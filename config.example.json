@@ -1,0 +1,155 @@
+{
+  "profile": "default",
+  "magic_home": "~/.magic",
+  "provider": "openai",
+  "model": "gpt-4",
+  "providers": {
+    "openai": {
+      "api_key": "your-openai-api-key-here",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4"
+    },
+    "anthropic": {
+      "api_key": "your-anthropic-api-key-here",
+      "model": "claude-3-opus-20240229"
+    },
+    "openrouter": {
+      "api_key": "your-openrouter-api-key-here",
+      "model": "openai/gpt-4"
+    },
+    "deepseek": {
+      "api_key": "your-deepseek-api-key-here",
+      "model": "deepseek-chat"
+    },
+    "doubao": {
+      "api_key": "your-doubao-api-key-here",
+      "model": "doubao-pro-32k"
+    },
+    "qwen": {
+      "api_key": "your-qwen-api-key-here",
+      "model": "qwen-max"
+    },
+    "minimax": {
+      "api_key": "your-minimax-api-key-here",
+      "model": "minimax-chat"
+    },
+    "kimi": {
+      "api_key": "your-kimi-api-key-here",
+      "model": "moonshot-v1-8k"
+    },
+    "zhipu": {
+      "api_key": "your-zhipu-api-key-here",
+      "model": "glm-4"
+    },
+    "dashscope": {
+      "api_key": "your-dashscope-api-key-here",
+      "model": "qwen-max"
+    },
+    "gemini": {
+      "api_key": "your-google-api-key-here",
+      "model": "gemini-1.5-flash"
+    },
+    "groq": {
+      "api_key": "your-groq-api-key-here",
+      "model": "mixtral-8x7b-32768"
+    },
+    "together": {
+      "api_key": "your-together-api-key-here",
+      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
+    },
+    "mistral": {
+      "api_key": "your-mistral-api-key-here",
+      "model": "mistral-small-latest"
+    },
+    "cohere": {
+      "api_key": "your-cohere-api-key-here",
+      "model": "command-r-plus"
+    },
+    "perplexity": {
+      "api_key": "your-perplexity-api-key-here",
+      "model": "sonar"
+    },
+    "wenxin": {
+      "api_key": "your-baidu-api-key-here",
+      "model": "ernie-4.0-8k-latest"
+    },
+    "moonshot": {
+      "api_key": "your-moonshot-api-key-here",
+      "model": "moonshot-v1-8k"
+    },
+    "mimo": {
+      "api_key": "your-mimo-api-key-here",
+      "model": "mimo-v2-flash"
+    },
+    "hunyuan": {
+      "api_key": "your-hunyuan-api-key-here",
+      "model": "hunyuan-turbo"
+    }
+  },
+  "tools": {
+    "enabled": ["all"],
+    "disabled": []
+  },
+  "gateway": {
+    "enabled": false,
+    "platforms": {
+      "telegram": {
+        "token": "your-telegram-bot-token",
+        "enabled": false
+      },
+      "discord": {
+        "token": "your-discord-bot-token",
+        "enabled": false
+      },
+      "wecom": {
+        "corp_id": "your-corp-id",
+        "agent_id": "your-agent-id",
+        "secret": "your-secret",
+        "enabled": false
+      },
+      "qq": {
+        "number": "123456789",
+        "password": "your-qq-password",
+        "enabled": false
+      },
+      "dingtalk": {
+        "app_key": "your-dingtalk-app-key",
+        "app_secret": "your-dingtalk-app-secret",
+        "enabled": false
+      },
+      "feishu": {
+        "app_id": "your-feishu-app-id",
+        "app_secret": "your-feishu-app-secret",
+        "enabled": false
+      },
+      "wechat": {
+        "api_url": "http://localhost:8080",
+        "api_key": "your-wechat-api-key",
+        "enabled": false
+      },
+      "slack": {
+        "token": "your-slack-bot-token",
+        "app_secret": "your-slack-signing-secret",
+        "enabled": false
+      },
+      "whatsapp": {
+        "app_id": "your-whatsapp-phone-number-id",
+        "token": "your-whatsapp-access-token",
+        "app_secret": "your-whatsapp-app-secret",
+        "verify_token": "your-webhook-verify-token",
+        "enabled": false
+      },
+      "line": {
+        "token": "your-line-channel-access-token",
+        "app_secret": "your-line-channel-secret",
+        "enabled": false
+      },
+      "matrix": {
+        "api_url": "https://your-matrix-homeserver.com",
+        "app_id": "your-user-id",
+        "token": "your-matrix-access-token",
+        "enabled": false
+      }
+    }
+  }
+}

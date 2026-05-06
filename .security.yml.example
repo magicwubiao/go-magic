@@ -1,0 +1,59 @@
+# Security Configuration for go-magic
+# This file configures PII handling, command approval, hooks, and rate limiting
+
+# PII (Personally Identifiable Information) handling
+pii:
+  enabled: true
+  # Enable/disable specific PII types
+  redact_phone: true        # Chinese mobile numbers
+  redact_email: true        # Email addresses
+  redact_id_card: true      # Chinese ID cards and US SSN
+  redact_bank_card: true     # Credit card and bank card numbers
+  redact_ip: true            # IPv4 and IPv6 addresses
+  redact_address: true       # Chinese address patterns
+  
+  # Custom patterns (name -> regex)
+  custom_patterns:
+    # passport: '[A-Z]{1,2}[0-9]{6,9}'  # Example passport pattern
+
+# Command security
+commands:
+  auto_approve_safe: true      # Auto-approve read-only commands
+  auto_reject_dangerous: true  # Auto-reject dangerous system modifications
+  
+  # Risk levels that require approval
+  require_approval_levels:
+    - dangerous
+  
+  # Command whitelist (optional, if set only these commands are allowed)
+  # allowed_commands:
+  #   - "git *"
+  #   - "ls *"
+  
+  # Command blacklist (optional, these commands are always blocked)
+  # blocked_commands:
+  #   - "rm -rf /*"
+  #   - "dd *"
+
+# Hooks configuration
+hooks:
+  # Built-in hooks to enable
+  enabled:
+    - privacy           # PII redaction
+    - rate_limit        # Rate limiting
+  
+  # External process hooks (for advanced use cases)
+  # process:
+  #   - name: custom_hook
+  #     command: ["/path/to/hook", "--arg"]
+  #     dir: "/working/directory"
+  #     observe_kinds: ["llm_request", "llm_response"]
+  #     intercept_llm: false
+  #     intercept_tool: false
+  #     approve_tool: false
+
+# Rate limiting
+rate_limit:
+  enabled: true
+  max_requests_per_minute: 60  # Max LLM API calls per minute
+  max_token_budget: 100000     # Max tokens per session

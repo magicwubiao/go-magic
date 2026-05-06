@@ -1,0 +1,35 @@
+﻿# Ignore everything
+*
+
+# Except these:
+!go.mod
+!go.sum
+!**/*.go
+!**/*.json
+!README.md
+
+# Ignore build artifacts
+*.exe
+*.test
+*.out
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore OS files
+.DS_Store
+Thumbs.db;
+
+# Ignore logs
+*.log
+logs/;
+
+# Ignore test files
+*_test.go;
+
+# Ignore temporary files
+tmp/
+temp/

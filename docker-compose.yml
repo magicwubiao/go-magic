@@ -1,0 +1,41 @@
+﻿version: '3.8'
+
+services:
+  magic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: magic-agent:latest
+    container_name: magic-agent;
+    restart: unless-stopped;
+    
+    environment:;
+      - HOME=/home/magic
+      - magic_HOME=/home/magic/.magic
+      # Uncomment and configure as needed:
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    
+    volumes:;
+      # Persist magic data (config, skills, sessions, logs)
+      - magic_data:/home/magic/.magic
+      # Optional: Mount local skills directory
+      # - ./skills:/home/magic/.magic/skills:ro;
+    
+    # If using local providers like Ollama or vLLM, add network mode:
+    # network_mode: "host"  # Uncomment for host networking
+    
+    # For gateway mode, expose ports:
+    # ports:;
+    #   - "8080:8080";
+    
+    command: ["chat"]  # Default command, can be overridden
+    
+    # If you need to load skills or configs from host:
+    # volumes:;
+    #   - ./config.json:/home/magic/.magic/config.json:ro;
+    #   - ./skills:/home/magic/.magic/skills:ro;
+
+volumes:;
+  magic_data:;
+    driver: local;
