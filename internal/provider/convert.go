@@ -33,6 +33,10 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 					argsBytes, _ := json.Marshal(tc.Arguments)
 					funcArgs = string(argsBytes)
 				}
+				// Ensure funcArgs is at least "{}" for API compatibility
+				if funcArgs == "" {
+					funcArgs = "{}"
+				}
 				toolCall := map[string]interface{}{
 					"id":   tc.ID,
 					"type": "function",
@@ -57,13 +61,27 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 					openAIMsg["tool_call_id"] = toolCallID
 					fmt.Fprintf(os.Stderr, "[WARN] Missing tool_call_id for tool message, found matching ID: %s\n", toolCallID)
 				} else {
-					// Last resort - this will likely fail but at least we tried
-					fmt.Fprintf(os.Stderr, "[ERROR] Missing tool_call_id for tool message and could not find matching ID\n")
+					// Last resort - generate a synthetic ID
+					syntheticID := "call_unknown"
+					openAIMsg["tool_call_id"] = syntheticID
+					fmt.Fprintf(os.Stderr, "[ERROR] Missing tool_call_id for tool message, using synthetic ID: %s\n", syntheticID)
 				}
 			}
 		}
 		
 		result = append(result, openAIMsg)
+	}
+	
+	// Debug: log tool messages
+	for i, msg := range result {
+		if msg["role"] == "tool" {
+			tcid, _ := msg["tool_call_id"]
+			content := fmt.Sprintf("%v", msg["content"])
+			if len(content) > 100 {
+				content = content[:100]
+			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] ConvertMessages: messages[%d] role=tool tool_call_id=%v content=%.100s\n", i, tcid, content)
+		}
 	}
 	
 	return result
@@ -72,11 +90,35 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 // findToolCallID searches backwards through messages to find the tool_call_id
 // that corresponds to a tool result message
 func findToolCallID(messages []types.Message, toolMsg types.Message) string {
+	// Count how many tool messages come before this one (including this one)
+	toolMsgIdx := 0
+	for _, m := range messages {
+		if m.Role == "tool" {
+			toolMsgIdx++
+		}
+		if &m == &toolMsg {
+			break
+		}
+	}
+	
 	// Search backwards for the last assistant message with tool_calls
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
-			// Return the first tool call ID (simple matching)
-			return messages[i].ToolCalls[0].ID
+			// Use the tool message index to find the matching tool call
+			tcIdx := toolMsgIdx - 1
+			if tcIdx < len(messages[i].ToolCalls) {
+				tc := messages[i].ToolCalls[tcIdx]
+				if tc.ID != "" {
+					return tc.ID
+				}
+			}
+			// Fallback: return first non-empty ID
+			for _, tc := range messages[i].ToolCalls {
+				if tc.ID != "" {
+					return tc.ID
+				}
+			}
+			return ""
 		}
 	}
 	return ""

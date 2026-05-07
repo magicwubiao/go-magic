@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"io"
 
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -115,7 +116,12 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 
 	url := p.BaseURL + "/chat/completions"
-	
+
+	// Debug: dump request messages for troubleshooting
+	if debugJSON, err := json.Marshal(reqBody); err == nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] ChatWithTools request: %s\n", func() string { s := string(debugJSON); if len(s) > 2000 { return s[:2000] }; return s }())
+	}
+
 	headers := map[string]string{}
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
@@ -198,6 +204,11 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	}
 
 	url := p.BaseURL + "/chat/completions"
+
+	// Debug: dump request messages for troubleshooting
+	if debugJSON, err := json.Marshal(reqBody); err == nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] StreamWithTools request: %s\n", func() string { s := string(debugJSON); if len(s) > 2000 { return s[:2000] }; return s }())
+	}
 
 	headers := map[string]string{}
 	resp, err := p.DoStreamRequest(ctx, url, reqBody, headers)

@@ -467,6 +467,16 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					// Done=true: Content is full accumulated, ToolCalls are complete
 					fullContent = resp.Content
 					toolCalls = resp.ToolCalls
+					// Safety: ensure every tool call has an ID
+					for i := range toolCalls {
+						if toolCalls[i].ID == "" {
+							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+							fmt.Fprintf(os.Stderr, "[WARN] Generated fallback ID for toolCalls[%d]: %s\n", i, toolCalls[i].ID)
+						}
+						if toolCalls[i].Function.Name == "" {
+							toolCalls[i].Function.Name = toolCalls[i].Name
+						}
+					}
 				} else {
 					// Delta chunk: Content is incremental
 					fullContent += resp.Content
@@ -524,6 +534,16 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 
 			fullContent = resp.Content
 			toolCalls = resp.ToolCalls
+			// Safety: ensure every tool call has an ID
+			for i := range toolCalls {
+				if toolCalls[i].ID == "" {
+					toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+					fmt.Fprintf(os.Stderr, "[WARN] Generated fallback ID for non-streaming toolCalls[%d]: %s\n", i, toolCalls[i].ID)
+			}
+				if toolCalls[i].Function.Name == "" {
+					toolCalls[i].Function.Name = toolCalls[i].Name
+				}
+			}
 			handler(resp.Content, true)
 		}
 
