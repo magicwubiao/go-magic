@@ -1,6 +1,6 @@
-# go-magic
+# hermes-agent
 
-A high-performance, ultra-lightweight Go implementation of the magic AI Agent, inspired by Nous Research's magic-agent.
+A high-performance, ultra-lightweight Go implementation of the Hermes AI Agent, inspired by Nous Research's hermes-agent.
 
 ## Features
 
@@ -204,14 +204,15 @@ Config file: `~/.magic/config.json`
 
 ```json
 {
-  "provider": "openai",
-  "model": "gpt-4",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
   "providers": {
-    "openai": {
+    "deepseek": {
       "api_key": "...",
-      "base_url": "https://api.openai.com/v1"
+      "base_url": "https://api.deepseek.com/v1"
     }
   },
+  "cortex_enabled": true,
   "cortex": {
     "enabled": true,
     "frozen_snapshot": true,
@@ -271,7 +272,7 @@ Config file: `~/.magic/config.json`
 ```go
 import "github.com/magicwubiao/go-magic/internal/cortex"
 
-// Create manager
+// Create manager (part of hermes-agent's Cortex architecture)
 mgr := cortex.NewManager("/data/cortex")
 mgr.Start()
 
