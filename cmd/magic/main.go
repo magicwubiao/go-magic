@@ -52,7 +52,7 @@ Examples:
 
 // helpTemplate is the custom help template for magic
 const helpTemplate = `
-{{bold .Name}}{{bold " - " .Short}}{{bold "\n"}}{{if .Long}}{{.Long | trim}}{{else}}{{.Short | trim}}{{end}}
+{{bold (printf "%s - %s" .Name .Short)}}{{bold "\n"}}{{if .Long}}{{.Long | trim}}{{else}}{{.Short | trim}}{{end}}
 {{if or .Runnable .HasSubCommands}}
 {{bold "\nUsage:"}}{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasSubCommands}}
@@ -67,7 +67,7 @@ const helpTemplate = `
 {{if .HasInheritedFlags}}{{bold "\nGlobal Flags:"}}
 {{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}
 {{if .HasSubCommands}}
-{{bold "\nUse \"{{.CommandPath}} [command] --help\" for more information about a command."}}{{end}}
+{{bold "\nUse"}} {{.CommandPath}} [command] --help {{bold "for more information about a command."}}{{end}}
 {{if .HasExample}}{{bold "\nExamples:"}}
 {{.Example}}{{end}}
 {{if .HasSubCommands}}{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
