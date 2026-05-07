@@ -112,6 +112,14 @@ func Load() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+
+	// Default working_dir to current directory if not set
+	if cfg.WorkingDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cfg.WorkingDir = wd
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -119,7 +127,7 @@ func defaultConfig() *Config {
 	return &Config{
 		Profile:    "default",
 		MagicHome:  "~/.magic",
-		WorkingDir: "",
+		WorkingDir: getDefaultWorkingDir(),
 		Provider:   "openai",
 		Model:      "gpt-4",
 		Providers:  make(map[string]ProviderConfig),
@@ -136,6 +144,13 @@ func defaultConfig() *Config {
 // DefaultConfig returns a default configuration (exported version)
 func DefaultConfig() *Config {
 	return defaultConfig()
+}
+
+func getDefaultWorkingDir() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return ""
 }
 
 func (c *Config) Save() error {
