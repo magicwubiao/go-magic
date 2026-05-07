@@ -10,6 +10,19 @@ import (
 
 // ConvertMessages converts internal Message format to OpenAI API message format
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
+	// Debug: dump raw messages before conversion
+	fmt.Fprintf(os.Stderr, "[DEBUG] ConvertMessages: %d messages\n", len(messages))
+	for i, msg := range messages {
+		tcCount := len(msg.ToolCalls)
+		tcID := msg.ToolCallID
+		contentPreview := msg.Content
+		if len(contentPreview) > 80 { contentPreview = contentPreview[:80] }
+		fmt.Fprintf(os.Stderr, "[DEBUG]   [%d] role=%s tool_calls=%d tool_call_id=%q content=%.80s\n", i, msg.Role, tcCount, tcID, contentPreview)
+		for j, tc := range msg.ToolCalls {
+			fmt.Fprintf(os.Stderr, "[DEBUG]     tool_calls[%d]: id=%q name=%q func.name=%q\n", j, tc.ID, tc.Name, tc.Function.Name)
+		}
+	}
+	
 	result := make([]map[string]interface{}, 0, len(messages))
 	
 	for msgIdx, msg := range messages {

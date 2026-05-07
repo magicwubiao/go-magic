@@ -117,9 +117,13 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 
 	url := p.BaseURL + "/chat/completions"
 
-	// Debug: dump request messages for troubleshooting
-	if debugJSON, err := json.Marshal(reqBody); err == nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] ChatWithTools request: %s\n", func() string { s := string(debugJSON); if len(s) > 2000 { return s[:2000] }; return s }())
+	// Debug: dump request messages only (not tools) for troubleshooting
+	if msgs, ok := reqBody["messages"]; ok {
+		if msgJSON, err := json.Marshal(msgs); err == nil {
+			s := string(msgJSON)
+			if len(s) > 5000 { s = s[:5000] }
+			fmt.Fprintf(os.Stderr, "[DEBUG] ChatWithTools messages: %s\n", s)
+		}
 	}
 
 	headers := map[string]string{}
@@ -205,9 +209,13 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 
 	url := p.BaseURL + "/chat/completions"
 
-	// Debug: dump request messages for troubleshooting
-	if debugJSON, err := json.Marshal(reqBody); err == nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] StreamWithTools request: %s\n", func() string { s := string(debugJSON); if len(s) > 2000 { return s[:2000] }; return s }())
+	// Debug: dump request messages only (not tools) for troubleshooting
+	if msgs, ok := reqBody["messages"]; ok {
+		if msgJSON, err := json.Marshal(msgs); err == nil {
+			s := string(msgJSON)
+			if len(s) > 5000 { s = s[:5000] }
+			fmt.Fprintf(os.Stderr, "[DEBUG] StreamWithTools messages: %s\n", s)
+		}
 	}
 
 	headers := map[string]string{}
