@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -460,35 +461,34 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					lastErr = resp.Error
 					return
 				}
-				// FIX: Use += to accumulate incremental content from streaming chunks
 				fullContent += resp.Content
 				toolCalls = resp.ToolCalls
-				// Always call handler - for incremental chunks (done=false) it streams,
-				// for final chunk (done=true) it sends the complete response
 				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
 				streamed = true
 			} else {
+				fmt.Fprintf(os.Stderr, "[DEBUG] StreamWithTools failed: %v, falling back\n", err)
 				lastErr = err
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
-			// Simple streaming
+			// Simple streaming (no tools)
 			err = ss.Stream(ctx, req.Messages, func(resp *provider.StreamResponse) {
 				if resp.Error != nil {
 					lastErr = resp.Error
 					return
 				}
 				fullContent += resp.Content
-				// Always call handler - for incremental chunks (done=false) it streams,
-				// for final chunk (done=true) it sends the complete response
 				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
 				streamed = true
 			} else {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Stream failed: %v, falling back\n", err)
 				lastErr = err
 			}
+		} else {
+			fmt.Fprintf(os.Stderr, "[DEBUG] No streaming support, using non-streaming\n")
 		}
 
 		// Fall back to non-streaming if streaming failed

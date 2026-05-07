@@ -385,17 +385,22 @@ func (r *REPL) runConversation(input string) {
 	if r.state.streamingEnabled {
 		err = r.agent.RunConversationStream(r.ctx, input, func(content string, done bool) {
 			if done {
+				// Final chunk - ensure newline after streaming
+				if fullContent.Len() > 0 {
+					fmt.Println()
+				}
 				return
 			}
-			fullContent.WriteString(content)
-			// Streaming output with basic ANSI rendering
-			r.renderStreaming(content)
+			if content != "" {
+				fullContent.WriteString(content)
+				r.renderStreaming(content)
+			}
 		})
 	} else {
 		var response string
 		response, err = r.agent.RunConversation(r.ctx, input)
 		if err == nil && response != "" {
-			fmt.Print(response)
+			fmt.Println(response)
 		}
 	}
 
