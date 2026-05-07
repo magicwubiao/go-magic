@@ -327,9 +327,9 @@ func (p *CohereProvider) parseResponse(body []byte) (*ChatResponse, error) {
 
 	for _, tc := range resp.ToolCalls {
 		toolCalls = append(toolCalls, types.ToolCall{
-			ID:       tc.ToolUseID,
-			Type:     "function",
-			Function: types.Function{Name: tc.Name, Arguments: tc.Parameters},
+			ID:        tc.ToolUseID,
+			Name:      tc.Name,
+			Arguments: tc.Parameters,
 		})
 	}
 
@@ -380,12 +380,9 @@ func (p *CohereProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 			for _, tc := range chunk.ToolCalls {
 				handler(&StreamResponse{
 					ToolCall: &types.ToolCall{
-						ID:   tc.ToolUseID,
-						Type: "function",
-						Function: types.Function{
-							Name:      tc.Name,
-							Arguments: tc.Parameters,
-						},
+						ID:        tc.ToolUseID,
+						Name:      tc.Name,
+						Arguments: tc.Parameters,
 					},
 					Done: false,
 				})

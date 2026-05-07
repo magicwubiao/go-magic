@@ -10,8 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
-	"strings"
+	
 	"sync"
 	"time"
 
@@ -450,6 +449,36 @@ func (g *LineGateway) processEvent(event *struct {
 		Data string `json:"data"`
 		Params map[string]interface{} `json:"params,omitempty"`
 	} `json:"postback,omitempty"`
+	Beacon *struct {
+		Type   string `json:"type"`
+		Hwid   string `json:"hwid"`
+		DeviceMessage string `json:"deviceMessage,omitempty"`
+	} `json:"beacon,omitempty"`
+	Join     *struct{} `json:"join,omitempty"`
+	Leave    *struct{} `json:"leave,omitempty"`
+	MemberJoined *struct {
+		Members []struct {
+			Type   string `json:"type"`
+			UserID string `json:"userId"`
+		} `json:"members"`
+	} `json:"memberJoined,omitempty"`
+	MemberLeft *struct {
+		Members []struct {
+			Type   string `json:"type"`
+			UserID string `json:"userId"`
+		} `json:"members"`
+	} `json:"memberLeft,omitempty"`
+	Unsend *struct {
+		MessageID string `json:"messageId"`
+	} `json:"unsend,omitempty"`
+	AccountLink *struct {
+		Result string `json:"result"`
+		Nonce  string `json:"nonce"`
+	} `json:"accountLink,omitempty"`
+	Things *struct {
+		Type string `json:"type"`
+		DeviceID string `json:"deviceId"`
+	} `json:"things,omitempty"`
 }) *Message {
 	// Get user ID from source
 	var userID string

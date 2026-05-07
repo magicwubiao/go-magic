@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/magicwubiao/go-magic/internal/agent/hooks"
+	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/execution"
-	"github.com/magicwubiao/go-magic/internal/perception"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )

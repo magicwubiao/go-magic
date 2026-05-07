@@ -17,6 +17,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // Memory types
@@ -484,7 +485,7 @@ func (s *Store) llmSummarize(memories []*Memory) (string, error) {
 
 	// Call LLM
 	ctx := context.Background()
-	resp, err := provider.Chat(ctx, []provider.Message{
+	resp, err := provider.Chat(ctx, []types.Message{
 		{Role: "user", Content: prompt.String()},
 	})
 	if err != nil {

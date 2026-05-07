@@ -263,6 +263,12 @@ func (hg *HelpGenerator) GenerateHelp(tool Tool) string {
 					continue
 				}
 				
+				// 获取参数类型
+				propType := "any"
+				if t, ok := propMap["type"].(string); ok {
+					propType = t
+				}
+				
 				required := false
 				if req, ok := schema["required"].([]interface{}); ok {
 					for _, r := range req {
@@ -286,7 +292,7 @@ func (hg *HelpGenerator) GenerateHelp(tool Tool) string {
 					suffix = "]"
 				}
 				
-				buf.WriteString(fmt.Sprintf(" %s%s=%s%s", prefix, name, name, suffix))
+				buf.WriteString(fmt.Sprintf(" %s%s:%s=%s%s", prefix, name, propType, name, suffix))
 			}
 		}
 		buf.WriteString("\n\n")

@@ -170,7 +170,7 @@ func (p *HermesParser) Parse(skillDir string) (*HermesSkill, error) {
 		}
 
 		ext := filepath.Ext(entry.Name())
-		if isCodeFile(ext) {
+		if IsCodeFile(ext) {
 			path := filepath.Join(skillDir, entry.Name())
 			codeData, err := os.ReadFile(path)
 			if err != nil {
@@ -264,7 +264,7 @@ func (p *HermesParser) ParseFromFiles(files map[string]string) (*HermesSkill, er
 			continue
 		}
 		ext := filepath.Ext(filename)
-		if isCodeFile(ext) {
+		if IsCodeFile(ext) {
 			skill.CodeFiles[filename] = content
 			if primaryCodeFile == "" {
 				primaryCodeFile = filename

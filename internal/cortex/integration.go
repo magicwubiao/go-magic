@@ -1,6 +1,7 @@
 package cortex
 
 import (
+	"fmt"
 	"path/filepath"
 	"strconv"
 
@@ -107,9 +108,9 @@ func (m *Manager) OnUserMessage(input string) {
 
 	// Record perception result in memory for learning
 	// The agent can use this to adapt its behavior based on task type
-	m.Snapshot.AppendToMemory("- Task type: " + string(m.LastPerception.Type))
-	if m.LastPerception.Type == perception.IntentTask {
-		m.Snapshot.AppendToMemory("- Task complexity: " + string(m.LastPerception.Complexity))
+	m.Snapshot.AppendToMemory("- Task type: " + string(m.LastPerception.Intent.Type))
+	if m.LastPerception.Intent.Type == perception.IntentTask {
+		m.Snapshot.AppendToMemory("- Task complexity: " + string(m.LastPerception.Intent.Complexity))
 	}
 
 	// Layer 2: Cognition - plan the task execution
@@ -190,7 +191,7 @@ func (m *Manager) GetIntent() perception.IntentType {
 	if m.LastPerception == nil {
 		return perception.IntentUnknown
 	}
-	return m.LastPerception.Type
+	return m.LastPerception.Intent.Type
 }
 
 // GetTaskComplexity returns the estimated task complexity
@@ -198,7 +199,7 @@ func (m *Manager) GetTaskComplexity() perception.TaskComplexity {
 	if m.LastPerception == nil {
 		return perception.ComplexitySimple
 	}
-	return m.LastPerception.Complexity
+	return m.LastPerception.Intent.Complexity
 }
 
 // HasNoise returns true if noise was detected in input

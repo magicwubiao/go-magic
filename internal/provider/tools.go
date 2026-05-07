@@ -51,11 +51,15 @@ func (tc *ToolConverter) ConvertToAnthropic(tools []map[string]interface{}) []ma
 		if fn, ok := tool["function"].(map[string]interface{}); ok {
 			name = getString(fn, "name")
 			description = getString(fn, "description")
-			parameters = fn["parameters"]
+			if p, ok := fn["parameters"].(map[string]interface{}); ok {
+				parameters = p
+			}
 		} else {
 			name = getString(tool, "name")
 			description = getString(tool, "description")
-			parameters = tool["parameters"]
+			if p, ok := tool["parameters"].(map[string]interface{}); ok {
+				parameters = p
+			}
 		}
 		
 		if parameters == nil {
@@ -86,11 +90,15 @@ func (tc *ToolConverter) ConvertToGemini(tools []map[string]interface{}) []map[s
 		if fn, ok := tool["function"].(map[string]interface{}); ok {
 			name = getString(fn, "name")
 			description = getString(fn, "description")
-			parameters = fn["parameters"]
+			if p, ok := fn["parameters"].(map[string]interface{}); ok {
+				parameters = p
+			}
 		} else {
 			name = getString(tool, "name")
 			description = getString(tool, "description")
-			parameters = tool["parameters"]
+			if p, ok := tool["parameters"].(map[string]interface{}); ok {
+				parameters = p
+			}
 		}
 		
 		// Convert to Gemini schema format
@@ -305,13 +313,6 @@ func GetProviderToolFormat(provider string) ProviderToolFormat {
 }
 
 // Helper functions
-
-func getString(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
 
 func marshalJSON(v interface{}) string {
 	if v == nil {

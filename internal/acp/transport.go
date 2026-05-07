@@ -20,6 +20,7 @@ import (
 type Transport interface {
 	Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error)
 	Receive(ctx context.Context) (*JSONRPCRequest, error)
+	Respond(ctx context.Context, resp *JSONRPCResponse) error
 	Close() error
 }
 
@@ -144,6 +145,25 @@ func (t *StdioTransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
 	}
 }
 
+// Respond sends a JSON-RPC response (for server-side use)
+func (t *StdioTransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Marshal the response
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	// Write to stdin with newline delimiter
+	if _, err := t.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to write to stdin: %w", err)
+	}
+
+	return nil
+}
+
 // Close closes the stdio transport
 func (t *StdioTransport) Close() error {
 	t.mu.Lock()
@@ -235,6 +255,11 @@ func (t *HTTPTransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPC
 // Receive receives a JSON-RPC request (not applicable for HTTP)
 func (t *HTTPTransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
 	return nil, fmt.Errorf("Receive not supported for HTTP transport")
+}
+
+// Respond sends a JSON-RPC response (no-op for HTTP transport)
+func (t *HTTPTransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
+	return nil
 }
 
 // Close closes the HTTP transport (no-op)
@@ -353,6 +378,11 @@ func (t *SSETransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
 		}
 		return &req, nil
 	}
+}
+
+// Respond sends a JSON-RPC response (no-op for SSE transport)
+func (t *SSETransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
+	return nil
 }
 
 // Close closes the SSE transport

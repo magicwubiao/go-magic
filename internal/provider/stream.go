@@ -23,8 +23,6 @@ type StreamResponse struct {
 	Usage     *Usage           `json:"usage,omitempty"`
 }
 
-// StreamHandler is called for each streaming chunk
-type StreamHandler func(resp *StreamResponse)
 
 // StreamConfig configures streaming behavior
 type StreamConfig struct {
@@ -271,7 +269,7 @@ type StreamContext struct {
 
 // NewStreamContext creates a new streaming context with cancellation support
 func NewStreamContext(parent context.Context) (*StreamContext, context.Context) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, _ := context.WithCancel(parent)
 	sc := &StreamContext{
 		done: make(chan struct{}),
 	}
@@ -361,7 +359,7 @@ func (b *BufferedStreamReader) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 	
-	b.buffer.SetBufferSize(b.config.BufferSize)
+	
 	return b.buffer.Read(p)
 }
 

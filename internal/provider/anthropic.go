@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/magicwubiao/go-magic/pkg/log"
+	
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 

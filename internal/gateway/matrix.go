@@ -260,8 +260,8 @@ func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, co
 	}
 
 	g.mu.Lock()
-	g.txnId++
-	txnID := fmt.Sprintf("m%d", g.txnId)
+	g.txnID++
+	txnID := fmt.Sprintf("m%d", g.txnID)
 	g.mu.Unlock()
 
 	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", 
@@ -521,8 +521,8 @@ func (g *MatrixGateway) SendFormattedMessage(ctx context.Context, roomID, body, 
 	}
 
 	g.mu.Lock()
-	g.txnId++
-	txnID := fmt.Sprintf("m%d", g.txnId)
+	g.txnID++
+	txnID := fmt.Sprintf("m%d", g.txnID)
 	g.mu.Unlock()
 
 	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", 

@@ -1,4 +1,4 @@
-package plugin
+﻿package plugin
 
 import (
 	"fmt"
@@ -121,26 +121,7 @@ func ParseVersionConstraint(constraint string) (*VersionConstraint, error) {
 		return nil, fmt.Errorf("empty constraint")
 	}
 
-	// Match patterns like ">=1.2.3", "^1.2.3", "~1.2.3", "1.2.3", "*"
-	patterns := []struct {
-		regex   *regexp.Regexp
-		extract func([]string) *VersionConstraint
-	}{
-		{
-			// >=1.2.3 or >1.2.3 or <=1.2.3 or <1.2.3 or =1.2.3
-			regexp.MustCompile(`^([<>]=?|=)\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$`),
-			func(groups []string) *VersionConstraint {
-				minor := toIntPtr(groups[2])
-				patch := toIntPtr(groups[3])
-				return &VersionConstraint{
-					Operator: groups[1],
-					Major:    toInt(groups[1]),
-					Minor:    minor,
-					Patch:    patch,
-				}
-			},
-		},
-	}
+	// Match patterns like >=1.2.3, >1.2.3, <=1.2.3, <1.2.3, =1.2.3
 
 	// Simple patterns
 	switch constraint {
@@ -209,8 +190,8 @@ func parseSimpleVersion(s string) (*VersionConstraint, error) {
 			return &VersionConstraint{
 				Operator: op,
 				Major:    parts[0],
-				Minor:    parts[1],
-				Patch:    parts[2],
+				Minor:    toIntPtr(fmt.Sprintf("%d", parts[1])),
+				Patch:    toIntPtr(fmt.Sprintf("%d", parts[2])),
 			}, nil
 		}
 	}
@@ -224,8 +205,8 @@ func parseSimpleVersion(s string) (*VersionConstraint, error) {
 	return &VersionConstraint{
 		Operator: "=",
 		Major:    parts[0],
-		Minor:    parts[1],
-		Patch:    parts[2],
+		Minor:    toIntPtr(fmt.Sprintf("%d", parts[1])),
+		Patch:    toIntPtr(fmt.Sprintf("%d", parts[2])),
 	}, nil
 }
 
@@ -336,7 +317,7 @@ func (vc *VersionConstraint) Matches(version string) bool {
 		if major != vc.Major {
 			return false
 		}
-		return minor == vc.Minor || minor > vc.Minor
+		return comparePtr(minor, vc.Minor) >= 0
 	}
 
 	return false

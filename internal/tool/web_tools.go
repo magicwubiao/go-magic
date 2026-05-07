@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
-	"io"
 	"net/http"
 	"strings"
 )

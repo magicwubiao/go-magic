@@ -34,7 +34,7 @@ func (p *DashScopeProvider) Name() string {
 func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.model,
-		"messages": convertMessages(messages),
+		"messages": ConvertMessages(messages),
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -111,7 +111,7 @@ func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*Chat
 func (p *DashScopeProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.model,
-		"messages": convertMessages(messages),
+		"messages": ConvertMessages(messages),
 		"tools":    tools,
 	}
 

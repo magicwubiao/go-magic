@@ -59,6 +59,10 @@ func (t *ShellTool) Description() string {
 	return "Execute shell commands"
 }
 
+func (t *ShellTool) Schema() map[string]interface{} {
+	return t.Parameters()
+}
+
 func (t *ShellTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

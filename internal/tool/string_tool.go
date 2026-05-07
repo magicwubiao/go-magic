@@ -1,9 +1,10 @@
 package tool
 
 import (
+	"math/rand"
 	"context"
 	"crypto/md5"
-	"crypto/rand"
+	crand "crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -17,7 +18,7 @@ import (
 )
 
 // ============================================================================
-// String Tool - 字符串处理工具
+// String Tool - 字符串处理工具?
 // ============================================================================
 
 type StringTool struct {
@@ -353,7 +354,7 @@ func (t *UUIDTool) validate(uuid string) (map[string]any, error) {
 
 func generateUUIDv4() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	crand.Read(b)
 
 	// Set version 4 and variant bits
 	b[6] = (b[6] & 0x0f) | 0x40
@@ -375,7 +376,7 @@ func generateUUIDv5(namespace, name string) string {
 }
 
 // ============================================================================
-// Random Tool - 随机数生成工具
+// Random Tool - 随机数生成?
 // ============================================================================
 
 type RandomTool struct {
@@ -464,7 +465,7 @@ func (t *RandomTool) randomNumber(args map[string]any) (map[string]any, error) {
 
 	var numbers []int
 	for i := 0; i < count; i++ {
-		n := min + int(rand.Int63n(int64(max-min+1)))
+		n := min + int(int64(rand.Intn(max-min+1)))
 		numbers = append(numbers, n)
 	}
 

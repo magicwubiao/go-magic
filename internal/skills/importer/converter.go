@@ -26,11 +26,10 @@ func (c *Converter) ConvertOpenClaw(openclaw *parser.OpenClawSkill) (*skills.Ski
 	}
 
 	// Build metadata
-	metadata := make(map[string]interface{}{
-		"source":        "openclaw",
-		"source_path":   openclaw.SourcePath,
-		"source_format": string(parser.FormatOpenClaw),
-	})
+	metadata := make(map[string]interface{})
+	metadata["source"] = "openclaw"
+	metadata["source_path"] = openclaw.SourcePath
+	metadata["source_format"] = string(parser.FormatOpenClaw)
 
 	// Add trigger conditions if present
 	if len(openclaw.TriggerConditions) > 0 {
@@ -52,76 +51,79 @@ func (c *Converter) ConvertOpenClaw(openclaw *parser.OpenClawSkill) (*skills.Ski
 	content := c.buildContent(openclaw.Name, openclaw.Description, openclaw.Content, openclaw.CodeFiles)
 
 	return &skills.Skill{
-		Name:         openclaw.Name,
-		Description: openclaw.Description,
-		Version:      openclaw.Version,
-		Author:       openclaw.Author,
-		License:      openclaw.License,
-		Tags:         openclaw.Tags,
-		Tools:        openclaw.Tools,
-		Content:      content,
-		Metadata:     metadata,
-		Source:       "imported",
-		InstalledAt:  time.Now(),
+		SkillMeta: skills.SkillMeta{
+			Name:        openclaw.Name,
+			Description: openclaw.Description,
+			Version:     openclaw.Version,
+			Author:      openclaw.Author,
+			License:     openclaw.License,
+			Tags:        openclaw.Tags,
+			Source:      "imported",
+			InstalledAt: time.Now(),
+		},
+		Tools:    openclaw.Tools,
+		Content:  content,
+		Metadata: metadata,
 	}, nil
 }
 
 // ConvertHermes converts a Hermes skill to go-magic Skill
 func (c *Converter) ConvertHermes(hermes *parser.HermesSkill) (*skills.Skill, error) {
-	if err := cortex.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid Cortex skill: %w", err)
+	if err := hermes.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid Hermes skill: %w", err)
 	}
 
 	// Build metadata
-	metadata := make(map[string]interface{}{
-		"source":        "cortex",
-		"source_path":   cortex.SourcePath,
-		"source_format": string(parser.FormatHermes),
-	})
+	metadata := make(map[string]interface{})
+	metadata["source"] = "hermes"
+	metadata["source_path"] = hermes.SourcePath
+	metadata["source_format"] = string(parser.FormatHermes)
 
-	// Preserve cortex-specific metadata
-	if cortex.Category != "" {
-		metadata["category"] = cortex.Category
+	// Preserve hermes-specific metadata
+	if hermes.Category != "" {
+		metadata["category"] = hermes.Category
 	}
 
 	// Add trigger conditions if present
-	if len(cortex.TriggerConditions) > 0 {
-		metadata["trigger_conditions"] = cortex.TriggerConditions
+	if len(hermes.TriggerConditions) > 0 {
+		metadata["trigger_conditions"] = hermes.TriggerConditions
 	}
 
 	// Add steps if present
-	if len(cortex.Steps) > 0 {
-		metadata["steps"] = cortex.Steps
+	if len(hermes.Steps) > 0 {
+		metadata["steps"] = hermes.Steps
 	}
 
 	// Add code files
-	if len(cortex.CodeFiles) > 0 {
-		metadata["code_files"] = cortex.CodeFiles
-		metadata["code_language"] = cortex.CodeLanguage
+	if len(hermes.CodeFiles) > 0 {
+		metadata["code_files"] = hermes.CodeFiles
+		metadata["code_language"] = hermes.CodeLanguage
 	}
 
 	// Add original metadata
-	for key, value := range cortex.Metadata {
+	for key, value := range hermes.Metadata {
 		if key != "hermes" {
 			metadata[key] = value
 		}
 	}
 
 	// Build combined content
-	content := c.buildContent(cortex.Name, cortex.Description, cortex.Content, cortex.CodeFiles)
+	content := c.buildContent(hermes.Name, hermes.Description, hermes.Content, hermes.CodeFiles)
 
 	return &skills.Skill{
-		Name:         cortex.Name,
-		Description: cortex.Description,
-		Version:      cortex.Version,
-		Author:       cortex.Author,
-		License:      cortex.License,
-		Tags:         cortex.Tags,
-		Tools:        cortex.Tools,
-		Content:      content,
-		Metadata:     metadata,
-		Source:       "imported",
-		InstalledAt:  time.Now(),
+		SkillMeta: skills.SkillMeta{
+			Name:        hermes.Name,
+			Description: hermes.Description,
+			Version:     hermes.Version,
+			Author:      hermes.Author,
+			License:     hermes.License,
+			Tags:        hermes.Tags,
+			Source:      "imported",
+			InstalledAt: time.Now(),
+		},
+		Tools:    hermes.Tools,
+		Content:  content,
+		Metadata: metadata,
 	}, nil
 }
 
@@ -166,15 +168,17 @@ func (c *Converter) ConvertFromParseResult(result *parser.ParseResult) (*skills.
 	default:
 		// Generic magic format
 		skill := &skills.Skill{
-			Name:         result.Name,
-			Description:  getString(result.Data, "description"),
-			Version:      getString(result.Data, "version"),
-			Author:       getString(result.Data, "author"),
-			Tags:         getStringSlice(result.Data, "tags"),
-			Tools:        getStringSlice(result.Data, "tools"),
-			Content:      result.Content,
-			Source:       "imported",
-			InstalledAt:  time.Now(),
+			SkillMeta: skills.SkillMeta{
+				Name:        result.Name,
+				Description: getString(result.Data, "description"),
+				Version:     getString(result.Data, "version"),
+				Author:      getString(result.Data, "author"),
+				Tags:        getStringSlice(result.Data, "tags"),
+				Source:      "imported",
+				InstalledAt: time.Now(),
+			},
+			Tools:   getStringSlice(result.Data, "tools"),
+			Content: result.Content,
 		}
 
 		if result.Data != nil {
@@ -218,7 +222,6 @@ func (c *Converter) buildContent(name, description, markdown string, codeFiles m
 // ToJSON converts a skill to JSON for storage
 func (c *Converter) ToJSON(skill *skills.Skill) ([]byte, error) {
 	return json.MarshalIndent(skill, "", "  ")
-}
 }
 
 // Helper functions for type-safe access to map data

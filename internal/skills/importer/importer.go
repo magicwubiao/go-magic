@@ -40,24 +40,10 @@ type Importer struct {
 	manager   *skills.Manager
 }
 
-// Parser is a wrapper for detecting and parsing different formats
-type Parser struct {
-	openclawParser *parser.OpenClawParser
-	CortexParser   *parser.HermesParser
-}
-
-// NewParser creates a new multi-format parser
-func NewParser() *Parser {
-	return &Parser{
-		openclawParser: parser.NewOpenClawParser(),
-		CortexParser:   parser.NewHermesParser(),
-	}
-}
-
 // NewImporter creates a new importer
 func NewImporter(manager *skills.Manager) *Importer {
 	return &Importer{
-		parser:    NewParser(),
+		parser:    parser.NewParser(),
 		converter: NewConverter(),
 		validator: NewValidator(),
 		manager:   manager,
@@ -101,7 +87,7 @@ func (i *Importer) Import(skillDir string, force bool) *ImportResult {
 	var skill *skills.Skill
 	switch format {
 	case parser.FormatOpenClaw:
-		openclaw, err := i.parser.openclawParser.Parse(skillDir)
+		openclaw, err := i.parser.OpenClawParser.Parse(skillDir)
 		if err != nil {
 			result.Success = false
 			result.Error = fmt.Errorf("failed to parse OpenClaw skill: %w", err)
@@ -115,16 +101,16 @@ func (i *Importer) Import(skillDir string, force bool) *ImportResult {
 		}
 
 	case parser.FormatHermes:
-		hermes, err := i.parser.CortexParser.Parse(skillDir)
+		hermes, err := i.parser.HermesParser.Parse(skillDir)
 		if err != nil {
 			result.Success = false
-			result.Error = fmt.Errorf("failed to parse Cortex skill: %w", err)
+			result.Error = fmt.Errorf("failed to parse Hermes skill: %w", err)
 			return result
 		}
 		skill, err = i.converter.ConvertHermes(hermes)
 		if err != nil {
 			result.Success = false
-			result.Error = fmt.Errorf("failed to convert Cortex skill: %w", err)
+			result.Error = fmt.Errorf("failed to convert Hermes skill: %w", err)
 			return result
 		}
 
@@ -203,12 +189,12 @@ func (i *Importer) ImportFromFiles(name string, files map[string]string, force b
 		frontmatter, _, _ := parser.ParseYAMLFrontmatter(openclawFiles)
 		if frontmatter != nil {
 			if _, ok := frontmatter["trigger_conditions"]; ok {
-				openclaw, parseErr := i.parser.openclawParser.ParseFromFiles(files)
+				openclaw, parseErr := i.parser.OpenClawParser.ParseFromFiles(files)
 				if parseErr == nil {
 					skill, err = i.converter.ConvertOpenClaw(openclaw)
 				}
 			} else if _, ok := frontmatter["hermes"]; ok {
-				hermes, parseErr := i.parser.CortexParser.ParseFromFiles(files)
+				hermes, parseErr := i.parser.HermesParser.ParseFromFiles(files)
 				if parseErr == nil {
 					skill, err = i.converter.ConvertHermes(hermes)
 				}
@@ -219,7 +205,9 @@ func (i *Importer) ImportFromFiles(name string, files map[string]string, force b
 	if skill == nil {
 		// Generic format
 		skill = &skills.Skill{
-			Name:    name,
+			SkillMeta: skills.SkillMeta{
+				Name: name,
+			},
 			Content: files["SKILL.md"],
 		}
 	}
@@ -302,8 +290,10 @@ func (i *Importer) parseGenericFormat(files map[string]string) (*skills.Skill, e
 	}
 
 	skill := &skills.Skill{
+		SkillMeta: skills.SkillMeta{
+			Source: "imported",
+		},
 		Content: content,
-		Source:  "imported",
 	}
 
 	if frontmatter != nil {
@@ -363,7 +353,7 @@ func (i *Importer) copySkillDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(destPath, data, info.Mode())
+		return os.WriteFile(destPath, data, 0644)
 	})
 }
 
@@ -431,7 +421,10 @@ func (i *Importer) ImportFromURL(url string) (*ImportResult, error) {
 
 // ImportFromURLWithManager imports a skill from a URL with explicit manager
 func ImportFromURLWithManager(manager *skills.Manager, url string, force bool) (*ImportResult, error) {
-	result := DownloadAndImport(manager, url, force)
+	result, err := DownloadAndImport(manager, url, force)
+	if err != nil {
+		return nil, err
+	}
 	if result == nil {
 		return nil, errors.New("import returned nil result")
 	}
@@ -445,7 +438,10 @@ func (i *Importer) ImportFromURLRecursive(url string) ([]*ImportResult, error) {
 
 // ImportFromURLRecursiveWithManager imports all skills from a URL directory with explicit manager
 func ImportFromURLRecursiveWithManager(manager *skills.Manager, url string, force bool) ([]*ImportResult, error) {
-	results := DownloadAndImportRecursive(manager, url, force)
+	results, err := DownloadAndImportRecursive(manager, url, force)
+	if err != nil {
+		return nil, err
+	}
 	if results == nil {
 		return nil, errors.New("import returned nil results")
 	}

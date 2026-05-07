@@ -1,9 +1,7 @@
 package provider
 
 import (
-	"context"
-
-	"github.com/magicwubiao/go-magic/pkg/types"
+	
 )
 
 // ZhipuProvider 智谱AI (兼容OpenAI格式)

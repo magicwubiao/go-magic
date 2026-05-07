@@ -2,7 +2,9 @@ package plugin
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Registry manages plugin registration and discovery
@@ -356,7 +358,7 @@ func (r *Registry) ResolveDependencies(id string) error {
 		// Check version compatibility
 		if !CheckVersion(depEntry.Manifest.Version, dep.Version) {
 			return fmt.Errorf("incompatible version for %s: need %s, have %s",
-				dep.ID, dep.Version, dep.Entry.Version)
+				dep.ID, dep.Version, depEntry.Manifest.Version)
 		}
 	}
 

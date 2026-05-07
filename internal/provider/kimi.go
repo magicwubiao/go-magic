@@ -1,9 +1,7 @@
 package provider
 
 import (
-	"context"
-
-	"github.com/magicwubiao/go-magic/pkg/types"
+	
 )
 
 // KimiProvider 月之暗面 Kimi (兼容OpenAI格式)

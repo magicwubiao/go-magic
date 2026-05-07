@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -289,7 +288,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler
 						ToolCall: &types.ToolCall{
 							ID:       fmt.Sprintf("call_%d", time.Now().UnixNano()),
 							Type:     "function",
-							Function: types.Function{Name: part.FunctionCall.Name, Arguments: part.FunctionCall.Args},
+							Function: types.Function{Name: part.FunctionCall.Name, Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }()},
 						},
 						Done: true,
 					})
@@ -311,7 +310,7 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 	var contents []geminiContent
 	var systemInstruction *geminiContent
 
-	for i, msg := range messages {
+	for _, msg := range messages {
 		role := "user"
 		if msg.Role == "assistant" {
 			role = "model"
@@ -341,7 +340,7 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 					Name       string                 `json:"name"`
 					Response   map[string]interface{} `json:"response"`
 				}{
-					Name:     msg.ToolName,
+					Name:     msg.ToolCallID,
 					Response: map[string]interface{}{"result": msg.Content},
 				},
 			}
@@ -450,7 +449,7 @@ func (p *GeminiProvider) parseResponse(body []byte) (*ChatResponse, error) {
 				Type:     "function",
 				Function: types.Function{
 					Name:      part.FunctionCall.Name,
-					Arguments: part.FunctionCall.Args,
+					Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
 				},
 			}
 			toolCalls = append(toolCalls, tc)

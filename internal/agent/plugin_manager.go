@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/magicwubiao/go-magic/internal/plugin"
 )
@@ -72,9 +71,10 @@ func (pm *PluginManager) Initialize(ctx context.Context) error {
 	}
 
 	// Register built-in skills as plugins
-	if err := RegisterBuiltinSkills(pm.registry); err != nil {
-		fmt.Printf("Warning: failed to register built-in skills: %v\n", err)
-	}
+	// TODO: Implement RegisterBuiltinSkills
+	// if err := RegisterBuiltinSkills(pm.registry); err != nil {
+	// 	fmt.Printf("Warning: failed to register built-in skills: %v\n", err)
+	// }
 
 	// Build recommended plugins map
 	pm.buildRecommendations()
@@ -83,6 +83,11 @@ func (pm *PluginManager) Initialize(ctx context.Context) error {
 	pm.enableDefaults()
 
 	return nil
+}
+
+// GetPluginDir returns the plugin directory
+func (pm *PluginManager) GetPluginDir() string {
+	return plugin.GetPluginDir()
 }
 
 // registerHooks registers plugin lifecycle hooks with the agent
@@ -345,7 +350,7 @@ func (pm *PluginManager) GetPluginStats() map[string]interface{} {
 	stats["enabled"] = stateCounts[plugin.StateEnabled]
 	stats["disabled"] = stateCounts[plugin.StateDisabled]
 
-	for _, info := range infos {
+	for range infos {
 		stats["by_category"] = map[string]int{}
 	}
 
@@ -396,7 +401,7 @@ func (pm *PluginManager) AutoInstallMissing(recommended []string) error {
 		}
 
 		// Try to install
-		if err := pm.repo.Install(pluginID, "", pm.loader.(*plugin.Loader).LoadFromDirectory); err != nil {
+		if err := pm.repo.Install(pluginID, "", pm.GetPluginDir()); err != nil {
 			installErrors = append(installErrors, fmt.Errorf("failed to install %s: %w", pluginID, err))
 		}
 	}

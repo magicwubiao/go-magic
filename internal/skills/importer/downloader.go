@@ -167,7 +167,7 @@ func parseGitHubURL(rawURL string) (owner, repo, branch, pathInRepo string, err 
 
 // DownloadGitHubRepo downloads files from a GitHub repository directory
 func (d *Downloader) DownloadGitHubRepo(rawURL string) (string, error) {
-	owner, repo, branch, pathInRepo := parseGitHubURL(rawURL)
+	owner, repo, branch, pathInRepo, err := parseGitHubURL(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse GitHub URL: %w", err)
 	}
@@ -247,8 +247,6 @@ func (d *Downloader) DownloadGitHubRepo(rawURL string) (string, error) {
 			fmt.Printf("  Downloaded: %s\n", filePath)
 		} else if content.Type == "dir" {
 			// Recursively download subdirectory
-			subURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s/%s",
-				owner, repo, branch, content.Path)
 			subDir := filepath.Join(downloadDir, filepath.Base(content.Path))
 			if err := os.MkdirAll(subDir, 0755); err != nil {
 				return "", fmt.Errorf("failed to create subdirectory: %w", err)
@@ -420,7 +418,7 @@ func (d *Downloader) DownloadHTTP(rawURL string) (string, error) {
 
 	downloadPath := filepath.Join(d.TempDir, filename)
 
-	return d.downloadFile(rawURL, filename, d.TempDir)
+	return d.downloadFile(rawURL, filename, downloadPath)
 }
 
 // downloadFile downloads a file from a URL and saves it to the destination

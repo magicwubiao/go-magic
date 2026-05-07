@@ -128,15 +128,15 @@ func (ac *AutoCreator) CreateSkill() (*Skill, error) {
 	tools := ac.extractTools()
 
 	skill := &Skill{
-		Name:        skillName,
-		Description: description,
-		Version:     "1.0.0",
-		Author:      "magic Auto-Creator",
-		Tags:        ac.generateTags(),
+		SkillMeta: SkillMeta{
+			Name:        skillName,
+			Description: description,
+			Version:     "1.0.0",
+			Author:      "magic Auto-Creator",
+			Tags:        ac.generateTags(),
+		},
 		Tools:       tools,
 		Content:     content,
-		Source:      "auto",
-		InstalledAt: time.Now(),
 		Metadata: map[string]interface{}{
 			"auto_created": true,
 			"tool_count":   ac.toolCallCount,

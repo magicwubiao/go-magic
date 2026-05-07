@@ -82,7 +82,7 @@ func (r *ProviderRouter) Register(name string, creator ProviderCreator) {
 }
 
 // ExtractProviderModel extracts provider and model from "provider/model" format
-func ExtractProviderModel(modelRef string) (provider, model string) {
+func ExtractProviderModelWithRouter(modelRef string) (provider, model string) {
 	modelRef = strings.TrimSpace(modelRef)
 	parts := strings.SplitN(modelRef, "/", 2)
 	if len(parts) == 2 {

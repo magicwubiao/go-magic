@@ -317,7 +317,7 @@ func (m *Manager) generateToolsSchema(filterTools []string) []map[string]interfa
 			"function": map[string]interface{}{
 				"name":        t.Name(),
 				"description": t.Description(),
-				"parameters":  t.Parameters(),
+				"parameters":  t.Schema(),
 			},
 		})
 	}

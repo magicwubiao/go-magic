@@ -38,14 +38,15 @@ type rtmConnection struct {
 
 // slackEvent represents incoming Slack events
 type slackEvent struct {
-	Type    string          `json:"type"`
-	Channel string          `json:"channel,omitempty"`
-	User    string          `json:"user,omitempty"`
-	Text    string          `json:"text,omitempty"`
-	Ts      string          `json:"ts,omitempty"`
-	EventTs string          `json:"event_ts,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Raw     json.RawMessage `json:"raw,omitempty"`
+	Type      string          `json:"type"`
+	Challenge string          `json:"challenge,omitempty"`
+	Channel   string          `json:"channel,omitempty"`
+	User      string          `json:"user,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Ts        string          `json:"ts,omitempty"`
+	EventTs   string          `json:"event_ts,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // slackMessageEvent represents a message event
@@ -268,7 +269,7 @@ func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request)
 	// Handle URL verification
 	if event.Type == "url_verification" {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"challenge": event.Raw})
+		json.NewEncoder(w).Encode(map[string]string{"challenge": event.Challenge})
 		return
 	}
 

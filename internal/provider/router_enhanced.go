@@ -33,10 +33,10 @@ type ProviderRouter struct {
 	healthChecks map[string]*HealthCheck
 	loadBalance  LoadBalancingStrategy
 	mu           sync.RWMutex
-	
+
 	// Metrics tracking
 	stats map[string]*RouterStats
-	
+
 	// Configuration
 	config *RouterConfig
 }
@@ -53,14 +53,14 @@ type RouterConfig struct {
 	UnhealthyThreshold int
 	// Number of consecutive successes before marking healthy
 	HealthyThreshold int
-	
+
 	// Load balancing strategy
 	LoadBalancing LoadBalancingStrategy
-	
+
 	// Fallback configuration
 	EnableFallback bool
 	FallbackDelay  time.Duration
-	
+
 	// Circuit breaker settings
 	CircuitBreakerEnabled bool
 	FailureThreshold      int
@@ -111,7 +111,7 @@ func NewProviderRouter(config *RouterConfig) *ProviderRouter {
 	if config == nil {
 		config = DefaultRouterConfig()
 	}
-	
+
 	router := &ProviderRouter{
 		providers:    make(map[string]Provider),
 		modelRouting: make(map[string]string),
@@ -120,12 +120,12 @@ func NewProviderRouter(config *RouterConfig) *ProviderRouter {
 		stats:        make(map[string]*RouterStats),
 		config:       config,
 	}
-	
+
 	// Start health check background worker if enabled
 	if config.HealthCheckEnabled {
 		go router.healthCheckWorker()
 	}
-	
+
 	return router
 }
 
@@ -133,12 +133,12 @@ func NewProviderRouter(config *RouterConfig) *ProviderRouter {
 func (r *ProviderRouter) Register(name string, provider Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	r.providers[name] = provider
 	r.stats[name] = &RouterStats{
 		RequestsByProvider: make(map[string]int64),
 	}
-	
+
 	// Register health check
 	if r.config.HealthCheckEnabled {
 		r.healthChecks[name] = &HealthCheck{
@@ -152,7 +152,7 @@ func (r *ProviderRouter) Register(name string, provider Provider) {
 func (r *ProviderRouter) RegisterFallback(provider string, fallbacks []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	r.fallbacks[provider] = fallbacks
 }
 
@@ -160,7 +160,7 @@ func (r *ProviderRouter) RegisterFallback(provider string, fallbacks []string) {
 func (r *ProviderRouter) RegisterModelRouting(modelPrefix, provider string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	r.modelRouting[modelPrefix] = provider
 }
 
@@ -168,28 +168,22 @@ func (r *ProviderRouter) RegisterModelRouting(modelPrefix, provider string) {
 func (r *ProviderRouter) GetProvider(name string) (Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	provider, ok := r.providers[name]
 	if !ok {
 		return nil, fmt.Errorf("provider %s not found", name)
 	}
-	
-	// Check circuit breaker if enabled
-	if r.config.CircuitBreakerEnabled {
-		if bp, ok := provider.(*BaseProvider); ok {
-			if !bp.IsHealthy() {
-				return nil, fmt.Errorf("provider %s is unhealthy (circuit breaker open)", name)
-			}
-		}
-	}
-	
+
+	// Circuit breaker check removed - BaseProvider doesn't implement Provider interface
+	// Use GetProviderHealth instead for health checks
+
 	return provider, nil
 }
 
 // GetProviderForModel returns the appropriate provider for a given model
 func (r *ProviderRouter) GetProviderForModel(model string) (Provider, string, error) {
 	r.mu.RLock()
-	
+
 	// First try exact match
 	if providerName, ok := r.modelRouting[model]; ok {
 		if provider, ok := r.providers[providerName]; ok {
@@ -197,7 +191,7 @@ func (r *ProviderRouter) GetProviderForModel(model string) (Provider, string, er
 			return provider, providerName, nil
 		}
 	}
-	
+
 	// Try prefix matching
 	for prefix, providerName := range r.modelRouting {
 		if strings.HasPrefix(model, prefix) {
@@ -207,24 +201,24 @@ func (r *ProviderRouter) GetProviderForModel(model string) (Provider, string, er
 			}
 		}
 	}
-	
+
 	r.mu.RUnlock()
-	
+
 	// Default to first registered provider
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	for name, provider := range r.providers {
 		return provider, name, nil
 	}
-	
+
 	return nil, "", fmt.Errorf("no providers registered")
 }
 
 // RouteWithFallback executes a request with automatic fallback
-func (r *ProviderRouter) RouteWithFallback(ctx context.Context, model string, 
+func (r *ProviderRouter) RouteWithFallback(ctx context.Context, model string,
 	execute func(ctx context.Context, provider Provider) error) error {
-	
+
 	if !r.config.EnableFallback {
 		provider, _, err := r.GetProviderForModel(model)
 		if err != nil {
@@ -232,26 +226,26 @@ func (r *ProviderRouter) RouteWithFallback(ctx context.Context, model string,
 		}
 		return execute(ctx, provider)
 	}
-	
+
 	// Get primary provider
 	primary, primaryName, err := r.GetProviderForModel(model)
 	if err != nil {
 		return err
 	}
-	
+
 	// Try primary first
 	if err := execute(ctx, primary); err == nil {
 		r.recordSuccess(primaryName)
 		return nil
 	}
-	
+
 	r.recordFailure(primaryName)
-	
+
 	// Get fallbacks
 	r.mu.RLock()
 	fallbacks := r.fallbacks[primaryName]
 	r.mu.RUnlock()
-	
+
 	// Try each fallback
 	for _, fbName := range fallbacks {
 		fbProvider, err := r.GetProvider(fbName)
@@ -259,17 +253,17 @@ func (r *ProviderRouter) RouteWithFallback(ctx context.Context, model string,
 			log.Debugf("Fallback provider %s unavailable: %v", fbName, err)
 			continue
 		}
-		
+
 		log.Infof("Attempting fallback to provider %s", fbName)
-		
+
 		if err := execute(ctx, fbProvider); err == nil {
 			r.recordSuccess(fbName)
 			return nil
 		}
-		
+
 		r.recordFailure(fbName)
 	}
-	
+
 	return fmt.Errorf("all providers failed for model %s", model)
 }
 
@@ -278,7 +272,7 @@ func (r *ProviderRouter) recordSuccess(provider string) {
 	r.mu.RLock()
 	stats, ok := r.stats[provider]
 	r.mu.RUnlock()
-	
+
 	if ok {
 		stats.mu.Lock()
 		stats.SuccessRequests++
@@ -293,7 +287,7 @@ func (r *ProviderRouter) recordFailure(provider string) {
 	r.mu.RLock()
 	stats, ok := r.stats[provider]
 	r.mu.RUnlock()
-	
+
 	if ok {
 		stats.mu.Lock()
 		stats.FailedRequests++
@@ -305,7 +299,7 @@ func (r *ProviderRouter) recordFailure(provider string) {
 func (r *ProviderRouter) GetStats(provider string) (stats RouterStats) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if s, ok := r.stats[provider]; ok {
 		s.mu.RLock()
 		stats = RouterStats{
@@ -322,7 +316,7 @@ func (r *ProviderRouter) GetStats(provider string) (stats RouterStats) {
 func (r *ProviderRouter) GetAllStats() map[string]RouterStats {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	result := make(map[string]RouterStats)
 	for name, s := range r.stats {
 		s.mu.RLock()
@@ -340,7 +334,7 @@ func (r *ProviderRouter) GetAllStats() map[string]RouterStats {
 func (r *ProviderRouter) GetHealthStatus(provider string) (healthy bool, lastCheck time.Time) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if hc, ok := r.healthChecks[provider]; ok {
 		hc.mu.RLock()
 		healthy = hc.Healthy
@@ -354,7 +348,7 @@ func (r *ProviderRouter) GetHealthStatus(provider string) (healthy bool, lastChe
 func (r *ProviderRouter) healthCheckWorker() {
 	ticker := time.NewTicker(r.config.HealthCheckInterval)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		r.runHealthChecks()
 	}
@@ -368,7 +362,7 @@ func (r *ProviderRouter) runHealthChecks() {
 		providers[name] = provider
 	}
 	r.mu.RUnlock()
-	
+
 	for name, provider := range providers {
 		r.checkProvider(name, provider)
 	}
@@ -379,17 +373,17 @@ func (r *ProviderRouter) checkProvider(name string, provider Provider) {
 	r.mu.RLock()
 	hc, ok := r.healthChecks[name]
 	r.mu.RUnlock()
-	
+
 	if !ok {
 		return
 	}
-	
+
 	// Try to ping the provider
 	healthy := r.pingProvider(provider)
-	
+
 	hc.mu.Lock()
 	hc.LastCheck = time.Now()
-	
+
 	if healthy {
 		hc.Successes++
 		hc.Failures = 0
@@ -414,7 +408,7 @@ func (r *ProviderRouter) pingProvider(provider Provider) bool {
 		defer cancel()
 		return hc.HealthCheck(ctx) == nil
 	}
-	
+
 	// Default: assume healthy if no health check method
 	return true
 }
@@ -430,15 +424,15 @@ func (r *ProviderRouter) SetLoadBalancing(strategy LoadBalancingStrategy) {
 func (r *ProviderRouter) SelectProvider(providers []string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if len(providers) == 0 {
 		return ""
 	}
-	
+
 	if len(providers) == 1 {
 		return providers[0]
 	}
-	
+
 	switch r.loadBalance {
 	case RoundRobin:
 		// Simple round robin - return first for now
@@ -472,7 +466,7 @@ func (r *ProviderRouter) SelectProvider(providers []string) string {
 func (r *ProviderRouter) ListProviders() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	names := make([]string, 0, len(r.providers))
 	for name := range r.providers {
 		names = append(names, name)

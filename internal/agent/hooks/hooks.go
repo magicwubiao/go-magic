@@ -214,7 +214,7 @@ func (m *HookManager) Register(reg HookRegistration) error {
 		m.eventHooks = append(m.eventHooks, h)
 		// Auto-bridge to EventBus if available
 		if m.eventBus != nil {
-			_ = m.eventBus.Subscribe(bus.EventKindLLMRequest, 16)
+			_ = m.eventBus.Subscribe(16)
 		}
 	default:
 		return fmt.Errorf("unsupported hook type: %T", reg.Hook)

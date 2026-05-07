@@ -262,7 +262,7 @@ func ReadSkillFiles(skillDir string) (map[string]string, error) {
 		name := entry.Name()
 
 		// Include SKILL.md and code files
-		if name == "SKILL.md" || isCodeFile(ext) {
+		if name == "SKILL.md" || IsCodeFile(ext) {
 			path := filepath.Join(skillDir, name)
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -275,8 +275,8 @@ func ReadSkillFiles(skillDir string) (map[string]string, error) {
 	return files, nil
 }
 
-// isCodeFile checks if a file extension is a code file
-func isCodeFile(ext string) bool {
+// IsCodeFile checks if a file extension is a code file
+func IsCodeFile(ext string) bool {
 	codeExts := []string{
 		".go", ".py", ".js", ".ts", ".tsx", ".jsx",
 		".sh", ".bash", ".zsh",

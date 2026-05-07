@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/magicwubiao/go-magic/pkg/types"
+	
 )
 
 // WenxinProvider implements the Baidu Wenxin (ERNIE) API

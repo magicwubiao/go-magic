@@ -109,7 +109,7 @@ func (sm *SnapshotManager) UpdateMemory(content string) error {
 
 	// Apply character limit
 	if len(content) > MemoryLimitChars {
-		content = sm.compressMemory(content, MemoryLimitChars)
+		content = sm.compressor.compressMemory(content, MemoryLimitChars)
 	}
 
 	sm.latestMemory = content
@@ -124,7 +124,7 @@ func (sm *SnapshotManager) UpdateUser(content string) error {
 
 	// Apply character limit
 	if len(content) > UserLimitChars {
-		content = sm.compressUser(content, UserLimitChars)
+		content = sm.compressor.compressUser(content, UserLimitChars)
 	}
 
 	sm.latestUser = content
@@ -144,7 +144,7 @@ func (sm *SnapshotManager) AppendToMemory(line string) error {
 
 	// Check limit and compress if needed
 	if len(newContent) > MemoryLimitChars {
-		newContent = sm.compressMemory(newContent, MemoryLimitChars)
+		newContent = sm.compressor.compressMemory(newContent, MemoryLimitChars)
 	}
 
 	sm.latestMemory = newContent
@@ -164,7 +164,7 @@ func (sm *SnapshotManager) AppendToUser(line string) error {
 
 	// Check limit and compress if needed
 	if len(newContent) > UserLimitChars {
-		newContent = sm.compressUser(newContent, UserLimitChars)
+		newContent = sm.compressor.compressUser(newContent, UserLimitChars)
 	}
 
 	sm.latestUser = newContent

@@ -32,6 +32,7 @@ const (
 	EventKindAgentStart
 	EventKindAgentEnd
 	EventKindError
+	EventKindWarning
 	EventKindSteering
 	EventKindCount
 )
@@ -58,6 +59,8 @@ func (k EventKind) String() string {
 		return "agent_end"
 	case EventKindError:
 		return "error"
+	case EventKindWarning:
+		return "warning"
 	case EventKindSteering:
 		return "steering"
 	default:

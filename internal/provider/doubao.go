@@ -213,10 +213,7 @@ func (p *DoubaoProvider) convertMessages(messages []Message) []map[string]interf
 				toolCalls = append(toolCalls, map[string]interface{}{
 					"id":   tc.ID,
 					"type": "function",
-					"function": map[string]interface{}{
-						"name":      tc.Function.Name,
-						"arguments": tc.Function.Arguments,
-					},
+					"name": tc.Name, "arguments": tc.Arguments,
 				})
 			}
 			m["tool_calls"] = toolCalls
@@ -271,10 +268,14 @@ func (p *DoubaoProvider) parseResponse(body []byte) (*ChatResponse, error) {
 	}
 
 	for _, tc := range choice.Message.ToolCalls {
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = make(map[string]interface{})
+		}
 		toolCalls = append(toolCalls, types.ToolCall{
-			ID:       tc.ID,
-			Type:     "function",
-			Function: types.Function{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: args,
 		})
 	}
 
@@ -337,14 +338,15 @@ func (p *DoubaoProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 			}
 
 			for _, tc := range choice.Delta.ToolCalls {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					args = make(map[string]interface{})
+				}
 				handler(&StreamResponse{
 					ToolCall: &types.ToolCall{
-						ID:   tc.ID,
-						Type: "function",
-						Function: types.Function{
-							Name:      tc.Function.Name,
-							Arguments: tc.Function.Arguments,
-						},
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: args,
 					},
 					Done: false,
 				})

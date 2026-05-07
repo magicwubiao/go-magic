@@ -138,7 +138,7 @@ func (r *Repository) Install(pluginID string, version string, targetDir string) 
 	// Check if version exists in index
 	var downloadURL string
 	for _, v := range []string{installVersion, "latest"} {
-		u := r.buildURL("plugins", pluginID, "download", map[string]string{"version": v})
+		u := r.buildURLWithQuery("plugins/"+pluginID+"/download", map[string]string{"version": v})
 		if r.pluginExists(u) {
 			downloadURL = u
 			break
@@ -374,7 +374,7 @@ func (r *Repository) buildURL(parts ...string) string {
 }
 
 // buildURLWithQuery builds a URL with query parameters
-func (r *Repository) buildURL(path string, query map[string]string) string {
+func (r *Repository) buildURLWithQuery(path string, query map[string]string) string {
 	u, _ := url.Parse(r.baseURL)
 	u.Path = filepath.Join(u.Path, path)
 
@@ -413,8 +413,8 @@ func (r *Repository) download(url string) ([]byte, error) {
 }
 
 // extractZip extracts a ZIP archive
-func (r *Repository) extractZip(reader io.ReaderAt, targetDir string) error {
-	zipReader, err := zip.NewReader(reader, int64(reader.Size()))
+func (r *Repository) extractZip(reader *bytes.Reader, targetDir string) error {
+	zipReader, err := zip.NewReader(reader, reader.Size())
 	if err != nil {
 		return fmt.Errorf("failed to read zip: %w", err)
 	}

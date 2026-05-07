@@ -255,15 +255,6 @@ func (p *GroqProvider) convertMessages(messages []Message) []map[string]interfac
 	return converted
 }
 
-// marshalArgs converts arguments to JSON string
-func marshalArgs(args map[string]interface{}) string {
-	if args == nil {
-		return "{}"
-	}
-	data, _ := json.Marshal(args)
-	return string(data)
-}
-
 // parseResponse parses the OpenAI-compatible response
 func (p *GroqProvider) parseResponse(body []byte) (*ChatResponse, error) {
 	var resp struct {

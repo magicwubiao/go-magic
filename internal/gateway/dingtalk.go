@@ -5,15 +5,14 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
+	
 	"crypto/sha256"
-	"encoding/base64"
+	
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
-	"strconv"
+	
 	"strings"
 	"sync"
 	"time"
@@ -148,60 +147,42 @@ func (g *DingTalkGateway) HandleSlashCommand(cmd string, msg Message) (Response,
 // CheckHealth returns detailed health status for DingTalk gateway
 func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "dingtalk",
-		Connected:   g.IsConnected(),
-		CallbackOK:  false,
-		CallbackPort: g.callbackPort,
-		Details:     make(map[string]interface{}),
+		Status:    "ok",
+		Timestamp: time.Now(),
+		Platforms: make(map[string]PlatformStatus),
 	}
-
-	if !status.Connected {
-		status.Error = "Gateway not connected"
+	
+	platformStatus := PlatformStatus{
+		Name:   "dingtalk",
+		Status: "disconnected",
+	}
+	
+	if !g.IsConnected() {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["dingtalk"] = platformStatus
 		return status
 	}
-
+	
+	platformStatus.Status = "connected"
+	
 	// Check token validity
 	g.tokenMu.RLock()
 	token := g.accessToken
 	tokenExpiry := g.tokenExpiresAt
 	g.tokenMu.RUnlock()
-
-	if token != "" {
-		status.TokenValid = true
-		status.Details["token_available"] = true
-	} else {
-		status.TokenValid = false
-		status.Details["token_available"] = false
+	
+	if token == "" {
+		platformStatus.Error = "No access token"
+		status.Status = "error"
+	} else if !tokenExpiry.IsZero() && time.Now().After(tokenExpiry) {
+		platformStatus.Error = "Token expired"
+		status.Status = "error"
 	}
-
-	if !tokenExpiry.IsZero() {
-		status.TokenExpiry = &tokenExpiry
-		if time.Now().After(tokenExpiry) {
-			status.TokenValid = false
-			status.Details["token_expired"] = true
-		}
-	}
-
-	// HTTP client is implicit via http.Get in refreshToken
-	status.HTTPClientOK = true
-	status.Details["http_client_initialized"] = true
-
-	// Check DingTalk API connectivity
-	start := time.Now()
-	testURL := fmt.Sprintf("https://oapi.dingtalk.com/gettoken?appkey=%s&appsecret=%s",
-		g.appKey, g.appSecret)
-
-	resp, err := http.Get(testURL)
-	if err == nil {
-		status.LatencyMs = time.Since(start).Milliseconds()
-		resp.Body.Close()
-		status.Details["api_reachable"] = true
-		status.Details["api_status"] = resp.StatusCode
-	} else {
-		status.HTTPClientOK = false
-		status.Error = fmt.Sprintf("DingTalk API not reachable: %v", err)
-	}
-
+	
+	status.Platforms["dingtalk"] = platformStatus
+	
 	return status
 }
 

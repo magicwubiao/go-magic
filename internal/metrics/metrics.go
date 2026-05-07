@@ -3,6 +3,7 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -87,38 +88,31 @@ func NewHistogram(buckets []float64) *Histogram {
 
 // Observe records a single observation
 func (h *Histogram) Observe(v float64) {
-	atomic.AddInt64(&h.count, 1)
-	atomic.AddFloat64(&h.sum, v)
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	
-	// Update min/max atomically
-	for {
-		currentMin := atomic.LoadFloat64(&h.min)
-		if v >= currentMin {
-			break
-		}
-		if atomic.CompareAndSwapFloat64(&h.min, currentMin, v) {
-			break
-		}
+	// Update count (no need for atomic since we hold the mutex)
+	h.count++
+	
+	// Update sum
+	h.sum += v
+	
+	// Update min
+	if v < h.min {
+		h.min = v
 	}
 	
-	for {
-		currentMax := atomic.LoadFloat64(&h.max)
-		if v <= currentMax {
-			break
-		}
-		if atomic.CompareAndSwapFloat64(&h.max, currentMax, v) {
-			break
-		}
+	// Update max
+	if v > h.max {
+		h.max = v
 	}
 	
 	// Update bucket counts
-	h.mu.Lock()
 	for bound := range h.buckets {
 		if v <= bound {
 			h.buckets[bound]++
 		}
 	}
-	h.mu.Unlock()
 }
 
 // Percentile calculates the p-th percentile
@@ -156,7 +150,7 @@ func (h *Histogram) Count() int64 {
 
 // Sum returns the sum of all observations
 func (h *Histogram) Sum() float64 {
-	return atomic.LoadFloat64(&h.sum)
+	h.mu.Lock(); defer h.mu.Unlock(); return h.sum
 }
 
 // Avg returns the average of all observations
@@ -170,7 +164,9 @@ func (h *Histogram) Avg() float64 {
 
 // Min returns the minimum observation
 func (h *Histogram) Min() float64 {
-	min := atomic.LoadFloat64(&h.min)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	min := h.min
 	if min == float64(^uint64(0>>1)) {
 		return 0
 	}
@@ -179,7 +175,9 @@ func (h *Histogram) Min() float64 {
 
 // Max returns the maximum observation
 func (h *Histogram) Max() float64 {
-	return atomic.LoadFloat64(&h.max)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.max
 }
 
 // Metrics represents a collection of all metrics

@@ -17,9 +17,6 @@ type ChatResponse struct {
 	Usage     *Usage           `json:"usage,omitempty"`
 }
 
-// StreamHandler is called for each streaming chunk
-type StreamHandler func(resp *StreamResponse)
-
 // Provider is the interface for LLM providers.
 type Provider interface {
 	Chat(ctx context.Context, messages []Message) (*ChatResponse, error)

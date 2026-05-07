@@ -18,6 +18,8 @@ type Message struct {
 	ChannelID string                 `json:"channel_id"`
 	UserID    string                 `json:"user_id"`
 	Content   string                 `json:"content"`
+	Role      string                 `json:"role,omitempty"`
+	From      string                 `json:"from,omitempty"`
 	Timestamp time.Time              `json:"timestamp"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -671,6 +673,18 @@ type HealthStatus struct {
 	Status    string                    `json:"status"`
 	Timestamp time.Time                 `json:"timestamp"`
 	Platforms map[string]PlatformStatus `json:"platforms"`
+	
+	// 兼容旧代码字段
+	Platform      string                 `json:"platform,omitempty"`
+	Connected    bool                   `json:"connected,omitempty"`
+	CallbackOK   bool                   `json:"callback_ok,omitempty"`
+	CallbackPort int                    `json:"callback_port,omitempty"`
+	HTTPClientOK bool                   `json:"http_client_ok,omitempty"`
+	TokenValid   bool                   `json:"token_valid,omitempty"`
+	TokenExpiry  *time.Time             `json:"token_expiry,omitempty"`
+	LatencyMs     int64                  `json:"latency_ms,omitempty"`
+	Details       map[string]interface{} `json:"details,omitempty"`
+	Error         string                 `json:"error,omitempty"`
 }
 
 // PlatformStatus represents the status of a platform
@@ -774,7 +788,7 @@ func (g *Gateway) Broadcast(content string) {
 	defer g.mu.RUnlock()
 	
 	for _, handler := range g.platforms {
-		for _, session := range g.sessions {
+		for range g.sessions {
 			resp := Response{
 				Content: content,
 			}

@@ -3,8 +3,6 @@ package migrate
 import (
 	"fmt"
 	"strings"
-
-	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
 
 // ToolConverter handles conversion of tools between formats

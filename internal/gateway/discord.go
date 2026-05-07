@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -265,11 +264,11 @@ func (g *DiscordGateway) HandleSlashCommand(cmd string, msg Message) (Response, 
 	case "status":
 		if g.IsConnected() {
 			return Response{
-				Content: "‚ú?Bot is connected and ready!",
+				Content: "Bot is connected and ready!",
 			}, nil
 		}
 		return Response{
-			Content: "‚ù?Bot is not connected",
+			Content: "Bot is not connected",
 		}, nil
 	case "info":
 		return Response{

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"encoding/json"
 )
 
 // WeChatGateway implements the WeChat platform handler
@@ -22,6 +22,7 @@ type WeChatGateway struct {
 	appID          string
 	appSecret      string
 	token          string
+	tokenExpiresAt time.Time
 	encodingAESKey string
 
 	agents map[string]*AgentSession
@@ -264,11 +265,11 @@ func (g *WeChatGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 	case "status":
 		if g.IsConnected() {
 			return Response{
-				Content: "✅ Bot is connected and ready!",
+				Content: "Bot is connected and ready!",
 			}, nil
 		}
 		return Response{
-			Content: "❌ Bot is not connected",
+			Content: "Bot is not connected",
 		}, nil
 	default:
 		return Response{}, fmt.Errorf("unknown command: %s", cmd)

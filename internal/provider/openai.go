@@ -1,9 +1,7 @@
 package provider
 
 import (
-	"context"
-
-	"github.com/magicwubiao/go-magic/pkg/types"
+	
 )
 
 // OpenAIProvider implements the OpenAI API

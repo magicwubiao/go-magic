@@ -5,14 +5,14 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
+	
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -305,9 +305,7 @@ func (g *WeComGateway) SetAESKey(key string) {
 
 // handleCallback handles incoming callbacks from WeCom
 func (g *WeComGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
-	msgSignature := r.URL.Query().Get("msg_signature")
-	timestamp := r.URL.Query().Get("timestamp")
-	nonce := r.URL.Query().Get("nonce")
+	
 	echostr := r.URL.Query().Get("echostr")
 	
 	// Handle URL verification

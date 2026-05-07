@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Skill is now defined in types.go - this file re-exports it for backwards compatibility
@@ -288,9 +287,11 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 	}
 
 	skill := &Skill{
-		Name:        name,
-		Description: description,
-		Tags:        tags,
+		SkillMeta: SkillMeta{
+			Name:        name,
+			Description: description,
+			Tags:        tags,
+		},
 		Tools:       tools,
 		Content:     content,
 		Metadata:    make(map[string]interface{}),
@@ -409,7 +410,9 @@ func (m *Manager) loadTextSkill(path string) *Skill {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
 	skill := &Skill{
-		Name:    name,
+		SkillMeta: SkillMeta{
+			Name:    name,
+		},
 		Content: string(data),
 	}
 
@@ -891,10 +894,12 @@ func (m *Manager) InstallFromURL(url string) error {
 
 	// Try as plain markdown/text
 	skill = Skill{
-		Name:        "imported-skill",
-		Description: "Skill imported from URL",
-		Content:     string(data),
-		Tags:        []string{"imported"},
+		SkillMeta: SkillMeta{
+			Name:        "imported-skill",
+			Description: "Skill imported from URL",
+			Tags:        []string{"imported"},
+		},
+		Content: string(data),
 	}
 
 	return m.Add(&skill)

@@ -174,7 +174,7 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) {
 
 	// Send response if we have a transport
 	if s.transport != nil {
-		if err := s.transport.Send(ctx, &resp); err != nil {
+		if err := s.transport.Respond(ctx, &resp); err != nil {
 			fmt.Printf("Failed to send response: %v\n", err)
 		}
 	}

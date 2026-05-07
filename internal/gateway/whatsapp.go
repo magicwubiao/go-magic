@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,7 +219,7 @@ func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
 		RecipientType:    "individual",
 		To:               to,
 		Type:             "text",
-		Text:             &struct{ Body string }{Body: text},
+		Text:             &struct{ Body string `json:"body"` }{Body: text},
 	}
 
 	return g.sendMessage(ctx, reqBody)

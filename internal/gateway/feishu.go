@@ -3,10 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
+	
 	"encoding/json"
 	"fmt"
 	"io"

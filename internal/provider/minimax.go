@@ -1,9 +1,7 @@
 package provider
 
 import (
-	"context"
-
-	"github.com/magicwubiao/go-magic/pkg/types"
+	
 )
 
 // MiniMaxProvider MiniMax (兼容OpenAI格式)

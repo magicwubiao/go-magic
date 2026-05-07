@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -1002,13 +1001,13 @@ func (c *SearchCache) set(key string, value []SearchResult) {
 	}
 
 	// Add new entry
-	entry = &CacheEntry{
+	newEntry := &CacheEntry{
 		key:     key,
 		value:   value,
 		created: time.Now(),
 	}
-	entry.element = c.lru.PushFront(entry)
-	c.entries[key] = entry
+	newEntry.element = c.lru.PushFront(newEntry)
+	c.entries[key] = newEntry
 }
 
 // evictLRU evicts the least recently used entry
