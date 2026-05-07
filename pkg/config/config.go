@@ -19,18 +19,19 @@ const (
 
 // Config represents the application configuration
 type Config struct {
-	Profile    string                    `json:"profile"`
-	MagicHome  string                    `json:"magic_home"`
-	WorkingDir string                    `json:"working_dir,omitempty"`
-	Provider   string                    `json:"provider"`
-	Model      string                    `json:"model"`
-	Providers  map[string]ProviderConfig  `json:"providers"`
-	Tools      ToolsConfig               `json:"tools"`
-	Gateway    GatewayConfig              `json:"gateway"`
-	MCP        *MCPConfig                `json:"mcp,omitempty"`
-	SubAgent   *SubAgentConfig           `json:"subagent,omitempty"`
-	Voice      *VoiceConfig              `json:"voice,omitempty"`
-	Privacy    *privacy.Config           `json:"privacy,omitempty"`
+	Profile        string                    `json:"profile"`
+	MagicHome      string                    `json:"magic_home"`
+	WorkingDir     string                    `json:"working_dir,omitempty"`
+	Provider       string                    `json:"provider"`
+	Model          string                    `json:"model"`
+	Providers      map[string]ProviderConfig `json:"providers"`
+	Tools          ToolsConfig               `json:"tools"`
+	Gateway        GatewayConfig             `json:"gateway"`
+	CortexEnabled  bool                      `json:"cortex_enabled,omitempty"`
+	MCP            *MCPConfig               `json:"mcp,omitempty"`
+	SubAgent       *SubAgentConfig          `json:"subagent,omitempty"`
+	Voice          *VoiceConfig              `json:"voice,omitempty"`
+	Privacy        *privacy.Config           `json:"privacy,omitempty"`
 }
 
 // ProviderConfig represents provider configuration
@@ -123,12 +124,13 @@ func Load() (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Profile:    "default",
-		MagicHome:  "~/.magic",
-		WorkingDir: getDefaultWorkingDir(),
-		Provider:   "openai",
-		Model:      "gpt-4",
-		Providers:  make(map[string]ProviderConfig),
+		Profile:       "default",
+		MagicHome:     "~/.magic",
+		WorkingDir:    getDefaultWorkingDir(),
+		Provider:      "deepseek",
+		Model:         "deepseek-chat",
+		CortexEnabled: true,
+		Providers:     make(map[string]ProviderConfig),
 		Tools: ToolsConfig{
 			Enabled: []string{"all"},
 		},

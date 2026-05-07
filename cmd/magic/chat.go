@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -136,8 +137,15 @@ func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, 
 	// Generate tools schema for provider
 	toolsSchema := getToolsSchema(registry)
 
-	// Initialize agent
-	aiAgent := agent.NewAIAgent(prov, registry, toolsSchema, "You are magic, a helpful AI assistant.")
+	// Initialize agent with optional cortex
+	home, _ := os.UserHomeDir()
+	var agentOpts []agent.AgentOption
+	if cfg.CortexEnabled {
+		cortexMgr := cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
+		cortexMgr.Start()
+		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
+	}
+	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, "You are magic, a helpful AI assistant.", agentOpts...)
 
 	// Load skills if available
 	if mgr, err := skills.NewManager(); err == nil {

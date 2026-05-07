@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -98,8 +99,18 @@ type REPL struct {
 func NewREPL(cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store) *REPL {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Initialize agent with optional cortex
+	home, _ := os.UserHomeDir()
+	var agentOpts []agent.AgentOption
+	if cfg.CortexEnabled {
+		cortexMgr := cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
+		cortexMgr.Start()
+		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
+	}
+	aiAgent := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), "", agentOpts...)
+
 	repl := &REPL{
-		agent:    agent.NewAIAgent(prov, registry, getToolsSchema(registry), ""),
+		agent:    aiAgent,
 		registry: registry,
 		store:    store,
 		cfg:      cfg,

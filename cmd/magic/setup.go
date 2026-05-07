@@ -46,9 +46,9 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	// Provider selection
 	fmt.Println("1. Choose your LLM provider:")
-	fmt.Println("   [1] OpenAI (GPT-4, GPT-3.5)")
+	fmt.Println("   [1] DeepSeek")
 	fmt.Println("   [2] Anthropic (Claude)")
-	fmt.Println("   [3] DeepSeek")
+	fmt.Println("   [3] OpenAI (GPT-4, GPT-3.5)")
 	fmt.Println("   [4] Kimi (Moonshot)")
 	fmt.Println("   [5] Zhipu (GLM)")
 	fmt.Println("   [6] Huoshan (Volcano Engine)")
@@ -63,9 +63,9 @@ func runSetup(cmd *cobra.Command, args []string) {
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	provider := "openai"
-	model := "gpt-4o"
-	baseURL := "https://api.openai.com/v1"
+	provider := "deepseek"
+	model := "deepseek-chat"
+	baseURL := "https://api.deepseek.com/v1"
 
 	switch choice {
 	case "2":
@@ -73,9 +73,9 @@ func runSetup(cmd *cobra.Command, args []string) {
 		model = "claude-3-5-sonnet-20241022"
 		baseURL = "https://api.anthropic.com/v1"
 	case "3":
-		provider = "deepseek"
-		model = "deepseek-chat"
-		baseURL = "https://api.deepseek.com/v1"
+		provider = "openai"
+		model = "gpt-4o"
+		baseURL = "https://api.openai.com/v1"
 	case "4":
 		provider = "kimi"
 		model = "moonshot-v1-8k"
@@ -114,7 +114,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		baseURL = ""
 		fmt.Println("\n   Note: You will need to configure custom provider manually.")
 	default:
-		// Use defaults for OpenAI
+		// Use defaults for DeepSeek
 	}
 
 	cfg.Provider = provider
@@ -171,13 +171,12 @@ func runSetup(cmd *cobra.Command, args []string) {
 		cfg.Profile = profile
 	}
 
-	// Working directory
-	fmt.Printf("\n5. Working directory (default: current directory): ")
-	workDir, _ := reader.ReadString('\n')
-	workDir = strings.TrimSpace(workDir)
-	if workDir != "" {
-		cfg.WorkingDir = workDir
-	}
+	// Ask about Cortex
+	fmt.Print("\n5. Enable Cortex AI enhancement? (Y/n): ")
+	cortexChoice, _ := reader.ReadString('\n')
+	cortexChoice = strings.TrimSpace(cortexChoice)
+	// Default is Yes (Y), only 'n' or 'N' disables
+	cfg.CortexEnabled = !(cortexChoice == "n" || cortexChoice == "N")
 
 	// Ask about gateway
 	fmt.Print("\n6. Enable messaging gateway? (y/N): ")
