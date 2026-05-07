@@ -53,12 +53,6 @@ Examples:
   magic skills match <input>`,
 }
 
-var skillsListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all skills",
-	Run:   runSkillsList,
-}
-
 var skillsShowCmd = &cobra.Command{
 	Use:   "show <name>",
 	Short: "Show a skill",
@@ -102,7 +96,6 @@ var skillsMatchCmd = &cobra.Command{
 }
 
 func init() {
-	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsShowCmd)
 	skillsCmd.AddCommand(skillsSearchCmd)
 	skillsCmd.AddCommand(skillsInstallCmd)
@@ -110,53 +103,12 @@ func init() {
 	skillsCmd.AddCommand(skillsDeleteCmd)
 	skillsCmd.AddCommand(skillsMatchCmd)
 	// migrate command is added in skill_migrate.go
+	// list command is added in skill_list.go
 
 	skillsCreateCmd.Flags().BoolVarP(&skillCreateForce, "force", "f", false, "Overwrite if skill exists")
 	skillsInstallCmd.Flags().StringVar(&skillInstallFrom, "from", "", "Source path or URL")
 
 	rootCmd.AddCommand(skillsCmd)
-}
-
-func runSkillsList(cmd *cobra.Command, args []string) {
-	mgr, err := skills.NewManager()
-	if err != nil {
-		fmt.Printf("Failed to load skills: %v\n", err)
-		os.Exit(1)
-	}
-
-	skillList := mgr.List()
-	if len(skillList) == 0 {
-		fmt.Println("No skills found.")
-		fmt.Println("Skills directories:")
-		fmt.Println("  ~/.magic/skills/ (global)")
-		fmt.Println("  ./skills/ (workspace)")
-		fmt.Println("  .magic/skills/ (workspace)")
-		return
-	}
-
-	fmt.Printf("Found %d skills:\n\n", len(skillList))
-
-	// Group by source
-	bySource := make(map[string][]*skills.Skill)
-	for _, s := range skillList {
-		source := s.Source
-		if source == "" {
-			source = "local"
-		}
-		bySource[string(source)] = append(bySource[string(source)], s)
-	}
-
-	for source, list := range bySource {
-		fmt.Printf("## %s\n", strings.ToUpper(source))
-		for _, s := range list {
-			tags := ""
-			if len(s.Tags) > 0 {
-				tags = fmt.Sprintf(" [%s]", strings.Join(s.Tags, ", "))
-			}
-			fmt.Printf("  • %s: %s%s\n", s.Name, s.Description, tags)
-		}
-		fmt.Println()
-	}
 }
 
 func runSkillsShow(cmd *cobra.Command, args []string) {

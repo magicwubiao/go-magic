@@ -27,6 +27,7 @@ var statusCmd = &cobra.Command{
 - Available tools
 - System resources
 - Health check`,
+	Run: runStatus,
 }
 
 var healthCmd = &cobra.Command{

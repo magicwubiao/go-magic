@@ -75,7 +75,7 @@ var cronTestCmd = &cobra.Command{
 
 func init() {
 	cronAddCmd.Flags().StringVarP(&cronSchedule, "schedule", "s", "0 9 * * *", "Cron schedule expression")
-	cronAddCmd.Flags().StringVarP(&cronPrompt, "prompt", "p", "Daily summary", "Prompt to execute")
+	cronAddCmd.Flags().StringVar(&cronPrompt, "prompt", "Daily summary", "Prompt to execute")
 	cronAddCmd.Flags().BoolVarP(&cronEnabled, "enabled", "e", false, "Enable the cron job immediately")
 
 	cronRemoveCmd.Flags().BoolP("force", "f", false, "Skip confirmation")

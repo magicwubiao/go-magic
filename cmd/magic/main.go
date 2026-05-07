@@ -70,8 +70,6 @@ const helpTemplate = `
 {{bold "\nUse"}} {{.CommandPath}} [command] --help {{bold "for more information about a command."}}{{end}}
 {{if .HasExample}}{{bold "\nExamples:"}}
 {{.Example}}{{end}}
-{{if .HasSubCommands}}{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
-{{.CmdPath}}{{" "}}{{.UsageLine}}{{end}}{{end}}{{end}}
 `
 
 // usageTemplate is the custom usage template

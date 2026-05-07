@@ -54,7 +54,7 @@ func init() {
 	docsCmd.Flags().StringVarP(&docsOutputDir, "output", "o", "./docs", "Output directory for documentation")
 	docsCmd.Flags().StringVar(&docsFormat, "format", "markdown", "Output format (markdown, html, man)")
 	docsCmd.Flags().BoolVar(&docsIncludeAll, "all", false, "Include hidden commands")
-	docsCmd.Flags().IntVarP(&docsPort, "port", "p", 8080, "Port for documentation server")
+	docsCmd.Flags().IntVar(&docsPort, "port", 8080, "Port for documentation server")
 	rootCmd.AddCommand(docsCmd)
 }
 
