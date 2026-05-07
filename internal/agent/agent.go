@@ -759,7 +759,19 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	if err != nil {
 		content = fmt.Sprintf("Error: %v", err)
 	} else {
-		content = fmt.Sprintf("%v", result)
+		// Serialize result to JSON string for API compatibility
+		switch v := result.(type) {
+		case string:
+			content = v
+		case nil:
+			content = ""
+		default:
+			if jsonBytes, jsonErr := json.Marshal(result); jsonErr == nil {
+				content = string(jsonBytes)
+			} else {
+				content = fmt.Sprintf("%v", result)
+			}
+		}
 	}
 
 	// Call AfterTool hooks
