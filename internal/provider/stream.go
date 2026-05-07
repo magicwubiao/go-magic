@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"io"
 	"strings"
 	"sync"
@@ -293,6 +294,7 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 	for i := 0; i <= len(deltaMap); i++ {
 		if tc, ok := deltaMap[i]; ok {
 			accumulatedToolCalls = append(accumulatedToolCalls, *tc)
+			fmt.Fprintf(os.Stderr, "[DEBUG] Accumulated toolCall[%d]: id=%q func.name=%q func.args_len=%d\n", i, tc.ID, tc.Function.Name, len(tc.Function.Arguments))
 		}
 	}
 

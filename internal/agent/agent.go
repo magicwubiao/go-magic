@@ -13,7 +13,8 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
-)
+
+	"encoding/json")
 
 // Tool dependency graph - tools that must run alone (cannot parallelize with same tool or related)
 var (
@@ -337,8 +338,9 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 		for i, tc := range resp.ToolCalls {
 			toolCalls[i] = types.ToolCall{
 				ID:        tc.ID,
-				Name:      tc.Name,
-				Arguments: tc.Arguments,
+				Name:      tc.Function.Name,
+				Type:      "function",
+				Function:  tc.Function,
 			}
 		}
 
@@ -461,8 +463,14 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					lastErr = resp.Error
 					return
 				}
-				fullContent += resp.Content
-				toolCalls = resp.ToolCalls
+				if resp.Done {
+					// Done=true: Content is full accumulated, ToolCalls are complete
+					fullContent = resp.Content
+					toolCalls = resp.ToolCalls
+				} else {
+					// Delta chunk: Content is incremental
+					fullContent += resp.Content
+				}
 				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
@@ -478,7 +486,11 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					lastErr = resp.Error
 					return
 				}
-				fullContent += resp.Content
+				if resp.Done {
+					fullContent = resp.Content
+				} else {
+					fullContent += resp.Content
+				}
 				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
@@ -547,9 +559,14 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 		for i, tc := range toolCalls {
 			tcs[i] = types.ToolCall{
 				ID:        tc.ID,
-				Name:      tc.Name,
-				Arguments: tc.Arguments,
+				Name:      tc.Function.Name,
+				Type:      "function",
+				Function:  tc.Function,
 			}
+		}
+		// Debug: log tool calls
+		for i, tc := range tcs {
+			fmt.Fprintf(os.Stderr, "[DEBUG] toolCalls[%d]: id=%q name=%q func.name=%q func.args_len=%d\n", i, tc.ID, tc.Name, tc.Function.Name, len(tc.Function.Arguments))
 		}
 
 		a.history = append(a.history, provider.Message{
@@ -574,14 +591,19 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 				content = fmt.Sprintf("Error: %v", result.Err)
 			}
 
+			fmt.Fprintf(os.Stderr, "[DEBUG] Adding tool result to history: tc.ID=%q tc.Name=%q tc.Function.Name=%q\n", tc.ID, tc.Name, tc.Function.Name)
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
 				Content:    truncateStr(content, a.maxMsgLen),
 				ToolCallID: tc.ID,
 			})
 
-			// Stream tool result
-			handler(fmt.Sprintf("\n[Tool: %s] %s\n", tc.Name, content), false)
+			// Stream tool result - use Function.Name for display
+			toolName := tc.Function.Name
+			if toolName == "" {
+				toolName = tc.Name
+			}
+			handler(fmt.Sprintf("\n[Tool: %s] %s\n", toolName, content), false)
 		}
 
 		// Check context after tool execution
@@ -661,16 +683,35 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCall) ToolCallResult {
 	start := time.Now()
 
+	// Resolve tool name: prefer Function.Name, fallback to Name
+	toolName := tc.Function.Name
+	if toolName == "" {
+		toolName = tc.Name
+	}
+
+	// Parse arguments: prefer Function.Arguments (JSON string), fallback to Arguments (map)
+	var toolArgs map[string]interface{}
+	if tc.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs); err != nil {
+			// If parsing fails, try as a simple value
+			toolArgs = map[string]interface{}{"input": tc.Function.Arguments}
+		}
+	} else if tc.Arguments != nil {
+		toolArgs = tc.Arguments
+	} else {
+		toolArgs = map[string]interface{}{}
+	}
+
 	// Emit before tool event
 	a.Emit(bus.EventKindToolBefore, map[string]interface{}{
-		"tool": tc.Name,
-		"args": tc.Arguments,
+		"tool": toolName,
+		"args": toolArgs,
 	})
 
 	// Call BeforeTool hooks
 	callReq := &hooks.ToolCallHookRequest{
-		ToolName: tc.Name,
-		ToolArgs: tc.Arguments,
+		ToolName: toolName,
+		ToolArgs: toolArgs,
 	}
 	callReq, decision, err := a.hooks.BeforeTool(ctx, callReq)
 	if err != nil {
@@ -691,7 +732,7 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	}
 
 	// Execute tool
-	result, err := a.registry.Execute(ctx, tc.Name, callReq.ToolArgs)
+	result, err := a.registry.Execute(ctx, toolName, callReq.ToolArgs)
 	elapsed := time.Since(start)
 
 	content := ""
@@ -703,8 +744,8 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 
 	// Call AfterTool hooks
 	resultResp := &hooks.ToolResultHookResponse{
-		ToolName:    tc.Name,
-		ToolArgs:    callReq.ToolArgs,
+		ToolName:    toolName,
+		ToolArgs:    toolArgs,
 		Result:      result,
 		Error:       err,
 		ExecutionMs: elapsed.Milliseconds(),
@@ -713,14 +754,14 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 
 	// Emit after tool event
 	a.Emit(bus.EventKindToolAfter, map[string]interface{}{
-		"tool":  tc.Name,
+		"tool":  toolName,
 		"error": err,
 		"ms":    elapsed.Milliseconds(),
 	})
 
 	return ToolCallResult{
 		ID:        tc.ID,
-		Name:      tc.Name,
+		Name:      toolName,
 		Content:   content,
 		Err:       err,
 		Execution: elapsed,
@@ -733,7 +774,11 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 	var sequential []types.ToolCall
 
 	for _, tc := range toolCalls {
-		if exclusiveTools[tc.Name] || sequentialTools[tc.Name] {
+		toolName := tc.Function.Name
+		if toolName == "" {
+			toolName = tc.Name
+		}
+		if exclusiveTools[toolName] || sequentialTools[toolName] {
 			sequential = append(sequential, tc)
 		} else {
 			parallel = append(parallel, tc)
