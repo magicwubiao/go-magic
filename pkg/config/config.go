@@ -113,11 +113,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Default working_dir to current directory if not set
+	// Default working_dir to "working" subdirectory of current directory if not set
 	if cfg.WorkingDir == "" {
-		if wd, err := os.Getwd(); err == nil {
-			cfg.WorkingDir = wd
-		}
+		cfg.WorkingDir = getDefaultWorkingDir()
 	}
 
 	return &cfg, nil
@@ -146,8 +144,15 @@ func DefaultConfig() *Config {
 	return defaultConfig()
 }
 
+// getDefaultWorkingDir returns the default working directory.
+// It uses the "working" subdirectory of the current working directory.
+// If the "working" directory does not exist, falls back to the current directory.
 func getDefaultWorkingDir() string {
 	if wd, err := os.Getwd(); err == nil {
+		workingDir := filepath.Join(wd, "working")
+		if info, err := os.Stat(workingDir); err == nil && info.IsDir() {
+			return workingDir
+		}
 		return wd
 	}
 	return ""
