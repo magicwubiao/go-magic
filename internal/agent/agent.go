@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -471,7 +470,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
 							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
-							fmt.Fprintf(os.Stderr, "[WARN] Generated fallback ID for toolCalls[%d]: %s\n", i, toolCalls[i].ID)
 						}
 						if toolCalls[i].Function.Name == "" {
 							toolCalls[i].Function.Name = toolCalls[i].Name
@@ -486,7 +484,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 			if err == nil {
 				streamed = true
 			} else {
-				fmt.Fprintf(os.Stderr, "[DEBUG] StreamWithTools failed: %v, falling back\n", err)
 				lastErr = err
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
@@ -506,11 +503,10 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 			if err == nil {
 				streamed = true
 			} else {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Stream failed: %v, falling back\n", err)
 				lastErr = err
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "[DEBUG] No streaming support, using non-streaming\n")
+			// No streaming support available
 		}
 
 		// Fall back to non-streaming if streaming failed
@@ -538,8 +534,7 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 			for i := range toolCalls {
 				if toolCalls[i].ID == "" {
 					toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
-					fmt.Fprintf(os.Stderr, "[WARN] Generated fallback ID for non-streaming toolCalls[%d]: %s\n", i, toolCalls[i].ID)
-			}
+				}
 				if toolCalls[i].Function.Name == "" {
 					toolCalls[i].Function.Name = toolCalls[i].Name
 				}
@@ -584,10 +579,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 				Function:  tc.Function,
 			}
 		}
-		// Debug: log tool calls
-		for i, tc := range tcs {
-			fmt.Fprintf(os.Stderr, "[DEBUG] toolCalls[%d]: id=%q name=%q func.name=%q func.args_len=%d\n", i, tc.ID, tc.Name, tc.Function.Name, len(tc.Function.Arguments))
-		}
 
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
@@ -611,7 +602,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 				content = fmt.Sprintf("Error: %v", result.Err)
 			}
 
-			fmt.Fprintf(os.Stderr, "[DEBUG] Adding tool result to history: tc.ID=%q tc.Name=%q tc.Function.Name=%q\n", tc.ID, tc.Name, tc.Function.Name)
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
 				Content:    truncateStr(content, a.maxMsgLen),

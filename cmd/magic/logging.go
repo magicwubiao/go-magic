@@ -87,5 +87,5 @@ func initLogging() {
 	}
 
 	logFile = f
-	logInfo("Logging initialized: %s", logPath)
+	writeLogFile("[INFO] Logging initialized: " + logPath)
 }

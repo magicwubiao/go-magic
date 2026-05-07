@@ -2,27 +2,12 @@ package provider
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // ConvertMessages converts internal Message format to OpenAI API message format
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
-	// Debug: dump raw messages before conversion
-	fmt.Fprintf(os.Stderr, "[DEBUG] ConvertMessages: %d messages\n", len(messages))
-	for i, msg := range messages {
-		tcCount := len(msg.ToolCalls)
-		tcID := msg.ToolCallID
-		contentPreview := msg.Content
-		if len(contentPreview) > 80 { contentPreview = contentPreview[:80] }
-		fmt.Fprintf(os.Stderr, "[DEBUG]   [%d] role=%s tool_calls=%d tool_call_id=%q content=%.80s\n", i, msg.Role, tcCount, tcID, contentPreview)
-		for j, tc := range msg.ToolCalls {
-			fmt.Fprintf(os.Stderr, "[DEBUG]     tool_calls[%d]: id=%q name=%q func.name=%q\n", j, tc.ID, tc.Name, tc.Function.Name)
-		}
-	}
-	
 	result := make([]map[string]interface{}, 0, len(messages))
 	
 	for msgIdx, msg := range messages {
@@ -72,37 +57,15 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 				toolCallID := findToolCallID(messages, msgIdx)
 				if toolCallID != "" {
 					openAIMsg["tool_call_id"] = toolCallID
-					fmt.Fprintf(os.Stderr, "[WARN] Missing tool_call_id for tool message, found matching ID: %s\n", toolCallID)
 				} else {
 					// Last resort - generate a synthetic ID
 					syntheticID := "call_unknown"
 					openAIMsg["tool_call_id"] = syntheticID
-					fmt.Fprintf(os.Stderr, "[ERROR] Missing tool_call_id for tool message, using synthetic ID: %s\n", syntheticID)
 				}
 			}
 		}
 		
 		result = append(result, openAIMsg)
-	}
-	
-	// Debug: log assistant messages with tool_calls and tool messages
-	for i, msg := range result {
-		if msg["role"] == "assistant" {
-			if tcs, ok := msg["tool_calls"]; ok {
-				fmt.Fprintf(os.Stderr, "[DEBUG] ConvertMessages: messages[%d] role=assistant has_tool_calls=true tool_calls_count=%d\n", i, len(tcs.([]map[string]interface{})))
-				for j, tc := range tcs.([]map[string]interface{}) {
-					fmt.Fprintf(os.Stderr, "[DEBUG]   tool_calls[%d]: id=%v\n", j, tc["id"])
-				}
-			}
-		}
-		if msg["role"] == "tool" {
-			tcid, _ := msg["tool_call_id"]
-			content := fmt.Sprintf("%v", msg["content"])
-			if len(content) > 100 {
-				content = content[:100]
-			}
-			fmt.Fprintf(os.Stderr, "[DEBUG] ConvertMessages: messages[%d] role=tool tool_call_id=%v content=%.100s\n", i, tcid, content)
-		}
 	}
 	
 	return result
