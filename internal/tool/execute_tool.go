@@ -21,6 +21,9 @@ var allowedCommands = map[string]bool{
 	"ls": true, "dir": true, "cat": true, "type": true,
 	"find": true, "grep": true, "wc": true, "head": true,
 	"tail": true, "stat": true,
+	"mkdir": true, "rmdir": true, "touch": true,
+	"cp": true, "mv": true, "rm": true, "ln": true,
+	"chmod": true, "chown": true,
 
 	// Git operations
 	"git": true, "github": true, "glab": true,

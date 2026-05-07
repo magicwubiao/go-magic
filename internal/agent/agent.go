@@ -591,6 +591,21 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 		if err != nil {
 			lastErr = err
 			a.Emit(bus.EventKindToolError, err.Error())
+			// Must add tool result messages for each tool call,
+			// otherwise API rejects the next request (tool_calls without tool responses)
+			for _, tc := range toolCalls {
+				errContent := fmt.Sprintf("Error: %v", err)
+				a.history = append(a.history, provider.Message{
+					Role:       "tool",
+					Content:    truncateStr(errContent, a.maxMsgLen),
+					ToolCallID: tc.ID,
+				})
+				toolName := tc.Function.Name
+				if toolName == "" {
+					toolName = tc.Name
+				}
+				handler(fmt.Sprintf("\n[Tool: %s] Error: %v\n", toolName, err), false)
+			}
 			continue
 		}
 
