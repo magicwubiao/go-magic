@@ -117,12 +117,12 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagMagicHome, "magic-home", "", "Custom magic home directory")
 	rootCmd.PersistentFlags().StringVarP(&flagProfile, "profile", "p", "", "Configuration profile to use")
 
-	// Add help command customization with template functions
-	helpTmpl := template.Must(template.New("help").Funcs(funcMap).Parse(helpTemplate))
-	rootCmd.SetHelpTemplate(helpTmpl.Root.String())
+	// Register custom template functions with cobra
+	cobra.AddTemplateFuncs(funcMap)
 
-	usageTmpl := template.Must(template.New("usage").Funcs(funcMap).Parse(usageTemplate))
-	rootCmd.SetUsageTemplate(usageTmpl.Root.String())
+	// Set help and usage templates
+	rootCmd.SetHelpTemplate(helpTemplate)
+	rootCmd.SetUsageTemplate(usageTemplate)
 
 	// PersistentPreRun hook for all commands
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
