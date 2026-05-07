@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -360,17 +361,22 @@ func (r *REPL) runConversation(input string) {
 	// Save state for undo (reserved for future undo feature)
 	_ = r.agent.GetHistory()
 
-	// Print thinking indicator
-	doneCh := make(chan struct{})
+	// Spinner control with atomic flag
+	spinnerDone := make(chan struct{})
+	firstContent := int32(0) // atomic flag: 0=no content yet, 1=content started
+
 	go func() {
 		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		i := 0
 		for {
 			select {
-			case <-doneCh:
+			case <-spinnerDone:
 				return
 			default:
-				fmt.Printf("%s%sThinking %s%s\r", clearLine, colorGray, spinner[i%len(spinner)], colorReset)
+				// Only show spinner if no content has arrived yet
+				if atomic.LoadInt32(&firstContent) == 0 {
+					fmt.Printf("%s%sThinking %s%s\r", clearLine, colorGray, spinner[i%len(spinner)], colorReset)
+				}
 				time.Sleep(80 * time.Millisecond)
 				i++
 			}
@@ -392,6 +398,10 @@ func (r *REPL) runConversation(input string) {
 				return
 			}
 			if content != "" {
+				// First content arrived - clear spinner line
+				if atomic.CompareAndSwapInt32(&firstContent, 0, 1) {
+					fmt.Printf("%s        \r", clearLine)
+				}
 				fullContent.WriteString(content)
 				r.renderStreaming(content)
 			}
@@ -404,7 +414,7 @@ func (r *REPL) runConversation(input string) {
 		}
 	}
 
-	close(doneCh)
+	close(spinnerDone)
 
 	// Clear thinking line
 	fmt.Printf("%s        \r", clearLine)

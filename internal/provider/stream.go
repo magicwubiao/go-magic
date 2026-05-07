@@ -13,14 +13,24 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+	// StreamToolCall represents a tool call with index for streaming delta
+type StreamToolCall struct {
+	Index     int
+	ID        string
+	Type      string
+	Name      string
+	Arguments string
+}
+
 // StreamResponse represents a chunk of streaming response
 type StreamResponse struct {
-	Content   string           `json:"content,omitempty"`
-	ToolCall  *types.ToolCall  `json:"tool_call,omitempty"`
-	ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
-	Done      bool             `json:"done"`
-	Error     error            `json:"error,omitempty"`
-	Usage     *Usage           `json:"usage,omitempty"`
+	Content    string           `json:"content,omitempty"`
+	ToolCall   *types.ToolCall  `json:"tool_call,omitempty"`
+	ToolCalls  []types.ToolCall `json:"tool_calls,omitempty"`
+	StreamTCs  []StreamToolCall `json:"-"` // Internal use for delta tracking
+	Done       bool             `json:"done"`
+	Error      error            `json:"error,omitempty"`
+	Usage      *Usage           `json:"usage,omitempty"`
 }
 
 
@@ -84,6 +94,7 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 				Role      string `json:"role"`
 				Content   string `json:"content"`
 				ToolCalls []struct {
+					Index   int    `json:"index"`
 					ID       string `json:"id"`
 					Type     string `json:"type"`
 					Function struct {
@@ -122,6 +133,14 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
 				},
+			})
+			// Also populate StreamTCs for delta tracking with index
+			resp.StreamTCs = append(resp.StreamTCs, StreamToolCall{
+				Index:     tc.Index,
+				ID:        tc.ID,
+				Type:      tc.Type,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
 			})
 		}
 		
@@ -184,42 +203,66 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 	
 	var accumulatedContent strings.Builder
 	var accumulatedToolCalls []types.ToolCall
+	// Use map for delta tracking: index -> current accumulated tool call
+	deltaMap := make(map[int]*types.ToolCall)
 	var mu sync.Mutex
-	
+
 	done := false
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Check for completion
 		if parser.IsDone(line) {
 			done = true
 			break
 		}
-		
+
 		// Skip non-data lines
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		resp, err := parser.Parse(line)
 		if err != nil {
 			// Log error but continue parsing
 			continue
 		}
-		
+
 		if resp == nil {
 			continue
 		}
-		
+
 		mu.Lock()
 		if resp.Content != "" {
 			if config.AccumulateContent {
 				accumulatedContent.WriteString(resp.Content)
 			}
 		}
-		
-		if len(resp.ToolCalls) > 0 {
+
+		// Merge tool calls by index (streaming delta format)
+		if len(resp.StreamTCs) > 0 {
+			for _, stc := range resp.StreamTCs {
+				if stc.ID != "" {
+					// New tool call starting - this chunk has the ID
+					tc := &types.ToolCall{
+						ID:   stc.ID,
+						Type: "function",
+						Function: types.Function{
+							Name:      stc.Name,
+							Arguments: stc.Arguments,
+						},
+					}
+					deltaMap[stc.Index] = tc
+				} else if existing, ok := deltaMap[stc.Index]; ok && stc.Arguments != "" {
+					// Delta chunk - append arguments to existing tool call
+					existing.Function.Arguments += stc.Arguments
+				}
+			}
+		}
+
+		// Also handle legacy ToolCalls (for non-delta format)
+		if len(resp.ToolCalls) > 0 && len(resp.StreamTCs) == 0 {
 			accumulatedToolCalls = append(accumulatedToolCalls, resp.ToolCalls...)
 		}
 		
@@ -246,6 +289,13 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 		return fmt.Errorf("stream parsing error: %w", err)
 	}
 	
+	// Convert delta map to accumulated tool calls slice
+	for i := 0; i <= len(deltaMap); i++ {
+		if tc, ok := deltaMap[i]; ok {
+			accumulatedToolCalls = append(accumulatedToolCalls, *tc)
+		}
+	}
+
 	// Send final accumulated response
 	mu.Lock()
 	handler(&StreamResponse{
@@ -254,7 +304,7 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 		Done:      true,
 	})
 	mu.Unlock()
-	
+
 	return nil
 }
 
