@@ -101,7 +101,7 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 	}
 
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(cfg.WorkingDir)
 
 	mgr := subagent.NewManager(subCfg, prov, registry)
 	mgr.Start()

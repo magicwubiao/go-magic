@@ -312,7 +312,7 @@ func runCronTest(cmd *cobra.Command, args []string) {
 
 	// Create a simple tool registry (no tools for cron test)
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(cfg.WorkingDir)
 
 	// Create agent with minimal system prompt
 	systemPrompt := "You are a helpful assistant running a scheduled task. Complete the given task concisely and accurately."

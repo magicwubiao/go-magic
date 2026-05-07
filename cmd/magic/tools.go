@@ -95,8 +95,13 @@ func init() {
 }
 
 func runToolsList(cmd *cobra.Command, args []string) {
+	cfg, _ := config.Load()
+	workDir := ""
+	if cfg != nil {
+		workDir = cfg.WorkingDir
+	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(workDir)
 
 	tools := registry.List()
 	if len(tools) == 0 {
@@ -182,8 +187,13 @@ func categorizeTools(tools []string) map[string][]string {
 func runToolsShow(cmd *cobra.Command, args []string) {
 	toolName := args[0]
 
+	cfg, _ := config.Load()
+	workDir := ""
+	if cfg != nil {
+		workDir = cfg.WorkingDir
+	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(workDir)
 
 	t, err := registry.Get(toolName)
 	if err != nil {
@@ -242,8 +252,13 @@ func runToolsShow(cmd *cobra.Command, args []string) {
 func runToolsSearch(cmd *cobra.Command, args []string) {
 	keyword := args[0]
 
+	cfg, _ := config.Load()
+	workDir := ""
+	if cfg != nil {
+		workDir = cfg.WorkingDir
+	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(workDir)
 
 	matched := registry.FilterToolsByKeyword(keyword)
 	if len(matched) == 0 {
@@ -262,8 +277,13 @@ func runToolsEnable(cmd *cobra.Command, args []string) {
 	toolName := args[0]
 
 	// Verify tool exists
+	cfg, _ := config.Load()
+	workDir := ""
+	if cfg != nil {
+		workDir = cfg.WorkingDir
+	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(workDir)
 
 	if !registry.HasTool(toolName) {
 		fmt.Printf("Tool '%s' does not exist.\n", toolName)
@@ -326,8 +346,13 @@ func runToolsDisable(cmd *cobra.Command, args []string) {
 }
 
 func runToolsSchema(cmd *cobra.Command, args []string) {
+	cfg, _ := config.Load()
+	workDir := ""
+	if cfg != nil {
+		workDir = cfg.WorkingDir
+	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(workDir)
 
 	ts := &tool.ToolSchema{}
 

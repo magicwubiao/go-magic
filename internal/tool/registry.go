@@ -81,7 +81,7 @@ func NewRegistry() *Registry {
 }
 
 // RegisterAll 注册所有内置工具
-func (r *Registry) RegisterAll() {
+func (r *Registry) RegisterAll(workDir string) {
 	// File tools
 	r.Register(&ReadFileTool{})
 	r.Register(&WriteFileTool{})
@@ -95,7 +95,7 @@ func (r *Registry) RegisterAll() {
 	r.Register(&WebExtractTool{})
 
 	// Command execution
-	r.Register(NewSecureExecuteCommandTool())
+	r.Register(NewSecureExecuteCommandTool(workDir))
 
 	// Code execution
 	r.Register(&PythonExecuteTool{})
@@ -164,7 +164,7 @@ func GetAllTools() []Tool {
 		&WriteFileTool{},
 		&WebSearchTool{},
 		&WebExtractTool{},
-		NewSecureExecuteCommandTool(),
+		NewSecureExecuteCommandTool(""),
 		&PythonExecuteTool{},
 		&NodeExecuteTool{},
 		&ListFilesTool{},
@@ -418,7 +418,7 @@ func (r *Registry) RegisterSkillTool(provider SkillInfoProvider) {
 }
 
 // RegisterWithSkillManager 注册所有工具，包括技能工具
-func (r *Registry) RegisterWithSkillManager(skillManager SkillInfoProvider) {
-	r.RegisterAll()
+func (r *Registry) RegisterWithSkillManager(skillManager SkillInfoProvider, workDir string) {
+	r.RegisterAll(workDir)
 	r.RegisterSkillTool(skillManager)
 }

@@ -120,13 +120,15 @@ type ExecuteCommandTool struct {
 	timeout   time.Duration
 	maxOutput int
 	allowAny  bool
+	workDir   string
 }
 
-func NewSecureExecuteCommandTool() *ExecuteCommandTool {
+func NewSecureExecuteCommandTool(workDir string) *ExecuteCommandTool {
 	return &ExecuteCommandTool{
 		timeout:   defaultTimeout,
 		maxOutput: maxOutputLength,
 		allowAny:  false,
+		workDir:   workDir,
 	}
 }
 
@@ -223,6 +225,8 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 
 	if workdir, ok := args["workdir"].(string); ok && workdir != "" {
 		cmd.Dir = workdir
+	} else if t.workDir != "" {
+		cmd.Dir = t.workDir
 	}
 
 	output, err := cmd.CombinedOutput()

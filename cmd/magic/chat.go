@@ -98,7 +98,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	// Initialize tool registry with auto-registration
 	registry := tool.NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll(cfg.WorkingDir)
 
 	// Initialize session store
 	home, _ := os.UserHomeDir()
