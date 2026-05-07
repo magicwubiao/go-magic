@@ -1,56 +1,56 @@
 @echo off
 echo ===================================
-echo  go-magic 安装脚本
+echo  go-magic Install Script
 echo ===================================
 echo.
 
-REM 检查 Go 是否安装
+REM Check if Go is installed
 go version >nul 2>&1
 if errorlevel 1 (
-    echo [错误] Go 未安装或不在 PATH 中
-    echo 请先安装 Go 1.21 或更高版本
-    echo 下载地址: https://go.dev/dl/
+    echo [ERROR] Go is not installed or not in PATH
+    echo Please install Go 1.21 or later
+    echo Download: https://go.dev/dl/
     pause
     exit /b 1
 )
 
-echo [✓] Go 已安装:
+echo [OK] Go installed:
 go version
 
 echo.
-echo [1/3] 下载依赖...
+echo [1/3] Downloading dependencies...
 cd /d "%~dp0"
 go mod tidy
 if errorlevel 1 (
-    echo [错误] 依赖下载失败
+    echo [ERROR] Failed to download dependencies
     pause
     exit /b 1
 )
-echo [✓] 依赖下载完成
+echo [OK] Dependencies downloaded
 
 echo.
-echo [2/3] 构建项目...
+echo [2/3] Building project...
 go build -o magic.exe ./cmd/magic
 if errorlevel 1 (
-    echo [错误] 构建失败
+    echo [ERROR] Build failed
     pause
     exit /b 1
 )
-echo [✓] 构建完成: magic.exe
+echo [OK] Build complete: magic.exe
 
 echo.
-echo [3/3] 创建配置文件...
+echo [3/3] Creating configuration...
 magic.exe setup <nul 2>nul
-echo [✓] 配置完成
+echo [OK] Configuration complete
 
 echo.
 echo ===================================
-echo  安装完成!
+echo  Installation complete!
 echo ===================================
 echo.
-echo 使用方法:
-echo   magic.exe --help       # 查看帮助
-echo   magic.exe chat         # 开始聊天
-echo   magic.exe doctor      # 诊断
+echo Usage:
+echo   magic.exe --help       # Show help
+echo   magic.exe chat         # Start chat
+echo   magic.exe doctor       # Run diagnostics
 echo.
 pause
