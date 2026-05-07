@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -297,29 +298,44 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [QQ] configured successfully!")
 				}
-			case "7": // WeChat
-				fmt.Print("   Enter WeChat API URL: ")
-				apiURL, _ := reader.ReadString('\n')
-				apiURL = strings.TrimSpace(apiURL)
-				fmt.Print("   Enter WeChat token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
-				fmt.Print("   Enter WeChat AES key: ")
-				aesKey, _ := reader.ReadString('\n')
-				aesKey = strings.TrimSpace(aesKey)
-				fmt.Print("   Enter WeChat API key (optional): ")
-				apiKey, _ := reader.ReadString('\n')
-				apiKey = strings.TrimSpace(apiKey)
-				if apiURL != "" && token != "" {
-					cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-						APIURL: apiURL,
-						Token:  token,
-						AESKey: aesKey,
-						APIKey: apiKey,
-						Enabled: true,
+			case "7": // WeChat (ClawBot scan)
+					fmt.Println("   WeChat uses ClawBot (微信官方插件) for connection.")
+					fmt.Println("   Requires: Node.js >= 18, WeChat >= 8.0.69 (Android) / 8.0.70 (iOS)")
+					fmt.Println()
+					fmt.Print("   Start ClawBot scan now? (Y/n): ")
+					scanChoice, _ := reader.ReadString('\n')
+					scanChoice = strings.TrimSpace(scanChoice)
+					if scanChoice != "n" && scanChoice != "N" {
+						fmt.Println()
+						fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+						fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
+						fmt.Println("   ──────────────────────────────────────────────────────")
+						clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
+						clawCmd.Stdin = os.Stdin
+						clawCmd.Stdout = os.Stdout
+						clawCmd.Stderr = os.Stderr
+						err := clawCmd.Run()
+						fmt.Println("   ──────────────────────────────────────────────────────")
+						if err != nil {
+							fmt.Printf("   ClawBot install failed: %v\n", err)
+							fmt.Println("   You can try manually running:")
+							fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+						}
+						fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
+						bindChoice, _ := reader.ReadString('\n')
+						bindChoice = strings.TrimSpace(bindChoice)
+						if bindChoice == "y" || bindChoice == "Y" {
+							cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+								Enabled: true,
+							}
+							fmt.Println("   [WeChat] configured successfully via ClawBot!")
+						} else {
+							fmt.Println("   [WeChat] not configured. You can run setup again later.")
+						}
+					} else {
+						fmt.Println("   Skipped. To configure WeChat later, run:")
+						fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
 					}
-					fmt.Println("   [WeChat] configured successfully!")
-				}
 			default:
 				fmt.Println("   Invalid choice. Please select 0-7.")
 			}
