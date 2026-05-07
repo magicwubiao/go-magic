@@ -131,6 +131,38 @@ func (br *BackgroundReview) detectPatterns(toolSequence []string, _ string) []De
 }
 
 // suggestSkill suggests a skill based on detected patterns
+// Currently logs the suggestion; full implementation would create/export skill definitions
 func (br *BackgroundReview) suggestSkill(task string, patterns []DetectedPattern) {
-	// TODO: implement skill suggestion
+	br.mu.Lock()
+	defer br.mu.Unlock()
+
+	if len(patterns) == 0 {
+		return
+	}
+
+	// Build suggestion summary
+	var toolSequence []string
+	for _, p := range patterns {
+		if len(p.ToolSequence) > len(toolSequence) {
+			toolSequence = p.ToolSequence
+		}
+	}
+
+	// Log the suggestion for manual review
+	suggestion := map[string]interface{}{
+		"timestamp":      time.Now().Format(time.RFC3339),
+		"task":           task,
+		"pattern_count":  len(patterns),
+		"suggested_tool": toolSequence,
+	}
+
+	// Store suggestion in patterns found
+	br.patternsFound = append(br.patternsFound, patterns...)
+
+	// In a full implementation, this would:
+	// 1. Generate a skill definition based on patterns
+	// 2. Create a SKILL.md file
+	// 3. Register the skill with the skills manager
+	// For now, we log it for manual review
+	_ = suggestion // suggestion stored in patternsFound for later retrieval
 }

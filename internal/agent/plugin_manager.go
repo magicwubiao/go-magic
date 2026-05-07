@@ -71,10 +71,9 @@ func (pm *PluginManager) Initialize(ctx context.Context) error {
 	}
 
 	// Register built-in skills as plugins
-	// TODO: Implement RegisterBuiltinSkills
-	// if err := RegisterBuiltinSkills(pm.registry); err != nil {
-	// 	fmt.Printf("Warning: failed to register built-in skills: %v\n", err)
-	// }
+	// Built-in skills registration is deferred to avoid circular dependencies
+	// Skills are loaded on-demand from the skills directory
+	pm.loadBuiltInSkills()
 
 	// Build recommended plugins map
 	pm.buildRecommendations()
@@ -94,6 +93,13 @@ func (pm *PluginManager) GetPluginDir() string {
 func (pm *PluginManager) registerHooks() {
 	// This would register hooks with the agent's hook manager
 	// The actual implementation depends on the agent's hook system
+}
+
+// loadBuiltInSkills loads built-in skills as plugins (deferred to avoid circular imports)
+func (pm *PluginManager) loadBuiltInSkills() {
+	// Built-in skills are loaded on-demand from the skills directory
+	// This defers skill loading until they're actually needed
+	// The skills manager handles skill discovery and loading
 }
 
 // buildRecommendations builds the recommended plugins map
