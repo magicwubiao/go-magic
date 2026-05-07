@@ -32,13 +32,11 @@ func (h *PrivacyHook) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLMH
 		return nil, HookDecision{Action: HookActionContinue}, nil
 	}
 
-	// Redact messages
+	// Redact messages (preserve all fields like ToolCalls and ToolCallID)
 	redactedMessages := make([]provider.Message, len(req.Messages))
 	for i, msg := range req.Messages {
-		redactedMessages[i] = provider.Message{
-			Role:    msg.Role,
-			Content: h.redactor.Redact(msg.Content),
-		}
+		redactedMessages[i] = msg // copy all fields first
+		redactedMessages[i].Content = h.redactor.Redact(msg.Content) // then redact content
 	}
 
 	return &LLMHookRequest{
