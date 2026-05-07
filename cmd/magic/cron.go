@@ -1,13 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cron"
+	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var cronCmd = &cobra.Command{

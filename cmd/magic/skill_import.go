@@ -71,7 +71,7 @@ func init() {
 	skillImportCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "Show what would be imported without importing")
 	skillImportCmd.Flags().BoolVar(&importListOnly, "list", false, "List available skills without importing")
 
-	skillCmd.AddCommand(skillImportCmd)
+	skillsCmd.AddCommand(skillImportCmd)
 }
 
 func runSkillImport(cmd *cobra.Command, args []string) {

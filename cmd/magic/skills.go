@@ -143,7 +143,7 @@ func runSkillsList(cmd *cobra.Command, args []string) {
 		if source == "" {
 			source = "local"
 		}
-		bySource[source] = append(bySource[source], s)
+		bySource[string(source)] = append(bySource[string(source)], s)
 	}
 
 	for source, list := range bySource {
@@ -176,7 +176,7 @@ func runSkillsShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("Description: %s\n", skill.Description)
 	fmt.Printf("Version:     %s\n", skill.Version)
 	fmt.Printf("Author:      %s\n", skill.Author)
-	fmt.Printf("Source:      %s\n", skill.Source)
+	fmt.Printf("Source:      %s\n", string(skill.Source))
 
 	if len(skill.Tags) > 0 {
 		fmt.Printf("Tags:        %s\n", strings.Join(skill.Tags, ", "))
@@ -400,37 +400,4 @@ func runSkillsMatch(cmd *cobra.Command, args []string) {
 	for _, s := range results {
 		fmt.Printf("  • %s: %s\n", s.Name, s.Description)
 	}
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0644)
-}
-
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, info os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		destPath := filepath.Join(dst, rel)
-
-		if info.IsDir() {
-			return os.MkdirAll(destPath, 0755)
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(destPath, data, 0644)
-	})
 }

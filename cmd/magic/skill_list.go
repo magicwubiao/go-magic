@@ -58,7 +58,7 @@ func init() {
 	skillListCmd.Flags().BoolVar(&listShowTools, "show-tools", false, "Show required tools for each skill")
 	skillListCmd.Flags().BoolVarP(&listJSON, "json", "j", false, "Output in JSON format")
 
-	skillCmd.AddCommand(skillListCmd)
+	skillsCmd.AddCommand(skillListCmd)
 	skillListCmd.AddCommand(skillAvailableCmd)
 }
 
@@ -122,7 +122,7 @@ func filterBySource(list []*skills.Skill, source string) []*skills.Skill {
 	var result []*skills.Skill
 
 	for _, s := range list {
-		if strings.ToLower(s.Source) == source {
+		if strings.ToLower(string(s.Source)) == source {
 			result = append(result, s)
 		}
 	}
@@ -146,7 +146,7 @@ func outputTable(list []*skills.Skill) {
 		if source == "" {
 			source = "local"
 		}
-		bySource[source] = append(bySource[source], s)
+		bySource[string(source)] = append(bySource[string(source)], s)
 	}
 
 	// Sort sources
@@ -157,7 +157,7 @@ func outputTable(list []*skills.Skill) {
 	sort.Strings(sources)
 
 	for _, source := range sources {
-		skills := bySource[source]
+		skills := bySource[string(source)]
 		fmt.Printf("## %s (%d)\n", strings.ToUpper(source), len(skills))
 		fmt.Println(strings.Repeat("-", 40))
 
@@ -236,7 +236,7 @@ func outputJSON(list []*skills.Skill) {
 			Author:      s.Author,
 			Tags:        s.Tags,
 			Tools:       s.Tools,
-			Source:      s.Source,
+			Source:      string(s.Source),
 		})
 	}
 

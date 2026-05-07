@@ -253,9 +253,7 @@ func runToolsSearch(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Found %d tools matching '%s':\n\n", len(matched), keyword)
 
-	ts := &tool.ToolSchema{}
 	for _, t := range matched {
-		schema := ts.ToOpenAISchema(t)
 		fmt.Printf("  • %s: %s\n", t.Name(), t.Description())
 	}
 }

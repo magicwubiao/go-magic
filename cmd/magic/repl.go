@@ -24,20 +24,6 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
-// Color codes for terminal output
-const (
-	colorReset   = "\033[0m"
-	colorRed     = "\033[31m"
-	colorGreen   = "\033[32m"
-	colorYellow  = "\033[33m"
-	colorBlue    = "\033[34m"
-	colorMagenta = "\033[35m"
-	colorCyan    = "\033[36m"
-	colorWhite   = "\033[37m"
-	colorGray    = "\033[90m"
-	colorBold    = "\033[1m"
-)
-
 // Platform-specific clear and cursor control
 var (
 	clearLine   = "\r\033[K"
@@ -157,7 +143,8 @@ func (r *REPL) Run() {
 
 	// Restore previous session if exists
 	if r.store != nil {
-		if sess, err := r.store.GetLatestSession(r.ctx, "cli"); err == nil && sess != nil {
+		if sessions, err := r.store.ListSessions(r.ctx, "cli"); err == nil && len(sessions) > 0 {
+			sess := sessions[len(sessions)-1]
 			r.agent.SetHistory(sess.Messages)
 			r.state.sessionID = sess.ID
 		}
@@ -334,7 +321,7 @@ func (r *REPL) printWelcome() {
 	fmt.Println()
 	fmt.Printf("%s╔══════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s  %s⚡ magic Agent CLI v%s  %s                       %s║%s\n",
-		colorCyan, colorReset, colorBold, "1.0", colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, "1.0", colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠══════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s  Provider: %-15s  Model: %-20s %s║%s\n",
 		colorCyan, colorReset, r.state.provider, r.state.modelName, colorCyan, colorReset)
@@ -370,8 +357,8 @@ func (r *REPL) handleInterrupt() {
 func (r *REPL) runConversation(input string) {
 	fmt.Println() // Move to new line
 
-	// Save state for undo
-	historyBeforeUndo := r.agent.GetHistory()
+	// Save state for undo (reserved for future undo feature)
+	_ = r.agent.GetHistory()
 
 	// Print thinking indicator
 	doneCh := make(chan struct{})
@@ -390,30 +377,23 @@ func (r *REPL) runConversation(input string) {
 		}
 	}()
 
-	var response string
-	var toolCallCount int
+	var _ int
 	var err error
 
 	// Track if we're in streaming mode
 	if r.state.streamingEnabled {
 		var fullContent strings.Builder
-		var tc []interface{}
 
 		err = r.agent.RunConversationStream(r.ctx, input, func(content string, done bool) {
 			if done {
-				response = fullContent.String()
 				return
 			}
 			fullContent.WriteString(content)
 			// Streaming output with basic ANSI rendering
 			r.renderStreaming(content)
 		})
-
-		if err == nil {
-			response = fullContent.String()
-		}
 	} else {
-		response, err = r.agent.RunConversation(r.ctx, input)
+		_, err = r.agent.RunConversation(r.ctx, input)
 	}
 
 	close(doneCh)
@@ -482,7 +462,7 @@ func (r *REPL) cmdHelp() {
 	fmt.Println()
 	fmt.Printf("%s╔══════════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s                    %s⚡ magic Agent Commands%s                     %s║%s\n",
-		colorCyan, colorReset, colorBold, colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠══════════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 
 	commands := [][]string{
@@ -528,7 +508,7 @@ func (r *REPL) cmdHelp() {
 
 	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
 	fmt.Println()
-	fmt.Printf("%sTips:%s\n", colorBold, colorReset)
+	fmt.Printf("%sTips:%s\n", bold, colorReset)
 	fmt.Printf("  %s•%s Multi-line input: end a line with %s\\%s and press Enter\n", colorGray, colorReset, colorYellow, colorReset)
 	fmt.Printf("  %s•%s Commands auto-complete with %sTab%s\n", colorGray, colorReset, colorYellow, colorReset)
 	fmt.Printf("  %s•%s Use %s↑↓%s to navigate command history\n", colorGray, colorReset, colorYellow, colorReset)
@@ -571,7 +551,6 @@ func (r *REPL) cmdCompress() {
 	r.agent.EnableCompression(true)
 	r.agent.SetCompressionRatio(0.5)
 
-	before := r.getContext()
 	// Trigger compression by adding a marker that the next conversation will compress
 	// Note: Actual compression happens automatically when context exceeds threshold
 	after := r.getContext()
@@ -595,7 +574,7 @@ func (r *REPL) cmdUsage() {
 
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════╗%s\n", colorCyan, colorReset)
-	fmt.Printf("%s║%s           %s📊 Usage Statistics%s            %s║%s\n", colorCyan, colorReset, colorBold, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s║%s           %s📊 Usage Statistics%s            %s║%s\n", colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠═══════════════════════════════════════╣%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s  Messages:      %-20d %s║%s\n", colorCyan, colorReset, msgCount, colorCyan, colorReset)
 	fmt.Printf("%s║%s  Est. Tokens:  %-20d %s║%s\n", colorCyan, colorReset, inputTokens, colorCyan, colorReset)
@@ -612,10 +591,10 @@ func (r *REPL) cmdTools() {
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s                      %s🔧 Available Tools%s                      %s║%s\n",
-		colorCyan, colorReset, colorBold, colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠═══════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 
-	for i, tName := range tools {
+	for _, tName := range tools {
 		t, err := r.registry.Get(tName)
 		if err != nil {
 			continue
@@ -642,7 +621,7 @@ func (r *REPL) cmdSkills() {
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s                      %s🎯 Available Skills%s                    %s║%s\n",
-		colorCyan, colorReset, colorBold, colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠═══════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 
 	if mgr, err := skills.NewManager(); err == nil {
@@ -652,12 +631,8 @@ func (r *REPL) cmdSkills() {
 				colorCyan, colorReset, colorGray, colorCyan, colorReset)
 		} else {
 			for _, skill := range skillList {
-				desc := skill.Description
-				if len(desc) > 45 {
-					desc = desc[:42] + "..."
-				}
-				fmt.Printf("%s║%s  %s%-15s %s%-48s %s║%s\n",
-					colorCyan, colorReset, colorYellow, skill.Name, colorGray, desc, colorCyan, colorReset)
+				fmt.Printf("%s║%s  %s%-15s %s║%s\n",
+					colorCyan, colorReset, colorYellow, skill, colorCyan, colorReset)
 			}
 		}
 	} else {
@@ -828,7 +803,7 @@ func (r *REPL) cmdHistory() {
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s                     %s📜 History (%d messages)%s                     %s║%s\n",
-		colorCyan, colorReset, colorBold, len(history), colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, len(history), colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠═══════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 
 	for i, msg := range history {
@@ -842,7 +817,7 @@ func (r *REPL) cmdHistory() {
 		case "system":
 			roleColor = colorYellow
 		case "tool":
-			roleColor = colorMagenta
+			roleColor = colorPurple
 		default:
 			roleColor = colorGray
 		}
@@ -892,7 +867,7 @@ func (r *REPL) cmdInsights(args string) {
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s                   %s📈 Insights (last %d days)%s                    %s║%s\n",
-		colorCyan, colorReset, colorBold, days, colorReset, colorCyan, colorReset)
+		colorCyan, colorReset, bold, days, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠═══════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s  Total Sessions:  %-20d %s║%s\n", colorCyan, colorReset, sessionCount, colorCyan, colorReset)
 	fmt.Printf("%s║%s  Current Session Msgs: %-15d %s║%s\n", colorCyan, colorReset, msgCount, colorCyan, colorReset)
@@ -988,33 +963,6 @@ func (r *REPL) cmdExportMD() {
 	}
 
 	fmt.Printf("%s✓ Exported to %s%s\n", colorGreen, path, colorReset)
-}
-
-// parseSlashCommand parses a slash command
-func parseSlashCommand(input string) (string, string) {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "/") {
-		return "", ""
-	}
-
-	input = input[1:] // Remove leading /
-	parts := strings.SplitN(input, " ", 2)
-
-	cmdName := strings.ToLower(parts[0])
-	var cmdArgs string
-	if len(parts) > 1 {
-		cmdArgs = strings.TrimSpace(parts[1])
-	}
-
-	return cmdName, cmdArgs
-}
-
-// truncateStr truncates a string
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
 }
 
 // escapeJSON escapes a string for JSON

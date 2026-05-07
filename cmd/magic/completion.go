@@ -60,7 +60,7 @@ Install:
   $ magic completion install`,
 	DisableFlagsInUseLine: true,
 	ValidArgs:             []string{"bash", "zsh", "fish", "powershell", "install"},
-	Args:                  cobra.MatchAll,
+	Args:                  cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("shell type required: bash, zsh, fish, or powershell")
@@ -119,7 +119,7 @@ func installCompletion() error {
 
 	switch shell {
 	case "bash":
-		home, _ := os.UserHomeDir()
+		_ = home // reserved for future use
 		if runtime.GOOS == "darwin" {
 			installPath = "/usr/local/etc/bash_completion.d/magic"
 		} else {
@@ -239,7 +239,7 @@ func bashCompletionFunc(cmd *cobra.Command, toComplete string) ([]string, cobra.
 	// Add subcommands
 	for _, sub := range rootCmd.Commands() {
 		if sub.IsAvailableCommand() {
-			completions = append(completions, sub.Name)
+			completions = append(completions, sub.Name())
 		}
 	}
 

@@ -53,18 +53,26 @@ func runHealth(cmd *cobra.Command, args []string) {
 	fmt.Println("Running health check...")
 	fmt.Println()
 
+	cfgOk, cfgMsg := checkConfigHealth()
+	magicOk, magicMsg := checkMagicHomeHealth()
+	skillsOk, skillsMsg := checkSkillsHealth()
+	toolsOk, toolsMsg := checkToolsHealth()
+	pluginsOk, pluginsMsg := checkPluginsHealth()
+	networkOk, networkMsg := checkNetworkHealth()
+	diskOk, diskMsg := checkDiskHealth()
+
 	checks := []struct {
 		name    string
 		healthy bool
 		message string
 	}{
-		{"Config", checkConfigHealth()},
-		{"Magic Home", checkMagicHomeHealth()},
-		{"Skills", checkSkillsHealth()},
-		{"Tools", checkToolsHealth()},
-		{"Plugins", checkPluginsHealth()},
-		{"Network", checkNetworkHealth()},
-		{"Disk Space", checkDiskHealth()},
+		{"Config", cfgOk, cfgMsg},
+		{"Magic Home", magicOk, magicMsg},
+		{"Skills", skillsOk, skillsMsg},
+		{"Tools", toolsOk, toolsMsg},
+		{"Plugins", pluginsOk, pluginsMsg},
+		{"Network", networkOk, networkMsg},
+		{"Disk Space", diskOk, diskMsg},
 	}
 
 	allHealthy := true

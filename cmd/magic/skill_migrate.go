@@ -69,7 +69,7 @@ func init() {
 		return nil
 	}
 
-	skillCmd.AddCommand(skillMigrateCmd)
+	skillsCmd.AddCommand(skillMigrateCmd)
 }
 
 func runSkillMigrate(cmd *cobra.Command, args []string) {

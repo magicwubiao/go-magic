@@ -218,7 +218,7 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 	case "kimi":
 		return provider.NewKimiProvider(cfg.APIKey, cfg.Model)
 	case "minimax":
-		return provider.NewMinimaxProvider(cfg.APIKey, cfg.Model)
+		return provider.NewMiniMaxProvider(cfg.APIKey, cfg.Model)
 	case "ollama":
 		return provider.NewOllamaProvider(cfg.APIKey, cfg.Model)
 	case "openrouter":

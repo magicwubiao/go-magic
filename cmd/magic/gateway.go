@@ -80,6 +80,9 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	platformCount := 0
 
+	// Use the unified Gateway to manage all platforms
+	gw := gateway.NewGateway(nil, &gateway.GatewayConfig{})
+
 	// Start Telegram if configured
 	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled {
 		platformCount++
@@ -87,11 +90,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			fmt.Println("Telegram token not configured!")
 		} else {
 			fmt.Println("[Telegram] Starting...")
-			gw, err := gateway.NewGateway(tgCfg.Token)
+			tgGw, err := gateway.NewTelegramHandler(tgCfg.Token, nil)
 			if err != nil {
 				fmt.Printf("[Telegram] Failed: %v\n", err)
 			} else {
-				go gw.Start(ctx)
+				gw.RegisterPlatform("telegram", tgGw)
 			}
 		}
 	}
@@ -107,7 +110,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			if err != nil {
 				fmt.Printf("[Discord] Failed: %v\n", err)
 			} else {
-				go dgw.Start(ctx)
+				if err := dgw.Connect(ctx); err != nil {
+					fmt.Printf("[Discord] Failed to connect: %v\n", err)
+				} else {
+					gw.RegisterPlatform("discord", dgw)
+				}
 			}
 		}
 	}
@@ -120,7 +127,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[WeCom] Starting...")
 			wcgw := gateway.NewWeComGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-			go wcgw.Start(ctx)
+			if err := wcgw.Connect(ctx); err != nil {
+				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("wecom", wcgw)
+			}
 		}
 	}
 
@@ -128,10 +139,12 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	if qqCfg, ok := cfg.Gateway.Platforms["qq"]; ok && qqCfg.Enabled {
 		platformCount++
 		fmt.Println("[QQ] Starting...")
-		fmt.Println("  Note: QQ gateway is a framework.")
-		fmt.Println("  Install a library like MiraiGo or cq-http first.")
 		qqGw := gateway.NewQQGateway(qqCfg.Number, qqCfg.Password)
-		go qqGw.Start(ctx)
+		if err := qqGw.Connect(ctx); err != nil {
+			fmt.Printf("[QQ] Failed to connect: %v\n", err)
+		} else {
+			gw.RegisterPlatform("qq", qqGw)
+		}
 	}
 
 	// Start DingTalk if configured
@@ -142,7 +155,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[DingTalk] Starting...")
 			dtGw := gateway.NewDingTalkGateway(dtCfg.AppKey, dtCfg.AppSecret)
-			go dtGw.Start(ctx)
+			if err := dtGw.Connect(ctx); err != nil {
+				fmt.Printf("[DingTalk] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("dingtalk", dtGw)
+			}
 		}
 	}
 
@@ -154,19 +171,27 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[Feishu/Lark] Starting...")
 			fsGw := gateway.NewFeishuGateway(fsCfg.AppID, fsCfg.AppSecret)
-			go fsGw.Start(ctx)
+			if err := fsGw.Connect(ctx); err != nil {
+				fmt.Printf("[Feishu] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("feishu", fsGw)
+			}
 		}
 	}
 
-	// Start WeChat (clawbot) if configured
+	// Start WeChat if configured
 	if wcCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wcCfg.Enabled {
 		platformCount++
 		if wcCfg.APIURL == "" {
 			fmt.Println("WeChat config incomplete (need api_url)!")
 		} else {
 			fmt.Println("[WeChat] Starting...")
-			wcGw := gateway.NewWeChatGateway(wcCfg.APIURL, wcCfg.APIKey)
-			go wcGw.Start(ctx)
+			wcGw := gateway.NewWeChatGateway(wcCfg.APIURL, wcCfg.APIKey, wcCfg.Token, wcCfg.AESKey)
+			if err := wcGw.Connect(ctx); err != nil {
+				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("wechat", wcGw)
+			}
 		}
 	}
 
@@ -178,7 +203,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[Slack] Starting...")
 			slackGw := gateway.NewSlackGateway(slackCfg.Token, slackCfg.AppSecret)
-			go slackGw.Start(ctx)
+			if err := slackGw.Connect(ctx); err != nil {
+				fmt.Printf("[Slack] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("slack", slackGw)
+			}
 		}
 	}
 
@@ -190,7 +219,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[WhatsApp] Starting...")
 			waGw := gateway.NewWhatsAppGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
-			go waGw.Start(ctx)
+			if err := waGw.Connect(ctx); err != nil {
+				fmt.Printf("[WhatsApp] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("whatsapp", waGw)
+			}
 		}
 	}
 
@@ -202,7 +235,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[LINE] Starting...")
 			lineGw := gateway.NewLineGateway(lineCfg.AppSecret, lineCfg.Token)
-			go lineGw.Start(ctx)
+			if err := lineGw.Connect(ctx); err != nil {
+				fmt.Printf("[LINE] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("line", lineGw)
+			}
 		}
 	}
 
@@ -214,7 +251,11 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[Matrix] Starting...")
 			matrixGw := gateway.NewMatrixGateway(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.Token)
-			go matrixGw.Start(ctx)
+			if err := matrixGw.Connect(ctx); err != nil {
+				fmt.Printf("[Matrix] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("matrix", matrixGw)
+			}
 		}
 	}
 

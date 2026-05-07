@@ -2,14 +2,12 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,7 +55,7 @@ func init() {
 }
 
 // REPL represents the interactive shell
-type REPL struct {
+type InteractiveShell struct {
 	reader        *bufio.Reader
 	writer        io.Writer
 	prompt        string
@@ -69,8 +67,8 @@ type REPL struct {
 }
 
 // NewREPL creates a new REPL instance
-func NewREPL() *REPL {
-	return &REPL{
+func NewInteractiveShell() *InteractiveShell {
+	return &InteractiveShell{
 		reader:    bufio.NewReader(os.Stdin),
 		writer:    os.Stdout,
 		history:   make([]string, 0),
@@ -80,7 +78,7 @@ func NewREPL() *REPL {
 }
 
 // Run starts the REPL loop
-func (r *REPL) Run(initialPrompt string) error {
+func (r *InteractiveShell) Run(initialPrompt string) error {
 	// Set up signal handling for graceful exit
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -173,7 +171,7 @@ func (r *REPL) Run(initialPrompt string) error {
 	}
 }
 
-func (r *REPL) handleSpecialCommand(cmd string) error {
+func (r *InteractiveShell) handleSpecialCommand(cmd string) error {
 	parts := strings.SplitN(cmd, " ", 2)
 	command := strings.ToLower(parts[0])
 	args := ""
@@ -218,7 +216,7 @@ func (r *REPL) handleSpecialCommand(cmd string) error {
 	return nil
 }
 
-func (r *REPL) processInput(input string) (string, error) {
+func (r *InteractiveShell) processInput(input string) (string, error) {
 	// Parse and execute the input
 	// This is where you'd integrate with the agent
 
@@ -226,7 +224,7 @@ func (r *REPL) processInput(input string) (string, error) {
 	return input, nil
 }
 
-func (r *REPL) shouldContinueMultiline(input string) bool {
+func (r *InteractiveShell) shouldContinueMultiline(input string) bool {
 	// Check if the line ends with continuation markers
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -247,14 +245,14 @@ func (r *REPL) shouldContinueMultiline(input string) bool {
 	return openBraces > 0 || openParens > 0 || openBrackets > 0
 }
 
-func (r *REPL) addToHistory(line string) {
+func (r *InteractiveShell) addToHistory(line string) {
 	r.history = append(r.history, line)
 	if len(r.history) > interactiveHistorySize {
 		r.history = r.history[len(r.history)-interactiveHistorySize:]
 	}
 }
 
-func (r *REPL) showHelp() error {
+func (r *InteractiveShell) showHelp() error {
 	help := `
 Special Commands:
   /help, /h        Show this help
@@ -285,7 +283,7 @@ Tips:
 	return nil
 }
 
-func (r *REPL) clearScreen() error {
+func (r *InteractiveShell) clearScreen() error {
 	switch runtime.GOOS {
 	case "windows":
 		fmt.Fprint(r.writer, "\x1b[2J\x1b[H")
@@ -295,7 +293,7 @@ func (r *REPL) clearScreen() error {
 	return nil
 }
 
-func (r *REPL) showHistory() error {
+func (r *InteractiveShell) showHistory() error {
 	fmt.Fprintln(r.writer, "Command History:")
 	for i, cmd := range r.history {
 		fmt.Fprintf(r.writer, "  %d: %s\n", i+1, cmd)
@@ -303,7 +301,7 @@ func (r *REPL) showHistory() error {
 	return nil
 }
 
-func (r *REPL) saveSession(filename string) error {
+func (r *InteractiveShell) saveSession(filename string) error {
 	if filename == "" {
 		return fmt.Errorf("filename required: /save <filename>")
 	}
@@ -322,7 +320,7 @@ func (r *REPL) saveSession(filename string) error {
 	return nil
 }
 
-func (r *REPL) loadSession(filename string) error {
+func (r *InteractiveShell) loadSession(filename string) error {
 	if filename == "" {
 		return fmt.Errorf("filename required: /load <filename>")
 	}
@@ -347,7 +345,7 @@ func (r *REPL) loadSession(filename string) error {
 	return nil
 }
 
-func (r *REPL) showEnv() error {
+func (r *InteractiveShell) showEnv() error {
 	fmt.Fprintln(r.writer, "Environment Variables:")
 	env := os.Environ()
 	for _, e := range env {
@@ -356,7 +354,7 @@ func (r *REPL) showEnv() error {
 	return nil
 }
 
-func (r *REPL) showVariables() error {
+func (r *InteractiveShell) showVariables() error {
 	fmt.Fprintln(r.writer, "Variables:")
 	if len(r.variables) == 0 {
 		fmt.Fprintln(r.writer, "  (none)")
@@ -368,7 +366,7 @@ func (r *REPL) showVariables() error {
 	return nil
 }
 
-func (r *REPL) resetSession() error {
+func (r *InteractiveShell) resetSession() error {
 	r.history = make([]string, 0)
 	r.variables = make(map[string]string)
 	r.currentLine = ""
@@ -377,7 +375,7 @@ func (r *REPL) resetSession() error {
 	return nil
 }
 
-func (r *REPL) setVariable(args string) error {
+func (r *InteractiveShell) setVariable(args string) error {
 	// Parse name=value
 	parts := strings.SplitN(args, "=", 2)
 	if len(parts) != 2 {
@@ -391,7 +389,7 @@ func (r *REPL) setVariable(args string) error {
 }
 
 // History search
-func (r *REPL) searchHistory(pattern string) []string {
+func (r *InteractiveShell) searchHistory(pattern string) []string {
 	var matches []string
 	re, err := regexp.Compile("(?i)" + pattern)
 	if err != nil {
@@ -407,7 +405,7 @@ func (r *REPL) searchHistory(pattern string) []string {
 }
 
 // Completion suggestions
-func (r *REPL) getCompletions(partial string) []string {
+func (r *InteractiveShell) getCompletions(partial string) []string {
 	// Built-in commands
 	commands := []string{
 		"/help", "/exit", "/quit", "/clear", "/history",
@@ -431,7 +429,7 @@ func runInteractive(cmd *cobra.Command, args []string) error {
 		prompt = args[0]
 	}
 
-	repl := NewREPL()
+	repl := NewInteractiveShell()
 	repl.multiline = interactiveMultiline
 	repl.prompt = prompt
 
@@ -461,9 +459,5 @@ func isTerminal(fd uintptr) bool {
 	return true
 }
 
-// Time functions for testing
 var timeNow = func() time.Time { return time.Now() }
 var timeSince = func(t time.Time) time.Duration { return time.Since(t) }
-
-// Import time
-import "time"

@@ -24,7 +24,7 @@ This command helps you:
 - Generate man pages for Unix systems`,
 	DisableFlagsInUseLine: true,
 	ValidArgs:             []string{"generate", "serve", "man"},
-	Args:                  cobra.MatchAll,
+	Args:                  cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return cmd.Help()
@@ -210,7 +210,7 @@ func generateCommandDoc(cmd *cobra.Command, dir string) error {
 	buf.WriteString(cmd.Long)
 	buf.WriteString("\n\n")
 
-	if len(cmd.Flags()) > 0 {
+	if cmd.Flags().HasFlags() {
 		buf.WriteString("## Flags\n\n")
 		buf.WriteString("| Flag | Short | Type | Default | Description |\n")
 		buf.WriteString("|------|-------|------|---------|-------------|\n")
@@ -361,7 +361,7 @@ func generateManPages() error {
 		buf.WriteString(fmt.Sprintf(".SH SYNOPSIS\n.B magic\n%s\n\n", cmd.Use))
 		buf.WriteString(fmt.Sprintf(".SH DESCRIPTION\n%s\n\n", cmd.Long))
 
-		if len(cmd.Flags()) > 0 {
+		if cmd.Flags().HasFlags() {
 			buf.WriteString(".SH OPTIONS\n")
 			cmd.Flags().VisitAll(func(f *pflag.Flag) {
 				buf.WriteString(fmt.Sprintf(".TP\n.B \\-%s\n.br\n%s\n", f.Name, f.Usage))
@@ -483,8 +483,3 @@ func getCommandCategory(cmd *cobra.Command) string {
 		return "Commands"
 	}
 }
-
-// Import pflag for the flag types used in documentation
-import (
-	"github.com/spf13/pflag"
-)

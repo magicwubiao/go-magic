@@ -61,7 +61,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	case "kimi":
 		prov = provider.NewKimiProvider(provCfg.APIKey, provCfg.Model)
 	case "minimax":
-		prov = provider.NewMinimaxProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewMiniMaxProvider(provCfg.APIKey, provCfg.Model)
 	case "ollama":
 		prov = provider.NewOllamaProvider(provCfg.APIKey, provCfg.Model)
 	case "openrouter":
@@ -430,7 +430,7 @@ func showSkills() {
 			fmt.Println("  No skills installed.")
 		} else {
 			for _, skill := range skillList {
-				fmt.Printf("  - %s: %s\n", skill.Name, skill.Description)
+				fmt.Printf("  - %s\n", skill)
 			}
 		}
 	} else {
@@ -481,7 +481,7 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 			"function": map[string]interface{}{
 				"name":        t.Name(),
 				"description": t.Description(),
-				"parameters":  t.Parameters(),
+				"parameters":  t.Schema(),
 			},
 		})
 	}

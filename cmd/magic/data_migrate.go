@@ -11,6 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// migrateItem represents a single item to migrate
+type migrateItem struct {
+	name      string
+	src       string
+	dst       string
+	transform func(src string) (string, error) // For content transformation
+}
+
 // Migration source type
 type migrateSource string
 
@@ -19,16 +27,25 @@ const (
 	sourceHermes   migrateSource = "hermes"
 )
 
+// Implement pflag.Value interface for migrateSource
+func (m *migrateSource) String() string { return string(*m) }
+func (m *migrateSource) Set(s string) error {
+	switch migrateSource(s) {
+	case sourceOpenClaw, sourceHermes:
+		*m = migrateSource(s)
+		return nil
+	default:
+		return fmt.Errorf("invalid migration source: %s (valid: openclaw, hermes)", s)
+	}
+}
+func (m *migrateSource) Type() string { return "string" }
+
 // Home directory detection (cross-platform)
 func getHomeDir() string {
 	if home := os.Getenv("HOME"); home != "" {
 		return home
 	}
 	return os.Getenv("USERPROFILE")
-}
-
-func (s migrateSource) String() string {
-	return string(s)
 }
 
 func (s migrateSource) dir() string {
@@ -212,14 +229,6 @@ func runDataMigrate(cmd *cobra.Command, args []string) {
 
 	magicDir := filepath.Join(getHomeDir(), ".magic")
 	os.MkdirAll(magicDir, 0755)
-
-	// Items to migrate
-	type migrateItem struct {
-		name string
-		src  string
-		dst  string
-		transform func(src string) (string, error) // For content transformation
-	}
 
 	items := []migrateItem{}
 

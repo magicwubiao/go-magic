@@ -71,6 +71,8 @@ type PlatformConfig struct {
 	APIKey string `json:"api_key,omitempty"`
 	// WhatsApp fields
 	VerifyToken string `json:"verify_token,omitempty"`
+	// WeChat fields
+	AESKey string `json:"aes_key,omitempty"`
 	// Slack/Line/Matrix fields
 }
 

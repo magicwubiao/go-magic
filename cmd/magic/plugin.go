@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/plugin"
-	"github.com/magicwubiao/go-magic/internal/tool"
 )
 
 var pluginCmd = &cobra.Command{
@@ -61,18 +60,16 @@ func init() {
 	rootCmd.AddCommand(pluginCmd)
 }
 
-func runPluginList(cmd *cobra.Command, args []string) {
-	registry := tool.NewRegistry()
-	config := plugin.DefaultManagerConfig()
-	mgr, err := plugin.NewManager(config)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	_ = registry // Tool registry can be passed if needed
+func newPluginLoader() *plugin.Loader {
+	registry := plugin.NewRegistry()
+	cfg := plugin.DefaultLoaderConfig()
+	return plugin.NewLoader(registry, cfg)
+}
 
-	plugins := mgr.ListPlugins()
-	if len(plugins) == 0 {
+func runPluginList(cmd *cobra.Command, args []string) {
+	registry := plugin.NewRegistry()
+	manifests := registry.List()
+	if len(manifests) == 0 {
 		fmt.Println("No plugins loaded.")
 		fmt.Println("\nUse 'magic plugin discover' to find available plugins.")
 		return
@@ -80,14 +77,18 @@ func runPluginList(cmd *cobra.Command, args []string) {
 
 	fmt.Println("Loaded Plugins:")
 	fmt.Println("==============")
-	for _, p := range plugins {
+	for _, p := range manifests {
 		fmt.Printf("  %s (v%s) - %s\n", p.Name, p.Version, p.Description)
 	}
 }
 
 func runPluginDiscover(cmd *cobra.Command, args []string) {
-	config := plugin.DefaultManagerConfig()
-	pluginDir := config.PluginDir
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	pluginDir := filepath.Join(home, ".magic", "plugins")
 
 	fmt.Println("Discovering plugins...")
 	fmt.Printf("Plugin directory: %s\n\n", pluginDir)
@@ -127,7 +128,7 @@ func runPluginDiscover(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		var manifest plugin.Manifest
+		var manifest plugin.PluginManifest
 		if err := json.Unmarshal(data, &manifest); err != nil {
 			fmt.Printf("  ⚠ %s: Invalid manifest\n", entry.Name())
 			continue
@@ -137,9 +138,9 @@ func runPluginDiscover(cmd *cobra.Command, args []string) {
 			Name:        manifest.Name,
 			Version:     manifest.Version,
 			Description: manifest.Description,
-			Author:     manifest.Author,
-			Path:       pluginPath,
-			Type:       manifest.Type,
+			Author:      manifest.Author,
+			Path:        pluginPath,
+			Type:        string(manifest.Type),
 		})
 	}
 
@@ -183,16 +184,9 @@ type PluginDiscovery struct {
 
 func runPluginLoad(cmd *cobra.Command, args []string) {
 	path := args[0]
+	loader := newPluginLoader()
 
-	config := plugin.DefaultManagerConfig()
-	mgr, err := plugin.NewManager(config)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	err = mgr.Load(path)
-	if err != nil {
+	if err := loader.Load(path); err != nil {
 		fmt.Printf("Failed to load plugin: %v\n", err)
 		os.Exit(1)
 	}
@@ -202,19 +196,12 @@ func runPluginLoad(cmd *cobra.Command, args []string) {
 
 func runPluginUnload(cmd *cobra.Command, args []string) {
 	name := args[0]
+	loader := newPluginLoader()
 
-	registry := tool.NewRegistry()
-	config := plugin.DefaultManagerConfig()
-	mgr, err := plugin.NewManager(config)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	_ = registry // Tool registry can be passed if needed
-
-	err = mgr.Unload(name)
-	if err != nil {
+	if err := loader.Unload(name); err != nil {
 		fmt.Printf("Failed to unload plugin: %v\n", err)
 		os.Exit(1)
 	}
+
+	fmt.Printf("Plugin '%s' unloaded.\n", name)
 }

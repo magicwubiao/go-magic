@@ -230,9 +230,14 @@ func (t *TelegramHandler) Receive() <-chan Message {
 }
 
 // CheckHealth checks if the handler is healthy
-func (t *TelegramHandler) CheckHealth() error {
+func (t *TelegramHandler) CheckHealth() *HealthStatus {
 	if !t.IsConnected() {
-		return fmt.Errorf("Telegram handler not connected")
+		return &HealthStatus{Status: "unhealthy", Error: "Telegram handler not connected"}
 	}
-	return nil
+	return &HealthStatus{Status: "healthy", Connected: true}
+}
+
+// HandleSlashCommand handles a slash command
+func (t *TelegramHandler) HandleSlashCommand(cmd string, msg Message) (Response, error) {
+	return Response{Content: "Slash commands not supported for Telegram"}, nil
 }

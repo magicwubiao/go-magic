@@ -127,7 +127,7 @@ func (f *OutputFormatter) printMapSlice(data []map[string]interface{}) error {
 	SortKeys(headers)
 
 	// Create table
-	table := tablewriter.CreateWriter(f.writer)
+	table := tablewriter.NewWriter(f.writer)
 	table.SetHeader(headers)
 	table.SetBorder(true)
 	table.SetRowLine(true)
@@ -147,7 +147,7 @@ func (f *OutputFormatter) printMapSlice(data []map[string]interface{}) error {
 }
 
 func (f *OutputFormatter) printStringSlice(data [][]string) error {
-	table := tablewriter.CreateWriter(f.writer)
+	table := tablewriter.NewWriter(f.writer)
 	for _, row := range data {
 		table.Append(row)
 	}

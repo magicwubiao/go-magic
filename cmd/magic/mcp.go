@@ -116,13 +116,13 @@ func runMCPConnect(cmd *cobra.Command, args []string) {
 	mgr := mcp.NewManager()
 
 	// Try to connect
-	config := mcp.ServerConfig{
+	serverCfg := mcp.ServerConfig{
 		Command:   command,
 		Args:      serverArgs,
 		Transport: "stdio",
 	}
 
-	if err := mgr.ConnectStdio(serverName, config); err != nil {
+	if err := mgr.ConnectStdio(serverName, serverCfg); err != nil {
 		fmt.Printf("Failed to connect: %v\n", err)
 		os.Exit(1)
 	}
@@ -136,7 +136,7 @@ func runMCPConnect(cmd *cobra.Command, args []string) {
 	if cfg.MCP.Servers == nil {
 		cfg.MCP.Servers = make(map[string]mcp.ServerConfig)
 	}
-	cfg.MCP.Servers[serverName] = config
+	cfg.MCP.Servers[serverName] = serverCfg
 
 	if err := cfg.Save(); err != nil {
 		fmt.Printf("Warning: Failed to save config: %v\n", err)
