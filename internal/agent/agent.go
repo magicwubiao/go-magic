@@ -460,11 +460,12 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					lastErr = resp.Error
 					return
 				}
-				fullContent = resp.Content
+				// FIX: Use += to accumulate incremental content from streaming chunks
+				fullContent += resp.Content
 				toolCalls = resp.ToolCalls
-				if !resp.Done {
-					handler(resp.Content, false)
-				}
+				// Always call handler - for incremental chunks (done=false) it streams,
+				// for final chunk (done=true) it sends the complete response
+				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
 				streamed = true
@@ -479,9 +480,9 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					return
 				}
 				fullContent += resp.Content
-				if !resp.Done {
-					handler(resp.Content, false)
-				}
+				// Always call handler - for incremental chunks (done=false) it streams,
+				// for final chunk (done=true) it sends the complete response
+				handler(resp.Content, resp.Done)
 			})
 			if err == nil {
 				streamed = true

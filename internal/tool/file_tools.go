@@ -47,7 +47,7 @@ func (t *ListFilesTool) Schema() map[string]interface{} {
 				"default":     false,
 			},
 		},
-		"required": []string{},
+		// Note: required is omitted when empty since all params are optional
 	}
 }
 

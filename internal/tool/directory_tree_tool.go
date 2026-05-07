@@ -54,7 +54,7 @@ func NewDirectoryTreeTool() *DirectoryTreeTool {
 						"default":     "tree",
 					},
 				},
-				"required": []string{},
+				// Note: required is omitted when empty since all params are optional
 			},
 		),
 	}

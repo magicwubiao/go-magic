@@ -381,9 +381,8 @@ func (r *REPL) runConversation(input string) {
 	var err error
 
 	// Track if we're in streaming mode
+	var fullContent strings.Builder
 	if r.state.streamingEnabled {
-		var fullContent strings.Builder
-
 		err = r.agent.RunConversationStream(r.ctx, input, func(content string, done bool) {
 			if done {
 				return
@@ -393,7 +392,11 @@ func (r *REPL) runConversation(input string) {
 			r.renderStreaming(content)
 		})
 	} else {
-		_, err = r.agent.RunConversation(r.ctx, input)
+		var response string
+		response, err = r.agent.RunConversation(r.ctx, input)
+		if err == nil && response != "" {
+			fmt.Print(response)
+		}
 	}
 
 	close(doneCh)
