@@ -476,11 +476,20 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 		if err != nil {
 			continue
 		}
+		name := t.Name()
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "[WARN] Tool with empty name found, skipping\n")
+			continue
+		}
+		desc := t.Description()
+		if desc == "" {
+			desc = name + " tool"
+		}
 		tools = append(tools, map[string]interface{}{
 			"type": "function",
 			"function": map[string]interface{}{
-				"name":        t.Name(),
-				"description": t.Description(),
+				"name":        name,
+				"description": desc,
 				"parameters":  t.Schema(),
 			},
 		})
