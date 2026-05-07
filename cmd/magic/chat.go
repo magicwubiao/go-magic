@@ -251,7 +251,6 @@ func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, 
 				continue
 			case "compress":
 				aiAgent.EnableCompression(true)
-				aiAgent.SetCompressionRatio(0.5)
 				fmt.Println("History compression triggered.")
 				continue
 			case "usage":

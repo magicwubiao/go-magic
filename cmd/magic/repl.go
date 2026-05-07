@@ -578,7 +578,6 @@ func (r *REPL) cmdModel(args string) {
 // cmdCompress compresses context
 func (r *REPL) cmdCompress() {
 	r.agent.EnableCompression(true)
-	r.agent.SetCompressionRatio(0.5)
 
 	// Trigger compression by adding a marker that the next conversation will compress
 	// Note: Actual compression happens automatically when context exceeds threshold

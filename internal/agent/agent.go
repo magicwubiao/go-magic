@@ -108,7 +108,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		maxTotalLen:        200000, // 200K chars
 		maxMsgLen:          50000,  // 50K chars per message
 		compressionEnabled: true,
-		compressionRatio:   0.7, // trigger compression at 70%
+		compressionRatio:   0.5, // trigger compression at 50%
 		hooks:              hooks.NewHookManager(),
 		bus:                bus.NewEventBus(),
 		maxIterations:      50,

@@ -206,26 +206,15 @@ Config file: `~/.magic/config.json`
 {
   "provider": "deepseek",
   "model": "deepseek-chat",
+  "cortex_enabled": true,
   "providers": {
     "deepseek": {
       "api_key": "...",
       "base_url": "https://api.deepseek.com/v1"
     }
   },
-  "cortex_enabled": true,
-  "cortex": {
-    "enabled": true,
-    "frozen_snapshot": true,
-    "nudge_threshold": 15
-  },
   "tools": {
-    "enabled": ["web_search", "execute_command"]
-  },
-  "agent": {
-    "max_turns": 10,
-    "max_context_length": 200000,
-    "compression_enabled": true,
-    "compression_ratio": 0.7
+    "enabled": ["all"]
   },
   "gateway": {
     "enabled": false,
