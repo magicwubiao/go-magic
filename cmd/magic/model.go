@@ -54,99 +54,125 @@ func runModel(cmd *cobra.Command, args []string) {
 
 		switch strings.ToLower(listProvider) {
 		case "openai":
-			fmt.Println("  gpt-4o         - GPT-4o (latest)")
-			fmt.Println("  gpt-4o-mini   - GPT-4o Mini")
-			fmt.Println("  gpt-4-turbo   - GPT-4 Turbo")
-			fmt.Println("  gpt-4         - GPT-4")
-			fmt.Println("  gpt-3.5-turbo - GPT-3.5 Turbo")
+			fmt.Println("  gpt-4.1         - GPT-4.1 (latest flagship)")
+			fmt.Println("  gpt-4.1-mini   - GPT-4.1 Mini")
+			fmt.Println("  gpt-4.1-nano   - GPT-4.1 Nano (fastest/cheapest)")
+			fmt.Println("  gpt-4o         - GPT-4o")
+			fmt.Println("  gpt-4o-mini    - GPT-4o Mini")
+			fmt.Println("  o3-mini        - o3 Mini (reasoning)")
+			fmt.Println("  gpt-4-turbo    - GPT-4 Turbo")
+			fmt.Println("  gpt-4          - GPT-4")
 			fmt.Println()
-			fmt.Println("  Note: Set via: magic model openai:gpt-4o")
+			fmt.Println("  Note: Set via: magic model openai:gpt-4.1")
 		case "anthropic":
-			fmt.Println("  claude-3-5-sonnet-20241022 - Claude 3.5 Sonnet (latest)")
+			fmt.Println("  claude-sonnet-4-20250514    - Claude Sonnet 4 (latest)")
+			fmt.Println("  claude-opus-4-20250514     - Claude Opus 4")
+			fmt.Println("  claude-3-5-sonnet-20241022 - Claude 3.5 Sonnet")
 			fmt.Println("  claude-3-5-haiku-20241022 - Claude 3.5 Haiku")
 			fmt.Println("  claude-3-opus-20240229    - Claude 3 Opus")
-			fmt.Println("  claude-3-sonnet-20240229  - Claude 3 Sonnet")
 		case "deepseek":
-			fmt.Println("  deepseek-chat      - DeepSeek Chat")
+			fmt.Println("  deepseek-chat       - DeepSeek V3 (non-thinking)")
+			fmt.Println("  deepseek-reasoner  - DeepSeek R1 (thinking/reasoning)")
+			fmt.Println("  deepseek-v3.1      - DeepSeek V3.1")
 			fmt.Println("  deepseek-coder     - DeepSeek Coder")
 		case "huoshan":
 			fmt.Println("  ep-xxxxxxxx - Volcengine Endpoint ID")
 			fmt.Println("  (check Volcano Engine console for available endpoints)")
 		case "kimi":
-			fmt.Println("  moonshot-v1-128k  - Kimi 128K context")
-			fmt.Println("  moonshot-v1-32k  - Kimi 32K context")
-			fmt.Println("  moonshot-v1-8k    - Kimi 8K context")
+			fmt.Println("  moonshot-v1-128k  - Moonshot V1 128K context")
+			fmt.Println("  moonshot-v1-32k  - Moonshot V1 32K context")
+			fmt.Println("  moonshot-v1-8k   - Moonshot V1 8K context")
+			fmt.Println("  kimi-k2-instruct - Kimi K2 (latest MoE agentic model)")
 		case "minimax":
-			fmt.Println("  abab6-chat - MiniMax Chat")
+			fmt.Println("  MiniMax-M2    - MiniMax M2 (latest, 200K context)")
+			fmt.Println("  MiniMax-M2.1  - MiniMax M2.1 (enhanced coding)")
+			fmt.Println("  MiniMax-M2.5  - MiniMax M2.5 (advanced reasoning)")
 		case "zhipu":
-			fmt.Println("  glm-4        - GLM-4")
+			fmt.Println("  glm-4         - GLM-4")
 			fmt.Println("  glm-4-flash  - GLM-4 Flash")
-			fmt.Println("  glm-3-turbo - GLM-3 Turbo")
+			fmt.Println("  glm-4.6      - GLM-4.6 (200K context)")
+			fmt.Println("  glm-4.7      - GLM-4.7 (latest, agentic coding)")
+			fmt.Println("  glm-4v       - GLM-4V (multimodal)")
 		case "ollama":
-			fmt.Println("  llama3.2      - Llama 3.2")
+			fmt.Println("  llama3.3      - Llama 3.3 (latest)")
+			fmt.Println("  qwen3         - Qwen 3")
 			fmt.Println("  qwen2.5       - Qwen 2.5")
 			fmt.Println("  codellama     - Code Llama")
 			fmt.Println("  mistral       - Mistral")
 			fmt.Println("  (models depend on your local Ollama installation)")
 		case "openrouter":
-			fmt.Println("  openrouter/anthropic/claude-3.5-sonnet")
-			fmt.Println("  openrouter/google/gemini-pro")
-			fmt.Println("  openrouter/mistral/mistral-large")
+			fmt.Println("  openrouter/anthropic/claude-sonnet-4        - Claude Sonnet 4")
+			fmt.Println("  openrouter/google/gemini-2.0-flash         - Gemini 2.0 Flash")
+			fmt.Println("  openrouter/deepseek/deepseek-chat          - DeepSeek V3")
 			fmt.Println("  (see https://openrouter.ai/models for full list)")
 		case "dashscope":
-			fmt.Println("  qwen-turbo      - Qwen Turbo")
-			fmt.Println("  qwen-plus       - Qwen Plus")
-			fmt.Println("  qwen-max        - Qwen Max")
-			fmt.Println("  qwen-max-long   - Qwen Max Long")
+			fmt.Println("  qwen3-turbo       - Qwen 3 Turbo")
+			fmt.Println("  qwen3-plus       - Qwen 3 Plus")
+			fmt.Println("  qwen3-max        - Qwen 3 Max")
+			fmt.Println("  qwen3-nano       - Qwen 3 Nano")
+			fmt.Println("  qwq-32b          - QwQ 32B (reasoning)")
+			fmt.Println("  qwen-turbo       - Qwen 2.5 Turbo (legacy)")
 		case "vllm":
 			fmt.Println("  (depends on your vLLM server configuration)")
 		case "gemini":
-			fmt.Println("  gemini-1.5-pro      - Gemini 1.5 Pro")
-			fmt.Println("  gemini-1.5-flash    - Gemini 1.5 Flash (fast)")
-			fmt.Println("  gemini-1.5-flash-8b - Gemini 1.5 Flash 8B")
 			fmt.Println("  gemini-2.0-flash-exp - Gemini 2.0 Flash Experimental")
+			fmt.Println("  gemini-2.5-pro       - Gemini 2.5 Pro")
+			fmt.Println("  gemini-2.5-flash     - Gemini 2.5 Flash")
+			fmt.Println("  gemini-1.5-pro       - Gemini 1.5 Pro (legacy)")
+			fmt.Println("  gemini-1.5-flash     - Gemini 1.5 Flash (legacy)")
 		case "groq":
+			fmt.Println("  llama-3.3-70b-versatile   - Llama 3.3 70B (latest)")
 			fmt.Println("  mixtral-8x7b-32768       - Mixtral 8x7B (fast inference)")
-			fmt.Println("  llama-3.1-70b-versatile   - Llama 3.1 70B")
+			fmt.Println("  llama-3.1-70b-versatile   - Llama 3.1 70B (legacy)")
 			fmt.Println("  llama-3.1-8b-instant     - Llama 3.1 8B")
 			fmt.Println("  gemma2-9b-it             - Gemma 2 9B")
 		case "together":
+			fmt.Println("  deepseek-ai/DeepSeek-V3              - DeepSeek V3")
+			fmt.Println("  deepseek-ai/DeepSeek-R1              - DeepSeek R1 (reasoning)")
+			fmt.Println("  meta-llama/Llama-3.3-70B-Instruct-Turbo")
+			fmt.Println("  Qwen/QwQ-32B                        - QwQ 32B (reasoning)")
 			fmt.Println("  mistralai/Mixtral-8x7B-Instruct-v0.1")
-			fmt.Println("  meta-llama/Llama-3-70b-chat-hf")
-			fmt.Println("  mistralai/Mistral-7B-Instruct-v0.3")
 		case "mistral":
-			fmt.Println("  mistral-large-latest  - Mistral Large")
-			fmt.Println("  mistral-small-latest - Mistral Small (fast)")
-			fmt.Println("  mistral-medium-latest - Mistral Medium")
-			fmt.Println("  open-mixtral-8x22b   - Open Mixtral 8x22B")
+			fmt.Println("  mistral-large-3    - Mistral Large 3 (latest, 256K context)")
+			fmt.Println("  mistral-small-3    - Mistral Small 3 (fast)")
+			fmt.Println("  mistral-medium-3   - Mistral Medium 3")
+			fmt.Println("  mistral-large-latest - Mistral Large (legacy)")
+			fmt.Println("  open-mixtral-8x22b - Open Mixtral 8x22B")
 		case "cohere":
-			fmt.Println("  command-r-plus      - Command R+")
-			fmt.Println("  command-r7b-12-2024 - Command R7B")
-			fmt.Println("  command-medium-new  - Command Medium")
+			fmt.Println("  command-r-plus-08-2024 - Command R+ (Aug 2024)")
+			fmt.Println("  command-r7b-12-2024  - Command R7B")
+			fmt.Println("  command               - Command (standard)")
 		case "perplexity":
-			fmt.Println("  sonar              - Sonar (default)")
-			fmt.Println("  sonar-pro          - Sonar Pro")
-			fmt.Println("  sonar-reasoning    - Sonar Reasoning")
-			fmt.Println("  sonar-reasoning-pro - Sonar Reasoning Pro")
+			fmt.Println("  sonar                    - Sonar (default)")
+			fmt.Println("  sonar-pro                - Sonar Pro")
+			fmt.Println("  sonar-reasoning-pro     - Sonar Reasoning Pro")
+			fmt.Println("  sonar-deep-research      - Sonar Deep Research")
 		case "doubao":
-			fmt.Println("  doubao-pro-32k  - Doubao Pro 32K")
-			fmt.Println("  doubao-lite-32k - Doubao Lite 32K")
-			fmt.Println("  doubao-pro-4k   - Doubao Pro 4K")
+			fmt.Println("  doubao-pro-256k      - Doubao Pro 256K context")
+			fmt.Println("  doubao-pro-32k       - Doubao Pro 32K")
+			fmt.Println("  doubao-lite-32k      - Doubao Lite 32K")
+			fmt.Println("  doubao-1.5-pro-32k   - Doubao 1.5 Pro 32K")
+			fmt.Println("  doubao-1.5-thinking-pro - Doubao Thinking Pro")
+			fmt.Println("  doubao-seed-1.6       - Doubao Seed 1.6 (multimodal)")
 		case "wenxin":
-			fmt.Println("  ernie-4.0-8k-latest - ERNIE 4.0 8K (latest)")
-			fmt.Println("  ernie-4.0-8k       - ERNIE 4.0 8K")
-			fmt.Println("  ernie-3.5-8k       - ERNIE 3.5 8K")
+			fmt.Println("  ernie-4.0-8k-latest  - ERNIE 4.0 8K (latest)")
+			fmt.Println("  ernie-4.0-turbo-8k  - ERNIE 4.0 Turbo 8K")
+			fmt.Println("  ernie-x1            - ERNIE X1 (reasoning)")
+			fmt.Println("  ernie-x1.1          - ERNIE X1.1 (enhanced reasoning)")
+			fmt.Println("  ernie-3.5-8k        - ERNIE 3.5 8K")
 		case "moonshot":
-			fmt.Println("  moonshot-v1-128k - Kimi 128K context")
-			fmt.Println("  moonshot-v1-32k - Kimi 32K context")
-			fmt.Println("  moonshot-v1-8k  - Kimi 8K context")
+			fmt.Println("  moonshot-v1-128k - Moonshot V1 128K context")
+			fmt.Println("  moonshot-v1-32k - Moonshot V1 32K context")
+			fmt.Println("  moonshot-v1-8k  - Moonshot V1 8K context")
+			fmt.Println("  kimi-k2-instruct - Kimi K2 (MoE agentic model)")
 		case "mimo":
 			fmt.Println("  mimo-v2-flash  - MiMo V2 Flash (fast)")
 			fmt.Println("  mimo-v2-pro    - MiMo V2 Pro (reasoning)")
 			fmt.Println("  mimo-v2-omni  - MiMo V2 Omni (multimodal)")
 		case "hunyuan":
-			fmt.Println("  hunyuan-turbo        - Hunyuan Turbo")
-			fmt.Println("  hunyuan-turbos-latest - Hunyuan Turbo S (latest)")
+			fmt.Println("  hunyuan-turbo         - Hunyuan Turbo")
+			fmt.Println("  hunyuan-turbos-latest  - Hunyuan Turbo S (latest)")
+			fmt.Println("  hunyuan-t1            - Hunyuan T1 (thinking model)")
 		default:
 			fmt.Printf("  Unknown provider: %s\n", listProvider)
 			fmt.Println("  Try: openai, anthropic, deepseek, kimi, ollama, zhipu, openrouter, gemini, groq, mistral, cohere, perplexity, doubao, wenxin, moonshot")
@@ -214,31 +240,31 @@ func maskAPIKey(key string) string {
 }
 
 // Provider models (hardcoded for now)
-var providerModels = map[string][]string{
-	"openai":      {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"},
-	"anthropic":   {"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229"},
-	"deepseek":    {"deepseek-chat", "deepseek-coder"},
-	"huoshan":     {"ep-xxxxxxxx"}, // Volcano Engine endpoint ID
-	"kimi":        {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"},
-	"minimax":     {"abab6-chat"},
-	"zhipu":       {"glm-4", "glm-4-flash", "glm-3-turbo"},
-	"ollama":      {"llama3.2", "qwen2.5", "codellama", "mistral"}, // depends on local Ollama
-	"openrouter":  {"openrouter/anthropic/claude-3.5-sonnet", "openrouter/google/gemini-pro", "openrouter/mistral/mistral-large"},
-	"dashscope":   {"qwen-turbo", "qwen-plus", "qwen-max", "qwen-max-long"},
-	"vllm":        {}, // depends on vLLM server config
-	// New providers
-	"gemini":      {"gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash-exp"},
-	"groq":        {"mixtral-8x7b-32768", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"},
-	"together":    {"mistralai/Mixtral-8x7B-Instruct-v0.1", "meta-llama/Llama-3-70b-chat-hf", "mistralai/Mistral-7B-Instruct-v0.3"},
-	"mistral":     {"mistral-large-latest", "mistral-small-latest", "mistral-medium-latest", "open-mixtral-8x22b"},
-	"cohere":      {"command-r-plus", "command-r7b-12-2024", "command-medium-new"},
-	"perplexity":  {"sonar", "sonar-pro", "sonar-reasoning", "sonar-reasoning-pro"},
-	"doubao":      {"doubao-pro-32k", "doubao-lite-32k", "doubao-pro-4k"},
-	"wenxin":      {"ernie-4.0-8k-latest", "ernie-4.0-8k", "ernie-3.5-8k"},
-	"moonshot":    {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"},
-	"mimo":        {"mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"},
-	"hunyuan":     {"hunyuan-turbo", "hunyuan-turbos-latest"},
-}
+	var providerModels = map[string][]string{
+		"openai":      {"gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4-turbo", "gpt-4"},
+		"anthropic":   {"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"},
+		"deepseek":    {"deepseek-chat", "deepseek-reasoner", "deepseek-v3.1", "deepseek-coder"},
+		"huoshan":     {"ep-xxxxxxxx"}, // Volcano Engine endpoint ID
+		"kimi":        {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
+		"minimax":     {"MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5"},
+		"zhipu":       {"glm-4", "glm-4-flash", "glm-4.6", "glm-4.7", "glm-4v"},
+		"ollama":      {"llama3.3", "qwen3", "qwen2.5", "codellama", "mistral"}, // depends on local Ollama
+		"openrouter":  {"openrouter/anthropic/claude-sonnet-4", "openrouter/google/gemini-2.0-flash", "openrouter/deepseek/deepseek-chat"},
+		"dashscope":   {"qwen3-turbo", "qwen3-plus", "qwen3-max", "qwen3-nano", "qwq-32b", "qwen-turbo"},
+		"vllm":        {}, // depends on vLLM server config
+		// New providers
+		"gemini":      {"gemini-2.0-flash-exp", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"},
+		"groq":        {"llama-3.3-70b-versatile", "mixtral-8x7b-32768", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"},
+		"together":    {"deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/QwQ-32B", "mistralai/Mixtral-8x7B-Instruct-v0.1"},
+		"mistral":     {"mistral-large-3", "mistral-small-3", "mistral-medium-3", "mistral-large-latest", "open-mixtral-8x22b"},
+		"cohere":      {"command-r-plus-08-2024", "command-r7b-12-2024", "command"},
+		"perplexity":  {"sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"},
+		"doubao":      {"doubao-pro-256k", "doubao-pro-32k", "doubao-lite-32k", "doubao-1.5-pro-32k", "doubao-1.5-thinking-pro", "doubao-seed-1.6"},
+		"wenxin":      {"ernie-4.0-8k-latest", "ernie-4.0-turbo-8k", "ernie-x1", "ernie-x1.1", "ernie-3.5-8k"},
+		"moonshot":    {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
+		"mimo":        {"mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"},
+		"hunyuan":     {"hunyuan-turbo", "hunyuan-turbos-latest", "hunyuan-t1"},
+	}
 
 // interactiveModelSelect presents an interactive UI for selecting provider and model.
 func interactiveModelSelect(cfg *config.Config) (string, string) {

@@ -201,7 +201,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 	gm := NewGroupManager()
 	
 	// 文件操作分组
-	fileGroup := gm.CreateGroup("file", "文件操作工具")
+	fileGroup := gm.CreateGroup("file", "File operations")
 	for _, name := range []string{"read_file", "write_file", "list_files", "search_in_files"} {
 		if tool, err := registry.Get(name); err == nil {
 			fileGroup.Add(tool)
@@ -209,7 +209,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 	}
 	
 	// Web 操作分组
-	webGroup := gm.CreateGroup("web", "Web 操作工具")
+	webGroup := gm.CreateGroup("web", "Web operations")
 	for _, name := range []string{"web_search", "web_extract", "web_fetch"} {
 		if tool, err := registry.Get(name); err == nil {
 			webGroup.Add(tool)
@@ -217,7 +217,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 	}
 	
 	// 代码执行分组
-	codeGroup := gm.CreateGroup("code", "代码执行工具")
+	codeGroup := gm.CreateGroup("code", "Code execution")
 	for _, name := range []string{"execute_command", "python_execute", "node_execute"} {
 		if tool, err := registry.Get(name); err == nil {
 			codeGroup.Add(tool)
@@ -225,7 +225,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 	}
 	
 	// 记忆分组
-	memoryGroup := gm.CreateGroup("memory", "记忆工具")
+	memoryGroup := gm.CreateGroup("memory", "Memory")
 	for _, name := range []string{"memory_store", "memory_recall"} {
 		if tool, err := registry.Get(name); err == nil {
 			memoryGroup.Add(tool)
