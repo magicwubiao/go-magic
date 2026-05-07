@@ -1,6 +1,6 @@
 # hermes-agent
 
-A high-performance, ultra-lightweight Go implementation of the Hermes AI Agent, inspired by Nous Research's hermes-agent.
+A high-performance, ultra-lightweight Go implementation of the AI Agent, inspired by Nous Research's hermes-agent.
 
 ## Features
 
