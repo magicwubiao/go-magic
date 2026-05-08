@@ -403,17 +403,10 @@ func (g *WeChatClawGateway) startHeartbeat() {
 					return
 				}
 
-				// Send a lightweight ping to keep the connection alive
-				// We use the client's internal state check + a keepalive send
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
 				// Try to send a heartbeat via a simple state check
-				// The clawbot client's internal getupdates loop will keep the connection alive
-				// by just checking if it's still connected
+				// The clawbot client keeps the connection alive internally
 				state := g.client.State()
 				_ = state
-
-				cancel()
 
 			case <-g.heartbeatStopCh:
 				log.Debug("[WeChat-ClawBot] Heartbeat stopped")

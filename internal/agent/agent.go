@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,8 +13,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
-
-	"encoding/json"
 )
 
 // Tool dependency graph - tools that must run alone (cannot parallelize with same tool or related)
@@ -77,6 +76,9 @@ type Agent struct {
 
 	// Cortex Agent six-system integration
 	cortexManager *cortex.Manager
+
+	// Sub-task delegation (auto-decompose complex tasks)
+	subTaskEnabled bool
 }
 
 // ToolRegistry interface for tool execution
@@ -113,6 +115,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		hooks:              hooks.NewHookManager(),
 		bus:                bus.NewEventBus(),
 		maxIterations:      50,
+		subTaskEnabled:     true, // Enable sub-task delegation by default
 	}
 
 	// Register built-in hooks
@@ -177,6 +180,13 @@ func WithCortex(mgr *cortex.Manager) AgentOption {
 	}
 }
 
+// WithSubTask enables or disables automatic sub-task delegation
+func WithSubTask(enabled bool) AgentOption {
+	return func(a *Agent) {
+		a.subTaskEnabled = enabled
+	}
+}
+
 func (a *Agent) registerBuiltinHooks() {
 	// Privacy hook
 	a.hooks.Register(hooks.HookRegistration{
@@ -220,6 +230,38 @@ func (a *Agent) AddSkillsContext(skillsCtx string) {
 	}}, a.history...)
 }
 
+// trySubTaskDelegation checks if the task is complex and delegates to sub-task executor.
+// Returns true if delegated and handled, false if should proceed normally.
+func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, string, error) {
+	if !a.subTaskEnabled {
+		return false, "", nil
+	}
+
+	analyzer := NewComplexityAnalyzer()
+	if !analyzer.ShouldDecompose(input) {
+		return false, "", nil
+	}
+
+	// Task is complex - delegate to sub-task executor
+	result, err := a.ExecuteComplexTask(ctx, input)
+	if err != nil {
+		// If delegation fails, fall through to normal conversation
+		return false, "", nil
+	}
+
+	if result == "" {
+		return false, "", nil
+	}
+
+	// Add the sub-task results to conversation history
+	a.history = append(a.history,
+		provider.Message{Role: "user", Content: input},
+		provider.Message{Role: "assistant", Content: result + "\n\nBased on the sub-task results above, here is my complete response:"},
+	)
+
+	return true, result, nil
+}
+
 // RunConversation runs a conversation with automatic tool execution
 func (a *Agent) RunConversation(ctx context.Context, input string) (string, error) {
 	// Emit agent start event
@@ -228,6 +270,20 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 	// Cortex: User message trigger - increments turn counter, may trigger nudge
 	if a.cortexManager != nil {
 		a.cortexManager.OnUserMessage(input)
+	}
+
+	// Auto sub-task delegation for complex tasks
+	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
+		if err != nil {
+			return "", err
+		}
+		// Synthesis prompt to summarize sub-task results
+		return a.RunConversation(ctx,
+			fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
+
+%s
+
+Please provide a comprehensive, well-structured final response based on these sub-task results.`, result))
 	}
 
 	// Truncate input
@@ -242,8 +298,6 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
 		// Cortex: OnTurnStart - freezes memory snapshot for prefix cache
-		// Critical optimization: memory updates written to disk but NOT loaded
-		// into system prompt until next session, protecting cache hit rate
 		if a.cortexManager != nil {
 			a.cortexManager.OnTurnStart()
 		}
@@ -323,9 +377,6 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
-			// Cortex: Session end - refresh memory snapshot for next session
-			// This ensures future conversations get the latest memory
-			// while protecting the prefix cache during the current session
 			if a.cortexManager != nil {
 				a.cortexManager.OnSessionEnd()
 			}
@@ -380,7 +431,6 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 
 	a.Emit(bus.EventKindAgentEnd, nil)
 
-	// Cortex: Session end - refresh memory snapshot for next session
 	if a.cortexManager != nil {
 		a.cortexManager.OnSessionEnd()
 	}
@@ -398,6 +448,27 @@ type StreamHandler func(content string, done bool)
 func (a *Agent) RunConversationStream(ctx context.Context, input string, handler StreamHandler) error {
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
+
+	// Auto sub-task delegation for complex tasks
+	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
+		if err != nil {
+			handler(fmt.Sprintf("\nError delegating sub-tasks: %v\n", err), true)
+			return err
+		}
+		// Stream the delegation result
+		handler(fmt.Sprintf("\n[⚡ Task Auto-Delegated to Sub-Task Executor]\n"), false)
+		handler(result, false)
+		handler("\n\n[Synthesizing final response...]\n\n", false)
+
+		// Run synthesis via streaming
+		return a.RunConversationStream(ctx,
+			fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
+
+%s
+
+Please provide a comprehensive, well-structured final response based on these sub-task results.`, result),
+			handler)
+	}
 
 	// Truncate input
 	a.history = append(a.history, provider.Message{
@@ -464,10 +535,8 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 					return
 				}
 				if resp.Done {
-					// Done=true: Content is full accumulated, ToolCalls are complete
 					fullContent = resp.Content
 					toolCalls = resp.ToolCalls
-					// Safety: ensure every tool call has an ID
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
 							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
@@ -477,7 +546,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 						}
 					}
 				} else {
-					// Delta chunk: Content is incremental
 					fullContent += resp.Content
 				}
 				handler(resp.Content, resp.Done)
@@ -488,7 +556,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 				lastErr = err
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
-			// Simple streaming (no tools)
 			err = ss.Stream(ctx, req.Messages, func(resp *provider.StreamResponse) {
 				if resp.Error != nil {
 					lastErr = resp.Error
@@ -506,8 +573,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 			} else {
 				lastErr = err
 			}
-		} else {
-			// No streaming support available
 		}
 
 		// Fall back to non-streaming if streaming failed
@@ -531,7 +596,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 
 			fullContent = resp.Content
 			toolCalls = resp.ToolCalls
-			// Safety: ensure every tool call has an ID
 			for i := range toolCalls {
 				if toolCalls[i].ID == "" {
 					toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
@@ -592,8 +656,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 		if err != nil {
 			lastErr = err
 			a.Emit(bus.EventKindToolError, err.Error())
-			// Must add tool result messages for each tool call,
-			// otherwise API rejects the next request (tool_calls without tool responses)
 			for _, tc := range toolCalls {
 				errContent := fmt.Sprintf("Error: %v", err)
 				a.history = append(a.history, provider.Message{
@@ -624,7 +686,6 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 				ToolCallID: tc.ID,
 			})
 
-			// Stream tool result - use Function.Name for display
 			toolName := tc.Function.Name
 			if toolName == "" {
 				toolName = tc.Name
@@ -658,12 +719,10 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	results := make(map[string]ToolCallResult)
 	var mu sync.Mutex
 
-	// Group tools by execution mode
 	groups := a.groupToolsForExecution(toolCalls)
 
 	for _, group := range groups {
 		if group.sequential {
-			// Execute sequentially
 			for _, tc := range group.tools {
 				result := a.executeSingleToolWithHooks(ctx, tc)
 				mu.Lock()
@@ -671,7 +730,6 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 				mu.Unlock()
 			}
 		} else {
-			// Execute in parallel using goroutines
 			var wg sync.WaitGroup
 			errCh := make(chan error, len(group.tools))
 
@@ -693,7 +751,6 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 			wg.Wait()
 			close(errCh)
 
-			// Check for errors
 			for err := range errCh {
 				if err != nil {
 					return results, err
@@ -709,17 +766,14 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCall) ToolCallResult {
 	start := time.Now()
 
-	// Resolve tool name: prefer Function.Name, fallback to Name
 	toolName := tc.Function.Name
 	if toolName == "" {
 		toolName = tc.Name
 	}
 
-	// Parse arguments: prefer Function.Arguments (JSON string), fallback to Arguments (map)
 	var toolArgs map[string]interface{}
 	if tc.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs); err != nil {
-			// If parsing fails, try as a simple value
 			toolArgs = map[string]interface{}{"input": tc.Function.Arguments}
 		}
 	} else if tc.Arguments != nil {
@@ -728,13 +782,11 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		toolArgs = map[string]interface{}{}
 	}
 
-	// Emit before tool event
 	a.Emit(bus.EventKindToolBefore, map[string]interface{}{
 		"tool": toolName,
 		"args": toolArgs,
 	})
 
-	// Call BeforeTool hooks
 	callReq := &hooks.ToolCallHookRequest{
 		ToolName: toolName,
 		ToolArgs: toolArgs,
@@ -757,7 +809,6 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		}
 	}
 
-	// Execute tool
 	result, err := a.registry.Execute(ctx, toolName, callReq.ToolArgs)
 	elapsed := time.Since(start)
 
@@ -765,7 +816,6 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	if err != nil {
 		content = fmt.Sprintf("Error: %v", err)
 	} else {
-		// Serialize result to JSON string for API compatibility
 		switch v := result.(type) {
 		case string:
 			content = v
@@ -780,7 +830,6 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		}
 	}
 
-	// Call AfterTool hooks
 	resultResp := &hooks.ToolResultHookResponse{
 		ToolName:    toolName,
 		ToolArgs:    toolArgs,
@@ -790,7 +839,6 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	}
 	resultResp, _, _ = a.hooks.AfterTool(ctx, resultResp)
 
-	// Emit after tool event
 	a.Emit(bus.EventKindToolAfter, map[string]interface{}{
 		"tool":  toolName,
 		"error": err,
@@ -864,18 +912,15 @@ func (a *Agent) GetHistoryLength() int {
 func (a *Agent) truncateHistory() {
 	totalLen := a.GetHistoryLength()
 
-	// Check if we need compression
 	if a.compressionEnabled && totalLen > int(float64(a.maxTotalLen)*a.compressionRatio) {
 		a.compressHistory()
 		return
 	}
 
-	// Simple truncation if not compressing
 	if totalLen < a.maxTotalLen {
 		return
 	}
 
-	// Find system prompt index
 	systemIdx := -1
 	for i, m := range a.history {
 		if m.Role == "system" {
@@ -884,16 +929,14 @@ func (a *Agent) truncateHistory() {
 		}
 	}
 
-	// Remove oldest user/tool messages, keeping system
 	for totalLen > a.maxTotalLen && len(a.history) > 1 {
 		idx := 0
 		if systemIdx == 0 {
-			idx = 1 // Skip system
+			idx = 1
 		}
 		totalLen -= len(a.history[idx].Content)
 		a.history = append(a.history[:idx], a.history[idx+1:]...)
 
-		// If system was deleted, re-find it
 		if systemIdx == idx {
 			systemIdx = -1
 			for i, m := range a.history {
@@ -908,7 +951,6 @@ func (a *Agent) truncateHistory() {
 
 // compressHistory performs smart context compression
 func (a *Agent) compressHistory() {
-	// Separate messages by role
 	var userMsgs []provider.Message
 	var assistantMsgs []provider.Message
 
@@ -921,7 +963,6 @@ func (a *Agent) compressHistory() {
 		}
 	}
 
-	// Calculate how many to keep
 	totalMsgs := len(userMsgs)
 	keepRecent := 4
 	keepFirst := 2
@@ -930,10 +971,8 @@ func (a *Agent) compressHistory() {
 		return
 	}
 
-	// Build new history with compression summary
 	var newHistory []provider.Message
 
-	// Keep system prompt
 	for _, m := range a.history {
 		if m.Role == "system" {
 			newHistory = append(newHistory, m)
@@ -941,12 +980,10 @@ func (a *Agent) compressHistory() {
 		}
 	}
 
-	// Keep first messages
 	for i := 0; i < keepFirst && i < len(userMsgs); i++ {
 		newHistory = append(newHistory, userMsgs[i])
 	}
 
-	// Add compression summary
 	summary := a.generateCompressionSummary(userMsgs[keepFirst : len(userMsgs)-keepRecent])
 	newHistory = append(newHistory, provider.Message{
 		Role: "system",
@@ -954,7 +991,6 @@ func (a *Agent) compressHistory() {
 			totalMsgs-keepRecent-keepFirst, summary),
 	})
 
-	// Keep recent messages
 	for i := len(userMsgs) - keepRecent; i < len(userMsgs); i++ {
 		newHistory = append(newHistory, userMsgs[i])
 	}
