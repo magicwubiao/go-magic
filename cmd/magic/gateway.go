@@ -23,6 +23,8 @@ import (
 
 const pidFileName = "gateway.pid"
 
+var gatewayPlatform string // --platform 参数
+
 var gatewayCmd = &cobra.Command{
 	Use:   "gateway",
 	Short: "Start the messaging gateway (with health check on :8080)",
@@ -48,10 +50,22 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 func init() {
+	gatewayStartCmd.Flags().StringVarP(&gatewayPlatform, "platform", "p", "",
+		"Only start specified platform (e.g., qq, wechat, telegram). If not set, starts all enabled platforms.")
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStopCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
 	rootCmd.AddCommand(gatewayCmd)
+}
+
+// shouldStartPlatform checks if a platform should be started based on --platform flag.
+// If --platform is empty, all enabled platforms start.
+// If --platform is set, only the matching platform starts.
+func shouldStartPlatform(name string) bool {
+	if gatewayPlatform == "" {
+		return true
+	}
+	return gatewayPlatform == name
 }
 
 // gatewayAgentHandler implements gateway.AgentHandler to bridge gateway messages
@@ -111,7 +125,6 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			"Message: %s", msg.Content), nil
 	}
 
-	// Create a simple prompt for the AI to respond to the message
 	prompt := fmt.Sprintf(`You are a helpful AI assistant. The user sent you a message via %s.
 
 User message: %s
@@ -137,6 +150,11 @@ func (h *gatewayAgentHandler) ResetSession(userID string) {
 }
 
 func runGatewayStart(cmd *cobra.Command, args []string) {
+	if gatewayPlatform != "" {
+		fmt.Printf("🔧 Platform filter: only starting '%s'\n", gatewayPlatform)
+		fmt.Printf("   (omit --platform to start all enabled platforms)\n\n")
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
@@ -152,7 +170,6 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start health check server
 	go startHealthServer(ctx)
 
 	sigCh := make(chan os.Signal, 1)
@@ -165,19 +182,14 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}()
 
 	platformCount := 0
-
-	// Create a simple agent handler that prints and responds to messages
-	// This bridges the gateway to the main magic agent logic
 	agentHandler := &gatewayAgentHandler{}
-
-	// Use the unified Gateway to manage all platforms
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
 
 	// Start Telegram if configured
-	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled {
+	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled && shouldStartPlatform("telegram") {
 		platformCount++
 		if tgCfg.Token == "" {
-			fmt.Println("Telegram token not configured!")
+			fmt.Println("[Telegram] Token not configured!")
 		} else {
 			fmt.Println("[Telegram] Starting...")
 			tgGw, err := gateway.NewTelegramHandler(tgCfg.Token, nil)
@@ -190,10 +202,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start Discord if configured
-	if dcCfg, ok := cfg.Gateway.Platforms["discord"]; ok && dcCfg.Enabled {
+	if dcCfg, ok := cfg.Gateway.Platforms["discord"]; ok && dcCfg.Enabled && shouldStartPlatform("discord") {
 		platformCount++
 		if dcCfg.Token == "" {
-			fmt.Println("Discord token not configured!")
+			fmt.Println("[Discord] Token not configured!")
 		} else {
 			fmt.Println("[Discord] Starting...")
 			dgw, err := gateway.NewDiscordGateway(dcCfg.Token)
@@ -210,10 +222,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WeCom if configured
-	if wcCfg, ok := cfg.Gateway.Platforms["wecom"]; ok && wcCfg.Enabled {
+	if wcCfg, ok := cfg.Gateway.Platforms["wecom"]; ok && wcCfg.Enabled && shouldStartPlatform("wecom") {
 		platformCount++
 		if wcCfg.CorpID == "" || wcCfg.Secret == "" {
-			fmt.Println("WeCom config incomplete (need corp_id and secret)!")
+			fmt.Println("[WeCom] Config incomplete (need corp_id and secret)!")
 		} else {
 			fmt.Println("[WeCom] Starting...")
 			wcgw := gateway.NewWeComGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
@@ -226,13 +238,12 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start QQ if configured
-	if qqCfg, ok := cfg.Gateway.Platforms["qq"]; ok && qqCfg.Enabled {
+	if qqCfg, ok := cfg.Gateway.Platforms["qq"]; ok && qqCfg.Enabled && shouldStartPlatform("qq") {
 		platformCount++
 		if qqCfg.Number == "" && qqCfg.AppID == "" {
-			fmt.Println("QQ config incomplete (need app_id/number and app_secret)!")
+			fmt.Println("[QQ] Config incomplete (need app_id/number and app_secret)!")
 		} else {
 			fmt.Println("[QQ] Starting...")
-			// 优先使用 app_id/app_secret（官方QQ机器人），兼容旧的 number/password 字段
 			appID := qqCfg.AppID
 			if appID == "" {
 				appID = qqCfg.Number
@@ -251,14 +262,13 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start DingTalk if configured
-	if dtCfg, ok := cfg.Gateway.Platforms["dingtalk"]; ok && dtCfg.Enabled {
+	if dtCfg, ok := cfg.Gateway.Platforms["dingtalk"]; ok && dtCfg.Enabled && shouldStartPlatform("dingtalk") {
 		platformCount++
 		if dtCfg.AppKey == "" || dtCfg.AppSecret == "" {
-			fmt.Println("DingTalk config incomplete (need app_key and app_secret)!")
+			fmt.Println("[DingTalk] Config incomplete (need app_key and app_secret)!")
 		} else {
 			fmt.Println("[DingTalk] Starting...")
 			dtGw := gateway.NewDingTalkGateway(dtCfg.AppKey, dtCfg.AppSecret)
-			// 从配置加载 agentID（用于发送企业应用消息）
 			if dtCfg.AgentID != "" {
 				dtGw.SetAgentID(dtCfg.AgentID)
 			}
@@ -271,10 +281,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start Feishu/Lark if configured
-	if fsCfg, ok := cfg.Gateway.Platforms["feishu"]; ok && fsCfg.Enabled {
+	if fsCfg, ok := cfg.Gateway.Platforms["feishu"]; ok && fsCfg.Enabled && shouldStartPlatform("feishu") {
 		platformCount++
 		if fsCfg.AppID == "" || fsCfg.AppSecret == "" {
-			fmt.Println("Feishu config incomplete (need app_id and app_secret)!")
+			fmt.Println("[Feishu] Config incomplete (need app_id and app_secret)!")
 		} else {
 			fmt.Println("[Feishu/Lark] Starting...")
 			fsGw := gateway.NewFeishuGateway(fsCfg.AppID, fsCfg.AppSecret)
@@ -287,8 +297,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WeChat (Official Account / Mini Program) if configured
-	// Uses 微信公众[ADDRESS]/小程序 official API (app_id + app_secret)
-	if wxCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wxCfg.Enabled {
+	if wxCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wxCfg.Enabled && shouldStartPlatform("wechat") {
 		platformCount++
 		if wxCfg.AppID == "" || wxCfg.AppSecret == "" {
 			fmt.Println("[WeChat] Config incomplete (need app_id and app_secret)!")
@@ -305,10 +314,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start Slack if configured
-	if slackCfg, ok := cfg.Gateway.Platforms["slack"]; ok && slackCfg.Enabled {
+	if slackCfg, ok := cfg.Gateway.Platforms["slack"]; ok && slackCfg.Enabled && shouldStartPlatform("slack") {
 		platformCount++
 		if slackCfg.Token == "" || slackCfg.AppSecret == "" {
-			fmt.Println("Slack config incomplete (need token and app_secret)!")
+			fmt.Println("[Slack] Config incomplete (need token and app_secret)!")
 		} else {
 			fmt.Println("[Slack] Starting...")
 			slackGw := gateway.NewSlackGateway(slackCfg.Token, slackCfg.AppSecret)
@@ -321,10 +330,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WhatsApp if configured
-	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled {
+	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled && shouldStartPlatform("whatsapp") {
 		platformCount++
 		if waCfg.Token == "" || waCfg.AppSecret == "" {
-			fmt.Println("WhatsApp config incomplete (need token and app_secret)!")
+			fmt.Println("[WhatsApp] Config incomplete (need token and app_secret)!")
 		} else {
 			fmt.Println("[WhatsApp] Starting...")
 			waGw := gateway.NewWhatsAppGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
@@ -337,10 +346,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start LINE if configured
-	if lineCfg, ok := cfg.Gateway.Platforms["line"]; ok && lineCfg.Enabled {
+	if lineCfg, ok := cfg.Gateway.Platforms["line"]; ok && lineCfg.Enabled && shouldStartPlatform("line") {
 		platformCount++
 		if lineCfg.Token == "" || lineCfg.AppSecret == "" {
-			fmt.Println("LINE config incomplete (need token and app_secret)!")
+			fmt.Println("[LINE] Config incomplete (need token and app_secret)!")
 		} else {
 			fmt.Println("[LINE] Starting...")
 			lineGw := gateway.NewLineGateway(lineCfg.AppSecret, lineCfg.Token)
@@ -353,10 +362,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start Matrix if configured
-	if matrixCfg, ok := cfg.Gateway.Platforms["matrix"]; ok && matrixCfg.Enabled {
+	if matrixCfg, ok := cfg.Gateway.Platforms["matrix"]; ok && matrixCfg.Enabled && shouldStartPlatform("matrix") {
 		platformCount++
 		if matrixCfg.Token == "" {
-			fmt.Println("Matrix config incomplete (need token/homeserver)!")
+			fmt.Println("[Matrix] Config incomplete (need token/homeserver)!")
 		} else {
 			fmt.Println("[Matrix] Starting...")
 			matrixGw := gateway.NewMatrixGateway(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.Token)
@@ -369,8 +378,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WeChat iLink (Personal WeChat via iLink Bot API) if configured
-	// Uses personal WeChat via 微信 iLink Bot API (previously called ClawBot)
-	if ilinkCfg, ok := cfg.Gateway.Platforms["wechat_ilink"]; ok && ilinkCfg.Enabled {
+	if ilinkCfg, ok := cfg.Gateway.Platforms["wechat_ilink"]; ok && ilinkCfg.Enabled && shouldStartPlatform("wechat_ilink") {
 		platformCount++
 		fmt.Println("[WeChat-iLink] Starting...")
 
@@ -397,13 +405,13 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			gw.RegisterPlatform("wechat_ilink", ilinkGw)
 		}
 	}
-	
+
 	// Also support the old "wechat_clawbot" config name for backward compatibility
-	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled {
+	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled &&
+		(shouldStartPlatform("wechat_clawbot") || shouldStartPlatform("wechat_ilink")) {
 		if _, already := cfg.Gateway.Platforms["wechat_ilink"]; !already {
 			platformCount++
 			fmt.Println("[WeChat-ClawBot] Starting (using iLink API)...")
-			fmt.Println("[WeChat-ClawBot] NOTE: Please rename 'wechat_clawbot' to 'wechat_ilink' in config.json")
 
 			dataDir := clawCfg.DataDir
 			if dataDir == "" {
@@ -431,19 +439,23 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	if platformCount == 0 {
-		fmt.Println("No platforms configured/enabled.")
-		fmt.Println("Configure in ~/.magic/config.json")
-		fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_ilink, wechat_clawbot")
+		if gatewayPlatform != "" {
+			fmt.Printf("Platform '%s' is not configured or not enabled.\n", gatewayPlatform)
+			fmt.Println("Run 'magic gateway status' to see configured platforms.")
+		} else {
+			fmt.Println("No platforms configured/enabled.")
+			fmt.Println("Configure in ~/.magic/config.json")
+			fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_ilink, wechat_clawbot")
+		}
 		return
 	}
 
-	// Start the gateway - this starts message processing for all registered platforms
 	if err := gw.Start(ctx); err != nil {
 		fmt.Printf("Failed to start gateway: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Save PID file for stop command
+	// Save PID file
 	home, _ := os.UserHomeDir()
 	pidDir := filepath.Join(home, ".magic")
 	os.MkdirAll(pidDir, 0755)
@@ -458,10 +470,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	fmt.Printf("\nStarted %d platform(s). Press Ctrl+C to stop.\n", platformCount)
 	fmt.Printf("PID saved: %s\n", pidFile)
 
-	// Wait for signal
 	<-ctx.Done()
-
-	// Clean up PID file
 	os.Remove(pidFile)
 }
 
@@ -474,7 +483,6 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 
 	pidFile := filepath.Join(home, ".magic", pidFileName)
 
-	// Check if PID file exists
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -497,33 +505,27 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Try to send signal to process
 	process, err := os.FindProcess(int(pid))
 	if err != nil {
 		fmt.Printf("Failed to find process: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Send SIGTERM
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		fmt.Printf("Failed to stop gateway: %v\n", err)
 		fmt.Println("Try killing the process manually: kill", int(pid))
 		os.Exit(1)
 	}
 
-	// Wait for process to terminate
 	fmt.Printf("Sent stop signal to gateway (PID: %d)...\n", int(pid))
 	time.Sleep(2 * time.Second)
 
-	// Check if process is still running
 	if process.Pid == 0 {
-		// Process may have already exited
 	} else {
 		process.Kill()
 		fmt.Println("Process forcefully killed.")
 	}
 
-	// Clean up PID file
 	os.Remove(pidFile)
 	fmt.Println("✓ Gateway stopped.")
 }
@@ -539,14 +541,12 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 	fmt.Println("==============")
 	fmt.Printf("Enabled in config: %v\n", cfg.Gateway.Enabled)
 
-	// Check if gateway is actually running
 	home, _ := os.UserHomeDir()
 	pidFile := filepath.Join(home, ".magic", pidFileName)
 
 	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
 		fmt.Println("\n● Gateway: NOT RUNNING")
 	} else {
-		// Read PID file
 		data, err := os.ReadFile(pidFile)
 		if err == nil {
 			var pidData map[string]interface{}
@@ -554,7 +554,6 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 				if pid, ok := pidData["pid"].(float64); ok {
 					process, err := os.FindProcess(int(pid))
 					if err == nil && process.Pid != 0 {
-						// Try to check if process is responsive
 						fmt.Printf("\n● Gateway: RUNNING (PID: %d)\n", int(pid))
 						if started, ok := pidData["started"].(string); ok {
 							fmt.Printf("  Started: %s\n", started)
@@ -566,7 +565,6 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		// Try to query health endpoint
 		client := &http.Client{Timeout: 2 * time.Second}
 		if resp, err := client.Get("http://localhost:8080/health"); err == nil {
 			resp.Body.Close()
