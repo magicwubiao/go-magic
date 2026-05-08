@@ -323,6 +323,19 @@ func (r *REPL) processCommand(input string) {
 		r.cmdExport(args)
 	case "export-md":
 		r.cmdExportMD()
+	// === Requirement management (interrupt mode) ===
+	case "req":
+		r.cmdAddRequirement(args)
+	case "reqs", "requirements":
+		r.cmdListRequirements()
+	case "req-done":
+		r.cmdCompleteRequirement(args)
+	case "req-del":
+		r.cmdDeleteRequirement(args)
+	case "req-priority":
+		r.cmdSetRequirementPriority(args)
+	case "context", "ctx":
+		r.cmdShowContext()
 	default:
 		fmt.Printf("%sUnknown command: /%s (type /help for commands)%s\n", colorRed, cmd, colorReset)
 	}
@@ -516,6 +529,14 @@ func (r *REPL) cmdHelp() {
 		{"  /tools", "List available tools"},
 		{"  /skills", "List available skills"},
 		{"  /insights [--days N]", "Show usage insights"},
+		{""},
+		{"Requirements (Interrupt)", ""},
+		{"  /req <text>", "Interrupt & add a new requirement"},
+		{"  /reqs", "List all pending requirements"},
+		{"  /req-done <id>", "Mark requirement completed"},
+		{"  /req-del <id>", "Delete a requirement"},
+		{"  /req-priority <id> <level>", "Set priority (high/med/low)"},
+		{"  /context", "Show context + pending requirements"},
 		{""},
 		{"Session", ""},
 		{"  /save [name]", "Save current session"},
@@ -993,6 +1014,329 @@ func (r *REPL) cmdExportMD() {
 	fmt.Printf("%s✓ Exported to %s%s\n", colorGreen, path, colorReset)
 }
 
+// ====== Requirement Management Commands (Interrupt Mode) ======
+
+// parsePriorityArg parses --priority flag from args and returns (cleanedText, priority)
+func parseReqArgs(args string) (string, string) {
+	priority := "medium"
+	text := args
+	parts := strings.Fields(args)
+	for i, p := range parts {
+		if p == "--priority" || p == "-p" {
+			if i+1 < len(parts) {
+				pval := strings.ToLower(parts[i+1])
+				switch pval {
+				case "high", "h":
+					priority = "high"
+				case "low", "l":
+					priority = "low"
+				default:
+					priority = "medium"
+				}
+				cleaned := make([]string, 0, len(parts)-2)
+				for j, pp := range parts {
+					if j == i || j == i+1 {
+						continue
+					}
+					cleaned = append(cleaned, pp)
+				}
+				text = strings.Join(cleaned, " ")
+			}
+			break
+		}
+	}
+	return strings.TrimSpace(text), priority
+}
+
+// cmdAddRequirement adds a new requirement (interrupt mode)
+func (r *REPL) cmdAddRequirement(args string) {
+	if args == "" {
+		fmt.Printf("%sUsage: /req <requirement description>%s\n", Yellow(""), colorReset)
+		fmt.Printf("  %s  /req --priority high Fix login bug%s\n", colorGray, colorReset)
+		return
+	}
+
+	// Stop current generation if running
+	if r.cancel != nil {
+		r.cancel()
+		r.ctx, r.cancel = context.WithCancel(context.Background())
+	}
+
+	// Parse priority flag
+	text, priority := parseReqArgs(args)
+	if text == "" {
+		fmt.Printf("%sRequirement text cannot be empty%s\n", Yellow(""), colorReset)
+		return
+	}
+
+	// Create todo via TodoTool
+	todoTool := tool.GetTodoTool()
+	res, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action":      "create",
+		"title":       text,
+		"priority":    priority,
+		"description": fmt.Sprintf("Added via chat interrupt (session: %s)", r.state.sessionID[:8]),
+	})
+	if err != nil {
+		fmt.Printf("%sFailed to add requirement: %v%s\n", Red(""), err, colorReset)
+		return
+	}
+
+	// Extract todo ID from result
+	todoID := ""
+	if resMap, ok := res.(map[string]interface{}); ok {
+		if id, exists := resMap["id"]; exists {
+			todoID = fmt.Sprintf("%v", id)
+		}
+	}
+
+	// Show priority emoji
+	priorityEmoji := map[string]string{"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
+	emoji := priorityEmoji[priority]
+	if emoji == "" {
+		emoji = "\U0001f7e1"
+	}
+
+	fmt.Printf("\n%s\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %s New Requirement Added (Interrupt)%s          %s\u2502%s\n", Cyan(""), colorReset, bold, colorReset, Cyan(""), colorReset)
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %s %s [%s] %s%s\n", Cyan(""), colorReset, emoji, Bold(""), strings.ToUpper(priority), colorReset, text)
+	if todoID != "" {
+		short := todoID
+		if len(short) > 20 {
+			short = short[:20]
+		}
+		fmt.Printf("%s\u2502%s  %s  ID: %s%s\n", Cyan(""), colorReset, colorGray, short, colorReset)
+	}
+	fmt.Printf("%s\u2502%s                                               %s\u2502%s\n", Cyan(""), colorReset, Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %sThis requirement is now tracked.%s              %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n\n", Cyan(""), colorReset)
+
+	// Save session right away
+	r.saveSession()
+}
+
+// cmdListRequirements lists all pending requirements
+func (r *REPL) cmdListRequirements() {
+	todoTool := tool.GetTodoTool()
+	raw, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action": "list",
+	})
+	if err != nil {
+		fmt.Printf("%sFailed to list requirements: %v%s\n", Red(""), err, colorReset)
+		return
+	}
+
+	resMap, ok := raw.(map[string]interface{})
+	if !ok {
+		fmt.Printf("%sNo requirements found.%s\n", colorYellow, colorReset)
+		return
+	}
+
+	total, _ := resMap["total"].(float64)
+	todos, _ := resMap["todos"].([]interface{})
+
+	fmt.Println()
+	fmt.Printf("%s\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s              %s Pending Requirements (%d)%s                    %s\u2502%s\n", Cyan(""), colorReset, bold, int(total), colorReset, Cyan(""), colorReset)
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+
+	if int(total) == 0 {
+		fmt.Printf("%s\u2502%s  %sNo pending requirements.%s                                  %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	} else {
+		for _, item := range todos {
+			todo, _ := item.(map[string]interface{})
+			id, _ := todo["id"].(string)
+			title, _ := todo["title"].(string)
+			status, _ := todo["status"].(string)
+			priority, _ := todo["priority"].(string)
+
+			if status != "pending" && status != "in_progress" {
+				continue
+			}
+
+			priorityEmoji := map[string]string{"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
+			emoji := priorityEmoji[priority]
+			if emoji == "" {
+				emoji = "\U0001f7e1"
+			}
+
+			statusIcon := map[string]string{"pending": "\u25cb", "in_progress": "\u25c9"}
+			icon := statusIcon[status]
+			if icon == "" {
+				icon = "\u25cb"
+			}
+
+			shortID := id
+			if len(shortID) > 12 {
+				shortID = shortID[:12]
+			}
+
+			displayTitle := title
+			if len(displayTitle) > 50 {
+				displayTitle = displayTitle[:47] + "..."
+			}
+
+			fmt.Printf("%s\u2502%s  %s %s %s%-50s %s\u2502%s\n", Cyan(""), colorReset, emoji, icon, colorReset, displayTitle, Cyan(""), colorReset)
+			fmt.Printf("%s\u2502%s     %s%s%s%s\u2502%s\n", Cyan(""), colorReset, colorGray, shortID, strings.Repeat(" ", 56-len(shortID)), Cyan(""), colorReset)
+		}
+	}
+
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %sUse /req to add new, /req-done <id> to complete%s   %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n", Cyan(""), colorReset)
+	fmt.Println()
+}
+
+// cmdCompleteRequirement marks a requirement as completed
+func (r *REPL) cmdCompleteRequirement(id string) {
+	if id == "" {
+		fmt.Printf("%sUsage: /req-done <requirement-id>%s\n", Yellow(""), colorReset)
+		fmt.Printf("  %s  /req-done todo_123456789%s\n", colorGray, colorReset)
+		return
+	}
+
+	todoTool := tool.GetTodoTool()
+	raw, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action": "complete",
+		"id":     id,
+	})
+	if err != nil {
+		fmt.Printf("%sFailed to complete requirement: %v%s\n", Red(""), err, colorReset)
+		return
+	}
+
+	title := ""
+	if resMap, ok := raw.(map[string]interface{}); ok {
+		if t, exists := resMap["title"]; exists {
+			title = fmt.Sprintf("%v", t)
+		}
+	}
+
+	fmt.Printf("%sRequirement completed: %s%s\n", Green(""), title, colorReset)
+}
+
+// cmdDeleteRequirement deletes a requirement
+func (r *REPL) cmdDeleteRequirement(id string) {
+	if id == "" {
+		fmt.Printf("%sUsage: /req-del <requirement-id>%s\n", Yellow(""), colorReset)
+		return
+	}
+
+	todoTool := tool.GetTodoTool()
+	_, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action": "delete",
+		"id":     id,
+	})
+	if err != nil {
+		fmt.Printf("%sFailed to delete requirement: %v%s\n", Red(""), err, colorReset)
+		return
+	}
+
+	fmt.Printf("%sRequirement deleted: %s%s\n", Green(""), id, colorReset)
+}
+
+// cmdSetRequirementPriority sets priority for a requirement
+func (r *REPL) cmdSetRequirementPriority(args string) {
+	parts := strings.Fields(args)
+	if len(parts) < 2 {
+		fmt.Printf("%sUsage: /req-priority <id> <high|medium|low>%s\n", Yellow(""), colorReset)
+		return
+	}
+
+	id := parts[0]
+	priority := strings.ToLower(parts[1])
+
+	validPriorities := map[string]bool{"high": true, "medium": true, "low": true}
+	if !validPriorities[priority] {
+		fmt.Printf("%sInvalid priority: %s (use: high, medium, low)%s\n", Yellow(""), priority, colorReset)
+		return
+	}
+
+	todoTool := tool.GetTodoTool()
+	raw, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action":   "update",
+		"id":       id,
+		"priority": priority,
+	})
+	if err != nil {
+		fmt.Printf("%sFailed to update priority: %v%s\n", Red(""), err, colorReset)
+		return
+	}
+
+	title := ""
+	if resMap, ok := raw.(map[string]interface{}); ok {
+		if t, exists := resMap["title"]; exists {
+			title = fmt.Sprintf("%v", t)
+		}
+	}
+
+	priorityEmoji := map[string]string{"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
+	emoji := priorityEmoji[priority]
+
+	short := id
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	fmt.Printf("%sPriority set: %s [%s] -> %s %s%s\n", Green(""), title, short, emoji, strings.ToUpper(priority), colorReset)
+}
+
+// cmdShowContext shows conversation context with pending requirements
+func (r *REPL) cmdShowContext() {
+	history := r.agent.GetHistory()
+	msgCount := len(history)
+	ctxSize := r.getContext()
+
+	fmt.Println()
+	fmt.Printf("%s\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s                %s Conversation Context%s                 %s\u2502%s\n", Cyan(""), colorReset, bold, colorReset, Cyan(""), colorReset)
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  Session:     %-38s %s\u2502%s\n", Cyan(""), colorReset, r.state.sessionID[:8]+"...", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  Messages:    %-38d %s\u2502%s\n", Cyan(""), colorReset, msgCount, Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  Context:     %-38s %s\u2502%s\n", Cyan(""), colorReset, fmt.Sprintf("%d chars", ctxSize), Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  Model:       %-38s %s\u2502%s\n", Cyan(""), colorReset, r.state.modelName, Cyan(""), colorReset)
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+
+	fmt.Printf("%s\u2502%s  %sPending Requirements:%s                           %s\u2502%s\n", Cyan(""), colorReset, bold, colorReset, Cyan(""), colorReset)
+
+	todoTool := tool.GetTodoTool()
+	raw, err := todoTool.Execute(r.ctx, map[string]interface{}{
+		"action": "list",
+	})
+	pendingCount := 0
+	if err == nil {
+		if resMap, ok := raw.(map[string]interface{}); ok {
+			todos, _ := resMap["todos"].([]interface{})
+			for _, item := range todos {
+				todo, _ := item.(map[string]interface{})
+				status, _ := todo["status"].(string)
+				if status == "pending" || status == "in_progress" {
+					pendingCount++
+					title, _ := todo["title"].(string)
+					priority, _ := todo["priority"].(string)
+					priorityEmoji := map[string]string{"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
+					emoji := priorityEmoji[priority]
+					if emoji == "" {
+						emoji = "\U0001f7e1"
+					}
+					shortTitle := title
+					if len(shortTitle) > 45 {
+						shortTitle = shortTitle[:42] + "..."
+					}
+					fmt.Printf("%s\u2502%s    %s %s%-45s %s\u2502%s\n", Cyan(""), colorReset, emoji, colorReset, shortTitle, Cyan(""), colorReset)
+				}
+			}
+		}
+	}
+	if pendingCount == 0 {
+		fmt.Printf("%s\u2502%s    %s(no pending requirements)%s               %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	}
+
+	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %s/req <text>%s - Add req   %s/reqs%s - List   %s/context%s - View %s\u2502%s\n", Cyan(""), colorReset, colorYellow, colorReset, colorYellow, colorReset, colorYellow, colorReset, Cyan(""), colorReset)
+	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n", Cyan(""), colorReset)
+	fmt.Println()
+}
 // escapeJSON escapes a string for JSON
 func escapeJSON(s string) string {
 	var result strings.Builder
@@ -1025,7 +1369,8 @@ func completeCommand(partial string) string {
 		"help", "exit", "quit", "new", "reset", "model", "compress",
 		"usage", "tools", "skills", "undo", "retry", "stop", "save",
 		"load", "stream", "clear", "history", "insights", "personality",
-		"export", "export-md",
+		"export", "export-md", "req", "reqs", "req-done", "req-del",
+		"req-priority", "context",
 	}
 
 	partial = strings.TrimPrefix(partial, "/")
@@ -1068,6 +1413,9 @@ func isValidCommand(input string) bool {
 		"stream": true, "clear": true, "cls": true, "history": true,
 		"insights": true, "personality": true, "export": true,
 		"export-md": true, "h": true, "?": true,
+		"req": true, "reqs": true, "requirements": true,
+		"req-done": true, "req-del": true, "req-priority": true,
+		"context": true, "ctx": true,
 	}
 
 	return validCmds[cmd]
@@ -1085,7 +1433,7 @@ func NewCompleter() *Completer {
 			"help", "exit", "quit", "new", "reset", "model", "compress",
 			"usage", "tools", "skills", "undo", "retry", "stop", "save",
 			"load", "stream", "clear", "history", "insights", "personality",
-			"export",
+			"export", "req", "reqs", "req-done", "req-del", "req-priority", "context",
 		},
 	}
 }
