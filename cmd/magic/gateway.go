@@ -50,11 +50,12 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 func init() {
+<<<<<<< Updated upstream
+=======
+func init() {
+	// Note: 'p' shorthand is already used by root's --profile persistent flag.
+	// We use 'P' (uppercase) for --platform.
 	gatewayStartCmd.Flags().StringVarP(&gatewayPlatform, "platform", "P", "",
-		"Only start specified platform (e.g., qq, wechat, telegram). If not set, starts all enabled platforms.")
-	gatewayCmd.AddCommand(gatewayStartCmd)
-	gatewayCmd.AddCommand(gatewayStopCmd)
-	gatewayCmd.AddCommand(gatewayStatusCmd)
 	rootCmd.AddCommand(gatewayCmd)
 }
 
