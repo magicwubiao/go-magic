@@ -55,33 +55,15 @@ type Agent struct {
 	maxTurns    int
 	maxTotalLen int // max chars in message history
 	maxMsgLen   int // max chars per message
-
-	// Context compression settings
-	compressionEnabled bool
-	compressionRatio   float64 // trigger compression when history exceeds this ratio
-
-	// Hook and EventBus
-	hooks   *hooks.HookManager
-	bus     *bus.EventBus
-	session string
-
-	// Steering settings
 	// Steering settings
 	maxIterations  int
+	maxTokenBudget int64
 
 	// Tool call loop detection
-	toolCallHistory  []string           // 记录已调用的工具名
-	toolCallCount    map[string]int     // 每个工具被调用的次数
-	// Tool call loop detection
-	toolCallHistory  []string           // 记录已调用的工具名
-	toolCallCount    map[string]int     // 每个工具被调用的次数
-	sameToolLimit    int                // 同一工具最大调用次数
-	consecutiveLimit int               // 连续 tool call 最大次数
-	// Tool call loop detection
-	toolCallHistory  []string           // 记录已调用的工具名
-	toolCallCount    map[string]int     // 每个工具被调用的次数
-	sameToolLimit    int                // 同一工具最大调用次数
-	consecutiveLimit int               // 连续 tool call 最大次数
+	toolCallHistory  []string       // 记录已调用的工具名
+	toolCallCount    map[string]int // 每个工具被调用的次数
+	sameToolLimit    int            // 同一工具最大调用次数
+	consecutiveLimit int            // 连续 tool call 最大次数
 
 	// Memory integration
 	memoryEnabled bool
@@ -90,6 +72,9 @@ type Agent struct {
 	cortexManager *cortex.Manager
 
 	// Sub-task delegation (auto-decompose complex tasks)
+	subTaskEnabled bool
+}
+
 // ToolRegistry interface for tool execution
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error)
@@ -105,9 +90,6 @@ type SteeringConfig struct {
 func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[string]interface{}, systemPrompt string) *Agent {
 	history := make([]provider.Message, 0)
 	if systemPrompt != "" {
-}
-
-// SteeringConfig holds steering configuration
 		history = append(history, provider.Message{
 			Role:    "system",
 			Content: systemPrompt,
@@ -121,12 +103,13 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		history:            history,
 		maxTurns:           100,
 		maxIterations:      100,
-		sameToolLimit:       8,    // 同一工具最多调用 8 次
-		consecutiveLimit:   20,    // 连续 tool call 最多 20 次
+		maxTokenBudget:     0,
+		sameToolLimit:       8,
+		consecutiveLimit:   20,
 		toolCallCount:      make(map[string]int),
-		subTaskEnabled:     true, // Enable sub-task delegation by default
+		subTaskEnabled:     true,
 		bus:                bus.NewEventBus(),
-		maxIterations:      100,
+	}
 
 	// Register built-in hooks
 	agent.registerBuiltinHooks()
@@ -144,9 +127,6 @@ func NewEnhancedAgent(prov provider.Provider, registry ToolRegistry, tools []map
 
 	return agent
 }
-
-// AgentOption configures an agent
-type AgentOption func(*Agent)
 
 // WithSteering configures steering settings
 func WithSteering(cfg SteeringConfig) AgentOption {
