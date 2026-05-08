@@ -280,6 +280,24 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 	// Cortex: User message trigger - increments turn counter, may trigger nudge
 	if a.cortexManager != nil {
 		a.cortexManager.OnUserMessage(input)
+
+		// Inject memory and user context into system prompt (first turn only)
+		if a.iterationCount == 0 {
+			if memCtx := a.cortexManager.GetPromptContext(); memCtx != "" {
+				a.AddSystemContext("[Memory Context]\n" + memCtx)
+			}
+			if userCtx := a.cortexManager.GetUserContext(); userCtx != "" {
+				a.AddSystemContext("[User Profile]\n" + userCtx)
+			}
+		}
+
+		// Apply cortex decision: adjust maxTurns based on task complexity
+		if decision := a.cortexManager.GetLastDecision(); decision != nil && decision.MaxTurns > 0 {
+			if a.maxTurns > decision.MaxTurns {
+				log.Debugf("[Agent] Cortex adjusting maxTurns: %d -> %d", a.maxTurns, decision.MaxTurns)
+				a.maxTurns = decision.MaxTurns
+			}
+		}
 	}
 
 	// Auto sub-task delegation for complex tasks
@@ -1083,4 +1101,14 @@ func truncateStr(s string, max int) string {
 		return s
 	}
 	return s[:max] + fmt.Sprintf("... [truncated, total %d chars]", len(s))
+}
+
+// AddSystemContext appends context to the system prompt message.
+// If no system message exists, creates one.
+func (a *Agent) AddSystemContext(ctx string) {
+	if len(a.history) == 0 || a.history[0].Role != "system" {
+		a.history = append([]provider.Message{{Role: "system", Content: ctx}}, a.history...)
+		return
+	}
+	a.history[0].Content += "\n\n" + ctx
 }

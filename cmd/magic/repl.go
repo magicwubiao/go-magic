@@ -101,13 +101,24 @@ func NewREPL(cfg *config.Config, prov provider.Provider, registry *tool.Registry
 
 	// Initialize agent with optional cortex
 	home, _ := os.UserHomeDir()
+	var cortexMgr *cortex.Manager
 	var agentOpts []agent.AgentOption
 	if cfg.CortexEnabled {
-		cortexMgr := cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
+		cortexMgr = cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
 		cortexMgr.Start()
 		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
 	}
 	aiAgent := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), "", agentOpts...)
+
+	// Inject cortex memory context into system prompt
+	if cortexMgr != nil {
+		if memCtx := cortexMgr.GetPromptContext(); memCtx != "" {
+			aiAgent.AddSystemContext("[Memory Context]\n" + memCtx)
+		}
+		if userCtx := cortexMgr.GetUserContext(); userCtx != "" {
+			aiAgent.AddSystemContext("[User Profile]\n" + userCtx)
+		}
+	}
 
 	repl := &REPL{
 		agent:    aiAgent,

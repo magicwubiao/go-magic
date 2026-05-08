@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/tool"
@@ -77,8 +78,9 @@ type gatewayAgentHandler struct {
 	mu       sync.Mutex
 
 	// Per-user agents for conversation context
-	agents    map[string]*agent.Agent
+	agents       map[string]*agent.Agent
 	systemPrompt string
+	cortexMgr    *cortex.Manager
 }
 
 // NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
@@ -114,11 +116,25 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	// Generate system prompt
 	systemPrompt := generateGatewaySystemPrompt(cfg)
 
+	// Initialize cortex if enabled
+	var cortexMgr *cortex.Manager
+	if cfg.CortexEnabled {
+		home, _ := os.UserHomeDir()
+		cortexMgr = cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
+		if err := cortexMgr.Start(); err != nil {
+			log.Warnf("[Gateway] Cortex start failed: %v", err)
+			cortexMgr = nil
+		} else {
+			log.Info("[Gateway] Cortex enabled")
+		}
+	}
+
 	return &gatewayAgentHandler{
 		provider:     prov,
 		registry:     registry,
 		agents:       make(map[string]*agent.Agent),
 		systemPrompt: systemPrompt,
+		cortexMgr:    cortexMgr,
 	}
 }
 
@@ -153,9 +169,25 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 	// Generate tools schema
 	toolsSchema := getToolsSchema(h.registry)
 
+	// Build agent options
+	var agentOpts []agent.AgentOption
+	if h.cortexMgr != nil {
+		agentOpts = append(agentOpts, agent.WithCortex(h.cortexMgr))
+	}
+
 	// Create new agent for this user
-	newAgent := agent.NewAIAgent(h.provider, h.registry, toolsSchema, h.systemPrompt)
+	newAgent := agent.NewEnhancedAgent(h.provider, h.registry, toolsSchema, h.systemPrompt, agentOpts...)
 	newAgent.SetSession(userID)
+
+	// Inject cortex memory context into system prompt
+	if h.cortexMgr != nil {
+		if memCtx := h.cortexMgr.GetPromptContext(); memCtx != "" {
+			newAgent.AddSystemContext("[Memory Context]\n" + memCtx)
+		}
+		if userCtx := h.cortexMgr.GetUserContext(); userCtx != "" {
+			newAgent.AddSystemContext("[User Profile]\n" + userCtx)
+		}
+	}
 
 	h.agents[userID] = newAgent
 	return newAgent, nil

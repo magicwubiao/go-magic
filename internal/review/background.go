@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -122,12 +123,55 @@ func (br *BackgroundReview) GetRecentReviews(limit int) []ReviewEntry {
 
 // performReview performs a review of the tool calls
 func (br *BackgroundReview) performReview(toolCalls []string) string {
-	return fmt.Sprintf("Reviewed %d tool calls", len(toolCalls))
+	if len(toolCalls) == 0 {
+		return "No tool calls to review"
+	}
+
+	// Count tool usage
+	toolCounts := make(map[string]int)
+	for _, tc := range toolCalls {
+		toolCounts[tc]++
+	}
+
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("Reviewed %d tool calls across %d tools:\n", len(toolCalls), len(toolCounts)))
+	for tool, count := range toolCounts {
+		summary.WriteString(fmt.Sprintf("- %s: %d calls\n", tool, count))
+		if count >= 3 {
+			summary.WriteString("  ⚠️ High usage - may indicate a loop or inefficient approach\n")
+		}
+	}
+
+	return summary.String()
 }
 
 // detectPatterns detects patterns in tool sequences
 func (br *BackgroundReview) detectPatterns(toolSequence []string, _ string) []DetectedPattern {
-	return nil
+	if len(toolSequence) < 4 {
+		return nil
+	}
+
+	var patterns []DetectedPattern
+
+	// Detect repeating subsequences of length 2 (e.g., A→B→A→B)
+	pairCounts := make(map[string]int)
+	for i := 0; i < len(toolSequence)-1; i++ {
+		pair := toolSequence[i] + "->" + toolSequence[i+1]
+		pairCounts[pair]++
+	}
+
+	for pair, count := range pairCounts {
+		if count >= 3 {
+			parts := strings.Split(pair, "->")
+			patterns = append(patterns, DetectedPattern{
+				Name:         "repeating_pair",
+				ToolSequence: parts,
+				Frequency:    count,
+			})
+		}
+	}
+
+	return patterns
 }
 
 // suggestSkill suggests a skill based on detected patterns
