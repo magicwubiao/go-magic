@@ -261,34 +261,65 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Start WeChat ClawBot (Personal WeChat via iLink) if configured
-	// Uses personal WeChat via 微信官方插件 (ClawBot / iLink Bot API)
-	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled {
+	// Start WeChat iLink (Personal WeChat via iLink Bot API) if configured
+	// Uses personal WeChat via 微信 iLink Bot API (previously called ClawBot)
+	if ilinkCfg, ok := cfg.Gateway.Platforms["wechat_ilink"]; ok && ilinkCfg.Enabled {
 		platformCount++
-		fmt.Println("[WeChat-ClawBot] Starting...")
+		fmt.Println("[WeChat-iLink] Starting...")
 
-		dataDir := clawCfg.DataDir
+		dataDir := ilinkCfg.DataDir
 		if dataDir == "" {
 			homeDir, _ := os.UserHomeDir()
-			dataDir = filepath.Join(homeDir, ".magic", "clawbot")
+			dataDir = filepath.Join(homeDir, ".magic", "wechat_ilink")
 		}
 
-		baseURL := clawCfg.APIURL
+		baseURL := ilinkCfg.APIURL
 		if baseURL == "" {
 			baseURL = "https://ilinkai.weixin.qq.com"
 		}
 
-		clawGw := gateway.NewWeChatClawGateway(gateway.WeChatClawConfig{
-			ClientID:  clawCfg.ClientID,
+		ilinkGw := gateway.NewWeChatILinkGateway(gateway.WeChatILinkConfig{
 			DataDir:   dataDir,
 			BaseURL:   baseURL,
-			AutoLogin: clawCfg.AutoLogin,
+			AutoLogin: ilinkCfg.AutoLogin,
 		})
 
-		if err := clawGw.Connect(ctx); err != nil {
-			fmt.Printf("[WeChat-ClawBot] Failed to connect: %v\n", err)
+		if err := ilinkGw.Connect(ctx); err != nil {
+			fmt.Printf("[WeChat-iLink] Failed to connect: %v\n", err)
 		} else {
-			gw.RegisterPlatform("wechat_clawbot", clawGw)
+			gw.RegisterPlatform("wechat_ilink", ilinkGw)
+		}
+	}
+	
+	// Also support the old "wechat_clawbot" config name for backward compatibility
+	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled {
+		if _, already := cfg.Gateway.Platforms["wechat_ilink"]; !already {
+			platformCount++
+			fmt.Println("[WeChat-ClawBot] Starting (using iLink API)...")
+			fmt.Println("[WeChat-ClawBot] NOTE: Please rename 'wechat_clawbot' to 'wechat_ilink' in config.json")
+
+			dataDir := clawCfg.DataDir
+			if dataDir == "" {
+				homeDir, _ := os.UserHomeDir()
+				dataDir = filepath.Join(homeDir, ".magic", "clawbot")
+			}
+
+			baseURL := clawCfg.APIURL
+			if baseURL == "" {
+				baseURL = "https://ilinkai.weixin.qq.com"
+			}
+
+			clawGw := gateway.NewWeChatILinkGateway(gateway.WeChatILinkConfig{
+				DataDir:   dataDir,
+				BaseURL:   baseURL,
+				AutoLogin: clawCfg.AutoLogin,
+			})
+
+			if err := clawGw.Connect(ctx); err != nil {
+				fmt.Printf("[WeChat-ClawBot] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("wechat_clawbot", clawGw)
+			}
 		}
 	}
 

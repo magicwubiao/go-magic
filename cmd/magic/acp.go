@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -146,7 +148,7 @@ func runACPServe(cmd *cobra.Command, args []string) {
 	}
 
 	manager := acp.NewManager()
-	server, err := manager.StartServer("local", agentID, info, transport)
+	_, err = manager.StartServer("local", agentID, info, transport)
 	if err != nil {
 		fmt.Printf("Failed to start server: %v\n", err)
 		os.Exit(1)
@@ -156,9 +158,11 @@ func runACPServe(cmd *cobra.Command, args []string) {
 	fmt.Printf("Transport: %s\n", acpTransport)
 	fmt.Println("Press Ctrl+C to stop")
 
-	// Wait for context cancellation
-	select {}
-	_ = server
+	// Wait for context cancellation using signal handling
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	fmt.Println("\nShutting down...")
 }
 
 func runACPConnect(cmd *cobra.Command, args []string) {

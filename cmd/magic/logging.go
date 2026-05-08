@@ -25,13 +25,13 @@ func init() {
 
 func logInfo(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	logger.Info(msg)
+	logger.Info("%s", msg)
 	writeLogFile("[INFO] " + msg)
 }
 
 func logError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	logger.Error(msg)
+	logger.Error("%s", msg)
 	writeLogFile("[ERROR] " + msg)
 }
 
@@ -40,13 +40,13 @@ func logDebug(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	logger.Debug(msg)
+	logger.Debug("%s", msg)
 	writeLogFile("[DEBUG] " + msg)
 }
 
 func logWarn(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	logger.Warn(msg)
+	logger.Warn("%s", msg)
 	writeLogFile("[WARN] " + msg)
 }
 

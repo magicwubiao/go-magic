@@ -129,16 +129,10 @@
         "aes_key": "your-wechat-aes-key",
         "enabled": false
       },
-      "wechat_clawbot": {
-        "client_id": "my-wechat-bot",
-        "data_dir": "~/.magic/clawbot",
+      "wechat_ilink": {
+        "data_dir": "~/.magic/wechat_ilink",
         "api_url": "https://ilinkai.weixin.qq.com",
-        "auto_login": true,
-        "enabled": false
-      },
-      "slack": {
-        "token": "your-slack-bot-token",
-        "app_secret": "your-slack-signing-secret",
+        "auto_login": false,
         "enabled": false
       },
       "whatsapp": {

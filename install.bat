@@ -40,7 +40,7 @@ echo [OK] Build complete: magic.exe
 
 echo.
 echo [3/3] Creating configuration...
-magic.exe setup <nul 2>nul
+
 echo [OK] Configuration complete
 
 echo.

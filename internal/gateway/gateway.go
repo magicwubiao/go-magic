@@ -619,11 +619,13 @@ func (g *Gateway) HealthCheck() *HealthStatus {
 			Status: "connected",
 		}
 
-		// Check if handler supports health check
-		if h, ok := handler.(HealthCheckable); ok {
-			if err := h.CheckHealth(); err != nil {
-				platformStatus.Status = "unhealthy"
-				platformStatus.Error = err.Error()
+		// Check handler health status
+		if health := handler.CheckHealth(); health != nil {
+			if health.Status != "healthy" {
+				platformStatus.Status = health.Status
+				if health.Error != "" {
+					platformStatus.Error = health.Error
+				}
 				status.Status = "degraded"
 			}
 		}

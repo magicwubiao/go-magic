@@ -39,7 +39,6 @@ require (
 
 require (
 	github.com/PuerkitoBio/goquery v1.9.2
-	github.com/importcjj/wechat-clawbot-client-go v0.0.0-20260401160543-49a6a8d111cd
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/spf13/pflag v1.0.10

@@ -660,7 +660,7 @@ func (r *REPL) cmdTools() {
 	}
 
 	fmt.Printf("%s║%s  %s(%d tools total)%s                                         %s║%s\n",
-		colorCyan, colorReset, colorGray, len(tools), colorCyan, colorReset)
+		colorCyan, colorReset, colorGray, len(tools), colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╚═══════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
 	fmt.Println()
 }
@@ -677,7 +677,7 @@ func (r *REPL) cmdSkills() {
 		skillList := mgr.ListSkills()
 		if len(skillList) == 0 {
 			fmt.Printf("%s║%s  %sNo skills installed.%s                                         %s║%s\n",
-				colorCyan, colorReset, colorGray, colorCyan, colorReset)
+				colorCyan, colorReset, colorGray, colorReset, colorCyan, colorReset)
 		} else {
 			for _, skill := range skillList {
 				fmt.Printf("%s║%s  %s%-15s %s║%s\n",
@@ -686,7 +686,7 @@ func (r *REPL) cmdSkills() {
 		}
 	} else {
 		fmt.Printf("%s║%s  %sSkills manager not available.%s                           %s║%s\n",
-			colorCyan, colorReset, colorGray, colorCyan, colorReset)
+			colorCyan, colorReset, colorGray, colorReset, colorCyan, colorReset)
 	}
 
 	fmt.Printf("%s╚═══════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
@@ -1109,7 +1109,7 @@ func (r *REPL) cmdAddRequirement(args string) {
 		fmt.Printf("%s\u2502%s  %s  ID: %s%s\n", Cyan(""), colorReset, colorGray, short, colorReset)
 	}
 	fmt.Printf("%s\u2502%s                                               %s\u2502%s\n", Cyan(""), colorReset, Cyan(""), colorReset)
-	fmt.Printf("%s\u2502%s  %sThis requirement is now tracked.%s              %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %sThis requirement is now tracked.%s              %s\u2502%s\n", Cyan(""), colorReset, colorGray, colorReset, Cyan(""), colorReset)
 	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n\n", Cyan(""), colorReset)
 
 	// Save session right away
@@ -1142,7 +1142,7 @@ func (r *REPL) cmdListRequirements() {
 	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
 
 	if int(total) == 0 {
-		fmt.Printf("%s\u2502%s  %sNo pending requirements.%s                                  %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+		fmt.Printf("%s\u2502%s  %sNo pending requirements.%s                                  %s\u2502%s\n", Cyan(""), colorReset, colorGray, colorReset, Cyan(""), colorReset)
 	} else {
 		for _, item := range todos {
 			todo, _ := item.(map[string]interface{})
@@ -1183,7 +1183,7 @@ func (r *REPL) cmdListRequirements() {
 	}
 
 	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)
-	fmt.Printf("%s\u2502%s  %sUse /req to add new, /req-done <id> to complete%s   %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+	fmt.Printf("%s\u2502%s  %sUse /req to add new, /req-done <id> to complete%s   %s\u2502%s\n", Cyan(""), colorReset, colorGray, colorReset, Cyan(""), colorReset)
 	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n", Cyan(""), colorReset)
 	fmt.Println()
 }
@@ -1329,7 +1329,7 @@ func (r *REPL) cmdShowContext() {
 		}
 	}
 	if pendingCount == 0 {
-		fmt.Printf("%s\u2502%s    %s(no pending requirements)%s               %s\u2502%s\n", Cyan(""), colorReset, colorGray, Cyan(""), colorReset)
+		fmt.Printf("%s\u2502%s    %s(no pending requirements)%s               %s\u2502%s\n", Cyan(""), colorReset, colorGray, colorReset, Cyan(""), colorReset)
 	}
 
 	fmt.Printf("%s\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524%s\n", Cyan(""), colorReset)

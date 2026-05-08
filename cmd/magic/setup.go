@@ -24,6 +24,17 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 }
 
+// readInput reads a line from stdin, trims it, and returns the result.
+// If the input is empty, it returns the default value.
+func readInput(reader *bufio.Reader, defaultValue string) string {
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return defaultValue
+	}
+	return input
+}
+
 func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("╔════════════════════════════════════════╗")
 	fmt.Println("║       magic Agent Setup Wizard         ║")
@@ -33,24 +44,78 @@ func runSetup(cmd *cobra.Command, args []string) {
 	homeDir, _ := os.UserHomeDir()
 	magicDir := filepath.Join(homeDir, ".magic")
 
-	cfg := &config.Config{
-		Profile:    "default",
-		MagicHome:  magicDir,
-		WorkingDir: "",
-		Providers:  make(map[string]config.ProviderConfig),
-		Tools: config.ToolsConfig{
-			Enabled: []string{"all"},
-		},
-		Gateway: config.GatewayConfig{
-			Enabled:   false,
-			Platforms: make(map[string]config.PlatformConfig),
-		},
+	// Load existing config if any
+	cfg, loadErr := config.Load()
+	if loadErr != nil || cfg == nil {
+		cfg = &config.Config{
+			Profile:    "default",
+			MagicHome:  magicDir,
+			WorkingDir: "",
+			Providers:  make(map[string]config.ProviderConfig),
+			Tools: config.ToolsConfig{
+				Enabled: []string{"all"},
+			},
+			Gateway: config.GatewayConfig{
+				Enabled:   false,
+				Platforms: make(map[string]config.PlatformConfig),
+			},
+		}
+	}
+	// Ensure maps are initialized
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]config.ProviderConfig)
+	}
+	if cfg.Gateway.Platforms == nil {
+		cfg.Gateway.Platforms = make(map[string]config.PlatformConfig)
+	}
+
+	// Determine current provider and its config
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "deepseek"
+	}
+
+	provCfg, hasProv := cfg.Providers[provider]
+	if !hasProv {
+		provCfg = config.ProviderConfig{}
 	}
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// Provider selection
-	fmt.Println("1. Choose your LLM provider:")
+	// Provider default values lookup
+	providerDefaults := map[string]struct {
+		name    string
+		model   string
+		baseURL string
+	}{
+		"deepseek":  {"DeepSeek", "deepseek-chat", "https://api.deepseek.com/v1"},
+		"anthropic": {"Anthropic (Claude)", "claude-3-5-sonnet-20241022", "https://api.anthropic.com/v1"},
+		"openai":    {"OpenAI (GPT-4, GPT-3.5)", "gpt-4o", "https://api.openai.com/v1"},
+		"kimi":      {"Kimi (Moonshot)", "moonshot-v1-8k", "https://api.moonshot.cn/v1"},
+		"zhipu":     {"Zhipu (GLM)", "glm-4", "https://open.bigmodel.cn/api/paas/v4"},
+		"huoshan":   {"Huoshan (Volcano Engine)", "ep-20250105-xxxxx", "https://volcengine.com/api/v1"},
+		"minimax":   {"MiniMax", "abab6-chat", "https://api.minimax.chat/v1"},
+		"dashscope": {"Dashscope (Qwen)", "qwen-turbo", "https://dashscope.aliyuncs.com/api/v1"},
+		"ollama":    {"Ollama (Local)", "llama3.2", "http://localhost:11434/v1"},
+		"vllm":      {"vLLM (Local)", "", "http://localhost:8000/v1"},
+		"openrouter": {"OpenRouter", "openrouter/anthropic/claude-3.5-sonnet", "https://openrouter.ai/api/v1"},
+		"custom":    {"Other (custom)", "", ""},
+	}
+
+	// Map provider to selection number
+	providerToNum := map[string]string{
+		"deepseek": "1", "anthropic": "2", "openai": "3", "kimi": "4",
+		"zhipu": "5", "huoshan": "6", "minimax": "7", "dashscope": "8",
+		"ollama": "9", "vllm": "10", "openrouter": "11", "custom": "12",
+	}
+
+	// Provider selection - show current value
+	currentProviderName := provider
+	if p, ok := providerDefaults[provider]; ok {
+		currentProviderName = p.name
+	}
+
+	fmt.Printf("1. Choose your LLM provider (current: %s):\n", currentProviderName)
 	fmt.Println("   [1] DeepSeek")
 	fmt.Println("   [2] Anthropic (Claude)")
 	fmt.Println("   [3] OpenAI (GPT-4, GPT-3.5)")
@@ -63,130 +128,131 @@ func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("   [10] vLLM (Local)")
 	fmt.Println("   [11] OpenRouter")
 	fmt.Println("   [12] Other (custom)")
-	fmt.Print("   Select (1-12, default 1): ")
+	fmt.Printf("   Select (1-12, default %s - keep current): ", providerToNum[provider])
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+	choice := readInput(reader, providerToNum[provider])
 
-	provider := "deepseek"
-	model := "deepseek-chat"
-	baseURL := "https://api.deepseek.com/v1"
+	// Resolve provider, model, baseURL from choice
+	newProvider := provider
+	model := provCfg.Model
+	baseURL := provCfg.BaseURL
 
 	switch choice {
+	case "1":
+		newProvider = "deepseek"
 	case "2":
-		provider = "anthropic"
-		model = "claude-3-5-sonnet-20241022"
-		baseURL = "https://api.anthropic.com/v1"
+		newProvider = "anthropic"
 	case "3":
-		provider = "openai"
-		model = "gpt-4o"
-		baseURL = "https://api.openai.com/v1"
+		newProvider = "openai"
 	case "4":
-		provider = "kimi"
-		model = "moonshot-v1-8k"
-		baseURL = "https://api.moonshot.cn/v1"
+		newProvider = "kimi"
 	case "5":
-		provider = "zhipu"
-		model = "glm-4"
-		baseURL = "https://open.bigmodel.cn/api/paas/v4"
+		newProvider = "zhipu"
 	case "6":
-		provider = "huoshan"
-		model = "ep-20250105-xxxxx"
-		baseURL = "https://volcengine.com/api/v1"
+		newProvider = "huoshan"
 	case "7":
-		provider = "minimax"
-		model = "abab6-chat"
-		baseURL = "https://api.minimax.chat/v1"
+		newProvider = "minimax"
 	case "8":
-		provider = "dashscope"
-		model = "qwen-turbo"
-		baseURL = "https://dashscope.aliyuncs.com/api/v1"
+		newProvider = "dashscope"
 	case "9":
-		provider = "ollama"
-		model = "llama3.2"
-		baseURL = "http://localhost:11434/v1"
+		newProvider = "ollama"
 	case "10":
-		provider = "vllm"
-		model = ""
-		baseURL = "http://localhost:8000/v1"
+		newProvider = "vllm"
 	case "11":
-		provider = "openrouter"
-		model = "openrouter/anthropic/claude-3.5-sonnet"
-		baseURL = "https://openrouter.ai/api/v1"
+		newProvider = "openrouter"
 	case "12":
-		provider = "custom"
-		model = ""
-		baseURL = ""
-		fmt.Println("\n   Note: You will need to configure custom provider manually.")
-	default:
-		// Use defaults for DeepSeek
+		newProvider = "custom"
+	}
+
+	// If provider changed, use defaults for the new provider
+	if newProvider != provider {
+		if p, ok := providerDefaults[newProvider]; ok {
+			model = p.model
+			baseURL = p.baseURL
+		}
+		// Check if new provider already has saved config
+		if existingProv, ok := cfg.Providers[newProvider]; ok {
+			if existingProv.Model != "" {
+				model = existingProv.Model
+			}
+			if existingProv.BaseURL != "" {
+				baseURL = existingProv.BaseURL
+			}
+		}
+		provider = newProvider
 	}
 
 	cfg.Provider = provider
 
-	// API Key
-	fmt.Printf("\n2. Enter your %s API key: ", provider)
-	apiKey, _ := reader.ReadString('\n')
-	apiKey = strings.TrimSpace(apiKey)
+	// API Key - show masked existing key if present
+	apiKeyDisplay := ""
+	if provCfg.APIKey != "" && provider == newProvider {
+		// Show last 4 chars only
+		if len(provCfg.APIKey) > 4 {
+			apiKeyDisplay = " (current: ..." + provCfg.APIKey[len(provCfg.APIKey)-4:] + ")"
+		} else {
+			apiKeyDisplay = " (current: ****)"
+		}
+	}
+	fmt.Printf("\n2. Enter your %s API key%s: ", provider, apiKeyDisplay)
+	apiKey := readInput(reader, provCfg.APIKey)
 
-	// Validate API key is not empty (except for Ollama which may not need one)
-	if apiKey == "" && provider != "ollama" && provider != "custom" {
+	if apiKey == "" && provider != "ollama" && provider != "custom" && provider != "vllm" {
 		fmt.Println("\n   Warning: API key is empty. You may need to configure it later.")
 		fmt.Println("   Press Enter to continue or Ctrl+C to cancel...")
 		reader.ReadString('\n')
 	}
 
-	// Custom base URL for "other" option
+	// Custom provider additional fields
 	if provider == "custom" {
-		fmt.Print("\n3. Enter API base URL: ")
-		baseURL, _ = reader.ReadString('\n')
-		baseURL = strings.TrimSpace(baseURL)
+		fmt.Printf("3. Enter API base URL (current: %s): ", baseURL)
+		baseURL = readInput(reader, baseURL)
 
-		fmt.Print("4. Enter model name: ")
-		model, _ = reader.ReadString('\n')
-		model = strings.TrimSpace(model)
+		fmt.Printf("4. Enter model name (current: %s): ", model)
+		model = readInput(reader, model)
 	}
 
-	provCfg := config.ProviderConfig{
+	// Build provider config
+	provCfg = config.ProviderConfig{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
 		Model:   model,
 	}
-
 	cfg.Providers[provider] = provCfg
 	cfg.Model = model
 
 	// Model selection
-	if model != "" {
-		fmt.Printf("\n3. Choose model (default: %s): ", model)
-		inputModel, _ := reader.ReadString('\n')
-		inputModel = strings.TrimSpace(inputModel)
-		if inputModel != "" {
-			cfg.Model = inputModel
-			provCfg.Model = inputModel
-			cfg.Providers[provider] = provCfg
-		}
-	}
+	fmt.Printf("\n3. Choose model (current: %s): ", model)
+	inputModel := readInput(reader, model)
+	cfg.Model = inputModel
+	provCfg.Model = inputModel
+	cfg.Providers[provider] = provCfg
 
 	// Profile name
-	fmt.Printf("\n4. Enter profile name (default: default): ")
-	profile, _ := reader.ReadString('\n')
-	profile = strings.TrimSpace(profile)
-	if profile != "" {
-		cfg.Profile = profile
+	profileLabel := "default"
+	if cfg.Profile != "" {
+		profileLabel = cfg.Profile
 	}
+	fmt.Printf("\n4. Enter profile name (current: %s): ", profileLabel)
+	profile := readInput(reader, cfg.Profile)
+	cfg.Profile = profile
 
-	// Ask about Cortex
-	fmt.Print("\n5. Enable Cortex AI enhancement? (Y/n): ")
-	cortexChoice, _ := reader.ReadString('\n')
-	cortexChoice = strings.TrimSpace(cortexChoice)
-	// Default is Yes (Y), only 'n' or 'N' disables
+	// Cortex AI enhancement
+	cortexDefault := "Y"
+	if !cfg.CortexEnabled {
+		cortexDefault = "n"
+	}
+	fmt.Printf("\n5. Enable Cortex AI enhancement? (Y/n, default %s): ", cortexDefault)
+	cortexChoice := readInput(reader, cortexDefault)
 	cfg.CortexEnabled = !(cortexChoice == "n" || cortexChoice == "N")
 
-	// Ask about gateway
-	fmt.Print("\n6. Enable messaging gateway? (y/N): ")
-	gatewayChoice, _ := reader.ReadString('\n')
-	gatewayChoice = strings.TrimSpace(gatewayChoice)
+	// Gateway
+	gatewayDefault := "N"
+	if cfg.Gateway.Enabled {
+		gatewayDefault = "y"
+	}
+	fmt.Printf("\n6. Enable messaging gateway? (y/N, default %s): ", gatewayDefault)
+	gatewayChoice := readInput(reader, gatewayDefault)
 	if gatewayChoice == "y" || gatewayChoice == "Y" {
 		cfg.Gateway.Enabled = true
 		fmt.Println("   Gateway can be configured later with: magic gateway start")
@@ -214,13 +280,22 @@ func runSetup(cmd *cobra.Command, args []string) {
 			switch platformChoice {
 			case "0":
 				fmt.Println("   Platform configuration complete.")
-				// break out of loop
-				// Use goto or a flag instead of break in switch
 				goto donePlatforms
 			case "1": // Telegram
-				fmt.Print("   Enter Telegram bot token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
+				currentToken := ""
+				if p, ok := cfg.Gateway.Platforms["telegram"]; ok {
+					currentToken = p.Token
+				}
+				tokenDisplay := ""
+				if currentToken != "" {
+					if len(currentToken) > 4 {
+						tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
+					} else {
+						tokenDisplay = " (current: ****)"
+					}
+				}
+				fmt.Printf("   Enter Telegram bot token%s: ", tokenDisplay)
+				token := readInput(reader, currentToken)
 				if token != "" {
 					cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
 						Token:   token,
@@ -229,9 +304,20 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [Telegram] configured successfully!")
 				}
 			case "2": // Discord
-				fmt.Print("   Enter Discord bot token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
+				currentToken := ""
+				if p, ok := cfg.Gateway.Platforms["discord"]; ok {
+					currentToken = p.Token
+				}
+				tokenDisplay := ""
+				if currentToken != "" {
+					if len(currentToken) > 4 {
+						tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
+					} else {
+						tokenDisplay = " (current: ****)"
+					}
+				}
+				fmt.Printf("   Enter Discord bot token%s: ", tokenDisplay)
+				token := readInput(reader, currentToken)
 				if token != "" {
 					cfg.Gateway.Platforms["discord"] = config.PlatformConfig{
 						Token:   token,
@@ -240,18 +326,15 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [Discord] configured successfully!")
 				}
 			case "3": // WeCom
-				fmt.Print("   Enter WeCom corp_id: ")
-				corpID, _ := reader.ReadString('\n')
-				corpID = strings.TrimSpace(corpID)
-				fmt.Print("   Enter WeCom agent_id: ")
-				agentID, _ := reader.ReadString('\n')
-				agentID = strings.TrimSpace(agentID)
-				fmt.Print("   Enter WeCom secret: ")
-				secret, _ := reader.ReadString('\n')
-				secret = strings.TrimSpace(secret)
-				fmt.Print("   Enter WeCom token (for callback verification): ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
+				current := cfg.Gateway.Platforms["wecom"]
+				fmt.Printf("   Enter WeCom corp_id (current: %s): ", maskString(current.CorpID))
+				corpID := readInput(reader, current.CorpID)
+				fmt.Printf("   Enter WeCom agent_id (current: %s): ", current.AgentID)
+				agentID := readInput(reader, current.AgentID)
+				fmt.Printf("   Enter WeCom secret (current: %s): ", maskString(current.Secret))
+				secret := readInput(reader, current.Secret)
+				fmt.Printf("   Enter WeCom token for callback verification (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
 				if corpID != "" && secret != "" {
 					cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
 						CorpID:  corpID,
@@ -263,12 +346,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [WeCom] configured successfully!")
 				}
 			case "4": // Feishu
-				fmt.Print("   Enter Feishu app_id: ")
-				appID, _ := reader.ReadString('\n')
-				appID = strings.TrimSpace(appID)
-				fmt.Print("   Enter Feishu app_secret: ")
-				appSecret, _ := reader.ReadString('\n')
-				appSecret = strings.TrimSpace(appSecret)
+				current := cfg.Gateway.Platforms["feishu"]
+				fmt.Printf("   Enter Feishu app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter Feishu app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
 				if appID != "" && appSecret != "" {
 					cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
 						AppID:     appID,
@@ -278,12 +360,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [Feishu] configured successfully!")
 				}
 			case "5": // DingTalk
-				fmt.Print("   Enter DingTalk app_key: ")
-				appKey, _ := reader.ReadString('\n')
-				appKey = strings.TrimSpace(appKey)
-				fmt.Print("   Enter DingTalk app_secret: ")
-				appSecret, _ := reader.ReadString('\n')
-				appSecret = strings.TrimSpace(appSecret)
+				current := cfg.Gateway.Platforms["dingtalk"]
+				fmt.Printf("   Enter DingTalk app_key (current: %s): ", current.AppKey)
+				appKey := readInput(reader, current.AppKey)
+				fmt.Printf("   Enter DingTalk app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
 				if appKey != "" && appSecret != "" {
 					cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
 						AppKey:    appKey,
@@ -293,12 +374,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [DingTalk] configured successfully!")
 				}
 			case "6": // QQ
-				fmt.Print("   Enter QQ number: ")
-				number, _ := reader.ReadString('\n')
-				number = strings.TrimSpace(number)
-				fmt.Print("   Enter QQ password: ")
-				password, _ := reader.ReadString('\n')
-				password = strings.TrimSpace(password)
+				current := cfg.Gateway.Platforms["qq"]
+				fmt.Printf("   Enter QQ number (current: %s): ", current.Number)
+				number := readInput(reader, current.Number)
+				fmt.Printf("   Enter QQ password (current: %s): ", maskString(current.Password))
+				password := readInput(reader, current.Password)
 				if number != "" && password != "" {
 					cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
 						Number:   number,
@@ -307,67 +387,80 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [QQ] configured successfully!")
 				}
-			case "7": // WeChat ClawBot (个人微信)
-				fmt.Println("   WeChat ClawBot connects personal WeChat via 微信官方插件.")
-				fmt.Println("   Requires: Node.js >= 18, WeChat >= 8.0.69 (Android) / 8.0.70 (iOS)")
-				fmt.Println()
-				fmt.Print("   Enter Client ID (default: wechat-clawbot): ")
-				clientID, _ := reader.ReadString('\n')
-				clientID = strings.TrimSpace(clientID)
-				if clientID == "" {
-					clientID = "wechat-clawbot"
+			case "7": // WeChat ClawBot
+				current := cfg.Gateway.Platforms["wechat_clawbot"]
+				clientIDDefault := "wechat-clawbot"
+				if current.ClientID != "" {
+					clientIDDefault = current.ClientID
 				}
-				fmt.Print("   Enable auto-login (QR scan on startup)? (Y/n): ")
-				autoLoginChoice, _ := reader.ReadString('\n')
-				autoLoginChoice = strings.TrimSpace(autoLoginChoice)
+				fmt.Printf("   Enter Client ID (current: %s): ", clientIDDefault)
+				clientID := readInput(reader, clientIDDefault)
+
+				autoLoginDefault := "Y"
+				if !current.AutoLogin {
+					autoLoginDefault = "n"
+				}
+				fmt.Printf("   Enable auto-login (QR scan on startup)? (Y/n, default %s): ", autoLoginDefault)
+				autoLoginChoice := readInput(reader, autoLoginDefault)
 				autoLogin := !(autoLoginChoice == "n" || autoLoginChoice == "N")
 
-				fmt.Println()
-				fmt.Print("   Start ClawBot QR code scan now? (Y/n): ")
-				scanChoice, _ := reader.ReadString('\n')
-				scanChoice = strings.TrimSpace(scanChoice)
-				if scanChoice != "n" && scanChoice != "N" {
+				// Only prompt for QR scan if not already configured
+				if current.ClientID == "" {
 					fmt.Println()
-					fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-					fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
-					fmt.Println("   ──────────────────────────────────────────────────────")
-					clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
-					clawCmd.Stdin = os.Stdin
-					clawCmd.Stdout = os.Stdout
-					clawCmd.Stderr = os.Stderr
-					err := clawCmd.Run()
-					fmt.Println("   ──────────────────────────────────────────────────────")
-					if err != nil {
-						fmt.Printf("   ClawBot install failed: %v\n", err)
-						fmt.Println("   You can try manually running:")
-						fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-					}
-					fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
-					bindChoice, _ := reader.ReadString('\n')
-					bindChoice = strings.TrimSpace(bindChoice)
-					if bindChoice == "y" || bindChoice == "Y" {
-						cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
-							ClientID:  clientID,
-							AutoLogin: autoLogin,
-							DataDir:   filepath.Join(magicDir, "clawbot"),
-							Enabled:   true,
+					fmt.Print("   Start ClawBot QR code scan now? (Y/n): ")
+					scanChoice, _ := reader.ReadString('\n')
+					scanChoice = strings.TrimSpace(scanChoice)
+					if scanChoice != "n" && scanChoice != "N" {
+						fmt.Println()
+						fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+						fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
+						fmt.Println("   ──────────────────────────────────────────────────────")
+						clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
+						clawCmd.Stdin = os.Stdin
+						clawCmd.Stdout = os.Stdout
+						clawCmd.Stderr = os.Stderr
+						err := clawCmd.Run()
+						fmt.Println("   ──────────────────────────────────────────────────────")
+						if err != nil {
+							fmt.Printf("   ClawBot install failed: %v\n", err)
+							fmt.Println("   You can try manually running:")
+							fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
 						}
-						fmt.Println("   [WeChat-ClawBot] configured successfully!")
+						fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
+						bindChoice, _ := reader.ReadString('\n')
+						bindChoice = strings.TrimSpace(bindChoice)
+						if bindChoice == "y" || bindChoice == "Y" {
+							cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
+								ClientID:  clientID,
+								AutoLogin: autoLogin,
+								DataDir:   filepath.Join(magicDir, "clawbot"),
+								Enabled:   true,
+							}
+							fmt.Println("   [WeChat-ClawBot] configured successfully!")
+						} else {
+							fmt.Println("   [WeChat-ClawBot] not configured. You can run setup again later.")
+						}
 					} else {
-						fmt.Println("   [WeChat-ClawBot] not configured. You can run setup again later.")
+						fmt.Println("   Skipped. To configure WeChat later, run:")
+						fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+						fmt.Println("   Then add to ~/.magic/config.json under gateway.platforms.wechat_clawbot")
 					}
 				} else {
-					fmt.Println("   Skipped. To configure WeChat later, run:")
-					fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-					fmt.Println("   Then add to ~/.magic/config.json under gateway.platforms.wechat_clawbot")
+					// Already configured, just update client ID
+					cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
+						ClientID:  clientID,
+						AutoLogin: autoLogin,
+						DataDir:   filepath.Join(magicDir, "clawbot"),
+						Enabled:   true,
+					}
+					fmt.Println("   [WeChat-ClawBot] configuration updated!")
 				}
 			case "8": // Slack
-				fmt.Print("   Enter Slack bot token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
-				fmt.Print("   Enter Slack signing secret: ")
-				appSecret, _ := reader.ReadString('\n')
-				appSecret = strings.TrimSpace(appSecret)
+				current := cfg.Gateway.Platforms["slack"]
+				fmt.Printf("   Enter Slack bot token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter Slack signing secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
 				if token != "" && appSecret != "" {
 					cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
 						Token:     token,
@@ -377,12 +470,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [Slack] configured successfully!")
 				}
 			case "9": // WhatsApp
-				fmt.Print("   Enter WhatsApp Phone Number ID: ")
-				appID, _ := reader.ReadString('\n')
-				appID = strings.TrimSpace(appID)
-				fmt.Print("   Enter WhatsApp access token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
+				current := cfg.Gateway.Platforms["whatsapp"]
+				fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
 				if appID != "" && token != "" {
 					cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
 						AppID:   appID,
@@ -392,12 +484,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 					fmt.Println("   [WhatsApp] configured successfully!")
 				}
 			case "10": // LINE
-				fmt.Print("   Enter LINE Channel Access Token: ")
-				token, _ := reader.ReadString('\n')
-				token = strings.TrimSpace(token)
-				fmt.Print("   Enter LINE Channel Secret: ")
-				appSecret, _ := reader.ReadString('\n')
-				appSecret = strings.TrimSpace(appSecret)
+				current := cfg.Gateway.Platforms["line"]
+				fmt.Printf("   Enter LINE Channel Access Token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter LINE Channel Secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
 				if token != "" && appSecret != "" {
 					cfg.Gateway.Platforms["line"] = config.PlatformConfig{
 						Token:     token,
@@ -411,6 +502,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 			}
 		}
 	donePlatforms:
+	} else {
+		cfg.Gateway.Enabled = false
 	}
 
 	// Save config
@@ -425,4 +518,16 @@ func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println("You can now start chatting with:")
 	fmt.Println("  magic chat")
+}
+
+// maskString returns a masked version of s for display.
+// If s is empty, returns "(empty)".
+func maskString(s string) string {
+	if s == "" {
+		return "(empty)"
+	}
+	if len(s) > 4 {
+		return "..." + s[len(s)-4:]
+	}
+	return "****"
 }

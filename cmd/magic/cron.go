@@ -194,7 +194,7 @@ func runCronEdit(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Editing cron job '%s'\n\n", name)
 	fmt.Println("Leave field empty to keep current value.")
-	fmt.Println("Type 'quit' to cancel.\n")
+	fmt.Println("Type 'quit' to cancel.")
 
 	reader := bufio.NewReader(os.Stdin)
 
