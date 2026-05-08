@@ -8,14 +8,14 @@ import (
 // ToolContext 工具执行上下文，扩展标准 context.Context
 type ToolContext struct {
 	context.Context
-	SessionID   string            // 会话ID
-	UserID      string            // 用户ID
-	RequestID   string            // 请求ID
-	ToolName    string            // 当前工具名称
-	Metadata    map[string]any    // 元数据
-	Logger      Logger            // 日志器
-	Metrics     MetricsRecorder   // 指标记录器
-	StartTime   time.Time         // 开始时间
+	SessionID string          // 会话ID
+	UserID    string          // 用户ID
+	RequestID string          // 请求ID
+	ToolName  string          // 当前工具名称
+	Metadata  map[string]any  // 元数据
+	Logger    Logger          // 日志器
+	Metrics   MetricsRecorder // 指标记录器
+	StartTime time.Time       // 开始时间
 }
 
 // NewToolContext 创建工具上下文

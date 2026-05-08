@@ -19,43 +19,43 @@ import (
 
 // ImportanceDecayConfig configures how memory importance decays over time
 type ImportanceDecayConfig struct {
-	BaseDecayRate   float64 // Daily decay rate (0-1)
-	MinImportance   int     // Minimum importance floor
-	DecayInterval   time.Duration // How often to apply decay
+	BaseDecayRate float64       // Daily decay rate (0-1)
+	MinImportance int           // Minimum importance floor
+	DecayInterval time.Duration // How often to apply decay
 }
 
 // CacheConfig configures the result cache
 type CacheConfig struct {
-	Enabled       bool
-	MaxEntries    int
-	TTL           time.Duration
+	Enabled    bool
+	MaxEntries int
+	TTL        time.Duration
 }
 
 // EnhancedFTSStore provides advanced full-text search with semantic capabilities
 type EnhancedFTSStore struct {
-	db         *sql.DB
-	dbPath     string
-	baseDir    string
-	
+	db      *sql.DB
+	dbPath  string
+	baseDir string
+
 	// Cache
-	cache      *SearchCache
+	cache       *SearchCache
 	cacheConfig *CacheConfig
-	
+
 	// Importance tracking
 	decayConfig *ImportanceDecayConfig
 	decayTimer  *time.Timer
-	
+
 	// Semantic analysis
-	synonymMap   map[string][]string
-	stopWords    map[string]bool
-	
+	synonymMap map[string][]string
+	stopWords  map[string]bool
+
 	// Metrics
-	stats       *FTSStats
-	statsMu     sync.RWMutex
-	
+	stats   *FTSStats
+	statsMu sync.RWMutex
+
 	// Memory deduplication
-	hashIndex    map[string]int64 // hash -> memory_id
-	
+	hashIndex map[string]int64 // hash -> memory_id
+
 	// Cross-session linking
 	sessionLinks []SessionLink
 	linkMu       sync.RWMutex
@@ -63,38 +63,38 @@ type EnhancedFTSStore struct {
 
 // SessionLink represents a link between memories across sessions
 type SessionLink struct {
-	SourceID    int64     `json:"source_id"`
-	TargetID    int64     `json:"target_id"`
-	LinkType    string    `json:"link_type"` // "related", "follows", "references"
-	CreatedAt   time.Time `json:"created_at"`
-	Strength    float64  `json:"strength"` // 0-1
+	SourceID  int64     `json:"source_id"`
+	TargetID  int64     `json:"target_id"`
+	LinkType  string    `json:"link_type"` // "related", "follows", "references"
+	CreatedAt time.Time `json:"created_at"`
+	Strength  float64   `json:"strength"` // 0-1
 }
 
 // FTSStats holds search statistics
 type FTSStats struct {
-	TotalSearches    int64            `json:"total_searches"`
-	TotalHits        int64            `json:"total_hits"`
-	AvgLatencyMs     float64          `json:"avg_latency_ms"`
-	CacheHits        int64            `json:"cache_hits"`
-	CacheMisses      int64            `json:"cache_misses"`
-	QueryCounts      map[string]int  `json:"query_counts"`
-	TopTerms         []TermFrequency  `json:"top_terms"`
+	TotalSearches int64           `json:"total_searches"`
+	TotalHits     int64           `json:"total_hits"`
+	AvgLatencyMs  float64         `json:"avg_latency_ms"`
+	CacheHits     int64           `json:"cache_hits"`
+	CacheMisses   int64           `json:"cache_misses"`
+	QueryCounts   map[string]int  `json:"query_counts"`
+	TopTerms      []TermFrequency `json:"top_terms"`
 }
 
 // TermFrequency represents term frequency data
 type TermFrequency struct {
-	Term      string  `json:"term"`
-	Frequency int     `json:"frequency"`
+	Term      string `json:"term"`
+	Frequency int    `json:"frequency"`
 }
 
 // SearchCache implements LRU caching for search results
 type SearchCache struct {
-	mu       sync.RWMutex
-	entries  map[string]*CacheEntry
-	lru      *list.List
-	maxSize  int
-	ttl      time.Duration
-	enabled  bool
+	mu      sync.RWMutex
+	entries map[string]*CacheEntry
+	lru     *list.List
+	maxSize int
+	ttl     time.Duration
+	enabled bool
 }
 
 // CacheEntry represents a cached search result
@@ -117,17 +117,17 @@ func NewEnhancedFTSStore(baseDir string) (*EnhancedFTSStore, error) {
 	}
 
 	store := &EnhancedFTSStore{
-		db:         db,
-		dbPath:     dbPath,
-		baseDir:    baseDir,
-		hashIndex:  make(map[string]int64),
+		db:           db,
+		dbPath:       dbPath,
+		baseDir:      baseDir,
+		hashIndex:    make(map[string]int64),
 		sessionLinks: make([]SessionLink, 0),
 		stats: &FTSStats{
 			QueryCounts: make(map[string]int),
 			TopTerms:    make([]TermFrequency, 0),
 		},
-		synonymMap:  loadDefaultSynonyms(),
-		stopWords:   loadStopWords(),
+		synonymMap: loadDefaultSynonyms(),
+		stopWords:  loadStopWords(),
 	}
 
 	// Initialize cache
@@ -173,16 +173,16 @@ func newSearchCache(maxSize int, ttl time.Duration, enabled bool) *SearchCache {
 // loadDefaultSynonyms loads default synonym mappings
 func loadDefaultSynonyms() map[string][]string {
 	return map[string][]string{
-		"create":   {"make", "generate", "build", "add", "new"},
-		"delete":   {"remove", "drop", "erase", "clear"},
-		"read":     {"get", "fetch", "retrieve", "load"},
-		"write":    {"set", "update", "save", "store"},
-		"search":   {"find", "query", "look", "seek"},
-		"analyze":  {"examine", "review", "inspect", "check"},
-		"execute":  {"run", "start", "launch", "begin"},
-		"config":   {"configure", "setup", "settings", "options"},
-		"error":    {"bug", "issue", "problem", "fault"},
-		"success":  {"complete", "done", "finished", "ok"},
+		"create":  {"make", "generate", "build", "add", "new"},
+		"delete":  {"remove", "drop", "erase", "clear"},
+		"read":    {"get", "fetch", "retrieve", "load"},
+		"write":   {"set", "update", "save", "store"},
+		"search":  {"find", "query", "look", "seek"},
+		"analyze": {"examine", "review", "inspect", "check"},
+		"execute": {"run", "start", "launch", "begin"},
+		"config":  {"configure", "setup", "settings", "options"},
+		"error":   {"bug", "issue", "problem", "fault"},
+		"success": {"complete", "done", "finished", "ok"},
 	}
 }
 
@@ -358,22 +358,22 @@ func (f *EnhancedFTSStore) applyImportanceDecay() {
 		SET importance = MAX(?, CAST(importance * ? AS INTEGER))
 		WHERE importance > ?
 	`
-	
+
 	days := f.decayConfig.DecayInterval.Hours() / 24
 	decayFactor := math.Pow(1-f.decayConfig.BaseDecayRate, days)
-	
+
 	f.db.Exec(query, f.decayConfig.MinImportance, decayFactor, f.decayConfig.MinImportance)
 }
 
 // EnhancedMemoryRecord extends MemoryRecord with additional metadata
 type EnhancedMemoryRecord struct {
 	MemoryRecord
-	Summary        string    `json:"summary,omitempty"`
-	ContentHash    string    `json:"content_hash,omitempty"`
-	ParentID       int64     `json:"parent_id,omitempty"`
-	LastAccessed   time.Time `json:"last_accessed"`
-	AccessCount    int       `json:"access_count"`
-	SimilarMemories []int64  `json:"similar_memories,omitempty"`
+	Summary         string    `json:"summary,omitempty"`
+	ContentHash     string    `json:"content_hash,omitempty"`
+	ParentID        int64     `json:"parent_id,omitempty"`
+	LastAccessed    time.Time `json:"last_accessed"`
+	AccessCount     int       `json:"access_count"`
+	SimilarMemories []int64   `json:"similar_memories,omitempty"`
 }
 
 // computeHash computes a hash for content deduplication
@@ -387,17 +387,17 @@ func generateSummary(content string, maxLen int) string {
 	if len(content) <= maxLen {
 		return content
 	}
-	
+
 	// Simple summarization: take first sentence or maxLen chars
 	summary := content[:maxLen]
-	
+
 	// Try to end at a sentence boundary
 	if idx := strings.LastIndexAny(summary, ".!?"); idx > maxLen/2 {
 		summary = summary[:idx+1]
 	} else {
 		summary = summary + "..."
 	}
-	
+
 	return summary
 }
 
@@ -449,7 +449,7 @@ func (f *EnhancedFTSStore) findSimilarMemories(memoryID int64, content string) {
 
 	// Build similarity query
 	query := strings.Join(terms[:min(5, len(terms))], " OR ")
-	
+
 	rows, err := f.db.Query(`
 		SELECT m.id, m.content
 		FROM memories m
@@ -483,14 +483,14 @@ func (f *EnhancedFTSStore) extractTerms(content string) []string {
 	content = strings.ToLower(content)
 	content = strings.ReplaceAll(content, "[^a-z0-9 ]", " ")
 	words := strings.Fields(content)
-	
+
 	terms := make([]string, 0)
 	for _, word := range words {
 		if len(word) > 2 && !f.stopWords[word] {
 			terms = append(terms, word)
 		}
 	}
-	
+
 	return terms
 }
 
@@ -498,29 +498,29 @@ func (f *EnhancedFTSStore) extractTerms(content string) []string {
 func (f *EnhancedFTSStore) calculateSimilarity(content1, content2 string) float64 {
 	terms1 := f.extractTerms(content1)
 	terms2 := f.extractTerms(content2)
-	
+
 	if len(terms1) == 0 || len(terms2) == 0 {
 		return 0
 	}
-	
+
 	// Jaccard similarity
 	set1 := make(map[string]bool)
 	for _, t := range terms1 {
 		set1[t] = true
 	}
-	
+
 	intersection := 0
 	for _, t := range terms2 {
 		if set1[t] {
 			intersection++
 		}
 	}
-	
+
 	union := len(terms1) + len(terms2) - intersection
 	if union == 0 {
 		return 0
 	}
-	
+
 	return float64(intersection) / float64(union)
 }
 
@@ -535,27 +535,27 @@ func (f *EnhancedFTSStore) linkMemories(sourceID, targetID int64, linkType strin
 // EnhancedSearchOptions provides advanced search options
 type EnhancedSearchOptions struct {
 	// Basic options
-	Limit        int
-	Offset       int
-	
+	Limit  int
+	Offset int
+
 	// Semantic options
-	UseSynonyms  bool
+	UseSynonyms   bool
 	MinSimilarity float64
-	
+
 	// Time-based options
-	TimeRange    *TimeRange
+	TimeRange     *TimeRange
 	SessionFilter []string
-	
+
 	// Content filters
-	ContentTypes []string
+	ContentTypes  []string
 	MinImportance int
-	Tags         []string
-	
+	Tags          []string
+
 	// Ranking options
-	BoostRecent  bool
+	BoostRecent     bool
 	BoostImportance bool
-	BoostFrequency bool
-	
+	BoostFrequency  bool
+
 	// Context options
 	IncludeRelated bool
 	MaxRelated     int
@@ -570,7 +570,7 @@ type TimeRange struct {
 // Search performs enhanced full-text search with caching
 func (f *EnhancedFTSStore) Search(query string, options *EnhancedSearchOptions) ([]SearchResult, error) {
 	startTime := time.Now()
-	
+
 	// Apply defaults
 	if options == nil {
 		options = &EnhancedSearchOptions{Limit: 10}
@@ -732,13 +732,13 @@ func (f *EnhancedFTSStore) recordStats(query string, hits int, latencyMs int64) 
 
 	f.stats.TotalSearches++
 	f.stats.TotalHits += int64(hits)
-	
+
 	// Running average of latency
 	f.stats.AvgLatencyMs = (f.stats.AvgLatencyMs*float64(f.stats.TotalSearches-1) + float64(latencyMs)) / float64(f.stats.TotalSearches)
-	
+
 	// Track query counts
 	f.stats.QueryCounts[query]++
-	
+
 	// Update top terms
 	f.updateTopTerms(query)
 }
@@ -835,10 +835,10 @@ func (f *EnhancedFTSStore) GetRelatedMemories(memoryID int64, limit int) ([]Enha
 // GetContext retrieves relevant context with cross-session linking
 func (f *EnhancedFTSStore) GetContext(query string, maxTokens int) string {
 	results, err := f.Search(query, &EnhancedSearchOptions{
-		Limit:            5,
-		UseSynonyms:      true,
-		IncludeRelated:   true,
-		MaxRelated:       3,
+		Limit:          5,
+		UseSynonyms:    true,
+		IncludeRelated: true,
+		MaxRelated:     3,
 	})
 	if err != nil || len(results) == 0 {
 		return ""
@@ -853,7 +853,7 @@ func (f *EnhancedFTSStore) GetContext(query string, maxTokens int) string {
 		if snippet == "" {
 			snippet = result.Content
 		}
-		
+
 		tokens := len(snippet) / 4 // Rough token estimate
 		if totalTokens+tokens > maxTokens {
 			break
@@ -870,10 +870,10 @@ func (f *EnhancedFTSStore) GetContext(query string, maxTokens int) string {
 // GetCrossSessionMemories retrieves memories from previous sessions
 func (f *EnhancedFTSStore) GetCrossSessionMemories(query string, currentSession string, limit int) ([]SearchResult, error) {
 	return f.Search(query, &EnhancedSearchOptions{
-		Limit:           limit,
-		SessionFilter:   []string{}, // Empty means all sessions except current
-		UseSynonyms:     true,
-		BoostRecent:     true,
+		Limit:         limit,
+		SessionFilter: []string{}, // Empty means all sessions except current
+		UseSynonyms:   true,
+		BoostRecent:   true,
 	})
 }
 
@@ -938,16 +938,16 @@ func (f *EnhancedFTSStore) AddSynonym(term string, synonyms []string) {
 // Cleanup removes old or low-importance memories
 func (f *EnhancedFTSStore) Cleanup(olderThan time.Duration, minImportance int) (int, error) {
 	cutoff := time.Now().Add(-olderThan)
-	
+
 	result, err := f.db.Exec(`
 		DELETE FROM memories 
 		WHERE created_at < ? AND importance < ? AND access_count < 5
 	`, cutoff, minImportance)
-	
+
 	if err != nil {
 		return 0, err
 	}
-	
+
 	rows, _ := result.RowsAffected()
 	return int(rows), nil
 }

@@ -124,7 +124,7 @@ type MemoryRecord struct {
 // SearchResult represents a search result with rank
 type SearchResult struct {
 	MemoryRecord
-	Rank   float64 `json:"rank"`   // BM25 score, lower = better
+	Rank    float64 `json:"rank"`    // BM25 score, lower = better
 	Snippet string  `json:"snippet"` // Highlighted snippet
 }
 

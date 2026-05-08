@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	
+
 	"sync"
 	"time"
 
@@ -22,13 +22,13 @@ type LineGateway struct {
 	channelSecret string
 	channelToken  string
 	userID        string
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	callbackPort int
 	httpServer   *http.Server
 }
@@ -40,42 +40,42 @@ type lineWebhookRequest struct {
 		Type       string `json:"type"`
 		ReplyToken string `json:"replyToken,omitempty"`
 		Source     struct {
-			Type   string `json:"type"`
-			UserID string `json:"userId,omitempty"`
+			Type    string `json:"type"`
+			UserID  string `json:"userId,omitempty"`
 			GroupID string `json:"groupId,omitempty"`
 			RoomID  string `json:"roomId,omitempty"`
 		} `json:"source"`
-		Timestamp int64 `json:"timestamp"`
+		Timestamp int64  `json:"timestamp"`
 		Mode      string `json:"mode,omitempty"`
 		Message   struct {
-			Type string `json:"type"`
-			ID   string `json:"id"`
-			Text string `json:"text,omitempty"`
+			Type            string `json:"type"`
+			ID              string `json:"id"`
+			Text            string `json:"text,omitempty"`
 			ContentProvider *struct {
-				Type   string `json:"type"`
+				Type               string `json:"type"`
 				OriginalContentURL string `json:"originalContentUrl,omitempty"`
-				PreviewImageURL string `json:"previewImageUrl,omitempty"`
+				PreviewImageURL    string `json:"previewImageUrl,omitempty"`
 			} `json:"contentProvider,omitempty"`
-			Duration int `json:"duration,omitempty"`
-			Title    string `json:"title,omitempty"`
-			Address  string `json:"address,omitempty"`
-			Latitude float64 `json:"latitude,omitempty"`
-			Longitude float64 `json:"longitude,omitempty"`
-			PackageID string `json:"packageId,omitempty"`
-			StickerID string `json:"stickerId,omitempty"`
-			QuoteToken string `json:"quoteToken,omitempty"`
+			Duration   int     `json:"duration,omitempty"`
+			Title      string  `json:"title,omitempty"`
+			Address    string  `json:"address,omitempty"`
+			Latitude   float64 `json:"latitude,omitempty"`
+			Longitude  float64 `json:"longitude,omitempty"`
+			PackageID  string  `json:"packageId,omitempty"`
+			StickerID  string  `json:"stickerId,omitempty"`
+			QuoteToken string  `json:"quoteToken,omitempty"`
 		} `json:"message,omitempty"`
 		Postback *struct {
-			Data string `json:"data"`
+			Data   string                 `json:"data"`
 			Params map[string]interface{} `json:"params,omitempty"`
 		} `json:"postback,omitempty"`
 		Beacon *struct {
-			Type   string `json:"type"`
-			Hwid   string `json:"hwid"`
+			Type          string `json:"type"`
+			Hwid          string `json:"hwid"`
 			DeviceMessage string `json:"deviceMessage,omitempty"`
 		} `json:"beacon,omitempty"`
-		Join     *struct{} `json:"join,omitempty"`
-		Leave    *struct{} `json:"leave,omitempty"`
+		Join         *struct{} `json:"join,omitempty"`
+		Leave        *struct{} `json:"leave,omitempty"`
 		MemberJoined *struct {
 			Members []struct {
 				Type   string `json:"type"`
@@ -96,7 +96,7 @@ type lineWebhookRequest struct {
 			Nonce  string `json:"nonce"`
 		} `json:"accountLink,omitempty"`
 		Things *struct {
-			Type string `json:"type"`
+			Type     string `json:"type"`
 			DeviceID string `json:"deviceId"`
 		} `json:"things,omitempty"`
 	} `json:"events"`
@@ -122,18 +122,18 @@ type lineMessageContent struct {
 	OriginalContentURL string `json:"originalContentUrl,omitempty"`
 	PreviewImageURL    string `json:"previewImageUrl,omitempty"`
 	// For location message
-	Title       string  `json:"title,omitempty"`
-	Address     string  `json:"address,omitempty"`
-	Latitude    float64 `json:"latitude,omitempty"`
-	Longitude   float64 `json:"longitude,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	Address   string  `json:"address,omitempty"`
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
 	// For sticker message
 	PackageID string `json:"packageId,omitempty"`
 	StickerID string `json:"stickerId,omitempty"`
 	// For template message
-	AltText  string                 `json:"altText,omitempty"`
-	Template interface{}            `json:"template,omitempty"`
+	AltText  string      `json:"altText,omitempty"`
+	Template interface{} `json:"template,omitempty"`
 	// For quick reply
-	QuickReply *lineQuickReply      `json:"quickReply,omitempty"`
+	QuickReply *lineQuickReply `json:"quickReply,omitempty"`
 }
 
 // lineQuickReply represents quick reply buttons
@@ -143,22 +143,22 @@ type lineQuickReply struct {
 
 // lineQuickReplyItem represents a quick reply item
 type lineQuickReplyItem struct {
-	Type  string `json:"type"`
-	ImageURL string `json:"imageUrl,omitempty"`
-	Action lineQuickReplyAction `json:"action"`
+	Type     string               `json:"type"`
+	ImageURL string               `json:"imageUrl,omitempty"`
+	Action   lineQuickReplyAction `json:"action"`
 }
 
 // lineQuickReplyAction represents a quick reply action
 type lineQuickReplyAction struct {
-	Type        string `json:"type"`
-	Label       string `json:"label,omitempty"`
-	Message     string `json:"message,omitempty"`
-	URI         string `json:"uri,omitempty"`
+	Type           string `json:"type"`
+	Label          string `json:"label,omitempty"`
+	Message        string `json:"message,omitempty"`
+	URI            string `json:"uri,omitempty"`
 	DatetimePicker *struct {
-		Mode      string `json:"mode"`
-		Initial   string `json:"initial,omitempty"`
-		Max       string `json:"max,omitempty"`
-		Min       string `json:"min,omitempty"`
+		Mode    string `json:"mode"`
+		Initial string `json:"initial,omitempty"`
+		Max     string `json:"max,omitempty"`
+		Min     string `json:"min,omitempty"`
 	} `json:"datetimePicker,omitempty"`
 }
 
@@ -225,7 +225,7 @@ func (g *LineGateway) CheckHealth() *HealthStatus {
 	g.mu.RUnlock()
 
 	return &HealthStatus{
-		Platform:   "line",
+		Platform:  "line",
 		Connected: running,
 		Details: map[string]interface{}{
 			"callback_port": g.callbackPort,
@@ -420,42 +420,42 @@ func (g *LineGateway) processEvent(event *struct {
 	Type       string `json:"type"`
 	ReplyToken string `json:"replyToken,omitempty"`
 	Source     struct {
-		Type   string `json:"type"`
-		UserID string `json:"userId,omitempty"`
+		Type    string `json:"type"`
+		UserID  string `json:"userId,omitempty"`
 		GroupID string `json:"groupId,omitempty"`
 		RoomID  string `json:"roomId,omitempty"`
 	} `json:"source"`
-	Timestamp int64 `json:"timestamp"`
+	Timestamp int64  `json:"timestamp"`
 	Mode      string `json:"mode,omitempty"`
 	Message   struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Text string `json:"text,omitempty"`
+		Type            string `json:"type"`
+		ID              string `json:"id"`
+		Text            string `json:"text,omitempty"`
 		ContentProvider *struct {
-			Type   string `json:"type"`
+			Type               string `json:"type"`
 			OriginalContentURL string `json:"originalContentUrl,omitempty"`
-			PreviewImageURL string `json:"previewImageUrl,omitempty"`
+			PreviewImageURL    string `json:"previewImageUrl,omitempty"`
 		} `json:"contentProvider,omitempty"`
-		Duration int `json:"duration,omitempty"`
-		Title    string `json:"title,omitempty"`
-		Address  string `json:"address,omitempty"`
-		Latitude float64 `json:"latitude,omitempty"`
-		Longitude float64 `json:"longitude,omitempty"`
-		PackageID string `json:"packageId,omitempty"`
-		StickerID string `json:"stickerId,omitempty"`
-		QuoteToken string `json:"quoteToken,omitempty"`
+		Duration   int     `json:"duration,omitempty"`
+		Title      string  `json:"title,omitempty"`
+		Address    string  `json:"address,omitempty"`
+		Latitude   float64 `json:"latitude,omitempty"`
+		Longitude  float64 `json:"longitude,omitempty"`
+		PackageID  string  `json:"packageId,omitempty"`
+		StickerID  string  `json:"stickerId,omitempty"`
+		QuoteToken string  `json:"quoteToken,omitempty"`
 	} `json:"message,omitempty"`
 	Postback *struct {
-		Data string `json:"data"`
+		Data   string                 `json:"data"`
 		Params map[string]interface{} `json:"params,omitempty"`
 	} `json:"postback,omitempty"`
 	Beacon *struct {
-		Type   string `json:"type"`
-		Hwid   string `json:"hwid"`
+		Type          string `json:"type"`
+		Hwid          string `json:"hwid"`
 		DeviceMessage string `json:"deviceMessage,omitempty"`
 	} `json:"beacon,omitempty"`
-	Join     *struct{} `json:"join,omitempty"`
-	Leave    *struct{} `json:"leave,omitempty"`
+	Join         *struct{} `json:"join,omitempty"`
+	Leave        *struct{} `json:"leave,omitempty"`
 	MemberJoined *struct {
 		Members []struct {
 			Type   string `json:"type"`
@@ -476,7 +476,7 @@ func (g *LineGateway) processEvent(event *struct {
 		Nonce  string `json:"nonce"`
 	} `json:"accountLink,omitempty"`
 	Things *struct {
-		Type string `json:"type"`
+		Type     string `json:"type"`
 		DeviceID string `json:"deviceId"`
 	} `json:"things,omitempty"`
 }) *Message {
@@ -514,7 +514,7 @@ func (g *LineGateway) processEvent(event *struct {
 		case "file":
 			content = "[File]"
 		case "location":
-			content = fmt.Sprintf("[Location: %s, %s]", 
+			content = fmt.Sprintf("[Location: %s, %s]",
 				event.Message.Title, event.Message.Address)
 		case "sticker":
 			content = "[Sticker]"
@@ -550,17 +550,17 @@ func (g *LineGateway) processEvent(event *struct {
 	}
 
 	return &Message{
-		ID:         event.Message.ID,
-		Platform:   "line",
-		ChannelID:  channelID,
-		UserID:     userID,
-		Content:    content,
-		Timestamp:  time.Unix(event.Timestamp/1000, 0),
+		ID:        event.Message.ID,
+		Platform:  "line",
+		ChannelID: channelID,
+		UserID:    userID,
+		Content:   content,
+		Timestamp: time.Unix(event.Timestamp/1000, 0),
 		Metadata: map[string]interface{}{
-			"type":        event.Type,
+			"type":         event.Type,
 			"message_type": msgType,
 			"reply_token":  event.ReplyToken,
-			"source_type":   event.Source.Type,
+			"source_type":  event.Source.Type,
 		},
 	}
 }
@@ -582,9 +582,9 @@ func (g *LineGateway) SendImage(to, originalURL, previewURL string) error {
 		To: to,
 		Messages: []lineMessageContent{
 			{
-				Type: "image",
+				Type:               "image",
 				OriginalContentURL: originalURL,
-				PreviewImageURL: previewURL,
+				PreviewImageURL:    previewURL,
 			},
 		},
 	}
@@ -597,10 +597,10 @@ func (g *LineGateway) SendLocation(to, title, address string, lat, lon float64) 
 		To: to,
 		Messages: []lineMessageContent{
 			{
-				Type:    "location",
-				Title:   title,
-				Address: address,
-				Latitude: lat,
+				Type:      "location",
+				Title:     title,
+				Address:   address,
+				Latitude:  lat,
 				Longitude: lon,
 			},
 		},
@@ -716,8 +716,8 @@ type RichMenu struct {
 	Name        string       `json:"name"`
 	ChatBarText string       `json:"chatBarText"`
 	Areas       []struct {
-		Bounds   richMenuBounds `json:"bounds"`
-		Action   interface{}    `json:"action"`
+		Bounds richMenuBounds `json:"bounds"`
+		Action interface{}    `json:"action"`
 	} `json:"areas"`
 }
 

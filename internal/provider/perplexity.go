@@ -16,10 +16,10 @@ import (
 
 // PerplexityProvider implements the Perplexity API
 type PerplexityProvider struct {
-	apiKey   string
-	model    string
-	baseURL  string
-	client   *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // NewPerplexityProvider creates a new Perplexity provider
@@ -44,18 +44,18 @@ func (p *PerplexityProvider) Name() string {
 // GetCapabilities returns the capabilities of Perplexity
 func (p *PerplexityProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
 // Chat implements the Provider interface
 func (p *PerplexityProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -91,7 +91,7 @@ func (p *PerplexityProvider) Chat(ctx context.Context, messages []Message) (*Cha
 // ChatWithTools implements the ToolCaller interface
 func (p *PerplexityProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -127,7 +127,7 @@ func (p *PerplexityProvider) ChatWithTools(ctx context.Context, messages []Messa
 // Stream implements the Streamer interface
 func (p *PerplexityProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -159,9 +159,9 @@ func (p *PerplexityProvider) Stream(ctx context.Context, messages []Message, han
 // buildRequest builds the OpenAI-compatible request
 func (p *PerplexityProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
-		"model": p.model,
+		"model":    p.model,
 		"messages": p.convertMessages(messages),
-		"stream": stream,
+		"stream":   stream,
 	}
 
 	if len(tools) > 0 {

@@ -10,14 +10,14 @@ import (
 
 // Global flags
 var (
-	flagVerbose    bool
-	flagDebug      bool
-	flagConfig     string
-	flagOutput     string
-	flagNoColor    bool
-	flagMagicHome  string
-	flagProfile    string
-	flagVersion    bool
+	flagVerbose   bool
+	flagDebug     bool
+	flagConfig    string
+	flagOutput    string
+	flagNoColor   bool
+	flagMagicHome string
+	flagProfile   string
+	flagVersion   bool
 )
 
 var rootCmd = &cobra.Command{

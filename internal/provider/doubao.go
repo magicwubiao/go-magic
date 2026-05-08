@@ -16,11 +16,11 @@ import (
 
 // DoubaoProvider implements the Doubao (Volcengine) API
 type DoubaoProvider struct {
-	apiKey      string
-	model       string
-	baseURL     string
-	client      *http.Client
-	endpointID  string
+	apiKey     string
+	model      string
+	baseURL    string
+	client     *http.Client
+	endpointID string
 }
 
 // NewDoubaoProvider creates a new Doubao provider
@@ -57,18 +57,18 @@ func (p *DoubaoProvider) Name() string {
 // GetCapabilities returns the capabilities of Doubao
 func (p *DoubaoProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
 // Chat implements the Provider interface
 func (p *DoubaoProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -104,7 +104,7 @@ func (p *DoubaoProvider) Chat(ctx context.Context, messages []Message) (*ChatRes
 // ChatWithTools implements the ToolCaller interface
 func (p *DoubaoProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -140,7 +140,7 @@ func (p *DoubaoProvider) ChatWithTools(ctx context.Context, messages []Message, 
 // Stream implements the Streamer interface
 func (p *DoubaoProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -180,9 +180,9 @@ func (p *DoubaoProvider) getURL(path string) string {
 // buildRequest builds the OpenAI-compatible request
 func (p *DoubaoProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
-		"model": p.model,
+		"model":    p.model,
 		"messages": p.convertMessages(messages),
-		"stream": stream,
+		"stream":   stream,
 	}
 
 	if len(tools) > 0 {

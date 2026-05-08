@@ -13,7 +13,8 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
 
-	"encoding/json")
+	"encoding/json"
+)
 
 // Tool dependency graph - tools that must run alone (cannot parallelize with same tool or related)
 var (
@@ -336,10 +337,10 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 		toolCalls := make([]types.ToolCall, len(resp.ToolCalls))
 		for i, tc := range resp.ToolCalls {
 			toolCalls[i] = types.ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Type:      "function",
-				Function:  tc.Function,
+				ID:       tc.ID,
+				Name:     tc.Function.Name,
+				Type:     "function",
+				Function: tc.Function,
 			}
 		}
 
@@ -573,10 +574,10 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 		tcs := make([]types.ToolCall, len(toolCalls))
 		for i, tc := range toolCalls {
 			tcs[i] = types.ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Type:      "function",
-				Function:  tc.Function,
+				ID:       tc.ID,
+				Name:     tc.Function.Name,
+				Type:     "function",
+				Function: tc.Function,
 			}
 		}
 

@@ -317,4 +317,3 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 		"message": "Todo completed successfully",
 	}, nil
 }
-

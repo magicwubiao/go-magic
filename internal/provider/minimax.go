@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // MiniMaxProvider MiniMax (兼容OpenAI格式)
 type MiniMaxProvider struct {
@@ -27,9 +25,9 @@ func (p *MiniMaxProvider) Name() string {
 func (p *MiniMaxProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }

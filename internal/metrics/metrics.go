@@ -90,23 +90,23 @@ func NewHistogram(buckets []float64) *Histogram {
 func (h *Histogram) Observe(v float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	
+
 	// Update count (no need for atomic since we hold the mutex)
 	h.count++
-	
+
 	// Update sum
 	h.sum += v
-	
+
 	// Update min
 	if v < h.min {
 		h.min = v
 	}
-	
+
 	// Update max
 	if v > h.max {
 		h.max = v
 	}
-	
+
 	// Update bucket counts
 	for bound := range h.buckets {
 		if v <= bound {
@@ -120,26 +120,26 @@ func (h *Histogram) Percentile(p float64) float64 {
 	if h.Count() == 0 {
 		return 0
 	}
-	
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	
+
 	// Calculate count at percentile
 	target := float64(h.count) * p / 100.0
 	var cumulative int64
-	
+
 	bounds := make([]float64, 0, len(h.buckets))
 	for b := range h.buckets {
 		bounds = append(bounds, b)
 	}
-	
+
 	for i := 0; i < len(bounds)-1; i++ {
 		cumulative += h.buckets[bounds[i]]
 		if float64(cumulative) >= target {
 			return bounds[i]
 		}
 	}
-	
+
 	return bounds[len(bounds)-1]
 }
 
@@ -150,7 +150,9 @@ func (h *Histogram) Count() int64 {
 
 // Sum returns the sum of all observations
 func (h *Histogram) Sum() float64 {
-	h.mu.Lock(); defer h.mu.Unlock(); return h.sum
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sum
 }
 
 // Avg returns the average of all observations
@@ -183,52 +185,52 @@ func (h *Histogram) Max() float64 {
 // Metrics represents a collection of all metrics
 type Metrics struct {
 	// Perception layer metrics
-	PerceptionLatency   *Histogram `json:"perception_latency"`
-	IntentClassification *Counter  `json:"intent_classification"`
-	
+	PerceptionLatency    *Histogram `json:"perception_latency"`
+	IntentClassification *Counter   `json:"intent_classification"`
+
 	// Decision layer metrics
-	PlanningLatency     *Histogram `json:"planning_latency"`
-	AvgStepsPerPlan     *Gauge     `json:"avg_steps_per_plan"`
-	PlanAdjustments     *Counter   `json:"plan_adjustments"`
-	
+	PlanningLatency *Histogram `json:"planning_latency"`
+	AvgStepsPerPlan *Gauge     `json:"avg_steps_per_plan"`
+	PlanAdjustments *Counter   `json:"plan_adjustments"`
+
 	// Execution layer metrics
-	ExecutionLatency   *Histogram `json:"execution_latency"`
-	ExecutionSuccess   *Counter   `json:"execution_success"`
-	ExecutionFailure   *Counter   `json:"execution_failure"`
-	CheckpointsCreated *Counter    `json:"checkpoints_created"`
+	ExecutionLatency    *Histogram `json:"execution_latency"`
+	ExecutionSuccess    *Counter   `json:"execution_success"`
+	ExecutionFailure    *Counter   `json:"execution_failure"`
+	CheckpointsCreated  *Counter   `json:"checkpoints_created"`
 	CheckpointsRestored *Counter   `json:"checkpoints_restored"`
-	
+
 	// Memory metrics
-	MemorySize         *Gauge     `json:"memory_size_bytes"`
-	FTSQueryLatency    *Histogram `json:"fts_query_latency"`
-	MemoryRetrievalCount *Counter  `json:"memory_retrieval_count"`
-	CacheHits          *Counter   `json:"cache_hits"`
-	CacheMisses        *Counter   `json:"cache_misses"`
-	
+	MemorySize           *Gauge     `json:"memory_size_bytes"`
+	FTSQueryLatency      *Histogram `json:"fts_query_latency"`
+	MemoryRetrievalCount *Counter   `json:"memory_retrieval_count"`
+	CacheHits            *Counter   `json:"cache_hits"`
+	CacheMisses          *Counter   `json:"cache_misses"`
+
 	// Plugin metrics
-	PluginLoadCount    *Counter   `json:"plugin_load_count"`
-	PluginUsageCount   *Counter   `json:"plugin_usage_count"`
-	PluginErrors       *Counter   `json:"plugin_errors"`
-	
+	PluginLoadCount  *Counter `json:"plugin_load_count"`
+	PluginUsageCount *Counter `json:"plugin_usage_count"`
+	PluginErrors     *Counter `json:"plugin_errors"`
+
 	// Skill metrics
-	SkillsCreated      *Counter   `json:"skills_created"`
-	SkillUsageCount    *Counter   `json:"skill_usage_count"`
-	PatternDetections  *Counter   `json:"pattern_detections"`
-	
+	SkillsCreated     *Counter `json:"skills_created"`
+	SkillUsageCount   *Counter `json:"skill_usage_count"`
+	PatternDetections *Counter `json:"pattern_detections"`
+
 	// Trigger metrics
-	NudgeCount         *Counter   `json:"nudge_count"`
-	NudgeAcceptance    *Counter   `json:"nudge_acceptance"`
-	
+	NudgeCount      *Counter `json:"nudge_count"`
+	NudgeAcceptance *Counter `json:"nudge_acceptance"`
+
 	// Review metrics
-	ReviewCount        *Counter   `json:"review_count"`
-	
+	ReviewCount *Counter `json:"review_count"`
+
 	// System metrics
-	ActiveGoroutines   *Gauge     `json:"active_goroutines"`
-	Uptime             *Gauge     `json:"uptime_seconds"`
-	
+	ActiveGoroutines *Gauge `json:"active_goroutines"`
+	Uptime           *Gauge `json:"uptime_seconds"`
+
 	// Intent distribution
 	IntentDistribution map[string]*Counter
-	
+
 	startTime time.Time
 	mu        sync.RWMutex
 }
@@ -248,8 +250,8 @@ func NewMetrics() *Metrics {
 		CheckpointsRestored:  &Counter{},
 		MemorySize:           &Gauge{},
 		FTSQueryLatency:      NewHistogram([]float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5}),
-		MemoryRetrievalCount:  &Counter{},
-		CacheHits:             &Counter{},
+		MemoryRetrievalCount: &Counter{},
+		CacheHits:            &Counter{},
 		CacheMisses:          &Counter{},
 		PluginLoadCount:      &Counter{},
 		PluginUsageCount:     &Counter{},
@@ -265,7 +267,7 @@ func NewMetrics() *Metrics {
 		IntentDistribution:   make(map[string]*Counter),
 		startTime:            time.Now(),
 	}
-	
+
 	return m
 }
 
@@ -273,7 +275,7 @@ func NewMetrics() *Metrics {
 func (m *Metrics) RecordPerception(duration time.Duration, intent string) {
 	m.PerceptionLatency.Observe(duration.Seconds())
 	m.IntentClassification.Inc()
-	
+
 	// Track intent distribution
 	m.mu.Lock()
 	if _, ok := m.IntentDistribution[intent]; !ok {
@@ -369,14 +371,14 @@ func (m *Metrics) UpdateSystemMetrics() {
 
 // MetricsSnapshot represents a point-in-time snapshot of metrics
 type MetricsSnapshot struct {
-	Timestamp        time.Time `json:"timestamp"`
-	Perception      PerceptionMetrics `json:"perception"`
-	Planning        PlanningMetrics   `json:"planning"`
-	Execution       ExecutionMetrics  `json:"execution"`
-	Memory          MemoryMetrics     `json:"memory"`
-	Plugins         PluginMetrics     `json:"plugins"`
-	Skills          SkillMetrics      `json:"skills"`
-	Triggers        TriggerMetrics    `json:"triggers"`
+	Timestamp          time.Time         `json:"timestamp"`
+	Perception         PerceptionMetrics `json:"perception"`
+	Planning           PlanningMetrics   `json:"planning"`
+	Execution          ExecutionMetrics  `json:"execution"`
+	Memory             MemoryMetrics     `json:"memory"`
+	Plugins            PluginMetrics     `json:"plugins"`
+	Skills             SkillMetrics      `json:"skills"`
+	Triggers           TriggerMetrics    `json:"triggers"`
 	IntentDistribution map[string]uint64 `json:"intent_distribution"`
 }
 
@@ -391,22 +393,22 @@ type PerceptionMetrics struct {
 
 // PlanningMetrics represents planning layer snapshot
 type PlanningMetrics struct {
-	AvgLatencyMs    float64 `json:"avg_latency_ms"`
-	P50LatencyMs    float64 `json:"p50_latency_ms"`
-	P95LatencyMs    float64 `json:"p95_latency_ms"`
-	AvgSteps        int64   `json:"avg_steps"`
-	TotalAdjustments uint64 `json:"total_adjustments"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
+	P50LatencyMs     float64 `json:"p50_latency_ms"`
+	P95LatencyMs     float64 `json:"p95_latency_ms"`
+	AvgSteps         int64   `json:"avg_steps"`
+	TotalAdjustments uint64  `json:"total_adjustments"`
 }
 
 // ExecutionMetrics represents execution layer snapshot
 type ExecutionMetrics struct {
-	AvgLatencyMs     float64 `json:"avg_latency_ms"`
-	P50LatencyMs     float64 `json:"p50_latency_ms"`
-	P95LatencyMs     float64 `json:"p95_latency_ms"`
-	SuccessRate      float64 `json:"success_rate"`
-	TotalSuccess     uint64  `json:"total_success"`
-	TotalFailure     uint64  `json:"total_failure"`
-	Checkpoints      uint64  `json:"checkpoints_created"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	SuccessRate  float64 `json:"success_rate"`
+	TotalSuccess uint64  `json:"total_success"`
+	TotalFailure uint64  `json:"total_failure"`
+	Checkpoints  uint64  `json:"checkpoints_created"`
 }
 
 // MemoryMetrics represents memory layer snapshot
@@ -420,34 +422,34 @@ type MemoryMetrics struct {
 
 // PluginMetrics represents plugin layer snapshot
 type PluginMetrics struct {
-	TotalLoads   uint64 `json:"total_loads"`
-	TotalUsages  uint64 `json:"total_usages"`
-	TotalErrors  uint64 `json:"total_errors"`
+	TotalLoads  uint64 `json:"total_loads"`
+	TotalUsages uint64 `json:"total_usages"`
+	TotalErrors uint64 `json:"total_errors"`
 }
 
 // SkillMetrics represents skill layer snapshot
 type SkillMetrics struct {
-	TotalCreated    uint64 `json:"total_created"`
-	TotalUsages     uint64 `json:"total_usages"`
-	PatternsFound   uint64 `json:"patterns_found"`
+	TotalCreated  uint64 `json:"total_created"`
+	TotalUsages   uint64 `json:"total_usages"`
+	PatternsFound uint64 `json:"patterns_found"`
 }
 
 // TriggerMetrics represents trigger layer snapshot
 type TriggerMetrics struct {
-	TotalNudges     uint64 `json:"total_nudges"`
-	TotalAccepted   uint64 `json:"total_accepted"`
-	AcceptanceRate  float64 `json:"acceptance_rate"`
+	TotalNudges    uint64  `json:"total_nudges"`
+	TotalAccepted  uint64  `json:"total_accepted"`
+	AcceptanceRate float64 `json:"acceptance_rate"`
 }
 
 // Snapshot returns a point-in-time snapshot of all metrics
 func (m *Metrics) Snapshot() *MetricsSnapshot {
 	m.UpdateSystemMetrics()
-	
+
 	snapshot := &MetricsSnapshot{
-		Timestamp: time.Now(),
+		Timestamp:          time.Now(),
 		IntentDistribution: make(map[string]uint64),
 	}
-	
+
 	// Perception
 	snapshot.Perception = PerceptionMetrics{
 		AvgLatencyMs:    m.PerceptionLatency.Avg() * 1000,
@@ -456,7 +458,7 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		P99LatencyMs:    m.PerceptionLatency.Percentile(99) * 1000,
 		TotalClassified: m.IntentClassification.Value(),
 	}
-	
+
 	// Planning
 	snapshot.Planning = PlanningMetrics{
 		AvgLatencyMs:     m.PlanningLatency.Avg() * 1000,
@@ -465,7 +467,7 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		AvgSteps:         m.AvgStepsPerPlan.Value(),
 		TotalAdjustments: m.PlanAdjustments.Value(),
 	}
-	
+
 	// Execution
 	success := m.ExecutionSuccess.Value()
 	failure := m.ExecutionFailure.Value()
@@ -475,15 +477,15 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		successRate = float64(success) / float64(total)
 	}
 	snapshot.Execution = ExecutionMetrics{
-		AvgLatencyMs:  m.ExecutionLatency.Avg() * 1000,
-		P50LatencyMs:  m.ExecutionLatency.Percentile(50) * 1000,
-		P95LatencyMs:  m.ExecutionLatency.Percentile(95) * 1000,
-		SuccessRate:   successRate,
-		TotalSuccess:  success,
+		AvgLatencyMs: m.ExecutionLatency.Avg() * 1000,
+		P50LatencyMs: m.ExecutionLatency.Percentile(50) * 1000,
+		P95LatencyMs: m.ExecutionLatency.Percentile(95) * 1000,
+		SuccessRate:  successRate,
+		TotalSuccess: success,
 		TotalFailure: failure,
 		Checkpoints:  m.CheckpointsCreated.Value(),
 	}
-	
+
 	// Memory
 	hits := m.CacheHits.Value()
 	misses := m.CacheMisses.Value()
@@ -499,21 +501,21 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		CacheHitRate:      cacheHitRate,
 		TotalRetrievals:   m.MemoryRetrievalCount.Value(),
 	}
-	
+
 	// Plugins
 	snapshot.Plugins = PluginMetrics{
 		TotalLoads:  m.PluginLoadCount.Value(),
 		TotalUsages: m.PluginUsageCount.Value(),
 		TotalErrors: m.PluginErrors.Value(),
 	}
-	
+
 	// Skills
 	snapshot.Skills = SkillMetrics{
 		TotalCreated:  m.SkillsCreated.Value(),
 		TotalUsages:   m.SkillUsageCount.Value(),
 		PatternsFound: m.PatternDetections.Value(),
 	}
-	
+
 	// Triggers
 	nudges := m.NudgeCount.Value()
 	accepted := m.NudgeAcceptance.Value()
@@ -526,14 +528,14 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		TotalAccepted:  accepted,
 		AcceptanceRate: nudgeRate,
 	}
-	
+
 	// Intent distribution
 	m.mu.RLock()
 	for intent, counter := range m.IntentDistribution {
 		snapshot.IntentDistribution[intent] = counter.Value()
 	}
 	m.mu.RUnlock()
-	
+
 	return snapshot
 }
 
@@ -546,53 +548,52 @@ func (m *Metrics) ExportJSON() ([]byte, error) {
 func (m *Metrics) ExportPrometheus() string {
 	var sb strings.Builder
 	snapshot := m.Snapshot()
-	
+
 	// Helper to write metrics
 	writeMetric := func(name, help string, value interface{}) {
 		sb.WriteString(fmt.Sprintf("# HELP %s %s\n", name, help))
 		sb.WriteString(fmt.Sprintf("# TYPE %s gauge\n", name))
 		sb.WriteString(fmt.Sprintf("%s %v\n\n", name, value))
 	}
-	
+
 	// Perception
 	writeMetric("cortex_perception_latency_avg_ms", "Average perception latency in ms", snapshot.Perception.AvgLatencyMs)
 	writeMetric("cortex_perception_latency_p95_ms", "P95 perception latency in ms", snapshot.Perception.P95LatencyMs)
 	writeMetric("cortex_perception_classified_total", "Total intent classifications", snapshot.Perception.TotalClassified)
-	
+
 	// Planning
 	writeMetric("cortex_planning_latency_avg_ms", "Average planning latency in ms", snapshot.Planning.AvgLatencyMs)
 	writeMetric("cortex_planning_steps_avg", "Average steps per plan", snapshot.Planning.AvgSteps)
 	writeMetric("cortex_planning_adjustments_total", "Total plan adjustments", snapshot.Planning.TotalAdjustments)
-	
+
 	// Execution
 	writeMetric("cortex_execution_latency_avg_ms", "Average execution latency in ms", snapshot.Execution.AvgLatencyMs)
 	writeMetric("cortex_execution_success_rate", "Execution success rate", snapshot.Execution.SuccessRate)
 	writeMetric("cortex_execution_success_total", "Total successful executions", snapshot.Execution.TotalSuccess)
 	writeMetric("cortex_execution_failure_total", "Total failed executions", snapshot.Execution.TotalFailure)
 	writeMetric("cortex_checkpoints_created_total", "Total checkpoints created", snapshot.Execution.Checkpoints)
-	
+
 	// Memory
 	writeMetric("cortex_memory_size_bytes", "Memory store size in bytes", snapshot.Memory.SizeBytes)
 	writeMetric("cortex_memory_query_latency_avg_ms", "Average query latency in ms", snapshot.Memory.AvgQueryLatencyMs)
 	writeMetric("cortex_memory_cache_hit_rate", "Cache hit rate", snapshot.Memory.CacheHitRate)
-	
+
 	// Plugins
 	writeMetric("cortex_plugins_loaded_total", "Total plugin loads", snapshot.Plugins.TotalLoads)
 	writeMetric("cortex_plugins_usage_total", "Total plugin usages", snapshot.Plugins.TotalUsages)
 	writeMetric("cortex_plugins_errors_total", "Total plugin errors", snapshot.Plugins.TotalErrors)
-	
+
 	// Skills
 	writeMetric("cortex_skills_created_total", "Total skills created", snapshot.Skills.TotalCreated)
 	writeMetric("cortex_skills_usage_total", "Total skill usages", snapshot.Skills.TotalUsages)
-	
+
 	// Triggers
 	writeMetric("cortex_nudges_total", "Total nudges sent", snapshot.Triggers.TotalNudges)
 	writeMetric("cortex_nudges_accepted_total", "Total nudges accepted", snapshot.Triggers.TotalAccepted)
 	writeMetric("cortex_nudges_acceptance_rate", "Nudge acceptance rate", snapshot.Triggers.AcceptanceRate)
-	
+
 	return sb.String()
 }
-
 
 // Reset resets all metrics
 func (m *Metrics) Reset() {
@@ -622,7 +623,7 @@ func (m *Metrics) Reset() {
 	m.ReviewCount.Reset()
 	m.ActiveGoroutines.Set(0)
 	m.startTime = time.Now()
-	
+
 	m.mu.Lock()
 	m.IntentDistribution = make(map[string]*Counter)
 	m.mu.Unlock()

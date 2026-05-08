@@ -198,10 +198,10 @@ func (t *StdioTransport) Close() error {
 
 // HTTPTransport implements ACP transport over HTTP
 type HTTPTransport struct {
-	client   *http.Client
-	baseURL  string
-	headers  map[string]string
-	mu       sync.Mutex
+	client  *http.Client
+	baseURL string
+	headers map[string]string
+	mu      sync.Mutex
 }
 
 // NewHTTPTransport creates a new HTTP transport
@@ -397,12 +397,12 @@ func (t *SSETransport) Close() error {
 
 // TCPTransport implements ACP transport over TCP
 type TCPTransport struct {
-	conn        net.Conn
-	address     string
-	listener    net.Listener
-	isServer    bool
-	mu          sync.Mutex
-	readTimeout time.Duration
+	conn         net.Conn
+	address      string
+	listener     net.Listener
+	isServer     bool
+	mu           sync.Mutex
+	readTimeout  time.Duration
 	writeTimeout time.Duration
 }
 
@@ -628,4 +628,3 @@ func mustMarshal(v interface{}) json.RawMessage {
 	}
 	return data
 }
-

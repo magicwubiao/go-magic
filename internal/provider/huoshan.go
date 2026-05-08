@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // HuoshanProvider 火山方舟 (字节跳动，兼容OpenAI格式)
 type HuoshanProvider struct {
@@ -27,9 +25,9 @@ func (p *HuoshanProvider) Name() string {
 func (p *HuoshanProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }

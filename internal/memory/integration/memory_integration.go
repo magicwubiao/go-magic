@@ -12,8 +12,8 @@ import (
 
 // preferencePatterns defines patterns for extracting user preferences
 var preferencePatterns = []*struct {
-	pattern *regexp.Regexp
-	category string
+	pattern    *regexp.Regexp
+	category   string
 	importance float64
 }{
 	// User preferences

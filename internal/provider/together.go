@@ -16,10 +16,10 @@ import (
 
 // TogetherProvider implements the Together AI API
 type TogetherProvider struct {
-	apiKey   string
-	model    string
-	baseURL  string
-	client   *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // NewTogetherProvider creates a new Together AI provider
@@ -44,18 +44,18 @@ func (p *TogetherProvider) Name() string {
 // GetCapabilities returns the capabilities of Together AI
 func (p *TogetherProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
 // Chat implements the Provider interface
 func (p *TogetherProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -91,7 +91,7 @@ func (p *TogetherProvider) Chat(ctx context.Context, messages []Message) (*ChatR
 // ChatWithTools implements the ToolCaller interface
 func (p *TogetherProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -127,7 +127,7 @@ func (p *TogetherProvider) ChatWithTools(ctx context.Context, messages []Message
 // Stream implements the Streamer interface
 func (p *TogetherProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -159,9 +159,9 @@ func (p *TogetherProvider) Stream(ctx context.Context, messages []Message, handl
 // buildRequest builds the OpenAI-compatible request
 func (p *TogetherProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
-		"model": p.model,
+		"model":    p.model,
 		"messages": p.convertMessages(messages),
-		"stream": stream,
+		"stream":   stream,
 	}
 
 	if len(tools) > 0 {

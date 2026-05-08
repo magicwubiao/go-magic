@@ -24,42 +24,42 @@ const (
 
 // PluginManifest represents the complete manifest of a plugin
 type PluginManifest struct {
-	ID            string            `json:"id"`            // Unique identifier (kebab-case)
-	Name          string            `json:"name"`          // Display name
-	Version       string            `json:"version"`       // Semantic version
-	Description   string            `json:"description"`   // Brief description
-	LongDesc      string            `json:"long_desc"`     // Detailed description
-	Author        string            `json:"author"`        // Author name
-	AuthorEmail   string            `json:"author_email"`  // Author email
-	License       string            `json:"license"`       // License type
-	Homepage      string            `json:"homepage"`      // Plugin homepage
-	Repository    string            `json:"repository"`    // Source repository
-	Tags          []string          `json:"tags"`          // Searchable tags
-	Category      string            `json:"category"`      // Plugin category
-	APIVersion    string            `json:"api_version"`   // go-magic API version
-	MinAppVersion string            `json:"min_app_version"` // Minimum go-magic version
-	Type          PluginType        `json:"type"`          // Plugin implementation type
-	Entrypoint    string            `json:"entrypoint"`     // Main entry file
-	Permissions   []string          `json:"permissions"`   // Required permissions
-	Dependencies  []Dependency      `json:"dependencies"`  // Plugin dependencies
-	ConfigSchema  []ConfigField     `json:"config_schema"` // Configuration schema
-	Commands      []CommandSpec     `json:"commands"`      // CLI commands
-	Hooks         []string          `json:"hooks"`         // Lifecycle hooks
-	Events        []string          `json:"events"`        // Published events
-	Resources     []ResourceSpec    `json:"resources"`     // Bundled resources
-	CreatedAt     string            `json:"created_at"`    // Creation timestamp
-	UpdatedAt     string            `json:"updated_at"`    // Last update timestamp
+	ID            string         `json:"id"`              // Unique identifier (kebab-case)
+	Name          string         `json:"name"`            // Display name
+	Version       string         `json:"version"`         // Semantic version
+	Description   string         `json:"description"`     // Brief description
+	LongDesc      string         `json:"long_desc"`       // Detailed description
+	Author        string         `json:"author"`          // Author name
+	AuthorEmail   string         `json:"author_email"`    // Author email
+	License       string         `json:"license"`         // License type
+	Homepage      string         `json:"homepage"`        // Plugin homepage
+	Repository    string         `json:"repository"`      // Source repository
+	Tags          []string       `json:"tags"`            // Searchable tags
+	Category      string         `json:"category"`        // Plugin category
+	APIVersion    string         `json:"api_version"`     // go-magic API version
+	MinAppVersion string         `json:"min_app_version"` // Minimum go-magic version
+	Type          PluginType     `json:"type"`            // Plugin implementation type
+	Entrypoint    string         `json:"entrypoint"`      // Main entry file
+	Permissions   []string       `json:"permissions"`     // Required permissions
+	Dependencies  []Dependency   `json:"dependencies"`    // Plugin dependencies
+	ConfigSchema  []ConfigField  `json:"config_schema"`   // Configuration schema
+	Commands      []CommandSpec  `json:"commands"`        // CLI commands
+	Hooks         []string       `json:"hooks"`           // Lifecycle hooks
+	Events        []string       `json:"events"`          // Published events
+	Resources     []ResourceSpec `json:"resources"`       // Bundled resources
+	CreatedAt     string         `json:"created_at"`      // Creation timestamp
+	UpdatedAt     string         `json:"updated_at"`      // Last update timestamp
 }
 
 // PluginType represents the type of plugin implementation
 type PluginType string
 
 const (
-	TypeGo     PluginType = "go"      // Go plugin (.so)
-	TypeScript PluginType = "script"  // Script plugin (shell, python, etc.)
-	TypeBinary PluginType = "binary"  // Standalone binary
-	TypeWasm   PluginType = "wasm"    // WebAssembly plugin
-	TypeHTTP   PluginType = "http"    // HTTP-based remote plugin
+	TypeGo     PluginType = "go"     // Go plugin (.so)
+	TypeScript PluginType = "script" // Script plugin (shell, python, etc.)
+	TypeBinary PluginType = "binary" // Standalone binary
+	TypeWasm   PluginType = "wasm"   // WebAssembly plugin
+	TypeHTTP   PluginType = "http"   // HTTP-based remote plugin
 )
 
 // Dependency represents a plugin dependency
@@ -71,25 +71,25 @@ type Dependency struct {
 
 // ConfigField represents a configuration field schema
 type ConfigField struct {
-	Key          string      `json:"key"`           // Field key
-	Type         string      `json:"type"`          // Field type (string, int, bool, etc.)
-	Default      interface{} `json:"default"`       // Default value
-	Description  string      `json:"description"`   // Field description
-	Required     bool        `json:"required"`      // Is required
-	Options      []string    `json:"options"`       // Allowed values for enum
-	Min          *float64    `json:"min,omitempty"` // Minimum for numbers
-	Max          *float64    `json:"max,omitempty"` // Maximum for numbers
-	Pattern      string      `json:"pattern"`       // Regex pattern for strings
-	Sensitive    bool        `json:"sensitive"`      // Is sensitive (password, etc.)
-	EnvVar       string      `json:"env_var"`       // Environment variable fallback
+	Key         string      `json:"key"`           // Field key
+	Type        string      `json:"type"`          // Field type (string, int, bool, etc.)
+	Default     interface{} `json:"default"`       // Default value
+	Description string      `json:"description"`   // Field description
+	Required    bool        `json:"required"`      // Is required
+	Options     []string    `json:"options"`       // Allowed values for enum
+	Min         *float64    `json:"min,omitempty"` // Minimum for numbers
+	Max         *float64    `json:"max,omitempty"` // Maximum for numbers
+	Pattern     string      `json:"pattern"`       // Regex pattern for strings
+	Sensitive   bool        `json:"sensitive"`     // Is sensitive (password, etc.)
+	EnvVar      string      `json:"env_var"`       // Environment variable fallback
 }
 
 // CommandSpec defines a command provided by the plugin
 type CommandSpec struct {
-	Name        string   `json:"name"`        // Command name
-	Description string   `json:"description"` // Command description
-	Arguments   []string `json:"arguments"`   // Argument names
-	Flags       []FlagSpec `json:"flags"`     // Available flags
+	Name        string     `json:"name"`        // Command name
+	Description string     `json:"description"` // Command description
+	Arguments   []string   `json:"arguments"`   // Argument names
+	Flags       []FlagSpec `json:"flags"`       // Available flags
 }
 
 // FlagSpec defines a command flag
@@ -103,9 +103,9 @@ type FlagSpec struct {
 
 // ResourceSpec defines a bundled resource
 type ResourceSpec struct {
-	Name     string `json:"name"`     // Resource name
-	Type     string `json:"type"`     // Resource type (data, template, etc.)
-	Path     string `json:"path"`     // Relative path in plugin
+	Name     string `json:"name"`      // Resource name
+	Type     string `json:"type"`      // Resource type (data, template, etc.)
+	Path     string `json:"path"`      // Relative path in plugin
 	MimeType string `json:"mime_type"` // MIME type
 }
 
@@ -170,11 +170,11 @@ type Context struct {
 	DataDir     string                 // Plugin data directory
 	CacheDir    string                 // Plugin cache directory
 	ConfigDir   string                 // Plugin config directory
-	Config      map[string]interface{}  // Plugin configuration
+	Config      map[string]interface{} // Plugin configuration
 	SessionID   string                 // Current session ID
 	UserID      string                 // Current user ID
 	Logger      Logger                 // Plugin logger
-	Metadata    map[string]interface{}  // Additional metadata
+	Metadata    map[string]interface{} // Additional metadata
 }
 
 // Logger provides logging interface for plugins
@@ -213,26 +213,26 @@ func (l *SimpleLogger) Error(msg string, args ...interface{}) {
 
 // PluginInfo represents detailed runtime information about a plugin
 type PluginInfo struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Version     string                 `json:"version"`
-	Description string                 `json:"description"`
-	State       PluginState            `json:"state"`
-	Author      string                 `json:"author"`
-	Category    string                 `json:"category"`
-	Tags        []string               `json:"tags"`
-	StateInfo   string                 `json:"state_info"`   // Additional state info
-	EnabledAt   *time.Time             `json:"enabled_at"`   // When enabled
-	DisabledAt  *time.Time             `json:"disabled_at"`  // When disabled
-	LoadedAt    *time.Time             `json:"loaded_at"`    // When loaded
-	UnloadedAt  *time.Time             `json:"unloaded_at"`  // When unloaded
-	ErrorMsg    string                 `json:"error_msg"`    // Error message if state is error
-	Permissions []string               `json:"permissions"`   // Permissions granted
-	Commands    []string               `json:"commands"`     // Available commands
-	Hooks       []string               `json:"hooks"`       // Registered hooks
-	Dependents  []string               `json:"dependents"`   // Plugins depending on this
-	Dependencies []string              `json:"dependencies"` // Plugins this depends on
-	Config      map[string]interface{} `json:"config"`       // Current config
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Version      string                 `json:"version"`
+	Description  string                 `json:"description"`
+	State        PluginState            `json:"state"`
+	Author       string                 `json:"author"`
+	Category     string                 `json:"category"`
+	Tags         []string               `json:"tags"`
+	StateInfo    string                 `json:"state_info"`   // Additional state info
+	EnabledAt    *time.Time             `json:"enabled_at"`   // When enabled
+	DisabledAt   *time.Time             `json:"disabled_at"`  // When disabled
+	LoadedAt     *time.Time             `json:"loaded_at"`    // When loaded
+	UnloadedAt   *time.Time             `json:"unloaded_at"`  // When unloaded
+	ErrorMsg     string                 `json:"error_msg"`    // Error message if state is error
+	Permissions  []string               `json:"permissions"`  // Permissions granted
+	Commands     []string               `json:"commands"`     // Available commands
+	Hooks        []string               `json:"hooks"`        // Registered hooks
+	Dependents   []string               `json:"dependents"`   // Plugins depending on this
+	Dependencies []string               `json:"dependencies"` // Plugins this depends on
+	Config       map[string]interface{} `json:"config"`       // Current config
 }
 
 // SortPluginInfos sorts plugin info slice by name

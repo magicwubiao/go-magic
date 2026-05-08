@@ -28,7 +28,7 @@ const (
 // circuit breakers, and load balancing support
 type ProviderRouter struct {
 	providers    map[string]Provider
-	modelRouting map[string]string // model prefix -> provider name
+	modelRouting map[string]string   // model prefix -> provider name
 	fallbacks    map[string][]string // provider -> fallback providers
 	healthChecks map[string]*HealthCheck
 	loadBalance  LoadBalancingStrategy
@@ -70,29 +70,29 @@ type RouterConfig struct {
 // DefaultRouterConfig returns sensible router defaults
 func DefaultRouterConfig() *RouterConfig {
 	return &RouterConfig{
-		HealthCheckEnabled:     true,
-		HealthCheckInterval:    30 * time.Second,
-		HealthCheckTimeout:     10 * time.Second,
-		UnhealthyThreshold:     3,
-		HealthyThreshold:       2,
-		LoadBalancing:          RoundRobin,
-		EnableFallback:         true,
-		FallbackDelay:          500 * time.Millisecond,
-		CircuitBreakerEnabled:  true,
-		FailureThreshold:       5,
-		RecoveryTimeout:        60 * time.Second,
+		HealthCheckEnabled:    true,
+		HealthCheckInterval:   30 * time.Second,
+		HealthCheckTimeout:    10 * time.Second,
+		UnhealthyThreshold:    3,
+		HealthyThreshold:      2,
+		LoadBalancing:         RoundRobin,
+		EnableFallback:        true,
+		FallbackDelay:         500 * time.Millisecond,
+		CircuitBreakerEnabled: true,
+		FailureThreshold:      5,
+		RecoveryTimeout:       60 * time.Second,
 	}
 }
 
 // RouterStats tracks routing statistics
 type RouterStats struct {
-	mu              sync.RWMutex
-	TotalRequests   int64
-	FailedRequests  int64
-	SuccessRequests int64
+	mu                 sync.RWMutex
+	TotalRequests      int64
+	FailedRequests     int64
+	SuccessRequests    int64
 	RequestsByProvider map[string]int64
-	LastUsed        time.Time
-	LastError       error
+	LastUsed           time.Time
+	LastError          error
 }
 
 // HealthCheck represents a health check for a provider

@@ -16,10 +16,10 @@ import (
 
 // CohereProvider implements the Cohere API
 type CohereProvider struct {
-	apiKey   string
-	model    string
-	baseURL  string
-	client   *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // NewCohereProvider creates a new Cohere provider
@@ -44,11 +44,11 @@ func (p *CohereProvider) Name() string {
 // GetCapabilities returns the capabilities of Cohere
 func (p *CohereProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
@@ -60,20 +60,20 @@ type cohereMessage struct {
 
 // cohereRequest represents Cohere API request
 type cohereRequest struct {
-	Model         string            `json:"model"`
-	Message       string            `json:"message"`
-	ChatHistory   []cohereMessage   `json:"chat_history,omitempty"`
-	Temperature   *float64         `json:"temperature,omitempty"`
-	MaxTokens     *int             `json:"max_tokens,omitempty"`
-	Tools         []cohereTool      `json:"tools,omitempty"`
-	ToolResults   []cohereToolResult `json:"tool_results,omitempty"`
-	Stream        bool              `json:"stream,omitempty"`
+	Model       string             `json:"model"`
+	Message     string             `json:"message"`
+	ChatHistory []cohereMessage    `json:"chat_history,omitempty"`
+	Temperature *float64           `json:"temperature,omitempty"`
+	MaxTokens   *int               `json:"max_tokens,omitempty"`
+	Tools       []cohereTool       `json:"tools,omitempty"`
+	ToolResults []cohereToolResult `json:"tool_results,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
 }
 
 // cohereTool represents a tool definition for Cohere
 type cohereTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Name                 string                 `json:"name"`
+	Description          string                 `json:"description"`
 	ParameterDefinitions map[string]interface{} `json:"parameter_definitions"`
 }
 
@@ -87,11 +87,11 @@ type cohereToolResult struct {
 
 // cohereResponse represents Cohere API response
 type cohereResponse struct {
-	Text       string `json:"text"`
+	Text         string `json:"text"`
 	FinishReason string `json:"finish_reason,omitempty"`
-	ToolCalls  []struct {
-		ToolUseID string `json:"tool_use_id"`
-		Name      string `json:"name"`
+	ToolCalls    []struct {
+		ToolUseID  string                 `json:"tool_use_id"`
+		Name       string                 `json:"name"`
 		Parameters map[string]interface{} `json:"parameters"`
 	} `json:"tool_calls,omitempty"`
 	Tokens struct {
@@ -105,18 +105,18 @@ type cohereStreamChunk struct {
 	EventType string `json:"event_type"`
 	Text      string `json:"text,omitempty"`
 	ToolCalls []struct {
-		ToolUseID string `json:"tool_use_id"`
-		Name      string `json:"name"`
+		ToolUseID  string                 `json:"tool_use_id"`
+		Name       string                 `json:"name"`
 		Parameters map[string]interface{} `json:"parameters"`
 	} `json:"tool_calls,omitempty"`
-	GenerationID   string `json:"generation_id,omitempty"`
-	FinishReason  string `json:"finish_reason,omitempty"`
+	GenerationID string `json:"generation_id,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // Chat implements the Provider interface
 func (p *CohereProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -153,7 +153,7 @@ func (p *CohereProvider) Chat(ctx context.Context, messages []Message) (*ChatRes
 // ChatWithTools implements the ToolCaller interface
 func (p *CohereProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -190,7 +190,7 @@ func (p *CohereProvider) ChatWithTools(ctx context.Context, messages []Message, 
 // Stream implements the Streamer interface
 func (p *CohereProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -280,9 +280,9 @@ func (p *CohereProvider) convertTools(tools []map[string]interface{}) []cohereTo
 	for _, tool := range tools {
 		if fn, ok := tool["function"].(map[string]interface{}); ok {
 			ct := cohereTool{
-				Name:                  getString(fn, "name"),
-				Description:           getString(fn, "description"),
-				ParameterDefinitions:  make(map[string]interface{}),
+				Name:                 getString(fn, "name"),
+				Description:          getString(fn, "description"),
+				ParameterDefinitions: make(map[string]interface{}),
 			}
 
 			if params, ok := fn["parameters"].(map[string]interface{}); ok {

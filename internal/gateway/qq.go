@@ -20,10 +20,10 @@ type QQGateway struct {
 	appSecret string
 	token     string
 
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
 
 	callbackPort int
@@ -191,7 +191,7 @@ func (g *QQGateway) SendText(channelID string, text string) error {
 // sendQQMessage sends a single message via QQ API
 func (g *QQGateway) sendQQMessage(url, content string) error {
 	body := map[string]interface{}{
-		"content": content,
+		"content":  content,
 		"msg_type": 1, // 1 = text message
 	}
 
@@ -259,10 +259,10 @@ func (g *QQGateway) HandleSlashCommand(cmd string, msg Message) (Response, error
 func (g *QQGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
 		Platform:     "qq",
-		Connected:   g.IsConnected(),
-		CallbackOK:  false,
+		Connected:    g.IsConnected(),
+		CallbackOK:   false,
 		CallbackPort: g.callbackPort,
-		Details:     make(map[string]interface{}),
+		Details:      make(map[string]interface{}),
 	}
 
 	if !status.Connected {

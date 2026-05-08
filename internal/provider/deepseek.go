@@ -29,11 +29,11 @@ func (p *DeepSeekProvider) Name() string {
 // GetCapabilities returns the capabilities of DeepSeek
 func (p *DeepSeekProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 

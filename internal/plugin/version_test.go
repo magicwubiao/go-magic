@@ -60,12 +60,12 @@ func TestIsValidVersion(t *testing.T) {
 
 func TestParseVersionConstraint(t *testing.T) {
 	tests := []struct {
-		input      string
-		operator   string
-		major      int
-		hasMinor   bool
-		hasPatch   bool
-		wantErr    bool
+		input    string
+		operator string
+		major    int
+		hasMinor bool
+		hasPatch bool
+		wantErr  bool
 	}{
 		{"*", "*", 0, false, false, false},
 		{"latest", "latest", 0, false, false, false},
@@ -173,9 +173,9 @@ func TestVersionConstraintMatches(t *testing.T) {
 
 func TestCheckVersion(t *testing.T) {
 	tests := []struct {
-		version   string
+		version    string
 		constraint string
-		matches   bool
+		matches    bool
 	}{
 		{"1.0.0", ">=1.0.0", true},
 		{"1.0.0", "^1.0.0", true},

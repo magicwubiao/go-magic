@@ -17,11 +17,11 @@ import (
 // HTTP client configuration constants
 const (
 	DefaultTimeoutDuration = 180 * time.Second
-	DefaultMaxRetries     = 3
-	DefaultRetryDelay    = 1 * time.Second
-	MaxIdleConns         = 100
-	MaxIdleConnsPerHost  = 10
-	IdleConnTimeout      = 90 * time.Second
+	DefaultMaxRetries      = 3
+	DefaultRetryDelay      = 1 * time.Second
+	MaxIdleConns           = 100
+	MaxIdleConnsPerHost    = 10
+	IdleConnTimeout        = 90 * time.Second
 )
 
 // HTTPOption is a functional option for HTTP client configuration
@@ -62,39 +62,39 @@ type Usage struct {
 
 // ChatResponse extends types.ChatResponse with usage info
 type ExtendedChatResponse struct {
-	Content   string           `json:"content"`
-	ToolCalls []interface{}    `json:"tool_calls,omitempty"`
-	Usage     *Usage           `json:"usage,omitempty"`
+	Content   string        `json:"content"`
+	ToolCalls []interface{} `json:"tool_calls,omitempty"`
+	Usage     *Usage        `json:"usage,omitempty"`
 }
 
 // Capabilities declares what features a provider supports
 type Capabilities struct {
-	ToolCalling     bool `json:"tool_calling"`
-	Streaming       bool `json:"streaming"`
-	StreamingTools  bool `json:"streaming_tools"`
-	MultiModal      bool `json:"multi_modal"`
-	Vision          bool `json:"vision"`
+	ToolCalling    bool `json:"tool_calling"`
+	Streaming      bool `json:"streaming"`
+	StreamingTools bool `json:"streaming_tools"`
+	MultiModal     bool `json:"multi_modal"`
+	Vision         bool `json:"vision"`
 }
 
 // DefaultCapabilities returns default capabilities for OpenAI-compatible providers
 func DefaultCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
 // NoStreamCapabilities returns capabilities without streaming
 func NoStreamCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     false,
-		Streaming:       false,
-		StreamingTools:  false,
-		MultiModal:      false,
-		Vision:          false,
+		ToolCalling:    false,
+		Streaming:      false,
+		StreamingTools: false,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
@@ -123,8 +123,8 @@ type RequestMetrics struct {
 	mu             sync.RWMutex
 	TotalRequests  int64
 	FailedRequests int64
-	TotalLatency  time.Duration
-	TokenUsage    Usage
+	TotalLatency   time.Duration
+	TokenUsage     Usage
 }
 
 // AddRequest records a successful request
@@ -165,26 +165,26 @@ func (m *RequestMetrics) GetStats() (total, failed int64, avgLatency time.Durati
 // Inspired by Cortex Agent's Provider Resolution pattern with enhanced resilience features
 type BaseProvider struct {
 	// HTTP client configuration
-	Client        *http.Client
-	BaseURL       string
-	APIVersion    string
-	Timeout       time.Duration
-	
+	Client     *http.Client
+	BaseURL    string
+	APIVersion string
+	Timeout    time.Duration
+
 	// Authentication
-	APIKey        string
-	APIKeyPrefix   string // e.g., "Bearer" for OAuth or "sk-ant-api03" for Anthropic
-	
+	APIKey       string
+	APIKeyPrefix string // e.g., "Bearer" for OAuth or "sk-ant-api03" for Anthropic
+
 	// Retry and resilience
-	RetryConfig   *RetryConfig
-	RetryEnabled  bool
-	
+	RetryConfig  *RetryConfig
+	RetryEnabled bool
+
 	// Health and metrics
-	Metrics       *RequestMetrics
-	HealthStatus  HealthStatus
-	mu            sync.RWMutex
-	
+	Metrics      *RequestMetrics
+	HealthStatus HealthStatus
+	mu           sync.RWMutex
+
 	// Configuration validation
-	Validated     bool
+	Validated bool
 }
 
 // HealthStatus tracks provider health state for circuit breaker
@@ -202,9 +202,9 @@ type HealthStatus struct {
 type CircuitState int
 
 const (
-	CircuitClosed CircuitState = iota // Normal operation
-	CircuitOpen                      // Failing, reject requests
-	CircuitHalfOpen                  // Testing recovery
+	CircuitClosed   CircuitState = iota // Normal operation
+	CircuitOpen                         // Failing, reject requests
+	CircuitHalfOpen                     // Testing recovery
 )
 
 func (s CircuitState) String() string {
@@ -223,13 +223,13 @@ func (s CircuitState) String() string {
 // NewBaseProvider creates a new base provider with default configuration
 func NewBaseProvider(baseURL string) *BaseProvider {
 	return &BaseProvider{
-		Client:      NewHTTPClient(),
-		BaseURL:     strings.TrimRight(baseURL, "/"),
-		APIVersion:  "v1",
-		Timeout:     DefaultTimeoutDuration,
-		RetryConfig: DefaultRetryConfig(),
+		Client:       NewHTTPClient(),
+		BaseURL:      strings.TrimRight(baseURL, "/"),
+		APIVersion:   "v1",
+		Timeout:      DefaultTimeoutDuration,
+		RetryConfig:  DefaultRetryConfig(),
 		RetryEnabled: true,
-		Metrics:     &RequestMetrics{},
+		Metrics:      &RequestMetrics{},
 		HealthStatus: HealthStatus{
 			State: CircuitClosed,
 		},
@@ -239,13 +239,13 @@ func NewBaseProvider(baseURL string) *BaseProvider {
 // NewBaseProviderWithConfig creates a base provider with custom configuration
 func NewBaseProviderWithConfig(baseURL string, timeout time.Duration) *BaseProvider {
 	return &BaseProvider{
-		Client:      NewHTTPClient(WithTimeout(timeout)),
-		BaseURL:     strings.TrimRight(baseURL, "/"),
-		APIVersion:  "v1",
-		Timeout:     timeout,
-		RetryConfig: DefaultRetryConfig(),
+		Client:       NewHTTPClient(WithTimeout(timeout)),
+		BaseURL:      strings.TrimRight(baseURL, "/"),
+		APIVersion:   "v1",
+		Timeout:      timeout,
+		RetryConfig:  DefaultRetryConfig(),
 		RetryEnabled: true,
-		Metrics:     &RequestMetrics{},
+		Metrics:      &RequestMetrics{},
 		HealthStatus: HealthStatus{
 			State: CircuitClosed,
 		},
@@ -283,7 +283,7 @@ func (bp *BaseProvider) Validate() error {
 func (bp *BaseProvider) isHealthy() bool {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
-	
+
 	switch bp.HealthStatus.State {
 	case CircuitClosed:
 		return true
@@ -307,13 +307,13 @@ func (bp *BaseProvider) isHealthy() bool {
 func (bp *BaseProvider) RecordSuccess() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
-	
+
 	bp.HealthStatus.Successes++
 	bp.HealthStatus.LastSuccess = time.Now()
-	
+
 	// Reset failure count on success
 	bp.HealthStatus.Failures = 0
-	
+
 	// If in half-open state, return to closed
 	if bp.HealthStatus.State == CircuitHalfOpen {
 		bp.HealthStatus.State = CircuitClosed
@@ -326,13 +326,13 @@ func (bp *BaseProvider) RecordSuccess() {
 func (bp *BaseProvider) RecordFailure() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
-	
+
 	bp.HealthStatus.Failures++
 	bp.HealthStatus.LastFailure = time.Now()
-	
+
 	// Threshold for opening circuit (e.g., 5 failures)
 	const failureThreshold = 5
-	
+
 	if bp.HealthStatus.Failures >= failureThreshold && bp.HealthStatus.State == CircuitClosed {
 		bp.HealthStatus.State = CircuitOpen
 		bp.HealthStatus.CoolingDown = true
@@ -345,7 +345,7 @@ func (bp *BaseProvider) RecordFailure() {
 func (bp *BaseProvider) TransitionToHalfOpen() bool {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
-	
+
 	if bp.HealthStatus.State == CircuitOpen && bp.HealthStatus.CoolingDown {
 		coolDownDuration := bp.RetryConfig.InitialDelay * 2
 		if time.Since(bp.HealthStatus.CooledAt) > coolDownDuration {
@@ -374,25 +374,25 @@ func (bp *BaseProvider) DoRequest(ctx context.Context, method, url string, body 
 // doRequestWithRetry performs request with exponential backoff retry
 func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url string, body interface{}, headers map[string]string, attempt int) ([]byte, int, error) {
 	start := time.Now()
-	
+
 	var reqBody []byte
 	var err error
-	
+
 	if body != nil {
 		reqBody, err = json.Marshal(body)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to marshal request body: %w", err)
 		}
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	// Set default headers
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	// Set authentication header
 	if bp.APIKey != "" {
 		if bp.APIKeyPrefix != "" {
@@ -401,12 +401,12 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 			req.Header.Set("Authorization", "Bearer "+bp.APIKey)
 		}
 	}
-	
+
 	// Set custom headers
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	
+
 	resp, err := bp.Client.Do(req)
 	if err != nil {
 		bp.Metrics.AddFailure()
@@ -414,18 +414,18 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 		return nil, 0, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		bp.Metrics.AddFailure()
 		bp.RecordFailure()
 		return nil, resp.StatusCode, fmt.Errorf("failed to read response body: %w", err)
 	}
-	
+
 	// Check if we should retry based on status code
 	if bp.RetryEnabled && bp.shouldRetry(resp.StatusCode) && attempt < bp.RetryConfig.MaxRetries {
 		delay := bp.calculateRetryDelay(attempt)
-		
+
 		// Check for rate limiting headers
 		if resp.StatusCode == 429 {
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
@@ -434,10 +434,10 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 				}
 			}
 		}
-		
-		log.Debugf("Retrying request (attempt %d/%d) after %v due to status %d", 
+
+		log.Debugf("Retrying request (attempt %d/%d) after %v due to status %d",
 			attempt+1, bp.RetryConfig.MaxRetries, delay, resp.StatusCode)
-		
+
 		// Wait before retry with context cancellation support
 		select {
 		case <-time.After(delay):
@@ -446,18 +446,18 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 			return nil, 0, ctx.Err()
 		}
 	}
-	
+
 	if resp.StatusCode != http.StatusOK {
 		apiErr := bp.ParseAPIError(respBody, resp.StatusCode)
 		bp.Metrics.AddFailure()
 		bp.RecordFailure()
 		return respBody, resp.StatusCode, apiErr
 	}
-	
+
 	// Record success
 	bp.Metrics.AddRequest(time.Since(start), nil)
 	bp.RecordSuccess()
-	
+
 	return respBody, resp.StatusCode, nil
 }
 
@@ -479,7 +479,7 @@ func (bp *BaseProvider) calculateRetryDelay(attempt int) time.Duration {
 	if bp.RetryConfig == nil {
 		return DefaultRetryDelay
 	}
-	
+
 	delay := float64(bp.RetryConfig.InitialDelay) * powInt(bp.RetryConfig.BackoffFactor, attempt)
 	if delay > float64(bp.RetryConfig.MaxDelay) {
 		delay = float64(bp.RetryConfig.MaxDelay)
@@ -517,15 +517,15 @@ func (bp *BaseProvider) DoStreamRequest(ctx context.Context, url string, body in
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	
+
 	// Set authentication header
 	if bp.APIKey != "" {
 		if bp.APIKeyPrefix != "" {
@@ -534,11 +534,11 @@ func (bp *BaseProvider) DoStreamRequest(ctx context.Context, url string, body in
 			req.Header.Set("Authorization", "Bearer "+bp.APIKey)
 		}
 	}
-	
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	
+
 	return bp.Client.Do(req)
 }
 
@@ -552,11 +552,11 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 			Code    string `json:"code"`
 		} `json:"error"`
 	}
-	
+
 	if err := json.Unmarshal(body, &openAIErr); err == nil && openAIErr.Error.Message != "" {
 		return fmt.Errorf("api error [%s]: %s", openAIErr.Error.Type, openAIErr.Error.Message)
 	}
-	
+
 	// Try to parse as Anthropic error format
 	var anthropicErr struct {
 		Type    string `json:"type"`
@@ -566,7 +566,7 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	
+
 	if err := json.Unmarshal(body, &anthropicErr); err == nil {
 		if anthropicErr.Message != "" {
 			return fmt.Errorf("anthropic error: %s", anthropicErr.Message)
@@ -575,7 +575,7 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 			return fmt.Errorf("anthropic error [%s]: %s", anthropicErr.Error.Type, anthropicErr.Error.Message)
 		}
 	}
-	
+
 	// Try to parse as simple error with code/msg
 	var simpleErr struct {
 		Code    int    `json:"code"`
@@ -583,7 +583,7 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 		Message string `json:"message"`
 		Error   string `json:"error"`
 	}
-	
+
 	if err := json.Unmarshal(body, &simpleErr); err == nil {
 		msg := simpleErr.Msg
 		if msg == "" {
@@ -596,7 +596,7 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 			return fmt.Errorf("api error (%d): %s", statusCode, msg)
 		}
 	}
-	
+
 	// Try to parse as array of errors
 	var errArray []struct {
 		Message string `json:"message"`
@@ -607,7 +607,7 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 			return fmt.Errorf("api error [%s]: %s", errArray[0].Type, errArray[0].Message)
 		}
 	}
-	
+
 	return fmt.Errorf("api error (%d): %s", statusCode, string(body))
 }
 

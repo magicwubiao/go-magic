@@ -21,13 +21,13 @@ import (
 type URLType int
 
 const (
-	URLTypeUnknown URLType = iota
-	URLTypeGitHubRepo   // github.com tree view
-	URLTypeGitHubRaw    // raw.githubusercontent.com
-	URLTypeGist         // gist.github.com
-	URLTypeHTTPFile     // Regular HTTP file
-	URLTypeHTTPZip      // HTTP ZIP archive
-	URLTypeGitHubZip    // GitHub archive download
+	URLTypeUnknown    URLType = iota
+	URLTypeGitHubRepo         // github.com tree view
+	URLTypeGitHubRaw          // raw.githubusercontent.com
+	URLTypeGist               // gist.github.com
+	URLTypeHTTPFile           // Regular HTTP file
+	URLTypeHTTPZip            // HTTP ZIP archive
+	URLTypeGitHubZip          // GitHub archive download
 )
 
 // GitHub API types
@@ -53,23 +53,23 @@ type GitHubContent struct {
 
 // Gist file info
 type GistFile struct {
-	Filename    string `json:"filename"`
-	Content     string `json:"content"`
-	RawURL      string `json:"raw_url"`
-	Size        int    `json:"size"`
-	Type        string `json:"type"`
-	Language    string `json:"language"`
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+	RawURL   string `json:"raw_url"`
+	Size     int    `json:"size"`
+	Type     string `json:"type"`
+	Language string `json:"language"`
 }
 
 type GistInfo struct {
-	ID     string          `json:"id"`
-	Files  map[string]GistFile `json:"files"`
+	ID    string              `json:"id"`
+	Files map[string]GistFile `json:"files"`
 }
 
 // Downloader handles downloading skills from various URL sources
 type Downloader struct {
-	Client   *http.Client
-	TempDir  string
+	Client  *http.Client
+	TempDir string
 }
 
 // NewDownloader creates a new URL downloader
@@ -313,16 +313,16 @@ func (d *Downloader) DownloadGitHubZip(rawURL string) (string, error) {
 	// Convert github.com URL to archive URL
 	// https://github.com/user/repo/archive/refs/heads/main.zip
 	// or https://github.com/user/repo/archive/refs/tags/v1.0.zip
-	
+
 	re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/(archive|tarball)/(.+)`)
 	matches := re.FindStringSubmatch(rawURL)
-	
+
 	if len(matches) < 5 {
 		return "", fmt.Errorf("invalid GitHub archive URL format")
 	}
 
 	// Convert to zipball URL
-	zipURL := fmt.Sprintf("https://github.com/%s/%s/archive/%s.zip", 
+	zipURL := fmt.Sprintf("https://github.com/%s/%s/archive/%s.zip",
 		matches[1], matches[2], matches[4])
 
 	return d.DownloadHTTP(zipURL)

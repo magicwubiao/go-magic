@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"encoding/json"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // WeChatGateway implements the WeChat platform handler
@@ -25,10 +25,10 @@ type WeChatGateway struct {
 	tokenExpiresAt time.Time
 	encodingAESKey string
 
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
 
 	callbackPort int
@@ -62,7 +62,7 @@ func NewWeChatGateway(appID, appSecret, token, aesKey string) *WeChatGateway {
 		msgCh:          make(chan Message, 100),
 		stopCh:         make(chan struct{}),
 		callbackPort:   8083, // WeChat-specific port
-		apiBaseURL:    "https://api.weixin.qq.com",
+		apiBaseURL:     "https://api.weixin.qq.com",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -280,10 +280,10 @@ func (g *WeChatGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 func (g *WeChatGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
 		Platform:     "wechat",
-		Connected:   g.IsConnected(),
-		CallbackOK:  false,
+		Connected:    g.IsConnected(),
+		CallbackOK:   false,
 		CallbackPort: g.callbackPort,
-		Details:     make(map[string]interface{}),
+		Details:      make(map[string]interface{}),
 	}
 
 	if !status.Connected {

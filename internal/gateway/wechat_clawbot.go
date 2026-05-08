@@ -21,20 +21,32 @@ type WeChatClawConfig struct {
 	BaseURL string `json:"base_url"`
 	// Whether to auto-login (scan QR code) when no credentials
 	AutoLogin bool `json:"auto_login"`
+	// Max reconnection attempts on disconnect (default: 5)
+	MaxReconnectAttempts int `json:"max_reconnect_attempts"`
+	// Reconnection delay between attempts (default: 5s)
+	ReconnectDelay time.Duration `json:"reconnect_delay"`
 }
 
 // WeChatClawGateway implements WeChat personal account via ClawBot (iLink Bot API)
 type WeChatClawGateway struct {
-	config   WeChatClawConfig
-	client   *clawbot.DefaultClient
-	msgCh    chan Message
-	stopCh   chan struct{}
-	mu       sync.RWMutex
-	running  bool
-	loginMu  sync.Mutex
+	config  WeChatClawConfig
+	client  *clawbot.DefaultClient
+	msgCh   chan Message
+	stopCh  chan struct{}
+	mu      sync.RWMutex
+	running bool
+	loginMu sync.Mutex
 
-	// Message bridge to gateway
+	// Message bridge to agent (for Nudge system integration)
 	agentCh chan<- Message
+
+	// Reconnection state
+	reconnectCount int
+
+	// Health tracking
+	connectedAt time.Time
+	lastMsgTime time.Time
+	msgCount    int64
 }
 
 // NewWeChatClawGateway creates a new WeChat ClawBot gateway
@@ -48,10 +60,16 @@ func NewWeChatClawGateway(cfg WeChatClawConfig) *WeChatClawGateway {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://ilinkai.weixin.qq.com"
 	}
+	if cfg.MaxReconnectAttempts <= 0 {
+		cfg.MaxReconnectAttempts = 5
+	}
+	if cfg.ReconnectDelay <= 0 {
+		cfg.ReconnectDelay = 5 * time.Second
+	}
 
 	return &WeChatClawGateway{
 		config: cfg,
-		msgCh:  make(chan Message, 100),
+		msgCh:  make(chan Message, 200), // increased buffer for busy chats
 		stopCh: make(chan struct{}),
 	}
 }
@@ -69,6 +87,7 @@ func (g *WeChatClawGateway) Connect(ctx context.Context) error {
 		return nil
 	}
 	g.running = true
+	g.reconnectCount = 0
 	g.mu.Unlock()
 
 	log.Infof("[WeChat-ClawBot] Connecting... (data dir: %s)", g.config.DataDir)
@@ -76,13 +95,17 @@ func (g *WeChatClawGateway) Connect(ctx context.Context) error {
 	// Create filestore for credential persistence
 	fileStore := store.NewFileStore(g.config.DataDir)
 
-	// Create clawbot client with DefaultEventHooks (no generic state needed)
+	// Create clawbot client with DefaultEventHooks
 	g.client = clawbot.NewDefault(g.config.ClientID, fileStore,
 		clawbot.WithDefaultEventHooks(clawbot.DefaultEventHooks{
 			OnMessage: func(clientID string, msg *clawbot.Message) {
 				g.handleIncomingMessage(clientID, msg)
 			},
 			OnConnected: func(clientID string) {
+				g.mu.Lock()
+				g.connectedAt = time.Now()
+				g.reconnectCount = 0
+				g.mu.Unlock()
 				log.Infof("[WeChat-ClawBot:%s] Connected!", clientID)
 			},
 			OnQRCode: func(clientID string, qrURL string) {
@@ -97,9 +120,30 @@ func (g *WeChatClawGateway) Connect(ctx context.Context) error {
 			},
 			OnSessionExpired: func(clientID string) {
 				log.Warn("[WeChat-ClawBot] Session expired, need to re-login")
+				// If auto-login is enabled, trigger re-login
+				if g.config.AutoLogin {
+					go func() {
+						reCtx := context.Background()
+						if err := g.login(reCtx); err != nil {
+							log.Errorf("[WeChat-ClawBot] Re-login failed: %v", err)
+						} else {
+							log.Info("[WeChat-ClawBot] Re-login successful, restarting...")
+							if err := g.client.Start(reCtx); err != nil {
+								log.Errorf("[WeChat-ClawBot] Restart after re-login failed: %v", err)
+							}
+						}
+					}()
+				}
 			},
 			OnDisconnected: func(clientID string, err error) {
 				log.Warnf("[WeChat-ClawBot] Disconnected: %v", err)
+				// Auto-reconnect if running
+				g.mu.RLock()
+				running := g.running
+				g.mu.RUnlock()
+				if running {
+					go g.reconnect()
+				}
 			},
 			OnError: func(clientID string, err error) {
 				log.Errorf("[WeChat-ClawBot] Error: %v", err)
@@ -124,7 +168,7 @@ func (g *WeChatClawGateway) Connect(ctx context.Context) error {
 						log.Errorf("[WeChat-ClawBot] Start after login failed: %v", err)
 					}
 				} else {
-					log.Info("[WeChat-ClawBot] Auto-login disabled. Use command to login manually")
+					log.Info("[WeChat-ClawBot] Auto-login disabled. Use /login command to login manually")
 				}
 				return
 			}
@@ -134,6 +178,55 @@ func (g *WeChatClawGateway) Connect(ctx context.Context) error {
 
 	log.Info("[WeChat-ClawBot] Connection initiated")
 	return nil
+}
+
+// reconnect attempts to reconnect after a disconnect
+func (g *WeChatClawGateway) reconnect() {
+	g.mu.Lock()
+	if g.reconnectCount >= g.config.MaxReconnectAttempts {
+		g.mu.Unlock()
+		log.Errorf("[WeChat-ClawBot] Max reconnection attempts (%d) reached, giving up", g.config.MaxReconnectAttempts)
+		return
+	}
+	g.reconnectCount++
+	count := g.reconnectCount
+	g.mu.Unlock()
+
+	delay := g.config.ReconnectDelay * time.Duration(count)
+	log.Infof("[WeChat-ClawBot] Reconnecting in %v (attempt %d/%d)...", delay, count, g.config.MaxReconnectAttempts)
+
+	time.Sleep(delay)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := g.client.Start(ctx); err != nil {
+		if err == clawbot.ErrNotLoggedIn {
+			log.Info("[WeChat-ClawBot] Session lost, need to re-login")
+			if g.config.AutoLogin {
+				loginCtx := context.Background()
+				if err := g.login(loginCtx); err != nil {
+					log.Errorf("[WeChat-ClawBot] Re-login failed: %v", err)
+				} else {
+					if err := g.client.Start(loginCtx); err != nil {
+						log.Errorf("[WeChat-ClawBot] Start after re-login failed: %v", err)
+					} else {
+						g.mu.Lock()
+						g.reconnectCount = 0
+						g.mu.Unlock()
+					}
+				}
+			}
+		} else {
+			log.Warnf("[WeChat-ClawBot] Reconnect attempt %d failed: %v", count, err)
+			// Try again
+			go g.reconnect()
+		}
+	} else {
+		g.mu.Lock()
+		g.reconnectCount = 0
+		g.mu.Unlock()
+	}
 }
 
 // login performs QR code login
@@ -221,15 +314,26 @@ func (g *WeChatClawGateway) HandleSlashCommand(cmd string, msg Message) (Respons
 				"/help - Show this help\n" +
 				"/ping - Check bot status\n" +
 				"/status - Show connection status\n" +
-				"/login - Start QR code login",
+				"/login - Start QR code login\n" +
+				"/stats - Show message statistics",
 		}, nil
 	case "ping":
 		return Response{Content: "Pong! 🏓"}, nil
 	case "status":
 		if g.IsConnected() {
-			return Response{Content: "WeChat ClawBot is connected and ready!"}, nil
+			g.mu.RLock()
+			since := time.Since(g.connectedAt)
+			g.mu.RUnlock()
+			return Response{Content: fmt.Sprintf("WeChat ClawBot is connected and ready! (connected for %v)", since.Round(time.Second))}, nil
 		}
 		return Response{Content: "WeChat ClawBot is not connected"}, nil
+	case "stats":
+		g.mu.RLock()
+		count := g.msgCount
+		lastMsg := g.lastMsgTime
+		g.mu.RUnlock()
+		msg := fmt.Sprintf("📊 Message Statistics:\n  Total messages: %d\n  Last message: %v", count, lastMsg.Format("15:04:05"))
+		return Response{Content: msg}, nil
 	case "login":
 		ctx := context.Background()
 		if err := g.login(ctx); err != nil {
@@ -252,6 +356,16 @@ func (g *WeChatClawGateway) CheckHealth() *HealthStatus {
 	status.Details["data_dir"] = g.config.DataDir
 	status.Details["client_id"] = g.config.ClientID
 
+	g.mu.RLock()
+	if !g.connectedAt.IsZero() {
+		status.Details["connected_since"] = g.connectedAt.Format(time.RFC3339)
+	}
+	status.Details["msg_count"] = g.msgCount
+	if !g.lastMsgTime.IsZero() {
+		status.Details["last_msg_at"] = g.lastMsgTime.Format(time.RFC3339)
+	}
+	g.mu.RUnlock()
+
 	if g.client != nil {
 		status.Details["state"] = g.client.State().String()
 		status.Details["has_credentials"] = g.client.HasCredentials()
@@ -264,21 +378,39 @@ func (g *WeChatClawGateway) CheckHealth() *HealthStatus {
 	return status
 }
 
-// SetAgentChannel sets the agent message channel for bridging
+// SetAgentChannel sets the agent message channel for bridging (for Nudge system)
 func (g *WeChatClawGateway) SetAgentChannel(ch chan<- Message) {
 	g.agentCh = ch
 }
 
 // handleIncomingMessage converts ClawBot message to gateway.Message
+// and forwards it to both msgCh and agentCh (if configured)
 func (g *WeChatClawGateway) handleIncomingMessage(clientID string, msg *clawbot.Message) {
 	if msg == nil {
 		return
 	}
 
+	// Update stats
+	g.mu.Lock()
+	g.msgCount++
+	g.lastMsgTime = time.Now()
+	g.mu.Unlock()
+
 	// Extract sender info for ChannelID
 	channelID := msg.From
 	if channelID == "" {
 		channelID = msg.To
+	}
+
+	// Determine message type based on ClawBot message fields
+	msgType := "text"
+	switch {
+	case len(msg.Images) > 0:
+		msgType = "image"
+	case msg.Voice != nil:
+		msgType = "voice"
+	case len(msg.Files) > 0:
+		msgType = "file"
 	}
 
 	gatewayMsg := Message{
@@ -292,9 +424,11 @@ func (g *WeChatClawGateway) handleIncomingMessage(clientID string, msg *clawbot.
 			"client_id": clientID,
 			"from":      msg.From,
 			"to":        msg.To,
+			"msg_type":  msgType,
 		},
 	}
 
+	// Send to main message channel (for gateway processing)
 	select {
 	case g.msgCh <- gatewayMsg:
 		truncated := msg.Text
@@ -304,6 +438,16 @@ func (g *WeChatClawGateway) handleIncomingMessage(clientID string, msg *clawbot.
 		log.Debugf("[WeChat-ClawBot] Message received from %s: %s", msg.From, truncated)
 	default:
 		log.Warnf("[WeChat-ClawBot] Message channel full, dropping message from %s", msg.From)
+	}
+
+	// Also forward to agent channel if configured (for Nudge system / async processing)
+	if g.agentCh != nil {
+		select {
+		case g.agentCh <- gatewayMsg:
+			// forwarded to agent
+		default:
+			// agent channel full, skip (non-blocking)
+		}
 	}
 }
 

@@ -15,7 +15,7 @@ type ConfigManager struct {
 	mu        sync.RWMutex
 	configs   map[string]map[string]interface{} // pluginID -> config
 	defaults  map[string]map[string]interface{} // pluginID -> defaults
-	schema    map[string][]ConfigField         // pluginID -> schema
+	schema    map[string][]ConfigField          // pluginID -> schema
 	configDir string
 }
 
@@ -29,9 +29,9 @@ func NewConfigManager(configDir string) (*ConfigManager, error) {
 	os.MkdirAll(configDir, 0755)
 
 	cm := &ConfigManager{
-		configs:  make(map[string]map[string]interface{}),
-		defaults: make(map[string]map[string]interface{}),
-		schema:  make(map[string][]ConfigField),
+		configs:   make(map[string]map[string]interface{}),
+		defaults:  make(map[string]map[string]interface{}),
+		schema:    make(map[string][]ConfigField),
 		configDir: configDir,
 	}
 

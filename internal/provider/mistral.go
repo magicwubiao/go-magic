@@ -16,10 +16,10 @@ import (
 
 // MistralProvider implements the Mistral AI API
 type MistralProvider struct {
-	apiKey   string
-	model    string
-	baseURL  string
-	client   *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // NewMistralProvider creates a new Mistral AI provider
@@ -44,18 +44,18 @@ func (p *MistralProvider) Name() string {
 // GetCapabilities returns the capabilities of Mistral AI
 func (p *MistralProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }
 
 // Chat implements the Provider interface
 func (p *MistralProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -91,7 +91,7 @@ func (p *MistralProvider) Chat(ctx context.Context, messages []Message) (*ChatRe
 // ChatWithTools implements the ToolCaller interface
 func (p *MistralProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -127,7 +127,7 @@ func (p *MistralProvider) ChatWithTools(ctx context.Context, messages []Message,
 // Stream implements the Streamer interface
 func (p *MistralProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -159,9 +159,9 @@ func (p *MistralProvider) Stream(ctx context.Context, messages []Message, handle
 // buildRequest builds the request
 func (p *MistralProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
-		"model": p.model,
+		"model":    p.model,
 		"messages": p.convertMessages(messages),
-		"stream": stream,
+		"stream":   stream,
 	}
 
 	if len(tools) > 0 {

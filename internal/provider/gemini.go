@@ -16,10 +16,10 @@ import (
 
 // GeminiProvider implements the Google Gemini API
 type GeminiProvider struct {
-	apiKey      string
-	model       string
-	baseURL     string
-	client      *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // NewGeminiProvider creates a new Gemini provider
@@ -44,18 +44,18 @@ func (p *GeminiProvider) Name() string {
 // GetCapabilities returns the capabilities of Gemini
 func (p *GeminiProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }
 
 // geminiContent represents a content part in Gemini
 type geminiContent struct {
-	Role  string        `json:"role,omitempty"`
-	Parts []geminiPart  `json:"parts"`
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
 }
 
 // geminiPart represents a part of content
@@ -63,12 +63,12 @@ type geminiPart struct {
 	Text string `json:"text,omitempty"`
 	// For function calling
 	FunctionCall *struct {
-		Name      string                 `json:"name"`
-		Args      map[string]interface{} `json:"args"`
+		Name string                 `json:"name"`
+		Args map[string]interface{} `json:"args"`
 	} `json:"functionCall,omitempty"`
 	FunctionResponse *struct {
-		Name       string                 `json:"name"`
-		Response   map[string]interface{} `json:"response"`
+		Name     string                 `json:"name"`
+		Response map[string]interface{} `json:"response"`
 	} `json:"functionResponse,omitempty"`
 	// For media
 	InlineData *struct {
@@ -79,10 +79,10 @@ type geminiPart struct {
 
 // geminiRequest represents Gemini API request
 type geminiRequest struct {
-	Contents           []geminiContent       `json:"contents"`
-	SystemInstruction *geminiContent        `json:"systemInstruction,omitempty"`
-	Tools             []geminiTool          `json:"tools,omitempty"`
-	GenerationConfig   *geminiGenerationConfig `json:"generationConfig,omitempty"`
+	Contents          []geminiContent         `json:"contents"`
+	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
 
 // geminiTool represents a tool definition
@@ -92,18 +92,18 @@ type geminiTool struct {
 
 // geminiFunctionDeclaration represents a function declaration
 type geminiFunctionDeclaration struct {
-	Name        string                    `json:"name"`
-	Description string                    `json:"description"`
-	Parameters  *geminiSchema             `json:"parameters"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Parameters  *geminiSchema `json:"parameters"`
 }
 
 // geminiSchema represents a JSON schema
 type geminiSchema struct {
-	Type        string                  `json:"type"`
-	Properties  map[string]interface{}  `json:"properties,omitempty"`
-	Required    []string                `json:"required,omitempty"`
-	Description string                  `json:"description,omitempty"`
-	Items       *geminiSchema           `json:"items,omitempty"`
+	Type        string                 `json:"type"`
+	Properties  map[string]interface{} `json:"properties,omitempty"`
+	Required    []string               `json:"required,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Items       *geminiSchema          `json:"items,omitempty"`
 }
 
 // geminiGenerationConfig represents generation configuration
@@ -119,11 +119,11 @@ type geminiGenerationConfig struct {
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
-			Role  string        `json:"role"`
-			Parts []geminiPart  `json:"parts"`
+			Role  string       `json:"role"`
+			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
-		FinishReason   string `json:"finishReason"`
-		Index          int    `json:"index"`
+		FinishReason  string `json:"finishReason"`
+		Index         int    `json:"index"`
 		SafetyRatings []struct {
 			Category    string `json:"category"`
 			Probability string `json:"probability"`
@@ -136,9 +136,9 @@ type geminiResponse struct {
 		} `json:"safetyRatings"`
 	} `json:"promptFeedback"`
 	UsageMetadata struct {
-		PromptTokenCount         int `json:"promptTokenCount"`
-		CandidatesTokenCount     int `json:"candidatesTokenCount"`
-		TotalTokenCount          int `json:"totalTokenCount"`
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -146,23 +146,23 @@ type geminiResponse struct {
 type geminiStreamChunk struct {
 	Candidates []struct {
 		Content struct {
-			Role  string        `json:"role"`
-			Parts []geminiPart  `json:"parts"`
+			Role  string       `json:"role"`
+			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
 		FinishReason string `json:"finishReason"`
 		Index        int    `json:"index"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount         int `json:"promptTokenCount"`
-		CandidatesTokenCount     int `json:"candidatesTokenCount"`
-		TotalTokenCount          int `json:"totalTokenCount"`
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 }
 
 // Chat implements the Provider interface
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -197,7 +197,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message) (*ChatRes
 // ChatWithTools implements the ToolCaller interface
 func (p *GeminiProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -232,7 +232,7 @@ func (p *GeminiProvider) ChatWithTools(ctx context.Context, messages []Message, 
 // Stream implements the Streamer interface
 func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -262,7 +262,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Skip empty lines and "data:" prefix
 		if line == "" || strings.HasPrefix(line, "data:") {
 			continue
@@ -337,8 +337,8 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 		if msg.ToolCallID != "" {
 			part = geminiPart{
 				FunctionResponse: &struct {
-					Name       string                 `json:"name"`
-					Response   map[string]interface{} `json:"response"`
+					Name     string                 `json:"name"`
+					Response map[string]interface{} `json:"response"`
 				}{
 					Name:     msg.ToolCallID,
 					Response: map[string]interface{}{"result": msg.Content},
@@ -355,7 +355,7 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 	}
 
 	req := &geminiRequest{
-		Contents:           contents,
+		Contents:          contents,
 		SystemInstruction: systemInstruction,
 	}
 
@@ -445,8 +445,8 @@ func (p *GeminiProvider) parseResponse(body []byte) (*ChatResponse, error) {
 
 		if part.FunctionCall != nil {
 			tc := types.ToolCall{
-				ID:       fmt.Sprintf("call_%d", time.Now().UnixNano()),
-				Type:     "function",
+				ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
+				Type: "function",
 				Function: types.Function{
 					Name:      part.FunctionCall.Name,
 					Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),

@@ -417,9 +417,9 @@ func (m *Manager) GetDeniedCommands() []*CommandPattern {
 
 // PatternMatchResult contains the result of a pattern match
 type PatternMatchResult struct {
-	Matched    bool
-	Pattern    string
-	Variables  map[string]string // Extracted variables from wildcard matches
+	Matched   bool
+	Pattern   string
+	Variables map[string]string // Extracted variables from wildcard matches
 }
 
 // CLIConfirm prompts user for confirmation in terminal

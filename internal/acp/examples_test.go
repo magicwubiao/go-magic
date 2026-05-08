@@ -35,9 +35,9 @@ func ExampleUsage() {
 func ExampleServer() {
 	// Create server info
 	info := AgentInfo{
-		ID:       "my-agent",
-		Name:     "My Agent",
-		Version:  "1.0.0",
+		ID:      "my-agent",
+		Name:    "My Agent",
+		Version: "1.0.0",
 		Capabilities: []string{
 			"skill/call",
 			"skill/list",

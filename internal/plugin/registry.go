@@ -9,35 +9,35 @@ import (
 
 // Registry manages plugin registration and discovery
 type Registry struct {
-	mu          sync.RWMutex
-	plugins     map[string]*PluginEntry
-	index       *PluginIndex
-	eventBus    *RegistryEventBus
+	mu       sync.RWMutex
+	plugins  map[string]*PluginEntry
+	index    *PluginIndex
+	eventBus *RegistryEventBus
 }
 
 // PluginEntry represents a registered plugin entry
 type PluginEntry struct {
-	Plugin    Plugin
-	Manifest  *PluginManifest
-	State     PluginState
-	Info      *PluginInfo
-	RefCount  int // Number of other plugins depending on this
-	mu        sync.RWMutex
+	Plugin   Plugin
+	Manifest *PluginManifest
+	State    PluginState
+	Info     *PluginInfo
+	RefCount int // Number of other plugins depending on this
+	mu       sync.RWMutex
 }
 
 // PluginIndex provides fast lookup by various criteria
 type PluginIndex struct {
-	mu      sync.RWMutex
-	byName  map[string]string   // name -> id
-	byTag   map[string][]string // tag -> []id
-	byCat   map[string][]string // category -> []id
-	byDep   map[string][]string // plugin -> []dependents
+	mu     sync.RWMutex
+	byName map[string]string   // name -> id
+	byTag  map[string][]string // tag -> []id
+	byCat  map[string][]string // category -> []id
+	byDep  map[string][]string // plugin -> []dependents
 }
 
 // RegistryEventBus notifies on registry changes
 type RegistryEventBus struct {
-	mu         sync.RWMutex
-	listeners  map[string][]RegistryListener
+	mu        sync.RWMutex
+	listeners map[string][]RegistryListener
 }
 
 // RegistryListener receives registry events
@@ -520,11 +520,11 @@ func toPluginInfo(m *PluginManifest, state PluginState) *PluginInfo {
 
 // Registry event types
 const (
-	EventRegister       = "register"
-	EventUnregister     = "unregister"
-	EventStateChange    = "state_change"
-	EventEnable         = "enable"
-	EventDisable        = "disable"
+	EventRegister    = "register"
+	EventUnregister  = "unregister"
+	EventStateChange = "state_change"
+	EventEnable      = "enable"
+	EventDisable     = "disable"
 )
 
 // notify notifies listeners of an event

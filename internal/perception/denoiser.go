@@ -15,20 +15,20 @@ type Denoiser struct {
 func NewDenoiser() *Denoiser {
 	return &Denoiser{
 		commonTypos: map[string]string{
-			"pyhton":      "python",
-			"javasript":   "javascript",
-			"typesript":   "typescript",
-			"javscript":   "javascript",
-			"golang":      "go",
-			"dockerfile":  "Dockerfile",
-			"json file":   "JSON file",
-			"csv file":    "CSV file",
-			"dont":        "don't",
-			"cant":        "can't",
-			"wont":        "won't",
-			"im":          "I'm",
-			"ive":         "I've",
-			"youre":       "you're",
+			"pyhton":     "python",
+			"javasript":  "javascript",
+			"typesript":  "typescript",
+			"javscript":  "javascript",
+			"golang":     "go",
+			"dockerfile": "Dockerfile",
+			"json file":  "JSON file",
+			"csv file":   "CSV file",
+			"dont":       "don't",
+			"cant":       "can't",
+			"wont":       "won't",
+			"im":         "I'm",
+			"ive":        "I've",
+			"youre":      "you're",
 		},
 	}
 }
@@ -36,8 +36,8 @@ func NewDenoiser() *Denoiser {
 // detectNoise analyzes input for potential issues
 func (p *Parser) detectNoise(input string) NoiseDetection {
 	result := NoiseDetection{
-		HasNoise:   false,
-		NoiseTypes: make([]NoiseType, 0),
+		HasNoise:    false,
+		NoiseTypes:  make([]NoiseType, 0),
 		Suggestions: make([]string, 0),
 	}
 

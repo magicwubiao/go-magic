@@ -9,19 +9,19 @@ import (
 
 // OpenClawSkill represents an OpenClaw format skill
 type OpenClawSkill struct {
-	Name             string
-	Description      string
-	Version          string
-	Author           string
-	License          string
-	Tags             []string
-	Tools            []string
+	Name              string
+	Description       string
+	Version           string
+	Author            string
+	License           string
+	Tags              []string
+	Tools             []string
 	TriggerConditions []string
-	Steps            []string
-	Content          string
-	CodeFiles        map[string]string // filename -> content
-	CodeLanguage     string
-	SourcePath       string
+	Steps             []string
+	Content           string
+	CodeFiles         map[string]string // filename -> content
+	CodeLanguage      string
+	SourcePath        string
 }
 
 // OpenClawParser parses OpenClaw format skills
@@ -148,8 +148,8 @@ func (p *OpenClawParser) ParseFromFiles(files map[string]string) (*OpenClawSkill
 	}
 
 	skill := &OpenClawSkill{
-		Content:    content,
-		CodeFiles:  make(map[string]string),
+		Content:   content,
+		CodeFiles: make(map[string]string),
 	}
 
 	// Parse frontmatter fields

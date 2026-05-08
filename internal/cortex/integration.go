@@ -23,13 +23,13 @@ import (
 // 6. Memory Manager with Frozen Snapshot
 type Manager struct {
 	baseDir        string
-	Snapshot       *memory.SnapshotManager  // System 4: Frozen snapshot memory
-	Trigger        *trigger.MessageTrigger  // System 1 + 2: Nudge mechanism
-	Review         *review.BackgroundReview // System 3: Background review
-	Perception     *perception.Parser      // Layer 1: Intent classification
-	Cognition      *cognition.Planner       // Layer 2: Planning and decision making
-	Execution      *execution.Manager        // Layer 3: Checkpoint + Resume
-	FTSMemory      *memory.FTSStore        // System 5: FTS full-text search
+	Snapshot       *memory.SnapshotManager     // System 4: Frozen snapshot memory
+	Trigger        *trigger.MessageTrigger     // System 1 + 2: Nudge mechanism
+	Review         *review.BackgroundReview    // System 3: Background review
+	Perception     *perception.Parser          // Layer 1: Intent classification
+	Cognition      *cognition.Planner          // Layer 2: Planning and decision making
+	Execution      *execution.Manager          // Layer 3: Checkpoint + Resume
+	FTSMemory      *memory.FTSStore            // System 5: FTS full-text search
 	SkillCreator   *skills.EnhancedAutoCreator // System 6: Auto skill evolution
 	LastPerception *perception.PerceptionResult
 	LastDecision   *cognition.Decision   // Last cognition decision

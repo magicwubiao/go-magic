@@ -30,7 +30,7 @@ func (p *Parser) Parse(skillDir string) (*ParseResult, error) {
 
 	// Get the skill.md path
 	skillMdPath := filepath.Join(skillDir, "SKILL.md")
-	
+
 	_, err = os.ReadFile(skillMdPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read SKILL.md: %w", err)

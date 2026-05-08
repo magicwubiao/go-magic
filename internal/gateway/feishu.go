@@ -3,7 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
-	
+
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,24 +17,24 @@ import (
 
 // FeishuGateway implements the Feishu (Lark) platform handler
 type FeishuGateway struct {
-	appID      string
-	appSecret  string
+	appID             string
+	appSecret         string
 	verificationToken string
-	encryptKey string
-	
+	encryptKey        string
+
 	tenantAccessToken string
 	tokenExpiresAt    time.Time
 	tokenMu           sync.RWMutex
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	// Configurable callback port
 	callbackPort int
-	
+
 	// Reconnection config
 	maxRetries     int
 	retryDelay     time.Duration
@@ -44,11 +44,11 @@ type FeishuGateway struct {
 // NewFeishuGateway creates a new Feishu gateway
 func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
 	return &FeishuGateway{
-		appID:      appID,
-		appSecret:  appSecret,
-		agents:     make(map[string]*AgentSession),
-		msgCh:      make(chan Message, 100),
-		stopCh:     make(chan struct{}),
+		appID:        appID,
+		appSecret:    appSecret,
+		agents:       make(map[string]*AgentSession),
+		msgCh:        make(chan Message, 100),
+		stopCh:       make(chan struct{}),
 		callbackPort: 8081,
 		maxRetries:   5,
 		retryDelay:   time.Second * 5,
@@ -71,19 +71,19 @@ func (g *FeishuGateway) Connect(ctx context.Context) error {
 	g.mu.Unlock()
 
 	log.Infof("Connecting to Feishu gateway...")
-	
+
 	// Get initial token
 	if err := g.refreshToken(); err != nil {
 		log.Errorf("Failed to get Feishu token: %v", err)
 		return err
 	}
-	
+
 	// Start token refresh goroutine
 	go g.tokenRefresher()
-	
+
 	// Start callback server
 	go g.startCallbackServer()
-	
+
 	log.Info("Feishu gateway connected")
 	return nil
 }
@@ -92,15 +92,15 @@ func (g *FeishuGateway) Connect(ctx context.Context) error {
 func (g *FeishuGateway) Disconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	if !g.running {
 		return nil
 	}
-	
+
 	close(g.stopCh)
 	g.running = false
 	g.currentRetries = 0
-	
+
 	log.Info("Feishu gateway disconnected")
 	return nil
 }
@@ -148,10 +148,10 @@ func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 func (g *FeishuGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
 		Platform:     "feishu",
-		Connected:   g.IsConnected(),
-		CallbackOK:  false,
+		Connected:    g.IsConnected(),
+		CallbackOK:   false,
 		CallbackPort: g.callbackPort,
-		Details:     make(map[string]interface{}),
+		Details:      make(map[string]interface{}),
 	}
 
 	if !status.Connected {
@@ -270,11 +270,11 @@ func (g *FeishuGateway) tokenRefresher() {
 			g.mu.RLock()
 			running := g.running
 			g.mu.RUnlock()
-			
+
 			if !running {
 				return
 			}
-			
+
 			if err := g.refreshToken(); err != nil {
 				log.Errorf("Failed to refresh Feishu token: %v", err)
 			}
@@ -286,13 +286,13 @@ func (g *FeishuGateway) tokenRefresher() {
 func (g *FeishuGateway) startCallbackServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/feishu/callback", g.handleCallback)
-	
+
 	addr := fmt.Sprintf(":%d", g.callbackPort)
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
-	
+
 	log.Infof("Feishu callback server starting on %s", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Errorf("Feishu callback server error: %v", err)
@@ -311,38 +311,38 @@ func (g *FeishuGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	
+
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Errorf("Failed to read callback body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	
+
 	// Parse callback event
 	var event struct {
 		Schema string `json:"schema"`
 		Header struct {
-			EventID   string `json:"event_id"`
-			EventType string `json:"event_type"`
-			AppID     string `json:"app_id"`
-			TenantKey string `json:"tenant_key"`
+			EventID    string `json:"event_id"`
+			EventType  string `json:"event_type"`
+			AppID      string `json:"app_id"`
+			TenantKey  string `json:"tenant_key"`
 			CreateTime string `json:"create_time"`
 		} `json:"header"`
 		Event json.RawMessage `json:"event"`
 	}
-	
+
 	if err := json.Unmarshal(body, &event); err != nil {
 		log.Errorf("Failed to parse callback event: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	
+
 	// Handle different event types
 	switch event.Header.EventType {
 	case "im.message.receive_v1":
@@ -350,7 +350,7 @@ func (g *FeishuGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Debugf("Unhandled event type: %s", event.Header.EventType)
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"code":0}`))
 }
@@ -367,27 +367,27 @@ func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 			TenantKey  string `json:"tenant_key"`
 		} `json:"sender"`
 		Message struct {
-			MessageID string `json:"message_id"`
-			RootID    string `json:"root_id"`
-			ParentID  string `json:"parent_id"`
-			CreateTime string `json:"create_time"`
-			ChatID    string `json:"chat_id"`
-			ChatType  string `json:"chat_type"`
+			MessageID   string `json:"message_id"`
+			RootID      string `json:"root_id"`
+			ParentID    string `json:"parent_id"`
+			CreateTime  string `json:"create_time"`
+			ChatID      string `json:"chat_id"`
+			ChatType    string `json:"chat_type"`
 			MessageType string `json:"message_type"`
-			Content   string `json:"content"`
+			Content     string `json:"content"`
 		} `json:"message"`
 	}
-	
+
 	if err := json.Unmarshal(event, &msgEvent); err != nil {
 		log.Errorf("Failed to parse message event: %v", err)
 		return
 	}
-	
+
 	// Only handle user messages
 	if msgEvent.Sender.SenderType != "user" {
 		return
 	}
-	
+
 	// Parse message content
 	var content struct {
 		Text string `json:"text"`
@@ -396,7 +396,7 @@ func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 		log.Errorf("Failed to parse message content: %v", err)
 		return
 	}
-	
+
 	msg := Message{
 		ID:        msgEvent.Message.MessageID,
 		Platform:  "feishu",
@@ -405,15 +405,15 @@ func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 		Content:   content.Text,
 		Timestamp: time.Now(),
 		Metadata: map[string]interface{}{
-			"chat_type":   msgEvent.Message.ChatType,
+			"chat_type":    msgEvent.Message.ChatType,
 			"message_type": msgEvent.Message.MessageType,
 		},
 	}
-	
+
 	g.mu.RLock()
 	msgCh := g.msgCh
 	g.mu.RUnlock()
-	
+
 	select {
 	case msgCh <- msg:
 	default:
@@ -426,7 +426,7 @@ func (g *FeishuGateway) sendMessageAPI(chatID, content string) error {
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
 	g.tokenMu.RUnlock()
-	
+
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 
 	msg := map[string]interface{}{
@@ -517,25 +517,25 @@ func (g *FeishuGateway) SendRichText(chatID string, paragraphs []map[string]stri
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
 	g.tokenMu.RUnlock()
-	
+
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
-	
+
 	// Build post content
 	postContent := make([]interface{}, len(paragraphs))
 	for i, p := range paragraphs {
 		postContent[i] = map[string]interface{}{
-			"tag": "text",
+			"tag":  "text",
 			"text": p["text"],
 		}
 		if p["href"] != "" {
 			postContent[i] = map[string]interface{}{
-				"tag": "a",
+				"tag":  "a",
 				"text": p["text"],
 				"href": p["href"],
 			}
 		}
 	}
-	
+
 	msg := map[string]interface{}{
 		"receive_id": chatID,
 		"msg_type":   "post",
@@ -579,21 +579,21 @@ func (g *FeishuGateway) Reconnect(ctx context.Context) error {
 	g.currentRetries++
 	retryDelay := g.retryDelay * time.Duration(g.currentRetries)
 	g.mu.Unlock()
-	
+
 	log.Infof("Attempting to reconnect to Feishu (attempt %d, delay %v)", g.currentRetries, retryDelay)
-	
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(retryDelay):
 	}
-	
+
 	if err := g.Connect(ctx); err != nil {
 		if g.currentRetries < g.maxRetries {
 			return g.Reconnect(ctx)
 		}
 		return fmt.Errorf("max retries exceeded")
 	}
-	
+
 	return nil
 }

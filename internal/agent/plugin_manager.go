@@ -21,7 +21,7 @@ type PluginManager struct {
 	versionMgr  *plugin.VersionManager
 	agent       *Agent
 	mu          sync.RWMutex
-	enabled     map[string]bool // pluginID -> enabled
+	enabled     map[string]bool     // pluginID -> enabled
 	recommended map[string][]string // task -> recommended plugins
 }
 
@@ -34,8 +34,8 @@ func NewPluginManager(agent *Agent) (*PluginManager, error) {
 	// Create components
 	registry := plugin.NewRegistry()
 	config := &plugin.LoaderConfig{
-		PluginDir:   pluginDir,
-		AutoEnable:  true,
+		PluginDir:    pluginDir,
+		AutoEnable:   true,
 		ValidateDeps: true,
 	}
 	loader := plugin.NewLoader(registry, config)
@@ -346,9 +346,9 @@ func (pm *PluginManager) GetPluginStats() map[string]interface{} {
 	infos := pm.registry.ListInfos()
 
 	stats := map[string]interface{}{
-		"total":      len(infos),
-		"enabled":    0,
-		"disabled":   0,
+		"total":       len(infos),
+		"enabled":     0,
+		"disabled":    0,
 		"by_category": make(map[string]int),
 	}
 

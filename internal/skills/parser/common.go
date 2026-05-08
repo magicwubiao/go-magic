@@ -12,19 +12,19 @@ import (
 type SkillFormat string
 
 const (
-	FormatOpenClaw   SkillFormat = "openclaw"
-	FormatHermes     SkillFormat = "hermes"
-	FormatMagic      SkillFormat = "magic"
-	FormatUnknown    SkillFormat = "unknown"
+	FormatOpenClaw SkillFormat = "openclaw"
+	FormatHermes   SkillFormat = "hermes"
+	FormatMagic    SkillFormat = "magic"
+	FormatUnknown  SkillFormat = "unknown"
 )
 
 // ParseResult holds the result of parsing a skill
 type ParseResult struct {
-	Format   SkillFormat
-	Name     string
-	Data     map[string]interface{}
-	Content  string
-	CodeFiles map[string]string // filename -> content
+	Format         SkillFormat
+	Name           string
+	Data           map[string]interface{}
+	Content        string
+	CodeFiles      map[string]string // filename -> content
 	RawFrontmatter string
 }
 

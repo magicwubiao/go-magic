@@ -24,10 +24,10 @@ type Client struct {
 // NewClient creates a new ACP client
 func NewClient(agentID string, transport Transport) *Client {
 	return &Client{
-		agentID: agentID,
+		agentID:   agentID,
 		transport: transport,
-		skills:   make(map[string]Skill),
-		timeout:  30 * time.Second,
+		skills:    make(map[string]Skill),
+		timeout:   30 * time.Second,
 	}
 }
 
@@ -249,7 +249,7 @@ func (c *Client) SendMessage(ctx context.Context, targetAgent string, content st
 	defer cancel()
 
 	req := NewJSONRPCRequest("message/send", map[string]interface{}{
-		"target": targetAgent,
+		"target":  targetAgent,
 		"content": content,
 	}, uuid.New().String())
 

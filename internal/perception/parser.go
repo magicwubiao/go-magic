@@ -1,4 +1,4 @@
-﻿package perception
+package perception
 
 import (
 	"strings"

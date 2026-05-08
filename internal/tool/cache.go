@@ -26,17 +26,17 @@ type ToolCache interface {
 
 // InMemoryToolCache 内存缓存实现
 type InMemoryToolCache struct {
-	mu       sync.RWMutex
-	items    map[string]*cacheItem
-	maxSize  int
-	evictFn  func(key string, item *cacheItem)
+	mu      sync.RWMutex
+	items   map[string]*cacheItem
+	maxSize int
+	evictFn func(key string, item *cacheItem)
 }
 
 // cacheItem 缓存条目
 type cacheItem struct {
-	value      *ToolResult
-	expiration time.Time
-	createdAt  time.Time
+	value       *ToolResult
+	expiration  time.Time
+	createdAt   time.Time
 	accessCount int
 }
 
@@ -46,43 +46,43 @@ func NewInMemoryCache(maxSize int) *InMemoryToolCache {
 		items:   make(map[string]*cacheItem),
 		maxSize: maxSize,
 	}
-	
+
 	// 启动过期清理
 	go cache.cleanupExpired()
-	
+
 	return cache
 }
 
 func (c *InMemoryToolCache) Get(key string) (*ToolResult, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	item, exists := c.items[key]
 	if !exists {
 		return nil, false
 	}
-	
+
 	// 检查是否过期
 	if time.Now().After(item.expiration) {
 		delete(c.items, key)
 		return nil, false
 	}
-	
+
 	// 更新访问计数
 	item.accessCount++
-	
+
 	return item.value, true
 }
 
 func (c *InMemoryToolCache) Set(key string, result *ToolResult, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	// 检查缓存大小，必要时淘汰
 	if len(c.items) >= c.maxSize {
 		c.evictLRU()
 	}
-	
+
 	c.items[key] = &cacheItem{
 		value:       result,
 		expiration:  time.Now().Add(ttl),
@@ -113,14 +113,14 @@ func (c *InMemoryToolCache) Size() int {
 func (c *InMemoryToolCache) evictLRU() {
 	var oldestKey string
 	var oldestCount int = -1
-	
+
 	for key, item := range c.items {
 		if oldestCount == -1 || item.accessCount < oldestCount {
 			oldestKey = key
 			oldestCount = item.accessCount
 		}
 	}
-	
+
 	if oldestKey != "" {
 		delete(c.items, oldestKey)
 	}
@@ -130,7 +130,7 @@ func (c *InMemoryToolCache) evictLRU() {
 func (c *InMemoryToolCache) cleanupExpired() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		c.mu.Lock()
 		now := time.Now()
@@ -167,7 +167,7 @@ func (b *CacheKeyBuilder) Build(toolName string, params map[string]any) string {
 		}
 		return b.hashKey(key)
 	}
-	
+
 	// 构建完整 key
 	rawKey := toolName + ":" + string(paramJSON)
 	return b.hashKey(rawKey)
@@ -183,8 +183,8 @@ func (b *CacheKeyBuilder) hashKey(key string) string {
 // ============================================================================
 
 type TTLCache struct {
-	mu      sync.RWMutex
-	items   map[string]*cacheItem
+	mu         sync.RWMutex
+	items      map[string]*cacheItem
 	defaultTTL time.Duration
 }
 
@@ -200,23 +200,23 @@ func NewTTLCache(defaultTTL time.Duration) *TTLCache {
 func (c *TTLCache) Get(key string) (*ToolResult, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	item, exists := c.items[key]
 	if !exists || time.Now().After(item.expiration) {
 		return nil, false
 	}
-	
+
 	return item.value, true
 }
 
 func (c *TTLCache) Set(key string, result *ToolResult, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
-	
+
 	c.items[key] = &cacheItem{
 		value:      result,
 		expiration: time.Now().Add(ttl),
@@ -245,7 +245,7 @@ func (c *TTLCache) Size() int {
 func (c *TTLCache) cleanupExpired() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		c.mu.Lock()
 		now := time.Now()
@@ -273,8 +273,8 @@ type CacheStats struct {
 
 // CachedToolExecutor 带有缓存的执行器包装
 type CachedToolExecutor struct {
-	registry *Registry
-	cache    ToolCache
+	registry   *Registry
+	cache      ToolCache
 	keyBuilder *CacheKeyBuilder
 }
 
@@ -291,22 +291,22 @@ func NewCachedToolExecutor(registry *Registry, cache ToolCache) *CachedToolExecu
 func (e *CachedToolExecutor) ExecuteCached(ctx context.Context, toolName string, params map[string]any, ttl time.Duration) (*ToolResult, error) {
 	// 构建缓存 key
 	cacheKey := e.keyBuilder.Build(toolName, params)
-	
+
 	// 尝试获取缓存
 	if cached, found := e.cache.Get(cacheKey); found {
 		return cached, nil
 	}
-	
+
 	// 执行工具
 	tool, err := e.registry.Get(toolName)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	start := time.Now()
 	result, err := tool.Execute(ctx, params)
 	duration := time.Since(start)
-	
+
 	if err != nil {
 		return &ToolResult{
 			Success:  false,
@@ -314,7 +314,7 @@ func (e *CachedToolExecutor) ExecuteCached(ctx context.Context, toolName string,
 			Duration: duration,
 		}, nil
 	}
-	
+
 	toolResult := &ToolResult{
 		Success:  true,
 		Data:     result,
@@ -324,10 +324,10 @@ func (e *CachedToolExecutor) ExecuteCached(ctx context.Context, toolName string,
 			"cached":    false,
 		},
 	}
-	
+
 	// 缓存结果
 	e.cache.Set(cacheKey, toolResult, ttl)
-	
+
 	return toolResult, nil
 }
 

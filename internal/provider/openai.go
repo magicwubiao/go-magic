@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // OpenAIProvider implements the OpenAI API
 type OpenAIProvider struct {
@@ -30,9 +28,9 @@ func (p *OpenAIProvider) Name() string {
 func (p *OpenAIProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }

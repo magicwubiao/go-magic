@@ -135,8 +135,8 @@ func (ac *AutoCreator) CreateSkill() (*Skill, error) {
 			Author:      "magic Auto-Creator",
 			Tags:        ac.generateTags(),
 		},
-		Tools:       tools,
-		Content:     content,
+		Tools:   tools,
+		Content: content,
 		Metadata: map[string]interface{}{
 			"auto_created": true,
 			"tool_count":   ac.toolCallCount,

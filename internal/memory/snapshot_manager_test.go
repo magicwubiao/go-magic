@@ -453,9 +453,9 @@ func TestConcurrentAccess(t *testing.T) {
 // TestTruncateString tests string truncation
 func TestTruncateString(t *testing.T) {
 	tests := []struct {
-		input    string
-		limit    int
-		wantLen  int
+		input        string
+		limit        int
+		wantLen      int
 		wantEllipsis bool
 	}{
 		{"short", 10, 5, false},

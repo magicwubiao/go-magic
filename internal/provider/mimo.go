@@ -45,10 +45,10 @@ func (p *MiMoProvider) Name() string {
 func (p *MiMoProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 

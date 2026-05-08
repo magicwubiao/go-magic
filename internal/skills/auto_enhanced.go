@@ -110,15 +110,15 @@ func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
 
 	// Generate skill metadata
 	skillMeta := map[string]interface{}{
-		"id":           skillID,
-		"name":         fmt.Sprintf("Automated %s", pattern.Name),
-		"description":  pattern.Description,
-		"author":       "cortex-auto",
-		"created_at":   time.Now().Format(time.RFC3339),
-		"level":        "Level 1",
+		"id":            skillID,
+		"name":          fmt.Sprintf("Automated %s", pattern.Name),
+		"description":   pattern.Description,
+		"author":        "cortex-auto",
+		"created_at":    time.Now().Format(time.RFC3339),
+		"level":         "Level 1",
 		"pattern_tools": pattern.Tools,
-		"frequency":    pattern.Frequency,
-		"examples":     pattern.ExampleTasks,
+		"frequency":     pattern.Frequency,
+		"examples":      pattern.ExampleTasks,
 	}
 
 	metaJSON, _ := json.MarshalIndent(skillMeta, "", "  ")
@@ -213,10 +213,10 @@ func (e *EnhancedAutoCreator) GetGeneratedSkills() []string {
 // GetStats returns statistics about pattern detection and skills
 func (e *EnhancedAutoCreator) GetStats() map[string]interface{} {
 	return map[string]interface{}{
-		"patterns_detected":  len(e.patterns),
-		"skills_generated":   e.skillCount,
-		"min_frequency":      e.minFrequency,
-		"pending_patterns":   e.countPendingPatterns(),
+		"patterns_detected": len(e.patterns),
+		"skills_generated":  e.skillCount,
+		"min_frequency":     e.minFrequency,
+		"pending_patterns":  e.countPendingPatterns(),
 	}
 }
 

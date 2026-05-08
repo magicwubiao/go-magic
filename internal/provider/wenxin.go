@@ -11,20 +11,18 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	
 )
 
 // WenxinProvider implements the Baidu Wenxin (ERNIE) API
 type WenxinProvider struct {
-	apiKey       string
-	secretKey    string
-	model        string
-	accessToken  string
-	tokenExpiry  time.Time
-	tokenMu      sync.RWMutex
-	baseURL      string
-	client       *http.Client
+	apiKey      string
+	secretKey   string
+	model       string
+	accessToken string
+	tokenExpiry time.Time
+	tokenMu     sync.RWMutex
+	baseURL     string
+	client      *http.Client
 }
 
 // NewWenxinProvider creates a new Wenxin provider
@@ -50,11 +48,11 @@ func (p *WenxinProvider) Name() string {
 // GetCapabilities returns the capabilities of Wenxin
 func (p *WenxinProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
-		ToolCalling:     true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }
 
@@ -89,10 +87,10 @@ func (p *WenxinProvider) getAccessToken(ctx context.Context) (string, error) {
 	}
 
 	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		ExpiresIn    int    `json:"expires_in"`
-		Error        string `json:"error"`
-		ErrorDesc    string `json:"error_description"`
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
 	}
 
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
@@ -119,7 +117,7 @@ func (p *WenxinProvider) Chat(ctx context.Context, messages []Message) (*ChatRes
 	}
 
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -159,7 +157,7 @@ func (p *WenxinProvider) ChatWithTools(ctx context.Context, messages []Message, 
 	}
 
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -200,7 +198,7 @@ func (p *WenxinProvider) Stream(ctx context.Context, messages []Message, handler
 
 	reqBody := p.buildRequest(messages, nil, true)
 	reqBody["stream"] = true
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -331,7 +329,7 @@ func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 			Created int64  `json:"created"`
 			Result  string `json:"result"`
 			IsEnd   bool   `json:"is_end"`
-			Usage    struct {
+			Usage   struct {
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
 				TotalTokens      int `json:"total_tokens"`

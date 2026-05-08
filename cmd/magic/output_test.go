@@ -8,7 +8,7 @@ import (
 
 func TestOutputFormatterJSON(t *testing.T) {
 	data := map[string]interface{}{
-		"name": "test",
+		"name":  "test",
 		"value": 123,
 	}
 

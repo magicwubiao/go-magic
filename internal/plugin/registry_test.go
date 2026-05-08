@@ -24,10 +24,10 @@ func TestRegisterPlugin(t *testing.T) {
 
 	plugin := &MockPlugin{
 		manifest: &PluginManifest{
-			ID:   "test-plugin",
-			Name: "Test Plugin",
+			ID:      "test-plugin",
+			Name:    "Test Plugin",
 			Version: "1.0.0",
-			Type: TypeScript,
+			Type:    TypeScript,
 		},
 	}
 

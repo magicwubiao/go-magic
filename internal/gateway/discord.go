@@ -19,8 +19,8 @@ type DiscordGateway struct {
 	running bool
 
 	callbackPort int
-	server      interface{} // discordgo doesn't use http.Server for its own callbacks
-	serverOnce  sync.Once
+	server       interface{} // discordgo doesn't use http.Server for its own callbacks
+	serverOnce   sync.Once
 
 	// Message channel for Receive()
 	msgCh chan Message
@@ -284,12 +284,12 @@ func (g *DiscordGateway) HandleSlashCommand(cmd string, msg Message) (Response, 
 // CheckHealth returns detailed health status for Discord gateway
 func (g *DiscordGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:   "discord",
-		Connected:  g.IsConnected(),
-		HTTPClientOK: true, // discordgo manages HTTP internally
-		TokenValid:   true, // Discord uses websocket, no token to check
-		CallbackOK:  false, // Discord doesn't use HTTP callback
-		Details:     make(map[string]interface{}),
+		Platform:     "discord",
+		Connected:    g.IsConnected(),
+		HTTPClientOK: true,  // discordgo manages HTTP internally
+		TokenValid:   true,  // Discord uses websocket, no token to check
+		CallbackOK:   false, // Discord doesn't use HTTP callback
+		Details:      make(map[string]interface{}),
 	}
 
 	if !status.Connected {

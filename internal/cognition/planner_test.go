@@ -19,8 +19,8 @@ func TestCreatePlan(t *testing.T) {
 		wantPlan       bool
 	}{
 		{
-			name:   "simple_task",
-			input:  "run ls command",
+			name:  "simple_task",
+			input: "run ls command",
 			perception: &perception.PerceptionResult{
 				Intent: perception.IntentClassification{
 					Type:       perception.IntentTask,
@@ -33,8 +33,8 @@ func TestCreatePlan(t *testing.T) {
 			wantPlan:       true,
 		},
 		{
-			name:   "medium_task",
-			input:  "create a Python script to parse CSV",
+			name:  "medium_task",
+			input: "create a Python script to parse CSV",
 			perception: &perception.PerceptionResult{
 				Intent: perception.IntentClassification{
 					Type:       perception.IntentTask,
@@ -47,8 +47,8 @@ func TestCreatePlan(t *testing.T) {
 			wantPlan:       true,
 		},
 		{
-			name:   "advanced_task",
-			input:  "build a full system and deploy to production",
+			name:  "advanced_task",
+			input: "build a full system and deploy to production",
 			perception: &perception.PerceptionResult{
 				Intent: perception.IntentClassification{
 					Type:       perception.IntentTask,
@@ -61,8 +61,8 @@ func TestCreatePlan(t *testing.T) {
 			wantPlan:       true,
 		},
 		{
-			name:   "task_with_noise",
-			input:  "write a script",
+			name:  "task_with_noise",
+			input: "write a script",
 			perception: &perception.PerceptionResult{
 				Intent: perception.IntentClassification{
 					Type:       perception.IntentTask,
@@ -149,9 +149,9 @@ func TestSubAgentDecision(t *testing.T) {
 	planner := NewPlanner()
 
 	tests := []struct {
-		name           string
-		complexity     perception.TaskComplexity
-		wantSubAgents  bool
+		name          string
+		complexity    perception.TaskComplexity
+		wantSubAgents bool
 	}{
 		{"simple", perception.ComplexitySimple, false},
 		{"medium", perception.ComplexityMedium, false},

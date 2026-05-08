@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -43,10 +42,10 @@ func (p *AnthropicProvider) Name() string {
 func (p *AnthropicProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }
 
@@ -59,22 +58,22 @@ type anthropicMessage struct {
 // anthropicRequest represents Anthropic's chat request
 type anthropicRequest struct {
 	Model         string               `json:"model"`
-	Messages      []anthropicMessage    `json:"messages"`
-	SystemPrompt  string                `json:"system,omitempty"`
-	MaxTokens     int                   `json:"max_tokens"`
-	Tools         []anthropicToolDef    `json:"tools,omitempty"`
-	ToolChoice    *anthropicToolChoice  `json:"tool_choice,omitempty"`
-	Stream        bool                  `json:"stream,omitempty"`
-	Temperature   *float64              `json:"temperature,omitempty"`
-	TopP          *float64              `json:"top_p,omitempty"`
-	StopSequences []string              `json:"stop_sequences,omitempty"`
+	Messages      []anthropicMessage   `json:"messages"`
+	SystemPrompt  string               `json:"system,omitempty"`
+	MaxTokens     int                  `json:"max_tokens"`
+	Tools         []anthropicToolDef   `json:"tools,omitempty"`
+	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
+	Stream        bool                 `json:"stream,omitempty"`
+	Temperature   *float64             `json:"temperature,omitempty"`
+	TopP          *float64             `json:"top_p,omitempty"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
 }
 
 // anthropicToolDef represents Anthropic's tool definition
 type anthropicToolDef struct {
-	Name        string                     `json:"name"`
-	Description string                     `json:"description,omitempty"`
-	InputSchema map[string]interface{}     `json:"input_schema"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
 // anthropicToolChoice represents tool choice options
@@ -85,21 +84,21 @@ type anthropicToolChoice struct {
 
 // anthropicResponse represents Anthropic's response
 type anthropicResponse struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	Role         string `json:"role"`
-	Content      []struct {
-		Type        string `json:"type"`
-		Text        string `json:"text,omitempty"`
-		ID          string `json:"id,omitempty"`
-		Name        string `json:"name,omitempty"`
-		Input       map[string]interface{} `json:"input,omitempty"`
-		ToolUseID   string `json:"tool_use_id,omitempty"`
-		Content      string `json:"content,omitempty"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Content []struct {
+		Type      string                 `json:"type"`
+		Text      string                 `json:"text,omitempty"`
+		ID        string                 `json:"id,omitempty"`
+		Name      string                 `json:"name,omitempty"`
+		Input     map[string]interface{} `json:"input,omitempty"`
+		ToolUseID string                 `json:"tool_use_id,omitempty"`
+		Content   string                 `json:"content,omitempty"`
 	} `json:"content"`
-	StopReason  string `json:"stop_reason"`
+	StopReason   string  `json:"stop_reason"`
 	StopSequence *string `json:"stop_sequence,omitempty"`
-	Usage       struct {
+	Usage        struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
@@ -108,7 +107,7 @@ type anthropicResponse struct {
 // Chat implements the Provider interface
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -145,7 +144,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message) (*Chat
 // ChatWithTools implements the ToolCaller interface
 func (p *AnthropicProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -182,7 +181,7 @@ func (p *AnthropicProvider) ChatWithTools(ctx context.Context, messages []Messag
 // Stream implements the Streamer interface
 func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -216,7 +215,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, hand
 // StreamWithTools implements the StreamingToolCaller interface
 func (p *AnthropicProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, tools, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -251,7 +250,7 @@ func (p *AnthropicProvider) StreamWithTools(ctx context.Context, messages []Mess
 func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) *anthropicRequest {
 	var systemPrompt string
 	var anthropicMessages []anthropicMessage
-	
+
 	// Separate system prompt from messages
 	for _, msg := range messages {
 		if msg.Role == "system" {
@@ -324,8 +323,8 @@ func (p *AnthropicProvider) parseResponse(body []byte) (*ChatResponse, error) {
 			// This is a tool call request
 			args, _ := json.Marshal(content.Input)
 			tc := types.ToolCall{
-				ID:   content.ID,
-				Name: content.Name,
+				ID:        content.ID,
+				Name:      content.Name,
 				Arguments: content.Input,
 			}
 			if tc.Arguments == nil {
@@ -369,21 +368,21 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 
 		// Parse event type
 		var event struct {
-			Type            string `json:"type"`
-			Index           int    `json:"index,omitempty"`
-			Content         []struct {
-				Type   string `json:"type"`
-				Text   string `json:"text,omitempty"`
-				ID     string `json:"id,omitempty"`
-				Name   string `json:"name,omitempty"`
-				Input  map[string]interface{} `json:"input,omitempty"`
+			Type    string `json:"type"`
+			Index   int    `json:"index,omitempty"`
+			Content []struct {
+				Type  string                 `json:"type"`
+				Text  string                 `json:"text,omitempty"`
+				ID    string                 `json:"id,omitempty"`
+				Name  string                 `json:"name,omitempty"`
+				Input map[string]interface{} `json:"input,omitempty"`
 			} `json:"content,omitempty"`
-			Delta           *struct {
-				Type          string `json:"type"`
-				Text          string `json:"text,omitempty"`
-				PartialJson   string `json:"partial_json,omitempty"`
-				Index         int    `json:"index,omitempty"`
-				ContentBlock  *struct {
+			Delta *struct {
+				Type         string `json:"type"`
+				Text         string `json:"text,omitempty"`
+				PartialJson  string `json:"partial_json,omitempty"`
+				Index        int    `json:"index,omitempty"`
+				ContentBlock *struct {
 					Type string `json:"type"`
 					ID   string `json:"id,omitempty"`
 					Name string `json:"name,omitempty"`

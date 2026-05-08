@@ -56,14 +56,14 @@ func init() {
 
 // REPL represents the interactive shell
 type InteractiveShell struct {
-	reader        *bufio.Reader
-	writer        io.Writer
-	prompt        string
-	history       []string
-	variables     map[string]string
-	multiline     bool
-	currentLine   string
-	lineCount     int
+	reader      *bufio.Reader
+	writer      io.Writer
+	prompt      string
+	history     []string
+	variables   map[string]string
+	multiline   bool
+	currentLine string
+	lineCount   int
 }
 
 // NewREPL creates a new REPL instance

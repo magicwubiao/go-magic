@@ -134,7 +134,7 @@ func TestExtractEntities(t *testing.T) {
 	tests := []struct {
 		name          string
 		input         string
-		wantLanguages  int
+		wantLanguages int
 		wantFiles     int
 		wantTools     int
 		wantEntityCnt int
@@ -190,10 +190,10 @@ func TestDenoiser(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name            string
-		input           string
-		wantHasNoise    bool
-		wantNoiseTypes  []NoiseType
+		name           string
+		input          string
+		wantHasNoise   bool
+		wantNoiseTypes []NoiseType
 	}{
 		{"clean_input", "write a Python script to process data", false, nil},
 		{"excessive_punct", "What!!! Is this!!! Working???", true, []NoiseType{NoiseTypo}},
@@ -269,12 +269,12 @@ func TestContextHints(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name           string
-		input          string
-		history        []string
-		wantMinHints   int
-		wantHasRef     bool
-		wantHasTime    bool
+		name         string
+		input        string
+		history      []string
+		wantMinHints int
+		wantHasRef   bool
+		wantHasTime  bool
 	}{
 		{
 			name:         "pronoun_reference",
@@ -349,7 +349,7 @@ func TestPriorityAdjustment(t *testing.T) {
 		input    string
 		expected int
 	}{
-		{"correction_high", "no, that's wrong", 1},                    // Corrections = priority 1
+		{"correction_high", "no, that's wrong", 1},                   // Corrections = priority 1
 		{"complex_task_high", "build a full system architecture", 2}, // Complex tasks = priority 2
 		{"normal_task", "write a file", 3},                           // Normal = priority 3
 		{"simple_question", "what is this?", 3},                      // Questions = priority 3

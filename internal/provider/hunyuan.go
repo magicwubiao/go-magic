@@ -45,10 +45,10 @@ func (p *HunyuanProvider) Name() string {
 func (p *HunyuanProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      false,
-		Vision:          false,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
 	}
 }
 
@@ -293,8 +293,8 @@ func (p *HunyuanProvider) parseStreamResponse(body io.Reader, handler StreamHand
 			Note    string `json:"Note"`
 			Choices []struct {
 				Delta struct {
-					Role    string `json:"Role"`
-					Content string `json:"Content"`
+					Role      string `json:"Role"`
+					Content   string `json:"Content"`
 					ToolCalls []struct {
 						ID       string `json:"ID"`
 						Type     string `json:"Type"`

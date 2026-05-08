@@ -24,13 +24,13 @@ type WhatsAppGateway struct {
 	appSecret     string
 	verifyToken   string
 	webhookURL    string
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	callbackPort int
 	httpServer   *http.Server
 }
@@ -71,10 +71,10 @@ type whatsappWebhookRequest struct {
 						MimeType string `json:"mime_type"`
 					} `json:"audio,omitempty"`
 					Document *struct {
-						ID          string `json:"id"`
-						MimeType    string `json:"mime_type"`
-						Filename    string `json:"filename"`
-						Caption     string `json:"caption"`
+						ID       string `json:"id"`
+						MimeType string `json:"mime_type"`
+						Filename string `json:"filename"`
+						Caption  string `json:"caption"`
 					} `json:"document,omitempty"`
 					Location *struct {
 						Latitude  float64 `json:"latitude"`
@@ -107,8 +107,8 @@ type whatsappMessageRequest struct {
 		Body string `json:"body"`
 	} `json:"text,omitempty"`
 	Image *struct {
-		ID    string `json:"id,omitempty"`
-		Link  string `json:"link,omitempty"`
+		ID      string `json:"id,omitempty"`
+		Link    string `json:"link,omitempty"`
 		Caption string `json:"caption,omitempty"`
 	} `json:"image,omitempty"`
 	Document *struct {
@@ -188,11 +188,11 @@ func (g *WhatsAppGateway) CheckHealth() *HealthStatus {
 	g.mu.RUnlock()
 
 	return &HealthStatus{
-		Platform:   "whatsapp",
+		Platform:  "whatsapp",
 		Connected: running,
 		Details: map[string]interface{}{
 			"phone_number_id": g.phoneNumberID,
-			"callback_port":  g.callbackPort,
+			"callback_port":   g.callbackPort,
 		},
 	}
 }
@@ -219,7 +219,9 @@ func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
 		RecipientType:    "individual",
 		To:               to,
 		Type:             "text",
-		Text:             &struct{ Body string `json:"body"` }{Body: text},
+		Text: &struct {
+			Body string `json:"body"`
+		}{Body: text},
 	}
 
 	return g.sendMessage(ctx, reqBody)
@@ -335,7 +337,7 @@ func (g *WhatsAppGateway) handleWebhook(w http.ResponseWriter, r *http.Request) 
 					content = "[Document: " + msg.Document.Filename + "]"
 					msgType = "document"
 				case "location":
-					content = fmt.Sprintf("[Location: %s, %s]", 
+					content = fmt.Sprintf("[Location: %s, %s]",
 						strconv.FormatFloat(msg.Location.Latitude, 'f', 6, 64),
 						strconv.FormatFloat(msg.Location.Longitude, 'f', 6, 64))
 					msgType = "location"
@@ -350,16 +352,16 @@ func (g *WhatsAppGateway) handleWebhook(w http.ResponseWriter, r *http.Request) 
 				timestamp, _ := strconv.ParseInt(msg.Timestamp, 10, 64)
 
 				waMsg := Message{
-					ID:         msg.ID,
-					Platform:   "whatsapp",
-					ChannelID:  msg.From,
-					UserID:     msg.From,
-					Content:    content,
-					Timestamp:  time.Unix(timestamp, 0),
+					ID:        msg.ID,
+					Platform:  "whatsapp",
+					ChannelID: msg.From,
+					UserID:    msg.From,
+					Content:   content,
+					Timestamp: time.Unix(timestamp, 0),
 					Metadata: map[string]interface{}{
-						"type":           msgType,
+						"type":            msgType,
 						"phone_number_id": g.phoneNumberID,
-						"reply_to":       msg.Context.ID,
+						"reply_to":        msg.Context.ID,
 					},
 				}
 
@@ -410,9 +412,9 @@ func (g *WhatsAppGateway) DownloadMedia(mediaID string) ([]byte, string, error) 
 	defer resp.Body.Close()
 
 	var mediaInfo struct {
-		URL       string `json:"url"`
-		MimeType  string `json:"mime_type"`
-		Hash      string `json:"sha256"`
+		URL      string `json:"url"`
+		MimeType string `json:"mime_type"`
+		Hash     string `json:"sha256"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&mediaInfo); err != nil {
@@ -449,7 +451,7 @@ func (g *WhatsAppGateway) MarkMessageAsRead(messageID string) error {
 
 	jsonData, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://graph.facebook.com/v18.0/%s/messages", g.phoneNumberID)
-	
+
 	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonData)))
 	if err != nil {
 		return err

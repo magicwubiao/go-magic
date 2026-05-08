@@ -15,18 +15,18 @@ import (
 
 // SlackGateway implements the Slack platform handler
 type SlackGateway struct {
-	botToken   string
-	appToken   string
+	botToken      string
+	appToken      string
 	signingSecret string
-	wsURL      string
-	rtmConn    *rtmConnection
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	wsURL         string
+	rtmConn       *rtmConnection
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	callbackPort int
 	httpServer   *http.Server
 }
@@ -51,12 +51,12 @@ type slackEvent struct {
 
 // slackMessageEvent represents a message event
 type slackMessageEvent struct {
-	Type      string `json:"type"`
-	Channel   string `json:"channel"`
-	User      string `json:"user"`
-	Text      string `json:"text"`
-	Ts        string `json:"ts"`
-	ThreadTs  string `json:"thread_ts,omitempty"`
+	Type        string `json:"type"`
+	Channel     string `json:"channel"`
+	User        string `json:"user"`
+	Text        string `json:"text"`
+	Ts          string `json:"ts"`
+	ThreadTs    string `json:"thread_ts,omitempty"`
 	ChannelType string `json:"channel_type,omitempty"`
 }
 
@@ -131,7 +131,7 @@ func (g *SlackGateway) CheckHealth() *HealthStatus {
 	g.mu.RUnlock()
 
 	return &HealthStatus{
-		Platform:   "slack",
+		Platform:  "slack",
 		Connected: running,
 		Details: map[string]interface{}{
 			"callback_port": g.callbackPort,
@@ -216,8 +216,8 @@ func (g *SlackGateway) startRTM() error {
 	}
 
 	var result struct {
-		OK  bool   `json:"ok"`
-		URL string `json:"url"`
+		OK    bool   `json:"ok"`
+		URL   string `json:"url"`
 		Error string `json:"error"`
 	}
 
@@ -288,13 +288,13 @@ func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request)
 		}
 
 		msg := Message{
-			ID:         msgEvent.Ts,
-			Platform:   "slack",
-			ChannelID:  msgEvent.Channel,
-			UserID:     msgEvent.User,
-			Content:    msgEvent.Text,
-			Timestamp:  time.Now(),
-			Metadata:   map[string]interface{}{"thread_ts": msgEvent.ThreadTs},
+			ID:        msgEvent.Ts,
+			Platform:  "slack",
+			ChannelID: msgEvent.Channel,
+			UserID:    msgEvent.User,
+			Content:   msgEvent.Text,
+			Timestamp: time.Now(),
+			Metadata:  map[string]interface{}{"thread_ts": msgEvent.ThreadTs},
 		}
 
 		select {

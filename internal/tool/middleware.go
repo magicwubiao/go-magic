@@ -37,11 +37,11 @@ func LoggingMiddleware(logger Logger) Middleware {
 			if tc := FromContext(ctx); tc != nil {
 				toolName = tc.ToolName
 			}
-			
+
 			log.Printf("[TOOL] Starting: %s with params: %v", toolName, params)
-			
+
 			result, err := next(ctx, params)
-			
+
 			duration := time.Since(start)
 			if err != nil {
 				log.Printf("[TOOL] Failed: %s after %v - %v", toolName, duration, err)
@@ -50,7 +50,7 @@ func LoggingMiddleware(logger Logger) Middleware {
 			} else {
 				log.Printf("[TOOL] Completed: %s in %v", toolName, duration)
 			}
-			
+
 			return result, err
 		}
 	}
@@ -68,9 +68,9 @@ func MetricsMiddleware(recorder MetricsRecorder) Middleware {
 			if tc := FromContext(ctx); tc != nil {
 				toolName = tc.ToolName
 			}
-			
+
 			result, err := next(ctx, params)
-			
+
 			duration := time.Since(start)
 			success := err == nil && (result == nil || result.Success)
 			errorMsg := ""
@@ -79,9 +79,9 @@ func MetricsMiddleware(recorder MetricsRecorder) Middleware {
 			} else if result != nil && !result.Success {
 				errorMsg = result.Error
 			}
-			
+
 			recorder.RecordToolExecution(toolName, duration, success, errorMsg)
-			
+
 			return result, err
 		}
 	}
@@ -92,18 +92,18 @@ func MetricsMiddleware(recorder MetricsRecorder) Middleware {
 // ============================================================================
 
 type RetryOptions struct {
-	MaxAttempts int           // 最大重试次数
-	InitialWait time.Duration // 初始等待时间
-	MaxWait     time.Duration // 最大等待时间
-	Multiplier  float64       // 退避倍数
+	MaxAttempts int                               // 最大重试次数
+	InitialWait time.Duration                     // 初始等待时间
+	MaxWait     time.Duration                     // 最大等待时间
+	Multiplier  float64                           // 退避倍数
 	ShouldRetry func(err error, attempt int) bool // 判断是否重试
 }
 
 var DefaultRetryOptions = RetryOptions{
-	MaxAttempts:  3,
-	InitialWait:  100 * time.Millisecond,
-	MaxWait:      5 * time.Second,
-	Multiplier:   2.0,
+	MaxAttempts: 3,
+	InitialWait: 100 * time.Millisecond,
+	MaxWait:     5 * time.Second,
+	Multiplier:  2.0,
 	ShouldRetry: func(err error, attempt int) bool {
 		if err == nil {
 			return false
@@ -120,45 +120,45 @@ func RetryMiddleware(opts ...RetryOptions) Middleware {
 	} else {
 		options = DefaultRetryOptions
 	}
-	
+
 	return func(next ToolFunc) ToolFunc {
 		return func(ctx context.Context, params map[string]any) (*ToolResult, error) {
 			var lastErr error
 			wait := options.InitialWait
-			
+
 			for attempt := 0; attempt < options.MaxAttempts; attempt++ {
 				if attempt > 0 {
 					log.Printf("[RETRY] Attempt %d for tool execution after %v", attempt+1, wait)
-					
+
 					select {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					case <-time.After(wait):
 					}
-					
+
 					wait = time.Duration(math.Min(float64(wait)*options.Multiplier, float64(options.MaxWait)))
 				}
-				
+
 				result, err := next(ctx, params)
 				if err == nil && (result == nil || result.Success) {
 					return result, nil
 				}
-				
+
 				var errMsg string
 				if err != nil {
 					errMsg = err.Error()
 				} else if result != nil {
 					errMsg = result.Error
 				}
-				
+
 				if options.ShouldRetry(fmt.Errorf("%s", errMsg), attempt+1) {
 					lastErr = fmt.Errorf("%s", errMsg)
 					continue
 				}
-				
+
 				return result, err
 			}
-			
+
 			return nil, lastErr
 		}
 	}
@@ -172,17 +172,17 @@ func TimeoutMiddleware(defaultTimeout time.Duration) Middleware {
 	return func(next ToolFunc) ToolFunc {
 		return func(ctx context.Context, params map[string]any) (*ToolResult, error) {
 			timeout := defaultTimeout
-			
+
 			// 从参数中检查是否有自定义超时
 			if timeoutStr, ok := params["_timeout"].(string); ok {
 				if parsed, err := time.ParseDuration(timeoutStr); err == nil {
 					timeout = parsed
 				}
 			}
-			
+
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			
+
 			return next(ctx, params)
 		}
 	}
@@ -215,7 +215,7 @@ func NewRateLimiter() *RateLimiter {
 func (rl *RateLimiter) Allow(toolName string, rate float64, burst int) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	
+
 	bucket, exists := rl.buckets[toolName]
 	if !exists {
 		bucket = &tokenBucket{
@@ -226,18 +226,18 @@ func (rl *RateLimiter) Allow(toolName string, rate float64, burst int) bool {
 		}
 		rl.buckets[toolName] = bucket
 	}
-	
+
 	// 补充 tokens
 	now := time.Now()
 	elapsed := now.Sub(bucket.lastRefill).Seconds()
 	bucket.tokens = math.Min(bucket.maxTokens, bucket.tokens+elapsed*bucket.refillRate)
 	bucket.lastRefill = now
-	
+
 	if bucket.tokens >= 1 {
 		bucket.tokens--
 		return true
 	}
-	
+
 	return false
 }
 
@@ -250,14 +250,14 @@ func RateLimitMiddleware(rate float64, burst int) Middleware {
 			if tc := FromContext(ctx); tc != nil {
 				toolName = tc.ToolName
 			}
-			
+
 			if !defaultRateLimiter.Allow(toolName, rate, burst) {
 				return NewErrorResultWithCode(
 					fmt.Sprintf("rate limit exceeded for tool: %s", toolName),
 					"RATE_LIMIT_EXCEEDED",
 				), nil
 			}
-			
+
 			return next(ctx, params)
 		}
 	}
@@ -289,23 +289,23 @@ func CacheMiddleware(cache ToolCache, ttl time.Duration) Middleware {
 			if tc := FromContext(ctx); tc != nil {
 				toolName = tc.ToolName
 			}
-			
+
 			cacheKey := buildCacheKey(toolName, params)
-			
+
 			// 尝试从缓存获取
 			if cached, found := cache.Get(cacheKey); found {
 				log.Printf("[CACHE] Hit for tool: %s", toolName)
 				return cached, nil
 			}
-			
+
 			// 执行工具
 			result, err := next(ctx, params)
-			
+
 			// 缓存结果（仅缓存成功的结果）
 			if err == nil && result != nil && result.Success {
 				cache.Set(cacheKey, result, ttl)
 			}
-			
+
 			return result, err
 		}
 	}
@@ -328,7 +328,7 @@ func PanicRecoveryMiddleware() Middleware {
 					err = nil
 				}
 			}()
-			
+
 			return next(ctx, params)
 		}
 	}

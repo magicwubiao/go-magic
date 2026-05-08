@@ -11,7 +11,7 @@ import (
 type NudgePriority int
 
 const (
-	NudgePriorityLow    NudgePriority = iota
+	NudgePriorityLow NudgePriority = iota
 	NudgePriorityNormal
 	NudgePriorityHigh
 	NudgePriorityCritical
@@ -21,7 +21,7 @@ const (
 type NudgeType string
 
 const (
-	NudgeTypePeriodic       NudgeType = "periodic"
+	NudgeTypePeriodic      NudgeType = "periodic"
 	NudgeTypePattern       NudgeType = "pattern"
 	NudgeTypeReminder      NudgeType = "reminder"
 	NudgeTypeSuggestion    NudgeType = "suggestion"
@@ -31,15 +31,15 @@ const (
 
 // Nudge represents a single nudge message/action
 type Nudge struct {
-	ID          string        `json:"id"`
-	Type        NudgeType     `json:"type"`
-	Priority    NudgePriority `json:"priority"`
-	Message     string        `json:"message"`
-	Context     string        `json:"context,omitempty"`
-	Actions     []NudgeAction `json:"actions,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	ExpiresAt   time.Time     `json:"expires_at,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID        string                 `json:"id"`
+	Type      NudgeType              `json:"type"`
+	Priority  NudgePriority          `json:"priority"`
+	Message   string                 `json:"message"`
+	Context   string                 `json:"context,omitempty"`
+	Actions   []NudgeAction          `json:"actions,omitempty"`
+	CreatedAt time.Time              `json:"created_at"`
+	ExpiresAt time.Time              `json:"expires_at,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NudgeAction represents a possible action for a nudge
@@ -51,23 +51,23 @@ type NudgeAction struct {
 
 // UserNudgePreference tracks user preferences for nudges
 type UserNudgePreference struct {
-	EnabledTypes     map[NudgeType]bool  `json:"enabled_types"`
-	FrequencyLimit   time.Duration        `json:"frequency_limit"`
-	QuietHoursStart  time.Time            `json:"quiet_hours_start"`
-	QuietHoursEnd    time.Time            `json:"quiet_hours_end"`
-	LastNudgeTime    time.Time            `json:"last_nudge_time"`
-	ResponseRate     float64              `json:"response_rate"` // How often user responds to nudges
+	EnabledTypes    map[NudgeType]bool `json:"enabled_types"`
+	FrequencyLimit  time.Duration      `json:"frequency_limit"`
+	QuietHoursStart time.Time          `json:"quiet_hours_start"`
+	QuietHoursEnd   time.Time          `json:"quiet_hours_end"`
+	LastNudgeTime   time.Time          `json:"last_nudge_time"`
+	ResponseRate    float64            `json:"response_rate"` // How often user responds to nudges
 }
 
 // NudgeMetrics tracks nudge effectiveness
 type NudgeMetrics struct {
-	TotalSent       int              `json:"total_sent"`
-	TotalShown      int              `json:"total_shown"`
-	TotalDismissed  int              `json:"total_dismissed"`
-	TotalAccepted   int              `json:"total_accepted"`
-	ByType          map[NudgeType]int `json:"by_type"`
+	TotalSent       int                   `json:"total_sent"`
+	TotalShown      int                   `json:"total_shown"`
+	TotalDismissed  int                   `json:"total_dismissed"`
+	TotalAccepted   int                   `json:"total_accepted"`
+	ByType          map[NudgeType]int     `json:"by_type"`
 	ByPriority      map[NudgePriority]int `json:"by_priority"`
-	AvgResponseTime time.Duration    `json:"avg_response_time"`
+	AvgResponseTime time.Duration         `json:"avg_response_time"`
 }
 
 // EnhancedMessageTrigger provides intelligent nudge mechanism
@@ -76,34 +76,34 @@ type EnhancedMessageTrigger struct {
 	turnCount      int
 	nudgeThreshold int
 	nudgeHandlers  []NudgeHandler
-	
+
 	// Intelligent threshold tracking
 	dynamicThreshold int
 	baseThreshold    int
 	frequencyHistory []time.Time
-	
+
 	// Context awareness
-	currentContext    string
-	contextHistory    []string
-	contextDuration   map[string]time.Duration
-	
+	currentContext  string
+	contextHistory  []string
+	contextDuration map[string]time.Duration
+
 	// Cooldown mechanism
-	lastNudgeTime     time.Time
-	minNudgeInterval  time.Duration
-	recentNudges      *list.List
-	maxRecentNudges   int
-	
+	lastNudgeTime    time.Time
+	minNudgeInterval time.Duration
+	recentNudges     *list.List
+	maxRecentNudges  int
+
 	// User preference learning
-	preferences   *UserNudgePreference
-	metrics       *NudgeMetrics
-	
+	preferences *UserNudgePreference
+	metrics     *NudgeMetrics
+
 	// Scheduled nudges
 	scheduledNudges []ScheduledNudge
 	timer           *time.Timer
 
 	// Task tracking
 	taskStartTime time.Time
-	currentTask  string
+	currentTask   string
 }
 
 // NudgeHandler is the interface for nudge handlers
@@ -135,25 +135,25 @@ type ScheduledNudge struct {
 // NewEnhancedMessageTrigger creates an enhanced message trigger with smart nudges
 func NewEnhancedMessageTrigger() *EnhancedMessageTrigger {
 	return &EnhancedMessageTrigger{
-		nudgeThreshold:    DefaultNudgeThreshold,
-		dynamicThreshold:  DefaultNudgeThreshold,
-		baseThreshold:     DefaultNudgeThreshold,
-		frequencyHistory:  make([]time.Time, 0),
-		contextDuration:   make(map[string]time.Duration),
-		recentNudges:      list.New(),
-		maxRecentNudges:   10,
+		nudgeThreshold:   DefaultNudgeThreshold,
+		dynamicThreshold: DefaultNudgeThreshold,
+		baseThreshold:    DefaultNudgeThreshold,
+		frequencyHistory: make([]time.Time, 0),
+		contextDuration:  make(map[string]time.Duration),
+		recentNudges:     list.New(),
+		maxRecentNudges:  10,
 		minNudgeInterval: 30 * time.Second,
 		preferences: &UserNudgePreference{
-			EnabledTypes:  allNudgeTypesEnabled(),
+			EnabledTypes:   allNudgeTypesEnabled(),
 			FrequencyLimit: 5 * time.Minute,
 		},
 		metrics: &NudgeMetrics{
-			TotalSent:     0,
-			TotalShown:    0,
+			TotalSent:      0,
+			TotalShown:     0,
 			TotalDismissed: 0,
 			TotalAccepted:  0,
-			ByType:        make(map[NudgeType]int),
-			ByPriority:    make(map[NudgePriority]int),
+			ByType:         make(map[NudgeType]int),
+			ByPriority:     make(map[NudgePriority]int),
 		},
 		scheduledNudges: make([]ScheduledNudge, 0),
 	}
@@ -162,9 +162,9 @@ func NewEnhancedMessageTrigger() *EnhancedMessageTrigger {
 // allNudgeTypesEnabled returns a map with all nudge types enabled
 func allNudgeTypesEnabled() map[NudgeType]bool {
 	return map[NudgeType]bool{
-		NudgeTypePeriodic:       true,
-		NudgeTypePattern:        true,
-		NudgeTypeReminder:       true,
+		NudgeTypePeriodic:      true,
+		NudgeTypePattern:       true,
+		NudgeTypeReminder:      true,
 		NudgeTypeSuggestion:    true,
 		NudgeTypeErrorRecovery: true,
 		NudgeTypeOpportunity:   true,
@@ -176,23 +176,23 @@ func allNudgeTypesEnabled() map[NudgeType]bool {
 func (mt *EnhancedMessageTrigger) OnUserMessage(input string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	// Update context
 	mt.updateContext(input)
-	
+
 	mt.turnCount++
 	mt.taskStartTime = time.Now()
 	mt.currentTask = input
-	
+
 	// Update frequency history
 	mt.frequencyHistory = append(mt.frequencyHistory, time.Now())
 	if len(mt.frequencyHistory) > 100 {
 		mt.frequencyHistory = mt.frequencyHistory[1:]
 	}
-	
+
 	// Adjust threshold based on conversation frequency
 	mt.adjustDynamicThreshold()
-	
+
 	// Check if we should trigger a nudge
 	if mt.shouldTriggerNudge() {
 		mt.triggerNudge(NudgeTypePeriodic, NudgePriorityNormal, "You've been working on this for a while. Want me to summarize progress?")
@@ -203,13 +203,13 @@ func (mt *EnhancedMessageTrigger) OnUserMessage(input string) {
 func (mt *EnhancedMessageTrigger) updateContext(input string) {
 	// Simple context extraction - in production, use NLP
 	mt.currentContext = input
-	
+
 	// Track context history
 	mt.contextHistory = append(mt.contextHistory, input)
 	if len(mt.contextHistory) > 20 {
 		mt.contextHistory = mt.contextHistory[1:]
 	}
-	
+
 	// Track context duration
 	now := time.Now()
 	if mt.taskStartTime.IsZero() {
@@ -224,7 +224,7 @@ func (mt *EnhancedMessageTrigger) adjustDynamicThreshold() {
 	if len(mt.frequencyHistory) < 5 {
 		return
 	}
-	
+
 	// Calculate recent conversation frequency
 	recentMessages := 0
 	since := time.Now().Add(-10 * time.Minute)
@@ -233,7 +233,7 @@ func (mt *EnhancedMessageTrigger) adjustDynamicThreshold() {
 			recentMessages++
 		}
 	}
-	
+
 	// Adjust threshold: higher frequency = longer interval between nudges
 	if recentMessages > 10 {
 		mt.dynamicThreshold = int(float64(mt.baseThreshold) * 1.5)
@@ -250,22 +250,22 @@ func (mt *EnhancedMessageTrigger) shouldTriggerNudge() bool {
 	if mt.turnCount%mt.dynamicThreshold != 0 {
 		return false
 	}
-	
+
 	// Check cooldown
 	if time.Since(mt.lastNudgeTime) < mt.minNudgeInterval {
 		return false
 	}
-	
+
 	// Check quiet hours
 	if mt.isQuietHours() {
 		return false
 	}
-	
+
 	// Check if this nudge type is enabled
 	if !mt.preferences.EnabledTypes[NudgeTypePeriodic] {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -274,11 +274,11 @@ func (mt *EnhancedMessageTrigger) isQuietHours() bool {
 	if mt.preferences.QuietHoursStart.IsZero() || mt.preferences.QuietHoursEnd.IsZero() {
 		return false
 	}
-	
+
 	now := time.Now()
 	start := mt.preferences.QuietHoursStart
 	end := mt.preferences.QuietHoursEnd
-	
+
 	// Handle overnight quiet hours (e.g., 22:00 - 07:00)
 	if start.After(end) {
 		return now.After(start) || now.Before(end)
@@ -297,13 +297,13 @@ func (mt *EnhancedMessageTrigger) triggerNudge(nudgeType NudgeType, priority Nud
 		CreatedAt: time.Now(),
 		Metadata:  mt.buildNudgeMetadata(),
 	}
-	
+
 	// Add context-aware actions
 	nudge.Actions = mt.buildNudgeActions(nudge)
-	
+
 	// Track the nudge
 	mt.recordNudge(nudge)
-	
+
 	// Notify handlers
 	mt.deliverNudge(nudge)
 }
@@ -311,17 +311,17 @@ func (mt *EnhancedMessageTrigger) triggerNudge(nudgeType NudgeType, priority Nud
 // buildNudgeMetadata builds metadata for the nudge
 func (mt *EnhancedMessageTrigger) buildNudgeMetadata() map[string]interface{} {
 	return map[string]interface{}{
-		"turn_count":      mt.turnCount,
-		"threshold":       mt.dynamicThreshold,
+		"turn_count":       mt.turnCount,
+		"threshold":        mt.dynamicThreshold,
 		"conversation_age": time.Since(mt.taskStartTime).Seconds(),
-		"context":         mt.currentContext,
+		"context":          mt.currentContext,
 	}
 }
 
 // buildNudgeActions builds context-aware actions for the nudge
 func (mt *EnhancedMessageTrigger) buildNudgeActions(nudge *Nudge) []NudgeAction {
 	actions := make([]NudgeAction, 0)
-	
+
 	switch nudge.Type {
 	case NudgeTypePeriodic:
 		actions = append(actions, NudgeAction{
@@ -358,7 +358,7 @@ func (mt *EnhancedMessageTrigger) buildNudgeActions(nudge *Nudge) []NudgeAction 
 			Value: "apply",
 		})
 	}
-	
+
 	return actions
 }
 
@@ -368,13 +368,13 @@ func (mt *EnhancedMessageTrigger) recordNudge(nudge *Nudge) {
 	mt.metrics.TotalSent++
 	mt.metrics.ByType[nudge.Type]++
 	mt.metrics.ByPriority[nudge.Priority]++
-	
+
 	// Add to recent nudges list
 	mt.recentNudges.PushBack(nudge)
 	if mt.recentNudges.Len() > mt.maxRecentNudges {
 		mt.recentNudges.Remove(mt.recentNudges.Front())
 	}
-	
+
 	// Update user preferences
 	mt.preferences.LastNudgeTime = time.Now()
 }
@@ -396,12 +396,12 @@ func (mt *EnhancedMessageTrigger) deliverNudge(nudge *Nudge) {
 func (mt *EnhancedMessageTrigger) OnPatternDetected(pattern string, frequency int) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	// Only nudge for significant patterns
 	if frequency < 2 {
 		return
 	}
-	
+
 	message := fmt.Sprintf("I noticed you perform `%s` frequently. Want me to create a skill for this?", pattern)
 	mt.triggerNudgeUnsafe(NudgeTypePattern, NudgePriorityNormal, message)
 }
@@ -410,17 +410,17 @@ func (mt *EnhancedMessageTrigger) OnPatternDetected(pattern string, frequency in
 func (mt *EnhancedMessageTrigger) OnErrorOccurred(errorType string, canRecover bool) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	if !canRecover {
 		return
 	}
-	
+
 	priority := NudgePriorityHigh
 	if mt.preferences.ResponseRate < 0.3 {
 		// User doesn't engage much - make nudge less intrusive
 		priority = NudgePriorityNormal
 	}
-	
+
 	message := fmt.Sprintf("I encountered a %s issue. Should I try a different approach?", errorType)
 	mt.triggerNudgeUnsafe(NudgeTypeErrorRecovery, priority, message)
 }
@@ -429,11 +429,11 @@ func (mt *EnhancedMessageTrigger) OnErrorOccurred(errorType string, canRecover b
 func (mt *EnhancedMessageTrigger) OnOpportunityDetected(opportunity string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	if !mt.preferences.EnabledTypes[NudgeTypeOpportunity] {
 		return
 	}
-	
+
 	message := fmt.Sprintf("I found an opportunity: %s. Want me to explore this?", opportunity)
 	mt.triggerNudgeUnsafe(NudgeTypeOpportunity, NudgePriorityLow, message)
 }
@@ -447,7 +447,7 @@ func (mt *EnhancedMessageTrigger) triggerNudgeUnsafe(nudgeType NudgeType, priori
 			return
 		}
 	}
-	
+
 	nudge := &Nudge{
 		ID:        fmt.Sprintf("nudge-%d", time.Now().UnixNano()),
 		Type:      nudgeType,
@@ -457,7 +457,7 @@ func (mt *EnhancedMessageTrigger) triggerNudgeUnsafe(nudgeType NudgeType, priori
 		CreatedAt: time.Now(),
 		Metadata:  mt.buildNudgeMetadata(),
 	}
-	
+
 	mt.recordNudge(nudge)
 	go mt.deliverNudge(nudge)
 }
@@ -471,7 +471,7 @@ func (mt *EnhancedMessageTrigger) OnToolCall(toolName string, args map[string]in
 func (mt *EnhancedMessageTrigger) OnTaskComplete() time.Duration {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	duration := time.Since(mt.taskStartTime)
 	mt.currentTask = ""
 	return duration
@@ -481,20 +481,20 @@ func (mt *EnhancedMessageTrigger) OnTaskComplete() time.Duration {
 func (mt *EnhancedMessageTrigger) OnNudgeResponse(nudgeID string, accepted bool) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	// Update metrics
 	if accepted {
 		mt.metrics.TotalAccepted++
 	} else {
 		mt.metrics.TotalDismissed++
 	}
-	
+
 	// Update user preference learning
 	total := mt.metrics.TotalAccepted + mt.metrics.TotalDismissed
 	if total > 0 {
 		mt.preferences.ResponseRate = float64(mt.metrics.TotalAccepted) / float64(total)
 	}
-	
+
 	// Adjust future nudge behavior
 	mt.adjustBehaviorFromResponse(accepted)
 }
@@ -510,7 +510,7 @@ func (mt *EnhancedMessageTrigger) adjustBehaviorFromResponse(accepted bool) {
 		mt.minNudgeInterval = time.Duration(float64(mt.minNudgeInterval) * 1.2)
 		mt.baseThreshold = int(float64(mt.baseThreshold) * 1.1)
 	}
-	
+
 	// Clamp values
 	if mt.minNudgeInterval < 10*time.Second {
 		mt.minNudgeInterval = 10 * time.Second
@@ -530,7 +530,7 @@ func (mt *EnhancedMessageTrigger) adjustBehaviorFromResponse(accepted bool) {
 func (mt *EnhancedMessageTrigger) RegisterNudgeHandler(handler NudgeHandler) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.nudgeHandlers = append(mt.nudgeHandlers, handler)
 }
 
@@ -543,12 +543,12 @@ func (mt *EnhancedMessageTrigger) RegisterNudgeHandlerFunc(name string, handler 
 func (mt *EnhancedMessageTrigger) ScheduleNudge(nudge *Nudge, deliverAt time.Time) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.scheduledNudges = append(mt.scheduledNudges, ScheduledNudge{
 		Nudge:     nudge,
 		DeliverAt: deliverAt,
 	})
-	
+
 	mt.scheduleNextCheck()
 }
 
@@ -557,7 +557,7 @@ func (mt *EnhancedMessageTrigger) scheduleNextCheck() {
 	if len(mt.scheduledNudges) == 0 {
 		return
 	}
-	
+
 	// Find the next nudge time
 	soonest := mt.scheduledNudges[0].DeliverAt
 	for _, sn := range mt.scheduledNudges {
@@ -565,12 +565,12 @@ func (mt *EnhancedMessageTrigger) scheduleNextCheck() {
 			soonest = sn.DeliverAt
 		}
 	}
-	
+
 	delay := time.Until(soonest)
 	if delay < 0 {
 		delay = 0
 	}
-	
+
 	if mt.timer != nil {
 		mt.timer.Stop()
 	}
@@ -583,10 +583,10 @@ func (mt *EnhancedMessageTrigger) scheduleNextCheck() {
 func (mt *EnhancedMessageTrigger) deliverScheduledNudges() {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	now := time.Now()
 	remaining := make([]ScheduledNudge, 0)
-	
+
 	for _, sn := range mt.scheduledNudges {
 		if sn.DeliverAt.Before(now) || sn.DeliverAt.Equal(now) {
 			mt.recordNudge(sn.Nudge)
@@ -595,7 +595,7 @@ func (mt *EnhancedMessageTrigger) deliverScheduledNudges() {
 			remaining = append(remaining, sn)
 		}
 	}
-	
+
 	mt.scheduledNudges = remaining
 	mt.scheduleNextCheck()
 }
@@ -611,7 +611,7 @@ func (mt *EnhancedMessageTrigger) GetTurnCount() int {
 func (mt *EnhancedMessageTrigger) SetNudgeThreshold(threshold int) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	if threshold > 0 {
 		mt.baseThreshold = threshold
 		mt.dynamicThreshold = threshold
@@ -623,7 +623,7 @@ func (mt *EnhancedMessageTrigger) SetNudgeThreshold(threshold int) {
 func (mt *EnhancedMessageTrigger) SetQuietHours(start, end time.Time) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.preferences.QuietHoursStart = start
 	mt.preferences.QuietHoursEnd = end
 }
@@ -632,7 +632,7 @@ func (mt *EnhancedMessageTrigger) SetQuietHours(start, end time.Time) {
 func (mt *EnhancedMessageTrigger) SetNudgeTypeEnabled(nudgeType NudgeType, enabled bool) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.preferences.EnabledTypes[nudgeType] = enabled
 }
 
@@ -640,7 +640,7 @@ func (mt *EnhancedMessageTrigger) SetNudgeTypeEnabled(nudgeType NudgeType, enabl
 func (mt *EnhancedMessageTrigger) GetMetrics() *NudgeMetrics {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	
+
 	// Return a copy
 	metrics := *mt.metrics
 	return &metrics
@@ -650,7 +650,7 @@ func (mt *EnhancedMessageTrigger) GetMetrics() *NudgeMetrics {
 func (mt *EnhancedMessageTrigger) GetPreferences() *UserNudgePreference {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	
+
 	// Return a copy
 	pref := *mt.preferences
 	return &pref
@@ -660,7 +660,7 @@ func (mt *EnhancedMessageTrigger) GetPreferences() *UserNudgePreference {
 func (mt *EnhancedMessageTrigger) SetPreferences(pref *UserNudgePreference) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.preferences = pref
 }
 
@@ -668,12 +668,12 @@ func (mt *EnhancedMessageTrigger) SetPreferences(pref *UserNudgePreference) {
 func (mt *EnhancedMessageTrigger) Reset() {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.turnCount = 0
 	mt.currentTask = ""
 	mt.dynamicThreshold = mt.baseThreshold
 	mt.taskStartTime = time.Time{}
-	
+
 	if mt.timer != nil {
 		mt.timer.Stop()
 	}
@@ -684,15 +684,15 @@ func (mt *EnhancedMessageTrigger) Reset() {
 func (mt *EnhancedMessageTrigger) GetRecentNudges(limit int) []*Nudge {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	
+
 	nudges := make([]*Nudge, 0)
-	
+
 	e := mt.recentNudges.Back()
 	for i := 0; i < limit && e != nil; i++ {
 		nudges = append(nudges, e.Value.(*Nudge))
 		e = e.Prev()
 	}
-	
+
 	return nudges
 }
 
@@ -707,7 +707,7 @@ func (mt *EnhancedMessageTrigger) GetContext() string {
 func (mt *EnhancedMessageTrigger) GetContextHistory(limit int) []string {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	
+
 	if len(mt.contextHistory) <= limit {
 		return mt.contextHistory
 	}
@@ -725,11 +725,11 @@ func (mt *EnhancedMessageTrigger) GetDynamicThreshold() int {
 func (mt *EnhancedMessageTrigger) PredictiveNudge(predictor func() (string, bool)) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	if !mt.preferences.EnabledTypes[NudgeTypeSuggestion] {
 		return
 	}
-	
+
 	suggestion, shouldNudge := predictor()
 	if shouldNudge {
 		mt.triggerNudgeUnsafe(NudgeTypeSuggestion, NudgePriorityLow, suggestion)
@@ -752,11 +752,11 @@ func (mt *EnhancedMessageTrigger) BatchNudge(nudges []*Nudge) {
 func (mt *EnhancedMessageTrigger) AddCustomNudgeType(nudgeType NudgeType) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	if mt.preferences.EnabledTypes == nil {
 		mt.preferences.EnabledTypes = make(map[NudgeType]bool)
 	}
-	
+
 	// New custom types are disabled by default
 	mt.preferences.EnabledTypes[nudgeType] = false
 }
@@ -765,7 +765,7 @@ func (mt *EnhancedMessageTrigger) AddCustomNudgeType(nudgeType NudgeType) {
 func (mt *EnhancedMessageTrigger) SetMinNudgeInterval(interval time.Duration) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	
+
 	mt.minNudgeInterval = interval
 }
 

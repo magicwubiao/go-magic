@@ -5,26 +5,26 @@ import "time"
 // Checkpoint represents a saved execution state
 // This is the core of the resumable execution pattern
 type Checkpoint struct {
-	ID            string                 `json:"id"`             // Unique checkpoint ID
-	TaskID        string                 `json:"task_id"`        // Task this checkpoint belongs to
-	StepID        int                    `json:"step_id"`        // Current step being executed
-	StepName      string                 `json:"step_name"`      // Human-readable step name
-	TurnCount     int                    `json:"turn_count"`     // Turns used so far
-	State         map[string]interface{} `json:"state"`          // Arbitrary state data
-	ToolResults   map[string]interface{} `json:"tool_results"`   // Results from tools
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	IsFinal       bool                   `json:"is_final"`       // True if task completed
+	ID          string                 `json:"id"`           // Unique checkpoint ID
+	TaskID      string                 `json:"task_id"`      // Task this checkpoint belongs to
+	StepID      int                    `json:"step_id"`      // Current step being executed
+	StepName    string                 `json:"step_name"`    // Human-readable step name
+	TurnCount   int                    `json:"turn_count"`   // Turns used so far
+	State       map[string]interface{} `json:"state"`        // Arbitrary state data
+	ToolResults map[string]interface{} `json:"tool_results"` // Results from tools
+	CreatedAt   time.Time              `json:"created_at"`
+	UpdatedAt   time.Time              `json:"updated_at"`
+	IsFinal     bool                   `json:"is_final"` // True if task completed
 }
 
 // ExecutionResult represents the result of a single tool execution
 type ExecutionResult struct {
-	ToolName    string      `json:"tool_name"`
-	Success     bool        `json:"success"`
-	Data        interface{} `json:"data,omitempty"`
-	Error       string      `json:"error,omitempty"`
-	Duration    time.Duration `json:"duration"`
-	Timestamp   time.Time   `json:"timestamp"`
+	ToolName  string        `json:"tool_name"`
+	Success   bool          `json:"success"`
+	Data      interface{}   `json:"data,omitempty"`
+	Error     string        `json:"error,omitempty"`
+	Duration  time.Duration `json:"duration"`
+	Timestamp time.Time     `json:"timestamp"`
 }
 
 // Progress represents task progress information for the user
@@ -41,10 +41,10 @@ type Progress struct {
 type ValidationLevel string
 
 const (
-	ValidationNone     ValidationLevel = "none"
-	ValidationBasic    ValidationLevel = "basic"     // Check for obvious errors
-	ValidationStrict   ValidationLevel = "strict"    // Verify expected outcomes
-	ValidationFull     ValidationLevel = "full"      // LLM-based quality assessment
+	ValidationNone   ValidationLevel = "none"
+	ValidationBasic  ValidationLevel = "basic"  // Check for obvious errors
+	ValidationStrict ValidationLevel = "strict" // Verify expected outcomes
+	ValidationFull   ValidationLevel = "full"   // LLM-based quality assessment
 )
 
 // ValidationResult contains the outcome of result validation
@@ -59,17 +59,17 @@ type ValidationResult struct {
 type ResumeStrategy string
 
 const (
-	ResumeAuto       ResumeStrategy = "auto"       // Resume automatically
-	ResumeAskUser    ResumeStrategy = "ask_user"   // Ask user before resuming
-	ResumeRestart    ResumeStrategy = "restart"    // Start over from beginning
+	ResumeAuto    ResumeStrategy = "auto"     // Resume automatically
+	ResumeAskUser ResumeStrategy = "ask_user" // Ask user before resuming
+	ResumeRestart ResumeStrategy = "restart"  // Start over from beginning
 )
 
 // RecoveryAction represents possible actions when execution fails
 type RecoveryAction string
 
 const (
-	RecoveryRetry       RecoveryAction = "retry"        // Retry the same step
-	RecoveryAlternative RecoveryAction = "alternative"  // Try a different approach
-	RecoveryAskUser     RecoveryAction = "ask_user"     // Ask user what to do
-	RecoveryAbort       RecoveryAction = "abort"        // Give up
+	RecoveryRetry       RecoveryAction = "retry"       // Retry the same step
+	RecoveryAlternative RecoveryAction = "alternative" // Try a different approach
+	RecoveryAskUser     RecoveryAction = "ask_user"    // Ask user what to do
+	RecoveryAbort       RecoveryAction = "abort"       // Give up
 )

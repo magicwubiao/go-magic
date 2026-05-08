@@ -12,37 +12,37 @@ import (
 
 // Sandbox provides security isolation for plugins
 type Sandbox struct {
-	plugin    Plugin
-	timeout   time.Duration
-	memLimit  int64 // bytes
-	cpuQuota  int   // percentage (1-100)
-	network   bool  // allow network access
-	fsRead    []string
-	fsWrite   []string
+	plugin       Plugin
+	timeout      time.Duration
+	memLimit     int64 // bytes
+	cpuQuota     int   // percentage (1-100)
+	network      bool  // allow network access
+	fsRead       []string
+	fsWrite      []string
 	envWhitelist []string
-	mu        sync.RWMutex
-	active    bool
+	mu           sync.RWMutex
+	active       bool
 }
 
 // SandboxConfig holds sandbox configuration
 type SandboxConfig struct {
-	Timeout      time.Duration // Execution timeout
-	MemLimit     int64          // Memory limit in bytes (0 = unlimited)
-	CPUQuota     int            // CPU quota percentage (0 = unlimited)
-	AllowNetwork bool           // Allow network access
-	FilesystemRead  []string     // Allowed read paths
-	FilesystemWrite []string     // Allowed write paths
-	EnvWhitelist    []string     // Allowed environment variables
+	Timeout         time.Duration // Execution timeout
+	MemLimit        int64         // Memory limit in bytes (0 = unlimited)
+	CPUQuota        int           // CPU quota percentage (0 = unlimited)
+	AllowNetwork    bool          // Allow network access
+	FilesystemRead  []string      // Allowed read paths
+	FilesystemWrite []string      // Allowed write paths
+	EnvWhitelist    []string      // Allowed environment variables
 }
 
 // DefaultSandboxConfig returns default sandbox configuration
 func DefaultSandboxConfig() *SandboxConfig {
 	home, _ := os.UserHomeDir()
 	return &SandboxConfig{
-		Timeout:       30 * time.Second,
-		MemLimit:      256 * 1024 * 1024, // 256MB
-		CPUQuota:      50,                // 50% CPU
-		AllowNetwork:  true,
+		Timeout:      30 * time.Second,
+		MemLimit:     256 * 1024 * 1024, // 256MB
+		CPUQuota:     50,                // 50% CPU
+		AllowNetwork: true,
 		FilesystemRead: []string{
 			home,
 			"/tmp",
@@ -70,14 +70,14 @@ func NewSandbox(plugin Plugin, config *SandboxConfig) *Sandbox {
 	}
 
 	return &Sandbox{
-		plugin:         plugin,
-		timeout:        config.Timeout,
-		memLimit:       config.MemLimit,
-		cpuQuota:       config.CPUQuota,
-		network:        config.AllowNetwork,
-		fsRead:         config.FilesystemRead,
-		fsWrite:        config.FilesystemWrite,
-		envWhitelist:   config.EnvWhitelist,
+		plugin:       plugin,
+		timeout:      config.Timeout,
+		memLimit:     config.MemLimit,
+		cpuQuota:     config.CPUQuota,
+		network:      config.AllowNetwork,
+		fsRead:       config.FilesystemRead,
+		fsWrite:      config.FilesystemWrite,
+		envWhitelist: config.EnvWhitelist,
 	}
 }
 
@@ -286,9 +286,9 @@ func (s *Sandbox) IsActive() bool {
 
 // SandboxManager manages multiple sandboxes
 type SandboxManager struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	sandboxes map[string]*Sandbox
-	config   *SandboxConfig
+	config    *SandboxConfig
 }
 
 // NewSandboxManager creates a new sandbox manager

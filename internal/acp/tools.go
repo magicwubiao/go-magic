@@ -249,9 +249,9 @@ func (t *ToolAdapter) executePing(ctx context.Context, args map[string]interface
 
 	if err := t.manager.Ping(ctx, agentName); err != nil {
 		return map[string]interface{}{
-			"agent":    agentName,
-			"healthy":  false,
-			"error":    err.Error(),
+			"agent":   agentName,
+			"healthy": false,
+			"error":   err.Error(),
 		}, nil
 	}
 
@@ -292,8 +292,8 @@ func BuiltinTools() []map[string]interface{} {
 						"description": "Command for stdio transport",
 					},
 					"args": map[string]interface{}{
-						"type":  "array",
-						"items": map[string]interface{}{"type": "string"},
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
 						"description": "Command arguments for stdio transport",
 					},
 					"headers": map[string]interface{}{
@@ -352,8 +352,8 @@ func BuiltinTools() []map[string]interface{} {
 			"name":        "acp_list_agents",
 			"description": "List all connected ACP agents",
 			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties":  map[string]interface{}{},
+				"type":       "object",
+				"properties": map[string]interface{}{},
 			},
 		},
 		{
@@ -393,8 +393,8 @@ func ToolSchemaToMap(tool map[string]interface{}) map[string]interface{} {
 // ParseSkillCall parses a skill call request
 func ParseSkillCall(params json.RawMessage) (string, string, map[string]interface{}, error) {
 	var req struct {
-		Agent string                 `json:"agent"`
-		Skill string                 `json:"skill"`
+		Agent  string                 `json:"agent"`
+		Skill  string                 `json:"skill"`
 		Params map[string]interface{} `json:"params"`
 	}
 

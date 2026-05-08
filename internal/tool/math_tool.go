@@ -179,7 +179,7 @@ func (t *MathTool) median(args map[string]any) (map[string]any, error) {
 	if !ok || len(nums) == 0 {
 		return nil, fmt.Errorf("numbers array is required for median")
 	}
-	
+
 	// Sort copy
 	sorted := make([]float64, len(nums))
 	copy(sorted, nums)
@@ -190,7 +190,7 @@ func (t *MathTool) median(args map[string]any) (map[string]any, error) {
 			}
 		}
 	}
-	
+
 	var median float64
 	n := len(sorted)
 	if n%2 == 0 {
@@ -198,7 +198,7 @@ func (t *MathTool) median(args map[string]any) (map[string]any, error) {
 	} else {
 		median = sorted[n/2]
 	}
-	
+
 	return map[string]any{"result": median, "count": n}, nil
 }
 
@@ -207,7 +207,7 @@ func (t *MathTool) stddev(args map[string]any) (map[string]any, error) {
 	if !ok || len(nums) == 0 {
 		return nil, fmt.Errorf("numbers array is required for stddev")
 	}
-	
+
 	var sum, sumSq float64
 	for _, n := range nums {
 		sum += n
@@ -216,7 +216,7 @@ func (t *MathTool) stddev(args map[string]any) (map[string]any, error) {
 	n := float64(len(nums))
 	mean := sum / n
 	variance := (sumSq / n) - (mean * mean)
-	
+
 	return map[string]any{
 		"result":   math.Sqrt(variance),
 		"variance": variance,
@@ -230,32 +230,33 @@ func (t *MathTool) aggregateOp(args map[string]any, initFn func([]float64) float
 	if !ok || len(nums) == 0 {
 		return nil, fmt.Errorf("numbers array is required")
 	}
-	
+
 	result := initFn(nums)
 	for _, n := range nums {
 		result = opFn(result, n)
 	}
-	
+
 	return map[string]any{"result": result, "count": len(nums)}, nil
 }
 
 func (t *MathTool) constants() (map[string]any, error) {
 	m := map[string]any{
-		"pi":       math.Pi,
-		"e":        math.E,
-		"phi":      math.Phi,
-		"sqrt2":    math.Sqrt2,
-		"sqrt_e":   math.SqrtE,
-		"ln2":      math.Ln2,
-		"ln10":     math.Ln10,
-		"log2_e":   math.Log2E,
-		"log10_e":  math.Log10E,
-		"inf":      math.Inf(1),
-		"neg_inf":  math.Inf(-1),
-		"nan":      math.NaN(),
+		"pi":      math.Pi,
+		"e":       math.E,
+		"phi":     math.Phi,
+		"sqrt2":   math.Sqrt2,
+		"sqrt_e":  math.SqrtE,
+		"ln2":     math.Ln2,
+		"ln10":    math.Ln10,
+		"log2_e":  math.Log2E,
+		"log10_e": math.Log10E,
+		"inf":     math.Inf(1),
+		"neg_inf": math.Inf(-1),
+		"nan":     math.NaN(),
 	}
 	return m, nil
 }
+
 // CSV Tool - CSV 处理工具
 // ============================================================================
 
@@ -491,7 +492,7 @@ func (t *CSVTool) stats(data, delimiter string, hasHeader bool) (map[string]any,
 			}
 			if _, exists := stats[col]; !exists {
 				stats[col] = map[string]any{
-					"count":    0,
+					"count":     0,
 					"non_empty": 0,
 				}
 			}
@@ -503,8 +504,8 @@ func (t *CSVTool) stats(data, delimiter string, hasHeader bool) (map[string]any,
 	}
 
 	return map[string]any{
-		"total_rows":  len(rows),
-		"columns":     stats,
+		"total_rows": len(rows),
+		"columns":    stats,
 	}, nil
 }
 

@@ -15,8 +15,8 @@ import (
 
 // OutputFormatter handles different output formats
 type OutputFormatter struct {
-	writer io.Writer
-	format string
+	writer  io.Writer
+	format  string
 	noColor bool
 }
 
@@ -279,10 +279,10 @@ func Underline(s string) string {
 
 // Spinner provides a simple loading indicator
 type Spinner struct {
-	message  string
-	frames   []string
-	current  int
-	stopped  bool
+	message string
+	frames  []string
+	current int
+	stopped bool
 }
 
 var defaultFrames = []string{
@@ -329,10 +329,10 @@ type Progress struct {
 // NewProgress creates a new progress bar
 func NewProgress(total int, prefix string) *Progress {
 	return &Progress{
-		total:  total,
+		total:   total,
 		current: 0,
-		width:  50,
-		prefix: prefix,
+		width:   50,
+		prefix:  prefix,
 	}
 }
 

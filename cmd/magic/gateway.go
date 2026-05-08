@@ -179,18 +179,20 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Start WeChat if configured
-	if wcCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wcCfg.Enabled {
+	// Start WeChat (Official Account / Mini Program) if configured
+	// Uses 微信公众[ADDRESS]/小程序 official API (app_id + app_secret)
+	if wxCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wxCfg.Enabled {
 		platformCount++
-		if wcCfg.APIURL == "" {
-			fmt.Println("WeChat config incomplete (need api_url)!")
+		if wxCfg.AppID == "" || wxCfg.AppSecret == "" {
+			fmt.Println("[WeChat] Config incomplete (need app_id and app_secret)!")
+			fmt.Println("[WeChat] For personal WeChat account, use 'wechat_clawbot' platform instead.")
 		} else {
 			fmt.Println("[WeChat] Starting...")
-			wcGw := gateway.NewWeChatGateway(wcCfg.APIURL, wcCfg.APIKey, wcCfg.Token, wcCfg.AESKey)
-			if err := wcGw.Connect(ctx); err != nil {
+			wxGw := gateway.NewWeChatGateway(wxCfg.AppID, wxCfg.AppSecret, wxCfg.Token, wxCfg.AESKey)
+			if err := wxGw.Connect(ctx); err != nil {
 				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
 			} else {
-				gw.RegisterPlatform("wechat", wcGw)
+				gw.RegisterPlatform("wechat", wxGw)
 			}
 		}
 	}
@@ -259,7 +261,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Start WeChat ClawBot if configured
+	// Start WeChat ClawBot (Personal WeChat via iLink) if configured
+	// Uses personal WeChat via 微信官方插件 (ClawBot / iLink Bot API)
 	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled {
 		platformCount++
 		fmt.Println("[WeChat-ClawBot] Starting...")
@@ -270,10 +273,15 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			dataDir = filepath.Join(homeDir, ".magic", "clawbot")
 		}
 
+		baseURL := clawCfg.APIURL
+		if baseURL == "" {
+			baseURL = "https://ilinkai.weixin.qq.com"
+		}
+
 		clawGw := gateway.NewWeChatClawGateway(gateway.WeChatClawConfig{
 			ClientID:  clawCfg.ClientID,
 			DataDir:   dataDir,
-			BaseURL:   clawCfg.APIURL,
+			BaseURL:   baseURL,
 			AutoLogin: clawCfg.AutoLogin,
 		})
 
@@ -435,28 +443,5 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 			}
 			fmt.Printf("  %s: %s\n", name, status)
 		}
-	}
-}
-
-func startHealthServer(ctx context.Context) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
-
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
-	}
-
-	go func() {
-		<-ctx.Done()
-		server.Shutdown(context.Background())
-	}()
-
-	fmt.Println("Health check server started on :8080")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Printf("Health server error: %v\n", err)
 	}
 }

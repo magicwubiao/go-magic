@@ -88,9 +88,9 @@ type HermesUser struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Settings struct {
-		Theme        string `json:"theme"`
-		Language     string `json:"language"`
-		Timezone     string `json:"timezone"`
+		Theme         string `json:"theme"`
+		Language      string `json:"language"`
+		Timezone      string `json:"timezone"`
 		Notifications struct {
 			Email bool `json:"email"`
 			Push  bool `json:"push"`
@@ -101,9 +101,9 @@ type HermesUser struct {
 // HermesMemory represents Hermes memory.json structure
 type HermesMemory struct {
 	Entries []struct {
-		Type      string `json:"type"`
-		Content   string `json:"content"`
-		Timestamp string `json:"timestamp"`
+		Type      string   `json:"type"`
+		Content   string   `json:"content"`
+		Timestamp string   `json:"timestamp"`
 		Tags      []string `json:"tags"`
 	} `json:"entries"`
 }
@@ -113,7 +113,7 @@ func convertMemoryToMarkdown(memory *HermesMemory) string {
 	var md string
 	md += "# Memory\n\n"
 	md += "Auto-migrated from Hermes Agent\n\n"
-	
+
 	for _, entry := range memory.Entries {
 		md += fmt.Sprintf("## [%s] %s\n\n", entry.Type, entry.Timestamp)
 		md += entry.Content + "\n\n"
@@ -147,7 +147,7 @@ func detectSource() migrateSource {
 	if _, err := os.Stat(openclawDir); err == nil {
 		return sourceOpenClaw
 	}
-	
+
 	// Check Hermes (~/.hermes or ~/.config/hermes)
 	hermesDir1 := filepath.Join(getHomeDir(), ".hermes")
 	hermesDir2 := filepath.Join(getHomeDir(), ".config", "hermes")
@@ -157,7 +157,7 @@ func detectSource() migrateSource {
 	if _, err := os.Stat(hermesDir2); err == nil {
 		return sourceHermes
 	}
-	
+
 	return sourceOpenClaw // Default fallback
 }
 
@@ -194,7 +194,7 @@ func runDataMigrate(cmd *cobra.Command, args []string) {
 
 	// Check if --from flag was explicitly set
 	flagChanged := cmd.Flags().Changed("from")
-	
+
 	// Auto-detect source if not explicitly specified
 	if !flagChanged {
 		fromSource = detectSource()
@@ -246,10 +246,10 @@ func runDataMigrate(cmd *cobra.Command, args []string) {
 		filtered := []migrateItem{}
 		for _, item := range items {
 			// Only include user-related items
-			if item.name == "SOUL.md (persona)" || 
-			   item.name == "MEMORY.md" || 
-			   item.name == "USER.md" ||
-			   item.name == "persona.md (Hermes)" {
+			if item.name == "SOUL.md (persona)" ||
+				item.name == "MEMORY.md" ||
+				item.name == "USER.md" ||
+				item.name == "persona.md (Hermes)" {
 				filtered = append(filtered, item)
 			}
 		}
@@ -330,19 +330,19 @@ func buildHermesMigrateItems(srcDir, dstDir string) []migrateItem {
 	return []migrateItem{
 		// Persona: persona.md -> SOUL.md
 		{"persona.md (Hermes)", filepath.Join(srcDir, "persona.md"), filepath.Join(dstDir, "SOUL.md"), nil},
-		
+
 		// Memory: memory.json/memory.db -> MEMORY.md
 		{"memory.json (Hermes)", filepath.Join(srcDir, "memory.json"), filepath.Join(dstDir, "MEMORY.md"), transformHermesMemory},
-		
+
 		// User: user.json -> USER.md
 		{"user.json (Hermes)", filepath.Join(srcDir, "user.json"), filepath.Join(dstDir, "USER.md"), transformHermesUser},
-		
+
 		// Config: direct copy
 		{"Config", filepath.Join(srcDir, "config.yaml"), filepath.Join(dstDir, "config.yaml"), nil},
-		
+
 		// Skills: directory copy
 		{"Skills", filepath.Join(srcDir, "skills"), filepath.Join(dstDir, "skills"), nil},
-		
+
 		// Conversations: directory copy
 		{"Conversations", filepath.Join(srcDir, "conversations"), filepath.Join(dstDir, "conversations"), nil},
 	}

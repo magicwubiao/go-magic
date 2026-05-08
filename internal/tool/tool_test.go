@@ -633,7 +633,7 @@ func TestInMemoryCache(t *testing.T) {
 	t.Run("set and get", func(t *testing.T) {
 		result := NewSuccessResult("test")
 		cache.Set("key1", result, time.Hour)
-		
+
 		cached, found := cache.Get("key1")
 		if !found {
 			t.Error("cache.Get should return found=true")
@@ -647,7 +647,7 @@ func TestInMemoryCache(t *testing.T) {
 		result := NewSuccessResult("test")
 		cache.Set("key2", result, time.Hour)
 		cache.Delete("key2")
-		
+
 		_, found := cache.Get("key2")
 		if found {
 			t.Error("cache.Get should return found=false after delete")
@@ -657,9 +657,9 @@ func TestInMemoryCache(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		result := NewSuccessResult("test")
 		cache.Set("key3", result, time.Millisecond)
-		
+
 		time.Sleep(time.Millisecond * 10)
-		
+
 		_, found := cache.Get("key3")
 		if found {
 			t.Error("expired key should not be found")
@@ -670,7 +670,7 @@ func TestInMemoryCache(t *testing.T) {
 		cache.Clear()
 		cache.Set("k1", NewSuccessResult("v1"), time.Hour)
 		cache.Set("k2", NewSuccessResult("v2"), time.Hour)
-		
+
 		if cache.Size() != 2 {
 			t.Errorf("Size = %d, want 2", cache.Size())
 		}
@@ -684,13 +684,13 @@ func TestInMemoryCache(t *testing.T) {
 func TestLoggingMiddleware(t *testing.T) {
 	logger := &defaultLogger{}
 	middleware := LoggingMiddleware(logger)
-	
+
 	var executed bool
 	wrapped := middleware(func(ctx context.Context, params map[string]any) (*ToolResult, error) {
 		executed = true
 		return NewSuccessResult("test"), nil
 	})
-	
+
 	_, _ = wrapped(context.Background(), map[string]any{})
 	if !executed {
 		t.Error("middleware should execute wrapped function")
@@ -699,11 +699,11 @@ func TestLoggingMiddleware(t *testing.T) {
 
 func TestPanicRecoveryMiddleware(t *testing.T) {
 	middleware := PanicRecoveryMiddleware()
-	
+
 	wrapped := middleware(func(ctx context.Context, params map[string]any) (*ToolResult, error) {
 		panic("test panic")
 	})
-	
+
 	result, err := wrapped(context.Background(), map[string]any{})
 	if err != nil {
 		t.Errorf("panic should not return error, got: %v", err)
@@ -763,7 +763,7 @@ func TestToolContext(t *testing.T) {
 	t.Run("ToContext and FromContext", func(t *testing.T) {
 		tc := NewToolContext(context.Background()).WithSession("session123")
 		ctx := tc.ToContext()
-		
+
 		fromCtx := FromContext(ctx)
 		if fromCtx.SessionID != "session123" {
 			t.Errorf("FromContext SessionID = %s, want 'session123'", fromCtx.SessionID)
@@ -777,7 +777,7 @@ func TestToolContext(t *testing.T) {
 
 func TestCacheKeyBuilder(t *testing.T) {
 	builder := NewCacheKeyBuilder("test")
-	
+
 	t.Run("build consistent key", func(t *testing.T) {
 		key1 := builder.Build("tool", map[string]any{"a": "1"})
 		key2 := builder.Build("tool", map[string]any{"a": "1"})

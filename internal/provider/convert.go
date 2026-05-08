@@ -9,13 +9,13 @@ import (
 // ConvertMessages converts internal Message format to OpenAI API message format
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(messages))
-	
+
 	for msgIdx, msg := range messages {
 		openAIMsg := map[string]interface{}{
 			"role":    msg.Role,
 			"content": msg.Content,
 		}
-		
+
 		// Handle tool calls for assistant messages
 		if len(msg.ToolCalls) > 0 {
 			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
@@ -47,7 +47,7 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 			}
 			openAIMsg["tool_calls"] = toolCalls
 		}
-		
+
 		// Handle tool_call_id for tool messages - ALWAYS include it for tool role
 		if msg.Role == "tool" {
 			if msg.ToolCallID != "" {
@@ -64,10 +64,10 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 				}
 			}
 		}
-		
+
 		result = append(result, openAIMsg)
 	}
-	
+
 	return result
 }
 
@@ -81,7 +81,7 @@ func findToolCallID(messages []types.Message, toolMsgIdx int) string {
 			toolCount++
 		}
 	}
-	
+
 	// Search backwards for the last assistant message with tool_calls before this tool message
 	for i := toolMsgIdx - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {

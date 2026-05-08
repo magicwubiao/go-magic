@@ -108,10 +108,10 @@ func runMetrics(cmd *cobra.Command, args []string) {
 	metrics := map[string]interface{}{
 		"timestamp": time.Now().Format(time.RFC3339),
 		"go": map[string]interface{}{
-			"version":      runtime.Version(),
-			"goos":         runtime.GOOS,
-			"goarch":       runtime.GOARCH,
-			"num_cpu":      runtime.NumCPU(),
+			"version":       runtime.Version(),
+			"goos":          runtime.GOOS,
+			"goarch":        runtime.GOARCH,
+			"num_cpu":       runtime.NumCPU(),
 			"num_goroutine": runtime.NumGoroutine(),
 		},
 		"memory": map[string]interface{}{
@@ -126,7 +126,7 @@ func runMetrics(cmd *cobra.Command, args []string) {
 			"heap_inuse":  memStats.HeapInuse,
 		},
 		"gc": map[string]interface{}{
-			"count":      memStats.NumGC,
+			"count":       memStats.NumGC,
 			"pause_total": memStats.PauseTotalNs,
 		},
 	}
@@ -134,9 +134,9 @@ func runMetrics(cmd *cobra.Command, args []string) {
 	// Try to add config info
 	if cfg, err := config.Load(); err == nil {
 		metrics["config"] = map[string]interface{}{
-			"profile":   cfg.Profile,
-			"provider":  cfg.Provider,
-			"model":     cfg.Model,
+			"profile":    cfg.Profile,
+			"provider":   cfg.Provider,
+			"model":      cfg.Model,
 			"magic_home": cfg.MagicHome,
 		}
 	}

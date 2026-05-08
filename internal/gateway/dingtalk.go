@@ -5,14 +5,14 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	
+
 	"crypto/sha256"
-	
+
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	
+
 	"strings"
 	"sync"
 	"time"
@@ -25,23 +25,23 @@ type DingTalkGateway struct {
 	appKey    string
 	appSecret string
 	agentID   string
-	
-	accessToken string
+
+	accessToken    string
 	tokenExpiresAt time.Time
-	tokenMu      sync.RWMutex
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	tokenMu        sync.RWMutex
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	// Callback config
 	callbackPort int
-	
+
 	// AES encryption
 	aesKey []byte
-	
+
 	// Reconnection
 	maxRetries     int
 	retryDelay     time.Duration
@@ -51,11 +51,11 @@ type DingTalkGateway struct {
 // NewDingTalkGateway creates a new DingTalk gateway
 func NewDingTalkGateway(appKey, appSecret string) *DingTalkGateway {
 	return &DingTalkGateway{
-		appKey:      appKey,
-		appSecret:   appSecret,
-		agents:      make(map[string]*AgentSession),
-		msgCh:       make(chan Message, 100),
-		stopCh:      make(chan struct{}),
+		appKey:       appKey,
+		appSecret:    appSecret,
+		agents:       make(map[string]*AgentSession),
+		msgCh:        make(chan Message, 100),
+		stopCh:       make(chan struct{}),
 		callbackPort: 8080,
 		maxRetries:   5,
 		retryDelay:   time.Second * 5,
@@ -78,15 +78,15 @@ func (g *DingTalkGateway) Connect(ctx context.Context) error {
 	g.mu.Unlock()
 
 	log.Infof("Connecting to DingTalk gateway...")
-	
+
 	if err := g.refreshToken(); err != nil {
 		log.Errorf("Failed to get DingTalk token: %v", err)
 		return err
 	}
-	
+
 	go g.tokenRefresher()
 	go g.startCallbackServer()
-	
+
 	log.Info("DingTalk gateway connected")
 	return nil
 }
@@ -95,15 +95,15 @@ func (g *DingTalkGateway) Connect(ctx context.Context) error {
 func (g *DingTalkGateway) Disconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	if !g.running {
 		return nil
 	}
-	
+
 	close(g.stopCh)
 	g.running = false
 	g.currentRetries = 0
-	
+
 	log.Info("DingTalk gateway disconnected")
 	return nil
 }
@@ -151,12 +151,12 @@ func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 		Timestamp: time.Now(),
 		Platforms: make(map[string]PlatformStatus),
 	}
-	
+
 	platformStatus := PlatformStatus{
 		Name:   "dingtalk",
 		Status: "disconnected",
 	}
-	
+
 	if !g.IsConnected() {
 		platformStatus.Status = "disconnected"
 		platformStatus.Error = "Gateway not connected"
@@ -164,15 +164,15 @@ func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 		status.Platforms["dingtalk"] = platformStatus
 		return status
 	}
-	
+
 	platformStatus.Status = "connected"
-	
+
 	// Check token validity
 	g.tokenMu.RLock()
 	token := g.accessToken
 	tokenExpiry := g.tokenExpiresAt
 	g.tokenMu.RUnlock()
-	
+
 	if token == "" {
 		platformStatus.Error = "No access token"
 		status.Status = "error"
@@ -180,9 +180,9 @@ func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 		platformStatus.Error = "Token expired"
 		status.Status = "error"
 	}
-	
+
 	status.Platforms["dingtalk"] = platformStatus
-	
+
 	return status
 }
 
@@ -243,11 +243,11 @@ func (g *DingTalkGateway) tokenRefresher() {
 			g.mu.RLock()
 			running := g.running
 			g.mu.RUnlock()
-			
+
 			if !running {
 				return
 			}
-			
+
 			if err := g.refreshToken(); err != nil {
 				log.Errorf("Failed to refresh DingTalk token: %v", err)
 			}
@@ -259,13 +259,13 @@ func (g *DingTalkGateway) tokenRefresher() {
 func (g *DingTalkGateway) startCallbackServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dingtalk/callback", g.handleCallback)
-	
+
 	addr := fmt.Sprintf(":%d", g.callbackPort)
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
-	
+
 	log.Infof("DingTalk callback server starting on %s", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Errorf("DingTalk callback server error: %v", err)
@@ -286,25 +286,25 @@ func (g *DingTalkGateway) SetAESKey(key string) {
 // handleCallback handles incoming callbacks from DingTalk
 func (g *DingTalkGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 	// Check signature for callback verification
-	
+
 	// Handle verification challenge
 	if r.URL.Query().Get("type") == "verification" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	
+
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Errorf("Failed to read callback body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	
+
 	// Decrypt if encrypted
 	var msgStr string
 	if g.aesKey != nil && len(body) > 0 {
@@ -317,27 +317,27 @@ func (g *DingTalkGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 	} else {
 		msgStr = string(body)
 	}
-	
+
 	// Parse callback event
 	var event struct {
 		EventType string `json:"EventType"`
 		Text      struct {
 			Content string `json:"content"`
 		} `json:"text"`
-		RobotCode string `json:"robotCode"`
-		SenderNick string `json:"senderNick"`
+		RobotCode      string `json:"robotCode"`
+		SenderNick     string `json:"senderNick"`
 		ConversationID string `json:"conversationId"`
-		SenderID string `json:"senderStaffId"`
-		MsgId string `json:"msgId"`
-		CreateAt int64 `json:"createAt"`
+		SenderID       string `json:"senderStaffId"`
+		MsgId          string `json:"msgId"`
+		CreateAt       int64  `json:"createAt"`
 	}
-	
+
 	if err := json.Unmarshal([]byte(msgStr), &event); err != nil {
 		log.Errorf("Failed to parse callback event: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	
+
 	// Handle different event types
 	switch event.EventType {
 	case "robot", "o2o":
@@ -345,7 +345,7 @@ func (g *DingTalkGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 	default:
 		log.Debugf("Unhandled event type: %s", event.EventType)
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -353,22 +353,22 @@ func (g *DingTalkGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 func (g *DingTalkGateway) decryptCallback(encrypted []byte) (string, error) {
 	// Simplified decryption - in production, implement full AES/CBC decryption
 	// DingTalk uses AES/CBC/PKCS5Padding encryption
-	
+
 	block, err := aes.NewCipher(g.aesKey)
 	if err != nil {
 		return "", err
 	}
-	
+
 	iv := encrypted[:aes.BlockSize]
 	encrypted = encrypted[aes.BlockSize:]
-	
+
 	mode := cipher.NewCBCDecrypter(block, iv)
 	mode.CryptBlocks(encrypted, encrypted)
-	
+
 	// Remove PKCS5 padding
 	padding := int(encrypted[len(encrypted)-1])
 	encrypted = encrypted[:len(encrypted)-padding]
-	
+
 	return string(encrypted), nil
 }
 
@@ -378,18 +378,18 @@ func (g *DingTalkGateway) handleMessageEvent(event struct {
 	Text      struct {
 		Content string `json:"content"`
 	} `json:"text"`
-	RobotCode string `json:"robotCode"`
-	SenderNick string `json:"senderNick"`
+	RobotCode      string `json:"robotCode"`
+	SenderNick     string `json:"senderNick"`
 	ConversationID string `json:"conversationId"`
-	SenderID string `json:"senderStaffId"`
-	MsgId string `json:"msgId"`
-	CreateAt int64 `json:"createAt"`
+	SenderID       string `json:"senderStaffId"`
+	MsgId          string `json:"msgId"`
+	CreateAt       int64  `json:"createAt"`
 }) {
 	// Only process robot messages
 	if event.EventType != "robot" && event.EventType != "o2o" {
 		return
 	}
-	
+
 	msg := Message{
 		ID:        event.MsgId,
 		Platform:  "dingtalk",
@@ -402,11 +402,11 @@ func (g *DingTalkGateway) handleMessageEvent(event struct {
 			"robot_code":  event.RobotCode,
 		},
 	}
-	
+
 	g.mu.RLock()
 	msgCh := g.msgCh
 	g.mu.RUnlock()
-	
+
 	select {
 	case msgCh <- msg:
 	default:
@@ -419,7 +419,7 @@ func (g *DingTalkGateway) sendMessage(userID, content string) error {
 	g.tokenMu.RLock()
 	token := g.accessToken
 	g.tokenMu.RUnlock()
-	
+
 	url := fmt.Sprintf("https://oapi.dingtalk.com/topapi/message/corpconversation/send?access_token=%s", token)
 
 	msg := map[string]interface{}{
@@ -503,24 +503,24 @@ func (g *DingTalkGateway) sendRichMessage(userID, content string) error {
 	case "link":
 		if title, ok := richContent["title"].(string); ok {
 			msg["link"] = map[string]interface{}{
-				"title":       title,
-				"text":        richContent["text"],
-				"messageUrl":   richContent["messageUrl"],
-				"picUrl":      richContent["picUrl"],
+				"title":      title,
+				"text":       richContent["text"],
+				"messageUrl": richContent["messageUrl"],
+				"picUrl":     richContent["picUrl"],
 			}
 		} else {
 			msg["link"] = map[string]interface{}{
-				"title":     "Message",
-				"text":      content,
+				"title":      "Message",
+				"text":       content,
 				"messageUrl": richContent["messageUrl"],
 			}
 		}
 	case "action_card":
 		msg["action_card"] = map[string]interface{}{
-			"title":          richContent["title"],
-			"markdown":       content,
-			"single_title":   richContent["single_title"],
-			"single_url":     richContent["single_url"],
+			"title":        richContent["title"],
+			"markdown":     content,
+			"single_title": richContent["single_title"],
+			"single_url":   richContent["single_url"],
 		}
 	default:
 		// Default to text
@@ -557,7 +557,7 @@ func (g *DingTalkGateway) SendToConversation(conversationID, content string) err
 	g.tokenMu.RLock()
 	token := g.accessToken
 	g.tokenMu.RUnlock()
-	
+
 	url := fmt.Sprintf("https://oapi.dingtalk.com/robot/send?access_token=%s", token)
 
 	msg := map[string]interface{}{
@@ -601,21 +601,21 @@ func (g *DingTalkGateway) Reconnect(ctx context.Context) error {
 	g.currentRetries++
 	retryDelay := g.retryDelay * time.Duration(g.currentRetries)
 	g.mu.Unlock()
-	
+
 	log.Infof("Attempting to reconnect to DingTalk (attempt %d, delay %v)", g.currentRetries, retryDelay)
-	
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(retryDelay):
 	}
-	
+
 	if err := g.Connect(ctx); err != nil {
 		if g.currentRetries < g.maxRetries {
 			return g.Reconnect(ctx)
 		}
 		return fmt.Errorf("max retries exceeded")
 	}
-	
+
 	return nil
 }

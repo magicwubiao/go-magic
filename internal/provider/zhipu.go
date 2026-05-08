@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // ZhipuProvider 智谱AI (兼容OpenAI格式)
 type ZhipuProvider struct {
@@ -27,9 +25,9 @@ func (p *ZhipuProvider) Name() string {
 func (p *ZhipuProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }

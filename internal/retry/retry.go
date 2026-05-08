@@ -26,9 +26,9 @@ func (f FixedBackoff) NextDelay(attempt int) time.Duration {
 
 // LinearBackoff increases delay linearly with each attempt
 type LinearBackoff struct {
-	Base    time.Duration
+	Base      time.Duration
 	Increment time.Duration
-	Max     time.Duration
+	Max       time.Duration
 }
 
 // NextDelay implements BackoffStrategy
@@ -57,8 +57,8 @@ func (e ExponentialBackoff) NextDelay(attempt int) time.Duration {
 
 // ExponentialBackoffWithJitter adds jitter to exponential backoff
 type ExponentialBackoffWithJitter struct {
-	Base       time.Duration
-	Max        time.Duration
+	Base         time.Duration
+	Max          time.Duration
 	JitterFactor float64 // 0-1, percentage of jitter
 }
 
@@ -68,7 +68,7 @@ func (e ExponentialBackoffWithJitter) NextDelay(attempt int) time.Duration {
 	if baseDelay > e.Max {
 		baseDelay = e.Max
 	}
-	
+
 	// Add jitter
 	jitter := time.Duration(float64(baseDelay) * e.JitterFactor * (rand.Float64()*2 - 1))
 	return baseDelay + jitter
@@ -85,11 +85,11 @@ func (f FibonacciBackoff) NextDelay(attempt int) time.Duration {
 	if attempt <= 2 {
 		return f.Base
 	}
-	
+
 	// Calculate Fibonacci number
 	fib := fibonacci(attempt)
 	delay := f.Base * time.Duration(fib)
-	
+
 	if delay > f.Max {
 		delay = f.Max
 	}
@@ -101,7 +101,7 @@ func fibonacci(n int) int64 {
 	if n <= 1 {
 		return int64(n)
 	}
-	
+
 	var a, b int64 = 0, 1
 	for i := 2; i <= n; i++ {
 		a, b = b, a+b
@@ -150,18 +150,18 @@ func DefaultRetryConfig() *RetryConfig {
 
 // RetryResult contains the result of a retry operation
 type RetryResult struct {
-	Value      interface{}
-	Error      error
-	Attempts   int
-	TotalTime  time.Duration
-	LastDelay  time.Duration
-	Success    bool
+	Value     interface{}
+	Error     error
+	Attempts  int
+	TotalTime time.Duration
+	LastDelay time.Duration
+	Success   bool
 }
 
 // Do executes the operation with retry logic
 func Do(ctx context.Context, config *RetryConfig, op func() error) error {
 	var lastErr error
-	
+
 	start := time.Now()
 	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
 		select {
@@ -169,15 +169,15 @@ func Do(ctx context.Context, config *RetryConfig, op func() error) error {
 			return fmt.Errorf("retry cancelled: %w", ctx.Err())
 		default:
 		}
-		
+
 		// Execute operation
 		err := op()
 		if err == nil {
 			return nil
 		}
-		
+
 		lastErr = err
-		
+
 		// Check if we should retry
 		shouldRetry := false
 		for _, condition := range config.RetryOn {
@@ -186,22 +186,22 @@ func Do(ctx context.Context, config *RetryConfig, op func() error) error {
 				break
 			}
 		}
-		
+
 		if !shouldRetry || attempt >= config.MaxAttempts {
 			return err
 		}
-		
+
 		// Calculate delay
 		var delay time.Duration
 		if config.Backoff != nil {
 			delay = config.Backoff.NextDelay(attempt)
 		}
-		
+
 		// Check timeout
 		if config.Timeout > 0 && time.Since(start)+delay > config.Timeout {
 			return fmt.Errorf("retry timeout exceeded: %w", err)
 		}
-		
+
 		// Wait before next attempt
 		select {
 		case <-ctx.Done():
@@ -209,7 +209,7 @@ func Do(ctx context.Context, config *RetryConfig, op func() error) error {
 		case <-time.After(delay):
 		}
 	}
-	
+
 	return lastErr
 }
 
@@ -217,7 +217,7 @@ func Do(ctx context.Context, config *RetryConfig, op func() error) error {
 func DoWithResult(ctx context.Context, config *RetryConfig, op func() (interface{}, error)) *RetryResult {
 	result := &RetryResult{}
 	start := time.Now()
-	
+
 	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
 		select {
 		case <-ctx.Done():
@@ -225,22 +225,22 @@ func DoWithResult(ctx context.Context, config *RetryConfig, op func() (interface
 			return result
 		default:
 		}
-		
+
 		// Execute operation
 		value, err := op()
 		result.Value = value
-		
+
 		if err == nil {
 			result.Success = true
 			result.Attempts = attempt
 			result.TotalTime = time.Since(start)
 			return result
 		}
-		
+
 		result.Error = err
 		result.Attempts = attempt
 		result.LastDelay = config.Backoff.NextDelay(attempt)
-		
+
 		// Check if we should retry
 		shouldRetry := false
 		for _, condition := range config.RetryOn {
@@ -249,19 +249,19 @@ func DoWithResult(ctx context.Context, config *RetryConfig, op func() (interface
 				break
 			}
 		}
-		
+
 		if !shouldRetry || attempt >= config.MaxAttempts {
 			result.TotalTime = time.Since(start)
 			return result
 		}
-		
+
 		// Check timeout
 		if config.Timeout > 0 && time.Since(start)+result.LastDelay > config.Timeout {
 			result.Error = fmt.Errorf("retry timeout exceeded: %w", err)
 			result.TotalTime = time.Since(start)
 			return result
 		}
-		
+
 		// Wait before next attempt
 		select {
 		case <-ctx.Done():
@@ -271,7 +271,7 @@ func DoWithResult(ctx context.Context, config *RetryConfig, op func() (interface
 		case <-time.After(result.LastDelay):
 		}
 	}
-	
+
 	result.TotalTime = time.Since(start)
 	return result
 }
@@ -294,17 +294,17 @@ func NewRetryer(config *RetryConfig) *Retryer {
 // Attempt executes a single retry attempt
 func (r *Retryer) Attempt(ctx context.Context, op func() error) error {
 	r.attempts++
-	
+
 	// Check timeout
 	if r.config.Timeout > 0 && r.totalTime > r.config.Timeout {
 		return fmt.Errorf("retry timeout exceeded")
 	}
-	
+
 	err := op()
 	if err == nil {
 		return nil
 	}
-	
+
 	// Check if we should retry
 	shouldRetry := false
 	for _, condition := range r.config.RetryOn {
@@ -313,16 +313,16 @@ func (r *Retryer) Attempt(ctx context.Context, op func() error) error {
 			break
 		}
 	}
-	
+
 	if !shouldRetry {
 		return err
 	}
-	
+
 	// Calculate delay
 	if r.config.Backoff != nil {
 		r.lastDelay = r.config.Backoff.NextDelay(r.attempts)
 	}
-	
+
 	return err
 }
 
@@ -331,7 +331,7 @@ func (r *Retryer) Wait(ctx context.Context) error {
 	if r.lastDelay == 0 {
 		return nil
 	}
-	
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

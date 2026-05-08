@@ -13,10 +13,10 @@ import (
 )
 
 var (
-	importForce       bool
-	importRecursive   bool
-	importDryRun      bool
-	importListOnly    bool
+	importForce     bool
+	importRecursive bool
+	importDryRun    bool
+	importListOnly  bool
 )
 
 var skillImportCmd = &cobra.Command{

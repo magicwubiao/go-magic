@@ -11,12 +11,12 @@ import (
 )
 
 var (
-	migrateInput   string
-	migrateOutput  string
-	migrateFormat  string
-	migrateBatch   bool
+	migrateInput     string
+	migrateOutput    string
+	migrateFormat    string
+	migrateBatch     bool
 	migrateOverwrite bool
-	migrateDryRun  bool
+	migrateDryRun    bool
 	migrateRecursive bool
 )
 
@@ -169,7 +169,7 @@ func runSkillMigrate(cmd *cobra.Command, args []string) {
 		Batch:      migrateBatch,
 		Overwrite:  migrateOverwrite,
 		DryRun:     migrateDryRun,
-		Recursive: migrateRecursive,
+		Recursive:  migrateRecursive,
 	}
 
 	// Run migration

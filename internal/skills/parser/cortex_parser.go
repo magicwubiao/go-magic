@@ -31,21 +31,21 @@ const SkillSourceBuiltin = "builtin"
 
 // HermesSkill represents a Hermes format skill
 type HermesSkill struct {
-	Name             string
-	Description      string
-	Version          string
-	Author           string
-	License          string
-	Tags             []string
-	Tools            []string
-	Category         string
+	Name              string
+	Description       string
+	Version           string
+	Author            string
+	License           string
+	Tags              []string
+	Tools             []string
+	Category          string
 	TriggerConditions []string
-	Steps            []string
-	Content          string
-	CodeFiles        map[string]string // filename -> content
-	CodeLanguage     string
-	SourcePath       string
-	Metadata         map[string]interface{}
+	Steps             []string
+	Content           string
+	CodeFiles         map[string]string // filename -> content
+	CodeLanguage      string
+	SourcePath        string
+	Metadata          map[string]interface{}
 }
 
 // HermesParser parses Hermes format skills
@@ -202,9 +202,9 @@ func (p *HermesParser) ParseFromFiles(files map[string]string) (*HermesSkill, er
 	}
 
 	skill := &HermesSkill{
-		Content:  content,
+		Content:   content,
 		CodeFiles: make(map[string]string),
-		Metadata: make(map[string]interface{}),
+		Metadata:  make(map[string]interface{}),
 	}
 
 	// Parse direct frontmatter fields

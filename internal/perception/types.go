@@ -71,9 +71,9 @@ type NoiseDetection struct {
 
 // PerceptionResult is the complete output of the perception layer
 type PerceptionResult struct {
-	Input        string              `json:"input"`
+	Input        string               `json:"input"`
 	Intent       IntentClassification `json:"intent"`
-	Noise        NoiseDetection      `json:"noise"`
-	ContextHints []string            `json:"context_hints,omitempty"`
-	Priority     int                 `json:"priority"` // 1 (highest) - 5 (lowest)
+	Noise        NoiseDetection       `json:"noise"`
+	ContextHints []string             `json:"context_hints,omitempty"`
+	Priority     int                  `json:"priority"` // 1 (highest) - 5 (lowest)
 }

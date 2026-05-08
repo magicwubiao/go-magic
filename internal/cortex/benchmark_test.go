@@ -302,8 +302,8 @@ func BenchmarkMultiTurnScenario(b *testing.B) {
 	defer os.RemoveAll(tmpDir)
 
 	scenario := []struct {
-		input    string
-		turns    int
+		input string
+		turns int
 	}{
 		{"write a Python script to parse CSV", 3},
 		{"add error handling", 2},

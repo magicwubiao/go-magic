@@ -13,10 +13,10 @@ import (
 
 // Migrator handles migration from OpenClaw to Hermes Agent format
 type Migrator struct {
-	parser       *parser.Parser
-	generator    *HermesGenerator
-	report       *MigrationReport
-	overwrite    bool
+	parser    *parser.Parser
+	generator *HermesGenerator
+	report    *MigrationReport
+	overwrite bool
 }
 
 // MigrationReport contains the result of a migration operation
@@ -31,12 +31,12 @@ type MigrationReport struct {
 
 // MigratedSkill represents a successfully migrated skill
 type MigratedSkill struct {
-	SourceName    string
-	SourcePath    string
-	TargetName    string
-	TargetPath    string
-	Warnings      []string
-	Format        parser.SkillFormat
+	SourceName string
+	SourcePath string
+	TargetName string
+	TargetPath string
+	Warnings   []string
+	Format     parser.SkillFormat
 }
 
 // MigrationError represents a migration failure
@@ -48,13 +48,13 @@ type MigrationError struct {
 
 // MigrateOptions contains options for migration
 type MigrateOptions struct {
-	InputPath   string  // Source path (file or directory)
-	OutputPath  string  // Output directory
-	Format      string  // "openclaw" or "hermes" (auto-detect if empty)
-	Batch       bool    // Batch migrate all skills in directory
-	Overwrite   bool    // Overwrite existing skills
-	DryRun      bool    // Preview without creating files
-	Recursive   bool    // Recursively process subdirectories
+	InputPath  string // Source path (file or directory)
+	OutputPath string // Output directory
+	Format     string // "openclaw" or "hermes" (auto-detect if empty)
+	Batch      bool   // Batch migrate all skills in directory
+	Overwrite  bool   // Overwrite existing skills
+	DryRun     bool   // Preview without creating files
+	Recursive  bool   // Recursively process subdirectories
 }
 
 // NewMigrator creates a new migrator

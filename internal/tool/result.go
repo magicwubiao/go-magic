@@ -6,13 +6,13 @@ import (
 
 // ToolResult 标准化工具执行结果
 type ToolResult struct {
-	Success   bool                   // 是否成功
-	Data      any                    // 结果数据
-	Error     string                 // 错误信息
-	ErrorCode string                 // 错误码
-	Metadata  map[string]any         // 执行元数据
-	Duration  time.Duration          // 执行耗时
-	Warnings  []string               // 警告信息
+	Success   bool           // 是否成功
+	Data      any            // 结果数据
+	Error     string         // 错误信息
+	ErrorCode string         // 错误码
+	Metadata  map[string]any // 执行元数据
+	Duration  time.Duration  // 执行耗时
+	Warnings  []string       // 警告信息
 }
 
 // NewSuccessResult 创建成功结果
@@ -27,8 +27,8 @@ func NewSuccessResult(data any) *ToolResult {
 // NewErrorResult 创建错误结果
 func NewErrorResult(err string) *ToolResult {
 	return &ToolResult{
-		Success: false,
-		Error:   err,
+		Success:  false,
+		Error:    err,
 		Metadata: make(map[string]any),
 	}
 }

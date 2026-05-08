@@ -12,21 +12,21 @@ import (
 
 // Loader handles plugin loading from various sources
 type Loader struct {
-	registry    *Registry
-	config     *LoaderConfig
-	mu         sync.Mutex
-	loading    map[string]bool
+	registry *Registry
+	config   *LoaderConfig
+	mu       sync.Mutex
+	loading  map[string]bool
 }
 
 // LoaderConfig holds loader configuration
 type LoaderConfig struct {
-	PluginDir     string   // Directory to load plugins from
-	AllowedDirs   []string // Additional allowed directories
-	AutoEnable    bool     // Auto-enable loaded plugins
-	ValidateDeps  bool     // Validate dependencies on load
-	LoadBuiltins  bool     // Load built-in plugins
-	BuiltinDir    string   // Built-in plugins directory
-	PreloadHooks  []string // Hooks to preload
+	PluginDir    string   // Directory to load plugins from
+	AllowedDirs  []string // Additional allowed directories
+	AutoEnable   bool     // Auto-enable loaded plugins
+	ValidateDeps bool     // Validate dependencies on load
+	LoadBuiltins bool     // Load built-in plugins
+	BuiltinDir   string   // Built-in plugins directory
+	PreloadHooks []string // Hooks to preload
 }
 
 // DefaultLoaderConfig returns default loader configuration
@@ -416,16 +416,16 @@ func (l *Loader) createContext(manifest *PluginManifest) *Context {
 	pluginDir := filepath.Join(l.config.PluginDir, manifest.ID)
 
 	return &Context{
-		PluginID:   manifest.ID,
-		HomeDir:    home,
-		WorkingDir: pluginDir,
+		PluginID:    manifest.ID,
+		HomeDir:     home,
+		WorkingDir:  pluginDir,
 		Environment: os.Environ(),
-		DataDir:    filepath.Join(pluginDir, "data"),
-		CacheDir:   filepath.Join(pluginDir, "cache"),
-		ConfigDir:  filepath.Join(pluginDir, "config"),
-		Config:     make(map[string]interface{}),
-		Logger:     NewSimpleLogger(manifest.ID),
-		Metadata:   make(map[string]interface{}),
+		DataDir:     filepath.Join(pluginDir, "data"),
+		CacheDir:    filepath.Join(pluginDir, "cache"),
+		ConfigDir:   filepath.Join(pluginDir, "config"),
+		Config:      make(map[string]interface{}),
+		Logger:      NewSimpleLogger(manifest.ID),
+		Metadata:    make(map[string]interface{}),
 	}
 }
 
@@ -541,19 +541,19 @@ func (p *BinaryPlugin) Shutdown() error {
 // CreateSamplePlugin creates a sample plugin for demonstration
 func CreateSamplePlugin(dir string) error {
 	manifest := PluginManifest{
-		ID:            "example",
-		Name:          "Example Plugin",
-		Version:       "1.0.0",
-		Description:   "Example plugin demonstrating the plugin system",
-		LongDesc:      "This is a more detailed description of the example plugin.",
-		Author:        "go-magic",
-		License:       "MIT",
-		APIVersion:    "1.0",
-		Type:          TypeScript,
-		Entrypoint:    "run.sh",
-		Category:      "utilities",
-		Tags:          []string{"example", "demo", "sample"},
-		Permissions:   []string{"filesystem", "network"},
+		ID:          "example",
+		Name:        "Example Plugin",
+		Version:     "1.0.0",
+		Description: "Example plugin demonstrating the plugin system",
+		LongDesc:    "This is a more detailed description of the example plugin.",
+		Author:      "go-magic",
+		License:     "MIT",
+		APIVersion:  "1.0",
+		Type:        TypeScript,
+		Entrypoint:  "run.sh",
+		Category:    "utilities",
+		Tags:        []string{"example", "demo", "sample"},
+		Permissions: []string{"filesystem", "network"},
 		ConfigSchema: []ConfigField{
 			{
 				Key:         "debug",

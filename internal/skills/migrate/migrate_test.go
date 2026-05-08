@@ -101,10 +101,10 @@ func TestToolConverter_ConvertTools(t *testing.T) {
 	conv := NewToolConverter()
 
 	tests := []struct {
-		name         string
+		name          string
 		openclawTools []string
-		wantTools    []string
-		wantWarnLen  int
+		wantTools     []string
+		wantWarnLen   int
 	}{
 		{
 			name:          "Known tools",
@@ -180,9 +180,9 @@ func TestDetectFormat(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	tests := []struct {
-		name     string
-		content  string
-		wantFmt  parser.SkillFormat
+		name    string
+		content string
+		wantFmt parser.SkillFormat
 	}{
 		{
 			name:    "OpenClaw with trigger_conditions",
@@ -249,8 +249,8 @@ func TestMigrationReport_GenerateReport(t *testing.T) {
 		Errors: []MigrationError{
 			{
 				SourcePath: "/path/to/skill3",
-				Error:     nil,
-				Warning:   "Failed to migrate",
+				Error:      nil,
+				Warning:    "Failed to migrate",
 			},
 		},
 	}

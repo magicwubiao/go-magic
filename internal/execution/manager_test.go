@@ -109,9 +109,9 @@ func TestFailureRecovery(t *testing.T) {
 	checkpoint.StepID = 1
 
 	tests := []struct {
-		name          string
-		failCount     int
-		wantAction    RecoveryAction
+		name       string
+		failCount  int
+		wantAction RecoveryAction
 	}{
 		{"first_failure", 0, RecoveryRetry},
 		{"second_failure", 1, RecoveryRetry},
@@ -145,36 +145,36 @@ func TestResultValidation(t *testing.T) {
 	checkpoint := manager.StartCheckpoint("validation-test", plan)
 
 	tests := []struct {
-		name          string
-		result        interface{}
-		level         ValidationLevel
-		wantPassed    bool
+		name           string
+		result         interface{}
+		level          ValidationLevel
+		wantPassed     bool
 		wantConfidence float64
 	}{
 		{
-			name:   "none_level",
-			result: "any result",
-			level:  ValidationNone,
+			name:       "none_level",
+			result:     "any result",
+			level:      ValidationNone,
 			wantPassed: true,
 		},
 		{
-			name:   "basic_clean_result",
-			result: "File created successfully",
-			level:  ValidationBasic,
-			wantPassed: true,
+			name:           "basic_clean_result",
+			result:         "File created successfully",
+			level:          ValidationBasic,
+			wantPassed:     true,
 			wantConfidence: 0.8,
 		},
 		{
-			name:   "basic_error_pattern",
-			result: "Error: permission denied",
-			level:  ValidationBasic,
-			wantPassed: false,
+			name:           "basic_error_pattern",
+			result:         "Error: permission denied",
+			level:          ValidationBasic,
+			wantPassed:     false,
 			wantConfidence: 0.3,
 		},
 		{
-			name:   "basic_failed_keyword",
-			result: "Command failed to execute",
-			level:  ValidationBasic,
+			name:       "basic_failed_keyword",
+			result:     "Command failed to execute",
+			level:      ValidationBasic,
 			wantPassed: false,
 		},
 	}
@@ -214,8 +214,8 @@ func TestProgressReporting(t *testing.T) {
 	checkpoint.State["plan_steps"] = 5
 
 	tests := []struct {
-		stepID   int
-		wantPct  float64
+		stepID  int
+		wantPct float64
 	}{
 		{1, 20.0},
 		{2, 40.0},

@@ -11,13 +11,13 @@ import (
 )
 
 var (
-	acpAgentID    string
-	acpTransport  string
-	acpAddress    string
-	acpCommand    string
-	acpArgs       []string
-	acpHeaders    []string
-	acpParams     string
+	acpAgentID   string
+	acpTransport string
+	acpAddress   string
+	acpCommand   string
+	acpArgs      []string
+	acpHeaders   []string
+	acpParams    string
 )
 
 var acpCmd = &cobra.Command{

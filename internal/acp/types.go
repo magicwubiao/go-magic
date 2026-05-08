@@ -89,19 +89,19 @@ type Message struct {
 
 // ConnectionRequest is sent when connecting to an agent
 type ConnectionRequest struct {
-	AgentID      string       `json:"agentId"`
-	AgentInfo    AgentInfo    `json:"agentInfo"`
-	Capabilities []string     `json:"capabilities"`
-	Skills       []Skill     `json:"skills"`
+	AgentID      string    `json:"agentId"`
+	AgentInfo    AgentInfo `json:"agentInfo"`
+	Capabilities []string  `json:"capabilities"`
+	Skills       []Skill   `json:"skills"`
 }
 
 // ConnectionResponse is returned after a successful connection
 type ConnectionResponse struct {
-	Success      bool         `json:"success"`
-	AgentInfo    AgentInfo    `json:"agentInfo,omitempty"`
-	Capabilities []string     `json:"capabilities,omitempty"`
-	Skills       []Skill      `json:"skills,omitempty"`
-	Error        string       `json:"error,omitempty"`
+	Success      bool      `json:"success"`
+	AgentInfo    AgentInfo `json:"agentInfo,omitempty"`
+	Capabilities []string  `json:"capabilities,omitempty"`
+	Skills       []Skill   `json:"skills,omitempty"`
+	Error        string    `json:"error,omitempty"`
 }
 
 // ListResponse wraps a list result
@@ -136,11 +136,11 @@ const (
 
 // TransportConfig holds transport configuration
 type TransportConfig struct {
-	Type     TransportType `json:"type"`
-	Address  string        `json:"address,omitempty"`
-	Command  string        `json:"command,omitempty"`
-	Args     []string      `json:"args,omitempty"`
-	Env      []string      `json:"env,omitempty"`
-	BaseURL  string        `json:"baseURL,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
+	Type    TransportType     `json:"type"`
+	Address string            `json:"address,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     []string          `json:"env,omitempty"`
+	BaseURL string            `json:"baseURL,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }

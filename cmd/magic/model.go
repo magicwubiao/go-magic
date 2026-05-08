@@ -240,31 +240,31 @@ func maskAPIKey(key string) string {
 }
 
 // Provider models (hardcoded for now)
-	var providerModels = map[string][]string{
-		"openai":      {"gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4-turbo", "gpt-4"},
-		"anthropic":   {"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"},
-		"deepseek":    {"deepseek-chat", "deepseek-reasoner", "deepseek-v3.1", "deepseek-coder"},
-		"huoshan":     {"ep-xxxxxxxx"}, // Volcano Engine endpoint ID
-		"kimi":        {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
-		"minimax":     {"MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5"},
-		"zhipu":       {"glm-4", "glm-4-flash", "glm-4.6", "glm-4.7", "glm-4v"},
-		"ollama":      {"llama3.3", "qwen3", "qwen2.5", "codellama", "mistral"}, // depends on local Ollama
-		"openrouter":  {"openrouter/anthropic/claude-sonnet-4", "openrouter/google/gemini-2.0-flash", "openrouter/deepseek/deepseek-chat"},
-		"dashscope":   {"qwen3-turbo", "qwen3-plus", "qwen3-max", "qwen3-nano", "qwq-32b", "qwen-turbo"},
-		"vllm":        {}, // depends on vLLM server config
-		// New providers
-		"gemini":      {"gemini-2.0-flash-exp", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"},
-		"groq":        {"llama-3.3-70b-versatile", "mixtral-8x7b-32768", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"},
-		"together":    {"deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/QwQ-32B", "mistralai/Mixtral-8x7B-Instruct-v0.1"},
-		"mistral":     {"mistral-large-3", "mistral-small-3", "mistral-medium-3", "mistral-large-latest", "open-mixtral-8x22b"},
-		"cohere":      {"command-r-plus-08-2024", "command-r7b-12-2024", "command"},
-		"perplexity":  {"sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"},
-		"doubao":      {"doubao-pro-256k", "doubao-pro-32k", "doubao-lite-32k", "doubao-1.5-pro-32k", "doubao-1.5-thinking-pro", "doubao-seed-1.6"},
-		"wenxin":      {"ernie-4.0-8k-latest", "ernie-4.0-turbo-8k", "ernie-x1", "ernie-x1.1", "ernie-3.5-8k"},
-		"moonshot":    {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
-		"mimo":        {"mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"},
-		"hunyuan":     {"hunyuan-turbo", "hunyuan-turbos-latest", "hunyuan-t1"},
-	}
+var providerModels = map[string][]string{
+	"openai":     {"gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4-turbo", "gpt-4"},
+	"anthropic":  {"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"},
+	"deepseek":   {"deepseek-chat", "deepseek-reasoner", "deepseek-v3.1", "deepseek-coder"},
+	"huoshan":    {"ep-xxxxxxxx"}, // Volcano Engine endpoint ID
+	"kimi":       {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
+	"minimax":    {"MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5"},
+	"zhipu":      {"glm-4", "glm-4-flash", "glm-4.6", "glm-4.7", "glm-4v"},
+	"ollama":     {"llama3.3", "qwen3", "qwen2.5", "codellama", "mistral"}, // depends on local Ollama
+	"openrouter": {"openrouter/anthropic/claude-sonnet-4", "openrouter/google/gemini-2.0-flash", "openrouter/deepseek/deepseek-chat"},
+	"dashscope":  {"qwen3-turbo", "qwen3-plus", "qwen3-max", "qwen3-nano", "qwq-32b", "qwen-turbo"},
+	"vllm":       {}, // depends on vLLM server config
+	// New providers
+	"gemini":     {"gemini-2.0-flash-exp", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"},
+	"groq":       {"llama-3.3-70b-versatile", "mixtral-8x7b-32768", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"},
+	"together":   {"deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/QwQ-32B", "mistralai/Mixtral-8x7B-Instruct-v0.1"},
+	"mistral":    {"mistral-large-3", "mistral-small-3", "mistral-medium-3", "mistral-large-latest", "open-mixtral-8x22b"},
+	"cohere":     {"command-r-plus-08-2024", "command-r7b-12-2024", "command"},
+	"perplexity": {"sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"},
+	"doubao":     {"doubao-pro-256k", "doubao-pro-32k", "doubao-lite-32k", "doubao-1.5-pro-32k", "doubao-1.5-thinking-pro", "doubao-seed-1.6"},
+	"wenxin":     {"ernie-4.0-8k-latest", "ernie-4.0-turbo-8k", "ernie-x1", "ernie-x1.1", "ernie-3.5-8k"},
+	"moonshot":   {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
+	"mimo":       {"mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"},
+	"hunyuan":    {"hunyuan-turbo", "hunyuan-turbos-latest", "hunyuan-t1"},
+}
 
 // interactiveModelSelect presents an interactive UI for selecting provider and model.
 func interactiveModelSelect(cfg *config.Config) (string, string) {

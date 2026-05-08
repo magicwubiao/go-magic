@@ -88,9 +88,9 @@ func TestJSONRPCRequestResponse(t *testing.T) {
 
 func TestServerCreation(t *testing.T) {
 	info := AgentInfo{
-		ID:       "test-agent",
-		Name:     "Test Agent",
-		Version:  "1.0.0",
+		ID:           "test-agent",
+		Name:         "Test Agent",
+		Version:      "1.0.0",
 		Capabilities: []string{"skill/call", "message/send"},
 	}
 
@@ -207,9 +207,9 @@ func TestManagerConnectHTTP(t *testing.T) {
 
 func TestAgentInfo(t *testing.T) {
 	info := AgentInfo{
-		ID:       "agent-1",
-		Name:     "Agent One",
-		Version:  "1.0.0",
+		ID:           "agent-1",
+		Name:         "Agent One",
+		Version:      "1.0.0",
 		Capabilities: []string{"skill/call", "message/send"},
 		Metadata: map[string]string{
 			"env": "test",

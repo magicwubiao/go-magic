@@ -20,7 +20,7 @@ type OpenAICompatibleProvider struct {
 func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string) *OpenAICompatibleProvider {
 	bp := NewBaseProvider(baseURL)
 	bp.APIKey = apiKey
-	
+
 	return &OpenAICompatibleProvider{
 		BaseProvider: bp,
 		name:         name,
@@ -41,7 +41,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 
 	url := p.BaseURL + "/chat/completions"
-	
+
 	headers := map[string]string{}
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
@@ -84,7 +84,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 
 	choice := response.Choices[0]
-	
+
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
 	}
@@ -153,7 +153,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 
 	choice := response.Choices[0]
-	
+
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
 	}

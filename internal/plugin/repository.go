@@ -42,7 +42,7 @@ func NewRepository(baseURL string) (*Repository, error) {
 	}
 
 	repo := &Repository{
-		baseURL:  baseURL,
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},

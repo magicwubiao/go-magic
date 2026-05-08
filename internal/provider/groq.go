@@ -18,10 +18,10 @@ import (
 // Groq uses OpenAI-compatible format but with different base URL and specific models
 type GroqProvider struct {
 	*BaseProvider
-	apiKey   string
-	model    string
-	baseURL  string
-	metrics  *RequestMetrics
+	apiKey  string
+	model   string
+	baseURL string
+	metrics *RequestMetrics
 }
 
 // NewGroqProvider creates a new Groq provider
@@ -29,13 +29,13 @@ func NewGroqProvider(apiKey, model string) *GroqProvider {
 	if model == "" {
 		model = "mixtral-8x7b-32768" // Default to fast model
 	}
-	
+
 	return &GroqProvider{
 		BaseProvider: NewBaseProvider("https://api.groq.com/openai/v1"),
-		apiKey:      apiKey,
-		model:       model,
-		baseURL:     "https://api.groq.com/openai/v1",
-		metrics:     &RequestMetrics{},
+		apiKey:       apiKey,
+		model:        model,
+		baseURL:      "https://api.groq.com/openai/v1",
+		metrics:      &RequestMetrics{},
 	}
 }
 
@@ -49,7 +49,7 @@ func (p *GroqProvider) GetCapabilities() *Capabilities {
 		ToolCalling:    true,
 		Streaming:      true,
 		StreamingTools: true,
-		MultiModal:    false,
+		MultiModal:     false,
 		Vision:         false,
 	}
 }
@@ -57,7 +57,7 @@ func (p *GroqProvider) GetCapabilities() *Capabilities {
 // Chat implements the Provider interface
 func (p *GroqProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, nil, false)
-	
+
 	start := time.Now()
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -99,7 +99,7 @@ func (p *GroqProvider) Chat(ctx context.Context, messages []Message) (*ChatRespo
 // ChatWithTools implements the ToolCaller interface
 func (p *GroqProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := p.buildRequest(messages, tools, false)
-	
+
 	start := time.Now()
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -141,7 +141,7 @@ func (p *GroqProvider) ChatWithTools(ctx context.Context, messages []Message, to
 // Stream implements the Streamer interface
 func (p *GroqProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, nil, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -174,7 +174,7 @@ func (p *GroqProvider) Stream(ctx context.Context, messages []Message, handler S
 // StreamWithTools implements streaming with tool calls
 func (p *GroqProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
 	reqBody := p.buildRequest(messages, tools, true)
-	
+
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)

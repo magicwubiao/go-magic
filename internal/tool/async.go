@@ -46,9 +46,9 @@ type AsyncTool interface {
 
 // AsyncToolExecutor 异步工具执行器
 type AsyncToolExecutor struct {
-	mu       sync.RWMutex
-	jobs     map[string]*AsyncJob
-	registry *Registry
+	mu         sync.RWMutex
+	jobs       map[string]*AsyncJob
+	registry   *Registry
 	workerPool chan struct{}
 	maxWorkers int
 }
@@ -58,17 +58,17 @@ func NewAsyncToolExecutor(registry *Registry, maxWorkers int) *AsyncToolExecutor
 	if maxWorkers <= 0 {
 		maxWorkers = 10
 	}
-	
+
 	executor := &AsyncToolExecutor{
-		jobs:        make(map[string]*AsyncJob),
-		registry:    registry,
-		workerPool:  make(chan struct{}, maxWorkers),
+		jobs:       make(map[string]*AsyncJob),
+		registry:   registry,
+		workerPool: make(chan struct{}, maxWorkers),
 		maxWorkers: maxWorkers,
 	}
-	
+
 	// 启动后台清理 goroutine
 	go executor.cleanup()
-	
+
 	return executor
 }
 
@@ -79,7 +79,7 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 检查是否为异步工具
 	asyncTool, ok := tool.(AsyncTool)
 	if !ok {
@@ -93,11 +93,11 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 			CreatedAt: time.Now(),
 			StartedAt: time.Now(),
 		}
-		
+
 		e.mu.Lock()
 		e.jobs[jobID] = job
 		e.mu.Unlock()
-		
+
 		// 同步执行
 		go func() {
 			result, err := tool.Execute(ctx, params)
@@ -115,16 +115,16 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 				}
 			}
 		}()
-		
+
 		return jobID, nil
 	}
-	
+
 	// 异步工具
 	jobID, err := asyncTool.Start(ctx, params)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 创建 job 记录
 	job := &AsyncJob{
 		ID:        jobID,
@@ -133,11 +133,11 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 		Status:    StatusPending,
 		CreatedAt: time.Now(),
 	}
-	
+
 	e.mu.Lock()
 	e.jobs[jobID] = job
 	e.mu.Unlock()
-	
+
 	return jobID, nil
 }
 
@@ -145,7 +145,7 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 func (e *AsyncToolExecutor) GetJob(jobID string) (*AsyncJob, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	job, ok := e.jobs[jobID]
 	if !ok {
 		return nil, fmt.Errorf("job not found: %s", jobID)
@@ -157,7 +157,7 @@ func (e *AsyncToolExecutor) GetJob(jobID string) (*AsyncJob, error) {
 func (e *AsyncToolExecutor) ListJobs() []*AsyncJob {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	jobs := make([]*AsyncJob, 0, len(e.jobs))
 	for _, job := range e.jobs {
 		jobs = append(jobs, job)
@@ -169,16 +169,16 @@ func (e *AsyncToolExecutor) ListJobs() []*AsyncJob {
 func (e *AsyncToolExecutor) Cancel(jobID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	job, ok := e.jobs[jobID]
 	if !ok {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
-	
+
 	if job.Status == StatusCompleted || job.Status == StatusFailed || job.Status == StatusCancelled {
 		return fmt.Errorf("job already finished")
 	}
-	
+
 	job.Status = StatusCancelled
 	job.EndedAt = time.Now()
 	return nil
@@ -188,7 +188,7 @@ func (e *AsyncToolExecutor) Cancel(jobID string) error {
 func (e *AsyncToolExecutor) cleanup() {
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		e.mu.Lock()
 		threshold := time.Now().Add(-1 * time.Hour)
@@ -245,21 +245,21 @@ func (t *LongRunningTool) Start(ctx context.Context, params map[string]any) (str
 	if !ok {
 		return "", fmt.Errorf("task_id is required")
 	}
-	
+
 	duration := 10
 	if d, ok := params["duration"].(float64); ok {
 		duration = int(d)
 	}
-	
+
 	jobID := fmt.Sprintf("long_task_%s_%d", taskID, time.Now().UnixNano())
-	
+
 	// 创建可取消的 context
 	jobCtx, cancel := context.WithCancel(ctx)
-	
+
 	t.mu.Lock()
 	t.jobs[jobID] = cancel
 	t.mu.Unlock()
-	
+
 	// 异步执行
 	go func() {
 		ticker := time.NewTicker(time.Duration(duration) * time.Second)
@@ -269,12 +269,12 @@ func (t *LongRunningTool) Start(ctx context.Context, params map[string]any) (str
 		case <-jobCtx.Done():
 			// 任务被取消
 		}
-		
+
 		t.mu.Lock()
 		delete(t.jobs, jobID)
 		t.mu.Unlock()
 	}()
-	
+
 	return jobID, nil
 }
 
@@ -282,7 +282,7 @@ func (t *LongRunningTool) Status(jobID string) (JobStatus, error) {
 	t.mu.RLock()
 	_, exists := t.jobs[jobID]
 	t.mu.RUnlock()
-	
+
 	if exists {
 		return StatusRunning, nil
 	}
@@ -299,7 +299,7 @@ func (t *LongRunningTool) Result(jobID string) (*ToolResult, error) {
 func (t *LongRunningTool) Cancel(jobID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	
+
 	if cancel, ok := t.jobs[jobID]; ok {
 		cancel()
 		delete(t.jobs, jobID)

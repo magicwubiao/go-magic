@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // KimiProvider 月之暗面 Kimi (兼容OpenAI格式)
 type KimiProvider struct {
@@ -27,9 +25,9 @@ func (p *KimiProvider) Name() string {
 func (p *KimiProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }

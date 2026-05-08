@@ -4,10 +4,10 @@ import "sync"
 
 // ToolGroup 工具分组
 type ToolGroup struct {
-	Name        string   // 分组名称
-	Description string   // 分组描述
-	Tools       []Tool   // 分组中的工具
-	Enabled     bool     // 是否启用
+	Name        string         // 分组名称
+	Description string         // 分组描述
+	Tools       []Tool         // 分组中的工具
+	Enabled     bool           // 是否启用
 	Metadata    map[string]any // 分组元数据
 }
 
@@ -58,8 +58,8 @@ func (g *ToolGroup) Count() int {
 // ============================================================================
 
 type GroupManager struct {
-	mu      sync.RWMutex
-	groups  map[string]*ToolGroup
+	mu           sync.RWMutex
+	groups       map[string]*ToolGroup
 	toolsInGroup map[string]string // toolName -> groupName
 }
 
@@ -75,7 +75,7 @@ func NewGroupManager() *GroupManager {
 func (gm *GroupManager) CreateGroup(name, description string) *ToolGroup {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	group := NewToolGroup(name, description)
 	gm.groups[name] = group
 	return group
@@ -92,7 +92,7 @@ func (gm *GroupManager) GetGroup(name string) *ToolGroup {
 func (gm *GroupManager) DeleteGroup(name string) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	if group, ok := gm.groups[name]; ok {
 		for _, tool := range group.Tools {
 			delete(gm.toolsInGroup, tool.Name())
@@ -105,7 +105,7 @@ func (gm *GroupManager) DeleteGroup(name string) {
 func (gm *GroupManager) RegisterGroup(group *ToolGroup) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	gm.groups[group.Name] = group
 	for _, tool := range group.Tools {
 		gm.toolsInGroup[tool.Name()] = group.Name
@@ -116,13 +116,13 @@ func (gm *GroupManager) RegisterGroup(group *ToolGroup) {
 func (gm *GroupManager) AddToolToGroup(tool Tool, groupName string) error {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	group, ok := gm.groups[groupName]
 	if !ok {
 		group = NewToolGroup(groupName, "")
 		gm.groups[groupName] = group
 	}
-	
+
 	group.Add(tool)
 	gm.toolsInGroup[tool.Name()] = groupName
 	return nil
@@ -132,12 +132,12 @@ func (gm *GroupManager) AddToolToGroup(tool Tool, groupName string) error {
 func (gm *GroupManager) RemoveToolFromGroup(toolName, groupName string) error {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	group, ok := gm.groups[groupName]
 	if !ok {
 		return nil
 	}
-	
+
 	group.Remove(toolName)
 	delete(gm.toolsInGroup, toolName)
 	return nil
@@ -154,7 +154,7 @@ func (gm *GroupManager) GetToolGroup(toolName string) string {
 func (gm *GroupManager) ListGroups() []*ToolGroup {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
-	
+
 	groups := make([]*ToolGroup, 0, len(gm.groups))
 	for _, g := range gm.groups {
 		groups = append(groups, g)
@@ -166,7 +166,7 @@ func (gm *GroupManager) ListGroups() []*ToolGroup {
 func (gm *GroupManager) GetEnabledTools() []Tool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
-	
+
 	var tools []Tool
 	for _, group := range gm.groups {
 		if group.Enabled {
@@ -180,7 +180,7 @@ func (gm *GroupManager) GetEnabledTools() []Tool {
 func (gm *GroupManager) EnableGroup(name string) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	if group, ok := gm.groups[name]; ok {
 		group.Enabled = true
 	}
@@ -190,7 +190,7 @@ func (gm *GroupManager) EnableGroup(name string) {
 func (gm *GroupManager) DisableGroup(name string) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	
+
 	if group, ok := gm.groups[name]; ok {
 		group.Enabled = false
 	}
@@ -199,7 +199,7 @@ func (gm *GroupManager) DisableGroup(name string) {
 // DefaultGroups 返回默认的工具分组
 func DefaultToolGroups(registry *Registry) *GroupManager {
 	gm := NewGroupManager()
-	
+
 	// 文件操作分组
 	fileGroup := gm.CreateGroup("file", "File operations")
 	for _, name := range []string{"read_file", "write_file", "list_files", "search_in_files"} {
@@ -207,7 +207,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 			fileGroup.Add(tool)
 		}
 	}
-	
+
 	// Web 操作分组
 	webGroup := gm.CreateGroup("web", "Web operations")
 	for _, name := range []string{"web_search", "web_extract", "web_fetch"} {
@@ -215,7 +215,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 			webGroup.Add(tool)
 		}
 	}
-	
+
 	// 代码执行分组
 	codeGroup := gm.CreateGroup("code", "Code execution")
 	for _, name := range []string{"execute_command", "python_execute", "node_execute"} {
@@ -223,7 +223,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 			codeGroup.Add(tool)
 		}
 	}
-	
+
 	// 记忆分组
 	memoryGroup := gm.CreateGroup("memory", "Memory")
 	for _, name := range []string{"memory_store", "memory_recall"} {
@@ -231,6 +231,6 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 			memoryGroup.Add(tool)
 		}
 	}
-	
+
 	return gm
 }

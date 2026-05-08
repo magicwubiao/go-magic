@@ -69,8 +69,8 @@ func (t *EnvTool) get(args map[string]any) (map[string]any, error) {
 
 	value := os.Getenv(name)
 	return map[string]any{
-		"name":  name,
-		"value": value,
+		"name":   name,
+		"value":  value,
 		"exists": value != "",
 	}, nil
 }
@@ -88,8 +88,8 @@ func (t *EnvTool) set(args map[string]any) (map[string]any, error) {
 	}
 
 	return map[string]any{
-		"name":  name,
-		"value": value,
+		"name":    name,
+		"value":   value,
 		"success": true,
 	}, nil
 }
@@ -112,7 +112,7 @@ func (t *EnvTool) list(args map[string]any) (map[string]any, error) {
 
 	return map[string]any{
 		"variables": envVars,
-		"count": len(envVars),
+		"count":     len(envVars),
 	}, nil
 }
 
@@ -143,7 +143,7 @@ func (t *EnvTool) getAll() (map[string]any, error) {
 
 	return map[string]any{
 		"variables": envVars,
-		"count":    len(envVars),
+		"count":     len(envVars),
 	}, nil
 }
 
@@ -200,10 +200,10 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]any) (any,
 		return t.goInfo(), nil
 	default:
 		return map[string]any{
-			"os":      t.osInfo(),
-			"cpu":     t.cpuInfo(),
-			"memory":  t.memoryInfo(),
-			"go":      t.goInfo(),
+			"os":     t.osInfo(),
+			"cpu":    t.cpuInfo(),
+			"memory": t.memoryInfo(),
+			"go":     t.goInfo(),
 		}, nil
 	}
 }
@@ -218,7 +218,7 @@ func (t *SystemInfoTool) osInfo() map[string]any {
 
 func (t *SystemInfoTool) cpuInfo() map[string]any {
 	return map[string]any{
-		"num_cpu":    runtime.NumCPU(),
+		"num_cpu":       runtime.NumCPU(),
 		"num_goroutine": runtime.NumGoroutine(),
 	}
 }
@@ -226,13 +226,13 @@ func (t *SystemInfoTool) cpuInfo() map[string]any {
 func (t *SystemInfoTool) memoryInfo() map[string]any {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	
+
 	return map[string]any{
-		"alloc":      m.Alloc,
+		"alloc":       m.Alloc,
 		"total_alloc": m.TotalAlloc,
-		"sys":        m.Sys,
-		"num_gc":     m.NumGC,
-		"go_version": runtime.Version(),
+		"sys":         m.Sys,
+		"num_gc":      m.NumGC,
+		"go_version":  runtime.Version(),
 	}
 }
 

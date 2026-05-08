@@ -19,15 +19,15 @@ const (
 // the current turn uses a frozen snapshot to protect prefix cache
 // This is crucial for cost optimization with Anthropic's prefix caching
 type SnapshotManager struct {
-	mu             sync.RWMutex
-	memoryPath     string
-	userPath       string
-	frozenMemory   string // Snapshot for current turn
-	frozenUser     string
-	latestMemory   string // Latest version (on disk)
-	latestUser     string
-	version        int
-	compressor     *MemoryCompressor
+	mu           sync.RWMutex
+	memoryPath   string
+	userPath     string
+	frozenMemory string // Snapshot for current turn
+	frozenUser   string
+	latestMemory string // Latest version (on disk)
+	latestUser   string
+	version      int
+	compressor   *MemoryCompressor
 }
 
 // MemoryCompressor handles memory summarization when limits are reached

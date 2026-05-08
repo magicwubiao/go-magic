@@ -19,17 +19,17 @@ type MatrixGateway struct {
 	homeserver  string
 	userID      string
 	accessToken string
-	deviceID   string
-	
-	roomID      string
-	txnID       int64
-	
-	agents map[string]*AgentSession
-	msgCh  chan Message
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	deviceID    string
+
+	roomID string
+	txnID  int64
+
+	agents  map[string]*AgentSession
+	msgCh   chan Message
+	mu      sync.RWMutex
+	stopCh  chan struct{}
 	running bool
-	
+
 	longPollTimeout time.Duration
 	lastNextBatch   string
 }
@@ -46,11 +46,11 @@ type matrixLoginRequest struct {
 
 // matrixLoginResponse represents login response
 type matrixLoginResponse struct {
-	AccessToken  string `json:"access_token"`
-	DeviceID     string `json:"device_id"`
-	UserID       string `json:"user_id"`
-	HomeServer   string `json:"home_server"`
-	Token        string `json:"token,omitempty"`
+	AccessToken string `json:"access_token"`
+	DeviceID    string `json:"device_id"`
+	UserID      string `json:"user_id"`
+	HomeServer  string `json:"home_server"`
+	Token       string `json:"token,omitempty"`
 }
 
 // matrixSyncResponse represents sync response
@@ -67,21 +67,21 @@ type matrixSyncResponse struct {
 
 // matrixEvent represents a Matrix event
 type matrixEvent struct {
-	Type         string          `json:"type"`
-	EventID      string          `json:"event_id"`
-	Sender       string          `json:"sender"`
-	OriginServerTS int64         `json:"origin_server_ts"`
-	Content      json.RawMessage `json:"content"`
-	Unsigned     json.RawMessage `json:"unsigned,omitempty"`
-	RoomID       string          `json:"room_id,omitempty"`
-	StateKey     string          `json:"state_key,omitempty"`
+	Type           string          `json:"type"`
+	EventID        string          `json:"event_id"`
+	Sender         string          `json:"sender"`
+	OriginServerTS int64           `json:"origin_server_ts"`
+	Content        json.RawMessage `json:"content"`
+	Unsigned       json.RawMessage `json:"unsigned,omitempty"`
+	RoomID         string          `json:"room_id,omitempty"`
+	StateKey       string          `json:"state_key,omitempty"`
 }
 
 // matrixRoomMessage represents room message content
 type matrixRoomMessage struct {
-	Body     string `json:"body"`
-	MsgType  string `json:"msgtype"`
-	Format   string `json:"format,omitempty"`
+	Body          string `json:"body"`
+	MsgType       string `json:"msgtype"`
+	Format        string `json:"format,omitempty"`
 	FormattedBody string `json:"formatted_body,omitempty"`
 }
 
@@ -93,9 +93,9 @@ type matrixSendRequest struct {
 // NewMatrixGateway creates a new Matrix gateway
 func NewMatrixGateway(homeserver, userID, accessToken string) *MatrixGateway {
 	return &MatrixGateway{
-		homeserver:     strings.TrimRight(homeserver, "/"),
+		homeserver:      strings.TrimRight(homeserver, "/"),
 		userID:          userID,
-		accessToken:    accessToken,
+		accessToken:     accessToken,
 		agents:          make(map[string]*AgentSession),
 		msgCh:           make(chan Message, 100),
 		stopCh:          make(chan struct{}),
@@ -106,12 +106,12 @@ func NewMatrixGateway(homeserver, userID, accessToken string) *MatrixGateway {
 // NewMatrixGatewayWithLogin creates a Matrix gateway with login
 func NewMatrixGatewayWithLogin(homeserver, userID, password, deviceID string) (*MatrixGateway, error) {
 	gw := &MatrixGateway{
-		homeserver:     strings.TrimRight(homeserver, "/"),
-		userID:         userID,
-		deviceID:       deviceID,
-		agents:         make(map[string]*AgentSession),
-		msgCh:          make(chan Message, 100),
-		stopCh:         make(chan struct{}),
+		homeserver:      strings.TrimRight(homeserver, "/"),
+		userID:          userID,
+		deviceID:        deviceID,
+		agents:          make(map[string]*AgentSession),
+		msgCh:           make(chan Message, 100),
+		stopCh:          make(chan struct{}),
 		longPollTimeout: 30 * time.Second,
 	}
 
@@ -206,7 +206,7 @@ func (g *MatrixGateway) CheckHealth() *HealthStatus {
 	g.mu.RUnlock()
 
 	return &HealthStatus{
-		Platform:   "matrix",
+		Platform:  "matrix",
 		Connected: running,
 		Details: map[string]interface{}{
 			"homeserver": g.homeserver,
@@ -264,7 +264,7 @@ func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, co
 	txnID := fmt.Sprintf("m%d", g.txnID)
 	g.mu.Unlock()
 
-	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", 
+	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
 		url.PathEscape(roomID), txnID), jsonData, true)
 
 	return err
@@ -352,20 +352,20 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 		}
 
 		return &Message{
-			ID:         event.EventID,
-			Platform:   "matrix",
-			ChannelID:  roomID,
-			UserID:     event.Sender,
-			Content:    content.Body,
-			Timestamp:  time.Unix(event.OriginServerTS/1000, 0),
+			ID:        event.EventID,
+			Platform:  "matrix",
+			ChannelID: roomID,
+			UserID:    event.Sender,
+			Content:   content.Body,
+			Timestamp: time.Unix(event.OriginServerTS/1000, 0),
 			Metadata: map[string]interface{}{
-				"msg_type":   content.MsgType,
-				"format":     content.Format,
+				"msg_type": content.MsgType,
+				"format":   content.Format,
 			},
 		}
 	case "m.room.member":
 		var content struct {
-			Membership string `json:"membership"`
+			Membership  string `json:"membership"`
 			Displayname string `json:"displayname,omitempty"`
 		}
 		if err := json.Unmarshal(event.Content, &content); err != nil {
@@ -373,12 +373,12 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 		}
 
 		return &Message{
-			ID:         event.EventID,
-			Platform:   "matrix",
-			ChannelID:  roomID,
-			UserID:     event.Sender,
-			Content:    fmt.Sprintf("[%s joined/left]", event.Sender),
-			Timestamp:  time.Unix(event.OriginServerTS/1000, 0),
+			ID:        event.EventID,
+			Platform:  "matrix",
+			ChannelID: roomID,
+			UserID:    event.Sender,
+			Content:   fmt.Sprintf("[%s joined/left]", event.Sender),
+			Timestamp: time.Unix(event.OriginServerTS/1000, 0),
 			Metadata: map[string]interface{}{
 				"event_type": "membership",
 				"membership": content.Membership,
@@ -525,7 +525,7 @@ func (g *MatrixGateway) SendFormattedMessage(ctx context.Context, roomID, body, 
 	txnID := fmt.Sprintf("m%d", g.txnID)
 	g.mu.Unlock()
 
-	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", 
+	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
 		url.PathEscape(roomID), txnID), jsonData, true)
 
 	return err
@@ -541,7 +541,7 @@ func (g *MatrixGateway) SetTypingIndicator(roomID string, isTyping bool, timeout
 	}
 
 	jsonData, _ := json.Marshal(payload)
-	_, err := g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/typing/%s", 
+	_, err := g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/typing/%s",
 		url.PathEscape(roomID), url.PathEscape(g.userID)), jsonData, true)
 
 	return err

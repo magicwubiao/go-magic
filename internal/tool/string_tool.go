@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"math/rand"
 	"context"
 	"crypto/md5"
 	crand "crypto/rand"
@@ -12,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strings"
 	"time"
@@ -606,11 +606,11 @@ func (t *TimeTool) now(args map[string]any) (map[string]any, error) {
 	}
 
 	return map[string]any{
-		"unix":       now.Unix(),
-		"unix_nano":  now.UnixNano(),
-		"formatted":  now.Format(format),
-		"timezone":   loc.String(),
-		"iso":        now.Format(time.RFC3339),
+		"unix":      now.Unix(),
+		"unix_nano": now.UnixNano(),
+		"formatted": now.Format(format),
+		"timezone":  loc.String(),
+		"iso":       now.Format(time.RFC3339),
 	}, nil
 }
 
@@ -716,11 +716,11 @@ func (t *TimeTool) diff(args map[string]any) (map[string]any, error) {
 	diff := t2.Sub(t1)
 
 	return map[string]any{
-		"seconds":      int(diff.Seconds()),
-		"minutes":      int(diff.Minutes()),
-		"hours":        int(diff.Hours()),
-		"days":         int(diff.Hours() / 24),
-		"formatted":    diff.String(),
+		"seconds":   int(diff.Seconds()),
+		"minutes":   int(diff.Minutes()),
+		"hours":     int(diff.Hours()),
+		"days":      int(diff.Hours() / 24),
+		"formatted": diff.String(),
 	}, nil
 }
 

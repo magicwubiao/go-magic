@@ -17,11 +17,11 @@ import (
 // This is Layer 3 of the Cortex three-layer architecture:
 // Perception → Cognition → Execution
 type Manager struct {
-	baseDir          string
-	checkpoints      map[string]*Checkpoint
-	results          map[string][]*ExecutionResult
-	validationLevel  ValidationLevel
-	autoResume       bool
+	baseDir         string
+	checkpoints     map[string]*Checkpoint
+	results         map[string][]*ExecutionResult
+	validationLevel ValidationLevel
+	autoResume      bool
 }
 
 // NewManager creates a new execution manager

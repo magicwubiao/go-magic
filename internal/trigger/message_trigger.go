@@ -16,7 +16,7 @@ type MessageTrigger struct {
 	mu             sync.RWMutex
 	turnCount      int
 	nudgeThreshold int
-	nudgeHandlers  []func()      // Functions to call on nudge
+	nudgeHandlers  []func() // Functions to call on nudge
 	taskStartTime  time.Time
 	currentTask    string
 }

@@ -21,18 +21,18 @@ func NewPluginAdapter(skill *Skill) *PluginAdapter {
 // Manifest returns the plugin manifest
 func (a *PluginAdapter) Manifest() *plugin.PluginManifest {
 	return &plugin.PluginManifest{
-		ID:            sanitizeID(a.skill.Name),
-		Name:          a.skill.Name,
-		Version:       a.skill.Version,
-		Description:   a.skill.Description,
-		Author:        a.skill.Author,
-		License:       a.skill.License,
-		APIVersion:    "1.0",
-		Type:          plugin.TypeScript, // Skills are script-based
-		Category:      a.skill.Category,
-		Tags:          a.skill.Tags,
-		Permissions:   []string{"filesystem"},
-		Hooks:         []string{"on_load"},
+		ID:          sanitizeID(a.skill.Name),
+		Name:        a.skill.Name,
+		Version:     a.skill.Version,
+		Description: a.skill.Description,
+		Author:      a.skill.Author,
+		License:     a.skill.License,
+		APIVersion:  "1.0",
+		Type:        plugin.TypeScript, // Skills are script-based
+		Category:    a.skill.Category,
+		Tags:        a.skill.Tags,
+		Permissions: []string{"filesystem"},
+		Hooks:       []string{"on_load"},
 	}
 }
 
@@ -77,7 +77,7 @@ type ToolSpec struct {
 func NewPluginAdapterWithTools(skill *Skill, tools []ToolSpec) *PluginAdapterWithTools {
 	return &PluginAdapterWithTools{
 		PluginAdapter: NewPluginAdapter(skill),
-		tools:        tools,
+		tools:         tools,
 	}
 }
 

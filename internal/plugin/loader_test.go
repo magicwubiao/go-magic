@@ -212,11 +212,11 @@ func TestValidatePlugin(t *testing.T) {
 	os.MkdirAll(pluginPath, 0755)
 
 	manifest := PluginManifest{
-		ID:          "test-plugin",
-		Name:        "Test Plugin",
-		Version:     "1.0.0",
-		Type:        TypeScript,
-		Entrypoint:  "run.sh",
+		ID:         "test-plugin",
+		Name:       "Test Plugin",
+		Version:    "1.0.0",
+		Type:       TypeScript,
+		Entrypoint: "run.sh",
 	}
 	manifestData := toJSON(manifest)
 	os.WriteFile(filepath.Join(pluginPath, "manifest.json"), manifestData, 0644)

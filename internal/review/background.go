@@ -12,11 +12,11 @@ import (
 // "Background Review - an independent daemon that runs asynchronously,
 // specifically designed to summarize experiences without interrupting the user conversation."
 type BackgroundReview struct {
-	mu             sync.Mutex
-	baseDir        string
-	reviewLog      []ReviewEntry
-	patternsFound  []DetectedPattern
-	isReviewing    bool
+	mu            sync.Mutex
+	baseDir       string
+	reviewLog     []ReviewEntry
+	patternsFound []DetectedPattern
+	isReviewing   bool
 }
 
 // NewBackgroundReview creates a new background review manager

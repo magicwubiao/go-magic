@@ -52,10 +52,10 @@ func NewImporter(manager *skills.Manager) *Importer {
 
 // ImportResult holds the result of an import operation
 type ImportResult struct {
-	Success bool
-	Name    string
-	Path    string
-	Error   error
+	Success  bool
+	Name     string
+	Path     string
+	Error    error
 	Warnings []string
 }
 

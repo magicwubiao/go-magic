@@ -16,23 +16,23 @@ const (
 
 // SkillMeta contains metadata about a skill
 type SkillMeta struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Version     string     `json:"version,omitempty"`
-	Author      string     `json:"author,omitempty"`
-	License     string     `json:"license,omitempty"`
-	Tags        []string   `json:"tags,omitempty"`
-	Category    string     `json:"category,omitempty"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Version     string      `json:"version,omitempty"`
+	Author      string      `json:"author,omitempty"`
+	License     string      `json:"license,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+	Category    string      `json:"category,omitempty"`
 	Source      SkillSource `json:"source,omitempty"`
-	InstalledAt time.Time  `json:"installed_at,omitempty"`
+	InstalledAt time.Time   `json:"installed_at,omitempty"`
 }
 
 // Skill represents a unified skill with metadata and content
 // This is the canonical type for all skills in the system
 type Skill struct {
 	SkillMeta
-	Tools    []string               `json:"tools,omitempty"` // Tools required by this skill
-	Content  string                 `json:"content"`         // Main skill content/prompt
+	Tools    []string               `json:"tools,omitempty"`    // Tools required by this skill
+	Content  string                 `json:"content"`            // Main skill content/prompt
 	Metadata map[string]interface{} `json:"metadata,omitempty"` // Additional metadata
 }
 

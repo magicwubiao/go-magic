@@ -51,11 +51,11 @@ func NewJSONTool() *JSONTool {
 func (t *JSONTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	operation, _ := args["operation"].(string)
 	data, _ := args["data"].(string)
-	
+
 	if data == "" {
 		return nil, fmt.Errorf("data is required")
 	}
-	
+
 	switch operation {
 	case "parse":
 		return t.parse(data)
@@ -92,7 +92,7 @@ func (t *JSONTool) format(data string, indent int) (string, error) {
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		return "", fmt.Errorf("invalid JSON: %w", err)
 	}
-	
+
 	indentStr := strings.Repeat(" ", indent)
 	jsonBytes, err := json.MarshalIndent(result, "", indentStr)
 	if err != nil {
@@ -106,19 +106,19 @@ func (t *JSONTool) query(data, path string) (any, error) {
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
-	
+
 	// 简单的 JSONPath 查询实现
 	// 支持格式: $.key.subkey 或 $[0].key
 	path = strings.TrimPrefix(path, "$")
 	parts := strings.Split(path, ".")
-	
+
 	current := result
 	for _, part := range parts {
 		part = strings.TrimPrefix(part, ".")
 		if part == "" {
 			continue
 		}
-		
+
 		switch c := current.(type) {
 		case map[string]any:
 			current = c[part]
@@ -140,7 +140,7 @@ func (t *JSONTool) query(data, path string) (any, error) {
 			return nil, fmt.Errorf("path not found: %s", part)
 		}
 	}
-	
+
 	return current, nil
 }
 
@@ -211,11 +211,11 @@ func NewYAMLTool() *YAMLTool {
 func (t *YAMLTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	operation, _ := args["operation"].(string)
 	data, _ := args["data"].(string)
-	
+
 	if data == "" {
 		return nil, fmt.Errorf("data is required")
 	}
-	
+
 	switch operation {
 	case "parse":
 		return t.parse(data)
@@ -234,13 +234,13 @@ func (t *YAMLTool) parse(data string) (map[string]any, error) {
 	// 简单 YAML 解析
 	result := make(map[string]any)
 	lines := strings.Split(data, "\n")
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		if strings.Contains(line, ":") {
 			parts := strings.SplitN(line, ":", 2)
 			key := strings.TrimSpace(parts[0])
@@ -249,7 +249,7 @@ func (t *YAMLTool) parse(data string) (map[string]any, error) {
 			result[key] = value
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -258,7 +258,7 @@ func (t *YAMLTool) format(data string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 简单格式化输出
 	var buf strings.Builder
 	for k, v := range parsed {
@@ -272,7 +272,7 @@ func (t *YAMLTool) toJSON(data string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	jsonBytes, err := json.Marshal(parsed)
 	if err != nil {
 		return "", err
@@ -285,7 +285,7 @@ func (t *YAMLTool) fromJSON(data string) (string, error) {
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		return "", fmt.Errorf("invalid JSON: %w", err)
 	}
-	
+
 	// 简单 JSON 到 YAML 转换
 	if m, ok := result.(map[string]any); ok {
 		var buf strings.Builder
@@ -294,6 +294,6 @@ func (t *YAMLTool) fromJSON(data string) (string, error) {
 		}
 		return buf.String(), nil
 	}
-	
+
 	return "", fmt.Errorf("unsupported type for YAML conversion")
 }

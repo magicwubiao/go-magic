@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,9 +30,12 @@ func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("╚════════════════════════════════════════╝")
 	fmt.Println()
 
+	homeDir, _ := os.UserHomeDir()
+	magicDir := filepath.Join(homeDir, ".magic")
+
 	cfg := &config.Config{
 		Profile:    "default",
-		MagicHome:  "~/.magic",
+		MagicHome:  magicDir,
 		WorkingDir: "",
 		Providers:  make(map[string]config.ProviderConfig),
 		Tools: config.ToolsConfig{
@@ -197,17 +201,22 @@ func runSetup(cmd *cobra.Command, args []string) {
 			fmt.Println("      [4] Feishu (飞书)")
 			fmt.Println("      [5] DingTalk (钉钉)")
 			fmt.Println("      [6] QQ")
-			fmt.Println("      [7] WeChat (微信)")
+			fmt.Println("      [7] WeChat (微信 - ClawBot 个人微信)")
+			fmt.Println("      [8] Slack")
+			fmt.Println("      [9] WhatsApp")
+			fmt.Println("      [10] LINE")
 			fmt.Println("      [0] Done (结束配置)")
 
-			fmt.Print("\n   Select platform to configure (0-7): ")
+			fmt.Print("\n   Select platform to configure (0-10): ")
 			platformChoice, _ := reader.ReadString('\n')
 			platformChoice = strings.TrimSpace(platformChoice)
 
 			switch platformChoice {
 			case "0":
 				fmt.Println("   Platform configuration complete.")
-				break
+				// break out of loop
+				// Use goto or a flag instead of break in switch
+				goto donePlatforms
 			case "1": // Telegram
 				fmt.Print("   Enter Telegram bot token: ")
 				token, _ := reader.ReadString('\n')
@@ -257,7 +266,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 				fmt.Print("   Enter Feishu app_id: ")
 				appID, _ := reader.ReadString('\n')
 				appID = strings.TrimSpace(appID)
-				fmt.Print("   Enter Feishu app_secret (or API key): ")
+				fmt.Print("   Enter Feishu app_secret: ")
 				appSecret, _ := reader.ReadString('\n')
 				appSecret = strings.TrimSpace(appSecret)
 				if appID != "" && appSecret != "" {
@@ -298,52 +307,110 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [QQ] configured successfully!")
 				}
-			case "7": // WeChat (ClawBot scan)
-					fmt.Println("   WeChat uses ClawBot (微信官方插件) for connection.")
-					fmt.Println("   Requires: Node.js >= 18, WeChat >= 8.0.69 (Android) / 8.0.70 (iOS)")
+			case "7": // WeChat ClawBot (个人微信)
+				fmt.Println("   WeChat ClawBot connects personal WeChat via 微信官方插件.")
+				fmt.Println("   Requires: Node.js >= 18, WeChat >= 8.0.69 (Android) / 8.0.70 (iOS)")
+				fmt.Println()
+				fmt.Print("   Enter Client ID (default: wechat-clawbot): ")
+				clientID, _ := reader.ReadString('\n')
+				clientID = strings.TrimSpace(clientID)
+				if clientID == "" {
+					clientID = "wechat-clawbot"
+				}
+				fmt.Print("   Enable auto-login (QR scan on startup)? (Y/n): ")
+				autoLoginChoice, _ := reader.ReadString('\n')
+				autoLoginChoice = strings.TrimSpace(autoLoginChoice)
+				autoLogin := !(autoLoginChoice == "n" || autoLoginChoice == "N")
+
+				fmt.Println()
+				fmt.Print("   Start ClawBot QR code scan now? (Y/n): ")
+				scanChoice, _ := reader.ReadString('\n')
+				scanChoice = strings.TrimSpace(scanChoice)
+				if scanChoice != "n" && scanChoice != "N" {
 					fmt.Println()
-					fmt.Print("   Start ClawBot scan now? (Y/n): ")
-					scanChoice, _ := reader.ReadString('\n')
-					scanChoice = strings.TrimSpace(scanChoice)
-					if scanChoice != "n" && scanChoice != "N" {
-						fmt.Println()
-						fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-						fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
-						fmt.Println("   ──────────────────────────────────────────────────────")
-						clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
-						clawCmd.Stdin = os.Stdin
-						clawCmd.Stdout = os.Stdout
-						clawCmd.Stderr = os.Stderr
-						err := clawCmd.Run()
-						fmt.Println("   ──────────────────────────────────────────────────────")
-						if err != nil {
-							fmt.Printf("   ClawBot install failed: %v\n", err)
-							fmt.Println("   You can try manually running:")
-							fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-						}
-						fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
-						bindChoice, _ := reader.ReadString('\n')
-						bindChoice = strings.TrimSpace(bindChoice)
-						if bindChoice == "y" || bindChoice == "Y" {
-							cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-								Enabled: true,
-							}
-							fmt.Println("   [WeChat] configured successfully via ClawBot!")
-						} else {
-							fmt.Println("   [WeChat] not configured. You can run setup again later.")
-						}
-					} else {
-						fmt.Println("   Skipped. To configure WeChat later, run:")
+					fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+					fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
+					fmt.Println("   ──────────────────────────────────────────────────────")
+					clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
+					clawCmd.Stdin = os.Stdin
+					clawCmd.Stdout = os.Stdout
+					clawCmd.Stderr = os.Stderr
+					err := clawCmd.Run()
+					fmt.Println("   ──────────────────────────────────────────────────────")
+					if err != nil {
+						fmt.Printf("   ClawBot install failed: %v\n", err)
+						fmt.Println("   You can try manually running:")
 						fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
 					}
+					fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
+					bindChoice, _ := reader.ReadString('\n')
+					bindChoice = strings.TrimSpace(bindChoice)
+					if bindChoice == "y" || bindChoice == "Y" {
+						cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
+							ClientID:  clientID,
+							AutoLogin: autoLogin,
+							DataDir:   filepath.Join(magicDir, "clawbot"),
+							Enabled:   true,
+						}
+						fmt.Println("   [WeChat-ClawBot] configured successfully!")
+					} else {
+						fmt.Println("   [WeChat-ClawBot] not configured. You can run setup again later.")
+					}
+				} else {
+					fmt.Println("   Skipped. To configure WeChat later, run:")
+					fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
+					fmt.Println("   Then add to ~/.magic/config.json under gateway.platforms.wechat_clawbot")
+				}
+			case "8": // Slack
+				fmt.Print("   Enter Slack bot token: ")
+				token, _ := reader.ReadString('\n')
+				token = strings.TrimSpace(token)
+				fmt.Print("   Enter Slack signing secret: ")
+				appSecret, _ := reader.ReadString('\n')
+				appSecret = strings.TrimSpace(appSecret)
+				if token != "" && appSecret != "" {
+					cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
+						Token:     token,
+						AppSecret: appSecret,
+						Enabled:   true,
+					}
+					fmt.Println("   [Slack] configured successfully!")
+				}
+			case "9": // WhatsApp
+				fmt.Print("   Enter WhatsApp Phone Number ID: ")
+				appID, _ := reader.ReadString('\n')
+				appID = strings.TrimSpace(appID)
+				fmt.Print("   Enter WhatsApp access token: ")
+				token, _ := reader.ReadString('\n')
+				token = strings.TrimSpace(token)
+				if appID != "" && token != "" {
+					cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
+						AppID:   appID,
+						Token:   token,
+						Enabled: true,
+					}
+					fmt.Println("   [WhatsApp] configured successfully!")
+				}
+			case "10": // LINE
+				fmt.Print("   Enter LINE Channel Access Token: ")
+				token, _ := reader.ReadString('\n')
+				token = strings.TrimSpace(token)
+				fmt.Print("   Enter LINE Channel Secret: ")
+				appSecret, _ := reader.ReadString('\n')
+				appSecret = strings.TrimSpace(appSecret)
+				if token != "" && appSecret != "" {
+					cfg.Gateway.Platforms["line"] = config.PlatformConfig{
+						Token:     token,
+						AppSecret: appSecret,
+						Enabled:   true,
+					}
+					fmt.Println("   [LINE] configured successfully!")
+				}
 			default:
-				fmt.Println("   Invalid choice. Please select 0-7.")
-			}
-
-			if platformChoice == "0" {
-				break
+				fmt.Println("   Invalid choice. Please select 0-10.")
 			}
 		}
+	donePlatforms:
 	}
 
 	// Save config

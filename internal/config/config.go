@@ -44,22 +44,22 @@ type CortexConfig struct {
 
 	// Trigger settings
 	NudgeInterval time.Duration `json:"nudge_interval"` // Interval between nudges
-	NudgeEnabled bool `json:"nudge_enabled"` // Enable/disable nudges
+	NudgeEnabled  bool          `json:"nudge_enabled"`  // Enable/disable nudges
 
 	// Review settings
 	ReviewInterval time.Duration `json:"review_interval"` // Background review interval
-	ReviewEnabled  bool `json:"review_enabled"` // Enable/disable reviews
+	ReviewEnabled  bool          `json:"review_enabled"`  // Enable/disable reviews
 
 	// FTS settings
 	EnableFTS bool `json:"enable_fts"` // Enable full-text search
-	FTSCache  bool `json:"fts_cache"` // Enable FTS caching
+	FTSCache  bool `json:"fts_cache"`  // Enable FTS caching
 
 	// Perception settings
 	PerceptionConfidenceThreshold float64 `json:"perception_confidence_threshold"`
-	PerceptionMaxHistory         int     `json:"perception_max_history"`
+	PerceptionMaxHistory          int     `json:"perception_max_history"`
 
 	// Cognition settings
-	PlanningMaxSteps int `json:"planning_max_steps"`
+	PlanningMaxSteps int           `json:"planning_max_steps"`
 	PlanningTimeout  time.Duration `json:"planning_timeout"`
 
 	// Skills settings
@@ -70,17 +70,17 @@ type CortexConfig struct {
 // PluginConfig contains plugin system configuration
 type PluginConfig struct {
 	// Plugin loading
-	AutoInstall bool `json:"auto_install"` // Auto-install missing plugins
-	AutoUpdate  bool `json:"auto_update"`  // Auto-update plugins
+	AutoInstall bool     `json:"auto_install"` // Auto-install missing plugins
+	AutoUpdate  bool     `json:"auto_update"`  // Auto-update plugins
 	AllowedDirs []string `json:"allowed_dirs"` // Allowed plugin directories
 
 	// Security
-	SandboxEnabled bool `json:"sandbox_enabled"` // Enable plugin sandboxing
+	SandboxEnabled bool          `json:"sandbox_enabled"` // Enable plugin sandboxing
 	SandboxTimeout time.Duration `json:"sandbox_timeout"` // Sandbox timeout
 
 	// Cache
-	CacheEnabled bool `json:"cache_enabled"` // Enable plugin cache
-	CacheDir     string `json:"cache_dir"`    // Cache directory
+	CacheEnabled bool   `json:"cache_enabled"` // Enable plugin cache
+	CacheDir     string `json:"cache_dir"`     // Cache directory
 }
 
 // ExecutionConfig contains execution layer configuration
@@ -90,14 +90,14 @@ type ExecutionConfig struct {
 	MaxDepth      int `json:"max_depth"`      // Maximum recursion depth
 
 	// Checkpoint settings
-	CheckpointsEnabled bool `json:"checkpoints_enabled"`
-	CheckpointFreq     int  `json:"checkpoint_frequency"` // Create checkpoint every N iterations
-	CheckpointDir      string `json:"checkpoint_dir"`
+	CheckpointsEnabled bool          `json:"checkpoints_enabled"`
+	CheckpointFreq     int           `json:"checkpoint_frequency"` // Create checkpoint every N iterations
+	CheckpointDir      string        `json:"checkpoint_dir"`
 	CheckpointTTL      time.Duration `json:"checkpoint_ttl"` // How long to keep checkpoints
 
 	// Recovery settings
-	AutoResume        bool `json:"auto_resume"` // Auto-resume from checkpoint on failure
-	MaxRecoveryAttempts int `json:"max_recovery_attempts"`
+	AutoResume          bool `json:"auto_resume"` // Auto-resume from checkpoint on failure
+	MaxRecoveryAttempts int  `json:"max_recovery_attempts"`
 
 	// Validation settings
 	ValidationLevel string `json:"validation_level"` // "strict", "normal", "relaxed"
@@ -127,8 +127,8 @@ type MemoryConfig struct {
 	EnableDedup bool `json:"enable_dedup"` // Enable content deduplication
 
 	// Cleanup settings
-	CleanupEnabled bool          `json:"cleanup_enabled"`
-	CleanupInterval time.Duration `json:"cleanup_interval"`
+	CleanupEnabled   bool          `json:"cleanup_enabled"`
+	CleanupInterval  time.Duration `json:"cleanup_interval"`
 	CleanupOlderThan time.Duration `json:"cleanup_older_than"`
 }
 
@@ -166,8 +166,8 @@ type ServerConfig struct {
 	IdleTimeout  time.Duration `json:"idle_timeout"`
 
 	// Limits
-	MaxRequestSize    int64 `json:"max_request_size"`
-	MaxHeaderBytes    int   `json:"max_header_bytes"`
+	MaxRequestSize    int64         `json:"max_request_size"`
+	MaxHeaderBytes    int           `json:"max_header_bytes"`
 	ReadHeaderTimeout time.Duration `json:"read_header_timeout"`
 }
 
@@ -177,8 +177,8 @@ type ConfigManager struct {
 	configDir string
 	filePath  string
 
-	watchers    []chan *Config
-	watcherMu   sync.RWMutex
+	watchers  []chan *Config
+	watcherMu sync.RWMutex
 
 	mu sync.RWMutex
 }
@@ -187,31 +187,31 @@ type ConfigManager struct {
 func DefaultConfig() *Config {
 	// Create default core config (shared between all agents)
 	defaultCore := CortexConfig{
-		MemoryLimit:                 1024,
-		NudgeInterval:               15 * time.Minute,
-		NudgeEnabled:                true,
-		ReviewInterval:              30 * time.Minute,
-		ReviewEnabled:               true,
-		EnableFTS:                   true,
-		FTSCache:                   true,
+		MemoryLimit:                   1024,
+		NudgeInterval:                 15 * time.Minute,
+		NudgeEnabled:                  true,
+		ReviewInterval:                30 * time.Minute,
+		ReviewEnabled:                 true,
+		EnableFTS:                     true,
+		FTSCache:                      true,
 		PerceptionConfidenceThreshold: 0.7,
-		PerceptionMaxHistory:        100,
-		PlanningMaxSteps:           50,
-		PlanningTimeout:             30 * time.Second,
-		AutoSkillCreation:           true,
-		MinPatternFreq:              2,
+		PerceptionMaxHistory:          100,
+		PlanningMaxSteps:              50,
+		PlanningTimeout:               30 * time.Second,
+		AutoSkillCreation:             true,
+		MinPatternFreq:                2,
 	}
 
 	return &Config{
 		Cortex: defaultCore,
 		Plugin: PluginConfig{
-			AutoInstall:   false,
-			AutoUpdate:    false,
-			AllowedDirs:   []string{"./plugins"},
+			AutoInstall:    false,
+			AutoUpdate:     false,
+			AllowedDirs:    []string{"./plugins"},
 			SandboxEnabled: true,
 			SandboxTimeout: 30 * time.Second,
-			CacheEnabled:  true,
-			CacheDir:      "./.cache/plugins",
+			CacheEnabled:   true,
+			CacheDir:       "./.cache/plugins",
 		},
 		Execution: ExecutionConfig{
 			MaxIterations:       100,
@@ -241,26 +241,26 @@ func DefaultConfig() *Config {
 			CleanupOlderThan: 90 * 24 * time.Hour,
 		},
 		Log: LogConfig{
-			Level:       "info",
-			Format:      "json",
-			FileEnabled: true,
-			FilePath:    "./logs/app.log",
-			MaxSizeMB:   100,
-			MaxBackups:  5,
-			MaxAgeDays:  30,
+			Level:         "info",
+			Format:        "json",
+			FileEnabled:   true,
+			FilePath:      "./logs/app.log",
+			MaxSizeMB:     100,
+			MaxBackups:    5,
+			MaxAgeDays:    30,
 			StdoutEnabled: true,
 			StderrEnabled: true,
 		},
 		Server: ServerConfig{
-			Host:                "0.0.0.0",
-			Port:                8080,
-			TLSEnabled:         false,
-			ReadTimeout:         30 * time.Second,
-			WriteTimeout:        30 * time.Second,
-			IdleTimeout:         120 * time.Second,
-			MaxRequestSize:      10 * 1024 * 1024,
-			MaxHeaderBytes:      4096,
-			ReadHeaderTimeout:   5 * time.Second,
+			Host:              "0.0.0.0",
+			Port:              8080,
+			TLSEnabled:        false,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxRequestSize:    10 * 1024 * 1024,
+			MaxHeaderBytes:    4096,
+			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
 }

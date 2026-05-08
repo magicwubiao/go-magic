@@ -80,12 +80,12 @@ func (p *Planner) createTaskPlan(input string, result *perception.PerceptionResu
 
 	// Step 1: Analysis and context gathering
 	steps = append(steps, Step{
-		ID:          stepID,
-		Description: "Analyze requirements and gather context",
-		Tools:       []string{"search_files", "memory"},
-		Priority:    1,
+		ID:             stepID,
+		Description:    "Analyze requirements and gather context",
+		Tools:          []string{"search_files", "memory"},
+		Priority:       1,
 		EstimatedTurns: 1,
-		Status:      StepPending,
+		Status:         StepPending,
 	})
 	stepID++
 
@@ -94,13 +94,13 @@ func (p *Planner) createTaskPlan(input string, result *perception.PerceptionResu
 	if strings.Contains(lower, "write") || strings.Contains(lower, "create") ||
 		strings.Contains(lower, "generate") || strings.Contains(lower, "build") {
 		steps = append(steps, Step{
-			ID:          stepID,
-			Description: "Create/modify files according to requirements",
-			Tools:       []string{"write_file", "file_edit"},
-			Priority:    1,
+			ID:             stepID,
+			Description:    "Create/modify files according to requirements",
+			Tools:          []string{"write_file", "file_edit"},
+			Priority:       1,
 			EstimatedTurns: 2,
-			Dependencies: []int{stepID - 1},
-			Status:      StepPending,
+			Dependencies:   []int{stepID - 1},
+			Status:         StepPending,
 		})
 		stepID++
 	}
@@ -109,13 +109,13 @@ func (p *Planner) createTaskPlan(input string, result *perception.PerceptionResu
 	if strings.Contains(lower, "run") || strings.Contains(lower, "execute") ||
 		strings.Contains(lower, "test") || strings.Contains(lower, "debug") {
 		steps = append(steps, Step{
-			ID:          stepID,
-			Description: "Execute code and verify results",
-			Tools:       []string{"execute_command"},
-			Priority:    1,
+			ID:             stepID,
+			Description:    "Execute code and verify results",
+			Tools:          []string{"execute_command"},
+			Priority:       1,
 			EstimatedTurns: 2,
-			Dependencies: []int{stepID - 1},
-			Status:      StepPending,
+			Dependencies:   []int{stepID - 1},
+			Status:         StepPending,
 		})
 		stepID++
 	}
@@ -124,13 +124,13 @@ func (p *Planner) createTaskPlan(input string, result *perception.PerceptionResu
 	if strings.Contains(lower, "analyze") || strings.Contains(lower, "process") ||
 		strings.Contains(lower, "summarize") || strings.Contains(lower, "parse") {
 		steps = append(steps, Step{
-			ID:          stepID,
-			Description: "Process data and generate analysis",
-			Tools:       []string{"execute_command", "read_file"},
-			Priority:    1,
+			ID:             stepID,
+			Description:    "Process data and generate analysis",
+			Tools:          []string{"execute_command", "read_file"},
+			Priority:       1,
 			EstimatedTurns: 2,
-			Dependencies: []int{stepID - 1},
-			Status:      StepPending,
+			Dependencies:   []int{stepID - 1},
+			Status:         StepPending,
 		})
 		stepID++
 	}
@@ -139,26 +139,26 @@ func (p *Planner) createTaskPlan(input string, result *perception.PerceptionResu
 	if strings.Contains(lower, "deploy") || strings.Contains(lower, "setup") ||
 		strings.Contains(lower, "install") || strings.Contains(lower, "configure") {
 		steps = append(steps, Step{
-			ID:          stepID,
-			Description: "Set up environment and deploy",
-			Tools:       []string{"execute_command", "write_file"},
-			Priority:    2,
+			ID:             stepID,
+			Description:    "Set up environment and deploy",
+			Tools:          []string{"execute_command", "write_file"},
+			Priority:       2,
 			EstimatedTurns: 2,
-			Dependencies: []int{stepID - 1},
-			Status:      StepPending,
+			Dependencies:   []int{stepID - 1},
+			Status:         StepPending,
 		})
 		stepID++
 	}
 
 	// Final step: verification and summary
 	steps = append(steps, Step{
-		ID:          stepID,
-		Description: "Verify results and summarize work done",
-		Tools:       []string{"read_file", "execute_command"},
-		Priority:    1,
+		ID:             stepID,
+		Description:    "Verify results and summarize work done",
+		Tools:          []string{"read_file", "execute_command"},
+		Priority:       1,
 		EstimatedTurns: 1,
-		Dependencies: []int{stepID - 1},
-		Status:      StepPending,
+		Dependencies:   []int{stepID - 1},
+		Status:         StepPending,
 	})
 
 	// Calculate total estimated turns
@@ -192,13 +192,13 @@ func (p *Planner) AdjustPlan(plan *ExecutionPlan, state *ExecutionState, reason 
 			if step.ID == failedStepID && step.Status == StepFailed {
 				// Add retry step
 				newStep := Step{
-					ID:          len(plan.Steps) + 1,
-					Description: "Retry: " + step.Description,
-					Tools:       step.Tools,
-					Priority:    step.Priority,
+					ID:             len(plan.Steps) + 1,
+					Description:    "Retry: " + step.Description,
+					Tools:          step.Tools,
+					Priority:       step.Priority,
 					EstimatedTurns: step.EstimatedTurns,
-					Dependencies: step.Dependencies,
-					Status:      StepPending,
+					Dependencies:   step.Dependencies,
+					Status:         StepPending,
 				}
 				plan.Steps = append(plan.Steps, newStep)
 				adjustment.StepAdded = append(adjustment.StepAdded, newStep)
@@ -253,4 +253,3 @@ func (p *Planner) MarkStepComplete(state *ExecutionState, stepID int) {
 func (p *Planner) MarkStepFailed(state *ExecutionState, stepID int) {
 	state.StepsFailed = append(state.StepsFailed, stepID)
 }
-

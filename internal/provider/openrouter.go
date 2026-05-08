@@ -1,8 +1,6 @@
 package provider
 
-import (
-	
-)
+import ()
 
 // OpenRouterProvider OpenRouter (兼容OpenAI格式)
 type OpenRouterProvider struct {
@@ -27,9 +25,9 @@ func (p *OpenRouterProvider) Name() string {
 func (p *OpenRouterProvider) GetCapabilities() *Capabilities {
 	return &Capabilities{
 		ToolCalling:    true,
-		Streaming:       true,
-		StreamingTools:  true,
-		MultiModal:      true,
-		Vision:          true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     true,
+		Vision:         true,
 	}
 }

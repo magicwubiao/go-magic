@@ -13,7 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
-	// StreamToolCall represents a tool call with index for streaming delta
+// StreamToolCall represents a tool call with index for streaming delta
 type StreamToolCall struct {
 	Index     int
 	ID        string
@@ -24,15 +24,14 @@ type StreamToolCall struct {
 
 // StreamResponse represents a chunk of streaming response
 type StreamResponse struct {
-	Content    string           `json:"content,omitempty"`
-	ToolCall   *types.ToolCall  `json:"tool_call,omitempty"`
-	ToolCalls  []types.ToolCall `json:"tool_calls,omitempty"`
-	StreamTCs  []StreamToolCall `json:"-"` // Internal use for delta tracking
-	Done       bool             `json:"done"`
-	Error      error            `json:"error,omitempty"`
-	Usage      *Usage           `json:"usage,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	ToolCall  *types.ToolCall  `json:"tool_call,omitempty"`
+	ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
+	StreamTCs []StreamToolCall `json:"-"` // Internal use for delta tracking
+	Done      bool             `json:"done"`
+	Error     error            `json:"error,omitempty"`
+	Usage     *Usage           `json:"usage,omitempty"`
 }
-
 
 // StreamConfig configures streaming behavior
 type StreamConfig struct {
@@ -78,23 +77,23 @@ func (p *OpenAIStreamParser) IsDone(line string) bool {
 func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 	data := strings.TrimPrefix(line, "data: ")
 	data = strings.TrimSpace(data)
-	
+
 	if data == "" || p.IsDone(line) {
 		return nil, nil
 	}
-	
+
 	var chunk struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		Model   string `json:"model"`
 		Choices []struct {
-			Index        int `json:"index"`
-			Delta        struct {
+			Index int `json:"index"`
+			Delta struct {
 				Role      string `json:"role"`
 				Content   string `json:"content"`
 				ToolCalls []struct {
-					Index   int    `json:"index"`
+					Index    int    `json:"index"`
 					ID       string `json:"id"`
 					Type     string `json:"type"`
 					Function struct {
@@ -111,20 +110,20 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	
+
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return nil, fmt.Errorf("failed to parse SSE chunk: %w", err)
 	}
-	
+
 	resp := &StreamResponse{}
-	
+
 	if len(chunk.Choices) > 0 {
 		choice := chunk.Choices[0]
-		
+
 		if choice.Delta.Content != "" {
 			resp.Content = choice.Delta.Content
 		}
-		
+
 		for _, tc := range choice.Delta.ToolCalls {
 			resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
@@ -143,12 +142,12 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 				Arguments: tc.Function.Arguments,
 			})
 		}
-		
+
 		if choice.FinishReason != "" {
 			resp.Done = true
 		}
 	}
-	
+
 	if chunk.Usage.TotalTokens > 0 {
 		resp.Usage = &Usage{
 			PromptTokens:     chunk.Usage.PromptTokens,
@@ -156,7 +155,7 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			TotalTokens:      chunk.Usage.TotalTokens,
 		}
 	}
-	
+
 	return resp, nil
 }
 
@@ -173,9 +172,9 @@ func (p *AnthropicStreamParser) IsDone(line string) bool {
 func (p *AnthropicStreamParser) Parse(line string) (*StreamResponse, error) {
 	data := strings.TrimPrefix(line, "event: ")
 	data = strings.TrimSpace(data)
-	
+
 	_ = data // Event type tracking would go here
-	
+
 	return nil, nil
 }
 
@@ -194,13 +193,13 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 	if config == nil {
 		config = DefaultStreamConfig()
 	}
-	
+
 	scanner := bufio.NewScanner(body)
-	
+
 	// Set buffer size for large content
 	buf := make([]byte, 0, config.BufferSize)
 	scanner.Buffer(buf, config.BufferSize)
-	
+
 	var accumulatedContent strings.Builder
 	var accumulatedToolCalls []types.ToolCall
 	// Use map for delta tracking: index -> current accumulated tool call
@@ -265,7 +264,7 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 		if len(resp.ToolCalls) > 0 && len(resp.StreamTCs) == 0 {
 			accumulatedToolCalls = append(accumulatedToolCalls, resp.ToolCalls...)
 		}
-		
+
 		if !resp.Done {
 			// Send incremental response
 			handler(&StreamResponse{
@@ -274,21 +273,21 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 				Done:      false,
 			})
 		}
-		
+
 		if resp.Done {
 			done = true
 		}
 		mu.Unlock()
-		
+
 		if done {
 			break
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("stream parsing error: %w", err)
 	}
-	
+
 	// Convert delta map to accumulated tool calls slice
 	for i := 0; i <= len(deltaMap); i++ {
 		if tc, ok := deltaMap[i]; ok {
@@ -323,7 +322,7 @@ func NewStreamContext(parent context.Context) (*StreamContext, context.Context) 
 	sc := &StreamContext{
 		done: make(chan struct{}),
 	}
-	
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -335,7 +334,7 @@ func NewStreamContext(parent context.Context) (*StreamContext, context.Context) 
 		case <-sc.done:
 		}
 	}()
-	
+
 	return sc, ctx
 }
 
@@ -364,13 +363,13 @@ func (sc *StreamContext) Close(err error) {
 func StreamWithTimeout(ctx context.Context, duration time.Duration, body io.Reader, handler StreamHandler) error {
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
-	
+
 	done := make(chan error, 1)
-	
+
 	go func() {
 		done <- ParseStreamResponse(body, handler)
 	}()
-	
+
 	select {
 	case err := <-done:
 		return err
@@ -404,12 +403,11 @@ func NewBufferedStreamReader(reader io.Reader, config *StreamConfig) *BufferedSt
 func (b *BufferedStreamReader) Read(p []byte) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	if b.closed {
 		return 0, io.EOF
 	}
-	
-	
+
 	return b.buffer.Read(p)
 }
 
@@ -424,9 +422,9 @@ func (b *BufferedStreamReader) Close() error {
 // CreateStreamHandler creates a handler that accumulates responses
 type StreamAccumulator struct {
 	content      strings.Builder
-	toolCalls   []types.ToolCall
-	mu          sync.Mutex
-	handler     StreamHandler
+	toolCalls    []types.ToolCall
+	mu           sync.Mutex
+	handler      StreamHandler
 	finalHandler StreamHandler
 }
 
@@ -447,20 +445,20 @@ func (sa *StreamAccumulator) OnFinal(handler StreamHandler) *StreamAccumulator {
 func (sa *StreamAccumulator) Handle(resp *StreamResponse) {
 	sa.mu.Lock()
 	defer sa.mu.Unlock()
-	
+
 	if resp.Content != "" {
 		sa.content.WriteString(resp.Content)
 	}
-	
+
 	if len(resp.ToolCalls) > 0 {
 		sa.toolCalls = append(sa.toolCalls, resp.ToolCalls...)
 	}
-	
+
 	// Forward to original handler if set
 	if sa.handler != nil && !resp.Done {
 		sa.handler(resp)
 	}
-	
+
 	if resp.Done && sa.finalHandler != nil {
 		sa.finalHandler(&StreamResponse{
 			Content:   sa.content.String(),

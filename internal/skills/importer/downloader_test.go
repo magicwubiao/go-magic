@@ -144,28 +144,28 @@ func TestURLTypeNames(t *testing.T) {
 
 func TestParseGitHubURL(t *testing.T) {
 	tests := []struct {
-		url           string
-		expectedOwner string
-		expectedRepo  string
+		url            string
+		expectedOwner  string
+		expectedRepo   string
 		expectedBranch string
-		expectedPath  string
-		expectError   bool
+		expectedPath   string
+		expectError    bool
 	}{
 		{
-			url:           "https://github.com/user/repo/tree/main/skills/my-skill",
-			expectedOwner: "user",
-			expectedRepo:  "repo",
+			url:            "https://github.com/user/repo/tree/main/skills/my-skill",
+			expectedOwner:  "user",
+			expectedRepo:   "repo",
 			expectedBranch: "main",
-			expectedPath:  "skills/my-skill",
-			expectError:   false,
+			expectedPath:   "skills/my-skill",
+			expectError:    false,
 		},
 		{
-			url:           "https://github.com/owner/project/tree/develop/path/to/skill",
-			expectedOwner: "owner",
-			expectedRepo:  "project",
+			url:            "https://github.com/owner/project/tree/develop/path/to/skill",
+			expectedOwner:  "owner",
+			expectedRepo:   "project",
 			expectedBranch: "develop",
-			expectedPath:  "path/to/skill",
-			expectError:   false,
+			expectedPath:   "path/to/skill",
+			expectError:    false,
 		},
 		{
 			url:         "invalid-url",
@@ -176,7 +176,7 @@ func TestParseGitHubURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {
 			owner, repo, branch, path, err := parseGitHubURL(tt.url)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("parseGitHubURL(%q) expected error, got nil", tt.url)

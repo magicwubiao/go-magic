@@ -26,10 +26,10 @@ type Message struct {
 
 // Response represents a response to a message
 type Response struct {
-	MessageID string                 `json:"message_id"`
-	Content  string                 `json:"content"`
-	ChannelID string                 `json:"channel_id"`
-	Error    error                  `json:"error,omitempty"`
+	MessageID string `json:"message_id"`
+	Content   string `json:"content"`
+	ChannelID string `json:"channel_id"`
+	Error     error  `json:"error,omitempty"`
 }
 
 // PlatformHandler defines the interface for platform implementations
@@ -97,7 +97,7 @@ type Middleware interface {
 type MiddlewareFunc func(msg *Message) (bool, error)
 
 func (f MiddlewareFunc) Process(msg *Message) (bool, error) { return f(msg) }
-func (f MiddlewareFunc) Name() string                      { return "MiddlewareFunc" }
+func (f MiddlewareFunc) Name() string                       { return "MiddlewareFunc" }
 
 // RateLimitMiddleware limits message rate per user
 type RateLimitMiddleware struct {
@@ -120,13 +120,13 @@ func (m *RateLimitMiddleware) Name() string { return "rate_limit" }
 
 func (m *RateLimitMiddleware) Process(msg *Message) (bool, error) {
 	key := msg.UserID + ":" + msg.Platform
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	now := time.Now()
 	windowStart := now.Add(-m.window)
-	
+
 	// Clean old entries
 	var valid []time.Time
 	for _, t := range m.limits[key] {
@@ -134,12 +134,12 @@ func (m *RateLimitMiddleware) Process(msg *Message) (bool, error) {
 			valid = append(valid, t)
 		}
 	}
-	
+
 	if len(valid) >= m.maxCount {
 		m.limits[key] = valid
 		return false, fmt.Errorf("rate limit exceeded: max %d messages per %v", m.maxCount, m.window)
 	}
-	
+
 	m.limits[key] = append(valid, now)
 	return true, nil
 }
@@ -282,13 +282,13 @@ func NewGateway(agent AgentHandler, config *GatewayConfig) *Gateway {
 	}
 
 	return &Gateway{
-		platforms: make(map[string]PlatformHandler),
-		sessions:  make(map[string]*Session),
-		agent:     agent,
-		stopCh:    make(chan struct{}),
-		config:    config,
+		platforms:  make(map[string]PlatformHandler),
+		sessions:   make(map[string]*Session),
+		agent:      agent,
+		stopCh:     make(chan struct{}),
+		config:     config,
 		middleware: make([]Middleware, 0),
-		apiPort:   config.APIPort,
+		apiPort:    config.APIPort,
 	}
 }
 
@@ -673,18 +673,18 @@ type HealthStatus struct {
 	Status    string                    `json:"status"`
 	Timestamp time.Time                 `json:"timestamp"`
 	Platforms map[string]PlatformStatus `json:"platforms"`
-	
+
 	// 兼容旧代码字段
-	Platform      string                 `json:"platform,omitempty"`
+	Platform     string                 `json:"platform,omitempty"`
 	Connected    bool                   `json:"connected,omitempty"`
 	CallbackOK   bool                   `json:"callback_ok,omitempty"`
 	CallbackPort int                    `json:"callback_port,omitempty"`
 	HTTPClientOK bool                   `json:"http_client_ok,omitempty"`
 	TokenValid   bool                   `json:"token_valid,omitempty"`
 	TokenExpiry  *time.Time             `json:"token_expiry,omitempty"`
-	LatencyMs     int64                  `json:"latency_ms,omitempty"`
-	Details       map[string]interface{} `json:"details,omitempty"`
-	Error         string                 `json:"error,omitempty"`
+	LatencyMs    int64                  `json:"latency_ms,omitempty"`
+	Details      map[string]interface{} `json:"details,omitempty"`
+	Error        string                 `json:"error,omitempty"`
 }
 
 // PlatformStatus represents the status of a platform
@@ -702,17 +702,17 @@ type HealthCheckable interface {
 // startAPIServer starts the HTTP API server
 func (g *Gateway) startAPIServer() {
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/api/status", g.handleStatus)
 	mux.HandleFunc("/api/sessions", g.handleSessions)
 	mux.HandleFunc("/api/broadcast", g.handleBroadcast)
 	mux.HandleFunc("/api/health", g.handleHealth)
-	
+
 	g.apiServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", g.apiPort),
 		Handler: mux,
 	}
-	
+
 	log.Infof("Gateway API server starting on port %d", g.apiPort)
 	if err := g.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Errorf("API server error: %v", err)
@@ -726,7 +726,7 @@ func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) handleSessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if r.Method == "GET" {
 		json.NewEncoder(w).Encode(g.ListSessions())
 	} else if r.Method == "DELETE" {
@@ -749,7 +749,7 @@ func (g *Gateway) handleBroadcast(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var req struct {
 		Content string `json:"content"`
 	}
@@ -758,11 +758,11 @@ func (g *Gateway) handleBroadcast(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"})
 		return
 	}
-	
+
 	// Broadcast to all sessions
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	for key, handler := range g.platforms {
 		for _, session := range g.sessions {
 			resp := Response{
@@ -772,7 +772,7 @@ func (g *Gateway) handleBroadcast(w http.ResponseWriter, r *http.Request) {
 			log.Infof("Broadcast to %s:%s", key, session.UserID)
 		}
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "broadcast"})
 }
@@ -786,7 +786,7 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) Broadcast(content string) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	for _, handler := range g.platforms {
 		for range g.sessions {
 			resp := Response{

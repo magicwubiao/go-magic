@@ -22,44 +22,44 @@ func TestFullPipeline(t *testing.T) {
 
 	// Test cases
 	testCases := []struct {
-		name         string
-		input        string
-		wantIntent   string
+		name        string
+		input       string
+		wantIntent  string
 		wantComplex string
-		wantTurns    int
+		wantTurns   int
 	}{
 		{
-			name:         "simple task",
-			input:        "run ls command",
-			wantIntent:   "task",
-			wantComplex:  "simple",
-			wantTurns:    8,
+			name:        "simple task",
+			input:       "run ls command",
+			wantIntent:  "task",
+			wantComplex: "simple",
+			wantTurns:   8,
 		},
 		{
-			name:         "medium task",
-			input:        "create a Python script to parse CSV files",
-			wantIntent:   "task",
-			wantComplex:  "medium",
-			wantTurns:    15,
+			name:        "medium task",
+			input:       "create a Python script to parse CSV files",
+			wantIntent:  "task",
+			wantComplex: "medium",
+			wantTurns:   15,
 		},
 		{
-			name:         "advanced task",
-			input:        "build a complete ETL pipeline and deploy to docker",
-			wantIntent:   "task",
-			wantComplex:  "advanced",
-			wantTurns:    25,
+			name:        "advanced task",
+			input:       "build a complete ETL pipeline and deploy to docker",
+			wantIntent:  "task",
+			wantComplex: "advanced",
+			wantTurns:   25,
 		},
 		{
-			name:         "question",
-			input:        "how do I install go?",
-			wantIntent:   "question",
-			wantComplex:  "simple",
+			name:        "question",
+			input:       "how do I install go?",
+			wantIntent:  "question",
+			wantComplex: "simple",
 		},
 		{
-			name:         "chitchat",
-			input:        "hi",
-			wantIntent:   "chitchat",
-			wantComplex:  "simple",
+			name:        "chitchat",
+			input:       "hi",
+			wantIntent:  "chitchat",
+			wantComplex: "simple",
 		},
 	}
 

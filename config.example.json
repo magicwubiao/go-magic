@@ -123,8 +123,17 @@
         "enabled": false
       },
       "wechat": {
-        "api_url": "http://localhost:8080",
-        "api_key": "your-wechat-api-key",
+        "app_id": "your-wechat-official-account-app-id",
+        "app_secret": "your-wechat-official-account-app-secret",
+        "token": "your-wechat-callback-token",
+        "aes_key": "your-wechat-aes-key",
+        "enabled": false
+      },
+      "wechat_clawbot": {
+        "client_id": "my-wechat-bot",
+        "data_dir": "~/.magic/clawbot",
+        "api_url": "https://ilinkai.weixin.qq.com",
+        "auto_login": true,
         "enabled": false
       },
       "slack": {

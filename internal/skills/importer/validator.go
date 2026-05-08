@@ -22,8 +22,8 @@ func (e *ValidationError) Error() string {
 
 // ValidationResult holds the result of validation
 type ValidationResult struct {
-	Valid  bool
-	Errors []error
+	Valid    bool
+	Errors   []error
 	Warnings []string
 }
 

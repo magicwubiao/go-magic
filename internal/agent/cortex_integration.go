@@ -242,7 +242,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				if !validation.Passed {
 					a.Emit(bus.EventKindWarning, map[string]interface{}{
 						"validation_failed": true,
-						"issues":           validation.Issues,
+						"issues":            validation.Issues,
 					})
 
 					// Suggest recovery action

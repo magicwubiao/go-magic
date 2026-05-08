@@ -292,9 +292,9 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 			Description: description,
 			Tags:        tags,
 		},
-		Tools:       tools,
-		Content:     content,
-		Metadata:    make(map[string]interface{}),
+		Tools:    tools,
+		Content:  content,
+		Metadata: make(map[string]interface{}),
 	}
 
 	return skill
@@ -411,7 +411,7 @@ func (m *Manager) loadTextSkill(path string) *Skill {
 
 	skill := &Skill{
 		SkillMeta: SkillMeta{
-			Name:    name,
+			Name: name,
 		},
 		Content: string(data),
 	}
