@@ -75,6 +75,10 @@ type PlatformConfig struct {
 	VerifyToken string `json:"verify_token,omitempty"`
 	// WeChat fields
 	AESKey string `json:"aes_key,omitempty"`
+	// WeChat ClawBot fields
+	ClientID  string `json:"client_id,omitempty"`
+	DataDir   string `json:"data_dir,omitempty"`
+	AutoLogin bool   `json:"auto_login,omitempty"`
 	// Slack/Line/Matrix fields
 }
 

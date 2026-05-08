@@ -259,10 +259,35 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Start WeChat ClawBot if configured
+	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled {
+		platformCount++
+		fmt.Println("[WeChat-ClawBot] Starting...")
+
+		dataDir := clawCfg.DataDir
+		if dataDir == "" {
+			homeDir, _ := os.UserHomeDir()
+			dataDir = filepath.Join(homeDir, ".magic", "clawbot")
+		}
+
+		clawGw := gateway.NewWeChatClawGateway(gateway.WeChatClawConfig{
+			ClientID:  clawCfg.ClientID,
+			DataDir:   dataDir,
+			BaseURL:   clawCfg.APIURL,
+			AutoLogin: clawCfg.AutoLogin,
+		})
+
+		if err := clawGw.Connect(ctx); err != nil {
+			fmt.Printf("[WeChat-ClawBot] Failed to connect: %v\n", err)
+		} else {
+			gw.RegisterPlatform("wechat_clawbot", clawGw)
+		}
+	}
+
 	if platformCount == 0 {
 		fmt.Println("No platforms configured/enabled.")
 		fmt.Println("Configure in ~/.magic/config.json")
-		fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix")
+		fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_clawbot")
 		return
 	}
 
@@ -410,5 +435,28 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 			}
 			fmt.Printf("  %s: %s\n", name, status)
 		}
+	}
+}
+
+func startHealthServer(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		<-ctx.Done()
+		server.Shutdown(context.Background())
+	}()
+
+	fmt.Println("Health check server started on :8080")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Printf("Health server error: %v\n", err)
 	}
 }
