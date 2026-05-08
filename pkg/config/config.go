@@ -35,10 +35,11 @@ type Config struct {
 }
 
 // ProviderConfig represents provider configuration
+// Note: api_key uses omitempty to prevent accidentally overwriting with empty value on Save()
 type ProviderConfig struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
+	APIKey  string `json:"api_key,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 // ToolsConfig represents tools configuration
@@ -55,7 +56,7 @@ type GatewayConfig struct {
 
 // PlatformConfig represents platform-specific configuration
 type PlatformConfig struct {
-	Token   string `json:"token"`
+	Token   string `json:"token,omitempty"`
 	Enabled bool   `json:"enabled"`
 	// WeCom fields
 	CorpID  string `json:"corp_id,omitempty"`
@@ -164,6 +165,11 @@ func getDefaultWorkingDir() string {
 	return ""
 }
 
+// Save saves the configuration to disk.
+// It uses a safe write approach to avoid data loss:
+// 1. First reads existing config from disk to preserve any fields not in memory
+// 2. Merges in-memory changes on top
+// 3. Writes result to a temp file, then renames
 func (c *Config) Save() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -176,10 +182,50 @@ func (c *Config) Save() error {
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
+
+	// Step 1: Try to read existing config to preserve values not in memory
+	existingData, readErr := os.ReadFile(configPath)
+	var existingCfg Config
+	hasExisting := readErr == nil && json.Unmarshal(existingData, &existingCfg) == nil
+
+	// Step 2: Merge - preserve existing provider fields that might be empty in current config
+	if hasExisting {
+		for name, existingProv := range existingCfg.Providers {
+			if currentProv, ok := c.Providers[name]; ok {
+				// Preserve API key if current is empty but exists on disk
+				if currentProv.APIKey == "" && existingProv.APIKey != "" {
+					currentProv.APIKey = existingProv.APIKey
+				}
+				// Preserve BaseURL if current is empty but exists on disk
+				if currentProv.BaseURL == "" && existingProv.BaseURL != "" {
+					currentProv.BaseURL = existingProv.BaseURL
+				}
+				// Preserve Model if current is empty but exists on disk
+				if currentProv.Model == "" && existingProv.Model != "" {
+					currentProv.Model = existingProv.Model
+				}
+				c.Providers[name] = currentProv
+			}
+		}
+	}
+
+	// Step 3: Marshal and write safely (write to temp file first, then rename)
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	// Write to temp file first
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+
+	// Rename temp file to actual path (atomic on most OS)
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		// Fallback: try direct write
+		return os.WriteFile(configPath, data, 0644)
+	}
+
+	return nil
 }
