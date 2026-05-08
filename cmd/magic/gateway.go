@@ -50,7 +50,7 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 func init() {
-	gatewayStartCmd.Flags().StringVarP(&gatewayPlatform, "platform", "p", "",
+	gatewayStartCmd.Flags().StringVarP(&gatewayPlatform, "platform", "P", "",
 		"Only start specified platform (e.g., qq, wechat, telegram). If not set, starts all enabled platforms.")
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStopCmd)
@@ -392,8 +392,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		if baseURL == "" {
 			baseURL = "https://ilinkai.weixin.qq.com"
 		}
-
 		ilinkGw := gateway.NewWeChatILinkGateway(gateway.WeChatILinkConfig{
+			Token:     ilinkCfg.Token,
 			DataDir:   dataDir,
 			BaseURL:   baseURL,
 			AutoLogin: ilinkCfg.AutoLogin,

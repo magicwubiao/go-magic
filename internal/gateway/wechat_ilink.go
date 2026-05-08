@@ -26,8 +26,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,6 +235,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 		}
 		g.config.Token = token
 		g.config.BaseURL = baseURL
+		_ = g.saveTokenToConfig(token, baseURL) // persist token for next restart
 
 		// Re-create API client with new token
 		api, err = NewILinkAPIClient(baseURL, token, g.config.Proxy)
@@ -370,6 +374,7 @@ func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Respon
 			g.mu.Lock()
 			g.config.Token = token
 			g.config.BaseURL = baseURL
+			_ = g.saveTokenToConfig(token, baseURL) // persist for next restart
 			g.mu.Unlock()
 
 			// Re-create API client
@@ -909,6 +914,71 @@ func (g *WeChatILinkGateway) getTypingTicket(ctx context.Context, userID, contex
 		return cachedTicket, err
 	}
 	return cachedTicket, fmt.Errorf("getconfig: ret=%d errcode=%d", resp.Ret, resp.Errcode)
+}
+
+// ============================================================================
+// Token Persistence
+// ============================================================================
+
+// saveTokenToConfig persists the bot token to ~/.magic/config.json
+// so the token survives process restarts (no re-scan needed).
+func (g *WeChatILinkGateway) saveTokenToConfig(token, baseURL string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find home dir: %w", err)
+	}
+
+	configPath := filepath.Join(homeDir, ".magic", "config.json")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// Config file not found; save token to data dir as fallback
+		tokenFile := filepath.Join(g.config.DataDir, "token.json")
+		if mkdirErr := os.MkdirAll(g.config.DataDir, 0755); mkdirErr != nil {
+			return fmt.Errorf("failed to create data dir: %w", mkdirErr)
+		}
+		tokenData := map[string]string{
+			"token":    token,
+			"base_url": baseURL,
+		}
+		tokenBytes, _ := json.MarshalIndent(tokenData, "", "  ")
+		return os.WriteFile(tokenFile, tokenBytes, 0644)
+	}
+
+	// Parse existing config as raw map to preserve all fields
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Navigate/initialize gateway.platforms.wechat_ilink
+	gatewaySection := ensureMap(cfg, "gateway")
+	platforms := ensureMap(gatewaySection, "platforms")
+	ilinkSection := ensureMap(platforms, "wechat_ilink")
+	ilinkSection["token"] = token
+	ilinkSection["api_url"] = baseURL
+	platforms["wechat_ilink"] = ilinkSection
+	gatewaySection["platforms"] = platforms
+	cfg["gateway"] = gatewaySection
+
+	newData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	return os.WriteFile(configPath, newData, 0644)
+}
+
+// ensureMap gets or creates a nested map[string]interface{} at the given key.
+func ensureMap(m map[string]interface{}, key string) map[string]interface{} {
+	if v, ok := m[key]; ok {
+		if sub, ok := v.(map[string]interface{}); ok {
+			return sub
+		}
+	}
+	sub := make(map[string]interface{})
+	m[key] = sub
+	return sub
 }
 
 // ============================================================================

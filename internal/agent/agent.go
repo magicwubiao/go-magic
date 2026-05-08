@@ -73,12 +73,33 @@ type Agent struct {
 
 	// Sub-task delegation (auto-decompose complex tasks)
 	subTaskEnabled bool
+
+	// Hooks system
+	hooks *hooks.Manager
+
+	// Event bus for observability
+	bus *bus.EventBus
+
+	// Session tracking
+	session        string
+	iterationCount int
+
+	// Compression settings
+	compressionEnabled bool
+	compressionRatio   float64
+	maxMemoryTokens    int
+
+	// Token usage tracking
+	tokenUsage int64
 }
 
 // ToolRegistry interface for tool execution
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error)
 }
+
+// AgentOption configures the agent
+type AgentOption func(*Agent)
 
 // SteeringConfig holds steering configuration
 type SteeringConfig struct {
@@ -108,10 +129,8 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		consecutiveLimit:   20,
 		toolCallCount:      make(map[string]int),
 		subTaskEnabled:     true,
-		bus:                bus.NewEventBus(),
 	}
 
-	// Register built-in hooks
 	agent.registerBuiltinHooks()
 
 	return agent
@@ -875,15 +894,8 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 
 // GetHistory returns the conversation history
 func (a *Agent) GetHistory() []provider.Message {
-	a.toolCallCount = make(map[string]int)
-}
-
-// GetHistory returns the conversation history
-func (a *Agent) GetHistory() []provider.Message {
 	return a.history
 }
-
-// SetHistory sets the conversation history
 
 // SetHistory sets the conversation history
 func (a *Agent) SetHistory(history []provider.Message) {

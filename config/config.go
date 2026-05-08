@@ -143,8 +143,8 @@ func DefaultConfig() *Config {
 			Disabled: []string{},
 		},
 		Agent: AgentConfig{
-			MaxTurns:           50,
-			MaxIterations:      50,
+			MaxTurns:           100,
+			MaxIterations:      80,
 			CompressionEnabled: true,
 			CompressionRatio:   0.7,
 			ContextWindow:      200000,
@@ -209,7 +209,7 @@ func (c *Config) applyDefaults() {
 	}
 
 	if c.Agent.MaxTurns == 0 {
-		c.Agent.MaxTurns = 50
+		c.Agent.MaxTurns = 60
 	}
 
 	if c.Agent.MaxIterations == 0 {
