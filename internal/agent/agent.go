@@ -66,10 +66,22 @@ type Agent struct {
 	session string
 
 	// Steering settings
+	// Steering settings
 	maxIterations  int
-	maxTokenBudget int64
-	tokenUsage     int64
-	iterationCount int
+
+	// Tool call loop detection
+	toolCallHistory  []string           // 记录已调用的工具名
+	toolCallCount    map[string]int     // 每个工具被调用的次数
+	// Tool call loop detection
+	toolCallHistory  []string           // 记录已调用的工具名
+	toolCallCount    map[string]int     // 每个工具被调用的次数
+	sameToolLimit    int                // 同一工具最大调用次数
+	consecutiveLimit int               // 连续 tool call 最大次数
+	// Tool call loop detection
+	toolCallHistory  []string           // 记录已调用的工具名
+	toolCallCount    map[string]int     // 每个工具被调用的次数
+	sameToolLimit    int                // 同一工具最大调用次数
+	consecutiveLimit int               // 连续 tool call 最大次数
 
 	// Memory integration
 	memoryEnabled bool
@@ -78,9 +90,6 @@ type Agent struct {
 	cortexManager *cortex.Manager
 
 	// Sub-task delegation (auto-decompose complex tasks)
-	subTaskEnabled bool
-}
-
 // ToolRegistry interface for tool execution
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error)
@@ -96,6 +105,9 @@ type SteeringConfig struct {
 func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[string]interface{}, systemPrompt string) *Agent {
 	history := make([]provider.Message, 0)
 	if systemPrompt != "" {
+}
+
+// SteeringConfig holds steering configuration
 		history = append(history, provider.Message{
 			Role:    "system",
 			Content: systemPrompt,
@@ -108,15 +120,13 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		tools:              tools,
 		history:            history,
 		maxTurns:           100,
-		maxTotalLen:        200000, // 200K chars
-		maxMsgLen:          50000,  // 50K chars per message
-		compressionEnabled: true,
-		compressionRatio:   0.5, // trigger compression at 50%
-		hooks:              hooks.NewHookManager(),
-		bus:                bus.NewEventBus(),
-		maxIterations:      50,
+		maxIterations:      100,
+		sameToolLimit:       8,    // 同一工具最多调用 8 次
+		consecutiveLimit:   20,    // 连续 tool call 最多 20 次
+		toolCallCount:      make(map[string]int),
 		subTaskEnabled:     true, // Enable sub-task delegation by default
-	}
+		bus:                bus.NewEventBus(),
+		maxIterations:      100,
 
 	// Register built-in hooks
 	agent.registerBuiltinHooks()
@@ -361,7 +371,6 @@ Please provide a comprehensive, well-structured final response based on these su
 		if err != nil {
 			return "", fmt.Errorf("hook error: %w", err)
 		}
-
 		// Emit LLM response event
 		a.Emit(bus.EventKindLLMResponse, map[string]interface{}{
 			"content": llmResp.Content,
@@ -384,55 +393,53 @@ Please provide a comprehensive, well-structured final response based on these su
 			return resp.Content, nil
 		}
 
-		// Store tool calls for history
-		toolCalls := make([]types.ToolCall, len(resp.ToolCalls))
-		for i, tc := range resp.ToolCalls {
-			toolCalls[i] = types.ToolCall{
-				ID:       tc.ID,
-				Name:     tc.Function.Name,
-				Type:     "function",
-				Function: tc.Function,
-			}
-		}
-
-		a.history = append(a.history, provider.Message{
-			Role:      "assistant",
-			Content:   truncateStr(resp.Content, a.maxMsgLen),
-			ToolCalls: toolCalls,
-		})
-
-		// Execute tools with hooks
-		results, err := a.executeToolsWithHooks(ctx, resp.ToolCalls)
-		if err != nil {
-			lastErr = err
-			a.Emit(bus.EventKindToolError, err.Error())
-			continue
-		}
-
-		// Add results to history
+		// Tool call loop detection - break if stuck in a loop
 		for _, tc := range resp.ToolCalls {
-			result := results[tc.ID]
-			content := result.Content
-			if result.Err != nil {
-				content = fmt.Sprintf("Error: %v", result.Err)
-			}
-
-			a.history = append(a.history, provider.Message{
-				Role:       "tool",
-				Content:    truncateStr(content, a.maxMsgLen),
-				ToolCallID: tc.ID,
-			})
+			name := tc.Function.Name
+			a.toolCallCount[name]++
+			a.toolCallHistory = append(a.toolCallHistory, name)
 		}
 
-		// Check context after tool execution
-		a.truncateHistory()
-		a.Emit(bus.EventKindTurnEnd, nil)
-	}
+		// Check if same tool called too many times
+		loopDetected := false
+		for name, count := range a.toolCallCount {
+			if count >= a.sameToolLimit {
+				fmt.Printf("[WARN] Tool call loop detected: %s called %d times, forcing final response\n", name, count)
+				loopDetected = true
+				break
+			}
+		}
 
-	a.Emit(bus.EventKindAgentEnd, nil)
+		// Check consecutive tool calls limit
+		if len(a.toolCallHistory) >= a.consecutiveLimit {
+			fmt.Printf("[WARN] Too many consecutive tool calls (%d), forcing final response\n", len(a.toolCallHistory))
+			loopDetected = true
+		}
 
-	if a.cortexManager != nil {
-		a.cortexManager.OnSessionEnd()
+		if loopDetected {
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: truncateStr(resp.Content, a.maxMsgLen),
+			})
+			a.history = append(a.history, provider.Message{
+				Role:    "user",
+				Content: "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+			})
+			finalResp, finalErr := a.provider.Chat(ctx, a.history)
+			if finalErr != nil {
+				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
+			}
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: truncateStr(finalResp.Content, a.maxMsgLen),
+			})
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+			if a.cortexManager != nil {
+				a.cortexManager.OnSessionEnd()
+			}
+			return finalResp.Content, nil
+		}
 	}
 
 	if lastErr != nil {
@@ -874,25 +881,29 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 	var groups []toolGroup
 	if len(parallel) > 0 {
 		groups = append(groups, toolGroup{tools: parallel, sequential: false})
-	}
 	if len(sequential) > 0 {
 		groups = append(groups, toolGroup{tools: sequential, sequential: true})
 	}
-
 	return groups
 }
 
 // Reset clears the conversation history
-func (a *Agent) Reset() {
-	a.history = make([]provider.Message, 0)
-	a.iterationCount = 0
 	a.tokenUsage = 0
+	a.toolCallHistory = nil
+	a.toolCallCount = make(map[string]int)
+}
+
+// GetHistory returns the conversation history
+func (a *Agent) GetHistory() []provider.Message {
+	a.toolCallCount = make(map[string]int)
 }
 
 // GetHistory returns the conversation history
 func (a *Agent) GetHistory() []provider.Message {
 	return a.history
 }
+
+// SetHistory sets the conversation history
 
 // SetHistory sets the conversation history
 func (a *Agent) SetHistory(history []provider.Message) {
