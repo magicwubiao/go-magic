@@ -16,7 +16,7 @@ import (
 
 // HTTP client configuration constants
 const (
-	DefaultTimeoutDuration = 60 * time.Second
+	DefaultTimeoutDuration = 180 * time.Second
 	DefaultMaxRetries     = 3
 	DefaultRetryDelay    = 1 * time.Second
 	MaxIdleConns         = 100
