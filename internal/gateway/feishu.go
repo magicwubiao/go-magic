@@ -421,10 +421,12 @@ func (g *FeishuGateway) sendMessageAPI(chatID, content string) error {
 
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 
+	// 使用 json.Marshal 确保 content 中的特殊字符（引号、换行符等）被正确转义
+	textContent, _ := json.Marshal(content)
 	msg := map[string]interface{}{
 		"receive_id": chatID,
 		"msg_type":   "text",
-		"content":    fmt.Sprintf(`{"text":"%s"}`, content),
+		"content":    fmt.Sprintf(`{"text":%s}`, string(textContent)),
 	}
 
 	jsonBody, _ := json.Marshal(msg)

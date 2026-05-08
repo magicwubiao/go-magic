@@ -470,6 +470,12 @@ func (g *WeComGateway) handleMessageEvent(event struct {
 		},
 	}
 
+	// 企业微信事件消息（如 click 菜单事件）的 MsgId 可能为空
+	// 此时使用 "wecom_" + 时间戳 + FromUserName 生成唯一ID
+	if msg.ID == "" {
+		msg.ID = fmt.Sprintf("wecom_%d_%s", event.CreateTime, event.FromUserName)
+	}
+
 	g.mu.RLock()
 	msgCh := g.msgCh
 	g.mu.RUnlock()

@@ -8,13 +8,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/gateway"
+	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 const pidFileName = "gateway.pid"
@@ -50,6 +54,88 @@ func init() {
 	rootCmd.AddCommand(gatewayCmd)
 }
 
+// gatewayAgentHandler implements gateway.AgentHandler to bridge gateway messages
+// to the magic AI agent for processing and response.
+type gatewayAgentHandler struct {
+	provider provider.Provider
+	registry *tool.Registry
+	mu       sync.Mutex
+}
+
+// NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
+func NewGatewayAgentHandler() *gatewayAgentHandler {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Warnf("[Gateway] Failed to load config for agent handler: %v", err)
+		return &gatewayAgentHandler{}
+	}
+
+	provCfg, ok := cfg.Providers[cfg.Provider]
+	if !ok {
+		log.Warnf("[Gateway] Provider %s not configured", cfg.Provider)
+		return &gatewayAgentHandler{}
+	}
+
+	prov := createProvider(cfg.Provider, provCfg)
+	registry := tool.NewRegistry()
+	registry.RegisterAll(cfg.WorkingDir)
+
+	return &gatewayAgentHandler{
+		provider: prov,
+		registry: registry,
+	}
+}
+
+// Process processes a message from a gateway platform and returns a response.
+func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) (string, error) {
+	if h.provider == nil {
+		// Lazy init
+		h.mu.Lock()
+		if h.provider == nil {
+			cfg, err := config.Load()
+			if err == nil {
+				provCfg, ok := cfg.Providers[cfg.Provider]
+				if ok {
+					h.provider = createProvider(cfg.Provider, provCfg)
+					h.registry = tool.NewRegistry()
+					h.registry.RegisterAll(cfg.WorkingDir)
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+
+	if h.provider == nil {
+		return fmt.Sprintf("Hello! I received your message but the AI provider is not configured.\n"+
+			"Please run 'magic setup' to configure an AI provider.\n\n"+
+			"Message: %s", msg.Content), nil
+	}
+
+	// Create a simple prompt for the AI to respond to the message
+	prompt := fmt.Sprintf(`You are a helpful AI assistant. The user sent you a message via %s.
+
+User message: %s
+
+Please respond helpfully and concisely. If they ask you to use tools or perform actions, 
+describe what you would do.`,
+		msg.Platform, msg.Content)
+
+	chatResp, err := h.provider.Chat(ctx, []provider.Message{
+		{Role: "system", Content: "You are a helpful AI assistant responding via a chat platform."},
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return "", fmt.Errorf("AI processing failed: %w", err)
+	}
+
+	return chatResp.Content, nil
+}
+
+// ResetSession resets a user's session (no-op for now).
+func (h *gatewayAgentHandler) ResetSession(userID string) {
+	log.Infof("[Gateway] Session reset for user: %s", userID)
+}
+
 func runGatewayStart(cmd *cobra.Command, args []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -80,8 +166,12 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	platformCount := 0
 
+	// Create a simple agent handler that prints and responds to messages
+	// This bridges the gateway to the main magic agent logic
+	agentHandler := &gatewayAgentHandler{}
+
 	// Use the unified Gateway to manage all platforms
-	gw := gateway.NewGateway(nil, &gateway.GatewayConfig{})
+	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
 
 	// Start Telegram if configured
 	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled {
@@ -138,12 +228,25 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	// Start QQ if configured
 	if qqCfg, ok := cfg.Gateway.Platforms["qq"]; ok && qqCfg.Enabled {
 		platformCount++
-		fmt.Println("[QQ] Starting...")
-		qqGw := gateway.NewQQGateway(qqCfg.Number, qqCfg.Password)
-		if err := qqGw.Connect(ctx); err != nil {
-			fmt.Printf("[QQ] Failed to connect: %v\n", err)
+		if qqCfg.Number == "" && qqCfg.AppID == "" {
+			fmt.Println("QQ config incomplete (need app_id/number and app_secret)!")
 		} else {
-			gw.RegisterPlatform("qq", qqGw)
+			fmt.Println("[QQ] Starting...")
+			// 优先使用 app_id/app_secret（官方QQ机器人），兼容旧的 number/password 字段
+			appID := qqCfg.AppID
+			if appID == "" {
+				appID = qqCfg.Number
+			}
+			appSecret := qqCfg.AppSecret
+			if appSecret == "" {
+				appSecret = qqCfg.Password
+			}
+			qqGw := gateway.NewQQGateway(appID, appSecret)
+			if err := qqGw.Connect(ctx); err != nil {
+				fmt.Printf("[QQ] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("qq", qqGw)
+			}
 		}
 	}
 
@@ -155,6 +258,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[DingTalk] Starting...")
 			dtGw := gateway.NewDingTalkGateway(dtCfg.AppKey, dtCfg.AppSecret)
+			// 从配置加载 agentID（用于发送企业应用消息）
+			if dtCfg.AgentID != "" {
+				dtGw.SetAgentID(dtCfg.AgentID)
+			}
 			if err := dtGw.Connect(ctx); err != nil {
 				fmt.Printf("[DingTalk] Failed to connect: %v\n", err)
 			} else {
@@ -185,7 +292,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		platformCount++
 		if wxCfg.AppID == "" || wxCfg.AppSecret == "" {
 			fmt.Println("[WeChat] Config incomplete (need app_id and app_secret)!")
-			fmt.Println("[WeChat] For personal WeChat account, use 'wechat_clawbot' platform instead.")
+			fmt.Println("[WeChat] For personal WeChat account, use 'wechat_ilink' platform instead.")
 		} else {
 			fmt.Println("[WeChat] Starting...")
 			wxGw := gateway.NewWeChatGateway(wxCfg.AppID, wxCfg.AppSecret, wxCfg.Token, wxCfg.AESKey)
@@ -326,8 +433,14 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	if platformCount == 0 {
 		fmt.Println("No platforms configured/enabled.")
 		fmt.Println("Configure in ~/.magic/config.json")
-		fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_clawbot")
+		fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_ilink, wechat_clawbot")
 		return
+	}
+
+	// Start the gateway - this starts message processing for all registered platforms
+	if err := gw.Start(ctx); err != nil {
+		fmt.Printf("Failed to start gateway: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Save PID file for stop command

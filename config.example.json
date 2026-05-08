@@ -108,8 +108,8 @@
         "enabled": false
       },
       "qq": {
-        "number": "123456789",
-        "password": "your-qq-password",
+        "app_id": "your-qq-app-id",
+        "app_secret": "your-qq-app-secret",
         "enabled": false
       },
       "dingtalk": {

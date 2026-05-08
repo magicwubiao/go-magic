@@ -68,9 +68,13 @@ func (g *QQGateway) Connect(ctx context.Context) error {
 
 	log.Infof("Connecting to QQ gateway...")
 
-	// Get access token
-	if err := g.getAccessToken(); err != nil {
-		log.Warnf("Failed to get QQ access token: %v (will retry on first message)", err)
+	// QQ 机器人使用 Bot Token 认证方式
+	// token 格式为 "Bot {appID}.{appSecret}"，其中 appSecret 即开放平台的 Token
+	if g.appID != "" && g.appSecret != "" {
+		g.token = g.appSecret
+		log.Info("QQ Bot Token configured, using Bot authentication")
+	} else {
+		log.Warnf("QQ appID or appSecret not configured")
 	}
 
 	go g.startCallbackServer()
@@ -79,41 +83,16 @@ func (g *QQGateway) Connect(ctx context.Context) error {
 	return nil
 }
 
-// getAccessToken obtains an access token from QQ
+// getAccessToken obtains an access token from QQ (备用: 尝试从 API 获取 token)
 func (g *QQGateway) getAccessToken() error {
 	if g.appID == "" || g.appSecret == "" {
 		return fmt.Errorf("appID or appSecret not configured")
 	}
 
-	url := fmt.Sprintf("https://api.sgroup.qq.com/login/qrcode/refresh_token?appid=%s&secret=%s",
-		g.appID, g.appSecret)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get access token: status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-
-	g.token = result.AccessToken
-	log.Info("QQ access token obtained")
+	// QQ 官方开放平台的 Bot Token 获取方式
+	// 注意：这里 appSecret 实际是 Bot Token，直接使用即可
+	g.token = g.appSecret
+	log.Info("QQ Bot Token obtained from config")
 	return nil
 }
 
@@ -205,7 +184,7 @@ func (g *QQGateway) sendQQMessage(url, content string) error {
 		return err
 	}
 
-	req.Header.Set("Authorization", "QQBot "+g.token)
+	req.Header.Set("Authorization", fmt.Sprintf("Bot %s.%s", g.appID, g.token))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.httpClient.Do(req)
@@ -214,9 +193,23 @@ func (g *QQGateway) sendQQMessage(url, content string) error {
 	}
 	defer resp.Body.Close()
 
+	// 先读取完整响应Body，防止后续解析时为空
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to send message: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	// QQ API成功时通常返回空JSON或消息ID，这里简单检查是否有错误码
+	var result struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(respBody, &result); err == nil && result.Code != 0 {
+		return fmt.Errorf("QQ API error: code %d, message: %s", result.Code, result.Message)
 	}
 
 	return nil

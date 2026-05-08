@@ -3,7 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -372,10 +372,9 @@ func (g *WeChatGateway) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if signature != "" && echostr != "" {
 		// Verify signature
 		if g.verifySignature(signature, timestamp, nonce) {
-			// Return encrypted echo
-			encrypted, _ := g.encrypt(echostr)
+			// 微信验证要求直接返回原始的 echostr 字符串（明文）
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(encrypted))
+			w.Write([]byte(echostr))
 			return
 		}
 	}
@@ -383,12 +382,13 @@ func (g *WeChatGateway) handleVerify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// verifySignature verifies WeChat callback signature
+// verifySignature verifies WeChat callback signature.
+// 微信公众平台使用 SHA1 签名验证算法
 func (g *WeChatGateway) verifySignature(signature, timestamp, nonce string) bool {
 	strs := sort.StringSlice{g.token, timestamp, nonce}
 	sort.Strings(strs)
 	str := strings.Join(strs, "")
-	h := sha256.Sum256([]byte(str))
+	h := sha1.Sum([]byte(str))
 	return fmt.Sprintf("%x", h) == signature
 }
 

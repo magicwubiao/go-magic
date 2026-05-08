@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -264,16 +263,18 @@ func runSetup(cmd *cobra.Command, args []string) {
 			fmt.Println("      [1] Telegram")
 			fmt.Println("      [2] Discord")
 			fmt.Println("      [3] WeCom (企业微信)")
-			fmt.Println("      [4] Feishu (飞书)")
+			fmt.Println("      [4] Feishu (飞书/Lark)")
 			fmt.Println("      [5] DingTalk (钉钉)")
-			fmt.Println("      [6] QQ")
-			fmt.Println("      [7] WeChat (微信 - ClawBot 个人微信)")
-			fmt.Println("      [8] Slack")
-			fmt.Println("      [9] WhatsApp")
-			fmt.Println("      [10] LINE")
+			fmt.Println("      [6] QQ (QQ机器人/频道)")
+			fmt.Println("      [7] WeChat (微信公众号/小程序)")
+			fmt.Println("      [8] WeChat-iLink (个人微信 via iLink)")
+			fmt.Println("      [9] Slack")
+			fmt.Println("      [10] WhatsApp")
+			fmt.Println("      [11] LINE")
+			fmt.Println("      [12] Matrix")
 			fmt.Println("      [0] Done (结束配置)")
 
-			fmt.Print("\n   Select platform to configure (0-10): ")
+			fmt.Print("\n   Select platform to configure (0-12): ") 
 			platformChoice, _ := reader.ReadString('\n')
 			platformChoice = strings.TrimSpace(platformChoice)
 
@@ -345,7 +346,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [WeCom] configured successfully!")
 				}
-			case "4": // Feishu
+			case "4": // Feishu (飞书/Lark)
 				current := cfg.Gateway.Platforms["feishu"]
 				fmt.Printf("   Enter Feishu app_id (current: %s): ", current.AppID)
 				appID := readInput(reader, current.AppID)
@@ -359,42 +360,94 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [Feishu] configured successfully!")
 				}
-			case "5": // DingTalk
+			case "5": // DingTalk (钉钉)
 				current := cfg.Gateway.Platforms["dingtalk"]
 				fmt.Printf("   Enter DingTalk app_key (current: %s): ", current.AppKey)
 				appKey := readInput(reader, current.AppKey)
 				fmt.Printf("   Enter DingTalk app_secret (current: %s): ", maskString(current.AppSecret))
 				appSecret := readInput(reader, current.AppSecret)
+				fmt.Printf("   Enter DingTalk agent_id (current: %s): ", current.AgentID)
+				agentID := readInput(reader, current.AgentID)
 				if appKey != "" && appSecret != "" {
 					cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
 						AppKey:    appKey,
 						AppSecret: appSecret,
+						AgentID:   agentID,
 						Enabled:   true,
 					}
 					fmt.Println("   [DingTalk] configured successfully!")
 				}
-			case "6": // QQ
+			case "6": // QQ (支持新版官方机器人 app_id/app_secret + 旧版 number/password)
 				current := cfg.Gateway.Platforms["qq"]
-				fmt.Printf("   Enter QQ number (current: %s): ", current.Number)
-				number := readInput(reader, current.Number)
-				fmt.Printf("   Enter QQ password (current: %s): ", maskString(current.Password))
-				password := readInput(reader, current.Password)
-				if number != "" && password != "" {
-					cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
-						Number:   number,
-						Password: password,
-						Enabled:  true,
+				fmt.Println("   QQ supports two auth methods:")
+				fmt.Println("     [a] Official QQ Bot (app_id + app_secret) - 推荐")
+				fmt.Println("     [b] Legacy QQ (number + password)")
+				fmt.Printf("   Select method (default a): ")
+				qqMethod := readInput(reader, "a")
+				if qqMethod == "b" || qqMethod == "B" {
+					// Legacy mode
+					fmt.Printf("   Enter QQ number (current: %s): ", current.Number)
+					number := readInput(reader, current.Number)
+					fmt.Printf("   Enter QQ password (current: %s): ", maskString(current.Password))
+					password := readInput(reader, current.Password)
+					if number != "" && password != "" {
+						cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
+							Number:   number,
+							Password: password,
+							Enabled:  true,
+						}
+						fmt.Println("   [QQ Legacy] configured successfully!")
 					}
-					fmt.Println("   [QQ] configured successfully!")
+				} else {
+					// Official QQ Bot mode (推荐)
+					fmt.Printf("   Enter QQ Bot app_id (current: %s): ", current.AppID)
+					appID := readInput(reader, current.AppID)
+					fmt.Printf("   Enter QQ Bot app_secret (current: %s): ", maskString(current.AppSecret))
+					appSecret := readInput(reader, current.AppSecret)
+					if appID != "" && appSecret != "" {
+						cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
+							AppID:     appID,
+							AppSecret: appSecret,
+							Enabled:   true,
+						}
+						fmt.Println("   [QQ Official Bot] configured successfully!")
+					}
 				}
-			case "7": // WeChat ClawBot
-				current := cfg.Gateway.Platforms["wechat_clawbot"]
-				clientIDDefault := "wechat-clawbot"
+			case "7": // WeChat (微信公众号/小程序)
+				current := cfg.Gateway.Platforms["wechat"]
+				fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				fmt.Printf("   Enter WeChat token for callback verification (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter WeChat AESKey (current: %s): ", maskString(current.AESKey))
+				aesKey := readInput(reader, current.AESKey)
+				if appID != "" && appSecret != "" {
+					cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+						AppID:     appID,
+						AppSecret: appSecret,
+						Token:     token,
+						AESKey:    aesKey,
+						Enabled:   true,
+					}
+					fmt.Println("   [WeChat Official Account] configured successfully!")
+				}
+			case "8": // WeChat-iLink (个人微信)
+				current := cfg.Gateway.Platforms["wechat_ilink"]
+				clientIDDefault := "wechat-ilink"
 				if current.ClientID != "" {
 					clientIDDefault = current.ClientID
 				}
 				fmt.Printf("   Enter Client ID (current: %s): ", clientIDDefault)
 				clientID := readInput(reader, clientIDDefault)
+
+				baseURLDefault := "https://ilinkai.weixin.qq.com"
+				if current.APIURL != "" {
+					baseURLDefault = current.APIURL
+				}
+				fmt.Printf("   Enter API Base URL (current: %s): ", baseURLDefault)
+				apiURL := readInput(reader, baseURLDefault)
 
 				autoLoginDefault := "Y"
 				if !current.AutoLogin {
@@ -404,58 +457,17 @@ func runSetup(cmd *cobra.Command, args []string) {
 				autoLoginChoice := readInput(reader, autoLoginDefault)
 				autoLogin := !(autoLoginChoice == "n" || autoLoginChoice == "N")
 
-				// Only prompt for QR scan if not already configured
-				if current.ClientID == "" {
-					fmt.Println()
-					fmt.Print("   Start ClawBot QR code scan now? (Y/n): ")
-					scanChoice, _ := reader.ReadString('\n')
-					scanChoice = strings.TrimSpace(scanChoice)
-					if scanChoice != "n" && scanChoice != "N" {
-						fmt.Println()
-						fmt.Println("   Running: npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-						fmt.Println("   A QR code will appear below. Scan it with WeChat to bind.")
-						fmt.Println("   ──────────────────────────────────────────────────────")
-						clawCmd := exec.Command("npx", "-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install")
-						clawCmd.Stdin = os.Stdin
-						clawCmd.Stdout = os.Stdout
-						clawCmd.Stderr = os.Stderr
-						err := clawCmd.Run()
-						fmt.Println("   ──────────────────────────────────────────────────────")
-						if err != nil {
-							fmt.Printf("   ClawBot install failed: %v\n", err)
-							fmt.Println("   You can try manually running:")
-							fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-						}
-						fmt.Print("\n   Did you successfully scan and bind WeChat? (y/N): ")
-						bindChoice, _ := reader.ReadString('\n')
-						bindChoice = strings.TrimSpace(bindChoice)
-						if bindChoice == "y" || bindChoice == "Y" {
-							cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
-								ClientID:  clientID,
-								AutoLogin: autoLogin,
-								DataDir:   filepath.Join(magicDir, "clawbot"),
-								Enabled:   true,
-							}
-							fmt.Println("   [WeChat-ClawBot] configured successfully!")
-						} else {
-							fmt.Println("   [WeChat-ClawBot] not configured. You can run setup again later.")
-						}
-					} else {
-						fmt.Println("   Skipped. To configure WeChat later, run:")
-						fmt.Println("     npx -y @tencent-weixin/openclaw-weixin-cli@latest install")
-						fmt.Println("   Then add to ~/.magic/config.json under gateway.platforms.wechat_clawbot")
-					}
-				} else {
-					// Already configured, just update client ID
-					cfg.Gateway.Platforms["wechat_clawbot"] = config.PlatformConfig{
-						ClientID:  clientID,
-						AutoLogin: autoLogin,
-						DataDir:   filepath.Join(magicDir, "clawbot"),
-						Enabled:   true,
-					}
-					fmt.Println("   [WeChat-ClawBot] configuration updated!")
+				cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+					ClientID:  clientID,
+					APIURL:    apiURL,
+					AutoLogin: autoLogin,
+					DataDir:   filepath.Join(magicDir, "wechat_ilink"),
+					Enabled:   true,
 				}
-			case "8": // Slack
+				fmt.Println("   [WeChat-iLink] configured successfully!")
+				fmt.Println("   To bind WeChat, start the gateway and scan the QR code:")
+				fmt.Println("     magic gateway start")
+			case "9": // Slack
 				current := cfg.Gateway.Platforms["slack"]
 				fmt.Printf("   Enter Slack bot token (current: %s): ", maskString(current.Token))
 				token := readInput(reader, current.Token)
@@ -469,21 +481,27 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [Slack] configured successfully!")
 				}
-			case "9": // WhatsApp
+			case "10": // WhatsApp
 				current := cfg.Gateway.Platforms["whatsapp"]
 				fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
 				appID := readInput(reader, current.AppID)
 				fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
 				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter WhatsApp app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				fmt.Printf("   Enter WhatsApp verify_token (current: %s): ", maskString(current.VerifyToken))
+				verifyToken := readInput(reader, current.VerifyToken)
 				if appID != "" && token != "" {
 					cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
-						AppID:   appID,
-						Token:   token,
-						Enabled: true,
+						AppID:       appID,
+						Token:       token,
+						AppSecret:   appSecret,
+						VerifyToken: verifyToken,
+						Enabled:     true,
 					}
 					fmt.Println("   [WhatsApp] configured successfully!")
 				}
-			case "10": // LINE
+			case "11": // LINE
 				current := cfg.Gateway.Platforms["line"]
 				fmt.Printf("   Enter LINE Channel Access Token (current: %s): ", maskString(current.Token))
 				token := readInput(reader, current.Token)
@@ -497,8 +515,29 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [LINE] configured successfully!")
 				}
+			case "12": // Matrix
+				current := cfg.Gateway.Platforms["matrix"]
+				apiURLDefault := "https://matrix.example.com"
+				if current.APIURL != "" {
+					apiURLDefault = current.APIURL
+				}
+				fmt.Printf("   Enter Matrix homeserver URL (current: %s): ", apiURLDefault)
+				apiURL := readInput(reader, apiURLDefault)
+				fmt.Printf("   Enter Matrix user ID / app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter Matrix access token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				if apiURL != "" && token != "" {
+					cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+						APIURL:  apiURL,
+						AppID:   appID,
+						Token:   token,
+						Enabled: true,
+					}
+					fmt.Println("   [Matrix] configured successfully!")
+				}
 			default:
-				fmt.Println("   Invalid choice. Please select 0-10.")
+				fmt.Println("   Invalid choice. Please select 0-12.")
 			}
 		}
 	donePlatforms:
