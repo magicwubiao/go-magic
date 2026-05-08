@@ -29,3 +29,6 @@ logs/
 # Temp
 *.tmp
 .fuse_hidden*
+
+# User home directory - contains sensitive clawbot credentials
+~/
