@@ -60,63 +60,97 @@ var allowedCommands = map[string]bool{
 
 	// Misc
 	"systeminfo": true, "ver": true,
+
+	// Windows-specific commands
+	"del": true, "copy": true, "xcopy": true, "robocopy": true,
+	"move": true, "rename": true, "ren": true,
+	"attrib": true, "icacls": true, "takeown": true,
+	"cd": true, "chdir": true,
+	"cls": true, "color": true, "title": true,
+	"tasklist": true, "taskkill": true,
+	"reg": true, "schtasks": true,
+	"powershell": true, "cmd": true,
+	"findstr": true, "more": true,
+	"set": true, "path": true,
+	"fc": true, "comp": true,
+	"diskpart": true, "chkdsk": true, "sfc": true,
+	"driverquery": true, "msinfo32": true,
 }
 
-// Dangerous patterns - commands that can cause harm
+// dangerousPatterns checks for genuinely dangerous commands.
+// Uses ^ prefix to anchor at start to avoid false positives on intermediate pipe outputs.
 var dangerousPatterns = []*regexp.Regexp{
 	// File destruction
-	regexp.MustCompile(`(?i)rm\s+-rf\s+/`),
-	regexp.MustCompile(`(?i)del\s+/[sfq]\s+`),
-	regexp.MustCompile(`(?i)format\s+[a-z]:`),
-	regexp.MustCompile(`(?i)shred\s+`),
+	regexp.MustCompile(`(?i)^rm\s+-rf\s+/`),
+	regexp.MustCompile(`(?i)^del\s+/[sfq]\s+`),
+	regexp.MustCompile(`(?i)^format\s+[a-z]:`),
+	regexp.MustCompile(`(?i)^shred\s+`),
 	// System modification
-	regexp.MustCompile(`(?i)chmod\s+777`),
-	regexp.MustCompile(`(?i)/etc/passwd`),
-	regexp.MustCompile(`(?i)visudo`),
-	regexp.MustCompile(`(?i)sudo\s+su`),
-	regexp.MustCompile(`(?i)shutdown`),
-	regexp.MustCompile(`(?i)reboot`),
-	regexp.MustCompile(`(?i)init\s+0`),
-	regexp.MustCompile(`(?i)systemctl\s+kill`),
-	regexp.MustCompile(`(?i)pkill\s+-9`),
+	regexp.MustCompile(`(?i)^chmod\s+777\s`),
+	regexp.MustCompile(`(?i)^sudo\s+rm`),
+	regexp.MustCompile(`(?i)^visudo`),
+	regexp.MustCompile(`(?i)^sudo\s+su$`),
+	regexp.MustCompile(`(?i)^shutdown`),
+	regexp.MustCompile(`(?i)^reboot`),
+	regexp.MustCompile(`(?i)^init\s+0`),
+	regexp.MustCompile(`(?i)^systemctl\s+kill`),
+	regexp.MustCompile(`(?i)^pkill\s+-9`),
+	// Credential theft (only at start of command)
+	regexp.MustCompile(`(?i)^cat\s+/etc/shadow`),
+	regexp.MustCompile(`(?i)^type\s+/etc/shadow`),
+	// Pipe to shell (only when wget/curl is the first command)
+	regexp.MustCompile(`(?i)^(wget|curl)\s+.*\|\s*(bash|sh|powershell)`),
+	// Command substitution
+	regexp.MustCompile(`(?i)^eval\s`),
 	// Network abuse
-	regexp.MustCompile(`(?i)ddos`),
-	regexp.MustCompile(`(?i)flood`),
-	regexp.MustCompile(`(?i)ping\s+-f`),
-	regexp.MustCompile(`(?i)smurf`),
-	regexp.MustCompile(`(?i)netcat\s+-e`),
-	regexp.MustCompile(`(?i)nc\s+-e`),
-	// Credential theft
-	regexp.MustCompile(`(?i)wget.*\|.*bash`),
-	regexp.MustCompile(`(?i)curl.*\|.*sh`),
-	regexp.MustCompile(`(?i)eval\s+\$\(`),
-	regexp.MustCompile(`(?i)base64\s+-d.*\$`),
-	regexp.MustCompile(`(?i)cat\s+/etc/shadow`),
+	regexp.MustCompile(`(?i)^ddos`),
+	regexp.MustCompile(`(?i)^flood`),
+	regexp.MustCompile(`(?i)^ping\s+-f`),
+	regexp.MustCompile(`(?i)^smurf`),
+	regexp.MustCompile(`(?i)^netcat\s+-e`),
+	regexp.MustCompile(`(?i)^nc\s+-e`),
 	// Process injection
-	regexp.MustCompile(`(?i)fork\s+bomb`),
-	regexp.MustCompile(`(?i):\(`),
-	regexp.MustCompile(`(?i);.*rm`),
-	regexp.MustCompile(`(?i)&&.*rm`),
-	regexp.MustCompile(`(?i)\|\|.*rm`),
+	regexp.MustCompile(`(?i)^:\s*\(\s*\)\s*\{`),
 	// Package manipulation
-	regexp.MustCompile(`(?i)apt-get\s+remove.*--purge`),
-	regexp.MustCompile(`(?i)yum\s+remove`),
-	regexp.MustCompile(`(?i)rpm\s+-e\s+--nodeps`),
+	regexp.MustCompile(`(?i)^apt-get\s+remove\s+.*--purge`),
+	regexp.MustCompile(`(?i)^yum\s+remove`),
+	regexp.MustCompile(`(?i)^rpm\s+-e\s+--nodeps`),
 	// Service disruption
-	regexp.MustCompile(`(?i)systemctl\s+stop\s+(sshd|firewalld|apache|httpd)`),
-	regexp.MustCompile(`(?i)service\s+.*stop`),
-	// Registry/system file deletion (Windows)
-	regexp.MustCompile(`(?i)reg\s+delete`),
-	regexp.MustCompile(`(?i)del\s+/f/s/q\s+.*windows`),
-	regexp.MustCompile(`(?i)attrib\s+-h\s+-r`),
+	regexp.MustCompile(`(?i)^systemctl\s+stop\s+(sshd|firewalld|apache|httpd)`),
+	regexp.MustCompile(`(?i)^service\s+.*stop`),
+	// Dangerous Windows commands
+	regexp.MustCompile(`(?i)^reg\s+delete\s+HK`),
+	regexp.MustCompile(`(?i)^taskkill\s+/f\s+/im\s+.*\.exe`),
+	regexp.MustCompile(`(?i)^del\s+/f/s/q\s+.*windows`),
 }
 
-// Shell injection patterns
+// injectionPatterns detects actual shell injection attempts vs normal pipe/chain usage.
+// Only blocks truly dangerous patterns like backtick execution and command substitution.
 var injectionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`[;&|]`),             // ; & |
-	regexp.MustCompile("\x60"),              // backtick
-	regexp.MustCompile(`\$\(`),              // $(
-	regexp.MustCompile(`(^|\s)xargs(\s|$)`), // xargs
+	// Reject backtick execution (always dangerous)
+	regexp.MustCompile("`[^`]+`"),
+	// Reject $() command substitution (always dangerous)
+	regexp.MustCompile(`\$\(`),
+}
+
+// pipeAndChainPatterns detect dangerous patterns in pipe/chain contexts.
+// These patterns specifically require shell operators (|, ;, &&, ||) plus dangerous operations after them.
+var pipeAndChainPatterns = []struct {
+	pattern *regexp.Regexp
+	reason  string
+}{
+	// rm after pipe or chain (dangerous - file deletion)
+	{regexp.MustCompile(`(?i)[|;&]\s*rm\s+(-rf\s+)?[/~\\]`), "rm dangerous after pipe/chain"},
+	// wget/curl piped to shell (dangerous - remote code execution)
+	{regexp.MustCompile(`(?i)(wget|curl)\s+.*\|\s*(bash|sh|powershell)`), "remote download piped to shell"},
+	// dd after pipe (dangerous - disk destruction)
+	{regexp.MustCompile(`(?i)[|;&]\s*dd\s+if=`), "dd dangerous after pipe/chain"},
+	// mkfs after pipe (dangerous - filesystem destruction)
+	{regexp.MustCompile(`(?i)[|;&]\s*mkfs`), "mkfs dangerous after pipe/chain"},
+	// shutdown/reboot after pipe
+	{regexp.MustCompile(`(?i)[|;&]\s*(shutdown|reboot|halt)`), "shutdown/reboot after pipe/chain"},
+	// sudo after pipe (dangerous privilege escalation)
+	{regexp.MustCompile(`(?i)[|;&]\s*sudo\s+(rm|shutdown|reboot|halt)`), "sudo dangerous after pipe/chain"},
 }
 
 type ExecuteCommandTool struct {
@@ -179,12 +213,22 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 		return nil, fmt.Errorf("command cannot be empty")
 	}
 
-	// Check for shell injection
+	// Check for shell injection (backtick, $())
 	if err := t.checkInjection(command); err != nil {
 		return map[string]interface{}{
 			"exit_code": 1,
 			"error":     err.Error(),
 			"blocked":   "injection",
+		}, nil
+	}
+
+	// Check for pipe/chain dangerous usage (must run before checkDangerous
+	// to catch patterns like "curl ... | bash" which span both)
+	if err := t.checkPipeAndChain(command); err != nil {
+		return map[string]interface{}{
+			"exit_code": 1,
+			"error":     err.Error(),
+			"blocked":   "dangerous_pipe",
 		}, nil
 	}
 
@@ -203,7 +247,6 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 			"exit_code": 1,
 			"error":     err.Error(),
 			"blocked":   "not_whitelisted",
-			"allowed":   "See execute_command tool for list of allowed commands",
 		}, nil
 	}
 
@@ -252,7 +295,12 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 			result["error"] = "command timed out"
 			result["timeout_seconds"] = execTimeout.Seconds()
 		} else {
-			result["exit_code"] = 1
+			exitCode := 1
+			// Try to extract exit code from exec error
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			}
+			result["exit_code"] = exitCode
 			result["error"] = err.Error()
 		}
 	}
@@ -264,6 +312,15 @@ func (t *ExecuteCommandTool) checkInjection(cmd string) error {
 	for _, pattern := range injectionPatterns {
 		if pattern.MatchString(cmd) {
 			return fmt.Errorf("shell injection detected: contains forbidden characters")
+		}
+	}
+	return nil
+}
+
+func (t *ExecuteCommandTool) checkPipeAndChain(cmd string) error {
+	for _, pc := range pipeAndChainPatterns {
+		if pc.pattern.MatchString(cmd) {
+			return fmt.Errorf("command blocked: %s", pc.reason)
 		}
 	}
 	return nil
@@ -283,7 +340,7 @@ func (t *ExecuteCommandTool) checkWhitelist(cmd string) error {
 		return nil
 	}
 
-	// Extract the base command
+	// Extract the base command - get the first word before any shell operators
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
 		return fmt.Errorf("empty command")

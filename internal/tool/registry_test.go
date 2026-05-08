@@ -150,7 +150,7 @@ func TestRegistrySetTimeout(t *testing.T) {
 // TestRegistryRegisterAll tests registering all built-in tools
 func TestRegistryRegisterAll(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterAll()
+	registry.RegisterAll("")
 
 	names := registry.List()
 	if len(names) == 0 {
@@ -205,19 +205,18 @@ func TestToolExecutor(t *testing.T) {
 		},
 	}
 
-	result, err := executor.Execute(context.Background(), tool, map[string]interface{}{"input": "test"})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+	result := executor.ExecuteWithProtection(context.Background(), tool, map[string]interface{}{"input": "test"}, 10*time.Second)
+	if result.Error != nil {
+		t.Errorf("unexpected error: %v", result.Error)
 	}
-	if result != "executed" {
-		t.Errorf("expected 'executed', got '%v'", result)
+	if result.Result != "executed" {
+		t.Errorf("expected 'executed', got '%v'", result.Result)
 	}
 }
 
 // TestToolExecutorWithTimeout tests tool execution with timeout
 func TestToolExecutorWithTimeout(t *testing.T) {
 	executor := NewDefaultToolExecutor()
-	executor.SetTimeout(100 * time.Millisecond)
 
 	slowTool := &MockTool{
 		name: "slow_tool",
@@ -227,8 +226,8 @@ func TestToolExecutorWithTimeout(t *testing.T) {
 		},
 	}
 
-	_, err := executor.Execute(context.Background(), slowTool, map[string]interface{}{})
-	if err == nil {
+	result := executor.ExecuteWithProtection(context.Background(), slowTool, map[string]interface{}{}, 100*time.Millisecond)
+	if result.Error == nil {
 		t.Error("expected timeout error")
 	}
 }
@@ -268,8 +267,9 @@ func TestToolValidation(t *testing.T) {
 		execute: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 			if input, ok := params["input"].(string); !ok {
 				return nil, ErrInvalidParameters
+			} else {
+				return input, nil
 			}
-			return input, nil
 		},
 	}
 
