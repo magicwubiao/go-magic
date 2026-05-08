@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -273,6 +274,11 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 		cmd.Dir = workdir
 	} else if t.workDir != "" {
 		cmd.Dir = t.workDir
+	} else {
+		// Fallback to current working directory if no workDir configured
+		if cwd, err := os.Getwd(); err == nil {
+			cmd.Dir = cwd
+		}
 	}
 
 	output, err := cmd.CombinedOutput()

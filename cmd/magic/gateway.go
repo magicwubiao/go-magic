@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/tool"
@@ -50,12 +51,11 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 func init() {
-<<<<<<< Updated upstream
-=======
-func init() {
 	// Note: 'p' shorthand is already used by root's --profile persistent flag.
 	// We use 'P' (uppercase) for --platform.
 	gatewayStartCmd.Flags().StringVarP(&gatewayPlatform, "platform", "P", "",
+		"Start only this platform (e.g., wechat_ilink, telegram)")
+
 	rootCmd.AddCommand(gatewayCmd)
 }
 
@@ -75,6 +75,10 @@ type gatewayAgentHandler struct {
 	provider provider.Provider
 	registry *tool.Registry
 	mu       sync.Mutex
+
+	// Per-user agents for conversation context
+	agents    map[string]*agent.Agent
+	systemPrompt string
 }
 
 // NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
@@ -82,23 +86,79 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Warnf("[Gateway] Failed to load config for agent handler: %v", err)
-		return &gatewayAgentHandler{}
+		return &gatewayAgentHandler{
+			agents: make(map[string]*agent.Agent),
+		}
 	}
 
 	provCfg, ok := cfg.Providers[cfg.Provider]
 	if !ok {
 		log.Warnf("[Gateway] Provider %s not configured", cfg.Provider)
-		return &gatewayAgentHandler{}
+		return &gatewayAgentHandler{
+			agents: make(map[string]*agent.Agent),
+		}
 	}
 
 	prov := createProvider(cfg.Provider, provCfg)
 	registry := tool.NewRegistry()
-	registry.RegisterAll(cfg.WorkingDir)
+
+	// Get workDir with fallback to current directory
+	workDir := cfg.WorkingDir
+	if workDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workDir = cwd
+		}
+	}
+	registry.RegisterAll(workDir)
+
+	// Generate system prompt
+	systemPrompt := generateGatewaySystemPrompt(cfg)
 
 	return &gatewayAgentHandler{
-		provider: prov,
-		registry: registry,
+		provider:     prov,
+		registry:     registry,
+		agents:       make(map[string]*agent.Agent),
+		systemPrompt: systemPrompt,
 	}
+}
+
+// generateGatewaySystemPrompt creates a system prompt for gateway agent
+func generateGatewaySystemPrompt(cfg *config.Config) string {
+	basePrompt := `You are a helpful AI assistant responding via a chat platform.
+
+Guidelines:
+- Be concise and friendly in responses
+- If asked to perform actions or use tools, use the available tools to help the user
+- Keep responses appropriate for chat format
+- Remember context within the conversation for this user`
+
+	// Check for custom system prompt in config (if field exists in future)
+	// For now, use the base prompt
+	return basePrompt
+}
+
+// getOrCreateAgent gets or creates an agent for a specific user
+func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if ag, ok := h.agents[userID]; ok {
+		return ag, nil
+	}
+
+	if h.provider == nil {
+		return nil, fmt.Errorf("provider not configured")
+	}
+
+	// Generate tools schema
+	toolsSchema := getToolsSchema(h.registry)
+
+	// Create new agent for this user
+	newAgent := agent.NewAIAgent(h.provider, h.registry, toolsSchema, h.systemPrompt)
+	newAgent.SetSession(userID)
+
+	h.agents[userID] = newAgent
+	return newAgent, nil
 }
 
 // Process processes a message from a gateway platform and returns a response.
@@ -112,8 +172,18 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 				provCfg, ok := cfg.Providers[cfg.Provider]
 				if ok {
 					h.provider = createProvider(cfg.Provider, provCfg)
+
+					// Get workDir with fallback
+					workDir := cfg.WorkingDir
+					if workDir == "" {
+						if cwd, err := os.Getwd(); err == nil {
+							workDir = cwd
+						}
+					}
+
 					h.registry = tool.NewRegistry()
-					h.registry.RegisterAll(cfg.WorkingDir)
+					h.registry.RegisterAll(workDir)
+					h.systemPrompt = generateGatewaySystemPrompt(cfg)
 				}
 			}
 		}
@@ -126,27 +196,33 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			"Message: %s", msg.Content), nil
 	}
 
-	prompt := fmt.Sprintf(`You are a helpful AI assistant. The user sent you a message via %s.
+	// Format message with platform context
+	prompt := fmt.Sprintf("[Message from %s] %s", msg.Platform, msg.Content)
 
-User message: %s
+	// Get or create agent for this user
+	ag, err := h.getOrCreateAgent(msg.UserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get agent: %w", err)
+	}
 
-Please respond helpfully and concisely. If they ask you to use tools or perform actions, 
-describe what you would do.`,
-		msg.Platform, msg.Content)
-
-	chatResp, err := h.provider.Chat(ctx, []provider.Message{
-		{Role: "system", Content: "You are a helpful AI assistant responding via a chat platform."},
-		{Role: "user", Content: prompt},
-	})
+	// Run conversation with full agent capabilities
+	response, err := ag.RunConversation(ctx, prompt)
 	if err != nil {
 		return "", fmt.Errorf("AI processing failed: %w", err)
 	}
 
-	return chatResp.Content, nil
+	return response, nil
 }
 
-// ResetSession resets a user's session (no-op for now).
+// ResetSession resets a user's session (clears conversation history).
 func (h *gatewayAgentHandler) ResetSession(userID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if ag, ok := h.agents[userID]; ok {
+		ag.Reset()
+	}
+	delete(h.agents, userID)
 	log.Infof("[Gateway] Session reset for user: %s", userID)
 }
 

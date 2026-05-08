@@ -12,6 +12,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -75,7 +76,7 @@ type Agent struct {
 	subTaskEnabled bool
 
 	// Hooks system
-	hooks *hooks.Manager
+	hooks *hooks.HookManager
 
 	// Event bus for observability
 	bus *bus.EventBus
@@ -123,7 +124,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		tools:              tools,
 		history:            history,
 		maxTurns:           100,
-		maxIterations:      100,
+		maxIterations:      150, // Increased from 100 to allow more complex tasks
 		maxTokenBudget:     0,
 		sameToolLimit:       8,
 		consecutiveLimit:   20,
@@ -392,27 +393,32 @@ Please provide a comprehensive, well-structured final response based on these su
 			return resp.Content, nil
 		}
 
-		// Tool call loop detection - break if stuck in a loop
+		// Tool call loop detection - track tool calls more precisely
 		for _, tc := range resp.ToolCalls {
 			name := tc.Function.Name
 			a.toolCallCount[name]++
 			a.toolCallHistory = append(a.toolCallHistory, name)
 		}
 
-		// Check if same tool called too many times
+		// Check if same tool called too many times (with more context)
 		loopDetected := false
+		loopReason := ""
 		for name, count := range a.toolCallCount {
 			if count >= a.sameToolLimit {
-				fmt.Printf("[WARN] Tool call loop detected: %s called %d times, forcing final response\n", name, count)
+				log.Debugf("[Agent] Tool call loop detected: %s called %d times, forcing final response", name, count)
 				loopDetected = true
+				loopReason = fmt.Sprintf("tool %s called %d times", name, count)
 				break
 			}
 		}
 
 		// Check consecutive tool calls limit
 		if len(a.toolCallHistory) >= a.consecutiveLimit {
-			fmt.Printf("[WARN] Too many consecutive tool calls (%d), forcing final response\n", len(a.toolCallHistory))
+			log.Debugf("[Agent] Too many consecutive tool calls (%d), forcing final response", len(a.toolCallHistory))
 			loopDetected = true
+			if loopReason == "" {
+				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
+			}
 		}
 
 		if loopDetected {
@@ -444,7 +450,18 @@ Please provide a comprehensive, well-structured final response based on these su
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("exceeded maximum turns (%d)", a.maxTurns)
+	// Provide helpful information about what was being done
+	recentTools := []string{}
+	if len(a.toolCallHistory) > 0 {
+		recentCount := len(a.toolCallHistory)
+		start := 0
+		if recentCount > 5 {
+			start = recentCount - 5
+		}
+		recentTools = a.toolCallHistory[start:]
+	}
+	return "", fmt.Errorf("exceeded maximum iterations (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+		a.maxIterations, a.iterationCount, len(a.toolCallHistory), recentTools)
 }
 
 // StreamHandler is called for each streaming chunk
@@ -880,6 +897,7 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 	var groups []toolGroup
 	if len(parallel) > 0 {
 		groups = append(groups, toolGroup{tools: parallel, sequential: false})
+	}
 	if len(sequential) > 0 {
 		groups = append(groups, toolGroup{tools: sequential, sequential: true})
 	}
@@ -887,6 +905,8 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 }
 
 // Reset clears the conversation history
+func (a *Agent) Reset() {
+	a.history = a.history[:1] // Keep system prompt
 	a.tokenUsage = 0
 	a.toolCallHistory = nil
 	a.toolCallCount = make(map[string]int)

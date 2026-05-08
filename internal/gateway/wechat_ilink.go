@@ -205,6 +205,17 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 
 	log.Infof("[WeChat-iLink] Connecting to %s", g.config.BaseURL)
 
+	// Try to load token from config if not already set
+	if g.config.Token == "" {
+		if loadedToken, loadedURL := g.loadTokenFromConfig(); loadedToken != "" {
+			g.config.Token = loadedToken
+			if loadedURL != "" {
+				g.config.BaseURL = loadedURL
+			}
+			log.Info("[WeChat-iLink] Token loaded from config")
+		}
+	}
+
 	// Create API client
 	api, err := NewILinkAPIClient(g.config.BaseURL, g.config.Token, g.config.Proxy)
 	if err != nil {
@@ -252,13 +263,13 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 		log.Warn("[WeChat-iLink] No token configured. Set token or enable auto-login.")
 		// Still mark as "connected" - user can login later via /login command
 	} else {
-		log.Info("[WeChat-iLink] Token configured, starting message polling...")
+		log.Debug("[WeChat-iLink] Token configured, starting message polling...")
 	}
 
 	g.connectedAt = time.Now()
 	go g.pollLoop(g.ctx)
 
-	log.Info("[WeChat-iLink] Gateway connected")
+	log.Debug("[WeChat-iLink] Gateway connected")
 	return nil
 }
 
@@ -278,7 +289,7 @@ func (g *WeChatILinkGateway) Disconnect() error {
 	close(g.stopCh)
 	g.running = false
 
-	log.Info("[WeChat-iLink] Gateway disconnected")
+	log.Debug("[WeChat-iLink] Gateway disconnected")
 	return nil
 }
 
@@ -477,12 +488,12 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 	nextTimeoutMs := ilinkDefaultPollTimeoutMs
 	consecutiveFails := 0
 
-	log.Info("[WeChat-iLink] Poll loop started")
+	log.Debug("[WeChat-iLink] Poll loop started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("[WeChat-iLink] Poll loop stopped")
+			log.Debug("[WeChat-iLink] Poll loop stopped")
 			return
 		default:
 		}
@@ -979,6 +990,54 @@ func ensureMap(m map[string]interface{}, key string) map[string]interface{} {
 	sub := make(map[string]interface{})
 	m[key] = sub
 	return sub
+}
+
+// loadTokenFromConfig loads the bot token from config.json or fallback token.json
+// Returns (token, baseURL, error)
+func (g *WeChatILinkGateway) loadTokenFromConfig() (string, string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+
+	configPath := filepath.Join(homeDir, ".magic", "config.json")
+
+	// Try to load from config.json first
+	data, err := os.ReadFile(configPath)
+	if err == nil {
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if gatewaySection, ok := cfg["gateway"].(map[string]interface{}); ok {
+				if platforms, ok := gatewaySection["platforms"].(map[string]interface{}); ok {
+					if ilink, ok := platforms["wechat_ilink"].(map[string]interface{}); ok {
+						if token, ok := ilink["token"].(string); ok && token != "" {
+							baseURL := ""
+							if url, ok := ilink["api_url"].(string); ok {
+								baseURL = url
+							}
+							return token, baseURL
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to dataDir/token.json
+	tokenFile := filepath.Join(g.config.DataDir, "token.json")
+	data, err = os.ReadFile(tokenFile)
+	if err != nil {
+		return "", ""
+	}
+
+	var tokenData map[string]string
+	if err := json.Unmarshal(data, &tokenData); err != nil {
+		return "", ""
+	}
+
+	token := tokenData["token"]
+	baseURL := tokenData["base_url"]
+	return token, baseURL
 }
 
 // ============================================================================
