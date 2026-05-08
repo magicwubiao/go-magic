@@ -147,14 +147,16 @@ func (g *DingTalkGateway) HandleSlashCommand(cmd string, msg Message) (Response,
 // CheckHealth returns detailed health status for DingTalk gateway
 func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Status:    "ok",
-		Timestamp: time.Now(),
+		Platform:  "dingtalk",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
+		Details:   make(map[string]interface{}),
 		Platforms: make(map[string]PlatformStatus),
 	}
 
 	platformStatus := PlatformStatus{
 		Name:   "dingtalk",
-		Status: "disconnected",
+		Status: "connected",
 	}
 
 	if !g.IsConnected() {
@@ -164,8 +166,6 @@ func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 		status.Platforms["dingtalk"] = platformStatus
 		return status
 	}
-
-	platformStatus.Status = "connected"
 
 	// Check token validity
 	g.tokenMu.RLock()
@@ -181,6 +181,8 @@ func (g *DingTalkGateway) CheckHealth() *HealthStatus {
 		status.Status = "error"
 	}
 
+	status.Details["token_available"] = token != ""
+	status.Details["callback_port"] = g.callbackPort
 	status.Platforms["dingtalk"] = platformStatus
 
 	return status

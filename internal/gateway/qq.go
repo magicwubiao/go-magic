@@ -258,19 +258,28 @@ func (g *QQGateway) HandleSlashCommand(cmd string, msg Message) (Response, error
 // CheckHealth returns detailed health status for QQ gateway
 func (g *QQGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "qq",
-		Connected:    g.IsConnected(),
-		CallbackOK:   false,
+		Platform:  "qq",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
 		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "qq",
+		Status: "connected",
 	}
 
 	if !status.Connected {
-		status.Error = "Gateway not connected"
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["qq"] = platformStatus
 		return status
 	}
 
-	// Check HTTP client by making a test request
+	// Check HTTP client
 	if g.httpClient != nil {
 		status.HTTPClientOK = true
 		status.Details["http_client_initialized"] = true
@@ -287,37 +296,12 @@ func (g *QQGateway) CheckHealth() *HealthStatus {
 	} else {
 		status.TokenValid = false
 		status.Details["token_available"] = false
-		// Token not required for initial health check, but noted
+		platformStatus.Error = "No access token"
+		status.Status = "error"
 	}
 
-	// Check callback server by making a localhost request
-	callbackURL := fmt.Sprintf("http://localhost:%d/qq/health", g.callbackPort)
-	req, err := http.NewRequest("GET", callbackURL, nil)
-	if err == nil {
-		// Don't actually make the request, just verify we can construct it
-		status.Details["callback_url"] = callbackURL
-	}
-
-	// Try a quick connectivity check to QQ API
-	start := time.Now()
-	testURL := g.apiBaseURL + "/users/me"
-	req, _ = http.NewRequestWithContext(context.Background(), "GET", testURL, nil)
-	if g.token != "" {
-		req.Header.Set("Authorization", "QQBot "+g.token)
-	}
-	req.Header.Set("X-Union-Appid", g.appID)
-
-	resp, err := g.httpClient.Do(req)
-	if err == nil {
-		status.LatencyMs = time.Since(start).Milliseconds()
-		resp.Body.Close()
-		// 401 is expected without valid auth, but means HTTP client works
-		status.Details["api_reachable"] = true
-		status.Details["api_status"] = resp.StatusCode
-	} else {
-		status.HTTPClientOK = false
-		status.Error = fmt.Sprintf("API not reachable: %v", err)
-	}
+	status.Details["callback_port"] = g.callbackPort
+	status.Platforms["qq"] = platformStatus
 
 	return status
 }

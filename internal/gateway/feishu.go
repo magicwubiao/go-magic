@@ -147,15 +147,24 @@ func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 // CheckHealth returns detailed health status for Feishu gateway
 func (g *FeishuGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "feishu",
-		Connected:    g.IsConnected(),
-		CallbackOK:   false,
+		Platform:  "feishu",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
 		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "feishu",
+		Status: "connected",
 	}
 
 	if !status.Connected {
-		status.Error = "Gateway not connected"
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["feishu"] = platformStatus
 		return status
 	}
 
@@ -171,6 +180,8 @@ func (g *FeishuGateway) CheckHealth() *HealthStatus {
 	} else {
 		status.TokenValid = false
 		status.Details["token_available"] = false
+		platformStatus.Error = "No access token"
+		status.Status = "error"
 	}
 
 	if !tokenExpiry.IsZero() {
@@ -178,32 +189,13 @@ func (g *FeishuGateway) CheckHealth() *HealthStatus {
 		if time.Now().After(tokenExpiry) {
 			status.TokenValid = false
 			status.Details["token_expired"] = true
+			platformStatus.Error = "Token expired"
+			status.Status = "error"
 		}
 	}
 
-	// HTTP client is implicit via http.Post in refreshToken
-	status.HTTPClientOK = true
-	status.Details["http_client_initialized"] = true
-
-	// Check Feishu API connectivity
-	start := time.Now()
-	testURL := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-	body := map[string]string{
-		"app_id":     g.appID,
-		"app_secret": g.appSecret,
-	}
-	jsonBody, _ := json.Marshal(body)
-
-	resp, err := http.Post(testURL, "application/json", bytes.NewReader(jsonBody))
-	if err == nil {
-		status.LatencyMs = time.Since(start).Milliseconds()
-		resp.Body.Close()
-		status.Details["api_reachable"] = true
-		status.Details["api_status"] = resp.StatusCode
-	} else {
-		status.HTTPClientOK = false
-		status.Error = fmt.Sprintf("Feishu API not reachable: %v", err)
-	}
+	status.Details["callback_port"] = g.callbackPort
+	status.Platforms["feishu"] = platformStatus
 
 	return status
 }

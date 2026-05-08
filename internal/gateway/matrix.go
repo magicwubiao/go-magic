@@ -205,14 +205,30 @@ func (g *MatrixGateway) CheckHealth() *HealthStatus {
 	running := g.running
 	g.mu.RUnlock()
 
-	return &HealthStatus{
+	status := &HealthStatus{
 		Platform:  "matrix",
 		Connected: running,
+		Status:    "healthy",
 		Details: map[string]interface{}{
 			"homeserver": g.homeserver,
 			"user_id":    g.userID,
 		},
+		Platforms: make(map[string]PlatformStatus),
 	}
+
+	platformStatus := PlatformStatus{
+		Name:   "matrix",
+		Status: "connected",
+	}
+
+	if !running {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+	}
+
+	status.Platforms["matrix"] = platformStatus
+	return status
 }
 
 // Receive returns the message channel

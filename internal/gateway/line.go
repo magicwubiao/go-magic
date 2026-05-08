@@ -224,13 +224,29 @@ func (g *LineGateway) CheckHealth() *HealthStatus {
 	running := g.running
 	g.mu.RUnlock()
 
-	return &HealthStatus{
+	status := &HealthStatus{
 		Platform:  "line",
 		Connected: running,
+		Status:    "healthy",
 		Details: map[string]interface{}{
 			"callback_port": g.callbackPort,
 		},
+		Platforms: make(map[string]PlatformStatus),
 	}
+
+	platformStatus := PlatformStatus{
+		Name:   "line",
+		Status: "connected",
+	}
+
+	if !running {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+	}
+
+	status.Platforms["line"] = platformStatus
+	return status
 }
 
 // Receive returns the message channel

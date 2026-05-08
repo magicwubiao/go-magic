@@ -407,8 +407,15 @@ func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Respon
 // CheckHealth returns detailed health status.
 func (g *WeChatILinkGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform: "wechat-ilink",
-		Details:  make(map[string]interface{}),
+		Platform:  "wechat-ilink",
+		Status:    "healthy",
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "wechat-ilink",
+		Status: "connected",
 	}
 
 	g.mu.RLock()
@@ -446,9 +453,13 @@ func (g *WeChatILinkGateway) CheckHealth() *HealthStatus {
 	g.mu.RUnlock()
 
 	if !status.Connected {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
 		status.Error = "Gateway not connected"
 	}
 
+	status.Platforms["wechat-ilink"] = platformStatus
 	return status
 }
 

@@ -130,13 +130,29 @@ func (g *SlackGateway) CheckHealth() *HealthStatus {
 	running := g.running
 	g.mu.RUnlock()
 
-	return &HealthStatus{
+	status := &HealthStatus{
 		Platform:  "slack",
 		Connected: running,
+		Status:    "healthy",
 		Details: map[string]interface{}{
 			"callback_port": g.callbackPort,
 		},
+		Platforms: make(map[string]PlatformStatus),
 	}
+
+	platformStatus := PlatformStatus{
+		Name:   "slack",
+		Status: "connected",
+	}
+
+	if !running {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+	}
+
+	status.Platforms["slack"] = platformStatus
+	return status
 }
 
 // Receive returns the message channel

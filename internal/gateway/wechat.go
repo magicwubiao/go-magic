@@ -279,15 +279,24 @@ func (g *WeChatGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 // CheckHealth returns detailed health status for WeChat gateway
 func (g *WeChatGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "wechat",
-		Connected:    g.IsConnected(),
-		CallbackOK:   false,
+		Platform:  "wechat",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
 		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "wechat",
+		Status: "connected",
 	}
 
 	if !status.Connected {
-		status.Error = "Gateway not connected"
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["wechat"] = platformStatus
 		return status
 	}
 
@@ -313,33 +322,22 @@ func (g *WeChatGateway) CheckHealth() *HealthStatus {
 	} else {
 		status.TokenValid = false
 		status.Details["token_available"] = false
+		platformStatus.Error = "No access token"
+		status.Status = "error"
 	}
 
 	if !tokenExpiry.IsZero() {
 		status.TokenExpiry = &tokenExpiry
-		// Token is expired if expiry time is in the past
 		if time.Now().After(tokenExpiry) {
 			status.TokenValid = false
 			status.Details["token_expired"] = true
+			platformStatus.Error = "Token expired"
+			status.Status = "error"
 		}
 	}
 
-	// Check WeChat API connectivity
-	start := time.Now()
-	testURL := g.apiBaseURL + "/cgi-bin/getcallbackip?access_token=" + token
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", testURL, nil)
-
-	resp, err := g.httpClient.Do(req)
-	if err == nil {
-		status.LatencyMs = time.Since(start).Milliseconds()
-		resp.Body.Close()
-		status.Details["api_reachable"] = true
-		status.Details["api_status"] = resp.StatusCode
-	} else {
-		// Network error - could be no internet or blocked
-		status.HTTPClientOK = false
-		status.Error = fmt.Sprintf("WeChat API not reachable: %v", err)
-	}
+	status.Details["callback_port"] = g.callbackPort
+	status.Platforms["wechat"] = platformStatus
 
 	return status
 }

@@ -149,15 +149,24 @@ func (g *WeComGateway) HandleSlashCommand(cmd string, msg Message) (Response, er
 // CheckHealth returns detailed health status for WeCom gateway
 func (g *WeComGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "wecom",
-		Connected:    g.IsConnected(),
-		CallbackOK:   false,
+		Platform:  "wecom",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
 		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "wecom",
+		Status: "connected",
 	}
 
 	if !status.Connected {
-		status.Error = "Gateway not connected"
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["wecom"] = platformStatus
 		return status
 	}
 
@@ -173,6 +182,8 @@ func (g *WeComGateway) CheckHealth() *HealthStatus {
 	} else {
 		status.TokenValid = false
 		status.Details["token_available"] = false
+		platformStatus.Error = "No access token"
+		status.Status = "error"
 	}
 
 	if !tokenExpiry.IsZero() {
@@ -180,28 +191,13 @@ func (g *WeComGateway) CheckHealth() *HealthStatus {
 		if time.Now().After(tokenExpiry) {
 			status.TokenValid = false
 			status.Details["token_expired"] = true
+			platformStatus.Error = "Token expired"
+			status.Status = "error"
 		}
 	}
 
-	// HTTP client is implicit via http.Get in refreshToken
-	status.HTTPClientOK = true
-	status.Details["http_client_initialized"] = true
-
-	// Check WeCom API connectivity
-	start := time.Now()
-	testURL := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s",
-		g.corpID, g.secret)
-
-	resp, err := http.Get(testURL)
-	if err == nil {
-		status.LatencyMs = time.Since(start).Milliseconds()
-		resp.Body.Close()
-		status.Details["api_reachable"] = true
-		status.Details["api_status"] = resp.StatusCode
-	} else {
-		status.HTTPClientOK = false
-		status.Error = fmt.Sprintf("WeCom API not reachable: %v", err)
-	}
+	status.Details["callback_port"] = g.callbackPort
+	status.Platforms["wecom"] = platformStatus
 
 	return status
 }

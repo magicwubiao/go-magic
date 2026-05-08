@@ -229,12 +229,30 @@ func (t *TelegramHandler) Receive() <-chan Message {
 	return msgCh
 }
 
-// CheckHealth checks if the handler is healthy
+// CheckHealth returns detailed health status for Telegram gateway
 func (t *TelegramHandler) CheckHealth() *HealthStatus {
-	if !t.IsConnected() {
-		return &HealthStatus{Status: "unhealthy", Error: "Telegram handler not connected"}
+	status := &HealthStatus{
+		Platform:  "telegram",
+		Connected: t.IsConnected(),
+		Status:    "healthy",
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
 	}
-	return &HealthStatus{Status: "healthy", Connected: true}
+
+	platformStatus := PlatformStatus{
+		Name:   "telegram",
+		Status: "connected",
+	}
+
+	if !t.IsConnected() {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Telegram handler not connected"
+		status.Status = "unhealthy"
+		status.Error = "Telegram handler not connected"
+	}
+
+	status.Platforms["telegram"] = platformStatus
+	return status
 }
 
 // HandleSlashCommand handles a slash command

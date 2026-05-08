@@ -284,22 +284,31 @@ func (g *DiscordGateway) HandleSlashCommand(cmd string, msg Message) (Response, 
 // CheckHealth returns detailed health status for Discord gateway
 func (g *DiscordGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:     "discord",
-		Connected:    g.IsConnected(),
-		HTTPClientOK: true,  // discordgo manages HTTP internally
-		TokenValid:   true,  // Discord uses websocket, no token to check
-		CallbackOK:   false, // Discord doesn't use HTTP callback
-		Details:      make(map[string]interface{}),
+		Platform:  "discord",
+		Connected: g.IsConnected(),
+		Status:    "healthy",
+		Details:   make(map[string]interface{}),
+		Platforms: make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "discord",
+		Status: "connected",
 	}
 
 	if !status.Connected {
-		status.Error = "Gateway not connected"
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["discord"] = platformStatus
 		return status
 	}
 
 	if g.session == nil {
 		status.Connected = false
-		status.Error = "Discord session is nil"
+		platformStatus.Error = "Discord session is nil"
+		status.Status = "error"
+		status.Platforms["discord"] = platformStatus
 		return status
 	}
 
@@ -314,9 +323,9 @@ func (g *DiscordGateway) CheckHealth() *HealthStatus {
 		status.Details["websocket_ready"] = true
 	}
 
-	// Discord uses websocket, no HTTP client check needed
-	status.HTTPClientOK = true
-	status.TokenValid = true
+	status.Details["callback_port"] = g.callbackPort
+	status.Details["http_client_ok"] = true
+	status.Platforms["discord"] = platformStatus
 
 	return status
 }
