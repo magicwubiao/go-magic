@@ -355,15 +355,6 @@ Please provide a comprehensive, well-structured final response based on these su
 		type openAIlike interface {
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 		}
-		// DEBUG: Log messages being sent to LLM (non-stream path)
-		stdlog.Printf("[DEBUG] Sending %d messages to LLM (chat+tools, iteration %d)", len(req.Messages), a.iterationCount)
-		for i, msg := range req.Messages {
-			content := msg.Content
-			if len(content) > 200 {
-				content = content[:200] + "..."
-			}
-			stdlog.Printf("[DEBUG]   msg[%d] role=%s content=%q toolcalls=%d", i, msg.Role, content, len(msg.ToolCalls))
-		}
 		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
@@ -527,11 +518,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		Role:    "user",
 		Content: truncateStr(input, a.maxMsgLen),
 	})
-	stdlog.Printf("[DEBUG] [Stream] After appending user message, history has %d messages", len(a.history))
 
 	// Truncate history to prevent overflow
 	a.truncateHistory()
-	stdlog.Printf("[DEBUG] [Stream] After truncateHistory, history has %d messages", len(a.history))
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
@@ -587,15 +576,6 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		if st, ok := a.provider.(streamer); ok && len(a.tools) > 0 {
-			// DEBUG: Log messages being sent to LLM
-			stdlog.Printf("[DEBUG] Sending %d messages to LLM (stream+tools, iteration %d)", len(req.Messages), a.iterationCount)
-			for i, msg := range req.Messages {
-				content := msg.Content
-				if len(content) > 200 {
-					content = content[:200] + "..."
-				}
-				stdlog.Printf("[DEBUG]   msg[%d] role=%s content=%q toolcalls=%d", i, msg.Role, content, len(msg.ToolCalls))
-			}
 			// Streaming with tools
 			err = st.StreamWithTools(ctx, req.Messages, req.Tools, func(resp *provider.StreamResponse) {
 				if resp.Error != nil {
@@ -605,10 +585,6 @@ Please provide a comprehensive, well-structured final response based on these su
 				if resp.Done {
 					fullContent = resp.Content
 					toolCalls = resp.ToolCalls
-					stdlog.Printf("[DEBUG] Stream done: content_len=%d tool_calls=%d", len(fullContent), len(toolCalls))
-					for i, tc := range toolCalls {
-						stdlog.Printf("[DEBUG]   toolcall[%d] id=%s name=%s args=%s", i, tc.ID, tc.Function.Name, tc.Function.Arguments)
-					}
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
 							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
@@ -627,14 +603,14 @@ Please provide a comprehensive, well-structured final response based on these su
 				// Fallback: if streaming returned no tool calls but the content looks like
 				// the model should have called a tool, retry with non-streaming ChatWithTools
 				if len(toolCalls) == 0 && fullContent != "" {
-					stdlog.Printf("[DEBUG] Stream returned no tool calls, falling back to ChatWithTools")
+					stdlog.Printf("[WARN] Stream returned no tool calls, falling back to ChatWithTools")
 					type openAIlikeFallback interface {
 						ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 					}
 					if oa, ok := a.provider.(openAIlikeFallback); ok {
 						nonStreamResp, nsErr := oa.ChatWithTools(ctx, req.Messages, req.Tools)
 						if nsErr == nil && len(nonStreamResp.ToolCalls) > 0 {
-							stdlog.Printf("[DEBUG] ChatWithTools returned %d tool calls!", len(nonStreamResp.ToolCalls))
+							stdlog.Printf("[WARN] ChatWithTools returned %d tool calls (stream parser bug)", len(nonStreamResp.ToolCalls))
 							toolCalls = nonStreamResp.ToolCalls
 							fullContent = nonStreamResp.Content
 						}

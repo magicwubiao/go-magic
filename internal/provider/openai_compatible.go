@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	stdlog "log"
 
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -116,17 +115,6 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 		"tool_choice": "auto",
 	}
 
-	// DEBUG: Log request body (tools count and first few message roles)
-	toolNames := make([]string, 0, len(tools))
-	for _, t := range tools {
-		if fn, ok := t["function"].(map[string]interface{}); ok {
-			if name, ok := fn["name"].(string); ok {
-				toolNames = append(toolNames, name)
-			}
-		}
-	}
-	stdlog.Printf("[DEBUG] ChatWithTools request: model=%s tools_count=%d tool_names=%v msg_count=%d", p.Model, len(tools), toolNames[:min(5, len(toolNames))], len(messages))
-
 	url := p.BaseURL + "/chat/completions"
 
 	headers := map[string]string{}
@@ -209,16 +197,6 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	if withTools && tools != nil {
 		reqBody["tools"] = tools
 		reqBody["tool_choice"] = "auto"
-		// DEBUG
-		toolNames := make([]string, 0, len(tools))
-		for _, t := range tools {
-			if fn, ok := t["function"].(map[string]interface{}); ok {
-				if name, ok := fn["name"].(string); ok {
-					toolNames = append(toolNames, name)
-				}
-			}
-		}
-		stdlog.Printf("[DEBUG] StreamWithTools request: model=%s tools_count=%d tool_names=%v msg_count=%d", p.Model, len(tools), toolNames[:min(5, len(toolNames))], len(messages))
 	}
 
 	url := p.BaseURL + "/chat/completions"
