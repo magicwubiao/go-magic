@@ -1,0 +1,32 @@
+{
+  "id": "demo-binary",
+  "name": "Demo Binary Plugin",
+  "version": "1.0.0",
+  "description": "A binary plugin demo - cross-platform executable",
+  "author": "go-magic",
+  "license": "MIT",
+  "api_version": "1.0",
+  "type": "binary",
+  "entrypoint": "demo-binary",
+  "entrypoint_windows": "demo-binary.exe",
+  "category": "utilities",
+  "tags": ["demo", "binary", "example"],
+  "permissions": ["filesystem", "network"],
+  "commands": [
+    {
+      "name": "hello",
+      "description": "Say hello"
+    },
+    {
+      "name": "info",
+      "description": "Show system info"
+    },
+    {
+      "name": "ping",
+      "description": "Ping a host",
+      "arguments": ["host"]
+    }
+  ],
+  "hooks": ["on_load"],
+  "events": ["demo-binary.loaded"]
+}

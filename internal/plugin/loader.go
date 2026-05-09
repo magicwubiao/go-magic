@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	plugin "plugin"
 	"runtime"
@@ -538,7 +539,24 @@ func (p *BinaryPlugin) Initialize(ctx *Context) error {
 
 // Execute runs the binary with arguments
 func (p *BinaryPlugin) Execute(cmd string, args []string) (interface{}, error) {
-	return nil, fmt.Errorf("binary plugins do not support direct execution")
+	// Build the command: binary <cmd> [args...]
+	allArgs := append([]string{cmd}, args...)
+	execCmd := exec.Command(p.binaryPath, allArgs...)
+
+	output, err := execCmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("binary execution failed: %w\noutput: %s", err, string(output))
+	}
+
+	// Try to parse as JSON
+	var result interface{}
+	if err := json.Unmarshal(output, &result); err != nil {
+		// Return raw output if not JSON
+		return map[string]interface{}{
+			"output": string(output),
+		}, nil
+	}
+	return result, nil
 }
 
 // Shutdown shuts down the plugin

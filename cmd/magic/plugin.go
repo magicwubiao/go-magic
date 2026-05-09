@@ -23,7 +23,8 @@ Examples:
   magic plugin list
   magic plugin discover
   magic plugin load <path>
-  magic plugin unload <name>`,
+  magic plugin unload <name>
+  magic plugin reload <name>`,
 }
 
 var pluginListCmd = &cobra.Command{
@@ -52,11 +53,19 @@ var pluginUnloadCmd = &cobra.Command{
 	Run:   runPluginUnload,
 }
 
+var pluginReloadCmd = &cobra.Command{
+	Use:   "reload <name>",
+	Short: "Hot-reload a plugin without restarting",
+	Args:  cobra.ExactArgs(1),
+	Run:   runPluginReload,
+}
+
 func init() {
 	pluginCmd.AddCommand(pluginListCmd)
 	pluginCmd.AddCommand(pluginDiscoverCmd)
 	pluginCmd.AddCommand(pluginLoadCmd)
 	pluginCmd.AddCommand(pluginUnloadCmd)
+	pluginCmd.AddCommand(pluginReloadCmd)
 	rootCmd.AddCommand(pluginCmd)
 }
 
@@ -204,4 +213,16 @@ func runPluginUnload(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("Plugin '%s' unloaded.\n", name)
+}
+
+func runPluginReload(cmd *cobra.Command, args []string) {
+	name := args[0]
+	loader := newPluginLoader()
+
+	if err := loader.HotReload(name); err != nil {
+		fmt.Printf("Failed to reload plugin: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Plugin '%s' reloaded.\n", name)
 }
