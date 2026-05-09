@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	stdlog "log"
 	"strings"
 	"sync"
 	"time"
@@ -352,6 +353,15 @@ Please provide a comprehensive, well-structured final response based on these su
 		type openAIlike interface {
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 		}
+		// DEBUG: Log messages being sent to LLM (non-stream path)
+		stdlog.Printf("[DEBUG] Sending %d messages to LLM (chat+tools, iteration %d)", len(req.Messages), a.iterationCount)
+		for i, msg := range req.Messages {
+			content := msg.Content
+			if len(content) > 200 {
+				content = content[:200] + "..."
+			}
+			stdlog.Printf("[DEBUG]   msg[%d] role=%s content=%q toolcalls=%d", i, msg.Role, content, len(msg.ToolCalls))
+		}
 		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
@@ -573,6 +583,15 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		if st, ok := a.provider.(streamer); ok && len(a.tools) > 0 {
+			// DEBUG: Log messages being sent to LLM
+			stdlog.Printf("[DEBUG] Sending %d messages to LLM (stream+tools, iteration %d)", len(req.Messages), a.iterationCount)
+			for i, msg := range req.Messages {
+				content := msg.Content
+				if len(content) > 200 {
+					content = content[:200] + "..."
+				}
+				stdlog.Printf("[DEBUG]   msg[%d] role=%s content=%q toolcalls=%d", i, msg.Role, content, len(msg.ToolCalls))
+			}
 			// Streaming with tools
 			err = st.StreamWithTools(ctx, req.Messages, req.Tools, func(resp *provider.StreamResponse) {
 				if resp.Error != nil {
