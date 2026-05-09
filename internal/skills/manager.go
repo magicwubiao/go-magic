@@ -924,3 +924,21 @@ func (m *Manager) GetSkillInfo(name string) (description string, tools []string,
 	}
 	return skill.Description, skill.GetTools(), skill.Content, nil
 }
+
+// GetSkillsList returns a compact list of skill names and descriptions
+// for system prompt injection (instead of full skill content which can be 48KB+)
+func (m *Manager) GetSkillsList() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.skills) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Available skills (use /skill <name> for details):\n")
+	for name, skill := range m.skills {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", name, skill.Description))
+	}
+	return sb.String()
+}

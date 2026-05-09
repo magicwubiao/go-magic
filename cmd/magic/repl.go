@@ -167,10 +167,11 @@ func (r *REPL) Run() {
 	fmt.Print(hideCursor)
 	defer fmt.Print(showCursor)
 
-	// Load skills context
+	// Load skills context - only inject skill names/descriptions, not full content
+	// Full skill content is too large (48KB+) and pollutes the system prompt
 	if mgr, err := skills.NewManager(); err == nil {
-		if skillsCtx := mgr.GetSkillsContext(); skillsCtx != "" {
-			r.agent.AddSkillsContext(skillsCtx)
+		if skillsList := mgr.GetSkillsList(); skillsList != "" {
+			r.agent.AddSkillsContext(skillsList)
 		}
 	}
 

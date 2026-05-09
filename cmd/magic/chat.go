@@ -168,10 +168,10 @@ IMPORTANT RULES:
 		}
 	}
 
-	// Load skills if available
+	// Load skills if available (compact list only, not full content)
 	if mgr, err := skills.NewManager(); err == nil {
-		if skillsCtx := mgr.GetSkillsContext(); skillsCtx != "" {
-			aiAgent.AddSkillsContext(skillsCtx)
+		if skillsList := mgr.GetSkillsList(); skillsList != "" {
+			aiAgent.AddSkillsContext(skillsList)
 			fmt.Println("Skills loaded.")
 		}
 	}
@@ -247,10 +247,10 @@ IMPORTANT RULES:
 				lastUserInput = ""
 				historyBeforeUndo = nil
 
-				// Reload skills
+				// Reload skills (compact list)
 				if mgr, err := skills.NewManager(); err == nil {
-					if skillsCtx := mgr.GetSkillsContext(); skillsCtx != "" {
-						aiAgent.AddSkillsContext(skillsCtx)
+					if skillsList := mgr.GetSkillsList(); skillsList != "" {
+						aiAgent.AddSkillsContext(skillsList)
 					}
 				}
 				fmt.Println("New conversation started.")
