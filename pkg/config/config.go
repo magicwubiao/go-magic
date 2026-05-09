@@ -111,6 +111,9 @@ func Load() (*Config, error) {
 	configPath := filepath.Join(home, ".magic", ConfigFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return defaultConfig(), ErrNoConfig
+		}
 		return defaultConfig(), nil
 	}
 
