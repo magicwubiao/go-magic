@@ -101,7 +101,10 @@ func selectProvider(reader *bufio.Reader, currentProvider string, providerToNum 
 	providers := []string{
 		"deepseek", "anthropic", "openai", "kimi",
 		"zhipu", "huoshan", "minimax", "dashscope",
-		"ollama", "vllm", "openrouter", "custom",
+		"ollama", "vllm", "openrouter",
+		"gemini", "groq", "together", "mistral",
+		"cohere", "perplexity", "doubao", "wenxin",
+		"moonshot", "mimo", "hunyuan", "custom",
 	}
 
 	providerNames := []string{
@@ -116,6 +119,17 @@ func selectProvider(reader *bufio.Reader, currentProvider string, providerToNum 
 		"Ollama (Local)",
 		"vLLM (Local)",
 		"OpenRouter",
+		"Google Gemini",
+		"Groq",
+		"Together AI",
+		"Mistral",
+		"Cohere",
+		"Perplexity",
+		"Doubao (ByteDance)",
+		"Wenxin (Baidu)",
+		"Moonshot",
+		"MiMo (MiniMax)",
+		"Hunyuan (Tencent)",
 		"Other (custom)",
 	}
 
@@ -230,11 +244,22 @@ func runSetup(cmd *cobra.Command, args []string) {
 		"kimi":       {"Kimi (Moonshot)", "moonshot-v1-8k", "https://api.moonshot.cn/v1"},
 		"zhipu":      {"Zhipu (GLM)", "glm-4", "https://open.bigmodel.cn/api/paas/v4"},
 		"huoshan":    {"Huoshan (Volcano Engine)", "ep-20250105-xxxxx", "https://volcengine.com/api/v1"},
-		"minimax":    {"MiniMax", "abab6-chat", "https://api.minimax.chat/v1"},
+		"minimax":    {"MiniMax", "MiniMax-M2", "https://api.minimax.chat/v1"},
 		"dashscope":  {"Dashscope (Qwen)", "qwen-turbo", "https://dashscope.aliyuncs.com/api/v1"},
 		"ollama":     {"Ollama (Local)", "llama3.2", "http://localhost:11434/v1"},
 		"vllm":       {"vLLM (Local)", "", "http://localhost:8000/v1"},
 		"openrouter": {"OpenRouter", "openrouter/anthropic/claude-3.5-sonnet", "https://openrouter.ai/api/v1"},
+		"gemini":     {"Google Gemini", "gemini-2.0-flash-exp", "https://generativelanguage.googleapis.com/v1beta/openai"},
+		"groq":       {"Groq", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1"},
+		"together":   {"Together AI", "deepseek-ai/DeepSeek-V3", "https://api.together.xyz/v1"},
+		"mistral":    {"Mistral", "mistral-large-latest", "https://api.mistral.ai/v1"},
+		"cohere":     {"Cohere", "command-r-plus-08-2024", "https://api.cohere.ai/v1"},
+		"perplexity": {"Perplexity", "sonar", "https://api.perplexity.ai"},
+		"doubao":     {"Doubao (ByteDance)", "doubao-pro-32k", "https://ark.cn-beijing.volces.com/api/v3"},
+		"wenxin":     {"Wenxin (Baidu)", "ernie-4.0-8k-latest", "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop"},
+		"moonshot":   {"Moonshot", "moonshot-v1-128k", "https://api.moonshot.cn/v1"},
+		"mimo":       {"MiMo (MiniMax)", "mimo-v2-pro", "https://api.xiaomimimo.com/v1"},
+		"hunyuan":    {"Hunyuan (Tencent)", "hunyuan-turbo", "https://api.hunyuan.cloud.tencent.com/v1"},
 		"custom":     {"Other (custom)", "", ""},
 	}
 
@@ -242,7 +267,10 @@ func runSetup(cmd *cobra.Command, args []string) {
 	providerToNum := map[string]string{
 		"deepseek": "1", "anthropic": "2", "openai": "3", "kimi": "4",
 		"zhipu": "5", "huoshan": "6", "minimax": "7", "dashscope": "8",
-		"ollama": "9", "vllm": "10", "openrouter": "11", "custom": "12",
+		"ollama": "9", "vllm": "10", "openrouter": "11",
+		"gemini": "12", "groq": "13", "together": "14", "mistral": "15",
+		"cohere": "16", "perplexity": "17", "doubao": "18", "wenxin": "19",
+		"moonshot": "20", "mimo": "21", "hunyuan": "22", "custom": "23",
 	}
 
 	// Provider selection
@@ -308,8 +336,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 		model = readInput(reader, model)
 	}
 
-	// Model selection
-	fmt.Println()
+	// Model selection (skip for custom, already collected above)
+	if provider != "custom" {
 	modelTitle := fmt.Sprintf("Model for %s (current: %s)", provider, model)
 	// Find default index for current model
 	defaultIdx := 0
@@ -329,6 +357,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	selectedModel, _ := selectItem(reader, models, defaultIdx, allowCustom, modelTitle)
 	model = selectedModel
+	} // end if provider != "custom"
 
 	// Build provider config
 	provCfg = config.ProviderConfig{

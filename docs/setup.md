@@ -10,6 +10,29 @@ Interactive setup wizard that configures everything at once.
 magic setup
 ```
 
+## First Run / 首次运行
+
+When you run `magic chat` for the first time (no `~/.magic/config.json` exists), the setup wizard is automatically launched:
+
+首次运行 `magic chat` 时（`~/.magic/config.json` 不存在），会自动启动配置向导：
+
+```
+Welcome to magic! It looks like this is your first run.
+Let's set things up...
+
+╔════════════════════════════════════════╗
+║       magic Agent Setup Wizard         ║
+╚════════════════════════════════════════╝
+```
+
+After setup completes, the chat session starts automatically with your configuration.
+
+配置完成后，聊天会话会自动使用你的配置启动。
+
+You can also run `magic setup` manually at any time to reconfigure.
+
+随时可手动运行 `magic setup` 重新配置。
+
 ## Setup Steps / 配置步骤
 
 ### 1. LLM Provider / LLM 提供商

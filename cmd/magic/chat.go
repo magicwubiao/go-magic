@@ -102,6 +102,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 		prov = provider.NewMiMoProvider(provCfg.APIKey, provCfg.Model)
 	case "hunyuan":
 		prov = provider.NewHunyuanProvider(provCfg.APIKey, provCfg.Model)
+	case "custom":
+		prov = provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	default:
 		return fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
