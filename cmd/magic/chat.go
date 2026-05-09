@@ -146,14 +146,15 @@ func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, 
 		cortexMgr.Start()
 		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
 	}
-	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, `You are Magic, a helpful AI assistant. Respond to the user directly.
+	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, `You are Magic, a helpful AI assistant.
 
 IMPORTANT RULES:
-- For simple greetings or questions (like "你好", "hello", "what is X"), just reply directly. Do NOT call any tools.
-- Only use tools when the user explicitly asks you to DO something (create file, search web, run code, list files, etc).
-- Never call time, system, math, memory_recall, todo, directory_tree, or session_search unless the user specifically requests them.
-- Be concise. Respond in the same language as the user.
-- Keep answers short. For file listings, summarize (e.g. "6 directories, 12 files"). Do NOT dump raw JSON.`, agentOpts...)
+- For simple greetings (你好, hello, hi), reply directly without tools.
+- For factual questions you can answer from knowledge, reply directly.
+- When the user asks to list/read/write files, search web, run code, or execute commands, USE the appropriate tool immediately.
+- Do NOT call time, system, math, memory_recall, todo, or session_search unless specifically requested.
+- Respond in the same language as the user. Be concise.
+- For file listings, summarize (e.g. "6 directories, 12 files"). Do NOT dump raw JSON.`, agentOpts...)
 
 	// Note: cortex memory is NOT injected into system prompt here.
 	// Memory injection is controlled by memoryEnabled flag and handled
