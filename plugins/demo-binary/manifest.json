@@ -7,11 +7,13 @@
   "license": "MIT",
   "api_version": "1.0",
   "type": "binary",
-  "entrypoint": "demo-binary",
+  "entrypoint": "bin/demo-binary-linux",
   "entrypoints": {
-    "windows": "demo-binary.exe",
-    "darwin/arm64": "demo-binary-arm64",
-    "linux": "demo-binary-linux"
+    "windows": "bin/demo-binary.exe",
+    "linux": "bin/demo-binary-linux",
+    "linux/arm64": "bin/demo-binary-linux-arm64",
+    "darwin": "bin/demo-binary-mac",
+    "darwin/arm64": "bin/demo-binary-arm64"
   },
   "category": "utilities",
   "tags": ["demo", "binary", "example"],
