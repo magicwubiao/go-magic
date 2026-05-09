@@ -377,17 +377,17 @@ func runSetup(cmd *cobra.Command, args []string) {
 			fmt.Println("\n   Available platforms:")
 			fmt.Println("      [1] Telegram")
 			fmt.Println("      [2] Discord")
-			fmt.Println("      [3] WeCom (企业微信)")
-			fmt.Println("      [4] Feishu (飞书/Lark)")
-			fmt.Println("      [5] DingTalk (钉钉)")
-			fmt.Println("      [6] QQ (QQ机器人/频道)")
-			fmt.Println("      [7] WeChat (微信公众号/小程序)")
-			fmt.Println("      [8] WeChat-iLink (个人微信 via iLink)")
+			fmt.Println("      [3] WeCom (Enterprise WeChat)")
+			fmt.Println("      [4] Feishu (Lark)")
+			fmt.Println("      [5] DingTalk")
+			fmt.Println("      [6] QQ (Bot/Channel)")
+			fmt.Println("      [7] WeChat (Official Account/Mini Program)")
+			fmt.Println("      [8] WeChat-iLink (Personal WeChat via iLink)")
 			fmt.Println("      [9] Slack")
 			fmt.Println("      [10] WhatsApp")
 			fmt.Println("      [11] LINE")
 			fmt.Println("      [12] Matrix")
-			fmt.Println("      [0] Done (结束配置)")
+			fmt.Println("      [0] Done")
 
 			fmt.Print("\n   Select platform to configure (0-12, default 0): ")
 			platformChoice, _ := reader.ReadString('\n')
@@ -464,7 +464,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [WeCom] configured successfully!")
 				}
-			case "4": // Feishu (飞书/Lark)
+			case "4": // Feishu (Lark)
 				current := cfg.Gateway.Platforms["feishu"]
 				fmt.Printf("   Enter Feishu app_id (current: %s): ", current.AppID)
 				appID := readInput(reader, current.AppID)
@@ -478,7 +478,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [Feishu] configured successfully!")
 				}
-			case "5": // DingTalk (钉钉)
+			case "5": // DingTalk
 				current := cfg.Gateway.Platforms["dingtalk"]
 				fmt.Printf("   Enter DingTalk app_key (current: %s): ", current.AppKey)
 				appKey := readInput(reader, current.AppKey)
@@ -495,10 +495,10 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [DingTalk] configured successfully!")
 				}
-			case "6": // QQ (支持新版官方机器人 app_id/app_secret + 旧版 number/password)
+			case "6": // QQ (Bot/Channel)
 				current := cfg.Gateway.Platforms["qq"]
 				fmt.Println("   QQ supports two auth methods:")
-				fmt.Println("     [a] Official QQ Bot (app_id + app_secret) - 推荐")
+				fmt.Println("     [a] Official QQ Bot (app_id + app_secret) - Recommended")
 				fmt.Println("     [b] Legacy QQ (number + password)")
 				fmt.Printf("   Select method (default a): ")
 				qqMethod := readInput(reader, "a")
@@ -517,7 +517,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 						fmt.Println("   [QQ Legacy] configured successfully!")
 					}
 				} else {
-					// Official QQ Bot mode (推荐)
+					// Official QQ Bot mode (Recommended)
 					fmt.Printf("   Enter QQ Bot app_id (current: %s): ", current.AppID)
 					appID := readInput(reader, current.AppID)
 					fmt.Printf("   Enter QQ Bot app_secret (current: %s): ", maskString(current.AppSecret))
@@ -531,7 +531,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 						fmt.Println("   [QQ Official Bot] configured successfully!")
 					}
 				}
-			case "7": // WeChat (微信公众号/小程序)
+			case "7": // WeChat (Official Account/Mini Program)
 				current := cfg.Gateway.Platforms["wechat"]
 				fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
 				appID := readInput(reader, current.AppID)
@@ -551,7 +551,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 					}
 					fmt.Println("   [WeChat Official Account] configured successfully!")
 				}
-			case "8": // WeChat-iLink (个人微信)
+			case "8": // WeChat-iLink (Personal WeChat)
 				current := cfg.Gateway.Platforms["wechat_ilink"]
 				clientIDDefault := "wechat-ilink"
 				if current.ClientID != "" {
