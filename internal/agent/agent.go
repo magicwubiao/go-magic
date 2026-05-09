@@ -604,6 +604,10 @@ Please provide a comprehensive, well-structured final response based on these su
 				if resp.Done {
 					fullContent = resp.Content
 					toolCalls = resp.ToolCalls
+					stdlog.Printf("[DEBUG] Stream done: content_len=%d tool_calls=%d", len(fullContent), len(toolCalls))
+					for i, tc := range toolCalls {
+						stdlog.Printf("[DEBUG]   toolcall[%d] id=%s name=%s args=%s", i, tc.ID, tc.Function.Name, tc.Function.Arguments)
+					}
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
 							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
