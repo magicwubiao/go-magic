@@ -9,6 +9,7 @@
   "api_version": "1.0",
   "type": "script",
   "entrypoint": "run.sh",
+  "entrypoint_windows": "run.ps1",
   "category": "utilities",
   "tags": ["demo", "example", "template"],
   "permissions": ["filesystem"],

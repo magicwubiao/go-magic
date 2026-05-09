@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"plugin"
+	plugin "plugin"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -284,6 +285,9 @@ func (l *Loader) Validate(pluginPath string) error {
 		}
 	case TypeScript:
 		entrypoint := manifest.Entrypoint
+		if runtime.GOOS == "windows" && manifest.EntrypointWindows != "" {
+			entrypoint = manifest.EntrypointWindows
+		}
 		if entrypoint == "" {
 			entrypoint = "run." + getScriptExt(pluginPath)
 		}
@@ -375,6 +379,10 @@ func (l *Loader) loadGoPlugin(pluginPath string, manifest *PluginManifest) (Plug
 // loadScriptPlugin loads a script plugin
 func (l *Loader) loadScriptPlugin(pluginPath string, manifest *PluginManifest) (Plugin, error) {
 	entrypoint := manifest.Entrypoint
+	// Use Windows-specific entrypoint if on Windows and available
+	if runtime.GOOS == "windows" && manifest.EntrypointWindows != "" {
+		entrypoint = manifest.EntrypointWindows
+	}
 	if entrypoint == "" {
 		ext := getScriptExt(pluginPath)
 		entrypoint = "run." + ext

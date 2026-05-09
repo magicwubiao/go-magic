@@ -1,6 +1,7 @@
 # Demo Plugin
 
 A demo plugin for go-magic that showcases all plugin system capabilities.
+Cross-platform: works on Linux, macOS, and Windows.
 
 ## Features
 
