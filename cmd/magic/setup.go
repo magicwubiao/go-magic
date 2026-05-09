@@ -128,7 +128,7 @@ func selectProvider(reader *bufio.Reader, currentProvider string, providerToNum 
 		"Doubao (ByteDance)",
 		"Wenxin (Baidu)",
 		"Moonshot",
-		"MiMo (MiniMax)",
+		"MiMo (Xiaomi)",
 		"Hunyuan (Tencent)",
 		"Other (custom)",
 	}
@@ -258,7 +258,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		"doubao":     {"Doubao (ByteDance)", "doubao-pro-32k", "https://ark.cn-beijing.volces.com/api/v3"},
 		"wenxin":     {"Wenxin (Baidu)", "ernie-4.0-8k-latest", "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop"},
 		"moonshot":   {"Moonshot", "moonshot-v1-128k", "https://api.moonshot.cn/v1"},
-		"mimo":       {"MiMo (MiniMax)", "mimo-v2-pro", "https://api.xiaomimimo.com/v1"},
+		"mimo":       {"MiMo (Xiaomi)", "mimo-v2-pro", "https://api.xiaomimimo.com/v1"},
 		"hunyuan":    {"Hunyuan (Tencent)", "hunyuan-turbo", "https://api.hunyuan.cloud.tencent.com/v1"},
 		"custom":     {"Other (custom)", "", ""},
 	}
