@@ -623,6 +623,22 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			if err == nil {
 				streamed = true
+				// Fallback: if streaming returned no tool calls but the content looks like
+				// the model should have called a tool, retry with non-streaming ChatWithTools
+				if len(toolCalls) == 0 && fullContent != "" {
+					stdlog.Printf("[DEBUG] Stream returned no tool calls, falling back to ChatWithTools")
+					type openAIlikeFallback interface {
+						ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
+					}
+					if oa, ok := a.provider.(openAIlikeFallback); ok {
+						nonStreamResp, nsErr := oa.ChatWithTools(ctx, req.Messages, req.Tools)
+						if nsErr == nil && len(nonStreamResp.ToolCalls) > 0 {
+							stdlog.Printf("[DEBUG] ChatWithTools returned %d tool calls!", len(nonStreamResp.ToolCalls))
+							toolCalls = nonStreamResp.ToolCalls
+							fullContent = nonStreamResp.Content
+						}
+					}
+				}
 			} else {
 				lastErr = err
 			}
