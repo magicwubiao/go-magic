@@ -263,7 +263,35 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 		log.Warn("[WeChat-iLink] No token configured. Set token or enable auto-login.")
 		// Still mark as "connected" - user can login later via /login command
 	} else {
-		log.Debug("[WeChat-iLink] Token configured, starting message polling...")
+		// Validate token by calling GetUpdates once
+		log.Debug("[WeChat-iLink] Validating token...")
+		testResp, err := g.api.GetUpdates(g.ctx, ILinkGetUpdatesReq{
+			GetUpdatesBuf: g.syncBuf,
+		})
+		if err != nil || (testResp != nil && isSessionExpired(testResp.Ret, testResp.Errcode)) {
+			log.Warn("[WeChat-iLink] Token expired or invalid")
+			if g.config.AutoLogin {
+				log.Info("[WeChat-iLink] Starting QR code re-login...")
+				if token, _, _, baseURL, loginErr := PerformILinkLogin(ctx, ILinkLoginOpts{
+					BaseURL: g.config.BaseURL,
+					BotType: g.config.BotType,
+					Proxy:   g.config.Proxy,
+					Timeout: ilinkAuthDefaultTimeout,
+				}); loginErr == nil {
+					g.config.Token = token
+					g.config.BaseURL = baseURL
+					_ = g.saveTokenToConfig(token, baseURL)
+					if newAPI, apiErr := NewILinkAPIClient(baseURL, token, g.config.Proxy); apiErr == nil {
+						g.api = newAPI
+					}
+					log.Info("[WeChat-iLink] ✅ Re-login successful")
+				} else {
+					log.Warnf("[WeChat-iLink] Re-login failed: %v (will retry on session expiry)", loginErr)
+				}
+			}
+		} else {
+			log.Debug("[WeChat-iLink] Token valid, starting message polling...")
+		}
 	}
 
 	g.connectedAt = time.Now()
@@ -556,8 +584,41 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 
 		// Check for session expiration
 		if isSessionExpired(resp.Ret, resp.Errcode) {
-			remaining := g.pauseSession(resp.Ret, resp.Errcode, resp.Errmsg)
-			log.Warnf("[WeChat-iLink] Session expired, pausing for %v", remaining)
+			g.pauseSession(resp.Ret, resp.Errcode, resp.Errmsg)
+			log.Warnf("[WeChat-iLink] Session expired")
+
+			// Try auto re-login if configured
+			if g.config.AutoLogin {
+				log.Info("[WeChat-iLink] Attempting auto re-login...")
+				if token, _, _, baseURL, err := PerformILinkLogin(g.ctx, ILinkLoginOpts{
+					BaseURL: g.config.BaseURL,
+					BotType: g.config.BotType,
+					Proxy:   g.config.Proxy,
+					Timeout: ilinkAuthDefaultTimeout,
+				}); err == nil {
+					g.config.Token = token
+					g.config.BaseURL = baseURL
+					_ = g.saveTokenToConfig(token, baseURL)
+					if newAPI, err := NewILinkAPIClient(baseURL, token, g.config.Proxy); err == nil {
+						g.api = newAPI
+					}
+					// Clear pause
+					g.pauseMu.Lock()
+					g.pauseUntil = time.Time{}
+					g.pauseMu.Unlock()
+					log.Info("[WeChat-iLink] ✅ Re-login successful, resuming polling")
+					continue
+				} else {
+					log.Warnf("[WeChat-iLink] Auto re-login failed: %v", err)
+				}
+			}
+
+			// No auto-login or re-login failed: pause and retry later
+			remaining := time.Until(g.pauseUntil)
+			if remaining <= 0 {
+				remaining = ilinkSessionPauseDuration
+			}
+			log.Warnf("[WeChat-iLink] Pausing for %v (set auto_login: true to enable re-login)", remaining.Round(time.Second))
 			select {
 			case <-ctx.Done():
 				return
