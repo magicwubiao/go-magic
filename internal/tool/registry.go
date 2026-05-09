@@ -87,7 +87,7 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(&WriteFileTool{})
 	r.Register(&FileEditTool{})
 	r.Register(&ListFilesTool{})
-	r.Register(&DirectoryTreeTool{})
+	r.Register(NewDirectoryTreeTool())
 	r.Register(&SearchInFilesTool{})
 
 	// Web tools
