@@ -294,7 +294,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}()
 
 	platformCount := 0
-	agentHandler := &gatewayAgentHandler{}
+	agentHandler := NewGatewayAgentHandler()
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
 
 	// Start Telegram if configured
