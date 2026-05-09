@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -125,6 +126,51 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
+	// Approval config: security.approval.*
+	case strings.HasPrefix(key, "security.approval."):
+		parts := strings.Split(key, ".")
+		// security.approval.<field>
+		if len(parts) == 3 {
+			field := parts[2]
+			switch field {
+			case "strategy":
+				validStrategies := map[string]bool{"manual": true, "auto": true, "smart": true, "whitelist": true}
+				if !validStrategies[value] {
+					fmt.Printf("Invalid strategy: %s\nAvailable: manual, auto, smart, whitelist\n", value)
+					os.Exit(1)
+				}
+				cfg.Security.Commands.ApprovalStrategy = value
+			case "auto_approve_safe":
+				cfg.Security.Commands.AutoApproveSafe = value == "true" || value == "1" || value == "yes"
+			case "auto_reject_dangerous":
+				cfg.Security.Commands.AutoRejectDangerous = value == "true" || value == "1" || value == "yes"
+			case "enable_learning":
+				cfg.Security.Commands.EnableLearning = value == "true" || value == "1" || value == "yes"
+			case "trust_threshold":
+				n, err := strconv.Atoi(value)
+				if err != nil || n < 1 {
+					fmt.Println("trust_threshold must be a positive integer")
+					os.Exit(1)
+				}
+				cfg.Security.Commands.TrustThreshold = n
+			case "enable_cli_confirm":
+				cfg.Security.Commands.EnableCLIConfirm = value == "true" || value == "1" || value == "yes"
+			default:
+				fmt.Printf("Unknown approval field: %s\n", field)
+				fmt.Println("Available fields:")
+				fmt.Println("  strategy            - Approval strategy: manual|auto|smart|whitelist")
+				fmt.Println("  auto_approve_safe   - Auto-approve safe commands (true/false)")
+				fmt.Println("  auto_reject_dangerous - Auto-reject dangerous commands (true/false)")
+				fmt.Println("  enable_learning     - Learn from user decisions (true/false)")
+				fmt.Println("  trust_threshold     - Approvals before auto-trust (default: 3)")
+				fmt.Println("  enable_cli_confirm  - CLI confirmation prompt (true/false)")
+				os.Exit(1)
+			}
+		} else {
+			fmt.Println("Usage: config set security.approval.<field> <value>")
+			os.Exit(1)
+		}
+
 	// Gateway platform config: gateway.platforms.<name>.<field>
 	case strings.HasPrefix(key, "gateway.platforms."):
 		parts := strings.Split(key, ".")
@@ -195,6 +241,9 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		fmt.Println("Available keys:")
 		fmt.Println("  profile, provider, model")
 		fmt.Println("  providers.<name>.api_key, providers.<name>.base_url, providers.<name>.model")
+		fmt.Println("  security.approval.strategy, security.approval.auto_approve_safe")
+		fmt.Println("  security.approval.auto_reject_dangerous, security.approval.enable_learning")
+		fmt.Println("  security.approval.trust_threshold, security.approval.enable_cli_confirm")
 		fmt.Println("  gateway.enabled")
 		fmt.Println("  gateway.platforms.<name>.token, gateway.platforms.<name>.enabled, ...")
 		os.Exit(1)
