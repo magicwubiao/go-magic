@@ -155,6 +155,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("web_extract", 60*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
 	r.SetTimeout("web_select", 30*time.Second)
+
+	// Register plugin tools
+	r.registerPluginTools()
 }
 
 // GetAllTools 返回所有内置工具实例
@@ -421,4 +424,20 @@ func (r *Registry) RegisterSkillTool(provider SkillInfoProvider) {
 func (r *Registry) RegisterWithSkillManager(skillManager SkillInfoProvider, workDir string) {
 	r.RegisterAll(workDir)
 	r.RegisterSkillTool(skillManager)
+}
+
+// registerPluginTools discovers and registers plugin commands as agent tools.
+// This bridges the plugin system with the tool system, so when a plugin
+// declares commands in its manifest, the agent can call them via tool calling.
+func (r *Registry) registerPluginTools() {
+	loader := newPluginToolLoader()
+	if loader == nil {
+		return
+	}
+
+	tools := loader.DiscoverTools()
+	for _, t := range tools {
+		r.Register(t)
+		r.SetTimeout(t.Name(), 30*time.Second)
+	}
 }
