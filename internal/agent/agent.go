@@ -209,6 +209,12 @@ func (a *Agent) registerBuiltinHooks() {
 		Source: hooks.HookSourceBuiltIn,
 		Hook:   hooks.NewPrivacyHook(),
 	})
+	// Smart approval hook
+	a.hooks.Register(hooks.HookRegistration{
+		Name:   "approval",
+		Source: hooks.HookSourceBuiltIn,
+		Hook:   NewApprovalHook(),
+	})
 }
 
 // SetSession sets the session ID for event tracking
