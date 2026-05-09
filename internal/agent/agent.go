@@ -1393,3 +1393,9 @@ func (a *Agent) AddSystemContext(ctx string) {
 	}
 	a.history[0].Content += "\n\n" + ctx
 }
+
+
+// GetProvider returns the agent's provider for use by other components
+func (a *Agent) GetProvider() provider.Provider {
+	return a.provider
+}

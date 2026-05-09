@@ -74,10 +74,11 @@ type REPLState struct {
 // REPL is the main interactive REPL
 type REPL struct {
 	// Components
-	agent    *agent.Agent
-	registry *tool.Registry
-	store    *session.Store
-	cfg      *config.Config
+	agent       *agent.Agent
+	registry    *tool.Registry
+	store       *session.Store
+	cfg         *config.Config
+	goalManager *agent.GoalManager
 
 	// State
 	state REPLState
@@ -354,6 +355,8 @@ func (r *REPL) processCommand(input string) {
 		r.cmdSetRequirementPriority(args)
 	case "context", "ctx":
 		r.cmdShowContext()
+	case "goal":
+		r.cmdGoal(args)
 	default:
 		fmt.Printf("%sUnknown command: /%s (type /help for commands)%s\n", colorRed, cmd, colorReset)
 	}
@@ -478,6 +481,39 @@ func (r *REPL) runConversation(input string) {
 	// Save session
 	r.saveSession()
 
+	// Goal continuation hook — if a goal is active, judge and continue
+	if r.goalManager != nil {
+		goal := r.goalManager.GetStatus()
+		if goal != nil && goal.State == agent.GoalActive {
+			r.goalManager.IncrementTurn()
+
+			if r.goalManager.IsExhausted() {
+				r.goalManager.SetState(agent.GoalExhausted)
+				fmt.Printf("\n⏸ Goal budget exhausted (%d turns). Use /goal resume to continue.\n", goal.MaxTurns)
+			} else {
+				// Get last assistant response for judge
+				lastResponse := r.getLastAssistantResponse()
+				achieved, reason, err := r.goalManager.JudgeGoal(r.ctx, lastResponse)
+				if err != nil {
+					// Judge failed → fail open, continue
+					achieved = false
+				}
+
+				if achieved {
+					r.goalManager.SetState(agent.GoalAchieved)
+					fmt.Printf("\n✅ Goal achieved: %s\n", reason)
+				} else {
+					// Continue next turn
+					contPrompt := r.goalManager.GetContinuationPrompt()
+					time.Sleep(500 * time.Millisecond) // Brief delay
+					fmt.Printf("\n↻ Continuing toward goal (turn %d/%d)...\n", goal.TurnCount+1, goal.MaxTurns)
+					r.runConversation(contPrompt)
+				}
+			}
+			r.goalManager.SaveWithSessionID(r.state.sessionID)
+		}
+	}
+
 	fmt.Println() // Extra newline after response
 }
 
@@ -555,6 +591,13 @@ func (r *REPL) cmdHelp() {
 		{"  /req-del <id>", "Delete a requirement"},
 		{"  /req-priority <id> <level>", "Set priority (high/med/low)"},
 		{"  /context", "Show context + pending requirements"},
+		{""},
+		{"Goals (Ralph Loop)", ""},
+		{"  /goal <text>", "Set persistent goal (auto-continues)"},
+		{"  /goal status", "Show current goal status"},
+		{"  /goal pause", "Pause active goal"},
+		{"  /goal resume", "Resume paused goal"},
+		{"  /goal clear", "Clear current goal"},
 		{""},
 		{"Session", ""},
 		{"  /save [name]", "Save current session"},
@@ -1355,6 +1398,99 @@ func (r *REPL) cmdShowContext() {
 	fmt.Printf("%s\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518%s\n", Cyan(""), colorReset)
 	fmt.Println()
 }
+// getLastAssistantResponse returns the content of the last assistant message
+func (r *REPL) getLastAssistantResponse() string {
+	history := r.agent.GetHistory()
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			return history[i].Content
+		}
+	}
+	return ""
+}
+
+// cmdGoal handles /goal command
+func (r *REPL) cmdGoal(args string) {
+	home, _ := os.UserHomeDir()
+	goalsDir := filepath.Join(home, ".magic", "goals")
+
+	// Initialize goal manager if needed
+	if r.goalManager == nil {
+		// Get provider from agent
+		prov := r.agent.GetProvider()
+		if prov == nil {
+			fmt.Printf("%s⚠ Goal manager requires AI provider (not available)%s\n", colorYellow, colorReset)
+			return
+		}
+		r.goalManager = agent.NewGoalManager(prov, goalsDir)
+		maxTurns := r.cfg.Agent.GoalMaxTurns
+		if maxTurns <= 0 {
+			maxTurns = 20 // Default
+		}
+		r.goalManager.SetMaxTurns(maxTurns)
+
+		// Try to load saved goal for this session
+		if err := r.goalManager.Load(r.state.sessionID); err != nil {
+			// Ignore load errors, just means no saved goal
+		}
+	}
+
+	parts := strings.SplitN(strings.TrimSpace(args), " ", 2)
+	subcmd := parts[0]
+
+	switch subcmd {
+	case "", "status":
+		goal := r.goalManager.GetStatus()
+		if goal == nil {
+			fmt.Println("No active goal")
+			return
+		}
+		fmt.Printf("🎯 Goal: %s\n", goal.Text)
+		fmt.Printf("   State: %s | Turns: %d/%d\n", goal.State, goal.TurnCount, goal.MaxTurns)
+		if goal.JudgeResult != "" {
+			fmt.Printf("   Last judge: %s\n", goal.JudgeResult)
+		}
+	case "pause":
+		goal := r.goalManager.Pause()
+		if goal != nil {
+			fmt.Printf("⏸ Goal paused: %s\n", goal.Text)
+			r.goalManager.SaveWithSessionID(r.state.sessionID)
+		} else {
+			fmt.Println("No active goal to pause")
+		}
+	case "resume":
+		goal := r.goalManager.Resume()
+		if goal != nil {
+			fmt.Printf("▶ Goal resumed: %s (turn counter reset)\n", goal.Text)
+			r.goalManager.SaveWithSessionID(r.state.sessionID)
+			// Automatically inject continuation prompt
+			r.runConversation(goal.Text)
+		} else {
+			fmt.Println("No paused goal to resume")
+		}
+	case "clear":
+		r.goalManager.Clear()
+		fmt.Println("🗑 Goal cleared")
+	default:
+		// Other text is treated as a new goal
+		goalText := strings.TrimSpace(args)
+		if goalText == "" {
+			fmt.Println("Usage: /goal <text> | /goal status | /goal pause | /goal resume | /goal clear")
+			return
+		}
+		goal := r.goalManager.SetGoal(goalText)
+		goal.MaxTurns = r.cfg.Agent.GoalMaxTurns
+		if goal.MaxTurns <= 0 {
+			goal.MaxTurns = 20 // Default
+		}
+		r.goalManager.SetMaxTurns(goal.MaxTurns)
+		fmt.Printf("🎯 Goal set: %s (max %d turns)\n", goal.Text, goal.MaxTurns)
+		r.goalManager.SaveWithSessionID(r.state.sessionID)
+		// Immediately start first turn
+		r.runConversation(goalText)
+	}
+}
+
 // escapeJSON escapes a string for JSON
 func escapeJSON(s string) string {
 	var result strings.Builder
@@ -1388,7 +1524,7 @@ func completeCommand(partial string) string {
 		"usage", "tools", "skills", "undo", "retry", "stop", "save",
 		"load", "stream", "clear", "history", "insights", "personality",
 		"export", "export-md", "req", "reqs", "req-done", "req-del",
-		"req-priority", "context",
+		"req-priority", "context", "goal",
 	}
 
 	partial = strings.TrimPrefix(partial, "/")
@@ -1433,7 +1569,7 @@ func isValidCommand(input string) bool {
 		"export-md": true, "h": true, "?": true,
 		"req": true, "reqs": true, "requirements": true,
 		"req-done": true, "req-del": true, "req-priority": true,
-		"context": true, "ctx": true,
+		"context": true, "ctx": true, "goal": true,
 	}
 
 	return validCmds[cmd]
@@ -1451,7 +1587,7 @@ func NewCompleter() *Completer {
 			"help", "exit", "quit", "new", "reset", "model", "compress",
 			"usage", "tools", "skills", "undo", "retry", "stop", "save",
 			"load", "stream", "clear", "history", "insights", "personality",
-			"export", "req", "reqs", "req-done", "req-del", "req-priority", "context",
+			"export", "req", "reqs", "req-done", "req-del", "req-priority", "context", "goal",
 		},
 	}
 }

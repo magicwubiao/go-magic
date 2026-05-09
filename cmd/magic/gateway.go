@@ -86,6 +86,9 @@ type gatewayAgentHandler struct {
 	agents       map[string]*agent.Agent
 	systemPrompt string
 	cortexMgr    *cortex.Manager
+
+	// Per-user goal managers
+	goalManagers map[string]*agent.GoalManager
 }
 
 // NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
@@ -138,6 +141,7 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 		provider:     prov,
 		registry:     registry,
 		agents:       make(map[string]*agent.Agent),
+		goalManagers: make(map[string]*agent.GoalManager),
 		systemPrompt: systemPrompt,
 		cortexMgr:    cortexMgr,
 	}
@@ -284,6 +288,11 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		}
 	}
 
+	// Check for /goal command
+	if strings.HasPrefix(msg.Content, "/goal") {
+		return h.handleGoalCommand(ctx, msg.UserID, msg.Content)
+	}
+
 	// Run conversation with full agent capabilities (multimodal if contentParts available)
 	var response string
 	if len(contentParts) > 0 {
@@ -309,6 +318,75 @@ func (h *gatewayAgentHandler) makeFileURL(path string) string {
 	}
 	// Convert local path to file:// URL
 	return "file://" + path
+}
+
+// handleGoalCommand handles /goal commands from gateway platforms
+func (h *gatewayAgentHandler) handleGoalCommand(ctx context.Context, userID string, input string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Get or create goal manager for this user
+	gm, ok := h.goalManagers[userID]
+	if !ok {
+		// Create goal manager
+		home, _ := os.UserHomeDir()
+		goalsDir := filepath.Join(home, ".magic", "goals")
+		gm = agent.NewGoalManager(h.provider, goalsDir)
+		h.goalManagers[userID] = gm
+
+		// Load saved goal if exists
+		gm.Load(userID)
+	}
+
+	// Parse command
+	args := strings.TrimPrefix(input, "/goal")
+	args = strings.TrimSpace(args)
+	parts := strings.SplitN(args, " ", 2)
+	subcmd := parts[0]
+
+	switch subcmd {
+	case "", "status":
+		goal := gm.GetStatus()
+		if goal == nil {
+			return "No active goal. Use /goal <text> to set a new goal.", nil
+		}
+		return fmt.Sprintf("🎯 Goal: %s\nState: %s | Turns: %d/%d\n%s",
+			goal.Text, goal.State, goal.TurnCount, goal.MaxTurns, goal.JudgeResult), nil
+
+	case "pause":
+		goal := gm.Pause()
+		if goal != nil {
+			gm.SaveWithSessionID(userID)
+			return fmt.Sprintf("⏸ Goal paused: %s", goal.Text), nil
+		}
+		return "No active goal to pause.", nil
+
+	case "resume":
+		goal := gm.Resume()
+		if goal != nil {
+			gm.SaveWithSessionID(userID)
+			return fmt.Sprintf("▶ Goal resumed: %s (turn counter reset)", goal.Text), nil
+		}
+		return "No paused goal to resume.", nil
+
+	case "clear":
+		gm.Clear()
+		return "🗑 Goal cleared", nil
+
+	default:
+		// Set new goal
+		goalText := strings.TrimSpace(args)
+		if goalText == "" {
+			return "Usage: /goal <text> | /goal status | /goal pause | /goal resume | /goal clear", nil
+		}
+
+		goal := gm.SetGoal(goalText)
+		goal.MaxTurns = 20 // Default for gateway
+		gm.SetMaxTurns(20)
+		gm.SaveWithSessionID(userID)
+
+		return fmt.Sprintf("🎯 Goal set: %s (max %d turns)\nI'll start working on this goal now.", goal.Text, goal.MaxTurns), nil
+	}
 }
 
 // ResetSession resets a user's session (clears conversation history).

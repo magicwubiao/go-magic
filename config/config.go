@@ -64,6 +64,7 @@ type AgentConfig struct {
 	CompressionEnabled bool    `json:"compression_enabled"`
 	CompressionRatio   float64 `json:"compression_ratio"`
 	ContextWindow      int     `json:"context_window"`
+	GoalMaxTurns       int     `json:"goal_max_turns"` // Max turns for /goal command, default 20
 }
 
 // MemoryConfig represents memory configuration
@@ -148,6 +149,7 @@ func DefaultConfig() *Config {
 			CompressionEnabled: true,
 			CompressionRatio:   0.7,
 			ContextWindow:      200000,
+			GoalMaxTurns:       20,
 		},
 		Memory: MemoryConfig{
 			Enabled:     true,
