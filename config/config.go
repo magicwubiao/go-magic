@@ -143,7 +143,7 @@ func DefaultConfig() *Config {
 			Disabled: []string{},
 		},
 		Agent: AgentConfig{
-			MaxTurns:           100,
+			MaxTurns:           60,
 			MaxIterations:      80,
 			CompressionEnabled: true,
 			CompressionRatio:   0.7,

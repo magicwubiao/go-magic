@@ -124,8 +124,8 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		registry:           registry,
 		tools:              tools,
 		history:            history,
-		maxTurns:           100,
-		maxIterations:      150, // Increased from 100 to allow more complex tasks
+		maxTurns:           60,
+		maxIterations:      60,
 		maxTotalLen:        200000, // 200K chars max history (~50K tokens)
 		maxMsgLen:          50000,  // 50K chars per message (~12K tokens)
 		maxTokenBudget:     0,
