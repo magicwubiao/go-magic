@@ -237,11 +237,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 	cfg.Profile = profile
 
 	// Cortex AI enhancement
-	cortexDefault := "Y"
-	if !cfg.CortexEnabled {
-		cortexDefault = "n"
+	cortexDefault := "N"
+	if cfg.CortexEnabled {
+		cortexDefault = "Y"
 	}
-	fmt.Printf("\n5. Enable Cortex AI enhancement? (Y/n, default %s): ", cortexDefault)
+	fmt.Printf("\n5. Enable Cortex AI enhancement? (y/N, default %s): ", cortexDefault)
 	cortexChoice := readInput(reader, cortexDefault)
 	cfg.CortexEnabled = !(cortexChoice == "n" || cortexChoice == "N")
 

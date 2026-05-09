@@ -134,7 +134,7 @@ func defaultConfig() *Config {
 		WorkingDir:    getDefaultWorkingDir(),
 		Provider:      "deepseek",
 		Model:         "deepseek-chat",
-		CortexEnabled: true,
+		CortexEnabled: false,
 		Providers:     make(map[string]ProviderConfig),
 		Tools: ToolsConfig{
 			Enabled: []string{"all"},

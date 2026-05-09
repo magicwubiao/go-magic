@@ -14,7 +14,7 @@ func (t *MemoryStoreTool) Name() string {
 }
 
 func (t *MemoryStoreTool) Description() string {
-	return "Store a memory for later recall"
+	return "Store a memory for later recall. Only use when the user explicitly asks to remember or save something."
 }
 
 func (t *MemoryStoreTool) Schema() map[string]interface{} {
@@ -82,7 +82,7 @@ func (t *MemoryRecallTool) Name() string {
 }
 
 func (t *MemoryRecallTool) Description() string {
-	return "Recall a stored memory by key"
+	return "Recall a stored memory by key. Only use when the user explicitly asks to recall or remember something. Do NOT call this automatically."
 }
 
 func (t *MemoryRecallTool) Schema() map[string]interface{} {
