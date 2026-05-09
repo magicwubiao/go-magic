@@ -389,9 +389,12 @@ func runSetup(cmd *cobra.Command, args []string) {
 			fmt.Println("      [12] Matrix")
 			fmt.Println("      [0] Done (结束配置)")
 
-			fmt.Print("\n   Select platform to configure (0-12): ")
+			fmt.Print("\n   Select platform to configure (0-12, default 0): ")
 			platformChoice, _ := reader.ReadString('\n')
 			platformChoice = strings.TrimSpace(platformChoice)
+			if platformChoice == "" {
+				platformChoice = "0"
+			}
 
 			switch platformChoice {
 			case "0":
