@@ -893,6 +893,12 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	result, err := a.registry.Execute(ctx, toolName, callReq.ToolArgs)
 	elapsed := time.Since(start)
 
+	if err != nil {
+		stdlog.Printf("[TOOL] %s error after %v: %v", toolName, elapsed, err)
+	} else {
+		stdlog.Printf("[TOOL] %s success after %v", toolName, elapsed)
+	}
+
 	content := ""
 	if err != nil {
 		content = fmt.Sprintf("Error: %v", err)

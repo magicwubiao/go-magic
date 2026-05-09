@@ -186,6 +186,7 @@ RULES:
 	var lastUserInput string
 
 	fmt.Printf("magic Agent v%s\n", Version)
+	logInfo("magic Agent v%s started | Provider: %s | Model: %s | Tools: %d", Version, cfg.Provider, cfg.Model, len(toolsSchema))
 	fmt.Printf("Provider: %s | Model: %s\n", cfg.Provider, cfg.Model)
 	fmt.Printf("Streaming: %s | Commands: /help\n\n", map[bool]string{true: "ON", false: "OFF"}[streamingEnabled])
 
@@ -354,6 +355,8 @@ RULES:
 		lastUserInput = input
 		historyBeforeUndo = aiAgent.GetHistory()
 
+		logInfo("User input: %s", truncateLogMsg(input, 200))
+
 		// Run conversation with or without streaming
 		if streamingEnabled {
 			fmt.Print("\n") // Move to new line for output
@@ -366,6 +369,9 @@ RULES:
 			})
 			if err != nil {
 				fmt.Printf("\nError: %v\n\n", err)
+				logError("Stream error: %v", err)
+			} else {
+				logInfo("Stream completed, history: %d messages", len(aiAgent.GetHistory()))
 			}
 		} else {
 			fmt.Print("Thinking...")
@@ -374,8 +380,11 @@ RULES:
 
 			if err != nil {
 				fmt.Printf("Error: %v\n\n", err)
+				logError("Chat error: %v", err)
 				continue
 			}
+
+			logInfo("Chat completed, response: %s", truncateLogMsg(response, 200))
 
 			fmt.Printf("%s\n\n", response)
 		}

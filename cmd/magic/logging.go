@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
+	stdlog "log"
 	"time"
 
 	pkglog "github.com/magicwubiao/go-magic/pkg/log"
@@ -88,4 +90,31 @@ func initLogging() {
 
 	logFile = f
 	writeLogFile("[INFO] Logging initialized: " + logPath)
+
+	// Redirect Go's standard log to also write to our log file.
+	// This captures stdlog.Printf calls from internal packages (agent, provider, etc.)
+	stdlog.SetOutput(io.MultiWriter(os.Stderr, &logWriter{file: f}))
+}
+
+// logWriter wraps a log file to implement io.Writer for stdlog redirection.
+// It prepends a timestamp to each line.
+type logWriter struct {
+	file *os.File
+}
+
+func (w *logWriter) Write(p []byte) (n int, err error) {
+	if w.file != nil {
+		// stdlog already adds its own timestamp via its format flags,
+		// so we write directly
+		w.file.Write(p)
+	}
+	return len(p), nil
+}
+
+// truncateLogMsg truncates a message for logging purposes
+func truncateLogMsg(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
