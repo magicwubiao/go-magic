@@ -13,6 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -93,6 +94,9 @@ type Agent struct {
 
 	// Token usage tracking
 	tokenUsage int64
+
+	// Secret redaction (default true)
+	secretRedaction bool
 }
 
 // ToolRegistry interface for tool execution
@@ -199,6 +203,13 @@ func WithCortex(mgr *cortex.Manager) AgentOption {
 func WithSubTask(enabled bool) AgentOption {
 	return func(a *Agent) {
 		a.subTaskEnabled = enabled
+	}
+}
+
+// WithSecretRedaction enables or disables secret redaction (API keys, tokens, etc.)
+func WithSecretRedaction(enabled bool) AgentOption {
+	return func(a *Agent) {
+		a.secretRedaction = enabled
 	}
 }
 
@@ -486,7 +497,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if a.cortexManager != nil {
 				a.cortexManager.OnSessionEnd()
 			}
-			return finalResp.Content, nil
+			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 		}
 	}
 
@@ -625,7 +636,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				a.cortexManager.OnSessionEnd()
 			}
 
-			return resp.Content, nil
+			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
 		}
 
 		// Tool call loop detection - track tool calls more precisely
@@ -678,7 +689,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if a.cortexManager != nil {
 				a.cortexManager.OnSessionEnd()
 			}
-			return finalResp.Content, nil
+			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 		}
 	}
 
@@ -826,7 +837,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				} else {
 					fullContent += resp.Content
 				}
-				handler(resp.Content, resp.Done)
+				handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), resp.Done)
 			})
 			if err == nil {
 				streamed = true
@@ -860,7 +871,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				} else {
 					fullContent += resp.Content
 				}
-				handler(resp.Content, resp.Done)
+				handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), resp.Done)
 			})
 			if err == nil {
 				streamed = true
@@ -898,7 +909,7 @@ Please provide a comprehensive, well-structured final response based on these su
 					toolCalls[i].Function.Name = toolCalls[i].Name
 				}
 			}
-			handler(resp.Content, true)
+			handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), true)
 		}
 
 		// Call AfterLLM hooks
@@ -990,7 +1001,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if toolName == "" {
 				toolName = tc.Name
 			}
-			handler(fmt.Sprintf("\n[Tool: %s] %s\n", toolName, content), false)
+			handler(fmt.Sprintf("\n[Tool: %s] %s\n", toolName, redact.RedactIfEnabled(content, a.secretRedaction)), false)
 
 			// Cortex: record tool call for review/pattern detection
 			if a.cortexManager != nil {

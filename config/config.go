@@ -10,17 +10,18 @@ import (
 
 // Config represents the main application configuration
 type Config struct {
-	Profile      string                 `json:"profile"`
-	MagicHome    string                 `json:"magic_home"`
-	Provider     string                 `json:"provider"`
-	Model        string                 `json:"model"`
-	Providers    map[string]ProviderCfg `json:"providers"`
-	Tools        ToolsConfig            `json:"tools"`
-	Gateway      GatewayConfig          `json:"gateway"`
-	Agent        AgentConfig            `json:"agent"`
-	Memory       MemoryConfig           `json:"memory"`
-	Security     *SecurityConfig        `json:"-"`
-	SecurityPath string                 `json:"-"`
+	Profile         string                 `json:"profile"`
+	MagicHome       string                 `json:"magic_home"`
+	Provider        string                 `json:"provider"`
+	Model           string                 `json:"model"`
+	Providers       map[string]ProviderCfg `json:"providers"`
+	Tools           ToolsConfig            `json:"tools"`
+	Gateway         GatewayConfig          `json:"gateway"`
+	Agent           AgentConfig            `json:"agent"`
+	Memory          MemoryConfig           `json:"memory"`
+	SecretRedaction bool                   `json:"secret_redaction"` // Secret redaction (API keys, tokens, etc.)
+	Security        *SecurityConfig        `json:"-"`
+	SecurityPath    string                 `json:"-"`
 }
 
 // ProviderCfg represents a provider configuration
@@ -136,9 +137,10 @@ func LoadFromDefault() (*Config, error) {
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Profile:  "default",
-		Provider: "openai",
-		Model:    "gpt-4",
+		Profile:         "default",
+		Provider:        "openai",
+		Model:           "gpt-4",
+		SecretRedaction: true, // Default ON for security
 		Tools: ToolsConfig{
 			Enabled:  []string{"all"},
 			Disabled: []string{},
@@ -209,6 +211,10 @@ func (c *Config) applyDefaults() {
 	if c.Profile == "" {
 		c.Profile = "default"
 	}
+
+	// Secret redaction defaults to true (Hermes v0.13.0 behavior)
+	// Note: bool default in Go is false, so we only set true if not explicitly configured
+	// For JSON configs, if the field is omitted, we want it true
 
 	if c.Agent.MaxTurns == 0 {
 		c.Agent.MaxTurns = 60

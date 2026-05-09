@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cortex"
+	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -79,6 +81,7 @@ type REPL struct {
 	store       *session.Store
 	cfg         *config.Config
 	goalManager *agent.GoalManager
+	checkpointMgr *session.CheckpointManager
 
 	// State
 	state REPLState
@@ -109,6 +112,8 @@ func NewREPL(cfg *config.Config, prov provider.Provider, registry *tool.Registry
 		cortexMgr.Start()
 		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
 	}
+	// Enable secret redaction (default true)
+	agentOpts = append(agentOpts, agent.WithSecretRedaction(cfg.SecretRedaction))
 	aiAgent := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), `You are Magic, a helpful AI assistant.
 
 RULES:
@@ -139,6 +144,11 @@ RULES:
 		cancel:   cancel,
 		stopCh:   make(chan struct{}),
 		running:  true,
+	}
+
+	// Initialize checkpoint manager for session persistence
+	if cm, err := session.NewCheckpointManager(); err == nil {
+		repl.checkpointMgr = cm
 	}
 
 	repl.state.modelName = cfg.Model
@@ -357,6 +367,8 @@ func (r *REPL) processCommand(input string) {
 		r.cmdShowContext()
 	case "goal":
 		r.cmdGoal(args)
+	case "kanban", "kb":
+		r.cmdKanban(args)
 	default:
 		fmt.Printf("%sUnknown command: /%s (type /help for commands)%s\n", colorRed, cmd, colorReset)
 	}
@@ -549,6 +561,21 @@ func (r *REPL) doExit() {
 
 	// Save session before exit
 	r.saveSession()
+
+	// Save checkpoint for session recovery
+	if r.checkpointMgr != nil {
+		cp := &session.Checkpoint{
+			SessionID:   r.state.sessionID,
+			Platform:    "cli",
+			ChannelID:   "cli",
+			UserID:      "cli",
+			Messages:    r.agent.GetHistory(),
+			Interrupted: false,
+		}
+		if err := r.checkpointMgr.Save(cp); err != nil {
+			// Silent fail
+		}
+	}
 
 	fmt.Printf("\n%sGoodbye! 👋%s\n", colorCyan, colorReset)
 }
@@ -1491,6 +1518,397 @@ func (r *REPL) cmdGoal(args string) {
 	}
 }
 
+// cmdKanban handles kanban board commands
+func (r *REPL) cmdKanban(args string) {
+	// Initialize kanban manager
+	home, _ := os.UserHomeDir()
+	mgr, err := kanban.NewManager(filepath.Join(home, ".magic"))
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to initialize kanban: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+	if err := mgr.Init(); err != nil {
+		fmt.Printf("%s⚠ Failed to init kanban: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+	defer mgr.Close()
+
+	parts := strings.SplitN(strings.TrimSpace(args), " ", 2)
+	subcmd := parts[0]
+	subargs := ""
+	if len(parts) > 1 {
+		subargs = parts[1]
+	}
+
+	switch subcmd {
+	case "", "board":
+		r.cmdKanbanBoard(mgr)
+	case "create":
+		r.cmdKanbanCreate(mgr, subargs)
+	case "list", "ls":
+		r.cmdKanbanList(mgr, subargs)
+	case "show":
+		r.cmdKanbanShow(mgr, subargs)
+	case "start":
+		r.cmdKanbanStart(mgr, subargs)
+	case "complete", "done":
+		r.cmdKanbanComplete(mgr, subargs)
+	case "block":
+		r.cmdKanbanBlock(mgr, subargs)
+	case "unblock":
+		r.cmdKanbanUnblock(mgr, subargs)
+	case "comment":
+		r.cmdKanbanComment(mgr, subargs)
+	case "link":
+		r.cmdKanbanLink(mgr, subargs)
+	case "stats":
+		r.cmdKanbanStats(mgr)
+	default:
+		fmt.Println("Kanban commands:")
+		fmt.Println("  /kanban, /kb        - Show board")
+		fmt.Println("  /kanban board       - Show board")
+		fmt.Println("  /kanban create <title> - Create task")
+		fmt.Println("  /kanban list        - List tasks")
+		fmt.Println("  /kanban show <id>   - Show task")
+		fmt.Println("  /kanban start <id>  - Start task")
+		fmt.Println("  /kanban complete <id> - Complete task")
+		fmt.Println("  /kanban block <id>  - Block task")
+		fmt.Println("  /kanban unblock <id> - Unblock task")
+		fmt.Println("  /kanban comment <id> <text> - Comment")
+		fmt.Println("  /kanban link <parent> <child> - Add dependency")
+		fmt.Println("  /kanban stats       - Show statistics")
+	}
+}
+
+func (r *REPL) cmdKanbanBoard(mgr *kanban.Manager) {
+	board, err := mgr.GetBoard("")
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to get board: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	statuses := []kanban.TaskStatus{
+		kanban.StatusTriage, kanban.StatusTodo, kanban.StatusReady,
+		kanban.StatusRunning, kanban.StatusBlocked, kanban.StatusDone,
+	}
+
+	statusLabels := map[kanban.TaskStatus]string{
+		kanban.StatusTriage:   "🔍 Triage",
+		kanban.StatusTodo:     "📋 Todo",
+		kanban.StatusReady:    "✅ Ready",
+		kanban.StatusRunning:  "🔄 Running",
+		kanban.StatusBlocked:  "🚫 Blocked",
+		kanban.StatusDone:     "🎉 Done",
+	}
+
+	fmt.Println()
+	fmt.Printf("%s╔══════════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
+	fmt.Printf("%s║%s                      %s📊 Kanban Board%s                         %s║%s\n", colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s╠══════════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
+
+	for _, status := range statuses {
+		tasks := board[status]
+		label := statusLabels[status]
+		fmt.Printf("%s║%s %s (%d tasks)%s", colorCyan, colorReset, label, len(tasks), colorCyan)
+		padding := 65 - len(label) - len(fmt.Sprintf("(%d tasks)", len(tasks)))
+		if padding > 0 {
+			fmt.Print(strings.Repeat(" ", padding))
+		}
+		fmt.Printf("%s║%s\n", colorCyan, colorReset)
+
+		if len(tasks) == 0 {
+			fmt.Printf("%s║%s   (empty)%s", colorCyan, colorReset, colorCyan)
+			fmt.Print(strings.Repeat(" ", 62))
+			fmt.Printf("%s║%s\n", colorCyan, colorReset)
+		} else {
+			for _, task := range tasks {
+				title := task.Title
+				if len(title) > 55 {
+					title = title[:52] + "..."
+				}
+				fmt.Printf("%s║%s   • %s [%s]%s", colorCyan, colorReset, task.ID, title, colorCyan)
+				padding := 62 - 5 - len(task.ID) - len(title)
+				if padding > 0 {
+					fmt.Print(strings.Repeat(" ", padding))
+				}
+				fmt.Printf("%s║%s\n", colorCyan, colorReset)
+			}
+		}
+	}
+
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
+	fmt.Println()
+}
+
+func (r *REPL) cmdKanbanCreate(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban create <title>")
+		return
+	}
+
+	// Get assignee from agent profile or user
+	assignee := os.Getenv("USER")
+	if assignee == "" {
+		assignee = "agent"
+	}
+
+	task, err := mgr.CreateTask(args, "", assignee)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to create task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task created: %s%s\n", colorGreen, task.ID, colorReset)
+	fmt.Printf("  Title: %s\n", task.Title)
+	fmt.Printf("  Status: %s\n", task.Status)
+}
+
+func (r *REPL) cmdKanbanList(mgr *kanban.Manager, args string) {
+	filter := kanban.TaskFilter{}
+	
+	if args != "" {
+		filter.Search = args
+	}
+
+	tasks, err := mgr.ListTasks(filter)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to list tasks: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	if len(tasks) == 0 {
+		fmt.Println("No tasks found")
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("%sTasks (%d):%s\n", bold, len(tasks), colorReset)
+	for _, task := range tasks {
+		priority := ""
+		switch task.Priority {
+		case 3:
+			priority = "🔴"
+		case 2:
+			priority = "🟠"
+		case 1:
+			priority = "🟡"
+		default:
+			priority = "⚪"
+		}
+
+		title := task.Title
+		if len(title) > 50 {
+			title = title[:47] + "..."
+		}
+
+		assignee := ""
+		if task.Assignee != "" {
+			assignee = fmt.Sprintf(" @%s", task.Assignee)
+		}
+
+		fmt.Printf("  %s %s [%s]%s %s%s\n", priority, task.ID, task.Status, colorReset, title, assignee)
+	}
+	fmt.Println()
+}
+
+func (r *REPL) cmdKanbanShow(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban show <task_id>")
+		return
+	}
+
+	task, err := mgr.GetTask(args)
+	if err != nil {
+		fmt.Printf("%s⚠ Task not found: %s%s\n", colorYellow, args, colorReset)
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("%s╔══════════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
+	fmt.Printf("%s║%s %-64s %s║%s\n", colorCyan, colorReset, task.ID, colorCyan, colorReset)
+	fmt.Printf("%s╠══════════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
+	fmt.Printf("%s║%s Title:    %-55s %s║%s\n", colorCyan, colorReset, task.Title, colorCyan, colorReset)
+	fmt.Printf("%s║%s Status:   %-55s %s║%s\n", colorCyan, colorReset, task.Status, colorCyan, colorReset)
+	fmt.Printf("%s║%s Priority: %-55s %s║%s\n", colorCyan, colorReset, strconv.Itoa(task.Priority), colorCyan, colorReset)
+	fmt.Printf("%s║%s Assignee: %-55s %s║%s\n", colorCyan, colorReset, task.Assignee, colorCyan, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
+
+	if task.Body != "" {
+		fmt.Printf("\n📝 Description:\n%s\n", task.Body)
+	}
+
+	// Show parents
+	parents, _ := mgr.GetParents(args)
+	if len(parents) > 0 {
+		fmt.Printf("\n👆 Parents (%d):\n", len(parents))
+		for _, p := range parents {
+			fmt.Printf("  - %s [%s]\n", p.ID, p.Title)
+		}
+	}
+
+	// Show children
+	children, _ := mgr.GetChildren(args)
+	if len(children) > 0 {
+		fmt.Printf("\n👇 Children (%d/%d done):\n", task.ChildDoneCount, task.ChildCount)
+		for _, c := range children {
+			fmt.Printf("  - %s [%s]\n", c.ID, c.Title)
+		}
+	}
+
+	// Show comments
+	comments, _ := mgr.ListComments(args)
+	if len(comments) > 0 {
+		fmt.Printf("\n💬 Comments (%d):\n", len(comments))
+		for _, c := range comments {
+			fmt.Printf("  [%s] %s: %s\n", c.CreatedAt.Format("01-02 15:04"), c.Author, c.Body)
+		}
+	}
+	fmt.Println()
+}
+
+func (r *REPL) cmdKanbanStart(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban start <task_id>")
+		return
+	}
+
+	task, err := mgr.StartTask(args)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to start task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s started (→ ready)%s\n", colorGreen, task.ID, colorReset)
+}
+
+func (r *REPL) cmdKanbanComplete(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban complete <task_id>")
+		return
+	}
+
+	summary := "Completed"
+	task, err := mgr.CompleteTask(args, summary)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to complete task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s completed%s\n", colorGreen, task.ID, colorReset)
+}
+
+func (r *REPL) cmdKanbanBlock(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban block <task_id>")
+		return
+	}
+
+	reason := "Blocked by user"
+	task, err := mgr.BlockTask(args, reason)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to block task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s blocked: %s%s\n", colorGreen, task.ID, reason, colorReset)
+}
+
+func (r *REPL) cmdKanbanUnblock(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban unblock <task_id>")
+		return
+	}
+
+	task, err := mgr.UnblockTask(args)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to unblock task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s unblocked (→ ready)%s\n", colorGreen, task.ID, colorReset)
+}
+
+func (r *REPL) cmdKanbanComment(mgr *kanban.Manager, args string) {
+	parts := strings.SplitN(args, " ", 2)
+	if len(parts) < 2 {
+		fmt.Println("Usage: /kanban comment <task_id> <text>")
+		return
+	}
+
+	taskID := parts[0]
+	body := parts[1]
+
+	author := os.Getenv("USER")
+	if author == "" {
+		author = "user"
+	}
+
+	comment, err := mgr.AddComment(taskID, author, body)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to add comment: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Comment added to %s%s\n", colorGreen, taskID, colorReset)
+	fmt.Printf("  [%s] %s: %s\n", comment.CreatedAt.Format("01-02 15:04"), author, body)
+}
+
+func (r *REPL) cmdKanbanLink(mgr *kanban.Manager, args string) {
+	parts := strings.Split(args, " ")
+	if len(parts) < 2 {
+		fmt.Println("Usage: /kanban link <parent_id> <child_id>")
+		return
+	}
+
+	parentID := parts[0]
+	childID := parts[1]
+
+	if err := mgr.AddLink(parentID, childID); err != nil {
+		fmt.Printf("%s⚠ Failed to link tasks: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Linked %s → %s%s\n", colorGreen, parentID, childID, colorReset)
+}
+
+func (r *REPL) cmdKanbanStats(mgr *kanban.Manager) {
+	stats, err := mgr.GetStats("")
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to get stats: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("%s📊 Task Statistics%s\n", bold, colorReset)
+	fmt.Println("══════════════════════════════════════")
+
+	statusLabels := map[kanban.TaskStatus]string{
+		kanban.StatusTriage:   "🔍 Triage",
+		kanban.StatusTodo:     "📋 Todo",
+		kanban.StatusReady:    "✅ Ready",
+		kanban.StatusRunning:  "🔄 Running",
+		kanban.StatusBlocked:  "🚫 Blocked",
+		kanban.StatusDone:     "🎉 Done",
+		kanban.StatusArchived: "📦 Archived",
+	}
+
+	total := 0
+	for _, status := range []kanban.TaskStatus{
+		kanban.StatusTriage, kanban.StatusTodo, kanban.StatusReady,
+		kanban.StatusRunning, kanban.StatusBlocked, kanban.StatusDone,
+	} {
+		count := stats[status]
+		total += count
+		label := statusLabels[status]
+		fmt.Printf("  %-15s : %d\n", label, count)
+	}
+
+	fmt.Println("──────────────────────────────────────")
+	fmt.Printf("  %-15s : %d\n", "Total (active)", total)
+	fmt.Printf("  %-15s : %d\n", "Archived", stats[kanban.StatusArchived])
+	fmt.Println()
+}
+
 // escapeJSON escapes a string for JSON
 func escapeJSON(s string) string {
 	var result strings.Builder
@@ -1601,29 +2019,4 @@ func (c *Completer) Complete(input string) []string {
 		partial := strings.TrimPrefix(input, "/")
 		for _, cmd := range c.commands {
 			if strings.HasPrefix(cmd, partial) {
-				results = append(results, "/"+cmd)
-			}
-		}
-	}
-
-	// History completion (for non-slash commands)
-	if !strings.HasPrefix(input, "/") && len(input) > 0 {
-		for _, h := range c.history {
-			if strings.HasPrefix(h, input) {
-				results = append(results, h)
-			}
-		}
-	}
-
-	return results
-}
-
-// sanitizeInput removes non-printable characters
-func sanitizeInput(input string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsPrint(r) || r == '\n' || r == '\t' {
-			return r
-		}
-		return -1
-	}, input)
-}
+				results = append
