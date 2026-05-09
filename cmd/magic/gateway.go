@@ -58,6 +58,9 @@ func init() {
 		"Start only this platform (e.g., wechat_ilink, telegram)")
 
 	rootCmd.AddCommand(gatewayCmd)
+	gatewayCmd.AddCommand(gatewayStartCmd)
+	gatewayCmd.AddCommand(gatewayStopCmd)
+	gatewayCmd.AddCommand(gatewayStatusCmd)
 }
 
 // shouldStartPlatform checks if a platform should be started based on --platform flag.
