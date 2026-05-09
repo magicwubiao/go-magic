@@ -24,22 +24,6 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 }
 
-// Provider models mapping
-var providerModels = map[string][]string{
-	"deepseek":   {"deepseek-chat", "deepseek-reasoner"},
-	"anthropic":  {"claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"},
-	"openai":     {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini", "o3-mini"},
-	"kimi":       {"moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"},
-	"zhipu":      {"glm-4", "glm-4-flash", "glm-4-plus"},
-	"huoshan":    {"doubao-pro-32k", "doubao-pro-128k", "doubao-lite-32k"},
-	"minimax":    {"abab6.5s-chat", "abab6.5-chat", "abab5.5-chat"},
-	"dashscope":  {"qwen-turbo", "qwen-plus", "qwen-max", "qwen-long"},
-	"ollama":     {}, // Local model, user fills in
-	"vllm":       {}, // Local model, user fills in
-	"openrouter": {"openrouter/anthropic/claude-3.5-sonnet", "openrouter/openai/gpt-4o", "openrouter/google/gemini-pro"},
-	"custom":     {}, // Custom, user fills in
-}
-
 // selectItem displays options and allows selection via number or custom input
 // items: list of options
 // defaultIdx: default selected index (0-based)
