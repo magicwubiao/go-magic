@@ -1,0 +1,66 @@
+{
+  "id": "demo",
+  "name": "Demo Plugin",
+  "version": "1.0.0",
+  "description": "A demo plugin showcasing all plugin capabilities",
+  "long_desc": "This plugin demonstrates manifest, CLI commands, lifecycle hooks, configuration schema, and tool registration. Use it as a template for building your own plugins.",
+  "author": "go-magic",
+  "license": "MIT",
+  "api_version": "1.0",
+  "type": "script",
+  "entrypoint": "run.sh",
+  "category": "utilities",
+  "tags": ["demo", "example", "template"],
+  "permissions": ["filesystem"],
+  "config_schema": [
+    {
+      "key": "greeting",
+      "type": "string",
+      "default": "Hello",
+      "description": "Default greeting word",
+      "required": false
+    },
+    {
+      "key": "uppercase",
+      "type": "boolean",
+      "default": false,
+      "description": "Convert output to uppercase"
+    },
+    {
+      "key": "max_length",
+      "type": "integer",
+      "default": 200,
+      "description": "Max output length",
+      "min": 10,
+      "max": 1000
+    }
+  ],
+  "commands": [
+    {
+      "name": "hello",
+      "description": "Say hello from the demo plugin",
+      "arguments": [],
+      "flags": [
+        {"name": "name", "short": "n", "description": "Name to greet", "default": "World", "type": "string"}
+      ]
+    },
+    {
+      "name": "time",
+      "description": "Show current time in various formats"
+    },
+    {
+      "name": "stats",
+      "description": "Show system stats summary"
+    },
+    {
+      "name": "echo",
+      "description": "Echo back the input (with config transforms)",
+      "arguments": ["text"]
+    }
+  ],
+  "hooks": ["on_load", "on_unload", "on_session_start"],
+  "events": ["demo.greeted", "demo.loaded"],
+  "resources": [
+    {"name": "readme", "type": "data", "path": "README.md", "mime_type": "text/markdown"}
+  ]
+}
