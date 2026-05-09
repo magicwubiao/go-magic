@@ -130,6 +130,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		consecutiveLimit:   20,
 		toolCallCount:      make(map[string]int),
 		subTaskEnabled:     true,
+		hooks:              hooks.NewHookManager(),
 	}
 
 	agent.registerBuiltinHooks()
