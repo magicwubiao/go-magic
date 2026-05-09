@@ -436,11 +436,35 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	// Start WhatsApp if configured
 	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled && shouldStartPlatform("whatsapp") {
 		platformCount++
-		if waCfg.Token == "" || waCfg.AppSecret == "" {
-			fmt.Println("[WhatsApp] Config incomplete (need token and app_secret)!")
+		if waCfg.Mode == "business" {
+			// WhatsApp Business API mode (webhook-based)
+			if waCfg.Token == "" || waCfg.AppSecret == "" {
+				fmt.Println("[WhatsApp] Business mode: need token and app_secret!")
+			} else {
+				fmt.Println("[WhatsApp Business] Starting...")
+				waGw := gateway.NewWhatsAppBusinessGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
+				if err := waGw.Connect(ctx); err != nil {
+					fmt.Printf("[WhatsApp Business] Failed to connect: %v\n", err)
+				} else {
+					gw.RegisterPlatform("whatsapp_business", waGw)
+				}
+			}
 		} else {
-			fmt.Println("[WhatsApp] Starting...")
-			waGw := gateway.NewWhatsAppGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
+			// Personal WhatsApp with QR login (default)
+			dataDir := waCfg.DataDir
+			if dataDir == "" {
+				dataDir = "" // will use default ~/.magic/whatsapp
+			}
+			fmt.Println("[WhatsApp] Starting with QR login...")
+			waGw := gateway.NewWhatsAppGateway(dataDir)
+
+			// Set QR callback for display
+			waGw.SetQRCallback(func(qr string) {
+				fmt.Println("\n[WhatsApp] Scan this QR code with WhatsApp > Linked Devices:")
+				fmt.Println(qr)
+				fmt.Println()
+			})
+
 			if err := waGw.Connect(ctx); err != nil {
 				fmt.Printf("[WhatsApp] Failed to connect: %v\n", err)
 			} else {

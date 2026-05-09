@@ -2,28 +2,29 @@ package gateway
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strconv"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
-	"time"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// WhatsAppGateway implements WhatsApp Business API platform handler
+// WhatsAppGateway implements WhatsApp via whatsmeow (personal account, QR code login)
 type WhatsAppGateway struct {
-	phoneNumberID string
-	accessToken   string
-	appSecret     string
-	verifyToken   string
-	webhookURL    string
+	client    *whatsmeow.Client
+	container *sqlstore.Container
+	device    *store.Device
 
 	agents  map[string]*AgentSession
 	msgCh   chan Message
@@ -31,110 +32,31 @@ type WhatsAppGateway struct {
 	stopCh  chan struct{}
 	running bool
 
-	callbackPort int
-	httpServer   *http.Server
+	dataDir    string // Where session data is stored
+	qrCallback func(qr string) // Called when QR code is generated
+
+	// Track own JID for filtering
+	ownJID types.JID
 }
 
-// whatsappWebhookRequest represents incoming webhook data
-type whatsappWebhookRequest struct {
-	Object string `json:"object"`
-	Entry  []struct {
-		ID      string `json:"id"`
-		Changes []struct {
-			Value struct {
-				MessagingProduct string `json:"messaging_product"`
-				Metadata         struct {
-					DisplayPhoneNumber string `json:"display_phone_number"`
-					PhoneNumberID      string `json:"phone_number_id"`
-				} `json:"metadata"`
-				Contacts []struct {
-					Profile struct {
-						Name string `json:"name"`
-					} `json:"profile"`
-					WAID string `json:"wa_id"`
-				} `json:"contacts"`
-				Messages []struct {
-					From      string `json:"from"`
-					ID        string `json:"id"`
-					Timestamp string `json:"timestamp"`
-					Type      string `json:"type"`
-					Text      struct {
-						Body string `json:"body"`
-					} `json:"text,omitempty"`
-					Image *struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						SHA256   string `json:"sha256"`
-					} `json:"image,omitempty"`
-					Audio *struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-					} `json:"audio,omitempty"`
-					Document *struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						Filename string `json:"filename"`
-						Caption  string `json:"caption"`
-					} `json:"document,omitempty"`
-					Location *struct {
-						Latitude  float64 `json:"latitude"`
-						Longitude float64 `json:"longitude"`
-						Name      string  `json:"name"`
-						Address   string  `json:"address"`
-					} `json:"location,omitempty"`
-					Sticker *struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-					} `json:"sticker,omitempty"`
-					Context *struct {
-						From string `json:"from"`
-						ID   string `json:"id"`
-					} `json:"context,omitempty"`
-				} `json:"messages"`
-			} `json:"value"`
-			Field string `json:"field"`
-		} `json:"changes"`
-	} `json:"entry"`
-}
-
-// whatsappMessageRequest represents outgoing message payload
-type whatsappMessageRequest struct {
-	MessagingProduct string `json:"messaging_product"`
-	RecipientType    string `json:"recipient_type"`
-	To               string `json:"to"`
-	Type             string `json:"type"`
-	Text             *struct {
-		Body string `json:"body"`
-	} `json:"text,omitempty"`
-	Image *struct {
-		ID      string `json:"id,omitempty"`
-		Link    string `json:"link,omitempty"`
-		Caption string `json:"caption,omitempty"`
-	} `json:"image,omitempty"`
-	Document *struct {
-		ID       string `json:"id,omitempty"`
-		Link     string `json:"link,omitempty"`
-		Caption  string `json:"caption,omitempty"`
-		Filename string `json:"filename,omitempty"`
-	} `json:"document,omitempty"`
-	Audio *struct {
-		ID   string `json:"id,omitempty"`
-		Link string `json:"link,omitempty"`
-	} `json:"audio,omitempty"`
-}
-
-// NewWhatsAppGateway creates a new WhatsApp gateway
-func NewWhatsAppGateway(phoneNumberID, accessToken, appSecret, verifyToken string) *WhatsAppGateway {
-	return &WhatsAppGateway{
-		phoneNumberID: phoneNumberID,
-		accessToken:   accessToken,
-		appSecret:     appSecret,
-		verifyToken:   verifyToken,
-		agents:        make(map[string]*AgentSession),
-		msgCh:         make(chan Message, 100),
-		stopCh:        make(chan struct{}),
-		callbackPort:  8086,
+// NewWhatsAppGateway creates a new WhatsApp gateway with QR login support
+func NewWhatsAppGateway(dataDir string) *WhatsAppGateway {
+	if dataDir == "" {
+		home, _ := os.UserHomeDir()
+		dataDir = filepath.Join(home, ".magic", "whatsapp")
 	}
+
+	return &WhatsAppGateway{
+		agents:  make(map[string]*AgentSession),
+		msgCh:   make(chan Message, 100),
+		stopCh:  make(chan struct{}),
+		dataDir: dataDir,
+	}
+}
+
+// SetQRCallback sets a callback for QR code events (for CLI display or API push)
+func (g *WhatsAppGateway) SetQRCallback(cb func(qr string)) {
+	g.qrCallback = cb
 }
 
 // Name returns the platform name
@@ -142,7 +64,7 @@ func (g *WhatsAppGateway) Name() string {
 	return "whatsapp"
 }
 
-// Connect establishes connection to WhatsApp Business API
+// Connect establishes connection with QR code login
 func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 	g.mu.Lock()
 	if g.running {
@@ -152,12 +74,53 @@ func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 	g.running = true
 	g.mu.Unlock()
 
-	log.Infof("Connecting to WhatsApp gateway...")
+	// Ensure data directory exists
+	if err := os.MkdirAll(g.dataDir, 0700); err != nil {
+		return fmt.Errorf("failed to create whatsapp data dir: %w", err)
+	}
 
-	// Start webhook server
-	go g.startHTTPServer()
+	// Initialize SQL store for session persistence
+	dbPath := filepath.Join(g.dataDir, "store.db")
+	container, err := sqlstore.New("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
+	if err != nil {
+		return fmt.Errorf("failed to create session store: %w", err)
+	}
+	g.container = container
 
-	log.Info("WhatsApp gateway connected (webhook server started)")
+	// Get or create device
+	devices, err := container.GetAllDevices()
+	if err != nil {
+		return fmt.Errorf("failed to get devices: %w", err)
+	}
+
+	if len(devices) > 0 {
+		// Use existing device (already logged in)
+		g.device = devices[0]
+		log.Info("Found existing WhatsApp session, connecting...")
+	} else {
+		// Create new device (will need QR login)
+		g.device = container.NewDevice()
+		log.Info("No WhatsApp session found, will generate QR code for login")
+	}
+
+	// Create client
+	client := whatsmeow.NewClient(g.device, waLog.Noop)
+	g.client = client
+
+	// Register event handlers
+	client.AddEventHandler(g.eventHandler)
+
+	// Connect
+	if client.IsConnected() {
+		return nil
+	}
+
+	err = client.Connect()
+	if err != nil {
+		return fmt.Errorf("failed to connect to WhatsApp: %w", err)
+	}
+
+	log.Info("WhatsApp gateway connecting...")
 	return nil
 }
 
@@ -170,10 +133,13 @@ func (g *WhatsAppGateway) Disconnect() error {
 		return nil
 	}
 
-	close(g.stopCh)
-	if g.httpServer != nil {
-		g.httpServer.Shutdown(context.Background())
+	if g.client != nil {
+		g.client.Disconnect()
 	}
+	if g.container != nil {
+		g.container.Close()
+	}
+	close(g.stopCh)
 	close(g.msgCh)
 	g.running = false
 
@@ -189,26 +155,29 @@ func (g *WhatsAppGateway) CheckHealth() *HealthStatus {
 
 	status := &HealthStatus{
 		Platform:  "whatsapp",
-		Connected: running,
+		Connected: running && g.client != nil && g.client.IsConnected(),
 		Status:    "healthy",
-		Details: map[string]interface{}{
-			"phone_number_id": g.phoneNumberID,
-			"callback_port":   g.callbackPort,
-		},
+		Details:   make(map[string]interface{}),
 		Platforms: make(map[string]PlatformStatus),
+	}
+
+	if g.client != nil && g.client.IsLoggedIn() {
+		status.Details["logged_in"] = true
+		status.Details["own_jid"] = g.ownJID.String()
+	} else {
+		status.Details["logged_in"] = false
+		status.Details["message"] = "Not logged in, use QR code to login"
+		if !status.Connected {
+			status.Status = "disconnected"
+		} else {
+			status.Status = "waiting_login"
+		}
 	}
 
 	platformStatus := PlatformStatus{
 		Name:   "whatsapp",
-		Status: "connected",
+		Status: status.Status,
 	}
-
-	if !running {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-	}
-
 	status.Platforms["whatsapp"] = platformStatus
 	return status
 }
@@ -218,270 +187,338 @@ func (g *WhatsAppGateway) Receive() <-chan Message {
 	return g.msgCh
 }
 
-// Send sends a message via WhatsApp Business API
+// Send sends a message via WhatsApp
 func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
+	if g.client == nil || !g.client.IsLoggedIn() {
+		return fmt.Errorf("WhatsApp not logged in")
+	}
+
 	to := resp.ChannelID
 	if to == "" {
-		return fmt.Errorf("recipient phone number (channel_id) is required")
+		return fmt.Errorf("recipient (channel_id) is required")
 	}
 
-	text := resp.Content
-	if text == "" {
-		return nil // Skip empty messages
-	}
-
-	reqBody := whatsappMessageRequest{
-		MessagingProduct: "whisperers",
-		RecipientType:    "individual",
-		To:               to,
-		Type:             "text",
-		Text: &struct {
-			Body string `json:"body"`
-		}{Body: text},
-	}
-
-	return g.sendMessage(ctx, reqBody)
-}
-
-// sendMessage sends a message payload to WhatsApp API
-func (g *WhatsAppGateway) sendMessage(ctx context.Context, reqBody whatsappMessageRequest) error {
-	jsonData, err := json.Marshal(reqBody)
+	// Parse JID
+	jid, err := g.parseJID(to)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return fmt.Errorf("invalid recipient: %w", err)
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/v18.0/%s/messages", g.phoneNumberID)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(jsonData)))
+	// Send text message
+	_, err = g.client.SendMessage(ctx, jid, &whatsmeow.Message{
+		Conversation: &resp.Content,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.accessToken)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("WhatsApp API error: %s", string(body))
+		return fmt.Errorf("failed to send WhatsApp message: %w", err)
 	}
 
 	return nil
 }
 
-// HandleSlashCommand handles commands (not applicable for WhatsApp)
+// HandleSlashCommand handles commands
 func (g *WhatsAppGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	return Response{
-		ChannelID: msg.UserID,
-		Content:   "Slash commands are not supported on WhatsApp",
+	switch cmd {
+	case "logout":
+		if g.client != nil {
+			g.client.Logout()
+		}
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   "Logged out of WhatsApp. Restart to login again.",
+		}, nil
+	case "status":
+		loggedIn := g.client != nil && g.client.IsLoggedIn()
+		connected := g.client != nil && g.client.IsConnected()
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   fmt.Sprintf("WhatsApp: connected=%v, logged_in=%v", connected, loggedIn),
+		}, nil
+	default:
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   "Available commands: /logout, /status",
+		}, nil
+	}
+}
+
+// IsLoggedIn returns whether the client is logged in
+func (g *WhatsAppGateway) IsLoggedIn() bool {
+	return g.client != nil && g.client.IsLoggedIn()
+}
+
+// GetQRCode returns the current QR code for login (if waiting)
+// This is called after Connect() if the session is new
+func (g *WhatsAppGateway) GetQRCode() string {
+	// QR code is delivered via event handler, this method is for polling
+	return ""
+}
+
+// parseJID parses a phone number or JID string into a types.JID
+func (g *WhatsAppGateway) parseJID(input string) (types.JID, error) {
+	// If already a full JID
+	if strings.Contains(input, "@") {
+		return types.ParseJID(input)
+	}
+
+	// Treat as phone number - clean it
+	number := input
+	number = strings.TrimPrefix(number, "+")
+	number = strings.ReplaceAll(number, " ", "")
+	number = strings.ReplaceAll(number, "-", "")
+
+	// Determine if it's a group or personal
+	if strings.HasPrefix(number, "g-") || strings.HasPrefix(number, "group-") {
+		// Group JID
+		groupID := strings.TrimPrefix(number, "g-")
+		groupID = strings.TrimPrefix(groupID, "group-")
+		return types.JID{
+			Server: types.GroupServer,
+			User:   groupID,
+		}, nil
+	}
+
+	// Personal JID
+	return types.JID{
+		Server: types.DefaultUserServer,
+		User:   number,
 	}, nil
 }
 
-// startHTTPServer starts the webhook server
-func (g *WhatsAppGateway) startHTTPServer() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/webhook", g.handleWebhook)
+// eventHandler processes WhatsApp events
+func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
+	switch evt := rawEvt.(type) {
+	case *events.QR:
+		// QR code generated, display it
+		qrData := evt.Code
+		log.Infof("WhatsApp QR Code generated. Scan with WhatsApp app to login.")
 
-	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.callbackPort),
-		Handler: mux,
-	}
-
-	go func() {
-		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("WhatsApp HTTP server error: %v", err)
+		if g.qrCallback != nil {
+			g.qrCallback(qrData)
 		}
-	}()
+
+		// Also print QR to console for CLI usage
+		fmt.Printf("\n--- WhatsApp QR Code ---\n%s\n--- Scan with WhatsApp > Linked Devices ---\n\n", qrData)
+
+	case *events.QRScannedWithoutMultidevice:
+		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
+
+	case *events.Connected:
+		log.Info("WhatsApp connected to servers")
+
+	case *events.LoggedOut:
+		log.Warn("WhatsApp logged out")
+		g.mu.Lock()
+		g.running = false
+		g.mu.Unlock()
+
+	case *events.Disconnected:
+		log.Warn("WhatsApp disconnected, will attempt to reconnect...")
+
+	case *events.PairSuccess:
+		log.Infof("WhatsApp paired successfully: %s", evt.ID.String())
+		g.mu.Lock()
+		g.ownJID = evt.ID
+		g.mu.Unlock()
+
+	case *events.Contact:
+		// Contact sync
+
+	case *events.PushName:
+		// Push name update
+
+	case *events.Message:
+		g.handleIncomingMessage(evt)
+
+	case *events.Receipt:
+		// Message receipt (read/delivered)
+
+	case *events.AppStateSyncComplete:
+		if len(g.client.Store.PushName) > 0 && g.client.Store.PushName != "go-magic" {
+			_ = g.client.SendPresence(types.PresenceAvailable)
+		}
+
+	case *events.ConnInfo:
+		// Connection info update
+
+	case *events.OfflineSyncCompleted:
+		log.Info("WhatsApp offline sync completed")
+	}
 }
 
-// handleWebhook handles incoming WhatsApp webhooks
-func (g *WhatsAppGateway) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	// Verify webhook
-	if r.Method == "GET" {
-		mode := r.URL.Query().Get("hub.mode")
-		token := r.URL.Query().Get("hub.verify_token")
-		challenge := r.URL.Query().Get("hub.challenge")
+// handleIncomingMessage processes an incoming WhatsApp message
+func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
+	msg := evt.Message
+	info := evt.Info
 
-		if mode == "subscribe" && token == g.verifyToken {
-			log.Info("WhatsApp webhook verified")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(challenge))
-			return
-		}
-
-		http.Error(w, "Forbidden", http.StatusForbidden)
+	// Skip messages from self
+	if info.Sender.User == g.ownJID.User {
 		return
 	}
 
-	// Verify signature for POST requests
-	signature := r.Header.Get("X-Hub-Signature-256")
-	if g.appSecret != "" && !g.verifySignature(r, signature) {
-		http.Error(w, "Invalid signature", http.StatusUnauthorized)
-		return
-	}
+	// Extract text content
+	var content string
+	var msgType string
 
-	var webhookReq whatsappWebhookRequest
-	if err := json.NewDecoder(r.Body).Decode(&webhookReq); err != nil {
-		log.Errorf("Failed to decode webhook: %v", err)
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
+	switch {
+	case msg.Conversation != nil && *msg.Conversation != "":
+		content = *msg.Conversation
+		msgType = "text"
 
-	// Process messages
-	for _, entry := range webhookReq.Entry {
-		for _, change := range entry.Changes {
-			for _, msg := range change.Value.Messages {
-				var content string
-				var msgType string
-
-				switch msg.Type {
-				case "text":
-					content = msg.Text.Body
-					msgType = "text"
-				case "image":
-					content = "[Image]"
-					msgType = "image"
-				case "audio":
-					content = "[Audio]"
-					msgType = "audio"
-				case "document":
-					content = "[Document: " + msg.Document.Filename + "]"
-					msgType = "document"
-				case "location":
-					content = fmt.Sprintf("[Location: %s, %s]",
-						strconv.FormatFloat(msg.Location.Latitude, 'f', 6, 64),
-						strconv.FormatFloat(msg.Location.Longitude, 'f', 6, 64))
-					msgType = "location"
-				case "sticker":
-					content = "[Sticker]"
-					msgType = "sticker"
-				default:
-					content = fmt.Sprintf("[%s]", msg.Type)
-					msgType = msg.Type
-				}
-
-				timestamp, _ := strconv.ParseInt(msg.Timestamp, 10, 64)
-
-				waMsg := Message{
-					ID:        msg.ID,
-					Platform:  "whatsapp",
-					ChannelID: msg.From,
-					UserID:    msg.From,
-					Content:   content,
-					Timestamp: time.Unix(timestamp, 0),
-					Metadata: map[string]interface{}{
-						"type":            msgType,
-						"phone_number_id": g.phoneNumberID,
-						"reply_to":        msg.Context.ID,
-					},
-				}
-
-				select {
-				case g.msgCh <- waMsg:
-				default:
-					log.Warnf("WhatsApp message channel full, dropping message")
-				}
-			}
+	case msg.ExtendedTextMessage != nil:
+		content = msg.ExtendedTextMessage.GetText()
+		msgType = "text"
+		if msg.ExtendedTextMessage.ContextInfo != nil && msg.ExtendedTextMessage.ContextInfo.QuotedMessage != nil {
+			msgType = "reply"
 		}
+
+	case msg.ImageMessage != nil:
+		caption := msg.ImageMessage.GetCaption()
+		if caption != "" {
+			content = "[Image] " + caption
+		} else {
+			content = "[Image]"
+		}
+		msgType = "image"
+
+	case msg.VideoMessage != nil:
+		caption := msg.VideoMessage.GetCaption()
+		if caption != "" {
+			content = "[Video] " + caption
+		} else {
+			content = "[Video]"
+		}
+		msgType = "video"
+
+	case msg.AudioMessage != nil:
+		content = "[Audio]"
+		msgType = "audio"
+
+	case msg.DocumentMessage != nil:
+		content = "[Document: " + msg.DocumentMessage.GetFileName() + "]"
+		msgType = "document"
+
+	case msg.LocationMessage != nil:
+		content = fmt.Sprintf("[Location: %.6f, %.6f]",
+			msg.LocationMessage.GetDegreesLatitude(),
+			msg.LocationMessage.GetDegreesLongitude())
+		msgType = "location"
+
+	case msg.ContactMessage != nil:
+		content = "[Contact: " + msg.ContactMessage.GetDisplayName() + "]"
+		msgType = "contact"
+
+	case msg.StickerMessage != nil:
+		content = "[Sticker]"
+		msgType = "sticker"
+
+	case msg.ReactionMessage != nil:
+		content = "[Reaction: " + msg.ReactionMessage.GetText() + "]"
+		msgType = "reaction"
+
+	default:
+		content = "[Unsupported message]"
+		msgType = "unknown"
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Determine source (group or DM)
+	sender := info.Sender.String()
+	chatJID := info.Chat
+	isGroup := chatJID.Server == types.GroupServer
+
+	metadata := map[string]interface{}{
+		"type":      msgType,
+		"sender":    sender,
+		"is_group":  isGroup,
+		"push_name": info.PushName,
+	}
+
+	if isGroup {
+		metadata["group_jid"] = chatJID.String()
+	}
+
+	// Build gateway message
+	waMsg := Message{
+		ID:        info.ID,
+		Platform:  "whatsapp",
+		ChannelID: chatJID.String(),
+		UserID:    sender,
+		Content:   content,
+		Timestamp: info.Timestamp,
+		Metadata:  metadata,
+	}
+
+	select {
+	case g.msgCh <- waMsg:
+	default:
+		log.Warnf("WhatsApp message channel full, dropping message")
+	}
 }
 
-// verifySignature verifies the webhook signature
-func (g *WhatsAppGateway) verifySignature(r *http.Request, signature string) bool {
-	body, err := io.ReadAll(r.Body)
+// RequestAppState requests full app state sync (contacts, etc.)
+func (g *WhatsAppGateway) RequestAppState() error {
+	if g.client == nil || !g.client.IsLoggedIn() {
+		return fmt.Errorf("not logged in")
+	}
+	err := g.client.FetchAppState(appstate.WAPatchCriticalBlock, false, false)
 	if err != nil {
-		return false
+		return fmt.Errorf("failed to fetch app state: %w", err)
 	}
-
-	// Restore body for later use
-	r.Body = io.NopCloser(strings.NewReader(string(body)))
-
-	expectedSig := "sha256=" + hex.EncodeToString(
-		hmac.New(sha256.New, []byte(g.appSecret)).Sum(body),
-	)
-
-	return hmac.Equal([]byte(signature), []byte(expectedSig))
-}
-
-// DownloadMedia downloads media from WhatsApp
-func (g *WhatsAppGateway) DownloadMedia(mediaID string) ([]byte, string, error) {
-	// Get media URL
-	url := fmt.Sprintf("https://graph.facebook.com/v18.0/%s", mediaID)
-	req, err := http.NewRequest("GET", url, nil)
+	err = g.client.FetchAppState(appstate.WAPatchRegularHigh, false, false)
 	if err != nil {
-		return nil, "", err
+		return fmt.Errorf("failed to fetch regular app state: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+g.accessToken)
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	var mediaInfo struct {
-		URL      string `json:"url"`
-		MimeType string `json:"mime_type"`
-		Hash     string `json:"sha256"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&mediaInfo); err != nil {
-		return nil, "", err
-	}
-
-	// Download media
-	req, err = http.NewRequest("GET", mediaInfo.URL, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+g.accessToken)
-
-	resp, err = client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return data, mediaInfo.MimeType, nil
-}
-
-// MarkMessageAsRead marks a message as read
-func (g *WhatsAppGateway) MarkMessageAsRead(messageID string) error {
-	payload := map[string]interface{}{
-		"messaging_product": "whisperers",
-		"message_id":        messageID,
-	}
-
-	jsonData, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://graph.facebook.com/v18.0/%s/messages", g.phoneNumberID)
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonData)))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.accessToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
 	return nil
+}
+
+// SendPresence updates the user's presence (available/unavailable/composing)
+func (g *WhatsAppGateway) SendPresence(presence types.Presence) error {
+	if g.client == nil || !g.client.IsLoggedIn() {
+		return fmt.Errorf("not logged in")
+	}
+	return g.client.SendPresence(presence)
+}
+
+// SendTyping sends a typing indicator to a chat
+func (g *WhatsAppGateway) SendTyping(chatJID types.JID) error {
+	if g.client == nil || !g.client.IsLoggedIn() {
+		return fmt.Errorf("not logged in")
+	}
+	return g.client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+}
+
+// GetContactName resolves a JID to a contact name
+func (g *WhatsAppGateway) GetContactName(jid types.JID) string {
+	if g.client == nil {
+		return jid.User
+	}
+	contact, err := g.client.Store.Contacts.GetContact(jid)
+	if err != nil || contact.FullName == "" {
+		return jid.User
+	}
+	return contact.FullName
+}
+
+// ExportSession exports the current session as JSON (for backup)
+func (g *WhatsAppGateway) ExportSession() ([]byte, error) {
+	if g.device == nil {
+		return nil, fmt.Errorf("no device session")
+	}
+	return json.Marshal(g.device)
+}
+
+// ---- Keep backward compatibility with old Business API constructor ----
+
+// NewWhatsAppBusinessGateway creates a WhatsApp Business API gateway (legacy)
+// Deprecated: Use NewWhatsAppGateway for personal accounts with QR login
+func NewWhatsAppBusinessGateway(phoneNumberID, accessToken, appSecret, verifyToken string) *WhatsAppBusinessGateway {
+	return &WhatsAppBusinessGateway{
+		phoneNumberID: phoneNumberID,
+		accessToken:   accessToken,
+		appSecret:     appSecret,
+		verifyToken:   verifyToken,
+		agents:        make(map[string]*AgentSession),
+		msgCh:         make(chan Message, 100),
+		stopCh:        make(chan struct{}),
+		callbackPort:  8086,
+	}
 }
