@@ -213,5 +213,8 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 		return fmt.Errorf("stream API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	if withTools {
+		return ParseStreamResponseWithTools(resp.Body, handler)
+	}
 	return ParseStreamResponse(resp.Body, handler)
 }
