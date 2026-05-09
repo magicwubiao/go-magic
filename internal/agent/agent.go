@@ -520,14 +520,16 @@ Please provide a comprehensive, well-structured final response based on these su
 			handler)
 	}
 
-	// Truncate input
+	// Truncate input (stream path)
 	a.history = append(a.history, provider.Message{
 		Role:    "user",
 		Content: truncateStr(input, a.maxMsgLen),
 	})
+	stdlog.Printf("[DEBUG] [Stream] After appending user message, history has %d messages", len(a.history))
 
 	// Truncate history to prevent overflow
 	a.truncateHistory()
+	stdlog.Printf("[DEBUG] [Stream] After truncateHistory, history has %d messages", len(a.history))
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
