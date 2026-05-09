@@ -38,6 +38,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/PuerkitoBio/goquery v1.9.2
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/olekukonko/tablewriter v0.0.5

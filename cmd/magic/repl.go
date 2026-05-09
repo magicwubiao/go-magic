@@ -2019,4 +2019,29 @@ func (c *Completer) Complete(input string) []string {
 		partial := strings.TrimPrefix(input, "/")
 		for _, cmd := range c.commands {
 			if strings.HasPrefix(cmd, partial) {
-				results = append
+				results = append(results, "/"+cmd)
+			}
+		}
+	}
+
+	// History completion (for non-slash commands)
+	if !strings.HasPrefix(input, "/") && len(input) > 0 {
+		for _, h := range c.history {
+			if strings.HasPrefix(h, input) {
+				results = append(results, h)
+			}
+		}
+	}
+
+	return results
+}
+
+// sanitizeInput removes non-printable characters
+func sanitizeInput(input string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) || r == '\n' || r == '\t' {
+			return r
+		}
+		return -1
+	}, input)
+}

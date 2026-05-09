@@ -39,6 +39,8 @@ var (
 	cronSchedule   string
 	cronPrompt     string
 	cronEnabled    bool
+	cronNoAgent    bool   // Skip agent, run script directly
+	cronScript     string // Script for no_agent mode
 	cronDeleteCmd  *cobra.Command
 	cronEnableCmd  *cobra.Command
 	cronDisableCmd *cobra.Command
@@ -77,6 +79,8 @@ func init() {
 	cronAddCmd.Flags().StringVarP(&cronSchedule, "schedule", "s", "0 9 * * *", "Cron schedule expression")
 	cronAddCmd.Flags().StringVar(&cronPrompt, "prompt", "Daily summary", "Prompt to execute")
 	cronAddCmd.Flags().BoolVarP(&cronEnabled, "enabled", "e", false, "Enable the cron job immediately")
+	cronAddCmd.Flags().BoolVar(&cronNoAgent, "no-agent", false, "Skip agent, run script directly")
+	cronAddCmd.Flags().StringVar(&cronScript, "script", "", "Script/command for no_agent mode")
 
 	cronRemoveCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
 
@@ -122,6 +126,12 @@ func runCronAdd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Validate no_agent mode
+	if cronNoAgent && cronScript == "" {
+		fmt.Println("Error: --script is required when using --no-agent")
+		os.Exit(1)
+	}
+
 	// Generate unique ID based on timestamp
 	timestamp := time.Now().UnixMilli()
 	job := &cron.Job{
@@ -131,6 +141,8 @@ func runCronAdd(cmd *cobra.Command, args []string) {
 		Schedule:    cronSchedule,
 		Prompt:      cronPrompt,
 		Enabled:     cronEnabled,
+		NoAgent:     cronNoAgent,
+		Script:      cronScript,
 	}
 
 	if err := mgr.Add(job); err != nil {
@@ -145,7 +157,12 @@ func runCronAdd(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("✓ Cron job '%s' added (%s)\n", name, status)
 	fmt.Printf("  Schedule: %s\n", cronSchedule)
-	fmt.Printf("  Prompt: %s\n", cronPrompt)
+	if cronNoAgent {
+		fmt.Printf("  Mode: no_agent (direct script execution)\n")
+		fmt.Printf("  Script: %s\n", cronScript)
+	} else {
+		fmt.Printf("  Prompt: %s\n", cronPrompt)
+	}
 	fmt.Printf("\nEdit job details in ~/.magic/cron_jobs.json")
 }
 

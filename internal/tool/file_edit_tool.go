@@ -89,11 +89,18 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"path":          path,
 		"operation":     operation,
 		"bytes_written": len(newContent),
-	}, nil
+	}
+
+	// Post-write lint (non-blocking)
+	if issues, _ := LintFile(path); len(issues) > 0 {
+		result["lint_warning"] = fmt.Sprintf("⚠ Lint issues found:\n%s", strings.Join(issues, "\n"))
+	}
+
+	return result, nil
 }
 
 func (t *FileEditTool) replaceContent(content string, params map[string]interface{}) (string, error) {

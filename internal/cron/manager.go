@@ -1,11 +1,14 @@
 package cron
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -18,8 +21,10 @@ type Job struct {
 	Skills      []string               `json:"skills,omitempty"`
 	Platform    string                 `json:"platform,omitempty"`
 	Enabled     bool                   `json:"enabled"`
-	NextRun     *time.Time             `json:"next_run,omitempty"`
-	LastRun     *time.Time             `json:"last_run,omitempty"`
+	NoAgent     bool                   `json:"no_agent"`  // Skip agent, run script directly
+	Script      string                 `json:"script"`     // Script/command for no_agent mode
+	NextRun     *time.Time            `json:"next_run,omitempty"`
+	LastRun     *time.Time            `json:"last_run,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -132,6 +137,25 @@ func (m *Manager) GetDueJobs() []*Job {
 func (m *Manager) RunJob(ctx context.Context, job *Job) error {
 	fmt.Printf("Running job: %s\n", job.Name)
 
+	// no_agent mode: execute script directly without agent
+	if job.NoAgent && job.Script != "" {
+		output, err := executeScript(ctx, job.Script)
+		if err != nil {
+			fmt.Printf("no_agent cron script error: %v\n", err)
+			return err
+		}
+		output = strings.TrimSpace(output)
+		if output != "" {
+			fmt.Printf("Script output: %s\n", output)
+			// In a real implementation, sendToChannel(job.ChannelID, output) would be called
+			// For now, just print to stdout
+			if job.Platform != "" {
+				fmt.Printf("[%s] %s\n", job.Platform, output)
+			}
+		}
+		// Silent if output is empty
+	}
+
 	now := time.Now()
 	job.LastRun = &now
 
@@ -139,4 +163,28 @@ func (m *Manager) RunJob(ctx context.Context, job *Job) error {
 	job.NextRun = &next
 
 	return m.saveJobs()
+}
+
+// executeScript runs a script/command with 60s timeout
+func executeScript(ctx context.Context, script string) (string, error) {
+	// Create a context with 60s timeout
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	// Use shell to run the script
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		errMsg := stderr.String()
+		if errMsg != "" {
+			return "", fmt.Errorf("script error: %s", errMsg)
+		}
+		return "", fmt.Errorf("script error: %v", err)
+	}
+
+	return stdout.String(), nil
 }

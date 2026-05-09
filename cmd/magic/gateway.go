@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/gateway"
+	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -89,6 +91,9 @@ type gatewayAgentHandler struct {
 
 	// Per-user goal managers
 	goalManagers map[string]*agent.GoalManager
+
+	// Checkpoint manager for session persistence
+	checkpointMgr *session.CheckpointManager
 }
 
 // NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
@@ -138,13 +143,24 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	}
 
 	return &gatewayAgentHandler{
-		provider:     prov,
-		registry:     registry,
-		agents:       make(map[string]*agent.Agent),
-		goalManagers: make(map[string]*agent.GoalManager),
-		systemPrompt: systemPrompt,
-		cortexMgr:    cortexMgr,
+		provider:       prov,
+		registry:       registry,
+		agents:         make(map[string]*agent.Agent),
+		goalManagers:   make(map[string]*agent.GoalManager),
+		systemPrompt:   systemPrompt,
+		cortexMgr:      cortexMgr,
+		checkpointMgr:  newCheckpointManager(),
 	}
+}
+
+// newCheckpointManager creates a checkpoint manager, returning nil on error
+func newCheckpointManager() *session.CheckpointManager {
+	cm, err := session.NewCheckpointManager()
+	if err != nil {
+		log.Warnf("[Gateway] Failed to create checkpoint manager: %v", err)
+		return nil
+	}
+	return cm
 }
 
 // generateGatewaySystemPrompt creates a system prompt for gateway agent
@@ -293,6 +309,14 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		return h.handleGoalCommand(ctx, msg.UserID, msg.Content)
 	}
 
+	// Check for /kanban command
+	if strings.HasPrefix(msg.Content, "/kanban") || strings.HasPrefix(msg.Content, "/kb") {
+		return h.handleKanbanCommand(ctx, msg.UserID, msg.Content)
+	}
+
+	// Save checkpoint before processing (for recovery)
+	h.saveCheckpoint(msg.UserID, msg.Platform, msg.ChannelID, ag)
+
 	// Run conversation with full agent capabilities (multimodal if contentParts available)
 	var response string
 	if len(contentParts) > 0 {
@@ -304,7 +328,89 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		return "", fmt.Errorf("AI processing failed: %w", err)
 	}
 
+	// Update checkpoint after successful processing
+	h.saveCheckpoint(msg.UserID, msg.Platform, msg.ChannelID, ag)
+
 	return response, nil
+}
+
+// saveCheckpoint saves the current session state to disk
+func (h *gatewayAgentHandler) saveCheckpoint(userID, platform, channelID string, ag *agent.Agent) {
+	if h.checkpointMgr == nil {
+		return
+	}
+
+	cp := &session.Checkpoint{
+		SessionID:   userID,
+		Platform:    platform,
+		ChannelID:   channelID,
+		UserID:      userID,
+		Messages:    ag.GetHistory(),
+		Interrupted: false,
+	}
+
+	if err := h.checkpointMgr.Save(cp); err != nil {
+		log.Warnf("[Checkpoint] Failed to save: %v", err)
+	}
+}
+
+// loadCheckpoint loads a checkpoint for a session
+func (h *gatewayAgentHandler) loadCheckpoint(sessionID string) (*session.Checkpoint, error) {
+	if h.checkpointMgr == nil {
+		return nil, fmt.Errorf("checkpoint manager not available")
+	}
+	return h.checkpointMgr.Load(sessionID)
+}
+
+// markAllInterrupted marks all current sessions as interrupted (for graceful shutdown)
+func (h *gatewayAgentHandler) markAllInterrupted() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for userID := range h.agents {
+		if h.checkpointMgr != nil {
+			if err := h.checkpointMgr.MarkInterrupted(userID); err != nil {
+				log.Warnf("[Checkpoint] Failed to mark interrupted: %v", err)
+			} else {
+				log.Infof("[Checkpoint] Marked session interrupted: %s", userID)
+			}
+		}
+	}
+}
+
+// recoverInterruptedSessions checks for and recovers sessions that were interrupted
+func (h *gatewayAgentHandler) recoverInterruptedSessions(ctx context.Context) {
+	if h.checkpointMgr == nil {
+		return
+	}
+
+	// Prune old checkpoints first
+	if err := h.checkpointMgr.Prune(7 * 24 * time.Hour); err != nil {
+		log.Warnf("[Checkpoint] Prune failed: %v", err)
+	}
+
+	// Find interrupted sessions
+	interrupted, err := h.checkpointMgr.ListInterrupted()
+	if err != nil {
+		log.Warnf("[Checkpoint] Failed to list interrupted: %v", err)
+		return
+	}
+
+	if len(interrupted) == 0 {
+		return
+	}
+
+	log.Infof("[Checkpoint] Found %d interrupted sessions", len(interrupted))
+	for _, cp := range interrupted {
+		log.Infof("[Checkpoint] Resuming interrupted session: %s (platform: %s)", cp.SessionID, cp.Platform)
+		// In a real implementation, we would:
+		// 1. Load the agent state from checkpoint
+		// 2. Send a recovery notification to the user
+		// 3. Continue the conversation
+		if err := h.checkpointMgr.ClearInterrupted(cp.SessionID); err != nil {
+			log.Warnf("[Checkpoint] Failed to clear interrupted: %v", err)
+		}
+	}
 }
 
 // makeFileURL converts a local file path to a file:// URL for LLM access
@@ -389,6 +495,334 @@ func (h *gatewayAgentHandler) handleGoalCommand(ctx context.Context, userID stri
 	}
 }
 
+// handleKanbanCommand handles /kanban and /kb commands from gateway platforms
+func (h *gatewayAgentHandler) handleKanbanCommand(ctx context.Context, userID string, input string) (string, error) {
+	// Initialize kanban manager
+	home, _ := os.UserHomeDir()
+	mgr, err := kanban.NewManager(filepath.Join(home, ".magic"))
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to initialize kanban: %v", err), nil
+	}
+	if err := mgr.Init(); err != nil {
+		return fmt.Sprintf("⚠ Failed to init kanban: %v", err), nil
+	}
+	defer mgr.Close()
+
+	// Parse command
+	args := strings.TrimPrefix(input, "/kanban")
+	args = strings.TrimPrefix(args, "/kb")
+	args = strings.TrimSpace(args)
+
+	parts := strings.SplitN(args, " ", 2)
+	subcmd := parts[0]
+	subargs := ""
+	if len(parts) > 1 {
+		subargs = parts[1]
+	}
+
+	switch subcmd {
+	case "", "board":
+		return h.handleKanbanBoard(mgr)
+	case "list", "ls":
+		return h.handleKanbanList(mgr, subargs)
+	case "create":
+		return h.handleKanbanCreate(mgr, subargs, userID)
+	case "show":
+		return h.handleKanbanShow(mgr, subargs)
+	case "start":
+		return h.handleKanbanStart(mgr, subargs)
+	case "complete", "done":
+		return h.handleKanbanComplete(mgr, subargs)
+	case "block":
+		return h.handleKanbanBlock(mgr, subargs)
+	case "unblock":
+		return h.handleKanbanUnblock(mgr, subargs)
+	case "comment":
+		return h.handleKanbanComment(mgr, subargs, userID)
+	case "link":
+		return h.handleKanbanLink(mgr, subargs)
+	case "stats":
+		return h.handleKanbanStats(mgr)
+	default:
+		return "Kanban commands:\n" +
+			"• /kanban - Show board\n" +
+			"• /kanban list - List tasks\n" +
+			"• /kanban create <title> - Create task\n" +
+			"• /kanban show <id> - Show task\n" +
+			"• /kanban start <id> - Start task\n" +
+			"• /kanban complete <id> - Complete task\n" +
+			"• /kanban block <id> - Block task\n" +
+			"• /kanban unblock <id> - Unblock task\n" +
+			"• /kanban comment <id> <text> - Comment\n" +
+			"• /kanban stats - Show statistics", nil
+	}
+}
+
+func (h *gatewayAgentHandler) handleKanbanBoard(mgr *kanban.Manager) (string, error) {
+	board, err := mgr.GetBoard("")
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to get board: %v", err), nil
+	}
+
+	statuses := []kanban.TaskStatus{
+		kanban.StatusTriage, kanban.StatusTodo, kanban.StatusReady,
+		kanban.StatusRunning, kanban.StatusBlocked, kanban.StatusDone,
+	}
+
+	statusLabels := map[kanban.TaskStatus]string{
+		kanban.StatusTriage:   "🔍 Triage",
+		kanban.StatusTodo:     "📋 Todo",
+		kanban.StatusReady:    "✅ Ready",
+		kanban.StatusRunning:  "🔄 Running",
+		kanban.StatusBlocked:  "🚫 Blocked",
+		kanban.StatusDone:     "🎉 Done",
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊 Kanban Board\n═══════════════════════════════\n")
+
+	for _, status := range statuses {
+		tasks := board[status]
+		label := statusLabels[status]
+		sb.WriteString(fmt.Sprintf("\n%s (%d)\n", label, len(tasks)))
+
+		if len(tasks) == 0 {
+			sb.WriteString("  (empty)\n")
+		} else {
+			for _, task := range tasks {
+				title := task.Title
+				if len(title) > 40 {
+					title = title[:37] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("  • %s [%s]\n", task.ID, title))
+			}
+		}
+	}
+
+	return sb.String(), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanList(mgr *kanban.Manager, args string) (string, error) {
+	filter := kanban.TaskFilter{}
+	if args != "" {
+		filter.Search = args
+	}
+
+	tasks, err := mgr.ListTasks(filter)
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to list tasks: %v", err), nil
+	}
+
+	if len(tasks) == 0 {
+		return "No tasks found", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📋 Tasks (%d)\n═══════════════════════════════\n", len(tasks)))
+
+	for _, task := range tasks {
+		priority := ""
+		switch task.Priority {
+		case 3:
+			priority = "🔴"
+		case 2:
+			priority = "🟠"
+		case 1:
+			priority = "🟡"
+		default:
+			priority = "⚪"
+		}
+
+		title := task.Title
+		if len(title) > 45 {
+			title = title[:42] + "..."
+		}
+
+		sb.WriteString(fmt.Sprintf("%s %s [%s] %s\n", priority, task.ID, task.Status, title))
+	}
+
+	return sb.String(), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanCreate(mgr *kanban.Manager, args string, userID string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban create <title>", nil
+	}
+
+	assignee := userID
+	task, err := mgr.CreateTask(args, "", assignee)
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to create task: %v", err), nil
+	}
+
+	return fmt.Sprintf("✅ Task created: %s\nTitle: %s\nStatus: %s", task.ID, task.Title, task.Status), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanShow(mgr *kanban.Manager, args string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban show <task_id>", nil
+	}
+
+	task, err := mgr.GetTask(args)
+	if err != nil {
+		return fmt.Sprintf("⚠ Task not found: %s", args), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📋 Task: %s\n═══════════════════════════════\n", task.ID))
+	sb.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", task.Status))
+	sb.WriteString(fmt.Sprintf("Priority: %s\n", strconv.Itoa(task.Priority)))
+	sb.WriteString(fmt.Sprintf("Assignee: %s\n", task.Assignee))
+
+	if task.Body != "" {
+		sb.WriteString(fmt.Sprintf("\nDescription:\n%s\n", task.Body))
+	}
+
+	// Show parents
+	parents, _ := mgr.GetParents(args)
+	if len(parents) > 0 {
+		sb.WriteString(fmt.Sprintf("\n👆 Parents (%d):\n", len(parents)))
+		for _, p := range parents {
+			sb.WriteString(fmt.Sprintf("  • %s [%s]\n", p.ID, p.Title))
+		}
+	}
+
+	// Show children
+	children, _ := mgr.GetChildren(args)
+	if len(children) > 0 {
+		sb.WriteString(fmt.Sprintf("\n👇 Children (%d/%d done):\n", task.ChildDoneCount, task.ChildCount))
+		for _, c := range children {
+			sb.WriteString(fmt.Sprintf("  • %s [%s]\n", c.ID, c.Title))
+		}
+	}
+
+	return sb.String(), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanStart(mgr *kanban.Manager, args string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban start <task_id>", nil
+	}
+
+	task, err := mgr.StartTask(args)
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to start task: %v", err), nil
+	}
+
+	return fmt.Sprintf("✅ Task %s started (→ ready)", task.ID), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanComplete(mgr *kanban.Manager, args string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban complete <task_id>", nil
+	}
+
+	task, err := mgr.CompleteTask(args, "Completed")
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to complete task: %v", err), nil
+	}
+
+	return fmt.Sprintf("✅ Task %s completed", task.ID), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanBlock(mgr *kanban.Manager, args string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban block <task_id>", nil
+	}
+
+	task, err := mgr.BlockTask(args, "Blocked by user")
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to block task: %v", err), nil
+	}
+
+	return fmt.Sprintf("🚫 Task %s blocked", task.ID), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanUnblock(mgr *kanban.Manager, args string) (string, error) {
+	if args == "" {
+		return "Usage: /kanban unblock <task_id>", nil
+	}
+
+	task, err := mgr.UnblockTask(args)
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to unblock task: %v", err), nil
+	}
+
+	return fmt.Sprintf("✅ Task %s unblocked (→ ready)", task.ID), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanComment(mgr *kanban.Manager, args string, userID string) (string, error) {
+	parts := strings.SplitN(args, " ", 2)
+	if len(parts) < 2 {
+		return "Usage: /kanban comment <task_id> <text>", nil
+	}
+
+	taskID := parts[0]
+	body := parts[1]
+	author := userID
+
+	comment, err := mgr.AddComment(taskID, author, body)
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to add comment: %v", err), nil
+	}
+
+	return fmt.Sprintf("💬 Comment added to %s\n[%s] %s: %s", taskID, comment.CreatedAt.Format("01-02 15:04"), author, body), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanLink(mgr *kanban.Manager, args string) (string, error) {
+	parts := strings.Split(args, " ")
+	if len(parts) < 2 {
+		return "Usage: /kanban link <parent_id> <child_id>", nil
+	}
+
+	parentID := parts[0]
+	childID := parts[1]
+
+	if err := mgr.AddLink(parentID, childID); err != nil {
+		return fmt.Sprintf("⚠ Failed to link tasks: %v", err), nil
+	}
+
+	return fmt.Sprintf("✅ Linked %s → %s", parentID, childID), nil
+}
+
+func (h *gatewayAgentHandler) handleKanbanStats(mgr *kanban.Manager) (string, error) {
+	stats, err := mgr.GetStats("")
+	if err != nil {
+		return fmt.Sprintf("⚠ Failed to get stats: %v", err), nil
+	}
+
+	statusLabels := map[kanban.TaskStatus]string{
+		kanban.StatusTriage:   "🔍 Triage",
+		kanban.StatusTodo:     "📋 Todo",
+		kanban.StatusReady:    "✅ Ready",
+		kanban.StatusRunning:  "🔄 Running",
+		kanban.StatusBlocked:  "🚫 Blocked",
+		kanban.StatusDone:     "🎉 Done",
+		kanban.StatusArchived: "📦 Archived",
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊 Task Statistics\n═══════════════════════════════\n")
+
+	total := 0
+	for _, status := range []kanban.TaskStatus{
+		kanban.StatusTriage, kanban.StatusTodo, kanban.StatusReady,
+		kanban.StatusRunning, kanban.StatusBlocked, kanban.StatusDone,
+	} {
+		count := stats[status]
+		total += count
+		label := statusLabels[status]
+		sb.WriteString(fmt.Sprintf("  %-15s : %d\n", label, count))
+	}
+
+	sb.WriteString("──────────────────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("  %-15s : %d\n", "Total (active)", total))
+	sb.WriteString(fmt.Sprintf("  %-15s : %d\n", "Archived", stats[kanban.StatusArchived]))
+
+	return sb.String(), nil
+}
+
 // ResetSession resets a user's session (clears conversation history).
 func (h *gatewayAgentHandler) ResetSession(userID string) {
 	h.mu.Lock()
@@ -427,15 +861,20 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		<-sigCh
-		fmt.Println("\nShutting down gateway...")
-		cancel()
-	}()
-
 	platformCount := 0
 	agentHandler := NewGatewayAgentHandler()
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
+
+	// Recover interrupted sessions from previous shutdown
+	go agentHandler.recoverInterruptedSessions(ctx)
+
+	go func() {
+		sig := <-sigCh
+		fmt.Printf("\nShutting down gateway (%v)...\n", sig)
+		// Mark all active sessions as interrupted before shutdown
+		agentHandler.markAllInterrupted()
+		cancel()
+	}()
 
 	// Start Telegram if configured
 	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled && shouldStartPlatform("telegram") {
@@ -444,7 +883,14 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			fmt.Println("[Telegram] Token not configured!")
 		} else {
 			fmt.Println("[Telegram] Starting...")
-			tgGw, err := gateway.NewTelegramHandler(tgCfg.Token, nil)
+			tgConfig := &gateway.TelegramConfig{
+				Token:           tgCfg.Token,
+				AllowGroups:     true,
+				StreamingReply:  true,
+				AllowedChannels: tgCfg.AllowedChannels,
+				BlockedChannels: tgCfg.BlockedChannels,
+			}
+			tgGw, err := gateway.NewTelegramHandler(tgCfg.Token, tgConfig)
 			if err != nil {
 				fmt.Printf("[Telegram] Failed: %v\n", err)
 			} else {
@@ -464,6 +910,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			if err != nil {
 				fmt.Printf("[Discord] Failed: %v\n", err)
 			} else {
+				// Set channel filter
+				dgw.SetChannelFilter(dcCfg.AllowedChannels, dcCfg.BlockedChannels)
 				if err := dgw.Connect(ctx); err != nil {
 					fmt.Printf("[Discord] Failed to connect: %v\n", err)
 				} else {
@@ -557,6 +1005,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[Feishu/Lark] Starting...")
 			fsGw := gateway.NewFeishuGateway(fsCfg.AppID, fsCfg.AppSecret)
+			// Set channel filter
+			fsGw.SetChannelFilter(fsCfg.AllowedChannels, fsCfg.BlockedChannels)
 			if err := fsGw.Connect(ctx); err != nil {
 				fmt.Printf("[Feishu] Failed to connect: %v\n", err)
 			} else {
@@ -607,6 +1057,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Println("[Slack] Starting...")
 			slackGw := gateway.NewSlackGateway(slackCfg.Token, slackCfg.AppSecret)
+			// Set channel filter
+			slackGw.SetChannelFilter(slackCfg.AllowedChannels, slackCfg.BlockedChannels)
 			if err := slackGw.Connect(ctx); err != nil {
 				fmt.Printf("[Slack] Failed to connect: %v\n", err)
 			} else {

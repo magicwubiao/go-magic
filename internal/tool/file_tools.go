@@ -502,13 +502,20 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	// Get file info
 	info, _ := os.Stat(absPath)
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"success": true,
 		"path":    absPath,
 		"bytes":   len(content),
 		"lines":   strings.Count(content, "\n") + 1,
 		"size":    info.Size(),
-	}, nil
+	}
+
+	// Post-write lint (non-blocking)
+	if issues, _ := LintFile(absPath); len(issues) > 0 {
+		result["lint_warning"] = fmt.Sprintf("⚠ Lint issues found:\n%s", strings.Join(issues, "\n"))
+	}
+
+	return result, nil
 }
 
 // ============================================================================
