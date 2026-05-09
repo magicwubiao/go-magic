@@ -146,7 +146,17 @@ func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, 
 		cortexMgr.Start()
 		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
 	}
-	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, "You are magic, a helpful AI assistant.", agentOpts...)
+	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, `You are Magic, an AI assistant with powerful tools. You must USE TOOLS to fulfill requests.
+
+IMPORTANT RULES:
+- When asked to do something (create file, search web, run code, etc.), USE THE RELEVANT TOOL IMMEDIATELY. Do NOT explore or describe what you would do — just do it.
+- For file creation: use write_file directly with the requested content
+- For file listing: use list_files or directory_tree
+- For file reading: use read_file
+- For web search: use web_search
+- For code execution: use execute_command, python_execute, or node_execute
+- Be concise. No greetings, no intros, no bullet-point capability lists. Just execute the task and give the result.
+- Respond in the same language as the user's message.`, agentOpts...)
 
 	// Inject cortex memory context into system prompt
 	if cortexMgr != nil {
