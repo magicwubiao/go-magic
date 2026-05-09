@@ -20,7 +20,27 @@ type PluginTool struct {
 
 // NewPluginTool creates a tool from a plugin command spec
 func NewPluginTool(pluginID, entrypoint string, command string, desc string, argNames []string) *PluginTool {
-	name := fmt.Sprintf("plugin_%s_%s", pluginID, command)
+	// Sanitize name: only alphanumeric and underscores allowed by LLM APIs
+	safeID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r + 32 // to lowercase
+		}
+		return '_'
+	}, pluginID)
+	safeCmd := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r + 32
+		}
+		return '_'
+	}, command)
+	name := fmt.Sprintf("plugin_%s_%s", safeID, safeCmd)
+
 	if desc == "" {
 		desc = fmt.Sprintf("Plugin %s: %s", pluginID, command)
 	}
@@ -42,23 +62,25 @@ func (t *PluginTool) Schema() map[string]interface{} {
 	properties := make(map[string]interface{})
 	required := make([]string, 0)
 
+	// Add named arguments from manifest
 	for _, arg := range t.args {
 		properties[arg] = map[string]interface{}{
 			"type":        "string",
 			"description": fmt.Sprintf("Argument: %s", arg),
 		}
-		required = append(required, arg)
+		// Mark named args as optional (agent can also use command_args)
+	}
+
+	// Add a catch-all command_args field
+	properties["command_args"] = map[string]interface{}{
+		"type":        "string",
+		"description": fmt.Sprintf("Arguments for '%s' command. Named args: %s. Can also pass all args as a single string.", t.command, strings.Join(t.args, ", ")),
 	}
 
 	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"command_args": map[string]interface{}{
-				"type":        "string",
-				"description": fmt.Sprintf("Arguments for '%s' command. Named args: %s", t.command, strings.Join(t.args, ", ")),
-			},
-		},
-		"required": []string{},
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
 	}
 }
 
