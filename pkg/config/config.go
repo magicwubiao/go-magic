@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,6 +17,9 @@ const (
 	DefaultMagicHome = "~/.magic"
 	ConfigFileName   = "config.json"
 )
+
+// ErrNoConfig indicates that no config file exists (first run).
+var ErrNoConfig = fmt.Errorf("config file not found")
 
 // Config represents the application configuration
 type Config struct {

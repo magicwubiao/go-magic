@@ -36,7 +36,16 @@ func init() {
 
 func runChat(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
-	if err != nil {
+	if err == config.ErrNoConfig {
+		fmt.Println("Welcome to magic! It looks like this is your first run.")
+		fmt.Println("Let's set things up...\n")
+		runSetup(nil, nil)
+		// Reload config after setup
+		cfg, err = config.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load config after setup: %v", err)
+		}
+	} else if err != nil {
 		return fmt.Errorf("failed to load config: %v", err)
 	}
 
