@@ -116,6 +116,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Vision tool
 	r.Register(NewVisionTool())
 
+	// Video analyze tool
+	r.Register(NewVideoAnalyzeTool())
+
 	// Image generation tool
 	r.Register(NewImageGenerationTool())
 

@@ -34,6 +34,10 @@ type WhatsAppBusinessGateway struct {
 
 	callbackPort int
 	httpServer   *http.Server
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // whatsappWebhookRequest represents incoming webhook data
@@ -288,6 +292,15 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 	for _, entry := range webhookReq.Entry {
 		for _, change := range entry.Changes {
 			for _, msg := range change.Value.Messages {
+				// Check channel allowlist/blocklist
+				g.mu.RLock()
+				allowed := g.allowedChannels
+				blocked := g.blockedChannels
+				g.mu.RUnlock()
+				if !ShouldProcessChannel(msg.From, allowed, blocked) {
+					continue
+				}
+
 				var content string
 				var msgType string
 

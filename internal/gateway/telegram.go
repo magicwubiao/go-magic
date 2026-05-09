@@ -16,6 +16,8 @@ type TelegramConfig struct {
 	AdminUsers     []int64 // List of admin user IDs
 	AllowGroups    bool    // Allow bot in groups
 	StreamingReply bool    // Enable streaming reply for long messages
+	AllowedChannels []string `json:"allowed_channels,omitempty"` // Whitelist of channel/chat IDs
+	BlockedChannels []string `json:"blocked_channels,omitempty"` // Blacklist of channel/chat IDs
 }
 
 // TelegramHandler implements PlatformHandler for Telegram
@@ -206,6 +208,12 @@ func (t *TelegramHandler) Receive() <-chan Message {
 
 				// Check group permissions
 				if update.Message.Chat.Type != "private" && !t.config.AllowGroups {
+					continue
+				}
+
+				// Check channel allowlist/blocklist
+				channelID := fmt.Sprintf("%d", update.Message.Chat.ID)
+				if !ShouldProcessChannel(channelID, t.config.AllowedChannels, t.config.BlockedChannels) {
 					continue
 				}
 

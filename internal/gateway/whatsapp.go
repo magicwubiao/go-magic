@@ -37,6 +37,10 @@ type WhatsAppGateway struct {
 
 	// Track own JID for filtering
 	ownJID types.JID
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // NewWhatsAppGateway creates a new WhatsApp gateway with QR login support
@@ -57,6 +61,14 @@ func NewWhatsAppGateway(dataDir string) *WhatsAppGateway {
 // SetQRCallback sets a callback for QR code events (for CLI display or API push)
 func (g *WhatsAppGateway) SetQRCallback(cb func(qr string)) {
 	g.qrCallback = cb
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *WhatsAppGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }
 
 // Name returns the platform name
@@ -355,6 +367,15 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		return
 	}
 
+	// Check channel allowlist/blocklist
+	g.mu.RLock()
+	allowed := g.allowedChannels
+	blocked := g.blockedChannels
+	g.mu.RUnlock()
+	if !ShouldProcessChannel(info.Chat.User, allowed, blocked) {
+		return
+	}
+
 	// Extract text content and media attachments
 	var content string
 	var msgType string
@@ -620,4 +641,12 @@ func NewWhatsAppBusinessGateway(phoneNumberID, accessToken, appSecret, verifyTok
 		stopCh:        make(chan struct{}),
 		callbackPort:  8086,
 	}
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist for WhatsApp Business
+func (g *WhatsAppBusinessGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }

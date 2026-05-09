@@ -245,6 +245,43 @@ func toLower(s string) string {
 	return string(result)
 }
 
+// ShouldProcessChannel 检查频道是否在白名单/黑名单中
+// 规则:
+// 1. 如果黑名单中有该频道，返回 false
+// 2. 如果白名单非空且不包含该频道（或 "*"），返回 false
+// 3. 否则返回 true
+func ShouldProcessChannel(channelID string, allowed, blocked []string) bool {
+	// 检查黑名单
+	for _, ch := range blocked {
+		if ch == channelID {
+			return false
+		}
+	}
+
+	// 如果白名单为空，允许所有
+	if len(allowed) == 0 {
+		return true
+	}
+
+	// 检查白名单
+	for _, ch := range allowed {
+		if ch == channelID || ch == "*" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ConvertToChannelSet 将字符串切片转换为 map[string]bool 集合
+func ConvertToChannelSet(channels []string) map[string]bool {
+	set := make(map[string]bool)
+	for _, ch := range channels {
+		set[ch] = true
+	}
+	return set
+}
+
 // Gateway manages multiple platform connections and routes messages to the agent
 type Gateway struct {
 	platforms  map[string]PlatformHandler

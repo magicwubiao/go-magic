@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Config represents the main application configuration
@@ -19,6 +20,7 @@ type Config struct {
 	Gateway         GatewayConfig          `json:"gateway"`
 	Agent           AgentConfig            `json:"agent"`
 	Memory          MemoryConfig           `json:"memory"`
+	Kanban          KanbanConfig           `json:"kanban"`
 	SecretRedaction bool                   `json:"secret_redaction"` // Secret redaction (API keys, tokens, etc.)
 	Security        *SecurityConfig        `json:"-"`
 	SecurityPath    string                 `json:"-"`
@@ -74,6 +76,16 @@ type MemoryConfig struct {
 	DBPath      string `json:"db_path"`
 	AutoRecall  bool   `json:"auto_recall"`
 	RecallLimit int    `json:"recall_limit"`
+}
+
+// KanbanConfig represents kanban board configuration
+type KanbanConfig struct {
+	Enabled               bool          `json:"enabled"`
+	DBPath                string        `json:"db_path"`                        // Default: ~/.magic/kanban.db
+	DispatcherTick        time.Duration `json:"dispatcher_tick"`                // Default: 60s
+	MaxRetries            int           `json:"max_retries"`                   // Default: 3
+	MaxConsecutiveFailures int          `json:"max_consecutive_failures"`       // Default: 5
+	DefaultMaxRuntime     int           `json:"default_max_runtime"`           // Default: 3600s (1 hour)
 }
 
 // Load loads configuration from a file with environment variable overrides
@@ -158,6 +170,14 @@ func DefaultConfig() *Config {
 			AutoRecall:  true,
 			RecallLimit: 5,
 		},
+		Kanban: KanbanConfig{
+			Enabled:               true,
+			DBPath:                "",
+			DispatcherTick:        60 * time.Second,
+			MaxRetries:            3,
+			MaxConsecutiveFailures: 5,
+			DefaultMaxRuntime:     3600,
+		},
 		Security: DefaultSecurityConfig(),
 	}
 }
@@ -230,6 +250,20 @@ func (c *Config) applyDefaults() {
 
 	if c.Memory.RecallLimit == 0 {
 		c.Memory.RecallLimit = 5
+	}
+
+	// Kanban defaults
+	if c.Kanban.DispatcherTick == 0 {
+		c.Kanban.DispatcherTick = 60 * time.Second
+	}
+	if c.Kanban.MaxRetries == 0 {
+		c.Kanban.MaxRetries = 3
+	}
+	if c.Kanban.MaxConsecutiveFailures == 0 {
+		c.Kanban.MaxConsecutiveFailures = 5
+	}
+	if c.Kanban.DefaultMaxRuntime == 0 {
+		c.Kanban.DefaultMaxRuntime = 3600
 	}
 
 	// Apply default provider settings if not specified

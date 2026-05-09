@@ -39,6 +39,10 @@ type FeishuGateway struct {
 	maxRetries     int
 	retryDelay     time.Duration
 	currentRetries int
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // NewFeishuGateway creates a new Feishu gateway
@@ -53,6 +57,14 @@ func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
 		maxRetries:   5,
 		retryDelay:   time.Second * 5,
 	}
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *FeishuGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }
 
 // Name returns the platform name
@@ -377,6 +389,15 @@ func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 
 	// Only handle user messages
 	if msgEvent.Sender.SenderType != "user" {
+		return
+	}
+
+	// Check channel allowlist/blocklist
+	g.mu.RLock()
+	allowed := g.allowedChannels
+	blocked := g.blockedChannels
+	g.mu.RUnlock()
+	if !ShouldProcessChannel(msgEvent.Message.ChatID, allowed, blocked) {
 		return
 	}
 

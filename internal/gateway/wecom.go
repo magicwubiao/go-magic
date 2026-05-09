@@ -60,6 +60,10 @@ type WeComQRGateway struct {
 
 	// HTTP client
 	httpClient *http.Client
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // WeComSession represents the QR login session data
@@ -100,6 +104,14 @@ func (g *WeComQRGateway) SetQRCallback(cb func(url string)) {
 // SetQRCallbackPort sets the callback server port
 func (g *WeComQRGateway) SetQRCallbackPort(port int) {
 	g.qrCallbackPort = port
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *WeComQRGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }
 
 // Name returns the platform name

@@ -24,6 +24,10 @@ type DiscordGateway struct {
 
 	// Message channel for Receive()
 	msgCh chan Message
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 func NewDiscordGateway(token string) (*DiscordGateway, error) {
@@ -95,6 +99,14 @@ func (g *DiscordGateway) IsConnected() bool {
 	return g.running
 }
 
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *DiscordGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
+}
+
 func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Ignore own messages
 	if m.Author.ID == s.State.User.ID {
@@ -103,6 +115,15 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 
 	userID := m.Author.ID
 	channelID := m.ChannelID
+
+	// Check channel allowlist/blocklist
+	g.mu.RLock()
+	allowed := g.allowedChannels
+	blocked := g.blockedChannels
+	g.mu.RUnlock()
+	if !ShouldProcessChannel(channelID, allowed, blocked) {
+		return
+	}
 
 	g.mu.Lock()
 	session, exists := g.agents[userID]

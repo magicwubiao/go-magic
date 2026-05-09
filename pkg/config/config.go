@@ -62,6 +62,9 @@ type GatewayConfig struct {
 type PlatformConfig struct {
 	Token   string `json:"token,omitempty"`
 	Enabled bool   `json:"enabled"`
+	// Channel allowlist/blocklist - only respond to messages from allowed channels
+	AllowedChannels []string `json:"allowed_channels,omitempty"` // Whitelist of channel/chat IDs; empty means allow all
+	BlockedChannels []string `json:"blocked_channels,omitempty"` // Blacklist of channel/chat IDs; takes precedence over whitelist
 	// WeCom fields
 	CorpID  string `json:"corp_id,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`

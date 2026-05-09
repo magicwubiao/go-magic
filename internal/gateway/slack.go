@@ -29,6 +29,10 @@ type SlackGateway struct {
 
 	callbackPort int
 	httpServer   *http.Server
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // rtmConnection represents RTM websocket connection
@@ -70,6 +74,14 @@ func NewSlackGateway(botToken, signingSecret string) *SlackGateway {
 		stopCh:        make(chan struct{}),
 		callbackPort:  8085,
 	}
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *SlackGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }
 
 // Name returns the platform name
@@ -299,6 +311,16 @@ func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request)
 
 		// Ignore bot messages
 		if msgEvent.User == "" || strings.HasPrefix(msgEvent.Text, "<@U") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Check channel allowlist/blocklist
+		g.mu.RLock()
+		allowed := g.allowedChannels
+		blocked := g.blockedChannels
+		g.mu.RUnlock()
+		if !ShouldProcessChannel(msgEvent.Channel, allowed, blocked) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

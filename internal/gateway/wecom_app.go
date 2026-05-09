@@ -51,6 +51,10 @@ type WeComAppGateway struct {
 	maxRetries     int
 	retryDelay     time.Duration
 	currentRetries int
+
+	// Channel allowlist/blocklist
+	allowedChannels []string
+	blockedChannels []string
 }
 
 // NewWeComAppGateway creates a new WeCom application message mode gateway
@@ -66,6 +70,14 @@ func NewWeComAppGateway(corpID, agentID, secret string) *WeComAppGateway {
 		maxRetries:   5,
 		retryDelay:   time.Second * 5,
 	}
+}
+
+// SetChannelFilter sets the channel allowlist and blocklist
+func (g *WeComAppGateway) SetChannelFilter(allowed, blocked []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedChannels = allowed
+	g.blockedChannels = blocked
 }
 
 // Name returns the platform name
@@ -464,6 +476,15 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 }) {
 	// Check if this is for our agent
 	if event.AgentID != "" && event.AgentID != g.agentID {
+		return
+	}
+
+	// Check channel allowlist/blocklist (WeCom uses FromUserName as channel/user ID)
+	g.mu.RLock()
+	allowed := g.allowedChannels
+	blocked := g.blockedChannels
+	g.mu.RUnlock()
+	if !ShouldProcessChannel(event.FromUserName, allowed, blocked) {
 		return
 	}
 

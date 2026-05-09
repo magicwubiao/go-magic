@@ -930,6 +930,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// Traditional app message mode (requires public IP + verified enterprise)
 			fmt.Println("[WeCom] Starting in app mode (callback-based)...")
 			wcgw := gateway.NewWeComAppGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+			// Set channel filter
+			wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
 			if err := wcgw.Connect(ctx); err != nil {
 				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
 			} else {
@@ -939,7 +941,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// QR code login mode (default, no public IP required)
 			fmt.Println("[WeCom] Starting in QR mode...")
 			wcgw := gateway.NewWeComQRGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-			
+			// Set channel filter
+			wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
 			// Set QR callback for display
 			wcgw.SetQRCallback(func(qrURL string) {
 				fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
@@ -1077,6 +1080,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			} else {
 				fmt.Println("[WhatsApp Business] Starting...")
 				waGw := gateway.NewWhatsAppBusinessGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
+				// Set channel filter
+				waGw.SetChannelFilter(waCfg.AllowedChannels, waCfg.BlockedChannels)
 				if err := waGw.Connect(ctx); err != nil {
 					fmt.Printf("[WhatsApp Business] Failed to connect: %v\n", err)
 				} else {
