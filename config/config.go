@@ -22,6 +22,8 @@ type Config struct {
 	Memory          MemoryConfig           `json:"memory"`
 	Kanban          KanbanConfig           `json:"kanban"`
 	SecretRedaction bool                   `json:"secret_redaction"` // Secret redaction (API keys, tokens, etc.)
+	CortexEnabled   bool                   `json:"cortex_enabled"`   // Enable Cortex Agent six-system integration
+	WorkingDir      string                 `json:"working_dir"`      // Working directory for file operations
 	Security        *SecurityConfig        `json:"-"`
 	SecurityPath    string                 `json:"-"`
 }
@@ -264,6 +266,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Kanban.DefaultMaxRuntime == 0 {
 		c.Kanban.DefaultMaxRuntime = 3600
+	}
+
+	// Cortex disabled by default
+	// Note: bool default in Go is false, which is the correct default
+
+	// WorkingDir defaults to current directory if not set
+	if c.WorkingDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			c.WorkingDir = cwd
+		}
 	}
 
 	// Apply default provider settings if not specified

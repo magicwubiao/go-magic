@@ -203,7 +203,7 @@ func runAgentStats(cmd *cobra.Command, args []string) {
 	fmt.Println(string(data))
 }
 
-func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
+func createProvider(name string, cfg config.ProviderCfg) provider.Provider {
 	switch name {
 	case "openai":
 		return provider.NewOpenAIProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
