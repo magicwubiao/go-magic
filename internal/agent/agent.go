@@ -274,31 +274,13 @@ func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, s
 
 // RunConversation runs a conversation with automatic tool execution
 func (a *Agent) RunConversation(ctx context.Context, input string) (string, error) {
+	// If cortex is enabled, use the full cortex integration path
+	if a.cortexManager != nil {
+		return a.RunWithCortex(ctx, input)
+	}
+
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
-
-	// Cortex: User message trigger - increments turn counter, may trigger nudge
-	if a.cortexManager != nil {
-		a.cortexManager.OnUserMessage(input)
-
-		// Inject memory and user context into system prompt (first turn only)
-		if a.iterationCount == 0 {
-			if memCtx := a.cortexManager.GetPromptContext(); memCtx != "" {
-				a.AddSystemContext("[Memory Context]\n" + memCtx)
-			}
-			if userCtx := a.cortexManager.GetUserContext(); userCtx != "" {
-				a.AddSystemContext("[User Profile]\n" + userCtx)
-			}
-		}
-
-		// Apply cortex decision: adjust maxTurns based on task complexity
-		if decision := a.cortexManager.GetLastDecision(); decision != nil && decision.MaxTurns > 0 {
-			if a.maxTurns > decision.MaxTurns {
-				log.Debugf("[Agent] Cortex adjusting maxTurns: %d -> %d", a.maxTurns, decision.MaxTurns)
-				a.maxTurns = decision.MaxTurns
-			}
-		}
-	}
 
 	// Auto sub-task delegation for complex tasks
 	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
@@ -490,6 +472,21 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
+	// Cortex: inject memory context and adjust behavior
+	if a.cortexManager != nil {
+		a.cortexManager.OnUserMessage(input)
+
+		// Inject memory and user context into system prompt
+		if a.iterationCount == 0 {
+			if memCtx := a.cortexManager.GetPromptContext(); memCtx != "" {
+				a.AddSystemContext("[Memory Context]\n" + memCtx)
+			}
+			if userCtx := a.cortexManager.GetUserContext(); userCtx != "" {
+				a.AddSystemContext("[User Profile]\n" + userCtx)
+			}
+		}
+	}
+
 	// Auto sub-task delegation for complex tasks
 	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
 		if err != nil {
@@ -522,6 +519,11 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Cortex: freeze snapshot at turn start
+		if a.cortexManager != nil {
+			a.cortexManager.OnTurnStart()
+		}
+
 		// Check steering limits
 		if a.iterationCount >= a.maxIterations {
 			return fmt.Errorf("exceeded maximum iterations (%d)", a.maxIterations)
@@ -672,6 +674,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
+
+			// Cortex: refresh snapshot at session end
+			if a.cortexManager != nil {
+				a.cortexManager.OnSessionEnd()
+			}
+
 			return nil
 		}
 
@@ -732,6 +740,11 @@ Please provide a comprehensive, well-structured final response based on these su
 				toolName = tc.Name
 			}
 			handler(fmt.Sprintf("\n[Tool: %s] %s\n", toolName, content), false)
+
+			// Cortex: record tool call for review/pattern detection
+			if a.cortexManager != nil {
+				a.cortexManager.Trigger.OnToolCall(toolName, nil)
+			}
 		}
 
 		// Check context after tool execution
@@ -740,6 +753,12 @@ Please provide a comprehensive, well-structured final response based on these su
 	}
 
 	a.Emit(bus.EventKindAgentEnd, nil)
+
+	// Cortex: refresh snapshot at session end
+	if a.cortexManager != nil {
+		a.cortexManager.OnSessionEnd()
+	}
+
 	if lastErr != nil {
 		return lastErr
 	}
