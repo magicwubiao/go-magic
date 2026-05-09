@@ -330,9 +330,26 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		platformCount++
 		if wcCfg.CorpID == "" || wcCfg.Secret == "" {
 			fmt.Println("[WeCom] Config incomplete (need corp_id and secret)!")
+		} else if wcCfg.Mode == "app" {
+			// Traditional app message mode (requires public IP + verified enterprise)
+			fmt.Println("[WeCom] Starting in app mode (callback-based)...")
+			wcgw := gateway.NewWeComAppGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+			if err := wcgw.Connect(ctx); err != nil {
+				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("wecom", wcgw)
+			}
 		} else {
-			fmt.Println("[WeCom] Starting...")
-			wcgw := gateway.NewWeComGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+			// QR code login mode (default, no public IP required)
+			fmt.Println("[WeCom] Starting in QR mode...")
+			wcgw := gateway.NewWeComQRGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+			
+			// Set QR callback for display
+			wcgw.SetQRCallback(func(qrURL string) {
+				fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
+				fmt.Printf("   %s\n\n", qrURL)
+			})
+			
 			if err := wcgw.Connect(ctx); err != nil {
 				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
 			} else {
@@ -400,15 +417,32 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Start WeChat (Official Account / Mini Program) if configured
+	// Start WeChat (Official Account) if configured
 	if wxCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wxCfg.Enabled && shouldStartPlatform("wechat") {
 		platformCount++
 		if wxCfg.AppID == "" || wxCfg.AppSecret == "" {
 			fmt.Println("[WeChat] Config incomplete (need app_id and app_secret)!")
 			fmt.Println("[WeChat] For personal WeChat account, use 'wechat_ilink' platform instead.")
+		} else if wxCfg.Mode == "callback" {
+			// Traditional callback mode (requires public IP + verified service account)
+			fmt.Println("[WeChat] Starting in callback mode (webhook-based)...")
+			wxGw := gateway.NewWeChatCallbackGateway(wxCfg.AppID, wxCfg.AppSecret, wxCfg.Token, wxCfg.AESKey)
+			if err := wxGw.Connect(ctx); err != nil {
+				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("wechat", wxGw)
+			}
 		} else {
-			fmt.Println("[WeChat] Starting...")
-			wxGw := gateway.NewWeChatGateway(wxCfg.AppID, wxCfg.AppSecret, wxCfg.Token, wxCfg.AESKey)
+			// QR code login mode (default, no public IP required)
+			fmt.Println("[WeChat] Starting in QR mode (OAuth2 scan)...")
+			wxGw := gateway.NewWeChatQRGateway(wxCfg.AppID, wxCfg.AppSecret)
+			
+			// Set QR callback for display
+			wxGw.SetQRCallback(func(qrURL string) {
+				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
+				fmt.Printf("   %s\n\n", qrURL)
+			})
+			
 			if err := wxGw.Connect(ctx); err != nil {
 				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
 			} else {

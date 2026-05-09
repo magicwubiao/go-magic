@@ -3,79 +3,107 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/xml"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"encoding/json"
+	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// WeChatGateway implements the WeChat platform handler
-type WeChatGateway struct {
-	appID          string
-	appSecret      string
-	token          string
-	tokenExpiresAt time.Time
-	encodingAESKey string
+// WeChatQRGateway implements WeChat Official Account QR code login mode
+// This mode uses the WeChat Open Platform OAuth2 flow for easier setup
+// Requirements:
+// - WeChat Official Account (订阅号/服务号都可以)
+// - No public IP required
+// - No verified service account required
+type WeChatQRGateway struct {
+	appID     string
+	appSecret string
 
+	// Session data
+	session     *WeChatSession
+	sessionPath string
+
+	// Token management
+	accessToken    string
+	refreshToken   string
+	openID         string
+	tokenExpiresAt time.Time
+	tokenMu        sync.RWMutex
+
+	// Runtime state
 	agents  map[string]*AgentSession
 	msgCh   chan Message
 	mu      sync.RWMutex
 	stopCh  chan struct{}
 	running bool
 
-	callbackPort int
-	server       *http.Server
-	serverOnce   sync.Once
+	// QR callback server
+	qrCallbackPort int
+	server         *http.Server
+	serverOnce     sync.Once
 
-	// WeChat API endpoints
-	apiBaseURL string
+	// QR callback for external display
+	qrCallback func(url string)
+
+	// HTTP client
 	httpClient *http.Client
 }
 
-// WeChatMessage represents a WeChat message
-type WeChatMessage struct {
-	ToUserName   string `xml:"ToUserName"`
-	FromUserName string `xml:"FromUserName"`
-	CreateTime   int64  `xml:"CreateTime"`
-	MsgType      string `xml:"MsgType"`
-	Content      string `xml:"Content"`
-	MsgID        string `xml:"MsgId"`
-	Encrypt      string `xml:"Encrypt"`
+// WeChatSession represents the OAuth session data
+type WeChatSession struct {
+	AccessToken    string    `json:"access_token"`
+	RefreshToken   string    `json:"refresh_token"`
+	OpenID         string    `json:"openid"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	RefreshAt      time.Time `json:"refresh_at"`
+	LastActiveTime time.Time `json:"last_active"`
 }
 
-// NewWeChatGateway creates a new WeChat gateway
-func NewWeChatGateway(appID, appSecret, token, aesKey string) *WeChatGateway {
-	return &WeChatGateway{
+// NewWeChatQRGateway creates a new WeChat QR code login gateway
+func NewWeChatQRGateway(appID, appSecret string) *WeChatQRGateway {
+	home, _ := os.UserHomeDir()
+	sessionPath := filepath.Join(home, ".magic", "wechat", "session.json")
+
+	return &WeChatQRGateway{
 		appID:          appID,
 		appSecret:      appSecret,
-		token:          token,
-		encodingAESKey: aesKey,
+		sessionPath:    sessionPath,
 		agents:         make(map[string]*AgentSession),
 		msgCh:          make(chan Message, 100),
 		stopCh:         make(chan struct{}),
-		callbackPort:   8083, // WeChat-specific port
-		apiBaseURL:     "https://api.weixin.qq.com",
+		qrCallbackPort: 8083,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
+// SetQRCallback sets a callback for QR code URL (for CLI display or API push)
+func (g *WeChatQRGateway) SetQRCallback(cb func(url string)) {
+	g.qrCallback = cb
+}
+
+// SetQRCallbackPort sets the callback server port
+func (g *WeChatQRGateway) SetQRCallbackPort(port int) {
+	g.qrCallbackPort = port
+}
+
 // Name returns the platform name
-func (g *WeChatGateway) Name() string {
+func (g *WeChatQRGateway) Name() string {
 	return "wechat"
 }
 
-// Connect establishes connection to WeChat
-func (g *WeChatGateway) Connect(ctx context.Context) error {
+// Connect establishes connection with QR code login
+func (g *WeChatQRGateway) Connect(ctx context.Context) error {
 	g.mu.Lock()
 	if g.running {
 		g.mu.Unlock()
@@ -84,54 +112,312 @@ func (g *WeChatGateway) Connect(ctx context.Context) error {
 	g.running = true
 	g.mu.Unlock()
 
-	log.Infof("Connecting to WeChat gateway...")
+	log.Infof("Connecting to WeChat QR gateway...")
 
-	// Get access token
-	if err := g.getAccessToken(); err != nil {
-		log.Warnf("Failed to get WeChat access token: %v (will retry on first message)", err)
+	// Ensure session directory exists
+	sessionDir := filepath.Dir(g.sessionPath)
+	if err := os.MkdirAll(sessionDir, 0700); err != nil {
+		return fmt.Errorf("failed to create session dir: %w", err)
 	}
 
-	go g.startCallbackServer()
+	// Try to load existing session
+	if err := g.loadSession(); err != nil {
+		log.Debugf("No existing session found: %v", err)
+	}
 
-	log.Info("WeChat gateway connected")
+	// Check if session is valid
+	g.tokenMu.RLock()
+	isValid := g.accessToken != "" && time.Now().Before(g.tokenExpiresAt)
+	g.tokenMu.RUnlock()
+
+	if isValid {
+		log.Info("Found valid WeChat session, using cached token")
+	} else if g.refreshToken != "" {
+		// Try to refresh the token
+		log.Info("Session expired, attempting to refresh token...")
+		if err := g.refreshAccessToken(); err != nil {
+			log.Warnf("Failed to refresh token: %v, need re-authentication", err)
+			g.startQRServer(ctx)
+		}
+	} else {
+		// Need new QR code login
+		log.Info("No session found, starting QR code login...")
+		g.startQRServer(ctx)
+	}
+
+	log.Info("WeChat QR gateway connected")
 	return nil
 }
 
-// getAccessToken obtains an access token from WeChat
-func (g *WeChatGateway) getAccessToken() error {
-	if g.appID == "" || g.appSecret == "" {
-		return fmt.Errorf("appID or appSecret not configured")
+// startQRServer starts the local HTTP server for OAuth callback
+func (g *WeChatQRGateway) startQRServer(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wechat/qr/callback", g.handleQROAuthCallback)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	addr := fmt.Sprintf(":%d", g.qrCallbackPort)
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	g.server = server
+
+	// Generate and display QR code URL
+	state := uuid.New().String()
+	authURL := g.buildAuthURL(state)
+
+	// Store state for verification
+	g.mu.Lock()
+	g.pendingState = state
+	g.mu.Unlock()
+
+	log.Infof("WeChat QR server starting on %s", addr)
+	log.Infof("Please scan the QR code at: %s", authURL)
+
+	// Call QR callback if set
+	if g.qrCallback != nil {
+		g.qrCallback(authURL)
 	}
 
-	url := fmt.Sprintf("https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=%s&secret=%s",
-		g.appID, g.appSecret)
+	// Start server in background
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Errorf("WeChat QR server error: %v", err)
+		}
+	}()
+}
 
-	resp, err := g.httpClient.Get(url)
+// pendingState stores the OAuth state for CSRF protection
+var pendingState string
+
+// buildAuthURL builds the WeChat OAuth authorization URL
+func (g *WeChatQRGateway) buildAuthURL(state string) string {
+	redirectURI := url.QueryEscape(fmt.Sprintf("http://localhost:%d/wechat/qr/callback", g.qrCallbackPort))
+	return fmt.Sprintf(
+		"https://open.weixin.qq.com/connect/qrconnect?appid=%s&redirect_uri=%s&response_type=code&scope=snsapi_login&state=%s#wechat_redirect",
+		g.appID, redirectURI, state,
+	)
+}
+
+// handleQROAuthCallback handles the OAuth callback after QR scan
+func (g *WeChatQRGateway) handleQROAuthCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+
+	// Verify state
+	g.mu.RLock()
+	expectedState := g.pendingState
+	g.mu.RUnlock()
+
+	if state != expectedState {
+		log.Errorf("Invalid OAuth state: expected %s, got %s", expectedState, state)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Invalid state"))
+		return
+	}
+
+	if code == "" {
+		log.Error("No code received in OAuth callback")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("No code provided"))
+		return
+	}
+
+	// Exchange code for access token
+	if err := g.exchangeCodeForToken(code); err != nil {
+		log.Errorf("Failed to exchange code for token: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Failed to authenticate"))
+		return
+	}
+
+	// Save session
+	if err := g.saveSession(); err != nil {
+		log.Errorf("Failed to save session: %v", err)
+	}
+
+	// Send success response
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head>
+    <title>WeChat Login Success</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
+        .success { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        .checkmark { color: #07C160; font-size: 48px; }
+        h1 { color: #07C160; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="success">
+        <div class="checkmark">✓</div>
+        <h1>Login Successful!</h1>
+        <p>You can close this window and return to the application.</p>
+    </div>
+</body>
+</html>`))
+
+	log.Info("WeChat QR login successful!")
+}
+
+// exchangeCodeForToken exchanges the OAuth code for access token
+func (g *WeChatQRGateway) exchangeCodeForToken(code string) error {
+	tokenURL := fmt.Sprintf(
+		"https://api.weixin.qq.com/sns/oauth2/access_token?appid=%s&secret=%s&code=%s&grant_type=authorization_code",
+		g.appID, g.appSecret, code,
+	)
+
+	resp, err := g.httpClient.Get(tokenURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to request token: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get access token: status %d", resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var result struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
+		ErrCode       int    `json:"errcode"`
+		ErrMsg        string `json:"errmsg"`
+		AccessToken   string `json:"access_token"`
+		RefreshToken  string `json:"refresh_token"`
+		OpenID        string `json:"openid"`
+		ExpiresIn     int    `json:"expires_in"`
+		RefreshExpires int   `json:"refresh_expires_in"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	g.token = result.AccessToken
-	log.Info("WeChat access token obtained")
+	if result.ErrCode != 0 {
+		return fmt.Errorf("token API error: %d - %s", result.ErrCode, result.ErrMsg)
+	}
+
+	// Store tokens
+	g.tokenMu.Lock()
+	g.accessToken = result.AccessToken
+	g.refreshToken = result.RefreshToken
+	g.openID = result.OpenID
+	g.tokenExpiresAt = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
+	g.tokenMu.Unlock()
+
+	log.Infof("WeChat access token obtained for OpenID: %s", result.OpenID)
 	return nil
 }
 
+// refreshAccessToken refreshes the access token using refresh token
+func (g *WeChatQRGateway) refreshAccessToken() error {
+	g.tokenMu.RLock()
+	refreshToken := g.refreshToken
+	g.tokenMu.RUnlock()
+
+	if refreshToken == "" {
+		return fmt.Errorf("no refresh token available")
+	}
+
+	refreshURL := fmt.Sprintf(
+		"https://api.weixin.qq.com/sns/oauth2/refresh_token?appid=%s&grant_type=refresh_token&refresh_token=%s",
+		g.appID, refreshToken,
+	)
+
+	resp, err := g.httpClient.Get(refreshURL)
+	if err != nil {
+		return fmt.Errorf("failed to request token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result struct {
+		ErrCode       int    `json:"errcode"`
+		ErrMsg        string `json:"errmsg"`
+		AccessToken   string `json:"access_token"`
+		RefreshToken  string `json:"refresh_token"`
+		OpenID        string `json:"openid"`
+		ExpiresIn     int    `json:"expires_in"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if result.ErrCode != 0 {
+		return fmt.Errorf("refresh token API error: %d - %s", result.ErrCode, result.ErrMsg)
+	}
+
+	// Store new tokens
+	g.tokenMu.Lock()
+	g.accessToken = result.AccessToken
+	g.refreshToken = result.RefreshToken
+	g.openID = result.OpenID
+	g.tokenExpiresAt = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
+	g.tokenMu.Unlock()
+
+	// Save updated session
+	if err := g.saveSession(); err != nil {
+		log.Warnf("Failed to save session after refresh: %v", err)
+	}
+
+	log.Info("WeChat access token refreshed successfully")
+	return nil
+}
+
+// loadSession loads the session from disk
+func (g *WeChatQRGateway) loadSession() error {
+	data, err := os.ReadFile(g.sessionPath)
+	if err != nil {
+		return err
+	}
+
+	var session WeChatSession
+	if err := json.Unmarshal(data, &session); err != nil {
+		return err
+	}
+
+	g.tokenMu.Lock()
+	g.accessToken = session.AccessToken
+	g.refreshToken = session.RefreshToken
+	g.openID = session.OpenID
+	g.tokenExpiresAt = session.ExpiresAt
+	g.tokenMu.Unlock()
+
+	return nil
+}
+
+// saveSession saves the session to disk
+func (g *WeChatQRGateway) saveSession() error {
+	g.tokenMu.RLock()
+	session := WeChatSession{
+		AccessToken:    g.accessToken,
+		RefreshToken:  g.refreshToken,
+		OpenID:         g.openID,
+		ExpiresAt:      g.tokenExpiresAt,
+		RefreshAt:      time.Now(),
+		LastActiveTime: time.Now(),
+	}
+	g.tokenMu.RUnlock()
+
+	data, err := json.MarshalIndent(session, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(g.sessionPath, data, 0600)
+}
+
 // Disconnect closes the connection
-func (g *WeChatGateway) Disconnect() error {
+func (g *WeChatQRGateway) Disconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -150,24 +436,30 @@ func (g *WeChatGateway) Disconnect() error {
 	})
 	g.running = false
 
-	log.Info("WeChat gateway disconnected")
+	log.Info("WeChat QR gateway disconnected")
 	return nil
 }
 
 // IsConnected checks if connected to WeChat
-func (g *WeChatGateway) IsConnected() bool {
+func (g *WeChatQRGateway) IsConnected() bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.running
+	return g.running && g.accessToken != ""
 }
 
 // Send sends a message via WeChat API
-func (g *WeChatGateway) Send(ctx context.Context, resp Response) error {
+func (g *WeChatQRGateway) Send(ctx context.Context, resp Response) error {
 	if !g.IsConnected() {
 		return fmt.Errorf("WeChat gateway not connected")
 	}
 
-	openID := resp.ChannelID // In WeChat, ChannelID is typically the OpenID
+	openID := resp.ChannelID
+	if openID == "" {
+		g.tokenMu.RLock()
+		openID = g.openID
+		g.tokenMu.RUnlock()
+	}
+
 	if openID == "" {
 		return fmt.Errorf("OpenID (channel ID) is required")
 	}
@@ -175,13 +467,17 @@ func (g *WeChatGateway) Send(ctx context.Context, resp Response) error {
 	return g.SendText(openID, resp.Content)
 }
 
-// SendText sends a text message via WeChat API
-func (g *WeChatGateway) SendText(openID, text string) error {
-	if g.token == "" {
+// SendText sends a text message via WeChat customer service API
+func (g *WeChatQRGateway) SendText(openID, text string) error {
+	g.tokenMu.RLock()
+	token := g.accessToken
+	g.tokenMu.RUnlock()
+
+	if token == "" {
 		return fmt.Errorf("WeChat access token not available")
 	}
 
-	url := fmt.Sprintf("https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=%s", g.token)
+	url := fmt.Sprintf("https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=%s", token)
 
 	// WeChat has a 2048 character limit per message
 	if len(text) > 2040 {
@@ -191,18 +487,18 @@ func (g *WeChatGateway) SendText(openID, text string) error {
 			if end > len(text) {
 				end = len(text)
 			}
-			if err := g.sendWeChatMessage(url, openID, text[i:end]); err != nil {
+			if err := g.sendMessage(url, openID, text[i:end]); err != nil {
 				return fmt.Errorf("failed to send message part: %w", err)
 			}
 		}
 		return nil
 	}
 
-	return g.sendWeChatMessage(url, openID, text)
+	return g.sendMessage(url, openID, text)
 }
 
-// sendWeChatMessage sends a single text message via WeChat API
-func (g *WeChatGateway) sendWeChatMessage(url, openID, content string) error {
+// sendMessage sends a single text message via WeChat API
+func (g *WeChatQRGateway) sendMessage(url, openID, content string) error {
 	body := map[string]interface{}{
 		"touser":  openID,
 		"msgtype": "text",
@@ -244,47 +540,68 @@ func (g *WeChatGateway) sendWeChatMessage(url, openID, content string) error {
 }
 
 // Receive returns a channel of incoming messages
-func (g *WeChatGateway) Receive() <-chan Message {
+func (g *WeChatQRGateway) Receive() <-chan Message {
 	return g.msgCh
 }
 
 // HandleSlashCommand handles a slash command
-func (g *WeChatGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
+func (g *WeChatQRGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch cmd {
 	case "help":
 		return Response{
 			Content: "Available commands:\n" +
 				"/help - Show this help\n" +
 				"/ping - Check bot status\n" +
-				"/status - Show connection status",
+				"/status - Show connection status\n" +
+				"/login - Re-authenticate if disconnected",
 		}, nil
 	case "ping":
 		return Response{
 			Content: "Pong! 🏓",
 		}, nil
 	case "status":
-		if g.IsConnected() {
+		g.tokenMu.RLock()
+		hasToken := g.accessToken != ""
+		openID := g.openID
+		g.tokenMu.RUnlock()
+
+		if hasToken {
 			return Response{
-				Content: "Bot is connected and ready!",
+				Content: fmt.Sprintf("Bot is connected!\nOpenID: %s", openID),
 			}, nil
 		}
 		return Response{
-			Content: "Bot is not connected",
+			Content: "Bot is not connected. Please re-authenticate.",
+		}, nil
+	case "login":
+		go g.startQRServer(context.Background())
+		return Response{
+			Content: "Starting QR code login... Please check the terminal for the QR code URL.",
 		}, nil
 	default:
 		return Response{}, fmt.Errorf("unknown command: %s", cmd)
 	}
 }
 
-// CheckHealth returns detailed health status for WeChat gateway
-func (g *WeChatGateway) CheckHealth() *HealthStatus {
+// CheckHealth returns detailed health status for WeChat QR gateway
+func (g *WeChatQRGateway) CheckHealth() *HealthStatus {
+	g.mu.RLock()
+	running := g.running
+	g.mu.RUnlock()
+
+	g.tokenMu.RLock()
+	hasToken := g.accessToken != ""
+	openID := g.openID
+	tokenExpiry := g.tokenExpiresAt
+	g.tokenMu.RUnlock()
+
 	status := &HealthStatus{
-		Platform:  "wechat",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
-		CallbackPort: g.callbackPort,
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+		Platform:     "wechat",
+		Connected:    running && hasToken,
+		Status:       "healthy",
+		CallbackPort: g.qrCallbackPort,
+		Details:      make(map[string]interface{}),
+		Platforms:    make(map[string]PlatformStatus),
 	}
 
 	platformStatus := PlatformStatus{
@@ -292,38 +609,23 @@ func (g *WeChatGateway) CheckHealth() *HealthStatus {
 		Status: "connected",
 	}
 
-	if !status.Connected {
+	if !running {
 		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
+		platformStatus.Error = "Gateway not running"
 		status.Status = "error"
 		status.Platforms["wechat"] = platformStatus
 		return status
 	}
 
-	// Check HTTP client
-	if g.httpClient != nil {
-		status.HTTPClientOK = true
-		status.Details["http_client_initialized"] = true
+	if !hasToken {
+		platformStatus.Status = "waiting_login"
+		platformStatus.Error = "Not authenticated, need QR login"
+		status.Status = "waiting_login"
+		status.Details["authenticated"] = false
 	} else {
-		status.HTTPClientOK = false
-		status.Error = "HTTP client not initialized"
-		return status
-	}
-
-	// Check token validity
-	g.mu.RLock()
-	token := g.token
-	tokenExpiry := g.tokenExpiresAt
-	g.mu.RUnlock()
-
-	if token != "" {
 		status.TokenValid = true
-		status.Details["token_available"] = true
-	} else {
-		status.TokenValid = false
-		status.Details["token_available"] = false
-		platformStatus.Error = "No access token"
-		status.Status = "error"
+		status.Details["authenticated"] = true
+		status.Details["openid"] = openID
 	}
 
 	if !tokenExpiry.IsZero() {
@@ -336,145 +638,45 @@ func (g *WeChatGateway) CheckHealth() *HealthStatus {
 		}
 	}
 
-	status.Details["callback_port"] = g.callbackPort
+	status.Details["mode"] = "qr"
+	status.Details["callback_port"] = g.qrCallbackPort
 	status.Platforms["wechat"] = platformStatus
 
 	return status
 }
 
-// startCallbackServer starts the HTTP server for callbacks
-func (g *WeChatGateway) startCallbackServer() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/wechat/callback", g.handleCallback)
-	mux.HandleFunc("/wechat/verify", g.handleVerify)
-
-	addr := fmt.Sprintf(":%d", g.callbackPort)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-	g.server = server
-
-	log.Infof("WeChat callback server starting on %s", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Errorf("WeChat callback server error: %v", err)
-	}
+// GetOpenID returns the authenticated user's OpenID
+func (g *WeChatQRGateway) GetOpenID() string {
+	g.tokenMu.RLock()
+	defer g.tokenMu.RUnlock()
+	return g.openID
 }
 
-// handleVerify handles URL verification from WeChat
-func (g *WeChatGateway) handleVerify(w http.ResponseWriter, r *http.Request) {
-	// WeChat verification GET request
-	signature := r.URL.Query().Get("signature")
-	echostr := r.URL.Query().Get("echostr")
-	timestamp := r.URL.Query().Get("timestamp")
-	nonce := r.URL.Query().Get("nonce")
-
-	if signature != "" && echostr != "" {
-		// Verify signature
-		if g.verifySignature(signature, timestamp, nonce) {
-			// 微信验证要求直接返回原始的 echostr 字符串（明文）
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(echostr))
-			return
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
+// IsAuthenticated returns whether the gateway is authenticated
+func (g *WeChatQRGateway) IsAuthenticated() bool {
+	g.tokenMu.RLock()
+	defer g.tokenMu.RUnlock()
+	return g.accessToken != ""
 }
 
-// verifySignature verifies WeChat callback signature.
-// 微信公众平台使用 SHA1 签名验证算法
-func (g *WeChatGateway) verifySignature(signature, timestamp, nonce string) bool {
-	strs := sort.StringSlice{g.token, timestamp, nonce}
-	sort.Strings(strs)
-	str := strings.Join(strs, "")
-	h := sha1.Sum([]byte(str))
-	return fmt.Sprintf("%x", h) == signature
+// TriggerReauth starts a new QR authentication flow
+func (g *WeChatQRGateway) TriggerReauth(ctx context.Context) {
+	g.tokenMu.Lock()
+	g.accessToken = ""
+	g.refreshToken = ""
+	g.openID = ""
+	g.tokenMu.Unlock()
+
+	// Clear session file
+	os.Remove(g.sessionPath)
+
+	g.startQRServer(ctx)
 }
 
-// encrypt encrypts content using AES (simplified - in production use proper AES-CBC)
-func (g *WeChatGateway) encrypt(content string) (string, error) {
-	// This is a simplified implementation
-	// In production, use proper AES encryption with the encodingAESKey
-	return content, nil
-}
-
-// handleCallback handles incoming callbacks from WeChat
-func (g *WeChatGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		g.handleVerify(w, r)
-		return
-	}
-
-	if r.Method == "POST" {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			log.Errorf("Failed to read WeChat callback body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Parse WeChat message event
-		g.parseCallbackEvent(body)
-
-		// WeChat requires a "success" response
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("success"))
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// parseCallbackEvent parses incoming WeChat callback events
-func (g *WeChatGateway) parseCallbackEvent(body []byte) {
-	var msg WeChatMessage
-	if err := xml.Unmarshal(body, &msg); err != nil {
-		log.Errorf("Failed to parse WeChat message: %v", err)
-		return
-	}
-
-	// Check if it's encrypted
-	if msg.Encrypt != "" {
-		// Decrypt the message (simplified)
-		log.Debugf("Received encrypted WeChat message")
-		return
-	}
-
-	// Only process text messages
-	if msg.MsgType != "text" && msg.MsgType != "voice" {
-		return
-	}
-
-	content := msg.Content
-	if content == "" {
-		// For voice messages, we might need ASR
-		content = "[Voice message]"
-	}
-
-	msgData := Message{
-		ID:        msg.MsgID,
-		Platform:  "wechat",
-		ChannelID: msg.FromUserName, // OpenID
-		UserID:    msg.FromUserName,
-		Content:   content,
-		Timestamp: time.Unix(msg.CreateTime, 0),
-		Metadata: map[string]interface{}{
-			"msg_type": msg.MsgType,
-			"to_user":  msg.ToUserName,
-		},
-	}
-
-	// Send to channel
-	select {
-	case g.msgCh <- msgData:
-		log.Debugf("WeChat message received: %s from %s", msgData.ID, msgData.UserID)
-	default:
-		log.Warnf("WeChat message channel full, dropping message: %s", msgData.ID)
-	}
-}
-
-// SetCallbackPort sets the callback server port
-func (g *WeChatGateway) SetCallbackPort(port int) {
-	g.callbackPort = port
+// Backward compatibility: NewWeChatGateway creates a QR gateway by default
+// This is for API compatibility with existing code
+func NewWeChatGateway(appID, appSecret, token, aesKey string) *WeChatQRGateway {
+	gw := NewWeChatQRGateway(appID, appSecret)
+	// Note: token and aesKey are not used in QR mode, kept for backward compatibility
+	return gw
 }

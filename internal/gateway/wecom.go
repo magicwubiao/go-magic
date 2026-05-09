@@ -3,74 +3,112 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-
-	"encoding/base64"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// WeComGateway implements the WeCom (Enterprise WeChat) platform handler
-type WeComGateway struct {
-	corpID         string
-	agentID        string
-	secret         string
-	token          string
-	encodingAESKey string
+// WeComQRGateway implements WeCom (Enterprise WeChat) QR code login mode
+// This mode uses the WeCom Open Platform OAuth2 flow for easier setup
+// Requirements:
+// - A WeCom enterprise account (任何版本都可以)
+// - No public IP required
+// - No verified enterprise required
+type WeComQRGateway struct {
+	corpID   string
+	agentID  string
+	secret   string
 
+	// Session data
+	session     *WeComSession
+	sessionPath string
+
+	// User info (obtained from QR scan)
+	userID       string
+	userName     string
+	userDeptID   int
+
+	// Token management
 	accessToken    string
-	tokenMu        sync.RWMutex
 	tokenExpiresAt time.Time
+	tokenMu        sync.RWMutex
 
+	// Runtime state
 	agents  map[string]*AgentSession
 	msgCh   chan Message
 	mu      sync.RWMutex
 	stopCh  chan struct{}
 	running bool
 
-	// Callback config
-	callbackPort int
+	// QR callback server
+	qrCallbackPort int
+	server         *http.Server
+	serverOnce     sync.Once
 
-	// AES encryption
-	aesKey []byte
+	// QR callback for external display
+	qrCallback func(url string)
 
-	// Reconnection
-	maxRetries     int
-	retryDelay     time.Duration
-	currentRetries int
+	// HTTP client
+	httpClient *http.Client
 }
 
-// NewWeComGateway creates a new WeCom gateway
-func NewWeComGateway(corpID, agentID, secret string) *WeComGateway {
-	return &WeComGateway{
-		corpID:       corpID,
-		agentID:      agentID,
-		secret:       secret,
-		agents:       make(map[string]*AgentSession),
-		msgCh:        make(chan Message, 100),
-		stopCh:       make(chan struct{}),
-		callbackPort: 8080,
-		maxRetries:   5,
-		retryDelay:   time.Second * 5,
+// WeComSession represents the QR login session data
+type WeComSession struct {
+	UserID       string    `json:"user_id"`
+	UserName     string    `json:"user_name"`
+	UserDeptID   int       `json:"user_dept_id"`
+	AccessToken  string    `json:"access_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	LastActive   time.Time `json:"last_active"`
+}
+
+// NewWeComQRGateway creates a new WeCom QR code login gateway
+func NewWeComQRGateway(corpID, agentID, secret string) *WeComQRGateway {
+	home, _ := os.UserHomeDir()
+	sessionPath := filepath.Join(home, ".magic", "wecom", "session.json")
+
+	return &WeComQRGateway{
+		corpID:         corpID,
+		agentID:        agentID,
+		secret:         secret,
+		sessionPath:    sessionPath,
+		agents:         make(map[string]*AgentSession),
+		msgCh:          make(chan Message, 100),
+		stopCh:         make(chan struct{}),
+		qrCallbackPort: 8080,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
+// SetQRCallback sets a callback for QR code URL (for CLI display or API push)
+func (g *WeComQRGateway) SetQRCallback(cb func(url string)) {
+	g.qrCallback = cb
+}
+
+// SetQRCallbackPort sets the callback server port
+func (g *WeComQRGateway) SetQRCallbackPort(port int) {
+	g.qrCallbackPort = port
+}
+
 // Name returns the platform name
-func (g *WeComGateway) Name() string {
+func (g *WeComQRGateway) Name() string {
 	return "wecom"
 }
 
-// Connect establishes connection to WeCom
-func (g *WeComGateway) Connect(ctx context.Context) error {
+// Connect establishes connection with QR code login
+func (g *WeComQRGateway) Connect(ctx context.Context) error {
 	g.mu.Lock()
 	if g.running {
 		g.mu.Unlock()
@@ -79,148 +117,232 @@ func (g *WeComGateway) Connect(ctx context.Context) error {
 	g.running = true
 	g.mu.Unlock()
 
-	log.Infof("Connecting to WeCom gateway...")
+	log.Infof("Connecting to WeCom QR gateway...")
 
-	if err := g.refreshToken(); err != nil {
-		log.Errorf("Failed to get WeCom token: %v", err)
-		return err
+	// Ensure session directory exists
+	sessionDir := filepath.Dir(g.sessionPath)
+	if err := os.MkdirAll(sessionDir, 0700); err != nil {
+		return fmt.Errorf("failed to create session dir: %w", err)
 	}
 
-	go g.tokenRefresher()
-	go g.startCallbackServer()
+	// Try to load existing session
+	if err := g.loadSession(); err != nil {
+		log.Debugf("No existing session found: %v", err)
+	}
 
-	log.Info("WeCom gateway connected")
+	// Check if we have a valid user session
+	g.mu.RLock()
+	hasUser := g.userID != ""
+	g.mu.RUnlock()
+
+	// Check if we need to get/refresh access token using corpsecret
+	if err := g.refreshAccessToken(); err != nil {
+		log.Warnf("Failed to refresh access token: %v", err)
+	}
+
+	if !hasUser {
+		// Need new QR code login
+		log.Info("No user session found, starting QR code login...")
+		g.startQRServer(ctx)
+	} else {
+		log.Infof("Found user session: %s", g.userName)
+	}
+
+	log.Info("WeCom QR gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *WeComGateway) Disconnect() error {
+// startQRServer starts the local HTTP server for OAuth callback
+func (g *WeComQRGateway) startQRServer(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wecom/qr/callback", g.handleQROAuthCallback)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	addr := fmt.Sprintf(":%d", g.qrCallbackPort)
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	g.server = server
+
+	// Generate and display QR code URL
+	state := uuid.New().String()
+	authURL := g.buildAuthURL(state)
+
+	// Store state for verification
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.pendingState = state
+	g.mu.Unlock()
 
-	if !g.running {
-		return nil
+	log.Infof("WeCom QR server starting on %s", addr)
+	log.Infof("Please scan the QR code at: %s", authURL)
+
+	// Call QR callback if set
+	if g.qrCallback != nil {
+		g.qrCallback(authURL)
 	}
 
-	close(g.stopCh)
-	g.running = false
-	g.currentRetries = 0
-
-	log.Info("WeCom gateway disconnected")
-	return nil
-}
-
-// Send sends a message (enhanced to support rich content)
-func (g *WeComGateway) Send(ctx context.Context, resp Response) error {
-	if resp.ChannelID != "" {
-		content := resp.Content
-		// Check if content is rich text (starts with { or [)
-		if strings.HasPrefix(strings.TrimSpace(content), "{") ||
-			strings.HasPrefix(strings.TrimSpace(content), "[") {
-			// Try to send as rich content
-			if err := g.sendRichMessage(resp.ChannelID, content); err != nil {
-				log.Warnf("Failed to send rich message, falling back to text: %v", err)
-				return g.sendMessage(resp.ChannelID, content)
-			}
-			return nil
+	// Start server in background
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Errorf("WeCom QR server error: %v", err)
 		}
-		return g.sendMessage(resp.ChannelID, content)
-	}
-	return nil
+	}()
 }
 
-// Receive returns a channel of incoming messages
-func (g *WeComGateway) Receive() <-chan Message {
-	return g.msgCh
+// pendingState stores the OAuth state for CSRF protection
+var pendingStateWecom string
+
+// buildAuthURL builds the WeCom OAuth authorization URL
+func (g *WeComQRGateway) buildAuthURL(state string) string {
+	redirectURI := url.QueryEscape(fmt.Sprintf("http://localhost:%d/wecom/qr/callback", g.qrCallbackPort))
+	return fmt.Sprintf(
+		"https://login.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%s&redirect_uri=%s&state=%s",
+		g.corpID, g.agentID, redirectURI, state,
+	)
 }
 
-// HandleSlashCommand handles a slash command
-func (g *WeComGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	switch cmd {
-	case "help":
-		return Response{Content: "Available commands:\n/help - Show this help\n/stats - Show statistics"}, nil
-	case "stats":
-		return Response{Content: "Gateway is running"}, nil
-	default:
-		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+// handleQROAuthCallback handles the OAuth callback after QR scan
+func (g *WeComQRGateway) handleQROAuthCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+
+	// Verify state
+	g.mu.RLock()
+	expectedState := g.pendingState
+	g.mu.RUnlock()
+
+	if state != expectedState {
+		log.Errorf("Invalid OAuth state: expected %s, got %s", expectedState, state)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Invalid state"))
+		return
 	}
+
+	if code == "" {
+		log.Error("No code received in OAuth callback")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("No code provided"))
+		return
+	}
+
+	// Exchange code for user info
+	if err := g.exchangeCodeForUser(code); err != nil {
+		log.Errorf("Failed to exchange code for user: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Failed to authenticate"))
+		return
+	}
+
+	// Save session
+	if err := g.saveSession(); err != nil {
+		log.Errorf("Failed to save session: %v", err)
+	}
+
+	// Send success response
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head>
+    <title>WeCom Login Success</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
+        .success { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        .checkmark { color: #07C160; font-size: 48px; }
+        h1 { color: #07C160; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="success">
+        <div class="checkmark">✓</div>
+        <h1>Login Successful!</h1>
+        <p>You can close this window and return to the application.</p>
+    </div>
+</body>
+</html>`))
+
+	log.Infof("WeCom QR login successful! User: %s", g.userName)
 }
 
-// CheckHealth returns detailed health status for WeCom gateway
-func (g *WeComGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:  "wecom",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
-		CallbackPort: g.callbackPort,
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+// exchangeCodeForUser exchanges the OAuth code for user info
+func (g *WeComQRGateway) exchangeCodeForUser(code string) error {
+	// First get access token using corpsecret
+	if err := g.refreshAccessToken(); err != nil {
+		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	platformStatus := PlatformStatus{
-		Name:   "wecom",
-		Status: "connected",
-	}
-
-	if !status.Connected {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-		status.Platforms["wecom"] = platformStatus
-		return status
-	}
-
-	// Check token validity
 	g.tokenMu.RLock()
 	token := g.accessToken
-	tokenExpiry := g.tokenExpiresAt
 	g.tokenMu.RUnlock()
 
-	if token != "" {
-		status.TokenValid = true
-		status.Details["token_available"] = true
-	} else {
-		status.TokenValid = false
-		status.Details["token_available"] = false
-		platformStatus.Error = "No access token"
-		status.Status = "error"
+	// Then get user info using the code
+	userInfoURL := fmt.Sprintf(
+		"https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo?access_token=%s&code=%s",
+		token, code,
+	)
+
+	resp, err := g.httpClient.Get(userInfoURL)
+	if err != nil {
+		return fmt.Errorf("failed to request user info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if !tokenExpiry.IsZero() {
-		status.TokenExpiry = &tokenExpiry
-		if time.Now().After(tokenExpiry) {
-			status.TokenValid = false
-			status.Details["token_expired"] = true
-			platformStatus.Error = "Token expired"
-			status.Status = "error"
-		}
+	var result struct {
+		ErrCode   int    `json:"errcode"`
+		ErrMsg    string `json:"errmsg"`
+		UserID    string `json:"UserId"`
+		OpenID    string `json:"OpenId"`
+		Name      string `json:"name"`
+		DeptID    []int  `json:"deptid"`
 	}
 
-	status.Details["callback_port"] = g.callbackPort
-	status.Platforms["wecom"] = platformStatus
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
 
-	return status
+	if result.ErrCode != 0 {
+		return fmt.Errorf("user info API error: %d - %s", result.ErrCode, result.ErrMsg)
+	}
+
+	// Store user info
+	g.mu.Lock()
+	g.userID = result.UserID
+	g.userName = result.Name
+	if len(result.DeptID) > 0 {
+		g.userDeptID = result.DeptID[0]
+	}
+	g.mu.Unlock()
+
+	log.Infof("WeCom user info obtained: %s (ID: %s)", result.Name, result.UserID)
+	return nil
 }
 
-// IsConnected checks if connected to WeCom
-func (g *WeComGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.accessToken != ""
-}
+// refreshAccessToken refreshes the access token using corpsecret
+func (g *WeComQRGateway) refreshAccessToken() error {
+	tokenURL := fmt.Sprintf(
+		"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s",
+		g.corpID, g.secret,
+	)
 
-// refreshToken gets a new access token
-func (g *WeComGateway) refreshToken() error {
-	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s",
-		g.corpID, g.secret)
-
-	resp, err := http.Get(url)
+	resp, err := g.httpClient.Get(tokenURL)
 	if err != nil {
 		return fmt.Errorf("failed to request token: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
 
 	var result struct {
 		ErrCode     int    `json:"errcode"`
@@ -230,271 +352,169 @@ func (g *WeComGateway) refreshToken() error {
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse token response: %w", err)
+		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	if result.ErrCode != 0 {
-		return fmt.Errorf("token API error: %s", result.ErrMsg)
+		return fmt.Errorf("token API error: %d - %s", result.ErrCode, result.ErrMsg)
 	}
 
+	// Store token
 	g.tokenMu.Lock()
 	g.accessToken = result.AccessToken
 	g.tokenExpiresAt = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
 	g.tokenMu.Unlock()
 
-	log.Debugf("WeCom token refreshed")
+	log.Debugf("WeCom access token refreshed")
 	return nil
 }
 
-// tokenRefresher periodically refreshes the token
-func (g *WeComGateway) tokenRefresher() {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-g.stopCh:
-			return
-		case <-ticker.C:
-			g.mu.RLock()
-			running := g.running
-			g.mu.RUnlock()
-
-			if !running {
-				return
-			}
-
-			if err := g.refreshToken(); err != nil {
-				log.Errorf("Failed to refresh WeCom token: %v", err)
-			}
-		}
-	}
-}
-
-// startCallbackServer starts the HTTP server for callbacks
-func (g *WeComGateway) startCallbackServer() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/wecom/callback", g.handleCallback)
-
-	addr := fmt.Sprintf(":%d", g.callbackPort)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-
-	log.Infof("WeCom callback server starting on %s", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Errorf("WeCom callback server error: %v", err)
-	}
-}
-
-// SetCallbackPort sets the callback server port
-func (g *WeComGateway) SetCallbackPort(port int) {
-	g.callbackPort = port
-}
-
-// SetAESKey sets the AES key for callback encryption
-func (g *WeComGateway) SetAESKey(key string) {
-	g.encodingAESKey = key
-	g.aesKey = []byte(key + "=")[:32]
-}
-
-// handleCallback handles incoming callbacks from WeCom
-func (g *WeComGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
-
-	echostr := r.URL.Query().Get("echostr")
-
-	// Handle URL verification
-	if echostr != "" {
-		decoded, err := base64.StdEncoding.DecodeString(echostr)
-		if err != nil {
-			log.Errorf("Failed to decode echostr: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		if g.encodingAESKey != "" {
-			decrypted, err := g.decryptWeCom(decoded)
-			if err != nil {
-				log.Errorf("Failed to decrypt echostr: %v", err)
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			w.Write(decrypted)
-		} else {
-			w.Write(decoded)
-		}
-		return
-	}
-
-	if r.Method != "POST" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
+// loadSession loads the session from disk
+func (g *WeComQRGateway) loadSession() error {
+	data, err := os.ReadFile(g.sessionPath)
 	if err != nil {
-		log.Errorf("Failed to read callback body: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
+		return err
 	}
 
-	// Parse XML callback
-	var callback struct {
-		XMLName      xml.Name `xml:"xml"`
-		Encrypt      string   `xml:"Encrypt"`
-		MsgSignature string   `xml:"MsgSignature"`
-		TimeStamp    string   `xml:"TimeStamp"`
-		Nonce        string   `xml:"Nonce"`
-		Content      string   `xml:"Content"`
+	var session WeComSession
+	if err := json.Unmarshal(data, &session); err != nil {
+		return err
 	}
 
-	if err := xml.Unmarshal(body, &callback); err != nil {
-		log.Errorf("Failed to parse callback XML: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
+	g.mu.Lock()
+	g.userID = session.UserID
+	g.userName = session.UserName
+	g.userDeptID = session.UserDeptID
+	g.mu.Unlock()
 
-	// Decrypt if needed
-	var msgStr string
-	if callback.Encrypt != "" && g.encodingAESKey != "" {
-		decoded, err := base64.StdEncoding.DecodeString(callback.Encrypt)
-		if err != nil {
-			log.Errorf("Failed to decode encrypt: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+	g.tokenMu.Lock()
+	g.accessToken = session.AccessToken
+	g.tokenExpiresAt = session.ExpiresAt
+	g.tokenMu.Unlock()
 
-		decrypted, err := g.decryptWeCom(decoded)
-		if err != nil {
-			log.Errorf("Failed to decrypt callback: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		msgStr = string(decrypted)
-	} else {
-		msgStr = callback.Content
-	}
-
-	// Parse decrypted message
-	var event struct {
-		MsgType      string `xml:"MsgType"`
-		Content      string `xml:"Content"`
-		FromUserName string `xml:"FromUserName"`
-		ToUserName   string `xml:"ToUserName"`
-		MsgId        string `xml:"MsgId"`
-		AgentID      string `xml:"AgentID"`
-		Event        string `xml:"Event"`
-		CreateTime   int64  `xml:"CreateTime"`
-	}
-
-	if err := xml.Unmarshal([]byte(msgStr), &event); err != nil {
-		log.Errorf("Failed to parse callback event: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Handle different message types
-	switch event.MsgType {
-	case "text", "event":
-		g.handleMessageEvent(event)
-	default:
-		log.Debugf("Unhandled message type: %s", event.MsgType)
-	}
-
-	// Respond success
-	w.WriteHeader(http.StatusOK)
+	return nil
 }
 
-// decryptWeCom decrypts a WeCom callback
-func (g *WeComGateway) decryptWeCom(encrypted []byte) ([]byte, error) {
-	if len(g.aesKey) != 32 {
-		return nil, fmt.Errorf("invalid AES key length")
-	}
-
-	block, err := aes.NewCipher(g.aesKey)
-	if err != nil {
-		return nil, err
-	}
-
-	iv := encrypted[:aes.BlockSize]
-	encrypted = encrypted[aes.BlockSize:]
-
-	mode := cipher.NewCBCDecrypter(block, iv)
-	mode.CryptBlocks(encrypted, encrypted)
-
-	// Remove PKCS5 padding
-	padding := int(encrypted[len(encrypted)-1])
-	encrypted = encrypted[:len(encrypted)-padding]
-
-	// Remove random bytes and appid from beginning
-	// Format: random(16) + msg_len(4) + msg + appid
-	msgLen := int(encrypted[16])<<24 | int(encrypted[17])<<16 | int(encrypted[18])<<8 | int(encrypted[19])
-	msg := encrypted[20 : 20+msgLen]
-
-	return msg, nil
-}
-
-// handleMessageEvent processes a message receive event
-func (g *WeComGateway) handleMessageEvent(event struct {
-	MsgType      string `xml:"MsgType"`
-	Content      string `xml:"Content"`
-	FromUserName string `xml:"FromUserName"`
-	ToUserName   string `xml:"ToUserName"`
-	MsgId        string `xml:"MsgId"`
-	AgentID      string `xml:"AgentID"`
-	Event        string `xml:"Event"`
-	CreateTime   int64  `xml:"CreateTime"`
-}) {
-	// Only process text messages or click events
-	if event.MsgType != "text" && event.Event != "click" {
-		return
-	}
-
-	// Check if this is for our agent
-	if event.AgentID != "" && event.AgentID != g.agentID {
-		return
-	}
-
-	msg := Message{
-		ID:        event.MsgId,
-		Platform:  "wecom",
-		ChannelID: event.FromUserName, // User ID is channel ID in this context
-		UserID:    event.FromUserName,
-		Content:   event.Content,
-		Timestamp: time.Unix(event.CreateTime, 0),
-		Metadata: map[string]interface{}{
-			"to_user":  event.ToUserName,
-			"agent_id": event.AgentID,
-			"event":    event.Event,
-		},
-	}
-
-	// 企业微信事件消息（如 click 菜单事件）的 MsgId 可能为空
-	// 此时使用 "wecom_" + 时间戳 + FromUserName 生成唯一ID
-	if msg.ID == "" {
-		msg.ID = fmt.Sprintf("wecom_%d_%s", event.CreateTime, event.FromUserName)
-	}
-
+// saveSession saves the session to disk
+func (g *WeComQRGateway) saveSession() error {
 	g.mu.RLock()
-	msgCh := g.msgCh
+	userID := g.userID
+	userName := g.userName
+	userDeptID := g.userDeptID
 	g.mu.RUnlock()
 
-	select {
-	case msgCh <- msg:
-	default:
-		log.Warnf("WeCom message channel full, dropping message")
+	g.tokenMu.RLock()
+	session := WeComSession{
+		UserID:      userID,
+		UserName:    userName,
+		UserDeptID:  userDeptID,
+		AccessToken: g.accessToken,
+		ExpiresAt:  g.tokenExpiresAt,
+		LastActive:  time.Now(),
 	}
+	g.tokenMu.RUnlock()
+
+	data, err := json.MarshalIndent(session, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(g.sessionPath, data, 0600)
+}
+
+// Disconnect closes the connection
+func (g *WeComQRGateway) Disconnect() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.running {
+		return nil
+	}
+
+	g.serverOnce.Do(func() {
+		if g.server != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			g.server.Shutdown(shutdownCtx)
+		}
+		close(g.stopCh)
+		close(g.msgCh)
+	})
+	g.running = false
+
+	log.Info("WeCom QR gateway disconnected")
+	return nil
+}
+
+// IsConnected checks if connected to WeCom
+func (g *WeComQRGateway) IsConnected() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.running && g.userID != ""
+}
+
+// Send sends a message via WeCom API
+func (g *WeComQRGateway) Send(ctx context.Context, resp Response) error {
+	if !g.IsConnected() {
+		return fmt.Errorf("WeCom gateway not connected")
+	}
+
+	userID := resp.ChannelID
+	if userID == "" {
+		// Default to the logged-in user
+		g.mu.RLock()
+		userID = g.userID
+		g.mu.RUnlock()
+	}
+
+	if userID == "" {
+		return fmt.Errorf("User ID (channel ID) is required")
+	}
+
+	content := resp.Content
+
+	// Check if content is rich text (starts with { or [)
+	if strings.HasPrefix(strings.TrimSpace(content), "{") ||
+		strings.HasPrefix(strings.TrimSpace(content), "[") {
+		// Try to send as rich content
+		if err := g.sendRichMessage(userID, content); err != nil {
+			log.Warnf("Failed to send rich message, falling back to text: %v", err)
+			return g.sendMessage(userID, content)
+		}
+		return nil
+	}
+	return g.sendMessage(userID, content)
 }
 
 // sendMessage sends a message via WeCom API
-func (g *WeComGateway) sendMessage(userID, content string) error {
+func (g *WeComQRGateway) sendMessage(userID, content string) error {
 	g.tokenMu.RLock()
 	token := g.accessToken
 	g.tokenMu.RUnlock()
 
 	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=%s", token)
 
+	// WeCom has a 2048 character limit per message
+	var err error
+	if len(content) > 2040 {
+		// Split into multiple messages
+		for i := 0; i < len(content); i += 2030 {
+			end := i + 2030
+			if end > len(content) {
+				end = len(content)
+			}
+			if err = g.doSendMessage(url, userID, content[i:end]); err != nil {
+				return fmt.Errorf("failed to send message part: %w", err)
+			}
+		}
+		return nil
+	}
+
+	return g.doSendMessage(url, userID, content)
+}
+
+// doSendMessage performs the actual HTTP request to send a message
+func (g *WeComQRGateway) doSendMessage(url, userID, content string) error {
 	msg := map[string]interface{}{
 		"touser":  userID,
 		"msgtype": "text",
@@ -528,12 +548,12 @@ func (g *WeComGateway) sendMessage(userID, content string) error {
 }
 
 // SendText sends a text message
-func (g *WeComGateway) SendText(userID, content string) error {
+func (g *WeComQRGateway) SendText(userID, content string) error {
 	return g.sendMessage(userID, content)
 }
 
 // sendRichMessage sends a rich text or markdown message
-func (g *WeComGateway) sendRichMessage(userID, content string) error {
+func (g *WeComQRGateway) sendRichMessage(userID, content string) error {
 	g.tokenMu.RLock()
 	token := g.accessToken
 	g.tokenMu.RUnlock()
@@ -573,32 +593,147 @@ func (g *WeComGateway) sendRichMessage(userID, content string) error {
 	return g.sendMessage(userID, content)
 }
 
-// SendToUser sends a message to a user
-func (g *WeComGateway) SendToUser(userID, content string) error {
-	return g.sendMessage(userID, content)
+// Receive returns a channel of incoming messages
+func (g *WeComQRGateway) Receive() <-chan Message {
+	return g.msgCh
 }
 
-// Reconnect attempts to reconnect with exponential backoff
-func (g *WeComGateway) Reconnect(ctx context.Context) error {
+// HandleSlashCommand handles a slash command
+func (g *WeComQRGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
+	switch cmd {
+	case "help":
+		return Response{
+			Content: "Available commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Show connection status\n" +
+				"/login - Re-authenticate if disconnected",
+		}, nil
+	case "ping":
+		return Response{
+			Content: "Pong! 🏓",
+		}, nil
+	case "status":
+		g.mu.RLock()
+		hasUser := g.userID != ""
+		userName := g.userName
+		g.mu.RUnlock()
+
+		if hasUser {
+			return Response{
+				Content: fmt.Sprintf("Bot is connected!\nUser: %s (ID: %s)", userName, g.userID),
+			}, nil
+		}
+		return Response{
+			Content: "Bot is not connected. Please re-authenticate.",
+		}, nil
+	case "login":
+		go g.startQRServer(context.Background())
+		return Response{
+			Content: "Starting QR code login... Please check the terminal for the QR code URL.",
+		}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
+}
+
+// CheckHealth returns detailed health status for WeCom QR gateway
+func (g *WeComQRGateway) CheckHealth() *HealthStatus {
+	g.mu.RLock()
+	running := g.running
+	userID := g.userID
+	userName := g.userName
+	g.mu.RUnlock()
+
+	g.tokenMu.RLock()
+	tokenExpiry := g.tokenExpiresAt
+	g.tokenMu.RUnlock()
+
+	status := &HealthStatus{
+		Platform:     "wecom",
+		Connected:    running && userID != "",
+		Status:       "healthy",
+		CallbackPort: g.qrCallbackPort,
+		Details:      make(map[string]interface{}),
+		Platforms:    make(map[string]PlatformStatus),
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "wecom",
+		Status: "connected",
+	}
+
+	if !running {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not running"
+		status.Status = "error"
+		status.Platforms["wecom"] = platformStatus
+		return status
+	}
+
+	if userID == "" {
+		platformStatus.Status = "waiting_login"
+		platformStatus.Error = "Not authenticated, need QR login"
+		status.Status = "waiting_login"
+		status.Details["authenticated"] = false
+	} else {
+		status.TokenValid = true
+		status.Details["authenticated"] = true
+		status.Details["user_id"] = userID
+		status.Details["user_name"] = userName
+	}
+
+	if !tokenExpiry.IsZero() {
+		status.TokenExpiry = &tokenExpiry
+		if time.Now().After(tokenExpiry) {
+			status.Details["token_expired"] = true
+		}
+	}
+
+	status.Details["mode"] = "qr"
+	status.Details["callback_port"] = g.qrCallbackPort
+	status.Platforms["wecom"] = platformStatus
+
+	return status
+}
+
+// GetUserID returns the authenticated user's ID
+func (g *WeComQRGateway) GetUserID() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.userID
+}
+
+// GetUserName returns the authenticated user's name
+func (g *WeComQRGateway) GetUserName() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.userName
+}
+
+// IsAuthenticated returns whether the gateway is authenticated
+func (g *WeComQRGateway) IsAuthenticated() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.userID != ""
+}
+
+// TriggerReauth starts a new QR authentication flow
+func (g *WeComQRGateway) TriggerReauth(ctx context.Context) {
 	g.mu.Lock()
-	g.currentRetries++
-	retryDelay := g.retryDelay * time.Duration(g.currentRetries)
+	g.userID = ""
+	g.userName = ""
+	g.userDeptID = 0
 	g.mu.Unlock()
 
-	log.Infof("Attempting to reconnect to WeCom (attempt %d, delay %v)", g.currentRetries, retryDelay)
+	// Clear session file
+	os.Remove(g.sessionPath)
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(retryDelay):
-	}
+	g.startQRServer(ctx)
+}
 
-	if err := g.Connect(ctx); err != nil {
-		if g.currentRetries < g.maxRetries {
-			return g.Reconnect(ctx)
-		}
-		return fmt.Errorf("max retries exceeded")
-	}
-
-	return nil
+// Backward compatibility: NewWeComGateway creates a QR gateway by default
+// This is for API compatibility with existing code
+func NewWeComGateway(corpID, agentID, secret string) *WeComQRGateway {
+	return NewWeComQRGateway(corpID, agentID, secret)
 }
