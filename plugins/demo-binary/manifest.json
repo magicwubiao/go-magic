@@ -8,7 +8,11 @@
   "api_version": "1.0",
   "type": "binary",
   "entrypoint": "demo-binary",
-  "entrypoint_windows": "demo-binary.exe",
+  "entrypoints": {
+    "windows": "demo-binary.exe",
+    "darwin/arm64": "demo-binary-arm64",
+    "linux": "demo-binary-linux"
+  },
   "category": "utilities",
   "tags": ["demo", "binary", "example"],
   "permissions": ["filesystem", "network"],

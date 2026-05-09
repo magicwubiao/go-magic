@@ -39,8 +39,9 @@ type PluginManifest struct {
 	APIVersion    string         `json:"api_version"`     // go-magic API version
 	MinAppVersion string         `json:"min_app_version"` // Minimum go-magic version
 	Type          PluginType     `json:"type"`            // Plugin implementation type
-	Entrypoint         string         `json:"entrypoint"`            // Main entry file
-	EntrypointWindows  string         `json:"entrypoint_windows"`    // Windows entry file (optional)
+	Entrypoint         string         `json:"entrypoint"`            // Main entry file (default)
+	Entrypoints        map[string]string `json:"entrypoints"`        // Platform-specific entrypoints (key: GOOS, e.g. "windows", "darwin", "linux")
+	EntrypointWindows  string         `json:"entrypoint_windows"`    // Shortcut for entrypoints.windows
 	Permissions   []string       `json:"permissions"`     // Required permissions
 	Dependencies  []Dependency   `json:"dependencies"`    // Plugin dependencies
 	ConfigSchema  []ConfigField  `json:"config_schema"`   // Configuration schema

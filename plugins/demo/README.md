@@ -3,6 +3,22 @@
 A demo plugin for go-magic that showcases all plugin system capabilities.
 Cross-platform: works on Linux, macOS, and Windows.
 
+## Multi-Platform Support
+
+The manifest uses `entrypoints` to specify platform-specific entry files:
+
+```json
+{
+  "entrypoint": "run.sh",
+  "entrypoints": {
+    "windows": "run.ps1",
+    "darwin": "run.mac.sh"
+  }
+}
+```
+
+Priority: `entrypoints[GOOS/ARCH]` > `entrypoints[GOOS]` > `entrypoint_windows` shortcut > `entrypoint` default
+
 ## Features
 
 - **4 CLI Commands**: `hello`, `time`, `stats`, `echo`

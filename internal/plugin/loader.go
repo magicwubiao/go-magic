@@ -277,7 +277,7 @@ func (l *Loader) Validate(pluginPath string) error {
 	// Validate entrypoint exists
 	switch manifest.Type {
 	case TypeGo:
-		entrypoint := manifest.Entrypoint
+		entrypoint := resolveEntrypoint(manifest)
 		if entrypoint == "" {
 			entrypoint = manifest.ID + ".so"
 		}
@@ -285,10 +285,7 @@ func (l *Loader) Validate(pluginPath string) error {
 			return fmt.Errorf("plugin binary not found: %s", entrypoint)
 		}
 	case TypeScript:
-		entrypoint := manifest.Entrypoint
-		if runtime.GOOS == "windows" && manifest.EntrypointWindows != "" {
-			entrypoint = manifest.EntrypointWindows
-		}
+		entrypoint := resolveEntrypoint(manifest)
 		if entrypoint == "" {
 			entrypoint = "run." + getScriptExt(pluginPath)
 		}
@@ -296,8 +293,12 @@ func (l *Loader) Validate(pluginPath string) error {
 			return fmt.Errorf("script not found: %s", entrypoint)
 		}
 	case TypeBinary:
-		if _, err := os.Stat(filepath.Join(pluginPath, manifest.Entrypoint)); err != nil {
-			return fmt.Errorf("binary not found: %s", manifest.Entrypoint)
+		entrypoint := resolveEntrypoint(manifest)
+		if entrypoint == "" {
+			return fmt.Errorf("binary plugin requires entrypoint")
+		}
+		if _, err := os.Stat(filepath.Join(pluginPath, entrypoint)); err != nil {
+			return fmt.Errorf("binary not found: %s", entrypoint)
 		}
 	}
 
@@ -352,7 +353,7 @@ func (l *Loader) loadManifest(pluginPath string) (*PluginManifest, error) {
 
 // loadGoPlugin loads a Go plugin
 func (l *Loader) loadGoPlugin(pluginPath string, manifest *PluginManifest) (Plugin, error) {
-	entrypoint := manifest.Entrypoint
+	entrypoint := resolveEntrypoint(manifest)
 	if entrypoint == "" {
 		entrypoint = manifest.ID + ".so"
 	}
@@ -379,11 +380,7 @@ func (l *Loader) loadGoPlugin(pluginPath string, manifest *PluginManifest) (Plug
 
 // loadScriptPlugin loads a script plugin
 func (l *Loader) loadScriptPlugin(pluginPath string, manifest *PluginManifest) (Plugin, error) {
-	entrypoint := manifest.Entrypoint
-	// Use Windows-specific entrypoint if on Windows and available
-	if runtime.GOOS == "windows" && manifest.EntrypointWindows != "" {
-		entrypoint = manifest.EntrypointWindows
-	}
+	entrypoint := resolveEntrypoint(manifest)
 	if entrypoint == "" {
 		ext := getScriptExt(pluginPath)
 		entrypoint = "run." + ext
@@ -403,11 +400,12 @@ func (l *Loader) loadScriptPlugin(pluginPath string, manifest *PluginManifest) (
 
 // loadBinaryPlugin loads a binary plugin
 func (l *Loader) loadBinaryPlugin(pluginPath string, manifest *PluginManifest) (Plugin, error) {
-	if manifest.Entrypoint == "" {
+	entrypoint := resolveEntrypoint(manifest)
+	if entrypoint == "" {
 		return nil, fmt.Errorf("binary plugin requires entrypoint")
 	}
 
-	binaryPath := filepath.Join(pluginPath, manifest.Entrypoint)
+	binaryPath := filepath.Join(pluginPath, entrypoint)
 	if _, err := os.Stat(binaryPath); err != nil {
 		return nil, fmt.Errorf("binary not found: %s", binaryPath)
 	}
@@ -617,4 +615,31 @@ case "$1" in
 esac
 `
 	return os.WriteFile(filepath.Join(dir, "run.sh"), []byte(script), 0755)
+}
+
+// resolveEntrypoint picks the correct entrypoint for the current platform.
+// Priority: entrypoints[GOOS] > entrypoint_windows shortcut > entrypoint (default)
+func resolveEntrypoint(manifest *PluginManifest) string {
+	// 1. Check entrypoints map (most flexible)
+	if manifest.Entrypoints != nil {
+		if ep, ok := manifest.Entrypoints[runtime.GOOS]; ok {
+			return ep
+		}
+		// Also check arch-specific: e.g. "darwin/arm64"
+		archKey := runtime.GOOS + "/" + runtime.GOARCH
+		if ep, ok := manifest.Entrypoints[archKey]; ok {
+			return ep
+		}
+	}
+
+	// 2. Check shortcut fields
+	switch runtime.GOOS {
+	case "windows":
+		if manifest.EntrypointWindows != "" {
+			return manifest.EntrypointWindows
+		}
+	}
+
+	// 3. Default
+	return manifest.Entrypoint
 }
