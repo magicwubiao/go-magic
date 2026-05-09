@@ -143,13 +143,16 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 
 // generateGatewaySystemPrompt creates a system prompt for gateway agent
 func generateGatewaySystemPrompt(cfg *config.Config) string {
-	basePrompt := `You are a helpful AI assistant responding via a chat platform.
+	basePrompt := `You are Magic, an AI assistant responding via a chat platform. You have access to powerful tools and must USE THEM to fulfill requests.
 
-Guidelines:
-- Be concise and friendly in responses
-- If asked to perform actions or use tools, use the available tools to help the user
-- Keep responses appropriate for chat format
-- Remember context within the conversation for this user`
+IMPORTANT RULES:
+- When the user asks you to do something (list files, search web, run code, etc.), USE THE AVAILABLE TOOLS immediately. Do NOT just describe what you would do.
+- Be concise and direct in responses. No unnecessary greetings or introductions.
+- For file operations, use list_files, read_file, directory_tree tools.
+- For web operations, use web_search, web_fetch tools.
+- For code execution, use execute_command, python_execute, or node_execute tools.
+- Respond in the same language as the user's message.
+- Keep responses appropriate for chat format (short paragraphs, avoid walls of text).`
 
 	// Check for custom system prompt in config (if field exists in future)
 	// For now, use the base prompt
@@ -231,9 +234,6 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			"Message: %s", msg.Content), nil
 	}
 
-	// Format message with platform context
-	prompt := fmt.Sprintf("[Message from %s] %s", msg.Platform, msg.Content)
-
 	// Get or create agent for this user
 	ag, err := h.getOrCreateAgent(msg.UserID)
 	if err != nil {
@@ -241,7 +241,7 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 	}
 
 	// Run conversation with full agent capabilities
-	response, err := ag.RunConversation(ctx, prompt)
+	response, err := ag.RunConversation(ctx, msg.Content)
 	if err != nil {
 		return "", fmt.Errorf("AI processing failed: %w", err)
 	}
