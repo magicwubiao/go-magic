@@ -127,6 +127,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		maxTurns:           100,
 		maxIterations:      150, // Increased from 100 to allow more complex tasks
 		maxTotalLen:        200000, // 200K chars max history (~50K tokens)
+		maxMsgLen:          50000,  // 50K chars per message (~12K tokens)
 		maxTokenBudget:     0,
 		sameToolLimit:       8,
 		consecutiveLimit:   20,
@@ -1165,7 +1166,7 @@ func (a *Agent) SetMaxIterations(max int) {
 
 // truncateStr truncates a string to maximum length
 func truncateStr(s string, max int) string {
-	if len(s) <= max {
+	if max <= 0 || len(s) <= max {
 		return s
 	}
 	return s[:max] + fmt.Sprintf("... [truncated, total %d chars]", len(s))
