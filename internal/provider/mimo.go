@@ -30,7 +30,7 @@ func NewMiMoProvider(apiKey, model string) *MiMoProvider {
 	return &MiMoProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.mimo-v2.com/v1",
+		baseURL: "https://api.xiaomimimo.com/v1",
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},
