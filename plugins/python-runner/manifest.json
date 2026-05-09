@@ -1,0 +1,19 @@
+{
+  "id": "python-runner",
+  "name": "Python Runner",
+  "version": "1.0.0",
+  "description": "Execute Python code snippets",
+  "author": "go-magic",
+  "category": "code",
+  "type": "script",
+  "entrypoint": "run.sh",
+  "entrypoint_windows": "run.ps1",
+  "tags": ["python", "code", "execute"],
+  "commands": [
+    {
+      "name": "run",
+      "description": "Execute Python code. Pass code as argument.",
+      "arguments": ["code"]
+    }
+  ]
+}

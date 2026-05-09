@@ -218,7 +218,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 
 	// 代码执行分组
 	codeGroup := gm.CreateGroup("code", "Code execution")
-	for _, name := range []string{"execute_command", "python_execute", "node_execute"} {
+	for _, name := range []string{"execute_command"} {
 		if tool, err := registry.Get(name); err == nil {
 			codeGroup.Add(tool)
 		}

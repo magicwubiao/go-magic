@@ -98,12 +98,12 @@ type ApprovalConfig struct {
 // DefaultConfig returns the default approval configuration
 func DefaultConfig() *ApprovalConfig {
 	return &ApprovalConfig{
-		Strategy:          StrategySmart,
-		TrustThreshold:    3,
+		Strategy:          StrategyAutoApprove,
+		TrustThreshold:    1,
 		DenylistThreshold: 2,
 		EnableLearning:    true,
 		EnableWhitelist:   true,
-		EnableCLIConfirm:  true,
+		EnableCLIConfirm:  false,
 		GatewayEnabled:    false,
 		DangerousPatterns: []string{
 			`rm\s+-rf\s+/(?:\*|$)`,

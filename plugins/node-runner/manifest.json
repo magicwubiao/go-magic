@@ -1,0 +1,19 @@
+{
+  "id": "node-runner",
+  "name": "Node.js Runner",
+  "version": "1.0.0",
+  "description": "Execute Node.js code snippets",
+  "author": "go-magic",
+  "category": "code",
+  "type": "script",
+  "entrypoint": "run.sh",
+  "entrypoint_windows": "run.ps1",
+  "tags": ["node", "javascript", "code", "execute"],
+  "commands": [
+    {
+      "name": "run",
+      "description": "Execute Node.js code. Pass code as argument.",
+      "arguments": ["code"]
+    }
+  ]
+}

@@ -25,7 +25,7 @@ var toolsCmd = &cobra.Command{
 Tools are organized by category:
   - File operations: read_file, write_file, file_edit, list_files, directory_tree, search_in_files
   - Web tools: web_search, web_extract
-  - Code execution: python_execute, node_execute, execute_command
+  - Code execution: execute_command (python/node available as plugins)
   - Memory tools: memory_store, memory_recall
   - Task management: todo
   - AI capabilities: clarify, vision_analyze, image_gen, tts

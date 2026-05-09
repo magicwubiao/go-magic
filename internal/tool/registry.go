@@ -97,9 +97,8 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Command execution
 	r.Register(NewSecureExecuteCommandTool(workDir))
 
-	// Code execution
-	r.Register(&PythonExecuteTool{})
-	r.Register(&NodeExecuteTool{})
+	// Code execution moved to plugins (python-runner, node-runner)
+	// Use: magic plugin install python-runner / magic plugin install node-runner
 
 	// Memory tools
 	r.Register(&MemoryStoreTool{})
@@ -149,8 +148,6 @@ func (r *Registry) RegisterAll(workDir string) {
 
 	// Set default timeouts
 	r.SetTimeout("execute_command", 120*time.Second)
-	r.SetTimeout("python_execute", 60*time.Second)
-	r.SetTimeout("node_execute", 60*time.Second)
 	r.SetTimeout("web_search", 30*time.Second)
 	r.SetTimeout("web_extract", 60*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
@@ -168,8 +165,6 @@ func GetAllTools() []Tool {
 		&WebSearchTool{},
 		&WebExtractTool{},
 		NewSecureExecuteCommandTool(""),
-		&PythonExecuteTool{},
-		&NodeExecuteTool{},
 		&ListFilesTool{},
 		&SearchInFilesTool{},
 		&MemoryStoreTool{},

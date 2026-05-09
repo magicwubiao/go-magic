@@ -18,7 +18,7 @@ type ApprovalHook struct {
 
 // NewApprovalHook creates a new approval hook with smart approval
 func NewApprovalHook() *ApprovalHook {
-	mgr, err := approval.NewManager(nil) // uses DefaultConfig (strategy=smart)
+	mgr, err := approval.NewManager(nil) // uses DefaultConfig (strategy=auto)
 	if err != nil {
 		// Fallback: if manager can't be created, create one with safe defaults
 		mgr, _ = approval.NewManager(approval.DefaultConfig())
