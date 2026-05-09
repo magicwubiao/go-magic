@@ -210,6 +210,9 @@ func (t *CronJobTool) runJob(args map[string]interface{}) (interface{}, error) {
 func (t *CronJobTool) loadJobs() (map[string]*Job, error) {
 	data, err := os.ReadFile(t.jobsFile)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]*Job), nil
+		}
 		return nil, err
 	}
 
