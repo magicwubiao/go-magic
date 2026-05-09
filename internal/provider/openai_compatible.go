@@ -109,9 +109,10 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 // ChatWithTools implements the ToolCaller interface
 func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
-		"model":    p.Model,
-		"messages": ConvertMessages(messages),
-		"tools":    tools,
+		"model":       p.Model,
+		"messages":    ConvertMessages(messages),
+		"tools":       tools,
+		"tool_choice": "auto",
 	}
 
 	url := p.BaseURL + "/chat/completions"
@@ -195,6 +196,7 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 
 	if withTools && tools != nil {
 		reqBody["tools"] = tools
+		reqBody["tool_choice"] = "auto"
 	}
 
 	url := p.BaseURL + "/chat/completions"
