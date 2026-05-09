@@ -131,6 +131,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		toolCallCount:      make(map[string]int),
 		subTaskEnabled:     true,
 		hooks:              hooks.NewHookManager(),
+		bus:                bus.NewEventBus(),
 	}
 
 	agent.registerBuiltinHooks()
