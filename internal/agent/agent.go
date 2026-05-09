@@ -126,6 +126,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		history:            history,
 		maxTurns:           100,
 		maxIterations:      150, // Increased from 100 to allow more complex tasks
+		maxTotalLen:        200000, // 200K chars max history (~50K tokens)
 		maxTokenBudget:     0,
 		sameToolLimit:       8,
 		consecutiveLimit:   20,
@@ -993,6 +994,11 @@ func (a *Agent) GetHistoryLength() int {
 
 // truncateHistory truncates message history to prevent overflow
 func (a *Agent) truncateHistory() {
+	// If maxTotalLen is 0 (unset), skip truncation entirely
+	if a.maxTotalLen <= 0 {
+		return
+	}
+
 	totalLen := a.GetHistoryLength()
 
 	if a.compressionEnabled && totalLen > int(float64(a.maxTotalLen)*a.compressionRatio) {
