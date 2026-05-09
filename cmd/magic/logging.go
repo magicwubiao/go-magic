@@ -91,9 +91,10 @@ func initLogging() {
 	logFile = f
 	writeLogFile("[INFO] Logging initialized: " + logPath)
 
-	// Redirect Go's standard log to also write to our log file.
+	// Redirect Go's standard log to write to our log file only (not terminal).
 	// This captures stdlog.Printf calls from internal packages (agent, provider, etc.)
-	stdlog.SetOutput(io.MultiWriter(os.Stderr, &logWriter{file: f}))
+	// without cluttering the user's conversation output.
+	stdlog.SetOutput(&logWriter{file: f})
 }
 
 // logWriter wraps a log file to implement io.Writer for stdlog redirection.
