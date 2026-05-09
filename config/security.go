@@ -39,13 +39,9 @@ type PIIConfig struct {
 type CommandSecurityConfig struct {
 	AutoApproveSafe       bool     `yaml:"auto_approve_safe" json:"auto_approve_safe"`
 	AutoRejectDangerous   bool     `yaml:"auto_reject_dangerous" json:"auto_reject_dangerous"`
-	RequireApprovalLevels []string `yaml:"require_approval_levels" json:"require_approval_levels"` // "medium", "dangerous"
+	RequireApprovalLevels []string `yaml:"require_approval_levels" json:"require_approval_levels"` // "medium", "dangerous
 	AllowedCommands       []string `yaml:"allowed_commands" json:"allowed_commands"`               // Whitelist
 	BlockedCommands       []string `yaml:"blocked_commands" json:"blocked_commands"`               // Blacklist
-	ApprovalStrategy      string   `yaml:"approval_strategy" json:"approval_strategy"`             // manual, auto, smart, whitelist
-	EnableLearning        bool     `yaml:"enable_learning" json:"enable_learning"`                 // Learn from user decisions
-	TrustThreshold        int      `yaml:"trust_threshold" json:"trust_threshold"`                 // Approvals before auto-trust
-	EnableCLIConfirm      bool     `yaml:"enable_cli_confirm" json:"enable_cli_confirm"`           // CLI confirmation prompt
 }
 
 // HooksConfig configures hooks
@@ -89,10 +85,6 @@ func DefaultSecurityConfig() *SecurityConfig {
 			AutoApproveSafe:       true,
 			AutoRejectDangerous:   true,
 			RequireApprovalLevels: []string{"dangerous"},
-			ApprovalStrategy:      "smart",
-			EnableLearning:        true,
-			TrustThreshold:        3,
-			EnableCLIConfirm:      true,
 		},
 		Hooks: HooksConfig{
 			Enabled: []string{"privacy"},
@@ -145,10 +137,6 @@ func parseSecurityConfigYAML(data string) (*SecurityConfig, error) {
 			AutoApproveSafe:       true,
 			AutoRejectDangerous:   true,
 			RequireApprovalLevels: []string{"dangerous"},
-			ApprovalStrategy:      "smart",
-			EnableLearning:        true,
-			TrustThreshold:        3,
-			EnableCLIConfirm:      true,
 		},
 		Hooks: HooksConfig{
 			Enabled: []string{"privacy"},
@@ -225,10 +213,6 @@ func parseSecurityConfigJSON(data string) (*SecurityConfig, error) {
 			AutoApproveSafe:       true,
 			AutoRejectDangerous:   true,
 			RequireApprovalLevels: []string{"dangerous"},
-			ApprovalStrategy:      "smart",
-			EnableLearning:        true,
-			TrustThreshold:        3,
-			EnableCLIConfirm:      true,
 		},
 		Hooks: HooksConfig{
 			Enabled: []string{"privacy"},
