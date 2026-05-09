@@ -8,12 +8,15 @@ type HuoshanProvider struct {
 }
 
 // NewHuoshanProvider creates a new Huoshan provider
-func NewHuoshanProvider(apiKey, model string) *HuoshanProvider {
+func NewHuoshanProvider(apiKey, baseURL, model string) *HuoshanProvider {
 	if model == "" {
 		model = "ep-xxxxx" // 火山方舟的endpoint ID
 	}
+	if baseURL == "" {
+		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
+	}
 	return &HuoshanProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("huoshan", apiKey, "https://ark.cn-beijing.volces.com/api/v3", model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("huoshan", apiKey, baseURL, model),
 	}
 }
 

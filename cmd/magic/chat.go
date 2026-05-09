@@ -65,43 +65,43 @@ func runChat(cmd *cobra.Command, args []string) error {
 	case "deepseek":
 		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.Model)
 	case "huoshan":
-		prov = provider.NewHuoshanProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewHuoshanProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "dashscope":
-		prov = provider.NewDashScopeProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "kimi":
-		prov = provider.NewKimiProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewKimiProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "minimax":
-		prov = provider.NewMiniMaxProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewMiniMaxProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "ollama":
 		prov = provider.NewOllamaProvider(provCfg.APIKey, provCfg.Model)
 	case "openrouter":
-		prov = provider.NewOpenRouterProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewOpenRouterProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "vllm":
 		prov = provider.NewVLLMProvider(provCfg.APIKey, provCfg.Model)
 	case "zhipu":
-		prov = provider.NewZhipuProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewZhipuProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "gemini":
-		prov = provider.NewGeminiProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewGeminiProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "groq":
-		prov = provider.NewGroqProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewGroqProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "together":
-		prov = provider.NewTogetherProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewTogetherProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "mistral":
-		prov = provider.NewMistralProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewMistralProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "cohere":
-		prov = provider.NewCohereProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewCohereProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "perplexity":
-		prov = provider.NewPerplexityProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewPerplexityProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "doubao":
-		prov = provider.NewDoubaoProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewDoubaoProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "wenxin":
 		prov = provider.NewWenxinProvider(provCfg.APIKey, provCfg.APIKey, provCfg.Model)
 	case "moonshot":
 		prov = provider.NewMoonshotProvider(provCfg.APIKey, provCfg.Model)
 	case "mimo":
-		prov = provider.NewMiMoProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewMiMoProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "hunyuan":
-		prov = provider.NewHunyuanProvider(provCfg.APIKey, provCfg.Model)
+		prov = provider.NewHunyuanProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	case "custom":
 		prov = provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
 	default:

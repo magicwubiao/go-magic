@@ -212,43 +212,43 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 	case "deepseek":
 		return provider.NewDeepSeekProvider(cfg.APIKey, cfg.Model)
 	case "huoshan":
-		return provider.NewHuoshanProvider(cfg.APIKey, cfg.Model)
+		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "dashscope":
-		return provider.NewDashScopeProvider(cfg.APIKey, cfg.Model)
+		return provider.NewDashScopeProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "kimi":
-		return provider.NewKimiProvider(cfg.APIKey, cfg.Model)
+		return provider.NewKimiProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "minimax":
-		return provider.NewMiniMaxProvider(cfg.APIKey, cfg.Model)
+		return provider.NewMiniMaxProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "ollama":
 		return provider.NewOllamaProvider(cfg.APIKey, cfg.Model)
 	case "openrouter":
-		return provider.NewOpenRouterProvider(cfg.APIKey, cfg.Model)
+		return provider.NewOpenRouterProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "vllm":
 		return provider.NewVLLMProvider(cfg.APIKey, cfg.Model)
 	case "zhipu":
-		return provider.NewZhipuProvider(cfg.APIKey, cfg.Model)
+		return provider.NewZhipuProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "gemini":
-		return provider.NewGeminiProvider(cfg.APIKey, cfg.Model)
+		return provider.NewGeminiProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "groq":
-		return provider.NewGroqProvider(cfg.APIKey, cfg.Model)
+		return provider.NewGroqProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "together":
-		return provider.NewTogetherProvider(cfg.APIKey, cfg.Model)
+		return provider.NewTogetherProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "mistral":
-		return provider.NewMistralProvider(cfg.APIKey, cfg.Model)
+		return provider.NewMistralProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "cohere":
-		return provider.NewCohereProvider(cfg.APIKey, cfg.Model)
+		return provider.NewCohereProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "perplexity":
-		return provider.NewPerplexityProvider(cfg.APIKey, cfg.Model)
+		return provider.NewPerplexityProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "doubao":
-		return provider.NewDoubaoProvider(cfg.APIKey, cfg.Model)
+		return provider.NewDoubaoProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "wenxin":
 		return provider.NewWenxinProvider(cfg.APIKey, cfg.APIKey, cfg.Model)
 	case "moonshot":
 		return provider.NewMoonshotProvider(cfg.APIKey, cfg.Model)
 	case "mimo":
-		return provider.NewMiMoProvider(cfg.APIKey, cfg.Model)
+		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "hunyuan":
-		return provider.NewHunyuanProvider(cfg.APIKey, cfg.Model)
+		return provider.NewHunyuanProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	default:
 		// Fallback: try to use openai-compatible endpoint
 		if cfg.BaseURL != "" {

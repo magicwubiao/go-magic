@@ -24,14 +24,17 @@ type DoubaoProvider struct {
 }
 
 // NewDoubaoProvider creates a new Doubao provider
-func NewDoubaoProvider(apiKey, model string) *DoubaoProvider {
+func NewDoubaoProvider(apiKey, baseURL, model string) *DoubaoProvider {
 	if model == "" {
 		model = "doubao-pro-32k" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
 	}
 	return &DoubaoProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://ark.cn-beijing.volces.com/api/v3",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

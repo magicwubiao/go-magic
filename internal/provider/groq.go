@@ -25,16 +25,19 @@ type GroqProvider struct {
 }
 
 // NewGroqProvider creates a new Groq provider
-func NewGroqProvider(apiKey, model string) *GroqProvider {
+func NewGroqProvider(apiKey, baseURL, model string) *GroqProvider {
 	if model == "" {
 		model = "mixtral-8x7b-32768" // Default to fast model
 	}
+	if baseURL == "" {
+		baseURL = "https://api.groq.com/openai/v1"
+	}
 
 	return &GroqProvider{
-		BaseProvider: NewBaseProvider("https://api.groq.com/openai/v1"),
+		BaseProvider: NewBaseProvider(baseURL),
 		apiKey:       apiKey,
 		model:        model,
-		baseURL:      "https://api.groq.com/openai/v1",
+		baseURL:      baseURL,
 		metrics:      &RequestMetrics{},
 	}
 }

@@ -23,14 +23,17 @@ type MistralProvider struct {
 }
 
 // NewMistralProvider creates a new Mistral AI provider
-func NewMistralProvider(apiKey, model string) *MistralProvider {
+func NewMistralProvider(apiKey, baseURL, model string) *MistralProvider {
 	if model == "" {
 		model = "mistral-small-latest" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.mistral.ai/v1"
 	}
 	return &MistralProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.mistral.ai/v1",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

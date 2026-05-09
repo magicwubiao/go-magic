@@ -23,14 +23,17 @@ type HunyuanProvider struct {
 }
 
 // NewHunyuanProvider creates a new Hunyuan provider
-func NewHunyuanProvider(apiKey, model string) *HunyuanProvider {
+func NewHunyuanProvider(apiKey, baseURL, model string) *HunyuanProvider {
 	if model == "" {
 		model = "hunyuan-turbo" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
 	}
 	return &HunyuanProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.hunyuan.cloud.tencent.com/v1",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

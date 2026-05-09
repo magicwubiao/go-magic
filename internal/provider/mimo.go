@@ -23,14 +23,17 @@ type MiMoProvider struct {
 }
 
 // NewMiMoProvider creates a new MiMo provider
-func NewMiMoProvider(apiKey, model string) *MiMoProvider {
+func NewMiMoProvider(apiKey, baseURL, model string) *MiMoProvider {
 	if model == "" {
 		model = "mimo-v2-flash" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.xiaomimimo.com/v1"
 	}
 	return &MiMoProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.xiaomimimo.com/v1",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

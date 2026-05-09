@@ -13,17 +13,22 @@ import (
 
 // DashScopeProvider 阿里云DashScope (兼容OpenAI格式)
 type DashScopeProvider struct {
-	apiKey string
-	model  string
+	apiKey  string
+	model   string
+	baseURL string
 }
 
-func NewDashScopeProvider(apiKey, model string) *DashScopeProvider {
+func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
 	if model == "" {
 		model = "qwen-max"
 	}
+	if baseURL == "" {
+		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
 	return &DashScopeProvider{
-		apiKey: apiKey,
-		model:  model,
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: baseURL,
 	}
 }
 
@@ -43,7 +48,8 @@ func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*Chat
 	}
 
 	// DashScope 兼容 OpenAI 格式
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", bytes.NewReader(jsonBody))
+	url := p.baseURL + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
 	}

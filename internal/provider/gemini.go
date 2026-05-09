@@ -23,14 +23,17 @@ type GeminiProvider struct {
 }
 
 // NewGeminiProvider creates a new Gemini provider
-func NewGeminiProvider(apiKey, model string) *GeminiProvider {
+func NewGeminiProvider(apiKey, baseURL, model string) *GeminiProvider {
 	if model == "" {
 		model = "gemini-1.5-flash" // Default to cost-effective model
+	}
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com/v1beta"
 	}
 	return &GeminiProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://generativelanguage.googleapis.com/v1beta",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

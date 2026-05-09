@@ -8,12 +8,15 @@ type OpenRouterProvider struct {
 }
 
 // NewOpenRouterProvider creates a new OpenRouter provider
-func NewOpenRouterProvider(apiKey, model string) *OpenRouterProvider {
+func NewOpenRouterProvider(apiKey, baseURL, model string) *OpenRouterProvider {
 	if model == "" {
 		model = "openai/gpt-4"
 	}
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
 	return &OpenRouterProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("openrouter", apiKey, "https://openrouter.ai/api/v1", model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("openrouter", apiKey, baseURL, model),
 	}
 }
 

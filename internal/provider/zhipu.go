@@ -8,12 +8,15 @@ type ZhipuProvider struct {
 }
 
 // NewZhipuProvider creates a new Zhipu provider
-func NewZhipuProvider(apiKey, model string) *ZhipuProvider {
+func NewZhipuProvider(apiKey, baseURL, model string) *ZhipuProvider {
 	if model == "" {
 		model = "glm-4"
 	}
+	if baseURL == "" {
+		baseURL = "https://open.bigmodel.cn/api/paas/v4"
+	}
 	return &ZhipuProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("zhipu", apiKey, "https://open.bigmodel.cn/api/paas/v4", model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("zhipu", apiKey, baseURL, model),
 	}
 }
 

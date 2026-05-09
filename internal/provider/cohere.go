@@ -23,14 +23,17 @@ type CohereProvider struct {
 }
 
 // NewCohereProvider creates a new Cohere provider
-func NewCohereProvider(apiKey, model string) *CohereProvider {
+func NewCohereProvider(apiKey, baseURL, model string) *CohereProvider {
 	if model == "" {
 		model = "command-r-plus" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.cohere.ai/v1"
 	}
 	return &CohereProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.cohere.ai/v1",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

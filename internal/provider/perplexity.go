@@ -23,14 +23,17 @@ type PerplexityProvider struct {
 }
 
 // NewPerplexityProvider creates a new Perplexity provider
-func NewPerplexityProvider(apiKey, model string) *PerplexityProvider {
+func NewPerplexityProvider(apiKey, baseURL, model string) *PerplexityProvider {
 	if model == "" {
 		model = "sonar" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.perplexity.ai"
 	}
 	return &PerplexityProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.perplexity.ai",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

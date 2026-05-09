@@ -23,14 +23,17 @@ type TogetherProvider struct {
 }
 
 // NewTogetherProvider creates a new Together AI provider
-func NewTogetherProvider(apiKey, model string) *TogetherProvider {
+func NewTogetherProvider(apiKey, baseURL, model string) *TogetherProvider {
 	if model == "" {
 		model = "mistralai/Mixtral-8x7B-Instruct-v0.1" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.together.xyz/v1"
 	}
 	return &TogetherProvider{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.together.xyz/v1",
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},

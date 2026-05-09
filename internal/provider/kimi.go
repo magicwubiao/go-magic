@@ -8,12 +8,15 @@ type KimiProvider struct {
 }
 
 // NewKimiProvider creates a new Kimi provider
-func NewKimiProvider(apiKey, model string) *KimiProvider {
+func NewKimiProvider(apiKey, baseURL, model string) *KimiProvider {
 	if model == "" {
 		model = "moonshot-v1-8k"
 	}
+	if baseURL == "" {
+		baseURL = "https://api.moonshot.cn/v1"
+	}
 	return &KimiProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("kimi", apiKey, "https://api.moonshot.cn/v1", model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("kimi", apiKey, baseURL, model),
 	}
 }
 

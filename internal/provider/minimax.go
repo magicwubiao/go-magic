@@ -8,12 +8,15 @@ type MiniMaxProvider struct {
 }
 
 // NewMiniMaxProvider creates a new MiniMax provider
-func NewMiniMaxProvider(apiKey, model string) *MiniMaxProvider {
+func NewMiniMaxProvider(apiKey, baseURL, model string) *MiniMaxProvider {
 	if model == "" {
 		model = "abab6-chat"
 	}
+	if baseURL == "" {
+		baseURL = "https://api.minimax.chat/v1"
+	}
 	return &MiniMaxProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("minimax", apiKey, "https://api.minimax.chat/v1", model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("minimax", apiKey, baseURL, model),
 	}
 }
 
