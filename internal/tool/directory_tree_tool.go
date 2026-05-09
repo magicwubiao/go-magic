@@ -67,7 +67,7 @@ func (t *DirectoryTreeTool) Execute(ctx context.Context, params map[string]inter
 		path = p
 	}
 
-	maxDepth := 3
+	maxDepth := 2
 	if md, ok := params["max_depth"].(float64); ok {
 		maxDepth = int(md)
 	}

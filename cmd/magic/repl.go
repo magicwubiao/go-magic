@@ -108,17 +108,13 @@ func NewREPL(cfg *config.Config, prov provider.Provider, registry *tool.Registry
 		cortexMgr.Start()
 		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
 	}
-	aiAgent := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), `You are Magic, an AI assistant with powerful tools. You must USE TOOLS to fulfill requests.
+	aiAgent := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), `You are Magic. Execute tasks directly using tools. Respond concisely in the user's language.
 
-IMPORTANT RULES:
-- When asked to do something (create file, search web, run code, etc.), USE THE RELEVANT TOOL IMMEDIATELY. Do NOT explore or describe what you would do — just do it.
-- For file creation: use write_file directly with the requested content
-- For file listing: use list_files or directory_tree
-- For file reading: use read_file
-- For web search: use web_search
-- For code execution: use execute_command, python_execute, or node_execute
-- Be concise. No greetings, no intros, no bullet-point capability lists. Just execute the task and give the result.
-- Respond in the same language as the user's message.`, agentOpts...)
+RULES:
+- Call ONLY the tool that directly answers the request. Do NOT call memory_recall, todo, directory_tree, or session_search unless the user explicitly asks for them.
+- One request → one tool call → brief answer. No exploration, no pre-checks.
+- Never list your capabilities or give intros.
+- Keep answers short. For file listings, summarize (e.g. "6 directories, 12 files"). Do NOT dump raw JSON.`, agentOpts...)
 
 	// Note: cortex memory is NOT injected into system prompt here.
 	// Memory injection is controlled by memoryEnabled flag and handled
