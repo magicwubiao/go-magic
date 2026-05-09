@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,6 +22,158 @@ var setupCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(setupCmd)
+}
+
+// Provider models mapping
+var providerModels = map[string][]string{
+	"deepseek":   {"deepseek-chat", "deepseek-reasoner"},
+	"anthropic":  {"claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"},
+	"openai":     {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini", "o3-mini"},
+	"kimi":       {"moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"},
+	"zhipu":      {"glm-4", "glm-4-flash", "glm-4-plus"},
+	"huoshan":    {"doubao-pro-32k", "doubao-pro-128k", "doubao-lite-32k"},
+	"minimax":    {"abab6.5s-chat", "abab6.5-chat", "abab5.5-chat"},
+	"dashscope":  {"qwen-turbo", "qwen-plus", "qwen-max", "qwen-long"},
+	"ollama":     {}, // Local model, user fills in
+	"vllm":       {}, // Local model, user fills in
+	"openrouter": {"openrouter/anthropic/claude-3.5-sonnet", "openrouter/openai/gpt-4o", "openrouter/google/gemini-pro"},
+	"custom":     {}, // Custom, user fills in
+}
+
+// selectItem displays options and allows selection via number or custom input
+// items: list of options
+// defaultIdx: default selected index (0-based)
+// allowCustom: whether to allow custom input
+// title: display title for the selection
+func selectItem(reader *bufio.Reader, items []string, defaultIdx int, allowCustom bool, title string) (string, error) {
+	if len(items) == 0 {
+		// No predefined items, just read input
+		input, _ := reader.ReadString('\n')
+		return strings.TrimSpace(input), nil
+	}
+
+	// Adjust default index if out of bounds
+	if defaultIdx < 0 || defaultIdx >= len(items) {
+		defaultIdx = 0
+	}
+
+	selected := defaultIdx
+
+	for {
+		// Clear lines and show selection
+		fmt.Println()
+		fmt.Printf("%s:\n", title)
+		for i, item := range items {
+			prefix := "  "
+			if i == selected {
+				prefix = "> "
+			}
+			fmt.Printf("  %s[%d] %s\n", prefix, i+1, item)
+		}
+
+		if allowCustom {
+			fmt.Println("  [Other] Custom input")
+		}
+
+		// Show prompt on the same line
+		prompt := fmt.Sprintf("Select (1-%d, default %d, ↑↓ navigate, Enter confirm): ", len(items), defaultIdx+1)
+		fmt.Print(prompt)
+
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		// Empty input means confirm current selection
+		if input == "" {
+			return items[selected], nil
+		}
+
+		// Try to parse as number
+		if num, err := strconv.Atoi(input); err == nil {
+			if num >= 1 && num <= len(items) {
+				return items[num-1], nil
+			}
+			fmt.Printf("  Invalid choice. Please enter 1-%d.\n", len(items))
+			continue
+		}
+
+		// Check for "Other" or custom input
+		if allowCustom {
+			if strings.ToLower(input) == "other" || strings.ToLower(input) == "custom" {
+				fmt.Println()
+				fmt.Print("  Enter custom value: ")
+				custom, _ := reader.ReadString('\n')
+				return strings.TrimSpace(custom), nil
+			}
+			// Treat as custom input
+			return input, nil
+		}
+
+		fmt.Printf("  Invalid input. Please enter 1-%d or Enter to confirm default.\n", len(items))
+	}
+}
+
+// selectProvider displays provider options and allows selection via number
+func selectProvider(reader *bufio.Reader, currentProvider string, providerToNum map[string]string) (string, error) {
+	providers := []string{
+		"deepseek", "anthropic", "openai", "kimi",
+		"zhipu", "huoshan", "minimax", "dashscope",
+		"ollama", "vllm", "openrouter", "custom",
+	}
+
+	providerNames := []string{
+		"DeepSeek",
+		"Anthropic (Claude)",
+		"OpenAI (GPT-4, GPT-3.5)",
+		"Kimi (Moonshot)",
+		"Zhipu (GLM)",
+		"Huoshan (Volcano Engine)",
+		"MiniMax",
+		"Dashscope (Qwen)",
+		"Ollama (Local)",
+		"vLLM (Local)",
+		"OpenRouter",
+		"Other (custom)",
+	}
+
+	// Find current selection
+	currentIdx := 0
+	if numStr, ok := providerToNum[currentProvider]; ok {
+		if num, err := strconv.Atoi(numStr); err == nil && num >= 1 && num <= len(providers) {
+			currentIdx = num - 1
+		}
+	}
+
+	for {
+		fmt.Println()
+		fmt.Println("LLM Provider:")
+		for i, name := range providerNames {
+			prefix := "  "
+			if i == currentIdx {
+				prefix = "> "
+			}
+			fmt.Printf("  %s[%d] %s\n", prefix, i+1, name)
+		}
+
+		prompt := fmt.Sprintf("Select (1-%d, default %d, ↑↓ navigate, Enter confirm): ", len(providers), currentIdx+1)
+		fmt.Print(prompt)
+
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if input == "" {
+			return providers[currentIdx], nil
+		}
+
+		if num, err := strconv.Atoi(input); err == nil {
+			if num >= 1 && num <= len(providers) {
+				return providers[num-1], nil
+			}
+			fmt.Printf("Invalid choice. Please enter 1-%d.\n", len(providers))
+			continue
+		}
+
+		fmt.Printf("Invalid input. Please enter 1-%d or Enter to confirm default.\n", len(providers))
+	}
 }
 
 // readInput reads a line from stdin, trims it, and returns the result.
@@ -87,18 +240,18 @@ func runSetup(cmd *cobra.Command, args []string) {
 		model   string
 		baseURL string
 	}{
-		"deepseek":  {"DeepSeek", "deepseek-chat", "https://api.deepseek.com/v1"},
-		"anthropic": {"Anthropic (Claude)", "claude-3-5-sonnet-20241022", "https://api.anthropic.com/v1"},
-		"openai":    {"OpenAI (GPT-4, GPT-3.5)", "gpt-4o", "https://api.openai.com/v1"},
-		"kimi":      {"Kimi (Moonshot)", "moonshot-v1-8k", "https://api.moonshot.cn/v1"},
-		"zhipu":     {"Zhipu (GLM)", "glm-4", "https://open.bigmodel.cn/api/paas/v4"},
-		"huoshan":   {"Huoshan (Volcano Engine)", "ep-20250105-xxxxx", "https://volcengine.com/api/v1"},
-		"minimax":   {"MiniMax", "abab6-chat", "https://api.minimax.chat/v1"},
-		"dashscope": {"Dashscope (Qwen)", "qwen-turbo", "https://dashscope.aliyuncs.com/api/v1"},
-		"ollama":    {"Ollama (Local)", "llama3.2", "http://localhost:11434/v1"},
-		"vllm":      {"vLLM (Local)", "", "http://localhost:8000/v1"},
+		"deepseek":   {"DeepSeek", "deepseek-chat", "https://api.deepseek.com/v1"},
+		"anthropic":  {"Anthropic (Claude)", "claude-3-5-sonnet-20241022", "https://api.anthropic.com/v1"},
+		"openai":     {"OpenAI (GPT-4, GPT-3.5)", "gpt-4o", "https://api.openai.com/v1"},
+		"kimi":       {"Kimi (Moonshot)", "moonshot-v1-8k", "https://api.moonshot.cn/v1"},
+		"zhipu":      {"Zhipu (GLM)", "glm-4", "https://open.bigmodel.cn/api/paas/v4"},
+		"huoshan":    {"Huoshan (Volcano Engine)", "ep-20250105-xxxxx", "https://volcengine.com/api/v1"},
+		"minimax":    {"MiniMax", "abab6-chat", "https://api.minimax.chat/v1"},
+		"dashscope":  {"Dashscope (Qwen)", "qwen-turbo", "https://dashscope.aliyuncs.com/api/v1"},
+		"ollama":     {"Ollama (Local)", "llama3.2", "http://localhost:11434/v1"},
+		"vllm":       {"vLLM (Local)", "", "http://localhost:8000/v1"},
 		"openrouter": {"OpenRouter", "openrouter/anthropic/claude-3.5-sonnet", "https://openrouter.ai/api/v1"},
-		"custom":    {"Other (custom)", "", ""},
+		"custom":     {"Other (custom)", "", ""},
 	}
 
 	// Map provider to selection number
@@ -108,60 +261,13 @@ func runSetup(cmd *cobra.Command, args []string) {
 		"ollama": "9", "vllm": "10", "openrouter": "11", "custom": "12",
 	}
 
-	// Provider selection - show current value
-	currentProviderName := provider
-	if p, ok := providerDefaults[provider]; ok {
-		currentProviderName = p.name
-	}
+	// Provider selection
+	// fmt.Printf("1. Choose your LLM provider (current: %s):\n", currentProviderName)
+	newProvider, _ := selectProvider(reader, provider, providerToNum)
 
-	fmt.Printf("1. Choose your LLM provider (current: %s):\n", currentProviderName)
-	fmt.Println("   [1] DeepSeek")
-	fmt.Println("   [2] Anthropic (Claude)")
-	fmt.Println("   [3] OpenAI (GPT-4, GPT-3.5)")
-	fmt.Println("   [4] Kimi (Moonshot)")
-	fmt.Println("   [5] Zhipu (GLM)")
-	fmt.Println("   [6] Huoshan (Volcano Engine)")
-	fmt.Println("   [7] MiniMax")
-	fmt.Println("   [8] Dashscope (Qwen)")
-	fmt.Println("   [9] Ollama (Local)")
-	fmt.Println("   [10] vLLM (Local)")
-	fmt.Println("   [11] OpenRouter")
-	fmt.Println("   [12] Other (custom)")
-	fmt.Printf("   Select (1-12, default %s - keep current): ", providerToNum[provider])
-
-	choice := readInput(reader, providerToNum[provider])
-
-	// Resolve provider, model, baseURL from choice
-	newProvider := provider
+	// Resolve provider, model, baseURL from selection
 	model := provCfg.Model
 	baseURL := provCfg.BaseURL
-
-	switch choice {
-	case "1":
-		newProvider = "deepseek"
-	case "2":
-		newProvider = "anthropic"
-	case "3":
-		newProvider = "openai"
-	case "4":
-		newProvider = "kimi"
-	case "5":
-		newProvider = "zhipu"
-	case "6":
-		newProvider = "huoshan"
-	case "7":
-		newProvider = "minimax"
-	case "8":
-		newProvider = "dashscope"
-	case "9":
-		newProvider = "ollama"
-	case "10":
-		newProvider = "vllm"
-	case "11":
-		newProvider = "openrouter"
-	case "12":
-		newProvider = "custom"
-	}
 
 	// If provider changed, use defaults for the new provider
 	if newProvider != provider {
@@ -185,16 +291,19 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	// API Key - show masked existing key if present
 	apiKeyDisplay := ""
-	if provCfg.APIKey != "" && provider == newProvider {
+	currentProvCfg := cfg.Providers[provider]
+	if currentProvCfg.APIKey != "" {
 		// Show last 4 chars only
-		if len(provCfg.APIKey) > 4 {
-			apiKeyDisplay = " (current: ..." + provCfg.APIKey[len(provCfg.APIKey)-4:] + ")"
+		if len(currentProvCfg.APIKey) > 4 {
+			apiKeyDisplay = " (current: ..." + currentProvCfg.APIKey[len(currentProvCfg.APIKey)-4:] + ")"
 		} else {
 			apiKeyDisplay = " (current: ****)"
 		}
 	}
-	fmt.Printf("\n2. Enter your %s API key%s: ", provider, apiKeyDisplay)
-	apiKey := readInput(reader, provCfg.APIKey)
+	fmt.Println()
+	fmt.Printf("API Key for %s%s:\n", provider, apiKeyDisplay)
+	fmt.Print("> ")
+	apiKey := readInput(reader, currentProvCfg.APIKey)
 
 	if apiKey == "" && provider != "ollama" && provider != "custom" && provider != "vllm" {
 		fmt.Println("\n   Warning: API key is empty. You may need to configure it later.")
@@ -204,12 +313,38 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	// Custom provider additional fields
 	if provider == "custom" {
-		fmt.Printf("3. Enter API base URL (current: %s): ", baseURL)
+		fmt.Println()
+		fmt.Printf("API Base URL (current: %s):\n", baseURL)
+		fmt.Print("> ")
 		baseURL = readInput(reader, baseURL)
 
-		fmt.Printf("4. Enter model name (current: %s): ", model)
+		fmt.Println()
+		fmt.Println("Model name:")
+		fmt.Print("> ")
 		model = readInput(reader, model)
 	}
+
+	// Model selection
+	fmt.Println()
+	modelTitle := fmt.Sprintf("Model for %s (current: %s)", provider, model)
+	// Find default index for current model
+	defaultIdx := 0
+	models := providerModels[provider]
+	for i, m := range models {
+		if m == model {
+			defaultIdx = i
+			break
+		}
+	}
+	// For providers with no predefined models (ollama, vllm, custom)
+	allowCustom := len(models) == 0
+	if !allowCustom {
+		// Add "Other" option
+		allowCustom = true
+	}
+
+	selectedModel, _ := selectItem(reader, models, defaultIdx, allowCustom, modelTitle)
+	model = selectedModel
 
 	// Build provider config
 	provCfg = config.ProviderConfig{
@@ -220,19 +355,14 @@ func runSetup(cmd *cobra.Command, args []string) {
 	cfg.Providers[provider] = provCfg
 	cfg.Model = model
 
-	// Model selection
-	fmt.Printf("\n3. Choose model (current: %s): ", model)
-	inputModel := readInput(reader, model)
-	cfg.Model = inputModel
-	provCfg.Model = inputModel
-	cfg.Providers[provider] = provCfg
-
 	// Profile name
 	profileLabel := "default"
 	if cfg.Profile != "" {
 		profileLabel = cfg.Profile
 	}
-	fmt.Printf("\n4. Enter profile name (current: %s): ", profileLabel)
+	fmt.Println()
+	fmt.Printf("Profile name (current: %s):\n", profileLabel)
+	fmt.Print("> ")
 	profile := readInput(reader, cfg.Profile)
 	cfg.Profile = profile
 
@@ -241,7 +371,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 	if cfg.CortexEnabled {
 		cortexDefault = "Y"
 	}
-	fmt.Printf("\n5. Enable Cortex AI enhancement? (y/N, default %s): ", cortexDefault)
+	fmt.Println()
+	fmt.Printf("Enable Cortex AI enhancement? (y/N, default %s): ", cortexDefault)
 	cortexChoice := readInput(reader, cortexDefault)
 	cfg.CortexEnabled = !(cortexChoice == "n" || cortexChoice == "N")
 
@@ -250,7 +381,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 	if cfg.Gateway.Enabled {
 		gatewayDefault = "y"
 	}
-	fmt.Printf("\n6. Enable messaging gateway? (y/N, default %s): ", gatewayDefault)
+	fmt.Printf("\nEnable messaging gateway? (y/N, default %s): ", gatewayDefault)
 	gatewayChoice := readInput(reader, gatewayDefault)
 	if gatewayChoice == "y" || gatewayChoice == "Y" {
 		cfg.Gateway.Enabled = true
@@ -274,7 +405,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 			fmt.Println("      [12] Matrix")
 			fmt.Println("      [0] Done (结束配置)")
 
-			fmt.Print("\n   Select platform to configure (0-12): ") 
+			fmt.Print("\n   Select platform to configure (0-12): ")
 			platformChoice, _ := reader.ReadString('\n')
 			platformChoice = strings.TrimSpace(platformChoice)
 
