@@ -185,16 +185,6 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 	newAgent := agent.NewEnhancedAgent(h.provider, h.registry, toolsSchema, h.systemPrompt, agentOpts...)
 	newAgent.SetSession(userID)
 
-	// Inject cortex memory context into system prompt
-	if h.cortexMgr != nil {
-		if memCtx := h.cortexMgr.GetPromptContext(); memCtx != "" {
-			newAgent.AddSystemContext("[Memory Context]\n" + memCtx)
-		}
-		if userCtx := h.cortexMgr.GetUserContext(); userCtx != "" {
-			newAgent.AddSystemContext("[User Profile]\n" + userCtx)
-		}
-	}
-
 	h.agents[userID] = newAgent
 	return newAgent, nil
 }

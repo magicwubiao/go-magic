@@ -120,15 +120,10 @@ IMPORTANT RULES:
 - Be concise. No greetings, no intros, no bullet-point capability lists. Just execute the task and give the result.
 - Respond in the same language as the user's message.`, agentOpts...)
 
-	// Inject cortex memory context into system prompt
-	if cortexMgr != nil {
-		if memCtx := cortexMgr.GetPromptContext(); memCtx != "" {
-			aiAgent.AddSystemContext("[Memory Context]\n" + memCtx)
-		}
-		if userCtx := cortexMgr.GetUserContext(); userCtx != "" {
-			aiAgent.AddSystemContext("[User Profile]\n" + userCtx)
-		}
-	}
+	// Note: cortex memory is NOT injected into system prompt here.
+	// Memory injection is controlled by memoryEnabled flag and handled
+	// inside RunWithCortex when appropriate. Injecting raw memory
+	// context pollutes the prompt and confuses the model.
 
 	repl := &REPL{
 		agent:    aiAgent,

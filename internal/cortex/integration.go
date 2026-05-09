@@ -3,7 +3,6 @@ package cortex
 import (
 	"fmt"
 	"path/filepath"
-	"strconv"
 
 	"github.com/magicwubiao/go-magic/internal/cognition"
 	"github.com/magicwubiao/go-magic/internal/execution"
@@ -106,22 +105,9 @@ func (m *Manager) OnUserMessage(input string) {
 	// Perception → Decision → Execution
 	m.LastPerception = m.Perception.Parse(input, nil)
 
-	// Record perception result in memory for learning
-	// The agent can use this to adapt its behavior based on task type
-	m.Snapshot.AppendToMemory("- Task type: " + string(m.LastPerception.Intent.Type))
-	if m.LastPerception.Intent.Type == perception.IntentTask {
-		m.Snapshot.AppendToMemory("- Task complexity: " + string(m.LastPerception.Intent.Complexity))
-	}
-
 	// Layer 2: Cognition - plan the task execution
 	// Create execution plan, set max turns, and retrieve memory hints
 	m.LastDecision = m.Cognition.CreatePlan(input, m.LastPerception)
-
-	// Record cognition decisions
-	if m.LastDecision.Plan != nil {
-		m.Snapshot.AppendToMemory("- Plan steps: " + strconv.Itoa(len(m.LastDecision.Plan.Steps)))
-		m.Snapshot.AppendToMemory("- Estimated turns: " + strconv.Itoa(m.LastDecision.Plan.TotalEstimatedTurns))
-	}
 
 	m.Trigger.OnUserMessage(input)
 }
