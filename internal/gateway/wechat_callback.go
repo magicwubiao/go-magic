@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -53,6 +55,19 @@ type WeChatMessage struct {
 	Content      string `xml:"Content"`
 	MsgID        string `xml:"MsgId"`
 	Encrypt      string `xml:"Encrypt"`
+	// Media fields for various message types
+	MediaID      string `xml:"MediaId,omitempty"`      // For image, voice, video, shortvideo
+	PicURL       string `xml:"PicUrl,omitempty"`       // For image
+	Format       string `xml:"Format,omitempty"`       // For voice (amr, mp3)
+	Recognition  string `xml:"Recognition,omitempty"`  // For voice (ASR result)
+	ThumbMediaID string `xml:"ThumbMediaId,omitempty"` // For video, music
+	LocationX    string `xml:"Location_X,omitempty"`
+	LocationY    string `xml:"Location_Y,omitempty"`
+	Scale        string `xml:"Scale,omitempty"`
+	Label        string `xml:"Label,omitempty"`
+	Title        string `xml:"Title,omitempty"`
+	Description  string `xml:"Description,omitempty"`
+	URL          string `xml:"Url,omitempty"`
 }
 
 // NewWeChatCallbackGateway creates a new WeChat callback mode gateway
@@ -136,6 +151,75 @@ func (g *WeChatCallbackGateway) getAccessToken() error {
 
 	log.Info("WeChat access token obtained")
 	return nil
+}
+
+// downloadMedia downloads a media file from WeChat using media_id
+func (g *WeChatCallbackGateway) downloadMedia(mediaID, mediaType string) (string, error) {
+	g.mu.RLock()
+	token := g.token
+	g.mu.RUnlock()
+
+	if token == "" {
+		return "", fmt.Errorf("WeChat access token not available")
+	}
+
+	url := fmt.Sprintf("https://api.weixin.qq.com/cgi-bin/media/get?access_token=%s&media_id=%s", token, mediaID)
+
+	resp, err := g.httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download media: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download media: status %d", resp.StatusCode)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	var ext string
+	switch mediaType {
+	case "image":
+		if strings.Contains(contentType, "png") {
+			ext = "png"
+		} else if strings.Contains(contentType, "gif") {
+			ext = "gif"
+		} else {
+			ext = "jpg"
+		}
+	case "voice":
+		if strings.Contains(contentType, "mpeg") || strings.Contains(contentType, "mp3") {
+			ext = "mp3"
+		} else {
+			ext = "amr"
+		}
+	case "video":
+		ext = "mp4"
+	default:
+		ext = "bin"
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read media data: %w", err)
+	}
+
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty media data")
+	}
+
+	// Save to disk
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".magic", "wechat", "media", mediaType)
+	os.MkdirAll(dir, 0755)
+
+	filename := fmt.Sprintf("%s_%s.%s", mediaID, mediaType, ext)
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to save media: %w", err)
+	}
+
+	return path, nil
 }
 
 // Disconnect closes the connection
@@ -447,15 +531,79 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 		return
 	}
 
-	// Only process text messages
-	if msg.MsgType != "text" && msg.MsgType != "voice" {
-		return
-	}
+	// Determine message type and handle accordingly
+	var content string
+	var mediaURLs []MediaAttachment
 
-	content := msg.Content
-	if content == "" {
-		// For voice messages, we might need ASR
-		content = "[Voice message]"
+	switch msg.MsgType {
+	case "text":
+		content = msg.Content
+
+	case "image":
+		content = ""
+		if msg.MediaID != "" {
+			if path, err := g.downloadMedia(msg.MediaID, "image"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "image",
+					URL:      path,
+					Caption:  msg.PicURL,
+				})
+			} else {
+				log.Debugf("Failed to download WeChat image: %v", err)
+				content = "[Image]"
+			}
+		}
+
+	case "voice":
+		content = ""
+		// Use ASR result if available
+		if msg.Recognition != "" {
+			content = msg.Recognition
+		} else if msg.MediaID != "" {
+			if path, err := g.downloadMedia(msg.MediaID, "voice"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "audio",
+					URL:      path,
+					MimeType: "audio/" + msg.Format,
+				})
+			} else {
+				log.Debugf("Failed to download WeChat voice: %v", err)
+				content = "[Voice message]"
+			}
+		} else {
+			content = "[Voice message]"
+		}
+
+	case "video", "shortvideo":
+		content = ""
+		if msg.MediaID != "" {
+			if path, err := g.downloadMedia(msg.MediaID, "video"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "video",
+					URL:      path,
+					Caption:  msg.Description,
+				})
+			} else {
+				log.Debugf("Failed to download WeChat video: %v", err)
+				content = "[Video]"
+			}
+		} else {
+			content = "[Video]"
+		}
+
+	case "location":
+		content = fmt.Sprintf("[Location: %s, %s] %s", msg.LocationX, msg.LocationY, msg.Label)
+
+	case "link":
+		content = fmt.Sprintf("[Link: %s] %s - %s", msg.Title, msg.Description, msg.URL)
+
+	case "music":
+		content = fmt.Sprintf("[Music: %s] %s", msg.Title, msg.Description)
+
+	default:
+		// For unknown types, just log and skip
+		log.Debugf("Ignoring WeChat message type: %s", msg.MsgType)
+		return
 	}
 
 	msgData := Message{
@@ -469,6 +617,7 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 			"msg_type": msg.MsgType,
 			"to_user":  msg.ToUserName,
 		},
+		MediaURLs: mediaURLs,
 	}
 
 	// Send to channel

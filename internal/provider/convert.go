@@ -12,8 +12,64 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 
 	for msgIdx, msg := range messages {
 		openAIMsg := map[string]interface{}{
-			"role":    msg.Role,
-			"content": msg.Content,
+			"role": msg.Role,
+		}
+
+		// Handle multimodal content (ContentParts) - takes priority over plain Content
+		if len(msg.ContentParts) > 0 {
+			parts := make([]map[string]interface{}, 0, len(msg.ContentParts))
+			for _, p := range msg.ContentParts {
+				switch p.Type {
+				case "text":
+					parts = append(parts, map[string]interface{}{
+						"type": "text",
+						"text": p.Text,
+					})
+				case "image_url":
+					imgURL := map[string]string{
+						"url": p.ImageURL.URL,
+					}
+					if p.ImageURL.Detail != "" {
+						imgURL["detail"] = p.ImageURL.Detail
+					}
+					parts = append(parts, map[string]interface{}{
+						"type": "image_url",
+						"image_url": imgURL,
+					})
+				case "video_url":
+					parts = append(parts, map[string]interface{}{
+						"type": "video_url",
+						"video_url": map[string]string{
+							"url": p.VideoURL.URL,
+						},
+					})
+				case "audio_url":
+					parts = append(parts, map[string]interface{}{
+						"type": "audio_url",
+						"audio_url": map[string]string{
+							"url": p.AudioURL.URL,
+						},
+					})
+				case "file":
+					fileInfo := map[string]interface{}{
+						"url": p.File.URL,
+					}
+					if p.File.Name != "" {
+						fileInfo["name"] = p.File.Name
+					}
+					if p.File.MimeType != "" {
+						fileInfo["mime_type"] = p.File.MimeType
+					}
+					parts = append(parts, map[string]interface{}{
+						"type": "file",
+						"file": fileInfo,
+					})
+				}
+			}
+			openAIMsg["content"] = parts
+		} else {
+			// Fallback to plain text content
+			openAIMsg["content"] = msg.Content
 		}
 
 		// Handle tool calls for assistant messages

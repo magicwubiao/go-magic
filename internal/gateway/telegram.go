@@ -209,16 +209,135 @@ func (t *TelegramHandler) Receive() <-chan Message {
 					continue
 				}
 
-				msg := Message{
-					ID:        fmt.Sprintf("tg-%d-%d", update.Message.Chat.ID, update.Message.MessageID),
-					ChannelID: fmt.Sprintf("%d", update.Message.Chat.ID),
-					Content:   update.Message.Text,
+				// Handle different message types
+				var content string
+				var mediaURLs []MediaAttachment
+
+				msg := update.Message
+
+				// Check for caption (photos, videos, documents can have captions)
+				caption := msg.Caption
+
+				// Get text content
+				text := msg.Text
+				if text == "" && caption != "" {
+					text = caption
+				}
+				content = text
+
+				// Handle media
+				if msg.Photo != nil {
+					// Download photo
+					photo := msg.Photo[len(msg.Photo)-1] // Get largest photo
+					if file, err := t.bot.GetFile(photo.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "image",
+							URL:      file.Link(t.bot.Token),
+							MimeType: "image/jpeg",
+							Caption:  caption,
+							Size:     photo.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Video != nil {
+					if file, err := t.bot.GetFile(msg.Video.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "video",
+							URL:      file.Link(t.bot.Token),
+							MimeType: "video/mp4",
+							Caption:  caption,
+							Size:     msg.Video.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Document != nil {
+					if file, err := t.bot.GetFile(msg.Document.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "file",
+							URL:      file.Link(t.bot.Token),
+							MimeType: msg.Document.MimeType,
+							Filename: msg.Document.FileName,
+							Caption:  caption,
+							Size:     msg.Document.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Voice != nil {
+					if file, err := t.bot.GetFile(msg.Voice.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "audio",
+							URL:      file.Link(t.bot.Token),
+							MimeType: msg.Voice.MimeType,
+							Size:     msg.Voice.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Audio != nil {
+					if file, err := t.bot.GetFile(msg.Audio.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "audio",
+							URL:      file.Link(t.bot.Token),
+							MimeType: msg.Audio.MimeType,
+							Filename: msg.Audio.Title,
+							Caption:  caption,
+							Size:     msg.Audio.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Sticker != nil {
+					if file, err := t.bot.GetFile(msg.Sticker.FileID); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type:     "image",
+							URL:      file.Link(t.bot.Token),
+							MimeType: "image/webp",
+							Caption:  "Sticker",
+							Size:     msg.Sticker.FileSize,
+						})
+					}
+					if content == "" {
+						content = ""
+					}
+				}
+
+				if msg.Location != nil {
+					content = fmt.Sprintf("[Location: %.6f, %.6f]", msg.Location.Latitude, msg.Location.Longitude)
+				}
+
+				gwMsg := Message{
+					ID:        fmt.Sprintf("tg-%d-%d", msg.Chat.ID, msg.MessageID),
+					ChannelID: fmt.Sprintf("%d", msg.Chat.ID),
+					Content:   content,
 					Role:      "user",
-					From:      update.Message.From.UserName,
+					From:      msg.From.UserName,
+					MediaURLs: mediaURLs,
+					Metadata: map[string]interface{}{
+						"msg_type":  msg.MessageType(),
+						"chat_type": msg.Chat.Type,
+					},
 				}
 
 				select {
-				case msgCh <- msg:
+				case msgCh <- gwMsg:
 				case <-t.stopCh:
 					return
 				}

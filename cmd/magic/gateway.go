@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 const pidFileName = "gateway.pid"
@@ -192,6 +194,7 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 }
 
 // Process processes a message from a gateway platform and returns a response.
+// It handles both plain text and multimodal messages.
 func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) (string, error) {
 	if h.provider == nil {
 		// Lazy init
@@ -232,13 +235,80 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		return "", fmt.Errorf("failed to get agent: %w", err)
 	}
 
-	// Run conversation with full agent capabilities
-	response, err := ag.RunConversation(ctx, msg.Content)
+	// Build content parts from media attachments if present
+	var contentParts []types.ContentPart
+	if len(msg.MediaURLs) > 0 {
+		// First add text content if present
+		if msg.Content != "" {
+			contentParts = append(contentParts, types.ContentPart{
+				Type: "text",
+				Text: msg.Content,
+			})
+		}
+		// Add media attachments
+		for _, m := range msg.MediaURLs {
+			switch m.Type {
+			case "image":
+				contentParts = append(contentParts, types.ContentPart{
+					Type: "image_url",
+					ImageURL: &types.MediaURL{
+						URL:    h.makeFileURL(m.URL),
+						Detail: "auto",
+					},
+				})
+			case "video":
+				contentParts = append(contentParts, types.ContentPart{
+					Type: "video_url",
+					VideoURL: &types.MediaURL{
+						URL: h.makeFileURL(m.URL),
+					},
+				})
+			case "audio":
+				contentParts = append(contentParts, types.ContentPart{
+					Type: "audio_url",
+					AudioURL: &types.MediaURL{
+						URL: h.makeFileURL(m.URL),
+					},
+				})
+			case "file":
+				contentParts = append(contentParts, types.ContentPart{
+					Type: "file",
+					File: &types.FileInfo{
+						Name:     m.Filename,
+						MimeType: m.MimeType,
+						URL:      h.makeFileURL(m.URL),
+						Size:     m.Size,
+					},
+				})
+			}
+		}
+	}
+
+	// Run conversation with full agent capabilities (multimodal if contentParts available)
+	var response string
+	if len(contentParts) > 0 {
+		response, err = ag.RunConversationWithMedia(ctx, msg.Content, contentParts)
+	} else {
+		response, err = ag.RunConversation(ctx, msg.Content)
+	}
 	if err != nil {
 		return "", fmt.Errorf("AI processing failed: %w", err)
 	}
 
 	return response, nil
+}
+
+// makeFileURL converts a local file path to a file:// URL for LLM access
+func (h *gatewayAgentHandler) makeFileURL(path string) string {
+	if path == "" {
+		return ""
+	}
+	// If it's already a URL, return as is
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "file://") {
+		return path
+	}
+	// Convert local path to file:// URL
+	return "file://" + path
 }
 
 // ResetSession resets a user's session (clears conversation history).

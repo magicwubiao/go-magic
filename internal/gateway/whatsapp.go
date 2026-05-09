@@ -355,9 +355,10 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		return
 	}
 
-	// Extract text content
+	// Extract text content and media attachments
 	var content string
 	var msgType string
+	var mediaURLs []MediaAttachment
 
 	switch {
 	case msg.Conversation != nil && *msg.Conversation != "":
@@ -374,28 +375,109 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 	case msg.ImageMessage != nil:
 		caption := msg.ImageMessage.GetCaption()
 		if caption != "" {
-			content = "[Image] " + caption
+			content = caption
 		} else {
-			content = "[Image]"
+			content = ""
 		}
 		msgType = "image"
+		// Download image
+		if g.client != nil && g.client.IsConnected() {
+			data, err := g.client.Download(msg.ImageMessage)
+			if err == nil && len(data) > 0 {
+				ext := "jpg"
+				if msg.ImageMessage.GetMimetype() == "image/webp" {
+					ext = "webp"
+				} else if msg.ImageMessage.GetMimetype() == "image/png" {
+					ext = "png"
+				}
+				path := saveMedia(data, info.ID, "whatsapp", "image", ext)
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "image",
+					URL:      path,
+					MimeType: msg.ImageMessage.GetMimetype(),
+					Caption:  caption,
+					Size:     int64(len(data)),
+				})
+			} else if err != nil {
+				log.Debugf("Failed to download WhatsApp image: %v", err)
+			}
+		}
 
 	case msg.VideoMessage != nil:
 		caption := msg.VideoMessage.GetCaption()
 		if caption != "" {
-			content = "[Video] " + caption
+			content = caption
 		} else {
-			content = "[Video]"
+			content = ""
 		}
 		msgType = "video"
+		// Download video
+		if g.client != nil && g.client.IsConnected() {
+			data, err := g.client.Download(msg.VideoMessage)
+			if err == nil && len(data) > 0 {
+				path := saveMedia(data, info.ID, "whatsapp", "video", "mp4")
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "video",
+					URL:      path,
+					MimeType: msg.VideoMessage.GetMimetype(),
+					Caption:  caption,
+					Size:     int64(len(data)),
+				})
+			} else if err != nil {
+				log.Debugf("Failed to download WhatsApp video: %v", err)
+			}
+		}
 
 	case msg.AudioMessage != nil:
-		content = "[Audio]"
+		content = ""
 		msgType = "audio"
+		// Download audio
+		if g.client != nil && g.client.IsConnected() {
+			data, err := g.client.Download(msg.AudioMessage)
+			if err == nil && len(data) > 0 {
+				ext := "ogg"
+				if msg.AudioMessage.GetMimetype() == "audio/ogg; codecs=opus" {
+					ext = "opus"
+				} else if msg.AudioMessage.GetMimetype() == "audio/mpeg" {
+					ext = "mp3"
+				}
+				path := saveMedia(data, info.ID, "whatsapp", "audio", ext)
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "audio",
+					URL:      path,
+					MimeType: msg.AudioMessage.GetMimetype(),
+					Size:     int64(len(data)),
+				})
+			} else if err != nil {
+				log.Debugf("Failed to download WhatsApp audio: %v", err)
+			}
+		}
 
 	case msg.DocumentMessage != nil:
-		content = "[Document: " + msg.DocumentMessage.GetFileName() + "]"
+		content = ""
 		msgType = "document"
+		filename := msg.DocumentMessage.GetFileName()
+		// Download document
+		if g.client != nil && g.client.IsConnected() {
+			data, err := g.client.Download(msg.DocumentMessage)
+			if err == nil && len(data) > 0 {
+				// Extract extension from filename or mime type
+				ext := "bin"
+				if idx := strings.LastIndex(filename, "."); idx > 0 {
+					ext = filename[idx+1:]
+				}
+				path := saveMedia(data, info.ID, "whatsapp", "file", ext)
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "file",
+					URL:      path,
+					MimeType: msg.DocumentMessage.GetMimetype(),
+					Filename: filename,
+					Size:     int64(len(data)),
+				})
+			} else if err != nil {
+				log.Debugf("Failed to download WhatsApp document: %v", err)
+			}
+		}
 
 	case msg.LocationMessage != nil:
 		content = fmt.Sprintf("[Location: %.6f, %.6f]",
@@ -408,8 +490,24 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "contact"
 
 	case msg.StickerMessage != nil:
-		content = "[Sticker]"
+		content = ""
 		msgType = "sticker"
+		// Download sticker (as image)
+		if g.client != nil && g.client.IsConnected() {
+			data, err := g.client.Download(msg.StickerMessage)
+			if err == nil && len(data) > 0 {
+				path := saveMedia(data, info.ID, "whatsapp", "image", "webp")
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "image",
+					URL:      path,
+					MimeType: msg.StickerMessage.GetMimetype(),
+					Caption:  "Sticker",
+					Size:     int64(len(data)),
+				})
+			} else if err != nil {
+				log.Debugf("Failed to download WhatsApp sticker: %v", err)
+			}
+		}
 
 	case msg.ReactionMessage != nil:
 		content = "[Reaction: " + msg.ReactionMessage.GetText() + "]"
@@ -445,6 +543,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		Content:   content,
 		Timestamp: info.Timestamp,
 		Metadata:  metadata,
+		MediaURLs: mediaURLs,
 	}
 
 	select {

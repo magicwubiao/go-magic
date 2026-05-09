@@ -118,6 +118,45 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		return
 	}
 
+	// Extract media attachments
+	var mediaURLs []MediaAttachment
+
+	for _, attachment := range m.Attachments {
+		var mediaType string
+		switch {
+		case strings.HasPrefix(attachment.ContentType, "image/"):
+			mediaType = "image"
+		case strings.HasPrefix(attachment.ContentType, "video/"):
+			mediaType = "video"
+		case strings.HasPrefix(attachment.ContentType, "audio/"):
+			mediaType = "audio"
+		default:
+			mediaType = "file"
+		}
+		mediaURLs = append(mediaURLs, MediaAttachment{
+			Type:     mediaType,
+			URL:      attachment.URL,
+			MimeType: attachment.ContentType,
+			Filename: attachment.Filename,
+			Size:     attachment.Size,
+		})
+	}
+
+	// Handle embeds (often used for rich content)
+	for _, embed := range m.Embeds {
+		if embed.Type == "image" && embed.URL != "" {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type: "image",
+				URL:  embed.URL,
+			})
+		} else if embed.Type == "video" && embed.URL != "" {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type: "video",
+				URL:  embed.URL,
+			})
+		}
+	}
+
 	// Create message for the channel
 	msg := Message{
 		ID:        m.ID,
@@ -126,10 +165,13 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		UserID:    userID,
 		Content:   m.Content,
 		Timestamp: m.Timestamp,
+		MediaURLs: mediaURLs,
 		Metadata: map[string]interface{}{
-			"author":    m.Author.Username,
-			"author_id": m.Author.ID,
-			"guild_id":  m.GuildID,
+			"author":     m.Author.Username,
+			"author_id":  m.Author.ID,
+			"guild_id":   m.GuildID,
+			"msg_type":   m.Type.String(),
+			"attachment_count": len(m.Attachments),
 		},
 	}
 

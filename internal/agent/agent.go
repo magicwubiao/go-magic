@@ -283,6 +283,230 @@ func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, s
 	return true, result, nil
 }
 
+// RunConversationWithMedia runs a conversation with multimodal input support.
+// If contentParts is provided, it takes priority over plain text input.
+func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, contentParts []types.ContentPart) (string, error) {
+	// If cortex is enabled, use the full cortex integration path
+	if a.cortexManager != nil {
+		return a.RunWithCortex(ctx, input)
+	}
+
+	// Emit agent start event
+	a.Emit(bus.EventKindAgentStart, nil)
+
+	// Auto sub-task delegation for complex tasks
+	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
+		if err != nil {
+			return "", err
+		}
+		// Synthesis prompt to summarize sub-task results
+		return a.RunConversation(ctx,
+			fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
+
+%s
+
+Please provide a comprehensive, well-structured final response based on these sub-task results.`, result))
+	}
+
+	// Build user message - use content parts if available, otherwise fall back to plain text
+	userMsg := provider.Message{
+		Role: "user",
+	}
+	if len(contentParts) > 0 {
+		userMsg.ContentParts = contentParts
+	} else {
+		userMsg.Content = truncateStr(input, a.maxMsgLen)
+	}
+	a.history = append(a.history, userMsg)
+
+	// Truncate history to prevent overflow
+	a.truncateHistory()
+
+	var lastErr error
+	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Cortex: OnTurnStart - freezes memory snapshot for prefix cache
+		if a.cortexManager != nil {
+			a.cortexManager.OnTurnStart()
+		}
+
+		// Check steering limits
+		if a.iterationCount >= a.maxIterations {
+			return "", fmt.Errorf("exceeded maximum iterations (%d)", a.maxIterations)
+		}
+		if a.maxTokenBudget > 0 && a.tokenUsage >= a.maxTokenBudget {
+			return "", fmt.Errorf("exceeded token budget (%d)", a.maxTokenBudget)
+		}
+
+		// Emit turn start event
+		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
+			"turn": a.iterationCount,
+		})
+
+		// Build LLM request
+		req := &hooks.LLMHookRequest{
+			Provider: a.provider.Name(),
+			Model:    "",
+			Messages: a.history,
+			Tools:    a.tools,
+		}
+
+		// Call BeforeLLM hooks
+		req, decision, err := a.hooks.BeforeLLM(ctx, req)
+		if err != nil {
+			return "", fmt.Errorf("hook error: %w", err)
+		}
+		if decision.Action == hooks.HookActionStop {
+			return "", fmt.Errorf("hook stopped: %s", decision.Reason)
+		}
+		if decision.Action == hooks.HookActionReject {
+			return "", fmt.Errorf("hook rejected: %s", decision.Reason)
+		}
+
+		// Use ChatWithTools for OpenAI provider if tools are available
+		var resp *provider.ChatResponse
+		type openAIlike interface {
+			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
+		}
+		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
+			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
+		} else {
+			resp, err = a.provider.Chat(ctx, req.Messages)
+		}
+
+		if err != nil {
+			lastErr = err
+			a.Emit(bus.EventKindError, err.Error())
+			continue
+		}
+
+		// Call AfterLLM hooks
+		llmResp := &hooks.LLMHookResponse{
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		}
+		llmResp, decision, err = a.hooks.AfterLLM(ctx, llmResp)
+		if err != nil {
+			return "", fmt.Errorf("hook error: %w", err)
+		}
+		// Emit LLM response event
+		a.Emit(bus.EventKindLLMResponse, map[string]interface{}{
+			"content": llmResp.Content,
+		})
+
+		// No tool calls - return the response
+		if len(resp.ToolCalls) == 0 {
+			content := truncateStr(llmResp.Content, a.maxMsgLen)
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: content,
+			})
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+			return content, nil
+		}
+
+		// Has tool calls - execute them
+		toolResults, err := a.executeToolsWithHooks(ctx, resp.ToolCalls)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Add assistant message and tool results to history
+		a.history = append(a.history, provider.Message{
+			Role:       "assistant",
+			Content:    llmResp.Content,
+			ToolCalls:  resp.ToolCalls,
+		})
+
+		for _, result := range toolResults {
+			var resultContent string
+			if result.Err != nil {
+				resultContent = fmt.Sprintf("Error: %v", result.Err)
+			} else {
+				resultContent = truncateStr(result.Content, a.maxMsgLen)
+			}
+			a.history = append(a.history, provider.Message{
+				Role:       "tool",
+				Content:    resultContent,
+				ToolCallID: result.ID,
+			})
+		}
+
+		// Check for tool call loops
+		if len(a.toolCallHistory) > 0 && a.toolCallHistory[len(a.toolCallHistory)-1] == "unknown" {
+			// Replace last if unknown
+			a.toolCallHistory = a.toolCallHistory[:len(a.toolCallHistory)-1]
+		}
+		for _, tc := range resp.ToolCalls {
+			a.toolCallHistory = append(a.toolCallHistory, tc.Name)
+		}
+
+		// Detect loops
+		loopDetected := false
+		loopReason := ""
+		toolCounts := make(map[string]int)
+		for _, name := range a.toolCallHistory {
+			toolCounts[name]++
+			if toolCounts[name] > a.sameToolLimit {
+				loopDetected = true
+				loopReason = fmt.Sprintf("tool %s called %d times", name, toolCounts[name])
+				break
+			}
+		}
+
+		// Check consecutive tool calls limit
+		if len(a.toolCallHistory) >= a.consecutiveLimit {
+			log.Debugf("[Agent] Too many consecutive tool calls (%d), forcing final response", len(a.toolCallHistory))
+			loopDetected = true
+			if loopReason == "" {
+				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
+			}
+		}
+
+		if loopDetected {
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: truncateStr(resp.Content, a.maxMsgLen),
+			})
+			a.history = append(a.history, provider.Message{
+				Role:    "user",
+				Content: "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+			})
+			finalResp, finalErr := a.provider.Chat(ctx, a.history)
+			if finalErr != nil {
+				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
+			}
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: truncateStr(finalResp.Content, a.maxMsgLen),
+			})
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+			if a.cortexManager != nil {
+				a.cortexManager.OnSessionEnd()
+			}
+			return finalResp.Content, nil
+		}
+	}
+
+	if lastErr != nil {
+		return "", lastErr
+	}
+	// Provide helpful information about what was being done
+	recentTools := []string{}
+	if len(a.toolCallHistory) > 0 {
+		recentCount := len(a.toolCallHistory)
+		start := 0
+		if recentCount > 5 {
+			start = recentCount - 5
+		}
+		recentTools = a.toolCallHistory[start:]
+	}
+	return "", fmt.Errorf("exceeded maximum iterations (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+		a.maxIterations, a.iterationCount, len(a.toolCallHistory), recentTools)
+}
+
 // RunConversation runs a conversation with automatic tool execution
 func (a *Agent) RunConversation(ctx context.Context, input string) (string, error) {
 	// If cortex is enabled, use the full cortex integration path

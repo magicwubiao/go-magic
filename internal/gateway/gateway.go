@@ -22,6 +22,18 @@ type Message struct {
 	From      string                 `json:"from,omitempty"`
 	Timestamp time.Time              `json:"timestamp"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	// 媒体附件列表
+	MediaURLs []MediaAttachment `json:"media_urls,omitempty"`
+}
+
+// MediaAttachment represents a media file attachment
+type MediaAttachment struct {
+	Type     string `json:"type"` // "image", "video", "audio", "file"
+	URL      string `json:"url"` // 下载URL或本地路径
+	MimeType string `json:"mime_type,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+	Size     int64  `json:"size,omitempty"`
 }
 
 // Response represents a response to a message

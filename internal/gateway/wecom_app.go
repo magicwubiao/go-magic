@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -447,14 +450,92 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 	AgentID      string `xml:"AgentID"`
 	Event        string `xml:"Event"`
 	CreateTime   int64  `xml:"CreateTime"`
+	// Media fields
+	MediaID  string `xml:"MediaId,omitempty"`
+	PicURL   string `xml:"PicUrl,omitempty"`
+	Format   string `xml:"Format,omitempty"`
+	ThumbURL string `xml:"ThumbMediaId,omitempty"`
+	Location string `xml:"Location,omitempty"`
+	Scale    string `xml:"Scale,omitempty"`
+	Label    string `xml:"Label,omitempty"`
+	Title    string `xml:"Title,omitempty"`
+	Desc     string `xml:"Description,omitempty"`
+	URL      string `xml:"Url,omitempty"`
 }) {
-	// Only process text messages or click events
-	if event.MsgType != "text" && event.Event != "click" {
+	// Check if this is for our agent
+	if event.AgentID != "" && event.AgentID != g.agentID {
 		return
 	}
 
-	// Check if this is for our agent
-	if event.AgentID != "" && event.AgentID != g.agentID {
+	// Handle different message types
+	var content string
+	var mediaURLs []MediaAttachment
+
+	switch event.MsgType {
+	case "text":
+		content = event.Content
+
+	case "image":
+		content = ""
+		if event.MediaID != "" {
+			if path, err := g.downloadMedia(event.MediaID, "image"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "image",
+					URL:      path,
+					Caption:  event.PicURL,
+				})
+			} else {
+				log.Debugf("Failed to download WeCom image: %v", err)
+				content = "[Image]"
+			}
+		}
+
+	case "voice":
+		content = ""
+		if event.MediaID != "" {
+			if path, err := g.downloadMedia(event.MediaID, "voice"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "audio",
+					URL:      path,
+					MimeType: "audio/" + event.Format,
+				})
+			} else {
+				log.Debugf("Failed to download WeCom voice: %v", err)
+				content = "[Voice message]"
+			}
+		} else {
+			content = "[Voice message]"
+		}
+
+	case "video":
+		content = ""
+		if event.MediaID != "" {
+			if path, err := g.downloadMedia(event.MediaID, "video"); err == nil {
+				mediaURLs = append(mediaURLs, MediaAttachment{
+					Type:     "video",
+					URL:      path,
+					Caption:  event.Desc,
+				})
+			} else {
+				log.Debugf("Failed to download WeCom video: %v", err)
+				content = "[Video]"
+			}
+		} else {
+			content = "[Video]"
+		}
+
+	case "location":
+		content = "[Location] " + event.Label + " (" + event.Location + ")"
+
+	case "link":
+		content = fmt.Sprintf("[Link: %s] %s - %s", event.Title, event.Desc, event.URL)
+
+	case "event":
+		// Event messages (like menu clicks) - content is typically in event type
+		content = ""
+
+	default:
+		log.Debugf("Unhandled WeCom message type: %s", event.MsgType)
 		return
 	}
 
@@ -463,13 +544,15 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		Platform:  "wecom_app",
 		ChannelID: event.FromUserName, // User ID is channel ID in this context
 		UserID:    event.FromUserName,
-		Content:   event.Content,
+		Content:   content,
 		Timestamp: time.Unix(event.CreateTime, 0),
 		Metadata: map[string]interface{}{
 			"to_user":  event.ToUserName,
 			"agent_id": event.AgentID,
 			"event":    event.Event,
+			"msg_type": event.MsgType,
 		},
+		MediaURLs: mediaURLs,
 	}
 
 	// 企业微信事件消息（如 click 菜单事件）的 MsgId 可能为空
@@ -487,6 +570,80 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 	default:
 		log.Warnf("WeCom App message channel full, dropping message")
 	}
+}
+
+// downloadMedia downloads a media file from WeCom using media_id
+func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, error) {
+	g.tokenMu.RLock()
+	token := g.accessToken
+	g.tokenMu.RUnlock()
+
+	if token == "" {
+		return "", fmt.Errorf("WeCom access token not available")
+	}
+
+	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/media/get?access_token=%s&media_id=%s", token, mediaID)
+
+	resp, err := g.httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download media: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download media: status %d", resp.StatusCode)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	var ext string
+	switch mediaType {
+	case "image":
+		if strings.Contains(contentType, "png") {
+			ext = "png"
+		} else if strings.Contains(contentType, "gif") {
+			ext = "gif"
+		} else {
+			ext = "jpg"
+		}
+	case "voice":
+		if strings.Contains(contentType, "mpeg") || strings.Contains(contentType, "mp3") {
+			ext = "mp3"
+		} else {
+			ext = "amr"
+		}
+	case "video":
+		ext = "mp4"
+	default:
+		ext = "bin"
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read media data: %w", err)
+	}
+
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty media data")
+	}
+
+	// Check if this is an error response
+	if strings.HasPrefix(string(data), "{\"errcode\"") {
+		return "", fmt.Errorf("WeCom API error: %s", string(data))
+	}
+
+	// Save to disk
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".magic", "wecom", "media", mediaType)
+	os.MkdirAll(dir, 0755)
+
+	filename := fmt.Sprintf("%s_%s.%s", mediaID, mediaType, ext)
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to save media: %w", err)
+	}
+
+	return path, nil
 }
 
 // sendMessage sends a message via WeCom API
