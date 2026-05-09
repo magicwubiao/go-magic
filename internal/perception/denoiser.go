@@ -42,7 +42,14 @@ func (p *Parser) detectNoise(input string) NoiseDetection {
 	}
 
 	// Check for incomplete input
-	if utf8.RuneCountInString(input) < 5 && !isGreeting(input) {
+	// Note: CJK characters convey much more meaning per character than Latin,
+	// so we use a lower threshold (2) for CJK-heavy input
+	runeCount := utf8.RuneCountInString(input)
+	minLen := 5
+	if hasCJK(input) {
+		minLen = 2
+	}
+	if runeCount < minLen && !isGreeting(input) {
 		result.HasNoise = true
 		result.NoiseTypes = append(result.NoiseTypes, NoiseIncomplete)
 		result.Suggestions = append(result.Suggestions, "Input seems incomplete - could you provide more details?")
@@ -111,6 +118,17 @@ func isGreeting(input string) bool {
 	lower := strings.ToLower(strings.Trim(input, ".,?!"))
 	for _, g := range greetings {
 		if lower == g {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCJK returns true if the string contains CJK (Chinese/Japanese/Korean) characters
+func hasCJK(s string) bool {
+	for _, r := range s {
+		if (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3040 && r <= 0x309F) ||
+			(r >= 0x30A0 && r <= 0x30FF) || (r >= 0xAC00 && r <= 0xD7AF) {
 			return true
 		}
 	}
