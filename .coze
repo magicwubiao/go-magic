@@ -1,0 +1,20 @@
+[project]
+sub_id = "80d87f0a"
+name = "go-magic"
+requires = ["golang-1.25"]
+project_type = "backend"
+entrypoint = "cmd/magic/main.go"
+
+[preview]
+preview_enable = "disabled"
+
+[deploy]
+build = ["bash", "scripts/build.sh"]
+run = ["bash", "scripts/run.sh", "-p", "5000"]
+
+[deploy.profile]
+kind = "service"
+flavor = "web"
+
+[subprojects]
+path = ["."]
