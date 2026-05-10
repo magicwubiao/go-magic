@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -414,17 +415,68 @@ func (h *gatewayAgentHandler) recoverInterruptedSessions(ctx context.Context) {
 	}
 }
 
-// makeFileURL converts a local file path to a file:// URL for LLM access
+// makeFileURL converts a local file path to a format that LLM APIs can access.
+// For images, converts to base64 data URL (data:image/xxx;base64,...).
+// For other files, returns the path as-is (LLM may not be able to access).
+// Maximum file size: 20MB.
+const maxFileSizeForBase64 = 20 * 1024 * 1024 // 20MB
+
 func (h *gatewayAgentHandler) makeFileURL(path string) string {
 	if path == "" {
 		return ""
 	}
 	// If it's already a URL, return as is
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "file://") {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "data:") {
 		return path
 	}
-	// Convert local path to file:// URL
-	return "file://" + path
+
+	// For local image files, convert to base64 data URL
+	ext := strings.ToLower(filepath.Ext(path))
+	isImage := ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" || ext == ".bmp"
+
+	if isImage {
+		return h.localPathToBase64DataURL(path)
+	}
+
+	// For non-image files, return as-is (LLM may not be able to access)
+	// Note: file:// URLs are not supported by most LLM APIs
+	log.Warnf("makeFileURL: non-image local file cannot be accessed by LLM: %s", path)
+	return path
+}
+
+// localPathToBase64DataURL converts a local image file to a base64 data URL.
+// Returns empty string if file cannot be read or exceeds size limit.
+func (h *gatewayAgentHandler) localPathToBase64DataURL(path string) string {
+	// Read file
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Warnf("makeFileURL: failed to read file %s: %v", path, err)
+		return ""
+	}
+
+	// Check file size
+	if len(data) > maxFileSizeForBase64 {
+		log.Warnf("makeFileURL: file too large (%d bytes > %d bytes), skipping: %s", len(data), maxFileSizeForBase64, path)
+		return ""
+	}
+
+	// Determine MIME type from extension
+	ext := strings.ToLower(filepath.Ext(path))
+	mimeType := "image/jpeg"
+	switch ext {
+	case ".png":
+		mimeType = "image/png"
+	case ".gif":
+		mimeType = "image/gif"
+	case ".webp":
+		mimeType = "image/webp"
+	case ".bmp":
+		mimeType = "image/bmp"
+	}
+
+	// Encode to base64
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return "data:" + mimeType + ";base64," + encoded
 }
 
 // handleGoalCommand handles /goal commands from gateway platforms

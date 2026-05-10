@@ -691,6 +691,48 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 		}
+
+		// Execute tools and add results to history (BUG FIX: was missing before)
+		toolResults, err := a.executeToolsWithHooks(ctx, resp.ToolCalls)
+		if err != nil {
+			lastErr = err
+			a.Emit(bus.EventKindToolError, err.Error())
+			// Still add tool error messages to history so message sequence is complete
+			a.history = append(a.history, provider.Message{
+				Role:       "assistant",
+				Content:    llmResp.Content,
+				ToolCalls:  resp.ToolCalls,
+			})
+			for _, tc := range resp.ToolCalls {
+				a.history = append(a.history, provider.Message{
+					Role:       "tool",
+					Content:    fmt.Sprintf("Error: %v", err),
+					ToolCallID: tc.ID,
+				})
+			}
+			continue
+		}
+
+		// Add assistant message and tool results to history
+		a.history = append(a.history, provider.Message{
+			Role:       "assistant",
+			Content:    llmResp.Content,
+			ToolCalls:  resp.ToolCalls,
+		})
+
+		for _, result := range toolResults {
+			var resultContent string
+			if result.Err != nil {
+				resultContent = fmt.Sprintf("Error: %v", result.Err)
+			} else {
+				resultContent = truncateStr(result.Content, a.maxMsgLen)
+			}
+			a.history = append(a.history, provider.Message{
+				Role:       "tool",
+				Content:    resultContent,
+				ToolCallID: result.ID,
+			})
+		}
 	}
 
 	if lastErr != nil {
