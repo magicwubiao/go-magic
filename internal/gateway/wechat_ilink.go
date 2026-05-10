@@ -710,11 +710,21 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 			}
 		case ILinkItemTypeImage:
 			if item.ImageItem != nil {
-				// Try to download image
+				// Try to download image from CDN
 				if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
 					mediaURLs = append(mediaURLs, MediaAttachment{
 						Type: "image",
 						URL:  mediaPath,
+					})
+					// Image downloaded successfully to local file
+					// content may be empty but message should still be sent
+				} else if item.ImageItem.Url != "" {
+					// CDN download failed, use direct HTTP URL
+					// LLM APIs like OpenAI can access HTTP URLs directly
+					log.Debugf("[WeChat-iLink] CDN download failed, using direct URL: %s", item.ImageItem.Url)
+					mediaURLs = append(mediaURLs, MediaAttachment{
+						Type: "image",
+						URL:  item.ImageItem.Url,
 					})
 				} else {
 					log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
@@ -759,8 +769,40 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 	}
 
 	content := strings.Join(parts, "\n")
-	if content == "" {
+
+	// FIX: Prevent message drop when content is empty but mediaURLs exist (e.g., image-only messages)
+	// Previously this returned early, causing images to be silently dropped
+	if content == "" && len(mediaURLs) == 0 {
+		log.Debugf("[WeChat-iLink] Skipping empty message with no media")
 		return
+	}
+
+	// When content is empty but we have media, provide a default text prompt
+	if content == "" && len(mediaURLs) > 0 {
+		// Determine content type from media URLs
+		hasImage := false
+		hasVideo := false
+		hasAudio := false
+		for _, m := range mediaURLs {
+			switch m.Type {
+			case "image":
+				hasImage = true
+			case "video":
+				hasVideo = true
+			case "audio":
+				hasAudio = true
+			}
+		}
+		if hasImage {
+			content = "[用户发送了一张图片]"
+		} else if hasVideo {
+			content = "[用户发送了一个视频]"
+		} else if hasAudio {
+			content = "[用户发送了一段语音]"
+		} else {
+			content = "[用户发送了一个文件]"
+		}
+		log.Debugf("[WeChat-iLink] Media-only message, using default content: %s", content)
 	}
 
 	// Determine chat type

@@ -268,13 +268,22 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			})
 		}
 		// Add media attachments
+		mediaFailedCount := 0
 		for _, m := range msg.MediaURLs {
+			fileURL := h.makeFileURL(m.URL)
+			if fileURL == "" {
+				// makeFileURL failed (file read error, size limit, etc.)
+				// Skip this media but log it
+				log.Warnf("Process: failed to get URL for media %s (type: %s), skipping", m.URL, m.Type)
+				mediaFailedCount++
+				continue
+			}
 			switch m.Type {
 			case "image":
 				contentParts = append(contentParts, types.ContentPart{
 					Type: "image_url",
 					ImageURL: &types.MediaURL{
-						URL:    h.makeFileURL(m.URL),
+						URL:    fileURL,
 						Detail: "auto",
 					},
 				})
@@ -282,14 +291,14 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 				contentParts = append(contentParts, types.ContentPart{
 					Type: "video_url",
 					VideoURL: &types.MediaURL{
-						URL: h.makeFileURL(m.URL),
+						URL: fileURL,
 					},
 				})
 			case "audio":
 				contentParts = append(contentParts, types.ContentPart{
 					Type: "audio_url",
 					AudioURL: &types.MediaURL{
-						URL: h.makeFileURL(m.URL),
+						URL: fileURL,
 					},
 				})
 			case "file":
@@ -298,11 +307,15 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 					File: &types.FileInfo{
 						Name:     m.Filename,
 						MimeType: m.MimeType,
-						URL:      h.makeFileURL(m.URL),
+						URL:      fileURL,
 						Size:     m.Size,
 					},
 				})
 			}
+		}
+		// If all media failed, add a fallback text message
+		if len(contentParts) == 0 && msg.Content == "" {
+			log.Warnf("Process: all media attachments failed (%d total), message will be text-only", mediaFailedCount)
 		}
 	}
 
