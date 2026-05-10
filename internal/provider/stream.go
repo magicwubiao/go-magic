@@ -127,6 +127,7 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 		for _, tc := range choice.Delta.ToolCalls {
 			resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
+				Name: tc.Function.Name, // Set Name field for compatibility
 				Type: "function",
 				Function: types.Function{
 					Name:      tc.Function.Name,

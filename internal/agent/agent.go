@@ -450,7 +450,11 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.toolCallHistory = a.toolCallHistory[:len(a.toolCallHistory)-1]
 		}
 		for _, tc := range resp.ToolCalls {
-			a.toolCallHistory = append(a.toolCallHistory, tc.Name)
+			name := tc.Function.Name
+			if name == "" {
+				name = tc.Name
+			}
+			a.toolCallHistory = append(a.toolCallHistory, name)
 		}
 
 		// Detect loops
@@ -990,9 +994,13 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Store tool calls for history
 		tcs := make([]types.ToolCall, len(toolCalls))
 		for i, tc := range toolCalls {
+			name := tc.Function.Name
+			if name == "" {
+				name = tc.Name
+			}
 			tcs[i] = types.ToolCall{
 				ID:       tc.ID,
-				Name:     tc.Function.Name,
+				Name:     name,
 				Type:     "function",
 				Function: tc.Function,
 			}
@@ -1088,9 +1096,15 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	for _, group := range groups {
 		if group.sequential {
 			for _, tc := range group.tools {
+				// Ensure tc.ID is not empty
+				tcID := tc.ID
+				if tcID == "" {
+					tcID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+					tc.ID = tcID
+				}
 				result := a.executeSingleToolWithHooks(ctx, tc)
 				mu.Lock()
-				results[tc.ID] = result
+				results[tcID] = result
 				mu.Unlock()
 			}
 		} else {
@@ -1099,12 +1113,18 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 
 			for _, tc := range group.tools {
 				tc := tc
+				// Ensure tc.ID is not empty
+				tcID := tc.ID
+				if tcID == "" {
+					tcID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+					tc.ID = tcID
+				}
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					result := a.executeSingleToolWithHooks(ctx, tc)
 					mu.Lock()
-					results[tc.ID] = result
+					results[tcID] = result
 					if result.Err != nil {
 						errCh <- result.Err
 					}

@@ -94,6 +94,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 		for _, tc := range choice.Message.ToolCalls {
 			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
+				Name: tc.Function.Name, // Set Name field for compatibility
 				Type: tc.Type,
 				Function: types.Function{
 					Name:      tc.Function.Name,
@@ -164,6 +165,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 		for _, tc := range choice.Message.ToolCalls {
 			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
+				Name: tc.Function.Name, // Set Name field for compatibility
 				Type: tc.Type,
 				Function: types.Function{
 					Name:      tc.Function.Name,

@@ -28,7 +28,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +126,9 @@ type WeChatILinkGateway struct {
 	api    *ILinkAPIClient
 	client *httpClient
 
+	// CDN downloader for media files
+	cdnDownloader *CDNDownloader
+
 	// Message channel (incoming)
 	msgCh  chan Message
 	stopCh chan struct{}
@@ -177,10 +182,11 @@ func NewWeChatILinkGateway(cfg WeChatILinkConfig) *WeChatILinkGateway {
 	}
 
 	return &WeChatILinkGateway{
-		config:      cfg,
-		msgCh:       make(chan Message, 200),
-		stopCh:      make(chan struct{}),
-		typingCache: make(map[string]typingCacheEntry),
+		config:        cfg,
+		msgCh:         make(chan Message, 200),
+		stopCh:        make(chan struct{}),
+		typingCache:   make(map[string]typingCacheEntry),
+		cdnDownloader: NewCDNDownloader(cfg.CDNBaseURL, cfg.Proxy),
 	}
 }
 
@@ -677,8 +683,9 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 		messageID = uuid.New().String()
 	}
 
-	// Build text content from item_list
+	// Build text content from item_list and collect media attachments
 	var parts []string
+	var mediaURLs []MediaAttachment
 	for _, item := range msg.ItemList {
 		switch item.Type {
 		case ILinkItemTypeText:
@@ -692,16 +699,62 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 			} else {
 				parts = append(parts, "[语音消息]")
 			}
+			// Try to download voice media if available
+			if item.VoiceItem != nil && item.VoiceItem.Media != nil {
+				if mediaPath, err := g.downloadILinkMediaAsFile(item.VoiceItem.Media, "audio", "mp3"); err == nil {
+					mediaURLs = append(mediaURLs, MediaAttachment{
+						Type: "audio",
+						URL:  mediaPath,
+					})
+				}
+			}
 		case ILinkItemTypeImage:
-			parts = append(parts, "[图片]")
+			if item.ImageItem != nil {
+				// Try to download image
+				if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
+					mediaURLs = append(mediaURLs, MediaAttachment{
+						Type: "image",
+						URL:  mediaPath,
+					})
+				} else {
+					log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
+					parts = append(parts, "[图片]")
+				}
+			} else {
+				parts = append(parts, "[图片]")
+			}
 		case ILinkItemTypeFile:
 			if item.FileItem != nil && item.FileItem.FileName != "" {
-				parts = append(parts, fmt.Sprintf("[文件: %s]", item.FileItem.FileName))
+				// Try to download file
+				if mediaPath, err := g.downloadILinkMediaAsFile(item.FileItem.Media, "file", ""); err == nil {
+					mediaURLs = append(mediaURLs, MediaAttachment{
+						Type:     "file",
+						URL:      mediaPath,
+						Filename: item.FileItem.FileName,
+					})
+					parts = append(parts, fmt.Sprintf("[文件: %s]", item.FileItem.FileName))
+				} else {
+					log.Debugf("[WeChat-iLink] Failed to download file %s: %v", item.FileItem.FileName, err)
+					parts = append(parts, fmt.Sprintf("[文件: %s]", item.FileItem.FileName))
+				}
 			} else {
 				parts = append(parts, "[文件]")
 			}
 		case ILinkItemTypeVideo:
-			parts = append(parts, "[视频]")
+			if item.VideoItem != nil {
+				// Try to download video
+				if mediaPath, err := g.downloadILinkMediaAsFile(item.VideoItem.Media, "video", "mp4"); err == nil {
+					mediaURLs = append(mediaURLs, MediaAttachment{
+						Type: "video",
+						URL:  mediaPath,
+					})
+				} else {
+					log.Debugf("[WeChat-iLink] Failed to download video: %v", err)
+					parts = append(parts, "[视频]")
+				}
+			} else {
+				parts = append(parts, "[视频]")
+			}
 		}
 	}
 
@@ -732,6 +785,7 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 		UserID:    fromUserID,
 		Content:   content,
 		Timestamp: time.UnixMilli(msg.CreateTimeMs),
+		MediaURLs: mediaURLs,
 		Metadata: map[string]interface{}{
 			"from_user_id":  fromUserID,
 			"context_token": msg.ContextToken,
@@ -1124,4 +1178,153 @@ func randomHex(n int) string {
 		return strings.ReplaceAll(uuid.New().String(), "-", "")[:n*2]
 	}
 	return hex.EncodeToString(buf)
+}
+
+// ============================================================================
+// Media Download Helpers
+// ============================================================================
+
+const (
+	// Media download limits
+	mediaDownloadTimeout = 30 * time.Second
+	mediaMaxSize         = 50 << 20 // 50MB - files larger than this won't be sent to LLM
+)
+
+// downloadILinkMediaAsFile downloads a CDN media file and saves it locally.
+// Returns the local file path on success.
+func (g *WeChatILinkGateway) downloadILinkMediaAsFile(media *ILinkCDNMedia, mediaType, fallbackExt string) (string, error) {
+	if media == nil {
+		return "", fmt.Errorf("nil media")
+	}
+
+	// Create download context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), mediaDownloadTimeout)
+	defer cancel()
+
+	// Parse AES key if present
+	var aesKey []byte
+	var err error
+	if media.AesKey != "" {
+		aesKey, err = ParseWeixinMediaAESKey(media.AesKey)
+		if err != nil {
+			log.Debugf("[WeChat-iLink] Failed to parse AES key: %v", err)
+			// Continue without decryption - might be plain HTTP URL
+		}
+	}
+
+	// Download from CDN
+	var data []byte
+	if g.cdnDownloader != nil {
+		data, err = g.cdnDownloader.DownloadMedia(ctx, media.EncryptQueryParam, media.FullURL, aesKey)
+		if err != nil {
+			return "", fmt.Errorf("CDN download failed: %w", err)
+		}
+	} else {
+		return "", fmt.Errorf("CDN downloader not initialized")
+	}
+
+	// Check size limit - don't save huge files to disk (videos/files > 50MB)
+	if int64(len(data)) > mediaMaxSize {
+		log.Debugf("[WeChat-iLink] Media too large (%d bytes > %d limit), not saving to disk", len(data), mediaMaxSize)
+		return "", fmt.Errorf("media too large: %d bytes", len(data))
+	}
+
+	// Save to local file
+	return g.saveMediaFile(data, mediaType, fallbackExt)
+}
+
+// downloadILinkMediaAsFileFromImage downloads an image from ILinkImageItem.
+// It tries full image first, then falls back to thumb if full image is unavailable.
+func (g *WeChatILinkGateway) downloadILinkMediaAsFileFromImage(imageItem *ILinkImageItem) (string, error) {
+	if imageItem == nil {
+		return "", fmt.Errorf("nil image item")
+	}
+
+	// Try full image first (use Media if available)
+	if imageItem.Media != nil {
+		if path, err := g.downloadILinkMediaAsFile(imageItem.Media, "image", "jpg"); err == nil {
+			return path, nil
+		}
+		// If Media download fails, try direct URL
+		if imageItem.Url != "" {
+			return g.downloadFromURL(imageItem.Url, "image", "jpg")
+		}
+	}
+
+	// Try thumb image as fallback
+	if imageItem.ThumbMedia != nil {
+		if path, err := g.downloadILinkMediaAsFile(imageItem.ThumbMedia, "image", "jpg"); err == nil {
+			return path, nil
+		}
+	}
+
+	// Try direct URL if available
+	if imageItem.Url != "" {
+		return g.downloadFromURL(imageItem.Url, "image", "jpg")
+	}
+
+	// Try legacy Aeskey field
+	if imageItem.Aeskey != "" {
+		media := &ILinkCDNMedia{AesKey: imageItem.Aeskey}
+		return g.downloadILinkMediaAsFile(media, "image", "jpg")
+	}
+
+	return "", fmt.Errorf("no downloadable image media found")
+}
+
+// downloadFromURL downloads a file from a direct HTTP URL.
+func (g *WeChatILinkGateway) downloadFromURL(url, mediaType, fallbackExt string) (string, error) {
+	if url == "" {
+		return "", fmt.Errorf("empty URL")
+	}
+
+	// Create download context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), mediaDownloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := g.client.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	// Read with size limit
+	data, err := io.ReadAll(io.LimitReader(resp.Body, mediaMaxSize+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(data)) > mediaMaxSize {
+		return "", fmt.Errorf("file too large: %d bytes", len(data))
+	}
+
+	return g.saveMediaFile(data, mediaType, fallbackExt)
+}
+
+// saveMediaFile saves media data to the local media directory.
+func (g *WeChatILinkGateway) saveMediaFile(data []byte, mediaType, fallbackExt string) (string, error) {
+	// Build media directory path
+	mediaDir := filepath.Join(g.config.DataDir, "media", mediaType)
+	if err := os.MkdirAll(mediaDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create media directory: %w", err)
+	}
+
+	// Generate unique filename
+	filename := fmt.Sprintf("%s_%d.%s", mediaType, time.Now().UnixNano(), fallbackExt)
+	filePath := filepath.Join(mediaDir, filename)
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	log.Debugf("[WeChat-iLink] Saved %s to %s (%d bytes)", mediaType, filePath, len(data))
+	return filePath, nil
 }
