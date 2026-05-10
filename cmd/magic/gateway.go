@@ -365,6 +365,16 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 	// Save checkpoint before processing (for recovery)
 	h.saveCheckpoint(msg.UserID, msg.Platform, msg.ChannelID, ag)
 
+	// Debug log for content parts
+	hasImageContentInParts := false
+	for _, cp := range contentParts {
+		if cp.Type == "image_url" {
+			hasImageContentInParts = true
+			break
+		}
+	}
+	log.Debugf("[Process] contentParts count=%d, has image=%v", len(contentParts), hasImageContentInParts)
+
 	// Run conversation with full agent capabilities (multimodal if contentParts available)
 	var response string
 	if len(contentParts) > 0 {
@@ -482,7 +492,14 @@ func (h *gatewayAgentHandler) makeFileURL(path string) string {
 	isImage := ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" || ext == ".bmp"
 
 	if isImage {
-		return h.localPathToBase64DataURL(path)
+		result := h.localPathToBase64DataURL(path)
+		outputLen := len(result)
+		if outputLen > 100 {
+			log.Debugf("[Process] makeFileURL result: input=%s, outputLen=%d", path, outputLen)
+		} else {
+			log.Debugf("[Process] makeFileURL result: input=%s, output=%s", path, result)
+		}
+		return result
 	}
 
 	// For non-image files, return as-is (LLM may not be able to access)

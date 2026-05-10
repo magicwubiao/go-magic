@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -26,6 +27,7 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 						"text": p.Text,
 					})
 				case "image_url":
+					log.Debugf("[ConvertMessages] image_url part: url=%s, detail=%s", p.ImageURL.URL, p.ImageURL.Detail)
 					imgURL := map[string]string{
 						"url": p.ImageURL.URL,
 					}

@@ -357,12 +357,39 @@ Please provide a comprehensive, well-structured final response based on these su
 			"turn": a.iterationCount,
 		})
 
+		// Filter out vision_analyze tool when image content is already provided via contentParts
+		// This prevents LLM from calling vision_analyze instead of using image_url content parts
+		hasImageContent := false
+		for _, msg := range a.history {
+			for _, cp := range msg.ContentParts {
+				if cp.Type == "image_url" {
+					hasImageContent = true
+					break
+				}
+			}
+			if hasImageContent {
+				break
+			}
+		}
+		toolsToUse := a.tools
+		if hasImageContent {
+			filteredTools := make([]map[string]interface{}, 0, len(a.tools))
+			for _, tool := range a.tools {
+				if name, ok := tool["name"].(string); ok && name == "vision_analyze" {
+					continue
+				}
+				filteredTools = append(filteredTools, tool)
+			}
+			toolsToUse = filteredTools
+			log.Debugf("[Agent] Filtered vision_analyze tool, %d tools remaining", len(filteredTools))
+		}
+
 		// Build LLM request
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
 			Messages: a.history,
-			Tools:    a.tools,
+			Tools:    toolsToUse,
 		}
 
 		// Call BeforeLLM hooks
@@ -579,12 +606,39 @@ Please provide a comprehensive, well-structured final response based on these su
 			"turn": a.iterationCount,
 		})
 
+		// Filter out vision_analyze tool when image content is already provided via contentParts
+		// This prevents LLM from calling vision_analyze instead of using image_url content parts
+		hasImageContent := false
+		for _, msg := range a.history {
+			for _, cp := range msg.ContentParts {
+				if cp.Type == "image_url" {
+					hasImageContent = true
+					break
+				}
+			}
+			if hasImageContent {
+				break
+			}
+		}
+		toolsToUse := a.tools
+		if hasImageContent {
+			filteredTools := make([]map[string]interface{}, 0, len(a.tools))
+			for _, tool := range a.tools {
+				if name, ok := tool["name"].(string); ok && name == "vision_analyze" {
+					continue
+				}
+				filteredTools = append(filteredTools, tool)
+			}
+			toolsToUse = filteredTools
+			log.Debugf("[Agent] Filtered vision_analyze tool, %d tools remaining", len(filteredTools))
+		}
+
 		// Build LLM request
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
 			Messages: a.history,
-			Tools:    a.tools,
+			Tools:    toolsToUse,
 		}
 
 		// Call BeforeLLM hooks
