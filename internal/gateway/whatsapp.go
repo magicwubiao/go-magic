@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +19,8 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/mdp/qrterminal/v3"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
@@ -304,17 +305,18 @@ func (g *WhatsAppGateway) parseJID(input string) (types.JID, error) {
 func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 	switch evt := rawEvt.(type) {
 	case *events.QR:
-		// QR code generated, display it
-		qrData := strings.Join(evt.Codes, ",")
+		// QR code generated, display it as terminal ASCII QR code
+		// evt.Codes contains rotating QR codes, use the last one
+		qrData := evt.Codes[len(evt.Codes)-1]
 		log.Infof("WhatsApp QR Code generated. Scan with WhatsApp app to login.")
 
 		if g.qrCallback != nil {
 			g.qrCallback(qrData)
 		}
 
-		// Print QR code link for CLI usage
+		// Print QR code to terminal as ASCII art
 		fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
-		fmt.Printf("   Open in browser: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", url.QueryEscape(qrData))
+		qrterminal.GenerateHalfBlock(qrData, qrterminal.L, os.Stdout)
 		fmt.Println()
 
 	case *events.QRScannedWithoutMultidevice:

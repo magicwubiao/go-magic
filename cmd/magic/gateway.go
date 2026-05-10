@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mdp/qrterminal/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -1093,8 +1093,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
 				wcgw.SetQRCallback(func(qrURL string) {
 					fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
-					fmt.Printf("   Open in browser: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", url.QueryEscape(qrURL))
-					fmt.Printf("   Or scan directly: %s\n\n", qrURL)
+					qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
+					fmt.Println()
 				})
 				if err := wcgw.Connect(ctx); err != nil {
 					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
@@ -1189,8 +1189,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// Set QR callback for display
 			wxGw.SetQRCallback(func(qrURL string) {
 				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
-				fmt.Printf("   Open in browser: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", url.QueryEscape(qrURL))
-				fmt.Printf("   Or scan directly: %s\n\n", qrURL)
+				qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
+				fmt.Println()
 			})
 			
 			if err := wxGw.Connect(ctx); err != nil {
@@ -1248,9 +1248,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 			// Set QR callback for display
 			waGw.SetQRCallback(func(qr string) {
-				fmt.Println("\n[WhatsApp] Scan this QR code with WhatsApp > Linked Devices:")
-				fmt.Printf("   Open in browser: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", url.QueryEscape(qr))
-				fmt.Println()
+				// QR is displayed by eventHandler in whatsapp.go, no need to print again
 			})
 
 			if err := waGw.Connect(ctx); err != nil {
