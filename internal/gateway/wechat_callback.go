@@ -540,7 +540,7 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 		content = msg.Content
 
 	case "image":
-		content = ""
+		content = "[用户发送了一张图片]"
 		if msg.MediaID != "" {
 			if path, err := g.downloadMedia(msg.MediaID, "image"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -548,14 +548,16 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 					URL:      path,
 					Caption:  msg.PicURL,
 				})
+				// Image downloaded successfully, set default content
+				content = "[用户发送了一张图片]"
 			} else {
 				log.Debugf("Failed to download WeChat image: %v", err)
-				content = "[Image]"
+				content = "[图片]"
 			}
 		}
 
 	case "voice":
-		content = ""
+		content = "[语音消息]"
 		// Use ASR result if available
 		if msg.Recognition != "" {
 			content = msg.Recognition
@@ -575,7 +577,7 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 		}
 
 	case "video", "shortvideo":
-		content = ""
+		content = "[用户发送了一个视频]"
 		if msg.MediaID != "" {
 			if path, err := g.downloadMedia(msg.MediaID, "video"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{

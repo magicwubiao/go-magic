@@ -512,7 +512,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		content = event.Content
 
 	case "image":
-		content = ""
+		content = "[用户发送了一张图片]"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "image"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -527,7 +527,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		}
 
 	case "voice":
-		content = ""
+		content = "[语音消息]"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "voice"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -544,7 +544,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		}
 
 	case "video":
-		content = ""
+		content = "[用户发送了一个视频]"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "video"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{

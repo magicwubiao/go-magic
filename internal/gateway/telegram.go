@@ -246,8 +246,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(photo.FileSize),
 						})
 					}
+					// If photo has no caption, set a meaningful default content
 					if content == "" {
-						content = ""
+						content = "[用户发送了一张图片]"
 					}
 				}
 
@@ -261,8 +262,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(msg.Video.FileSize),
 						})
 					}
+					// If video has no caption, set a meaningful default content
 					if content == "" {
-						content = ""
+						content = "[用户发送了一个视频]"
 					}
 				}
 
@@ -277,8 +279,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(msg.Document.FileSize),
 						})
 					}
+					// If document has no caption, set a meaningful default content
 					if content == "" {
-						content = ""
+						content = fmt.Sprintf("[用户发送了文件: %s]", msg.Document.FileName)
 					}
 				}
 
@@ -291,8 +294,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(msg.Voice.FileSize),
 						})
 					}
+					// If voice has no caption, set a meaningful default content
 					if content == "" {
-						content = ""
+						content = "[用户发送了一段语音]"
 					}
 				}
 
@@ -307,8 +311,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(msg.Audio.FileSize),
 						})
 					}
+					// If audio has no caption, set a meaningful default content
 					if content == "" {
-						content = ""
+						content = "[用户发送了一段音频]"
 					}
 				}
 
@@ -322,8 +327,9 @@ func (t *TelegramHandler) Receive() <-chan Message {
 							Size:     int64(msg.Sticker.FileSize),
 						})
 					}
+					// Sticker is already descriptive
 					if content == "" {
-						content = ""
+						content = "[用户发送了一个表情包]"
 					}
 				}
 

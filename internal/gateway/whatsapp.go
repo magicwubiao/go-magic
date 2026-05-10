@@ -395,7 +395,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		if caption != "" {
 			content = caption
 		} else {
-			content = ""
+			content = "[用户发送了一张图片]"
 		}
 		msgType = "image"
 		// Download image
@@ -426,7 +426,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		if caption != "" {
 			content = caption
 		} else {
-			content = ""
+			content = "[用户发送了一个视频]"
 		}
 		msgType = "video"
 		// Download video
@@ -447,7 +447,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.AudioMessage != nil:
-		content = ""
+		content = "[语音消息]"
 		msgType = "audio"
 		// Download audio
 		if g.client != nil && g.client.IsConnected() {
@@ -472,7 +472,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.DocumentMessage != nil:
-		content = ""
+		content = "[文件]"
 		msgType = "document"
 		filename := msg.DocumentMessage.GetFileName()
 		// Download document
@@ -508,7 +508,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "contact"
 
 	case msg.StickerMessage != nil:
-		content = ""
+		content = "[贴纸]"
 		msgType = "sticker"
 		// Download sticker (as image)
 		if g.client != nil && g.client.IsConnected() {

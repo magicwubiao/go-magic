@@ -269,11 +269,25 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		}
 		// Add media attachments
 		mediaFailedCount := 0
+		hasImageFailed := false
+		hasVideoFailed := false
+		hasAudioFailed := false
+		hasFileFailed := false
 		for _, m := range msg.MediaURLs {
 			fileURL := h.makeFileURL(m.URL)
 			if fileURL == "" {
 				// makeFileURL failed (file read error, size limit, etc.)
-				// Skip this media but log it
+				// Track which types failed for content fallback
+				switch m.Type {
+				case "image":
+					hasImageFailed = true
+				case "video":
+					hasVideoFailed = true
+				case "audio":
+					hasAudioFailed = true
+				case "file":
+					hasFileFailed = true
+				}
 				log.Warnf("Process: failed to get URL for media %s (type: %s), skipping", m.URL, m.Type)
 				mediaFailedCount++
 				continue
@@ -313,9 +327,28 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 				})
 			}
 		}
-		// If all media failed, add a fallback text message
-		if len(contentParts) == 0 && msg.Content == "" {
-			log.Warnf("Process: all media attachments failed (%d total), message will be text-only", mediaFailedCount)
+		// If media failed, add descriptive fallback text to help LLM understand context
+		if mediaFailedCount > 0 {
+			var fallbackText string
+			if hasImageFailed {
+				fallbackText = "[用户发送了一张图片，但无法加载]"
+			} else if hasVideoFailed {
+				fallbackText = "[用户发送了一个视频，但无法加载]"
+			} else if hasAudioFailed {
+				fallbackText = "[用户发送了一段语音，但无法加载]"
+			} else if hasFileFailed {
+				fallbackText = "[用户发送了一个文件，但无法加载]"
+			} else {
+				fallbackText = "[用户发送了附件，但无法加载]"
+			}
+			// Add fallback text if no content exists
+			if msg.Content == "" {
+				contentParts = append(contentParts, types.ContentPart{
+					Type: "text",
+					Text: fallbackText,
+				})
+				log.Warnf("Process: added fallback text for %d failed media attachments", mediaFailedCount)
+			}
 		}
 	}
 
