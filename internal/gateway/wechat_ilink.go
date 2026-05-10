@@ -237,7 +237,8 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	g.client = newHTTPClient(g.config.Proxy)
 
 	// If no token, try auto-login
-	if g.config.Token == "" && g.config.AutoLogin {
+	if g.config.Token == "" {
+		// No token available, start QR code login automatically
 		log.Info("[WeChat-iLink] No token available, starting QR code login...")
 		token, _, _, baseURL, err := PerformILinkLogin(ctx, ILinkLoginOpts{
 			BaseURL: g.config.BaseURL,
@@ -249,7 +250,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 			g.mu.Lock()
 			g.running = false
 			g.mu.Unlock()
-			return fmt.Errorf("auto-login failed: %w", err)
+			return fmt.Errorf("QR login failed: %w", err)
 		}
 		g.config.Token = token
 		g.config.BaseURL = baseURL
@@ -266,39 +267,32 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 		g.api = api
 	}
 
-	if g.config.Token == "" {
-		log.Warn("[WeChat-iLink] No token configured. Set token or enable auto-login.")
-		// Still mark as "connected" - user can login later via /login command
-	} else {
-		// Validate token by calling GetUpdates once
-		log.Debug("[WeChat-iLink] Validating token...")
-		testResp, err := g.api.GetUpdates(g.ctx, ILinkGetUpdatesReq{
-			GetUpdatesBuf: g.syncBuf,
-		})
-		if err != nil || (testResp != nil && isSessionExpired(testResp.Ret, testResp.Errcode)) {
-			log.Warn("[WeChat-iLink] Token expired or invalid")
-			if g.config.AutoLogin {
-				log.Info("[WeChat-iLink] Starting QR code re-login...")
-				if token, _, _, baseURL, loginErr := PerformILinkLogin(ctx, ILinkLoginOpts{
-					BaseURL: g.config.BaseURL,
-					BotType: g.config.BotType,
-					Proxy:   g.config.Proxy,
-					Timeout: ilinkAuthDefaultTimeout,
-				}); loginErr == nil {
-					g.config.Token = token
-					g.config.BaseURL = baseURL
-					_ = g.saveTokenToConfig(token, baseURL)
-					if newAPI, apiErr := NewILinkAPIClient(baseURL, token, g.config.Proxy); apiErr == nil {
-						g.api = newAPI
-					}
-					log.Info("[WeChat-iLink] ✅ Re-login successful")
-				} else {
-					log.Warnf("[WeChat-iLink] Re-login failed: %v (will retry on session expiry)", loginErr)
-				}
+	// Validate token by calling GetUpdates once
+	log.Debug("[WeChat-iLink] Validating token...")
+	testResp, err := g.api.GetUpdates(g.ctx, ILinkGetUpdatesReq{
+		GetUpdatesBuf: g.syncBuf,
+	})
+	if err != nil || (testResp != nil && isSessionExpired(testResp.Ret, testResp.Errcode)) {
+		log.Warn("[WeChat-iLink] Token expired or invalid")
+		log.Info("[WeChat-iLink] Starting QR code re-login...")
+		if token, _, _, baseURL, loginErr := PerformILinkLogin(ctx, ILinkLoginOpts{
+			BaseURL: g.config.BaseURL,
+			BotType: g.config.BotType,
+			Proxy:   g.config.Proxy,
+			Timeout: ilinkAuthDefaultTimeout,
+		}); loginErr == nil {
+			g.config.Token = token
+			g.config.BaseURL = baseURL
+			_ = g.saveTokenToConfig(token, baseURL)
+			if newAPI, apiErr := NewILinkAPIClient(baseURL, token, g.config.Proxy); apiErr == nil {
+				g.api = newAPI
 			}
+			log.Info("[WeChat-iLink] ✅ Re-login successful")
 		} else {
-			log.Debug("[WeChat-iLink] Token valid, starting message polling...")
+			log.Warnf("[WeChat-iLink] Re-login failed: %v (will retry on session expiry)", loginErr)
 		}
+	} else {
+		log.Debug("[WeChat-iLink] Token valid, starting message polling...")
 	}
 
 	g.connectedAt = time.Now()
