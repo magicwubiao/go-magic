@@ -20,6 +20,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/mdp/qrterminal/v3"
+
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -303,7 +305,7 @@ func (g *WhatsAppGateway) parseJID(input string) (types.JID, error) {
 func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 	switch evt := rawEvt.(type) {
 	case *events.QR:
-		// QR code generated, save as PNG and display path
+		// QR code generated, display in terminal
 		// evt.Codes contains rotating QR codes, use the last one
 		qrData := evt.Codes[len(evt.Codes)-1]
 		log.Infof("WhatsApp QR Code generated. Scan with WhatsApp app to login.")
@@ -312,15 +314,8 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 			g.qrCallback(qrData)
 		}
 
-		// Generate QR PNG file for easy scanning
-		qrPath, err := WriteQRPNG(qrData, g.dataDir)
-		if err == nil {
-			fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
-			fmt.Printf("   QR image saved: %s\n", qrPath)
-			fmt.Println("   Open the image and scan with your phone.")
-		} else {
-			fmt.Printf("\n[WhatsApp] QR code generated but failed to save PNG: %v\n", err)
-		}
+		fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
+		qrterminal.Generate(qrData, qrterminal.L, os.Stdout)
 		fmt.Println()
 
 	case *events.QRScannedWithoutMultidevice:
