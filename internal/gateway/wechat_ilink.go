@@ -751,8 +751,13 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 			}
 		case ILinkItemTypeFile:
 			if item.FileItem != nil && item.FileItem.FileName != "" {
+				// Extract extension from original filename for proper file naming
+				fileExt := ""
+				if idx := strings.LastIndex(item.FileItem.FileName, "."); idx >= 0 {
+					fileExt = item.FileItem.FileName[idx+1:]
+				}
 				// Try to download file
-				if mediaPath, err := g.downloadILinkMediaAsFile(item.FileItem.Media, "file", ""); err == nil {
+				if mediaPath, err := g.downloadILinkMediaAsFile(item.FileItem.Media, "file", fileExt); err == nil {
 					mediaURLs = append(mediaURLs, MediaAttachment{
 						Type:     "file",
 						URL:      mediaPath,
@@ -1376,7 +1381,12 @@ func (g *WeChatILinkGateway) saveMediaFile(data []byte, mediaType, fallbackExt s
 	}
 
 	// Generate unique filename
-	filename := fmt.Sprintf("%s_%d.%s", mediaType, time.Now().UnixNano(), fallbackExt)
+	var filename string
+	if fallbackExt != "" {
+		filename = fmt.Sprintf("%s_%d.%s", mediaType, time.Now().UnixNano(), fallbackExt)
+	} else {
+		filename = fmt.Sprintf("%s_%d", mediaType, time.Now().UnixNano())
+	}
 	filePath := filepath.Join(mediaDir, filename)
 
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
