@@ -568,7 +568,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 
 	case "event":
 		// Event messages (like menu clicks) - content is typically in event type
-		content = ""
+		content = "[事件]"
 
 	default:
 		log.Debugf("Unhandled WeCom message type: %s", event.MsgType)
