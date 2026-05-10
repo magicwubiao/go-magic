@@ -19,6 +19,8 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -95,7 +97,7 @@ func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 
 	// Initialize SQL store for session persistence
 	dbPath := filepath.Join(g.dataDir, "store.db")
-	container, err := sqlstore.New(context.Background(), "sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
+	container, err := sqlstore.New(context.Background(), "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
 	if err != nil {
 		return fmt.Errorf("failed to create session store: %w", err)
 	}
