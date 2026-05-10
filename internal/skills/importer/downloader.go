@@ -416,9 +416,7 @@ func (d *Downloader) DownloadHTTP(rawURL string) (string, error) {
 		filename = "downloaded_file"
 	}
 
-	downloadPath := filepath.Join(d.TempDir, filename)
-
-	return d.downloadFile(rawURL, filename, downloadPath)
+	return d.downloadFile(rawURL, filename, d.TempDir)
 }
 
 // downloadFile downloads a file from a URL and saves it to the destination
