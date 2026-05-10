@@ -1277,9 +1277,19 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	// Start Matrix if configured
 	if matrixCfg, ok := cfg.Gateway.Platforms["matrix"]; ok && matrixCfg.Enabled && shouldStartPlatform("matrix") {
 		platformCount++
-		if matrixCfg.Token == "" {
-			fmt.Println("[Matrix] Config incomplete (need token/homeserver)!")
-		} else {
+		if matrixCfg.Mode == "password" && matrixCfg.AppSecret != "" {
+			// Password login mode
+			fmt.Println("[Matrix] Starting with password login...")
+			matrixGw, err := gateway.NewMatrixGatewayWithLogin(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.AppSecret, "")
+			if err != nil {
+				fmt.Printf("[Matrix] Failed to login: %v\n", err)
+			} else if err := matrixGw.Connect(ctx); err != nil {
+				fmt.Printf("[Matrix] Failed to connect: %v\n", err)
+			} else {
+				gw.RegisterPlatform("matrix", matrixGw)
+			}
+		} else if matrixCfg.Token != "" {
+			// Access token mode
 			fmt.Println("[Matrix] Starting...")
 			matrixGw := gateway.NewMatrixGateway(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.Token)
 			if err := matrixGw.Connect(ctx); err != nil {
@@ -1287,6 +1297,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			} else {
 				gw.RegisterPlatform("matrix", matrixGw)
 			}
+		} else {
+			fmt.Println("[Matrix] Config incomplete (need access token or password)!")
 		}
 	}
 

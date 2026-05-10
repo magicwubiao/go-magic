@@ -710,23 +710,49 @@ func runGatewayPlatformSetup(cfg *config.Config, reader *bufio.Reader, magicDir 
 			}
 		case "10": // WhatsApp
 			current := cfg.Gateway.Platforms["whatsapp"]
-			fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
-			appID := readInput(reader, current.AppID)
-			fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
-			token := readInput(reader, current.Token)
-			fmt.Printf("   Enter WhatsApp app_secret (current: %s): ", maskString(current.AppSecret))
-			appSecret := readInput(reader, current.AppSecret)
-			fmt.Printf("   Enter WhatsApp verify_token (current: %s): ", maskString(current.VerifyToken))
-			verifyToken := readInput(reader, current.VerifyToken)
-			if appID != "" && token != "" {
-				cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
-					AppID:       appID,
-					Token:       token,
-					AppSecret:   appSecret,
-					VerifyToken: verifyToken,
-					Enabled:     true,
+			fmt.Println("   WhatsApp connection mode:")
+			fmt.Println("      [1] QR Code Login (recommended - scan with WhatsApp)")
+			fmt.Println("      [2] Business API Mode (requires Meta Developer account)")
+			fmt.Printf("   Select mode (1-2, default 1): ")
+			waModeChoice := readInput(reader, "1")
+
+			if waModeChoice == "2" {
+				// Business API mode
+				fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter WhatsApp app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				fmt.Printf("   Enter WhatsApp verify_token (current: %s): ", maskString(current.VerifyToken))
+				verifyToken := readInput(reader, current.VerifyToken)
+				if appID != "" && token != "" {
+					cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
+						AppID:       appID,
+						Token:       token,
+						AppSecret:   appSecret,
+						VerifyToken: verifyToken,
+						Mode:        "business",
+						Enabled:     true,
+					}
+					fmt.Println("   [WhatsApp] configured in Business API mode!")
 				}
-				fmt.Println("   [WhatsApp] configured successfully!")
+			} else {
+				// QR Code login mode (default)
+				dataDir := current.DataDir
+				if dataDir == "" {
+					dataDir = filepath.Join(magicDir, "whatsapp")
+				}
+				fmt.Printf("   Enter data directory (current: %s): ", dataDir)
+				dataDir = readInput(reader, dataDir)
+				cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
+					DataDir: dataDir,
+					Mode:    "qr",
+					Enabled: true,
+				}
+				fmt.Println("   [WhatsApp] configured in QR mode!")
+				fmt.Println("   To login, start the gateway and scan the QR code:")
+				fmt.Println("     magic gateway start")
 			}
 		case "11": // LINE
 			current := cfg.Gateway.Platforms["line"]
@@ -748,20 +774,45 @@ func runGatewayPlatformSetup(cfg *config.Config, reader *bufio.Reader, magicDir 
 			if current.APIURL != "" {
 				apiURLDefault = current.APIURL
 			}
+			fmt.Println("   Matrix login mode:")
+			fmt.Println("      [1] Access Token (recommended - get from Element or other client)")
+			fmt.Println("      [2] Password Login (login with username + password)")
+			fmt.Printf("   Select mode (1-2, default 1): ")
+			matrixModeChoice := readInput(reader, "1")
+
 			fmt.Printf("   Enter Matrix homeserver URL (current: %s): ", apiURLDefault)
 			apiURL := readInput(reader, apiURLDefault)
-			fmt.Printf("   Enter Matrix user ID / app_id (current: %s): ", current.AppID)
+			fmt.Printf("   Enter Matrix user ID (current: %s): ", current.AppID)
 			appID := readInput(reader, current.AppID)
-			fmt.Printf("   Enter Matrix access token (current: %s): ", maskString(current.Token))
-			token := readInput(reader, current.Token)
-			if apiURL != "" && token != "" {
-				cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
-					APIURL:  apiURL,
-					AppID:   appID,
-					Token:   token,
-					Enabled: true,
+
+			if matrixModeChoice == "2" {
+				// Password login mode
+				fmt.Printf("   Enter Matrix password (current: %s): ", maskString(current.AppSecret))
+				password := readInput(reader, current.AppSecret)
+				if apiURL != "" && appID != "" && password != "" {
+					cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+						APIURL:    apiURL,
+						AppID:     appID,
+						AppSecret: password,
+						Mode:      "password",
+						Enabled:   true,
+					}
+					fmt.Println("   [Matrix] configured in password login mode!")
 				}
-				fmt.Println("   [Matrix] configured successfully!")
+			} else {
+				// Access token mode
+				fmt.Printf("   Enter Matrix access token (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				if apiURL != "" && token != "" {
+					cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+						APIURL: apiURL,
+						AppID:  appID,
+						Token:  token,
+						Mode:   "token",
+						Enabled: true,
+					}
+					fmt.Println("   [Matrix] configured in access token mode!")
+				}
 			}
 		default:
 			fmt.Println("   Invalid choice. Please select 0-12.")
