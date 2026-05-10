@@ -1068,35 +1068,37 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	// Start WeCom if configured
 	if wcCfg, ok := cfg.Gateway.Platforms["wecom"]; ok && wcCfg.Enabled && shouldStartPlatform("wecom") {
 		platformCount++
-		if wcCfg.CorpID == "" || wcCfg.Secret == "" {
-			fmt.Println("[WeCom] Config incomplete (need corp_id and secret)!")
-		} else if wcCfg.Mode == "app" {
-			// Traditional app message mode (requires public IP + verified enterprise)
-			fmt.Println("[WeCom] Starting in app mode (callback-based)...")
-			wcgw := gateway.NewWeComAppGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-			// Set channel filter
-			wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
-			if err := wcgw.Connect(ctx); err != nil {
-				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+		if wcCfg.Mode == "app" {
+			// Traditional app message mode (requires corp_id + secret + public IP)
+			if wcCfg.CorpID == "" || wcCfg.Secret == "" {
+				fmt.Println("[WeCom] Config incomplete (app mode requires corp_id and secret)!")
 			} else {
-				gw.RegisterPlatform("wecom", wcgw)
+				fmt.Println("[WeCom] Starting in app mode (callback-based)...")
+				wcgw := gateway.NewWeComAppGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
+				if err := wcgw.Connect(ctx); err != nil {
+					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+				} else {
+					gw.RegisterPlatform("wecom", wcgw)
+				}
 			}
 		} else {
-			// QR code login mode (default, no public IP required)
-			fmt.Println("[WeCom] Starting in QR mode...")
-			wcgw := gateway.NewWeComQRGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-			// Set channel filter
-			wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
-			// Set QR callback for display
-			wcgw.SetQRCallback(func(qrURL string) {
-				fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
-				fmt.Printf("   %s\n\n", qrURL)
-			})
-			
-			if err := wcgw.Connect(ctx); err != nil {
-				fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+			// QR code login mode (default, only needs corp_id + agent_id)
+			if wcCfg.CorpID == "" || wcCfg.AgentID == "" {
+				fmt.Println("[WeCom] Config incomplete (QR mode requires corp_id and agent_id)!")
 			} else {
-				gw.RegisterPlatform("wecom", wcgw)
+				fmt.Println("[WeCom] Starting in QR mode...")
+				wcgw := gateway.NewWeComQRGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
+				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
+				wcgw.SetQRCallback(func(qrURL string) {
+					fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
+					fmt.Printf("   %s\n\n", qrURL)
+				})
+				if err := wcgw.Connect(ctx); err != nil {
+					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+				} else {
+					gw.RegisterPlatform("wecom", wcgw)
+				}
 			}
 		}
 	}
