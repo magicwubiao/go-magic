@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,8 +310,10 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 			g.qrCallback(qrData)
 		}
 
-		// Also print QR to console for CLI usage
-		fmt.Printf("\n--- WhatsApp QR Code ---\n%s\n--- Scan with WhatsApp > Linked Devices ---\n\n", qrData)
+		// Print QR code link for CLI usage
+		fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
+		fmt.Printf("   Open in browser: https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", url.QueryEscape(qrData))
+		fmt.Println()
 
 	case *events.QRScannedWithoutMultidevice:
 		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
