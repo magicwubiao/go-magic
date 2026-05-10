@@ -471,8 +471,9 @@ func (h *gatewayAgentHandler) makeFileURL(path string) string {
 	if path == "" {
 		return ""
 	}
-	// If it's already a URL, return as is
+	// If it's already a URL, return as is (HTTP URLs can be accessed directly by LLM)
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "data:") {
+		log.Debugf("makeFileURL: passing through URL as-is: %s", path)
 		return path
 	}
 
@@ -505,6 +506,8 @@ func (h *gatewayAgentHandler) localPathToBase64DataURL(path string) string {
 		log.Warnf("makeFileURL: file too large (%d bytes > %d bytes), skipping: %s", len(data), maxFileSizeForBase64, path)
 		return ""
 	}
+
+	log.Debugf("makeFileURL: successfully read local image file (%d bytes): %s", len(data), path)
 
 	// Determine MIME type from extension
 	ext := strings.ToLower(filepath.Ext(path))

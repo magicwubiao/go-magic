@@ -710,25 +710,25 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 			}
 		case ILinkItemTypeImage:
 			if item.ImageItem != nil {
-				// Try to download image from CDN
-				if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
-					mediaURLs = append(mediaURLs, MediaAttachment{
-						Type: "image",
-						URL:  mediaPath,
-					})
-					// Image downloaded successfully to local file
-					// content may be empty but message should still be sent
-				} else if item.ImageItem.Url != "" {
-					// CDN download failed, use direct HTTP URL
-					// LLM APIs like OpenAI can access HTTP URLs directly
-					log.Debugf("[WeChat-iLink] CDN download failed, using direct URL: %s", item.ImageItem.Url)
+				// Priority 1: Use direct HTTP URL if available (LLM can access directly)
+				// This avoids local file path issues on Windows/Linux path mismatches
+				if item.ImageItem.Url != "" {
+					log.Debugf("[WeChat-iLink] Using direct image URL: %s", item.ImageItem.Url)
 					mediaURLs = append(mediaURLs, MediaAttachment{
 						Type: "image",
 						URL:  item.ImageItem.Url,
 					})
 				} else {
-					log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
-					parts = append(parts, "[图片]")
+					// Priority 2: Download image from CDN to local file as fallback
+					if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type: "image",
+							URL:  mediaPath,
+						})
+					} else {
+						log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
+						parts = append(parts, "[图片]")
+					}
 				}
 			} else {
 				parts = append(parts, "[图片]")

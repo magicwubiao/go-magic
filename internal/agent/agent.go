@@ -305,18 +305,22 @@ func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, cont
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
-	// Auto sub-task delegation for complex tasks
-	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
-		if err != nil {
-			return "", err
-		}
-		// Synthesis prompt to summarize sub-task results
-		return a.RunConversation(ctx,
-			fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
+	// Skip sub-task delegation when contentParts are present (e.g., multimodal input with images)
+	// This prevents losing the media content when delegating to sub-task executor
+	if len(contentParts) == 0 {
+		// Auto sub-task delegation for complex tasks
+		if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
+			if err != nil {
+				return "", err
+			}
+			// Synthesis prompt to summarize sub-task results
+			return a.RunConversation(ctx,
+				fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
 
 %s
 
 Please provide a comprehensive, well-structured final response based on these sub-task results.`, result))
+		}
 	}
 
 	// Build user message - use content parts if available, otherwise fall back to plain text
