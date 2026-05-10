@@ -14,6 +14,7 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -93,14 +94,14 @@ func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 
 	// Initialize SQL store for session persistence
 	dbPath := filepath.Join(g.dataDir, "store.db")
-	container, err := sqlstore.New("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
+	container, err := sqlstore.New(context.Background(), "sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
 	if err != nil {
 		return fmt.Errorf("failed to create session store: %w", err)
 	}
 	g.container = container
 
 	// Get or create device
-	devices, err := container.GetAllDevices()
+	devices, err := container.GetAllDevices(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get devices: %w", err)
 	}
@@ -217,7 +218,7 @@ func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
 	}
 
 	// Send text message
-	_, err = g.client.SendMessage(ctx, jid, &whatsmeow.Message{
+	_, err = g.client.SendMessage(ctx, jid, &waE2E.Message{
 		Conversation: &resp.Content,
 	})
 	if err != nil {
@@ -232,7 +233,7 @@ func (g *WhatsAppGateway) HandleSlashCommand(cmd string, msg Message) (Response,
 	switch cmd {
 	case "logout":
 		if g.client != nil {
-			g.client.Logout()
+			g.client.Logout(context.Background())
 		}
 		return Response{
 			ChannelID: msg.UserID,
@@ -301,7 +302,7 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 	switch evt := rawEvt.(type) {
 	case *events.QR:
 		// QR code generated, display it
-		qrData := evt.Code
+		qrData := strings.Join(evt.Codes, ",")
 		log.Infof("WhatsApp QR Code generated. Scan with WhatsApp app to login.")
 
 		if g.qrCallback != nil {
@@ -346,13 +347,9 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 
 	case *events.AppStateSyncComplete:
 		if len(g.client.Store.PushName) > 0 && g.client.Store.PushName != "go-magic" {
-			_ = g.client.SendPresence(types.PresenceAvailable)
+			_ = g.client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
 
-	case *events.ConnInfo:
-		// Connection info update
-
-	case *events.OfflineSyncCompleted:
 		log.Info("WhatsApp offline sync completed")
 	}
 }
@@ -403,7 +400,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "image"
 		// Download image
 		if g.client != nil && g.client.IsConnected() {
-			data, err := g.client.Download(msg.ImageMessage)
+			data, err := g.client.Download(context.Background(), msg.ImageMessage)
 			if err == nil && len(data) > 0 {
 				ext := "jpg"
 				if msg.ImageMessage.GetMimetype() == "image/webp" {
@@ -434,7 +431,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "video"
 		// Download video
 		if g.client != nil && g.client.IsConnected() {
-			data, err := g.client.Download(msg.VideoMessage)
+			data, err := g.client.Download(context.Background(), msg.VideoMessage)
 			if err == nil && len(data) > 0 {
 				path := saveMedia(data, info.ID, "whatsapp", "video", "mp4")
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -454,7 +451,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "audio"
 		// Download audio
 		if g.client != nil && g.client.IsConnected() {
-			data, err := g.client.Download(msg.AudioMessage)
+			data, err := g.client.Download(context.Background(), msg.AudioMessage)
 			if err == nil && len(data) > 0 {
 				ext := "ogg"
 				if msg.AudioMessage.GetMimetype() == "audio/ogg; codecs=opus" {
@@ -480,7 +477,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		filename := msg.DocumentMessage.GetFileName()
 		// Download document
 		if g.client != nil && g.client.IsConnected() {
-			data, err := g.client.Download(msg.DocumentMessage)
+			data, err := g.client.Download(context.Background(), msg.DocumentMessage)
 			if err == nil && len(data) > 0 {
 				// Extract extension from filename or mime type
 				ext := "bin"
@@ -515,7 +512,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "sticker"
 		// Download sticker (as image)
 		if g.client != nil && g.client.IsConnected() {
-			data, err := g.client.Download(msg.StickerMessage)
+			data, err := g.client.Download(context.Background(), msg.StickerMessage)
 			if err == nil && len(data) > 0 {
 				path := saveMedia(data, info.ID, "whatsapp", "image", "webp")
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -579,11 +576,11 @@ func (g *WhatsAppGateway) RequestAppState() error {
 	if g.client == nil || !g.client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	err := g.client.FetchAppState(appstate.WAPatchCriticalBlock, false, false)
+	err := g.client.FetchAppState(context.Background(), appstate.WAPatchCriticalBlock, false, false)
 	if err != nil {
 		return fmt.Errorf("failed to fetch app state: %w", err)
 	}
-	err = g.client.FetchAppState(appstate.WAPatchRegularHigh, false, false)
+	err = g.client.FetchAppState(context.Background(), appstate.WAPatchRegularHigh, false, false)
 	if err != nil {
 		return fmt.Errorf("failed to fetch regular app state: %w", err)
 	}
@@ -595,7 +592,7 @@ func (g *WhatsAppGateway) SendPresence(presence types.Presence) error {
 	if g.client == nil || !g.client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	return g.client.SendPresence(presence)
+	return g.client.SendPresence(context.Background(), presence)
 }
 
 // SendTyping sends a typing indicator to a chat
@@ -603,7 +600,7 @@ func (g *WhatsAppGateway) SendTyping(chatJID types.JID) error {
 	if g.client == nil || !g.client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	return g.client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	return g.client.SendChatPresence(context.Background(), chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 }
 
 // GetContactName resolves a JID to a contact name
@@ -611,7 +608,7 @@ func (g *WhatsAppGateway) GetContactName(jid types.JID) string {
 	if g.client == nil {
 		return jid.User
 	}
-	contact, err := g.client.Store.Contacts.GetContact(jid)
+	contact, err := g.client.Store.Contacts.GetContact(context.Background(), jid)
 	if err != nil || contact.FullName == "" {
 		return jid.User
 	}

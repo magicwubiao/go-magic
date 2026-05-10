@@ -36,6 +36,11 @@ type Config struct {
 	SubAgent      *SubAgentConfig           `json:"subagent,omitempty"`
 	Voice         *VoiceConfig              `json:"voice,omitempty"`
 	Privacy       *privacy.Config           `json:"privacy,omitempty"`
+	// Agent settings
+	SecretRedaction bool `json:"secret_redaction,omitempty"`
+	Agent           struct {
+		GoalMaxTurns int `json:"goal_max_turns"`
+	} `json:"agent,omitempty"`
 }
 
 // ProviderConfig represents provider configuration

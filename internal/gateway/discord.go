@@ -159,7 +159,7 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			URL:      attachment.URL,
 			MimeType: attachment.ContentType,
 			Filename: attachment.Filename,
-			Size:     attachment.Size,
+			Size:     int64(attachment.Size),
 		})
 	}
 
@@ -191,7 +191,7 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			"author":     m.Author.Username,
 			"author_id":  m.Author.ID,
 			"guild_id":   m.GuildID,
-			"msg_type":   m.Type.String(),
+			"msg_type":   fmt.Sprintf("%d", m.Type),
 			"attachment_count": len(m.Attachments),
 		},
 	}

@@ -273,7 +273,7 @@ func runKanbanList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	table := tablewriter.CreateTable()
+	table := tablewriter.NewWriter(os.Stdout)
 	table.SetHeader([]string{"ID", "Title", "Status", "Priority", "Assignee"})
 
 	for _, task := range tasks {
@@ -285,7 +285,7 @@ func runKanbanList(cmd *cobra.Command, args []string) error {
 		if assignee == "" {
 			assignee = "-"
 		}
-		table.AddRow([]string{task.ID, title, string(task.Status), strconv.Itoa(task.Priority), assignee})
+		table.Append([]string{task.ID, title, string(task.Status), strconv.Itoa(task.Priority), assignee})
 	}
 
 	table.Render()

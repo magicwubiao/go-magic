@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +49,9 @@ type WeChatQRGateway struct {
 	qrCallbackPort int
 	server         *http.Server
 	serverOnce     sync.Once
+
+	// Pending state for OAuth verification
+	pendingState string
 
 	// QR callback for external display
 	qrCallback func(url string)

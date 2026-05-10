@@ -55,6 +55,9 @@ type WeComAppGateway struct {
 	// Channel allowlist/blocklist
 	allowedChannels []string
 	blockedChannels []string
+
+	// HTTP client
+	httpClient *http.Client
 }
 
 // NewWeComAppGateway creates a new WeCom application message mode gateway
@@ -69,6 +72,7 @@ func NewWeComAppGateway(corpID, agentID, secret string) *WeComAppGateway {
 		callbackPort: 8080,
 		maxRetries:   5,
 		retryDelay:   time.Second * 5,
+		httpClient:   &http.Client{},
 	}
 }
 
@@ -403,6 +407,17 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 		AgentID      string `xml:"AgentID"`
 		Event        string `xml:"Event"`
 		CreateTime   int64  `xml:"CreateTime"`
+		// Media fields
+		MediaID  string `xml:"MediaId,omitempty"`
+		PicURL   string `xml:"PicUrl,omitempty"`
+		Format   string `xml:"Format,omitempty"`
+		ThumbURL string `xml:"ThumbMediaId,omitempty"`
+		Location string `xml:"Location,omitempty"`
+		Scale    string `xml:"Scale,omitempty"`
+		Label    string `xml:"Label,omitempty"`
+		Title    string `xml:"Title,omitempty"`
+		Desc     string `xml:"Description,omitempty"`
+		URL      string `xml:"Url,omitempty"`
 	}
 
 	if err := xml.Unmarshal([]byte(msgStr), &event); err != nil {

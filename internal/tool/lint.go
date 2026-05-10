@@ -88,7 +88,7 @@ func lintYAML(path string) ([]string, error) {
 
 // lintTOML checks TOML syntax using github.com/BurntSushi/toml
 func lintTOML(path string) ([]string, error) {
-	_, err := toml.LoadFile(path)
+	_, err := toml.DecodeFile(path, &struct{}{})
 	if err != nil {
 		return []string{err.Error()}, nil
 	}

@@ -237,13 +237,13 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				if msg.Photo != nil {
 					// Download photo
 					photo := msg.Photo[len(msg.Photo)-1] // Get largest photo
-					if file, err := t.bot.GetFile(photo.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "image",
 							URL:      file.Link(t.bot.Token),
 							MimeType: "image/jpeg",
 							Caption:  caption,
-							Size:     photo.FileSize,
+							Size:     int64(photo.FileSize),
 						})
 					}
 					if content == "" {
@@ -252,13 +252,13 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				}
 
 				if msg.Video != nil {
-					if file, err := t.bot.GetFile(msg.Video.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Video.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "video",
 							URL:      file.Link(t.bot.Token),
 							MimeType: "video/mp4",
 							Caption:  caption,
-							Size:     msg.Video.FileSize,
+							Size:     int64(msg.Video.FileSize),
 						})
 					}
 					if content == "" {
@@ -267,14 +267,14 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				}
 
 				if msg.Document != nil {
-					if file, err := t.bot.GetFile(msg.Document.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Document.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "file",
 							URL:      file.Link(t.bot.Token),
 							MimeType: msg.Document.MimeType,
 							Filename: msg.Document.FileName,
 							Caption:  caption,
-							Size:     msg.Document.FileSize,
+							Size:     int64(msg.Document.FileSize),
 						})
 					}
 					if content == "" {
@@ -283,12 +283,12 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				}
 
 				if msg.Voice != nil {
-					if file, err := t.bot.GetFile(msg.Voice.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Voice.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "audio",
 							URL:      file.Link(t.bot.Token),
 							MimeType: msg.Voice.MimeType,
-							Size:     msg.Voice.FileSize,
+							Size:     int64(msg.Voice.FileSize),
 						})
 					}
 					if content == "" {
@@ -297,14 +297,14 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				}
 
 				if msg.Audio != nil {
-					if file, err := t.bot.GetFile(msg.Audio.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Audio.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "audio",
 							URL:      file.Link(t.bot.Token),
 							MimeType: msg.Audio.MimeType,
 							Filename: msg.Audio.Title,
 							Caption:  caption,
-							Size:     msg.Audio.FileSize,
+							Size:     int64(msg.Audio.FileSize),
 						})
 					}
 					if content == "" {
@@ -313,13 +313,13 @@ func (t *TelegramHandler) Receive() <-chan Message {
 				}
 
 				if msg.Sticker != nil {
-					if file, err := t.bot.GetFile(msg.Sticker.FileID); err == nil {
+					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Sticker.FileID}); err == nil {
 						mediaURLs = append(mediaURLs, MediaAttachment{
 							Type:     "image",
 							URL:      file.Link(t.bot.Token),
 							MimeType: "image/webp",
 							Caption:  "Sticker",
-							Size:     msg.Sticker.FileSize,
+							Size:     int64(msg.Sticker.FileSize),
 						})
 					}
 					if content == "" {
@@ -339,7 +339,6 @@ func (t *TelegramHandler) Receive() <-chan Message {
 					From:      msg.From.UserName,
 					MediaURLs: mediaURLs,
 					Metadata: map[string]interface{}{
-						"msg_type":  msg.MessageType(),
 						"chat_type": msg.Chat.Type,
 					},
 				}
