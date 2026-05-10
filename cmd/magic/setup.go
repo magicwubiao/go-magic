@@ -562,23 +562,52 @@ func runSetup(cmd *cobra.Command, args []string) {
 				}
 			case "7": // WeChat (Official Account/Mini Program)
 				current := cfg.Gateway.Platforms["wechat"]
-				fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
-				appID := readInput(reader, current.AppID)
-				fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				fmt.Printf("   Enter WeChat token for callback verification (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				fmt.Printf("   Enter WeChat AESKey (current: %s): ", maskString(current.AESKey))
-				aesKey := readInput(reader, current.AESKey)
-				if appID != "" && appSecret != "" {
-					cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-						AppID:     appID,
-						AppSecret: appSecret,
-						Token:     token,
-						AESKey:    aesKey,
-						Enabled:   true,
+				fmt.Println("   WeChat connection mode:")
+				fmt.Println("      [1] QR Code Login (recommended - scan to login)")
+				fmt.Println("      [2] Callback Mode (webhook - requires public IP)")
+				fmt.Printf("   Select mode (1-2, default 1): ")
+				modeChoice := readInput(reader, "1")
+
+				if modeChoice == "2" {
+					// Traditional callback mode
+					fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
+					appID := readInput(reader, current.AppID)
+					fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
+					appSecret := readInput(reader, current.AppSecret)
+					fmt.Printf("   Enter WeChat token for callback verification (current: %s): ", maskString(current.Token))
+					token := readInput(reader, current.Token)
+					fmt.Printf("   Enter WeChat AESKey (current: %s): ", maskString(current.AESKey))
+					aesKey := readInput(reader, current.AESKey)
+					if appID != "" && appSecret != "" {
+						cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+							AppID:     appID,
+							AppSecret: appSecret,
+							Token:     token,
+							AESKey:    aesKey,
+							Mode:      "callback",
+							Enabled:   true,
+						}
+						fmt.Println("   [WeChat Official Account] configured in callback mode!")
 					}
-					fmt.Println("   [WeChat Official Account] configured successfully!")
+				} else {
+					// QR Code login mode
+					fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
+					appID := readInput(reader, current.AppID)
+					fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
+					appSecret := readInput(reader, current.AppSecret)
+					if appID != "" && appSecret != "" {
+						cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+							AppID:     appID,
+							AppSecret: appSecret,
+							Mode:      "qr",
+							Enabled:   true,
+						}
+						fmt.Println("   [WeChat Official Account] configured in QR mode!")
+						fmt.Println("   To login, start the gateway and scan the QR code:")
+						fmt.Println("     magic gateway start")
+					} else {
+						fmt.Println("   [WeChat] app_id and app_secret are required for QR login")
+					}
 				}
 			case "8": // WeChat-iLink (Personal WeChat)
 				current := cfg.Gateway.Platforms["wechat_ilink"]

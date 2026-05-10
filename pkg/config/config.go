@@ -86,8 +86,10 @@ type PlatformConfig struct {
 	APIKey string `json:"api_key,omitempty"`
 	// WhatsApp fields
 	VerifyToken string `json:"verify_token,omitempty"`
-	Mode        string `json:"mode,omitempty"` // "personal" (QR login, default) or "business" (API)
-	// WeChat fields
+	Mode        string `json:"mode,omitempty"` // WhatsApp: "personal" (QR login, default) or "business" (API)
+	// WeCom fields: Mode = "qr" (QR code login, default) or "app" (API callback mode)
+	// WeChat fields: Mode = "qr" (QR code login, default) or "callback" (webhook mode)
+	// WeChat ClawBot fields
 	AESKey string `json:"aes_key,omitempty"`
 	// WeChat ClawBot fields
 	ClientID  string `json:"client_id,omitempty"`
