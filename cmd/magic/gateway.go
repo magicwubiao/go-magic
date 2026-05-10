@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -1093,7 +1092,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
 				wcgw.SetQRCallback(func(qrURL string) {
 					fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
-					qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+					qrPath, _ := gateway.WriteQRPNG(qrURL, "")
+					if qrPath != "" {
+						fmt.Printf("   QR image saved: %s\n", qrPath)
+					}
 					fmt.Println()
 				})
 				if err := wcgw.Connect(ctx); err != nil {
@@ -1189,7 +1191,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// Set QR callback for display
 			wxGw.SetQRCallback(func(qrURL string) {
 				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
-				qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+				qrPath, _ := gateway.WriteQRPNG(qrURL, "")
+				if qrPath != "" {
+					fmt.Printf("   QR image saved: %s\n", qrPath)
+					}
 				fmt.Println()
 			})
 			
