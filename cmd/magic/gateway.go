@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -57,6 +58,13 @@ var gatewayStatusCmd = &cobra.Command{
 	Run:   runGatewayStatus,
 }
 
+var gatewaySetupCmd = &cobra.Command{
+	Use:   "setup",
+	Short: "Configure gateway platforms interactively",
+	Long:  "Interactive setup wizard for configuring messaging platforms (Telegram, Discord, WeChat, etc.)",
+	Run:   runGatewaySetup,
+}
+
 func init() {
 	// Note: 'p' shorthand is already used by root's --profile persistent flag.
 	// We use 'P' (uppercase) for --platform.
@@ -67,6 +75,7 @@ func init() {
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStopCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
+	gatewayCmd.AddCommand(gatewaySetupCmd)
 }
 
 // shouldStartPlatform checks if a platform should be started based on --platform flag.
@@ -1488,4 +1497,51 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 			fmt.Printf("  %s: %s\n", name, status)
 		}
 	}
+}
+
+func runGatewaySetup(cmd *cobra.Command, args []string) {
+	fmt.Println("╔════════════════════════════════════════╗")
+	fmt.Println("║     Gateway Platform Setup Wizard      ║")
+	fmt.Println("╚════════════════════════════════════════╝")
+	fmt.Println()
+
+	homeDir, _ := os.UserHomeDir()
+	magicDir := filepath.Join(homeDir, ".magic")
+
+	// Load existing config
+	cfg, loadErr := config.Load()
+	if loadErr != nil || cfg == nil {
+		cfg = &config.Config{
+			Profile:    "default",
+			MagicHome:  magicDir,
+			Providers:  make(map[string]config.ProviderConfig),
+			Gateway: config.GatewayConfig{
+				Enabled:   true,
+				Platforms: make(map[string]config.PlatformConfig),
+			},
+		}
+	}
+
+	// Ensure gateway is enabled
+	cfg.Gateway.Enabled = true
+	if cfg.Gateway.Platforms == nil {
+		cfg.Gateway.Platforms = make(map[string]config.PlatformConfig)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Run the platform setup wizard
+	runGatewayPlatformSetup(cfg, reader, magicDir)
+
+	// Save config
+	if err := cfg.Save(); err != nil {
+		fmt.Printf("Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n✓ Gateway setup complete!")
+	fmt.Println("Configuration saved to ~/.magic/config.json")
+	fmt.Println()
+	fmt.Println("Start the gateway with:")
+	fmt.Println("  magic gateway start")
 }

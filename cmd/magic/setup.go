@@ -399,324 +399,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 	if gatewayChoice == "y" || gatewayChoice == "Y" {
 		cfg.Gateway.Enabled = true
 		fmt.Println("   Gateway can be configured later with: magic gateway start")
-		fmt.Println("\n   Gateway Platform Configuration:")
-		fmt.Println("   Configure messaging platforms (Telegram, Discord, etc.)")
-
-		for {
-			fmt.Println("\n   Available platforms:")
-			fmt.Println("      [1] Telegram")
-			fmt.Println("      [2] Discord")
-			fmt.Println("      [3] WeCom (Enterprise WeChat)")
-			fmt.Println("      [4] Feishu (Lark)")
-			fmt.Println("      [5] DingTalk")
-			fmt.Println("      [6] QQ (Bot/Channel)")
-			fmt.Println("      [7] WeChat (Official Account/Mini Program)")
-			fmt.Println("      [8] WeChat-iLink (Personal WeChat via iLink)")
-			fmt.Println("      [9] Slack")
-			fmt.Println("      [10] WhatsApp")
-			fmt.Println("      [11] LINE")
-			fmt.Println("      [12] Matrix")
-			fmt.Println("      [0] Done")
-
-			fmt.Print("\n   Select platform to configure (0-12, default 0): ")
-			platformChoice, _ := reader.ReadString('\n')
-			platformChoice = strings.TrimSpace(platformChoice)
-			if platformChoice == "" {
-				platformChoice = "0"
-			}
-
-			switch platformChoice {
-			case "0":
-				fmt.Println("   Platform configuration complete.")
-				goto donePlatforms
-			case "1": // Telegram
-				currentToken := ""
-				if p, ok := cfg.Gateway.Platforms["telegram"]; ok {
-					currentToken = p.Token
-				}
-				tokenDisplay := ""
-				if currentToken != "" {
-					if len(currentToken) > 4 {
-						tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
-					} else {
-						tokenDisplay = " (current: ****)"
-					}
-				}
-				fmt.Printf("   Enter Telegram bot token%s: ", tokenDisplay)
-				token := readInput(reader, currentToken)
-				if token != "" {
-					cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
-						Token:   token,
-						Enabled: true,
-					}
-					fmt.Println("   [Telegram] configured successfully!")
-				}
-			case "2": // Discord
-				currentToken := ""
-				if p, ok := cfg.Gateway.Platforms["discord"]; ok {
-					currentToken = p.Token
-				}
-				tokenDisplay := ""
-				if currentToken != "" {
-					if len(currentToken) > 4 {
-						tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
-					} else {
-						tokenDisplay = " (current: ****)"
-					}
-				}
-				fmt.Printf("   Enter Discord bot token%s: ", tokenDisplay)
-				token := readInput(reader, currentToken)
-				if token != "" {
-					cfg.Gateway.Platforms["discord"] = config.PlatformConfig{
-						Token:   token,
-						Enabled: true,
-					}
-					fmt.Println("   [Discord] configured successfully!")
-				}
-			case "3": // WeCom
-				current := cfg.Gateway.Platforms["wecom"]
-				fmt.Printf("   Enter WeCom corp_id (current: %s): ", maskString(current.CorpID))
-				corpID := readInput(reader, current.CorpID)
-				fmt.Printf("   Enter WeCom agent_id (current: %s): ", current.AgentID)
-				agentID := readInput(reader, current.AgentID)
-				fmt.Printf("   Enter WeCom secret (current: %s): ", maskString(current.Secret))
-				secret := readInput(reader, current.Secret)
-				fmt.Printf("   Enter WeCom token for callback verification (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				if corpID != "" && secret != "" {
-					cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
-						CorpID:  corpID,
-						AgentID: agentID,
-						Secret:  secret,
-						Token:   token,
-						Enabled: true,
-					}
-					fmt.Println("   [WeCom] configured successfully!")
-				}
-			case "4": // Feishu (Lark)
-				current := cfg.Gateway.Platforms["feishu"]
-				fmt.Printf("   Enter Feishu app_id (current: %s): ", current.AppID)
-				appID := readInput(reader, current.AppID)
-				fmt.Printf("   Enter Feishu app_secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				if appID != "" && appSecret != "" {
-					cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
-						AppID:     appID,
-						AppSecret: appSecret,
-						Enabled:   true,
-					}
-					fmt.Println("   [Feishu] configured successfully!")
-				}
-			case "5": // DingTalk
-				current := cfg.Gateway.Platforms["dingtalk"]
-				fmt.Printf("   Enter DingTalk app_key (current: %s): ", current.AppKey)
-				appKey := readInput(reader, current.AppKey)
-				fmt.Printf("   Enter DingTalk app_secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				fmt.Printf("   Enter DingTalk agent_id (current: %s): ", current.AgentID)
-				agentID := readInput(reader, current.AgentID)
-				if appKey != "" && appSecret != "" {
-					cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
-						AppKey:    appKey,
-						AppSecret: appSecret,
-						AgentID:   agentID,
-						Enabled:   true,
-					}
-					fmt.Println("   [DingTalk] configured successfully!")
-				}
-			case "6": // QQ (Bot/Channel)
-				current := cfg.Gateway.Platforms["qq"]
-				fmt.Println("   QQ supports two auth methods:")
-				fmt.Println("     [a] Official QQ Bot (app_id + app_secret) - Recommended")
-				fmt.Println("     [b] Legacy QQ (number + password)")
-				fmt.Printf("   Select method (default a): ")
-				qqMethod := readInput(reader, "a")
-				if qqMethod == "b" || qqMethod == "B" {
-					// Legacy mode
-					fmt.Printf("   Enter QQ number (current: %s): ", current.Number)
-					number := readInput(reader, current.Number)
-					fmt.Printf("   Enter QQ password (current: %s): ", maskString(current.Password))
-					password := readInput(reader, current.Password)
-					if number != "" && password != "" {
-						cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
-							Number:   number,
-							Password: password,
-							Enabled:  true,
-						}
-						fmt.Println("   [QQ Legacy] configured successfully!")
-					}
-				} else {
-					// Official QQ Bot mode (Recommended)
-					fmt.Printf("   Enter QQ Bot app_id (current: %s): ", current.AppID)
-					appID := readInput(reader, current.AppID)
-					fmt.Printf("   Enter QQ Bot app_secret (current: %s): ", maskString(current.AppSecret))
-					appSecret := readInput(reader, current.AppSecret)
-					if appID != "" && appSecret != "" {
-						cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
-							AppID:     appID,
-							AppSecret: appSecret,
-							Enabled:   true,
-						}
-						fmt.Println("   [QQ Official Bot] configured successfully!")
-					}
-				}
-			case "7": // WeChat (Official Account/Mini Program)
-				current := cfg.Gateway.Platforms["wechat"]
-				fmt.Println("   WeChat connection mode:")
-				fmt.Println("      [1] QR Code Login (recommended - scan to login)")
-				fmt.Println("      [2] Callback Mode (webhook - requires public IP)")
-				fmt.Printf("   Select mode (1-2, default 1): ")
-				modeChoice := readInput(reader, "1")
-
-				if modeChoice == "2" {
-					// Traditional callback mode
-					fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
-					appID := readInput(reader, current.AppID)
-					fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
-					appSecret := readInput(reader, current.AppSecret)
-					fmt.Printf("   Enter WeChat token for callback verification (current: %s): ", maskString(current.Token))
-					token := readInput(reader, current.Token)
-					fmt.Printf("   Enter WeChat AESKey (current: %s): ", maskString(current.AESKey))
-					aesKey := readInput(reader, current.AESKey)
-					if appID != "" && appSecret != "" {
-						cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-							AppID:     appID,
-							AppSecret: appSecret,
-							Token:     token,
-							AESKey:    aesKey,
-							Mode:      "callback",
-							Enabled:   true,
-						}
-						fmt.Println("   [WeChat Official Account] configured in callback mode!")
-					}
-				} else {
-					// QR Code login mode
-					fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
-					appID := readInput(reader, current.AppID)
-					fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
-					appSecret := readInput(reader, current.AppSecret)
-					if appID != "" && appSecret != "" {
-						cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-							AppID:     appID,
-							AppSecret: appSecret,
-							Mode:      "qr",
-							Enabled:   true,
-						}
-						fmt.Println("   [WeChat Official Account] configured in QR mode!")
-						fmt.Println("   To login, start the gateway and scan the QR code:")
-						fmt.Println("     magic gateway start")
-					} else {
-						fmt.Println("   [WeChat] app_id and app_secret are required for QR login")
-					}
-				}
-			case "8": // WeChat-iLink (Personal WeChat)
-				current := cfg.Gateway.Platforms["wechat_ilink"]
-				clientIDDefault := "wechat-ilink"
-				if current.ClientID != "" {
-					clientIDDefault = current.ClientID
-				}
-				fmt.Printf("   Enter Client ID (current: %s): ", clientIDDefault)
-				clientID := readInput(reader, clientIDDefault)
-
-				baseURLDefault := "https://ilinkai.weixin.qq.com"
-				if current.APIURL != "" {
-					baseURLDefault = current.APIURL
-				}
-				fmt.Printf("   Enter API Base URL (current: %s): ", baseURLDefault)
-				apiURL := readInput(reader, baseURLDefault)
-
-				autoLoginDefault := "Y"
-				if !current.AutoLogin {
-					autoLoginDefault = "n"
-				}
-				fmt.Printf("   Enable auto-login (QR scan on startup)? (Y/n, default %s): ", autoLoginDefault)
-				autoLoginChoice := readInput(reader, autoLoginDefault)
-				autoLogin := !(autoLoginChoice == "n" || autoLoginChoice == "N")
-
-				cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
-					ClientID:  clientID,
-					APIURL:    apiURL,
-					AutoLogin: autoLogin,
-					DataDir:   filepath.Join(magicDir, "wechat_ilink"),
-					Enabled:   true,
-				}
-				fmt.Println("   [WeChat-iLink] configured successfully!")
-				fmt.Println("   To bind WeChat, start the gateway and scan the QR code:")
-				fmt.Println("     magic gateway start")
-			case "9": // Slack
-				current := cfg.Gateway.Platforms["slack"]
-				fmt.Printf("   Enter Slack bot token (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				fmt.Printf("   Enter Slack signing secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				if token != "" && appSecret != "" {
-					cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
-						Token:     token,
-						AppSecret: appSecret,
-						Enabled:   true,
-					}
-					fmt.Println("   [Slack] configured successfully!")
-				}
-			case "10": // WhatsApp
-				current := cfg.Gateway.Platforms["whatsapp"]
-				fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
-				appID := readInput(reader, current.AppID)
-				fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				fmt.Printf("   Enter WhatsApp app_secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				fmt.Printf("   Enter WhatsApp verify_token (current: %s): ", maskString(current.VerifyToken))
-				verifyToken := readInput(reader, current.VerifyToken)
-				if appID != "" && token != "" {
-					cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
-						AppID:       appID,
-						Token:       token,
-						AppSecret:   appSecret,
-						VerifyToken: verifyToken,
-						Enabled:     true,
-					}
-					fmt.Println("   [WhatsApp] configured successfully!")
-				}
-			case "11": // LINE
-				current := cfg.Gateway.Platforms["line"]
-				fmt.Printf("   Enter LINE Channel Access Token (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				fmt.Printf("   Enter LINE Channel Secret (current: %s): ", maskString(current.AppSecret))
-				appSecret := readInput(reader, current.AppSecret)
-				if token != "" && appSecret != "" {
-					cfg.Gateway.Platforms["line"] = config.PlatformConfig{
-						Token:     token,
-						AppSecret: appSecret,
-						Enabled:   true,
-					}
-					fmt.Println("   [LINE] configured successfully!")
-				}
-			case "12": // Matrix
-				current := cfg.Gateway.Platforms["matrix"]
-				apiURLDefault := "https://matrix.example.com"
-				if current.APIURL != "" {
-					apiURLDefault = current.APIURL
-				}
-				fmt.Printf("   Enter Matrix homeserver URL (current: %s): ", apiURLDefault)
-				apiURL := readInput(reader, apiURLDefault)
-				fmt.Printf("   Enter Matrix user ID / app_id (current: %s): ", current.AppID)
-				appID := readInput(reader, current.AppID)
-				fmt.Printf("   Enter Matrix access token (current: %s): ", maskString(current.Token))
-				token := readInput(reader, current.Token)
-				if apiURL != "" && token != "" {
-					cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
-						APIURL:  apiURL,
-						AppID:   appID,
-						Token:   token,
-						Enabled: true,
-					}
-					fmt.Println("   [Matrix] configured successfully!")
-				}
-			default:
-				fmt.Println("   Invalid choice. Please select 0-12.")
-			}
-		}
-	donePlatforms:
+		// Run the platform setup wizard
+		runGatewayPlatformSetup(cfg, reader, magicDir)
 	} else {
 		cfg.Gateway.Enabled = false
 	}
@@ -733,6 +417,356 @@ func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println("You can now start chatting with:")
 	fmt.Println("  magic chat")
+}
+
+// runGatewayPlatformSetup runs the interactive gateway platform configuration wizard
+func runGatewayPlatformSetup(cfg *config.Config, reader *bufio.Reader, magicDir string) {
+	fmt.Println("\n   Gateway Platform Configuration:")
+	fmt.Println("   Configure messaging platforms (Telegram, Discord, etc.)")
+
+	for {
+		fmt.Println("\n   Available platforms:")
+		fmt.Println("      [1] Telegram")
+		fmt.Println("      [2] Discord")
+		fmt.Println("      [3] WeCom (Enterprise WeChat)")
+		fmt.Println("      [4] Feishu (Lark)")
+		fmt.Println("      [5] DingTalk")
+		fmt.Println("      [6] QQ (Bot/Channel)")
+		fmt.Println("      [7] WeChat (Official Account/Mini Program)")
+		fmt.Println("      [8] WeChat-iLink (Personal WeChat via iLink)")
+		fmt.Println("      [9] Slack")
+		fmt.Println("      [10] WhatsApp")
+		fmt.Println("      [11] LINE")
+		fmt.Println("      [12] Matrix")
+		fmt.Println("      [0] Done")
+
+		fmt.Print("\n   Select platform to configure (0-12, default 0): ")
+		platformChoice, _ := reader.ReadString('\n')
+		platformChoice = strings.TrimSpace(platformChoice)
+		if platformChoice == "" {
+			platformChoice = "0"
+		}
+
+		switch platformChoice {
+		case "0":
+			fmt.Println("   Platform configuration complete.")
+			return
+		case "1": // Telegram
+			currentToken := ""
+			if p, ok := cfg.Gateway.Platforms["telegram"]; ok {
+				currentToken = p.Token
+			}
+			tokenDisplay := ""
+			if currentToken != "" {
+				if len(currentToken) > 4 {
+					tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
+				} else {
+					tokenDisplay = " (current: ****)"
+				}
+			}
+			fmt.Printf("   Enter Telegram bot token%s: ", tokenDisplay)
+			token := readInput(reader, currentToken)
+			if token != "" {
+				cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
+					Token:   token,
+					Enabled: true,
+				}
+				fmt.Println("   [Telegram] configured successfully!")
+			}
+		case "2": // Discord
+			currentToken := ""
+			if p, ok := cfg.Gateway.Platforms["discord"]; ok {
+				currentToken = p.Token
+			}
+			tokenDisplay := ""
+			if currentToken != "" {
+				if len(currentToken) > 4 {
+					tokenDisplay = " (current: ..." + currentToken[len(currentToken)-4:] + ")"
+				} else {
+					tokenDisplay = " (current: ****)"
+				}
+			}
+			fmt.Printf("   Enter Discord bot token%s: ", tokenDisplay)
+			token := readInput(reader, currentToken)
+			if token != "" {
+				cfg.Gateway.Platforms["discord"] = config.PlatformConfig{
+					Token:   token,
+					Enabled: true,
+				}
+				fmt.Println("   [Discord] configured successfully!")
+			}
+		case "3": // WeCom
+			current := cfg.Gateway.Platforms["wecom"]
+			fmt.Println("   WeCom connection mode:")
+			fmt.Println("      [1] QR Code Login (recommended - scan to login)")
+			fmt.Println("      [2] API Mode (corp_id + secret)")
+			fmt.Printf("   Select mode (1-2, default 1): ")
+			modeChoice := readInput(reader, "1")
+
+			if modeChoice == "2" {
+				// Traditional API mode
+				fmt.Printf("   Enter WeCom corp_id (current: %s): ", maskString(current.CorpID))
+				corpID := readInput(reader, current.CorpID)
+				fmt.Printf("   Enter WeCom agent_id (current: %s): ", current.AgentID)
+				agentID := readInput(reader, current.AgentID)
+				fmt.Printf("   Enter WeCom secret (current: %s): ", maskString(current.Secret))
+				secret := readInput(reader, current.Secret)
+				fmt.Printf("   Enter WeCom token for callback verification (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				if corpID != "" && secret != "" {
+					cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
+						CorpID:  corpID,
+						AgentID: agentID,
+						Secret:  secret,
+						Token:   token,
+						Mode:    "app",
+						Enabled: true,
+					}
+					fmt.Println("   [WeCom] configured in API mode!")
+				}
+			} else {
+				// QR Code login mode
+				fmt.Printf("   Enter WeCom corp_id (current: %s): ", maskString(current.CorpID))
+				corpID := readInput(reader, current.CorpID)
+				fmt.Printf("   Enter WeCom agent_id (current: %s): ", current.AgentID)
+				agentID := readInput(reader, current.AgentID)
+				if corpID != "" && agentID != "" {
+					cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
+						CorpID:  corpID,
+						AgentID: agentID,
+						Mode:    "qr",
+						Enabled: true,
+					}
+					fmt.Println("   [WeCom] configured in QR mode!")
+					fmt.Println("   To login, start the gateway and scan the QR code:")
+					fmt.Println("     magic gateway start")
+				} else {
+					fmt.Println("   [WeCom] corp_id and agent_id are required for QR login")
+				}
+			}
+		case "4": // Feishu (Lark)
+			current := cfg.Gateway.Platforms["feishu"]
+			fmt.Printf("   Enter Feishu app_id (current: %s): ", current.AppID)
+			appID := readInput(reader, current.AppID)
+			fmt.Printf("   Enter Feishu app_secret (current: %s): ", maskString(current.AppSecret))
+			appSecret := readInput(reader, current.AppSecret)
+			if appID != "" && appSecret != "" {
+				cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
+					AppID:     appID,
+					AppSecret: appSecret,
+					Enabled:   true,
+				}
+				fmt.Println("   [Feishu] configured successfully!")
+			}
+		case "5": // DingTalk
+			current := cfg.Gateway.Platforms["dingtalk"]
+			fmt.Printf("   Enter DingTalk app_key (current: %s): ", current.AppKey)
+			appKey := readInput(reader, current.AppKey)
+			fmt.Printf("   Enter DingTalk app_secret (current: %s): ", maskString(current.AppSecret))
+			appSecret := readInput(reader, current.AppSecret)
+			fmt.Printf("   Enter DingTalk agent_id (current: %s): ", current.AgentID)
+			agentID := readInput(reader, current.AgentID)
+			if appKey != "" && appSecret != "" {
+				cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
+					AppKey:    appKey,
+					AppSecret: appSecret,
+					AgentID:   agentID,
+					Enabled:   true,
+				}
+				fmt.Println("   [DingTalk] configured successfully!")
+			}
+		case "6": // QQ (Bot/Channel)
+			current := cfg.Gateway.Platforms["qq"]
+			fmt.Println("   QQ supports two auth methods:")
+			fmt.Println("     [a] Official QQ Bot (app_id + app_secret) - Recommended")
+			fmt.Println("     [b] Legacy QQ (number + password)")
+			fmt.Printf("   Select method (default a): ")
+			qqMethod := readInput(reader, "a")
+			if qqMethod == "b" || qqMethod == "B" {
+				// Legacy mode
+				fmt.Printf("   Enter QQ number (current: %s): ", current.Number)
+				number := readInput(reader, current.Number)
+				fmt.Printf("   Enter QQ password (current: %s): ", maskString(current.Password))
+				password := readInput(reader, current.Password)
+				if number != "" && password != "" {
+					cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
+						Number:   number,
+						Password: password,
+						Enabled:  true,
+					}
+					fmt.Println("   [QQ Legacy] configured successfully!")
+				}
+			} else {
+				// Official QQ Bot mode (Recommended)
+				fmt.Printf("   Enter QQ Bot app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter QQ Bot app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				if appID != "" && appSecret != "" {
+					cfg.Gateway.Platforms["qq"] = config.PlatformConfig{
+						AppID:     appID,
+						AppSecret: appSecret,
+						Enabled:   true,
+					}
+					fmt.Println("   [QQ Official Bot] configured successfully!")
+				}
+			}
+		case "7": // WeChat (Official Account/Mini Program)
+			current := cfg.Gateway.Platforms["wechat"]
+			fmt.Println("   WeChat connection mode:")
+			fmt.Println("      [1] QR Code Login (recommended - scan to login)")
+			fmt.Println("      [2] Callback Mode (webhook - requires public IP)")
+			fmt.Printf("   Select mode (1-2, default 1): ")
+			modeChoice := readInput(reader, "1")
+
+			if modeChoice == "2" {
+				// Traditional callback mode
+				fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				fmt.Printf("   Enter WeChat token for callback verification (current: %s): ", maskString(current.Token))
+				token := readInput(reader, current.Token)
+				fmt.Printf("   Enter WeChat AESKey (current: %s): ", maskString(current.AESKey))
+				aesKey := readInput(reader, current.AESKey)
+				if appID != "" && appSecret != "" {
+					cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+						AppID:     appID,
+						AppSecret: appSecret,
+						Token:     token,
+						AESKey:    aesKey,
+						Mode:      "callback",
+						Enabled:   true,
+					}
+					fmt.Println("   [WeChat Official Account] configured in callback mode!")
+				}
+			} else {
+				// QR Code login mode
+				fmt.Printf("   Enter WeChat Official Account app_id (current: %s): ", current.AppID)
+				appID := readInput(reader, current.AppID)
+				fmt.Printf("   Enter WeChat app_secret (current: %s): ", maskString(current.AppSecret))
+				appSecret := readInput(reader, current.AppSecret)
+				if appID != "" && appSecret != "" {
+					cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+						AppID:     appID,
+						AppSecret: appSecret,
+						Mode:      "qr",
+						Enabled:   true,
+					}
+					fmt.Println("   [WeChat Official Account] configured in QR mode!")
+					fmt.Println("   To login, start the gateway and scan the QR code:")
+					fmt.Println("     magic gateway start")
+				} else {
+					fmt.Println("   [WeChat] app_id and app_secret are required for QR login")
+				}
+			}
+		case "8": // WeChat-iLink (Personal WeChat)
+			current := cfg.Gateway.Platforms["wechat_ilink"]
+			clientIDDefault := "wechat-ilink"
+			if current.ClientID != "" {
+				clientIDDefault = current.ClientID
+			}
+			fmt.Printf("   Enter Client ID (current: %s): ", clientIDDefault)
+			clientID := readInput(reader, clientIDDefault)
+
+			baseURLDefault := "https://ilinkai.weixin.qq.com"
+			if current.APIURL != "" {
+				baseURLDefault = current.APIURL
+			}
+			fmt.Printf("   Enter API Base URL (current: %s): ", baseURLDefault)
+			apiURL := readInput(reader, baseURLDefault)
+
+			autoLoginDefault := "Y"
+			if !current.AutoLogin {
+				autoLoginDefault = "n"
+			}
+			fmt.Printf("   Enable auto-login (QR scan on startup)? (Y/n, default %s): ", autoLoginDefault)
+			autoLoginChoice := readInput(reader, autoLoginDefault)
+			autoLogin := !(autoLoginChoice == "n" || autoLoginChoice == "N")
+
+			cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+				ClientID:  clientID,
+				APIURL:    apiURL,
+				AutoLogin: autoLogin,
+				DataDir:   filepath.Join(magicDir, "wechat_ilink"),
+				Enabled:   true,
+			}
+			fmt.Println("   [WeChat-iLink] configured successfully!")
+			fmt.Println("   To bind WeChat, start the gateway and scan the QR code:")
+			fmt.Println("     magic gateway start")
+		case "9": // Slack
+			current := cfg.Gateway.Platforms["slack"]
+			fmt.Printf("   Enter Slack bot token (current: %s): ", maskString(current.Token))
+			token := readInput(reader, current.Token)
+			fmt.Printf("   Enter Slack signing secret (current: %s): ", maskString(current.AppSecret))
+			appSecret := readInput(reader, current.AppSecret)
+			if token != "" && appSecret != "" {
+				cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
+					Token:     token,
+					AppSecret: appSecret,
+					Enabled:   true,
+				}
+				fmt.Println("   [Slack] configured successfully!")
+			}
+		case "10": // WhatsApp
+			current := cfg.Gateway.Platforms["whatsapp"]
+			fmt.Printf("   Enter WhatsApp Phone Number ID (current: %s): ", current.AppID)
+			appID := readInput(reader, current.AppID)
+			fmt.Printf("   Enter WhatsApp access token (current: %s): ", maskString(current.Token))
+			token := readInput(reader, current.Token)
+			fmt.Printf("   Enter WhatsApp app_secret (current: %s): ", maskString(current.AppSecret))
+			appSecret := readInput(reader, current.AppSecret)
+			fmt.Printf("   Enter WhatsApp verify_token (current: %s): ", maskString(current.VerifyToken))
+			verifyToken := readInput(reader, current.VerifyToken)
+			if appID != "" && token != "" {
+				cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
+					AppID:       appID,
+					Token:       token,
+					AppSecret:   appSecret,
+					VerifyToken: verifyToken,
+					Enabled:     true,
+				}
+				fmt.Println("   [WhatsApp] configured successfully!")
+			}
+		case "11": // LINE
+			current := cfg.Gateway.Platforms["line"]
+			fmt.Printf("   Enter LINE Channel Access Token (current: %s): ", maskString(current.Token))
+			token := readInput(reader, current.Token)
+			fmt.Printf("   Enter LINE Channel Secret (current: %s): ", maskString(current.AppSecret))
+			appSecret := readInput(reader, current.AppSecret)
+			if token != "" && appSecret != "" {
+				cfg.Gateway.Platforms["line"] = config.PlatformConfig{
+					Token:     token,
+					AppSecret: appSecret,
+					Enabled:   true,
+				}
+				fmt.Println("   [LINE] configured successfully!")
+			}
+		case "12": // Matrix
+			current := cfg.Gateway.Platforms["matrix"]
+			apiURLDefault := "https://matrix.example.com"
+			if current.APIURL != "" {
+				apiURLDefault = current.APIURL
+			}
+			fmt.Printf("   Enter Matrix homeserver URL (current: %s): ", apiURLDefault)
+			apiURL := readInput(reader, apiURLDefault)
+			fmt.Printf("   Enter Matrix user ID / app_id (current: %s): ", current.AppID)
+			appID := readInput(reader, current.AppID)
+			fmt.Printf("   Enter Matrix access token (current: %s): ", maskString(current.Token))
+			token := readInput(reader, current.Token)
+			if apiURL != "" && token != "" {
+				cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+					APIURL:  apiURL,
+					AppID:   appID,
+					Token:   token,
+					Enabled: true,
+				}
+				fmt.Println("   [Matrix] configured successfully!")
+			}
+		default:
+			fmt.Println("   Invalid choice. Please select 0-12.")
+		}
+	}
 }
 
 // maskString returns a masked version of s for display.
