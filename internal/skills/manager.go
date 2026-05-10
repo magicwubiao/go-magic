@@ -230,14 +230,34 @@ func (m *Manager) loadSkillFromManifest(manifestPath string) *Skill {
 func (m *Manager) loadSkillFromFile(path string) *Skill {
 	ext := filepath.Ext(path)
 
+	var skill *Skill
 	switch ext {
 	case ".json":
-		return m.loadJSONSkill(path)
+		skill = m.loadJSONSkill(path)
 	case ".md", ".markdown":
-		return m.loadMarkdownSkill(path)
+		skill = m.loadMarkdownSkill(path)
 	default:
-		return m.loadTextSkill(path)
+		skill = m.loadTextSkill(path)
 	}
+
+	if skill != nil {
+		// Inject absolute skill directory path
+		absPath, _ := filepath.Abs(path)
+		skillDir := filepath.Dir(absPath)
+		skill.Dir = skillDir
+
+		// Scan scripts/ directory
+		scriptsDir := filepath.Join(skillDir, "scripts")
+		if entries, err := os.ReadDir(scriptsDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					skill.Scripts = append(skill.Scripts, filepath.Join("scripts", e.Name()))
+				}
+			}
+		}
+	}
+
+	return skill
 }
 
 func (m *Manager) loadJSONSkill(path string) *Skill {
@@ -518,7 +538,12 @@ func (m *Manager) Remove(name string) error {
 func (m *Manager) GetSkillsContext() string {
 	var ctx string
 	for _, skill := range m.skills {
-		ctx += fmt.Sprintf("\n--- Skill: %s ---\n%s\n", skill.Name, skill.Content)
+		content := skill.ResolveContent("")
+		ctx += fmt.Sprintf("\n--- Skill: %s ---\n[Skill directory: %s]\n", skill.Name, skill.Dir)
+		if files := skill.SupportingFiles(); files != "" {
+			ctx += files + "\n"
+		}
+		ctx += content + "\n"
 	}
 	return ctx
 }
@@ -532,7 +557,12 @@ func (m *Manager) GetSkillsContextForTags(tags []string) string {
 
 	var ctx string
 	for _, skill := range skills {
-		ctx += fmt.Sprintf("\n--- Skill: %s ---\n%s\n", skill.Name, skill.Content)
+		content := skill.ResolveContent("")
+		ctx += fmt.Sprintf("\n--- Skill: %s ---\n[Skill directory: %s]\n", skill.Name, skill.Dir)
+		if files := skill.SupportingFiles(); files != "" {
+			ctx += files + "\n"
+		}
+		ctx += content + "\n"
 	}
 	return ctx
 }

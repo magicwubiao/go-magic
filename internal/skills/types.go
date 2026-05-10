@@ -1,6 +1,10 @@
 package skills
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,9 +35,11 @@ type SkillMeta struct {
 // This is the canonical type for all skills in the system
 type Skill struct {
 	SkillMeta
-	Tools    []string               `json:"tools,omitempty"`    // Tools required by this skill
-	Content  string                 `json:"content"`            // Main skill content/prompt
-	Metadata map[string]interface{} `json:"metadata,omitempty"` // Additional metadata
+	Tools     []string               `json:"tools,omitempty"`     // Tools required by this skill
+	Content   string                 `json:"content"`             // Main skill content/prompt
+	Dir       string                 `json:"dir,omitempty"`       // Absolute path to skill directory
+	Scripts   []string               `json:"scripts,omitempty"`   // Relative paths to scripts in scripts/
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`  // Additional metadata
 }
 
 // GetTools returns the list of tool names required by this skill
@@ -102,4 +108,51 @@ func NewSkill(name, description string) *Skill {
 		},
 		Metadata: make(map[string]interface{}),
 	}
+}
+
+// ResolveContent returns the skill content with template variables replaced.
+// Supported variables: ${MAGIC_SKILL_DIR}, ${MAGIC_SESSION_ID}
+func (s *Skill) ResolveContent(sessionID string) string {
+	content := s.Content
+	dir := s.Dir
+	if dir == "" {
+		dir = "."
+	}
+	content = strings.ReplaceAll(content, "${MAGIC_SKILL_DIR}", dir)
+	content = strings.ReplaceAll(content, "${MAGIC_SESSION_ID}", sessionID)
+	return content
+}
+
+// SupportingFiles returns a formatted list of supporting files (scripts/, references/) with absolute paths.
+func (s *Skill) SupportingFiles() string {
+	if s.Dir == "" {
+		return ""
+	}
+	var files []string
+	// Scan scripts/ directory
+	scriptsDir := filepath.Join(s.Dir, "scripts")
+	if entries, err := os.ReadDir(scriptsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				rel := filepath.Join("scripts", e.Name())
+				abs := filepath.Join(s.Dir, rel)
+				files = append(files, fmt.Sprintf("  %s -> %s", rel, abs))
+			}
+		}
+	}
+	// Scan references/ directory
+	refsDir := filepath.Join(s.Dir, "references")
+	if entries, err := os.ReadDir(refsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				rel := filepath.Join("references", e.Name())
+				abs := filepath.Join(s.Dir, rel)
+				files = append(files, fmt.Sprintf("  %s -> %s", rel, abs))
+			}
+		}
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	return "Supporting files:\n" + strings.Join(files, "\n")
 }
