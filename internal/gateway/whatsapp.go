@@ -316,7 +316,7 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 
 		// Print QR code to terminal as ASCII art
 		fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
-		qrterminal.GenerateHalfBlock(qrData, qrterminal.L, os.Stdout)
+		qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
 		fmt.Println()
 
 	case *events.QRScannedWithoutMultidevice:
