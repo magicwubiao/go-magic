@@ -27,7 +27,12 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 						"text": p.Text,
 					})
 				case "image_url":
-					log.Debugf("[ConvertMessages] image_url part: url=%s, detail=%s", p.ImageURL.URL, p.ImageURL.Detail)
+					urlStr := p.ImageURL.URL
+					if len(urlStr) > 100 {
+						log.Debugf("[ConvertMessages] image_url part: url_prefix=%s..., url_length=%d, detail=%s", urlStr[:100], len(urlStr), p.ImageURL.Detail)
+					} else {
+						log.Debugf("[ConvertMessages] image_url part: url=%s, detail=%s", urlStr, p.ImageURL.Detail)
+					}
 					imgURL := map[string]string{
 						"url": p.ImageURL.URL,
 					}

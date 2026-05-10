@@ -714,49 +714,37 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 				// Debug log for image item
 				log.Debugf("[WeChat-iLink] ImageItem received: Url=%s, Media=%v, Aeskey=%s",
 					item.ImageItem.Url, item.ImageItem.Media != nil, item.ImageItem.Aeskey)
-				// Priority 1: Use direct HTTP URL if available (LLM can access directly)
-				// This avoids local file path issues on Windows/Linux path mismatches
-				if item.ImageItem.Url != "" {
-					log.Debugf("[WeChat-iLink] Using direct image URL: %s", item.ImageItem.Url)
-					mediaURLs = append(mediaURLs, MediaAttachment{
-						Type: "image",
-						URL:  item.ImageItem.Url,
-					})
-				} else {
-					// Priority 2: Download image from CDN and convert to base64 data URL
-					if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
-						// Read the file and convert to base64 data URL
-						data, err := os.ReadFile(mediaPath)
-						if err == nil {
-							ext := strings.ToLower(filepath.Ext(mediaPath))
-							mimeType := "image/jpeg"
-							switch ext {
-							case ".png":
-								mimeType = "image/png"
-							case ".gif":
-								mimeType = "image/gif"
-							case ".webp":
-								mimeType = "image/webp"
-							}
-							encoded := base64.StdEncoding.EncodeToString(data)
-							dataURL := "data:" + mimeType + ";base64," + encoded
-							log.Debugf("[WeChat-iLink] Converted downloaded image to base64 data URL (size: %d bytes)", len(data))
-							mediaURLs = append(mediaURLs, MediaAttachment{
-								Type: "image",
-								URL:  dataURL,
-							})
-						} else {
-							// Fall back to local path (makeFileURL will try to handle it)
-							log.Debugf("[WeChat-iLink] Failed to read downloaded image file: %v, using local path", err)
-							mediaURLs = append(mediaURLs, MediaAttachment{
-								Type: "image",
-								URL:  mediaPath,
-							})
+
+				// ALWAYS download the image and convert to base64 data URL
+				// WeChat CDN URLs require authentication and cannot be accessed by LLM APIs directly
+				if mediaPath, err := g.downloadILinkMediaAsFileFromImage(item.ImageItem); err == nil {
+					// Read the downloaded file and convert to base64 data URL
+					data, err := os.ReadFile(mediaPath)
+					if err == nil {
+						ext := strings.ToLower(filepath.Ext(mediaPath))
+						mimeType := "image/jpeg"
+						switch ext {
+						case ".png":
+							mimeType = "image/png"
+						case ".gif":
+							mimeType = "image/gif"
+						case ".webp":
+							mimeType = "image/webp"
 						}
+						encoded := base64.StdEncoding.EncodeToString(data)
+						dataURL := "data:" + mimeType + ";base64," + encoded
+						log.Debugf("[WeChat-iLink] Converted image to base64 data URL (original size: %d bytes, data URL length: %d)", len(data), len(dataURL))
+						mediaURLs = append(mediaURLs, MediaAttachment{
+							Type: "image",
+							URL:  dataURL,
+						})
 					} else {
-						log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
+						log.Warnf("[WeChat-iLink] Failed to read downloaded image file %s: %v", mediaPath, err)
 						parts = append(parts, "[图片]")
 					}
+				} else {
+					log.Debugf("[WeChat-iLink] Failed to download image: %v", err)
+					parts = append(parts, "[图片]")
 				}
 			} else {
 				parts = append(parts, "[图片]")

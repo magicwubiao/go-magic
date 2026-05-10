@@ -409,7 +409,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		type openAIlike interface {
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 		}
-		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
+		if oa, ok := a.provider.(openAIlike); ok && len(toolsToUse) > 0 {
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
 			resp, err = a.provider.Chat(ctx, req.Messages)
@@ -658,7 +658,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		type openAIlike interface {
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 		}
-		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
+		if oa, ok := a.provider.(openAIlike); ok && len(toolsToUse) > 0 {
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
 			resp, err = a.provider.Chat(ctx, req.Messages)

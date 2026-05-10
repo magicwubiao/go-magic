@@ -275,6 +275,11 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		hasFileFailed := false
 		for _, m := range msg.MediaURLs {
 			fileURL := h.makeFileURL(m.URL)
+			if strings.HasPrefix(fileURL, "data:") {
+				log.Debugf("[Process] makeFileURL result: type=image, data_url_length=%d", len(fileURL))
+			} else {
+				log.Debugf("[Process] makeFileURL result: type=image, url=%s", fileURL)
+			}
 			if fileURL == "" {
 				// makeFileURL failed (file read error, size limit, etc.)
 				// Track which types failed for content fallback
@@ -374,6 +379,17 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		}
 	}
 	log.Debugf("[Process] contentParts count=%d, has image=%v", len(contentParts), hasImageContentInParts)
+
+	// Additional debug: check for image_url parts specifically
+	hasImagePart := false
+	for _, cp := range contentParts {
+		if cp.Type == "image_url" {
+			hasImagePart = true
+			break
+		}
+	}
+	log.Debugf("[Process] Built %d contentParts, hasImage=%v, will use RunConversationWithMedia=%v",
+		len(contentParts), hasImagePart, len(contentParts) > 0)
 
 	// Run conversation with full agent capabilities (multimodal if contentParts available)
 	var response string
