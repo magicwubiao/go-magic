@@ -71,6 +71,8 @@ type AgentConfig struct {
 	CompressionRatio   float64 `json:"compression_ratio"`
 	ContextWindow      int     `json:"context_window"`
 	GoalMaxTurns       int     `json:"goal_max_turns"` // Max turns for /goal command, default 20
+	SameToolLimit      int     `json:"same_tool_limit"`      // Same tool call limit (default: 3)
+	ConsecutiveLimit   int     `json:"consecutive_limit"`    // Consecutive tool call limit (default: 10)
 }
 
 // MemoryConfig represents memory configuration

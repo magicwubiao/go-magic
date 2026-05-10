@@ -205,13 +205,23 @@ func (t *ExecuteCommandTool) Schema() map[string]interface{} {
 
 func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	command, ok := args["command"].(string)
-	if !ok {
-		return nil, fmt.Errorf("command argument is required")
+	if !ok || command == "" {
+		// Return helpful message instead of error to avoid LLM retry loop
+		return map[string]interface{}{
+			"error":   "command argument is required",
+			"hint":    "Please provide the command to execute, e.g. {\"command\": \"ls -la\"}",
+			"success": false,
+		}, nil
 	}
 
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return nil, fmt.Errorf("command cannot be empty")
+		// Return helpful message instead of error to avoid LLM retry loop
+		return map[string]interface{}{
+			"error":   "command cannot be empty",
+			"hint":    "Please provide a non-empty command to execute",
+			"success": false,
+		}, nil
 	}
 
 	// Check for shell injection (backtick, $())

@@ -133,8 +133,8 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		maxTotalLen:        200000, // 200K chars max history (~50K tokens)
 		maxMsgLen:          50000,  // 50K chars per message (~12K tokens)
 		maxTokenBudget:     0,
-		sameToolLimit:       8,
-		consecutiveLimit:   20,
+		sameToolLimit:      3,
+		consecutiveLimit:   10,
 		toolCallCount:      make(map[string]int),
 		subTaskEnabled:     true,
 		hooks:              hooks.NewHookManager(),
@@ -165,6 +165,18 @@ func WithSteering(cfg SteeringConfig) AgentOption {
 		}
 		if cfg.MaxTokenBudget > 0 {
 			a.maxTokenBudget = cfg.MaxTokenBudget
+		}
+	}
+}
+
+// WithLoopLimits configures loop detection limits
+func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
+	return func(a *Agent) {
+		if sameToolLimit > 0 {
+			a.sameToolLimit = sameToolLimit
+		}
+		if consecutiveLimit > 0 {
+			a.consecutiveLimit = consecutiveLimit
 		}
 	}
 }
@@ -509,10 +521,21 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 	}
 
+	// Try to get a summary from the LLM before giving up
+	a.history = append(a.history, provider.Message{
+		Role:    "user",
+		Content: "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+	})
+	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "assistant",
+			Content: truncateStr(finalResp.Content, a.maxMsgLen),
+		})
+		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+	}
 	if lastErr != nil {
 		return "", lastErr
 	}
-	// Provide helpful information about what was being done
 	recentTools := []string{}
 	if len(a.toolCallHistory) > 0 {
 		recentCount := len(a.toolCallHistory)
@@ -522,8 +545,8 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 		recentTools = a.toolCallHistory[start:]
 	}
-	return "", fmt.Errorf("exceeded maximum iterations (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxIterations, a.iterationCount, len(a.toolCallHistory), recentTools)
+	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+		a.maxTurns, a.iterationCount, len(a.toolCallHistory), recentTools)
 }
 
 // RunConversation runs a conversation with automatic tool execution
@@ -743,10 +766,21 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 	}
 
+	// Try to get a summary from the LLM before giving up
+	a.history = append(a.history, provider.Message{
+		Role:    "user",
+		Content: "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+	})
+	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "assistant",
+			Content: truncateStr(finalResp.Content, a.maxMsgLen),
+		})
+		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+	}
 	if lastErr != nil {
 		return "", lastErr
 	}
-	// Provide helpful information about what was being done
 	recentTools := []string{}
 	if len(a.toolCallHistory) > 0 {
 		recentCount := len(a.toolCallHistory)
@@ -756,8 +790,8 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 		recentTools = a.toolCallHistory[start:]
 	}
-	return "", fmt.Errorf("exceeded maximum iterations (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxIterations, a.iterationCount, len(a.toolCallHistory), recentTools)
+	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+		a.maxTurns, a.iterationCount, len(a.toolCallHistory), recentTools)
 }
 
 // StreamHandler is called for each streaming chunk
