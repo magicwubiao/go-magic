@@ -28,7 +28,7 @@ Tools are organized by category:
   - Code execution: execute_command (python/node available as plugins)
   - Memory tools: memory_store, memory_recall
   - Task management: todo
-  - AI capabilities: clarify, vision_analyze, image_gen, tts
+  - AI capabilities: clarify, image_gen, tts, video_analyze (optional, require API config)
   - Skills: skill
 
 Examples:
@@ -169,8 +169,9 @@ func categorizeTools(tools []string) map[string][]string {
 			categories["code"] = append(categories["code"], t)
 		case strings.HasPrefix(t, "memory_"):
 			categories["memory"] = append(categories["memory"], t)
-		case strings.HasPrefix(t, "clarify") || strings.HasPrefix(t, "vision_") ||
-			strings.HasPrefix(t, "image_") || strings.HasPrefix(t, "tts"):
+		case strings.HasPrefix(t, "clarify") ||
+			strings.HasPrefix(t, "image_") || strings.HasPrefix(t, "tts") ||
+			strings.HasPrefix(t, "video_"):
 			categories["ai"] = append(categories["ai"], t)
 		case t == "todo":
 			categories["task"] = append(categories["task"], t)

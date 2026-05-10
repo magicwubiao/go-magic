@@ -113,17 +113,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Clarify tool
 	r.Register(NewClarifyTool())
 
-	// Vision tool
-	r.Register(NewVisionTool())
-
-	// Video analyze tool
-	r.Register(NewVideoAnalyzeTool())
-
-	// Image generation tool
-	r.Register(NewImageGenerationTool())
-
-	// TTS tool
-	r.Register(NewTTSTool())
+	// Optional tools - these require external API configuration and are not registered by default
+	// Call RegisterOptionalTools() after RegisterAll() to enable them
+	// r.Register(NewImageGenerationTool())  // Optional
+	// r.Register(NewTTSTool())               // Optional
+	// r.Register(NewVideoAnalyzeTool())      // Optional
 
 	// Cron job tool
 	r.Register(NewCronJobTool())
@@ -158,6 +152,14 @@ func (r *Registry) RegisterAll(workDir string) {
 
 	// Register plugin tools
 	r.registerPluginTools()
+}
+
+// RegisterOptionalTools registers tools that require external API configuration.
+// These are not registered by default to avoid confusing the LLM with non-functional placeholder tools.
+func (r *Registry) RegisterOptionalTools() {
+	r.Register(NewImageGenerationTool())
+	r.Register(NewTTSTool())
+	r.Register(NewVideoAnalyzeTool())
 }
 
 // GetAllTools 返回所有内置工具实例

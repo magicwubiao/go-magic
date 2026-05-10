@@ -216,3 +216,13 @@ func extractKeyFrames(videoPath, tmpDir string, count int, duration float64) ([]
 
 	return frames, nil
 }
+
+// expandPath expands ~ and environment variables in a path
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home := os.Getenv("HOME"); home != "" {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+	return filepath.Clean(path)
+}

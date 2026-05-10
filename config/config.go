@@ -17,6 +17,7 @@ type Config struct {
 	Model           string                 `json:"model"`
 	Providers       map[string]ProviderCfg `json:"providers"`
 	Tools           ToolsConfig            `json:"tools"`
+	OptionalTools   []string               `json:"optional_tools"` // Optional tools to enable (image_gen, tts, video_analyze)
 	Gateway         GatewayConfig          `json:"gateway"`
 	Agent           AgentConfig            `json:"agent"`
 	Memory          MemoryConfig           `json:"memory"`
