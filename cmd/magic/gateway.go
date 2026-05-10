@@ -1367,11 +1367,19 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	if platformCount == 0 {
 		if gatewayPlatform != "" {
 			fmt.Printf("Platform '%s' is not configured or not enabled.\n", gatewayPlatform)
-			fmt.Println("Run 'magic gateway status' to see configured platforms.")
+			fmt.Println("Run 'magic gateway setup' to configure platforms.")
 		} else {
 			fmt.Println("No platforms configured/enabled.")
-			fmt.Println("Configure in ~/.magic/config.json")
-			fmt.Println("Supported: telegram, discord, wecom, qq, dingtalk, feishu, wechat, slack, whatsapp, line, matrix, wechat_ilink, wechat_clawbot")
+			fmt.Println()
+			fmt.Print("Would you like to configure a platform now? (Y/n): ")
+			reader := bufio.NewReader(os.Stdin)
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			if choice == "" || choice == "y" || choice == "Y" {
+				runGatewaySetup(cmd, args)
+				return
+			}
+			fmt.Println("Run 'magic gateway setup' to configure platforms later.")
 		}
 		return
 	}
