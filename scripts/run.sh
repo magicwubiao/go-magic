@@ -30,4 +30,21 @@ while getopts "p:h" opt; do
 done
 
 export PORT
-exec bin/magic gateway start --platform wechat_ilink
+
+# Find the built binary
+GO_OS=$(go env GOOS)
+GO_ARCH=$(go env GOARCH)
+BINARY="./dist/magic-${GO_OS}-${GO_ARCH}"
+
+# Fallback to bin/magic for development mode
+if [ ! -f "$BINARY" ]; then
+    BINARY="./bin/magic"
+fi
+
+# Final fallback: build if needed
+if [ ! -f "$BINARY" ]; then
+    ./build.sh cli
+    BINARY="./dist/magic-${GO_OS}-${GO_ARCH}"
+fi
+
+exec "$BINARY" gateway start --platform wechat_ilink

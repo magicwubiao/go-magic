@@ -9,8 +9,8 @@ entrypoint = "cmd/magic/main.go"
 preview_enable = "disabled"
 
 [deploy]
-build = ["bash", "scripts/build.sh"]
-run = ["bash", "scripts/run.sh", "-p", "5000"]
+build = ["bash", "build.sh", "cli"]
+run = ["bash", "scripts/run.sh"]
 
 [deploy.profile]
 kind = "service"
