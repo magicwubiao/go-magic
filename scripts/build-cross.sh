@@ -173,10 +173,15 @@ build_platform() {
 
     log_info "Building ${platform}..."
 
-    # Set CGO flags
-    local cgo_enabled=0
-    if [[ "$os" == "darwin" && "$arch" == "amd64" ]]; then
-        cgo_enabled=0
+    # Set CGO flags - Enable CGO for SQLite support
+    # Note: Some platforms may require specific cross-compilers
+    local cgo_enabled=1
+    # For cross-compilation without proper cross-compiler, fallback to CGO disabled
+    if [[ "$os" != "$(go env GOOS)" || "$arch" != "$(go env GOARCH)" ]]; then
+        # Cross-compilation: only enable CGO if we have the right cross-compiler
+        if [[ "$os" == "darwin" ]] || [[ "$os" == "windows" ]]; then
+            cgo_enabled=0
+        fi
     fi
 
     # Build
