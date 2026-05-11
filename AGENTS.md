@@ -526,5 +526,73 @@ services:
 cd web
 pnpm install
 pnpm dev     # 开发模式
-pnpm build   # 构建
+pnnpm build   # 构建
+```
+
+## CLI 命令参考
+
+### setup 命令
+交互式配置向导，引导用户完成完整设置流程。
+```bash
+magic setup              # 完整设置向导
+magic setup --skip-model # 跳过模型选择
+magic setup --skip-tools  # 跳过工具集选择
+```
+
+### doctor 命令
+诊断工具，检查配置和连接状态。
+```bash
+magic doctor              # 完整诊断
+magic doctor --check config    # 仅配置
+magic doctor --check provider  # 仅 Provider
+magic doctor --check tools    # 仅工具
+magic doctor --check gateway   # 仅 Gateway
+magic doctor --check skills    # 仅技能
+```
+
+### migrate 命令
+从 OpenClaw 迁移配置和数据。
+```bash
+magic migrate              # 交互式迁移
+magic migrate --dry-run    # 预览迁移内容
+magic migrate --preset user-data  # 仅用户数据
+magic migrate --overwrite   # 覆盖冲突
+```
+
+### tools 命令
+工具和工具集管理。
+```bash
+magic tools list           # 列出所有工具
+magic tools list --json    # JSON 格式输出
+magic tools toolsets list       # 列出所有工具集
+magic tools toolsets show web   # 查看工具集详情
+magic tools toolsets enable browser  # 启用工具集
+magic tools toolsets disable terminal # 禁用工具集
+```
+
+### model 命令
+模型选择和配置。
+```bash
+magic model               # 交互式模型选择
+magic model list          # 列出可用模型
+magic model set anthropic/claude-opus-4.6  # 设置模型
+```
+
+### gateway 命令
+消息网关管理。
+```bash
+magic gateway setup       # 配置网关
+magic gateway start       # 启动网关
+magic gateway stop        # 停止网关
+magic gateway status      # 查看状态
+```
+
+### 快速恢复序列
+当配置出现问题时，按以下顺序排查：
+```bash
+1. magic doctor           # 诊断问题
+2. magic model            # 重新选择模型
+3. magic setup            # 重新设置
+4. magic sessions list    # 查看会话
+5. magic gateway status   # 网关状态
 ```
