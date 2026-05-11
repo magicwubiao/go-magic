@@ -63,9 +63,13 @@ func (t *ExecuteCodeTool) RegisterTool(name string, tool Tool) {
 func (t *ExecuteCodeTool) Name() string { return "execute_code" }
 
 func (t *ExecuteCodeTool) Description() string {
-	return `Execute Python code and optionally call tools.
+	return `Execute Python or Node.js code with optional tool access.
 Supports reading files, running commands, and using registered tools.
-Code runs in an isolated subprocess with timeout and memory limits.`
+Code runs in an isolated subprocess with timeout and memory limits.
+
+Supported languages:
+- python, python3: Python 3.x
+- node, nodejs: Node.js (JavaScript/TypeScript)`
 }
 
 func (t *ExecuteCodeTool) Schema() map[string]interface{} {
@@ -80,12 +84,12 @@ func (t *ExecuteCodeTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"code": map[string]interface{}{
 				"type":        "string",
-				"description": "Python code to execute",
+				"description": "Code to execute (Python or JavaScript)",
 			},
 			"language": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"python", "python3"},
-				"description": "Programming language (default: python)",
+				"enum":       []string{"python", "python3", "node", "nodejs", "js"},
+				"description": "Programming language (python/python3/node/nodejs, default: python)",
 			},
 			"timeout": map[string]interface{}{
 				"type":        "number",
@@ -118,6 +122,14 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 
 	language, _ := args["language"].(string)
 	if language == "" {
+		language = "python"
+	}
+
+	// Normalize language names
+	switch language {
+	case "js", "javascript", "node", "nodejs":
+		language = "node"
+	default:
 		language = "python"
 	}
 
@@ -157,11 +169,21 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 		}
 	}
 
-	// Generate tool wrapper code
-	toolWrapper := t.generateToolWrapper(toolNames, toolsOutput)
+	// Generate tool wrapper code based on language
+	var toolWrapper string
+	if language == "node" {
+		toolWrapper = t.generateNodeToolWrapper(toolNames, toolsOutput)
+	} else {
+		toolWrapper = t.generatePythonToolWrapper(toolNames, toolsOutput)
+	}
 
 	// Wrap user code
-	fullCode := toolWrapper + "\n\n# User code\n" + code
+	var fullCode string
+	if language == "node" {
+		fullCode = toolWrapper + "\n\n// User code\n" + code
+	} else {
+		fullCode = toolWrapper + "\n\n# User code\n" + code
+	}
 
 	// Execute
 	return t.executeCode(ctx, fullCode, language, workDir, timeout)
@@ -186,8 +208,8 @@ func (t *ExecuteCodeTool) isDirAllowed(dir string) bool {
 	return false
 }
 
-// generateToolWrapper creates Python code that exposes tools as callable functions
-func (t *ExecuteCodeTool) generateToolWrapper(toolNames []string, includeOutput bool) string {
+// generatePythonToolWrapper creates Python code that exposes tools as callable functions
+func (t *ExecuteCodeTool) generatePythonToolWrapper(toolNames []string, includeOutput bool) string {
 	var buf bytes.Buffer
 
 	buf.WriteString(`import json
@@ -264,14 +286,98 @@ def print_results():
 print("Available tools:", list(_TOOLS.keys()))
 print("-" * 40)
 `)
+	return buf.String()
+}
+
+// generateNodeToolWrapper creates Node.js code that exposes tools as callable functions
+func (t *ExecuteCodeTool) generateNodeToolWrapper(toolNames []string, includeOutput bool) string {
+	var buf bytes.Buffer
+
+	buf.WriteString(`// Tool registry - populated by executor
+const _TOOLS = {};
+const _TOOL_RESULTS = [];
+
+// Register available tools
+function register_tools(tools) {
+    Object.assign(_TOOLS, tools);
+}
+
+// Call a tool by name with arguments
+async function tool(name, kwargs = {}) {
+    if (!Object.keys(_TOOLS).includes(name)) {
+        return { error: "Unknown tool: " + name };
+    }
+    
+    const result = await _TOOLS[name](kwargs);
+    _TOOL_RESULTS.push({
+        tool: name,
+        args: kwargs,
+        result: result
+    });
+    return result;
+}
+
+// Built-in convenience functions
+async function read_file(path, options = {}) {
+    return tool('read_file', { path, ...options });
+}
+
+async function write_file(path, content) {
+    return tool('write_file', { path, content });
+}
+
+async function search_files(pattern, options = {}) {
+    return tool('search_in_files', { pattern, ...options });
+}
+
+async function terminal(command, options = {}) {
+    return tool('execute_command', { command, ...options });
+}
+
+async function web_search(query, options = {}) {
+    return tool('web_search', { query, ...options });
+}
+
+async function web_fetch(url) {
+    return tool('web_fetch', { url });
+}
+
+function json_dump(obj, indent = 2) {
+    console.log(JSON.stringify(obj, null, indent));
+}
+
+function print_results() {
+    _TOOL_RESULTS.forEach(r => {
+        console.log("[" + r.tool + "] " + JSON.stringify(r.result, null, 2));
+    });
+}
+
+// Banner
+console.log("Available tools:", Object.keys(_TOOLS));
+console.log("-".repeat(40));
+`)
 
 	return buf.String()
 }
 
 // executeCode runs the code in a subprocess
 func (t *ExecuteCodeTool) executeCode(ctx context.Context, code, language, workDir string, timeout time.Duration) (interface{}, error) {
+	// Determine the executable based on language
+	var executable string
+	var fileExt string
+	if language == "node" {
+		executable = "node"
+		fileExt = ".js"
+	} else {
+		executable = "python3"
+		fileExt = ".py"
+		// Try python3 first, fall back to python
+		if _, err := exec.LookPath("python3"); err != nil {
+			executable = "python"
+		}
+	}
 	// Write code to temp file
-	tmpFile, err := os.CreateTemp("", "magic_code_*.py")
+	tmpFile, err := os.CreateTemp("", "magic_code_*"+fileExt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -284,7 +390,7 @@ func (t *ExecuteCodeTool) executeCode(ctx context.Context, code, language, workD
 	tmpFile.Close()
 
 	// Build command
-	cmd := exec.CommandContext(ctx, language, tmpFile.Name())
+	cmd := exec.CommandContext(ctx, executable, tmpFile.Name())
 
 	// Prepare environment
 	env := os.Environ()
@@ -516,6 +622,87 @@ data = [{'category': 'A', 'value': 1}, {'category': 'B', 'value': 2}]
 results = analyze_data(data, 'category')
 json_dump(results)
 `,
+
+	// Node.js templates
+	"file_processor_node": `
+const fs = require('fs');
+const path = require('path');
+
+async function processFiles(directory, pattern = "*.txt") {
+    const results = [];
+    const files = fs.readdirSync(directory);
+    
+    for (const file of files) {
+        if (file.endsWith('.txt')) {
+            const filePath = path.join(directory, file);
+            const content = fs.readFileSync(filePath, 'utf8');
+            results.push({
+                path: filePath,
+                content: content,
+                size: fs.statSync(filePath).size
+            });
+        }
+    }
+    return results;
+}
+
+// Example usage
+const results = processFiles('/tmp');
+console.log("Processed " + results.length + " files");
+json_dump(results);
+`,
+
+	"web_scraper_node": `
+const https = require('https');
+const http = require('http');
+
+function extractLinks(html, baseUrl) {
+    baseUrl = baseUrl || '';
+    const linkRegex = /href=["']([^"']+)["']/g;
+    const links = [];
+    let match;
+    while ((match = linkRegex.exec(html)) !== null) {
+        links.push({
+            url: match[1],
+            absolute: match[1].startsWith('http') ? match[1] : baseUrl + match[1]
+        });
+    }
+    return links;
+}
+
+// Example usage
+// const html = await web_fetch('https://example.com');
+// const links = extractLinks(html, 'https://example.com');
+// console.log("Found " + links.length + " links");
+// json_dump(links.slice(0, 10));
+`,
+
+	"data_analysis_node": `
+function analyzeData(items, key) {
+    const distribution = {};
+    items.forEach(item => {
+        if (item && typeof item === 'object' && key in item) {
+            const val = item[key];
+            distribution[val] = (distribution[val] || 0) + 1;
+        }
+    });
+    
+    const entries = Object.entries(distribution);
+    entries.sort((a, b) => b[1] - a[1]);
+    const sorted = entries.slice(0, 5);
+    
+    return {
+        total: items.length,
+        distribution: distribution,
+        most_common: sorted
+    };
+}
+
+// Example: Analyze a list
+const data = [{category: 'A', value: 1}, {category: 'B', value: 2}];
+const results = analyzeData(data, 'category');
+json_dump(results);
+`,
 }
 
 // GetTemplate returns a code template by name
@@ -538,28 +725,109 @@ func ListTemplates() []string {
 // =============================================================================
 
 // ValidateCode performs static analysis on code for security issues
+// Supports both Python and JavaScript/Node.js
 func ValidateCode(code string) (bool, string) {
-	// Check for dangerous patterns
-	dangerous := []string{
+	// Check for dangerous patterns (Python)
+	pythonDangerous := []string{
 		`__import__`,
-		`eval(`,
-		`exec(`,
+		`eval\(`,
+		`exec\(`,
 		`open.*\(.*\)`,
 		`subprocess`,
-		`os.system`,
-		`os.popen`,
-		`pty.spawn`,
+		`os\.system`,
+		`os\.popen`,
+		`pty\.spawn`,
 		`fork`,
 		`multiprocessing`,
 		`threading`,
 	}
 
-	for _, pattern := range dangerous {
+	for _, pattern := range pythonDangerous {
 		re := regexp.MustCompile(pattern)
 		if re.MatchString(code) {
 			return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
 		}
 	}
 
+	// Check for dangerous patterns (JavaScript/Node.js)
+	nodeDangerous := []string{
+		`require\(['"]child_process['"]\)`,
+		`require\(['"]fs['"]\)`,
+		`require\(['"]os['"]\)`,
+		`require\(['"]path['"]\)`,
+		`eval\(`,
+		`new Function\(`,
+		`process\.exit`,
+		`process\.kill`,
+		`child_process\.exec`,
+		`child_process\.spawn.*rm`,
+		`child_process\.spawn.*delete`,
+		`child_process\.spawn.*format`,
+		`fs\.unlink`,
+		`fs\.rmdir`,
+		`__dirname`,
+		`__filename`,
+		`global\.[a-zA-Z]`,
+		`global\[`,
+	}
+
+	for _, pattern := range nodeDangerous {
+		re := regexp.MustCompile(pattern)
+		if re.MatchString(code) {
+			return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
+		}
+	}
+
+	return true, ""
+}
+
+// ValidateCodeForLanguage performs security check for specific language
+func ValidateCodeForLanguage(code, language string) (bool, string) {
+	switch language {
+	case "node", "nodejs", "js", "javascript":
+		nodeDangerous := []string{
+			`require\(['"]child_process['"]\)`,
+			`require\(['"]fs['"]\)`,
+			`require\(['"]os['"]\)`,
+			`eval\(`,
+			`new Function\(`,
+			`process\.exit`,
+			`process\.kill`,
+			`child_process\.exec`,
+			`child_process\.spawn.*rm`,
+			`child_process\.spawn.*delete`,
+			`child_process\.spawn.*format`,
+			`fs\.unlink`,
+			`fs\.rmdir`,
+			`global\.[a-zA-Z]`,
+			`global\[`,
+		}
+		for _, pattern := range nodeDangerous {
+			re := regexp.MustCompile(pattern)
+			if re.MatchString(code) {
+				return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
+			}
+		}
+	default: // Python
+		pythonDangerous := []string{
+			`__import__`,
+			`eval\(`,
+			`exec\(`,
+			`open.*\(.*\)`,
+			`subprocess`,
+			`os\.system`,
+			`os\.popen`,
+			`pty\.spawn`,
+			`fork`,
+			`multiprocessing`,
+			`threading`,
+		}
+		for _, pattern := range pythonDangerous {
+			re := regexp.MustCompile(pattern)
+			if re.MatchString(code) {
+				return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
+			}
+		}
+	}
 	return true, ""
 }

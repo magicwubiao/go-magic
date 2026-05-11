@@ -76,7 +76,7 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 | **skills** | skill_list, skill_view, skill_manage, skill_create, skill_delete | 技能管理 |
 | **cron** | cronjob | 定时任务 |
 | **delegation** | delegate_task, poll_task, list_tasks, cancel_task | 子代理委托 |
-| **code_execution** | execute_code | 内置 Python 代码执行（带工具调用） |
+| **code_execution** | execute_code | 内置 Python/Node.js 代码执行（带工具调用） |
 | **homeassistant** | ha_list_entities, ha_get_state, ha_list_services, ha_call_service, ha_events, ha_config | 智能家居控制 |
 | **utility** | json, yaml, string, hash, uuid, random, time, math, csv, env, system_info | 实用工具 |
 | **mcp** | mcp_* | MCP 服务器工具 |
@@ -312,7 +312,13 @@ export HASS_TOKEN="your_long_lived_access_token"
 
 ## 代码执行 (execute_code)
 
-内置 Python 代码执行，支持从代码中调用工具。
+内置 Python 和 Node.js 代码执行，支持从代码中调用工具。
+
+### 支持的语言
+| 语言 | 说明 |
+|------|------|
+| `python`, `python3` | Python 3.x (默认) |
+| `node`, `nodejs`, `js` | Node.js (JavaScript) |
 
 ### 环境配置
 ```bash
@@ -330,11 +336,19 @@ tool := NewExecuteCodeTool()
 tool.RegisterTool("read_file", &ReadFileTool{})
 tool.RegisterTool("web_search", &WebSearchTool{})
 
-// 执行代码
+// 执行 Python 代码
 result, _ := tool.Execute(ctx, map[string]interface{}{
     "code":      "print('Hello'); result = read_file(path='/tmp/test.txt')",
+    "language":  "python",
     "timeout":   60,
     "workdir":   "/tmp",
+})
+
+// 执行 Node.js 代码
+result, _ := tool.Execute(ctx, map[string]interface{}{
+    "code":      "console.log('Hello'); const result = await read_file({path: '/tmp/test.txt'});",
+    "language":  "node",
+    "timeout":   60,
 })
 ```
 
@@ -357,12 +371,39 @@ output = terminal('ls -la')
 print(output)
 ```
 
+### Node.js 代码中使用工具
+```javascript
+// 读取文件
+const content = await read_file({path: '/tmp/test.txt'});
+console.log(content);
+
+// 搜索网页
+const results = await web_search({query: 'golang tutorial', count: 5});
+console.log(results);
+
+// 搜索文件
+const matches = await search_files({pattern: 'TODO', path: '/workspace'});
+console.log(matches);
+
+// 执行命令
+const output = await terminal({command: 'ls -la'});
+console.log(output);
+
+// JSON 输出
+json_dump({ key: 'value' });
+```
+
 ### 内置模板
 ```go
-// 使用预置模板
+// 使用预置模板 (Python)
 code, ok := GetTemplate("file_processor")
 code, ok := GetTemplate("web_scraper")
 code, ok := GetTemplate("data_analysis")
+
+// 使用预置模板 (Node.js)
+code, ok := GetTemplate("file_processor_node")
+code, ok := GetTemplate("web_scraper_node")
+code, ok := GetTemplate("data_analysis_node")
 
 // 列出所有模板
 templates := ListTemplates()
