@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/magicwubiao/go-magic/internal/groupchat"
 )
 
 //go:embed dist
@@ -44,23 +47,30 @@ type Message struct {
 
 // Server represents the web server
 type Server struct {
-	port        string
-	sessions    map[string]*Session
-	sessionsMux sync.RWMutex
-	mux         *http.ServeMux
-	httpServer  *http.Server
+	port            string
+	db              *sql.DB
+	groupChatHandler *groupchat.Handler
+	sessions        map[string]*Session
+	sessionsMux     sync.RWMutex
+	mux             *http.ServeMux
+	httpServer      *http.Server
 }
 
-func NewServer(port string) *Server {
-	return &Server{
+func NewServer(port string, db *sql.DB) *Server {
+	s := &Server{
 		port:     port,
+		db:       db,
 		sessions: make(map[string]*Session),
 	}
+	// Initialize Group Chat
+	groupchat.InitSchema(db)
+	s.groupChatHandler = groupchat.NewHandler(groupchat.NewStorage(db))
+	return s
 }
 
 func (s *Server) Start() error {
 	s.mux = http.NewServeMux()
-	
+
 	// API routes
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/sessions", s.handleSessions)
@@ -70,19 +80,22 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/config", s.handleConfig)
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
-	
+
+	// Group Chat routes
+	s.mux.Handle("/api/groupchat/", http.StripPrefix("/api/groupchat", s.groupChatHandler))
+
 	// WebSocket for streaming
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
-	
+
 	// Serve static files from embedded FS
 	s.mux.HandleFunc("/", s.handleStatic)
-	
+
 	addr := fmt.Sprintf(":%s", s.port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: s.mux,
 	}
-	
+
 	log.Printf("Starting web server on http://localhost%s", addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -346,7 +359,17 @@ func main() {
 		port = "8080"
 	}
 
-	server := NewServer(port)
+	// Create temporary database for standalone server
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		log.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	// Initialize schema
+	groupchat.InitSchema(db)
+
+	server := NewServer(port, db)
 	log.Printf("Starting go-magic server on http://localhost:%s", port)
 	log.Printf("Dashboard: http://localhost:%s/", port)
 	log.Fatal(server.Start())

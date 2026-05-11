@@ -178,6 +178,15 @@ func DefaultConfig() *Config {
 	return defaultConfig()
 }
 
+// GetConfigDir returns the configuration directory path.
+func GetConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".magic")
+}
+
 // getDefaultWorkingDir returns the default working directory.
 // It uses the "working" subdirectory of the current working directory.
 // If the "working" directory does not exist, falls back to the current directory.

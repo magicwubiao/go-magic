@@ -33,6 +33,12 @@ export default {
     files: '文件',
     terminal: '终端',
     usage: '用量',
+    groupChat: '群聊',
+    memory: '记忆',
+    jobs: '任务',
+    files: '文件',
+    terminal: '终端',
+    usage: '用量',
   },
   chat: {
     title: '聊天',

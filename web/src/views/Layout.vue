@@ -150,6 +150,7 @@ import {
   Cube,
   Gift,
   HardwareChip,
+  People,
 } from '@vicons/ionicons5'
 import type { MenuOption } from 'naive-ui'
 
@@ -213,6 +214,11 @@ const menuOptions = computed<MenuOption[]>(() => [
     label: () => 'Profiles',
     key: 'profiles',
     icon: () => h(NIcon, null, { default: () => h(ExtensionPuzzle) }),
+  },
+  {
+    label: () => 'Group Chat',
+    key: 'group-chat',
+    icon: () => h(NIcon, null, { default: () => h(People) }),
   },
   {
     label: () => 'Gateways',

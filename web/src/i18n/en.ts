@@ -33,6 +33,12 @@ export default {
     files: 'Files',
     terminal: 'Terminal',
     usage: 'Usage',
+    groupChat: 'Group Chat',
+    memory: 'Memory',
+    jobs: 'Jobs',
+    files: 'Files',
+    terminal: 'Terminal',
+    usage: 'Usage',
   },
   chat: {
     title: 'Chat',

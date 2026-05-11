@@ -81,6 +81,11 @@ const routes: RouteRecordRaw[] = [
         name: 'settings',
         component: () => import('@/views/Settings.vue'),
       },
+      {
+        path: 'group-chat',
+        name: 'group-chat',
+        component: () => import('@/views/GroupChat.vue'),
+      },
     ],
   },
 ]
