@@ -131,6 +131,17 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewListTasksTool())
 	r.Register(NewCancelTaskTool())
 
+	// Built-in code execution with tool access
+	r.Register(NewExecuteCodeTool())
+
+	// Home Assistant smart home integration
+	r.Register(NewHATool())
+	r.Register(NewHAGetStateTool())
+	r.Register(NewHAListServicesTool())
+	r.Register(NewHACallServiceTool())
+	r.Register(NewHAEventsTool())
+	r.Register(NewHAConfigTool())
+
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 

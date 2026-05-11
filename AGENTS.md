@@ -62,6 +62,8 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 | **skills** | skill_list, skill_view, skill_manage, skill_create, skill_delete | 技能管理 |
 | **cron** | cronjob | 定时任务 |
 | **delegation** | delegate_task, poll_task, list_tasks, cancel_task | 子代理委托 |
+| **code_execution** | execute_code | 内置 Python 代码执行（带工具调用） |
+| **homeassistant** | ha_list_entities, ha_get_state, ha_list_services, ha_call_service, ha_events, ha_config | 智能家居控制 |
 | **utility** | json, yaml, string, hash, uuid, random, time, math, csv, env, system_info | 实用工具 |
 | **mcp** | mcp_* | MCP 服务器工具 |
 
@@ -157,9 +159,49 @@ json := ts.ExportJSON()
 
 ### 功能特性
 - SKILL.md 格式支持
-- 渐进式加载
+- 渐进式加载 (L0/L1/L2)
+- 条件激活 (fallback_for_toolset, requires_toolset)
+- 平台限制 (macos/linux/windows)
 - 代理自动创建
+- Skills Hub 集成
 - 外部目录支持
+
+### 渐进式加载
+```go
+// Level 0: 仅列表 - 返回名称、描述、分类
+level0, _ := manager.LoadSkillAtLevel("git-workflow", &SkillViewOptions{Level: Level0})
+
+// Level 1: 完整内容 - 返回技能完整内容
+level1, _ := manager.LoadSkillAtLevel("git-workflow", &SkillViewOptions{Level: Level1})
+
+// Level 2: 带引用 - 返回特定引用文件
+level2, _ := manager.LoadSkillAtLevel("git-workflow", &SkillViewOptions{
+    Level: Level2,
+    Path:  "references/commands.md",
+})
+```
+
+### 条件激活
+```go
+// 根据可用工具集/工具过滤技能
+visible := manager.FilterSkillsByCondition(
+    []string{"web", "terminal"},           // 可用工具集
+    []string{"web_search", "read_file"},  // 可用工具
+    "linux",                               // 当前平台
+)
+```
+
+### Skills Hub 集成
+```go
+// 搜索 Hub
+skills, _ := manager.SearchHub("kubernetes", []HubSource{HubSourceOfficial, HubSourceSkillsSh})
+
+// 从 Hub 安装
+manager.InstallFromHub(HubSourceOfficial, "security/1password")
+
+// 检查更新
+updates, _ := manager.CheckForUpdates()
+```
 
 ### 管理接口
 ```go
@@ -208,6 +250,109 @@ mcp:
 - `magic mcp connect <name> <command>` - 连接 MCP 服务器
 - `magic mcp disconnect <name>` - 断开 MCP 服务器
 - `magic mcp health [name]` - 检查服务器健康状态
+
+## Home Assistant 集成
+
+支持智能家居控制，连接 Home Assistant 实例进行设备管理。
+
+### 环境配置
+```bash
+export HASS_URL="http://homeassistant.local:8123"
+export HASS_TOKEN="your_long_lived_access_token"
+```
+
+### 工具列表
+| 工具 | 描述 |
+|------|------|
+| ha_list_entities | 列出所有实体及其状态 |
+| ha_get_state | 获取特定实体状态 |
+| ha_list_services | 列出可用服务 |
+| ha_call_service | 调用 Home Assistant 服务 |
+| ha_events | 订阅/管理事件 |
+| ha_config | 获取系统配置信息 |
+
+### 使用示例
+```json
+// 列出所有灯光
+{"tool": "ha_list_entities", "args": {"domain": "light"}}
+
+// 获取实体状态
+{"tool": "ha_get_state", "args": {"entity_id": "light.living_room"}}
+
+// 开灯
+{"tool": "ha_call_service", "args": {
+  "domain": "light",
+  "service": "turn_on",
+  "entity_id": "light.living_room",
+  "data": {"brightness": 255}
+}}
+
+// 设置温度
+{"tool": "ha_call_service", "args": {
+  "domain": "climate",
+  "service": "set_temperature",
+  "entity_id": "climate.thermostat",
+  "data": {"temperature": 22}
+}}
+```
+
+## 代码执行 (execute_code)
+
+内置 Python 代码执行，支持从代码中调用工具。
+
+### 环境配置
+```bash
+# 可选：设置工作目录限制
+export CODE_ALLOWED_DIRS="/tmp,/workspace"
+export CODE_TIMEOUT=120
+export CODE_MEMORY_LIMIT=512
+```
+
+### 工具接口
+```go
+tool := NewExecuteCodeTool()
+
+// 注册可用的工具
+tool.RegisterTool("read_file", &ReadFileTool{})
+tool.RegisterTool("web_search", &WebSearchTool{})
+
+// 执行代码
+result, _ := tool.Execute(ctx, map[string]interface{}{
+    "code":      "print('Hello'); result = read_file(path='/tmp/test.txt')",
+    "timeout":   60,
+    "workdir":   "/tmp",
+})
+```
+
+### Python 代码中使用工具
+```python
+# 读取文件
+content = read_file('/tmp/test.txt')
+print(content)
+
+# 搜索网页
+results = web_search('golang tutorial', count=5)
+print(results)
+
+# 搜索文件
+matches = search_files('TODO', path='/workspace')
+print(matches)
+
+# 执行命令
+output = terminal('ls -la')
+print(output)
+```
+
+### 内置模板
+```go
+// 使用预置模板
+code, ok := GetTemplate("file_processor")
+code, ok := GetTemplate("web_scraper")
+code, ok := GetTemplate("data_analysis")
+
+// 列出所有模板
+templates := ListTemplates()
+```
 
 ## 子代理委托 (Delegate Task)
 

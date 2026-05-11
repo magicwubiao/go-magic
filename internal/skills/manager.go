@@ -1123,3 +1123,373 @@ func (m *Manager) Delete(name string) error {
 	delete(m.skills, name)
 	return nil
 }
+
+// =============================================================================
+// Progressive Disclosure (渐进式加载)
+// =============================================================================
+
+// LoadSkillAtLevel loads a skill at the specified level
+// Level 0: List only - returns name, description, category
+// Level 1: Full content - returns complete skill content
+// Level 2: With references - returns specific reference file
+func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (interface{}, error) {
+	skill, err := m.Get(name)
+	if err != nil {
+		return nil, err
+	}
+
+	switch options.Level {
+	case Level0:
+		// Return lightweight list item
+		return SkillListItem{
+			Name:        skill.Name,
+			Description: skill.Description,
+			Category:    skill.Category,
+			Tags:        skill.Tags,
+			Version:     skill.Version,
+		}, nil
+
+	case Level1:
+		// Return full skill content
+		content := skill.Content
+		if content == "" {
+			// Try to load from SKILL.md
+			if skill.Dir != "" {
+				skillMdPath := filepath.Join(skill.Dir, "SKILL.md")
+				if data, err := os.ReadFile(skillMdPath); err == nil {
+					content = string(data)
+				}
+			}
+		}
+		return map[string]interface{}{
+			"name":         skill.Name,
+			"description":  skill.Description,
+			"content":      content,
+			"category":     skill.Category,
+			"tags":         skill.Tags,
+			"version":      skill.Version,
+			"author":       skill.Author,
+			"source":       skill.Source,
+			"tools":        skill.GetTools(),
+			"dir":          skill.Dir,
+			"supporting":   skill.SupportingFiles(),
+		}, nil
+
+	case Level2:
+		// Return specific reference file
+		if options.Path == "" {
+			return nil, fmt.Errorf("path required for Level2 load")
+		}
+		if skill.Dir == "" {
+			return nil, fmt.Errorf("skill has no directory")
+		}
+		refPath := filepath.Join(skill.Dir, options.Path)
+		data, err := os.ReadFile(refPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read reference file: %w", err)
+		}
+		return map[string]interface{}{
+			"name":    skill.Name,
+			"path":    options.Path,
+			"content": string(data),
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown load level: %d", options.Level)
+	}
+}
+
+// ListSkillsAtLevel0 returns lightweight skill list for efficient indexing
+func (m *Manager) ListSkillsAtLevel0() ([]SkillListItem, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	items := make([]SkillListItem, 0, len(m.skills))
+	for _, skill := range m.skills {
+		items = append(items, SkillListItem{
+			Name:        skill.Name,
+			Description: skill.Description,
+			Category:    skill.Category,
+			Tags:        skill.Tags,
+			Version:     skill.Version,
+		})
+	}
+	return items, nil
+}
+
+// GetSkillsByCategory returns skills grouped by category
+func (m *Manager) GetSkillsByCategory() map[string][]SkillListItem {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string][]SkillListItem)
+	for _, skill := range m.skills {
+		cat := skill.Category
+		if cat == "" {
+			cat = "uncategorized"
+		}
+		result[cat] = append(result[cat], SkillListItem{
+			Name:        skill.Name,
+			Description: skill.Description,
+			Category:    cat,
+			Tags:        skill.Tags,
+			Version:     skill.Version,
+		})
+	}
+	return result
+}
+
+// FilterSkillsByCondition returns visible skills based on activation conditions
+func (m *Manager) FilterSkillsByCondition(availableToolsets, availableTools []string, platform string) []*Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var visible []*Skill
+	for _, skill := range m.skills {
+		if skill.Metadata == nil {
+			// No conditions, always visible
+			visible = append(visible, skill)
+			continue
+		}
+
+		// Check hermes conditions
+		if hermes, ok := skill.Metadata["hermes"].(map[string]interface{}); ok {
+			cond := &SkillActivationCondition{}
+
+			if v, ok := hermes["fallback_for_toolset"].(string); ok {
+				cond.FallbackForToolset = v
+			}
+			if v, ok := hermes["requires_toolset"].(string); ok {
+				cond.RequiresToolset = v
+			}
+			if v, ok := hermes["platforms"]; ok {
+				if platforms, ok := v.([]interface{}); ok {
+					for _, p := range platforms {
+						if pStr, ok := p.(string); ok {
+							cond.Platforms = append(cond.Platforms, pStr)
+						}
+					}
+				}
+			}
+
+			if cond.RequiresToolset != "" || len(cond.Platforms) > 0 ||
+				cond.FallbackForToolset != "" {
+				if cond.IsVisible(availableToolsets, availableTools, platform) {
+					visible = append(visible, skill)
+				}
+			} else {
+				visible = append(visible, skill)
+			}
+		} else {
+			visible = append(visible, skill)
+		}
+	}
+	return visible
+}
+
+// =============================================================================
+// Skills Hub Integration
+// =============================================================================
+
+// HubConfig contains hub/source configuration
+type HubConfig struct {
+	Sources    []HubSourceConfig `json:"sources"`
+	CacheDir   string            `json:"cache_dir"`
+	CacheTTL   int               `json:"cache_ttl_hours"` // Hours to cache
+}
+
+// HubSourceConfig describes a skill source
+type HubSourceConfig struct {
+	Type HubSource `json:"type"`
+	Name string    `json:"name"`
+	URL  string    `json:"url,omitempty"`
+}
+
+// SearchHub searches all configured hubs for skills
+func (m *Manager) SearchHub(keyword string, sources []HubSource) ([]HubSkill, error) {
+	var allSkills []HubSkill
+
+	for _, source := range sources {
+		skills, err := m.searchHubSource(keyword, source)
+		if err != nil {
+			continue // Skip errors, try next source
+		}
+		allSkills = append(allSkills, skills...)
+	}
+
+	return allSkills, nil
+}
+
+// searchHubSource searches a specific hub source
+func (m *Manager) searchHubSource(keyword string, source HubSource) ([]HubSkill, error) {
+	switch source {
+	case HubSourceOfficial:
+		return m.searchOfficialSkills(keyword)
+	case HubSourceSkillsSh:
+		return m.searchSkillsSh(keyword)
+	case HubSourceHub:
+		return m.searchHubSkills(keyword)
+	default:
+		return nil, fmt.Errorf("unsupported hub source: %s", source)
+	}
+}
+
+// searchOfficialSkills searches Hermes official skills
+func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
+	// Official skills list (hardcoded for now, can be fetched from remote)
+	officialSkills := []HubSkill{
+		{Name: "security/1password", Description: "1Password integration for secure credential management", Category: "security", Source: HubSourceOfficial},
+		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Category: "security", Source: HubSourceOfficial},
+		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial},
+		{Name: "devops/kubernetes", Description: "Kubernetes deployment and management", Category: "devops", Source: HubSourceOfficial},
+		{Name: "devops/docker", Description: "Docker container management", Category: "devops", Source: HubSourceOfficial},
+	}
+
+	var results []HubSkill
+	keyword = strings.ToLower(keyword)
+	for _, skill := range officialSkills {
+		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
+			strings.Contains(strings.ToLower(skill.Description), keyword) {
+			results = append(results, skill)
+		}
+	}
+	return results, nil
+}
+
+// searchSkillsSh searches skills.sh registry
+func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
+	// For now, return mock data - real implementation would call skills.sh API
+	mockSkills := []HubSkill{
+		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Category: "frontend", Source: HubSourceSkillsSh},
+		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Category: "document", Source: HubSourceSkillsSh},
+	}
+
+	var results []HubSkill
+	keyword = strings.ToLower(keyword)
+	for _, skill := range mockSkills {
+		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
+			strings.Contains(strings.ToLower(skill.Description), keyword) {
+			results = append(results, skill)
+		}
+	}
+	return results, nil
+}
+
+// searchHubSkills searches ClawHub marketplace
+func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
+	// For now, return mock data - real implementation would call clawhub.ai API
+	mockSkills := []HubSkill{
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devops", Source: HubSourceHub},
+		{Name: "git-workflow", Description: "Git workflow automation", Category: "dev", Source: HubSourceHub},
+	}
+
+	var results []HubSkill
+	keyword = strings.ToLower(keyword)
+	for _, skill := range mockSkills {
+		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
+			strings.Contains(strings.ToLower(skill.Description), keyword) {
+			results = append(results, skill)
+		}
+	}
+	return results, nil
+}
+
+// InstallFromHub installs a skill from a hub source
+func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
+	var url string
+
+	switch source {
+	case HubSourceOfficial:
+		url = fmt.Sprintf("https://raw.githubusercontent.com/NousResearch/hermes-agent/main/optional-skills/%s", sourceID)
+	case HubSourceSkillsSh:
+		// Resolve skills.sh URL
+		url = fmt.Sprintf("https://%s", sourceID)
+	case HubSourceHub:
+		url = fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID)
+	default:
+		return fmt.Errorf("unsupported hub source: %s", source)
+	}
+
+	return m.InstallFromURL(url)
+}
+
+// CheckForUpdates checks installed hub skills for updates
+func (m *Manager) CheckForUpdates() (map[string]bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	updates := make(map[string]bool)
+	for name, skill := range m.skills {
+		if skill.Source == SkillSourceRegistry {
+			// In real implementation, compare with remote version
+			updates[name] = false // No update available by default
+		}
+	}
+	return updates, nil
+}
+
+// UpdateHubSkill updates a skill from its hub source
+func (m *Manager) UpdateHubSkill(name string) error {
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	if skill.Source != SkillSourceRegistry {
+		return fmt.Errorf("skill %s is not a hub skill", name)
+	}
+
+	// Re-install from hub
+	return m.InstallFromHub(HubSource(skill.Source), name)
+}
+
+// =============================================================================
+// External Skill Directories
+// =============================================================================
+
+// ExternalDir represents an external skill directory configuration
+type ExternalDir struct {
+	Path   string `yaml:"path"`
+	ReadOnly bool `yaml:"read_only"`
+}
+
+// SetExternalDirs sets additional external skill directories to scan
+func (m *Manager) SetExternalDirs(dirs []ExternalDir) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Scan external directories but don't allow writes to them
+	for _, dir := range dirs {
+		if dir.Path == "" {
+			continue
+		}
+
+		// Expand ~ to home directory
+		expandPath := os.Expand(dir.Path, func(key string) string {
+			if key == "~" {
+				home, _ := os.UserHomeDir()
+				return home
+			}
+			return os.Getenv(key)
+		})
+
+		// Add to search dirs if not already present
+		found := false
+		for _, existing := range m.searchDirs {
+			if existing == expandPath {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.searchDirs = append(m.searchDirs, expandPath)
+		}
+	}
+}
+
+// GetExternalDirs returns configured external directories
+func (m *Manager) GetExternalDirs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.searchDirs
+}
