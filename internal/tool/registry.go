@@ -122,6 +122,12 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Cron job tool
 	r.Register(NewCronJobTool())
 
+	// Delegation tools (sub-agent tasks)
+	r.Register(NewDelegateTaskTool())
+	r.Register(NewPollTaskTool())
+	r.Register(NewListTasksTool())
+	r.Register(NewCancelTaskTool())
+
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 

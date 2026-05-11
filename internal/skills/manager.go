@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -971,4 +972,154 @@ func (m *Manager) GetSkillsList() string {
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", name, skill.Description))
 	}
 	return sb.String()
+}
+
+// List returns all skills as a map (for tool interface)
+func (m *Manager) List() map[string]*Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]*Skill, len(m.skills))
+	for k, v := range m.skills {
+		result[k] = v
+	}
+	return result
+}
+
+// GetCategories returns all unique skill categories
+func (m *Manager) GetCategories() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	categorySet := make(map[string]bool)
+	for _, skill := range m.skills {
+		if skill.Category != "" {
+			categorySet[skill.Category] = true
+		}
+	}
+
+	categories := make([]string, 0, len(categorySet))
+	for cat := range categorySet {
+		categories = append(categories, cat)
+	}
+	sort.Strings(categories)
+	return categories
+}
+
+// GetSkillDir returns the directory path for a skill
+func (m *Manager) GetSkillDir(name string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return "", fmt.Errorf("skill %s not found", name)
+	}
+	return skill.Dir, nil
+}
+
+// Create creates a new skill from scratch
+func (m *Manager) Create(name, description, content, category string, tags []string) (*Skill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if skill already exists
+	if _, ok := m.skills[name]; ok {
+		return nil, fmt.Errorf("skill %s already exists", name)
+	}
+
+	// Find or create skill directory
+	var skillDir string
+	for _, dir := range m.searchDirs {
+		if strings.HasPrefix(dir, os.Getenv("HOME")) || strings.HasPrefix(dir, "/workspace/projects") {
+			skillDir = filepath.Join(dir, name)
+			if err := os.MkdirAll(skillDir, 0755); err == nil {
+				break
+			}
+		}
+	}
+
+	if skillDir == "" {
+		skillDir = filepath.Join(m.searchDirs[0], name)
+		os.MkdirAll(skillDir, 0755)
+	}
+
+	// Write SKILL.md file
+	skillMdPath := filepath.Join(skillDir, "SKILL.md")
+	skillContent := fmt.Sprintf(`---
+name: %s
+description: %s
+version: 1.0.0
+category: %s
+tags: [%s]
+---
+
+# %s
+
+%s
+`, name, description, category, strings.Join(tags, ", "), name, content)
+
+	if err := os.WriteFile(skillMdPath, []byte(skillContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write skill file: %w", err)
+	}
+
+	// Create and add skill
+	skill := &Skill{
+		SkillMeta: SkillMeta{
+			Name:        name,
+			Description: description,
+			Version:     "1.0.0",
+			Category:    category,
+			Tags:        tags,
+			Source:      SkillSourceLocal,
+		},
+		Content: content,
+		Dir:     skillDir,
+	}
+
+	m.skills[name] = skill
+	return skill, nil
+}
+
+// Update updates an existing skill's content
+func (m *Manager) Update(name, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	// Update content
+	skill.Content = content
+
+	// Write to file
+	if skill.Dir == "" {
+		return fmt.Errorf("skill %s has no directory", name)
+	}
+
+	skillMdPath := filepath.Join(skill.Dir, "SKILL.md")
+	return os.WriteFile(skillMdPath, []byte(content), 0644)
+}
+
+// Delete removes a skill
+func (m *Manager) Delete(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	// Remove directory
+	if skill.Dir != "" {
+		if err := os.RemoveAll(skill.Dir); err != nil {
+			return fmt.Errorf("failed to remove skill directory: %w", err)
+		}
+	}
+
+	delete(m.skills, name)
+	return nil
 }
