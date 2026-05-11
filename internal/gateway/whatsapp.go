@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
+	"unsafe"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
@@ -18,11 +20,11 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/mdp/qrterminal/v3"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
+
+	_ "modernc.org/sqlite"
 )
 
 // WhatsAppGateway implements WhatsApp via whatsmeow (personal account, QR code login)
@@ -309,7 +311,9 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		// QR code generated, display in terminal
 		// evt.Codes contains rotating QR codes, use the last one
 		qrData := evt.Codes[len(evt.Codes)-1]
-		log.Infof("WhatsApp QR Code generated. Scan with WhatsApp app to login.")
+		
+		// Always display QR code with maximum verbosity
+		ForceDisplayQR(qrData)
 
 		if g.qrCallback != nil {
 			g.qrCallback(qrData)
@@ -319,9 +323,6 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		g.mu.Lock()
 		g.latestQR = qrData
 		g.mu.Unlock()
-
-		// Display QR code with multiple fallbacks
-		displayQRCode(qrData)
 
 	case *events.QRScannedWithoutMultidevice:
 		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
@@ -704,7 +705,40 @@ func displayQRCode(qrData string) {
 
 // isTerminal checks if the file descriptor is a terminal
 func isTerminal(fd uintptr) bool {
-	return true // Simplified - always assume TTY for qrterminal
+	// Check if file descriptor is a terminal by trying to get terminal attributes
+	var term syscall.Termios
+	_, _, err := syscall.Syscall6(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(&term)), 0, 0, 0)
+	return err == 0
+}
+
+// ForceDisplayQR forces QR code display regardless of terminal detection
+func ForceDisplayQR(qrData string) {
+	// Always try to display QR code with maximum verbosity
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
+	fmt.Println("║          📱 WhatsApp QR Code - Scan with WhatsApp App           ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// Display QR code with medium size
+	qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
+
+	// Also show URL fallback
+	fmt.Println()
+	fmt.Println("QR Code URL (open in browser):")
+	fmt.Printf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s\n", qrData)
+
+	// Print raw data
+	fmt.Println()
+	fmt.Println("Raw QR Data:")
+	fmt.Printf("%s\n", qrData)
+
+	fmt.Println()
+	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
+	fmt.Println()
+
+	// Flush output immediately
+	os.Stdout.Sync()
 }
 
 // truncateStringSimple truncates a string to maxLen characters
