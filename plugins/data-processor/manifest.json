@@ -1,0 +1,16 @@
+{
+  "id": "data-processor",
+  "name": "Data Processor",
+  "version": "1.0.0",
+  "author": "go-magic",
+  "description": "Process and analyze CSV/JSON data with statistics",
+  "category": "utilities",
+  "tags": ["data", "csv", "json", "analysis"],
+  "type": "script",
+  "entry": "run.py",
+  "permissions": ["network", "filesystem"],
+  "hooks": {
+    "pre_execute": null,
+    "post_execute": null
+  }
+}

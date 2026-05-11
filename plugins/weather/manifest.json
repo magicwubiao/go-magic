@@ -1,0 +1,16 @@
+{
+  "id": "weather",
+  "name": "Weather Query",
+  "version": "1.0.0",
+  "author": "go-magic",
+  "description": "Query weather information using wttr.in API",
+  "category": "utilities",
+  "tags": ["weather", "api", "utility"],
+  "type": "script",
+  "entry": "run.sh",
+  "permissions": ["network"],
+  "hooks": {
+    "pre_execute": null,
+    "post_execute": null
+  }
+}
