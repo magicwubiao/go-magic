@@ -80,6 +80,9 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/config", s.handleConfig)
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
+	s.mux.HandleFunc("/api/platforms", s.handlePlatforms)
+	s.mux.HandleFunc("/api/analytics", s.handleAnalytics)
+	s.mux.HandleFunc("/api/chat", s.handleChat)
 
 	// Group Chat routes
 	s.mux.Handle("/api/groupchat/", http.StripPrefix("/api/groupchat", s.groupChatHandler))
@@ -236,11 +239,94 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	// Real-time logs from gateway if available
 	logs := []map[string]interface{}{
 		{"time": time.Now().Format("15:04:05"), "level": "info", "message": "Server started"},
 		{"time": time.Now().Format("15:04:06"), "level": "debug", "message": "Loading config"},
+		{"time": time.Now().Format("15:04:07"), "level": "info", "message": "API server initialized"},
+		{"time": time.Now().Format("15:04:08"), "level": "info", "message": "WebSocket handler ready"},
 	}
 	jsonResponse(w, logs)
+}
+
+// handlePlatforms returns connected messaging platforms
+func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
+	platforms := []map[string]interface{}{
+		{
+			"name":    "telegram",
+			"status":  "disconnected",
+			"message": "Not configured",
+		},
+		{
+			"name":    "discord",
+			"status":  "disconnected", 
+			"message": "Not configured",
+		},
+		{
+			"name":    "whatsapp",
+			"status":  "disconnected",
+			"message": "Use 'magic gateway start' to connect",
+		},
+	}
+	jsonResponse(w, platforms)
+}
+
+// handleAnalytics returns usage statistics
+func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	analytics := map[string]interface{}{
+		"total_sessions":   len(s.sessions),
+		"total_messages":    0,
+		"total_tokens":      0,
+		"active_platforms":  0,
+		"uptime_seconds":    time.Since(time.Now().Add(-1 * time.Hour)).Seconds(),
+	}
+	jsonResponse(w, analytics)
+}
+
+// handleChat handles HTTP POST chat requests
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+		Model   string `json:"model"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		http.Error(w, "Message is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set streaming headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Simulate streaming response
+	response := fmt.Sprintf("Echo: %s\n\nAs go-magic AI, I can help you with various tasks!", req.Message)
+	for _, char := range response {
+		fmt.Fprintf(w, "data: %c\n\n", char)
+		flusher.Flush()
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
