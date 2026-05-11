@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+//go:embed dist
+var staticFiles embed.FS
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -249,9 +253,19 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
-	// Try disk files first
+	// Try embedded files first
+	data, err := staticFiles.ReadFile(path)
+	if err == nil {
+		contentType := getContentType(path)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(data)
+		return
+	}
+
+	// Try disk files as fallback
 	diskPath := filepath.Join("web", "dist", path)
-	data, err := os.ReadFile(diskPath)
+	data, err = os.ReadFile(diskPath)
 	if err == nil {
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
@@ -260,17 +274,43 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return index.html for SPA routing
-	indexPath := filepath.Join("web", "dist", "index.html")
-	indexData, err := os.ReadFile(indexPath)
+	indexData, err := staticFiles.ReadFile("/index.html")
 	if err == nil {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(indexData)
 		return
 	}
 
-	// No files found
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte("go-magic Web Dashboard\n\nPlease run: make web-build\n"))
+	// Fallback to disk
+	indexDiskPath := filepath.Join("web", "dist", "index.html")
+	indexData, err = os.ReadFile(indexDiskPath)
+	if err == nil {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(indexData)
+		return
+	}
+
+	// No files found - show setup instructions
+	w.Header().Set("Content-Type", "text/html")
+	html := `<!DOCTYPE html>
+<html>
+<head><title>go-magic Web Dashboard</title></head>
+<body>
+<h1>go-magic Web Dashboard</h1>
+<p>Frontend files not embedded. To enable the dashboard:</p>
+<pre>
+# Option 1: Download pre-built binary with embedded frontend
+# Already available in this release!
+
+# Option 2: Build frontend manually
+cd web && pnpm install && pnpm build
+
+# Option 3: Use the CLI instead
+./magic --help
+</pre>
+</body>
+</html>`
+	w.Write([]byte(html))
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
