@@ -422,3 +422,108 @@ func (m *Manager) GetStats() *CompressionStats {
 
 	return stats
 }
+
+// Preview shows compression preview without applying changes
+func (m *Manager) Preview(level string) (*PreviewResult, error) {
+	config := DefaultConfig()
+	if level == "full" {
+		config.PreserveRecent = 2
+	}
+
+	preview := &PreviewResult{
+		CurrentMessages: 0,
+		AfterMessages:   0,
+		TokensSaved:    0,
+		TokenReduction: 0,
+		CostSavings:    0,
+	}
+
+	// Get active session
+	for _, session := range m.sessions {
+		if len(session.Messages) > config.MinMessages {
+			currentTokens := 0
+			for _, msg := range session.Messages {
+				currentTokens += EstimateTokens(msg.Content)
+			}
+
+			preview.CurrentMessages = len(session.Messages)
+
+			// Estimate after compression
+			afterMessages := config.PreserveRecent + 1 // preserved + summary
+			afterTokens := (config.PreserveRecent * 50) + 100 // rough estimate
+
+			preview.AfterMessages = afterMessages
+			preview.TokensSaved = currentTokens - afterTokens
+			if currentTokens > 0 {
+				preview.TokenReduction = float64(preview.TokensSaved) / float64(currentTokens)
+			}
+			// Cost: $0.01 per 1M tokens approx
+			preview.CostSavings = float64(preview.TokensSaved) * 0.00000001
+		}
+		break
+	}
+
+	return preview, nil
+}
+
+// Compress applies compression to active session
+func (m *Manager) Compress(level string) (*CompressionResult, error) {
+	config := DefaultConfig()
+	if level == "full" {
+		config.PreserveRecent = 2
+	}
+
+	result := &CompressionResult{
+		MessagesCompressed: 0,
+		SummaryLength:     0,
+		TokensSaved:       0,
+	}
+
+	// Get active session
+	for _, session := range m.sessions {
+		if len(session.Messages) > config.MinMessages {
+			currentTokens := 0
+			for _, msg := range session.Messages {
+				currentTokens += EstimateTokens(msg.Content)
+			}
+
+			_, compressed, err := m.CompressSession(session.ID, session.Messages, config.PreserveRecent)
+			if err != nil {
+				return nil, err
+			}
+
+			session.Messages = compressed
+			session.Summary = &CompressionSummary{
+				OriginalCount:   len(session.Messages),
+				CompressedCount: len(compressed),
+				TokensSaved:     currentTokens - (len(compressed) * 50),
+				CompressedAt:    time.Now().Unix(),
+			}
+
+			result.MessagesCompressed = len(session.Messages) - len(compressed)
+			result.SummaryLength = 100
+			result.TokensSaved = currentTokens - (len(compressed) * 50)
+
+			return result, nil
+		}
+		break
+	}
+
+	return result, nil
+}
+
+// PreviewResult contains compression preview information
+type PreviewResult struct {
+	CurrentMessages int
+	AfterMessages   int
+	TokensSaved     int
+	TokenReduction  float64
+	CostSavings     float64
+}
+
+// CompressionResult contains compression result information
+type CompressionResult struct {
+	MessagesCompressed int
+	SummaryLength     int
+	TokensSaved       int
+}

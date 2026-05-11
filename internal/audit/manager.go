@@ -77,8 +77,13 @@ type Manager struct {
 	stopChan  chan struct{}
 }
 
-// NewManager 创建审计管理器
+// NewManager creates audit manager
 func NewManager(dataDir string) (*Manager, error) {
+	// Use default dir if empty
+	if dataDir == "" {
+		dataDir = filepath.Join(getMagicHomeDir(), "audit")
+	}
+
 	m := &Manager{
 		dataDir: dataDir,
 		entries: make([]*Entry, 0),
@@ -86,21 +91,21 @@ func NewManager(dataDir string) (*Manager, error) {
 		stopChan: make(chan struct{}),
 	}
 
-	// 创建目录
+	// Create directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
 
-	// 加载历史记录
+	// Load history
 	if err := m.load(); err != nil {
-		// 忽略错误
+		// Ignore load errors
 	}
 
 	// 启动定期刷新
 	m.flushTick = time.NewTicker(5 * time.Minute)
 	go m.autoFlush()
 
-	return m
+	return m, nil
 }
 
 // Close 关闭管理器
@@ -497,4 +502,13 @@ func (m *Manager) LogSystem(action, result string, metadata map[string]interface
 // LogError 记录错误
 func (m *Manager) LogError(category Category, action, resource, errMsg string) *Entry {
 	return m.Log(LevelError, category, action, "system", resource, "failure", WithError(fmt.Errorf("%s", errMsg)))
+}
+
+// getMagicHomeDir returns the magic home directory
+func getMagicHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
+	return filepath.Join(home, ".go-magic")
 }

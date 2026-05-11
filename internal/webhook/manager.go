@@ -40,11 +40,11 @@ type Webhook struct {
 	LastTriggered time.Time     `json:"last_triggered,omitempty"`
 }
 
-// RetryPolicy 重试策略
+// RetryPolicy retry policy
 type RetryPolicy struct {
-	MaxRetries    int     `json:"max_retries"`
-	RetryDelay    int     `json:"retry_delay_seconds"`
-	BackoffMultiplier float `json:"backoff_multiplier"`
+	MaxRetries          int     `json:"max_retries"`
+	RetryDelay          int     `json:"retry_delay_seconds"`
+	BackoffMultiplier   float64 `json:"backoff_multiplier"`
 }
 
 // DeliveryResult 投递结果

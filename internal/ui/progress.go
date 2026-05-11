@@ -7,32 +7,36 @@ import (
 	"time"
 )
 
-// Color ANSI 颜色代码
+// Color ANSI color codes
 type Color struct {
-	Reset  string = "\033[0m"
-	Bold   string = "\033[1m"
-	Dim    string = "\033[2m"
-
-	// 前景色
-	Black   string = "\033[30m"
-	Red     string = "\033[31m"
-	Green   string = "\033[32m"
-	Yellow  string = "\033[33m"
-	Blue    string = "\033[34m"
-	Magenta string = "\033[35m"
-	Cyan    string = "\033[36m"
-	White   string = "\033[37m"
-
-	// 背景色
-	BGBlack   string = "\033[40m"
-	BGRed     string = "\033[41m"
-	BGGreen   string = "\033[42m"
-	BGYellow  string = "\033[43m"
-	BGBlue    string = "\033[44m"
-	BGDefault string = "\033[49m"
+	Reset  string
+	Bold   string
+	Dim    string
+	Black  string
+	Red    string
+	Green  string
+	Yellow string
+	Blue   string
+	Magenta string
+	Cyan   string
+	White  string
 }
 
-var color = &Color{}
+func init() {
+	color = &Color{
+		Reset:   "\033[0m",
+		Bold:    "\033[1m",
+		Dim:     "\033[2m",
+		Black:   "\033[30m",
+		Red:     "\033[31m",
+		Green:   "\033[32m",
+		Yellow:  "\033[33m",
+		Blue:    "\033[34m",
+		Magenta: "\033[35m",
+		Cyan:    "\033[36m",
+		White:   "\033[37m",
+	}
+}
 
 // ProgressBar 进度条
 type ProgressBar struct {

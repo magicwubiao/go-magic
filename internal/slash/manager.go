@@ -449,8 +449,13 @@ func (m *Manager) Execute(ctx context.Context, input string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
-	return parsed.Handler(ctx, parsed.Args, parsed.Flags)
+
+	// Call the handler function from the Command
+	if parsed.Handler != nil && parsed.Handler.Handler != nil {
+		return parsed.Handler.Handler(ctx, parsed.Args, parsed.Flags)
+	}
+
+	return "", fmt.Errorf("command %s has no handler", parsed.Name)
 }
 
 // parseCommandParts splits a command string respecting quotes

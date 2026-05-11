@@ -52,6 +52,8 @@ type Manager struct {
 	autoLearnEnabled bool
 	minConfidence    float64
 	maxExperiences   int
+	skillThreshold   int
+	patternMinOccur  int
 }
 
 // Pattern represents a learned pattern
@@ -101,6 +103,8 @@ func NewManager(dataDir string) *Manager {
 		autoLearnEnabled: true,
 		minConfidence:    0.7,
 		maxExperiences:   1000,
+		skillThreshold:   5,
+		patternMinOccur: 3,
 	}
 }
 
@@ -166,7 +170,7 @@ func (m *Manager) checkForNewSkill() {
 			continue
 		}
 		
-		for _, pattern := range m.extractTaskPatterns(exp.Task) {
+		for _, pattern := range extractTaskPatterns(exp.Task) {
 			patternGroups[pattern] = append(patternGroups[pattern], exp)
 		}
 	}
@@ -252,7 +256,7 @@ func (m *Manager) createSkillFromExperiences(name, description string, exps []Ex
 	
 	// Set triggers
 	for _, exp := range exps {
-		skill.Triggers = append(skill.Triggers, m.extractTaskPatterns(exp.Task)...)
+		skill.Triggers = append(skill.Triggers, extractTaskPatterns(exp.Task)...)
 	}
 	
 	m.skills[name] = skill
@@ -271,7 +275,7 @@ func (m *Manager) buildSkillContent(name, description string, exps []Experience)
 	builder.WriteString("- This skill is triggered when:\n")
 	seen := make(map[string]bool)
 	for _, exp := range exps {
-		for _, trigger := range m.extractTaskPatterns(exp.Task) {
+		for _, trigger := range extractTaskPatterns(exp.Task) {
 			if !seen[trigger] {
 				builder.WriteString(fmt.Sprintf("  - Task involves: %s\n", trigger))
 				seen[trigger] = true
@@ -341,7 +345,7 @@ func (m *Manager) ListSkills() []*LearnedSkill {
 		skills = append(skills, s)
 	}
 	sort.Slice(skills, func(i, j int) bool {
-		return skills[i].UseCount > j.UseCount
+		return skills[i].UseCount > skills[j].UseCount
 	})
 	return skills
 }
@@ -355,7 +359,7 @@ func (m *Manager) GetPatterns(minConfidence float64) []*Pattern {
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Confidence > j.Confidence
+		return result[i].Confidence > result[j].Confidence
 	})
 	return result
 }

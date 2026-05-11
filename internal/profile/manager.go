@@ -270,9 +270,7 @@ func (m *Manager) UpdatePreference(userID string, pref string, value interface{}
 			profile.Preferences.LearningStyle = v
 		}
 	case "expertise":
-		if v, ok := []string{}; true {
-			// Handle expertise array
-		}
+		// Handle expertise array (handled separately)
 	}
 	
 	profile.UpdatedAt = time.Now().Unix()
@@ -332,7 +330,7 @@ func (m *Manager) getTopTasks(profile *UserProfile, limit int) []string {
 	}
 	
 	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].count > j.count
+		return tasks[i].count > tasks[j].count
 	})
 	
 	var result []string
@@ -361,7 +359,7 @@ func (m *Manager) getPreferredTools(profile *UserProfile) []string {
 	}
 	
 	sort.Slice(tools, func(i, j int) bool {
-		return tools[i].count > j.count
+		return tools[i].count > tools[j].count
 	})
 	
 	var result []string
@@ -388,7 +386,7 @@ func (m *Manager) getBusiestHours(profile *UserProfile) []int {
 	}
 	
 	sort.Slice(hours, func(i, j int) bool {
-		return hours[i].count > j.count
+		return hours[i].count > hours[j].count
 	})
 	
 	var result []int

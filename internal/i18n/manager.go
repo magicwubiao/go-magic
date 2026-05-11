@@ -24,8 +24,17 @@ type Manager struct {
 	fallback   string
 }
 
-// NewManager 创建国际化管理器
+// NewManager creates internationalization manager
 func NewManager(dataDir, defaultLocale string) (*Manager, error) {
+	// Use default dir if empty
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = "/tmp"
+		}
+		dataDir = filepath.Join(home, ".go-magic", "i18n")
+	}
+
 	m := &Manager{
 		dataDir:  dataDir,
 		locales:  make(map[string]*Locale),
@@ -33,17 +42,17 @@ func NewManager(dataDir, defaultLocale string) (*Manager, error) {
 		fallback: "en",
 	}
 
-	// 创建目录
+	// Create directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
 
-	// 加载内置语言
+	// Load built-in translations
 	m.loadBuiltins()
 
-	// 加载用户自定义翻译
+	// Load user translations
 	if err := m.loadUserLocales(); err != nil {
-		// 忽略错误
+		// Ignore load errors
 	}
 
 	return m, nil

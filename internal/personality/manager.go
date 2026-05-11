@@ -402,7 +402,6 @@ func LoadSOUL(path string) (*SOUL, error) {
 	
 	lines := strings.Split(content, "\n")
 	var currentSection string
-	var currentValues []string
 	
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
