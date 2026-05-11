@@ -381,3 +381,150 @@ templates := ListTemplates()
   "wait": true
 }
 ```
+
+## Profile 多实例支持
+
+支持多个完全隔离的配置实例，每个实例有独立的配置、密钥、记忆、会话等。
+
+### 目录结构
+```
+~/.go-magic/
+├── config.yaml          # 默认配置
+├── .env                 # 默认密钥
+├── skills/              # 默认技能
+├── sessions/            # 默认会话
+├── profiles/
+│   ├── default/         # 默认配置
+│   ├── work/            # 工作配置
+│   └── dev/             # 开发配置
+```
+
+### 配置示例
+```yaml
+# ~/.go-magic/profiles/work/config.yaml
+provider:
+  name: deepseek
+  api_key: ${DEEPSEEK_API_KEY}
+  
+memory:
+  enabled: true
+  max_entries: 1000
+```
+
+### 环境变量
+```bash
+export GO_MAGIC_HOME=~/.go-magic
+export GO_MAGIC_PROFILE=work  # 使用 work 配置
+```
+
+### CLI 命令
+```bash
+magic profile list           # 列出所有配置
+magic profile create dev     # 创建新配置
+magic profile switch prod    # 切换到 prod 配置
+magic profile delete dev     # 删除配置
+magic profile export work    # 导出配置
+magic profile import work.tar.gz  # 导入配置
+```
+
+## MCP Server
+
+go-magic 可以作为 MCP Server 被其他 MCP 客户端（如 Claude Code、Cursor）使用。
+
+### 启动 MCP Server
+```bash
+magic mcp serve
+```
+
+### MCP Client 配置
+在 Claude Code 的 `~/.claude/claude_desktop_config.json` 中添加：
+```json
+{
+  "mcpServers": {
+    "go-magic": {
+      "command": "go-magic",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+### 可用工具
+| 工具 | 描述 |
+|------|------|
+| conversations_list | 列出所有会话 |
+| conversation_get | 获取会话详情 |
+| messages_read | 读取消息历史 |
+| messages_send | 发送消息 |
+| events_poll | 轮询新事件 |
+| channels_list | 列出可用频道 |
+
+### 配置示例
+```yaml
+mcp:
+  enabled: true
+  port: 8765
+  auth:
+    enabled: true
+    api_key: ${MCP_API_KEY}
+```
+
+## Dashboard UI
+
+Web 管理界面，用于管理会话、配置、技能、日志等。
+
+### 快速启动
+```bash
+# 安装
+npm install -g go-magic-web-ui
+
+# 启动
+go-magic-web-ui start
+# 或指定端口
+go-magic-web-ui start --port 9000
+```
+
+### Docker 部署
+```yaml
+version: '3.8'
+services:
+  go-magic:
+    image: go-magic:latest
+    ports:
+      - "8642:8642"
+  
+  web-ui:
+    image: go-magic-web-ui:latest
+    ports:
+      - "8648:8648"
+    environment:
+      - UPSTREAM=http://go-magic:8642
+```
+
+### 功能特性
+- **AI 聊天** - 实时流式响应、多会话管理、Markdown 渲染
+- **会话管理** - 创建、重命名、删除、按平台分组
+- **工具集配置** - 按需启用/禁用工具集
+- **技能管理** - 浏览、安装、查看技能详情
+- **配置管理** - Provider、Display、Agent 设置
+- **日志查看** - 实时日志、筛选、搜索
+- **Profile 管理** - 多实例配置切换
+
+### API 端点
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/sessions` | GET/POST | 会话列表/创建 |
+| `/api/sessions/:id` | GET/DELETE | 会话详情/删除 |
+| `/api/toolsets` | GET | 工具集列表 |
+| `/api/skills` | GET | 技能列表 |
+| `/api/config` | GET/PUT | 配置读写 |
+| `/api/logs` | GET | 日志查询 |
+| `/api/health` | GET | 健康检查 |
+
+### 开发
+```bash
+cd web
+npm install
+npm run dev    # 开发模式
+npm run build # 构建
+```
