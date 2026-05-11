@@ -143,19 +143,24 @@ func InitializeDefaultToolsets() {
 		Includes:    []string{},
 	})
 
-	// Terminal execution
+	// Terminal execution (local, docker, ssh backends)
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "terminal",
-		Description: "Terminal/command execution tools",
-		Tools:       []string{"execute_command"},
+		Description: "Terminal/command execution with multiple backends (local, docker, ssh)",
+		Tools:       []string{"execute_command", "terminal", "process"},
 		Includes:    []string{},
 	})
 
 	// Browser automation
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "browser",
-		Description: "Browser automation for web interaction",
-		Tools:       []string{"web_fetch", "web_select", "web_search"},
+		Description: "Browser automation for web interaction (navigate, click, type, scroll, snapshot, vision)",
+		Tools: []string{
+			"browser_navigate", "browser_snapshot", "browser_click",
+			"browser_type", "browser_scroll", "browser_back",
+			"browser_get_images", "browser_console",
+			"web_fetch", "web_select", "web_search",
+		},
 		Includes:    []string{},
 	})
 

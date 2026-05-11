@@ -53,17 +53,86 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 | 工具集 | 工具 | 描述 |
 |--------|------|------|
 | **web** | web_search, web_extract | Web 搜索和内容提取 |
-| **terminal** | execute_command | 终端命令执行 |
+| **terminal** | execute_command, terminal, process | 终端命令执行（多后端） |
 | **file** | read_file, write_file, file_edit, list_files, search_in_files | 文件操作 |
-| **browser** | web_fetch, web_select | 轻量级浏览器工具 |
+| **browser** | browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_back, browser_get_images, browser_console | 浏览器自动化 |
 | **memory** | memory_store, memory_recall | 持久化记忆 |
 | **todo** | todo | 任务规划 |
 | **session** | session_search | 会话搜索 |
-| **skills** | skill_list, skill_invoke, skill_info | 技能管理 |
+| **skills** | skill_list, skill_view, skill_manage, skill_create, skill_delete | 技能管理 |
 | **cron** | cronjob | 定时任务 |
 | **delegation** | delegate_task, poll_task, list_tasks, cancel_task | 子代理委托 |
 | **utility** | json, yaml, string, hash, uuid, random, time, math, csv, env, system_info | 实用工具 |
 | **mcp** | mcp_* | MCP 服务器工具 |
+
+## 终端后端系统 (Terminal Backends)
+
+支持多种执行后端，用于安全隔离的终端操作。
+
+### 支持的后端
+| 后端 | 描述 | 使用场景 |
+|------|------|----------|
+| **local** | 本地执行（默认） | 信任的本地操作 |
+| **docker** | Docker 容器隔离 | 安全隔离、跨平台 |
+| **ssh** | 远程服务器执行 | 远程操作、沙箱隔离 |
+
+### Docker 后端配置
+```yaml
+terminal:
+  backend: docker
+  docker_image: golang:1.25-alpine
+  container_memory: 512m
+  container_cpu: 1.0
+```
+
+### SSH 后端配置
+```yaml
+terminal:
+  backend: ssh
+  ssh_host: my-server.example.com
+  ssh_user: myuser
+  ssh_key: ~/.ssh/id_rsa
+```
+
+### 后端管理器
+```go
+// 创建后端管理器
+manager := NewBackendManager()
+
+// 列出可用后端
+backends := manager.List()
+
+// 执行命令
+result, _ := manager.Execute(ctx, "docker", "ls -la", "/workspace", 30*time.Second)
+```
+
+## 浏览器自动化工具
+
+增强的浏览器自动化工具集，支持页面导航、元素操作、内容提取等。
+
+### 工具列表
+| 工具 | 描述 |
+|------|------|
+| browser_navigate | 导航到 URL，获取页面内容 |
+| browser_snapshot | 获取页面快照（标题、链接、表单等） |
+| browser_click | 点击页面元素 |
+| browser_type | 输入文本到输入框 |
+| browser_scroll | 滚动页面 |
+| browser_back | 返回上一页 |
+| browser_get_images | 提取页面图片 URL |
+| browser_console | 获取控制台消息（需要 JS） |
+
+### 使用示例
+```json
+// 导航到页面
+{"tool": "browser_navigate", "args": {"url": "https://example.com"}}
+
+// 获取页面快照
+{"tool": "browser_snapshot", "args": {"url": "https://example.com", "selector": "article"}}
+
+// 提取所有图片
+{"tool": "browser_get_images", "args": {"url": "https://example.com"}}
+```
 
 ### 工具集管理
 ```go

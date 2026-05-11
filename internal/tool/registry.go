@@ -94,8 +94,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(&WebSearchTool{})
 	r.Register(&WebExtractTool{})
 
-	// Command execution
+	// Command execution with multiple backends (local, docker, ssh)
 	r.Register(NewSecureExecuteCommandTool(workDir))
+	
+	// Enhanced terminal tool with backend support
+	RegisterTerminalTools(r)
 
 	// Code execution moved to plugins (python-runner, node-runner)
 	// Use: magic plugin install python-runner / magic plugin install node-runner
@@ -131,10 +134,12 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 
-	// Browser tools - using lightweight goquery-based implementation
-	// (rod-based tools disabled due to browser binary requirements)
+	// Browser tools - lightweight goquery-based + enhanced browser automation
 	r.Register(NewWebFetchTool())
 	r.Register(NewWebSelectTool())
+	
+	// Enhanced browser tools (navigate, snapshot, click, type, scroll, etc.)
+	RegisterBrowserTools(r)
 
 	// Utility tools
 	r.Register(NewJSONTool())
