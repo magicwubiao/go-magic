@@ -28,3 +28,16 @@ Thumbs.db
 # Temp
 *.tmp
 *.log
+
+# Build outputs
+dist/
+build/
+output/
+*.wav
+*.mp3
+output.wav
+output.mp3
+*.png
+*.jpg
+*.jpeg
+.coze
