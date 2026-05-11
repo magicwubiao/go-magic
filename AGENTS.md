@@ -791,19 +791,86 @@ magic i18n translate <key>     # 翻译指定 key
 ### CLI 命令
 ```bash
 magic plugin list              # 列出已加载插件
+magic plugin search <query>    # 搜索插件
+magic plugin install <id>      # 安装插件
+magic plugin uninstall <id>    # 卸载插件
+magic plugin enable <id>       # 启用插件
+magic plugin disable <id>      # 禁用插件
+magic plugin reload <id>       # 热重载插件
+magic plugin update [id]       # 更新插件
+magic plugin info <id>         # 查看插件详情
 magic plugin discover          # 发现可用插件
-magic plugin load <path>       # 加载插件
-magic plugin unload <name>     # 卸载插件
-magic plugin reload <name>     # 热重载插件
+magic plugin check            # 检查插件更新
 ```
+
+### 插件类型
+| 类型 | 描述 | 示例 |
+|------|------|------|
+| **script** | Shell 脚本插件 | Python、Bash、PowerShell |
+| **binary** | 二进制可执行插件 | Go、C++、Rust 编译产物 |
+| **http** | HTTP API 插件 | REST API 服务 |
+| **native** | 原生 Go 插件 | 编译成共享库 |
 
 ### 插件结构
 ```
 ~/.magic/plugins/
-└── my-plugin/
-    ├── manifest.json     # 插件元数据
-    ├── plugin.go         # 插件代码
-    └── README.md          # 文档
+├── manifest.json     # 插件元数据
+├── plugin.go         # 插件代码（script 类型）
+├── plugin.sh         # Shell 脚本（script 类型）
+└── README.md         # 文档
+```
+
+### manifest.json 格式
+```json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "author": "Author Name",
+  "description": "Plugin description",
+  "category": "utilities",
+  "tags": ["tool", "utility"],
+  "type": "script",
+  "entry": "plugin.sh",
+  "permissions": ["network", "filesystem"],
+  "hooks": ["pre_agent", "post_agent"],
+  "commands": [
+    {
+      "name": "mycmd",
+      "description": "My command"
+    }
+  ]
+}
+```
+
+### 插件沙箱隔离
+插件在受限环境中运行，支持多种隔离级别：
+
+```go
+// 沙箱配置
+sandbox := plugin.NewSandbox(&plugin.SandboxConfig{
+    AllowedPaths:    []string{"/tmp", "/workspace"},
+    DeniedPaths:     []string{"/etc", "/root"},
+    NetworkAccess:   false,       // 禁用网络访问
+    EnvWhitelist:    []string{"PATH", "HOME"},
+    MaxMemoryMB:     512,
+    MaxCPUPercent:   50,
+    Timeout:         30 * time.Second,
+})
+```
+
+### 插件仓库
+支持多个插件源：
+
+```go
+// GitHub releases
+repo := plugin.NewGitHubRepository("owner/repo")
+
+// 本地目录
+repo := plugin.NewLocalRepository("/path/to/plugins")
+
+// GitHub API 搜索
+results, _ := repo.Search(context.Background(), "keyword")
 ```
 
 ## Context Files (项目上下文)

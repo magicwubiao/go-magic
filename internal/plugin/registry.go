@@ -163,6 +163,18 @@ func (r *Registry) Get(id string) (Plugin, bool) {
 	return entry.Plugin, true
 }
 
+// GetEntry retrieves a plugin entry by ID
+func (r *Registry) GetEntry(id string) (*PluginEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, exists := r.plugins[id]
+	if !exists {
+		return nil, false
+	}
+	return entry, true
+}
+
 // GetInfo retrieves plugin info by ID
 func (r *Registry) GetInfo(id string) (*PluginInfo, bool) {
 	r.mu.RLock()
@@ -198,6 +210,18 @@ func (r *Registry) ListInfos() []*PluginInfo {
 	}
 	SortPluginInfos(infos)
 	return infos
+}
+
+// ListEntries returns all registered plugin entries
+func (r *Registry) ListEntries() []*PluginEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entries := make([]*PluginEntry, 0, len(r.plugins))
+	for _, entry := range r.plugins {
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // ListByCategory returns plugins in a category

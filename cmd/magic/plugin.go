@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"sort"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -13,216 +15,483 @@ import (
 
 var pluginCmd = &cobra.Command{
 	Use:   "plugin",
-	Short: "Manage plugins",
-	Long: `Manage magic plugins.
-	
-Plugins extend magic with new tools and capabilities.
-Plugins are loaded from ~/.magic/plugins/
-	
-Examples:
-  magic plugin list
-  magic plugin discover
-  magic plugin load <path>
-  magic plugin unload <name>
-  magic plugin reload <name>`,
+	Short: "Plugin management for magic",
+	Long:  `Discover, install, and manage plugins for magic Agent.`,
 }
 
 var pluginListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List loaded plugins",
+	Short: "List all plugins",
 	Run:   runPluginList,
+}
+
+var pluginSearchCmd = &cobra.Command{
+	Use:   "search <query>",
+	Short: "Search for plugins in the marketplace",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginSearch,
+}
+
+var pluginInstallCmd = &cobra.Command{
+	Use:   "install <plugin-id>",
+	Short: "Install a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginInstall,
+}
+
+var pluginUninstallCmd = &cobra.Command{
+	Use:   "uninstall <plugin-id>",
+	Short: "Uninstall a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginUninstall,
+}
+
+var pluginEnableCmd = &cobra.Command{
+	Use:   "enable <plugin-id>",
+	Short: "Enable a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginEnable,
+}
+
+var pluginDisableCmd = &cobra.Command{
+	Use:   "disable <plugin-id>",
+	Short: "Disable a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginDisable,
+}
+
+var pluginReloadCmd = &cobra.Command{
+	Use:   "reload <plugin-id>",
+	Short: "Reload a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginReload,
+}
+
+var pluginUpdateCmd = &cobra.Command{
+	Use:   "update [plugin-id]",
+	Short: "Update plugin(s) from the marketplace",
+	Run:   runPluginUpdate,
+}
+
+var pluginInfoCmd = &cobra.Command{
+	Use:   "info <plugin-id>",
+	Short: "Show detailed information about a plugin",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runPluginInfo,
 }
 
 var pluginDiscoverCmd = &cobra.Command{
 	Use:   "discover",
-	Short: "Discover available plugins",
+	Short: "Discover available plugins from the marketplace",
 	Run:   runPluginDiscover,
 }
 
-var pluginLoadCmd = &cobra.Command{
-	Use:   "load <path>",
-	Short: "Load a plugin from path",
-	Args:  cobra.ExactArgs(1),
-	Run:   runPluginLoad,
+var pluginCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check for plugin updates",
+	Run:   runPluginCheck,
 }
 
-var pluginUnloadCmd = &cobra.Command{
-	Use:   "unload <name>",
-	Short: "Unload a plugin",
-	Args:  cobra.ExactArgs(1),
-	Run:   runPluginUnload,
-}
-
-var pluginReloadCmd = &cobra.Command{
-	Use:   "reload <name>",
-	Short: "Hot-reload a plugin without restarting",
-	Args:  cobra.ExactArgs(1),
-	Run:   runPluginReload,
-}
+var (
+	pluginCategory string
+	pluginJSON     bool
+	pluginAll      bool
+)
 
 func init() {
-	pluginCmd.AddCommand(pluginListCmd)
-	pluginCmd.AddCommand(pluginDiscoverCmd)
-	pluginCmd.AddCommand(pluginLoadCmd)
-	pluginCmd.AddCommand(pluginUnloadCmd)
-	pluginCmd.AddCommand(pluginReloadCmd)
+	// List flags
+	pluginListCmd.Flags().StringVar(&pluginCategory, "category", "", "Filter by category")
+	pluginListCmd.Flags().BoolVar(&pluginJSON, "json", false, "Output as JSON")
+
+	// Update flags
+	pluginUpdateCmd.Flags().BoolVar(&pluginAll, "all", false, "Update all plugins")
+
 	rootCmd.AddCommand(pluginCmd)
+	pluginCmd.AddCommand(pluginListCmd)
+	pluginCmd.AddCommand(pluginSearchCmd)
+	pluginCmd.AddCommand(pluginInstallCmd)
+	pluginCmd.AddCommand(pluginUninstallCmd)
+	pluginCmd.AddCommand(pluginEnableCmd)
+	pluginCmd.AddCommand(pluginDisableCmd)
+	pluginCmd.AddCommand(pluginReloadCmd)
+	pluginCmd.AddCommand(pluginUpdateCmd)
+	pluginCmd.AddCommand(pluginInfoCmd)
+	pluginCmd.AddCommand(pluginDiscoverCmd)
+	pluginCmd.AddCommand(pluginCheckCmd)
 }
 
-func newPluginLoader() *plugin.Loader {
-	registry := plugin.NewRegistry()
-	cfg := plugin.DefaultLoaderConfig()
-	return plugin.NewLoader(registry, cfg)
+func getPluginManager() *plugin.Manager {
+	mgr, err := plugin.NewManager(nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create plugin manager: %v\n", err)
+		os.Exit(1)
+	}
+	return mgr
 }
 
 func runPluginList(cmd *cobra.Command, args []string) {
-	registry := plugin.NewRegistry()
-	manifests := registry.List()
-	if len(manifests) == 0 {
-		fmt.Println("No plugins loaded.")
-		fmt.Println("\nUse 'magic plugin discover' to find available plugins.")
+	mgr := getPluginManager()
+
+	if err := mgr.LoadAll(cmd.Context()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load some plugins: %v\n", err)
+	}
+
+	var entries []*plugin.PluginEntry
+	if pluginCategory != "" {
+		entries = mgr.ListByCategory(pluginCategory)
+	} else {
+		entries = mgr.List()
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No plugins found")
 		return
 	}
 
-	fmt.Println("Loaded Plugins:")
-	fmt.Println("==============")
-	for _, p := range manifests {
-		fmt.Printf("  %s (v%s) - %s\n", p.Name, p.Version, p.Description)
-	}
-}
-
-func runPluginDiscover(cmd *cobra.Command, args []string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-	pluginDir := filepath.Join(home, ".magic", "plugins")
-
-	fmt.Println("Discovering plugins...")
-	fmt.Printf("Plugin directory: %s\n\n", pluginDir)
-
-	// Ensure directory exists
-	if err := os.MkdirAll(pluginDir, 0755); err != nil {
-		fmt.Printf("Error: Cannot access plugin directory: %v\n", err)
-		return
-	}
-
-	// Read directory contents
-	entries, err := os.ReadDir(pluginDir)
-	if err != nil {
-		fmt.Printf("Error reading plugin directory: %v\n", err)
+	if pluginJSON {
+		// Convert to JSON-serializable format
+		type PluginInfoJSON struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Version     string   `json:"version"`
+			Description string   `json:"description"`
+			Category    string   `json:"category"`
+			Tags        []string `json:"tags"`
+			State       string   `json:"state"`
+		}
+		var jsonEntries []PluginInfoJSON
+		for _, e := range entries {
+			jsonEntries = append(jsonEntries, PluginInfoJSON{
+				ID:          e.Manifest.ID,
+				Name:        e.Manifest.Name,
+				Version:     e.Manifest.Version,
+				Description: e.Manifest.Description,
+				Category:    e.Manifest.Category,
+				Tags:        e.Manifest.Tags,
+				State:       string(e.State),
+			})
+		}
+		output, _ := json.MarshalIndent(jsonEntries, "", "  ")
+		fmt.Println(string(output))
 		return
 	}
 
-	var discovered []PluginDiscovery
+	// Sort by name
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Manifest.Name < entries[j].Manifest.Name
+	})
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "NAME\tVERSION\tSTATE\tCATEGORY\tDESCRIPTION\n")
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+		stateStr := getStateString(entry.State)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			entry.Manifest.Name,
+			entry.Manifest.Version,
+			stateStr,
+			entry.Manifest.Category,
+			truncateStr(entry.Manifest.Description, 50),
+		)
+	}
+	w.Flush()
 
-		pluginPath := filepath.Join(pluginDir, entry.Name())
-		manifestPath := filepath.Join(pluginPath, "manifest.json")
+	fmt.Fprintf(os.Stderr, "\n%d plugin(s)\n", len(entries))
+}
 
-		// Try to load manifest
-		data, err := os.ReadFile(manifestPath)
-		if err != nil {
-			// Try .yaml extension
-			manifestPath = filepath.Join(pluginPath, "manifest.yaml")
-			data, err = os.ReadFile(manifestPath)
-			if err != nil {
-				fmt.Printf("  ⚠ %s: No manifest found\n", entry.Name())
-				continue
-			}
-		}
+func runPluginSearch(cmd *cobra.Command, args []string) {
+	query := strings.Join(args, " ")
+	mgr := getPluginManager()
 
-		var manifest plugin.PluginManifest
-		if err := json.Unmarshal(data, &manifest); err != nil {
-			fmt.Printf("  ⚠ %s: Invalid manifest\n", entry.Name())
-			continue
-		}
-
-		discovered = append(discovered, PluginDiscovery{
-			Name:        manifest.Name,
-			Version:     manifest.Version,
-			Description: manifest.Description,
-			Author:      manifest.Author,
-			Path:        pluginPath,
-			Type:        string(manifest.Type),
-		})
+	results, err := mgr.Search(cmd.Context(), query)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Search failed: %v\n", err)
+		os.Exit(1)
 	}
 
-	if len(discovered) == 0 {
-		fmt.Println("No plugins discovered.")
-		fmt.Println("\nTo add plugins:")
-		fmt.Println("1. Create a directory in ~/.magic/plugins/")
-		fmt.Println("2. Add a manifest.json with plugin metadata")
-		fmt.Println("3. Add your plugin code")
+	if len(results) == 0 {
+		fmt.Printf("No plugins found matching '%s'\n", query)
 		return
 	}
 
-	fmt.Printf("Discovered %d plugin(s):\n\n", len(discovered))
-	fmt.Println("Available Plugins:")
-	fmt.Println("=================")
-	for _, p := range discovered {
-		fmt.Printf("  📦 %s (v%s)\n", p.Name, p.Version)
-		fmt.Printf("     Path: %s\n", p.Path)
-		fmt.Printf("     Type: %s\n", p.Type)
-		if p.Description != "" {
-			fmt.Printf("     Description: %s\n", p.Description)
-		}
-		if p.Author != "" {
-			fmt.Printf("     Author: %s\n", p.Author)
-		}
-		fmt.Println()
+	fmt.Printf("Found %d plugin(s):\n\n", len(results))
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "NAME\tVERSION\tCATEGORY\tTAGS\n")
+
+	for _, p := range results {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			p.Name,
+			p.Version,
+			p.Category,
+			strings.Join(p.Tags, ", "),
+		)
 	}
+	w.Flush()
 
-	fmt.Println("To load a plugin: magic plugin load <path>")
+	fmt.Fprintf(os.Stderr, "\nInstall with: magic plugin install <plugin-id>\n")
 }
 
-// PluginDiscovery represents a discovered plugin
-type PluginDiscovery struct {
-	Name        string
-	Version     string
-	Description string
-	Author      string
-	Path        string
-	Type        string
-}
+func runPluginInstall(cmd *cobra.Command, args []string) {
+	pluginID := args[0]
+	mgr := getPluginManager()
 
-func runPluginLoad(cmd *cobra.Command, args []string) {
-	path := args[0]
-	loader := newPluginLoader()
+	fmt.Printf("Installing plugin: %s\n", pluginID)
 
-	if err := loader.Load(path); err != nil {
-		fmt.Printf("Failed to load plugin: %v\n", err)
+	if err := mgr.Install(cmd.Context(), pluginID); err != nil {
+		fmt.Fprintf(os.Stderr, "Installation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Plugin loaded from: %s\n", path)
+	fmt.Println("Plugin installed successfully")
 }
 
-func runPluginUnload(cmd *cobra.Command, args []string) {
-	name := args[0]
-	loader := newPluginLoader()
+func runPluginUninstall(cmd *cobra.Command, args []string) {
+	pluginID := args[0]
+	mgr := getPluginManager()
 
-	if err := loader.Unload(name); err != nil {
-		fmt.Printf("Failed to unload plugin: %v\n", err)
+	if !confirm(fmt.Sprintf("Uninstall plugin '%s'?", pluginID)) {
+		return
+	}
+
+	if err := mgr.Uninstall(pluginID); err != nil {
+		fmt.Fprintf(os.Stderr, "Uninstallation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Plugin '%s' unloaded.\n", name)
+	fmt.Println("Plugin uninstalled successfully")
+}
+
+func runPluginEnable(cmd *cobra.Command, args []string) {
+	pluginID := args[0]
+	mgr := getPluginManager()
+
+	if err := mgr.Enable(pluginID); err != nil {
+		fmt.Fprintf(os.Stderr, "Enable failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Plugin enabled")
+}
+
+func runPluginDisable(cmd *cobra.Command, args []string) {
+	pluginID := args[0]
+	mgr := getPluginManager()
+
+	if err := mgr.Disable(pluginID); err != nil {
+		fmt.Fprintf(os.Stderr, "Disable failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Plugin disabled")
 }
 
 func runPluginReload(cmd *cobra.Command, args []string) {
-	name := args[0]
-	loader := newPluginLoader()
+	pluginID := args[0]
+	mgr := getPluginManager()
 
-	if err := loader.HotReload(name); err != nil {
-		fmt.Printf("Failed to reload plugin: %v\n", err)
+	fmt.Printf("Reloading plugin: %s\n", pluginID)
+
+	if err := mgr.Reload(cmd.Context(), pluginID); err != nil {
+		fmt.Fprintf(os.Stderr, "Reload failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Plugin '%s' reloaded.\n", name)
+	fmt.Println("Plugin reloaded successfully")
+}
+
+func runPluginUpdate(cmd *cobra.Command, args []string) {
+	mgr := getPluginManager()
+
+	var updates []plugin.UpdateInfo
+	var err error
+
+	if pluginAll || len(args) == 0 {
+		updates, err = mgr.CheckUpdates()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Check updates failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(updates) == 0 {
+			fmt.Println("All plugins are up to date")
+			return
+		}
+
+		fmt.Printf("Found %d update(s):\n\n", len(updates))
+		for _, u := range updates {
+			fmt.Printf("  %s: %s -> %s\n", u.PluginID, u.CurrentVer, u.NewVersion)
+		}
+		fmt.Println()
+
+		if !confirm("Update all plugins?") {
+			return
+		}
+
+		for _, u := range updates {
+			fmt.Printf("Updating %s...\n", u.PluginID)
+			if err := mgr.Update(cmd.Context(), u.PluginID); err != nil {
+				fmt.Printf("  Failed: %v\n", err)
+			} else {
+				fmt.Printf("  Updated to %s\n", u.NewVersion)
+			}
+		}
+	} else {
+		pluginID := args[0]
+		fmt.Printf("Updating plugin: %s\n", pluginID)
+
+		if err := mgr.Update(cmd.Context(), pluginID); err != nil {
+			fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Plugin updated successfully")
+	}
+}
+
+func runPluginInfo(cmd *cobra.Command, args []string) {
+	pluginID := args[0]
+	mgr := getPluginManager()
+
+	entry, ok := mgr.GetEntry(pluginID)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Plugin not found: %s\n", pluginID)
+		os.Exit(1)
+	}
+
+	m := entry.Manifest
+
+	fmt.Println()
+	fmt.Println("===", m.Name, "===")
+	fmt.Printf("ID:         %s\n", m.ID)
+	fmt.Printf("Version:    %s\n", m.Version)
+	fmt.Printf("Author:     %s\n", m.Author)
+	fmt.Printf("License:    %s\n", m.License)
+	fmt.Printf("Category:   %s\n", m.Category)
+	fmt.Printf("State:      %s\n", entry.State)
+	fmt.Printf("Type:       %s\n", m.Type)
+	fmt.Println()
+	fmt.Printf("Description:\n%s\n", m.Description)
+	if m.LongDesc != "" {
+		fmt.Printf("\nLong Description:\n%s\n", m.LongDesc)
+	}
+	fmt.Printf("\nTags:       %s\n", strings.Join(m.Tags, ", "))
+
+	if len(m.Commands) > 0 {
+		fmt.Println("\nCommands:")
+		for _, c := range m.Commands {
+			fmt.Printf("  /%s - %s\n", c.Name, c.Description)
+		}
+	}
+
+	if len(m.Hooks) > 0 {
+		fmt.Printf("\nHooks:      %s\n", strings.Join(m.Hooks, ", "))
+	}
+
+	if len(m.Permissions) > 0 {
+		fmt.Printf("\nPermissions: %s\n", strings.Join(m.Permissions, ", "))
+	}
+
+	fmt.Println()
+}
+
+func runPluginDiscover(cmd *cobra.Command, args []string) {
+	mgr := getPluginManager()
+
+	fmt.Println("Discovering plugins...")
+
+	// Show categories
+	categories := []string{
+		"utilities",
+		"productivity",
+		"development",
+		"ai",
+		"automation",
+		"integration",
+		"data",
+		"security",
+	}
+
+	fmt.Println("\nAvailable Categories:")
+	for _, cat := range categories {
+		fmt.Printf("  - %s\n", cat)
+	}
+
+	fmt.Println("\nPopular Plugins:")
+
+	// Search for popular plugins
+	popular := []string{"code", "web", "data", "api"}
+	for _, q := range popular {
+		results, err := mgr.Search(cmd.Context(), q)
+		if err != nil {
+			continue
+		}
+		if len(results) > 0 {
+			count := len(results)
+			if count > 3 {
+				count = 3
+			}
+			fmt.Printf("\n  [%s]:\n", q)
+			for i := 0; i < count; i++ {
+				p := results[i]
+				fmt.Printf("    %s - %s\n", p.Name, truncateStr(p.Description, 40))
+			}
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Search for specific plugins:")
+	fmt.Println("  magic plugin search <query>")
+	fmt.Println()
+	fmt.Println("Install a plugin:")
+	fmt.Println("  magic plugin install <plugin-id>")
+	fmt.Println()
+}
+
+func runPluginCheck(cmd *cobra.Command, args []string) {
+	mgr := getPluginManager()
+
+	fmt.Println("Checking for updates...")
+
+	updates, err := mgr.CheckUpdates()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Check failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(updates) == 0 {
+		fmt.Println("All plugins are up to date")
+		return
+	}
+
+	fmt.Printf("Found %d update(s):\n\n", len(updates))
+	for _, u := range updates {
+		fmt.Printf("  %s: %s -> %s\n", u.PluginID, u.CurrentVer, u.NewVersion)
+	}
+	fmt.Println()
+	fmt.Println("Update with: magic plugin update --all")
+}
+
+// Helper functions
+
+func getStateString(state plugin.PluginState) string {
+	switch state {
+	case plugin.StateEnabled:
+		return "enabled"
+	case plugin.StateDisabled:
+		return "disabled"
+	case plugin.StateError:
+		return "error"
+	default:
+		return string(state)
+	}
+}
+
+
+
+func confirm(prompt string) bool {
+	fmt.Printf("%s [y/N]: ", prompt)
+	var answer string
+	fmt.Scanln(&answer)
+	return strings.ToLower(answer) == "y"
 }
