@@ -33,7 +33,7 @@
                 <span class="session-name">{{ session.name }}</span>
                 <n-dropdown
                   :options="sessionOptions"
-                  @select="(key) => handleSessionAction(key, session)"
+                  @select="(key: string) => handleSessionAction(key, session)"
                 >
                   <n-button quaternary circle size="small">
                     <template #icon>
@@ -62,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import { Add, Search, EllipsisVertical, Trash, Refresh } from '@vicons/ionicons5'
@@ -84,12 +84,16 @@ const filteredSessions = computed(() => {
   )
 })
 
-const sessionOptions = [
+interface DropdownOption {
+  label: string
+  key: string
+  icon?: () => ReturnType<typeof h>
+}
+
+const sessionOptions: DropdownOption[] = [
   { label: 'Rename', key: 'rename', icon: () => h(NIcon, null, { default: () => h(Refresh) }) },
   { label: 'Delete', key: 'delete', icon: () => h(NIcon, null, { default: () => h(Trash) }) },
 ]
-
-import { h } from 'vue'
 
 function formatTime(timestamp: string): string {
   return new Date(timestamp).toLocaleString()

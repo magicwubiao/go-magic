@@ -524,7 +524,7 @@ services:
 ### 开发
 ```bash
 cd web
-npm install
-npm run dev    # 开发模式
-npm run build # 构建
+pnpm install
+pnpm dev     # 开发模式
+pnpm build   # 构建
 ```

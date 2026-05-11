@@ -9,7 +9,7 @@
       >
         <div class="message-avatar">
           <n-icon
-            :component="message.role === 'user' ? Person : Bot"
+            :component="message.role === 'user' ? Person : Construct"
             size="24"
           />
         </div>
@@ -47,7 +47,7 @@
 
       <div v-if="isLoading" class="message message-assistant">
         <div class="message-avatar">
-          <n-icon :component="Bot" size="24" />
+          <n-icon :component="Construct" size="24" />
         </div>
         <div class="message-content">
           <n-spin size="small" />
@@ -90,7 +90,7 @@ import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { NIcon } from 'naive-ui'
-import { Person, Bot, Construct, Trash, Attach } from '@vicons/ionicons5'
+import { Person, Boat, Construct, Trash, Attach } from '@vicons/ionicons5'
 import type { Message } from '@/types'
 
 const messagesRef = ref<HTMLElement>()
@@ -100,11 +100,17 @@ const isLoading = ref(false)
 const expandedTools = ref(new Set<string>())
 const showAttach = ref(false)
 
-// Configure marked
-marked.setOptions({
-  highlight: (code: string) => {
-    return hljs.highlightAuto(code).value
-  },
+// Configure marked with highlight.js
+marked.use({
+  renderer: {
+    code({ text, lang }: { text: string; lang?: string }) {
+      const validLanguage = lang && hljs.getLanguage(lang)
+      const highlighted = validLanguage
+        ? hljs.highlight(text, { language: lang }).value
+        : hljs.highlightAuto(text).value
+      return `<pre><code class="hljs ${lang || ''}">${highlighted}</code></pre>`
+    }
+  }
 })
 
 function renderMarkdown(content: string): string {

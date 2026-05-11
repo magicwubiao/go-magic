@@ -12,7 +12,7 @@
       @expand="collapsed = false"
     >
       <div class="logo" :class="{ collapsed }">
-        <n-icon :component="MagicWand" size="24" />
+        <n-icon :component="Sparkles" size="24" />
         <span v-if="!collapsed">Go Magic</span>
       </div>
 
@@ -38,7 +38,7 @@
             <n-button quaternary circle @click="showNotifications = true">
               <template #icon>
                 <n-icon :component="Notifications" />
-              </n-template>
+              </template>
             </n-button>
           </n-badge>
           <n-button quaternary @click="showProfile = true">
@@ -59,6 +59,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { h } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   Chatbubbles,
@@ -66,13 +67,13 @@ import {
   Construct,
   Book,
   Time,
-  Platforms,
+  Grid,
   StatsChart,
   Settings,
   DocumentText,
-  MagicWand,
   Notifications,
   Person,
+  Sparkles,
 } from '@vicons/ionicons5'
 import type { MenuOption } from 'naive-ui'
 
@@ -112,7 +113,7 @@ const menuOptions = computed<MenuOption[]>(() => [
   {
     label: () => 'Platforms',
     key: 'platforms',
-    icon: () => h(NIcon, null, { default: () => h(Platforms) }),
+    icon: () => h(NIcon, null, { default: () => h(Grid) }),
   },
   {
     label: () => 'Analytics',
@@ -130,8 +131,6 @@ const menuOptions = computed<MenuOption[]>(() => [
     icon: () => h(NIcon, null, { default: () => h(Settings) }),
   },
 ])
-
-import { h } from 'vue'
 </script>
 
 <style lang="scss" scoped>

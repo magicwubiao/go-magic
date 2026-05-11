@@ -75,10 +75,15 @@ import { Book, Search } from '@vicons/ionicons5'
 import { skillApi } from '@/api'
 import type { Skill } from '@/types'
 
+interface HubSkill extends Skill {
+  source: string
+  installs?: number
+}
+
 const skills = ref<Skill[]>([])
 const showBrowse = ref(false)
 const searchQuery = ref('')
-const hubSkills = ref<Skill[]>([])
+const hubSkills = ref<HubSkill[]>([])
 
 async function loadSkills() {
   try {

@@ -14,7 +14,7 @@
                 </n-space>
                 <n-switch
                   :value="toolset.enabled"
-                  @update:value="(v) => toggleToolset(toolset.name, v)"
+                  @update:value="(v: boolean) => toggleToolset(toolset.name, v)"
                 />
               </n-space>
             </template>
