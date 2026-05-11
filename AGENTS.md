@@ -1104,7 +1104,7 @@ gateway:
 ### 命令行二进制
 
 ```bash
-# 构建 CLI
+# 构建 CLI (当前平台)
 make build
 
 # 多平台交叉编译
@@ -1113,6 +1113,61 @@ make build-all
 # 安装
 make install
 ```
+
+### 多平台支持
+
+go-magic 支持多种操作系统和架构的交叉编译。
+
+#### 支持的平台
+
+| 操作系统 | 架构 | 支持状态 |
+|---------|------|----------|
+| **Linux** | amd64, 386, armv6, arm64, riscv64, ppc64le, s390x | ✅ 完全支持 |
+| **macOS** | amd64, arm64 (Apple Silicon) | ✅ 完全支持 |
+| **Windows** | amd64, 386, arm64 | ✅ 完全支持 |
+| **FreeBSD** | amd64, 386, arm | ✅ 完全支持 |
+| **OpenBSD** | amd64, 386, arm | ✅ 完全支持 |
+| **NetBSD** | amd64, 386, arm | ✅ 完全支持 |
+
+#### 交叉编译脚本
+
+```bash
+# 列出所有支持的平台
+./scripts/build-cross.sh list
+
+# 构建通用平台 (Linux/macOS/Windows amd64+arm64)
+./scripts/build-cross.sh common
+
+# 构建所有平台
+./scripts/build-cross.sh all
+
+# 指定平台构建
+./scripts/build-cross.sh linux-amd64 darwin-arm64 windows-amd64
+
+# 构建并压缩
+./scripts/build-cross.sh all --compress
+
+# 生成校验和
+./scripts/build-cross.sh all --checksum
+```
+
+#### Makefile 跨平台目标
+
+```bash
+make build-all      # 构建所有通用平台
+make build-cross    # 构建所有支持平台
+make build-linux    # 仅构建 Linux
+make build-macos    # 仅构建 macOS
+make build-windows  # 仅构建 Windows
+```
+
+#### GitHub Actions 自动发布
+
+发布 tag 时自动构建并发布：
+- Linux: amd64, 386, armv6, arm64, riscv64, ppc64le, s390x
+- macOS: amd64, arm64
+- Windows: 386, amd64, arm64
+- Docker: linux/amd64, linux/arm64
 
 ### Web Dashboard
 
@@ -1140,7 +1195,45 @@ PORT=9000 docker-compose up -d
 ### 一键安装
 
 ```bash
+# 默认安装 (下载二进制)
 curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
+
+# Homebrew 安装 (macOS/Linux)
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash -s -- --method homebrew
+
+# Docker 安装
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash -s -- --method docker
+
+# APT 安装 (Debian/Ubuntu)
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash -s -- --method apt
+```
+
+#### Windows 安装
+
+**Scoop:**
+```powershell
+scoop bucket add magic https://github.com/magicwubiao/scoop-bucket
+scoop install magic
+```
+
+**PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/windows/install.ps1 | iex
+```
+
+#### macOS Homebrew
+
+```bash
+brew tap magicwubiao/tap
+brew install go-magic
+```
+
+#### Linux APT (Debian/Ubuntu)
+
+```bash
+curl -fsSL https://packages.magicwubiao.com/keys/public.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/magicwubiao.gpg
+echo "deb [signed-by=/etc/apt/trusted.gpg.d/magicwubiao.gpg] https://packages.magicwubiao.com stable main" | sudo tee /etc/apt/sources.list.d/magicwubiao.list
+sudo apt update && sudo apt install -y go-magic
 ```
 
 ### Web 套壳应用
