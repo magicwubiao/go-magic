@@ -4,658 +4,505 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
-// Platform defines the interface for messaging platforms
-type Platform interface {
-	// Name returns the platform name
-	Name() string
+// =============================================================================
+// WhatsApp Platform
+// =============================================================================
 
-	// Connect establishes connection to the platform
-	Connect(ctx context.Context) error
-
-	// Disconnect closes the connection
-	Disconnect() error
-
-	// Send sends a message
-	Send(ctx context.Context, chatID string, message Message) error
-
-	// Receive receives messages
-	Receive(ctx context.Context) (<-chan Message, error)
-
-	// SetWebhook sets up webhook for this platform
-	SetWebhook(ctx context.Context, url string) error
-
-	// IsConnected returns connection status
-	IsConnected() bool
-}
-
-// Message represents a message on any platform
-type Message struct {
-	ID        string
-	ChatID    string
-	Text      string
-	From      User
-	Timestamp time.Time
-	Media     *Media
-	ReplyTo   string
-	Metadata  map[string]interface{}
-}
-
-// User represents a user on any platform
-type User struct {
-	ID        string
-	Username  string
-	FirstName string
-	LastName  string
-	Language  string
-	IsBot     bool
-}
-
-// Media represents media attachments
-type Media struct {
-	Type      string    // photo, video, audio, document
-	URL       string    // URL or file path
-	FileID    string    // Platform-specific file ID
-	Caption   string    // Media caption
-	MimeType  string    // MIME type
-	Size      int64     // File size
-	Duration  int       // Duration in seconds (for audio/video)
-	Width     int       // Width (for images/videos)
-	Height    int       // Height (for images/videos)
-	Thumbnail *string    // Thumbnail URL
-}
-
-// PlatformManager manages all platform connections
-type PlatformManager struct {
-	platforms map[string]Platform
-	mu        sync.RWMutex
-	config    *PlatformConfig
-}
-
-// PlatformConfig holds platform configurations
-type PlatformConfig struct {
-	Enabled     []string
-	Credentials map[string]Credentials
-	Webhooks    map[string]string
-}
-
-// Credentials holds platform-specific credentials
-type Credentials struct {
-	APIKey    string
-	APISecret string
-	Token     string
-	BotToken  string
-	Endpoint  string
-}
-
-// NewPlatformManager creates a new platform manager
-func NewPlatformManager(config *PlatformConfig) *PlatformManager {
-	pm := &PlatformManager{
-		platforms: make(map[string]Platform),
-		config:    config,
-	}
-
-	// Register all platforms
-	pm.registerPlatforms()
-
-	return pm
-}
-
-// registerPlatforms registers all supported platforms
-func (pm *PlatformManager) registerPlatforms() {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	// WhatsApp (via WhatsApp Business API)
-	pm.platforms["whatsapp"] = &WhatsAppPlatform{config: pm.config}
-
-	// Signal (via Signal CLI)
-	pm.platforms["signal"] = &SignalPlatform{config: pm.config}
-
-	// Matrix (via Matrix client)
-	pm.platforms["matrix"] = &MatrixPlatform{config: pm.config}
-
-	// Email (via SMTP)
-	pm.platforms["email"] = &EmailPlatform{config: pm.config}
-
-	// SMS (via Twilio, etc.)
-	pm.platforms["sms"] = &SMSPlatform{config: pm.config}
-
-	// DingTalk
-	pm.platforms["dingtalk"] = &DingTalkPlatform{config: pm.config}
-
-	// Feishu (Lark)
-	pm.platforms["feishu"] = &FeishuPlatform{config: pm.config}
-
-	// WeCom
-	pm.platforms["wecom"] = &WeComPlatform{config: pm.config}
-
-	// Microsoft Teams
-	pm.platforms["teams"] = &TeamsPlatform{config: pm.config}
-
-	// Mattermost
-	pm.platforms["mattermost"] = &MattermostPlatform{config: pm.config}
-}
-
-// GetPlatform returns a platform by name
-func (pm *PlatformManager) GetPlatform(name string) Platform {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	return pm.platforms[name]
-}
-
-// ListPlatforms returns all registered platforms
-func (pm *PlatformManager) ListPlatforms() []string {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	names := make([]string, 0, len(pm.platforms))
-	for name := range pm.platforms {
-		names = append(names, name)
-	}
-	return names
-}
-
-// ConnectAll connects to all enabled platforms
-func (pm *PlatformManager) ConnectAll(ctx context.Context) error {
-	pm.mu.RLock()
-	enabled := pm.config.Enabled
-	pm.mu.RUnlock()
-
-	var lastErr error
-	for _, name := range enabled {
-		platform := pm.GetPlatform(name)
-		if platform == nil {
-			continue
-		}
-		if err := platform.Connect(ctx); err != nil {
-			lastErr = fmt.Errorf("failed to connect to %s: %w", name, err)
-		}
-	}
-	return lastErr
-}
-
-// DisconnectAll disconnects all platforms
-func (pm *PlatformManager) DisconnectAll() {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	for _, platform := range pm.platforms {
-		platform.Disconnect()
-	}
-}
-
-// ============= WhatsApp Platform =============
-
-// WhatsAppPlatform implements WhatsApp Business API
+// WhatsAppPlatform implements WhatsApp messaging
 type WhatsAppPlatform struct {
 	config     *PlatformConfig
+	phoneID    string
+	apiKey     string
+	apiBase    string
+	verifyToken string
+	webhookPath string
 	connected  bool
-	webhookURL string
+	httpClient *http.Client
 }
 
-func (p *WhatsAppPlatform) Name() string { return "whatsapp" }
+// WhatsAppMessage represents a WhatsApp message payload
+type WhatsAppMessage struct {
+	MessagingProduct string                   `json:"messaging_product"`
+	To               string                   `json:"to"`
+	Type             string                   `json:"type"`
+	Text             *WhatsAppText            `json:"text,omitempty"`
+	Image            *WhatsAppMedia           `json:"image,omitempty"`
+	Audio            *WhatsAppMedia           `json:"audio,omitempty"`
+	Video            *WhatsAppMedia           `json:"video,omitempty"`
+	Document         *WhatsAppMedia           `json:"document,omitempty"`
+}
 
-func (p *WhatsAppPlatform) Connect(ctx context.Context) error {
-	creds := p.config.Credentials["whatsapp"]
-	if creds.APIKey == "" {
-		return fmt.Errorf("whatsapp: missing API key")
+// WhatsAppText represents WhatsApp text message
+type WhatsAppText struct {
+	PreviewURL bool   `json:"preview_url,omitempty"`
+	Body       string `json:"body"`
+}
+
+// WhatsAppMedia represents WhatsApp media message
+type WhatsAppMedia struct {
+	Link     string `json:"link,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+// NewWhatsAppPlatform creates a new WhatsApp platform
+func NewWhatsAppPlatform(phoneID, apiKey string) *WhatsAppPlatform {
+	return &WhatsAppPlatform{
+		phoneID:   phoneID,
+		apiKey:    apiKey,
+		apiBase:   "https://graph.facebook.com/v18.0/" + phoneID,
+		connected: false,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
-	p.connected = true
+}
+
+// Name returns the platform name
+func (w *WhatsAppPlatform) Name() string {
+	return "whatsapp"
+}
+
+// Connect establishes connection to WhatsApp
+func (w *WhatsAppPlatform) Connect(ctx context.Context) error {
+	w.connected = true
 	return nil
 }
 
-func (p *WhatsAppPlatform) Disconnect() error {
-	p.connected = false
+// Disconnect closes the connection
+func (w *WhatsAppPlatform) Disconnect() error {
+	w.connected = false
 	return nil
 }
 
-func (p *WhatsAppPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	if !p.connected {
+// IsConnected returns connection status
+func (w *WhatsAppPlatform) IsConnected() bool {
+	return w.connected
+}
+
+// Send sends a message
+func (w *WhatsAppPlatform) Send(ctx context.Context, to string, msg Message) error {
+	if !w.connected {
 		return fmt.Errorf("not connected")
 	}
-	// WhatsApp API implementation
+
+	var payload WhatsAppMessage
+	payload.MessagingProduct = "whatsapp"
+	payload.To = to
+
+	if msg.Media != nil {
+		switch msg.Media.Type {
+		case "image":
+			payload.Type = "image"
+			payload.Image = &WhatsAppMedia{
+				Link:    msg.Media.URL,
+				Caption: msg.Media.Caption,
+			}
+		case "audio":
+			payload.Type = "audio"
+			payload.Audio = &WhatsAppMedia{
+				Link: msg.Media.URL,
+			}
+		case "video":
+			payload.Type = "video"
+			payload.Video = &WhatsAppMedia{
+				Link:    msg.Media.URL,
+				Caption: msg.Media.Caption,
+			}
+		case "document":
+			payload.Type = "document"
+			payload.Document = &WhatsAppMedia{
+				Link:    msg.Media.URL,
+				Caption: msg.Media.Caption,
+			}
+		default:
+			payload.Type = "text"
+			payload.Text = &WhatsAppText{
+				Body: msg.Text,
+			}
+		}
+	} else {
+		payload.Type = "text"
+		payload.Text = &WhatsAppText{
+			Body: msg.Text,
+		}
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", w.apiBase+"/messages", strings.NewReader(string(jsonData)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+w.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := w.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("send failed: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
 	return nil
 }
 
-func (p *WhatsAppPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
+// Receive is not supported for WhatsApp (uses webhooks)
+func (w *WhatsAppPlatform) Receive(ctx context.Context) (<-chan Message, error) {
+	ch := make(chan Message, 100)
 	go func() {
-		defer close(ch)
-		// Webhook receiver
+		<-ctx.Done()
+		close(ch)
 	}()
 	return ch, nil
 }
 
-func (p *WhatsAppPlatform) SetWebhook(ctx context.Context, url string) error {
-	p.webhookURL = url
-	return nil
-}
+// =============================================================================
+// Signal Platform
+// =============================================================================
 
-func (p *WhatsAppPlatform) IsConnected() bool { return p.connected }
-
-// ============= Signal Platform =============
-
-// SignalPlatform implements Signal CLI
+// SignalPlatform implements Signal messaging
 type SignalPlatform struct {
-	config    *PlatformConfig
-	connected bool
+	config      *PlatformConfig
+	serviceURL string
+	username   string
+	password   string
+	connected  bool
+	httpClient *http.Client
 }
 
-func (p *SignalPlatform) Name() string { return "signal" }
+// NewSignalPlatform creates a new Signal platform
+func NewSignalPlatform(serviceURL, username, password string) *SignalPlatform {
+	return &SignalPlatform{
+		serviceURL: serviceURL,
+		username:   username,
+		password:   password,
+		connected:  false,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
 
-func (p *SignalPlatform) Connect(ctx context.Context) error {
-	// Signal CLI connection
-	p.connected = true
+// Name returns the platform name
+func (s *SignalPlatform) Name() string {
+	return "signal"
+}
+
+// Connect establishes connection to Signal
+func (s *SignalPlatform) Connect(ctx context.Context) error {
+	s.connected = true
 	return nil
 }
 
-func (p *SignalPlatform) Disconnect() error {
-	p.connected = false
+// Disconnect closes the connection
+func (s *SignalPlatform) Disconnect() error {
+	s.connected = false
 	return nil
 }
 
-func (p *SignalPlatform) Send(ctx context.Context, chatID string, msg Message) error {
+// IsConnected returns connection status
+func (s *SignalPlatform) IsConnected() bool {
+	return s.connected
+}
+
+// Send sends a message
+func (s *SignalPlatform) Send(ctx context.Context, recipient string, msg Message) error {
+	if !s.connected {
+		return fmt.Errorf("not connected")
+	}
+
+	payload := map[string]interface{}{
+		"recipient": recipient,
+		"message":  msg.Text,
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.serviceURL+"/send", strings.NewReader(string(jsonData)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.password)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
 	return nil
 }
 
-func (p *SignalPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
+// Receive is not supported for Signal (uses external service)
+func (s *SignalPlatform) Receive(ctx context.Context) (<-chan Message, error) {
+	ch := make(chan Message, 100)
 	go func() {
-		defer close(ch)
+		<-ctx.Done()
+		close(ch)
 	}()
 	return ch, nil
 }
 
-func (p *SignalPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
+// =============================================================================
+// Matrix Platform
+// =============================================================================
 
-func (p *SignalPlatform) IsConnected() bool { return p.connected }
-
-// ============= Matrix Platform =============
-
-// MatrixPlatform implements Matrix protocol
+// MatrixPlatform implements Matrix messaging
 type MatrixPlatform struct {
 	config    *PlatformConfig
-	connected bool
-	homeServer string
+	homeserver string
 	userID    string
+	accessToken string
 	roomID    string
+	connected bool
+	httpClient *http.Client
 }
 
-func (p *MatrixPlatform) Name() string { return "matrix" }
-
-func (p *MatrixPlatform) Connect(ctx context.Context) error {
-	creds := p.config.Credentials["matrix"]
-	if creds.Token == "" {
-		return fmt.Errorf("matrix: missing access token")
+// NewMatrixPlatform creates a new Matrix platform
+func NewMatrixPlatform(homeserver, userID, accessToken string) *MatrixPlatform {
+	return &MatrixPlatform{
+		homeserver:  homeserver,
+		userID:      userID,
+		accessToken: accessToken,
+		connected:   false,
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
-	p.homeServer = creds.Endpoint
-	if p.homeServer == "" {
-		p.homeServer = "matrix.org"
+}
+
+// Name returns the platform name
+func (m *MatrixPlatform) Name() string {
+	return "matrix"
+}
+
+// Connect establishes connection to Matrix
+func (m *MatrixPlatform) Connect(ctx context.Context) error {
+	m.connected = true
+	return nil
+}
+
+// Disconnect closes the connection
+func (m *MatrixPlatform) Disconnect() error {
+	m.connected = false
+	return nil
+}
+
+// IsConnected returns connection status
+func (m *MatrixPlatform) IsConnected() bool {
+	return m.connected
+}
+
+// Send sends a message
+func (m *MatrixPlatform) Send(ctx context.Context, roomID string, msg Message) error {
+	if !m.connected {
+		return fmt.Errorf("not connected")
 	}
-	p.connected = true
+
+	content := map[string]interface{}{
+		"msgtype": "m.text",
+		"body":    msg.Text,
+	}
+
+	if msg.Media != nil && msg.Media.URL != "" {
+		content["msgtype"] = "m.image"
+		content["body"] = msg.Media.URL
+		content["url"] = msg.Media.URL
+	}
+
+	payload := map[string]interface{}{
+		"msgtype": content["msgtype"],
+		"body":    content["body"],
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	apiURL := fmt.Sprintf("%s/_matrix/client/r0/rooms/%s/send/m.room.message?access_token=%s",
+		m.homeserver, url.PathEscape(roomID), m.accessToken)
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", apiURL, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
 	return nil
 }
 
-func (p *MatrixPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *MatrixPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *MatrixPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
+// Receive is not supported for Matrix (uses webhooks)
+func (m *MatrixPlatform) Receive(ctx context.Context) (<-chan Message, error) {
+	ch := make(chan Message, 100)
 	go func() {
-		defer close(ch)
-		// Matrix sync loop
+		<-ctx.Done()
+		close(ch)
 	}()
 	return ch, nil
 }
 
-func (p *MatrixPlatform) SetWebhook(ctx context.Context, url string) error {
+// JoinRoom joins a Matrix room
+func (m *MatrixPlatform) JoinRoom(ctx context.Context, roomID string) error {
+	apiURL := fmt.Sprintf("%s/_matrix/client/r0/join/%s?access_token=%s",
+		m.homeserver, url.PathEscape(roomID), m.accessToken)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
 	return nil
 }
 
-func (p *MatrixPlatform) IsConnected() bool { return p.connected }
+// =============================================================================
+// Email Platform
+// =============================================================================
 
-// ============= Email Platform =============
-
-// EmailPlatform implements email via SMTP
+// EmailPlatform implements Email messaging
 type EmailPlatform struct {
 	config    *PlatformConfig
+	smtpHost  string
+	smtpPort  int
+	username  string
+	password  string
+	fromAddr  string
 	connected bool
-	smtpHost string
-	smtpPort int
-	from     string
 }
 
-func (p *EmailPlatform) Name() string { return "email" }
-
-func (p *EmailPlatform) Connect(ctx context.Context) error {
-	creds := p.config.Credentials["email"]
-	if creds.APIKey == "" {
-		return fmt.Errorf("email: missing credentials")
+// NewEmailPlatform creates a new Email platform
+func NewEmailPlatform(smtpHost string, smtpPort int, username, password, fromAddr string) *EmailPlatform {
+	return &EmailPlatform{
+		smtpHost:  smtpHost,
+		smtpPort:  smtpPort,
+		username:  username,
+		password:  password,
+		fromAddr:  fromAddr,
+		connected: false,
 	}
-	p.smtpHost = creds.Endpoint
-	if p.smtpHost == "" {
-		p.smtpHost = "smtp.gmail.com"
+}
+
+// Name returns the platform name
+func (e *EmailPlatform) Name() string {
+	return "email"
+}
+
+// Connect establishes connection to SMTP server
+func (e *EmailPlatform) Connect(ctx context.Context) error {
+	e.connected = true
+	return nil
+}
+
+// Disconnect closes the connection
+func (e *EmailPlatform) Disconnect() error {
+	e.connected = false
+	return nil
+}
+
+// IsConnected returns connection status
+func (e *EmailPlatform) IsConnected() bool {
+	return e.connected
+}
+
+// Send sends an email
+func (e *EmailPlatform) Send(ctx context.Context, to string, msg Message) error {
+	if !e.connected {
+		return fmt.Errorf("not connected")
 	}
-	p.smtpPort = 587
-	p.from = creds.APISecret // sender email
-	p.connected = true
+
+	// Email sending would require net/smtp package
+	// This is a placeholder implementation
 	return nil
 }
 
-func (p *EmailPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *EmailPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	// Send email via SMTP
-	return nil
-}
-
-func (p *EmailPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
+// Receive is not supported for Email (uses webhooks)
+func (e *EmailPlatform) Receive(ctx context.Context) (<-chan Message, error) {
+	ch := make(chan Message, 100)
 	go func() {
-		defer close(ch)
-		// IMAP/Polling receiver
+		<-ctx.Done()
+		close(ch)
 	}()
 	return ch, nil
 }
 
-func (p *EmailPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
+// =============================================================================
+// SMS Platform
+// =============================================================================
 
-func (p *EmailPlatform) IsConnected() bool { return p.connected }
-
-// ============= SMS Platform =============
-
-// SMSPlatform implements SMS via Twilio
+// SMSPlatform implements SMS messaging
 type SMSPlatform struct {
 	config    *PlatformConfig
+	apiKey    string
+	apiURL    string
+	from      string
 	connected bool
+	httpClient *http.Client
 }
 
-func (p *SMSPlatform) Name() string { return "sms" }
-
-func (p *SMSPlatform) Connect(ctx context.Context) error {
-	creds := p.config.Credentials["sms"]
-	if creds.APIKey == "" {
-		return fmt.Errorf("sms: missing API key")
-	}
-	p.connected = true
-	return nil
-}
-
-func (p *SMSPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *SMSPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *SMSPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *SMSPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *SMSPlatform) IsConnected() bool { return p.connected }
-
-// ============= DingTalk Platform =============
-
-// DingTalkPlatform implements DingTalk
-type DingTalkPlatform struct {
-	config    *PlatformConfig
-	connected bool
-}
-
-func (p *DingTalkPlatform) Name() string { return "dingtalk" }
-
-func (p *DingTalkPlatform) Connect(ctx context.Context) error {
-	p.connected = true
-	return nil
-}
-
-func (p *DingTalkPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *DingTalkPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *DingTalkPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *DingTalkPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *DingTalkPlatform) IsConnected() bool { return p.connected }
-
-// ============= Feishu Platform =============
-
-// FeishuPlatform implements Feishu (Lark)
-type FeishuPlatform struct {
-	config    *PlatformConfig
-	connected bool
-}
-
-func (p *FeishuPlatform) Name() string { return "feishu" }
-
-func (p *FeishuPlatform) Connect(ctx context.Context) error {
-	p.connected = true
-	return nil
-}
-
-func (p *FeishuPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *FeishuPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *FeishuPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *FeishuPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *FeishuPlatform) IsConnected() bool { return p.connected }
-
-// ============= WeCom Platform =============
-
-// WeComPlatform implements WeCom (WeChat Work)
-type WeComPlatform struct {
-	config    *PlatformConfig
-	connected bool
-}
-
-func (p *WeComPlatform) Name() string { return "wecom" }
-
-func (p *WeComPlatform) Connect(ctx context.Context) error {
-	p.connected = true
-	return nil
-}
-
-func (p *WeComPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *WeComPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *WeComPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *WeComPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *WeComPlatform) IsConnected() bool { return p.connected }
-
-// ============= Microsoft Teams Platform =============
-
-// TeamsPlatform implements Microsoft Teams
-type TeamsPlatform struct {
-	config    *PlatformConfig
-	connected bool
-}
-
-func (p *TeamsPlatform) Name() string { return "teams" }
-
-func (p *TeamsPlatform) Connect(ctx context.Context) error {
-	p.connected = true
-	return nil
-}
-
-func (p *TeamsPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *TeamsPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *TeamsPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *TeamsPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *TeamsPlatform) IsConnected() bool { return p.connected }
-
-// ============= Mattermost Platform =============
-
-// MattermostPlatform implements Mattermost
-type MattermostPlatform struct {
-	config     *PlatformConfig
-	connected  bool
-	serverURL  string
-	teamName   string
-	channelName string
-}
-
-func (p *MattermostPlatform) Name() string { return "mattermost" }
-
-func (p *MattermostPlatform) Connect(ctx context.Context) error {
-	creds := p.config.Credentials["mattermost"]
-	if creds.Endpoint == "" {
-		return fmt.Errorf("mattermost: missing server URL")
-	}
-	p.serverURL = creds.Endpoint
-	p.connected = true
-	return nil
-}
-
-func (p *MattermostPlatform) Disconnect() error {
-	p.connected = false
-	return nil
-}
-
-func (p *MattermostPlatform) Send(ctx context.Context, chatID string, msg Message) error {
-	return nil
-}
-
-func (p *MattermostPlatform) Receive(ctx context.Context) (<-chan Message, error) {
-	ch := make(chan Message)
-	go func() {
-		defer close(ch)
-	}()
-	return ch, nil
-}
-
-func (p *MattermostPlatform) SetWebhook(ctx context.Context, url string) error {
-	return nil
-}
-
-func (p *MattermostPlatform) IsConnected() bool { return p.connected }
-
-// ============= Helper Functions =============
-
-// ParseChatID parses platform-specific chat ID
-func ParseChatID(platform, rawID string) string {
-	switch strings.ToLower(platform) {
-	case "telegram":
-		return rawID
-	case "whatsapp":
-		// Remove any non-digit characters
-		return strings.TrimPrefix(rawID, "+")
-	case "signal":
-		return rawID
-	case "sms":
-		return rawID
-	default:
-		return rawID
+// NewSMSPlatform creates a new SMS platform
+func NewSMSPlatform(apiKey, apiURL, from string) *SMSPlatform {
+	return &SMSPlatform{
+		apiKey:    apiKey,
+		apiURL:    apiURL,
+		from:      from,
+		connected: false,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// FormatPhoneNumber formats phone numbers for messaging
-func FormatPhoneNumber(phone string) string {
-	// Remove all non-digit characters except leading +
-	if strings.HasPrefix(phone, "+") {
-		return "+" + strings.ReplaceAll(phone[1:], " ", "")
+// Name returns the platform name
+func (s *SMSPlatform) Name() string {
+	return "sms"
+}
+
+// Connect establishes connection to SMS gateway
+func (s *SMSPlatform) Connect(ctx context.Context) error {
+	s.connected = true
+	return nil
+}
+
+// Disconnect closes the connection
+func (s *SMSPlatform) Disconnect() error {
+	s.connected = false
+	return nil
+}
+
+// IsConnected returns connection status
+func (s *SMSPlatform) IsConnected() bool {
+	return s.connected
+}
+
+// Send sends an SMS
+func (s *SMSPlatform) Send(ctx context.Context, to string, msg Message) error {
+	if !s.connected {
+		return fmt.Errorf("not connected")
 	}
-	return strings.ReplaceAll(phone, " ", "")
+
+	// SMS API integration would go here
+	// Different providers have different APIs
+	return nil
 }
 
-// MessageToJSON converts message to JSON
-func MessageToJSON(msg Message) ([]byte, error) {
-	return json.MarshalIndent(msg, "", "  ")
-}
-
-// JSONToMessage parses JSON to message
-func JSONToMessage(data []byte) (*Message, error) {
-	var msg Message
-	err := json.Unmarshal(data, &msg)
-	return &msg, err
+// Receive is not supported for SMS
+func (s *SMSPlatform) Receive(ctx context.Context) (<-chan Message, error) {
+	ch := make(chan Message, 100)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
 }

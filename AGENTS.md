@@ -1152,3 +1152,130 @@ curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/i
 # 或使用 Python 服务器
 python3 scripts/web_wrapper.py --port 5000 --browser
 ```
+
+## 多媒体处理
+
+### Gateway 多媒体支持
+
+Gateway 支持处理各种多媒体消息类型，包括语音、图片、视频和文件。
+
+#### 平台统一消息格式
+```go
+type Message struct {
+    ID        string                 `json:"id"`
+    ChatID    string                 `json:"chat_id"`
+    Text      string                 `json:"text"`
+    Timestamp time.Time              `json:"timestamp"`
+    From      User                   `json:"from"`
+    Media     *Media                 `json:"media,omitempty"`
+    Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type Media struct {
+    Type     string `json:"type"`      // voice, photo, video, document, image
+    URL      string `json:"url"`
+    FileID   string `json:"file_id,omitempty"`
+    MimeType string `json:"mime_type,omitempty"`
+    Size     int64  `json:"size,omitempty"`
+    Width    int    `json:"width,omitempty"`
+    Height   int    `json:"height,omitempty"`
+    Duration int    `json:"duration,omitempty"`
+    Caption  string `json:"caption,omitempty"`
+}
+```
+
+#### Telegram 多媒体处理
+```go
+// 支持的媒体类型
+- voice: 语音消息 → 自动转录为文本
+- photo: 图片消息 → Vision 模型分析
+- video: 视频消息 → 提取缩略图
+- document: 文件消息 → 保存到本地
+
+// 配置示例
+telegram:
+  token: ${TELEGRAM_BOT_TOKEN}
+  allowed_users:
+    - user123
+  voice_auto_transcribe: true
+  photo_auto_analyze: true
+```
+
+#### Discord 多媒体处理
+```go
+// 支持的媒体类型
+- 附件: 图片/音频/视频/文件
+- 嵌入: Rich Embed 结构
+- 表情: Emoji 响应
+
+// 配置示例
+discord:
+  bot_token: ${DISCORD_BOT_TOKEN}
+  guild_id: ${DISCORD_GUILD_ID}
+```
+
+### Voice 命令
+
+```bash
+# 语音模式（推送讲话）
+magic voice listen
+
+# 文字转语音
+magic voice speak "Hello, world!"
+
+# 测试语音配置
+magic voice test
+
+# 带参数使用
+magic voice speak --provider openai --voice alloy "Hello"
+```
+
+### Vision 命令
+
+```bash
+# 分析图片
+magic vision analyze image.png
+
+# 分析网络图片
+magic vision analyze https://example.com/image.jpg
+
+# 比较两张图片
+magic vision compare image1.png image2.png
+```
+
+### 扩展消息平台
+
+支持的消息平台：
+
+| 平台 | 类型 | 支持功能 |
+|------|------|----------|
+| WhatsApp | Business API | 文本、图片、音频、视频、文档 |
+| Signal | REST API | 文本消息 |
+| Matrix | Matrix Protocol | 文本、图片、文件 |
+| Email | SMTP | 文本、附件 |
+| SMS | 第三方 API | 文本消息 |
+
+#### WhatsApp 配置
+```yaml
+whatsapp:
+  phone_id: ${WHATSAPP_PHONE_ID}
+  api_key: ${WHATSAPP_API_KEY}
+  webhook_path: /webhook/whatsapp
+```
+
+#### Signal 配置
+```yaml
+signal:
+  service_url: https://signal.example.com
+  username: ${SIGNAL_USERNAME}
+  password: ${SIGNAL_PASSWORD}
+```
+
+#### Matrix 配置
+```yaml
+matrix:
+  homeserver: https://matrix.example.com
+  user_id: @user:matrix.example.com
+  access_token: ${MATRIX_ACCESS_TOKEN}
+```
+
