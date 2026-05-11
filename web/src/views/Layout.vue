@@ -149,6 +149,11 @@ const menuOptions = computed<MenuOption[]>(() => [
   color: var(--primary-color);
   border-bottom: 1px solid var(--border-color);
 
+  img {
+    width: 32px;
+    height: 32px;
+  }
+
   &.collapsed {
     justify-content: center;
     padding: 12px 8px;
