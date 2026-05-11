@@ -1,1 +1,0 @@
-export { colorPickerProps, default as NColorPicker } from "./src/ColorPicker.mjs";

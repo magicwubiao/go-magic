@@ -1,1 +1,0 @@
-export { menuProps, default as NMenu } from "./src/Menu.mjs";

@@ -1,1 +1,0 @@
-export { dividerProps, default as NDivider } from "./src/Divider.mjs";

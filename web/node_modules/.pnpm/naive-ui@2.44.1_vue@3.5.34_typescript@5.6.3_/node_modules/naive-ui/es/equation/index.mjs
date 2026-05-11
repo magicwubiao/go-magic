@@ -1,1 +1,0 @@
-export { equationProps, Equation as NEquation } from "./src/Equation.mjs";

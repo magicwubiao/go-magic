@@ -1,46 +1,30 @@
 # Binaries
-magic.exe
 magic
+magic-server
 *.exe
-*.test
 
-# Build output
-dist/
-build/
+# Web build
+web/node_modules/
+web/dist/
+web/dist-node/
+web/*.tsbuildinfo
+web/pnpm-lock.yaml
+
+# Go
+*.test
+/coverage.txt
+/vendor/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
-*.sublime-*
 
 # OS
 .DS_Store
 Thumbs.db
-Desktop.ini
-
-# Logs
-*.log
-logs/
-
-# Environment
-.env
-.env.local
-.env.*.local
 
 # Temp
 *.tmp
-*.temp
-.fuse_hidden*
-
-# Config with secrets (user-specific)
-config.json
-config.local.json
-
-# Coverage
-coverage.out
-coverage.html
-
-# Release artifacts
-release/
+*.log

@@ -1,1 +1,0 @@
-export { flexProps, default as NFlex } from "./src/Flex.mjs";

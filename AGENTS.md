@@ -11,18 +11,32 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 ```
 /workspace/projects/
 ├── cmd/                    # 入口命令
-│   ├── magic/              # 主程序入口
-│   │   └── main.go
+│   ├── magic/              # 主程序入口 (50个命令)
 │   └── setup/              # 安装程序
-├── internal/               # 内部包
+├── internal/               # 内部包 (44个模块)
+│   ├── agent/             # AI Agent 核心
+│   ├── tool/              # 工具系统
+│   ├── skills/            # 技能管理
+│   ├── session/           # 会话管理
+│   ├── memory/            # 记忆系统
+│   ├── gateway/           # 消息网关
+│   ├── provider/          # LLM Provider
+│   └── ...                # 其他模块
 ├── pkg/                    # 公共包
 ├── plugins/                # 插件系统
 ├── skills/                 # 技能系统
+├── scripts/                # 构建脚本
+│   └── windows/            # Windows 脚本
+├── server/                 # Web Dashboard 服务
+├── web/                    # Vue 3 前端
+├── docs/                   # 文档
 ├── config/                 # 配置
-├── go.mod / go.sum         # 依赖管理
 ├── build.sh                # 构建脚本
+├── Makefile                # Make 构建
 ├── Dockerfile              # Docker 构建
-└── docker-compose.yml      # Docker Compose
+├── docker-compose.yml      # Docker Compose
+├── .gitignore              # Git 忽略
+└── go.mod / go.sum         # 依赖管理
 ```
 
 ## 关键入口 / 核心模块
