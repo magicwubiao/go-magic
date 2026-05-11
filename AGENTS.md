@@ -21,6 +21,7 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 │   ├── memory/            # 记忆系统
 │   ├── gateway/           # 消息网关
 │   ├── provider/          # LLM Provider
+│   ├── skin/              # 皮肤/主题系统
 │   └── ...                # 其他模块
 ├── pkg/                    # 公共包
 ├── plugins/                # 插件系统
@@ -42,7 +43,7 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 ## 关键入口 / 核心模块
 - **主入口**：`cmd/magic/main.go`
 - **构建命令**：`make build` 或 `./build.sh`
-- **主要命令**：acp、agent、chat、config、gateway、health、interactive、mcp、repl、sessions、skills、voice 等
+- **主要命令**：acp、agent、chat、config、gateway、health、interactive、mcp、repl、sessions、skills、skin、voice 等
 
 ## 运行与预览
 - **预览**：不支持（backend 类型）
@@ -1015,6 +1016,68 @@ magic personality list         # 列出所有个性
 magic personality set <name>   # 设置当前个性
 magic personality create      # 创建自定义个性
 magic personality preview <name>  # 预览个性
+```
+
+## Skin/Theme 系统
+
+CLI 视觉主题定制，支持多种内置皮肤和用户自定义。
+
+### 内置皮肤
+| 皮肤 | 描述 |
+|------|------|
+| default | 经典金色/kawaii 风格 |
+| mono | 简洁灰度单色 |
+| slate | 冷色调开发者风格 |
+| cyber | 霓虹赛博朋克主题 |
+
+### CLI 命令
+```bash
+magic skin list              # 列出所有皮肤
+magic skin list --all       # 显示详细信息
+magic skin show [name]      # 查看皮肤详情
+magic skin preview [name]   # 预览皮肤效果
+magic skin set <name>      # 设置活动皮肤
+magic skin create <name>    # 创建自定义皮肤
+magic skin delete <name>    # 删除用户皮肤
+magic skin export [name]    # 导出皮肤为 JSON
+```
+
+### 皮肤配置示例
+用户皮肤存储在 `~/.go-magic/skins/` 目录，YAML 格式：
+
+```yaml
+name: my-theme
+description: My custom skin
+
+colors:
+  banner_border: "#FFD700"
+  banner_title: "#FF8C00"
+  banner_text: "#FFFFFF"
+  success: "#00FF00"
+  error: "#FF0000"
+
+spinner:
+  frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"]
+  thinking_verbs: ["thinking", "processing"]
+  speed: 80
+
+branding:
+  agent_name: "magic"
+  prompt_symbol: ">"
+
+tool_prefix: "┊"
+```
+
+### 工具图标
+每个皮肤可以自定义工具图标：
+
+```yaml
+tool_emojis:
+  web_search: "🌐"
+  read_file: "📄"
+  execute_command: "⚡"
+  memory_store: "💾"
+  execute_code: "💻"
 ```
 
 ## Slash Commands

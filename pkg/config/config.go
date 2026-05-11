@@ -36,11 +36,20 @@ type Config struct {
 	SubAgent      *SubAgentConfig           `json:"subagent,omitempty"`
 	Voice         *VoiceConfig              `json:"voice,omitempty"`
 	Privacy       *privacy.Config           `json:"privacy,omitempty"`
+	Display       DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
 	SecretRedaction bool `json:"secret_redaction,omitempty"`
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
 	} `json:"agent,omitempty"`
+}
+
+// DisplayConfig represents display/UI configuration
+type DisplayConfig struct {
+	Skin        string `json:"skin,omitempty"`         // Active skin name
+	NoColor     bool   `json:"no_color,omitempty"`     // Disable colors
+	ShowBanner  bool   `json:"show_banner,omitempty"`   // Show startup banner
+	ShowVersion bool   `json:"show_version,omitempty"` // Show version info
 }
 
 // ProviderConfig represents provider configuration
