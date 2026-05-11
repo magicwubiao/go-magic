@@ -38,6 +38,7 @@ output/
 output.wav
 output.mp3
 *.png
+!.web/public/logo.png
 *.jpg
 *.jpeg
 .coze
