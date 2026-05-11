@@ -791,3 +791,192 @@ magic plugin reload <name>     # 热重载插件
     ├── plugin.go         # 插件代码
     └── README.md          # 文档
 ```
+
+## Context Files (项目上下文)
+
+每次对话自动加载项目上下文文件，影响 Agent 行为。
+
+### 支持的文件
+| 文件 | 描述 |
+|------|------|
+| `AGENTS.md` | 项目规范和经验 |
+| `SOUL.md` | Agent 个性定义 |
+| `MEMORY.md` | 持久记忆 |
+| `USER.md` | 用户画像 |
+| `.context/` | 额外上下文目录 |
+
+### CLI 命令
+```bash
+magic context load <path>      # 加载项目上下文
+magic context list             # 列出已加载的上下文
+magic context reload           # 重新加载上下文
+magic context clear            # 清除所有上下文
+```
+
+### 功能特性
+- 自动检测 AGENTS.md 并加载
+- 支持 SOUL.md 个性化 Agent
+- 上下文版本控制
+- 增量更新
+
+## 内置学习循环 (Learning Loop)
+
+Agent 自动从经验中学习并改进技能。
+
+### 功能
+- **技能自动改进**: 复杂任务后自动优化技能
+- **记忆强化**: 定期提醒 Agent 保存重要信息
+- **会话搜索**: FTS5 全文搜索 + LLM 摘要
+- **自我改进**: 分析失败并调整策略
+
+### CLI 命令
+```bash
+magic learn analyze            # 分析学习数据
+magic learn stats             # 显示学习统计
+magic learn improve <skill>   # 改进指定技能
+```
+
+## 用户画像建模 (User Profiling)
+
+跨会话学习用户偏好和特点。
+
+### 功能
+- 用户偏好学习
+- 专业知识追踪
+- 交流风格适应
+- 长期记忆整合
+
+### CLI 命令
+```bash
+magic profile user             # 查看用户画像
+magic profile update <key>    # 更新用户信息
+magic profile clear            # 清除画像
+```
+
+## 增强 TUI 界面
+
+功能完整的终端用户界面。
+
+### 功能
+- 多行编辑支持
+- Slash 命令自动补全
+- 命令历史搜索
+- 流式工具输出
+- 实时进度显示
+- ANSI 颜色支持
+
+### 快捷键
+| 快捷键 | 描述 |
+|--------|------|
+| `↑/↓` | 浏览历史 |
+| `Ctrl+R` | 搜索历史 |
+| `Tab` | 自动补全 |
+| `Ctrl+C` | 中断当前任务 |
+| `Ctrl+L` | 清屏 |
+
+## Personality 系统
+
+个性化 Agent 性格和行为模式。
+
+### 内置个性
+| 个性 | 描述 |
+|------|------|
+| default | 默认助手 |
+| creative | 创意写作 |
+| precise | 精确分析 |
+| friendly | 友好闲聊 |
+| professional | 专业严谨 |
+
+### CLI 命令
+```bash
+magic personality list         # 列出所有个性
+magic personality set <name>   # 设置当前个性
+magic personality create      # 创建自定义个性
+magic personality preview <name>  # 预览个性
+```
+
+## Slash Commands
+
+会话中可用的斜杠命令。
+
+### 核心命令
+| 命令 | 描述 |
+|------|------|
+| `/new` | 开始新对话 |
+| `/reset` | 重置当前会话 |
+| `/model <provider:model>` | 切换模型 |
+| `/personality <name>` | 切换个性 |
+| `/retry` | 重试上一条消息 |
+| `/undo` | 撤销上一条消息 |
+| `/compress` | 压缩上下文 |
+| `/usage` | 显示使用统计 |
+| `/insights [days]` | 显示使用洞察 |
+| `/skills` | 浏览技能列表 |
+| `/help` | 显示帮助 |
+
+### 工具命令
+| 命令 | 描述 |
+|------|------|
+| `/web <query>` | 网页搜索 |
+| `/browse <url>` | 浏览网页 |
+| `/code <language>` | 代码执行 |
+| `/terminal` | 终端操作 |
+
+## Terminal 后端扩展
+
+支持多种终端执行后端。
+
+### 支持的后端
+| 后端 | 描述 |
+|------|------|
+| local | 本地执行（默认） |
+| docker | Docker 容器隔离 |
+| ssh | 远程服务器执行 |
+| daytona | Daytona 云端隔离 |
+| singularity | Singularity 容器 |
+
+### 配置
+```yaml
+terminal:
+  backend: daytona  # 使用 Daytona 云端后端
+  daytona_api_key: ${DAYTONA_API_KEY}
+  daytona_workspace: ${DAYTONA_WORKSPACE}
+```
+
+## 会话压缩 (Context Compression)
+
+优化长对话的上下文窗口。
+
+### 功能
+- 自动摘要历史消息
+- 保留关键信息
+- 减少 Token 消耗
+- 保持对话连贯性
+
+### CLI 命令
+```bash
+magic compress                # 压缩当前会话
+magic compress --dry-run     # 预览压缩效果
+magic compress --level full  # 完整压缩
+```
+
+## Usage Insights
+
+详细的使用分析和洞察。
+
+### CLI 命令
+```bash
+magic usage insights          # 最近 7 天洞察
+magic usage insights --days 30  # 最近 30 天
+magic usage insights daily   # 按日分析
+magic usage insights models  # 按模型分析
+```
+
+### 分析内容
+- 请求和 Token 统计
+- 成本分析
+- Top 模型排名
+- 每日趋势
+- 使用高峰时段
+- 优化建议
+
