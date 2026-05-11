@@ -2,14 +2,18 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -379,7 +383,14 @@ func runSetup(cmd *cobra.Command, args []string) {
 	profile := readInput(reader, cfg.Profile)
 	cfg.Profile = profile
 
-	// Cortex AI enhancement
+	// Toolset selection
+	fmt.Println()
+	fmt.Println("┌─────────────────────────────────────────────┐")
+	fmt.Println("│           Toolset Configuration             │")
+	fmt.Println("└─────────────────────────────────────────────┘")
+	runToolsetSetup(cfg, reader)
+
+	// Verify configuration
 	cortexDefault := "N"
 	if cfg.CortexEnabled {
 		cortexDefault = "Y"
@@ -417,6 +428,200 @@ func runSetup(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println("You can now start chatting with:")
 	fmt.Println("  magic chat")
+
+	// Verify configuration by testing API connection
+	verifyConfig(cfg)
+}
+
+// runToolsetSetup runs the interactive toolset configuration wizard
+func runToolsetSetup(cfg *config.Config, reader *bufio.Reader) {
+	// Get all available toolsets
+	ts := tool.NewManager()
+	toolsets := ts.List()
+
+	if len(toolsets) == 0 {
+		fmt.Println("   No toolsets available.")
+		return
+	}
+
+	// Get current enabled toolsets
+	currentTools := cfg.Tools.Enabled
+	currentMap := make(map[string]bool)
+	for _, t := range currentTools {
+		if t == "all" {
+			currentMap["all"] = true
+			break
+		}
+		currentMap[t] = true
+	}
+
+	// Check if "all" is currently enabled
+	isAllEnabled := currentMap["all"]
+
+	fmt.Println("   Select toolsets to enable (comma-separated numbers, or 'all'):")
+	fmt.Println()
+
+	// Build display list with numbers
+	numberedToolsets := make([]string, 0, len(toolsets))
+	toolsetNames := make([]string, 0, len(toolsets))
+	for i, ts := range toolsets {
+		num := strconv.Itoa(i + 1)
+		numberedToolsets = append(numberedToolsets, num)
+		toolsetNames = append(toolsetNames, ts.Name)
+
+		// Check if selected
+		selected := ""
+		if isAllEnabled || currentMap[ts.Name] {
+			selected = " [enabled]"
+		}
+
+		// Truncate long descriptions
+		desc := ts.Description
+		if len(desc) > 50 {
+			desc = desc[:47] + "..."
+		}
+
+		fmt.Printf("      [%d] %s - %s%s\n", i+1, ts.Name, desc, selected)
+	}
+
+	fmt.Println()
+	fmt.Print("   Enter numbers (e.g. 1,3,5) or 'all': ")
+
+	selection, _ := reader.ReadString('\n')
+	selection = strings.TrimSpace(selection)
+
+	if selection == "" {
+		// Keep current selection
+		return
+	}
+
+	if strings.ToLower(selection) == "all" {
+		cfg.Tools.Enabled = []string{"all"}
+		fmt.Println("   ✓ All toolsets enabled")
+		return
+	}
+
+	// Parse comma-separated numbers
+	selectedTools := []string{}
+	parts := strings.Split(selection, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if num, err := strconv.Atoi(part); err == nil {
+			idx := num - 1
+			if idx >= 0 && idx < len(toolsetNames) {
+				selectedTools = append(selectedTools, toolsetNames[idx])
+			}
+		}
+	}
+
+	if len(selectedTools) > 0 {
+		cfg.Tools.Enabled = selectedTools
+		fmt.Printf("   ✓ %d toolsets enabled: %s\n", len(selectedTools), strings.Join(selectedTools, ", "))
+	}
+}
+
+// verifyConfig tests the API configuration by making a simple request
+func verifyConfig(cfg *config.Config) {
+	if cfg.Provider == "" || cfg.Model == "" {
+		fmt.Println("\n⚠ Skipping verification: Provider or model not configured")
+		return
+	}
+
+	provCfg, ok := cfg.Providers[cfg.Provider]
+	if !ok || provCfg.APIKey == "" {
+		if cfg.Provider != "ollama" && cfg.Provider != "vllm" && cfg.Provider != "custom" {
+			fmt.Println("\n⚠ Skipping verification: API key not configured")
+			return
+		}
+	}
+
+	fmt.Println("\n┌─────────────────────────────────────────────┐")
+	fmt.Println("│         Configuration Verification           │")
+	fmt.Println("└─────────────────────────────────────────────┘")
+
+	// Build request
+	var reqBody map[string]interface{}
+	var apiURL string
+	var headers map[string]string
+
+	switch cfg.Provider {
+	case "openai", "azure":
+		apiURL = provCfg.BaseURL + "/chat/completions"
+		reqBody = map[string]interface{}{
+			"model": cfg.Model,
+			"messages": []map[string]string{
+				{"role": "user", "content": "Hi"},
+			},
+			"max_tokens": 10,
+		}
+		headers = map[string]string{
+			"Authorization": "Bearer " + provCfg.APIKey,
+		}
+	case "anthropic":
+		apiURL = "https://api.anthropic.com/v1/messages"
+		reqBody = map[string]interface{}{
+			"model": cfg.Model,
+			"messages": []map[string]string{
+				{"role": "user", "content": "Hi"},
+			},
+			"max_tokens": 10,
+		}
+		headers = map[string]string{
+			"x-api-key":             provCfg.APIKey,
+			"anthropic-version":     "2023-06-01",
+			"anthropic-dangerous-direct-https-access-allowed": "true",
+		}
+	default:
+		// Generic OpenAI-compatible
+		apiURL = provCfg.BaseURL + "/chat/completions"
+		reqBody = map[string]interface{}{
+			"model": cfg.Model,
+			"messages": []map[string]string{
+				{"role": "user", "content": "Hi"},
+			},
+			"max_tokens": 10,
+		}
+		headers = map[string]string{
+			"Authorization": "Bearer " + provCfg.APIKey,
+		}
+	}
+
+	// Create request
+	jsonBody, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		fmt.Printf("   ✗ Request creation failed: %v\n", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	// Send request with timeout
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("   ✗ Connection failed: %v\n", err)
+		fmt.Println("   This may be normal if the API requires additional configuration.")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		fmt.Println("   ✓ API connection successful!")
+		fmt.Printf("   Provider: %s, Model: %s\n", cfg.Provider, cfg.Model)
+	} else {
+		fmt.Printf("   ✗ API returned status %d\n", resp.StatusCode)
+		if resp.StatusCode == 401 {
+			fmt.Println("   Please check your API key.")
+		} else if resp.StatusCode == 403 {
+			fmt.Println("   Access forbidden. Please check your permissions.")
+		} else if resp.StatusCode == 429 {
+			fmt.Println("   Rate limited. Try again later.")
+		}
+	}
 }
 
 // runGatewayPlatformSetup runs the interactive gateway platform configuration wizard

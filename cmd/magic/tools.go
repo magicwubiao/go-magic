@@ -80,6 +80,29 @@ var toolsSchemaCmd = &cobra.Command{
 	Run:   runToolsSchema,
 }
 
+var toolsetsCmd = &cobra.Command{
+	Use:   "toolsets",
+	Short: "Manage tool groups (toolsets)",
+	Long: `Manage tool groups for organized tool access.
+
+Toolsets bundle related tools together:
+  - web: web_search, web_extract
+  - browser: browser_navigate, browser_snapshot, browser_click, etc.
+  - terminal: execute_command, terminal, process
+  - file: read_file, write_file, file_edit, list_files, etc.
+  - code_execution: execute_code
+  - skills: skills_list, skill_view, skill_manage
+  - memory: memory_store, memory_recall
+  - delegation: delegate_task, poll_task, list_tasks, cancel_task
+  - homeassistant: ha_list_entities, ha_get_state, etc.
+
+Examples:
+  magic tools toolsets list
+  magic tools toolsets show web
+  magic tools toolsets enable browser
+  magic tools toolsets disable terminal`,
+}
+
 func init() {
 	toolsCmd.AddCommand(toolsListCmd)
 	toolsCmd.AddCommand(toolsShowCmd)
@@ -87,6 +110,7 @@ func init() {
 	toolsCmd.AddCommand(toolsDisableCmd)
 	toolsCmd.AddCommand(toolsSearchCmd)
 	toolsCmd.AddCommand(toolsSchemaCmd)
+	toolsCmd.AddCommand(toolsetsCmd)
 
 	toolsListCmd.Flags().StringVar(&toolsFilterPrefix, "prefix", "", "Filter tools by prefix")
 	toolsShowCmd.Flags().BoolVar(&toolsShowSchema, "schema", false, "Show JSON schema")
@@ -383,4 +407,172 @@ type ToolInfo struct {
 	Description string                 `json:"description"`
 	Schema      map[string]interface{} `json:"schema"`
 	Timeout     time.Duration          `json:"timeout,omitempty"`
+}
+
+// ============================================================================
+// Toolsets subcommands
+// ============================================================================
+
+var toolsetsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all available toolsets",
+	Run:   runToolsetsList,
+}
+
+var toolsetsShowCmd = &cobra.Command{
+	Use:   "show <toolset>",
+	Short: "Show tools in a toolset",
+	Args:  cobra.ExactArgs(1),
+	Run:   runToolsetsShow,
+}
+
+var toolsetsEnableCmd = &cobra.Command{
+	Use:   "enable <toolset>",
+	Short: "Enable a toolset",
+	Args:  cobra.ExactArgs(1),
+	Run:   runToolsetsEnable,
+}
+
+var toolsetsDisableCmd = &cobra.Command{
+	Use:   "disable <toolset>",
+	Short: "Disable a toolset",
+	Args:  cobra.ExactArgs(1),
+	Run:   runToolsetsDisable,
+}
+
+func init() {
+	toolsetsCmd.AddCommand(toolsetsListCmd)
+	toolsetsCmd.AddCommand(toolsetsShowCmd)
+	toolsetsCmd.AddCommand(toolsetsEnableCmd)
+	toolsetsCmd.AddCommand(toolsetsDisableCmd)
+	toolsCmd.AddCommand(toolsetsCmd)
+}
+
+func runToolsetsList(cmd *cobra.Command, args []string) {
+	cfg, _ := config.Load()
+	manager := tool.NewToolsetManager()
+
+	// Merge custom toolsets from config
+	if cfg != nil {
+		for name, ts := range cfg.Tools.Toolsets {
+			manager.RegisterToolset(name, ts.Tools, ts.Tags)
+		}
+	}
+
+	toolsets := manager.List()
+
+	fmt.Printf("Available toolsets (%d total):\n\n", len(toolsets))
+
+	for _, ts := range toolsets {
+		info := manager.GetToolsetInfo(ts)
+		fmt.Printf("## %s\n", ts)
+		if info.Description != "" {
+			fmt.Printf("  %s\n", info.Description)
+		}
+		fmt.Printf("  Tools: %d\n", info.ToolCount)
+		if len(info.Tools) > 0 {
+			fmt.Printf("  %s\n", strings.Join(info.Tools, ", "))
+		}
+		fmt.Println()
+	}
+}
+
+func runToolsetsShow(cmd *cobra.Command, args []string) {
+	name := args[0]
+	manager := tool.NewToolsetManager()
+
+	info := manager.GetToolsetInfo(name)
+	if info == nil {
+		fmt.Printf("Toolset '%s' not found.\n", name)
+		os.Exit(1)
+	}
+
+	fmt.Printf("# %s\n\n", name)
+	if info.Description != "" {
+		fmt.Printf("%s\n\n", info.Description)
+	}
+	fmt.Printf("Tools (%d):\n", info.ToolCount)
+	for _, t := range info.Tools {
+		fmt.Printf("  - %s\n", t)
+	}
+	if len(info.Tags) > 0 {
+		fmt.Printf("\nTags: %s\n", strings.Join(info.Tags, ", "))
+	}
+}
+
+func runToolsetsEnable(cmd *cobra.Command, args []string) {
+	name := args[0]
+	manager := tool.NewToolsetManager()
+	info := manager.GetToolsetInfo(name)
+
+	if info == nil {
+		fmt.Printf("Toolset '%s' not found.\n", name)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Add tools to enabled list, remove from disabled
+	for _, t := range info.Tools {
+		// Add to enabled
+		found := false
+		for _, e := range cfg.Tools.Enabled {
+			if e == t {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Tools.Enabled = append(cfg.Tools.Enabled, t)
+		}
+
+		// Remove from disabled
+		newDisabled := []string{}
+		for _, d := range cfg.Tools.Disabled {
+			if d != t {
+				newDisabled = append(newDisabled, d)
+			}
+		}
+		cfg.Tools.Disabled = newDisabled
+	}
+
+	if err := cfg.Save(); err != nil {
+		fmt.Printf("Failed to save config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Toolset '%s' enabled (%d tools)\n", name, info.ToolCount)
+}
+
+func runToolsetsDisable(cmd *cobra.Command, args []string) {
+	name := args[0]
+	manager := tool.NewToolsetManager()
+	info := manager.GetToolsetInfo(name)
+
+	if info == nil {
+		fmt.Printf("Toolset '%s' not found.\n", name)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Add tools to disabled list
+	for _, t := range info.Tools {
+		cfg.Tools.Disabled = append(cfg.Tools.Disabled, t)
+	}
+
+	if err := cfg.Save(); err != nil {
+		fmt.Printf("Failed to save config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Toolset '%s' disabled (%d tools)\n", name, info.ToolCount)
 }
