@@ -12,8 +12,9 @@
       @expand="collapsed = false"
     >
       <div class="logo" :class="{ collapsed }">
-        <n-icon :component="Sparkles" size="24" />
-        <span v-if="!collapsed">Go Magic</span>
+        <img v-if="!collapsed" src="/logo.png" alt="Go Magic" class="logo-img" />
+        <span v-if="collapsed" class="logo-icon">⚡</span>
+        <span v-if="!collapsed" class="logo-text">Go Magic</span>
       </div>
 
       <n-menu
@@ -141,8 +142,8 @@ const menuOptions = computed<MenuOption[]>(() => [
 .logo {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 12px 16px;
   font-size: 18px;
   font-weight: 600;
   color: var(--primary-color);
@@ -150,8 +151,22 @@ const menuOptions = computed<MenuOption[]>(() => [
 
   &.collapsed {
     justify-content: center;
-    padding: 16px 8px;
+    padding: 12px 8px;
   }
+}
+
+.logo-img {
+  height: 32px;
+  width: auto;
+}
+
+.logo-icon {
+  font-size: 24px;
+}
+
+.logo-text {
+  font-size: 16px;
+  white-space: nowrap;
 }
 
 .header {
