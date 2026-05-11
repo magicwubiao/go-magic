@@ -17,14 +17,15 @@ if errorlevel 1 (
 echo [OK] Go installed:
 go version
 
-REM Change to project root directory
-set PROJECT_ROOT=%~dp0..
+REM Change to project root directory (parent of scripts)
+for %%i in ("%~dp0..") do set PROJECT_ROOT=%%~fi
 cd /d "%PROJECT_ROOT%"
 
 REM Verify we are in the right directory
 if not exist "cmd\magic" (
     echo [ERROR] Cannot find cmd\magic directory
     echo Current directory: %CD%
+    echo Expected: %PROJECT_ROOT%
     pause
     exit /b 1
 )
