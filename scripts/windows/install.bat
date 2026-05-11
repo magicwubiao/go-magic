@@ -17,13 +17,21 @@ if errorlevel 1 (
 echo [OK] Go installed:
 go version
 
-REM Get project root directory (parent of scripts)
+REM Change to project root directory
 set PROJECT_ROOT=%~dp0..
 cd /d "%PROJECT_ROOT%"
 
+REM Verify we are in the right directory
+if not exist "cmd\magic" (
+    echo [ERROR] Cannot find cmd\magic directory
+    echo Current directory: %CD%
+    pause
+    exit /b 1
+)
+
 echo.
 echo [1/3] Downloading dependencies...
-go mod tidy
+go mod download
 if errorlevel 1 (
     echo [ERROR] Failed to download dependencies
     pause
@@ -33,9 +41,10 @@ echo [OK] Dependencies downloaded
 
 echo.
 echo [2/3] Building project...
-go build -o "%PROJECT_ROOT%\magic.exe" ./cmd/magic
+go build -ldflags="-s -w" -o magic.exe ./cmd/magic
 if errorlevel 1 (
     echo [ERROR] Build failed
+    echo Current directory: %CD%
     pause
     exit /b 1
 )
