@@ -1084,3 +1084,57 @@ gateway:
 - LLM 上下文加载
 - AI 代码助手集成
 - 自动化文档处理
+
+## 构建与部署
+
+### 命令行二进制
+
+```bash
+# 构建 CLI
+make build
+
+# 多平台交叉编译
+make build-all
+
+# 安装
+make install
+```
+
+### Web Dashboard
+
+```bash
+# 开发模式
+make web-dev
+
+# 构建前端
+make web-build
+
+# 启动 Web 服务
+make web-start
+```
+
+### Docker 部署
+
+```bash
+# 单容器部署
+docker-compose up -d
+
+# 自定义端口
+PORT=9000 docker-compose up -d
+```
+
+### 一键安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
+```
+
+### Web 套壳应用
+
+```bash
+# 构建桌面应用
+./scripts/build.sh --platform all
+
+# 或使用 Python 服务器
+python3 scripts/web_wrapper.py --port 5000 --browser
+```

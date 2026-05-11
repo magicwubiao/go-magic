@@ -1,35 +1,41 @@
-﻿# Ignore everything
-*
+# Git
+.git
+.gitignore
 
-# Except these:
-!go.mod
-!go.sum
-!**/*.go
-!**/*.json
-!README.md
-
-# Ignore build artifacts
+# Build outputs
+magic
 *.exe
-*.test
-*.out
+dist/
+build/
 
-# Ignore IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Ignore OS files
+# Test files
+*_test.go
+test/
+tests/
+
+# Documentation
+*.md
+!README.md
+
+# Node modules (for web)
+web/node_modules/
+
+# OS files
 .DS_Store
-Thumbs.db;
+Thumbs.db
 
-# Ignore logs
+# Temporary files
 *.log
-logs/;
-
-# Ignore test files
-*_test.go;
-
-# Ignore temporary files
 tmp/
 temp/
+
+# Secrets
+.env.local
+*.pem
+*.key
