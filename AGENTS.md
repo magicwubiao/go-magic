@@ -980,3 +980,107 @@ magic usage insights models  # 按模型分析
 - 使用高峰时段
 - 优化建议
 
+
+## Voice Mode 增强
+
+实时语音交互，支持 TTS/ASR 流式处理。
+
+### 功能
+- 多提供商支持 (OpenAI, ElevenLabs, Azure, Coqui)
+- 流式语音合成和识别
+- 实时对话模式
+- 语音指令控制
+
+### CLI 命令
+```bash
+magic voice listen           # 启动语音模式
+magic voice speak <text>     # 文字转语音
+magic voice test            # 测试配置
+```
+
+## Batch 批处理
+
+批量轨迹生成和 RL 训练支持。
+
+### 功能
+- 批量任务执行
+- 轨迹生成和导出
+- 查询批处理
+- 进度追踪
+
+### CLI 命令
+```bash
+magic batch list                    # 列出任务
+magic batch create <file> --type trajectory  # 创建任务
+magic batch status <job_id>        # 查看状态
+magic batch export <job_id>        # 导出结果
+```
+
+## 图像理解/生成
+
+Vision 工具集成，支持图像分析和生成。
+
+### 功能
+- 图像内容理解
+- 图像描述生成
+- 图表/截图分析
+- 多模态交互
+
+### 支持模型
+- GPT-4V / Claude Vision
+- Gemini Pro Vision
+- 本地模型 (LLaVA, CogVLM)
+
+## Skills Hub 集成
+
+agentskills.io 官方技能市场集成。
+
+### 功能
+- 搜索官方技能
+- 一键安装技能
+- 自动更新检查
+- 技能版本管理
+
+### CLI 命令
+```bash
+magic skills hub search <query>   # 搜索 Hub
+magic skills hub install <name>   # 安装技能
+magic skills hub update           # 检查更新
+```
+
+## 扩展消息平台
+
+支持更多消息网关集成。
+
+### 新增平台
+| 平台 | 描述 |
+|------|------|
+| WhatsApp | WhatsApp Business API |
+| Signal | Signal 消息 |
+| Matrix | Matrix 协议 |
+| Email | 邮件网关 |
+| SMS | 短信服务 |
+
+### 配置示例
+```yaml
+gateway:
+  platforms:
+    - type: whatsapp
+      phone_id: ${WHATSAPP_PHONE_ID}
+      api_key: ${WHATSAPP_API_KEY}
+    - type: signal
+      signal_service: ${SIGNAL_SERVICE}
+```
+
+## LLM 文档生成
+
+机器可读的文档索引。
+
+### 生成的文件
+- `llms.txt` - 精简索引 (~17 KB)
+- `llms-full.txt` - 完整文档 (~1.8 MB)
+
+### 用途
+- LLM 上下文加载
+- AI 代码助手集成
+- 自动化文档处理

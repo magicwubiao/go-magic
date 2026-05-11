@@ -110,8 +110,8 @@ type SubAgentConfig struct {
 	Timeout       time.Duration `json:"timeout"`
 }
 
-// VoiceConfig represents voice configuration (alias for voice.Config)
-type VoiceConfig = voice.Config
+// VoiceConfig represents voice configuration (alias for voice.VoiceConfig)
+type VoiceConfig = voice.VoiceConfig
 
 func DefaultSubAgentConfig() *subagent.Config {
 	return subagent.DefaultConfig()
