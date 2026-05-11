@@ -22,6 +22,24 @@ const (
 	TypeCode
 )
 
+// String returns the string representation of FileType
+func (ft FileType) String() string {
+	switch ft {
+	case TypeMarkdown:
+		return "markdown"
+	case TypeYAML:
+		return "yaml"
+	case TypeJSON:
+		return "json"
+	case TypeText:
+		return "text"
+	case TypeCode:
+		return "code"
+	default:
+		return "unknown"
+	}
+}
+
 // ContextFile represents a context file entry
 type ContextFile struct {
 	Path       string   `json:"path"`
