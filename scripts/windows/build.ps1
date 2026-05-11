@@ -1,54 +1,38 @@
-# Build magic agent for multiple platforms
+# go-magic Windows Build Script
 # Usage: .\build.ps1
 
-$ErrorActionPreference = "Stop"
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host " go-magic Build Script" -ForegroundColor Cyan
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host ""
 
-# Change to project root
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+# Get project root
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
-$Project = "github.com/magicwubiao/go-magic"
-$OutputDir = ".\build"
+Write-Host "[INFO] Project root: $PWD" -ForegroundColor Gray
 
-if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir | Out-Null
+# Create dist directory
+$DistDir = "dist"
+if (-not (Test-Path $DistDir)) {
+    New-Item -ItemType Directory -Path $DistDir | Out-Null
 }
 
-# Get version from git tag or use "dev"
-$Version = git describe --tags --always 2>$null
-if (-not $Version) { $Version = "dev" }
+# Build for Windows AMD64
+Write-Host "[INFO] Building for Windows AMD64..." -ForegroundColor Yellow
+go build -ldflags="-s -w" -o "$DistDir\magic-windows-amd64.exe" ./cmd/magic
 
-Write-Host "Building magic agent v$Version..." -ForegroundColor Cyan
-
-$platforms = @(
-    @{GOOS="windows"; GOARCH="amd64"; Ext=".exe"},
-    @{GOOS="linux"; GOARCH="amd64"; Ext=""},
-    @{GOOS="darwin"; GOARCH="amd64"; Ext=""},
-    @{GOOS="darwin"; GOARCH="arm64"; Ext=""}
-)
-
-foreach ($p in $platforms) {
-    $output = "$OutputDir\magic-$($p.GOOS)-$($p.GOARCH)$($p.Ext)"
-    Write-Host "  Building $output..." -ForegroundColor Yellow
-    
-    $env:GOOS = $p.GOOS
-    $env:GOARCH = $p.GOARCH
-    
-    go build -ldflags "-s -w -X main.Version=$Version" -o $output ./cmd/magic/
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  FAILED!" -ForegroundColor Red
-        exit 1
-    }
-    
-    Write-Host "  OK" -ForegroundColor Green
+if ($LASTEXITCODE -eq 0) {
+    $Size = (Get-Item "$DistDir\magic-windows-amd64.exe").Length / 1MB
+    Write-Host "[OK] Built: $DistDir\magic-windows-amd64.exe ($([math]::Round($Size, 1)) MB)" -ForegroundColor Green
+} else {
+    Write-Host "[ERROR] Build failed" -ForegroundColor Red
+    exit 1
 }
-
-# Reset env
-$env:GOOS = ""
-$env:GOARCH = ""
 
 Write-Host ""
-Write-Host "Build complete! Outputs:" -ForegroundColor Cyan
-Get-ChildItem $OutputDir | ForEach-Object { Write-Host "  $($_.Name)" }
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host " Build complete!" -ForegroundColor Green
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Output: $DistDir\magic-windows-amd64.exe" -ForegroundColor Gray

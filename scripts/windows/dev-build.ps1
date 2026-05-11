@@ -1,21 +1,36 @@
-# Build magic agent for current platform
+# go-magic Windows Dev Build Script
 # Usage: .\dev-build.ps1
 
-$ErrorActionPreference = "Stop"
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host " go-magic Dev Build (with debug)" -ForegroundColor Cyan
+Write-Host "===================================" -ForegroundColor Cyan
+Write-Host ""
 
-# Change to project root
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+# Get project root
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
-$Version = git describe --tags --always 2>$null
-if (-not $Version) { $Version = "dev" }
+Write-Host "[INFO] Project root: $PWD" -ForegroundColor Gray
 
-Write-Host "Building magic v$Version for current platform..." -ForegroundColor Cyan
-go build -ldflags "-X main.Version=$Version" -o .\magic.exe .\cmd\magic\
+# Check for uncommitted changes
+$Status = git status --porcelain
+if ($Status) {
+    Write-Host "[WARN] You have uncommitted changes:" -ForegroundColor Yellow
+    Write-Host $Status -ForegroundColor Gray
+    Write-Host ""
+}
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build FAILED!" -ForegroundColor Red
+# Build with debug symbols and no optimization
+Write-Host "[INFO] Building for development..." -ForegroundColor Yellow
+go build -gcflags="all=-N -l" -o magic-dev.exe ./cmd/magic
+
+if ($LASTEXITCODE -eq 0) {
+    $Size = (Get-Item "magic-dev.exe").Length / 1MB
+    Write-Host "[OK] Dev build complete: magic-dev.exe ($([math]::Round($Size, 1)) MB)" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Run with: .\magic-dev.exe" -ForegroundColor Cyan
+    Write-Host "For debugging, use: dlv debug ./cmd/magic" -ForegroundColor Gray
+} else {
+    Write-Host "[ERROR] Build failed" -ForegroundColor Red
     exit 1
 }
-Write-Host "OK -> .\magic.exe" -ForegroundColor Green
