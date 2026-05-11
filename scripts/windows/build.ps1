@@ -2,6 +2,12 @@
 # Usage: .\build.ps1
 
 $ErrorActionPreference = "Stop"
+
+# Change to project root
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+Set-Location $ProjectRoot
+
 $Project = "github.com/magicwubiao/go-magic"
 $OutputDir = ".\build"
 

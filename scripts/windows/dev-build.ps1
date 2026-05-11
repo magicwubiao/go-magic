@@ -1,7 +1,13 @@
 # Build magic agent for current platform
-# Usage: .\build.ps1 -Dev
+# Usage: .\dev-build.ps1
 
 $ErrorActionPreference = "Stop"
+
+# Change to project root
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+Set-Location $ProjectRoot
+
 $Version = git describe --tags --always 2>$null
 if (-not $Version) { $Version = "dev" }
 

@@ -1,5 +1,10 @@
 $ErrorActionPreference = "Stop"
 
+# Change to project root
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+Set-Location $ProjectRoot
+
 $VERSION = "dev"
 $COMMIT = "unknown"
 $DATE = "unknown"
