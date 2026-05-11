@@ -433,10 +433,10 @@ func (m *Manager) List() []*Template {
 // ListByTag 按标签筛选
 func (m *Manager) ListByTag(tag string) []*Template {
 	result := make([]*Template, 0)
-	for _, t := range m.templates {
-		for _, t := range t.Tags {
+	for _, tpl := range m.templates {
+		for _, t := range tpl.Tags {
 			if t == tag {
-				result = append(result, t)
+				result = append(result, tpl)
 				break
 			}
 		}

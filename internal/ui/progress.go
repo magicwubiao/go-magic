@@ -9,33 +9,31 @@ import (
 
 // Color ANSI color codes
 type Color struct {
-	Reset  string
-	Bold   string
-	Dim    string
-	Black  string
-	Red    string
-	Green  string
-	Yellow string
-	Blue   string
+	Reset   string
+	Bold    string
+	Dim     string
+	Black   string
+	Red     string
+	Green   string
+	Yellow  string
+	Blue    string
 	Magenta string
-	Cyan   string
-	White  string
+	Cyan    string
+	White   string
 }
 
-func init() {
-	color = &Color{
-		Reset:   "\033[0m",
-		Bold:    "\033[1m",
-		Dim:     "\033[2m",
-		Black:   "\033[30m",
-		Red:     "\033[31m",
-		Green:   "\033[32m",
-		Yellow:  "\033[33m",
-		Blue:    "\033[34m",
-		Magenta: "\033[35m",
-		Cyan:    "\033[36m",
-		White:   "\033[37m",
-	}
+var ansiColor = &Color{
+	Reset:   "\033[0m",
+	Bold:    "\033[1m",
+	Dim:     "\033[2m",
+	Black:   "\033[30m",
+	Red:     "\033[31m",
+	Green:   "\033[32m",
+	Yellow:  "\033[33m",
+	Blue:    "\033[34m",
+	Magenta: "\033[35m",
+	Cyan:    "\033[36m",
+	White:   "\033[37m",
 }
 
 // ProgressBar 进度条
@@ -62,7 +60,7 @@ func NewProgressBar(total int) *ProgressBar {
 		showTimer:  true,
 		showPercent: true,
 		showETA:    true,
-		colorFg:    color.Green,
+		colorFg:    ansiColor.Green,
 		startTime:  time.Now(),
 	}
 }
@@ -156,7 +154,7 @@ func (p *ProgressBar) drawLocked() {
 	for i := 0; i < filled; i++ {
 		sb.WriteString("█")
 	}
-	sb.WriteString(color.Reset)
+	sb.WriteString(ansiColor.Reset)
 	for i := 0; i < empty; i++ {
 		sb.WriteString("░")
 	}
@@ -275,48 +273,48 @@ func (s *Spinner) Stop() {
 // Success 显示成功
 func (s *Spinner) Success(msg string) {
 	s.Stop()
-	fmt.Printf("\r%s✓%s %s\n", color.Green, color.Reset, msg)
+	fmt.Printf("\r%s✓%s %s\n", ansiColor.Green, ansiColor.Reset, msg)
 }
 
 // Error 显示错误
 func (s *Spinner) Error(msg string) {
 	s.Stop()
-	fmt.Printf("\r%s✗%s %s\n", color.Red, color.Reset, msg)
+	fmt.Printf("\r%s✗%s %s\n", ansiColor.Red, ansiColor.Reset, msg)
 }
 
 // Warning 显示警告
 func (s *Spinner) Warning(msg string) {
 	s.Stop()
-	fmt.Printf("\r%s⚠%s %s\n", color.Yellow, color.Reset, msg)
+	fmt.Printf("\r%s⚠%s %s\n", ansiColor.Yellow, ansiColor.Reset, msg)
 }
 
 func (s *Spinner) drawLocked() {
-	fmt.Printf("\r%s%s%s %s", color.Cyan, s.spinner[s.index], color.Reset, s.message)
+	fmt.Printf("\r%s%s%s %s", ansiColor.Cyan, s.spinner[s.index], ansiColor.Reset, s.message)
 }
 
 // StatusMessage 状态消息
 func StatusMessage(msg string) {
-	fmt.Printf("\r%s%s%s\n", color.Dim, msg, color.Reset)
+	fmt.Printf("\r%s%s%s\n", ansiColor.Dim, msg, ansiColor.Reset)
 }
 
 // SuccessMessage 成功消息
 func SuccessMessage(msg string) {
-	fmt.Printf("%s✓%s %s\n", color.Green, color.Reset, msg)
+	fmt.Printf("%s✓%s %s\n", ansiColor.Green, ansiColor.Reset, msg)
 }
 
 // ErrorMessage 错误消息
 func ErrorMessage(msg string) {
-	fmt.Printf("%s✗%s %s\n", color.Red, color.Reset, msg)
+	fmt.Printf("%s✗%s %s\n", ansiColor.Red, ansiColor.Reset, msg)
 }
 
 // WarningMessage 警告消息
 func WarningMessage(msg string) {
-	fmt.Printf("%s⚠%s %s\n", color.Yellow, color.Reset, msg)
+	fmt.Printf("%s⚠%s %s\n", ansiColor.Yellow, ansiColor.Reset, msg)
 }
 
 // InfoMessage 信息消息
 func InfoMessage(msg string) {
-	fmt.Printf("%sℹ%s %s\n", color.Blue, color.Reset, msg)
+	fmt.Printf("%sℹ%s %s\n", ansiColor.Blue, ansiColor.Reset, msg)
 }
 
 // formatDuration 格式化时长
