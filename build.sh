@@ -45,7 +45,7 @@ build_cli() {
             ;;
     esac
 
-    CGO_ENABLED=1 go build \
+    CGO_ENABLED=0 go build \
         -ldflags="-s -w -X main.version=${VERSION} -X main.buildTime=${TIMESTAMP}" \
         -o "$OUTPUT" \
         ./cmd/magic
