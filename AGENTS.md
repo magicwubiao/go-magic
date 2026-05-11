@@ -596,3 +596,198 @@ magic gateway status      # 查看状态
 4. magic sessions list    # 查看会话
 5. magic gateway status   # 网关状态
 ```
+
+## 使用量统计 (Usage Tracking)
+
+内置 Token 和成本追踪系统，支持每日/每月统计、预算限制和告警。
+
+### CLI 命令
+```bash
+magic usage              # 显示今日统计
+magic usage --daily      # 按日统计
+magic usage --monthly    # 按月统计
+magic usage --budget     # 设置预算
+magic usage --export     # 导出 CSV
+```
+
+### 功能特性
+- 按 Provider/Model 分组统计
+- 每日/每月/每年汇总
+- 成本计算（基于 Provider 定价）
+- 预算限制和告警
+- 数据导出 (CSV/JSON)
+
+## 密钥管理 (Secrets)
+
+加密存储 API 密钥和其他敏感信息，支持多种后端。
+
+### CLI 命令
+```bash
+magic secrets list              # 列出所有密钥
+magic secrets set OPENAI_KEY    # 存储新密钥
+magic secrets get OPENAI_KEY    # 获取密钥值
+magic secrets delete OPENAI_KEY # 删除密钥
+magic secrets rename OLD NEW    # 重命名
+magic secrets import-env        # 从环境变量导入
+```
+
+### 后端支持
+- **keyring**: 系统密钥链 (Linux: libsecret, macOS: Keychain, Windows: Credential Manager)
+- **file**: 加密文件存储 (AES-256-GCM)
+
+## 自动更新 (Auto-Update)
+
+检查和安装新版本，支持备份、回滚和多通道更新。
+
+### CLI 命令
+```bash
+magic update              # 检查并更新
+magic update --check      # 仅检查
+magic update --backup     # 更新前备份
+magic update --force      # 强制更新
+magic update --channel beta  # 使用 beta 通道
+```
+
+## Prompt 模板系统
+
+管理和使用提示模板，支持变量插值和分类管理。
+
+### CLI 命令
+```bash
+magic prompt list              # 列出模板
+magic prompt list --system     # 包含系统模板
+magic prompt list --tags code  # 按标签筛选
+magic prompt show <name>       # 查看详情
+magic prompt create <name>     # 创建模板
+magic prompt edit <name>       # 编辑模板
+magic prompt delete <name>     # 删除模板
+magic prompt export [name]     # 导出
+magic prompt import <file>     # 导入
+```
+
+### 内置模板
+| 模板 | 描述 | 分类 |
+|------|------|------|
+| default | 默认 Agent 提示 | system |
+| research | 研究助手 | system |
+| coder | 代码助手 | system |
+| summarizer | 内容总结 | agent |
+
+## 交互式 UI
+
+终端进度条和动画效果。
+
+### Spinner 示例
+```go
+spinner := ui.NewSpinner("Loading...")
+spinner.Start()
+defer spinner.Stop()
+
+// 执行任务
+result := doWork()
+
+spinner.Success("Done!")
+```
+
+### 进度条示例
+```go
+bar := ui.NewProgressBar(100)
+bar.Start()
+
+for i := 0; i < 100; i++ {
+    bar.Update(i)
+    time.Sleep(10 * time.Millisecond)
+}
+
+bar.Finish()
+```
+
+## Webhook 事件系统
+
+事件驱动架构，支持订阅和触发 Webhook。
+
+### 配置
+```yaml
+webhook:
+  enabled: true
+  port: 8643
+  events:
+    - message.received
+    - agent.started
+    - agent.completed
+    - tool.called
+  handlers:
+    - url: https://example.com/webhook
+      events: [message.received]
+      secret: ${WEBHOOK_SECRET}
+```
+
+### 事件类型
+| 事件 | 描述 |
+|------|------|
+| message.received | 收到新消息 |
+| message.sent | 发送消息 |
+| agent.started | Agent 启动 |
+| agent.completed | Agent 完成 |
+| tool.called | 工具调用 |
+| error | 发生错误 |
+
+## 审计日志
+
+记录敏感操作的审计日志。
+
+### CLI 命令
+```bash
+magic audit list              # 查看审计日志
+magic audit list --user alice # 按用户筛选
+magic audit list --since 24h  # 最近 24 小时
+magic audit export            # 导出日志
+```
+
+### 记录的操作
+- 密钥访问和修改
+- 配置变更
+- 插件安装/卸载
+- 敏感工具调用
+- 认证和授权事件
+
+## 多语言支持 (i18n)
+
+支持多种语言界面。
+
+### 支持的语言
+| 语言 | 代码 |
+|------|------|
+| English | en |
+| 中文 | zh |
+| 日本語 | ja |
+| 한국어 | ko |
+
+### CLI 命令
+```bash
+magic i18n list               # 列出可用语言
+magic i18n set zh              # 设置语言
+magic i18n translate <key>     # 翻译指定 key
+```
+
+## 插件市场
+
+发现和安装社区插件。
+
+### CLI 命令
+```bash
+magic plugin list              # 列出已加载插件
+magic plugin discover          # 发现可用插件
+magic plugin load <path>       # 加载插件
+magic plugin unload <name>     # 卸载插件
+magic plugin reload <name>     # 热重载插件
+```
+
+### 插件结构
+```
+~/.magic/plugins/
+└── my-plugin/
+    ├── manifest.json     # 插件元数据
+    ├── plugin.go         # 插件代码
+    └── README.md          # 文档
+```
