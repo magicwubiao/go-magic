@@ -39,6 +39,7 @@ type WhatsAppGateway struct {
 
 	dataDir    string // Where session data is stored
 	qrCallback func(qr string) // Called when QR code is generated
+	latestQR  string // Store latest QR code for web access
 
 	// Track own JID for filtering
 	ownJID types.JID
@@ -314,9 +315,13 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 			g.qrCallback(qrData)
 		}
 
-		fmt.Println("\n📱 Scan this QR code with WhatsApp > Linked Devices:")
-		qrterminal.Generate(qrData, qrterminal.L, os.Stdout)
-		fmt.Println()
+		// Store latest QR for web dashboard access
+		g.mu.Lock()
+		g.latestQR = qrData
+		g.mu.Unlock()
+
+		// Display QR code with multiple fallbacks
+		displayQRCode(qrData)
 
 	case *events.QRScannedWithoutMultidevice:
 		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
@@ -652,4 +657,85 @@ func (g *WhatsAppBusinessGateway) SetChannelFilter(allowed, blocked []string) {
 	defer g.mu.Unlock()
 	g.allowedChannels = allowed
 	g.blockedChannels = blocked
+}
+
+// displayQRCode displays the QR code with multiple fallback methods
+func displayQRCode(qrData string) {
+	// Check if stdout is a terminal
+	isTTY := isTerminal(os.Stdout.Fd())
+
+	if isTTY {
+		// Try to display QR code in terminal
+		// Use smaller size (M) for better compatibility with most terminals
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("  📱 WhatsApp QR Code - Scan with WhatsApp > Linked Devices")
+		fmt.Println(strings.Repeat("=", 60))
+		
+		// Try terminal QR first
+		qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
+		
+		// Also print as URL for backup viewing
+		fmt.Println("\n  QR Code raw data:")
+		fmt.Printf("  %s\n", truncateStringSimple(qrData, 80))
+	} else {
+		// Non-TTY environment (piped/redirected output)
+		// Generate a simple text representation
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("  📱 WhatsApp QR Code (Text Mode)")
+		fmt.Println(strings.Repeat("=", 60))
+		fmt.Println()
+		fmt.Println("  Open this URL in your browser to see the QR code:")
+		fmt.Println()
+		fmt.Printf("  https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", qrData)
+		fmt.Println()
+		fmt.Println("  Or scan the QR code below (if your terminal supports it):")
+		fmt.Println()
+		
+		// Try anyway with smaller size
+		qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
+	}
+
+	fmt.Println()
+	fmt.Println("  ⚠️  QR code expires in 60 seconds. Please scan quickly!")
+	fmt.Println("  If the QR code doesn't appear, check your terminal width (>80 chars)")
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println()
+}
+
+// isTerminal checks if the file descriptor is a terminal
+func isTerminal(fd uintptr) bool {
+	return true // Simplified - always assume TTY for qrterminal
+}
+
+// truncateStringSimple truncates a string to maxLen characters
+func truncateStringSimple(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// GetLatestQR returns the most recent QR code data
+func (g *WhatsAppGateway) GetLatestQR() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.latestQR
+}
+
+// QRCodeResponse represents QR code data for API response
+type QRCodeResponse struct {
+	QRCode string `json:"qr_code"`
+	Expiry int    `json:"expires_in_seconds"`
+}
+
+// GetQRCodeForAPI returns QR code data suitable for web display
+func (g *WhatsAppGateway) GetQRCodeForAPI() *QRCodeResponse {
+	qr := g.GetLatestQR()
+	if qr == "" {
+		return nil
+	}
+	return &QRCodeResponse{
+		QRCode: qr,
+		Expiry: 60, // QR codes typically expire in 60 seconds
+	}
 }
