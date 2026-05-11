@@ -1,76 +1,21 @@
 # Go Magic
 
-A high-performance, ultra-lightweight Go implementation of the AI Agent, inspired by Nous Research's hermes-agent.
+A high-performance, ultra-lightweight AI Agent framework written in Go, inspired by [Nous Research's hermes-agent](https://github.com/NousResearch/hermes-agent).
 
 ## Features
 
-- **Ultra-Lightweight**: Minimal dependencies, designed for efficiency
-- **Multi-Provider Support**: OpenAI, DeepSeek, Huoshan, Anthropic, Zhipu, Kimi, MiniMax, DashScope, OpenRouter, Ollama, vLLM
-- **Tool System**: Extensible tool framework with 15+ built-in tools
-- **Parallel Tool Execution**: Concurrent execution of independent tools for reduced latency
-- **Context Compression**: Intelligent history summarization to prevent context overflow
-- **Secure Execution**: Command whitelist, injection detection, dangerous pattern blocking
-- **Session Management**: Persistent chat sessions with SQLite storage
-- **Gateway**: Multi-platform messaging gateway (Telegram, Discord, WeCom, QQ, DingTalk, Feishu, WeChat)
-- **Skills System**: Extensible skill framework with auto-creation capabilities
-- **MCP Protocol**: Connect to external MCP servers for extended tool capabilities
-- **Subagents**: Parallel execution of multiple subagents
-- **PII Redaction**: Automatic detection and redaction of sensitive information
-- **Voice Mode**: Voice interaction with push-to-talk functionality
-- **Health Check**: HTTP health endpoint with detailed status
-- **CLI REPL**: Interactive shell with slash commands and colored output
-
-## Cortex Agent Architecture
-
-go-magic implements a complete three-layer cognitive architecture with six self-evolution systems:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│   Layer 1: Perception → Layer 2: Cognition → Layer 3: Execution     │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐     │
-│   │  Intent     │    │  Task       │    │  Checkpoint &       │     │
-│   │  Classification    │  Planning  │    │  Resume Support     │     │
-│   │  Complexity │    │  DAG       │    │  Result Validation   │     │
-│   │  Assessment │    │  Management │    │  Progress Tracking  │     │
-│   └─────────────┘    └─────────────┘    └─────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────┘
-
-Six Self-Evolution Systems:
-┌────────────┐ ┌────────┐ ┌─────────────┐ ┌──────────────┐
-│  Message   │ │ Nudge  │ │ Background  │ │  Frozen      │
-│  Trigger   │ │ System │ │ Review      │ │  Snapshot    │
-└────────────┘ └────────┘ └─────────────┘ └──────────────┘
-┌────────────┐ ┌────────────────┐
-│  FTS       │ │  Skill Auto-   │
-│  Memory    │ │  Evolution     │
-└────────────┘ └────────────────┘
-```
-
-### Three-Layer Architecture
-
-| Layer | Purpose | Key Features |
-|-------|---------|--------------|
-| **Perception** | Understand user input | 7 intent types, 3 complexity levels, entity extraction, noise detection |
-| **Cognition** | Plan execution | Task decomposition, DAG dependency, adaptive max turns, sub-agent decisions |
-| **Execution** | Execute tasks | Checkpoint/resume, result validation, progress tracking |
-
-### Six Self-Evolution Systems
-
-1. **Message Trigger**: Detects conversation turns, triggers Nudge signals
-2. **Nudge System**: Async background review without blocking user
-3. **Background Review**: Analyzes patterns, generates skill drafts
-4. **Frozen Snapshot**: Protects prefix cache, reduces API costs by 90%
-5. **FTS Memory**: Full-text search across sessions with BM25 ranking
-6. **Skill Auto-Evolution**: Progressive disclosure (Level 0-2), learns from usage
-
-### Cost Optimization
-
-Using frozen snapshots achieves **90% API cost savings**:
-
-```
-Without Frozen Snapshot: ~$0.20/turn × 100 turns = $20.00
-With Frozen Snapshot:    ~$0.02/turn × 100 turns = $2.00
-```
+| Feature | Description |
+|---------|-------------|
+| **Multi-Provider Support** | OpenAI, DeepSeek, Huoshan, Anthropic, Zhipu, Kimi, MiniMax, DashScope, OpenRouter, Ollama, vLLM |
+| **Cortex Architecture** | Three-layer cognitive system with six self-evolution mechanisms |
+| **Tool System** | 15+ built-in tools with extensible plugin framework |
+| **Gateway** | Multi-platform messaging (Telegram, Discord, WhatsApp, Signal, Slack, etc.) |
+| **Skills System** | Auto-creation, progressive loading (L0/L1/L2), Skills Hub integration |
+| **MCP Protocol** | Connect to external MCP servers for extended capabilities |
+| **Session Management** | SQLite-based persistence with FTS5 full-text search |
+| **Voice Mode** | TTS/STT with multiple provider support |
+| **Vision** | Image understanding with multi-model support |
+| **Multi-Platform** | Linux, macOS, Windows, FreeBSD, Docker |
 
 ## Quick Start
 
@@ -86,204 +31,212 @@ cd go-magic
 make build
 ```
 
-### Configuration
+### One-Click Install (Linux/macOS)
 
 ```bash
-# Set provider
-magic config set provider openai
-
-# Set API key
-magic config set providers.openai.api_key YOUR_KEY
-
-# Enable Cortex mode (recommended)
-magic config set cortex.enabled true
-
-# View configuration
-magic config list
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
 ```
 
-### Basic Usage
+### Docker
 
 ```bash
-# Start interactive chat
+docker run -it magicwubiao/go-magic
+```
+
+## Usage
+
+```bash
+# Interactive chat
 magic chat
 
-# Run agent mode
+# Agent mode with parallel execution
 magic agent
 
-# Start REPL
-magic repl
-
 # Voice interaction
-magic voice
+magic voice listen
+magic voice speak "Hello world"
+
+# Vision image analysis
+magic vision analyze image.png
+
+# REPL mode
+magic repl
 ```
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Quick Start](docs/QUICKSTART.md) | Get started quickly |
-| [Architecture](docs/ARCHITECTURE.md) | Complete architecture overview |
-| [API Reference](docs/API.md) | API documentation |
-| [Cortex Architecture](docs/CORTEX_ARCHITECTURE_OVERVIEW.md) | Three-layer six-system architecture |
-| [Tools](docs/TOOLS.md) | Built-in tools |
-| [Plugin System](docs/PLUGIN_SYSTEM.md) | Plugin development |
-| [CLI Usage](docs/CLI_USAGE.md) | CLI commands |
-| [Configuration](docs/CONFIGURATION.md) | Configuration guide |
-| [Development](docs/DEVELOPMENT.md) | Development guide |
-| [Deployment](docs/DEPLOYMENT.md) | Deployment guide |
-| [FAQ](docs/FAQ.md) | Common questions |
-| [Glossary](docs/GLOSSARY.md) | Terminology |
 
 ## CLI Commands
 
-### Core Commands
-
 | Command | Description |
 |---------|-------------|
-| `magic chat` | Start interactive chat session |
-| `magic agent` | Run agent mode with parallel execution |
-| `magic repl` | Start REPL (Read-Eval-Print Loop) |
-| `magic voice` | Voice interaction mode |
-
-### Configuration
-
-| Command | Description |
-|---------|-------------|
-| `magic config list` | List all configuration |
-| `magic config get <key>` | Get config value |
-| `magic config set <key> <value>` | Set config value |
-| `magic config path` | Show config file path |
-| `magic config validate` | Validate configuration |
-| `magic config reset` | Reset to defaults |
-
-### Skills Management
-
-| Command | Description |
-|---------|-------------|
-| `magic skills list` | List all skills |
-| `magic skills show <name>` | Show skill details |
-| `magic skills search <keyword>` | Search skills |
-| `magic skills install <name>` | Install a skill |
-| `magic skills create <name>` | Create new skill |
-| `magic skills delete <name>` | Delete a skill |
-| `magic skills match <input>` | Find matching skills |
-
-### Plugin Management
-
-| Command | Description |
-|---------|-------------|
-| `magic plugin list` | List loaded plugins |
-| `magic plugin discover` | Discover available plugins |
-| `magic plugin load <path>` | Load a plugin |
-| `magic plugin unload <name>` | Unload a plugin |
-
-### Session Management
-
-| Command | Description |
-|---------|-------------|
-| `magic session list` | List all sessions |
-| `magic session show <id>` | Show session details |
-| `magic session delete <id>` | Delete a session |
-| `magic session clear` | Clear all sessions |
-
-### Utilities
-
-| Command | Description |
-|---------|-------------|
-| `magic version` | Show version information |
-| `magic health` | Health check |
-| `magic status` | System status |
-| `magic metrics` | Show system metrics |
-| `magic logs` | View logs |
-| `magic doctor` | Run diagnostics |
+| `magic chat` | Interactive chat session |
+| `magic agent` | Agent mode with task planning |
+| `magic repl` | REPL shell |
+| `magic voice` | Voice interaction (listen/speak/test) |
+| `magic vision` | Image understanding (analyze/compare) |
+| `magic config` | Configuration management |
+| `magic skills` | Skills management |
+| `magic plugin` | Plugin system |
+| `magic session` | Session management |
+| `magic gateway` | Messaging gateway |
+| `magic mcp` | MCP server management |
+| `magic doctor` | Diagnostics |
+| `magic update` | Auto-update |
 
 ## Configuration
 
-Config file: `~/.magic/config.json`
+```yaml
+# ~/.magic/config.yaml
+provider:
+  name: deepseek
+  api_key: ${DEEPSEEK_API_KEY}
 
-```json
-{
-  "provider": "deepseek",
-  "model": "deepseek-chat",
-  "cortex_enabled": true,
-  "providers": {
-    "deepseek": {
-      "api_key": "...",
-      "base_url": "https://api.deepseek.com/v1"
-    }
-  },
-  "tools": {
-    "enabled": ["all"]
-  },
-  "gateway": {
-    "enabled": false,
-    "platforms": {}
-  }
-}
+cortex:
+  enabled: true
+  max_turns: 25
+
+tools:
+  enabled: ["all"]
+
+gateway:
+  enabled: true
+  platforms:
+    telegram:
+      token: ${TELEGRAM_BOT_TOKEN}
+    discord:
+      bot_token: ${DISCORD_BOT_TOKEN}
 ```
 
-## Built-in Tools
+## Tool System
 
-### File Tools
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents |
-| `write_file` | Write file contents |
-| `list_files` | List directory contents |
-| `search_in_files` | Search content in files |
+| Toolset | Tools |
+|---------|-------|
+| **web** | web_search, web_extract |
+| **file** | read_file, write_file, file_edit, list_files, search_in_files |
+| **terminal** | execute_command, terminal, process |
+| **browser** | browser_navigate, browser_snapshot, browser_click, browser_type |
+| **memory** | memory_store, memory_recall |
+| **skills** | skill_list, skill_view, skill_manage |
+| **code_execution** | execute_code |
+| **delegation** | delegate_task, poll_task |
+| **homeassistant** | ha_list_entities, ha_get_state, ha_call_service |
+| **mcp** | mcp_* (from connected servers) |
 
-### Web Tools
-| Tool | Description |
-|------|-------------|
-| `web_search` | Web search with structured results |
-| `web_extract` | Extract readable content from URL |
-| `browser_navigate` | Navigate to URL with full browser automation |
-| `browser_click` | Click elements on page |
-| `browser_type` | Type text into input fields |
-| `browser_screenshot` | Take page screenshots |
+## Architecture
 
-### Execution Tools
-| Tool | Description |
-|------|-------------|
-| `execute_command` | Secure shell command execution |
-| `python_execute` | Execute Python code |
-| `node_execute` | Execute Node.js code |
+### Three-Layer Cognitive System
 
-### Memory Tools
-| Tool | Description |
-|------|-------------|
-| `memory_store` | Store information in session memory |
-| `memory_recall` | Recall stored information |
+```
+┌──────────────────────────────────────────────────────┐
+│  Layer 1: Perception                                 │
+│  Intent Classification → Complexity Assessment       │
+├──────────────────────────────────────────────────────┤
+│  Layer 2: Cognition                                  │
+│  Task Planning → DAG Management → Sub-agent Decisions│
+├──────────────────────────────────────────────────────┤
+│  Layer 3: Execution                                  │
+│  Checkpoint/Resume → Result Validation               │
+└──────────────────────────────────────────────────────┘
+```
 
-## Cortex API Example
+### Six Self-Evolution Systems
 
-```go
-import "github.com/magicwubiao/go-magic/internal/cortex"
+| System | Description |
+|--------|-------------|
+| **Message Trigger** | Detects conversation turns, triggers Nudge signals |
+| **Nudge System** | Async background review without blocking |
+| **Background Review** | Analyzes patterns, generates skill drafts |
+| **Frozen Snapshot** | 90% API cost reduction via prefix caching |
+| **FTS Memory** | Full-text search across sessions |
+| **Skill Evolution** | Progressive disclosure, learns from usage |
 
-// Create manager (part of hermes-agent's Cortex architecture)
-mgr := cortex.NewManager("/data/cortex")
-mgr.Start()
+## Plugin System
 
-// Process message
-mgr.OnUserMessage("Write a Python ETL pipeline")
+```bash
+# Discover plugins
+magic plugin discover
 
-// Get results
-fmt.Println("Intent:", mgr.GetIntent())                    // "task"
-fmt.Println("Complexity:", mgr.GetTaskComplexity())         // "advanced"
-fmt.Println("Max Turns:", mgr.GetRecommendedMaxTurns())    // 25
+# Search plugins
+magic plugin search <query>
 
-// Get execution plan
-plan := mgr.GetExecutionPlan()
-for _, step := range plan.Steps {
-    fmt.Printf("[%d] %s\n", step.ID, step.Description)
-}
+# Install plugin
+magic plugin install <plugin-id>
+
+# Enable/disable/reload
+magic plugin enable <id>
+magic plugin disable <id>
+magic plugin reload <id>
+
+# Check updates
+magic plugin update
+magic plugin check
+```
+
+## Skills System
+
+```bash
+# List skills
+magic skills list
+
+# Show skill details
+magic skills show <name>
+
+# Create new skill
+magic skills create <name>
+
+# Install from Skills Hub
+magic skills hub install <name>
+
+# Progressive loading
+magic skills view <name> --level 0  # List only
+magic skills view <name> --level 1  # Full content
+magic skills view <name> --level 2  # With references
+```
+
+## Messaging Gateway
+
+```bash
+# Setup gateway
+magic gateway setup
+
+# Start gateway
+magic gateway start
+
+# Configure platforms
+magic gateway config telegram --token <token>
+magic gateway config discord --bot-token <token>
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
+| `DISCORD_BOT_TOKEN` | Discord bot token |
+| `GO_MAGIC_HOME` | Config directory (default: ~/.magic) |
+| `GO_MAGIC_PROFILE` | Profile name (default: default) |
+
+## Building
+
+```bash
+# Build for current platform
+make build
+
+# Cross-platform build
+make build-all
+
+# Build specific platform
+./scripts/build-cross.sh linux-amd64 darwin-arm64 windows-amd64
 ```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+Built with inspiration from [hermes-agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com/).
