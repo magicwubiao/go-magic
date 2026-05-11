@@ -1,6 +1,7 @@
-package main
+package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -43,6 +44,7 @@ type Server struct {
 	sessions    map[string]*Session
 	sessionsMux sync.RWMutex
 	mux         *http.ServeMux
+	httpServer  *http.Server
 }
 
 func NewServer(port string) *Server {
@@ -72,8 +74,21 @@ func (s *Server) Start() error {
 	s.mux.HandleFunc("/", s.handleStatic)
 	
 	addr := fmt.Sprintf(":%s", s.port)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: s.mux,
+	}
+	
 	log.Printf("Starting web server on http://localhost%s", addr)
-	return http.ListenAndServe(addr, s.mux)
+	return s.httpServer.ListenAndServe()
+}
+
+// Stop gracefully shuts down the server
+func (s *Server) Stop(ctx context.Context) error {
+	if s.httpServer != nil {
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
