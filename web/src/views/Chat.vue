@@ -106,7 +106,7 @@ async function sendMessage() {
   await nextTick()
   scrollToBottom()
   
-  // Simulate streaming response
+  // Create assistant message placeholder
   const assistantMessage: Message = {
     id: crypto.randomUUID(),
     role: 'assistant',
@@ -115,9 +115,64 @@ async function sendMessage() {
   }
   messages.value.push(assistantMessage)
   
-  // Simulate stream (replace with real SSE in production)
-  const responseText = `这是对 "${userMessage.content}" 的回复。\n\n我可以帮助你：\n- 回答问题\n- 编写代码\n- 分析数据\n- 写作和翻译\n\n有什么我可以帮你的吗？`
-  
+  // Connect to WebSocket for streaming response
+  try {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws`
+    const ws = new WebSocket(wsUrl)
+    
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        session_id: activeSessionId.value,
+        message: userMessage.content,
+        model: selectedModel.value
+      }))
+    }
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'chunk') {
+          assistantMessage.content += data.content
+          nextTick().then(scrollToBottom)
+        } else if (data.type === 'complete') {
+          ws.close()
+        }
+      } catch (e) {
+        // Plain text response fallback
+        assistantMessage.content += event.data
+        nextTick().then(scrollToBottom)
+      }
+    }
+    
+    ws.onerror = () => {
+      console.error('WebSocket error, falling back to simulated response')
+      simulateResponse(assistantMessage, userMessage.content)
+    }
+    
+    ws.onclose = () => {
+      streaming.value = false
+      isLoading.value = false
+    }
+  } catch (e) {
+    console.error('Failed to connect to WebSocket:', e)
+    simulateResponse(assistantMessage, userMessage.content)
+  }
+}
+
+// Fallback simulated response when WebSocket is not available
+async function simulateResponse(assistantMessage: Message, userContent: string) {
+  const responseText = `收到消息: "${userContent}"
+
+作为 go-magic AI Agent，我可以帮助你：
+- 回答各种问题
+- 编写和调试代码
+- 分析文件和数据
+- 执行终端命令
+- 管理技能和工作流程
+
+请告诉我你需要什么帮助？`
+
   for (let i = 0; i < responseText.length; i++) {
     await new Promise(resolve => setTimeout(resolve, 20))
     assistantMessage.content += responseText[i]

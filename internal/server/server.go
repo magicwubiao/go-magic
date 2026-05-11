@@ -86,6 +86,9 @@ func (s *Server) Start() error {
 
 	// WebSocket for streaming
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
+	
+	// SSE for streaming chat
+	s.mux.HandleFunc("/api/chat/stream", s.handleChatSSE)
 
 	// Serve static files from embedded FS
 	s.mux.HandleFunc("/", s.handleStatic)
@@ -255,9 +258,100 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		
-		// Echo back (in production, this would call the AI)
-		conn.WriteMessage(websocket.TextMessage, msg)
+		// Parse incoming message
+		var req ChatRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			// Echo back for error
+			conn.WriteMessage(websocket.TextMessage, msg)
+			continue
+		}
+		
+		// Process chat request and stream response
+		s.streamChatResponse(conn, &req)
 	}
+}
+
+// ChatRequest represents a chat message request
+type ChatRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+	Model     string `json:"model,omitempty"`
+}
+
+// streamChatResponse streams AI response via WebSocket
+func (s *Server) streamChatResponse(conn *websocket.Conn, req *ChatRequest) {
+	// Generate response chunks (simulated streaming)
+	chunks := []string{
+		"收到你的消息: " + req.Message + "\n\n",
+		"正在思考...\n",
+		"作为 go-magic AI Agent，我可以帮助你：\n\n",
+		"1. 回答各种问题\n",
+		"2. 编写和调试代码\n",
+		"3. 分析文件和数据\n",
+		"4. 执行终端命令\n",
+		"5. 管理你的技能和工作流程\n\n",
+		"请告诉我你需要什么帮助？",
+	}
+	
+	for _, chunk := range chunks {
+		resp := map[string]interface{}{
+			"type":    "chunk",
+			"content": chunk,
+		}
+		data, _ := json.Marshal(resp)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	
+	// Send completion
+	complete := map[string]interface{}{
+		"type": "complete",
+	}
+	data, _ := json.Marshal(complete)
+	conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// handleChatSSE handles Server-Sent Events for streaming chat
+func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	
+	sessionID := r.URL.Query().Get("session_id")
+	message := r.URL.Query().Get("message")
+	
+	if message == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+	
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+	
+	// Stream response
+	_ = sessionID // sessionID reserved for future use
+	chunks := []string{
+		"收到: " + message + "\n\n",
+		"正在处理...\n",
+		"go-magic AI Agent 响应中...\n",
+	}
+	
+	for _, chunk := range chunks {
+		fmt.Fprintf(w, "data: %s\n\n", chunk)
+		flusher.Flush()
+		time.Sleep(200 * time.Millisecond)
+	}
+	
+	// Send final message
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
