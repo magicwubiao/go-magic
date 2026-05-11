@@ -4,414 +4,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/magicwubiao/go-magic/internal/tool"
-	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
-var toolsShowSchema bool
-var toolsFilterPrefix string
-
+// toolsCmd represents the tools command
 var toolsCmd = &cobra.Command{
 	Use:   "tools",
-	Short: "Configure and manage tools",
-	Long: `Configure which tools are enabled and view tool information.
+	Short: "Tool and toolset management",
+	Long:  `Manage available tools and toolsets.`,
+}
 
-Tools are organized by category:
-  - File operations: read_file, write_file, file_edit, list_files, directory_tree, search_in_files
-  - Web tools: web_search, web_extract
-  - Code execution: execute_command (python/node available as plugins)
-  - Memory tools: memory_store, memory_recall
-  - Task management: todo
-  - AI capabilities: clarify, image_gen, tts, video_analyze (optional, require API config)
-  - Skills: skill
+var toolsListAll bool
 
-Examples:
-  magic tools list
-  magic tools list --prefix file
-  magic tools show read_file
-  magic tools show read_file --schema
-  magic tools enable browser_navigate
-  magic tools disable web_search`,
+func init() {
+	toolsListCmd.Flags().BoolVar(&toolsListAll, "json", false, "Output in JSON format")
+	toolsCmd.AddCommand(toolsListCmd)
+	rootCmd.AddCommand(toolsCmd)
+
+	// Toolset commands
+	toolsetsCmd.AddCommand(toolsetsListCmd)
+	toolsetsCmd.AddCommand(toolsetsShowCmd)
+	toolsetsCmd.AddCommand(toolsetsEnableCmd)
+	toolsetsCmd.AddCommand(toolsetsDisableCmd)
+	toolsCmd.AddCommand(toolsetsCmd)
 }
 
 var toolsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all available tools",
+	Long:  `List all available tools with their descriptions.`,
 	Run:   runToolsList,
-}
-
-var toolsShowCmd = &cobra.Command{
-	Use:   "show <tool>",
-	Short: "Show details about a tool",
-	Args:  cobra.ExactArgs(1),
-	Run:   runToolsShow,
-}
-
-var toolsEnableCmd = &cobra.Command{
-	Use:   "enable <tool>",
-	Short: "Enable a tool",
-	Args:  cobra.ExactArgs(1),
-	Run:   runToolsEnable,
-}
-
-var toolsDisableCmd = &cobra.Command{
-	Use:   "disable <tool>",
-	Short: "Disable a tool",
-	Args:  cobra.ExactArgs(1),
-	Run:   runToolsDisable,
-}
-
-var toolsSearchCmd = &cobra.Command{
-	Use:   "search <keyword>",
-	Short: "Search tools by keyword",
-	Args:  cobra.ExactArgs(1),
-	Run:   runToolsSearch,
-}
-
-var toolsSchemaCmd = &cobra.Command{
-	Use:   "schema [tool]",
-	Short: "Show tool schemas in OpenAI format",
-	Run:   runToolsSchema,
 }
 
 var toolsetsCmd = &cobra.Command{
 	Use:   "toolsets",
-	Short: "Manage tool groups (toolsets)",
-	Long: `Manage tool groups for organized tool access.
-
-Toolsets bundle related tools together:
-  - web: web_search, web_extract
-  - browser: browser_navigate, browser_snapshot, browser_click, etc.
-  - terminal: execute_command, terminal, process
-  - file: read_file, write_file, file_edit, list_files, etc.
-  - code_execution: execute_code
-  - skills: skills_list, skill_view, skill_manage
-  - memory: memory_store, memory_recall
-  - delegation: delegate_task, poll_task, list_tasks, cancel_task
-  - homeassistant: ha_list_entities, ha_get_state, etc.
-
-Examples:
-  magic tools toolsets list
-  magic tools toolsets show web
-  magic tools toolsets enable browser
-  magic tools toolsets disable terminal`,
+	Short: "Toolset management",
 }
-
-func init() {
-	toolsCmd.AddCommand(toolsListCmd)
-	toolsCmd.AddCommand(toolsShowCmd)
-	toolsCmd.AddCommand(toolsEnableCmd)
-	toolsCmd.AddCommand(toolsDisableCmd)
-	toolsCmd.AddCommand(toolsSearchCmd)
-	toolsCmd.AddCommand(toolsSchemaCmd)
-	toolsCmd.AddCommand(toolsetsCmd)
-
-	toolsListCmd.Flags().StringVar(&toolsFilterPrefix, "prefix", "", "Filter tools by prefix")
-	toolsShowCmd.Flags().BoolVar(&toolsShowSchema, "schema", false, "Show JSON schema")
-
-	rootCmd.AddCommand(toolsCmd)
-}
-
-func runToolsList(cmd *cobra.Command, args []string) {
-	cfg, _ := config.Load()
-	workDir := ""
-	if cfg != nil {
-		workDir = cfg.WorkingDir
-	}
-	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
-
-	tools := registry.List()
-	if len(tools) == 0 {
-		fmt.Println("No tools registered.")
-		return
-	}
-
-	// Sort tools
-	sort.Strings(tools)
-
-	// Filter by prefix if specified
-	if toolsFilterPrefix != "" {
-		var filtered []string
-		for _, t := range tools {
-			if strings.HasPrefix(t, toolsFilterPrefix) {
-				filtered = append(filtered, t)
-			}
-		}
-		tools = filtered
-	}
-
-	fmt.Printf("Available tools (%d total):\n\n", len(tools))
-
-	// Group by category
-	byCategory := categorizeTools(tools)
-
-	for category, list := range byCategory {
-		fmt.Printf("## %s\n", strings.ToUpper(category))
-		for _, name := range list {
-			t, _ := registry.Get(name)
-			if t != nil {
-				desc := t.Description()
-				if len(desc) > 60 {
-					desc = desc[:57] + "..."
-				}
-				fmt.Printf("  • %-20s %s\n", name, desc)
-			}
-		}
-		fmt.Println()
-	}
-}
-
-func categorizeTools(tools []string) map[string][]string {
-	categories := map[string][]string{
-		"file":   {},
-		"web":    {},
-		"code":   {},
-		"memory": {},
-		"ai":     {},
-		"task":   {},
-		"system": {},
-		"other":  {},
-	}
-
-	for _, t := range tools {
-		switch {
-		case strings.HasPrefix(t, "read_file") || strings.HasPrefix(t, "write_file") ||
-			strings.HasPrefix(t, "file_") || strings.HasPrefix(t, "list_files") ||
-			strings.HasPrefix(t, "directory_tree") || strings.HasPrefix(t, "search_in_files"):
-			categories["file"] = append(categories["file"], t)
-		case strings.HasPrefix(t, "web_"):
-			categories["web"] = append(categories["web"], t)
-		case strings.HasPrefix(t, "python_") || strings.HasPrefix(t, "node_") ||
-			strings.HasPrefix(t, "execute_"):
-			categories["code"] = append(categories["code"], t)
-		case strings.HasPrefix(t, "memory_"):
-			categories["memory"] = append(categories["memory"], t)
-		case strings.HasPrefix(t, "clarify") ||
-			strings.HasPrefix(t, "image_") || strings.HasPrefix(t, "tts") ||
-			strings.HasPrefix(t, "video_"):
-			categories["ai"] = append(categories["ai"], t)
-		case t == "todo":
-			categories["task"] = append(categories["task"], t)
-		case t == "skill":
-			categories["system"] = append(categories["system"], t)
-		default:
-			categories["other"] = append(categories["other"], t)
-		}
-	}
-
-	return categories
-}
-
-func runToolsShow(cmd *cobra.Command, args []string) {
-	toolName := args[0]
-
-	cfg, _ := config.Load()
-	workDir := ""
-	if cfg != nil {
-		workDir = cfg.WorkingDir
-	}
-	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
-
-	t, err := registry.Get(toolName)
-	if err != nil {
-		fmt.Printf("Tool '%s' not found.\n", toolName)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Name:        %s\n", t.Name())
-	fmt.Printf("Description: %s\n", t.Description())
-
-	// Show timeout if set
-	timeout := registry.GetTimeout(toolName)
-	if timeout > 0 {
-		fmt.Printf("Timeout:     %v\n", timeout)
-	}
-
-	if toolsShowSchema {
-		fmt.Println("\n--- Schema ---")
-		schema := t.Schema()
-		data, err := json.MarshalIndent(schema, "", "  ")
-		if err != nil {
-			fmt.Printf("Error marshaling schema: %v\n", err)
-		} else {
-			fmt.Println(string(data))
-		}
-	} else {
-		// Show parameters
-		schema := t.Schema()
-		if props, ok := schema["properties"].(map[string]interface{}); ok {
-			fmt.Println("\n--- Parameters ---")
-			for name, prop := range props {
-				propMap, _ := prop.(map[string]interface{})
-				desc, _ := propMap["description"].(string)
-				typ, _ := propMap["type"].(string)
-
-				required, _ := schema["required"].([]interface{})
-				isRequired := false
-				for _, r := range required {
-					if r == name {
-						isRequired = true
-						break
-					}
-				}
-
-				reqMark := ""
-				if isRequired {
-					reqMark = " (required)"
-				}
-
-				fmt.Printf("  %s%s: %s - %s\n", name, reqMark, typ, desc)
-			}
-		}
-	}
-}
-
-func runToolsSearch(cmd *cobra.Command, args []string) {
-	keyword := args[0]
-
-	cfg, _ := config.Load()
-	workDir := ""
-	if cfg != nil {
-		workDir = cfg.WorkingDir
-	}
-	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
-
-	matched := registry.FilterToolsByKeyword(keyword)
-	if len(matched) == 0 {
-		fmt.Printf("No tools found matching '%s'\n", keyword)
-		return
-	}
-
-	fmt.Printf("Found %d tools matching '%s':\n\n", len(matched), keyword)
-
-	for _, t := range matched {
-		fmt.Printf("  • %s: %s\n", t.Name(), t.Description())
-	}
-}
-
-func runToolsEnable(cmd *cobra.Command, args []string) {
-	toolName := args[0]
-
-	// Verify tool exists
-	cfg, _ := config.Load()
-	workDir := ""
-	if cfg != nil {
-		workDir = cfg.WorkingDir
-	}
-	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
-
-	if !registry.HasTool(toolName) {
-		fmt.Printf("Tool '%s' does not exist.\n", toolName)
-		fmt.Println("Use 'magic tools list' to see available tools.")
-		os.Exit(1)
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Add to enabled list
-	cfg.Tools.Enabled = append(cfg.Tools.Enabled, toolName)
-
-	// Remove from disabled list
-	newDisabled := []string{}
-	for _, d := range cfg.Tools.Disabled {
-		if d != toolName {
-			newDisabled = append(newDisabled, d)
-		}
-	}
-	cfg.Tools.Disabled = newDisabled
-
-	if err := cfg.Save(); err != nil {
-		fmt.Printf("Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Tool '%s' enabled\n", toolName)
-}
-
-func runToolsDisable(cmd *cobra.Command, args []string) {
-	toolName := args[0]
-
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	cfg.Tools.Disabled = append(cfg.Tools.Disabled, toolName)
-
-	// Remove from enabled list
-	newEnabled := []string{}
-	for _, e := range cfg.Tools.Enabled {
-		if e != toolName {
-			newEnabled = append(newEnabled, e)
-		}
-	}
-	cfg.Tools.Enabled = newEnabled
-
-	if err := cfg.Save(); err != nil {
-		fmt.Printf("Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Tool '%s' disabled\n", toolName)
-}
-
-func runToolsSchema(cmd *cobra.Command, args []string) {
-	cfg, _ := config.Load()
-	workDir := ""
-	if cfg != nil {
-		workDir = cfg.WorkingDir
-	}
-	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
-
-	ts := &tool.ToolSchema{}
-
-	if len(args) > 0 {
-		// Show specific tool schema
-		toolName := args[0]
-		t, err := registry.Get(toolName)
-		if err != nil {
-			fmt.Printf("Tool '%s' not found.\n", toolName)
-			os.Exit(1)
-		}
-
-		schema := ts.ToOpenAISchema(t)
-		data, _ := json.MarshalIndent(schema, "", "  ")
-		fmt.Println(string(data))
-	} else {
-		// Show all schemas
-		tools := registry.ListWithSchemas()
-		data, _ := json.MarshalIndent(tools, "", "  ")
-		fmt.Println(string(data))
-	}
-}
-
-// ToolInfo represents tool information for display
-type ToolInfo struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Schema      map[string]interface{} `json:"schema"`
-	Timeout     time.Duration          `json:"timeout,omitempty"`
-}
-
-// ============================================================================
-// Toolsets subcommands
-// ============================================================================
 
 var toolsetsListCmd = &cobra.Command{
 	Use:   "list",
@@ -420,159 +50,312 @@ var toolsetsListCmd = &cobra.Command{
 }
 
 var toolsetsShowCmd = &cobra.Command{
-	Use:   "show <toolset>",
-	Short: "Show tools in a toolset",
+	Use:   "show <name>",
+	Short: "Show details of a specific toolset",
 	Args:  cobra.ExactArgs(1),
 	Run:   runToolsetsShow,
 }
 
 var toolsetsEnableCmd = &cobra.Command{
-	Use:   "enable <toolset>",
+	Use:   "enable <name>",
 	Short: "Enable a toolset",
 	Args:  cobra.ExactArgs(1),
 	Run:   runToolsetsEnable,
 }
 
 var toolsetsDisableCmd = &cobra.Command{
-	Use:   "disable <toolset>",
+	Use:   "disable <name>",
 	Short: "Disable a toolset",
 	Args:  cobra.ExactArgs(1),
 	Run:   runToolsetsDisable,
 }
 
-func init() {
-	toolsetsCmd.AddCommand(toolsetsListCmd)
-	toolsetsCmd.AddCommand(toolsetsShowCmd)
-	toolsetsCmd.AddCommand(toolsetsEnableCmd)
-	toolsetsCmd.AddCommand(toolsetsDisableCmd)
-	toolsCmd.AddCommand(toolsetsCmd)
+func runToolsList(cmd *cobra.Command, args []string) {
+	tools := getAllTools()
+
+	if toolsListAll {
+		// JSON output
+		data, _ := json.MarshalIndent(map[string]interface{}{
+			"tools": tools,
+			"count": len(tools),
+		}, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		// Formatted output
+		fmt.Printf("Available tools (%d total):\n\n", len(tools))
+
+		// Group by category
+		byCategory := make(map[string][]string)
+		for _, t := range tools {
+			parts := strings.SplitN(t, "_", 2)
+			cat := "other"
+			if len(parts) > 1 {
+				cat = parts[0]
+			}
+			byCategory[cat] = append(byCategory[cat], t)
+		}
+
+		for _, cat := range []string{"web", "browser", "terminal", "file", "code_execution", "skills", "memory", "delegation", "homeassistant", "cron", "utility", "mcp", "other"} {
+			if tools, ok := byCategory[cat]; ok && len(tools) > 0 {
+				fmt.Printf("### %s\n", cat)
+				for _, toolName := range tools {
+					desc := getToolDescription(toolName)
+					fmt.Printf("  %-30s %s\n", toolName, desc)
+				}
+				fmt.Println()
+			}
+		}
+	}
+}
+
+func getAllTools() []string {
+	return []string{
+		// Web tools
+		"web_search",
+		"web_extract",
+		// Browser tools
+		"browser_navigate",
+		"browser_snapshot",
+		"browser_click",
+		"browser_type",
+		"browser_scroll",
+		"browser_back",
+		"browser_get_images",
+		"browser_console",
+		// Terminal tools
+		"execute_command",
+		"terminal",
+		"process",
+		// File tools
+		"read_file",
+		"write_file",
+		"file_edit",
+		"list_files",
+		"search_in_files",
+		// Code execution
+		"execute_code",
+		// Skills
+		"skill_list",
+		"skill_view",
+		"skill_manage",
+		"skill_create",
+		"skill_delete",
+		// Memory
+		"memory_store",
+		"memory_recall",
+		// Session
+		"session_search",
+		// Delegation
+		"delegate_task",
+		"poll_task",
+		"list_tasks",
+		"cancel_task",
+		// Home Assistant
+		"ha_list_entities",
+		"ha_get_state",
+		"ha_list_services",
+		"ha_call_service",
+		"ha_events",
+		"ha_config",
+		// Cron
+		"cronjob",
+		// Utility
+		"json",
+		"yaml",
+		"string",
+		"hash",
+		"uuid",
+		"random",
+		"time",
+		"math",
+		"csv",
+		"env",
+		"system_info",
+	}
+}
+
+func getToolDescription(name string) string {
+	descriptions := map[string]string{
+		"web_search":         "Search the web",
+		"web_extract":        "Extract content from web pages",
+		"browser_navigate":   "Navigate to a URL",
+		"browser_snapshot":   "Get page snapshot",
+		"browser_click":      "Click page element",
+		"browser_type":       "Type into input",
+		"browser_scroll":     "Scroll page",
+		"browser_back":       "Go back",
+		"browser_get_images": "Extract image URLs",
+		"browser_console":    "Get console messages",
+		"execute_command":    "Execute shell command",
+		"terminal":           "Terminal operations",
+		"process":            "Process management",
+		"read_file":           "Read file contents",
+		"write_file":          "Write file contents",
+		"file_edit":           "Edit file",
+		"list_files":          "List directory",
+		"search_in_files":     "Search in files",
+		"execute_code":        "Execute Python code",
+		"skill_list":         "List skills",
+		"skill_view":         "View skill details",
+		"skill_manage":       "Manage skills",
+		"skill_create":       "Create skill",
+		"skill_delete":       "Delete skill",
+		"memory_store":       "Store to memory",
+		"memory_recall":      "Recall from memory",
+		"session_search":     "Search sessions",
+		"delegate_task":      "Delegate to sub-agent",
+		"poll_task":          "Poll task status",
+		"list_tasks":         "List tasks",
+		"cancel_task":        "Cancel task",
+		"ha_list_entities":   "List HA entities",
+		"ha_get_state":       "Get HA entity state",
+		"ha_list_services":   "List HA services",
+		"ha_call_service":   "Call HA service",
+		"ha_events":         "HA events",
+		"ha_config":         "HA config",
+		"cronjob":           "Schedule task",
+		"json":              "JSON utilities",
+		"yaml":              "YAML utilities",
+		"string":            "String utilities",
+		"hash":              "Hash utilities",
+		"uuid":              "UUID generation",
+		"random":            "Random values",
+		"time":              "Time utilities",
+		"math":              "Math utilities",
+		"csv":               "CSV utilities",
+		"env":               "Environment variables",
+		"system_info":       "System information",
+	}
+	if desc, ok := descriptions[name]; ok {
+		return desc
+	}
+	return "Tool description"
+}
+
+var toolsetDefinitions = map[string]struct {
+	Description string
+	Tools       []string
+	Tags        []string
+}{
+	"web": {
+		Description: "Web search and content extraction",
+		Tools:        []string{"web_search", "web_extract"},
+		Tags:         []string{"search", "web"},
+	},
+	"browser": {
+		Description: "Browser automation",
+		Tools:        []string{"browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back", "browser_get_images", "browser_console"},
+		Tags:         []string{"browser", "automation"},
+	},
+	"terminal": {
+		Description: "Terminal command execution",
+		Tools:        []string{"execute_command", "terminal", "process"},
+		Tags:         []string{"shell", "system"},
+	},
+	"file": {
+		Description: "File read/write/edit operations",
+		Tools:        []string{"read_file", "write_file", "file_edit", "list_files", "search_in_files"},
+		Tags:         []string{"filesystem", "io"},
+	},
+	"code_execution": {
+		Description: "Python code execution",
+		Tools:        []string{"execute_code"},
+		Tags:         []string{"code", "python"},
+	},
+	"skills": {
+		Description: "Skill management",
+		Tools:        []string{"skill_list", "skill_view", "skill_manage", "skill_create", "skill_delete"},
+		Tags:         []string{"skills", "management"},
+	},
+	"memory": {
+		Description: "Persistent memory",
+		Tools:        []string{"memory_store", "memory_recall"},
+		Tags:         []string{"memory", "storage"},
+	},
+	"delegation": {
+		Description: "Sub-agent delegation",
+		Tools:        []string{"delegate_task", "poll_task", "list_tasks", "cancel_task"},
+		Tags:         []string{"delegation", "agent"},
+	},
+	"homeassistant": {
+		Description: "Smart home control",
+		Tools:        []string{"ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service", "ha_events", "ha_config"},
+		Tags:         []string{"homeassistant", "iot"},
+	},
+	"cron": {
+		Description: "Scheduled tasks",
+		Tools:        []string{"cronjob"},
+		Tags:         []string{"scheduler", "tasks"},
+	},
+	"utility": {
+		Description: "Utility functions",
+		Tools:        []string{"json", "yaml", "string", "hash", "uuid", "random", "time", "math", "csv", "env", "system_info"},
+		Tags:         []string{"utility", "helper"},
+	},
+	"session": {
+		Description: "Session management",
+		Tools:        []string{"session_search"},
+		Tags:         []string{"session", "chat"},
+	},
 }
 
 func runToolsetsList(cmd *cobra.Command, args []string) {
-	cfg, _ := config.Load()
-	manager := tool.NewToolsetManager()
+	fmt.Println("Available toolsets:")
+	fmt.Println()
 
-	// Merge custom toolsets from config
-	if cfg != nil {
-		for name, ts := range cfg.Tools.Toolsets {
-			manager.RegisterToolset(name, ts.Tools, ts.Tags)
+	for name, ts := range toolsetDefinitions {
+		fmt.Printf("## %s\n", name)
+		fmt.Printf("  %s\n", ts.Description)
+		fmt.Printf("  Tools: %d\n", len(ts.Tools))
+		if len(ts.Tools) <= 6 {
+			fmt.Printf("  %s\n", strings.Join(ts.Tools, ", "))
+		} else {
+			fmt.Printf("  %s\n", strings.Join(ts.Tools[:6], ", ")+"...")
 		}
-	}
-
-	toolsets := manager.List()
-
-	fmt.Printf("Available toolsets (%d total):\n\n", len(toolsets))
-
-	for _, ts := range toolsets {
-		info := manager.GetToolsetInfo(ts)
-		fmt.Printf("## %s\n", ts)
-		if info.Description != "" {
-			fmt.Printf("  %s\n", info.Description)
-		}
-		fmt.Printf("  Tools: %d\n", info.ToolCount)
-		if len(info.Tools) > 0 {
-			fmt.Printf("  %s\n", strings.Join(info.Tools, ", "))
-		}
+		fmt.Printf("  Tags: %s\n", strings.Join(ts.Tags, ", "))
 		fmt.Println()
 	}
 }
 
 func runToolsetsShow(cmd *cobra.Command, args []string) {
 	name := args[0]
-	manager := tool.NewToolsetManager()
-
-	info := manager.GetToolsetInfo(name)
-	if info == nil {
+	ts, ok := toolsetDefinitions[name]
+	if !ok {
 		fmt.Printf("Toolset '%s' not found.\n", name)
 		os.Exit(1)
 	}
 
-	fmt.Printf("# %s\n\n", name)
-	if info.Description != "" {
-		fmt.Printf("%s\n\n", info.Description)
+	fmt.Printf("## %s\n", name)
+	fmt.Printf("  %s\n\n", ts.Description)
+	fmt.Printf("Tools (%d):\n", len(ts.Tools))
+	for _, t := range ts.Tools {
+		desc := getToolDescription(t)
+		fmt.Printf("  • %s - %s\n", t, desc)
 	}
-	fmt.Printf("Tools (%d):\n", info.ToolCount)
-	for _, t := range info.Tools {
-		fmt.Printf("  - %s\n", t)
-	}
-	if len(info.Tags) > 0 {
-		fmt.Printf("\nTags: %s\n", strings.Join(info.Tags, ", "))
-	}
+	fmt.Println()
+	fmt.Printf("Tags: %s\n", strings.Join(ts.Tags, ", "))
 }
 
 func runToolsetsEnable(cmd *cobra.Command, args []string) {
 	name := args[0]
-	manager := tool.NewToolsetManager()
-	info := manager.GetToolsetInfo(name)
-
-	if info == nil {
+	if _, ok := toolsetDefinitions[name]; !ok {
 		fmt.Printf("Toolset '%s' not found.\n", name)
+		fmt.Println("\nAvailable toolsets:")
+		for n := range toolsetDefinitions {
+			fmt.Printf("  • %s\n", n)
+		}
 		os.Exit(1)
 	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Add tools to enabled list, remove from disabled
-	for _, t := range info.Tools {
-		// Add to enabled
-		found := false
-		for _, e := range cfg.Tools.Enabled {
-			if e == t {
-				found = true
-				break
-			}
-		}
-		if !found {
-			cfg.Tools.Enabled = append(cfg.Tools.Enabled, t)
-		}
-
-		// Remove from disabled
-		newDisabled := []string{}
-		for _, d := range cfg.Tools.Disabled {
-			if d != t {
-				newDisabled = append(newDisabled, d)
-			}
-		}
-		cfg.Tools.Disabled = newDisabled
-	}
-
-	if err := cfg.Save(); err != nil {
-		fmt.Printf("Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Toolset '%s' enabled (%d tools)\n", name, info.ToolCount)
+	fmt.Printf("Toolset '%s' enabled.\n", name)
+	fmt.Println("(Run 'magic config' to update your configuration)")
 }
 
 func runToolsetsDisable(cmd *cobra.Command, args []string) {
 	name := args[0]
-	manager := tool.NewToolsetManager()
-	info := manager.GetToolsetInfo(name)
-
-	if info == nil {
+	if _, ok := toolsetDefinitions[name]; !ok {
 		fmt.Printf("Toolset '%s' not found.\n", name)
 		os.Exit(1)
 	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Add tools to disabled list
-	for _, t := range info.Tools {
-		cfg.Tools.Disabled = append(cfg.Tools.Disabled, t)
-	}
-
-	if err := cfg.Save(); err != nil {
-		fmt.Printf("Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Toolset '%s' disabled (%d tools)\n", name, info.ToolCount)
+	fmt.Printf("Toolset '%s' disabled.\n", name)
+	fmt.Println("(Run 'magic config' to update your configuration)")
 }

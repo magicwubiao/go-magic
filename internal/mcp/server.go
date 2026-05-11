@@ -55,11 +55,6 @@ type MCPServerHandler interface {
 }
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
 
 // Resource represents an MCP resource
 type Resource struct {
@@ -257,11 +252,13 @@ func (s *MCPServer) handleInitialize(conn *websocket.Conn, msg *JSONRPCMessage) 
 	}
 
 	protocolVersion := "2024-11-05"
-	if msg.Params != nil {
-		if v, ok := (*msg.Params)["protocolVersion"].(string); ok {
-			protocolVersion = v
+		var params map[string]interface{}
+		if msg.Params != nil {
+			json.Unmarshal(*msg.Params, &params)
+			if v, ok := params["protocolVersion"].(string); ok {
+				protocolVersion = v
+			}
 		}
-	}
 
 	result := map[string]interface{}{
 		"protocolVersion": protocolVersion,

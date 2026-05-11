@@ -975,7 +975,7 @@ func (m *Manager) GetSkillsList() string {
 }
 
 // List returns all skills as a map (for tool interface)
-func (m *Manager) List() map[string]*Skill {
+func (m *Manager) ListAll() map[string]*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

@@ -127,7 +127,8 @@ func (t *HATool) Execute(ctx context.Context, args map[string]interface{}) (inte
 	}
 
 	// Parse response
-	states, ok := result[""].([]interface{})
+	// Parse response
+	_, ok := result[""].([]interface{})
 	if !ok {
 		// Try alternate format
 		var allStates []map[string]interface{}

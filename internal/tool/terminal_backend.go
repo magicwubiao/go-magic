@@ -581,15 +581,6 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 	}
 }
 
-// RegisterTerminalTools registers all terminal tools with the registry
-func RegisterTerminalTools(registry *ToolRegistry) {
-	terminal := NewTerminalTool()
-	process := NewProcessTool()
-
-	registry.Register(terminal)
-	registry.Register(process)
-}
-
 // ExportTerminalBackendsJSON exports available backends as JSON
 func ExportTerminalBackendsJSON() string {
 	manager := NewBackendManager()

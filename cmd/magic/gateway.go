@@ -63,7 +63,7 @@ var gatewaySetupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Configure gateway platforms interactively",
 	Long:  "Interactive setup wizard for configuring messaging platforms (Telegram, Discord, WeChat, etc.)",
-	Run:   runGatewaySetup,
+	Run:   runGatewayPlatformSetup,
 }
 
 func init() {
@@ -1376,7 +1376,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			choice, _ := reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
 			if choice == "" || choice == "y" || choice == "Y" {
-				runGatewaySetup(cmd, args)
+				runGatewayPlatformSetup(cmd, args)
 				return
 			}
 			fmt.Println("Run 'magic gateway setup' to configure platforms later.")
@@ -1522,7 +1522,7 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 	}
 }
 
-func runGatewaySetup(cmd *cobra.Command, args []string) {
+func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("╔════════════════════════════════════════╗")
 	fmt.Println("║     Gateway Platform Setup Wizard      ║")
 	fmt.Println("╚════════════════════════════════════════╝")
@@ -1551,10 +1551,9 @@ func runGatewaySetup(cmd *cobra.Command, args []string) {
 		cfg.Gateway.Platforms = make(map[string]config.PlatformConfig)
 	}
 
+	// Interactive platform setup
 	reader := bufio.NewReader(os.Stdin)
-
-	// Run the platform setup wizard
-	runGatewayPlatformSetup(cfg, reader, magicDir)
+	runPlatformSetupInteractive(cfg, reader, magicDir)
 
 	// Save config
 	if err := cfg.Save(); err != nil {
@@ -1567,4 +1566,137 @@ func runGatewaySetup(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println("Start the gateway with:")
 	fmt.Println("  magic gateway start")
+}
+
+// runPlatformSetupInteractive handles the interactive platform setup
+func runPlatformSetupInteractive(cfg *config.Config, reader *bufio.Reader, magicDir string) {
+	fmt.Println("Select platforms to configure:")
+	fmt.Println()
+	fmt.Println("  [1] Telegram Bot")
+	fmt.Println("  [2] Discord Bot")
+	fmt.Println("  [3] Slack Bot")
+	fmt.Println("  [4] WeChat (via ilink)")
+	fmt.Println("  [5] Custom Webhook")
+	fmt.Println()
+	fmt.Print("Enter numbers (e.g. 1,2): ")
+
+	selection, _ := reader.ReadString('\n')
+	selection = strings.TrimSpace(selection)
+
+	if selection == "" {
+		fmt.Println("No platforms selected.")
+		return
+	}
+
+	parts := strings.Split(selection, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		switch part {
+		case "1":
+			configureTelegram(cfg, reader)
+		case "2":
+			configureDiscord(cfg, reader)
+		case "3":
+			configureSlack(cfg, reader)
+		case "4":
+			configureWeChat(cfg, reader)
+		case "5":
+			configureWebhook(cfg, reader)
+		}
+	}
+}
+
+func configureTelegram(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println("\n--- Telegram Bot Configuration ---")
+	fmt.Print("Enter Bot Token: ")
+	token, _ := reader.ReadString('\n')
+	token = strings.TrimSpace(token)
+
+	if token != "" {
+		cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+		}
+		fmt.Println("✓ Telegram configured")
+	}
+}
+
+func configureDiscord(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println("\n--- Discord Bot Configuration ---")
+	fmt.Print("Enter Bot Token: ")
+	token, _ := reader.ReadString('\n')
+	token = strings.TrimSpace(token)
+
+	fmt.Print("Enter Guild ID: ")
+	guildID, _ := reader.ReadString('\n')
+	guildID = strings.TrimSpace(guildID)
+
+	if token != "" {
+		cfg.Gateway.Platforms["discord"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+			AllowedChannels: []string{guildID},
+		}
+		fmt.Println("✓ Discord configured")
+	}
+}
+
+func configureSlack(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println("\n--- Slack Bot Configuration ---")
+	fmt.Print("Enter Bot Token: ")
+	token, _ := reader.ReadString('\n')
+	token = strings.TrimSpace(token)
+
+	fmt.Print("Enter Signing Secret: ")
+	signingSecret, _ := reader.ReadString('\n')
+	signingSecret = strings.TrimSpace(signingSecret)
+
+	if token != "" {
+		cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+			Secret:  signingSecret,
+		}
+		fmt.Println("✓ Slack configured")
+	}
+}
+
+func configureWeChat(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println("\n--- WeChat (iLink) Configuration ---")
+	fmt.Print("Enter iLink App ID: ")
+	appID, _ := reader.ReadString('\n')
+	appID = strings.TrimSpace(appID)
+
+	fmt.Print("Enter iLink App Secret: ")
+	appSecret, _ := reader.ReadString('\n')
+	appSecret = strings.TrimSpace(appSecret)
+
+	if appID != "" {
+		cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+			Enabled: true,
+			CorpID:  appID,
+			Secret:  appSecret,
+		}
+		fmt.Println("✓ WeChat configured")
+	}
+}
+
+func configureWebhook(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println("\n--- Custom Webhook Configuration ---")
+	fmt.Print("Enter Webhook URL: ")
+	url, _ := reader.ReadString('\n')
+	url = strings.TrimSpace(url)
+
+	fmt.Print("Enter Secret (optional): ")
+	secret, _ := reader.ReadString('\n')
+	secret = strings.TrimSpace(secret)
+
+	if url != "" {
+		cfg.Gateway.Platforms["webhook"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   url,
+			Secret:  secret,
+		}
+		fmt.Println("✓ Webhook configured")
+	}
 }

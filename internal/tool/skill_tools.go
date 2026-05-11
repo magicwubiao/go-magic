@@ -6,13 +6,24 @@ import (
 	"fmt"
 )
 
+// SkillData represents skill data as a map to avoid circular imports
+type SkillData map[string]interface{}
+
+// SkillsManager interface for skills manager
+type SkillsManager interface {
+	List() map[string]SkillData
+	Get(name string) (SkillData, error)
+	GetCategories() []string
+	GetSkillDir(name string) (string, error)
+	Create(name, description, content, category string, tags []string) (SkillData, error)
+	Update(name, content string) error
+	Delete(name string) error
+}
+
 // SkillListTool lists all available skills
 type SkillListTool struct {
 	*BaseTool
-	manager interface {
-		List() map[string]*Skill
-		GetCategories() []string
-	}
+	manager SkillsManager
 }
 
 // NewSkillListTool creates a new skill list tool
@@ -43,10 +54,7 @@ func NewSkillListTool() *SkillListTool {
 }
 
 // SetManager sets the skills manager
-func (t *SkillListTool) SetManager(mgr interface {
-	List() map[string]*Skill
-	GetCategories() []string
-}) {
+func (t *SkillListTool) SetManager(mgr SkillsManager) {
 	t.manager = mgr
 }
 
@@ -56,47 +64,35 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, fmt.Errorf("skills manager not initialized")
 	}
 
-	category := ""
-	if c, ok := args["category"].(string); ok {
-		category = c
-	}
-
-	source := ""
-	if s, ok := args["source"].(string); ok {
-		source = s
-	}
-
-	query := ""
-	if q, ok := args["query"].(string); ok {
-		query = q
-	}
+	category := getString(args, "category")
+	source := getString(args, "source")
+	query := getString(args, "query")
 
 	skills := t.manager.List()
 	categories := t.manager.GetCategories()
 
 	// Filter skills
-	var filtered []*Skill
+	var filtered []SkillData
 	for _, skill := range skills {
 		// Filter by category
-		if category != "" && skill.Category != category {
-			continue
+		if category != "" {
+			if cat := getString(skill, "category"); cat != category {
+				continue
+			}
 		}
 
 		// Filter by source
-		if source != "" && string(skill.Source) != source {
-			continue
+		if source != "" {
+			if src := getString(skill, "source"); src != source {
+				continue
+			}
 		}
 
 		// Filter by query
 		if query != "" {
-			found := false
-			lowerQuery := toLower(query)
-			if contains(toLower(skill.Name), lowerQuery) {
-				found = true
-			} else if contains(toLower(skill.Description), lowerQuery) {
-				found = true
-			}
-			if !found {
+			name := getString(skill, "name")
+			desc := getString(skill, "description")
+			if !containsIgnoreCase(name, query) && !containsIgnoreCase(desc, query) {
 				continue
 			}
 		}
@@ -117,12 +113,12 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]interface{}
 	summaries := make([]SkillSummary, 0, len(filtered))
 	for _, s := range filtered {
 		summaries = append(summaries, SkillSummary{
-			Name:        s.Name,
-			Description: s.Description,
-			Category:    s.Category,
-			Tags:        s.Tags,
-			Source:      string(s.Source),
-			Version:     s.Version,
+			Name:        getString(s, "name"),
+			Description: getString(s, "description"),
+			Category:    getString(s, "category"),
+			Tags:        getStringSlice(s, "tags"),
+			Source:      getString(s, "source"),
+			Version:     getString(s, "version"),
 		})
 	}
 
@@ -133,49 +129,17 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]interface{}
 	}, nil
 }
 
-// toLower is a helper
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
-}
-
-// contains checks if s contains substr (case-insensitive)
-func contains(s, substr string) bool {
-	if len(substr) == 0 {
-		return true
-	}
-	if len(s) < len(substr) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// SkillInfoTool shows detailed information about a skill
-type SkillInfoTool struct {
+// SkillViewTool shows detailed information about a skill
+type SkillViewTool struct {
 	*BaseTool
-	manager interface {
-		Get(name string) (*Skill, error)
-		GetSkillDir(name string) (string, error)
-	}
+	manager SkillsManager
 }
 
-// NewSkillInfoTool creates a new skill info tool
-func NewSkillInfoTool() *SkillInfoTool {
-	return &SkillInfoTool{
+// NewSkillViewTool creates a new skill view tool
+func NewSkillViewTool() *SkillViewTool {
+	return &SkillViewTool{
 		BaseTool: NewBaseTool(
-			"skill_info",
+			"skill_view",
 			"Get detailed information about a specific skill including its full content, metadata, and supporting files.",
 			map[string]interface{}{
 				"type": "object",
@@ -184,9 +148,13 @@ func NewSkillInfoTool() *SkillInfoTool {
 						"type":        "string",
 						"description": "The name of the skill to get info about",
 					},
-					"include_content": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Include the full skill content (default: true)",
+					"level": map[string]interface{}{
+						"type":        "integer",
+						"description": "Progressive disclosure level: 0=summary, 1=full content, 2=with references (default: 0)",
+					},
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Specific reference file to view (for level 2)",
 					},
 				},
 				"required": []string{"name"},
@@ -196,21 +164,18 @@ func NewSkillInfoTool() *SkillInfoTool {
 }
 
 // SetManager sets the skills manager
-func (t *SkillInfoTool) SetManager(mgr interface {
-	Get(name string) (*Skill, error)
-	GetSkillDir(name string) (string, error)
-}) {
+func (t *SkillViewTool) SetManager(mgr SkillsManager) {
 	t.manager = mgr
 }
 
 // Execute returns skill information
-func (t *SkillInfoTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+func (t *SkillViewTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	if t.manager == nil {
 		return nil, fmt.Errorf("skills manager not initialized")
 	}
 
-	name, ok := args["name"].(string)
-	if !ok || name == "" {
+	name := getString(args, "name")
+	if name == "" {
 		return nil, fmt.Errorf("skill name is required")
 	}
 
@@ -219,31 +184,41 @@ func (t *SkillInfoTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, fmt.Errorf("skill not found: %s", name)
 	}
 
-	includeContent := true
-	if ic, ok := args["include_content"].(bool); ok {
-		includeContent = ic
-	}
+	level := getInt(args, "level")
+	path := getString(args, "path")
 
 	skillDir, _ := t.manager.GetSkillDir(name)
 
 	result := map[string]interface{}{
-		"name":        skill.Name,
-		"description": skill.Description,
-		"version":     skill.Version,
-		"author":      skill.Author,
-		"category":    skill.Category,
-		"tags":        skill.Tags,
-		"source":      string(skill.Source),
-		"directory":   skillDir,
+		"name":      getString(skill, "name"),
+		"directory": skillDir,
 	}
 
-	if includeContent {
-		result["content"] = skill.Content
+	// Level 0: Summary
+	if level >= 0 {
+		result["description"] = getString(skill, "description")
+		result["version"] = getString(skill, "version")
+		result["category"] = getString(skill, "category")
+		result["tags"] = getStringSlice(skill, "tags")
+		result["source"] = getString(skill, "source")
 	}
 
-	// Add supporting files info
-	if len(skill.Scripts) > 0 {
-		result["scripts"] = skill.Scripts
+	// Level 1: Full content
+	if level >= 1 {
+		result["content"] = getString(skill, "content")
+		result["author"] = getString(skill, "author")
+		result["scripts"] = getStringSlice(skill, "scripts")
+	}
+
+	// Level 2: Specific reference
+	if level >= 2 && path != "" {
+		// For now, include references in content
+		refs := getStringMap(skill, "references")
+		if refs != nil {
+			if content, ok := refs[path]; ok {
+				result["reference_content"] = content
+			}
+		}
 	}
 
 	return result, nil
@@ -252,11 +227,7 @@ func (t *SkillInfoTool) Execute(ctx context.Context, args map[string]interface{}
 // SkillManageTool allows creating, updating, and deleting skills
 type SkillManageTool struct {
 	*BaseTool
-	manager interface {
-		Create(name, description, content, category string, tags []string) (*Skill, error)
-		Update(name, content string) error
-		Delete(name string) error
-	}
+	manager SkillsManager
 }
 
 // NewSkillManageTool creates a new skill manage tool
@@ -270,7 +241,7 @@ func NewSkillManageTool() *SkillManageTool {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "Action to perform: create, update, delete",
+						"description": "Action to perform: create, update, delete, patch, edit",
 					},
 					"name": map[string]interface{}{
 						"type":        "string",
@@ -293,6 +264,14 @@ func NewSkillManageTool() *SkillManageTool {
 						"items":       map[string]interface{}{"type": "string"},
 						"description": "Skill tags (for create)",
 					},
+					"old_string": map[string]interface{}{
+						"type":        "string",
+						"description": "Text to replace (for patch action)",
+					},
+					"new_string": map[string]interface{}{
+						"type":        "string",
+						"description": "Replacement text (for patch action)",
+					},
 				},
 				"required": []string{"action", "name"},
 			},
@@ -301,52 +280,28 @@ func NewSkillManageTool() *SkillManageTool {
 }
 
 // SetManager sets the skills manager
-func (t *SkillManageTool) SetManager(mgr interface {
-	Create(name, description, content, category string, tags []string) (*Skill, error)
-	Update(name, content string) error
-	Delete(name string) error
-}) {
+func (t *SkillManageTool) SetManager(mgr SkillsManager) {
 	t.manager = mgr
 }
 
-// Execute performs the skill management action
+// Execute manages skills
 func (t *SkillManageTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	if t.manager == nil {
 		return nil, fmt.Errorf("skills manager not initialized")
 	}
 
-	action, ok := args["action"].(string)
-	if !ok || action == "" {
-		return nil, fmt.Errorf("action is required (create, update, delete)")
-	}
-
-	name, ok := args["name"].(string)
-	if !ok || name == "" {
-		return nil, fmt.Errorf("name is required")
+	action := getString(args, "action")
+	name := getString(args, "name")
+	if name == "" {
+		return nil, fmt.Errorf("skill name is required")
 	}
 
 	switch action {
 	case "create":
-		description := ""
-		if d, ok := args["description"].(string); ok {
-			description = d
-		}
-		content := ""
-		if c, ok := args["content"].(string); ok {
-			content = c
-		}
-		category := ""
-		if cat, ok := args["category"].(string); ok {
-			category = cat
-		}
-		var tags []string
-		if t, ok := args["tags"].([]interface{}); ok {
-			for _, tt := range t {
-				if ts, ok := tt.(string); ok {
-					tags = append(tags, ts)
-				}
-			}
-		}
+		description := getString(args, "description")
+		content := getString(args, "content")
+		category := getString(args, "category")
+		tags := getStringSlice(args, "tags")
 
 		skill, err := t.manager.Create(name, description, content, category, tags)
 		if err != nil {
@@ -355,41 +310,133 @@ func (t *SkillManageTool) Execute(ctx context.Context, args map[string]interface
 
 		return map[string]interface{}{
 			"success": true,
-			"message": fmt.Sprintf("Skill '%s' created successfully", name),
-			"skill":   skill.Name,
+			"action":  "created",
+			"skill":   skill,
 		}, nil
 
-	case "update":
-		content, ok := args["content"].(string)
-		if !ok || content == "" {
+	case "update", "edit":
+		content := getString(args, "content")
+		if content == "" {
 			return nil, fmt.Errorf("content is required for update")
 		}
 
-		if err := t.manager.Update(name, content); err != nil {
+		err := t.manager.Update(name, content)
+		if err != nil {
 			return nil, fmt.Errorf("failed to update skill: %w", err)
 		}
 
 		return map[string]interface{}{
 			"success": true,
-			"message": fmt.Sprintf("Skill '%s' updated successfully", name),
+			"action":  "updated",
+			"name":    name,
 		}, nil
 
 	case "delete":
-		if err := t.manager.Delete(name); err != nil {
+		err := t.manager.Delete(name)
+		if err != nil {
 			return nil, fmt.Errorf("failed to delete skill: %w", err)
 		}
 
 		return map[string]interface{}{
 			"success": true,
-			"message": fmt.Sprintf("Skill '%s' deleted successfully", name),
+			"action":  "deleted",
+			"name":    name,
 		}, nil
 
+	case "patch":
+		// Patch is not directly supported, use update instead
+		return nil, fmt.Errorf("patch action not directly supported, use update with full content")
+
 	default:
-		return nil, fmt.Errorf("unknown action: %s (use: create, update, delete)", action)
+		return nil, fmt.Errorf("unknown action: %s, supported: create, update, delete", action)
 	}
 }
 
-// MarshalJSON helper for skill source
+// Helper functions
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getInt(m map[string]interface{}, key string) int {
+	if v, ok := m[key].(float64); ok {
+		return int(v)
+	}
+	return 0
+}
+
+func getStringSlice(m map[string]interface{}, key string) []string {
+	if v, ok := m[key].([]interface{}); ok {
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+func getStringMap(m map[string]interface{}, key string) map[string]string {
+	if v, ok := m[key].(map[string]interface{}); ok {
+		result := make(map[string]string)
+		for k, val := range v {
+			if s, ok := val.(string); ok {
+				result[k] = s
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+func containsIgnoreCase(s, substr string) bool {
+	s = strToLower(s)
+	substr = strToLower(substr)
+	return strContains(s, substr)
+}
+
+func strToLower(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		result[i] = c
+	}
+	return string(result)
+}
+
+func strContains(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(s) < len(substr) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// MarshalJSON for SkillListTool
+func (t *SkillListTool) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Name())
+}
+
+// MarshalJSON for SkillViewTool
+func (t *SkillViewTool) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Name())
+}
+
+// MarshalJSON for SkillManageTool
 func (t *SkillManageTool) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.Name())
 }

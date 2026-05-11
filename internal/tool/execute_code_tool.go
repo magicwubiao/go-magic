@@ -345,7 +345,7 @@ func (t *ExecuteCodeTool) serializeToolsForEnv() (string, error) {
 	}
 
 	tools := make([]SimpleTool, 0, len(t.tools))
-	for name, tool := range t.tools {
+	for _, tool := range t.tools {
 		tools = append(tools, SimpleTool{
 			Name:        tool.Name(),
 			Description: tool.Description(),

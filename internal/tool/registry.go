@@ -97,8 +97,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Command execution with multiple backends (local, docker, ssh)
 	r.Register(NewSecureExecuteCommandTool(workDir))
 	
-	// Enhanced terminal tool with backend support
-	RegisterTerminalTools(r)
 
 	// Code execution moved to plugins (python-runner, node-runner)
 	// Use: magic plugin install python-runner / magic plugin install node-runner
@@ -150,7 +148,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewWebSelectTool())
 	
 	// Enhanced browser tools (navigate, snapshot, click, type, scroll, etc.)
-	RegisterBrowserTools(r)
 
 	// Utility tools
 	r.Register(NewJSONTool())

@@ -38,7 +38,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err == config.ErrNoConfig {
 		fmt.Println("Welcome to magic! It looks like this is your first run.")
-		fmt.Println("Let's set things up...\n")
+		fmt.Println("Let's set things up...")
 		runSetup(nil, nil)
 		// Reload config after setup
 		cfg, err = config.Load()

@@ -93,7 +93,7 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 	content = cleanText(content)
 
 	return map[string]interface{}{
-		"url":         urlStr,
+		"url":          urlStr,
 		"title":       strings.TrimSpace(title),
 		"status":      resp.StatusCode,
 		"content":     truncateText(content, 5000),
@@ -138,7 +138,7 @@ func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]inter
 
 	if urlStr == "" {
 		return map[string]interface{}{
-			"error":   "url is required for snapshot",
+			"error":    "url is required for snapshot",
 			"snapshot": map[string]interface{}{},
 		}, nil
 	}
@@ -320,7 +320,7 @@ func (t *BrowserScrollTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"direction": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"up", "down", "top", "bottom"},
+				"enum":        []string{"up", "down", "top", "bottom"},
 				"description": "Scroll direction",
 			},
 			"amount": map[string]interface{}{
@@ -369,7 +369,7 @@ func (t *BrowserBackTool) Description() string {
 
 func (t *BrowserBackTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
 }
@@ -441,7 +441,7 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 	doc.Find("img").Each(func(i int, s *goquery.Selection) {
 		src, _ := s.Attr("src")
 		alt, _ := s.Attr("alt")
-		
+
 		// Resolve relative URLs
 		if src != "" {
 			if !strings.HasPrefix(src, "http") {
@@ -455,10 +455,12 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 		}
 	})
 
+	_ = minWidth // TODO: implement min_width filtering
+
 	return map[string]interface{}{
-		"url":     urlStr,
-		"count":   len(images),
-		"images":  images,
+		"url":    urlStr,
+		"count":  len(images),
+		"images": images,
 	}, nil
 }
 
@@ -485,7 +487,7 @@ func (t *BrowserConsoleTool) Schema() map[string]interface{} {
 			},
 			"level": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"all", "error", "warning", "info"},
+				"enum":        []string{"all", "error", "warning", "info"},
 				"description": "Console level to fetch",
 			},
 		},
@@ -516,41 +518,26 @@ func truncateText(text string, maxLen int) string {
 	return text[:maxLen] + "..."
 }
 
-// RegisterBrowserTools registers all browser tools with the registry
-func RegisterBrowserTools(registry *ToolRegistry) {
-	bt := NewBrowserTools()
-
-	registry.Register(NewBrowserNavigateTool(bt))
-	registry.Register(NewBrowserSnapshotTool(bt))
-	registry.Register(NewBrowserClickTool(bt))
-	registry.Register(NewBrowserTypeTool(bt))
-	registry.Register(NewBrowserScrollTool(bt))
-	registry.Register(NewBrowserBackTool())
-	registry.Register(NewBrowserGetImagesTool(bt))
-	registry.Register(NewBrowserConsoleTool())
-}
-
 // ExportBrowserToolsJSON exports browser tools as JSON
 func ExportBrowserToolsJSON() string {
-	bt := NewBrowserTools()
-	tools := []interface{}{
-		NewBrowserNavigateTool(bt),
-		NewBrowserSnapshotTool(bt),
-		NewBrowserClickTool(bt),
-		NewBrowserTypeTool(bt),
-		NewBrowserScrollTool(bt),
-		NewBrowserBackTool(),
-		NewBrowserGetImagesTool(bt),
-		NewBrowserConsoleTool(),
-	}
+	navTool := &BrowserNavigateTool{}
+	snapTool := &BrowserSnapshotTool{}
+	clickTool := &BrowserClickTool{}
+	typeTool := &BrowserTypeTool{}
+	scrollTool := &BrowserScrollTool{}
+	backTool := &BrowserBackTool{}
+	imgTool := &BrowserGetImagesTool{}
+	consoleTool := &BrowserConsoleTool{}
 
-	result := make([]map[string]interface{}, 0)
-	for _, t := range tools {
-		result = append(result, map[string]interface{}{
-			"name":        t.Name(),
-			"description": t.Description(),
-			"schema":      t.Schema(),
-		})
+	result := []map[string]interface{}{
+		{"name": "browser_navigate", "description": "Navigate to URL and get page content", "schema": navTool.Schema()},
+		{"name": "browser_snapshot", "description": "Get page snapshot", "schema": snapTool.Schema()},
+		{"name": "browser_click", "description": "Click page element", "schema": clickTool.Schema()},
+		{"name": "browser_type", "description": "Type text into element", "schema": typeTool.Schema()},
+		{"name": "browser_scroll", "description": "Scroll page", "schema": scrollTool.Schema()},
+		{"name": "browser_back", "description": "Go back to previous page", "schema": backTool.Schema()},
+		{"name": "browser_get_images", "description": "Extract image URLs", "schema": imgTool.Schema()},
+		{"name": "browser_console", "description": "Get console messages", "schema": consoleTool.Schema()},
 	}
 
 	jsonBytes, _ := json.MarshalIndent(result, "", "  ")

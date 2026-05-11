@@ -233,7 +233,7 @@ func installSkillFromPath(name, path string) {
 	fmt.Printf("  To:   %s\n", dest)
 
 	if info.IsDir() {
-		if err := copyDir(path, dest); err != nil {
+		if err := copyDirMigrate(path, dest); err != nil {
 			fmt.Printf("Failed to copy directory: %v\n", err)
 			os.Exit(1)
 		}

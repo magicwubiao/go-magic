@@ -44,7 +44,7 @@ func runBackup(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Backing up %s to %s...\n", magicDir, backupDir)
 
-	err = copyDir(magicDir, backupDir)
+	err = copyDirMigrate(magicDir, backupDir)
 	if err != nil {
 		fmt.Printf("Backup failed: %v\n", err)
 		os.Exit(1)
@@ -59,4 +59,25 @@ func getTimestamp() string {
 	return fmt.Sprintf("%d%02d%02d_%02d%02d%02d",
 		t.Year(), t.Month(), t.Day(),
 		t.Hour(), t.Minute(), t.Second())
+}
+
+func copyDirMigrate(src, dest string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, _ := filepath.Rel(src, path)
+		destPath := filepath.Join(dest, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(destPath, 0755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destPath, data, info.Mode())
+	})
 }
