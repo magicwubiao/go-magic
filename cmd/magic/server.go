@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"syscall"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 

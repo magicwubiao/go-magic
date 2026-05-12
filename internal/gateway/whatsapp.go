@@ -22,7 +22,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // WhatsAppGateway implements WhatsApp via whatsmeow (personal account, QR code login)
