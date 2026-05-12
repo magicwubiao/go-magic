@@ -641,9 +641,33 @@ func (s *Server) handleDashboardLogs(w http.ResponseWriter, r *http.Request) {
 // handleDashboardThemes handles dashboard themes
 func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
 	themes := []map[string]interface{}{
-		{"id": "dark", "name": "Dark", "preview": "#1a1a2e"},
-		{"id": "light", "name": "Light", "preview": "#ffffff"},
-		{"id": "cyber", "name": "Cyber", "preview": "#00ff41"},
+		{
+			"id": "dark", "name": "Dark", "label": "Dark",
+			"description": "Dark theme for night use", "preview": "#1a1a2e",
+			"colorOverrides": map[string]interface{}{
+				"primary": "#6366f1", "secondary": "#8b5cf6", "accent": "#a855f7",
+				"background": "#0f0f23", "surface": "#1a1a2e", "border": "#2d2d4a",
+				"text": "#e2e8f0", "textSecondary": "#94a3b8",
+			},
+		},
+		{
+			"id": "light", "name": "Light", "label": "Light",
+			"description": "Light theme for day use", "preview": "#ffffff",
+			"colorOverrides": map[string]interface{}{
+				"primary": "#6366f1", "secondary": "#8b5cf6", "accent": "#a855f7",
+				"background": "#ffffff", "surface": "#f8fafc", "border": "#e2e8f0",
+				"text": "#1e293b", "textSecondary": "#64748b",
+			},
+		},
+		{
+			"id": "cyber", "name": "Cyber", "label": "Cyber",
+			"description": "Cyberpunk style theme", "preview": "#00ff41",
+			"colorOverrides": map[string]interface{}{
+				"primary": "#00ff41", "secondary": "#00d4ff", "accent": "#ff00ff",
+				"background": "#0a0a0a", "surface": "#1a1a1a", "border": "#00ff41",
+				"text": "#00ff41", "textSecondary": "#00aa00",
+			},
+		},
 	}
 	jsonResponse(w, themes)
 }
@@ -719,7 +743,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try embedded files first
-	data, err := staticFiles.ReadFile(path[1:])
+	data, err := staticFiles.ReadFile("dist" + path[1:])
 	if err == nil {
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
