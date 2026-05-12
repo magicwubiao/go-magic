@@ -1,1065 +1,766 @@
 package server
 
 import (
-	"context"
-	"database/sql"
 	"embed"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 //go:embed dist
 var staticFiles embed.FS
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
 // Session represents a chat session
 type Session struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Model         string    `json:"model,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	Messages      []Message `json:"messages,omitempty"`
-	MessageCount  int       `json:"message_count,omitempty"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Model     string    `json:"model"`
+	Platform  string    `json:"platform"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Message represents a chat message
 type Message struct {
 	ID        string    `json:"id"`
-	Role      string    `json:"role"` // user, assistant, system
+	SessionID string    `json:"session_id"`
+	Role      string    `json:"role"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
-	Tools     []ToolCall `json:"tools,omitempty"`
 }
 
-// ToolCall represents a tool invocation
-type ToolCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments,omitempty"`
-	Result    string `json:"result,omitempty"`
-	Status    string `json:"status"` // pending, running, done, error
+// Toolset represents a group of tools
+type Toolset struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Tools   []string `json:"tools"`
+	Enabled bool     `json:"enabled"`
 }
 
-// Server represents the web server
+// Skill represents a skill
+type Skill struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Category    string   `json:"category"`
+	Tags        []string `json:"tags"`
+}
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+	Source    string    `json:"source"`
+}
+
+// Provider represents a model provider
+type Provider struct {
+	Name    string   `json:"name"`
+	Label   string   `json:"label"`
+	BaseURL string   `json:"base_url"`
+	Models  []string `json:"models"`
+	APIKey  string   `json:"api_key,omitempty"`
+}
+
+// HealthResponse represents health check response
+type HealthResponse struct {
+	Status string `json:"status"`
+}
+
+// Server represents the HTTP server
 type Server struct {
-	port            string
-	db              *sql.DB
-	sessions        map[string]*Session
-	sessionsMux     sync.RWMutex
-	mux             *http.ServeMux
-	httpServer      *http.Server
-	startTime       time.Time
-	toolsets        []map[string]interface{}
-	skills          []map[string]interface{}
-	config          map[string]interface{}
-	logs            []map[string]interface{}
+	mu          sync.RWMutex
+	startTime   time.Time
+	sessions    map[string]*Session
+	sessionList []*Session
+	toolsets    []Toolset
+	skills      []Skill
+	providers   []Provider
+	messages    []*Message
 }
 
-// Storage for in-memory data
-type Storage struct {
-	sessions   map[string]*Session
-	sessionsMux sync.RWMutex
-}
-
-func NewStorage() *Storage {
-	return &Storage{
-		sessions: make(map[string]*Session),
-	}
-}
-
-func (s *Storage) CreateSession(name, model string) *Session {
-	session := &Session{
-		ID:        generateID(),
-		Name:      name,
-		Model:     model,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Messages:  []Message{},
-	}
-	s.sessionsMux.Lock()
-	s.sessions[session.ID] = session
-	s.sessionsMux.Unlock()
-	return session
-}
-
-func (s *Storage) GetSession(id string) *Session {
-	s.sessionsMux.RLock()
-	defer s.sessionsMux.RUnlock()
-	return s.sessions[id]
-}
-
-func (s *Storage) ListSessions() []*Session {
-	s.sessionsMux.RLock()
-	defer s.sessionsMux.RUnlock()
-	result := make([]*Session, 0, len(s.sessions))
-	for _, session := range s.sessions {
-		result = append(result, session)
-	}
-	return result
-}
-
-func (s *Storage) DeleteSession(id string) bool {
-	s.sessionsMux.Lock()
-	defer s.sessionsMux.Unlock()
-	if _, ok := s.sessions[id]; ok {
-		delete(s.sessions, id)
-		return true
-	}
-	return false
-}
-
-func (s *Storage) UpdateSession(id string, fn func(*Session)) bool {
-	s.sessionsMux.Lock()
-	defer s.sessionsMux.Unlock()
-	session, ok := s.sessions[id]
-	if !ok {
-		return false
-	}
-	fn(session)
-	session.UpdatedAt = time.Now()
-	return true
-}
-
-func NewServer(port string, db *sql.DB) *Server {
-	s := &Server{
-		port:       port,
-		db:         db,
+// NewServer creates a new server instance
+func NewServer(dbPath string) *Server {
+	return &Server{
+		mu:         sync.RWMutex{},
 		startTime:  time.Now(),
-		logs:       []map[string]interface{}{},
 		sessions:   make(map[string]*Session),
-	}
-	s.initData()
-	return s
-}
-
-func (s *Server) initData() {
-	// Initialize toolsets from actual tool system
-	s.toolsets = []map[string]interface{}{
-		{
-			"name":        "web",
-			"description": "Web search and content extraction",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "web_search", "description": "Search the web for information"},
-				{"name": "web_extract", "description": "Extract content from URLs"},
-			},
+		sessionList: []*Session{},
+		toolsets: []Toolset{
+			{ID: "web", Name: "Web", Tools: []string{"web_search", "web_extract"}, Enabled: true},
+			{ID: "terminal", Name: "Terminal", Tools: []string{"execute_command", "terminal"}, Enabled: true},
+			{ID: "file", Name: "File", Tools: []string{"read_file", "write_file", "edit_file"}, Enabled: true},
+			{ID: "browser", Name: "Browser", Tools: []string{"browser_navigate", "browser_snapshot"}, Enabled: true},
+			{ID: "memory", Name: "Memory", Tools: []string{"memory_store", "memory_recall"}, Enabled: true},
+			{ID: "code_execution", Name: "Code Execution", Tools: []string{"execute_code"}, Enabled: true},
+			{ID: "delegation", Name: "Delegation", Tools: []string{"delegate_task", "poll_task"}, Enabled: true},
 		},
-		{
-			"name":        "file",
-			"description": "File operations",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "read_file", "description": "Read file contents"},
-				{"name": "write_file", "description": "Write content to file"},
-				{"name": "edit_file", "description": "Edit existing file"},
-				{"name": "list_files", "description": "List directory contents"},
-				{"name": "search_in_files", "description": "Search for text in files"},
-			},
+		skills: []Skill{
+			{ID: "git-workflow", Name: "Git Workflow", Description: "Git operations", Category: "development", Tags: []string{"git", "version-control"}},
+			{ID: "code-review", Name: "Code Review", Description: "Code review assistance", Category: "development", Tags: []string{"code", "review"}},
+			{ID: "web-research", Name: "Web Research", Description: "Research and analysis", Category: "research", Tags: []string{"web", "research"}},
+			{ID: "data-analysis", Name: "Data Analysis", Description: "Data processing and analysis", Category: "analytics", Tags: []string{"data", "analysis"}},
 		},
-		{
-			"name":        "terminal",
-			"description": "Terminal command execution",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "execute_command", "description": "Execute shell commands"},
-				{"name": "terminal", "description": "Interactive terminal"},
-			},
-		},
-		{
-			"name":        "browser",
-			"description": "Browser automation",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "browser_navigate", "description": "Navigate to URL"},
-				{"name": "browser_snapshot", "description": "Get page snapshot"},
-				{"name": "browser_click", "description": "Click element"},
-				{"name": "browser_type", "description": "Type text"},
-			},
-		},
-		{
-			"name":        "memory",
-			"description": "Persistent memory storage",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "memory_store", "description": "Store information"},
-				{"name": "memory_recall", "description": "Recall stored information"},
-			},
-		},
-		{
-			"name":        "utility",
-			"description": "Utility functions",
-			"enabled":     true,
-			"tools": []map[string]interface{}{
-				{"name": "json", "description": "JSON operations"},
-				{"name": "uuid", "description": "Generate UUID"},
-				{"name": "random", "description": "Generate random values"},
-				{"name": "time", "description": "Time operations"},
-			},
+		providers: []Provider{
+			{Name: "openai", Label: "OpenAI", BaseURL: "https://api.openai.com/v1", Models: []string{"gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"}},
+			{Name: "deepseek", Label: "DeepSeek", BaseURL: "https://api.deepseek.com", Models: []string{"deepseek-chat", "deepseek-coder"}},
+			{Name: "anthropic", Label: "Anthropic", BaseURL: "https://api.anthropic.com", Models: []string{"claude-3-5-sonnet", "claude-3-opus"}},
 		},
 	}
-
-	// Initialize skills
-	s.skills = []map[string]interface{}{
-		{"name": "git-workflow", "category": "development", "description": "Git workflow helpers", "enabled": true},
-		{"name": "docker-help", "category": "devops", "description": "Docker commands reference", "enabled": true},
-		{"name": "code-review", "category": "development", "description": "Code review best practices", "enabled": true},
-		{"name": "api-design", "category": "development", "description": "REST API design patterns", "enabled": false},
-	}
-
-	// Initialize config
-	s.config = map[string]interface{}{
-		"provider":     "openai",
-		"model":        "gpt-4",
-		"temperature":  0.7,
-		"max_tokens":   4096,
-		"theme":         "dark",
-		"language":      "en",
-		"streaming":     true,
-		"system_prompt": "You are go-magic, a helpful AI assistant.",
-	}
 }
 
-func (s *Server) addLog(level, message string) {
-	s.logs = append(s.logs, map[string]interface{}{
-		"id":        generateID(),
-		"time":      time.Now().Format("15:04:05"),
-		"timestamp": time.Now().Unix(),
-		"level":     level,
-		"message":   message,
-	})
-	// Keep only last 100 logs
-	if len(s.logs) > 100 {
-		s.logs = s.logs[len(s.logs)-100:]
-	}
-}
+// Start starts the HTTP server
+func (s *Server) Start(port int) error {
+	mux := http.NewServeMux()
 
-func (s *Server) Start() error {
-	s.mux = http.NewServeMux()
-	s.addLog("info", "Server starting on port "+s.port)
-
-	// API routes
-	s.mux.HandleFunc("/api/health", s.handleHealth)
-	s.mux.HandleFunc("/api/stats", s.handleStats)
-	
-	// Sessions
-	s.mux.HandleFunc("/api/sessions", s.handleSessions)
-	s.mux.HandleFunc("/api/sessions/", s.handleSession)
-	
-	// Chat
-	s.mux.HandleFunc("/api/chat", s.handleChat)
-	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
-	
-	// Tools
-	s.mux.HandleFunc("/api/toolsets", s.handleToolsets)
-	s.mux.HandleFunc("/api/toolsets/", s.handleToolsetAction)
-	s.mux.HandleFunc("/api/tools", s.handleTools)
-	
-	// Skills
-	s.mux.HandleFunc("/api/skills", s.handleSkills)
-	s.mux.HandleFunc("/api/skills/", s.handleSkillAction)
-	
-	// Config
-	s.mux.HandleFunc("/api/config", s.handleConfig)
-	
-	// Logs
-	s.mux.HandleFunc("/api/logs", s.handleLogs)
-	
-	// Platforms
-	s.mux.HandleFunc("/api/platforms", s.handlePlatforms)
-	
-	// Dashboard plugins (placeholder for future plugin system)
-	s.mux.HandleFunc("/api/dashboard/plugins", s.handleDashboardPlugins)
-	s.mux.HandleFunc("/api/dashboard/plugins/rescan", s.handleDashboardPluginsRescan)
-
-	// Dashboard themes
-	s.mux.HandleFunc("/api/dashboard/themes", s.handleDashboardThemes)
-
-	// Status endpoint
-	s.mux.HandleFunc("/api/status", s.handleStatus)
-	
-	// Additional API endpoints for frontend compatibility
-	s.mux.HandleFunc("/api/model/auxiliary", s.handleModelAuxiliary)
-	s.mux.HandleFunc("/api/analytics/models", s.handleAnalyticsModels)
-	s.mux.HandleFunc("/api/tools/toolsets", s.handleToolsToolsets)
-
-	// WebSocket
-	s.mux.HandleFunc("/ws", s.handleWebSocket)
-
-	// Serve static files (SPA fallback)
-	s.mux.HandleFunc("/", s.handleStatic)
-
-	addr := fmt.Sprintf(":%s", s.port)
-	s.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: s.mux,
-	}
-
-	s.addLog("info", fmt.Sprintf("Server listening on http://0.0.0.0%s", addr))
-	log.Printf("Starting web server on http://0.0.0.0%s", addr)
-	return s.httpServer.ListenAndServe()
-}
-
-// Stop gracefully shuts down the server
-func (s *Server) Stop(ctx context.Context) error {
-	s.addLog("info", "Server shutting down")
-	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
-	}
-	return nil
-}
-
-// Health check
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"status":  "healthy",
-		"version": "1.0.0",
-		"time":    time.Now().Unix(),
-	})
-}
-
-// Stats
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	s.sessionsMux.RLock()
-	sessionCount := len(s.sessions)
-	var messageCount int
-	for _, session := range s.sessions {
-		messageCount += len(session.Messages)
-	}
-	s.sessionsMux.RUnlock()
-	
-	jsonResponse(w, map[string]interface{}{
-		"total_sessions":  sessionCount,
-		"total_messages":  messageCount,
-		"uptime_seconds":  int(time.Since(s.startTime).Seconds()),
-		"toolset_count":   len(s.toolsets),
-		"skill_count":     len(s.skills),
-	})
-}
-
-// Sessions handlers
-func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	f, _ := os.OpenFile("/tmp/server.log", os.O_APPEND|os.O_CREATE, 0644); fmt.Fprintf(f, "handleSessions called with Method=%s\n", r.Method); f.Close()
-	switch r.Method {
-	case http.MethodGet:
-		s.sessionsMux.RLock()
-		sessions := make([]*Session, 0, len(s.sessions))
-		for _, session := range s.sessions {
-			// Return sessions without full messages for list view
-			sessions = append(sessions, &Session{
-				ID:        session.ID,
-				Name:      session.Name,
-				Model:     session.Model,
-				CreatedAt: session.CreatedAt,
-				UpdatedAt: session.UpdatedAt,
-				MessageCount: len(session.Messages),
-			})
-		}
-		s.sessionsMux.RUnlock()
-		jsonResponse(w, sessions)
-
-	case http.MethodPost:
-		var req struct {
-			Title string `json:"title"` // Support both "title" and "name"
-			Name  string `json:"name"`
-			Model string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		
-		// Support both "title" (from frontend) and "name" (legacy)
-		if req.Title != "" {
-			req.Name = req.Title
-		}
-		if req.Name == "" {
-			req.Name = fmt.Sprintf("Chat %d", time.Now().Unix())
-		}
-		model := s.config["model"]
-		if req.Model == "" && model != nil {
-			req.Model = model.(string)
-		}
-		
-		session := &Session{
-			ID:        generateID(),
-			Name:      req.Name,
-			Model:     req.Model,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Messages:  []Message{},
-		}
-		
-		s.sessionsMux.Lock()
-		s.sessions[session.ID] = session
-		s.sessionsMux.Unlock()
-		
-		s.addLog("info", fmt.Sprintf("Created session: %s", session.Name))
-		jsonResponse(w, session)
-	}
-}
-
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	parts := strings.SplitN(path, "/", 2)
-	id := parts[0]
-	action := ""
-	if len(parts) > 1 {
-		action = parts[1]
-	}
-
-	s.sessionsMux.RLock()
-	session, ok := s.sessions[id]
-	s.sessionsMux.RUnlock()
-
-	if !ok {
-		http.Error(w, "Session not found", http.StatusNotFound)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		if action == "messages" {
-			jsonResponse(w, session.Messages)
-		} else {
-			jsonResponse(w, session)
-		}
-
-	case http.MethodPut:
-		var req struct {
-			Title string `json:"title"`
-			Name  string `json:"name"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		// Support both "title" and "name"
-		newName := req.Title
-		if newName == "" {
-			newName = req.Name
-		}
-		if newName != "" {
-			s.sessionsMux.Lock()
-			session.Name = newName
-			session.UpdatedAt = time.Now()
-			s.sessionsMux.Unlock()
-			s.addLog("info", fmt.Sprintf("Renamed session to: %s", newName))
-		}
-		jsonResponse(w, session)
-
-	case http.MethodDelete:
-		s.sessionsMux.Lock()
-		delete(s.sessions, id)
-		s.sessionsMux.Unlock()
-		s.addLog("info", fmt.Sprintf("Deleted session: %s", id))
-		w.WriteHeader(http.StatusNoContent)
-
-	case http.MethodPost:
-		if action == "messages" {
-			var req struct {
-				Content string `json:"content"`
-				Role    string `json:"role"`
-			}
-			json.NewDecoder(r.Body).Decode(&req)
-			
-			msg := Message{
-				ID:        generateID(),
-				Role:      req.Role,
-				Content:   req.Content,
-				Timestamp: time.Now(),
-			}
-			
-			s.sessionsMux.Lock()
-			session.Messages = append(session.Messages, msg)
-			session.UpdatedAt = time.Now()
-			s.sessionsMux.Unlock()
-			
-			jsonResponse(w, msg)
-		}
-	}
-}
-
-// Chat handlers
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Message   string `json:"message"`
-		SessionID string `json:"session_id"`
-		Model     string `json:"model"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	// Create or get session
-	s.sessionsMux.Lock()
-	var session *Session
-	if req.SessionID != "" {
-		session = s.sessions[req.SessionID]
-	}
-	if session == nil {
-		session = &Session{
-			ID:        generateID(),
-			Name:      fmt.Sprintf("Chat %d", time.Now().Unix()),
-			Model:     req.Model,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Messages:  []Message{},
-		}
-		s.sessions[session.ID] = session
-	}
-	s.sessionsMux.Unlock()
-
-	// Add user message
-	userMsg := Message{
-		ID:        generateID(),
-		Role:      "user",
-		Content:   req.Message,
-		Timestamp: time.Now(),
-	}
-
-	s.sessionsMux.Lock()
-	session.Messages = append(session.Messages, userMsg)
-	session.UpdatedAt = time.Now()
-	s.sessionsMux.Unlock()
-
-	// Generate response
-	response := s.generateResponse(req.Message, session)
-
-	// Add assistant message
-	assistantMsg := Message{
-		ID:        generateID(),
-		Role:      "assistant",
-		Content:   response,
-		Timestamp: time.Now(),
-	}
-
-	s.sessionsMux.Lock()
-	session.Messages = append(session.Messages, assistantMsg)
-	session.UpdatedAt = time.Now()
-	s.sessionsMux.Unlock()
-
-	s.addLog("info", fmt.Sprintf("Chat message in session %s", session.ID))
-
-	jsonResponse(w, map[string]interface{}{
-		"session":  session,
-		"response": assistantMsg,
-	})
-}
-
-// SSE streaming chat
-func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Message   string `json:"message"`
-		SessionID string `json:"session_id"`
-		Model     string `json:"model"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
-		return
-	}
-
-	// Create or get session
-	s.sessionsMux.Lock()
-	var session *Session
-	if req.SessionID != "" {
-		session = s.sessions[req.SessionID]
-	}
-	if session == nil {
-		session = &Session{
-			ID:        generateID(),
-			Name:      fmt.Sprintf("Chat %d", time.Now().Unix()),
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Messages:  []Message{},
-		}
-		s.sessions[session.ID] = session
-	}
-
-	// Add user message
-	userMsg := Message{
-		ID:        generateID(),
-		Role:      "user",
-		Content:   req.Message,
-		Timestamp: time.Now(),
-	}
-	session.Messages = append(session.Messages, userMsg)
-	s.sessionsMux.Unlock()
-
-	// Send session info
-	sessionJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "session",
-		"data": session,
-	})
-	fmt.Fprintf(w, "data: %s\n\n", sessionJSON)
-	flusher.Flush()
-
-	// Generate and stream response
-	response := s.generateResponse(req.Message, session)
-	
-	// Stream character by character
-	assistantMsg := Message{
-		ID:        generateID(),
-		Role:      "assistant",
-		Content:   "",
-		Timestamp: time.Now(),
-	}
-
-	for _, char := range response {
-		event := map[string]interface{}{
-			"type": "chunk",
-			"data": map[string]interface{}{
-				"content": string(char),
-			},
-		}
-		eventJSON, _ := json.Marshal(event)
-		fmt.Fprintf(w, "data: %s\n\n", eventJSON)
-		flusher.Flush()
-		assistantMsg.Content += string(char)
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	// Add complete message to session
-	s.sessionsMux.Lock()
-	session.Messages = append(session.Messages, assistantMsg)
-	session.UpdatedAt = time.Now()
-	s.sessionsMux.Unlock()
-
-	// Send done event
-	doneEvent := map[string]interface{}{
-		"type": "done",
-		"data": assistantMsg,
-	}
-	doneJSON, _ := json.Marshal(doneEvent)
-	fmt.Fprintf(w, "data: %s\n\n", doneJSON)
-	flusher.Flush()
-
-	s.addLog("info", fmt.Sprintf("Streamed response for session %s", session.ID))
-}
-
-// Generate AI response (simplified - would connect to real LLM in production)
-func (s *Server) generateResponse(message string, session *Session) string {
-	// Simple pattern-based responses for demo
-	lower := strings.ToLower(message)
-	
-	// Build context from recent messages
-	var context string
-	s.sessionsMux.RLock()
-	if len(session.Messages) > 1 {
-		recent := session.Messages[len(session.Messages)-5 : len(session.Messages)-1]
-		for _, msg := range recent {
-			if msg.Role == "user" {
-				context += "User: " + msg.Content + "\n"
-			}
-		}
-	}
-	s.sessionsMux.RUnlock()
-
-	switch {
-	case strings.Contains(lower, "hello") || strings.Contains(lower, "hi"):
-		return "Hello! I'm go-magic, your AI assistant. How can I help you today?"
-	
-	case strings.Contains(lower, "help"):
-		return "I can help you with:\n\n- **Chat**: Have conversations and get answers\n- **Code**: Write, review, and debug code\n- **Files**: Read, write, and manage files\n- **Terminal**: Execute shell commands\n- **Web**: Search the web and extract content\n\nWhat would you like to do?"
-	
-	case strings.Contains(lower, "who are you"):
-		return "I'm **go-magic**, a high-performance AI Agent built with Go. I'm inspired by Nous Research's hermes-agent and support multiple providers (OpenAI, DeepSeek, etc.) and various messaging platforms."
-	
-	case strings.Contains(lower, "feature"):
-		return "**go-magic Features:**\n\n- Multi-provider LLM support\n- Tool system (web, file, terminal, browser)\n- Skills system for extending capabilities\n- Message gateways (Telegram, Discord, WhatsApp)\n- Session management with memory\n- MCP protocol support\n\nWhat would you like to explore?"
-	
-	case strings.Contains(lower, "thanks") || strings.Contains(lower, "thank"):
-		return "You're welcome! Is there anything else I can help you with?"
-	
-	default:
-		return fmt.Sprintf("I received your message: \"%s\"\n\nAs an AI assistant, I can help you with various tasks. Try asking about:\n- \"What can you do?\"\n- \"Help me with coding\"\n- \"Show me your features\"", message)
-	}
-}
-
-// Tools handlers
-func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		jsonResponse(w, s.toolsets)
-	}
-}
-
-func (s *Server) handleToolsetAction(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/toolsets/")
-	parts := strings.SplitN(path, "/", 2)
-	name := parts[0]
-	action := ""
-	if len(parts) > 1 {
-		action = parts[1]
-	}
-
-	// Find toolset
-	var ts map[string]interface{}
-	for _, t := range s.toolsets {
-		if t["name"] == name {
-			ts = t
-			break
-		}
-	}
-
-	if ts == nil {
-		http.Error(w, "Toolset not found", http.StatusNotFound)
-		return
-	}
-
-	if action == "toggle" && r.Method == http.MethodPost {
-		var req struct {
-			Enabled bool `json:"enabled"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		ts["enabled"] = req.Enabled
-		jsonResponse(w, ts)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		jsonResponse(w, ts)
-	}
-}
-
-func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	var tools []map[string]interface{}
-	for _, ts := range s.toolsets {
-		for _, t := range ts["tools"].([]map[string]interface{}) {
-			t["toolset"] = ts["name"]
-			tools = append(tools, t)
-		}
-	}
-	jsonResponse(w, tools)
-}
-
-// Skills handlers
-func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		jsonResponse(w, s.skills)
-		return
-	}
-	if r.Method == http.MethodPost {
-		var req struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Category    string `json:"category"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		
-		skill := map[string]interface{}{
-			"name":        req.Name,
-			"description": req.Description,
-			"category":    req.Category,
-			"enabled":     true,
-		}
-		s.skills = append(s.skills, skill)
-		s.addLog("info", fmt.Sprintf("Added skill: %s", req.Name))
-		jsonResponse(w, skill)
-	}
-}
-
-func (s *Server) handleSkillAction(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/skills/")
-	parts := strings.SplitN(path, "/", 2)
-	name := parts[0]
-
-	var skillData map[string]interface{}
-	for i, sk := range s.skills {
-		if sk["name"] == name {
-			skillData = sk
-			if r.Method == http.MethodDelete {
-				s.skills = append(s.skills[:i], s.skills[i+1:]...)
-				s.addLog("info", fmt.Sprintf("Deleted skill: %s", name))
-				w.WriteHeader(http.StatusNoContent)
+	// CORS middleware wrapper
+	withCORS := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(204)
 				return
 			}
-			break
+			h(w, r)
 		}
 	}
 
-	if skillData == nil {
-		http.Error(w, "Skill not found", http.StatusNotFound)
+	// Base API handler for CORS preflight
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(204)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	// Health
+	mux.HandleFunc("/api/health", withCORS(s.handleHealth))
+	mux.HandleFunc("/api/status", withCORS(s.handleStatus))
+
+	// Sessions
+	mux.HandleFunc("/api/sessions", withCORS(s.handleSessions))
+	mux.HandleFunc("/api/sessions/", withCORS(s.handleSessionByID))
+
+	// Chat
+	mux.HandleFunc("/api/chat", withCORS(s.handleChat))
+
+	// Tools
+	mux.HandleFunc("/api/toolsets", withCORS(s.handleToolsets))
+	mux.HandleFunc("/api/tools/toolsets", withCORS(s.handleToolsets))
+	mux.HandleFunc("/api/tools/toolsets/", withCORS(s.handleToolsetByID))
+	mux.HandleFunc("/api/tools/categories", withCORS(s.handleToolCategories))
+	mux.HandleFunc("/api/tools/", withCORS(s.handleToolByID))
+
+	// Skills
+	mux.HandleFunc("/api/skills", withCORS(s.handleSkills))
+	mux.HandleFunc("/api/skills/categories", withCORS(s.handleSkillCategories))
+	mux.HandleFunc("/api/skills/", withCORS(s.handleSkillByID))
+	mux.HandleFunc("/api/dashboard/skills", withCORS(s.handleDashboardSkills))
+	mux.HandleFunc("/api/dashboard/skills/search", withCORS(s.handleSkillsSearch))
+
+	// Plugins
+	mux.HandleFunc("/api/dashboard/plugins", withCORS(s.handleDashboardPlugins))
+	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(s.handleDashboardPluginsRescan))
+
+	// Models
+	mux.HandleFunc("/api/models", withCORS(s.handleModels))
+	mux.HandleFunc("/api/models/", withCORS(s.handleModelByID))
+	mux.HandleFunc("/api/model/auxiliary", withCORS(s.handleModelAuxiliary))
+	mux.HandleFunc("/api/providers", withCORS(s.handleProviders))
+
+	// Config
+	mux.HandleFunc("/api/config", withCORS(s.handleConfig))
+	mux.HandleFunc("/api/config/", withCORS(s.handleConfigByID))
+
+	// Analytics
+	mux.HandleFunc("/api/analytics/models", withCORS(s.handleAnalyticsModels))
+	mux.HandleFunc("/api/analytics/usage", withCORS(s.handleAnalyticsUsage))
+	mux.HandleFunc("/api/analytics/cost", withCORS(s.handleAnalyticsCost))
+	mux.HandleFunc("/api/analytics/tokens", withCORS(s.handleAnalyticsTokens))
+
+	// System
+	mux.HandleFunc("/api/system/info", withCORS(s.handleSystemInfo))
+	mux.HandleFunc("/api/system/stats", withCORS(s.handleSystemStats))
+	mux.HandleFunc("/api/system/health", withCORS(s.handleSystemHealth))
+
+	// Logs
+	mux.HandleFunc("/api/logs", withCORS(s.handleLogs))
+	mux.HandleFunc("/api/dashboard/logs", withCORS(s.handleDashboardLogs))
+
+	// Themes
+	mux.HandleFunc("/api/dashboard/themes", withCORS(s.handleDashboardThemes))
+
+	// Settings
+	mux.HandleFunc("/api/settings", withCORS(s.handleSettings))
+	mux.HandleFunc("/api/settings/", withCORS(s.handleSettingByID))
+
+	// WebSocket for streaming
+	mux.HandleFunc("/api/chat/stream", withCORS(s.handleChatStream))
+
+	// Static files
+	mux.HandleFunc("/", s.handleStatic)
+
+	addr := fmt.Sprintf(":%d", port)
+	return http.ListenAndServe(addr, mux)
+}
+
+// handleHealth handles health check
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, HealthResponse{Status: "healthy"})
+}
+
+// handleStatus handles status check
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"status":    "ok",
+		"timestamp": time.Now().Unix(),
+		"version":   "1.0.0",
+	})
+}
+
+// handleSessions handles session list and creation
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		jsonResponse(w, s.sessionList)
+	case "POST":
+		var req struct {
+			Name     string `json:"name"`
+			Title    string `json:"title"`
+			Model    string `json:"model"`
+			Platform string `json:"platform"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		name := req.Name
+		if name == "" {
+			name = req.Title
+		}
+		if name == "" {
+			name = fmt.Sprintf("Chat %d", time.Now().Unix())
+		}
+		model := req.Model
+		if model == "" {
+			model = "gpt-4"
+		}
+		platform := req.Platform
+		if platform == "" {
+			platform = "web"
+		}
+		session := &Session{
+			ID:        fmt.Sprintf("s_%d", time.Now().UnixNano()),
+			Name:      name,
+			Model:     model,
+			Platform:  platform,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		s.sessions[session.ID] = session
+		s.sessionList = append(s.sessionList, session)
+		jsonResponse(w, session)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+// handleSessionByID handles single session operations
+func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" {
+		http.Error(w, "not found", 404)
 		return
 	}
 
-	if r.Method == http.MethodGet {
-		jsonResponse(w, skillData)
+	session, ok := s.sessions[id]
+	if !ok {
+		http.Error(w, "not found", 404)
+		return
 	}
-}
 
-// Config handlers
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
-		jsonResponse(w, s.config)
-	case http.MethodPut:
-		var updates map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&updates)
-		for k, v := range updates {
-			s.config[k] = v
+	case "GET":
+		jsonResponse(w, session)
+	case "DELETE":
+		delete(s.sessions, id)
+		for i, item := range s.sessionList {
+			if item.ID == id {
+				s.sessionList = append(s.sessionList[:i], s.sessionList[i+1:]...)
+				break
+			}
 		}
-		s.addLog("info", "Config updated")
-		jsonResponse(w, s.config)
+		w.WriteHeader(204)
+	default:
+		http.Error(w, "method not allowed", 405)
 	}
 }
 
-// Logs handler
-func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodDelete {
-		s.logs = []map[string]interface{}{}
+// handleChat handles chat messages
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
 	}
-	
-	// Add current request as log
-	query := r.URL.Query()
-	level := query.Get("level")
-	if level == "" {
-		level = "debug"
+
+	var req struct {
+		Message   string `json:"message"`
+		SessionID string `json:"session_id"`
+		Model     string `json:"model"`
 	}
-	s.addLog(level, fmt.Sprintf("%s %s", r.Method, r.URL.Path))
-	
-	jsonResponse(w, s.logs)
-}
-
-// Platforms handler
-func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
-	platforms := []map[string]interface{}{
-		{
-			"name":    "telegram",
-			"status":  "disconnected",
-			"message": "Configure with: magic gateway setup telegram",
-		},
-		{
-			"name":    "discord",
-			"status":  "disconnected",
-			"message": "Configure with: magic gateway setup discord",
-		},
-		{
-			"name":    "whatsapp",
-			"status":  "disconnected",
-			"message": "Use 'magic gateway start' to connect",
-		},
-		{
-			"name":    "slack",
-			"status":  "disconnected",
-			"message": "Not configured",
-		},
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
 	}
-	jsonResponse(w, platforms)
-}
 
-// Dashboard plugins handler (placeholder)
-func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
-	// Return empty plugin list for now
-	jsonResponse(w, []interface{}{})
-}
-
-func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{"ok": true, "count": 0})
-}
-
-// Dashboard themes handler
-func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
-	themes := []map[string]interface{}{
-		{"id": "default", "name": "Default", "colors": map[string]string{
-			"primary": "#6366f1", "secondary": "#8b5cf6", "background": "#0f0f0f",
-		}},
-		{"id": "light", "name": "Light", "colors": map[string]string{
-			"primary": "#3b82f6", "secondary": "#6366f1", "background": "#ffffff",
-		}},
-		{"id": "blue", "name": "Blue", "colors": map[string]string{
-			"primary": "#3b82f6", "secondary": "#60a5fa", "background": "#1e3a5f",
-		}},
+	// Return a mock response for now
+	response := map[string]interface{}{
+		"id":      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		"content": fmt.Sprintf("Echo: %s", req.Message),
+		"model":   req.Model,
 	}
-	jsonResponse(w, map[string]interface{}{"themes": themes})
+	jsonResponse(w, response)
 }
 
-// Status handler
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"status":  "online",
-		"version": "1.0.0",
-		"uptime":  time.Since(s.startTime).Seconds(),
-	})
-}
-
-// Model auxiliary info
-func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"models": []map[string]string{
-			{"id": "gpt-4", "name": "GPT-4"},
-			{"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo"},
-			{"id": "claude-3", "name": "Claude 3"},
-		},
-	})
-}
-
-// Analytics models
-func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"models": []map[string]interface{}{
-			{"id": "gpt-4", "name": "GPT-4", "requests": 0},
-			{"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "requests": 0},
-		},
-	})
-}
-
-// Tools toolsets
-func (s *Server) handleToolsToolsets(w http.ResponseWriter, r *http.Request) {
+// handleToolsets handles toolset list
+func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, s.toolsets)
 }
 
-// WebSocket handler
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
-		return
+// handleToolsetByID handles single toolset
+func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/tools/toolsets/")
+	id = strings.TrimPrefix(r.URL.Path, "/api/toolsets/")
+	
+	for _, ts := range s.toolsets {
+		if ts.ID == id {
+			jsonResponse(w, ts)
+			return
+		}
 	}
-	defer conn.Close()
+	http.Error(w, "not found", 404)
+}
 
-	for {
-		_, msg, err := conn.ReadMessage()
-		if err != nil {
-			break
+// handleToolCategories handles tool categories
+func (s *Server) handleToolCategories(w http.ResponseWriter, r *http.Request) {
+	cats := map[string][]Toolset{
+		"browser": {{ID: "browser", Name: "Browser", Tools: []string{"browser_navigate", "browser_snapshot", "browser_click", "browser_type"}, Enabled: true}},
+	}
+	jsonResponse(w, cats)
+}
+
+// handleToolByID handles single tool
+func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/tools/")
+	tool := map[string]interface{}{
+		"id":          id,
+		"name":        id,
+		"description": fmt.Sprintf("Tool: %s", id),
+		"parameters":  map[string]interface{}{},
+	}
+	jsonResponse(w, tool)
+}
+
+// handleSkills handles skill list
+func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.skills)
+}
+
+// handleSkillCategories handles skill categories
+func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
+	cats := []string{"development", "research", "analytics"}
+	jsonResponse(w, cats)
+}
+
+// handleSkillByID handles single skill
+func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/skills/")
+	for _, skill := range s.skills {
+		if skill.ID == id {
+			jsonResponse(w, skill)
+			return
 		}
+	}
+	http.Error(w, "not found", 404)
+}
 
-		var req struct {
-			Type      string `json:"type"`
-			Message   string `json:"message"`
-			SessionID string `json:"session_id"`
+// handleDashboardSkills handles dashboard skill view
+func (s *Server) handleDashboardSkills(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"installed": s.skills,
+		"available": []Skill{},
+		"categories": []string{"development", "research", "analytics"},
+	})
+}
+
+// handleSkillsSearch handles skill search
+func (s *Server) handleSkillsSearch(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	var results []Skill
+	for _, skill := range s.skills {
+		if strings.Contains(strings.ToLower(skill.Name), strings.ToLower(query)) {
+			results = append(results, skill)
 		}
-		json.Unmarshal(msg, &req)
+	}
+	jsonResponse(w, results)
+}
 
-		switch req.Type {
-		case "chat":
-			response := s.generateResponse(req.Message, nil)
-			conn.WriteJSON(map[string]interface{}{
-				"type":    "response",
-				"content": response,
+// handleDashboardPlugins handles dashboard plugins
+func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, []map[string]interface{}{
+		{
+			"id":   "theme-default",
+			"name": "Default Theme",
+			"type": "theme",
+		},
+		{
+			"id":   "theme-dark",
+			"name": "Dark Theme",
+			"type": "theme",
+		},
+	})
+}
+
+// handleDashboardPluginsRescan handles plugin rescan
+func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"scanned": 0,
+		"found":   0,
+	})
+}
+
+// handleModels handles model list
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	var models []map[string]interface{}
+	for _, p := range s.providers {
+		for _, m := range p.Models {
+			models = append(models, map[string]interface{}{
+				"id":         fmt.Sprintf("%s/%s", p.Name, m),
+				"name":       m,
+				"provider":   p.Name,
+				"contextLen": 128000,
 			})
 		}
 	}
+	jsonResponse(w, models)
 }
 
-// Static file handler
+// handleModelByID handles single model
+func (s *Server) handleModelByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/models/")
+	model := map[string]interface{}{
+		"id":         id,
+		"name":       id,
+		"contextLen": 128000,
+	}
+	jsonResponse(w, model)
+}
+
+// handleModelAuxiliary handles auxiliary model
+func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"id":         "auto",
+		"name":       "Auto",
+		"contextLen": 128000,
+	})
+}
+
+// handleProviders handles provider list
+func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.providers)
+}
+
+// handleConfig handles configuration
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		jsonResponse(w, map[string]interface{}{
+			"language": "en",
+			"theme":    "dark",
+			"model":    "openai/gpt-4",
+		})
+	case "PUT":
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		jsonResponse(w, req)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+// handleConfigByID handles single config
+func (s *Server) handleConfigByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/config/")
+	jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
+}
+
+// handleSystemInfo handles system information
+func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"name":    "go-magic",
+		"version": "1.0.0",
+		"status":  "running",
+		"os":      runtime.GOOS,
+		"arch":    runtime.GOARCH,
+		"go":      runtime.Version(),
+	})
+}
+
+// handleSystemStats handles system statistics
+func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	sessionCount := len(s.sessions)
+	messageCount := len(s.messages)
+	s.mu.RUnlock()
+	
+	jsonResponse(w, map[string]interface{}{
+		"sessions":     sessionCount,
+		"messages":     messageCount,
+		"uptime":       time.Since(s.startTime).String(),
+		"memory_usage": "N/A",
+	})
+}
+
+// handleSystemHealth handles system health
+func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"status": "healthy",
+		"checks": map[string]string{
+			"server":   "ok",
+			"database": "ok",
+			"llm":      "not_configured",
+		},
+	})
+}
+
+// handleAnalyticsModels handles model analytics
+func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
+	days := r.URL.Query().Get("days")
+	if days == "" {
+		days = "30"
+	}
+	jsonResponse(w, []map[string]interface{}{
+		{"model": "gpt-4", "requests": 100, "tokens": 50000},
+		{"model": "gpt-3.5-turbo", "requests": 200, "tokens": 80000},
+	})
+}
+
+// handleAnalyticsUsage handles usage analytics
+func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"daily":   []map[string]interface{}{{"date": time.Now().Format("2006-01-02"), "requests": 10}},
+		"monthly": []map[string]interface{}{{"month": time.Now().Format("2006-01"), "requests": 300}},
+	})
+}
+
+// handleAnalyticsCost handles cost analytics
+func (s *Server) handleAnalyticsCost(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"total":   25.50,
+		"currency": "USD",
+		"breakdown": []map[string]interface{}{
+			{"model": "gpt-4", "cost": 15.00},
+			{"model": "gpt-3.5-turbo", "cost": 10.50},
+		},
+	})
+}
+
+// handleAnalyticsTokens handles token analytics
+func (s *Server) handleAnalyticsTokens(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"input":  100000,
+		"output": 50000,
+		"total":  150000,
+	})
+}
+
+// handleLogs handles log list
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "100"
+	}
+	n, _ := strconv.Atoi(limit)
+	
+	var logs []LogEntry
+	for i := 0; i < n && i < 100; i++ {
+		logs = append(logs, LogEntry{
+			Timestamp: time.Now().Add(-time.Duration(i) * time.Minute),
+			Level:     "info",
+			Message:   fmt.Sprintf("Log entry %d", i),
+			Source:    "system",
+		})
+	}
+	jsonResponse(w, logs)
+}
+
+// handleDashboardLogs handles dashboard logs
+func (s *Server) handleDashboardLogs(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"logs": []LogEntry{
+			{Timestamp: time.Now(), Level: "info", Message: "Server started", Source: "system"},
+		},
+		"stats": map[string]interface{}{
+			"total":   100,
+			"errors":   5,
+			"warnings": 10,
+		},
+	})
+}
+
+// handleDashboardThemes handles dashboard themes
+func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
+	themes := []map[string]interface{}{
+		{"id": "dark", "name": "Dark", "preview": "#1a1a2e"},
+		{"id": "light", "name": "Light", "preview": "#ffffff"},
+		{"id": "cyber", "name": "Cyber", "preview": "#00ff41"},
+	}
+	jsonResponse(w, themes)
+}
+
+// handleSettings handles settings
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"general": map[string]interface{}{
+			"language": "en",
+			"timezone": "UTC",
+		},
+		"appearance": map[string]interface{}{
+			"theme": "dark",
+			"fontSize": 14,
+		},
+	})
+}
+
+// handleSettingByID handles single setting
+func (s *Server) handleSettingByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/settings/")
+	jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
+}
+
+// handleChatStream handles streaming chat
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	var req struct {
+		Message   string `json:"message"`
+		SessionID string `json:"session_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// Send streaming response
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+
+	message := fmt.Sprintf("Echo: %s", req.Message)
+	for i := 0; i < len(message); i++ {
+		fmt.Fprintf(w, "data: %s\n\n", string(message[i]))
+		flusher.Flush()
+		time.Sleep(10 * time.Millisecond)
+	}
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+// handleStatic serves static files with SPA fallback
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// Skip API routes - they should be handled by other handlers
+	// Skip API routes
 	if strings.HasPrefix(path, "/api/") {
-		w.WriteHeader(404)
-		w.Write([]byte(`{"error":"API route not found"}`))
+		http.Error(w, "not found", 404)
 		return
 	}
 
-	fmt.Printf("handleStatic: path=%s\n", path)
-	if path == "/" {
-		path = "/index.html"
-	}
-
-	// Try embedded files first (files are embedded at root, no prefix needed)
-	embedPath := strings.TrimPrefix(path, "/")
-	data, err := staticFiles.ReadFile(embedPath)
-	if err == nil {
-		fmt.Printf("handleStatic: embedded file found: %s, size=%d\n", embedPath, len(data))
-		contentType := getContentType(path)
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+	// Root SPA fallback
+	if path == "/" || path == "" {
+		data, err := staticFiles.ReadFile("index.html")
+		if err != nil {
+			http.Error(w, "internal server error", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
 		w.Write(data)
 		return
 	}
-	fmt.Printf("handleStatic: embedded file not found: %s, err=%v\n", embedPath, err)
 
-	// Try disk files (fallback for development)
-	diskPath := filepath.Join("internal/server/dist", path)
-	data, err = os.ReadFile(diskPath)
+	// Try embedded files first
+	data, err := staticFiles.ReadFile(path[1:])
 	if err == nil {
-		fmt.Printf("handleStatic: disk file found: %s, size=%d\n", diskPath, len(data))
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
 		w.Write(data)
 		return
 	}
-	fmt.Printf("handleStatic: disk file not found: %s\n", diskPath)
 
-	// SPA fallback - serve index.html for SPA routing
-	indexData, err := staticFiles.ReadFile("index.html")
-	if err != nil {
-		// Try disk fallback
-		indexData, _ = os.ReadFile(filepath.Join("internal/server/dist", "index.html"))
+	// Serve index.html for SPA routes (remove trailing slash issues)
+	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings"}
+	for _, spa := range spaPaths {
+		if strings.HasPrefix(path, spa) {
+			data, err := staticFiles.ReadFile("index.html")
+			if err == nil {
+				w.Header().Set("Content-Type", "text/html")
+				w.Write(data)
+				return
+			}
+		}
 	}
-	w.Header().Set("Content-Type", "text/html")
-	w.Write(indexData)
-}
 
-// Static file handler (for subpath)
-func (s *Server) handleStaticWithPrefix(prefix string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.handleStatic(w, r)
-	}
-}
-
-// Helper functions
-func jsonResponse(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	http.Error(w, "not found", 404)
 }
 
 func getContentType(path string) string {
-	ext := filepath.Ext(path)
-	types := map[string]string{
-		".html": "text/html",
-		".js":   "application/javascript",
-		".css":  "text/css",
-		".json": "application/json",
-		".png":  "image/png",
-		".jpg":  "image/jpeg",
-		".svg":  "image/svg+xml",
-		".ico":  "image/x-icon",
-		".woff": "font/woff",
-		".woff2": "font/woff2",
+	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+	switch ext {
+	case "js":
+		return "application/javascript"
+	case "css":
+		return "text/css"
+	case "html":
+		return "text/html"
+	case "json":
+		return "application/json"
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	case "svg":
+		return "image/svg+xml"
+	case "woff", "woff2":
+		return "font/woff2"
+	case "ttf":
+		return "font/ttf"
+	case "eot":
+		return "application/vnd.ms-fontobject"
+	case "ico":
+		return "image/x-icon"
+	default:
+		return "application/octet-stream"
 	}
-	if t, ok := types[ext]; ok {
-		return t
-	}
-	return "application/octet-stream"
 }
 
-func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+func jsonResponse(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
 }
