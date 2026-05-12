@@ -140,6 +140,7 @@ func NewServer(port string, db *sql.DB) *Server {
 		db:         db,
 		startTime:  time.Now(),
 		logs:       []map[string]interface{}{},
+		sessions:   make(map[string]*Session),
 	}
 	s.initData()
 	return s
@@ -336,6 +337,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // Sessions handlers
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	f, _ := os.OpenFile("/tmp/server.log", os.O_APPEND|os.O_CREATE, 0644); fmt.Fprintf(f, "handleSessions called with Method=%s\n", r.Method); f.Close()
 	switch r.Method {
 	case http.MethodGet:
 		s.sessionsMux.RLock()
@@ -356,16 +358,25 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
+			Title string `json:"title"` // Support both "title" and "name"
 			Name  string `json:"name"`
 			Model string `json:"model"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
 		
+		// Support both "title" (from frontend) and "name" (legacy)
+		if req.Title != "" {
+			req.Name = req.Title
+		}
 		if req.Name == "" {
 			req.Name = fmt.Sprintf("Chat %d", time.Now().Unix())
 		}
-		if req.Model == "" {
-			req.Model = s.config["model"].(string)
+		model := s.config["model"]
+		if req.Model == "" && model != nil {
+			req.Model = model.(string)
 		}
 		
 		session := &Session{
@@ -414,15 +425,21 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPut:
 		var req struct {
-			Name string `json:"name"`
+			Title string `json:"title"`
+			Name  string `json:"name"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		if req.Name != "" {
+		// Support both "title" and "name"
+		newName := req.Title
+		if newName == "" {
+			newName = req.Name
+		}
+		if newName != "" {
 			s.sessionsMux.Lock()
-			session.Name = req.Name
+			session.Name = newName
 			session.UpdatedAt = time.Now()
 			s.sessionsMux.Unlock()
-			s.addLog("info", fmt.Sprintf("Renamed session to: %s", req.Name))
+			s.addLog("info", fmt.Sprintf("Renamed session to: %s", newName))
 		}
 		jsonResponse(w, session)
 
