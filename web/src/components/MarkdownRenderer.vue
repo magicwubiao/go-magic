@@ -1,322 +1,333 @@
 <template>
-  <div class="markdown-body" v-html="renderedContent"></div>
+  <div class="markdown-renderer" v-html="renderedContent" ref="contentRef"></div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import hljs from 'highlight.js'
-import 'highlight.js/styles/github.css'
 
 const props = defineProps<{
   content: string
-  isDark?: boolean
+  sanitize?: boolean
 }>()
 
+const contentRef = ref<HTMLElement | null>(null)
+
+// Simple markdown parser
 const renderedContent = computed(() => {
-  let content = escapeHtml(props.content || '')
-
-  // Code blocks with syntax highlighting
-  content = content.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-    const language = lang || 'plaintext'
-    let highlighted = code
-    try {
-      if (hljs.getLanguage(language)) {
-        highlighted = hljs.highlight(code.trim(), { language, ignoreIllegals: true }).value
-      } else {
-        highlighted = hljs.highlightAuto(code.trim()).value
-      }
-    } catch (e) {
-      // fallback
-    }
-    return `
-      <div class="code-block">
-        <div class="code-header">
-          <span class="code-lang">${language}</span>
-          <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
-        </div>
-        <pre><code class="hljs language-${language}">${highlighted}</code></pre>
-      </div>
-    `
-  })
-
-  // Inline code
-  content = content.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
-
-  // Headers
-  content = content.replace(/^### (.*$)/gm, '<h3>$1</h3>')
-  content = content.replace(/^## (.*$)/gm, '<h2>$1</h2>')
-  content = content.replace(/^# (.*$)/gm, '<h1>$1</h1>')
-
-  // Bold and italic
-  content = content.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
-  content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  content = content.replace(/\*(.*?)\*/g, '<em>$1</em>')
-  content = content.replace(/__(.*?)__/g, '<u>$1</u>')
-
-  // Links
-  content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-
-  // Images
-  content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />')
-
-  // Blockquotes
-  content = content.replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>')
-
-  // Tables
-  content = content.replace(/\|(.+)\|/g, (match) => {
-    const cells = match.split('|').filter(c => c.trim())
-    if (cells.some(c => /^-+$/.test(c.trim()))) {
-      return ''
-    }
-    const row = cells.map(c => `<td>${c.trim()}</td>`).join('')
-    return `<tr>${row}</tr>`
-  })
-
-  // Lists
-  content = content.replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
-  content = content.replace(/^- (.*$)/gm, '<li>$1</li>')
-  content = content.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-
-  // Horizontal rules
-  content = content.replace(/^---$/gm, '<hr />')
-  content = content.replace(/^\*\*\*$/gm, '<hr />')
-
-  // Line breaks
-  content = content.replace(/\n\n/g, '</p><p>')
-  content = content.replace(/\n/g, '<br />')
-
-  // Wrap in paragraphs
-  if (!content.startsWith('<')) {
-    content = '<p>' + content + '</p>'
+  if (!props.content) return ''
+  
+  let html = props.content
+  
+  // Escape HTML (unless disabled)
+  if (props.sanitize !== false) {
+    html = html
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
   }
-
-  return content
+  
+  // Code blocks (```language\ncode\n```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const langClass = lang ? `language-${lang}` : ''
+    const highlighted = lang && hljs.getLanguage(lang) 
+      ? hljs.highlight(code.trim(), { language: lang }).value 
+      : code.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `<pre class="code-block"><code class="${langClass}">${highlighted}</code><button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.querySelector('code').textContent)">📋 Copy</button></pre>`
+  })
+  
+  // Inline code (`code`)
+  html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
+  
+  // Headers
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>')
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>')
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
+  
+  // Bold and Italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>')
+  html = html.replace(/_(.+?)_/g, '<em>$1</em>')
+  
+  // Strikethrough
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>')
+  
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+  
+  // Images
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />')
+  
+  // Blockquotes
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
+  
+  // Unordered lists
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>')
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+  
+  // Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+  
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr />')
+  html = html.replace(/^\*\*\*$/gm, '<hr />')
+  
+  // Tables (basic support)
+  const tableRegex = /^\|(.+)\|$/gm
+  const tables = html.match(tableRegex)
+  if (tables) {
+    let inTable = false
+    let tableRows: string[] = []
+    html = html.replace(tableRegex, (match, content) => {
+      if (!inTable) {
+        inTable = true
+        tableRows = []
+      }
+      const cells = content.split('|').filter(c => c.trim())
+      if (cells.some(c => /^[-:]+$/.test(c.trim()))) {
+        // Header row separator, skip
+        return ''
+      }
+      tableRows.push(`<tr>${cells.map(c => `<td>${c.trim()}</td>`).join('')}</tr>`)
+      if (tableRows.length === 1) {
+        const header = tableRows[0].replace(/<td>/g, '<th>').replace(/<\/td>/g, '</th>')
+        tableRows[0] = header
+      }
+      return ''
+    })
+    if (tableRows.length > 0) {
+      html += `<table><thead>${tableRows[0]}</thead><tbody>${tableRows.slice(1).join('')}</tbody></table>`
+    }
+  }
+  
+  // Line breaks
+  html = html.replace(/\n\n/g, '</p><p>')
+  html = '<p>' + html + '</p>'
+  html = html.replace(/<p><\/p>/g, '')
+  html = html.replace(/<p>(<h[1-6]|<ul|<ol|<blockquote|<pre|<table)/g, '$1')
+  html = html.replace(/(<\/h[1-6]>|<\/ul>|<\/ol>|<\/blockquote>|<\/pre>|<\/table>)<\/p>/g, '$1')
+  
+  return html
 })
 
-const escapeHtml = (text: string): string => {
-  const map: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;'
-  }
-  return text.replace(/[&<>"']/g, m => map[m])
-}
+// Auto-apply syntax highlighting after render
+watch(() => props.content, () => {
+  setTimeout(highlightCode, 0)
+})
 
-// Global copy function for code blocks
-if (typeof window !== 'undefined') {
-  (window as any).copyCode = async (btn: HTMLButtonElement) => {
-    const codeBlock = btn.parentElement?.nextElementSibling
-    const code = codeBlock?.textContent || ''
-    try {
-      await navigator.clipboard.writeText(code)
-      btn.textContent = '✅ Copied!'
-      setTimeout(() => btn.textContent = '📋 Copy', 2000)
-    } catch (err) {
-      btn.textContent = '❌ Failed'
-    }
-  }
+onMounted(() => {
+  highlightCode()
+})
+
+function highlightCode() {
+  if (!contentRef.value) return
+  const codeBlocks = contentRef.value.querySelectorAll('pre code:not(.hljs)')
+  codeBlocks.forEach((block) => {
+    hljs.highlightElement(block as HTMLElement)
+  })
 }
 </script>
 
 <style>
-.markdown-body {
-  font-size: 15px;
-  line-height: 1.7;
-  word-wrap: break-word;
+.markdown-renderer {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
-.markdown-body h1 {
-  font-size: 1.8em;
-  margin: 0.8em 0;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid #eaecef;
-}
-
-.markdown-body h2 {
-  font-size: 1.5em;
-  margin: 0.8em 0;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid #eaecef;
-}
-
-.markdown-body h3 {
-  font-size: 1.25em;
-  margin: 0.6em 0;
-}
-
-.markdown-body p {
-  margin: 0.8em 0;
-}
-
-.markdown-body a {
-  color: #4f46e5;
-  text-decoration: none;
-}
-
-.markdown-body a:hover {
-  text-decoration: underline;
-}
-
-.markdown-body blockquote {
-  margin: 1em 0;
-  padding: 0.5em 1em;
-  border-left: 4px solid #4f46e5;
-  background: #f6f8fa;
-  color: #24292e;
-}
-
-.markdown-body ul,
-.markdown-body ol {
-  margin: 1em 0;
-  padding-left: 2em;
-}
-
-.markdown-body li {
-  margin: 0.3em 0;
-}
-
-.markdown-body table {
-  border-collapse: collapse;
-  margin: 1em 0;
-  width: 100%;
-}
-
-.markdown-body td,
-.markdown-body th {
-  border: 1px solid #dfe2e5;
-  padding: 0.5em 1em;
-}
-
-.markdown-body th {
-  background: #f6f8fa;
+.markdown-renderer h1,
+.markdown-renderer h2,
+.markdown-renderer h3,
+.markdown-renderer h4,
+.markdown-renderer h5,
+.markdown-renderer h6 {
+  margin: 16px 0 8px;
   font-weight: 600;
 }
 
-.markdown-body hr {
-  border: none;
-  border-top: 1px solid #eaecef;
-  margin: 1.5em 0;
+.markdown-renderer h1 { font-size: 24px; }
+.markdown-renderer h2 { font-size: 20px; }
+.markdown-renderer h3 { font-size: 18px; }
+.markdown-renderer h4 { font-size: 16px; }
+
+.markdown-renderer p {
+  margin: 0 0 12px;
 }
 
-.markdown-body img {
+.markdown-renderer a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+.markdown-renderer a:hover {
+  text-decoration: underline;
+}
+
+.markdown-renderer img {
   max-width: 100%;
-  height: auto;
   border-radius: 8px;
-  margin: 1em 0;
+  margin: 12px 0;
+}
+
+.markdown-renderer blockquote {
+  margin: 12px 0;
+  padding: 12px 16px;
+  border-left: 4px solid var(--primary-color);
+  background: var(--bg-secondary);
+  border-radius: 0 8px 8px 0;
+}
+
+.markdown-renderer ul,
+.markdown-renderer ol {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.markdown-renderer li {
+  margin: 4px 0;
+}
+
+.markdown-renderer hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 20px 0;
+}
+
+.markdown-renderer table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+}
+
+.markdown-renderer th,
+.markdown-renderer td {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.markdown-renderer th {
+  background: var(--bg-secondary);
+  font-weight: 600;
 }
 
 /* Inline code */
-.markdown-body .inline-code {
-  padding: 0.2em 0.4em;
-  background: #f1f3f4;
+.markdown-renderer .inline-code {
+  padding: 2px 6px;
+  background: var(--bg-secondary);
   border-radius: 4px;
-  font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 0.9em;
-  color: #e83e8c;
+  font-family: 'Fira Code', monospace;
+  font-size: 13px;
 }
 
 /* Code blocks */
-.markdown-body .code-block {
-  margin: 1em 0;
-  border-radius: 8px;
+.markdown-renderer .code-block {
+  position: relative;
+  margin: 16px 0;
+  border-radius: 12px;
   overflow: hidden;
-  background: #f6f8fa;
-  border: 1px solid #eaecef;
+  background: #1e1e1e;
 }
 
-.markdown-body .code-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 16px;
-  background: #eaecef;
-  border-bottom: 1px solid #dfe2e5;
-}
-
-.markdown-body .code-lang {
-  font-size: 12px;
-  color: #6a737d;
-  font-weight: 500;
-}
-
-.markdown-body .copy-btn {
-  background: white;
-  border: 1px solid #dfe2e5;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.markdown-body .copy-btn:hover {
-  background: #f6f8fa;
-}
-
-.markdown-body pre {
-  margin: 0;
+.markdown-renderer .code-block code {
+  display: block;
   padding: 16px;
+  padding-top: 40px;
   overflow-x: auto;
   font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
-.markdown-body code {
-  font-family: 'Fira Code', 'Consolas', monospace;
+.markdown-renderer .code-block .copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
 }
 
-/* Dark theme */
-.dark-theme .markdown-body {
-  color: #c9d1d9;
+.markdown-renderer .code-block:hover .copy-btn {
+  opacity: 1;
 }
 
-.dark-theme .markdown-body h1,
-.dark-theme .markdown-body h2 {
-  border-color: #30363d;
+.markdown-renderer .code-block .copy-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
-.dark-theme .markdown-body a {
-  color: #8b5cf6;
+/* Highlight.js theme (One Dark inspired) */
+.hljs {
+  color: #abb2bf;
 }
-
-.dark-theme .markdown-body blockquote {
-  background: #161b22;
-  border-color: #8b5cf6;
-  color: #c9d1d9;
+.hljs-comment,
+.hljs-quote {
+  color: #5c6370;
+  font-style: italic;
 }
-
-.dark-theme .markdown-body td,
-.dark-theme .markdown-body th {
-  border-color: #30363d;
+.hljs-doctag,
+.hljs-keyword,
+.hljs-formula {
+  color: #c678dd;
 }
-
-.dark-theme .markdown-body th {
-  background: #161b22;
+.hljs-section,
+.hljs-name,
+.hljs-selector-tag,
+.hljs-deletion,
+.hljs-subst {
+  color: #e06c75;
 }
-
-.dark-theme .markdown-body hr {
-  border-color: #30363d;
+.hljs-literal {
+  color: #56b6c2;
 }
-
-.dark-theme .markdown-body .code-block {
-  background: #0d1117;
-  border-color: #30363d;
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #98c379;
 }
-
-.dark-theme .markdown-body .code-header {
-  background: #161b22;
-  border-color: #30363d;
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-number {
+  color: #d19a66;
 }
-
-.dark-theme .markdown-body .inline-code {
-  background: #161b22;
-  color: #f97583;
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-meta,
+.hljs-selector-id,
+.hljs-title {
+  color: #61afef;
 }
-
-.dark-theme .markdown-body pre {
-  background: #0d1117;
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: #e6c07b;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
+.hljs-link {
+  text-decoration: underline;
 }
 </style>

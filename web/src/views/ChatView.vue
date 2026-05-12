@@ -1,938 +1,693 @@
 <template>
-  <div class="chat-container" :class="{ 'dark-theme': isDark }">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h2>💬 Chats</h2>
-        <button class="btn-new-chat" @click="newChat" title="New Chat">➕</button>
+  <div class="chat-view">
+    <!-- Chat Header -->
+    <div class="chat-header">
+      <div class="header-left">
+        <button @click="showSidebar = !showSidebar" class="icon-btn" title="Toggle Sidebar">
+          ☰
+        </button>
+        <h2>{{ currentSession?.title || 'New Chat' }}</h2>
+        <span v-if="isStreaming" class="streaming-badge">● Streaming</span>
       </div>
-
-      <div class="search-box">
-        <input v-model="searchQuery" placeholder="Search chats..." class="search-input" />
+      <div class="header-right">
+        <select v-model="selectedModel" class="model-select">
+          <option value="gpt-4o">GPT-4o</option>
+          <option value="gpt-4o-mini">GPT-4o Mini</option>
+          <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+          <option value="deepseek-chat">DeepSeek Chat</option>
+        </select>
+        <button @click="showSettings = true" class="icon-btn" title="Settings">⚙️</button>
+        <button @click="toggleTheme" class="icon-btn" title="Toggle Theme">
+          {{ isDark ? '☀️' : '🌙' }}
+        </button>
       </div>
+    </div>
 
-      <div class="chat-list">
-        <div
-          v-for="(chat, index) in filteredChats"
-          :key="index"
-          class="chat-item"
-          :class="{ active: currentChatIndex === index }"
-          @click="selectChat(index)"
-        >
-          <div class="chat-item-content">
-            <span class="chat-title">{{ chat.title || 'New Chat' }}</span>
-            <span class="chat-time">{{ chat.time }}</span>
-          </div>
-          <button class="btn-delete-chat" @click.stop="deleteChat(index)" title="Delete">🗑️</button>
-        </div>
-      </div>
-
-      <div class="sidebar-footer">
-        <div class="session-info">
-          <span>Model: {{ selectedModel }}</span>
-        </div>
-        <div class="theme-toggle">
-          <button @click="toggleTheme" :title="isDark ? 'Light Mode' : 'Dark Mode'">
-            {{ isDark ? '☀️' : '🌙' }}
-          </button>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Main Chat Area -->
-    <main class="chat-main">
-      <!-- Messages -->
-      <div ref="messagesEl" class="messages-container">
-        <!-- Welcome message when empty -->
-        <div v-if="messages.length === 0" class="welcome-message">
-          <h2>✨ Welcome to go-magic</h2>
-          <p>Your AI assistant is ready. How can I help you today?</p>
-          <div class="quick-prompts">
-            <button @click="usePrompt('Help me write a Go program that...')">
-              Help me write a Go program
-            </button>
-            <button @click="usePrompt('Explain what this code does:')">
-              Explain code
-            </button>
-            <button @click="usePrompt('Help me debug this error:')">
-              Debug an error
-            </button>
-          </div>
-        </div>
-
-        <!-- Messages -->
-        <div
-          v-for="(msg, index) in messages"
-          :key="index"
-          class="message"
-          :class="msg.role"
-        >
-          <div class="message-avatar">
-            {{ msg.role === 'user' ? '👤' : '🤖' }}
-          </div>
-          <div class="message-content">
-            <div class="message-header">
-              <span class="sender-name">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</span>
-              <span v-if="msg.model" class="model-badge">{{ msg.model }}</span>
-              <span class="message-time">{{ msg.time }}</span>
-            </div>
-            <div class="message-body" v-if="msg.role === 'assistant' && !msg.error">
-              <MarkdownRenderer :content="msg.content" :is-dark="isDark" />
-            </div>
-            <div class="message-body error" v-else-if="msg.error">
-              <p>❌ {{ msg.content }}</p>
-            </div>
-            <div class="message-body" v-else>
-              <p>{{ msg.content }}</p>
-            </div>
-            <div class="message-actions">
-              <button @click="copyMessage(msg.content)" title="Copy">📋</button>
-              <button @click="regenerateMessage(index)" v-if="msg.role === 'assistant'" title="Regenerate">🔄</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Streaming indicator -->
-        <div v-if="streaming" class="message assistant">
-          <div class="message-avatar">🤖</div>
-          <div class="message-content">
-            <div class="message-header">
-              <span class="sender-name">Assistant</span>
-              <span class="model-badge">{{ selectedModel }}</span>
-              <span class="typing-indicator">
-                <span></span><span></span><span></span>
-              </span>
-            </div>
-            <div class="message-body streaming">
-              <MarkdownRenderer :content="streamContent + '▊'" :is-dark="isDark" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Input Area -->
-      <div class="input-area">
-        <div class="input-toolbar">
-          <select v-model="selectedModel" class="model-select">
-            <option value="gpt-4">GPT-4</option>
-            <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-            <option value="claude-3">Claude-3</option>
-            <option value="deepseek-chat">DeepSeek Chat</option>
-          </select>
-          <div class="input-stats">
-            <span v-if="inputText.length > 0">{{ inputText.length }} chars</span>
-          </div>
-        </div>
-        <div class="input-wrapper">
-          <textarea
-            ref="inputEl"
-            v-model="inputText"
-            @keydown.enter.exact.prevent="sendMessage"
-            @keydown.enter.shift.exact="addNewLine"
-            placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-            class="message-input"
-            rows="3"
-          ></textarea>
+    <!-- Messages Container -->
+    <div class="messages-container" ref="messagesContainer">
+      <!-- Welcome Message -->
+      <div v-if="messages.length === 0" class="welcome-message">
+        <div class="welcome-icon">🤖</div>
+        <h2>Welcome to Go Magic</h2>
+        <p>Your AI assistant is ready. Start a conversation!</p>
+        <div class="suggestions">
           <button
-            class="btn-send"
-            @click="sendMessage"
-            :disabled="!inputText.trim() || streaming"
+            v-for="suggestion in suggestions"
+            :key="suggestion"
+            @click="sendMessage(suggestion)"
+            class="suggestion-btn"
           >
-            {{ streaming ? '⏳' : '➤' }}
+            {{ suggestion }}
           </button>
         </div>
-        <div class="input-footer">
-          <button @click="clearChat" class="btn-clear">🗑️ Clear</button>
-          <span class="connection-status" :class="{ connected }">
-            {{ connected ? '🟢 Connected' : '🔴 Disconnected' }}
-          </span>
+      </div>
+
+      <!-- Messages -->
+      <div v-for="(msg, index) in messages" :key="index" class="message" :class="msg.role">
+        <div class="message-avatar">
+          {{ msg.role === 'user' ? '👤' : '🤖' }}
+        </div>
+        <div class="message-content">
+          <div class="message-header">
+            <span class="sender-name">{{ msg.role === 'user' ? 'You' : 'Magic' }}</span>
+            <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
+            <button @click="copyMessage(msg)" class="copy-btn" title="Copy">📋</button>
+          </div>
+          <div class="message-body">
+            <MarkdownRenderer :content="msg.content" />
+          </div>
+          <div v-if="msg.role === 'assistant' && msg.toolCalls" class="tool-calls">
+            <div v-for="(tool, tIdx) in msg.toolCalls" :key="tIdx" class="tool-call">
+              <span class="tool-icon">{{ getToolIcon(tool.name) }}</span>
+              <span class="tool-name">{{ tool.name }}</span>
+            </div>
+          </div>
         </div>
       </div>
-    </main>
+
+      <!-- Typing Indicator -->
+      <div v-if="isTyping" class="message assistant">
+        <div class="message-avatar">🤖</div>
+        <div class="message-content">
+          <div class="typing-indicator">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <div v-if="attachedFiles.length > 0" class="attached-files">
+        <div v-for="(file, idx) in attachedFiles" :key="idx" class="attached-file">
+          <span>{{ file.name }}</span>
+          <button @click="removeFile(idx)">×</button>
+        </div>
+      </div>
+      <div class="input-container">
+        <button @click="showFileUpload = !showFileUpload" class="attach-btn" title="Attach File">
+          📎
+        </button>
+        <textarea
+          ref="inputRef"
+          v-model="inputMessage"
+          @keydown.enter.exact.prevent="sendMessage()"
+          @keydown.enter.shift.exact="inputMessage += '\n'"
+          placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+          class="message-input"
+          rows="1"
+        ></textarea>
+        <button @click="sendMessage()" class="send-btn" :disabled="!inputMessage.trim() && attachedFiles.length === 0">
+          ➤
+        </button>
+      </div>
+      <div class="input-hints">
+        <span>Press <kbd>/</kbd> for commands</span>
+        <span>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> for shortcuts</span>
+      </div>
+    </div>
+
+    <!-- File Upload Modal -->
+    <div v-if="showFileUpload" class="modal-overlay" @click="showFileUpload = false">
+      <div class="modal-content" @click.stop>
+        <FileUpload @files-selected="handleFilesSelected" />
+        <button @click="showFileUpload = false" class="modal-close">Close</button>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div v-if="showSettings" class="modal-overlay" @click="showSettings = false">
+      <SettingsView @close="showSettings = false" />
+    </div>
+
+    <!-- Command Palette -->
+    <CommandPalette :show="showCommandPalette" @close="showCommandPalette = false" @command="handleCommand" />
+
+    <!-- Notifications -->
+    <div class="notifications">
+      <div
+        v-for="(notification, idx) in notifications"
+        :key="idx"
+        class="notification"
+        :class="notification.type"
+      >
+        {{ notification.message }}
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import FileUpload from '../components/FileUpload.vue'
+import CommandPalette from '../components/CommandPalette.vue'
+import SettingsView from '../views/SettingsView.vue'
 
-const isDark = ref(false)
-const messages = ref<any[]>([])
-const inputText = ref('')
-const inputEl = ref<HTMLTextAreaElement>()
-const messagesEl = ref<HTMLDivElement>()
-const streaming = ref(false)
-const streamContent = ref('')
-const connected = ref(false)
-const selectedModel = ref('gpt-4')
-const searchQuery = ref('')
-const currentChatIndex = ref(0)
-const chats = ref<any[]>([
-  {
-    title: 'Welcome Chat',
-    time: 'Just now',
-    messages: []
+interface Message {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: Date
+  toolCalls?: Array<{ name: string; arguments: string }>
+}
+
+interface Session {
+  id: string
+  title: string
+}
+
+interface Notification {
+  message: string
+  type: 'success' | 'error' | 'info'
+}
+
+const messages = ref<Message[]>([])
+const currentSession = ref<Session | null>(null)
+const inputMessage = ref('')
+const isTyping = ref(false)
+const isStreaming = ref(false)
+const isDark = ref(true)
+const showSidebar = ref(true)
+const showSettings = ref(false)
+const showFileUpload = ref(false)
+const showCommandPalette = ref(false)
+const selectedModel = ref('gpt-4o-mini')
+const attachedFiles = ref<Array<{ name: string; data: string }>>([])
+const notifications = ref<Notification[]>([])
+const messagesContainer = ref<HTMLElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+const suggestions = [
+  'Help me write a Python script',
+  'Explain quantum computing',
+  'Debug my code',
+  'Write a haiku about programming',
+]
+
+onMounted(() => {
+  // Load from localStorage
+  const saved = localStorage.getItem('go-magic-messages')
+  if (saved) {
+    messages.value = JSON.parse(saved)
   }
-])
-
-let ws: WebSocket | null = null
-let reconnectTimer: any = null
-
-const filteredChats = computed(() => {
-  if (!searchQuery.value) return chats.value
-  return chats.value.filter(c =>
-    c.title.toLowerCase().includes(searchQuery.value.toLowerCase())
-  )
+  
+  const theme = localStorage.getItem('theme')
+  isDark.value = theme !== 'light'
+  
+  // Keyboard shortcuts
+  document.addEventListener('keydown', handleKeydown)
 })
 
-const formatTime = () => {
-  const now = new Date()
-  return now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-}
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+})
 
-const connectWebSocket = () => {
-  try {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+// Save messages to localStorage
+watch(messages, (newMessages) => {
+  localStorage.setItem('go-magic-messages', JSON.stringify(newMessages))
+}, { deep: true })
 
-    ws.onopen = () => {
-      connected.value = true
-      console.log('WebSocket connected')
-    }
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-
-      if (data.type === 'chunk') {
-        streamContent.value += data.content
-        scrollToBottom()
-      } else if (data.type === 'done') {
-        messages.value.push({
-          role: 'assistant',
-          content: streamContent.value,
-          time: formatTime(),
-          model: selectedModel.value
-        })
-        streaming.value = false
-        streamContent.value = ''
-        scrollToBottom()
-      } else if (data.type === 'error') {
-        //message.error(data.content)
-        streaming.value = false
-        streamContent.value = ''
-      }
-    }
-
-    ws.onclose = () => {
-      connected.value = false
-      reconnectTimer = setTimeout(connectWebSocket, 3000)
-    }
-  } catch (err) {
-    console.error('WebSocket error:', err)
-    connected.value = false
+function handleKeydown(e: KeyboardEvent) {
+  // Ctrl+K for command palette
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault()
+    showCommandPalette.value = true
+  }
+  // / for focus input
+  if (e.key === '/' && document.activeElement?.tagName !== 'TEXTAREA') {
+    e.preventDefault()
+    inputRef.value?.focus()
+  }
+  // Ctrl+N for new chat
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+    e.preventDefault()
+    newChat()
+  }
+  // Escape to close modals
+  if (e.key === 'Escape') {
+    showSettings.value = false
+    showFileUpload.value = false
+    showCommandPalette.value = false
   }
 }
 
-const sendMessage = async () => {
-  if (!inputText.value.trim() || streaming.value) return
-
-  const userMsg = {
+async function sendMessage(content?: string) {
+  const message = content || inputMessage.value.trim()
+  if (!message && attachedFiles.value.length === 0) return
+  
+  // Add user message
+  messages.value.push({
     role: 'user',
-    content: inputText.value,
-    time: formatTime()
-  }
-  messages.value.push(userMsg)
-
-  // Update chat title if first message
-  if (messages.value.length === 1) {
-    chats.value[currentChatIndex.value].title = inputText.value.slice(0, 30) + (inputText.value.length > 30 ? '...' : '')
-  }
-
-  const question = inputText.value
-  inputText.value = ''
-  streaming.value = true
-  streamContent.value = ''
+    content: message,
+    timestamp: new Date(),
+  })
+  
+  inputMessage.value = ''
+  isTyping.value = true
+  
+  // Scroll to bottom
   await nextTick()
   scrollToBottom()
-
+  
   try {
-    // Try HTTP first (more reliable)
+    // Send to backend
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message: question,
-        model: selectedModel.value
-      })
+        message,
+        model: selectedModel.value,
+        files: attachedFiles.value,
+      }),
     })
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      streamContent.value += decoder.decode(value, { stream: true })
-      scrollToBottom()
-    }
-
+    
+    if (!response.ok) throw new Error('Failed to send message')
+    
+    const data = await response.json()
+    
+    // Add assistant message
     messages.value.push({
       role: 'assistant',
-      content: streamContent.value,
-      time: formatTime(),
-      model: selectedModel.value
+      content: data.content || data.message || 'I received your message.',
+      timestamp: new Date(),
+      toolCalls: data.toolCalls,
     })
-    streamContent.value = ''
-  } catch (err) {
-    console.error('Send message error:', err)
+    
+    attachedFiles.value = []
+  } catch (error) {
+    showNotification('Failed to send message', 'error')
     messages.value.push({
       role: 'assistant',
-      content: `❌ Error: ${err.message}. Please make sure the server is running.`,
-      time: formatTime(),
-      error: true
+      content: 'Sorry, I encountered an error. Please try again.',
+      timestamp: new Date(),
     })
-  }
-
-  streaming.value = false
-  await nextTick()
-  scrollToBottom()
-}
-
-const copyMessage = async (content: string) => {
-  try {
-    await navigator.clipboard.writeText(content)
-    //message.success('Copied to clipboard!')
-  } catch {
-    //message.error('Failed to copy')
+  } finally {
+    isTyping.value = false
+    scrollToBottom()
   }
 }
 
-const regenerateMessage = async (index: number) => {
-  if (index > 0 && messages.value[index - 1].role === 'user') {
-    const question = messages.value[index - 1].content
-    messages.value.splice(index)
-    inputText.value = question
-    await sendMessage()
-  }
-}
-
-const clearChat = () => {
+function newChat() {
   messages.value = []
-  chats.value[currentChatIndex.value].messages = []
-  //message.success('Chat cleared')
+  currentSession.value = null
+  localStorage.removeItem('go-magic-messages')
+  showNotification('New chat started', 'success')
 }
 
-const newChat = () => {
-  chats.value.unshift({
-    title: 'New Chat',
-    time: 'Just now',
-    messages: []
-  })
-  currentChatIndex.value = 0
-  messages.value = []
-  inputText.value = ''
+function copyMessage(msg: Message) {
+  navigator.clipboard.writeText(msg.content)
+  showNotification('Message copied!', 'success')
 }
 
-const selectChat = (index: number) => {
-  // Save current chat
-  chats.value[currentChatIndex.value].messages = [...messages.value]
-  currentChatIndex.value = index
-  messages.value = [...chats.value[index].messages]
+function formatTime(date: Date): string {
+  return new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const deleteChat = (index: number) => {
-  chats.value.splice(index, 1)
-  if (currentChatIndex.value >= chats.value.length) {
-    currentChatIndex.value = Math.max(0, chats.value.length - 1)
-  }
-  if (chats.value.length === 0) {
-    newChat()
+function scrollToBottom() {
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
   }
 }
 
-const toggleTheme = () => {
+function toggleTheme() {
   isDark.value = !isDark.value
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light')
 }
 
-const scrollToBottom = () => {
-  if (messagesEl.value) {
-    messagesEl.value.scrollTo({
-      top: messagesEl.value.scrollHeight,
-      behavior: 'smooth'
-    })
+function getToolIcon(toolName: string): string {
+  const icons: Record<string, string> = {
+    web_search: '🌐',
+    read_file: '📄',
+    write_file: '✏️',
+    terminal: '💻',
+    execute_code: '⚡',
+    memory_store: '💾',
+  }
+  return icons[toolName] || '🛠️'
+}
+
+function handleFilesSelected(files: Array<{ name: string; data: string }>) {
+  attachedFiles.value = files
+  showFileUpload.value = false
+  showNotification(`${files.length} file(s) attached`, 'success')
+}
+
+function removeFile(idx: number) {
+  attachedFiles.value.splice(idx, 1)
+}
+
+function handleCommand(command: string) {
+  switch (command) {
+    case 'new-chat':
+      newChat()
+      break
+    case 'toggle-theme':
+      toggleTheme()
+      break
+    case 'settings':
+      showSettings.value = true
+      break
+    case 'focus-input':
+      inputRef.value?.focus()
+      break
   }
 }
 
-const addNewLine = () => {
-  inputText.value += '\n'
+function showNotification(message: string, type: 'success' | 'error' | 'info') {
+  notifications.value.push({ message, type })
+  setTimeout(() => {
+    notifications.value.shift()
+  }, 3000)
 }
-
-const usePrompt = (prompt: string) => {
-  inputText.value = prompt
-  inputEl.value?.focus()
-}
-
-watch(isDark, (val) => {
-  document.documentElement.setAttribute('data-theme', val ? 'dark' : 'light')
-})
-
-onMounted(() => {
-  // Load theme
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme) {
-    isDark.value = savedTheme === 'dark'
-  } else {
-    isDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
-  }
-
-  // Try to connect WebSocket
-  connectWebSocket()
-})
-
-onUnmounted(() => {
-  if (reconnectTimer) clearTimeout(reconnectTimer)
-  if (ws) ws.close()
-})
 </script>
 
 <style scoped>
-.chat-container {
-  height: 100vh;
-  display: flex;
-  background: #f5f7fa;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.chat-container.dark-theme {
-  background: #1a1a2e;
-  color: #e0e0e0;
-}
-
-/* Sidebar */
-.sidebar {
-  width: 280px;
-  background: #ffffff;
-  border-right: 1px solid #e0e0e0;
+.chat-view {
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+  height: 100vh;
+  background: var(--bg-primary);
 }
 
-.dark-theme .sidebar {
-  background: #16213e;
-  border-color: #2d3748;
-}
-
-.sidebar-header {
-  padding: 20px;
-  border-bottom: 1px solid #e0e0e0;
+/* Header */
+.chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 12px 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
 }
-
-.dark-theme .sidebar-header {
-  border-color: #2d3748;
+.header-left, .header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
-
-.sidebar-header h2 {
+.header-left h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.btn-new-chat {
-  background: #4f46e5;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
   font-size: 16px;
-  transition: all 0.2s;
+  font-weight: 500;
 }
-
-.btn-new-chat:hover {
-  background: #4338ca;
-  transform: scale(1.05);
+.streaming-badge {
+  font-size: 12px;
+  color: #10b981;
+  animation: pulse 1.5s infinite;
 }
-
-.search-box {
-  padding: 12px 16px;
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
-
-.search-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 14px;
-  background: #f9fafb;
-  color: #333;
-}
-
-.dark-theme .search-input {
-  background: #1f2937;
-  border-color: #374151;
-  color: #e0e0e0;
-}
-
-.chat-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.chat-item {
-  padding: 12px;
-  border-radius: 8px;
+.icon-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
   cursor: pointer;
-  margin-bottom: 4px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
   transition: background 0.2s;
 }
-
-.chat-item:hover {
-  background: #f3f4f6;
+.icon-btn:hover {
+  background: var(--hover-bg);
+}
+.model-select {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
-.dark-theme .chat-item:hover {
-  background: #1f2937;
-}
-
-.chat-item.active {
-  background: #eef2ff;
-}
-
-.dark-theme .chat-item.active {
-  background: #3730a3;
-}
-
-.chat-item-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.chat-title {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chat-time {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.btn-delete-chat {
-  background: none;
-  border: none;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s;
-  font-size: 12px;
-}
-
-.chat-item:hover .btn-delete-chat {
-  opacity: 1;
-}
-
-.sidebar-footer {
-  padding: 16px;
-  border-top: 1px solid #e0e0e0;
-}
-
-.dark-theme .sidebar-footer {
-  border-color: #2d3748;
-}
-
-.session-info {
-  font-size: 12px;
-  color: #6b7280;
-  margin-bottom: 8px;
-}
-
-.theme-toggle button {
-  background: none;
-  border: none;
-  font-size: 20px;
-  cursor: pointer;
-  padding: 8px;
-}
-
-/* Main Chat Area */
-.chat-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
+/* Messages */
 .messages-container {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
-
 .welcome-message {
   text-align: center;
-  padding: 40px 20px;
-  color: #6b7280;
+  padding: 60px 20px;
 }
-
+.welcome-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+}
 .welcome-message h2 {
   font-size: 28px;
   margin-bottom: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
 }
-
-.quick-prompts {
+.welcome-message p {
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+.suggestions {
   display: flex;
-  gap: 10px;
-  justify-content: center;
-  margin-top: 24px;
   flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
 }
-
-.quick-prompts button {
-  padding: 10px 16px;
-  border: 1px solid #e0e0e0;
+.suggestion-btn {
+  padding: 10px 20px;
+  border: 1px solid var(--border-color);
   border-radius: 20px;
-  background: white;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
   transition: all 0.2s;
 }
-
-.dark-theme .quick-prompts button {
-  background: #1f2937;
-  border-color: #374151;
-  color: #e0e0e0;
+.suggestion-btn:hover {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
 }
-
-.quick-prompts button:hover {
-  border-color: #667eea;
-  color: #667eea;
-}
-
-/* Messages */
 .message {
   display: flex;
-  gap: 12px;
-  max-width: 85%;
+  gap: 16px;
+  margin-bottom: 24px;
+  animation: fadeIn 0.3s ease;
 }
-
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .message.user {
-  margin-left: auto;
   flex-direction: row-reverse;
 }
-
 .message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
+  font-size: 28px;
   flex-shrink: 0;
-  background: #e5e7eb;
 }
-
-.dark-theme .message-avatar {
-  background: #374151;
-}
-
-.message.user .message-avatar {
-  background: #dbeafe;
-}
-
 .message-content {
-  flex: 1;
-  min-width: 0;
+  max-width: 80%;
 }
-
 .message-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 13px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
-
 .sender-name {
-  font-weight: 600;
-  color: #374151;
+  font-weight: 500;
+  font-size: 14px;
 }
-
-.dark-theme .sender-name {
-  color: #e0e0e0;
-}
-
-.model-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: #e0e7ff;
-  color: #4338ca;
-  font-size: 11px;
-}
-
-.dark-theme .model-badge {
-  background: #3730a3;
-  color: #a5b4fc;
-}
-
 .message-time {
-  color: #9ca3af;
   font-size: 12px;
+  color: var(--text-secondary);
 }
-
-.message-body {
-  padding: 14px 18px;
-  border-radius: 16px;
-  background: white;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  line-height: 1.6;
-}
-
-.dark-theme .message-body {
-  background: #1f2937;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-}
-
-.message.user .message-body {
-  background: #4f46e5;
-  color: white;
-}
-
-.dark-theme .message.user .message-body {
-  background: #5b21b6;
-}
-
-.message-body.error {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
-}
-
-.dark-theme .message-body.error {
-  background: #450a0a;
-  border-color: #7f1d1d;
-}
-
-.message-body.streaming {
-  background: #f0f9ff;
-}
-
-.dark-theme .message-body.streaming {
-  background: #1e3a5f;
-}
-
-.message-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.message:hover .message-actions {
-  opacity: 1;
-}
-
-.message-actions button {
+.copy-btn {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
   font-size: 14px;
-  transition: background 0.2s;
 }
-
-.message-actions button:hover {
-  background: #f3f4f6;
+.message:hover .copy-btn {
+  opacity: 1;
 }
-
-.dark-theme .message-actions button:hover {
-  background: #374151;
+.message-body {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.message.user .message-body {
+  background: var(--primary-color);
+  color: white;
+}
+.tool-calls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.tool-call {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 16px;
+  font-size: 12px;
 }
 
 /* Typing Indicator */
 .typing-indicator {
   display: flex;
   gap: 4px;
-  padding: 0 8px;
+  padding: 16px;
 }
-
 .typing-indicator span {
-  width: 6px;
-  height: 6px;
-  background: #9ca3af;
+  width: 8px;
+  height: 8px;
+  background: var(--text-secondary);
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out;
 }
-
 .typing-indicator span:nth-child(1) { animation-delay: 0s; }
 .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
 .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-
 @keyframes bounce {
   0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-  40% { transform: scale(1.2); opacity: 1; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 /* Input Area */
 .input-area {
   padding: 16px 20px;
-  background: white;
-  border-top: 1px solid #e0e0e0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
 }
-
-.dark-theme .input-area {
-  background: #16213e;
-  border-color: #2d3748;
-}
-
-.input-toolbar {
+.attached-files {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
 }
-
-.model-select {
+.attached-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 16px;
   font-size: 13px;
-  background: #f9fafb;
-  cursor: pointer;
 }
-
-.dark-theme .model-select {
-  background: #1f2937;
-  border-color: #374151;
-  color: #e0e0e0;
-}
-
-.input-stats {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.input-wrapper {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-
-.message-input {
-  flex: 1;
-  padding: 12px 16px;
-  border: 2px solid #e0e0e0;
-  border-radius: 12px;
-  font-size: 14px;
-  resize: none;
-  font-family: inherit;
-  transition: border-color 0.2s;
-}
-
-.dark-theme .message-input {
-  background: #1f2937;
-  border-color: #374151;
-  color: #e0e0e0;
-}
-
-.message-input:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.btn-send {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  border: none;
-  background: #4f46e5;
-  color: white;
-  font-size: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-send:hover:not(:disabled) {
-  background: #4338ca;
-  transform: scale(1.05);
-}
-
-.btn-send:disabled {
-  background: #d1d5db;
-  cursor: not-allowed;
-}
-
-.input-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 10px;
-}
-
-.btn-clear {
+.attached-file button {
   background: none;
   border: none;
-  color: #6b7280;
   cursor: pointer;
-  font-size: 13px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  transition: all 0.2s;
+  font-size: 16px;
 }
-
-.btn-clear:hover {
-  background: #f3f4f6;
-  color: #dc2626;
+.input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 8px 12px;
 }
-
-.dark-theme .btn-clear:hover {
-  background: #374151;
+.attach-btn, .send-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background 0.2s;
 }
-
-.connection-status {
+.attach-btn:hover, .send-btn:hover {
+  background: var(--hover-bg);
+}
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.message-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  resize: none;
+  outline: none;
+  min-height: 24px;
+  max-height: 120px;
+}
+.message-input::placeholder {
+  color: var(--text-secondary);
+}
+.input-hints {
+  display: flex;
+  gap: 24px;
+  margin-top: 8px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-secondary);
+}
+kbd {
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 11px;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    left: -280px;
-    height: 100vh;
-    z-index: 100;
-    transition: left 0.3s;
-  }
-
-  .sidebar.open {
-    left: 0;
-  }
-
-  .message {
-    max-width: 95%;
-  }
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
 }
+.modal-content {
+  background: var(--bg-primary);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 500px;
+  width: 90%;
+}
+.modal-close {
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+}
+
+/* Notifications */
+.notifications {
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2000;
+}
+.notification {
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  animation: slideIn 0.3s ease;
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.notification.success { background: #10b981; color: white; }
+.notification.error { background: #ef4444; color: white; }
+.notification.info { background: #3b82f6; color: white; }
 </style>
