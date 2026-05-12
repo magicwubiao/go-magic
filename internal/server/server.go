@@ -284,7 +284,13 @@ func (s *Server) Start() error {
 	// Dashboard plugins (placeholder for future plugin system)
 	s.mux.HandleFunc("/api/dashboard/plugins", s.handleDashboardPlugins)
 	s.mux.HandleFunc("/api/dashboard/plugins/rescan", s.handleDashboardPluginsRescan)
-	
+
+	// Dashboard themes
+	s.mux.HandleFunc("/api/dashboard/themes", s.handleDashboardThemes)
+
+	// Status endpoint
+	s.mux.HandleFunc("/api/status", s.handleStatus)
+
 	// WebSocket
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
@@ -881,6 +887,31 @@ func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Req
 	jsonResponse(w, map[string]interface{}{"ok": true, "count": 0})
 }
 
+// Dashboard themes handler
+func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
+	themes := []map[string]interface{}{
+		{"id": "default", "name": "Default", "colors": map[string]string{
+			"primary": "#6366f1", "secondary": "#8b5cf6", "background": "#0f0f0f",
+		}},
+		{"id": "light", "name": "Light", "colors": map[string]string{
+			"primary": "#3b82f6", "secondary": "#6366f1", "background": "#ffffff",
+		}},
+		{"id": "blue", "name": "Blue", "colors": map[string]string{
+			"primary": "#3b82f6", "secondary": "#60a5fa", "background": "#1e3a5f",
+		}},
+	}
+	jsonResponse(w, map[string]interface{}{"themes": themes})
+}
+
+// Status handler
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"status":  "online",
+		"version": "1.0.0",
+		"uptime":  time.Since(s.startTime).Seconds(),
+	})
+}
+
 // WebSocket handler
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -917,6 +948,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // Static file handler
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+
+	// Skip API routes - they should be handled by other handlers
+	if strings.HasPrefix(path, "/api/") {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":"API route not found"}`))
+		return
+	}
+
 	fmt.Printf("handleStatic: path=%s\n", path)
 	if path == "/" {
 		path = "/index.html"
