@@ -111,7 +111,7 @@ func NewEnhancedFTSStore(baseDir string) (*EnhancedFTSStore, error) {
 	dbPath := filepath.Join(baseDir, "memory_enhanced.sqlite")
 	os.MkdirAll(baseDir, 0755)
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}

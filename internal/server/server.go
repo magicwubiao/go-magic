@@ -540,7 +540,7 @@ func main() {
 	}
 
 	// Create temporary database for standalone server
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		log.Fatalf("Failed to create database: %v", err)
 	}

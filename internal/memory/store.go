@@ -98,7 +98,7 @@ func NewStore(config *MemoryConfig) (*Store, error) {
 	}
 
 	// Initialize SQLite database
-	db, err := sql.Open("sqlite3", config.DBPath)
+	db, err := sql.Open("sqlite", config.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
