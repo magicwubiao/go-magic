@@ -1,0 +1,1 @@
+{"version":3,"file":"arrow.d.ts","sourceRoot":"","sources":["../../../../src/ui/components/icons/arrow.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,OAAO,CAAA;AAIrC,wBAAgB,SAAS,CAAC,EACxB,SAAS,EACT,SAAkB,EAClB,GAAG,KAAK,EACT,EAAE,cAAc,2CA6BhB;AAED,UAAU,cAAe,SAAQ,QAAQ,CAAC,aAAa,CAAC;IACtD,SAAS,CAAC,EAAE,MAAM,GAAG,MAAM,GAAG,OAAO,GAAG,IAAI,CAAA;CAC7C"}

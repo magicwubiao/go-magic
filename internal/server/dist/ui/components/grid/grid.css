@@ -1,0 +1,79 @@
+.g {
+  @apply grid grid-cols-1 border-l border-current/20;
+
+  &:has(> .gc:nth-child(3)):not(:has(> .gc:nth-child(4))) > .gc:nth-child(2) {
+    @apply -order-1;
+  }
+
+  @media (width >= 40rem) {
+    &:has(> .gc:nth-child(2)) {
+      @apply grid-cols-2;
+    }
+
+    &:has(> .gc:nth-child(3)):not(:has(> .gc:nth-child(4)))
+      > .gc:nth-child(2) {
+      @apply -order-1 col-span-full;
+    }
+  }
+
+  @media (width >= 64rem) {
+    &:has(> .gc:nth-child(3)) {
+      @apply grid-cols-3;
+    }
+
+    &:has(> .gc:nth-child(4)) {
+      @apply grid-cols-4;
+    }
+
+    &:has(> .gc:nth-child(5)) {
+      @apply grid-cols-5;
+    }
+
+    &:has(> .gc:nth-child(6)) {
+      @apply grid-cols-6;
+    }
+
+    &:has(> .gc:nth-child(3)):not(:has(> .gc:nth-child(4))) {
+      grid-template-columns: 1fr 2fr 1fr;
+
+      > .gc:nth-child(2) {
+        @apply order-none col-auto;
+      }
+    }
+  }
+
+  &:last-child {
+    @apply border-b;
+  }
+
+  &:first-child,
+  + .g > .gc,
+  > .g {
+    @apply border-t;
+  }
+
+  .g {
+    @apply border-l-0;
+  }
+
+  &:not(:last-child) .gc:last-child {
+    @apply border-b-0;
+  }
+
+  .gc {
+    min-width: 0;
+    @apply border-r border-inherit p-4;
+
+    &:has(> .gc) {
+      @apply p-0;
+
+      > .gc {
+        @apply border-r-0 not-first:border-t last:border-b-0;
+      }
+    }
+  }
+
+  .post.gc {
+    @apply lg:p-12;
+  }
+}

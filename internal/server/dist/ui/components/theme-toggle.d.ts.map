@@ -1,0 +1,1 @@
+{"version":3,"file":"theme-toggle.d.ts","sourceRoot":"","sources":["../../../src/ui/components/theme-toggle.tsx"],"names":[],"mappings":"AAQA,wBAAgB,WAAW,CAAC,EAAE,SAAS,EAAE,KAAK,EAAE,EAAE,gBAAgB,2CAoDjE;AAED,UAAU,gBAAgB;IACxB,SAAS,CAAC,EAAE,MAAM,CAAA;IAClB,KAAK,CAAC,EAAE,KAAK,CAAC,aAAa,CAAA;CAC5B"}

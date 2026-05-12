@@ -917,34 +917,47 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // Static file handler
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+	fmt.Printf("handleStatic: path=%s\n", path)
 	if path == "/" {
 		path = "/index.html"
 	}
 
-	// Try embedded files (embed directive points to dist/ already)
-	data, err := staticFiles.ReadFile(path)
+	// Try embedded files first (embed path needs "dist" prefix)
+	embedPath := "dist" + path
+	data, err := staticFiles.ReadFile(embedPath)
 	if err == nil {
+		fmt.Printf("handleStatic: embedded file found: %s, size=%d\n", embedPath, len(data))
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(data)
 		return
 	}
+	fmt.Printf("handleStatic: embedded file not found: %s, err=%v\n", embedPath, err)
 
-	// Try disk files (relative to project root)
-	diskPath := filepath.Join("magic_cli", "web_dist", path)
+	// Try disk files (fallback for development)
+	diskPath := filepath.Join("internal/server/dist", path)
 	data, err = os.ReadFile(diskPath)
 	if err == nil {
+		fmt.Printf("handleStatic: disk file found: %s, size=%d\n", diskPath, len(data))
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
 		w.Write(data)
 		return
 	}
+	fmt.Printf("handleStatic: disk file not found: %s\n", diskPath)
 
 	// SPA fallback
-	indexData, _ := staticFiles.ReadFile("/index.html")
+	indexData, _ := staticFiles.ReadFile("dist/index.html")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(indexData)
+}
+
+// Static file handler (for subpath)
+func (s *Server) handleStaticWithPrefix(prefix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.handleStatic(w, r)
+	}
 }
 
 // Helper functions

@@ -1,0 +1,36 @@
+.modal {
+  @apply bg-foreground-base text-background-base z-50 m-auto max-h-[85dvh] max-w-[90dvw] p-0 opacity-0 outline-none;
+
+  transition:
+    opacity 0.25s ease-out,
+    overlay 0.25s ease-out allow-discrete,
+    display 0.25s ease-out allow-discrete;
+
+  &::backdrop {
+    @apply bg-foreground-base/2 backdrop-blur-xs;
+
+    transition:
+      opacity 0.25s ease-out,
+      overlay 0.25s ease-out allow-discrete,
+      display 0.25s ease-out allow-discrete;
+  }
+
+  &[open] {
+    @apply opacity-100;
+
+    &::backdrop {
+      @apply opacity-100;
+    }
+  }
+
+  @starting-style {
+    &[open],
+    &[open]::backdrop {
+      @apply opacity-0;
+    }
+  }
+}
+
+.modal-body {
+  @apply overflow-y-auto p-8 font-mono normal-case;
+}

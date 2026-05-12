@@ -1,0 +1,5 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function SearchIcon(props) {
+    return (_jsxs("svg", { fill: "none", viewBox: "0 0 20 21", ...props, children: [_jsx("path", { clipRule: "evenodd", d: "M7.49773 1.6664h6.66637V0H7.49773zM14.1641 15.0001H7.49773v1.6664h6.66637z", fill: "currentColor", fillRule: "evenodd" }), _jsx("path", { clipRule: "evenodd", d: "M5.8336 3.33278H7.5v-1.6664H5.8336zM15.8359 13.3329h-1.6671v1.6672h1.6671zM4.16877 5.00017h1.66717V3.33301H4.16877zM17.5 11.6665h-1.6664v1.6664H17.5zM4.16406 11.6665V5.00012h-1.6664v6.66638zM17.4977 5.00012v6.66638h1.6664V5.00012z", fill: "currentColor", fillRule: "evenodd" }), _jsx("path", { clipRule: "evenodd", d: "M17.5 5.00017V3.33301h-1.6664v1.66716zM15.8359 3.33278v-1.6664h-1.6671v1.6664zM15.8359 10.0002V6.6665h-1.6671v3.3337zM14.1641 6.6664V5h-1.6664v1.6664zM5.8335 13.3328v-1.6664H4.16633V15H7.5v-1.6671zM4.16406 16.6664V15h-1.6664v1.6664zM2.5 18.3331v-1.6664H.8336v1.6664z", fill: "currentColor", fillRule: "evenodd" })] }));
+}
+//# sourceMappingURL=search.js.map

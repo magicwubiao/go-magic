@@ -1,0 +1,5 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function EyeIcon(props) {
+    return (_jsx("svg", { fill: "none", viewBox: "0 0 26 17", ...props, children: _jsxs("g", { clipRule: "evenodd", fill: "currentColor", fillRule: "evenodd", children: [_jsx("path", { d: "M2.36308 9.45484H0V7.09067h2.36308zM23.6387 9.45484h2.3631V7.09067h-2.3631zM4.73047 2.36462h3.54519v2.36309H4.73047zM8.27539 0h9.45451v2.36417H8.27539zM8.27539 14.1808h9.45451v2.3641H8.27539zM4.73047 14.1808h3.54519v-2.3631H4.73047zM21.2718 2.36462h-3.5452v2.36309h3.5452zM21.2718 14.1808h-3.5452v-2.3631h3.5452zM2.36719 4.72751h2.36308v2.36308H2.36719zM2.36719 11.8179h2.36308V9.45486H2.36719z" }), _jsx("path", { d: "M23.6346 4.72751h-2.3631v2.36308h2.3631zM23.6346 11.8179h-2.3631V9.45486h2.3631zM14.7716 6.50014h-3.5452V4.13705h3.5452zm0 0v3.54516h-3.5452v2.3631h3.5452v-2.3631h2.363V6.50014zm-3.5452 0v3.54516H8.86328V6.50014z" })] }) }));
+}
+//# sourceMappingURL=eye.js.map

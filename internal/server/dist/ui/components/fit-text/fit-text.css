@@ -1,0 +1,42 @@
+.fit-text {
+  --fit-captured-length: initial;
+  --fit-support-sentinel: var(--fit-captured-length, 9999px);
+
+  display: flex;
+  container-type: inline-size;
+
+  > [aria-hidden] {
+    visibility: hidden;
+  }
+
+  > :not([aria-hidden]) {
+    flex-grow: 1;
+    container-type: inline-size;
+
+    --fit-captured-length: 100cqi;
+    --fit-available-space: var(--fit-captured-length);
+
+    > * {
+      --fit-support-sentinel: inherit;
+      --fit-captured-length: 100cqi;
+      --fit-ratio: tan(
+        atan2(
+          var(--fit-available-space),
+          var(--fit-available-space) - var(--fit-captured-length)
+        )
+      );
+
+      display: block;
+      inline-size: var(--fit-available-space);
+      font-size: clamp(
+        var(--fit-min, 1em),
+        1em * var(--fit-ratio),
+        var(--fit-max, infinity * 1px) - var(--fit-support-sentinel)
+      );
+
+      @container (inline-size > 0) {
+        white-space: nowrap;
+      }
+    }
+  }
+}

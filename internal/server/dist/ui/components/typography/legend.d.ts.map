@@ -1,0 +1,1 @@
+{"version":3,"file":"legend.d.ts","sourceRoot":"","sources":["../../../../src/ui/components/typography/legend.tsx"],"names":[],"mappings":"AAIA,wBAAgB,MAAM,CAAC,EACrB,QAAQ,EACR,SAAS,EACT,KAAK,EACL,GAAG,EACH,GAAG,KAAK,EACT,EAAE,WAAW,2CAQb;AAED,UAAU,WAAY,SAAQ,KAAK,CAAC,cAAc,CAAC,QAAQ,CAAC;IAC1D,KAAK,EAAE,KAAK,CAAC,SAAS,CAAA;IACtB,GAAG,CAAC,EAAE,KAAK,CAAC,SAAS,CAAA;CACtB"}
