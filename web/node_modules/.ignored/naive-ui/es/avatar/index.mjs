@@ -1,1 +1,0 @@
-export { avatarProps, default as NAvatar } from "./src/Avatar.mjs";

@@ -1,1 +1,0 @@
-export { createDiscreteApi } from "./src/discrete.mjs";

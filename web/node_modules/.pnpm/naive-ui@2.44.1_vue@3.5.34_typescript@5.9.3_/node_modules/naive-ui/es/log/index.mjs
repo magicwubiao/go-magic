@@ -1,1 +1,0 @@
-export { logProps, default as NLog } from "./src/Log.mjs";

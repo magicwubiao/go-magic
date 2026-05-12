@@ -1,1 +1,0 @@
-export { dynamicTagsProps, default as NDynamicTags } from "./src/DynamicTags.mjs";

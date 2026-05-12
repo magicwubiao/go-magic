@@ -1,1 +1,0 @@
-export { default as NMarquee } from "./src/Marquee.mjs";

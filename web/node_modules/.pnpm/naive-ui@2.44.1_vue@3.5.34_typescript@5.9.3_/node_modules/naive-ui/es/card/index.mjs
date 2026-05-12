@@ -1,1 +1,0 @@
-export { cardProps, default as NCard } from "./src/Card.mjs";

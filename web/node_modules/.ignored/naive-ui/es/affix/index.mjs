@@ -1,1 +1,0 @@
-export { affixProps, default as NAffix } from "./src/Affix.mjs";

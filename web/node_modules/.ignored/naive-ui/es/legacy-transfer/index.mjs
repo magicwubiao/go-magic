@@ -1,1 +1,0 @@
-export { transferProps as legacyTransferProps, default as NLegacyTransfer } from "./src/Transfer.mjs";

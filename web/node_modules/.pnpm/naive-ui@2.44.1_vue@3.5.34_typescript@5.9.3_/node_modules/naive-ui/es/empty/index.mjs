@@ -1,1 +1,0 @@
-export { emptyProps, default as NEmpty } from "./src/Empty.mjs";

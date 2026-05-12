@@ -1,1 +1,0 @@
-export { badgeProps, default as NBadge } from "./src/Badge.mjs";
