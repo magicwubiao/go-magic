@@ -907,8 +907,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
-	// Try embedded files
-	data, err := staticFiles.ReadFile(filepath.Join("dist", path))
+	// Try embedded files (embed directive points to dist/ already)
+	data, err := staticFiles.ReadFile(path)
 	if err == nil {
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
@@ -917,8 +917,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try disk files
-	diskPath := filepath.Join("web", "dist", path)
+	// Try disk files (relative to project root)
+	diskPath := filepath.Join("magic_cli", "web_dist", path)
 	data, err = os.ReadFile(diskPath)
 	if err == nil {
 		contentType := getContentType(path)
