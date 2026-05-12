@@ -1,114 +1,164 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
-  timeout: 30000,
+  baseURL: '',
+  timeout: 60000,
 })
 
-// Add auth token if available
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
-})
-
-// Session API
-export const sessionApi = {
-  list: () => api.get('/sessions'),
-  get: (id: string) => api.get(`/sessions/${id}`),
-  create: (data: { name?: string; model?: string }) => api.post('/sessions', data),
-  delete: (id: string) => api.delete(`/sessions/${id}`),
-  reset: (id: string) => api.post(`/sessions/${id}/reset`),
-  search: (query: string) => api.get('/sessions/search', { params: { q: query } }),
+// Session types
+export interface Session {
+  id: string
+  name: string
+  model?: string
+  created_at: string
+  updated_at: string
+  message_count?: number
+  messages?: Message[]
 }
 
-// Toolset API
-export const toolsetApi = {
-  list: () => api.get('/toolsets'),
-  get: (name: string) => api.get(`/toolsets/${name}`),
-  enable: (name: string) => api.post(`/toolsets/${name}/enable`),
-  disable: (name: string) => api.post(`/toolsets/${name}/disable`),
+export interface Message {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  tools?: ToolCall[]
 }
 
-// Skill API
-export const skillApi = {
-  list: () => api.get('/skills'),
-  get: (name: string) => api.get(`/skills/${name}`),
-  create: (data: { name: string; content: string; category?: string }) => api.post('/skills', data),
-  update: (name: string, data: { content: string }) => api.put(`/skills/${name}`, data),
-  delete: (name: string) => api.delete(`/skills/${name}`),
-  browse: () => api.get('/skills/browse'),
-  install: (source: string) => api.post(`/skills/install`, { source }),
+export interface ToolCall {
+  name: string
+  arguments?: string
+  result?: string
+  status?: string
 }
 
-// Cron API
-export const cronApi = {
-  list: () => api.get('/cron'),
-  get: (id: string) => api.get(`/cron/${id}`),
-  create: (data: { name: string; schedule: string; command: string }) => api.post('/cron', data),
-  update: (id: string, data: any) => api.put(`/cron/${id}`, data),
-  delete: (id: string) => api.delete(`/cron/${id}`),
-  pause: (id: string) => api.post(`/cron/${id}/pause`),
-  resume: (id: string) => api.post(`/cron/${id}/resume`),
-  run: (id: string) => api.post(`/cron/${id}/run`),
+// Stats
+export interface Stats {
+  total_sessions: number
+  total_messages: number
+  uptime_seconds: number
+  toolset_count: number
+  skill_count: number
 }
 
-// Platform API
-export const platformApi = {
-  list: () => api.get('/platforms'),
-  get: (name: string) => api.get(`/platforms/${name}`),
-  update: (name: string, data: any) => api.put(`/platforms/${name}`, data),
-  enable: (name: string) => api.post(`/platforms/${name}/enable`),
-  disable: (name: string) => api.post(`/platforms/${name}/disable`),
+// Toolset types
+export interface Toolset {
+  name: string
+  description: string
+  enabled: boolean
+  tools: Tool[]
 }
 
-// Analytics API
-export const analyticsApi = {
-  summary: () => api.get('/analytics/summary'),
-  tokens: (days?: number) => api.get('/analytics/tokens', { params: { days } }),
-  models: () => api.get('/analytics/models'),
+export interface Tool {
+  name: string
+  description: string
+  toolset?: string
 }
 
-// Settings API
-export const settingsApi = {
-  get: () => api.get('/settings'),
-  update: (data: any) => api.put('/settings', data),
-  profiles: {
-    list: () => api.get('/settings/profiles'),
-    create: (name: string) => api.post('/settings/profiles', { name }),
-    switch: (name: string) => api.post(`/settings/profiles/${name}/switch`),
-    delete: (name: string) => api.delete(`/settings/profiles/${name}`),
+// Skill types
+export interface Skill {
+  name: string
+  description: string
+  category: string
+  enabled: boolean
+}
+
+// Config types
+export interface Config {
+  provider: string
+  model: string
+  temperature: number
+  max_tokens: number
+  theme: string
+  language: string
+  streaming: boolean
+  system_prompt: string
+}
+
+// Log types
+export interface Log {
+  id: string
+  time: string
+  timestamp: number
+  level: string
+  message: string
+}
+
+// Platform types
+export interface Platform {
+  name: string
+  status: string
+  message: string
+}
+
+// API methods
+export const apiService = {
+  // Health
+  health: () => api.get('/api/health'),
+  
+  // Stats
+  getStats: () => api.get<Stats>('/api/stats'),
+  
+  // Sessions
+  sessions: {
+    list: () => api.get<Session[]>('/api/sessions'),
+    create: (data: { name?: string; model?: string }) => api.post<Session>('/api/sessions', data),
+    get: (id: string) => api.get<Session>(`/api/sessions/${id}`),
+    update: (id: string, data: { name?: string }) => api.put<Session>(`/api/sessions/${id}`, data),
+    delete: (id: string) => api.delete(`/api/sessions/${id}`),
+    getMessages: (id: string) => api.get<Message[]>(`/api/sessions/${id}/messages`),
+    addMessage: (id: string, message: { content: string; role: string }) => 
+      api.post<Message>(`/api/sessions/${id}/messages`, message),
+  },
+  
+  // Chat
+  chat: {
+    send: (data: { message: string; session_id?: string; model?: string }) => 
+      api.post('/api/chat', data),
+    stream: (data: { message: string; session_id?: string; model?: string }) => {
+      return api.post('/api/chat/stream', data, {
+        responseType: 'stream',
+      })
+    },
+  },
+  
+  // Toolsets
+  toolsets: {
+    list: () => api.get<Toolset[]>('/api/toolsets'),
+    get: (name: string) => api.get<Toolset>(`/api/toolsets/${name}`),
+    toggle: (name: string, enabled: boolean) => 
+      api.post(`/api/toolsets/${name}/toggle`, { enabled }),
+  },
+  
+  // Tools
+  tools: {
+    list: () => api.get<Tool[]>('/api/tools'),
+  },
+  
+  // Skills
+  skills: {
+    list: () => api.get<Skill[]>('/api/skills'),
+    create: (data: { name: string; description: string; category: string }) =>
+      api.post<Skill>('/api/skills', data),
+    get: (name: string) => api.get<Skill>(`/api/skills/${name}`),
+    delete: (name: string) => api.delete(`/api/skills/${name}`),
+  },
+  
+  // Config
+  config: {
+    get: () => api.get<Config>('/api/config'),
+    update: (data: Partial<Config>) => api.put<Config>('/api/config', data),
+  },
+  
+  // Logs
+  logs: {
+    list: (level?: string) => api.get<Log[]>('/api/logs', { params: { level } }),
+    clear: () => api.delete('/api/logs'),
+  },
+  
+  // Platforms
+  platforms: {
+    list: () => api.get<Platform[]>('/api/platforms'),
   },
 }
 
-// Profile API
-export const profileApi = {
-  list: () => api.get('/profiles'),
-  get: (name: string) => api.get(`/profiles/${name}`),
-  create: (name: string) => api.post('/profiles', { name }),
-  switch: (name: string) => api.post(`/profiles/${name}/switch`),
-  delete: (name: string) => api.delete(`/profiles/${name}`),
-}
-
-// Config API
-export const configApi = {
-  get: () => api.get('/config'),
-  save: (data: { section: string; data: any }) => api.put('/config', data),
-}
-
-// Log API
-export const logApi = {
-  list: (params?: { file?: string; level?: string; search?: string; limit?: number }) =>
-    api.get('/logs', { params }),
-  tail: (params?: { file?: string; level?: string; lines?: number }) =>
-    api.get('/logs/tail', { params }),
-}
-
-// Health API
-export const healthApi = {
-  check: () => api.get('/health'),
-}
-
-export default api
+export default apiService

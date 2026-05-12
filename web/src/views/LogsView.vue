@@ -1,67 +1,132 @@
 <template>
   <div class="logs-view">
-    <n-card title="Logs">
-      <template #header-extra>
-        <n-space>
-          <n-select v-model:value="logLevel" :options="levelOptions" style="width: 120px" />
-          <n-button @click="refreshLogs">Refresh</n-button>
-          <n-button @click="downloadLogs">Download</n-button>
-        </n-space>
-      </template>
-
-      <div class="log-container">
-        <div v-for="(log, i) in filteredLogs" :key="i" :class="['log-entry', log.level]">
-          <span class="log-time">{{ log.time }}</span>
-          <n-tag :type="getLevelType(log.level)" size="small">{{ log.level.toUpperCase() }}</n-tag>
-          <span class="log-message">{{ log.message }}</span>
-        </div>
+    <div class="view-header">
+      <h2>Logs</h2>
+      <div class="header-actions">
+        <n-select
+          v-model:value="levelFilter"
+          :options="levelOptions"
+          placeholder="Filter by level"
+          clearable
+          style="width: 150px"
+        />
+        <n-button @click="loadLogs" :loading="loading">Refresh</n-button>
+        <n-button @click="clearLogs">Clear</n-button>
       </div>
-    </n-card>
+    </div>
+
+    <div class="logs-container">
+      <div
+        v-for="log in filteredLogs"
+        :key="log.id"
+        class="log-entry"
+        :class="`log-${log.level}`"
+      >
+        <span class="log-time">{{ log.time }}</span>
+        <span class="log-level">{{ log.level.toUpperCase() }}</span>
+        <span class="log-message">{{ log.message }}</span>
+      </div>
+
+      <div v-if="filteredLogs.length === 0" class="empty-state">
+        <div class="empty-icon">📜</div>
+        <p>No logs available</p>
+      </div>
+    </div>
   </div>
 </template>
 
-<script setup>
-import { ref, computed } from 'vue'
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { NSelect, NButton, useMessage } from 'naive-ui'
+import { apiService, Log } from '../api'
 
-const logLevel = ref('all')
+const message = useMessage()
+const logs = ref<Log[]>([])
+const levelFilter = ref<string | null>(null)
+const loading = ref(false)
+
 const levelOptions = [
-  { label: 'All', value: 'all' },
-  { label: 'Debug', value: 'debug' },
   { label: 'Info', value: 'info' },
-  { label: 'Warn', value: 'warn' },
-  { label: 'Error', value: 'error' }
+  { label: 'Warning', value: 'warning' },
+  { label: 'Error', value: 'error' },
+  { label: 'Debug', value: 'debug' },
 ]
 
-const logs = ref([
-  { time: '10:30:15', level: 'info', message: 'Application started' },
-  { time: '10:30:16', level: 'debug', message: 'Loading configuration from ~/.go-magic' },
-  { time: '10:30:17', level: 'info', message: 'Provider initialized: openai' },
-  { time: '10:30:18', level: 'warn', message: 'Memory system not configured' },
-  { time: '10:31:00', level: 'info', message: 'New session created: abc123' },
-  { time: '10:32:30', level: 'error', message: 'API request failed: rate limit exceeded' }
-])
-
 const filteredLogs = computed(() => {
-  if (logLevel.value === 'all') return logs.value
-  return logs.value.filter(l => l.level === logLevel.value)
+  if (!levelFilter.value) return logs.value
+  return logs.value.filter(log => log.level === levelFilter.value)
 })
 
-const getLevelType = (level) => {
-  const types = { debug: 'default', info: 'info', warn: 'warning', error: 'error' }
-  return types[level] || 'default'
+let refreshInterval: number | null = null
+
+onMounted(() => {
+  loadLogs()
+  // Auto-refresh every 5 seconds
+  refreshInterval = window.setInterval(loadLogs, 5000)
+})
+
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+  }
+})
+
+async function loadLogs() {
+  loading.value = true
+  try {
+    const params = levelFilter.value ? { level: levelFilter.value } : undefined
+    const response = await apiService.logs.list(params)
+    logs.value = response.data.reverse()
+  } catch (err) {
+    message.error('Failed to load logs')
+  } finally {
+    loading.value = false
+  }
 }
 
-const refreshLogs = () => console.log('Refresh logs')
-const downloadLogs = () => console.log('Download logs')
+async function clearLogs() {
+  if (!confirm('Clear all logs?')) return
+  
+  try {
+    await apiService.logs.clear()
+    logs.value = []
+    message.success('Logs cleared')
+  } catch (err) {
+    message.error('Failed to clear logs')
+  }
+}
 </script>
 
 <style scoped>
-.log-container {
-  background: #1a1a2e;
-  border-radius: 8px;
-  padding: 12px;
-  max-height: calc(100vh - 300px);
+.logs-view {
+  padding: 20px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.view-header h2 {
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.logs-container {
+  flex: 1;
   overflow-y: auto;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 12px;
   font-family: 'Monaco', 'Menlo', monospace;
   font-size: 13px;
 }
@@ -69,8 +134,8 @@ const downloadLogs = () => console.log('Download logs')
 .log-entry {
   display: flex;
   gap: 12px;
-  padding: 4px 0;
-  border-bottom: 1px solid #2a2a3e;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .log-entry:last-child {
@@ -78,11 +143,37 @@ const downloadLogs = () => console.log('Download logs')
 }
 
 .log-time {
-  color: #888;
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
+.log-level {
+  flex-shrink: 0;
+  width: 60px;
+  font-weight: 600;
+}
+
+.log-info .log-level { color: #3b82f6; }
+.log-warning .log-level { color: #f59e0b; }
+.log-error .log-level { color: #ef4444; }
+.log-debug .log-level { color: #6b7280; }
+
 .log-message {
-  color: #ddd;
+  flex: 1;
+  word-break: break-word;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-secondary);
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
 }
 </style>

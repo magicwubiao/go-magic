@@ -1,111 +1,202 @@
 <template>
   <div class="config-view">
-    <n-tabs type="line">
-      <n-tab-pane name="provider" tab="Provider">
-        <n-card title="AI Provider Configuration">
-          <n-form label-placement="left" label-width="120">
-            <n-form-item label="Provider">
-              <n-select v-model:value="config.provider" :options="providerOptions" />
-            </n-form-item>
-            <n-form-item label="Model">
-              <n-select v-model:value="config.model" :options="modelOptions" />
-            </n-form-item>
-            <n-form-item label="API Key">
-              <n-input type="password" v-model:value="config.apiKey" placeholder="sk-..." show-password-on="click" />
-            </n-form-item>
-            <n-form-item label="Temperature">
-              <n-slider v-model:value="config.temperature" :min="0" :max="2" :step="0.1" />
-              <span style="margin-left: 12px">{{ config.temperature }}</span>
-            </n-form-item>
-          </n-form>
-          <template #footer>
-            <n-space justify="end">
-              <n-button @click="resetConfig">Reset</n-button>
-              <n-button type="primary" @click="saveConfig">Save</n-button>
-            </n-space>
-          </template>
-        </n-card>
-      </n-tab-pane>
+    <div class="view-header">
+      <h2>Configuration</h2>
+      <n-button type="primary" @click="saveConfig" :loading="saving">
+        Save Changes
+      </n-button>
+    </div>
 
-      <n-tab-pane name="display" tab="Display">
-        <n-card title="Display Settings">
-          <n-form label-placement="left" label-width="120">
-            <n-form-item label="Theme">
-              <n-radio-group v-model:value="config.theme">
-                <n-radio value="dark">Dark</n-radio>
-                <n-radio value="light">Light</n-radio>
-                <n-radio value="auto">Auto</n-radio>
-              </n-radio-group>
-            </n-form-item>
-            <n-form-item label="Language">
-              <n-select v-model:value="config.language" :options="languageOptions" />
-            </n-form-item>
-            <n-form-item label="Streaming">
-              <n-switch v-model:value="config.streaming" />
-            </n-form-item>
-          </n-form>
-        </n-card>
-      </n-tab-pane>
+    <div class="config-sections">
+      <!-- Model Settings -->
+      <div class="config-section">
+        <h3>Model Settings</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label>Provider</label>
+            <n-select v-model:value="config.provider" :options="providerOptions" />
+          </div>
+          <div class="config-item">
+            <label>Model</label>
+            <n-select v-model:value="config.model" :options="modelOptions" />
+          </div>
+          <div class="config-item">
+            <label>Temperature</label>
+            <n-slider v-model:value="config.temperature" :min="0" :max="2" :step="0.1" />
+            <span class="value-label">{{ config.temperature }}</span>
+          </div>
+          <div class="config-item">
+            <label>Max Tokens</label>
+            <n-input-number v-model:value="config.max_tokens" :min="100" :max="32000" />
+          </div>
+        </div>
+      </div>
 
-      <n-tab-pane name="gateway" tab="Gateway">
-        <n-card title="Messaging Gateway">
-          <n-form label-placement="left" label-width="120">
-            <n-form-item label="Telegram">
-              <n-switch v-model:value="config.telegram" />
-            </n-form-item>
-            <n-form-item v-if="config.telegram" label="Bot Token">
-              <n-input v-model:value="config.telegramToken" placeholder="123456:ABC..." />
-            </n-form-item>
-            <n-form-item label="Discord">
-              <n-switch v-model:value="config.discord" />
-            </n-form-item>
-            <n-form-item v-if="config.discord" label="Bot Token">
-              <n-input v-model:value="config.discordToken" type="password" />
-            </n-form-item>
-          </n-form>
-        </n-card>
-      </n-tab-pane>
-    </n-tabs>
+      <!-- Interface Settings -->
+      <div class="config-section">
+        <h3>Interface</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label>Theme</label>
+            <n-select v-model:value="config.theme" :options="themeOptions" />
+          </div>
+          <div class="config-item">
+            <label>Language</label>
+            <n-select v-model:value="config.language" :options="languageOptions" />
+          </div>
+          <div class="config-item checkbox">
+            <n-switch v-model:value="config.streaming" />
+            <label>Enable Streaming Responses</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Prompt -->
+      <div class="config-section">
+        <h3>System Prompt</h3>
+        <n-input
+          v-model:value="config.system_prompt"
+          type="textarea"
+          :rows="6"
+          placeholder="Custom instructions for the AI..."
+        />
+      </div>
+    </div>
   </div>
 </template>
 
-<script setup>
-import { ref, reactive } from 'vue'
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { NButton, NSelect, NSlider, NInputNumber, NSwitch, NInput, useMessage } from 'naive-ui'
+import { apiService, Config } from '../api'
 
-const config = reactive({
+const message = useMessage()
+const saving = ref(false)
+const config = ref<Config>({
   provider: 'openai',
   model: 'gpt-4',
-  apiKey: '',
   temperature: 0.7,
+  max_tokens: 4096,
   theme: 'dark',
   language: 'en',
   streaming: true,
-  telegram: false,
-  telegramToken: '',
-  discord: false,
-  discordToken: ''
+  system_prompt: 'You are go-magic, a helpful AI assistant.',
 })
 
 const providerOptions = [
   { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
   { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'Ollama', value: 'ollama' },
-  { label: 'OpenRouter', value: 'openrouter' }
+  { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Google', value: 'google' },
 ]
 
 const modelOptions = [
   { label: 'GPT-4', value: 'gpt-4' },
   { label: 'GPT-4 Turbo', value: 'gpt-4-turbo' },
-  { label: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' }
+  { label: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' },
+  { label: 'Claude 3', value: 'claude-3' },
+]
+
+const themeOptions = [
+  { label: 'Dark', value: 'dark' },
+  { label: 'Light', value: 'light' },
+  { label: 'System', value: 'system' },
 ]
 
 const languageOptions = [
   { label: 'English', value: 'en' },
   { label: '中文', value: 'zh' },
-  { label: '日本語', value: 'ja' }
+  { label: '日本語', value: 'ja' },
 ]
 
-const saveConfig = () => console.log('Save config', config)
-const resetConfig = () => console.log('Reset config')
+onMounted(loadConfig)
+
+async function loadConfig() {
+  try {
+    const response = await apiService.config.get()
+    config.value = { ...config.value, ...response.data }
+  } catch (err) {
+    message.error('Failed to load config')
+  }
+}
+
+async function saveConfig() {
+  saving.value = true
+  try {
+    await apiService.config.update(config.value)
+    message.success('Configuration saved')
+  } catch (err) {
+    message.error('Failed to save config')
+  } finally {
+    saving.value = false
+  }
+}
 </script>
+
+<style scoped>
+.config-view {
+  padding: 20px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.view-header h2 {
+  margin: 0;
+}
+
+.config-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.config-section {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.config-section h3 {
+  font-size: 16px;
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.config-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-item label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.config-item.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.config-item.checkbox label {
+  font-weight: normal;
+}
+
+.value-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+</style>

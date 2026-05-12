@@ -1,378 +1,301 @@
 <template>
   <div class="chat-view">
-    <!-- Chat Header -->
+    <!-- Header -->
     <div class="chat-header">
-      <div class="header-left">
-        <button @click="showSidebar = !showSidebar" class="icon-btn" title="Toggle Sidebar">
-          ☰
-        </button>
-        <h2>{{ currentSession?.title || 'New Chat' }}</h2>
-        <span v-if="isStreaming" class="streaming-badge">● Streaming</span>
+      <div class="chat-title">
+        <span class="session-name">{{ currentSession?.name || 'New Chat' }}</span>
+        <n-tag v-if="isStreaming" size="small" type="info">
+          <template #icon>
+            <span class="streaming-dot"></span>
+          </template>
+          Streaming
+        </n-tag>
       </div>
-      <div class="header-right">
-        <select v-model="selectedModel" class="model-select">
-          <option value="gpt-4o">GPT-4o</option>
-          <option value="gpt-4o-mini">GPT-4o Mini</option>
-          <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-          <option value="deepseek-chat">DeepSeek Chat</option>
-        </select>
-        <button @click="showSettings = true" class="icon-btn" title="Settings">⚙️</button>
-        <button @click="toggleTheme" class="icon-btn" title="Toggle Theme">
-          {{ isDark ? '☀️' : '🌙' }}
-        </button>
+      <div class="chat-actions">
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button quaternary circle @click="clearChat" :disabled="!currentSession">
+              🗑️
+            </n-button>
+          </template>
+          Clear Chat
+        </n-tooltip>
       </div>
     </div>
 
-    <!-- Messages Container -->
+    <!-- Messages -->
     <div class="messages-container" ref="messagesContainer">
-      <!-- Welcome Message -->
-      <div v-if="messages.length === 0" class="welcome-message">
-        <div class="welcome-icon">🤖</div>
-        <h2>Welcome to Go Magic</h2>
-        <p>Your AI assistant is ready. Start a conversation!</p>
+      <!-- Welcome state -->
+      <div v-if="!currentSession || messages.length === 0" class="welcome-state">
+        <div class="welcome-icon">✨</div>
+        <h2>Welcome to go-magic</h2>
+        <p>Start a conversation or try one of these:</p>
         <div class="suggestions">
-          <button
+          <n-button
             v-for="suggestion in suggestions"
             :key="suggestion"
+            size="small"
             @click="sendMessage(suggestion)"
-            class="suggestion-btn"
           >
             {{ suggestion }}
-          </button>
+          </n-button>
         </div>
       </div>
 
       <!-- Messages -->
-      <div v-for="(msg, index) in messages" :key="index" class="message" :class="msg.role">
-        <div class="message-avatar">
-          {{ msg.role === 'user' ? '👤' : '🤖' }}
+      <div v-else class="messages-list">
+        <div
+          v-for="message in messages"
+          :key="message.id"
+          class="message"
+          :class="[`message-${message.role}`]"
+        >
+          <div class="message-avatar">
+            {{ message.role === 'user' ? '👤' : '🤖' }}
+          </div>
+          <div class="message-content">
+            <div class="message-header">
+              <span class="message-role">{{ message.role }}</span>
+              <span class="message-time">{{ formatTime(message.timestamp) }}</span>
+            </div>
+            <div class="message-text">
+              <MarkdownRenderer :content="message.content" />
+            </div>
+          </div>
         </div>
-        <div class="message-content">
-          <div class="message-header">
-            <span class="sender-name">{{ msg.role === 'user' ? 'You' : 'Magic' }}</span>
-            <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
-            <button @click="copyMessage(msg)" class="copy-btn" title="Copy">📋</button>
-          </div>
-          <div class="message-body">
-            <MarkdownRenderer :content="msg.content" />
-          </div>
-          <div v-if="msg.role === 'assistant' && msg.toolCalls" class="tool-calls">
-            <div v-for="(tool, tIdx) in msg.toolCalls" :key="tIdx" class="tool-call">
-              <span class="tool-icon">{{ getToolIcon(tool.name) }}</span>
-              <span class="tool-name">{{ tool.name }}</span>
+
+        <!-- Typing indicator -->
+        <div v-if="isStreaming" class="message message-assistant">
+          <div class="message-avatar">🤖</div>
+          <div class="message-content">
+            <div class="typing-indicator">
+              <span></span>
+              <span></span>
+              <span></span>
             </div>
           </div>
         </div>
       </div>
-
-      <!-- Typing Indicator -->
-      <div v-if="isTyping" class="message assistant">
-        <div class="message-avatar">🤖</div>
-        <div class="message-content">
-          <div class="typing-indicator">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-        </div>
-      </div>
     </div>
 
-    <!-- Input Area -->
-    <div class="input-area">
-      <div v-if="attachedFiles.length > 0" class="attached-files">
-        <div v-for="(file, idx) in attachedFiles" :key="idx" class="attached-file">
-          <span>{{ file.name }}</span>
-          <button @click="removeFile(idx)">×</button>
-        </div>
-      </div>
-      <div class="input-container">
-        <button @click="showFileUpload = !showFileUpload" class="attach-btn" title="Attach File">
-          📎
-        </button>
-        <textarea
-          ref="inputRef"
-          v-model="inputMessage"
-          @keydown.enter.exact.prevent="sendMessage()"
-          @keydown.enter.shift.exact="inputMessage += '\n'"
-          placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-          class="message-input"
-          rows="1"
-        ></textarea>
-        <button @click="sendMessage()" class="send-btn" :disabled="!inputMessage.trim() && attachedFiles.length === 0">
-          ➤
-        </button>
+    <!-- Input -->
+    <div class="chat-input-container">
+      <div class="input-wrapper">
+        <n-input
+          v-model:value="inputMessage"
+          type="textarea"
+          placeholder="Type your message... (Shift+Enter for new line, Enter to send)"
+          :autosize="{ minRows: 1, maxRows: 5 }"
+          @keydown="handleKeydown"
+          :disabled="isStreaming"
+        />
+        <n-button
+          type="primary"
+          :loading="isStreaming"
+          :disabled="!inputMessage.trim()"
+          @click="sendCurrentMessage"
+          class="send-button"
+        >
+          {{ isStreaming ? '...' : '➤' }}
+        </n-button>
       </div>
       <div class="input-hints">
-        <span>Press <kbd>/</kbd> for commands</span>
-        <span>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> for shortcuts</span>
-      </div>
-    </div>
-
-    <!-- File Upload Modal -->
-    <div v-if="showFileUpload" class="modal-overlay" @click="showFileUpload = false">
-      <div class="modal-content" @click.stop>
-        <FileUpload @files-selected="handleFilesSelected" />
-        <button @click="showFileUpload = false" class="modal-close">Close</button>
-      </div>
-    </div>
-
-    <!-- Settings Modal -->
-    <div v-if="showSettings" class="modal-overlay" @click="showSettings = false">
-      <SettingsView @close="showSettings = false" />
-    </div>
-
-    <!-- Command Palette -->
-    <CommandPalette :show="showCommandPalette" @close="showCommandPalette = false" @command="handleCommand" />
-
-    <!-- Notifications -->
-    <div class="notifications">
-      <div
-        v-for="(notification, idx) in notifications"
-        :key="idx"
-        class="notification"
-        :class="notification.type"
-      >
-        {{ notification.message }}
+        <span>Press Enter to send</span>
+        <span>Shift+Enter for new line</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { NInput, NButton, NTooltip, NTag } from 'naive-ui'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
-import FileUpload from '../components/FileUpload.vue'
-import CommandPalette from '../components/CommandPalette.vue'
-import SettingsView from '../views/SettingsView.vue'
+import { apiService, Session, Message } from '../api'
 
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  toolCalls?: Array<{ name: string; arguments: string }>
-}
-
-interface Session {
-  id: string
-  title: string
-}
-
-interface Notification {
-  message: string
-  type: 'success' | 'error' | 'info'
-}
-
-const messages = ref<Message[]>([])
-const currentSession = ref<Session | null>(null)
-const inputMessage = ref('')
-const isTyping = ref(false)
-const isStreaming = ref(false)
-const isDark = ref(true)
-const showSidebar = ref(true)
-const showSettings = ref(false)
-const showFileUpload = ref(false)
-const showCommandPalette = ref(false)
-const selectedModel = ref('gpt-4o-mini')
-const attachedFiles = ref<Array<{ name: string; data: string }>>([])
-const notifications = ref<Notification[]>([])
 const messagesContainer = ref<HTMLElement | null>(null)
-const inputRef = ref<HTMLTextAreaElement | null>(null)
+const inputMessage = ref('')
+const isStreaming = ref(false)
+const currentSession = ref<Session | null>(null)
+const messages = ref<Message[]>([])
 
 const suggestions = [
-  'Help me write a Python script',
-  'Explain quantum computing',
-  'Debug my code',
-  'Write a haiku about programming',
+  'What can you help me with?',
+  'Show me your features',
+  'How do I configure you?',
 ]
 
-onMounted(() => {
-  // Load from localStorage
-  const saved = localStorage.getItem('go-magic-messages')
-  if (saved) {
-    messages.value = JSON.parse(saved)
+// Load initial session
+onMounted(async () => {
+  try {
+    const sessions = await apiService.sessions.list()
+    if (sessions.data.length > 0) {
+      // Get most recent session
+      const sorted = sessions.data.sort((a, b) => 
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      )
+      await selectSession(sorted[0])
+    }
+  } catch (err) {
+    console.error('Failed to load sessions:', err)
   }
-  
-  const theme = localStorage.getItem('theme')
-  isDark.value = theme !== 'light'
-  
-  // Keyboard shortcuts
-  document.addEventListener('keydown', handleKeydown)
 })
 
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown)
-})
-
-// Save messages to localStorage
-watch(messages, (newMessages) => {
-  localStorage.setItem('go-magic-messages', JSON.stringify(newMessages))
-}, { deep: true })
-
-function handleKeydown(e: KeyboardEvent) {
-  // Ctrl+K for command palette
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-    e.preventDefault()
-    showCommandPalette.value = true
-  }
-  // / for focus input
-  if (e.key === '/' && document.activeElement?.tagName !== 'TEXTAREA') {
-    e.preventDefault()
-    inputRef.value?.focus()
-  }
-  // Ctrl+N for new chat
-  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-    e.preventDefault()
-    newChat()
-  }
-  // Escape to close modals
-  if (e.key === 'Escape') {
-    showSettings.value = false
-    showFileUpload.value = false
-    showCommandPalette.value = false
+async function selectSession(session: Session) {
+  currentSession.value = session
+  try {
+    const response = await apiService.sessions.get(session.id)
+    messages.value = response.data.messages || []
+    scrollToBottom()
+  } catch (err) {
+    console.error('Failed to load session:', err)
   }
 }
 
-async function sendMessage(content?: string) {
-  const message = content || inputMessage.value.trim()
-  if (!message && attachedFiles.value.length === 0) return
-  
-  // Add user message
-  messages.value.push({
+async function sendMessage(text: string) {
+  if (!text.trim() || isStreaming.value) return
+
+  // Create session if needed
+  if (!currentSession.value) {
+    try {
+      const response = await apiService.sessions.create({
+        name: text.slice(0, 50),
+      })
+      currentSession.value = response.data
+    } catch (err) {
+      console.error('Failed to create session:', err)
+      return
+    }
+  }
+
+  const userMessage: Message = {
+    id: Date.now().toString(),
     role: 'user',
-    content: message,
-    timestamp: new Date(),
-  })
-  
+    content: text,
+    timestamp: new Date().toISOString(),
+  }
+  messages.value.push(userMessage)
   inputMessage.value = ''
-  isTyping.value = true
-  
-  // Scroll to bottom
-  await nextTick()
   scrollToBottom()
+
+  // Stream response
+  isStreaming.value = true
   
   try {
-    // Send to backend
-    const response = await fetch('/api/chat', {
+    const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message,
-        model: selectedModel.value,
-        files: attachedFiles.value,
+        message: text,
+        session_id: currentSession.value.id,
       }),
     })
-    
-    if (!response.ok) throw new Error('Failed to send message')
-    
-    const data = await response.json()
-    
-    // Add assistant message
-    messages.value.push({
+
+    const reader = response.body?.getReader()
+    const decoder = new TextDecoder()
+    let assistantMessage: Message = {
+      id: (Date.now() + 1).toString(),
       role: 'assistant',
-      content: data.content || data.message || 'I received your message.',
-      timestamp: new Date(),
-      toolCalls: data.toolCalls,
-    })
-    
-    attachedFiles.value = []
-  } catch (error) {
-    showNotification('Failed to send message', 'error')
-    messages.value.push({
+      content: '',
+      timestamp: new Date().toISOString(),
+    }
+    messages.value.push(assistantMessage)
+
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value)
+      const lines = chunk.split('\n')
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'chunk') {
+              assistantMessage.content += data.data.content
+              scrollToBottom()
+            } else if (data.type === 'done') {
+              assistantMessage = data.data
+            } else if (data.type === 'session') {
+              currentSession.value = data.data
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+
+    // Update messages with final message
+    const lastIdx = messages.value.findIndex(m => m.id === assistantMessage.id)
+    if (lastIdx >= 0) {
+      messages.value[lastIdx] = assistantMessage
+    }
+
+  } catch (err) {
+    console.error('Chat error:', err)
+    const errorMsg: Message = {
+      id: (Date.now() + 2).toString(),
       role: 'assistant',
-      content: 'Sorry, I encountered an error. Please try again.',
-      timestamp: new Date(),
-    })
+      content: 'Sorry, there was an error processing your request.',
+      timestamp: new Date().toISOString(),
+    }
+    messages.value.push(errorMsg)
   } finally {
-    isTyping.value = false
+    isStreaming.value = false
     scrollToBottom()
   }
 }
 
-function newChat() {
-  messages.value = []
-  currentSession.value = null
-  localStorage.removeItem('go-magic-messages')
-  showNotification('New chat started', 'success')
+function sendCurrentMessage() {
+  sendMessage(inputMessage.value)
 }
 
-function copyMessage(msg: Message) {
-  navigator.clipboard.writeText(msg.content)
-  showNotification('Message copied!', 'success')
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    sendCurrentMessage()
+  }
 }
 
-function formatTime(date: Date): string {
-  return new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+async function clearChat() {
+  if (!currentSession.value) return
+  
+  try {
+    await apiService.sessions.delete(currentSession.value.id)
+    messages.value = []
+    currentSession.value = null
+  } catch (err) {
+    console.error('Failed to clear chat:', err)
+  }
 }
 
 function scrollToBottom() {
-  if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  }
+  nextTick(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    }
+  })
 }
 
-function toggleTheme() {
-  isDark.value = !isDark.value
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
-  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light')
+function formatTime(timestamp: string): string {
+  const date = new Date(timestamp)
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function getToolIcon(toolName: string): string {
-  const icons: Record<string, string> = {
-    web_search: '🌐',
-    read_file: '📄',
-    write_file: '✏️',
-    terminal: '💻',
-    execute_code: '⚡',
-    memory_store: '💾',
-  }
-  return icons[toolName] || '🛠️'
-}
-
-function handleFilesSelected(files: Array<{ name: string; data: string }>) {
-  attachedFiles.value = files
-  showFileUpload.value = false
-  showNotification(`${files.length} file(s) attached`, 'success')
-}
-
-function removeFile(idx: number) {
-  attachedFiles.value.splice(idx, 1)
-}
-
-function handleCommand(command: string) {
-  switch (command) {
-    case 'new-chat':
-      newChat()
-      break
-    case 'toggle-theme':
-      toggleTheme()
-      break
-    case 'settings':
-      showSettings.value = true
-      break
-    case 'focus-input':
-      inputRef.value?.focus()
-      break
-  }
-}
-
-function showNotification(message: string, type: 'success' | 'error' | 'info') {
-  notifications.value.push({ message, type })
-  setTimeout(() => {
-    notifications.value.shift()
-  }, 3000)
-}
+// Watch for streaming changes to scroll
+watch(messages, () => scrollToBottom(), { deep: true })
 </script>
 
 <style scoped>
 .chat-view {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   background: var(--bg-primary);
 }
 
-/* Header */
 .chat-header {
   display: flex;
   justify-content: space-between;
@@ -381,313 +304,180 @@ function showNotification(message: string, type: 'success' | 'error' | 'info') {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
 }
-.header-left, .header-right {
+
+.chat-title {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.header-left h2 {
-  margin: 0;
+
+.session-name {
+  font-weight: 600;
   font-size: 16px;
-  font-weight: 500;
 }
-.streaming-badge {
-  font-size: 12px;
-  color: #10b981;
-  animation: pulse 1.5s infinite;
+
+.streaming-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info-color);
+  animation: pulse 1s infinite;
 }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
-.icon-btn {
-  background: none;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-.icon-btn:hover {
-  background: var(--hover-bg);
-}
-.model-select {
-  padding: 6px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 13px;
-}
 
-/* Messages */
 .messages-container {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
 }
-.welcome-message {
+
+.welcome-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
   text-align: center;
-  padding: 60px 20px;
+  color: var(--text-secondary);
 }
+
 .welcome-icon {
   font-size: 64px;
   margin-bottom: 20px;
 }
-.welcome-message h2 {
-  font-size: 28px;
-  margin-bottom: 12px;
-}
-.welcome-message p {
-  color: var(--text-secondary);
-  margin-bottom: 24px;
-}
-.suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
-}
-.suggestion-btn {
-  padding: 10px 20px;
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  background: var(--bg-secondary);
+
+.welcome-state h2 {
+  font-size: 24px;
   color: var(--text-primary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.suggestion-btn:hover {
-  background: var(--primary-color);
-  color: white;
-  border-color: var(--primary-color);
-}
-.message {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 24px;
-  animation: fadeIn 0.3s ease;
-}
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.message.user {
-  flex-direction: row-reverse;
-}
-.message-avatar {
-  font-size: 28px;
-  flex-shrink: 0;
-}
-.message-content {
-  max-width: 80%;
-}
-.message-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   margin-bottom: 8px;
 }
-.sender-name {
-  font-weight: 500;
-  font-size: 14px;
-}
-.message-time {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.copy-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s;
-  font-size: 14px;
-}
-.message:hover .copy-btn {
-  opacity: 1;
-}
-.message-body {
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--bg-secondary);
-  font-size: 14px;
-  line-height: 1.6;
-}
-.message.user .message-body {
-  background: var(--primary-color);
-  color: white;
-}
-.tool-calls {
+
+.suggestions {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
-.tool-call {
+
+.messages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  max-width: 80%;
+}
+
+.message-user {
+  margin-left: auto;
+  flex-direction: row-reverse;
+}
+
+.message-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--bg-tertiary);
-  border-radius: 16px;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-header {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
   font-size: 12px;
 }
 
-/* Typing Indicator */
+.message-role {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.message-time {
+  color: var(--text-secondary);
+}
+
+.message-text {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.message-user .message-text {
+  background: var(--primary-color);
+  color: white;
+}
+
 .typing-indicator {
   display: flex;
   gap: 4px;
-  padding: 16px;
+  padding: 12px 16px;
 }
+
 .typing-indicator span {
   width: 8px;
   height: 8px;
-  background: var(--text-secondary);
   border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out;
-}
-.typing-indicator span:nth-child(1) { animation-delay: 0s; }
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-  40% { transform: scale(1); opacity: 1; }
+  background: var(--text-secondary);
+  animation: typing 1.4s infinite;
 }
 
-/* Input Area */
-.input-area {
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+.chat-input-container {
   padding: 16px 20px;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
 }
-.attached-files {
+
+.input-wrapper {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.attached-file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--bg-tertiary);
-  border-radius: 16px;
-  font-size: 13px;
-}
-.attached-file button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 16px;
-}
-.input-container {
-  display: flex;
-  align-items: flex-end;
   gap: 12px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 8px 12px;
+  align-items: flex-end;
 }
-.attach-btn, .send-btn {
-  background: none;
-  border: none;
-  font-size: 20px;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-.attach-btn:hover, .send-btn:hover {
-  background: var(--hover-bg);
-}
-.send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.message-input {
+
+.input-wrapper :deep(.n-input) {
   flex: 1;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 14px;
-  resize: none;
-  outline: none;
-  min-height: 24px;
-  max-height: 120px;
 }
-.message-input::placeholder {
-  color: var(--text-secondary);
+
+.send-button {
+  height: 40px;
+  width: 40px;
 }
+
 .input-hints {
   display: flex;
-  gap: 24px;
+  gap: 16px;
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-secondary);
 }
-kbd {
-  padding: 2px 6px;
-  background: var(--bg-tertiary);
-  border-radius: 4px;
-  font-size: 11px;
-}
-
-/* Modal */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-.modal-content {
-  background: var(--bg-primary);
-  border-radius: 16px;
-  padding: 24px;
-  max-width: 500px;
-  width: 90%;
-}
-.modal-close {
-  margin-top: 16px;
-  padding: 10px 20px;
-  background: var(--primary-color);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  width: 100%;
-}
-
-/* Notifications */
-.notifications {
-  position: fixed;
-  bottom: 100px;
-  right: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 2000;
-}
-.notification {
-  padding: 12px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  animation: slideIn 0.3s ease;
-}
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-.notification.success { background: #10b981; color: white; }
-.notification.error { background: #ef4444; color: white; }
-.notification.info { background: #3b82f6; color: white; }
 </style>
