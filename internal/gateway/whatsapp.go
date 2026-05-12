@@ -717,9 +717,7 @@ func isTerminal(fd uintptr) bool {
 func isTTY() bool {
 	return isTerminal(os.Stdout.Fd())
 }
-}
 
-// ForceDisplayQR forces QR code display regardless of terminal detection
 func ForceDisplayQR(qrData string) {
 	// Always try to display QR code with maximum verbosity
 	fmt.Println()
