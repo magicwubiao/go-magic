@@ -74,7 +74,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Open database
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
