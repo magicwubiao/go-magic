@@ -171,6 +171,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(s.handleSkillsSearch))
 
 	// Plugins
+	mux.HandleFunc("/api/plugins", withCORS(s.handlePlugins))
 	mux.HandleFunc("/api/dashboard/plugins", withCORS(s.handleDashboardPlugins))
 	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(s.handleDashboardPluginsRescan))
 
@@ -394,6 +395,20 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Error(w, "not found", 404)
+}
+
+// handlePlugins handles plugin list
+func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	plugins := []map[string]interface{}{
+		{
+			"id":          "welcome",
+			"name":        "Welcome",
+			"description": "Welcome plugin",
+			"enabled":     true,
+			"version":     "1.0.0",
+		},
+	}
+	jsonResponse(w, plugins)
 }
 
 // handleDashboardSkills handles dashboard skill view
@@ -693,7 +708,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 
 	// Root SPA fallback
 	if path == "/" || path == "" {
-		data, err := staticFiles.ReadFile("index.html")
+		data, err := staticFiles.ReadFile("dist/index.html")
 		if err != nil {
 			http.Error(w, "internal server error", 500)
 			return
@@ -712,11 +727,11 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve index.html for SPA routes (remove trailing slash issues)
+		// Serve index.html for SPA routes (remove trailing slash issues)
 	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings"}
 	for _, spa := range spaPaths {
 		if strings.HasPrefix(path, spa) {
-			data, err := staticFiles.ReadFile("index.html")
+			data, err := staticFiles.ReadFile("dist/index.html")
 			if err == nil {
 				w.Header().Set("Content-Type", "text/html")
 				w.Write(data)
