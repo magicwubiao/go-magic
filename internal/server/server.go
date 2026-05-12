@@ -961,8 +961,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
-	// Try embedded files first (embed path needs "dist" prefix)
-	embedPath := "dist" + path
+	// Try embedded files first (files are embedded at root, no prefix needed)
+	embedPath := path
 	data, err := staticFiles.ReadFile(embedPath)
 	if err == nil {
 		fmt.Printf("handleStatic: embedded file found: %s, size=%d\n", embedPath, len(data))
@@ -987,7 +987,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("handleStatic: disk file not found: %s\n", diskPath)
 
 	// SPA fallback
-	indexData, _ := staticFiles.ReadFile("dist/index.html")
+	indexData, _ := staticFiles.ReadFile("index.html")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(indexData)
 }
