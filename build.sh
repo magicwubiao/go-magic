@@ -25,6 +25,13 @@ TARGET=${1:-"all"}
 # Ensure build directory
 mkdir -p "$BUILD_DIR"
 
+# Copy web dist to internal/server/dist for embedding
+if [ -d "web/dist" ]; then
+    mkdir -p internal/server/dist
+    cp -r web/dist/* internal/server/dist/
+    echo "Copied web/dist to internal/server/dist"
+fi
+
 # Get Go info
 GO_VERSION=$(go version | grep -oP 'go\d+\.\d+')
 GO_ARCH=$(go env GOARCH)
