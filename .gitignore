@@ -30,7 +30,7 @@ Thumbs.db
 *.log
 
 # Build outputs
-dist/
+!internal/server/dist/
 build/
 output/
 *.wav
