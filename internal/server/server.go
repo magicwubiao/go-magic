@@ -290,11 +290,16 @@ func (s *Server) Start() error {
 
 	// Status endpoint
 	s.mux.HandleFunc("/api/status", s.handleStatus)
+	
+	// Additional API endpoints for frontend compatibility
+	s.mux.HandleFunc("/api/model/auxiliary", s.handleModelAuxiliary)
+	s.mux.HandleFunc("/api/analytics/models", s.handleAnalyticsModels)
+	s.mux.HandleFunc("/api/tools/toolsets", s.handleToolsToolsets)
 
 	// WebSocket
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
-	// Serve static files
+	// Serve static files (SPA fallback)
 	s.mux.HandleFunc("/", s.handleStatic)
 
 	addr := fmt.Sprintf(":%s", s.port)
@@ -912,6 +917,32 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Model auxiliary info
+func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"models": []map[string]string{
+			{"id": "gpt-4", "name": "GPT-4"},
+			{"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo"},
+			{"id": "claude-3", "name": "Claude 3"},
+		},
+	})
+}
+
+// Analytics models
+func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"models": []map[string]interface{}{
+			{"id": "gpt-4", "name": "GPT-4", "requests": 0},
+			{"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "requests": 0},
+		},
+	})
+}
+
+// Tools toolsets
+func (s *Server) handleToolsToolsets(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.toolsets)
+}
+
 // WebSocket handler
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -962,7 +993,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try embedded files first (files are embedded at root, no prefix needed)
-	embedPath := path
+	embedPath := strings.TrimPrefix(path, "/")
 	data, err := staticFiles.ReadFile(embedPath)
 	if err == nil {
 		fmt.Printf("handleStatic: embedded file found: %s, size=%d\n", embedPath, len(data))
@@ -986,8 +1017,12 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("handleStatic: disk file not found: %s\n", diskPath)
 
-	// SPA fallback
-	indexData, _ := staticFiles.ReadFile("index.html")
+	// SPA fallback - serve index.html for SPA routing
+	indexData, err := staticFiles.ReadFile("index.html")
+	if err != nil {
+		// Try disk fallback
+		indexData, _ = os.ReadFile(filepath.Join("internal/server/dist", "index.html"))
+	}
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(indexData)
 }
