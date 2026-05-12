@@ -1,1 +1,0 @@
-{"version":3,"file":"basic-page.d.ts","sourceRoot":"","sources":["../../src/ui/basic-page.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,OAAO,CAAA;AAOtC,wBAAgB,SAAS,CAAC,EAAE,QAAQ,EAAE,QAAQ,EAAE,KAAK,EAAE,EAAE,cAAc,2CAqBtE;AAED,UAAU,cAAe,SAAQ,KAAK,CAAC,iBAAiB;IACtD,QAAQ,CAAC,EAAE,MAAM,CAAA;IACjB,KAAK,CAAC,EAAE,SAAS,CAAA;CAClB"}

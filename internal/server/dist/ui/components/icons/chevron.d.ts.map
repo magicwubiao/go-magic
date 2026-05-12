@@ -1,1 +1,0 @@
-{"version":3,"file":"chevron.d.ts","sourceRoot":"","sources":["../../../../src/ui/components/icons/chevron.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,OAAO,CAAA;AAIrC,wBAAgB,WAAW,CAAC,EAC1B,SAAS,EACT,SAAkB,EAClB,GAAG,KAAK,EACT,EAAE,gBAAgB,2CAgClB;AAED,UAAU,gBAAiB,SAAQ,QAAQ,CAAC,aAAa,CAAC;IACxD,SAAS,CAAC,EAAE,MAAM,GAAG,OAAO,CAAA;CAC7B"}

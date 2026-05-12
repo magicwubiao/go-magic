@@ -1,1 +1,0 @@
-{"version":3,"file":"badge.d.ts","sourceRoot":"","sources":["../../../src/ui/components/badge.tsx"],"names":[],"mappings":"AAgBA,eAAO,MAAM,KAAK,GAAI,sCAKnB,UAAU,4CAyBZ,CAAA;AAED,KAAK,IAAI,GACL,SAAS,GACT,aAAa,GACb,SAAS,GACT,WAAW,GACX,SAAS,GACT,SAAS,CAAA;AAEb,UAAU,UACR,SAAQ,IAAI,CAAC,KAAK,CAAC,cAAc,CAAC,eAAe,CAAC,EAAE,OAAO,CAAC;IAC5D,IAAI,CAAC,EAAE,IAAI,CAAA;CACZ"}

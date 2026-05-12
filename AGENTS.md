@@ -281,6 +281,68 @@ categories := manager.GetCategories()
 dir, _ := manager.GetSkillDir(name)
 ```
 
+## Dashboard UI
+
+Web 管理界面，基于 React + TypeScript + Vite 构建。
+
+### 目录结构
+```
+web/
+├── src/
+│   ├── api/              # API 调用
+│   ├── components/       # 组件
+│   ├── hooks/           # React Hooks
+│   ├── i18n/            # 国际化
+│   ├── lib/             # 工具库
+│   ├── pages/           # 页面
+│   ├── plugins/         # 插件系统
+│   └── styles/          # 样式
+└── dist/                # 构建产物
+```
+
+### 页面路由
+- `/` - 首页仪表盘
+- `/sessions` - 会话管理
+- `/chat` - 聊天界面
+- `/skills` - 技能管理
+- `/tools` - 工具集
+- `/logs` - 日志查看
+- `/settings` - 设置
+- `/config` - 配置
+
+### API 端点
+- `/api/health` - 健康检查
+- `/api/sessions` - 会话管理
+- `/api/sessions/:id/messages` - 消息管理
+- `/api/skills` - 技能管理
+- `/api/toolsets` - 工具集
+- `/api/plugins` - 插件管理
+- `/api/logs` - 日志
+- `/api/config` - 配置
+- `/api/system/info` - 系统信息
+- `/api/analytics/models` - 模型分析
+- `/api/dashboard/themes` - 主题
+- `/api/dashboard/plugins` - 仪表盘插件
+
+### 构建和运行
+```bash
+# 构建前端
+cd web && pnpm build
+
+# 复制到嵌入目录
+cp -r dist/* ../internal/server/dist/
+
+# 构建 Go 二进制
+go build -o magic ./cmd/magic
+
+# 运行服务
+./magic server --port 5000
+```
+
+### 预览脚本
+- `scripts/coze-preview-build.sh` - 构建脚本
+- `scripts/coze-preview-run.sh` - 运行脚本
+
 ## MCP 集成
 
 支持连接外部 MCP 服务器，提供扩展工具能力。
