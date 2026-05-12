@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // ImportanceDecayConfig configures how memory importance decays over time
