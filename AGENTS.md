@@ -47,8 +47,47 @@ Go Magic 是一个高性能、超轻量级的 Go 实现的 AI Agent，灵感来�
 
 ## 运行与预览
 - **预览**：不支持（backend 类型）
+- **Web Dashboard**：`magic server` 或 `magic server --port 5000`
 - **运行**：`go run cmd/magic/main.go <command>`
 - **构建**：`make build` 生成 `magic` 可执行文件
+
+## Web Dashboard UI
+
+现代化的 Web 管理界面，基于 Vue 3 + TypeScript + Vite 构建。
+
+### 目录结构
+```
+web/
+├── src/
+│   ├── views/
+│   │   ├── ChatView.vue      # 主聊天界面
+│   │   ├── HistoryView.vue   # 历史记录
+│   │   ├── SettingsView.vue  # 设置页面
+│   │   └── ...
+│   ├── components/
+│   │   ├── Sidebar.vue       # 侧边栏
+│   │   ├── CommandPalette.vue # 命令面板
+│   │   ├── MarkdownRenderer.vue # Markdown 渲染
+│   │   ├── FileUpload.vue    # 文件上传
+│   │   ├── KeyboardShortcuts.vue # 快捷键指南
+│   │   └── ToolCallDisplay.vue # 工具调用展示
+│   └── ...
+└── dist/                      # 构建产物 (嵌入 internal/server/dist)
+```
+
+### 功能特性
+- **ChatView**: 流式响应、文件上传、模型选择、快捷键支持
+- **CommandPalette**: 模糊搜索命令 (Ctrl+K)
+- **KeyboardShortcuts**: 全面的键盘快捷键指南
+- **ToolCallDisplay**: 可视化工具调用过程
+- **MarkdownRenderer**: 代码高亮、表格、列表等
+
+### 构建命令
+```bash
+cd web && pnpm build          # 构建前端
+cp -r web/dist internal/server/dist  # 复制到嵌入目录
+go build ./cmd/magic         # 编译后端
+```
 
 ## 用户偏好与长期约束
 - Go 版本必须 >= 1.25（项目要求）
