@@ -281,6 +281,10 @@ func (s *Server) Start() error {
 	// Platforms
 	s.mux.HandleFunc("/api/platforms", s.handlePlatforms)
 	
+	// Dashboard plugins (placeholder for future plugin system)
+	s.mux.HandleFunc("/api/dashboard/plugins", s.handleDashboardPlugins)
+	s.mux.HandleFunc("/api/dashboard/plugins/rescan", s.handleDashboardPluginsRescan)
+	
 	// WebSocket
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 
@@ -865,6 +869,16 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	jsonResponse(w, platforms)
+}
+
+// Dashboard plugins handler (placeholder)
+func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
+	// Return empty plugin list for now
+	jsonResponse(w, []interface{}{})
+}
+
+func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{"ok": true, "count": 0})
 }
 
 // WebSocket handler
