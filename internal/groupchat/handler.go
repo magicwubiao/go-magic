@@ -42,7 +42,7 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /rooms/{id}", h.getRoom)
 	h.mux.HandleFunc("DELETE /rooms/{id}", h.deleteRoom)
 	h.mux.HandleFunc("PUT /rooms/{id}/config", h.updateRoomConfig)
-	h.mux.HandleFunc("GET /rooms/join/{code}", h.joinByCode)
+	h.mux.HandleFunc("GET /room/join/{code}", h.joinByCode)
 
 	// Agents
 	h.mux.HandleFunc("GET /rooms/{id}/agents", h.listAgents)
