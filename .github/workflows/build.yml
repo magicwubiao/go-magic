@@ -1,0 +1,123 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          EXT=""
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+          FILE_NAME="magic-${GOOS}-${GOARCH}${EXT}"
+          go build -ldflags="-s -w -X main.Version=${GITHUB_REF_NAME}" -o "dist/${FILE_NAME}" ./cmd/magic
+          echo "Built: $FILE_NAME"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: magic-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.version != ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create checksums
+        run: |
+          cd dist
+          for f in magic-*; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" > "${f}.sha256"
+            fi
+          done
+          ls -la
+
+      - name: Generate Release Notes
+        id: release-notes
+        run: |
+          VERSION=${GITHUB_REF_NAME:1}
+          NOTES="## Downloads\n\n"
+          NOTES+="| Platform | Architecture | File | SHA256 |\n"
+          NOTES+="|----------|-------------|------|--------|\n"
+          for f in dist/magic-*; do
+            if [ -f "$f" ] && [ ! "$f" = "${f%.sha256}" ]; then
+              NAME=$(basename "$f")
+              SHA=$(sha256sum "$f" | cut -d' ' -f1)
+              EXT="${NAME##*.}"
+              if [ "$EXT" = "exe" ]; then
+                PLATFORM="Windows"
+                ARCH="${NAME%.exe}"
+                ARCH="${ARCH#magic-windows-}"
+              else
+                case "$NAME" in
+                  *linux*) PLATFORM="Linux" ;;
+                  *darwin*) PLATFORM="macOS" ;;
+                  *freebsd*) PLATFORM="FreeBSD" ;;
+                  *openbsd*) PLATFORM="OpenBSD" ;;
+                  *netbsd*) PLATFORM="NetBSD" ;;
+                esac
+                ARCH="${NAME#magic-*}"
+                ARCH="${ARCH%-*}"
+              fi
+              NOTES+="| $PLATFORM | $ARCH | \`$NAME\` | \`${SHA:0:16}...\` |\n"
+            fi
+          done
+          NOTES+="\n---\n\n"
+          NOTES+="Built with ❤️ by GitHub Actions"
+          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/magic-*
+          generate_release_notes: false
+          body: ${{ steps.release-notes.outputs.notes }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
