@@ -1,0 +1,43 @@
+'use strict'
+Object.defineProperty(exports, '__esModule', { value: true })
+const vue_1 = require('vue')
+const _hoisted_1 = {
+  xmlns: 'http://www.w3.org/2000/svg',
+  'xmlns:xlink': 'http://www.w3.org/1999/xlink',
+  viewBox: '0 0 512 512'
+}
+const _hoisted_2 = /*#__PURE__*/ (0, vue_1.createElementVNode)(
+  'path',
+  {
+    d: 'M431 320.6c-1-3.6 1.2-8.6 3.3-12.2a33.68 33.68 0 0 1 2.1-3.1A162 162 0 0 0 464 215c.3-92.2-77.5-167-173.7-167c-83.9 0-153.9 57.1-170.3 132.9a160.7 160.7 0 0 0-3.7 34.2c0 92.3 74.8 169.1 171 169.1c15.3 0 35.9-4.6 47.2-7.7s22.5-7.2 25.4-8.3a26.44 26.44 0 0 1 9.3-1.7a26 26 0 0 1 10.1 2l56.7 20.1a13.52 13.52 0 0 0 3.9 1a8 8 0 0 0 8-8a12.85 12.85 0 0 0-.5-2.7z',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-linecap': 'round',
+    'stroke-miterlimit': '10',
+    'stroke-width': '32'
+  },
+  null,
+  -1
+  /* HOISTED */
+)
+const _hoisted_3 = /*#__PURE__*/ (0, vue_1.createElementVNode)(
+  'path',
+  {
+    d: 'M66.46 232a146.23 146.23 0 0 0 6.39 152.67c2.31 3.49 3.61 6.19 3.21 8s-11.93 61.87-11.93 61.87a8 8 0 0 0 2.71 7.68A8.17 8.17 0 0 0 72 464a7.26 7.26 0 0 0 2.91-.6l56.21-22a15.7 15.7 0 0 1 12 .2c18.94 7.38 39.88 12 60.83 12A159.21 159.21 0 0 0 284 432.11',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-linecap': 'round',
+    'stroke-miterlimit': '10',
+    'stroke-width': '32'
+  },
+  null,
+  -1
+  /* HOISTED */
+)
+const _hoisted_4 = [_hoisted_2, _hoisted_3]
+exports.default = (0, vue_1.defineComponent)({
+  name: 'ChatbubblesOutline',
+  render: function render(_ctx, _cache) {
+    return (0, vue_1.openBlock)(), (0, vue_1.createElementBlock)('svg', _hoisted_1, _hoisted_4)
+  }
+})

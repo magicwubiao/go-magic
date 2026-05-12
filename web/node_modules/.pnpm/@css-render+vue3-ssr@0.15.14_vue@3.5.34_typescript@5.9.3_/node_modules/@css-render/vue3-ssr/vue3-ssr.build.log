@@ -1,0 +1,29 @@
+Invoking: npm run lint && rm -rf es lib && npm run test && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json 
+
+> @css-render/vue3-ssr@0.15.14 lint
+> eslint --fix *.js src/**/*.ts __tests__/**/*.ts
+
+
+> @css-render/vue3-ssr@0.15.14 test
+> jest
+
+Browserslist: caniuse-lite is outdated. Please run:
+  npx browserslist@latest --update-db
+  Why you should do it regularly: https://github.com/browserslist/browserslist#browsers-data-updating
+PASS __tests__/index.spec.ts
+  ssr
+    render to string
+      ✓ should work (3ms)
+    useSsrAdapter
+      ✓ should work (2ms)
+
+----------|---------|----------|---------|---------|-------------------
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+----------|---------|----------|---------|---------|-------------------
+All files |   86.95 |       50 |     100 |     100 |                   
+ index.ts |   86.95 |       50 |     100 |     100 | 22-39             
+----------|---------|----------|---------|---------|-------------------
+Test Suites: 1 passed, 1 total
+Tests:       2 passed, 2 total
+Snapshots:   2 passed, 2 total
+Time:        0.525s

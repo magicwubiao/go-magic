@@ -1,0 +1,20 @@
+{
+  "name": "@vicons/ionicons5",
+  "version": "0.12.0",
+  "description": "Vue3 SVG icon components integrated from [`ionicons5`](https://ionicons.com/)",
+  "keywords": [
+    "icon",
+    "vue-next",
+    "vue",
+    "svg",
+    "ionicons",
+    "ionicons5"
+  ],
+  "author": "07akioni",
+  "license": "MIT",
+  "dependencies": {},
+  "sideEffects": false,
+  "main": "lib/index.js",
+  "module": "es/index.js",
+  "types": "es/index.d.ts"
+}
