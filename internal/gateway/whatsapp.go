@@ -12,7 +12,6 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
-	"golang.org/x/term"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -705,18 +704,19 @@ func displayQRCode(qrData string) {
 
 // isTerminal checks if the file descriptor is a terminal (cross-platform)
 func isTerminal(fd uintptr) bool {
-	// Use golang.org/x/term for cross-platform terminal detection
-	return term.IsTerminal(int(fd))
+	// Simple cross-platform terminal detection
+	fileInfo, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	mode := fileInfo.Mode()
+	return (mode & os.ModeCharDevice) != 0
 }
 
 // isTTY returns true if running in a terminal
 func isTTY() bool {
-	if runtime.GOOS == "windows" {
-		// On Windows, check if we have a real terminal
-		return term.IsTerminal(int(os.Stdout.Fd()))
-	}
-	// On Unix, use syscall for more reliable detection
 	return isTerminal(os.Stdout.Fd())
+}
 }
 
 // ForceDisplayQR forces QR code display regardless of terminal detection
