@@ -317,16 +317,53 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Message   string `json:"message"`
-		SessionID string `json:"session_id"`
-		Model     string `json:"model"`
+		Message    string                   `json:"message"`
+		SessionID string                   `json:"session_id"`
+		Model     string                   `json:"model"`
+		Messages  []map[string]interface{} `json:"messages"`
+		Tools     []map[string]interface{} `json:"tools"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", 400)
 		return
 	}
 
-	// Return a mock response for now
+	// Check if last message has tool_calls
+	var hasToolCalls bool
+	var toolCalls []interface{}
+	if len(req.Messages) > 0 {
+		lastMsg := req.Messages[len(req.Messages)-1]
+		if tc, ok := lastMsg["tool_calls"].([]interface{}); ok && len(tc) > 0 {
+			hasToolCalls = true
+			toolCalls = tc
+		}
+	}
+
+	// If there are tool_calls in the message, return tool results
+	if hasToolCalls {
+		toolMessages := make([]map[string]interface{}, 0)
+		for i, tc := range toolCalls {
+			if tcMap, ok := tc.(map[string]interface{}); ok {
+				toolMessages = append(toolMessages, map[string]interface{}{
+					"role":         "tool",
+					"tool_call_id": tcMap["id"],
+					"content":      fmt.Sprintf("Tool executed successfully (mock result %d)", i+1),
+				})
+			}
+		}
+		// Return tool results
+		response := map[string]interface{}{
+			"id":            fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+			"content":       "Tool executed successfully",
+			"model":         req.Model,
+			"tool_messages": toolMessages,
+			"tool_call_id":  "mock_tool_call_id",
+		}
+		jsonResponse(w, response)
+		return
+	}
+
+	// Return a mock response
 	response := map[string]interface{}{
 		"id":      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		"content": fmt.Sprintf("Echo: %s", req.Message),
