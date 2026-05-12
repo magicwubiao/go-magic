@@ -342,6 +342,37 @@ onMounted(() => {
 </script>
 
 <style>
+:root {
+  --primary-color: #6366f1;
+  --primary-color-hover: #818cf8;
+  --primary-color-pressed: #4f46e5;
+  --secondary-color: #a855f7;
+  --success-color: #10b981;
+  --error-color: #ef4444;
+  --warning-color: #f59e0b;
+  --info-color: #3b82f6;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #252542;
+  --bg-tertiary: #2f2f4a;
+  --border-color: #3f3f5c;
+  --hover-bg: rgba(99, 102, 241, 0.1);
+}
+
+.light-mode {
+  --primary-color: #6366f1;
+  --primary-color-hover: #818cf8;
+  --primary-color-pressed: #4f46e5;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --bg-primary: #f5f5f5;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f0f0f0;
+  --border-color: #e0e0e0;
+  --hover-bg: rgba(99, 102, 241, 0.05);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -356,11 +387,11 @@ html, body, #app {
 
 .app-layout {
   height: 100vh;
-  background: #0f0f1a;
+  background: var(--bg-primary);
 }
 
 .app-layout.light-mode {
-  background: #f5f5f5;
+  background: var(--bg-primary);
 }
 
 .app-header {
@@ -369,13 +400,13 @@ html, body, #app {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #1a1a2e;
-  border-bottom: 1px solid #333;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .light-mode .app-header {
-  background: #ffffff;
-  border-bottom: 1px solid #e0e0e0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .header-left {
@@ -410,12 +441,13 @@ html, body, #app {
 }
 
 .app-sider {
-  background: #1a1a2e;
+  background: var(--bg-secondary);
   height: calc(100vh - 60px);
 }
 
 .light-mode .app-sider {
-  background: #ffffff;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
 }
 
 .quick-actions {
@@ -469,13 +501,8 @@ html, body, #app {
   margin-top: 20px;
 }
 
-.light-mode .app-sider {
-  background: #ffffff;
-  border-right: 1px solid #e0e0e0;
-}
-
 .light-mode .app-content {
-  background: #f5f5f5;
+  background: var(--bg-primary);
 }
 
 /* Scrollbar styling */
@@ -489,12 +516,12 @@ html, body, #app {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #444;
+  background: var(--border-color);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: var(--text-secondary);
 }
 
 .light-mode ::-webkit-scrollbar-thumb {
