@@ -2,11 +2,15 @@
 sub_id = "80d87f0a"
 name = "go-magic"
 requires = ["golang-1.25"]
-project_type = "backend"
+project_type = "web"
 entrypoint = "cmd/magic/main.go"
 
 [preview]
-preview_enable = "disabled"
+preview_enable = "enabled"
+
+[dev]
+build = ["bash", "scripts/coze-preview-build.sh"]
+run = ["bash", "scripts/coze-preview-run.sh"]
 
 [deploy]
 build = ["bash", "build.sh", "cli"]
