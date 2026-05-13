@@ -47,4 +47,5 @@ if [ ! -f "$BINARY" ]; then
     BINARY="./dist/magic-${GO_OS}-${GO_ARCH}"
 fi
 
-exec "$BINARY" gateway start --platform wechat_ilink
+# Start server with the built binary
+exec "$BINARY" server --port 5000

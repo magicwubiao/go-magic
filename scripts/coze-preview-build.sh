@@ -16,6 +16,7 @@ cp -r dist/* ../internal/server/dist/
 
 echo "Building Go binary..."
 cd ..
-/usr/local/go/bin/go build -o build/magic ./cmd/magic
+export GOTOOLCHAIN=local
+go build -o build/magic ./cmd/magic
 
 echo "Preview build complete!"

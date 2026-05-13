@@ -37,5 +37,19 @@ magic doctor            # 诊断
 - `/api/system/info` - 系统信息
 
 ## 预览
-- **不支持**：backend 类型项目
+- **支持**：预览型 web 项目
 - **Web Dashboard**：`http://localhost:5000`
+- **预览构建**：`bash scripts/coze-preview-build.sh`
+- **预览运行**：`bash scripts/coze-preview-run.sh`
+- **端口绑定**：`0.0.0.0:5000`
+
+## 环境要求
+- **Go 版本**：1.25+（需要使用 GOTOOLCHAIN=local 或安装 Go 1.25）
+- **前端依赖**：pnpm
+- **Go 代理**：需要配置 GOPROXY（建议使用 goproxy.cn）
+
+## .coze 配置
+- **项目类型**：web
+- **运行时**：golang-1.25
+- **部署类型**：service/web
+- **入口**：`cmd/magic/main.go`
