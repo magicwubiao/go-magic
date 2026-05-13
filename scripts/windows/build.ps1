@@ -8,6 +8,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Get project root
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+Set-Location $ProjectRoot
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  go-magic Windows Build Script" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan

@@ -7,7 +7,7 @@ Write-Host "===================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Get project root
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $ProjectRoot
 
 Write-Host "[INFO] Project root: $PWD" -ForegroundColor Gray
