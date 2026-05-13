@@ -218,16 +218,52 @@ magic gateway config discord --bot-token <token>
 
 ## Building
 
+### Requirements
+- Go 1.21+
+- Node.js 18+ (for web dashboard)
+
+### Build for Current Platform
+
 ```bash
-# Build for current platform
-make build
+# Linux/macOS
+./scripts/build.sh
 
-# Cross-platform build
-make build-all
-
-# Build specific platform
-./scripts/build-cross.sh linux-amd64 darwin-arm64 windows-amd64
+# Windows
+.\scripts\windows\build.ps1
 ```
+
+### Development Build
+
+```bash
+# Build web assets first
+cd web && npm install && npm run build && cd ..
+
+# Copy web assets for embedding
+cp -r web/dist internal/server/dist
+
+# Build Go binary
+go build -o magic ./cmd/magic
+```
+
+### Cross-Platform Build
+
+```bash
+# Build for all platforms (includes web embedding)
+./scripts/build.sh all
+
+# Build specific targets
+./scripts/build.sh go      # Build Go binaries only
+./scripts/build.sh web     # Build web app only
+./scripts/build.sh docker  # Build Docker images
+```
+
+### Build Output
+
+The build script will automatically:
+1. Build the React web dashboard
+2. Copy web assets to `internal/server/dist` for embedding
+3. Compile Go binary with embedded frontend
+4. Create platform-specific packages
 
 ## Contributing
 

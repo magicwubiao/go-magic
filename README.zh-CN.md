@@ -218,16 +218,52 @@ magic gateway config discord --bot-token <token>
 
 ## 构建
 
+### 要求
+- Go 1.21+
+- Node.js 18+ (用于 web 仪表板)
+
+### 构建当前平台
+
 ```bash
-# 构建当前平台
-make build
+# Linux/macOS
+./scripts/build.sh
 
-# 跨平台构建
-make build-all
-
-# 构建指定平台
-./scripts/build-cross.sh linux-amd64 darwin-arm64 windows-amd64
+# Windows
+.\scripts\windows\build.ps1
 ```
+
+### 开发构建
+
+```bash
+# 先构建 web 资源
+cd web && npm install && npm run build && cd ..
+
+# 复制 web 资源用于嵌入
+cp -r web/dist internal/server/dist
+
+# 构建 Go 二进制
+go build -o magic ./cmd/magic
+```
+
+### 跨平台构建
+
+```bash
+# 构建所有平台（包含 web 嵌入）
+./scripts/build.sh all
+
+# 构建指定目标
+./scripts/build.sh go      # 仅构建 Go 二进制
+./scripts/build.sh web     # 仅构建 web 应用
+./scripts/build.sh docker  # 构建 Docker 镜像
+```
+
+### 构建输出
+
+构建脚本会自动执行：
+1. 构建 React web 仪表板
+2. 将 web 资源复制到 `internal/server/dist` 用于嵌入
+3. 编译包含嵌入式前端的 Go 二进制
+4. 创建平台特定的包
 
 ## 贡献
 
