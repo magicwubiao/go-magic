@@ -17,21 +17,32 @@ var staticFiles embed.FS
 
 // Session represents a chat session
 type Session struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Model     string    `json:"model"`
-	Platform  string    `json:"platform"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	Source          string    `json:"source"`
+	Model           string    `json:"model"`
+	Title           string    `json:"title"`
+	StartedAt       int64     `json:"started_at"`
+	EndedAt         *int64    `json:"ended_at"`
+	LastActive      int64     `json:"last_active"`
+	IsActive        bool      `json:"is_active"`
+	MessageCount    int       `json:"message_count"`
+	ToolCallCount   int       `json:"tool_call_count"`
+	InputTokens     int       `json:"input_tokens"`
+	OutputTokens    int       `json:"output_tokens"`
+	Preview         string    `json:"preview"`
+	ParentSessionID *string   `json:"parent_session_id"`
 }
 
 // Message represents a chat message
 type Message struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	ID          string                 `json:"id"`
+	SessionID   string                 `json:"session_id"`
+	Role        string                 `json:"role"`
+	Content     string                 `json:"content"`
+	Timestamp   int64                  `json:"timestamp"`
+	ToolCalls   []map[string]interface{} `json:"tool_calls,omitempty"`
+	ToolName    string                 `json:"tool_name,omitempty"`
+	ToolCallID  string                 `json:"tool_call_id,omitempty"`
 }
 
 // Toolset represents a group of tools
@@ -68,9 +79,12 @@ type Provider struct {
 	APIKey  string   `json:"api_key,omitempty"`
 }
 
-// HealthResponse represents health check response
-type HealthResponse struct {
-	Status string `json:"status"`
+// PlatformStatus represents platform status
+type PlatformStatus struct {
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	State        string `json:"state"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // Server represents the HTTP server
@@ -82,7 +96,7 @@ type Server struct {
 	toolsets    []Toolset
 	skills      []Skill
 	providers   []Provider
-	messages    []*Message
+	messages    map[string][]*Message
 }
 
 // NewServer creates a new server instance
@@ -92,6 +106,7 @@ func NewServer(dbPath string) *Server {
 		startTime:  time.Now(),
 		sessions:   make(map[string]*Session),
 		sessionList: []*Session{},
+		messages:   make(map[string][]*Message),
 		toolsets: []Toolset{
 			{ID: "web", Name: "Web", Tools: []string{"web_search", "web_extract"}, Enabled: true},
 			{ID: "terminal", Name: "Terminal", Tools: []string{"execute_command", "terminal"}, Enabled: true},
@@ -152,6 +167,7 @@ func (s *Server) Start(port int) error {
 	// Sessions
 	mux.HandleFunc("/api/sessions", withCORS(s.handleSessions))
 	mux.HandleFunc("/api/sessions/", withCORS(s.handleSessionByID))
+	mux.HandleFunc("/api/sessions/search", withCORS(s.handleSessionSearch))
 
 	// Chat
 	mux.HandleFunc("/api/chat", withCORS(s.handleChat))
@@ -219,15 +235,27 @@ func (s *Server) Start(port int) error {
 
 // handleHealth handles health check
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, HealthResponse{Status: "healthy"})
+	jsonResponse(w, map[string]string{"status": "healthy"})
 }
 
 // handleStatus handles status check
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
-		"status":    "ok",
-		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
+		"status":              "ok",
+		"timestamp":           time.Now().Unix(),
+		"version":             "1.0.0",
+		"active_sessions":     len(s.sessions),
+		"config_path":         "~/.magic/config.json",
+		"config_version":      1,
+		"env_path":            "~/.magic/.env",
+		"gateway_exit_reason": nil,
+		"gateway_health_url":  nil,
+		"gateway_pid":         nil,
+		"gateway_platforms":   map[string]PlatformStatus{},
+		"gateway_running":     false,
+		"gateway_state":       nil,
+		"magic_home":          "~/.magic",
+		"session_count":       len(s.sessions),
 	})
 }
 
@@ -235,7 +263,33 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		jsonResponse(w, s.sessionList)
+		limitStr := r.URL.Query().Get("limit")
+		offsetStr := r.URL.Query().Get("offset")
+		
+		limit := 20
+		if limitStr != "" {
+			if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+				limit = l
+			}
+		}
+		
+		offset := 0
+		if offsetStr != "" {
+			if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+				offset = o
+			}
+		}
+		
+		end := offset + limit
+		if end > len(s.sessionList) {
+			end = len(s.sessionList)
+		}
+		
+		jsonResponse(w, map[string]interface{}{
+			"sessions": s.sessionList[offset:end],
+			"total":    len(s.sessionList),
+			"limit":    limit,
+		})
 	case "POST":
 		var req struct {
 			Name     string `json:"name"`
@@ -247,28 +301,36 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request", 400)
 			return
 		}
+		
+		now := time.Now().Unix()
 		name := req.Name
 		if name == "" {
 			name = req.Title
 		}
 		if name == "" {
-			name = fmt.Sprintf("Chat %d", time.Now().Unix())
+			name = fmt.Sprintf("Chat %d", now)
 		}
+		
 		model := req.Model
 		if model == "" {
 			model = "gpt-4"
 		}
-		platform := req.Platform
-		if platform == "" {
-			platform = "web"
-		}
+		
 		session := &Session{
-			ID:        fmt.Sprintf("s_%d", time.Now().UnixNano()),
-			Name:      name,
-			Model:     model,
-			Platform:  platform,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+			ID:             fmt.Sprintf("s_%d", time.Now().UnixNano()),
+			Source:         "cli",
+			Model:          model,
+			Title:          name,
+			StartedAt:      now,
+			EndedAt:        nil,
+			LastActive:     now,
+			IsActive:       false,
+			MessageCount:   0,
+			ToolCallCount:  0,
+			InputTokens:    0,
+			OutputTokens:   0,
+			Preview:        "",
+			ParentSessionID: nil,
 		}
 		s.sessions[session.ID] = session
 		s.sessionList = append(s.sessionList, session)
@@ -280,7 +342,16 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionByID handles single session operations
 func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	
+	// Check for messages endpoint
+	if strings.HasSuffix(path, "/messages") {
+		sessionID := strings.TrimSuffix(path, "/messages")
+		s.handleSessionMessages(w, r, sessionID)
+		return
+	}
+	
+	id := path
 	if id == "" {
 		http.Error(w, "not found", 404)
 		return
@@ -303,10 +374,71 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		delete(s.messages, id)
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// handleSessionMessages handles session messages
+func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	
+	msgs := s.messages[sessionID]
+	if msgs == nil {
+		msgs = []*Message{}
+	}
+	
+	messages := make([]map[string]interface{}, len(msgs))
+	for i, msg := range msgs {
+		messages[i] = map[string]interface{}{
+			"id":         msg.ID,
+			"role":       msg.Role,
+			"content":    msg.Content,
+			"timestamp":  msg.Timestamp,
+			"tool_calls": msg.ToolCalls,
+			"tool_name":  msg.ToolName,
+			"tool_call_id": msg.ToolCallID,
+		}
+	}
+	
+	jsonResponse(w, map[string]interface{}{
+		"session_id": sessionID,
+		"messages":   messages,
+	})
+}
+
+// handleSessionSearch handles session search
+func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	
+	query := r.URL.Query().Get("q")
+	results := []map[string]interface{}{}
+	
+	for _, session := range s.sessionList {
+		if strings.Contains(strings.ToLower(session.Title), strings.ToLower(query)) ||
+		   strings.Contains(strings.ToLower(session.Model), strings.ToLower(query)) {
+			results = append(results, map[string]interface{}{
+				"session_id":       session.ID,
+				"snippet":          session.Preview,
+				"role":             nil,
+				"source":           session.Source,
+				"model":            session.Model,
+				"session_started":  session.StartedAt,
+			})
+		}
+	}
+	
+	jsonResponse(w, map[string]interface{}{
+		"results": results,
+	})
 }
 
 // handleChat handles chat messages
@@ -380,7 +512,7 @@ func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request) {
 // handleToolsetByID handles single toolset
 func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/tools/toolsets/")
-	id = strings.TrimPrefix(r.URL.Path, "/api/toolsets/")
+	id = strings.TrimPrefix(id, "/api/toolsets/")
 	
 	for _, ts := range s.toolsets {
 		if ts.ID == id {
@@ -577,12 +709,11 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	sessionCount := len(s.sessions)
-	messageCount := len(s.messages)
 	s.mu.RUnlock()
 	
 	jsonResponse(w, map[string]interface{}{
 		"sessions":     sessionCount,
-		"messages":     messageCount,
+		"messages":     0,
 		"uptime":       time.Since(s.startTime).String(),
 		"memory_usage": "N/A",
 	})
@@ -606,9 +737,21 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 	if days == "" {
 		days = "30"
 	}
-	jsonResponse(w, []map[string]interface{}{
-		{"model": "gpt-4", "requests": 100, "tokens": 50000},
-		{"model": "gpt-3.5-turbo", "requests": 200, "tokens": 80000},
+	jsonResponse(w, map[string]interface{}{
+		"models": []map[string]interface{}{
+			{"model": "gpt-4", "requests": 100, "tokens": 50000},
+			{"model": "gpt-3.5-turbo", "requests": 200, "tokens": 80000},
+		},
+		"totals": map[string]interface{}{
+			"distinct_models":      2,
+			"total_input":          100000,
+			"total_output":         50000,
+			"total_cache_read":     0,
+			"total_reasoning":      0,
+			"total_estimated_cost": 25.50,
+			"total_actual_cost":    25.50,
+			"total_sessions":       50,
+		},
 	})
 }
 
@@ -658,7 +801,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			Source:    "system",
 		})
 	}
-	jsonResponse(w, logs)
+	jsonResponse(w, map[string]interface{}{
+		"file":  "server.log",
+		"lines": logs,
+	})
 }
 
 // handleDashboardLogs handles dashboard logs
@@ -677,36 +823,419 @@ func (s *Server) handleDashboardLogs(w http.ResponseWriter, r *http.Request) {
 
 // handleDashboardThemes handles dashboard themes
 func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
-	themes := []map[string]interface{}{
-		{
-			"id": "dark", "name": "Dark", "label": "Dark",
-			"description": "Dark theme for night use", "preview": "#1a1a2e",
-			"colorOverrides": map[string]interface{}{
-				"primary": "#6366f1", "secondary": "#8b5cf6", "accent": "#a855f7",
-				"background": "#0f0f23", "surface": "#1a1a2e", "border": "#2d2d4a",
-				"text": "#e2e8f0", "textSecondary": "#94a3b8",
+	jsonResponse(w, map[string]interface{}{
+		"themes": []map[string]interface{}{
+			{
+				"name":        "default",
+				"label":       "Magic Teal",
+				"description": "Classic dark teal — the canonical Magic look",
+				"palette": map[string]interface{}{
+					"primary":      "#0d9488",
+					"primaryLight": "#14b8a6",
+					"primaryDark":  "#0f766e",
+					"accent":       "#8b5cf6",
+					"accentLight":  "#a78bfa",
+					"accentDark":   "#7c3aed",
+					"background":   "#0f172a",
+					"surface":      "#1e293b",
+					"surfaceLight": "#334155",
+					"text":         "#f8fafc",
+					"textMuted":    "#94a3b8",
+					"textDim":      "#64748b",
+					"border":       "#334155",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#ef4444",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#1e293b",
+					"cardForeground":       "#f8fafc",
+					"popover":              "#1e293b",
+					"popoverForeground":    "#f8fafc",
+					"primary":              "#0d9488",
+					"primaryForeground":    "#ffffff",
+					"secondary":            "#334155",
+					"secondaryForeground":  "#f8fafc",
+					"muted":                "#334155",
+					"mutedForeground":      "#94a3b8",
+					"accent":               "#8b5cf6",
+					"accentForeground":     "#ffffff",
+					"destructive":          "#ef4444",
+					"destructiveForeground": "#ffffff",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#334155",
+					"input":                "#334155",
+					"ring":                 "#0d9488",
+				},
+			},
+			{
+				"name":        "midnight",
+				"label":       "Midnight",
+				"description": "Deep blue-violet with cool accents",
+				"palette": map[string]interface{}{
+					"primary":      "#6366f1",
+					"primaryLight": "#818cf8",
+					"primaryDark":  "#4f46e5",
+					"accent":       "#c084fc",
+					"accentLight":  "#d8b4fe",
+					"accentDark":   "#a855f7",
+					"background":   "#0a0a1a",
+					"surface":      "#17172a",
+					"surfaceLight": "#272744",
+					"text":         "#fafafa",
+					"textMuted":    "#a1a1aa",
+					"textDim":      "#71717a",
+					"border":       "#272744",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#ef4444",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#17172a",
+					"cardForeground":       "#fafafa",
+					"popover":              "#17172a",
+					"popoverForeground":    "#fafafa",
+					"primary":              "#6366f1",
+					"primaryForeground":    "#ffffff",
+					"secondary":            "#272744",
+					"secondaryForeground":  "#fafafa",
+					"muted":                "#272744",
+					"mutedForeground":      "#a1a1aa",
+					"accent":               "#c084fc",
+					"accentForeground":     "#ffffff",
+					"destructive":          "#ef4444",
+					"destructiveForeground": "#ffffff",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#272744",
+					"input":                "#272744",
+					"ring":                 "#6366f1",
+				},
+			},
+			{
+				"name":        "ember",
+				"label":       "Ember",
+				"description": "Warm crimson and bronze — forge vibes",
+				"palette": map[string]interface{}{
+					"primary":      "#dc2626",
+					"primaryLight": "#ef4444",
+					"primaryDark":  "#b91c1c",
+					"accent":       "#d97706",
+					"accentLight":  "#f59e0b",
+					"accentDark":   "#b45309",
+					"background":   "#1a0a0a",
+					"surface":      "#2d1f1f",
+					"surfaceLight": "#4a3030",
+					"text":         "#fef3c7",
+					"textMuted":    "#d97706",
+					"textDim":      "#92400e",
+					"border":       "#4a3030",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#dc2626",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#2d1f1f",
+					"cardForeground":       "#fef3c7",
+					"popover":              "#2d1f1f",
+					"popoverForeground":    "#fef3c7",
+					"primary":              "#dc2626",
+					"primaryForeground":    "#ffffff",
+					"secondary":            "#4a3030",
+					"secondaryForeground":  "#fef3c7",
+					"muted":                "#4a3030",
+					"mutedForeground":      "#d97706",
+					"accent":               "#d97706",
+					"accentForeground":     "#1a0a0a",
+					"destructive":          "#dc2626",
+					"destructiveForeground": "#ffffff",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#4a3030",
+					"input":                "#4a3030",
+					"ring":                 "#dc2626",
+				},
+			},
+			{
+				"name":        "mono",
+				"label":       "Mono",
+				"description": "Clean grayscale — minimal and focused",
+				"palette": map[string]interface{}{
+					"primary":      "#6b7280",
+					"primaryLight": "#9ca3af",
+					"primaryDark":  "#4b5563",
+					"accent":       "#374151",
+					"accentLight":  "#4b5563",
+					"accentDark":   "#1f2937",
+					"background":   "#0f172a",
+					"surface":      "#1e293b",
+					"surfaceLight": "#334155",
+					"text":         "#f1f5f9",
+					"textMuted":    "#94a3b8",
+					"textDim":      "#64748b",
+					"border":       "#334155",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#ef4444",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#1e293b",
+					"cardForeground":       "#f1f5f9",
+					"popover":              "#1e293b",
+					"popoverForeground":    "#f1f5f9",
+					"primary":              "#6b7280",
+					"primaryForeground":    "#ffffff",
+					"secondary":            "#334155",
+					"secondaryForeground":  "#f1f5f9",
+					"muted":                "#334155",
+					"mutedForeground":      "#94a3b8",
+					"accent":               "#374151",
+					"accentForeground":     "#f1f5f9",
+					"destructive":          "#ef4444",
+					"destructiveForeground": "#ffffff",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#334155",
+					"input":                "#334155",
+					"ring":                 "#6b7280",
+				},
+			},
+			{
+				"name":        "cyberpunk",
+				"label":       "Cyberpunk",
+				"description": "Neon green on black — matrix terminal",
+				"palette": map[string]interface{}{
+					"primary":      "#22c55e",
+					"primaryLight": "#4ade80",
+					"primaryDark":  "#16a34a",
+					"accent":       "#8b5cf6",
+					"accentLight":  "#a78bfa",
+					"accentDark":   "#7c3aed",
+					"background":   "#020617",
+					"surface":      "#0f172a",
+					"surfaceLight": "#1e293b",
+					"text":         "#22c55e",
+					"textMuted":    "#4ade80",
+					"textDim":      "#16a34a",
+					"border":       "#1e293b",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#ef4444",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#0f172a",
+					"cardForeground":       "#22c55e",
+					"popover":              "#0f172a",
+					"popoverForeground":    "#22c55e",
+					"primary":              "#22c55e",
+					"primaryForeground":    "#020617",
+					"secondary":            "#1e293b",
+					"secondaryForeground":  "#22c55e",
+					"muted":                "#1e293b",
+					"mutedForeground":      "#4ade80",
+					"accent":               "#8b5cf6",
+					"accentForeground":     "#020617",
+					"destructive":          "#ef4444",
+					"destructiveForeground": "#020617",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#1e293b",
+					"input":                "#1e293b",
+					"ring":                 "#22c55e",
+				},
+			},
+			{
+				"name":        "rose",
+				"label":       "Rosé",
+				"description": "Soft pink and warm ivory — easy on the eyes",
+				"palette": map[string]interface{}{
+					"primary":      "#f472b6",
+					"primaryLight": "#f9a8d4",
+					"primaryDark":  "#ec4899",
+					"accent":       "#fb923c",
+					"accentLight":  "#fdba74",
+					"accentDark":   "#f97316",
+					"background":   "#1c1917",
+					"surface":      "#292524",
+					"surfaceLight": "#44403c",
+					"text":         "#fef3c7",
+					"textMuted":    "#d6d3d1",
+					"textDim":      "#a8a29e",
+					"border":       "#44403c",
+					"success":      "#22c55e",
+					"warning":      "#f59e0b",
+					"error":        "#ef4444",
+					"info":         "#3b82f6",
+				},
+				"typography": map[string]interface{}{
+					"fontFamily":    "Inter, system-ui, sans-serif",
+					"fontFamilyMono": "JetBrains Mono, monospace",
+					"fontSizeSm":     "0.875rem",
+					"fontSize":       "1rem",
+					"fontSizeLg":     "1.125rem",
+					"fontSizeXl":     "1.25rem",
+					"fontSize2Xl":    "1.5rem",
+					"fontWeightNormal": "400",
+					"fontWeightMedium": "500",
+					"fontWeightBold":   "600",
+				},
+				"layout": map[string]interface{}{
+					"sidebarWidth":         "256px",
+					"sidebarWidthCollapsed": "64px",
+					"headerHeight":         "64px",
+					"footerHeight":         "48px",
+					"contentPadding":       "1rem",
+					"radius":               "0.5rem",
+					"radiusLg":             "0.75rem",
+					"radiusSm":             "0.25rem",
+				},
+				"layoutVariant": "standard",
+				"colorOverrides": map[string]interface{}{
+					"card":                 "#292524",
+					"cardForeground":       "#fef3c7",
+					"popover":              "#292524",
+					"popoverForeground":    "#fef3c7",
+					"primary":              "#f472b6",
+					"primaryForeground":    "#1c1917",
+					"secondary":            "#44403c",
+					"secondaryForeground":  "#fef3c7",
+					"muted":                "#44403c",
+					"mutedForeground":      "#d6d3d1",
+					"accent":               "#fb923c",
+					"accentForeground":     "#1c1917",
+					"destructive":          "#ef4444",
+					"destructiveForeground": "#1c1917",
+					"success":              "#22c55e",
+					"warning":              "#f59e0b",
+					"border":               "#44403c",
+					"input":                "#44403c",
+					"ring":                 "#f472b6",
+				},
 			},
 		},
-		{
-			"id": "light", "name": "Light", "label": "Light",
-			"description": "Light theme for day use", "preview": "#ffffff",
-			"colorOverrides": map[string]interface{}{
-				"primary": "#6366f1", "secondary": "#8b5cf6", "accent": "#a855f7",
-				"background": "#ffffff", "surface": "#f8fafc", "border": "#e2e8f0",
-				"text": "#1e293b", "textSecondary": "#64748b",
-			},
-		},
-		{
-			"id": "cyber", "name": "Cyber", "label": "Cyber",
-			"description": "Cyberpunk style theme", "preview": "#00ff41",
-			"colorOverrides": map[string]interface{}{
-				"primary": "#00ff41", "secondary": "#00d4ff", "accent": "#ff00ff",
-				"background": "#0a0a0a", "surface": "#1a1a1a", "border": "#00ff41",
-				"text": "#00ff41", "textSecondary": "#00aa00",
-			},
-		},
-	}
-	jsonResponse(w, themes)
+		"active": "default",
+	})
 }
 
 // handleSettings handles settings
@@ -717,7 +1246,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"timezone": "UTC",
 		},
 		"appearance": map[string]interface{}{
-			"theme": "dark",
+			"theme":    "dark",
 			"fontSize": 14,
 		},
 	})
@@ -780,7 +1309,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try embedded files first
-	data, err := staticFiles.ReadFile("dist" + path[1:])
+	data, err := staticFiles.ReadFile("dist" + path)
 	if err == nil {
 		contentType := getContentType(path)
 		w.Header().Set("Content-Type", contentType)
@@ -788,7 +1317,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		// Serve index.html for SPA routes (remove trailing slash issues)
+	// Serve index.html for SPA routes (remove trailing slash issues)
 	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings"}
 	for _, spa := range spaPaths {
 		if strings.HasPrefix(path, spa) {

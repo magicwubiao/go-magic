@@ -32,7 +32,7 @@ var serverCmd = &cobra.Command{
 			if err != nil {
 				homeDir = os.TempDir()
 			}
-			magicHome = homeDir + "/.go-magic"
+			magicHome = homeDir + "/.magic"
 		}
 
 		dbPath := magicHome + "/sessions.db"

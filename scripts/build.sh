@@ -27,6 +27,25 @@ clean() {
     mkdir -p "$BUILD_DIR"
 }
 
+# Copy web dist to internal/server/dist for embedding
+copy_web_dist() {
+    info "Copying web/dist to internal/server/dist..."
+    
+    local web_dist="${PROJECT_DIR}/web/dist"
+    local server_dist="${PROJECT_DIR}/internal/server/dist"
+    
+    if [ -d "$server_dist" ]; then
+        rm -rf "$server_dist"
+    fi
+    
+    if [ -d "$web_dist" ]; then
+        cp -r "$web_dist" "$server_dist"
+        success "Frontend files copied"
+    else
+        info "web/dist not found, skipping copy"
+    fi
+}
+
 # Build Go binary
 build_go() {
     local os=$1
@@ -48,6 +67,9 @@ build_go() {
 # Build all platforms
 build_all() {
     info "Building for all platforms..."
+    
+    # Ensure web dist is copied before building
+    copy_web_dist
     
     # Linux
     build_go linux amd64
@@ -274,6 +296,7 @@ main() {
             ;;
         go)
             clean
+            copy_web_dist
             build_go linux amd64
             ;;
         web)
@@ -284,13 +307,13 @@ main() {
             ;;
         all)
             clean
-            build_all
             build_web
+            build_all
             package_all
             ;;
         release)
-            build_all
             build_web
+            build_all
             package_all
             build_docker
             upload_releases
