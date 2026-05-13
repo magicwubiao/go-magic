@@ -492,5 +492,5 @@ func hashURL(s string) string {
 
 // DefaultRepositoryURL returns the default plugin repository URL
 func DefaultRepositoryURL() string {
-	return "https://plugins.go-magic.dev"
+	return "https://plugins.magic.dev"
 }

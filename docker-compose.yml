@@ -18,7 +18,7 @@ services:
     environment:
       - TZ=UTC
     volumes:
-      - magic-config:/home/magic/.go-magic
+      - magic-config:/home/magic/.magic
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - magic-network

@@ -90,7 +90,7 @@ export default defineConfig({
     ],
   },
   build: {
-    outDir: "../magic_cli/web_dist",
+    outDir: "./dist",
     emptyOutDir: true,
   },
   server: {

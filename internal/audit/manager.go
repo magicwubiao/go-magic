@@ -510,5 +510,5 @@ func getMagicHomeDir() string {
 	if err != nil {
 		home = "/tmp"
 	}
-	return filepath.Join(home, ".go-magic")
+	return filepath.Join(home, ".magic")
 }

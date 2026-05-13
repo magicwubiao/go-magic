@@ -15,7 +15,7 @@ type Profile struct {
 
 // ProfileManager manages multiple isolated configuration profiles
 type ProfileManager struct {
-	homeBase  string               // Base directory for all profiles (e.g., ~/.go-magic/profiles)
+	homeBase  string               // Base directory for all profiles (e.g., ~/.magic/profiles)
 	mu        sync.RWMutex
 	current   *Profile
 	profiles  map[string]*Profile

@@ -31,7 +31,7 @@ NC='\033[0m'
 # Config
 REPO="magicwubiao/go-magic"
 VERSION="${VERSION:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.go-magic}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.magic}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_METHOD="${INSTALL_METHOD:-binary}"
@@ -51,7 +51,7 @@ ${GREEN}go-magic 一键安装脚本${NC}
 选项:
     --method <method>      安装方式: binary, homebrew, docker, apt (default: binary)
     --version <ver>        指定版本 (default: latest)
-    --dir <path>           安装目录 (default: ~/.go-magic)
+    --dir <path>           安装目录 (default: ~/.magic)
     --bin-dir <path>       bin 目录 (default: ~/.local/bin)
     --help                 显示此帮助
 

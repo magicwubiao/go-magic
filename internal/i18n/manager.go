@@ -32,7 +32,7 @@ func NewManager(dataDir, defaultLocale string) (*Manager, error) {
 		if err != nil {
 			home = "/tmp"
 		}
-		dataDir = filepath.Join(home, ".go-magic", "i18n")
+		dataDir = filepath.Join(home, ".magic", "i18n")
 	}
 
 	m := &Manager{

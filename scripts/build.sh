@@ -170,7 +170,7 @@ build_wrapper_installer() {
     local pyinstaller="${PROJECT_DIR}/scripts/pyinstaller"
     mkdir -p "$pyinstaller"
     
-    cat > "${pyinstaller}/spec.go-magic" << 'PYEOF'
+    cat > "${pyinstaller}/spec.magic" << 'PYEOF'
 # -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
@@ -222,7 +222,7 @@ PYEOF
     # 构建 Linux 版本
     if command -v pyinstaller &> /dev/null; then
         cd "${pyinstaller}"
-        pyinstaller spec.go-magic
+        pyinstaller spec.magic
         success "PyInstaller build completed"
     else
         info "PyInstaller not found, skipping..."

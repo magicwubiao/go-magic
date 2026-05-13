@@ -58,7 +58,7 @@ COPY --from=builder /magic /app/magic
 COPY --from=builder /app/web/dist /app/web/dist 2>/dev/null || true
 
 # Create config directory
-RUN mkdir -p /home/magic/.go-magic && \
+RUN mkdir -p /home/magic/.magic && \
     chown -R magic:magic /home/magic
 
 # Switch to non-root user

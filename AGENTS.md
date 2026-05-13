@@ -545,7 +545,7 @@ templates := ListTemplates()
 
 ### 目录结构
 ```
-~/.go-magic/
+~/.magic/
 ├── config.yaml          # 默认配置
 ├── .env                 # 默认密钥
 ├── skills/              # 默认技能
@@ -558,7 +558,7 @@ templates := ListTemplates()
 
 ### 配置示例
 ```yaml
-# ~/.go-magic/profiles/work/config.yaml
+# ~/.magic/profiles/work/config.yaml
 provider:
   name: deepseek
   api_key: ${DEEPSEEK_API_KEY}
@@ -570,7 +570,7 @@ memory:
 
 ### 环境变量
 ```bash
-export GO_MAGIC_HOME=~/.go-magic
+export GO_MAGIC_HOME=~/.magic
 export GO_MAGIC_PROFILE=work  # 使用 work 配置
 ```
 
@@ -1144,7 +1144,7 @@ magic skin export [name]    # 导出皮肤为 JSON
 ```
 
 ### 皮肤配置示例
-用户皮肤存储在 `~/.go-magic/skins/` 目录，YAML 格式：
+用户皮肤存储在 `~/.magic/skins/` 目录，YAML 格式：
 
 ```yaml
 name: my-theme

@@ -142,7 +142,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Enabled:       true,
 		DefaultMode:   "understand",
-		ImageCacheDir: filepath.Join(os.Getenv("HOME"), ".go-magic", "vision-cache"),
+		ImageCacheDir: filepath.Join(os.Getenv("HOME"), ".magic", "vision-cache"),
 		MaxImageSize:  50 * 1024 * 1024, // 50MB
 		Timeout:       120 * time.Second,
 	}

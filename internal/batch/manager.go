@@ -36,8 +36,8 @@ func DefaultConfig() *Config {
 		MaxConcurrent: 5,
 		RetryCount:    3,
 		RetryDelay:    5 * time.Second,
-		ResultDir:     filepath.Join(os.Getenv("HOME"), ".go-magic", "batch-results"),
-		ProgressDir:   filepath.Join(os.Getenv("HOME"), ".go-magic", "batch-progress"),
+		ResultDir:     filepath.Join(os.Getenv("HOME"), ".magic", "batch-results"),
+		ProgressDir:   filepath.Join(os.Getenv("HOME"), ".magic", "batch-progress"),
 		Timeout:       1 * time.Hour,
 	}
 }

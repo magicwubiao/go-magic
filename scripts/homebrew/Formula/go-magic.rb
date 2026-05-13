@@ -39,7 +39,7 @@ class GoMagic < Formula
     puts "  magic chat               # Start interactive chat"
     puts "  magic setup              # Initial setup"
     puts ""
-    puts "Configuration is stored in: #{Dir.home}/.go-magic"
+    puts "Configuration is stored in: #{Dir.home}/.magic"
     puts ""
   end
 

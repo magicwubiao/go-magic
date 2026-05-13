@@ -127,13 +127,13 @@ run:
 # Docker
 docker: build-docker
 	docker run --rm -it \
-		-v ~/.go-magic:/root/.go-magic \
+		-v ~/.magic:/root/.magic \
 		magicwubiao/go-magic:$(VERSION)
 
 docker-run:
 	docker run -d -p 8642:8642 \
 		--name go-magic \
-		-v ~/.go-magic:/root/.go-magic \
+		-v ~/.magic:/root/.magic \
 		-e GO_MAGIC_PROFILE=default \
 		magicwubiao/go-magic:$(VERSION)
 

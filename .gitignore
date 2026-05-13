@@ -5,7 +5,7 @@ magic-server
 
 # Web build
 web/node_modules/
-web/dist/
+!web/dist/
 web/dist-node/
 web/*.tsbuildinfo
 web/pnpm-lock.yaml
