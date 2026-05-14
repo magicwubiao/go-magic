@@ -448,3 +448,125 @@ func (w *Waiter) Fail(msg string) {
 	}
 	fmt.Println(w.renderer.Error(msg))
 }
+
+// MarkdownRenderer renders markdown content
+type MarkdownRenderer struct {
+	noColor bool
+}
+
+// NewMarkdownRenderer creates a new markdown renderer
+func NewMarkdownRenderer(noColor bool) *MarkdownRenderer {
+	return &MarkdownRenderer{
+		noColor: noColor,
+	}
+}
+
+// Render renders markdown to styled text
+func (r *MarkdownRenderer) Render(text string) string {
+	// For now, just return the text (basic implementation)
+	// In a real implementation, this would convert markdown to styled terminal output
+	return text
+}
+
+// RenderStreaming renders markdown content streamingly
+func (r *MarkdownRenderer) RenderStreaming(text string) string {
+	// For now, just return the text (basic implementation)
+	return text
+}
+
+// ToolCallDisplay holds tool call information for display
+type ToolCallDisplay struct {
+	Name      string
+	Arguments string
+	Started   time.Time
+	Ended     time.Time
+	Success   bool
+	Error     string
+}
+
+// ToolCallRenderer renders tool call information
+type ToolCallRenderer struct {
+	noColor bool
+}
+
+// NewToolCallRenderer creates a new tool call renderer
+func NewToolCallRenderer(noColor bool) *ToolCallRenderer {
+	return &ToolCallRenderer{
+		noColor: noColor,
+	}
+}
+
+// RenderStart renders the start of a tool call
+func (r *ToolCallRenderer) RenderStart(display *ToolCallDisplay) {
+	if r.noColor {
+		fmt.Printf("Calling tool: %s with args: %s\n", display.Name, display.Arguments)
+	} else {
+		fmt.Printf("\033[36mCalling tool:\033[0m \033[32m%s\033[0m \033[36mwith args:\033[0m %s\n", display.Name, display.Arguments)
+	}
+}
+
+// RenderResult renders the result of a tool call
+func (r *ToolCallRenderer) RenderResult(display *ToolCallDisplay) {
+	duration := display.Ended.Sub(display.Started)
+	if r.noColor {
+		if display.Success {
+			fmt.Printf("Tool %s completed in %v\n", display.Name, duration)
+		} else {
+			fmt.Printf("Tool %s failed: %s\n", display.Name, display.Error)
+		}
+	} else {
+		if display.Success {
+			fmt.Printf("\033[32m✓\033[0m Tool \033[32m%s\033[0m completed in %v\n", display.Name, duration)
+		} else {
+			fmt.Printf("\033[31m✗\033[0m Tool \033[31m%s\033[0m failed: %s\n", display.Name, display.Error)
+		}
+	}
+}
+
+// CostInfo holds cost information for display
+type CostInfo struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+	TotalCost    float64
+	Currency     string
+}
+
+// CostRenderer renders cost information
+type CostRenderer struct {
+	noColor bool
+}
+
+// NewCostRenderer creates a new cost renderer
+func NewCostRenderer(noColor bool) *CostRenderer {
+	return &CostRenderer{
+		noColor: noColor,
+	}
+}
+
+// RenderCost renders cost information
+func (r *CostRenderer) RenderCost(info *CostInfo) {
+	if r.noColor {
+		fmt.Println()
+		fmt.Println("╔═══════════════════════════════════════╗")
+		fmt.Println("║           Usage Statistics            ║")
+		fmt.Println("╠═══════════════════════════════════════╣")
+		fmt.Printf("║  Input Tokens:   %-18d ║\n", info.InputTokens)
+		fmt.Printf("║  Output Tokens:  %-18d ║\n", info.OutputTokens)
+		fmt.Printf("║  Total Tokens:   %-18d ║\n", info.TotalTokens)
+		fmt.Printf("║  Est. Cost:      %-18.4f %s ║\n", info.TotalCost, info.Currency)
+		fmt.Println("╚═══════════════════════════════════════╝")
+		fmt.Println()
+	} else {
+		fmt.Println()
+		fmt.Printf("\033[36m╔═══════════════════════════════════════╗\033[0m\n")
+		fmt.Printf("\033[36m║%s           📊 Usage Statistics%s            \033[36m║\033[0m\n", "\033[0m", "\033[0m")
+		fmt.Printf("\033[36m╠═══════════════════════════════════════╣\033[0m\n")
+		fmt.Printf("\033[36m║%s  Input Tokens:   \033[33m%-18d\033[0m \033[36m║\033[0m\n", "\033[0m", info.InputTokens)
+		fmt.Printf("\033[36m║%s  Output Tokens:  \033[33m%-18d\033[0m \033[36m║\033[0m\n", "\033[0m", info.OutputTokens)
+		fmt.Printf("\033[36m║%s  Total Tokens:   \033[33m%-18d\033[0m \033[36m║\033[0m\n", "\033[0m", info.TotalTokens)
+		fmt.Printf("\033[36m║%s  Est. Cost:      \033[32m%-18.4f %s\033[0m \033[36m║\033[0m\n", "\033[0m", info.TotalCost, info.Currency)
+		fmt.Printf("\033[36m╚═══════════════════════════════════════╝\033[0m\n")
+		fmt.Println()
+	}
+}

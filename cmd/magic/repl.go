@@ -23,6 +23,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/internal/skin"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -84,9 +85,9 @@ type REPL struct {
 	checkpointMgr *session.CheckpointManager
 
 	// Renderers
-	mdRenderer   *MarkdownRenderer   // Markdown 渲染
-	toolRenderer *ToolCallRenderer   // 工具调用渲染
-	costRenderer *CostRenderer      // 成本统计渲染
+	mdRenderer   *skin.MarkdownRenderer   // Markdown 渲染
+	toolRenderer *skin.ToolCallRenderer   // 工具调用渲染
+	costRenderer *skin.CostRenderer      // 成本统计渲染
 
 	// State
 	state REPLState
@@ -152,9 +153,9 @@ RULES:
 	}
 
 	// Initialize renderers
-	repl.mdRenderer = NewMarkdownRenderer(flagNoColor)
-	repl.toolRenderer = NewToolCallRenderer(flagNoColor)
-	repl.costRenderer = NewCostRenderer(flagNoColor)
+	repl.mdRenderer = skin.NewMarkdownRenderer(false)
+	repl.toolRenderer = skin.NewToolCallRenderer(false)
+	repl.costRenderer = skin.NewCostRenderer(false)
 
 	// Initialize checkpoint manager for session persistence
 	if cm, err := session.NewCheckpointManager(); err == nil {
@@ -561,7 +562,7 @@ func (r *REPL) renderMarkdown(content string) string {
 // renderToolCall renders a tool call with enhanced display
 func (r *REPL) renderToolCall(toolName string, args string) {
 	if r.toolRenderer != nil {
-		display := &ToolCallDisplay{
+		display := &skin.ToolCallDisplay{
 			Name:      toolName,
 			Arguments: args,
 			Started:   time.Now(),
@@ -573,7 +574,7 @@ func (r *REPL) renderToolCall(toolName string, args string) {
 // renderToolResult renders tool call result
 func (r *REPL) renderToolResult(toolName string, success bool, duration time.Duration) {
 	if r.toolRenderer != nil {
-		r.toolRenderer.RenderResult(&ToolCallDisplay{
+		r.toolRenderer.RenderResult(&skin.ToolCallDisplay{
 			Name:    toolName,
 			Started: time.Now().Add(-duration),
 			Ended:   time.Now(),
@@ -583,7 +584,7 @@ func (r *REPL) renderToolResult(toolName string, success bool, duration time.Dur
 }
 
 // renderCost renders cost information
-func (r *REPL) renderCost(info CostInfo) {
+func (r *REPL) renderCost(info skin.CostInfo) {
 	if r.costRenderer != nil {
 		r.costRenderer.RenderCost(&info)
 	}
@@ -764,7 +765,7 @@ func (r *REPL) cmdUsage() {
 
 	// Use cost renderer for enhanced display
 	if r.costRenderer != nil {
-		costInfo := &CostInfo{
+		costInfo := &skin.CostInfo{
 			InputTokens:  inputTokens,
 			OutputTokens: r.state.outputTokens,
 			TotalTokens:  inputTokens + r.state.outputTokens,
