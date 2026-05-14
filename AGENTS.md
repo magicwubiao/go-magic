@@ -53,3 +53,44 @@ magic doctor            # 诊断
 - **运行时**：golang-1.25
 - **部署类型**：service/web
 - **入口**：`cmd/magic/main.go`
+
+## REPL 命令行人机交互
+
+参考 DeepSeek-TUI 优化了交互体验：
+
+### 渲染组件
+- **MarkdownRenderer** (`repl_renderer.go`) - Markdown 流式渲染，支持标题、代码块、列表、链接等
+- **ToolCallRenderer** - 工具调用状态显示，带进度条和耗时统计
+- **CostRenderer** - 实时成本/Token 统计显示
+- **ThinkingRenderer** - 思考过程渲染器
+- **StatusBarRenderer** - 底部状态栏渲染
+
+### 补全系统
+- **Completer** (`repl_completion.go`) - 命令/上下文自动补全
+- 支持 `/` 命令补全、`@` 技能/工具补全、`model:` 模型补全
+- 文件路径补全、命令历史补全
+
+### 快捷键
+| 键 | 功能 |
+|---|---|
+| Tab | 自动补全 |
+| ↑↓ | 历史记录导航 |
+| Ctrl+C | 中断生成 |
+| Ctrl+L | 清屏 |
+| Shift+Tab | 循环切换思考模式 |
+
+### 命令
+| 命令 | 功能 |
+|------|------|
+| `/help` | 显示帮助 |
+| `/new` | 新对话 |
+| `/clear` | 清屏 |
+| `/usage` | 使用统计 |
+| `/tools` | 工具列表 |
+| `/skills` | 技能列表 |
+| `/stream` | 切换流式输出 |
+| `/think [off/high/max]` | 设置思考模式 |
+| `/context` | 上下文信息 |
+| `/save` / `/load` | 会话保存/加载 |
+| `/stop` | 停止生成 |
+| `/undo` / `/retry` | 撤销/重试 |

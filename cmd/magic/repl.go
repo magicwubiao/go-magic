@@ -83,6 +83,11 @@ type REPL struct {
 	goalManager *agent.GoalManager
 	checkpointMgr *session.CheckpointManager
 
+	// Renderers
+	mdRenderer   *MarkdownRenderer   // Markdown 渲染
+	toolRenderer *ToolCallRenderer   // 工具调用渲染
+	costRenderer *CostRenderer      // 成本统计渲染
+
 	// State
 	state REPLState
 
@@ -145,6 +150,11 @@ RULES:
 		stopCh:   make(chan struct{}),
 		running:  true,
 	}
+
+	// Initialize renderers
+	repl.mdRenderer = NewMarkdownRenderer(flagNoColor)
+	repl.toolRenderer = NewToolCallRenderer(flagNoColor)
+	repl.costRenderer = NewCostRenderer(flagNoColor)
 
 	// Initialize checkpoint manager for session persistence
 	if cm, err := session.NewCheckpointManager(); err == nil {
@@ -650,10 +660,54 @@ func (r *REPL) runConversation(input string) {
 	fmt.Println() // Extra newline after response
 }
 
-// renderStreaming renders streaming content with basic formatting
+// renderStreaming renders streaming content with Markdown formatting
 func (r *REPL) renderStreaming(content string) {
-	// Basic rendering - just print with some handling for code blocks
-	fmt.Print(content)
+	// Use Markdown renderer for enhanced display
+	if r.mdRenderer != nil {
+		// For streaming, we render partial content with proper formatting
+		fmt.Print(r.mdRenderer.RenderStreaming(content))
+	} else {
+		fmt.Print(content)
+	}
+}
+
+// renderMarkdown renders complete Markdown text
+func (r *REPL) renderMarkdown(content string) string {
+	if r.mdRenderer != nil {
+		return r.mdRenderer.Render(content)
+	}
+	return content
+}
+
+// renderToolCall renders a tool call with enhanced display
+func (r *REPL) renderToolCall(toolName string, args string) {
+	if r.toolRenderer != nil {
+		display := &ToolCallDisplay{
+			Name:      toolName,
+			Arguments: args,
+			Started:   time.Now(),
+		}
+		r.toolRenderer.RenderStart(display)
+	}
+}
+
+// renderToolResult renders tool call result
+func (r *REPL) renderToolResult(toolName string, success bool, duration time.Duration) {
+	if r.toolRenderer != nil {
+		r.toolRenderer.RenderResult(&ToolCallDisplay{
+			Name:    toolName,
+			Started: time.Now().Add(-duration),
+			Ended:   time.Now(),
+			Success: success,
+		})
+	}
+}
+
+// renderCost renders cost information
+func (r *REPL) renderCost(info CostInfo) {
+	if r.costRenderer != nil {
+		r.costRenderer.RenderCost(&info)
+	}
 }
 
 // saveSession saves the current session
@@ -830,6 +884,20 @@ func (r *REPL) cmdUsage() {
 		inputTokens += len(msg.Content) / 4
 	}
 
+	// Use cost renderer for enhanced display
+	if r.costRenderer != nil {
+		costInfo := &CostInfo{
+			InputTokens:  inputTokens,
+			OutputTokens: r.state.outputTokens,
+			TotalTokens:  inputTokens + r.state.outputTokens,
+			TotalCost:    float64(inputTokens+r.state.outputTokens) * 0.00001, // Rough estimate
+			Currency:     "USD",
+		}
+		r.costRenderer.RenderCost(costInfo)
+		return
+	}
+
+	// Fallback to simple display
 	fmt.Println()
 	fmt.Printf("%s╔═══════════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s           %s📊 Usage Statistics%s            %s║%s\n", colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
@@ -2112,49 +2180,6 @@ func isValidCommand(input string) bool {
 	}
 
 	return validCmds[cmd]
-}
-
-// Tab completion helper
-type Completer struct {
-	commands []string
-	history  []string
-}
-
-func NewCompleter() *Completer {
-	return &Completer{
-		commands: []string{
-			"help", "exit", "quit", "new", "reset", "model", "compress",
-			"usage", "tools", "skills", "undo", "retry", "stop", "save",
-			"load", "stream", "clear", "history", "insights", "personality",
-			"export", "req", "reqs", "req-done", "req-del", "req-priority", "context", "goal",
-		},
-	}
-}
-
-// Complete returns completions for the given input
-func (c *Completer) Complete(input string) []string {
-	var results []string
-
-	// Command completion
-	if strings.HasPrefix(input, "/") {
-		partial := strings.TrimPrefix(input, "/")
-		for _, cmd := range c.commands {
-			if strings.HasPrefix(cmd, partial) {
-				results = append(results, "/"+cmd)
-			}
-		}
-	}
-
-	// History completion (for non-slash commands)
-	if !strings.HasPrefix(input, "/") && len(input) > 0 {
-		for _, h := range c.history {
-			if strings.HasPrefix(h, input) {
-				results = append(results, h)
-			}
-		}
-	}
-
-	return results
 }
 
 // sanitizeInput removes non-printable characters
