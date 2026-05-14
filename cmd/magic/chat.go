@@ -22,8 +22,8 @@ import (
 
 var chatCmd = &cobra.Command{
 	Use:   "chat",
-	Short: "Start interactive chat with magic Agent",
-	Long:  "Start an interactive chat session with magic Agent.\nFeatures: streaming output, slash commands, skills loading, session persistence.\nType /help to see available commands.",
+	Short: "Start interactive chat with Magic Agent",
+	Long:  "Start an interactive chat session with Magic Agent.\nFeatures: streaming output, slash commands, skills loading, session persistence.\nType /help to see available commands.",
 	RunE:  runChat,
 }
 
@@ -196,8 +196,8 @@ RULES:
 	var historyBeforeUndo []provider.Message
 	var lastUserInput string
 
-	fmt.Printf("magic Agent v%s\n", Version)
-	logInfo("magic Agent v%s started | Provider: %s | Model: %s | Tools: %d", Version, cfg.Provider, cfg.Model, len(toolsSchema))
+	fmt.Printf("Magic Agent v%s\n", Version)
+	logInfo("Magic Agent v%s started | Provider: %s | Model: %s | Tools: %d", Version, cfg.Provider, cfg.Model, len(toolsSchema))
 	fmt.Printf("Provider: %s | Model: %s\n", cfg.Provider, cfg.Model)
 	fmt.Printf("Streaming: %s | Commands: /help\n\n", map[bool]string{true: "ON", false: "OFF"}[streamingEnabled])
 
@@ -445,7 +445,7 @@ func parseSlashCommand(input string) (string, string) {
 
 // showHelp displays help information
 func showHelp() {
-	fmt.Println("\n=== magic Agent Commands ===")
+	fmt.Println("\n=== Magic Agent Commands ===")
 	fmt.Println()
 	fmt.Println("  /new, /reset  - Start a new conversation")
 	fmt.Println("  /model        - Show current model")

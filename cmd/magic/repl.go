@@ -243,41 +243,9 @@ func (r *REPL) readInput() (string, error) {
 	prompt := r.makePrompt()
 	fmt.Print(prompt)
 
-	var lines []string
-	emptyLineCount := 0
-	pasteBuffer := []string{} // Buffer for detecting paste operations
-	isPasting := false
-	pasteTimeout := time.NewTimer(0)
-	pasteTimeout.Stop() // Initially stopped
-
 	for {
-		// Show continuation prompt if in multi-line mode
-		if len(lines) > 0 && !isPasting {
-			// Show line count and continuation indicator
-			fmt.Printf("%s[%d] > %s", colorGray, len(lines)+1, colorReset)
-		}
-
-		// Set up paste detection timeout
-		if len(pasteBuffer) > 0 && !pasteTimeout.Stop() {
-			// Timeout fired - paste is complete
-			isPasting = false
-			lines = append(lines, pasteBuffer...)
-			pasteBuffer = []string{}
-			// Show completion message
-			fmt.Printf("\n%s[Pasted %d lines]%s\n", colorGreen, len(lines), colorReset)
-			// Return all pasted content as single input
-			return strings.Join(lines, "\n"), nil
-		}
-
 		line, err := r.reader.ReadString('\n')
 		if err != nil {
-			// Handle EOF - return what we have if any
-			if len(lines) > 0 {
-				return strings.Join(lines, "\n"), nil
-			}
-			if len(pasteBuffer) > 0 {
-				return strings.Join(pasteBuffer, "\n"), nil
-			}
 			return "", err
 		}
 
@@ -285,24 +253,13 @@ func (r *REPL) readInput() (string, error) {
 
 		// Handle Ctrl+D (EOF on Unix) - treated as end of input
 		if line == "\x04" {
-			if len(lines) > 0 {
-				return strings.Join(lines, "\n"), nil
-			}
-			if len(pasteBuffer) > 0 {
-				return strings.Join(pasteBuffer, "\n"), nil
-			}
 			return "", fmt.Errorf("EOF")
 		}
 
 		// Handle Ctrl+C - cancel input
 		if line == "\x03" {
 			fmt.Printf("\n%s[Input cancelled]%s\n", colorYellow, colorReset)
-			prompt := r.makePrompt()
 			fmt.Print(prompt)
-			lines = []string{}
-			pasteBuffer = []string{}
-			emptyLineCount = 0
-			isPasting = false
 			continue
 		}
 
@@ -311,89 +268,11 @@ func (r *REPL) readInput() (string, error) {
 			continue // Skip arrow key escape sequences
 		}
 
-		// Detect paste operation: if we get multiple lines quickly
-		// Paste detection: any input after we've just started suggests paste
-		if len(lines) == 0 && !isPasting {
-			// Check if this looks like a paste (contains newlines or is part of multi-line content)
-			// Actually, we can't detect newlines here since ReadString splits on \n
-			// Instead, we use timing: if multiple lines come in quick succession
-			// First line after prompt - could be paste or normal input
-			// If we're in single-line mode and get content, start paste timer
-			// Check for multi-line trigger first
-			if strings.HasSuffix(line, "\\") {
-				lines = append(lines, strings.TrimSuffix(line, "\\"))
-			} else if strings.HasSuffix(line, "```") {
-				// Code block mode - collect until closing ```
-				lines = append(lines, line)
-				r.collectCodeBlock(&lines)
-				return strings.Join(lines, "\n"), nil
-			} else {
-				// Start paste detection: set timer and buffer first line
-				pasteBuffer = []string{line}
-				isPasting = true
-				pasteTimeout = time.NewTimer(100 * time.Millisecond)
-				fmt.Printf("\n%s[Pasting... (Ctrl+C to cancel)]%s", colorBlue, colorReset)
-				continue
-			}
-		} else if isPasting {
-			// Continue collecting paste buffer
-			pasteBuffer = append(pasteBuffer, line)
-			// Reset timer for next chunk
-			pasteTimeout.Stop()
-			pasteTimeout = time.NewTimer(100 * time.Millisecond)
-			continue
-		} else {
-			// Multi-line mode (not pasting)
-			// Count consecutive empty lines
-			if line == "" {
-				emptyLineCount++
-				// Two consecutive empty lines end multi-line input
-				if emptyLineCount >= 2 {
-					fmt.Println() // Add newline for visual separation
-					return strings.Join(lines, "\n"), nil
-				}
-				// Single empty line is preserved as part of input
-				lines = append(lines, line)
-				continue
-			}
-
-			emptyLineCount = 0 // Reset empty line counter
-
-			// Multi-line mode - check for end markers
-			if line == "```" {
-				lines = append(lines, line)
-				return strings.Join(lines, "\n"), nil
-			}
-			lines = append(lines, line)
-		}
+		return line, nil
 	}
 }
 
-// collectCodeBlock collects lines until closing triple backticks
-func (r *REPL) collectCodeBlock(lines *[]string) {
-	for {
-		fmt.Printf("%s[code] > %s", colorPurple, colorReset)
-		line, err := r.reader.ReadString('\n')
-		if err != nil {
-			return
-		}
-		line = strings.TrimRight(line, "\r\n")
 
-		// Handle Ctrl+C - cancel input
-		if line == "\x03" {
-			fmt.Printf("\n%s[Code input cancelled]%s\n", colorYellow, colorReset)
-			*lines = []string{}
-			return
-		}
-
-		*lines = append(*lines, line)
-
-		// Check for closing backticks
-		if line == "```" {
-			return
-		}
-	}
-}
 
 // makePrompt creates the prompt string
 func (r *REPL) makePrompt() string {
@@ -509,7 +388,7 @@ func (r *REPL) processCommand(input string) {
 func (r *REPL) printWelcome() {
 	fmt.Println()
 	fmt.Printf("%s╔══════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
-	fmt.Printf("%s║%s  %s⚡ magic Agent CLI v%s  %s                       %s║%s\n",
+	fmt.Printf("%s║%s  %s⚡ Magic Agent CLI v%s  %s                       %s║%s\n",
 		colorCyan, colorReset, bold, "1.0", colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠══════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║%s  Provider: %-15s  Model: %-20s %s║%s\n",
@@ -759,7 +638,7 @@ func (r *REPL) doExit() {
 func (r *REPL) cmdHelp() {
 	fmt.Println()
 	fmt.Printf("%s╔══════════════════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
-	fmt.Printf("%s║%s                    %s⚡ magic Agent Commands%s                     %s║%s\n",
+	fmt.Printf("%s║%s                    %s⚡ Magic Agent Commands%s                     %s║%s\n",
 		colorCyan, colorReset, bold, colorReset, colorCyan, colorReset)
 	fmt.Printf("%s╠══════════════════════════════════════════════════════════════╣%s\n", colorCyan, colorReset)
 
@@ -822,7 +701,6 @@ func (r *REPL) cmdHelp() {
 	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n", colorCyan, colorReset)
 	fmt.Println()
 	fmt.Printf("%sTips:%s\n", bold, colorReset)
-	fmt.Printf("  %s•%s Multi-line input: end a line with %s\\%s and press Enter\n", colorGray, colorReset, colorYellow, colorReset)
 	fmt.Printf("  %s•%s Commands auto-complete with %sTab%s\n", colorGray, colorReset, colorYellow, colorReset)
 	fmt.Printf("  %s•%s Use %s↑↓%s to navigate command history\n", colorGray, colorReset, colorYellow, colorReset)
 	fmt.Printf("  %s•%s Press %sCtrl+C%s to interrupt generation\n", colorGray, colorReset, colorYellow, colorReset)

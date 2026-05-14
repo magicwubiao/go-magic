@@ -173,7 +173,7 @@ func (m *Manager) loadBuiltins() {
 			"exit":            "Exit",
 
 			// 命令行
-			"cmd.help.title":      "magic Agent - Help",
+			"cmd.help.title":      "Magic Agent - Help",
 			"cmd.help.usage":      "Usage",
 			"cmd.help.examples":   "Examples",
 			"cmd.help.options":    "Options",
@@ -187,7 +187,7 @@ func (m *Manager) loadBuiltins() {
 			"err.internal":         "Internal error",
 
 			// 欢迎信息
-			"welcome.title":   "Welcome to magic Agent",
+			"welcome.title":   "Welcome to Magic Agent",
 			"welcome.subtitle": "A high-performance AI Agent in Go",
 			"welcome.tip":     "Type /help for available commands",
 		},
@@ -226,7 +226,7 @@ func (m *Manager) loadBuiltins() {
 			"exit":            "退出",
 
 			// 命令行
-			"cmd.help.title":      "magic Agent - 帮助",
+			"cmd.help.title":      "Magic Agent - 帮助",
 			"cmd.help.usage":      "用法",
 			"cmd.help.examples":   "示例",
 			"cmd.help.options":    "选项",
@@ -240,7 +240,7 @@ func (m *Manager) loadBuiltins() {
 			"err.internal":        "内部错误",
 
 			// 欢迎信息
-			"welcome.title":   "欢迎使用 magic Agent",
+			"welcome.title":   "欢迎使用 Magic Agent",
 			"welcome.subtitle": "高性能 Go 语言 AI 助手",
 			"welcome.tip":     "输入 /help 查看可用命令",
 		},
@@ -279,7 +279,7 @@ func (m *Manager) loadBuiltins() {
 			"exit":            "終了",
 
 			// 命令行
-			"cmd.help.title":      "magic Agent - ヘルプ",
+			"cmd.help.title":      "Magic Agent - ヘルプ",
 			"cmd.help.usage":      "使用方法",
 			"cmd.help.examples":   "例",
 			"cmd.help.options":    "オプション",
@@ -293,7 +293,7 @@ func (m *Manager) loadBuiltins() {
 			"err.internal":        "内部エラー",
 
 			// 欢迎信息
-			"welcome.title":   "magic Agent へようこそ",
+			"welcome.title":   "Magic Agent へようこそ",
 			"welcome.subtitle": "高性能 Go 言語 AI アシスタント",
 			"welcome.tip":     "/help でコマンド一覧を表示",
 		},

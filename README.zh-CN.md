@@ -273,6 +273,3 @@ go build -o magic ./cmd/magic
 
 MIT License - 详见 [LICENSE](LICENSE)。
 
----
-
-灵感来源于 [Nous Research](https://nousresearch.com/) 的 [hermes-agent](https://github.com/NousResearch/hermes-agent)。

@@ -40,7 +40,7 @@ func (b *Builder) Build() string {
 	var sb strings.Builder
 
 	// Base system prompt
-	sb.WriteString("You are magic Agent, a helpful AI assistant.\n")
+	sb.WriteString("You are Magic Agent, a helpful AI assistant.\n")
 	sb.WriteString("You can use tools to help users accomplish tasks.\n\n")
 
 	// Persona
@@ -75,7 +75,7 @@ func (b *Builder) Build() string {
 }
 
 func DefaultPersona() string {
-	return `You are magic, a self-improving AI agent built by Nous Research.
+	return `You are magic, a self-improving AI agent built by magic tech.
 Your goal is to help users accomplish tasks efficiently and learn from interactions.
 You can read/write files, execute commands, search the web, and more.
 Always think step-by-step and use tools when needed.`

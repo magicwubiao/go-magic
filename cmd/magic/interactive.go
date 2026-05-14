@@ -24,7 +24,6 @@ In interactive mode, you can:
 - Enter commands directly
 - Use arrow keys for history
 - Get auto-completion suggestions
-- Execute multi-line statements
 - Use special commands (help, exit, clear, history)
 
 Special Commands:
@@ -44,26 +43,21 @@ Special Commands:
 var (
 	interactiveHistorySize = 1000
 	interactivePrompt      = "magic> "
-	interactiveMultiline   = false
 )
 
 func init() {
 	interactiveCmd.Flags().IntVar(&interactiveHistorySize, "history-size", 1000, "Maximum history entries")
 	interactiveCmd.Flags().StringVar(&interactivePrompt, "prompt", "magic> ", "REPL prompt")
-	interactiveCmd.Flags().BoolVar(&interactiveMultiline, "multiline", false, "Enable multiline mode")
 	rootCmd.AddCommand(interactiveCmd)
 }
 
 // REPL represents the interactive shell
 type InteractiveShell struct {
-	reader      *bufio.Reader
-	writer      io.Writer
-	prompt      string
-	history     []string
-	variables   map[string]string
-	multiline   bool
-	currentLine string
-	lineCount   int
+	reader    *bufio.Reader
+	writer    io.Writer
+	prompt    string
+	history   []string
+	variables map[string]string
 }
 
 // NewREPL creates a new REPL instance
@@ -73,7 +67,6 @@ func NewInteractiveShell() *InteractiveShell {
 		writer:    os.Stdout,
 		history:   make([]string, 0),
 		variables: make(map[string]string),
-		multiline: interactiveMultiline,
 	}
 }
 
@@ -106,11 +99,7 @@ func (r *InteractiveShell) Run(initialPrompt string) error {
 		}
 
 		// Print prompt
-		if r.multiline && r.lineCount > 0 {
-			fmt.Fprintf(r.writer, "%s ", strings.Repeat("  ", r.lineCount))
-		} else {
-			fmt.Fprint(r.writer, prompt)
-		}
+		fmt.Fprint(r.writer, prompt)
 
 		// Read input
 		line, err := r.reader.ReadString('\n')
@@ -130,9 +119,7 @@ func (r *InteractiveShell) Run(initialPrompt string) error {
 		}
 
 		// Add to history
-		if line != "" {
-			r.addToHistory(line)
-		}
+		r.addToHistory(line)
 
 		// Handle special commands
 		if strings.HasPrefix(line, "/") {
@@ -142,31 +129,9 @@ func (r *InteractiveShell) Run(initialPrompt string) error {
 			continue
 		}
 
-		// Handle multiline input
-		if r.multiline {
-			r.currentLine += line + "\n"
-			r.lineCount++
-
-			// Check if we should continue multiline
-			if r.shouldContinueMultiline(r.currentLine) {
-				continue
-			}
-
-			// Process multiline input
-			input := strings.TrimSpace(r.currentLine)
-			r.currentLine = ""
-			r.lineCount = 0
-
-			if input != "" {
-				if _, err := r.processInput(input); err != nil {
-					fmt.Fprintf(r.writer, "Error: %v\n", err)
-				}
-			}
-		} else {
-			// Single line mode
-			if _, err := r.processInput(line); err != nil {
-				fmt.Fprintf(r.writer, "Error: %v\n", err)
-			}
+		// Process single line input
+		if _, err := r.processInput(line); err != nil {
+			fmt.Fprintf(r.writer, "Error: %v\n", err)
 		}
 	}
 }
@@ -224,27 +189,6 @@ func (r *InteractiveShell) processInput(input string) (string, error) {
 	return input, nil
 }
 
-func (r *InteractiveShell) shouldContinueMultiline(input string) bool {
-	// Check if the line ends with continuation markers
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return false
-	}
-
-	// Continue if line ends with \
-	lastChar := input[len(input)-1]
-	if lastChar == '\\' {
-		return true
-	}
-
-	// Continue if unclosed brackets/parens
-	openBraces := strings.Count(input, "{") - strings.Count(input, "}")
-	openParens := strings.Count(input, "(") - strings.Count(input, ")")
-	openBrackets := strings.Count(input, "[") - strings.Count(input, "]")
-
-	return openBraces > 0 || openParens > 0 || openBrackets > 0
-}
-
 func (r *InteractiveShell) addToHistory(line string) {
 	r.history = append(r.history, line)
 	if len(r.history) > interactiveHistorySize {
@@ -274,10 +218,6 @@ Keyboard Shortcuts:
   Ctrl+L           Clear screen
   Ctrl+R           Search history
   Up/Down          Navigate history
-
-Tips:
-  - Start multiline mode with: /multiline
-  - End multiline with empty line
 `
 	fmt.Fprintln(r.writer, help)
 	return nil
@@ -369,8 +309,6 @@ func (r *InteractiveShell) showVariables() error {
 func (r *InteractiveShell) resetSession() error {
 	r.history = make([]string, 0)
 	r.variables = make(map[string]string)
-	r.currentLine = ""
-	r.lineCount = 0
 	fmt.Fprintln(r.writer, "Session reset.")
 	return nil
 }
@@ -430,7 +368,6 @@ func runInteractive(cmd *cobra.Command, args []string) error {
 	}
 
 	repl := NewInteractiveShell()
-	repl.multiline = interactiveMultiline
 	repl.prompt = prompt
 
 	return repl.Run(prompt)
