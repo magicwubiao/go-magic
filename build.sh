@@ -116,6 +116,8 @@ build_docker() {
 # Build all
 case "$TARGET" in
     cli)
+        # Ensure web is built and copied for embedding
+        build_web
         build_cli
         ;;
     web)
@@ -125,8 +127,9 @@ case "$TARGET" in
         build_docker
         ;;
     all)
-        build_cli
+        # Build web first, then CLI (which embeds web assets), then Docker
         build_web
+        build_cli
         build_docker
         ;;
     *)

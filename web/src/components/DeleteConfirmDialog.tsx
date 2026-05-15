@@ -1,5 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 
 export function DeleteConfirmDialog({
   cancelLabel,
@@ -11,8 +11,6 @@ export function DeleteConfirmDialog({
   open,
   title,
 }: DeleteConfirmDialogProps) {
-  const { t } = useI18n();
-
   return (
     <ConfirmDialog
       open={open}

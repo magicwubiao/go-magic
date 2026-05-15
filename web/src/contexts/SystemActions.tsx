@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { ActionStatusResponse } from "@/lib/api";
 import { Toast } from "@/components/Toast";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import {
   SystemActionsContext,
   type SystemAction,
@@ -24,7 +24,6 @@ export function SystemActionsProvider({
     null,
   );
   const [toast, setToast] = useState<ToastState | null>(null);
-  const { t } = useI18n();
 
   useEffect(() => {
     if (!toast) return;
@@ -62,7 +61,7 @@ export function SystemActionsProvider({
     return () => {
       cancelled = true;
     };
-  }, [activeAction, t.status.actionFinished, t.status.actionFailed]);
+  }, [activeAction]);
 
   const runAction = useCallback(
     async (action: SystemAction) => {

@@ -5,13 +5,11 @@ import {
   getPluginLoadError,
   onPluginRegistered,
 } from "./registry";
-import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { Translations } from "@/i18n/types";
+import { t } from "@/lib/translations";
 
 /** Renders a plugin tab once its bundle has called `register()`. */
 export function PluginPage({ name }: { name: string }) {
-  const { t } = useI18n();
   // Subscribe in render (via useSyncExternalStore) so we never miss
   // `register()` if the script loads before a useEffect would run.
   const Component = useSyncExternalStore(
@@ -30,7 +28,7 @@ export function PluginPage({ name }: { name: string }) {
   }
 
   if (loadError) {
-    const message = formatPluginError(loadError, t);
+    const message = formatPluginError(loadError);
     return (
       <div
         className={cn(
@@ -57,7 +55,7 @@ export function PluginPage({ name }: { name: string }) {
   );
 }
 
-function formatPluginError(code: string, t: Translations): string {
+function formatPluginError(code: string): string {
   if (code === "LOAD_FAILED") return t.common.pluginLoadFailed;
   if (code === "NO_REGISTER") return t.common.pluginNotRegistered;
   return code;

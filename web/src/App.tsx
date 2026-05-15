@@ -67,14 +67,10 @@ import ProfilesPage from "@/pages/ProfilesPage";
 import SkillsPage from "@/pages/SkillsPage";
 import PluginsPage from "@/pages/PluginsPage";
 import ChatPage from "@/pages/ChatPage";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-import { ThemeSwitcher } from "@/components/ThemeSwitcher";
-import { useI18n } from "@/i18n";
-import type { Translations } from "@/i18n/types";
 import { PluginPage, PluginSlot, usePlugins } from "@/plugins";
 import type { PluginManifest } from "@/plugins";
-import { useTheme } from "@/themes";
 import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
+import { t } from "@/lib/translations";
 
 function RootRedirect() {
   return <Navigate to="/sessions" replace />;
@@ -197,6 +193,7 @@ function buildNavItems(
   const items = [...builtIn];
 
   for (const manifest of manifests) {
+    if (!manifest.tab) continue;
     if (manifest.tab.override) continue;
     if (manifest.tab.hidden) continue;
 
@@ -253,6 +250,7 @@ function buildRoutes(
   const addons: PluginManifest[] = [];
 
   for (const m of manifests) {
+    if (!m.tab) continue;
     if (m.tab.override) {
       byOverride.set(m.tab.override, m);
     } else {
@@ -291,6 +289,7 @@ function buildRoutes(
   }
 
   for (const m of manifests) {
+    if (!m.tab) continue;
     if (!m.tab.hidden) continue;
     if (m.tab.path === "/plugins") continue;
     if (builtinRoutes[m.tab.path] || m.tab.override) continue;
@@ -305,10 +304,8 @@ function buildRoutes(
 }
 
 export default function App() {
-  const { t } = useI18n();
   const { pathname } = useLocation();
   const { manifests, loading: pluginsLoading } = usePlugins();
-  const { theme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   const isDocsRoute = pathname === "/docs" || pathname === "/docs/";
@@ -316,25 +313,8 @@ export default function App() {
   const isChatRoute = normalizedPath === "/chat";
   const embeddedChat = isDashboardEmbeddedChatEnabled();
 
-  // A plugin can replace the built-in /chat page via `tab.override: "/chat"`
-  // in its manifest.  When one does, `buildRoutes` already swaps the route
-  // element for <PluginPage /> — but we also have to suppress the
-  // persistent ChatPage host below, or the plugin's page and the built-in
-  // terminal would paint on top of each other.  The override is niche
-  // (nothing ships overriding /chat today) but it's an advertised
-  // extension point, so preserve the pre-persistence contract: when a
-  // plugin owns /chat, the built-in chat UI is entirely absent.
-  //
-  // Waiting on `pluginsLoading` is load-bearing: manifests arrive
-  // asynchronously from /api/dashboard/plugins, so on initial render
-  // `chatOverriddenByPlugin` is always false.  Without the loading
-  // gate, the persistent host would mount, spawn a PTY, and THEN get
-  // yanked out from under the user when the plugin's manifest resolves
-  // — killing the session mid-paint.  Delaying host mount by the
-  // plugin-load window (typically <50ms, worst case 2s safety timeout)
-  // is the cheaper trade-off.
   const chatOverriddenByPlugin = useMemo(
-    () => manifests.some((m) => m.tab.override === "/chat"),
+    () => manifests.some((m) => m.tab?.override === "/chat"),
     [manifests],
   );
 
@@ -363,15 +343,15 @@ export default function App() {
   const pluginTabMeta = useMemo(
     () =>
       manifests
-        .filter((m) => !m.tab.hidden)
+        .filter((m) => m.tab && !m.tab.hidden)
         .map((m) => ({
-          path: m.tab.override ?? m.tab.path,
+          path: m.tab!.override ?? m.tab!.path,
           label: m.label,
         })),
     [manifests],
   );
 
-  const layoutVariant = theme.layoutVariant ?? "standard";
+  const layoutVariant = "standard";
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -511,7 +491,6 @@ export default function App() {
                     closeMobile={closeMobile}
                     item={item}
                     key={item.path}
-                    t={t}
                   />
                 ))}
               </ul>
@@ -538,7 +517,6 @@ export default function App() {
                         closeMobile={closeMobile}
                         item={item}
                         key={item.path}
-                        t={t}
                       />
                     ))}
                   </ul>
@@ -557,8 +535,6 @@ export default function App() {
             >
               <div className="flex min-w-0 items-center gap-2">
                 <PluginSlot name="header-right" />
-                <ThemeSwitcher dropUp />
-                <LanguageSwitcher />
               </div>
             </div>
 
@@ -635,7 +611,7 @@ export default function App() {
   );
 }
 
-function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
+function SidebarNavLink({ closeMobile, item }: SidebarNavLinkProps) {
   const { path, label, labelKey, icon: Icon } = item;
 
   const navLabel = labelKey
@@ -687,7 +663,6 @@ function SidebarNavLink({ closeMobile, item, t }: SidebarNavLinkProps) {
 }
 
 function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
-  const { t } = useI18n();
   const navigate = useNavigate();
   const { activeAction, isBusy, isRunning, pendingAction, runAction } =
     useSystemActions();
@@ -807,7 +782,6 @@ interface NavItem {
 interface SidebarNavLinkProps {
   closeMobile: () => void;
   item: NavItem;
-  t: Translations;
 }
 
 interface SystemActionItem {

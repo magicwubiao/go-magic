@@ -14,7 +14,7 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Switch } from "@nous-research/ui/ui/components/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 
@@ -23,7 +23,8 @@ const LEVELS = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR"] as const;
 const COMPONENTS = ["all", "gateway", "agent", "tools", "cli", "cron"] as const;
 const LINE_COUNTS = [50, 100, 200, 500] as const;
 
-function classifyLine(line: string): "error" | "warning" | "info" | "debug" {
+function classifyLine(line: unknown): "error" | "warning" | "info" | "debug" {
+  if (typeof line !== "string") return "info";
   const upper = line.toUpperCase();
   if (
     upper.includes("ERROR") ||
@@ -57,7 +58,7 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { t } = useI18n();
+  
   const { setAfterTitle, setEnd } = usePageHeader();
 
   const fetchLogs = useCallback(() => {

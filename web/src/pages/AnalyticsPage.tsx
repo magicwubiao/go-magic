@@ -23,7 +23,7 @@ import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { usePageHeader } from "@/contexts/usePageHeader";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import { PluginSlot } from "@/plugins";
 
 const PERIODS = [
@@ -129,7 +129,7 @@ function SortHeader({
 
 
 function TokenBarChart({ daily }: { daily: AnalyticsDailyEntry[] }) {
-  const { t } = useI18n();
+  
   if (daily.length === 0) return null;
 
   const maxTokens = Math.max(
@@ -222,7 +222,7 @@ function TokenBarChart({ daily }: { daily: AnalyticsDailyEntry[] }) {
 }
 
 function DailyTable({ daily }: { daily: AnalyticsDailyEntry[] }) {
-  const { t } = useI18n();
+  
   const { sorted, sortKey, sortDir, toggle } = useTableSort(daily, "day", "desc");
 
   if (daily.length === 0) return null;
@@ -281,7 +281,7 @@ function DailyTable({ daily }: { daily: AnalyticsDailyEntry[] }) {
 }
 
 function ModelTable({ models }: { models: AnalyticsModelEntry[] }) {
-  const { t } = useI18n();
+  
   const { sorted, sortKey, sortDir, toggle } = useTableSort(models, "input_tokens", "desc");
 
   if (models.length === 0) return null;
@@ -338,7 +338,7 @@ function ModelTable({ models }: { models: AnalyticsModelEntry[] }) {
 }
 
 function SkillTable({ skills }: { skills: AnalyticsSkillEntry[] }) {
-  const { t } = useI18n();
+  
   const { sorted, sortKey, sortDir, toggle } = useTableSort(skills, "total_count", "desc");
 
   if (skills.length === 0) return null;
@@ -380,7 +380,7 @@ function SkillTable({ skills }: { skills: AnalyticsSkillEntry[] }) {
                   </td>
                   <td className="text-right py-2 px-4">{skill.total_count}</td>
                   <td className="text-right py-2 pl-4 text-muted-foreground">
-                    {skill.last_used_at ? timeAgo(skill.last_used_at) : "—"}
+                    {skill.last_used_at ? timeAgo(skill.last_used_at) : "-"}
                   </td>
                 </tr>
               ))}
@@ -397,7 +397,7 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { t } = useI18n();
+  
   const { setAfterTitle, setEnd } = usePageHeader();
 
   const load = useCallback(() => {

@@ -5,7 +5,23 @@
 # Multi-stage build for small image size
 # ===========================================
 
-# Stage 1: Build
+# Stage 1: Web Build
+FROM node:20-alpine AS web-builder
+
+WORKDIR /app/web
+
+# Copy web source
+COPY web/package*.json ./
+
+# Install dependencies
+RUN npm ci --legacy-peer-deps
+
+COPY web/ .
+
+# Build web assets
+RUN npm run build
+
+# Stage 2: Go Build
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
@@ -17,21 +33,19 @@ RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Copy web dist from web-builder
+COPY --from=web-builder /app/web/dist /app/internal/server/dist
+
 # Copy source code
 COPY . .
 
-# Build the binary
+# Build the binary with embedded web assets
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /magic \
     ./cmd/magic
 
-# Build web assets (if node available)
-RUN if command -v node &> /dev/null; then \
-    cd web && npm ci --legacy-peer-deps 2>/dev/null || true && npm run build 2>/dev/null || true; \
-    fi
-
-# Stage 2: Runtime
+# Stage 3: Runtime
 FROM alpine:3.19
 
 LABEL maintainer="go-magic"
@@ -51,11 +65,8 @@ RUN addgroup -g 1000 magic && \
 
 WORKDIR /app
 
-# Copy binary from builder
+# Copy binary from builder (contains embedded web assets)
 COPY --from=builder /magic /app/magic
-
-# Copy web assets if they exist
-COPY --from=builder /app/web/dist /app/web/dist 2>/dev/null || true
 
 # Create config directory
 RUN mkdir -p /home/magic/.magic && \
@@ -65,15 +76,14 @@ RUN mkdir -p /home/magic/.magic && \
 USER magic
 
 # Expose ports
-# 8642: Main API
+# 8642: Main API / Web UI
 # 8643: Webhook
-# 8648: Web UI (if built)
-EXPOSE 8642 8643 8648
+EXPOSE 8642 8643
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8642/api/health || exit 1
 
-# Default command
+# Default command - start server with web UI
 ENTRYPOINT ["/app/magic"]
-CMD ["serve"]
+CMD ["server"]

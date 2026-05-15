@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { OAuthLoginModal } from "@/components/OAuthLoginModal";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 
 interface Props {
   onError?: (msg: string) => void;
@@ -55,7 +55,7 @@ export function OAuthProvidersCard({ onError, onSuccess }: Props) {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loginFor, setLoginFor] = useState<OAuthProvider | null>(null);
-  const { t } = useI18n();
+  
 
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;

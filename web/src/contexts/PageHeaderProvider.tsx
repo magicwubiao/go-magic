@@ -3,7 +3,6 @@ import { useLocation } from "react-router-dom";
 import { PageHeaderContext } from "./page-header-context";
 import { resolvePageTitle } from "@/lib/resolve-page-title";
 import { cn } from "@/lib/utils";
-import { useI18n } from "@/i18n";
 
 export function PageHeaderProvider({
   children,
@@ -13,7 +12,6 @@ export function PageHeaderProvider({
   pluginTabs: { path: string; label: string }[];
 }) {
   const { pathname } = useLocation();
-  const { t } = useI18n();
   const [titleOverride, setTitleOverride] = useState<string | null>(null);
   const [afterTitle, setAfterTitle] = useState<ReactNode>(null);
   const [end, setEnd] = useState<ReactNode>(null);
@@ -29,8 +27,8 @@ export function PageHeaderProvider({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const defaultTitle = useMemo(
-    () => resolvePageTitle(pathname, t, pluginTabs),
-    [pathname, t, pluginTabs],
+    () => resolvePageTitle(pathname, pluginTabs),
+    [pathname, pluginTabs],
   );
   const displayTitle = titleOverride ?? defaultTitle;
 

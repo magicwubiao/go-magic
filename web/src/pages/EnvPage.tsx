@@ -34,7 +34,7 @@ import {
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import { PluginSlot } from "@/plugins";
 
 /* ------------------------------------------------------------------ */
@@ -92,7 +92,7 @@ const CATEGORY_META_ICONS: Record<string, typeof KeyRound> = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  EnvVarRow — single key edit row                                    */
+/*  EnvVarRow �?single key edit row                                    */
 /* ------------------------------------------------------------------ */
 
 function EnvVarRow({
@@ -122,7 +122,7 @@ function EnvVarRow({
   clearDialogOpen?: boolean;
   compact?: boolean;
 }) {
-  const { t } = useI18n();
+  
   const isEditing = edits[varKey] !== undefined;
   const isRevealed = !!revealed[varKey];
   const displayValue = isRevealed
@@ -329,7 +329,7 @@ function EnvVarRow({
 }
 
 /* ------------------------------------------------------------------ */
-/*  ProviderGroupCard — groups API key + base URL per provider         */
+/*  ProviderGroupCard �?groups API key + base URL per provider         */
 /* ------------------------------------------------------------------ */
 
 function ProviderGroupCard({
@@ -356,7 +356,7 @@ function ProviderGroupCard({
   clearDialogOpen?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { t } = useI18n();
+  
 
   // Separate API keys from base URLs and other settings
   const apiKeys = group.entries.filter(
@@ -379,7 +379,7 @@ function ProviderGroupCard({
 
   return (
     <div className="border border-border">
-      {/* Header — always visible */}
+      {/* Header �?always visible */}
       <ListItem
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
@@ -492,7 +492,7 @@ export default function EnvPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(true); // Show all providers by default
   const { toast, showToast } = useToast();
-  const { t } = useI18n();
+  
 
   useEffect(() => {
     api
@@ -624,7 +624,7 @@ export default function EnvPage() {
       }))
       .sort((a, b) => a.priority - b.priority);
 
-    // Non-provider categories — use translated labels
+    // Non-provider categories �?use translated labels
     const CATEGORY_META_LABELS: Record<string, string> = {
       tool: t.app.nav.keys,
       messaging: t.common.messaging,
@@ -677,7 +677,7 @@ export default function EnvPage() {
         title={t.env.confirmClearTitle}
         description={
           pendingClearKey
-            ? `${pendingClearKey}${pendingKeyDescription ? ` — ${pendingKeyDescription}` : ""}. ${t.env.confirmClearMessage}`
+            ? `${pendingClearKey}${pendingKeyDescription ? ` �?${pendingKeyDescription}` : ""}. ${t.env.confirmClearMessage}`
             : t.env.confirmClearMessage
         }
         loading={keyClear.isDeleting}
@@ -806,7 +806,7 @@ export default function EnvPage() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  CollapsibleUnset — for non-provider categories                     */
+/*  CollapsibleUnset �?for non-provider categories                     */
 /* ------------------------------------------------------------------ */
 
 function CollapsibleUnset({
@@ -835,7 +835,7 @@ function CollapsibleUnset({
   clearDialogOpen?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(true);
-  const { t } = useI18n();
+  
 
   return (
     <>

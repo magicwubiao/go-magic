@@ -88,8 +88,8 @@ func generateDocs() error {
 func generateMainReadme() error {
 	var buf bytes.Buffer
 
-	buf.WriteString("# magic Agent CLI\n\n")
-	buf.WriteString("> A Go implementation of magic Agent by Nous Research\n\n")
+	buf.WriteString("# Magic Agent CLI\n\n")
+	buf.WriteString("> A Go implementation of Magic Agent by Magic Tech\n\n")
 	buf.WriteString("## Overview\n\n")
 	buf.WriteString("magic is a powerful CLI agent that grows with you through conversation and skill management.\n\n")
 	buf.WriteString("## Quick Start\n\n")
@@ -356,7 +356,7 @@ func generateManPages() error {
 		}
 
 		var buf bytes.Buffer
-		buf.WriteString(fmt.Sprintf(".TH \"MAGIC\" \"1\" \"%s\" \"magic Agent\" \"magic Manual\"\n\n", time.Now().Format("January 2006")))
+		buf.WriteString(fmt.Sprintf(".TH \"MAGIC\" \"1\" \"%s\" \"Magic Agent\" \"magic Manual\"\n\n", time.Now().Format("January 2006")))
 		buf.WriteString(fmt.Sprintf(".SH NAME\nmagic %s \\- %s\n\n", cmd.Use, cmd.Short))
 		buf.WriteString(fmt.Sprintf(".SH SYNOPSIS\n.B magic\n%s\n\n", cmd.Use))
 		buf.WriteString(fmt.Sprintf(".SH DESCRIPTION\n%s\n\n", cmd.Long))
@@ -427,7 +427,7 @@ func serveHTTP(dir string, port int) error {
     </style>
 </head>
 <body>
-    <h1>magic Agent Documentation</h1>
+    <h1>Magic Agent Documentation</h1>
     <p>Welcome to the magic CLI documentation.</p>
     <h2>Quick Links</h2>
     <ul>

@@ -207,6 +207,21 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/analytics/cost", withCORS(s.handleAnalyticsCost))
 	mux.HandleFunc("/api/analytics/tokens", withCORS(s.handleAnalyticsTokens))
 
+	// Cron
+	mux.HandleFunc("/api/cron/jobs", withCORS(s.handleCronJobs))
+	mux.HandleFunc("/api/cron/jobs/", withCORS(s.handleCronJobByID))
+
+	// Env
+	mux.HandleFunc("/api/env", withCORS(s.handleEnv))
+	mux.HandleFunc("/api/env/reveal", withCORS(s.handleEnvReveal))
+
+	// Profiles
+	mux.HandleFunc("/api/profiles", withCORS(s.handleProfiles))
+	mux.HandleFunc("/api/profiles/", withCORS(s.handleProfileByName))
+
+	// Plugins Hub
+	mux.HandleFunc("/api/dashboard/plugins/hub", withCORS(s.handlePluginsHub))
+
 	// System
 	mux.HandleFunc("/api/system/info", withCORS(s.handleSystemInfo))
 	mux.HandleFunc("/api/system/stats", withCORS(s.handleSystemStats))
@@ -215,9 +230,6 @@ func (s *Server) Start(port int) error {
 	// Logs
 	mux.HandleFunc("/api/logs", withCORS(s.handleLogs))
 	mux.HandleFunc("/api/dashboard/logs", withCORS(s.handleDashboardLogs))
-
-	// Themes
-	mux.HandleFunc("/api/dashboard/themes", withCORS(s.handleDashboardThemes))
 
 	// Settings
 	mux.HandleFunc("/api/settings", withCORS(s.handleSettings))
@@ -603,18 +615,7 @@ func (s *Server) handleSkillsSearch(w http.ResponseWriter, r *http.Request) {
 
 // handleDashboardPlugins handles dashboard plugins
 func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, []map[string]interface{}{
-		{
-			"id":   "theme-default",
-			"name": "Default Theme",
-			"type": "theme",
-		},
-		{
-			"id":   "theme-dark",
-			"name": "Dark Theme",
-			"type": "theme",
-		},
-	})
+	jsonResponse(w, []map[string]interface{}{})
 }
 
 // handleDashboardPluginsRescan handles plugin rescan
@@ -821,422 +822,6 @@ func (s *Server) handleDashboardLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDashboardThemes handles dashboard themes
-func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"themes": []map[string]interface{}{
-			{
-				"name":        "default",
-				"label":       "Magic Teal",
-				"description": "Classic dark teal — the canonical Magic look",
-				"palette": map[string]interface{}{
-					"primary":      "#0d9488",
-					"primaryLight": "#14b8a6",
-					"primaryDark":  "#0f766e",
-					"accent":       "#8b5cf6",
-					"accentLight":  "#a78bfa",
-					"accentDark":   "#7c3aed",
-					"background":   "#0f172a",
-					"surface":      "#1e293b",
-					"surfaceLight": "#334155",
-					"text":         "#f8fafc",
-					"textMuted":    "#94a3b8",
-					"textDim":      "#64748b",
-					"border":       "#334155",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#ef4444",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#1e293b",
-					"cardForeground":       "#f8fafc",
-					"popover":              "#1e293b",
-					"popoverForeground":    "#f8fafc",
-					"primary":              "#0d9488",
-					"primaryForeground":    "#ffffff",
-					"secondary":            "#334155",
-					"secondaryForeground":  "#f8fafc",
-					"muted":                "#334155",
-					"mutedForeground":      "#94a3b8",
-					"accent":               "#8b5cf6",
-					"accentForeground":     "#ffffff",
-					"destructive":          "#ef4444",
-					"destructiveForeground": "#ffffff",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#334155",
-					"input":                "#334155",
-					"ring":                 "#0d9488",
-				},
-			},
-			{
-				"name":        "midnight",
-				"label":       "Midnight",
-				"description": "Deep blue-violet with cool accents",
-				"palette": map[string]interface{}{
-					"primary":      "#6366f1",
-					"primaryLight": "#818cf8",
-					"primaryDark":  "#4f46e5",
-					"accent":       "#c084fc",
-					"accentLight":  "#d8b4fe",
-					"accentDark":   "#a855f7",
-					"background":   "#0a0a1a",
-					"surface":      "#17172a",
-					"surfaceLight": "#272744",
-					"text":         "#fafafa",
-					"textMuted":    "#a1a1aa",
-					"textDim":      "#71717a",
-					"border":       "#272744",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#ef4444",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#17172a",
-					"cardForeground":       "#fafafa",
-					"popover":              "#17172a",
-					"popoverForeground":    "#fafafa",
-					"primary":              "#6366f1",
-					"primaryForeground":    "#ffffff",
-					"secondary":            "#272744",
-					"secondaryForeground":  "#fafafa",
-					"muted":                "#272744",
-					"mutedForeground":      "#a1a1aa",
-					"accent":               "#c084fc",
-					"accentForeground":     "#ffffff",
-					"destructive":          "#ef4444",
-					"destructiveForeground": "#ffffff",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#272744",
-					"input":                "#272744",
-					"ring":                 "#6366f1",
-				},
-			},
-			{
-				"name":        "ember",
-				"label":       "Ember",
-				"description": "Warm crimson and bronze — forge vibes",
-				"palette": map[string]interface{}{
-					"primary":      "#dc2626",
-					"primaryLight": "#ef4444",
-					"primaryDark":  "#b91c1c",
-					"accent":       "#d97706",
-					"accentLight":  "#f59e0b",
-					"accentDark":   "#b45309",
-					"background":   "#1a0a0a",
-					"surface":      "#2d1f1f",
-					"surfaceLight": "#4a3030",
-					"text":         "#fef3c7",
-					"textMuted":    "#d97706",
-					"textDim":      "#92400e",
-					"border":       "#4a3030",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#dc2626",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#2d1f1f",
-					"cardForeground":       "#fef3c7",
-					"popover":              "#2d1f1f",
-					"popoverForeground":    "#fef3c7",
-					"primary":              "#dc2626",
-					"primaryForeground":    "#ffffff",
-					"secondary":            "#4a3030",
-					"secondaryForeground":  "#fef3c7",
-					"muted":                "#4a3030",
-					"mutedForeground":      "#d97706",
-					"accent":               "#d97706",
-					"accentForeground":     "#1a0a0a",
-					"destructive":          "#dc2626",
-					"destructiveForeground": "#ffffff",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#4a3030",
-					"input":                "#4a3030",
-					"ring":                 "#dc2626",
-				},
-			},
-			{
-				"name":        "mono",
-				"label":       "Mono",
-				"description": "Clean grayscale — minimal and focused",
-				"palette": map[string]interface{}{
-					"primary":      "#6b7280",
-					"primaryLight": "#9ca3af",
-					"primaryDark":  "#4b5563",
-					"accent":       "#374151",
-					"accentLight":  "#4b5563",
-					"accentDark":   "#1f2937",
-					"background":   "#0f172a",
-					"surface":      "#1e293b",
-					"surfaceLight": "#334155",
-					"text":         "#f1f5f9",
-					"textMuted":    "#94a3b8",
-					"textDim":      "#64748b",
-					"border":       "#334155",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#ef4444",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#1e293b",
-					"cardForeground":       "#f1f5f9",
-					"popover":              "#1e293b",
-					"popoverForeground":    "#f1f5f9",
-					"primary":              "#6b7280",
-					"primaryForeground":    "#ffffff",
-					"secondary":            "#334155",
-					"secondaryForeground":  "#f1f5f9",
-					"muted":                "#334155",
-					"mutedForeground":      "#94a3b8",
-					"accent":               "#374151",
-					"accentForeground":     "#f1f5f9",
-					"destructive":          "#ef4444",
-					"destructiveForeground": "#ffffff",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#334155",
-					"input":                "#334155",
-					"ring":                 "#6b7280",
-				},
-			},
-			{
-				"name":        "cyberpunk",
-				"label":       "Cyberpunk",
-				"description": "Neon green on black — matrix terminal",
-				"palette": map[string]interface{}{
-					"primary":      "#22c55e",
-					"primaryLight": "#4ade80",
-					"primaryDark":  "#16a34a",
-					"accent":       "#8b5cf6",
-					"accentLight":  "#a78bfa",
-					"accentDark":   "#7c3aed",
-					"background":   "#020617",
-					"surface":      "#0f172a",
-					"surfaceLight": "#1e293b",
-					"text":         "#22c55e",
-					"textMuted":    "#4ade80",
-					"textDim":      "#16a34a",
-					"border":       "#1e293b",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#ef4444",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#0f172a",
-					"cardForeground":       "#22c55e",
-					"popover":              "#0f172a",
-					"popoverForeground":    "#22c55e",
-					"primary":              "#22c55e",
-					"primaryForeground":    "#020617",
-					"secondary":            "#1e293b",
-					"secondaryForeground":  "#22c55e",
-					"muted":                "#1e293b",
-					"mutedForeground":      "#4ade80",
-					"accent":               "#8b5cf6",
-					"accentForeground":     "#020617",
-					"destructive":          "#ef4444",
-					"destructiveForeground": "#020617",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#1e293b",
-					"input":                "#1e293b",
-					"ring":                 "#22c55e",
-				},
-			},
-			{
-				"name":        "rose",
-				"label":       "Rosé",
-				"description": "Soft pink and warm ivory — easy on the eyes",
-				"palette": map[string]interface{}{
-					"primary":      "#f472b6",
-					"primaryLight": "#f9a8d4",
-					"primaryDark":  "#ec4899",
-					"accent":       "#fb923c",
-					"accentLight":  "#fdba74",
-					"accentDark":   "#f97316",
-					"background":   "#1c1917",
-					"surface":      "#292524",
-					"surfaceLight": "#44403c",
-					"text":         "#fef3c7",
-					"textMuted":    "#d6d3d1",
-					"textDim":      "#a8a29e",
-					"border":       "#44403c",
-					"success":      "#22c55e",
-					"warning":      "#f59e0b",
-					"error":        "#ef4444",
-					"info":         "#3b82f6",
-				},
-				"typography": map[string]interface{}{
-					"fontFamily":    "Inter, system-ui, sans-serif",
-					"fontFamilyMono": "JetBrains Mono, monospace",
-					"fontSizeSm":     "0.875rem",
-					"fontSize":       "1rem",
-					"fontSizeLg":     "1.125rem",
-					"fontSizeXl":     "1.25rem",
-					"fontSize2Xl":    "1.5rem",
-					"fontWeightNormal": "400",
-					"fontWeightMedium": "500",
-					"fontWeightBold":   "600",
-				},
-				"layout": map[string]interface{}{
-					"sidebarWidth":         "256px",
-					"sidebarWidthCollapsed": "64px",
-					"headerHeight":         "64px",
-					"footerHeight":         "48px",
-					"contentPadding":       "1rem",
-					"radius":               "0.5rem",
-					"radiusLg":             "0.75rem",
-					"radiusSm":             "0.25rem",
-				},
-				"layoutVariant": "standard",
-				"colorOverrides": map[string]interface{}{
-					"card":                 "#292524",
-					"cardForeground":       "#fef3c7",
-					"popover":              "#292524",
-					"popoverForeground":    "#fef3c7",
-					"primary":              "#f472b6",
-					"primaryForeground":    "#1c1917",
-					"secondary":            "#44403c",
-					"secondaryForeground":  "#fef3c7",
-					"muted":                "#44403c",
-					"mutedForeground":      "#d6d3d1",
-					"accent":               "#fb923c",
-					"accentForeground":     "#1c1917",
-					"destructive":          "#ef4444",
-					"destructiveForeground": "#1c1917",
-					"success":              "#22c55e",
-					"warning":              "#f59e0b",
-					"border":               "#44403c",
-					"input":                "#44403c",
-					"ring":                 "#f472b6",
-				},
-			},
-		},
-		"active": "default",
-	})
-}
 
 // handleSettings handles settings
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -1286,6 +871,117 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+// handleCronJobs handles cron jobs API
+func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		jsonResponse(w, []interface{}{})
+		return
+	}
+	if r.Method == http.MethodPost {
+		jsonResponse(w, map[string]interface{}{
+			"id":      "job-1",
+			"name":    "New Job",
+			"prompt":  "",
+			"schedule": "* * * * *",
+			"status":  "active",
+		})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleCronJobByID handles individual cron job operations
+func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/cron/jobs/")
+	
+	if strings.HasSuffix(path, "/pause") {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	if strings.HasSuffix(path, "/resume") {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	if strings.HasSuffix(path, "/trigger") {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	if r.Method == http.MethodDelete {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// handleEnv handles environment variables API
+func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		jsonResponse(w, map[string]interface{}{})
+		return
+	}
+	if r.Method == http.MethodPost {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	if r.Method == http.MethodDelete {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleEnvReveal handles env reveal API
+func (s *Server) handleEnvReveal(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		jsonResponse(w, map[string]string{"key": "", "value": ""})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleProfiles handles profiles API
+func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		jsonResponse(w, map[string]interface{}{"profiles": []interface{}{}})
+		return
+	}
+	if r.Method == http.MethodPost {
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": "", "path": ""})
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleProfileByName handles individual profile operations
+func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/profiles/")
+	
+	if strings.HasSuffix(path, "/setup-command") {
+		jsonResponse(w, map[string]string{"command": ""})
+		return
+	}
+	if strings.HasSuffix(path, "/soul") {
+		if r.Method == http.MethodGet {
+			jsonResponse(w, map[string]string{"soul": ""})
+			return
+		}
+		if r.Method == http.MethodPut {
+			jsonResponse(w, map[string]bool{"ok": true})
+			return
+		}
+	}
+	if r.Method == http.MethodDelete {
+		jsonResponse(w, map[string]bool{"ok": true})
+		return
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// handlePluginsHub handles plugins hub API
+func (s *Server) handlePluginsHub(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{"plugins": []interface{}{}})
+}
+
 // handleStatic serves static files with SPA fallback
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -1318,7 +1014,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Serve index.html for SPA routes (remove trailing slash issues)
-	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings"}
+	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings", "/analytics", "/models", "/cron", "/plugins", "/env", "/profiles"}
 	for _, spa := range spaPaths {
 		if strings.HasPrefix(path, spa) {
 			data, err := staticFiles.ReadFile("dist/index.html")

@@ -43,11 +43,14 @@ help:
 	@echo "  CROSS_DIR=$(CROSS_DIR)"
 
 # Build current platform
-build: build-cli build-web
+build: build-web build-cli
 
-build-cli:
+build-cli: build-web
 	@echo "Building CLI for current platform..."
 	@mkdir -p $(BUILD_DIR)
+	# Ensure web dist is copied to internal/server/dist for embedding
+	@mkdir -p internal/server/dist
+	@cp -r web/dist/* internal/server/dist/ 2>/dev/null || true
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic ./cmd/magic
 
 build-web:
@@ -56,6 +59,7 @@ build-web:
 		cd web && pnpm install 2>/dev/null || npm install --legacy-peer-deps 2>/dev/null; \
 		pnpm build 2>/dev/null || npm run build 2>/dev/null; \
 		cd - > /dev/null; \
+		mkdir -p internal/server/dist && cp -r web/dist/* internal/server/dist/; \
 	fi
 
 build-docker:

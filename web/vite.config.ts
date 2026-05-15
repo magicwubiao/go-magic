@@ -2,8 +2,38 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 const BACKEND = process.env.MAGIC_DASHBOARD_URL ?? "http://127.0.0.1:9119";
+
+/**
+ * Copy fonts from @nous-research/ui package to dist/fonts directory
+ */
+function copyFonts(): Plugin {
+  return {
+    name: "copy-fonts",
+    apply: "build",
+    async writeBundle() {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
+      const sourceDir = path.join(__dirname, "node_modules", "@nous-research", "ui", "dist", "fonts");
+      const destDir = path.join(__dirname, "dist", "fonts");
+      
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      
+      if (fs.existsSync(sourceDir)) {
+        const files = fs.readdirSync(sourceDir);
+        for (const file of files) {
+          if (file.endsWith(".woff2")) {
+            fs.copyFileSync(path.join(sourceDir, file), path.join(destDir, file));
+          }
+        }
+      }
+    },
+  };
+}
 
 /**
  * In production the Python `magic dashboard` server injects a one-shot
@@ -65,7 +95,7 @@ function magicDevToken(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), magicDevToken()],
+  plugins: [react(), tailwindcss(), magicDevToken(), copyFonts()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

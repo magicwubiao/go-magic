@@ -48,7 +48,7 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 
@@ -120,7 +120,7 @@ export default function ConfigPage() {
   const [activeCategory, setActiveCategory] = useState<string>("");
   const { toast, showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { t } = useI18n();
+  
   const { setEnd } = usePageHeader();
 
   useLayoutEffect(() => {
@@ -283,8 +283,8 @@ export default function ConfigPage() {
   const handleReset = () => {
     if (!defaults || !config) return;
     // Scope the reset to what the user is currently looking at:
-    //   - search mode → the matched fields
-    //   - form mode   → the active category's fields
+    //   - search mode �?the matched fields
+    //   - form mode   �?the active category's fields
     // Resetting the whole config here was a footgun (issue reported by @ykmfb001):
     // the button sits next to the category tabs and users reasonably assumed
     // "reset this tab", not "wipe my entire config.yaml".
@@ -517,13 +517,13 @@ export default function ConfigPage() {
         </Card>
       ) : (
         <div className="flex flex-col sm:flex-row gap-4">
-          <aside aria-label={t.config.filters} className="sm:w-56 sm:shrink-0">
+          <aside aria-label={t.config.filtersLabel} className="sm:w-56 sm:shrink-0">
             <div className="sm:sticky sm:top-4">
               <div className="flex flex-col border border-border bg-muted/20">
                 <div className="hidden sm:flex items-center gap-2 px-3 py-2 border-b border-border">
                   <Filter className="h-3 w-3 text-muted-foreground" />
                   <span className="font-mondwest text-[0.65rem] tracking-[0.12em] uppercase text-muted-foreground">
-                    {t.config.filters}
+                    {t.config.filtersLabel}
                   </span>
                 </div>
 

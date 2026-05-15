@@ -1,19 +1,19 @@
 /**
- * ChatPage — embeds `magic --tui` inside the dashboard.
+ * ChatPage �?embeds `magic --tui` inside the dashboard.
  *
  *   <div host> (dashboard chrome)                                         .
- *     └─ <div wrapper> (rounded, dark bg, padded — the "terminal window"  .
+ *     └─ <div wrapper> (rounded, dark bg, padded �?the "terminal window"  .
  *         look that gives the page a distinct visual identity)            .
  *         └─ @xterm/xterm Terminal (WebGL renderer, Unicode 11 widths)    .
- *              │ onData      keystrokes → WebSocket → PTY master          .
- *              │ onResize    terminal resize → `\x1b[RESIZE:cols;rows]`   .
- *              │ write(data) PTY output bytes → VT100 parser              .
- *              ▼                                                          .
+ *              �?onData      keystrokes �?WebSocket �?PTY master          .
+ *              �?onResize    terminal resize �?`\x1b[RESIZE:cols;rows]`   .
+ *              �?write(data) PTY output bytes �?VT100 parser              .
+ *              �?                                                         .
  *     WebSocket /api/pty?token=<session>                                  .
- *          ▼                                                              .
+ *          �?                                                             .
  *     FastAPI pty_ws  (magic_cli/web_server.py)                          .
- *          ▼                                                              .
- *     POSIX PTY → `node ui-tui/dist/entry.js` → tui_gateway + AIAgent     .
+ *          �?                                                             .
+ *     POSIX PTY �?`node ui-tui/dist/entry.js` �?tui_gateway + AIAgent     .
  */
 
 import { FitAddon } from "@xterm/addon-fit";
@@ -32,7 +32,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { usePageHeader } from "@/contexts/usePageHeader";
-import { useI18n } from "@/i18n";
+import { t } from "@/lib/translations";
 import { api } from "@/lib/api";
 import { PluginSlot } from "@/plugins";
 
@@ -49,7 +49,7 @@ function buildWsUrl(
 
 // Channel id ties this chat tab's PTY child (publisher) to its sidebar
 // (subscriber).  Generated once per mount so a tab refresh starts a fresh
-// channel — the previous PTY child terminates with the old WS, and its
+// channel �?the previous PTY child terminates with the old WS, and its
 // channel auto-evicts when no subscribers remain.
 function generateChannelId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -59,7 +59,7 @@ function generateChannelId(): string {
 }
 
 // Colors for the terminal body.  Matches the dashboard's dark teal canvas
-// with cream foreground — we intentionally don't pick monokai or a loud
+// with cream foreground �?we intentionally don't pick monokai or a loud
 // theme, because the TUI's skin engine already paints the content; the
 // terminal chrome just needs to sit quietly inside the dashboard.
 const TERMINAL_THEME = {
@@ -73,7 +73,7 @@ const TERMINAL_THEME = {
 /**
  * CSS width for xterm font tiers.
  *
- * Prefer the terminal host's `clientWidth` — Chrome DevTools device mode often
+ * Prefer the terminal host's `clientWidth` �?Chrome DevTools device mode often
  * keeps `window.innerWidth` at the full desktop value while the *drawn* layout
  * is phone-sized, which made us pick desktop font sizes (~14px) and look huge.
  */
@@ -109,7 +109,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   // Exposed to the main metrics-sync effect so it can refit the terminal
-  // the moment `isActive` flips back to true (display:none → display:flex
+  // the moment `isActive` flips back to true (display:none �?display:flex
   // collapses the host's box, so ResizeObserver never fires on return).
   const syncMetricsRef = useRef<(() => void) | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -125,7 +125,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // Raw state for the mobile side-sheet + a derived value that force-
   // closes whenever the chat tab isn't active.  The *derived* value is
   // what side-effects (body-scroll lock, keydown listener, portal render)
-  // key on — that way switching to another tab triggers the effect's
+  // key on �?that way switching to another tab triggers the effect's
   // cleanup, releasing the scroll-lock on /sessions etc.  Returning to
   // /chat re-runs the effect (derived flips back to true) and re-locks.
   // Keying on the raw state would leak the body.overflow="hidden" across
@@ -133,7 +133,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const [mobilePanelOpenRaw, setMobilePanelOpenRaw] = useState(false);
   const mobilePanelOpen = isActive && mobilePanelOpenRaw;
   const { setEnd } = usePageHeader();
-  const { t } = useI18n();
+  
   const closeMobilePanel = useCallback(() => setMobilePanelOpenRaw(false), []);
   const modelToolsLabel = useMemo(
     () => `${t.app.modelToolsSheetTitle} ${t.app.modelToolsSheetSubtitle}`,
@@ -214,7 +214,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   }, []);
 
   useEffect(() => {
-    // When hidden (non-chat tab) we must not register the header button —
+    // When hidden (non-chat tab) we must not register the header button �?
     // another page owns the header's end slot at that point.
     if (!isActive) {
       setEnd(null);
@@ -251,7 +251,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // Send the slash as a burst, wait long enough for Ink's tokenizer to
     // emit a keypress event for each character (not coalesce them into a
     // paste), then send Return as its own event.  The timing here is
-    // empirical — 100ms is safely past Node's default stdin coalescing
+    // empirical �?100ms is safely past Node's default stdin coalescing
     // window and well inside UI responsiveness.
     ws.send("/copy");
     setTimeout(() => {
@@ -298,11 +298,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     //
     // Three independent paths all route to the system clipboard:
     //
-    //   1. **Selection → Ctrl+C (or Cmd+C on macOS).**  Ink's own handler
+    //   1. **Selection �?Ctrl+C (or Cmd+C on macOS).**  Ink's own handler
     //      in useInputHandlers.ts turns Ctrl+C into a copy when the
     //      terminal has a selection, then emits an OSC 52 escape.  Our
     //      OSC 52 handler below decodes that escape and writes to the
-    //      browser clipboard — so the flow works just like it does in
+    //      browser clipboard �?so the flow works just like it does in
     //      `magic --tui`.
     //
     //   2. **Ctrl/Cmd+Shift+C.**  Belt-and-suspenders shortcut that
@@ -315,14 +315,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     //      it with bracketed-paste if the host has that mode enabled.
     //
     // OSC 52 reads (terminal asking to read the clipboard) are not
-    // supported — that would let any content the TUI renders exfiltrate
+    // supported �?that would let any content the TUI renders exfiltrate
     // the user's clipboard.
     term.parser.registerOscHandler(52, (data) => {
       // Format: "<targets>;<base64 | '?'>"
       const semi = data.indexOf(";");
       if (semi < 0) return false;
       const payload = data.slice(semi + 1);
-      if (payload === "?" || payload === "") return false; // read/clear — ignore
+      if (payload === "?" || payload === "") return false; // read/clear �?ignore
       try {
         const binary = atob(payload);
         const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
@@ -346,7 +346,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       if (ev.type !== "keydown") return true;
 
       // Copy: Cmd+C on macOS, Ctrl+Shift+C on other platforms. Bare Ctrl+C
-      // is reserved for SIGINT to the TUI child — matches xterm / gnome-terminal /
+      // is reserved for SIGINT to the TUI child �?matches xterm / gnome-terminal /
       // konsole / Windows Terminal. Ctrl+Shift+C only copies if a selection exists;
       // without a selection it passes through to the TUI so agents can still
       // react to the keypress.
@@ -358,7 +358,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         const sel = term.getSelection();
         if (sel) {
           // Direct writeText inside the keydown handler preserves the user
-          // gesture — async round-trips through OSC 52 can lose activation
+          // gesture �?async round-trips through OSC 52 can lose activation
           // and fail with "Document is not focused".
           navigator.clipboard.writeText(sel).catch((err) => {
             console.warn("[dashboard clipboard] direct copy failed:", err.message);
@@ -368,7 +368,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           ev.preventDefault();
           return false;
         }
-        // No selection → fall through so the TUI receives Ctrl+Shift+C
+        // No selection �?fall through so the TUI receives Ctrl+Shift+C
         // (or the bare ev if the user used a different modifier).
       }
 
@@ -397,7 +397,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // Magic TUI own transcript scrolling.
     //
     // In practice, the most reliable path here is NOT terminal mouse-wheel
-    // protocol emulation — that can vary by terminal mode and parser path.
+    // protocol emulation �?that can vary by terminal mode and parser path.
     // The inner TUI already handles keyboard-driven transcript scrolling
     // correctly (`Shift+Up` / `Shift+Down`, `PageUp` / `PageDown`), so we
     // translate browser wheel gestures into those known-good key sequences.
@@ -436,7 +436,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
     // WebGL draws from a texture atlas sized with device pixels. On phones and
     // in DevTools device mode that often produces *visually* much larger cells
-    // than `fontSize` suggests — users see "huge" text even at 7–9px settings.
+    // than `fontSize` suggests �?users see "huge" text even at 7�?px settings.
     // The canvas/DOM renderer tracks `fontSize` faithfully; use it for narrow
     // hosts.  Wide layouts still get WebGL for crisp box-drawing.
     const useWebgl = terminalTierWidthPx(host) >= 768;
@@ -462,7 +462,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // cell widths off from the final size.  ResizeObserver *does* fire
     // when the container settles, but if the pixel delta happens to be
     // smaller than one cell's width, fit() computes the same integer
-    // (cols, rows) as before and doesn't emit onResize — so the PTY
+    // (cols, rows) as before and doesn't emit onResize �?so the PTY
     // never learns the final size.  Users see truncated long lines until
     // they resize the browser window.
     //
@@ -539,7 +539,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // committed at least once since mount; fit.fit() then reads the
     // stable container size.  We always send a RESIZE escape afterwards
     // (even if fit's cols/rows didn't change, so the PTY has the same
-    // dims registered as our JS state — prevents a drift where Ink
+    // dims registered as our JS state �?prevents a drift where Ink
     // thinks the terminal is one col bigger than what's on screen).
     let settleRaf1 = 0;
     let settleRaf2 = 0;
@@ -565,7 +565,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       setBanner(null);
       // Send the initial RESIZE immediately so Ink has *a* size to lay
       // out against on its first paint.  The double-rAF block above will
-      // follow up with the authoritative measurement — at worst Ink
+      // follow up with the authoritative measurement �?at worst Ink
       // reflows once after the PTY boots, which is imperceptible.
       ws.send(`\x1b[RESIZE:${term.cols};${term.rows}]`);
     };
@@ -598,7 +598,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       term.write("\r\n\x1b[90m[session ended]\x1b[0m\r\n");
     };
 
-    // Keystrokes → PTY.
+    // Keystrokes �?PTY.
     //
     // IMPORTANT:
     // The embedded web chat has occasionally surfaced stray letters/digits
@@ -659,9 +659,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     };
   }, [channel, resumeParam]);
 
-  // When the user returns to the chat tab (isActive: false → true), the
+  // When the user returns to the chat tab (isActive: false �?true), the
   // terminal host just transitioned from display:none to display:flex.
-  // ResizeObserver won't fire on that kind of style-driven box change —
+  // ResizeObserver won't fire on that kind of style-driven box change �?
   // xterm thinks its grid is still whatever it was when the tab was
   // hidden (or 0×0, if it was hidden before first fit).  Force a refit
   // after two animation frames so layout has committed.
@@ -674,7 +674,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // and has since fallen back to <body>).  If the user had clicked
   // into the sidebar (model picker, tool-call entry) before switching
   // tabs, we must not yank focus away from wherever they left it when
-  // they come back — that's a surprise and an a11y foot-gun.
+  // they come back �?that's a surprise and an a11y foot-gun.
   useEffect(() => {
     if (!isActive) return;
     let raf1 = 0;
@@ -705,18 +705,18 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   }, [isActive]);
 
   // Layout:
-  //   outer flex column — sits inside the dashboard's content area
-  //   row split — terminal pane (flex-1) + sidebar (fixed width, lg+)
-  //   terminal wrapper — rounded, dark, padded — the "terminal window"
-  //   floating copy button — bottom-right corner, transparent with a
+  //   outer flex column �?sits inside the dashboard's content area
+  //   row split �?terminal pane (flex-1) + sidebar (fixed width, lg+)
+  //   terminal wrapper �?rounded, dark, padded �?the "terminal window"
+  //   floating copy button �?bottom-right corner, transparent with a
   //     subtle border; stays out of the way until hovered.  Sends
-  //     `/copy\n` to Ink, which emits OSC 52 → our clipboard handler.
-  //   sidebar — ChatSidebar opens its own JSON-RPC sidecar; renders
+  //     `/copy\n` to Ink, which emits OSC 52 �?our clipboard handler.
+  //   sidebar �?ChatSidebar opens its own JSON-RPC sidecar; renders
   //     model badge, tool-call list, model picker. Best-effort: if the
   //     sidecar fails to connect the terminal pane keeps working.
   //
   // `normal-case` opts out of the dashboard's global `uppercase` rule on
-  // the root `<div>` in App.tsx — terminal output must preserve case.
+  // the root `<div>` in App.tsx �?terminal output must preserve case.
   //
   // Mobile model/tools sheet is portaled to `document.body` so it stacks
   // above the app sidebar (`z-50`) and mobile chrome (`z-40`).  The main
