@@ -32,7 +32,7 @@ func init() {
 	chatCmd.Flags().BoolP("stream", "s", true, "Enable streaming output")
 	chatCmd.Flags().BoolP("no-stream", "n", false, "Disable streaming output")
 	chatCmd.Flags().BoolP("legacy", "l", false, "Use legacy REPL mode")
-	chatCmd.Flags().BoolP("tui", "t", false, "Use TUI (terminal UI) mode")
+	chatCmd.Flags().BoolP("tui", "t", true, "Use TUI (terminal UI) mode")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -167,15 +167,15 @@ func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, 
 	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, `You are Magic, a helpful AI assistant.
 
 RULES:
-- 闲聊打招呼（你好/hello）→ 直接回复，不调工具
-- 知识问答 → 直接回复
-- 列出/查看/读取文件 → 调用 list_files 或 read_file
-- 创建/写入文件 → 调用 write_file
-- 搜索网络 → 调用 web_search
-- 执行命令/代码 → 调用 execute_command
-- 不要调用 time, system, math, memory_recall, todo, session_search，除非用户明确要求
-- 用中文回复中文问题，英文回复英文问题
-- 文件列表要简明总结，不要输出原始JSON`, agentOpts...)
+- Small talk/greetings (hello/hi) → Respond directly, do not call tools
+- Knowledge Q&A → Respond directly
+- List/view/read files → Call list_files or read_file
+- Create/write files → Call write_file
+- Web search → Call web_search
+- Execute command/code → Call execute_command
+- Do not call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- Respond in the user's language
+- Summarize file lists concisely, do not output raw JSON`, agentOpts...)
 
 	// Note: cortex memory is NOT injected into system prompt here.
 	// Memory injection is controlled by memoryEnabled flag and handled
