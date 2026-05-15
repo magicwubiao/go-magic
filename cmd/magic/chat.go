@@ -32,6 +32,7 @@ func init() {
 	chatCmd.Flags().BoolP("stream", "s", true, "Enable streaming output")
 	chatCmd.Flags().BoolP("no-stream", "n", false, "Disable streaming output")
 	chatCmd.Flags().BoolP("legacy", "l", false, "Use legacy REPL mode")
+	chatCmd.Flags().BoolP("tui", "t", false, "Use TUI (terminal UI) mode")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -124,6 +125,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	if store != nil {
 		defer store.Close()
+	}
+
+	// Check for TUI mode
+	useTUI, _ := cmd.Flags().GetBool("tui")
+	if useTUI {
+		return RunTUI(cfg, prov, registry, store)
 	}
 
 	// Check for legacy mode
