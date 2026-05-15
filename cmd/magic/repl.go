@@ -1629,6 +1629,16 @@ func (r *REPL) cmdKanban(args string) {
 		r.cmdKanbanComment(mgr, subargs)
 	case "link":
 		r.cmdKanbanLink(mgr, subargs)
+	case "unlink":
+		r.cmdKanbanUnlink(mgr, subargs)
+	case "update":
+		r.cmdKanbanUpdate(mgr, subargs)
+	case "delete", "del":
+		r.cmdKanbanDelete(mgr, subargs)
+	case "claim":
+		r.cmdKanbanClaim(mgr, subargs)
+	case "archive":
+		r.cmdKanbanArchive(mgr, subargs)
 	case "stats":
 		r.cmdKanbanStats(mgr)
 	default:
@@ -1636,14 +1646,19 @@ func (r *REPL) cmdKanban(args string) {
 		fmt.Println("  /kanban, /kb        - Show board")
 		fmt.Println("  /kanban board       - Show board")
 		fmt.Println("  /kanban create <title> - Create task")
-		fmt.Println("  /kanban list        - List tasks")
-		fmt.Println("  /kanban show <id>   - Show task")
-		fmt.Println("  /kanban start <id>  - Start task")
-		fmt.Println("  /kanban complete <id> - Complete task")
-		fmt.Println("  /kanban block <id>  - Block task")
+		fmt.Println("  /kanban list [search] - List tasks")
+		fmt.Println("  /kanban show <id>   - Show task details")
+		fmt.Println("  /kanban update <id> <field>=<value> - Update task")
+		fmt.Println("  /kanban delete <id> - Delete task")
+		fmt.Println("  /kanban start <id>  - Start task (triage/todo → ready)")
+		fmt.Println("  /kanban claim <id>  - Claim task (ready → running)")
+		fmt.Println("  /kanban complete <id> [summary] - Complete task")
+		fmt.Println("  /kanban block <id> [reason] - Block task")
 		fmt.Println("  /kanban unblock <id> - Unblock task")
-		fmt.Println("  /kanban comment <id> <text> - Comment")
+		fmt.Println("  /kanban archive <id> - Archive task")
+		fmt.Println("  /kanban comment <id> <text> - Add comment")
 		fmt.Println("  /kanban link <parent> <child> - Add dependency")
+		fmt.Println("  /kanban unlink <parent> <child> - Remove dependency")
 		fmt.Println("  /kanban stats       - Show statistics")
 	}
 }
@@ -1975,6 +1990,126 @@ func (r *REPL) cmdKanbanStats(mgr *kanban.Manager) {
 	fmt.Printf("  %-15s : %d\n", "Total (active)", total)
 	fmt.Printf("  %-15s : %d\n", "Archived", stats[kanban.StatusArchived])
 	fmt.Println()
+}
+
+func (r *REPL) cmdKanbanUpdate(mgr *kanban.Manager, args string) {
+	parts := strings.SplitN(args, " ", 2)
+	if len(parts) < 2 {
+		fmt.Println("Usage: /kanban update <task_id> <field>=<value>")
+		fmt.Println("Fields: title, body, assignee, priority")
+		return
+	}
+
+	taskID := parts[0]
+	updateStr := parts[1]
+
+	kv := strings.SplitN(updateStr, "=", 2)
+	if len(kv) != 2 {
+		fmt.Println("Usage: /kanban update <task_id> <field>=<value>")
+		return
+	}
+
+	field := strings.TrimSpace(kv[0])
+	value := strings.TrimSpace(kv[1])
+
+	updates := make(map[string]interface{})
+	switch field {
+	case "title", "body", "assignee":
+		updates[field] = value
+	case "priority":
+		priority, err := strconv.Atoi(value)
+		if err != nil {
+			fmt.Printf("%s⚠ Invalid priority value: %s%s\n", colorYellow, value, colorReset)
+			return
+		}
+		updates["priority"] = priority
+	default:
+		fmt.Printf("%s⚠ Unknown field: %s. Available fields: title, body, assignee, priority%s\n", colorYellow, field, colorReset)
+		return
+	}
+
+	task, err := mgr.UpdateTask(taskID, updates)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to update task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s updated%s\n", colorGreen, task.ID, colorReset)
+}
+
+func (r *REPL) cmdKanbanDelete(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban delete <task_id>")
+		return
+	}
+
+	fmt.Printf("Are you sure you want to delete task %s? [y/N] ", args)
+	var confirm string
+	fmt.Scanln(&confirm)
+	if strings.ToLower(confirm) != "y" {
+		fmt.Println("Canceled")
+		return
+	}
+
+	if err := mgr.DeleteTask(args); err != nil {
+		fmt.Printf("%s⚠ Failed to delete task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s deleted%s\n", colorGreen, args, colorReset)
+}
+
+func (r *REPL) cmdKanbanClaim(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban claim <task_id>")
+		return
+	}
+
+	assignee := os.Getenv("USER")
+	if assignee == "" {
+		assignee = "agent"
+	}
+
+	task, err := mgr.ClaimTask(args, assignee)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to claim task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s claimed by %s (→ running)%s\n", colorGreen, task.ID, assignee, colorReset)
+}
+
+func (r *REPL) cmdKanbanArchive(mgr *kanban.Manager, args string) {
+	if args == "" {
+		fmt.Println("Usage: /kanban archive <task_id>")
+		return
+	}
+
+	task, err := mgr.ArchiveTask(args)
+	if err != nil {
+		fmt.Printf("%s⚠ Failed to archive task: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Task %s archived%s\n", colorGreen, task.ID, colorReset)
+}
+
+func (r *REPL) cmdKanbanUnlink(mgr *kanban.Manager, args string) {
+	parts := strings.Split(args, " ")
+	if len(parts) < 2 {
+		fmt.Println("Usage: /kanban unlink <parent_id> <child_id>")
+		return
+	}
+
+	parentID := parts[0]
+	childID := parts[1]
+
+	if err := mgr.RemoveLink(parentID, childID); err != nil {
+		fmt.Printf("%s⚠ Failed to unlink tasks: %v%s\n", colorYellow, err, colorReset)
+		return
+	}
+
+	fmt.Printf("%s✓ Unlinked %s → %s%s\n", colorGreen, parentID, childID, colorReset)
 }
 
 // escapeJSON escapes a string for JSON
