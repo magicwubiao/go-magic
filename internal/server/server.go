@@ -758,9 +758,56 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 
 // handleAnalyticsUsage handles usage analytics
 func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
+	// Generate mock daily data for the past 30 days
+	var daily []map[string]interface{}
+	for i := 29; i >= 0; i-- {
+		date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+		daily = append(daily, map[string]interface{}{
+			"day":               date,
+			"input_tokens":      5000 + (i%7)*1000,
+			"output_tokens":     3000 + (i%5)*800,
+			"cache_read_tokens": 1000 + (i%3)*500,
+			"reasoning_tokens":  500 + (i%4)*200,
+			"estimated_cost":    0.5 + float64(i%10)*0.1,
+			"actual_cost":       0.5 + float64(i%10)*0.1,
+			"sessions":          5 + i%10,
+			"api_calls":         20 + i%15,
+		})
+	}
+
+	// Mock model breakdown
+	byModel := []map[string]interface{}{
+		{"model": "gpt-4", "input_tokens": 50000, "output_tokens": 30000, "estimated_cost": 15.00, "sessions": 50, "api_calls": 200},
+		{"model": "gpt-3.5-turbo", "input_tokens": 80000, "output_tokens": 40000, "estimated_cost": 10.50, "sessions": 80, "api_calls": 350},
+		{"model": "claude-3-sonnet", "input_tokens": 30000, "output_tokens": 20000, "estimated_cost": 8.00, "sessions": 30, "api_calls": 120},
+	}
+
 	jsonResponse(w, map[string]interface{}{
-		"daily":   []map[string]interface{}{{"date": time.Now().Format("2006-01-02"), "requests": 10}},
-		"monthly": []map[string]interface{}{{"month": time.Now().Format("2006-01"), "requests": 300}},
+		"daily": daily,
+		"by_model": byModel,
+		"totals": map[string]interface{}{
+			"total_input":         160000,
+			"total_output":        90000,
+			"total_cache_read":    30000,
+			"total_reasoning":     15000,
+			"total_estimated_cost": 33.50,
+			"total_actual_cost":   33.50,
+			"total_sessions":      160,
+			"total_api_calls":     670,
+		},
+		"skills": map[string]interface{}{
+			"summary": map[string]interface{}{
+				"total_skill_loads":  500,
+				"total_skill_edits": 50,
+				"total_skill_actions": 200,
+				"distinct_skills_used": 15,
+			},
+			"top_skills": []map[string]interface{}{
+				{"skill": "web-research", "view_count": 100, "manage_count": 20, "total_count": 150, "percentage": 30.0, "last_used_at": time.Now().Unix()},
+				{"skill": "code-review", "view_count": 80, "manage_count": 15, "total_count": 100, "percentage": 20.0, "last_used_at": time.Now().Unix()},
+				{"skill": "data-analysis", "view_count": 60, "manage_count": 10, "total_count": 70, "percentage": 14.0, "last_used_at": time.Now().Unix()},
+			},
+		},
 	})
 }
 
@@ -793,18 +840,20 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	n, _ := strconv.Atoi(limit)
 	
-	var logs []LogEntry
+	var lines []string
 	for i := 0; i < n && i < 100; i++ {
-		logs = append(logs, LogEntry{
-			Timestamp: time.Now().Add(-time.Duration(i) * time.Minute),
-			Level:     "info",
-			Message:   fmt.Sprintf("Log entry %d", i),
-			Source:    "system",
-		})
+		timestamp := time.Now().Add(-time.Duration(i) * time.Minute).Format("2006-01-02 15:04:05")
+		level := "info"
+		if i%10 == 0 {
+			level = "error"
+		} else if i%5 == 0 {
+			level = "warning"
+		}
+		lines = append(lines, fmt.Sprintf("[%s] [%s] Log entry %d - System operation completed", timestamp, level, i))
 	}
 	jsonResponse(w, map[string]interface{}{
 		"file":  "server.log",
-		"lines": logs,
+		"lines": lines,
 	})
 }
 
