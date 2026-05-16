@@ -22,7 +22,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Button } from "@nous-research/ui/ui/components/button";
+import { Button } from "@nous-research/ui";
 import { Typography } from "@/components/NouiTypography";
 import { cn } from "@/lib/utils";
 import { Copy, PanelRight, X } from "lucide-react";

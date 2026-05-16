@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Palette, Check } from "lucide-react";
-import { Button } from "@nous-research/ui/ui/components/button";
-import { ListItem } from "@nous-research/ui/ui/components/list-item";
+import { Button } from "@nous-research/ui";
+import { ListItem } from "@nous-research/ui";
 import { Typography } from "@/components/NouiTypography";
 import { BUILTIN_THEMES, useTheme } from "@/themes";
 import type { DashboardTheme } from "@/themes";

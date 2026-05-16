@@ -1,8 +1,8 @@
-import { forwardRef, type ElementType, type HTMLAttributes, type ReactNode } from "react";
+import { type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 type TypographyProps = HTMLAttributes<HTMLElement> & {
-  as?: ElementType;
+  as?: "span" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "article" | "section";
   children?: ReactNode;
   compressed?: boolean;
   courier?: boolean;
@@ -20,25 +20,22 @@ const variantClasses: Record<NonNullable<TypographyProps["variant"]>, string> = 
   xl: "text-[4.5rem] leading-[1] tracking-[0.135rem]",
 };
 
-export const Typography = forwardRef<HTMLElement, TypographyProps>(function Typography(
-  {
-    as: Component = "span",
-    className,
-    compressed,
-    courier,
-    expanded,
-    mondwest,
-    mono,
-    sans,
-    variant,
-    ...props
-  },
-  ref,
-) {
+export function Typography({
+  as: Tag = "span",
+  className,
+  compressed,
+  courier,
+  expanded,
+  mondwest,
+  mono,
+  sans,
+  variant,
+  ...props
+}: TypographyProps) {
   const hasFontVariant = compressed || courier || expanded || mondwest || mono || sans;
 
   return (
-    <Component
+    <Tag
       className={cn(
         compressed && "font-compressed",
         courier && "font-courier",
@@ -49,15 +46,11 @@ export const Typography = forwardRef<HTMLElement, TypographyProps>(function Typo
         variant && variantClasses[variant],
         className,
       )}
-      ref={ref}
       {...props}
     />
   );
-});
+}
 
-export const H2 = forwardRef<HTMLHeadingElement, Omit<TypographyProps, "as">>(function H2(
-  { className, variant = "lg", ...props },
-  ref,
-) {
-  return <Typography as="h2" className={cn("font-bold", className)} variant={variant} ref={ref} {...props} />;
-});
+export function H2({ className, variant = "lg", ...props }: Omit<TypographyProps, "as">) {
+  return <Typography as="h2" className={cn("font-bold", className)} variant={variant} {...props} />;
+}

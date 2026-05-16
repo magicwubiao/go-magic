@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Button } from "@nous-research/ui/ui/components/button";
+import { Button } from "@nous-research/ui";
 import { Typography } from "@/components/NouiTypography";
 import { useI18n } from "@/i18n/context";
 import { LOCALE_META } from "@/i18n";
