@@ -194,12 +194,19 @@ func (s *Server) Start(port int) error {
 	// Models
 	mux.HandleFunc("/api/models", withCORS(s.handleModels))
 	mux.HandleFunc("/api/models/", withCORS(s.handleModelByID))
+	mux.HandleFunc("/api/model/info", withCORS(s.handleModelInfo))
+	mux.HandleFunc("/api/model/options", withCORS(s.handleModelOptions))
+	mux.HandleFunc("/api/model/set", withCORS(s.handleModelSet))
 	mux.HandleFunc("/api/model/auxiliary", withCORS(s.handleModelAuxiliary))
 	mux.HandleFunc("/api/providers", withCORS(s.handleProviders))
+	mux.HandleFunc("/api/providers/oauth", withCORS(s.handleProvidersOAuth))
 
 	// Config
 	mux.HandleFunc("/api/config", withCORS(s.handleConfig))
 	mux.HandleFunc("/api/config/", withCORS(s.handleConfigByID))
+	mux.HandleFunc("/api/config/defaults", withCORS(s.handleConfigDefaults))
+	mux.HandleFunc("/api/config/raw", withCORS(s.handleConfigRaw))
+	mux.HandleFunc("/api/config/schema", withCORS(s.handleConfigSchema))
 
 	// Analytics
 	mux.HandleFunc("/api/analytics/models", withCORS(s.handleAnalyticsModels))
@@ -667,6 +674,64 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, s.providers)
 }
 
+// handleModelInfo handles model info request
+func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"model":                      "openai/gpt-4",
+		"provider":                   "openai",
+		"auto_context_length":        128000,
+		"config_context_length":      0,
+		"effective_context_length":    128000,
+		"capabilities": map[string]interface{}{
+			"supports_tools":     true,
+			"supports_vision":    false,
+			"supports_reasoning": false,
+			"context_window":      128000,
+			"max_output_tokens":   4096,
+			"model_family":        "gpt-4",
+		},
+	})
+}
+
+// handleModelOptions handles model options request
+func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
+	providers := []map[string]interface{}{
+		{"name": "OpenAI", "slug": "openai", "models": []string{"gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"}, "total_models": 3, "is_current": true},
+		{"name": "DeepSeek", "slug": "deepseek", "models": []string{"deepseek-chat", "deepseek-coder"}, "total_models": 2},
+		{"name": "Anthropic", "slug": "anthropic", "models": []string{"claude-3-sonnet", "claude-3-opus"}, "total_models": 2},
+	}
+	jsonResponse(w, map[string]interface{}{
+		"model":    "gpt-4",
+		"provider": "openai",
+		"providers": providers,
+	})
+}
+
+// handleModelSet handles model assignment
+func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scope    string `json:"scope"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Task     string `json:"task"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"ok":      true,
+		"scope":   req.Scope,
+		"provider": req.Provider,
+		"model":   req.Model,
+	})
+}
+
+// handleProvidersOAuth handles OAuth provider list
+func (s *Server) handleProvidersOAuth(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, []map[string]interface{}{})
+}
+
 // handleConfig handles configuration
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -692,6 +757,70 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfigByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/config/")
 	jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
+}
+
+// handleConfigDefaults handles default configuration
+func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
+	defaults := map[string]interface{}{
+		"language": "en",
+		"theme":    "dark",
+		"model":    "openai/gpt-4",
+		"provider": "openai",
+	}
+	jsonResponse(w, defaults)
+}
+
+// handleConfigRaw handles raw config
+func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		yamlContent := `# go-magic configuration
+language: en
+theme: dark
+model: openai/gpt-4
+provider: openai
+`
+		jsonResponse(w, map[string]interface{}{"yaml": yamlContent})
+	case "PUT":
+		var req struct {
+			YamlText string `json:"yaml_text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+// handleConfigSchema handles config schema
+func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
+	schema := map[string]interface{}{
+		"fields": map[string]interface{}{
+			"language": map[string]interface{}{
+				"type":    "string",
+				"default":  "en",
+				"options": []string{"en", "zh-CN"},
+			},
+			"theme": map[string]interface{}{
+				"type":    "string",
+				"default":  "dark",
+				"options": []string{"dark", "light"},
+			},
+			"model": map[string]interface{}{
+				"type":    "string",
+				"default":  "openai/gpt-4",
+			},
+			"provider": map[string]interface{}{
+				"type":    "string",
+				"default":  "openai",
+			},
+		},
+		"category_order": []string{"general", "model", "provider"},
+	}
+	jsonResponse(w, schema)
 }
 
 // handleSystemInfo handles system information
