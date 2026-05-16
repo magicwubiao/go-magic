@@ -99,6 +99,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@/components": path.resolve(__dirname, "./node_modules/@nous-research/ui/dist/ui/components"),
+      "@/components/ui": path.resolve(__dirname, "./node_modules/@nous-research/ui/dist/ui/components"),
+      "@/lib": path.resolve(__dirname, "./node_modules/@nous-research/ui/dist"),
+      "@/hooks": path.resolve(__dirname, "./node_modules/@nous-research/ui/dist/hooks"),
     },
     // When @nous-research/ui is symlinked via `file:../../design-language`,
     // Node's module resolution would pick up shared deps from

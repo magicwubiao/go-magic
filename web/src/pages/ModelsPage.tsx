@@ -458,8 +458,8 @@ function ModelSettingsPanel({
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
-  const mainProv = aux?.main.provider ?? "";
-  const mainModel = aux?.main.model ?? "";
+  const mainProv = aux?.main?.provider ?? "";
+  const mainModel = aux?.main?.model ?? "";
 
   const applyAssignment = async ({
     scope,
@@ -784,9 +784,9 @@ export default function ModelsPage() {
 
           {data.models.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {data.models.map((m, i) => (
+              {data.models.filter(m => m?.model).map((m, i) => (
                 <ModelCard
-                  key={`${m.model}:${m.provider}`}
+                  key={`${m.model}:${m.provider || "unknown"}`}
                   entry={m}
                   rank={i + 1}
                   main={aux?.main ?? null}
