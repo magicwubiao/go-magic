@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
+export PATH="$PATH:/usr/local/go/bin"
+export GOTOOLCHAIN=local
+
 echo "Building web UI..."
 cd web
 pnpm install --frozen-lockfile 2>/dev/null || pnpm install
@@ -16,7 +19,6 @@ cp -r dist/* ../internal/server/dist/
 
 echo "Building Go binary..."
 cd ..
-export GOTOOLCHAIN=local
 go build -o build/magic ./cmd/magic
 
 echo "Preview build complete!"

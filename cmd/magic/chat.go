@@ -127,12 +127,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 		defer store.Close()
 	}
 
-	// Check for TUI mode
-	useTUI, _ := cmd.Flags().GetBool("tui")
-	if useTUI {
-		return RunTUI(cfg, prov, registry, store)
-	}
-
 	// Check for legacy mode
 	useLegacy, _ := cmd.Flags().GetBool("legacy")
 	if useLegacy {

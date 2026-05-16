@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
+export PATH="$PATH:/usr/local/go/bin"
 export PORT=5000
 
 # 清理 5000 端口残留进程
