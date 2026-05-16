@@ -17,11 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "@/components/*": ["node_modules/@nous-research/ui/dist/ui/components/*"],
-      "@/components/ui/*": ["node_modules/@nous-research/ui/dist/ui/components/*"],
-      "@/lib/*": ["node_modules/@nous-research/ui/dist/*"],
-      "@/hooks/*": ["node_modules/@nous-research/ui/dist/hooks/*"]
+      "@/*": ["./src/*"]
     },
     "types": ["vite/client"]
   },

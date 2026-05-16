@@ -45,7 +45,7 @@ import { useConfirmDelete } from "@/hooks/useConfirmDelete";
 import { Input } from "@/components/ui/input";
 import { useSystemActions } from "@/contexts/useSystemActions";
 import { useToast } from "@/hooks/useToast";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
@@ -95,7 +95,7 @@ function ToolCallBlock({
   toolCall: { id: string; function: { name: string; arguments: string } };
 }) {
   const [open, setOpen] = useState(false);
-  
+  const { t } = useI18n();
 
   let args = toolCall.function.arguments;
   try {
@@ -138,7 +138,7 @@ function MessageBubble({
   msg: SessionMessage;
   highlight?: string;
 }) {
-  
+  const { t } = useI18n();
 
   const ROLE_STYLES: Record<
     string,
@@ -274,7 +274,7 @@ function SessionRow({
   const [messages, setMessages] = useState<SessionMessage[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+  const { t } = useI18n();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -426,7 +426,7 @@ export default function SessionsPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [overviewSessions, setOverviewSessions] = useState<SessionInfo[]>([]);
   const { toast, showToast } = useToast();
-  
+  const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
   const { activeAction, actionStatus, dismissLog } = useSystemActions();
   const resumeInChatEnabled = isDashboardEmbeddedChatEnabled();
@@ -571,7 +571,7 @@ export default function SessionsPage() {
     ? sessions.find((s) => s.id === sessionDelete.pendingId)
     : null;
 
-  // Build snippet map from search results (session_id �?snippet)
+  // Build snippet map from search results (session_id → snippet)
   const snippetMap = new Map<string, string>();
   if (searchResults) {
     for (const r of searchResults) {
@@ -608,11 +608,8 @@ export default function SessionsPage() {
         info.state === "fatal"
           ? t.status.platformError
           : t.status.platformDisconnected;
-      const displayName = typeof name === "string" 
-        ? name.charAt(0).toUpperCase() + name.slice(1) 
-        : String(name);
       alerts.push({
-        message: `${displayName} ${stateLabel}`,
+        message: `${name.charAt(0).toUpperCase() + name.slice(1)} ${stateLabel}`,
         detail: info.error_message ?? undefined,
       });
     }
@@ -638,7 +635,7 @@ export default function SessionsPage() {
         title={t.sessions.confirmDeleteTitle}
         description={
           pendingSession?.title && pendingSession.title !== "Untitled"
-            ? `"${pendingSession.title}" �?${t.sessions.confirmDeleteMessage}`
+            ? `"${pendingSession.title}" — ${t.sessions.confirmDeleteMessage}`
             : t.sessions.confirmDeleteMessage
         }
         loading={sessionDelete.isDeleting}

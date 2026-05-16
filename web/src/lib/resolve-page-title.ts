@@ -1,6 +1,6 @@
-import { t } from "./translations";
+import type { Translations } from "@/i18n/types";
 
-const BUILTIN: Record<string, keyof typeof t.app.nav> = {
+const BUILTIN: Record<string, keyof Translations["app"]["nav"]> = {
   "/chat": "chat",
   "/sessions": "sessions",
   "/analytics": "analytics",
@@ -15,6 +15,7 @@ const BUILTIN: Record<string, keyof typeof t.app.nav> = {
 
 export function resolvePageTitle(
   pathname: string,
+  t: Translations,
   pluginTabs: { path: string; label: string }[],
 ): string {
   const normalized = pathname.replace(/\/$/, "") || "/";

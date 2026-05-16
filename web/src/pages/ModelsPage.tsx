@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import {
   Brain,
   ChevronDown,
@@ -26,7 +26,7 @@ import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { usePageHeader } from "@/contexts/usePageHeader";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { PluginSlot } from "@/plugins";
 import { ModelPickerDialog } from "@/components/ModelPickerDialog";
 
@@ -69,7 +69,7 @@ function shortModelName(model: string): string {
   return model;
 }
 
-/** Extract vendor prefix from a model string like "anthropic/claude-opus-4.7" -?"anthropic". */
+/** Extract vendor prefix from a model string like "anthropic/claude-opus-4.7" → "anthropic". */
 function modelVendor(model: string, fallback?: string): string {
   const slashIdx = model.indexOf("/");
   if (slashIdx > 0) return model.slice(0, slashIdx);
@@ -158,9 +158,9 @@ function CapabilityBadges({
   );
 }
 
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 /*  Per-card "Use as" menu                                              */
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 
 function UseAsMenu({
   provider,
@@ -285,9 +285,9 @@ function UseAsMenu({
   );
 }
 
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 /*  ModelCard                                                           */
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 
 function ModelCard({
   entry,
@@ -302,10 +302,10 @@ function ModelCard({
   aux: AuxiliaryTaskAssignment[];
   onAssigned(): void;
 }) {
-  
-  const provider = entry?.provider || modelVendor(entry?.model || "");
-  const totalTokens = (entry?.input_tokens || 0) + (entry?.output_tokens || 0);
-  const caps = entry?.capabilities || {};
+  const { t } = useI18n();
+  const provider = entry.provider || modelVendor(entry.model);
+  const totalTokens = entry.input_tokens + entry.output_tokens;
+  const caps = entry.capabilities;
 
   const isMain =
     !!main &&
@@ -337,7 +337,7 @@ function ModelCard({
               )}
               {mainAuxTask && (
                 <span className="inline-flex items-center bg-purple-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-purple-600 dark:text-purple-400">
-                  aux - {mainAuxTask}
+                  aux · {mainAuxTask}
                 </span>
               )}
             </div>
@@ -403,7 +403,7 @@ function ModelCard({
           </div>
           <div className="text-center">
             <div className="font-mono font-semibold">
-              {entry.api_calls > 0 ? formatTokens(entry.api_calls) : "-"}
+              {entry.api_calls > 0 ? formatTokens(entry.api_calls) : "—"}
             </div>
             <div className="text-[10px] text-muted-foreground">
               {t.models.apiCalls}
@@ -437,9 +437,9 @@ function ModelCard({
   );
 }
 
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 /*  Model Settings panel (top of page)                                  */
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 
 type PickerTarget =
   | { kind: "main" }
@@ -458,8 +458,8 @@ function ModelSettingsPanel({
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
-  const mainProv = aux?.main?.provider ?? "";
-  const mainModel = aux?.main?.model ?? "";
+  const mainProv = aux?.main.provider ?? "";
+  const mainModel = aux?.main.model ?? "";
 
   const applyAssignment = async ({
     scope,
@@ -531,7 +531,7 @@ function ModelSettingsPanel({
             </div>
             <div className="text-xs font-mono text-muted-foreground truncate">
               {mainProv || "(unset)"}
-              {mainProv && mainModel && " - "}
+              {mainProv && mainModel && " · "}
               {mainModel || "(unset)"}
             </div>
           </div>
@@ -573,7 +573,7 @@ function ModelSettingsPanel({
             {AUX_TASKS.map((t) => {
               const cur = aux?.tasks.find((a) => a.task === t.key);
               const isAuto =
-                !cur || !cur.provider || cur.provider === "auto";
+                !cur || cur.provider === "auto" || !cur.provider;
               return (
                 <div
                   key={t.key}
@@ -589,7 +589,7 @@ function ModelSettingsPanel({
                     <div className="text-[10px] font-mono text-muted-foreground truncate">
                       {isAuto
                         ? "auto (use main model)"
-                        : `${cur?.provider} - ${cur?.model || "(provider default)"}`}
+                        : `${cur?.provider} · ${cur?.model || "(provider default)"}`}
                     </div>
                   </div>
                   <Button
@@ -635,9 +635,9 @@ function ModelSettingsPanel({
   );
 }
 
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 /*  Page                                                                */
-/* - */
+/* ──────────────────────────────────────────────────────────────────── */
 
 export default function ModelsPage() {
   const [days, setDays] = useState(30);
@@ -646,7 +646,7 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveKey, setSaveKey] = useState(0);
-  
+  const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
 
   const load = useCallback(() => {
@@ -784,9 +784,9 @@ export default function ModelsPage() {
 
           {data.models.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {data.models.filter(m => m?.model).map((m, i) => (
+              {data.models.map((m, i) => (
                 <ModelCard
-                  key={`${m.model}:${m.provider || "unknown"}`}
+                  key={`${m.model}:${m.provider}`}
                   entry={m}
                   rank={i + 1}
                   main={aux?.main ?? null}

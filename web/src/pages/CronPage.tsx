@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Clock, Pause, Play, Plus, Trash2, Zap } from "lucide-react";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
@@ -14,11 +14,11 @@ import { Toast } from "@/components/Toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { PluginSlot } from "@/plugins";
 
 function formatTime(iso?: string | null): string {
-  if (!iso) return "-";
+  if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleString();
 }
@@ -59,7 +59,7 @@ function getJobScheduleDisplay(job: CronJob): string {
     asText(job.schedule_display) ||
     asText(job.schedule?.display) ||
     asText(job.schedule?.expr) ||
-    "-"
+    "—"
   );
 }
 
@@ -79,7 +79,7 @@ export default function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast, showToast } = useToast();
-  
+  const { t } = useI18n();
 
   // New job form state
   const [prompt, setPrompt] = useState("");
@@ -113,7 +113,7 @@ export default function CronPage() {
         name: name.trim() || undefined,
         deliver,
       });
-      showToast(t.common.create + "d", "success");
+      showToast(t.common.create + " ✓", "success");
       setPrompt("");
       setSchedule("");
       setName("");
@@ -205,7 +205,7 @@ export default function CronPage() {
         title={t.cron.confirmDeleteTitle}
         description={
           pendingJob
-            ? `"${truncateText(getJobTitle(pendingJob), 40)}" -?${
+            ? `"${truncateText(getJobTitle(pendingJob), 40)}" — ${
                 t.cron.confirmDeleteMessage
               }`
             : t.cron.confirmDeleteMessage

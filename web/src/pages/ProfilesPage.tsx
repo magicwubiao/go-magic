@@ -12,17 +12,17 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 
 // Mirrors magic_cli/profiles.py::_PROFILE_ID_RE so we can reject obviously
-// invalid names (uppercase, spaces, �? before round-tripping a doomed POST.
+// invalid names (uppercase, spaces, …) before round-tripping a doomed POST.
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export default function ProfilesPage() {
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast, showToast } = useToast();
-  
+  const { t } = useI18n();
 
   // Create form
   const [newName, setNewName] = useState("");
@@ -90,7 +90,7 @@ export default function ProfilesPage() {
     }
     try {
       await api.renameProfile(renamingFrom, target);
-      showToast(`${t.profiles.renamed}: ${renamingFrom} �?${target}`, "success");
+      showToast(`${t.profiles.renamed}: ${renamingFrom} → ${target}`, "success");
       setRenamingFrom(null);
       setRenameTo("");
       load();

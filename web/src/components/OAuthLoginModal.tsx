@@ -6,7 +6,7 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { H2 } from "@/components/NouiTypography";
 import { api, type OAuthProvider, type OAuthStartResponse } from "@/lib/api";
 import { Input } from "@/components/ui/input";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 
 interface Props {
   provider: OAuthProvider;
@@ -32,7 +32,7 @@ export function OAuthLoginModal({ provider, onClose, onSuccess }: Props) {
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const isMounted = useRef(true);
   const pollTimer = useRef<number | null>(null);
-  
+  const { t } = useI18n();
 
   // Initiate flow on mount
   useEffect(() => {

@@ -1,6 +1,6 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, RefreshCw, Puzzle, Trash2, Eye, EyeOff } from "lucide-react";
-
+import type { Translations } from "@/i18n/types";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { HubAgentPluginRow, PluginsHubResponse } from "@/lib/api";
@@ -15,12 +15,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/useToast";
 import { Toast } from "@/components/Toast";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { PluginSlot } from "@/plugins";
 import { cn } from "@/lib/utils";
 import { usePageHeader } from "@/contexts/usePageHeader";
 
-/** Select value for built-in memory (`config` uses empty string). Never use `""` -?UI Select maps empty value to an empty label. */
+/** Select value for built-in memory (`config` uses empty string). Never use `""` — UI Select maps empty value to an empty label. */
 const MEMORY_PROVIDER_BUILTIN = "__magic_memory_builtin__";
 
 export default function PluginsPage() {
@@ -37,7 +37,7 @@ export default function PluginsPage() {
   const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   const { toast, showToast } = useToast();
-  
+  const { t } = useI18n();
   const { setEnd } = usePageHeader();
 
   const loadHub = useCallback(() => {
@@ -314,7 +314,7 @@ export default function PluginsPage() {
 
 
                   <PluginRowCard
-                    {...{ row, rowBusy, setRuntimeLoading, showToast }}
+                    {...{ row, rowBusy, setRuntimeLoading, showToast, t }}
                   />
 
                 </li>
@@ -339,7 +339,7 @@ export default function PluginsPage() {
                 <li className="text-[0.7rem] normal-case opacity-85" key={m.name}>
 
 
-                  {m.label ?? m.name} -?{m.description || m.tab?.path}
+                  {m.label ?? m.name} — {m.description || m.tab?.path}
 
 
                   {!m.tab?.hidden ? (
@@ -367,13 +367,16 @@ export default function PluginsPage() {
 }
 
 interface PluginRowCardProps {
+
   row: HubAgentPluginRow;
   rowBusy: string | null;
   setRuntimeLoading: (
     name: string,
     fn: () => Promise<unknown>,
   ) => Promise<void>;
+
   showToast: (msg: string, variant: "success" | "error") => void;
+  t: Translations;
 }
 
 function PluginRowCard(props: PluginRowCardProps) {
@@ -382,6 +385,7 @@ function PluginRowCard(props: PluginRowCardProps) {
     rowBusy,
     setRuntimeLoading,
     showToast,
+    t,
   } = props;
 
   const dm = row.dashboard_manifest;
@@ -419,7 +423,7 @@ function PluginRowCard(props: PluginRowCardProps) {
               </Badge>
 
 
-              <Badge tone="outline">v{row.version || "-"}</Badge>
+              <Badge tone="outline">v{row.version || "—"}</Badge>
 
               <Badge tone={badgeTone}>{row.runtime_status}</Badge>
 

@@ -27,7 +27,7 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Switch } from "@nous-research/ui/ui/components/switch";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 
@@ -102,7 +102,7 @@ export default function SkillsPage() {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [togglingSkills, setTogglingSkills] = useState<Set<string>>(new Set());
   const { toast, showToast } = useToast();
-  
+  const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
 
   useEffect(() => {
@@ -296,7 +296,7 @@ export default function SkillsPage() {
                 allCategories.length > 0 && (
                   <div className="hidden sm:flex flex-col border-t border-border">
                     <div className="px-3 pt-2 pb-1 font-mondwest text-[0.6rem] tracking-[0.12em] uppercase text-muted-foreground/70">
-                      {t.skills.categoriesLabel}
+                      {t.skills.categories}
                     </div>
                     <div className="flex flex-col p-2 pt-1 gap-px max-h-[calc(100vh-340px)] overflow-y-auto">
                       {allCategories.map(({ key, name, count }) => {

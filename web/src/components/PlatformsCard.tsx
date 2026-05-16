@@ -3,10 +3,10 @@ import type { PlatformStatus } from "@/lib/api";
 import { isoTimeAgo } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 
 export function PlatformsCard({ platforms }: PlatformsCardProps) {
-  
+  const { t } = useI18n();
   const platformStateBadge: Record<
     string,
     { tone: "success" | "warning" | "destructive"; label: string }

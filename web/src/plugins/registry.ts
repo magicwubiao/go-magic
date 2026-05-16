@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@nous-research/ui/ui/components/tabs";
+import { useI18n } from "@/i18n";
 import { registerSlot, PluginSlot } from "./slots";
 
 // ---------------------------------------------------------------------------
@@ -143,5 +144,6 @@ export function exposePluginSDK() {
     utils: { cn, timeAgo, isoTimeAgo },
 
     // Hooks
+    useI18n,
   };
 }

@@ -1,6 +1,6 @@
 import { useLayoutEffect } from "react";
 import { ExternalLink } from "lucide-react";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { cn } from "@/lib/utils";
 import { PluginSlot } from "@/plugins";
@@ -16,7 +16,7 @@ const DS_BUTTON_OUTLINED_LINK_CN = cn(
 );
 
 export default function DocsPage() {
-  
+  const { t } = useI18n();
   const { setEnd } = usePageHeader();
 
   useLayoutEffect(() => {
@@ -53,8 +53,8 @@ export default function DocsPage() {
           // Docusaurus paints over a transparent <html> / <body> and
           // relies on the browser's canvas color (light by default) to
           // fill the viewport. Inheriting the dashboard's dark color
-          // scheme makes that canvas dark, so the docs body text �?which
-          // is tuned for a light canvas �?becomes near-invisible. Force a
+          // scheme makes that canvas dark, so the docs body text — which
+          // is tuned for a light canvas — becomes near-invisible. Force a
           // light color scheme + white background on the iframe element so
           // the docs render cleanly regardless of the active dashboard
           // theme or the user's prefers-color-scheme.

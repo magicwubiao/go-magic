@@ -14,7 +14,7 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Switch } from "@nous-research/ui/ui/components/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { t } from "@/lib/translations";
+import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 
@@ -23,8 +23,7 @@ const LEVELS = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR"] as const;
 const COMPONENTS = ["all", "gateway", "agent", "tools", "cli", "cron"] as const;
 const LINE_COUNTS = [50, 100, 200, 500] as const;
 
-function classifyLine(line: unknown): "error" | "warning" | "info" | "debug" {
-  if (typeof line !== "string") return "info";
+function classifyLine(line: string): "error" | "warning" | "info" | "debug" {
   const upper = line.toUpperCase();
   if (
     upper.includes("ERROR") ||
@@ -58,7 +57,7 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  
+  const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
 
   const fetchLogs = useCallback(() => {
@@ -156,7 +155,7 @@ export default function LogsPage() {
         <FilterGroup label={t.logs.file}>
           <Segmented
             value={file}
-            onChange={setFile}
+            onChange={(v) => setFile(v as (typeof FILES)[number])}
             options={toOptions(FILES)}
           />
         </FilterGroup>
@@ -164,7 +163,7 @@ export default function LogsPage() {
         <FilterGroup label={t.logs.level}>
           <Segmented
             value={level}
-            onChange={setLevel}
+            onChange={(v) => setLevel(v as (typeof LEVELS)[number])}
             options={toOptions(LEVELS)}
           />
         </FilterGroup>
@@ -172,7 +171,7 @@ export default function LogsPage() {
         <FilterGroup label={t.logs.component}>
           <Segmented
             value={component}
-            onChange={setComponent}
+            onChange={(v) => setComponent(v as (typeof COMPONENTS)[number])}
             options={toOptions(COMPONENTS)}
           />
         </FilterGroup>
