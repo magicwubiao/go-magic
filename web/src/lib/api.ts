@@ -639,9 +639,11 @@ export interface AuxiliaryTaskAssignment {
   base_url: string;
 }
 
+// 后端返回的简化格式
 export interface AuxiliaryModelsResponse {
-  tasks: AuxiliaryTaskAssignment[];
-  main: { provider: string; model: string };
+  id: string;
+  name: string;
+  contextLen: number;
 }
 
 export interface ModelAssignmentRequest {

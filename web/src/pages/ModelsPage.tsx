@@ -455,8 +455,9 @@ function ModelSettingsPanel({
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
-  const mainProv = aux?.main?.provider ?? "";
-  const mainModel = aux?.main?.model ?? "";
+  // 从 aux 获取主模型信息
+  const mainProv = aux?.id ?? "";
+  const mainModel = "";
 
   const applyAssignment = async ({
     scope,
@@ -568,9 +569,8 @@ function ModelSettingsPanel({
             </p>
 
             {AUX_TASKS.map((t) => {
-              const cur = aux?.tasks.find((a) => a.task === t.key);
-              const isAuto =
-                !cur || cur.provider === "auto" || !cur.provider;
+              // 后端 API 简化版，暂不显示具体任务配置
+              const isAuto = true;
               return (
                 <div
                   key={t.key}
@@ -584,9 +584,7 @@ function ModelSettingsPanel({
                       </span>
                     </div>
                     <div className="text-[10px] font-mono text-muted-foreground truncate">
-                      {isAuto
-                        ? "auto (use main model)"
-                        : `${cur?.provider} · ${cur?.model || "(provider default)"}`}
+                      auto (use main model)
                     </div>
                   </div>
                   <Button
@@ -786,8 +784,8 @@ export default function ModelsPage() {
                   key={`${m.model}:${m.provider}`}
                   entry={m}
                   rank={i + 1}
-                  main={aux?.main ?? null}
-                  aux={aux?.tasks ?? []}
+                  main={aux ? { provider: aux.id, model: "" } : null}
+                  aux={[]}
                   onAssigned={onAssigned}
                 />
               ))}
