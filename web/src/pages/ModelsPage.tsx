@@ -455,8 +455,8 @@ function ModelSettingsPanel({
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
-  const mainProv = aux?.main.provider ?? "";
-  const mainModel = aux?.main.model ?? "";
+  const mainProv = aux?.main?.provider ?? "";
+  const mainModel = aux?.main?.model ?? "";
 
   const applyAssignment = async ({
     scope,
