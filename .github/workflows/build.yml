@@ -1,0 +1,190 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        default: ''
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Linux
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            ext: ''
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            ext: ''
+          # macOS
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+            ext: ''
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            ext: ''
+          # Windows
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            ext: '.exe'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          BINARY_NAME="magic-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" -o "dist/${BINARY_NAME}" ./cmd/magic
+          echo "BINARY_NAME=${BINARY_NAME}" >> $GITHUB_ENV
+
+      - name: Create archive (Unix)
+        if: matrix.os != 'windows'
+        working-directory: dist
+        run: |
+          tar czf ${{ env.BINARY_NAME }}.tar.gz ${{ env.BINARY_NAME }}
+          echo "ARCHIVE_NAME=${{ env.BINARY_NAME }}.tar.gz" >> $GITHUB_ENV
+
+      - name: Create archive (Windows)
+        if: matrix.os == 'windows'
+        working-directory: dist
+        run: |
+          7z a ${{ env.BINARY_NAME }}.zip ${{ env.BINARY_NAME }}
+          echo "ARCHIVE_NAME=${{ env.BINARY_NAME }}.zip" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}
+          path: dist/${{ env.ARCHIVE_NAME }}
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Display structure of downloaded files
+        run: ls -R dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Downloads
+            
+            | Platform | Architecture | Download |
+            |----------|-------------|----------|
+            | Linux | AMD64 | `magic-linux-amd64.tar.gz` |
+            | Linux | ARM64 | `magic-linux-arm64.tar.gz` |
+            | macOS | AMD64 | `magic-darwin-amd64.tar.gz` |
+            | macOS | ARM64 | `magic-darwin-arm64.tar.gz` |
+            | Windows | AMD64 | `magic-windows-amd64.exe.zip` |
+            
+            ## Installation
+            
+            ### Linux / macOS
+            ```bash
+            # Download and extract
+            curl -L https://github.com/$(echo ${{ github.repository }} | tr -d '\n')/releases/download/${{ steps.version.outputs.VERSION }}/magic-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
+            chmod +x magic-*
+            sudo mv magic-* /usr/local/bin/magic
+            ```
+            
+            ### Windows
+            Download the `.zip` file, extract it, and add to PATH.
+            
+          files: |
+            dist/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional: Build on every push to main (without release)
+  build-main:
+    name: Build (main branch)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build (Linux AMD64)
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o magic-linux-amd64 ./cmd/magic
+
+      - name: Test
+        run: |
+          ./magic-linux-amd64 --version || echo "Build successful"

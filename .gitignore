@@ -1,0 +1,44 @@
+# Binaries
+magic
+magic-server
+*.exe
+
+# Web build
+web/node_modules/
+!web/dist/
+web/dist-node/
+web/*.tsbuildinfo
+web/pnpm-lock.yaml
+
+# Go
+*.test
+/coverage.txt
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.log
+
+# Build outputs
+!internal/server/dist/
+build/
+output/
+*.wav
+*.mp3
+output.wav
+output.mp3
+*.png
+!.web/public/logo.png
+*.jpg
+*.jpeg
+.coze

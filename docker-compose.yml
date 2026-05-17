@@ -1,0 +1,72 @@
+# ===========================================
+# go-magic Docker Compose
+# One-command deployment
+# ===========================================
+
+services:
+  # Main application
+  magic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go-magic
+    restart: unless-stopped
+    ports:
+      - "8642:8642"   # API
+      - "8643:8643"   # Webhook
+      - "8648:8648"   # Web UI
+    environment:
+      - TZ=UTC
+    volumes:
+      - magic-config:/home/magic/.magic
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - magic-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8642/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: magic-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - magic-network
+    command: redis-server --appendonly yes
+
+  # Optional: PostgreSQL for sessions
+  postgres:
+    image: postgres:16-alpine
+    container_name: magic-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=magic
+      - POSTGRES_USER=magic
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - magic-network
+
+networks:
+  magic-network:
+    driver: bridge
+
+volumes:
+  magic-config:
+  redis-data:
+  postgres-data:
+
+secrets:
+  postgres_password:
+    file: .postgres_password

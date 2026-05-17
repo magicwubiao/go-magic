@@ -1,0 +1,43 @@
+# =============================================================================
+# go-magic Scoop Installer (Windows)
+# =============================================================================
+# Usage:
+#   scoop bucket add magic https://github.com/magicwubiao/scoop-bucket
+#   scoop install magic
+# =============================================================================
+
+{
+    "version": "dev",
+    "description": "High-performance AI Agent in Go",
+    "homepage": "https://github.com/magicwubiao/go-magic",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/magicwubiao/go-magic/releases/download/v#{version}/magic-windows-amd64.exe",
+            "bin": "magic-windows-amd64.exe",
+            "shortcut": "magic.exe"
+        },
+        "arm64": {
+            "url": "https://github.com/magicwubiao/go-magic/releases/download/v#{version}/magic-windows-arm64.exe",
+            "bin": "magic-windows-arm64.exe",
+            "shortcut": "magic.exe"
+        }
+    },
+    "checkver": {
+        "github": "https://github.com/magicwubiao/go-magic"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/magicwubiao/go-magic/releases/download/v$version/magic-windows-amd64.exe"
+            },
+            "arm64": {
+                "url": "https://github.com/magicwubiao/go-magic/releases/download/v$version/magic-windows-arm64.exe"
+            }
+        }
+    },
+    "post_install": [
+        "# Rename to magic.exe",
+        "Rename-Item -Path \"$dir\\magic-windows-amd64.exe\" -NewName \"magic.exe\" -Force"
+    ]
+}
