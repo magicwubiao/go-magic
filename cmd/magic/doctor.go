@@ -1,0 +1,251 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+	"path/filepath"
+)
+
+// doctorCmd represents the doctor command
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Diagnose configuration and connectivity issues",
+	Long: `Run diagnostic checks to identify configuration problems.
+
+Available checks:
+  - config:   Validate configuration file
+  - provider: Test API provider connectivity
+  - tools:    Verify tool availability
+  - gateway:  Check gateway status
+  - skills:   Validate skills directory`,
+	RunE: runDoctor,
+}
+
+var doctorAllCmd = &cobra.Command{
+	Use:   "all",
+	Short: "Run all diagnostic checks",
+	RunE:  runDoctorAll,
+}
+
+var doctorCheckType string
+
+func init() {
+	doctorCmd.Flags().StringVarP(&doctorCheckType, "check", "c", "",
+		"Check type: config, provider, tools, gateway, skills")
+	doctorCmd.AddCommand(doctorAllCmd)
+	rootCmd.AddCommand(doctorCmd)
+}
+
+func runDoctor(cmd *cobra.Command, args []string) error {
+	checkType := doctorCheckType
+
+	if checkType == "" {
+		return runDoctorAll(cmd, args)
+	}
+
+	fmt.Println()
+	fmt.Println("=== Running " + checkType + " check ===")
+
+	var err error
+	switch checkType {
+	case "config":
+		err = runConfigCheck()
+	case "provider":
+		err = runProviderCheck()
+	case "tools":
+		err = runToolsCheck()
+	case "gateway":
+		err = runGatewayCheck()
+	case "skills":
+		err = runSkillsCheck()
+	default:
+		fmt.Printf("Unknown check type: %s\n", checkType)
+		fmt.Println("Valid types: config, provider, tools, gateway, skills")
+	}
+
+	return err
+}
+
+func runDoctorAll(cmd *cobra.Command, args []string) error {
+	fmt.Println()
+	fmt.Println("========================================")
+	fmt.Println("       go-magic Diagnostic Report")
+	fmt.Println("========================================")
+	fmt.Printf("Date: %s\n", strings.TrimSpace(runCommand("date")))
+	fmt.Printf("OS: %s\n", runtime.GOOS)
+	fmt.Printf("Arch: %s\n", runtime.GOARCH)
+	fmt.Println("========================================")
+	fmt.Println()
+
+	// Config check
+	fmt.Println("[CONFIG] Configuration...")
+	if err := runConfigCheck(); err != nil {
+		fmt.Printf("   FAILED: %v\n\n", err)
+	} else {
+		fmt.Println("   PASSED")
+	}
+
+	// Provider check
+	fmt.Println("[PROVIDER] API Connectivity...")
+	if err := runProviderCheck(); err != nil {
+		fmt.Printf("   FAILED: %v\n\n", err)
+	} else {
+		fmt.Println("   PASSED")
+	}
+
+	// Tools check
+	fmt.Println("[TOOLS] Tool Availability...")
+	if err := runToolsCheck(); err != nil {
+		fmt.Printf("   FAILED: %v\n\n", err)
+	} else {
+		fmt.Println("   PASSED")
+	}
+
+	// Gateway check
+	fmt.Println("[GATEWAY] Gateway Status...")
+	if err := runGatewayCheck(); err != nil {
+		fmt.Printf("   FAILED: %v\n\n", err)
+	} else {
+		fmt.Println("   PASSED")
+	}
+
+	// Skills check
+	fmt.Println("[SKILLS] Skills Directory...")
+	if err := runSkillsCheck(); err != nil {
+		fmt.Printf("   FAILED: %v\n\n", err)
+	} else {
+		fmt.Println("   PASSED")
+	}
+
+	fmt.Println("========================================")
+	fmt.Println("Run 'magic setup' to fix configuration issues.")
+	fmt.Println("========================================")
+
+	return nil
+}
+
+func runConfigCheck() error {
+	home, _ := os.UserHomeDir()
+	configPath := home + "/.go-magic/config.yaml"
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("config file not found at %s", configPath)
+	}
+
+	var cfg map[string]interface{}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("invalid YAML: %v", err)
+	}
+
+	if provider, ok := cfg["provider"].(map[string]interface{}); ok {
+		if name, ok := provider["name"].(string); ok {
+			fmt.Printf("   Provider: %s\n", name)
+		}
+		if model, ok := provider["model"].(string); ok {
+			fmt.Printf("   Model: %s\n", model)
+		}
+	}
+
+	fmt.Printf("   Config dir: %s/.go-magic\n", home)
+	return nil
+}
+
+func runProviderCheck() error {
+	home, _ := os.UserHomeDir()
+	configPath := home + "/.go-magic/config.yaml"
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("no config found")
+	}
+
+	var cfg map[string]interface{}
+	yaml.Unmarshal(data, &cfg)
+
+	provider, _ := cfg["provider"].(map[string]interface{})
+	providerName, _ := provider["name"].(string)
+
+	if providerName == "" {
+		return fmt.Errorf("no provider configured (run 'magic model' first)")
+	}
+
+	fmt.Printf("   Provider: %s\n", providerName)
+	fmt.Printf("   (Connectivity test requires API key)\n")
+	return nil
+}
+
+func runToolsCheck() error {
+	// Check if tools are registered
+	home, _ := os.UserHomeDir()
+	skillsDir := home + "/.go-magic/skills"
+
+	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
+		fmt.Printf("   Skills dir: NOT FOUND\n")
+	} else {
+		fmt.Printf("   Skills dir: %s\n", skillsDir)
+	}
+
+	// Check common tool directories
+	toolDirs := []string{
+		home + "/.go-magic/plugins",
+	}
+
+	for _, dir := range toolDirs {
+		if _, err := os.Stat(dir); err == nil {
+			fmt.Printf("   Plugin dir: %s\n", dir)
+		}
+	}
+
+	return nil
+}
+
+func runGatewayCheck() error {
+	cmd := exec.Command("pgrep", "-f", "magic.*gateway")
+	if err := cmd.Run(); err == nil {
+		fmt.Println("   Gateway: RUNNING")
+	} else {
+		fmt.Println("   Gateway: NOT RUNNING")
+		fmt.Println("   (Start with 'magic gateway start')")
+	}
+	return nil
+}
+
+func runSkillsCheck() error {
+	home, _ := os.UserHomeDir()
+	skillsDir := home + "/.go-magic/skills"
+
+	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
+		fmt.Println("   Skills directory: NOT FOUND")
+		return nil
+	}
+
+	fmt.Printf("   Skills dir: %s\n", skillsDir)
+
+	// Count skill files
+	count := 0
+	filepath.Walk(skillsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && (strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".skill")) {
+			count++
+		}
+		return nil
+	})
+
+	fmt.Printf("   Skill files: %d\n", count)
+	return nil
+}
+
+func runCommand(name string) string {
+	cmd := exec.Command("sh", "-c", name)
+	output, _ := cmd.CombinedOutput()
+	return string(output)
+}

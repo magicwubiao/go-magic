@@ -1,6 +1,5 @@
 # Binaries
-magic
-magic-server
+
 *.exe
 
 # Web build
