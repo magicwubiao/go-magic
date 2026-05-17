@@ -88,8 +88,17 @@ func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {
 }
 
 func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, error) {
-	query := `SELECT id, profile, platform, messages, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
-	rows, err := s.db.QueryContext(ctx, query, profile)
+	var query string
+	var rows *sql.Rows
+	var err error
+	
+	if profile == "" {
+		query = `SELECT id, profile, platform, messages, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+		rows, err = s.db.QueryContext(ctx, query)
+	} else {
+		query = `SELECT id, profile, platform, messages, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
+		rows, err = s.db.QueryContext(ctx, query, profile)
+	}
 	if err != nil {
 		return nil, err
 	}

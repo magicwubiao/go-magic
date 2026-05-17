@@ -80,6 +80,13 @@ func NewRegistry() *Registry {
 	}
 }
 
+// RegistryWithConfig 带配置的工具注册表
+type RegistryWithConfig struct {
+	*Registry
+	emailConfig *EmailConfig
+	smsConfig   *SMSConfig
+}
+
 // RegisterAll 注册所有内置工具
 func (r *Registry) RegisterAll(workDir string) {
 	// File tools
@@ -123,14 +130,14 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Cron job tool
 	r.Register(NewCronJobTool())
 
-	// Delegation tools (sub-agent tasks)
-	r.Register(NewDelegateTaskTool())
-	r.Register(NewPollTaskTool())
-	r.Register(NewListTasksTool())
-	r.Register(NewCancelTaskTool())
+	// Delegation tools (sub-agent tasks) - will be registered when subagent manager is available
+	// Call RegisterDelegationTools(manager) to enable them
 
 	// Built-in code execution with tool access
 	r.Register(NewExecuteCodeTool())
+
+	// Gitignore tool for generating .gitignore files
+	r.Register(NewGitignoreTool())
 
 	// Home Assistant smart home integration
 	r.Register(NewHATool())
@@ -176,9 +183,55 @@ func (r *Registry) RegisterAll(workDir string) {
 // RegisterOptionalTools registers tools that require external API configuration.
 // These are not registered by default to avoid confusing the LLM with non-functional placeholder tools.
 func (r *Registry) RegisterOptionalTools() {
-	r.Register(NewImageGenerationTool())
+	r.Register(NewImageGenerationTool(nil))
+	r.Register(NewImageEditTool(nil))
+	r.Register(NewTTSTool())
+	r.Register(NewASRTool())
+	r.Register(NewASRAvailableProvidersTool())
+	r.Register(NewTTSAvailableVoicesTool())
+	r.Register(NewAudioPlayTool())
+	r.Register(NewAudioDownloadTool())
+	r.Register(NewVideoAnalyzeTool())
+}
+
+// RegisterImageGenTool 注册图片生成工具（带配置）
+func (r *Registry) RegisterImageGenTool(config *ImageGenConfig) {
+	if config != nil && config.APIKey != "" {
+		r.Register(NewImageGenerationTool(config))
+		r.SetTimeout("image_gen", 180*time.Second)
+		r.Register(NewImageEditTool(config))
+		r.SetTimeout("image_edit", 180*time.Second)
+	}
+}
+
+// RegisterOptionalToolsWithConfig 使用配置注册可选工具
+func (r *Registry) RegisterOptionalToolsWithConfig(imageGenConfig *ImageGenConfig) {
+	r.RegisterImageGenTool(imageGenConfig)
 	r.Register(NewTTSTool())
 	r.Register(NewVideoAnalyzeTool())
+}
+
+// RegisterEmailTool 注册邮件发送工具（需要配置）
+func (r *Registry) RegisterEmailTool(config *EmailConfig) {
+	if config != nil && config.SMTPHost != "" {
+		r.Register(NewEmailTool(config))
+		r.SetTimeout("send_email", 30*time.Second)
+	}
+}
+
+// RegisterSMSTool 注册短信发送工具（需要配置）
+func (r *Registry) RegisterSMSTool(config *SMSConfig) {
+	if config != nil && config.Provider != "" {
+		r.Register(NewSMSTool(config))
+		r.SetTimeout("send_sms", 30*time.Second)
+	}
+}
+
+// RegisterWithNotificationConfig 注册所有工具，包括邮件和短信工具
+func (r *Registry) RegisterWithNotificationConfig(workDir string, emailConfig *EmailConfig, smsConfig *SMSConfig) {
+	r.RegisterAll(workDir)
+	r.RegisterEmailTool(emailConfig)
+	r.RegisterSMSTool(smsConfig)
 }
 
 // GetAllTools 返回所有内置工具实例

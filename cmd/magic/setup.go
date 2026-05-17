@@ -118,7 +118,7 @@ func allPlatforms() []platformInfo {
 		{Name: "telegram", DisplayName: "Telegram", Description: "Telegram Bot"},
 		{Name: "discord", DisplayName: "Discord", Description: "Discord Bot"},
 		{Name: "slack", DisplayName: "Slack", Description: "Slack Bot"},
-		{Name: "wechat", DisplayName: "WeChat", Description: "WeChat (ClawBot)"},
+		{Name: "wechat", DisplayName: "WeChat", Description: "WeChat Personal Account (iLink QR Login)"},
 		{Name: "wecom", DisplayName: "WeCom", Description: "WeCom (Enterprise WeChat)"},
 		{Name: "qq", DisplayName: "QQ", Description: "QQ Bot"},
 		{Name: "dingtalk", DisplayName: "DingTalk", Description: "DingTalk Bot"},
@@ -229,7 +229,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  - Run 'magic model' to switch AI Provider/model")
 	fmt.Println("  - Run 'magic gateway start' to start messaging gateway")
 	fmt.Println()
-	fmt.Println("Config file: ~/.magic/config.json")
+	fmt.Println("Config file: " + filepath.Join(homeDir, ".magic", "config.json"))
 	fmt.Println()
 
 	return nil
@@ -540,7 +540,9 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 				Enabled: true,
 				Token:   token,
 			}
-			fmt.Printf("  Telegram configured\n")
+			fmt.Printf("  ✓ Telegram configured\n")
+		} else {
+			fmt.Println("  ✗ Skipped (Bot Token is required)")
 		}
 
 	case "discord":
@@ -553,7 +555,9 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 				Enabled: true,
 				Token:   token,
 			}
-			fmt.Printf("  Discord configured\n")
+			fmt.Printf("  ✓ Discord configured\n")
+		} else {
+			fmt.Println("  ✗ Skipped (Bot Token is required)")
 		}
 
 	case "slack":
@@ -561,44 +565,35 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 		fmt.Print("  Enter Bot Token: ")
 		token, _ := reader.ReadString('\n')
 		token = strings.TrimSpace(token)
-		fmt.Print("  Enter App Secret: ")
+		if token == "" {
+			fmt.Println("  ✗ Skipped (Bot Token is required)")
+			return
+		}
+		fmt.Print("  Enter App Secret (optional): ")
 		secret, _ := reader.ReadString('\n')
 		secret = strings.TrimSpace(secret)
-		if token != "" {
-			cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
-				Enabled: true,
-				Token:   token,
-				Secret:  secret,
-			}
-			fmt.Printf("  Slack configured\n")
+		cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+			Secret:  secret,
 		}
+		fmt.Printf("  ✓ Slack configured\n")
 
 	case "wechat":
-		fmt.Println("  WeChat (ClawBot) Configuration")
-		fmt.Print("  Enter App ID: ")
-		appID, _ := reader.ReadString('\n')
-		appID = strings.TrimSpace(appID)
-		fmt.Print("  Enter App Secret: ")
-		appSecret, _ := reader.ReadString('\n')
-		appSecret = strings.TrimSpace(appSecret)
-		fmt.Print("  Enter AES Key (optional): ")
-		aesKey, _ := reader.ReadString('\n')
-		aesKey = strings.TrimSpace(aesKey)
-		fmt.Print("  Mode (callback/qr, default callback): ")
-		mode, _ := reader.ReadString('\n')
-		mode = strings.TrimSpace(mode)
-		if mode == "" {
-			mode = "callback"
-		}
-		if appID != "" {
-			cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+		fmt.Println("  WeChat (iLink) Configuration")
+		fmt.Println("  This uses the iLink Bot API for personal WeChat accounts.")
+		fmt.Println("  You will need to scan a QR code to login after starting the gateway.")
+		fmt.Print("  Enable WeChat? (y/N): ")
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer == "y" {
+			cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
 				Enabled: true,
-				CorpID:  appID,
-				Secret:  appSecret,
-				AESKey:  aesKey,
-				Mode:    mode,
 			}
-			fmt.Printf("  WeChat configured (mode: %s)\n", mode)
+			fmt.Printf("  ✓ WeChat configured.\n")
+			fmt.Println("  Note: Run 'magic gateway start' and scan the QR code to login.")
+		} else {
+			fmt.Println("  ✗ Skipped")
 		}
 
 	case "wecom":
@@ -606,6 +601,10 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 		fmt.Print("  Enter Corp ID: ")
 		corpID, _ := reader.ReadString('\n')
 		corpID = strings.TrimSpace(corpID)
+		if corpID == "" {
+			fmt.Println("  ✗ Skipped (Corp ID is required)")
+			return
+		}
 		fmt.Print("  Enter Agent ID: ")
 		agentID, _ := reader.ReadString('\n')
 		agentID = strings.TrimSpace(agentID)
@@ -618,74 +617,78 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 		if mode == "" {
 			mode = "qr"
 		}
-		if corpID != "" {
-			cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
-				Enabled: true,
-				CorpID:  corpID,
-				AgentID: agentID,
-				Secret:  secret,
-				Mode:    mode,
-			}
-			fmt.Printf("  WeCom configured (mode: %s)\n", mode)
+		cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
+			Enabled: true,
+			CorpID:  corpID,
+			AgentID: agentID,
+			Secret:  secret,
+			Mode:    mode,
 		}
+		fmt.Printf("  ✓ WeCom configured (mode: %s)\n", mode)
 
 	case "qq":
 		fmt.Println("  QQ Bot Configuration")
 		fmt.Print("  Enter QQ Number: ")
 		number, _ := reader.ReadString('\n')
 		number = strings.TrimSpace(number)
+		if number == "" {
+			fmt.Println("  ✗ Skipped (QQ Number is required)")
+			return
+		}
 		fmt.Print("  Enter Password (optional): ")
 		password, _ := reader.ReadString('\n')
 		password = strings.TrimSpace(password)
-		if number != "" {
-			qqCfg := config.PlatformConfig{
-				Enabled: true,
-				Number:  number,
-			}
-			if password != "" {
-				qqCfg.Password = password
-			}
-			cfg.Gateway.Platforms["qq"] = qqCfg
-			fmt.Printf("  QQ configured\n")
+		qqCfg := config.PlatformConfig{
+			Enabled: true,
+			Number:  number,
 		}
+		if password != "" {
+			qqCfg.Password = password
+		}
+		cfg.Gateway.Platforms["qq"] = qqCfg
+		fmt.Printf("  ✓ QQ configured\n")
 
 	case "dingtalk":
 		fmt.Println("  DingTalk Bot Configuration")
 		fmt.Print("  Enter App Key: ")
 		appKey, _ := reader.ReadString('\n')
 		appKey = strings.TrimSpace(appKey)
+		if appKey == "" {
+			fmt.Println("  ✗ Skipped (App Key is required)")
+			return
+		}
 		fmt.Print("  Enter App Secret: ")
 		appSecret, _ := reader.ReadString('\n')
 		appSecret = strings.TrimSpace(appSecret)
-		if appKey != "" {
-			cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
-				Enabled:   true,
-				AppKey:    appKey,
-				AppSecret: appSecret,
-			}
-			fmt.Printf("  DingTalk configured\n")
+		cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
+			Enabled:   true,
+			AppKey:    appKey,
+			AppSecret: appSecret,
 		}
+		fmt.Printf("  ✓ DingTalk configured\n")
 
 	case "feishu":
 		fmt.Println("  Feishu/Lark Bot Configuration")
 		fmt.Print("  Enter App ID: ")
 		appID, _ := reader.ReadString('\n')
 		appID = strings.TrimSpace(appID)
+		if appID == "" {
+			fmt.Println("  ✗ Skipped (App ID is required)")
+			return
+		}
 		fmt.Print("  Enter App Secret: ")
 		appSecret, _ := reader.ReadString('\n')
 		appSecret = strings.TrimSpace(appSecret)
-		if appID != "" {
-			cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
-				Enabled:   true,
-				AppID:     appID,
-				AppSecret: appSecret,
-			}
-			fmt.Printf("  Feishu configured\n")
+		cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
+			Enabled:   true,
+			AppID:     appID,
+			AppSecret: appSecret,
 		}
+		fmt.Printf("  ✓ Feishu configured\n")
 
 	case "whatsapp":
 		fmt.Println("  WhatsApp Configuration")
-		fmt.Print("  Enter Verify Token (optional): ")
+		fmt.Print("  Enter Verify Token (optional, press Enter to skip): ")
 		verifyToken, _ := reader.ReadString('\n')
 		verifyToken = strings.TrimSpace(verifyToken)
 		fmt.Print("  Mode (personal/business, default personal): ")
@@ -699,41 +702,49 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 			VerifyToken: verifyToken,
 			Mode:        mode,
 		}
-		fmt.Printf("  WhatsApp configured (mode: %s)\n", mode)
+		fmt.Printf("  ✓ WhatsApp configured (mode: %s)\n", mode)
 
 	case "line":
 		fmt.Println("  LINE Bot Configuration")
 		fmt.Print("  Enter Channel Access Token: ")
 		token, _ := reader.ReadString('\n')
 		token = strings.TrimSpace(token)
+		if token == "" {
+			fmt.Println("  ✗ Skipped (Channel Access Token is required)")
+			return
+		}
 		fmt.Print("  Enter Channel Secret (optional): ")
 		secret, _ := reader.ReadString('\n')
 		secret = strings.TrimSpace(secret)
-		if token != "" {
-			cfg.Gateway.Platforms["line"] = config.PlatformConfig{
-				Enabled: true,
-				Token:   token,
-				Secret:  secret,
-			}
-			fmt.Printf("  LINE configured\n")
+		cfg.Gateway.Platforms["line"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+			Secret:  secret,
 		}
+		fmt.Printf("  ✓ LINE configured\n")
 
 	case "matrix":
 		fmt.Println("  Matrix Configuration")
 		fmt.Print("  Enter Homeserver URL (e.g., https://matrix.org): ")
 		homeserver, _ := reader.ReadString('\n')
 		homeserver = strings.TrimSpace(homeserver)
+		if homeserver == "" {
+			fmt.Println("  ✗ Skipped (Homeserver URL is required)")
+			return
+		}
 		fmt.Print("  Enter Access Token: ")
 		token, _ := reader.ReadString('\n')
 		token = strings.TrimSpace(token)
-		if homeserver != "" && token != "" {
-			cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
-				Enabled: true,
-				Token:   token,
-				APIURL:  homeserver,
-			}
-			fmt.Printf("  Matrix configured\n")
+		if token == "" {
+			fmt.Println("  ✗ Skipped (Access Token is required)")
+			return
 		}
+		cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+			Enabled: true,
+			Token:   token,
+			APIURL:  homeserver,
+		}
+		fmt.Printf("  ✓ Matrix configured\n")
 	}
 }
 

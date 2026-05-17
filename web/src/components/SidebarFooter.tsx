@@ -23,7 +23,7 @@ export function SidebarFooter() {
       </Typography>
 
       <a
-        href="https://nousresearch.com"
+        href="https://magictech.cc"
         target="_blank"
         rel="noopener noreferrer"
         className={cn(

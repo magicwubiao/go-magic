@@ -3,6 +3,7 @@ package groupchat
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -54,6 +55,7 @@ func (h *Handler) registerRoutes() {
 
 	// Messages
 	h.mux.HandleFunc("GET /rooms/{id}/messages", h.listMessages)
+	h.mux.HandleFunc("POST /rooms/{id}/messages", h.sendMessage)
 
 	// Context compression
 	h.mux.HandleFunc("POST /rooms/{id}/compress", h.forceCompress)
@@ -102,6 +104,11 @@ func (h *Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 		data.Compression = DefaultCompressionConfig()
 	}
 
+	// Generate invite code if not provided
+	if data.InviteCode == "" {
+		data.InviteCode = GenerateInviteCode()
+	}
+
 	room := &Room{
 		ID:               uuid.New().String(),
 		Name:             data.Name,
@@ -117,6 +124,9 @@ func (h *Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Create compressor for room
+	h.server.GetOrCreateCompressor(room.ID)
 
 	agents, _ := h.storage.GetAgents(room.ID)
 	jsonResponse(w, map[string]interface{}{"room": room, "agents": agents})
@@ -200,6 +210,14 @@ func (h *Handler) updateRoomConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.storage.UpdateRoomConfig(roomID, config); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Update compressor
+	compressor := h.server.GetOrCreateCompressor(roomID)
+	if compressor != nil {
+		compressor.triggerTokens = config.TriggerTokens
+		compressor.maxHistoryTokens = config.MaxHistoryTokens
+		compressor.tailMessageCount = config.TailMessageCount
 	}
 
 	room, _ := h.storage.GetRoom(roomID)
@@ -293,7 +311,7 @@ func (h *Handler) addAgent(w http.ResponseWriter, r *http.Request) {
 	agent := &RoomAgent{
 		ID:          uuid.New().String(),
 		RoomID:      roomID,
-		AgentID:    uuid.New().String(),
+		AgentID:     uuid.New().String(),
 		Profile:     data.Profile,
 		Name:        data.Name,
 		Description: data.Description,
@@ -358,6 +376,21 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 		members = []Member{}
 	}
 
+	// Add online status
+	h.server.mu.RLock()
+	roomClients, ok := h.server.rooms[roomID]
+	h.server.mu.RUnlock()
+
+	if ok {
+		onlineMap := make(map[string]bool)
+		for _, client := range roomClients {
+			onlineMap[client.UserID] = true
+		}
+		for i := range members {
+			members[i].Online = onlineMap[members[i].UserID]
+		}
+	}
+
 	jsonResponse(w, map[string]interface{}{"members": members})
 }
 
@@ -376,7 +409,14 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := h.storage.GetMessages(roomID, 100)
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	messages, err := h.storage.GetMessages(roomID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -387,6 +427,60 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"messages": messages})
+}
+
+// sendMessage 发送消息
+func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	var data struct {
+		SenderID   string `json:"senderId"`
+		SenderName string `json:"senderName"`
+		Content    string `json:"content"`
+		Type       string `json:"type,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	msgType := data.Type
+	if msgType == "" {
+		msgType = "text"
+	}
+
+	chatMsg := &ChatMessage{
+		ID:         uuid.New().String(),
+		RoomID:     roomID,
+		SenderID:   data.SenderID,
+		SenderName: data.SenderName,
+		Content:    data.Content,
+		Timestamp:  Now(),
+		Type:       msgType,
+	}
+
+	if err := h.storage.SaveMessage(chatMsg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast to room via WebSocket
+	h.server.broadcastToRoom(roomID, map[string]interface{}{
+		"type":    "message",
+		"roomId":  roomID,
+		"data":    chatMsg,
+	})
+
+	jsonResponse(w, map[string]interface{}{"message": chatMsg})
 }
 
 // ─── Context Handlers ────────────────────────────────────────────────────────
@@ -404,8 +498,20 @@ func (h *Handler) forceCompress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: 实现上下文压缩逻辑
-	// 需要调用 Agent 的压缩功能
+	compressor := h.server.GetOrCreateCompressor(roomID)
+	if compressor == nil {
+		http.Error(w, "Failed to get compressor", http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast compression event
+	h.server.broadcastToRoom(roomID, map[string]interface{}{
+		"type":   "context_compressing",
+		"roomId": roomID,
+	})
+
+	// TODO: Implement actual compression logic
+	// This would involve calling the agent's compression functionality
 
 	room, _ := h.storage.GetRoom(roomID)
 	jsonResponse(w, map[string]interface{}{"room": room, "compressed": true})

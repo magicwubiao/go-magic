@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -126,6 +127,20 @@ type Server struct {
 
 	// Cron job manager
 	cronMgr *cron.Manager
+
+	// Background actions tracking
+	actions      map[string]*ActionStatus
+	actionsMu    sync.RWMutex
+}
+
+// ActionStatus tracks the status of a background action
+type ActionStatus struct {
+	Name      string     `json:"name"`
+	Running   bool       `json:"running"`
+	ExitCode  *int       `json:"exit_code"`
+	Lines     []string   `json:"lines"`
+	StartTime time.Time  `json:"start_time"`
+	EndTime   *time.Time `json:"end_time,omitempty"`
 }
 
 // NewServer creates a new server instance connected to real backend systems
@@ -215,6 +230,7 @@ func NewServer(dbPath string) *Server {
 		agents:          make(map[string]*agent.Agent),
 		disabledSkills:  disabledSkills,
 		cronMgr:         cronMgr,
+		actions:         make(map[string]*ActionStatus),
 	}
 }
 
@@ -368,6 +384,7 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 	msgCount := len(s.Messages)
 	var toolCallCount int
 	var preview string
+	var title string
 
 	for _, m := range s.Messages {
 		if m.Role == "user" || m.Role == "assistant" {
@@ -378,6 +395,13 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		if len(m.ToolCalls) > 0 {
 			toolCallCount += len(m.ToolCalls)
 		}
+		// Extract title from first user message
+		if title == "" && m.Role == "user" && m.Content != "" {
+			title = strings.TrimSpace(m.Content)
+			if len(title) > 50 {
+				title = title[:50] + "..."
+			}
+		}
 	}
 
 	preview = strings.TrimSpace(preview)
@@ -385,14 +409,22 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		preview = preview[:200] + "..."
 	}
 
+	// If no title found, use a shortened ID
+	if title == "" {
+		title = "Untitled"
+	}
+
+	// Determine if session is active (has activity in last 30 minutes)
+	isActive := time.Since(s.UpdatedAt) < 30*time.Minute
+
 	return &Session{
 		ID:            s.ID,
 		Source:        s.Platform,
 		Model:         "default",
-		Title:         s.ID,
+		Title:         title,
 		StartedAt:     s.CreatedAt.Unix(),
 		LastActive:    s.UpdatedAt.Unix(),
-		IsActive:      true,
+		IsActive:      isActive,
 		MessageCount:  msgCount,
 		ToolCallCount: toolCallCount,
 		Preview:       preview,
@@ -1032,10 +1064,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if provider supports streaming
-	streamer, supportsStream := s.provider.(provider.StreamingToolCaller)
+	// Check if agent supports streaming
+	_, supportsStream := s.provider.(provider.StreamingToolCaller)
 	if !supportsStream {
-		// Fall back to non-streaming
+		// Fall back to non-streaming via agent (which still executes tools)
 		ctx := context.Background()
 		resp, err := aiAgent.RunConversation(ctx, req.Message)
 		if err != nil {
@@ -1056,24 +1088,47 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Real streaming
+	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	ctx := context.Background()
-	handler := func(resp *provider.StreamResponse) {
-		if resp.Content != "" {
-			data, _ := json.Marshal(map[string]string{"content": resp.Content})
+	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
+		if done {
+			// Stream finished
+			return
+		}
+		if content != "" {
+			// Check if this is a tool result
+			if strings.Contains(content, ">>>TOOL_RESULT_START|") {
+				// Extract tool name
+				re := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^<]+)<<<`)
+				matches := re.FindStringSubmatch(content)
+				if len(matches) > 1 {
+					toolName := matches[1]
+					// Extract tool content
+					contentRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|[^<]+<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
+					contentMatches := contentRe.FindStringSubmatch(content)
+					toolContent := ""
+					if len(contentMatches) > 1 {
+						toolContent = strings.TrimSpace(contentMatches[1])
+					}
+					// Send as tool result event
+					data, _ := json.Marshal(map[string]interface{}{
+						"type":    "tool_result",
+						"tool":    toolName,
+						"content": toolContent,
+					})
+					fmt.Fprintf(w, "data: %s\n\n", string(data))
+					flusher.Flush()
+					return
+				}
+			}
+			// Regular content
+			data, _ := json.Marshal(map[string]string{"content": content})
 			fmt.Fprintf(w, "data: %s\n\n", string(data))
 			flusher.Flush()
 		}
-	}
-
-	// Build messages from history
-	messages := []provider.Message{
-		{Role: "user", Content: req.Message},
-	}
-
-	err := streamer.StreamWithTools(ctx, messages, getToolsSchema(s.toolReg), handler)
-	if err != nil {
-		data, _ := json.Marshal(map[string]string{"error": err.Error()})
+	})
+	if streamErr != nil {
+		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
 		fmt.Fprintf(w, "data: %s\n\n", string(data))
 		flusher.Flush()
 	}
@@ -2837,8 +2892,20 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	// Gateway restart is a no-op in the web dashboard context
-	jsonResponse(w, map[string]bool{"ok": true})
+	
+	// Start gateway restart as a background action
+	actionID := "gateway-restart"
+	s.runAction(actionID, "gateway restart", func() (int, error) {
+		cmd := exec.Command(os.Args[0], "gateway", "restart")
+		cmd.Env = os.Environ()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return 1, fmt.Errorf("gateway restart failed: %w\nOutput: %s", err, string(output))
+		}
+		return 0, nil
+	})
+	
+	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
 }
 
 // --- Magic Update ---
@@ -2848,13 +2915,59 @@ func (s *Server) handleMagicUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	jsonResponse(w, map[string]interface{}{
-		"status":  "not_available",
-		"message": "Update from web dashboard is not supported. Use 'magic update' CLI command.",
+	
+	// Start magic update as a background action
+	actionID := "magic-update"
+	s.runAction(actionID, "magic update", func() (int, error) {
+		cmd := exec.Command(os.Args[0], "update")
+		cmd.Env = os.Environ()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return 1, fmt.Errorf("magic update failed: %w\nOutput: %s", err, string(output))
+		}
+		return 0, nil
 	})
+	
+	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
 }
 
 // --- Actions ---
+
+// runAction executes a background action and tracks its status
+func (s *Server) runAction(id, name string, fn func() (int, error)) {
+	s.actionsMu.Lock()
+	s.actions[id] = &ActionStatus{
+		Name:      name,
+		Running:   true,
+		Lines:     []string{},
+		StartTime: time.Now(),
+	}
+	s.actionsMu.Unlock()
+
+	go func() {
+		exitCode, err := fn()
+		
+		s.actionsMu.Lock()
+		defer s.actionsMu.Unlock()
+		
+		if action, ok := s.actions[id]; ok {
+			action.Running = false
+			action.ExitCode = &exitCode
+			now := time.Now()
+			action.EndTime = &now
+			if err != nil {
+				action.Lines = append(action.Lines, fmt.Sprintf("Error: %v", err))
+			}
+		}
+	}()
+}
+
+// getActionStatus retrieves the status of a background action
+func (s *Server) getActionStatus(id string) *ActionStatus {
+	s.actionsMu.RLock()
+	defer s.actionsMu.RUnlock()
+	return s.actions[id]
+}
 
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/actions/")
@@ -2863,17 +2976,32 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	// actionName := parts[0]
-	// subPath := parts[1]
-	if parts[1] == "status" {
-		name := parts[0]
+	actionName := parts[0]
+	subPath := parts[1]
+	
+	if subPath == "status" {
+		status := s.getActionStatus(actionName)
+		if status == nil {
+			// Return empty status if action not found
+			jsonResponse(w, map[string]interface{}{
+				"exit_code": nil,
+				"lines":     []string{},
+				"name":      actionName,
+				"pid":       nil,
+				"running":   false,
+				"status":    "unknown",
+				"message":   "",
+			})
+			return
+		}
+		
 		jsonResponse(w, map[string]interface{}{
-			"exit_code": nil,
-			"lines":     []string{},
-			"name":      name,
+			"exit_code": status.ExitCode,
+			"lines":     status.Lines,
+			"name":      status.Name,
 			"pid":       nil,
-			"running":   false,
-			"status":    "completed",
+			"running":   status.Running,
+			"status":    map[bool]string{true: "running", false: "completed"}[status.Running],
 			"message":   "",
 		})
 		return
@@ -2883,13 +3011,45 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 
 // --- Dashboard Themes ---
 
+// getThemePreference reads the user's theme preference from config
+func (s *Server) getThemePreference() string {
+	themePath := filepath.Join(s.magicHome, ".theme")
+	if data, err := os.ReadFile(themePath); err == nil {
+		theme := strings.TrimSpace(string(data))
+		// Support all frontend themes
+		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose", "dark", "light"}
+		for _, valid := range validThemes {
+			if theme == valid {
+				return theme
+			}
+		}
+	}
+	return "default" // default
+}
+
+// saveThemePreference saves the user's theme preference
+func (s *Server) saveThemePreference(theme string) error {
+	themePath := filepath.Join(s.magicHome, ".theme")
+	return os.WriteFile(themePath, []byte(theme), 0644)
+}
+
 func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
+	activeTheme := s.getThemePreference()
+	// All available themes matching frontend presets
+	themes := []map[string]interface{}{
+		{"name": "default", "label": "Default", "description": "Default dark teal theme"},
+		{"name": "default-large", "label": "Default Large", "description": "Default theme with larger fonts"},
+		{"name": "midnight", "label": "Midnight", "description": "Deep blue midnight theme"},
+		{"name": "ember", "label": "Ember", "description": "Warm orange ember theme"},
+		{"name": "mono", "label": "Mono", "description": "Monochrome grayscale theme"},
+		{"name": "cyberpunk", "label": "Cyberpunk", "description": "Neon cyberpunk theme"},
+		{"name": "rose", "label": "Rose", "description": "Soft rose pink theme"},
+		{"name": "dark", "label": "Dark", "description": "Dark theme with dark backgrounds"},
+		{"name": "light", "label": "Light", "description": "Light theme with light backgrounds"},
+	}
 	jsonResponse(w, map[string]interface{}{
-		"active": "dark",
-		"themes": []map[string]interface{}{
-			{"name": "dark", "label": "Dark", "description": "Dark theme with dark backgrounds"},
-			{"name": "light", "label": "Light", "description": "Light theme with light backgrounds"},
-		},
+		"active": activeTheme,
+		"themes": themes,
 	})
 }
 
@@ -2902,6 +3062,27 @@ func (s *Server) handleDashboardTheme(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
+
+		// Validate theme name - support all frontend themes
+		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose", "dark", "light"}
+		isValid := false
+		for _, valid := range validThemes {
+			if req.Name == valid {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			http.Error(w, "Invalid theme name", http.StatusBadRequest)
+			return
+		}
+
+		// Save theme preference
+		if err := s.saveThemePreference(req.Name); err != nil {
+			http.Error(w, "Failed to save theme", http.StatusInternalServerError)
+			return
+		}
+
 		jsonResponse(w, map[string]interface{}{"ok": true, "theme": req.Name})
 		return
 	}

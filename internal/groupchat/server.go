@@ -3,6 +3,7 @@ package groupchat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -22,6 +23,7 @@ type Server struct {
 	mu           sync.RWMutex
 	ctx          context.Context
 	cancel       context.CancelFunc
+	compressors  map[string]*ContextCompressor // roomID -> compressor
 }
 
 // Client WebSocket 客户端
@@ -34,6 +36,7 @@ type Client struct {
 	Conn        *websocket.Conn
 	send        chan []byte
 	server      *Server
+	mu          sync.Mutex
 }
 
 // AgentClient Agent 客户端
@@ -44,6 +47,7 @@ type AgentClient struct {
 	Name      string    `json:"name"`
 	SessionID string    `json:"sessionId"`
 	Connected bool      `json:"connected"`
+	CreatedAt int64     `json:"createdAt"`
 }
 
 // Message 消息结构
@@ -52,6 +56,15 @@ type Message struct {
 	RoomID    string          `json:"roomId,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 	Timestamp int64           `json:"timestamp"`
+}
+
+// ContextCompressor handles context compression for rooms
+type ContextCompressor struct {
+	roomID           string
+	triggerTokens    int
+	maxHistoryTokens int
+	tailMessageCount int
+	mu               sync.RWMutex
 }
 
 // NewServer 创建服务器
@@ -65,7 +78,41 @@ func NewServer(storage *Storage) *Server {
 		onlineUsers: make(map[string]*Client),
 		ctx:         ctx,
 		cancel:      cancel,
+		compressors: make(map[string]*ContextCompressor),
 	}
+}
+
+// GetOrCreateCompressor gets or creates a context compressor for a room
+func (s *Server) GetOrCreateCompressor(roomID string) *ContextCompressor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if comp, ok := s.compressors[roomID]; ok {
+		return comp
+	}
+
+	// Get room config
+	room, err := s.storage.GetRoom(roomID)
+	if err != nil || room == nil {
+		// Use defaults
+		comp := &ContextCompressor{
+			roomID:           roomID,
+			triggerTokens:    100000,
+			maxHistoryTokens: 32000,
+			tailMessageCount: 20,
+		}
+		s.compressors[roomID] = comp
+		return comp
+	}
+
+	comp := &ContextCompressor{
+		roomID:           roomID,
+		triggerTokens:    room.TriggerTokens,
+		maxHistoryTokens: room.MaxHistoryTokens,
+		tailMessageCount: room.TailMessageCount,
+	}
+	s.compressors[roomID] = comp
+	return comp
 }
 
 // HandleWebSocket 处理 WebSocket 连接
@@ -154,6 +201,21 @@ func (c *Client) writePump() {
 	}
 }
 
+// Send sends a message to the client
+func (c *Client) Send(data interface{}) error {
+	message, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case c.send <- message:
+		return nil
+	default:
+		return fmt.Errorf("client send buffer full")
+	}
+}
+
 // handleMessage 处理消息
 func (c *Client) handleMessage(msg *Message) {
 	switch msg.Type {
@@ -177,6 +239,12 @@ func (c *Client) handleMessage(msg *Message) {
 		c.handleAddAgent(msg)
 	case "remove_agent":
 		c.handleRemoveAgent(msg)
+	case "get_history":
+		c.handleGetHistory(msg)
+	case "list_members":
+		c.handleListMembers(msg)
+	case "compress_context":
+		c.handleCompressContext(msg)
 	}
 }
 
@@ -189,6 +257,7 @@ func (c *Client) handleJoin(msg *Message) {
 		RoomID      string `json:"roomId"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid join data")
 		return
 	}
 
@@ -222,35 +291,53 @@ func (c *Client) handleJoin(msg *Message) {
 		c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
 			"type":    "member_joined",
 			"roomId":  c.RoomID,
+			"userId":  c.UserID,
+			"userName": c.Name,
 			"members": members,
 		})
 	}
 	c.server.mu.Unlock()
 
 	// 发送确认
-	c.send <- []byte(`{"type":"joined","userId":"` + c.UserID + `"}`)
+	c.Send(map[string]interface{}{
+		"type":   "joined",
+		"userId": c.UserID,
+		"roomId": c.RoomID,
+	})
 }
 
 // handleLeave 处理离开
 func (c *Client) handleLeave(msg *Message) {
-	c.server.removeClient(c)
-
 	if c.RoomID != "" {
 		c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
-			"type":   "member_left",
-			"roomId": c.RoomID,
-			"userId": c.UserID,
+			"type":     "member_left",
+			"roomId":   c.RoomID,
+			"userId":   c.UserID,
+			"userName": c.Name,
 		})
 	}
+	c.server.removeClient(c)
 }
 
 // handleChatMessage 处理聊天消息
 func (c *Client) handleChatMessage(msg *Message) {
 	var data struct {
 		Content string `json:"content"`
+		Type    string `json:"type,omitempty"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid message data")
 		return
+	}
+
+	if c.RoomID == "" {
+		c.sendError("Not in a room")
+		return
+	}
+
+	msgType := data.Type
+	if msgType == "" {
+		msgType = "text"
 	}
 
 	chatMsg := &ChatMessage{
@@ -260,35 +347,48 @@ func (c *Client) handleChatMessage(msg *Message) {
 		SenderName: c.Name,
 		Content:    data.Content,
 		Timestamp:  Now(),
+		Type:       msgType,
 	}
 
 	// 保存消息
-	c.server.storage.SaveMessage(chatMsg)
+	if err := c.server.storage.SaveMessage(chatMsg); err != nil {
+		log.Printf("Failed to save message: %v", err)
+	}
 
 	// 广播消息
 	c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
-		"type": "message",
-		"data": chatMsg,
+		"type":    "message",
+		"roomId":  c.RoomID,
+		"data":    chatMsg,
 	})
 
 	// 如果是 @ 某个代理，转发给代理处理
 	if len(data.Content) > 0 && data.Content[0] == '@' {
 		c.server.handleAgentMention(c.RoomID, chatMsg)
 	}
+
+	// Check if context compression is needed
+	c.server.checkAndCompressContext(c.RoomID)
 }
 
 // handleTyping 处理打字
 func (c *Client) handleTyping(msg *Message) {
+	if c.RoomID == "" {
+		return
+	}
 	c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
-		"type":    "typing",
-		"roomId":  c.RoomID,
-		"userId":  c.UserID,
+		"type":     "typing",
+		"roomId":   c.RoomID,
+		"userId":   c.UserID,
 		"userName": c.Name,
 	}, c.ID)
 }
 
 // handleStopTyping 处理停止打字
 func (c *Client) handleStopTyping(msg *Message) {
+	if c.RoomID == "" {
+		return
+	}
 	c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
 		"type":   "stop_typing",
 		"roomId": c.RoomID,
@@ -304,7 +404,17 @@ func (c *Client) handleCreateRoom(msg *Message) {
 		Compression CompressionConfig   `json:"compression"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid create room data")
 		return
+	}
+
+	if data.Compression.TriggerTokens == 0 {
+		data.Compression = DefaultCompressionConfig()
+	}
+
+	// Generate invite code if not provided
+	if data.InviteCode == "" {
+		data.InviteCode = GenerateInviteCode()
 	}
 
 	room := &Room{
@@ -320,42 +430,95 @@ func (c *Client) handleCreateRoom(msg *Message) {
 
 	if err := c.server.storage.CreateRoom(room); err != nil {
 		log.Printf("Create room error: %v", err)
+		c.sendError("Failed to create room")
 		return
 	}
 
+	// Create compressor for room
+	c.server.GetOrCreateCompressor(room.ID)
+
 	// 发送房间信息
-	c.send <- mustMarshal(map[string]interface{}{
-		"type": "room_created",
-		"room": room,
+	c.Send(map[string]interface{}{
+		"type":       "room_created",
+		"room":       room,
+		"inviteCode": data.InviteCode,
 	})
 }
 
 // handleJoinRoom 处理加入房间
 func (c *Client) handleJoinRoom(msg *Message) {
 	var data struct {
-		RoomID string `json:"roomId"`
+		RoomID     string `json:"roomId"`
+		InviteCode string `json:"inviteCode,omitempty"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid join room data")
 		return
 	}
 
-	room, err := c.server.storage.GetRoom(data.RoomID)
-	if err != nil || room == nil {
+	var room *Room
+	var err error
+
+	if data.InviteCode != "" {
+		room, err = c.server.storage.GetRoomByInviteCode(data.InviteCode)
+	} else {
+		room, err = c.server.storage.GetRoom(data.RoomID)
+	}
+
+	if err != nil {
+		log.Printf("Get room error: %v", err)
+		c.sendError("Failed to get room")
 		return
 	}
 
-	members, _ := c.server.storage.GetMembers(data.RoomID)
-	messages, _ := c.server.storage.GetMessages(data.RoomID, 100)
-	agents, _ := c.server.storage.GetAgents(data.RoomID)
+	if room == nil {
+		c.sendError("Room not found")
+		return
+	}
 
-	c.send <- mustMarshal(map[string]interface{}{
+	c.RoomID = room.ID
+
+	// Add to room
+	c.server.mu.Lock()
+	if _, ok := c.server.rooms[c.RoomID]; !ok {
+		c.server.rooms[c.RoomID] = make(map[string]*Client)
+	}
+	c.server.rooms[c.RoomID][c.ID] = c
+	c.server.mu.Unlock()
+
+	// Add member
+	member := &Member{
+		ID:          uuid.New().String(),
+		RoomID:      c.RoomID,
+		UserID:      c.UserID,
+		Name:        c.Name,
+		Description: c.Description,
+		JoinedAt:    Now(),
+		LastSeenAt:  Now(),
+	}
+	c.server.storage.AddMember(member)
+
+	members, _ := c.server.storage.GetMembers(c.RoomID)
+	messages, _ := c.server.storage.GetMessages(c.RoomID, 100)
+	agents, _ := c.server.storage.GetAgents(c.RoomID)
+
+	c.Send(map[string]interface{}{
 		"type":     "room_joined",
-		"roomId":   data.RoomID,
+		"roomId":   c.RoomID,
 		"roomName": room.Name,
 		"members":  members,
 		"messages": messages,
 		"agents":   agents,
 	})
+
+	// Broadcast member joined
+	c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
+		"type":     "member_joined",
+		"roomId":   c.RoomID,
+		"userId":   c.UserID,
+		"userName": c.Name,
+		"members":  members,
+	}, c.ID)
 }
 
 // handleDeleteRoom 处理删除房间
@@ -364,13 +527,26 @@ func (c *Client) handleDeleteRoom(msg *Message) {
 		RoomID string `json:"roomId"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid delete room data")
+		return
+	}
+
+	// Check if user is in the room
+	if c.RoomID != data.RoomID {
+		c.sendError("Not authorized to delete this room")
 		return
 	}
 
 	if err := c.server.storage.DeleteRoom(data.RoomID); err != nil {
 		log.Printf("Delete room error: %v", err)
+		c.sendError("Failed to delete room")
 		return
 	}
+
+	// Remove compressor
+	c.server.mu.Lock()
+	delete(c.server.compressors, data.RoomID)
+	c.server.mu.Unlock()
 
 	// 广播房间删除
 	c.server.broadcastToRoom(data.RoomID, map[string]interface{}{
@@ -388,20 +564,21 @@ func (c *Client) handleAddAgent(msg *Message) {
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid add agent data")
 		return
 	}
 
 	// 检查是否已存在
 	exists, _ := c.server.storage.AgentExistsInRoom(data.RoomID, data.Profile)
 	if exists {
-		c.send <- []byte(`{"type":"error","message":"Agent already in room"}`)
+		c.sendError("Agent already in room")
 		return
 	}
 
 	agent := &RoomAgent{
 		ID:          uuid.New().String(),
 		RoomID:      data.RoomID,
-		AgentID:    uuid.New().String(),
+		AgentID:     uuid.New().String(),
 		Profile:     data.Profile,
 		Name:        data.Name,
 		Description: data.Description,
@@ -411,6 +588,7 @@ func (c *Client) handleAddAgent(msg *Message) {
 
 	if err := c.server.storage.CreateAgent(agent); err != nil {
 		log.Printf("Add agent error: %v", err)
+		c.sendError("Failed to add agent")
 		return
 	}
 
@@ -418,6 +596,7 @@ func (c *Client) handleAddAgent(msg *Message) {
 	c.server.broadcastToRoom(data.RoomID, map[string]interface{}{
 		"type":   "agent_added",
 		"roomId": data.RoomID,
+		"agent":  agent,
 		"agents": agents,
 	})
 }
@@ -429,19 +608,123 @@ func (c *Client) handleRemoveAgent(msg *Message) {
 		AgentID string `json:"agentId"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid remove agent data")
 		return
 	}
 
 	if err := c.server.storage.DeleteAgent(data.AgentID); err != nil {
 		log.Printf("Remove agent error: %v", err)
+		c.sendError("Failed to remove agent")
 		return
 	}
 
 	agents, _ := c.server.storage.GetAgents(data.RoomID)
 	c.server.broadcastToRoom(data.RoomID, map[string]interface{}{
-		"type":   "agent_removed",
+		"type":    "agent_removed",
+		"roomId":  data.RoomID,
+		"agentId": data.AgentID,
+		"agents":  agents,
+	})
+}
+
+// handleGetHistory 处理获取历史消息
+func (c *Client) handleGetHistory(msg *Message) {
+	var data struct {
+		RoomID string `json:"roomId"`
+		Limit  int    `json:"limit,omitempty"`
+		Before int64  `json:"before,omitempty"`
+	}
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid get history data")
+		return
+	}
+
+	if data.Limit <= 0 || data.Limit > 100 {
+		data.Limit = 100
+	}
+
+	messages, err := c.server.storage.GetMessages(data.RoomID, data.Limit)
+	if err != nil {
+		log.Printf("Get messages error: %v", err)
+		c.sendError("Failed to get messages")
+		return
+	}
+
+	c.Send(map[string]interface{}{
+		"type":     "history",
+		"roomId":   data.RoomID,
+		"messages": messages,
+	})
+}
+
+// handleListMembers 处理列出成员
+func (c *Client) handleListMembers(msg *Message) {
+	var data struct {
+		RoomID string `json:"roomId"`
+	}
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid list members data")
+		return
+	}
+
+	members, err := c.server.storage.GetMembers(data.RoomID)
+	if err != nil {
+		log.Printf("Get members error: %v", err)
+		c.sendError("Failed to get members")
+		return
+	}
+
+	// Add online status
+	c.server.mu.RLock()
+	roomClients, ok := c.server.rooms[data.RoomID]
+	c.server.mu.RUnlock()
+
+	if ok {
+		onlineMap := make(map[string]bool)
+		for _, client := range roomClients {
+			onlineMap[client.UserID] = true
+		}
+		for i := range members {
+			members[i].Online = onlineMap[members[i].UserID]
+		}
+	}
+
+	c.Send(map[string]interface{}{
+		"type":    "members",
+		"roomId":  data.RoomID,
+		"members": members,
+	})
+}
+
+// handleCompressContext 处理压缩上下文
+func (c *Client) handleCompressContext(msg *Message) {
+	var data struct {
+		RoomID string `json:"roomId"`
+	}
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		c.sendError("Invalid compress context data")
+		return
+	}
+
+	compressor := c.server.GetOrCreateCompressor(data.RoomID)
+	if compressor == nil {
+		c.sendError("Failed to get compressor")
+		return
+	}
+
+	// Trigger compression
+	c.server.broadcastToRoom(data.RoomID, map[string]interface{}{
+		"type":   "context_compressing",
 		"roomId": data.RoomID,
-		"agents": agents,
+	})
+
+	// TODO: Implement actual compression logic
+	// This would involve calling the agent's compression functionality
+
+	c.Send(map[string]interface{}{
+		"type":       "context_compressed",
+		"roomId":     data.RoomID,
+		"compressed": true,
 	})
 }
 
@@ -465,10 +748,10 @@ func (s *Server) handleAgentMention(roomID string, msg *ChatMessage) {
 		if agent.Name == mentionedName || agent.Profile == mentionedName {
 			// 广播上下文状态
 			s.broadcastToRoom(roomID, map[string]interface{}{
-				"type":       "context_status",
-				"roomId":     roomID,
-				"agentName":  agent.Name,
-				"status":     "compressing",
+				"type":      "context_status",
+				"roomId":    roomID,
+				"agentName": agent.Name,
+				"status":    "processing",
 			})
 
 			// TODO: 调用 Agent 处理消息
@@ -476,6 +759,43 @@ func (s *Server) handleAgentMention(roomID string, msg *ChatMessage) {
 			_ = agent
 			break
 		}
+	}
+}
+
+// checkAndCompressContext checks if context compression is needed
+func (s *Server) checkAndCompressContext(roomID string) {
+	compressor := s.GetOrCreateCompressor(roomID)
+	if compressor == nil {
+		return
+	}
+
+	// Get message count
+	messages, err := s.storage.GetMessages(roomID, 1000)
+	if err != nil {
+		return
+	}
+
+	// Simple token estimation (rough approximation)
+	totalTokens := 0
+	for _, msg := range messages {
+		totalTokens += len(msg.Content) / 4 // Rough estimate: 4 chars per token
+	}
+
+	// Update room token count
+	room, _ := s.storage.GetRoom(roomID)
+	if room != nil {
+		room.TotalTokens = totalTokens
+		s.storage.UpdateRoom(room)
+	}
+
+	// Check if compression is needed
+	if totalTokens > compressor.triggerTokens {
+		s.broadcastToRoom(roomID, map[string]interface{}{
+			"type":        "context_compression_needed",
+			"roomId":      roomID,
+			"totalTokens": totalTokens,
+			"message":     "Context compression recommended",
+		})
 	}
 }
 
@@ -513,31 +833,85 @@ func (s *Server) broadcastToRoom(roomID string, data interface{}, excludeIDs ...
 		excludeSet[id] = true
 	}
 
-	message := mustMarshal(data)
+	message, err := json.Marshal(data)
+	if err != nil {
+		s.mu.RUnlock()
+		return
+	}
+
+	// Copy clients to avoid holding lock during send
+	clients := make([]*Client, 0, len(room))
 	for _, client := range room {
-		if excludeSet[client.ID] {
-			continue
-		}
-		select {
-		case client.send <- message:
-		default:
-			close(client.send)
-			delete(room, client.ID)
+		if !excludeSet[client.ID] {
+			clients = append(clients, client)
 		}
 	}
 	s.mu.RUnlock()
+
+	for _, client := range clients {
+		select {
+		case client.send <- message:
+		default:
+			// Client buffer full, close and remove
+			client.mu.Lock()
+			if client.Conn != nil {
+				client.Conn.Close()
+			}
+			client.mu.Unlock()
+			s.removeClient(client)
+		}
+	}
+}
+
+// sendError sends an error message to the client
+func (c *Client) sendError(message string) {
+	c.Send(map[string]interface{}{
+		"type":    "error",
+		"message": message,
+	})
 }
 
 // Close 关闭服务器
 func (s *Server) Close() {
 	s.cancel()
+
+	// Close all client connections
+	s.mu.Lock()
+	for _, client := range s.onlineUsers {
+		if client.Conn != nil {
+			client.Conn.Close()
+		}
+	}
+	s.mu.Unlock()
 }
 
-// mustMarshal JSON 序列化
-func mustMarshal(v interface{}) []byte {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return []byte(`{"type":"error","message":"marshal error"}`)
+// GetRoomClients returns all clients in a room
+func (s *Server) GetRoomClients(roomID string) []*Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	room, ok := s.rooms[roomID]
+	if !ok {
+		return nil
 	}
-	return data
+
+	clients := make([]*Client, 0, len(room))
+	for _, client := range room {
+		clients = append(clients, client)
+	}
+	return clients
+}
+
+// GetOnlineCount returns the number of online users
+func (s *Server) GetOnlineCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.onlineUsers)
+}
+
+// GetRoomCount returns the number of active rooms
+func (s *Server) GetRoomCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.rooms)
 }

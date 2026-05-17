@@ -724,19 +724,29 @@ func ForceDisplayQR(qrData string) {
 	fmt.Println("║          📱 WhatsApp QR Code - Scan with WhatsApp App           ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
+	fmt.Println("Instructions:")
+	fmt.Println("  1. Open WhatsApp on your phone")
+	fmt.Println("  2. Go to Settings → Linked Devices")
+	fmt.Println("  3. Tap 'Link a Device'")
+	fmt.Println("  4. Scan the QR code below")
+	fmt.Println()
 
 	// Display QR code with medium size
 	qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
 
-	// Also show URL fallback
+	// Also show URL fallback for browser viewing
 	fmt.Println()
-	fmt.Println("QR Code URL (open in browser):")
-	fmt.Printf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s\n", qrData)
+	fmt.Println("─────────────────────────────────────────────────────────────────")
+	fmt.Println("📎 Alternative: Open this URL in your browser to view QR code:")
+	fmt.Println()
+	fmt.Printf("  %s\n", GetQRCodeURL(qrData))
+	fmt.Println()
+	fmt.Println("─────────────────────────────────────────────────────────────────")
 
 	// Print raw data
 	fmt.Println()
-	fmt.Println("Raw QR Data:")
-	fmt.Printf("%s\n", qrData)
+	fmt.Println("Raw QR Data (for manual scanning):")
+	fmt.Printf("%s\n", truncateStringSimple(qrData, 100))
 
 	fmt.Println()
 	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
@@ -744,6 +754,11 @@ func ForceDisplayQR(qrData string) {
 
 	// Flush output immediately
 	os.Stdout.Sync()
+}
+
+// GetQRCodeURL returns a URL to display the QR code in a browser
+func GetQRCodeURL(qrData string) string {
+	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", qrData)
 }
 
 // truncateStringSimple truncates a string to maxLen characters

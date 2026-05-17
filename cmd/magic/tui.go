@@ -114,7 +114,7 @@ var mdRenderer *glamour.TermRenderer
 func init() {
 	r, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(100),
+		glamour.WithWordWrap(120),
 	)
 	if err != nil {
 		// Fallback: no-op renderer
@@ -733,6 +733,10 @@ func (m TUIModel) startStreaming(input string) tea.Cmd {
 	}
 }
 
+// toolResultRegex matches tool result markers
+var toolResultStartRegex = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^<]+)<<<`)
+var toolResultEndRegex = regexp.MustCompile(`>>>TOOL_RESULT_END<<<`)
+
 func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 	if msg.done {
 		// Finalize the streaming message
@@ -748,7 +752,67 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 		m.saveSession()
 		m.input.Focus()
 	} else {
-		m.streamBuf.WriteString(msg.content)
+		// Check if this is a turn start marker (for multi-turn conversations with tool calls)
+		if strings.Contains(msg.content, ">>>TURN_START<<<") {
+			// Finalize current streaming message if any
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].Streaming {
+					m.messages[i].Content = m.streamBuf.String()
+					m.messages[i].Streaming = false
+					break
+				}
+			}
+			// Reset stream buffer and create new streaming message for the next turn
+			m.streamBuf.Reset()
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "assistant",
+				Content:   "",
+				Timestamp: time.Now(),
+				Streaming: true,
+			})
+			// Remove the marker from content
+			content := strings.ReplaceAll(msg.content, ">>>TURN_START<<<", "")
+			if content != "" {
+				m.streamBuf.WriteString(content)
+			}
+		} else if strings.Contains(msg.content, ">>>TOOL_RESULT_START|") {
+			// Extract tool results and create separate tool messages
+			content := msg.content
+			for {
+				startMatch := toolResultStartRegex.FindStringIndex(content)
+				if startMatch == nil {
+					break
+				}
+				endMatch := toolResultEndRegex.FindStringIndex(content)
+				if endMatch == nil {
+					break
+				}
+
+				// Extract tool name
+				toolName := toolResultStartRegex.FindStringSubmatch(content[startMatch[0]:startMatch[1]])[1]
+				// Extract tool content
+				toolContent := content[startMatch[1]:endMatch[0]]
+
+				// Add tool message
+				m.messages = append(m.messages, ChatMessage{
+					Role:      "tool",
+					Content:   fmt.Sprintf("[%s] %s", toolName, strings.TrimSpace(toolContent)),
+					Timestamp: time.Now(),
+					Streaming: false,
+				})
+
+				// Remove processed part from content
+				content = content[:startMatch[0]] + content[endMatch[1]:]
+			}
+
+			// Append remaining content to stream buffer
+			if content != "" {
+				m.streamBuf.WriteString(content)
+			}
+		} else {
+			m.streamBuf.WriteString(msg.content)
+		}
+
 		// Update the streaming message
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].Streaming {
@@ -758,6 +822,8 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.contentDirty = true
+	// Re-render content and scroll to bottom
+	m.viewport.SetContent(m.renderMessages())
 	m.viewport.GotoBottom()
 	return m, m.waitForActivity()
 }

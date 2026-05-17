@@ -168,7 +168,7 @@ func InitializeDefaultToolsets() {
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "vision",
 		Description: "Image analysis and generation tools",
-		Tools:       []string{"image_generation", "video_analyze"},
+		Tools:       []string{"image_gen", "image_edit", "video_analyze"},
 		Includes:    []string{},
 	})
 

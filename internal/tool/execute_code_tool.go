@@ -3,7 +3,6 @@ package tool
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,34 +13,51 @@ import (
 )
 
 // =============================================================================
-// Execute Code Tool - Built-in Python code execution
+// Execute Code Tool - Multi-language code execution with package management
 // =============================================================================
+
+// Language represents a supported programming language
+type Language string
+
+const (
+	LanguagePython     Language = "python"
+	LanguageJavaScript Language = "javascript"
+	LanguageTypeScript Language = "typescript"
+	LanguageGo         Language = "go"
+	LanguageRust       Language = "rust"
+	LanguageJava       Language = "java"
+	LanguageCpp        Language = "cpp"
+	LanguageC          Language = "c"
+)
 
 // CodeExecutorConfig holds configuration for code execution
 type CodeExecutorConfig struct {
-	Timeout     time.Duration // Max execution time
-	MemoryLimit int           // Memory limit in MB
-	AllowedDirs []string      // Allowed working directories
-	EnableTools bool          // Enable tool calling from code
+	Timeout       time.Duration // Max execution time
+	MemoryLimit   int           // Memory limit in MB
+	AllowedDirs   []string      // Allowed working directories
+	EnableTools   bool          // Enable tool calling from code
+	EnableNetwork bool          // Enable network access
 }
 
 // DefaultCodeExecutorConfig returns the default configuration
 func DefaultCodeExecutorConfig() *CodeExecutorConfig {
 	home, _ := os.UserHomeDir()
 	return &CodeExecutorConfig{
-		Timeout:     60 * time.Second,
-		MemoryLimit: 512,
-		AllowedDirs: []string{
+		Timeout:       60 * time.Second,
+		MemoryLimit:   512,
+		AllowedDirs:   []string{
 			"/tmp",
 			home + "/projects",
 			home + "/workspace",
 			".",
 		},
-		EnableTools: true,
+		EnableTools:   true,
+		EnableNetwork: false,
 	}
 }
 
-// ExecuteCodeTool provides in-process Python code execution with tool access
+// ExecuteCodeTool provides in-process multi-language code execution with tool access
+// and package management support
 type ExecuteCodeTool struct {
 	config     *CodeExecutorConfig
 	tools      map[string]Tool // Available tools for code to call
@@ -65,49 +81,62 @@ func (t *ExecuteCodeTool) RegisterTool(name string, tool Tool) {
 func (t *ExecuteCodeTool) SetCodingMode(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
-		t.config.Timeout = 120 * time.Second
-		t.config.MemoryLimit = 1024 // 1GB
+		t.config.Timeout = 300 * time.Second // 5 minutes for coding mode
+		t.config.MemoryLimit = 2048          // 2GB
+		t.config.EnableNetwork = true
 	}
 }
 
 func (t *ExecuteCodeTool) Name() string { return "execute_code" }
 
 func (t *ExecuteCodeTool) Description() string {
-	return `Execute Python or Node.js code with optional tool access.
+	return `Execute code in multiple programming languages with optional tool access and package management.
 Supports reading files, running commands, and using registered tools.
 Code runs in an isolated subprocess with timeout and memory limits.
 
 Supported languages:
-- python, python3: Python 3.x
-- node, nodejs: Node.js (JavaScript/TypeScript)`
+- python, python3: Python 3.x (supports pip packages)
+- node, nodejs, js: Node.js JavaScript (supports npm packages)
+- ts, typescript: TypeScript via ts-node (supports npm packages)
+- go: Go (supports go mod dependencies)
+- rust: Rust (supports cargo packages)
+- java: Java (supports Maven/Gradle dependencies)
+- cpp, c: C/C++ (supports cmake)
+
+Package installation:
+- Python: packages array for pip install
+- Node.js/TypeScript: packages array for npm install
+- Go: imports in code trigger go get
+- Rust: dependencies in Cargo.toml format
+- Java: Maven coordinates in packages array
+- C/C++: libraries via system package manager`
 }
 
 func (t *ExecuteCodeTool) Schema() map[string]interface{} {
-	// Get registered tool names for documentation
-	var toolNames []string
-	for name := range t.tools {
-		toolNames = append(toolNames, name)
-	}
-
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"code": map[string]interface{}{
 				"type":        "string",
-				"description": "Code to execute (Python or JavaScript)",
+				"description": "Code to execute",
 			},
 			"language": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"python", "python3", "node", "nodejs", "js"},
-				"description": "Programming language (python/python3/node/nodejs, default: python)",
+				"enum":        []string{"python", "python3", "node", "nodejs", "js", "ts", "typescript", "go", "rust", "java", "cpp", "c"},
+				"description": "Programming language",
 			},
 			"timeout": map[string]interface{}{
 				"type":        "number",
-				"description": "Timeout in seconds (default: 60)",
+				"description": "Timeout in seconds (default: 60, max: 300 in coding mode)",
 			},
 			"workdir": map[string]interface{}{
 				"type":        "string",
 				"description": "Working directory for code execution",
+			},
+			"packages": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Package names to install before execution",
 			},
 			"tools": map[string]interface{}{
 				"type":        "array",
@@ -118,12 +147,17 @@ func (t *ExecuteCodeTool) Schema() map[string]interface{} {
 				"type":        "boolean",
 				"description": "Include tool call outputs in result",
 			},
+			"args": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Command line arguments for the program",
+			},
 		},
-		"required": []string{"code"},
+		"required": []string{"code", "language"},
 	}
 }
 
-// Execute runs Python code with optional tool access
+// Execute runs code with optional tool access and package management
 func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	code, _ := args["code"].(string)
 	if code == "" {
@@ -136,33 +170,47 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 	}
 
 	// Normalize language names
-	switch language {
-	case "js", "javascript", "node", "nodejs":
-		language = "node"
-	default:
-		language = "python"
-	}
+	lang := t.normalizeLanguage(language)
 
 	timeout := t.config.Timeout
 	if tArg, ok := args["timeout"].(float64); ok {
 		timeout = time.Duration(tArg) * time.Second
 	}
-	if timeout > 120*time.Second {
-		timeout = 120 * time.Second
+	// Enforce max timeout
+	maxTimeout := 120 * time.Second
+	if t.codingMode {
+		maxTimeout = 300 * time.Second
 	}
-
-	// In coding mode, allow longer timeout
-	if t.codingMode && timeout < 120*time.Second {
-		timeout = 120 * time.Second
+	if timeout > maxTimeout {
+		timeout = maxTimeout
 	}
 
 	workDir := "/tmp"
 	if wd, ok := args["workdir"].(string); ok && wd != "" {
-		// Security: verify workdir is allowed
 		if !t.isDirAllowed(wd) {
 			return nil, fmt.Errorf("working directory %s is not allowed", wd)
 		}
 		workDir = wd
+	}
+
+	// Parse packages
+	var packages []string
+	if pkgArg, ok := args["packages"].([]interface{}); ok {
+		for _, pkg := range pkgArg {
+			if name, ok := pkg.(string); ok {
+				packages = append(packages, name)
+			}
+		}
+	}
+
+	// Parse args
+	var progArgs []string
+	if argList, ok := args["args"].([]interface{}); ok {
+		for _, a := range argList {
+			if s, ok := a.(string); ok {
+				progArgs = append(progArgs, s)
+			}
+		}
 	}
 
 	toolsOutput := false
@@ -184,24 +232,55 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 		}
 	}
 
-	// Generate tool wrapper code based on language
-	var toolWrapper string
-	if language == "node" {
-		toolWrapper = t.generateNodeToolWrapper(toolNames, toolsOutput)
-	} else {
-		toolWrapper = t.generatePythonToolWrapper(toolNames, toolsOutput)
+	// Create execution context
+	execCtx := &codeExecutionContext{
+		lang:        lang,
+		code:        code,
+		workDir:     workDir,
+		packages:    packages,
+		progArgs:    progArgs,
+		toolNames:   toolNames,
+		toolsOutput: toolsOutput,
+		timeout:     timeout,
 	}
 
-	// Wrap user code
-	var fullCode string
-	if language == "node" {
-		fullCode = toolWrapper + "\n\n// User code\n" + code
-	} else {
-		fullCode = toolWrapper + "\n\n# User code\n" + code
-	}
+	return t.executeWithLanguage(ctx, execCtx)
+}
 
-	// Execute
-	return t.executeCode(ctx, fullCode, language, workDir, timeout)
+// codeExecutionContext holds execution parameters
+type codeExecutionContext struct {
+	lang        Language
+	code        string
+	workDir     string
+	packages    []string
+	progArgs    []string
+	toolNames   []string
+	toolsOutput bool
+	timeout     time.Duration
+}
+
+// normalizeLanguage normalizes language names
+func (t *ExecuteCodeTool) normalizeLanguage(lang string) Language {
+	switch strings.ToLower(lang) {
+	case "python", "python3", "py":
+		return LanguagePython
+	case "node", "nodejs", "js", "javascript":
+		return LanguageJavaScript
+	case "ts", "typescript":
+		return LanguageTypeScript
+	case "go", "golang":
+		return LanguageGo
+	case "rust", "rs":
+		return LanguageRust
+	case "java":
+		return LanguageJava
+	case "cpp", "c++", "cxx", "cc":
+		return LanguageCpp
+	case "c":
+		return LanguageC
+	default:
+		return LanguagePython
+	}
 }
 
 // isDirAllowed checks if a directory is allowed for execution
@@ -216,11 +295,422 @@ func (t *ExecuteCodeTool) isDirAllowed(dir string) bool {
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(absDir, absAllowed) {
+		if strings.HasPrefix(absDir, absAllowed) || strings.HasPrefix(absAllowed, absDir) {
 			return true
 		}
 	}
 	return false
+}
+
+// executeWithLanguage executes code based on language
+func (t *ExecuteCodeTool) executeWithLanguage(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	switch execCtx.lang {
+	case LanguagePython:
+		return t.executePython(ctx, execCtx)
+	case LanguageJavaScript:
+		return t.executeJavaScript(ctx, execCtx)
+	case LanguageTypeScript:
+		return t.executeTypeScript(ctx, execCtx)
+	case LanguageGo:
+		return t.executeGo(ctx, execCtx)
+	case LanguageRust:
+		return t.executeRust(ctx, execCtx)
+	case LanguageJava:
+		return t.executeJava(ctx, execCtx)
+	case LanguageCpp, LanguageC:
+		return t.executeCpp(ctx, execCtx)
+	default:
+		return nil, fmt.Errorf("unsupported language: %s", execCtx.lang)
+	}
+}
+
+// executePython executes Python code with pip package support
+func (t *ExecuteCodeTool) executePython(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Install packages if specified
+	if len(execCtx.packages) > 0 {
+		pkgArgs := append([]string{"-m", "pip", "install", "--quiet"}, execCtx.packages...)
+		cmd := exec.CommandContext(ctx, "python3", pkgArgs...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to install packages: %w\n%s", err, output)
+		}
+	}
+
+	// Generate tool wrapper
+	toolWrapper := t.generatePythonToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
+	fullCode := toolWrapper + "\n\n# User code\n" + execCtx.code
+
+	return t.executeScript(ctx, fullCode, "python3", ".py", execCtx.workDir, execCtx.timeout, execCtx.progArgs)
+}
+
+// executeJavaScript executes JavaScript/Node.js code with npm package support
+func (t *ExecuteCodeTool) executeJavaScript(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory for node_modules
+	tempDir, err := os.MkdirTemp("", "magic_js_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Initialize npm project
+	if err := t.initNpmProject(tempDir); err != nil {
+		return nil, err
+	}
+
+	// Install packages if specified
+	if len(execCtx.packages) > 0 {
+		if err := t.installNpmPackages(tempDir, execCtx.packages); err != nil {
+			return nil, err
+		}
+	}
+
+	// Generate tool wrapper
+	toolWrapper := t.generateNodeToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
+	fullCode := toolWrapper + "\n\n// User code\n" + execCtx.code
+
+	return t.executeScript(ctx, fullCode, "node", ".js", tempDir, execCtx.timeout, execCtx.progArgs)
+}
+
+// executeTypeScript executes TypeScript code with ts-node
+func (t *ExecuteCodeTool) executeTypeScript(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "magic_ts_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Initialize npm project and install TypeScript
+	if err := t.initNpmProject(tempDir); err != nil {
+		return nil, err
+	}
+
+	// Install TypeScript and ts-node
+	packages := append([]string{"typescript", "ts-node", "@types/node"}, execCtx.packages...)
+	if err := t.installNpmPackages(tempDir, packages); err != nil {
+		return nil, err
+	}
+
+	// Generate tool wrapper
+	toolWrapper := t.generateNodeToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
+	fullCode := toolWrapper + "\n\n// User code\n" + execCtx.code
+
+	// Write TypeScript file
+	tsFile := filepath.Join(tempDir, "script.ts")
+	if err := os.WriteFile(tsFile, []byte(fullCode), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write TypeScript file: %w", err)
+	}
+
+	// Execute with ts-node
+	cmd := exec.CommandContext(ctx, filepath.Join(tempDir, "node_modules", ".bin", "ts-node"), tsFile)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "NODE_PATH="+filepath.Join(tempDir, "node_modules"))
+
+	return t.runCommand(cmd, execCtx.timeout)
+}
+
+// executeGo executes Go code with module support
+func (t *ExecuteCodeTool) executeGo(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "magic_go_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Initialize go module
+	modName := fmt.Sprintf("magicexec%d", time.Now().Unix())
+	cmd := exec.CommandContext(ctx, "go", "mod", "init", modName)
+	cmd.Dir = tempDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("failed to initialize go module: %w\n%s", err, output)
+	}
+
+	// Write code to main.go
+	mainFile := filepath.Join(tempDir, "main.go")
+	if err := os.WriteFile(mainFile, []byte(execCtx.code), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write main.go: %w", err)
+	}
+
+	// Download dependencies
+	cmd = exec.CommandContext(ctx, "go", "mod", "tidy")
+	cmd.Dir = tempDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("failed to tidy go modules: %w\n%s", err, output)
+	}
+
+	// Run the code
+	cmd = exec.CommandContext(ctx, "go", "run", ".")
+	cmd.Dir = tempDir
+	cmd.Args = append(cmd.Args, execCtx.progArgs...)
+
+	return t.runCommand(cmd, execCtx.timeout)
+}
+
+// executeRust executes Rust code with cargo support
+func (t *ExecuteCodeTool) executeRust(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "magic_rust_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create Cargo.toml
+	cargoToml := `[package]
+name = "magicexec"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+`
+	// Add dependencies if specified
+	for _, pkg := range execCtx.packages {
+		parts := strings.Split(pkg, "=")
+		if len(parts) == 2 {
+			cargoToml += fmt.Sprintf("%s = \"%s\"\n", strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		} else {
+			cargoToml += fmt.Sprintf("%s = \"*\"\n", pkg)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, "Cargo.toml"), []byte(cargoToml), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write Cargo.toml: %w", err)
+	}
+
+	// Create src directory and main.rs
+	srcDir := filepath.Join(tempDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create src directory: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(srcDir, "main.rs"), []byte(execCtx.code), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write main.rs: %w", err)
+	}
+
+	// Build and run
+	cmd := exec.CommandContext(ctx, "cargo", "run", "--quiet")
+	cmd.Dir = tempDir
+
+	return t.runCommand(cmd, execCtx.timeout)
+}
+
+// executeJava executes Java code with Maven/Gradle support
+func (t *ExecuteCodeTool) executeJava(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "magic_java_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create Maven pom.xml if dependencies specified
+	if len(execCtx.packages) > 0 {
+		pomXML := `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.magic</groupId>
+    <artifactId>exec</artifactId>
+    <version>1.0</version>
+    <dependencies>
+`
+		for _, pkg := range execCtx.packages {
+			// Parse Maven coordinate: groupId:artifactId:version
+			parts := strings.Split(pkg, ":")
+			if len(parts) >= 2 {
+				version := "LATEST"
+				if len(parts) >= 3 {
+					version = parts[2]
+				}
+				pomXML += fmt.Sprintf(`        <dependency>
+            <groupId>%s</groupId>
+            <artifactId>%s</artifactId>
+            <version>%s</version>
+        </dependency>
+`, parts[0], parts[1], version)
+			}
+		}
+		pomXML += `    </dependencies>
+</project>`
+
+		if err := os.WriteFile(filepath.Join(tempDir, "pom.xml"), []byte(pomXML), 0644); err != nil {
+			return nil, fmt.Errorf("failed to write pom.xml: %w", err)
+		}
+
+		// Download dependencies
+		cmd := exec.CommandContext(ctx, "mvn", "dependency:copy-dependencies", "-DoutputDirectory=lib", "-q")
+		cmd.Dir = tempDir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to download dependencies: %w\n%s", err, output)
+		}
+	}
+
+	// Write Main.java
+	srcDir := filepath.Join(tempDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create src directory: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(srcDir, "Main.java"), []byte(execCtx.code), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write Main.java: %w", err)
+	}
+
+	// Compile
+	compileCmd := exec.CommandContext(ctx, "javac", "-d", ".", "src/Main.java")
+	compileCmd.Dir = tempDir
+	if output, err := compileCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("compilation failed: %w\n%s", err, output)
+	}
+
+	// Run
+	runCmd := exec.CommandContext(ctx, "java", "Main")
+	runCmd.Dir = tempDir
+
+	// Add classpath if dependencies exist
+	libDir := filepath.Join(tempDir, "lib")
+	if _, err := os.Stat(libDir); err == nil {
+		runCmd.Args = append(runCmd.Args, "-cp", ".:lib/*")
+	}
+
+	runCmd.Args = append(runCmd.Args, execCtx.progArgs...)
+
+	return t.runCommand(runCmd, execCtx.timeout)
+}
+
+// executeCpp executes C/C++ code with cmake support
+func (t *ExecuteCodeTool) executeCpp(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "magic_cpp_*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Determine file extension and compiler
+	ext := ".cpp"
+	compiler := "g++"
+	if execCtx.lang == LanguageC {
+		ext = ".c"
+		compiler = "gcc"
+	}
+
+	// Write source file
+	srcFile := filepath.Join(tempDir, "main"+ext)
+	if err := os.WriteFile(srcFile, []byte(execCtx.code), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write source file: %w", err)
+	}
+
+	// Compile
+	outputFile := filepath.Join(tempDir, "main")
+	compileArgs := []string{"-o", outputFile, srcFile, "-std=c++14"}
+	if execCtx.lang == LanguageC {
+		compileArgs = []string{"-o", outputFile, srcFile}
+	}
+
+	// Add libraries if specified
+	for _, lib := range execCtx.packages {
+		compileArgs = append(compileArgs, "-l"+lib)
+	}
+
+	compileCmd := exec.CommandContext(ctx, compiler, compileArgs...)
+	compileCmd.Dir = tempDir
+	if output, err := compileCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("compilation failed: %w\n%s", err, output)
+	}
+
+	// Run
+	runCmd := exec.CommandContext(ctx, outputFile)
+	runCmd.Dir = tempDir
+	runCmd.Args = append(runCmd.Args, execCtx.progArgs...)
+
+	return t.runCommand(runCmd, execCtx.timeout)
+}
+
+// initNpmProject initializes an npm project
+func (t *ExecuteCodeTool) initNpmProject(dir string) error {
+	pkgJSON := `{"name": "magicexec", "version": "1.0.0", "private": true}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		return fmt.Errorf("failed to create package.json: %w", err)
+	}
+	return nil
+}
+
+// installNpmPackages installs npm packages
+func (t *ExecuteCodeTool) installNpmPackages(dir string, packages []string) error {
+	args := append([]string{"install", "--silent"}, packages...)
+	cmd := exec.Command("npm", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install npm packages: %w\n%s", err, output)
+	}
+	return nil
+}
+
+// executeScript executes a script file
+func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable, fileExt, workDir string, timeout time.Duration, args []string) (interface{}, error) {
+	// Write code to temp file
+	tmpFile, err := os.CreateTemp("", "magic_code_*"+fileExt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.WriteString(code); err != nil {
+		return nil, fmt.Errorf("failed to write code: %w", err)
+	}
+	tmpFile.Close()
+
+	// Build command
+	cmdArgs := append([]string{tmpFile.Name()}, args...)
+	cmd := exec.CommandContext(ctx, executable, cmdArgs...)
+	cmd.Dir = workDir
+
+	return t.runCommand(cmd, timeout)
+}
+
+// runCommand runs a command with timeout
+func (t *ExecuteCodeTool) runCommand(cmd *exec.Cmd, timeout time.Duration) (interface{}, error) {
+	// Capture output
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute with timeout
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Run()
+	}()
+
+	select {
+	case err := <-done:
+		result := map[string]interface{}{
+			"stdout":    stdout.String(),
+			"stderr":    stderr.String(),
+			"exit_code": 0,
+		}
+
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				result["exit_code"] = exitErr.ExitCode()
+			} else {
+				result["error"] = err.Error()
+				result["exit_code"] = -1
+			}
+		}
+
+		return result, nil
+
+	case <-time.After(timeout):
+		cmd.Process.Kill()
+		return map[string]interface{}{
+			"stdout":    stdout.String(),
+			"stderr":    stderr.String(),
+			"exit_code": -1,
+			"error":     "execution timed out",
+		}, nil
+	}
 }
 
 // generatePythonToolWrapper creates Python code that exposes tools as callable functions
@@ -375,112 +865,6 @@ console.log("-".repeat(40));
 	return buf.String()
 }
 
-// executeCode runs the code in a subprocess
-func (t *ExecuteCodeTool) executeCode(ctx context.Context, code, language, workDir string, timeout time.Duration) (interface{}, error) {
-	// Determine the executable based on language
-	var executable string
-	var fileExt string
-	if language == "node" {
-		executable = "node"
-		fileExt = ".js"
-	} else {
-		executable = "python3"
-		fileExt = ".py"
-		// Try python3 first, fall back to python
-		if _, err := exec.LookPath("python3"); err != nil {
-			executable = "python"
-		}
-	}
-	// Write code to temp file
-	tmpFile, err := os.CreateTemp("", "magic_code_*"+fileExt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
-
-	if _, err := tmpFile.WriteString(code); err != nil {
-		return nil, fmt.Errorf("failed to write code: %w", err)
-	}
-	tmpFile.Close()
-
-	// Build command
-	cmd := exec.CommandContext(ctx, executable, tmpFile.Name())
-
-	// Prepare environment
-	env := os.Environ()
-
-	// Add tool definitions to environment
-	toolsJSON, _ := t.serializeToolsForEnv()
-	env = append(env, fmt.Sprintf("MAGIC_TOOLS=%s", toolsJSON))
-
-	cmd.Env = env
-	cmd.Dir = workDir
-
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Execute with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Run()
-	}()
-
-	select {
-	case err := <-done:
-		result := map[string]interface{}{
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
-			"exit_code": 0,
-		}
-
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				result["error"] = "Execution timed out"
-				result["exit_code"] = -1
-			} else if exitErr, ok := err.(*exec.ExitError); ok {
-				result["exit_code"] = exitErr.ExitCode()
-			} else {
-				result["error"] = err.Error()
-				result["exit_code"] = -1
-			}
-		}
-
-		return result, nil
-
-	case <-ctx.Done():
-		cmd.Process.Kill()
-		return nil, fmt.Errorf("execution cancelled")
-	}
-}
-
-// serializeToolsForEnv serializes tools for injection into subprocess
-func (t *ExecuteCodeTool) serializeToolsForEnv() (string, error) {
-	// Create a simplified tool interface for Python subprocess
-	type SimpleTool struct {
-		Name        string                 `json:"name"`
-		Description string                 `json:"description"`
-		Schema      map[string]interface{} `json:"schema"`
-	}
-
-	tools := make([]SimpleTool, 0, len(t.tools))
-	for _, tool := range t.tools {
-		tools = append(tools, SimpleTool{
-			Name:        tool.Name(),
-			Description: tool.Description(),
-			Schema:      tool.Schema(),
-		})
-	}
-
-	data, err := json.Marshal(tools)
-	if err != nil {
-		return "[]", err
-	}
-	return string(data), nil
-}
-
 // =============================================================================
 // Code Execution with Tool Calls (Async)
 // =============================================================================
@@ -491,25 +875,27 @@ type CodeExecutionRequest struct {
 	Language string                 `json:"language,omitempty"`
 	Timeout  int                    `json:"timeout,omitempty"`
 	WorkDir  string                 `json:"workdir,omitempty"`
+	Packages []string               `json:"packages,omitempty"`
+	Args     []string               `json:"args,omitempty"`
 	Tools    []string               `json:"tools,omitempty"`
 	Context  map[string]interface{} `json:"context,omitempty"`
 }
 
 // CodeExecutionResponse represents the response from code execution
 type CodeExecutionResponse struct {
-	Success     bool                   `json:"success"`
-	Output      string                 `json:"output,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	ExitCode    int                    `json:"exit_code"`
-	ToolCalls   []CodeToolCall         `json:"tool_calls,omitempty"`
-	Duration    time.Duration          `json:"duration"`
+	Success   bool           `json:"success"`
+	Output    string         `json:"output,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	ExitCode  int            `json:"exit_code"`
+	ToolCalls []CodeToolCall `json:"tool_calls,omitempty"`
+	Duration  time.Duration  `json:"duration"`
 }
 
 // CodeToolCall represents a tool call made during code execution
 type CodeToolCall struct {
-	Tool     string      `json:"tool"`
-	Args     interface{} `json:"args"`
-	Result   interface{} `json:"result"`
+	Tool     string        `json:"tool"`
+	Args     interface{}   `json:"args"`
+	Result   interface{}   `json:"result"`
 	Duration time.Duration `json:"duration"`
 }
 
@@ -523,16 +909,20 @@ func (t *ExecuteCodeTool) ExecuteWithTools(ctx context.Context, req *CodeExecuti
 	}
 
 	args := map[string]interface{}{
-		"code": req.Code,
-	}
-	if req.Language != "" {
-		args["language"] = req.Language
+		"code":     req.Code,
+		"language": req.Language,
 	}
 	if req.Timeout > 0 {
 		args["timeout"] = float64(req.Timeout)
 	}
 	if req.WorkDir != "" {
 		args["workdir"] = req.WorkDir
+	}
+	if len(req.Packages) > 0 {
+		args["packages"] = req.Packages
+	}
+	if len(req.Args) > 0 {
+		args["args"] = req.Args
 	}
 	if len(req.Tools) > 0 {
 		args["tools"] = req.Tools
@@ -558,12 +948,17 @@ func (t *ExecuteCodeTool) ExecuteWithTools(ctx context.Context, req *CodeExecuti
 		}, nil
 	}
 
+	exitCode := 0
+	if ec, ok := resultMap["exit_code"].(float64); ok {
+		exitCode = int(ec)
+	}
+
 	return &CodeExecutionResponse{
-		Success:   resultMap["exit_code"] == 0,
-		Output:    fmt.Sprintf("%v", resultMap["stdout"]),
-		Error:     fmt.Sprintf("%v", resultMap["stderr"]),
-		ExitCode:  int(resultMap["exit_code"].(float64)),
-		Duration:  time.Since(start),
+		Success:  exitCode == 0,
+		Output:   fmt.Sprintf("%v", resultMap["stdout"]),
+		Error:    fmt.Sprintf("%v", resultMap["stderr"]),
+		ExitCode: exitCode,
+		Duration: time.Since(start),
 	}, nil
 }
 
@@ -718,6 +1113,43 @@ const data = [{category: 'A', value: 1}, {category: 'B', value: 2}];
 const results = analyzeData(data, 'category');
 json_dump(results);
 `,
+
+	// Go template
+	"hello_go": `
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello from Go!")
+}
+`,
+
+	// Rust template
+	"hello_rust": `
+fn main() {
+    println!("Hello from Rust!");
+}
+`,
+
+	// Java template
+	"hello_java": `
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello from Java!");
+    }
+}
+`,
+
+	// C++ template
+	"hello_cpp": `
+#include <iostream>
+
+int main() {
+    std::cout << "Hello from C++!" << std::endl;
+    return 0;
+}
+`,
 }
 
 // GetTemplate returns a code template by name
@@ -747,14 +1179,12 @@ func ValidateCode(code string) (bool, string) {
 		`__import__`,
 		`eval\(`,
 		`exec\(`,
-		`open.*\(.*\)`,
 		`subprocess`,
 		`os\.system`,
 		`os\.popen`,
 		`pty\.spawn`,
 		`fork`,
 		`multiprocessing`,
-		`threading`,
 	}
 
 	for _, pattern := range pythonDangerous {
@@ -767,9 +1197,6 @@ func ValidateCode(code string) (bool, string) {
 	// Check for dangerous patterns (JavaScript/Node.js)
 	nodeDangerous := []string{
 		`require\(['"]child_process['"]\)`,
-		`require\(['"]fs['"]\)`,
-		`require\(['"]os['"]\)`,
-		`require\(['"]path['"]\)`,
 		`eval\(`,
 		`new Function\(`,
 		`process\.exit`,
@@ -777,13 +1204,6 @@ func ValidateCode(code string) (bool, string) {
 		`child_process\.exec`,
 		`child_process\.spawn.*rm`,
 		`child_process\.spawn.*delete`,
-		`child_process\.spawn.*format`,
-		`fs\.unlink`,
-		`fs\.rmdir`,
-		`__dirname`,
-		`__filename`,
-		`global\.[a-zA-Z]`,
-		`global\[`,
 	}
 
 	for _, pattern := range nodeDangerous {
@@ -802,20 +1222,11 @@ func ValidateCodeForLanguage(code, language string) (bool, string) {
 	case "node", "nodejs", "js", "javascript":
 		nodeDangerous := []string{
 			`require\(['"]child_process['"]\)`,
-			`require\(['"]fs['"]\)`,
-			`require\(['"]os['"]\)`,
 			`eval\(`,
 			`new Function\(`,
 			`process\.exit`,
 			`process\.kill`,
 			`child_process\.exec`,
-			`child_process\.spawn.*rm`,
-			`child_process\.spawn.*delete`,
-			`child_process\.spawn.*format`,
-			`fs\.unlink`,
-			`fs\.rmdir`,
-			`global\.[a-zA-Z]`,
-			`global\[`,
 		}
 		for _, pattern := range nodeDangerous {
 			re := regexp.MustCompile(pattern)
@@ -828,14 +1239,9 @@ func ValidateCodeForLanguage(code, language string) (bool, string) {
 			`__import__`,
 			`eval\(`,
 			`exec\(`,
-			`open.*\(.*\)`,
 			`subprocess`,
 			`os\.system`,
 			`os\.popen`,
-			`pty\.spawn`,
-			`fork`,
-			`multiprocessing`,
-			`threading`,
 		}
 		for _, pattern := range pythonDangerous {
 			re := regexp.MustCompile(pattern)

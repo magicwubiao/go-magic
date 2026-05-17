@@ -2,7 +2,6 @@ package groupchat
 
 import (
 	"database/sql"
-	"fmt"
 )
 
 // Storage 数据存储
@@ -241,7 +240,7 @@ func (s *Storage) RemoveMember(roomID, userID string) error {
 // GetMessages 获取消息
 func (s *Storage) GetMessages(roomID string, limit int) ([]ChatMessage, error) {
 	rows, err := s.db.Query(`
-		SELECT id, roomId, senderId, senderName, content, timestamp
+		SELECT id, roomId, senderId, senderName, content, timestamp, type
 		FROM gc_messages WHERE roomId = ? ORDER BY timestamp DESC LIMIT ?`, roomID, limit)
 	if err != nil {
 		return nil, err
@@ -251,8 +250,14 @@ func (s *Storage) GetMessages(roomID string, limit int) ([]ChatMessage, error) {
 	var messages []ChatMessage
 	for rows.Next() {
 		var msg ChatMessage
-		if err := rows.Scan(&msg.ID, &msg.RoomID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.Timestamp); err != nil {
+		var msgType sql.NullString
+		if err := rows.Scan(&msg.ID, &msg.RoomID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.Timestamp, &msgType); err != nil {
 			return nil, err
+		}
+		if msgType.Valid {
+			msg.Type = msgType.String
+		} else {
+			msg.Type = "text"
 		}
 		messages = append(messages, msg)
 	}
@@ -267,9 +272,9 @@ func (s *Storage) GetMessages(roomID string, limit int) ([]ChatMessage, error) {
 // SaveMessage 保存消息
 func (s *Storage) SaveMessage(msg *ChatMessage) error {
 	_, err := s.db.Exec(`
-		INSERT INTO gc_messages (id, roomId, senderId, senderName, content, timestamp)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		msg.ID, msg.RoomID, msg.SenderID, msg.SenderName, msg.Content, msg.Timestamp)
+		INSERT INTO gc_messages (id, roomId, senderId, senderName, content, timestamp, type)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, msg.RoomID, msg.SenderID, msg.SenderName, msg.Content, msg.Timestamp, msg.Type)
 	return err
 }
 
@@ -315,7 +320,51 @@ func (s *Storage) AgentExistsInRoom(roomID, profile string) (bool, error) {
 	return count > 0, nil
 }
 
-// GenerateInviteCode 生成邀请码
-func GenerateInviteCode() string {
-	return fmt.Sprintf("%06d", Now()%1000000)
+// GetMessageCount 获取房间消息数量
+func (s *Storage) GetMessageCount(roomID string) (int, error) {
+	row := s.db.QueryRow("SELECT COUNT(*) FROM gc_messages WHERE roomId = ?", roomID)
+	var count int
+	err := row.Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// DeleteMessagesBefore 删除指定时间之前的消息
+func (s *Storage) DeleteMessagesBefore(roomID string, timestamp int64) error {
+	_, err := s.db.Exec("DELETE FROM gc_messages WHERE roomId = ? AND timestamp < ?", roomID, timestamp)
+	return err
+}
+
+// GetRecentMessages 获取最近的消息（用于压缩后保留）
+func (s *Storage) GetRecentMessages(roomID string, count int) ([]ChatMessage, error) {
+	rows, err := s.db.Query(`
+		SELECT id, roomId, senderId, senderName, content, timestamp, type
+		FROM gc_messages WHERE roomId = ? ORDER BY timestamp DESC LIMIT ?`, roomID, count)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []ChatMessage
+	for rows.Next() {
+		var msg ChatMessage
+		var msgType sql.NullString
+		if err := rows.Scan(&msg.ID, &msg.RoomID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.Timestamp, &msgType); err != nil {
+			return nil, err
+		}
+		if msgType.Valid {
+			msg.Type = msgType.String
+		} else {
+			msg.Type = "text"
+		}
+		messages = append(messages, msg)
+	}
+
+	// 反转使最早的消息在前
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
 }
