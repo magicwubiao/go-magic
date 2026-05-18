@@ -93,7 +93,10 @@ type Agent struct {
 	maxMemoryTokens    int
 
 	// Token usage tracking
-	tokenUsage int64
+	tokenUsage       int64
+	inputTokens      int
+	outputTokens     int
+	cacheReadTokens  int
 
 	// Secret redaction (default true)
 	secretRedaction bool
@@ -404,6 +407,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			lastErr = err
 			a.Emit(bus.EventKindError, err.Error())
 			continue
+		}
+
+		// Track token usage from the response
+		if resp.Usage != nil {
+			a.inputTokens += resp.Usage.PromptTokens
+			a.outputTokens += resp.Usage.CompletionTokens
 		}
 
 		// Call AfterLLM hooks
@@ -723,45 +732,48 @@ Please provide a comprehensive, well-structured final response based on these su
 			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 		}
 
-		// Execute tools and add results to history (BUG FIX: was missing before)
-		toolResults, err := a.executeToolsWithHooks(ctx, resp.ToolCalls)
-		if err != nil {
-			lastErr = err
-			a.Emit(bus.EventKindToolError, err.Error())
-			// Still add tool error messages to history so message sequence is complete
-			a.history = append(a.history, provider.Message{
-				Role:       "assistant",
-				Content:    llmResp.Content,
-				ToolCalls:  resp.ToolCalls,
-			})
-			for _, tc := range resp.ToolCalls {
-				a.history = append(a.history, provider.Message{
-					Role:       "tool",
-					Content:    fmt.Sprintf("Error: %v", err),
-					ToolCallID: tc.ID,
-				})
-			}
-			continue
+		// Execute tools and add results to history
+		toolResults, execErr := a.executeToolsWithHooks(ctx, resp.ToolCalls)
+		if execErr != nil {
+			lastErr = execErr
+			a.Emit(bus.EventKindToolError, execErr.Error())
+			// Continue to add messages - toolResults may contain partial results
 		}
 
-		// Add assistant message and tool results to history
+		// Add assistant message with tool_calls
 		a.history = append(a.history, provider.Message{
 			Role:       "assistant",
 			Content:    llmResp.Content,
 			ToolCalls:  resp.ToolCalls,
 		})
 
-		for _, result := range toolResults {
-			var resultContent string
-			if result.Err != nil {
-				resultContent = fmt.Sprintf("Error: %v", result.Err)
-			} else {
-				resultContent = truncateStr(result.Content, a.maxMsgLen)
+		// Add tool results - ensure every tool_call has a corresponding tool message
+		for _, tc := range resp.ToolCalls {
+			tcID := tc.ID
+			if tcID == "" {
+				tcID = "call_unknown"
 			}
+
+			var resultContent string
+			if result, ok := toolResults[tcID]; ok {
+				if result.Err != nil {
+					resultContent = fmt.Sprintf("Error: %v", result.Err)
+				} else {
+					resultContent = truncateStr(result.Content, a.maxMsgLen)
+				}
+			} else {
+				// No result found for this tool call
+				if execErr != nil {
+					resultContent = fmt.Sprintf("Error: %v", execErr)
+				} else {
+					resultContent = "Error: No result returned for tool call"
+				}
+			}
+
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
 				Content:    resultContent,
-				ToolCallID: result.ID,
+				ToolCallID: tcID,
 			})
 		}
 	}
@@ -1153,39 +1165,45 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 				mu.Unlock()
 			}
 		} else {
-			var wg sync.WaitGroup
-			errCh := make(chan error, len(group.tools))
+		var wg sync.WaitGroup
+		errCh := make(chan error, len(group.tools))
 
-			for _, tc := range group.tools {
-				tc := tc
-				// Ensure tc.ID is not empty
+		for _, tc := range group.tools {
+			tc := tc
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Ensure tc.ID is not empty (inside goroutine to avoid race)
 				tcID := tc.ID
 				if tcID == "" {
 					tcID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
 					tc.ID = tcID
 				}
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					result := a.executeSingleToolWithHooks(ctx, tc)
-					mu.Lock()
-					results[tcID] = result
-					if result.Err != nil {
-						errCh <- result.Err
-					}
-					mu.Unlock()
-				}()
-			}
-
-			wg.Wait()
-			close(errCh)
-
-			for err := range errCh {
-				if err != nil {
-					return results, err
+				result := a.executeSingleToolWithHooks(ctx, tc)
+				mu.Lock()
+				results[tcID] = result
+				if result.Err != nil {
+					errCh <- result.Err
 				}
+				mu.Unlock()
+			}()
+		}
+
+		wg.Wait()
+		close(errCh)
+
+		// Collect all errors but don't return early - all results must be processed
+		var execErrors []error
+		for err := range errCh {
+			if err != nil {
+				execErrors = append(execErrors, err)
 			}
 		}
+		if len(execErrors) > 0 {
+			// Return first error but still return all results
+			return results, execErrors[0]
+		}
+	}
 	}
 
 	return results, nil
@@ -1320,6 +1338,9 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 func (a *Agent) Reset() {
 	a.history = a.history[:1] // Keep system prompt
 	a.tokenUsage = 0
+	a.inputTokens = 0
+	a.outputTokens = 0
+	a.cacheReadTokens = 0
 	a.toolCallHistory = nil
 	a.toolCallCount = make(map[string]int)
 }
@@ -1327,6 +1348,27 @@ func (a *Agent) Reset() {
 // GetHistory returns the conversation history
 func (a *Agent) GetHistory() []provider.Message {
 	return a.history
+}
+
+// GetTokenStats returns the token usage statistics
+func (a *Agent) GetTokenStats() (inputTokens, outputTokens, cacheReadTokens int) {
+	return a.inputTokens, a.outputTokens, a.cacheReadTokens
+}
+
+// TokenUsage represents token usage statistics for tracking
+type TokenUsage struct {
+	InputTokens     int `json:"input_tokens"`
+	OutputTokens    int `json:"output_tokens"`
+	CacheReadTokens int `json:"cache_read_tokens"`
+}
+
+// GetTokenUsage returns the usage statistics as a TokenUsage struct
+func (a *Agent) GetTokenUsage() TokenUsage {
+	return TokenUsage{
+		InputTokens:     a.inputTokens,
+		OutputTokens:    a.outputTokens,
+		CacheReadTokens: a.cacheReadTokens,
+	}
 }
 
 // SetHistory sets the conversation history

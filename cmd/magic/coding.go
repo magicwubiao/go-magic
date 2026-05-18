@@ -1476,8 +1476,3 @@ func runCodingDebug(cmd *cobra.Command, args []string) error {
 		}
 	}
 }
-
-// unused import suppression
-var _ = provider.Provider(nil)
-var _ = context.Background()
-var _ = time.Now()

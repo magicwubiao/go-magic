@@ -29,6 +29,7 @@ type Config struct {
 	Model         string                    `json:"model"`
 	Providers     map[string]ProviderConfig `json:"providers"`
 	Tools         ToolsConfig               `json:"tools"`
+	Memory         MemoryConfig             `json:"memory"`
 	Gateway       GatewayConfig             `json:"gateway"`
 	CortexEnabled bool                      `json:"cortex_enabled,omitempty"`
 	MCP           *MCPConfig                `json:"mcp,omitempty"`
@@ -41,6 +42,11 @@ type Config struct {
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
 	} `json:"agent,omitempty"`
+}
+
+// MemoryConfig represents memory configuration
+type MemoryConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 // DisplayConfig represents display/UI configuration

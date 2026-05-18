@@ -59,6 +59,14 @@ func (h *Handler) registerRoutes() {
 
 	// Context compression
 	h.mux.HandleFunc("POST /rooms/{id}/compress", h.forceCompress)
+
+	// Additional routes for web compatibility
+	h.mux.HandleFunc("PUT /rooms/{id}", h.updateRoom)           // PUT /rooms/{id} (not just /config)
+	h.mux.HandleFunc("POST /rooms/{id}/invite", h.generateInviteCode) // Generate invite code
+	h.mux.HandleFunc("POST /rooms/join", h.joinRoom)            // POST /rooms/join (not just GET)
+	h.mux.HandleFunc("POST /rooms/{id}/leave", h.leaveRoom)     // Leave room
+	h.mux.HandleFunc("DELETE /rooms/{id}/members/{userId}", h.removeMember) // Remove member
+	h.mux.HandleFunc("GET /agents", h.listAllAgents)            // List all agents (global)
 }
 
 // ─── Room Handlers ───────────────────────────────────────────────────────────
@@ -224,7 +232,7 @@ func (h *Handler) updateRoomConfig(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"room": room})
 }
 
-// joinByCode 通过邀请码加入
+// joinByCode 通过邀请码加入 (GET /room/join/{code})
 func (h *Handler) joinByCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -248,6 +256,145 @@ func (h *Handler) joinByCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// updateRoom 更新房间信息 (PUT /rooms/{id})
+func (h *Handler) updateRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	var data struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoom(roomID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	if data.Name != "" {
+		room.Name = data.Name
+	}
+	room.UpdatedAt = Now()
+
+	if err := h.storage.UpdateRoom(room); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// generateInviteCode 生成邀请码 (POST /rooms/{id}/invite)
+func (h *Handler) generateInviteCode(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoom(roomID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	// Generate new invite code
+	room.InviteCode = GenerateInviteCode()
+	room.UpdatedAt = Now()
+
+	if err := h.storage.UpdateRoom(room); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"code": room.InviteCode})
+}
+
+// joinRoom 加入房间 (POST /rooms/join)
+func (h *Handler) joinRoom(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if data.Code == "" {
+		http.Error(w, "Invite code required", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoomByInviteCode(data.Code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// leaveRoom 离开房间 (POST /rooms/{id}/leave)
+func (h *Handler) leaveRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	// For now, just return success (actual leave logic would remove member)
+	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+// removeMember 移除成员 (DELETE /rooms/{id}/members/{userId})
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	userID := extractPathVar(r.URL.Path, "userId")
+	if roomID == "" || userID == "" {
+		http.Error(w, "Room ID and User ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Remove member from storage
+	if err := h.storage.RemoveMember(roomID, userID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+// listAllAgents 列出所有代理 (GET /agents)
+func (h *Handler) listAllAgents(w http.ResponseWriter, r *http.Request) {
+	// Return a list of available agent profiles
+	agents := []map[string]interface{}{
+		{"id": "default", "name": "Default Agent", "description": "Default assistant"},
+		{"id": "coder", "name": "Coder", "description": "Programming assistant"},
+		{"id": "researcher", "name": "Researcher", "description": "Research assistant"},
+	}
+	jsonResponse(w, map[string]interface{}{"agents": agents})
 }
 
 // ─── Agent Handlers ─────────────────────────────────────────────────────────

@@ -92,10 +92,14 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	if len(choice.Message.ToolCalls) > 0 {
 		chatResp.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
 		for _, tc := range choice.Message.ToolCalls {
+			// Ensure type is always "function"
+			tcType := tc.Type
+			if tcType == "" {
+				tcType = "function"
+			}
 			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
-				Name: tc.Function.Name, // Set Name field for compatibility
-				Type: tc.Type,
+				Type: tcType,
 				Function: types.Function{
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
@@ -144,6 +148,11 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 
 	if err := json.Unmarshal(respBody, &response); err != nil {
@@ -158,15 +167,24 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
+		Usage: &Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
 		chatResp.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
 		for _, tc := range choice.Message.ToolCalls {
+			// Ensure type is always "function"
+			tcType := tc.Type
+			if tcType == "" {
+				tcType = "function"
+			}
 			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
-				Name: tc.Function.Name, // Set Name field for compatibility
-				Type: tc.Type,
+				Type: tcType,
 				Function: types.Function{
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,

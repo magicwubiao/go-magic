@@ -200,7 +200,7 @@ func NewTUIModel(aiAgent *agent.Agent, registry *tool.Registry, store *session.S
 
 	// Textarea input
 	ta := textarea.New()
-	ta.Placeholder = "Type a message... (/help for commands)"
+	ta.Placeholder = "Type a message... (Enter: send, Shift+Enter: newline, /help for commands)"
 	ta.Focus()
 	ta.CharLimit = 0
 	ta.SetWidth(80)
@@ -462,8 +462,16 @@ func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch msg.Type {
-	case tea.KeyEnter:
+	// Handle Enter key: Enter sends, Shift+Enter inserts newline
+	if msg.Type == tea.KeyEnter {
+		// Shift+Enter inserts newline (detected via msg.String)
+		if msg.String() == "shift+enter" {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
+
+		// Regular Enter sends message
 		input := strings.TrimSpace(m.input.Value())
 		if input == "" {
 			return m, nil
@@ -485,7 +493,9 @@ func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		// Normal chat message
 		return m.sendMessage(input)
+	}
 
+	switch msg.Type {
 	case tea.KeyUp:
 		// Navigate input history
 		if len(m.inputHistory) > 0 {
@@ -1056,7 +1066,7 @@ func (m *TUIModel) doHelp(args string) {
 
  More: /help req  /help goal  /help kanban  /help session
 
- Tips: Shift+Enter newline | Up/Down history | PgUp/PgDn scroll`
+Tips: Enter send | Shift+Enter newline | Up/Down history | PgUp/PgDn scroll`
 	}
 
 	m.addMessage("system", helpText)
@@ -1991,7 +2001,7 @@ func (m *TUIModel) doMode(args string) {
 		} else {
 			m.codingMode = true
 			m.applyCodingMode()
-			m.addMessage("system", "Switched to CODING mode. Commands execute with elevated permissions. Dangerous commands (rm -rf /, shutdown, etc.) are still blocked.")
+			m.addMessage("system", "Switched to CODING mode.\n- Elevated permissions: arbitrary commands, pipes, chains, command substitution\n- Extended timeouts: up to 10 min (commands), 10 min (code execution)\n- Memory limit: 4GB for code execution\n- New tools available: batch_file_ops, project_analyze, diff_patch\n- Dangerous commands (rm -rf /, shutdown, etc.) are still blocked")
 		}
 	case "chat":
 		if !m.codingMode {
@@ -2043,11 +2053,17 @@ func (m *TUIModel) saveSession() {
 		return
 	}
 
+	// Get token stats from agent
+	inputTokens, outputTokens, cacheReadTokens := m.agent.GetTokenStats()
+
 	sess := &session.Session{
-		ID:       m.sessionID,
-		Profile:  m.cfg.Profile,
-		Platform: "tui",
-		Messages: m.agent.GetHistory(),
+		ID:              m.sessionID,
+		Profile:         m.cfg.Profile,
+		Platform:        "tui",
+		Messages:        m.agent.GetHistory(),
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		CacheReadTokens: cacheReadTokens,
 	}
 
 	// Use background context to avoid blocking

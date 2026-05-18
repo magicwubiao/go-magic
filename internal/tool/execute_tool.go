@@ -268,8 +268,13 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 	execTimeout := t.timeout
 	if timeoutArg, ok := args["timeout"].(float64); ok {
 		execTimeout = time.Duration(timeoutArg) * time.Second
-		if execTimeout > 120*time.Second {
-			execTimeout = 120 * time.Second // Max 2 minutes
+		// In coding mode, allow up to 10 minutes; otherwise max 2 minutes
+		maxTimeout := 120 * time.Second
+		if t.codingMode {
+			maxTimeout = 600 * time.Second
+		}
+		if execTimeout > maxTimeout {
+			execTimeout = maxTimeout
 		}
 	}
 
@@ -382,8 +387,18 @@ func (t *ExecuteCommandTool) SetAllowAny(allow bool) {
 func (t *ExecuteCommandTool) SetCodingMode(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
-		t.timeout = 120 * time.Second
-		t.maxOutput = 200 * 1024 // 200KB
+		t.timeout = 300 * time.Second  // 5 minutes for coding mode (was 120s)
+		t.maxOutput = 1024 * 1024      // 1MB output (was 200KB)
+		t.allowAny = true
+	}
+}
+
+// SetCodingModeAdvanced enables advanced coding mode with even more relaxed restrictions
+func (t *ExecuteCommandTool) SetCodingModeAdvanced(enabled bool) {
+	t.codingMode = enabled
+	if enabled {
+		t.timeout = 600 * time.Second  // 10 minutes for advanced coding
+		t.maxOutput = 2 * 1024 * 1024  // 2MB output
 		t.allowAny = true
 	}
 }

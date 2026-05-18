@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"fmt"
+
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -8,7 +10,7 @@ import (
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(messages))
 
-	for msgIdx, msg := range messages {
+	for i, msg := range messages {
 		openAIMsg := make(map[string]interface{})
 
 		// Always set role
@@ -43,9 +45,15 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 		if len(msg.ToolCalls) > 0 {
 			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
+				// Always use "function" as the type - some providers require this
+				toolCallType := tc.Type
+				if toolCallType == "" {
+					toolCallType = "function"
+				}
+
 				toolCall := map[string]interface{}{
 					"id":   tc.ID,
-					"type": tc.Type,
+					"type": toolCallType,
 					"function": map[string]interface{}{
 						"name":      tc.Function.Name,
 						"arguments": tc.Function.Arguments,
@@ -63,18 +71,16 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 			if msg.Content == "" {
 				openAIMsg["content"] = nil
 			}
-			if msg.ToolCallID != "" {
+
+			// Find the matching tool_call ID from the most recent assistant message with tool_calls
+			toolCallID := findToolCallID(messages, i)
+			if toolCallID != "" {
+				openAIMsg["tool_call_id"] = toolCallID
+			} else if msg.ToolCallID != "" {
 				openAIMsg["tool_call_id"] = msg.ToolCallID
 			} else {
-				// tool_call_id is required by API - search backwards for matching assistant tool_call
-				toolCallID := findToolCallID(messages, msgIdx)
-				if toolCallID != "" {
-					openAIMsg["tool_call_id"] = toolCallID
-				} else {
-					// Last resort - generate a synthetic ID
-					syntheticID := "call_unknown"
-					openAIMsg["tool_call_id"] = syntheticID
-				}
+				// Last resort - generate a synthetic ID
+				openAIMsg["tool_call_id"] = fmt.Sprintf("call_unknown_%d", i)
 			}
 		}
 
@@ -84,26 +90,18 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	return result
 }
 
-// findToolCallID searches backwards through messages to find the tool_call_id
-// that corresponds to a tool result message at the given index
-func findToolCallID(messages []types.Message, toolMsgIdx int) string {
+// findToolCallID searches backwards to find the matching tool_call ID
+func findToolCallID(messages []types.Message, currentIdx int) string {
 	// Count only the consecutive tool messages immediately before this one
-	// (i.e., since the last assistant message with tool_calls)
 	consecutiveToolCount := 0
-	for i := toolMsgIdx - 1; i >= 0; i-- {
+	for i := currentIdx - 1; i >= 0; i-- {
 		if messages[i].Role == "tool" {
 			consecutiveToolCount++
 		} else if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
 			// Found the assistant message that initiated these tool calls
 			tcIdx := consecutiveToolCount
-			if tcIdx < len(messages[i].ToolCalls) && messages[i].ToolCalls[tcIdx].ID != "" {
+			if tcIdx < len(messages[i].ToolCalls) {
 				return messages[i].ToolCalls[tcIdx].ID
-			}
-			// Fallback: return first non-empty ID
-			for _, tc := range messages[i].ToolCalls {
-				if tc.ID != "" {
-					return tc.ID
-				}
 			}
 			return ""
 		} else {

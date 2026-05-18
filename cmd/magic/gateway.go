@@ -418,6 +418,24 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 	return response, nil
 }
 
+// ProcessWithStats processes a message and returns response with token statistics.
+func (h *gatewayAgentHandler) ProcessWithStats(ctx context.Context, msg gateway.Message) (string, int, int, int, error) {
+	// Use the same logic as Process but capture token stats
+	response, err := h.Process(ctx, msg)
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+
+	// Get token stats from agent
+	ag, err := h.getOrCreateAgent(msg.UserID)
+	if err != nil {
+		return response, 0, 0, 0, nil
+	}
+
+	inputTokens, outputTokens, cacheTokens := ag.GetTokenStats()
+	return response, inputTokens, outputTokens, cacheTokens, nil
+}
+
 // saveCheckpoint saves the current session state to disk
 func (h *gatewayAgentHandler) saveCheckpoint(userID, platform, channelID string, ag *agent.Agent) {
 	if h.checkpointMgr == nil {
@@ -1009,6 +1027,16 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	platformCount := 0
 	agentHandler := NewGatewayAgentHandler()
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
+
+	// Set up session persistence for analytics
+	homeDir, _ := os.UserHomeDir()
+	sessionDBPath := filepath.Join(homeDir, ".magic", "sessions.db")
+	store, err := session.NewStore(sessionDBPath)
+	if err != nil {
+		fmt.Printf("Warning: Failed to create session store: %v\n", err)
+	} else {
+		gw.SetSessionStore(store)
+	}
 
 	// Recover interrupted sessions from previous shutdown
 	go agentHandler.recoverInterruptedSessions(ctx)
@@ -1680,24 +1708,58 @@ func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
 		}
 
 	case "wechat":
-		fmt.Println("WeChat via ClawBot")
-		fmt.Print("Enter App ID: ")
-		appID, _ := reader.ReadString('\n')
-		appID = strings.TrimSpace(appID)
-		fmt.Print("Enter App Secret: ")
-		appSecret, _ := reader.ReadString('\n')
-		appSecret = strings.TrimSpace(appSecret)
-		fmt.Print("Enter AES Key (optional): ")
-		aesKey, _ := reader.ReadString('\n')
-		aesKey = strings.TrimSpace(aesKey)
-		if appID != "" {
-			cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-				Enabled: true,
-				CorpID:  appID,
-				Secret:  appSecret,
-				AESKey:  aesKey,
+		fmt.Println("WeChat Configuration")
+		fmt.Println("  Options:")
+		fmt.Println("    1. WeChat (iLink) - Personal WeChat via QR code login")
+		fmt.Println("    2. WeChat Official Account - Enterprise account with callback")
+		fmt.Print("Select option (1/2, default 1): ")
+		option, _ := reader.ReadString('\n')
+		option = strings.TrimSpace(option)
+		if option == "" || option == "1" {
+			// iLink mode for personal WeChat
+			fmt.Println("  WeChat (iLink) - Personal WeChat via QR code login")
+			fmt.Println("  You will need to scan a QR code to login after starting the gateway.")
+			fmt.Print("  Enable WeChat iLink? (y/N): ")
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "y" {
+				cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+					Enabled: true,
+				}
+				fmt.Printf("  ✓ WeChat iLink configured.\n")
+				fmt.Println("  Note: Run 'magic gateway start' and scan the QR code to login.")
+			} else {
+				fmt.Println("  ✗ Skipped")
 			}
-			fmt.Println("✓ WeChat configured")
+		} else if option == "2" {
+			// Official Account callback mode
+			fmt.Print("Enter App ID: ")
+			appID, _ := reader.ReadString('\n')
+			appID = strings.TrimSpace(appID)
+			fmt.Print("Enter App Secret: ")
+			appSecret, _ := reader.ReadString('\n')
+			appSecret = strings.TrimSpace(appSecret)
+			fmt.Print("Enter Token (optional): ")
+			token, _ := reader.ReadString('\n')
+			token = strings.TrimSpace(token)
+			fmt.Print("Enter AES Key (optional): ")
+			aesKey, _ := reader.ReadString('\n')
+			aesKey = strings.TrimSpace(aesKey)
+			if appID != "" {
+				cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+					Enabled: true,
+					CorpID:  appID,
+					Secret:  appSecret,
+					Token:   token,
+					AESKey:  aesKey,
+					Mode:    "callback",
+				}
+				fmt.Println("✓ WeChat Official Account configured")
+			} else {
+				fmt.Println("✗ Skipped (App ID is required)")
+			}
+		} else {
+			fmt.Println("✗ Invalid option")
 		}
 
 	case "wecom":

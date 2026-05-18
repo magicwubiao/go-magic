@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -75,19 +78,31 @@ type AgentHandler interface {
 	// Process processes a message and returns the response
 	Process(ctx context.Context, msg Message) (string, error)
 
+	// ProcessWithStats processes a message and returns response with token stats
+	ProcessWithStats(ctx context.Context, msg Message) (string, int, int, int, error)
+
 	// ResetSession resets a user's session
 	ResetSession(userID string)
 }
 
+// AgentHandlerWithStats is an optional interface for agent handlers that support token stats
+type AgentHandlerWithStats interface {
+	ProcessWithStats(ctx context.Context, msg Message) (string, int, int, int, error)
+}
+
 // Session represents a user session
 type Session struct {
-	UserID     string                 `json:"user_id"`
-	Platform   string                 `json:"platform"`
-	CreatedAt  time.Time              `json:"created_at"`
-	LastActive time.Time              `json:"last_active"`
-	History    []Message              `json:"history,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
-	agent      AgentHandler
+	ID              string                 `json:"id"`
+	UserID          string                 `json:"user_id"`
+	Platform        string                 `json:"platform"`
+	CreatedAt       time.Time              `json:"created_at"`
+	LastActive      time.Time              `json:"last_active"`
+	History         []Message              `json:"history,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	InputTokens     int                    `json:"input_tokens"`
+	OutputTokens    int                    `json:"output_tokens"`
+	CacheReadTokens int                    `json:"cache_read_tokens"`
+	agent           AgentHandler
 }
 
 // AgentSession represents a platform-specific agent session
@@ -234,15 +249,7 @@ func containsSensitiveWord(content, word string) bool {
 }
 
 func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
+	return strings.ToLower(s)
 }
 
 // ShouldProcessChannel 检查频道是否在白名单/黑名单中
@@ -300,6 +307,9 @@ type Gateway struct {
 	// HTTP API server
 	apiServer *http.Server
 	apiPort   int
+
+	// Session persistence
+	sessionStore *session.Store
 }
 
 // GatewayConfig holds gateway configuration
@@ -339,6 +349,13 @@ func NewGateway(agent AgentHandler, config *GatewayConfig) *Gateway {
 		middleware: make([]Middleware, 0),
 		apiPort:    config.APIPort,
 	}
+}
+
+// SetSessionStore sets the session store for persistence
+func (g *Gateway) SetSessionStore(store *session.Store) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.sessionStore = store
 }
 
 // RegisterPlatform registers a platform handler
@@ -473,10 +490,41 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		g.onMessage(msg)
 	}
 
-	// Process with agent
-	resp, err := g.agent.Process(context.Background(), msg)
+	// Process with agent and capture token stats
+	var resp string
+	var inputTokens, outputTokens, cacheTokens int
+	var err error
+
+	// Try ProcessWithStats first, fall back to Process
+	if psHandler, ok := g.agent.(AgentHandlerWithStats); ok {
+		resp, inputTokens, outputTokens, cacheTokens, err = psHandler.ProcessWithStats(context.Background(), msg)
+	} else {
+		resp, err = g.agent.Process(context.Background(), msg)
+	}
 	if err != nil {
 		resp = fmt.Sprintf("Error: %v", err)
+	}
+
+	// Update session with token stats
+	session.InputTokens += inputTokens
+	session.OutputTokens += outputTokens
+	session.CacheReadTokens += cacheTokens
+	session.LastActive = time.Now()
+
+	// Persist session to store if available
+	if g.sessionStore != nil {
+		go func(s *Session) {
+			if err := g.sessionStore.SaveSessionDataFromMap(
+				context.Background(),
+				s.ID,
+				s.Platform,
+				s.InputTokens,
+				s.OutputTokens,
+				s.CacheReadTokens,
+			); err != nil {
+				log.Warnf("[Gateway] Failed to save session: %v", err)
+			}
+		}(session)
 	}
 
 	// Send response
@@ -510,13 +558,14 @@ func (g *Gateway) getOrCreateSession(userID, platform string) *Session {
 
 	// Create new session
 	session = &Session{
-		UserID:     userID,
-		Platform:   platform,
-		CreatedAt:  time.Now(),
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		Platform:  platform,
+		CreatedAt: time.Now(),
 		LastActive: time.Now(),
-		History:    make([]Message, 0),
-		Metadata:   make(map[string]interface{}),
-		agent:      g.agent,
+		History:   make([]Message, 0),
+		Metadata:  make(map[string]interface{}),
+		agent:     g.agent,
 	}
 
 	// Check max sessions

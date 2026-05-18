@@ -81,8 +81,8 @@ func (t *ExecuteCodeTool) RegisterTool(name string, tool Tool) {
 func (t *ExecuteCodeTool) SetCodingMode(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
-		t.config.Timeout = 300 * time.Second // 5 minutes for coding mode
-		t.config.MemoryLimit = 2048          // 2GB
+		t.config.Timeout = 600 * time.Second // 10 minutes for coding mode (was 300s)
+		t.config.MemoryLimit = 4096          // 4GB (was 2GB)
 		t.config.EnableNetwork = true
 	}
 }

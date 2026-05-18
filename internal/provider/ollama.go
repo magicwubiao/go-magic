@@ -220,9 +220,12 @@ func (p *OllamaProvider) ChatWithTools(ctx context.Context, messages []Message, 
 		var args map[string]interface{}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		response.ToolCalls = append(response.ToolCalls, types.ToolCall{
-			ID:        fmt.Sprintf("call_%d", i),
-			Name:      tc.Function.Name,
-			Arguments: args,
+			ID:   fmt.Sprintf("call_%d", i),
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 		})
 	}
 

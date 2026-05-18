@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -117,6 +116,3 @@ func NewBaseStreamProvider(name, apiKey, baseURL, model string) *BaseStreamProvi
 		OpenAICompatibleProvider: NewOpenAICompatibleProvider(name, apiKey, baseURL, model),
 	}
 }
-
-// Helper to satisfy unused warning
-var _ = time.Second

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -139,6 +140,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Gitignore tool for generating .gitignore files
 	r.Register(NewGitignoreTool())
 
+	// Coding-enhanced tools (useful in coding mode)
+	r.Register(NewBatchFileOpsTool())
+	r.Register(NewProjectAnalyzeTool())
+	r.Register(NewDiffPatchTool())
+
 	// Home Assistant smart home integration
 	r.Register(NewHATool())
 	r.Register(NewHAGetStateTool())
@@ -150,11 +156,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 
-	// Browser tools - lightweight goquery-based + enhanced browser automation
+	// Browser tools - lightweight goquery-based
 	r.Register(NewWebFetchTool())
 	r.Register(NewWebSelectTool())
-	
-	// Enhanced browser tools (navigate, snapshot, click, type, scroll, etc.)
 
 	// Utility tools
 	r.Register(NewJSONTool())
@@ -457,32 +461,13 @@ func (r *Registry) FilterToolsByKeyword(keyword string) []Tool {
 	return tools
 }
 
-// 辅助函数
+// 辅助函数 - 使用标准库实现
 func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
+	return strings.ToLower(s)
 }
 
 func contains(s, substr string) bool {
-	if len(substr) == 0 {
-		return true
-	}
-	if len(s) < len(substr) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
 
 // RegisterSkillTool 注册技能工具（带 SkillInfoProvider）

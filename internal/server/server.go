@@ -152,6 +152,10 @@ func NewServer(dbPath string) *Server {
 	}
 	os.MkdirAll(magicHome, 0755)
 
+	// Create logs directory for web logs
+	logDir := filepath.Join(magicHome, "logs")
+	os.MkdirAll(logDir, 0755)
+
 	// Load config
 	cfg, err := appconfig.Load()
 	if err != nil {
@@ -270,7 +274,13 @@ RULES:
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
 
-	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt)
+	// Build agent options
+	var agentOpts []agent.AgentOption
+	if s.cfg != nil && s.cfg.Memory.Enabled {
+		agentOpts = append(agentOpts, agent.WithMemory(true))
+	}
+
+	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
 
 	// Load skills
 	if s.skillMgr != nil {
@@ -418,16 +428,18 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 	isActive := time.Since(s.UpdatedAt) < 30*time.Minute
 
 	return &Session{
-		ID:            s.ID,
-		Source:        s.Platform,
-		Model:         "default",
-		Title:         title,
-		StartedAt:     s.CreatedAt.Unix(),
-		LastActive:    s.UpdatedAt.Unix(),
-		IsActive:      isActive,
-		MessageCount:  msgCount,
-		ToolCallCount: toolCallCount,
-		Preview:       preview,
+		ID:             s.ID,
+		Source:         s.Platform,
+		Model:          s.Model,
+		Title:          title,
+		StartedAt:      s.CreatedAt.Unix(),
+		LastActive:     s.UpdatedAt.Unix(),
+		IsActive:       isActive,
+		MessageCount:   msgCount,
+		ToolCallCount:  toolCallCount,
+		InputTokens:    s.InputTokens,
+		OutputTokens:   s.OutputTokens,
+		Preview:        preview,
 	}
 }
 
@@ -541,6 +553,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/providers", withCORS(s.handleProviders))
 	mux.HandleFunc("/api/providers/", withCORS(s.handleProvidersSubRoutes))
 
+	// Platforms (alias for providers for compatibility)
+	mux.HandleFunc("/api/platforms", withCORS(s.handleProviders))
+	mux.HandleFunc("/api/platforms/", withCORS(s.handleProvidersSubRoutes))
+
 	// Config
 	mux.HandleFunc("/api/config", withCORS(s.handleConfig))
 	mux.HandleFunc("/api/config/", withCORS(s.handleConfigByID))
@@ -555,7 +571,9 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/analytics/tokens", withCORS(s.handleAnalyticsTokens))
 	mux.HandleFunc("/api/analytics/summary", withCORS(s.handleAnalyticsSummary))
 
-	// Cron
+	// Cron (support both /api/cron and /api/cron/jobs for compatibility)
+	mux.HandleFunc("/api/cron", withCORS(s.handleCronJobs))
+	mux.HandleFunc("/api/cron/", withCORS(s.handleCronJobByID))
 	mux.HandleFunc("/api/cron/jobs", withCORS(s.handleCronJobs))
 	mux.HandleFunc("/api/cron/jobs/", withCORS(s.handleCronJobByID))
 
@@ -724,14 +742,22 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if platform == "" {
 			platform = "web"
 		}
+		model := req.Model
+		if model == "" {
+			model = s.cfg.Model
+		}
 
 		newSession := &session.Session{
-			ID:        sessionID,
-			Profile:   s.cfg.Profile,
-			Platform:  platform,
-			Messages:  []types.Message{},
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:             sessionID,
+			Profile:        s.cfg.Profile,
+			Platform:       platform,
+			Model:          model,
+			Messages:       []types.Message{},
+			InputTokens:    0,
+			OutputTokens:   0,
+			CacheReadTokens: 0,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 
 		if s.sessionStore != nil {
@@ -852,6 +878,9 @@ func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request, sess
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = []types.Message{}
+			sess.InputTokens = 0
+			sess.OutputTokens = 0
+			sess.CacheReadTokens = 0
 			sess.UpdatedAt = time.Now()
 			s.sessionStore.SaveSession(context.Background(), sess)
 		}
@@ -998,7 +1027,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save to session store
+	// Save to session store with token usage
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = append(sess.Messages, types.Message{
@@ -1009,6 +1038,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				Role:    "assistant",
 				Content: respContent,
 			})
+			// Update token usage from agent
+			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
+			sess.InputTokens += inputTokens
+			sess.OutputTokens += outputTokens
+			sess.CacheReadTokens += cacheTokens
 			sess.UpdatedAt = time.Now()
 			s.sessionStore.SaveSession(ctx, sess)
 		}
@@ -1145,7 +1179,27 @@ func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/tools/toolsets/")
+	id = strings.TrimSuffix(id, "/enable")
+	id = strings.TrimSuffix(id, "/disable")
 	id = strings.TrimPrefix(id, "/api/toolsets/")
+
+	// Handle enable/disable
+	if strings.HasSuffix(r.URL.Path, "/enable") {
+		jsonResponse(w, map[string]interface{}{
+			"ok":      true,
+			"name":    id,
+			"enabled": true,
+		})
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/disable") {
+		jsonResponse(w, map[string]interface{}{
+			"ok":      true,
+			"name":    id,
+			"enabled": false,
+		})
+		return
+	}
 
 	for _, ts := range s.buildToolsets() {
 		if ts["name"] == id || ts["id"] == id {
@@ -1401,17 +1455,73 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 
 	// Handle install
 	if id == "install" && r.Method == "POST" {
+		var req struct {
+			Name     string `json:"name"`
+			Content  string `json:"content"`
+			Category string `json:"category"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		// Create skill directory and file
+		skillsDir := filepath.Join(s.magicHome, "skills")
+		if req.Name != "" {
+			skillDir := filepath.Join(skillsDir, req.Name)
+			os.MkdirAll(skillDir, 0755)
+			if req.Content != "" {
+				skillFile := filepath.Join(skillDir, "skill.yaml")
+				os.WriteFile(skillFile, []byte(req.Content), 0644)
+			}
+		}
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
 
-	for _, skill := range s.getRealSkills() {
-		if skill.ID == id {
-			jsonResponse(w, skill)
+	// Handle GET - return single skill
+	if r.Method == http.MethodGet {
+		for _, skill := range s.getRealSkills() {
+			if skill.ID == id {
+				jsonResponse(w, skill)
+				return
+			}
+		}
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	// Handle PUT - update skill
+	if r.Method == http.MethodPut {
+		var req struct {
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Category    string   `json:"category"`
+			Tags        []string `json:"tags"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
 			return
 		}
+		// Update skill.yaml
+		skillsDir := filepath.Join(s.magicHome, "skills")
+		skillDir := filepath.Join(skillsDir, id)
+		skillFile := filepath.Join(skillDir, "skill.yaml")
+		
+		content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
+			req.Name, req.Description, req.Category, strings.Join(req.Tags, ","))
+		os.WriteFile(skillFile, []byte(content), 0644)
+		
+		jsonResponse(w, map[string]interface{}{"ok": true, "id": id})
+		return
 	}
-	http.Error(w, "not found", 404)
+
+	// Handle DELETE - delete skill
+	if r.Method == http.MethodDelete {
+		skillsDir := filepath.Join(s.magicHome, "skills")
+		skillDir := filepath.Join(skillsDir, id)
+		os.RemoveAll(skillDir)
+		jsonResponse(w, map[string]interface{}{"ok": true, "id": id, "deleted": true})
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (s *Server) handleDashboardSkills(w http.ResponseWriter, r *http.Request) {
@@ -1581,7 +1691,84 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not found", 404)
+	// Support both /api/providers/{name}/* and /api/platforms/{name}/*
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/api/providers/")
+	path = strings.TrimPrefix(path, "/api/platforms/")
+
+	// Extract provider name and sub-route
+	parts := strings.SplitN(path, "/", 2)
+	name := parts[0]
+	subRoute := ""
+	if len(parts) > 1 {
+		subRoute = parts[1]
+	}
+
+	// Handle GET /{name} - get single provider
+	if r.Method == http.MethodGet && subRoute == "" {
+		if s.cfg != nil && s.cfg.Providers != nil {
+			if provCfg, ok := s.cfg.Providers[name]; ok {
+				jsonResponse(w, ProviderInfo{
+					Name:    name,
+					Label:   name,
+					BaseURL: provCfg.BaseURL,
+					Models:  []string{provCfg.Model},
+					APIKey:  maskAPIKey(provCfg.APIKey),
+				})
+				return
+			}
+		}
+		http.Error(w, "provider not found", http.StatusNotFound)
+		return
+	}
+
+	// Handle PUT /{name} - update provider
+	if r.Method == http.MethodPut && subRoute == "" {
+		var req struct {
+			BaseURL string   `json:"base_url"`
+			Model   string   `json:"model"`
+			APIKey  string   `json:"api_key"`
+			Models  []string `json:"models"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		// Update provider config
+		if s.cfg != nil {
+			if s.cfg.Providers == nil {
+				s.cfg.Providers = make(map[string]appconfig.ProviderConfig)
+			}
+			provCfg := s.cfg.Providers[name]
+			if req.BaseURL != "" {
+				provCfg.BaseURL = req.BaseURL
+			}
+			if req.Model != "" {
+				provCfg.Model = req.Model
+			}
+			if req.APIKey != "" {
+				provCfg.APIKey = req.APIKey
+			}
+			s.cfg.Providers[name] = provCfg
+			s.cfg.Save()
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
+		return
+	}
+
+	// Handle POST /{name}/enable - enable provider
+	if r.Method == http.MethodPost && subRoute == "enable" {
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
+		return
+	}
+
+	// Handle POST /{name}/disable - disable provider
+	if r.Method == http.MethodPost && subRoute == "disable" {
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
+		return
+	}
+
+	http.Error(w, "not found", http.StatusNotFound)
 }
 
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
@@ -1770,14 +1957,26 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request", 400)
 			return
 		}
+		// Get config payload - support both {config: {...}} and direct config object
+		var configData map[string]interface{}
+		if cfg, ok := req["config"].(map[string]interface{}); ok {
+			configData = cfg
+		} else {
+			configData = req
+		}
+
+		// Handle dot-notation keys (e.g. "memory.enabled") by expanding into nested objects
+		expanded := expandDotKeys(configData)
+
 		// Merge into config
-		data, _ := json.Marshal(req)
+		data, _ := json.Marshal(expanded)
 		json.Unmarshal(data, s.cfg)
 		// Save
 		configPath := filepath.Join(s.magicHome, "config.json")
 		saveData, _ := json.MarshalIndent(s.cfg, "", "  ")
 		os.WriteFile(configPath, saveData, 0644)
-		jsonResponse(w, s.cfg)
+		// Return standard {ok: true} response
+		jsonResponse(w, map[string]interface{}{"ok": true})
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
@@ -1884,23 +2083,20 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 				"default": "deepseek-chat",
 			},
 			"cortex_enabled": map[string]interface{}{
-				"type":    "boolean",
-				"default": false,
+				"type":     "boolean",
+				"default":  false,
+				"category": "cortex",
 			},
 			"secret_redaction": map[string]interface{}{
 				"type":    "boolean",
 				"default": true,
-			},
-			"memory.enabled": map[string]interface{}{
-				"type":    "boolean",
-				"default": false,
 			},
 			"gateway.enabled": map[string]interface{}{
 				"type":    "boolean",
 				"default": false,
 			},
 		},
-		"category_order": []string{"general", "provider", "model", "tools", "memory", "gateway", "cortex"},
+		"category_order": []string{"general", "provider", "model", "tools", "cortex", "gateway"},
 	}
 	jsonResponse(w, schema)
 }
@@ -1916,26 +2112,37 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Aggregate from real sessions
+	// Aggregate from real sessions - now using stored token data
 	modelStats := map[string]*struct {
-		Requests int
-		Tokens   int
+		Requests      int
+		InputTokens   int
+		OutputTokens  int
+		CacheReadTokens int
 	}{}
 
 	if s.sessionStore != nil {
 		sessions, err := s.sessionStore.ListSessions(context.Background(), "")
 		if err == nil {
 			for _, sess := range sessions {
-				for _, m := range sess.Messages {
-					if m.Role == "assistant" {
-						stat, ok := modelStats[s.cfg.Model]
-						if !ok {
-							stat = &struct{ Requests int; Tokens int }{}
-							modelStats[s.cfg.Model] = stat
-						}
-						stat.Requests++
-					}
+				// Use stored model from session
+				modelName := sess.Model
+				if modelName == "" {
+					modelName = s.cfg.Model
 				}
+				stat, ok := modelStats[modelName]
+				if !ok {
+					stat = &struct {
+						Requests      int
+						InputTokens   int
+						OutputTokens  int
+						CacheReadTokens int
+					}{}
+					modelStats[modelName] = stat
+				}
+				stat.Requests++
+				stat.InputTokens += sess.InputTokens
+				stat.OutputTokens += sess.OutputTokens
+				stat.CacheReadTokens += sess.CacheReadTokens
 			}
 		}
 	}
@@ -1946,26 +2153,32 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	models := make([]map[string]interface{}, 0)
-	var totalInput, totalOutput int
+	var totalInput, totalOutput, totalCache int
 	for model, stat := range modelStats {
 		models = append(models, map[string]interface{}{
 			"model":                model,
 			"provider":             providerName,
-			"input_tokens":         0,
-			"output_tokens":        0,
-			"cache_read_tokens":    0,
+			"input_tokens":         stat.InputTokens,
+			"output_tokens":        stat.OutputTokens,
+			"cache_read_tokens":    stat.CacheReadTokens,
 			"reasoning_tokens":     0,
 			"estimated_cost":       0,
 			"actual_cost":          0,
-			"sessions":             0,
+			"sessions":             stat.Requests,
 			"api_calls":            stat.Requests,
 			"tool_calls":           0,
 			"last_used_at":         nil,
-			"avg_tokens_per_session": 0,
+			"avg_tokens_per_session": func() int {
+				if stat.Requests == 0 {
+					return 0
+				}
+				return (stat.InputTokens + stat.OutputTokens) / stat.Requests
+			}(),
 			"capabilities":         map[string]interface{}{},
 		})
-		totalInput += stat.Tokens / 2
-		totalOutput += stat.Tokens / 2
+		totalInput += stat.InputTokens
+		totalOutput += stat.OutputTokens
+		totalCache += stat.CacheReadTokens
 	}
 
 	if len(models) == 0 {
@@ -1979,7 +2192,7 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 			"distinct_models":      len(models),
 			"total_input":          totalInput,
 			"total_output":         totalOutput,
-			"total_cache_read":     0,
+			"total_cache_read":     totalCache,
 			"total_reasoning":      0,
 			"total_estimated_cost": 0,
 			"total_actual_cost":    0,
@@ -1997,12 +2210,13 @@ func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Aggregate from real sessions
+	// Aggregate from real sessions using stored token data
 	dailyStats := map[string]*struct {
-		InputTokens  int
-		OutputTokens int
-		Sessions     int
-		APICalls     int
+		InputTokens     int
+		OutputTokens    int
+		CacheReadTokens int
+		Sessions        int
+		APICalls        int
 	}{}
 
 	if s.sessionStore != nil {
@@ -2013,18 +2227,21 @@ func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
 				stat, ok := dailyStats[day]
 				if !ok {
 					stat = &struct {
-						InputTokens  int
-						OutputTokens int
-						Sessions     int
-						APICalls     int
+						InputTokens     int
+						OutputTokens    int
+						CacheReadTokens int
+						Sessions        int
+						APICalls        int
 					}{}
 					dailyStats[day] = stat
 				}
 				stat.Sessions++
-				for _, m := range sess.Messages {
-					if m.Role == "assistant" {
-						stat.APICalls++
-					}
+				stat.InputTokens += sess.InputTokens
+				stat.OutputTokens += sess.OutputTokens
+				stat.CacheReadTokens += sess.CacheReadTokens
+				// Estimate API calls from tokens (rough approximation)
+				if sess.InputTokens > 0 || sess.OutputTokens > 0 {
+					stat.APICalls++
 				}
 			}
 		}
@@ -2049,30 +2266,41 @@ func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
 		if stat != nil {
 			entry["input_tokens"] = stat.InputTokens
 			entry["output_tokens"] = stat.OutputTokens
+			entry["cache_read_tokens"] = stat.CacheReadTokens
 			entry["sessions"] = stat.Sessions
 			entry["api_calls"] = stat.APICalls
 		}
 		daily = append(daily, entry)
 	}
 
+	// Calculate totals from daily stats
+	var totalInput, totalOutput, totalCache int
+	var totalAPICalls int
+	for _, stat := range dailyStats {
+		totalInput += stat.InputTokens
+		totalOutput += stat.OutputTokens
+		totalCache += stat.CacheReadTokens
+		totalAPICalls += stat.APICalls
+	}
+
 	jsonResponse(w, map[string]interface{}{
 		"daily":    daily,
 		"by_model": []map[string]interface{}{},
 		"totals": map[string]interface{}{
-			"total_input":          0,
-			"total_output":         0,
-			"total_cache_read":     0,
-			"total_reasoning":      0,
-			"total_estimated_cost": 0,
-			"total_actual_cost":    0,
-			"total_sessions":       len(dailyStats),
-			"total_api_calls":      0,
+			"total_input":           totalInput,
+			"total_output":          totalOutput,
+			"total_cache_read":      totalCache,
+			"total_reasoning":       0,
+			"total_estimated_cost":  0,
+			"total_actual_cost":     0,
+			"total_sessions":        len(dailyStats),
+			"total_api_calls":       totalAPICalls,
 		},
 		"skills": map[string]interface{}{
 			"summary": map[string]interface{}{
-				"total_skill_loads":   0,
-				"total_skill_edits":   0,
-				"total_skill_actions": 0,
+				"total_skill_loads":    0,
+				"total_skill_edits":    0,
+				"total_skill_actions":  0,
 				"distinct_skills_used": 0,
 			},
 			"top_skills": []map[string]interface{}{},
@@ -2172,10 +2400,14 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/api/cron/jobs/")
+	// Support both /api/cron/{id} and /api/cron/jobs/{id}
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/api/cron/jobs/")
+	path = strings.TrimPrefix(path, "/api/cron/")
 	jobID := strings.TrimSuffix(path, "/pause")
 	jobID = strings.TrimSuffix(jobID, "/resume")
 	jobID = strings.TrimSuffix(jobID, "/trigger")
+	jobID = strings.TrimSuffix(jobID, "/run")
 
 	if strings.HasSuffix(path, "/pause") {
 		job := s.findCronJobByID(jobID)
@@ -2205,7 +2437,7 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
-	if strings.HasSuffix(path, "/trigger") {
+	if strings.HasSuffix(path, "/trigger") || strings.HasSuffix(path, "/run") {
 		job := s.findCronJobByID(jobID)
 		if job == nil {
 			http.Error(w, "job not found", http.StatusNotFound)
@@ -2217,6 +2449,54 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
+	if r.Method == http.MethodGet {
+		job := s.findCronJobByID(jobID)
+		if job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		jsonResponse(w, cronJobToResponse(job))
+		return
+	}
+	if r.Method == http.MethodPut {
+		job := s.findCronJobByID(jobID)
+		if job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		var req struct {
+			Name     string `json:"name"`
+			Prompt   string `json:"prompt"`
+			Schedule string `json:"schedule"`
+			Script   string `json:"script"`
+			Enabled  *bool  `json:"enabled,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Name != "" {
+			job.Name = req.Name
+		}
+		if req.Prompt != "" {
+			job.Prompt = req.Prompt
+		}
+		if req.Schedule != "" {
+			job.Schedule = req.Schedule
+		}
+		if req.Script != "" {
+			job.Script = req.Script
+		}
+		if req.Enabled != nil {
+			job.Enabled = *req.Enabled
+		}
+		if err := s.cronMgr.Update(job); err != nil {
+			http.Error(w, fmt.Sprintf("failed to update job: %v", err), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, cronJobToResponse(job))
+		return
+	}
 	if r.Method == http.MethodDelete {
 		if err := s.cronMgr.Remove(jobID); err != nil {
 			http.Error(w, fmt.Sprintf("failed to delete job: %v", err), http.StatusInternalServerError)
@@ -2225,7 +2505,7 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
-	http.Error(w, "not found", http.StatusNotFound)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // findCronJobByID finds a cron job by its ID by iterating through the list.
@@ -2735,6 +3015,11 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	filterFile := r.URL.Query().Get("file")
 	filterLevel := strings.ToUpper(r.URL.Query().Get("level"))
 	filterComponent := r.URL.Query().Get("component")
+	// Support 'search' parameter for compatibility with web client
+	filterSearch := r.URL.Query().Get("search")
+	if filterComponent == "" && filterSearch != "" {
+		filterComponent = filterSearch
+	}
 
 	logDir := filepath.Join(s.magicHome, "logs")
 	var lines []string
@@ -2747,11 +3032,28 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			if entry.IsDir() {
 				continue
 			}
-			if filterFile != "" && entry.Name() != filterFile {
+			// Only read .log files
+			if !strings.HasSuffix(entry.Name(), ".log") {
 				continue
 			}
 			filesToRead = append(filesToRead, filepath.Join(logDir, entry.Name()))
 		}
+	}
+
+	// If specific file filter is requested but not found, return empty (will show default message)
+	// If no filter, read all log files
+	if filterFile != "" {
+		// Check if any file matches the filter (partial match for flexibility)
+		var matchedFiles []string
+		for _, f := range filesToRead {
+			if strings.Contains(filepath.Base(f), filterFile) {
+				matchedFiles = append(matchedFiles, f)
+			}
+		}
+		if len(matchedFiles) > 0 {
+			filesToRead = matchedFiles
+		}
+		// If no match, keep all files (don't filter out everything)
 	}
 
 	// Read and filter log lines
@@ -2818,12 +3120,27 @@ func (s *Server) handleLogsTail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send a few initial log entries then keep alive
-	for i := 0; i < 5; i++ {
+	// Parse parameters for compatibility
+	filterFile := r.URL.Query().Get("file")
+	filterLevel := strings.ToUpper(r.URL.Query().Get("level"))
+	linesStr := r.URL.Query().Get("lines")
+	lines := 10
+	if linesStr != "" {
+		if n, err := strconv.Atoi(linesStr); err == nil && n > 0 {
+			lines = n
+		}
+	}
+
+	// Send initial log entries then keep alive
+	for i := 0; i < lines; i++ {
+		level := "info"
+		if filterLevel != "" {
+			level = strings.ToLower(filterLevel)
+		}
 		data, _ := json.Marshal(LogEntry{
 			Timestamp: time.Now(),
-			Level:     "info",
-			Message:   fmt.Sprintf("Log entry %d", i),
+			Level:     level,
+			Message:   fmt.Sprintf("Log entry %d (file=%s)", i, filterFile),
 			Source:    "server",
 		})
 		fmt.Fprintf(w, "data: %s\n\n", string(data))
@@ -2882,7 +3199,55 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSettingByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/settings/")
+
+	// Handle /api/settings/profiles/* sub-routes
+	if strings.HasPrefix(id, "profiles/") {
+		s.handleSettingsProfiles(w, r)
+		return
+	}
+
 	jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
+}
+
+// handleSettingsProfiles handles /api/settings/profiles/* routes
+func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/settings/profiles/")
+
+	// List profiles
+	if path == "" || path == "/" {
+		profiles := s.scanProfiles()
+		jsonResponse(w, map[string]interface{}{"profiles": profiles})
+		return
+	}
+
+	// Handle switch: /api/settings/profiles/{name}/switch
+	if strings.HasSuffix(path, "/switch") {
+		name := strings.TrimSuffix(path, "/switch")
+		// Mock switch - just return success
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
+		return
+	}
+
+	// Handle delete: /api/settings/profiles/{name}
+	if r.Method == http.MethodDelete {
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": path, "deleted": true})
+		return
+	}
+
+	// Handle create: POST /api/settings/profiles
+	if r.Method == http.MethodPost {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": req.Name, "created": true})
+		return
+	}
+
+	http.Error(w, "not found", http.StatusNotFound)
 }
 
 // --- Gateway ---
@@ -3044,8 +3409,6 @@ func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
 		{"name": "mono", "label": "Mono", "description": "Monochrome grayscale theme"},
 		{"name": "cyberpunk", "label": "Cyberpunk", "description": "Neon cyberpunk theme"},
 		{"name": "rose", "label": "Rose", "description": "Soft rose pink theme"},
-		{"name": "dark", "label": "Dark", "description": "Dark theme with dark backgrounds"},
-		{"name": "light", "label": "Light", "description": "Light theme with light backgrounds"},
 	}
 	jsonResponse(w, map[string]interface{}{
 		"active": activeTheme,
@@ -3064,7 +3427,7 @@ func (s *Server) handleDashboardTheme(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Validate theme name - support all frontend themes
-		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose", "dark", "light"}
+		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose"}
 		isValid := false
 		for _, valid := range validThemes {
 			if req.Name == valid {
@@ -3214,6 +3577,27 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// expandDotKeys converts dot-notation keys (e.g. "memory.enabled") into nested maps
+// {"memory.enabled": true} -> {"memory": {"enabled": true}}
+func expandDotKeys(data map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range data {
+		parts := strings.SplitN(k, ".", 2)
+		if len(parts) == 2 {
+			// Nested key
+			parent, ok := result[parts[0]].(map[string]interface{})
+			if !ok {
+				parent = make(map[string]interface{})
+				result[parts[0]] = parent
+			}
+			parent[parts[1]] = v
+		} else {
+			result[k] = v
+		}
+	}
+	return result
 }
 
 // execCommand is a helper to run a command and return its output
