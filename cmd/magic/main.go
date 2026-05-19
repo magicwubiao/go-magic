@@ -99,12 +99,12 @@ func init() {
 			if padding <= 0 {
 				return s
 			}
-			return s + repeat(" ", padding)
+			return s + strings.Repeat(" ", padding)
 		},
 		"trim": func(s string) string {
-			return trimSpace(s)
+			return strings.TrimSpace(s)
 		},
-		"trimTrailingWhitespaces": trimSpace,
+		"trimTrailingWhitespaces": strings.TrimSpace,
 	}
 
 	// Register global flags
@@ -165,21 +165,4 @@ func main() {
 		}
 		os.Exit(1)
 	}
-}
-
-func repeat(s string, count int) string {
-	return strings.Repeat(s, count)
-}
-
-func trimSpace(s string) string {
-	// Simple trim implementation
-	i := 0
-	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
-		i++
-	}
-	j := len(s)
-	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r') {
-		j--
-	}
-	return s[i:j]
 }

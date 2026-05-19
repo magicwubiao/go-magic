@@ -21,6 +21,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 
 	_ "modernc.org/sqlite"
 )
@@ -758,7 +759,7 @@ func displayQRCode(qrData string) {
 		
 		// Also print as URL for backup viewing
 		fmt.Println("\n  QR Code raw data:")
-		fmt.Printf("  %s\n", truncateStringSimple(qrData, 80))
+		fmt.Printf("  %s\n", utils.Truncate(qrData, 80))
 	} else {
 		// Non-TTY environment (piped/redirected output)
 		// Generate a simple text representation
@@ -829,7 +830,7 @@ func ForceDisplayQR(qrData string) {
 	// Print raw data
 	fmt.Println()
 	fmt.Println("Raw QR Data (for manual scanning):")
-	fmt.Printf("%s\n", truncateStringSimple(qrData, 100))
+	fmt.Printf("%s\n", utils.Truncate(qrData, 100))
 
 	fmt.Println()
 	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
@@ -842,14 +843,6 @@ func ForceDisplayQR(qrData string) {
 // GetQRCodeURL returns a URL to display the QR code in a browser
 func GetQRCodeURL(qrData string) string {
 	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", qrData)
-}
-
-// truncateStringSimple truncates a string to maxLen characters
-func truncateStringSimple(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }
 
 // GetLatestQR returns the most recent QR code data

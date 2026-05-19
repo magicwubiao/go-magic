@@ -1,5 +1,14 @@
 package config
 
+// Package config provides configuration management for the Cortex cognitive engine.
+// This is separate from the main application config (config/ package) and the
+// simplified runtime config (pkg/config/ package).
+//
+// Config package roles:
+//   - config/         : Main application config (setup wizard, gateway, providers)
+//   - pkg/config/     : Simplified runtime config (TUI, agent initialization)
+//   - internal/config/: Cortex engine config (memory, execution, logging, server)
+
 import (
 	"encoding/json"
 	"fmt"

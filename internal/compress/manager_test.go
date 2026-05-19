@@ -1,6 +1,10 @@
 package compress
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/magicwubiao/go-magic/pkg/utils"
+)
 
 func TestEstimateTokens_Empty(t *testing.T) {
 	result := EstimateTokens("")
@@ -171,10 +175,10 @@ func TestContainsAny(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	if truncate("hello", 10) != "hello" {
+	if utils.Truncate("hello", 10) != "hello" {
 		t.Error("short text should not be truncated")
 	}
-	result := truncate("hello world", 5)
+	result := utils.Truncate("hello world", 5)
 	if result != "hello..." {
 		t.Errorf("expected 'hello...', got '%s'", result)
 	}

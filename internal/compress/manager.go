@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // Message represents a chat message
@@ -199,7 +201,7 @@ func (m *Manager) generateSummary(messages []Message) string {
 		} else if role == "assistant" {
 			role = "Assistant"
 		}
-		content.WriteString(fmt.Sprintf("%s: %s\n", role, truncate(msg.Content, 200)))
+		content.WriteString(fmt.Sprintf("%s: %s\n", role, utils.Truncate(msg.Content, 200)))
 	}
 
 	return m.extractiveSummarize(content.String())
@@ -288,14 +290,6 @@ func containsAny(text string, keywords []string) bool {
 		}
 	}
 	return false
-}
-
-// truncate truncates text to max length
-func truncate(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
 }
 
 // CompressWithLLM uses an LLM to generate a better summary

@@ -71,7 +71,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	noStream, _ := cmd.Flags().GetBool("no-stream")
 	enableStream, _ := cmd.Flags().GetBool("stream")
 
-	return RunTUIWithOptions(ctx, cfg, prov, registry, store, enableStream && !noStream)
+	return RunTUI(ctx, cfg, prov, registry, store, WithStreaming(enableStream && !noStream))
 }
 
 // parseSlashCommand parses a slash command into name and arguments

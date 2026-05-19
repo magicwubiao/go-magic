@@ -10,6 +10,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // RunWithCortex runs a conversation with full Cortex Agent integration
@@ -95,7 +96,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	// ========== MAIN CONVERSATION LOOP ==========
 	a.history = append(a.history, provider.Message{
 		Role:    "user",
-		Content: truncateStr(input, a.maxMsgLen),
+		Content: utils.TruncateDetailed(input, a.maxMsgLen),
 	})
 	a.truncateHistory()
 
@@ -178,7 +179,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 		// ========== No tool calls - return response ==========
 		if len(resp.ToolCalls) == 0 {
-			content := truncateStr(llmResp.Content, a.maxMsgLen)
+			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
 				Content: content,
@@ -216,7 +217,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   truncateStr(resp.Content, a.maxMsgLen),
+			Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
 			ToolCalls: toolCalls,
 		})
 
@@ -283,7 +284,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
-				Content:    truncateStr(content, a.maxMsgLen),
+				Content:    utils.TruncateDetailed(content, a.maxMsgLen),
 				ToolCallID: tc.ID,
 			})
 		}

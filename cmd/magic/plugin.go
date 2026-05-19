@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/plugin"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 var pluginCmd = &cobra.Command{
@@ -191,7 +192,7 @@ func runPluginList(cmd *cobra.Command, args []string) {
 			entry.Manifest.Version,
 			stateStr,
 			entry.Manifest.Category,
-			truncateStr(entry.Manifest.Description, 50),
+			utils.Truncate(entry.Manifest.Description, 50),
 		)
 	}
 	w.Flush()
@@ -434,7 +435,7 @@ func runPluginDiscover(cmd *cobra.Command, args []string) {
 			fmt.Printf("\n  [%s]:\n", q)
 			for i := 0; i < count; i++ {
 				p := results[i]
-				fmt.Printf("    %s - %s\n", p.Name, truncateStr(p.Description, 40))
+				fmt.Printf("    %s - %s\n", p.Name, utils.Truncate(p.Description, 40))
 			}
 		}
 	}

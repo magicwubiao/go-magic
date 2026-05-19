@@ -26,6 +26,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -112,12 +113,22 @@ var (
 var mdRenderer *glamour.TermRenderer
 
 func init() {
+	// Initial renderer with default width; will be re-created on resize
+	initMarkdownRenderer(120)
+}
+
+func initMarkdownRenderer(width int) {
+	if width < 40 {
+		width = 40
+	}
+	if width > 200 {
+		width = 200
+	}
 	r, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(120),
+		glamour.WithWordWrap(width),
 	)
 	if err != nil {
-		// Fallback: no-op renderer
 		mdRenderer = nil
 	} else {
 		mdRenderer = r
@@ -361,6 +372,8 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// viewport height = total - title(1) - input(3) - status(1)
 		m.viewport.Height = msg.Height - 5
 		m.viewport.SetContent(m.renderMessages())
+		// Reinitialize markdown renderer with new terminal width
+		initMarkdownRenderer(msg.Width - 4)
 		return m, nil
 
 	case spinner.TickMsg:
@@ -533,7 +546,13 @@ func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		input := m.input.Value()
 		if strings.HasPrefix(input, "/") {
 			completions := []string{}
-			commands := []string{"/help", "/new", "/exit", "/mode", "/model", "/tools", "/skills", "/usage", "/undo", "/retry", "/clear", "/save", "/load", "/export", "/kanban", "/goal", "/req", "/reqs", "/context"}
+			commands := []string{
+			"/help", "/new", "/exit", "/mode", "/model", "/stream", "/compress",
+			"/tools", "/skills", "/usage", "/undo", "/retry", "/stop", "/clear",
+			"/save", "/load", "/export", "/history", "/insights",
+			"/req", "/reqs", "/req-done", "/req-del", "/req-priority", "/context",
+			"/goal", "/kanban", "/kb", "/handoff", "/clarify", "/interrupt",
+		}
 			for _, cmd := range commands {
 				if strings.HasPrefix(cmd, input) {
 					completions = append(completions, cmd)
@@ -543,7 +562,7 @@ func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input.SetValue(completions[0] + " ")
 				m.input.CursorEnd()
 			} else if len(completions) > 1 {
-				m.addMessage("system", "Completions: "+strings.Join(completions, "  "))
+				m.addMessage("system", "Did you mean: "+strings.Join(completions, "  "))
 			}
 		}
 		return m, nil
@@ -799,7 +818,11 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 				}
 
 				// Extract tool name
-				toolName := toolResultStartRegex.FindStringSubmatch(content[startMatch[0]:startMatch[1]])[1]
+				submatch := toolResultStartRegex.FindStringSubmatch(content[startMatch[0]:startMatch[1]])
+				if len(submatch) < 2 {
+					break
+				}
+				toolName := submatch[1]
 				// Extract tool content
 				toolContent := content[startMatch[1]:endMatch[0]]
 
@@ -832,9 +855,12 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.contentDirty = true
-	// Re-render content and scroll to bottom
+	// Re-render content
 	m.viewport.SetContent(m.renderMessages())
-	m.viewport.GotoBottom()
+	// Only auto-scroll if user is near the bottom (within 5 lines)
+	if m.viewport.AtBottom() || m.viewport.TotalLineCount()-m.viewport.YOffset <= 5 {
+		m.viewport.GotoBottom()
+	}
 	return m, m.waitForActivity()
 }
 
@@ -961,7 +987,7 @@ func (m TUIModel) renderMessages() string {
 		switch msg.Role {
 		case "user":
 			b.WriteString(userStyle.Render("> "))
-			b.WriteString(truncateDisplay(msg.Content, 2000))
+			b.WriteString(utils.Truncate(msg.Content, 2000))
 			b.WriteString("\n\n")
 
 		case "assistant":
@@ -982,7 +1008,7 @@ func (m TUIModel) renderMessages() string {
 
 		case "tool":
 			b.WriteString(toolStyle.Render("[Tool] "))
-			b.WriteString(truncateDisplay(msg.Content, 2000))
+			b.WriteString(utils.Truncate(msg.Content, 2000))
 			b.WriteString("\n\n")
 
 		case "error":
@@ -1020,7 +1046,8 @@ func (m *TUIModel) doHelp(args string) {
    /goal status    Show current goal status
    /goal pause     Pause active goal
    /goal resume    Resume paused goal
-   /goal clear     Clear current goal`
+   /goal clear     Clear current goal
+   /subgoal <text> Add sub-goal to active goal`
 
 	case "kanban":
 		helpText = `
@@ -1053,6 +1080,7 @@ func (m *TUIModel) doHelp(args string) {
    /retry              Retry last message
    /stop               Stop generation
    /clear              Clear history
+   /handoff [model]    Transfer session to another model
 
  Mode
    /mode [coding|chat] Switch mode
@@ -1063,6 +1091,10 @@ func (m *TUIModel) doHelp(args string) {
    /tools              List tools
    /skills             List skills
    /usage              Token usage
+
+ Tools
+   /clarify [question] Ask user for clarification
+   /interrupt [reason] Interrupt agent execution
 
  More: /help req  /help goal  /help kanban  /help session
 
@@ -1106,7 +1138,7 @@ func (m *TUIModel) doUsage() {
 
 	inputTokens := 0
 	for _, msg := range history {
-		inputTokens += len(msg.Content) / 4
+		inputTokens += estimateTokens(msg.Content)
 	}
 
 	usageText := fmt.Sprintf(`
@@ -1213,7 +1245,7 @@ func (m *TUIModel) doRetry() (tea.Model, tea.Cmd) {
 	// Remove assistant response
 	m.agent.SetHistory(history[:userIdx+1])
 
-	m.addMessage("system", fmt.Sprintf("Retrying: \"%s\"", truncateDisplay(lastUserMsg, 50)))
+	m.addMessage("system", fmt.Sprintf("Retrying: \"%s\"", utils.Truncate(lastUserMsg, 50)))
 	m.refreshViewport()
 
 	// Send the retry message
@@ -2079,7 +2111,7 @@ func (m *TUIModel) doExit() {
 // ---------------------------------------------------------------------------
 
 // RunTUI starts the TUI chat interface
-func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store) error {
+func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store, opts ...func(*TUIModel)) error {
 	// Generate tools schema for provider
 	toolsSchema := getToolsSchema(registry)
 
@@ -2112,63 +2144,27 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 		m.applyCodingMode()
 	}
 
+	// Apply options
+	for _, opt := range opts {
+		opt(&m)
+	}
+
 	// Run BubbleTea program
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
 
-// RunTUIWithOptions creates and runs the TUI with custom streaming option
-func RunTUIWithOptions(ctx context.Context, cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store, streaming bool) error {
-	// Generate tools schema for provider
-	toolsSchema := getToolsSchema(registry)
-
-	// Determine initial coding mode from config
-	codingMode := false
-
-	// Build system prompt
-	systemPrompt := buildSystemPrompt(cfg, codingMode)
-
-	// Initialize agent
-	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, systemPrompt)
-
-	// Generate session ID
-	sessionID := uuid.New().String()
-	aiAgent.SetSession(sessionID)
-
-	// Load skills context (compact list only)
-	if mgr, err := skills.NewManager(); err == nil {
-		if skillsList := mgr.GetSkillsList(); skillsList != "" {
-			aiAgent.AddSkillsContext(skillsList)
-		}
+// WithStreaming enables streaming mode for RunTUI
+func WithStreaming(enabled bool) func(*TUIModel) {
+	return func(m *TUIModel) {
+		m.streamingOn = enabled
 	}
-
-	// Create TUI model
-	m := NewTUIModel(aiAgent, registry, store, cfg)
-	m.streamingOn = streaming
-
-	// Apply initial coding mode if configured
-	if codingMode {
-		m.codingMode = true
-		m.applyCodingMode()
-	}
-
-	// Run BubbleTea program
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := p.Run()
-	return err
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func truncateDisplay(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
 
 func escapeJSONTUI(s string) string {
 	b, err := json.Marshal(s)
@@ -2207,4 +2203,23 @@ func parseReqArgsTUI(args string) (string, string) {
 		}
 	}
 	return strings.TrimSpace(text), priority
+}
+
+// estimateTokens provides a rough token count estimate.
+// English: ~4 chars/token, CJK: ~2 chars/token, mixed: weighted average.
+func estimateTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+	cjk := 0
+	other := 0
+	for _, r := range text {
+		if r >= 0x4E00 && r <= 0x9FFF || r >= 0x3400 && r <= 0x4DBF || r >= 0xF900 && r <= 0xFAFF {
+			cjk++
+		} else {
+			other++
+		}
+	}
+	// CJK: ~1.5 tokens per char, English: ~4 chars per token
+	return cjk + other/4
 }

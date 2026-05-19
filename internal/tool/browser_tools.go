@@ -12,6 +12,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/util"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // BrowserTools provides enhanced browser automation tools
@@ -98,7 +99,7 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 		"url":          urlStr,
 		"title":       strings.TrimSpace(title),
 		"status":      resp.StatusCode,
-		"content":     truncateText(content, 5000),
+		"content":     utils.Truncate(content, 5000),
 		"content_type": resp.Header.Get("Content-Type"),
 	}, nil
 }
@@ -199,7 +200,7 @@ func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]inter
 	if selector != "" {
 		snapshot["selected"] = doc.Find(selector).First().Text()
 	} else {
-		snapshot["content"] = truncateText(cleanText(doc.Find("body").First().Text()), 3000)
+		snapshot["content"] = utils.Truncate(cleanText(doc.Find("body").First().Text()), 3000)
 	}
 
 	return snapshot, nil
@@ -520,13 +521,6 @@ func cleanText(text string) string {
 	space := regexp.MustCompile(`\s+`)
 	text = space.ReplaceAllString(text, " ")
 	return text
-}
-
-func truncateText(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
 }
 
 // ExportBrowserToolsJSON exports browser tools as JSON

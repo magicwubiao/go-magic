@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,10 +26,8 @@ import (
 	"github.com/magicwubiao/go-magic/internal/tool"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/types"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
-
-//go:embed dist
-var staticFiles embed.FS
 
 // Session represents a chat session (API response format)
 type Session struct {
@@ -915,7 +912,7 @@ func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(strings.ToLower(m.Content), strings.ToLower(query)) {
 				results = append(results, map[string]interface{}{
 					"session_id":      sess.ID,
-					"snippet":         truncateString(m.Content, 200),
+					"snippet":         utils.Truncate(m.Content, 200),
 					"role":            m.Role,
 					"source":          sess.Platform,
 					"model":           s.cfg.Model,
@@ -3489,44 +3486,9 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Root SPA fallback
-	if path == "/" || path == "" {
-		data, err := staticFiles.ReadFile("dist/index.html")
-		if err != nil {
-			http.Error(w, "internal server error", 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(data)
-		return
-	}
-
-	// Try embedded files first
-	data, err := staticFiles.ReadFile("dist" + path)
-	if err == nil {
-		contentType := getContentType(path)
-		w.Header().Set("Content-Type", contentType)
-		w.Write(data)
-		return
-	}
-
-	// Serve index.html for SPA routes
-	spaPaths := []string{"/sessions", "/logs", "/skills", "/tools", "/config", "/settings", "/analytics", "/models", "/cron", "/plugins", "/env", "/profiles", "/docs", "/chat"}
-	for _, spa := range spaPaths {
-		if strings.HasPrefix(path, spa) {
-			data, err := staticFiles.ReadFile("dist/index.html")
-			if err == nil {
-				w.Header().Set("Content-Type", "text/html")
-				w.Write(data)
-				return
-			}
-		}
-	}
-
-	http.Error(w, "not found", 404)
+	// SPA disabled - dist directory removed
+	http.Error(w, "SPA not available", 404)
 }
-
-// --- Helper Functions ---
 
 func getContentType(path string) string {
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
@@ -3570,13 +3532,6 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****" + key[len(key)-4:]
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // expandDotKeys converts dot-notation keys (e.g. "memory.enabled") into nested maps

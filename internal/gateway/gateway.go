@@ -74,8 +74,6 @@ type PlatformHandler interface {
 	IsConnected() bool
 }
 
-// HealthStatus is redefined later with Platforms field (see line ~682)
-
 // AgentHandler defines the interface for the agent
 type AgentHandler interface {
 	// Process processes a message and returns the response
@@ -241,18 +239,14 @@ func (m *SensitiveWordMiddleware) Process(msg *Message) (bool, error) {
 
 func containsSensitiveWord(content, word string) bool {
 	// Simple case-insensitive substring check
-	lowerContent := toLower(content)
-	lowerWord := toLower(word)
+	lowerContent := strings.ToLower(content)
+	lowerWord := strings.ToLower(word)
 	for i := 0; i <= len(lowerContent)-len(lowerWord); i++ {
 		if lowerContent[i:i+len(lowerWord)] == lowerWord {
 			return true
 		}
 	}
 	return false
-}
-
-func toLower(s string) string {
-	return strings.ToLower(s)
 }
 
 // ShouldProcessChannel 检查频道是否在白名单/黑名单中
@@ -777,7 +771,7 @@ type HealthStatus struct {
 	Timestamp time.Time                 `json:"timestamp"`
 	Platforms map[string]PlatformStatus `json:"platforms"`
 
-	// 兼容旧代码字段
+	// Legacy compatibility fields (actively used by platform implementations)
 	Platform     string                 `json:"platform,omitempty"`
 	Connected    bool                   `json:"connected,omitempty"`
 	CallbackOK   bool                   `json:"callback_ok,omitempty"`

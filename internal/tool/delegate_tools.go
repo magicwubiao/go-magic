@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/magicwubiao/go-magic/internal/subagent"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // DelegateTaskTool allows spawning isolated sub-agents for complex subtasks
@@ -354,7 +355,7 @@ func (t *ListTasksTool) Execute(ctx context.Context, params map[string]interface
 		taskInfo := map[string]interface{}{
 			"task_id":     task.ID,
 			"status":      task.GetStatus(),
-			"description": truncateString(task.Description, 100),
+			"description": utils.Truncate(task.Description, 100),
 			"created_at":  task.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		}
 
@@ -461,15 +462,6 @@ func (t *CancelTaskTool) Execute(ctx context.Context, params map[string]interfac
 	}
 
 	return resp, nil
-}
-
-// Helper functions
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // RegisterSubAgentTools registers all subagent tools with the registry

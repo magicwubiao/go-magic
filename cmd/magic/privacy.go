@@ -10,6 +10,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 var privacyCmd = &cobra.Command{
@@ -196,8 +197,8 @@ func runPrivacyAudit(cmd *cobra.Command, args []string) {
 
 	for i, entry := range log {
 		fmt.Printf("%d. Detected: %s\n", i+1, strings.Join(entry.Detected, ", "))
-		fmt.Printf("   Original: %s\n", truncateStr(entry.Original, 50))
-		fmt.Printf("   Redacted: %s\n", truncateStr(entry.Redacted, 50))
+		fmt.Printf("   Original: %s\n", utils.Truncate(entry.Original, 50))
+		fmt.Printf("   Redacted: %s\n", utils.Truncate(entry.Redacted, 50))
 		fmt.Println()
 	}
 }
@@ -246,11 +247,4 @@ func readStdin() (string, error) {
 		}
 	}
 	return strings.TrimRight(input, "\n"), nil
-}
-
-func truncateStr(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }

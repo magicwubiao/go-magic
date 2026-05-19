@@ -253,9 +253,3 @@ func (g *Gateway) GetAllLoginStatuses() []*LoginStatus {
 
 	return statuses
 }
-
-// MarshalJSON marshals LoginStatus to JSON
-// func (s *LoginStatus) MarshalJSON() ([]byte, error) {
-// 	type Alias LoginStatus
-// 	return json.Marshal((*Alias)(s))
-// }

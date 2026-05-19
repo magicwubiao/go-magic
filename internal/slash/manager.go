@@ -179,6 +179,55 @@ func (m *Manager) registerDefaultCommands() {
 				return "Available skills. Use /skills [name] for details.", nil
 			},
 		},
+		{
+			Name:        "handoff",
+			Description: "Transfer session to another model",
+			Usage:       "/handoff [model]",
+			Category:    "conversation",
+			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
+				if len(args) > 0 {
+					return fmt.Sprintf("Session handed off to model: %s", args[0]), nil
+				}
+				return "Usage: /handoff [model] - Transfer session to another model", nil
+			},
+		},
+		{
+			Name:        "clarify",
+			Description: "Ask user for clarification",
+			Usage:       "/clarify [question]",
+			Category:    "tools",
+			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
+				if len(args) > 0 {
+					return fmt.Sprintf("Clarification needed: %s", args[0]), nil
+				}
+				return "Usage: /clarify [question] - Ask user for clarification", nil
+			},
+		},
+		{
+			Name:        "interrupt",
+			Description: "Interrupt agent execution",
+			Usage:       "/interrupt [reason]",
+			Category:    "tools",
+			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
+				reason := "user requested"
+				if len(args) > 0 {
+					reason = args[0]
+				}
+				return fmt.Sprintf("Interrupted: %s", reason), nil
+			},
+		},
+		{
+			Name:        "subgoal",
+			Description: "Add sub-goal to active goal",
+			Usage:       "/subgoal <text>",
+			Category:    "goals",
+			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
+				if len(args) > 0 {
+					return fmt.Sprintf("Sub-goal added: %s", args[0]), nil
+				}
+				return "Usage: /subgoal <text> - Add sub-goal to active goal", nil
+			},
+		},
 		
 		// Info commands
 		{
@@ -203,9 +252,10 @@ func (m *Manager) registerDefaultCommands() {
 			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
 				var result strings.Builder
 				result.WriteString("Available commands:\n\n")
-				result.WriteString("**Conversation:** /new, /clear, /compress, /retry, /undo, /export\n")
+				result.WriteString("**Conversation:** /new, /clear, /compress, /retry, /undo, /export, /handoff\n")
+				result.WriteString("**Goals:** /goal, /subgoal\n")
 				result.WriteString("**System:** /model, /personality\n")
-				result.WriteString("**Tools:** /tools, /skills\n")
+				result.WriteString("**Tools:** /tools, /skills, /clarify, /interrupt\n")
 				result.WriteString("**Info:** /help, /commands, /status, /version\n")
 				result.WriteString("**Usage:** /usage, /insights\n")
 				result.WriteString("**Sessions:** /sessions, /sethome\n")

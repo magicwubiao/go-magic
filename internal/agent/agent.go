@@ -16,6 +16,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // Tool dependency graph - tools that must run alone (cannot parallelize with same tool or related)
@@ -345,7 +346,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	if len(contentParts) > 0 {
 		userMsg.ContentParts = contentParts
 	} else {
-		userMsg.Content = truncateStr(input, a.maxMsgLen)
+		userMsg.Content = utils.TruncateDetailed(input, a.maxMsgLen)
 	}
 	a.history = append(a.history, userMsg)
 
@@ -431,7 +432,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// No tool calls - return the response
 		if len(resp.ToolCalls) == 0 {
-			content := truncateStr(llmResp.Content, a.maxMsgLen)
+			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
 				Content: content,
@@ -460,7 +461,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if result.Err != nil {
 				resultContent = fmt.Sprintf("Error: %v", result.Err)
 			} else {
-				resultContent = truncateStr(result.Content, a.maxMsgLen)
+				resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 			}
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
@@ -507,7 +508,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		if loopDetected {
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
-				Content: truncateStr(resp.Content, a.maxMsgLen),
+				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
 			})
 			a.history = append(a.history, provider.Message{
 				Role:    "user",
@@ -519,7 +520,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
-				Content: truncateStr(finalResp.Content, a.maxMsgLen),
+				Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -538,7 +539,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
 		a.history = append(a.history, provider.Message{
 			Role:    "assistant",
-			Content: truncateStr(finalResp.Content, a.maxMsgLen),
+			Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
 		})
 		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 	}
@@ -585,7 +586,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	// Truncate input
 	a.history = append(a.history, provider.Message{
 		Role:    "user",
-		Content: truncateStr(input, a.maxMsgLen),
+		Content: utils.TruncateDetailed(input, a.maxMsgLen),
 	})
 
 	// Truncate history to prevent overflow
@@ -664,7 +665,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// No tool calls - return the response
 		if len(resp.ToolCalls) == 0 {
-			content := truncateStr(llmResp.Content, a.maxMsgLen)
+			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
 				Content: content,
@@ -710,7 +711,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		if loopDetected {
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
-				Content: truncateStr(resp.Content, a.maxMsgLen),
+				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
 			})
 			a.history = append(a.history, provider.Message{
 				Role:    "user",
@@ -722,7 +723,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
-				Content: truncateStr(finalResp.Content, a.maxMsgLen),
+				Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -759,7 +760,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				if result.Err != nil {
 					resultContent = fmt.Sprintf("Error: %v", result.Err)
 				} else {
-					resultContent = truncateStr(result.Content, a.maxMsgLen)
+					resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 				}
 			} else {
 				// No result found for this tool call
@@ -786,7 +787,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
 		a.history = append(a.history, provider.Message{
 			Role:    "assistant",
-			Content: truncateStr(finalResp.Content, a.maxMsgLen),
+			Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
 		})
 		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 	}
@@ -853,7 +854,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	// Truncate input (stream path)
 	a.history = append(a.history, provider.Message{
 		Role:    "user",
-		Content: truncateStr(input, a.maxMsgLen),
+		Content: utils.TruncateDetailed(input, a.maxMsgLen),
 	})
 
 	// Truncate history to prevent overflow
@@ -1030,7 +1031,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// No tool calls - return the response
 		if len(toolCalls) == 0 {
-			content := truncateStr(llmResp.Content, a.maxMsgLen)
+			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
 				Role:    "assistant",
 				Content: content,
@@ -1063,7 +1064,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   truncateStr(fullContent, a.maxMsgLen),
+			Content:   utils.TruncateDetailed(fullContent, a.maxMsgLen),
 			ToolCalls: tcs,
 		})
 
@@ -1076,7 +1077,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				errContent := fmt.Sprintf("Error: %v", err)
 				a.history = append(a.history, provider.Message{
 					Role:       "tool",
-					Content:    truncateStr(errContent, a.maxMsgLen),
+					Content:    utils.TruncateDetailed(errContent, a.maxMsgLen),
 					ToolCallID: tc.ID,
 				})
 				toolName := tc.Function.Name
@@ -1099,7 +1100,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
-				Content:    truncateStr(content, a.maxMsgLen),
+				Content:    utils.TruncateDetailed(content, a.maxMsgLen),
 				ToolCallID: tc.ID,
 			})
 
@@ -1633,14 +1634,6 @@ func (a *Agent) SetMaxIterations(max int) {
 	if max > 0 {
 		a.maxIterations = max
 	}
-}
-
-// truncateStr truncates a string to maximum length
-func truncateStr(s string, max int) string {
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	return s[:max] + fmt.Sprintf("... [truncated, total %d chars]", len(s))
 }
 
 // AddSystemContext appends context to the system prompt message.

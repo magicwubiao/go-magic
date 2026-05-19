@@ -41,6 +41,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // iLink API constants
@@ -861,7 +862,7 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 	}
 
 	log.Debugf("[WeChat-iLink] 📨 Message from %s: %s",
-		gatewayMsg.UserID, truncateString(content, 50))
+		gatewayMsg.UserID, utils.Truncate(content, 50))
 
 	select {
 	case g.msgCh <- gatewayMsg:
@@ -1225,13 +1226,6 @@ func (g *WeChatILinkGateway) loadTokenFromConfig() (string, string) {
 
 func isSessionExpired(ret, errcode int) bool {
 	return ret == ilinkSessionExpiredCode || errcode == ilinkSessionExpiredCode
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // randomHex generates a hex-encoded random string of n bytes.
