@@ -180,15 +180,15 @@ func generateGatewaySystemPrompt(cfg *config.Config) string {
 	basePrompt := `You are Magic, a helpful AI assistant.
 
 RULES:
-- 闲聊打招呼（你好/hello）→ 直接回复，不调工具
-- 知识问答 → 直接回复
-- 列出/查看/读取文件 → 调用 list_files 或 read_file
-- 创建/写入文件 → 调用 write_file
-- 搜索网络 → 调用 web_search
-- 执行命令/代码 → 调用 execute_command
-- 不要调用 time, system, math, memory_recall, todo, session_search，除非用户明确要求
-- 用中文回复中文问题，英文回复英文问题
-- 文件列表要简明总结，不要输出原始JSON`
+- Casual greetings (hello/hi) → Reply directly, no tool calls
+- Knowledge Q&A → Reply directly
+- List/view/read files → Call list_files or read_file
+- Create/write files → Call write_file
+- Search web → Call web_search
+- Execute commands/code → Call execute_command
+- Do not call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- Reply in Chinese for Chinese questions, English for English questions
+- File lists should be concise summaries, not raw JSON`
 
 	// Check for custom system prompt in config (if field exists in future)
 	// For now, use the base prompt
@@ -346,15 +346,15 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		if mediaFailedCount > 0 {
 			var fallbackText string
 			if hasImageFailed {
-				fallbackText = "[用户发送了一张图片，但无法加载]"
+				fallbackText = "[User sent an image, but it could not be loaded]"
 			} else if hasVideoFailed {
-				fallbackText = "[用户发送了一个视频，但无法加载]"
+				fallbackText = "[User sent a video, but it could not be loaded]"
 			} else if hasAudioFailed {
-				fallbackText = "[用户发送了一段语音，但无法加载]"
+				fallbackText = "[User sent an audio message, but it could not be loaded]"
 			} else if hasFileFailed {
-				fallbackText = "[用户发送了一个文件，但无法加载]"
+				fallbackText = "[User sent a file, but it could not be loaded]"
 			} else {
-				fallbackText = "[用户发送了附件，但无法加载]"
+				fallbackText = "[User sent an attachment, but it could not be loaded]"
 			}
 			// Add fallback text if no content exists
 			if msg.Content == "" {
@@ -416,6 +416,24 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 	h.saveCheckpoint(msg.UserID, msg.Platform, msg.ChannelID, ag)
 
 	return response, nil
+}
+
+// ProcessWithStats processes a message and returns response with token statistics.
+func (h *gatewayAgentHandler) ProcessWithStats(ctx context.Context, msg gateway.Message) (string, int, int, int, error) {
+	// Use the same logic as Process but capture token stats
+	response, err := h.Process(ctx, msg)
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+
+	// Get token stats from agent
+	ag, err := h.getOrCreateAgent(msg.UserID)
+	if err != nil {
+		return response, 0, 0, 0, nil
+	}
+
+	inputTokens, outputTokens, cacheTokens := ag.GetTokenStats()
+	return response, inputTokens, outputTokens, cacheTokens, nil
 }
 
 // saveCheckpoint saves the current session state to disk
@@ -1010,6 +1028,16 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	agentHandler := NewGatewayAgentHandler()
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
 
+	// Set up session persistence for analytics
+	homeDir, _ := os.UserHomeDir()
+	sessionDBPath := filepath.Join(homeDir, ".magic", "sessions.db")
+	store, err := session.NewStore(sessionDBPath)
+	if err != nil {
+		fmt.Printf("Warning: Failed to create session store: %v\n", err)
+	} else {
+		gw.SetSessionStore(store)
+	}
+
 	// Recover interrupted sessions from previous shutdown
 	go agentHandler.recoverInterruptedSessions(ctx)
 
@@ -1523,7 +1551,7 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 }
 
 func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
-	fmt.Println("╔════════════════════════════════════════╗")
+	fmt.Println("╔══════════════════════════════════════════╗")
 	fmt.Println("║     Gateway Platform Setup Wizard      ║")
 	fmt.Println("╚════════════════════════════════════════╝")
 	fmt.Println()
@@ -1535,9 +1563,9 @@ func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 	cfg, loadErr := config.Load()
 	if loadErr != nil || cfg == nil {
 		cfg = &config.Config{
-			Profile:    "default",
-			MagicHome:  magicDir,
-			Providers:  make(map[string]config.ProviderConfig),
+			Profile:   "default",
+			MagicHome: magicDir,
+			Providers: make(map[string]config.ProviderConfig),
 			Gateway: config.GatewayConfig{
 				Enabled:   true,
 				Platforms: make(map[string]config.PlatformConfig),
@@ -1551,11 +1579,11 @@ func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 		cfg.Gateway.Platforms = make(map[string]config.PlatformConfig)
 	}
 
-	// Interactive platform setup
+	// Interactive platform configuration
 	reader := bufio.NewReader(os.Stdin)
-	runPlatformSetupInteractive(cfg, reader, magicDir)
+	runPlatformSetupInteractiveV2(cfg, reader, magicDir)
 
-	// Save config
+	// 保存配置
 	if err := cfg.Save(); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
@@ -1568,17 +1596,40 @@ func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("  magic gateway start")
 }
 
-// runPlatformSetupInteractive handles the interactive platform setup
-func runPlatformSetupInteractive(cfg *config.Config, reader *bufio.Reader, magicDir string) {
+// runPlatformSetupInteractiveV2 handles interactive platform configuration (full version, supports all 11 platforms)
+func runPlatformSetupInteractiveV2(cfg *config.Config, reader *bufio.Reader, magicDir string) {
+	// List of all supported platforms
+	type platformEntry struct {
+		name        string
+		displayName string
+		description string
+	}
+	platforms := []platformEntry{
+		{"telegram", "Telegram", "Telegram Bot"},
+		{"discord", "Discord", "Discord Bot"},
+		{"slack", "Slack", "Slack Bot"},
+		{"wechat", "WeChat", "WeChat (ClawBot)"},
+		{"wecom", "WeCom", "WeCom (Enterprise WeChat)"},
+		{"qq", "QQ", "QQ Bot"},
+		{"dingtalk", "DingTalk", "DingTalk Bot"},
+		{"feishu", "Feishu/Lark", "Feishu/Lark Bot"},
+		{"whatsapp", "WhatsApp", "WhatsApp Bot"},
+		{"line", "LINE", "LINE Bot"},
+		{"matrix", "Matrix", "Matrix Protocol"},
+	}
+
 	fmt.Println("Select platforms to configure:")
 	fmt.Println()
-	fmt.Println("  [1] Telegram Bot")
-	fmt.Println("  [2] Discord Bot")
-	fmt.Println("  [3] Slack Bot")
-	fmt.Println("  [4] WeChat (via ilink)")
-	fmt.Println("  [5] Custom Webhook")
+	for i, p := range platforms {
+		// Show configured status
+		marker := ""
+		if existing, ok := cfg.Gateway.Platforms[p.name]; ok && existing.Enabled {
+			marker = " [configured]"
+		}
+		fmt.Printf("  [%d] %s - %s%s\n", i+1, p.displayName, p.description, marker)
+	}
 	fmt.Println()
-	fmt.Print("Enter numbers (e.g. 1,2): ")
+	fmt.Print("Enter numbers (e.g. 1,3,5), press Enter to skip: ")
 
 	selection, _ := reader.ReadString('\n')
 	selection = strings.TrimSpace(selection)
@@ -1591,112 +1642,281 @@ func runPlatformSetupInteractive(cfg *config.Config, reader *bufio.Reader, magic
 	parts := strings.Split(selection, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		switch part {
-		case "1":
-			configureTelegram(cfg, reader)
-		case "2":
-			configureDiscord(cfg, reader)
-		case "3":
-			configureSlack(cfg, reader)
-		case "4":
-			configureWeChat(cfg, reader)
-		case "5":
-			configureWebhook(cfg, reader)
+		num, err := strconv.Atoi(part)
+		if err != nil || num < 1 || num > len(platforms) {
+			continue
 		}
+		platform := platforms[num-1]
+		configurePlatformV2(cfg, reader, platform)
 	}
 }
 
-func configureTelegram(cfg *config.Config, reader *bufio.Reader) {
-	fmt.Println("\n--- Telegram Bot Configuration ---")
-	fmt.Print("Enter Bot Token: ")
-	token, _ := reader.ReadString('\n')
-	token = strings.TrimSpace(token)
+// configurePlatformV2 configures a single platform (full version, supports all 11 platforms)
+func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
+	name        string
+	displayName string
+	description string
+}) {
+	fmt.Printf("\n--- %s Configuration ---\n", p.displayName)
 
-	if token != "" {
-		cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
-			Enabled: true,
-			Token:   token,
+	switch p.name {
+	case "telegram":
+		fmt.Print("Enter Bot Token (from @BotFather): ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		if token != "" {
+			cfg.Gateway.Platforms["telegram"] = config.PlatformConfig{
+				Enabled: true,
+				Token:   token,
+			}
+			fmt.Println("✓ Telegram configured")
 		}
-		fmt.Println("✓ Telegram configured")
-	}
-}
 
-func configureDiscord(cfg *config.Config, reader *bufio.Reader) {
-	fmt.Println("\n--- Discord Bot Configuration ---")
-	fmt.Print("Enter Bot Token: ")
-	token, _ := reader.ReadString('\n')
-	token = strings.TrimSpace(token)
-
-	fmt.Print("Enter Guild ID: ")
-	guildID, _ := reader.ReadString('\n')
-	guildID = strings.TrimSpace(guildID)
-
-	if token != "" {
-		cfg.Gateway.Platforms["discord"] = config.PlatformConfig{
-			Enabled: true,
-			Token:   token,
-			AllowedChannels: []string{guildID},
+	case "discord":
+		fmt.Print("Enter Bot Token: ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		fmt.Print("Enter Guild ID (optional, press Enter to skip): ")
+		guildID, _ := reader.ReadString('\n')
+		guildID = strings.TrimSpace(guildID)
+		if token != "" {
+			platformCfg := config.PlatformConfig{
+				Enabled: true,
+				Token:   token,
+			}
+			if guildID != "" {
+				platformCfg.AllowedChannels = []string{guildID}
+			}
+			cfg.Gateway.Platforms["discord"] = platformCfg
+			fmt.Println("✓ Discord configured")
 		}
-		fmt.Println("✓ Discord configured")
-	}
-}
 
-func configureSlack(cfg *config.Config, reader *bufio.Reader) {
-	fmt.Println("\n--- Slack Bot Configuration ---")
-	fmt.Print("Enter Bot Token: ")
-	token, _ := reader.ReadString('\n')
-	token = strings.TrimSpace(token)
-
-	fmt.Print("Enter Signing Secret: ")
-	signingSecret, _ := reader.ReadString('\n')
-	signingSecret = strings.TrimSpace(signingSecret)
-
-	if token != "" {
-		cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
-			Enabled: true,
-			Token:   token,
-			Secret:  signingSecret,
+	case "slack":
+		fmt.Print("Enter Bot Token (xoxb-...): ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		fmt.Print("Enter Signing Secret (optional): ")
+		secret, _ := reader.ReadString('\n')
+		secret = strings.TrimSpace(secret)
+		if token != "" {
+			cfg.Gateway.Platforms["slack"] = config.PlatformConfig{
+				Enabled: true,
+				Token:   token,
+				Secret:  secret,
+			}
+			fmt.Println("✓ Slack configured")
 		}
-		fmt.Println("✓ Slack configured")
-	}
-}
 
-func configureWeChat(cfg *config.Config, reader *bufio.Reader) {
-	fmt.Println("\n--- WeChat (iLink) Configuration ---")
-	fmt.Print("Enter iLink App ID: ")
-	appID, _ := reader.ReadString('\n')
-	appID = strings.TrimSpace(appID)
-
-	fmt.Print("Enter iLink App Secret: ")
-	appSecret, _ := reader.ReadString('\n')
-	appSecret = strings.TrimSpace(appSecret)
-
-	if appID != "" {
-		cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
-			Enabled: true,
-			CorpID:  appID,
-			Secret:  appSecret,
+	case "wechat":
+		fmt.Println("WeChat Configuration")
+		fmt.Println("  Options:")
+		fmt.Println("    1. WeChat (iLink) - Personal WeChat via QR code login (recommended)")
+		fmt.Println("    2. WeChat Official Account - Enterprise account with callback")
+		fmt.Print("Select option (1/2, default 1): ")
+		option, _ := reader.ReadString('\n')
+		option = strings.TrimSpace(option)
+		if option == "" || option == "1" {
+			// iLink mode for personal WeChat
+			fmt.Println("  WeChat (iLink) - Personal WeChat via QR code login")
+			fmt.Println("  You will need to scan a QR code to login after starting the gateway.")
+			fmt.Print("  Enable WeChat iLink? (y/N): ")
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "y" {
+				cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+					Enabled: true,
+				}
+				fmt.Printf("  ✓ WeChat iLink configured.\n")
+				fmt.Println("  Note: Run 'magic gateway start' and scan the QR code to login.")
+			} else {
+				fmt.Println("  ✗ Skipped")
+			}
+		} else if option == "2" {
+			// Official Account callback mode
+			fmt.Print("Enter App ID: ")
+			appID, _ := reader.ReadString('\n')
+			appID = strings.TrimSpace(appID)
+			fmt.Print("Enter App Secret: ")
+			appSecret, _ := reader.ReadString('\n')
+			appSecret = strings.TrimSpace(appSecret)
+			fmt.Print("Enter Token (optional): ")
+			token, _ := reader.ReadString('\n')
+			token = strings.TrimSpace(token)
+			fmt.Print("Enter AES Key (optional): ")
+			aesKey, _ := reader.ReadString('\n')
+			aesKey = strings.TrimSpace(aesKey)
+			if appID != "" {
+				cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
+					Enabled: true,
+					CorpID:  appID,
+					Secret:  appSecret,
+					Token:   token,
+					AESKey:  aesKey,
+					Mode:    "callback",
+				}
+				fmt.Println("✓ WeChat Official Account configured")
+			} else {
+				fmt.Println("✗ Skipped (App ID is required)")
+			}
+		} else {
+			fmt.Println("✗ Invalid option")
 		}
-		fmt.Println("✓ WeChat configured")
-	}
-}
 
-func configureWebhook(cfg *config.Config, reader *bufio.Reader) {
-	fmt.Println("\n--- Custom Webhook Configuration ---")
-	fmt.Print("Enter Webhook URL: ")
-	url, _ := reader.ReadString('\n')
-	url = strings.TrimSpace(url)
-
-	fmt.Print("Enter Secret (optional): ")
-	secret, _ := reader.ReadString('\n')
-	secret = strings.TrimSpace(secret)
-
-	if url != "" {
-		cfg.Gateway.Platforms["webhook"] = config.PlatformConfig{
-			Enabled: true,
-			Token:   url,
-			Secret:  secret,
+	case "wecom":
+		fmt.Println("WeCom (Enterprise WeChat)")
+		fmt.Println("  Login method: QR code scan (recommended)")
+		fmt.Print("Enter Corp ID: ")
+		corpID, _ := reader.ReadString('\n')
+		corpID = strings.TrimSpace(corpID)
+		fmt.Print("Enter Agent ID: ")
+		agentID, _ := reader.ReadString('\n')
+		agentID = strings.TrimSpace(agentID)
+		fmt.Print("Enter Secret: ")
+		secret, _ := reader.ReadString('\n')
+		secret = strings.TrimSpace(secret)
+		if corpID != "" {
+			cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
+				Enabled: true,
+				CorpID:  corpID,
+				AgentID: agentID,
+				Secret:  secret,
+			}
+			fmt.Println("✓ WeCom configured (QR code login on first start)")
 		}
-		fmt.Println("✓ Webhook configured")
+
+	case "qq":
+		fmt.Println("QQ Bot")
+		fmt.Print("Enter QQ Number: ")
+		number, _ := reader.ReadString('\n')
+		number = strings.TrimSpace(number)
+		fmt.Print("Enter Password (optional): ")
+		password, _ := reader.ReadString('\n')
+		password = strings.TrimSpace(password)
+		if number != "" {
+			platformCfg := config.PlatformConfig{
+				Enabled: true,
+				Number:  number,
+			}
+			if password != "" {
+				platformCfg.Password = password
+			}
+			cfg.Gateway.Platforms["qq"] = platformCfg
+			fmt.Println("✓ QQ configured")
+		}
+
+	case "dingtalk":
+		fmt.Println("DingTalk Bot")
+		fmt.Print("Enter App Key: ")
+		appKey, _ := reader.ReadString('\n')
+		appKey = strings.TrimSpace(appKey)
+		fmt.Print("Enter App Secret: ")
+		appSecret, _ := reader.ReadString('\n')
+		appSecret = strings.TrimSpace(appSecret)
+		if appKey != "" {
+			cfg.Gateway.Platforms["dingtalk"] = config.PlatformConfig{
+				Enabled:   true,
+				AppKey:    appKey,
+				AppSecret: appSecret,
+			}
+			fmt.Println("✓ DingTalk configured")
+		}
+
+	case "feishu":
+		fmt.Println("Feishu/Lark Bot")
+		fmt.Print("Enter App ID: ")
+		appID, _ := reader.ReadString('\n')
+		appID = strings.TrimSpace(appID)
+		fmt.Print("Enter App Secret: ")
+		appSecret, _ := reader.ReadString('\n')
+		appSecret = strings.TrimSpace(appSecret)
+		if appID != "" {
+			cfg.Gateway.Platforms["feishu"] = config.PlatformConfig{
+				Enabled:   true,
+				AppID:     appID,
+				AppSecret: appSecret,
+			}
+			fmt.Println("✓ Feishu configured")
+		}
+
+	case "whatsapp":
+		fmt.Println("WhatsApp Bot")
+		fmt.Println("  Login method: QR code scan (recommended)")
+		fmt.Print("Mode (personal/business, default personal): ")
+		mode, _ := reader.ReadString('\n')
+		mode = strings.TrimSpace(mode)
+		if mode == "" {
+			mode = "personal"
+		}
+		fmt.Print("Enter Verify Token (optional, for callback mode): ")
+		verifyToken, _ := reader.ReadString('\n')
+		verifyToken = strings.TrimSpace(verifyToken)
+		cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
+			Enabled:     true,
+			VerifyToken: verifyToken,
+			Mode:        mode,
+		}
+		if mode == "personal" {
+			fmt.Println("✓ WhatsApp configured (personal mode - QR code login on first start)")
+		} else {
+			fmt.Printf("✓ WhatsApp configured (mode: %s)\n", mode)
+		}
+
+	case "line":
+		fmt.Println("LINE Bot")
+		fmt.Print("Enter Channel Access Token: ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		fmt.Print("Enter Channel Secret (optional): ")
+		secret, _ := reader.ReadString('\n')
+		secret = strings.TrimSpace(secret)
+		if token != "" {
+			cfg.Gateway.Platforms["line"] = config.PlatformConfig{
+				Enabled: true,
+				Token:   token,
+				Secret:  secret,
+			}
+			fmt.Println("✓ LINE configured")
+		}
+
+	case "matrix":
+		fmt.Println("Matrix Protocol")
+		fmt.Print("Enter Homeserver URL (e.g. https://matrix.org): ")
+		homeserver, _ := reader.ReadString('\n')
+		homeserver = strings.TrimSpace(homeserver)
+		fmt.Println("  Login method:")
+		fmt.Println("    1. Access Token (recommended)")
+		fmt.Println("    2. Username/Password")
+		fmt.Print("Select option (1/2, default 1): ")
+		loginMethod, _ := reader.ReadString('\n')
+		loginMethod = strings.TrimSpace(loginMethod)
+		if loginMethod == "" || loginMethod == "1" {
+			fmt.Print("Enter Access Token: ")
+			token, _ := reader.ReadString('\n')
+			token = strings.TrimSpace(token)
+			if homeserver != "" && token != "" {
+				cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+					Enabled: true,
+					Token:   token,
+					APIURL:  homeserver,
+				}
+				fmt.Println("✓ Matrix configured (access token)")
+			}
+		} else {
+			fmt.Print("Enter Username: ")
+			username, _ := reader.ReadString('\n')
+			username = strings.TrimSpace(username)
+			fmt.Print("Enter Password: ")
+			password, _ := reader.ReadString('\n')
+			password = strings.TrimSpace(password)
+			if homeserver != "" && username != "" {
+				cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
+					Enabled: true,
+					APIURL:   homeserver,
+					Token:    username + ":" + password,
+					Mode:     "password",
+				}
+				fmt.Println("✓ Matrix configured (password login)")
+			}
+		}
 	}
 }

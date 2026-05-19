@@ -72,10 +72,41 @@ func NewManager(dataDir string) *Manager {
 	}
 }
 
-// EstimateTokens estimates token count (rough approximation)
+// EstimateTokens estimates token count using a multi-strategy approach.
+// Uses cl100k_base heuristic for better accuracy across languages.
 func EstimateTokens(text string) int {
-	// Rough approximation: 1 token ≈ 4 characters
-	return len(text) / 4
+	if len(text) == 0 {
+		return 0
+	}
+
+	// Strategy: count characters, then apply ratio based on content type
+	// cl100k_base averages: ~4 chars/token for English, ~2 chars/token for CJK
+	charCount := 0
+	cjkCount := 0
+
+	for _, r := range text {
+		charCount++
+		// CJK Unified Ideographs and common CJK ranges
+		if (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified
+			(r >= 0x3400 && r <= 0x4DBF) || // CJK Extension A
+			(r >= 0x3000 && r <= 0x303F) || // CJK Symbols
+			(r >= 0xFF00 && r <= 0xFFEF) || // Fullwidth
+			(r >= 0xAC00 && r <= 0xD7AF) || // Korean
+			(r >= 0x3040 && r <= 0x30FF) { // Japanese Hiragana/Katakana
+			cjkCount++
+		}
+	}
+
+	nonCJK := charCount - cjkCount
+	// CJK: ~1.5 tokens per character, Non-CJK: ~4 chars per token
+	tokens := (cjkCount * 2 + 1) / 3 // ~1.5 tokens per CJK char
+	tokens += nonCJK / 4              // ~4 chars per token for Latin/etc
+
+	if tokens == 0 && charCount > 0 {
+		tokens = 1
+	}
+
+	return tokens
 }
 
 // CompressSession compresses a session to fit within token limit

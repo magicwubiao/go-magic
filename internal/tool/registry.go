@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -80,6 +81,13 @@ func NewRegistry() *Registry {
 	}
 }
 
+// RegistryWithConfig 带配置的工具注册表
+type RegistryWithConfig struct {
+	*Registry
+	emailConfig *EmailConfig
+	smsConfig   *SMSConfig
+}
+
 // RegisterAll 注册所有内置工具
 func (r *Registry) RegisterAll(workDir string) {
 	// File tools
@@ -111,8 +119,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Session search tool
 	r.Register(GetSessionSearchTool())
 
-	// Clarify tool
+	// Clarify tool (with native button support for Telegram/Discord)
 	r.Register(NewClarifyTool())
+
+	// LSP diagnostic tool - semantic analysis after file writes
+	r.Register(NewLSPDiagnosticTool(workDir))
 
 	// Optional tools - these require external API configuration and are not registered by default
 	// Call RegisterOptionalTools() after RegisterAll() to enable them
@@ -123,14 +134,22 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Cron job tool
 	r.Register(NewCronJobTool())
 
-	// Delegation tools (sub-agent tasks)
-	r.Register(NewDelegateTaskTool())
-	r.Register(NewPollTaskTool())
-	r.Register(NewListTasksTool())
-	r.Register(NewCancelTaskTool())
+	// Interrupt tool - allows agent to interrupt its own execution
+	r.Register(NewInterruptTool())
+
+	// Delegation tools (sub-agent tasks) - will be registered when subagent manager is available
+	// Call RegisterDelegationTools(manager) to enable them
 
 	// Built-in code execution with tool access
 	r.Register(NewExecuteCodeTool())
+
+	// Gitignore tool for generating .gitignore files
+	r.Register(NewGitignoreTool())
+
+	// Coding-enhanced tools (useful in coding mode)
+	r.Register(NewBatchFileOpsTool())
+	r.Register(NewProjectAnalyzeTool())
+	r.Register(NewDiffPatchTool())
 
 	// Home Assistant smart home integration
 	r.Register(NewHATool())
@@ -143,11 +162,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 
-	// Browser tools - lightweight goquery-based + enhanced browser automation
+	// Browser tools - lightweight goquery-based
 	r.Register(NewWebFetchTool())
 	r.Register(NewWebSelectTool())
-	
-	// Enhanced browser tools (navigate, snapshot, click, type, scroll, etc.)
 
 	// Utility tools
 	r.Register(NewJSONTool())
@@ -176,9 +193,68 @@ func (r *Registry) RegisterAll(workDir string) {
 // RegisterOptionalTools registers tools that require external API configuration.
 // These are not registered by default to avoid confusing the LLM with non-functional placeholder tools.
 func (r *Registry) RegisterOptionalTools() {
-	r.Register(NewImageGenerationTool())
+	r.Register(NewImageGenerationTool(nil))
+	r.Register(NewImageEditTool(nil))
+	r.Register(NewTTSTool())
+	r.Register(NewASRTool())
+	r.Register(NewASRAvailableProvidersTool())
+	r.Register(NewTTSAvailableVoicesTool())
+	r.Register(NewAudioPlayTool())
+	r.Register(NewAudioDownloadTool())
+	r.Register(NewVideoAnalyzeTool())
+
+	// Video generation (pluggable backends: Replicate, Fal.ai, Stability AI)
+	r.Register(NewVideoGenerateTool(nil))
+
+	// X/Twitter search
+	r.Register(NewXSearchTool("", ""))
+
+	// Computer use (GUI control via mouse/keyboard)
+	r.Register(NewComputerUseTool(""))
+
+	// Send message - cross-platform messaging (requires gateway)
+	// Call SetGateway on the tool after gateway is initialized
+	r.Register(NewSendMessageTool(nil))
+}
+
+// RegisterImageGenTool 注册图片生成工具（带配置）
+func (r *Registry) RegisterImageGenTool(config *ImageGenConfig) {
+	if config != nil && config.APIKey != "" {
+		r.Register(NewImageGenerationTool(config))
+		r.SetTimeout("image_gen", 180*time.Second)
+		r.Register(NewImageEditTool(config))
+		r.SetTimeout("image_edit", 180*time.Second)
+	}
+}
+
+// RegisterOptionalToolsWithConfig 使用配置注册可选工具
+func (r *Registry) RegisterOptionalToolsWithConfig(imageGenConfig *ImageGenConfig) {
+	r.RegisterImageGenTool(imageGenConfig)
 	r.Register(NewTTSTool())
 	r.Register(NewVideoAnalyzeTool())
+}
+
+// RegisterEmailTool 注册邮件发送工具（需要配置）
+func (r *Registry) RegisterEmailTool(config *EmailConfig) {
+	if config != nil && config.SMTPHost != "" {
+		r.Register(NewEmailTool(config))
+		r.SetTimeout("send_email", 30*time.Second)
+	}
+}
+
+// RegisterSMSTool 注册短信发送工具（需要配置）
+func (r *Registry) RegisterSMSTool(config *SMSConfig) {
+	if config != nil && config.Provider != "" {
+		r.Register(NewSMSTool(config))
+		r.SetTimeout("send_sms", 30*time.Second)
+	}
+}
+
+// RegisterWithNotificationConfig 注册所有工具，包括邮件和短信工具
+func (r *Registry) RegisterWithNotificationConfig(workDir string, emailConfig *EmailConfig, smsConfig *SMSConfig) {
+	r.RegisterAll(workDir)
+	r.RegisterEmailTool(emailConfig)
+	r.RegisterSMSTool(smsConfig)
 }
 
 // GetAllTools 返回所有内置工具实例
@@ -404,32 +480,13 @@ func (r *Registry) FilterToolsByKeyword(keyword string) []Tool {
 	return tools
 }
 
-// 辅助函数
+// 辅助函数 - 使用标准库实现
 func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
+	return strings.ToLower(s)
 }
 
 func contains(s, substr string) bool {
-	if len(substr) == 0 {
-		return true
-	}
-	if len(s) < len(substr) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
 
 // RegisterSkillTool 注册技能工具（带 SkillInfoProvider）

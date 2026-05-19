@@ -14,8 +14,8 @@ import (
 
 var voiceCmd = &cobra.Command{
 	Use:   "voice",
-	Short: "Voice mode for magic Agent",
-	Long: `Enable voice interaction with magic Agent.
+	Short: "Voice mode for Magic Agent",
+	Long: `Enable voice interaction with Magic Agent.
 Supports push-to-talk, speech-to-text, and text-to-speech.`,
 }
 

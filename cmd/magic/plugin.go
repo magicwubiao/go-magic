@@ -16,7 +16,7 @@ import (
 var pluginCmd = &cobra.Command{
 	Use:   "plugin",
 	Short: "Plugin management for magic",
-	Long:  `Discover, install, and manage plugins for magic Agent.`,
+	Long:  `Discover, install, and manage plugins for Magic Agent.`,
 }
 
 var pluginListCmd = &cobra.Command{

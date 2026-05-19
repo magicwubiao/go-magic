@@ -54,6 +54,12 @@ func (p *Parser) Parse(skillDir string) (*ParseResult, error) {
 		result.Data["version"] = skill.Version
 		result.Data["author"] = skill.Author
 		result.Data["tags"] = skill.Tags
+		result.Data["trigger_conditions"] = skill.TriggerConditions
+		result.Data["steps"] = skill.Steps
+		// Copy remaining metadata
+		for k, v := range skill.Metadata {
+			result.Data[k] = v
+		}
 
 	case FormatOpenClaw:
 		skill, err := p.OpenClawParser.Parse(skillDir)
@@ -63,6 +69,15 @@ func (p *Parser) Parse(skillDir string) (*ParseResult, error) {
 		result.Name = skill.Name
 		result.Content = skill.Content
 		result.CodeFiles = skill.CodeFiles
+		// Extract all OpenClaw-specific fields into Data
+		result.Data["description"] = skill.Description
+		result.Data["version"] = skill.Version
+		result.Data["author"] = skill.Author
+		result.Data["license"] = skill.License
+		result.Data["tags"] = skill.Tags
+		result.Data["tools"] = skill.Tools
+		result.Data["trigger_conditions"] = skill.TriggerConditions
+		result.Data["steps"] = skill.Steps
 
 	default:
 		return nil, fmt.Errorf("unsupported format: %s", format)

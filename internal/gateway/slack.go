@@ -216,11 +216,31 @@ func (g *SlackGateway) Send(ctx context.Context, resp Response) error {
 
 // HandleSlashCommand handles slash commands
 func (g *SlackGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	// For slash commands, we respond in the same channel
-	return Response{
-		ChannelID: msg.ChannelID,
-		Content:   fmt.Sprintf("Command /%s received", cmd),
-	}, nil
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - Slack\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/usage - Token usage\n" +
+				"/model - Change model\n" +
+				"/goal - Goal management\n" +
+				"/kanban - Kanban board",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }
 
 // startRTM starts the RTM connection
@@ -408,4 +428,11 @@ func (g *SlackGateway) postMessage(channel, text string) error {
 	}
 
 	return nil
+}
+
+// IsConnected returns whether the gateway is connected
+func (g *SlackGateway) IsConnected() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.running && g.rtmConn != nil
 }

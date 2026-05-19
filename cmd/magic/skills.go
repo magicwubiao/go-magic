@@ -29,7 +29,7 @@ var (
 var skillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "Manage skills",
-	Long: `Manage magic Agent skills.
+	Long: `Manage Magic Agent skills.
 
 Skills are loaded from three levels:
   - Built-in skills: bundled with the application

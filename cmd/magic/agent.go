@@ -103,7 +103,20 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 	registry := tool.NewRegistry()
 	registry.RegisterAll(cfg.WorkingDir)
 
-	mgr := subagent.NewManager(subCfg, prov, registry)
+	// Create adapter for tool registry
+	registryAdapter := newToolRegistryAdapter(registry)
+
+	// Create agent factory for subagents
+	agentFactory := func(p provider.Provider, reg subagent.ToolRegistry, toolsSchema []map[string]interface{}, systemPrompt string) subagent.AgentRunner {
+		return &simpleAgentRunner{
+			provider:     p,
+			registry:     reg,
+			toolsSchema:  toolsSchema,
+			systemPrompt: systemPrompt,
+		}
+	}
+
+	mgr := subagent.NewManager(subCfg, prov, registryAdapter, agentFactory)
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -195,7 +208,20 @@ func runAgentStats(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	mgr := subagent.NewManager(subCfg, prov, registry)
+	// Create adapter for tool registry
+	registryAdapter := newToolRegistryAdapter(registry)
+
+	// Create agent factory for subagents
+	agentFactory := func(p provider.Provider, reg subagent.ToolRegistry, toolsSchema []map[string]interface{}, systemPrompt string) subagent.AgentRunner {
+		return &simpleAgentRunner{
+			provider:     p,
+			registry:     reg,
+			toolsSchema:  toolsSchema,
+			systemPrompt: systemPrompt,
+		}
+	}
+
+	mgr := subagent.NewManager(subCfg, prov, registryAdapter, agentFactory)
 
 	stats := mgr.GetStats()
 

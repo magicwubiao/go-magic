@@ -7,10 +7,40 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
-	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/types"
+)
+
+// ToolRegistry is an interface for tool registry to avoid circular imports
+type ToolRegistry interface {
+	List() []string
+	Get(name string) (Tool, error)
+}
+
+// Tool is an interface for tools
+type Tool interface {
+	Name() string
+	Description() string
+	Schema() map[string]interface{}
+}
+
+// AgentRunner is an interface for running agent conversations
+type AgentRunner interface {
+	RunConversation(ctx context.Context, input string) (string, error)
+}
+
+// AgentFactory is a function type for creating agents
+type AgentFactory func(provider provider.Provider, registry ToolRegistry, toolsSchema []map[string]interface{}, systemPrompt string) AgentRunner
+
+// TaskStatus represents the status of a task
+type TaskStatus string
+
+const (
+	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusCancelled TaskStatus = "cancelled"
 )
 
 // Config holds subagent configuration
@@ -18,6 +48,7 @@ type Config struct {
 	MaxConcurrent int           `json:"max_concurrent"` // Max parallel subagents
 	MaxDepth      int           `json:"max_depth"`      // Max recursion depth
 	Timeout       time.Duration `json:"timeout"`        // Task timeout
+	EnableNested  bool          `json:"enable_nested"`  // Enable nested subagents
 }
 
 // DefaultConfig returns default subagent configuration
@@ -26,6 +57,7 @@ func DefaultConfig() *Config {
 		MaxConcurrent: 3,
 		MaxDepth:      2,
 		Timeout:       120 * time.Second,
+		EnableNested:  true,
 	}
 }
 
@@ -38,7 +70,47 @@ type Task struct {
 	Context     map[string]interface{} `json:"context,omitempty"`
 	ParentID    string                 `json:"parent_id,omitempty"`
 	Depth       int                    `json:"depth"`
+	Status      TaskStatus             `json:"status"`
 	CreatedAt   time.Time              `json:"created_at"`
+	StartedAt   *time.Time             `json:"started_at,omitempty"`
+	CompletedAt *time.Time             `json:"completed_at,omitempty"`
+	Cancelled   bool                   `json:"cancelled"`
+	mu          sync.RWMutex           `json:"-"`
+}
+
+// SetStatus sets the task status thread-safely
+func (t *Task) SetStatus(status TaskStatus) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Status = status
+	now := time.Now()
+	switch status {
+	case TaskStatusRunning:
+		t.StartedAt = &now
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		t.CompletedAt = &now
+	}
+}
+
+// GetStatus gets the task status thread-safely
+func (t *Task) GetStatus() TaskStatus {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Status
+}
+
+// IsCancelled checks if the task is cancelled
+func (t *Task) IsCancelled() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Cancelled
+}
+
+// Cancel marks the task as cancelled
+func (t *Task) Cancel() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Cancelled = true
 }
 
 // Result represents the result of a subagent task
@@ -49,6 +121,7 @@ type Result struct {
 	Error      string        `json:"error,omitempty"`
 	Duration   time.Duration `json:"duration"`
 	SubResults []Result      `json:"sub_results,omitempty"`
+	CreatedAt  time.Time     `json:"created_at"`
 }
 
 // SubAgent represents a subagent that can execute tasks
@@ -56,54 +129,57 @@ type SubAgent struct {
 	id        string
 	name      string
 	provider  provider.Provider
-	registry  agent.ToolRegistry
-	agent     *agent.Agent
+	registry  ToolRegistry
+	runner    AgentRunner
 	depth     int
 	maxDepth  int
 	tools     []string
 	mu        sync.RWMutex
 	completed bool
+	cancelled bool
+	parentID  string
+	taskID    string
 }
 
 // Manager manages all subagents
 type Manager struct {
-	config     *Config
-	provider   provider.Provider
-	registry   agent.ToolRegistry
-	mu         sync.RWMutex
-	subagents  map[string]*SubAgent
-	tasks      map[string]*Task
-	results    map[string]*Result
-	taskQueue  chan *Task
-	resultChan chan *Result
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
+	config        *Config
+	provider      provider.Provider
+	registry      ToolRegistry
+	agentFactory  AgentFactory
+	mu            sync.RWMutex
+	subagents     map[string]*SubAgent
+	tasks         map[string]*Task
+	results       map[string]*Result
+	taskQueue     chan *Task
+	resultChan    chan *Result
+	wg            sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	semaphore     chan struct{}
 }
 
 // NewManager creates a new subagent manager
-func NewManager(cfg *Config, prov provider.Provider, registry agent.ToolRegistry) *Manager {
+func NewManager(cfg *Config, prov provider.Provider, registry ToolRegistry, factory AgentFactory) *Manager {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	if cfg.Timeout == 0 {
-		ctx = context.Background()
-		cancel = func() {}
-	}
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Manager{
-		config:     cfg,
-		provider:   prov,
-		registry:   registry,
-		subagents:  make(map[string]*SubAgent),
-		tasks:      make(map[string]*Task),
-		results:    make(map[string]*Result),
-		taskQueue:  make(chan *Task, cfg.MaxConcurrent*2),
-		resultChan: make(chan *Result, 100),
-		ctx:        ctx,
-		cancel:     cancel,
+		config:       cfg,
+		provider:     prov,
+		registry:     registry,
+		agentFactory: factory,
+		subagents:    make(map[string]*SubAgent),
+		tasks:        make(map[string]*Task),
+		results:      make(map[string]*Result),
+		taskQueue:    make(chan *Task, cfg.MaxConcurrent*10),
+		resultChan:   make(chan *Result, 100),
+		ctx:          ctx,
+		cancel:       cancel,
+		semaphore:    make(chan struct{}, cfg.MaxConcurrent),
 	}
 }
 
@@ -134,6 +210,40 @@ func (m *Manager) SpawnTaskWithContext(description, input string, tools []string
 		Input:       input,
 		Tools:       tools,
 		Context:     ctx,
+		Status:      TaskStatusPending,
+		CreatedAt:   time.Now(),
+	}
+
+	return task.ID, m.SubmitTask(task)
+}
+
+// SpawnNestedTask spawns a nested subagent task from a parent task
+func (m *Manager) SpawnNestedTask(parentTaskID, description, input string, tools []string, ctx map[string]interface{}) (string, error) {
+	m.mu.RLock()
+	parentTask, exists := m.tasks[parentTaskID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return "", fmt.Errorf("parent task '%s' not found", parentTaskID)
+	}
+
+	if !m.config.EnableNested {
+		return "", fmt.Errorf("nested subagents are disabled")
+	}
+
+	if parentTask.Depth >= m.config.MaxDepth {
+		return "", fmt.Errorf("maximum subagent depth reached (%d)", m.config.MaxDepth)
+	}
+
+	task := &Task{
+		ID:          uuid.New().String(),
+		Description: description,
+		Input:       input,
+		Tools:       tools,
+		Context:     ctx,
+		ParentID:    parentTaskID,
+		Depth:       parentTask.Depth + 1,
+		Status:      TaskStatusPending,
 		CreatedAt:   time.Now(),
 	}
 
@@ -173,11 +283,51 @@ func (m *Manager) GetResult(id string) *Result {
 	return m.results[id]
 }
 
+// CancelTask cancels a task by ID
+func (m *Manager) CancelTask(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	task, exists := m.tasks[id]
+	if !exists {
+		return fmt.Errorf("task '%s' not found", id)
+	}
+
+	status := task.GetStatus()
+	if status == TaskStatusCompleted || status == TaskStatusFailed || status == TaskStatusCancelled {
+		return fmt.Errorf("cannot cancel task with status '%s'", status)
+	}
+
+	task.Cancel()
+
+	// Also cancel the subagent if it exists
+	for _, sub := range m.subagents {
+		if sub.taskID == id {
+			sub.cancel()
+			break
+		}
+	}
+
+	return nil
+}
+
+// ListTasks returns all tasks with optional status filter
+func (m *Manager) ListTasks(statusFilter TaskStatus) []*Task {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	tasks := make([]*Task, 0)
+	for _, task := range m.tasks {
+		if statusFilter == "" || task.GetStatus() == statusFilter {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks
+}
+
 // processTasks processes tasks from the queue
 func (m *Manager) processTasks() {
 	defer m.wg.Done()
-
-	semaphore := make(chan struct{}, m.config.MaxConcurrent)
 
 	for {
 		select {
@@ -190,11 +340,11 @@ func (m *Manager) processTasks() {
 
 			// Acquire semaphore slot
 			select {
-			case semaphore <- struct{}{}:
+			case m.semaphore <- struct{}{}:
 				m.wg.Add(1)
 				go func(t *Task) {
 					defer func() {
-						<-semaphore
+						<-m.semaphore
 						m.wg.Done()
 					}()
 					m.executeTask(t)
@@ -209,9 +359,29 @@ func (m *Manager) processTasks() {
 // executeTask executes a task with a subagent
 func (m *Manager) executeTask(task *Task) {
 	startTime := time.Now()
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(m.ctx, m.config.Timeout)
+	defer cancel()
+
+	// Update task status
+	task.SetStatus(TaskStatusRunning)
+
 	result := &Result{
-		TaskID:   task.ID,
-		Duration: time.Since(startTime),
+		TaskID:    task.ID,
+		Duration:  0,
+		CreatedAt: time.Now(),
+	}
+
+	// Check if task was cancelled before starting
+	if task.IsCancelled() {
+		result.Success = false
+		result.Error = "Task was cancelled before execution"
+		task.SetStatus(TaskStatusCancelled)
+		result.Duration = time.Since(startTime)
+		m.storeResult(result)
+		m.resultChan <- result
+		return
 	}
 
 	subAgent, err := m.createSubAgent(task)
@@ -219,24 +389,46 @@ func (m *Manager) executeTask(task *Task) {
 		result.Success = false
 		result.Error = err.Error()
 		result.Duration = time.Since(startTime)
+		task.SetStatus(TaskStatusFailed)
 		m.storeResult(result)
 		m.resultChan <- result
 		return
 	}
 
-	output, err := subAgent.Run(m.ctx, task.Input)
-	if err != nil {
+	// Execute with cancellation support
+	done := make(chan struct{})
+	var output string
+	var execErr error
+
+	go func() {
+		defer close(done)
+		output, execErr = subAgent.Run(ctx, task.Input)
+	}()
+
+	select {
+	case <-done:
+		if execErr != nil {
+			result.Success = false
+			result.Error = execErr.Error()
+			task.SetStatus(TaskStatusFailed)
+		} else {
+			result.Success = true
+			result.Output = output
+			task.SetStatus(TaskStatusCompleted)
+		}
+	case <-ctx.Done():
 		result.Success = false
-		result.Error = err.Error()
-		result.Duration = time.Since(startTime)
-	} else {
-		result.Success = true
-		result.Output = output
-		result.Duration = time.Since(startTime)
+		result.Error = "Task timeout or cancelled"
+		task.SetStatus(TaskStatusCancelled)
+		subAgent.cancel()
 	}
 
+	result.Duration = time.Since(startTime)
 	m.storeResult(result)
 	m.resultChan <- result
+
+	// Clean up subagent
+	m.removeSubAgent(subAgent.id)
 }
 
 // createSubAgent creates a new subagent for a task
@@ -248,6 +440,10 @@ func (m *Manager) createSubAgent(task *Task) (*SubAgent, error) {
 		return nil, fmt.Errorf("maximum subagent depth reached")
 	}
 
+	if m.agentFactory == nil {
+		return nil, fmt.Errorf("agent factory not set")
+	}
+
 	id := uuid.New().String()
 	name := fmt.Sprintf("subagent-%s", id[:8])
 
@@ -255,44 +451,48 @@ func (m *Manager) createSubAgent(task *Task) (*SubAgent, error) {
 	systemPrompt := fmt.Sprintf(`You are %s, a subagent executing a specific task.
 Task: %s
 Depth: %d/%d
+Task ID: %s
 %s`,
 		name,
 		task.Description,
 		task.Depth,
 		m.config.MaxDepth,
+		task.ID,
 		generateContextPrompt(task.Context),
 	)
 
 	// Generate tools schema from registry based on task.Tools filter
 	toolsSchema := m.generateToolsSchema(task.Tools)
-	aiAgent := agent.NewAIAgent(m.provider, m.registry, toolsSchema, systemPrompt)
+	runner := m.agentFactory(m.provider, m.registry, toolsSchema, systemPrompt)
 
 	subAgent := &SubAgent{
 		id:       id,
 		name:     name,
 		provider: m.provider,
 		registry: m.registry,
-		agent:    aiAgent,
+		runner:   runner,
 		depth:    task.Depth,
 		maxDepth: m.config.MaxDepth,
 		tools:    task.Tools,
+		parentID: task.ParentID,
+		taskID:   task.ID,
 	}
 
 	m.subagents[id] = subAgent
 	return subAgent, nil
 }
 
+// removeSubAgent removes a subagent from the manager
+func (m *Manager) removeSubAgent(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.subagents, id)
+}
+
 // generateToolsSchema generates tools schema from registry, optionally filtered by tool names
 func (m *Manager) generateToolsSchema(filterTools []string) []map[string]interface{} {
-	// Get tool registry interface
-	registry, ok := m.registry.(*tool.Registry)
-	if !ok {
-		// If registry is not the standard type, return empty schema
-		return []map[string]interface{}{}
-	}
-
 	tools := []map[string]interface{}{}
-	for _, tName := range registry.List() {
+	for _, tName := range m.registry.List() {
 		// Apply filter if specified
 		if len(filterTools) > 0 {
 			found := false
@@ -307,7 +507,7 @@ func (m *Manager) generateToolsSchema(filterTools []string) []map[string]interfa
 			}
 		}
 
-		t, err := registry.Get(tName)
+		t, err := m.registry.Get(tName)
 		if err != nil {
 			continue
 		}
@@ -327,19 +527,37 @@ func (m *Manager) generateToolsSchema(filterTools []string) []map[string]interfa
 // Run executes the subagent
 func (s *SubAgent) Run(ctx context.Context, input string) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.completed {
+		s.mu.Unlock()
 		return "", fmt.Errorf("subagent already completed")
 	}
+	if s.cancelled {
+		s.mu.Unlock()
+		return "", fmt.Errorf("subagent was cancelled")
+	}
+	s.mu.Unlock()
 
-	output, err := s.agent.RunConversation(ctx, input)
+	if s.runner == nil {
+		return "", fmt.Errorf("agent runner not set")
+	}
+
+	output, err := s.runner.RunConversation(ctx, input)
 	if err != nil {
 		return "", err
 	}
 
+	s.mu.Lock()
 	s.completed = true
+	s.mu.Unlock()
+
 	return output, nil
+}
+
+// cancel marks the subagent as cancelled
+func (s *SubAgent) cancel() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelled = true
 }
 
 // storeResult stores a result
@@ -362,6 +580,9 @@ func (m *Manager) ListSubAgents() []map[string]interface{} {
 			"name":      sub.name,
 			"depth":     sub.depth,
 			"completed": sub.completed,
+			"cancelled": sub.cancelled,
+			"parent_id": sub.parentID,
+			"task_id":   sub.taskID,
 		})
 		sub.mu.RUnlock()
 	}
@@ -380,6 +601,7 @@ func (m *Manager) KillSubAgent(id string) error {
 
 	sub.mu.Lock()
 	sub.completed = true
+	sub.cancelled = true
 	sub.mu.Unlock()
 
 	delete(m.subagents, id)
@@ -455,16 +677,32 @@ func (m *Manager) GetStats() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	statusCounts := map[TaskStatus]int{
+		TaskStatusPending:   0,
+		TaskStatusRunning:   0,
+		TaskStatusCompleted: 0,
+		TaskStatusFailed:    0,
+		TaskStatusCancelled: 0,
+	}
+
+	for _, task := range m.tasks {
+		statusCounts[task.GetStatus()]++
+	}
+
 	return map[string]interface{}{
 		"active_subagents": len(m.subagents),
-		"pending_tasks":    len(m.tasks),
-		"completed_tasks":  len(m.results),
+		"pending_tasks":    statusCounts[TaskStatusPending],
+		"running_tasks":    statusCounts[TaskStatusRunning],
+		"completed_tasks":  statusCounts[TaskStatusCompleted],
+		"failed_tasks":     statusCounts[TaskStatusFailed],
+		"cancelled_tasks":  statusCounts[TaskStatusCancelled],
+		"total_tasks":      len(m.tasks),
 		"config":           m.config,
 	}
 }
 
 func generateContextPrompt(ctx map[string]interface{}) string {
-	if ctx == nil {
+	if ctx == nil || len(ctx) == 0 {
 		return ""
 	}
 

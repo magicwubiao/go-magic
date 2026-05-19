@@ -1,75 +1,37 @@
 package provider
 
 import (
-	"encoding/json"
+	"fmt"
 
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
-// ConvertMessages converts internal Message format to OpenAI API message format
+// ConvertMessages converts internal Message type to OpenAI-compatible format
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(messages))
 
-	for msgIdx, msg := range messages {
-		openAIMsg := map[string]interface{}{
-			"role": msg.Role,
-		}
+	for i, msg := range messages {
+		openAIMsg := make(map[string]interface{})
 
-		// Handle multimodal content (ContentParts) - takes priority over plain Content
+		// Always set role
+		openAIMsg["role"] = msg.Role
+
+		// Handle content based on type
 		if len(msg.ContentParts) > 0 {
+			// Multi-modal content (text + images)
 			parts := make([]map[string]interface{}, 0, len(msg.ContentParts))
-			for _, p := range msg.ContentParts {
-				switch p.Type {
-				case "text":
+			for _, part := range msg.ContentParts {
+				if part.Type == "text" {
 					parts = append(parts, map[string]interface{}{
 						"type": "text",
-						"text": p.Text,
+						"text": part.Text,
 					})
-				case "image_url":
-					urlStr := p.ImageURL.URL
-					if len(urlStr) > 100 {
-						log.Debugf("[ConvertMessages] image_url part: url_prefix=%s..., url_length=%d, detail=%s", urlStr[:100], len(urlStr), p.ImageURL.Detail)
-					} else {
-						log.Debugf("[ConvertMessages] image_url part: url=%s, detail=%s", urlStr, p.ImageURL.Detail)
-					}
-					imgURL := map[string]string{
-						"url": p.ImageURL.URL,
-					}
-					if p.ImageURL.Detail != "" {
-						imgURL["detail"] = p.ImageURL.Detail
-					}
+				} else if part.Type == "image_url" {
 					parts = append(parts, map[string]interface{}{
 						"type": "image_url",
-						"image_url": imgURL,
-					})
-				case "video_url":
-					parts = append(parts, map[string]interface{}{
-						"type": "video_url",
-						"video_url": map[string]string{
-							"url": p.VideoURL.URL,
+						"image_url": map[string]interface{}{
+							"url": part.ImageURL.URL,
 						},
-					})
-				case "audio_url":
-					parts = append(parts, map[string]interface{}{
-						"type": "audio_url",
-						"audio_url": map[string]string{
-							"url": p.AudioURL.URL,
-						},
-					})
-				case "file":
-					fileInfo := map[string]interface{}{
-						"url": p.File.URL,
-					}
-					if p.File.Name != "" {
-						fileInfo["name"] = p.File.Name
-					}
-					if p.File.MimeType != "" {
-						fileInfo["mime_type"] = p.File.MimeType
-					}
-					parts = append(parts, map[string]interface{}{
-						"type": "file",
-						"file": fileInfo,
 					})
 				}
 			}
@@ -83,27 +45,18 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 		if len(msg.ToolCalls) > 0 {
 			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
-				// Use Function.Name/Arguments (OpenAI format), fallback to Name field
-				funcName := tc.Function.Name
-				if funcName == "" {
-					funcName = tc.Name
+				// Always use "function" as the type - some providers require this
+				toolCallType := tc.Type
+				if toolCallType == "" {
+					toolCallType = "function"
 				}
-				funcArgs := tc.Function.Arguments
-				if funcArgs == "" && tc.Arguments != nil {
-					// Arguments field is map[string]interface{}, convert to JSON string
-					argsBytes, _ := json.Marshal(tc.Arguments)
-					funcArgs = string(argsBytes)
-				}
-				// Ensure funcArgs is at least "{}" for API compatibility
-				if funcArgs == "" {
-					funcArgs = "{}"
-				}
+
 				toolCall := map[string]interface{}{
 					"id":   tc.ID,
-					"type": "function",
+					"type": toolCallType,
 					"function": map[string]interface{}{
-						"name":      funcName,
-						"arguments": funcArgs,
+						"name":      tc.Function.Name,
+						"arguments": tc.Function.Arguments,
 					},
 				}
 				toolCalls = append(toolCalls, toolCall)
@@ -113,18 +66,21 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 
 		// Handle tool_call_id for tool messages - ALWAYS include it for tool role
 		if msg.Role == "tool" {
-			if msg.ToolCallID != "" {
+			// OpenAI requires tool messages to have content (null is ok, but not missing)
+			// If content is empty, set it to null
+			if msg.Content == "" {
+				openAIMsg["content"] = nil
+			}
+
+			// Find the matching tool_call ID from the most recent assistant message with tool_calls
+			toolCallID := findToolCallID(messages, i)
+			if toolCallID != "" {
+				openAIMsg["tool_call_id"] = toolCallID
+			} else if msg.ToolCallID != "" {
 				openAIMsg["tool_call_id"] = msg.ToolCallID
 			} else {
-				// tool_call_id is required by API - search backwards for matching assistant tool_call
-				toolCallID := findToolCallID(messages, msgIdx)
-				if toolCallID != "" {
-					openAIMsg["tool_call_id"] = toolCallID
-				} else {
-					// Last resort - generate a synthetic ID
-					syntheticID := "call_unknown"
-					openAIMsg["tool_call_id"] = syntheticID
-				}
+				// Last resort - generate a synthetic ID
+				openAIMsg["tool_call_id"] = fmt.Sprintf("call_unknown_%d", i)
 			}
 		}
 
@@ -134,32 +90,23 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	return result
 }
 
-// findToolCallID searches backwards through messages to find the tool_call_id
-// that corresponds to a tool result message at the given index
-func findToolCallID(messages []types.Message, toolMsgIdx int) string {
-	// Count how many tool messages come before this index
-	toolCount := 0
-	for i := 0; i < toolMsgIdx; i++ {
+// findToolCallID searches backwards to find the matching tool_call ID
+func findToolCallID(messages []types.Message, currentIdx int) string {
+	// Count only the consecutive tool messages immediately before this one
+	consecutiveToolCount := 0
+	for i := currentIdx - 1; i >= 0; i-- {
 		if messages[i].Role == "tool" {
-			toolCount++
-		}
-	}
-
-	// Search backwards for the last assistant message with tool_calls before this tool message
-	for i := toolMsgIdx - 1; i >= 0; i-- {
-		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
-			// Use the tool message count to find the matching tool call
-			tcIdx := toolCount
-			if tcIdx < len(messages[i].ToolCalls) && messages[i].ToolCalls[tcIdx].ID != "" {
+			consecutiveToolCount++
+		} else if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			// Found the assistant message that initiated these tool calls
+			tcIdx := consecutiveToolCount
+			if tcIdx < len(messages[i].ToolCalls) {
 				return messages[i].ToolCalls[tcIdx].ID
 			}
-			// Fallback: return first non-empty ID
-			for _, tc := range messages[i].ToolCalls {
-				if tc.ID != "" {
-					return tc.ID
-				}
-			}
 			return ""
+		} else {
+			// Not a tool or assistant-with-tool-calls message, stop searching
+			break
 		}
 	}
 	return ""

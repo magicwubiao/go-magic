@@ -168,7 +168,7 @@ func InitializeDefaultToolsets() {
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "vision",
 		Description: "Image analysis and generation tools",
-		Tools:       []string{"image_generation", "video_analyze"},
+		Tools:       []string{"image_gen", "image_edit", "video_analyze"},
 		Includes:    []string{},
 	})
 
@@ -258,7 +258,7 @@ func InitializeDefaultToolsets() {
 	// Full platform toolsets
 	// =============================================================================
 
-	// Hermes-CLI: Full interactive CLI toolset
+	// Full interactive CLI toolset
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "magic-cli",
 		Description: "Full interactive CLI toolset - all default tools",

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/template"
 
 	"github.com/spf13/cobra"
@@ -22,8 +23,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "magic",
-	Short: "magic Agent - The agent that grows with you",
-	Long: `magic Agent - A Go implementation of magic Agent by Nous Research
+	Short: "Magic Agent - The AI agent that grows with you",
+	Long: `Magic Agent - High-performance AI Agent Framework
 
 A powerful CLI agent that grows with you through conversation and skill management.
 
@@ -167,11 +168,7 @@ func main() {
 }
 
 func repeat(s string, count int) string {
-	result := ""
-	for i := 0; i < count; i++ {
-		result += s
-	}
-	return result
+	return strings.Repeat(s, count)
 }
 
 func trimSpace(s string) string {

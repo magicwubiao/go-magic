@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -389,5 +390,29 @@ func (t *TelegramHandler) CheckHealth() *HealthStatus {
 
 // HandleSlashCommand handles a slash command
 func (t *TelegramHandler) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	return Response{Content: "Slash commands not supported for Telegram"}, nil
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - Telegram\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - Start new conversation\n" +
+				"/compress - Compress context\n" +
+				"/usage - Token usage stats\n" +
+				"/model - Change AI model\n" +
+				"/goal - Goal management\n" +
+				"/kanban - Kanban board",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if t.IsConnected() {
+			return Response{Content: "✅ Bot is connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Bot is not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }

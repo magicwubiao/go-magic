@@ -288,10 +288,28 @@ func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, co
 
 // HandleSlashCommand handles Matrix commands
 func (g *MatrixGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	return Response{
-		ChannelID: msg.ChannelID,
-		Content:   fmt.Sprintf("Command /%s received", cmd),
-	}, nil
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - Matrix\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/goal - Goal management",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }
 
 // sync performs a sync request
@@ -561,4 +579,11 @@ func (g *MatrixGateway) SetTypingIndicator(roomID string, isTyping bool, timeout
 		url.PathEscape(roomID), url.PathEscape(g.userID)), jsonData, true)
 
 	return err
+}
+
+// IsConnected returns whether the gateway is connected
+func (g *MatrixGateway) IsConnected() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.running
 }

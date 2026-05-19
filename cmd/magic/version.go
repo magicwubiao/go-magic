@@ -27,8 +27,8 @@ func init() {
 
 func runVersion(cmd *cobra.Command, args []string) {
 	fmt.Printf("go-magic version %s\n", Version)
-	fmt.Println("A Go implementation of magic Agent")
-	fmt.Println("Based on Nous Research's magic-agent")
+	fmt.Println("A Go implementation of Magic Agent")
+	fmt.Println("by Magic Tech")
 	fmt.Println()
 	fmt.Printf("Go Version: %s\n", runtime.Version())
 	fmt.Printf("OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)

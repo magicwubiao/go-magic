@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -66,6 +69,9 @@ type PlatformHandler interface {
 
 	// CheckHealth returns detailed health status
 	CheckHealth() *HealthStatus
+
+	// IsConnected returns whether the platform is connected
+	IsConnected() bool
 }
 
 // HealthStatus is redefined later with Platforms field (see line ~682)
@@ -75,19 +81,31 @@ type AgentHandler interface {
 	// Process processes a message and returns the response
 	Process(ctx context.Context, msg Message) (string, error)
 
+	// ProcessWithStats processes a message and returns response with token stats
+	ProcessWithStats(ctx context.Context, msg Message) (string, int, int, int, error)
+
 	// ResetSession resets a user's session
 	ResetSession(userID string)
 }
 
+// AgentHandlerWithStats is an optional interface for agent handlers that support token stats
+type AgentHandlerWithStats interface {
+	ProcessWithStats(ctx context.Context, msg Message) (string, int, int, int, error)
+}
+
 // Session represents a user session
 type Session struct {
-	UserID     string                 `json:"user_id"`
-	Platform   string                 `json:"platform"`
-	CreatedAt  time.Time              `json:"created_at"`
-	LastActive time.Time              `json:"last_active"`
-	History    []Message              `json:"history,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
-	agent      AgentHandler
+	ID              string                 `json:"id"`
+	UserID          string                 `json:"user_id"`
+	Platform        string                 `json:"platform"`
+	CreatedAt       time.Time              `json:"created_at"`
+	LastActive      time.Time              `json:"last_active"`
+	History         []Message              `json:"history,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	InputTokens     int                    `json:"input_tokens"`
+	OutputTokens    int                    `json:"output_tokens"`
+	CacheReadTokens int                    `json:"cache_read_tokens"`
+	agent           AgentHandler
 }
 
 // AgentSession represents a platform-specific agent session
@@ -234,15 +252,7 @@ func containsSensitiveWord(content, word string) bool {
 }
 
 func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
+	return strings.ToLower(s)
 }
 
 // ShouldProcessChannel 检查频道是否在白名单/黑名单中
@@ -300,6 +310,9 @@ type Gateway struct {
 	// HTTP API server
 	apiServer *http.Server
 	apiPort   int
+
+	// Session persistence
+	sessionStore *session.Store
 }
 
 // GatewayConfig holds gateway configuration
@@ -339,6 +352,13 @@ func NewGateway(agent AgentHandler, config *GatewayConfig) *Gateway {
 		middleware: make([]Middleware, 0),
 		apiPort:    config.APIPort,
 	}
+}
+
+// SetSessionStore sets the session store for persistence
+func (g *Gateway) SetSessionStore(store *session.Store) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.sessionStore = store
 }
 
 // RegisterPlatform registers a platform handler
@@ -473,10 +493,41 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		g.onMessage(msg)
 	}
 
-	// Process with agent
-	resp, err := g.agent.Process(context.Background(), msg)
+	// Process with agent and capture token stats
+	var resp string
+	var inputTokens, outputTokens, cacheTokens int
+	var err error
+
+	// Try ProcessWithStats first, fall back to Process
+	if psHandler, ok := g.agent.(AgentHandlerWithStats); ok {
+		resp, inputTokens, outputTokens, cacheTokens, err = psHandler.ProcessWithStats(context.Background(), msg)
+	} else {
+		resp, err = g.agent.Process(context.Background(), msg)
+	}
 	if err != nil {
 		resp = fmt.Sprintf("Error: %v", err)
+	}
+
+	// Update session with token stats
+	session.InputTokens += inputTokens
+	session.OutputTokens += outputTokens
+	session.CacheReadTokens += cacheTokens
+	session.LastActive = time.Now()
+
+	// Persist session to store if available
+	if g.sessionStore != nil {
+		go func(s *Session) {
+			if err := g.sessionStore.SaveSessionDataFromMap(
+				context.Background(),
+				s.ID,
+				s.Platform,
+				s.InputTokens,
+				s.OutputTokens,
+				s.CacheReadTokens,
+			); err != nil {
+				log.Warnf("[Gateway] Failed to save session: %v", err)
+			}
+		}(session)
 	}
 
 	// Send response
@@ -510,13 +561,14 @@ func (g *Gateway) getOrCreateSession(userID, platform string) *Session {
 
 	// Create new session
 	session = &Session{
-		UserID:     userID,
-		Platform:   platform,
-		CreatedAt:  time.Now(),
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		Platform:  platform,
+		CreatedAt: time.Now(),
 		LastActive: time.Now(),
-		History:    make([]Message, 0),
-		Metadata:   make(map[string]interface{}),
-		agent:      g.agent,
+		History:   make([]Message, 0),
+		Metadata:  make(map[string]interface{}),
+		agent:     g.agent,
 	}
 
 	// Check max sessions
@@ -759,6 +811,11 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/broadcast", g.handleBroadcast)
 	mux.HandleFunc("/api/health", g.handleHealth)
 
+	// QR Code login endpoints
+	mux.HandleFunc("/api/login/status", g.handleLoginStatus)
+	mux.HandleFunc("/api/login/qr/", g.handleQRCode)
+	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
+
 	g.apiServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", g.apiPort),
 		Handler: mux,
@@ -846,4 +903,113 @@ func (g *Gateway) Broadcast(content string) {
 			handler.Send(context.Background(), resp)
 		}
 	}
+}
+
+// handleLoginStatus returns the login status for all platforms
+func (g *Gateway) handleLoginStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	statuses := g.GetAllLoginStatuses()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"statuses":  statuses,
+		"timestamp": time.Now(),
+	})
+}
+
+// handleQRCode returns the QR code for a specific platform
+func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Extract platform from path: /api/login/qr/{platform}
+	path := strings.TrimPrefix(r.URL.Path, "/api/login/qr/")
+	platform := strings.TrimSuffix(path, "/")
+
+	if platform == "" {
+		http.Error(w, "platform is required", http.StatusBadRequest)
+		return
+	}
+
+	qrManager := GetQRManager()
+	session := qrManager.GetSession(platform)
+
+	if session == nil || session.Status == "expired" || session.Status == "confirmed" {
+		// Generate new QR code
+		g.mu.RLock()
+		handler, ok := g.platforms[platform]
+		g.mu.RUnlock()
+
+		if !ok {
+			http.Error(w, fmt.Sprintf("platform '%s' not found", platform), http.StatusNotFound)
+			return
+		}
+
+		// Check if it's a QR-capable handler
+		if qrHandler, ok := handler.(QRCodeHandler); ok {
+			qrData, err := qrHandler.StartQRLogin(r.Context())
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to start QR login: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			session, err = qrManager.CreateSession(platform, qrData)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			http.Error(w, fmt.Sprintf("platform '%s' does not support QR login", platform), http.StatusBadRequest)
+			return
+		}
+	}
+
+	json.NewEncoder(w).Encode(session.ToAPIResponse())
+}
+
+// handleQRRefresh refreshes the QR code for a specific platform
+func (g *Gateway) handleQRRefresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Extract platform from path: /api/login/qr/refresh/{platform}
+	path := strings.TrimPrefix(r.URL.Path, "/api/login/qr/refresh/")
+	platform := strings.TrimSuffix(path, "/")
+
+	if platform == "" {
+		http.Error(w, "platform is required", http.StatusBadRequest)
+		return
+	}
+
+	g.mu.RLock()
+	handler, ok := g.platforms[platform]
+	g.mu.RUnlock()
+
+	if !ok {
+		http.Error(w, fmt.Sprintf("platform '%s' not found", platform), http.StatusNotFound)
+		return
+	}
+
+	if qrHandler, ok := handler.(QRCodeHandler); ok {
+		qrData, err := qrHandler.StartQRLogin(r.Context())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to refresh QR code: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		qrManager := GetQRManager()
+		session, err := qrManager.CreateSession(platform, qrData)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(session.ToAPIResponse())
+	} else {
+		http.Error(w, fmt.Sprintf("platform '%s' does not support QR login", platform), http.StatusBadRequest)
+	}
+}
+
+// AddQRCodeHandler registers a platform handler that supports QR login
+func (g *Gateway) AddQRCodeHandler(platform string, handler PlatformHandler) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.platforms[platform] = handler
 }

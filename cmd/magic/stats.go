@@ -15,7 +15,7 @@ import (
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show magic usage statistics",
-	Long: `Display usage statistics for magic Agent.
+	Long: `Display usage statistics for Magic Agent.
 	
 Shows information about:
   - Configuration (profile, provider, model)

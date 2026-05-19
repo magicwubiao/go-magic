@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
+	"strings"
 	"sync"
 	"time"
 
@@ -354,10 +354,28 @@ func (g *LineGateway) sendReply(ctx context.Context, reqBody lineReplyRequest) e
 
 // HandleSlashCommand handles commands (not applicable for LINE)
 func (g *LineGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	return Response{
-		ChannelID: msg.UserID,
-		Content:   "Commands are not supported on LINE",
-	}, nil
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - LINE\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/goal - Goal management",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }
 
 // startHTTPServer starts the webhook server
@@ -749,4 +767,11 @@ type richMenuBounds struct {
 	Y      int `json:"y"`
 	Width  int `json:"width"`
 	Height int `json:"height"`
+}
+
+// IsConnected returns whether the gateway is connected
+func (g *LineGateway) IsConnected() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.running && g.httpServer != nil
 }

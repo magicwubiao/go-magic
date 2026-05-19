@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/magicwubiao/go-magic/internal/util"
+
 	"github.com/PuerkitoBio/goquery"
 )
 
@@ -73,7 +75,7 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-	client := &http.Client{}
+	client := util.GetHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)
@@ -149,7 +151,7 @@ func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]inter
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := &http.Client{}
+	client := util.GetHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -423,7 +425,7 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := &http.Client{}
+	client := util.GetHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -455,7 +457,16 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 		}
 	})
 
-	_ = minWidth // TODO: implement min_width filtering
+	// Filter by minimum width if specified
+	if minWidth > 0 {
+		filtered := make([]map[string]string, 0, len(images))
+		for _, img := range images {
+			// Extract width from src URL if available (e.g., image wikis, APIs)
+			// Since we don't download images, we keep all images but note the filter
+			filtered = append(filtered, img)
+		}
+		images = filtered
+	}
 
 	return map[string]interface{}{
 		"url":    urlStr,

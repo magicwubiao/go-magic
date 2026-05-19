@@ -1,275 +1,289 @@
-# Go Magic
+# go-magic
 
-A high-performance, ultra-lightweight AI Agent framework written in Go, inspired by [Nous Research's hermes-agent](https://github.com/NousResearch/hermes-agent).
+**Magic Agent** -- A high-performance, ultra-lightweight AI Agent framework written in Go.
+
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
+[![Version](https://img.shields.io/badge/version-v0.3.1-green)](https://github.com/magicwubiao/go-magic/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+## Overview
+
+go-magic is a full-featured AI Agent framework that combines a powerful Go backend with a modern React/TypeScript web dashboard. It supports 20+ AI providers, ships a built-in TUI (BubbleTea), and offers extensive tooling for file operations, code execution, web browsing, and more.
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-Provider Support** | OpenAI, DeepSeek, Huoshan, Anthropic, Zhipu, Kimi, MiniMax, DashScope, OpenRouter, Ollama, vLLM |
-| **Cortex Architecture** | Three-layer cognitive system with six self-evolution mechanisms |
-| **Tool System** | 15+ built-in tools with extensible plugin framework |
-| **Gateway** | Multi-platform messaging (Telegram, Discord, WhatsApp, Signal, Slack, etc.) |
-| **Skills System** | Auto-creation, progressive loading (L0/L1/L2), Skills Hub integration |
-| **MCP Protocol** | Connect to external MCP servers for extended capabilities |
-| **Session Management** | SQLite-based persistence with FTS5 full-text search |
-| **Voice Mode** | TTS/STT with multiple provider support |
-| **Vision** | Image understanding with multi-model support |
-| **Multi-Platform** | Linux, macOS, Windows, FreeBSD, Docker |
+### Multi-Provider Support (20+)
+
+DeepSeek, OpenAI, Anthropic, Gemini, Ollama, OpenRouter, Groq, Mistral, Cohere, Perplexity, Together, DashScope, Kimi, MiniMax, Zhipu, Huoshan, Doubao, Wenxin, Moonshot, Hunyuan, Mimo, and any OpenAI-compatible endpoint.
+
+### TUI Interface
+
+Built with [BubbleTea](https://github.com/charmbracelet/bubbletea), featuring multi-line input, Markdown rendering, streaming output, and slash commands.
+
+### Coding Mode
+
+A dedicated mode with relaxed permissions, longer timeouts, and support for Python/Node.js code execution -- designed for development workflows.
+
+### Web Dashboard
+
+React/TypeScript frontend with real-time chat, session management, and configuration management. Embedded into the binary for single-file deployment.
+
+### Tool System
+
+15+ built-in tools organized into toolsets:
+
+| Toolset | Tools |
+|---------|-------|
+| **Web** | web_search, web_extract |
+| **File** | read_file, write_file, file_edit, list_files, search_in_files |
+| **Terminal** | execute_command, terminal, process |
+| **Browser** | browser_navigate, browser_snapshot, browser_click, browser_type |
+| **Code Execution** | execute_code (Python, Node.js) |
+| **Memory** | memory_store, memory_recall |
+| **Skills** | skill_list, skill_view, skill_manage |
+| **MCP** | mcp_* (from connected servers) |
+
+### Skills System
+
+Auto-creation and progressive loading (L0/L1/L2). Skills are learned from usage patterns and can be shared via Skills Hub.
+
+### Messaging Gateway
+
+Connect your agent to external platforms:
+
+Telegram, Discord, Slack, WhatsApp, WeChat, WeCom, DingTalk, Feishu, QQ, LINE, Matrix.
+
+### MCP Protocol
+
+Connect to external MCP (Model Context Protocol) servers to extend agent capabilities.
+
+### Session Management
+
+SQLite-based persistence with FTS5 full-text search across all sessions.
+
+### CI/CD
+
+GitHub Actions workflow for automatic multi-platform compilation and release.
 
 ## Quick Start
 
-### Installation
+### Download Release
+
+Download the latest binary from [GitHub Releases](https://github.com/magicwubiao/go-magic/releases):
 
 ```bash
-# Install via Go
-go install github.com/magicwubiao/go-magic/cmd/magic@latest
-
-# Or clone and build
-git clone https://github.com/magicwubiao/go-magic.git
-cd go-magic
-make build
+# Linux / macOS
+curl -L https://github.com/magicwubiao/go-magic/releases/latest/download/magic-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
+chmod +x magic-*
+sudo mv magic-* /usr/local/bin/magic
 ```
 
-### One-Click Install (Linux/macOS)
+### Go Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
+go install github.com/magicwubiao/go-magic/cmd/magic@latest
 ```
 
 ### Docker
 
 ```bash
+# Quick run
 docker run -it magicwubiao/go-magic
+
+# With Docker Compose (includes optional Redis and PostgreSQL)
+docker compose up -d
 ```
 
-## Usage
+### One-Line Install (Linux/macOS)
 
 ```bash
-# Interactive chat
-magic chat
-
-# Agent mode with parallel execution
-magic agent
-
-# Voice interaction
-magic voice listen
-magic voice speak "Hello world"
-
-# Vision image analysis
-magic vision analyze image.png
-
-# REPL mode
-magic repl
+curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
 ```
 
-## CLI Commands
+### First Run
 
-| Command | Description |
-|---------|-------------|
-| `magic chat` | Interactive chat session |
-| `magic agent` | Agent mode with task planning |
-| `magic repl` | REPL shell |
-| `magic voice` | Voice interaction (listen/speak/test) |
-| `magic vision` | Image understanding (analyze/compare) |
-| `magic config` | Configuration management |
-| `magic skills` | Skills management |
-| `magic plugin` | Plugin system |
-| `magic session` | Session management |
-| `magic gateway` | Messaging gateway |
-| `magic mcp` | MCP server management |
-| `magic doctor` | Diagnostics |
-| `magic update` | Auto-update |
+```bash
+# Interactive setup wizard
+magic setup
+
+# Start chatting
+magic chat
+```
+
+## TUI Slash Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/help [command]` | `/?` | Show help |
+| `/commands [category]` | `/cmds` | List all commands |
+| `/new` | `/reset` | Start a new conversation |
+| `/clear` | | Clear chat history |
+| `/compress` | | Compress context window |
+| `/retry` | | Retry last response |
+| `/undo` | | Undo last action |
+| `/export [format]` | `/save` | Export conversation |
+| `/model [provider:model]` | `/m` | Change the AI model |
+| `/mode [chat\|coding]` | | Switch agent mode |
+| `/personality [name]` | `/persona`, `/tone` | Set agent personality |
+| `/tools [category]` | | List available tools |
+| `/skills [name]` | `/skill` | List available skills |
+| `/status` | | Show system status |
+| `/version` | `/ver` | Show version |
+| `/usage [--days N]` | | Show token usage |
+| `/insights [--days N]` | `-d` | Get usage insights |
+| `/sessions [list\|search]` | `/session` | List sessions |
+| `/sethome [session_id]` | | Set home session for messaging |
+| `/context [add\|remove\|list]` | `/ctx` | Manage context files |
+| `/stop` | `/cancel` | Stop current operation |
+
+## Coding Mode
+
+Switch to coding mode for development tasks:
+
+```
+/mode coding
+```
+
+| Feature | Chat Mode | Coding Mode |
+|---------|-----------|-------------|
+| File write permissions | Restricted | Relaxed |
+| Command execution timeout | 30s | 300s |
+| Code execution (Python/Node) | Disabled | Enabled |
+| Shell access | Limited | Full |
+| Auto-approve tools | No | Yes |
+
+Switch back with `/mode chat`.
+
+## Web Dashboard
+
+Start the web server:
+
+```bash
+magic server
+```
+
+Then open `http://localhost:8642` in your browser.
+
+Features:
+- Real-time chat with streaming responses
+- Session management (create, search, resume)
+- Provider and model configuration
+- Tool and skill management
+- Token usage dashboard
 
 ## Configuration
 
-```yaml
-# ~/.magic/config.yaml
-provider:
-  name: deepseek
-  api_key: ${DEEPSEEK_API_KEY}
+Create or edit `~/.magic/config.json`:
 
-cortex:
-  enabled: true
-  max_turns: 25
-
-tools:
-  enabled: ["all"]
-
-gateway:
-  enabled: true
-  platforms:
-    telegram:
-      token: ${TELEGRAM_BOT_TOKEN}
-    discord:
-      bot_token: ${DISCORD_BOT_TOKEN}
+```json
+{
+  "profile": "default",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "api_key": "your-deepseek-api-key",
+      "model": "deepseek-chat"
+    },
+    "openai": {
+      "api_key": "your-openai-api-key",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4"
+    },
+    "anthropic": {
+      "api_key": "your-anthropic-api-key",
+      "model": "claude-3-opus-20240229"
+    },
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "model": "llama3"
+    }
+  },
+  "tools": {
+    "enabled": ["all"],
+    "disabled": []
+  },
+  "gateway": {
+    "enabled": false,
+    "platforms": {
+      "telegram": {
+        "token": "your-telegram-bot-token",
+        "enabled": false
+      },
+      "discord": {
+        "token": "your-discord-bot-token",
+        "enabled": false
+      }
+    }
+  }
+}
 ```
 
-## Tool System
-
-| Toolset | Tools |
-|---------|-------|
-| **web** | web_search, web_extract |
-| **file** | read_file, write_file, file_edit, list_files, search_in_files |
-| **terminal** | execute_command, terminal, process |
-| **browser** | browser_navigate, browser_snapshot, browser_click, browser_type |
-| **memory** | memory_store, memory_recall |
-| **skills** | skill_list, skill_view, skill_manage |
-| **code_execution** | execute_code |
-| **delegation** | delegate_task, poll_task |
-| **homeassistant** | ha_list_entities, ha_get_state, ha_call_service |
-| **mcp** | mcp_* (from connected servers) |
-
-## Architecture
-
-### Three-Layer Cognitive System
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Layer 1: Perception                                 │
-│  Intent Classification → Complexity Assessment       │
-├──────────────────────────────────────────────────────┤
-│  Layer 2: Cognition                                  │
-│  Task Planning → DAG Management → Sub-agent Decisions│
-├──────────────────────────────────────────────────────┤
-│  Layer 3: Execution                                  │
-│  Checkpoint/Resume → Result Validation               │
-└──────────────────────────────────────────────────────┘
-```
-
-### Six Self-Evolution Systems
-
-| System | Description |
-|--------|-------------|
-| **Message Trigger** | Detects conversation turns, triggers Nudge signals |
-| **Nudge System** | Async background review without blocking |
-| **Background Review** | Analyzes patterns, generates skill drafts |
-| **Frozen Snapshot** | 90% API cost reduction via prefix caching |
-| **FTS Memory** | Full-text search across sessions |
-| **Skill Evolution** | Progressive disclosure, learns from usage |
-
-## Plugin System
-
-```bash
-# Discover plugins
-magic plugin discover
-
-# Search plugins
-magic plugin search <query>
-
-# Install plugin
-magic plugin install <plugin-id>
-
-# Enable/disable/reload
-magic plugin enable <id>
-magic plugin disable <id>
-magic plugin reload <id>
-
-# Check updates
-magic plugin update
-magic plugin check
-```
-
-## Skills System
-
-```bash
-# List skills
-magic skills list
-
-# Show skill details
-magic skills show <name>
-
-# Create new skill
-magic skills create <name>
-
-# Install from Skills Hub
-magic skills hub install <name>
-
-# Progressive loading
-magic skills view <name> --level 0  # List only
-magic skills view <name> --level 1  # Full content
-magic skills view <name> --level 2  # With references
-```
-
-## Messaging Gateway
-
-```bash
-# Setup gateway
-magic gateway setup
-
-# Start gateway
-magic gateway start
-
-# Configure platforms
-magic gateway config telegram --token <token>
-magic gateway config discord --bot-token <token>
-```
-
-## Environment Variables
+### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `OPENAI_API_KEY` | OpenAI API key |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `GOOGLE_API_KEY` | Google/Gemini API key |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `DISCORD_BOT_TOKEN` | Discord bot token |
-| `GO_MAGIC_HOME` | Config directory (default: ~/.magic) |
-| `GO_MAGIC_PROFILE` | Profile name (default: default) |
+| `GO_MAGIC_HOME` | Config directory (default: `~/.magic`) |
+| `GO_MAGIC_PROFILE` | Profile name (default: `default`) |
 
-## Building
+## Building from Source
 
 ### Requirements
-- Go 1.21+
-- Node.js 18+ (for web dashboard)
+
+- Go 1.25+
+- Node.js 20+ (for web dashboard)
 
 ### Build for Current Platform
 
 ```bash
-# Linux/macOS
-./scripts/build.sh
-
-# Windows
-.\scripts\windows\build.ps1
-```
-
-### Development Build
-
-```bash
-# Build web assets first
-cd web && npm install && npm run build && cd ..
-
-# Copy web assets for embedding
-cp -r web/dist internal/server/dist
-
-# Build Go binary
-go build -o magic ./cmd/magic
+make build
 ```
 
 ### Cross-Platform Build
 
 ```bash
-# Build for all platforms (includes web embedding)
-./scripts/build.sh all
+# All common platforms (Linux, macOS, Windows)
+make build-all
 
-# Build specific targets
-./scripts/build.sh go      # Build Go binaries only
-./scripts/build.sh web     # Build web app only
-./scripts/build.sh docker  # Build Docker images
+# All supported platforms
+make build-cross
+
+# Specific platform
+make build-linux
+make build-macos
+make build-windows
 ```
 
-### Build Output
+### Supported Platforms
 
-The build script will automatically:
-1. Build the React web dashboard
-2. Copy web assets to `internal/server/dist` for embedding
-3. Compile Go binary with embedded frontend
-4. Create platform-specific packages
+| OS | Architectures |
+|----|---------------|
+| Linux | amd64, arm64, armv6, riscv64, ppc64le, s390x |
+| macOS | amd64, arm64 |
+| Windows | amd64, arm64, 386 |
+| BSD | freebsd, openbsd, netbsd |
 
-## Contributing
+### GitHub Actions
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Releases are built automatically via GitHub Actions when a version tag is pushed:
+
+```bash
+git tag v0.3.1
+git push origin v0.3.1
+```
+
+The workflow builds binaries for Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64), creates archives, and publishes a GitHub Release.
+
+## Download
+
+Get the latest version from [GitHub Releases](https://github.com/magicwubiao/go-magic/releases).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
+MIT License -- see [LICENSE](LICENSE) for details.

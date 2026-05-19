@@ -13,7 +13,7 @@ func NewToolConverter() *ToolConverter {
 	return &ToolConverter{}
 }
 
-// ToolMapping maps OpenClaw tool names to Hermes tool names
+// ToolMapping maps OpenClaw tool names to Magic tool names
 var ToolMapping = map[string]ToolConversion{
 	"bash": {
 		HermesName: "bash",
@@ -79,7 +79,7 @@ type ToolConversion struct {
 	Convert    func(srcTool map[string]interface{}) (map[string]interface{}, error)
 }
 
-// ConvertTools converts OpenClaw tools to Hermes format
+// ConvertTools converts OpenClaw tools to Magic format
 func (c *ToolConverter) ConvertTools(openclawTools []string) ([]string, []string, error) {
 	var hermesTools []string
 	var warnings []string
@@ -112,7 +112,7 @@ func (c *ToolConverter) ConvertTools(openclawTools []string) ([]string, []string
 	return hermesTools, warnings, nil
 }
 
-// ConvertToolSchema converts OpenClaw tool schema to Hermes format
+// ConvertToolSchema converts OpenClaw tool schema to Magic format
 func (c *ToolConverter) ConvertToolSchema(srcTool map[string]interface{}) (map[string]interface{}, error) {
 	toolType, ok := srcTool["type"].(string)
 	if !ok {
@@ -147,7 +147,7 @@ func (c *ToolConverter) convertGenericTool(srcTool map[string]interface{}) (map[
 	return hermesTool, nil
 }
 
-// convertParameters converts OpenClaw parameters to Hermes format
+// convertParameters converts OpenClaw parameters to Magic format
 func (c *ToolConverter) convertParameters(params map[string]interface{}) map[string]interface{} {
 	hermesParams := make(map[string]interface{})
 
@@ -455,7 +455,7 @@ func NewConfigConverter() *ConfigConverter {
 	return &ConfigConverter{}
 }
 
-// ConvertConfig converts OpenClaw config to Hermes format
+// ConvertConfig converts OpenClaw config to Magic format
 func (c *ConfigConverter) ConvertConfig(srcConfig map[string]interface{}) (map[string]interface{}, error) {
 	hermesConfig := make(map[string]interface{})
 
@@ -484,7 +484,7 @@ func NewDependencyConverter() *DependencyConverter {
 	return &DependencyConverter{}
 }
 
-// ConvertDependencies converts OpenClaw dependencies to Hermes format
+// ConvertDependencies converts OpenClaw dependencies to Magic format
 func (c *DependencyConverter) ConvertDependencies(deps []string) ([]string, []string, error) {
 	var hermesDeps []string
 	var warnings []string

@@ -154,5 +154,47 @@
         "enabled": false
       }
     }
+  },
+  "notification": {
+    "email": {
+      "smtp_host": "smtp.gmail.com",
+      "smtp_port": 587,
+      "username": "your-email@gmail.com",
+      "password": "your-app-password",
+      "from": "your-email@gmail.com",
+      "from_name": "Go-Magic",
+      "use_tls": false,
+      "use_starttls": true,
+      "insecure_skip": false
+    },
+    "sms": {
+      "provider": "twilio",
+      "twilio": {
+        "account_sid": "your-twilio-account-sid",
+        "auth_token": "your-twilio-auth-token",
+        "from_number": "+1234567890"
+      },
+      "aliyun": {
+        "access_key_id": "your-aliyun-access-key-id",
+        "access_key_secret": "your-aliyun-access-key-secret",
+        "sign_name": "your-sign-name",
+        "endpoint": "https://dysmsapi.aliyuncs.com"
+      },
+      "tencent": {
+        "secret_id": "your-tencent-secret-id",
+        "secret_key": "your-tencent-secret-key",
+        "sdk_app_id": "your-sdk-app-id",
+        "sign_name": "your-sign-name",
+        "endpoint": "sms.tencentcloudapi.com"
+      }
+    }
+  },
+  "image_gen": {
+    "provider": "dall-e",
+    "api_key": "your-openai-api-key-for-dalle",
+    "base_url": "",
+    "default_size": "1024x1024",
+    "default_style": "digital-art",
+    "output_directory": "./generated_images"
   }
 }

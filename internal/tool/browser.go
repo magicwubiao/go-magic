@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/magicwubiao/go-magic/internal/util"
 )
 
 // WebFetchTool fetches and parses web pages using goquery
@@ -65,7 +66,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; go-magic/1.0)")
 
 	// Execute request
-	client := &http.Client{}
+	client := util.GetHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)
@@ -240,7 +241,7 @@ func (t *WebSelectTool) Execute(ctx context.Context, args map[string]interface{}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; go-magic/1.0)")
 
 	// Execute request
-	client := &http.Client{}
+	client := util.GetHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)

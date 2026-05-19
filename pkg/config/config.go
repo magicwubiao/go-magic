@@ -9,7 +9,6 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/privacy"
-	"github.com/magicwubiao/go-magic/internal/subagent"
 	"github.com/magicwubiao/go-magic/internal/voice"
 )
 
@@ -30,6 +29,7 @@ type Config struct {
 	Model         string                    `json:"model"`
 	Providers     map[string]ProviderConfig `json:"providers"`
 	Tools         ToolsConfig               `json:"tools"`
+	Memory         MemoryConfig             `json:"memory"`
 	Gateway       GatewayConfig             `json:"gateway"`
 	CortexEnabled bool                      `json:"cortex_enabled,omitempty"`
 	MCP           *MCPConfig                `json:"mcp,omitempty"`
@@ -44,11 +44,16 @@ type Config struct {
 	} `json:"agent,omitempty"`
 }
 
+// MemoryConfig represents memory configuration
+type MemoryConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 // DisplayConfig represents display/UI configuration
 type DisplayConfig struct {
 	Skin        string `json:"skin,omitempty"`         // Active skin name
 	NoColor     bool   `json:"no_color,omitempty"`     // Disable colors
-	ShowBanner  bool   `json:"show_banner,omitempty"`   // Show startup banner
+	ShowBanner  bool   `json:"show_banner,omitempty"`  // Show startup banner
 	ShowVersion bool   `json:"show_version,omitempty"` // Show version info
 }
 
@@ -122,8 +127,13 @@ type SubAgentConfig struct {
 // VoiceConfig represents voice configuration (alias for voice.VoiceConfig)
 type VoiceConfig = voice.VoiceConfig
 
-func DefaultSubAgentConfig() *subagent.Config {
-	return subagent.DefaultConfig()
+// DefaultSubAgentConfig returns default subagent configuration
+func DefaultSubAgentConfig() *SubAgentConfig {
+	return &SubAgentConfig{
+		MaxConcurrent: 3,
+		MaxDepth:      2,
+		Timeout:       120 * time.Second,
+	}
 }
 
 func Load() (*Config, error) {
@@ -170,6 +180,7 @@ func defaultConfig() *Config {
 			Enabled:   false,
 			Platforms: make(map[string]PlatformConfig),
 		},
+		Voice: voice.DefaultVoiceConfig(),
 	}
 }
 
@@ -241,6 +252,35 @@ func (c *Config) Save() error {
 					currentProv.Model = existingProv.Model
 				}
 				c.Providers[name] = currentProv
+			}
+		}
+
+		// Preserve Voice config API keys if current is empty but exists on disk
+		if c.Voice != nil && existingCfg.Voice != nil {
+			// Preserve global API key
+			if c.Voice.APIKey == "" && existingCfg.Voice.APIKey != "" {
+				c.Voice.APIKey = existingCfg.Voice.APIKey
+			}
+			// Preserve region
+			if c.Voice.Region == "" && existingCfg.Voice.Region != "" {
+				c.Voice.Region = existingCfg.Voice.Region
+			}
+			// Preserve provider-specific credentials
+			if c.Voice.Providers == nil {
+				c.Voice.Providers = make(map[string]voice.ProviderCredentials)
+			}
+			for provName, existingCreds := range existingCfg.Voice.Providers {
+				if currentCreds, ok := c.Voice.Providers[provName]; ok {
+					if currentCreds.APIKey == "" && existingCreds.APIKey != "" {
+						currentCreds.APIKey = existingCreds.APIKey
+					}
+					if currentCreds.Region == "" && existingCreds.Region != "" {
+						currentCreds.Region = existingCreds.Region
+					}
+					c.Voice.Providers[provName] = currentCreds
+				} else {
+					c.Voice.Providers[provName] = existingCreds
+				}
 			}
 		}
 	}

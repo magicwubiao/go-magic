@@ -157,7 +157,7 @@ func (g *WeComQRGateway) Connect(ctx context.Context) error {
 
 	if !hasUser {
 		// Need new QR code login
-		log.Info("No user session found, starting QR code login...")
+		log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
 		g.startQRServer(ctx)
 	} else {
 		log.Infof("Found user session: %s", g.userName)
@@ -618,10 +618,17 @@ func (g *WeComQRGateway) HandleSlashCommand(cmd string, msg Message) (Response, 
 	switch cmd {
 	case "help":
 		return Response{
-			Content: "Available commands:\n" +
+			Content: "🤖 Magic Bot - WeCom\n\n" +
+				"📋 Commands:\n" +
 				"/help - Show this help\n" +
 				"/ping - Check bot status\n" +
-				"/status - Show connection status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/usage - Token usage\n" +
+				"/model - Change model\n" +
+				"/goal - Goal management\n" +
+				"/kanban - Kanban board\n" +
 				"/login - Re-authenticate if disconnected",
 		}, nil
 	case "ping":

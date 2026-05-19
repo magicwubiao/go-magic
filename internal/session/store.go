@@ -12,17 +12,32 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+// SessionData represents minimal session data for Gateway analytics
+type SessionData struct {
+	ID              string    `json:"id"`
+	Platform        string    `json:"platform"`
+	InputTokens     int       `json:"input_tokens"`
+	OutputTokens    int       `json:"output_tokens"`
+	CacheReadTokens int       `json:"cache_read_tokens"`
+	CreatedAt       time.Time `json:"created_at"`
+	LastActive      time.Time `json:"last_active"`
+}
+
 type Store struct {
 	db *sql.DB
 }
 
 type Session struct {
-	ID        string          `json:"id"`
-	Profile   string          `json:"profile"`
-	Platform  string          `json:"platform"`
-	Messages  []types.Message `json:"messages"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID              string          `json:"id"`
+	Profile         string          `json:"profile"`
+	Platform        string          `json:"platform"`
+	Model           string          `json:"model"`
+	Messages        []types.Message `json:"messages"`
+	InputTokens     int             `json:"input_tokens"`
+	OutputTokens    int             `json:"output_tokens"`
+	CacheReadTokens int             `json:"cache_read_tokens"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -44,7 +59,11 @@ func initSchema(db *sql.DB) error {
 		id TEXT PRIMARY KEY,
 		profile TEXT NOT NULL,
 		platform TEXT NOT NULL,
+		model TEXT DEFAULT '',
 		messages TEXT,
+		input_tokens INTEGER DEFAULT 0,
+		output_tokens INTEGER DEFAULT 0,
+		cache_read_tokens INTEGER DEFAULT 0,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
@@ -62,34 +81,87 @@ func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	}
 
 	query := `
-	INSERT OR REPLACE INTO sessions (id, profile, platform, messages, updated_at)
-	VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO sessions (id, profile, platform, model, messages, input_tokens, output_tokens, cache_read_tokens, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
-	_, err = s.db.ExecContext(ctx, query, session.ID, session.Profile, session.Platform, string(messages))
+	_, err = s.db.ExecContext(ctx, query, session.ID, session.Profile, session.Platform, session.Model, string(messages), session.InputTokens, session.OutputTokens, session.CacheReadTokens)
+	return err
+}
+
+// SaveSessionData saves session token data (used by Gateway for analytics)
+// This method accepts a generic map to avoid import cycle issues
+func (s *Store) SaveSessionData(ctx context.Context, data *SessionData) error {
+	return s.saveSessionDataInternal(ctx, data.ID, data.Platform, data.InputTokens, data.OutputTokens, data.CacheReadTokens)
+}
+
+// SaveSessionDataFromMap saves session data from a map (for cross-package usage)
+func (s *Store) SaveSessionDataFromMap(ctx context.Context, id, platform string, inputTokens, outputTokens, cacheTokens int) error {
+	return s.saveSessionDataInternal(ctx, id, platform, inputTokens, outputTokens, cacheTokens)
+}
+
+func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string, inputTokens, outputTokens, cacheTokens int) error {
+	// Check if session exists
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`
+	s.db.QueryRowContext(ctx, query, id).Scan(&exists)
+
+	if exists {
+		// Update existing session with token stats
+		updateQuery := `
+		UPDATE sessions SET 
+			platform = ?, 
+			input_tokens = input_tokens + ?, 
+			output_tokens = output_tokens + ?,
+			cache_read_tokens = cache_read_tokens + ?,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+		`
+		_, err := s.db.ExecContext(ctx, updateQuery, platform, inputTokens, outputTokens, cacheTokens, id)
+		return err
+	}
+
+	// Insert new session
+	insertQuery := `
+	INSERT INTO sessions (id, profile, platform, input_tokens, output_tokens, cache_read_tokens, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`
+	_, err := s.db.ExecContext(ctx, insertQuery, id, "", platform, inputTokens, outputTokens, cacheTokens)
 	return err
 }
 
 func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {
-	query := `SELECT id, profile, platform, messages, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, profile, platform, model, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, query, id)
 
 	var session Session
 	var messagesStr string
-	err := row.Scan(&session.ID, &session.Profile, &session.Platform, &messagesStr, &session.CreatedAt, &session.UpdatedAt)
+	err := row.Scan(&session.ID, &session.Profile, &session.Platform, &session.Model, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 
 	if messagesStr != "" {
-		json.Unmarshal([]byte(messagesStr), &session.Messages)
+		if err := json.Unmarshal([]byte(messagesStr), &session.Messages); err != nil {
+			// Log error but don't fail - messages are optional
+			session.Messages = []types.Message{}
+		}
 	}
 
 	return &session, nil
 }
 
 func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, error) {
-	query := `SELECT id, profile, platform, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
-	rows, err := s.db.QueryContext(ctx, query, profile)
+	var query string
+	var rows *sql.Rows
+	var err error
+
+	if profile == "" {
+		query = `SELECT id, profile, platform, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+		rows, err = s.db.QueryContext(ctx, query)
+	} else {
+		query = `SELECT id, profile, platform, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
+		rows, err = s.db.QueryContext(ctx, query, profile)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +170,13 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	var sessions []*Session
 	for rows.Next() {
 		var session Session
-		err := rows.Scan(&session.ID, &session.Profile, &session.Platform, &session.CreatedAt, &session.UpdatedAt)
+		var messagesStr string
+		err := rows.Scan(&session.ID, &session.Profile, &session.Platform, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 		if err != nil {
 			return nil, err
+		}
+		if messagesStr != "" {
+			json.Unmarshal([]byte(messagesStr), &session.Messages)
 		}
 		sessions = append(sessions, &session)
 	}

@@ -239,7 +239,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	// If no token, try auto-login
 	if g.config.Token == "" {
 		// No token available, start QR code login automatically
-		log.Info("[WeChat-iLink] No token available, starting QR code login...")
+		log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
 		token, _, _, baseURL, err := PerformILinkLogin(ctx, ILinkLoginOpts{
 			BaseURL: g.config.BaseURL,
 			BotType: g.config.BotType,
@@ -377,10 +377,17 @@ func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Respon
 	switch cmd {
 	case "help":
 		return Response{
-			Content: "Available commands:\n" +
+			Content: "🤖 Magic Bot - WeChat iLink\n\n" +
+				"📋 Commands:\n" +
 				"/help - Show this help\n" +
 				"/ping - Check bot status\n" +
-				"/status - Show connection status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/usage - Token usage\n" +
+				"/model - Change model\n" +
+				"/goal - Goal management\n" +
+				"/kanban - Kanban board\n" +
 				"/login - Start QR code login\n" +
 				"/stats - Show message statistics\n" +
 				"/health - Detailed health check",

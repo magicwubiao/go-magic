@@ -11,7 +11,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
 
-// Migrator handles migration from OpenClaw to Hermes Agent format
+// Migrator handles migration from OpenClaw to Magic Agent format
 type Migrator struct {
 	parser    *parser.Parser
 	generator *HermesGenerator
@@ -50,7 +50,7 @@ type MigrationError struct {
 type MigrateOptions struct {
 	InputPath  string // Source path (file or directory)
 	OutputPath string // Output directory
-	Format     string // "openclaw" or "hermes" (auto-detect if empty)
+	Format     string // "openclaw" or "magic" (auto-detect if empty)
 	Batch      bool   // Batch migrate all skills in directory
 	Overwrite  bool   // Overwrite existing skills
 	DryRun     bool   // Preview without creating files
@@ -243,7 +243,7 @@ func (m *Migrator) migrateDirectory(inputPath, outputPath, formatHint string, dr
 		}
 	}
 
-	// Generate Hermes format
+	// Generate Magic format
 	hermesContent, warnings, err := m.generator.Generate(format, frontmatter, content, skillName)
 	if err != nil {
 		m.report.FailedCount++
@@ -482,11 +482,11 @@ func ConvertToSkill(format parser.SkillFormat, frontmatter map[string]interface{
 		skill.Tools = tools
 	}
 
-	// For Hermes format, also check hermes block
+	// For Magic format, also check magic block
 	if hermes, ok := frontmatter["hermes"].(map[string]interface{}); ok {
 		skill.Metadata["hermes"] = hermes
 
-		// Override with hermes-specific values if not set
+		// Override with format-specific values if not set
 		if len(skill.Tags) == 0 {
 			if tags, ok := hermes["tags"].([]string); ok {
 				skill.Tags = tags

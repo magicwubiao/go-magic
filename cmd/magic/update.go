@@ -51,7 +51,7 @@ func init() {
 func runUpdate(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println("╔═══════════════════════════════════════════════════════════╗")
-	fmt.Println("║               magic Agent Updater                       ║")
+	fmt.Println("║               Magic Agent Updater                       ║")
 	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
 	fmt.Println()
 

@@ -12,7 +12,7 @@ import (
 var logsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "View magic logs",
-	Long: `View and manage magic Agent log files.
+	Long: `View and manage Magic Agent log files.
 	
 Log files are stored in ~/.magic/logs/ and contain
 debugging information about magic operations.

@@ -9,15 +9,15 @@ import (
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
 
-// HermesGenerator generates Hermes Agent SKILL.md format
+// SkillGenerator generates Magic Agent SKILL.md format
 type HermesGenerator struct{}
 
-// NewHermesGenerator creates a new Hermes generator
+// NewSkillGenerator creates a new skill generator
 func NewHermesGenerator() *HermesGenerator {
 	return &HermesGenerator{}
 }
 
-// Generate generates Hermes SKILL.md content from source format
+// Generate generates SKILL.md content from source format
 func (g *HermesGenerator) Generate(format parser.SkillFormat, frontmatter map[string]interface{}, content string, defaultName string) (string, []string, error) {
 	var warnings []string
 
@@ -59,7 +59,7 @@ func (g *HermesGenerator) Generate(format parser.SkillFormat, frontmatter map[st
 		frontmatterBuilder.WriteString(fmt.Sprintf("tools: [%s]\n", strings.Join(tools, ", ")))
 	}
 
-	// Hermes metadata block
+	// Metadata block
 	frontmatterBuilder.WriteString("metadata:\n")
 	frontmatterBuilder.WriteString("  hermes:\n")
 	frontmatterBuilder.WriteString("    tags: []\n")
@@ -77,7 +77,7 @@ func (g *HermesGenerator) Generate(format parser.SkillFormat, frontmatter map[st
 			for _, t := range triggers {
 				frontmatterBuilder.WriteString(fmt.Sprintf("      - %q\n", t))
 			}
-			warnings = append(warnings, "trigger_conditions converted to metadata (Hermes uses different trigger system)")
+			warnings = append(warnings, "trigger_conditions converted to metadata (Magic uses different trigger system)")
 		}
 		if steps := g.getStringArray(frontmatter, "steps"); len(steps) > 0 {
 			frontmatterBuilder.WriteString("    original_steps:\n")
@@ -215,7 +215,7 @@ func (g *HermesGenerator) processContent(content string) string {
 			continue
 		}
 
-		// Convert OpenClaw trigger sections to Hermes format
+		// Convert OpenClaw trigger sections to Magic format
 		if strings.Contains(strings.ToLower(trimmed), "trigger") {
 			// Skip trigger sections, they'll be in metadata
 			if strings.Contains(strings.ToLower(trimmed), "##") || strings.Contains(strings.ToLower(trimmed), "#") {
@@ -267,7 +267,7 @@ func sanitizeTitle(name string) string {
 	return strings.Join(words, " ")
 }
 
-// GenerateMinimal generates a minimal Hermes SKILL.md
+// GenerateMinimal generates a minimal SKILL.md
 func (g *HermesGenerator) GenerateMinimal(name, description string) string {
 	return fmt.Sprintf(`---
 name: %s

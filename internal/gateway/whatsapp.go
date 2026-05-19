@@ -133,6 +133,7 @@ func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 		return nil
 	}
 
+	log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
 	err = client.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to WhatsApp: %w", err)
@@ -262,6 +263,88 @@ func (g *WhatsAppGateway) HandleSlashCommand(cmd string, msg Message) (Response,
 // IsLoggedIn returns whether the client is logged in
 func (g *WhatsAppGateway) IsLoggedIn() bool {
 	return g.client != nil && g.client.IsLoggedIn()
+}
+
+// GetLoginStatus returns the current login status
+func (g *WhatsAppGateway) GetLoginStatus() string {
+	if g.client == nil {
+		return "not_initialized"
+	}
+	if g.client.IsLoggedIn() {
+		return "confirmed"
+	}
+	if g.client.IsConnected() {
+		return "waiting_scan"
+	}
+	return "disconnected"
+}
+
+// StartQRLogin initiates QR code login and returns the QR data string
+func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// If already logged in, return empty
+	if g.client != nil && g.client.IsLoggedIn() {
+		return "", nil
+	}
+
+	// Ensure client is initialized
+	if g.client == nil {
+		if err := g.initClientLocked(ctx); err != nil {
+			return "", err
+		}
+	}
+
+	// Trigger QR code generation by connecting
+	if !g.client.IsConnected() {
+		if err := g.client.Connect(); err != nil {
+			return "", fmt.Errorf("failed to connect: %w", err)
+		}
+	}
+
+	// QR code will be delivered via event handler
+	// Return a placeholder - actual QR data comes from the callback
+	return "whatsapp_qr_pending", nil
+}
+
+// initClientLocked initializes the WhatsApp client (caller must hold g.mu)
+func (g *WhatsAppGateway) initClientLocked(ctx context.Context) error {
+	// Ensure data directory exists
+	if err := os.MkdirAll(g.dataDir, 0700); err != nil {
+		return fmt.Errorf("failed to create whatsapp data dir: %w", err)
+	}
+
+	// Initialize SQL store for session persistence
+	dbPath := filepath.Join(g.dataDir, "store.db")
+	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
+	if err != nil {
+		return fmt.Errorf("failed to create session store: %w", err)
+	}
+	g.container = container
+
+	// Get or create device
+	devices, err := container.GetAllDevices(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get devices: %w", err)
+	}
+
+	if len(devices) > 0 {
+		g.device = devices[0]
+		log.Info("Found existing WhatsApp session")
+	} else {
+		g.device = container.NewDevice()
+		log.Info("No WhatsApp session found, will generate QR code for login")
+	}
+
+	// Create client
+	client := whatsmeow.NewClient(g.device, waLog.Noop)
+	g.client = client
+
+	// Register event handlers
+	client.AddEventHandler(g.eventHandler)
+
+	return nil
 }
 
 // GetQRCode returns the current QR code for login (if waiting)
@@ -724,19 +807,29 @@ func ForceDisplayQR(qrData string) {
 	fmt.Println("║          📱 WhatsApp QR Code - Scan with WhatsApp App           ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
+	fmt.Println("Instructions:")
+	fmt.Println("  1. Open WhatsApp on your phone")
+	fmt.Println("  2. Go to Settings → Linked Devices")
+	fmt.Println("  3. Tap 'Link a Device'")
+	fmt.Println("  4. Scan the QR code below")
+	fmt.Println()
 
 	// Display QR code with medium size
 	qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
 
-	// Also show URL fallback
+	// Also show URL fallback for browser viewing
 	fmt.Println()
-	fmt.Println("QR Code URL (open in browser):")
-	fmt.Printf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s\n", qrData)
+	fmt.Println("─────────────────────────────────────────────────────────────────")
+	fmt.Println("📎 Alternative: Open this URL in your browser to view QR code:")
+	fmt.Println()
+	fmt.Printf("  %s\n", GetQRCodeURL(qrData))
+	fmt.Println()
+	fmt.Println("─────────────────────────────────────────────────────────────────")
 
 	// Print raw data
 	fmt.Println()
-	fmt.Println("Raw QR Data:")
-	fmt.Printf("%s\n", qrData)
+	fmt.Println("Raw QR Data (for manual scanning):")
+	fmt.Printf("%s\n", truncateStringSimple(qrData, 100))
 
 	fmt.Println()
 	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
@@ -744,6 +837,11 @@ func ForceDisplayQR(qrData string) {
 
 	// Flush output immediately
 	os.Stdout.Sync()
+}
+
+// GetQRCodeURL returns a URL to display the QR code in a browser
+func GetQRCodeURL(qrData string) string {
+	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", qrData)
 }
 
 // truncateStringSimple truncates a string to maxLen characters
@@ -777,4 +875,9 @@ func (g *WhatsAppGateway) GetQRCodeForAPI() *QRCodeResponse {
 		QRCode: qr,
 		Expiry: 60, // QR codes typically expire in 60 seconds
 	}
+}
+
+// IsConnected returns whether the gateway is connected
+func (g *WhatsAppGateway) IsConnected() bool {
+	return g.client != nil && g.client.IsLoggedIn()
 }

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
 
 // Skill is now defined in types.go - this file re-exports it for backwards compatibility
@@ -290,15 +292,60 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 	// Default values
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	description := "Markdown skill"
-	tags := []string{}
-	tools := []string{}
 
 	// If file is SKILL.md, use parent directory name as skill name
 	if name == "SKILL" {
 		name = filepath.Base(filepath.Dir(path))
 	}
 
-	// Try to extract metadata from YAML frontmatter
+	// Try to use the parser package for full OpenClaw/Hermes parsing
+	skillDir := filepath.Dir(path)
+	p := parser.NewParser()
+	result, parseErr := p.Parse(skillDir)
+	if parseErr == nil && result != nil {
+		// Successfully parsed with the unified parser
+		skill := &Skill{
+			SkillMeta: SkillMeta{
+				Name:        result.Name,
+				Description: extractString(result.Data, "description", description),
+				Version:     extractString(result.Data, "version", ""),
+				Author:      extractString(result.Data, "author", ""),
+				License:     extractString(result.Data, "license", ""),
+				Tags:        extractStringSlice(result.Data, "tags"),
+			},
+			Tools:    extractStringSlice(result.Data, "tools"),
+			Content:  content,
+			Metadata: make(map[string]interface{}),
+		}
+
+		// If name is empty (parser didn't find one), fall back to directory/file name
+		if skill.Name == "" {
+			skill.Name = name
+		}
+
+		// Copy OpenClaw-specific fields into Metadata
+		if tc, ok := result.Data["trigger_conditions"]; ok {
+			skill.Metadata["trigger_conditions"] = tc
+		}
+		if steps, ok := result.Data["steps"]; ok {
+			skill.Metadata["steps"] = steps
+		}
+		// Copy any remaining Data fields into Metadata
+		for k, v := range result.Data {
+			if k != "description" && k != "version" && k != "author" &&
+				k != "license" && k != "tags" && k != "tools" &&
+				k != "trigger_conditions" && k != "steps" {
+				skill.Metadata[k] = v
+			}
+		}
+
+		return skill
+	}
+
+	// Fallback: use the simple frontmatter parser
+	tags := []string{}
+	tools := []string{}
+
 	if strings.HasPrefix(content, "---") {
 		endMarker := strings.Index(content[3:], "---")
 		if endMarker != -1 {
@@ -319,6 +366,38 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 	}
 
 	return skill
+}
+
+// extractString safely extracts a string value from a map
+func extractString(data map[string]interface{}, key, defaultVal string) string {
+	if data == nil {
+		return defaultVal
+	}
+	if v, ok := data[key].(string); ok && v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+// extractStringSlice safely extracts a []string value from a map
+func extractStringSlice(data map[string]interface{}, key string) []string {
+	if data == nil {
+		return nil
+	}
+	if v, ok := data[key].([]string); ok {
+		return v
+	}
+	// Also handle []interface{} (from YAML parsing)
+	if v, ok := data[key].([]interface{}); ok {
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 // parseFrontmatter 解析 YAML frontmatter
@@ -575,25 +654,56 @@ func (m *Manager) MatchSkillsByInput(input string) []*Skill {
 
 	input = strings.ToLower(input)
 	matched := make([]*Skill, 0)
+	matchedSet := make(map[string]bool)
+
+	tryAdd := func(skill *Skill) {
+		if !matchedSet[skill.Name] {
+			matchedSet[skill.Name] = true
+			matched = append(matched, skill)
+		}
+	}
 
 	for _, skill := range m.skills {
 		// Check name
 		if strings.Contains(strings.ToLower(skill.Name), input) {
-			matched = append(matched, skill)
+			tryAdd(skill)
 			continue
 		}
 
 		// Check description
 		if strings.Contains(strings.ToLower(skill.Description), input) {
-			matched = append(matched, skill)
+			tryAdd(skill)
 			continue
 		}
 
 		// Check tags
 		for _, tag := range skill.GetTags() {
 			if strings.Contains(strings.ToLower(tag), input) {
-				matched = append(matched, skill)
+				tryAdd(skill)
 				break
+			}
+		}
+
+		// Check trigger_conditions in Metadata (supports both []string and string)
+		if skill.Metadata != nil {
+			if conditions, ok := skill.Metadata["trigger_conditions"]; ok {
+				matched := false
+				switch condVal := conditions.(type) {
+				case []string:
+					for _, cond := range condVal {
+						if strings.Contains(strings.ToLower(cond), input) {
+							matched = true
+							break
+						}
+					}
+				case string:
+					if strings.Contains(strings.ToLower(condVal), input) {
+						matched = true
+					}
+				}
+				if matched {
+					tryAdd(skill)
+				}
 			}
 		}
 	}

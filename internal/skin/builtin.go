@@ -2,10 +2,10 @@ package skin
 
 // Built-in skin definitions
 
-// Default skin - classic Hermes gold/kawaii style
+// Default skin - classic gold/kawaii style
 var DefaultSkin = &Config{
 	Name:        "default",
-	Description: "Classic Hermes gold/kawaii style",
+	Description: "Classic gold/kawaii style",
 	Colors: Colors{
 		BannerBorder:   "\033[38;5;220m", // Gold
 		BannerTitle:    "\033[38;5;214m", // Orange

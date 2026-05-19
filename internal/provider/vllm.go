@@ -16,6 +16,13 @@ type vLLMProvider struct {
 	model   string
 }
 
+// vllmUsageInfo represents token usage from vLLM API
+type vllmUsageInfo struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 func NewVLLMProvider(baseURL, model string) *vLLMProvider {
 	if baseURL == "" {
 		baseURL = "http://localhost:8000/v1"
@@ -92,7 +99,8 @@ func (p *vLLMProvider) Chat(ctx context.Context, messages []Message) (*ChatRespo
 	}
 
 	type Response struct {
-		Choices []Choice `json:"choices"`
+		Choices []Choice       `json:"choices"`
+		Usage   vllmUsageInfo `json:"usage"`
 	}
 
 	var respData Response
@@ -106,6 +114,11 @@ func (p *vLLMProvider) Chat(ctx context.Context, messages []Message) (*ChatRespo
 
 	return &ChatResponse{
 		Content: respData.Choices[0].Message.Content,
+		Usage: &Usage{
+			PromptTokens:     respData.Usage.PromptTokens,
+			CompletionTokens: respData.Usage.CompletionTokens,
+			TotalTokens:      respData.Usage.TotalTokens,
+		},
 	}, nil
 }
 
@@ -180,7 +193,8 @@ func (p *vLLMProvider) ChatWithTools(ctx context.Context, messages []Message, to
 	}
 
 	type Response struct {
-		Choices []Choice `json:"choices"`
+		Choices []Choice       `json:"choices"`
+		Usage   vllmUsageInfo `json:"usage"`
 	}
 
 	var respData Response
@@ -194,15 +208,23 @@ func (p *vLLMProvider) ChatWithTools(ctx context.Context, messages []Message, to
 
 	response := &ChatResponse{
 		Content: respData.Choices[0].Message.Content,
+		Usage: &Usage{
+			PromptTokens:     respData.Usage.PromptTokens,
+			CompletionTokens: respData.Usage.CompletionTokens,
+			TotalTokens:      respData.Usage.TotalTokens,
+		},
 	}
 
 	for _, tc := range respData.Choices[0].Message.ToolCalls {
 		var args map[string]interface{}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		response.ToolCalls = append(response.ToolCalls, types.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: args,
+			ID:   tc.ID,
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 		})
 	}
 

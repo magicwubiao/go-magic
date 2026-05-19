@@ -235,10 +235,25 @@ func (g *WhatsAppBusinessGateway) Send(ctx context.Context, resp Response) error
 
 // HandleSlashCommand handles commands
 func (g *WhatsAppBusinessGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	return Response{
-		ChannelID: msg.UserID,
-		Content:   "Slash commands are not supported on WhatsApp Business",
-	}, nil
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - WhatsApp Business\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }
 
 // startHTTPServer starts the webhook server
@@ -399,4 +414,11 @@ func (g *WhatsAppBusinessGateway) sendMessage(ctx context.Context, reqBody whats
 	}
 
 	return nil
+}
+
+// IsConnected returns whether the gateway is connected
+func (g *WhatsAppBusinessGateway) IsConnected() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.running && g.httpServer != nil
 }

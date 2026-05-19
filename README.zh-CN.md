@@ -1,197 +1,166 @@
-# Go Magic
+# Go Magic (Magic Agent) v0.3.1
 
-高性能、超轻量级的 Go 语言 AI Agent 框架，灵感来源于 [Nous Research 的 hermes-agent](https://github.com/NousResearch/hermes-agent)。
+高性能、超轻量级的 AI Agent 框架，使用 Go 语言编写，支持多 AI Provider，内置 Web Dashboard 和 TUI 界面。
 
-## 特性
+## 核心特性
 
 | 特性 | 描述 |
 |------|------|
-| **多 Provider 支持** | OpenAI, DeepSeek, Huoshan, Anthropic, Zhipu, Kimi, MiniMax, DashScope, OpenRouter, Ollama, vLLM |
-| **Cortex 架构** | 三层认知系统，六大自进化机制 |
-| **工具系统** | 15+ 内置工具，可扩展插件框架 |
-| **消息网关** | 多平台消息（Telegram, Discord, WhatsApp, Signal, Slack 等） |
-| **技能系统** | 自动创建，渐进式加载（L0/L1/L2），Skills Hub 集成 |
-| **MCP 协议** | 连接外部 MCP 服务器扩展能力 |
-| **会话管理** | SQLite 持久化，FTS5 全文搜索 |
-| **语音模式** | TTS/STT 多 Provider 支持 |
-| **视觉理解** | 多模型支持的图像理解 |
-| **多平台支持** | Linux, macOS, Windows, FreeBSD, Docker |
+| **多 AI Provider 支持** | 20+ 提供商：DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenRouter、Groq、Huoshan、Zhipu、Kimi、MiniMax、DashScope、vLLM 等 |
+| **TUI 界面** | 基于 BubbleTea，支持多行输入（Shift+Enter 换行）、Markdown 渲染、流式输出、斜杠命令 |
+| **Coding 模式** | 放宽权限、更长超时、允许 Python/Node 代码执行 |
+| **Web Dashboard** | React + TypeScript 前端，实时聊天、会话管理、配置管理 |
+| **工具系统** | 15+ 内置工具：文件操作、命令执行、代码执行、Web 搜索、浏览器自动化等 |
+| **技能系统** | 自动创建、渐进式加载（L0/L1/L2），Skills Hub 集成 |
+| **消息网关** | Telegram、Discord、Slack、WhatsApp、WeChat、WeCom 等多平台消息接入 |
+| **MCP 协议** | 连接外部 MCP 服务器，扩展 Agent 能力 |
+| **会话管理** | SQLite 持久化存储，FTS5 全文搜索 |
+| **多平台支持** | Linux、macOS、Windows、FreeBSD、Docker |
+| **CI/CD** | GitHub Actions 自动多平台编译和发布 |
 
 ## 快速开始
 
 ### 安装
 
+**下载 Release**
+
+从 [GitHub Releases](https://github.com/magicwubiao/go-magic/releases) 下载对应平台的二进制文件。
+
+**Go Install**
+
 ```bash
-# 通过 Go 安装
 go install github.com/magicwubiao/go-magic/cmd/magic@latest
-
-# 或克隆并构建
-git clone https://github.com/magicwubiao/go-magic.git
-cd go-magic
-make build
 ```
 
-### 一键安装 (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
-```
-
-### Docker
+**Docker**
 
 ```bash
 docker run -it magicwubiao/go-magic
 ```
 
-## 使用方法
+### 首次运行
 
 ```bash
-# 交互式聊天
+# 初始化配置
+magic setup
+
+# 开始聊天
 magic chat
-
-# Agent 模式（并行执行）
-magic agent
-
-# 语音交互
-magic voice listen
-magic voice speak "你好世界"
-
-# 图像分析
-magic vision analyze image.png
-
-# REPL 模式
-magic repl
 ```
 
-## CLI 命令
+## TUI 界面
+
+启动 `magic chat` 后进入 TUI 交互界面，支持以下斜杠命令：
 
 | 命令 | 描述 |
 |------|------|
-| `magic chat` | 交互式聊天会话 |
-| `magic agent` | Agent 模式（任务规划） |
-| `magic repl` | REPL shell |
-| `magic voice` | 语音交互 (listen/speak/test) |
-| `magic vision` | 图像理解 (analyze/compare) |
-| `magic config` | 配置管理 |
-| `magic skills` | 技能管理 |
-| `magic plugin` | 插件系统 |
-| `magic session` | 会话管理 |
-| `magic gateway` | 消息网关 |
-| `magic mcp` | MCP 服务器管理 |
-| `magic doctor` | 诊断工具 |
-| `magic update` | 自动更新 |
+| `/help` | 显示帮助信息 |
+| `/mode` | 切换模式（chat / coding） |
+| `/new` | 新建会话 |
+| `/model` | 切换 AI 模型 |
+| `/provider` | 切换 AI Provider |
+| `/tools` | 查看/管理工具 |
+| `/skills` | 查看/管理技能 |
+| `/sessions` | 查看历史会话 |
+| `/compact` | 压缩当前会话上下文 |
+| `/config` | 打开配置 |
+| `/quit` | 退出 |
+
+**TUI 快捷操作：**
+- `Shift+Enter`：多行输入换行
+- `Enter`：发送消息
+- 支持 Markdown 渲染和流式输出
+
+## Coding 模式
+
+通过 `/mode coding` 切换到 Coding 模式，专为编程任务优化。
+
+| 特性 | Chat 模式 | Coding 模式 |
+|------|-----------|-------------|
+| 工具权限 | 受限 | 放宽 |
+| 命令超时 | 较短 | 更长 |
+| 代码执行 | 不可用 | 支持 Python / Node.js |
+| 文件写入 | 需确认 | 自动执行 |
+| 适用场景 | 日常对话 | 编程开发 |
+
+## Web Dashboard
+
+使用 React + TypeScript 构建的 Web 管理界面。
+
+### 启动
+
+```bash
+magic server
+```
+
+默认访问地址：`http://localhost:8080`
+
+### 功能
+
+- 实时聊天对话
+- 会话管理和历史记录
+- Provider / 模型配置
+- 工具和技能管理
+- 消息网关配置
 
 ## 配置
 
-```yaml
-# ~/.magic/config.yaml
-provider:
-  name: deepseek
-  api_key: ${DEEPSEEK_API_KEY}
+配置文件路径：`~/.magic/config.json`
 
-cortex:
-  enabled: true
-  max_turns: 25
-
-tools:
-  enabled: ["all"]
-
-gateway:
-  enabled: true
-  platforms:
-    telegram:
-      token: ${TELEGRAM_BOT_TOKEN}
-    discord:
-      bot_token: ${DISCORD_BOT_TOKEN}
+```json
+{
+  "provider": {
+    "name": "deepseek",
+    "api_key": "${DEEPSEEK_API_KEY}"
+  },
+  "model": "deepseek-chat",
+  "tools": {
+    "enabled": ["all"]
+  },
+  "gateway": {
+    "enabled": true,
+    "platforms": {
+      "telegram": {
+        "token": "${TELEGRAM_BOT_TOKEN}"
+      },
+      "discord": {
+        "bot_token": "${DISCORD_BOT_TOKEN}"
+      }
+    }
+  }
+}
 ```
+
+### 环境变量
+
+| 变量 | 描述 |
+|------|------|
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 |
+| `OPENAI_API_KEY` | OpenAI API 密钥 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
+| `GEMINI_API_KEY` | Gemini API 密钥 |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token |
+| `DISCORD_BOT_TOKEN` | Discord Bot Token |
+| `SLACK_BOT_TOKEN` | Slack Bot Token |
+| `GO_MAGIC_HOME` | 配置目录（默认：`~/.magic`） |
+| `GO_MAGIC_PROFILE` | Profile 名称（默认：`default`） |
 
 ## 工具系统
 
 | 工具集 | 工具 |
 |--------|------|
-| **web** | web_search, web_extract |
-| **file** | read_file, write_file, file_edit, list_files, search_in_files |
-| **terminal** | execute_command, terminal, process |
-| **browser** | browser_navigate, browser_snapshot, browser_click, browser_type |
-| **memory** | memory_store, memory_recall |
-| **skills** | skill_list, skill_view, skill_manage |
-| **code_execution** | execute_code |
-| **delegation** | delegate_task, poll_task |
-| **homeassistant** | ha_list_entities, ha_get_state, ha_call_service |
-| **mcp** | mcp_* (来自已连接的服务器) |
-
-## 架构
-
-### 三层认知系统
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Layer 1: Perception (感知层)                          │
-│  Intent Classification → Complexity Assessment        │
-├──────────────────────────────────────────────────────┤
-│  Layer 2: Cognition (认知层)                          │
-│  Task Planning → DAG Management → Sub-agent Decisions │
-├──────────────────────────────────────────────────────┤
-│  Layer 3: Execution (执行层)                          │
-│  Checkpoint/Resume → Result Validation                │
-└──────────────────────────────────────────────────────┘
-```
-
-### 六大自进化系统
-
-| 系统 | 描述 |
-|------|------|
-| **Message Trigger** | 检测对话轮次，触发 Nudge 信号 |
-| **Nudge System** | 异步后台审查，不阻塞用户 |
-| **Background Review** | 分析模式，生成技能草稿 |
-| **Frozen Snapshot** | 通过前缀缓存降低 90% API 成本 |
-| **FTS Memory** | 跨会话全文搜索 |
-| **Skill Evolution** | 渐进式披露，从使用中学习 |
-
-## 插件系统
-
-```bash
-# 发现插件
-magic plugin discover
-
-# 搜索插件
-magic plugin search <query>
-
-# 安装插件
-magic plugin install <plugin-id>
-
-# 启用/禁用/重载
-magic plugin enable <id>
-magic plugin disable <id>
-magic plugin reload <id>
-
-# 检查更新
-magic plugin update
-magic plugin check
-```
-
-## 技能系统
-
-```bash
-# 列出技能
-magic skills list
-
-# 查看技能详情
-magic skills show <name>
-
-# 创建新技能
-magic skills create <name>
-
-# 从 Skills Hub 安装
-magic skills hub install <name>
-
-# 渐进式加载
-magic skills view <name> --level 0  # 仅列表
-magic skills view <name> --level 1  # 完整内容
-magic skills view <name> --level 2  # 含引用
-```
+| **文件操作** | read_file、write_file、file_edit、list_files、search_in_files |
+| **命令执行** | execute_command、terminal、process |
+| **代码执行** | execute_code（Python / Node.js） |
+| **Web** | web_search、web_extract |
+| **浏览器** | browser_navigate、browser_snapshot、browser_click、browser_type |
+| **记忆** | memory_store、memory_recall |
+| **技能** | skill_list、skill_view、skill_manage |
+| **MCP** | mcp_*（来自已连接的 MCP 服务器） |
 
 ## 消息网关
+
+支持将 Agent 接入多个消息平台：
 
 ```bash
 # 设置网关
@@ -205,65 +174,58 @@ magic gateway config telegram --token <token>
 magic gateway config discord --bot-token <token>
 ```
 
-## 环境变量
+支持平台：Telegram、Discord、Slack、WhatsApp、WeChat、WeCom 等。
 
-| 变量 | 描述 |
-|------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 |
-| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token |
-| `DISCORD_BOT_TOKEN` | Discord Bot Token |
-| `GO_MAGIC_HOME` | 配置目录 (默认: ~/.magic) |
-| `GO_MAGIC_PROFILE` | Profile 名称 (默认: default) |
+## 多平台编译
 
-## 构建
+### GitHub Actions
 
-### 要求
+项目已配置 GitHub Actions，推送 Tag 时自动编译并发布多平台二进制文件。
+
+### 手动编译
+
+**要求：**
 - Go 1.21+
-- Node.js 18+ (用于 web 仪表板)
+- Node.js 18+（用于 Web Dashboard）
 
-### 构建当前平台
+**构建当前平台：**
 
 ```bash
-# Linux/macOS
 ./scripts/build.sh
-
-# Windows
-.\scripts\windows\build.ps1
 ```
 
-### 开发构建
+**构建所有平台：**
 
 ```bash
-# 先构建 web 资源
+./scripts/build.sh all
+```
+
+**开发构建：**
+
+```bash
+# 构建 Web 资源
 cd web && npm install && npm run build && cd ..
 
-# 复制 web 资源用于嵌入
+# 复制 Web 资源用于嵌入
 cp -r web/dist internal/server/dist
 
 # 构建 Go 二进制
 go build -o magic ./cmd/magic
 ```
 
-### 跨平台构建
+**构建指定目标：**
 
 ```bash
-# 构建所有平台（包含 web 嵌入）
-./scripts/build.sh all
-
-# 构建指定目标
 ./scripts/build.sh go      # 仅构建 Go 二进制
-./scripts/build.sh web     # 仅构建 web 应用
+./scripts/build.sh web     # 仅构建 Web 应用
 ./scripts/build.sh docker  # 构建 Docker 镜像
 ```
 
-### 构建输出
+## 下载
 
-构建脚本会自动执行：
-1. 构建 React web 仪表板
-2. 将 web 资源复制到 `internal/server/dist` 用于嵌入
-3. 编译包含嵌入式前端的 Go 二进制
-4. 创建平台特定的包
+从 [GitHub Releases](https://github.com/magicwubiao/go-magic/releases) 下载最新版本。
+
+支持平台：Linux（amd64/arm64）、macOS（amd64/arm64）、Windows（amd64）、FreeBSD（amd64）。
 
 ## 贡献
 
@@ -272,4 +234,3 @@ go build -o magic ./cmd/magic
 ## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE)。
-

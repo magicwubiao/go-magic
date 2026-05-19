@@ -22,6 +22,8 @@ type Config struct {
 	Agent           AgentConfig            `json:"agent"`
 	Memory          MemoryConfig           `json:"memory"`
 	Kanban          KanbanConfig           `json:"kanban"`
+	Notification    NotificationConfig     `json:"notification"`     // Email and SMS notification configuration
+	ImageGen        ImageGenConfig         `json:"image_gen"`        // Image generation configuration
 	SecretRedaction bool                   `json:"secret_redaction"` // Secret redaction (API keys, tokens, etc.)
 	CortexEnabled   bool                   `json:"cortex_enabled"`   // Enable Cortex Agent six-system integration
 	WorkingDir      string                 `json:"working_dir"`      // Working directory for file operations
@@ -85,12 +87,73 @@ type MemoryConfig struct {
 
 // KanbanConfig represents kanban board configuration
 type KanbanConfig struct {
-	Enabled               bool          `json:"enabled"`
-	DBPath                string        `json:"db_path"`                        // Default: ~/.magic/kanban.db
-	DispatcherTick        time.Duration `json:"dispatcher_tick"`                // Default: 60s
-	MaxRetries            int           `json:"max_retries"`                   // Default: 3
-	MaxConsecutiveFailures int          `json:"max_consecutive_failures"`       // Default: 5
-	DefaultMaxRuntime     int           `json:"default_max_runtime"`           // Default: 3600s (1 hour)
+	Enabled                bool          `json:"enabled"`
+	DBPath                 string        `json:"db_path"`                  // Default: ~/.magic/kanban.db
+	DispatcherTick         time.Duration `json:"dispatcher_tick"`          // Default: 60s
+	MaxRetries             int           `json:"max_retries"`              // Default: 3
+	MaxConsecutiveFailures int           `json:"max_consecutive_failures"` // Default: 5
+	DefaultMaxRuntime      int           `json:"default_max_runtime"`      // Default: 3600s (1 hour)
+}
+
+// EmailConfig represents email (SMTP) configuration
+type EmailConfig struct {
+	SMTPHost     string `json:"smtp_host"`     // SMTP server host
+	SMTPPort     int    `json:"smtp_port"`     // SMTP server port
+	Username     string `json:"username"`      // SMTP username
+	Password     string `json:"password"`      // SMTP password or app-specific password
+	From         string `json:"from"`          // From email address
+	FromName     string `json:"from_name"`     // From name
+	UseTLS       bool   `json:"use_tls"`       // Use TLS
+	UseStartTLS  bool   `json:"use_starttls"`  // Use STARTTLS
+	InsecureSkip bool   `json:"insecure_skip"` // Skip TLS certificate verification
+}
+
+// TwilioConfig represents Twilio SMS configuration
+type TwilioConfig struct {
+	AccountSID string `json:"account_sid"` // Twilio Account SID
+	AuthToken  string `json:"auth_token"`  // Twilio Auth Token
+	FromNumber string `json:"from_number"` // Twilio phone number
+}
+
+// AliyunSMSConfig represents Aliyun SMS configuration
+type AliyunSMSConfig struct {
+	AccessKeyID     string `json:"access_key_id"`     // Aliyun AccessKey ID
+	AccessKeySecret string `json:"access_key_secret"` // Aliyun AccessKey Secret
+	SignName        string `json:"sign_name"`         // SMS signature name
+	Endpoint        string `json:"endpoint"`          // API endpoint (optional)
+}
+
+// TencentSMSConfig represents Tencent Cloud SMS configuration
+type TencentSMSConfig struct {
+	SecretID  string `json:"secret_id"`  // Tencent Secret ID
+	SecretKey string `json:"secret_key"` // Tencent Secret Key
+	SDKAppID  string `json:"sdk_app_id"` // SMS SDK App ID
+	SignName  string `json:"sign_name"`  // SMS signature name
+	Endpoint  string `json:"endpoint"`   // API endpoint (optional)
+}
+
+// SMSConfig represents SMS service configuration
+type SMSConfig struct {
+	Provider string          `json:"provider"` // Provider: twilio, aliyun, tencent
+	Twilio   TwilioConfig    `json:"twilio"`
+	Aliyun   AliyunSMSConfig `json:"aliyun"`
+	Tencent  TencentSMSConfig `json:"tencent"`
+}
+
+// NotificationConfig represents notification service configuration
+type NotificationConfig struct {
+	Email EmailConfig `json:"email"`
+	SMS   SMSConfig   `json:"sms"`
+}
+
+// ImageGenConfig represents image generation configuration
+type ImageGenConfig struct {
+	Provider        string `json:"provider"`          // Provider: dall-e, stable-diffusion, midjourney, together
+	APIKey          string `json:"api_key"`           // API key for the provider
+	BaseURL         string `json:"base_url"`          // Custom base URL (optional)
+	DefaultSize     string `json:"default_size"`      // Default image size
+	DefaultStyle    string `json:"default_style"`     // Default art style
+	OutputDirectory string `json:"output_directory"`  // Output directory for generated images
 }
 
 // Load loads configuration from a file with environment variable overrides

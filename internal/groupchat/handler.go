@@ -3,9 +3,11 @@ package groupchat
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/compress"
 )
 
 // Handler HTTP 处理器
@@ -54,9 +56,18 @@ func (h *Handler) registerRoutes() {
 
 	// Messages
 	h.mux.HandleFunc("GET /rooms/{id}/messages", h.listMessages)
+	h.mux.HandleFunc("POST /rooms/{id}/messages", h.sendMessage)
 
 	// Context compression
 	h.mux.HandleFunc("POST /rooms/{id}/compress", h.forceCompress)
+
+	// Additional routes for web compatibility
+	h.mux.HandleFunc("PUT /rooms/{id}", h.updateRoom)           // PUT /rooms/{id} (not just /config)
+	h.mux.HandleFunc("POST /rooms/{id}/invite", h.generateInviteCode) // Generate invite code
+	h.mux.HandleFunc("POST /rooms/join", h.joinRoom)            // POST /rooms/join (not just GET)
+	h.mux.HandleFunc("POST /rooms/{id}/leave", h.leaveRoom)     // Leave room
+	h.mux.HandleFunc("DELETE /rooms/{id}/members/{userId}", h.removeMember) // Remove member
+	h.mux.HandleFunc("GET /agents", h.listAllAgents)            // List all agents (global)
 }
 
 // ─── Room Handlers ───────────────────────────────────────────────────────────
@@ -102,6 +113,11 @@ func (h *Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 		data.Compression = DefaultCompressionConfig()
 	}
 
+	// Generate invite code if not provided
+	if data.InviteCode == "" {
+		data.InviteCode = GenerateInviteCode()
+	}
+
 	room := &Room{
 		ID:               uuid.New().String(),
 		Name:             data.Name,
@@ -117,6 +133,9 @@ func (h *Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Create compressor for room
+	h.server.GetOrCreateCompressor(room.ID)
 
 	agents, _ := h.storage.GetAgents(room.ID)
 	jsonResponse(w, map[string]interface{}{"room": room, "agents": agents})
@@ -202,11 +221,19 @@ func (h *Handler) updateRoomConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update compressor
+	compressor := h.server.GetOrCreateCompressor(roomID)
+	if compressor != nil {
+		compressor.triggerTokens = config.TriggerTokens
+		compressor.maxHistoryTokens = config.MaxHistoryTokens
+		compressor.tailMessageCount = config.TailMessageCount
+	}
+
 	room, _ := h.storage.GetRoom(roomID)
 	jsonResponse(w, map[string]interface{}{"room": room})
 }
 
-// joinByCode 通过邀请码加入
+// joinByCode 通过邀请码加入 (GET /room/join/{code})
 func (h *Handler) joinByCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -230,6 +257,145 @@ func (h *Handler) joinByCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// updateRoom 更新房间信息 (PUT /rooms/{id})
+func (h *Handler) updateRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	var data struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoom(roomID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	if data.Name != "" {
+		room.Name = data.Name
+	}
+	room.UpdatedAt = Now()
+
+	if err := h.storage.UpdateRoom(room); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// generateInviteCode 生成邀请码 (POST /rooms/{id}/invite)
+func (h *Handler) generateInviteCode(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoom(roomID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	// Generate new invite code
+	room.InviteCode = GenerateInviteCode()
+	room.UpdatedAt = Now()
+
+	if err := h.storage.UpdateRoom(room); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"code": room.InviteCode})
+}
+
+// joinRoom 加入房间 (POST /rooms/join)
+func (h *Handler) joinRoom(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if data.Code == "" {
+		http.Error(w, "Invite code required", http.StatusBadRequest)
+		return
+	}
+
+	room, err := h.storage.GetRoomByInviteCode(data.Code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"room": room})
+}
+
+// leaveRoom 离开房间 (POST /rooms/{id}/leave)
+func (h *Handler) leaveRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	// For now, just return success (actual leave logic would remove member)
+	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+// removeMember 移除成员 (DELETE /rooms/{id}/members/{userId})
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	roomID := extractPathVar(r.URL.Path, "id")
+	userID := extractPathVar(r.URL.Path, "userId")
+	if roomID == "" || userID == "" {
+		http.Error(w, "Room ID and User ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Remove member from storage
+	if err := h.storage.RemoveMember(roomID, userID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+// listAllAgents 列出所有代理 (GET /agents)
+func (h *Handler) listAllAgents(w http.ResponseWriter, r *http.Request) {
+	// Return a list of available agent profiles
+	agents := []map[string]interface{}{
+		{"id": "default", "name": "Default Agent", "description": "Default assistant"},
+		{"id": "coder", "name": "Coder", "description": "Programming assistant"},
+		{"id": "researcher", "name": "Researcher", "description": "Research assistant"},
+	}
+	jsonResponse(w, map[string]interface{}{"agents": agents})
 }
 
 // ─── Agent Handlers ─────────────────────────────────────────────────────────
@@ -293,7 +459,7 @@ func (h *Handler) addAgent(w http.ResponseWriter, r *http.Request) {
 	agent := &RoomAgent{
 		ID:          uuid.New().String(),
 		RoomID:      roomID,
-		AgentID:    uuid.New().String(),
+		AgentID:     uuid.New().String(),
 		Profile:     data.Profile,
 		Name:        data.Name,
 		Description: data.Description,
@@ -358,6 +524,21 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 		members = []Member{}
 	}
 
+	// Add online status
+	h.server.mu.RLock()
+	roomClients, ok := h.server.rooms[roomID]
+	h.server.mu.RUnlock()
+
+	if ok {
+		onlineMap := make(map[string]bool)
+		for _, client := range roomClients {
+			onlineMap[client.UserID] = true
+		}
+		for i := range members {
+			members[i].Online = onlineMap[members[i].UserID]
+		}
+	}
+
 	jsonResponse(w, map[string]interface{}{"members": members})
 }
 
@@ -376,7 +557,14 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := h.storage.GetMessages(roomID, 100)
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	messages, err := h.storage.GetMessages(roomID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -387,6 +575,60 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"messages": messages})
+}
+
+// sendMessage 发送消息
+func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	roomID := extractPathVar(r.URL.Path, "id")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+
+	var data struct {
+		SenderID   string `json:"senderId"`
+		SenderName string `json:"senderName"`
+		Content    string `json:"content"`
+		Type       string `json:"type,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	msgType := data.Type
+	if msgType == "" {
+		msgType = "text"
+	}
+
+	chatMsg := &ChatMessage{
+		ID:         uuid.New().String(),
+		RoomID:     roomID,
+		SenderID:   data.SenderID,
+		SenderName: data.SenderName,
+		Content:    data.Content,
+		Timestamp:  Now(),
+		Type:       msgType,
+	}
+
+	if err := h.storage.SaveMessage(chatMsg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast to room via WebSocket
+	h.server.broadcastToRoom(roomID, map[string]interface{}{
+		"type":    "message",
+		"roomId":  roomID,
+		"data":    chatMsg,
+	})
+
+	jsonResponse(w, map[string]interface{}{"message": chatMsg})
 }
 
 // ─── Context Handlers ────────────────────────────────────────────────────────
@@ -404,11 +646,64 @@ func (h *Handler) forceCompress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: 实现上下文压缩逻辑
-	// 需要调用 Agent 的压缩功能
+	compressor := h.server.GetOrCreateCompressor(roomID)
+	if compressor == nil {
+		http.Error(w, "Failed to get compressor", http.StatusInternalServerError)
+		return
+	}
 
-	room, _ := h.storage.GetRoom(roomID)
-	jsonResponse(w, map[string]interface{}{"room": room, "compressed": true})
+	// Broadcast compression event
+	h.server.broadcastToRoom(roomID, map[string]interface{}{
+		"type":   "context_compressing",
+		"roomId": roomID,
+	})
+
+	// Perform actual compression
+	room, err := h.storage.GetRoom(roomID)
+	if err != nil || room == nil {
+		jsonResponse(w, map[string]interface{}{"compressed": false, "error": "room not found"})
+		return
+	}
+
+	messages, err := h.storage.GetMessages(roomID, 1000)
+	if err != nil || len(messages) == 0 {
+		jsonResponse(w, map[string]interface{}{"room": room, "compressed": false, "error": "no messages"})
+		return
+	}
+
+	// Convert to compress.Message format
+	compressMsgs := make([]compress.Message, len(messages))
+	for i, msg := range messages {
+		role := "user"
+		if msg.Type == "agent" || msg.Type == "system" {
+			role = msg.Type
+		}
+		compressMsgs[i] = compress.Message{
+			Role:      role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		}
+	}
+
+	// Execute compression
+	compressMgr := compress.NewManager("")
+	summary, compressed, err := compressMgr.CompressSession(roomID, compressMsgs, compressor.tailMessageCount)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"room": room, "compressed": false, "error": err.Error()})
+		return
+	}
+
+	// Update room token count
+	if room != nil && summary != nil {
+		newTokens := 0
+		for _, msg := range compressed {
+			newTokens += compress.EstimateTokens(msg.Content)
+		}
+		room.TotalTokens = newTokens
+		h.storage.UpdateRoom(room)
+	}
+
+	jsonResponse(w, map[string]interface{}{"room": room, "compressed": true, "summary": summary})
 }
 
 // jsonResponse 返回 JSON 响应

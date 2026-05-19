@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultNudgeThreshold is the number of turns between nudges
-// Hermes Agent uses 15 turns as the default
+// Agent uses 15 turns as the default
 const DefaultNudgeThreshold = 15
 
 // MessageTrigger handles the six-system's first two components:

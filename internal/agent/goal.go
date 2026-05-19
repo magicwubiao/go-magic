@@ -45,6 +45,7 @@ type GoalManager struct {
 	provider provider.Provider
 	maxTurns int
 	dataDir  string
+	subGoals []*SubGoal // additional success criteria
 }
 
 // NewGoalManager creates a new GoalManager

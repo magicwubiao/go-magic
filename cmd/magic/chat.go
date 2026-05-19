@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -10,12 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/google/uuid"
-	"github.com/magicwubiao/go-magic/internal/agent"
-	"github.com/magicwubiao/go-magic/internal/cortex"
-	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
-	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
@@ -23,7 +17,7 @@ import (
 var chatCmd = &cobra.Command{
 	Use:   "chat",
 	Short: "Start interactive chat with Magic Agent",
-	Long:  "Start an interactive chat session with Magic Agent.\nFeatures: streaming output, slash commands, skills loading, session persistence.\nType /help to see available commands.",
+	Long:  "Start an interactive TUI chat session with Magic Agent.\nFeatures: streaming output, slash commands, skills loading, session persistence.\nType /help in the chat to see available commands.",
 	RunE:  runChat,
 }
 
@@ -31,8 +25,6 @@ func init() {
 	rootCmd.AddCommand(chatCmd)
 	chatCmd.Flags().BoolP("stream", "s", true, "Enable streaming output")
 	chatCmd.Flags().BoolP("no-stream", "n", false, "Disable streaming output")
-	chatCmd.Flags().BoolP("legacy", "l", false, "Use legacy REPL mode")
-	chatCmd.Flags().BoolP("tui", "t", true, "Use TUI (terminal UI) mode")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -41,7 +33,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 		fmt.Println("Welcome to magic! It looks like this is your first run.")
 		fmt.Println("Let's set things up...")
 		runSetup(nil, nil)
-		// Reload config after setup
 		cfg, err = config.Load()
 		if err != nil {
 			return fmt.Errorf("failed to load config after setup: %v", err)
@@ -52,61 +43,10 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	provCfg, ok := cfg.Providers[cfg.Provider]
-	if !ok {
-		return fmt.Errorf("provider %s not configured", cfg.Provider)
-	}
-
-	var prov provider.Provider
-	switch cfg.Provider {
-	case "openai":
-		prov = provider.NewOpenAIProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "anthropic":
-		prov = provider.NewAnthropicProvider(provCfg.APIKey, provCfg.Model)
-	case "deepseek":
-		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.Model)
-	case "huoshan":
-		prov = provider.NewHuoshanProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "dashscope":
-		prov = provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "kimi":
-		prov = provider.NewKimiProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "minimax":
-		prov = provider.NewMiniMaxProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "ollama":
-		prov = provider.NewOllamaProvider(provCfg.APIKey, provCfg.Model)
-	case "openrouter":
-		prov = provider.NewOpenRouterProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "vllm":
-		prov = provider.NewVLLMProvider(provCfg.APIKey, provCfg.Model)
-	case "zhipu":
-		prov = provider.NewZhipuProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "gemini":
-		prov = provider.NewGeminiProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "groq":
-		prov = provider.NewGroqProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "together":
-		prov = provider.NewTogetherProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "mistral":
-		prov = provider.NewMistralProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "cohere":
-		prov = provider.NewCohereProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "perplexity":
-		prov = provider.NewPerplexityProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "doubao":
-		prov = provider.NewDoubaoProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "wenxin":
-		prov = provider.NewWenxinProvider(provCfg.APIKey, provCfg.APIKey, provCfg.Model)
-	case "moonshot":
-		prov = provider.NewMoonshotProvider(provCfg.APIKey, provCfg.Model)
-	case "mimo":
-		prov = provider.NewMiMoProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "hunyuan":
-		prov = provider.NewHunyuanProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	case "custom":
-		prov = provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, provCfg.Model)
-	default:
-		return fmt.Errorf("unknown provider: %s", cfg.Provider)
+	// Use unified provider creation
+	prov, err := config.CreateProvider(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create provider: %v", err)
 	}
 
 	// Initialize tool registry with auto-registration
@@ -127,312 +67,22 @@ func runChat(cmd *cobra.Command, args []string) error {
 		defer store.Close()
 	}
 
-	// Check for legacy mode
-	useLegacy, _ := cmd.Flags().GetBool("legacy")
-	if useLegacy {
-		return runLegacyChat(cmd, ctx, cfg, prov, registry, store)
-	}
-
-	// Run new REPL
-	runREPLChat(ctx, cfg, prov, registry, store)
-	return nil
-}
-
-// runREPLChat runs the enhanced REPL
-func runREPLChat(ctx context.Context, cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store) {
-	repl := NewREPL(cfg, prov, registry, store)
-	repl.Run()
-}
-
-// runLegacyChat runs the original legacy chat mode
-func runLegacyChat(cmd *cobra.Command, ctx context.Context, cfg *config.Config, prov provider.Provider, registry *tool.Registry, store *session.Store) error {
-	// Generate tools schema for provider
-	toolsSchema := getToolsSchema(registry)
-
-	// Initialize agent with optional cortex
-	home, _ := os.UserHomeDir()
-	var cortexMgr *cortex.Manager
-	var agentOpts []agent.AgentOption
-	if cfg.CortexEnabled {
-		cortexMgr = cortex.NewManager(filepath.Join(home, ".magic", "cortex"))
-		cortexMgr.Start()
-		agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
-	}
-	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, `You are Magic, a helpful AI assistant.
-
-RULES:
-- Small talk/greetings (hello/hi) → Respond directly, do not call tools
-- Knowledge Q&A → Respond directly
-- List/view/read files → Call list_files or read_file
-- Create/write files → Call write_file
-- Web search → Call web_search
-- Execute command/code → Call execute_command
-- Do not call time, system, math, memory_recall, todo, session_search unless explicitly requested
-- Respond in the user's language
-- Summarize file lists concisely, do not output raw JSON`, agentOpts...)
-
-	// Note: cortex memory is NOT injected into system prompt here.
-	// Memory injection is controlled by memoryEnabled flag and handled
-	// inside RunWithCortex when appropriate. Injecting raw memory
-	// context pollutes the prompt and confuses the model.
-
-	// Load skills if available (compact list only, not full content)
-	if mgr, err := skills.NewManager(); err == nil {
-		if skillsList := mgr.GetSkillsList(); skillsList != "" {
-			aiAgent.AddSkillsContext(skillsList)
-			fmt.Println("Skills loaded.")
-		}
-	}
-
-	// Generate session ID
-	sessionID := uuid.New().String()
-	aiAgent.SetSession(sessionID)
-
-	// Check streaming flag
+	// Pass streaming flags to TUI
 	noStream, _ := cmd.Flags().GetBool("no-stream")
 	enableStream, _ := cmd.Flags().GetBool("stream")
-	streamingEnabled := enableStream && !noStream
 
-	// State for undo/retry
-	var historyBeforeUndo []provider.Message
-	var lastUserInput string
-
-	fmt.Printf("Magic Agent v%s\n", Version)
-	logInfo("Magic Agent v%s started | Provider: %s | Model: %s | Tools: %d", Version, cfg.Provider, cfg.Model, len(toolsSchema))
-	fmt.Printf("Provider: %s | Model: %s\n", cfg.Provider, cfg.Model)
-	fmt.Printf("Streaming: %s | Commands: /help\n\n", map[bool]string{true: "ON", false: "OFF"}[streamingEnabled])
-
-	for {
-		fmt.Print("> ")
-		var input string
-
-		// Read input
-		line, err := readLineMultiLine()
-		if err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			fmt.Printf("Error reading input: %v\n", err)
-			continue
-		}
-		input = line
-
-		// Process slash commands
-		if strings.HasPrefix(input, "/") {
-			cmdName, cmdArgs := parseSlashCommand(input)
-
-			switch cmdName {
-			case "help", "?":
-				showHelp()
-				continue
-			case "exit", "quit", "q":
-				// Save session before exit
-				if store != nil {
-					sess := &session.Session{
-						ID:       sessionID,
-						Profile:  cfg.Profile,
-						Platform: "cli",
-						Messages: aiAgent.GetHistory(),
-					}
-					store.SaveSession(ctx, sess)
-				}
-				fmt.Println("Goodbye!")
-				return nil
-			case "new", "reset":
-				// Save current session before reset
-				if store != nil {
-					sess := &session.Session{
-						ID:       sessionID,
-						Profile:  cfg.Profile,
-						Platform: "cli",
-						Messages: aiAgent.GetHistory(),
-					}
-					store.SaveSession(ctx, sess)
-				}
-
-				aiAgent.Reset()
-				sessionID = uuid.New().String()
-				aiAgent.SetSession(sessionID)
-				lastUserInput = ""
-				historyBeforeUndo = nil
-
-				// Reload skills (compact list)
-				if mgr, err := skills.NewManager(); err == nil {
-					if skillsList := mgr.GetSkillsList(); skillsList != "" {
-						aiAgent.AddSkillsContext(skillsList)
-					}
-				}
-				fmt.Println("New conversation started.")
-				continue
-			case "tools":
-				fmt.Println("Available tools:")
-				for _, tName := range registry.List() {
-					t, err := registry.Get(tName)
-					if err != nil {
-						fmt.Printf("  - %s (error: %v)\n", tName, err)
-						continue
-					}
-					fmt.Printf("  - %s: %s\n", t.Name(), t.Description())
-				}
-				fmt.Println()
-				continue
-			case "skills":
-				showSkills()
-				continue
-			case "compress":
-				aiAgent.EnableCompression(true)
-				fmt.Println("History compression triggered.")
-				continue
-			case "usage":
-				showUsage(aiAgent)
-				continue
-			case "undo":
-				if len(historyBeforeUndo) > 0 {
-					aiAgent.SetHistory(historyBeforeUndo)
-					historyBeforeUndo = nil
-					fmt.Println("Undone. Last response removed.")
-				} else {
-					fmt.Println("Nothing to undo.")
-				}
-				continue
-			case "retry":
-				if lastUserInput != "" {
-					historyBeforeUndo = aiAgent.GetHistory()
-					// Remove last assistant and tool messages
-					history := historyBeforeUndo
-					for len(history) > 0 && history[len(history)-1].Role != "user" {
-						history = history[:len(history)-1]
-					}
-					aiAgent.SetHistory(history)
-				} else {
-					fmt.Println("No message to retry.")
-				}
-				continue
-			case "stream":
-				streamingEnabled = !streamingEnabled
-				fmt.Printf("Streaming %s.\n", map[bool]string{true: "enabled", false: "disabled"}[streamingEnabled])
-				continue
-			case "clear":
-				aiAgent.Reset()
-				historyBeforeUndo = nil
-				lastUserInput = ""
-				fmt.Println("Conversation cleared.")
-				continue
-			case "history":
-				showHistory(aiAgent)
-				continue
-			case "model":
-				if cmdArgs != "" {
-					// Change model
-					newModel := strings.TrimSpace(cmdArgs)
-					if newModel == "" {
-						fmt.Println("Please specify a model name.")
-						fmt.Printf("Current model: %s\n", cfg.Model)
-						continue
-					}
-
-					// Update config
-					cfg.Model = newModel
-					if err := cfg.Save(); err != nil {
-						fmt.Printf("Failed to save config: %v\n", err)
-					} else {
-						fmt.Printf("Model changed to: %s\n", newModel)
-						fmt.Println("Note: Restart the chat to apply the new model.")
-					}
-				} else {
-					fmt.Printf("Current model: %s\n", cfg.Model)
-					fmt.Println("Usage: /model <model-name>")
-				}
-				continue
-			case "stop":
-				fmt.Println("Stop not supported in legacy mode.")
-				continue
-			case "save":
-				fmt.Println("Save not supported in legacy mode. Use /new to start fresh.")
-				continue
-			case "load":
-				fmt.Println("Load not supported in legacy mode.")
-				continue
-			default:
-				fmt.Printf("Unknown command: %s\n", cmdName)
-				fmt.Println("Type /help for available commands.")
-				continue
-			}
-		}
-
-		if input == "" {
-			continue
-		}
-
-		lastUserInput = input
-		historyBeforeUndo = aiAgent.GetHistory()
-
-		logInfo("User input: %s", truncateLogMsg(input, 200))
-
-		// Run conversation with or without streaming
-		if streamingEnabled {
-			fmt.Print("\n") // Move to new line for output
-			err := aiAgent.RunConversationStream(ctx, input, func(content string, done bool) {
-				if done {
-					fmt.Println()
-				} else {
-					fmt.Print(content)
-				}
-			})
-			if err != nil {
-				fmt.Printf("\nError: %v\n\n", err)
-				logError("Stream error: %v", err)
-			} else {
-				logInfo("Stream completed, history: %d messages", len(aiAgent.GetHistory()))
-			}
-		} else {
-			fmt.Print("Thinking...")
-			response, err := aiAgent.RunConversation(ctx, input)
-			fmt.Print("\r          \r")
-
-			if err != nil {
-				fmt.Printf("Error: %v\n\n", err)
-				logError("Chat error: %v", err)
-				continue
-			}
-
-			logInfo("Chat completed, response: %s", truncateLogMsg(response, 200))
-
-			fmt.Printf("%s\n\n", response)
-		}
-
-		// Auto-save session after each exchange
-		if store != nil {
-			sess := &session.Session{
-				ID:       sessionID,
-				Profile:  cfg.Profile,
-				Platform: "cli",
-				Messages: aiAgent.GetHistory(),
-			}
-			store.SaveSession(ctx, sess)
-		}
-	}
-	return nil
-}
-
-// readLineMultiLine reads input from stdin
-func readLineMultiLine() (string, error) {
-	reader := bufio.NewReaderSize(os.Stdin, 4096)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return RunTUIWithOptions(ctx, cfg, prov, registry, store, enableStream && !noStream)
 }
 
 // parseSlashCommand parses a slash command into name and arguments
 func parseSlashCommand(input string) (string, string) {
 	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "/") {
+	if len(input) > 0 && input[0] == '/' {
+		input = input[1:]
+	} else {
 		return "", ""
 	}
 
-	input = input[1:] // Remove leading /
 	parts := strings.SplitN(input, " ", 2)
 
 	cmdName := strings.ToLower(parts[0])
@@ -442,75 +92,6 @@ func parseSlashCommand(input string) (string, string) {
 	}
 
 	return cmdName, cmdArgs
-}
-
-// showHelp displays help information
-func showHelp() {
-	fmt.Println("\n=== Magic Agent Commands ===")
-	fmt.Println()
-	fmt.Println("  /new, /reset  - Start a new conversation")
-	fmt.Println("  /model        - Show current model")
-	fmt.Println("  /compress     - Manually compress context")
-	fmt.Println("  /usage        - Show token usage statistics")
-	fmt.Println("  /skills       - List available skills")
-	fmt.Println("  /tools        - List available tools")
-	fmt.Println("  /undo         - Undo last assistant response")
-	fmt.Println("  /retry        - Retry last user message")
-	fmt.Println("  /stream       - Toggle streaming mode")
-	fmt.Println("  /clear        - Clear conversation history")
-	fmt.Println("  /history      - Show conversation history")
-	fmt.Println("  /help         - Show this help message")
-	fmt.Println("  /exit         - Exit the chat")
-	fmt.Println()
-}
-
-// showSkills lists available skills
-func showSkills() {
-	fmt.Println("\n=== Available Skills ===")
-
-	// Load and display skills
-	if mgr, err := skills.NewManager(); err == nil {
-		skillList := mgr.ListSkills()
-		if len(skillList) == 0 {
-			fmt.Println("  No skills installed.")
-		} else {
-			for _, skill := range skillList {
-				fmt.Printf("  - %s\n", skill)
-			}
-		}
-	} else {
-		fmt.Println("  Skills manager not available.")
-	}
-	fmt.Println()
-}
-
-// showUsage displays usage statistics
-func showUsage(a *agent.Agent) {
-	historyLen := a.GetHistoryLength()
-	fmt.Printf("\n=== Usage Statistics ===\n")
-	fmt.Printf("  History length: %d chars\n", historyLen)
-	fmt.Printf("  History messages: %d\n", len(a.GetHistory()))
-	fmt.Println()
-}
-
-// showHistory displays conversation history
-func showHistory(a *agent.Agent) {
-	fmt.Println("\n=== Conversation History ===")
-	history := a.GetHistory()
-	for i, msg := range history {
-		role := msg.Role
-		if role == "system" {
-			role = "[System]"
-		}
-		content := msg.Content
-		if len(content) > 100 {
-			content = content[:100] + "..."
-		}
-		if content != "" {
-			fmt.Printf("[%d] %s: %s\n", i, role, content)
-		}
-	}
-	fmt.Println()
 }
 
 // getToolsSchema generates a tools schema from the registry
@@ -540,4 +121,202 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 		})
 	}
 	return tools
+}
+
+// buildSystemPrompt builds the system prompt for the agent
+func buildSystemPrompt(cfg *config.Config, codingMode bool) string {
+	if codingMode {
+		return buildCodingSystemPrompt(cfg)
+	}
+
+	prompt := `You are Magic, a powerful AI coding assistant.
+
+CORE PRINCIPLES:
+- You are an expert programmer with deep knowledge of all programming languages, frameworks, and tools
+- Always respond in the user's language
+- Be concise and actionable - provide working code, not just explanations
+- When writing code, follow best practices and include error handling
+- Never claim to be Claude, GPT, Gemini, or any other third-party AI model. You are Magic.
+
+TOOL USAGE RULES:
+- Small talk/greetings (hello/hi) -> Respond directly, no tool calls
+- Knowledge Q&A -> Respond directly
+- List/view/read files -> Call list_files or read_file
+- Create/write/edit files -> Call write_file or edit_file
+- Web search -> Call web_search
+- Execute commands/code -> Call execute_command
+- Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+
+CODING WORKFLOW:
+1. Understand the requirements before writing code
+2. Plan the approach for complex tasks
+3. Write clean, well-documented code
+4. Verify the solution works
+5. Explain key decisions and trade-offs
+
+OUTPUT FORMAT:
+- Use markdown for code blocks with language specification
+- Keep responses focused and practical
+- For errors, explain the cause and provide a fix`
+
+	if cfg.CortexEnabled {
+		prompt += "\n\nMEMORY: You have access to persistent memory via the cortex system. Use it to remember important context across sessions."
+	}
+
+	return prompt
+}
+
+// buildCodingSystemPrompt builds the system prompt for coding mode
+func buildCodingSystemPrompt(cfg *config.Config) string {
+	prompt := `You are Magic, an expert coding agent in CODING MODE. You have elevated permissions and should act proactively.
+
+CORE PRINCIPLES:
+- You are an expert programmer with deep knowledge of all programming languages, frameworks, and tools
+- Always respond in the user's language
+- Be proactive - execute actions directly rather than asking for permission
+- When writing code, follow best practices and include error handling
+- Prefer writing and running code over explaining theory
+- Never claim to be Claude, GPT, Gemini, or any other third-party AI model. You are Magic.
+
+CODING MODE ADVANTAGES:
+- You can freely execute shell commands (git, docker, make, etc.)
+- You can run Python, Node.js, Go, Rust, Java, C/C++ and other code directly
+- You can create, modify, and delete files as needed
+- You can install packages and manage dependencies (pip, npm, go mod, cargo, maven, gradle)
+- You have extended timeouts (up to 10 minutes) for long-running operations
+- You can use shell pipes, chains (&&, ||, ;), and command substitution
+- You do NOT need to ask for permission before executing commands
+- You can run multiple commands in sequence to accomplish complex tasks
+
+TOOL USAGE RULES:
+- Small talk/greetings (hello/hi) -> Respond directly, no tool calls
+- Knowledge Q&A -> Respond directly
+- List/view/read files -> Call list_files or read_file
+- Create/write/edit files -> Call write_file or file_edit
+- Batch file operations -> Call batch_file_ops (read/write/delete multiple files at once)
+- Web search -> Call web_search
+- Execute commands/code -> Call execute_command or execute_code
+- Generate .gitignore -> Call gitignore
+- Lint code -> Call lint
+- Analyze errors -> Call analyze_error
+- Suggest fixes -> Call suggest_fix
+- Show file diffs -> Call diff_patch (show_diff, apply_patch, show_changes)
+- Analyze project -> Call project_analyze (structure, dependencies, complexity, entry points)
+- Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+
+IMPORTANT BEHAVIORS:
+1. ALWAYS show tool execution results to the user — never silently consume tool output
+2. When a tool returns output, display a summary of the key results to the user
+3. After writing code, ALWAYS run it to verify it works (unless the user says not to)
+4. After running code, show the output and explain any errors
+5. When you encounter an error, try to fix it automatically and re-run (up to 3 attempts)
+6. When modifying files, show a brief diff or summary of changes
+7. For multi-file changes, list all files modified
+8. Use batch_file_ops for multi-file operations to be more efficient
+9. Use project_analyze to understand the project structure before making changes
+10. Use diff_patch to review changes before applying them
+
+PROJECT UNDERSTANDING WORKFLOW:
+When starting work on a new project or unfamiliar codebase:
+1. Run project_analyze with action "generate_summary" to understand the full project
+2. Identify the project type, entry points, and key files
+3. Review dependencies and understand the tech stack
+4. Read relevant source files to understand the codebase architecture
+5. Then proceed with the actual task
+
+CODE MODIFICATION WORKFLOW:
+When modifying existing code:
+1. Read the target file(s) first to understand current implementation
+2. Use diff_patch show_diff to preview changes before applying
+3. Apply changes using file_edit or diff_patch apply_patch
+4. Run lint to check for issues
+5. Run tests to verify correctness
+6. If tests fail, analyze errors and fix iteratively
+
+AUTOMATIC CODE ANALYSIS:
+When analyzing code, always:
+1. Check for syntax errors and logical bugs
+2. Identify potential performance bottlenecks
+3. Look for security vulnerabilities (SQL injection, XSS, buffer overflow, etc.)
+4. Review code style and best practices
+5. Suggest refactoring opportunities
+6. Check for missing error handling
+7. Verify proper resource management (close files, release locks, etc.)
+8. Check for race conditions in concurrent code
+
+INTELLIGENT CODE COMPLETION:
+When providing code suggestions:
+1. Complete partial code with context-aware suggestions
+2. Follow the existing code style and patterns
+3. Include necessary imports/dependencies
+4. Add inline comments for complex logic
+5. Provide multiple alternatives when appropriate
+
+CODE REFACTORING GUIDELINES:
+When refactoring code:
+1. Preserve existing functionality — run tests before and after
+2. Improve readability and maintainability
+3. Reduce code duplication (DRY principle)
+4. Apply design patterns appropriately
+5. Optimize for performance when beneficial
+6. Add or improve error handling
+7. Keep changes small and focused — one logical change per step
+
+PERFORMANCE OPTIMIZATION:
+When optimizing code:
+1. Profile before optimizing — identify actual bottlenecks
+2. Focus on algorithmic improvements first (O(n²) → O(n log n))
+3. Consider memory usage and allocation patterns
+4. Use appropriate data structures
+5. Leverage concurrency when applicable
+6. Measure improvements with benchmarks
+
+DEBUGGING STRATEGY:
+When debugging errors:
+1. Read the error message carefully and identify the root cause
+2. Use analyze_error tool to parse stack traces
+3. Check recent code changes that might have caused the issue
+4. Add logging/print statements to narrow down the problem
+5. Fix the issue, run the code again, and verify the fix
+6. If the fix doesn't work, try a different approach (max 3 attempts)
+
+GIT WORKFLOW:
+When working with git:
+1. Check current branch and status before making changes
+2. Create a feature branch for new work
+3. Commit changes with clear, descriptive messages
+4. Use git diff to review changes before committing
+5. Run tests before pushing
+
+MULTI-LANGUAGE SUPPORT:
+- Python: Use pip for packages, virtualenv recommended
+- JavaScript/TypeScript: Use npm/yarn/pnpm, node_modules management
+- Go: Use go modules, proper package structure, go fmt
+- Rust: Use cargo, follow Rust idioms, clippy for linting
+- Java: Use Maven/Gradle, proper project structure
+- C/C++: Use CMake/Make, handle dependencies
+- Frontend: React/Vue/Svelte, CSS/SCSS/Tailwind, webpack/vite
+
+TESTING GUIDELINES:
+When writing tests:
+1. Write tests that cover edge cases and error conditions
+2. Use descriptive test names that explain the expected behavior
+3. Follow the Arrange-Act-Assert pattern
+4. Mock external dependencies
+5. Run tests after every code change
+6. Aim for high coverage but prioritize meaningful tests over raw numbers
+
+OUTPUT FORMAT:
+- Use markdown for code blocks with language specification
+- Keep responses focused and practical
+- For errors, explain the cause and provide a fix
+- Show command output when relevant
+- Include file paths for created/modified files
+- After tool calls, always summarize the results for the user`
+
+	if cfg.CortexEnabled {
+		prompt += "\n\nMEMORY: You have access to persistent memory via the cortex system. Use it to remember important context across sessions."
+	}
+
+	return prompt
 }

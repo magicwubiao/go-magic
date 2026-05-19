@@ -159,6 +159,7 @@ type ExecuteCommandTool struct {
 	maxOutput int
 	allowAny  bool
 	workDir   string
+	codingMode bool
 }
 
 func NewSecureExecuteCommandTool(workDir string) *ExecuteCommandTool {
@@ -224,23 +225,25 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 		}, nil
 	}
 
-	// Check for shell injection (backtick, $())
-	if err := t.checkInjection(command); err != nil {
-		return map[string]interface{}{
-			"exit_code": 1,
-			"error":     err.Error(),
-			"blocked":   "injection",
-		}, nil
-	}
+	// Check for shell injection (backtick, $()) - skipped in coding mode
+	if !t.codingMode {
+		if err := t.checkInjection(command); err != nil {
+			return map[string]interface{}{
+				"exit_code": 1,
+				"error":     err.Error(),
+				"blocked":   "injection",
+			}, nil
+		}
 
-	// Check for pipe/chain dangerous usage (must run before checkDangerous
-	// to catch patterns like "curl ... | bash" which span both)
-	if err := t.checkPipeAndChain(command); err != nil {
-		return map[string]interface{}{
-			"exit_code": 1,
-			"error":     err.Error(),
-			"blocked":   "dangerous_pipe",
-		}, nil
+		// Check for pipe/chain dangerous usage (must run before checkDangerous
+		// to catch patterns like "curl ... | bash" which span both)
+		if err := t.checkPipeAndChain(command); err != nil {
+			return map[string]interface{}{
+				"exit_code": 1,
+				"error":     err.Error(),
+				"blocked":   "dangerous_pipe",
+			}, nil
+		}
 	}
 
 	// Check for dangerous patterns
@@ -265,8 +268,13 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 	execTimeout := t.timeout
 	if timeoutArg, ok := args["timeout"].(float64); ok {
 		execTimeout = time.Duration(timeoutArg) * time.Second
-		if execTimeout > 120*time.Second {
-			execTimeout = 120 * time.Second // Max 2 minutes
+		// In coding mode, allow up to 10 minutes; otherwise max 2 minutes
+		maxTimeout := 120 * time.Second
+		if t.codingMode {
+			maxTimeout = 600 * time.Second
+		}
+		if execTimeout > maxTimeout {
+			execTimeout = maxTimeout
 		}
 	}
 
@@ -373,6 +381,26 @@ func (t *ExecuteCommandTool) checkWhitelist(cmd string) error {
 // SetAllowAny allows executing arbitrary commands (use with caution)
 func (t *ExecuteCommandTool) SetAllowAny(allow bool) {
 	t.allowAny = allow
+}
+
+// SetCodingMode enables coding mode with relaxed restrictions
+func (t *ExecuteCommandTool) SetCodingMode(enabled bool) {
+	t.codingMode = enabled
+	if enabled {
+		t.timeout = 300 * time.Second  // 5 minutes for coding mode (was 120s)
+		t.maxOutput = 1024 * 1024      // 1MB output (was 200KB)
+		t.allowAny = true
+	}
+}
+
+// SetCodingModeAdvanced enables advanced coding mode with even more relaxed restrictions
+func (t *ExecuteCommandTool) SetCodingModeAdvanced(enabled bool) {
+	t.codingMode = enabled
+	if enabled {
+		t.timeout = 600 * time.Second  // 10 minutes for advanced coding
+		t.maxOutput = 2 * 1024 * 1024  // 2MB output
+		t.allowAny = true
+	}
 }
 
 // AddToWhitelist adds a command to the allowed list

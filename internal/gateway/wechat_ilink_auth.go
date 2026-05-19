@@ -51,9 +51,15 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 	}
 
 	fmt.Println()
-	fmt.Println("=======================================================")
-	fmt.Println("📱 请使用微信扫描下方二维码登录 (Scan QR with WeChat):")
-	fmt.Println("=======================================================")
+	fmt.Println("╔══════════════════════════════════════════════════════╗")
+	fmt.Println("║  📱 微信扫码登录 / WeChat QR Login                   ║")
+	fmt.Println("╚══════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Instructions:")
+	fmt.Println("  1. Open WeChat on your phone")
+	fmt.Println("  2. Tap '+' → 'Scan'")
+	fmt.Println("  3. Scan the QR code")
+	fmt.Println("  4. Confirm login on your phone")
 	fmt.Println()
 
 	// Print QR code to terminal using QR code URL
@@ -62,14 +68,15 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 		// If it's a data URL (starts with data:image), print the URL for scanning
 		fmt.Println("QR Code URL:", qrResp.QrcodeImgContent)
 		fmt.Println()
-		fmt.Println("💡 Tip: Copy the URL above and open it in a browser to scan, or")
-		fmt.Println("   use a QR code scanning tool if running on a headless server.")
+		fmt.Println("💡 Tips:")
+		fmt.Println("   • Copy the URL above and open it in a browser to scan")
+		fmt.Println("   • Or right-click and copy image address if using a terminal with image support")
 		fmt.Println()
 	} else {
 		fmt.Println("QR Code Key:", qrResp.Qrcode)
 	}
 
-	fmt.Println("等待扫码中... (Waiting for scan...)")
+	fmt.Println("⏳ Waiting for scan... (timeout:", opts.Timeout, ")")
 	fmt.Println()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, opts.Timeout)

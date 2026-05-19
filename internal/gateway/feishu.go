@@ -148,7 +148,26 @@ func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 	// Implement slash command handling
 	switch cmd {
 	case "help":
-		return Response{Content: "Available commands:\n/help - Show this help\n/stats - Show statistics"}, nil
+		return Response{
+			Content: "🤖 Magic Bot - Feishu\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/usage - Token usage\n" +
+				"/model - Change model\n" +
+				"/goal - Goal management\n" +
+				"/kanban - Kanban board",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
 	case "stats":
 		return Response{Content: "Gateway is running"}, nil
 	default:
