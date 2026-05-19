@@ -2,16 +2,54 @@ package groupchat
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 // Storage 数据存储
 type Storage struct {
-	db *sql.DB
+	db      *sql.DB
+	homeDir string
 }
 
 // NewStorage 创建存储实例
 func NewStorage(db *sql.DB) *Storage {
 	return &Storage{db: db}
+}
+
+// NewStorageFromHome creates a new storage instance from a home directory path
+func NewStorageFromHome(homeDir string) (*Storage, error) {
+	if homeDir == "" {
+		homeDir = "~/.magic"
+	}
+	homeDir = os.ExpandEnv(homeDir)
+
+	// Ensure directory exists
+	if err := os.MkdirAll(homeDir, 0755); err != nil {
+		return nil, err
+	}
+
+	dbPath := filepath.Join(homeDir, "groupchat.db")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		return nil, err
+	}
+
+	// Set connection pool settings
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
+
+	// Initialize schema
+	if err := InitSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return &Storage{db: db, homeDir: homeDir}, nil
 }
 
 // GetRoom 获取房间
@@ -267,6 +305,36 @@ func (s *Storage) GetMessages(roomID string, limit int) ([]ChatMessage, error) {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return messages, nil
+}
+
+// SaveRoom saves a room (wrapper for CreateRoom)
+func (s *Storage) SaveRoom(room *Room) error {
+	return s.CreateRoom(room)
+}
+
+// ListRooms returns all rooms
+func (s *Storage) ListRooms() ([]Room, error) {
+	return s.GetAllRooms()
+}
+
+// RoomInfo represents a chat room for JSON API
+type RoomInfoAPI struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Members     []string `json:"members"`
+	AgentIDs    []string `json:"agent_ids"`
+	CreatedAt   int64    `json:"created_at"`
+}
+
+// MessageInfo represents a chat message for JSON API
+type MessageInfoAPI struct {
+	ID        string `json:"id"`
+	RoomID    string `json:"room_id"`
+	Sender    string `json:"sender"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // SaveMessage 保存消息

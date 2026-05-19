@@ -1,0 +1,49 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import * as kanbanApi from '@/api/kanban'
+import type { KanbanTask } from '@/api/kanban'
+
+export const useKanbanStore = defineStore('kanban', () => {
+  const tasks = ref<KanbanTask[]>([])
+  const loading = ref(false)
+
+  const columns = computed(() => [
+    { key: 'triage', title: 'Triage', tasks: tasks.value.filter(t => t.status === 'triage') },
+    { key: 'todo', title: 'To Do', tasks: tasks.value.filter(t => t.status === 'todo') },
+    { key: 'ready', title: 'Ready', tasks: tasks.value.filter(t => t.status === 'ready') },
+    { key: 'running', title: 'Running', tasks: tasks.value.filter(t => t.status === 'running') },
+    { key: 'blocked', title: 'Blocked', tasks: tasks.value.filter(t => t.status === 'blocked') },
+    { key: 'done', title: 'Done', tasks: tasks.value.filter(t => t.status === 'done') },
+  ])
+
+  async function loadBoard() {
+    loading.value = true
+    try {
+      const board = await kanbanApi.getBoard()
+      tasks.value = board.tasks || []
+    } catch {
+      tasks.value = []
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function addTask(task: Partial<KanbanTask>) {
+    const newTask = await kanbanApi.createTask(task)
+    tasks.value.push(newTask)
+    return newTask
+  }
+
+  async function moveTask(id: string, status: string) {
+    const updated = await kanbanApi.moveTask(id, status)
+    const idx = tasks.value.findIndex(t => t.id === id)
+    if (idx >= 0) tasks.value[idx] = updated
+  }
+
+  async function removeTask(id: string) {
+    await kanbanApi.deleteTask(id)
+    tasks.value = tasks.value.filter(t => t.id !== id)
+  }
+
+  return { tasks, columns, loading, loadBoard, addTask, moveTask, removeTask }
+})

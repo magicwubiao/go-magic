@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +23,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cron"
+	"github.com/magicwubiao/go-magic/internal/groupchat"
+	"github.com/magicwubiao/go-magic/internal/kanban"
+	"github.com/magicwubiao/go-magic/internal/plugin"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -28,6 +34,9 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
+
+//go:embed dist
+var distFS embed.FS
 
 // Session represents a chat session (API response format)
 type Session struct {
@@ -125,9 +134,22 @@ type Server struct {
 	// Cron job manager
 	cronMgr *cron.Manager
 
+	// Kanban manager
+	kanbanMgr *kanban.Manager
+
+	// Plugin manager
+	pluginMgr *plugin.Manager
+
+	// GroupChat storage
+	groupchatStorage *groupchat.Storage
+
 	// Background actions tracking
 	actions      map[string]*ActionStatus
 	actionsMu    sync.RWMutex
+
+	// Auth
+	authToken string
+	authMu    sync.RWMutex
 }
 
 // ActionStatus tracks the status of a background action
@@ -192,6 +214,31 @@ func NewServer(dbPath string) *Server {
 		fmt.Printf("[server] Warning: Failed to create cron manager: %v\n", err)
 	}
 
+	// Initialize Kanban Manager
+	var kanbanMgr *kanban.Manager
+	kanbanMgr, err = kanban.NewManager(magicHome)
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create kanban manager: %v\n", err)
+	} else {
+		if err := kanbanMgr.Init(); err != nil {
+			fmt.Printf("[server] Warning: Failed to init kanban manager: %v\n", err)
+		}
+	}
+
+	// Initialize Plugin Manager
+	var pluginMgr *plugin.Manager
+	pluginMgr, err = plugin.NewManager(nil)
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create plugin manager: %v\n", err)
+	}
+
+	// Initialize GroupChat Storage
+	var groupchatStorage *groupchat.Storage
+	groupchatStorage, err = groupchat.NewStorageFromHome(magicHome)
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create groupchat storage: %v\n", err)
+	}
+
 	// Load disabled skills from config
 	disabledSkills := make(map[string]bool)
 	if cfg != nil {
@@ -218,6 +265,13 @@ func NewServer(dbPath string) *Server {
 		}
 	}
 
+	// Load or generate auth token
+	authTokenPath := filepath.Join(magicHome, ".auth_token")
+	authToken := ""
+	if data, err := os.ReadFile(authTokenPath); err == nil {
+		authToken = strings.TrimSpace(string(data))
+	}
+
 	return &Server{
 		mu:              sync.RWMutex{},
 		startTime:       time.Now(),
@@ -231,7 +285,11 @@ func NewServer(dbPath string) *Server {
 		agents:          make(map[string]*agent.Agent),
 		disabledSkills:  disabledSkills,
 		cronMgr:         cronMgr,
+		kanbanMgr:       kanbanMgr,
+		pluginMgr:       pluginMgr,
+		groupchatStorage: groupchatStorage,
 		actions:         make(map[string]*ActionStatus),
+		authToken:       authToken,
 	}
 }
 
@@ -490,6 +548,42 @@ func (s *Server) Start(port int) error {
 		}
 	}
 
+	// Auth middleware - checks token for protected routes
+	requireAuth := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			s.authMu.RLock()
+			token := s.authToken
+			s.authMu.RUnlock()
+
+			// No token configured = no auth required
+			if token == "" {
+				h(w, r)
+				return
+			}
+
+			// Check Authorization header
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "Bearer "+token {
+				h(w, r)
+				return
+			}
+
+			// Check query parameter
+			if r.URL.Query().Get("token") == token {
+				h(w, r)
+				return
+			}
+
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		}
+	}
+
+	// Auth routes (no auth required)
+	mux.HandleFunc("/api/auth/status", withCORS(s.handleAuthStatus))
+	mux.HandleFunc("/api/auth/setup", withCORS(s.handleAuthSetup))
+	mux.HandleFunc("/api/auth/login", withCORS(s.handleAuthLogin))
+	mux.HandleFunc("/api/auth/reset", withCORS(s.handleAuthReset))
+
 	// Base API handler for CORS preflight
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -502,112 +596,113 @@ func (s *Server) Start(port int) error {
 		http.NotFound(w, r)
 	})
 
-	// Health
+	// Health (public)
 	mux.HandleFunc("/api/health", withCORS(s.handleHealth))
 	mux.HandleFunc("/api/status", withCORS(s.handleStatus))
 
 	// Sessions
-	mux.HandleFunc("/api/sessions", withCORS(s.handleSessions))
-	mux.HandleFunc("/api/sessions/search", withCORS(s.handleSessionSearch))
-	mux.HandleFunc("/api/sessions/", withCORS(s.handleSessionByID))
+	mux.HandleFunc("/api/sessions", withCORS(requireAuth(s.handleSessions)))
+	mux.HandleFunc("/api/sessions/search", withCORS(requireAuth(s.handleSessionSearch)))
+	mux.HandleFunc("/api/sessions/", withCORS(requireAuth(s.handleSessionByID)))
 
 	// Chat
-	mux.HandleFunc("/api/chat", withCORS(s.handleChat))
-	mux.HandleFunc("/api/chat/stream", withCORS(s.handleChatStream))
+	mux.HandleFunc("/api/chat", withCORS(requireAuth(s.handleChat)))
+	mux.HandleFunc("/api/chat/stream", withCORS(requireAuth(s.handleChatStream)))
 
 	// Tools
-	mux.HandleFunc("/api/toolsets", withCORS(s.handleToolsets))
-	mux.HandleFunc("/api/tools/toolsets", withCORS(s.handleToolsets))
-	mux.HandleFunc("/api/tools/toolsets/", withCORS(s.handleToolsetByID))
-	mux.HandleFunc("/api/tools/categories", withCORS(s.handleToolCategories))
-	mux.HandleFunc("/api/tools/", withCORS(s.handleToolByID))
+	mux.HandleFunc("/api/toolsets", withCORS(requireAuth(s.handleToolsets)))
+	mux.HandleFunc("/api/tools/toolsets", withCORS(requireAuth(s.handleToolsets)))
+	mux.HandleFunc("/api/tools/toolsets/", withCORS(requireAuth(s.handleToolsetByID)))
+	mux.HandleFunc("/api/tools/categories", withCORS(requireAuth(s.handleToolCategories)))
+	mux.HandleFunc("/api/tools/", withCORS(requireAuth(s.handleToolByID)))
 
 	// Skills
-	mux.HandleFunc("/api/skills", withCORS(s.handleSkills))
-	mux.HandleFunc("/api/skills/categories", withCORS(s.handleSkillCategories))
-	mux.HandleFunc("/api/skills/", withCORS(s.handleSkillByID))
-	mux.HandleFunc("/api/dashboard/skills", withCORS(s.handleDashboardSkills))
-	mux.HandleFunc("/api/dashboard/skills/search", withCORS(s.handleSkillsSearch))
+	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
+	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
+	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
+	mux.HandleFunc("/api/dashboard/skills", withCORS(requireAuth(s.handleDashboardSkills)))
+	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
 
 	// Plugins
-	mux.HandleFunc("/api/plugins", withCORS(s.handlePlugins))
-	mux.HandleFunc("/api/dashboard/plugins", withCORS(s.handleDashboardPlugins))
-	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(s.handleDashboardPluginsRescan))
-	mux.HandleFunc("/api/dashboard/plugins/", withCORS(s.handleDashboardPluginsSubRoutes))
+	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
+	mux.HandleFunc("/api/dashboard/plugins", withCORS(requireAuth(s.handleDashboardPlugins)))
+	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(requireAuth(s.handleDashboardPluginsRescan)))
+	mux.HandleFunc("/api/dashboard/plugins/", withCORS(requireAuth(s.handleDashboardPluginsSubRoutes)))
 	// Agent plugins
-	mux.HandleFunc("/api/dashboard/agent-plugins/install", withCORS(s.handleAgentPluginInstall))
-	mux.HandleFunc("/api/dashboard/agent-plugins/", withCORS(s.handleAgentPluginsSubRoutes))
+	mux.HandleFunc("/api/dashboard/agent-plugins/install", withCORS(requireAuth(s.handleAgentPluginInstall)))
+	mux.HandleFunc("/api/dashboard/agent-plugins/", withCORS(requireAuth(s.handleAgentPluginsSubRoutes)))
 	// Plugin providers
-	mux.HandleFunc("/api/dashboard/plugin-providers", withCORS(s.handlePluginProviders))
+	mux.HandleFunc("/api/dashboard/plugin-providers", withCORS(requireAuth(s.handlePluginProviders)))
 
 	// Models
-	mux.HandleFunc("/api/models", withCORS(s.handleModels))
-	mux.HandleFunc("/api/models/", withCORS(s.handleModelByID))
-	mux.HandleFunc("/api/model/info", withCORS(s.handleModelInfo))
-	mux.HandleFunc("/api/model/options", withCORS(s.handleModelOptions))
-	mux.HandleFunc("/api/model/set", withCORS(s.handleModelSet))
-	mux.HandleFunc("/api/model/auxiliary", withCORS(s.handleModelAuxiliary))
-	mux.HandleFunc("/api/providers", withCORS(s.handleProviders))
-	mux.HandleFunc("/api/providers/", withCORS(s.handleProvidersSubRoutes))
+	mux.HandleFunc("/api/models", withCORS(requireAuth(s.handleModels)))
+	mux.HandleFunc("/api/models/", withCORS(requireAuth(s.handleModelByID)))
+	mux.HandleFunc("/api/model/info", withCORS(requireAuth(s.handleModelInfo)))
+	mux.HandleFunc("/api/model/options", withCORS(requireAuth(s.handleModelOptions)))
+	mux.HandleFunc("/api/model/set", withCORS(requireAuth(s.handleModelSet)))
+	mux.HandleFunc("/api/model/auxiliary", withCORS(requireAuth(s.handleModelAuxiliary)))
+	mux.HandleFunc("/api/providers", withCORS(requireAuth(s.handleProviders)))
+	mux.HandleFunc("/api/providers/", withCORS(requireAuth(s.handleProvidersSubRoutes)))
 
 	// Platforms (alias for providers for compatibility)
-	mux.HandleFunc("/api/platforms", withCORS(s.handleProviders))
-	mux.HandleFunc("/api/platforms/", withCORS(s.handleProvidersSubRoutes))
+	mux.HandleFunc("/api/platforms", withCORS(requireAuth(s.handleProviders)))
+	mux.HandleFunc("/api/platforms/", withCORS(requireAuth(s.handleProvidersSubRoutes)))
 
 	// Config
-	mux.HandleFunc("/api/config", withCORS(s.handleConfig))
-	mux.HandleFunc("/api/config/", withCORS(s.handleConfigByID))
-	mux.HandleFunc("/api/config/defaults", withCORS(s.handleConfigDefaults))
-	mux.HandleFunc("/api/config/raw", withCORS(s.handleConfigRaw))
-	mux.HandleFunc("/api/config/schema", withCORS(s.handleConfigSchema))
-
-	// Analytics
-	mux.HandleFunc("/api/analytics/models", withCORS(s.handleAnalyticsModels))
-	mux.HandleFunc("/api/analytics/usage", withCORS(s.handleAnalyticsUsage))
-	mux.HandleFunc("/api/analytics/cost", withCORS(s.handleAnalyticsCost))
-	mux.HandleFunc("/api/analytics/tokens", withCORS(s.handleAnalyticsTokens))
-	mux.HandleFunc("/api/analytics/summary", withCORS(s.handleAnalyticsSummary))
+	mux.HandleFunc("/api/config", withCORS(requireAuth(s.handleConfig)))
+	mux.HandleFunc("/api/config/", withCORS(requireAuth(s.handleConfigByID)))
+	mux.HandleFunc("/api/config/defaults", withCORS(requireAuth(s.handleConfigDefaults)))
+	mux.HandleFunc("/api/config/raw", withCORS(requireAuth(s.handleConfigRaw)))
+	mux.HandleFunc("/api/config/schema", withCORS(requireAuth(s.handleConfigSchema)))
 
 	// Cron (support both /api/cron and /api/cron/jobs for compatibility)
-	mux.HandleFunc("/api/cron", withCORS(s.handleCronJobs))
-	mux.HandleFunc("/api/cron/", withCORS(s.handleCronJobByID))
-	mux.HandleFunc("/api/cron/jobs", withCORS(s.handleCronJobs))
-	mux.HandleFunc("/api/cron/jobs/", withCORS(s.handleCronJobByID))
+	mux.HandleFunc("/api/cron", withCORS(requireAuth(s.handleCronJobs)))
+	mux.HandleFunc("/api/cron/", withCORS(requireAuth(s.handleCronJobByID)))
+	mux.HandleFunc("/api/cron/jobs", withCORS(requireAuth(s.handleCronJobs)))
+	mux.HandleFunc("/api/cron/jobs/", withCORS(requireAuth(s.handleCronJobByID)))
 
 	// Env
-	mux.HandleFunc("/api/env", withCORS(s.handleEnv))
-	mux.HandleFunc("/api/env/reveal", withCORS(s.handleEnvReveal))
+	mux.HandleFunc("/api/env", withCORS(requireAuth(s.handleEnv)))
+	mux.HandleFunc("/api/env/reveal", withCORS(requireAuth(s.handleEnvReveal)))
+
+	// File system
+	mux.HandleFunc("/api/fs/dirs", withCORS(requireAuth(s.handleListDirs)))
 
 	// Profiles
-	mux.HandleFunc("/api/profiles", withCORS(s.handleProfiles))
-	mux.HandleFunc("/api/profiles/", withCORS(s.handleProfileByName))
+	mux.HandleFunc("/api/profiles", withCORS(requireAuth(s.handleProfiles)))
+	mux.HandleFunc("/api/profiles/", withCORS(requireAuth(s.handleProfileByName)))
 
 	// System
-	mux.HandleFunc("/api/system/info", withCORS(s.handleSystemInfo))
-	mux.HandleFunc("/api/system/stats", withCORS(s.handleSystemStats))
-	mux.HandleFunc("/api/system/health", withCORS(s.handleSystemHealth))
+	mux.HandleFunc("/api/system/info", withCORS(requireAuth(s.handleSystemInfo)))
+	mux.HandleFunc("/api/system/stats", withCORS(requireAuth(s.handleSystemStats)))
+	mux.HandleFunc("/api/system/health", withCORS(requireAuth(s.handleSystemHealth)))
 
 	// Logs
-	mux.HandleFunc("/api/logs", withCORS(s.handleLogs))
-	mux.HandleFunc("/api/logs/tail", withCORS(s.handleLogsTail))
-	mux.HandleFunc("/api/dashboard/logs", withCORS(s.handleDashboardLogs))
+	mux.HandleFunc("/api/logs", withCORS(requireAuth(s.handleLogs)))
+	mux.HandleFunc("/api/logs/tail", withCORS(requireAuth(s.handleLogsTail)))
+	mux.HandleFunc("/api/dashboard/logs", withCORS(requireAuth(s.handleDashboardLogs)))
 
 	// Settings
-	mux.HandleFunc("/api/settings", withCORS(s.handleSettings))
-	mux.HandleFunc("/api/settings/", withCORS(s.handleSettingByID))
+	mux.HandleFunc("/api/settings", withCORS(requireAuth(s.handleSettings)))
+	mux.HandleFunc("/api/settings/", withCORS(requireAuth(s.handleSettingByID)))
 
 	// Gateway
-	mux.HandleFunc("/api/gateway/restart", withCORS(s.handleGatewayRestart))
+	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 
 	// Magic update
-	mux.HandleFunc("/api/magic/update", withCORS(s.handleMagicUpdate))
+	mux.HandleFunc("/api/magic/update", withCORS(requireAuth(s.handleMagicUpdate)))
 
 	// Actions
-	mux.HandleFunc("/api/actions/", withCORS(s.handleActions))
+	mux.HandleFunc("/api/actions/", withCORS(requireAuth(s.handleActions)))
 
-	// Dashboard themes
-	mux.HandleFunc("/api/dashboard/themes", withCORS(s.handleDashboardThemes))
-	mux.HandleFunc("/api/dashboard/theme", withCORS(s.handleDashboardTheme))
+	// Kanban
+	mux.HandleFunc("/api/kanban/board", withCORS(requireAuth(s.handleKanbanBoard)))
+	mux.HandleFunc("/api/kanban/tasks", withCORS(requireAuth(s.handleKanbanTasks)))
+	mux.HandleFunc("/api/kanban/tasks/", withCORS(requireAuth(s.handleKanbanTaskByID)))
+
+	// GroupChat
+	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
+	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomByID)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -615,10 +710,128 @@ func (s *Server) Start(port int) error {
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
 	fmt.Printf("[server] Provider: %s | Model: %s\n", s.cfg.Provider, s.cfg.Model)
+
+	// Auto-start gateway in background if enabled
+	if s.cfg != nil && s.cfg.Gateway.Enabled {
+		go func() {
+			time.Sleep(2 * time.Second) // Wait for server to be ready
+			fmt.Println("[server] Gateway enabled, starting in background...")
+			cmd := exec.Command(os.Args[0], "gateway", "start")
+			cmd.Env = os.Environ()
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Start(); err != nil {
+				fmt.Printf("[server] Gateway auto-start failed: %v\n", err)
+			} else {
+				fmt.Printf("[server] Gateway started in background (PID: %d)\n", cmd.Process.Pid)
+			}
+		}()
+	}
+
 	return http.ListenAndServe(addr, mux)
 }
 
 // --- Health & Status ---
+
+// --- Auth Handlers ---
+
+func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	s.authMu.RLock()
+	token := s.authToken
+	s.authMu.RUnlock()
+
+	jsonResponse(w, map[string]interface{}{
+		"configured": token != "",
+	})
+}
+
+func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
+	s.authMu.RLock()
+	token := s.authToken
+	s.authMu.RUnlock()
+
+	if token != "" {
+		http.Error(w, `{"error":"auth already configured"}`, http.StatusConflict)
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 4 {
+		http.Error(w, `{"error":"password must be at least 4 characters"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Generate token from password using SHA-256
+	hash := sha256.Sum256([]byte(req.Password))
+	newToken := hex.EncodeToString(hash[:])
+
+	authTokenPath := filepath.Join(s.magicHome, ".auth_token")
+	if err := os.WriteFile(authTokenPath, []byte(newToken), 0600); err != nil {
+		http.Error(w, `{"error":"failed to save token"}`, http.StatusInternalServerError)
+		return
+	}
+
+	s.authMu.Lock()
+	s.authToken = newToken
+	s.authMu.Unlock()
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":    true,
+		"token": newToken,
+	})
+}
+
+func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	s.authMu.RLock()
+	token := s.authToken
+	s.authMu.RUnlock()
+
+	if token == "" {
+		http.Error(w, `{"error":"auth not configured"}`, http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	hash := sha256.Sum256([]byte(req.Password))
+	inputToken := hex.EncodeToString(hash[:])
+
+	if inputToken != token {
+		http.Error(w, `{"error":"invalid password"}`, http.StatusUnauthorized)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":    true,
+		"token": token,
+	})
+}
+
+func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
+	authTokenPath := filepath.Join(s.magicHome, ".auth_token")
+	os.Remove(authTokenPath)
+
+	s.authMu.Lock()
+	s.authToken = ""
+	s.authMu.Unlock()
+
+	jsonResponse(w, map[string]bool{"ok": true})
+}
+
+// --- Health ---
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"status": "healthy"})
@@ -720,9 +933,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Model    string `json:"model"`
 			Platform string `json:"platform"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", 400)
-			return
+		// Allow empty body for simple session creation
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", 400)
+				return
+			}
 		}
 
 		now := time.Now()
@@ -785,6 +1001,13 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for stream endpoint
+	if strings.HasSuffix(path, "/stream") {
+		sessionID := strings.TrimSuffix(path, "/stream")
+		s.handleSessionStream(w, r, sessionID)
+		return
+	}
+
 	// Check for reset endpoint
 	if strings.HasSuffix(path, "/reset") {
 		sessionID := strings.TrimSuffix(path, "/reset")
@@ -837,27 +1060,80 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
-	if r.Method != "GET" {
+	switch r.Method {
+	case "GET":
+		if s.sessionStore == nil {
+			jsonResponse(w, map[string]interface{}{"session_id": sessionID, "messages": []map[string]interface{}{}})
+			return
+		}
+
+		dbSession, err := s.sessionStore.LoadSession(context.Background(), sessionID)
+		if err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
+
+		messages := convertDBMessagesToAPI(sessionID, dbSession.Messages)
+		jsonResponse(w, map[string]interface{}{
+			"session_id": sessionID,
+			"messages":   messages,
+		})
+	case "POST":
+		if s.provider == nil {
+			http.Error(w, "provider not configured", 400)
+			return
+		}
+
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
+			http.Error(w, "invalid request: content required", 400)
+			return
+		}
+
+		aiAgent := s.getOrCreateAgent(sessionID)
+		if aiAgent == nil {
+			http.Error(w, "failed to create agent", 500)
+			return
+		}
+
+		ctx := context.Background()
+		respContent, err := aiAgent.RunConversation(ctx, req.Content)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
+			return
+		}
+
+		// Save to session store
+		if s.sessionStore != nil {
+			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+				sess.Messages = append(sess.Messages, types.Message{
+					Role:    "user",
+					Content: req.Content,
+				})
+				sess.Messages = append(sess.Messages, types.Message{
+					Role:    "assistant",
+					Content: respContent,
+				})
+				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
+				sess.InputTokens += inputTokens
+				sess.OutputTokens += outputTokens
+				sess.CacheReadTokens += cacheTokens
+				sess.UpdatedAt = time.Now()
+				s.sessionStore.SaveSession(ctx, sess)
+			}
+		}
+
+		jsonResponse(w, map[string]interface{}{
+			"id":        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+			"role":      "assistant",
+			"content":   respContent,
+			"timestamp": time.Now().Unix(),
+		})
+	default:
 		http.Error(w, "method not allowed", 405)
-		return
 	}
-
-	if s.sessionStore == nil {
-		jsonResponse(w, map[string]interface{}{"session_id": sessionID, "messages": []map[string]interface{}{}})
-		return
-	}
-
-	dbSession, err := s.sessionStore.LoadSession(context.Background(), sessionID)
-	if err != nil {
-		http.Error(w, "not found", 404)
-		return
-	}
-
-	messages := convertDBMessagesToAPI(sessionID, dbSession.Messages)
-	jsonResponse(w, map[string]interface{}{
-		"session_id": sessionID,
-		"messages":   messages,
-	})
 }
 
 func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -884,6 +1160,135 @@ func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	jsonResponse(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	if s.provider == nil {
+		http.Error(w, "provider not configured", 400)
+		return
+	}
+
+	content := r.URL.Query().Get("content")
+	if content == "" {
+		http.Error(w, "content query parameter required", 400)
+		return
+	}
+
+	aiAgent := s.getOrCreateAgent(sessionID)
+	if aiAgent == nil {
+		http.Error(w, "failed to create agent", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", 500)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Save user message to session
+	if s.sessionStore != nil {
+		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+			sess.Messages = append(sess.Messages, types.Message{
+				Role:    "user",
+				Content: content,
+			})
+			sess.UpdatedAt = time.Now()
+			s.sessionStore.SaveSession(ctx, sess)
+		}
+	}
+
+	// Check if provider supports streaming
+	_, supportsStream := s.provider.(provider.StreamingToolCaller)
+	if !supportsStream {
+		// Fallback: non-streaming response sent as single chunk
+		resp, err := aiAgent.RunConversation(ctx, content)
+		if err != nil {
+			data, _ := json.Marshal(map[string]string{"error": err.Error()})
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+			return
+		}
+
+		// Send as delta chunks
+		words := strings.Split(resp, "")
+		for _, word := range words {
+			data, _ := json.Marshal(map[string]string{"delta": word})
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+		}
+
+		// Save assistant message
+		if s.sessionStore != nil {
+			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+				sess.Messages = append(sess.Messages, types.Message{
+					Role:    "assistant",
+					Content: resp,
+				})
+				sess.UpdatedAt = time.Now()
+				s.sessionStore.SaveSession(ctx, sess)
+			}
+		}
+
+		doneData, _ := json.Marshal(map[string]bool{"done": true})
+		fmt.Fprintf(w, "data: %s\n\n", string(doneData))
+		flusher.Flush()
+		return
+	}
+
+	// Real streaming
+	var fullResponse strings.Builder
+	streamErr := aiAgent.RunConversationStream(ctx, content, func(chunk string, done bool) {
+		if done {
+			return
+		}
+		if chunk != "" {
+			// Skip tool result markers for clean output
+			if strings.Contains(chunk, ">>>TOOL_RESULT_START|") || strings.Contains(chunk, ">>>TOOL_RESULT_END<<<") {
+				return
+			}
+			if strings.Contains(chunk, ">>>TURN_START<<<") {
+				return
+			}
+			fullResponse.WriteString(chunk)
+			data, _ := json.Marshal(map[string]string{"delta": chunk})
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+		}
+	})
+
+	if streamErr != nil {
+		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+	}
+
+	// Save assistant message
+	if s.sessionStore != nil {
+		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+			sess.Messages = append(sess.Messages, types.Message{
+				Role:    "assistant",
+				Content: fullResponse.String(),
+			})
+			sess.UpdatedAt = time.Now()
+			s.sessionStore.SaveSession(ctx, sess)
+		}
+	}
+
+	doneData, _ := json.Marshal(map[string]bool{"done": true})
+	fmt.Fprintf(w, "data: %s\n\n", string(doneData))
+	flusher.Flush()
 }
 
 func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
@@ -1575,8 +1980,45 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 }
 
 func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
-	plugins := s.scanPluginsDir()
-	jsonResponse(w, plugins)
+	if r.Method == "GET" {
+		if s.pluginMgr == nil {
+			// Fallback to simple file listing
+			pluginDir := filepath.Join(s.magicHome, "plugins")
+			files, _ := filepath.Glob(filepath.Join(pluginDir, "*.go")) // ignore error
+			result := make([]map[string]interface{}, 0)
+			for _, f := range files {
+				result = append(result, map[string]interface{}{
+					"id":          filepath.Base(f),
+					"name":        filepath.Base(f),
+					"version":     "1.0.0",
+					"description": "Local plugin",
+					"author":      "local",
+					"enabled":     true,
+					"type":        "local",
+				})
+			}
+			jsonResponse(w, result)
+			return
+		}
+
+		plugins := s.pluginMgr.List()
+		result := make([]map[string]interface{}, 0)
+		for _, p := range plugins {
+			result = append(result, map[string]interface{}{
+				"id":          p.Manifest.ID,
+				"name":        p.Manifest.Name,
+				"version":     p.Manifest.Version,
+				"description": p.Manifest.Description,
+				"author":      p.Manifest.Author,
+				"enabled":     p.State == plugin.StateEnabled,
+				"type":        p.Manifest.Category,
+			})
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
 }
 
 func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Request) {
@@ -2098,250 +2540,6 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, schema)
 }
 
-// --- Analytics ---
-
-func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
-	daysStr := r.URL.Query().Get("days")
-	days := 30
-	if daysStr != "" {
-		if n, err := strconv.Atoi(daysStr); err == nil && n > 0 {
-			days = n
-		}
-	}
-
-	// Aggregate from real sessions - now using stored token data
-	modelStats := map[string]*struct {
-		Requests      int
-		InputTokens   int
-		OutputTokens  int
-		CacheReadTokens int
-	}{}
-
-	if s.sessionStore != nil {
-		sessions, err := s.sessionStore.ListSessions(context.Background(), "")
-		if err == nil {
-			for _, sess := range sessions {
-				// Use stored model from session
-				modelName := sess.Model
-				if modelName == "" {
-					modelName = s.cfg.Model
-				}
-				stat, ok := modelStats[modelName]
-				if !ok {
-					stat = &struct {
-						Requests      int
-						InputTokens   int
-						OutputTokens  int
-						CacheReadTokens int
-					}{}
-					modelStats[modelName] = stat
-				}
-				stat.Requests++
-				stat.InputTokens += sess.InputTokens
-				stat.OutputTokens += sess.OutputTokens
-				stat.CacheReadTokens += sess.CacheReadTokens
-			}
-		}
-	}
-
-	providerName := s.cfg.Provider
-	if providerName == "" {
-		providerName = "unknown"
-	}
-
-	models := make([]map[string]interface{}, 0)
-	var totalInput, totalOutput, totalCache int
-	for model, stat := range modelStats {
-		models = append(models, map[string]interface{}{
-			"model":                model,
-			"provider":             providerName,
-			"input_tokens":         stat.InputTokens,
-			"output_tokens":        stat.OutputTokens,
-			"cache_read_tokens":    stat.CacheReadTokens,
-			"reasoning_tokens":     0,
-			"estimated_cost":       0,
-			"actual_cost":          0,
-			"sessions":             stat.Requests,
-			"api_calls":            stat.Requests,
-			"tool_calls":           0,
-			"last_used_at":         nil,
-			"avg_tokens_per_session": func() int {
-				if stat.Requests == 0 {
-					return 0
-				}
-				return (stat.InputTokens + stat.OutputTokens) / stat.Requests
-			}(),
-			"capabilities":         map[string]interface{}{},
-		})
-		totalInput += stat.InputTokens
-		totalOutput += stat.OutputTokens
-		totalCache += stat.CacheReadTokens
-	}
-
-	if len(models) == 0 {
-		models = []map[string]interface{}{}
-	}
-
-	jsonResponse(w, map[string]interface{}{
-		"period_days": days,
-		"models": models,
-		"totals": map[string]interface{}{
-			"distinct_models":      len(models),
-			"total_input":          totalInput,
-			"total_output":         totalOutput,
-			"total_cache_read":     totalCache,
-			"total_reasoning":      0,
-			"total_estimated_cost": 0,
-			"total_actual_cost":    0,
-			"total_sessions":       len(models),
-		},
-	})
-}
-
-func (s *Server) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
-	daysStr := r.URL.Query().Get("days")
-	days := 30
-	if daysStr != "" {
-		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
-			days = d
-		}
-	}
-
-	// Aggregate from real sessions using stored token data
-	dailyStats := map[string]*struct {
-		InputTokens     int
-		OutputTokens    int
-		CacheReadTokens int
-		Sessions        int
-		APICalls        int
-	}{}
-
-	if s.sessionStore != nil {
-		sessions, err := s.sessionStore.ListSessions(context.Background(), "")
-		if err == nil {
-			for _, sess := range sessions {
-				day := sess.CreatedAt.Format("2006-01-02")
-				stat, ok := dailyStats[day]
-				if !ok {
-					stat = &struct {
-						InputTokens     int
-						OutputTokens    int
-						CacheReadTokens int
-						Sessions        int
-						APICalls        int
-					}{}
-					dailyStats[day] = stat
-				}
-				stat.Sessions++
-				stat.InputTokens += sess.InputTokens
-				stat.OutputTokens += sess.OutputTokens
-				stat.CacheReadTokens += sess.CacheReadTokens
-				// Estimate API calls from tokens (rough approximation)
-				if sess.InputTokens > 0 || sess.OutputTokens > 0 {
-					stat.APICalls++
-				}
-			}
-		}
-	}
-
-	// Fill in daily data
-	daily := make([]map[string]interface{}, 0)
-	for i := days - 1; i >= 0; i-- {
-		date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
-		stat := dailyStats[date]
-		entry := map[string]interface{}{
-			"day":               date,
-			"input_tokens":      0,
-			"output_tokens":     0,
-			"cache_read_tokens": 0,
-			"reasoning_tokens":  0,
-			"estimated_cost":    0,
-			"actual_cost":       0,
-			"sessions":          0,
-			"api_calls":         0,
-		}
-		if stat != nil {
-			entry["input_tokens"] = stat.InputTokens
-			entry["output_tokens"] = stat.OutputTokens
-			entry["cache_read_tokens"] = stat.CacheReadTokens
-			entry["sessions"] = stat.Sessions
-			entry["api_calls"] = stat.APICalls
-		}
-		daily = append(daily, entry)
-	}
-
-	// Calculate totals from daily stats
-	var totalInput, totalOutput, totalCache int
-	var totalAPICalls int
-	for _, stat := range dailyStats {
-		totalInput += stat.InputTokens
-		totalOutput += stat.OutputTokens
-		totalCache += stat.CacheReadTokens
-		totalAPICalls += stat.APICalls
-	}
-
-	jsonResponse(w, map[string]interface{}{
-		"daily":    daily,
-		"by_model": []map[string]interface{}{},
-		"totals": map[string]interface{}{
-			"total_input":           totalInput,
-			"total_output":          totalOutput,
-			"total_cache_read":      totalCache,
-			"total_reasoning":       0,
-			"total_estimated_cost":  0,
-			"total_actual_cost":     0,
-			"total_sessions":        len(dailyStats),
-			"total_api_calls":       totalAPICalls,
-		},
-		"skills": map[string]interface{}{
-			"summary": map[string]interface{}{
-				"total_skill_loads":    0,
-				"total_skill_edits":    0,
-				"total_skill_actions":  0,
-				"distinct_skills_used": 0,
-			},
-			"top_skills": []map[string]interface{}{},
-		},
-	})
-}
-
-func (s *Server) handleAnalyticsCost(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, map[string]interface{}{
-		"total":    0,
-		"currency": "USD",
-		"breakdown": []map[string]interface{}{},
-	})
-}
-
-func (s *Server) handleAnalyticsTokens(w http.ResponseWriter, r *http.Request) {
-	var totalMessages int
-	if s.sessionStore != nil {
-		sessions, _ := s.sessionStore.ListSessions(context.Background(), "")
-		for _, sess := range sessions {
-			totalMessages += len(sess.Messages)
-		}
-	}
-	jsonResponse(w, map[string]interface{}{
-		"input":  0,
-		"output": 0,
-		"total":  totalMessages,
-	})
-}
-
-func (s *Server) handleAnalyticsSummary(w http.ResponseWriter, r *http.Request) {
-	sessions := 0
-	if s.sessionStore != nil {
-		if list, err := s.sessionStore.ListSessions(context.Background(), ""); err == nil {
-			sessions = len(list)
-		}
-	}
-	jsonResponse(w, map[string]interface{}{
-		"total_sessions": sessions,
-		"total_messages": 0,
-		"total_tools":    0,
-	})
-}
-
 // --- Cron ---
 
 func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request) {
@@ -2579,6 +2777,58 @@ func describeSchedule(schedule string) string {
 
 	// Generic description
 	return fmt.Sprintf("At %s:%s on day-of-month %s, month %s, day-of-week %s", hour, min, dom, mon, dow)
+}
+
+// --- Env ---
+
+// --- File System ---
+
+func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path, _ = os.Getwd()
+	}
+
+	// Security: resolve to absolute path and prevent traversal above root
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"dirs": []string{}, "error": "invalid path"})
+		return
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"dirs": []string{}, "error": "cannot read directory"})
+		return
+	}
+
+	type dirEntry struct {
+		Path  string `json:"path"`
+		Name  string `json:"name"`
+		IsDir bool   `json:"is_dir"`
+	}
+
+	var result []dirEntry
+	// Add parent directory option
+	parent := filepath.Dir(absPath)
+	if parent != absPath {
+		result = append(result, dirEntry{Path: parent, Name: "..", IsDir: true})
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			result = append(result, dirEntry{
+				Path:  filepath.Join(absPath, entry.Name()),
+				Name:  entry.Name(),
+				IsDir: true,
+			})
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"current": absPath,
+		"dirs":    result,
+	})
 }
 
 // --- Env ---
@@ -3371,81 +3621,435 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not found", 404)
 }
 
-// --- Dashboard Themes ---
+// --- Kanban Handlers ---
 
-// getThemePreference reads the user's theme preference from config
-func (s *Server) getThemePreference() string {
-	themePath := filepath.Join(s.magicHome, ".theme")
-	if data, err := os.ReadFile(themePath); err == nil {
-		theme := strings.TrimSpace(string(data))
-		// Support all frontend themes
-		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose", "dark", "light"}
-		for _, valid := range validThemes {
-			if theme == valid {
-				return theme
-			}
+func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	if s.kanbanMgr == nil {
+		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		return
+	}
+
+	board, err := s.kanbanMgr.GetBoard("")
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		return
+	}
+
+	tasks := make([]interface{}, 0)
+	for _, taskList := range board {
+		for _, task := range taskList {
+			tasks = append(tasks, map[string]interface{}{
+				"id":          task.ID,
+				"title":       task.Title,
+				"description": task.Body,
+				"status":      task.Status,
+				"priority":    task.Priority,
+				"assignee":    task.Assignee,
+				"tags":        task.Skills,
+				"created_at":  task.CreatedAt.Unix(),
+				"updated_at":  task.UpdatedAt.Unix(),
+			})
 		}
 	}
-	return "default" // default
-}
 
-// saveThemePreference saves the user's theme preference
-func (s *Server) saveThemePreference(theme string) error {
-	themePath := filepath.Join(s.magicHome, ".theme")
-	return os.WriteFile(themePath, []byte(theme), 0644)
-}
-
-func (s *Server) handleDashboardThemes(w http.ResponseWriter, r *http.Request) {
-	activeTheme := s.getThemePreference()
-	// All available themes matching frontend presets
-	themes := []map[string]interface{}{
-		{"name": "default", "label": "Default", "description": "Default dark teal theme"},
-		{"name": "default-large", "label": "Default Large", "description": "Default theme with larger fonts"},
-		{"name": "midnight", "label": "Midnight", "description": "Deep blue midnight theme"},
-		{"name": "ember", "label": "Ember", "description": "Warm orange ember theme"},
-		{"name": "mono", "label": "Mono", "description": "Monochrome grayscale theme"},
-		{"name": "cyberpunk", "label": "Cyberpunk", "description": "Neon cyberpunk theme"},
-		{"name": "rose", "label": "Rose", "description": "Soft rose pink theme"},
+	columns := []map[string]interface{}{
+		{"key": "triage", "title": "Triage", "count": 0},
+		{"key": "todo", "title": "To Do", "count": 0},
+		{"key": "ready", "title": "Ready", "count": 0},
+		{"key": "running", "title": "Running", "count": 0},
+		{"key": "blocked", "title": "Blocked", "count": 0},
+		{"key": "done", "title": "Done", "count": 0},
 	}
-	jsonResponse(w, map[string]interface{}{
-		"active": activeTheme,
-		"themes": themes,
-	})
-}
 
-func (s *Server) handleDashboardTheme(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPut {
-		var req struct {
-			Name string `json:"name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		// Validate theme name - support all frontend themes
-		validThemes := []string{"default", "default-large", "midnight", "ember", "mono", "cyberpunk", "rose"}
-		isValid := false
-		for _, valid := range validThemes {
-			if req.Name == valid {
-				isValid = true
+	// Count tasks per status
+	for status, taskList := range board {
+		for _, col := range columns {
+			if string(status) == col["key"] {
+				col["count"] = len(taskList)
 				break
 			}
 		}
-		if !isValid {
-			http.Error(w, "Invalid theme name", http.StatusBadRequest)
+	}
+
+	jsonResponse(w, map[string]interface{}{"tasks": tasks, "columns": columns})
+}
+
+func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var req struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			Priority    string `json:"priority"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
 			return
 		}
 
-		// Save theme preference
-		if err := s.saveThemePreference(req.Name); err != nil {
-			http.Error(w, "Failed to save theme", http.StatusInternalServerError)
+		if s.kanbanMgr == nil {
+			http.Error(w, "kanban not initialized", 500)
 			return
 		}
 
-		jsonResponse(w, map[string]interface{}{"ok": true, "theme": req.Name})
+		priority := 1
+		if req.Priority == "high" {
+			priority = 2
+		} else if req.Priority == "low" {
+			priority = 0
+		}
+
+		task, err := s.kanbanMgr.CreateTask(req.Title, req.Description, "", kanban.WithPriority(priority))
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		jsonResponse(w, map[string]interface{}{
+			"id":          task.ID,
+			"title":       task.Title,
+			"description": task.Body,
+			"status":      task.Status,
+			"priority":    task.Priority,
+			"tags":        task.Skills,
+			"created_at":  task.CreatedAt.Unix(),
+			"updated_at":  task.UpdatedAt.Unix(),
+		})
 		return
 	}
+
+	if r.Method == "GET" {
+		if s.kanbanMgr == nil {
+			jsonResponse(w, []interface{}{})
+			return
+		}
+		board, _ := s.kanbanMgr.GetBoard("")
+		tasks := make([]interface{}, 0)
+		for _, taskList := range board {
+			for _, task := range taskList {
+				tasks = append(tasks, map[string]interface{}{
+					"id":          task.ID,
+					"title":       task.Title,
+					"description": task.Body,
+					"status":      task.Status,
+					"priority":    task.Priority,
+					"created_at":  task.CreatedAt.Unix(),
+					"updated_at":  task.UpdatedAt.Unix(),
+				})
+			}
+		}
+		jsonResponse(w, tasks)
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/kanban/tasks/")
+	// Handle /move suffix
+	if strings.HasSuffix(id, "/move") {
+		id = strings.TrimSuffix(id, "/move")
+		s.handleKanbanTaskMove(w, r, id)
+		return
+	}
+
+	if id == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	if s.kanbanMgr == nil {
+		http.Error(w, "kanban not initialized", 500)
+		return
+	}
+
+	task, err := s.kanbanMgr.GetTask(id)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		jsonResponse(w, map[string]interface{}{
+			"id":          task.ID,
+			"title":       task.Title,
+			"description": task.Body,
+			"status":      task.Status,
+			"priority":    task.Priority,
+			"assignee":    task.Assignee,
+			"tags":        task.Skills,
+			"created_at":  task.CreatedAt.Unix(),
+			"updated_at":  task.UpdatedAt.Unix(),
+		})
+	case "PUT":
+		var req struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			Priority    string `json:"priority"`
+			Status      string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		updates := make(map[string]interface{})
+		if req.Title != "" {
+			updates["title"] = req.Title
+		}
+		if req.Description != "" {
+			updates["body"] = req.Description
+		}
+		if req.Priority != "" {
+			priority := 1
+			if req.Priority == "high" {
+				priority = 2
+			} else if req.Priority == "low" {
+				priority = 0
+			}
+			updates["priority"] = priority
+		}
+		if req.Status != "" {
+			updates["status"] = req.Status
+		}
+
+		updatedTask, err := s.kanbanMgr.UpdateTask(id, updates)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		jsonResponse(w, map[string]interface{}{
+			"id":          updatedTask.ID,
+			"title":       updatedTask.Title,
+			"status":      updatedTask.Status,
+			"priority":    updatedTask.Priority,
+			"updated_at":  updatedTask.UpdatedAt.Unix(),
+		})
+	case "DELETE":
+		if err := s.kanbanMgr.DeleteTask(id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]bool{"ok": true})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (s *Server) handleKanbanTaskMove(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	if s.kanbanMgr == nil {
+		http.Error(w, "kanban not initialized", 500)
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+
+	updates := map[string]interface{}{
+		"status": req.Status,
+	}
+
+	task, err := s.kanbanMgr.UpdateTask(id, updates)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"id":     task.ID,
+		"status": task.Status,
+	})
+}
+
+// --- GroupChat Handlers ---
+
+func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var req struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		if s.groupchatStorage == nil {
+			http.Error(w, "groupchat not initialized", 500)
+			return
+		}
+
+		room := &groupchat.Room{
+			ID:          uuid.New().String(),
+			Name:        req.Name,
+			InviteCode:  "",
+			CreatedAt:   time.Now().UnixMilli(),
+			UpdatedAt:   time.Now().UnixMilli(),
+		}
+
+		if err := s.groupchatStorage.SaveRoom(room); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		jsonResponse(w, map[string]interface{}{
+			"id":          room.ID,
+			"name":        room.Name,
+			"description": room.InviteCode,
+			"members":     []string{},
+			"agent_ids":   []string{},
+			"created_at":  room.CreatedAt,
+		})
+		return
+	}
+
+	if r.Method == "GET" {
+		if s.groupchatStorage == nil {
+			jsonResponse(w, []interface{}{})
+			return
+		}
+
+		rooms, _ := s.groupchatStorage.ListRooms()
+		result := make([]interface{}, 0)
+		for _, room := range rooms {
+			result = append(result, map[string]interface{}{
+				"id":          room.ID,
+				"name":        room.Name,
+				"description": room.InviteCode,
+				"members":     []string{},
+				"agent_ids":   []string{},
+				"created_at":  room.CreatedAt,
+			})
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleGroupchatRoomByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/")
+
+	if id == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	// Check for messages subroute
+	if strings.HasSuffix(r.URL.Path, "/messages") {
+		roomID := strings.TrimSuffix(id, "/messages")
+		s.handleGroupchatMessages(w, r, roomID)
+		return
+	}
+
+	if s.groupchatStorage == nil {
+		http.Error(w, "groupchat not initialized", 500)
+		return
+	}
+
+	room, err := s.groupchatStorage.GetRoom(id)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		jsonResponse(w, map[string]interface{}{
+			"id":          room.ID,
+			"name":        room.Name,
+			"description": room.InviteCode,
+			"members":     []string{},
+			"agent_ids":   []string{},
+			"created_at":  room.CreatedAt,
+		})
+	case "DELETE":
+		if err := s.groupchatStorage.DeleteRoom(id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]bool{"ok": true})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request, roomID string) {
+	if s.groupchatStorage == nil {
+		http.Error(w, "groupchat not initialized", 500)
+		return
+	}
+
+	if r.Method == "GET" {
+		messages, _ := s.groupchatStorage.GetMessages(roomID, 100)
+		result := make([]interface{}, 0)
+		for _, msg := range messages {
+			result = append(result, map[string]interface{}{
+				"id":         msg.ID,
+				"room_id":    msg.RoomID,
+				"sender":     msg.SenderID,
+				"role":       msg.Type,
+				"content":    msg.Content,
+				"timestamp":  msg.Timestamp,
+			})
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		msg := &groupchat.ChatMessage{
+			ID:         uuid.New().String(),
+			RoomID:     roomID,
+			SenderID:   "user",
+			SenderName: "User",
+			Content:    req.Content,
+			Timestamp:  time.Now().UnixMilli(),
+			Type:       "text",
+		}
+
+		if err := s.groupchatStorage.SaveMessage(msg); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		jsonResponse(w, map[string]interface{}{
+			"id":        msg.ID,
+			"room_id":   msg.RoomID,
+			"sender":    msg.SenderID,
+			"role":      msg.Type,
+			"content":   msg.Content,
+			"timestamp": msg.Timestamp,
+		})
+		return
+	}
+
 	http.Error(w, "method not allowed", 405)
 }
 
@@ -3486,8 +4090,37 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SPA disabled - dist directory removed
-	http.Error(w, "SPA not available", 404)
+	// Serve embedded SPA files
+	serveSPA(w, r)
+}
+
+func serveSPA(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Remove leading slash
+	if path == "/" {
+		path = "/index.html"
+	}
+	path = strings.TrimPrefix(path, "/")
+
+	// Try to serve the file from embedded dist
+	fullPath := "dist/" + path
+	data, err := distFS.ReadFile(fullPath)
+	if err != nil {
+		// If file not found, serve index.html for SPA routing
+		data, err = distFS.ReadFile("dist/index.html")
+		if err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(data)
+		return
+	}
+
+	contentType := getContentType(fullPath)
+	w.Header().Set("Content-Type", contentType)
+	w.Write(data)
 }
 
 func getContentType(path string) string {
