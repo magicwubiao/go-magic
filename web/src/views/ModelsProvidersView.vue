@@ -6,63 +6,44 @@
       <!-- Providers Tab -->
       <n-tab-pane name="providers" tab="Providers">
         <n-space style="margin-bottom: 16px;">
-          <n-button type="primary" @click="showAddProviderModal = true">
-            Add Provider
-          </n-button>
+          <n-button type="primary" @click="openAddModal">Add Provider</n-button>
         </n-space>
 
         <n-spin v-if="providersStore.loading" />
-        <n-list v-else>
-          <n-list-item v-for="provider in providersStore.providers" :key="provider.id">
-            <n-thing :title="provider.name">
-              <template #description>
-                <n-space>
-                  <n-tag :type="provider.enabled ? 'success' : 'default'">
-                    {{ provider.enabled ? 'Enabled' : 'Disabled' }}
-                  </n-tag>
-                  <n-text depth="3">{{ provider.type }}</n-text>
-                </n-space>
-              </template>
-              <template #action>
-                <n-space>
-                  <n-button size="small" @click="editProvider(provider)">Edit</n-button>
-                  <n-button size="small" type="error" @click="deleteProvider(provider.id)">Delete</n-button>
-                </n-space>
-              </template>
-            </n-thing>
-          </n-list-item>
-        </n-list>
+        <n-data-table
+          v-else
+          :columns="providerColumns"
+          :data="providersStore.providers"
+          :bordered="false"
+          size="small"
+        />
 
-        <!-- Add/Edit Provider Modal -->
-        <n-modal v-model:show="showAddProviderModal" title="Provider">
-          <n-card style="width: 500px;">
-            <n-form>
-              <n-form-item label="Name">
-                <n-input v-model:value="providerForm.name" />
-              </n-form-item>
-              <n-form-item label="Type">
-                <n-select v-model:value="providerForm.type" :options="typeOptions" />
-              </n-form-item>
-              <n-form-item label="API Key">
-                <n-input v-model:value="providerForm.api_key" type="password" show-password-on="click" placeholder="Your API key" />
-              </n-form-item>
-              <n-form-item label="Base URL">
-                <n-input v-model:value="providerForm.base_url" placeholder="Optional custom base URL" />
-              </n-form-item>
-              <n-form-item label="Model">
-                <n-input v-model:value="providerForm.model" placeholder="Default model for this provider" />
-              </n-form-item>
-              <n-form-item label="Enabled">
-                <n-switch v-model:value="providerForm.enabled" />
-              </n-form-item>
-            </n-form>
-            <template #footer>
-              <n-space justify="end">
-                <n-button @click="showAddProviderModal = false">Cancel</n-button>
-                <n-button type="primary" @click="saveProvider">Save</n-button>
-              </n-space>
-            </template>
-          </n-card>
+        <!-- Add/Edit Modal -->
+        <n-modal v-model:show="showModal" :title="editingId ? 'Edit Provider' : 'Add Provider'" preset="dialog">
+          <n-form label-placement="left" label-width="120">
+            <n-form-item label="Name">
+              <n-input v-model:value="form.name" placeholder="Provider name" />
+            </n-form-item>
+            <n-form-item label="Provider">
+              <n-select v-model:value="form.type" :options="typeOptions" />
+            </n-form-item>
+            <n-form-item label="API Key">
+              <n-input v-model:value="form.api_key" type="password" show-password-on="click" placeholder="Your API key" />
+            </n-form-item>
+            <n-form-item label="Base URL">
+              <n-input v-model:value="form.base_url" placeholder="Optional custom base URL" />
+            </n-form-item>
+            <n-form-item label="Model">
+              <n-input v-model:value="form.model" placeholder="Default model" />
+            </n-form-item>
+          </n-form>
+          <template #action>
+            <n-space justify="end">
+              <n-button v-if="editingId" type="error" @click="deleteProvider">Delete</n-button>
+              <n-button @click="showModal = false">Cancel</n-button>
+              <n-button type="primary" @click="saveProvider">Save</n-button>
+            </n-space>
+          </template>
         </n-modal>
       </n-tab-pane>
 
@@ -70,7 +51,7 @@
       <n-tab-pane name="models" tab="Models">
         <n-spin v-if="modelsStore.loading" />
         <div v-else>
-          <n-card title="Current Model" style="margin-bottom: 16px;">
+          <n-card title="Current Model" size="small" style="margin-bottom: 16px;">
             <n-space align="center">
               <n-tag type="success" size="large">
                 {{ modelsStore.currentModel?.name || 'Not set' }}
@@ -80,31 +61,12 @@
               </n-text>
             </n-space>
           </n-card>
-
-          <n-card title="Available Models">
-            <n-list>
-              <n-list-item v-for="model in modelsStore.models" :key="model.id">
-                <n-thing :title="model.name">
-                  <template #description>
-                    <n-space>
-                      <n-tag size="small">{{ model.provider }}</n-tag>
-                      <n-text depth="3">{{ model.description }}</n-text>
-                    </n-space>
-                  </template>
-                  <template #action>
-                    <n-button
-                      size="small"
-                      :type="isCurrent(model.id) ? 'primary' : 'default'"
-                      :disabled="isCurrent(model.id)"
-                      @click="selectModel(model.id)"
-                    >
-                      {{ isCurrent(model.id) ? 'Active' : 'Select' }}
-                    </n-button>
-                  </template>
-                </n-thing>
-              </n-list-item>
-            </n-list>
-          </n-card>
+          <n-data-table
+            :columns="modelColumns"
+            :data="modelsStore.models"
+            :bordered="false"
+            size="small"
+          />
         </div>
       </n-tab-pane>
     </n-tabs>
@@ -112,8 +74,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { ref, reactive, h, onMounted } from 'vue'
+import { useMessage, NButton, NTag, NPopconfirm } from 'naive-ui'
 import { useProvidersStore } from '@/stores/providers'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
@@ -124,17 +86,15 @@ const providersStore = useProvidersStore()
 const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 
-// --- Providers ---
-const showAddProviderModal = ref(false)
-const editingProviderId = ref<string | null>(null)
+const showModal = ref(false)
+const editingId = ref<string | null>(null)
 
-const providerForm = reactive({
+const form = reactive({
   name: '',
   type: 'openai',
   api_key: '',
   base_url: '',
   model: '',
-  enabled: true,
 })
 
 const typeOptions = [
@@ -149,58 +109,124 @@ const typeOptions = [
   { label: 'Groq', value: 'groq' },
   { label: 'Mistral', value: 'mistral' },
   { label: 'Cohere', value: 'cohere' },
-  { label: 'Custom (OpenAI Compatible)', value: 'custom' },
+  { label: 'Custom', value: 'custom' },
 ]
 
+const providerColumns = [
+  { title: 'Name', key: 'name' },
+  { title: 'Provider', key: 'type' },
+  { title: 'Model', key: 'model' },
+  {
+    title: 'API Key',
+    key: 'api_key',
+    render: (row: Provider) => h(NTag, { size: 'small', type: row.api_key ? 'success' : 'default' }, () => row.api_key ? 'Set' : 'Not set'),
+  },
+  {
+    title: 'Actions',
+    key: 'actions',
+    render: (row: Provider) => h('div', { style: 'display: flex; gap: 4px;' }, [
+      h(NButton, { size: 'tiny', onClick: () => editProvider(row) }, () => 'Edit'),
+      h(NPopconfirm, { onPositiveClick: () => deleteProviderById(row.id) }, {
+        trigger: () => h(NButton, { size: 'tiny', type: 'error' }, () => 'Delete'),
+        default: () => 'Delete this provider?',
+      }),
+    ]),
+  },
+]
+
+const modelColumns = [
+  { title: 'Name', key: 'name' },
+  { title: 'Provider', key: 'provider' },
+  {
+    title: 'Action',
+    key: 'action',
+    render: (row: any) => h(NButton, {
+      size: 'tiny',
+      type: modelsStore.currentModel?.id === row.id ? 'primary' : 'default',
+      disabled: modelsStore.currentModel?.id === row.id,
+      onClick: () => selectModel(row),
+    }, () => modelsStore.currentModel?.id === row.id ? 'Active' : 'Select'),
+  },
+]
+
+function openAddModal() {
+  editingId.value = null
+  form.name = ''
+  form.type = 'openai'
+  form.api_key = ''
+  form.base_url = ''
+  form.model = ''
+  showModal.value = true
+}
+
 function editProvider(provider: Provider) {
-  editingProviderId.value = provider.id
-  providerForm.name = provider.name
-  providerForm.type = provider.type
-  providerForm.enabled = provider.enabled
-  message.info('Edit provider: ' + provider.name)
+  editingId.value = provider.id
+  form.name = provider.name
+  form.type = provider.type || 'openai'
+  form.api_key = provider.api_key || ''
+  form.base_url = provider.base_url || ''
+  form.model = provider.model || ''
+  showModal.value = true
 }
 
 async function saveProvider() {
-  if (editingProviderId.value) {
-    await providersStore.updateProvider(editingProviderId.value, { ...providerForm })
-  } else {
-    await providersStore.createProvider({ ...providerForm })
+  if (!form.name.trim()) {
+    message.warning('Please enter a provider name')
+    return
   }
-  // Also save to config if api_key provided
-  if (providerForm.api_key) {
-    const payload: any = {
-      providers: {
-        [providerForm.type]: {
-          provider: providerForm.type,
-          api_key: providerForm.api_key,
-          base_url: providerForm.base_url,
-          model: providerForm.model,
+
+  try {
+    if (editingId.value) {
+      await providersStore.updateProvider(editingId.value, { ...form })
+    } else {
+      await providersStore.createProvider({ ...form })
+    }
+
+    // Also update config for api_key
+    if (form.api_key) {
+      await configStore.updateConfig({
+        providers: {
+          [form.type]: {
+            api_key: form.api_key,
+            base_url: form.base_url,
+            model: form.model,
+          },
         },
-      },
+      })
     }
-    if (providerForm.model) {
-      payload.model = providerForm.model
-    }
-    await configStore.updateConfig(payload)
+
+    showModal.value = false
+    await providersStore.loadProviders()
+    message.success('Provider saved')
+  } catch (e) {
+    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
   }
-  showAddProviderModal.value = false
-  editingProviderId.value = null
-  message.success('Provider saved')
 }
 
-async function deleteProvider(id: string) {
-  await providersStore.deleteProvider(id)
+async function deleteProvider() {
+  if (!editingId.value) return
+  await providersStore.deleteProvider(editingId.value)
+  showModal.value = false
+  await providersStore.loadProviders()
   message.success('Provider deleted')
 }
 
-// --- Models ---
-const isCurrent = computed(() => (id: string) => {
-  return modelsStore.currentModel?.id === id
-})
+async function deleteProviderById(id: string) {
+  await providersStore.deleteProvider(id)
+  await providersStore.loadProviders()
+  message.success('Provider deleted')
+}
 
-async function selectModel(id: string) {
-  await modelsStore.setModel(id)
-  message.success('Model updated')
+async function selectModel(row: any) {
+  // Use row.id directly which is "provider/model" format
+  const modelId = row.id || `${row.provider}/${row.name}`
+
+  try {
+    await modelsStore.setModel(modelId)
+    message.success(`Model set to ${row.name} (${row.provider})`)
+  } catch (e) {
+    message.error('Failed to set model: ' + (e instanceof Error ? e.message : 'Unknown error'))
+  }
 }
 
 onMounted(() => {

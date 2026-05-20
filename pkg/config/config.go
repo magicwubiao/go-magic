@@ -39,6 +39,7 @@ type Config struct {
 	Display       DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
 	SecretRedaction bool `json:"secret_redaction,omitempty"`
+	Mode            string `json:"mode,omitempty"` // chat, plan, act
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
 	} `json:"agent,omitempty"`
@@ -171,6 +172,7 @@ func defaultConfig() *Config {
 		WorkingDir:    getDefaultWorkingDir(),
 		Provider:      "deepseek",
 		Model:         "deepseek-chat",
+		Mode:          "chat",
 		CortexEnabled: false,
 		Providers:     make(map[string]ProviderConfig),
 		Tools: ToolsConfig{

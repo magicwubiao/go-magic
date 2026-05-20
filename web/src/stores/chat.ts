@@ -23,7 +23,9 @@ export const useChatStore = defineStore('chat', () => {
 
   async function loadSessions(): Promise<void> {
     try {
-      sessions.value = await sessionsApi.getSessions()
+      const allSessions = await sessionsApi.getSessions()
+      // Filter out gateway sessions (only show web sessions)
+      sessions.value = allSessions.filter(s => !s.source || s.source === 'web')
     } catch (e) {
       console.error('Failed to load sessions:', e)
       sessions.value = []

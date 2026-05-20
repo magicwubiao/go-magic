@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import * as skillsApi from '@/api/skills'
 import type { Skill } from '@/api/skills'
 
@@ -7,16 +7,6 @@ export const useSkillsStore = defineStore('skills', () => {
   const skills = ref<Skill[]>([])
   const categories = ref<string[]>([])
   const loading = ref(false)
-  const searchQuery = ref('')
-
-  const filteredSkills = computed(() => {
-    if (!searchQuery.value) return skills.value
-    const q = searchQuery.value.toLowerCase()
-    return skills.value.filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q)
-    )
-  })
 
   async function loadSkills() {
     loading.value = true
@@ -31,28 +21,24 @@ export const useSkillsStore = defineStore('skills', () => {
     categories.value = await skillsApi.getSkillCategories()
   }
 
-  async function search(query: string) {
-    searchQuery.value = query
-    if (query) {
-      loading.value = true
-      try {
-        skills.value = await skillsApi.searchSkills(query)
-      } finally {
-        loading.value = false
-      }
-    } else {
-      await loadSkills()
-    }
+  async function toggleSkill(name: string, enabled: boolean) {
+    await skillsApi.toggleSkill(name, enabled)
+    const skill = skills.value.find(s => s.name === name || s.id === name)
+    if (skill) skill.enabled = enabled
+  }
+
+  async function installSkill(url: string) {
+    await skillsApi.installSkill(url)
+    await loadSkills()
   }
 
   return {
     skills,
     categories,
     loading,
-    searchQuery,
-    filteredSkills,
     loadSkills,
     loadCategories,
-    search,
+    toggleSkill,
+    installSkill,
   }
 })

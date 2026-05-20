@@ -7,14 +7,18 @@ export const useKanbanStore = defineStore('kanban', () => {
   const tasks = ref<KanbanTask[]>([])
   const loading = ref(false)
 
+  // Normal flow columns (click to move forward)
   const columns = computed(() => [
     { key: 'triage', title: 'Triage', tasks: tasks.value.filter(t => t.status === 'triage') },
     { key: 'todo', title: 'To Do', tasks: tasks.value.filter(t => t.status === 'todo') },
     { key: 'ready', title: 'Ready', tasks: tasks.value.filter(t => t.status === 'ready') },
     { key: 'running', title: 'Running', tasks: tasks.value.filter(t => t.status === 'running') },
-    { key: 'blocked', title: 'Blocked', tasks: tasks.value.filter(t => t.status === 'blocked') },
     { key: 'done', title: 'Done', tasks: tasks.value.filter(t => t.status === 'done') },
+    { key: 'archived', title: 'Archived', tasks: tasks.value.filter(t => t.status === 'archived') },
   ])
+
+  // Special columns (blocked - not in normal flow)
+  const blockedTasks = computed(() => tasks.value.filter(t => t.status === 'blocked'))
 
   async function loadBoard() {
     loading.value = true
@@ -34,6 +38,13 @@ export const useKanbanStore = defineStore('kanban', () => {
     return newTask
   }
 
+  async function updateTask(id: string, updates: Partial<KanbanTask>) {
+    const updated = await kanbanApi.updateTask(id, updates)
+    const idx = tasks.value.findIndex(t => t.id === id)
+    if (idx >= 0) tasks.value[idx] = updated
+    return updated
+  }
+
   async function moveTask(id: string, status: string) {
     const updated = await kanbanApi.moveTask(id, status)
     const idx = tasks.value.findIndex(t => t.id === id)
@@ -45,5 +56,5 @@ export const useKanbanStore = defineStore('kanban', () => {
     tasks.value = tasks.value.filter(t => t.id !== id)
   }
 
-  return { tasks, columns, loading, loadBoard, addTask, moveTask, removeTask }
+  return { tasks, columns, blockedTasks, loading, loadBoard, addTask, updateTask, moveTask, removeTask }
 })

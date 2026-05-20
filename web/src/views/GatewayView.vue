@@ -4,8 +4,8 @@
       <h2>Gateway</h2>
       <n-space>
         <n-switch v-model:value="gatewayEnabled" @update:value="saveGatewayEnabled">
-          <template #checked>Running</template>
-          <template #unchecked>Stopped</template>
+          <template #checked>Enabled</template>
+          <template #unchecked>Disabled</template>
         </n-switch>
         <n-popconfirm @positive-click="restartGateway">
           <template #trigger>
@@ -18,117 +18,121 @@
 
     <!-- Status -->
     <n-card size="small" style="margin-bottom: 16px;">
-      <n-space align="center">
+      <n-space>
         <n-tag :type="gatewayEnabled ? 'success' : 'default'" size="large">
-          {{ gatewayEnabled ? '● Running' : '○ Stopped' }}
+          {{ gatewayEnabled ? '● Enabled' : '○ Disabled' }}
         </n-tag>
         <n-text depth="3">
-          {{ enabledCount }} / {{ platforms.length }} platform(s) enabled
+          {{ enabledCount }} / {{ platforms.length }} platform(s) configured
         </n-text>
       </n-space>
     </n-card>
 
     <!-- Platform Cards -->
-    <n-grid :cols="2" :x-gap="12" :y-gap="12">
+    <n-grid :cols="3" :x-gap="12" :y-gap="12">
       <n-gi v-for="platform in platforms" :key="platform.id">
         <n-card size="small" :title="platform.label">
           <template #header-extra>
             <n-switch v-model:value="platform.enabled" size="small" @update:value="savePlatform(platform)" />
           </template>
-
-          <!-- Token Config -->
-          <n-form label-placement="left" label-width="100" size="small">
-            <n-form-item :label="platform.tokenLabel">
-              <n-input
-                v-model:value="platform.token"
-                :type="platform.tokenType"
-                show-password-on="click"
-                :placeholder="platform.tokenPlaceholder"
-                size="small"
-                @blur="savePlatform(platform)"
-              />
-            </n-form-item>
-
-            <!-- Platform-specific fields -->
-            <template v-if="platform.id === 'wecom'">
-              <n-form-item label="Corp ID">
-                <n-input v-model:value="platform.corpId" placeholder="Enterprise Corp ID" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-              <n-form-item label="Agent ID">
-                <n-input v-model:value="platform.agentId" placeholder="Agent ID" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-              <n-form-item label="Secret">
-                <n-input v-model:value="platform.secret" type="password" show-password-on="click" placeholder="Secret" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-
-            <template v-if="platform.id === 'dingtalk' || platform.id === 'feishu'">
-              <n-form-item label="App Key">
-                <n-input v-model:value="platform.appKey" placeholder="App Key" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-              <n-form-item label="App Secret">
-                <n-input v-model:value="platform.appSecret" type="password" show-password-on="click" placeholder="App Secret" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-
-            <template v-if="platform.id === 'feishu'">
-              <n-form-item label="App ID">
-                <n-input v-model:value="platform.appId" placeholder="App ID" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-
-            <template v-if="platform.id === 'wechat_ilink' || platform.id === 'wechat'">
-              <n-form-item label="Mode">
-                <n-select v-model:value="platform.mode" :options="platform.modeOptions" size="small" @update:value="savePlatform(platform)" />
-              </n-form-item>
-              <n-form-item v-if="platform.id === 'wechat_ilink'" label="Auto Login">
-                <n-switch v-model:value="platform.autoLogin" size="small" @update:value="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-
-            <template v-if="platform.id === 'whatsapp'">
-              <n-form-item label="Mode">
-                <n-select v-model:value="platform.mode" :options="platform.modeOptions" size="small" @update:value="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-
-            <template v-if="platform.id === 'qq'">
-              <n-form-item label="Number">
-                <n-input v-model:value="platform.number" placeholder="QQ Number" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-              <n-form-item label="Password">
-                <n-input v-model:value="platform.password" type="password" show-password-on="click" placeholder="Password" size="small" @blur="savePlatform(platform)" />
-              </n-form-item>
-            </template>
-          </n-form>
-
-          <!-- QR Code Section -->
-          <template v-if="platform.supportsQR">
-            <n-divider style="margin: 8px 0;" />
-            <n-space vertical>
-              <n-button
-                size="small"
-                type="info"
-                :loading="platform.qrLoading"
-                @click="requestQRCode(platform)"
-              >
-                📱 Scan QR to Login
+          <n-space vertical size="small">
+            <n-text depth="3">{{ platform.description }}</n-text>
+            <n-tag :type="platform.enabled ? 'success' : 'default'" size="small">
+              {{ platform.enabled ? 'Enabled' : 'Disabled' }}
+            </n-tag>
+          </n-space>
+          <template #action>
+            <n-space>
+              <n-button size="small" @click="openEditModal(platform)">Configure</n-button>
+              <n-button v-if="platform.supportsQR" size="small" type="info" @click="showQRInfo(platform)">
+                QR Login
               </n-button>
-              <n-image
-                v-if="platform.qrCode"
-                :src="'data:image/png;base64,' + platform.qrCode"
-                width="160"
-                height="160"
-                style="border: 1px solid #e0e0e0; border-radius: 4px;"
-              />
-              <n-text v-if="platform.qrStatus" depth="3" style="font-size: 12px;">
-                Status: {{ platform.qrStatus }}
-              </n-text>
             </n-space>
           </template>
         </n-card>
       </n-gi>
     </n-grid>
+
+    <!-- Edit Platform Modal -->
+    <n-modal v-model:show="showEditModal" :title="editingPlatform?.label" preset="dialog" style="width: 500px;">
+      <n-form v-if="editingPlatform" label-placement="left" label-width="120" size="small">
+        <n-form-item label="Token">
+          <n-input
+            v-model:value="editingPlatform.token"
+            type="password"
+            show-password-on="click"
+            :placeholder="editingPlatform.tokenPlaceholder"
+          />
+        </n-form-item>
+
+        <!-- Platform-specific fields -->
+        <template v-if="editingPlatform.id === 'wecom'">
+          <n-form-item label="Corp ID">
+            <n-input v-model:value="editingPlatform.corpId" placeholder="Enterprise Corp ID" />
+          </n-form-item>
+          <n-form-item label="Agent ID">
+            <n-input v-model:value="editingPlatform.agentId" placeholder="Agent ID" />
+          </n-form-item>
+          <n-form-item label="Secret">
+            <n-input v-model:value="editingPlatform.secret" type="password" show-password-on="click" placeholder="Secret" />
+          </n-form-item>
+        </template>
+
+        <template v-if="editingPlatform.id === 'dingtalk' || editingPlatform.id === 'feishu'">
+          <n-form-item label="App Key">
+            <n-input v-model:value="editingPlatform.appKey" placeholder="App Key" />
+          </n-form-item>
+          <n-form-item label="App Secret">
+            <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="App Secret" />
+          </n-form-item>
+        </template>
+
+        <template v-if="editingPlatform.id === 'feishu'">
+          <n-form-item label="App ID">
+            <n-input v-model:value="editingPlatform.appId" placeholder="App ID" />
+          </n-form-item>
+        </template>
+
+        <template v-if="editingPlatform.id === 'wechat_ilink' || editingPlatform.id === 'wechat'">
+          <n-form-item label="Mode">
+            <n-select v-model:value="editingPlatform.mode" :options="editingPlatform.modeOptions" />
+          </n-form-item>
+          <n-form-item v-if="editingPlatform.id === 'wechat_ilink'" label="Auto Login">
+            <n-switch v-model:value="editingPlatform.autoLogin" />
+          </n-form-item>
+        </template>
+
+        <template v-if="editingPlatform.id === 'whatsapp'">
+          <n-form-item label="Mode">
+            <n-select v-model:value="editingPlatform.mode" :options="editingPlatform.modeOptions" />
+          </n-form-item>
+        </template>
+
+        <template v-if="editingPlatform.id === 'qq'">
+          <n-form-item label="Number">
+            <n-input v-model:value="editingPlatform.number" placeholder="QQ Number" />
+          </n-form-item>
+          <n-form-item label="Password">
+            <n-input v-model:value="editingPlatform.password" type="password" show-password-on="click" placeholder="Password" />
+          </n-form-item>
+        </template>
+      </n-form>
+      <template #action>
+        <n-space justify="end">
+          <n-button @click="showEditModal = false">Cancel</n-button>
+          <n-button type="primary" @click="saveEditingPlatform">Save</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- QR Info Modal -->
+    <n-modal v-model:show="showQRModal" title="QR Code Login" preset="dialog">
+      <n-alert type="info">
+        QR code login is available via CLI. Run the following command in your terminal:
+        <pre style="margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px;">magic gateway start</pre>
+      </n-alert>
+      <p>Then scan the QR code displayed in the terminal with your {{ qrPlatform?.label }} app.</p>
+    </n-modal>
   </div>
 </template>
 
@@ -137,7 +141,6 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useGatewayStore } from '@/stores/gateway'
 import { useConfigStore } from '@/stores/config'
-import { request } from '@/api/client'
 
 interface Platform {
   id: string
@@ -149,10 +152,6 @@ interface Platform {
   tokenType: string
   tokenPlaceholder: string
   supportsQR: boolean
-  qrCode: string
-  qrStatus: string
-  qrLoading: boolean
-  // Extra fields
   corpId: string
   agentId: string
   secret: string
@@ -170,12 +169,15 @@ const message = useMessage()
 const gatewayStore = useGatewayStore()
 const configStore = useConfigStore()
 const gatewayEnabled = ref(false)
+const showEditModal = ref(false)
+const showQRModal = ref(false)
+const editingPlatform = ref<Platform | null>(null)
+const qrPlatform = ref<Platform | null>(null)
 
 function createPlatform(id: string, label: string, description: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
   return reactive({
     id, label, description, enabled: false, token: '',
     tokenLabel, tokenType: 'password', tokenPlaceholder, supportsQR,
-    qrCode: '', qrStatus: '', qrLoading: false,
     corpId: '', agentId: '', secret: '',
     appKey: '', appSecret: '', appId: '',
     mode: '', modeOptions: [], autoLogin: false,
@@ -281,44 +283,21 @@ async function restartGateway(): Promise<void> {
   }
 }
 
-async function requestQRCode(platform: Platform): Promise<void> {
-  platform.qrLoading = true
-  try {
-    const res = await request<{ qr_code?: string; qr_data?: string; status?: string }>(`/login/qr/${platform.id}`, { method: 'POST' })
-    if (res.qr_code) {
-      platform.qrCode = res.qr_code
-      platform.qrStatus = 'Waiting for scan...'
-      pollQRStatus(platform)
-    } else if (res.qr_data) {
-      platform.qrStatus = 'QR data received, check terminal'
-    }
-  } catch (e) {
-    message.error('Failed to get QR code: ' + (e instanceof Error ? e.message : 'Unknown error'))
-  } finally {
-    platform.qrLoading = false
-  }
+function openEditModal(platform: Platform): void {
+  editingPlatform.value = platform
+  showEditModal.value = true
 }
 
-function pollQRStatus(platform: Platform): void {
-  const interval = setInterval(async () => {
-    try {
-      const res = await request<{ statuses: Array<{ platform: string; status: string }> }>('/login/status')
-      const status = res.statuses?.find(s => s.platform === platform.id)
-      if (status) {
-        platform.qrStatus = status.status
-        if (status.status === 'confirmed' || status.status === 'logged_in') {
-          platform.qrCode = ''
-          clearInterval(interval)
-          message.success(`${platform.label} logged in successfully`)
-        } else if (status.status === 'expired') {
-          platform.qrCode = ''
-          clearInterval(interval)
-        }
-      }
-    } catch {
-      clearInterval(interval)
-    }
-  }, 3000)
+function showQRInfo(platform: Platform): void {
+  qrPlatform.value = platform
+  showQRModal.value = true
+}
+
+async function saveEditingPlatform(): Promise<void> {
+  if (!editingPlatform.value) return
+  await savePlatform(editingPlatform.value)
+  showEditModal.value = false
+  message.success('Platform configuration saved')
 }
 
 onMounted(async () => {

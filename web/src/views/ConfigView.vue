@@ -3,37 +3,29 @@
     <h2 style="margin-bottom: 24px;">Configuration</h2>
     <n-spin v-if="configStore.loading" />
     <n-tabs v-else type="line" animated>
+      <!-- General Tab -->
+      <n-tab-pane name="general" tab="General">
+        <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
+          <n-form-item label="Secret Redaction">
+            <n-switch v-model:value="generalForm.secret_redaction" />
+          </n-form-item>
+          <n-form-item label="Working Directory">
+            <n-input v-model:value="generalForm.working_dir" placeholder="Enter directory path" />
+          </n-form-item>
+          <n-form-item>
+            <n-button type="primary" :loading="saving" @click="saveGeneral">Save</n-button>
+          </n-form-item>
+        </n-form>
+      </n-tab-pane>
+
       <!-- Agent Tab -->
       <n-tab-pane name="agent" tab="Agent">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item label="Working Directory">
-            <n-input-group>
-              <n-input v-model:value="agentForm.working_dir" placeholder="Select or type a directory path" />
-              <n-button @click="pickDirectory">📂 Browse</n-button>
-            </n-input-group>
-          </n-form-item>
           <n-form-item label="Goal Max Turns">
             <n-input-number v-model:value="agentForm.goal_max_turns" :min="1" :max="200" />
           </n-form-item>
-          <n-form-item label="Max Turns">
-            <n-input-number v-model:value="agentForm.max_turns" :min="1" :max="200" />
-          </n-form-item>
-          <n-form-item label="Max Iterations">
-            <n-input-number v-model:value="agentForm.max_iterations" :min="1" :max="200" />
-          </n-form-item>
-          <n-form-item label="Context Window">
-            <n-input-number v-model:value="agentForm.context_window" :min="1000" :max="1000000" :step="1000" />
-          </n-form-item>
-          <n-form-item label="Compression Enabled">
-            <n-switch v-model:value="agentForm.compression_enabled" />
-          </n-form-item>
-          <n-form-item label="Compression Ratio">
-            <n-slider v-model:value="agentForm.compression_ratio" :min="0.1" :max="1" :step="0.05" />
-          </n-form-item>
           <n-form-item>
-            <n-space>
-              <n-button type="primary" :loading="saving" @click="saveAgent">Save Agent Config</n-button>
-            </n-space>
+            <n-button type="primary" :loading="saving" @click="saveAgent">Save Agent Config</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -44,16 +36,8 @@
           <n-form-item label="Enable Memory">
             <n-switch v-model:value="memoryForm.enabled" />
           </n-form-item>
-          <n-form-item label="Auto Recall">
-            <n-switch v-model:value="memoryForm.auto_recall" />
-          </n-form-item>
-          <n-form-item label="Recall Limit">
-            <n-input-number v-model:value="memoryForm.recall_limit" :min="1" :max="50" />
-          </n-form-item>
           <n-form-item>
-            <n-space>
-              <n-button type="primary" :loading="saving" @click="saveMemory">Save Memory Config</n-button>
-            </n-space>
+            <n-button type="primary" :loading="saving" @click="saveMemory">Save Memory Config</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -116,59 +100,54 @@ const rawJson = ref('')
 const rawError = ref<string | null>(null)
 const authConfigured = ref(false)
 
-const agentForm = reactive({
+const generalForm = reactive({
   working_dir: '',
+  secret_redaction: false,
+})
+
+const agentForm = reactive({
   goal_max_turns: 60,
-  max_turns: 60,
-  max_iterations: 80,
-  context_window: 200000,
-  compression_enabled: true,
-  compression_ratio: 0.7,
 })
 
 const memoryForm = reactive({
   enabled: true,
-  auto_recall: true,
-  recall_limit: 5,
 })
 
 function populateFromConfig(cfg: any) {
+  generalForm.working_dir = cfg.working_dir || ''
+  generalForm.secret_redaction = cfg.secret_redaction || false
+
   const agent = cfg.agent || {}
-  agentForm.working_dir = agent.working_dir || ''
   agentForm.goal_max_turns = agent.goal_max_turns || 60
-  agentForm.max_turns = agent.max_turns || 60
-  agentForm.max_iterations = agent.max_iterations || 80
-  agentForm.context_window = agent.context_window || 200000
-  agentForm.compression_enabled = agent.compression_enabled !== false
-  agentForm.compression_ratio = agent.compression_ratio || 0.7
 
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
-  memoryForm.auto_recall = mem.auto_recall !== false
-  memoryForm.recall_limit = mem.recall_limit || 5
 }
 
-function pickDirectory(): void {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.webkitdirectory = true
-  input.onchange = () => {
-    if (input.files && input.files.length > 0) {
-      agentForm.working_dir = input.files[0].webkitRelativePath.split('/')[0]
-      // Try to get full path from the file
-      const path = (input.files[0] as any).path
-      if (path) {
-        agentForm.working_dir = path.replace(/\\/g, '/').replace(/\/[^/]*$/, '')
-      }
-    }
+async function saveGeneral() {
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      working_dir: generalForm.working_dir,
+      secret_redaction: generalForm.secret_redaction,
+    })
+    // Reload to ensure sync with server
+    await configStore.loadConfig()
+    message.success('General config saved')
+  } catch (e) {
+    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    saving.value = false
   }
-  input.click()
 }
 
 async function saveAgent() {
   saving.value = true
   try {
-    await configStore.updateConfig({ agent: { ...agentForm } })
+    await configStore.updateConfig({
+      agent: { goal_max_turns: agentForm.goal_max_turns }
+    })
+    await configStore.loadConfig()
     message.success('Agent config saved')
   } catch (e) {
     message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
@@ -180,7 +159,10 @@ async function saveAgent() {
 async function saveMemory() {
   saving.value = true
   try {
-    await configStore.updateConfig({ memory: { ...memoryForm } })
+    await configStore.updateConfig({
+      memory: { enabled: memoryForm.enabled }
+    })
+    await configStore.loadConfig()
     message.success('Memory config saved')
   } catch (e) {
     message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))

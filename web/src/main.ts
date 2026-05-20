@@ -20,6 +20,7 @@ import PluginsView from './views/PluginsView.vue'
 import GatewayView from './views/GatewayView.vue'
 import GroupChatView from './views/GroupChatView.vue'
 import ProfilesView from './views/ProfilesView.vue'
+import GoalsView from './views/GoalsView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -39,6 +40,7 @@ const router = createRouter({
     { path: '/logs', component: LogsView },
     { path: '/system', component: SystemView },
     { path: '/profiles', component: ProfilesView },
+    { path: '/goals', component: GoalsView },
   ],
 })
 

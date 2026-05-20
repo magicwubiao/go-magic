@@ -17,8 +17,18 @@ export async function getSkillCategories(): Promise<string[]> {
   return request('/skills/categories')
 }
 
-export async function getSkill(id: string): Promise<Skill> {
-  return request(`/skills/${id}`)
+export async function toggleSkill(name: string, enabled: boolean): Promise<void> {
+  await request('/skills/toggle', {
+    method: 'PUT',
+    body: JSON.stringify({ name, enabled }),
+  })
+}
+
+export async function installSkill(url: string): Promise<void> {
+  return request('/skills/install', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  })
 }
 
 export async function searchSkills(query: string): Promise<Skill[]> {

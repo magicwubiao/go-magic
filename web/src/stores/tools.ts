@@ -28,14 +28,14 @@ export const useToolsStore = defineStore('tools', () => {
     categories.value = await toolsApi.getToolCategories()
   }
 
-  async function enableToolset(id: string) {
-    await toolsApi.enableToolset(id)
-    await loadToolsets()
-  }
-
-  async function disableToolset(id: string) {
-    await toolsApi.disableToolset(id)
-    await loadToolsets()
+  async function toggleToolset(id: string, enabled: boolean) {
+    if (enabled) {
+      await toolsApi.enableToolset(id)
+    } else {
+      await toolsApi.disableToolset(id)
+    }
+    const toolset = toolsets.value.find(t => t.id === id)
+    if (toolset) toolset.enabled = enabled
   }
 
   return {
@@ -47,7 +47,6 @@ export const useToolsStore = defineStore('tools', () => {
     loadTools,
     loadToolsets,
     loadCategories,
-    enableToolset,
-    disableToolset,
+    toggleToolset,
   }
 })

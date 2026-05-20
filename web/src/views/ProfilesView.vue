@@ -80,6 +80,8 @@
 import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { request } from '@/api/client'
+import { useConfigStore } from '@/stores/config'
+import { useChatStore } from '@/stores/chat'
 
 interface Profile {
   name: string
@@ -92,6 +94,8 @@ interface Profile {
 }
 
 const message = useMessage()
+const configStore = useConfigStore()
+const chatStore = useChatStore()
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
 const creating = ref(false)
@@ -141,6 +145,9 @@ async function switchProfile(name: string): Promise<void> {
   try {
     await request(`/profiles/${name}/switch`, { method: 'POST' })
     message.success(`Switched to profile "${name}"`)
+    // Reload config and sessions after profile switch
+    await configStore.loadConfig()
+    await chatStore.loadSessions()
     await loadProfiles()
   } catch (e) {
     message.error('Failed to switch profile')

@@ -170,13 +170,13 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	var sessions []*Session
 	for rows.Next() {
 		var session Session
-		var messagesStr string
+		var messagesStr sql.NullString
 		err := rows.Scan(&session.ID, &session.Profile, &session.Platform, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
-		if messagesStr != "" {
-			json.Unmarshal([]byte(messagesStr), &session.Messages)
+		if messagesStr.Valid && messagesStr.String != "" {
+			json.Unmarshal([]byte(messagesStr.String), &session.Messages)
 		}
 		sessions = append(sessions, &session)
 	}

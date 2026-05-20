@@ -1,0 +1,123 @@
+<template>
+  <div>
+    <n-space justify="space-between" style="margin-bottom: 16px;">
+      <h2>Goals</h2>
+      <n-button type="primary" @click="openAddGoal">+ New Goal</n-button>
+    </n-space>
+
+    <n-tabs type="line" animated>
+      <n-tab-pane name="active" tab="Active">
+        <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
+      </n-tab-pane>
+      <n-tab-pane name="completed" tab="Completed">
+        <GoalList :goals="goalsStore.completedGoals" @edit="openEditGoal" @delete="deleteGoal" />
+      </n-tab-pane>
+      <n-tab-pane name="all" tab="All">
+        <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
+      </n-tab-pane>
+    </n-tabs>
+
+    <!-- Add/Edit Goal Modal -->
+    <n-modal v-model:show="showGoalModal" :title="editingGoal ? 'Edit Goal' : 'New Goal'">
+      <n-card style="width: 500px;">
+        <n-form>
+          <n-form-item label="Title">
+            <n-input v-model:value="goalForm.title" placeholder="Goal title" />
+          </n-form-item>
+          <n-form-item label="Description">
+            <n-input v-model:value="goalForm.description" type="textarea" :rows="4" placeholder="Describe your goal..." />
+          </n-form-item>
+          <n-form-item label="Progress" v-if="editingGoal">
+            <n-slider v-model:value="goalForm.progress" :min="0" :max="100" :step="5" />
+            <n-text>{{ goalForm.progress }}%</n-text>
+          </n-form-item>
+        </n-form>
+        <template #footer>
+          <n-space justify="end">
+            <n-button @click="showGoalModal = false">Cancel</n-button>
+            <n-button type="primary" @click="saveGoal">{{ editingGoal ? 'Save' : 'Create' }}</n-button>
+          </n-space>
+        </template>
+      </n-card>
+    </n-modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, onMounted } from 'vue'
+import { useMessage } from 'naive-ui'
+import { useGoalsStore } from '@/stores/goals'
+import GoalList from '@/components/GoalList.vue'
+import type { Goal } from '@/api/goals'
+
+const message = useMessage()
+const goalsStore = useGoalsStore()
+const showGoalModal = ref(false)
+const editingGoal = ref<Goal | null>(null)
+
+const goalForm = reactive({
+  title: '',
+  description: '',
+  progress: 0,
+})
+
+function openAddGoal() {
+  editingGoal.value = null
+  goalForm.title = ''
+  goalForm.description = ''
+  goalForm.progress = 0
+  showGoalModal.value = true
+}
+
+function openEditGoal(goal: Goal) {
+  editingGoal.value = goal
+  goalForm.title = goal.title
+  goalForm.description = goal.description
+  goalForm.progress = goal.progress
+  showGoalModal.value = true
+}
+
+async function saveGoal() {
+  if (!goalForm.title.trim()) {
+    message.warning('Please enter a title')
+    return
+  }
+
+  try {
+    if (editingGoal.value) {
+      await goalsStore.updateGoal(editingGoal.value.id, {
+        title: goalForm.title,
+        description: goalForm.description,
+        progress: goalForm.progress,
+      })
+      message.success('Goal updated')
+    } else {
+      await goalsStore.createGoal(goalForm.title, goalForm.description)
+      message.success('Goal created')
+    }
+    showGoalModal.value = false
+  } catch (e) {
+    message.error('Failed to save goal')
+  }
+}
+
+async function deleteGoal(goal: Goal) {
+  try {
+    await goalsStore.deleteGoal(goal.id)
+    message.success('Goal deleted')
+  } catch (e) {
+    message.error('Failed to delete goal')
+  }
+}
+
+async function completeGoal(goal: Goal) {
+  try {
+    await goalsStore.completeGoal(goal.id)
+    message.success('Goal completed!')
+  } catch (e) {
+    message.error('Failed to complete goal')
+  }
+}
+
+onMounted(() => goalsStore.loadGoals())
+</script>

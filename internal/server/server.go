@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cron"
+	"github.com/magicwubiao/go-magic/internal/goal"
 	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/plugin"
@@ -41,6 +42,7 @@ var distFS embed.FS
 // Session represents a chat session (API response format)
 type Session struct {
 	ID              string    `json:"id"`
+	Profile         string    `json:"profile"`
 	Source          string    `json:"source"`
 	Model           string    `json:"model"`
 	Title           string    `json:"title"`
@@ -143,6 +145,9 @@ type Server struct {
 	// GroupChat storage
 	groupchatStorage *groupchat.Storage
 
+	// Goal manager
+	goalMgr *goal.Manager
+
 	// Background actions tracking
 	actions      map[string]*ActionStatus
 	actionsMu    sync.RWMutex
@@ -185,10 +190,13 @@ func NewServer(dbPath string) *Server {
 	if dbPath == "" {
 		dbPath = filepath.Join(magicHome, "sessions.db")
 	}
+	fmt.Printf("[server] Session DB path: %s\n", dbPath)
 	store, err := session.NewStore(dbPath)
 	if err != nil {
 		fmt.Printf("[server] Warning: Failed to open session store: %v\n", err)
 		store = nil
+	} else {
+		fmt.Printf("[server] Session store opened successfully\n")
 	}
 
 	// Create provider
@@ -237,6 +245,13 @@ func NewServer(dbPath string) *Server {
 	groupchatStorage, err = groupchat.NewStorageFromHome(magicHome)
 	if err != nil {
 		fmt.Printf("[server] Warning: Failed to create groupchat storage: %v\n", err)
+	}
+
+	// Initialize Goal Manager
+	var goalMgr *goal.Manager
+	goalMgr, err = goal.NewManager(magicHome)
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create goal manager: %v\n", err)
 	}
 
 	// Load disabled skills from config
@@ -288,6 +303,7 @@ func NewServer(dbPath string) *Server {
 		kanbanMgr:       kanbanMgr,
 		pluginMgr:       pluginMgr,
 		groupchatStorage: groupchatStorage,
+		goalMgr:         goalMgr,
 		actions:         make(map[string]*ActionStatus),
 		authToken:       authToken,
 	}
@@ -484,6 +500,7 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 
 	return &Session{
 		ID:             s.ID,
+		Profile:        s.Profile,
 		Source:         s.Platform,
 		Model:          s.Model,
 		Title:          title,
@@ -610,6 +627,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/chat/stream", withCORS(requireAuth(s.handleChatStream)))
 
 	// Tools
+	mux.HandleFunc("/api/tools", withCORS(requireAuth(s.handleTools)))
 	mux.HandleFunc("/api/toolsets", withCORS(requireAuth(s.handleToolsets)))
 	mux.HandleFunc("/api/tools/toolsets", withCORS(requireAuth(s.handleToolsets)))
 	mux.HandleFunc("/api/tools/toolsets/", withCORS(requireAuth(s.handleToolsetByID)))
@@ -703,6 +721,10 @@ func (s *Server) Start(port int) error {
 	// GroupChat
 	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
 	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomByID)))
+
+	// Goals
+	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
+	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -1581,25 +1603,65 @@ func (s *Server) handleToolsets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/tools/toolsets/")
-	id = strings.TrimSuffix(id, "/enable")
-	id = strings.TrimSuffix(id, "/disable")
 	id = strings.TrimPrefix(id, "/api/toolsets/")
 
 	// Handle enable/disable
 	if strings.HasSuffix(r.URL.Path, "/enable") {
-		jsonResponse(w, map[string]interface{}{
-			"ok":      true,
-			"name":    id,
-			"enabled": true,
-		})
+		id = strings.TrimSuffix(id, "/enable")
+		s.mu.Lock()
+		if s.cfg != nil {
+			// Add to enabled list if not present
+			found := false
+			for _, e := range s.cfg.Tools.Enabled {
+				if e == id || e == "all" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				s.cfg.Tools.Enabled = append(s.cfg.Tools.Enabled, id)
+			}
+			// Remove from disabled list
+			newDisabled := make([]string, 0)
+			for _, d := range s.cfg.Tools.Disabled {
+				if d != id {
+					newDisabled = append(newDisabled, d)
+				}
+			}
+			s.cfg.Tools.Disabled = newDisabled
+			_ = s.cfg.Save()
+		}
+		s.mu.Unlock()
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": true})
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/disable") {
-		jsonResponse(w, map[string]interface{}{
-			"ok":      true,
-			"name":    id,
-			"enabled": false,
-		})
+		id = strings.TrimSuffix(id, "/disable")
+		s.mu.Lock()
+		if s.cfg != nil {
+			// Add to disabled list
+			found := false
+			for _, d := range s.cfg.Tools.Disabled {
+				if d == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				s.cfg.Tools.Disabled = append(s.cfg.Tools.Disabled, id)
+			}
+			// Remove from enabled list (unless "all")
+			newEnabled := make([]string, 0)
+			for _, e := range s.cfg.Tools.Enabled {
+				if e != id {
+					newEnabled = append(newEnabled, e)
+				}
+			}
+			s.cfg.Tools.Enabled = newEnabled
+			_ = s.cfg.Save()
+		}
+		s.mu.Unlock()
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": false})
 		return
 	}
 
@@ -1662,14 +1724,42 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	// Build toolset list
 	toolsets := make([]map[string]interface{}, 0, len(categoryTools))
 
+	// Check if all tools are enabled by default
+	allEnabled := false
+	for _, e := range s.cfg.Tools.Enabled {
+		if e == "all" {
+			allEnabled = true
+			break
+		}
+	}
+
+	// Helper to check if toolset is enabled
+	isEnabled := func(id string) bool {
+		// Check disabled list first
+		for _, d := range s.cfg.Tools.Disabled {
+			if d == id || d == "all" {
+				return false
+			}
+		}
+		// Check enabled list
+		for _, e := range s.cfg.Tools.Enabled {
+			if e == id || e == "all" {
+				return true
+			}
+		}
+		// Default: all enabled if not specified
+		return allEnabled || len(s.cfg.Tools.Enabled) == 0
+	}
+
 	// Add categorized toolsets
 	for catName, tools := range categoryTools {
+		id := strings.ToLower(strings.ReplaceAll(catName, " ", "_"))
 		toolsets = append(toolsets, map[string]interface{}{
-			"id":          strings.ToLower(strings.ReplaceAll(catName, " ", "_")),
+			"id":          id,
 			"name":        catName,
 			"label":       catName,
 			"description": categoryDescriptions[catName],
-			"enabled":     true,
+			"enabled":     isEnabled(id),
 			"configured":  true,
 			"tools":       tools,
 		})
@@ -1682,7 +1772,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 			"name":        "Other",
 			"label":       "Other",
 			"description": "Other tools",
-			"enabled":     true,
+			"enabled":     isEnabled("other"),
 			"configured":  true,
 			"tools":       ungrouped,
 		})
@@ -1706,6 +1796,18 @@ func (s *Server) handleGetToolsets() []Toolset {
 		})
 	}
 	return result
+}
+
+func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	// Return all tools from all toolsets
+	tools := make([]map[string]interface{}, 0)
+	toolsets := s.buildToolsets()
+	for _, ts := range toolsets {
+		if tsTools, ok := ts["tools"].([]map[string]interface{}); ok {
+			tools = append(tools, tsTools...)
+		}
+	}
+	jsonResponse(w, tools)
 }
 
 func (s *Server) handleToolCategories(w http.ResponseWriter, r *http.Request) {
@@ -1858,13 +1960,45 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 	// Handle install
 	if id == "install" && r.Method == "POST" {
 		var req struct {
+			URL      string `json:"url"`
 			Name     string `json:"name"`
 			Content  string `json:"content"`
 			Category string `json:"category"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		// Create skill directory and file
 		skillsDir := filepath.Join(s.magicHome, "skills")
+
+		// If URL is provided, download from Git URL
+		if req.URL != "" {
+			skillName := req.Name
+			if skillName == "" {
+				// Extract name from URL (e.g., github.com/user/repo -> repo)
+				parts := strings.Split(strings.TrimSuffix(req.URL, ".git"), "/")
+				if len(parts) > 0 {
+					skillName = parts[len(parts)-1]
+				}
+			}
+			if skillName == "" {
+				skillName = "installed-skill"
+			}
+			skillDir := filepath.Join(skillsDir, skillName)
+			os.MkdirAll(skillDir, 0755)
+
+			// Clone or download from URL (simplified: just create a marker file for now)
+			markerFile := filepath.Join(skillDir, "source.url")
+			os.WriteFile(markerFile, []byte(req.URL), 0644)
+
+			// If content provided, save as skill.yaml
+			if req.Content != "" {
+				skillFile := filepath.Join(skillDir, "skill.yaml")
+				os.WriteFile(skillFile, []byte(req.Content), 0644)
+			}
+
+			jsonResponse(w, map[string]interface{}{"ok": true, "name": skillName, "url": req.URL})
+			return
+		}
+
+		// Legacy: create from name/content
 		if req.Name != "" {
 			skillDir := filepath.Join(skillsDir, req.Name)
 			os.MkdirAll(skillDir, 0755)
@@ -1958,63 +2092,50 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 	pluginsDir := filepath.Join(s.magicHome, "plugins")
 	plugins := make([]map[string]interface{}, 0)
 
+	// Ensure plugins directory exists
+	os.MkdirAll(pluginsDir, 0755)
+
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
+		fmt.Printf("[server] Failed to read plugins dir: %v\n", err)
 		return plugins
 	}
 
+	fmt.Printf("[server] Scanning plugins dir: %s (found %d entries)\n", pluginsDir, len(entries))
+
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		name := entry.Name()
-		plugins = append(plugins, map[string]interface{}{
-			"id":          name,
-			"name":        name,
-			"description": fmt.Sprintf("Plugin: %s", name),
-			"enabled":     true,
-			"version":     "1.0.0",
-		})
+		if entry.IsDir() {
+			// Directory-based plugin
+			plugins = append(plugins, map[string]interface{}{
+				"id":          name,
+				"name":        name,
+				"description": fmt.Sprintf("Plugin: %s", name),
+				"enabled":     true,
+				"version":     "1.0.0",
+				"type":        "directory",
+			})
+		} else if filepath.Ext(name) == ".go" {
+			// Single .go file plugin
+			plugins = append(plugins, map[string]interface{}{
+				"id":          name,
+				"name":        name,
+				"description": fmt.Sprintf("Go plugin: %s", name),
+				"enabled":     true,
+				"version":     "1.0.0",
+				"type":        "go",
+			})
+		}
 	}
+	fmt.Printf("[server] Found %d plugins\n", len(plugins))
 	return plugins
 }
 
 func (s *Server) handleDashboardPlugins(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		if s.pluginMgr == nil {
-			// Fallback to simple file listing
-			pluginDir := filepath.Join(s.magicHome, "plugins")
-			files, _ := filepath.Glob(filepath.Join(pluginDir, "*.go")) // ignore error
-			result := make([]map[string]interface{}, 0)
-			for _, f := range files {
-				result = append(result, map[string]interface{}{
-					"id":          filepath.Base(f),
-					"name":        filepath.Base(f),
-					"version":     "1.0.0",
-					"description": "Local plugin",
-					"author":      "local",
-					"enabled":     true,
-					"type":        "local",
-				})
-			}
-			jsonResponse(w, result)
-			return
-		}
-
-		plugins := s.pluginMgr.List()
-		result := make([]map[string]interface{}, 0)
-		for _, p := range plugins {
-			result = append(result, map[string]interface{}{
-				"id":          p.Manifest.ID,
-				"name":        p.Manifest.Name,
-				"version":     p.Manifest.Version,
-				"description": p.Manifest.Description,
-				"author":      p.Manifest.Author,
-				"enabled":     p.State == plugin.StateEnabled,
-				"type":        p.Manifest.Category,
-			})
-		}
-		jsonResponse(w, result)
+		// Use unified scanPluginsDir logic
+		plugins := s.scanPluginsDir()
+		jsonResponse(w, plugins)
 		return
 	}
 
@@ -2028,16 +2149,15 @@ func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Req
 		return
 	}
 	plugins := s.scanPluginsDir()
-	jsonResponse(w, map[string]interface{}{
-		"ok":    true,
-		"count": len(plugins),
-	})
+	// Return the plugins list so frontend can update
+	jsonResponse(w, plugins)
 }
 
 // --- Models ---
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	models := make([]map[string]interface{}, 0)
+	seen := make(map[string]bool)
 
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
@@ -2045,23 +2165,30 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			if modelName == "" {
 				modelName = "default"
 			}
-			models = append(models, map[string]interface{}{
-				"id":         fmt.Sprintf("%s/%s", name, modelName),
-				"name":       modelName,
-				"provider":   name,
-				"contextLen": 128000,
-			})
+			id := fmt.Sprintf("%s/%s", name, modelName)
+			if !seen[id] {
+				seen[id] = true
+				models = append(models, map[string]interface{}{
+					"id":         id,
+					"name":       modelName,
+					"provider":   name,
+					"contextLen": 128000,
+				})
+			}
 		}
 	}
 
 	// Always include current provider
 	if s.cfg != nil && s.cfg.Provider != "" {
-		models = append(models, map[string]interface{}{
-			"id":         fmt.Sprintf("%s/%s", s.cfg.Provider, s.cfg.Model),
-			"name":       s.cfg.Model,
-			"provider":   s.cfg.Provider,
-			"contextLen": 128000,
-		})
+		id := fmt.Sprintf("%s/%s", s.cfg.Provider, s.cfg.Model)
+		if !seen[id] {
+			models = append(models, map[string]interface{}{
+				"id":         id,
+				"name":       s.cfg.Model,
+				"provider":   s.cfg.Provider,
+				"contextLen": 128000,
+			})
+		}
 	}
 
 	if len(models) == 0 {
@@ -2114,15 +2241,17 @@ func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
-	providers := make([]ProviderInfo, 0)
+	providers := make([]map[string]interface{}, 0)
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
-			providers = append(providers, ProviderInfo{
-				Name:    name,
-				Label:   name,
-				BaseURL: provCfg.BaseURL,
-				Models:  []string{provCfg.Model},
-				APIKey:  maskAPIKey(provCfg.APIKey),
+			providers = append(providers, map[string]interface{}{
+				"id":       name,
+				"name":     name,
+				"type":     name,
+				"enabled":  true,
+				"api_key":  provCfg.APIKey,
+				"base_url": provCfg.BaseURL,
+				"model":    provCfg.Model,
 			})
 		}
 	}
@@ -2192,6 +2321,50 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			s.cfg.Save()
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
+		return
+	}
+
+	// Handle DELETE /{name} - delete provider
+	if r.Method == http.MethodDelete && subRoute == "" {
+		if s.cfg != nil && s.cfg.Providers != nil {
+			delete(s.cfg.Providers, name)
+			s.cfg.Save()
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "deleted": true})
+		return
+	}
+
+	// Handle POST /{name} - create provider (alias for PUT to create new)
+	if r.Method == http.MethodPost && subRoute == "" {
+		var req struct {
+			BaseURL string   `json:"base_url"`
+			Model   string   `json:"model"`
+			APIKey  string   `json:"api_key"`
+			Models  []string `json:"models"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		// Create/update provider config
+		if s.cfg != nil {
+			if s.cfg.Providers == nil {
+				s.cfg.Providers = make(map[string]appconfig.ProviderConfig)
+			}
+			provCfg := s.cfg.Providers[name]
+			if req.BaseURL != "" {
+				provCfg.BaseURL = req.BaseURL
+			}
+			if req.Model != "" {
+				provCfg.Model = req.Model
+			}
+			if req.APIKey != "" {
+				provCfg.APIKey = req.APIKey
+			}
+			s.cfg.Providers[name] = provCfg
+			s.cfg.Save()
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "created": true})
 		return
 	}
 
@@ -2393,7 +2566,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	case "PUT":
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", 400)
+			http.Error(w, "invalid request: "+err.Error(), 400)
 			return
 		}
 		// Get config payload - support both {config: {...}} and direct config object
@@ -2408,14 +2581,46 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		expanded := expandDotKeys(configData)
 
 		// Merge into config
+		if s.cfg == nil {
+			s.cfg = appconfig.DefaultConfig()
+		}
 		data, _ := json.Marshal(expanded)
-		json.Unmarshal(data, s.cfg)
+		if err := json.Unmarshal(data, s.cfg); err != nil {
+			http.Error(w, "failed to merge config: "+err.Error(), 500)
+			return
+		}
 		// Save
 		configPath := filepath.Join(s.magicHome, "config.json")
 		saveData, _ := json.MarshalIndent(s.cfg, "", "  ")
-		os.WriteFile(configPath, saveData, 0644)
-		// Return standard {ok: true} response
-		jsonResponse(w, map[string]interface{}{"ok": true})
+		if err := os.WriteFile(configPath, saveData, 0644); err != nil {
+			http.Error(w, "failed to save config: "+err.Error(), 500)
+			return
+		}
+		fmt.Printf("[server] Config saved to %s\n", configPath)
+
+		// Check which config sections changed and hot-reload accordingly
+		hotReloadKeys := []string{"provider", "model", "api_key", "base_url", "secret_redaction", "profile", "working_dir"}
+		needsProviderReload := false
+
+		for key := range expanded {
+			for _, reloadKey := range hotReloadKeys {
+				if key == reloadKey {
+					needsProviderReload = true
+					break
+				}
+			}
+		}
+
+		// Hot-reload provider if provider-related config changed
+		if needsProviderReload {
+			s.mu.Lock()
+			s.provider = createProvider(s.cfg)
+			s.mu.Unlock()
+			fmt.Printf("[server] Provider hot-reloaded: %s / %s\n", s.cfg.Provider, s.cfg.Model)
+		}
+
+		// Return updated config
+		jsonResponse(w, s.cfg)
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
@@ -3470,7 +3675,18 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 	// Handle switch: /api/settings/profiles/{name}/switch
 	if strings.HasSuffix(path, "/switch") {
 		name := strings.TrimSuffix(path, "/switch")
-		// Mock switch - just return success
+		// Actually switch profile
+		if s.cfg != nil {
+			s.cfg.Profile = name
+			if err := s.cfg.Save(); err != nil {
+				http.Error(w, "Failed to save config: "+err.Error(), 500)
+				return
+			}
+			// Reload config to ensure memory is in sync
+			if newCfg, err := appconfig.Load(); err == nil {
+				s.cfg = newCfg
+			}
+		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
 		return
 	}
@@ -4238,10 +4454,86 @@ func copyDir(src, dst string) error {
 
 // --- Missing Handlers for Frontend API Compatibility ---
 
-// handleDashboardPluginsSubRoutes handles /api/dashboard/plugins/{name}/visibility
+// handleDashboardPluginsSubRoutes handles /api/dashboard/plugins/{name}/enable|disable|delete
 func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/dashboard/plugins/")
 
+	// Handle enable
+	if strings.HasSuffix(path, "/enable") {
+		name := strings.TrimSuffix(path, "/enable")
+		if r.Method == http.MethodPost {
+			// Add to enabled list
+			if s.cfg != nil {
+				found := false
+				for _, e := range s.cfg.Tools.Enabled {
+					if e == name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					s.cfg.Tools.Enabled = append(s.cfg.Tools.Enabled, name)
+					s.cfg.Save()
+				}
+			}
+			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
+			return
+		}
+	}
+
+	// Handle disable
+	if strings.HasSuffix(path, "/disable") {
+		name := strings.TrimSuffix(path, "/disable")
+		if r.Method == http.MethodPost {
+			// Add to disabled list
+			if s.cfg != nil {
+				found := false
+				for _, d := range s.cfg.Tools.Disabled {
+					if d == name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					s.cfg.Tools.Disabled = append(s.cfg.Tools.Disabled, name)
+					s.cfg.Save()
+				}
+			}
+			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
+			return
+		}
+	}
+
+	// Handle delete (DELETE /api/dashboard/plugins/{name})
+	if r.Method == http.MethodDelete {
+		name := path
+		pluginsDir := filepath.Join(s.magicHome, "plugins")
+		pluginPath := filepath.Join(pluginsDir, name)
+		
+		// Check if it's a file or directory
+		info, err := os.Stat(pluginPath)
+		if err != nil {
+			http.Error(w, "Plugin not found", http.StatusNotFound)
+			return
+		}
+		
+		// Remove plugin
+		if info.IsDir() {
+			err = os.RemoveAll(pluginPath)
+		} else {
+			err = os.Remove(pluginPath)
+		}
+		
+		if err != nil {
+			http.Error(w, "Failed to delete plugin", http.StatusInternalServerError)
+			return
+		}
+		
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "deleted": true})
+		return
+	}
+
+	// Handle visibility (legacy)
 	if strings.HasSuffix(path, "/visibility") {
 		name := strings.TrimSuffix(path, "/visibility")
 		if r.Method == http.MethodPost {
@@ -4267,6 +4559,7 @@ func (s *Server) handleAgentPluginInstall(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
+		URL        string `json:"url"`
 		Identifier string `json:"identifier"`
 		Force      bool   `json:"force"`
 		Enable     bool   `json:"enable"`
@@ -4275,10 +4568,35 @@ func (s *Server) handleAgentPluginInstall(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	// Support both url (frontend) and identifier (legacy)
+	pluginName := req.Identifier
+	if pluginName == "" && req.URL != "" {
+		// Extract name from URL
+		parts := strings.Split(strings.TrimSuffix(req.URL, ".git"), "/")
+		if len(parts) > 0 {
+			pluginName = parts[len(parts)-1]
+		}
+	}
+	if pluginName == "" {
+		pluginName = "installed-plugin"
+	}
+
+	// Create plugin directory and marker
+	pluginsDir := filepath.Join(s.magicHome, "plugins")
+	pluginDir := filepath.Join(pluginsDir, pluginName)
+	os.MkdirAll(pluginDir, 0755)
+
+	if req.URL != "" {
+		markerFile := filepath.Join(pluginDir, "source.url")
+		os.WriteFile(markerFile, []byte(req.URL), 0644)
+	}
+
 	jsonResponse(w, map[string]interface{}{
 		"ok":          true,
-		"plugin_name": req.Identifier,
+		"plugin_name": pluginName,
 		"enabled":     req.Enable,
+		"url":         req.URL,
 	})
 }
 

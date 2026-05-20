@@ -58,6 +58,7 @@ import {
   GitNetworkOutline,
   PeopleOutline,
   PersonOutline,
+  FlagOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 
@@ -81,6 +82,7 @@ function handleLogout() {
 const menuOptions = [
   { label: 'Chat', key: '/chat', icon: renderIcon(ChatbubbleOutline) },
   { label: 'Kanban', key: '/kanban', icon: renderIcon(GridOutline) },
+  { label: 'Goals', key: '/goals', icon: renderIcon(FlagOutline) },
   { type: 'divider' as const },
   { label: 'Models & Providers', key: '/models-providers', icon: renderIcon(CubeOutline) },
   { label: 'Tools', key: '/tools', icon: renderIcon(HammerOutline) },
