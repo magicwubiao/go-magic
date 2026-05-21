@@ -165,10 +165,10 @@ async function saveTask() {
   }
 
   if (editingTask.value) {
-    await kanbanStore.updateTask(editingTask.value.id, { ...taskForm })
+    await kanbanStore.updateTask(editingTask.value.id, { ...taskForm } as Partial<KanbanTask>)
     message.success('Task updated')
   } else {
-    await kanbanStore.addTask({ ...taskForm })
+    await kanbanStore.addTask({ ...taskForm } as Partial<KanbanTask>)
     message.success('Task created')
   }
   showTaskModal.value = false

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -161,7 +161,7 @@ type TUIModel struct {
 
 	// UI components
 	viewport viewport.Model
-	input    textarea.Model
+	input    textinput.Model
 	spinner  spinner.Model
 
 	// State
@@ -209,15 +209,12 @@ func NewTUIModel(aiAgent *agent.Agent, registry *tool.Registry, store *session.S
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00d2ff"))
 
-	// Textarea input
-	ta := textarea.New()
-	ta.Placeholder = "Type a message... (Enter: send, Shift+Enter: newline, /help for commands)"
-	ta.Focus()
-	ta.CharLimit = 0
-	ta.SetWidth(80)
-	ta.SetHeight(3)         // 默认显示3行
-	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetEnabled(true) // 允许换行
+	// Text input (single line)
+	ti := textinput.New()
+	ti.Placeholder = "Type a message... (Enter: send, /help for commands)"
+	ti.Focus()
+	ti.CharLimit = 0
+	ti.Width = 80
 
 	// Viewport
 	vp := viewport.New(80, 20)
@@ -235,7 +232,7 @@ func NewTUIModel(aiAgent *agent.Agent, registry *tool.Registry, store *session.S
 		sessionID:   sessionID,
 		sessionNum:  1,
 		spinner:     s,
-		input:       ta,
+		input:       ti,
 		viewport:    vp,
 		streamingOn: true,
 		statusText:  "ready",
@@ -368,9 +365,9 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
-		m.input.SetWidth(msg.Width - 4)
-		// viewport height = total - title(1) - input(3) - status(1)
-		m.viewport.Height = msg.Height - 5
+		m.input.Width = msg.Width - 4
+		// viewport height = total - title(1) - input(1) - status(1)
+		m.viewport.Height = msg.Height - 3
 		m.viewport.SetContent(m.renderMessages())
 		// Reinitialize markdown renderer with new terminal width
 		initMarkdownRenderer(msg.Width - 4)

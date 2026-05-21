@@ -7,6 +7,13 @@ export interface Config {
   base_url?: string
   temperature?: number
   max_tokens?: number
+  gateway?: Record<string, unknown>
+  working_dir?: string
+  agent?: Record<string, unknown>
+  memory?: Record<string, unknown>
+  provider_config?: Record<string, unknown>
+  providers?: unknown[]
+  secret_redaction?: boolean
 }
 
 export async function getConfig(): Promise<Config> {

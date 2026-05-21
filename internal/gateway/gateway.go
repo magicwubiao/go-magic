@@ -945,7 +945,7 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			session, err = qrManager.CreateSession(platform, qrData)
+			session, err = qrManager.CreateSession(platform, qrData, "")
 			if err != nil {
 				http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
 				return
@@ -989,7 +989,7 @@ func (g *Gateway) handleQRRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 
 		qrManager := GetQRManager()
-		session, err := qrManager.CreateSession(platform, qrData)
+		session, err := qrManager.CreateSession(platform, qrData, "")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
 			return

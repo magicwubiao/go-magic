@@ -46,7 +46,7 @@
             <n-input v-model:value="newJob.schedule" placeholder="0 8 * * *" />
           </n-form-item>
           <n-form-item label="Command">
-            <n-input v-model:value="newJob.command" type="textarea" />
+            <n-input v-model:value="newJob.command" placeholder="Command to execute" />
           </n-form-item>
         </n-form>
         <template #footer>

@@ -41,10 +41,9 @@
             </n-popconfirm>
           </div>
         </template>
-        <n-text v-if="!chatStore.sessions.length && !chatStore.loading" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <n-text v-if="!chatStore.sessions.length" depth="3" style="padding: 16px; display: block; text-align: center;">
           No sessions yet
         </n-text>
-        <n-spin v-if="chatStore.loading" size="small" style="padding: 16px; display: block; text-align: center;" />
       </div>
     </div>
 
@@ -104,14 +103,16 @@ const chatStore = useChatStore()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
 
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value
-    }
-    return hljs.highlightAuto(code).value
-  },
-})
+// Custom code renderer for highlight.js
+const codeRenderer = (code: string, lang?: string): string => {
+  const language = lang && hljs.getLanguage(lang) ? lang : null
+  const highlighted = language
+    ? hljs.highlight(code, { language }).value
+    : hljs.highlightAuto(code).value
+  return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`
+}
+
+marked.use({ renderer: { code: codeRenderer } })
 
 function renderMarkdown(content: string): string {
   return marked.parse(content) as string
@@ -286,8 +287,8 @@ onMounted(async () => {
 .content :deep(p:last-child) { margin-bottom: 0; }
 .content :deep(ul), .content :deep(ol) { margin: 8px 0; padding-left: 24px; }
 .content :deep(li) { margin: 4px 0; }
-.content :deep(pre) { background: #1e1e1e; padding: 12px; border-radius: 8px; overflow-x: auto; }
-.content :deep(code) { font-family: 'Fira Code', monospace; font-size: 14px; }
+.content :deep(pre) { background: #f0f0f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
+.content :deep(code) { font-family: 'Fira Code', monospace; font-size: 14px; color: #333; }
 
 .input-area { display: flex; gap: 12px; padding: 16px; border-top: 1px solid #e0e0e0; }
 .input-area .n-input { flex: 1; }

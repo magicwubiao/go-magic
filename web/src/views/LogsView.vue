@@ -18,7 +18,7 @@
     <n-spin :show="loading">
       <div
         ref="logContainer"
-        style="height: 600px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px;"
+        style="height: 600px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; background: #f8f8f8; color: #333; padding: 12px; border-radius: 4px;"
       >
         <div
           v-for="(line, index) in filteredLines"
@@ -60,10 +60,10 @@ const filteredLines = computed(() => {
 })
 
 function getLineStyle(line: string): Record<string, string> {
-  if (line.includes('[ERROR]')) return { color: '#f87171' }
-  if (line.includes('[WARN]')) return { color: '#fbbf24' }
-  if (line.includes('[INFO]')) return { color: '#60a5fa' }
-  if (line.includes('[DEBUG]')) return { color: '#9ca3af' }
+  if (line.includes('[ERROR]')) return { color: '#dc2626' }
+  if (line.includes('[WARN]')) return { color: '#d97706' }
+  if (line.includes('[INFO]')) return { color: '#2563eb' }
+  if (line.includes('[DEBUG]')) return { color: '#6b7280' }
   return {}
 }
 

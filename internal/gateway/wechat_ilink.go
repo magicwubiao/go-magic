@@ -237,7 +237,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	// Create HTTP client for CDN operations
 	g.client = newHTTPClient(g.config.Proxy)
 
-	// If no token, try auto-login
+	// If no token, try auto-login (silent mode - Web QR will handle display)
 	if g.config.Token == "" {
 		// No token available, start QR code login automatically
 		log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
@@ -246,6 +246,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 			BotType: g.config.BotType,
 			Proxy:   g.config.Proxy,
 			Timeout: ilinkAuthDefaultTimeout,
+			Silent:  true, // Silent mode - don't print QR to terminal
 		})
 		if err != nil {
 			g.mu.Lock()
@@ -281,6 +282,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 			BotType: g.config.BotType,
 			Proxy:   g.config.Proxy,
 			Timeout: ilinkAuthDefaultTimeout,
+			Silent:  true, // Silent mode for re-login too
 		}); loginErr == nil {
 			g.config.Token = token
 			g.config.BaseURL = baseURL
@@ -524,6 +526,7 @@ func (g *WeChatILinkGateway) CheckHealth() *HealthStatus {
 func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 	nextTimeoutMs := ilinkDefaultPollTimeoutMs
 	consecutiveFails := 0
+	lastTokenCheck := time.Now()
 
 	log.Debug("[WeChat-iLink] Poll loop started")
 
@@ -533,6 +536,12 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 			log.Debug("[WeChat-iLink] Poll loop stopped")
 			return
 		default:
+		}
+
+		// Periodically check if token has been updated externally (e.g. via Web QR login)
+		if time.Since(lastTokenCheck) > 10*time.Second {
+			lastTokenCheck = time.Now()
+			g.checkTokenUpdate()
 		}
 
 		// Wait if session is paused (e.g., token expired)
@@ -604,6 +613,7 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 					BotType: g.config.BotType,
 					Proxy:   g.config.Proxy,
 					Timeout: ilinkAuthDefaultTimeout,
+					Silent:  true,
 				}); err == nil {
 					g.config.Token = token
 					g.config.BaseURL = baseURL
@@ -898,6 +908,72 @@ func (g *WeChatILinkGateway) sendTextMessage(ctx context.Context, toUserID, cont
 			},
 		},
 	})
+}
+
+// ============================================================================
+// Token Hot-Reload
+// ============================================================================
+
+// checkTokenUpdate checks if the token in config.json has changed and updates the gateway if needed
+func (g *WeChatILinkGateway) checkTokenUpdate() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	configPath := filepath.Join(homeDir, ".magic", "config.json")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	var cfg struct {
+		Gateway struct {
+			Platforms map[string]struct {
+				Token  string `json:"token"`
+				APIURL string `json:"api_url"`
+			} `json:"platforms"`
+		} `json:"gateway"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+
+	ilinkCfg := cfg.Gateway.Platforms["wechat_ilink"]
+	newToken := ilinkCfg.Token
+	newBaseURL := ilinkCfg.APIURL
+
+	g.mu.RLock()
+	currentToken := g.config.Token
+	g.mu.RUnlock()
+
+	if newToken != "" && newToken != currentToken {
+		log.Info("[WeChat-iLink] Detected new token from config, updating API client...")
+		g.mu.Lock()
+		g.config.Token = newToken
+		if newBaseURL != "" {
+			g.config.BaseURL = newBaseURL
+		}
+		g.mu.Unlock()
+
+		if newAPI, err := NewILinkAPIClient(g.config.BaseURL, newToken, g.config.Proxy); err == nil {
+			g.mu.Lock()
+			g.api = newAPI
+			g.mu.Unlock()
+			// Clear session pause since we have a new token
+			g.pauseMu.Lock()
+			g.pauseUntil = time.Time{}
+			g.pauseMu.Unlock()
+			// Clear context tokens since new session
+			g.contextTokens.Range(func(key, _ interface{}) bool {
+				g.contextTokens.Delete(key)
+				return true
+			})
+			log.Info("[WeChat-iLink] ✅ Token updated successfully, session resumed")
+		} else {
+			log.Warnf("[WeChat-iLink] Failed to create API client with new token: %v", err)
+		}
+	}
 }
 
 // ============================================================================

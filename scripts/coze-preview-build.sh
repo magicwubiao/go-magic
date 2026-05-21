@@ -15,7 +15,11 @@ pnpm build
 
 echo "Copying dist to server directory..."
 mkdir -p ../internal/server/dist
-cp -r dist/* ../internal/server/dist/
+if [ -d "dist" ]; then
+  cp -r dist/* ../internal/server/dist/
+else
+  echo "dist/ not found, assuming vite already built to ../internal/server/dist"
+fi
 
 echo "Building Go binary..."
 cd ..

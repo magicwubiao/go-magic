@@ -19,6 +19,8 @@ type ILinkLoginOpts struct {
 	Proxy string
 	// Timeout for the login flow (default: 5 minutes)
 	Timeout time.Duration
+	// Silent mode - if true, don't print QR code to terminal (for Web QR mode)
+	Silent bool
 }
 
 // PerformILinkLogin starts the WeChat QR login flow and blocks until login is
@@ -50,34 +52,39 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 		return "", "", "", "", fmt.Errorf("failed to get QR code: %w", err)
 	}
 
-	fmt.Println()
-	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║  📱 微信扫码登录 / WeChat QR Login                   ║")
-	fmt.Println("╚══════════════════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("Instructions:")
-	fmt.Println("  1. Open WeChat on your phone")
-	fmt.Println("  2. Tap '+' → 'Scan'")
-	fmt.Println("  3. Scan the QR code")
-	fmt.Println("  4. Confirm login on your phone")
-	fmt.Println()
-
-	// Print QR code to terminal using QR code URL
-	// The QR code image is available as a data URL (qrcode_img_content)
-	if qrResp.QrcodeImgContent != "" {
-		// If it's a data URL (starts with data:image), print the URL for scanning
-		fmt.Println("QR Code URL:", qrResp.QrcodeImgContent)
+	// Only print QR code to terminal in non-silent mode
+	if !opts.Silent {
 		fmt.Println()
-		fmt.Println("💡 Tips:")
-		fmt.Println("   • Copy the URL above and open it in a browser to scan")
-		fmt.Println("   • Or right-click and copy image address if using a terminal with image support")
+		fmt.Println("╔══════════════════════════════════════════════════════╗")
+		fmt.Println("║  📱 微信扫码登录 / WeChat QR Login                   ║")
+		fmt.Println("╚══════════════════════════════════════════════════════╝")
+		fmt.Println()
+		fmt.Println("Instructions:")
+		fmt.Println("  1. Open WeChat on your phone")
+		fmt.Println("  2. Tap '+' → 'Scan'")
+		fmt.Println("  3. Scan the QR code")
+		fmt.Println("  4. Confirm login on your phone")
+		fmt.Println()
+
+		// Print QR code to terminal using QR code URL
+		// The QR code image is available as a data URL (qrcode_img_content)
+		if qrResp.QrcodeImgContent != "" {
+			// If it's a data URL (starts with data:image), print the URL for scanning
+			fmt.Println("QR Code URL:", qrResp.QrcodeImgContent)
+			fmt.Println()
+			fmt.Println("💡 Tips:")
+			fmt.Println("   • Copy the URL above and open it in a browser to scan")
+			fmt.Println("   • Or right-click and copy image address if using a terminal with image support")
+			fmt.Println()
+		} else {
+			fmt.Println("QR Code Key:", qrResp.Qrcode)
+		}
+
+		fmt.Println("⏳ Waiting for scan... (timeout:", opts.Timeout, ")")
 		fmt.Println()
 	} else {
-		fmt.Println("QR Code Key:", qrResp.Qrcode)
+		log.Info("[WeChat-iLink] QR login started in silent mode (Web QR)")
 	}
-
-	fmt.Println("⏳ Waiting for scan... (timeout:", opts.Timeout, ")")
-	fmt.Println()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
@@ -104,7 +111,7 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 				// Still waiting for scan
 
 			case "scaned":
-				if !scannedPrinted {
+				if !scannedPrinted && !opts.Silent {
 					fmt.Println("👀 二维码已扫描！请在手机上确认登录...")
 					fmt.Println("   QR code scanned! Please confirm login on your phone...")
 					scannedPrinted = true
@@ -124,15 +131,17 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 				log.Infof("[WeChat-iLink] ✅ Login successful! BotID: %s",
 					statusResp.IlinkBotID)
 
-				fmt.Println()
-				fmt.Println("=======================================================")
-				fmt.Println("✅ 登录成功！(Login successful!)")
-				fmt.Printf("   Bot Token: %s\n", statusResp.BotToken)
-				fmt.Printf("   Bot ID: %s\n", statusResp.IlinkBotID)
-				fmt.Printf("   User ID: %s\n", statusResp.IlinkUserID)
-				fmt.Printf("   API Base: %s\n", baseURL)
-				fmt.Println("=======================================================")
-				fmt.Println()
+				if !opts.Silent {
+					fmt.Println()
+					fmt.Println("=======================================================")
+					fmt.Println("✅ 登录成功！(Login successful!)")
+					fmt.Printf("   Bot Token: %s\n", statusResp.BotToken)
+					fmt.Printf("   Bot ID: %s\n", statusResp.IlinkBotID)
+					fmt.Printf("   User ID: %s\n", statusResp.IlinkUserID)
+					fmt.Printf("   API Base: %s\n", baseURL)
+					fmt.Println("=======================================================")
+					fmt.Println()
+				}
 
 				return statusResp.BotToken, statusResp.IlinkUserID,
 					statusResp.IlinkBotID, baseURL, nil
