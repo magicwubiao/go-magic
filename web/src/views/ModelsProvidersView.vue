@@ -95,6 +95,7 @@ const form = reactive({
   api_key: '',
   base_url: '',
   model: '',
+  enabled: true,
 })
 
 const typeOptions = [
@@ -166,6 +167,7 @@ function editProvider(provider: Provider) {
   form.api_key = provider.api_key || ''
   form.base_url = provider.base_url || ''
   form.model = provider.model || ''
+  form.enabled = provider.enabled ?? true
   showModal.value = true
 }
 
@@ -185,7 +187,7 @@ async function saveProvider() {
     // Also update config for api_key
     if (form.api_key) {
       await configStore.updateConfig({
-        providers: {
+        provider_config: {
           [form.type]: {
             api_key: form.api_key,
             base_url: form.base_url,

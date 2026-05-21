@@ -31,21 +31,6 @@ done
 
 export PORT
 
-# Find the built binary
-GO_OS=$(go env GOOS)
-GO_ARCH=$(go env GOARCH)
-BINARY="./dist/magic-${GO_OS}-${GO_ARCH}"
+BINARY="./build/magic"
 
-# Fallback to bin/magic for development mode
-if [ ! -f "$BINARY" ]; then
-    BINARY="./bin/magic"
-fi
-
-# Final fallback: build if needed
-if [ ! -f "$BINARY" ]; then
-    ./build.sh cli
-    BINARY="./dist/magic-${GO_OS}-${GO_ARCH}"
-fi
-
-# Start server with the built binary
-exec "$BINARY" server --port 5000
+exec "$BINARY" server --port "$PORT"

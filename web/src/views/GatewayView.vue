@@ -125,20 +125,79 @@
       </template>
     </n-modal>
 
-    <!-- QR Info Modal -->
-    <n-modal v-model:show="showQRModal" title="QR Code Login" preset="dialog">
-      <n-alert type="info">
-        QR code login is available via CLI. Run the following command in your terminal:
-        <pre style="margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px;">magic gateway start</pre>
-      </n-alert>
-      <p>Then scan the QR code displayed in the terminal with your {{ qrPlatform?.label }} app.</p>
+    <!-- QR Login Modal -->
+    <n-modal v-model:show="showQRModal" :title="`QR Code Login - ${qrPlatform?.label}`" preset="card" style="width: 400px;">
+      <div class="qr-modal-content">
+        <!-- QR Code Display -->
+        <div v-if="qrStatus === 'loading'" class="qr-loading">
+          <n-spin size="large" />
+          <n-text depth="3">Generating QR code...</n-text>
+        </div>
+        
+        <div v-else-if="qrStatus === 'error'" class="qr-error">
+          <n-result status="error" title="Error" :description="qrMessage" />
+          <n-button type="primary" @click="initQRCode">Retry</n-button>
+        </div>
+        
+        <div v-else-if="qrStatus === 'expired'" class="qr-expired">
+          <n-result status="warning" title="QR Code Expired" description="Please refresh to get a new code" />
+          <n-button type="primary" @click="initQRCode">Refresh QR Code</n-button>
+        </div>
+        
+        <div v-else class="qr-display">
+          <!-- QR Code Canvas -->
+          <div class="qr-canvas-container">
+            <canvas ref="qrCanvas" class="qr-canvas"></canvas>
+          </div>
+          
+          <!-- Status Message -->
+          <div class="qr-status" :class="`qr-status--${qrStatus}`">
+            <n-icon v-if="qrStatus === 'pending'" size="24">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zm8-2v8h-2V3h-4v8h6zm2 10h2v-6h-2v6zm-6-6v2h-2v-2h2zm8-8v6h2V3h-6v2h4z"/></svg>
+            </n-icon>
+            <n-icon v-else-if="qrStatus === 'scanning'" size="24" class="qr-icon--pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M9.5 6.5v3h-3v-3h3M11 5H5v6h6V5zm-1.5 9.5v3h-3v-3h3M11 13H5v6h6v-6zm6.5-6.5v3h-3v-3h3M19 5h-6v6h6V5zm-6 8h1.5v1.5H13V13zm1.5 1.5H16V16h-1.5v-1.5zM16 13h1.5v1.5H16V13zm-3 3h1.5v1.5H13V16zm1.5 1.5H16V19h-1.5v-1.5zM16 16h1.5v1.5H16V16zm1.5-1.5H19V16h-1.5v-1.5zm0 3H19V19h-1.5v-1.5zM19 13v1.5h-1.5V13H19z"/></svg>
+            </n-icon>
+            <n-icon v-else-if="qrStatus === 'confirmed'" size="24">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            </n-icon>
+            <n-text>{{ qrMessage }}</n-text>
+          </div>
+          
+          <!-- Countdown Timer -->
+          <div v-if="qrStatus === 'pending' || qrStatus === 'scanning'" class="qr-countdown">
+            <n-progress
+              type="circle"
+              :percentage="qrCountdownPercent"
+              :status="qrCountdownPercent < 20 ? 'error' : 'default'"
+              :stroke-width="8"
+              :size="48"
+            >
+              <template #default>
+                <n-text depth="3" style="font-size: 12px;">{{ qrCountdown }}s</n-text>
+              </template>
+            </n-progress>
+            <n-text depth="3" style="font-size: 12px;">Expires in {{ qrCountdown }}s</n-text>
+          </div>
+        </div>
+      </div>
+      
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="closeQRModal">Close</n-button>
+          <n-button v-if="qrStatus !== 'confirmed' && qrStatus !== 'loading'" type="primary" @click="initQRCode">
+            Refresh
+          </n-button>
+        </n-space>
+      </template>
     </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
+import QRCode from 'qrcode'
 import { useGatewayStore } from '@/stores/gateway'
 import { useConfigStore } from '@/stores/config'
 
@@ -165,6 +224,14 @@ interface Platform {
   password: string
 }
 
+interface QRResponse {
+  platform: string
+  status: string // pending, scanning, confirmed, expired, error
+  qr_code?: string
+  message?: string
+  expires_in?: number
+}
+
 const message = useMessage()
 const gatewayStore = useGatewayStore()
 const configStore = useConfigStore()
@@ -173,6 +240,16 @@ const showEditModal = ref(false)
 const showQRModal = ref(false)
 const editingPlatform = ref<Platform | null>(null)
 const qrPlatform = ref<Platform | null>(null)
+const qrCanvas = ref<HTMLCanvasElement | null>(null)
+
+// QR State
+const qrStatus = ref<'loading' | 'pending' | 'scanning' | 'confirmed' | 'expired' | 'error'>('loading')
+const qrMessage = ref('Please wait...')
+const qrCountdown = ref(60)
+const qrCountdownPercent = ref(100)
+const qrExpiresIn = ref(60)
+let qrPollInterval: ReturnType<typeof setInterval> | null = null
+let qrCountdownInterval: ReturnType<typeof setInterval> | null = null
 
 function createPlatform(id: string, label: string, description: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
   return reactive({
@@ -193,8 +270,8 @@ const platforms = ref<Platform[]>([
   createPlatform('wechat_ilink', 'WeChat iLink', 'WeChat Personal', 'Token', 'iLink Token', true),
   createPlatform('wecom', 'WeCom', 'Enterprise WeChat', 'Token', 'WeCom Token', true),
   createPlatform('qq', 'QQ', 'QQ Bot', 'App ID', 'QQ App ID'),
-  createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token'),
-  createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token'),
+  createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token', true),
+  createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token', true),
   createPlatform('whatsapp', 'WhatsApp', 'WhatsApp Bot', 'Token', 'WhatsApp Token', true),
   createPlatform('line', 'LINE', 'LINE Bot', 'Channel Token', 'LINE Channel Token'),
   createPlatform('matrix', 'Matrix', 'Matrix Protocol', 'Token', 'Matrix Token'),
@@ -291,6 +368,155 @@ function openEditModal(platform: Platform): void {
 function showQRInfo(platform: Platform): void {
   qrPlatform.value = platform
   showQRModal.value = true
+  nextTick(() => {
+    initQRCode()
+  })
+}
+
+async function initQRCode(): Promise<void> {
+  if (!qrPlatform.value) return
+  
+  qrStatus.value = 'loading'
+  qrMessage.value = 'Generating QR code...'
+  
+  try {
+    const resp = await fetch(`/api/gateway/qr?platform=${qrPlatform.value.id}`, {
+      credentials: 'include'
+    })
+    const data: QRResponse = await resp.json()
+    
+    qrStatus.value = data.status as typeof qrStatus.value
+    qrMessage.value = data.message || getDefaultMessage(data.status)
+    
+    if (data.status === 'pending' || data.status === 'scanning') {
+      qrExpiresIn.value = data.expires_in || 60
+      qrCountdown.value = qrExpiresIn.value
+      qrCountdownPercent.value = 100
+      
+      // Generate QR code image
+      if (data.qr_code && qrCanvas.value) {
+        await generateQRCodeImage(data.qr_code)
+      }
+      
+      // Start polling
+      startPolling()
+      startCountdown()
+    } else if (data.status === 'confirmed') {
+      message.success('Login successful!')
+      setTimeout(() => {
+        closeQRModal()
+      }, 1500)
+    }
+  } catch (e) {
+    qrStatus.value = 'error'
+    qrMessage.value = 'Failed to connect to server'
+    console.error('QR code error:', e)
+  }
+}
+
+async function generateQRCodeImage(data: string): Promise<void> {
+  if (!qrCanvas.value) return
+  
+  try {
+    await QRCode.toCanvas(qrCanvas.value, data, {
+      width: 200,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    })
+  } catch (e) {
+    console.error('Failed to generate QR code:', e)
+  }
+}
+
+function startPolling(): void {
+  stopPolling()
+  qrPollInterval = setInterval(async () => {
+    if (!qrPlatform.value || !showQRModal.value) {
+      stopPolling()
+      return
+    }
+    
+    try {
+      const resp = await fetch(`/api/gateway/qr/status?platform=${qrPlatform.value.id}`, {
+        credentials: 'include'
+      })
+      const data: QRResponse = await resp.json()
+      
+      if (data.status !== qrStatus.value) {
+        qrStatus.value = data.status as typeof qrStatus.value
+        qrMessage.value = data.message || getDefaultMessage(data.status)
+        
+        if (data.status === 'confirmed') {
+          message.success('Login successful!')
+          stopPolling()
+          stopCountdown()
+          setTimeout(() => {
+            closeQRModal()
+          }, 1500)
+        } else if (data.status === 'expired' || data.status === 'error') {
+          stopPolling()
+          stopCountdown()
+        }
+      }
+      
+      if (data.expires_in !== undefined) {
+        qrExpiresIn.value = data.expires_in
+      }
+    } catch (e) {
+      console.error('Poll error:', e)
+    }
+  }, 2000)
+}
+
+function startCountdown(): void {
+  stopCountdown()
+  qrCountdownInterval = setInterval(() => {
+    if (qrCountdown.value > 0) {
+      qrCountdown.value--
+      qrCountdownPercent.value = Math.round((qrCountdown.value / qrExpiresIn.value) * 100)
+    } else {
+      qrStatus.value = 'expired'
+      qrMessage.value = 'QR code expired. Please refresh.'
+      stopCountdown()
+      stopPolling()
+    }
+  }, 1000)
+}
+
+function stopPolling(): void {
+  if (qrPollInterval) {
+    clearInterval(qrPollInterval)
+    qrPollInterval = null
+  }
+}
+
+function stopCountdown(): void {
+  if (qrCountdownInterval) {
+    clearInterval(qrCountdownInterval)
+    qrCountdownInterval = null
+  }
+}
+
+function closeQRModal(): void {
+  stopPolling()
+  stopCountdown()
+  showQRModal.value = false
+  qrPlatform.value = null
+  qrStatus.value = 'loading'
+}
+
+function getDefaultMessage(status?: string): string {
+  switch (status) {
+    case 'pending': return 'Please scan the QR code with your app'
+    case 'scanning': return 'QR code scanned! Please confirm on your device'
+    case 'confirmed': return 'Login successful!'
+    case 'expired': return 'QR code expired. Please refresh.'
+    case 'error': return 'An error occurred. Please try again.'
+    default: return 'Please wait...'
+  }
 }
 
 async function saveEditingPlatform(): Promise<void> {
@@ -307,4 +533,54 @@ onMounted(async () => {
     populateFromConfig(configStore.config)
   }
 })
+
+onUnmounted(() => {
+  stopPolling()
+  stopCountdown()
+})
 </script>
+
+<style scoped>
+.chat-container { display: flex; height: 100%; }
+.session-sidebar { width: 260px; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; }
+.sidebar-header { padding: 12px; border-bottom: 1px solid #e0e0e0; }
+.session-list { flex: 1; overflow-y: auto; }
+.profile-group-header { padding: 8px 12px; font-size: 12px; color: #999; background: #f5f5f5; }
+.session-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #f0f0f0; position: relative; }
+.session-item:hover { background: #f5f5f5; }
+.session-item.active { background: #e6f7ff; }
+.session-title { font-size: 14px; margin-bottom: 4px; }
+.session-meta { font-size: 12px; color: #999; }
+.session-delete { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); opacity: 0; }
+.session-item:hover .session-delete { opacity: 1; }
+.chat-main { flex: 1; display: flex; flex-direction: column; }
+.messages { flex: 1; overflow-y: auto; padding: 16px; }
+.message { margin-bottom: 16px; }
+.message-bubble { max-width: 80%; padding: 12px 16px; border-radius: 8px; word-break: break-word; }
+.message-user .message-bubble { background: #1890ff; color: white; margin-left: auto; }
+.message-assistant .message-bubble { background: #f5f5f5; }
+.message-time { font-size: 11px; color: #999; margin-top: 4px; }
+.content :deep(pre) { background: #1e1e1e; padding: 12px; border-radius: 8px; overflow-x: auto; }
+.content :deep(code) { font-family: 'Fira Code', monospace; font-size: 14px; }
+.content :deep(p) { margin: 0 0 8px 0; }
+.content :deep(p:last-child) { margin-bottom: 0; }
+.content :deep(ul), .content :deep(ol) { margin: 8px 0; padding-left: 24px; }
+.content :deep(li) { margin: 4px 0; }
+.input-area { display: flex; gap: 12px; padding: 16px; border-top: 1px solid #e0e0e0; }
+.input-area .n-input { flex: 1; }
+
+/* QR Modal Styles */
+.qr-modal-content { display: flex; flex-direction: column; align-items: center; padding: 24px; min-height: 300px; }
+.qr-loading, .qr-error, .qr-expired { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; height: 250px; }
+.qr-display { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.qr-canvas-container { padding: 16px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
+.qr-canvas { display: block; }
+.qr-status { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 8px; font-size: 14px; }
+.qr-status--pending { background: #e6f7ff; color: #1890ff; }
+.qr-status--scanning { background: #fff7e6; color: #fa8c16; }
+.qr-status--confirmed { background: #f6ffed; color: #52c41a; }
+.qr-status--expired, .qr-status--error { background: #fff1f0; color: #ff4d4f; }
+.qr-icon--pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.qr-countdown { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+</style>

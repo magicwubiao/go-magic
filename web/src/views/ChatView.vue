@@ -41,10 +41,9 @@
             </n-popconfirm>
           </div>
         </template>
-        <n-text v-if="!chatStore.sessions.length && !chatStore.loading" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <n-text v-if="!chatStore.sessions.length" depth="3" style="padding: 16px; display: block; text-align: center;">
           No sessions yet
         </n-text>
-        <n-spin v-if="chatStore.loading" size="small" style="padding: 16px; display: block; text-align: center;" />
       </div>
     </div>
 
@@ -97,21 +96,23 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
-import 'highlight.js/styles/github.css'
+import 'highlight.js/styles/github-dark.css'
 import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
 
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value
-    }
-    return hljs.highlightAuto(code).value
-  },
-})
+// Custom code renderer for highlight.js
+const codeRenderer = (code: string, lang?: string): string => {
+  const language = lang && hljs.getLanguage(lang) ? lang : null
+  const highlighted = language
+    ? hljs.highlight(code, { language }).value
+    : hljs.highlightAuto(code).value
+  return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`
+}
+
+marked.use({ renderer: { code: codeRenderer } })
 
 function renderMarkdown(content: string): string {
   return marked.parse(content) as string

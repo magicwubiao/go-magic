@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/cron"
+	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/goal"
 	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/kanban"
@@ -706,6 +707,8 @@ func (s *Server) Start(port int) error {
 
 	// Gateway
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
+	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
+	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
 
 	// Magic update
 	mux.HandleFunc("/api/magic/update", withCORS(requireAuth(s.handleMagicUpdate)))
@@ -3734,6 +3737,279 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 	})
 	
 	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
+}
+
+// --- Gateway QR Code Login ---
+
+// QRStatus represents the status of a QR code login session
+type QRStatus struct {
+	Platform  string `json:"platform"`
+	Status    string `json:"status"` // pending, scanning, confirmed, expired, error
+	QRCode    string `json:"qr_code,omitempty"` // base64 encoded PNG
+	Message   string `json:"message,omitempty"`
+	ExpiresIn int    `json:"expires_in,omitempty"` // seconds remaining
+}
+
+func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	platform := r.URL.Query().Get("platform")
+	if platform == "" {
+		http.Error(w, "platform parameter is required", 400)
+		return
+	}
+
+	// Get the global QR manager
+	qrManager := gateway.GetQRManager()
+	if qrManager == nil {
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  "QR manager not available",
+		})
+		return
+	}
+
+	// Check for existing valid session
+	session := qrManager.GetSession(platform)
+	if session == nil || session.Status == "expired" || session.Status == "confirmed" || session.Status == "error" {
+		// Generate new QR code based on platform
+		var qrData string
+		var err error
+
+		switch platform {
+		case "wechat_ilink":
+			qrData, err = s.generateWeChatILinkQR()
+		case "whatsapp":
+			qrData, err = s.generateWhatsAppQR()
+		case "wechat":
+			qrData, err = s.generateWeChatQR()
+		case "wecom":
+			qrData, err = s.generateWeComQR()
+		case "dingtalk":
+			qrData, err = s.generateDingTalkQR()
+		case "feishu":
+			qrData, err = s.generateFeishuQR()
+		default:
+			jsonResponse(w, QRStatus{
+				Platform: platform,
+				Status:   "error",
+				Message:  fmt.Sprintf("QR login not supported for %s", platform),
+			})
+			return
+		}
+
+		if err != nil {
+			jsonResponse(w, QRStatus{
+				Platform: platform,
+				Status:   "error",
+				Message:  fmt.Sprintf("Failed to generate QR code: %v", err),
+			})
+			return
+		}
+
+		session, err = qrManager.CreateSession(platform, qrData)
+		if err != nil {
+			jsonResponse(w, QRStatus{
+				Platform: platform,
+				Status:   "error",
+				Message:  fmt.Sprintf("Failed to create session: %v", err),
+			})
+			return
+		}
+	}
+
+	// Return current session state
+	expiresIn := int(time.Until(session.ExpiresAt).Seconds())
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
+	jsonResponse(w, QRStatus{
+		Platform:  session.Platform,
+		Status:    session.Status,
+		QRCode:   session.QRCode,
+		Message:   session.Message,
+		ExpiresIn: expiresIn,
+	})
+}
+
+func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	platform := r.URL.Query().Get("platform")
+	if platform == "" {
+		http.Error(w, "platform parameter is required", 400)
+		return
+	}
+
+	qrManager := gateway.GetQRManager()
+	if qrManager == nil {
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  "QR manager not available",
+		})
+		return
+	}
+
+	session := qrManager.GetSession(platform)
+	if session == nil {
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  "No active QR session",
+		})
+		return
+	}
+
+	expiresIn := int(time.Until(session.ExpiresAt).Seconds())
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
+	jsonResponse(w, QRStatus{
+		Platform:  session.Platform,
+		Status:    session.Status,
+		QRCode:   session.QRCode,
+		Message:   session.Message,
+		ExpiresIn: expiresIn,
+	})
+}
+
+// generateWeChatILinkQR generates a QR code for WeChat iLink login
+func (s *Server) generateWeChatILinkQR() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create iLink API client
+	api, err := gateway.NewILinkAPIClient("https://ilinkai.weixin.qq.com/", "", "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create iLink API client: %w", err)
+	}
+
+	// Get QR code from iLink API
+	qrResp, err := api.GetQRCode(ctx, "3")
+	if err != nil {
+		return "", fmt.Errorf("failed to get QR code: %w", err)
+	}
+
+	// Prefer the QR code string over the image content URL
+	if qrResp.Qrcode != "" {
+		return qrResp.Qrcode, nil
+	}
+
+	return qrResp.QrcodeImgContent, nil
+}
+
+// generateWhatsAppQR generates a QR code for WhatsApp login
+// Note: This requires the WhatsApp gateway to be running
+func (s *Server) generateWhatsAppQR() (string, error) {
+	// For WhatsApp, we need to trigger the WhatsAppGateway to generate a QR code
+	// This would typically be done through the gateway manager
+	// For now, return a placeholder
+	return fmt.Sprintf("whatsapp://login?session=%s", uuid.New().String()), nil
+}
+
+// generateWeChatQR generates a QR code for WeChat login
+func (s *Server) generateWeChatQR() (string, error) {
+	// For WeChat official account, we would call the WeChat API
+	// For now, return a placeholder
+	return fmt.Sprintf("wechat://login?session=%s", uuid.New().String()), nil
+}
+
+// generateWeComQR generates a WeCom QR code URL for login
+func (s *Server) generateWeComQR() (string, error) {
+	// WeCom QR login requires corp_id, agent_id from config
+	cfg := s.configManager.GetConfig()
+	gwCfg := cfg.Gateway
+	wecomCfg := gwCfg.Platforms["wecom"]
+
+	corpID := wecomCfg.CorpID
+	agentID := wecomCfg.AgentID
+
+	if corpID == "" || agentID == "" {
+		return "", fmt.Errorf("WeCom corp_id and agent_id are required for QR login")
+	}
+
+	// Build WeCom QR login URL
+	// The redirect_uri should point back to the app after login
+	redirectURI := fmt.Sprintf("%s/api/gateway/qr/callback?platform=wecom", s.getBaseURL())
+	state := uuid.New().String()
+
+	loginURL := fmt.Sprintf(
+		"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%s&redirect_uri=%s&state=%s",
+		corpID, agentID, url.QueryEscape(redirectURI), state,
+	)
+
+	log.Infof("Generated WeCom QR login URL for corp_id: %s, agent_id: %s", corpID, agentID)
+	return loginURL, nil
+}
+
+// generateDingTalkQR generates a DingTalk QR code URL for login
+func (s *Server) generateDingTalkQR() (string, error) {
+	cfg := s.configManager.GetConfig()
+	gwCfg := cfg.Gateway
+	dingtalkCfg := gwCfg.Platforms["dingtalk"]
+
+	appKey := dingtalkCfg.AppKey
+	appSecret := dingtalkCfg.AppSecret
+
+	if appKey == "" || appSecret == "" {
+		return "", fmt.Errorf("DingTalk app_key and app_secret are required for QR login")
+	}
+
+	redirectURI := fmt.Sprintf("%s/api/gateway/qr/callback?platform=dingtalk", s.getBaseURL())
+	state := uuid.New().String()
+
+	loginURL := fmt.Sprintf(
+		"https://oapi.dingtalk.com/connect/qrconnect?appid=%s&response_type=code&scope=snsapi_login&state=%s&redirect_uri=%s",
+		appKey, state, url.QueryEscape(redirectURI),
+	)
+
+	log.Infof("Generated DingTalk QR login URL for app_key: %s", appKey)
+	return loginURL, nil
+}
+
+// generateFeishuQR generates a Feishu QR code URL for login
+func (s *Server) generateFeishuQR() (string, error) {
+	cfg := s.configManager.GetConfig()
+	gwCfg := cfg.Gateway
+	feishuCfg := gwCfg.Platforms["feishu"]
+
+	appID := feishuCfg.AppID
+	appSecret := feishuCfg.AppSecret
+
+	if appID == "" || appSecret == "" {
+		return "", fmt.Errorf("Feishu app_id and app_secret are required for QR login")
+	}
+
+	redirectURI := fmt.Sprintf("%s/api/gateway/qr/callback?platform=feishu", s.getBaseURL())
+	state := uuid.New().String()
+
+	loginURL := fmt.Sprintf(
+		"https://open.feishu.cn/open-apis/authen/v1/authorize?redirect_uri=%s&app_id=%s&state=%s",
+		url.QueryEscape(redirectURI), appID, state,
+	)
+
+	log.Infof("Generated Feishu QR login URL for app_id: %s", appID)
+	return loginURL, nil
+}
+
+// getBaseURL returns the base URL for callbacks
+func (s *Server) getBaseURL() string {
+	// Try to get from config or use a reasonable default
+	cfg := s.configManager.GetConfig()
+	if cfg.Server.BaseURL != "" {
+		return cfg.Server.BaseURL
+	}
+	return "http://localhost:5000"
 }
 
 // --- Magic Update ---

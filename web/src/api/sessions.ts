@@ -5,6 +5,7 @@ export interface Session {
   title: string
   source: string
   model: string
+  profile?: string
   started_at: number
   last_active: number
   is_active: boolean

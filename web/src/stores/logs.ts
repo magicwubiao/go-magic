@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as logsApi from '@/api/logs'
-import type { LogsResponse } from '@/api/logs'
 
 export interface LogLine {
   timestamp: string
