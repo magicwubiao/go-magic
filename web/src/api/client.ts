@@ -7,8 +7,13 @@ export function getAuthToken(): string | null {
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${BASE_URL}${path}`
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...options.headers as Record<string, string>,
+  }
+
+  // Only set Content-Type for JSON requests, not for FormData
+  const isFormData = options.body instanceof FormData
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json'
   }
 
   // Attach auth token if available

@@ -19,9 +19,9 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/mdp/qrterminal/v3"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
-	"github.com/magicwubiao/go-magic/pkg/utils"
 
 	_ "modernc.org/sqlite"
 )
@@ -393,7 +393,8 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		// QR code generated, display in terminal
 		// evt.Codes contains rotating QR codes, use the last one
 		qrData := evt.Codes[len(evt.Codes)-1]
-		
+		log.Infof("WhatsApp QR code received, length: %d", len(qrData))
+
 		// Always display QR code with maximum verbosity
 		ForceDisplayQR(qrData)
 
@@ -746,41 +747,34 @@ func (g *WhatsAppBusinessGateway) SetChannelFilter(allowed, blocked []string) {
 func displayQRCode(qrData string) {
 	// Check if stdout is a terminal
 	isTTY := isTerminal(os.Stdout.Fd())
+	qrURL := GetQRCodeURL(qrData)
 
 	if isTTY {
-		// Try to display QR code in terminal
-		// Use smaller size (M) for better compatibility with most terminals
 		fmt.Println("\n" + strings.Repeat("=", 60))
 		fmt.Println("  📱 WhatsApp QR Code - Scan with WhatsApp > Linked Devices")
 		fmt.Println(strings.Repeat("=", 60))
-		
-		// Try terminal QR first
-		qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
-		
-		// Also print as URL for backup viewing
-		fmt.Println("\n  QR Code raw data:")
-		fmt.Printf("  %s\n", utils.Truncate(qrData, 80))
+
+		// Generate QR from URL (WhatsApp QR data is binary, use URL for scannable QR)
+		qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+
+		fmt.Println("\n  Or open this URL in browser to view QR:")
+		fmt.Printf("  %s\n", qrURL)
 	} else {
-		// Non-TTY environment (piped/redirected output)
-		// Generate a simple text representation
 		fmt.Println("\n" + strings.Repeat("=", 60))
 		fmt.Println("  📱 WhatsApp QR Code (Text Mode)")
 		fmt.Println(strings.Repeat("=", 60))
 		fmt.Println()
 		fmt.Println("  Open this URL in your browser to see the QR code:")
 		fmt.Println()
-		fmt.Printf("  https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s\n", qrData)
+		fmt.Printf("  %s\n", qrURL)
 		fmt.Println()
-		fmt.Println("  Or scan the QR code below (if your terminal supports it):")
+		fmt.Println("  Or scan the QR code below:")
 		fmt.Println()
-		
-		// Try anyway with smaller size
-		qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
+		qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
 	}
 
 	fmt.Println()
 	fmt.Println("  ⚠️  QR code expires in 60 seconds. Please scan quickly!")
-	fmt.Println("  If the QR code doesn't appear, check your terminal width (>80 chars)")
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
 }
@@ -815,28 +809,31 @@ func ForceDisplayQR(qrData string) {
 	fmt.Println("  4. Scan the QR code below")
 	fmt.Println()
 
-	// Display QR code with medium size
+	// Generate QR code PNG file (WhatsApp QR data is binary, go-qrcode handles it correctly)
+	qrFile := filepath.Join(os.TempDir(), "whatsapp-qr.png")
+	if err := qrcode.WriteFile(qrData, qrcode.Medium, 256, qrFile); err != nil {
+		fmt.Printf("  [Error generating QR image: %v]\n", err)
+	} else {
+		fmt.Printf("  📷 QR code saved to: %s\n", qrFile)
+	}
+
+	// Try terminal QR display as well
 	qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
 
-	// Also show URL fallback for browser viewing
+	// Show URL fallback for browser viewing
+	qrURL := GetQRCodeURL(qrData)
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────────────────────────────")
-	fmt.Println("📎 Alternative: Open this URL in your browser to view QR code:")
+	fmt.Println("📎 Or open this URL in your browser to view/scan the QR code:")
 	fmt.Println()
-	fmt.Printf("  %s\n", GetQRCodeURL(qrData))
+	fmt.Printf("  %s\n", qrURL)
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────────────────────────────")
-
-	// Print raw data
-	fmt.Println()
-	fmt.Println("Raw QR Data (for manual scanning):")
-	fmt.Printf("%s\n", utils.Truncate(qrData, 100))
 
 	fmt.Println()
 	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
 	fmt.Println()
 
-	// Flush output immediately
 	os.Stdout.Sync()
 }
 

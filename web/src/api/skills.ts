@@ -31,6 +31,25 @@ export async function installSkill(url: string): Promise<void> {
   })
 }
 
+export async function uploadSkill(file: File, name?: string): Promise<{ ok: boolean; name: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (name) {
+    formData.append('name', name)
+  }
+  
+  return request('/skills/upload', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
 export async function searchSkills(query: string): Promise<Skill[]> {
   return request(`/dashboard/skills/search?q=${encodeURIComponent(query)}`)
+}
+
+export async function deleteSkill(id: string): Promise<{ ok: boolean; id: string; deleted: boolean }> {
+  return request(`/skills/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
 }

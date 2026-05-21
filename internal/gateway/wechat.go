@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/mdp/qrterminal/v3"
 )
 
 // WeChatQRGateway implements WeChat Official Account QR code login mode
@@ -177,9 +178,27 @@ func (g *WeChatQRGateway) startQRServer(ctx context.Context) {
 	g.mu.Unlock()
 
 	log.Infof("WeChat QR server starting on %s", addr)
-	log.Infof("Please scan the QR code at: %s", authURL)
 
-	// Call QR callback if set
+	// Display QR code in terminal
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════╗")
+	fmt.Println("║  📱 微信扫码登录 / WeChat QR Login                   ║")
+	fmt.Println("╚══════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Instructions:")
+	fmt.Println("  1. Open WeChat on your phone")
+	fmt.Println("  2. Tap '+' → 'Scan'")
+	fmt.Println("  3. Scan the QR code below")
+	fmt.Println("  4. Confirm login on your phone")
+	fmt.Println()
+	fmt.Println("📱 QR Code (scan with WeChat):")
+	fmt.Println()
+	qrterminal.GenerateHalfBlock(authURL, qrterminal.M, os.Stdout)
+	fmt.Println()
+	fmt.Println("QR Code URL:", authURL)
+	fmt.Println()
+
+	// Call QR callback if set (for backward compatibility)
 	if g.qrCallback != nil {
 		g.qrCallback(authURL)
 	}

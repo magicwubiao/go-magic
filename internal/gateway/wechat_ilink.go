@@ -237,7 +237,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	// Create HTTP client for CDN operations
 	g.client = newHTTPClient(g.config.Proxy)
 
-	// If no token, try auto-login (silent mode - Web QR will handle display)
+	// If no token, try auto-login (show QR in terminal)
 	if g.config.Token == "" {
 		// No token available, start QR code login automatically
 		log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
@@ -246,7 +246,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 			BotType: g.config.BotType,
 			Proxy:   g.config.Proxy,
 			Timeout: ilinkAuthDefaultTimeout,
-			Silent:  true, // Silent mode - don't print QR to terminal
+			Silent:  false, // Show QR code in terminal for easy scanning
 		})
 		if err != nil {
 			g.mu.Lock()

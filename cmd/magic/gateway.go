@@ -1121,7 +1121,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
 				wcgw.SetQRCallback(func(qrURL string) {
 					fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
-					qrterminal.Generate(qrURL, qrterminal.L, os.Stdout)
+					qrterminal.GenerateHalfBlock(qrURL, qrterminal.M, os.Stdout)
 					fmt.Println()
 				})
 				if err := wcgw.Connect(ctx); err != nil {
@@ -1217,7 +1217,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// Set QR callback for display
 			wxGw.SetQRCallback(func(qrURL string) {
 				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
-				qrterminal.Generate(qrURL, qrterminal.L, os.Stdout)
+				qrterminal.GenerateHalfBlock(qrURL, qrterminal.M, os.Stdout)
 				fmt.Println()
 			})
 			

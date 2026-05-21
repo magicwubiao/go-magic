@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -639,6 +640,7 @@ func (s *Server) Start(port int) error {
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
 	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
+	mux.HandleFunc("/api/skills/upload", withCORS(requireAuth(s.handleSkillUpload)))
 	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
 	mux.HandleFunc("/api/dashboard/skills", withCORS(requireAuth(s.handleDashboardSkills)))
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
@@ -1873,40 +1875,146 @@ func (s *Server) scanSkillsDir() []Skill {
 		}
 		name := entry.Name()
 		isDisabled := s.disabledSkills[name]
-		// Try to read skill.yaml
-		skillFile := filepath.Join(skillsDir, name, "skill.yaml")
-		data, err := os.ReadFile(skillFile)
-		if err != nil {
-			result = append(result, Skill{
-				ID:      name,
-				Name:    name,
-				Enabled: !isDisabled,
-			})
-			continue
-		}
-		// Simple YAML parsing
+
+		// Try to read skill definition files in priority order:
+		// 1. skill.yaml / skill.yml
+		// 2. SKILL.md
+		// 3. skill.json / manifest.json
 		skill := Skill{ID: name, Name: name, Enabled: !isDisabled}
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "description:") {
-				skill.Description = strings.TrimPrefix(line, "description:")
-				skill.Description = strings.TrimSpace(skill.Description)
-				skill.Description = strings.Trim(skill.Description, "\"'")
-			}
-			if strings.HasPrefix(line, "category:") {
-				skill.Category = strings.TrimPrefix(line, "category:")
-				skill.Category = strings.TrimSpace(skill.Category)
-			}
-			if strings.HasPrefix(line, "tags:") {
-				tags := strings.TrimPrefix(line, "tags:")
-				tags = strings.TrimSpace(tags)
-				skill.Tags = strings.Split(tags, ",")
+		found := false
+
+		// Try skill.yaml / skill.yml
+		for _, yamlName := range []string{"skill.yaml", "skill.yml"} {
+			skillFile := filepath.Join(skillsDir, name, yamlName)
+			data, err := os.ReadFile(skillFile)
+			if err == nil {
+				parseSkillYAML(data, &skill)
+				found = true
+				break
 			}
 		}
+
+		// Try SKILL.md
+		if !found {
+			mdFile := filepath.Join(skillsDir, name, "SKILL.md")
+			data, err := os.ReadFile(mdFile)
+			if err == nil {
+				parseSkillMarkdown(data, &skill)
+				found = true
+			}
+		}
+
+		// Try skill.json / manifest.json
+		if !found {
+			for _, jsonName := range []string{"skill.json", "manifest.json"} {
+				jsonFile := filepath.Join(skillsDir, name, jsonName)
+				data, err := os.ReadFile(jsonFile)
+				if err == nil {
+					parseSkillJSON(data, &skill)
+					found = true
+					break
+				}
+			}
+		}
+
+		// If no definition file found, still list the directory as a skill
+		if !found {
+			skill.Description = "(uploaded skill - no definition file found)"
+		}
+
 		result = append(result, skill)
 	}
 	return result
+}
+
+func parseSkillYAML(data []byte, skill *Skill) {
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			skill.Name = strings.TrimPrefix(line, "name:")
+			skill.Name = strings.TrimSpace(skill.Name)
+			skill.Name = strings.Trim(skill.Name, "\"'")
+		}
+		if strings.HasPrefix(line, "description:") {
+			skill.Description = strings.TrimPrefix(line, "description:")
+			skill.Description = strings.TrimSpace(skill.Description)
+			skill.Description = strings.Trim(skill.Description, "\"'")
+		}
+		if strings.HasPrefix(line, "category:") {
+			skill.Category = strings.TrimPrefix(line, "category:")
+			skill.Category = strings.TrimSpace(skill.Category)
+		}
+		if strings.HasPrefix(line, "tags:") {
+			tags := strings.TrimPrefix(line, "tags:")
+			tags = strings.TrimSpace(tags)
+			skill.Tags = strings.Split(tags, ",")
+		}
+	}
+}
+
+func parseSkillMarkdown(data []byte, skill *Skill) {
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Parse YAML front matter in markdown
+		if strings.HasPrefix(line, "# ") && skill.Name == skill.ID {
+			skill.Name = strings.TrimPrefix(line, "# ")
+			skill.Name = strings.TrimSpace(skill.Name)
+		}
+		if strings.HasPrefix(line, "description:") {
+			skill.Description = strings.TrimPrefix(line, "description:")
+			skill.Description = strings.TrimSpace(skill.Description)
+			skill.Description = strings.Trim(skill.Description, "\"'")
+		}
+		if strings.HasPrefix(line, "category:") {
+			skill.Category = strings.TrimPrefix(line, "category:")
+			skill.Category = strings.TrimSpace(skill.Category)
+		}
+		if strings.HasPrefix(line, "tags:") {
+			tags := strings.TrimPrefix(line, "tags:")
+			tags = strings.TrimSpace(tags)
+			skill.Tags = strings.Split(tags, ",")
+		}
+	}
+	// If no description found, use first non-empty, non-heading line
+	if skill.Description == "" {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "---") {
+				skill.Description = line
+				if len(skill.Description) > 100 {
+					skill.Description = skill.Description[:100] + "..."
+				}
+				break
+			}
+		}
+	}
+}
+
+func parseSkillJSON(data []byte, skill *Skill) {
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return
+	}
+	if v, ok := obj["name"].(string); ok && v != "" {
+		skill.Name = v
+	}
+	if v, ok := obj["description"].(string); ok {
+		skill.Description = v
+	}
+	if v, ok := obj["category"].(string); ok {
+		skill.Category = v
+	}
+	if v, ok := obj["tags"].([]interface{}); ok {
+		tags := make([]string, 0)
+		for _, t := range v {
+			if s, ok := t.(string); ok {
+				tags = append(tags, s)
+			}
+		}
+		skill.Tags = tags
+	}
 }
 
 func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
@@ -2083,6 +2191,185 @@ func (s *Server) handleSkillsSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResponse(w, results)
+}
+
+func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse multipart form with 32MB max memory
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get uploaded file
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "failed to get file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Get skill name from form or use filename
+	skillName := r.FormValue("name")
+	if skillName == "" {
+		skillName = strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
+	}
+	// Sanitize skill name
+	skillName = strings.ReplaceAll(skillName, " ", "_")
+	skillName = strings.ReplaceAll(skillName, "/", "_")
+	skillName = strings.ReplaceAll(skillName, "\\", "_")
+
+	skillsDir := filepath.Join(s.magicHome, "skills")
+	skillDir := filepath.Join(skillsDir, skillName)
+
+	// Create skill directory
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		http.Error(w, "failed to create skill directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Determine file extension and save path
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	var destPath string
+
+	switch ext {
+	case ".zip":
+		// Save zip file and extract
+		zipPath := filepath.Join(skillDir, header.Filename)
+		if err := saveUploadedFile(file, zipPath); err != nil {
+			http.Error(w, "failed to save zip file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Extract zip
+		if err := extractZip(zipPath, skillDir); err != nil {
+			http.Error(w, "failed to extract zip: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Remove zip file after extraction
+		os.Remove(zipPath)
+	default:
+		// Save as skill.yaml or SKILL.md based on extension
+		switch ext {
+		case ".md":
+			destPath = filepath.Join(skillDir, "SKILL.md")
+		case ".yaml", ".yml":
+			destPath = filepath.Join(skillDir, "skill.yaml")
+		case ".json":
+			destPath = filepath.Join(skillDir, "skill.json")
+		default:
+			destPath = filepath.Join(skillDir, header.Filename)
+		}
+
+		// Save file
+		destFile, err := os.Create(destPath)
+		if err != nil {
+			http.Error(w, "failed to create file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer destFile.Close()
+
+		if _, err := destFile.ReadFrom(file); err != nil {
+			http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":   true,
+		"name": skillName,
+		"path": skillDir,
+	})
+}
+
+func saveUploadedFile(src io.Reader, dst string) error {
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = out.ReadFrom(src)
+	return err
+}
+
+func extractZip(zipPath, destDir string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	// Check if zip has a single top-level directory
+	// If so, we'll extract contents directly into destDir instead of preserving nested structure
+	hasSingleTopLevelDir := false
+	var topLevelDir string
+
+	if len(r.File) > 0 {
+		firstName := r.File[0].Name
+		slashIdx := strings.Index(firstName, "/")
+		if slashIdx > 0 {
+			topLevelDir = firstName[:slashIdx]
+			// Check if ALL entries start with this directory
+			hasSingleTopLevelDir = true
+			for _, f := range r.File {
+				if !strings.HasPrefix(f.Name, topLevelDir+"/") && f.Name != topLevelDir {
+					hasSingleTopLevelDir = false
+					break
+				}
+			}
+		}
+	}
+
+	for _, f := range r.File {
+		// Skip hidden files and __MACOSX
+		if strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "__MACOSX") {
+			continue
+		}
+
+		// Strip top-level directory if zip has single-level nesting
+		fpathName := f.Name
+		if hasSingleTopLevelDir && topLevelDir != "" {
+			fpathName = strings.TrimPrefix(f.Name, topLevelDir+"/")
+		}
+		if fpathName == "" {
+			continue
+		}
+
+		fpath := filepath.Join(destDir, fpathName)
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(fpath, os.ModePerm)
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Plugins ---

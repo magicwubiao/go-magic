@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	initWindowsConsole()
+}
+
 // Global flags
 var (
 	flagVerbose   bool

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/mdp/qrterminal/v3"
 )
 
 // ILinkLoginOpts configures the interactive QR login flow.
@@ -62,23 +63,29 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 		fmt.Println("Instructions:")
 		fmt.Println("  1. Open WeChat on your phone")
 		fmt.Println("  2. Tap '+' → 'Scan'")
-		fmt.Println("  3. Scan the QR code")
+		fmt.Println("  3. Scan the QR code below")
 		fmt.Println("  4. Confirm login on your phone")
 		fmt.Println()
 
-		// Print QR code to terminal using QR code URL
-		// The QR code image is available as a data URL (qrcode_img_content)
-		if qrResp.QrcodeImgContent != "" {
-			// If it's a data URL (starts with data:image), print the URL for scanning
-			fmt.Println("QR Code URL:", qrResp.QrcodeImgContent)
-			fmt.Println()
-			fmt.Println("💡 Tips:")
-			fmt.Println("   • Copy the URL above and open it in a browser to scan")
-			fmt.Println("   • Or right-click and copy image address if using a terminal with image support")
-			fmt.Println()
-		} else {
-			fmt.Println("QR Code Key:", qrResp.Qrcode)
+		// Generate and display ASCII QR code in terminal
+		// Use the QR code URL for generating terminal QR
+		qrData := qrResp.QrcodeImgContent
+		if qrData == "" {
+			qrData = qrResp.Qrcode
 		}
+		
+		// Generate QR code for terminal
+		fmt.Println("📱 QR Code (scan with WeChat):")
+		fmt.Println()
+		// Use standard ANSI blocks for better Windows compatibility
+		qrterminal.GenerateHalfBlock(qrData, qrterminal.M, os.Stdout)
+		fmt.Println()
+		fmt.Println("QR Code URL:", qrResp.QrcodeImgContent)
+		fmt.Println()
+		fmt.Println("💡 Tips:")
+		fmt.Println("   • Scan the QR code above with WeChat")
+		fmt.Println("   • Or copy the URL and open it in a browser")
+		fmt.Println()
 
 		fmt.Println("⏳ Waiting for scan... (timeout:", opts.Timeout, ")")
 		fmt.Println()

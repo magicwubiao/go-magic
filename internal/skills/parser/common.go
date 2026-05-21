@@ -117,6 +117,11 @@ func parseSimpleYAML(content string) map[string]interface{} {
 				currentMap = result
 			}
 
+			// Ensure currentMap is not nil before writing
+			if currentMap == nil {
+				currentMap = result
+			}
+
 			// Handle different value types
 			if value == "" || value == "|" || value == ">" {
 				// This might be a nested object or multi-line value
@@ -145,8 +150,11 @@ func parseSimpleYAML(content string) map[string]interface{} {
 			item := strings.TrimPrefix(content, "-")
 			item = strings.TrimSpace(item)
 
-			// Get the array key
+			// Get the array key - skip if currentKey is empty or currentMap is nil
 			arrKey := currentKey
+			if arrKey == "" || currentMap == nil {
+				continue
+			}
 			if arr, ok := currentMap[arrKey].([]string); ok {
 				currentMap[arrKey] = append(arr, item)
 			} else {
