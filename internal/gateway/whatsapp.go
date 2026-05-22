@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
@@ -19,7 +20,6 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/mdp/qrterminal/v3"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 
@@ -283,16 +283,33 @@ func (g *WhatsAppGateway) GetLoginStatus() string {
 // StartQRLogin initiates QR code login and returns the QR data string
 func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// If already logged in, return empty
 	if g.client != nil && g.client.IsLoggedIn() {
+		g.mu.Unlock()
 		return "", nil
 	}
 
+	// Create a channel to receive QR code
+	qrChan := make(chan string, 1)
+	
+	// Set up temporary QR callback
+	originalCallback := g.qrCallback
+	g.qrCallback = func(qr string) {
+		select {
+		case qrChan <- qr:
+		default:
+		}
+		if originalCallback != nil {
+			originalCallback(qr)
+		}
+	}
+	
 	// Ensure client is initialized
 	if g.client == nil {
 		if err := g.initClientLocked(ctx); err != nil {
+			g.qrCallback = originalCallback
+			g.mu.Unlock()
 			return "", err
 		}
 	}
@@ -300,13 +317,31 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	// Trigger QR code generation by connecting
 	if !g.client.IsConnected() {
 		if err := g.client.Connect(); err != nil {
+			g.qrCallback = originalCallback
+			g.mu.Unlock()
 			return "", fmt.Errorf("failed to connect: %w", err)
 		}
 	}
+	g.mu.Unlock()
 
-	// QR code will be delivered via event handler
-	// Return a placeholder - actual QR data comes from the callback
-	return "whatsapp_qr_pending", nil
+	// Wait for QR code with timeout
+	select {
+	case qr := <-qrChan:
+		g.mu.Lock()
+		g.qrCallback = originalCallback
+		g.mu.Unlock()
+		return qr, nil
+	case <-time.After(30 * time.Second):
+		g.mu.Lock()
+		g.qrCallback = originalCallback
+		g.mu.Unlock()
+		return "", fmt.Errorf("timeout waiting for QR code")
+	case <-ctx.Done():
+		g.mu.Lock()
+		g.qrCallback = originalCallback
+		g.mu.Unlock()
+		return "", ctx.Err()
+	}
 }
 
 // initClientLocked initializes the WhatsApp client (caller must hold g.mu)
@@ -796,7 +831,6 @@ func isTTY() bool {
 }
 
 func ForceDisplayQR(qrData string) {
-	// Always try to display QR code with maximum verbosity
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
 	fmt.Println("║          📱 WhatsApp QR Code - Scan with WhatsApp App           ║")
@@ -809,19 +843,10 @@ func ForceDisplayQR(qrData string) {
 	fmt.Println("  4. Scan the QR code below")
 	fmt.Println()
 
-	// Generate QR code PNG file (WhatsApp QR data is binary, go-qrcode handles it correctly)
-	qrFile := filepath.Join(os.TempDir(), "whatsapp-qr.png")
-	if err := qrcode.WriteFile(qrData, qrcode.Medium, 256, qrFile); err != nil {
-		fmt.Printf("  [Error generating QR image: %v]\n", err)
-	} else {
-		fmt.Printf("  📷 QR code saved to: %s\n", qrFile)
-	}
-
-	// Try terminal QR display as well
-	qrterminal.Generate(qrData, qrterminal.M, os.Stdout)
-
-	// Show URL fallback for browser viewing
+	// Generate QR code from URL (WhatsApp QR data is binary, encode as URL for display)
 	qrURL := GetQRCodeURL(qrData)
+	qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────────────────────────────")
 	fmt.Println("📎 Or open this URL in your browser to view/scan the QR code:")

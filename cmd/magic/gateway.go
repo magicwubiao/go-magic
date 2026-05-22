@@ -1248,8 +1248,12 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WhatsApp if configured
+	fmt.Printf("[DEBUG] WhatsApp config: enabled=%v, shouldStart=%v\n", 
+		cfg.Gateway.Platforms["whatsapp"].Enabled, 
+		shouldStartPlatform("whatsapp"))
 	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled && shouldStartPlatform("whatsapp") {
 		platformCount++
+		fmt.Printf("[DEBUG] Starting WhatsApp, mode=%s\n", waCfg.Mode)
 		if waCfg.Mode == "business" {
 			// WhatsApp Business API mode (webhook-based)
 			if waCfg.Token == "" || waCfg.AppSecret == "" {
@@ -1279,11 +1283,13 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 				// QR is displayed by eventHandler in whatsapp.go, no need to print again
 			})
 
+			// Always register platform, even if initial connect fails
+			// This allows Web QR login to trigger reconnection
 			if err := waGw.Connect(ctx); err != nil {
-				fmt.Printf("[WhatsApp] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("whatsapp", waGw)
+				fmt.Printf("[WhatsApp] Initial connection failed: %v\n", err)
+				fmt.Println("[WhatsApp] Platform registered. Use Web QR Login to reconnect.")
 			}
+			gw.RegisterPlatform("whatsapp", waGw)
 		}
 	}
 

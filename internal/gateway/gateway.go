@@ -923,6 +923,15 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Debug: log available platforms
+	g.mu.RLock()
+	platforms := make([]string, 0, len(g.platforms))
+	for k := range g.platforms {
+		platforms = append(platforms, k)
+	}
+	g.mu.RUnlock()
+	log.Infof("QR request for platform: %s, available platforms: %v", platform, platforms)
+
 	qrManager := GetQRManager()
 	session := qrManager.GetSession(platform)
 
@@ -933,7 +942,7 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 		g.mu.RUnlock()
 
 		if !ok {
-			http.Error(w, fmt.Sprintf("platform '%s' not found", platform), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("platform '%s' not found. Available: %v", platform, platforms), http.StatusNotFound)
 			return
 		}
 

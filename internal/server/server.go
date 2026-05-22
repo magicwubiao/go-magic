@@ -35,6 +35,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -2219,10 +2220,22 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 	if skillName == "" {
 		skillName = strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
 	}
-	// Sanitize skill name
+
+	// Check for relative path (for directory uploads)
+	relativePath := r.FormValue("path")
+	log.Infof("[Skill Upload] file=%s, name=%s, path=%s", header.Filename, skillName, relativePath)
+	
+	// If relative path provided, extract folder name from it (use original folder name)
+	if relativePath != "" && strings.Contains(relativePath, "/") {
+		parts := strings.SplitN(relativePath, "/", 2)
+		if parts[0] != "" {
+			skillName = parts[0] // Use original folder name
+			log.Infof("[Skill Upload] Using folder name: %s", skillName)
+		}
+	}
+	
+	// Sanitize skill name (only replace spaces, keep path separators for folder detection)
 	skillName = strings.ReplaceAll(skillName, " ", "_")
-	skillName = strings.ReplaceAll(skillName, "/", "_")
-	skillName = strings.ReplaceAll(skillName, "\\", "_")
 
 	skillsDir := filepath.Join(s.magicHome, "skills")
 	skillDir := filepath.Join(skillsDir, skillName)
@@ -2253,16 +2266,33 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		// Remove zip file after extraction
 		os.Remove(zipPath)
 	default:
-		// Save as skill.yaml or SKILL.md based on extension
-		switch ext {
-		case ".md":
-			destPath = filepath.Join(skillDir, "SKILL.md")
-		case ".yaml", ".yml":
-			destPath = filepath.Join(skillDir, "skill.yaml")
-		case ".json":
-			destPath = filepath.Join(skillDir, "skill.json")
-		default:
-			destPath = filepath.Join(skillDir, header.Filename)
+		// If relative path provided, preserve directory structure
+		if relativePath != "" {
+			// Remove the top-level folder from path (it's the skill name)
+			parts := strings.SplitN(relativePath, "/", 2)
+			if len(parts) > 1 {
+				destPath = filepath.Join(skillDir, parts[1])
+			} else {
+				destPath = filepath.Join(skillDir, header.Filename)
+			}
+		} else {
+			// Save as skill.yaml or SKILL.md based on extension
+			switch ext {
+			case ".md":
+				destPath = filepath.Join(skillDir, "SKILL.md")
+			case ".yaml", ".yml":
+				destPath = filepath.Join(skillDir, "skill.yaml")
+			case ".json":
+				destPath = filepath.Join(skillDir, "skill.json")
+			default:
+				destPath = filepath.Join(skillDir, header.Filename)
+			}
+		}
+
+		// Ensure parent directory exists
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			http.Error(w, "failed to create directory: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		// Save file
@@ -4243,7 +4273,8 @@ func (s *Server) generateWhatsAppQR() (string, string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return "", "", fmt.Errorf("WhatsApp platform not enabled. Please enable it in gateway settings first.")
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("WhatsApp platform not enabled or not found: %s", string(body))
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

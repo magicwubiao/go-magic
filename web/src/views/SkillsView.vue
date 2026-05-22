@@ -20,30 +20,51 @@
 
       <!-- Drag & Drop Zone -->
       <n-card title="Drag & Drop Install" style="margin-bottom: 24px;">
-        <n-upload
-          ref="uploadRef"
-          multiple
-          directory-dnd
-          :max="5"
-          accept=".yaml,.yml,.md,.json,.zip"
-          :custom-request="handleCustomUpload"
-          @finish="handleUploadFinish"
-          @error="handleUploadError"
-        >
-          <n-upload-dragger>
-            <div style="padding: 40px 0">
-              <n-icon size="48" :depth="3">
-                <upload-icon />
-              </n-icon>
-              <n-text depth="3" style="display: block; margin-top: 16px;">
-                Click or drag skill files here to install
-              </n-text>
-              <n-text depth="3" style="display: block; font-size: 12px; margin-top: 8px;">
-                Supported: .yaml, .yml, .md, .json, .zip (SKILL.md, skill.yaml)
-              </n-text>
-            </div>
-          </n-upload-dragger>
-        </n-upload>
+        <n-space vertical>
+          <n-upload
+            ref="uploadRef"
+            multiple
+            directory-dnd
+            :max="5"
+            accept=".yaml,.yml,.md,.json,.zip"
+            :custom-request="handleCustomUpload"
+            @finish="handleUploadFinish"
+            @error="handleUploadError"
+          >
+            <n-upload-dragger>
+              <div style="padding: 40px 0">
+                <n-icon size="48" :depth="3">
+                  <upload-icon />
+                </n-icon>
+                <n-text depth="3" style="display: block; margin-top: 16px;">
+                  Click or drag skill files here to install
+                </n-text>
+                <n-text depth="3" style="display: block; font-size: 12px; margin-top: 8px;">
+                  Supported: .yaml, .yml, .md, .json, .zip (SKILL.md, skill.yaml)
+                </n-text>
+              </div>
+            </n-upload-dragger>
+          </n-upload>
+          
+          <!-- Directory Upload Button -->
+          <n-space justify="center">
+            <input
+              ref="dirInputRef"
+              type="file"
+              webkitdirectory
+              directory
+              multiple
+              style="display: none"
+              @change="handleDirectorySelect"
+            />
+            <n-button @click="dirInputRef?.click()">
+              <template #icon>
+                <n-icon><folder-icon /></n-icon>
+              </template>
+              Select Skill Folder
+            </n-button>
+          </n-space>
+        </n-space>
       </n-card>
 
       <!-- Skills Grid -->
@@ -105,7 +126,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon } from '@vicons/ionicons5'
+import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Folder as FolderIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
 import { uploadSkill, deleteSkill } from '@/api/skills'
 import type { UploadFile, UploadFileInfo } from 'naive-ui'
@@ -116,6 +137,7 @@ const showInstallModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
+const dirInputRef = ref<HTMLInputElement | null>(null)
 
 async function toggleSkill(id: string, enabled: boolean): Promise<void> {
   try {
@@ -175,8 +197,25 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
   uploadingCount.value++
 
   try {
-    const skillName = rawFile.name.replace(/\.(yaml|yml|md|json|zip)$/i, '')
-    await uploadSkill(rawFile, skillName)
+    // Get skill name from folder path if available (for directory uploads)
+    let skillName = rawFile.name.replace(/\.(yaml|yml|md|json|zip)$/i, '')
+    let relativePath = ''
+    
+    // Check for webkitRelativePath (directory upload) - extract folder name
+    // @ts-ignore
+    relativePath = rawFile.webkitRelativePath || ''
+    console.log('[Upload] File:', rawFile.name, 'webkitRelativePath:', relativePath)
+    
+    if (relativePath && relativePath.includes('/')) {
+      // Use the first folder name as skill name
+      const parts = relativePath.split('/')
+      if (parts.length > 1) {
+        skillName = parts[0]
+        console.log('[Upload] Using folder name as skill:', skillName)
+      }
+    }
+    
+    await uploadSkill(rawFile, skillName, relativePath)
     message.success(`Installed "${rawFile.name}" successfully`)
     onFinish()
     await skillsStore.loadSkills()
@@ -195,6 +234,48 @@ function handleUploadFinish({ file }: { file: UploadFileInfo }) {
 
 function handleUploadError({ file }: { file: UploadFileInfo }) {
   // Upload failed, error already shown in handleCustomUpload
+}
+
+async function handleDirectorySelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = input.files
+  if (!files || files.length === 0) return
+
+  uploadingCount.value += files.length
+
+  // Get folder name from first file's path
+  const firstFile = files[0]
+  // @ts-ignore
+  const relativePath = firstFile.webkitRelativePath || ''
+  const folderName = relativePath.split('/')[0] || 'skill'
+  console.log('[Directory Upload] Folder:', folderName, 'Files:', files.length)
+
+  // Upload all files
+  const uploadPromises = Array.from(files).map(async (file) => {
+    // @ts-ignore
+    const filePath = file.webkitRelativePath || file.name
+    console.log('[Directory Upload] Uploading:', filePath)
+
+    try {
+      await uploadSkill(file, folderName, filePath)
+    } catch (e) {
+      console.error('[Directory Upload] Failed:', file.name, e)
+      throw e
+    }
+  })
+
+  try {
+    await Promise.all(uploadPromises)
+    message.success(`Installed skill "${folderName}" with ${files.length} files`)
+    await skillsStore.loadSkills()
+    await skillsStore.loadCategories()
+  } catch (e) {
+    message.error(`Failed to install skill "${folderName}"`)
+  } finally {
+    uploadingCount.value -= files.length
+    // Reset input
+    input.value = ''
+  }
 }
 
 onMounted(() => {

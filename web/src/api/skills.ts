@@ -31,11 +31,14 @@ export async function installSkill(url: string): Promise<void> {
   })
 }
 
-export async function uploadSkill(file: File, name?: string): Promise<{ ok: boolean; name: string }> {
+export async function uploadSkill(file: File, name?: string, relativePath?: string): Promise<{ ok: boolean; name: string }> {
   const formData = new FormData()
   formData.append('file', file)
   if (name) {
     formData.append('name', name)
+  }
+  if (relativePath) {
+    formData.append('path', relativePath)
   }
   
   return request('/skills/upload', {
