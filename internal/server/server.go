@@ -739,23 +739,6 @@ func (s *Server) Start(port int) error {
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
 	fmt.Printf("[server] Provider: %s | Model: %s\n", s.cfg.Provider, s.cfg.Model)
 
-	// Auto-start gateway in background if enabled
-	if s.cfg != nil && s.cfg.Gateway.Enabled {
-		go func() {
-			time.Sleep(2 * time.Second) // Wait for server to be ready
-			fmt.Println("[server] Gateway enabled, starting in background...")
-			cmd := exec.Command(os.Args[0], "gateway", "start")
-			cmd.Env = os.Environ()
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Start(); err != nil {
-				fmt.Printf("[server] Gateway auto-start failed: %v\n", err)
-			} else {
-				fmt.Printf("[server] Gateway started in background (PID: %d)\n", cmd.Process.Pid)
-			}
-		}()
-	}
-
 	return http.ListenAndServe(addr, mux)
 }
 

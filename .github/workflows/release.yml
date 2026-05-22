@@ -1,0 +1,134 @@
+name: Build Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GO_VERSION: '1.24'
+
+jobs:
+  # 多平台交叉编译
+  build-cross:
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          # macOS 不支持 386
+          - goos: darwin
+            goarch: 386
+          # Windows 不支持 arm (实际上支持但较少用)
+          - goos: windows
+            goarch: arm
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Web UI
+        run: |
+          cd web
+          npm install
+          npm run build
+
+      - name: Build CLI
+        env:
+          EXT: ${{ matrix.goos == 'windows' && '.exe' || '' }}
+        run: |
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+          go build -ldflags="-s -w" \
+          -o go-magic-${{ matrix.goos }}-${{ matrix.goarch }}${{ env.EXT }} \
+          ./cmd/magic
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}*
+
+  # 构建 Linux 安装包
+  build-linux-packages:
+    needs: build-cross
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Web UI
+        run: |
+          cd web
+          npm install
+          npm run build
+
+      - name: Install fpm
+        run: |
+          gem install fpm --no-document || true
+
+      - name: Build DEB package
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o go-magic ./cmd/magic
+          fpm -s dir -t deb -n go-magic -v 1.0.0 -p go-magic_amd64.deb ./go-magic=/usr/bin/go-magic
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-magic-deb-package
+          path: go-magic_amd64.deb
+
+  # 创建 Release
+  create-release:
+    needs: [build-cross, build-linux-packages]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -laR artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.exe artifacts/*/go-magic-* artifacts/*.deb
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

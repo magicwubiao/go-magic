@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	serverPort         int
-	serverOpenBrowser  bool
+	serverPort        int
+	serverOpenBrowser bool
 )
 
 func init() {

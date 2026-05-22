@@ -319,9 +319,11 @@ type StreamContext struct {
 
 // NewStreamContext creates a new streaming context with cancellation support
 func NewStreamContext(parent context.Context) (*StreamContext, context.Context) {
-	ctx, _ := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(parent)
 	sc := &StreamContext{
-		done: make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 
 	go func() {
