@@ -1248,12 +1248,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	// Start WhatsApp if configured
-	fmt.Printf("[DEBUG] WhatsApp config: enabled=%v, shouldStart=%v\n", 
-		cfg.Gateway.Platforms["whatsapp"].Enabled, 
-		shouldStartPlatform("whatsapp"))
 	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled && shouldStartPlatform("whatsapp") {
 		platformCount++
-		fmt.Printf("[DEBUG] Starting WhatsApp, mode=%s\n", waCfg.Mode)
 		if waCfg.Mode == "business" {
 			// WhatsApp Business API mode (webhook-based)
 			if waCfg.Token == "" || waCfg.AppSecret == "" {

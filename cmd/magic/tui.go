@@ -888,7 +888,7 @@ func (m TUIModel) View() string {
 		return ""
 	}
 
-	// Title bar
+	// Title bar (1 line)
 	title := m.renderTitle()
 
 	// Messages (viewport) - only re-render if content changed
@@ -897,10 +897,16 @@ func (m TUIModel) View() string {
 	}
 	messagesView := m.viewport.View()
 
-	// Input area
+	// Force viewport to exactly its configured height to prevent overflow
+	vpHeight := m.height - 3 // title(1) + input(1) + status(1)
+	if vpHeight > 0 {
+		messagesView = lipgloss.NewStyle().Height(vpHeight).MaxHeight(vpHeight).Render(messagesView)
+	}
+
+	// Input area (1 line)
 	inputView := m.renderInput()
 
-	// Status bar
+	// Status bar (1 line)
 	statusView := m.renderStatus()
 
 	// Combine
@@ -980,7 +986,14 @@ func (m TUIModel) renderStatus() string {
 func (m TUIModel) renderMessages() string {
 	var b strings.Builder
 
-	for _, msg := range m.messages {
+	// Limit total message count to prevent memory issues
+	maxMessages := 100
+	startIdx := 0
+	if len(m.messages) > maxMessages {
+		startIdx = len(m.messages) - maxMessages
+	}
+
+	for _, msg := range m.messages[startIdx:] {
 		switch msg.Role {
 		case "user":
 			b.WriteString(userStyle.Render("> "))
@@ -993,7 +1006,9 @@ func (m TUIModel) renderMessages() string {
 				b.WriteString(m.spinner.View())
 				b.WriteString(" Thinking...\n\n")
 			} else if msg.Content != "" {
-				rendered := renderMarkdown(msg.Content)
+				// Truncate long content to prevent viewport overflow
+				content := utils.Truncate(msg.Content, 50000)
+				rendered := renderMarkdown(content)
 				b.WriteString(rendered)
 				b.WriteString("\n\n")
 			}

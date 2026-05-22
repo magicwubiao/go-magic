@@ -35,7 +35,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -2223,14 +2222,12 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Check for relative path (for directory uploads)
 	relativePath := r.FormValue("path")
-	log.Infof("[Skill Upload] file=%s, name=%s, path=%s", header.Filename, skillName, relativePath)
-	
+
 	// If relative path provided, extract folder name from it (use original folder name)
 	if relativePath != "" && strings.Contains(relativePath, "/") {
 		parts := strings.SplitN(relativePath, "/", 2)
 		if parts[0] != "" {
 			skillName = parts[0] // Use original folder name
-			log.Infof("[Skill Upload] Using folder name: %s", skillName)
 		}
 	}
 	

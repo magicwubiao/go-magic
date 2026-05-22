@@ -14,7 +14,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -498,7 +497,6 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// Check consecutive tool calls limit
 		if len(a.toolCallHistory) >= a.consecutiveLimit {
-			log.Debugf("[Agent] Too many consecutive tool calls (%d), forcing final response", len(a.toolCallHistory))
 			loopDetected = true
 			if loopReason == "" {
 				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
@@ -692,7 +690,6 @@ Please provide a comprehensive, well-structured final response based on these su
 		loopReason := ""
 		for name, count := range a.toolCallCount {
 			if count >= a.sameToolLimit {
-				log.Debugf("[Agent] Tool call loop detected: %s called %d times, forcing final response", name, count)
 				loopDetected = true
 				loopReason = fmt.Sprintf("tool %s called %d times", name, count)
 				break
@@ -701,7 +698,6 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// Check consecutive tool calls limit
 		if len(a.toolCallHistory) >= a.consecutiveLimit {
-			log.Debugf("[Agent] Too many consecutive tool calls (%d), forcing final response", len(a.toolCallHistory))
 			loopDetected = true
 			if loopReason == "" {
 				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
@@ -1149,62 +1145,57 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	results := make(map[string]ToolCallResult)
 	var mu sync.Mutex
 
+	// First, ensure all tool calls have an ID (modify in place)
+	for i := range toolCalls {
+		if toolCalls[i].ID == "" {
+			toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+		}
+	}
+
 	groups := a.groupToolsForExecution(toolCalls)
 
 	for _, group := range groups {
 		if group.sequential {
 			for _, tc := range group.tools {
-				// Ensure tc.ID is not empty
-				tcID := tc.ID
-				if tcID == "" {
-					tcID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
-					tc.ID = tcID
-				}
 				result := a.executeSingleToolWithHooks(ctx, tc)
 				mu.Lock()
-				results[tcID] = result
+				results[tc.ID] = result
 				mu.Unlock()
 			}
 		} else {
-		var wg sync.WaitGroup
-		errCh := make(chan error, len(group.tools))
+			var wg sync.WaitGroup
+			errCh := make(chan error, len(group.tools))
 
-		for _, tc := range group.tools {
-			tc := tc
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				// Ensure tc.ID is not empty (inside goroutine to avoid race)
-				tcID := tc.ID
-				if tcID == "" {
-					tcID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
-					tc.ID = tcID
+			for _, tc := range group.tools {
+				tc := tc
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					result := a.executeSingleToolWithHooks(ctx, tc)
+					mu.Lock()
+					results[tc.ID] = result
+					if result.Err != nil {
+						errCh <- result.Err
+					}
+					mu.Unlock()
+				}()
+			}
+
+			wg.Wait()
+			close(errCh)
+
+			// Collect all errors but don't return early - all results must be processed
+			var execErrors []error
+			for err := range errCh {
+				if err != nil {
+					execErrors = append(execErrors, err)
 				}
-				result := a.executeSingleToolWithHooks(ctx, tc)
-				mu.Lock()
-				results[tcID] = result
-				if result.Err != nil {
-					errCh <- result.Err
-				}
-				mu.Unlock()
-			}()
-		}
-
-		wg.Wait()
-		close(errCh)
-
-		// Collect all errors but don't return early - all results must be processed
-		var execErrors []error
-		for err := range errCh {
-			if err != nil {
-				execErrors = append(execErrors, err)
+			}
+			if len(execErrors) > 0 {
+				// Return first error but still return all results
+				return results, execErrors[0]
 			}
 		}
-		if len(execErrors) > 0 {
-			// Return first error but still return all results
-			return results, execErrors[0]
-		}
-	}
 	}
 
 	return results, nil

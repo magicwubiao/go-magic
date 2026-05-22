@@ -8,7 +8,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/execution"
 	"github.com/magicwubiao/go-magic/internal/provider"
-	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -66,9 +65,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 	// Check if clarification is needed
 	// Note: we log clarification but still proceed to LLM - don't block user input
-	if decision.ClarificationNeeded {
-		log.Debugf("[Agent] Cortex suggests clarification: %s", decision.ClarificationQuestion)
-	}
+	_ = decision.ClarificationNeeded // avoid unused warning if logging removed
 
 	// Apply tool filter based on decision (if set)
 	originalTools := a.tools
