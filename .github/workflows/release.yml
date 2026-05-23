@@ -16,6 +16,52 @@ env:
   GO_VERSION: '1.24'
 
 jobs:
+  # 打包源码
+  build-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event.inputs.version }}" != "" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+          echo "TIMESTAMP=$(date +"%Y%m%d%H%M%S")" >> $GITHUB_OUTPUT
+
+      - name: Create source archives
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          TIMESTAMP=${{ steps.version.outputs.TIMESTAMP }}
+          
+          # tar.gz for Linux/macOS
+          tar --exclude='web/node_modules' \
+              --exclude='.git' \
+              --exclude='dist' \
+              --exclude='internal/server/dist' \
+              --exclude='*.exe' \
+              -czf go-magic-source-${VERSION}-${TIMESTAMP}.tar.gz .
+          
+          # zip for Windows
+          zip -rq go-magic-source-${VERSION}-${TIMESTAMP}.zip . \
+              -x "web/node_modules/*" \
+              -x ".git/*" \
+              -x "dist/*" \
+              -x "internal/server/dist/*" \
+              -x "*.exe"
+          
+          ls -lh go-magic-source-*
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-magic-source
+          path: go-magic-source-*
+
   # 多平台交叉编译
   build-cross:
     strategy:
@@ -109,7 +155,7 @@ jobs:
 
   # 创建 Release
   create-release:
-    needs: [build-cross, build-linux-packages]
+    needs: [build-source, build-cross, build-linux-packages]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -127,7 +173,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*.exe artifacts/*/go-magic-* artifacts/*.deb
+          files: |
+            artifacts/**/*.exe
+            artifacts/*/go-magic-*
+            artifacts/*.deb
+            artifacts/go-magic-source/go-magic-source-*
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         env:
