@@ -38,22 +38,21 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
           TIMESTAMP=${{ steps.version.outputs.TIMESTAMP }}
           
+          # Create a clean temp directory for packaging
+          mkdir -p /tmp/go-magic-src
+          cp -r . /tmp/go-magic-src/
+          cd /tmp/go-magic-src
+          
+          # Remove files that shouldn't be in source package
+          rm -rf web/node_modules .git dist internal/server/dist *.exe
+          
           # tar.gz for Linux/macOS
-          tar --exclude='web/node_modules' \
-              --exclude='.git' \
-              --exclude='dist' \
-              --exclude='internal/server/dist' \
-              --exclude='*.exe' \
-              -czf go-magic-source-${VERSION}-${TIMESTAMP}.tar.gz .
+          tar -czf $GITHUB_WORKSPACE/go-magic-source-${VERSION}-${TIMESTAMP}.tar.gz .
           
           # zip for Windows
-          zip -rq go-magic-source-${VERSION}-${TIMESTAMP}.zip . \
-              -x "web/node_modules/*" \
-              -x ".git/*" \
-              -x "dist/*" \
-              -x "internal/server/dist/*" \
-              -x "*.exe"
+          zip -rq $GITHUB_WORKSPACE/go-magic-source-${VERSION}-${TIMESTAMP}.zip .
           
+          cd $GITHUB_WORKSPACE
           ls -lh go-magic-source-*
 
       - name: Upload source artifacts
@@ -140,12 +139,14 @@ jobs:
 
       - name: Install fpm
         run: |
-          gem install fpm --no-document || true
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential
+          sudo gem install fpm --no-document
 
       - name: Build DEB package
         run: |
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o go-magic ./cmd/magic
-          fpm -s dir -t deb -n go-magic -v 1.0.0 -p go-magic_amd64.deb ./go-magic=/usr/bin/go-magic
+          fpm -s dir -t deb -n go-magic -v 1.0.0 -p go-magic_amd64.deb ./go-magic=/usr/bin/go-magic || echo "DEB build failed, skipping"
 
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v4

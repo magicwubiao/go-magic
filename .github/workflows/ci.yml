@@ -41,30 +41,26 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-  # 构建 Web UI
-  build-web:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  # 多平台交叉编译
+  build-cross:
+    needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: cd web && npm install
-
-      - name: Build Web UI
-        run: |
-          cd web
-          npm run build
-          ls -la ../internal/server/dist/
-
-  # 构建 Go CLI (当前平台)
-  build-cli:
-    needs: build-web
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -87,12 +83,17 @@ jobs:
           npm install
           npm run build
 
-      - name: Build Go CLI
+      - name: Build CLI
+        env:
+          EXT: ${{ matrix.goos == 'windows' && '.exe' || '' }}
         run: |
-          go build -ldflags="-s -w" -o go-magic ./cmd/magic
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+          go build -ldflags="-s -w" \
+          -o go-magic-${{ matrix.goos }}-${{ matrix.goarch }}${{ env.EXT }} \
+          ./cmd/magic
 
-      - name: Upload CLI artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-magic-cli-linux-amd64
-          path: go-magic
+          name: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}*
