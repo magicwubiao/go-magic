@@ -66,42 +66,6 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-  # 打包源码
-  build-source:
-    needs: get-version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Create source archives
-        run: |
-          VERSION=${{ needs.get-version.outputs.version }}
-          TIMESTAMP=${{ needs.get-version.outputs.timestamp }}
-          
-          # Create a clean temp directory for packaging
-          mkdir -p /tmp/go-magic-src
-          cp -r . /tmp/go-magic-src/
-          cd /tmp/go-magic-src
-          
-          # Remove files that shouldn't be in source package
-          rm -rf web/node_modules .git dist internal/server/dist *.exe
-          
-          # tar.gz for Linux/macOS
-          tar -czf $GITHUB_WORKSPACE/go-magic-source-${VERSION}-${TIMESTAMP}.tar.gz .
-          
-          # zip for Windows
-          zip -rq $GITHUB_WORKSPACE/go-magic-source-${VERSION}-${TIMESTAMP}.zip .
-          
-          cd $GITHUB_WORKSPACE
-          ls -lh go-magic-source-*
-
-      - name: Upload source artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: go-magic-source
-          path: go-magic-source-*
-
   # 多平台交叉编译
   build-cross:
     needs: [lint-and-test, get-version]
@@ -203,7 +167,7 @@ jobs:
 
   # 创建 Release
   create-release:
-    needs: [build-source, build-cross, build-linux-packages]
+    needs: [build-cross, build-linux-packages]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -226,7 +190,6 @@ jobs:
             artifacts/*.exe
             artifacts/go-magic-*
             artifacts/*.deb
-            artifacts/go-magic-source-*
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           generate_release_notes: true  # 自动生成 Release Notes
