@@ -53,5 +53,5 @@ func runVersion(cmd *cobra.Command, args []string) {
 	fmt.Println("Providers: See config for available providers")
 	fmt.Println("Systems: Config, Skills, Cron, Plugin, Prompt, Gateway")
 	fmt.Println("\nFeatures:")
-	fmt.Println("  - Health check endpoint: http://localhost:8080/health")
+	fmt.Println("  - Health check endpoint: http://localhost:8081/health")
 }

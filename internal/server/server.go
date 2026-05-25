@@ -4056,7 +4056,7 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Check health endpoint
 	client := &http.Client{Timeout: 2 * time.Second}
-	if resp, err := client.Get("http://localhost:8080/health"); err == nil {
+	if resp, err := client.Get("http://localhost:8081/health"); err == nil {
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			status["health_ok"] = true
@@ -4287,41 +4287,49 @@ func (s *Server) generateWeChatILinkQR() (string, string, error) {
 // generateWhatsAppQR generates a QR code for WhatsApp login
 // Returns (qrData, qrImage, error)
 func (s *Server) generateWhatsAppQR() (string, string, error) {
-	// Gateway runs as a separate process, call its API to get WhatsApp QR
+	// Try Gateway API first (if gateway is running)
 	gatewayPort := 8080
-
-	// Call gateway API to get WhatsApp QR code
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/login/qr/whatsapp", gatewayPort))
+	
+	if err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		
+		if resp.StatusCode == http.StatusOK {
+			var result struct {
+				QRCode    string `json:"qr_code"`
+				ExpiresIn int    `json:"expires_in_seconds"`
+				Status    string `json:"status"`
+			}
+			if err := json.Unmarshal(body, &result); err == nil && result.QRCode != "" {
+				return result.QRCode, result.QRCode, nil
+			}
+		}
+	}
+
+	// Fallback: create a temporary WhatsApp gateway instance to generate QR directly
+	// This works even without the gateway process running (same approach as WeChat iLink)
+	homeDir, _ := os.UserHomeDir()
+	dataDir := filepath.Join(homeDir, ".magic", "whatsapp")
+	waGw := gateway.NewWhatsAppGateway(dataDir)
+	
+	qrData, err := waGw.StartQRLogin(context.Background())
 	if err != nil {
-		return "", "", fmt.Errorf("cannot connect to gateway. Please ensure the gateway is running: %w", err)
+		return "", "", fmt.Errorf("failed to generate WhatsApp QR: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("WhatsApp platform not enabled or not found: %s", string(body))
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("gateway returned error: %s", string(body))
+	if qrData == "" {
+		return "", "", fmt.Errorf("WhatsApp already logged in, no QR code needed")
 	}
 
-	var result struct {
-		QRCode     string `json:"qr_code"`
-		ExpiresIn  int    `json:"expires_in_seconds"`
-		Status     string `json:"status"`
-		Message    string `json:"message"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to parse gateway response: %w", err)
+	// Generate QR image from the data
+	qrImage, err := gateway.GenerateQRCodePNG(qrData)
+	if err != nil {
+		// Return raw data even if image generation fails
+		return qrData, qrData, nil
 	}
 
-	if result.QRCode == "" {
-		return "", "", fmt.Errorf("WhatsApp QR code not available yet. Please try again in a few seconds.")
-	}
-
-	return result.QRCode, result.QRCode, nil
+	return qrData, qrImage, nil
 }
 
 // generateWeComQR generates a QR code for WeCom (Enterprise WeChat) login

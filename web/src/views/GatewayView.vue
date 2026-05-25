@@ -28,8 +28,8 @@
         <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'warning'" size="large">
           {{ gatewayStore.status.running ? '● ' + t('gateway.running') : '○ ' + t('gateway.notRunning') }}
         </n-tag>
-        <n-tag v-if="gatewayStore.status?.health_ok" type="success" size="small">
-          {{ t('gateway.healthOk') }}
+        <n-tag v-if="gatewayStore.status?.health_ok" type="success" size="large">
+          ● {{ t('gateway.healthOk') }}
         </n-tag>
         <n-text depth="3">
           {{ enabledCount }} / {{ platforms.length }} {{ t('gateway.platforms') }}
@@ -130,8 +130,8 @@
       </n-form>
       <template #action>
         <n-space justify="end">
-          <n-button @click="showEditModal = false">Cancel</n-button>
-          <n-button type="primary" @click="saveEditingPlatform">Save</n-button>
+          <n-button @click="showEditModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="saveEditingPlatform">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -142,17 +142,17 @@
         <!-- QR Code Display -->
         <div v-if="qrStatus === 'loading'" class="qr-loading">
           <n-spin size="large" />
-          <n-text depth="3">Generating QR code...</n-text>
+          <n-text depth="3">{{ t('gateway.qrGenerating') }}</n-text>
         </div>
         
         <div v-else-if="qrStatus === 'error'" class="qr-error">
-          <n-result status="error" title="Error" :description="qrMessage" />
-          <n-button type="primary" @click="initQRCode">Retry</n-button>
+          <n-result status="error" :title="t('gateway.qrError')" :description="qrMessage" />
+          <n-button type="primary" @click="initQRCode">{{ t('gateway.qrRetry') }}</n-button>
         </div>
         
         <div v-else-if="qrStatus === 'expired'" class="qr-expired">
-          <n-result status="warning" title="QR Code Expired" description="Please refresh to get a new code" />
-          <n-button type="primary" @click="initQRCode">Refresh QR Code</n-button>
+          <n-result status="warning" :title="t('gateway.qrExpired')" :description="t('gateway.qrExpiredDesc')" />
+          <n-button type="primary" @click="initQRCode">{{ t('gateway.qrRefresh') }}</n-button>
         </div>
         
         <div v-else class="qr-display">
@@ -189,7 +189,7 @@
                 <n-text depth="3" style="font-size: 12px;">{{ qrCountdown }}s</n-text>
               </template>
             </n-progress>
-            <n-text depth="3" style="font-size: 12px;">Expires in {{ qrCountdown }}s</n-text>
+            <n-text depth="3" style="font-size: 12px;">{{ t('gateway.qrExpiresIn') }} {{ qrCountdown }}s</n-text>
           </div>
         </div>
       </div>
@@ -345,25 +345,43 @@ async function savePlatform(platform: Platform): Promise<void> {
     platformsPayload[platform.id] = buildPlatformPayload(platform)
     await configStore.updateConfig({ gateway: { enabled: gatewayEnabled.value, platforms: platformsPayload } })
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('gateway.saveFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }
 }
 
 async function saveGatewayEnabled(): Promise<void> {
   try {
     await configStore.updateConfig({ gateway: { enabled: gatewayEnabled.value } })
-    message.success(gatewayEnabled.value ? 'Gateway enabled' : 'Gateway disabled')
+    message.success(gatewayEnabled.value ? t('gateway.enabled') : t('gateway.disabled'))
   } catch (e) {
-    message.error('Failed to update: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('gateway.updateFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }
 }
 
 async function restartGateway(): Promise<void> {
   try {
     await gatewayStore.restart()
-    message.success('Gateway restarting...')
+    message.success(t('gateway.restarting'))
+    
+    // Force immediate status refresh
+    await gatewayStore.loadStatus()
+    
+    // Poll status more frequently until gateway is running again or timeout
+    let pollCount = 0
+    const maxPolls = 30
+    const pollInterval = setInterval(async () => {
+      pollCount++
+      await gatewayStore.loadStatus()
+      // Stop polling if running or timeout
+      if (gatewayStore.status?.running || pollCount >= maxPolls) {
+        clearInterval(pollInterval)
+        if (gatewayStore.status?.running) {
+          message.success(t('gateway.running'))
+        }
+      }
+    }, 1000)
   } catch (e) {
-    message.error('Failed to restart: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('gateway.restartFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }
 }
 
@@ -384,7 +402,7 @@ async function initQRCode(): Promise<void> {
   if (!qrPlatform.value) return
   
   qrStatus.value = 'loading'
-  qrMessage.value = 'Generating QR code...'
+  qrMessage.value = t('gateway.qrGenerating')
   
   try {
     const data: QRResponse = await request(`/gateway/qr?platform=${qrPlatform.value.id}`)
@@ -406,14 +424,14 @@ async function initQRCode(): Promise<void> {
       startPolling()
       startCountdown()
     } else if (data.status === 'confirmed') {
-      message.success('Login successful!')
+      message.success(t('gateway.qrLoginSuccess'))
       setTimeout(() => {
         closeQRModal()
       }, 1500)
     }
   } catch (e) {
     qrStatus.value = 'error'
-    qrMessage.value = 'Failed to connect to server'
+    qrMessage.value = t('gateway.qrScanError')
     console.error('QR code error:', e)
   }
 }
@@ -451,7 +469,7 @@ function startPolling(): void {
         qrMessage.value = data.message || getDefaultMessage(data.status)
         
         if (data.status === 'confirmed') {
-          message.success('Login successful!')
+          message.success(t('gateway.qrLoginSuccess'))
           stopPolling()
           stopCountdown()
           setTimeout(() => {
@@ -480,7 +498,7 @@ function startCountdown(): void {
       qrCountdownPercent.value = Math.round((qrCountdown.value / qrExpiresIn.value) * 100)
     } else {
       qrStatus.value = 'expired'
-      qrMessage.value = 'QR code expired. Please refresh.'
+      qrMessage.value = t('gateway.qrScanExpired')
       stopCountdown()
       stopPolling()
     }
@@ -512,12 +530,12 @@ function closeQRModal(): void {
 
 function getDefaultMessage(status?: string): string {
   switch (status) {
-    case 'pending': return 'Please scan the QR code with your app'
-    case 'scanning': return 'QR code scanned! Please confirm on your device'
-    case 'confirmed': return 'Login successful!'
-    case 'expired': return 'QR code expired. Please refresh.'
-    case 'error': return 'An error occurred. Please try again.'
-    default: return 'Please wait...'
+    case 'pending': return t('gateway.qrScanPending')
+    case 'scanning': return t('gateway.qrScanScanning')
+    case 'confirmed': return t('gateway.qrScanConfirmed')
+    case 'expired': return t('gateway.qrScanExpired')
+    case 'error': return t('gateway.qrScanError')
+    default: return t('gateway.qrWait')
   }
 }
 
@@ -525,7 +543,7 @@ async function saveEditingPlatform(): Promise<void> {
   if (!editingPlatform.value) return
   await savePlatform(editingPlatform.value)
   showEditModal.value = false
-  message.success('Platform configuration saved')
+  message.success(t('gateway.platformSaved'))
 }
 
 onMounted(async () => {

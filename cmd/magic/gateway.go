@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -37,8 +38,8 @@ var gatewayPlatform string // --platform 参数
 
 var gatewayCmd = &cobra.Command{
 	Use:   "gateway",
-	Short: "Start the messaging gateway (with health check on :8080)",
-	Long:  "Start the messaging gateway for Telegram, Discord, WeCom, etc.\nHealth check endpoint available at http://localhost:8080/health",
+	Short: "Start the messaging gateway (with health check on :8081)",
+	Long:  "Start the messaging gateway for Telegram, Discord, WeCom, etc.\nHealth check endpoint available at http://localhost:8081/health",
 }
 
 var gatewayStartCmd = &cobra.Command{
@@ -1033,7 +1034,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	platformCount := 0
 	agentHandler := NewGatewayAgentHandler()
-	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{})
+	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{
+		EnableAPI: true,
+		APIPort:   8080,
+	})
 
 	// Set up session persistence for analytics
 	homeDir, _ := os.UserHomeDir()
@@ -1551,15 +1555,11 @@ func runGatewayRestart(cmd *cobra.Command, args []string) {
 	}
 	gatewayCmd.Stdout = os.Stdout
 	gatewayCmd.Stderr = os.Stderr
-	gatewayCmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
-
+	setSysProcAttr(gatewayCmd)
 	if err := gatewayCmd.Start(); err != nil {
 		fmt.Printf("Failed to start gateway: %v\n", err)
 		os.Exit(1)
 	}
-
 	fmt.Printf("Gateway restart initiated (new PID: %d)\n", gatewayCmd.Process.Pid)
 }
 
@@ -1599,7 +1599,7 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 		}
 
 		client := &http.Client{Timeout: 2 * time.Second}
-		if resp, err := client.Get("http://localhost:8080/health"); err == nil {
+		if resp, err := client.Get("http://localhost:8081/health"); err == nil {
 			resp.Body.Close()
 			fmt.Println("● Health endpoint: REACHABLE")
 		} else {

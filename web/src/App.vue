@@ -14,8 +14,7 @@
           :width="220"
           show-trigger
         >
-          <div style="padding: 16px 16px 8px; text-align: center; display: flex; align-items: center; justify-content: space-between;">
-            <n-text strong style="font-size: 18px;">{{ t('app.title') }}</n-text>
+          <div style="padding: 8px 0; border-bottom: 1px solid #e0e0e0;">
             <locale-switch />
           </div>
           <n-menu
@@ -25,12 +24,26 @@
             :value="activeKey"
             @update:value="handleMenuClick"
           />
-          <div style="padding: 12px; border-top: 1px solid #e0e0e0; margin-top: auto;">
-            <n-button block quaternary size="small" @click="handleLogout">
-              ↩ Logout
-            </n-button>
+          <div style="padding: 8px 0; border-top: 1px solid #e0e0e0; margin-top: auto;">
+            <n-menu
+              :collapsed-width="64"
+              :collapsed-icon-size="22"
+              :options="logoutOption"
+              @update:value="handleLogoutClick"
+            />
           </div>
         </n-layout-sider>
+
+        <!-- Logout Confirm Modal -->
+        <n-modal
+          v-model:show="showLogoutConfirm"
+          preset="dialog"
+          :title="t('common.logout')"
+          :content="t('common.confirmLogout')"
+          :positive-text="t('common.confirm')"
+          :negative-text="t('common.cancel')"
+          @positive-click="handleLogout"
+        />
         <n-layout>
           <n-layout-content style="padding: 24px; overflow: auto;">
             <router-view />
@@ -42,9 +55,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h } from 'vue'
+import { computed, h, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon } from 'naive-ui'
+import { NIcon, NModal } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 import {
@@ -62,6 +75,7 @@ import {
   PeopleOutline,
   PersonOutline,
   FlagOutline,
+  LogOutOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 
@@ -69,6 +83,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const showLogoutConfirm = ref(false)
 
 const isLoginPage = computed(() => route.path === '/login')
 
@@ -76,6 +91,10 @@ const activeKey = computed(() => route.path)
 
 function handleMenuClick(key: string) {
   router.push(key)
+}
+
+function handleLogoutClick() {
+  showLogoutConfirm.value = true
 }
 
 function handleLogout() {
@@ -89,18 +108,22 @@ const menuOptions = computed(() => [
   { label: t('goals.title') || 'Goals', key: '/goals', icon: renderIcon(FlagOutline) },
   { type: 'divider' as const },
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
-  { label: 'Tools', key: '/tools', icon: renderIcon(HammerOutline) },
-  { label: 'Skills', key: '/skills', icon: renderIcon(StarOutline) },
-  { label: 'Plugins', key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
+  { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
+  { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
+  { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
-  { label: 'Cron Jobs', key: '/cron', icon: renderIcon(TimeOutline) },
+  { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
-  { label: 'Group Chat', key: '/groupchat', icon: renderIcon(PeopleOutline) },
+  { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { type: 'divider' as const },
-  { label: 'Profiles', key: '/profiles', icon: renderIcon(PersonOutline) },
+  { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
-  { label: 'System', key: '/system', icon: renderIcon(HardwareChipOutline) },
+  { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: '/config', icon: renderIcon(SettingsOutline) },
+])
+
+const logoutOption = computed(() => [
+  { label: t('common.logout'), key: 'logout', icon: renderIcon(LogOutOutline) },
 ])
 
 function renderIcon(icon: any) {

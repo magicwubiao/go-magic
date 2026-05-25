@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/mdp/qrterminal/v3"
+	"github.com/skip2/go-qrcode"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 
@@ -444,6 +446,18 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 
 	case *events.QRScannedWithoutMultidevice:
 		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
+		fmt.Println("\n[WARNING] Your WhatsApp does not have multi-device enabled.")
+		fmt.Println("Please enable it in WhatsApp Settings > Linked Devices > Multi-device")
+
+	case *events.PairError:
+		log.Errorf("Pairing failed: %v", evt.Error)
+		fmt.Printf("\n[ERROR] WhatsApp pairing failed: %v\n", evt.Error)
+		fmt.Println("Possible reasons:")
+		fmt.Println("  1. QR code expired - wait for a new QR code and try again")
+		fmt.Println("  2. Multi-device not enabled on your phone")
+		fmt.Println("  3. Too many linked devices (max 4)")
+		fmt.Println("  4. Network connectivity issues")
+		fmt.Println("  5. Phone and computer time not synchronized")
 
 	case *events.Connected:
 		log.Info("WhatsApp connected to servers")
@@ -778,40 +792,31 @@ func (g *WhatsAppBusinessGateway) SetChannelFilter(allowed, blocked []string) {
 	g.blockedChannels = blocked
 }
 
-// displayQRCode displays the QR code with multiple fallback methods
+// displayQRCode displays the QR code by saving as PNG file
 func displayQRCode(qrData string) {
-	// Check if stdout is a terminal
-	isTTY := isTerminal(os.Stdout.Fd())
-	qrURL := GetQRCodeURL(qrData)
-
-	if isTTY {
-		fmt.Println("\n" + strings.Repeat("=", 60))
-		fmt.Println("  📱 WhatsApp QR Code - Scan with WhatsApp > Linked Devices")
-		fmt.Println(strings.Repeat("=", 60))
-
-		// Generate QR from URL (WhatsApp QR data is binary, use URL for scannable QR)
-		qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
-
-		fmt.Println("\n  Or open this URL in browser to view QR:")
-		fmt.Printf("  %s\n", qrURL)
+	qrFile, err := saveQRToFile(qrData)
+	if err != nil {
+		fmt.Printf("  [WARNING] Failed to save QR image: %v\n", err)
 	} else {
-		fmt.Println("\n" + strings.Repeat("=", 60))
-		fmt.Println("  📱 WhatsApp QR Code (Text Mode)")
-		fmt.Println(strings.Repeat("=", 60))
+		fmt.Printf("  QR code saved to: %s\n", qrFile)
+		fmt.Println("  Please open this file and scan with WhatsApp!")
 		fmt.Println()
-		fmt.Println("  Open this URL in your browser to see the QR code:")
-		fmt.Println()
-		fmt.Printf("  %s\n", qrURL)
-		fmt.Println()
-		fmt.Println("  Or scan the QR code below:")
-		fmt.Println()
-		qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+	}
+}
+
+// saveQRToFile generates a QR code PNG file and returns the file path
+func saveQRToFile(qrData string) (string, error) {
+	// Create a temporary file for the QR code
+	tmpDir := os.TempDir()
+	qrFile := filepath.Join(tmpDir, "whatsapp-qr.png")
+
+	// Generate PNG QR code using skip2/go-qrcode (256x256 pixels)
+	err := qrcode.WriteFile(qrData, qrcode.Medium, 256, qrFile)
+	if err != nil {
+		return "", err
 	}
 
-	fmt.Println()
-	fmt.Println("  ⚠️  QR code expires in 60 seconds. Please scan quickly!")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println()
+	return qrFile, nil
 }
 
 // isTerminal checks if the file descriptor is a terminal (cross-platform)
@@ -832,31 +837,47 @@ func isTTY() bool {
 
 func ForceDisplayQR(qrData string) {
 	fmt.Println()
-	fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║          📱 WhatsApp QR Code - Scan with WhatsApp App           ║")
-	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+	fmt.Println("============================================================")
+	fmt.Println("        WhatsApp QR Code - Scan with WhatsApp App")
+	fmt.Println("============================================================")
+	fmt.Println()
+	fmt.Println("IMPORTANT: Make sure your phone has:")
+	fmt.Println("  - WhatsApp updated to latest version")
+	fmt.Println("  - Multi-device enabled (Settings > Linked Devices)")
+	fmt.Println("  - Less than 4 devices already linked")
 	fmt.Println()
 	fmt.Println("Instructions:")
 	fmt.Println("  1. Open WhatsApp on your phone")
-	fmt.Println("  2. Go to Settings → Linked Devices")
+	fmt.Println("  2. Go to Settings > Linked Devices")
 	fmt.Println("  3. Tap 'Link a Device'")
 	fmt.Println("  4. Scan the QR code below")
 	fmt.Println()
 
-	// Generate QR code from URL (WhatsApp QR data is binary, encode as URL for display)
-	qrURL := GetQRCodeURL(qrData)
-	qrterminal.Generate(qrURL, qrterminal.M, os.Stdout)
+	// Try to save as PNG file
+	qrFile, err := saveQRToFile(qrData)
+	if err != nil {
+		fmt.Printf("  [ERROR] Failed to save QR image: %v\n", err)
+	} else {
+		fmt.Printf("  [NEW] QR code PNG file: %s\n", qrFile)
+		fmt.Println("  Please open this file and scan with WhatsApp!")
+	}
+	fmt.Println()
+
+	// Also try ASCII QR display as backup
+	fmt.Println("  [ASCII QR Code - if not displayed correctly, use the PNG file above]")
+	fmt.Println()
+	qrterminal.GenerateHalfBlock(qrData, qrterminal.L, os.Stdout)
 
 	fmt.Println()
-	fmt.Println("─────────────────────────────────────────────────────────────────")
-	fmt.Println("📎 Or open this URL in your browser to view/scan the QR code:")
+	fmt.Println("============================================================")
+	fmt.Println("  WARNING: QR code expires in 60 seconds! Please scan quickly!")
+	fmt.Println("============================================================")
 	fmt.Println()
-	fmt.Printf("  %s\n", qrURL)
-	fmt.Println()
-	fmt.Println("─────────────────────────────────────────────────────────────────")
-
-	fmt.Println()
-	fmt.Println("⚠️  QR code expires in 60 seconds! Please scan quickly!")
+	fmt.Println("If QR code doesn't work, try:")
+	fmt.Println("  1. Restart WhatsApp on your phone")
+	fmt.Println("  2. Clear existing linked devices (Settings > Linked Devices)")
+	fmt.Println("  3. Check your phone and computer have correct time")
+	fmt.Println("  4. Ensure both devices have stable internet connection")
 	fmt.Println()
 
 	os.Stdout.Sync()
@@ -864,7 +885,7 @@ func ForceDisplayQR(qrData string) {
 
 // GetQRCodeURL returns a URL to display the QR code in a browser
 func GetQRCodeURL(qrData string) string {
-	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", qrData)
+	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", url.QueryEscape(qrData))
 }
 
 // GetLatestQR returns the most recent QR code data

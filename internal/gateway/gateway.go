@@ -380,12 +380,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 	g.running = true
 	g.mu.Unlock()
 
-	// Connect all platforms
+	// Connect platforms that haven't connected yet, and start message handlers
 	for name, handler := range g.platforms {
-		if err := handler.Connect(ctx); err != nil {
-			log.Errorf("Failed to connect %s: %v", name, err)
-		} else {
-			log.Infof("Platform %s connected", name)
+		if !handler.IsConnected() {
+			if err := handler.Connect(ctx); err != nil {
+				log.Errorf("Failed to connect %s: %v", name, err)
+			} else {
+				log.Infof("Platform %s connected", name)
+			}
 		}
 
 		// Start receiving messages

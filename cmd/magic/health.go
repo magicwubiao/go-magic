@@ -69,7 +69,7 @@ func startHealthServer(ctx context.Context) {
 	mux.HandleFunc("/health", healthHandler)
 
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":8081",
 		Handler: mux,
 	}
 
@@ -80,7 +80,7 @@ func startHealthServer(ctx context.Context) {
 		server.Shutdown(ctxShutdown)
 	}()
 
-	fmt.Println("[Health] Starting health check server on :8080")
+	fmt.Println("[Health] Starting health check server on :8081")
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Printf("[Health] Failed to start health check server: %v\n", err)
 	}

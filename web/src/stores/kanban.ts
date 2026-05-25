@@ -7,18 +7,19 @@ export const useKanbanStore = defineStore('kanban', () => {
   const tasks = ref<KanbanTask[]>([])
   const loading = ref(false)
 
-  // Normal flow columns (click to move forward)
-  const columns = computed(() => [
+  // Upper row: Triage / To Do / Ready
+  const upperColumns = computed(() => [
     { key: 'triage', title: 'Triage', tasks: tasks.value.filter(t => t.status === 'triage') },
     { key: 'todo', title: 'To Do', tasks: tasks.value.filter(t => t.status === 'todo') },
     { key: 'ready', title: 'Ready', tasks: tasks.value.filter(t => t.status === 'ready') },
-    { key: 'running', title: 'Running', tasks: tasks.value.filter(t => t.status === 'running') },
-    { key: 'done', title: 'Done', tasks: tasks.value.filter(t => t.status === 'done') },
-    { key: 'archived', title: 'Archived', tasks: tasks.value.filter(t => t.status === 'archived') },
   ])
 
-  // Special columns (blocked - not in normal flow)
-  const blockedTasks = computed(() => tasks.value.filter(t => t.status === 'blocked'))
+  // Lower row: Running / Blocked / Done
+  const lowerColumns = computed(() => [
+    { key: 'running', title: 'Running', tasks: tasks.value.filter(t => t.status === 'running') },
+    { key: 'blocked', title: 'Blocked', tasks: tasks.value.filter(t => t.status === 'blocked') },
+    { key: 'done', title: 'Done', tasks: tasks.value.filter(t => t.status === 'done' || t.status === 'archived') },
+  ])
 
   async function loadBoard() {
     loading.value = true
@@ -56,5 +57,5 @@ export const useKanbanStore = defineStore('kanban', () => {
     tasks.value = tasks.value.filter(t => t.id !== id)
   }
 
-  return { tasks, columns, blockedTasks, loading, loadBoard, addTask, updateTask, moveTask, removeTask }
+  return { tasks, upperColumns, lowerColumns, loading, loadBoard, addTask, updateTask, moveTask, removeTask }
 })
