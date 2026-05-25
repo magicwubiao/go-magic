@@ -1,20 +1,20 @@
 <template>
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
-      <h2>Gateway</h2>
+      <h2>{{ t('gateway.title') }}</h2>
       <n-space>
         <n-switch v-model:value="gatewayEnabled" @update:value="saveGatewayEnabled">
-          <template #checked>Enabled</template>
-          <template #unchecked>Disabled</template>
+          <template #checked>{{ t('common.enabled') }}</template>
+          <template #unchecked>{{ t('common.disabled') }}</template>
         </n-switch>
         <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'error'" size="small">
-          {{ gatewayStore.status.running ? `Running (PID: ${gatewayStore.status.pid})` : 'Not Running' }}
+          {{ gatewayStore.status.running ? `${t('gateway.running')} (PID: ${gatewayStore.status.pid})` : t('gateway.notRunning') }}
         </n-tag>
         <n-popconfirm @positive-click="restartGateway">
           <template #trigger>
-            <n-button type="warning" :disabled="!gatewayEnabled">Restart</n-button>
+            <n-button type="warning" :disabled="!gatewayEnabled">{{ t('gateway.restart') }}</n-button>
           </template>
-          Restart gateway? All platforms will reconnect.
+          {{ t('gateway.restartConfirm') }}
         </n-popconfirm>
       </n-space>
     </n-space>
@@ -23,16 +23,16 @@
     <n-card size="small" style="margin-bottom: 16px;">
       <n-space>
         <n-tag :type="gatewayEnabled ? 'success' : 'default'" size="large">
-          {{ gatewayEnabled ? '● Enabled' : '○ Disabled' }}
+          {{ gatewayEnabled ? '● ' + t('gateway.enabled') : '○ ' + t('gateway.disabled') }}
         </n-tag>
         <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'warning'" size="large">
-          {{ gatewayStore.status.running ? '● Running' : '○ Stopped' }}
+          {{ gatewayStore.status.running ? '● ' + t('gateway.running') : '○ ' + t('gateway.notRunning') }}
         </n-tag>
         <n-tag v-if="gatewayStore.status?.health_ok" type="success" size="small">
-          Health OK
+          {{ t('gateway.healthOk') }}
         </n-tag>
         <n-text depth="3">
-          {{ enabledCount }} / {{ platforms.length }} platform(s) configured
+          {{ enabledCount }} / {{ platforms.length }} {{ t('gateway.platforms') }}
         </n-text>
       </n-space>
     </n-card>
@@ -47,14 +47,14 @@
           <n-space vertical size="small">
             <n-text depth="3">{{ platform.description }}</n-text>
             <n-tag :type="platform.enabled ? 'success' : 'default'" size="small">
-              {{ platform.enabled ? 'Enabled' : 'Disabled' }}
+              {{ platform.enabled ? t('common.enabled') : t('common.disabled') }}
             </n-tag>
           </n-space>
           <template #action>
             <n-space>
-              <n-button size="small" @click="openEditModal(platform)">Configure</n-button>
+              <n-button size="small" @click="openEditModal(platform)">{{ t('gateway.config') }}</n-button>
               <n-button v-if="platform.supportsQR" size="small" type="info" @click="showQRInfo(platform)">
-                QR Login
+                {{ t('gateway.qrLogin') }}
               </n-button>
             </n-space>
           </template>
@@ -196,9 +196,9 @@
       
       <template #footer>
         <n-space justify="end">
-          <n-button @click="closeQRModal">Close</n-button>
+          <n-button @click="closeQRModal">{{ t('common.cancel') }}</n-button>
           <n-button v-if="qrStatus !== 'confirmed' && qrStatus !== 'loading'" type="primary" @click="initQRCode">
-            Refresh
+            {{ t('common.refresh') }}
           </n-button>
         </n-space>
       </template>
@@ -209,10 +209,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import QRCode from 'qrcode'
 import { request } from '@/api/client'
 import { useGatewayStore } from '@/stores/gateway'
 import { useConfigStore } from '@/stores/config'
+
+const { t } = useI18n()
 
 interface Platform {
   id: string

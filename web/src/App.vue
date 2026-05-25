@@ -14,8 +14,9 @@
           :width="220"
           show-trigger
         >
-          <div style="padding: 16px 16px 8px; text-align: center;">
-            <n-text strong style="font-size: 18px;">Magic</n-text>
+          <div style="padding: 16px 16px 8px; text-align: center; display: flex; align-items: center; justify-content: space-between;">
+            <n-text strong style="font-size: 18px;">{{ t('app.title') }}</n-text>
+            <locale-switch />
           </div>
           <n-menu
             :collapsed-width="64"
@@ -44,6 +45,8 @@
 import { computed, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
+import LocaleSwitch from '@/components/LocaleSwitch.vue'
 import {
   ChatbubbleOutline,
   SettingsOutline,
@@ -62,6 +65,7 @@ import {
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
@@ -79,25 +83,25 @@ function handleLogout() {
   router.push('/login')
 }
 
-const menuOptions = [
-  { label: 'Chat', key: '/chat', icon: renderIcon(ChatbubbleOutline) },
-  { label: 'Kanban', key: '/kanban', icon: renderIcon(GridOutline) },
-  { label: 'Goals', key: '/goals', icon: renderIcon(FlagOutline) },
+const menuOptions = computed(() => [
+  { label: t('nav.chat'), key: '/chat', icon: renderIcon(ChatbubbleOutline) },
+  { label: t('nav.kanban'), key: '/kanban', icon: renderIcon(GridOutline) },
+  { label: t('goals.title') || 'Goals', key: '/goals', icon: renderIcon(FlagOutline) },
   { type: 'divider' as const },
-  { label: 'Models & Providers', key: '/models-providers', icon: renderIcon(CubeOutline) },
+  { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
   { label: 'Tools', key: '/tools', icon: renderIcon(HammerOutline) },
   { label: 'Skills', key: '/skills', icon: renderIcon(StarOutline) },
   { label: 'Plugins', key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
   { label: 'Cron Jobs', key: '/cron', icon: renderIcon(TimeOutline) },
-  { label: 'Gateway', key: '/gateway', icon: renderIcon(GitNetworkOutline) },
+  { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: 'Group Chat', key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { type: 'divider' as const },
   { label: 'Profiles', key: '/profiles', icon: renderIcon(PersonOutline) },
-  { label: 'Logs', key: '/logs', icon: renderIcon(DocumentTextOutline) },
+  { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   { label: 'System', key: '/system', icon: renderIcon(HardwareChipOutline) },
-  { label: 'Config', key: '/config', icon: renderIcon(SettingsOutline) },
-]
+  { label: t('nav.config'), key: '/config', icon: renderIcon(SettingsOutline) },
+])
 
 function renderIcon(icon: any) {
   return () => h(NIcon, null, { default: () => h(icon) })

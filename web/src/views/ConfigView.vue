@@ -1,10 +1,10 @@
 <template>
   <div>
-    <h2 style="margin-bottom: 24px;">Configuration</h2>
+    <h2 style="margin-bottom: 24px;">{{ t('config.title') }}</h2>
     <n-spin v-if="configStore.loading" />
     <n-tabs v-else type="line" animated>
       <!-- General Tab -->
-      <n-tab-pane name="general" tab="General">
+      <n-tab-pane name="general" :tab="t('config.general')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
           <n-form-item label="Secret Redaction">
             <n-switch v-model:value="generalForm.secret_redaction" />
@@ -13,7 +13,7 @@
             <n-input v-model:value="generalForm.working_dir" placeholder="Enter directory path" />
           </n-form-item>
           <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveGeneral">Save</n-button>
+            <n-button type="primary" :loading="saving" @click="saveGeneral">{{ t('common.save') }}</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -25,7 +25,7 @@
             <n-input-number v-model:value="agentForm.goal_max_turns" :min="1" :max="200" />
           </n-form-item>
           <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveAgent">Save Agent Config</n-button>
+            <n-button type="primary" :loading="saving" @click="saveAgent">{{ t('common.save') }}</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -37,7 +37,7 @@
             <n-switch v-model:value="memoryForm.enabled" />
           </n-form-item>
           <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveMemory">Save Memory Config</n-button>
+            <n-button type="primary" :loading="saving" @click="saveMemory">{{ t('common.save') }}</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -88,9 +88,12 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
+
+const { t } = useI18n()
 
 const message = useMessage()
 const configStore = useConfigStore()

@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import naive from 'naive-ui'
 import App from './App.vue'
+import { i18n } from './locales'
 import { getAuthToken } from './api/client'
 import { getAuthStatus } from './api/auth'
 
@@ -83,4 +84,5 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 app.use(naive)
+app.use(i18n)
 app.mount('#app')

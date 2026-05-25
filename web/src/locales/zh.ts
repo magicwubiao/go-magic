@@ -1,0 +1,106 @@
+export default {
+  app: {
+    title: 'Magic AI',
+    description: 'AI 网关管理'
+  },
+  nav: {
+    chat: '聊天',
+    gateway: '网关',
+    kanban: '看板',
+    logs: '日志',
+    config: '配置',
+    models: '模型'
+  },
+  common: {
+    save: '保存',
+    cancel: '取消',
+    delete: '删除',
+    edit: '编辑',
+    add: '添加',
+    refresh: '刷新',
+    confirm: '确认',
+    success: '成功',
+    error: '错误',
+    loading: '加载中...',
+    noData: '暂无数据',
+    confirmDelete: '确定要删除吗？',
+    enabled: '已启用',
+    disabled: '已禁用'
+  },
+  chat: {
+    title: '聊天',
+    placeholder: '输入消息...',
+    send: '发送',
+    newSession: '新建会话',
+    deleteSession: '删除会话',
+    clearHistory: '清空历史',
+    model: '模型',
+    provider: '供应商'
+  },
+  gateway: {
+    title: '网关',
+    status: '状态',
+    running: '运行中',
+    notRunning: '未运行',
+    restart: '重启',
+    health: '健康检查',
+    healthOk: '健康',
+    healthError: '异常',
+    enabled: '网关已启用',
+    disabled: '网关已禁用',
+    platforms: '平台',
+    qrLogin: '扫码登录',
+    config: '配置',
+    restartConfirm: '确定要重启网关吗？'
+  },
+  kanban: {
+    title: '看板',
+    addTask: '添加任务',
+    editTask: '编辑任务',
+    deleteTask: '删除任务',
+    taskTitle: '任务标题',
+    taskDescription: '描述',
+    status: {
+      todo: '待办',
+      inProgress: '进行中',
+      done: '已完成'
+    }
+  },
+  logs: {
+    title: '日志',
+    level: '级别',
+    message: '消息',
+    time: '时间',
+    filter: '筛选',
+    clear: '清空日志',
+    export: '导出',
+    info: '信息',
+    warn: '警告',
+    error: '错误',
+    debug: '调试'
+  },
+  config: {
+    title: '配置',
+    general: '通用',
+    server: '服务器',
+    apiKeys: 'API 密钥',
+    saveSuccess: '配置保存成功',
+    serverUrl: '服务器地址',
+    port: '端口',
+    logLevel: '日志级别'
+  },
+  models: {
+    title: '模型与供应商',
+    provider: '供应商',
+    model: '模型',
+    addProvider: '添加供应商',
+    editProvider: '编辑供应商',
+    deleteProvider: '删除供应商',
+    apiKey: 'API 密钥',
+    baseUrl: '接口地址',
+    enabled: '已启用',
+    testConnection: '测试连接',
+    connectionSuccess: '连接成功',
+    connectionFailed: '连接失败'
+  }
+}
