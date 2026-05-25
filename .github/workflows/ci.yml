@@ -10,6 +10,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GO_VERSION: '1.24'
 
+permissions:
+  contents: read  # CI 只需要读取权限
+
 jobs:
   # 代码检查和测试
   lint-and-test:
@@ -22,11 +25,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
 
       - name: Build Web UI (required for embed)
         run: |
           cd web
-          npm install
+          npm ci  # 使用 ci 代替 install，更快且确定性更强
           npm run build
 
       - name: Set up Go
@@ -41,7 +46,15 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-  # 多平台交叉编译
+      - name: Check Go formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Go code is not formatted:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+  # 多平台交叉编译（验证构建是否成功）
   build-cross:
     needs: lint-and-test
     strategy:
@@ -76,11 +89,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
 
       - name: Build Web UI
         run: |
           cd web
-          npm install
+          npm ci
           npm run build
 
       - name: Build CLI
@@ -97,3 +112,4 @@ jobs:
         with:
           name: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}
           path: go-magic-${{ matrix.goos }}-${{ matrix.goarch }}*
+          retention-days: 7  # CI 产物保留 7 天
