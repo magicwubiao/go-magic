@@ -709,6 +709,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/settings/", withCORS(requireAuth(s.handleSettingByID)))
 
 	// Gateway
+	mux.HandleFunc("/api/gateway/status", withCORS(requireAuth(s.handleGatewayStatus)))
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
 	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
@@ -4019,6 +4020,51 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 }
 
 // --- Gateway ---
+
+func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	// Check if gateway is running by checking the health endpoint
+	status := map[string]interface{}{
+		"running":    false,
+		"pid":        0,
+		"health_ok":  false,
+	}
+
+	// Read PID file
+	home, _ := os.UserHomeDir()
+	pidFile := filepath.Join(home, ".magic", "gateway.pid")
+
+	if data, err := os.ReadFile(pidFile); err == nil {
+		var pidData map[string]interface{}
+		if json.Unmarshal(data, &pidData) == nil {
+			if pid, ok := pidData["pid"].(float64); ok {
+				process, err := os.FindProcess(int(pid))
+				if err == nil && process != nil {
+					status["running"] = true
+					status["pid"] = int(pid)
+					if started, ok := pidData["started"].(string); ok {
+						status["started"] = started
+					}
+				}
+			}
+		}
+	}
+
+	// Check health endpoint
+	client := &http.Client{Timeout: 2 * time.Second}
+	if resp, err := client.Get("http://localhost:8080/health"); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			status["health_ok"] = true
+		}
+	}
+
+	jsonResponse(w, status)
+}
 
 func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

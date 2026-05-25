@@ -1,8 +1,10 @@
 import { request } from './client'
 
 export interface GatewayStatus {
-  status: string
-  platforms: Record<string, PlatformStatus>
+  running: boolean
+  pid: number
+  health_ok: boolean
+  started?: string
 }
 
 export interface PlatformStatus {
@@ -13,7 +15,7 @@ export interface PlatformStatus {
 }
 
 export async function getGatewayStatus(): Promise<GatewayStatus> {
-  return request('/status')
+  return request('/gateway/status')
 }
 
 export async function restartGateway(): Promise<{ ok: boolean }> {
@@ -22,5 +24,5 @@ export async function restartGateway(): Promise<{ ok: boolean }> {
 
 export async function getPlatforms(): Promise<PlatformStatus[]> {
   const status = await getGatewayStatus()
-  return Object.values(status.platforms || {})
+  return []
 }

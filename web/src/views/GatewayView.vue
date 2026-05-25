@@ -7,6 +7,9 @@
           <template #checked>Enabled</template>
           <template #unchecked>Disabled</template>
         </n-switch>
+        <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'error'" size="small">
+          {{ gatewayStore.status.running ? `Running (PID: ${gatewayStore.status.pid})` : 'Not Running' }}
+        </n-tag>
         <n-popconfirm @positive-click="restartGateway">
           <template #trigger>
             <n-button type="warning" :disabled="!gatewayEnabled">Restart</n-button>
@@ -21,6 +24,12 @@
       <n-space>
         <n-tag :type="gatewayEnabled ? 'success' : 'default'" size="large">
           {{ gatewayEnabled ? '● Enabled' : '○ Disabled' }}
+        </n-tag>
+        <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'warning'" size="large">
+          {{ gatewayStore.status.running ? '● Running' : '○ Stopped' }}
+        </n-tag>
+        <n-tag v-if="gatewayStore.status?.health_ok" type="success" size="small">
+          Health OK
         </n-tag>
         <n-text depth="3">
           {{ enabledCount }} / {{ platforms.length }} platform(s) configured

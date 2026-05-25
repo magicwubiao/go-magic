@@ -66,6 +66,12 @@ var gatewaySetupCmd = &cobra.Command{
 	Run:   runGatewayPlatformSetup,
 }
 
+var gatewayRestartCmd = &cobra.Command{
+	Use:   "restart",
+	Short: "Restart the gateway (stop then start)",
+	Run:   runGatewayRestart,
+}
+
 func init() {
 	// Note: 'p' shorthand is already used by root's --profile persistent flag.
 	// We use 'P' (uppercase) for --platform.
@@ -75,6 +81,7 @@ func init() {
 	rootCmd.AddCommand(gatewayCmd)
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStopCmd)
+	gatewayCmd.AddCommand(gatewayRestartCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
 	gatewayCmd.AddCommand(gatewaySetupCmd)
 }
@@ -1492,6 +1499,68 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 
 	os.Remove(pidFile)
 	fmt.Println("✓ Gateway stopped.")
+}
+
+func runGatewayRestart(cmd *cobra.Command, args []string) {
+	fmt.Println("Restarting Gateway...")
+
+	// Stop first
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Failed to get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	pidFile := filepath.Join(home, ".magic", pidFileName)
+
+	// Check if running
+	if data, err := os.ReadFile(pidFile); err == nil {
+		var pidData map[string]interface{}
+		if json.Unmarshal(data, &pidData) == nil {
+			if pid, ok := pidData["pid"].(float64); ok {
+				process, err := os.FindProcess(int(pid))
+				if err == nil && process != nil {
+					// Send SIGTERM
+					process.Signal(syscall.SIGTERM)
+					fmt.Printf("Sent stop signal to gateway (PID: %d)...\n", int(pid))
+					time.Sleep(2 * time.Second)
+					os.Remove(pidFile)
+				}
+			}
+		}
+	} else {
+		if !os.IsNotExist(err) {
+			fmt.Printf("Warning: Failed to read PID file: %v\n", err)
+		}
+	}
+
+	// Start again
+	fmt.Println("Starting Gateway...")
+
+	// Get the current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		// Fallback to os.Args[0] if we can't get the executable path
+		execPath = os.Args[0]
+	}
+
+	// Start gateway in background
+	gatewayCmd := exec.Command(execPath, "gateway", "start")
+	if gatewayPlatform != "" {
+		gatewayCmd.Args = append(gatewayCmd.Args, "--platform", gatewayPlatform)
+	}
+	gatewayCmd.Stdout = os.Stdout
+	gatewayCmd.Stderr = os.Stderr
+	gatewayCmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	if err := gatewayCmd.Start(); err != nil {
+		fmt.Printf("Failed to start gateway: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Gateway restart initiated (new PID: %d)\n", gatewayCmd.Process.Pid)
 }
 
 func runGatewayStatus(cmd *cobra.Command, args []string) {
