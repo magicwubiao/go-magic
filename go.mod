@@ -6,8 +6,8 @@ require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/PuerkitoBio/goquery v1.9.2
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/charmbracelet/bubbles v0.21.0
-	github.com/charmbracelet/bubbletea v1.3.4
+	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v0.8.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
