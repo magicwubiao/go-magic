@@ -15,7 +15,7 @@ export default {
     plugins: '插件',
     cronJobs: '定时任务',
     groupChat: '群聊',
-    profiles: '配置文件',
+    profiles: '角色',
     system: '系统',
   },
   common: {
