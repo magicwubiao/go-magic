@@ -1,29 +1,29 @@
 <template>
   <div class="auth-container">
-    <n-card class="auth-card" :title="authStore.configured ? 'Login' : 'Set Password'">
+    <n-card class="auth-card" :title="authStore.configured ? t('auth.login') : t('auth.setPassword')">
       <n-alert v-if="authStore.error" type="error" style="margin-bottom: 16px;" closable @close="authStore.error = null">
         {{ authStore.error }}
       </n-alert>
 
       <n-form @submit.prevent="handleSubmit">
-        <n-form-item label="Password">
+        <n-form-item :label="t('auth.password')">
           <n-input
             v-model:value="password"
             type="password"
             show-password-on="click"
-            placeholder="Enter password"
+            :placeholder="t('auth.enterPassword')"
             :minlength="4"
             autofocus
             @keydown.enter="handleSubmit"
           />
         </n-form-item>
         <n-button type="primary" block :loading="authStore.loading" @click="handleSubmit">
-          {{ authStore.configured ? 'Login' : 'Set Password & Login' }}
+          {{ authStore.configured ? t('auth.loginButton') : t('auth.setPasswordButton') }}
         </n-button>
       </n-form>
 
       <n-text v-if="!authStore.configured" depth="3" style="display: block; margin-top: 12px; text-align: center;">
-        First time setup — choose a password to protect your dashboard
+        {{ t('auth.firstTimeSetup') }}
       </n-text>
     </n-card>
   </div>
@@ -32,8 +32,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 
+const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const password = ref('')
@@ -47,7 +49,7 @@ onMounted(async () => {
 
 async function handleSubmit(): Promise<void> {
   if (!password.value || password.value.length < 4) {
-    authStore.error = 'Password must be at least 4 characters'
+    authStore.error = t('auth.passwordMinLength')
     return
   }
 

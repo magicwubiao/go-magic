@@ -1,22 +1,22 @@
 <template>
   <div>
-    <h2 style="margin-bottom: 24px;">Settings</h2>
+    <h2 style="margin-bottom: 24px;">{{ t('nav.config') }}</h2>
     <n-spin v-if="loading" />
     <n-form v-else label-placement="left" label-width="120">
-      <n-form-item label="Provider">
+      <n-form-item :label="t('models.provider')">
         <n-select v-model:value="settings.provider" :options="providerOptions" />
       </n-form-item>
-      <n-form-item label="Model">
-        <n-input v-model:value="settings.model" placeholder="e.g. gpt-4" />
+      <n-form-item :label="t('models.model')">
+        <n-input v-model:value="settings.model" :placeholder="'e.g. gpt-4'" />
       </n-form-item>
-      <n-form-item label="API Key">
-        <n-input v-model:value="settings.apiKey" type="password" show-password-on="click" placeholder="Your API key" />
+      <n-form-item :label="t('models.apiKey')">
+        <n-input v-model:value="settings.apiKey" type="password" show-password-on="click" :placeholder="t('models.apiKey')" />
       </n-form-item>
-      <n-form-item label="Base URL">
-        <n-input v-model:value="settings.baseUrl" placeholder="Optional custom base URL" />
+      <n-form-item :label="t('models.baseUrl')">
+        <n-input v-model:value="settings.baseUrl" :placeholder="t('config.serverUrl')" />
       </n-form-item>
       <n-form-item>
-        <n-button type="primary" :loading="saving" @click="save">Save</n-button>
+        <n-button type="primary" :loading="saving" @click="save">{{ t('common.save') }}</n-button>
       </n-form-item>
     </n-form>
   </div>
@@ -25,7 +25,10 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
+
+const { t } = useI18n()
 
 const message = useMessage()
 const configStore = useConfigStore()
@@ -61,9 +64,9 @@ async function save() {
     })
     // Reload to ensure sync
     await configStore.loadConfig()
-    message.success('Settings saved')
+    message.success(t('config.saveSuccess'))
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
     saving.value = false
   }

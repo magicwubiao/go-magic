@@ -1,6 +1,6 @@
 <template>
   <div class="goal-list">
-    <n-empty v-if="!goals.length" description="No goals yet" />
+    <n-empty v-if="!goals.length" :description="t('goals.noGoals')" />
     <n-card
       v-for="goal in goals"
       :key="goal.id"
@@ -28,16 +28,16 @@
         
         <n-space v-if="goal.session_ids?.length">
           <n-text depth="3" style="font-size: 12px;">
-            Linked to {{ goal.session_ids.length }} session(s)
+            {{ t('goals.linkedSessions') }}: {{ goal.session_ids.length }}
           </n-text>
         </n-space>
         
         <n-space justify="end">
           <n-button v-if="goal.status !== 'completed'" size="tiny" type="success" @click="$emit('complete', goal)">
-            Complete
+            {{ t('goals.completeGoal') }}
           </n-button>
-          <n-button size="tiny" @click="$emit('edit', goal)">Edit</n-button>
-          <n-button size="tiny" type="error" @click="$emit('delete', goal)">Delete</n-button>
+          <n-button size="tiny" @click="$emit('edit', goal)">{{ t('common.edit') }}</n-button>
+          <n-button size="tiny" type="error" @click="$emit('delete', goal)">{{ t('common.delete') }}</n-button>
         </n-space>
       </n-space>
     </n-card>
@@ -45,7 +45,10 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { Goal } from '@/api/goals'
+
+const { t } = useI18n()
 
 defineProps<{
   goals: Goal[]

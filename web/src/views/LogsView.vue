@@ -1,12 +1,12 @@
 <template>
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
-      <h2>Logs</h2>
+      <h2>{{ t('logs.title') }}</h2>
       <n-space>
-        <n-select v-model:value="logLevel" :options="levelOptions" style="width: 120px;" clearable placeholder="All Levels" />
-        <n-button @click="loadLogs" :loading="loading">Refresh</n-button>
+        <n-select v-model:value="logLevel" :options="levelOptions" style="width: 120px;" clearable :placeholder="t('common.all')" />
+        <n-button @click="loadLogs" :loading="loading">{{ t('common.refresh') }}</n-button>
         <n-button :type="streaming ? 'error' : 'primary'" @click="toggleStreaming">
-          {{ streaming ? 'Stop Stream' : 'Start Stream' }}
+          {{ streaming ? t('logs.stopStream') : t('logs.startStream') }}
         </n-button>
       </n-space>
     </n-space>
@@ -28,7 +28,7 @@
         >
           {{ line }}
         </div>
-        <n-empty v-if="lines.length === 0 && !loading" description="No logs available" />
+        <n-empty v-if="lines.length === 0 && !loading" :description="t('logs.noLogs')" />
       </div>
     </n-spin>
   </div>
@@ -36,7 +36,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
+
+const { t } = useI18n()
 
 const lines = ref<string[]>([])
 const loading = ref(false)
@@ -75,7 +78,7 @@ async function loadLogs(): Promise<void> {
     lines.value = res.lines || []
     scrollToBottom()
   } catch (e) {
-    error.value = 'Failed to load logs'
+    error.value = t('logs.failedToLoad')
     lines.value = []
   } finally {
     loading.value = false

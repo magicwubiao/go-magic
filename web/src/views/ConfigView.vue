@@ -6,11 +6,11 @@
       <!-- General Tab -->
       <n-tab-pane name="general" :tab="t('config.general')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item label="Secret Redaction">
+          <n-form-item :label="t('config.secretRedaction')">
             <n-switch v-model:value="generalForm.secret_redaction" />
           </n-form-item>
-          <n-form-item label="Working Directory">
-            <n-input v-model:value="generalForm.working_dir" placeholder="Enter directory path" />
+          <n-form-item :label="t('config.workingDirectory')">
+            <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" />
           </n-form-item>
           <n-form-item>
             <n-button type="primary" :loading="saving" @click="saveGeneral">{{ t('common.save') }}</n-button>
@@ -19,9 +19,9 @@
       </n-tab-pane>
 
       <!-- Agent Tab -->
-      <n-tab-pane name="agent" tab="Agent">
+      <n-tab-pane name="agent" :tab="t('config.agent')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item label="Goal Max Turns">
+          <n-form-item :label="t('config.goalMaxTurns')">
             <n-input-number v-model:value="agentForm.goal_max_turns" :min="1" :max="200" />
           </n-form-item>
           <n-form-item>
@@ -31,9 +31,9 @@
       </n-tab-pane>
 
       <!-- Memory Tab -->
-      <n-tab-pane name="memory" tab="Memory">
+      <n-tab-pane name="memory" :tab="t('config.memory')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item label="Enable Memory">
+          <n-form-item :label="t('config.enableMemory')">
             <n-switch v-model:value="memoryForm.enabled" />
           </n-form-item>
           <n-form-item>
@@ -43,26 +43,26 @@
       </n-tab-pane>
 
       <!-- Security Tab -->
-      <n-tab-pane name="security" tab="Security">
+      <n-tab-pane name="security" :tab="t('config.security')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item label="Auth Status">
+          <n-form-item :label="t('config.authStatus')">
             <n-tag :type="authConfigured ? 'success' : 'warning'">
-              {{ authConfigured ? 'Password Set' : 'Not Configured' }}
+              {{ authConfigured ? t('config.passwordSet') : t('config.notConfigured') }}
             </n-tag>
           </n-form-item>
-          <n-form-item label="Reset Password">
+          <n-form-item :label="t('config.resetPassword')">
             <n-popconfirm @positive-click="resetPassword">
               <template #trigger>
-                <n-button type="warning">Reset Password</n-button>
+                <n-button type="warning">{{ t('config.resetPassword') }}</n-button>
               </template>
-              This will delete the current password. You will need to set a new one on next login.
+              {{ t('config.resetPasswordConfirm') }}
             </n-popconfirm>
           </n-form-item>
         </n-form>
       </n-tab-pane>
 
       <!-- Raw JSON Tab -->
-      <n-tab-pane name="raw" tab="Raw JSON">
+      <n-tab-pane name="raw" :tab="t('config.rawJson')">
         <div style="margin-top: 16px;">
           <n-alert v-if="rawError" type="error" style="margin-bottom: 12px;" closable @close="rawError = null">
             {{ rawError }}
@@ -71,13 +71,13 @@
             v-model:value="rawJson"
             type="textarea"
             :rows="20"
-            placeholder="Raw JSON configuration"
+            :placeholder="t('config.rawJson')"
             style="font-family: monospace;"
           />
           <n-space style="margin-top: 12px;">
-            <n-button type="primary" :loading="saving" @click="saveRaw">Save Raw Config</n-button>
-            <n-button @click="formatJson">Format</n-button>
-            <n-button @click="loadRaw">Reload</n-button>
+            <n-button type="primary" :loading="saving" @click="saveRaw">{{ t('common.save') }}</n-button>
+            <n-button @click="formatJson">{{ t('common.format') }}</n-button>
+            <n-button @click="loadRaw">{{ t('common.refresh') }}</n-button>
           </n-space>
         </div>
       </n-tab-pane>
@@ -136,9 +136,9 @@ async function saveGeneral() {
     })
     // Reload to ensure sync with server
     await configStore.loadConfig()
-    message.success('General config saved')
+    message.success(t('config.generalSaved'))
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
     saving.value = false
   }
@@ -151,9 +151,9 @@ async function saveAgent() {
       agent: { goal_max_turns: agentForm.goal_max_turns }
     })
     await configStore.loadConfig()
-    message.success('Agent config saved')
+    message.success(t('config.agentSaved'))
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
     saving.value = false
   }
@@ -166,9 +166,9 @@ async function saveMemory() {
       memory: { enabled: memoryForm.enabled }
     })
     await configStore.loadConfig()
-    message.success('Memory config saved')
+    message.success(t('config.memorySaved'))
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
     saving.value = false
   }
@@ -179,9 +179,9 @@ async function resetPassword() {
     await request('/auth/reset', { method: 'POST' })
     authConfigured.value = false
     authStore.logout()
-    message.success('Password reset. Please set a new password on next login.')
+    message.success(t('config.passwordReset'))
   } catch (e) {
-    message.error('Failed to reset password')
+    message.error(t('config.failedToReset'))
   }
 }
 
@@ -191,7 +191,7 @@ function formatJson(): void {
     rawJson.value = JSON.stringify(parsed, null, 2)
     rawError.value = null
   } catch (e) {
-    rawError.value = 'Invalid JSON: ' + (e instanceof Error ? e.message : 'Parse error')
+    rawError.value = t('config.invalidJson') + ': ' + (e instanceof Error ? e.message : 'Parse error')
   }
 }
 
@@ -201,7 +201,7 @@ async function saveRaw() {
   try {
     JSON.parse(rawJson.value)
   } catch (e) {
-    rawError.value = 'Invalid JSON: ' + (e instanceof Error ? e.message : 'Parse error')
+    rawError.value = t('config.invalidJson') + ': ' + (e instanceof Error ? e.message : 'Parse error')
     saving.value = false
     return
   }
@@ -210,9 +210,9 @@ async function saveRaw() {
       method: 'PUT',
       body: rawJson.value,
     })
-    message.success('Raw config saved')
+    message.success(t('config.rawConfigSaved'))
   } catch (e) {
-    message.error('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'))
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
     saving.value = false
   }

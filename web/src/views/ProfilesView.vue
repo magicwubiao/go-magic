@@ -1,8 +1,8 @@
 <template>
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
-      <h2>Profiles</h2>
-      <n-button type="primary" @click="showCreateModal = true">New Profile</n-button>
+      <h2>{{ t('profiles.title') }}</h2>
+      <n-button type="primary" @click="showCreateModal = true">{{ t('profiles.newProfile') }}</n-button>
     </n-space>
 
     <n-spin v-if="loading" />
@@ -13,12 +13,12 @@
             <template #header>
               <n-space align="center">
                 <span>{{ profile.name }}</span>
-                <n-tag v-if="profile.is_default" type="success" size="small">Active</n-tag>
+                <n-tag v-if="profile.is_default" type="success" size="small">{{ t('profiles.active') }}</n-tag>
               </n-space>
             </template>
             <n-space vertical>
-              <n-text depth="3">Skills: {{ profile.skill_count || 0 }}</n-text>
-              <n-text depth="3">Has .env: {{ profile.has_env ? 'Yes' : 'No' }}</n-text>
+              <n-text depth="3">{{ t('profiles.skills') }}: {{ profile.skill_count || 0 }}</n-text>
+              <n-text depth="3">{{ t('profiles.hasEnv') }}: {{ profile.has_env ? t('profiles.yes') : t('profiles.no') }}</n-text>
             </n-space>
             <template #action>
               <n-space>
@@ -28,14 +28,14 @@
                   type="primary"
                   @click="switchProfile(profile.name)"
                 >
-                  Switch
+                  {{ t('profiles.switch') }}
                 </n-button>
-                <n-button size="small" @click="editSoul(profile.name)">Soul</n-button>
+                <n-button size="small" @click="editSoul(profile.name)">{{ t('profiles.soul') }}</n-button>
                 <n-popconfirm @positive-click="deleteProfile(profile.name)">
                   <template #trigger>
-                    <n-button size="small" type="error" :disabled="profile.is_default">Delete</n-button>
+                    <n-button size="small" type="error" :disabled="profile.is_default">{{ t('common.delete') }}</n-button>
                   </template>
-                  Delete profile "{{ profile.name }}"?
+                  {{ t('profiles.deleteConfirm', { name: profile.name }) }}
                 </n-popconfirm>
               </n-space>
             </template>
@@ -45,32 +45,32 @@
     </template>
 
     <!-- Create Profile Modal -->
-    <n-modal v-model:show="showCreateModal" preset="dialog" title="Create Profile">
+    <n-modal v-model:show="showCreateModal" preset="dialog" :title="t('profiles.newProfile')">
       <n-form>
-        <n-form-item label="Name">
-          <n-input v-model:value="newProfileName" placeholder="Profile name" />
+        <n-form-item :label="t('profiles.profileName')">
+          <n-input v-model:value="newProfileName" :placeholder="t('profiles.profileName')" />
         </n-form-item>
-        <n-form-item label="Clone from default">
+        <n-form-item :label="t('profiles.cloneFromDefault')">
           <n-switch v-model:value="cloneFromDefault" />
         </n-form-item>
       </n-form>
       <template #action>
-        <n-button @click="showCreateModal = false">Cancel</n-button>
-        <n-button type="primary" :loading="creating" @click="createProfile">Create</n-button>
+        <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :loading="creating" @click="createProfile">{{ t('common.create') }}</n-button>
       </template>
     </n-modal>
 
     <!-- Soul Editor Modal -->
-    <n-modal v-model:show="showSoulModal" preset="dialog" :title="`Soul - ${editingProfile}`" style="width: 600px;">
+    <n-modal v-model:show="showSoulModal" preset="dialog" :title="`${t('profiles.soul')} - ${editingProfile}`" style="width: 600px;">
       <n-input
         v-model:value="soulContent"
         type="textarea"
         :rows="15"
-        placeholder="Define the AI's personality, behavior, and knowledge scope..."
+        :placeholder="t('profiles.soulPlaceholder')"
       />
       <template #action>
-        <n-button @click="showSoulModal = false">Cancel</n-button>
-        <n-button type="primary" :loading="savingSoul" @click="saveSoul">Save</n-button>
+        <n-button @click="showSoulModal = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :loading="savingSoul" @click="saveSoul">{{ t('common.save') }}</n-button>
       </template>
     </n-modal>
   </div>
@@ -79,9 +79,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
 import { useConfigStore } from '@/stores/config'
 import { useChatStore } from '@/stores/chat'
+
+const { t } = useI18n()
 
 interface Profile {
   name: string
@@ -113,7 +116,7 @@ async function loadProfiles(): Promise<void> {
     const res = await request<{ profiles: Profile[] }>('/profiles')
     profiles.value = res.profiles || []
   } catch (e) {
-    message.error('Failed to load profiles')
+    message.error(t('profiles.failedToLoad'))
   } finally {
     loading.value = false
   }
@@ -121,7 +124,7 @@ async function loadProfiles(): Promise<void> {
 
 async function createProfile(): Promise<void> {
   if (!newProfileName.value.trim()) {
-    message.warning('Please enter a profile name')
+    message.warning(t('profiles.pleaseEnterName'))
     return
   }
   creating.value = true
@@ -130,12 +133,12 @@ async function createProfile(): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ name: newProfileName.value, clone_from_default: cloneFromDefault.value }),
     })
-    message.success(`Profile "${newProfileName.value}" created`)
+    message.success(t('profiles.created', { name: newProfileName.value }))
     showCreateModal.value = false
     newProfileName.value = ''
     await loadProfiles()
   } catch (e) {
-    message.error('Failed to create profile')
+    message.error(t('profiles.failedToCreate'))
   } finally {
     creating.value = false
   }
@@ -144,23 +147,23 @@ async function createProfile(): Promise<void> {
 async function switchProfile(name: string): Promise<void> {
   try {
     await request(`/profiles/${name}/switch`, { method: 'POST' })
-    message.success(`Switched to profile "${name}"`)
+    message.success(t('profiles.switched', { name }))
     // Reload config and sessions after profile switch
     await configStore.loadConfig()
     await chatStore.loadSessions()
     await loadProfiles()
   } catch (e) {
-    message.error('Failed to switch profile')
+    message.error(t('profiles.failedToSwitch'))
   }
 }
 
 async function deleteProfile(name: string): Promise<void> {
   try {
     await request(`/profiles/${name}`, { method: 'DELETE' })
-    message.success(`Profile "${name}" deleted`)
+    message.success(t('profiles.deleted', { name }))
     await loadProfiles()
   } catch (e) {
-    message.error('Failed to delete profile')
+    message.error(t('profiles.failedToDelete'))
   }
 }
 
@@ -171,7 +174,7 @@ async function editSoul(name: string): Promise<void> {
     soulContent.value = res.content || ''
     showSoulModal.value = true
   } catch (e) {
-    message.error('Failed to load soul')
+    message.error(t('profiles.failedToLoadSoul'))
   }
 }
 
@@ -182,10 +185,10 @@ async function saveSoul(): Promise<void> {
       method: 'PUT',
       body: JSON.stringify({ content: soulContent.value }),
     })
-    message.success('Soul saved')
+    message.success(t('profiles.saved'))
     showSoulModal.value = false
   } catch (e) {
-    message.error('Failed to save soul')
+    message.error(t('profiles.failedToSaveSoul'))
   } finally {
     savingSoul.value = false
   }

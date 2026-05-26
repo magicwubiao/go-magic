@@ -105,7 +105,7 @@ function handleLogout() {
 const menuOptions = computed(() => [
   { label: t('nav.chat'), key: '/chat', icon: renderIcon(ChatbubbleOutline) },
   { label: t('nav.kanban'), key: '/kanban', icon: renderIcon(GridOutline) },
-  { label: t('goals.title') || 'Goals', key: '/goals', icon: renderIcon(FlagOutline) },
+  { label: t('goals.title'), key: '/goals', icon: renderIcon(FlagOutline) },
   { type: 'divider' as const },
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },

@@ -1,41 +1,41 @@
 <template>
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
-      <h2>Goals</h2>
-      <n-button type="primary" @click="openAddGoal">+ New Goal</n-button>
+      <h2>{{ t('goals.title') }}</h2>
+      <n-button type="primary" @click="openAddGoal">+ {{ t('goals.newGoal') }}</n-button>
     </n-space>
 
     <n-tabs type="line" animated>
-      <n-tab-pane name="active" tab="Active">
+      <n-tab-pane name="active" :tab="t('common.active')">
         <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
       </n-tab-pane>
-      <n-tab-pane name="completed" tab="Completed">
+      <n-tab-pane name="completed" :tab="t('common.completed')">
         <GoalList :goals="goalsStore.completedGoals" @edit="openEditGoal" @delete="deleteGoal" />
       </n-tab-pane>
-      <n-tab-pane name="all" tab="All">
+      <n-tab-pane name="all" :tab="t('common.all')">
         <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
       </n-tab-pane>
     </n-tabs>
 
     <!-- Add/Edit Goal Modal -->
-    <n-modal v-model:show="showGoalModal" :title="editingGoal ? 'Edit Goal' : 'New Goal'">
+    <n-modal v-model:show="showGoalModal" :title="editingGoal ? t('goals.editGoal') : t('goals.newGoal')">
       <n-card style="width: 500px;">
         <n-form>
-          <n-form-item label="Title">
-            <n-input v-model:value="goalForm.title" placeholder="Goal title" />
+          <n-form-item :label="t('goals.goalTitle')">
+            <n-input v-model:value="goalForm.title" :placeholder="t('goals.goalTitle')" />
           </n-form-item>
-          <n-form-item label="Description">
-            <n-input v-model:value="goalForm.description" type="textarea" :rows="4" placeholder="Describe your goal..." />
+          <n-form-item :label="t('goals.goalDescription')">
+            <n-input v-model:value="goalForm.description" type="textarea" :rows="4" :placeholder="t('goals.goalDescription')" />
           </n-form-item>
-          <n-form-item label="Progress" v-if="editingGoal">
+          <n-form-item :label="t('goals.progress')" v-if="editingGoal">
             <n-slider v-model:value="goalForm.progress" :min="0" :max="100" :step="5" />
             <n-text>{{ goalForm.progress }}%</n-text>
           </n-form-item>
         </n-form>
         <template #footer>
           <n-space justify="end">
-            <n-button @click="showGoalModal = false">Cancel</n-button>
-            <n-button type="primary" @click="saveGoal">{{ editingGoal ? 'Save' : 'Create' }}</n-button>
+            <n-button @click="showGoalModal = false">{{ t('common.cancel') }}</n-button>
+            <n-button type="primary" @click="saveGoal">{{ editingGoal ? t('common.save') : t('common.create') }}</n-button>
           </n-space>
         </template>
       </n-card>
@@ -46,10 +46,12 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
 import GoalList from '@/components/GoalList.vue'
 import type { Goal } from '@/api/goals'
 
+const { t } = useI18n()
 const message = useMessage()
 const goalsStore = useGoalsStore()
 const showGoalModal = ref(false)
@@ -79,7 +81,7 @@ function openEditGoal(goal: Goal) {
 
 async function saveGoal() {
   if (!goalForm.title.trim()) {
-    message.warning('Please enter a title')
+    message.warning(t('kanban.enterTitle'))
     return
   }
 
@@ -90,32 +92,32 @@ async function saveGoal() {
         description: goalForm.description,
         progress: goalForm.progress,
       })
-      message.success('Goal updated')
+      message.success(t('goals.updated'))
     } else {
       await goalsStore.createGoal(goalForm.title, goalForm.description)
-      message.success('Goal created')
+      message.success(t('goals.created'))
     }
     showGoalModal.value = false
   } catch (e) {
-    message.error('Failed to save goal')
+    message.error(t('common.error'))
   }
 }
 
 async function deleteGoal(goal: Goal) {
   try {
     await goalsStore.deleteGoal(goal.id)
-    message.success('Goal deleted')
+    message.success(t('goals.deleted'))
   } catch (e) {
-    message.error('Failed to delete goal')
+    message.error(t('common.error'))
   }
 }
 
 async function completeGoal(goal: Goal) {
   try {
     await goalsStore.completeGoal(goal.id)
-    message.success('Goal completed!')
+    message.success(t('goals.completed'))
   } catch (e) {
-    message.error('Failed to complete goal')
+    message.error(t('common.error'))
   }
 }
 

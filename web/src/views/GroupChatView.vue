@@ -3,7 +3,7 @@
     <!-- Room List -->
     <div style="width: 240px; border-right: 1px solid #e8e8e8; padding: 12px; overflow-y: auto;">
       <n-space justify="space-between" style="margin-bottom: 12px;">
-        <n-text strong>Rooms</n-text>
+        <n-text strong>{{ t('groupchat.rooms') }}</n-text>
         <n-button size="small" type="primary" @click="showCreateRoom = true">+</n-button>
       </n-space>
       <div
@@ -14,7 +14,7 @@
       >
         <n-text strong>{{ room.name }}</n-text>
         <br />
-        <n-text depth="3" style="font-size: 12px;">{{ room.members?.length || 0 }} members</n-text>
+        <n-text depth="3" style="font-size: 12px;">{{ room.members?.length || 0 }} {{ t('groupchat.members') }}</n-text>
       </div>
     </div>
 
@@ -33,32 +33,32 @@
         <div class="input-area">
           <n-input
             v-model:value="inputValue"
-            placeholder="Type a message..."
+            :placeholder="t('groupchat.typeMessage')"
             @keydown.enter="send"
           />
-          <n-button type="primary" @click="send">Send</n-button>
+          <n-button type="primary" @click="send">{{ t('groupchat.send') }}</n-button>
         </div>
       </template>
       <div v-else style="flex: 1; display: flex; align-items: center; justify-content: center;">
-        <n-text depth="3">Select a room to start chatting</n-text>
+        <n-text depth="3">{{ t('groupchat.selectRoom') }}</n-text>
       </div>
     </div>
 
     <!-- Create Room Modal -->
-    <n-modal v-model:show="showCreateRoom" title="New Room">
+    <n-modal v-model:show="showCreateRoom" :title="t('groupchat.newRoom')">
       <n-card style="width: 400px;">
         <n-form>
-          <n-form-item label="Room Name">
+          <n-form-item :label="t('groupchat.roomName')">
             <n-input v-model:value="newRoom.name" />
           </n-form-item>
-          <n-form-item label="Description">
+          <n-form-item :label="t('groupchat.description')">
             <n-input v-model:value="newRoom.description" />
           </n-form-item>
         </n-form>
         <template #footer>
           <n-space justify="end">
-            <n-button @click="showCreateRoom = false">Cancel</n-button>
-            <n-button type="primary" @click="createRoom">Create</n-button>
+            <n-button @click="showCreateRoom = false">{{ t('common.cancel') }}</n-button>
+            <n-button type="primary" @click="createRoom">{{ t('common.create') }}</n-button>
           </n-space>
         </template>
       </n-card>
@@ -69,8 +69,10 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { useGroupChatStore } from '@/stores/groupchat'
 
+const { t } = useI18n()
 const message = useMessage()
 const groupchatStore = useGroupChatStore()
 const inputValue = ref('')
@@ -90,7 +92,7 @@ async function createRoom() {
   newRoom.name = ''
   newRoom.description = ''
   showCreateRoom.value = false
-  message.success('Room created')
+  message.success(t('groupchat.created'))
 }
 
 onMounted(() => groupchatStore.loadRooms())

@@ -4,12 +4,12 @@
     <div class="session-sidebar">
       <div class="sidebar-header">
         <n-button type="primary" block @click="createSession" size="small">
-          + New Chat
+          + {{ t('chat.newChat') }}
         </n-button>
       </div>
       <div class="session-list">
         <template v-for="(sessions, profile) in groupedSessions" :key="profile">
-          <div class="profile-group-header">{{ profile || 'Default' }}</div>
+          <div class="profile-group-header">{{ profile || t('chat.default') }}</div>
           <div
             v-for="session in sessions"
             :key="session.id"
@@ -17,12 +17,12 @@
             :class="{ active: chatStore.activeSessionId === session.id }"
             @click="selectSession(session.id)"
           >
-            <div class="session-title">{{ session.title || 'Untitled' }}</div>
+            <div class="session-title">{{ session.title || t('chat.untitled') }}</div>
             <div class="session-meta">
               <n-tag v-if="session.source && session.source !== 'web'" size="tiny" :type="sourceType(session.source)" style="margin-right: 4px;">
                 {{ session.source }}
               </n-tag>
-              {{ session.message_count || 0 }} msgs
+              {{ session.message_count || 0 }} {{ t('chat.messages') }}
             </div>
             <n-popconfirm @positive-click="deleteSession(session.id)">
               <template #trigger>
@@ -37,12 +37,12 @@
                   ×
                 </n-button>
               </template>
-              Delete this session?
+              {{ t('common.confirmDelete') }}
             </n-popconfirm>
           </div>
         </template>
         <n-text v-if="!chatStore.sessions.length" depth="3" style="padding: 16px; display: block; text-align: center;">
-          No sessions yet
+          {{ t('chat.noSessions') }}
         </n-text>
       </div>
     </div>
@@ -54,7 +54,7 @@
       </n-alert>
 
       <n-alert v-if="isGatewaySession" type="info" style="margin: 12px;">
-        This session is from {{ activeSessionSource }}. Messages may not be available in web view.
+        {{ t('chat.gatewaySession', { source: activeSessionSource }) }}
       </n-alert>
 
       <div class="messages" ref="messagesRef">
@@ -73,7 +73,7 @@
           <n-spin size="small" />
         </div>
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" style="padding: 40px; display: block; text-align: center;">
-          Select a session or start a new chat
+          {{ t('chat.selectSession') }}
         </n-text>
       </div>
       <div class="input-area">
@@ -81,11 +81,11 @@
           v-model:value="inputValue"
           type="textarea"
           :autosize="{ minRows: 2, maxRows: 6 }"
-          placeholder="Type a message..."
+          :placeholder="t('chat.placeholder')"
           @keydown.enter.prevent="send"
         />
         <n-button type="primary" @click="send" :loading="chatStore.streaming" :disabled="!inputValue.trim()">
-          Send
+          {{ t('chat.send') }}
         </n-button>
       </div>
     </div>
@@ -94,11 +94,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 import { useChatStore } from '@/stores/chat'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
@@ -126,7 +128,7 @@ const groupedSessions = computed(() => {
     // Normalize profile: empty, 'default', 'Default' all become 'Default'
     let profile = session?.profile?.trim() || ''
     if (profile === '' || profile.toLowerCase() === 'default') {
-      profile = 'Default'
+      profile = t('chat.default')
     }
     if (!groups[profile]) groups[profile] = []
     groups[profile].push(session)
