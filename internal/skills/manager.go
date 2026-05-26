@@ -1272,17 +1272,17 @@ func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (inte
 			}
 		}
 		return map[string]interface{}{
-			"name":         skill.Name,
-			"description":  skill.Description,
-			"content":      content,
-			"category":     skill.Category,
-			"tags":         skill.Tags,
-			"version":      skill.Version,
-			"author":       skill.Author,
-			"source":       skill.Source,
-			"tools":        skill.GetTools(),
-			"dir":          skill.Dir,
-			"supporting":   skill.SupportingFiles(),
+			"name":        skill.Name,
+			"description": skill.Description,
+			"content":     content,
+			"category":    skill.Category,
+			"tags":        skill.Tags,
+			"version":     skill.Version,
+			"author":      skill.Author,
+			"source":      skill.Source,
+			"tools":       skill.GetTools(),
+			"dir":         skill.Dir,
+			"supporting":  skill.SupportingFiles(),
 		}, nil
 
 	case Level2:
@@ -1403,9 +1403,9 @@ func (m *Manager) FilterSkillsByCondition(availableToolsets, availableTools []st
 
 // HubConfig contains hub/source configuration
 type HubConfig struct {
-	Sources    []HubSourceConfig `json:"sources"`
-	CacheDir   string            `json:"cache_dir"`
-	CacheTTL   int               `json:"cache_ttl_hours"` // Hours to cache
+	Sources  []HubSourceConfig `json:"sources"`
+	CacheDir string            `json:"cache_dir"`
+	CacheTTL int               `json:"cache_ttl_hours"` // Hours to cache
 }
 
 // HubSourceConfig describes a skill source
@@ -1559,8 +1559,8 @@ func (m *Manager) UpdateHubSkill(name string) error {
 
 // ExternalDir represents an external skill directory configuration
 type ExternalDir struct {
-	Path   string `yaml:"path"`
-	ReadOnly bool `yaml:"read_only"`
+	Path     string `yaml:"path"`
+	ReadOnly bool   `yaml:"read_only"`
 }
 
 // SetExternalDirs sets additional external skill directories to scan

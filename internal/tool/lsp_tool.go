@@ -21,21 +21,21 @@ type FileChangeVerifier struct {
 }
 
 type fileSnapshot struct {
-	Path       string    `json:"path"`
-	Size       int64     `json:"size"`
-	ModTime    time.Time `json:"mod_time"`
-	ContentHash string   `json:"content_hash"`
-	LineCount  int       `json:"line_count"`
+	Path        string    `json:"path"`
+	Size        int64     `json:"size"`
+	ModTime     time.Time `json:"mod_time"`
+	ContentHash string    `json:"content_hash"`
+	LineCount   int       `json:"line_count"`
 }
 
 // FileChange represents a single file change detected
 type FileChange struct {
-	Path      string `json:"path"`
-	Action    string `json:"action"` // created, modified, deleted
-	OldLines  int    `json:"old_lines,omitempty"`
-	NewLines  int    `json:"new_lines,omitempty"`
-	OldSize   int64  `json:"old_size,omitempty"`
-	NewSize   int64  `json:"new_size,omitempty"`
+	Path     string `json:"path"`
+	Action   string `json:"action"` // created, modified, deleted
+	OldLines int    `json:"old_lines,omitempty"`
+	NewLines int    `json:"new_lines,omitempty"`
+	OldSize  int64  `json:"old_size,omitempty"`
+	NewSize  int64  `json:"new_size,omitempty"`
 }
 
 // FileChangeReport is the verification footer sent to the agent
@@ -265,12 +265,12 @@ type LSPDiagnostic struct {
 
 // LSPDiagnosticResult is the result of running diagnostics
 type LSPDiagnosticResult struct {
-	File        string          `json:"file"`
-	Language    string          `json:"language"`
-	Diagnostics []LSPDiagnostic `json:"diagnostics"`
-	ErrorCount  int             `json:"error_count"`
-	WarningCount int            `json:"warning_count"`
-	Summary     string          `json:"summary"`
+	File         string          `json:"file"`
+	Language     string          `json:"language"`
+	Diagnostics  []LSPDiagnostic `json:"diagnostics"`
+	ErrorCount   int             `json:"error_count"`
+	WarningCount int             `json:"warning_count"`
+	Summary      string          `json:"summary"`
 }
 
 // Execute runs LSP diagnostics on the specified file
@@ -322,17 +322,17 @@ func (t *LSPDiagnosticTool) Execute(ctx context.Context, params map[string]inter
 func detectLanguage(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	langMap := map[string]string{
-		".go":  "go",
-		".py":  "python",
-		".ts":  "typescript",
-		".tsx": "typescript",
-		".js":  "javascript",
-		".jsx": "javascript",
-		".rs":  "rust",
+		".go":   "go",
+		".py":   "python",
+		".ts":   "typescript",
+		".tsx":  "typescript",
+		".js":   "javascript",
+		".jsx":  "javascript",
+		".rs":   "rust",
 		".java": "java",
-		".c":   "c",
-		".cpp": "cpp",
-		".h":   "c",
+		".c":    "c",
+		".cpp":  "cpp",
+		".h":    "c",
 	}
 	if lang, ok := langMap[ext]; ok {
 		return lang

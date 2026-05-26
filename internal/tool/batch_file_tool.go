@@ -57,8 +57,8 @@ func (t *BatchFileOpsTool) Schema() map[string]interface{} {
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"path":       map[string]interface{}{"type": "string"},
-						"content":    map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
+						"path":    map[string]interface{}{"type": "string"},
+						"content": map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
 						"create_dirs": map[string]interface{}{
 							"type":        "boolean",
 							"description": "Create parent directories if they don't exist (for batch_write)",

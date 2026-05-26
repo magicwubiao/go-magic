@@ -38,30 +38,30 @@ var ansiColor = &Color{
 
 // ProgressBar 进度条
 type ProgressBar struct {
-	mu         sync.Mutex
-	total      int
+	mu          sync.Mutex
+	total       int
 	current     int
-	width      int
-	message    string
-	startTime  time.Time
-	showTimer  bool
+	width       int
+	message     string
+	startTime   time.Time
+	showTimer   bool
 	showPercent bool
-	showETA    bool
-	colorFg    string
-	colorBg    string
-	completed  bool
+	showETA     bool
+	colorFg     string
+	colorBg     string
+	completed   bool
 }
 
 // NewProgressBar 创建新进度条
 func NewProgressBar(total int) *ProgressBar {
 	return &ProgressBar{
-		total:      total,
-		width:      40,
-		showTimer:  true,
+		total:       total,
+		width:       40,
+		showTimer:   true,
 		showPercent: true,
-		showETA:    true,
-		colorFg:    ansiColor.Green,
-		startTime:  time.Now(),
+		showETA:     true,
+		colorFg:     ansiColor.Green,
+		startTime:   time.Now(),
 	}
 }
 

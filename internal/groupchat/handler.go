@@ -62,12 +62,12 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("POST /rooms/{id}/compress", h.forceCompress)
 
 	// Additional routes for web compatibility
-	h.mux.HandleFunc("PUT /rooms/{id}", h.updateRoom)           // PUT /rooms/{id} (not just /config)
-	h.mux.HandleFunc("POST /rooms/{id}/invite", h.generateInviteCode) // Generate invite code
-	h.mux.HandleFunc("POST /rooms/join", h.joinRoom)            // POST /rooms/join (not just GET)
-	h.mux.HandleFunc("POST /rooms/{id}/leave", h.leaveRoom)     // Leave room
+	h.mux.HandleFunc("PUT /rooms/{id}", h.updateRoom)                       // PUT /rooms/{id} (not just /config)
+	h.mux.HandleFunc("POST /rooms/{id}/invite", h.generateInviteCode)       // Generate invite code
+	h.mux.HandleFunc("POST /rooms/join", h.joinRoom)                        // POST /rooms/join (not just GET)
+	h.mux.HandleFunc("POST /rooms/{id}/leave", h.leaveRoom)                 // Leave room
 	h.mux.HandleFunc("DELETE /rooms/{id}/members/{userId}", h.removeMember) // Remove member
-	h.mux.HandleFunc("GET /agents", h.listAllAgents)            // List all agents (global)
+	h.mux.HandleFunc("GET /agents", h.listAllAgents)                        // List all agents (global)
 }
 
 // ─── Room Handlers ───────────────────────────────────────────────────────────
@@ -623,9 +623,9 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast to room via WebSocket
 	h.server.broadcastToRoom(roomID, map[string]interface{}{
-		"type":    "message",
-		"roomId":  roomID,
-		"data":    chatMsg,
+		"type":   "message",
+		"roomId": roomID,
+		"data":   chatMsg,
 	})
 
 	jsonResponse(w, map[string]interface{}{"message": chatMsg})

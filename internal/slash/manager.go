@@ -9,23 +9,23 @@ import (
 
 // Command represents a slash command
 type Command struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Usage       string            `json:"usage"`
-	Aliases     []string          `json:"aliases"`
-	Handler     CommandHandler    `json:"-"`
-	Flags       []Flag            `json:"flags"`
-	Category    string            `json:"category"` // conversation, system, tools, info
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Usage       string         `json:"usage"`
+	Aliases     []string       `json:"aliases"`
+	Handler     CommandHandler `json:"-"`
+	Flags       []Flag         `json:"flags"`
+	Category    string         `json:"category"` // conversation, system, tools, info
 }
 
 // Flag represents a command flag
 type Flag struct {
-	Name        string `json:"name"`
-	Short       string `json:"short"`
-	Description string `json:"description"`
-	Type        string `json:"type"` // string, int, bool
+	Name        string      `json:"name"`
+	Short       string      `json:"short"`
+	Description string      `json:"description"`
+	Type        string      `json:"type"` // string, int, bool
 	Default     interface{} `json:"default"`
-	Required    bool   `json:"required"`
+	Required    bool        `json:"required"`
 }
 
 // CommandHandler is the function signature for command handlers
@@ -33,11 +33,11 @@ type CommandHandler func(ctx context.Context, args []string, flags map[string]in
 
 // ParsedCommand represents a parsed command
 type ParsedCommand struct {
-	Name      string
-	Args      []string
-	Flags     map[string]interface{}
-	Raw       string
-	Handler   *Command
+	Name    string
+	Args    []string
+	Flags   map[string]interface{}
+	Raw     string
+	Handler *Command
 }
 
 // Manager handles slash commands
@@ -53,7 +53,7 @@ func NewManager() *Manager {
 		commands: make(map[string]*Command),
 		handlers: make(map[string]CommandHandler),
 	}
-	
+
 	m.registerDefaultCommands()
 	return m
 }
@@ -122,7 +122,7 @@ func (m *Manager) registerDefaultCommands() {
 				return fmt.Sprintf("Conversation exported as %s.", format), nil
 			},
 		},
-		
+
 		// Model commands
 		{
 			Name:        "model",
@@ -137,7 +137,7 @@ func (m *Manager) registerDefaultCommands() {
 				return fmt.Sprintf("Model set to: %s", args[0]), nil
 			},
 		},
-		
+
 		// Personality commands
 		{
 			Name:        "personality",
@@ -152,7 +152,7 @@ func (m *Manager) registerDefaultCommands() {
 				return fmt.Sprintf("Personality set to: %s", args[0]), nil
 			},
 		},
-		
+
 		// Tool commands
 		{
 			Name:        "tools",
@@ -228,7 +228,7 @@ func (m *Manager) registerDefaultCommands() {
 				return "Usage: /subgoal <text> - Add sub-goal to active goal", nil
 			},
 		},
-		
+
 		// Info commands
 		{
 			Name:        "help",
@@ -281,7 +281,7 @@ func (m *Manager) registerDefaultCommands() {
 				return "go-magic v1.0.0", nil
 			},
 		},
-		
+
 		// Usage commands
 		{
 			Name:        "usage",
@@ -315,7 +315,7 @@ func (m *Manager) registerDefaultCommands() {
 				{Name: "days", Short: "d", Type: "int", Default: 7, Description: "Number of days"},
 			},
 		},
-		
+
 		// Session commands
 		{
 			Name:        "sessions",
@@ -342,7 +342,7 @@ func (m *Manager) registerDefaultCommands() {
 				return "Usage: /sethome [session_id]", nil
 			},
 		},
-		
+
 		// Context commands
 		{
 			Name:        "context",
@@ -357,7 +357,7 @@ func (m *Manager) registerDefaultCommands() {
 				return fmt.Sprintf("Context %s:", args[0]), nil
 			},
 		},
-		
+
 		// Stop command
 		{
 			Name:        "stop",
@@ -370,7 +370,7 @@ func (m *Manager) registerDefaultCommands() {
 			},
 		},
 	}
-	
+
 	for _, cmd := range commands {
 		m.Register(cmd)
 	}
@@ -380,7 +380,7 @@ func (m *Manager) registerDefaultCommands() {
 func (m *Manager) Register(cmd *Command) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.commands[cmd.Name] = cmd
 	for _, alias := range cmd.Aliases {
 		aliasName := strings.TrimPrefix(alias, "/")
@@ -392,7 +392,7 @@ func (m *Manager) Register(cmd *Command) {
 func (m *Manager) Unregister(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	delete(m.commands, name)
 }
 
@@ -400,10 +400,10 @@ func (m *Manager) Unregister(name string) {
 func (m *Manager) Get(name string) *Command {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// Remove leading slash
 	name = strings.TrimPrefix(name, "/")
-	
+
 	if cmd, ok := m.commands[name]; ok {
 		return cmd
 	}
@@ -414,10 +414,10 @@ func (m *Manager) Get(name string) *Command {
 func (m *Manager) List() []*Command {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	seen := make(map[string]bool)
 	var result []*Command
-	
+
 	for _, cmd := range m.commands {
 		if !seen[cmd.Name] {
 			result = append(result, cmd)
@@ -431,10 +431,10 @@ func (m *Manager) List() []*Command {
 func (m *Manager) ListByCategory(category string) []*Command {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var result []*Command
 	seen := make(map[string]bool)
-	
+
 	for _, cmd := range m.commands {
 		if cmd.Category == category && !seen[cmd.Name] {
 			result = append(result, cmd)
@@ -450,15 +450,15 @@ func (m *Manager) ParseCommand(input string) (*ParsedCommand, error) {
 	if !strings.HasPrefix(input, "/") {
 		return nil, fmt.Errorf("not a slash command")
 	}
-	
+
 	parts := parseCommandParts(input)
 	name := strings.TrimPrefix(parts[0], "/")
-	
+
 	cmd := m.Get(name)
 	if cmd == nil {
 		return nil, fmt.Errorf("unknown command: %s", name)
 	}
-	
+
 	parsed := &ParsedCommand{
 		Name:    name,
 		Raw:     input,
@@ -466,13 +466,13 @@ func (m *Manager) ParseCommand(input string) (*ParsedCommand, error) {
 		Flags:   make(map[string]interface{}),
 		Handler: cmd,
 	}
-	
+
 	// Parse flags
 	for _, arg := range parts[1:] {
 		if strings.HasPrefix(arg, "--") {
 			flagParts := strings.SplitN(strings.TrimPrefix(arg, "--"), "=", 2)
 			flagName := flagParts[0]
-			
+
 			var flagValue interface{} = true
 			if len(flagParts) > 1 {
 				flagValue = flagParts[1]
@@ -489,7 +489,7 @@ func (m *Manager) ParseCommand(input string) (*ParsedCommand, error) {
 			}
 		}
 	}
-	
+
 	return parsed, nil
 }
 
@@ -514,13 +514,13 @@ func parseCommandParts(input string) []string {
 	var current strings.Builder
 	inQuote := false
 	quoteChar := ' '
-	
+
 	for i, r := range input {
 		if i == 0 && r == '/' {
 			current.WriteRune(r)
 			continue
 		}
-		
+
 		switch r {
 		case '"', '\'':
 			if !inQuote {
@@ -544,11 +544,11 @@ func parseCommandParts(input string) []string {
 			current.WriteRune(r)
 		}
 	}
-	
+
 	if current.Len() > 0 {
 		parts = append(parts, current.String())
 	}
-	
+
 	return parts
 }
 
@@ -556,10 +556,10 @@ func parseCommandParts(input string) []string {
 func (m *Manager) Autocomplete(partial string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var suggestions []string
 	partial = strings.TrimPrefix(partial, "/")
-	
+
 	for _, cmd := range m.commands {
 		name := cmd.Name
 		if strings.HasPrefix(name, partial) {
@@ -577,7 +577,7 @@ func (m *Manager) Autocomplete(partial string) []string {
 // HelpText generates help text for all commands
 func (m *Manager) HelpText(category string) string {
 	var result strings.Builder
-	
+
 	commands := m.List()
 	if category != "" {
 		var filtered []*Command
@@ -588,9 +588,9 @@ func (m *Manager) HelpText(category string) string {
 		}
 		commands = filtered
 	}
-	
+
 	result.WriteString("## Slash Commands\n\n")
-	
+
 	categories := map[string][]*Command{}
 	for _, cmd := range commands {
 		cat := cmd.Category
@@ -599,7 +599,7 @@ func (m *Manager) HelpText(category string) string {
 		}
 		categories[cat] = append(categories[cat], cmd)
 	}
-	
+
 	for cat, cmds := range categories {
 		result.WriteString(fmt.Sprintf("### %s\n", strings.Title(cat)))
 		for _, cmd := range cmds {
@@ -607,6 +607,6 @@ func (m *Manager) HelpText(category string) string {
 		}
 		result.WriteString("\n")
 	}
-	
+
 	return result.String()
 }

@@ -18,11 +18,11 @@ import (
 type ProjectType string
 
 const (
-	ProjectTypeGo        ProjectType = "go"
-	ProjectTypeNode      ProjectType = "node"
-	ProjectTypeRust      ProjectType = "rust"
-	ProjectTypePython    ProjectType = "python"
-	ProjectTypeUnknown   ProjectType = "unknown"
+	ProjectTypeGo      ProjectType = "go"
+	ProjectTypeNode    ProjectType = "node"
+	ProjectTypeRust    ProjectType = "rust"
+	ProjectTypePython  ProjectType = "python"
+	ProjectTypeUnknown ProjectType = "unknown"
 )
 
 // LintLevel represents the severity level of a lint issue
@@ -748,14 +748,14 @@ func runPylint(ctx context.Context, dir string) ([]LintResult, error) {
 	cmd.Run() // pylint exits with non-zero if there are issues
 
 	var pylintResults []struct {
-		Type     string `json:"type"`
-		Module   string `json:"module"`
-		Obj      string `json:"obj"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-		Path     string `json:"path"`
-		Symbol   string `json:"symbol"`
-		Message  string `json:"message"`
+		Type      string `json:"type"`
+		Module    string `json:"module"`
+		Obj       string `json:"obj"`
+		Line      int    `json:"line"`
+		Column    int    `json:"column"`
+		Path      string `json:"path"`
+		Symbol    string `json:"symbol"`
+		Message   string `json:"message"`
 		MessageID string `json:"message-id"`
 	}
 

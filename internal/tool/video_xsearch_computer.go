@@ -23,23 +23,23 @@ type VideoGenerateTool struct {
 
 // VideoGenConfig holds configuration for video generation
 type VideoGenConfig struct {
-	Provider    string `json:"provider"`     // "replicate", "fal", "stability", "local"
-	APIKey      string `json:"api_key"`
-	Model       string `json:"model"`        // e.g., "stable-video-diffusion", "animate-diff"
-	DefaultDuration int `json:"default_duration"` // seconds
-	OutputDir   string `json:"output_dir"`
+	Provider        string `json:"provider"` // "replicate", "fal", "stability", "local"
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`            // e.g., "stable-video-diffusion", "animate-diff"
+	DefaultDuration int    `json:"default_duration"` // seconds
+	OutputDir       string `json:"output_dir"`
 }
 
 // VideoGenRequest represents a video generation request
 type VideoGenRequest struct {
-	Prompt    string `json:"prompt"`
-	ImageURL  string `json:"image_url,omitempty"`  // optional: image-to-video
-	Duration  int    `json:"duration,omitempty"`   // seconds
-	Width     int    `json:"width,omitempty"`
-	Height    int    `json:"height,omitempty"`
-	FPS       int    `json:"fps,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
+	Prompt   string `json:"prompt"`
+	ImageURL string `json:"image_url,omitempty"` // optional: image-to-video
+	Duration int    `json:"duration,omitempty"`  // seconds
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	FPS      int    `json:"fps,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // VideoGenResult represents the result of video generation
@@ -60,10 +60,10 @@ type VideoGenResult struct {
 func NewVideoGenerateTool(config *VideoGenConfig) *VideoGenerateTool {
 	if config == nil {
 		config = &VideoGenConfig{
-			Provider: "replicate",
-			Model:    "stable-video-diffusion",
+			Provider:        "replicate",
+			Model:           "stable-video-diffusion",
 			DefaultDuration: 4,
-			OutputDir: "./output/videos",
+			OutputDir:       "./output/videos",
 		}
 	}
 	if config.OutputDir == "" {
@@ -166,9 +166,9 @@ func (t *VideoGenerateTool) generateReplicate(ctx context.Context, req *VideoGen
 	// Call Replicate API
 	payload := map[string]interface{}{
 		"input": map[string]interface{}{
-			"prompt":  req.Prompt,
-			"width":   req.Width,
-			"height":  req.Height,
+			"prompt":   req.Prompt,
+			"width":    req.Width,
+			"height":   req.Height,
 			"duration": req.Duration,
 		},
 	}
@@ -217,9 +217,9 @@ func (t *VideoGenerateTool) generateFal(ctx context.Context, req *VideoGenReques
 	}
 
 	payload := map[string]interface{}{
-		"prompt":      req.Prompt,
-		"image_url":   req.ImageURL,
-		"duration":    req.Duration,
+		"prompt":    req.Prompt,
+		"image_url": req.ImageURL,
+		"duration":  req.Duration,
 	}
 	body, _ := json.Marshal(payload)
 	httpReq, _ := http.NewRequestWithContext(ctx, "POST", "https://queue.fal.run/fal-ai/fast-animatediff/text-to-video", strings.NewReader(string(body)))
@@ -261,8 +261,8 @@ func (t *VideoGenerateTool) generateStability(ctx context.Context, req *VideoGen
 		"text_prompts": []map[string]interface{}{
 			{"text": req.Prompt, "weight": 1.0},
 		},
-		"width":    req.Width,
-		"height":   req.Height,
+		"width":  req.Width,
+		"height": req.Height,
 	}
 	body, _ := json.Marshal(payload)
 	httpReq, _ := http.NewRequestWithContext(ctx, "POST", "https://api.stability.ai/v2alpha/generation/image-to-video", strings.NewReader(string(body)))
@@ -426,9 +426,15 @@ func (t *XSearchTool) Execute(ctx context.Context, params map[string]interface{}
 
 				likes, retweets, replies := 0, 0, 0
 				if metrics, ok := t["public_metrics"].(map[string]interface{}); ok {
-					if v, ok := metrics["like_count"].(float64); ok { likes = int(v) }
-					if v, ok := metrics["retweet_count"].(float64); ok { retweets = int(v) }
-					if v, ok := metrics["reply_count"].(float64); ok { replies = int(v) }
+					if v, ok := metrics["like_count"].(float64); ok {
+						likes = int(v)
+					}
+					if v, ok := metrics["retweet_count"].(float64); ok {
+						retweets = int(v)
+					}
+					if v, ok := metrics["reply_count"].(float64); ok {
+						replies = int(v)
+					}
 				}
 
 				author := authors[authorID]
@@ -468,23 +474,23 @@ type ComputerUseTool struct {
 
 // ComputerUseAction represents a single computer use action
 type ComputerUseAction struct {
-	Type   string `json:"type"`   // "click", "type", "scroll", "key", "screenshot", "drag"
-	X      int    `json:"x,omitempty"`
-	Y      int    `json:"y,omitempty"`
-	Text   string `json:"text,omitempty"`
-	Key    string `json:"key,omitempty"`
-	Button string `json:"button,omitempty"` // "left", "right", "middle"
-	ScrollY int   `json:"scroll_y,omitempty"`
+	Type     string  `json:"type"` // "click", "type", "scroll", "key", "screenshot", "drag"
+	X        int     `json:"x,omitempty"`
+	Y        int     `json:"y,omitempty"`
+	Text     string  `json:"text,omitempty"`
+	Key      string  `json:"key,omitempty"`
+	Button   string  `json:"button,omitempty"` // "left", "right", "middle"
+	ScrollY  int     `json:"scroll_y,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
 }
 
 // ComputerUseResult represents the result of a computer use action
 type ComputerUseResult struct {
-	Success      bool   `json:"success"`
-	Action       string `json:"action"`
-	Screenshot   string `json:"screenshot_path,omitempty"`
+	Success       bool   `json:"success"`
+	Action        string `json:"action"`
+	Screenshot    string `json:"screenshot_path,omitempty"`
 	ScreenshotB64 string `json:"screenshot_base64,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // NewComputerUseTool creates a new computer use tool
@@ -502,9 +508,9 @@ func NewComputerUseTool(screenshotDir string) *ComputerUseTool {
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
-						"type": "string",
+						"type":        "string",
 						"description": "Action to perform: click, type, scroll, key, screenshot, drag",
-						"enum": []string{"click", "type", "scroll", "key", "screenshot", "drag"},
+						"enum":        []string{"click", "type", "scroll", "key", "screenshot", "drag"},
 					},
 					"x": map[string]interface{}{
 						"type":        "integer",
@@ -617,8 +623,12 @@ func (t *ComputerUseTool) performClick(ctx context.Context, params map[string]in
 	switch runtime.GOOS {
 	case "linux":
 		btn := "1"
-		if button == "right" { btn = "3" }
-		if button == "middle" { btn = "2" }
+		if button == "right" {
+			btn = "3"
+		}
+		if button == "middle" {
+			btn = "2"
+		}
 		cmd = exec.CommandContext(ctx, "xdotool", "mousemove", fmt.Sprintf("%d", int(x)), fmt.Sprintf("%d", int(y)), "click", btn)
 	case "darwin":
 		cmd = exec.CommandContext(ctx, "cliclick", "c:"+button, fmt.Sprintf("%d,%d", int(x), int(y)))
@@ -681,9 +691,13 @@ func (t *ComputerUseTool) performScroll(ctx context.Context, params map[string]i
 	case "darwin":
 		repeats := abs(scrollY) / 100
 		btn := "4"
-		if scrollY > 0 { btn = "5" }
+		if scrollY > 0 {
+			btn = "5"
+		}
 		args := make([]string, repeats)
-		for i := range args { args[i] = "c:" + btn }
+		for i := range args {
+			args[i] = "c:" + btn
+		}
 		cmd = exec.CommandContext(ctx, "cliclick", args...)
 	case "windows":
 		cmd = exec.CommandContext(ctx, "powershell", "-Command",
@@ -736,7 +750,9 @@ func (t *ComputerUseTool) performDrag(ctx context.Context, params map[string]int
 }
 
 func abs(x int) int {
-	if x < 0 { return -x }
+	if x < 0 {
+		return -x
+	}
 	return x
 }
 

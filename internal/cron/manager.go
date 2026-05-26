@@ -21,10 +21,10 @@ type Job struct {
 	Skills      []string               `json:"skills,omitempty"`
 	Platform    string                 `json:"platform,omitempty"`
 	Enabled     bool                   `json:"enabled"`
-	NoAgent     bool                   `json:"no_agent"`  // Skip agent, run script directly
-	Script      string                 `json:"script"`     // Script/command for no_agent mode
-	NextRun     *time.Time            `json:"next_run,omitempty"`
-	LastRun     *time.Time            `json:"last_run,omitempty"`
+	NoAgent     bool                   `json:"no_agent"` // Skip agent, run script directly
+	Script      string                 `json:"script"`   // Script/command for no_agent mode
+	NextRun     *time.Time             `json:"next_run,omitempty"`
+	LastRun     *time.Time             `json:"last_run,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 

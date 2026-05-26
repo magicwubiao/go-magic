@@ -17,15 +17,15 @@ import (
 
 // Server Group Chat WebSocket 服务器
 type Server struct {
-	storage      *Storage
-	upgrader     websocket.Upgrader
-	rooms        map[string]map[string]*Client // roomID -> clientID -> client
-	roomAgents   map[string]map[string]*AgentClient // roomID -> agentID -> agent
-	onlineUsers  map[string]*Client // socketID -> client
-	mu           sync.RWMutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	compressors  map[string]*ContextCompressor // roomID -> compressor
+	storage     *Storage
+	upgrader    websocket.Upgrader
+	rooms       map[string]map[string]*Client      // roomID -> clientID -> client
+	roomAgents  map[string]map[string]*AgentClient // roomID -> agentID -> agent
+	onlineUsers map[string]*Client                 // socketID -> client
+	mu          sync.RWMutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	compressors map[string]*ContextCompressor // roomID -> compressor
 }
 
 // Client WebSocket 客户端
@@ -43,13 +43,13 @@ type Client struct {
 
 // AgentClient Agent 客户端
 type AgentClient struct {
-	ID        string    `json:"id"`
-	RoomID    string    `json:"roomId"`
-	Profile   string    `json:"profile"`
-	Name      string    `json:"name"`
-	SessionID string    `json:"sessionId"`
-	Connected bool      `json:"connected"`
-	CreatedAt int64     `json:"createdAt"`
+	ID        string `json:"id"`
+	RoomID    string `json:"roomId"`
+	Profile   string `json:"profile"`
+	Name      string `json:"name"`
+	SessionID string `json:"sessionId"`
+	Connected bool   `json:"connected"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 // Message 消息结构
@@ -291,11 +291,11 @@ func (c *Client) handleJoin(msg *Message) {
 		// 广播成员加入
 		members, _ := c.server.storage.GetMembers(c.RoomID)
 		c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
-			"type":    "member_joined",
-			"roomId":  c.RoomID,
-			"userId":  c.UserID,
+			"type":     "member_joined",
+			"roomId":   c.RoomID,
+			"userId":   c.UserID,
 			"userName": c.Name,
-			"members": members,
+			"members":  members,
 		})
 	}
 	c.server.mu.Unlock()
@@ -359,9 +359,9 @@ func (c *Client) handleChatMessage(msg *Message) {
 
 	// 广播消息
 	c.server.broadcastToRoom(c.RoomID, map[string]interface{}{
-		"type":    "message",
-		"roomId":  c.RoomID,
-		"data":    chatMsg,
+		"type":   "message",
+		"roomId": c.RoomID,
+		"data":   chatMsg,
 	})
 
 	// 如果是 @ 某个代理，转发给代理处理
@@ -401,9 +401,9 @@ func (c *Client) handleStopTyping(msg *Message) {
 // handleCreateRoom 处理创建房间
 func (c *Client) handleCreateRoom(msg *Message) {
 	var data struct {
-		Name        string             `json:"name"`
-		InviteCode  string             `json:"inviteCode"`
-		Compression CompressionConfig   `json:"compression"`
+		Name        string            `json:"name"`
+		InviteCode  string            `json:"inviteCode"`
+		Compression CompressionConfig `json:"compression"`
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
 		c.sendError("Invalid create room data")

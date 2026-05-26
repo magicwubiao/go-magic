@@ -178,12 +178,12 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 	// 检查 API 密钥是否配置
 	if t.config.APIKey == "" {
 		return map[string]interface{}{
-			"status":          "not_configured",
-			"prompt":          prompt,
-			"style":           style,
-			"size":            size,
-			"count":           count,
-			"message":         "Image generation API key not configured. Please set image_gen_api_key in your config.",
+			"status":             "not_configured",
+			"prompt":             prompt,
+			"style":              style,
+			"size":               size,
+			"count":              count,
+			"message":            "Image generation API key not configured. Please set image_gen_api_key in your config.",
 			"configuration_help": "Add 'image_gen_api_key' and optionally 'image_gen_provider' to your ~/.magic/config.json",
 		}, nil
 	}
@@ -216,16 +216,16 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 	}
 
 	return map[string]interface{}{
-		"status":        "success",
-		"provider":      provider,
-		"prompt":        prompt,
+		"status":          "success",
+		"provider":        provider,
+		"prompt":          prompt,
 		"negative_prompt": negativePrompt,
-		"style":         style,
-		"size":          size,
-		"count":         len(result.Images),
-		"images":        savedPaths,
+		"style":           style,
+		"size":            size,
+		"count":           len(result.Images),
+		"images":          savedPaths,
 		"revised_prompts": result.RevisedPrompts,
-		"seed":          result.Seed,
+		"seed":            result.Seed,
 	}, nil
 }
 
@@ -348,13 +348,13 @@ func (t *ImageGenerationTool) generateWithStableDiffusion(ctx context.Context, p
 
 	// 构建请求体
 	reqBody := map[string]interface{}{
-		"prompt":         t.enhancePromptWithStyle(prompt, style),
+		"prompt":          t.enhancePromptWithStyle(prompt, style),
 		"negative_prompt": negativePrompt,
-		"width":          width,
-		"height":         height,
-		"samples":        count,
-		"steps":          30,
-		"cfg_scale":      7,
+		"width":           width,
+		"height":          height,
+		"samples":         count,
+		"steps":           30,
+		"cfg_scale":       7,
 	}
 
 	if seed != nil {
@@ -454,7 +454,7 @@ func (t *ImageGenerationTool) generateWithMidjourney(ctx context.Context, prompt
 
 	// 提交生成任务
 	reqBody := map[string]interface{}{
-		"prompt": enhancedPrompt,
+		"prompt":      enhancedPrompt,
 		"notify_hook": "",
 	}
 
@@ -532,14 +532,14 @@ func (t *ImageGenerationTool) generateWithTogether(ctx context.Context, prompt, 
 
 	// 构建请求体
 	reqBody := map[string]interface{}{
-		"model":             model,
-		"prompt":            t.enhancePromptWithStyle(prompt, style),
-		"negative_prompt":   negativePrompt,
-		"width":             width,
-		"height":            height,
-		"steps":             20,
-		"n":                 count,
-		"response_format":   "b64_json",
+		"model":           model,
+		"prompt":          t.enhancePromptWithStyle(prompt, style),
+		"negative_prompt": negativePrompt,
+		"width":           width,
+		"height":          height,
+		"steps":           20,
+		"n":               count,
+		"response_format": "b64_json",
 	}
 
 	if seed != nil {
@@ -889,12 +889,12 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 	}
 
 	return map[string]interface{}{
-		"status":     "success",
-		"edit_type":  editType,
-		"prompt":     prompt,
-		"source":     imagePath,
-		"images":     savedPaths,
-		"count":      len(savedPaths),
+		"status":    "success",
+		"edit_type": editType,
+		"prompt":    prompt,
+		"source":    imagePath,
+		"images":    savedPaths,
+		"count":     len(savedPaths),
 	}, nil
 }
 

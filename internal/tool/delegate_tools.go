@@ -290,8 +290,8 @@ Returns a summary of all tasks including their status and IDs.`,
 				"type": "object",
 				"properties": map[string]interface{}{
 					"status": map[string]interface{}{
-						"type": "string",
-						"enum": []string{"all", "pending", "running", "completed", "failed", "cancelled"},
+						"type":        "string",
+						"enum":        []string{"all", "pending", "running", "completed", "failed", "cancelled"},
 						"description": "Filter by task status",
 						"default":     "all",
 					},

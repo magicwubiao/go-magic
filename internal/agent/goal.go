@@ -34,7 +34,7 @@ type Goal struct {
 	TurnCount   int        `json:"turn_count"`
 	MaxTurns    int        `json:"max_turns"`
 	CreatedAt   time.Time  `json:"created_at"`
-	LastJudgeAt  *time.Time `json:"last_judge_at"`
+	LastJudgeAt *time.Time `json:"last_judge_at"`
 	JudgeResult string     `json:"judge_result"`
 }
 

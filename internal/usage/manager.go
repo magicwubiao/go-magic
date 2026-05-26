@@ -14,22 +14,22 @@ import (
 // ModelPricing 定义各模型的定价
 var ModelPricing = map[string]ModelPrice{
 	// OpenAI
-	"gpt-4o":           {Input: 5.00, Output: 15.00, Unit: "1M tokens"},
-	"gpt-4o-mini":      {Input: 0.15, Output: 0.60, Unit: "1M tokens"},
-	"gpt-4-turbo":      {Input: 10.00, Output: 30.00, Unit: "1M tokens"},
-	"gpt-4":            {Input: 30.00, Output: 60.00, Unit: "1M tokens"},
-	"gpt-3.5-turbo":    {Input: 0.50, Output: 1.50, Unit: "1M tokens"},
+	"gpt-4o":        {Input: 5.00, Output: 15.00, Unit: "1M tokens"},
+	"gpt-4o-mini":   {Input: 0.15, Output: 0.60, Unit: "1M tokens"},
+	"gpt-4-turbo":   {Input: 10.00, Output: 30.00, Unit: "1M tokens"},
+	"gpt-4":         {Input: 30.00, Output: 60.00, Unit: "1M tokens"},
+	"gpt-3.5-turbo": {Input: 0.50, Output: 1.50, Unit: "1M tokens"},
 	// Anthropic
 	"claude-3-5-sonnet-20241022": {Input: 3.00, Output: 15.00, Unit: "1M tokens"},
-	"claude-3-5-haiku-20241022": {Input: 0.80, Output: 4.00, Unit: "1M tokens"},
-	"claude-3-opus-20240229":    {Input: 15.00, Output: 75.00, Unit: "1M tokens"},
-	"claude-3-sonnet-20240229":  {Input: 3.00, Output: 15.00, Unit: "1M tokens"},
+	"claude-3-5-haiku-20241022":  {Input: 0.80, Output: 4.00, Unit: "1M tokens"},
+	"claude-3-opus-20240229":     {Input: 15.00, Output: 75.00, Unit: "1M tokens"},
+	"claude-3-sonnet-20240229":   {Input: 3.00, Output: 15.00, Unit: "1M tokens"},
 	// DeepSeek
 	"deepseek-chat":  {Input: 0.27, Output: 1.10, Unit: "1M tokens"},
 	"deepseek-coder": {Input: 0.27, Output: 1.10, Unit: "1M tokens"},
 	// Ollama (本地，免费)
-	"llama3.2": {Input: 0, Output: 0, Unit: "local"},
-	"mistral":  {Input: 0, Output: 0, Unit: "local"},
+	"llama3.2":  {Input: 0, Output: 0, Unit: "local"},
+	"mistral":   {Input: 0, Output: 0, Unit: "local"},
 	"codellama": {Input: 0, Output: 0, Unit: "local"},
 	// OpenRouter
 	"openrouter/anthropic/claude-3.5-sonnet": {Input: 3.00, Output: 15.00, Unit: "1M tokens"},
@@ -46,51 +46,51 @@ type ModelPrice struct {
 
 // UsageRecord 单次使用记录
 type UsageRecord struct {
-	ID          string    `json:"id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Model       string    `json:"model"`
-	Provider    string    `json:"provider"`
-	InputTokens int       `json:"input_tokens"`
-	OutputTokens int      `json:"output_tokens"`
-	Cost        float64   `json:"cost"`
-	SessionID   string    `json:"session_id,omitempty"`
-	RequestType string    `json:"request_type,omitempty"` // chat, completion, embedding, etc.
+	ID           string    `json:"id"`
+	Timestamp    time.Time `json:"timestamp"`
+	Model        string    `json:"model"`
+	Provider     string    `json:"provider"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	Cost         float64   `json:"cost"`
+	SessionID    string    `json:"session_id,omitempty"`
+	RequestType  string    `json:"request_type,omitempty"` // chat, completion, embedding, etc.
 }
 
 // DailyStats 每日统计
 type DailyStats struct {
-	Date           string  `json:"date"`
-	TotalRequests  int     `json:"total_requests"`
-	TotalInput     int     `json:"total_input_tokens"`
-	TotalOutput    int     `json:"total_output_tokens"`
-	TotalCost      float64 `json:"total_cost"`
-	ByModel        map[string]ModelStats `json:"by_model"`
+	Date          string                `json:"date"`
+	TotalRequests int                   `json:"total_requests"`
+	TotalInput    int                   `json:"total_input_tokens"`
+	TotalOutput   int                   `json:"total_output_tokens"`
+	TotalCost     float64               `json:"total_cost"`
+	ByModel       map[string]ModelStats `json:"by_model"`
 }
 
 // ModelStats 模型统计
 type ModelStats struct {
-	Requests    int     `json:"requests"`
-	InputTokens int     `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	Cost        float64 `json:"cost"`
+	Requests     int     `json:"requests"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	Cost         float64 `json:"cost"`
 }
 
 // MonthlyBudget 月度预算
 type MonthlyBudget struct {
-	Month      string  `json:"month"`
-	Limit      float64 `json:"limit"`       // 预算上限（美元）
-	Current    float64 `json:"current"`     // 当前花费
+	Month          string  `json:"month"`
+	Limit          float64 `json:"limit"`           // 预算上限（美元）
+	Current        float64 `json:"current"`         // 当前花费
 	AlertThreshold float64 `json:"alert_threshold"` // 告警阈值（百分比）
 }
 
 // Manager 使用量管理器
 type Manager struct {
-	mu            sync.RWMutex
-	dataDir       string
-	records       []UsageRecord
-	dailyStats    map[string]*DailyStats
-	budget        *MonthlyBudget
-	lastSave      time.Time
+	mu         sync.RWMutex
+	dataDir    string
+	records    []UsageRecord
+	dailyStats map[string]*DailyStats
+	budget     *MonthlyBudget
+	lastSave   time.Time
 }
 
 // NewManager 创建新的使用量管理器
@@ -120,9 +120,9 @@ func (m *Manager) initCurrentMonth() {
 	now := time.Now()
 	month := now.Format("2006-01")
 	m.budget = &MonthlyBudget{
-		Month:         month,
-		Limit:         100.0, // 默认 $100
-		Current:       0,
+		Month:          month,
+		Limit:          100.0, // 默认 $100
+		Current:        0,
 		AlertThreshold: 0.8, // 80%
 	}
 }
@@ -259,8 +259,8 @@ func (m *Manager) GetWeeklyStats() (*DailyStats, error) {
 	startOfWeek := now.AddDate(0, 0, -int(now.Weekday()))
 
 	result := &DailyStats{
-		Date:     fmt.Sprintf("%s to %s", startOfWeek.Format("2006-01-02"), now.Format("2006-01-02")),
-		ByModel:  make(map[string]ModelStats),
+		Date:    fmt.Sprintf("%s to %s", startOfWeek.Format("2006-01-02"), now.Format("2006-01-02")),
+		ByModel: make(map[string]ModelStats),
 	}
 
 	for date, stats := range m.dailyStats {
@@ -294,8 +294,8 @@ func (m *Manager) GetMonthlyStats() (*DailyStats, error) {
 	month := now.Format("2006-01")
 
 	result := &DailyStats{
-		Date:     month,
-		ByModel:  make(map[string]ModelStats),
+		Date:    month,
+		ByModel: make(map[string]ModelStats),
 	}
 
 	for date, stats := range m.dailyStats {
@@ -326,9 +326,9 @@ func (m *Manager) GetBudget() *MonthlyBudget {
 
 	if m.budget == nil {
 		return &MonthlyBudget{
-			Month:         time.Now().Format("2006-01"),
-			Limit:         100.0,
-			Current:       0,
+			Month:          time.Now().Format("2006-01"),
+			Limit:          100.0,
+			Current:        0,
 			AlertThreshold: 0.8,
 		}
 	}
@@ -468,9 +468,9 @@ func (m *Manager) ExportJSON() ([]byte, error) {
 	defer m.mu.RUnlock()
 
 	data := map[string]interface{}{
-		"records":      m.records,
-		"daily_stats":  m.dailyStats,
-		"budget":       m.budget,
+		"records":     m.records,
+		"daily_stats": m.dailyStats,
+		"budget":      m.budget,
 	}
 
 	return json.MarshalIndent(data, "", "  ")
@@ -478,36 +478,36 @@ func (m *Manager) ExportJSON() ([]byte, error) {
 
 // Insights provides detailed usage analysis
 type Insights struct {
-	Period          string            `json:"period"`
-	TotalRequests   int               `json:"total_requests"`
-	TotalTokens     int               `json:"total_tokens"`
-	TotalCost       float64           `json:"total_cost"`
-	AvgTokensPerReq float64           `json:"avg_tokens_per_request"`
-	AvgCostPerReq   float64           `json:"avg_cost_per_request"`
-	TopModels       []ModelUsage      `json:"top_models"`
-	TopProviders    []ProviderUsage   `json:"top_providers"`
-	DailyTrend      []DailyTrend      `json:"daily_trend"`
-	PeakHours       []HourlyUsage     `json:"peak_hours"`
+	Period          string             `json:"period"`
+	TotalRequests   int                `json:"total_requests"`
+	TotalTokens     int                `json:"total_tokens"`
+	TotalCost       float64            `json:"total_cost"`
+	AvgTokensPerReq float64            `json:"avg_tokens_per_request"`
+	AvgCostPerReq   float64            `json:"avg_cost_per_request"`
+	TopModels       []ModelUsage       `json:"top_models"`
+	TopProviders    []ProviderUsage    `json:"top_providers"`
+	DailyTrend      []DailyTrend       `json:"daily_trend"`
+	PeakHours       []HourlyUsage      `json:"peak_hours"`
 	CostBreakdown   map[string]float64 `json:"cost_breakdown"`
-	Recommendations []string          `json:"recommendations"`
-	GeneratedAt     int64             `json:"generated_at"`
+	Recommendations []string           `json:"recommendations"`
+	GeneratedAt     int64              `json:"generated_at"`
 }
 
 // ModelUsage represents usage by model
 type ModelUsage struct {
-	Model     string  `json:"model"`
-	Requests  int     `json:"requests"`
-	Tokens    int     `json:"tokens"`
-	Cost      float64 `json:"cost"`
+	Model      string  `json:"model"`
+	Requests   int     `json:"requests"`
+	Tokens     int     `json:"tokens"`
+	Cost       float64 `json:"cost"`
 	Percentage float64 `json:"percentage"`
 }
 
 // ProviderUsage represents usage by provider
 type ProviderUsage struct {
-	Provider  string  `json:"provider"`
-	Requests  int     `json:"requests"`
-	Tokens    int     `json:"tokens"`
-	Cost      float64 `json:"cost"`
+	Provider   string  `json:"provider"`
+	Requests   int     `json:"requests"`
+	Tokens     int     `json:"tokens"`
+	Cost       float64 `json:"cost"`
 	Percentage float64 `json:"percentage"`
 }
 
@@ -521,9 +521,9 @@ type DailyTrend struct {
 
 // HourlyUsage represents hourly usage pattern
 type HourlyUsage struct {
-	Hour     int     `json:"hour"`
-	Requests int     `json:"requests"`
-	Tokens   int     `json:"tokens"`
+	Hour     int `json:"hour"`
+	Requests int `json:"requests"`
+	Tokens   int `json:"tokens"`
 }
 
 // GetInsights generates detailed usage insights for the specified period
@@ -533,7 +533,7 @@ func (m *Manager) GetInsights(days int) (*Insights, error) {
 
 	insights := &Insights{
 		CostBreakdown:   make(map[string]float64),
-		Recommendations:  make([]string, 0),
+		Recommendations: make([]string, 0),
 		GeneratedAt:     time.Now().Unix(),
 	}
 
@@ -569,7 +569,7 @@ func (m *Manager) GetInsights(days int) (*Insights, error) {
 				Model:    record.Model,
 				Requests: 1,
 				Tokens:   tokens,
-				Cost:    record.Cost,
+				Cost:     record.Cost,
 			}
 		}
 
@@ -583,7 +583,7 @@ func (m *Manager) GetInsights(days int) (*Insights, error) {
 				Provider: record.Provider,
 				Requests: 1,
 				Tokens:   tokens,
-				Cost:    record.Cost,
+				Cost:     record.Cost,
 			}
 		}
 
@@ -611,7 +611,7 @@ func (m *Manager) GetInsights(days int) (*Insights, error) {
 				Date:     date,
 				Requests: 1,
 				Tokens:   tokens,
-				Cost:    record.Cost,
+				Cost:     record.Cost,
 			}
 		}
 

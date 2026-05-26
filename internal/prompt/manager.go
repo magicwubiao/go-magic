@@ -18,7 +18,7 @@ type Template struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Content     string            `json:"content"`
-	Variables   []Variable       `json:"variables"`
+	Variables   []Variable        `json:"variables"`
 	Tags        []string          `json:"tags"`
 	Version     int               `json:"version"`
 	Author      string            `json:"author"`
@@ -30,11 +30,11 @@ type Template struct {
 
 // Variable 模板变量
 type Variable struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"` // string, int, bool, select
-	Default     string `json:"default"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"` // string, int, bool, select
+	Default     string   `json:"default"`
+	Description string   `json:"description"`
+	Required    bool     `json:"required"`
 	Options     []string `json:"options,omitempty"` // for select type
 }
 
@@ -47,8 +47,8 @@ type RenderResult struct {
 
 // Manager Prompt 模板管理器
 type Manager struct {
-	dataDir    string
-	templates  map[string]*Template
+	dataDir   string
+	templates map[string]*Template
 	funcMap   template.FuncMap
 }
 
@@ -102,9 +102,9 @@ func (m *Manager) registerFunctions() {
 		"split": strings.Split,
 
 		// 数字函数
-		"add":    m.add,
-		"sub":    m.sub,
-		"mult":   m.mult,
+		"add":          m.add,
+		"sub":          m.sub,
+		"mult":         m.mult,
 		"formatNumber": m.formatNumber,
 	}
 

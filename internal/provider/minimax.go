@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // MiniMaxProvider MiniMax (兼容OpenAI格式)
 type MiniMaxProvider struct {
 	*OpenAICompatibleProvider

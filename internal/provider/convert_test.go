@@ -144,16 +144,16 @@ func TestConvertMessages_AgentBehavior(t *testing.T) {
 	toolCalls := []types.ToolCall{
 		{ID: "", Type: "function", Function: types.Function{Name: "web_search", Arguments: `{}`}},
 	}
-	
+
 	// Agent modifies the ID (like executeToolsWithHooks does)
 	toolCalls[0].ID = "call_agent_generated"
-	
+
 	messages := []types.Message{
 		{Role: "user", Content: "Search"},
 		{
-			Role:       "assistant",
-			Content:    "",
-			ToolCalls:  toolCalls, // Modified slice with ID
+			Role:      "assistant",
+			Content:   "",
+			ToolCalls: toolCalls, // Modified slice with ID
 		},
 		{Role: "tool", Content: "Result", ToolCallID: "call_agent_generated"}, // Same ID
 	}
@@ -202,7 +202,7 @@ func TestConvertMessages_ToolCallIDMismatch(t *testing.T) {
 	// The tool message should use its own ToolCallID
 	toolMsg := result[2]
 	toolCallID := toolMsg["tool_call_id"]
-	
+
 	t.Logf("Assistant tool_call ID: call_original")
 	t.Logf("Tool message tool_call_id: %v", toolCallID)
 

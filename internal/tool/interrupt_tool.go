@@ -28,11 +28,11 @@ type InterruptRequest struct {
 
 // InterruptResult represents the result of an interrupt operation
 type InterruptResult struct {
-	Success       bool      `json:"success"`
-	WasInterrupted bool     `json:"was_interrupted"`
-	Reason        string    `json:"reason,omitempty"`
-	Timestamp     time.Time `json:"timestamp"`
-	Message       string    `json:"message"`
+	Success        bool      `json:"success"`
+	WasInterrupted bool      `json:"was_interrupted"`
+	Reason         string    `json:"reason,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+	Message        string    `json:"message"`
 }
 
 // InterruptStatus represents the current interrupt status
@@ -91,12 +91,12 @@ func (t *InterruptTool) Execute(ctx context.Context, params map[string]interface
 	t.isInterrupted = true
 	t.reason = reason
 	t.timestamp = result.Timestamp
-	
+
 	// Notify callbacks
 	for _, cb := range t.callbacks {
 		go cb(reason)
 	}
-	
+
 	// Signal interrupt channel (non-blocking)
 	select {
 	case t.interruptCh <- struct{}{}:
@@ -106,7 +106,7 @@ func (t *InterruptTool) Execute(ctx context.Context, params map[string]interface
 
 	result.Success = true
 	result.WasInterrupted = wasInterrupted
-	
+
 	if force {
 		result.Message = fmt.Sprintf("Force interrupted: %s", reason)
 	} else {

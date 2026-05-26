@@ -29,7 +29,7 @@ type Config struct {
 	Model         string                    `json:"model"`
 	Providers     map[string]ProviderConfig `json:"providers"`
 	Tools         ToolsConfig               `json:"tools"`
-	Memory         MemoryConfig             `json:"memory"`
+	Memory        MemoryConfig              `json:"memory"`
 	Gateway       GatewayConfig             `json:"gateway"`
 	CortexEnabled bool                      `json:"cortex_enabled,omitempty"`
 	MCP           *MCPConfig                `json:"mcp,omitempty"`
@@ -38,7 +38,7 @@ type Config struct {
 	Privacy       *privacy.Config           `json:"privacy,omitempty"`
 	Display       DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
-	SecretRedaction bool `json:"secret_redaction,omitempty"`
+	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"` // chat, plan, act
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`

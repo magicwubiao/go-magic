@@ -42,15 +42,15 @@ func (ft FileType) String() string {
 
 // ContextFile represents a context file entry
 type ContextFile struct {
-	Path       string   `json:"path"`
-	Type       FileType `json:"type"`
-	Weight     float64  `json:"weight"`      // Priority weight (0.0-1.0)
-	Variables  []string `json:"variables"`  // Template variables
-	MaxTokens  int      `json:"max_tokens"`  // Max tokens to include
-	AutoLoad   bool     `json:"auto_load"`   // Auto-load on startup
-	Tags       []string `json:"tags"`        // Category tags
-	Content    string   `json:"-"`           // Actual content (not serialized)
-	LoadedAt   int64    `json:"loaded_at"`   // When it was last loaded
+	Path      string   `json:"path"`
+	Type      FileType `json:"type"`
+	Weight    float64  `json:"weight"`     // Priority weight (0.0-1.0)
+	Variables []string `json:"variables"`  // Template variables
+	MaxTokens int      `json:"max_tokens"` // Max tokens to include
+	AutoLoad  bool     `json:"auto_load"`  // Auto-load on startup
+	Tags      []string `json:"tags"`       // Category tags
+	Content   string   `json:"-"`          // Actual content (not serialized)
+	LoadedAt  int64    `json:"loaded_at"`  // When it was last loaded
 }
 
 // Manager handles project context files
@@ -58,19 +58,19 @@ type Manager struct {
 	projectRoot   string
 	configDir     string
 	contextFiles  map[string]*ContextFile
-	autoPatterns   []*regexp.Regexp
+	autoPatterns  []*regexp.Regexp
 	loadedContent map[string]string
 }
 
 // Config holds context manager configuration
 type Config struct {
-	Enabled        bool     `yaml:"enabled"`
-	ProjectRoot    string   `yaml:"project_root"`
-	ContextFiles   []string `yaml:"context_files"`
-	AutoLoad       []string `yaml:"auto_load_patterns"`
+	Enabled         bool     `yaml:"enabled"`
+	ProjectRoot     string   `yaml:"project_root"`
+	ContextFiles    []string `yaml:"context_files"`
+	AutoLoad        []string `yaml:"auto_load_patterns"`
 	ExcludePatterns []string `yaml:"exclude_patterns"`
-	MaxContextSize int      `yaml:"max_context_size"` // in tokens
-	IncludeHidden  bool     `yaml:"include_hidden"`
+	MaxContextSize  int      `yaml:"max_context_size"` // in tokens
+	IncludeHidden   bool     `yaml:"include_hidden"`
 }
 
 // DefaultConfig returns the default configuration
@@ -127,7 +127,7 @@ func (m *Manager) LoadContext(cfg *Config) (string, error) {
 				continue
 			}
 			m.loadedContent[file] = content
-			
+
 			// Add header for context
 			relPath, _ := filepath.Rel(m.projectRoot, file)
 			builder.WriteString(fmt.Sprintf("\n\n## %s\n\n", relPath))
@@ -146,7 +146,7 @@ func (m *Manager) LoadContext(cfg *Config) (string, error) {
 			continue
 		}
 		m.loadedContent[fullPath] = content
-		
+
 		relPath, _ := filepath.Rel(m.projectRoot, fullPath)
 		builder.WriteString(fmt.Sprintf("\n\n## %s\n\n", relPath))
 		builder.WriteString(content)
@@ -163,7 +163,7 @@ func (m *Manager) loadFile(path string) (string, error) {
 	}
 
 	content := string(data)
-	
+
 	// Handle different file types
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
@@ -183,7 +183,7 @@ func (m *Manager) processMarkdown(content string) string {
 	// Remove code block markers for cleaner extraction
 	lines := strings.Split(content, "\n")
 	var result []string
-	
+
 	inCodeBlock := false
 	for _, line := range lines {
 		if strings.HasPrefix(line, "```") {
@@ -194,7 +194,7 @@ func (m *Manager) processMarkdown(content string) string {
 			result = append(result, line)
 		}
 	}
-	
+
 	return strings.Join(result, "\n")
 }
 
@@ -204,25 +204,25 @@ func (m *Manager) processYAML(content string) string {
 	var result []string
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	var indent int
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
-		
+
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		
+
 		// Track indentation for hierarchy
 		spaces := len(line) - len(strings.TrimLeft(line, " "))
 		indent = spaces / 2
-		
+
 		// Only show top-level and one level deep
 		if indent <= 1 {
 			result = append(result, line)
 		}
 	}
-	
+
 	return strings.Join(result, "\n")
 }
 
@@ -232,7 +232,7 @@ func (m *Manager) processJSON(content string) string {
 	if err := json.Unmarshal([]byte(content), &data); err != nil {
 		return content
 	}
-	
+
 	// Compact but readable output
 	output, _ := json.MarshalIndent(data, "", "  ")
 	return string(output)
@@ -241,7 +241,7 @@ func (m *Manager) processJSON(content string) string {
 // findMatchingFiles finds files matching glob patterns
 func (m *Manager) findMatchingFiles(pattern string, excludePatterns []string) ([]string, error) {
 	var results []string
-	
+
 	// Handle glob patterns
 	if strings.Contains(pattern, "*") {
 		matches, err := filepath.Glob(filepath.Join(m.projectRoot, pattern))
@@ -256,7 +256,7 @@ func (m *Manager) findMatchingFiles(pattern string, excludePatterns []string) ([
 			results = append(results, path)
 		}
 	}
-	
+
 	// Filter excludes
 	var filtered []string
 	for _, file := range results {
@@ -273,7 +273,7 @@ func (m *Manager) findMatchingFiles(pattern string, excludePatterns []string) ([
 			filtered = append(filtered, file)
 		}
 	}
-	
+
 	return filtered, nil
 }
 
@@ -303,14 +303,14 @@ func (m *Manager) ListContextFiles() []*ContextFile {
 func (m *Manager) ExtractVariables(content string) []string {
 	re := regexp.MustCompile(`\{\{(\w+)\}\}`)
 	matches := re.FindAllStringSubmatch(content, -1)
-	
+
 	vars := make(map[string]bool)
 	for _, match := range matches {
 		if len(match) > 1 {
 			vars[match[1]] = true
 		}
 	}
-	
+
 	result := make([]string, 0, len(vars))
 	for v := range vars {
 		result = append(result, v)
@@ -330,12 +330,12 @@ func (m *Manager) RenderTemplate(content string, variables map[string]string) st
 
 // ContextSummary provides a summary of loaded context
 type ContextSummary struct {
-	TotalFiles    int            `json:"total_files"`
-	TotalSize     int            `json:"total_size"`
-	ByType        map[string]int `json:"by_type"`
-	ByTag         map[string]int `json:"by_tag"`
-	Variables     []string       `json:"variables"`
-	ProjectRoot   string         `json:"project_root"`
+	TotalFiles  int            `json:"total_files"`
+	TotalSize   int            `json:"total_size"`
+	ByType      map[string]int `json:"by_type"`
+	ByTag       map[string]int `json:"by_tag"`
+	Variables   []string       `json:"variables"`
+	ProjectRoot string         `json:"project_root"`
 }
 
 // GetSummary returns a summary of the loaded context
@@ -344,12 +344,12 @@ func (m *Manager) GetSummary() *ContextSummary {
 		TotalFiles:  len(m.loadedContent),
 		ProjectRoot: m.projectRoot,
 		ByType:      make(map[string]int),
-		ByTag:      make(map[string]int),
+		ByTag:       make(map[string]int),
 	}
-	
+
 	for path, content := range m.loadedContent {
 		summary.TotalSize += len(content)
-		
+
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".md":
@@ -364,7 +364,7 @@ func (m *Manager) GetSummary() *ContextSummary {
 			summary.ByType["other"]++
 		}
 	}
-	
+
 	// Extract all variables
 	allVars := make(map[string]bool)
 	for _, content := range m.loadedContent {
@@ -375,30 +375,30 @@ func (m *Manager) GetSummary() *ContextSummary {
 	for v := range allVars {
 		summary.Variables = append(summary.Variables, v)
 	}
-	
+
 	return summary
 }
 
 // SaveContext saves current context state
 func (m *Manager) SaveContext() error {
 	cachePath := filepath.Join(m.configDir, "context_cache.json")
-	
+
 	data, err := json.MarshalIndent(m.loadedContent, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(cachePath, data, 0644)
 }
 
 // LoadContextCache loads cached context
 func (m *Manager) LoadContextCache() error {
 	cachePath := filepath.Join(m.configDir, "context_cache.json")
-	
+
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		return err
 	}
-	
+
 	return json.Unmarshal(data, &m.loadedContent)
 }

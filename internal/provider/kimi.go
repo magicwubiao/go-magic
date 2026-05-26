@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // KimiProvider 月之暗面 Kimi (兼容OpenAI格式)
 type KimiProvider struct {
 	*OpenAICompatibleProvider

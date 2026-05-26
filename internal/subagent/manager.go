@@ -143,20 +143,20 @@ type SubAgent struct {
 
 // Manager manages all subagents
 type Manager struct {
-	config        *Config
-	provider      provider.Provider
-	registry      ToolRegistry
-	agentFactory  AgentFactory
-	mu            sync.RWMutex
-	subagents     map[string]*SubAgent
-	tasks         map[string]*Task
-	results       map[string]*Result
-	taskQueue     chan *Task
-	resultChan    chan *Result
-	wg            sync.WaitGroup
-	ctx           context.Context
-	cancel        context.CancelFunc
-	semaphore     chan struct{}
+	config       *Config
+	provider     provider.Provider
+	registry     ToolRegistry
+	agentFactory AgentFactory
+	mu           sync.RWMutex
+	subagents    map[string]*SubAgent
+	tasks        map[string]*Task
+	results      map[string]*Result
+	taskQueue    chan *Task
+	resultChan   chan *Result
+	wg           sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	semaphore    chan struct{}
 }
 
 // NewManager creates a new subagent manager

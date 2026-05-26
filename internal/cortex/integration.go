@@ -70,10 +70,10 @@ func (m *Manager) setupConnections() {
 
 // Start initializes all six Cortex systems
 // Systems started in order of dependency:
-//   1. Memory systems (Snapshot, FTS)
-//   2. Review system
-//   3. Skill evolution system
-//   4. Trigger system
+//  1. Memory systems (Snapshot, FTS)
+//  2. Review system
+//  3. Skill evolution system
+//  4. Trigger system
 func (m *Manager) Start() error {
 	// System 4: Load frozen snapshot from disk
 	if err := m.Snapshot.Load(); err != nil {

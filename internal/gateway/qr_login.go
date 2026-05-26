@@ -19,10 +19,10 @@ import (
 
 // QRCodeManager handles QR code generation and login for all platforms
 type QRCodeManager struct {
-	mu          sync.RWMutex
-	codes       map[string]*QRCodeSession // platform -> session
-	cleanup     chan string
-	pollers     map[string]*QRPollContext // active pollers
+	mu      sync.RWMutex
+	codes   map[string]*QRCodeSession // platform -> session
+	cleanup chan string
+	pollers map[string]*QRPollContext // active pollers
 }
 
 // QRPollContext holds the context for QR status polling
@@ -35,7 +35,7 @@ type QRPollContext struct {
 type QRCodeSession struct {
 	ID        string                 `json:"id"`
 	Platform  string                 `json:"platform"`
-	Status    string                 `json:"status"` // pending, scanning, confirmed, expired, error
+	Status    string                 `json:"status"`            // pending, scanning, confirmed, expired, error
 	QRCode    string                 `json:"qr_code,omitempty"` // base64 encoded PNG
 	QRData    string                 `json:"qr_data,omitempty"` // raw QR data string
 	Message   string                 `json:"message,omitempty"`
@@ -378,11 +378,11 @@ func (m *QRCodeManager) GenerateWeComQR(ctx context.Context, corpID, agentID, re
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(120 * time.Second),
 		Metadata: map[string]interface{}{
-			"corp_id":    corpID,
-			"agent_id":   agentID,
-			"redirect":   redirectURI,
-			"state":      state,
-			"login_url":  loginURL,
+			"corp_id":   corpID,
+			"agent_id":  agentID,
+			"redirect":  redirectURI,
+			"state":     state,
+			"login_url": loginURL,
 		},
 		Message: "Please scan the QR code with WeCom",
 	}
@@ -503,10 +503,10 @@ func (m *QRCodeManager) GenerateDingTalkQR(ctx context.Context, appKey, appSecre
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(120 * time.Second),
 		Metadata: map[string]interface{}{
-			"app_key":     appKey,
-			"redirect":    redirectURI,
-			"state":       state,
-			"login_url":   loginURL,
+			"app_key":   appKey,
+			"redirect":  redirectURI,
+			"state":     state,
+			"login_url": loginURL,
 		},
 		Message: "Please scan the QR code with DingTalk",
 	}
@@ -587,10 +587,10 @@ func (m *QRCodeManager) GenerateFeishuQR(ctx context.Context, appID, appSecret, 
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(120 * time.Second),
 		Metadata: map[string]interface{}{
-			"app_id":     appID,
-			"redirect":    redirectURI,
-			"state":       state,
-			"login_url":   loginURL,
+			"app_id":    appID,
+			"redirect":  redirectURI,
+			"state":     state,
+			"login_url": loginURL,
 		},
 		Message: "Please scan the QR code with Feishu",
 	}
@@ -799,13 +799,13 @@ func (g *Gateway) GetAllLoginStatuses() []*LoginStatus {
 
 // LoginStatus represents the current login status
 type LoginStatus struct {
-	Platform   string                 `json:"platform"`
-	Status     string                 `json:"status"` // "not_configured", "waiting_qr", "scanning", "confirmed", "error"
-	Message    string                 `json:"message,omitempty"`
-	QRCode     string                 `json:"qr_code,omitempty"`
-	QRStatus   string                 `json:"qr_status,omitempty"`
-	QRExpires  int                    `json:"qr_expires_in,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	Platform  string                 `json:"platform"`
+	Status    string                 `json:"status"` // "not_configured", "waiting_qr", "scanning", "confirmed", "error"
+	Message   string                 `json:"message,omitempty"`
+	QRCode    string                 `json:"qr_code,omitempty"`
+	QRStatus  string                 `json:"qr_status,omitempty"`
+	QRExpires int                    `json:"qr_expires_in,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // saveILinkToken saves the iLink bot token to config file
@@ -831,9 +831,9 @@ func (m *QRCodeManager) saveILinkToken(token, baseURL string) {
 				"enabled": true,
 				"platforms": map[string]interface{}{
 					"wechat_ilink": map[string]interface{}{
-						"enabled":   true,
-						"token":     token,
-						"api_url":   baseURL,
+						"enabled": true,
+						"token":   token,
+						"api_url": baseURL,
 					},
 				},
 			},

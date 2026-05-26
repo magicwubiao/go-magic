@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // OpenRouterProvider OpenRouter (兼容OpenAI格式)
 type OpenRouterProvider struct {
 	*OpenAICompatibleProvider

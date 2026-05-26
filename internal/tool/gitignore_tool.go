@@ -32,7 +32,7 @@ type GitignoreTool struct {
 func NewGitignoreTool() *GitignoreTool {
 	home, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(home, GitignoreCacheDir)
-	
+
 	return &GitignoreTool{
 		cacheDir: cacheDir,
 		client: &http.Client{
@@ -209,7 +209,7 @@ func (t *GitignoreTool) searchTemplates(ctx context.Context, args map[string]int
 
 	query = strings.ToLower(query)
 	allTemplates := t.getKnownTemplates()
-	
+
 	var matches []string
 	for _, tmpl := range allTemplates {
 		if strings.Contains(strings.ToLower(tmpl), query) {
@@ -227,14 +227,14 @@ func (t *GitignoreTool) searchTemplates(ctx context.Context, args map[string]int
 // listTemplates lists all available templates
 func (t *GitignoreTool) listTemplates(ctx context.Context) (interface{}, error) {
 	templates := t.getKnownTemplates()
-	
+
 	// Group templates by category
 	categories := map[string][]string{
-		"Languages":     {},
-		"Frameworks":    {},
-		"IDEs":          {},
+		"Languages":         {},
+		"Frameworks":        {},
+		"IDEs":              {},
 		"Operating Systems": {},
-		"Other":         {},
+		"Other":             {},
 	}
 
 	for _, tmpl := range templates {
@@ -337,38 +337,38 @@ func (t *GitignoreTool) downloadTemplate(ctx context.Context, url string) (strin
 func (t *GitignoreTool) normalizeTemplateName(name string) string {
 	// Handle common aliases
 	aliases := map[string]string{
-		"js":           "Node",
-		"javascript":   "Node",
-		"ts":           "Node",
-		"typescript":   "Node",
-		"py":           "Python",
-		"golang":       "Go",
-		"c++":          "C++",
-		"cpp":          "C++",
-		"csharp":       "VisualStudio",
-		"c#":           "VisualStudio",
-		"dotnet":       "VisualStudio",
-		"vs":           "VisualStudio",
-		"vscode":       "VisualStudioCode",
-		"intellij":     "JetBrains",
-		"idea":         "JetBrains",
-		"webstorm":     "JetBrains",
-		"pycharm":      "JetBrains",
-		"goland":       "JetBrains",
-		"rubymine":     "JetBrains",
-		"phpstorm":     "JetBrains",
-		"android":      "Android",
-		"xcode":        "Xcode",
-		"eclipse":      "Eclipse",
-		"sublime":      "SublimeText",
-		"vim":          "Vim",
-		"emacs":        "Emacs",
-		"linux":        "Linux",
-		"macos":        "macOS",
-		"mac":          "macOS",
-		"osx":          "macOS",
-		"windows":      "Windows",
-		"win":          "Windows",
+		"js":         "Node",
+		"javascript": "Node",
+		"ts":         "Node",
+		"typescript": "Node",
+		"py":         "Python",
+		"golang":     "Go",
+		"c++":        "C++",
+		"cpp":        "C++",
+		"csharp":     "VisualStudio",
+		"c#":         "VisualStudio",
+		"dotnet":     "VisualStudio",
+		"vs":         "VisualStudio",
+		"vscode":     "VisualStudioCode",
+		"intellij":   "JetBrains",
+		"idea":       "JetBrains",
+		"webstorm":   "JetBrains",
+		"pycharm":    "JetBrains",
+		"goland":     "JetBrains",
+		"rubymine":   "JetBrains",
+		"phpstorm":   "JetBrains",
+		"android":    "Android",
+		"xcode":      "Xcode",
+		"eclipse":    "Eclipse",
+		"sublime":    "SublimeText",
+		"vim":        "Vim",
+		"emacs":      "Emacs",
+		"linux":      "Linux",
+		"macos":      "macOS",
+		"mac":        "macOS",
+		"osx":        "macOS",
+		"windows":    "Windows",
+		"win":        "Windows",
 	}
 
 	lower := strings.ToLower(name)
@@ -382,26 +382,26 @@ func (t *GitignoreTool) normalizeTemplateName(name string) string {
 // mapProjectTypeToTemplate maps project type to template name
 func (t *GitignoreTool) mapProjectTypeToTemplate(projectType string) string {
 	mappings := map[string]string{
-		"go":         "Go",
-		"python":     "Python",
-		"node":       "Node",
-		"rust":       "Rust",
-		"java":       "Java",
-		"cpp":        "C++",
-		"c":          "C",
-		"ruby":       "Ruby",
-		"php":        "PHP",
-		"swift":      "Swift",
-		"kotlin":     "Kotlin",
-		"scala":      "Scala",
-		"dart":       "Dart",
-		"flutter":    "Flutter",
-		"elixir":     "Elixir",
-		"haskell":    "Haskell",
-		"lua":        "Lua",
-		"r":          "R",
-		"julia":      "Julia",
-		"perl":       "Perl",
+		"go":      "Go",
+		"python":  "Python",
+		"node":    "Node",
+		"rust":    "Rust",
+		"java":    "Java",
+		"cpp":     "C++",
+		"c":       "C",
+		"ruby":    "Ruby",
+		"php":     "PHP",
+		"swift":   "Swift",
+		"kotlin":  "Kotlin",
+		"scala":   "Scala",
+		"dart":    "Dart",
+		"flutter": "Flutter",
+		"elixir":  "Elixir",
+		"haskell": "Haskell",
+		"lua":     "Lua",
+		"r":       "R",
+		"julia":   "Julia",
+		"perl":    "Perl",
 	}
 
 	if tmpl, ok := mappings[strings.ToLower(projectType)]; ok {

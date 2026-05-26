@@ -99,7 +99,7 @@ func (p *vLLMProvider) Chat(ctx context.Context, messages []Message) (*ChatRespo
 	}
 
 	type Response struct {
-		Choices []Choice       `json:"choices"`
+		Choices []Choice      `json:"choices"`
 		Usage   vllmUsageInfo `json:"usage"`
 	}
 
@@ -193,7 +193,7 @@ func (p *vLLMProvider) ChatWithTools(ctx context.Context, messages []Message, to
 	}
 
 	type Response struct {
-		Choices []Choice       `json:"choices"`
+		Choices []Choice      `json:"choices"`
 		Usage   vllmUsageInfo `json:"usage"`
 	}
 

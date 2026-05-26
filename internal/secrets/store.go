@@ -16,17 +16,17 @@ import (
 // Secret 密钥条目
 type Secret struct {
 	Key      string            `json:"key"`      // 密钥名称
-	Provider string            `json:"provider"`  // 提供商 (openai, anthropic, etc.)
-	Value    string            `json:"value"`     // 加密后的值
-	Metadata map[string]string `json:"metadata"`  // 额外元数据
+	Provider string            `json:"provider"` // 提供商 (openai, anthropic, etc.)
+	Value    string            `json:"value"`    // 加密后的值
+	Metadata map[string]string `json:"metadata"` // 额外元数据
 }
 
 // Store 密钥存储
 type Store struct {
-	mu       sync.RWMutex
-	dataDir  string
-	secrets  map[string]*Secret
-	key      []byte // 加密密钥
+	mu        sync.RWMutex
+	dataDir   string
+	secrets   map[string]*Secret
+	key       []byte // 加密密钥
 	masterKey []byte // 主密钥 (从密码派生)
 }
 
@@ -281,7 +281,7 @@ func (s *Store) decrypt(ciphertext string) (string, error) {
 // save 保存到文件
 func (s *Store) save() error {
 	secretsPath := filepath.Join(s.dataDir, "secrets.enc")
-	
+
 	data, err := json.MarshalIndent(s.secrets, "", "  ")
 	if err != nil {
 		return err
@@ -363,8 +363,8 @@ func (s *Store) ImportFromEnv() error {
 			if value := os.Getenv(envVar); value != "" {
 				key := fmt.Sprintf("%s_api_key", provider)
 				if err := s.Set(key, provider, value, map[string]string{
-					"source":    "environment",
-					"env_var":   envVar,
+					"source":  "environment",
+					"env_var": envVar,
 				}); err == nil {
 					fmt.Printf("Imported %s from %s\n", key, envVar)
 				}

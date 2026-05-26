@@ -280,11 +280,11 @@ func (t *DiffPatchTool) createBackup(params map[string]interface{}) (interface{}
 	info, _ := os.Stat(path)
 
 	return map[string]interface{}{
-		"action":       "create_backup",
+		"action":        "create_backup",
 		"original_path": path,
-		"backup_path":  backupPath,
-		"size_bytes":   len(data),
-		"original_mod": info.ModTime().Format(time.RFC3339),
+		"backup_path":   backupPath,
+		"size_bytes":    len(data),
+		"original_mod":  info.ModTime().Format(time.RFC3339),
 	}, nil
 }
 
@@ -401,7 +401,7 @@ func generateUnifiedDiff(label string, oldLines, newLines []string) string {
 			op := ops[i]
 			switch op.kind {
 			case 0:
-				lines = append(lines, " " + op.line)
+				lines = append(lines, " "+op.line)
 				oldCount++
 				newCount++
 				if oldStart < 0 {
@@ -411,14 +411,14 @@ func generateUnifiedDiff(label string, oldLines, newLines []string) string {
 					newStart = i + 1
 				}
 			case -1:
-				lines = append(lines, "-" + op.line)
+				lines = append(lines, "-"+op.line)
 				oldCount++
 				if oldStart < 0 {
 					// Find the old line number by counting equal/delete ops before this
 					oldStart = countOldLineNumber(ops, i)
 				}
 			case 1:
-				lines = append(lines, "+" + op.line)
+				lines = append(lines, "+"+op.line)
 				newCount++
 				if newStart < 0 {
 					newStart = countNewLineNumber(ops, i)

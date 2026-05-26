@@ -14,20 +14,20 @@ import (
 // MCPServer represents an MCP server that can be connected to by MCP clients
 type MCPServer struct {
 	// Server configuration
-	Port         int
-	Path         string
-	AuthToken    string
-	EnableCORS   bool
+	Port       int
+	Path       string
+	AuthToken  string
+	EnableCORS bool
 
 	// Handler for MCP requests
 	Handler MCPServerHandler
 
 	// Internal state
-	server     *http.Server
-	upgrader   websocket.Upgrader
-	mu         sync.RWMutex
-	connected  map[string]*websocket.Conn
-	clientMu   sync.RWMutex
+	server    *http.Server
+	upgrader  websocket.Upgrader
+	mu        sync.RWMutex
+	connected map[string]*websocket.Conn
+	clientMu  sync.RWMutex
 }
 
 // MCPServerHandler defines the interface for handling MCP server requests
@@ -66,9 +66,9 @@ type Resource struct {
 
 // Prompt represents an MCP prompt
 type Prompt struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Arguments   []PromptArgument       `json:"arguments,omitempty"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
 }
 
 // PromptArgument represents a prompt argument
@@ -80,12 +80,12 @@ type PromptArgument struct {
 
 // SamplingRequest represents an MCP sampling request
 type SamplingRequest struct {
-	Method      string                 `json:"method,omitempty"`
-	Messages    []SamplingMessage      `json:"messages"`
-	MaxTokens   int                    `json:"maxTokens,omitempty"`
-	Temperature float64                `json:"temperature,omitempty"`
-	SystemPrompt string                 `json:"systemPrompt,omitempty"`
-	Tools       []Tool                 `json:"tools,omitempty"`
+	Method       string            `json:"method,omitempty"`
+	Messages     []SamplingMessage `json:"messages"`
+	MaxTokens    int               `json:"maxTokens,omitempty"`
+	Temperature  float64           `json:"temperature,omitempty"`
+	SystemPrompt string            `json:"systemPrompt,omitempty"`
+	Tools        []Tool            `json:"tools,omitempty"`
 }
 
 // SamplingMessage represents a message in a sampling request
@@ -103,11 +103,11 @@ type SamplingResponse struct {
 // NewMCPServer creates a new MCP server
 func NewMCPServer(port int, handler MCPServerHandler) *MCPServer {
 	return &MCPServer{
-		Port:        port,
-		Path:        "/mcp",
-		EnableCORS:  true,
-		Handler:     handler,
-		connected:   make(map[string]*websocket.Conn),
+		Port:       port,
+		Path:       "/mcp",
+		EnableCORS: true,
+		Handler:    handler,
+		connected:  make(map[string]*websocket.Conn),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins in development
@@ -252,13 +252,13 @@ func (s *MCPServer) handleInitialize(conn *websocket.Conn, msg *JSONRPCMessage) 
 	}
 
 	protocolVersion := "2024-11-05"
-		var params map[string]interface{}
-		if msg.Params != nil {
-			json.Unmarshal(*msg.Params, &params)
-			if v, ok := params["protocolVersion"].(string); ok {
-				protocolVersion = v
-			}
+	var params map[string]interface{}
+	if msg.Params != nil {
+		json.Unmarshal(*msg.Params, &params)
+		if v, ok := params["protocolVersion"].(string); ok {
+			protocolVersion = v
 		}
+	}
 
 	result := map[string]interface{}{
 		"protocolVersion": protocolVersion,
@@ -462,8 +462,8 @@ func (s *MCPServer) handleSamplingCreateMessage(conn *websocket.Conn, msg *JSONR
 
 // JSONRPCMessage represents a JSON-RPC message
 type JSONRPCMessage struct {
-	ID     interface{}     `json:"id"`
-	Method string          `json:"method"`
+	ID     interface{}      `json:"id"`
+	Method string           `json:"method"`
 	Params *json.RawMessage `json:"params,omitempty"`
 }
 

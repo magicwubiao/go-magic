@@ -27,36 +27,36 @@ type Event struct {
 
 // Webhook Webhook 配置
 type Webhook struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	URL       string            `json:"url"`
-	Secret    string            `json:"secret,omitempty"`
-	Events    []string          `json:"events"` // 监听的事件类型
-	Active    bool              `json:"active"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Timeout   int               `json:"timeout"` // 秒
-	RetryPolicy RetryPolicy     `json:"retry_policy"`
-	CreatedAt time.Time         `json:"created_at"`
-	LastTriggered time.Time     `json:"last_triggered,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	URL           string            `json:"url"`
+	Secret        string            `json:"secret,omitempty"`
+	Events        []string          `json:"events"` // 监听的事件类型
+	Active        bool              `json:"active"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Timeout       int               `json:"timeout"` // 秒
+	RetryPolicy   RetryPolicy       `json:"retry_policy"`
+	CreatedAt     time.Time         `json:"created_at"`
+	LastTriggered time.Time         `json:"last_triggered,omitempty"`
 }
 
 // RetryPolicy retry policy
 type RetryPolicy struct {
-	MaxRetries          int     `json:"max_retries"`
-	RetryDelay          int     `json:"retry_delay_seconds"`
-	BackoffMultiplier   float64 `json:"backoff_multiplier"`
+	MaxRetries        int     `json:"max_retries"`
+	RetryDelay        int     `json:"retry_delay_seconds"`
+	BackoffMultiplier float64 `json:"backoff_multiplier"`
 }
 
 // DeliveryResult 投递结果
 type DeliveryResult struct {
-	WebhookID string    `json:"webhook_id"`
-	EventID   string    `json:"event_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Success   bool      `json:"success"`
-	StatusCode int      `json:"status_code,omitempty"`
-	Response  string    `json:"response,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Duration  time.Duration `json:"duration"`
+	WebhookID  string        `json:"webhook_id"`
+	EventID    string        `json:"event_id"`
+	Timestamp  time.Time     `json:"timestamp"`
+	Success    bool          `json:"success"`
+	StatusCode int           `json:"status_code,omitempty"`
+	Response   string        `json:"response,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	Duration   time.Duration `json:"duration"`
 }
 
 // Manager Webhook 管理器
@@ -108,17 +108,17 @@ func (m *Manager) Create(name, url, secret string, events []string) (*Webhook, e
 	defer m.mu.Unlock()
 
 	wh := &Webhook{
-		ID:        generateID(),
-		Name:      name,
-		URL:       url,
-		Secret:    secret,
-		Events:    events,
-		Active:    true,
-		Headers:   make(map[string]string),
-		Timeout:   30,
+		ID:      generateID(),
+		Name:    name,
+		URL:     url,
+		Secret:  secret,
+		Events:  events,
+		Active:  true,
+		Headers: make(map[string]string),
+		Timeout: 30,
 		RetryPolicy: RetryPolicy{
-			MaxRetries:     3,
-			RetryDelay:     5,
+			MaxRetries:        3,
+			RetryDelay:        5,
 			BackoffMultiplier: 2.0,
 		},
 		CreatedAt: time.Now(),
@@ -494,16 +494,16 @@ func generateID() string {
 
 // PredefinedEvents 预定义事件类型
 var PredefinedEvents = []string{
-	"chat.message",        // 聊天消息
-	"chat.session_start",  // 会话开始
-	"chat.session_end",    // 会话结束
-	"tool.executed",       // 工具执行
-	"skill.activated",     // 技能激活
-	"skill.deactivated",   // 技能停用
-	"error",               // 错误
-	"warning",             // 警告
+	"chat.message",       // 聊天消息
+	"chat.session_start", // 会话开始
+	"chat.session_end",   // 会话结束
+	"tool.executed",      // 工具执行
+	"skill.activated",    // 技能激活
+	"skill.deactivated",  // 技能停用
+	"error",              // 错误
+	"warning",            // 警告
 	"update.available",   // 有可用更新
-	"budget.exceeded",     // 超出预算
-	"mcp.connected",       // MCP 连接
-	"mcp.disconnected",    // MCP 断开
+	"budget.exceeded",    // 超出预算
+	"mcp.connected",      // MCP 连接
+	"mcp.disconnected",   // MCP 断开
 }

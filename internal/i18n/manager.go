@@ -10,18 +10,18 @@ import (
 
 // Locale 区域设置
 type Locale struct {
-	code    string
-	data    map[string]string
+	code     string
+	data     map[string]string
 	fallback *Locale
 }
 
 // Manager 国际化管理器
 type Manager struct {
-	mu         sync.RWMutex
-	dataDir    string
-	locales    map[string]*Locale
-	current    string
-	fallback   string
+	mu       sync.RWMutex
+	dataDir  string
+	locales  map[string]*Locale
+	current  string
+	fallback string
 }
 
 // NewManager creates internationalization manager
@@ -121,10 +121,10 @@ func (m *Manager) ListLocales() []LocaleInfo {
 	result := make([]LocaleInfo, 0, len(m.locales))
 	for code, locale := range m.locales {
 		result = append(result, LocaleInfo{
-			Code:     code,
-			Name:     locale.get("locale_name"),
-			Native:   locale.get("locale_native"),
-			Current:  code == m.current,
+			Code:    code,
+			Name:    locale.get("locale_name"),
+			Native:  locale.get("locale_native"),
+			Current: code == m.current,
 		})
 	}
 	return result
@@ -144,52 +144,52 @@ func (m *Manager) loadBuiltins() {
 	m.locales["en"] = &Locale{
 		code: "en",
 		data: map[string]string{
-			"locale_name":  "English",
+			"locale_name":   "English",
 			"locale_native": "English",
 
 			// 通用
-			"ok":              "OK",
-			"cancel":          "Cancel",
-			"save":            "Save",
-			"delete":          "Delete",
-			"edit":            "Edit",
-			"create":          "Create",
-			"close":           "Close",
-			"back":            "Back",
-			"next":            "Next",
-			"yes":             "Yes",
-			"no":              "No",
-			"error":           "Error",
-			"warning":         "Warning",
-			"success":         "Success",
-			"info":            "Info",
-			"loading":         "Loading...",
-			"done":            "Done",
-			"retry":           "Retry",
-			"skip":            "Skip",
-			"help":            "Help",
-			"search":          "Search",
-			"settings":        "Settings",
-			"exit":            "Exit",
+			"ok":       "OK",
+			"cancel":   "Cancel",
+			"save":     "Save",
+			"delete":   "Delete",
+			"edit":     "Edit",
+			"create":   "Create",
+			"close":    "Close",
+			"back":     "Back",
+			"next":     "Next",
+			"yes":      "Yes",
+			"no":       "No",
+			"error":    "Error",
+			"warning":  "Warning",
+			"success":  "Success",
+			"info":     "Info",
+			"loading":  "Loading...",
+			"done":     "Done",
+			"retry":    "Retry",
+			"skip":     "Skip",
+			"help":     "Help",
+			"search":   "Search",
+			"settings": "Settings",
+			"exit":     "Exit",
 
 			// 命令行
-			"cmd.help.title":      "Magic Agent - Help",
-			"cmd.help.usage":      "Usage",
-			"cmd.help.examples":   "Examples",
-			"cmd.help.options":    "Options",
+			"cmd.help.title":    "Magic Agent - Help",
+			"cmd.help.usage":    "Usage",
+			"cmd.help.examples": "Examples",
+			"cmd.help.options":  "Options",
 
 			// 错误信息
-			"err.not_found":        "Not found",
-			"err.invalid_input":    "Invalid input",
-			"err.permission_denied":"Permission denied",
-			"err.network_error":    "Network error",
-			"err.timeout":          "Request timeout",
-			"err.internal":         "Internal error",
+			"err.not_found":         "Not found",
+			"err.invalid_input":     "Invalid input",
+			"err.permission_denied": "Permission denied",
+			"err.network_error":     "Network error",
+			"err.timeout":           "Request timeout",
+			"err.internal":          "Internal error",
 
 			// 欢迎信息
-			"welcome.title":   "Welcome to Magic Agent",
+			"welcome.title":    "Welcome to Magic Agent",
 			"welcome.subtitle": "A high-performance AI Agent in Go",
-			"welcome.tip":     "Type /help for available commands",
+			"welcome.tip":      "Type /help for available commands",
 		},
 	}
 
@@ -197,52 +197,52 @@ func (m *Manager) loadBuiltins() {
 	m.locales["zh"] = &Locale{
 		code: "zh",
 		data: map[string]string{
-			"locale_name":  "Chinese",
+			"locale_name":   "Chinese",
 			"locale_native": "中文",
 
 			// 通用
-			"ok":              "确定",
-			"cancel":          "取消",
-			"save":            "保存",
-			"delete":          "删除",
-			"edit":            "编辑",
-			"create":          "创建",
-			"close":           "关闭",
-			"back":            "返回",
-			"next":            "下一步",
-			"yes":             "是",
-			"no":              "否",
-			"error":           "错误",
-			"warning":         "警告",
-			"success":         "成功",
-			"info":            "信息",
-			"loading":         "加载中...",
-			"done":            "完成",
-			"retry":           "重试",
-			"skip":            "跳过",
-			"help":            "帮助",
-			"search":          "搜索",
-			"settings":        "设置",
-			"exit":            "退出",
+			"ok":       "确定",
+			"cancel":   "取消",
+			"save":     "保存",
+			"delete":   "删除",
+			"edit":     "编辑",
+			"create":   "创建",
+			"close":    "关闭",
+			"back":     "返回",
+			"next":     "下一步",
+			"yes":      "是",
+			"no":       "否",
+			"error":    "错误",
+			"warning":  "警告",
+			"success":  "成功",
+			"info":     "信息",
+			"loading":  "加载中...",
+			"done":     "完成",
+			"retry":    "重试",
+			"skip":     "跳过",
+			"help":     "帮助",
+			"search":   "搜索",
+			"settings": "设置",
+			"exit":     "退出",
 
 			// 命令行
-			"cmd.help.title":      "Magic Agent - 帮助",
-			"cmd.help.usage":      "用法",
-			"cmd.help.examples":   "示例",
-			"cmd.help.options":    "选项",
+			"cmd.help.title":    "Magic Agent - 帮助",
+			"cmd.help.usage":    "用法",
+			"cmd.help.examples": "示例",
+			"cmd.help.options":  "选项",
 
 			// 错误信息
-			"err.not_found":        "未找到",
-			"err.invalid_input":   "无效输入",
-			"err.permission_denied":"权限被拒绝",
-			"err.network_error":   "网络错误",
-			"err.timeout":         "请求超时",
-			"err.internal":        "内部错误",
+			"err.not_found":         "未找到",
+			"err.invalid_input":     "无效输入",
+			"err.permission_denied": "权限被拒绝",
+			"err.network_error":     "网络错误",
+			"err.timeout":           "请求超时",
+			"err.internal":          "内部错误",
 
 			// 欢迎信息
-			"welcome.title":   "欢迎使用 Magic Agent",
+			"welcome.title":    "欢迎使用 Magic Agent",
 			"welcome.subtitle": "高性能 Go 语言 AI 助手",
-			"welcome.tip":     "输入 /help 查看可用命令",
+			"welcome.tip":      "输入 /help 查看可用命令",
 		},
 	}
 
@@ -250,52 +250,52 @@ func (m *Manager) loadBuiltins() {
 	m.locales["ja"] = &Locale{
 		code: "ja",
 		data: map[string]string{
-			"locale_name":  "Japanese",
+			"locale_name":   "Japanese",
 			"locale_native": "日本語",
 
 			// 通用
-			"ok":              "OK",
-			"cancel":          "キャンセル",
-			"save":            "保存",
-			"delete":          "削除",
-			"edit":            "編集",
-			"create":          "作成",
-			"close":           "閉じる",
-			"back":            "戻る",
-			"next":            "次へ",
-			"yes":             "はい",
-			"no":              "いいえ",
-			"error":           "エラー",
-			"warning":         "警告",
-			"success":         "成功",
-			"info":            "情報",
-			"loading":         "読み込み中...",
-			"done":            "完了",
-			"retry":           "再試行",
-			"skip":            "スキップ",
-			"help":            "ヘルプ",
-			"search":          "検索",
-			"settings":        "設定",
-			"exit":            "終了",
+			"ok":       "OK",
+			"cancel":   "キャンセル",
+			"save":     "保存",
+			"delete":   "削除",
+			"edit":     "編集",
+			"create":   "作成",
+			"close":    "閉じる",
+			"back":     "戻る",
+			"next":     "次へ",
+			"yes":      "はい",
+			"no":       "いいえ",
+			"error":    "エラー",
+			"warning":  "警告",
+			"success":  "成功",
+			"info":     "情報",
+			"loading":  "読み込み中...",
+			"done":     "完了",
+			"retry":    "再試行",
+			"skip":     "スキップ",
+			"help":     "ヘルプ",
+			"search":   "検索",
+			"settings": "設定",
+			"exit":     "終了",
 
 			// 命令行
-			"cmd.help.title":      "Magic Agent - ヘルプ",
-			"cmd.help.usage":      "使用方法",
-			"cmd.help.examples":   "例",
-			"cmd.help.options":    "オプション",
+			"cmd.help.title":    "Magic Agent - ヘルプ",
+			"cmd.help.usage":    "使用方法",
+			"cmd.help.examples": "例",
+			"cmd.help.options":  "オプション",
 
 			// 错误信息
-			"err.not_found":        "見つかりません",
-			"err.invalid_input":   "無効な入力",
-			"err.permission_denied":"権限がありません",
-			"err.network_error":   "ネットワークエラー",
-			"err.timeout":         "タイムアウト",
-			"err.internal":        "内部エラー",
+			"err.not_found":         "見つかりません",
+			"err.invalid_input":     "無効な入力",
+			"err.permission_denied": "権限がありません",
+			"err.network_error":     "ネットワークエラー",
+			"err.timeout":           "タイムアウト",
+			"err.internal":          "内部エラー",
 
 			// 欢迎信息
-			"welcome.title":   "Magic Agent へようこそ",
+			"welcome.title":    "Magic Agent へようこそ",
 			"welcome.subtitle": "高性能 Go 言語 AI アシスタント",
-			"welcome.tip":     "/help でコマンド一覧を表示",
+			"welcome.tip":      "/help でコマンド一覧を表示",
 		},
 	}
 

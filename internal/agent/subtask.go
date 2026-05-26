@@ -311,9 +311,9 @@ func (stm *SubTaskManager) GetSubTaskSummary() string {
 // ComplexityAnalyzer analyzes task complexity and determines if decomposition is needed
 type ComplexityAnalyzer struct {
 	// Thresholds for complexity scoring
-	lengthThreshold     int
+	lengthThreshold    int
 	multiStepThreshold int
-	toolCountThreshold  int
+	toolCountThreshold int
 }
 
 // NewComplexityAnalyzer creates a new complexity analyzer

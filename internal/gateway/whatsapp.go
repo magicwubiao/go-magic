@@ -13,10 +13,10 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -40,9 +40,9 @@ type WhatsAppGateway struct {
 	stopCh  chan struct{}
 	running bool
 
-	dataDir    string // Where session data is stored
+	dataDir    string          // Where session data is stored
 	qrCallback func(qr string) // Called when QR code is generated
-	latestQR  string // Store latest QR code for web access
+	latestQR   string          // Store latest QR code for web access
 
 	// Track own JID for filtering
 	ownJID types.JID
@@ -294,7 +294,7 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 
 	// Create a channel to receive QR code
 	qrChan := make(chan string, 1)
-	
+
 	// Set up temporary QR callback
 	originalCallback := g.qrCallback
 	g.qrCallback = func(qr string) {
@@ -306,7 +306,7 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 			originalCallback(qr)
 		}
 	}
-	
+
 	// Ensure client is initialized
 	if g.client == nil {
 		if err := g.initClientLocked(ctx); err != nil {

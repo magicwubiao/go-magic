@@ -11,15 +11,15 @@ import (
 
 // Dispatcher manages task dispatch and lifecycle
 type Dispatcher struct {
-	db                      *KanbanDB
-	tickInterval            time.Duration
-	maxRetries              int
-	maxConsecutiveFailures  int
-	consecutiveFailures     int
-	running                 bool
-	stopCh                  chan struct{}
-	wg                      sync.WaitGroup
-	mu                      sync.Mutex
+	db                     *KanbanDB
+	tickInterval           time.Duration
+	maxRetries             int
+	maxConsecutiveFailures int
+	consecutiveFailures    int
+	running                bool
+	stopCh                 chan struct{}
+	wg                     sync.WaitGroup
+	mu                     sync.Mutex
 }
 
 // NewDispatcher creates a new dispatcher

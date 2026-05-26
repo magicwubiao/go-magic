@@ -17,9 +17,9 @@ import (
 
 // HAConfig holds Home Assistant connection configuration
 type HAConfig struct {
-	URL      string // e.g., "http://homeassistant.local:8123"
-	Token    string // Long-lived access token
-	Client   *http.Client
+	URL    string // e.g., "http://homeassistant.local:8123"
+	Token  string // Long-lived access token
+	Client *http.Client
 }
 
 // NewHAConfig creates a new Home Assistant config from environment
@@ -211,9 +211,9 @@ func (t *HAGetStateTool) Execute(ctx context.Context, args map[string]interface{
 	}
 
 	return map[string]interface{}{
-		"entity_id": result["entity_id"],
-		"state":     result["state"],
-		"attributes": result["attributes"],
+		"entity_id":    result["entity_id"],
+		"state":        result["state"],
+		"attributes":   result["attributes"],
 		"last_changed": result["last_changed"],
 		"last_updated": result["last_updated"],
 	}, nil
@@ -347,10 +347,10 @@ func (t *HACallServiceTool) Execute(ctx context.Context, args map[string]interfa
 	}
 
 	return map[string]interface{}{
-		"success":   true,
-		"domain":    domain,
-		"service":   service,
-		"results":   result,
+		"success": true,
+		"domain":  domain,
+		"service": service,
+		"results": result,
 	}, nil
 }
 
@@ -381,7 +381,7 @@ func (t *HAEventsTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"subscribe", "unsubscribe", "list"},
+				"enum":        []string{"subscribe", "unsubscribe", "list"},
 				"description": "Action to perform",
 			},
 			"event_type": map[string]interface{}{
@@ -416,9 +416,9 @@ func (t *HAEventsTool) Execute(ctx context.Context, args map[string]interface{})
 		// Note: True WebSocket subscription requires WebSocket support
 		// This is a simplified HTTP polling approach
 		return map[string]interface{}{
-			"subscribed":  true,
-			"event_type":  eventType,
-			"note":        "Use ha_get_state to poll for changes",
+			"subscribed": true,
+			"event_type": eventType,
+			"note":       "Use ha_get_state to poll for changes",
 		}, nil
 
 	default:

@@ -43,9 +43,9 @@ type CodeExecutorConfig struct {
 func DefaultCodeExecutorConfig() *CodeExecutorConfig {
 	home, _ := os.UserHomeDir()
 	return &CodeExecutorConfig{
-		Timeout:       60 * time.Second,
-		MemoryLimit:   512,
-		AllowedDirs:   []string{
+		Timeout:     60 * time.Second,
+		MemoryLimit: 512,
+		AllowedDirs: []string{
 			"/tmp",
 			home + "/projects",
 			home + "/workspace",
@@ -942,8 +942,8 @@ func (t *ExecuteCodeTool) ExecuteWithTools(ctx context.Context, req *CodeExecuti
 	resultMap, ok := result.(map[string]interface{})
 	if !ok {
 		return &CodeExecutionResponse{
-			Success: false,
-			Error:   "Invalid result format",
+			Success:  false,
+			Error:    "Invalid result format",
 			Duration: time.Since(start),
 		}, nil
 	}

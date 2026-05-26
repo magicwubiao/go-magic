@@ -115,13 +115,13 @@ func init() {
 type ProjectType string
 
 const (
-	ProjectTypeGo        ProjectType = "go"
-	ProjectTypePython    ProjectType = "python"
-	ProjectTypeNode      ProjectType = "node"
-	ProjectTypeRust      ProjectType = "rust"
-	ProjectTypeJava      ProjectType = "java"
-	ProjectTypeCpp       ProjectType = "cpp"
-	ProjectTypeUnknown   ProjectType = "unknown"
+	ProjectTypeGo      ProjectType = "go"
+	ProjectTypePython  ProjectType = "python"
+	ProjectTypeNode    ProjectType = "node"
+	ProjectTypeRust    ProjectType = "rust"
+	ProjectTypeJava    ProjectType = "java"
+	ProjectTypeCpp     ProjectType = "cpp"
+	ProjectTypeUnknown ProjectType = "unknown"
 )
 
 // detectProjectType detects the project type based on files in the directory

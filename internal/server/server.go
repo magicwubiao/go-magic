@@ -44,33 +44,33 @@ var distFS embed.FS
 
 // Session represents a chat session (API response format)
 type Session struct {
-	ID              string    `json:"id"`
-	Profile         string    `json:"profile"`
-	Source          string    `json:"source"`
-	Model           string    `json:"model"`
-	Title           string    `json:"title"`
-	StartedAt       int64     `json:"started_at"`
-	EndedAt         *int64    `json:"ended_at"`
-	LastActive      int64     `json:"last_active"`
-	IsActive        bool      `json:"is_active"`
-	MessageCount    int       `json:"message_count"`
-	ToolCallCount   int       `json:"tool_call_count"`
-	InputTokens     int       `json:"input_tokens"`
-	OutputTokens    int       `json:"output_tokens"`
-	Preview         string    `json:"preview"`
-	ParentSessionID *string   `json:"parent_session_id"`
+	ID              string  `json:"id"`
+	Profile         string  `json:"profile"`
+	Source          string  `json:"source"`
+	Model           string  `json:"model"`
+	Title           string  `json:"title"`
+	StartedAt       int64   `json:"started_at"`
+	EndedAt         *int64  `json:"ended_at"`
+	LastActive      int64   `json:"last_active"`
+	IsActive        bool    `json:"is_active"`
+	MessageCount    int     `json:"message_count"`
+	ToolCallCount   int     `json:"tool_call_count"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	Preview         string  `json:"preview"`
+	ParentSessionID *string `json:"parent_session_id"`
 }
 
 // Message represents a chat message (API response format)
 type Message struct {
-	ID          string                   `json:"id"`
-	SessionID   string                   `json:"session_id"`
-	Role        string                   `json:"role"`
-	Content     string                   `json:"content"`
-	Timestamp   int64                    `json:"timestamp"`
-	ToolCalls   []map[string]interface{} `json:"tool_calls,omitempty"`
-	ToolName    string                   `json:"tool_name,omitempty"`
-	ToolCallID  string                   `json:"tool_call_id,omitempty"`
+	ID         string                   `json:"id"`
+	SessionID  string                   `json:"session_id"`
+	Role       string                   `json:"role"`
+	Content    string                   `json:"content"`
+	Timestamp  int64                    `json:"timestamp"`
+	ToolCalls  []map[string]interface{} `json:"tool_calls,omitempty"`
+	ToolName   string                   `json:"tool_name,omitempty"`
+	ToolCallID string                   `json:"tool_call_id,omitempty"`
 }
 
 // Toolset represents a group of tools
@@ -118,19 +118,19 @@ type PlatformStatus struct {
 
 // Server represents the HTTP server with real backend connections
 type Server struct {
-	mu          sync.RWMutex
-	startTime   time.Time
-	cfg         *appconfig.Config
+	mu           sync.RWMutex
+	startTime    time.Time
+	cfg          *appconfig.Config
 	sessionStore *session.Store
-	provider    provider.Provider
-	toolReg     *tool.Registry
-	skillMgr    *skills.Manager
-	magicHome   string
-	version     string
+	provider     provider.Provider
+	toolReg      *tool.Registry
+	skillMgr     *skills.Manager
+	magicHome    string
+	version      string
 
 	// Active chat agents per session (lazy init)
-	agents      map[string]*agent.Agent
-	agentsMu    sync.Mutex
+	agents   map[string]*agent.Agent
+	agentsMu sync.Mutex
 
 	// Disabled skills tracking
 	disabledSkills   map[string]bool
@@ -152,8 +152,8 @@ type Server struct {
 	goalMgr *goal.Manager
 
 	// Background actions tracking
-	actions      map[string]*ActionStatus
-	actionsMu    sync.RWMutex
+	actions   map[string]*ActionStatus
+	actionsMu sync.RWMutex
 
 	// Auth
 	authToken string
@@ -291,24 +291,24 @@ func NewServer(dbPath string) *Server {
 	}
 
 	return &Server{
-		mu:              sync.RWMutex{},
-		startTime:       time.Now(),
-		cfg:             cfg,
-		sessionStore:    store,
-		provider:        prov,
-		toolReg:         registry,
-		skillMgr:        skillMgr,
-		magicHome:       magicHome,
-		version:         version,
-		agents:          make(map[string]*agent.Agent),
-		disabledSkills:  disabledSkills,
-		cronMgr:         cronMgr,
-		kanbanMgr:       kanbanMgr,
-		pluginMgr:       pluginMgr,
+		mu:               sync.RWMutex{},
+		startTime:        time.Now(),
+		cfg:              cfg,
+		sessionStore:     store,
+		provider:         prov,
+		toolReg:          registry,
+		skillMgr:         skillMgr,
+		magicHome:        magicHome,
+		version:          version,
+		agents:           make(map[string]*agent.Agent),
+		disabledSkills:   disabledSkills,
+		cronMgr:          cronMgr,
+		kanbanMgr:        kanbanMgr,
+		pluginMgr:        pluginMgr,
 		groupchatStorage: groupchatStorage,
-		goalMgr:         goalMgr,
-		actions:         make(map[string]*ActionStatus),
-		authToken:       authToken,
+		goalMgr:          goalMgr,
+		actions:          make(map[string]*ActionStatus),
+		authToken:        authToken,
 	}
 }
 
@@ -395,8 +395,8 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 				"parameters": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"path":     map[string]interface{}{"type": "string", "description": "File path to write"},
-						"content":  map[string]interface{}{"type": "string", "description": "Content to write"},
+						"path":    map[string]interface{}{"type": "string", "description": "File path to write"},
+						"content": map[string]interface{}{"type": "string", "description": "Content to write"},
 					},
 					"required": []string{"path", "content"},
 				},
@@ -502,19 +502,19 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 	isActive := time.Since(s.UpdatedAt) < 30*time.Minute
 
 	return &Session{
-		ID:             s.ID,
-		Profile:        s.Profile,
-		Source:         s.Platform,
-		Model:          s.Model,
-		Title:          title,
-		StartedAt:      s.CreatedAt.Unix(),
-		LastActive:     s.UpdatedAt.Unix(),
-		IsActive:       isActive,
-		MessageCount:   msgCount,
-		ToolCallCount:  toolCallCount,
-		InputTokens:    s.InputTokens,
-		OutputTokens:   s.OutputTokens,
-		Preview:        preview,
+		ID:            s.ID,
+		Profile:       s.Profile,
+		Source:        s.Platform,
+		Model:         s.Model,
+		Title:         title,
+		StartedAt:     s.CreatedAt.Unix(),
+		LastActive:    s.UpdatedAt.Unix(),
+		IsActive:      isActive,
+		MessageCount:  msgCount,
+		ToolCallCount: toolCallCount,
+		InputTokens:   s.InputTokens,
+		OutputTokens:  s.OutputTokens,
+		Preview:       preview,
 	}
 }
 
@@ -863,25 +863,25 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{
-		"status":               "ok",
-		"timestamp":            time.Now().Unix(),
-		"version":              s.version,
-		"active_sessions":      sessions,
-		"config_path":          filepath.Join(s.magicHome, "config.json"),
-		"config_version":       1,
+		"status":                "ok",
+		"timestamp":             time.Now().Unix(),
+		"version":               s.version,
+		"active_sessions":       sessions,
+		"config_path":           filepath.Join(s.magicHome, "config.json"),
+		"config_version":        1,
 		"latest_config_version": 1,
-		"env_path":             filepath.Join(s.magicHome, ".env"),
-		"gateway_exit_reason":  nil,
-		"gateway_health_url":   nil,
-		"gateway_pid":          nil,
-		"gateway_platforms":    map[string]PlatformStatus{},
-		"gateway_running":      false,
-		"gateway_state":        nil,
-		"gateway_updated_at":   nil,
-		"magic_home":           s.magicHome,
-		"session_count":        sessions,
-		"provider_status":      providerStatus,
-		"release_date":         time.Now().Format("2006-01-02"),
+		"env_path":              filepath.Join(s.magicHome, ".env"),
+		"gateway_exit_reason":   nil,
+		"gateway_health_url":    nil,
+		"gateway_pid":           nil,
+		"gateway_platforms":     map[string]PlatformStatus{},
+		"gateway_running":       false,
+		"gateway_state":         nil,
+		"gateway_updated_at":    nil,
+		"magic_home":            s.magicHome,
+		"session_count":         sessions,
+		"provider_status":       providerStatus,
+		"release_date":          time.Now().Format("2006-01-02"),
 	})
 }
 
@@ -973,16 +973,16 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		newSession := &session.Session{
-			ID:             sessionID,
-			Profile:        s.cfg.Profile,
-			Platform:       platform,
-			Model:          model,
-			Messages:       []types.Message{},
-			InputTokens:    0,
-			OutputTokens:   0,
+			ID:              sessionID,
+			Profile:         s.cfg.Profile,
+			Platform:        platform,
+			Model:           model,
+			Messages:        []types.Message{},
+			InputTokens:     0,
+			OutputTokens:    0,
 			CacheReadTokens: 0,
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}
 
 		if s.sessionStore != nil {
@@ -1352,7 +1352,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Message    string                   `json:"message"`
+		Message   string                   `json:"message"`
 		SessionID string                   `json:"session_id"`
 		Model     string                   `json:"model"`
 		Messages  []map[string]interface{} `json:"messages"`
@@ -1672,20 +1672,20 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 
 	// Known category prefixes and their human-readable names
 	categoryMap := map[string]string{
-		"web_":           "Web",
-		"browser_":       "Browser",
-		"execute_":       "Code Execution",
-		"read_":          "File",
-		"write_":         "File",
-		"file_":          "File",
-		"list_":          "File",
-		"search_":        "File",
-		"memory_":        "Memory",
-		"delegate_":      "Delegation",
-		"poll_":          "Delegation",
-		"code_":          "Code Execution",
-		"skill_":         "Skills",
-		"mcp_":           "MCP",
+		"web_":      "Web",
+		"browser_":  "Browser",
+		"execute_":  "Code Execution",
+		"read_":     "File",
+		"write_":    "File",
+		"file_":     "File",
+		"list_":     "File",
+		"search_":   "File",
+		"memory_":   "Memory",
+		"delegate_": "Delegation",
+		"poll_":     "Delegation",
+		"code_":     "Code Execution",
+		"skill_":    "Skills",
+		"mcp_":      "MCP",
 	}
 
 	// Group tools by category
@@ -2135,11 +2135,11 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 		skillsDir := filepath.Join(s.magicHome, "skills")
 		skillDir := filepath.Join(skillsDir, id)
 		skillFile := filepath.Join(skillDir, "skill.yaml")
-		
+
 		content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
 			req.Name, req.Description, req.Category, strings.Join(req.Tags, ","))
 		os.WriteFile(skillFile, []byte(content), 0644)
-		
+
 		jsonResponse(w, map[string]interface{}{"ok": true, "id": id})
 		return
 	}
@@ -2159,8 +2159,8 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashboardSkills(w http.ResponseWriter, r *http.Request) {
 	skills := s.getRealSkills()
 	jsonResponse(w, map[string]interface{}{
-		"installed": skills,
-		"available": []Skill{},
+		"installed":  skills,
+		"available":  []Skill{},
 		"categories": []string{"development", "research", "analytics", "automation", "communication"},
 	})
 }
@@ -2214,7 +2214,7 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 			skillName = parts[0] // Use original folder name
 		}
 	}
-	
+
 	// Sanitize skill name (only replace spaces, keep path separators for folder detection)
 	skillName = strings.ReplaceAll(skillName, " ", "_")
 
@@ -2775,10 +2775,10 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{
-		"model":                   fmt.Sprintf("%s/%s", providerName, modelName),
-		"provider":                providerName,
-		"auto_context_length":     contextLen,
-		"config_context_length":   0,
+		"model":                    fmt.Sprintf("%s/%s", providerName, modelName),
+		"provider":                 providerName,
+		"auto_context_length":      contextLen,
+		"config_context_length":    0,
 		"effective_context_length": contextLen,
 		"capabilities": map[string]interface{}{
 			"supports_tools":     supportsTools,
@@ -2983,8 +2983,8 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]interface{}{"yaml": string(data)})
 	case "PUT":
 		var req struct {
-			JsonText  string `json:"json_text"`
-			YamlText  string `json:"yaml_text"`
+			JsonText string `json:"json_text"`
+			YamlText string `json:"yaml_text"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -3232,16 +3232,16 @@ func cronJobToResponse(job *cron.Job) map[string]interface{} {
 	}
 
 	resp := map[string]interface{}{
-		"id":                job.ID,
-		"name":              job.Name,
-		"prompt":            job.Prompt,
-		"script":            job.Script,
-		"schedule":          job.Schedule,
-		"schedule_display":  describeSchedule(job.Schedule),
-		"enabled":           job.Enabled,
-		"state":             state,
-		"deliver":           nil,
-		"last_error":        nil,
+		"id":               job.ID,
+		"name":             job.Name,
+		"prompt":           job.Prompt,
+		"script":           job.Script,
+		"schedule":         job.Schedule,
+		"schedule_display": describeSchedule(job.Schedule),
+		"enabled":          job.Enabled,
+		"state":            state,
+		"deliver":          nil,
+		"last_error":       nil,
 	}
 
 	if job.LastRun != nil {
@@ -3353,14 +3353,14 @@ func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 		envResponse := make(map[string]interface{})
 		for key, value := range envVars {
 			info := map[string]interface{}{
-				"is_set":        value != "",
+				"is_set":         value != "",
 				"redacted_value": "",
-				"description":   "",
-				"url":           nil,
-				"category":      "",
-				"is_password":   false,
-				"tools":         []string{},
-				"advanced":      false,
+				"description":    "",
+				"url":            nil,
+				"category":       "",
+				"is_password":    false,
+				"tools":          []string{},
+				"advanced":       false,
 			}
 			if value != "" {
 				info["redacted_value"] = "****"
@@ -3920,7 +3920,7 @@ func (s *Server) handleDashboardLogs(w http.ResponseWriter, r *http.Request) {
 			{Timestamp: time.Now(), Level: "info", Message: "Server started", Source: "system"},
 		},
 		"stats": map[string]interface{}{
-			"total":   1,
+			"total":    1,
 			"errors":   0,
 			"warnings": 0,
 		},
@@ -4029,9 +4029,9 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Check if gateway is running by checking the health endpoint
 	status := map[string]interface{}{
-		"running":    false,
-		"pid":        0,
-		"health_ok":  false,
+		"running":   false,
+		"pid":       0,
+		"health_ok": false,
 	}
 
 	// Read PID file
@@ -4071,7 +4071,7 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	
+
 	// Start gateway restart as a background action
 	actionID := "gateway-restart"
 	s.runAction(actionID, "gateway restart", func() (int, error) {
@@ -4083,7 +4083,7 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		return 0, nil
 	})
-	
+
 	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
 }
 
@@ -4092,7 +4092,7 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 // QRStatus represents the status of a QR code login session
 type QRStatus struct {
 	Platform  string `json:"platform"`
-	Status    string `json:"status"` // pending, scanning, confirmed, expired, error
+	Status    string `json:"status"`            // pending, scanning, confirmed, expired, error
 	QRCode    string `json:"qr_code,omitempty"` // base64 encoded PNG
 	Message   string `json:"message,omitempty"`
 	ExpiresIn int    `json:"expires_in,omitempty"` // seconds remaining
@@ -4181,7 +4181,7 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, QRStatus{
 		Platform:  session.Platform,
 		Status:    session.Status,
-		QRCode:   session.QRCode,
+		QRCode:    session.QRCode,
 		Message:   session.Message,
 		ExpiresIn: expiresIn,
 	})
@@ -4227,7 +4227,7 @@ func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, QRStatus{
 		Platform:  session.Platform,
 		Status:    session.Status,
-		QRCode:   session.QRCode,
+		QRCode:    session.QRCode,
 		Message:   session.Message,
 		ExpiresIn: expiresIn,
 	})
@@ -4253,10 +4253,10 @@ func (s *Server) generateWeChatILinkQR() (string, string, error) {
 
 	// qrData is the key for status polling (32-char hex string)
 	qrData := qrResp.Qrcode
-	
+
 	fmt.Printf("[QR] iLink response: qrcode_len=%d, img_url=%s\n", len(qrData), qrResp.QrcodeImgContent)
 
-	// The img_url is a webpage, not a direct image. 
+	// The img_url is a webpage, not a direct image.
 	// We need to generate QR code from the URL itself so users can scan it
 	var qrImage string
 	if qrResp.QrcodeImgContent != "" {
@@ -4276,7 +4276,7 @@ func (s *Server) generateWeChatILinkQR() (string, string, error) {
 		qrImage = img
 		fmt.Printf("[QR] Generated image from qrData, len=%d\n", len(qrImage))
 	}
-	
+
 	if qrImage == "" {
 		return "", "", fmt.Errorf("no QR image available")
 	}
@@ -4291,11 +4291,11 @@ func (s *Server) generateWhatsAppQR() (string, string, error) {
 	gatewayPort := 8080
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/login/qr/whatsapp", gatewayPort))
-	
+
 	if err == nil {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		
+
 		if resp.StatusCode == http.StatusOK {
 			var result struct {
 				QRCode    string `json:"qr_code"`
@@ -4313,7 +4313,7 @@ func (s *Server) generateWhatsAppQR() (string, string, error) {
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".magic", "whatsapp")
 	waGw := gateway.NewWhatsAppGateway(dataDir)
-	
+
 	qrData, err := waGw.StartQRLogin(context.Background())
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate WhatsApp QR: %w", err)
@@ -4471,7 +4471,7 @@ func (s *Server) handleMagicUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	
+
 	// Start magic update as a background action
 	actionID := "magic-update"
 	s.runAction(actionID, "magic update", func() (int, error) {
@@ -4483,7 +4483,7 @@ func (s *Server) handleMagicUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return 0, nil
 	})
-	
+
 	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
 }
 
@@ -4502,10 +4502,10 @@ func (s *Server) runAction(id, name string, fn func() (int, error)) {
 
 	go func() {
 		exitCode, err := fn()
-		
+
 		s.actionsMu.Lock()
 		defer s.actionsMu.Unlock()
-		
+
 		if action, ok := s.actions[id]; ok {
 			action.Running = false
 			action.ExitCode = &exitCode
@@ -4534,7 +4534,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	}
 	actionName := parts[0]
 	subPath := parts[1]
-	
+
 	if subPath == "status" {
 		status := s.getActionStatus(actionName)
 		if status == nil {
@@ -4550,7 +4550,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		
+
 		jsonResponse(w, map[string]interface{}{
 			"exit_code": status.ExitCode,
 			"lines":     status.Lines,
@@ -4770,11 +4770,11 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		jsonResponse(w, map[string]interface{}{
-			"id":          updatedTask.ID,
-			"title":       updatedTask.Title,
-			"status":      updatedTask.Status,
-			"priority":    updatedTask.Priority,
-			"updated_at":  updatedTask.UpdatedAt.Unix(),
+			"id":         updatedTask.ID,
+			"title":      updatedTask.Title,
+			"status":     updatedTask.Status,
+			"priority":   updatedTask.Priority,
+			"updated_at": updatedTask.UpdatedAt.Unix(),
 		})
 	case "DELETE":
 		if err := s.kanbanMgr.DeleteTask(id); err != nil {
@@ -4841,11 +4841,11 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 		}
 
 		room := &groupchat.Room{
-			ID:          uuid.New().String(),
-			Name:        req.Name,
-			InviteCode:  "",
-			CreatedAt:   time.Now().UnixMilli(),
-			UpdatedAt:   time.Now().UnixMilli(),
+			ID:         uuid.New().String(),
+			Name:       req.Name,
+			InviteCode: "",
+			CreatedAt:  time.Now().UnixMilli(),
+			UpdatedAt:  time.Now().UnixMilli(),
 		}
 
 		if err := s.groupchatStorage.SaveRoom(room); err != nil {
@@ -4947,12 +4947,12 @@ func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request,
 		result := make([]interface{}, 0)
 		for _, msg := range messages {
 			result = append(result, map[string]interface{}{
-				"id":         msg.ID,
-				"room_id":    msg.RoomID,
-				"sender":     msg.SenderID,
-				"role":       msg.Type,
-				"content":    msg.Content,
-				"timestamp":  msg.Timestamp,
+				"id":        msg.ID,
+				"room_id":   msg.RoomID,
+				"sender":    msg.SenderID,
+				"role":      msg.Type,
+				"content":   msg.Content,
+				"timestamp": msg.Timestamp,
 			})
 		}
 		jsonResponse(w, result)
@@ -5237,26 +5237,26 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 		name := path
 		pluginsDir := filepath.Join(s.magicHome, "plugins")
 		pluginPath := filepath.Join(pluginsDir, name)
-		
+
 		// Check if it's a file or directory
 		info, err := os.Stat(pluginPath)
 		if err != nil {
 			http.Error(w, "Plugin not found", http.StatusNotFound)
 			return
 		}
-		
+
 		// Remove plugin
 		if info.IsDir() {
 			err = os.RemoveAll(pluginPath)
 		} else {
 			err = os.Remove(pluginPath)
 		}
-		
+
 		if err != nil {
 			http.Error(w, "Failed to delete plugin", http.StatusInternalServerError)
 			return
 		}
-		
+
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "deleted": true})
 		return
 	}

@@ -104,7 +104,6 @@ func (r *Registry) RegisterAll(workDir string) {
 
 	// Command execution with multiple backends (local, docker, ssh)
 	r.Register(NewSecureExecuteCommandTool(workDir))
-	
 
 	// Code execution moved to plugins (python-runner, node-runner)
 	// Use: magic plugin install python-runner / magic plugin install node-runner

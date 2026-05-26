@@ -46,11 +46,11 @@ import (
 
 // iLink API constants
 const (
-	ilinkChannelVersion  = "2.1.1"
-	ilinkAppID           = "bot"
-	ilinkClientVersion   = 131329 // 2.1.1 encoded: 0x00020101
-	ilinkDefaultBaseURL  = "https://ilinkai.weixin.qq.com/"
-	ilinkDefaultBotType  = "3"
+	ilinkChannelVersion = "2.1.1"
+	ilinkAppID          = "bot"
+	ilinkClientVersion  = 131329 // 2.1.1 encoded: 0x00020101
+	ilinkDefaultBaseURL = "https://ilinkai.weixin.qq.com/"
+	ilinkDefaultBotType = "3"
 
 	// Long-poll defaults
 	ilinkDefaultPollTimeoutMs = 35_000
@@ -59,17 +59,17 @@ const (
 	ilinkMaxConsecutiveFails  = 3
 
 	// Session management
-	ilinkSessionExpiredCode    = -14
-	ilinkSessionPauseDuration  = time.Hour
-	ilinkConfigCacheTTL        = 24 * time.Hour
-	ilinkConfigRetryInitial    = 2 * time.Second
-	ilinkConfigRetryMax        = time.Hour
+	ilinkSessionExpiredCode   = -14
+	ilinkSessionPauseDuration = time.Hour
+	ilinkConfigCacheTTL       = 24 * time.Hour
+	ilinkConfigRetryInitial   = 2 * time.Second
+	ilinkConfigRetryMax       = time.Hour
 
 	// Media limits
-	ilinkMediaMaxBytes          = 100 << 20 // 100MB
-	ilinkUploadRetryMax         = 3
-	ilinkDownloadRetryMax       = 2
-	ilinkDownloadRetryDelay     = 300 * time.Millisecond
+	ilinkMediaMaxBytes      = 100 << 20 // 100MB
+	ilinkUploadRetryMax     = 3
+	ilinkDownloadRetryMax   = 2
+	ilinkDownloadRetryDelay = 300 * time.Millisecond
 
 	// Typing indicator
 	ilinkTypingKeepAlive = 5 * time.Second
@@ -78,7 +78,7 @@ const (
 	ilinkDefaultCDNBaseURL = "https://novac2c.cdn.weixin.qq.com/c2c"
 
 	// Auth polling
-	ilinkAuthPollInterval = 2 * time.Second
+	ilinkAuthPollInterval   = 2 * time.Second
 	ilinkAuthDefaultTimeout = 5 * time.Minute
 )
 
@@ -143,12 +143,12 @@ type WeChatILinkGateway struct {
 	cancel context.CancelFunc
 
 	// Session state
-	pauseUntil     time.Time
-	pauseMu        sync.Mutex
-	contextTokens  sync.Map // from_user_id → context_token
-	typingCache    map[string]typingCacheEntry
-	typingMu       sync.Mutex
-	syncBuf        string // get_updates_buf cursor
+	pauseUntil    time.Time
+	pauseMu       sync.Mutex
+	contextTokens sync.Map // from_user_id → context_token
+	typingCache   map[string]typingCacheEntry
+	typingMu      sync.Mutex
+	syncBuf       string // get_updates_buf cursor
 
 	// Connection tracking
 	connectedAt    time.Time

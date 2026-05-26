@@ -4,12 +4,12 @@ import "fmt"
 
 // Config represents a complete skin configuration
 type Config struct {
-	Name        string   `json:"name" yaml:"name"`
-	Description string   `json:"description" yaml:"description"`
-	Colors      Colors   `json:"colors" yaml:"colors"`
-	Spinner     Spinner  `json:"spinner" yaml:"spinner"`
-	Branding    Branding `json:"branding" yaml:"branding"`
-	ToolPrefix  string   `json:"tool_prefix" yaml:"tool_prefix"`
+	Name        string     `json:"name" yaml:"name"`
+	Description string     `json:"description" yaml:"description"`
+	Colors      Colors     `json:"colors" yaml:"colors"`
+	Spinner     Spinner    `json:"spinner" yaml:"spinner"`
+	Branding    Branding   `json:"branding" yaml:"branding"`
+	ToolPrefix  string     `json:"tool_prefix" yaml:"tool_prefix"`
 	ToolEmojis  ToolEmojis `json:"tool_emojis" yaml:"tool_emojis"`
 }
 

@@ -72,9 +72,9 @@ type AgentConfig struct {
 	CompressionEnabled bool    `json:"compression_enabled"`
 	CompressionRatio   float64 `json:"compression_ratio"`
 	ContextWindow      int     `json:"context_window"`
-	GoalMaxTurns       int     `json:"goal_max_turns"` // Max turns for /goal command, default 20
-	SameToolLimit      int     `json:"same_tool_limit"`      // Same tool call limit (default: 3)
-	ConsecutiveLimit   int     `json:"consecutive_limit"`    // Consecutive tool call limit (default: 10)
+	GoalMaxTurns       int     `json:"goal_max_turns"`    // Max turns for /goal command, default 20
+	SameToolLimit      int     `json:"same_tool_limit"`   // Same tool call limit (default: 3)
+	ConsecutiveLimit   int     `json:"consecutive_limit"` // Consecutive tool call limit (default: 10)
 }
 
 // MemoryConfig represents memory configuration
@@ -134,9 +134,9 @@ type TencentSMSConfig struct {
 
 // SMSConfig represents SMS service configuration
 type SMSConfig struct {
-	Provider string          `json:"provider"` // Provider: twilio, aliyun, tencent
-	Twilio   TwilioConfig    `json:"twilio"`
-	Aliyun   AliyunSMSConfig `json:"aliyun"`
+	Provider string           `json:"provider"` // Provider: twilio, aliyun, tencent
+	Twilio   TwilioConfig     `json:"twilio"`
+	Aliyun   AliyunSMSConfig  `json:"aliyun"`
 	Tencent  TencentSMSConfig `json:"tencent"`
 }
 
@@ -148,12 +148,12 @@ type NotificationConfig struct {
 
 // ImageGenConfig represents image generation configuration
 type ImageGenConfig struct {
-	Provider        string `json:"provider"`          // Provider: dall-e, stable-diffusion, midjourney, together
-	APIKey          string `json:"api_key"`           // API key for the provider
-	BaseURL         string `json:"base_url"`          // Custom base URL (optional)
-	DefaultSize     string `json:"default_size"`      // Default image size
-	DefaultStyle    string `json:"default_style"`     // Default art style
-	OutputDirectory string `json:"output_directory"`  // Output directory for generated images
+	Provider        string `json:"provider"`         // Provider: dall-e, stable-diffusion, midjourney, together
+	APIKey          string `json:"api_key"`          // API key for the provider
+	BaseURL         string `json:"base_url"`         // Custom base URL (optional)
+	DefaultSize     string `json:"default_size"`     // Default image size
+	DefaultStyle    string `json:"default_style"`    // Default art style
+	OutputDirectory string `json:"output_directory"` // Output directory for generated images
 }
 
 // Load loads configuration from a file with environment variable overrides
@@ -239,12 +239,12 @@ func DefaultConfig() *Config {
 			RecallLimit: 5,
 		},
 		Kanban: KanbanConfig{
-			Enabled:               true,
-			DBPath:                "",
-			DispatcherTick:        60 * time.Second,
-			MaxRetries:            3,
+			Enabled:                true,
+			DBPath:                 "",
+			DispatcherTick:         60 * time.Second,
+			MaxRetries:             3,
 			MaxConsecutiveFailures: 5,
-			DefaultMaxRuntime:     3600,
+			DefaultMaxRuntime:      3600,
 		},
 		Security: DefaultSecurityConfig(),
 	}

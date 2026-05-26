@@ -163,13 +163,13 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	}
 
 	return &gatewayAgentHandler{
-		provider:       prov,
-		registry:       registry,
-		agents:         make(map[string]*agent.Agent),
-		goalManagers:   make(map[string]*agent.GoalManager),
-		systemPrompt:   systemPrompt,
-		cortexMgr:      cortexMgr,
-		checkpointMgr:  newCheckpointManager(),
+		provider:      prov,
+		registry:      registry,
+		agents:        make(map[string]*agent.Agent),
+		goalManagers:  make(map[string]*agent.GoalManager),
+		systemPrompt:  systemPrompt,
+		cortexMgr:     cortexMgr,
+		checkpointMgr: newCheckpointManager(),
 	}
 }
 
@@ -741,12 +741,12 @@ func (h *gatewayAgentHandler) handleKanbanBoard(mgr *kanban.Manager) (string, er
 	}
 
 	statusLabels := map[kanban.TaskStatus]string{
-		kanban.StatusTriage:   "🔍 Triage",
-		kanban.StatusTodo:     "📋 Todo",
-		kanban.StatusReady:    "✅ Ready",
-		kanban.StatusRunning:  "🔄 Running",
-		kanban.StatusBlocked:  "🚫 Blocked",
-		kanban.StatusDone:     "🎉 Done",
+		kanban.StatusTriage:  "🔍 Triage",
+		kanban.StatusTodo:    "📋 Todo",
+		kanban.StatusReady:   "✅ Ready",
+		kanban.StatusRunning: "🔄 Running",
+		kanban.StatusBlocked: "🚫 Blocked",
+		kanban.StatusDone:    "🎉 Done",
 	}
 
 	var sb strings.Builder
@@ -1224,14 +1224,14 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// QR code login mode (default, no public IP required)
 			fmt.Println("[WeChat] Starting in QR mode (OAuth2 scan)...")
 			wxGw := gateway.NewWeChatQRGateway(wxCfg.AppID, wxCfg.AppSecret)
-			
+
 			// Set QR callback for display
 			wxGw.SetQRCallback(func(qrURL string) {
 				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
 				qrterminal.GenerateHalfBlock(qrURL, qrterminal.M, os.Stdout)
 				fmt.Println()
 			})
-			
+
 			if err := wxGw.Connect(ctx); err != nil {
 				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
 			} else {
@@ -1982,9 +1982,9 @@ func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
 			if homeserver != "" && username != "" {
 				cfg.Gateway.Platforms["matrix"] = config.PlatformConfig{
 					Enabled: true,
-					APIURL:   homeserver,
-					Token:    username + ":" + password,
-					Mode:     "password",
+					APIURL:  homeserver,
+					Token:   username + ":" + password,
+					Mode:    "password",
 				}
 				fmt.Println("✓ Matrix configured (password login)")
 			}

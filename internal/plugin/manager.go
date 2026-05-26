@@ -20,9 +20,9 @@ type Manager struct {
 
 // ManagerConfig holds manager configuration
 type ManagerConfig struct {
-	PluginDir    string
-	CacheDir     string
-	AllowNetwork bool
+	PluginDir     string
+	CacheDir      string
+	AllowNetwork  bool
 	EnableSandbox bool
 }
 
@@ -30,9 +30,9 @@ type ManagerConfig struct {
 func DefaultManagerConfig() *ManagerConfig {
 	home, _ := os.UserHomeDir()
 	return &ManagerConfig{
-		PluginDir:    filepath.Join(home, ".magic", "plugins"),
-		CacheDir:    filepath.Join(home, ".magic", "plugins", "cache"),
-		AllowNetwork: true,
+		PluginDir:     filepath.Join(home, ".magic", "plugins"),
+		CacheDir:      filepath.Join(home, ".magic", "plugins", "cache"),
+		AllowNetwork:  true,
 		EnableSandbox: true,
 	}
 }

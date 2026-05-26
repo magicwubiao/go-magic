@@ -97,9 +97,9 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 
 	return map[string]interface{}{
 		"url":          urlStr,
-		"title":       strings.TrimSpace(title),
-		"status":      resp.StatusCode,
-		"content":     utils.Truncate(content, 5000),
+		"title":        strings.TrimSpace(title),
+		"status":       resp.StatusCode,
+		"content":      utils.Truncate(content, 5000),
 		"content_type": resp.Header.Get("Content-Type"),
 	}, nil
 }

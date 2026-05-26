@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // ZhipuProvider 智谱AI (兼容OpenAI格式)
 type ZhipuProvider struct {
 	*OpenAICompatibleProvider

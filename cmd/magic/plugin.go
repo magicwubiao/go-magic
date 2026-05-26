@@ -488,8 +488,6 @@ func getStateString(state plugin.PluginState) string {
 	}
 }
 
-
-
 func confirm(prompt string) bool {
 	fmt.Printf("%s [y/N]: ", prompt)
 	var answer string

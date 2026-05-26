@@ -24,33 +24,33 @@ const (
 
 // PluginManifest represents the complete manifest of a plugin
 type PluginManifest struct {
-	ID            string         `json:"id"`              // Unique identifier (kebab-case)
-	Name          string         `json:"name"`            // Display name
-	Version       string         `json:"version"`         // Semantic version
-	Description   string         `json:"description"`     // Brief description
-	LongDesc      string         `json:"long_desc"`       // Detailed description
-	Author        string         `json:"author"`          // Author name
-	AuthorEmail   string         `json:"author_email"`    // Author email
-	License       string         `json:"license"`         // License type
-	Homepage      string         `json:"homepage"`        // Plugin homepage
-	Repository    string         `json:"repository"`      // Source repository
-	Tags          []string       `json:"tags"`            // Searchable tags
-	Category      string         `json:"category"`        // Plugin category
-	APIVersion    string         `json:"api_version"`     // go-magic API version
-	MinAppVersion string         `json:"min_app_version"` // Minimum go-magic version
-	Type          PluginType     `json:"type"`            // Plugin implementation type
-	Entrypoint         string         `json:"entrypoint"`            // Main entry file (default)
-	Entrypoints        map[string]string `json:"entrypoints"`        // Platform-specific entrypoints (key: GOOS, e.g. "windows", "darwin", "linux")
-	EntrypointWindows  string         `json:"entrypoint_windows"`    // Shortcut for entrypoints.windows
-	Permissions   []string       `json:"permissions"`     // Required permissions
-	Dependencies  []Dependency   `json:"dependencies"`    // Plugin dependencies
-	ConfigSchema  []ConfigField  `json:"config_schema"`   // Configuration schema
-	Commands      []CommandSpec  `json:"commands"`        // CLI commands
-	Hooks         []string       `json:"hooks"`           // Lifecycle hooks
-	Events        []string       `json:"events"`          // Published events
-	Resources     []ResourceSpec `json:"resources"`       // Bundled resources
-	CreatedAt     string         `json:"created_at"`      // Creation timestamp
-	UpdatedAt     string         `json:"updated_at"`      // Last update timestamp
+	ID                string            `json:"id"`                 // Unique identifier (kebab-case)
+	Name              string            `json:"name"`               // Display name
+	Version           string            `json:"version"`            // Semantic version
+	Description       string            `json:"description"`        // Brief description
+	LongDesc          string            `json:"long_desc"`          // Detailed description
+	Author            string            `json:"author"`             // Author name
+	AuthorEmail       string            `json:"author_email"`       // Author email
+	License           string            `json:"license"`            // License type
+	Homepage          string            `json:"homepage"`           // Plugin homepage
+	Repository        string            `json:"repository"`         // Source repository
+	Tags              []string          `json:"tags"`               // Searchable tags
+	Category          string            `json:"category"`           // Plugin category
+	APIVersion        string            `json:"api_version"`        // go-magic API version
+	MinAppVersion     string            `json:"min_app_version"`    // Minimum go-magic version
+	Type              PluginType        `json:"type"`               // Plugin implementation type
+	Entrypoint        string            `json:"entrypoint"`         // Main entry file (default)
+	Entrypoints       map[string]string `json:"entrypoints"`        // Platform-specific entrypoints (key: GOOS, e.g. "windows", "darwin", "linux")
+	EntrypointWindows string            `json:"entrypoint_windows"` // Shortcut for entrypoints.windows
+	Permissions       []string          `json:"permissions"`        // Required permissions
+	Dependencies      []Dependency      `json:"dependencies"`       // Plugin dependencies
+	ConfigSchema      []ConfigField     `json:"config_schema"`      // Configuration schema
+	Commands          []CommandSpec     `json:"commands"`           // CLI commands
+	Hooks             []string          `json:"hooks"`              // Lifecycle hooks
+	Events            []string          `json:"events"`             // Published events
+	Resources         []ResourceSpec    `json:"resources"`          // Bundled resources
+	CreatedAt         string            `json:"created_at"`         // Creation timestamp
+	UpdatedAt         string            `json:"updated_at"`         // Last update timestamp
 }
 
 // PluginType represents the type of plugin implementation

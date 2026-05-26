@@ -19,13 +19,13 @@ import (
 // VersionInfo 版本信息
 type VersionInfo struct {
 	Tag        string `json:"tag_name"`
-	Name      string `json:"name"`
-	Body      string `json:"body"`
-	Prerelease  bool   `json:"prerelease"`
+	Name       string `json:"name"`
+	Body       string `json:"body"`
+	Prerelease bool   `json:"prerelease"`
 }
 
 var (
-	updateCheckCmd   *cobra.Command
+	updateCheckCmd    *cobra.Command
 	updateCheckFlag   bool
 	updateChannelFlag string
 	updateBackupFlag  bool

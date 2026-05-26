@@ -551,9 +551,9 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 		if msg.MediaID != "" {
 			if path, err := g.downloadMedia(msg.MediaID, "image"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
-					Type:     "image",
-					URL:      path,
-					Caption:  msg.PicURL,
+					Type:    "image",
+					URL:     path,
+					Caption: msg.PicURL,
 				})
 				// Image downloaded successfully, set default content
 				content = "[用户发送了一张图片]"
@@ -588,9 +588,9 @@ func (g *WeChatCallbackGateway) parseCallbackEvent(body []byte) {
 		if msg.MediaID != "" {
 			if path, err := g.downloadMedia(msg.MediaID, "video"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
-					Type:     "video",
-					URL:      path,
-					Caption:  msg.Description,
+					Type:    "video",
+					URL:     path,
+					Caption: msg.Description,
 				})
 			} else {
 				log.Debugf("Failed to download WeChat video: %v", err)

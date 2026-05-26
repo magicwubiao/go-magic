@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // OpenAIProvider implements the OpenAI API
 type OpenAIProvider struct {
 	*OpenAICompatibleProvider

@@ -13,14 +13,14 @@ import (
 
 // ErrorAnalysis represents the analysis of an error
 type ErrorAnalysis struct {
-	ErrorType    string            `json:"error_type"`
-	Location     *ErrorLocation    `json:"location,omitempty"`
-	Message      string            `json:"message"`
-	StackTrace   []StackFrame      `json:"stack_trace,omitempty"`
-	Causes       []string          `json:"possible_causes"`
-	Suggestions  []FixSuggestion   `json:"suggestions"`
-	Severity     string            `json:"severity"`
-	Language     string            `json:"language,omitempty"`
+	ErrorType   string          `json:"error_type"`
+	Location    *ErrorLocation  `json:"location,omitempty"`
+	Message     string          `json:"message"`
+	StackTrace  []StackFrame    `json:"stack_trace,omitempty"`
+	Causes      []string        `json:"possible_causes"`
+	Suggestions []FixSuggestion `json:"suggestions"`
+	Severity    string          `json:"severity"`
+	Language    string          `json:"language,omitempty"`
 }
 
 // ErrorLocation represents where an error occurred
@@ -48,10 +48,10 @@ type FixSuggestion struct {
 
 // ExecutionTrace represents a trace of code execution
 type ExecutionTrace struct {
-	Steps      []ExecutionStep `json:"steps"`
+	Steps      []ExecutionStep        `json:"steps"`
 	Variables  map[string]interface{} `json:"variables,omitempty"`
-	Duration   int64  `json:"duration_ms,omitempty"`
-	EntryPoint string `json:"entry_point"`
+	Duration   int64                  `json:"duration_ms,omitempty"`
+	EntryPoint string                 `json:"entry_point"`
 }
 
 // ExecutionStep represents a single step in execution

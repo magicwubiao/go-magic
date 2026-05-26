@@ -161,7 +161,7 @@ func InitializeDefaultToolsets() {
 			"browser_get_images", "browser_console",
 			"web_fetch", "web_select", "web_search",
 		},
-		Includes:    []string{},
+		Includes: []string{},
 	})
 
 	// Vision and image

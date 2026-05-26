@@ -305,13 +305,13 @@ func (g *WeChatQRGateway) exchangeCodeForToken(code string) error {
 	}
 
 	var result struct {
-		ErrCode       int    `json:"errcode"`
-		ErrMsg        string `json:"errmsg"`
-		AccessToken   string `json:"access_token"`
-		RefreshToken  string `json:"refresh_token"`
-		OpenID        string `json:"openid"`
-		ExpiresIn     int    `json:"expires_in"`
-		RefreshExpires int   `json:"refresh_expires_in"`
+		ErrCode        int    `json:"errcode"`
+		ErrMsg         string `json:"errmsg"`
+		AccessToken    string `json:"access_token"`
+		RefreshToken   string `json:"refresh_token"`
+		OpenID         string `json:"openid"`
+		ExpiresIn      int    `json:"expires_in"`
+		RefreshExpires int    `json:"refresh_expires_in"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -361,12 +361,12 @@ func (g *WeChatQRGateway) refreshAccessToken() error {
 	}
 
 	var result struct {
-		ErrCode       int    `json:"errcode"`
-		ErrMsg        string `json:"errmsg"`
-		AccessToken   string `json:"access_token"`
-		RefreshToken  string `json:"refresh_token"`
-		OpenID        string `json:"openid"`
-		ExpiresIn     int    `json:"expires_in"`
+		ErrCode      int    `json:"errcode"`
+		ErrMsg       string `json:"errmsg"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		OpenID       string `json:"openid"`
+		ExpiresIn    int    `json:"expires_in"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -421,7 +421,7 @@ func (g *WeChatQRGateway) saveSession() error {
 	g.tokenMu.RLock()
 	session := WeChatSession{
 		AccessToken:    g.accessToken,
-		RefreshToken:  g.refreshToken,
+		RefreshToken:   g.refreshToken,
 		OpenID:         g.openID,
 		ExpiresAt:      g.tokenExpiresAt,
 		RefreshAt:      time.Now(),

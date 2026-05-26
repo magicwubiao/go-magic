@@ -35,10 +35,10 @@ func TestSaveAndLoadSession(t *testing.T) {
 	defer store.Close()
 
 	sess := &Session{
-		ID:        "test-session-1",
-		Profile:   "default",
-		Platform:  "web",
-		Model:     "gpt-4",
+		ID:           "test-session-1",
+		Profile:      "default",
+		Platform:     "web",
+		Model:        "gpt-4",
 		InputTokens:  100,
 		OutputTokens: 200,
 	}
@@ -206,4 +206,3 @@ func TestSaveSessionWithMessages(t *testing.T) {
 		t.Errorf("expected 'Hello', got '%s'", loaded.Messages[0].Content)
 	}
 }
-

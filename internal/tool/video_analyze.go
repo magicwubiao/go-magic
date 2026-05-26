@@ -83,11 +83,11 @@ func (t *VideoAnalyzeTool) analyzeURL(url, question string, frameCount int) (int
 	}
 
 	result := map[string]interface{}{
-		"status":       "ready",
-		"video_url":    url,
-		"question":     question,
-		"frame_count":  frameCount,
-		"message":      "Video URL ready for analysis. Extracting key frames...",
+		"status":          "ready",
+		"video_url":       url,
+		"question":        question,
+		"frame_count":     frameCount,
+		"message":         "Video URL ready for analysis. Extracting key frames...",
 		"extraction_note": "Key frames will be extracted using ffmpeg and analyzed by the vision model.",
 	}
 
@@ -145,7 +145,7 @@ func (t *VideoAnalyzeTool) analyzeLocalFile(path, question string, frameCount in
 		"video_path":    expandedPath,
 		"video_size":    info.Size(),
 		"duration":      duration,
-		"question":       question,
+		"question":      question,
 		"frame_count":   len(frames),
 		"frames":        framePaths,
 		"message":       fmt.Sprintf("Successfully extracted %d key frames from video", len(frames)),

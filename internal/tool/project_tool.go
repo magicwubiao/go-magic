@@ -27,7 +27,7 @@ func NewProjectAnalyzeTool() *ProjectAnalyzeTool {
 				"description": "Path to the project directory to analyze",
 			},
 			"action": map[string]interface{}{
-				"type": "string",
+				"type":        "string",
 				"description": "Analysis action to perform",
 				"enum": []string{
 					"analyze_structure",
@@ -97,16 +97,16 @@ func (t *ProjectAnalyzeTool) Execute(ctx context.Context, params map[string]inte
 
 // StructureResult holds the output of project structure analysis.
 type StructureResult struct {
-	ProjectType    string              `json:"project_type"`
-	RootDir        string              `json:"root_dir"`
-	TopLevelDirs   []string            `json:"top_level_dirs"`
-	TopLevelFiles  []string            `json:"top_level_files"`
-	KeyFiles       []string            `json:"key_files"`
-	TestDirs       []string            `json:"test_dirs"`
-	ConfigFiles    []string            `json:"config_files"`
-	DependencyInfo string              `json:"dependency_info"`
-	VCS            string              `json:"vcs"`
-	BuildFiles     []string            `json:"build_files"`
+	ProjectType    string   `json:"project_type"`
+	RootDir        string   `json:"root_dir"`
+	TopLevelDirs   []string `json:"top_level_dirs"`
+	TopLevelFiles  []string `json:"top_level_files"`
+	KeyFiles       []string `json:"key_files"`
+	TestDirs       []string `json:"test_dirs"`
+	ConfigFiles    []string `json:"config_files"`
+	DependencyInfo string   `json:"dependency_info"`
+	VCS            string   `json:"vcs"`
+	BuildFiles     []string `json:"build_files"`
 }
 
 func (t *ProjectAnalyzeTool) analyzeStructure(dir string) (interface{}, error) {
@@ -834,11 +834,11 @@ func (t *ProjectAnalyzeTool) parsePomXML(dir string) ([]Dependency, string) {
 
 // ComplexityResult holds the output of code complexity analysis.
 type ComplexityResult struct {
-	TotalFiles     int            `json:"total_files"`
-	TotalDirs      int            `json:"total_dirs"`
-	TotalLines     int            `json:"total_lines"`
+	TotalFiles        int                      `json:"total_files"`
+	TotalDirs         int                      `json:"total_dirs"`
+	TotalLines        int                      `json:"total_lines"`
 	LanguageBreakdown map[string]LanguageStats `json:"language_breakdown"`
-	LargestFiles   []FileInfo     `json:"largest_files"`
+	LargestFiles      []FileInfo               `json:"largest_files"`
 }
 
 // LanguageStats holds statistics for a single language.
@@ -1039,7 +1039,7 @@ type EntryPointResult struct {
 // EntryPoint represents a detected entry point.
 type EntryPoint struct {
 	Path        string `json:"path"`
-	Type        string `json:"type"`        // "main", "cli", "library", "test", "config"
+	Type        string `json:"type"` // "main", "cli", "library", "test", "config"
 	Description string `json:"description"`
 }
 
@@ -1369,13 +1369,13 @@ func (t *ProjectAnalyzeTool) extractJSONStringValue(content, key string) string 
 
 // ProjectSummary is a comprehensive project analysis report.
 type ProjectSummary struct {
-	ProjectType    string              `json:"project_type"`
-	RootDir        string              `json:"root_dir"`
-	VCS            string              `json:"vcs"`
-	Structure      *StructureResult    `json:"structure,omitempty"`
-	Dependencies   *DependencyResult   `json:"dependencies,omitempty"`
-	Complexity     *ComplexityResult   `json:"complexity,omitempty"`
-	EntryPoints    *EntryPointResult   `json:"entry_points,omitempty"`
+	ProjectType  string            `json:"project_type"`
+	RootDir      string            `json:"root_dir"`
+	VCS          string            `json:"vcs"`
+	Structure    *StructureResult  `json:"structure,omitempty"`
+	Dependencies *DependencyResult `json:"dependencies,omitempty"`
+	Complexity   *ComplexityResult `json:"complexity,omitempty"`
+	EntryPoints  *EntryPointResult `json:"entry_points,omitempty"`
 }
 
 func (t *ProjectAnalyzeTool) generateSummary(dir string) (interface{}, error) {

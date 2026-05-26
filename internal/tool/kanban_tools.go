@@ -445,10 +445,10 @@ func (t *KanbanLinkTool) Execute(ctx context.Context, params map[string]interfac
 	}
 
 	return map[string]interface{}{
-		"success":  true,
-		"parent":   parentID,
-		"child":    childID,
-		"message":  fmt.Sprintf("Linked %s -> %s", parentID, childID),
+		"success": true,
+		"parent":  parentID,
+		"child":   childID,
+		"message": fmt.Sprintf("Linked %s -> %s", parentID, childID),
 	}, nil
 }
 

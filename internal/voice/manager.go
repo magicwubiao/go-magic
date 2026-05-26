@@ -592,8 +592,6 @@ func estimateDuration(text string) float64 {
 	return float64(words) / 150.0 * 60.0
 }
 
-
-
 // ConversationSession represents a voice conversation session
 type ConversationSession struct {
 	ID        string

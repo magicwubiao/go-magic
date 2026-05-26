@@ -35,11 +35,11 @@ type SkillMeta struct {
 // This is the canonical type for all skills in the system
 type Skill struct {
 	SkillMeta
-	Tools     []string               `json:"tools,omitempty"`     // Tools required by this skill
-	Content   string                 `json:"content"`             // Main skill content/prompt
-	Dir       string                 `json:"dir,omitempty"`       // Absolute path to skill directory
-	Scripts   []string               `json:"scripts,omitempty"`   // Relative paths to scripts in scripts/
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`  // Additional metadata
+	Tools    []string               `json:"tools,omitempty"`    // Tools required by this skill
+	Content  string                 `json:"content"`            // Main skill content/prompt
+	Dir      string                 `json:"dir,omitempty"`      // Absolute path to skill directory
+	Scripts  []string               `json:"scripts,omitempty"`  // Relative paths to scripts in scripts/
+	Metadata map[string]interface{} `json:"metadata,omitempty"` // Additional metadata
 }
 
 // GetTools returns the list of tool names required by this skill
@@ -199,8 +199,8 @@ type SkillListItem struct {
 // SkillViewOptions contains options for viewing a skill at different levels
 type SkillViewOptions struct {
 	Level    SkillLoadLevel `json:"level"`
-	Path     string         `json:"path,omitempty"`      // For Level2: specific reference file
-	Platform string         `json:"platform,omitempty"`  // For platform-specific skills
+	Path     string         `json:"path,omitempty"`     // For Level2: specific reference file
+	Platform string         `json:"platform,omitempty"` // For platform-specific skills
 }
 
 // =============================================================================
@@ -209,18 +209,18 @@ type SkillViewOptions struct {
 
 // SkillManifest represents a skill's manifest file (SKILL.md frontmatter)
 type SkillManifest struct {
-	Name                 string   `yaml:"name"`
-	Description          string   `yaml:"description"`
-	Version              string   `yaml:"version"`
-	Platforms            []string `yaml:"platforms,omitempty"`             // macos, linux, windows
-	FallbackForToolset   string   `yaml:"fallback_for_toolset,omitempty"`  // Show when this toolset is unavailable
-	FallbackForTools     []string `yaml:"fallback_for_tools,omitempty"`    // Show when these tools are unavailable
-	RequiresToolset      string   `yaml:"requires_toolset,omitempty"`       // Only show when this toolset is available
-	RequiresTools        []string `yaml:"requires_tools,omitempty"`         // Only show when these tools are available
-	Tags                 []string `yaml:"tags,omitempty"`
-	Category             string   `yaml:"category,omitempty"`
-	Config               []SkillConfigEntry `yaml:"config,omitempty"`
-	RequiredEnvVars      []EnvVarEntry      `yaml:"required_environment_variables,omitempty"`
+	Name               string             `yaml:"name"`
+	Description        string             `yaml:"description"`
+	Version            string             `yaml:"version"`
+	Platforms          []string           `yaml:"platforms,omitempty"`            // macos, linux, windows
+	FallbackForToolset string             `yaml:"fallback_for_toolset,omitempty"` // Show when this toolset is unavailable
+	FallbackForTools   []string           `yaml:"fallback_for_tools,omitempty"`   // Show when these tools are unavailable
+	RequiresToolset    string             `yaml:"requires_toolset,omitempty"`     // Only show when this toolset is available
+	RequiresTools      []string           `yaml:"requires_tools,omitempty"`       // Only show when these tools are available
+	Tags               []string           `yaml:"tags,omitempty"`
+	Category           string             `yaml:"category,omitempty"`
+	Config             []SkillConfigEntry `yaml:"config,omitempty"`
+	RequiredEnvVars    []EnvVarEntry      `yaml:"required_environment_variables,omitempty"`
 }
 
 // SkillConfigEntry represents a skill configuration setting
@@ -243,28 +243,28 @@ type EnvVarEntry struct {
 type HubSource string
 
 const (
-	HubSourceLocal    HubSource = "local"
-	HubSourceOfficial HubSource = "official"
-	HubSourceSkillsSh HubSource = "skills.sh"
+	HubSourceLocal     HubSource = "local"
+	HubSourceOfficial  HubSource = "official"
+	HubSourceSkillsSh  HubSource = "skills.sh"
 	HubSourceWellKnown HubSource = "well-known"
-	HubSourceGitHub   HubSource = "github"
-	HubSourceHub      HubSource = "hub"
+	HubSourceGitHub    HubSource = "github"
+	HubSourceHub       HubSource = "hub"
 )
 
 // HubSkill represents a skill from a hub/registry
 type HubSkill struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Category    string      `json:"category,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Source      HubSource   `json:"source"`
-	SourceID    string      `json:"source_id,omitempty"`    // e.g., "openai/skills/k8s"
-	URL         string      `json:"url,omitempty"`         // Install URL
-	Author      string      `json:"author,omitempty"`
-	Stars       int         `json:"stars,omitempty"`
-	Installs    int         `json:"installs,omitempty"`     // Weekly installs
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Category      string    `json:"category,omitempty"`
+	Tags          []string  `json:"tags,omitempty"`
+	Source        HubSource `json:"source"`
+	SourceID      string    `json:"source_id,omitempty"` // e.g., "openai/skills/k8s"
+	URL           string    `json:"url,omitempty"`       // Install URL
+	Author        string    `json:"author,omitempty"`
+	Stars         int       `json:"stars,omitempty"`
+	Installs      int       `json:"installs,omitempty"`       // Weekly installs
 	SecurityAudit string    `json:"security_audit,omitempty"` // audit status
-	Verified    bool        `json:"verified,omitempty"`
+	Verified      bool      `json:"verified,omitempty"`
 }
 
 // =============================================================================

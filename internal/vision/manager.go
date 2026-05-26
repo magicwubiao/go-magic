@@ -42,36 +42,36 @@ type Provider interface {
 
 // AnalysisResult contains image analysis results
 type AnalysisResult struct {
-	Description  string                 `json:"description"`
+	Description string                 `json:"description"`
 	Tags        []string               `json:"tags"`
 	Objects     []DetectedObject       `json:"objects"`
-	Text        string                 `json:"text"`        // OCR text
+	Text        string                 `json:"text"` // OCR text
 	Faces       []DetectedFace         `json:"faces"`
 	Colors      []ColorInfo            `json:"colors"`
-	Confidence  float64               `json:"confidence"`
+	Confidence  float64                `json:"confidence"`
 	Metadata    map[string]interface{} `json:"metadata"`
 }
 
 // DetectedObject represents a detected object
 type DetectedObject struct {
-	Label      string    `json:"label"`
-	Confidence float64   `json:"confidence"`
-	BoundingBox Box       `json:"bounding_box"`
+	Label       string  `json:"label"`
+	Confidence  float64 `json:"confidence"`
+	BoundingBox Box     `json:"bounding_box"`
 }
 
 // DetectedFace represents a detected face
 type DetectedFace struct {
-	BoundingBox  Box     `json:"bounding_box"`
-	Age          int     `json:"age,omitempty"`
-	Gender       string  `json:"gender,omitempty"`
-	Emotion      string  `json:"emotion,omitempty"`
-	Confidence   float64 `json:"confidence"`
+	BoundingBox Box     `json:"bounding_box"`
+	Age         int     `json:"age,omitempty"`
+	Gender      string  `json:"gender,omitempty"`
+	Emotion     string  `json:"emotion,omitempty"`
+	Confidence  float64 `json:"confidence"`
 }
 
 // ColorInfo represents dominant color
 type ColorInfo struct {
-	Hex       string  `json:"hex"`
-	RGB       [3]int  `json:"rgb"`
+	Hex        string  `json:"hex"`
+	RGB        [3]int  `json:"rgb"`
 	Percentage float64 `json:"percentage"`
 }
 
@@ -85,37 +85,37 @@ type Box struct {
 
 // GenerateOptions contains image generation options
 type GenerateOptions struct {
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	Model       string `json:"model,omitempty"`
-	Quality     string `json:"quality,omitempty"` // standard, hd
-	Style       string `json:"style,omitempty"`   // natural, vivid
-	Seed        int64  `json:"seed,omitempty"`
-	NumImages   int    `json:"num_images,omitempty"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	Model          string `json:"model,omitempty"`
+	Quality        string `json:"quality,omitempty"` // standard, hd
+	Style          string `json:"style,omitempty"`   // natural, vivid
+	Seed           int64  `json:"seed,omitempty"`
+	NumImages      int    `json:"num_images,omitempty"`
 	ReferenceImage string `json:"reference_image,omitempty"` // for img2img
-	MaskImage   string `json:"mask_image,omitempty"` // for inpainting
+	MaskImage      string `json:"mask_image,omitempty"`      // for inpainting
 	NegativePrompt string `json:"negative_prompt,omitempty"`
 }
 
 // GenerationResult contains generation results
 type GenerationResult struct {
-	Images     []ImageInfo `json:"images"`
-	Prompt     string      `json:"prompt"`
-	Provider   string      `json:"provider"`
-	Model      string      `json:"model"`
-	ProcessingTime float64 `json:"processing_time_seconds"`
-	Seed       int64       `json:"seed,omitempty"`
+	Images         []ImageInfo `json:"images"`
+	Prompt         string      `json:"prompt"`
+	Provider       string      `json:"provider"`
+	Model          string      `json:"model"`
+	ProcessingTime float64     `json:"processing_time_seconds"`
+	Seed           int64       `json:"seed,omitempty"`
 }
 
 // ImageInfo contains generated image information
 type ImageInfo struct {
-	URL         string `json:"url,omitempty"`
-	Base64      string `json:"base64,omitempty"`
-	LocalPath   string `json:"local_path,omitempty"`
-	MimeType    string `json:"mime_type"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	FileSize    int64  `json:"file_size"`
+	URL           string `json:"url,omitempty"`
+	Base64        string `json:"base64,omitempty"`
+	LocalPath     string `json:"local_path,omitempty"`
+	MimeType      string `json:"mime_type"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	FileSize      int64  `json:"file_size"`
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
@@ -351,7 +351,7 @@ func (p *OpenAIVisionProvider) GenerateImage(ctx context.Context, prompt string,
 			{URL: "https://example.com/generated.png", Width: options.Width, Height: options.Height},
 		},
 		Prompt: prompt,
-		Model: "dall-e-3",
+		Model:  "dall-e-3",
 	}, nil
 }
 

@@ -28,11 +28,11 @@ func newPluginToolLoader() *PluginToolLoader {
 
 // pluginManifest is a minimal manifest for tool discovery
 type pluginManifest struct {
-	ID            string             `json:"id"`
-	Type          string             `json:"type"`
-	Entrypoint    string             `json:"entrypoint"`
-	Entrypoints   map[string]string  `json:"entrypoints"`
-	Commands      []pluginCommand    `json:"commands"`
+	ID          string            `json:"id"`
+	Type        string            `json:"type"`
+	Entrypoint  string            `json:"entrypoint"`
+	Entrypoints map[string]string `json:"entrypoints"`
+	Commands    []pluginCommand   `json:"commands"`
 }
 
 type pluginCommand struct {

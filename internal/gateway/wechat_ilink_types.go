@@ -126,17 +126,17 @@ type ILinkRefMessage struct {
 
 // ILinkMessageItem is a single item in a message's item_list.
 type ILinkMessageItem struct {
-	Type         int               `json:"type,omitempty"`
-	CreateTimeMs int64             `json:"create_time_ms,omitempty"`
-	UpdateTimeMs int64             `json:"update_time_ms,omitempty"`
-	IsCompleted  bool              `json:"is_completed,omitempty"`
-	MsgID        string            `json:"msg_id,omitempty"`
-	RefMsg       *ILinkRefMessage  `json:"ref_msg,omitempty"`
-	TextItem     *ILinkTextItem    `json:"text_item,omitempty"`
-	ImageItem    *ILinkImageItem   `json:"image_item,omitempty"`
-	VoiceItem    *ILinkVoiceItem   `json:"voice_item,omitempty"`
-	FileItem     *ILinkFileItem    `json:"file_item,omitempty"`
-	VideoItem    *ILinkVideoItem   `json:"video_item,omitempty"`
+	Type         int              `json:"type,omitempty"`
+	CreateTimeMs int64            `json:"create_time_ms,omitempty"`
+	UpdateTimeMs int64            `json:"update_time_ms,omitempty"`
+	IsCompleted  bool             `json:"is_completed,omitempty"`
+	MsgID        string           `json:"msg_id,omitempty"`
+	RefMsg       *ILinkRefMessage `json:"ref_msg,omitempty"`
+	TextItem     *ILinkTextItem   `json:"text_item,omitempty"`
+	ImageItem    *ILinkImageItem  `json:"image_item,omitempty"`
+	VoiceItem    *ILinkVoiceItem  `json:"voice_item,omitempty"`
+	FileItem     *ILinkFileItem   `json:"file_item,omitempty"`
+	VideoItem    *ILinkVideoItem  `json:"video_item,omitempty"`
 }
 
 // ILinkMessage is a WeChat message from the iLink API.

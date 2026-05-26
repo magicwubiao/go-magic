@@ -95,7 +95,7 @@ func DecryptAESECB(ciphertext, key []byte) ([]byte, error) {
 
 // CDNDownloader handles downloading and decrypting media from WeChat CDN.
 type CDNDownloader struct {
-	client    *http.Client
+	client     *http.Client
 	cdnBaseURL string
 }
 
@@ -192,8 +192,8 @@ func (d *CDNDownloader) downloadOnce(ctx context.Context, downloadURL string) ([
 
 // CDNUploader handles uploading and encrypting media to WeChat CDN.
 type CDNUploader struct {
-	api       *ILinkAPIClient
-	client    *http.Client
+	api        *ILinkAPIClient
+	client     *http.Client
 	cdnBaseURL string
 }
 

@@ -258,12 +258,12 @@ func (g *QQGateway) HandleSlashCommand(cmd string, msg Message) (Response, error
 // CheckHealth returns detailed health status for QQ gateway
 func (g *QQGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:  "qq",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
+		Platform:     "qq",
+		Connected:    g.IsConnected(),
+		Status:       "healthy",
 		CallbackPort: g.callbackPort,
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+		Details:      make(map[string]interface{}),
+		Platforms:    make(map[string]PlatformStatus),
 	}
 
 	platformStatus := PlatformStatus{

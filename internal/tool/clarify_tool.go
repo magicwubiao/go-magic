@@ -36,7 +36,7 @@ func (t *ClarifyTool) Parameters() map[string]interface{} {
 				"description": "The clarification question to ask the user",
 			},
 			"options": map[string]interface{}{
-				"type":        "array",
+				"type": "array",
 				"items": map[string]interface{}{
 					"type": "string",
 				},
@@ -61,7 +61,7 @@ func (t *ClarifyTool) Parameters() map[string]interface{} {
 
 // ClarifyResult is the structured result returned by the clarify tool
 type ClarifyResult struct {
-	Status      string   `json:"status"`       // "clarification_needed"
+	Status      string   `json:"status"` // "clarification_needed"
 	Question    string   `json:"question"`
 	Options     []string `json:"options,omitempty"`
 	Context     string   `json:"context,omitempty"`
@@ -165,10 +165,10 @@ func BuildDiscordComponents(result *ClarifyResult) string {
 			customID = fmt.Sprintf("cl_%d", i)
 		}
 		buttons = append(buttons, map[string]interface{}{
-			"type":        2, // BUTTON
-			"label":       opt,
-			"custom_id":   customID,
-			"style":       1, // PRIMARY
+			"type":      2, // BUTTON
+			"label":     opt,
+			"custom_id": customID,
+			"style":     1, // PRIMARY
 		})
 	}
 	components[0]["components"] = buttons

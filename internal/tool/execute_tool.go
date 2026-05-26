@@ -155,10 +155,10 @@ var pipeAndChainPatterns = []struct {
 }
 
 type ExecuteCommandTool struct {
-	timeout   time.Duration
-	maxOutput int
-	allowAny  bool
-	workDir   string
+	timeout    time.Duration
+	maxOutput  int
+	allowAny   bool
+	workDir    string
 	codingMode bool
 }
 
@@ -387,8 +387,8 @@ func (t *ExecuteCommandTool) SetAllowAny(allow bool) {
 func (t *ExecuteCommandTool) SetCodingMode(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
-		t.timeout = 300 * time.Second  // 5 minutes for coding mode (was 120s)
-		t.maxOutput = 1024 * 1024      // 1MB output (was 200KB)
+		t.timeout = 300 * time.Second // 5 minutes for coding mode (was 120s)
+		t.maxOutput = 1024 * 1024     // 1MB output (was 200KB)
 		t.allowAny = true
 	}
 }
@@ -397,8 +397,8 @@ func (t *ExecuteCommandTool) SetCodingMode(enabled bool) {
 func (t *ExecuteCommandTool) SetCodingModeAdvanced(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
-		t.timeout = 600 * time.Second  // 10 minutes for advanced coding
-		t.maxOutput = 2 * 1024 * 1024  // 2MB output
+		t.timeout = 600 * time.Second // 10 minutes for advanced coding
+		t.maxOutput = 2 * 1024 * 1024 // 2MB output
 		t.allowAny = true
 	}
 }

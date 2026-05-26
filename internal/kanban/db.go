@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	_ "modernc.org/sqlite"
 )
 
 // KanbanDB manages the kanban SQLite database

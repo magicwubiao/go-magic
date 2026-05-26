@@ -32,7 +32,7 @@ type Message struct {
 // MediaAttachment represents a media file attachment
 type MediaAttachment struct {
 	Type     string `json:"type"` // "image", "video", "audio", "file"
-	URL      string `json:"url"` // 下载URL或本地路径
+	URL      string `json:"url"`  // 下载URL或本地路径
 	MimeType string `json:"mime_type,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	Caption  string `json:"caption,omitempty"`
@@ -557,14 +557,14 @@ func (g *Gateway) getOrCreateSession(userID, platform string) *Session {
 
 	// Create new session
 	session = &Session{
-		ID:        uuid.New().String(),
-		UserID:    userID,
-		Platform:  platform,
-		CreatedAt: time.Now(),
+		ID:         uuid.New().String(),
+		UserID:     userID,
+		Platform:   platform,
+		CreatedAt:  time.Now(),
 		LastActive: time.Now(),
-		History:   make([]Message, 0),
-		Metadata:  make(map[string]interface{}),
-		agent:     g.agent,
+		History:    make([]Message, 0),
+		Metadata:   make(map[string]interface{}),
+		agent:      g.agent,
 	}
 
 	// Check max sessions

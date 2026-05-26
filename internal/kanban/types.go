@@ -44,7 +44,7 @@ type Task struct {
 	Tenant            string     `json:"tenant"`
 	Workspace         string     `json:"workspace"`
 	Skills            []string   `json:"skills"`
-	MaxRuntimeSeconds int       `json:"max_runtime_seconds"`
+	MaxRuntimeSeconds int        `json:"max_runtime_seconds"`
 	IdempotencyKey    string     `json:"idempotency_key"`
 	CurrentRunID      string     `json:"current_run_id"`
 	CreatedAt         time.Time  `json:"created_at"`
@@ -159,16 +159,16 @@ func WithBody(b string) TaskOption {
 
 // EventType constants
 const (
-	EventCreated       = "created"
-	EventStatusChange  = "status_changed"
-	EventCommented     = "commented"
-	EventCompleted     = "completed"
-	EventBlocked       = "blocked"
-	EventUnblocked     = "unblocked"
-	EventClaimed       = "claimed"
-	EventHeartbeat     = "heartbeat"
-	EventTimeout       = "timeout"
-	EventCrash         = "crash"
+	EventCreated      = "created"
+	EventStatusChange = "status_changed"
+	EventCommented    = "commented"
+	EventCompleted    = "completed"
+	EventBlocked      = "blocked"
+	EventUnblocked    = "unblocked"
+	EventClaimed      = "claimed"
+	EventHeartbeat    = "heartbeat"
+	EventTimeout      = "timeout"
+	EventCrash        = "crash"
 )
 
 // RunStatus constants

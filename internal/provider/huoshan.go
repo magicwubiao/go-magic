@@ -1,7 +1,5 @@
 package provider
 
-import ()
-
 // HuoshanProvider 火山方舟 (字节跳动，兼容OpenAI格式)
 type HuoshanProvider struct {
 	*OpenAICompatibleProvider

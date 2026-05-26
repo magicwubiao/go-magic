@@ -108,20 +108,20 @@ func (b *LocalBackend) SetAllowAny(allow bool) {
 
 // DockerBackend executes commands in Docker containers
 type DockerBackend struct {
-	image        string
-	networkMode  string
-	memoryLimit  string
-	cpuLimit     string
-	privileged   bool
+	image       string
+	networkMode string
+	memoryLimit string
+	cpuLimit    string
+	privileged  bool
 }
 
 func NewDockerBackend() *DockerBackend {
 	return &DockerBackend{
-		image:        "golang:1.25-alpine",
-		networkMode:  "bridge",
-		memoryLimit:  "512m",
-		cpuLimit:     "1.0",
-		privileged:   false,
+		image:       "golang:1.25-alpine",
+		networkMode: "bridge",
+		memoryLimit: "512m",
+		cpuLimit:    "1.0",
+		privileged:  false,
 	}
 }
 
@@ -141,9 +141,9 @@ func (b *DockerBackend) Health() error {
 	return cmd.Run()
 }
 
-func (b *DockerBackend) SetImage(image string) { b.image = image }
+func (b *DockerBackend) SetImage(image string)       { b.image = image }
 func (b *DockerBackend) SetMemoryLimit(limit string) { b.memoryLimit = limit }
-func (b *DockerBackend) SetCpuLimit(limit string) { b.cpuLimit = limit }
+func (b *DockerBackend) SetCpuLimit(limit string)    { b.cpuLimit = limit }
 
 func (b *DockerBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
 	start := time.Now()
@@ -198,11 +198,11 @@ func (b *DockerBackend) Execute(ctx context.Context, cmd string, workDir string,
 
 // SSHBackend executes commands over SSH
 type SSHBackend struct {
-	host       string
-	user       string
-	keyPath    string
-	password   string
-	port       int
+	host     string
+	user     string
+	keyPath  string
+	password string
+	port     int
 }
 
 func NewSSHBackend() *SSHBackend {
@@ -297,14 +297,14 @@ func (b *SSHBackend) Execute(ctx context.Context, cmd string, workDir string, ti
 
 // BackendManager manages terminal backends
 type BackendManager struct {
-	backends map[string]TerminalBackend
-	mu       sync.RWMutex
+	backends       map[string]TerminalBackend
+	mu             sync.RWMutex
 	defaultBackend string
 }
 
 func NewBackendManager() *BackendManager {
 	m := &BackendManager{
-		backends: make(map[string]TerminalBackend),
+		backends:       make(map[string]TerminalBackend),
 		defaultBackend: "local",
 	}
 
@@ -366,8 +366,8 @@ func (m *BackendManager) Execute(ctx context.Context, backendName string, cmd st
 
 // TerminalTool provides enhanced terminal execution with backend support
 type TerminalTool struct {
-	manager     *BackendManager
-	baseTool    *ExecuteCommandTool
+	manager  *BackendManager
+	baseTool *ExecuteCommandTool
 }
 
 func NewTerminalTool() *TerminalTool {
@@ -393,7 +393,7 @@ func (t *TerminalTool) Schema() map[string]interface{} {
 			},
 			"backend": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"local", "docker", "ssh"},
+				"enum":        []string{"local", "docker", "ssh"},
 				"description": "Execution backend to use (default: local)",
 			},
 			"workdir": map[string]interface{}{
@@ -436,33 +436,33 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	return map[string]interface{}{
-		"command":   result.Command,
-		"exit_code": result.ExitCode,
-		"output":    result.Output,
-		"backend":   result.Backend,
+		"command":     result.Command,
+		"exit_code":   result.ExitCode,
+		"output":      result.Output,
+		"backend":     result.Backend,
 		"duration_ms": result.Duration.Milliseconds(),
 	}, nil
 }
 
 // DaytonaBackend executes commands via Daytona (serverless dev environments)
 type DaytonaBackend struct {
-	workspace   string
-	image       string
-	language    string
-	serverURL   string
-	apiKey      string
-	persist     bool  // Persist environment between sessions
-	autoWake    bool  // Auto-wake on demand
+	workspace string
+	image     string
+	language  string
+	serverURL string
+	apiKey    string
+	persist   bool // Persist environment between sessions
+	autoWake  bool // Auto-wake on demand
 }
 
 func NewDaytonaBackend() *DaytonaBackend {
 	return &DaytonaBackend{
-		workspace:  "go-magic",
-		image:      "ubuntu:22.04",
-		language:   "go",
+		workspace: "go-magic",
+		image:     "ubuntu:22.04",
+		language:  "go",
 		serverURL: "http://localhost:8998",
-		persist:    true,
-		autoWake:   true,
+		persist:   true,
+		autoWake:  true,
 	}
 }
 
@@ -492,7 +492,7 @@ func (b *DaytonaBackend) Configure(workspace, image, language, serverURL, apiKey
 	b.apiKey = apiKey
 }
 
-func (b *DaytonaBackend) SetPersist(persist bool) { b.persist = persist }
+func (b *DaytonaBackend) SetPersist(persist bool)   { b.persist = persist }
 func (b *DaytonaBackend) SetAutoWake(autoWake bool) { b.autoWake = autoWake }
 
 func (b *DaytonaBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
@@ -682,7 +682,7 @@ func (b *ModalBackend) Configure(appName, volumePath, gpu string, memory int, cp
 	b.cpu = cpu
 }
 
-func (b *ModalBackend) SetGPU(gpu string) { b.gpu = gpu }
+func (b *ModalBackend) SetGPU(gpu string)    { b.gpu = gpu }
 func (b *ModalBackend) SetMemory(memory int) { b.memory = memory }
 
 func (b *ModalBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
@@ -746,13 +746,13 @@ type ProcessTool struct {
 }
 
 type ProcessInfo struct {
-	ID       string    `json:"id"`
-	Command  string    `json:"command"`
-	Backend  string    `json:"backend"`
-	WorkDir  string    `json:"workdir"`
-	PID      int       `json:"pid"`
-	Start    time.Time `json:"start"`
-	Status   string    `json:"status"`
+	ID      string    `json:"id"`
+	Command string    `json:"command"`
+	Backend string    `json:"backend"`
+	WorkDir string    `json:"workdir"`
+	PID     int       `json:"pid"`
+	Start   time.Time `json:"start"`
+	Status  string    `json:"status"`
 }
 
 func NewProcessTool() *ProcessTool {
@@ -773,7 +773,7 @@ func (t *ProcessTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":       []string{"list", "poll", "wait", "kill", "write", "log"},
+				"enum":        []string{"list", "poll", "wait", "kill", "write", "log"},
 				"description": "Action to perform",
 			},
 			"session_id": map[string]interface{}{

@@ -1,15 +1,15 @@
 package types
 
 type Message struct {
-	ID         string        `json:"id,omitempty"`
-	Role       string        `json:"role"`
-	Content    string        `json:"content"`
+	ID      string `json:"id,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 	// 多模态内容，非空时优先于 Content
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
-	ChannelID   string        `json:"channel_id,omitempty"`
-	From       string        `json:"from,omitempty"`
-	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"` // Required for tool role messages
+	ChannelID    string        `json:"channel_id,omitempty"`
+	From         string        `json:"from,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"` // Required for tool role messages
 }
 
 // ContentPart represents a part of a multimodal message content

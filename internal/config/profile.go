@@ -15,16 +15,16 @@ type Profile struct {
 
 // ProfileManager manages multiple isolated configuration profiles
 type ProfileManager struct {
-	homeBase  string               // Base directory for all profiles (e.g., ~/.magic/profiles)
-	mu        sync.RWMutex
-	current   *Profile
-	profiles  map[string]*Profile
+	homeBase string // Base directory for all profiles (e.g., ~/.magic/profiles)
+	mu       sync.RWMutex
+	current  *Profile
+	profiles map[string]*Profile
 }
 
 // ProfileManagerConfig holds configuration for the profile manager
 type ProfileManagerConfig struct {
 	BaseDir string `json:"base_dir"` // Base directory for profiles
-	Current string `json:"current"` // Current active profile name
+	Current string `json:"current"`  // Current active profile name
 }
 
 // NewProfileManager creates a new profile manager
