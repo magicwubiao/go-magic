@@ -11,7 +11,7 @@
       <div class="kanban-board">
         <div v-for="col in kanbanStore.upperColumns" :key="col.key" class="kanban-column">
           <div class="column-header">
-            <n-text strong>{{ col.title }}</n-text>
+            <n-text strong>{{ t(col.titleKey) }}</n-text>
             <n-tag size="small" round>{{ col.tasks.length }}</n-tag>
           </div>
           <div class="column-body">
@@ -42,7 +42,7 @@
       <div class="kanban-board">
         <div v-for="col in kanbanStore.lowerColumns" :key="col.key" class="kanban-column" :class="{ 'blocked-column': col.key === 'blocked' }">
           <div class="column-header">
-            <n-text strong>{{ col.title }}</n-text>
+            <n-text strong>{{ t(col.titleKey) }}</n-text>
             <n-tag size="small" round :type="col.key === 'blocked' ? 'error' : 'default'">{{ col.tasks.length }}</n-tag>
           </div>
           <div class="column-body">

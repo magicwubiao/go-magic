@@ -4,7 +4,7 @@
     <n-spin v-if="toolsStore.loading" />
     <template v-else>
       <!-- Toolsets -->
-      <n-card :title="t('tools.toolsets')" style="margin-bottom: 24px;">
+      <n-card :title="t('tools.toolsets')">
         <n-grid :cols="3" :x-gap="12" :y-gap="12">
           <n-gi v-for="toolset in toolsStore.toolsets" :key="toolset.id">
             <n-card size="small">
@@ -29,24 +29,6 @@
           </n-gi>
         </n-grid>
         <n-empty v-if="!toolsStore.toolsets.length" :description="t('tools.noToolsets')" />
-      </n-card>
-
-      <!-- Tools -->
-      <n-card :title="t('tools.allTools')">
-        <n-grid :cols="3" :x-gap="12" :y-gap="12">
-          <n-gi v-for="tool in toolsStore.tools" :key="tool.id">
-            <n-card size="small">
-              <template #header>
-                <span style="font-weight: 500;">{{ tool.name }}</span>
-              </template>
-              <n-space vertical size="small">
-                <n-text depth="3">{{ tool.description || t('tools.noDescription') }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ t('tools.category') }}: {{ tool.category || t('tools.general') }}</n-text>
-              </n-space>
-            </n-card>
-          </n-gi>
-        </n-grid>
-        <n-empty v-if="!toolsStore.tools.length" :description="t('tools.noTools')" />
       </n-card>
     </template>
   </div>
@@ -74,6 +56,5 @@ async function toggleToolset(id: string, enabled: boolean): Promise<void> {
 
 onMounted(() => {
   toolsStore.loadToolsets()
-  toolsStore.loadTools()
 })
 </script>

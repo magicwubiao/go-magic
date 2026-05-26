@@ -55,14 +55,14 @@ const { t } = useI18n()
 const systemStore = useSystemStore()
 
 function formatUptime(seconds?: number): string {
-  if (!seconds) return t('system.na')
+  if (seconds === undefined || seconds === null) return t('system.na')
   const hours = Math.floor(seconds / 3600)
   const mins = Math.floor((seconds % 3600) / 60)
   return `${hours}h ${mins}m`
 }
 
 function formatBytes(bytes?: number): string {
-  if (!bytes) return t('system.na')
+  if (bytes === undefined || bytes === null) return t('system.na')
   const mb = bytes / 1024 / 1024
   return `${mb.toFixed(2)} MB`
 }

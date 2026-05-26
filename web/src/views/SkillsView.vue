@@ -13,7 +13,7 @@
       <n-card :title="t('skills.categories')" style="margin-bottom: 24px;" v-if="skillsStore.categories.length">
         <n-space>
           <n-tag v-for="cat in skillsStore.categories" :key="cat" size="large">
-            {{ cat }}
+            {{ t(`skills.categoryNames.${cat}`) || cat }}
           </n-tag>
         </n-space>
       </n-card>
@@ -97,7 +97,7 @@
               </template>
               <n-space vertical size="small">
                 <n-text depth="3" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">{{ skill.description || t('skills.noDescription') }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ t('skills.category') }}: {{ skill.category || t('skills.general') }}</n-text>
+                <n-text depth="3" style="font-size: 12px;">{{ t('skills.category') }}: {{ skill.category ? t(`skills.categoryNames.${skill.category}`) || skill.category : t('skills.general') }}</n-text>
               </n-space>
             </n-card>
           </n-gi>

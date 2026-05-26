@@ -1741,21 +1741,43 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		return allEnabled || len(s.cfg.Tools.Enabled) == 0
 	}
 
-	// Add categorized toolsets
-	for catName, tools := range categoryTools {
-		id := strings.ToLower(strings.ReplaceAll(catName, " ", "_"))
-		toolsets = append(toolsets, map[string]interface{}{
-			"id":          id,
-			"name":        catName,
-			"label":       catName,
-			"description": categoryDescriptions[catName],
-			"enabled":     isEnabled(id),
-			"configured":  true,
-			"tools":       tools,
-		})
+	// Helper to convert tool names to tool objects
+	makeToolObjects := func(names []string, category string) []map[string]interface{} {
+		result := make([]map[string]interface{}, 0, len(names))
+		for _, name := range names {
+			desc := ""
+			if t, err := s.toolReg.Get(name); err == nil {
+				desc = t.Description()
+			}
+			result = append(result, map[string]interface{}{
+				"id":          name,
+				"name":        name,
+				"description": desc,
+				"category":    category,
+				"enabled":     true,
+			})
+		}
+		return result
 	}
 
-	// Add ungrouped tools as "Other" toolset
+	// Add categorized toolsets in a fixed order (based on categoryMap order)
+	categoryOrder := []string{"File", "Web", "Browser", "Code Execution", "Memory", "Delegation", "Skills", "MCP"}
+	for _, catName := range categoryOrder {
+		if tools, ok := categoryTools[catName]; ok {
+			id := strings.ToLower(strings.ReplaceAll(catName, " ", "_"))
+			toolsets = append(toolsets, map[string]interface{}{
+				"id":          id,
+				"name":        catName,
+				"label":       catName,
+				"description": categoryDescriptions[catName],
+				"enabled":     isEnabled(id),
+				"configured":  true,
+				"tools":       makeToolObjects(tools, catName),
+			})
+		}
+	}
+
+	// Add ungrouped tools as "Other" toolset (always last)
 	if len(ungrouped) > 0 {
 		toolsets = append(toolsets, map[string]interface{}{
 			"id":          "other",
@@ -1764,7 +1786,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 			"description": "Other tools",
 			"enabled":     isEnabled("other"),
 			"configured":  true,
-			"tools":       ungrouped,
+			"tools":       makeToolObjects(ungrouped, "Other"),
 		})
 	}
 
@@ -1777,11 +1799,19 @@ func (s *Server) handleGetToolsets() []Toolset {
 	result := make([]Toolset, 0, len(dynamicToolsets))
 	for _, ts := range dynamicToolsets {
 		name, _ := ts["name"].(string)
-		toolsRaw, _ := ts["tools"].([]string)
+		// Convert tool objects to tool names for backward compatibility
+		var toolNames []string
+		if tsTools, ok := ts["tools"].([]map[string]interface{}); ok {
+			for _, t := range tsTools {
+				if toolName, ok := t["name"].(string); ok {
+					toolNames = append(toolNames, toolName)
+				}
+			}
+		}
 		result = append(result, Toolset{
 			ID:      strings.ToLower(strings.ReplaceAll(name, " ", "_")),
 			Name:    name,
-			Tools:   toolsRaw,
+			Tools:   toolNames,
 			Enabled: true,
 		})
 	}
@@ -3710,13 +3740,11 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&memStats)
 
 	jsonResponse(w, map[string]interface{}{
-		"name":         "go-magic",
 		"version":      s.version,
-		"status":       "running",
-		"os":           runtime.GOOS,
+		"platform":     runtime.GOOS,
 		"arch":         runtime.GOARCH,
-		"go":           runtime.Version(),
-		"memory_usage": fmt.Sprintf("%.2f MB", float64(memStats.Alloc)/1024/1024),
+		"go_version":   runtime.Version(),
+		"memory_usage": memStats.Alloc,
 		"goroutines":   runtime.NumGoroutine(),
 	})
 }
@@ -3729,11 +3757,16 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	uptimeSeconds := int(time.Since(s.startTime).Seconds())
+
 	jsonResponse(w, map[string]interface{}{
 		"sessions":     sessions,
 		"messages":     0,
-		"uptime":       time.Since(s.startTime).String(),
-		"memory_usage": fmt.Sprintf("%.2f MB", float64(runtime.MemStats{}.Alloc)/1024/1024),
+		"uptime":       uptimeSeconds,
+		"memory_usage": memStats.Alloc,
 		"goroutines":   runtime.NumGoroutine(),
 	})
 }
