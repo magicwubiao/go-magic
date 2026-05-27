@@ -83,6 +83,22 @@ magic chat
 | 文件写入 | 需确认 | 自动执行 |
 | 适用场景 | 日常对话 | 编程开发 |
 
+### 全局配置默认模式
+
+可在配置文件中设置默认启动模式，无需每次手动切换：
+
+```json
+{
+  "chat_mode": "coding"
+}
+```
+
+可选值：`"chat"`（默认）或 `"coding"`。
+
+也可通过 Web Dashboard → 配置 → 通用 → 聊天模式 进行设置。
+
+启动后仍可通过 `/mode chat` 或 `/mode coding` 临时切换。
+
 ## Web Dashboard
 
 使用 React + TypeScript 构建的 Web 管理界面。

@@ -154,6 +154,22 @@ Switch to coding mode for development tasks:
 
 Switch back with `/mode chat`.
 
+### Default Mode Configuration
+
+Set the default startup mode in your config file so you don't need to switch manually every time:
+
+```json
+{
+  "chat_mode": "coding"
+}
+```
+
+Available values: `"chat"` (default) or `"coding"`.
+
+You can also configure this via Web Dashboard → Config → General → Chat Mode.
+
+After startup, you can still switch temporarily with `/mode chat` or `/mode coding`.
+
 ## Web Dashboard
 
 Start the web server:

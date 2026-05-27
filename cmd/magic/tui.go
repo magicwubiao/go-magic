@@ -2127,8 +2127,8 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 	// Generate tools schema for provider
 	toolsSchema := getToolsSchema(registry)
 
-	// Determine initial coding mode
-	codingMode := false
+	// Determine initial coding mode from config (chat_mode: "chat" or "coding")
+	codingMode := cfg.ChatMode == "coding"
 
 	// Build system prompt
 	systemPrompt := buildSystemPrompt(cfg, codingMode)

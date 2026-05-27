@@ -214,6 +214,7 @@ export default {
     rawJson: 'Raw JSON',
     secretRedaction: 'Secret Redaction',
     workingDirectory: 'Working Directory',
+    chatMode: 'Chat Mode',
     goalMaxTurns: 'Goal Max Turns',
     enableMemory: 'Enable Memory',
     authStatus: 'Auth Status',

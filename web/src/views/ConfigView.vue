@@ -12,6 +12,9 @@
           <n-form-item :label="t('config.workingDirectory')">
             <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" />
           </n-form-item>
+          <n-form-item :label="t('config.chatMode')">
+            <n-select v-model:value="generalForm.chat_mode" :options="chatModeOptions" />
+          </n-form-item>
           <n-form-item>
             <n-button type="primary" :loading="saving" @click="saveGeneral">{{ t('common.save') }}</n-button>
           </n-form-item>
@@ -106,7 +109,13 @@ const authConfigured = ref(false)
 const generalForm = reactive({
   working_dir: '',
   secret_redaction: false,
+  chat_mode: 'chat',
 })
+
+const chatModeOptions = [
+  { label: 'Chat', value: 'chat' },
+  { label: 'Coding', value: 'coding' },
+]
 
 const agentForm = reactive({
   goal_max_turns: 60,
@@ -119,6 +128,7 @@ const memoryForm = reactive({
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
   generalForm.secret_redaction = cfg.secret_redaction || false
+  generalForm.chat_mode = cfg.chat_mode || 'chat'
 
   const agent = cfg.agent || {}
   agentForm.goal_max_turns = agent.goal_max_turns || 60
@@ -133,6 +143,7 @@ async function saveGeneral() {
     await configStore.updateConfig({
       working_dir: generalForm.working_dir,
       secret_redaction: generalForm.secret_redaction,
+      chat_mode: generalForm.chat_mode,
     })
     // Reload to ensure sync with server
     await configStore.loadConfig()

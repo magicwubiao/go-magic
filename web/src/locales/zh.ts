@@ -214,6 +214,7 @@ export default {
     rawJson: '原始 JSON',
     secretRedaction: '敏感信息脱敏',
     workingDirectory: '工作目录',
+    chatMode: '聊天模式',
     goalMaxTurns: '目标最大轮数',
     enableMemory: '启用记忆',
     authStatus: '认证状态',
