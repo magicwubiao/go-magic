@@ -57,7 +57,6 @@ func allProviders() []providerInfo {
 		{Name: "anthropic", DisplayName: "Anthropic", Description: "Claude 3.5 Sonnet, Claude Opus, etc.", Models: []string{"claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"}, NeedsAPIKey: true, DefaultURL: "https://api.anthropic.com"},
 
 		// China Providers
-		{Name: "huoshan", DisplayName: "Volcano Engine (Doubao)", Description: "ByteDance Doubao LLM", Models: []string{"doubao-pro-32k", "doubao-lite-32k"}, NeedsAPIKey: true, DefaultURL: "https://ark.cn-beijing.volces.com/api/v3"},
 		{Name: "dashscope", DisplayName: "Tongyi Qianwen (DashScope)", Description: "Alibaba Cloud Tongyi Qianwen LLM", Models: []string{"qwen-max", "qwen-plus", "qwen-turbo", "qwen-long"}, NeedsAPIKey: true, DefaultURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{Name: "kimi", DisplayName: "Kimi (Moonshot)", Description: "Moonshot Kimi LLM", Models: []string{"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"}, NeedsAPIKey: true, DefaultURL: "https://api.moonshot.cn/v1"},
 		{Name: "minimax", DisplayName: "MiniMax", Description: "MiniMax LLM", Models: []string{"abab6.5s-chat", "abab6.5-chat"}, NeedsAPIKey: true, DefaultURL: "https://api.minimax.chat/v1"},

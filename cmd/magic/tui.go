@@ -434,6 +434,28 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ---------------------------------------------------------------------------
 
 func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle Escape: if streaming, cancel generation
+	if msg.Type == tea.KeyEscape {
+		if m.streaming {
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.streaming = false
+			m.streamBuf.Reset()
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].Streaming {
+					m.messages[i].Streaming = false
+					break
+				}
+			}
+			m.statusText = "cancelled"
+			m.addMessage("system", "[Generation cancelled]")
+			m.refreshViewport()
+			m.input.Focus()
+			return m, nil
+		}
+	}
+
 	// Handle Ctrl+C: if streaming, cancel; otherwise quit
 	if msg.Type == tea.KeyCtrlC {
 		if m.streaming {

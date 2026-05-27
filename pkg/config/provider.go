@@ -29,8 +29,6 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 		return provider.NewAnthropicProvider(provCfg.APIKey, model), nil
 	case "deepseek":
 		return provider.NewDeepSeekProvider(provCfg.APIKey, model), nil
-	case "huoshan":
-		return provider.NewHuoshanProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "dashscope":
 		return provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "kimi":
@@ -111,14 +109,6 @@ func ListProviders() []ProviderInfo {
 			Models:       []string{"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022"},
 			NeedsAPIKey:  true,
 			NeedsBaseURL: false,
-		},
-		{
-			Name:         "huoshan",
-			DisplayName:  "火山引擎 (Huoshan)",
-			Description:  "字节跳动豆包大模型",
-			Models:       []string{"doubao-pro-32k", "doubao-pro-128k"},
-			NeedsAPIKey:  true,
-			NeedsBaseURL: true,
 		},
 		{
 			Name:         "dashscope",

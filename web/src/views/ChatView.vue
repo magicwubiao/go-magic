@@ -65,11 +65,16 @@
           :class="msg.role"
         >
           <div class="avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
-          <div class="content" v-html="renderMarkdown(msg.content)"></div>
+          <div class="content">
+            <ReasoningContent v-if="msg.role === 'assistant'" :content="msg.content" />
+            <div v-else v-html="renderMarkdown(msg.content)"></div>
+          </div>
         </div>
         <div v-if="chatStore.streaming" class="message assistant">
           <div class="avatar">🤖</div>
-          <div class="content" v-html="renderMarkdown(chatStore.streamContent)"></div>
+          <div class="content">
+            <ReasoningContent :content="chatStore.streamContent" />
+          </div>
           <n-spin size="small" />
         </div>
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" style="padding: 40px; display: block; text-align: center;">
@@ -84,8 +89,11 @@
           :placeholder="t('chat.placeholder')"
           @keydown.enter.prevent="send"
         />
-        <n-button type="primary" @click="send" :loading="chatStore.streaming" :disabled="!inputValue.trim()">
+        <n-button v-if="!chatStore.streaming" type="primary" @click="send" :disabled="!inputValue.trim()">
           {{ t('chat.send') }}
+        </n-button>
+        <n-button v-else type="warning" @click="stopGeneration">
+          ⏹ {{ t('chat.stop') }}
         </n-button>
       </div>
     </div>
@@ -99,6 +107,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 import { useChatStore } from '@/stores/chat'
+import ReasoningContent from '@/components/ReasoningContent.vue'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -162,6 +171,10 @@ async function send() {
 
   inputValue.value = ''
   await chatStore.sendMessage(content)
+}
+
+function stopGeneration() {
+  chatStore.stopGeneration()
 }
 
 async function createSession() {

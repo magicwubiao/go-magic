@@ -6,7 +6,7 @@
 
 | 特性 | 描述 |
 |------|------|
-| **多 AI Provider 支持** | 20+ 提供商：DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenRouter、Groq、Huoshan、Zhipu、Kimi、MiniMax、DashScope、vLLM 等 |
+| **多 AI Provider 支持** | 20+ 提供商：DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenRouter、Groq、Doubao、Zhipu、Kimi、MiniMax、DashScope、vLLM 等 |
 | **TUI 界面** | 基于 BubbleTea，支持多行输入（Shift+Enter 换行）、Markdown 渲染、流式输出、斜杠命令 |
 | **Coding 模式** | 放宽权限、更长超时、允许 Python/Node 代码执行 |
 | **Web Dashboard** | React + TypeScript 前端，实时聊天、会话管理、配置管理 |

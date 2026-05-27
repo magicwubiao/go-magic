@@ -237,8 +237,6 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewAnthropicProvider(cfg.APIKey, cfg.Model)
 	case "deepseek":
 		return provider.NewDeepSeekProvider(cfg.APIKey, cfg.Model)
-	case "huoshan":
-		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "dashscope":
 		return provider.NewDashScopeProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "kimi":

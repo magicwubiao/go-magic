@@ -102,17 +102,27 @@ const form = reactive({
 
 const typeOptions = [
   { label: 'OpenAI', value: 'openai' },
+  { label: 'Anthropic (Claude)', value: 'anthropic' },
   { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Google (Gemini)', value: 'google' },
-  { label: 'Zhipu (智谱)', value: 'zhipu' },
-  { label: 'Qwen (通义千问)', value: 'qwen' },
+  { label: 'Google (Gemini)', value: 'gemini' },
   { label: 'Kimi (Moonshot)', value: 'kimi' },
-  { label: 'Ollama (Local)', value: 'ollama' },
+  { label: 'Doubao (Volcano/ByteDance)', value: 'doubao' },
+  { label: 'Zhipu (智谱 GLM)', value: 'zhipu' },
+  { label: 'DashScope (通义千问)', value: 'dashscope' },
+  { label: 'MiniMax', value: 'minimax' },
+  { label: 'Wenxin (文心一言)', value: 'wenxin' },
+  { label: 'Hunyuan (腾讯混元)', value: 'hunyuan' },
+  { label: 'Moonshot', value: 'moonshot' },
+  { label: 'MiMo', value: 'mimo' },
+  { label: 'OpenRouter', value: 'openrouter' },
   { label: 'Groq', value: 'groq' },
   { label: 'Mistral', value: 'mistral' },
   { label: 'Cohere', value: 'cohere' },
-  { label: 'Custom', value: 'custom' },
+  { label: 'Perplexity', value: 'perplexity' },
+  { label: 'Together AI', value: 'together' },
+  { label: 'Ollama (Local)', value: 'ollama' },
+  { label: 'vLLM (Local)', value: 'vllm' },
+  { label: 'Custom (OpenAI Compatible)', value: 'custom' },
 ]
 
 const providerColumns = [

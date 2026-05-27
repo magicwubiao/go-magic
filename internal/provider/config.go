@@ -103,7 +103,6 @@ func getDefaultBaseURL(name string) string {
 		"wenxin":     "https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1",
 		"doubao":     "https://ark.cn-beijing.volces.com/api/v3",
 		"hunyuan":    "https://hunyuan.cloud.tencent.com/v1",
-		"huoshan":    "https://ark.cn-beijing.volces.com/api/v3",
 		"minimax":    "https://api.minimax.chat/v1",
 		"mimo":       "https://api.mymimo.ai/v1",
 	}
@@ -137,7 +136,6 @@ func getDefaultModel(name string) string {
 		"wenxin":     "ernie-4.0-8k",
 		"doubao":     "doubao-pro-32k",
 		"hunyuan":    "hunyuan-pro",
-		"huoshan":    "doubao-pro-32k",
 		"minimax":    "abab6.5s-chat",
 		"mimo":       "mimo-3-7b",
 	}

@@ -142,6 +142,22 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function stopGeneration(): void {
+    closeEventSource()
+    streaming.value = false
+    // Save partial content as a message if there's any
+    if (streamContent.value) {
+      messages.value.push({
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: streamContent.value + '\n\n*[Stopped by user]*',
+        timestamp: new Date().toISOString(),
+        session_id: activeSessionId.value || '',
+      })
+      streamContent.value = ''
+    }
+  }
+
   function cleanup(): void {
     closeEventSource()
   }
@@ -159,6 +175,7 @@ export const useChatStore = defineStore('chat', () => {
     selectSession,
     deleteSession,
     sendMessage,
+    stopGeneration,
     cleanup,
   }
 })

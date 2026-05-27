@@ -354,6 +354,13 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Check if context was cancelled (user pressed /stop)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
 		// Cortex: OnTurnStart - freezes memory snapshot for prefix cache
 		if a.cortexManager != nil {
 			a.cortexManager.OnTurnStart()
@@ -858,6 +865,15 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Check if context was cancelled (user pressed /stop)
+		select {
+		case <-ctx.Done():
+			handler("\n\n[⏹ Stopped by user]\n", false)
+			handler("", true)
+			return ctx.Err()
+		default:
+		}
+
 		// Cortex: freeze snapshot at turn start
 		if a.cortexManager != nil {
 			a.cortexManager.OnTurnStart()

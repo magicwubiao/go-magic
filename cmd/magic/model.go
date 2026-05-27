@@ -16,7 +16,7 @@ var modelCmd = &cobra.Command{
 	Short: "Choose LLM provider and model",
 	Long: `Choose or view the LLM provider and model to use.
 
-Supported providers: openai, anthropic, deepseek, huoshan, kimi, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, doubao, wenxin, moonshot, mimo, hunyuan.
+Supported providers: openai, anthropic, deepseek, kimi, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, doubao, wenxin, moonshot, mimo, hunyuan.
 
 Formats:
   magic model                  - View current provider and model
@@ -29,7 +29,7 @@ Flags:
 Examples:
   magic model
   magic model gpt-4o
-  magic model huoshan:ep-20250105-xxxxx
+  magic model doubao:ep-20250105-xxxxx
   magic model --list openai`,
 	Args: cobra.MaximumNArgs(1),
 	Run:  runModel,
@@ -75,9 +75,6 @@ func runModel(cmd *cobra.Command, args []string) {
 			fmt.Println("  deepseek-reasoner  - DeepSeek R1 (thinking/reasoning)")
 			fmt.Println("  deepseek-v3.1      - DeepSeek V3.1")
 			fmt.Println("  deepseek-coder     - DeepSeek Coder")
-		case "huoshan":
-			fmt.Println("  ep-xxxxxxxx - Volcengine Endpoint ID")
-			fmt.Println("  (check Volcano Engine console for available endpoints)")
 		case "kimi":
 			fmt.Println("  moonshot-v1-128k  - Moonshot V1 128K context")
 			fmt.Println("  moonshot-v1-32k  - Moonshot V1 32K context")
@@ -244,7 +241,6 @@ var providerModels = map[string][]string{
 	"openai":     {"gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4-turbo", "gpt-4"},
 	"anthropic":  {"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"},
 	"deepseek":   {"deepseek-chat", "deepseek-reasoner", "deepseek-v3.1", "deepseek-coder"},
-	"huoshan":    {"ep-xxxxxxxx"}, // Volcano Engine endpoint ID
 	"kimi":       {"moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2-instruct"},
 	"minimax":    {"MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5"},
 	"zhipu":      {"glm-4", "glm-4-flash", "glm-4.6", "glm-4.7", "glm-4v"},
@@ -268,8 +264,8 @@ var providerModels = map[string][]string{
 
 // interactiveModelSelect presents an interactive UI for selecting provider and model.
 func interactiveModelSelect(cfg *config.Config) (string, string) {
-	providers := []string{"openai", "anthropic", "deepseek", "huoshan", "kimi", "minimax", "zhipu", "ollama", "openrouter", "dashscope", "vllm", "gemini", "groq", "together", "mistral", "cohere", "perplexity", "doubao", "wenxin", "moonshot", "mimo", "hunyuan"}
-	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "HuoShan (Volcano)", "Kimi (Moonshot)", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "Doubao (ByteDance)", "Wenxin (Baidu)", "Moonshot", "MiMo (Xiaomi)", "Hunyuan (Tencent)"}
+	providers := []string{"openai", "anthropic", "deepseek", "kimi", "minimax", "zhipu", "ollama", "openrouter", "dashscope", "vllm", "gemini", "groq", "together", "mistral", "cohere", "perplexity", "doubao", "wenxin", "moonshot", "mimo", "hunyuan"}
+	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "Kimi (Moonshot)", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "Doubao (ByteDance/Volcano)", "Wenxin (Baidu)", "Moonshot", "MiMo (Xiaomi)", "Hunyuan (Tencent)"}
 
 	fmt.Println("\n=== Interactive Model Selection ===")
 	fmt.Println("Use arrow keys (up/down) to navigate, Enter to select, q to quit.")

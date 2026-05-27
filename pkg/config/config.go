@@ -39,7 +39,7 @@ type Config struct {
 	Display       DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
-	Mode            string `json:"mode,omitempty"` // chat, plan, act
+	Mode            string `json:"mode,omitempty"`      // chat, plan, act
 	ChatMode        string `json:"chat_mode,omitempty"` // chat, coding - default mode for magic chat
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
