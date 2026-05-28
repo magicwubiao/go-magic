@@ -185,13 +185,11 @@ func findAsset(release *VersionInfo) *Asset {
 		patterns = []string{
 			fmt.Sprintf("go-magic-%s-%s.exe", goos, goarch),
 			fmt.Sprintf("magic-%s-%s.exe", goos, goarch),
-			fmt.Sprintf("%s-%s-%s.exe", goos, goarch),
 		}
 	} else {
 		patterns = []string{
 			fmt.Sprintf("go-magic-%s-%s", goos, goarch),
 			fmt.Sprintf("magic-%s-%s", goos, goarch),
-			fmt.Sprintf("%s-%s-%s", goos, goarch),
 		}
 	}
 
