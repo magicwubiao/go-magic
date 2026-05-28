@@ -18,14 +18,15 @@
           size="small"
         />
 
-        <!-- Add/Edit Modal -->
-        <n-modal v-model:show="showModal" :title="editingId ? t('models.editProvider') : t('models.addProvider')" preset="dialog" style="width: 600px;">
+        <!-- Add Modal -->
+        <n-modal v-model:show="showModal" :title="t('models.addProvider')" preset="dialog" style="width: 600px;">
           <n-form label-placement="left" label-width="140">
             <n-form-item :label="t('models.providerName')" required>
-              <n-input 
+              <n-select 
                 v-model:value="form.name" 
-                :placeholder="t('models.providerNamePlaceholder')" 
-                :disabled="!!editingId"
+                :options="providerOptions"
+                :placeholder="t('models.selectProvider')"
+                filterable
               />
             </n-form-item>
             <n-form-item :label="t('models.apiKey')">
@@ -98,7 +99,6 @@ const providersStore = useProvidersStore()
 const modelsStore = useModelsStore()
 
 const showModal = ref(false)
-const editingId = ref<string | null>(null)
 const saving = ref(false)
 
 const form = reactive({
@@ -134,8 +134,17 @@ const providerLabels: Record<string, string> = {
   custom: 'Custom (OpenAI Compatible)',
 }
 
+const providerOptions = computed(() => 
+  Object.entries(providerLabels).map(([value, label]) => ({
+    label,
+    value,
+  }))
+)
+
 const providerColumns = [
-  { title: t('common.name'), key: 'name', width: 150 },
+  { title: t('common.name'), key: 'name', width: 180,
+    render: (row: Provider) => getProviderLabel(row.name || row.id) || (row.name || row.id)
+  },
   { 
     title: 'Base URL', 
     key: 'base_url', 
@@ -152,12 +161,6 @@ const providerColumns = [
     key: 'api_key',
     width: 100,
     render: (row: Provider) => h(NTag, { size: 'small', type: row.api_key ? 'success' : 'default' }, () => row.api_key ? t('models.set') : t('models.notSet')),
-  },
-  {
-    title: t('common.actions'),
-    key: 'actions',
-    width: 120,
-    render: (row: Provider) => h(NButton, { size: 'small', onClick: () => editProvider(row) }, () => t('common.edit')),
   },
 ]
 
@@ -181,20 +184,10 @@ function getProviderLabel(name: string): string {
 }
 
 function openAddModal() {
-  editingId.value = null
   form.name = ''
   form.api_key = ''
   form.base_url = ''
   form.model = ''
-  showModal.value = true
-}
-
-function editProvider(provider: Provider) {
-  editingId.value = provider.id
-  form.name = provider.name || provider.id
-  form.api_key = provider.api_key || ''
-  form.base_url = provider.base_url || ''
-  form.model = provider.model || ''
   showModal.value = true
 }
 
@@ -213,16 +206,9 @@ async function saveProvider() {
       model: form.model,
     }
 
-    if (editingId.value) {
-      // Update existing provider
-      const id = editingId.value
-      await providersStore.updateProvider(id, payload)
-      message.success(t('models.saved'))
-    } else {
-      // Create new provider
-      await providersStore.createProvider(payload)
-      message.success(t('models.added'))
-    }
+    // Create new provider
+    await providersStore.createProvider(payload)
+    message.success(t('models.added'))
 
     showModal.value = false
     await providersStore.loadProviders()

@@ -262,6 +262,7 @@ export default {
     providerNamePlaceholder: '例如：openai, deepseek, custom',
     providerNameTip: '供应商标识符，小写字母，无空格',
     providerType: '供应商类型',
+    selectProvider: '请选择供应商',
     deleteConfirm: '确定删除此供应商？',
     saved: '供应商已保存',
     deleted: '供应商已删除',

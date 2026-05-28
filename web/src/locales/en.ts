@@ -262,6 +262,7 @@ export default {
     providerNamePlaceholder: 'e.g., openai, deepseek, custom',
     providerNameTip: 'Provider identifier, lower case, no spaces',
     providerType: 'Provider Type',
+    selectProvider: 'Select a provider',
     deleteConfirm: 'Delete this provider?',
     saved: 'Provider saved',
     deleted: 'Provider deleted',
