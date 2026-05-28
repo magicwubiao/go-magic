@@ -1287,9 +1287,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					toolArgs = toolArgs[:200] + "..."
 				}
 				eventData, _ := json.Marshal(map[string]interface{}{
-					"type":  "tool_start",
-					"name":  toolName,
-					"args":  toolArgs,
+					"type": "tool_start",
+					"name": toolName,
+					"args": toolArgs,
 				})
 				fmt.Fprintf(w, "data: %s\n\n", string(eventData))
 				flusher.Flush()
@@ -1315,11 +1315,11 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 						toolContent = toolContent[:500] + "..."
 					}
 					eventData, _ := json.Marshal(map[string]interface{}{
-						"type":    "tool_result",
-						"name":    toolName,
-						"success": toolSuccess,
+						"type":     "tool_result",
+						"name":     toolName,
+						"success":  toolSuccess,
 						"duration": toolDuration,
-						"content": strings.TrimSpace(toolContent),
+						"content":  strings.TrimSpace(toolContent),
 					})
 					fmt.Fprintf(w, "data: %s\n\n", string(eventData))
 					flusher.Flush()
@@ -3832,11 +3832,11 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSystemVersion(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
-		"version":   s.version,
-		"commit":    s.commit,
+		"version":    s.version,
+		"commit":     s.commit,
 		"build_date": s.buildDate,
-		"platform":  runtime.GOOS,
-		"arch":      runtime.GOARCH,
+		"platform":   runtime.GOOS,
+		"arch":       runtime.GOARCH,
 	})
 }
 

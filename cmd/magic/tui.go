@@ -35,7 +35,7 @@ import (
 
 // ChatMessage represents a message in the chat
 type ChatMessage struct {
-	Role         string        // "user", "assistant", "system", "tool", "error"
+	Role         string // "user", "assistant", "system", "tool", "error"
 	Content      string
 	Timestamp    time.Time
 	Streaming    bool          // true if currently being streamed
@@ -96,23 +96,23 @@ var (
 			Foreground(lipgloss.Color("#9ca3af"))
 
 	toolNameStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#67e8f9")).
-				Bold(true)
+			Foreground(lipgloss.Color("#67e8f9")).
+			Bold(true)
 
 	toolSuccessStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#4ade80"))
 
 	toolErrorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#f87171"))
+			Foreground(lipgloss.Color("#f87171"))
 
 	toolDimStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#6b7280"))
+			Foreground(lipgloss.Color("#6b7280"))
 
 	toolContentStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#d1d5db"))
 
 	toolBorderStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#374151"))
+			Foreground(lipgloss.Color("#374151"))
 
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#1a1a2e")).
