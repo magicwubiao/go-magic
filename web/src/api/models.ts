@@ -24,9 +24,14 @@ export async function getModelInfo(): Promise<ModelInfo> {
 }
 
 export async function setModel(modelId: string): Promise<void> {
+  // modelId format: "provider/model" (e.g., "openai/gpt-4")
+  const [provider, model] = modelId.split('/')
   return request('/model/set', {
     method: 'POST',
-    body: JSON.stringify({ model: modelId }),
+    body: JSON.stringify({ 
+      provider: provider,
+      model: model || modelId, // fallback to full string if no slash
+    }),
   })
 }
 
