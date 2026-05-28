@@ -100,6 +100,7 @@ const modelsStore = useModelsStore()
 
 const showModal = ref(false)
 const saving = ref(false)
+const isEditing = ref(false)
 
 const form = reactive({
   name: '',
@@ -162,6 +163,23 @@ const providerColumns = [
     width: 100,
     render: (row: Provider) => h(NTag, { size: 'small', type: row.api_key ? 'success' : 'default' }, () => row.api_key ? t('models.set') : t('models.notSet')),
   },
+  {
+    title: t('common.actions'),
+    key: 'action',
+    width: 160,
+    render: (row: Provider) => h('div', { class: 'action-buttons' }, [
+      h(NButton, {
+        size: 'small',
+        onClick: () => openEditModal(row),
+      }, () => t('common.edit')),
+      h(NButton, {
+        size: 'small',
+        type: 'error',
+        style: { marginLeft: '8px' },
+        onClick: () => deleteProvider(row),
+      }, () => t('common.delete')),
+    ]),
+  },
 ]
 
 const modelColumns = [
@@ -184,11 +202,34 @@ function getProviderLabel(name: string): string {
 }
 
 function openAddModal() {
+  isEditing.value = false
   form.name = ''
   form.api_key = ''
   form.base_url = ''
   form.model = ''
   showModal.value = true
+}
+
+function openEditModal(provider: Provider) {
+  isEditing.value = true
+  form.name = provider.name || provider.id || ''
+  form.api_key = provider.api_key || ''
+  form.base_url = provider.base_url || ''
+  form.model = provider.model || ''
+  showModal.value = true
+}
+
+async function deleteProvider(provider: Provider) {
+  const name = provider.name || provider.id || ''
+  if (!confirm(t('models.confirmDelete') + '?')) return
+  
+  try {
+    await providersStore.deleteProvider(name)
+    message.success(t('models.deleted'))
+    await providersStore.loadProviders()
+  } catch (e) {
+    message.error(t('models.failedToDelete') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  }
 }
 
 async function saveProvider() {
@@ -206,9 +247,13 @@ async function saveProvider() {
       model: form.model,
     }
 
-    // Create new provider
-    await providersStore.createProvider(payload)
-    message.success(t('models.added'))
+    if (isEditing.value) {
+      await providersStore.updateProvider(form.name, payload)
+      message.success(t('models.updated'))
+    } else {
+      await providersStore.createProvider(payload)
+      message.success(t('models.added'))
+    }
 
     showModal.value = false
     await providersStore.loadProviders()
