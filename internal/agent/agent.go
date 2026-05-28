@@ -701,11 +701,15 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Tool call loop detection - track tool calls more precisely
-		// First, filter out empty tool calls
+		// First, filter out empty tool calls and ensure all have IDs
 		validToolCalls := make([]types.ToolCall, 0, len(resp.ToolCalls))
 		for _, tc := range resp.ToolCalls {
 			name := tc.GetToolName()
 			if name != "" {
+				// Generate ID if empty
+				if tc.ID == "" {
+					tc.ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+				}
 				validToolCalls = append(validToolCalls, tc)
 				a.toolCallCount[name]++
 				a.toolCallHistory = append(a.toolCallHistory, name)
