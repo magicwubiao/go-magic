@@ -8,6 +8,16 @@ export interface ChatError {
   code?: string
 }
 
+export interface ToolCallEvent {
+  id: string
+  name: string
+  args: string
+  success?: boolean
+  duration?: string
+  content?: string
+  status: 'running' | 'completed' | 'error'
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
@@ -15,16 +25,21 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false)
   const streamContent = ref('')
   const error = ref<ChatError | null>(null)
+  const toolCalls = ref<ToolCallEvent[]>([])
   let currentEventSource: EventSource | null = null
+  let toolCallIdCounter = 0
 
   const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value)
   )
 
+  const activeToolCalls = computed(() =>
+    toolCalls.value.filter(tc => tc.status === 'running')
+  )
+
   async function loadSessions(): Promise<void> {
     try {
       const allSessions = await sessionsApi.getSessions()
-      // Filter out gateway sessions (only show web sessions)
       sessions.value = allSessions.filter(s => !s.source || s.source === 'web')
     } catch (e) {
       console.error('Failed to load sessions:', e)
@@ -99,6 +114,7 @@ export const useChatStore = defineStore('chat', () => {
     // Start streaming
     streaming.value = true
     streamContent.value = ''
+    toolCalls.value = []
     error.value = null
 
     // Close any existing EventSource
@@ -109,7 +125,44 @@ export const useChatStore = defineStore('chat', () => {
 
       currentEventSource.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as { delta?: string; done?: boolean }
+          const data = JSON.parse(event.data)
+
+          // Handle structured tool events
+          if (data.type === 'tool_start') {
+            const id = `tc_${++toolCallIdCounter}`
+            toolCalls.value.push({
+              id,
+              name: data.name,
+              args: data.args,
+              status: 'running',
+            })
+            return
+          }
+
+          if (data.type === 'tool_result') {
+            // Find the matching running tool call and update it
+            const tc = toolCalls.value.find(t => t.name === data.name && t.status === 'running')
+            if (tc) {
+              tc.success = data.success
+              tc.duration = data.duration
+              tc.content = data.content
+              tc.status = data.success ? 'completed' : 'error'
+            } else {
+              // No matching running tool, add as completed
+              toolCalls.value.push({
+                id: `tc_${++toolCallIdCounter}`,
+                name: data.name,
+                args: '',
+                success: data.success,
+                duration: data.duration,
+                content: data.content,
+                status: data.success ? 'completed' : 'error',
+              })
+            }
+            return
+          }
+
+          // Handle normal delta
           if (data.delta) {
             streamContent.value += data.delta
           }
@@ -145,7 +198,13 @@ export const useChatStore = defineStore('chat', () => {
   function stopGeneration(): void {
     closeEventSource()
     streaming.value = false
-    // Save partial content as a message if there's any
+    // Mark any running tool calls as error
+    for (const tc of toolCalls.value) {
+      if (tc.status === 'running') {
+        tc.status = 'error'
+        tc.success = false
+      }
+    }
     if (streamContent.value) {
       messages.value.push({
         id: Date.now().toString(),
@@ -170,6 +229,8 @@ export const useChatStore = defineStore('chat', () => {
     streamContent,
     error,
     activeSession,
+    toolCalls,
+    activeToolCalls,
     loadSessions,
     createSession,
     selectSession,

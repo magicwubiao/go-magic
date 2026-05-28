@@ -207,8 +207,9 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		for i, tc := range resp.ToolCalls {
 			toolCalls[i] = types.ToolCall{
 				ID:        tc.ID,
-				Name:      tc.Name,
+				Name:      tc.GetToolName(),
 				Arguments: tc.Arguments,
+				Function:  tc.Function,
 			}
 		}
 
@@ -230,10 +231,11 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		if checkpoint != nil {
 			for _, tc := range resp.ToolCalls {
 				result := results[tc.ID]
-				a.cortexManager.Execution.StoreToolResult(checkpoint, tc.Name, result)
+				toolName := tc.GetToolName()
+				a.cortexManager.Execution.StoreToolResult(checkpoint, toolName, result)
 
 				// Validate result
-				validation := a.cortexManager.Execution.ValidateResult(checkpoint, tc.Name, result)
+				validation := a.cortexManager.Execution.ValidateResult(checkpoint, toolName, result)
 				if !validation.Passed {
 					a.Emit(bus.EventKindWarning, map[string]interface{}{
 						"validation_failed": true,
@@ -275,7 +277,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				content = fmt.Sprintf("Error: %v", result.Err)
 				// Store error in checkpoint
 				if checkpoint != nil {
-					a.cortexManager.Execution.StoreError(checkpoint, tc.Name, result.Err)
+					a.cortexManager.Execution.StoreError(checkpoint, tc.GetToolName(), result.Err)
 				}
 			}
 

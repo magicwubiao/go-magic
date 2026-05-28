@@ -210,10 +210,7 @@ Complete this sub-task using the available tools. Be focused and direct.`, task.
 
 		// Execute tools
 		for _, tc := range resp.ToolCalls {
-			toolName := tc.Function.Name
-			if toolName == "" {
-				toolName = tc.Name
-			}
+			toolName := tc.GetToolName()
 			var toolArgs map[string]interface{}
 			if tc.Function.Arguments != "" {
 				json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs)

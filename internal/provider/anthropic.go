@@ -322,9 +322,15 @@ func (p *AnthropicProvider) parseResponse(body []byte) (*ChatResponse, error) {
 		} else if content.Type == "tool_use" {
 			// This is a tool call request
 			args, _ := json.Marshal(content.Input)
+			argsStr := string(args)
 			tc := types.ToolCall{
-				ID:        content.ID,
-				Name:      content.Name,
+				ID:   content.ID,
+				Name: content.Name,
+				Type: "function",
+				Function: types.Function{
+					Name:      content.Name,
+					Arguments: argsStr,
+				},
 				Arguments: content.Input,
 			}
 			if tc.Arguments == nil {
@@ -425,8 +431,12 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 				if currentToolCall != nil {
 					// Finalize previous tool call
 					var args map[string]interface{}
-					json.Unmarshal([]byte(functionArgs.String()), &args)
+					argsStr := functionArgs.String()
+					if argsStr != "" {
+						json.Unmarshal([]byte(argsStr), &args)
+					}
 					currentToolCall.Arguments = args
+					currentToolCall.Function.Arguments = argsStr
 					toolCalls = append(toolCalls, *currentToolCall)
 					functionName.Reset()
 					functionArgs.Reset()
@@ -434,6 +444,10 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 				currentToolCall = &types.ToolCall{
 					ID:   content.ID,
 					Name: content.Name,
+					Type: "function",
+					Function: types.Function{
+						Name: content.Name,
+					},
 				}
 			}
 
@@ -444,10 +458,12 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 			// Finalize last tool call
 			if currentToolCall != nil {
 				var args map[string]interface{}
-				if functionArgs.Len() > 0 {
-					json.Unmarshal([]byte(functionArgs.String()), &args)
+				argsStr := functionArgs.String()
+				if argsStr != "" {
+					json.Unmarshal([]byte(argsStr), &args)
 				}
 				currentToolCall.Arguments = args
+				currentToolCall.Function.Arguments = argsStr
 				toolCalls = append(toolCalls, *currentToolCall)
 			}
 

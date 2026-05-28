@@ -40,6 +40,24 @@ type toolGroup struct {
 	sequential bool
 }
 
+// formatDuration returns a human-readable concise duration string
+func formatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	ms := d.Milliseconds()
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	s := d.Seconds()
+	if s < 60 {
+		return fmt.Sprintf("%.1fs", s)
+	}
+	m := int(d.Minutes())
+	s = d.Seconds() - float64(m*60)
+	return fmt.Sprintf("%dm%ds", m, int(s))
+}
+
 // ToolCallResult holds the result of a tool execution
 type ToolCallResult struct {
 	ID        string
@@ -482,10 +500,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.toolCallHistory = a.toolCallHistory[:len(a.toolCallHistory)-1]
 		}
 		for _, tc := range resp.ToolCalls {
-			name := tc.Function.Name
-			if name == "" {
-				name = tc.Name
-			}
+			name := tc.GetToolName()
 			a.toolCallHistory = append(a.toolCallHistory, name)
 		}
 
@@ -686,11 +701,37 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Tool call loop detection - track tool calls more precisely
+		// First, filter out empty tool calls
+		validToolCalls := make([]types.ToolCall, 0, len(resp.ToolCalls))
 		for _, tc := range resp.ToolCalls {
-			name := tc.Function.Name
-			a.toolCallCount[name]++
-			a.toolCallHistory = append(a.toolCallHistory, name)
+			name := tc.GetToolName()
+			if name != "" {
+				validToolCalls = append(validToolCalls, tc)
+				a.toolCallCount[name]++
+				a.toolCallHistory = append(a.toolCallHistory, name)
+			} else {
+				stdlog.Printf("[TOOL] skipping empty tool call in response (ID: %s)", tc.ID)
+			}
 		}
+
+		// If no valid tool calls, return the response directly
+		if len(validToolCalls) == 0 {
+			a.history = append(a.history, provider.Message{
+				Role:    "assistant",
+				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+			})
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+
+			if a.cortexManager != nil {
+				a.cortexManager.OnSessionEnd()
+			}
+
+			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
+		}
+
+		// Replace resp.ToolCalls with valid ones for further processing
+		resp.ToolCalls = validToolCalls
 
 		// Check if same tool called too many times (with more context)
 		loopDetected := false
@@ -944,9 +985,7 @@ Please provide a comprehensive, well-structured final response based on these su
 						if toolCalls[i].ID == "" {
 							toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
 						}
-						if toolCalls[i].Function.Name == "" {
-							toolCalls[i].Function.Name = toolCalls[i].Name
-						}
+						toolCalls[i].Normalize()
 					}
 				} else {
 					fullContent += resp.Content
@@ -1019,9 +1058,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				if toolCalls[i].ID == "" {
 					toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
 				}
-				if toolCalls[i].Function.Name == "" {
-					toolCalls[i].Function.Name = toolCalls[i].Name
-				}
+				toolCalls[i].Normalize()
 			}
 			handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), true)
 		}
@@ -1062,10 +1099,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Store tool calls for history
 		tcs := make([]types.ToolCall, len(toolCalls))
 		for i, tc := range toolCalls {
-			name := tc.Function.Name
-			if name == "" {
-				name = tc.Name
-			}
+			name := tc.GetToolName()
 			tcs[i] = types.ToolCall{
 				ID:       tc.ID,
 				Name:     name,
@@ -1081,6 +1115,20 @@ Please provide a comprehensive, well-structured final response based on these su
 		})
 
 		// Execute tools with hooks
+		// First, notify the handler about each tool call starting
+		for _, tc := range toolCalls {
+			toolName := tc.GetToolName()
+			argsSummary := ""
+			if tc.Function.Arguments != "" {
+				// Truncate arguments for display
+				argsSummary = tc.Function.Arguments
+				if len(argsSummary) > 200 {
+					argsSummary = argsSummary[:200] + "..."
+				}
+			}
+			handler(fmt.Sprintf("\n>>>TOOL_START|%s|%s<<<\n", toolName, argsSummary), false)
+		}
+
 		results, err := a.executeToolsWithHooks(ctx, toolCalls)
 		if err != nil {
 			lastErr = err
@@ -1092,12 +1140,8 @@ Please provide a comprehensive, well-structured final response based on these su
 					Content:    utils.TruncateDetailed(errContent, a.maxMsgLen),
 					ToolCallID: tc.ID,
 				})
-				toolName := tc.Function.Name
-				if toolName == "" {
-					toolName = tc.Name
-				}
-				// Use special prefix to identify tool results
-				handler(fmt.Sprintf("\n>>>TOOL_RESULT_START|%s<<<%s\n>>>TOOL_RESULT_END<<<\n", toolName, err), false)
+				toolName := tc.GetToolName()
+				handler(fmt.Sprintf("\n>>>TOOL_RESULT_START|%s|false|0s<<<%s\n>>>TOOL_RESULT_END<<<\n", toolName, err), false)
 			}
 			continue
 		}
@@ -1116,12 +1160,13 @@ Please provide a comprehensive, well-structured final response based on these su
 				ToolCallID: tc.ID,
 			})
 
-			toolName := tc.Function.Name
-			if toolName == "" {
-				toolName = tc.Name
-			}
-			// Use special prefix to identify tool results for better display
-			handler(fmt.Sprintf("\n>>>TOOL_RESULT_START|%s<<<\n%s\n>>>TOOL_RESULT_END<<<\n", toolName, redact.RedactIfEnabled(content, a.secretRedaction)), false)
+			toolName := tc.GetToolName()
+			success := result.Err == nil
+			duration := result.Execution
+			// Format duration concisely
+			durStr := formatDuration(duration)
+			handler(fmt.Sprintf("\n>>>TOOL_RESULT_START|%s|%v|%s<<<\n%s\n>>>TOOL_RESULT_END<<<\n",
+				toolName, success, durStr, redact.RedactIfEnabled(content, a.secretRedaction)), false)
 
 			// Cortex: record tool call for review/pattern detection
 			if a.cortexManager != nil {
@@ -1161,14 +1206,37 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	results := make(map[string]ToolCallResult)
 	var mu sync.Mutex
 
+	// Filter out empty tool calls (name is empty)
+	validToolCalls := make([]types.ToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		toolName := tc.GetToolName()
+		if toolName == "" {
+			// Skip empty tool call - this can happen when AI returns malformed response
+			stdlog.Printf("[TOOL] skipping empty tool call (ID: %s)", tc.ID)
+			// Add an error result for this empty tool call
+			results[tc.ID] = ToolCallResult{
+				ID:      tc.ID,
+				Name:    "",
+				Content: "Error: Empty tool call - no tool name provided",
+				Err:     fmt.Errorf("empty tool call: no tool name provided"),
+			}
+			continue
+		}
+		validToolCalls = append(validToolCalls, tc)
+	}
+
+	if len(validToolCalls) == 0 {
+		return results, nil
+	}
+
 	// First, ensure all tool calls have an ID (modify in place)
-	for i := range toolCalls {
-		if toolCalls[i].ID == "" {
-			toolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+	for i := range validToolCalls {
+		if validToolCalls[i].ID == "" {
+			validToolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
 		}
 	}
 
-	groups := a.groupToolsForExecution(toolCalls)
+	groups := a.groupToolsForExecution(validToolCalls)
 
 	for _, group := range groups {
 		if group.sequential {
@@ -1221,10 +1289,7 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCall) ToolCallResult {
 	start := time.Now()
 
-	toolName := tc.Function.Name
-	if toolName == "" {
-		toolName = tc.Name
-	}
+	toolName := tc.GetToolName()
 
 	var toolArgs map[string]interface{}
 	if tc.Function.Arguments != "" {
@@ -1250,7 +1315,7 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	if err != nil {
 		return ToolCallResult{
 			ID:      tc.ID,
-			Name:    tc.Name,
+			Name:    toolName,
 			Content: fmt.Sprintf("Hook error: %v", err),
 			Err:     err,
 		}
@@ -1258,7 +1323,7 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	if decision.Action == hooks.HookActionReject {
 		return ToolCallResult{
 			ID:      tc.ID,
-			Name:    tc.Name,
+			Name:    toolName,
 			Content: fmt.Sprintf("Rejected by hook: %s", decision.Reason),
 			Err:     fmt.Errorf("rejected: %s", decision.Reason),
 		}
@@ -1321,10 +1386,7 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 	var sequential []types.ToolCall
 
 	for _, tc := range toolCalls {
-		toolName := tc.Function.Name
-		if toolName == "" {
-			toolName = tc.Name
-		}
+		toolName := tc.GetToolName()
 		if exclusiveTools[toolName] || sequentialTools[toolName] {
 			sequential = append(sequential, tc)
 		} else {

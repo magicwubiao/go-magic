@@ -104,8 +104,13 @@ func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*Chat
 		var args map[string]interface{}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		response.ToolCalls = append(response.ToolCalls, types.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 			Arguments: args,
 		})
 	}
@@ -181,8 +186,13 @@ func (p *DashScopeProvider) ChatWithTools(ctx context.Context, messages []Messag
 		var args map[string]interface{}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		response.ToolCalls = append(response.ToolCalls, types.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 			Arguments: args,
 		})
 	}

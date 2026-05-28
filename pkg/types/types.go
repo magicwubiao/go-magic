@@ -1,5 +1,7 @@
 package types
 
+import "encoding/json"
+
 type Message struct {
 	ID      string `json:"id,omitempty"`
 	Role    string `json:"role"`
@@ -48,6 +50,35 @@ type ToolCall struct {
 type Function struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// GetToolName returns the tool name, trying Function.Name first, then falling back to Name.
+// This handles inconsistencies across different providers where some set Function.Name
+// and others set only the top-level Name field.
+func (tc *ToolCall) GetToolName() string {
+	if tc.Function.Name != "" {
+		return tc.Function.Name
+	}
+	return tc.Name
+}
+
+// Normalize ensures both Function.Name and Name are populated for consistency.
+// After normalization, GetToolName() will return the correct value regardless of
+// which field the provider originally set.
+func (tc *ToolCall) Normalize() {
+	name := tc.GetToolName()
+	if name == "" {
+		return
+	}
+	tc.Name = name
+	if tc.Function.Name == "" {
+		tc.Function.Name = name
+	}
+	if tc.Function.Arguments == "" && tc.Arguments != nil {
+		if argsBytes, err := json.Marshal(tc.Arguments); err == nil {
+			tc.Function.Arguments = string(argsBytes)
+		}
+	}
 }
 
 type ChatResponse struct {

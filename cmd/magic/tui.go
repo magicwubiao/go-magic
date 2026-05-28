@@ -35,10 +35,14 @@ import (
 
 // ChatMessage represents a message in the chat
 type ChatMessage struct {
-	Role      string // "user", "assistant", "system", "tool", "error"
-	Content   string
-	Timestamp time.Time
-	Streaming bool // true if currently being streamed
+	Role         string        // "user", "assistant", "system", "tool", "error"
+	Content      string
+	Timestamp    time.Time
+	Streaming    bool          // true if currently being streamed
+	ToolName     string        // tool role: the tool name (e.g. "web_search")
+	ToolDuration time.Duration // tool role: execution duration
+	ToolSuccess  bool          // tool role: whether the tool succeeded
+	ToolArgs     string        // tool role: abbreviated arguments
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +94,25 @@ var (
 
 	toolStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#9ca3af"))
+
+	toolNameStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#67e8f9")).
+				Bold(true)
+
+	toolSuccessStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#4ade80"))
+
+	toolErrorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#f87171"))
+
+	toolDimStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6b7280"))
+
+	toolContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#d1d5db"))
+
+	toolBorderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#374151"))
 
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#1a1a2e")).
@@ -782,8 +805,13 @@ func (m TUIModel) startStreaming(input string) tea.Cmd {
 }
 
 // toolResultRegex matches tool result markers
-var toolResultStartRegex = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^<]+)<<<`)
+// Format: >>>TOOL_RESULT_START|toolName|success|duration<<<content>>>TOOL_RESULT_END<<<
+var toolResultStartRegex = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^<]+)<<<`)
 var toolResultEndRegex = regexp.MustCompile(`>>>TOOL_RESULT_END<<<`)
+
+// toolStartRegex matches tool start markers
+// Format: >>>TOOL_START|toolName|args<<<
+var toolStartRegex = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
 
 func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 	if msg.done {
@@ -823,6 +851,36 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 			if content != "" {
 				m.streamBuf.WriteString(content)
 			}
+		} else if strings.Contains(msg.content, ">>>TOOL_START|") {
+			// Tool call starting - show a "calling tool" indicator
+			content := msg.content
+			for {
+				match := toolStartRegex.FindStringSubmatchIndex(content)
+				if match == nil {
+					break
+				}
+				toolName := content[match[2]:match[3]]
+				toolArgs := content[match[4]:match[5]]
+				// Truncate args for display
+				if len(toolArgs) > 100 {
+					toolArgs = toolArgs[:100] + "..."
+				}
+
+				m.messages = append(m.messages, ChatMessage{
+					Role:        "tool",
+					Content:     "",
+					Timestamp:   time.Now(),
+					Streaming:   false,
+					ToolName:    toolName,
+					ToolArgs:    toolArgs,
+					ToolSuccess: false, // pending
+				})
+
+				content = content[match[1]:]
+			}
+			if content != "" {
+				m.streamBuf.WriteString(content)
+			}
 		} else if strings.Contains(msg.content, ">>>TOOL_RESULT_START|") {
 			// Extract tool results and create separate tool messages
 			content := msg.content
@@ -836,22 +894,45 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 
-				// Extract tool name
+				// Extract tool name, success, duration
 				submatch := toolResultStartRegex.FindStringSubmatch(content[startMatch[0]:startMatch[1]])
-				if len(submatch) < 2 {
+				if len(submatch) < 4 {
 					break
 				}
 				toolName := submatch[1]
+				toolSuccess := submatch[2] == "true"
+				toolDuration := submatch[3]
 				// Extract tool content
 				toolContent := content[startMatch[1]:endMatch[0]]
 
-				// Add tool message
-				m.messages = append(m.messages, ChatMessage{
-					Role:      "tool",
-					Content:   fmt.Sprintf("[%s] %s", toolName, strings.TrimSpace(toolContent)),
-					Timestamp: time.Now(),
-					Streaming: false,
-				})
+				// Parse duration
+				var dur time.Duration
+				if d, err := time.ParseDuration(toolDuration); err == nil {
+					dur = d
+				}
+
+				// Update the last pending tool message if it matches, otherwise add new
+				updated := false
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].Role == "tool" && m.messages[i].ToolName == toolName && m.messages[i].Content == "" {
+						m.messages[i].Content = strings.TrimSpace(toolContent)
+						m.messages[i].ToolSuccess = toolSuccess
+						m.messages[i].ToolDuration = dur
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					m.messages = append(m.messages, ChatMessage{
+						Role:         "tool",
+						Content:      strings.TrimSpace(toolContent),
+						Timestamp:    time.Now(),
+						Streaming:    false,
+						ToolName:     toolName,
+						ToolSuccess:  toolSuccess,
+						ToolDuration: dur,
+					})
+				}
 
 				// Remove processed part from content
 				content = content[:startMatch[0]] + content[endMatch[1]:]
@@ -1005,6 +1086,76 @@ func (m TUIModel) renderStatus() string {
 	return statusBarStyle.Width(m.width).Render(content)
 }
 
+// toolEmoji returns an emoji for the given tool name
+func toolEmoji(name string) string {
+	emojis := map[string]string{
+		"web_search":       "🌐",
+		"web_extract":      "🔍",
+		"web_fetch":        "🌐",
+		"web_select":       "🖱️",
+		"read_file":        "📄",
+		"write_file":       "✏️",
+		"file_edit":        "📝",
+		"list_files":       "📁",
+		"directory_tree":   "📂",
+		"search_in_files":  "🔎",
+		"execute_command":  "⚡",
+		"execute_code":     "💻",
+		"browser_navigate": "🌍",
+		"delegate_task":    "🎭",
+		"memory_store":     "💾",
+		"memory_recall":    "🧠",
+		"session_search":   "🔎",
+		"cronjob":          "⏰",
+		"skill":            "📚",
+		"clarify":          "❓",
+		"image_gen":        "🎨",
+		"image_edit":       "🖼️",
+		"tts":              "🔊",
+		"asr":              "🎤",
+		"send_message":     "💬",
+		"todo":             "✅",
+		"lsp_diagnostic":   "🔍",
+		"interrupt":        "⏹️",
+		"gitignore":        "📋",
+		"batch_file_ops":   "📦",
+		"project_analyze":  "📊",
+		"diff_patch":       "🔀",
+		"ha":               "🏠",
+		"json":             "{}",
+		"yaml":             "📝",
+		"string":           "🔤",
+		"hash":             "#️⃣",
+		"uuid":             "🆔",
+		"random":           "🎲",
+		"time":             "🕐",
+		"math":             "🔢",
+		"csv":              "📊",
+		"env":              "🖥️",
+		"system_info":      "ℹ️",
+	}
+	if emoji, ok := emojis[name]; ok {
+		return emoji
+	}
+	return "🔧"
+}
+
+// formatToolDuration formats a duration for display
+func formatToolDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	ms := d.Milliseconds()
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	s := d.Seconds()
+	if s < 60 {
+		return fmt.Sprintf("%.1fs", s)
+	}
+	return fmt.Sprintf("%.0fs", s)
+}
+
 func (m TUIModel) renderMessages() string {
 	var b strings.Builder
 
@@ -1041,9 +1192,65 @@ func (m TUIModel) renderMessages() string {
 			b.WriteString("\n\n")
 
 		case "tool":
-			b.WriteString(toolStyle.Render("[Tool] "))
-			b.WriteString(utils.Truncate(msg.Content, 2000))
-			b.WriteString("\n\n")
+			emoji := toolEmoji(msg.ToolName)
+			name := msg.ToolName
+			if name == "" {
+				// Fallback for legacy messages without ToolName
+				b.WriteString(toolStyle.Render("[Tool] "))
+				b.WriteString(utils.Truncate(msg.Content, 2000))
+				b.WriteString("\n\n")
+				break
+			}
+
+			if msg.Content == "" {
+				// Tool is still running - show spinner indicator
+				b.WriteString(toolDimStyle.Render(fmt.Sprintf("  %s %s", emoji, name)))
+				if msg.ToolArgs != "" {
+					b.WriteString(toolDimStyle.Render(fmt.Sprintf(" %s", msg.ToolArgs)))
+				}
+				b.WriteString(toolDimStyle.Render(" ..."))
+				b.WriteString("\n")
+			} else {
+				// Tool completed - show result with status
+				// Header line: emoji + name + status + duration
+				statusIcon := "✓"
+				statusStyle := toolSuccessStyle
+				if !msg.ToolSuccess {
+					statusIcon = "✗"
+					statusStyle = toolErrorStyle
+				}
+				durStr := formatToolDuration(msg.ToolDuration)
+
+				b.WriteString(fmt.Sprintf("  %s %s ", emoji, toolNameStyle.Render(name)))
+				b.WriteString(statusStyle.Render(statusIcon))
+				if durStr != "" {
+					b.WriteString(toolDimStyle.Render(fmt.Sprintf(" %s", durStr)))
+				}
+				b.WriteString("\n")
+
+				// Content: indented, dimmed, truncated
+				content := msg.Content
+				// For very long content, show a preview
+				maxContentLen := 500
+				if len(content) > maxContentLen {
+					content = content[:maxContentLen] + "..."
+					b.WriteString(toolDimStyle.Render("  │ "))
+					b.WriteString(toolContentStyle.Render(content))
+					b.WriteString("\n")
+				} else {
+					// Shorter content: show each line indented
+					lines := strings.Split(content, "\n")
+					for _, line := range lines {
+						if strings.TrimSpace(line) == "" {
+							continue
+						}
+						b.WriteString(toolDimStyle.Render("  │ "))
+						b.WriteString(toolContentStyle.Render(line))
+						b.WriteString("\n")
+					}
+				}
+			}
+			b.WriteString("\n")
 
 		case "error":
 			b.WriteString(errorStyle.Render("[Error] "))

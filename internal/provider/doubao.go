@@ -216,7 +216,7 @@ func (p *DoubaoProvider) convertMessages(messages []Message) []map[string]interf
 				toolCalls = append(toolCalls, map[string]interface{}{
 					"id":   tc.ID,
 					"type": "function",
-					"name": tc.Name, "arguments": tc.Arguments,
+					"name": tc.GetToolName(), "arguments": tc.Arguments,
 				})
 			}
 			m["tool_calls"] = toolCalls
@@ -276,8 +276,13 @@ func (p *DoubaoProvider) parseResponse(body []byte) (*ChatResponse, error) {
 			args = make(map[string]interface{})
 		}
 		toolCalls = append(toolCalls, types.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 			Arguments: args,
 		})
 	}
@@ -347,8 +352,13 @@ func (p *DoubaoProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 				}
 				handler(&StreamResponse{
 					ToolCall: &types.ToolCall{
-						ID:        tc.ID,
-						Name:      tc.Function.Name,
+						ID:   tc.ID,
+						Name: tc.Function.Name,
+						Type: "function",
+						Function: types.Function{
+							Name:      tc.Function.Name,
+							Arguments: tc.Function.Arguments,
+						},
 						Arguments: args,
 					},
 					Done: false,

@@ -62,7 +62,7 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 					"id":   tcID,
 					"type": toolCallType,
 					"function": map[string]interface{}{
-						"name":      tc.Function.Name,
+						"name":      tc.GetToolName(),
 						"arguments": tc.Function.Arguments,
 					},
 				}

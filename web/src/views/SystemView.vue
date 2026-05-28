@@ -42,6 +42,10 @@
           </n-descriptions>
         </n-card>
       </n-gi>
+
+      <n-gi :span="2">
+        <UpdateManager />
+      </n-gi>
     </n-grid>
   </div>
 </template>
@@ -50,6 +54,7 @@
 import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSystemStore } from '@/stores/system'
+import UpdateManager from '@/components/UpdateManager.vue'
 
 const { t } = useI18n()
 const systemStore = useSystemStore()

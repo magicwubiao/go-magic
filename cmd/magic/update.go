@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,14 +17,21 @@ import (
 
 // VersionInfo 版本信息
 type VersionInfo struct {
-	Tag        string `json:"tag_name"`
-	Name       string `json:"name"`
-	Body       string `json:"body"`
-	Prerelease bool   `json:"prerelease"`
+	Tag        string  `json:"tag_name"`
+	Name       string  `json:"name"`
+	Body       string  `json:"body"`
+	Prerelease bool    `json:"prerelease"`
+	Assets     []Asset `json:"assets"`
+}
+
+// Asset represents a release asset
+type Asset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
 }
 
 var (
-	updateCheckCmd    *cobra.Command
 	updateCheckFlag   bool
 	updateChannelFlag string
 	updateBackupFlag  bool
@@ -138,7 +144,14 @@ func checkForUpdates(channel string) (*VersionInfo, error) {
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "go-magic/update")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +167,51 @@ func checkForUpdates(channel string) (*VersionInfo, error) {
 	}
 
 	return &release, nil
+}
+
+// findAsset finds the matching asset for the current platform from the release assets list
+func findAsset(release *VersionInfo) *Asset {
+	if release == nil {
+		return nil
+	}
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+
+	// Build expected name patterns to match against
+	// Actual release names: go-magic-windows-amd64.exe, go-magic-linux-amd64, etc.
+	var patterns []string
+	if goos == "windows" {
+		patterns = []string{
+			fmt.Sprintf("go-magic-%s-%s.exe", goos, goarch),
+			fmt.Sprintf("magic-%s-%s.exe", goos, goarch),
+			fmt.Sprintf("%s-%s-%s.exe", goos, goarch),
+		}
+	} else {
+		patterns = []string{
+			fmt.Sprintf("go-magic-%s-%s", goos, goarch),
+			fmt.Sprintf("magic-%s-%s", goos, goarch),
+			fmt.Sprintf("%s-%s-%s", goos, goarch),
+		}
+	}
+
+	for _, asset := range release.Assets {
+		for _, pattern := range patterns {
+			if asset.Name == pattern {
+				return &asset
+			}
+		}
+	}
+
+	// Fallback: try substring match
+	expectedSub := fmt.Sprintf("%s-%s", goos, goarch)
+	for _, asset := range release.Assets {
+		if strings.Contains(asset.Name, expectedSub) {
+			return &asset
+		}
+	}
+
+	return nil
 }
 
 func performUpdate(currentVersion string, latest *VersionInfo) error {
@@ -173,57 +231,32 @@ func performUpdate(currentVersion string, latest *VersionInfo) error {
 		return performGoInstall()
 	}
 
-	// 检测系统架构
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
-
-	// 确定二进制名称
-	binaryName := "magic"
-	if goos == "windows" {
-		binaryName = "magic.exe"
+	// 从 assets 中查找匹配当前平台的文件
+	asset := findAsset(latest)
+	if asset == nil {
+		fmt.Println("  ⚠ No matching binary found in release assets")
+		fmt.Println("  Falling back to go install...")
+		return performGoInstall()
 	}
-	archiveName := fmt.Sprintf("magic-%s-%s-%s.tar.gz", latest.Tag, goos, goarch)
 
 	// 下载
 	fmt.Println()
-	fmt.Printf("  📥 Downloading %s...\n", archiveName)
-	downloadURL := fmt.Sprintf("https://github.com/magicwubiao/go-magic/releases/download/%s/%s", latest.Tag, archiveName)
-
+	fmt.Printf("  📥 Downloading %s (%s)...\n", asset.Name, formatBytes(uint64(asset.Size)))
 	tmpDir := filepath.Join(os.TempDir(), "magic-update")
 	os.MkdirAll(tmpDir, 0755)
-	archivePath := filepath.Join(tmpDir, archiveName)
+	downloadPath := filepath.Join(tmpDir, asset.Name)
 
-	if err := downloadFile(downloadURL, archivePath); err != nil {
+	if err := downloadFile(asset.BrowserDownloadURL, downloadPath); err != nil {
 		fmt.Printf("  ⚠ Download failed: %v\n", err)
 		fmt.Println("  Falling back to go install...")
 		return performGoInstall()
 	}
 
-	// 解压
-	fmt.Println("  📦 Extracting...")
-	extractDir := filepath.Join(tmpDir, "extract")
-	if err := extractTarGz(archivePath, extractDir); err != nil {
-		return fmt.Errorf("failed to extract: %w", err)
-	}
-
-	// 安装
+	// 安装（直接替换，因为 release 中的文件是裸二进制）
 	fmt.Println("  ⚙ Installing...")
 	execPath, _ := os.Executable()
-	installPath := filepath.Join(filepath.Dir(execPath), binaryName)
-	newBinary := filepath.Join(extractDir, binaryName)
 
-	if _, err := os.Stat(newBinary); err != nil {
-		// 尝试在解压目录中查找
-		files, _ := os.ReadDir(extractDir)
-		for _, f := range files {
-			if !f.IsDir() && (strings.Contains(f.Name(), "magic") || strings.HasSuffix(f.Name(), ".exe")) {
-				newBinary = filepath.Join(extractDir, f.Name())
-				break
-			}
-		}
-	}
-
-	if err := copyFile(newBinary, installPath); err != nil {
+	if err := copyFile(downloadPath, execPath); err != nil {
 		return fmt.Errorf("failed to install: %w", err)
 	}
 
@@ -244,7 +277,13 @@ func performGoInstall() error {
 }
 
 func downloadFile(url, dest string) error {
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "go-magic/update")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -273,7 +312,7 @@ func downloadFile(url, dest string) error {
 
 			if size > 0 {
 				percent := float64(downloaded) / float64(size) * 100
-				fmt.Printf("\r  Progress: %.1f%%", percent)
+				fmt.Printf("\r  Progress: %.1f%% (%s / %s)", percent, formatBytes(uint64(downloaded)), formatBytes(uint64(size)))
 			}
 		}
 		if err != nil {
@@ -284,27 +323,12 @@ func downloadFile(url, dest string) error {
 		}
 	}
 
-	fmt.Print("\r  Progress: 100.0%")
+	if size > 0 {
+		fmt.Print("\r  Progress: 100.0%")
+	} else {
+		fmt.Printf("  Downloaded: %s", formatBytes(uint64(downloaded)))
+	}
 	fmt.Println()
-	return nil
-}
-
-func extractTarGz(src, dest string) error {
-	r, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	gz, err := gzip.NewReader(r)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	// 创建目标目录
-	os.MkdirAll(dest, 0755)
-
 	return nil
 }
 
@@ -374,3 +398,5 @@ func copyFile(src, dst string) error {
 	_, err = io.Copy(dstFile, srcFile)
 	return err
 }
+
+

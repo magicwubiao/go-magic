@@ -329,9 +329,20 @@ func (p *CohereProvider) parseResponse(body []byte) (*ChatResponse, error) {
 	}
 
 	for _, tc := range resp.ToolCalls {
+		argsStr := ""
+		if tc.Parameters != nil {
+			if argsBytes, err := json.Marshal(tc.Parameters); err == nil {
+				argsStr = string(argsBytes)
+			}
+		}
 		toolCalls = append(toolCalls, types.ToolCall{
-			ID:        tc.ToolUseID,
-			Name:      tc.Name,
+			ID:   tc.ToolUseID,
+			Name: tc.Name,
+			Type: "function",
+			Function: types.Function{
+				Name:      tc.Name,
+				Arguments: argsStr,
+			},
 			Arguments: tc.Parameters,
 		})
 	}
@@ -381,10 +392,21 @@ func (p *CohereProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 
 		case "tool-calls":
 			for _, tc := range chunk.ToolCalls {
+				argsStr := ""
+				if tc.Parameters != nil {
+					if argsBytes, err := json.Marshal(tc.Parameters); err == nil {
+						argsStr = string(argsBytes)
+					}
+				}
 				handler(&StreamResponse{
 					ToolCall: &types.ToolCall{
-						ID:        tc.ToolUseID,
-						Name:      tc.Name,
+						ID:   tc.ToolUseID,
+						Name: tc.Name,
+						Type: "function",
+						Function: types.Function{
+							Name:      tc.Name,
+							Arguments: argsStr,
+						},
 						Arguments: tc.Parameters,
 					},
 					Done: false,

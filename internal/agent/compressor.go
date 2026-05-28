@@ -258,7 +258,7 @@ func (ic *IntelligentCompressor) generateSummary(messages []provider.Message) st
 		// Track unique tool names from content patterns
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				uniqueTools[tc.Name] = true
+				uniqueTools[tc.GetToolName()] = true
 			}
 		}
 	}

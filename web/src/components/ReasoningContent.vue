@@ -1,6 +1,6 @@
 <template>
   <div class="reasoning-wrapper">
-    <!-- 思考过程部分 - 可折叠 -->
+    <!-- 思考过程部分 - 仅在有明确 <think> 标签时显示 -->
     <div v-if="reasoningPart" class="reasoning-section">
       <div class="reasoning-header" @click="toggleExpand">
         <n-icon size="16">
@@ -8,31 +8,14 @@
           <ChevronDown v-else />
         </n-icon>
         <span class="reasoning-title">💭 {{ t('chat.thinking') }}</span>
-        <n-tag v-if="steps.length > 0" size="tiny" type="info">{{ steps.length }} {{ t('chat.steps') }}</n-tag>
       </div>
       <n-collapse-transition :show="expanded">
-        <div class="reasoning-content">
-          <div v-for="(step, index) in steps" :key="index" class="reasoning-step">
-            <div class="step-number">{{ index + 1 }}</div>
-            <div class="step-content" v-html="renderMarkdown(step)"></div>
-          </div>
-          <div v-if="steps.length === 0" class="reasoning-text" v-html="renderMarkdown(reasoningPart)"></div>
-        </div>
+        <div class="reasoning-content" v-html="renderMarkdown(reasoningPart)"></div>
       </n-collapse-transition>
     </div>
-    
-    <!-- 分割线 -->
-    <div v-if="reasoningPart && finalPart" class="reasoning-divider">
-      <span class="divider-line"></span>
-      <span class="divider-text">✨ {{ t('chat.conclusion') }}</span>
-      <span class="divider-line"></span>
-    </div>
-    
-    <!-- 最终结论部分 -->
+
+    <!-- 最终内容 -->
     <div v-if="finalPart" class="final-content" v-html="renderMarkdown(finalPart)"></div>
-    
-    <!-- 没有思考过程的普通内容 -->
-    <div v-if="!reasoningPart && !finalPart" v-html="renderMarkdown(content)"></div>
   </div>
 </template>
 
@@ -50,74 +33,61 @@ const props = defineProps<{
 const { t } = useI18n()
 const expanded = ref(false)
 
-// 解析思考过程和最终结论
+// Only split thinking/reasoning when there are explicit markers.
+// <think>...</think> tags or specific headings like "### 思考过程".
+// Everything else is rendered as normal content — no false positives.
 const parsedContent = computed(() => {
   const content = props.content
-  
-  // 尝试匹配 <think>...</think> 或 <reasoning>...</reasoning> 标签
-  const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/i)
-  if (thinkMatch) {
-    const reasoning = thinkMatch[1].trim()
-    const final = content.replace(/<think>[\s\S]*?<\/think>/i, '').trim()
-    return { reasoning, final }
-  }
-  
-  // 尝试匹配 ### 思考过程 / ### Thinking 等标题
-  const reasoningMatch = content.match(/(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)[\s\S]*?(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i)
-  if (reasoningMatch) {
-    const reasoning = reasoningMatch[0].trim()
-    const final = content.replace(reasoningMatch[0], '').replace(/\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)\s*\n?/i, '').trim()
-    return { reasoning, final }
-  }
-  
-  // 尝试按特定分隔符分割（如 "---" 或 "===")
-  const separatorMatch = content.match(/([\s\S]*?)(?:\n-{3,}|={3,}|\n#{3,}\n)([\s\S]*)/)
-  if (separatorMatch && separatorMatch[1].length > 50 && separatorMatch[2].length > 20) {
-    return { 
-      reasoning: separatorMatch[1].trim(), 
-      final: separatorMatch[2].trim() 
+
+  // 1. <think>...</think> tags (DeepSeek, QwQ, etc.)
+  const thinkOpen = '<think>'
+  const thinkClose = '</think>'
+  const openIdx = content.toLowerCase().indexOf(thinkOpen)
+  if (openIdx !== -1) {
+    const closeIdx = content.toLowerCase().indexOf(thinkClose, openIdx + thinkOpen.length)
+    if (closeIdx !== -1) {
+      const reasoning = content.substring(openIdx + thinkOpen.length, closeIdx).trim()
+      const before = content.substring(0, openIdx).trim()
+      const after = content.substring(closeIdx + thinkClose.length).trim()
+      const final = (before + '\n' + after).trim()
+      return { reasoning, final }
     }
   }
-  
-  // 默认：没有明显的思考过程标记
+
+  // 2. Explicit headings: "### 思考过程" / "### Thinking" etc.
+  const headingRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)\s*\n([\s\S]*?)(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
+  const headingMatch = content.match(headingRe)
+  if (headingMatch) {
+    const fullRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)[\s\S]*?(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
+    const fullMatch = content.match(fullRe)
+    if (fullMatch) {
+      const reasoning = headingMatch[1].trim()
+      const final = content.replace(fullMatch[0], '').replace(/\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)\s*\n?/i, '').trim()
+      if (reasoning) {
+        return { reasoning, final }
+      }
+    }
+  }
+
+  // Default: no thinking markers found, render everything as normal content
   return { reasoning: '', final: content }
 })
 
 const reasoningPart = computed(() => parsedContent.value.reasoning)
 const finalPart = computed(() => parsedContent.value.final)
 
-// 解析思考步骤
-const steps = computed(() => {
-  if (!reasoningPart.value) return []
-  
-  // 尝试按步骤分割（Step 1, Step 2... 或 1., 2., 或 - 等）
-  const stepPatterns = [
-    /(?:^|\n)(?:Step|步骤)\s*\d+[.:\s]/gi,
-    /(?:^|\n)\d+[.:\s]\s+/g,
-    /(?:^|\n)[-\*]\s+/g
-  ]
-  
-  for (const pattern of stepPatterns) {
-    const matches = reasoningPart.value.split(pattern).filter(s => s.trim())
-    if (matches.length >= 2) {
-      return matches.map(s => s.trim()).filter(s => s.length > 5)
-    }
-  }
-  
-  return []
-})
-
 function toggleExpand() {
   expanded.value = !expanded.value
 }
 
-// Markdown 渲染
+// Markdown rendering with syntax highlighting
 const codeRenderer = (code: string, lang?: string): string => {
   const language = lang && hljs.getLanguage(lang) ? lang : null
   const highlighted = language
     ? hljs.highlight(code, { language }).value
     : hljs.highlightAuto(code).value
-  return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`
+  const copyBtn = `<button class="code-copy-btn" onclick="(function(btn){var code=btn.parentElement.querySelector('code');navigator.clipboard.writeText(code.textContent);btn.textContent='✓';setTimeout(()=>btn.textContent='Copy',2000)})(this)">Copy</button>`
+  return `<div class="code-block">${copyBtn}<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`
 }
 
 marked.use({ renderer: { code: codeRenderer } })
@@ -133,8 +103,8 @@ function renderMarkdown(content: string): string {
 }
 
 .reasoning-section {
-  margin-bottom: 12px;
-  border: 1px solid #e0e0e0;
+  margin-bottom: 10px;
+  border: 1px solid #e8e8e8;
   border-radius: 8px;
   background: #fafafa;
   overflow: hidden;
@@ -144,18 +114,20 @@ function renderMarkdown(content: string): string {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   cursor: pointer;
-  background: #f0f0f0;
-  transition: background 0.2s;
+  background: #f5f5f5;
+  transition: background 0.15s;
+  font-size: 13px;
 }
 
 .reasoning-header:hover {
-  background: #e8e8e8;
+  background: #eeeeee;
 }
 
 .reasoning-title {
   font-weight: 500;
+  color: #888;
   flex: 1;
 }
 
@@ -163,64 +135,17 @@ function renderMarkdown(content: string): string {
   padding: 12px;
   max-height: 400px;
   overflow-y: auto;
-}
-
-.reasoning-step {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 8px;
-  background: white;
-  border-radius: 6px;
-  border-left: 3px solid #18a058;
-}
-
-.step-number {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #18a058;
-  color: white;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: bold;
-  flex-shrink: 0;
-}
-
-.step-content {
-  flex: 1;
-  font-size: 14px;
-}
-
-.step-content :deep(p) {
-  margin: 0;
-}
-
-.reasoning-text {
   font-size: 14px;
   color: #666;
+  line-height: 1.6;
 }
 
-.reasoning-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 16px 0;
-  padding: 8px 0;
+.reasoning-content :deep(p) {
+  margin: 0 0 8px 0;
 }
 
-.divider-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(to right, transparent, #d0d0d0, transparent);
-}
-
-.divider-text {
-  font-size: 13px;
-  color: #888;
-  white-space: nowrap;
+.reasoning-content :deep(p:last-child) {
+  margin-bottom: 0;
 }
 
 .final-content {
@@ -232,27 +157,139 @@ function renderMarkdown(content: string): string {
   margin-top: 0;
 }
 
-/* 深色模式适配 */
+.final-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+/* Code blocks */
+.final-content :deep(.code-block),
+.reasoning-content :deep(.code-block) {
+  position: relative;
+  margin: 8px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.final-content :deep(.code-block pre),
+.reasoning-content :deep(.code-block pre) {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+
+.final-content :deep(.code-block code),
+.reasoning-content :deep(.code-block code) {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  color: #d4d4d4;
+}
+
+.final-content :deep(.code-copy-btn),
+.reasoning-content :deep(.code-copy-btn) {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ccc;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.final-content :deep(.code-block:hover .code-copy-btn),
+.reasoning-content :deep(.code-block:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+/* Tables */
+.final-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.final-content :deep(th),
+.final-content :deep(td) {
+  border: 1px solid #e0e0e0;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.final-content :deep(th) {
+  background: #f0f0f0;
+  font-weight: 600;
+}
+
+/* Lists */
+.final-content :deep(ul),
+.final-content :deep(ol) {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.final-content :deep(li) {
+  margin: 4px 0;
+}
+
+/* Blockquote */
+.final-content :deep(blockquote) {
+  border-left: 3px solid #d0d0d0;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #666;
+}
+
+/* Links */
+.final-content :deep(a) {
+  color: #18a058;
+  text-decoration: none;
+}
+
+.final-content :deep(a:hover) {
+  text-decoration: underline;
+}
+
+/* Dark mode */
 @media (prefers-color-scheme: dark) {
   .reasoning-section {
-    background: #2a2a2a;
+    background: #222;
     border-color: #444;
   }
-  
+
   .reasoning-header {
+    background: #2a2a2a;
+  }
+
+  .reasoning-header:hover {
     background: #333;
   }
-  
-  .reasoning-header:hover {
-    background: #3a3a3a;
+
+  .reasoning-title {
+    color: #999;
   }
-  
-  .reasoning-step {
-    background: #1a1a1a;
+
+  .reasoning-content {
+    color: #aaa;
   }
-  
-  .divider-line {
-    background: linear-gradient(to right, transparent, #555, transparent);
+
+  .final-content :deep(th) {
+    background: #252525;
+  }
+
+  .final-content :deep(th),
+  .final-content :deep(td) {
+    border-color: #333;
+  }
+
+  .final-content :deep(blockquote) {
+    border-left-color: #444;
+    color: #999;
   }
 }
 </style>

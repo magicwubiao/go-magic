@@ -127,6 +127,8 @@ type Server struct {
 	skillMgr     *skills.Manager
 	magicHome    string
 	version      string
+	commit       string
+	buildDate    string
 
 	// Active chat agents per session (lazy init)
 	agents   map[string]*agent.Agent
@@ -300,6 +302,8 @@ func NewServer(dbPath string) *Server {
 		skillMgr:         skillMgr,
 		magicHome:        magicHome,
 		version:          version,
+		commit:           "unknown",
+		buildDate:        "unknown",
 		agents:           make(map[string]*agent.Agent),
 		disabledSkills:   disabledSkills,
 		cronMgr:          cronMgr,
@@ -535,7 +539,7 @@ func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string
 					"id":   tc.ID,
 					"type": "function",
 					"function": map[string]interface{}{
-						"name":      tc.Function.Name,
+						"name":      tc.GetToolName(),
 						"arguments": tc.Function.Arguments,
 					},
 				}
@@ -698,6 +702,8 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/system/info", withCORS(requireAuth(s.handleSystemInfo)))
 	mux.HandleFunc("/api/system/stats", withCORS(requireAuth(s.handleSystemStats)))
 	mux.HandleFunc("/api/system/health", withCORS(requireAuth(s.handleSystemHealth)))
+	mux.HandleFunc("/api/system/version", withCORS(requireAuth(s.handleSystemVersion)))
+	mux.HandleFunc("/api/system/version/check", withCORS(requireAuth(s.handleVersionCheck)))
 
 	// Logs
 	mux.HandleFunc("/api/logs", withCORS(requireAuth(s.handleLogs)))
@@ -1265,19 +1271,72 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		if done {
 			return
 		}
-		if chunk != "" {
-			// Skip tool result markers for clean output
-			if strings.Contains(chunk, ">>>TOOL_RESULT_START|") || strings.Contains(chunk, ">>>TOOL_RESULT_END<<<") {
-				return
-			}
-			if strings.Contains(chunk, ">>>TURN_START<<<") {
-				return
-			}
-			fullResponse.WriteString(chunk)
-			data, _ := json.Marshal(map[string]string{"delta": chunk})
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+		if chunk == "" {
+			return
 		}
+
+		// Parse tool markers and emit structured events for web frontend
+		// >>>TOOL_START|toolName|args<<<
+		if strings.Contains(chunk, ">>>TOOL_START|") {
+			re := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
+			m := re.FindStringSubmatch(chunk)
+			if m != nil {
+				toolName := m[1]
+				toolArgs := m[2]
+				if len(toolArgs) > 200 {
+					toolArgs = toolArgs[:200] + "..."
+				}
+				eventData, _ := json.Marshal(map[string]interface{}{
+					"type":  "tool_start",
+					"name":  toolName,
+					"args":  toolArgs,
+				})
+				fmt.Fprintf(w, "data: %s\n\n", string(eventData))
+				flusher.Flush()
+			}
+			return
+		}
+
+		// >>>TOOL_RESULT_START|toolName|success|duration<<<content>>>TOOL_RESULT_END<<<
+		if strings.Contains(chunk, ">>>TOOL_RESULT_START|") {
+			re := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^<]+)<<<`)
+			endRe := regexp.MustCompile(`>>>TOOL_RESULT_END<<<`)
+			startMatch := re.FindStringSubmatchIndex(chunk)
+			endMatch := endRe.FindStringIndex(chunk)
+			if startMatch != nil && endMatch != nil {
+				submatch := re.FindStringSubmatch(chunk[startMatch[0]:startMatch[1]])
+				if len(submatch) >= 4 {
+					toolName := submatch[1]
+					toolSuccess := submatch[2] == "true"
+					toolDuration := submatch[3]
+					toolContent := chunk[startMatch[1]:endMatch[0]]
+					// Truncate tool content for display
+					if len(toolContent) > 500 {
+						toolContent = toolContent[:500] + "..."
+					}
+					eventData, _ := json.Marshal(map[string]interface{}{
+						"type":    "tool_result",
+						"name":    toolName,
+						"success": toolSuccess,
+						"duration": toolDuration,
+						"content": strings.TrimSpace(toolContent),
+					})
+					fmt.Fprintf(w, "data: %s\n\n", string(eventData))
+					flusher.Flush()
+				}
+			}
+			return
+		}
+
+		// Skip other internal markers
+		if strings.Contains(chunk, ">>>TURN_START<<<") {
+			return
+		}
+
+		fullResponse.WriteString(chunk)
+		data, _ := json.Marshal(map[string]string{"delta": chunk})
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
 	})
 
 	if streamErr != nil {
@@ -3769,6 +3828,161 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		"memory_usage": memStats.Alloc,
 		"goroutines":   runtime.NumGoroutine(),
 	})
+}
+
+func (s *Server) handleSystemVersion(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"version":   s.version,
+		"commit":    s.commit,
+		"build_date": s.buildDate,
+		"platform":  runtime.GOOS,
+		"arch":      runtime.GOARCH,
+	})
+}
+
+func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	owner := "magicwubiao"
+	repo := "go-magic"
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "go-magic/"+s.version)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "failed to check for updates: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "github api error", resp.StatusCode)
+		return
+	}
+
+	var release struct {
+		TagName     string    `json:"tag_name"`
+		Name        string    `json:"name"`
+		Body        string    `json:"body"`
+		Prerelease  bool      `json:"prerelease"`
+		PublishedAt time.Time `json:"published_at"`
+		HTMLURL     string    `json:"html_url"`
+		Assets      []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
+		} `json:"assets"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		http.Error(w, "failed to parse response", http.StatusInternalServerError)
+		return
+	}
+
+	// Compare versions
+	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	currentVersion := strings.TrimPrefix(s.version, "v")
+	hasUpdate := compareVersions(latestVersion, currentVersion) > 0
+
+	// Find appropriate asset for current platform
+	var downloadURL string
+	var assetSize int64
+	platform := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// Match actual release asset names: go-magic-windows-amd64.exe, go-magic-linux-amd64, etc.
+	var patterns []string
+	if platform == "windows" {
+		patterns = []string{
+			fmt.Sprintf("go-magic-%s-%s.exe", platform, arch),
+			fmt.Sprintf("magic-%s-%s.exe", platform, arch),
+		}
+	} else {
+		patterns = []string{
+			fmt.Sprintf("go-magic-%s-%s", platform, arch),
+			fmt.Sprintf("magic-%s-%s", platform, arch),
+		}
+	}
+
+	for _, asset := range release.Assets {
+		for _, pattern := range patterns {
+			if asset.Name == pattern {
+				downloadURL = asset.BrowserDownloadURL
+				assetSize = asset.Size
+				break
+			}
+		}
+		if downloadURL != "" {
+			break
+		}
+	}
+
+	// Fallback: substring match
+	if downloadURL == "" {
+		expectedSub := fmt.Sprintf("%s-%s", platform, arch)
+		for _, asset := range release.Assets {
+			if strings.Contains(asset.Name, expectedSub) {
+				downloadURL = asset.BrowserDownloadURL
+				assetSize = asset.Size
+				break
+			}
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"current_version": currentVersion,
+		"latest_version":  latestVersion,
+		"has_update":      hasUpdate,
+		"release_name":    release.Name,
+		"release_notes":   release.Body,
+		"published_at":    release.PublishedAt,
+		"html_url":        release.HTMLURL,
+		"download_url":    downloadURL,
+		"asset_size":      assetSize,
+		"prerelease":      release.Prerelease,
+	})
+}
+
+// compareVersions compares two semantic version strings.
+// Returns > 0 if v1 > v2, < 0 if v1 < v2, 0 if equal.
+func compareVersions(v1, v2 string) int {
+	// Handle "dev" or empty versions
+	if v1 == "dev" || v1 == "" {
+		return -1
+	}
+	if v2 == "dev" || v2 == "" {
+		return 1
+	}
+
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	for i := 0; i < len(parts1) && i < len(parts2); i++ {
+		n1, _ := strconv.Atoi(parts1[i])
+		n2, _ := strconv.Atoi(parts2[i])
+		if n1 > n2 {
+			return 1
+		}
+		if n1 < n2 {
+			return -1
+		}
+	}
+
+	if len(parts1) > len(parts2) {
+		return 1
+	}
+	if len(parts1) < len(parts2) {
+		return -1
+	}
+	return 0
 }
 
 func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
