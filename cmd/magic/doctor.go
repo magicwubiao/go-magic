@@ -1,15 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
-	"path/filepath"
 )
 
 // doctorCmd represents the doctor command
@@ -77,7 +77,7 @@ func runDoctorAll(cmd *cobra.Command, args []string) error {
 	fmt.Println("========================================")
 	fmt.Println("       go-magic Diagnostic Report")
 	fmt.Println("========================================")
-	fmt.Printf("Date: %s\n", strings.TrimSpace(runCommand("date")))
+	fmt.Printf("Date: %s\n", getCurrentTime())
 	fmt.Printf("OS: %s\n", runtime.GOOS)
 	fmt.Printf("Arch: %s\n", runtime.GOARCH)
 	fmt.Println("========================================")
@@ -130,9 +130,20 @@ func runDoctorAll(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func getCurrentTime() string {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "echo %date% %time%")
+		output, _ := cmd.CombinedOutput()
+		return strings.TrimSpace(string(output))
+	}
+	cmd := exec.Command("date")
+	output, _ := cmd.CombinedOutput()
+	return strings.TrimSpace(string(output))
+}
+
 func runConfigCheck() error {
 	home, _ := os.UserHomeDir()
-	configPath := home + "/.go-magic/config.yaml"
+	configPath := filepath.Join(home, ".magic", "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -140,51 +151,49 @@ func runConfigCheck() error {
 	}
 
 	var cfg map[string]interface{}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("invalid YAML: %v", err)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("invalid JSON: %v", err)
 	}
 
-	if provider, ok := cfg["provider"].(map[string]interface{}); ok {
-		if name, ok := provider["name"].(string); ok {
-			fmt.Printf("   Provider: %s\n", name)
-		}
-		if model, ok := provider["model"].(string); ok {
-			fmt.Printf("   Model: %s\n", model)
-		}
+	// Display provider info
+	if provider, ok := cfg["provider"].(string); ok && provider != "" {
+		fmt.Printf("   Provider: %s\n", provider)
+	}
+	if model, ok := cfg["model"].(string); ok && model != "" {
+		fmt.Printf("   Model: %s\n", model)
 	}
 
-	fmt.Printf("   Config dir: %s/.go-magic\n", home)
+	fmt.Printf("   Config: %s\n", configPath)
 	return nil
 }
 
 func runProviderCheck() error {
 	home, _ := os.UserHomeDir()
-	configPath := home + "/.go-magic/config.yaml"
+	configPath := filepath.Join(home, ".magic", "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return fmt.Errorf("no config found")
+		return fmt.Errorf("no config found at %s", configPath)
 	}
 
 	var cfg map[string]interface{}
-	yaml.Unmarshal(data, &cfg)
+	json.Unmarshal(data, &cfg)
 
-	provider, _ := cfg["provider"].(map[string]interface{})
-	providerName, _ := provider["name"].(string)
+	providerName, _ := cfg["provider"].(string)
 
 	if providerName == "" {
-		return fmt.Errorf("no provider configured (run 'magic model' first)")
+		return fmt.Errorf("no provider configured (run 'magic setup' or 'magic model' first)")
 	}
 
 	fmt.Printf("   Provider: %s\n", providerName)
-	fmt.Printf("   (Connectivity test requires API key)\n")
+	fmt.Printf("   (Connectivity test requires valid API key)\n")
 	return nil
 }
 
 func runToolsCheck() error {
 	// Check if tools are registered
 	home, _ := os.UserHomeDir()
-	skillsDir := home + "/.go-magic/skills"
+	skillsDir := filepath.Join(home, ".magic", "skills")
 
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		fmt.Printf("   Skills dir: NOT FOUND\n")
@@ -194,7 +203,7 @@ func runToolsCheck() error {
 
 	// Check common tool directories
 	toolDirs := []string{
-		home + "/.go-magic/plugins",
+		filepath.Join(home, ".magic", "plugins"),
 	}
 
 	for _, dir := range toolDirs {
@@ -207,7 +216,12 @@ func runToolsCheck() error {
 }
 
 func runGatewayCheck() error {
-	cmd := exec.Command("pgrep", "-f", "magic.*gateway")
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("tasklist", "/FI", "IMAGENAME eq magic.exe")
+	} else {
+		cmd = exec.Command("pgrep", "-f", "magic.*gateway")
+	}
 	if err := cmd.Run(); err == nil {
 		fmt.Println("   Gateway: RUNNING")
 	} else {
@@ -219,7 +233,7 @@ func runGatewayCheck() error {
 
 func runSkillsCheck() error {
 	home, _ := os.UserHomeDir()
-	skillsDir := home + "/.go-magic/skills"
+	skillsDir := filepath.Join(home, ".magic", "skills")
 
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		fmt.Println("   Skills directory: NOT FOUND")
@@ -242,10 +256,4 @@ func runSkillsCheck() error {
 
 	fmt.Printf("   Skill files: %d\n", count)
 	return nil
-}
-
-func runCommand(name string) string {
-	cmd := exec.Command("sh", "-c", name)
-	output, _ := cmd.CombinedOutput()
-	return string(output)
 }

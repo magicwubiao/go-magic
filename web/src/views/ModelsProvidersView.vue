@@ -18,42 +18,30 @@
           size="small"
         />
 
-        <!-- Add Modal -->
-        <n-modal v-model:show="showModal" :title="t('models.addProvider')" preset="dialog" style="width: 600px;">
-          <n-form label-placement="left" label-width="140">
-            <n-form-item :label="t('models.providerName')" required>
-              <n-select 
-                v-model:value="form.name" 
-                :options="providerOptions"
-                :placeholder="t('models.selectProvider')"
-                filterable
-              />
+        <!-- Add/Edit Modal -->
+        <n-modal v-model:show="showModal" :title="editingId ? t('models.editProvider') : t('models.addProvider')" preset="dialog">
+          <n-form label-placement="left" label-width="120">
+            <n-form-item :label="t('models.providerName')">
+              <n-input v-model:value="form.name" :placeholder="t('models.providerName')" />
+            </n-form-item>
+            <n-form-item :label="t('models.providerType')">
+              <n-select v-model:value="form.type" :options="typeOptions" />
             </n-form-item>
             <n-form-item :label="t('models.apiKey')">
-              <n-input 
-                v-model:value="form.api_key" 
-                type="password" 
-                show-password-on="click" 
-                :placeholder="t('models.apiKeyPlaceholder')" 
-              />
+              <n-input v-model:value="form.api_key" type="password" show-password-on="click" :placeholder="t('models.apiKey')" />
             </n-form-item>
             <n-form-item :label="t('models.baseUrl')">
-              <n-input 
-                v-model:value="form.base_url" 
-                :placeholder="t('models.baseUrlPlaceholder')" 
-              />
+              <n-input v-model:value="form.base_url" :placeholder="t('config.serverUrl')" />
             </n-form-item>
             <n-form-item :label="t('models.model')">
-              <n-input 
-                v-model:value="form.model" 
-                :placeholder="t('models.modelPlaceholder')" 
-              />
+              <n-input v-model:value="form.model" :placeholder="t('models.model')" />
             </n-form-item>
           </n-form>
           <template #action>
             <n-space justify="end">
+              <n-button v-if="editingId" type="error" @click="deleteProvider">{{ t('common.delete') }}</n-button>
               <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-              <n-button type="primary" @click="saveProvider" :loading="saving">{{ t('common.save') }}</n-button>
+              <n-button type="primary" @click="saveProvider">{{ t('common.save') }}</n-button>
             </n-space>
           </template>
         </n-modal>
@@ -86,150 +74,113 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, h, onMounted, computed } from 'vue'
-import { useMessage, NButton, NTag, NSwitch } from 'naive-ui'
+import { ref, reactive, h, onMounted } from 'vue'
+import { useMessage, NButton, NTag, NPopconfirm } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useProvidersStore } from '@/stores/providers'
 import { useModelsStore } from '@/stores/models'
+import { useConfigStore } from '@/stores/config'
 import type { Provider } from '@/api/providers'
 
 const { t } = useI18n()
 const message = useMessage()
 const providersStore = useProvidersStore()
 const modelsStore = useModelsStore()
+const configStore = useConfigStore()
 
 const showModal = ref(false)
-const saving = ref(false)
-const isEditing = ref(false)
+const editingId = ref<string | null>(null)
 
 const form = reactive({
   name: '',
+  type: 'openai',
   api_key: '',
   base_url: '',
   model: '',
+  enabled: true,
 })
 
-// Provider name -> display label mapping
-const providerLabels: Record<string, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic (Claude)',
-  deepseek: 'DeepSeek',
-  gemini: 'Google (Gemini)',
-  kimi: 'Kimi (Moonshot)',
-  doubao: 'Doubao (Volcano)',
-  zhipu: '智谱 GLM',
-  dashscope: '通义千问',
-  minimax: 'MiniMax',
-  wenxin: '文心一言',
-  hunyuan: '腾讯混元',
-  moonshot: 'Moonshot',
-  mimo: 'MiMo',
-  openrouter: 'OpenRouter',
-  groq: 'Groq',
-  mistral: 'Mistral',
-  cohere: 'Cohere',
-  perplexity: 'Perplexity',
-  together: 'Together AI',
-  ollama: 'Ollama (Local)',
-  vllm: 'vLLM (Local)',
-  custom: 'Custom (OpenAI Compatible)',
-}
-
-const providerOptions = computed(() => 
-  Object.entries(providerLabels).map(([value, label]) => ({
-    label,
-    value,
-  }))
-)
+const typeOptions = [
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'Anthropic (Claude)', value: 'anthropic' },
+  { label: 'DeepSeek', value: 'deepseek' },
+  { label: 'Google (Gemini)', value: 'gemini' },
+  { label: 'Kimi (Moonshot)', value: 'kimi' },
+  { label: 'Doubao (Volcano/ByteDance)', value: 'doubao' },
+  { label: t('models.zhipu'), value: 'zhipu' },
+  { label: t('models.dashscope'), value: 'dashscope' },
+  { label: 'MiniMax', value: 'minimax' },
+  { label: t('models.wenxin'), value: 'wenxin' },
+  { label: t('models.hunyuan'), value: 'hunyuan' },
+  { label: 'Moonshot', value: 'moonshot' },
+  { label: 'MiMo', value: 'mimo' },
+  { label: 'OpenRouter', value: 'openrouter' },
+  { label: 'Groq', value: 'groq' },
+  { label: 'Mistral', value: 'mistral' },
+  { label: 'Cohere', value: 'cohere' },
+  { label: 'Perplexity', value: 'perplexity' },
+  { label: 'Together AI', value: 'together' },
+  { label: 'Ollama (Local)', value: 'ollama' },
+  { label: 'vLLM (Local)', value: 'vllm' },
+  { label: 'Custom (OpenAI Compatible)', value: 'custom' },
+]
 
 const providerColumns = [
-  { title: t('common.name'), key: 'name', width: 180,
-    render: (row: Provider) => getProviderLabel(row.name || row.id) || (row.name || row.id)
-  },
-  { 
-    title: 'Base URL', 
-    key: 'base_url', 
-    ellipsis: { tooltip: true },
-    render: (row: Provider) => row.base_url || '-',
-  },
-  { 
-    title: t('models.model'), 
-    key: 'model',
-    render: (row: Provider) => row.model || '-',
-  },
-  { 
-    title: 'API Key', 
+  { title: t('common.name'), key: 'name' },
+  { title: t('models.providerType'), key: 'type' },
+  { title: t('models.model'), key: 'model' },
+  {
+    title: t('models.apiKey'),
     key: 'api_key',
-    width: 100,
     render: (row: Provider) => h(NTag, { size: 'small', type: row.api_key ? 'success' : 'default' }, () => row.api_key ? t('models.set') : t('models.notSet')),
   },
   {
     title: t('common.actions'),
-    key: 'action',
-    width: 160,
-    render: (row: Provider) => h('div', { class: 'action-buttons' }, [
-      h(NButton, {
-        size: 'small',
-        onClick: () => openEditModal(row),
-      }, () => t('common.edit')),
-      h(NButton, {
-        size: 'small',
-        type: 'error',
-        style: { marginLeft: '8px' },
-        onClick: () => deleteProvider(row),
-      }, () => t('common.delete')),
+    key: 'actions',
+    render: (row: Provider) => h('div', { style: 'display: flex; gap: 4px;' }, [
+      h(NButton, { size: 'tiny', onClick: () => editProvider(row) }, () => t('common.edit')),
+      h(NPopconfirm, { onPositiveClick: () => deleteProviderById(row.id) }, {
+        trigger: () => h(NButton, { size: 'tiny', type: 'error' }, () => t('common.delete')),
+        default: () => t('models.deleteConfirm'),
+      }),
     ]),
   },
 ]
 
 const modelColumns = [
-  { title: t('models.model'), key: 'name', width: 200 },
-  { title: t('models.provider'), key: 'provider', width: 150 },
+  { title: t('common.name'), key: 'name' },
+  { title: t('models.provider'), key: 'provider' },
   {
     title: t('common.actions'),
     key: 'action',
-    width: 120,
     render: (row: any) => h(NButton, {
-      size: 'small',
+      size: 'tiny',
       type: modelsStore.currentModel?.id === row.id ? 'primary' : 'default',
+      disabled: modelsStore.currentModel?.id === row.id,
       onClick: () => selectModel(row),
     }, () => modelsStore.currentModel?.id === row.id ? t('models.active') : t('models.select')),
   },
 ]
 
-function getProviderLabel(name: string): string {
-  return providerLabels[name] || name
-}
-
 function openAddModal() {
-  isEditing.value = false
+  editingId.value = null
   form.name = ''
+  form.type = 'openai'
   form.api_key = ''
   form.base_url = ''
   form.model = ''
   showModal.value = true
 }
 
-function openEditModal(provider: Provider) {
-  isEditing.value = true
-  form.name = provider.name || provider.id || ''
+function editProvider(provider: Provider) {
+  editingId.value = provider.id
+  form.name = provider.name
+  form.type = provider.type || 'openai'
   form.api_key = provider.api_key || ''
   form.base_url = provider.base_url || ''
   form.model = provider.model || ''
+  form.enabled = provider.enabled ?? true
   showModal.value = true
-}
-
-async function deleteProvider(provider: Provider) {
-  const name = provider.name || provider.id || ''
-  if (!confirm(t('models.confirmDelete') + '?')) return
-  
-  try {
-    await providersStore.deleteProvider(name)
-    message.success(t('models.deleted'))
-    await providersStore.loadProviders()
-  } catch (e) {
-    message.error(t('models.failedToDelete') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  }
 }
 
 async function saveProvider() {
@@ -238,37 +189,55 @@ async function saveProvider() {
     return
   }
 
-  saving.value = true
   try {
-    const payload = {
-      name: form.name,
-      api_key: form.api_key,
-      base_url: form.base_url,
-      model: form.model,
+    if (editingId.value) {
+      await providersStore.updateProvider(editingId.value, { ...form })
+    } else {
+      await providersStore.createProvider({ ...form })
     }
 
-    if (isEditing.value) {
-      await providersStore.updateProvider(form.name, payload)
-      message.success(t('models.updated'))
-    } else {
-      await providersStore.createProvider(payload)
-      message.success(t('models.added'))
+    // Also update config for api_key
+    if (form.api_key) {
+      await configStore.updateConfig({
+        provider_config: {
+          [form.type]: {
+            api_key: form.api_key,
+            base_url: form.base_url,
+            model: form.model,
+          },
+        },
+      })
     }
 
     showModal.value = false
     await providersStore.loadProviders()
+    message.success(t('models.saved'))
   } catch (e) {
     message.error(t('models.failedToSave') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  } finally {
-    saving.value = false
   }
 }
 
+async function deleteProvider() {
+  if (!editingId.value) return
+  await providersStore.deleteProvider(editingId.value)
+  showModal.value = false
+  await providersStore.loadProviders()
+  message.success(t('models.deleted'))
+}
+
+async function deleteProviderById(id: string) {
+  await providersStore.deleteProvider(id)
+  await providersStore.loadProviders()
+  message.success(t('models.deleted'))
+}
+
 async function selectModel(row: any) {
+  // Use row.id directly which is "provider/model" format
+  const modelId = row.id || `${row.provider}/${row.name}`
+
   try {
-    await modelsStore.setModel(row.id)
-    message.success(t('models.modelSet') + ': ' + row.name)
-    await modelsStore.loadCurrentModel()
+    await modelsStore.setModel(modelId)
+    message.success(`Model set to ${row.name} (${row.provider})`)
   } catch (e) {
     message.error(t('models.failedToSet') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }

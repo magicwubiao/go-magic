@@ -26,7 +26,7 @@
         <n-card :title="t('system.systemStatus')">
           <n-descriptions :column="1">
             <n-descriptions-item :label="t('system.health')">
-              <n-tag :type="systemStore.health?.status === 'ok' ? 'success' : 'error'">
+              <n-tag :type="systemStore.health?.status === 'healthy' ? 'success' : 'error'">
                 {{ systemStore.health?.status || 'unknown' }}
               </n-tag>
             </n-descriptions-item>

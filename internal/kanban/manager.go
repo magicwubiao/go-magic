@@ -462,6 +462,116 @@ Only respond with the JSON, no additional text.`, task.Title, task.Body)
 	return updatedTask, nil
 }
 
+// SplitTask uses LLM to split a task into subtasks
+func (m *Manager) SplitTask(ctx context.Context, id string, prov provider.Provider) ([]*Task, error) {
+	task, err := m.db.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+
+	prompt := fmt.Sprintf(`You are a task planning assistant. Please analyze the following task and break it down into 3-5 smaller, actionable subtasks.
+
+Parent Task:
+Title: %s
+Description: %s
+
+For each subtask, provide:
+1. A clear, specific title
+2. A brief description of what needs to be done
+3. Estimated hours (realistic estimate)
+4. Priority (0=low, 1=medium, 2=high, 3=critical)
+
+Respond in JSON format:
+{
+  "subtasks": [
+    {
+      "title": "subtask title",
+      "description": "subtask description",
+      "estimated_hours": 2.5,
+      "priority": 1
+    }
+  ]
+}
+
+Only respond with the JSON, no additional text.`, task.Title, task.Body)
+
+	messages := []provider.Message{
+		{Role: "user", Content: prompt},
+	}
+
+	resp, err := prov.Chat(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	// Parse the LLM response
+	var result struct {
+		Subtasks []struct {
+			Title          string  `json:"title"`
+			Description    string  `json:"description"`
+			EstimatedHours float64 `json:"estimated_hours"`
+			Priority       int     `json:"priority"`
+		} `json:"subtasks"`
+	}
+
+	content := resp.Content
+	// Try to extract JSON
+	startIdx := 0
+	for i := 0; i < len(content); i++ {
+		if content[i] == '{' {
+			startIdx = i
+			break
+		}
+	}
+	endIdx := len(content)
+	for i := len(content) - 1; i >= 0; i-- {
+		if content[i] == '}' {
+			endIdx = i + 1
+			break
+		}
+	}
+
+	if endIdx > startIdx {
+		jsonStr := content[startIdx:endIdx]
+		if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+			return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+		}
+	}
+
+	// Create subtasks
+	var subtasks []*Task
+	for _, st := range result.Subtasks {
+		subtask, err := m.CreateTask(
+			st.Title,
+			st.Description,
+			task.Assignee,
+			WithPriority(st.Priority),
+			WithTenant(task.Tenant),
+			WithWorkspace(task.Workspace),
+		)
+		if err != nil {
+			log.Warnf("[Kanban] Failed to create subtask: %v", err)
+			continue
+		}
+
+		// Update estimated hours
+		m.UpdateTask(subtask.ID, map[string]interface{}{
+			"estimated_hours": st.EstimatedHours,
+			"goal_id":         task.GoalID, // Inherit goal association
+		})
+
+		// Link to parent
+		if err := m.AddLink(id, subtask.ID); err != nil {
+			log.Warnf("[Kanban] Failed to link subtask: %v", err)
+		}
+
+		subtasks = append(subtasks, subtask)
+	}
+
+	log.Infof("[Kanban] Task %s split into %d subtasks", id, len(subtasks))
+	return subtasks, nil
+}
+
 // AddParentLink is a helper to add a parent link during task creation
 type AddParentLink struct {
 	ParentID string
@@ -534,4 +644,31 @@ func (m *Manager) UpdateTaskWithPID(id string, runID string, pid int) error {
 // GenerateRunID generates a new unique run ID
 func GenerateRunID() string {
 	return fmt.Sprintf("run_%s", uuid.New().String()[:8])
+}
+
+// GetBurndownData returns burndown chart data for a time period
+func (m *Manager) GetBurndownData(tenant string, days int) ([]BurndownPoint, error) {
+	return m.db.GetBurndownData(tenant, days)
+}
+
+// GetThroughputStats returns task throughput statistics
+func (m *Manager) GetThroughputStats(tenant string, days int) (*ThroughputStats, error) {
+	return m.db.GetThroughputStats(tenant, days)
+}
+
+// BurndownPoint represents a point in the burndown chart
+type BurndownPoint struct {
+	Date        string `json:"date"`
+	Total       int    `json:"total"`        // Total tasks at start of day
+	Remaining   int    `json:"remaining"`    // Tasks not done
+	Completed   int    `json:"completed"`    // Tasks completed that day
+	Added       int    `json:"added"`        // Tasks added that day
+}
+
+// ThroughputStats represents throughput statistics
+type ThroughputStats struct {
+	TotalCreated   int     `json:"total_created"`   // Total tasks created
+	TotalCompleted int     `json:"total_completed"` // Total tasks completed
+	AverageLeadTime float64 `json:"average_lead_time_hours"` // Average time from creation to completion
+	ThroughputPerDay float64 `json:"throughput_per_day"`      // Average tasks completed per day
 }

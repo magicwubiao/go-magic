@@ -50,6 +50,16 @@ type Task struct {
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 
+	// Time tracking fields
+	DueDate          *time.Time `json:"due_date,omitempty"`           // Deadline
+	EstimatedHours   float64    `json:"estimated_hours,omitempty"`    // Estimated work hours
+	ActualHours      float64    `json:"actual_hours,omitempty"`       // Actual work hours
+	StartedAt        *time.Time `json:"started_at,omitempty"`         // When task was started
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`       // When task was completed
+
+	// Goal association
+	GoalID string `json:"goal_id,omitempty"` // Associated goal ID
+
 	// Virtual fields (not stored in DB)
 	ParentCount    int `json:"parent_count,omitempty"`
 	CommentCount   int `json:"comment_count,omitempty"`
@@ -89,13 +99,16 @@ type Event struct {
 
 // TaskFilter represents filter criteria for listing tasks
 type TaskFilter struct {
-	Status   []TaskStatus `json:"status,omitempty"`
-	Assignee string       `json:"assignee,omitempty"`
-	Tenant   string       `json:"tenant,omitempty"`
-	Priority *int         `json:"priority,omitempty"`
-	Search   string       `json:"search,omitempty"`
-	Limit    int          `json:"limit,omitempty"`
-	Offset   int          `json:"offset,omitempty"`
+	Status      []TaskStatus `json:"status,omitempty"`
+	Assignee    string       `json:"assignee,omitempty"`
+	Tenant      string       `json:"tenant,omitempty"`
+	Priority    *int         `json:"priority,omitempty"`
+	Search      string       `json:"search,omitempty"`
+	GoalID      string       `json:"goal_id,omitempty"`      // Filter by associated goal
+	DueBefore   *time.Time   `json:"due_before,omitempty"`   // Filter by deadline
+	DueAfter    *time.Time   `json:"due_after,omitempty"`    // Filter by deadline
+	Limit       int          `json:"limit,omitempty"`
+	Offset      int          `json:"offset,omitempty"`
 }
 
 // TaskOption is a functional option for creating tasks

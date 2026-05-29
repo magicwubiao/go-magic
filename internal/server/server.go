@@ -225,6 +225,9 @@ func NewServer(dbPath string) *Server {
 	cronMgr, err := cron.NewManager()
 	if err != nil {
 		fmt.Printf("[server] Warning: Failed to create cron manager: %v\n", err)
+	} else if prov != nil && registry != nil {
+		// Set LLM provider and tools for cron agent mode
+		cronMgr.SetAgentDeps(prov, registry)
 	}
 
 	// Initialize Kanban Manager
@@ -292,7 +295,7 @@ func NewServer(dbPath string) *Server {
 		authToken = strings.TrimSpace(string(data))
 	}
 
-	return &Server{
+	s := &Server{
 		mu:               sync.RWMutex{},
 		startTime:        time.Now(),
 		cfg:              cfg,
@@ -314,6 +317,13 @@ func NewServer(dbPath string) *Server {
 		actions:          make(map[string]*ActionStatus),
 		authToken:        authToken,
 	}
+
+	// Start cron scheduler
+	if cronMgr != nil {
+		cronMgr.Start()
+	}
+
+	return s
 }
 
 // createProvider creates a provider instance from config (unified with pkg/config)
@@ -681,11 +691,11 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/config/raw", withCORS(requireAuth(s.handleConfigRaw)))
 	mux.HandleFunc("/api/config/schema", withCORS(requireAuth(s.handleConfigSchema)))
 
-	// Cron (support both /api/cron and /api/cron/jobs for compatibility)
-	mux.HandleFunc("/api/cron", withCORS(requireAuth(s.handleCronJobs)))
-	mux.HandleFunc("/api/cron/", withCORS(requireAuth(s.handleCronJobByID)))
+	// Cron - order matters: more specific paths first
 	mux.HandleFunc("/api/cron/jobs", withCORS(requireAuth(s.handleCronJobs)))
 	mux.HandleFunc("/api/cron/jobs/", withCORS(requireAuth(s.handleCronJobByID)))
+	mux.HandleFunc("/api/cron", withCORS(requireAuth(s.handleCronJobs)))
+	mux.HandleFunc("/api/cron/", withCORS(requireAuth(s.handleCronJobByID)))
 
 	// Env
 	mux.HandleFunc("/api/env", withCORS(requireAuth(s.handleEnv)))
@@ -737,7 +747,9 @@ func (s *Server) Start(port int) error {
 
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
+	mux.HandleFunc("/api/goals/current", withCORS(requireAuth(s.handleGoalCurrent)))
 	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
+	mux.HandleFunc("/api/goals/analyze", withCORS(requireAuth(s.handleGoalAnalyze)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -995,6 +1007,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			if err := s.sessionStore.SaveSession(context.Background(), newSession); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
+			}
+		}
+
+		// Auto-link to active goal if enabled
+		if s.goalMgr != nil && s.cfg.AutoLinkGoals {
+			goals, err := s.goalMgr.List(context.Background(), goal.StatusActive)
+			if err == nil && len(goals) > 0 {
+				// Link to the most recently updated active goal
+				s.goalMgr.LinkSession(context.Background(), goals[0].ID, sessionID)
 			}
 		}
 
@@ -3159,23 +3180,49 @@ func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost {
 		var req struct {
-			Name     string `json:"name"`
-			Prompt   string `json:"prompt"`
-			Schedule string `json:"schedule"`
-			Script   string `json:"script"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Prompt      string   `json:"prompt"`
+			Schedule    string   `json:"schedule"`
+			Script      string   `json:"script"`
+			NoAgent     bool     `json:"no_agent"`
+			Skills      []string `json:"skills"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 
+		if req.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		if req.Schedule == "" {
+			http.Error(w, "schedule is required", http.StatusBadRequest)
+			return
+		}
+
+		// Validate cron expression
+		if err := cron.ValidateSchedule(req.Schedule); err != nil {
+			http.Error(w, fmt.Sprintf("invalid cron expression: %v", err), http.StatusBadRequest)
+			return
+		}
+
 		job := &cron.Job{
-			ID:       uuid.New().String(),
-			Name:     req.Name,
-			Prompt:   req.Prompt,
-			Schedule: req.Schedule,
-			Script:   req.Script,
-			Enabled:  true,
+			ID:          uuid.New().String(),
+			Name:        req.Name,
+			Description: req.Description,
+			Prompt:      req.Prompt,
+			Schedule:    req.Schedule,
+			Script:      req.Script,
+			NoAgent:     req.NoAgent,
+			Skills:      req.Skills,
+			Enabled:     true,
+		}
+
+		// Calculate next run time
+		if nextRun, err := cron.GetNextRun(req.Schedule); err == nil {
+			job.NextRun = nextRun
 		}
 
 		if err := s.cronMgr.Add(job); err != nil {
@@ -3203,6 +3250,19 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 	jobID = strings.TrimSuffix(jobID, "/resume")
 	jobID = strings.TrimSuffix(jobID, "/trigger")
 	jobID = strings.TrimSuffix(jobID, "/run")
+	jobID = strings.TrimSuffix(jobID, "/logs")
+
+	if strings.HasSuffix(path, "/logs") {
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		logs := s.cronMgr.GetLogs(jobID, limit)
+		jsonResponse(w, logs)
+		return
+	}
 
 	if strings.HasSuffix(path, "/pause") {
 		job := s.findCronJobByID(jobID)
@@ -3215,7 +3275,7 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("failed to pause job: %v", err), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, map[string]bool{"ok": true})
+		jsonResponse(w, cronJobToResponse(job))
 		return
 	}
 	if strings.HasSuffix(path, "/resume") {
@@ -3225,11 +3285,15 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		job.Enabled = true
+		// Recalculate next run
+		if nextRun, err := cron.GetNextRun(job.Schedule); err == nil {
+			job.NextRun = nextRun
+		}
 		if err := s.cronMgr.Update(job); err != nil {
 			http.Error(w, fmt.Sprintf("failed to resume job: %v", err), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, map[string]bool{"ok": true})
+		jsonResponse(w, cronJobToResponse(job))
 		return
 	}
 	if strings.HasSuffix(path, "/trigger") || strings.HasSuffix(path, "/run") {
@@ -3260,11 +3324,14 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req struct {
-			Name     string `json:"name"`
-			Prompt   string `json:"prompt"`
-			Schedule string `json:"schedule"`
-			Script   string `json:"script"`
-			Enabled  *bool  `json:"enabled,omitempty"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Prompt      string   `json:"prompt"`
+			Schedule    string   `json:"schedule"`
+			Script      string   `json:"script"`
+			NoAgent     *bool    `json:"no_agent,omitempty"`
+			Enabled     *bool    `json:"enabled,omitempty"`
+			Skills      []string `json:"skills"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -3273,17 +3340,34 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		if req.Name != "" {
 			job.Name = req.Name
 		}
+		if req.Description != "" {
+			job.Description = req.Description
+		}
 		if req.Prompt != "" {
 			job.Prompt = req.Prompt
 		}
 		if req.Schedule != "" {
+			// Validate new schedule
+			if err := cron.ValidateSchedule(req.Schedule); err != nil {
+				http.Error(w, fmt.Sprintf("invalid cron expression: %v", err), http.StatusBadRequest)
+				return
+			}
 			job.Schedule = req.Schedule
+			if nextRun, err := cron.GetNextRun(req.Schedule); err == nil {
+				job.NextRun = nextRun
+			}
 		}
 		if req.Script != "" {
 			job.Script = req.Script
 		}
+		if req.NoAgent != nil {
+			job.NoAgent = *req.NoAgent
+		}
 		if req.Enabled != nil {
 			job.Enabled = *req.Enabled
+		}
+		if req.Skills != nil {
+			job.Skills = req.Skills
 		}
 		if err := s.cronMgr.Update(job); err != nil {
 			http.Error(w, fmt.Sprintf("failed to update job: %v", err), http.StatusInternalServerError)
@@ -3305,12 +3389,7 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 
 // findCronJobByID finds a cron job by its ID by iterating through the list.
 func (s *Server) findCronJobByID(id string) *cron.Job {
-	for _, job := range s.cronMgr.List() {
-		if job.ID == id {
-			return job
-		}
-	}
-	return nil
+	return s.cronMgr.GetByID(id)
 }
 
 // cronJobToResponse converts a cron.Job to the JSON format expected by the frontend.
@@ -3319,18 +3398,24 @@ func cronJobToResponse(job *cron.Job) map[string]interface{} {
 	if job.Enabled {
 		state = "active"
 	}
+	if job.LastStatus == "running" {
+		state = "running"
+	}
 
 	resp := map[string]interface{}{
 		"id":               job.ID,
 		"name":             job.Name,
+		"description":      job.Description,
 		"prompt":           job.Prompt,
 		"script":           job.Script,
 		"schedule":         job.Schedule,
 		"schedule_display": describeSchedule(job.Schedule),
 		"enabled":          job.Enabled,
+		"no_agent":         job.NoAgent,
 		"state":            state,
-		"deliver":          nil,
-		"last_error":       nil,
+		"last_status":      job.LastStatus,
+		"last_error":       job.LastError,
+		"run_count":        job.RunCount,
 	}
 
 	if job.LastRun != nil {

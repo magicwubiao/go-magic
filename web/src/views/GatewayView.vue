@@ -104,7 +104,7 @@
             <n-input v-model:value="editingPlatform.appId" placeholder="WeChat Open Platform App ID" />
           </n-form-item>
           <n-text depth="3" style="font-size: 12px;">
-            微信开放平台应用 ID，用于 QR 登录
+            {{ t('gateway.wechatAppIdHint') }}
           </n-text>
         </template>
 
@@ -124,7 +124,7 @@
             <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="Bot Token / App Secret" />
           </n-form-item>
           <n-text depth="3" style="font-size: 12px;">
-            QQ Bot 需要在 QQ 开放平台 注册后获取 App ID 和 Token
+            {{ t('gateway.qqBotHint') }}
           </n-text>
         </template>
       </n-form>
@@ -283,7 +283,7 @@ const platforms = ref<Platform[]>([
   createPlatform('wechat', 'WeChat', 'WeChat Official Account', 'Token', 'WeChat Token', true),
   createPlatform('wechat_ilink', 'WeChat iLink', 'WeChat Personal', 'Token', 'iLink Token', true),
   createPlatform('wecom', 'WeCom', 'Enterprise WeChat', 'Token', 'WeCom Token', true),
-  createPlatform('qq', 'QQ', 'QQ Guild Bot (频道机器人)', 'App ID', 'QQ Bot App ID'),
+  createPlatform('qq', 'QQ', t('gateway.qqGuildBot'), 'App ID', t('gateway.qqBotAppId')),
   createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token', true),
   createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token', true),
   createPlatform('whatsapp', 'WhatsApp', 'WhatsApp Bot', 'Token', 'WhatsApp Token', true),

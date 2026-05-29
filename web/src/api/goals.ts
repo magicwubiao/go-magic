@@ -21,6 +21,10 @@ export async function getGoal(id: string): Promise<Goal> {
   return request(`/goals/${id}`)
 }
 
+export async function getCurrentGoal(): Promise<Goal | null> {
+  return request('/goals/current')
+}
+
 export async function createGoal(title: string, description: string): Promise<Goal> {
   return request('/goals', {
     method: 'POST',

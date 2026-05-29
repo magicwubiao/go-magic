@@ -807,3 +807,107 @@ func (kdb *KanbanDB) GetStats(tenant string) (map[TaskStatus]int, error) {
 
 	return stats, nil
 }
+
+// GetBurndownData returns burndown chart data for the last N days
+func (kdb *KanbanDB) GetBurndownData(tenant string, days int) ([]BurndownPoint, error) {
+	var points []BurndownPoint
+	now := time.Now()
+
+	for i := days - 1; i >= 0; i-- {
+		date := now.AddDate(0, 0, -i)
+		dateStr := date.Format("2006-01-02")
+
+		// Count tasks created before or on this date
+		var total int
+		query := "SELECT COUNT(*) FROM tasks WHERE DATE(created_at) <= ?"
+		args := []interface{}{dateStr}
+		if tenant != "" {
+			query += " AND tenant = ?"
+			args = append(args, tenant)
+		}
+		kdb.db.QueryRow(query, args...).Scan(&total)
+
+		// Count tasks completed on this date
+		var completed int
+		compQuery := "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND DATE(updated_at) = ?"
+		compArgs := []interface{}{dateStr}
+		if tenant != "" {
+			compQuery += " AND tenant = ?"
+			compArgs = append(compArgs, tenant)
+		}
+		kdb.db.QueryRow(compQuery, compArgs...).Scan(&completed)
+
+		// Count tasks added on this date
+		var added int
+		addQuery := "SELECT COUNT(*) FROM tasks WHERE DATE(created_at) = ?"
+		addArgs := []interface{}{dateStr}
+		if tenant != "" {
+			addQuery += " AND tenant = ?"
+			addArgs = append(addArgs, tenant)
+		}
+		kdb.db.QueryRow(addQuery, addArgs...).Scan(&added)
+
+		// Count remaining (not done)
+		remaining := total - completed
+
+		points = append(points, BurndownPoint{
+			Date:      dateStr,
+			Total:     total,
+			Remaining: remaining,
+			Completed: completed,
+			Added:     added,
+		})
+	}
+
+	return points, nil
+}
+
+// GetThroughputStats returns task throughput statistics
+func (kdb *KanbanDB) GetThroughputStats(tenant string, days int) (*ThroughputStats, error) {
+	stats := &ThroughputStats{}
+
+	// Get date range
+	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+
+	// Count created
+	query := "SELECT COUNT(*) FROM tasks WHERE DATE(created_at) >= ?"
+	args := []interface{}{since}
+	if tenant != "" {
+		query += " AND tenant = ?"
+		args = append(args, tenant)
+	}
+	kdb.db.QueryRow(query, args...).Scan(&stats.TotalCreated)
+
+	// Count completed
+	compQuery := "SELECT COUNT(*) FROM tasks WHERE status = 'done' AND DATE(updated_at) >= ?"
+	compArgs := []interface{}{since}
+	if tenant != "" {
+		compQuery += " AND tenant = ?"
+		compArgs = append(compArgs, tenant)
+	}
+	kdb.db.QueryRow(compQuery, compArgs...).Scan(&stats.TotalCompleted)
+
+	// Calculate throughput per day
+	if days > 0 {
+		stats.ThroughputPerDay = float64(stats.TotalCompleted) / float64(days)
+	}
+
+	// Calculate average lead time (for tasks completed in the period)
+	leadQuery := `
+		SELECT AVG(
+			(JULIANDAY(updated_at) - JULIANDAY(created_at)) * 24
+		) FROM tasks 
+		WHERE status = 'done' AND DATE(updated_at) >= ?`
+	leadArgs := []interface{}{since}
+	if tenant != "" {
+		leadQuery += " AND tenant = ?"
+		leadArgs = append(leadArgs, tenant)
+	}
+	var avgLeadTime sql.NullFloat64
+	kdb.db.QueryRow(leadQuery, leadArgs...).Scan(&avgLeadTime)
+	if avgLeadTime.Valid {
+		stats.AverageLeadTime = avgLeadTime.Float64
+	}
+
+	return stats, nil
+}

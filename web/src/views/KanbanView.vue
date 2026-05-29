@@ -2,14 +2,65 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('kanban.title') }}</h2>
-      <n-button type="primary" @click="openAddTask">{{ t('kanban.newTask') }}</n-button>
+      <n-space>
+        <n-button @click="showStats = true">
+          <template #icon><n-icon :component="StatsChartOutline" /></template>
+          {{ t('kanban.stats') }}
+        </n-button>
+        <n-button type="primary" @click="openAddTask">+ {{ t('kanban.newTask') }}</n-button>
+      </n-space>
     </n-space>
+
+    <!-- Filter Bar -->
+    <n-card size="small" style="margin-bottom: 16px;">
+      <n-space align="center">
+        <n-input
+          v-model:value="filterForm.search"
+          :placeholder="t('kanban.searchTasks')"
+          clearable
+          style="width: 200px;"
+          @update:value="applyFilter"
+        />
+        <n-select
+          v-model:value="filterForm.priority"
+          :placeholder="t('kanban.priority')"
+          clearable
+          :options="priorityOptions"
+          style="width: 120px;"
+          @update:value="applyFilter"
+        />
+        <n-select
+          v-model:value="filterForm.assignee"
+          :placeholder="t('kanban.assignee')"
+          clearable
+          :options="assigneeOptions"
+          style="width: 120px;"
+          @update:value="applyFilter"
+        />
+        <n-select
+          v-model:value="filterForm.goal_id"
+          :placeholder="t('kanban.linkedGoal')"
+          clearable
+          :options="goalOptions"
+          style="width: 150px;"
+          @update:value="applyFilter"
+        />
+        <n-date-picker
+          v-model:value="filterForm.due_before"
+          :placeholder="t('kanban.dueBefore')"
+          clearable
+          style="width: 150px;"
+          @update:value="applyFilter"
+        />
+        <n-button @click="resetFilter">{{ t('kanban.reset') }}</n-button>
+      </n-space>
+    </n-card>
 
     <n-spin v-if="kanbanStore.loading" />
     <div v-else class="kanban-container">
       <!-- Upper Row: Triage / To Do / Ready -->
       <div class="kanban-board">
-        <div v-for="col in kanbanStore.upperColumns" :key="col.key" class="kanban-column">
+        <div v-for="col in filteredUpperColumns" :key="col.key" class="kanban-column">
           <div class="column-header">
             <n-text strong>{{ t(col.titleKey) }}</n-text>
             <n-tag size="small" round>{{ col.tasks.length }}</n-tag>
@@ -20,12 +71,26 @@
               :key="task.id"
               size="small"
               hoverable
+              :class="{ 'task-overdue': isOverdue(task), 'task-due-soon': isDueSoon(task) }"
               style="margin-bottom: 8px; cursor: pointer;"
               @click="moveTaskForward(task)"
             >
-              <n-text strong>{{ task.title }}</n-text>
-              <br />
-              <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+              <n-space vertical :size="4">
+                <n-text strong>{{ task.title }}</n-text>
+                <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+                <n-space v-if="task.due_date" :size="4">
+                  <n-tag :type="dueDateType(task)" size="tiny">
+                    <template #icon><n-icon :component="CalendarOutline" /></template>
+                    {{ formatDueDate(task.due_date) }}
+                  </n-tag>
+                </n-space>
+                <n-space v-if="task.estimated_hours" :size="4">
+                  <n-tag size="tiny" type="info">
+                    <template #icon><n-icon :component="TimeOutline" /></template>
+                    {{ task.estimated_hours }}h
+                  </n-tag>
+                </n-space>
+              </n-space>
               <template #action>
                 <n-space>
                   <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
@@ -40,7 +105,7 @@
 
       <!-- Lower Row: Running / Blocked / Done -->
       <div class="kanban-board">
-        <div v-for="col in kanbanStore.lowerColumns" :key="col.key" class="kanban-column" :class="{ 'blocked-column': col.key === 'blocked' }">
+        <div v-for="col in filteredLowerColumns" :key="col.key" class="kanban-column" :class="{ 'blocked-column': col.key === 'blocked' }">
           <div class="column-header">
             <n-text strong>{{ t(col.titleKey) }}</n-text>
             <n-tag size="small" round :type="col.key === 'blocked' ? 'error' : 'default'">{{ col.tasks.length }}</n-tag>
@@ -54,9 +119,16 @@
               style="margin-bottom: 8px; cursor: pointer;"
               @click="col.key !== 'blocked' && moveTaskForward(task)"
             >
-              <n-text strong>{{ task.title }}</n-text>
-              <br />
-              <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+              <n-space vertical :size="4">
+                <n-text strong>{{ task.title }}</n-text>
+                <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+                <n-space v-if="task.due_date" :size="4">
+                  <n-tag :type="dueDateType(task)" size="tiny">
+                    <template #icon><n-icon :component="CalendarOutline" /></template>
+                    {{ formatDueDate(task.due_date) }}
+                  </n-tag>
+                </n-space>
+              </n-space>
               <template #action>
                 <n-space>
                   <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
@@ -73,13 +145,22 @@
 
     <!-- Add/Edit Task Modal -->
     <n-modal v-model:show="showTaskModal" :title="editingTask ? t('kanban.editTask') : t('kanban.newTask')">
-      <n-card style="width: 450px;">
+      <n-card style="width: 500px;">
         <n-form>
           <n-form-item :label="t('kanban.formTitle')">
             <n-input v-model:value="taskForm.title" :placeholder="t('kanban.taskTitle')" />
           </n-form-item>
           <n-form-item :label="t('kanban.formDescription')">
             <n-input v-model:value="taskForm.description" type="textarea" :rows="4" />
+          </n-form-item>
+          <n-form-item :label="t('kanban.dueDate')">
+            <n-date-picker v-model:value="taskForm.due_date" type="date" clearable style="width: 100%;" />
+          </n-form-item>
+          <n-form-item :label="t('kanban.estimatedHours')">
+            <n-input-number v-model:value="taskForm.estimated_hours" :min="0" :step="0.5" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item :label="t('kanban.linkedGoal')">
+            <n-select v-model:value="taskForm.goal_id" :placeholder="t('kanban.selectGoal')" clearable :options="goalOptions" />
           </n-form-item>
           <n-form-item :label="t('kanban.formPriority')">
             <n-select v-model:value="taskForm.priority" :options="priorityOptions" />
@@ -90,10 +171,23 @@
         </n-form>
         <template #footer>
           <n-space justify="end">
+            <n-button v-if="editingTask" type="info" @click="splitTask">{{ t('kanban.aiSplit') }}</n-button>
             <n-button @click="showTaskModal = false">{{ t('common.cancel') }}</n-button>
             <n-button type="primary" @click="saveTask">{{ editingTask ? t('common.save') : t('kanban.create') }}</n-button>
           </n-space>
         </template>
+      </n-card>
+    </n-modal>
+
+    <!-- Stats Modal -->
+    <n-modal v-model:show="showStats" :title="t('kanban.statsTitle')">
+      <n-card style="width: 600px;">
+        <n-space vertical>
+          <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats?.total || 0" />
+          <n-statistic :label="t('kanban.completedTasks')" :value="kanbanStore.stats?.completed || 0" />
+          <n-statistic :label="t('kanban.inProgressTasks')" :value="kanbanStore.stats?.in_progress || 0" />
+          <n-statistic :label="t('kanban.pendingTasks')" :value="kanbanStore.stats?.pending || 0" />
+        </n-space>
       </n-card>
     </n-modal>
   </div>
@@ -103,14 +197,18 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { CalendarOutline, TimeOutline, StatsChartOutline } from '@vicons/ionicons5'
 import { useKanbanStore } from '@/stores/kanban'
+import { useGoalsStore } from '@/stores/goals'
 import type { KanbanTask } from '@/api/kanban'
 
 const { t } = useI18n()
 
 const message = useMessage()
 const kanbanStore = useKanbanStore()
+const goalsStore = useGoalsStore()
 const showTaskModal = ref(false)
+const showStats = ref(false)
 const editingTask = ref<KanbanTask | null>(null)
 
 const taskForm = reactive({
@@ -118,6 +216,17 @@ const taskForm = reactive({
   description: '',
   priority: 'medium' as string,
   status: 'triage' as string,
+  due_date: null as number | null,
+  estimated_hours: 0,
+  goal_id: '',
+})
+
+const filterForm = reactive({
+  search: '',
+  priority: null as string | null,
+  assignee: null as string | null,
+  goal_id: null as string | null,
+  due_before: null as number | null,
 })
 
 const priorityOptions = computed(() => [
@@ -137,9 +246,88 @@ const statusOptions = computed(() => [
   { label: t('kanban.statusOptions.archived'), value: 'archived' },
 ])
 
+const assigneeOptions = computed(() => [
+  { label: t('kanban.allLabel'), value: '' },
+])
+
+const goalOptions = computed(() => {
+  const options = [{ label: t('kanban.allLabel'), value: '' }]
+  goalsStore.goals.forEach(g => {
+    options.push({ label: g.title, value: g.id })
+  })
+  return options
+})
+
+// Filtered columns
+const filteredUpperColumns = computed(() => {
+  return kanbanStore.upperColumns.map(col => ({
+    ...col,
+    tasks: filterTasks(col.tasks)
+  }))
+})
+
+const filteredLowerColumns = computed(() => {
+  return kanbanStore.lowerColumns.map(col => ({
+    ...col,
+    tasks: filterTasks(col.tasks)
+  }))
+})
+
+function filterTasks(tasks: KanbanTask[]) {
+  return tasks.filter(task => {
+    if (filterForm.search && !task.title.toLowerCase().includes(filterForm.search.toLowerCase())) {
+      return false
+    }
+    if (filterForm.priority && task.priority !== filterForm.priority) {
+      return false
+    }
+    if (filterForm.goal_id && task.goal_id !== filterForm.goal_id) {
+      return false
+    }
+    return true
+  })
+}
+
+function applyFilter() {
+  // Filter is reactive, no need to do anything
+}
+
+function resetFilter() {
+  filterForm.search = ''
+  filterForm.priority = null
+  filterForm.assignee = null
+  filterForm.goal_id = null
+  filterForm.due_before = null
+}
+
 const priorityType = (p: string) => {
   const map: Record<string, string> = { low: 'default', medium: 'info', high: 'warning', critical: 'error' }
   return (map[p] || 'default') as any
+}
+
+// Due date helpers
+function isOverdue(task: KanbanTask) {
+  if (!task.due_date) return false
+  return new Date(task.due_date).getTime() < Date.now()
+}
+
+function isDueSoon(task: KanbanTask) {
+  if (!task.due_date) return false
+  const due = new Date(task.due_date).getTime()
+  const now = Date.now()
+  const oneDay = 24 * 60 * 60 * 1000
+  return due > now && due < now + oneDay * 3
+}
+
+function dueDateType(task: KanbanTask) {
+  if (isOverdue(task)) return 'error'
+  if (isDueSoon(task)) return 'warning'
+  return 'default'
+}
+
+function formatDueDate(date: string | number) {
+  const d = new Date(date)
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
 // Normal flow: triage -> todo -> ready -> running -> done -> archived
@@ -151,6 +339,9 @@ function openAddTask() {
   taskForm.description = ''
   taskForm.priority = 'medium'
   taskForm.status = 'triage'
+  taskForm.due_date = null
+  taskForm.estimated_hours = 0
+  taskForm.goal_id = ''
   showTaskModal.value = true
 }
 
@@ -160,6 +351,9 @@ function openEditTask(task: KanbanTask) {
   taskForm.description = task.description
   taskForm.priority = task.priority
   taskForm.status = task.status
+  taskForm.due_date = task.due_date ? new Date(task.due_date).getTime() : null
+  taskForm.estimated_hours = task.estimated_hours || 0
+  taskForm.goal_id = task.goal_id || ''
   showTaskModal.value = true
 }
 
@@ -169,14 +363,30 @@ async function saveTask() {
     return
   }
 
+  const data = {
+    ...taskForm,
+    due_date: taskForm.due_date ? new Date(taskForm.due_date).toISOString() : undefined,
+  }
+
   if (editingTask.value) {
-    await kanbanStore.updateTask(editingTask.value.id, { ...taskForm } as Partial<KanbanTask>)
+    await kanbanStore.updateTask(editingTask.value.id, data as Partial<KanbanTask>)
     message.success(t('kanban.taskUpdated'))
   } else {
-    await kanbanStore.addTask({ ...taskForm } as Partial<KanbanTask>)
+    await kanbanStore.addTask(data as Partial<KanbanTask>)
     message.success(t('kanban.taskCreated'))
   }
   showTaskModal.value = false
+}
+
+async function splitTask() {
+  if (!editingTask.value) return
+  try {
+    await kanbanStore.splitTask(editingTask.value.id)
+    message.success(t('kanban.taskSplit'))
+    showTaskModal.value = false
+  } catch (e) {
+    message.error(t('kanban.splitFailed'))
+  }
 }
 
 async function moveTaskForward(task: KanbanTask) {
@@ -198,7 +408,10 @@ async function removeTask(id: string) {
   message.success(t('kanban.taskDeleted'))
 }
 
-onMounted(() => kanbanStore.loadBoard())
+onMounted(() => {
+  kanbanStore.loadBoard()
+  goalsStore.loadGoals()
+})
 </script>
 
 <style scoped>
@@ -239,5 +452,13 @@ onMounted(() => kanbanStore.loadBoard())
 .column-body {
   padding: 8px;
   min-height: 100px;
+}
+
+.task-overdue {
+  border-left: 3px solid #ff4d4f;
+}
+
+.task-due-soon {
+  border-left: 3px solid #faad14;
 }
 </style>

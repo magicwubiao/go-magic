@@ -29,6 +29,14 @@ export const useGoalsStore = defineStore('goals', () => {
     }
   }
 
+  async function loadCurrentGoal() {
+    try {
+      currentGoal.value = await goalsApi.getCurrentGoal()
+    } catch (e) {
+      currentGoal.value = null
+    }
+  }
+
   async function createGoal(title: string, description: string) {
     const goal = await goalsApi.createGoal(title, description)
     goals.value.unshift(goal)
@@ -71,6 +79,7 @@ export const useGoalsStore = defineStore('goals', () => {
     completedGoals,
     loadGoals,
     loadGoal,
+    loadCurrentGoal,
     createGoal,
     updateGoal,
     deleteGoal,

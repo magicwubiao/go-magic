@@ -49,6 +49,8 @@
 
     <!-- Chat Area -->
     <div class="chat-main">
+      <CurrentGoal style="margin: 12px 12px 0 12px;" />
+
       <n-alert v-if="chatStore.error" type="error" closable style="margin: 12px;" @close="chatStore.error = null">
         {{ chatStore.error.message }}
       </n-alert>
@@ -158,6 +160,7 @@ import 'highlight.js/styles/github.css'
 import { useChatStore } from '@/stores/chat'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
+import CurrentGoal from '@/components/CurrentGoal.vue'
 
 const { t } = useI18n()
 const chatStore = useChatStore()

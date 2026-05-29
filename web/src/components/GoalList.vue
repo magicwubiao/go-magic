@@ -10,8 +10,23 @@
     >
       <n-space vertical>
         <n-space justify="space-between" align="center">
-          <n-text strong style="font-size: 16px;">{{ goal.title }}</n-text>
-          <n-tag :type="statusType(goal.status)" size="small">{{ goal.status }}</n-tag>
+          <n-space align="center" :size="8">
+            <n-text strong style="font-size: 16px;">{{ goal.title }}</n-text>
+            <n-tag :type="statusType(goal.status)" size="small">{{ goal.status }}</n-tag>
+          </n-space>
+          <n-space :size="4">
+            <!-- Quick progress buttons -->
+            <template v-if="goal.status !== 'completed'">
+              <n-button-group size="tiny">
+                <n-button @click="quickUpdate(goal, 25)">+25%</n-button>
+                <n-button @click="quickUpdate(goal, 50)">50%</n-button>
+                <n-button @click="quickUpdate(goal, 75)">75%</n-button>
+                <n-button type="success" @click="$emit('complete', goal)">
+                  <template #icon><n-icon :component="CheckmarkOutline" /></template>
+                </n-button>
+              </n-button-group>
+            </template>
+          </n-space>
         </n-space>
         
         <n-text depth="3">{{ goal.description }}</n-text>
@@ -24,6 +39,10 @@
             style="width: 200px;"
           />
           <n-text style="font-size: 12px;">{{ goal.progress }}%</n-text>
+          <n-button v-if="goal.status !== 'completed'" size="tiny" text @click="$emit('edit', goal)">
+            <template #icon><n-icon :component="CreateOutline" /></template>
+            {{ t('goals.adjust') }}
+          </n-button>
         </n-space>
         
         <n-space v-if="goal.session_ids?.length">
@@ -33,9 +52,6 @@
         </n-space>
         
         <n-space justify="end">
-          <n-button v-if="goal.status !== 'completed'" size="tiny" type="success" @click="$emit('complete', goal)">
-            {{ t('goals.completeGoal') }}
-          </n-button>
           <n-button size="tiny" @click="$emit('edit', goal)">{{ t('common.edit') }}</n-button>
           <n-button size="tiny" type="error" @click="$emit('delete', goal)">{{ t('common.delete') }}</n-button>
         </n-space>
@@ -46,18 +62,20 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import { CheckmarkOutline, CreateOutline } from '@vicons/ionicons5'
 import type { Goal } from '@/api/goals'
 
 const { t } = useI18n()
 
-defineProps<{
+const props = defineProps<{
   goals: Goal[]
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   edit: [goal: Goal]
   delete: [goal: Goal]
   complete: [goal: Goal]
+  updateProgress: [goal: Goal, progress: number]
 }>()
 
 function statusType(status: string) {
@@ -67,6 +85,10 @@ function statusType(status: string) {
     abandoned: 'default',
   }
   return (map[status] || 'default') as any
+}
+
+function quickUpdate(goal: Goal, progress: number) {
+  emit('updateProgress', goal, progress)
 }
 </script>
 

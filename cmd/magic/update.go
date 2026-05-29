@@ -337,7 +337,7 @@ func createBackup() error {
 	}
 
 	homeDir, _ := os.UserHomeDir()
-	backupDir := filepath.Join(homeDir, ".go-magic", "backups")
+	backupDir := filepath.Join(homeDir, ".magic", "backups")
 	os.MkdirAll(backupDir, 0755)
 
 	backupName := fmt.Sprintf("magic-backup-%s", getCurrentVersion())
@@ -348,7 +348,7 @@ func createBackup() error {
 
 func rollback() error {
 	homeDir, _ := os.UserHomeDir()
-	backupDir := filepath.Join(homeDir, ".go-magic", "backups")
+	backupDir := filepath.Join(homeDir, ".magic", "backups")
 
 	files, err := os.ReadDir(backupDir)
 	if err != nil {

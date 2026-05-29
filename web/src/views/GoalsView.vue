@@ -7,13 +7,13 @@
 
     <n-tabs type="line" animated>
       <n-tab-pane name="active" :tab="t('common.active')">
-        <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
+        <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @update-progress="updateProgress" />
       </n-tab-pane>
       <n-tab-pane name="completed" :tab="t('common.completed')">
         <GoalList :goals="goalsStore.completedGoals" @edit="openEditGoal" @delete="deleteGoal" />
       </n-tab-pane>
       <n-tab-pane name="all" :tab="t('common.all')">
-        <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" />
+        <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @update-progress="updateProgress" />
       </n-tab-pane>
     </n-tabs>
 
@@ -116,6 +116,15 @@ async function completeGoal(goal: Goal) {
   try {
     await goalsStore.completeGoal(goal.id)
     message.success(t('goals.completed'))
+  } catch (e) {
+    message.error(t('common.error'))
+  }
+}
+
+async function updateProgress(goal: Goal, progress: number) {
+  try {
+    await goalsStore.updateGoal(goal.id, { progress })
+    message.success(t('goals.progressUpdated', { progress }))
   } catch (e) {
     message.error(t('common.error'))
   }
