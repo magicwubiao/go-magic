@@ -18,7 +18,8 @@ export const useCronStore = defineStore('cron', () => {
     loading.value = true
     error.value = null
     try {
-      jobs.value = await cronApi.getCronJobs()
+      const data = await cronApi.getCronJobs()
+      jobs.value = data ?? []
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
       error.value = { message: 'Failed to load jobs: ' + errMsg }
@@ -47,7 +48,7 @@ export const useCronStore = defineStore('cron', () => {
     try {
       error.value = null
       await cronApi.deleteCronJob(id)
-      jobs.value = jobs.value.filter(j => j.id !== id)
+      jobs.value = (jobs.value ?? []).filter(j => j.id !== id)
       return true
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
@@ -98,7 +99,8 @@ export const useCronStore = defineStore('cron', () => {
 
   async function loadLogs(jobId: string, limit = 20): Promise<void> {
     try {
-      logs.value = await cronApi.getCronLogs(jobId, limit)
+      const data = await cronApi.getCronLogs(jobId, limit)
+      logs.value = data ?? []
     } catch (e) {
       logs.value = []
     }

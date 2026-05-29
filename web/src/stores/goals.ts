@@ -8,13 +8,14 @@ export const useGoalsStore = defineStore('goals', () => {
   const currentGoal = ref<Goal | null>(null)
   const loading = ref(false)
 
-  const activeGoals = computed(() => goals.value.filter(g => g.status === 'active'))
-  const completedGoals = computed(() => goals.value.filter(g => g.status === 'completed'))
+  const activeGoals = computed(() => (goals.value ?? []).filter(g => g.status === 'active'))
+  const completedGoals = computed(() => (goals.value ?? []).filter(g => g.status === 'completed'))
 
   async function loadGoals(status?: string) {
     loading.value = true
     try {
-      goals.value = await goalsApi.getGoals(status)
+      const data = await goalsApi.getGoals(status)
+      goals.value = data ?? []
     } finally {
       loading.value = false
     }

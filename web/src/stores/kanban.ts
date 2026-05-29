@@ -10,16 +10,16 @@ export const useKanbanStore = defineStore('kanban', () => {
 
   // Upper row: Triage / To Do / Ready
   const upperColumns = computed(() => [
-    { key: 'triage', titleKey: 'kanban.statusOptions.triage', tasks: tasks.value.filter(t => t.status === 'triage') },
-    { key: 'todo', titleKey: 'kanban.statusOptions.todo', tasks: tasks.value.filter(t => t.status === 'todo') },
-    { key: 'ready', titleKey: 'kanban.statusOptions.ready', tasks: tasks.value.filter(t => t.status === 'ready') },
+    { key: 'triage', titleKey: 'kanban.statusOptions.triage', tasks: (tasks.value ?? []).filter(t => t.status === 'triage') },
+    { key: 'todo', titleKey: 'kanban.statusOptions.todo', tasks: (tasks.value ?? []).filter(t => t.status === 'todo') },
+    { key: 'ready', titleKey: 'kanban.statusOptions.ready', tasks: (tasks.value ?? []).filter(t => t.status === 'ready') },
   ])
 
   // Lower row: Running / Blocked / Done
   const lowerColumns = computed(() => [
-    { key: 'running', titleKey: 'kanban.statusOptions.running', tasks: tasks.value.filter(t => t.status === 'running') },
-    { key: 'blocked', titleKey: 'kanban.statusOptions.blocked', tasks: tasks.value.filter(t => t.status === 'blocked') },
-    { key: 'done', titleKey: 'kanban.statusOptions.done', tasks: tasks.value.filter(t => t.status === 'done' || t.status === 'archived') },
+    { key: 'running', titleKey: 'kanban.statusOptions.running', tasks: (tasks.value ?? []).filter(t => t.status === 'running') },
+    { key: 'blocked', titleKey: 'kanban.statusOptions.blocked', tasks: (tasks.value ?? []).filter(t => t.status === 'blocked') },
+    { key: 'done', titleKey: 'kanban.statusOptions.done', tasks: (tasks.value ?? []).filter(t => t.status === 'done' || t.status === 'archived') },
   ])
 
   async function loadBoard() {
