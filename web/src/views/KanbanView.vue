@@ -12,8 +12,8 @@
     </n-space>
 
     <!-- Filter Bar -->
-    <n-card size="small" style="margin-bottom: 16px;">
-      <n-space align="center">
+    <div class="kanban-filter-bar">
+      <n-space align="center" wrap>
         <n-input
           v-model:value="filterForm.search"
           :placeholder="t('kanban.searchTasks')"
@@ -54,94 +54,95 @@
         />
         <n-button @click="resetFilter">{{ t('kanban.reset') }}</n-button>
       </n-space>
-    </n-card>
-
-    <n-spin v-if="kanbanStore.loading" />
-    <div v-else class="kanban-container">
-      <!-- Upper Row: Triage / To Do / Ready -->
-      <div class="kanban-board">
-        <div v-for="col in filteredUpperColumns" :key="col.key" class="kanban-column">
-          <div class="column-header">
-            <n-text strong>{{ t(col.titleKey) }}</n-text>
-            <n-tag size="small" round>{{ col.tasks.length }}</n-tag>
-          </div>
-          <div class="column-body">
-            <n-card
-              v-for="task in col.tasks"
-              :key="task.id"
-              size="small"
-              hoverable
-              :class="{ 'task-overdue': isOverdue(task), 'task-due-soon': isDueSoon(task) }"
-              style="margin-bottom: 8px; cursor: pointer;"
-              @click="moveTaskForward(task)"
-            >
-              <n-space vertical :size="4">
-                <n-text strong>{{ task.title }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
-                <n-space v-if="task.due_date" :size="4">
-                  <n-tag :type="dueDateType(task)" size="tiny">
-                    <template #icon><n-icon :component="CalendarOutline" /></template>
-                    {{ formatDueDate(task.due_date) }}
-                  </n-tag>
-                </n-space>
-                <n-space v-if="task.estimated_hours" :size="4">
-                  <n-tag size="tiny" type="info">
-                    <template #icon><n-icon :component="TimeOutline" /></template>
-                    {{ task.estimated_hours }}h
-                  </n-tag>
-                </n-space>
-              </n-space>
-              <template #action>
-                <n-space>
-                  <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
-                  <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
-                  <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
-                </n-space>
-              </template>
-            </n-card>
-          </div>
-        </div>
-      </div>
-
-      <!-- Lower Row: Running / Blocked / Done -->
-      <div class="kanban-board">
-        <div v-for="col in filteredLowerColumns" :key="col.key" class="kanban-column" :class="{ 'blocked-column': col.key === 'blocked' }">
-          <div class="column-header">
-            <n-text strong>{{ t(col.titleKey) }}</n-text>
-            <n-tag size="small" round :type="col.key === 'blocked' ? 'error' : 'default'">{{ col.tasks.length }}</n-tag>
-          </div>
-          <div class="column-body">
-            <n-card
-              v-for="task in col.tasks"
-              :key="task.id"
-              size="small"
-              hoverable
-              style="margin-bottom: 8px; cursor: pointer;"
-              @click="col.key !== 'blocked' && moveTaskForward(task)"
-            >
-              <n-space vertical :size="4">
-                <n-text strong>{{ task.title }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
-                <n-space v-if="task.due_date" :size="4">
-                  <n-tag :type="dueDateType(task)" size="tiny">
-                    <template #icon><n-icon :component="CalendarOutline" /></template>
-                    {{ formatDueDate(task.due_date) }}
-                  </n-tag>
-                </n-space>
-              </n-space>
-              <template #action>
-                <n-space>
-                  <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
-                  <n-button v-if="col.key === 'blocked'" size="tiny" type="primary" @click.stop="unblockTask(task.id)">{{ t('kanban.unblock') }}</n-button>
-                  <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
-                  <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
-                </n-space>
-              </template>
-            </n-card>
-          </div>
-        </div>
-      </div>
     </div>
+
+    <n-spin :show="kanbanStore.loading">
+      <div class="kanban-container">
+        <!-- Upper Row: Triage / To Do / Ready -->
+        <div class="kanban-board">
+          <div v-for="col in filteredUpperColumns" :key="col.key" class="kanban-column">
+            <div class="column-header">
+              <n-text strong>{{ t(col.titleKey) }}</n-text>
+              <n-tag size="small" round>{{ col.tasks.length }}</n-tag>
+            </div>
+            <div class="column-body">
+              <n-card
+                v-for="task in col.tasks"
+                :key="task.id"
+                size="small"
+                hoverable
+                :class="{ 'task-overdue': isOverdue(task), 'task-due-soon': isDueSoon(task) }"
+                style="margin-bottom: 8px; cursor: pointer;"
+                @click="moveTaskForward(task)"
+              >
+                <n-space vertical :size="4">
+                  <n-text strong>{{ task.title }}</n-text>
+                  <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+                  <n-space v-if="task.due_date" :size="4">
+                    <n-tag :type="dueDateType(task)" size="tiny">
+                      <template #icon><n-icon :component="CalendarOutline" /></template>
+                      {{ formatDueDate(task.due_date) }}
+                    </n-tag>
+                  </n-space>
+                  <n-space v-if="task.estimated_hours" :size="4">
+                    <n-tag size="tiny" type="info">
+                      <template #icon><n-icon :component="TimeOutline" /></template>
+                      {{ task.estimated_hours }}h
+                    </n-tag>
+                  </n-space>
+                </n-space>
+                <template #action>
+                  <n-space>
+                    <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
+                    <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
+                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
+                  </n-space>
+                </template>
+              </n-card>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lower Row: Running / Blocked / Done -->
+        <div class="kanban-board">
+          <div v-for="col in filteredLowerColumns" :key="col.key" class="kanban-column" :class="{ 'blocked-column': col.key === 'blocked' }">
+            <div class="column-header">
+              <n-text strong>{{ t(col.titleKey) }}</n-text>
+              <n-tag size="small" round :type="col.key === 'blocked' ? 'error' : 'default'">{{ col.tasks.length }}</n-tag>
+            </div>
+            <div class="column-body">
+              <n-card
+                v-for="task in col.tasks"
+                :key="task.id"
+                size="small"
+                hoverable
+                style="margin-bottom: 8px; cursor: pointer;"
+                @click="col.key !== 'blocked' && moveTaskForward(task)"
+              >
+                <n-space vertical :size="4">
+                  <n-text strong>{{ task.title }}</n-text>
+                  <n-text depth="3" style="font-size: 12px;">{{ task.description?.slice(0, 80) }}</n-text>
+                  <n-space v-if="task.due_date" :size="4">
+                    <n-tag :type="dueDateType(task)" size="tiny">
+                      <template #icon><n-icon :component="CalendarOutline" /></template>
+                      {{ formatDueDate(task.due_date) }}
+                    </n-tag>
+                  </n-space>
+                </n-space>
+                <template #action>
+                  <n-space>
+                    <n-tag :type="priorityType(task.priority)" size="tiny">{{ task.priority }}</n-tag>
+                    <n-button v-if="col.key === 'blocked'" size="tiny" type="primary" @click.stop="unblockTask(task.id)">{{ t('kanban.unblock') }}</n-button>
+                    <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
+                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
+                  </n-space>
+                </template>
+              </n-card>
+            </div>
+          </div>
+        </div>
+      </div>
+    </n-spin>
 
     <!-- Add/Edit Task Modal -->
     <n-modal v-model:show="showTaskModal" :title="editingTask ? t('kanban.editTask') : t('kanban.newTask')">
@@ -252,7 +253,7 @@ const assigneeOptions = computed(() => [
 
 const goalOptions = computed(() => {
   const options = [{ label: t('kanban.allLabel'), value: '' }]
-  goalsStore.goals.forEach(g => {
+  ;(goalsStore.goals ?? []).forEach(g => {
     options.push({ label: g.title, value: g.id })
   })
   return options
@@ -415,6 +416,14 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.kanban-filter-bar {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+}
+
 .kanban-container {
   display: flex;
   flex-direction: column;

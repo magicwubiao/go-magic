@@ -2659,7 +2659,6 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			providers = append(providers, map[string]interface{}{
 				"id":       name,
 				"name":     name,
-				"type":     name,
 				"enabled":  true,
 				"api_key":  provCfg.APIKey,
 				"base_url": provCfg.BaseURL,
@@ -2749,6 +2748,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 	// Handle POST /{name} - create provider (alias for PUT to create new)
 	if r.Method == http.MethodPost && subRoute == "" {
 		var req struct {
+			Name    string   `json:"name"`
 			BaseURL string   `json:"base_url"`
 			Model   string   `json:"model"`
 			APIKey  string   `json:"api_key"`
@@ -2758,12 +2758,17 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		// Use provided name or fallback to URL parameter
+		providerName := req.Name
+		if providerName == "" {
+			providerName = name
+		}
 		// Create/update provider config
 		if s.cfg != nil {
 			if s.cfg.Providers == nil {
 				s.cfg.Providers = make(map[string]appconfig.ProviderConfig)
 			}
-			provCfg := s.cfg.Providers[name]
+			provCfg := s.cfg.Providers[providerName]
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
@@ -2773,10 +2778,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.APIKey != "" {
 				provCfg.APIKey = req.APIKey
 			}
-			s.cfg.Providers[name] = provCfg
+			s.cfg.Providers[providerName] = provCfg
 			s.cfg.Save()
 		}
-		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "created": true})
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": providerName, "created": true})
 		return
 	}
 

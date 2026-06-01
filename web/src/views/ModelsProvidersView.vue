@@ -22,10 +22,7 @@
         <n-modal v-model:show="showModal" :title="editingId ? t('models.editProvider') : t('models.addProvider')" preset="dialog">
           <n-form label-placement="left" label-width="120">
             <n-form-item :label="t('models.providerName')">
-              <n-input v-model:value="form.name" :placeholder="t('models.providerName')" />
-            </n-form-item>
-            <n-form-item :label="t('models.providerType')">
-              <n-select v-model:value="form.type" :options="typeOptions" />
+              <n-select v-model:value="form.name" :options="providerOptions" :disabled="!!editingId" />
             </n-form-item>
             <n-form-item :label="t('models.apiKey')">
               <n-input v-model:value="form.api_key" type="password" show-password-on="click" :placeholder="t('models.apiKey')" />
@@ -93,25 +90,24 @@ const editingId = ref<string | null>(null)
 
 const form = reactive({
   name: '',
-  type: 'openai',
   api_key: '',
   base_url: '',
   model: '',
   enabled: true,
 })
 
-const typeOptions = [
+const providerOptions = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic (Claude)', value: 'anthropic' },
   { label: 'DeepSeek', value: 'deepseek' },
   { label: 'Google (Gemini)', value: 'gemini' },
   { label: 'Kimi (Moonshot)', value: 'kimi' },
   { label: 'Doubao (Volcano/ByteDance)', value: 'doubao' },
-  { label: t('models.zhipu'), value: 'zhipu' },
-  { label: t('models.dashscope'), value: 'dashscope' },
+  { label: t('models.zhipu') || '智谱 AI', value: 'zhipu' },
+  { label: t('models.dashscope') || 'DashScope', value: 'dashscope' },
   { label: 'MiniMax', value: 'minimax' },
-  { label: t('models.wenxin'), value: 'wenxin' },
-  { label: t('models.hunyuan'), value: 'hunyuan' },
+  { label: t('models.wenxin') || '文心一言', value: 'wenxin' },
+  { label: t('models.hunyuan') || '腾讯混元', value: 'hunyuan' },
   { label: 'Moonshot', value: 'moonshot' },
   { label: 'MiMo', value: 'mimo' },
   { label: 'OpenRouter', value: 'openrouter' },
@@ -127,7 +123,6 @@ const typeOptions = [
 
 const providerColumns = [
   { title: t('common.name'), key: 'name' },
-  { title: t('models.providerType'), key: 'type' },
   { title: t('models.model'), key: 'model' },
   {
     title: t('models.apiKey'),
@@ -165,7 +160,6 @@ const modelColumns = [
 function openAddModal() {
   editingId.value = null
   form.name = ''
-  form.type = 'openai'
   form.api_key = ''
   form.base_url = ''
   form.model = ''
@@ -175,7 +169,6 @@ function openAddModal() {
 function editProvider(provider: Provider) {
   editingId.value = provider.id
   form.name = provider.name
-  form.type = provider.type || 'openai'
   form.api_key = provider.api_key || ''
   form.base_url = provider.base_url || ''
   form.model = provider.model || ''
@@ -200,7 +193,7 @@ async function saveProvider() {
     if (form.api_key) {
       await configStore.updateConfig({
         provider_config: {
-          [form.type]: {
+          [form.name]: {
             api_key: form.api_key,
             base_url: form.base_url,
             model: form.model,

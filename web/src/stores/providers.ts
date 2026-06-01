@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as providersApi from '@/api/providers'
 import type { Provider } from '@/api/providers'
+import { useModelsStore } from './models'
 
 export interface ProviderError {
   message: string
@@ -61,6 +62,9 @@ export const useProvidersStore = defineStore('providers', () => {
       error.value = null
       await providersApi.deleteProvider(id)
       providers.value = providers.value.filter(p => p.id !== id)
+      // Also refresh models since they are derived from providers
+      const modelsStore = useModelsStore()
+      await modelsStore.loadModels()
       return true
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
