@@ -62,6 +62,7 @@ export default {
     disable: '禁用',
     format: '格式化',
     operationFailed: '操作失败',
+    language: '语言',
   },
   goals: {
     title: '目标',

@@ -62,6 +62,7 @@ export default {
     disable: 'Disable',
     format: 'Format',
     operationFailed: 'Operation failed',
+    language: 'Language',
   },
   goals: {
     title: 'Goals',

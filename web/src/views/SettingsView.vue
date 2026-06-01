@@ -1,6 +1,12 @@
 <template>
   <div>
     <h2 style="margin-bottom: 24px;">{{ t('nav.config') }}</h2>
+
+    <!-- Language Settings -->
+    <n-card :title="t('common.language')" style="margin-bottom: 24px;">
+      <locale-switch />
+    </n-card>
+
     <n-spin v-if="loading" />
     <n-form v-else label-placement="left" label-width="120">
       <n-form-item :label="t('models.provider')">
@@ -27,6 +33,7 @@ import { reactive, ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
+import LocaleSwitch from '@/components/LocaleSwitch.vue'
 
 const { t } = useI18n()
 

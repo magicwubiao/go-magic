@@ -13,10 +13,9 @@
           :collapsed-width="64"
           :width="220"
           show-trigger
+          v-model:collapsed="siderCollapsed"
         >
-          <div style="padding: 8px 0; border-bottom: 1px solid #e0e0e0;">
-            <locale-switch />
-          </div>
+          <sidebar-logo :collapsed="siderCollapsed" />
           <n-menu
             :collapsed-width="64"
             :collapsed-icon-size="22"
@@ -59,7 +58,7 @@ import { computed, h, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, NModal } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import LocaleSwitch from '@/components/LocaleSwitch.vue'
+import SidebarLogo from '@/components/SidebarLogo.vue'
 import {
   ChatbubbleOutline,
   SettingsOutline,
@@ -84,6 +83,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
+const siderCollapsed = ref(false)
 
 const isLoginPage = computed(() => route.path === '/login')
 

@@ -30,7 +30,7 @@
     </n-card>
   </div>
   <div v-else class="current-goal-empty">
-    <n-card size="small" style="background: #f5f5f5;">
+    <n-card size="small">
       <n-space align="center" justify="center" :size="8">
         <n-icon :component="FlagOutline" color="#999" />
         <n-text depth="3" style="font-size: 13px;">{{ t('goals.noActiveGoal') }}</n-text>

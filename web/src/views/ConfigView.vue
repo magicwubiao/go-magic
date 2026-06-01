@@ -1,6 +1,12 @@
 <template>
   <div>
     <h2 style="margin-bottom: 24px;">{{ t('config.title') }}</h2>
+
+    <!-- Language Settings -->
+    <n-card :title="t('common.language')" style="margin-bottom: 24px;">
+      <locale-switch />
+    </n-card>
+
     <n-spin v-if="configStore.loading" />
     <n-tabs v-else type="line" animated>
       <!-- General Tab -->
@@ -99,6 +105,7 @@ import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
+import LocaleSwitch from '@/components/LocaleSwitch.vue'
 
 const { t } = useI18n()
 

@@ -76,18 +76,6 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Migrate skills if exists
-	openclawSkills := filepath.Join(openclawDir, "skills")
-	if _, err := os.Stat(openclawSkills); err == nil {
-		fmt.Println("Migrating skills...")
-		magicSkills := filepath.Join(magicDir, "skills")
-		if err := copyDirRecursive(openclawSkills, magicSkills); err != nil {
-			fmt.Printf("  Warning: failed to migrate skills: %v\n", err)
-		} else {
-			fmt.Println("  ✓ Skills migrated")
-		}
-	}
-
 	// Save migrated config
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save migrated config: %w", err)
@@ -182,33 +170,4 @@ func copyFileSimple(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
-}
-
-// copyDirRecursive copies a directory from src to dst recursively
-func copyDirRecursive(src, dst string) error {
-	if err := os.MkdirAll(dst, 0755); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := copyDirRecursive(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFileSimple(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }

@@ -284,7 +284,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  background: #fafafa;
+  background: #fff;
 }
 
 .sidebar-header {
@@ -582,7 +582,7 @@ onMounted(async () => {
   gap: 12px;
   padding: 16px 24px;
   border-top: 1px solid #e0e0e0;
-  background: #fafafa;
+  background: #fff;
 }
 
 .input-area .n-input {
@@ -592,7 +592,7 @@ onMounted(async () => {
 /* ========== Dark Mode ========== */
 @media (prefers-color-scheme: dark) {
   .session-sidebar {
-    background: #1a1a1a;
+    background: #fff;
     border-right-color: #333;
   }
 
@@ -630,7 +630,7 @@ onMounted(async () => {
   }
 
   .input-area {
-    background: #1a1a1a;
+    background: #fff;
     border-top-color: #333;
   }
 
