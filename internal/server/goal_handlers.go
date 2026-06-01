@@ -113,12 +113,12 @@ func (s *Server) handleGoalAnalyze(w http.ResponseWriter, r *http.Request) {
 	analysis := analyzeProgress(g, req.Conversation)
 
 	jsonResponse(w, map[string]interface{}{
-		"goal_id":     goalID,
-		"title":       g.Title,
-		"current_progress": g.Progress,
+		"goal_id":            goalID,
+		"title":              g.Title,
+		"current_progress":   g.Progress,
 		"suggested_progress": analysis.SuggestedProgress,
-		"reason":      analysis.Reason,
-		"completed":   analysis.Completed,
+		"reason":             analysis.Reason,
+		"completed":          analysis.Completed,
 	})
 }
 
@@ -130,7 +130,7 @@ type ProgressAnalysis struct {
 
 func analyzeProgress(g *goal.Goal, conversation string) ProgressAnalysis {
 	lowerConv := strings.ToLower(conversation)
-	
+
 	// Check for completion indicators
 	completionWords := []string{"完成", "搞定", "done", "finished", "completed", "解决了", "成功了"}
 	for _, word := range completionWords {

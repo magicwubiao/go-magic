@@ -658,17 +658,17 @@ func (m *Manager) GetThroughputStats(tenant string, days int) (*ThroughputStats,
 
 // BurndownPoint represents a point in the burndown chart
 type BurndownPoint struct {
-	Date        string `json:"date"`
-	Total       int    `json:"total"`        // Total tasks at start of day
-	Remaining   int    `json:"remaining"`    // Tasks not done
-	Completed   int    `json:"completed"`    // Tasks completed that day
-	Added       int    `json:"added"`        // Tasks added that day
+	Date      string `json:"date"`
+	Total     int    `json:"total"`     // Total tasks at start of day
+	Remaining int    `json:"remaining"` // Tasks not done
+	Completed int    `json:"completed"` // Tasks completed that day
+	Added     int    `json:"added"`     // Tasks added that day
 }
 
 // ThroughputStats represents throughput statistics
 type ThroughputStats struct {
-	TotalCreated   int     `json:"total_created"`   // Total tasks created
-	TotalCompleted int     `json:"total_completed"` // Total tasks completed
-	AverageLeadTime float64 `json:"average_lead_time_hours"` // Average time from creation to completion
+	TotalCreated     int     `json:"total_created"`           // Total tasks created
+	TotalCompleted   int     `json:"total_completed"`         // Total tasks completed
+	AverageLeadTime  float64 `json:"average_lead_time_hours"` // Average time from creation to completion
 	ThroughputPerDay float64 `json:"throughput_per_day"`      // Average tasks completed per day
 }

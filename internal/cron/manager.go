@@ -42,31 +42,31 @@ type Job struct {
 
 // ExecutionLog records the result of a job execution
 type ExecutionLog struct {
-	ID        string    `json:"id"`
-	JobID     string    `json:"job_id"`
-	JobName   string    `json:"job_name"`
-	StartedAt time.Time `json:"started_at"`
+	ID         string     `json:"id"`
+	JobID      string     `json:"job_id"`
+	JobName    string     `json:"job_name"`
+	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Status    string    `json:"status"` // success, failed, timeout
-	Output    string    `json:"output,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Duration  string    `json:"duration,omitempty"`
+	Status     string     `json:"status"` // success, failed, timeout
+	Output     string     `json:"output,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	Duration   string     `json:"duration,omitempty"`
 }
 
 // Manager manages cron jobs with real scheduling
 type Manager struct {
-	jobsFile    string
-	logsFile    string
-	jobs        map[string]*Job
-	jobsMu      sync.RWMutex
-	logs        []ExecutionLog
-	logsMu      sync.RWMutex
-	cron        *robfigcron.Cron
-	entryMap    map[string]robfigcron.EntryID // job.ID -> cron entry ID
-	ctx         context.Context
-	cancel      context.CancelFunc
-	prov        provider.Provider             // LLM provider
-	toolReg     *tool.Registry              // Tool registry for agent tools
+	jobsFile string
+	logsFile string
+	jobs     map[string]*Job
+	jobsMu   sync.RWMutex
+	logs     []ExecutionLog
+	logsMu   sync.RWMutex
+	cron     *robfigcron.Cron
+	entryMap map[string]robfigcron.EntryID // job.ID -> cron entry ID
+	ctx      context.Context
+	cancel   context.CancelFunc
+	prov     provider.Provider // LLM provider
+	toolReg  *tool.Registry    // Tool registry for agent tools
 }
 
 // NewManager creates a new cron manager
