@@ -8,48 +8,91 @@ import (
 	"github.com/magicwubiao/go-magic/internal/execution"
 	"github.com/magicwubiao/go-magic/internal/memory"
 	"github.com/magicwubiao/go-magic/internal/perception"
+	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/review"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/trigger"
 )
 
-// Manager integrates all six Cortex Agent systems:
+// Manager integrates all Cortex Agent systems with Hermes Agent-inspired features:
 // 1. User Message Trigger
 // 2. Periodic Nudge Mechanism
 // 3. Background Review System
 // 4. Dual File Storage (MEMORY.md + USER.md)
-// 5. Holographic Memory (SQLite FTS5 - coming soon)
+// 5. Holographic Memory (SQLite FTS5)
 // 6. Memory Manager with Frozen Snapshot
+// 7. SOUL.md System Personality (NEW)
+// 8. LLM Planner (NEW)
+// 9. Prompt Caching (NEW)
+// 10. Context Compression (NEW)
+// 12. GEPA Self-Evolution Engine (NEW)
 type Manager struct {
 	baseDir        string
+	provider       provider.Provider // For LLM features
+
+	// Core systems
 	Snapshot       *memory.SnapshotManager     // System 4: Frozen snapshot memory
 	Trigger        *trigger.MessageTrigger     // System 1 + 2: Nudge mechanism
 	Review         *review.BackgroundReview    // System 3: Background review
 	Perception     *perception.Parser          // Layer 1: Intent classification
 	Cognition      *cognition.Planner          // Layer 2: Planning and decision making
+	LLMPlanner     *cognition.LLMPlanner       // LLM-based planning (NEW)
 	Execution      *execution.Manager          // Layer 3: Checkpoint + Resume
 	FTSMemory      *memory.FTSStore            // System 5: FTS full-text search
 	SkillCreator   *skills.EnhancedAutoCreator // System 6: Auto skill evolution
+
+	// NEW: Hermes-inspired systems
+	Soul             *SoulManager          // System personality (SOUL.md)
+	UserProfile      *UserProfile          // User preferences (USER.md)
+	PromptCache      *PromptCache          // Prompt caching
+	ContextCompressor *ContextCompressor   // Context compression
+	TrajectoryStore  *TrajectoryStore      // Trajectory learning
+	GEPAEngine       *GEPAEngine           // Self-evolution engine
+
 	LastPerception *perception.PerceptionResult
 	LastDecision   *cognition.Decision   // Last cognition decision
 	LastCheckpoint *execution.Checkpoint // Current execution checkpoint
 }
 
 // NewManager creates a new Cortex integration manager
-// Initializes all 6 Cortex systems and 3-layer architecture
-func NewManager(baseDir string) *Manager {
-	// Note: FTSStore may fail if sqlite3 is not available,
-	// so we initialize it separately in Start()
+// Initializes all Cortex systems including Hermes Agent-inspired features
+func NewManager(baseDir string, prov provider.Provider) *Manager {
+	return NewManagerWithProfile(baseDir, prov, "")
+}
+
+// NewManagerWithProfile creates a new Cortex manager with specific profile
+// The profile parameter specifies which profile's user.md to load
+func NewManagerWithProfile(baseDir string, prov provider.Provider, profile string) *Manager {
+	cortexDir := filepath.Join(baseDir, "cortex")
+
+	// Determine UserProfile path based on profile
+	userProfileDir := cortexDir
+	if profile != "" && profile != "default" {
+		userProfileDir = filepath.Join(baseDir, "profiles", profile)
+	}
+
 	mgr := &Manager{
 		baseDir:      baseDir,
+		provider:     prov,
 		Snapshot:     memory.NewSnapshotManager(baseDir),
 		Trigger:      trigger.NewMessageTrigger(),
-		Review:       review.NewBackgroundReview(filepath.Join(baseDir, "reviews")),
+		Review:       review.NewBackgroundReview(filepath.Join(cortexDir, "reviews")),
 		Perception:   perception.NewParser(),
 		Cognition:    cognition.NewPlanner(),
 		Execution:    execution.NewManager(baseDir),
 		SkillCreator: skills.NewEnhancedAutoCreator(baseDir),
-		// FTSMemory initialized in Start()
+
+		// NEW: Hermes-inspired systems
+		Soul:             NewSoulManager(cortexDir),
+		UserProfile:      NewUserProfile(userProfileDir),
+		PromptCache:      nil, // Initialized in Start()
+		ContextCompressor: NewContextCompressor(prov, 0, 0),
+		TrajectoryStore:  nil, // Initialized in Start()
+	}
+
+	// Initialize LLM Planner if provider is available
+	if prov != nil {
+		mgr.LLMPlanner = cognition.NewLLMPlanner(prov)
 	}
 
 	// Wire up the connections between systems
@@ -68,26 +111,56 @@ func (m *Manager) setupConnections() {
 	})
 }
 
-// Start initializes all six Cortex systems
+// Start initializes all Cortex systems
 // Systems started in order of dependency:
-//  1. Memory systems (Snapshot, FTS)
-//  2. Review system
-//  3. Skill evolution system
-//  4. Trigger system
 func (m *Manager) Start() error {
+	cortexDir := filepath.Join(m.baseDir, "cortex")
+
 	// System 4: Load frozen snapshot from disk
 	if err := m.Snapshot.Load(); err != nil {
 		return err
 	}
 
 	// System 5: Initialize FTS holographic memory (best effort)
-	if fts, err := memory.NewFTSStore(filepath.Join(m.baseDir, "fts")); err == nil {
+	if fts, err := memory.NewFTSStore(filepath.Join(cortexDir, "fts")); err == nil {
 		m.FTSMemory = fts
 	}
 
 	// System 3: Start background review system
 	if err := m.Review.Start(); err != nil {
 		return err
+	}
+
+	// NEW: Load SOUL.md system personality
+	if err := m.Soul.Load(); err != nil {
+		return err
+	}
+
+	// NEW: Load USER.md profile
+	if err := m.UserProfile.Load(); err != nil {
+		return err
+	}
+
+	// NEW: Initialize Prompt Cache
+	if m.provider != nil {
+		pc, err := NewPromptCache(m.provider, filepath.Join(cortexDir, "prompt_cache"))
+		if err == nil {
+			m.PromptCache = pc
+		}
+	}
+
+	// NEW: Initialize Trajectory Store
+	ts, err := NewTrajectoryStore(cortexDir)
+	if err == nil {
+		m.TrajectoryStore = ts
+	}
+
+	// NEW: Initialize GEPA Engine (self-evolution)
+	if m.provider != nil && m.TrajectoryStore != nil {
+		gepa := NewGEPAEngine(cortexDir, m.provider, m.TrajectoryStore)
+		if err := gepa.Start(nil); err == nil {
+			m.GEPAEngine = gepa
+		}
 	}
 
 	return nil

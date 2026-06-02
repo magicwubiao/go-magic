@@ -11,6 +11,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/bus"
+	"github.com/magicwubiao/go-magic/internal/complexity"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
@@ -69,6 +70,9 @@ type ToolCallResult struct {
 
 // Agent handles AI conversation with tool execution
 type Agent struct {
+	// Mutex for concurrent access protection
+	mu sync.RWMutex
+
 	provider    provider.Provider
 	registry    ToolRegistry
 	tools       []map[string]interface{} // tools schema for provider
@@ -80,7 +84,7 @@ type Agent struct {
 	maxIterations  int
 	maxTokenBudget int64
 
-	// Tool call loop detection
+	// Tool call loop detection (protected by mu)
 	toolCallHistory  []string       // 记录已调用的工具名
 	toolCallCount    map[string]int // 每个工具被调用的次数
 	sameToolLimit    int            // 同一工具最大调用次数
@@ -97,6 +101,9 @@ type Agent struct {
 
 	// Hooks system
 	hooks *hooks.HookManager
+
+	// Approval hook reference (set during registerBuiltinHooks)
+	approvalHook *ApprovalHook
 
 	// Event bus for observability
 	bus *bus.EventBus
@@ -254,26 +261,94 @@ func (a *Agent) registerBuiltinHooks() {
 		Hook:   hooks.NewPrivacyHook(),
 	})
 	// Smart approval hook
+	ah := NewApprovalHook()
+	a.approvalHook = ah
 	a.hooks.Register(hooks.HookRegistration{
 		Name:   "approval",
 		Source: hooks.HookSourceBuiltIn,
-		Hook:   NewApprovalHook(),
+		Hook:   ah,
 	})
 }
 
 // SetSession sets the session ID for event tracking
 func (a *Agent) SetSession(session string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.session = session
 }
 
 // Emit emits an event to the event bus
 func (a *Agent) Emit(kind bus.EventKind, data interface{}) {
+	a.mu.RLock()
+	turn := a.iterationCount
+	session := a.session
+	a.mu.RUnlock()
+	
 	a.bus.Emit(bus.Event{
 		Kind:      kind,
-		Turn:      a.iterationCount,
-		SessionID: a.session,
+		Turn:      turn,
+		SessionID: session,
 		Data:      data,
 	})
+}
+
+// addToHistory safely adds a message to history with lock protection
+func (a *Agent) addToHistory(msg provider.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.history = append(a.history, msg)
+}
+
+// addToHistoryMultiple safely adds multiple messages to history
+func (a *Agent) addToHistoryMultiple(msgs []provider.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.history = append(a.history, msgs...)
+}
+
+// getHistory safely returns a copy of history
+func (a *Agent) getHistory() []provider.Message {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]provider.Message, len(a.history))
+	copy(result, a.history)
+	return result
+}
+
+// recordToolCall safely records a tool call for loop detection
+func (a *Agent) recordToolCall(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolCallHistory = append(a.toolCallHistory, name)
+	a.toolCallCount[name]++
+}
+
+// getToolCallCount safely returns the count for a specific tool
+func (a *Agent) getToolCallCount(name string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.toolCallCount[name]
+}
+
+// getToolCallHistoryLength safely returns the length of tool call history
+func (a *Agent) getToolCallHistoryLength() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.toolCallHistory)
+}
+
+// incrementIteration safely increments the iteration count
+func (a *Agent) incrementIteration() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.iterationCount++
+}
+
+// getIteration safely returns the current iteration count
+func (a *Agent) getIteration() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.iterationCount
 }
 
 // AddSkillsContext adds skills context to system prompt
@@ -282,6 +357,9 @@ func (a *Agent) AddSkillsContext(skillsCtx string) {
 		return
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
 	for i, msg := range a.history {
 		if msg.Role == "system" {
 			a.history[i].Content += "\n\n" + skillsCtx
@@ -302,7 +380,7 @@ func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, s
 		return false, "", nil
 	}
 
-	analyzer := NewComplexityAnalyzer()
+	analyzer := complexity.NewAnalyzer()
 	if !analyzer.ShouldDecompose(input) {
 		return false, "", nil
 	}
@@ -1722,4 +1800,10 @@ func (a *Agent) AddSystemContext(ctx string) {
 // GetProvider returns the agent's provider for use by other components
 func (a *Agent) GetProvider() provider.Provider {
 	return a.provider
+}
+
+// GetApprovalHook returns the agent's approval hook for web API access.
+// Returns nil if the approval hook is not available.
+func (a *Agent) GetApprovalHook() *ApprovalHook {
+	return a.approvalHook
 }

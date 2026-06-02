@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
@@ -2362,8 +2363,21 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 	// Build system prompt
 	systemPrompt := buildSystemPrompt(cfg, codingMode)
 
-	// Initialize agent
-	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, systemPrompt)
+	// Prepare agent options
+	var agentOpts []agent.AgentOption
+
+	// Initialize Cortex if enabled
+	if cfg.CortexEnabled {
+		home, _ := os.UserHomeDir()
+		cortexDir := filepath.Join(home, ".magic", "cortex")
+		cortexMgr := cortex.NewManager(cortexDir, prov)
+		if err := cortexMgr.Start(); err == nil {
+			agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))
+		}
+	}
+
+	// Initialize agent (with cortex option if enabled)
+	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, systemPrompt, agentOpts...)
 
 	// Generate session ID
 	sessionID := uuid.New().String()

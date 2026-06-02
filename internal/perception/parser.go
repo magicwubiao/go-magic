@@ -3,6 +3,8 @@ package perception
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/magicwubiao/go-magic/internal/complexity"
 )
 
 // Parser handles intent classification and entity extraction
@@ -92,27 +94,17 @@ func (p *Parser) classifyIntent(input string, context []string) IntentClassifica
 	return result
 }
 
-// estimateComplexity estimates task complexity based on keywords
+// estimateComplexity estimates task complexity using the unified ComplexityAnalyzer
+// This delegates to agent.ComplexityAnalyzer for consistent complexity assessment
 func (p *Parser) estimateComplexity(input string) TaskComplexity {
-	lower := strings.ToLower(input)
+	// Use the unified ComplexityAnalyzer from complexity package
+	analyzer := complexity.NewAnalyzer()
+	score := analyzer.Analyze(input)
 
-	// Advanced tasks keywords
-	advancedKeywords := []string{
-		"end to end", "full system", "entire project", "production ready",
-		"multi-step", "multiple files", "integrate with", "deploy to",
-		"build and test", "ci/cd", "pipeline", "architecture",
-	}
-
-	// Medium tasks keywords
-	mediumKeywords := []string{
-		"refactor", "optimize", "debug", "analyze", "convert",
-		"create a script", "write a function", "add a feature",
-	}
-
-	if containsAny(lower, advancedKeywords) {
+	// Map ComplexityScore to TaskComplexity
+	if score.Score > 60 {
 		return ComplexityAdvanced
-	}
-	if containsAny(lower, mediumKeywords) {
+	} else if score.Score > 30 {
 		return ComplexityMedium
 	}
 	return ComplexitySimple

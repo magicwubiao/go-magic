@@ -268,7 +268,7 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 	case "wenxin":
 		return provider.NewWenxinProvider(cfg.APIKey, cfg.APIKey, cfg.Model)
 	case "moonshot":
-		return provider.NewMoonshotProvider(cfg.APIKey, cfg.Model)
+		return provider.NewMoonshotProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "mimo":
 		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 	case "hunyuan":

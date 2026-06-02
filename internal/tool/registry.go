@@ -100,7 +100,7 @@ func (r *Registry) RegisterAll(workDir string) {
 
 	// Web tools
 	r.Register(&WebSearchTool{})
-	r.Register(&WebExtractTool{})
+	// Note: WebExtractTool removed, use browser_navigate instead
 
 	// Command execution with multiple backends (local, docker, ssh)
 	r.Register(NewSecureExecuteCommandTool(workDir))
@@ -161,7 +161,18 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 
-	// Browser tools - lightweight goquery-based
+	// Browser tools - chromedp-based real browser automation
+	bt := NewBrowserTools()
+	r.Register(NewBrowserNavigateTool(bt))
+	r.Register(NewBrowserClickTool(bt))
+	r.Register(NewBrowserTypeTool(bt))
+	r.Register(NewBrowserScrollTool(bt))
+	r.Register(NewBrowserBackTool())
+	r.Register(NewBrowserConsoleTool())
+	r.Register(NewBrowserSnapshotTool(bt))
+	r.Register(NewBrowserGetImagesTool(bt))
+
+	// Legacy web tools - lightweight goquery-based
 	r.Register(NewWebFetchTool())
 	r.Register(NewWebSelectTool())
 
@@ -262,7 +273,7 @@ func GetAllTools() []Tool {
 		&ReadFileTool{},
 		&WriteFileTool{},
 		&WebSearchTool{},
-		&WebExtractTool{},
+		// Note: WebExtractTool removed, use browser_navigate instead
 		NewSecureExecuteCommandTool(""),
 		&ListFilesTool{},
 		&SearchInFilesTool{},

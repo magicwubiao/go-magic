@@ -85,8 +85,8 @@ func runStats(cmd *cobra.Command, args []string) {
 	registry.Register(&tool.ReadFileTool{})
 	registry.Register(&tool.WriteFileTool{})
 	registry.Register(&tool.WebSearchTool{})
-	registry.Register(&tool.WebExtractTool{})
-	registry.Register(&tool.ExecuteCommandTool{})
+	// Note: WebExtractTool removed, use browser_navigate instead
+	registry.Register(tool.NewSecureExecuteCommandTool(""))
 
 	for _, t := range registry.List() {
 		enabled := "enabled"

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/goal"
@@ -750,6 +751,18 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/goals/current", withCORS(requireAuth(s.handleGoalCurrent)))
 	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 	mux.HandleFunc("/api/goals/analyze", withCORS(requireAuth(s.handleGoalAnalyze)))
+
+	// Approval Management
+	mux.HandleFunc("/api/approval/status", withCORS(requireAuth(s.handleApprovalStatus)))
+	mux.HandleFunc("/api/approval/history", withCORS(requireAuth(s.handleApprovalHistory)))
+	mux.HandleFunc("/api/approval/stats", withCORS(requireAuth(s.handleApprovalStats)))
+	mux.HandleFunc("/api/approval/pending", withCORS(requireAuth(s.handleApprovalPending)))
+	mux.HandleFunc("/api/approval/pending/", withCORS(requireAuth(s.handleApprovalPendingByID)))
+	mux.HandleFunc("/api/approval/trusted", withCORS(requireAuth(s.handleApprovalTrusted)))
+	mux.HandleFunc("/api/approval/denied", withCORS(requireAuth(s.handleApprovalDenied)))
+	mux.HandleFunc("/api/approval/whitelist", withCORS(requireAuth(s.handleApprovalWhitelist)))
+	mux.HandleFunc("/api/approval/strategy", withCORS(requireAuth(s.handleApprovalStrategy)))
+	mux.HandleFunc("/api/approval/clear-history", withCORS(requireAuth(s.handleApprovalClearHistory)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -3838,6 +3851,77 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// --- User Profile (user.md) ---
+	if strings.HasSuffix(path, "/user") {
+		name := strings.TrimSuffix(path, "/user")
+		userPath := filepath.Join(s.magicHome, "profiles", name, "user.md")
+		if r.Method == http.MethodGet {
+			data, _ := os.ReadFile(userPath)
+			exists := false
+			if _, err := os.Stat(userPath); err == nil {
+				exists = true
+			}
+			// Parse user.md content into structured data
+			userData := s.parseUserMD(string(data))
+			jsonResponse(w, map[string]interface{}{
+				"content": string(data),
+				"exists":  exists,
+				"data":    userData,
+			})
+			return
+		}
+		if r.Method == http.MethodPut {
+			var req struct {
+				Content string                 `json:"content"`
+				Data    map[string]interface{} `json:"data"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			// If data is provided, regenerate content
+			content := req.Content
+			if req.Data != nil {
+				content = s.generateUserMD(req.Data)
+			}
+			os.WriteFile(userPath, []byte(content), 0644)
+			jsonResponse(w, map[string]bool{"ok": true})
+			return
+		}
+	}
+
+	// --- User Preferences (from Cortex) ---
+	if strings.HasSuffix(path, "/preferences") {
+		name := strings.TrimSuffix(path, "/preferences")
+		if r.Method == http.MethodGet {
+			// Return preferences from Cortex UserProfile
+			preferences := s.getUserPreferences(name)
+			jsonResponse(w, map[string]interface{}{"preferences": preferences})
+			return
+		}
+	}
+
+	// --- Preference Feedback ---
+	if strings.Contains(path, "/preferences/") && strings.HasSuffix(path, "/feedback") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 3 {
+			name := parts[0]
+			key := parts[2]
+			if r.Method == http.MethodPost {
+				var req struct {
+					Accurate bool `json:"accurate"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "Invalid request body", http.StatusBadRequest)
+					return
+				}
+				s.handlePreferenceFeedback(name, key, req.Accurate)
+				jsonResponse(w, map[string]bool{"ok": true})
+				return
+			}
+		}
+	}
 	if strings.HasSuffix(path, "/switch") && r.Method == http.MethodPost {
 		name := strings.TrimSuffix(path, "/switch")
 		s.mu.Lock()
@@ -3918,6 +4002,168 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		"memory_usage": memStats.Alloc,
 		"goroutines":   runtime.NumGoroutine(),
 	})
+}
+
+// --- User Profile Helper Methods ---
+
+// parseUserMD parses user.md content into structured data
+func (s *Server) parseUserMD(content string) map[string]interface{} {
+	data := map[string]interface{}{
+		"name":                 "",
+		"role":                 "",
+		"communication_style":  "",
+		"code_style":          "",
+		"tech_stack":          []string{},
+		"interests":           []string{},
+	}
+
+	lines := strings.Split(content, "\n")
+	currentSection := ""
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "## ") {
+			currentSection = strings.ToLower(strings.TrimPrefix(line, "## "))
+			continue
+		}
+
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, "*") {
+			line = strings.TrimPrefix(line, "-")
+			line = strings.TrimPrefix(line, "*")
+			line = strings.TrimSpace(line)
+
+			if idx := strings.Index(line, ":"); idx > 0 {
+				key := strings.TrimSpace(line[:idx])
+				value := strings.TrimSpace(line[idx+1:])
+
+				switch currentSection {
+				case "about":
+					if strings.EqualFold(key, "Name") {
+						data["name"] = value
+					} else if strings.EqualFold(key, "Role") {
+						data["role"] = value
+					}
+				case "preferences":
+					if strings.EqualFold(key, "Communication style") {
+						data["communication_style"] = value
+					} else if strings.EqualFold(key, "Code style") {
+						data["code_style"] = value
+					}
+				case "tech stack":
+					if value != "" && value != "[Not set]" {
+						if stack, ok := data["tech_stack"].([]string); ok {
+							data["tech_stack"] = append(stack, value)
+						}
+					}
+				case "interests":
+					if value != "" && value != "[Not set]" {
+						if interests, ok := data["interests"].([]string); ok {
+							data["interests"] = append(interests, value)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return data
+}
+
+// generateUserMD generates user.md content from structured data
+func (s *Server) generateUserMD(data map[string]interface{}) string {
+	var lines []string
+	lines = append(lines, "# User Profile")
+	lines = append(lines, "")
+	lines = append(lines, "## About")
+
+	name := "[Not set]"
+	if v, ok := data["name"].(string); ok && v != "" {
+		name = v
+	}
+	lines = append(lines, "- Name: "+name)
+
+	role := "[Not set]"
+	if v, ok := data["role"].(string); ok && v != "" {
+		role = v
+	}
+	lines = append(lines, "- Role: "+role)
+
+	lines = append(lines, "")
+	lines = append(lines, "## Preferences")
+
+	commStyle := "[Not set]"
+	if v, ok := data["communication_style"].(string); ok && v != "" {
+		commStyle = v
+	}
+	lines = append(lines, "- Communication style: "+commStyle)
+
+	codeStyle := "[Not set]"
+	if v, ok := data["code_style"].(string); ok && v != "" {
+		codeStyle = v
+	}
+	lines = append(lines, "- Code style: "+codeStyle)
+
+	lines = append(lines, "")
+	lines = append(lines, "## Tech Stack")
+
+	if stack, ok := data["tech_stack"].([]interface{}); ok && len(stack) > 0 {
+		for _, tech := range stack {
+			if t, ok := tech.(string); ok {
+				lines = append(lines, "- "+t)
+			}
+		}
+	} else {
+		lines = append(lines, "- Languages: [Not set]")
+		lines = append(lines, "- Frameworks: [Not set]")
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "## Interests")
+
+	if interests, ok := data["interests"].([]interface{}); ok && len(interests) > 0 {
+		for _, interest := range interests {
+			if i, ok := interest.(string); ok {
+				lines = append(lines, "- "+i)
+			}
+		}
+	} else {
+		lines = append(lines, "- [Not set]")
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "## Notes")
+	lines = append(lines, "[Auto-managed by go-magic]")
+
+	return strings.Join(lines, "\n")
+}
+
+// getUserPreferences returns user preferences from Cortex UserProfile
+func (s *Server) getUserPreferences(profileName string) []map[string]interface{} {
+	// For now, return mock data
+	// In production, this should read from Cortex UserProfile
+	return []map[string]interface{}{
+		{
+			"key":        "communication_style",
+			"value":      "简洁",
+			"context":    "多次要求简短回答",
+			"confidence": 0.85,
+			"source":     "learned",
+		},
+		{
+			"key":        "preferred_language",
+			"value":      "Go",
+			"context":    "多次使用 Go 示例",
+			"confidence": 0.92,
+			"source":     "learned",
+		},
+	}
+}
+
+// handlePreferenceFeedback handles user feedback on preferences
+func (s *Server) handlePreferenceFeedback(profileName, key string, accurate bool) {
+	// In production, this should update Cortex UserProfile
+	// For now, just log the feedback
+	fmt.Printf("Preference feedback: profile=%s, key=%s, accurate=%v\n", profileName, key, accurate)
 }
 
 func (s *Server) handleSystemVersion(w http.ResponseWriter, r *http.Request) {
@@ -5434,6 +5680,342 @@ func getContentType(path string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// --- Approval Management ---
+
+// getApprovalManager returns the approval manager from any active agent.
+// If no agent is available, it returns nil.
+func (s *Server) getApprovalManager() *approval.Manager {
+	s.agentsMu.Lock()
+	defer s.agentsMu.Unlock()
+
+	// Try to find any agent with an approval hook
+	for _, a := range s.agents {
+		if hook := a.GetApprovalHook(); hook != nil {
+			return hook.GetManager()
+		}
+	}
+
+	// No active agents - create a temporary one to get the manager
+	// This ensures the API works even before any chat session is created
+	if s.provider != nil {
+		toolsSchema := getToolsSchema(s.toolReg)
+		a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, "")
+		if hook := a.GetApprovalHook(); hook != nil {
+			return hook.GetManager()
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) handleApprovalStatus(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	cfg := mgr.GetConfig()
+	stats := mgr.GetStats()
+
+	jsonResponse(w, map[string]interface{}{
+		"strategy":            cfg.Strategy,
+		"learning":            cfg.EnableLearning,
+		"cli_confirm":         cfg.EnableCLIConfirm,
+		"trust_threshold":     cfg.TrustThreshold,
+		"trusted_patterns":    stats.TrustedPatterns,
+		"denied_patterns":     stats.DeniedPatterns,
+		"total_requests":      stats.TotalRequests,
+		"auto_approved":       stats.AutoApproved,
+		"user_approved":       stats.UserApproved,
+		"user_denied":         stats.UserDenied,
+		"avg_response_time_ms": stats.AvgResponseTime,
+	})
+}
+
+func (s *Server) handleApprovalHistory(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 20
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	offsetStr := r.URL.Query().Get("offset")
+	offset := 0
+	if offsetStr != "" {
+		if n, err := strconv.Atoi(offsetStr); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	records := mgr.GetHistory(limit, offset)
+
+	// Count total from stats
+	stats := mgr.GetStats()
+
+	jsonResponse(w, map[string]interface{}{
+		"records": records,
+		"total":   stats.TotalRequests,
+	})
+}
+
+func (s *Server) handleApprovalStats(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	stats := mgr.GetStats()
+
+	// Convert by_risk_level keys to strings for JSON serialization
+	byRiskLevel := make(map[string]int)
+	for k, v := range stats.ByRiskLevel {
+		byRiskLevel[k.String()] = v
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"total_requests":      stats.TotalRequests,
+		"auto_approved":       stats.AutoApproved,
+		"user_approved":       stats.UserApproved,
+		"user_denied":         stats.UserDenied,
+		"timed_out":           stats.TimedOut,
+		"trusted_patterns":    stats.TrustedPatterns,
+		"denied_patterns":     stats.DeniedPatterns,
+		"top_commands":        stats.TopCommands,
+		"by_risk_level":       byRiskLevel,
+		"by_category":         stats.ByCategory,
+		"avg_response_time_ms": stats.AvgResponseTime,
+	})
+}
+
+func (s *Server) handleApprovalPending(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	pending := mgr.GetPendingApprovals()
+
+	type pendingItem struct {
+		ID        string `json:"id"`
+		Command   string `json:"command"`
+		RiskLevel string `json:"risk_level"`
+		SessionID string `json:"session_id"`
+		CreatedAt string `json:"created_at"`
+		ExpiresAt string `json:"expires_at"`
+	}
+
+	items := make([]pendingItem, 0, len(pending))
+	for _, pa := range pending {
+		items = append(items, pendingItem{
+			ID:        pa.ID,
+			Command:   pa.Request.Command,
+			RiskLevel: pa.Request.RiskLevel.String(),
+			SessionID: pa.Request.SessionID,
+			CreatedAt: pa.CreatedAt.Format(time.RFC3339),
+			ExpiresAt: pa.ExpiresAt.Format(time.RFC3339),
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"pending": items,
+		"total":   len(items),
+	})
+}
+
+func (s *Server) handleApprovalPendingByID(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	// Extract ID from path: /api/approval/pending/{id}/resolve or /api/approval/pending/{id}
+	path := strings.TrimPrefix(r.URL.Path, "/api/approval/pending/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+
+	if r.Method == http.MethodPost && len(parts) > 1 && parts[1] == "resolve" {
+		var req struct {
+			Approved bool   `json:"approved"`
+			Reason   string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		mgr.ResolveWebApproval(id, req.Approved, req.Reason)
+		jsonResponse(w, map[string]bool{"success": true})
+		return
+	}
+
+	// GET single pending approval
+	pending := mgr.GetPendingApprovals()
+	for _, pa := range pending {
+		if pa.ID == id {
+			jsonResponse(w, map[string]interface{}{
+				"id":         pa.ID,
+				"command":    pa.Request.Command,
+				"risk_level": pa.Request.RiskLevel.String(),
+				"session_id": pa.Request.SessionID,
+				"created_at": pa.CreatedAt.Format(time.RFC3339),
+				"expires_at": pa.ExpiresAt.Format(time.RFC3339),
+			})
+			return
+		}
+	}
+
+	http.Error(w, "Pending approval not found", http.StatusNotFound)
+}
+
+func (s *Server) handleApprovalTrusted(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	trusted := mgr.GetTrustedCommands()
+	jsonResponse(w, map[string]interface{}{
+		"patterns": trusted,
+		"total":    len(trusted),
+	})
+}
+
+func (s *Server) handleApprovalDenied(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	denied := mgr.GetDeniedCommands()
+	jsonResponse(w, map[string]interface{}{
+		"patterns": denied,
+		"total":    len(denied),
+	})
+}
+
+func (s *Server) handleApprovalWhitelist(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		patterns := mgr.GetWhitelist()
+		jsonResponse(w, map[string]interface{}{
+			"patterns": patterns,
+			"total":    len(patterns),
+		})
+
+	case http.MethodPost:
+		var req struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if err := mgr.AddToWhitelist(req.Pattern); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, map[string]bool{"success": true})
+
+	case http.MethodDelete:
+		var req struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if err := mgr.RemoveFromWhitelist(req.Pattern); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, map[string]bool{"success": true})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleApprovalStrategy(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			Strategy string `json:"strategy"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Strategy == "" {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		switch req.Strategy {
+		case "manual":
+			mgr.SetStrategy(approval.StrategyManual)
+		case "auto":
+			mgr.SetStrategy(approval.StrategyAutoApprove)
+		case "smart":
+			mgr.SetStrategy(approval.StrategySmart)
+		case "whitelist":
+			mgr.SetStrategy(approval.StrategyWhitelist)
+		default:
+			http.Error(w, "Invalid strategy. Must be: manual, auto, smart, or whitelist", http.StatusBadRequest)
+			return
+		}
+
+		jsonResponse(w, map[string]bool{"success": true})
+		return
+	}
+
+	// GET current strategy
+	cfg := mgr.GetConfig()
+	jsonResponse(w, map[string]interface{}{
+		"strategy": cfg.Strategy,
+	})
+}
+
+func (s *Server) handleApprovalClearHistory(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	var req struct {
+		OlderThanHours int `json:"older_than_hours"`
+	}
+	// Default body is optional; use default 168 hours (7 days) if not provided
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.OlderThanHours <= 0 {
+		req.OlderThanHours = 168
+	}
+
+	mgr.ClearHistory(time.Duration(req.OlderThanHours) * time.Hour)
+	jsonResponse(w, map[string]bool{"success": true})
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {

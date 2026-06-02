@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/retry"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -98,16 +99,18 @@ func NoStreamCapabilities() *Capabilities {
 	}
 }
 
-// RetryConfig configures retry behavior
+// RetryConfig configures retry behavior - now uses internal/retry package
 type RetryConfig struct {
 	MaxRetries     int
 	InitialDelay   time.Duration
 	MaxDelay       time.Duration
 	BackoffFactor  float64
 	RetryableCodes []int // HTTP status codes that should be retried
+	// Backoff strategy from retry package
+	Backoff retry.BackoffStrategy
 }
 
-// DefaultRetryConfig returns sensible retry defaults
+// DefaultRetryConfig returns sensible retry defaults using exponential backoff
 func DefaultRetryConfig() *RetryConfig {
 	return &RetryConfig{
 		MaxRetries:     DefaultMaxRetries,
@@ -115,6 +118,7 @@ func DefaultRetryConfig() *RetryConfig {
 		MaxDelay:       30 * time.Second,
 		BackoffFactor:  2.0,
 		RetryableCodes: []int{429, 500, 502, 503, 504},
+		Backoff:        retry.ExponentialBackoff{Base: DefaultRetryDelay, Max: 30 * time.Second},
 	}
 }
 
@@ -474,12 +478,18 @@ func (bp *BaseProvider) shouldRetry(statusCode int) bool {
 	return false
 }
 
-// calculateRetryDelay computes the delay for the given attempt number
+// calculateRetryDelay computes the delay for the given attempt number using retry package
 func (bp *BaseProvider) calculateRetryDelay(attempt int) time.Duration {
 	if bp.RetryConfig == nil {
 		return DefaultRetryDelay
 	}
 
+	// Use Backoff strategy from retry package if available
+	if bp.RetryConfig.Backoff != nil {
+		return bp.RetryConfig.Backoff.NextDelay(attempt + 1) // attempt+1 because NextDelay starts at 1
+	}
+
+	// Fallback to legacy calculation
 	delay := float64(bp.RetryConfig.InitialDelay) * powInt(bp.RetryConfig.BackoffFactor, attempt)
 	if delay > float64(bp.RetryConfig.MaxDelay) {
 		delay = float64(bp.RetryConfig.MaxDelay)

@@ -211,24 +211,63 @@ func (cm *CheckpointManager) Prune(maxAge time.Duration) error {
 }
 
 // MarkInterrupted marks a session as interrupted (gateway shutdown)
+// Uses atomic operation to avoid race conditions
 func (cm *CheckpointManager) MarkInterrupted(sessionID string) error {
-	cp, err := cm.Load(sessionID)
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	cp, err := cm.loadInternal(sessionID)
 	if err != nil {
 		// No checkpoint exists, nothing to mark
 		return nil
 	}
 
 	cp.Interrupted = true
-	return cm.Save(cp)
+	return cm.saveInternal(cp)
 }
 
 // ClearInterrupted clears the interrupted flag after successful recovery
+// Uses atomic operation to avoid race conditions
 func (cm *CheckpointManager) ClearInterrupted(sessionID string) error {
-	cp, err := cm.Load(sessionID)
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	cp, err := cm.loadInternal(sessionID)
 	if err != nil {
 		return err
 	}
 
 	cp.Interrupted = false
-	return cm.Save(cp)
+	return cm.saveInternal(cp)
+}
+
+// loadInternal loads checkpoint without locking (for internal use)
+func (cm *CheckpointManager) loadInternal(sessionID string) (*Checkpoint, error) {
+	path := cm.checkpointPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var cp Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
+		return nil, err
+	}
+
+	return &cp, nil
+}
+
+// saveInternal saves checkpoint without locking (for internal use)
+func (cm *CheckpointManager) saveInternal(cp *Checkpoint) error {
+	cp.UpdatedAt = time.Now()
+	data, err := json.MarshalIndent(cp, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := cm.checkpointPath(cp.SessionID)
+	return os.WriteFile(path, data, 0644)
 }

@@ -4,14 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // ============================================================================
@@ -170,127 +165,6 @@ func (t *SearchInFilesTool) Execute(ctx context.Context, args map[string]interfa
 		"case_sensitive": caseSensitive,
 		"use_regex":      false,
 	})
-}
-
-// ============================================================================
-// Web Extract Tool
-// ============================================================================
-
-type WebExtractTool struct{}
-
-func (t *WebExtractTool) Name() string {
-	return "web_extract"
-}
-
-func (t *WebExtractTool) Description() string {
-	return "Extract and parse content from web pages"
-}
-
-func (t *WebExtractTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"url": map[string]interface{}{
-				"type":        "string",
-				"description": "URL to extract content from",
-			},
-			"query": map[string]interface{}{
-				"type":        "string",
-				"description": "CSS selector or query to extract specific content",
-			},
-		},
-		"required": []string{"url"},
-	}
-}
-
-func (t *WebExtractTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	url, ok := args["url"].(string)
-	if !ok {
-		return nil, fmt.Errorf("url is required")
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GoMagic/1.0)")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	content := string(body)
-
-	// Try to extract title
-	title := extractTitle(content)
-
-	// Try to extract main content
-	mainContent := extractMainContent(content)
-
-	return map[string]interface{}{
-		"url":        url,
-		"title":      title,
-		"content":    mainContent,
-		"raw_length": len(content),
-	}, nil
-}
-
-func extractTitle(htmlContent string) string {
-	start := strings.Index(htmlContent, "<title>")
-	if start == -1 {
-		return ""
-	}
-	end := strings.Index(htmlContent[start+7:], "</title>")
-	if end == -1 {
-		return ""
-	}
-	return strings.TrimSpace(htmlContent[start+7 : start+7+end])
-}
-
-func extractMainContent(htmlContent string) string {
-	doc, err := html.Parse(strings.NewReader(htmlContent))
-	if err != nil {
-		return htmlContent
-	}
-
-	var content strings.Builder
-	var extractText func(*html.Node)
-	extractText = func(n *html.Node) {
-		if n.Type == html.TextNode {
-			text := strings.TrimSpace(n.Data)
-			if text != "" {
-				content.WriteString(text)
-				content.WriteString(" ")
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			// Skip script and style elements
-			if c.Type == html.ElementNode {
-				switch c.DataAtom {
-				case atom.Script, atom.Style:
-					continue
-				}
-			}
-			extractText(c)
-		}
-	}
-
-	extractText(doc)
-	result := content.String()
-	// Clean up whitespace
-	result = strings.Join(strings.Fields(result), " ")
-
-	if len(result) > 5000 {
-		result = result[:5000] + "..."
-	}
-	return result
 }
 
 // ============================================================================

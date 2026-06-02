@@ -75,6 +75,7 @@ import {
   PersonOutline,
   FlagOutline,
   LogOutOutline,
+  ShieldCheckmarkOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 
@@ -116,6 +117,7 @@ const menuOptions = computed(() => [
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { type: 'divider' as const },
+  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },

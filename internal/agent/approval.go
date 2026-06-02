@@ -6,52 +6,92 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
 )
 
-// ApprovalHook provides command approval functionality using the smart approval system
+// defaultApprovalTimeout is the default CLI confirmation timeout.
+const defaultApprovalTimeout = 30 * time.Second
+
+// userAction represents the user's decision during interactive CLI confirmation.
+type userAction int
+
+const (
+	actionApprove userAction = iota // [A]pprove - approve this command once
+	actionDeny                     // [D]eny - reject this command
+	actionTrust                    // [T]rust - trust this pattern permanently
+	actionSkipSession              // [S]kip session - skip approval for similar commands in this session
+	actionQuit                     // [Q]uit - abort the entire session
+)
+
+// ApprovalHook provides command approval functionality using the smart approval system.
+// It supports CLI interactive prompts with rich risk display, Web-based approval mode,
+// approval timeout handling, and session-level skip behavior.
 type ApprovalHook struct {
-	manager *approval.Manager
+	manager      *approval.Manager
+	webMode      bool
+	cliTimeout   time.Duration
+	skipMutex    sync.Mutex
+	skipPatterns map[string]map[string]bool // sessionID -> normalizedPattern -> skipped
 }
 
-// NewApprovalHook creates a new approval hook with smart approval
+// NewApprovalHook creates a new approval hook with smart approval.
 func NewApprovalHook() *ApprovalHook {
-	mgr, err := approval.NewManager(nil) // uses DefaultConfig (strategy=auto)
+	mgr, err := approval.NewManager(nil)
 	if err != nil {
-		// Fallback: if manager can't be created, create one with safe defaults
 		mgr, _ = approval.NewManager(approval.DefaultConfig())
 	}
 	return &ApprovalHook{
-		manager: mgr,
+		manager:      mgr,
+		cliTimeout:   defaultApprovalTimeout,
+		skipPatterns: make(map[string]map[string]bool),
 	}
 }
 
-func (h *ApprovalHook) Name() string {
-	return "approval"
+// Name returns the hook name.
+func (h *ApprovalHook) Name() string { return "approval" }
+
+// SetWebMode enables or disables Web-based approval mode.
+// When enabled, user-facing confirmations are routed through the Web callback
+// system (PendingWebApproval) instead of CLI prompts.
+func (h *ApprovalHook) SetWebMode(enabled bool) {
+	h.webMode = enabled
 }
 
-// BeforeTool handles approval for tool execution
+// GetManager exposes the underlying approval.Manager for Web API usage.
+func (h *ApprovalHook) GetManager() *approval.Manager {
+	return h.manager
+}
+
+// BeforeTool handles approval for tool execution.
 func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookRequest) (*hooks.ToolCallHookRequest, hooks.HookDecision, error) {
-	// Only check execute_command tool
 	if call.ToolName != "execute_command" {
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
 
-	// Get command from args
 	command, _ := call.ToolArgs["command"].(string)
 	if command == "" {
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
 
-	// Build approval request
+	sessionID := getSessionID(ctx)
+	workingDir := getWorkingDir(ctx)
+
 	req := &approval.ApprovalRequest{
-		Command:   command,
-		SessionID: getSessionID(ctx),
+		Command:    command,
+		SessionID:  sessionID,
+		WorkingDir: workingDir,
 	}
 
-	// Request approval from manager
+	// Check session-level skip list first.
+	if h.isSessionSkipped(sessionID, command) {
+		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+	}
+
+	// Request approval from manager.
 	result, err := h.manager.RequestApproval(req)
 	if err != nil {
 		return call, hooks.HookDecision{
@@ -60,79 +100,245 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		}, nil
 	}
 
-	// If approved, continue
+	// If already approved by policy, notify and continue.
 	if result.Approved {
+		h.manager.NotifyApproval(result, req)
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
 
-	// If needs user confirmation (AskUser=true), prompt in CLI
+	// If needs user confirmation.
 	if result.AskUser {
-		approved := h.promptUserConfirmation(command, result.Reason)
+		var approved bool
+
+		if h.webMode {
+			// Route to Web approval callback.
+			webResult, webErr := h.manager.PendingWebApproval(req)
+			if webErr != nil {
+				return call, hooks.HookDecision{
+					Action: hooks.HookActionReject,
+					Reason: fmt.Sprintf("Web approval error: %v", webErr),
+				}, nil
+			}
+			approved = webResult.Approved
+			// Notify callbacks of the web decision.
+			h.manager.NotifyApproval(webResult, req)
+		} else {
+			// CLI interactive prompt with timeout.
+			act := h.promptUserConfirmation(ctx, command, result.Reason, result.RiskLevel)
+			switch act {
+			case actionApprove:
+				approved = true
+				h.manager.Approve(req)
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved:  true,
+					Strategy:  result.Strategy,
+					Reason:    "User approved via CLI",
+					RiskLevel: result.RiskLevel,
+				}, req)
+			case actionTrust:
+				approved = true
+				h.manager.Approve(req)
+				h.manager.AddToWhitelist(command)
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved:  true,
+					Trusted:   true,
+					Strategy:  result.Strategy,
+					Reason:    "User trusted pattern via CLI",
+					RiskLevel: result.RiskLevel,
+				}, req)
+			case actionSkipSession:
+				approved = true
+				h.addSessionSkip(sessionID, command)
+				h.manager.Approve(req)
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved:  true,
+					Strategy:  result.Strategy,
+					Reason:    "User skipped session approval",
+					RiskLevel: result.RiskLevel,
+				}, req)
+			case actionDeny:
+				approved = false
+				h.manager.Deny(req)
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved: false,
+					Strategy: result.Strategy,
+					Reason:   "User denied via CLI",
+				}, req)
+			case actionQuit:
+				h.manager.Deny(req)
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved: false,
+					Strategy: result.Strategy,
+					Reason:   "User quit session",
+				}, req)
+				return call, hooks.HookDecision{
+					Action: hooks.HookActionReject,
+					Reason: "User quit the session",
+				}, nil
+			}
+		}
+
 		if approved {
-			// Record approval for learning
-			h.manager.Approve(req)
 			return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 		}
-		// Record denial for learning
-		h.manager.Deny(req)
 		return call, hooks.HookDecision{
 			Action: hooks.HookActionReject,
 			Reason: fmt.Sprintf("User rejected command: %s", result.Reason),
 		}, nil
 	}
 
-	// Otherwise reject
+	// Rejected by policy, notify and return.
+	h.manager.NotifyApproval(result, req)
 	return call, hooks.HookDecision{
 		Action: hooks.HookActionReject,
 		Reason: result.Reason,
 	}, nil
 }
 
-// promptUserConfirmation asks the user for confirmation in CLI
-func (h *ApprovalHook) promptUserConfirmation(command, reason string) bool {
-	fmt.Printf("\n  ⚠ Command Approval Required\n")
-	fmt.Printf("  Command: %s\n", command)
-	fmt.Printf("  Reason: %s\n", reason)
-	fmt.Printf("  Allow? [y/N]: ")
+// promptUserConfirmation displays a rich interactive CLI prompt and returns the
+// user's action. It supports a configurable timeout (default 30s); if the timeout
+// expires the command is automatically rejected.
+func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reason string, riskLevel approval.RiskLevel) userAction {
+	// Display rich approval prompt.
+	fmt.Println()
+	fmt.Println("  ========================================")
+	fmt.Printf("  Command Approval Required\n")
+	fmt.Println("  ========================================")
+	fmt.Printf("  Command : %s\n", truncateCommand(command, 72))
+	fmt.Printf("  Risk    : %s %s\n", riskLevelEmoji(riskLevel), riskLevel)
+	fmt.Printf("  Category: %s\n", riskCategoryLabel(command, riskLevel))
 
-	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(strings.ToLower(input))
+	if hasBypassWarning(command) {
+		fmt.Printf("  WARNING : Bypass attempt detected!\n")
+	}
+	fmt.Printf("  Reason  : %s\n", reason)
+	fmt.Println("  ----------------------------------------")
+	fmt.Println("  [A]pprove  [D]eny  [T]rust  [S]kip session  [Q]uit")
+	fmt.Printf("  (timeout: %s): ", h.cliTimeout.Round(time.Second))
 
-	return input == "y" || input == "yes"
+	// Non-blocking timeout via goroutine + channel.
+	type cliResult struct {
+		input string
+		err   error
+	}
+	ch := make(chan cliResult, 1)
+
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		ch <- cliResult{input: line, err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			fmt.Printf("\n  Input error: %v -> denied\n", res.err)
+			return actionDeny
+		}
+		input := strings.TrimSpace(strings.ToLower(res.input))
+		switch input {
+		case "a", "approve", "":
+			return actionApprove
+		case "d", "deny":
+			return actionDeny
+		case "t", "trust":
+			return actionTrust
+		case "s", "skip":
+			return actionSkipSession
+		case "q", "quit":
+			return actionQuit
+		default:
+			fmt.Printf("  Unknown option '%s' -> denied\n", input)
+			return actionDeny
+		}
+	case <-time.After(h.cliTimeout):
+		fmt.Printf("\n  Approval timed out (%s) -> denied\n", h.cliTimeout.Round(time.Second))
+		return actionDeny
+	}
 }
 
-// AfterTool passes through the result
+// AfterTool passes through the result unchanged.
 func (h *ApprovalHook) AfterTool(ctx context.Context, result *hooks.ToolResultHookResponse) (*hooks.ToolResultHookResponse, hooks.HookDecision, error) {
 	return result, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 }
 
-// BeforeLLM passes through
+// BeforeLLM passes through the request unchanged.
 func (h *ApprovalHook) BeforeLLM(ctx context.Context, req *hooks.LLMHookRequest) (*hooks.LLMHookRequest, hooks.HookDecision, error) {
 	return req, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 }
 
-// AfterLLM passes through
+// AfterLLM passes through the response unchanged.
 func (h *ApprovalHook) AfterLLM(ctx context.Context, resp *hooks.LLMHookResponse) (*hooks.LLMHookResponse, hooks.HookDecision, error) {
 	return resp, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 }
 
-// ApproveTool handles approval request (for gateway integration)
+// ApproveTool handles approval request (for gateway integration).
 func (h *ApprovalHook) ApproveTool(ctx context.Context, req *hooks.ToolApprovalRequest) (hooks.ApprovalDecision, error) {
 	command, _ := req.ToolArgs["command"].(string)
+	sessionID := getSessionID(ctx)
+	workingDir := getWorkingDir(ctx)
+
 	approvalReq := &approval.ApprovalRequest{
-		Command:   command,
-		SessionID: getSessionID(ctx),
+		Command:    command,
+		SessionID:  sessionID,
+		WorkingDir: workingDir,
 	}
 	result, err := h.manager.RequestApproval(approvalReq)
 	if err != nil {
 		return hooks.ApprovalDecision{Approved: false, Reason: err.Error()}, err
 	}
+
+	// Notify callbacks.
+	h.manager.NotifyApproval(result, approvalReq)
+
 	return hooks.ApprovalDecision{
 		Approved: result.Approved,
 		Reason:   result.Reason,
 	}, nil
 }
+
+// ---------------------------------------------------------------------------
+// Session-level skip helpers
+// ---------------------------------------------------------------------------
+
+// isSessionSkipped checks whether a command pattern has been skipped for the session.
+func (h *ApprovalHook) isSessionSkipped(sessionID, command string) bool {
+	h.skipMutex.Lock()
+	defer h.skipMutex.Unlock()
+
+	patterns, ok := h.skipPatterns[sessionID]
+	if !ok {
+		return false
+	}
+	// Use a simple prefix / contains heuristic: if any skipped pattern is a
+	// prefix of the command, consider it skipped.
+	for pattern := range patterns {
+		if strings.HasPrefix(command, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// addSessionSkip records that a command pattern should be skipped for this session.
+func (h *ApprovalHook) addSessionSkip(sessionID, command string) {
+	h.skipMutex.Lock()
+	defer h.skipMutex.Unlock()
+
+	if _, ok := h.skipPatterns[sessionID]; !ok {
+		h.skipPatterns[sessionID] = make(map[string]bool)
+	}
+	// Extract the binary (first token) as the skip key so that all commands
+	// sharing the same binary are skipped.
+	tokens := strings.Fields(command)
+	if len(tokens) > 0 {
+		h.skipPatterns[sessionID][tokens[0]] = true
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Context helpers
+// ---------------------------------------------------------------------------
 
 // getSessionID extracts session ID from context
 func getSessionID(ctx context.Context) string {
@@ -140,4 +346,93 @@ func getSessionID(ctx context.Context) string {
 		return id
 	}
 	return "cli"
+}
+
+// getWorkingDir extracts working_dir from context if available.
+func getWorkingDir(ctx context.Context) string {
+	if dir, ok := ctx.Value("working_dir").(string); ok {
+		return dir
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+// riskLevelEmoji returns a colored emoji for the given risk level.
+func riskLevelEmoji(level approval.RiskLevel) string {
+	switch level {
+	case approval.RiskLow:
+		return "low"
+	case approval.RiskMedium:
+		return "medium"
+	case approval.RiskHigh:
+		return "high"
+	case approval.RiskCritical:
+		return "critical"
+	default:
+		return "unknown"
+	}
+}
+
+// riskCategoryLabel returns a human-readable risk category label for a command.
+func riskCategoryLabel(command string, level approval.RiskLevel) string {
+	lower := strings.ToLower(command)
+
+	categories := []struct {
+		name     string
+		keywords []string
+	}{
+		{"file_destruct", []string{"rm -rf", "rm -r", "truncate", "shred", "dd if=", "> /dev/"}},
+		{"network", []string{"curl ", "wget ", "nc ", "ncat ", "telnet "}},
+		{"privilege_esc", []string{"chmod 777", "chown", "sudo ", "su ", "setuid"}},
+		{"data_access", []string{"cat /etc/", "cat /var/", ".ssh/", "/etc/shadow", "/etc/passwd"}},
+		{"system", []string{"shutdown", "reboot", "halt", "mkfs", "fdisk", "parted"}},
+		{"package_mgmt", []string{"pip install", "npm install", "yarn add", "cargo install", "go install", "apt install", "brew install", "docker run"}},
+	}
+
+	for _, cat := range categories {
+		for _, kw := range cat.keywords {
+			if strings.Contains(lower, kw) {
+				return cat.name
+			}
+		}
+	}
+
+	// Default category based on risk level.
+	switch level {
+	case approval.RiskLow:
+		return "general"
+	case approval.RiskMedium:
+		return "moderate"
+	case approval.RiskHigh:
+		return "elevated"
+	case approval.RiskCritical:
+		return "critical_operation"
+	default:
+		return "unknown"
+	}
+}
+
+// hasBypassWarning returns true if the command contains known bypass patterns.
+func hasBypassWarning(command string) bool {
+	lower := strings.ToLower(command)
+	bypassIndicators := []string{
+		"base64 -d", "xxd -r", "eval ", "echo ", "| sh", "| bash",
+	}
+	for _, indicator := range bypassIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncateCommand truncates a command string for display purposes.
+func truncateCommand(cmd string, maxLen int) string {
+	if len(cmd) <= maxLen {
+		return cmd
+	}
+	return cmd[:maxLen-3] + "..."
 }

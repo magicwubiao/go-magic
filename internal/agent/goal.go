@@ -235,16 +235,18 @@ func (gm *GoalManager) GetContinuationPrompt() string {
 	return prompt
 }
 
-// Save persists the goal to disk
+// Save persists the goal to disk using the goal's ID as session identifier
 func (gm *GoalManager) Save() error {
 	gm.mu.RLock()
 	goal := gm.current
-	sessionID := ""
 	gm.mu.RUnlock()
 
-	if goal == nil || sessionID == "" {
+	if goal == nil {
 		return nil
 	}
+
+	// Use goal ID as session identifier for persistence
+	sessionID := goal.ID
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(gm.dataDir, 0755); err != nil {

@@ -246,19 +246,46 @@ func (m *Manager) save() error {
 		return err
 	}
 
-	file := filepath.Join(m.dir, "goals.json")
+	// Ensure goals subdirectory exists
+	goalsDir := filepath.Join(m.dir, "goals")
+	if err := os.MkdirAll(goalsDir, 0755); err != nil {
+		return err
+	}
+
+	file := filepath.Join(goalsDir, "goals.json")
 	return os.WriteFile(file, data, 0644)
 }
 
 // load loads goals from disk
 func (m *Manager) load() error {
-	file := filepath.Join(m.dir, "goals.json")
+	// Try new location first (goals/goals.json)
+	goalsDir := filepath.Join(m.dir, "goals")
+	file := filepath.Join(goalsDir, "goals.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			// Try legacy location (goals.json in root dir) for migration
+			legacyFile := filepath.Join(m.dir, "goals.json")
+			legacyData, legacyErr := os.ReadFile(legacyFile)
+			if legacyErr != nil {
+				if os.IsNotExist(legacyErr) {
+					return nil
+				}
+				return legacyErr
+			}
+			// Migrate to new location
+			if err := os.MkdirAll(goalsDir, 0755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(file, legacyData, 0644); err != nil {
+				return err
+			}
+			// Remove legacy file
+			_ = os.Remove(legacyFile)
+			data = legacyData
+		} else {
+			return err
 		}
-		return err
 	}
 
 	return json.Unmarshal(data, &m.goals)

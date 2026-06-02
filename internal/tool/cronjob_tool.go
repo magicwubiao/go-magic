@@ -17,7 +17,10 @@ type CronJobTool struct {
 // NewCronJobTool creates a new cron job tool
 func NewCronJobTool() *CronJobTool {
 	home, _ := os.UserHomeDir()
-	jobsFile := filepath.Join(home, ".magic", "cron_jobs.json")
+	cronDir := filepath.Join(home, ".magic", "cron")
+	// Ensure cron subdirectory exists
+	os.MkdirAll(cronDir, 0755)
+	jobsFile := filepath.Join(cronDir, "cron_jobs.json")
 	return &CronJobTool{jobsFile: jobsFile}
 }
 

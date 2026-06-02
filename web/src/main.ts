@@ -22,6 +22,7 @@ import GatewayView from './views/GatewayView.vue'
 import GroupChatView from './views/GroupChatView.vue'
 import ProfilesView from './views/ProfilesView.vue'
 import GoalsView from './views/GoalsView.vue'
+import ApprovalView from './views/ApprovalView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -42,6 +43,7 @@ const router = createRouter({
     { path: '/system', component: SystemView },
     { path: '/profiles', component: ProfilesView },
     { path: '/goals', component: GoalsView },
+    { path: '/approval', component: ApprovalView },
   ],
 })
 

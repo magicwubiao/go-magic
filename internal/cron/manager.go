@@ -76,8 +76,17 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 
-	jobsFile := filepath.Join(home, ".magic", "cron_jobs.json")
-	logsFile := filepath.Join(home, ".magic", "cron_logs.json")
+	// Ensure cron subdirectory exists
+	cronDir := filepath.Join(home, ".magic", "cron")
+	if err := os.MkdirAll(cronDir, 0755); err != nil {
+		return nil, err
+	}
+
+	jobsFile := filepath.Join(cronDir, "cron_jobs.json")
+	logsFile := filepath.Join(cronDir, "cron_logs.json")
+
+	// Migrate legacy files if they exist
+	migrateLegacyFiles(home, cronDir, jobsFile, logsFile)
 
 	m := &Manager{
 		jobsFile: jobsFile,
@@ -669,4 +678,27 @@ func GetNextRun(schedule string) (*time.Time, error) {
 
 	next := sched.Next(time.Now())
 	return &next, nil
+}
+
+// migrateLegacyFiles migrates cron files from legacy location (~/.magic/) to new location (~/.magic/cron/)
+func migrateLegacyFiles(home, cronDir, newJobsFile, newLogsFile string) {
+	// Migrate cron_jobs.json
+	legacyJobsFile := filepath.Join(home, ".magic", "cron_jobs.json")
+	if _, err := os.Stat(legacyJobsFile); err == nil {
+		// Legacy file exists, migrate it
+		if data, err := os.ReadFile(legacyJobsFile); err == nil {
+			_ = os.WriteFile(newJobsFile, data, 0644)
+			_ = os.Remove(legacyJobsFile)
+		}
+	}
+
+	// Migrate cron_logs.json
+	legacyLogsFile := filepath.Join(home, ".magic", "cron_logs.json")
+	if _, err := os.Stat(legacyLogsFile); err == nil {
+		// Legacy file exists, migrate it
+		if data, err := os.ReadFile(legacyLogsFile); err == nil {
+			_ = os.WriteFile(newLogsFile, data, 0644)
+			_ = os.Remove(legacyLogsFile)
+		}
+	}
 }

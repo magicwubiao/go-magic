@@ -61,7 +61,7 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 		// Wenxin requires both apiKey and secretKey; use BaseURL field for secretKey
 		return provider.NewWenxinProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "moonshot":
-		return provider.NewMoonshotProvider(provCfg.APIKey, model), nil
+		return provider.NewMoonshotProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "mimo":
 		return provider.NewMiMoProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "hunyuan":

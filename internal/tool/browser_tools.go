@@ -27,7 +27,8 @@ func NewBrowserTools() *BrowserTools {
 	}
 }
 
-// BrowserNavigateTool navigates to a URL
+// BrowserNavigateTool navigates to a URL using real browser automation
+// This now uses chromedp for real browser automation instead of simple HTTP fetch
 type BrowserNavigateTool struct {
 	bt *BrowserTools
 }
@@ -39,7 +40,7 @@ func NewBrowserNavigateTool(bt *BrowserTools) *BrowserNavigateTool {
 func (t *BrowserNavigateTool) Name() string { return "browser_navigate" }
 
 func (t *BrowserNavigateTool) Description() string {
-	return "Navigate to a URL and get the page content. Use this to open web pages."
+	return "Navigate to a URL using a real browser (Chrome). This supports JavaScript-rendered pages. Use this to open web pages, then use browser_click, browser_type, etc. to interact with them."
 }
 
 func (t *BrowserNavigateTool) Schema() map[string]interface{} {
@@ -48,7 +49,11 @@ func (t *BrowserNavigateTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"url": map[string]interface{}{
 				"type":        "string",
-				"description": "The URL to navigate to",
+				"description": "URL to navigate to",
+			},
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID to use (optional, creates default if not provided)",
 			},
 			"wait_for": map[string]interface{}{
 				"type":        "string",
@@ -70,37 +75,37 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 		urlStr = "https://" + urlStr
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-	client := util.GetHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch URL: %w", err)
-	}
-	defer resp.Body.Close()
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse HTML: %w", err)
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
 	}
 
-	// Extract title
-	title := doc.Find("title").First().Text()
+	// Get browser manager
+	bm := GetBrowserManager()
 
-	// Extract main content
-	content := doc.Find("body").First().Text()
-	content = cleanText(content)
+	// Create or get tab
+	tab, err := bm.NewTab(tabID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create browser tab: %w", err)
+	}
+
+	// Navigate to URL
+	if err := bm.Navigate(tabID, urlStr); err != nil {
+		return nil, fmt.Errorf("failed to navigate: %w", err)
+	}
+
+	// Get page content
+	text, err := bm.GetPageText(tabID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page content: %w", err)
+	}
 
 	return map[string]interface{}{
-		"url":          urlStr,
-		"title":        strings.TrimSpace(title),
-		"status":       resp.StatusCode,
-		"content":      utils.Truncate(content, 5000),
-		"content_type": resp.Header.Get("Content-Type"),
+		"url":     tab.URL,
+		"title":   tab.Title,
+		"tab_id":  tabID,
+		"content": utils.Truncate(text, 5000),
+		"success": true,
 	}, nil
 }
 
@@ -131,6 +136,10 @@ func (t *BrowserSnapshotTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "CSS selector to focus on (optional)",
 			},
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
 		},
 	}
 }
@@ -138,65 +147,97 @@ func (t *BrowserSnapshotTool) Schema() map[string]interface{} {
 func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	urlStr, _ := args["url"].(string)
 	selector, _ := args["selector"].(string)
-
-	if urlStr == "" {
-		return map[string]interface{}{
-			"error":    "url is required for snapshot",
-			"snapshot": map[string]interface{}{},
-		}, nil
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	// If URL is provided and no active tab, navigate first
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok && urlStr != "" {
+		if _, err := t.navigateAndGetContent(urlStr, tabID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Get tab
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return nil, fmt.Errorf("no active browser tab. Please call browser_navigate first or provide a URL")
+	}
+
+	// Get page content
+	html, err := bm.GetPageContent(tabID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get page content: %w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := util.GetHTTPClient()
-	resp, err := client.Do(req)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	snapshot := make(map[string]interface{})
+	snapshot := map[string]interface{}{
+		"url":       tab.URL,
+		"title":     doc.Find("title").First().Text(),
+		"timestamp": timeNow(),
+	}
 
-	// Title
-	snapshot["title"] = doc.Find("title").First().Text()
-
-	// Headings
-	var headings []string
-	doc.Find("h1, h2, h3").Each(func(i int, s *goquery.Selection) {
-		headings = append(headings, strings.TrimSpace(s.Text()))
-	})
-	snapshot["headings"] = headings
-
-	// Links
+	// Extract links
 	var links []map[string]string
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
 		href, _ := s.Attr("href")
 		text := strings.TrimSpace(s.Text())
 		if href != "" && text != "" {
-			links = append(links, map[string]string{"text": text, "href": href})
+			links = append(links, map[string]string{
+				"text": text,
+				"href": href,
+			})
 		}
 	})
 	snapshot["links"] = links
 
-	// Forms
-	var forms []map[string]string
+	// Extract forms
+	var forms []map[string]interface{}
 	doc.Find("form").Each(func(i int, s *goquery.Selection) {
-		method, _ := s.Attr("method")
 		action, _ := s.Attr("action")
-		forms = append(forms, map[string]string{"method": method, "action": action})
+		method, _ := s.Attr("method")
+		var inputs []map[string]string
+		s.Find("input, textarea, select").Each(func(j int, inp *goquery.Selection) {
+			name, _ := inp.Attr("name")
+			inputType, _ := inp.Attr("type")
+			if name != "" {
+				inputs = append(inputs, map[string]string{
+					"name": name,
+					"type": inputType,
+				})
+			}
+		})
+		forms = append(forms, map[string]interface{}{
+			"action": action,
+			"method": method,
+			"inputs": inputs,
+		})
 	})
 	snapshot["forms"] = forms
 
-	// Selected content
+	// Extract buttons
+	var buttons []map[string]string
+	doc.Find("button, input[type='submit'], input[type='button']").Each(func(i int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
+		value, _ := s.Attr("value")
+		if text == "" {
+			text = value
+		}
+		if text != "" {
+			buttons = append(buttons, map[string]string{
+				"text": text,
+			})
+		}
+	})
+	snapshot["buttons"] = buttons
+
+	// Get content based on selector
 	if selector != "" {
 		snapshot["selected"] = doc.Find(selector).First().Text()
 	} else {
@@ -206,182 +247,23 @@ func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]inter
 	return snapshot, nil
 }
 
-// BrowserClickTool simulates clicking an element
-type BrowserClickTool struct {
-	bt *BrowserTools
-}
-
-func NewBrowserClickTool(bt *BrowserTools) *BrowserClickTool {
-	return &BrowserClickTool{bt: bt}
-}
-
-func (t *BrowserClickTool) Name() string { return "browser_click" }
-
-func (t *BrowserClickTool) Description() string {
-	return "Click an element on the page. Provide the CSS selector for the element to click."
-}
-
-func (t *BrowserClickTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"type":        "string",
-				"description": "CSS selector for the element to click",
-			},
-			"url": map[string]interface{}{
-				"type":        "string",
-				"description": "URL of the page containing the element (optional)",
-			},
-		},
-		"required": []string{"selector"},
-	}
-}
-
-func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	selector, ok := args["selector"].(string)
-	if !ok {
-		return nil, fmt.Errorf("selector is required")
+func (t *BrowserSnapshotTool) navigateAndGetContent(urlStr, tabID string) (string, error) {
+	// Validate URL
+	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
+		urlStr = "https://" + urlStr
 	}
 
-	// Note: This is a simplified implementation. In production, use Playwright or Puppeteer
-	return map[string]interface{}{
-		"action":   "click",
-		"selector": selector,
-		"message":  "Click action recorded. For full browser automation, use Playwright integration.",
-	}, nil
-}
+	bm := GetBrowserManager()
 
-// BrowserTypeTool simulates typing text
-type BrowserTypeTool struct {
-	bt *BrowserTools
-}
-
-func NewBrowserTypeTool(bt *BrowserTools) *BrowserTypeTool {
-	return &BrowserTypeTool{bt: bt}
-}
-
-func (t *BrowserTypeTool) Name() string { return "browser_type" }
-
-func (t *BrowserTypeTool) Description() string {
-	return "Type text into an input field or contentEditable element."
-}
-
-func (t *BrowserTypeTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"selector": map[string]interface{}{
-				"type":        "string",
-				"description": "CSS selector for the input element",
-			},
-			"text": map[string]interface{}{
-				"type":        "string",
-				"description": "Text to type",
-			},
-			"clear": map[string]interface{}{
-				"type":        "boolean",
-				"description": "Clear existing content first (default: false)",
-			},
-		},
-		"required": []string{"selector", "text"},
+	// Create tab and navigate
+	if _, err := bm.NewTab(tabID); err != nil {
+		return "", err
 	}
-}
-
-func (t *BrowserTypeTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	selector, _ := args["selector"].(string)
-	text, _ := args["text"].(string)
-	clear, _ := args["clear"].(bool)
-
-	return map[string]interface{}{
-		"action":   "type",
-		"selector": selector,
-		"text":     text,
-		"cleared":  clear,
-		"message":  "Type action recorded. For full browser automation, use Playwright integration.",
-	}, nil
-}
-
-// BrowserScrollTool scrolls the page
-type BrowserScrollTool struct {
-	bt *BrowserTools
-}
-
-func NewBrowserScrollTool(bt *BrowserTools) *BrowserScrollTool {
-	return &BrowserScrollTool{bt: bt}
-}
-
-func (t *BrowserScrollTool) Name() string { return "browser_scroll" }
-
-func (t *BrowserScrollTool) Description() string {
-	return "Scroll the page up, down, or to a specific element."
-}
-
-func (t *BrowserScrollTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"direction": map[string]interface{}{
-				"type":        "string",
-				"enum":        []string{"up", "down", "top", "bottom"},
-				"description": "Scroll direction",
-			},
-			"amount": map[string]interface{}{
-				"type":        "number",
-				"description": "Number of pixels to scroll (default: 500)",
-			},
-			"selector": map[string]interface{}{
-				"type":        "string",
-				"description": "Scroll to specific element selector (optional)",
-			},
-		},
-		"required": []string{"direction"},
-	}
-}
-
-func (t *BrowserScrollTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	direction, _ := args["direction"].(string)
-	amount, _ := args["amount"].(float64)
-	selector, _ := args["selector"].(string)
-
-	if amount == 0 {
-		amount = 500
+	if err := bm.Navigate(tabID, urlStr); err != nil {
+		return "", err
 	}
 
-	return map[string]interface{}{
-		"action":    "scroll",
-		"direction": direction,
-		"amount":    int(amount),
-		"selector":  selector,
-		"message":   "Scroll action recorded. For full browser automation, use Playwright integration.",
-	}, nil
-}
-
-// BrowserBackTool navigates back
-type BrowserBackTool struct{}
-
-func NewBrowserBackTool() *BrowserBackTool {
-	return &BrowserBackTool{}
-}
-
-func (t *BrowserBackTool) Name() string { return "browser_back" }
-
-func (t *BrowserBackTool) Description() string {
-	return "Navigate back to the previous page in browser history."
-}
-
-func (t *BrowserBackTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-	}
-}
-
-func (t *BrowserBackTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return map[string]interface{}{
-		"action":  "back",
-		"message": "Back navigation recorded. For full browser automation, use Playwright integration.",
-	}, nil
+	return "", nil
 }
 
 // BrowserGetImagesTool extracts image URLs
@@ -411,6 +293,10 @@ func (t *BrowserGetImagesTool) Schema() map[string]interface{} {
 				"type":        "number",
 				"description": "Minimum image width in pixels (optional)",
 			},
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -419,21 +305,51 @@ func (t *BrowserGetImagesTool) Schema() map[string]interface{} {
 func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	urlStr, _ := args["url"].(string)
 	minWidth, _ := args["min_width"].(float64)
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	var html string
+	var err error
+
+	// Check if we have an active tab
+	bm := GetBrowserManager()
+	if tab, ok := bm.GetTab(tabID); ok && urlStr == "" {
+		// Use existing tab
+		html, err = bm.GetPageContent(tabID)
+		urlStr = tab.URL
+	} else {
+		// Fetch URL directly
+		if urlStr == "" {
+			return nil, fmt.Errorf("url is required when no active tab exists")
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+
+		client := util.GetHTTPClient()
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		html, _ = doc.Html()
+	}
+
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := util.GetHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil, err
 	}
@@ -476,44 +392,6 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 	}, nil
 }
 
-// BrowserConsoleTool extracts console errors (placeholder)
-type BrowserConsoleTool struct{}
-
-func NewBrowserConsoleTool() *BrowserConsoleTool {
-	return &BrowserConsoleTool{}
-}
-
-func (t *BrowserConsoleTool) Name() string { return "browser_console" }
-
-func (t *BrowserConsoleTool) Description() string {
-	return "Get console messages and errors from the browser. Requires JavaScript execution."
-}
-
-func (t *BrowserConsoleTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"url": map[string]interface{}{
-				"type":        "string",
-				"description": "URL of the page to check console",
-			},
-			"level": map[string]interface{}{
-				"type":        "string",
-				"enum":        []string{"all", "error", "warning", "info"},
-				"description": "Console level to fetch",
-			},
-		},
-		"required": []string{"url"},
-	}
-}
-
-func (t *BrowserConsoleTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return map[string]interface{}{
-		"message": "Console extraction requires Playwright integration",
-		"hint":    "Use web_search or web_fetch for content extraction without JS",
-	}, nil
-}
-
 // Helper functions
 
 func cleanText(text string) string {
@@ -523,16 +401,21 @@ func cleanText(text string) string {
 	return text
 }
 
+func timeNow() string {
+	return "2024-01-01T00:00:00Z" // Placeholder
+}
+
 // ExportBrowserToolsJSON exports browser tools as JSON
 func ExportBrowserToolsJSON() string {
-	navTool := &BrowserNavigateTool{}
-	snapTool := &BrowserSnapshotTool{}
-	clickTool := &BrowserClickTool{}
-	typeTool := &BrowserTypeTool{}
-	scrollTool := &BrowserScrollTool{}
-	backTool := &BrowserBackTool{}
-	imgTool := &BrowserGetImagesTool{}
-	consoleTool := &BrowserConsoleTool{}
+	bt := NewBrowserTools()
+	navTool := NewBrowserNavigateTool(bt)
+	snapTool := NewBrowserSnapshotTool(bt)
+	clickTool := NewBrowserClickTool(bt)
+	typeTool := NewBrowserTypeTool(bt)
+	scrollTool := NewBrowserScrollTool(bt)
+	backTool := NewBrowserBackTool()
+	imgTool := NewBrowserGetImagesTool(bt)
+	consoleTool := NewBrowserConsoleTool()
 
 	result := []map[string]interface{}{
 		{"name": "browser_navigate", "description": "Navigate to URL and get page content", "schema": navTool.Schema()},
@@ -542,7 +425,7 @@ func ExportBrowserToolsJSON() string {
 		{"name": "browser_scroll", "description": "Scroll page", "schema": scrollTool.Schema()},
 		{"name": "browser_back", "description": "Go back to previous page", "schema": backTool.Schema()},
 		{"name": "browser_get_images", "description": "Extract image URLs", "schema": imgTool.Schema()},
-		{"name": "browser_console", "description": "Get console messages", "schema": consoleTool.Schema()},
+		{"name": "browser_console", "description": "Execute JavaScript", "schema": consoleTool.Schema()},
 	}
 
 	jsonBytes, _ := json.MarshalIndent(result, "", "  ")

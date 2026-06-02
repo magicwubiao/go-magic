@@ -2,93 +2,111 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/bus"
+	"github.com/magicwubiao/go-magic/internal/cognition"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/execution"
+	"github.com/magicwubiao/go-magic/internal/perception"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
-// RunWithCortex runs a conversation with full Cortex Agent integration
-// This enhanced method leverages all six Cortex systems:
-// 1. User Message Trigger (increments turn, may trigger nudge)
-// 2. Periodic Nudge Mechanism (provides proactive suggestions)
-// 3. Background Review System (continuous quality assessment)
-// 4. Dual File Storage (MEMORY.md + USER.md with frozen snapshots)
-// 5. Holographic Memory (SQLite FTS5 for semantic retrieval)
-// 6. Memory Manager with Frozen Snapshot (prefix cache protection)
-//
-// Plus the three-layer architecture:
-// - Layer 1: Perception (intent classification, entity extraction, noise detection)
-// - Layer 2: Cognition (task planning, dynamic adjustment, sub-agent decisions)
-// - Layer 3: Execution (checkpoint persistence, resume, result validation)
+// RunWithCortex runs a conversation with full Cortex Agent integration.
+// This enhanced method leverages all Cortex systems:
+//  - SOUL.md system personality
+//  - USER.md user profile
+//  - LLM Planner for complex task decomposition
+//  - Context compression for long conversations
+//  - Trajectory recording for self-evolution (GEPA)
+//  - Prompt caching
+//  - Perception / Cognition / Execution three-layer architecture
+//  - Frozen snapshot memory protection
 func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error) {
 	if a.cortexManager == nil {
-		// Fallback to regular RunConversation
 		return a.RunConversation(ctx, input)
 	}
 
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
-	// ========== HERMES SYSTEM 1: User Message Trigger ==========
-	// Increments turn counter and may trigger nudge
+	// ========== CORTEX: User Message Trigger ==========
 	a.cortexManager.OnUserMessage(input)
 
-	// ========== LAYER 1: PERCEPTION - Analyze user input ==========
-	// Parse intent, extract entities, detect noise
+	// ========== CORTEX: Inject SOUL.md + UserProfile into system prompt ==========
+	a.injectCortexContext()
+
+	// ========== LAYER 1: PERCEPTION ==========
 	perceptionResult := a.cortexManager.Perception.Parse(input, a.getRecentHistory(5))
 	a.cortexManager.LastPerception = perceptionResult
 
-	// Handle noise/clarification if needed
 	if perceptionResult.Noise.HasNoise && len(perceptionResult.Noise.Suggestions) > 0 {
-		// Log noise detection for debugging
 		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
 			"noise_detected": true,
 			"suggestions":    perceptionResult.Noise.Suggestions,
 		})
 	}
 
-	// ========== LAYER 2: COGNITION - Create execution plan ==========
-	// Dynamic planning based on perception complexity
-	decision := a.cortexManager.Cognition.CreatePlan(input, perceptionResult)
-	a.cortexManager.LastDecision = decision
+	// ========== LAYER 2: COGNITION - Use LLM Planner for complex tasks ==========
+	plan := a.cortexManager.Cognition.CreatePlan(input, perceptionResult)
+	a.cortexManager.LastDecision = plan
 
-	// Dynamically adjust maxIterations based on task complexity
+	// For complex tasks, try LLM planner
+	useLLMPlan := false
+	var llmPlan *cognition.Decision
+	if a.cortexManager.LLMPlanner != nil && (perceptionResult.Intent.Complexity == perception.ComplexityMedium || perceptionResult.Intent.Complexity == perception.ComplexityAdvanced) {
+		decision, err := a.cortexManager.LLMPlanner.CreatePlan(ctx, input)
+		if err == nil && decision != nil {
+			llmPlan = decision
+			useLLMPlan = true
+		}
+	}
+
+	// Select which plan to use
+	activePlan := plan
+	if useLLMPlan && llmPlan != nil {
+		activePlan = llmPlan
+	}
+
+	// Dynamically adjust maxIterations
 	originalMaxTurns := a.maxTurns
-	if decision.MaxTurns > 0 && decision.MaxTurns < a.maxTurns {
-		a.maxTurns = decision.MaxTurns
+	if activePlan.MaxTurns > 0 && activePlan.MaxTurns < a.maxTurns {
+		a.maxTurns = activePlan.MaxTurns
 	}
 
-	// Check if clarification is needed
-	// Note: we log clarification but still proceed to LLM - don't block user input
-	_ = decision.ClarificationNeeded // avoid unused warning if logging removed
-
-	// Apply tool filter based on decision (if set)
+	// Apply tool filter
 	originalTools := a.tools
-	if len(decision.ToolFilter) > 0 {
-		a.tools = a.filterTools(decision.ToolFilter)
+	if len(activePlan.ToolFilter) > 0 {
+		a.tools = a.filterTools(activePlan.ToolFilter)
 	}
 
-	// ========== HERMES SYSTEM 4: Frozen Snapshot - Get memory for prompt ==========
-	// Critical optimization: use frozen snapshot to protect prefix cache
+	// ========== CORTEX: Frozen Snapshot Memory ==========
 	memoryPrompt := a.cortexManager.Snapshot.GetMemoryForPrompt()
 	userPrompt := a.cortexManager.Snapshot.GetUserForPrompt()
-
-	// Inject memory into system prompt (optional, controlled by memoryEnabled)
 	if a.memoryEnabled && memoryPrompt != "" {
 		a.injectMemoryIntoSystemPrompt(memoryPrompt, userPrompt)
 	}
 
+	// ========== CORTEX: Context Compression ==========
+	if a.cortexManager.ContextCompressor != nil {
+		a.compressWithContextEngine()
+	}
+
 	// ========== LAYER 3: EXECUTION - Setup checkpoint ==========
 	var checkpoint *execution.Checkpoint
-	if decision.Plan != nil {
-		checkpoint = a.cortexManager.Execution.StartCheckpoint("", decision.Plan)
+	if activePlan.Plan != nil {
+		checkpoint = a.cortexManager.Execution.StartCheckpoint("", activePlan.Plan)
 		a.cortexManager.LastCheckpoint = checkpoint
 	}
+
+	// ========== CORTEX: Initialize trajectory recording ==========
+	var trajectorySteps []cortex.TrajectoryStep
+	trajectoryStartTime := time.Now()
 
 	// ========== MAIN CONVERSATION LOOP ==========
 	a.history = append(a.history, provider.Message{
@@ -99,12 +117,8 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
-		// ========== HERMES SYSTEM 4: OnTurnStart - Freeze snapshot ==========
-		// Critical: memory updates written to disk but NOT loaded into
-		// system prompt until next session, protecting prefix cache hit rate
 		a.cortexManager.OnTurnStart()
 
-		// Check steering limits
 		if a.iterationCount >= a.maxIterations {
 			lastErr = fmt.Errorf("exceeded maximum iterations (%d)", a.maxIterations)
 			break
@@ -114,16 +128,10 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			break
 		}
 
-		// Emit turn start event with Cortex context
-		currentStepID := 0
-		if decision.Plan != nil {
-			currentStepID = decision.Plan.Steps[0].ID
-		}
 		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
-			"turn":            a.iterationCount,
-			"perception":      perceptionResult.Intent.Type,
-			"complexity":      perceptionResult.Intent.Complexity,
-			"current_step_id": currentStepID,
+			"turn":       a.iterationCount,
+			"perception": perceptionResult.Intent.Type,
+			"complexity": perceptionResult.Intent.Complexity,
 		})
 
 		// ========== LLM Call ==========
@@ -134,7 +142,6 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			Tools:    a.tools,
 		}
 
-		// Call BeforeLLM hooks
 		req, hookDecision, err := a.hooks.BeforeLLM(ctx, req)
 		if err != nil {
 			lastErr = fmt.Errorf("hook error: %w", err)
@@ -145,7 +152,6 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			break
 		}
 
-		// Use ChatWithTools for OpenAI provider if tools are available
 		var resp *provider.ChatResponse
 		type openAIlike interface {
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
@@ -162,14 +168,12 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			continue
 		}
 
-		// Call AfterLLM hooks
 		llmResp := &hooks.LLMHookResponse{
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		}
 		llmResp, _, _ = a.hooks.AfterLLM(ctx, llmResp)
 
-		// Emit LLM response event
 		a.Emit(bus.EventKindLLMResponse, map[string]interface{}{
 			"content": llmResp.Content,
 		})
@@ -182,23 +186,19 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				Content: content,
 			})
 
-			// ========== LAYER 3: Complete checkpoint ==========
 			if checkpoint != nil {
 				a.cortexManager.Execution.CompleteCheckpoint(checkpoint)
 			}
 
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
-
-			// ========== HERMES: Session end - refresh memory snapshot ==========
-			// This ensures future conversations get the latest memory
-			// while protecting the prefix cache during the current session
 			a.cortexManager.OnSessionEnd()
 
-			// Restore original settings
+			// ========== CORTEX: Record trajectory (no tools) ==========
+			a.recordTrajectory(input, content, trajectorySteps, trajectoryStartTime, lastErr == nil)
+
 			a.maxTurns = originalMaxTurns
 			a.tools = originalTools
-
 			return resp.Content, nil
 		}
 
@@ -219,7 +219,6 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			ToolCalls: toolCalls,
 		})
 
-		// Execute tools
 		results, err := a.executeToolsWithHooks(ctx, resp.ToolCalls)
 		if err != nil {
 			lastErr = err
@@ -227,14 +226,13 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			continue
 		}
 
-		// ========== LAYER 3: Update checkpoint with tool results ==========
+		// ========== LAYER 3: Update checkpoint + record trajectory steps ==========
 		if checkpoint != nil {
 			for _, tc := range resp.ToolCalls {
 				result := results[tc.ID]
 				toolName := tc.GetToolName()
 				a.cortexManager.Execution.StoreToolResult(checkpoint, toolName, result)
 
-				// Validate result
 				validation := a.cortexManager.Execution.ValidateResult(checkpoint, toolName, result)
 				if !validation.Passed {
 					a.Emit(bus.EventKindWarning, map[string]interface{}{
@@ -242,30 +240,39 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 						"issues":            validation.Issues,
 					})
 
-					// Suggest recovery action
 					recovery := a.cortexManager.Execution.SuggestRecoveryAction(checkpoint, nil)
 					switch recovery {
 					case execution.RecoveryRetry:
-						// Continue - will retry
+						// Continue
 					case execution.RecoveryAlternative:
-						// Log for potential alternative approach
-						a.Emit(bus.EventKindWarning, map[string]interface{}{
-							"recovery_action": "alternative",
-						})
+						a.Emit(bus.EventKindWarning, map[string]interface{}{"recovery_action": "alternative"})
 					case execution.RecoveryAskUser:
-						// Break and ask user
 						content := "I encountered an issue. " + fmt.Sprintf("Issues: %v. What would you like me to do?", validation.Issues)
-						a.history = append(a.history, provider.Message{
-							Role:    "assistant",
-							Content: content,
-						})
+						a.history = append(a.history, provider.Message{Role: "assistant", Content: content})
 						lastErr = fmt.Errorf("recovery needed")
 						break
 					}
 				}
-			}
 
-			// Update checkpoint turn count
+	// Record trajectory step
+				stepResult := ""
+				if result.Err != nil {
+					stepResult = result.Err.Error()
+				} else {
+					stepResult = result.Content
+				}
+				toolInputStr := ""
+				if argsJSON, err := json.Marshal(tc.Arguments); err == nil {
+					toolInputStr = string(argsJSON)
+				}
+				trajectorySteps = append(trajectorySteps, cortex.TrajectoryStep{
+					ToolName:   toolName,
+					ToolInput:  toolInputStr,
+					ToolOutput: stepResult,
+					Success:    result.Err == nil,
+					Timestamp:  time.Now(),
+				})
+			}
 			a.cortexManager.Execution.UpdateTurnCount(checkpoint, a.iterationCount+1)
 		}
 
@@ -275,7 +282,6 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			content := result.Content
 			if result.Err != nil {
 				content = fmt.Sprintf("Error: %v", result.Err)
-				// Store error in checkpoint
 				if checkpoint != nil {
 					a.cortexManager.Execution.StoreError(checkpoint, tc.GetToolName(), result.Err)
 				}
@@ -288,11 +294,14 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			})
 		}
 
-		// Check context after tool execution
+		// ========== CORTEX: Context compression after tool execution ==========
+		if a.cortexManager.ContextCompressor != nil {
+			a.compressWithContextEngine()
+		}
+
 		a.truncateHistory()
 		a.Emit(bus.EventKindTurnEnd, nil)
 
-		// Check for recovery break
 		if lastErr != nil && lastErr.Error() == "recovery needed" {
 			break
 		}
@@ -302,7 +311,13 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	a.Emit(bus.EventKindAgentEnd, nil)
 	a.cortexManager.OnSessionEnd()
 
-	// Restore original settings
+	// ========== CORTEX: Record trajectory (with tools) ==========
+	finalContent := ""
+	if lastErr == nil && len(a.history) > 0 {
+		finalContent = a.history[len(a.history)-1].Content
+	}
+	a.recordTrajectory(input, finalContent, trajectorySteps, trajectoryStartTime, lastErr == nil)
+
 	a.maxTurns = originalMaxTurns
 	a.tools = originalTools
 
@@ -312,7 +327,93 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	return "", fmt.Errorf("exceeded maximum turns (%d)", a.maxTurns)
 }
 
-// ========== Helper methods for Cortex integration ==========
+// ========== Cortex Integration Helper Methods ==========
+
+// injectCortexContext injects SOUL.md personality and UserProfile into system prompt
+func (a *Agent) injectCortexContext() {
+	if a.cortexManager == nil {
+		return
+	}
+
+	var injections []string
+
+	// Inject SOUL.md personality
+	if a.cortexManager.Soul != nil {
+		soulPrompt := a.cortexManager.Soul.GetSoulForPrompt()
+		if soulPrompt != "" {
+			injections = append(injections, soulPrompt)
+		}
+	}
+
+	// Inject UserProfile
+	if a.cortexManager.UserProfile != nil {
+		userProfile := a.cortexManager.UserProfile.GetForPrompt()
+		if userProfile != "" {
+			injections = append(injections, userProfile)
+		}
+	}
+
+	// Inject into system message
+	if len(injections) > 0 {
+		for i, msg := range a.history {
+			if msg.Role == "system" {
+				for _, injection := range injections {
+					a.history[i].Content += "\n\n" + injection
+				}
+				return
+			}
+		}
+	}
+}
+
+// compressWithContextEngine uses Cortex ContextCompressor for intelligent compression
+func (a *Agent) compressWithContextEngine() {
+	if a.cortexManager == nil || a.cortexManager.ContextCompressor == nil {
+		return
+	}
+
+	compressor := a.cortexManager.ContextCompressor
+	if compressor.ShouldCompress(a.history) {
+		result, err := compressor.Compress(context.Background(), a.history)
+		if err == nil && result.Removed > 0 {
+			a.history = result.Messages
+			a.Emit(bus.EventKindWarning, map[string]interface{}{
+				"compression": true,
+				"removed":     result.Removed,
+				"ratio":       result.Ratio,
+			})
+		}
+	}
+}
+
+// recordTrajectory records the execution trajectory for GEPA learning
+func (a *Agent) recordTrajectory(
+	input string,
+	output string,
+	steps []cortex.TrajectoryStep,
+	startTime time.Time,
+	success bool,
+) {
+	if a.cortexManager == nil || a.cortexManager.TrajectoryStore == nil {
+		return
+	}
+
+	trajectory := &cortex.Trajectory{
+		Task:      input,
+		Result:    output,
+		Steps:     steps,
+		Success:   success,
+		StartTime: startTime,
+		Model:     a.provider.Name(),
+	}
+
+	if err := a.cortexManager.TrajectoryStore.RecordTrajectory(trajectory); err == nil {
+		a.Emit(bus.EventKindTurnEnd, map[string]interface{}{
+			"trajectory_recorded": true,
+			"trajectory_id":       trajectory.ID,
+		})
+	}
+}
 
 // getRecentHistory returns recent conversation history for perception
 func (a *Agent) getRecentHistory(count int) []string {
@@ -333,7 +434,6 @@ func (a *Agent) getRecentHistory(count int) []string {
 func (a *Agent) injectMemoryIntoSystemPrompt(memory, user string) {
 	for i, msg := range a.history {
 		if msg.Role == "system" {
-			// Append memory to existing system prompt
 			injection := fmt.Sprintf("\n\n[MEMORY]\n%s\n\n[USER PROFILE]\n%s", memory, user)
 			a.history[i].Content += injection
 			return
