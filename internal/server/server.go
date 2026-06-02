@@ -6104,7 +6104,7 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		jsonResponse(w, map[string]interface{}{
 			"strategy":           cfg.Strategy,
 			"learning":           true,
-			"cli_confirm":        cfg.CLIPrompt,
+			"cli_confirm":        cfg.EnableCLIConfirm,
 			"trust_threshold":    cfg.TrustThreshold,
 			"trusted_patterns":   stats.TrustedPatterns,
 			"denied_patterns":    stats.DeniedPatterns,
