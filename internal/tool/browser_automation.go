@@ -69,9 +69,9 @@ func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]interfac
 	}
 
 	return map[string]interface{}{
-		"action":   "click",
-		"selector": selector,
-		"success":  true,
+		"action":     "click",
+		"selector":   selector,
+		"success":    true,
 		"page_title": title,
 		"page_text":  truncateString(text, 1000),
 	}, nil
@@ -390,9 +390,9 @@ func (t *BrowserConsoleTool) Execute(ctx context.Context, args map[string]interf
 	}
 
 	return map[string]interface{}{
-		"action": "execute_js",
-		"script": script,
-		"result": result,
+		"action":  "execute_js",
+		"script":  script,
+		"result":  result,
 		"success": true,
 	}, nil
 }

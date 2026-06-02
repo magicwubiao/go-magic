@@ -213,10 +213,10 @@ func isAppropriateTool(toolName, input string) bool {
 
 	// Tool-specific checks
 	toolChecks := map[string][]string{
-		"read_file":    {"file", "path", ".go", ".md", ".txt"},
-		"write_file":   {"file", "path", "content"},
-		"web_search":   {"search", "query", "find"},
-		"web_extract":  {"url", "http", "extract"},
+		"read_file":       {"file", "path", ".go", ".md", ".txt"},
+		"write_file":      {"file", "path", "content"},
+		"web_search":      {"search", "query", "find"},
+		"web_extract":     {"url", "http", "extract"},
 		"execute_command": {"command", "run", "execute"},
 	}
 
@@ -315,8 +315,8 @@ func (e *EffectivenessEvaluator) AnalyzeTrend(
 
 	// Sort by timestamp
 	type scoredTrajectory struct {
-		score       EffectivenessScore
-		timestamp   time.Time
+		score     EffectivenessScore
+		timestamp time.Time
 	}
 
 	scored := make([]scoredTrajectory, len(scores))

@@ -98,20 +98,20 @@ func (p *LLMPlanner) parseLLMResponse(content, originalTask string) (*Decision, 
 	content = strings.TrimSpace(content)
 
 	var planResp struct {
-		Title                string `json:"title"`
-		Description         string `json:"description"`
-		Complexity          string `json:"complexity"`
-		MaxTurns            int    `json:"max_turns"`
-		EnableSubAgents     bool   `json:"enable_sub_agents"`
-		Steps               []struct {
-			ID              int      `json:"id"`
-			Description     string   `json:"description"`
-			Tools           []string `json:"tools"`
-			Priority        int      `json:"priority"`
-			EstimatedTurns  int      `json:"estimated_turns"`
-			Dependencies    []int    `json:"dependencies"`
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		Complexity      string `json:"complexity"`
+		MaxTurns        int    `json:"max_turns"`
+		EnableSubAgents bool   `json:"enable_sub_agents"`
+		Steps           []struct {
+			ID             int      `json:"id"`
+			Description    string   `json:"description"`
+			Tools          []string `json:"tools"`
+			Priority       int      `json:"priority"`
+			EstimatedTurns int      `json:"estimated_turns"`
+			Dependencies   []int    `json:"dependencies"`
 		} `json:"steps"`
-		RetrievalHints       []string `json:"retrieval_hints"`
+		RetrievalHints        []string `json:"retrieval_hints"`
 		ClarificationNeeded   bool     `json:"clarification_needed"`
 		ClarificationQuestion string   `json:"clarification_question"`
 	}
@@ -123,13 +123,13 @@ func (p *LLMPlanner) parseLLMResponse(content, originalTask string) (*Decision, 
 	// Convert to Decision
 	decision := &Decision{
 		Plan: &ExecutionPlan{
-			Description:   planResp.Description,
-			OriginalInput: originalTask,
-			Steps:         make([]Step, len(planResp.Steps)),
+			Description:         planResp.Description,
+			OriginalInput:       originalTask,
+			Steps:               make([]Step, len(planResp.Steps)),
 			TotalEstimatedTurns: planResp.MaxTurns,
-			CreatedAt:     time.Now().Unix(),
-			ModifiedAt:    time.Now().Unix(),
-			IsDynamic:     true,
+			CreatedAt:           time.Now().Unix(),
+			ModifiedAt:          time.Now().Unix(),
+			IsDynamic:           true,
 		},
 		MaxTurns:        planResp.MaxTurns,
 		EnableSubAgents: planResp.EnableSubAgents,
@@ -150,13 +150,13 @@ func (p *LLMPlanner) parseLLMResponse(content, originalTask string) (*Decision, 
 	// Convert steps
 	for i, s := range planResp.Steps {
 		decision.Plan.Steps[i] = Step{
-			ID:              s.ID,
-			Description:     s.Description,
-			Tools:           s.Tools,
-			Priority:        s.Priority,
-			EstimatedTurns:  s.EstimatedTurns,
-			Dependencies:    s.Dependencies,
-			Status:          StepPending,
+			ID:             s.ID,
+			Description:    s.Description,
+			Tools:          s.Tools,
+			Priority:       s.Priority,
+			EstimatedTurns: s.EstimatedTurns,
+			Dependencies:   s.Dependencies,
+			Status:         StepPending,
 		}
 	}
 
@@ -234,8 +234,8 @@ func (p *LLMPlanner) parseAdjustment(content string, plan *ExecutionPlan) (*Plan
 	content = strings.TrimSpace(content)
 
 	var adjResp struct {
-		Reason         string `json:"reason"`
-		StepsToAdd     []struct {
+		Reason     string `json:"reason"`
+		StepsToAdd []struct {
 			Description string   `json:"description"`
 			Tools       []string `json:"tools"`
 			Priority    int      `json:"priority"`
@@ -256,13 +256,13 @@ func (p *LLMPlanner) parseAdjustment(content string, plan *ExecutionPlan) (*Plan
 	nextID := len(plan.Steps) + 1
 	for _, s := range adjResp.StepsToAdd {
 		newStep := Step{
-			ID:              nextID,
-			Description:     s.Description,
-			Tools:           s.Tools,
-			Priority:        s.Priority,
+			ID:             nextID,
+			Description:    s.Description,
+			Tools:          s.Tools,
+			Priority:       s.Priority,
 			EstimatedTurns: 2,
-			Dependencies:    []int{},
-			Status:          StepPending,
+			Dependencies:   []int{},
+			Status:         StepPending,
 		}
 		plan.Steps = append(plan.Steps, newStep)
 		adjustment.StepAdded = append(adjustment.StepAdded, newStep)

@@ -34,23 +34,23 @@ type GEPAEngine struct {
 	mu sync.RWMutex
 
 	// Configuration
-	baseDir        string
-	provider       provider.Provider
+	baseDir              string
+	provider             provider.Provider
 	convergenceThreshold float64 // Stop when improvement < threshold
-	maxIterations  int
-	populationSize int
+	maxIterations        int
+	populationSize       int
 
 	// Components
-	evaluator  *EffectivenessEvaluator
-	generator  *StrategyGenerator
-	optimizer  *PromptOptimizer
+	evaluator       *EffectivenessEvaluator
+	generator       *StrategyGenerator
+	optimizer       *PromptOptimizer
 	trajectoryStore *TrajectoryStore
 
 	// Evolution state
-	generations    []Generation
-	currentGen     int
-	bestStrategy   *OptimizationStrategy
-	isConverged    bool
+	generations  []Generation
+	currentGen   int
+	bestStrategy *OptimizationStrategy
+	isConverged  bool
 
 	// Metrics
 	totalTrajectories int
@@ -60,35 +60,35 @@ type GEPAEngine struct {
 
 // Generation represents one evolution iteration
 type Generation struct {
-	ID            int                      `json:"id"`
-	Timestamp     time.Time               `json:"timestamp"`
-	Strategies    []OptimizationStrategy  `json:"strategies"`
-	BestStrategy  *OptimizationStrategy   `json:"best_strategy"`
-	AvgFitness    float64                 `json:"avg_fitness"`
-	Improvement   float64                 `json:"improvement"`
-	Trajectories  []string                `json:"trajectory_ids"`
+	ID           int                    `json:"id"`
+	Timestamp    time.Time              `json:"timestamp"`
+	Strategies   []OptimizationStrategy `json:"strategies"`
+	BestStrategy *OptimizationStrategy  `json:"best_strategy"`
+	AvgFitness   float64                `json:"avg_fitness"`
+	Improvement  float64                `json:"improvement"`
+	Trajectories []string               `json:"trajectory_ids"`
 }
 
 // OptimizationStrategy represents a prompt optimization strategy
 type OptimizationStrategy struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Target      string                 `json:"target"` // "soul", "system", "skills"
-	Changes     []PromptChange         `json:"changes"`
-	Fitness     float64                `json:"fitness"`
-	Applied     bool                   `json:"applied"`
-	AppliedAt   *time.Time            `json:"applied_at,omitempty"`
-	Results     *StrategyResult       `json:"results,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Target      string          `json:"target"` // "soul", "system", "skills"
+	Changes     []PromptChange  `json:"changes"`
+	Fitness     float64         `json:"fitness"`
+	Applied     bool            `json:"applied"`
+	AppliedAt   *time.Time      `json:"applied_at,omitempty"`
+	Results     *StrategyResult `json:"results,omitempty"`
 }
 
 // PromptChange represents a single prompt modification
 type PromptChange struct {
-	Type        string `json:"type"`        // "add", "remove", "modify", "reorder"
-	Section     string `json:"section"`     // Section name
-	OldContent  string `json:"old_content"`
-	NewContent  string `json:"new_content"`
-	Reason      string `json:"reason"`
+	Type       string `json:"type"`    // "add", "remove", "modify", "reorder"
+	Section    string `json:"section"` // Section name
+	OldContent string `json:"old_content"`
+	NewContent string `json:"new_content"`
+	Reason     string `json:"reason"`
 }
 
 // StrategyResult tracks the outcome of applying a strategy
@@ -102,12 +102,12 @@ type StrategyResult struct {
 
 // EffectivenessScore represents a trajectory's effectiveness
 type EffectivenessScore struct {
-	TrajectoryID    string  `json:"trajectory_id"`
-	Success         bool    `json:"success"`
-	Efficiency      float64 `json:"efficiency"`      // 0-1, based on turns vs optimal
-	Quality         float64 `json:"quality"`         // 0-1, based on output quality
-	ToolAccuracy    float64 `json:"tool_accuracy"`   // 0-1, correct tool usage
-	OverallScore    float64 `json:"overall_score"`   // Weighted combination
+	TrajectoryID string  `json:"trajectory_id"`
+	Success      bool    `json:"success"`
+	Efficiency   float64 `json:"efficiency"`    // 0-1, based on turns vs optimal
+	Quality      float64 `json:"quality"`       // 0-1, based on output quality
+	ToolAccuracy float64 `json:"tool_accuracy"` // 0-1, correct tool usage
+	OverallScore float64 `json:"overall_score"` // Weighted combination
 }
 
 // NewGEPAEngine creates a new GEPA engine
@@ -331,12 +331,12 @@ func (g *GEPAEngine) GetStats() map[string]interface{} {
 	defer g.mu.RUnlock()
 
 	return map[string]interface{}{
-		"current_generation":   g.currentGen,
-		"is_converged":        g.isConverged,
-		"total_trajectories":  g.totalTrajectories,
-		"success_rate":        g.successRate,
-		"avg_effectiveness":   g.avgEffectiveness,
-		"best_strategy_id":    g.bestStrategy,
+		"current_generation":    g.currentGen,
+		"is_converged":          g.isConverged,
+		"total_trajectories":    g.totalTrajectories,
+		"success_rate":          g.successRate,
+		"avg_effectiveness":     g.avgEffectiveness,
+		"best_strategy_id":      g.bestStrategy,
 		"convergence_threshold": g.convergenceThreshold,
 	}
 }

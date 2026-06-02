@@ -283,7 +283,7 @@ func (a *Agent) Emit(kind bus.EventKind, data interface{}) {
 	turn := a.iterationCount
 	session := a.session
 	a.mu.RUnlock()
-	
+
 	a.bus.Emit(bus.Event{
 		Kind:      kind,
 		Turn:      turn,
@@ -359,7 +359,7 @@ func (a *Agent) AddSkillsContext(skillsCtx string) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	
+
 	for i, msg := range a.history {
 		if msg.Role == "system" {
 			a.history[i].Content += "\n\n" + skillsCtx

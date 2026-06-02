@@ -17,7 +17,7 @@ type TrajectoryStep struct {
 	ToolOutput string                 `json:"tool_output"`
 	Success    bool                   `json:"success"`
 	Duration   time.Duration          `json:"duration"`
-	Timestamp  time.Time             `json:"timestamp"`
+	Timestamp  time.Time              `json:"timestamp"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -40,33 +40,33 @@ type Trajectory struct {
 
 // TrajectoryPattern represents a learned pattern from trajectories
 type TrajectoryPattern struct {
-	ID           string   `json:"id"`
-	Pattern      string   `json:"pattern"`
-	ToolSequence []string `json:"tool_sequence"`
-	SuccessRate  float64 `json:"success_rate"`
-	Occurrences  int      `json:"occurrences"`
+	ID           string    `json:"id"`
+	Pattern      string    `json:"pattern"`
+	ToolSequence []string  `json:"tool_sequence"`
+	SuccessRate  float64   `json:"success_rate"`
+	Occurrences  int       `json:"occurrences"`
 	LastSeen     time.Time `json:"last_seen"`
-	SkillName    string   `json:"skill_name,omitempty"`
+	SkillName    string    `json:"skill_name,omitempty"`
 }
 
 // TrajectoryStore manages trajectory storage and learning
 type TrajectoryStore struct {
-	mu        sync.RWMutex
-	baseDir   string
+	mu            sync.RWMutex
+	baseDir       string
 	trajectoryDir string
-	patternDir  string
-	trajectories []Trajectory
-	patterns    []TrajectoryPattern
+	patternDir    string
+	trajectories  []Trajectory
+	patterns      []TrajectoryPattern
 }
 
 // NewTrajectoryStore creates a new trajectory store
 func NewTrajectoryStore(baseDir string) (*TrajectoryStore, error) {
 	ts := &TrajectoryStore{
-		baseDir:      baseDir,
+		baseDir:       baseDir,
 		trajectoryDir: filepath.Join(baseDir, "trajectories"),
-		patternDir:   filepath.Join(baseDir, "patterns"),
-		trajectories: make([]Trajectory, 0),
-		patterns:     make([]TrajectoryPattern, 0),
+		patternDir:    filepath.Join(baseDir, "patterns"),
+		trajectories:  make([]Trajectory, 0),
+		patterns:      make([]TrajectoryPattern, 0),
 	}
 
 	// Create directories
@@ -357,7 +357,7 @@ func (ts *TrajectoryStore) GetStats() map[string]interface{} {
 
 	return map[string]interface{}{
 		"total_trajectories": total,
-		"total_patterns":      len(ts.patterns),
+		"total_patterns":     len(ts.patterns),
 		"success_rate":       float64(successCount) / float64(total),
 		"avg_duration":       totalDuration / time.Duration(total),
 		"avg_steps":          float64(totalSteps) / float64(total),

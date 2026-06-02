@@ -11,10 +11,10 @@ import (
 
 // BrowserManager manages Chrome browser instances using chromedp
 type BrowserManager struct {
-	mu       sync.RWMutex
-	allocCtx context.Context
-	allocCancel context.CancelFunc
-	tabs     map[string]*BrowserTab
+	mu             sync.RWMutex
+	allocCtx       context.Context
+	allocCancel    context.CancelFunc
+	tabs           map[string]*BrowserTab
 	defaultTimeout time.Duration
 }
 

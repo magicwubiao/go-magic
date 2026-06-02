@@ -27,27 +27,27 @@ import (
 // 10. Context Compression (NEW)
 // 12. GEPA Self-Evolution Engine (NEW)
 type Manager struct {
-	baseDir        string
-	provider       provider.Provider // For LLM features
+	baseDir  string
+	provider provider.Provider // For LLM features
 
 	// Core systems
-	Snapshot       *memory.SnapshotManager     // System 4: Frozen snapshot memory
-	Trigger        *trigger.MessageTrigger     // System 1 + 2: Nudge mechanism
-	Review         *review.BackgroundReview    // System 3: Background review
-	Perception     *perception.Parser          // Layer 1: Intent classification
-	Cognition      *cognition.Planner          // Layer 2: Planning and decision making
-	LLMPlanner     *cognition.LLMPlanner       // LLM-based planning (NEW)
-	Execution      *execution.Manager          // Layer 3: Checkpoint + Resume
-	FTSMemory      *memory.FTSStore            // System 5: FTS full-text search
-	SkillCreator   *skills.EnhancedAutoCreator // System 6: Auto skill evolution
+	Snapshot     *memory.SnapshotManager     // System 4: Frozen snapshot memory
+	Trigger      *trigger.MessageTrigger     // System 1 + 2: Nudge mechanism
+	Review       *review.BackgroundReview    // System 3: Background review
+	Perception   *perception.Parser          // Layer 1: Intent classification
+	Cognition    *cognition.Planner          // Layer 2: Planning and decision making
+	LLMPlanner   *cognition.LLMPlanner       // LLM-based planning (NEW)
+	Execution    *execution.Manager          // Layer 3: Checkpoint + Resume
+	FTSMemory    *memory.FTSStore            // System 5: FTS full-text search
+	SkillCreator *skills.EnhancedAutoCreator // System 6: Auto skill evolution
 
 	// NEW: Hermes-inspired systems
-	Soul             *SoulManager          // System personality (SOUL.md)
-	UserProfile      *UserProfile          // User preferences (USER.md)
-	PromptCache      *PromptCache          // Prompt caching
-	ContextCompressor *ContextCompressor   // Context compression
-	TrajectoryStore  *TrajectoryStore      // Trajectory learning
-	GEPAEngine       *GEPAEngine           // Self-evolution engine
+	Soul              *SoulManager       // System personality (SOUL.md)
+	UserProfile       *UserProfile       // User preferences (USER.md)
+	PromptCache       *PromptCache       // Prompt caching
+	ContextCompressor *ContextCompressor // Context compression
+	TrajectoryStore   *TrajectoryStore   // Trajectory learning
+	GEPAEngine        *GEPAEngine        // Self-evolution engine
 
 	LastPerception *perception.PerceptionResult
 	LastDecision   *cognition.Decision   // Last cognition decision
@@ -83,11 +83,11 @@ func NewManagerWithProfile(baseDir string, prov provider.Provider, profile strin
 		SkillCreator: skills.NewEnhancedAutoCreator(baseDir),
 
 		// NEW: Hermes-inspired systems
-		Soul:             NewSoulManager(cortexDir),
-		UserProfile:      NewUserProfile(userProfileDir),
-		PromptCache:      nil, // Initialized in Start()
+		Soul:              NewSoulManager(cortexDir),
+		UserProfile:       NewUserProfile(userProfileDir),
+		PromptCache:       nil, // Initialized in Start()
 		ContextCompressor: NewContextCompressor(prov, 0, 0),
-		TrajectoryStore:  nil, // Initialized in Start()
+		TrajectoryStore:   nil, // Initialized in Start()
 	}
 
 	// Initialize LLM Planner if provider is available

@@ -100,18 +100,18 @@ type RiskAssessment struct {
 
 // ApprovalRecord 审批历史记录.
 type ApprovalRecord struct {
-	ID          string    `json:"id"`
-	Command     string    `json:"command"`
-	Normalized  string    `json:"normalized"`
-	RiskLevel   RiskLevel `json:"risk_level"`
-	RiskScore   float64   `json:"risk_score"`
-	Decision    string    `json:"decision"` // approved, denied, auto_approved, timeout
-	Strategy    Strategy  `json:"strategy"`
-	Reason      string    `json:"reason"`
-	SessionID   string    `json:"session_id"`
-	WorkingDir  string    `json:"working_dir"`
-	Duration    int64     `json:"duration_ms"` // 审批耗时
-	Timestamp   time.Time `json:"timestamp"`
+	ID         string    `json:"id"`
+	Command    string    `json:"command"`
+	Normalized string    `json:"normalized"`
+	RiskLevel  RiskLevel `json:"risk_level"`
+	RiskScore  float64   `json:"risk_score"`
+	Decision   string    `json:"decision"` // approved, denied, auto_approved, timeout
+	Strategy   Strategy  `json:"strategy"`
+	Reason     string    `json:"reason"`
+	SessionID  string    `json:"session_id"`
+	WorkingDir string    `json:"working_dir"`
+	Duration   int64     `json:"duration_ms"` // 审批耗时
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ type ApprovalStats struct {
 	DeniedPatterns  int               `json:"denied_patterns"`
 	ByRiskLevel     map[RiskLevel]int `json:"by_risk_level"`
 	ByCategory      map[string]int    `json:"by_category"`
-	TopCommands     []CommandStat      `json:"top_commands"`
+	TopCommands     []CommandStat     `json:"top_commands"`
 	AvgResponseTime float64           `json:"avg_response_time_ms"`
 }
 
@@ -148,7 +148,7 @@ type CommandStat struct {
 // WebApprovalCallback Web端审批回调.
 type WebApprovalCallback struct {
 	pendingApprovals map[string]*PendingApproval
-	mu              sync.Mutex
+	mu               sync.Mutex
 }
 
 // PendingApproval 待Web审批的请求.
@@ -294,7 +294,9 @@ func NewManager(config *ApprovalConfig) (*Manager, error) {
 
 	home, _ := os.UserHomeDir()
 	dbDir := filepath.Join(home, ".magic", "approval")
-	os.MkdirAll(dbDir, 0755)
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create approval directory: %w", err)
+	}
 
 	m := &Manager{
 		config:         config,
@@ -580,14 +582,14 @@ var sensitiveDirectories = []string{
 
 // bypassPatterns detect attempts to evade approval checks.
 var bypassPatterns = map[string]string{
-	`base64\s+-d`:                          "encoding",
-	`xxd\s+-r`:                             "encoding",
-	`\$\{?\w+\}?`:                          "variable",
-	`\$\(\s*\w+`:                           "variable_subshell",
-	`\.\./`:                                 "path_traversal",
-	`/proc/self/`:                          "path_traversal",
-	`eval\s+`:                              "encoding",
-	`echo\s+.*\|\s*(ba)?sh`:               "encoding",
+	`base64\s+-d`:           "encoding",
+	`xxd\s+-r`:              "encoding",
+	`\$\{?\w+\}?`:           "variable",
+	`\$\(\s*\w+`:            "variable_subshell",
+	`\.\./`:                 "path_traversal",
+	`/proc/self/`:           "path_traversal",
+	`eval\s+`:               "encoding",
+	`echo\s+.*\|\s*(ba)?sh`: "encoding",
 }
 
 // calculateRiskLevel assesses the risk of a command and returns a RiskAssessment.
@@ -1493,6 +1495,12 @@ func (m *Manager) loadPatterns() {
 
 // savePatterns saves patterns to disk.
 func (m *Manager) savePatterns() error {
+	// Ensure directory exists
+	dir := filepath.Dir(m.patternsDB)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
 	var patterns []*CommandPattern
 	for _, p := range m.patterns {
 		patterns = append(patterns, p)
@@ -1527,6 +1535,12 @@ func (m *Manager) saveWhitelist() error {
 	home, _ := os.UserHomeDir()
 	wlPath := filepath.Join(home, ".magic", "approval", "whitelist.txt")
 
+	// Ensure directory exists
+	dir := filepath.Dir(wlPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
 	var lines []string
 	for pattern := range m.whitelist {
 		lines = append(lines, pattern)
@@ -1552,6 +1566,12 @@ func (m *Manager) saveHistory() error {
 	m.mu.RLock()
 	records := m.history
 	m.mu.RUnlock()
+
+	// Ensure directory exists
+	dir := filepath.Dir(m.historyDB)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
 
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {

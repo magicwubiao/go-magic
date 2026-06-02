@@ -12,13 +12,13 @@ import (
 
 // UserPreference represents a single user preference
 type UserPreference struct {
-	Key       string    `json:"key"`
-	Value     string    `json:"value"`
-	Context   string    `json:"context,omitempty"`
-	Source    string    `json:"source"`  // "explicit", "learned", "feedback"
-	Confidence float64  `json:"confidence"` // 0.0-1.0
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Key        string    `json:"key"`
+	Value      string    `json:"value"`
+	Context    string    `json:"context,omitempty"`
+	Source     string    `json:"source"`     // "explicit", "learned", "feedback"
+	Confidence float64   `json:"confidence"` // 0.0-1.0
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // UserProfile manages the USER.md with structured preferences

@@ -254,7 +254,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 					}
 				}
 
-	// Record trajectory step
+				// Record trajectory step
 				stepResult := ""
 				if result.Err != nil {
 					stepResult = result.Err.Error()

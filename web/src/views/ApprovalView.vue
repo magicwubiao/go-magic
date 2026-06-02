@@ -561,8 +561,8 @@ async function setStrategy(strategy: string): Promise<void> {
 }
 
 async function clearHistory(olderThanHours: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/history`, {
-    method: 'DELETE',
+  const res = await fetch(`${API_BASE}/clear-history`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ older_than_hours: olderThanHours }),
   })

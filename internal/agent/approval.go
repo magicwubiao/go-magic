@@ -20,11 +20,11 @@ const defaultApprovalTimeout = 30 * time.Second
 type userAction int
 
 const (
-	actionApprove userAction = iota // [A]pprove - approve this command once
-	actionDeny                     // [D]eny - reject this command
-	actionTrust                    // [T]rust - trust this pattern permanently
-	actionSkipSession              // [S]kip session - skip approval for similar commands in this session
-	actionQuit                     // [Q]uit - abort the entire session
+	actionApprove     userAction = iota // [A]pprove - approve this command once
+	actionDeny                          // [D]eny - reject this command
+	actionTrust                         // [T]rust - trust this pattern permanently
+	actionSkipSession                   // [S]kip session - skip approval for similar commands in this session
+	actionQuit                          // [Q]uit - abort the entire session
 )
 
 // ApprovalHook provides command approval functionality using the smart approval system.

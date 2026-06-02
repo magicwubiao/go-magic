@@ -5,36 +5,36 @@ package configtypes
 // Config is the main configuration structure for go-magic application.
 type Config struct {
 	// Basic settings
-	Profile     string `json:"profile"`
-	MagicHome   string `json:"magic_home"`
-	WorkingDir  string `json:"working_dir,omitempty"`
+	Profile    string `json:"profile"`
+	MagicHome  string `json:"magic_home"`
+	WorkingDir string `json:"working_dir,omitempty"`
 
 	// Provider settings
-	Provider    string                 `json:"provider"`
-	Model       string                 `json:"model"`
-	Providers   map[string]ProviderCfg `json:"providers"`
+	Provider  string                 `json:"provider"`
+	Model     string                 `json:"model"`
+	Providers map[string]ProviderCfg `json:"providers"`
 
 	// Feature toggles
-	Tools       ToolsConfig      `json:"tools,omitempty"`
-	Gateway     GatewayConfig    `json:"gateway,omitempty"`
-	Agent       AgentConfig      `json:"agent,omitempty"`
-	Memory      MemoryConfig     `json:"memory,omitempty"`
-	Kanban      KanbanConfig     `json:"kanban,omitempty"`
+	Tools        ToolsConfig     `json:"tools,omitempty"`
+	Gateway      GatewayConfig   `json:"gateway,omitempty"`
+	Agent        AgentConfig     `json:"agent,omitempty"`
+	Memory       MemoryConfig    `json:"memory,omitempty"`
+	Kanban       KanbanConfig    `json:"kanban,omitempty"`
 	Notification NotificationCfg `json:"notification,omitempty"`
-	ImageGen    ImageGenConfig   `json:"image_gen,omitempty"`
-	Security    SecurityConfig   `json:"security,omitempty"`
+	ImageGen     ImageGenConfig  `json:"image_gen,omitempty"`
+	Security     SecurityConfig  `json:"security,omitempty"`
 
 	// Advanced features
-	Cortex       CortexConfig    `json:"cortex,omitempty"`
-	Plugin       PluginConfig    `json:"plugin,omitempty"`
-	Execution    ExecutionConfig `json:"execution,omitempty"`
-	Log          LogConfig       `json:"log,omitempty"`
-	Server       ServerConfig    `json:"server,omitempty"`
-	MCP          MCPConfig       `json:"mcp,omitempty"`
-	SubAgent     SubAgentConfig  `json:"subagent,omitempty"`
-	Voice        VoiceConfig     `json:"voice,omitempty"`
-	Privacy      PrivacyConfig   `json:"privacy,omitempty"`
-	Display      DisplayConfig   `json:"display,omitempty"`
+	Cortex    CortexConfig    `json:"cortex,omitempty"`
+	Plugin    PluginConfig    `json:"plugin,omitempty"`
+	Execution ExecutionConfig `json:"execution,omitempty"`
+	Log       LogConfig       `json:"log,omitempty"`
+	Server    ServerConfig    `json:"server,omitempty"`
+	MCP       MCPConfig       `json:"mcp,omitempty"`
+	SubAgent  SubAgentConfig  `json:"subagent,omitempty"`
+	Voice     VoiceConfig     `json:"voice,omitempty"`
+	Privacy   PrivacyConfig   `json:"privacy,omitempty"`
+	Display   DisplayConfig   `json:"display,omitempty"`
 }
 
 // ProviderCfg defines provider-specific configuration.
@@ -66,10 +66,10 @@ type ModelInfo struct {
 // This unified structure combines all memory-related settings.
 type MemoryConfig struct {
 	// Basic settings
-	Enabled    bool   `json:"enabled"`
-	DBPath     string `json:"db_path,omitempty"`
-	AutoRecall bool   `json:"auto_recall,omitempty"`
-	RecallLimit int   `json:"recall_limit,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	DBPath      string `json:"db_path,omitempty"`
+	AutoRecall  bool   `json:"auto_recall,omitempty"`
+	RecallLimit int    `json:"recall_limit,omitempty"`
 
 	// Storage settings
 	StorageDir     string `json:"storage_dir,omitempty"`
@@ -79,29 +79,29 @@ type MemoryConfig struct {
 	MaxUserMemLen  int    `json:"max_user_mem_length,omitempty"`
 
 	// FTS settings
-	FTSEnabled      bool `json:"fts_enabled,omitempty"`
-	FTSMaxResults   int  `json:"fts_max_results,omitempty"`
-	FTSBoostRecent  bool `json:"fts_boost_recent,omitempty"`
+	FTSEnabled     bool `json:"fts_enabled,omitempty"`
+	FTSMaxResults  int  `json:"fts_max_results,omitempty"`
+	FTSBoostRecent bool `json:"fts_boost_recent,omitempty"`
 
 	// Decay settings
-	EnableDecay   bool    `json:"enable_decay,omitempty"`
-	DecayRate     float64 `json:"decay_rate,omitempty"`
-	EnableDedup   bool    `json:"enable_dedup,omitempty"`
+	EnableDecay bool    `json:"enable_decay,omitempty"`
+	DecayRate   float64 `json:"decay_rate,omitempty"`
+	EnableDedup bool    `json:"enable_dedup,omitempty"`
 
 	// Cleanup settings
-	CleanupEnabled    bool   `json:"cleanup_enabled,omitempty"`
-	CleanupInterval   string `json:"cleanup_interval,omitempty"`
-	CleanupOlderThan  string `json:"cleanup_older_than,omitempty"`
+	CleanupEnabled   bool   `json:"cleanup_enabled,omitempty"`
+	CleanupInterval  string `json:"cleanup_interval,omitempty"`
+	CleanupOlderThan string `json:"cleanup_older_than,omitempty"`
 
 	// Summarization
-	AutoSummarize      bool `json:"auto_summarize,omitempty"`
-	SummarizeThreshold int  `json:"summarize_threshold,omitempty"`
+	AutoSummarize      bool   `json:"auto_summarize,omitempty"`
+	SummarizeThreshold int    `json:"summarize_threshold,omitempty"`
 	LLMProvider        string `json:"llm_provider,omitempty"`
 }
 
 // GatewayConfig defines gateway/platform integration configuration.
 type GatewayConfig struct {
-	Enabled   bool                     `json:"enabled"`
+	Enabled   bool                      `json:"enabled"`
 	Platforms map[string]PlatformConfig `json:"platforms,omitempty"`
 
 	// Runtime settings
@@ -116,12 +116,12 @@ type GatewayConfig struct {
 // PlatformConfig defines platform-specific configuration.
 type PlatformConfig struct {
 	// Authentication
-	Token      string `json:"token,omitempty"`
-	Secret     string `json:"secret,omitempty"`
-	AppKey     string `json:"app_key,omitempty"`
-	AppSecret  string `json:"app_secret,omitempty"`
-	CorpID     string `json:"corp_id,omitempty"`
-	AgentID    string `json:"agent_id,omitempty"`
+	Token     string `json:"token,omitempty"`
+	Secret    string `json:"secret,omitempty"`
+	AppKey    string `json:"app_key,omitempty"`
+	AppSecret string `json:"app_secret,omitempty"`
+	CorpID    string `json:"corp_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
 
 	// Settings
 	Enabled         bool     `json:"enabled"`
@@ -130,9 +130,9 @@ type PlatformConfig struct {
 	BlockedChannels []string `json:"blocked_channels,omitempty"`
 
 	// Advanced
-	APIURL          string `json:"api_url,omitempty"`
-	Region          string `json:"region,omitempty"`
-	MessageFormat   string `json:"message_format,omitempty"`
+	APIURL        string `json:"api_url,omitempty"`
+	Region        string `json:"region,omitempty"`
+	MessageFormat string `json:"message_format,omitempty"`
 }
 
 // AgentConfig defines agent behavior configuration.
@@ -167,13 +167,13 @@ type NotificationCfg struct {
 
 // EmailConfig defines email notification settings.
 type EmailConfig struct {
-	Enabled   bool   `json:"enabled"`
-	SMTPHost  string `json:"smtp_host"`
-	SMTPPort  int    `json:"smtp_port"`
-	SMTPUser  string `json:"smtp_user"`
-	SMTPPass  string `json:"smtp_pass"`
-	From      string `json:"from"`
-	To        string `json:"to"`
+	Enabled  bool   `json:"enabled"`
+	SMTPHost string `json:"smtp_host"`
+	SMTPPort int    `json:"smtp_port"`
+	SMTPUser string `json:"smtp_user"`
+	SMTPPass string `json:"smtp_pass"`
+	From     string `json:"from"`
+	To       string `json:"to"`
 }
 
 // SMSConfig defines SMS notification settings.
@@ -224,9 +224,9 @@ type PluginConfig struct {
 
 // ExecutionConfig defines execution system configuration.
 type ExecutionConfig struct {
-	MaxParallel     int    `json:"max_parallel,omitempty"`
-	CheckpointDir   string `json:"checkpoint_dir,omitempty"`
-	EnableCheckpoint bool  `json:"enable_checkpoint,omitempty"`
+	MaxParallel      int    `json:"max_parallel,omitempty"`
+	CheckpointDir    string `json:"checkpoint_dir,omitempty"`
+	EnableCheckpoint bool   `json:"enable_checkpoint,omitempty"`
 }
 
 // LogConfig defines logging configuration.
@@ -245,7 +245,7 @@ type ServerConfig struct {
 
 // MCPConfig defines MCP (Model Context Protocol) configuration.
 type MCPConfig struct {
-	Enabled bool              `json:"enabled"`
+	Enabled bool                 `json:"enabled"`
 	Servers map[string]MCPServer `json:"servers,omitempty"`
 }
 
@@ -258,14 +258,14 @@ type MCPServer struct {
 
 // SubAgentConfig defines sub-agent configuration.
 type SubAgentConfig struct {
-	Enabled    bool   `json:"enabled"`
-	MaxDepth   int    `json:"max_depth,omitempty"`
-	Timeout    string `json:"timeout,omitempty"`
+	Enabled  bool   `json:"enabled"`
+	MaxDepth int    `json:"max_depth,omitempty"`
+	Timeout  string `json:"timeout,omitempty"`
 }
 
 // VoiceConfig defines voice system configuration.
 type VoiceConfig struct {
-	Enabled bool   `json:"enabled"`
+	Enabled bool      `json:"enabled"`
 	ASR     ASRConfig `json:"asr,omitempty"`
 	TTS     TTSConfig `json:"tts,omitempty"`
 }
@@ -318,11 +318,11 @@ func DefaultConfig() *Config {
 			TruncateThreshold: 4000,
 		},
 		Memory: MemoryConfig{
-			Enabled:      true,
-			DBPath:       "~/.magic/memory.db",
-			AutoRecall:   true,
-			RecallLimit:  5,
-			FTSEnabled:   true,
+			Enabled:       true,
+			DBPath:        "~/.magic/memory.db",
+			AutoRecall:    true,
+			RecallLimit:   5,
+			FTSEnabled:    true,
 			FTSMaxResults: 10,
 		},
 		Gateway: GatewayConfig{

@@ -16,19 +16,19 @@ import (
 
 // PromptCache implements Anthropic/OpenAI-style prompt caching
 type PromptCache struct {
-	mu              sync.RWMutex
-	cacheDir       string
-	cache          map[string]*CachedPrompt
-	provider       provider.Provider
-	maxCacheSize   int
-	ttl            time.Duration
+	mu           sync.RWMutex
+	cacheDir     string
+	cache        map[string]*CachedPrompt
+	provider     provider.Provider
+	maxCacheSize int
+	ttl          time.Duration
 }
 
 // CachedPrompt represents a cached prompt with its cache key
 type CachedPrompt struct {
 	Key         string
-	Prefix      string      // The cached prefix content
-	CacheBreaks []int64    // Message indices where cache breaks occur
+	Prefix      string  // The cached prefix content
+	CacheBreaks []int64 // Message indices where cache breaks occur
 	CreatedAt   time.Time
 	LastUsedAt  time.Time
 	HitCount    int
@@ -39,10 +39,10 @@ type CachedPrompt struct {
 func NewPromptCache(provider provider.Provider, cacheDir string) (*PromptCache, error) {
 	pc := &PromptCache{
 		cacheDir:     cacheDir,
-		cache:       make(map[string]*CachedPrompt),
-		provider:    provider,
+		cache:        make(map[string]*CachedPrompt),
+		provider:     provider,
 		maxCacheSize: 100,
-		ttl:         24 * time.Hour,
+		ttl:          24 * time.Hour,
 	}
 
 	// Create cache directory
@@ -77,7 +77,7 @@ func (pc *PromptCache) CachePrefix(ctx context.Context, prefixContent string) (s
 	cached := &CachedPrompt{
 		Key:        key,
 		Prefix:     prefixContent,
-		CreatedAt: time.Now(),
+		CreatedAt:  time.Now(),
 		LastUsedAt: time.Now(),
 		HitCount:   1,
 		Tokens:     estimateTokens(prefixContent),
@@ -270,12 +270,12 @@ func (pc *PromptCache) GetCacheStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"entries":         len(pc.cache),
-		"total_tokens":    totalTokens,
-		"total_hits":      totalHits,
-		"oldest_access":   oldestAccess,
-		"newest_access":   newestAccess,
-		"cache_dir":       pc.cacheDir,
+		"entries":       len(pc.cache),
+		"total_tokens":  totalTokens,
+		"total_hits":    totalHits,
+		"oldest_access": oldestAccess,
+		"newest_access": newestAccess,
+		"cache_dir":     pc.cacheDir,
 	}
 }
 

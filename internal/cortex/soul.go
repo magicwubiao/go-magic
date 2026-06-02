@@ -8,10 +8,10 @@ import (
 
 // SoulManager manages the system personality (SOUL.md)
 type SoulManager struct {
-	baseDir    string
-	soulPath   string
-	content    string
-	mu         sync.RWMutex
+	baseDir     string
+	soulPath    string
+	content     string
+	mu          sync.RWMutex
 	defaultSoul string
 }
 
@@ -41,9 +41,9 @@ Guidelines:
 // NewSoulManager creates a new soul manager
 func NewSoulManager(baseDir string) *SoulManager {
 	return &SoulManager{
-		baseDir:    baseDir,
-		soulPath:   filepath.Join(baseDir, "SOUL.md"),
-		content:    DefaultSoul,
+		baseDir:     baseDir,
+		soulPath:    filepath.Join(baseDir, "SOUL.md"),
+		content:     DefaultSoul,
 		defaultSoul: DefaultSoul,
 	}
 }

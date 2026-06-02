@@ -758,11 +758,16 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/approval/stats", withCORS(requireAuth(s.handleApprovalStats)))
 	mux.HandleFunc("/api/approval/pending", withCORS(requireAuth(s.handleApprovalPending)))
 	mux.HandleFunc("/api/approval/pending/", withCORS(requireAuth(s.handleApprovalPendingByID)))
+	// Patterns endpoints (for frontend compatibility)
+	mux.HandleFunc("/api/approval/patterns/trusted", withCORS(requireAuth(s.handleApprovalPatternsTrusted)))
+	mux.HandleFunc("/api/approval/patterns/denied", withCORS(requireAuth(s.handleApprovalPatternsDenied)))
+	// Legacy endpoints (keep for backward compatibility)
 	mux.HandleFunc("/api/approval/trusted", withCORS(requireAuth(s.handleApprovalTrusted)))
 	mux.HandleFunc("/api/approval/denied", withCORS(requireAuth(s.handleApprovalDenied)))
 	mux.HandleFunc("/api/approval/whitelist", withCORS(requireAuth(s.handleApprovalWhitelist)))
 	mux.HandleFunc("/api/approval/strategy", withCORS(requireAuth(s.handleApprovalStrategy)))
 	mux.HandleFunc("/api/approval/clear-history", withCORS(requireAuth(s.handleApprovalClearHistory)))
+	mux.HandleFunc("/api/approval/settings", withCORS(requireAuth(s.handleApprovalSettings)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -4009,9 +4014,9 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 // parseUserMD parses user.md content into structured data
 func (s *Server) parseUserMD(content string) map[string]interface{} {
 	data := map[string]interface{}{
-		"name":                 "",
-		"role":                 "",
-		"communication_style":  "",
+		"name":                "",
+		"role":                "",
+		"communication_style": "",
 		"code_style":          "",
 		"tech_stack":          []string{},
 		"interests":           []string{},
@@ -5721,16 +5726,16 @@ func (s *Server) handleApprovalStatus(w http.ResponseWriter, r *http.Request) {
 	stats := mgr.GetStats()
 
 	jsonResponse(w, map[string]interface{}{
-		"strategy":            cfg.Strategy,
-		"learning":            cfg.EnableLearning,
-		"cli_confirm":         cfg.EnableCLIConfirm,
-		"trust_threshold":     cfg.TrustThreshold,
-		"trusted_patterns":    stats.TrustedPatterns,
-		"denied_patterns":     stats.DeniedPatterns,
-		"total_requests":      stats.TotalRequests,
-		"auto_approved":       stats.AutoApproved,
-		"user_approved":       stats.UserApproved,
-		"user_denied":         stats.UserDenied,
+		"strategy":             cfg.Strategy,
+		"learning":             cfg.EnableLearning,
+		"cli_confirm":          cfg.EnableCLIConfirm,
+		"trust_threshold":      cfg.TrustThreshold,
+		"trusted_patterns":     stats.TrustedPatterns,
+		"denied_patterns":      stats.DeniedPatterns,
+		"total_requests":       stats.TotalRequests,
+		"auto_approved":        stats.AutoApproved,
+		"user_approved":        stats.UserApproved,
+		"user_denied":          stats.UserDenied,
 		"avg_response_time_ms": stats.AvgResponseTime,
 	})
 }
@@ -5785,16 +5790,16 @@ func (s *Server) handleApprovalStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{
-		"total_requests":      stats.TotalRequests,
-		"auto_approved":       stats.AutoApproved,
-		"user_approved":       stats.UserApproved,
-		"user_denied":         stats.UserDenied,
-		"timed_out":           stats.TimedOut,
-		"trusted_patterns":    stats.TrustedPatterns,
-		"denied_patterns":     stats.DeniedPatterns,
-		"top_commands":        stats.TopCommands,
-		"by_risk_level":       byRiskLevel,
-		"by_category":         stats.ByCategory,
+		"total_requests":       stats.TotalRequests,
+		"auto_approved":        stats.AutoApproved,
+		"user_approved":        stats.UserApproved,
+		"user_denied":          stats.UserDenied,
+		"timed_out":            stats.TimedOut,
+		"trusted_patterns":     stats.TrustedPatterns,
+		"denied_patterns":      stats.DeniedPatterns,
+		"top_commands":         stats.TopCommands,
+		"by_risk_level":        byRiskLevel,
+		"by_category":          stats.ByCategory,
 		"avg_response_time_ms": stats.AvgResponseTime,
 	})
 }
@@ -5909,6 +5914,72 @@ func (s *Server) handleApprovalDenied(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleApprovalPatternsTrusted handles /api/approval/patterns/trusted (GET/DELETE)
+func (s *Server) handleApprovalPatternsTrusted(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		trusted := mgr.GetTrustedCommands()
+		jsonResponse(w, map[string]interface{}{
+			"patterns": trusted,
+			"total":    len(trusted),
+		})
+
+	case http.MethodDelete:
+		var req struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		// Remove from trusted patterns by denying it
+		mgr.Deny(&approval.ApprovalRequest{Command: req.Pattern})
+		jsonResponse(w, map[string]bool{"success": true})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleApprovalPatternsDenied handles /api/approval/patterns/denied (GET/DELETE)
+func (s *Server) handleApprovalPatternsDenied(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		denied := mgr.GetDeniedCommands()
+		jsonResponse(w, map[string]interface{}{
+			"patterns": denied,
+			"total":    len(denied),
+		})
+
+	case http.MethodDelete:
+		var req struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		// Remove from denied patterns by approving it
+		mgr.Approve(&approval.ApprovalRequest{Command: req.Pattern})
+		jsonResponse(w, map[string]bool{"success": true})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleApprovalWhitelist(w http.ResponseWriter, r *http.Request) {
 	mgr := s.getApprovalManager()
 	if mgr == nil {
@@ -6016,6 +6087,52 @@ func (s *Server) handleApprovalClearHistory(w http.ResponseWriter, r *http.Reque
 
 	mgr.ClearHistory(time.Duration(req.OlderThanHours) * time.Hour)
 	jsonResponse(w, map[string]bool{"success": true})
+}
+
+func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) {
+	mgr := s.getApprovalManager()
+	if mgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// GET current settings
+		cfg := mgr.GetConfig()
+		stats := mgr.GetStats()
+		jsonResponse(w, map[string]interface{}{
+			"strategy":           cfg.Strategy,
+			"learning":           true,
+			"cli_confirm":        cfg.CLIPrompt,
+			"trust_threshold":    cfg.TrustThreshold,
+			"trusted_patterns":   stats.TrustedPatterns,
+			"denied_patterns":    stats.DeniedPatterns,
+			"total_requests":     stats.TotalRequests,
+			"auto_approved":      stats.AutoApproved,
+			"user_approved":      stats.UserApproved,
+			"user_denied":        stats.UserDenied,
+			"avg_response_time_ms": stats.AvgResponseTime,
+		})
+	case http.MethodPut:
+		// PUT update settings
+		var req struct {
+			Strategy      string  `json:"strategy"`
+			TrustThreshold int    `json:"trust_threshold"`
+			CLIPrompt     bool    `json:"cli_confirm"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		// Update strategy
+		if req.Strategy != "" {
+			mgr.SetStrategy(approval.Strategy(req.Strategy))
+		}
+		jsonResponse(w, map[string]bool{"success": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {

@@ -13,18 +13,18 @@ import (
 // ContextCompressor handles intelligent context compression
 // Based on Hermes Agent's context_compressor.py approach
 type ContextCompressor struct {
-	provider    provider.Provider
-	threshold  int         // Token threshold before compression
-	ratio      float64     // Compression ratio (0.0-1.0)
-	maxSummary int         // Max tokens in summary
+	provider   provider.Provider
+	threshold  int     // Token threshold before compression
+	ratio      float64 // Compression ratio (0.0-1.0)
+	maxSummary int     // Max tokens in summary
 }
 
 // CompressionResult contains the compressed context
 type CompressionResult struct {
-	Messages    []provider.Message
-	Summary     string
-	Removed     int       // Number of messages removed
-	Ratio       float64   // Actual compression ratio
+	Messages     []provider.Message
+	Summary      string
+	Removed      int     // Number of messages removed
+	Ratio        float64 // Actual compression ratio
 	CompressedAt time.Time
 }
 
@@ -55,10 +55,10 @@ func (cc *ContextCompressor) ShouldCompress(messages []provider.Message) bool {
 func (cc *ContextCompressor) Compress(ctx context.Context, messages []provider.Message) (*CompressionResult, error) {
 	if len(messages) < 6 {
 		return &CompressionResult{
-			Messages:    messages,
-			Summary:     "",
-			Removed:     0,
-			Ratio:       0,
+			Messages:     messages,
+			Summary:      "",
+			Removed:      0,
+			Ratio:        0,
 			CompressedAt: time.Now(),
 		}, nil
 	}
@@ -76,10 +76,10 @@ func (cc *ContextCompressor) Compress(ctx context.Context, messages []provider.M
 
 	if len(middleMsgs) == 0 {
 		return &CompressionResult{
-			Messages:    messages,
-			Summary:     "",
-			Removed:     0,
-			Ratio:       0,
+			Messages:     messages,
+			Summary:      "",
+			Removed:      0,
+			Ratio:        0,
 			CompressedAt: time.Now(),
 		}, nil
 	}
@@ -106,10 +106,10 @@ func (cc *ContextCompressor) Compress(ctx context.Context, messages []provider.M
 	compressedTokens := cc.estimateTokens(compressed)
 
 	return &CompressionResult{
-		Messages:    compressed,
-		Summary:     summary,
-		Removed:     removed,
-		Ratio:       1.0 - float64(compressedTokens)/float64(originalTokens),
+		Messages:     compressed,
+		Summary:      summary,
+		Removed:      removed,
+		Ratio:        1.0 - float64(compressedTokens)/float64(originalTokens),
 		CompressedAt: time.Now(),
 	}, nil
 }
@@ -163,10 +163,10 @@ Keep the summary under 500 words.`, conversation)
 func (cc *ContextCompressor) simpleCompress(messages []provider.Message, keepCount int) (*CompressionResult, error) {
 	if len(messages) <= keepCount+1 {
 		return &CompressionResult{
-			Messages:    messages,
-			Summary:     "",
-			Removed:     0,
-			Ratio:       0,
+			Messages:     messages,
+			Summary:      "",
+			Removed:      0,
+			Ratio:        0,
 			CompressedAt: time.Now(),
 		}, nil
 	}
@@ -188,10 +188,10 @@ func (cc *ContextCompressor) simpleCompress(messages []provider.Message, keepCou
 	compressedTokens := cc.estimateTokens(compressed)
 
 	return &CompressionResult{
-		Messages:    compressed,
-		Summary:     summary,
-		Removed:     removed,
-		Ratio:       1.0 - float64(compressedTokens)/float64(originalTokens),
+		Messages:     compressed,
+		Summary:      summary,
+		Removed:      removed,
+		Ratio:        1.0 - float64(compressedTokens)/float64(originalTokens),
 		CompressedAt: time.Now(),
 	}, nil
 }
@@ -234,9 +234,9 @@ type CompressionStats struct {
 // GetStats returns compression statistics
 func (cc *ContextCompressor) GetStats() map[string]interface{} {
 	return map[string]interface{}{
-		"threshold":      cc.threshold,
-		"ratio":          cc.ratio,
-		"max_summary":   cc.maxSummary,
+		"threshold":   cc.threshold,
+		"ratio":       cc.ratio,
+		"max_summary": cc.maxSummary,
 	}
 }
 
