@@ -183,8 +183,8 @@
               <n-space vertical>
                 <n-space align="center" justify="space-between">
                   <n-text strong>{{ t('approval.pending.command') }}</n-text>
-                  <n-tag :type="riskTagType(item.riskLevel)" size="small">
-                    {{ t(`approval.riskLevels.${item.riskLevel}`) }}
+                  <n-tag :type="riskTagType(item.riskLevel || 'medium')" size="small">
+                    {{ t(`approval.riskLevels.${item.riskLevel || 'medium'}`) }}
                   </n-tag>
                 </n-space>
                 <n-text code style="word-break: break-all;">{{ item.command }}</n-text>
@@ -210,8 +210,6 @@ import { NButton, NSpace, NTag, useMessage } from 'naive-ui'
 
 const { t } = useI18n()
 const message = useMessage()
-
-const API_BASE = '/api/approval'
 
 // Loading & error
 const loading = ref(false)
@@ -323,11 +321,11 @@ function riskTagType(level: string): 'success' | 'warning' | 'error' | 'info' {
 }
 
 function getRiskCount(level: string): number {
-  return stats.value.riskDistribution[level] || 0
+  return stats.value?.riskDistribution?.[level] || 0
 }
 
 function getRiskPercent(level: string): number {
-  const total = stats.value.totalRequests || 1
+  const total = stats.value?.totalRequests || 1
   const count = getRiskCount(level)
   return Math.round((count / total) * 100)
 }
@@ -382,7 +380,7 @@ const topCommandColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 100,
-    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel}`) }),
+    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel || 'medium'}`) }),
   },
 ])
 
@@ -404,7 +402,7 @@ const historyColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 80,
-    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel}`) }),
+    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel || 'medium'}`) }),
   },
   {
     title: t('approval.history.decision'),
@@ -488,85 +486,65 @@ const deniedColumns = computed(() => [
 ])
 
 // API functions
+import { request } from '@/api/client'
+
 async function fetchApprovalStatus(): Promise<ApprovalSettings> {
-  const res = await fetch(`${API_BASE}/status`)
-  if (!res.ok) throw new Error('Failed to fetch approval status')
-  return res.json()
+  return request('/approval/status')
 }
 
 async function fetchApprovalHistory(limit: number, offset: number): Promise<{ records: HistoryRecord[]; total: number }> {
-  const res = await fetch(`${API_BASE}/history?limit=${limit}&offset=${offset}`)
-  if (!res.ok) throw new Error('Failed to fetch approval history')
-  return res.json()
+  return request(`/approval/history?limit=${limit}&offset=${offset}`)
 }
 
 async function fetchApprovalStats(): Promise<ApprovalStats> {
-  const res = await fetch(`${API_BASE}/stats`)
-  if (!res.ok) throw new Error('Failed to fetch approval stats')
-  return res.json()
+  return request('/approval/stats')
 }
 
 async function fetchPendingApprovals(): Promise<PendingApproval[]> {
-  const res = await fetch(`${API_BASE}/pending`)
-  if (!res.ok) throw new Error('Failed to fetch pending approvals')
-  return res.json()
+  return request('/approval/pending')
 }
 
 async function resolvePendingApproval(id: string, approved: boolean, reason: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/pending/${id}/resolve`, {
+  return request(`/approval/pending/${id}/resolve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approved, reason }),
   })
-  if (!res.ok) throw new Error('Failed to resolve pending approval')
 }
 
 async function fetchTrustedCommands(): Promise<TrustedCommand[]> {
-  const res = await fetch(`${API_BASE}/patterns/trusted`)
-  if (!res.ok) throw new Error('Failed to fetch trusted commands')
-  return res.json()
+  return request('/approval/patterns/trusted')
 }
 
 async function fetchDeniedCommands(): Promise<DeniedCommand[]> {
-  const res = await fetch(`${API_BASE}/patterns/denied`)
-  if (!res.ok) throw new Error('Failed to fetch denied commands')
-  return res.json()
+  return request('/approval/patterns/denied')
 }
 
 async function addWhitelist(pattern: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/whitelist`, {
+  return request('/approval/whitelist', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pattern }),
   })
-  if (!res.ok) throw new Error('Failed to add whitelist')
 }
 
 async function removeWhitelist(pattern: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/whitelist`, {
+  return request('/approval/whitelist', {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pattern }),
   })
-  if (!res.ok) throw new Error('Failed to remove whitelist')
 }
 
 async function setStrategy(strategy: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/settings`, {
+  return request('/approval/settings', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ strategy }),
   })
-  if (!res.ok) throw new Error('Failed to set strategy')
 }
 
 async function clearHistory(olderThanHours: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/clear-history`, {
+  return request('/approval/clear-history', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ older_than_hours: olderThanHours }),
   })
-  if (!res.ok) throw new Error('Failed to clear history')
 }
 
 // Handlers
@@ -654,12 +632,10 @@ async function handleClearHistory(): Promise<void> {
 
 async function handleRemoveTrust(pattern: string): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/patterns/trusted`, {
+    await request('/approval/patterns/trusted', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern }),
     })
-    if (!res.ok) throw new Error()
     await loadPatterns()
   } catch {
     // silent
@@ -668,12 +644,10 @@ async function handleRemoveTrust(pattern: string): Promise<void> {
 
 async function handleClearDenial(pattern: string): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/patterns/denied`, {
+    await request('/approval/patterns/denied', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern }),
     })
-    if (!res.ok) throw new Error()
     await loadPatterns()
   } catch {
     // silent
@@ -691,12 +665,10 @@ async function handleStrategyChange(value: string): Promise<void> {
 
 async function handleSettingsChange(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/settings`, {
+    await request('/approval/settings', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings.value),
     })
-    if (!res.ok) throw new Error()
     message.success(t('approval.settings.saved'))
   } catch {
     message.error(t('approval.settings.saveFailed'))

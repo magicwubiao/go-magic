@@ -646,22 +646,28 @@ func (s *Server) Start(port int) error {
 
 	// Tools
 	mux.HandleFunc("/api/tools", withCORS(requireAuth(s.handleTools)))
+	mux.HandleFunc("/api/tools/statistics", withCORS(requireAuth(s.handleToolsStatistics)))
 	mux.HandleFunc("/api/toolsets", withCORS(requireAuth(s.handleToolsets)))
+	mux.HandleFunc("/api/toolsets/statistics", withCORS(requireAuth(s.handleToolsetsStatistics)))
 	mux.HandleFunc("/api/tools/toolsets", withCORS(requireAuth(s.handleToolsets)))
 	mux.HandleFunc("/api/tools/toolsets/", withCORS(requireAuth(s.handleToolsetByID)))
 	mux.HandleFunc("/api/tools/categories", withCORS(requireAuth(s.handleToolCategories)))
 	mux.HandleFunc("/api/tools/", withCORS(requireAuth(s.handleToolByID)))
 
+
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
 	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
 	mux.HandleFunc("/api/skills/upload", withCORS(requireAuth(s.handleSkillUpload)))
+	mux.HandleFunc("/api/skills/statistics", withCORS(requireAuth(s.handleSkillsStatistics)))
+	mux.HandleFunc("/api/skills/recommendations", withCORS(requireAuth(s.handleSkillsRecommendations)))
 	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
 	mux.HandleFunc("/api/dashboard/skills", withCORS(requireAuth(s.handleDashboardSkills)))
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
 
 	// Plugins
 	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
+	mux.HandleFunc("/api/plugins/statistics", withCORS(requireAuth(s.handlePluginsStatistics)))
 	mux.HandleFunc("/api/dashboard/plugins", withCORS(requireAuth(s.handleDashboardPlugins)))
 	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(requireAuth(s.handleDashboardPluginsRescan)))
 	mux.HandleFunc("/api/dashboard/plugins/", withCORS(requireAuth(s.handleDashboardPluginsSubRoutes)))
@@ -1948,11 +1954,35 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, tool)
 }
 
+func (s *Server) handleToolsStatistics(w http.ResponseWriter, r *http.Request) {
+	// Return empty statistics for now (would need effectiveness manager integration)
+	stats := []map[string]interface{}{}
+	jsonResponse(w, stats)
+}
+
+func (s *Server) handleToolsetsStatistics(w http.ResponseWriter, r *http.Request) {
+	// Return empty statistics for now
+	stats := []map[string]interface{}{}
+	jsonResponse(w, stats)
+}
+
 // --- Skills ---
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	skills := s.getRealSkills()
 	jsonResponse(w, skills)
+}
+
+func (s *Server) handleSkillsStatistics(w http.ResponseWriter, r *http.Request) {
+	// Return empty statistics for now (would need effectiveness manager integration)
+	stats := []map[string]interface{}{}
+	jsonResponse(w, stats)
+}
+
+func (s *Server) handleSkillsRecommendations(w http.ResponseWriter, r *http.Request) {
+	// Return empty recommendations for now
+	recs := []map[string]interface{}{}
+	jsonResponse(w, recs)
 }
 
 func (s *Server) getRealSkills() []Skill {
@@ -2516,6 +2546,12 @@ func extractZip(zipPath, destDir string) error {
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	plugins := s.scanPluginsDir()
 	jsonResponse(w, plugins)
+}
+
+func (s *Server) handlePluginsStatistics(w http.ResponseWriter, r *http.Request) {
+	// Return empty statistics for now (would need effectiveness manager integration)
+	stats := []map[string]interface{}{}
+	jsonResponse(w, stats)
 }
 
 func (s *Server) scanPluginsDir() []map[string]interface{} {
@@ -6117,9 +6153,10 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 	case http.MethodPut:
 		// PUT update settings
 		var req struct {
-			Strategy      string  `json:"strategy"`
-			TrustThreshold int    `json:"trust_threshold"`
-			CLIPrompt     bool    `json:"cli_confirm"`
+			Strategy        string `json:"strategy"`
+			TrustThreshold  int    `json:"trust_threshold"`
+			CLIPrompt       bool   `json:"cli_confirm"`
+			EnableLearning  bool   `json:"enable_learning"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -6129,6 +6166,15 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		if req.Strategy != "" {
 			mgr.SetStrategy(approval.Strategy(req.Strategy))
 		}
+		// Update other settings
+		cfg := mgr.GetConfig()
+		if req.TrustThreshold > 0 {
+			cfg.TrustThreshold = req.TrustThreshold
+		}
+		cfg.EnableCLIConfirm = req.CLIPrompt
+		cfg.EnableLearning = req.EnableLearning
+		mgr.SaveConfig()
+		
 		jsonResponse(w, map[string]bool{"success": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

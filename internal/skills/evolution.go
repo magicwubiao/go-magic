@@ -60,11 +60,11 @@ const (
 
 // EvolutionContext 进化上下文
 type EvolutionContext struct {
-	SkillName        string            `json:"skill_name"`
-	CurrentContent   string            `json:"current_content"`
-	Stats            EffectivenessStats `json:"stats"`
-	FailureCases     []EffectivenessRecord `json:"failure_cases"`
-	CurrentGeneration int              `json:"current_generation"`
+	SkillName        string                     `json:"skill_name"`
+	CurrentContent   string                     `json:"current_content"`
+	Stats            *SkillStatistics           `json:"stats"`
+	FailureCases     []*SkillEffectivenessRecord `json:"failure_cases"`
+	CurrentGeneration int                       `json:"current_generation"`
 }
 
 // EvolutionResult 进化结果
@@ -140,11 +140,14 @@ func (em *SkillEvolutionManager) SaveRecords() error {
 // CheckEvolutionNeeded 检查技能是否需要进化
 func (em *SkillEvolutionManager) CheckEvolutionNeeded(skillName string) (bool, string) {
 	// 获取技能效果统计
-	stats := em.effectiveness.GetStats(skillName)
+	stats := em.effectiveness.GetSkillStatistics(skillName)
+	if stats == nil {
+		return false, "暂无统计记录"
+	}
 	
-	// 检查记录数是否足够
-	if stats.TotalRecords < em.config.MinRecordsForEvolution {
-		return false, fmt.Sprintf("记录数不足: %d < %d", stats.TotalRecords, em.config.MinRecordsForEvolution)
+	// 检查记录数是否足够 (使用 TotalInvocations)
+	if stats.TotalInvocations < em.config.MinRecordsForEvolution {
+		return false, fmt.Sprintf("记录数不足: %d < %d", stats.TotalInvocations, em.config.MinRecordsForEvolution)
 	}
 
 	// 检查质量是否低于阈值
@@ -194,21 +197,22 @@ func (em *SkillEvolutionManager) getCurrentGeneration(skillName string) int {
 }
 
 // collectFailureCases 收集失败案例
-func (em *SkillEvolutionManager) collectFailureCases(skillName string) []EffectivenessRecord {
-	allRecords := em.effectiveness.GetRecords(skillName)
-	failures := make([]EffectivenessRecord, 0)
+func (em *SkillEvolutionManager) collectFailureCases(skillName string) []*SkillEffectivenessRecord {
+	allRecords := em.effectiveness.GetRecordsForSkill(skillName, 100)
+	failures := make([]*SkillEffectivenessRecord, 0)
 	
 	for _, record := range allRecords {
-		if record.Quality < em.config.QualityThreshold {
-			failures = append(failures, record)
+		if record.Success {
+			continue
 		}
+		failures = append(failures, record)
 	}
-	
+
 	// 只保留最近的10个失败案例
 	if len(failures) > 10 {
 		failures = failures[len(failures)-10:]
 	}
-	
+
 	return failures
 }
 
@@ -221,13 +225,13 @@ func (em *SkillEvolutionManager) EvolveSkill(ctx context.Context, skillName stri
 	}
 
 	// 获取技能
-	skill, err := em.manager.GetSkill(skillName)
+	skill, err := em.manager.Get(skillName)
 	if err != nil {
 		return nil, fmt.Errorf("获取技能失败: %w", err)
 	}
 
 	// 获取效果统计
-	stats := em.effectiveness.GetStats(skillName)
+	stats := em.effectiveness.GetSkillStatistics(skillName)
 	
 	// 收集失败案例
 	failures := em.collectFailureCases(skillName)
@@ -268,8 +272,7 @@ func (em *SkillEvolutionManager) EvolveSkill(ctx context.Context, skillName stri
 
 	// 应用新内容到技能
 	skill.Content = result.NewContent
-	skill.UpdatedAt = time.Now()
-	if err := em.manager.UpdateSkill(skill); err != nil {
+	if err := em.manager.Update(skillName, result.NewContent); err != nil {
 		return nil, fmt.Errorf("更新技能内容失败: %w", err)
 	}
 
@@ -295,13 +298,13 @@ func (em *SkillEvolutionManager) generateEvolutionStrategy(ctx context.Context, 
 	prompt := em.buildEvolutionPrompt(evoCtx)
 
 	// 调用provider生成优化策略
-	response, err := em.provider.Complete(ctx, prompt)
+	resp, err := em.provider.Chat(ctx, []provider.Message{{Role: "user", Content: prompt}})
 	if err != nil {
 		return nil, fmt.Errorf("GEPA引擎调用失败: %w", err)
 	}
 
 	// 解析响应
-	result, err := em.parseEvolutionResponse(response, evoCtx.CurrentContent)
+	result, err := em.parseEvolutionResponse(resp.Content, evoCtx.CurrentContent)
 	if err != nil {
 		return nil, fmt.Errorf("解析进化响应失败: %w", err)
 	}
@@ -324,9 +327,11 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 	sb.WriteString("\n```\n\n")
 	
 	sb.WriteString("## 效果统计\n")
-	sb.WriteString(fmt.Sprintf("- 总记录数: %d\n", evoCtx.Stats.TotalRecords))
-	sb.WriteString(fmt.Sprintf("- 平均质量: %.2f\n", evoCtx.Stats.AvgQuality))
-	sb.WriteString(fmt.Sprintf("- 成功率: %.2f%%\n", evoCtx.Stats.SuccessRate))
+	if evoCtx.Stats != nil {
+		sb.WriteString(fmt.Sprintf("- 总调用数: %d\n", evoCtx.Stats.TotalInvocations))
+		sb.WriteString(fmt.Sprintf("- 平均质量: %.2f\n", evoCtx.Stats.AvgQuality))
+		sb.WriteString(fmt.Sprintf("- 成功率: %.2f%%\n", evoCtx.Stats.SuccessRate*100))
+	}
 	sb.WriteString(fmt.Sprintf("- 当前进化代数: %d\n", evoCtx.CurrentGeneration))
 	sb.WriteString("\n")
 	
@@ -337,12 +342,12 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 				sb.WriteString(fmt.Sprintf("... 还有 %d 个失败案例\n", len(evoCtx.FailureCases)-5))
 				break
 			}
-			sb.WriteString(fmt.Sprintf("### 案例 %d (质量: %.2f)\n", i+1, failure.Quality))
-			sb.WriteString(fmt.Sprintf("输入: %s\n", truncateString(failure.Input, 200)))
-			sb.WriteString(fmt.Sprintf("输出: %s\n", truncateString(failure.Output, 200)))
-			if failure.Feedback != "" {
-				sb.WriteString(fmt.Sprintf("反馈: %s\n", failure.Feedback))
+			successStr := "失败"
+			if failure.Success {
+				successStr = "成功"
 			}
+			sb.WriteString(fmt.Sprintf("### 案例 %d (%s)\n", i+1, successStr))
+			sb.WriteString(fmt.Sprintf("输入: %s\n", truncateString(failure.InputSummary, 200)))
 			sb.WriteString("\n")
 		}
 	}
@@ -484,15 +489,7 @@ func (em *SkillEvolutionManager) RevertEvolution(recordID string) error {
 
 // revertSkillContent 回滚技能内容
 func (em *SkillEvolutionManager) revertSkillContent(skillName, oldContent string) error {
-	skill, err := em.manager.GetSkill(skillName)
-	if err != nil {
-		return err
-	}
-
-	skill.Content = oldContent
-	skill.UpdatedAt = time.Now()
-	
-	return em.manager.UpdateSkill(skill)
+	return em.manager.Update(skillName, oldContent)
 }
 
 // GetEvolutionHistory 获取技能的进化历史
@@ -527,21 +524,21 @@ func (em *SkillEvolutionManager) GetPendingEvolutions() []SkillEvolutionRecord {
 
 // RunAutoEvolution 自动检查所有技能并进化
 func (em *SkillEvolutionManager) RunAutoEvolution(ctx context.Context) error {
-	// 获取所有技能名称
-	skillNames := em.manager.ListSkillNames()
+	// 获取所有技能
+	skills := em.manager.List()
 	
 	var evolvedCount int
 	var errors []string
 
-	for _, skillName := range skillNames {
-		needed, reason := em.CheckEvolutionNeeded(skillName)
+	for _, skill := range skills {
+		needed, _ := em.CheckEvolutionNeeded(skill.Name)
 		if !needed {
 			continue
 		}
 
-		_, err := em.EvolveSkill(ctx, skillName)
+		_, err := em.EvolveSkill(ctx, skill.Name)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", skillName, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", skill.Name, err))
 			continue
 		}
 

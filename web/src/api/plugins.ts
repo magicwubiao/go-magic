@@ -10,6 +10,18 @@ export interface Plugin {
   type: string
 }
 
+export interface PluginStatistics {
+  plugin_id: string
+  plugin_name: string
+  total_calls: number
+  success_calls: number
+  failed_calls: number
+  success_rate: number
+  avg_duration_ms: number
+  last_used: string
+  trend: string
+}
+
 export async function getPlugins(): Promise<Plugin[]> {
   return request('/dashboard/plugins')
 }
@@ -39,4 +51,9 @@ export async function installPlugin(url: string): Promise<Plugin> {
 
 export async function deletePlugin(id: string): Promise<void> {
   return request(`/dashboard/plugins/${id}`, { method: 'DELETE' })
+}
+
+// Statistics API
+export async function getPluginStatistics(): Promise<PluginStatistics[]> {
+  return request('/plugins/statistics')
 }
