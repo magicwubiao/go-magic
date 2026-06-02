@@ -348,6 +348,8 @@ export default {
     dragDropDesc: '点击或拖拽技能文件到此处安装',
     supportedFormats: '支持格式：.yaml, .yml, .md, .json, .zip (SKILL.md, skill.yaml)',
     selectSkillFolder: '选择技能文件夹',
+    description: '描述',
+    tags: '标签',
     noDescription: '暂无描述',
     category: '分类',
     general: '通用',
