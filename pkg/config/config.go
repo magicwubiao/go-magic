@@ -29,6 +29,7 @@ type Config struct {
 	Model         string                    `json:"model"`
 	Providers     map[string]ProviderConfig `json:"providers"`
 	Tools         ToolsConfig               `json:"tools"`
+	Plugins       PluginsConfig             `json:"plugins"`
 	Memory        MemoryConfig              `json:"memory"`
 	Gateway       GatewayConfig             `json:"gateway"`
 	CortexEnabled bool                      `json:"cortex_enabled,omitempty"`
@@ -70,6 +71,12 @@ type ProviderConfig struct {
 
 // ToolsConfig represents tools configuration
 type ToolsConfig struct {
+	Enabled  []string `json:"enabled"`
+	Disabled []string `json:"disabled"`
+}
+
+// PluginsConfig represents plugins configuration
+type PluginsConfig struct {
 	Enabled  []string `json:"enabled"`
 	Disabled []string `json:"disabled"`
 }
@@ -178,6 +185,9 @@ func defaultConfig() *Config {
 		CortexEnabled: false,
 		Providers:     make(map[string]ProviderConfig),
 		Tools: ToolsConfig{
+			Enabled: []string{"all"},
+		},
+		Plugins: PluginsConfig{
 			Enabled: []string{"all"},
 		},
 		Gateway: GatewayConfig{

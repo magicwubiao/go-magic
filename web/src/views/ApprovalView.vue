@@ -497,7 +497,26 @@ async function fetchApprovalHistory(limit: number, offset: number): Promise<{ re
 }
 
 async function fetchApprovalStats(): Promise<ApprovalStats> {
-  return request('/approval/stats')
+  const raw = await request<{
+    total_requests: number
+    auto_approved: number
+    user_approved: number
+    user_denied: number
+    by_risk_level: Record<string, number>
+    top_commands: { pattern: string; count: number }[]
+  }>('/approval/stats')
+  return {
+    totalRequests: raw.total_requests || 0,
+    autoApproved: raw.auto_approved || 0,
+    userApproved: raw.user_approved || 0,
+    userDenied: raw.user_denied || 0,
+    riskDistribution: raw.by_risk_level || {},
+    topCommands: (raw.top_commands || []).map(c => ({
+      command: c.pattern,
+      count: c.count,
+      riskLevel: 'medium',
+    })),
+  }
 }
 
 async function fetchPendingApprovals(): Promise<PendingApproval[]> {
@@ -512,11 +531,20 @@ async function resolvePendingApproval(id: string, approved: boolean, reason: str
 }
 
 async function fetchTrustedCommands(): Promise<TrustedCommand[]> {
-  return request('/approval/patterns/trusted')
+  const result = await request<{ patterns: Array<{ pattern: string; count: number; last_seen: string }>; total: number }>('/approval/patterns/trusted')
+  return (result.patterns || []).map(p => ({
+    pattern: p.pattern,
+    count: p.count,
+    lastSeen: p.last_seen,
+  }))
 }
 
 async function fetchDeniedCommands(): Promise<DeniedCommand[]> {
-  return request('/approval/patterns/denied')
+  const result = await request<{ patterns: Array<{ pattern: string; count: number }>; total: number }>('/approval/patterns/denied')
+  return (result.patterns || []).map(p => ({
+    pattern: p.pattern,
+    count: p.count,
+  }))
 }
 
 async function addWhitelist(pattern: string): Promise<void> {

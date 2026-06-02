@@ -2569,15 +2569,43 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 
 	fmt.Printf("[server] Scanning plugins dir: %s (found %d entries)\n", pluginsDir, len(entries))
 
+	// Build enabled/disabled lookup maps from config
+	enabledPlugins := make(map[string]bool)
+	disabledPlugins := make(map[string]bool)
+	enableAll := false
+
+	if s.cfg != nil {
+		// Check if "all" is in enabled list
+		for _, e := range s.cfg.Plugins.Enabled {
+			if e == "all" {
+				enableAll = true
+				break
+			}
+			enabledPlugins[e] = true
+		}
+		// Build disabled list
+		for _, d := range s.cfg.Plugins.Disabled {
+			disabledPlugins[d] = true
+		}
+	}
+
 	for _, entry := range entries {
 		name := entry.Name()
+		// Determine enabled status
+		enabled := false
+		if enableAll {
+			enabled = !disabledPlugins[name]
+		} else {
+			enabled = enabledPlugins[name] && !disabledPlugins[name]
+		}
+
 		if entry.IsDir() {
 			// Directory-based plugin
 			plugins = append(plugins, map[string]interface{}{
 				"id":          name,
 				"name":        name,
 				"description": fmt.Sprintf("Plugin: %s", name),
-				"enabled":     true,
+				"enabled":     enabled,
 				"version":     "1.0.0",
 				"type":        "directory",
 			})
@@ -2587,7 +2615,7 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 				"id":          name,
 				"name":        name,
 				"description": fmt.Sprintf("Go plugin: %s", name),
-				"enabled":     true,
+				"enabled":     enabled,
 				"version":     "1.0.0",
 				"type":        "go",
 			})
@@ -6275,14 +6303,22 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 			// Add to enabled list
 			if s.cfg != nil {
 				found := false
-				for _, e := range s.cfg.Tools.Enabled {
+				for _, e := range s.cfg.Plugins.Enabled {
 					if e == name {
 						found = true
 						break
 					}
 				}
 				if !found {
-					s.cfg.Tools.Enabled = append(s.cfg.Tools.Enabled, name)
+					s.cfg.Plugins.Enabled = append(s.cfg.Plugins.Enabled, name)
+					// Remove from disabled list if present
+					newDisabled := []string{}
+					for _, d := range s.cfg.Plugins.Disabled {
+						if d != name {
+							newDisabled = append(newDisabled, d)
+						}
+					}
+					s.cfg.Plugins.Disabled = newDisabled
 					s.cfg.Save()
 				}
 			}
@@ -6298,14 +6334,22 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 			// Add to disabled list
 			if s.cfg != nil {
 				found := false
-				for _, d := range s.cfg.Tools.Disabled {
+				for _, d := range s.cfg.Plugins.Disabled {
 					if d == name {
 						found = true
 						break
 					}
 				}
 				if !found {
-					s.cfg.Tools.Disabled = append(s.cfg.Tools.Disabled, name)
+					s.cfg.Plugins.Disabled = append(s.cfg.Plugins.Disabled, name)
+					// Remove from enabled list if present
+					newEnabled := []string{}
+					for _, e := range s.cfg.Plugins.Enabled {
+						if e != name && e != "all" {
+							newEnabled = append(newEnabled, e)
+						}
+					}
+					s.cfg.Plugins.Enabled = newEnabled
 					s.cfg.Save()
 				}
 			}
