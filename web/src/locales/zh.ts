@@ -332,6 +332,7 @@ export default {
     lastUsed: '最后使用',
     viewDetails: '查看详情',
     toolsInToolset: '工具集内工具',
+    noToolsInToolset: '工具集内暂无工具',
     noStats: '暂无统计',
     trends: {
       improving: '提升中',

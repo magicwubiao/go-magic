@@ -94,7 +94,7 @@
           <n-descriptions-item :label="t('tools.description')">
             {{ selectedToolset.description || t('tools.noDescription') }}
           </n-descriptions-item>
-          <n-descriptions-item :label="t('tools.toolsCount')">
+          <n-descriptions-item :label="t('tools.toolsCount', { count: selectedToolset.tools?.length || 0 })">
             {{ selectedToolset.tools?.length || 0 }}
           </n-descriptions-item>
         </n-descriptions>
@@ -113,7 +113,7 @@
 
         <!-- Tools in Toolset -->
         <n-card :title="t('tools.toolsInToolset')" size="small">
-          <n-list>
+          <n-list v-if="selectedToolset.tools && selectedToolset.tools.length > 0">
             <n-list-item v-for="toolName in selectedToolset.tools" :key="toolName">
               <n-thing :title="toolName">
                 <template #description>
@@ -128,6 +128,7 @@
               </n-thing>
             </n-list-item>
           </n-list>
+          <n-empty v-else :description="t('tools.noToolsInToolset')" />
         </n-card>
       </n-space>
     </n-modal>

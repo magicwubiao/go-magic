@@ -332,6 +332,7 @@ export default {
     lastUsed: 'Last Used',
     viewDetails: 'View Details',
     toolsInToolset: 'Tools in Toolset',
+    noToolsInToolset: 'No tools in toolset',
     noStats: 'No statistics',
     trends: {
       improving: 'Improving',
