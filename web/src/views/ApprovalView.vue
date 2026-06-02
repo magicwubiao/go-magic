@@ -695,7 +695,12 @@ async function handleSettingsChange(): Promise<void> {
   try {
     await request('/approval/settings', {
       method: 'PUT',
-      body: JSON.stringify(settings.value),
+      body: JSON.stringify({
+        strategy: settings.value.strategy,
+        trust_threshold: settings.value.trustThreshold,
+        cli_confirm: settings.value.cliConfirm,
+        enable_learning: settings.value.enableLearning,
+      }),
     })
     message.success(t('approval.settings.saved'))
   } catch {
