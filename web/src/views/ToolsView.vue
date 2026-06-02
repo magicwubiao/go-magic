@@ -69,7 +69,7 @@
                   <n-text depth="3" style="font-size: 12px;">
                     {{ t('tools.toolsCount', { count: toolset.tools?.length || 0 }) }}
                   </n-text>
-                  <n-button text size="tiny" @click="showToolsetDetail(toolset)">
+                  <n-button text size="tiny" @click="showToolsetDetail(toolset, $event)">
                     {{ t('tools.viewDetails') }}
                   </n-button>
                 </n-space>
@@ -82,7 +82,13 @@
     </template>
 
     <!-- Toolset Detail Modal -->
-    <n-modal v-model:show="showDetailModal" :title="selectedToolset?.name" preset="card" style="width: 600px;">
+    <n-modal 
+      v-model:show="showDetailModal" 
+      :title="selectedToolset?.name" 
+      preset="card" 
+      style="width: 600px;"
+      @update:show="handleModalShowChange"
+    >
       <n-space vertical v-if="selectedToolset">
         <n-descriptions bordered>
           <n-descriptions-item :label="t('tools.description')">
@@ -222,9 +228,29 @@ function formatTime(timeStr: string): string {
   return new Date(timeStr).toLocaleString()
 }
 
-function showToolsetDetail(toolset: any) {
+function showToolsetDetail(toolset: any, event?: Event) {
+  // Prevent focus from staying on the button
+  if (event && event.target instanceof HTMLElement) {
+    event.target.blur()
+  }
   selectedToolset.value = toolset
   showDetailModal.value = true
+}
+
+function handleModalShowChange(visible: boolean) {
+  if (visible) {
+    // When modal opens, focus should move inside the modal
+    // Naive UI's Modal should handle this automatically, but we can ensure it
+    setTimeout(() => {
+      const modalContent = document.querySelector('.n-modal-content')
+      if (modalContent) {
+        const focusable = modalContent.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') as HTMLElement
+        if (focusable) {
+          focusable.focus()
+        }
+      }
+    }, 100)
+  }
 }
 
 async function toggleToolset(id: string, enabled: boolean): Promise<void> {

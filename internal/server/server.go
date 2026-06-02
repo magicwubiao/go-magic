@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2159,8 +2160,24 @@ func parseSkillJSON(data []byte, skill *Skill) {
 }
 
 func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
-	cats := []string{"development", "research", "analytics", "automation", "communication"}
-	jsonResponse(w, cats)
+	skills := s.getRealSkills()
+	catSet := make(map[string]bool)
+
+	for _, skill := range skills {
+		if skill.Category != "" {
+			catSet[skill.Category] = true
+		}
+	}
+
+	categories := make([]string, 0, len(catSet))
+	for cat := range catSet {
+		categories = append(categories, cat)
+	}
+
+	// Sort categories alphabetically
+	sort.Strings(categories)
+
+	jsonResponse(w, categories)
 }
 
 func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
@@ -5790,9 +5807,10 @@ func (s *Server) handleApprovalStatus(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, map[string]interface{}{
 		"strategy":             cfg.Strategy,
-		"learning":             cfg.EnableLearning,
-		"cli_confirm":          cfg.EnableCLIConfirm,
-		"trust_threshold":      cfg.TrustThreshold,
+		"enableLearning":       cfg.EnableLearning,
+		"cliConfirm":           cfg.EnableCLIConfirm,
+		"trustThreshold":       cfg.TrustThreshold,
+		"whitelist":            mgr.GetWhitelist(),
 		"trusted_patterns":     stats.TrustedPatterns,
 		"denied_patterns":      stats.DeniedPatterns,
 		"total_requests":       stats.TotalRequests,
@@ -6166,9 +6184,10 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		stats := mgr.GetStats()
 		jsonResponse(w, map[string]interface{}{
 			"strategy":             cfg.Strategy,
-			"learning":             true,
-			"cli_confirm":          cfg.EnableCLIConfirm,
-			"trust_threshold":      cfg.TrustThreshold,
+			"enableLearning":       cfg.EnableLearning,
+			"cliConfirm":           cfg.EnableCLIConfirm,
+			"trustThreshold":       cfg.TrustThreshold,
+			"whitelist":            mgr.GetWhitelist(),
 			"trusted_patterns":     stats.TrustedPatterns,
 			"denied_patterns":      stats.DeniedPatterns,
 			"total_requests":       stats.TotalRequests,
