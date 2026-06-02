@@ -189,7 +189,13 @@
     </n-modal>
 
     <!-- Skill Detail Modal -->
-    <n-modal v-model:show="showDetailModal" :title="selectedSkill?.name" preset="card" style="width: 800px; max-height: 80vh;">
+    <n-modal 
+      v-model:show="showDetailModal" 
+      :title="selectedSkill?.name" 
+      preset="card" 
+      style="width: 800px; max-height: 80vh;"
+      @update:show="handleModalShowChange"
+    >
       <n-tabs v-if="selectedSkill">
         <n-tab-pane :name="t('skills.tabs.overview')" :tab="t('skills.tabs.overview')">
           <n-space vertical>
@@ -393,10 +399,29 @@ async function selectSkill(skill: Skill) {
   showDetailModal.value = true
 }
 
-async function showSkillDetail(skill: Skill) {
+async function showSkillDetail(skill: Skill, event?: Event) {
+  // Prevent focus from staying on the card
+  if (event && event.target instanceof HTMLElement) {
+    event.target.blur()
+  }
   selectedSkill.value = skill
   await loadSkillDetail(skill.name)
   showDetailModal.value = true
+}
+
+function handleModalShowChange(visible: boolean) {
+  if (visible) {
+    // When modal opens, focus should move inside the modal
+    setTimeout(() => {
+      const modalContent = document.querySelector('.n-modal-content')
+      if (modalContent) {
+        const focusable = modalContent.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') as HTMLElement
+        if (focusable) {
+          focusable.focus()
+        }
+      }
+    }, 100)
+  }
 }
 
 async function loadSkillDetail(skillName: string) {
