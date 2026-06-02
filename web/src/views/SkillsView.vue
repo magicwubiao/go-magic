@@ -9,10 +9,61 @@
 
     <n-spin v-if="skillsStore.loading" />
     <template v-else>
+      <!-- Skill Recommendations -->
+      <n-card v-if="recommendations.length > 0" :title="t('skills.recommendations')" style="margin-bottom: 24px;">
+        <n-grid :cols="3" :x-gap="12" :y-gap="12">
+          <n-gi v-for="rec in recommendations" :key="rec.skill.id">
+            <n-card size="small" hoverable @click="selectSkill(rec.skill)">
+              <template #header>
+                <n-space align="center" justify="space-between">
+                  <span style="font-weight: 500;">{{ rec.skill.name }}</span>
+                  <n-tag :type="getScoreType(rec.score)" size="small">
+                    {{ rec.score.toFixed(0) }}
+                  </n-tag>
+                </n-space>
+              </template>
+              <n-space vertical size="small">
+                <n-text depth="3" style="font-size: 12px;">{{ rec.reason }}</n-text>
+                <n-space size="small">
+                  <n-tag v-for="factor in rec.match_factors.slice(0, 2)" :key="factor" size="tiny" type="info">
+                    {{ factor }}
+                  </n-tag>
+                </n-space>
+              </n-space>
+            </n-card>
+          </n-gi>
+        </n-grid>
+      </n-card>
+
+      <!-- Skill Statistics Overview -->
+      <n-card :title="t('skills.statistics')" style="margin-bottom: 24px;" v-if="skillStats.length > 0">
+        <n-grid :cols="4" :x-gap="12">
+          <n-gi>
+            <n-statistic :label="t('skills.totalInvocations')" :value="totalInvocations" />
+          </n-gi>
+          <n-gi>
+            <n-statistic :label="t('skills.avgSuccessRate')" :value="avgSuccessRate.toFixed(1)" suffix="%" />
+          </n-gi>
+          <n-gi>
+            <n-statistic :label="t('skills.topSkill')" :value="topSkillName" />
+          </n-gi>
+          <n-gi>
+            <n-statistic :label="t('skills.improvingSkills')" :value="improvingSkillsCount" />
+          </n-gi>
+        </n-grid>
+      </n-card>
+
       <!-- Categories -->
       <n-card :title="t('skills.categories')" style="margin-bottom: 24px;" v-if="skillsStore.categories.length">
         <n-space>
-          <n-tag v-for="cat in skillsStore.categories" :key="cat" size="large">
+          <n-tag 
+            v-for="cat in skillsStore.categories" 
+            :key="cat" 
+            size="large"
+            :checked="selectedCategory === cat"
+            checkable
+            @update:checked="selectedCategory = selectedCategory === cat ? '' : cat"
+          >
             {{ t(`skills.categoryNames.${cat}`) || cat }}
           </n-tag>
         </n-space>
@@ -67,25 +118,32 @@
         </n-space>
       </n-card>
 
-      <!-- Skills Grid -->
+      <!-- Skills Grid with Stats -->
       <n-card :title="t('skills.allSkills')">
         <n-grid :cols="3" :x-gap="12" :y-gap="12">
-          <n-gi v-for="skill in skillsStore.skills" :key="skill.id">
-            <n-card size="small">
+          <n-gi v-for="skill in filteredSkills" :key="skill.id">
+            <n-card size="small" hoverable @click="showSkillDetail(skill)">
               <template #header>
-                <n-space align="center">
-                  <span style="font-weight: 500;">{{ skill.name }}</span>
-                  <n-tag :type="skill.enabled ? 'success' : 'default'" size="small">
-                    {{ skill.enabled ? t('tools.enabled') : t('tools.disabled') }}
-                  </n-tag>
+                <n-space align="center" justify="space-between" style="width: 100%;">
+                  <n-space align="center">
+                    <span style="font-weight: 500;">{{ skill.name }}</span>
+                    <n-tag :type="skill.enabled ? 'success' : 'default'" size="small">
+                      {{ skill.enabled ? t('tools.enabled') : t('tools.disabled') }}
+                    </n-tag>
+                  </n-space>
+                  <n-space align="center" size="small">
+                    <n-tag v-if="getSkillStat(skill.name)" size="tiny" :type="getSuccessRateType(getSkillStat(skill.name)!.success_rate)">
+                      {{ (getSkillStat(skill.name)!.success_rate * 100).toFixed(0) }}%
+                    </n-tag>
+                  </n-space>
                 </n-space>
               </template>
               <template #header-extra>
                 <n-space align="center" size="small">
-                  <n-switch v-model:value="skill.enabled" size="small" @update:value="toggleSkill(skill.name, $event)" />
-                  <n-popconfirm @positive-click="deleteSkillConfirm(skill.id, skill.name)">
+                  <n-switch v-model:value="skill.enabled" size="small" @update:value="toggleSkill(skill.name, $event)" @click.stop />
+                  <n-popconfirm @positive-click="deleteSkillConfirm(skill.id, skill.name)" @click.stop>
                     <template #trigger>
-                      <n-button size="small" type="error" quaternary circle>
+                      <n-button size="small" type="error" quaternary circle @click.stop>
                         <template #icon>
                           <n-icon><delete-icon /></n-icon>
                         </template>
@@ -96,13 +154,22 @@
                 </n-space>
               </template>
               <n-space vertical size="small">
-                <n-text depth="3" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">{{ skill.description || t('skills.noDescription') }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ t('skills.category') }}: {{ skill.category ? t(`skills.categoryNames.${skill.category}`) || skill.category : t('skills.general') }}</n-text>
+                <n-text depth="3" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">
+                  {{ skill.description || t('skills.noDescription') }}
+                </n-text>
+                <n-space justify="space-between" align="center">
+                  <n-text depth="3" style="font-size: 12px;">
+                    {{ t('skills.category') }}: {{ skill.category ? t(`skills.categoryNames.${skill.category}`) || skill.category : t('skills.general') }}
+                  </n-text>
+                  <n-tag v-if="getSkillTrend(skill.name)" size="tiny" :type="getTrendType(getSkillTrend(skill.name)!)">
+                    {{ t(`skills.trends.${getSkillTrend(skill.name)}`) }}
+                  </n-tag>
+                </n-space>
               </n-space>
             </n-card>
           </n-gi>
         </n-grid>
-        <n-empty v-if="!skillsStore.skills.length" :description="t('skills.noSkills')" />
+        <n-empty v-if="!filteredSkills.length" :description="t('skills.noSkills')" />
       </n-card>
     </template>
 
@@ -120,26 +187,230 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- Skill Detail Modal -->
+    <n-modal v-model:show="showDetailModal" :title="selectedSkill?.name" preset="card" style="width: 800px; max-height: 80vh;">
+      <n-tabs v-if="selectedSkill">
+        <n-tab-pane :name="t('skills.tabs.overview')" :tab="t('skills.tabs.overview')">
+          <n-space vertical>
+            <n-descriptions bordered>
+              <n-descriptions-item :label="t('skills.description')">
+                {{ selectedSkill.description || t('skills.noDescription') }}
+              </n-descriptions-item>
+              <n-descriptions-item :label="t('skills.category')">
+                {{ selectedSkill.category ? t(`skills.categoryNames.${selectedSkill.category}`) || selectedSkill.category : t('skills.general') }}
+              </n-descriptions-item>
+              <n-descriptions-item :label="t('skills.tags')">
+                <n-space>
+                  <n-tag v-for="tag in selectedSkill.tags" :key="tag" size="small">{{ tag }}</n-tag>
+                </n-space>
+              </n-descriptions-item>
+            </n-descriptions>
+            
+            <!-- Statistics -->
+            <n-card v-if="getSkillStat(selectedSkill.name)" :title="t('skills.statistics')" size="small">
+              <n-grid :cols="3" :x-gap="12">
+                <n-gi>
+                  <n-statistic :label="t('skills.invocations')" :value="getSkillStat(selectedSkill.name)!.total_invocations" />
+                </n-gi>
+                <n-gi>
+                  <n-statistic :label="t('skills.successRate')" :value="(getSkillStat(selectedSkill.name)!.success_rate * 100).toFixed(1)" suffix="%" />
+                </n-gi>
+                <n-gi>
+                  <n-statistic :label="t('skills.avgQuality')" :value="getSkillStat(selectedSkill.name)!.avg_quality.toFixed(1)" />
+                </n-gi>
+              </n-grid>
+            </n-card>
+          </n-space>
+        </n-tab-pane>
+        
+        <n-tab-pane :name="t('skills.tabs.versions')" :tab="t('skills.tabs.versions')">
+          <n-empty v-if="!skillVersions.length" :description="t('skills.noVersions')" />
+          <n-timeline v-else>
+            <n-timeline-item 
+              v-for="version in skillVersions" 
+              :key="version.version"
+              :type="version.is_current ? 'success' : 'default'"
+              :title="version.version + (version.is_current ? ' (' + t('skills.current') + ')' : '')"
+              :content="version.description"
+              :time="formatTime(version.created_at)"
+            />
+          </n-timeline>
+        </n-tab-pane>
+        
+        <n-tab-pane :name="t('skills.tabs.evolution')" :tab="t('skills.tabs.evolution')">
+          <n-empty v-if="!evolutionHistory.length" :description="t('skills.noEvolution')" />
+          <n-timeline v-else>
+            <n-timeline-item 
+              v-for="record in evolutionHistory" 
+              :key="record.id"
+              :type="record.status === 'validated' ? 'success' : record.status === 'reverted' ? 'error' : 'warning'"
+              :title="t('skills.generation') + ' ' + record.generation"
+              :content="record.reason"
+              :time="formatTime(record.timestamp)"
+            />
+          </n-timeline>
+        </n-tab-pane>
+      </n-tabs>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Folder as FolderIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
-import { uploadSkill, deleteSkill } from '@/api/skills'
-import type { UploadFile, UploadFileInfo } from 'naive-ui'
+import { uploadSkill, deleteSkill, getSkillRecommendations, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
+import type { UploadFileInfo } from 'naive-ui'
 
 const { t } = useI18n()
 const message = useMessage()
 const skillsStore = useSkillsStore()
+
+// UI State
 const showInstallModal = ref(false)
+const showDetailModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
 const dirInputRef = ref<HTMLInputElement | null>(null)
+const selectedCategory = ref('')
+const selectedSkill = ref<Skill | null>(null)
+
+// Data
+const recommendations = ref<SkillRecommendation[]>([])
+const skillStats = ref<SkillStatistics[]>([])
+const skillVersions = ref<SkillVersion[]>([])
+const evolutionHistory = ref<EvolutionRecord[]>([])
+
+// Types
+interface Skill {
+  id: string
+  name: string
+  description: string
+  category: string
+  tags: string[]
+  enabled: boolean
+}
+
+interface SkillRecommendation {
+  skill: Skill
+  score: number
+  reason: string
+  match_factors: string[]
+}
+
+interface SkillStatistics {
+  skill_name: string
+  total_invocations: number
+  success_rate: number
+  avg_quality: number
+  trend: string
+}
+
+interface SkillVersion {
+  version: string
+  description: string
+  created_at: string
+  is_current: boolean
+  quality_score: number
+}
+
+interface EvolutionRecord {
+  id: string
+  generation: number
+  reason: string
+  status: string
+  timestamp: string
+}
+
+// Computed
+const filteredSkills = computed(() => {
+  if (!selectedCategory.value) return skillsStore.skills
+  return skillsStore.skills.filter(s => s.category === selectedCategory.value)
+})
+
+const totalInvocations = computed(() => {
+  return skillStats.value.reduce((sum, s) => sum + s.total_invocations, 0)
+})
+
+const avgSuccessRate = computed(() => {
+  if (skillStats.value.length === 0) return 0
+  const total = skillStats.value.reduce((sum, s) => sum + s.success_rate, 0)
+  return (total / skillStats.value.length) * 100
+})
+
+const topSkillName = computed(() => {
+  if (skillStats.value.length === 0) return '-'
+  const top = skillStats.value.reduce((max, s) => s.total_invocations > max.total_invocations ? s : max, skillStats.value[0])
+  return top.skill_name
+})
+
+const improvingSkillsCount = computed(() => {
+  return skillStats.value.filter(s => s.trend === 'improving').length
+})
+
+// Methods
+function getScoreType(score: number): 'success' | 'warning' | 'error' {
+  if (score >= 80) return 'success'
+  if (score >= 50) return 'warning'
+  return 'error'
+}
+
+function getSuccessRateType(rate: number): 'success' | 'warning' | 'error' {
+  if (rate >= 0.8) return 'success'
+  if (rate >= 0.5) return 'warning'
+  return 'error'
+}
+
+function getTrendType(trend: string): 'success' | 'warning' | 'error' | 'default' {
+  switch (trend) {
+    case 'improving': return 'success'
+    case 'declining': return 'error'
+    case 'stable': return 'default'
+    default: return 'default'
+  }
+}
+
+function getSkillStat(skillName: string): SkillStatistics | undefined {
+  return skillStats.value.find(s => s.skill_name === skillName)
+}
+
+function getSkillTrend(skillName: string): string | undefined {
+  const stat = getSkillStat(skillName)
+  return stat?.trend
+}
+
+function formatTime(timeStr: string): string {
+  return new Date(timeStr).toLocaleString()
+}
+
+async function selectSkill(skill: Skill) {
+  selectedSkill.value = skill
+  await loadSkillDetail(skill.name)
+  showDetailModal.value = true
+}
+
+async function showSkillDetail(skill: Skill) {
+  selectedSkill.value = skill
+  await loadSkillDetail(skill.name)
+  showDetailModal.value = true
+}
+
+async function loadSkillDetail(skillName: string) {
+  try {
+    const [versions, evolution] = await Promise.all([
+      getSkillVersions(skillName),
+      getSkillEvolutionHistory(skillName)
+    ])
+    skillVersions.value = versions
+    evolutionHistory.value = evolution
+  } catch (e) {
+    console.error('Failed to load skill detail:', e)
+  }
+}
 
 async function toggleSkill(id: string, enabled: boolean): Promise<void> {
   try {
@@ -186,7 +457,6 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
     return
   }
 
-  // Validate file type
   const ext = rawFile.name.split('.').pop()?.toLowerCase()
   const allowedExts = ['yaml', 'yml', 'md', 'json', 'zip']
 
@@ -199,21 +469,14 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
   uploadingCount.value++
 
   try {
-    // Get skill name from folder path if available (for directory uploads)
     let skillName = rawFile.name.replace(/\.(yaml|yml|md|json|zip)$/i, '')
-    let relativePath = ''
-    
-    // Check for webkitRelativePath (directory upload) - extract folder name
     // @ts-ignore
-    relativePath = rawFile.webkitRelativePath || ''
-    console.log('[Upload] File:', rawFile.name, 'webkitRelativePath:', relativePath)
+    let relativePath = rawFile.webkitRelativePath || ''
     
     if (relativePath && relativePath.includes('/')) {
-      // Use the first folder name as skill name
       const parts = relativePath.split('/')
       if (parts.length > 1) {
         skillName = parts[0]
-        console.log('[Upload] Using folder name as skill:', skillName)
       }
     }
     
@@ -230,12 +493,12 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
   }
 }
 
-function handleUploadFinish({ file }: { file: UploadFileInfo }) {
+function handleUploadFinish() {
   // File uploaded successfully
 }
 
-function handleUploadError({ file }: { file: UploadFileInfo }) {
-  // Upload failed, error already shown in handleCustomUpload
+function handleUploadError() {
+  // Upload failed
 }
 
 async function handleDirectorySelect(event: Event) {
@@ -245,19 +508,14 @@ async function handleDirectorySelect(event: Event) {
 
   uploadingCount.value += files.length
 
-  // Get folder name from first file's path
   const firstFile = files[0]
   // @ts-ignore
   const relativePath = firstFile.webkitRelativePath || ''
   const folderName = relativePath.split('/')[0] || 'skill'
-  console.log('[Directory Upload] Folder:', folderName, 'Files:', files.length)
 
-  // Upload all files
   const uploadPromises = Array.from(files).map(async (file) => {
     // @ts-ignore
     const filePath = file.webkitRelativePath || file.name
-    console.log('[Directory Upload] Uploading:', filePath)
-
     try {
       await uploadSkill(file, folderName, filePath)
     } catch (e) {
@@ -275,13 +533,27 @@ async function handleDirectorySelect(event: Event) {
     message.error(t('skills.failedToInstall'))
   } finally {
     uploadingCount.value -= files.length
-    // Reset input
     input.value = ''
   }
 }
 
-onMounted(() => {
-  skillsStore.loadSkills()
-  skillsStore.loadCategories()
+// Load data on mount
+onMounted(async () => {
+  await Promise.all([
+    skillsStore.loadSkills(),
+    skillsStore.loadCategories()
+  ])
+  
+  // Load recommendations and statistics
+  try {
+    const [recs, stats] = await Promise.all([
+      getSkillRecommendations(),
+      getSkillStatistics()
+    ])
+    recommendations.value = recs
+    skillStats.value = stats
+  } catch (e) {
+    console.error('Failed to load skill data:', e)
+  }
 })
 </script>

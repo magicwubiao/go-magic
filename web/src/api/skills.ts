@@ -9,6 +9,37 @@ export interface Skill {
   enabled: boolean
 }
 
+export interface SkillRecommendation {
+  skill: Skill
+  score: number
+  reason: string
+  match_factors: string[]
+}
+
+export interface SkillStatistics {
+  skill_name: string
+  total_invocations: number
+  success_rate: number
+  avg_quality: number
+  trend: string
+}
+
+export interface SkillVersion {
+  version: string
+  description: string
+  created_at: string
+  is_current: boolean
+  quality_score: number
+}
+
+export interface EvolutionRecord {
+  id: string
+  generation: number
+  reason: string
+  status: string
+  timestamp: string
+}
+
 export async function getSkills(): Promise<Skill[]> {
   return request('/skills')
 }
@@ -55,4 +86,21 @@ export async function deleteSkill(id: string): Promise<{ ok: boolean; id: string
   return request(`/skills/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
+}
+
+// New Cortex-based APIs
+export async function getSkillRecommendations(): Promise<SkillRecommendation[]> {
+  return request('/skills/recommendations')
+}
+
+export async function getSkillStatistics(): Promise<SkillStatistics[]> {
+  return request('/skills/statistics')
+}
+
+export async function getSkillVersions(skillName: string): Promise<SkillVersion[]> {
+  return request(`/skills/${encodeURIComponent(skillName)}/versions`)
+}
+
+export async function getSkillEvolutionHistory(skillName: string): Promise<EvolutionRecord[]> {
+  return request(`/skills/${encodeURIComponent(skillName)}/evolution`)
 }
