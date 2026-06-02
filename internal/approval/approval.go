@@ -988,8 +988,8 @@ func (m *Manager) loadConfig() {
 	}
 
 	var savedConfig struct {
-		Strategy        Strategy `json:"strategy"`
-		TrustThreshold  int      `json:"trust_threshold"`
+		Strategy         Strategy `json:"strategy"`
+		TrustThreshold   int      `json:"trust_threshold"`
 		EnableCLIConfirm bool     `json:"enable_cli_confirm"`
 		EnableLearning   bool     `json:"enable_learning"`
 	}
@@ -1009,13 +1009,13 @@ func (m *Manager) loadConfig() {
 // saveConfigLocked saves config to disk (must be called with lock held).
 func (m *Manager) saveConfigLocked() {
 	configData := struct {
-		Strategy        Strategy `json:"strategy"`
-		TrustThreshold  int      `json:"trust_threshold"`
+		Strategy         Strategy `json:"strategy"`
+		TrustThreshold   int      `json:"trust_threshold"`
 		EnableCLIConfirm bool     `json:"enable_cli_confirm"`
 		EnableLearning   bool     `json:"enable_learning"`
 	}{
-		Strategy:        m.config.Strategy,
-		TrustThreshold:  m.config.TrustThreshold,
+		Strategy:         m.config.Strategy,
+		TrustThreshold:   m.config.TrustThreshold,
 		EnableCLIConfirm: m.config.EnableCLIConfirm,
 		EnableLearning:   m.config.EnableLearning,
 	}

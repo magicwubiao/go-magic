@@ -15,10 +15,10 @@ import (
 
 // SkillEvolutionConfig 进化配置
 type SkillEvolutionConfig struct {
-	MinRecordsForEvolution int     `json:"min_records"`      // 最少记录数才进化 (默认 5)
-	QualityThreshold       float64 `json:"quality_threshold"` // 质量阈值 (默认 60)
+	MinRecordsForEvolution int     `json:"min_records"`        // 最少记录数才进化 (默认 5)
+	QualityThreshold       float64 `json:"quality_threshold"`  // 质量阈值 (默认 60)
 	EvolutionInterval      int     `json:"evolution_interval"` // 进化间隔小时 (默认 24)
-	MaxEvolutionSteps      int     `json:"max_steps"`        // 最大进化步数 (默认 10)
+	MaxEvolutionSteps      int     `json:"max_steps"`          // 最大进化步数 (默认 10)
 }
 
 // SkillEvolutionRecord 进化记录
@@ -32,7 +32,7 @@ type SkillEvolutionRecord struct {
 	QualityAfter  float64   `json:"quality_after"`  // 进化后质量 (待验证)
 	Generation    int       `json:"generation"`     // 进化代数
 	Timestamp     time.Time `json:"timestamp"`
-	Status        string    `json:"status"`         // pending/validated/reverted
+	Status        string    `json:"status"` // pending/validated/reverted
 }
 
 // SkillEvolutionManager 进化管理器
@@ -50,29 +50,29 @@ type SkillEvolutionManager struct {
 type EvolutionStrategy string
 
 const (
-	StrategyAddExamples      EvolutionStrategy = "add_examples"       // 添加示例
-	StrategySimplify         EvolutionStrategy = "simplify"           // 简化指令
-	StrategyAddBoundaries    EvolutionStrategy = "add_boundaries"     // 增加边界条件
-	StrategyAdjustFormat     EvolutionStrategy = "adjust_format"      // 调整格式说明
-	StrategyClarifyIntent    EvolutionStrategy = "clarify_intent"     // 澄清意图
-	StrategyAddConstraints   EvolutionStrategy = "add_constraints"    // 添加约束条件
+	StrategyAddExamples    EvolutionStrategy = "add_examples"    // 添加示例
+	StrategySimplify       EvolutionStrategy = "simplify"        // 简化指令
+	StrategyAddBoundaries  EvolutionStrategy = "add_boundaries"  // 增加边界条件
+	StrategyAdjustFormat   EvolutionStrategy = "adjust_format"   // 调整格式说明
+	StrategyClarifyIntent  EvolutionStrategy = "clarify_intent"  // 澄清意图
+	StrategyAddConstraints EvolutionStrategy = "add_constraints" // 添加约束条件
 )
 
 // EvolutionContext 进化上下文
 type EvolutionContext struct {
-	SkillName        string                     `json:"skill_name"`
-	CurrentContent   string                     `json:"current_content"`
-	Stats            *SkillStatistics           `json:"stats"`
-	FailureCases     []*SkillEffectivenessRecord `json:"failure_cases"`
-	CurrentGeneration int                       `json:"current_generation"`
+	SkillName         string                      `json:"skill_name"`
+	CurrentContent    string                      `json:"current_content"`
+	Stats             *SkillStatistics            `json:"stats"`
+	FailureCases      []*SkillEffectivenessRecord `json:"failure_cases"`
+	CurrentGeneration int                         `json:"current_generation"`
 }
 
 // EvolutionResult 进化结果
 type EvolutionResult struct {
-	Strategy    EvolutionStrategy `json:"strategy"`
-	NewContent  string            `json:"new_content"`
-	Reason      string            `json:"reason"`
-	Confidence  float64           `json:"confidence"`
+	Strategy   EvolutionStrategy `json:"strategy"`
+	NewContent string            `json:"new_content"`
+	Reason     string            `json:"reason"`
+	Confidence float64           `json:"confidence"`
 }
 
 // DefaultEvolutionConfig 返回默认进化配置
@@ -88,7 +88,7 @@ func DefaultEvolutionConfig() SkillEvolutionConfig {
 // NewSkillEvolutionManager 创建进化管理器
 func NewSkillEvolutionManager(manager *Manager, effMgr *EffectivenessManager, prov provider.Provider, baseDir string) *SkillEvolutionManager {
 	config := DefaultEvolutionConfig()
-	
+
 	return &SkillEvolutionManager{
 		config:        config,
 		records:       make([]SkillEvolutionRecord, 0),
@@ -144,7 +144,7 @@ func (em *SkillEvolutionManager) CheckEvolutionNeeded(skillName string) (bool, s
 	if stats == nil {
 		return false, "暂无统计记录"
 	}
-	
+
 	// 检查记录数是否足够 (使用 TotalInvocations)
 	if stats.TotalInvocations < em.config.MinRecordsForEvolution {
 		return false, fmt.Sprintf("记录数不足: %d < %d", stats.TotalInvocations, em.config.MinRecordsForEvolution)
@@ -169,7 +169,7 @@ func (em *SkillEvolutionManager) hasRecentEvolution(skillName string) bool {
 	defer em.mu.RUnlock()
 
 	cutoff := time.Now().Add(-time.Duration(em.config.EvolutionInterval) * time.Hour)
-	
+
 	for _, record := range em.records {
 		if record.SkillName == skillName && record.Timestamp.After(cutoff) {
 			if record.Status == "pending" {
@@ -177,7 +177,7 @@ func (em *SkillEvolutionManager) hasRecentEvolution(skillName string) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -192,7 +192,7 @@ func (em *SkillEvolutionManager) getCurrentGeneration(skillName string) int {
 			maxGen = record.Generation
 		}
 	}
-	
+
 	return maxGen
 }
 
@@ -200,7 +200,7 @@ func (em *SkillEvolutionManager) getCurrentGeneration(skillName string) int {
 func (em *SkillEvolutionManager) collectFailureCases(skillName string) []*SkillEffectivenessRecord {
 	allRecords := em.effectiveness.GetRecordsForSkill(skillName, 100)
 	failures := make([]*SkillEffectivenessRecord, 0)
-	
+
 	for _, record := range allRecords {
 		if record.Success {
 			continue
@@ -232,10 +232,10 @@ func (em *SkillEvolutionManager) EvolveSkill(ctx context.Context, skillName stri
 
 	// 获取效果统计
 	stats := em.effectiveness.GetSkillStatistics(skillName)
-	
+
 	// 收集失败案例
 	failures := em.collectFailureCases(skillName)
-	
+
 	// 构建进化上下文
 	evolutionCtx := EvolutionContext{
 		SkillName:         skillName,
@@ -317,15 +317,15 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 	var sb strings.Builder
 
 	sb.WriteString("你是一位专业的AI提示词优化专家。请分析以下技能的效果数据，并提供优化后的提示词内容。\n\n")
-	
+
 	sb.WriteString("## 技能名称\n")
 	sb.WriteString(evoCtx.SkillName)
 	sb.WriteString("\n\n")
-	
+
 	sb.WriteString("## 当前提示词内容\n```\n")
 	sb.WriteString(evoCtx.CurrentContent)
 	sb.WriteString("\n```\n\n")
-	
+
 	sb.WriteString("## 效果统计\n")
 	if evoCtx.Stats != nil {
 		sb.WriteString(fmt.Sprintf("- 总调用数: %d\n", evoCtx.Stats.TotalInvocations))
@@ -334,7 +334,7 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 	}
 	sb.WriteString(fmt.Sprintf("- 当前进化代数: %d\n", evoCtx.CurrentGeneration))
 	sb.WriteString("\n")
-	
+
 	if len(evoCtx.FailureCases) > 0 {
 		sb.WriteString("## 失败案例分析\n")
 		for i, failure := range evoCtx.FailureCases {
@@ -351,7 +351,7 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 			sb.WriteString("\n")
 		}
 	}
-	
+
 	sb.WriteString("## 可选的优化策略\n")
 	sb.WriteString("1. add_examples - 添加具体示例说明期望的输出格式\n")
 	sb.WriteString("2. simplify - 简化复杂或冗余的指令\n")
@@ -359,7 +359,7 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 	sb.WriteString("4. adjust_format - 调整输出格式说明\n")
 	sb.WriteString("5. clarify_intent - 澄清任务意图和目标\n")
 	sb.WriteString("6. add_constraints - 添加明确的约束条件\n\n")
-	
+
 	sb.WriteString("## 输出要求\n")
 	sb.WriteString("请以JSON格式返回优化结果，包含以下字段:\n")
 	sb.WriteString(`{`)
@@ -378,27 +378,27 @@ func (em *SkillEvolutionManager) parseEvolutionResponse(response, oldContent str
 	// 尝试从响应中提取JSON
 	jsonStart := strings.Index(response, "{")
 	jsonEnd := strings.LastIndex(response, "}")
-	
+
 	if jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart {
 		return nil, fmt.Errorf("无法从响应中提取JSON")
 	}
-	
+
 	jsonStr := response[jsonStart : jsonEnd+1]
-	
+
 	var result EvolutionResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("解析JSON失败: %w", err)
 	}
-	
+
 	// 验证结果
 	if result.NewContent == "" {
 		return nil, fmt.Errorf("优化后的内容为空")
 	}
-	
+
 	if result.Strategy == "" {
 		result.Strategy = StrategyClarifyIntent
 	}
-	
+
 	return &result, nil
 }
 
@@ -426,7 +426,7 @@ func (em *SkillEvolutionManager) ValidateEvolution(recordID string, newQuality f
 	}
 
 	record := &em.records[recordIndex]
-	
+
 	if record.Status != "pending" {
 		return fmt.Errorf("记录状态不是pending: %s", record.Status)
 	}
@@ -436,7 +436,7 @@ func (em *SkillEvolutionManager) ValidateEvolution(recordID string, newQuality f
 
 	// 判断是否验证通过 (新质量 > 旧质量 + 10%)
 	improvementThreshold := record.QualityBefore * 1.1
-	
+
 	if newQuality >= improvementThreshold {
 		record.Status = "validated"
 	} else if newQuality < record.QualityBefore {
@@ -526,7 +526,7 @@ func (em *SkillEvolutionManager) GetPendingEvolutions() []SkillEvolutionRecord {
 func (em *SkillEvolutionManager) RunAutoEvolution(ctx context.Context) error {
 	// 获取所有技能
 	skills := em.manager.List()
-	
+
 	var evolvedCount int
 	var errors []string
 
@@ -556,7 +556,7 @@ func (em *SkillEvolutionManager) RunAutoEvolution(ctx context.Context) error {
 func (em *SkillEvolutionManager) UpdateConfig(config SkillEvolutionConfig) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
-	
+
 	em.config = config
 }
 
@@ -564,7 +564,7 @@ func (em *SkillEvolutionManager) UpdateConfig(config SkillEvolutionConfig) {
 func (em *SkillEvolutionManager) GetConfig() SkillEvolutionConfig {
 	em.mu.RLock()
 	defer em.mu.RUnlock()
-	
+
 	return em.config
 }
 

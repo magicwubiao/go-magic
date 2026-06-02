@@ -97,16 +97,16 @@ func (em *EffectivenessManager) RecordPluginCall(
 
 	// 创建记录
 	record := &PluginEffectivenessRecord{
-		ID:        generateID(),
-		PluginID:  pluginID,
+		ID:         generateID(),
+		PluginID:   pluginID,
 		PluginName: pluginName,
-		Command:   command,
-		Args:      args,
-		Result:    result,
-		Success:   success,
-		Duration:  duration,
-		SessionID: sessionID,
-		Timestamp: time.Now(),
+		Command:    command,
+		Args:       args,
+		Result:     result,
+		Success:    success,
+		Duration:   duration,
+		SessionID:  sessionID,
+		Timestamp:  time.Now(),
 	}
 
 	if !success {

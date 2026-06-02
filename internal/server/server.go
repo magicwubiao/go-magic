@@ -654,7 +654,6 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/tools/categories", withCORS(requireAuth(s.handleToolCategories)))
 	mux.HandleFunc("/api/tools/", withCORS(requireAuth(s.handleToolByID)))
 
-
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
 	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
@@ -6166,25 +6165,25 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		cfg := mgr.GetConfig()
 		stats := mgr.GetStats()
 		jsonResponse(w, map[string]interface{}{
-			"strategy":           cfg.Strategy,
-			"learning":           true,
-			"cli_confirm":        cfg.EnableCLIConfirm,
-			"trust_threshold":    cfg.TrustThreshold,
-			"trusted_patterns":   stats.TrustedPatterns,
-			"denied_patterns":    stats.DeniedPatterns,
-			"total_requests":     stats.TotalRequests,
-			"auto_approved":      stats.AutoApproved,
-			"user_approved":      stats.UserApproved,
-			"user_denied":        stats.UserDenied,
+			"strategy":             cfg.Strategy,
+			"learning":             true,
+			"cli_confirm":          cfg.EnableCLIConfirm,
+			"trust_threshold":      cfg.TrustThreshold,
+			"trusted_patterns":     stats.TrustedPatterns,
+			"denied_patterns":      stats.DeniedPatterns,
+			"total_requests":       stats.TotalRequests,
+			"auto_approved":        stats.AutoApproved,
+			"user_approved":        stats.UserApproved,
+			"user_denied":          stats.UserDenied,
 			"avg_response_time_ms": stats.AvgResponseTime,
 		})
 	case http.MethodPut:
 		// PUT update settings
 		var req struct {
-			Strategy        string `json:"strategy"`
-			TrustThreshold  int    `json:"trust_threshold"`
-			CLIPrompt       bool   `json:"cli_confirm"`
-			EnableLearning  bool   `json:"enable_learning"`
+			Strategy       string `json:"strategy"`
+			TrustThreshold int    `json:"trust_threshold"`
+			CLIPrompt      bool   `json:"cli_confirm"`
+			EnableLearning bool   `json:"enable_learning"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -6202,7 +6201,7 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		cfg.EnableCLIConfirm = req.CLIPrompt
 		cfg.EnableLearning = req.EnableLearning
 		mgr.SaveConfig()
-		
+
 		jsonResponse(w, map[string]bool{"success": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

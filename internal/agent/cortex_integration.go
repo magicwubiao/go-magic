@@ -19,14 +19,14 @@ import (
 
 // RunWithCortex runs a conversation with full Cortex Agent integration.
 // This enhanced method leverages all Cortex systems:
-//  - SOUL.md system personality
-//  - USER.md user profile
-//  - LLM Planner for complex task decomposition
-//  - Context compression for long conversations
-//  - Trajectory recording for self-evolution (GEPA)
-//  - Prompt caching
-//  - Perception / Cognition / Execution three-layer architecture
-//  - Frozen snapshot memory protection
+//   - SOUL.md system personality
+//   - USER.md user profile
+//   - LLM Planner for complex task decomposition
+//   - Context compression for long conversations
+//   - Trajectory recording for self-evolution (GEPA)
+//   - Prompt caching
+//   - Perception / Cognition / Execution three-layer architecture
+//   - Frozen snapshot memory protection
 func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error) {
 	if a.cortexManager == nil {
 		return a.RunConversation(ctx, input)
