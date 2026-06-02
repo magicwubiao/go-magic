@@ -145,6 +145,11 @@ func (g *GEPAEngine) evolutionLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute) // Evaluate every 5 minutes
 	defer ticker.Stop()
 
+	// Use background context if nil
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
