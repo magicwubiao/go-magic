@@ -288,9 +288,9 @@ func (m *Manager) loadSkills() error {
 				if _, err := os.Stat(skillMdPath); err == nil {
 					skill := m.loadSkillFromFile(skillMdPath)
 					if skill != nil {
-						// Preserve existing source if it's builtin or uploaded
+						// Preserve existing source if it's builtin
 						if existingSkill, exists := m.skills[skill.Name]; exists {
-							if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+							if existingSkill.Source == "builtin" {
 								skill.Source = existingSkill.Source
 							} else {
 								skill.Source = "local"
@@ -328,9 +328,9 @@ func (m *Manager) loadSkills() error {
 
 			skill := m.loadSkillFromFile(path)
 			if skill != nil {
-				// Preserve existing source if it's builtin or uploaded
+				// Preserve existing source if it's builtin
 				if existingSkill, exists := m.skills[skill.Name]; exists {
-					if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+					if existingSkill.Source == "builtin" {
 						skill.Source = existingSkill.Source
 					} else {
 						skill.Source = "local"
@@ -375,9 +375,9 @@ func (m *Manager) scanCategoryDir(categoryPath, parentDir, categoryName string) 
 		if _, err := os.Stat(skillMdPath); err == nil {
 			skill := m.loadSkillFromFile(skillMdPath)
 			if skill != nil {
-				// Preserve existing source if it's builtin or uploaded
+				// Preserve existing source if it's builtin
 				if existingSkill, exists := m.skills[skill.Name]; exists {
-					if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+					if existingSkill.Source == "builtin" {
 						skill.Source = existingSkill.Source
 					} else {
 						skill.Source = "local"
@@ -746,47 +746,6 @@ func (m *Manager) List() []*Skill {
 		skills = append(skills, s)
 	}
 	return skills
-}
-
-// LoadUploadedSkill loads a skill from the given directory and marks it as uploaded
-func (m *Manager) LoadUploadedSkill(skillDir string) (*Skill, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Check for SKILL.md
-	skillMdPath := filepath.Join(skillDir, "SKILL.md")
-	if _, err := os.Stat(skillMdPath); err == nil {
-		skill := m.loadSkillFromFile(skillMdPath)
-		if skill != nil {
-			skill.Source = "uploaded"
-			m.skills[skill.Name] = skill
-			return skill, nil
-		}
-	}
-
-	// Check for skill.yaml
-	skillYamlPath := filepath.Join(skillDir, "skill.yaml")
-	if _, err := os.Stat(skillYamlPath); err == nil {
-		skill := m.loadSkillFromFile(skillYamlPath)
-		if skill != nil {
-			skill.Source = "uploaded"
-			m.skills[skill.Name] = skill
-			return skill, nil
-		}
-	}
-
-	// Check for skill.json
-	skillJsonPath := filepath.Join(skillDir, "skill.json")
-	if _, err := os.Stat(skillJsonPath); err == nil {
-		skill := m.loadSkillFromFile(skillJsonPath)
-		if skill != nil {
-			skill.Source = "uploaded"
-			m.skills[skill.Name] = skill
-			return skill, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no skill file found in %s", skillDir)
 }
 
 // ListByTags returns skills filtered by tags

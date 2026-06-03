@@ -2145,7 +2145,7 @@ func (s *Server) scanSkillsDirRecursive(dir, parentCategory, source string, resu
 			}
 
 			if !found {
-				skill.Description = "(uploaded skill - no definition file found)"
+				skill.Description = "(no definition file found)"
 			}
 
 			*result = append(*result, skill)
@@ -2635,9 +2635,9 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load the uploaded skill and mark it as uploaded
+	// Reload skills to include the newly uploaded one
 	if s.skillMgr != nil {
-		s.skillMgr.LoadUploadedSkill(skillDir)
+		s.skillMgr.Reload()
 	}
 
 	jsonResponse(w, map[string]interface{}{

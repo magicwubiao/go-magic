@@ -390,7 +390,6 @@ function getSourceType(source: string): 'success' | 'warning' | 'error' | 'info'
     case 'global': return 'primary'
     case 'registry': return 'warning'
     case 'auto': return 'default'
-    case 'uploaded': return 'info'
     default: return 'default'
   }
 }
@@ -402,7 +401,6 @@ function getSourceTagType(source: string): 'success' | 'warning' | 'error' | 'in
     case 'global': return 'primary'
     case 'registry': return 'warning'
     case 'auto': return 'default'
-    case 'uploaded': return 'info'
     default: return 'default'
   }
 }
