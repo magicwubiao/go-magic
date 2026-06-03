@@ -1518,6 +1518,33 @@ func (m *Manager) Update(name, content string) error {
 	return os.WriteFile(skillMdPath, []byte(content), 0644)
 }
 
+// UpdateMetadata updates skill metadata (name, description, category, tags)
+func (m *Manager) UpdateMetadata(name string, meta SkillMeta) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	// Update metadata fields
+	skill.Name = meta.Name
+	skill.Description = meta.Description
+	skill.Category = meta.Category
+	skill.Tags = meta.Tags
+
+	// Write to skill.yaml if directory exists
+	if skill.Dir == "" {
+		return nil
+	}
+
+	skillFile := filepath.Join(skill.Dir, "skill.yaml")
+	content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
+		meta.Name, meta.Description, meta.Category, strings.Join(meta.Tags, ","))
+	return os.WriteFile(skillFile, []byte(content), 0644)
+}
+
 // Delete removes a skill
 func (m *Manager) Delete(name string) error {
 	m.mu.Lock()

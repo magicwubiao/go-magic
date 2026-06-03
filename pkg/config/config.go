@@ -198,7 +198,7 @@ func defaultConfig() *Config {
 		},
 		Skills: SkillsConfig{
 			Enabled:    []string{"all"},
-			DefaultDir: "skills-default",
+			DefaultDir: "skills",
 			UserDir:    "skills",
 		},
 		Plugins: PluginsConfig{

@@ -1772,6 +1772,14 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 // buildToolsets dynamically generates toolsets from s.toolReg
 func (s *Server) buildToolsets() []map[string]interface{} {
 	if s.toolReg == nil {
+		fmt.Println("[server] buildToolsets: toolReg is nil")
+		return []map[string]interface{}{}
+	}
+
+	allTools := s.toolReg.List()
+	fmt.Printf("[server] buildToolsets: total tools registered: %d\n", len(allTools))
+	if len(allTools) == 0 {
+		fmt.Println("[server] buildToolsets: no tools registered, returning empty list")
 		return []map[string]interface{}{}
 	}
 
@@ -1798,7 +1806,6 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	categoryDescriptions := map[string]string{}
 	ungrouped := []string{}
 
-	allTools := s.toolReg.List()
 	for _, name := range allTools {
 		categorized := false
 		for prefix, catName := range categoryMap {
@@ -1816,20 +1823,33 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		}
 	}
 
+	fmt.Printf("[server] buildToolsets: categorized tools: %d categories\n", len(categoryTools))
+	for cat, tools := range categoryTools {
+		fmt.Printf("[server] buildToolsets:   %s: %d tools - %v\n", cat, len(tools), tools)
+	}
+	if len(ungrouped) > 0 {
+		fmt.Printf("[server] buildToolsets:   ungrouped: %d tools - %v\n", len(ungrouped), ungrouped)
+	}
+
 	// Build toolset list
 	toolsets := make([]map[string]interface{}, 0, len(categoryTools))
 
 	// Check if all tools are enabled by default
 	allEnabled := false
-	for _, e := range s.cfg.Tools.Enabled {
-		if e == "all" {
-			allEnabled = true
-			break
+	if s.cfg != nil && s.cfg.Tools.Enabled != nil {
+		for _, e := range s.cfg.Tools.Enabled {
+			if e == "all" {
+				allEnabled = true
+				break
+			}
 		}
 	}
 
 	// Helper to check if toolset is enabled
 	isEnabled := func(id string) bool {
+		if s.cfg == nil || s.cfg.Tools.Disabled == nil || s.cfg.Tools.Enabled == nil {
+			return true // Default to enabled if no config
+		}
 		// Check disabled list first
 		for _, d := range s.cfg.Tools.Disabled {
 			if d == id || d == "all" {
@@ -2483,13 +2503,31 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		// Update skill.yaml
-		skillDir := filepath.Join(s.getUserSkillsDir(), id)
-		skillFile := filepath.Join(skillDir, "skill.yaml")
 
-		content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
-			req.Name, req.Description, req.Category, strings.Join(req.Tags, ","))
-		os.WriteFile(skillFile, []byte(content), 0644)
+		// Update through skill manager (updates memory and file)
+		if s.skillMgr != nil {
+			err := s.skillMgr.UpdateMetadata(id, skills.SkillMeta{
+				Name:        req.Name,
+				Description: req.Description,
+				Category:    req.Category,
+				Tags:        req.Tags,
+			})
+			if err != nil {
+				http.Error(w, "failed to update skill: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Fallback: update skill.yaml directly
+			skillDir := filepath.Join(s.getUserSkillsDir(), id)
+			skillFile := filepath.Join(skillDir, "skill.yaml")
+
+			content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
+				req.Name, req.Description, req.Category, strings.Join(req.Tags, ","))
+			if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
+				http.Error(w, "failed to write skill file: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 
 		jsonResponse(w, map[string]interface{}{"ok": true, "id": id})
 		return
