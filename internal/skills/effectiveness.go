@@ -47,8 +47,8 @@ type EffectivenessManager struct {
 	recordsDB    string                               // 存储路径
 	statsDB      string
 	mu           sync.RWMutex
-	dirty        bool         // 脏标记，标识数据是否有变更
-	saveTimer    *time.Ticker // 定时保存器
+	dirty        bool          // 脏标记，标识数据是否有变更
+	saveTimer    *time.Ticker  // 定时保存器
 	stopChan     chan struct{} // 停止信号
 }
 

@@ -18,9 +18,9 @@ type SkillsManager interface {
 	Create(name, description, content, category string, tags []string) (SkillData, error)
 	Update(name, content string) error
 	Delete(name string) error
-	Patch(name, oldString, newString string) error             // 定向修补：替换技能内容中的指定字符串
-	WriteSkillFile(name, filePath, content string) error       // 添加参考文件到技能目录
-	RemoveSkillFile(name, filePath string) error               // 删除技能目录中的参考文件
+	Patch(name, oldString, newString string) error       // 定向修补：替换技能内容中的指定字符串
+	WriteSkillFile(name, filePath, content string) error // 添加参考文件到技能目录
+	RemoveSkillFile(name, filePath string) error         // 删除技能目录中的参考文件
 }
 
 // SkillListTool lists all available skills

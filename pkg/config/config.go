@@ -78,10 +78,10 @@ type ToolsConfig struct {
 
 // SkillsConfig represents skills configuration
 type SkillsConfig struct {
-	Enabled      []string `json:"enabled"`
-	Disabled     []string `json:"disabled"`
-	DefaultDir   string   `json:"default_dir,omitempty"`   // Path to built-in default skills
-	UserDir      string   `json:"user_dir,omitempty"`      // Path to user-installed skills
+	Enabled    []string `json:"enabled"`
+	Disabled   []string `json:"disabled"`
+	DefaultDir string   `json:"default_dir,omitempty"` // Path to built-in default skills
+	UserDir    string   `json:"user_dir,omitempty"`    // Path to user-installed skills
 }
 
 // PluginsConfig represents plugins configuration
@@ -197,7 +197,7 @@ func defaultConfig() *Config {
 			Enabled: []string{"all"},
 		},
 		Skills: SkillsConfig{
-			Enabled:  []string{"all"},
+			Enabled:    []string{"all"},
 			DefaultDir: "skills-default",
 			UserDir:    "skills",
 		},

@@ -1799,6 +1799,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	ungrouped := []string{}
 
 	allTools := s.toolReg.List()
+	fmt.Printf("[DEBUG] Total tools registered: %d, tools: %v\n", len(allTools), allTools)
 	for _, name := range allTools {
 		categorized := false
 		for prefix, catName := range categoryMap {

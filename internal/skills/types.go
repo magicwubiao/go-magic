@@ -414,19 +414,19 @@ When using a skill and finding it outdated, incomplete, or wrong, patch it immed
 
 // SkillCategory 表示一个技能分类（对应目录层级）
 type SkillCategory struct {
-	Name        string    `json:"name"`        // 分类名称（目录名）
-	Description string    `json:"description"` // 分类描述
-	Path        string    `json:"path"`        // 分类目录绝对路径
-	SkillCount  int       `json:"skill_count"` // 该分类下的技能数量
-	Skills      []string  `json:"skills"`      // 技能名称列表
-	Parent      string    `json:"parent,omitempty"` // 父分类名称
-	Source      SkillSource `json:"source"`    // 来源
+	Name        string      `json:"name"`             // 分类名称（目录名）
+	Description string      `json:"description"`      // 分类描述
+	Path        string      `json:"path"`             // 分类目录绝对路径
+	SkillCount  int         `json:"skill_count"`      // 该分类下的技能数量
+	Skills      []string    `json:"skills"`           // 技能名称列表
+	Parent      string      `json:"parent,omitempty"` // 父分类名称
+	Source      SkillSource `json:"source"`           // 来源
 }
 
 // CategoryTree 表示分类树结构
 type CategoryTree struct {
-	Category *SkillCategory   `json:"category"`
-	Children []*CategoryTree  `json:"children,omitempty"`
+	Category *SkillCategory  `json:"category"`
+	Children []*CategoryTree `json:"children,omitempty"`
 }
 
 // =============================================================================
@@ -435,14 +435,14 @@ type CategoryTree struct {
 
 // HubLockEntry 表示一条 Hub 技能安装记录
 type HubLockEntry struct {
-	SkillName    string    `json:"skill_name"`
-	Source       HubSource `json:"source"`
-	SourceID     string    `json:"source_id"`
-	URL          string    `json:"url,omitempty"`
-	Version      string    `json:"version,omitempty"`
-	InstalledAt  time.Time `json:"installed_at"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
-	SecurityAudit string   `json:"security_audit,omitempty"` // passed, failed, pending
+	SkillName     string    `json:"skill_name"`
+	Source        HubSource `json:"source"`
+	SourceID      string    `json:"source_id"`
+	URL           string    `json:"url,omitempty"`
+	Version       string    `json:"version,omitempty"`
+	InstalledAt   time.Time `json:"installed_at"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	SecurityAudit string    `json:"security_audit,omitempty"` // passed, failed, pending
 }
 
 // HubLock 表示完整的 lock.json
@@ -459,8 +459,8 @@ type HubLock struct {
 type BundledManifestEntry struct {
 	SkillName string    `json:"skill_name"`
 	Category  string    `json:"category,omitempty"`
-	Path      string    `json:"path"`        // 相对路径
-	SHA256    string    `json:"sha256"`      // 原始内容哈希，用于检测用户修改
+	Path      string    `json:"path"`   // 相对路径
+	SHA256    string    `json:"sha256"` // 原始内容哈希，用于检测用户修改
 	SeededAt  time.Time `json:"seeded_at"`
 }
 
@@ -476,8 +476,8 @@ type BundledManifest struct {
 
 // DisabledSkillsConfig 表示禁用技能配置
 type DisabledSkillsConfig struct {
-	Global    []string            `json:"global,omitempty"`    // 全局禁用
-	Platform  map[string][]string `json:"platform,omitempty"`  // 按平台禁用
+	Global   []string            `json:"global,omitempty"`   // 全局禁用
+	Platform map[string][]string `json:"platform,omitempty"` // 按平台禁用
 }
 
 // =============================================================================

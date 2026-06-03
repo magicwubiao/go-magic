@@ -23,19 +23,19 @@ import (
 
 // Manager manages skill loading and registration
 type Manager struct {
-	mu          sync.RWMutex
-	searchDirs  []string
-	builtinDir  string
-	skills      map[string]*Skill
-	bundles     map[string]*SkillBundle       // 技能捆绑包
-	categories  map[string]*SkillCategory    // 技能分类（按目录层级）
-	toolNames   []string                     // Cached tool names from registry
-	registryURL string                      // ClawHub or GitHub registry URL
-	hubLock     *HubLock                    // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest *BundledManifest         // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills *DisabledSkillsConfig     // 禁用技能配置
-	skillsDir   string                      // 技能目录路径 (~/.magic/skills)
-	hubDir      string                      // Hub 目录路径 (~/.magic/skills/.hub)
+	mu              sync.RWMutex
+	searchDirs      []string
+	builtinDir      string
+	skills          map[string]*Skill
+	bundles         map[string]*SkillBundle   // 技能捆绑包
+	categories      map[string]*SkillCategory // 技能分类（按目录层级）
+	toolNames       []string                  // Cached tool names from registry
+	registryURL     string                    // ClawHub or GitHub registry URL
+	hubLock         *HubLock                  // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest *BundledManifest          // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills  *DisabledSkillsConfig     // 禁用技能配置
+	skillsDir       string                    // 技能目录路径 (~/.magic/skills)
+	hubDir          string                    // Hub 目录路径 (~/.magic/skills/.hub)
 }
 
 // ManagerConfig 配置管理器
@@ -83,16 +83,16 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 	skillsDir := config.SearchDirs[0]
 
 	m := &Manager{
-		searchDirs:      config.SearchDirs,
-		builtinDir:      config.BuiltinDir,
-		registryURL:     config.RegistryURL,
-		toolNames:       config.ToolNames,
-		skills:          make(map[string]*Skill),
-		bundles:         make(map[string]*SkillBundle),
-		categories:      make(map[string]*SkillCategory),
-		skillsDir:       skillsDir,
-		hubDir:          filepath.Join(skillsDir, ".hub"),
-		disabledSkills:  &DisabledSkillsConfig{Platform: make(map[string][]string)},
+		searchDirs:     config.SearchDirs,
+		builtinDir:     config.BuiltinDir,
+		registryURL:    config.RegistryURL,
+		toolNames:      config.ToolNames,
+		skills:         make(map[string]*Skill),
+		bundles:        make(map[string]*SkillBundle),
+		categories:     make(map[string]*SkillCategory),
+		skillsDir:      skillsDir,
+		hubDir:         filepath.Join(skillsDir, ".hub"),
+		disabledSkills: &DisabledSkillsConfig{Platform: make(map[string][]string)},
 	}
 
 	// 创建 Hub 目录
@@ -1610,13 +1610,13 @@ func (m *Manager) GetCategoryTree() []*CategoryTree {
 	for _, cat := range m.categories {
 		tree := &CategoryTree{
 			Category: &SkillCategory{
-				Name:       cat.Name,
+				Name:        cat.Name,
 				Description: cat.Description,
-				Path:       cat.Path,
-				SkillCount: cat.SkillCount,
-				Skills:     append([]string{}, cat.Skills...),
-				Parent:     cat.Parent,
-				Source:     cat.Source,
+				Path:        cat.Path,
+				SkillCount:  cat.SkillCount,
+				Skills:      append([]string{}, cat.Skills...),
+				Parent:      cat.Parent,
+				Source:      cat.Source,
 			},
 		}
 		rootMap[cat.Name] = tree
