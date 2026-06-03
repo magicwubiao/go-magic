@@ -371,7 +371,7 @@ export default {
       automation: '自动化',
       communication: '通信',
       'code-review': '代码审查',
-      code-quality: '代码质量',
+      'code-quality': '代码质量',
       documentation: '文档编写',
       debug: '调试',
       testing: '测试',

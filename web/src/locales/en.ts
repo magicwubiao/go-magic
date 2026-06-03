@@ -371,7 +371,7 @@ export default {
       automation: 'Automation',
       communication: 'Communication',
       'code-review': 'Code Review',
-      code-quality: 'Code Quality',
+      'code-quality': 'Code Quality',
       documentation: 'Documentation',
       debug: 'Debug',
       testing: 'Testing',
