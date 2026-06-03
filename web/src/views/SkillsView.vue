@@ -287,7 +287,7 @@ const selectedSkill = ref<Skill | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
-const skillSources = ref<string[]>(['all', 'builtin', 'local', 'global', 'registry', 'auto', 'uploaded'])
+const skillSources = ref<string[]>(['all', 'local', 'global', 'registry', 'auto'])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
 
