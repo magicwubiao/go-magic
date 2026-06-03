@@ -7,6 +7,7 @@ export interface Skill {
   category: string
   tags: string[]
   enabled: boolean
+  source: 'default' | 'user'
 }
 
 export interface SkillRecommendation {

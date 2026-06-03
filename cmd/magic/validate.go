@@ -64,6 +64,7 @@ func runValidate(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("  Gateway: %v\n", cfg.Gateway.Enabled)
 	fmt.Printf("  Tools enabled: %v\n", cfg.Tools.Enabled)
+	fmt.Printf("  Skills enabled: %v\n", cfg.Skills.Enabled)
 
 	fmt.Println()
 	fmt.Println("Validation complete.")

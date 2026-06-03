@@ -359,6 +359,10 @@ func runConfigList(cmd *cobra.Command, args []string) {
 	fmt.Printf("  Enabled:  %v\n", cfg.Tools.Enabled)
 	fmt.Printf("  Disabled: %v\n", cfg.Tools.Disabled)
 
+	fmt.Println("\nSkills:")
+	fmt.Printf("  Enabled:  %v\n", cfg.Skills.Enabled)
+	fmt.Printf("  Disabled: %v\n", cfg.Skills.Disabled)
+
 	fmt.Println("\nGateway:")
 	fmt.Printf("  Enabled: %v\n", cfg.Gateway.Enabled)
 	if len(cfg.Gateway.Platforms) > 0 {

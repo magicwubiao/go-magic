@@ -91,6 +91,7 @@ type Skill struct {
 	Category    string   `json:"category"`
 	Tags        []string `json:"tags"`
 	Enabled     bool     `json:"enabled"`
+	Source      string   `json:"source"` // "default" or "user"
 }
 
 // LogEntry represents a log entry
@@ -267,7 +268,7 @@ func NewServer(dbPath string) *Server {
 	// Load disabled skills from config
 	disabledSkills := make(map[string]bool)
 	if cfg != nil {
-		for _, name := range cfg.Tools.Disabled {
+		for _, name := range cfg.Skills.Disabled {
 			disabledSkills[name] = true
 		}
 	}
@@ -2053,6 +2054,7 @@ func (s *Server) getRealSkills() []Skill {
 			Category:    skill.Category,
 			Tags:        tags,
 			Enabled:     !isDisabled,
+			Source:      skill.Source,
 		})
 	}
 
@@ -2064,15 +2066,35 @@ func (s *Server) getRealSkills() []Skill {
 	return result
 }
 
+// getUserSkillsDir returns the user skills directory path
+func (s *Server) getUserSkillsDir() string {
+	userDir := "skills"
+	if s.cfg != nil && s.cfg.Skills.UserDir != "" {
+		userDir = s.cfg.Skills.UserDir
+	}
+	return filepath.Join(s.magicHome, userDir)
+}
+
+// getDefaultSkillsDir returns the default skills directory path
+func (s *Server) getDefaultSkillsDir() string {
+	defaultDir := "skills-default"
+	if s.cfg != nil && s.cfg.Skills.DefaultDir != "" {
+		defaultDir = s.cfg.Skills.DefaultDir
+	}
+	return filepath.Join(s.magicHome, defaultDir)
+}
+
 func (s *Server) scanSkillsDir() []Skill {
-	skillsDir := filepath.Join(s.magicHome, "skills")
 	result := make([]Skill, 0)
 
 	s.disabledSkillsMu.Lock()
 	defer s.disabledSkillsMu.Unlock()
 
-	// 递归扫描技能目录（支持目录层级分类）
-	s.scanSkillsDirRecursive(skillsDir, "", &result)
+	// Scan default skills directory
+	s.scanSkillsDirRecursive(s.getDefaultSkillsDir(), "", "default", &result)
+
+	// Scan user skills directory
+	s.scanSkillsDirRecursive(s.getUserSkillsDir(), "", "user", &result)
 
 	// 按名称排序
 	sort.Slice(result, func(i, j int) bool {
@@ -2083,7 +2105,7 @@ func (s *Server) scanSkillsDir() []Skill {
 }
 
 // scanSkillsDirRecursive 递归扫描技能目录
-func (s *Server) scanSkillsDirRecursive(dir, parentCategory string, result *[]Skill) {
+func (s *Server) scanSkillsDirRecursive(dir, parentCategory, source string, result *[]Skill) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -2120,7 +2142,7 @@ func (s *Server) scanSkillsDirRecursive(dir, parentCategory string, result *[]Sk
 				category = name // 使用父目录名作为分类（仅当无父分类时）
 			}
 
-			skill := Skill{ID: name, Name: name, Category: category, Enabled: !isDisabled}
+			skill := Skill{ID: name, Name: name, Category: category, Enabled: !isDisabled, Source: source}
 			found := false
 
 			// Try SKILL.md first
@@ -2169,7 +2191,7 @@ func (s *Server) scanSkillsDirRecursive(dir, parentCategory string, result *[]Sk
 			if parentCategory != "" {
 				childCategory = parentCategory + "/" + name
 			}
-			s.scanSkillsDirRecursive(subPath, childCategory, result)
+			s.scanSkillsDirRecursive(subPath, childCategory, source, result)
 		}
 	}
 }
@@ -2342,8 +2364,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 				disabledList = append(disabledList, name)
 			}
 			s.disabledSkillsMu.Unlock()
-			// Store in tools.disabled as a convention for disabled skills
-			s.cfg.Tools.Disabled = disabledList
+			s.cfg.Skills.Disabled = disabledList
 			_ = s.cfg.Save()
 		}
 		s.mu.Unlock()
@@ -2391,7 +2412,9 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			Category string `json:"category"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		skillsDir := filepath.Join(s.magicHome, "skills")
+		
+		// Get user skills directory
+		skillsDir := s.getUserSkillsDir()
 
 		// If URL is provided, download from Git URL
 		if req.URL != "" {
@@ -2461,8 +2484,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Update skill.yaml
-		skillsDir := filepath.Join(s.magicHome, "skills")
-		skillDir := filepath.Join(skillsDir, id)
+		skillDir := filepath.Join(s.getUserSkillsDir(), id)
 		skillFile := filepath.Join(skillDir, "skill.yaml")
 
 		content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
@@ -2475,9 +2497,20 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 
 	// Handle DELETE - delete skill
 	if r.Method == http.MethodDelete {
-		skillsDir := filepath.Join(s.magicHome, "skills")
-		skillDir := filepath.Join(skillsDir, id)
-		os.RemoveAll(skillDir)
+		// First, remove from skill manager (updates memory)
+		if s.skillMgr != nil {
+			if err := s.skillMgr.Delete(id); err != nil {
+				http.Error(w, "failed to delete skill: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Fallback: remove from file system directly
+			skillDir := filepath.Join(s.getUserSkillsDir(), id)
+			if err := os.RemoveAll(skillDir); err != nil {
+				http.Error(w, "failed to delete skill directory: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "id": id, "deleted": true})
 		return
 	}
@@ -2547,7 +2580,8 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 	// Sanitize skill name (only replace spaces, keep path separators for folder detection)
 	skillName = strings.ReplaceAll(skillName, " ", "_")
 
-	skillsDir := filepath.Join(s.magicHome, "skills")
+	// Get user skills directory
+	skillsDir := s.getUserSkillsDir()
 	skillDir := filepath.Join(skillsDir, skillName)
 
 	// Create skill directory

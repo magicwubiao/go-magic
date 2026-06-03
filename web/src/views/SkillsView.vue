@@ -130,6 +130,12 @@
                     <n-tag :type="skill.enabled ? 'success' : 'default'" size="small">
                       {{ skill.enabled ? t('tools.enabled') : t('tools.disabled') }}
                     </n-tag>
+                    <n-tag v-if="skill.source === 'default'" size="tiny" type="info">
+                      {{ t('skills.default') }}
+                    </n-tag>
+                    <n-tag v-if="skill.source === 'user'" size="tiny" type="primary">
+                      {{ t('skills.user') }}
+                    </n-tag>
                   </n-space>
                   <n-space align="center" size="small">
                     <n-tag v-if="getSkillStat(skill.name)" size="tiny" :type="getSuccessRateType(getSkillStat(skill.name)!.success_rate)">
@@ -299,6 +305,7 @@ interface Skill {
   category: string
   tags: string[]
   enabled: boolean
+  source: 'default' | 'user'
 }
 
 interface SkillRecommendation {
