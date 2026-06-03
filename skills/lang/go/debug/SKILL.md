@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [go, debugging, troubleshooting, delve]
-    category: software-development
+    category: lang/go
 ---
 
 # Go Debugging Guide

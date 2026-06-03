@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [code-review, quality, collaboration, guidelines]
-    category: software-development
+    category: practices
 ---
 
 # Code Review Guide

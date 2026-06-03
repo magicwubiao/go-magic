@@ -102,16 +102,24 @@ var skillsCategoryCmd = &cobra.Command{
 
 Categories are organized as subdirectories under the skills directory:
   ~/.magic/skills/
-    ├── devops/
-    │   ├── kubernetes/
+    ├── lang/
+    │   └── go/
+    │       └── debug/
+    │           └── SKILL.md
+    ├── devtools/
+    │   ├── api-testing/
     │   │   └── SKILL.md
-    │   └── docker/
-    │       └── SKILL.md
-    ├── coding/
+    │   └── git/
+    │       └── workflow/
+    │           └── SKILL.md
+    ├── practices/
     │   ├── code-review/
     │   │   └── SKILL.md
-    │   └── debug/
+    │   └── code-quality/
     │       └── SKILL.md
+    └── chat/
+        └── interrupt/
+            └── SKILL.md
 
 Examples:
   magic skills category list

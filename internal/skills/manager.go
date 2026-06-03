@@ -1422,6 +1422,52 @@ func (m *Manager) GetSkillDir(name string) (string, error) {
 	return skill.Dir, nil
 }
 
+// GetSkillsBySource returns skills filtered by source
+func (m *Manager) GetSkillsBySource(source SkillSource) []*Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []*Skill
+	for _, skill := range m.skills {
+		if skill.Source == source {
+			result = append(result, skill)
+		}
+	}
+	return result
+}
+
+// GetSkillSources returns all unique skill sources
+func (m *Manager) GetSkillSources() []SkillSource {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sourceSet := make(map[SkillSource]bool)
+	for _, skill := range m.skills {
+		sourceSet[skill.Source] = true
+	}
+
+	sources := make([]SkillSource, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return string(sources[i]) < string(sources[j])
+	})
+	return sources
+}
+
+// GetSkillSourceStats returns statistics about skill sources
+func (m *Manager) GetSkillSourceStats() map[SkillSource]int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	stats := make(map[SkillSource]int)
+	for _, skill := range m.skills {
+		stats[skill.Source]++
+	}
+	return stats
+}
+
 // Create creates a new skill from scratch
 func (m *Manager) Create(name, description, content, category string, tags []string) (*Skill, error) {
 	m.mu.Lock()
@@ -2168,8 +2214,8 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 		{Name: "security/1password", Description: "1Password integration for secure credential management", Category: "security", Source: HubSourceOfficial, SourceID: "security/1password"},
 		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Category: "security", Source: HubSourceOfficial, SourceID: "security/bitwarden"},
 		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
-		{Name: "devops/kubernetes", Description: "Kubernetes deployment and management", Category: "devops", Source: HubSourceOfficial, SourceID: "devops/kubernetes"},
-		{Name: "devops/docker", Description: "Docker container management", Category: "devops", Source: HubSourceOfficial, SourceID: "devops/docker"},
+		{Name: "devtools/kubernetes", Description: "Kubernetes deployment and management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/kubernetes"},
+		{Name: "devtools/docker", Description: "Docker container management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/docker"},
 	}
 
 	if keyword == "" {
@@ -2210,8 +2256,8 @@ func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call clawhub.ai API
 	mockSkills := []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devops", Source: HubSourceHub},
-		{Name: "git-workflow", Description: "Git workflow automation", Category: "dev", Source: HubSourceHub},
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devtools", Source: HubSourceHub},
+		{Name: "git-workflow", Description: "Git workflow automation", Category: "devtools/git", Source: HubSourceHub},
 	}
 
 	var results []HubSkill

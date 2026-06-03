@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [api, testing, rest, automation]
-    category: software-development
+    category: devtools
 ---
 
 # API Testing Guide

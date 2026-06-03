@@ -43,6 +43,23 @@
         </n-space>
       </n-card>
 
+      <!-- Skill Sources Filter -->
+      <n-card :title="t('skills.sources')" style="margin-bottom: 24px;">
+        <n-space>
+          <n-tag 
+            v-for="source in skillSources" 
+            :key="source" 
+            size="large"
+            :checked="selectedSource === source"
+            checkable
+            :type="getSourceType(source)"
+            @update:checked="selectedSource = selectedSource === source ? '' : source"
+          >
+            {{ t(`skills.sources.${source}`) || source }}
+          </n-tag>
+        </n-space>
+      </n-card>
+
       <!-- Drag & Drop Zone -->
       <n-card :title="t('skills.dragDropInstall')" style="margin-bottom: 24px;">
         <n-space vertical>
@@ -104,11 +121,8 @@
                     <n-tag :type="skill.enabled ? 'success' : 'default'" size="small">
                       {{ skill.enabled ? t('tools.enabled') : t('tools.disabled') }}
                     </n-tag>
-                    <n-tag v-if="skill.source === 'default'" size="tiny" type="info">
-                      {{ t('skills.default') }}
-                    </n-tag>
-                    <n-tag v-if="skill.source === 'user'" size="tiny" type="primary">
-                      {{ t('skills.user') }}
+                    <n-tag :type="getSourceTagType(skill.source)" size="tiny">
+                      {{ t(`skills.sources.${skill.source}`) || skill.source }}
                     </n-tag>
                   </n-space>
                   <n-space align="center" size="small">
@@ -263,10 +277,12 @@ const installing = ref(false)
 const uploadingCount = ref(0)
 const dirInputRef = ref<HTMLInputElement | null>(null)
 const selectedCategory = ref('')
+const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
+const skillSources = ref<string[]>(['builtin', 'local', 'global', 'registry', 'auto'])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
 
@@ -278,7 +294,7 @@ interface Skill {
   category: string
   tags: string[]
   enabled: boolean
-  source: 'default' | 'user'
+  source: 'builtin' | 'local' | 'global' | 'registry' | 'auto' | string
 }
 
 interface SkillStatistics {
@@ -307,8 +323,17 @@ interface EvolutionRecord {
 
 // Computed
 const filteredSkills = computed(() => {
-  if (!selectedCategory.value) return skillsStore.skills
-  return skillsStore.skills.filter(s => s.category === selectedCategory.value)
+  let result = skillsStore.skills
+  
+  if (selectedCategory.value) {
+    result = result.filter(s => s.category === selectedCategory.value)
+  }
+  
+  if (selectedSource.value) {
+    result = result.filter(s => s.source === selectedSource.value)
+  }
+  
+  return result
 })
 
 const totalInvocations = computed(() => {
@@ -344,6 +369,28 @@ function getTrendType(trend: string): 'success' | 'warning' | 'error' | 'default
     case 'improving': return 'success'
     case 'declining': return 'error'
     case 'stable': return 'default'
+    default: return 'default'
+  }
+}
+
+function getSourceType(source: string): 'success' | 'warning' | 'error' | 'info' | 'primary' | 'default' {
+  switch (source) {
+    case 'builtin': return 'success'
+    case 'local': return 'info'
+    case 'global': return 'primary'
+    case 'registry': return 'warning'
+    case 'auto': return 'default'
+    default: return 'default'
+  }
+}
+
+function getSourceTagType(source: string): 'success' | 'warning' | 'error' | 'info' | 'primary' | 'default' {
+  switch (source) {
+    case 'builtin': return 'success'
+    case 'local': return 'info'
+    case 'global': return 'primary'
+    case 'registry': return 'warning'
+    case 'auto': return 'default'
     default: return 'default'
   }
 }

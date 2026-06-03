@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [chat, interrupt, requirements, todo, workflow, interactive]
-    category: software-development
+    category: chat
 ---
 
 # Chat 打断机制 & 需求管理

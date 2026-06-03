@@ -134,6 +134,7 @@ func (ac *AutoCreator) CreateSkill() (*Skill, error) {
 			Version:     "1.0.0",
 			Author:      "magic Auto-Creator",
 			Tags:        ac.generateTags(),
+			Source:      SkillSourceAuto,
 		},
 		Tools:   tools,
 		Content: content,

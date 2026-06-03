@@ -6,8 +6,8 @@ author: magic
 license: MIT
 metadata:
   hermes:
-    tags: [chat, interrupt, requirements, todo, workflow]
-    category: software-development
+    tags: [chat, interrupt, requirements, todo, workflow, interactive]
+    category: chat
 ---
 
 # Chat 打断机制 & 需求管理

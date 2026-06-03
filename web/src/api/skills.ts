@@ -7,14 +7,7 @@ export interface Skill {
   category: string
   tags: string[]
   enabled: boolean
-  source: 'default' | 'user'
-}
-
-export interface SkillRecommendation {
-  skill: Skill
-  score: number
-  reason: string
-  match_factors: string[]
+  source: 'builtin' | 'local' | 'global' | 'registry' | 'auto' | string
 }
 
 export interface SkillStatistics {
