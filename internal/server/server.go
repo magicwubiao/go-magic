@@ -1981,14 +1981,14 @@ func (s *Server) handleSkillsStatistics(w http.ResponseWriter, r *http.Request) 
 		allStats := s.skillMgr.GetAllStatistics()
 		for _, stat := range allStats {
 			stats = append(stats, map[string]interface{}{
-				"skill_name":         stat.SkillName,
-				"total_invocations":  stat.TotalInvocations,
+				"skill_name":        stat.SkillName,
+				"total_invocations": stat.TotalInvocations,
 				"success_rate":      stat.SuccessRate,
-				"avg_quality":        stat.AvgQuality,
-				"avg_duration":       stat.AvgDuration,
-				"positive_rate":      stat.PositiveRate,
-				"last_used":          stat.LastUsed,
-				"trend":              stat.Trend,
+				"avg_quality":       stat.AvgQuality,
+				"avg_duration":      stat.AvgDuration,
+				"positive_rate":     stat.PositiveRate,
+				"last_used":         stat.LastUsed,
+				"trend":             stat.Trend,
 			})
 		}
 	}
@@ -2054,7 +2054,7 @@ func (s *Server) getRealSkills() []Skill {
 			Category:    skill.Category,
 			Tags:        tags,
 			Enabled:     !isDisabled,
-			Source:      skill.Source,
+			Source:      string(skill.Source),
 		})
 	}
 
@@ -2412,7 +2412,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			Category string `json:"category"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		
+
 		// Get user skills directory
 		skillsDir := s.getUserSkillsDir()
 
