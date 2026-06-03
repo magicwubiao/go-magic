@@ -416,6 +416,7 @@ export default {
       global: '全局',
       registry: '仓库',
       auto: '自动生成',
+      uploaded: '上传',
     },
     totalInvocations: '总调用次数',
     avgSuccessRate: '平均成功率',

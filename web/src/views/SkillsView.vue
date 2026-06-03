@@ -297,7 +297,7 @@ const selectedSkill = ref<Skill | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
-const skillSources = ref<string[]>(['all', 'builtin', 'local', 'global', 'registry', 'auto'])
+const skillSources = ref<string[]>(['all', 'builtin', 'local', 'global', 'registry', 'auto', 'uploaded'])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
 
@@ -396,6 +396,7 @@ function getSourceType(source: string): 'success' | 'warning' | 'error' | 'info'
     case 'global': return 'primary'
     case 'registry': return 'warning'
     case 'auto': return 'default'
+    case 'uploaded': return 'info'
     default: return 'default'
   }
 }
@@ -407,6 +408,7 @@ function getSourceTagType(source: string): 'success' | 'warning' | 'error' | 'in
     case 'global': return 'primary'
     case 'registry': return 'warning'
     case 'auto': return 'default'
+    case 'uploaded': return 'info'
     default: return 'default'
   }
 }

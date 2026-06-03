@@ -16,7 +16,8 @@ const (
 	SkillSourceGlobal   SkillSource = "global"
 	SkillSourceBuiltin  SkillSource = "builtin"
 	SkillSourceRegistry SkillSource = "registry"
-	SkillSourceAuto     SkillSource = "auto" // Agent 自动创建
+	SkillSourceAuto     SkillSource = "auto"     // Agent 自动创建
+	SkillSourceUploaded SkillSource = "uploaded" // 用户上传的技能
 )
 
 // SkillMeta contains metadata about a skill

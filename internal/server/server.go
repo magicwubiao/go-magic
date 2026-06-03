@@ -2635,6 +2635,34 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load the uploaded skill and set source to "uploaded"
+	s.skillManager.mu.Lock()
+	// Check for SKILL.md
+	skillMdPath := filepath.Join(skillDir, "SKILL.md")
+	if _, err := os.Stat(skillMdPath); err == nil {
+		if skill := s.skillManager.loadSkillFromFile(skillMdPath); skill != nil {
+			skill.Source = "uploaded"
+			s.skillManager.skills[skill.Name] = skill
+		}
+	}
+	// Check for skill.yaml
+	skillYamlPath := filepath.Join(skillDir, "skill.yaml")
+	if _, err := os.Stat(skillYamlPath); err == nil {
+		if skill := s.skillManager.loadSkillFromFile(skillYamlPath); skill != nil {
+			skill.Source = "uploaded"
+			s.skillManager.skills[skill.Name] = skill
+		}
+	}
+	// Check for skill.json
+	skillJsonPath := filepath.Join(skillDir, "skill.json")
+	if _, err := os.Stat(skillJsonPath); err == nil {
+		if skill := s.skillManager.loadSkillFromFile(skillJsonPath); skill != nil {
+			skill.Source = "uploaded"
+			s.skillManager.skills[skill.Name] = skill
+		}
+	}
+	s.skillManager.mu.Unlock()
+
 	jsonResponse(w, map[string]interface{}{
 		"ok":   true,
 		"name": skillName,

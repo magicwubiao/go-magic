@@ -416,6 +416,7 @@ export default {
       global: 'Global',
       registry: 'Registry',
       auto: 'Auto-generated',
+      uploaded: 'Uploaded',
     },
     totalInvocations: 'Total Invocations',
     avgSuccessRate: 'Avg Success Rate',
