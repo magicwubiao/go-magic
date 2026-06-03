@@ -346,6 +346,7 @@ export default {
     allSkills: 'All Skills',
     installFromUrl: 'Install from URL',
     browseHub: 'Browse Skill Hub',
+    search: 'Search',
     searchHub: 'Search skill hub...',
     noHubSkills: 'No skills found',
     failedToSearchHub: 'Failed to search skill hub',

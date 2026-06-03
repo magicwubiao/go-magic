@@ -4,7 +4,7 @@
       <h2>{{ t('skills.title') }}</h2>
       <n-space>
         <n-button @click="showInstallModal = true">{{ t('skills.installFromUrl') }}</n-button>
-        <n-button type="primary" @click="showHubModal = true">{{ t('skills.browseHub') }}</n-button>
+        <n-button type="primary" @click="openHubModal">{{ t('skills.browseHub') }}</n-button>
       </n-space>
     </n-space>
 
@@ -197,24 +197,31 @@
       style="width: 900px; max-height: 80vh;"
     >
       <n-space vertical>
-        <n-input 
-          v-model:value="hubSearchKeyword" 
-          :placeholder="t('skills.searchHub')"
-          @keyup.enter="searchHub"
-        >
-          <template #prefix>
-            <SearchIcon />
-          </template>
-        </n-input>
+        <n-space align="center">
+          <n-input 
+            v-model:value="hubSearchKeyword" 
+            :placeholder="t('skills.searchHub')"
+            @keyup.enter="searchHub"
+            style="flex: 1;"
+          >
+            <template #prefix>
+              <SearchIcon />
+            </template>
+          </n-input>
+          <n-button type="primary" :loading="hubLoading" @click="searchHub">
+            {{ t('skills.search') || '搜索' }}
+          </n-button>
+        </n-space>
         
-        <n-spin v-if="hubLoading">
-          <n-list bordered :data="hubSkills" style="max-height: 500px; overflow-y: auto;">
+        <n-spin :show="hubLoading">
+          <n-list v-if="hubSkills.length > 0" bordered :data="hubSkills" style="max-height: 500px; overflow-y: auto;">
             <template #default="{ item }">
               <n-list-item>
                 <template #header>
                   <n-space>
                     <span>{{ item.Name }}</span>
                     <n-tag size="small">{{ item.Category }}</n-tag>
+                    <n-tag size="small" type="info">{{ item.Source }}</n-tag>
                   </n-space>
                 </template>
                 <template #description>
@@ -233,33 +240,8 @@
               </n-list-item>
             </template>
           </n-list>
+          <n-empty v-else :description="t('skills.noHubSkills')" />
         </n-spin>
-        <n-empty v-else-if="hubSkills.length === 0" :description="t('skills.noHubSkills')" />
-        <n-list v-else bordered :data="hubSkills" style="max-height: 500px; overflow-y: auto;">
-          <template #default="{ item }">
-            <n-list-item>
-              <template #header>
-                <n-space>
-                  <span>{{ item.Name }}</span>
-                  <n-tag size="small">{{ item.Category }}</n-tag>
-                </n-space>
-              </template>
-              <template #description>
-                {{ item.Description }}
-              </template>
-              <template #extra>
-                <n-button 
-                  size="small" 
-                  type="primary"
-                  :loading="installingHubSkill === item.SourceID"
-                  @click="installHubSkill(item.Source, item.SourceID)"
-                >
-                  {{ t('skills.install') }}
-                </n-button>
-              </template>
-            </n-list-item>
-          </template>
-        </n-list>
       </n-space>
     </n-modal>
 
@@ -352,6 +334,7 @@ const skillsStore = useSkillsStore()
 
 // UI State
 const showInstallModal = ref(false)
+const showHubModal = ref(false)
 const showDetailModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
@@ -359,6 +342,12 @@ const uploadingCount = ref(0)
 const selectedCategory = ref('')
 const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
+
+// Hub State
+const hubSearchKeyword = ref('')
+const hubLoading = ref(false)
+const hubSkills = ref<HubSkill[]>([])
+const installingHubSkill = ref<string | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
@@ -576,12 +565,19 @@ async function installSkill(): Promise<void> {
 async function searchHub(): Promise<void> {
   hubLoading.value = true
   try {
-    hubSkills.value = await skillsStore.searchHubSkills(hubSearchKeyword.value)
+    hubSkills.value = (await skillsStore.searchHubSkills(hubSearchKeyword.value)) || []
   } catch (e) {
     message.error(t('skills.failedToSearchHub'))
+    hubSkills.value = []
   } finally {
     hubLoading.value = false
   }
+}
+
+async function openHubModal(): Promise<void> {
+  showHubModal.value = true
+  hubSearchKeyword.value = ''
+  await searchHub()
 }
 
 async function installHubSkill(source: string, sourceID: string): Promise<void> {
@@ -589,6 +585,10 @@ async function installHubSkill(source: string, sourceID: string): Promise<void> 
   try {
     await skillsStore.installHubSkill(source, sourceID)
     message.success(t('skills.installed'))
+    // 刷新技能列表
+    await skillsStore.loadSkills()
+    await skillsStore.loadCategories()
+    // 关闭模态框
     showHubModal.value = false
     hubSearchKeyword.value = ''
     hubSkills.value = []

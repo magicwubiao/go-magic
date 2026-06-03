@@ -2259,6 +2259,11 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
 		{Name: "devtools/kubernetes", Description: "Kubernetes deployment and management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/kubernetes"},
 		{Name: "devtools/docker", Description: "Docker container management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/docker"},
+		{Name: "utils/file-finder", Description: "Find and search files in your project", Category: "utils", Source: HubSourceOfficial, SourceID: "utils/file-finder"},
+		{Name: "utils/text-search", Description: "Search text patterns in code and documents", Category: "utils", Source: HubSourceOfficial, SourceID: "utils/text-search"},
+		{Name: "database/sql-finder", Description: "Find and analyze SQL queries", Category: "database", Source: HubSourceOfficial, SourceID: "database/sql-finder"},
+		{Name: "code/bug-finder", Description: "Find bugs and issues in code", Category: "code", Source: HubSourceOfficial, SourceID: "code/bug-finder"},
+		{Name: "docs/content-search", Description: "Search and find content in documentation", Category: "docs", Source: HubSourceOfficial, SourceID: "docs/content-search"},
 	}
 
 	if keyword == "" {
@@ -2280,8 +2285,10 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call skills.sh API
 	mockSkills := []HubSkill{
-		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Category: "frontend", Source: HubSourceSkillsSh},
-		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Category: "document", Source: HubSourceSkillsSh},
+		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Category: "frontend", Source: HubSourceSkillsSh, SourceID: "vercel-labs/agent-skills/vercel-react-best-practices"},
+		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Category: "document", Source: HubSourceSkillsSh, SourceID: "anthropics/skills/pdf"},
+		{Name: "github-search/skills/code-search", Description: "Find code across GitHub repositories", Category: "search", Source: HubSourceSkillsSh, SourceID: "github-search/skills/code-search"},
+		{Name: "log-finder/skills/trace", Description: "Find and analyze log traces", Category: "monitoring", Source: HubSourceSkillsSh, SourceID: "log-finder/skills/trace"},
 	}
 
 	var results []HubSkill
@@ -2299,8 +2306,11 @@ func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call clawhub.ai API
 	mockSkills := []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devtools", Source: HubSourceHub},
-		{Name: "git-workflow", Description: "Git workflow automation", Category: "devtools/git", Source: HubSourceHub},
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devtools", Source: HubSourceHub, SourceID: "k8s-deploy"},
+		{Name: "git-workflow", Description: "Git workflow automation", Category: "devtools/git", Source: HubSourceHub, SourceID: "git-workflow"},
+		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Category: "code-quality", Source: HubSourceHub, SourceID: "find-unused-code"},
+		{Name: "search-replace", Description: "Find and replace text across multiple files", Category: "productivity", Source: HubSourceHub, SourceID: "search-replace"},
+		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Category: "devtools", Source: HubSourceHub, SourceID: "dependency-finder"},
 	}
 
 	var results []HubSkill

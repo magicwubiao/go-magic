@@ -346,6 +346,7 @@ export default {
     allSkills: '所有技能',
     installFromUrl: '从 URL 安装',
     browseHub: '浏览技能库',
+    search: '搜索',
     searchHub: '搜索技能库...',
     noHubSkills: '没有找到技能',
     failedToSearchHub: '搜索技能库失败',

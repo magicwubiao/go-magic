@@ -2386,6 +2386,56 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle hub/search - 搜索技能库
+	if id == "hub/search" && r.Method == "GET" {
+		keyword := r.URL.Query().Get("q")
+		if s.skillMgr != nil {
+			// 使用所有可用的 Hub 源
+			sources := []skills.HubSource{
+				skills.HubSourceOfficial,
+				skills.HubSourceSkillsSh,
+				skills.HubSourceHub,
+			}
+			results, err := s.skillMgr.SearchHub(keyword, sources)
+			if err != nil {
+				jsonResponse(w, []skills.HubSkill{})
+				return
+			}
+			if results == nil {
+				results = []skills.HubSkill{}
+			}
+			jsonResponse(w, results)
+			return
+		}
+		jsonResponse(w, []skills.HubSkill{})
+		return
+	}
+
+	// Handle hub/install - 从技能库安装
+	if id == "hub/install" && r.Method == "POST" {
+		var req struct {
+			Source   string `json:"source"`
+			SourceID string `json:"sourceID"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceID == "" {
+			http.Error(w, "invalid request: source and sourceID required", 400)
+			return
+		}
+
+		if s.skillMgr != nil {
+			source := skills.HubSource(req.Source)
+			err := s.skillMgr.InstallFromHub(source, req.SourceID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("install failed: %v", err), 500)
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"ok": true, "source": req.Source, "sourceID": req.SourceID})
+			return
+		}
+		http.Error(w, "skill manager not available", 500)
+		return
+	}
+
 	// Handle versions - 获取技能版本历史
 	if strings.HasSuffix(id, "/versions") && r.Method == "GET" {
 		skillName := strings.TrimSuffix(id, "/versions")
