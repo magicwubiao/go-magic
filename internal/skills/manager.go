@@ -3,6 +3,7 @@ package skills
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
@@ -25,8 +27,15 @@ type Manager struct {
 	searchDirs  []string
 	builtinDir  string
 	skills      map[string]*Skill
-	toolNames   []string // Cached tool names from registry
-	registryURL string   // ClawHub or GitHub registry URL
+	bundles     map[string]*SkillBundle       // 技能捆绑包
+	categories  map[string]*SkillCategory    // 技能分类（按目录层级）
+	toolNames   []string                     // Cached tool names from registry
+	registryURL string                      // ClawHub or GitHub registry URL
+	hubLock     *HubLock                    // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest *BundledManifest         // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills *DisabledSkillsConfig     // 禁用技能配置
+	skillsDir   string                      // 技能目录路径 (~/.magic/skills)
+	hubDir      string                      // Hub 目录路径 (~/.magic/skills/.hub)
 }
 
 // ManagerConfig 配置管理器
@@ -71,13 +80,32 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 		}
 	}
 
+	skillsDir := config.SearchDirs[0]
+
 	m := &Manager{
-		searchDirs:  config.SearchDirs,
-		builtinDir:  config.BuiltinDir,
-		registryURL: config.RegistryURL,
-		toolNames:   config.ToolNames,
-		skills:      make(map[string]*Skill),
+		searchDirs:      config.SearchDirs,
+		builtinDir:      config.BuiltinDir,
+		registryURL:     config.RegistryURL,
+		toolNames:       config.ToolNames,
+		skills:          make(map[string]*Skill),
+		bundles:         make(map[string]*SkillBundle),
+		categories:      make(map[string]*SkillCategory),
+		skillsDir:       skillsDir,
+		hubDir:          filepath.Join(skillsDir, ".hub"),
+		disabledSkills:  &DisabledSkillsConfig{Platform: make(map[string][]string)},
 	}
+
+	// 创建 Hub 目录
+	os.MkdirAll(m.hubDir, 0755)
+
+	// 加载 Hub lock.json
+	m.loadHubLock()
+
+	// 加载 Bundled manifest
+	m.loadBundledManifest()
+
+	// 加载禁用技能配置
+	m.loadDisabledSkills()
 
 	// Load built-in skills
 	if config.BuiltinDir != "" {
@@ -158,6 +186,86 @@ func (m *Manager) loadBuiltinSkills() error {
 	return nil
 }
 
+// LoadBundles 从配置目录加载技能捆绑包
+func (m *Manager) LoadBundles(bundlesDir string) error {
+	if bundlesDir == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(bundlesDir)
+	if err != nil {
+		return nil // 目录不存在不算错误
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
+			continue
+		}
+
+		path := filepath.Join(bundlesDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var config SkillBundleConfig
+		if err := parseBundleYAML(data, &config); err != nil {
+			continue
+		}
+
+		bundle := &SkillBundle{
+			Name:        config.Name,
+			Description: config.Description,
+			Instruction: config.Instruction,
+		}
+
+		// 加载捆绑包中的技能
+		for _, skillName := range config.Skills {
+			if skill, err := m.Get(skillName); err == nil {
+				bundle.Skills = append(bundle.Skills, skill)
+			}
+			// 缺失的技能被跳过而非报错（参考 Hermes 行为）
+		}
+
+		m.mu.Lock()
+		m.bundles[config.Name] = bundle
+		m.mu.Unlock()
+	}
+
+	return nil
+}
+
+// parseBundleYAML 解析捆绑包 YAML 配置（简易解析器）
+func parseBundleYAML(data []byte, config *SkillBundleConfig) error {
+	lines := strings.Split(string(data), "\n")
+	var currentList *[]string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "name:") {
+			config.Name = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "name:")), "\"'")
+		} else if strings.HasPrefix(trimmed, "description:") {
+			config.Description = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "description:")), "\"'")
+		} else if strings.HasPrefix(trimmed, "instruction:") {
+			// 多行 instruction
+			config.Instruction = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "instruction:")), "\"'")
+			currentList = nil
+		} else if strings.HasPrefix(trimmed, "skills:") {
+			currentList = &config.Skills
+		} else if currentList != nil && strings.HasPrefix(trimmed, "- ") {
+			item := strings.TrimSpace(trimmed[2:])
+			item = strings.Trim(item, "\"'")
+			*currentList = append(*currentList, item)
+		}
+	}
+
+	return nil
+}
+
 func (m *Manager) loadSkills() error {
 	for _, dir := range m.searchDirs {
 		entries, err := os.ReadDir(dir)
@@ -169,7 +277,10 @@ func (m *Manager) loadSkills() error {
 			path := filepath.Join(dir, entry.Name())
 
 			if entry.IsDir() {
-				// Check for SKILL.md (Cortex format)
+				// 检查是否是分类目录（包含子目录，但自身没有 SKILL.md）
+				isCategory := m.scanCategoryDir(path, dir, entry.Name())
+
+				// Check for SKILL.md (Cortex format) - 直接放在搜索目录下的技能
 				skillMdPath := filepath.Join(path, "SKILL.md")
 				if _, err := os.Stat(skillMdPath); err == nil {
 					skill := m.loadSkillFromFile(skillMdPath)
@@ -190,6 +301,12 @@ func (m *Manager) loadSkills() error {
 						skill.Source = "local"
 						m.skills[skill.Name] = skill
 					}
+					continue
+				}
+
+				// 如果是分类目录且没有直接包含 SKILL.md，跳过（子技能已在 scanCategoryDir 中加载）
+				if isCategory {
+					continue
 				}
 				continue
 			}
@@ -203,6 +320,70 @@ func (m *Manager) loadSkills() error {
 	}
 
 	return nil
+}
+
+// scanCategoryDir 扫描分类目录，加载子目录中的技能
+// 返回 true 表示该目录被识别为分类目录
+func (m *Manager) scanCategoryDir(categoryPath, parentDir, categoryName string) bool {
+	entries, err := os.ReadDir(categoryPath)
+	if err != nil {
+		return false
+	}
+
+	// 检查是否有子目录（有子目录则视为分类目录）
+	hasSubdirs := false
+	var skillNames []string
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// 跳过排除目录
+		if IsExcludedDir(entry.Name()) {
+			continue
+		}
+		hasSubdirs = true
+
+		subPath := filepath.Join(categoryPath, entry.Name())
+
+		// 尝试加载子目录中的技能
+		skillMdPath := filepath.Join(subPath, "SKILL.md")
+		if _, err := os.Stat(skillMdPath); err == nil {
+			skill := m.loadSkillFromFile(skillMdPath)
+			if skill != nil {
+				skill.Source = "local"
+				if strings.Contains(parentDir, ".magic") {
+					skill.Source = "global"
+				}
+				// 自动设置分类
+				if skill.Category == "" {
+					skill.Category = categoryName
+				}
+				m.skills[skill.Name] = skill
+				skillNames = append(skillNames, skill.Name)
+			}
+			continue
+		}
+
+		// 递归扫描更深层的分类（支持多级分类）
+		if m.scanCategoryDir(subPath, parentDir, categoryName+"/"+entry.Name()) {
+			// 子分类已在递归中处理
+		}
+	}
+
+	// 如果有子技能，注册为分类
+	if len(skillNames) > 0 {
+		absPath, _ := filepath.Abs(categoryPath)
+		m.categories[categoryName] = &SkillCategory{
+			Name:       categoryName,
+			Path:       absPath,
+			SkillCount: len(skillNames),
+			Skills:     skillNames,
+			Source:     SkillSourceGlobal,
+		}
+	}
+
+	return hasSubdirs
 }
 
 func (m *Manager) loadSkillFromManifest(manifestPath string) *Skill {
@@ -1084,6 +1265,119 @@ func (m *Manager) GetSkillsList() string {
 	return sb.String()
 }
 
+// GetBundle 获取技能捆绑包
+func (m *Manager) GetBundle(name string) (*SkillBundle, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	bundle, ok := m.bundles[name]
+	if !ok {
+		return nil, fmt.Errorf("bundle %s not found", name)
+	}
+	return bundle, nil
+}
+
+// ListBundles 列出所有捆绑包
+func (m *Manager) ListBundles() []*SkillBundle {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	bundles := make([]*SkillBundle, 0, len(m.bundles))
+	for _, b := range m.bundles {
+		bundles = append(bundles, b)
+	}
+	return bundles
+}
+
+// ScanSkillSecurity 扫描技能内容的安全性
+// 参考 Hermes Agent 的安全扫描：检测数据泄露、提示注入、破坏性命令
+func ScanSkillSecurity(content string) *SecurityScanResult {
+	result := &SecurityScanResult{
+		ScannedAt: time.Now().Format(time.RFC3339),
+		Safe:      true,
+	}
+
+	// 检测提示注入模式
+	injectionPatterns := []string{
+		"ignore all previous instructions",
+		"ignore all above instructions",
+		"you are now",
+		"pretend you are",
+		"new instructions:",
+		"system prompt:",
+		"forget everything",
+	}
+	for _, pattern := range injectionPatterns {
+		if strings.Contains(strings.ToLower(content), pattern) {
+			result.Safe = false
+			result.Threats = append(result.Threats, "potential prompt injection: "+pattern)
+			result.Severity = "high"
+		}
+	}
+
+	// 检测数据泄露模式
+	dataLeakPatterns := []string{
+		"api_key",
+		"secret_key",
+		"password",
+		"credential",
+		"private_key",
+		"token",
+	}
+	for _, pattern := range dataLeakPatterns {
+		if strings.Contains(strings.ToLower(content), pattern) {
+			// 检查是否是模板变量（如 ${API_KEY}）而非实际值
+			if !strings.Contains(content, "${") && !strings.Contains(content, "{{") {
+				result.Safe = false
+				result.Threats = append(result.Threats, "potential data leak: "+pattern)
+				if result.Severity != "high" {
+					result.Severity = "medium"
+				}
+			}
+		}
+	}
+
+	// 检测破坏性命令
+	destructivePatterns := []string{
+		"rm -rf /",
+		"mkfs",
+		"dd if=",
+		":(){ :|:& };:", // fork bomb
+		"chmod -R 777 /",
+	}
+	for _, pattern := range destructivePatterns {
+		if strings.Contains(strings.ToLower(content), pattern) {
+			result.Safe = false
+			result.Threats = append(result.Threats, "destructive command: "+pattern)
+			result.Severity = "high"
+		}
+	}
+
+	return result
+}
+
+// GetSkillsContextForPrompt 返回用于系统提示词注入的技能索引（Level 0）
+// 参考 Hermes Agent 的 ephemeral 注入：只注入名称和描述，不注入完整内容
+func (m *Manager) GetSkillsContextForPrompt() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.skills) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Available skills (use skill_view for details):\n")
+	for name, skill := range m.skills {
+		desc := skill.Description
+		if desc == "" {
+			desc = "No description"
+		}
+		sb.WriteString(fmt.Sprintf("  /%s: %s\n", name, desc))
+	}
+	return sb.String()
+}
+
 // List returns all skills as a map (for tool interface)
 func (m *Manager) ListAll() map[string]*Skill {
 	m.mu.RLock()
@@ -1160,13 +1454,24 @@ func (m *Manager) Create(name, description, content, category string, tags []str
 name: %s
 description: %s
 version: 1.0.0
+author: magic-agent
 category: %s
 tags: [%s]
 ---
 
 # %s
 
+## When to Use
 %s
+
+## Procedure
+<!-- 描述具体的操作步骤 -->
+
+## Pitfalls
+<!-- 已知的陷阱和注意事项 -->
+
+## Verification
+<!-- 如何验证操作成功 -->
 `, name, description, category, strings.Join(tags, ", "), name, content)
 
 	if err := os.WriteFile(skillMdPath, []byte(skillContent), 0644); err != nil {
@@ -1231,6 +1536,330 @@ func (m *Manager) Delete(name string) error {
 	}
 
 	delete(m.skills, name)
+	return nil
+}
+
+// =============================================================================
+// Category Management (分类管理) - 参考 Hermes Agent 目录层级分类
+// =============================================================================
+
+// GetSkillCategories 获取所有技能分类（目录层级分类）
+func (m *Manager) GetSkillCategories() []*SkillCategory {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]*SkillCategory, 0, len(m.categories))
+	for _, cat := range m.categories {
+		catCopy := *cat
+		catCopy.Skills = append([]string{}, cat.Skills...)
+		result = append(result, &catCopy)
+	}
+
+	// 按名称排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+
+	return result
+}
+
+// GetCategory 获取指定分类
+func (m *Manager) GetCategory(name string) (*SkillCategory, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cat, ok := m.categories[name]
+	if !ok {
+		return nil, fmt.Errorf("category %s not found", name)
+	}
+
+	catCopy := *cat
+	catCopy.Skills = append([]string{}, cat.Skills...)
+	return &catCopy, nil
+}
+
+// GetSkillsInCategory 获取指定分类下的所有技能
+func (m *Manager) GetSkillsInCategory(categoryName string) []*Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cat, ok := m.categories[categoryName]
+	if !ok {
+		return nil
+	}
+
+	result := make([]*Skill, 0, len(cat.Skills))
+	for _, skillName := range cat.Skills {
+		if skill, exists := m.skills[skillName]; exists {
+			skillCopy := *skill
+			result = append(result, &skillCopy)
+		}
+	}
+
+	return result
+}
+
+// GetCategoryTree 获取分类树结构
+func (m *Manager) GetCategoryTree() []*CategoryTree {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 构建分类树
+	rootMap := make(map[string]*CategoryTree)
+
+	for _, cat := range m.categories {
+		tree := &CategoryTree{
+			Category: &SkillCategory{
+				Name:       cat.Name,
+				Description: cat.Description,
+				Path:       cat.Path,
+				SkillCount: cat.SkillCount,
+				Skills:     append([]string{}, cat.Skills...),
+				Parent:     cat.Parent,
+				Source:     cat.Source,
+			},
+		}
+		rootMap[cat.Name] = tree
+	}
+
+	// 构建父子关系
+	var roots []*CategoryTree
+	for name, tree := range rootMap {
+		// 检查是否是子分类（名称包含 /）
+		if idx := strings.LastIndex(name, "/"); idx > 0 {
+			parentName := name[:idx]
+			if parent, ok := rootMap[parentName]; ok {
+				parent.Children = append(parent.Children, tree)
+				tree.Category.Parent = parentName
+				continue
+			}
+		}
+		roots = append(roots, tree)
+	}
+
+	return roots
+}
+
+// CreateCategory 创建新分类目录
+func (m *Manager) CreateCategory(name, description string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 确定分类目录路径
+	var catDir string
+	for _, dir := range m.searchDirs {
+		if strings.HasPrefix(dir, os.Getenv("HOME")) || strings.Contains(dir, ".magic") {
+			catDir = filepath.Join(dir, name)
+			break
+		}
+	}
+
+	if catDir == "" {
+		catDir = filepath.Join(m.searchDirs[0], name)
+	}
+
+	// 创建目录
+	if err := os.MkdirAll(catDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create category directory: %w", err)
+	}
+
+	// 注册分类
+	absPath, _ := filepath.Abs(catDir)
+	m.categories[name] = &SkillCategory{
+		Name:        name,
+		Description: description,
+		Path:        absPath,
+		Skills:      []string{},
+		Source:      SkillSourceGlobal,
+	}
+
+	return catDir, nil
+}
+
+// DeleteCategory 删除分类（仅删除空分类）
+func (m *Manager) DeleteCategory(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cat, ok := m.categories[name]
+	if !ok {
+		return fmt.Errorf("category %s not found", name)
+	}
+
+	// 检查分类下是否还有技能
+	if cat.SkillCount > 0 {
+		return fmt.Errorf("category %s is not empty (contains %d skills)", name, cat.SkillCount)
+	}
+
+	// 删除目录
+	if cat.Path != "" {
+		if err := os.Remove(cat.Path); err != nil {
+			return fmt.Errorf("failed to remove category directory: %w", err)
+		}
+	}
+
+	delete(m.categories, name)
+	return nil
+}
+
+// MoveSkillToCategory 将技能移动到指定分类
+func (m *Manager) MoveSkillToCategory(skillName, categoryName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[skillName]
+	if !ok {
+		return fmt.Errorf("skill %s not found", skillName)
+	}
+
+	cat, ok := m.categories[categoryName]
+	if !ok {
+		return fmt.Errorf("category %s not found", categoryName)
+	}
+
+	if skill.Dir == "" {
+		return fmt.Errorf("skill %s has no directory", skillName)
+	}
+
+	// 移动目录
+	newDir := filepath.Join(cat.Path, filepath.Base(skill.Dir))
+	if err := os.Rename(skill.Dir, newDir); err != nil {
+		return fmt.Errorf("failed to move skill directory: %w", err)
+	}
+
+	// 更新技能信息
+	skill.Dir = newDir
+	skill.Category = categoryName
+
+	// 更新分类信息
+	cat.Skills = append(cat.Skills, skillName)
+	cat.SkillCount++
+
+	return nil
+}
+
+// Patch 对技能内容进行定向修补（参考 Hermes Agent 的 patch 操作）
+// 比 update 更节省 token，只替换指定的文本片段
+func (m *Manager) Patch(name, oldString, newString string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	if skill.Dir == "" {
+		return fmt.Errorf("skill %s has no directory", name)
+	}
+
+	// 读取当前 SKILL.md 文件
+	skillMdPath := filepath.Join(skill.Dir, "SKILL.md")
+	data, err := os.ReadFile(skillMdPath)
+	if err != nil {
+		return fmt.Errorf("failed to read skill file: %w", err)
+	}
+
+	content := string(data)
+
+	// 检查 oldString 是否存在
+	if !strings.Contains(content, oldString) {
+		return fmt.Errorf("old_string not found in skill %s content", name)
+	}
+
+	// 执行替换（仅替换第一个匹配）
+	newContent := strings.Replace(content, oldString, newString, 1)
+
+	// 安全扫描新内容
+	scanResult := ScanSkillSecurity(newString)
+	if !scanResult.Safe {
+		return fmt.Errorf("patch blocked by security scan: %s", strings.Join(scanResult.Threats, "; "))
+	}
+
+	// 写回文件
+	if err := os.WriteFile(skillMdPath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("failed to write patched skill file: %w", err)
+	}
+
+	// 更新内存中的内容
+	skill.Content = newContent
+
+	return nil
+}
+
+// WriteSkillFile 向技能目录写入参考文件（参考 Hermes Agent 的 write_file 操作）
+// 支持 references/、scripts/、templates/ 子目录
+func (m *Manager) WriteSkillFile(name, filePath, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	if skill.Dir == "" {
+		return fmt.Errorf("skill %s has no directory", name)
+	}
+
+	// 安全扫描
+	scanResult := ScanSkillSecurity(content)
+	if !scanResult.Safe {
+		return fmt.Errorf("write blocked by security scan: %s", strings.Join(scanResult.Threats, "; "))
+	}
+
+	// 构建完整路径（防止路径遍历攻击）
+	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path traversal detected: %s", filePath)
+	}
+
+	fullPath := filepath.Join(skill.Dir, cleanPath)
+
+	// 确保父目录存在
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveSkillFile 从技能目录删除参考文件（参考 Hermes Agent 的 remove_file 操作）
+func (m *Manager) RemoveSkillFile(name, filePath string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %s not found", name)
+	}
+
+	if skill.Dir == "" {
+		return fmt.Errorf("skill %s has no directory", name)
+	}
+
+	// 防止路径遍历攻击
+	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path traversal detected: %s", filePath)
+	}
+
+	// 保护 SKILL.md 不被删除
+	if cleanPath == "SKILL.md" || cleanPath == filepath.Join(skill.Dir, "SKILL.md") {
+		return fmt.Errorf("cannot remove SKILL.md, use delete action instead")
+	}
+
+	fullPath := filepath.Join(skill.Dir, cleanPath)
+
+	if err := os.Remove(fullPath); err != nil {
+		return fmt.Errorf("failed to remove file: %w", err)
+	}
+
 	return nil
 }
 
@@ -1444,15 +2073,80 @@ func (m *Manager) searchHubSource(keyword string, source HubSource) ([]HubSkill,
 	}
 }
 
-// searchOfficialSkills searches Hermes official skills
+// searchOfficialSkills searches Hermes official skills from GitHub
 func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
-	// Official skills list (hardcoded for now, can be fetched from remote)
+	// 从 Hermes Agent 官方仓库获取可选技能列表
+	// https://github.com/NousResearch/hermes-agent/tree/main/optional-skills
+	apiURL := "https://api.github.com/repos/NousResearch/hermes-agent/contents/optional-skills"
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		// 如果 API 调用失败，返回硬编码的常用技能
+		return m.getFallbackOfficialSkills(keyword), nil
+	}
+
+	req.Header.Set("User-Agent", "go-magic-skill-manager")
+
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return m.getFallbackOfficialSkills(keyword), nil
+	}
+	defer resp.Body.Close()
+
+	var contents []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+		return m.getFallbackOfficialSkills(keyword), nil
+	}
+
+	var results []HubSkill
+	keyword = strings.ToLower(keyword)
+
+	for _, item := range contents {
+		if item.Type != "dir" {
+			continue
+		}
+
+		skill := HubSkill{
+			Name:        item.Name,
+			Description: fmt.Sprintf("Hermes official skill: %s", item.Name),
+			Category:    "official",
+			Source:      HubSourceOfficial,
+			SourceID:    item.Name,
+			URL:         fmt.Sprintf("https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/%s", item.Name),
+		}
+
+		// 关键词过滤
+		if keyword != "" {
+			if !strings.Contains(strings.ToLower(skill.Name), keyword) &&
+				!strings.Contains(strings.ToLower(skill.Description), keyword) {
+				continue
+			}
+		}
+
+		results = append(results, skill)
+	}
+
+	return results, nil
+}
+
+// getFallbackOfficialSkills 返回硬编码的官方技能列表（API 失败时使用）
+func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 	officialSkills := []HubSkill{
-		{Name: "security/1password", Description: "1Password integration for secure credential management", Category: "security", Source: HubSourceOfficial},
-		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Category: "security", Source: HubSourceOfficial},
-		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial},
-		{Name: "devops/kubernetes", Description: "Kubernetes deployment and management", Category: "devops", Source: HubSourceOfficial},
-		{Name: "devops/docker", Description: "Docker container management", Category: "devops", Source: HubSourceOfficial},
+		{Name: "security/1password", Description: "1Password integration for secure credential management", Category: "security", Source: HubSourceOfficial, SourceID: "security/1password"},
+		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Category: "security", Source: HubSourceOfficial, SourceID: "security/bitwarden"},
+		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
+		{Name: "devops/kubernetes", Description: "Kubernetes deployment and management", Category: "devops", Source: HubSourceOfficial, SourceID: "devops/kubernetes"},
+		{Name: "devops/docker", Description: "Docker container management", Category: "devops", Source: HubSourceOfficial, SourceID: "devops/docker"},
+	}
+
+	if keyword == "" {
+		return officialSkills
 	}
 
 	var results []HubSkill
@@ -1463,7 +2157,7 @@ func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
 			results = append(results, skill)
 		}
 	}
-	return results, nil
+	return results
 }
 
 // searchSkillsSh searches skills.sh registry
@@ -1505,22 +2199,195 @@ func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 }
 
 // InstallFromHub installs a skill from a hub source
+// 支持从 GitHub 仓库目录、skills.sh、well-known 端点等来源安装
 func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
-	var url string
+	var installURL string
 
 	switch source {
 	case HubSourceOfficial:
-		url = fmt.Sprintf("https://raw.githubusercontent.com/NousResearch/hermes-agent/main/optional-skills/%s", sourceID)
+		// Hermes 官方技能：从 GitHub 仓库目录安装
+		installURL = fmt.Sprintf("https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/%s", sourceID)
 	case HubSourceSkillsSh:
-		// Resolve skills.sh URL
-		url = fmt.Sprintf("https://%s", sourceID)
+		// skills.sh 注册表
+		installURL = fmt.Sprintf("https://%s", sourceID)
+	case HubSourceWellKnown:
+		// well-known 端点
+		installURL = sourceID
+	case HubSourceGitHub:
+		// 直接 GitHub 仓库路径
+		installURL = fmt.Sprintf("https://github.com/%s", sourceID)
 	case HubSourceHub:
-		url = fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID)
+		installURL = fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID)
 	default:
 		return fmt.Errorf("unsupported hub source: %s", source)
 	}
 
-	return m.InstallFromURL(url)
+	// 使用 importer 下载器从远程安装
+	return m.installFromRemoteURL(installURL, source)
+}
+
+// installFromRemoteURL 从远程 URL 下载并安装技能
+// 复用 InstallFromURL 的下载逻辑，避免循环导入 importer 包
+func (m *Manager) installFromRemoteURL(rawURL string, source HubSource) error {
+	fmt.Printf("Downloading skill from: %s\n", rawURL)
+
+	// 创建临时目录
+	tmpDir, err := os.MkdirTemp("", "go-magic-skill-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 下载文件
+	client := &http.Client{Timeout: 60 * time.Second}
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-manager")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	// 读取响应内容
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// 判断内容类型并处理
+	contentType := resp.Header.Get("Content-Type")
+	isZip := strings.Contains(contentType, "zip") || strings.HasSuffix(rawURL, ".zip")
+	isTarGz := strings.Contains(contentType, "gzip") || strings.HasSuffix(rawURL, ".tar.gz")
+
+	var skillDir string
+
+	if isZip || isTarGz {
+		// 解压到临时目录
+		if isZip {
+			if err := m.extractZip(body, tmpDir); err != nil {
+				return fmt.Errorf("failed to extract zip: %w", err)
+			}
+		}
+		skillDir = tmpDir
+	} else if strings.Contains(contentType, "json") || strings.HasSuffix(rawURL, ".json") {
+		// JSON 格式（manifest.json）
+		manifestPath := filepath.Join(tmpDir, "manifest.json")
+		if err := os.WriteFile(manifestPath, body, 0644); err != nil {
+			return fmt.Errorf("failed to write manifest: %w", err)
+		}
+		skillDir = tmpDir
+	} else {
+		// 可能是 Markdown 或文本（SKILL.md）
+		skillMdPath := filepath.Join(tmpDir, "SKILL.md")
+		if err := os.WriteFile(skillMdPath, body, 0644); err != nil {
+			return fmt.Errorf("failed to write SKILL.md: %w", err)
+		}
+		skillDir = tmpDir
+	}
+
+	fmt.Printf("Downloaded to: %s\n", skillDir)
+
+	// 尝试加载下载的技能
+	skill := m.loadSkillFromFile(skillDir)
+	if skill == nil {
+		// 可能是目录，尝试找到 SKILL.md
+		skillMdPath := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillMdPath); err == nil {
+			skill = m.loadSkillFromFile(skillMdPath)
+		}
+	}
+
+	if skill == nil {
+		return fmt.Errorf("no valid skill found in downloaded content")
+	}
+
+	// 安全扫描
+	scanResult := ScanSkillSecurity(skill.Content)
+	if !scanResult.Safe {
+		return fmt.Errorf("security scan failed: %s", strings.Join(scanResult.Threats, "; "))
+	}
+
+	// 设置来源
+	skill.Source = SkillSourceRegistry
+
+	// 安装到全局技能目录
+	if err := m.Add(skill); err != nil {
+		return err
+	}
+
+	// 记录到 Hub lock.json
+	lockEntry := HubLockEntry{
+		SkillName:     skill.Name,
+		Source:        source,
+		SourceID:      rawURL,
+		URL:           rawURL,
+		InstalledAt:   time.Now(),
+		SecurityAudit: "passed",
+	}
+	if err := m.AddHubLockEntry(lockEntry); err != nil {
+		fmt.Printf("Warning: failed to save hub lock entry: %v\n", err)
+	}
+
+	// 添加审计日志
+	m.appendAuditLog("install", skill.Name, source, "success")
+
+	return nil
+}
+
+// extractZip 解压 ZIP 数据到指定目录
+func (m *Manager) extractZip(data []byte, destDir string) error {
+	reader := bytes.NewReader(data)
+	zipReader, err := zip.NewReader(reader, int64(len(data)))
+	if err != nil {
+		return err
+	}
+
+	for _, file := range zipReader.File {
+		// 防止路径遍历
+		if strings.Contains(file.Name, "..") {
+			continue
+		}
+
+		path := filepath.Join(destDir, file.Name)
+
+		if file.FileInfo().IsDir() {
+			os.MkdirAll(path, file.Mode())
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // CheckForUpdates checks installed hub skills for updates
@@ -1551,6 +2418,376 @@ func (m *Manager) UpdateHubSkill(name string) error {
 
 	// Re-install from hub
 	return m.InstallFromHub(HubSource(skill.Source), name)
+}
+
+// =============================================================================
+// Hub Lock Management (Hub 安装跟踪) - 参考 Hermes Agent .hub/lock.json
+// =============================================================================
+
+// lock.json 路径
+func (m *Manager) hubLockPath() string {
+	return filepath.Join(m.hubDir, "lock.json")
+}
+
+// loadHubLock 从 lock.json 加载 Hub 安装记录
+func (m *Manager) loadHubLock() {
+	m.hubLock = &HubLock{Entries: []HubLockEntry{}}
+
+	lockPath := m.hubLockPath()
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return // 文件不存在或读取失败，返回空 lock
+	}
+
+	if err := json.Unmarshal(data, m.hubLock); err != nil {
+		fmt.Printf("Warning: failed to parse hub lock: %v\n", err)
+	}
+}
+
+// saveHubLock 保存 Hub 安装记录到 lock.json
+func (m *Manager) saveHubLock() error {
+	if m.hubLock == nil {
+		m.hubLock = &HubLock{Entries: []HubLockEntry{}}
+	}
+	m.hubLock.UpdatedAt = time.Now()
+
+	data, err := json.MarshalIndent(m.hubLock, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal hub lock: %w", err)
+	}
+
+	return os.WriteFile(m.hubLockPath(), data, 0644)
+}
+
+// AddHubLockEntry 添加 Hub 安装记录
+func (m *Manager) AddHubLockEntry(entry HubLockEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查是否已存在，存在则更新
+	for i, e := range m.hubLock.Entries {
+		if e.SkillName == entry.SkillName {
+			m.hubLock.Entries[i] = entry
+			return m.saveHubLock()
+		}
+	}
+
+	m.hubLock.Entries = append(m.hubLock.Entries, entry)
+	return m.saveHubLock()
+}
+
+// RemoveHubLockEntry 移除 Hub 安装记录
+func (m *Manager) RemoveHubLockEntry(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i, e := range m.hubLock.Entries {
+		if e.SkillName == skillName {
+			m.hubLock.Entries = append(m.hubLock.Entries[:i], m.hubLock.Entries[i+1:]...)
+			return m.saveHubLock()
+		}
+	}
+
+	return nil
+}
+
+// GetHubLockEntries 返回所有 Hub 安装记录
+func (m *Manager) GetHubLockEntries() []HubLockEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.hubLock == nil {
+		return []HubLockEntry{}
+	}
+	return m.hubLock.Entries
+}
+
+// GetHubLockEntry 获取指定技能的 Hub 安装记录
+func (m *Manager) GetHubLockEntry(skillName string) *HubLockEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.hubLock == nil {
+		return nil
+	}
+
+	for _, e := range m.hubLock.Entries {
+		if e.SkillName == skillName {
+			return &e
+		}
+	}
+	return nil
+}
+
+// IsHubInstalled 检查技能是否从 Hub 安装
+func (m *Manager) IsHubInstalled(skillName string) bool {
+	return m.GetHubLockEntry(skillName) != nil
+}
+
+// =============================================================================
+// Bundled Manifest Management (内置技能跟踪) - 参考 Hermes Agent .bundled_manifest
+// =============================================================================
+
+// manifest 路径
+func (m *Manager) bundledManifestPath() string {
+	return filepath.Join(m.skillsDir, ".bundled_manifest")
+}
+
+// loadBundledManifest 从 .bundled_manifest 加载内置技能记录
+func (m *Manager) loadBundledManifest() {
+	m.bundledManifest = &BundledManifest{Entries: []BundledManifestEntry{}}
+
+	manifestPath := m.bundledManifestPath()
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return // 文件不存在或读取失败，返回空 manifest
+	}
+
+	if err := json.Unmarshal(data, m.bundledManifest); err != nil {
+		fmt.Printf("Warning: failed to parse bundled manifest: %v\n", err)
+	}
+}
+
+// saveBundledManifest 保存内置技能记录到 .bundled_manifest
+func (m *Manager) saveBundledManifest() error {
+	if m.bundledManifest == nil {
+		m.bundledManifest = &BundledManifest{Entries: []BundledManifestEntry{}}
+	}
+	m.bundledManifest.UpdatedAt = time.Now()
+
+	data, err := json.MarshalIndent(m.bundledManifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal bundled manifest: %w", err)
+	}
+
+	return os.WriteFile(m.bundledManifestPath(), data, 0644)
+}
+
+// AddBundledManifestEntry 添加内置技能记录
+func (m *Manager) AddBundledManifestEntry(entry BundledManifestEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i, e := range m.bundledManifest.Entries {
+		if e.SkillName == entry.SkillName {
+			m.bundledManifest.Entries[i] = entry
+			return m.saveBundledManifest()
+		}
+	}
+
+	m.bundledManifest.Entries = append(m.bundledManifest.Entries, entry)
+	return m.saveBundledManifest()
+}
+
+// GetBundledManifestEntries 返回所有内置技能记录
+func (m *Manager) GetBundledManifestEntries() []BundledManifestEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.bundledManifest == nil {
+		return []BundledManifestEntry{}
+	}
+	return m.bundledManifest.Entries
+}
+
+// IsBundled 检查技能是否为内置技能
+func (m *Manager) IsBundled(skillName string) bool {
+	for _, e := range m.GetBundledManifestEntries() {
+		if e.SkillName == skillName {
+			return true
+		}
+	}
+	return false
+}
+
+// =============================================================================
+// Disabled Skills (禁用技能) - 参考 Hermes Agent config.yaml skills.disabled
+// =============================================================================
+
+// disabled.json 路径
+func (m *Manager) disabledSkillsPath() string {
+	return filepath.Join(m.skillsDir, ".disabled.json")
+}
+
+// loadDisabledSkills 从 .disabled.json 加载禁用技能配置
+func (m *Manager) loadDisabledSkills() {
+	m.disabledSkills = &DisabledSkillsConfig{Global: []string{}, Platform: make(map[string][]string)}
+
+	disabledPath := m.disabledSkillsPath()
+	data, err := os.ReadFile(disabledPath)
+	if err != nil {
+		return // 文件不存在或读取失败，返回空配置
+	}
+
+	if err := json.Unmarshal(data, m.disabledSkills); err != nil {
+		fmt.Printf("Warning: failed to parse disabled skills: %v\n", err)
+	}
+}
+
+// saveDisabledSkills 保存禁用技能配置到 .disabled.json
+func (m *Manager) saveDisabledSkills() error {
+	data, err := json.MarshalIndent(m.disabledSkills, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal disabled skills: %w", err)
+	}
+
+	return os.WriteFile(m.disabledSkillsPath(), data, 0644)
+}
+
+// DisableSkill 禁用指定技能
+func (m *Manager) DisableSkill(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, name := range m.disabledSkills.Global {
+		if name == skillName {
+			return nil // 已禁用
+		}
+	}
+
+	m.disabledSkills.Global = append(m.disabledSkills.Global, skillName)
+	return m.saveDisabledSkills()
+}
+
+// EnableSkill 启用指定技能
+func (m *Manager) EnableSkill(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i, name := range m.disabledSkills.Global {
+		if name == skillName {
+			m.disabledSkills.Global = append(m.disabledSkills.Global[:i], m.disabledSkills.Global[i+1:]...)
+			return m.saveDisabledSkills()
+		}
+	}
+
+	return nil
+}
+
+// DisableSkillForPlatform 按平台禁用技能
+func (m *Manager) DisableSkillForPlatform(skillName, platform string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.disabledSkills.Platform == nil {
+		m.disabledSkills.Platform = make(map[string][]string)
+	}
+
+	platformDisabled, ok := m.disabledSkills.Platform[platform]
+	if !ok {
+		platformDisabled = []string{}
+	}
+
+	for _, name := range platformDisabled {
+		if name == skillName {
+			return nil // 已禁用
+		}
+	}
+
+	m.disabledSkills.Platform[platform] = append(platformDisabled, skillName)
+	return m.saveDisabledSkills()
+}
+
+// EnableSkillForPlatform 按平台启用技能
+func (m *Manager) EnableSkillForPlatform(skillName, platform string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	platformDisabled, ok := m.disabledSkills.Platform[platform]
+	if !ok {
+		return nil
+	}
+
+	for i, name := range platformDisabled {
+		if name == skillName {
+			m.disabledSkills.Platform[platform] = append(platformDisabled[:i], platformDisabled[i+1:]...)
+			return m.saveDisabledSkills()
+		}
+	}
+
+	return nil
+}
+
+// IsSkillDisabled 检查技能是否被禁用
+func (m *Manager) IsSkillDisabled(skillName string, platform string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 检查全局禁用
+	for _, name := range m.disabledSkills.Global {
+		if name == skillName {
+			return true
+		}
+	}
+
+	// 检查平台禁用
+	if platform != "" {
+		if platformDisabled, ok := m.disabledSkills.Platform[platform]; ok {
+			for _, name := range platformDisabled {
+				if name == skillName {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// GetDisabledSkills 返回禁用技能列表
+func (m *Manager) GetDisabledSkills() *DisabledSkillsConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return &DisabledSkillsConfig{
+		Global:   append([]string{}, m.disabledSkills.Global...),
+		Platform: m.disabledSkills.Platform,
+	}
+}
+
+// UninstallHubSkill 从 Hub 卸载技能（参考 Hermes Agent hermes skills uninstall）
+func (m *Manager) UninstallHubSkill(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查是否从 Hub 安装
+	entry := m.GetHubLockEntry(skillName)
+	if entry == nil {
+		return fmt.Errorf("skill %s is not a hub skill", skillName)
+	}
+
+	// 删除技能文件
+	skill, ok := m.skills[skillName]
+	if ok && skill.Dir != "" {
+		if err := os.RemoveAll(skill.Dir); err != nil {
+			return fmt.Errorf("failed to remove skill directory: %w", err)
+		}
+		delete(m.skills, skillName)
+	}
+
+	// 从 lock.json 移除记录
+	if err := m.RemoveHubLockEntry(skillName); err != nil {
+		return fmt.Errorf("failed to remove lock entry: %w", err)
+	}
+
+	// 添加审计日志
+	m.appendAuditLog("uninstall", skillName, entry.Source, "success")
+
+	return nil
+}
+
+// appendAuditLog 添加审计日志
+func (m *Manager) appendAuditLog(action, skillName string, source HubSource, status string) {
+	auditLog := filepath.Join(m.hubDir, "audit.log")
+	timestamp := time.Now().Format(time.RFC3339)
+	logEntry := fmt.Sprintf("[%s] %s: skill=%s source=%s status=%s\n", timestamp, action, skillName, source, status)
+
+	f, err := os.OpenFile(auditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(logEntry)
 }
 
 // =============================================================================
@@ -1602,4 +2839,49 @@ func (m *Manager) GetExternalDirs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.searchDirs
+}
+
+// GetVersions 获取技能版本历史（委托给 VersionManager）
+func (m *Manager) GetVersions(skillName string) []SkillVersion {
+	if len(m.searchDirs) == 0 {
+		return []SkillVersion{}
+	}
+	vm := NewVersionManager(m.searchDirs[0])
+	return vm.GetVersionHistory(skillName)
+}
+
+// GetEvolutionRecords 获取技能演化历史（委托给 SkillEvolutionManager）
+func (m *Manager) GetEvolutionRecords(skillName string) []SkillEvolutionRecord {
+	if len(m.searchDirs) == 0 {
+		return []SkillEvolutionRecord{}
+	}
+	// 演化管理器需要 EffectivenessManager，这里简化为从文件加载
+	em := NewSkillEvolutionManager(m, nil, nil, m.searchDirs[0])
+	_ = em.LoadRecords()
+	return em.GetEvolutionHistory(skillName)
+}
+
+// GetAllStatistics 获取所有技能统计数据（委托给 EffectivenessManager）
+func (m *Manager) GetAllStatistics() []*SkillStatistics {
+	if len(m.searchDirs) == 0 {
+		return []*SkillStatistics{}
+	}
+	effMgr, err := NewEffectivenessManager(m.searchDirs[0])
+	if err != nil {
+		return []*SkillStatistics{}
+	}
+	return effMgr.GetAllStatistics()
+}
+
+// GetRecommendations 获取技能推荐（委托给 Recommender）
+func (m *Manager) GetRecommendations(ctx *RecommendationContext) []*SkillRecommendation {
+	if len(m.searchDirs) == 0 {
+		return []*SkillRecommendation{}
+	}
+	effMgr, err := NewEffectivenessManager(m.searchDirs[0])
+	if err != nil {
+		return []*SkillRecommendation{}
+	}
+	rec := NewRecommender(m, effMgr, nil)
+	return rec.Recommend(context.Background(), ctx, 10)
 }

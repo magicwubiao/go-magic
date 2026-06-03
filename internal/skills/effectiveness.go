@@ -41,11 +41,25 @@ type SkillStatistics struct {
 
 // EffectivenessManager 效果管理器
 type EffectivenessManager struct {
-	records   map[string]*SkillEffectivenessRecord // ID -> Record
-	stats     map[string]*SkillStatistics          // SkillName -> Stats
-	recordsDB string                               // 存储路径
-	statsDB   string
-	mu        sync.RWMutex
+	records      map[string]*SkillEffectivenessRecord // ID -> Record
+	stats        map[string]*SkillStatistics          // SkillName -> Stats
+	runningStats map[string]*runningStat              // 增量统计缓存
+	recordsDB    string                               // 存储路径
+	statsDB      string
+	mu           sync.RWMutex
+	dirty        bool         // 脏标记，标识数据是否有变更
+	saveTimer    *time.Ticker // 定时保存器
+	stopChan     chan struct{} // 停止信号
+}
+
+// runningStat 增量统计结构
+type runningStat struct {
+	totalInvocations int
+	successCount     int
+	qualitySum       float64
+	durationSum      int64
+	positiveCount    int
+	lastUsed         time.Time
 }
 
 // NewEffectivenessManager 创建效果管理器
@@ -64,10 +78,11 @@ func NewEffectivenessManager(baseDir string) (*EffectivenessManager, error) {
 	}
 
 	em := &EffectivenessManager{
-		records:   make(map[string]*SkillEffectivenessRecord),
-		stats:     make(map[string]*SkillStatistics),
-		recordsDB: filepath.Join(skillsDir, "effectiveness.json"),
-		statsDB:   filepath.Join(skillsDir, "stats.json"),
+		records:      make(map[string]*SkillEffectivenessRecord),
+		stats:        make(map[string]*SkillStatistics),
+		runningStats: make(map[string]*runningStat),
+		recordsDB:    filepath.Join(skillsDir, "effectiveness.json"),
+		statsDB:      filepath.Join(skillsDir, "stats.json"),
 	}
 
 	// 加载已有数据
@@ -78,6 +93,9 @@ func NewEffectivenessManager(baseDir string) (*EffectivenessManager, error) {
 	if err := em.loadStats(); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to load stats: %w", err)
 	}
+
+	// 从已有记录重建增量统计
+	em.rebuildRunningStats()
 
 	return em, nil
 }
@@ -119,13 +137,29 @@ func (em *EffectivenessManager) RecordInvocation(
 
 	em.mu.Lock()
 	em.records[record.ID] = record
+
+	// 增量更新统计
+	rs, exists := em.runningStats[skillName]
+	if !exists {
+		rs = &runningStat{}
+		em.runningStats[skillName] = rs
+	}
+	rs.totalInvocations++
+	if success {
+		rs.successCount++
+	}
+	rs.qualitySum += outputQuality
+	rs.durationSum += duration
+	if record.Timestamp.After(rs.lastUsed) {
+		rs.lastUsed = record.Timestamp
+	}
+
+	// 同步到 stats
+	em.syncStats(skillName, rs)
+	em.dirty = true
 	em.mu.Unlock()
 
-	// 更新统计
-	em.updateStatistics(skillName)
-
-	// 保存记录
-	return em.saveRecords()
+	return nil
 }
 
 // RecordFeedback 记录用户反馈
@@ -150,12 +184,18 @@ func (em *EffectivenessManager) RecordFeedback(recordID, feedback string) error 
 	}
 	record.UserFeedback = feedback
 	skillName := record.SkillName
+
+	// 增量更新正面反馈计数
+	if feedback == "positive" {
+		if rs, ok := em.runningStats[skillName]; ok {
+			rs.positiveCount++
+			em.syncStats(skillName, rs)
+		}
+	}
+	em.dirty = true
 	em.mu.Unlock()
 
-	// 更新统计
-	em.updateStatistics(skillName)
-
-	return em.saveRecords()
+	return nil
 }
 
 // GetSkillStatistics 获取单个技能统计
@@ -317,61 +357,27 @@ func (em *EffectivenessManager) ClearOldRecords(olderThan time.Duration) error {
 		}
 	}
 
-	// 重新计算所有统计
-	em.recalculateAllStats()
+	// 重建增量统计
+	em.runningStats = make(map[string]*runningStat)
+	em.rebuildRunningStats()
 
-	// 保存数据
-	if err := em.saveRecords(); err != nil {
-		return err
+	// 重建所有 stats
+	em.stats = make(map[string]*SkillStatistics)
+	for name, rs := range em.runningStats {
+		em.syncStats(name, rs)
 	}
-	return em.saveStats()
+
+	em.dirty = true
+	return nil
 }
 
-// updateStatistics 更新单个技能的统计
+// updateStatistics 更新单个技能的统计（使用增量统计）
 func (em *EffectivenessManager) updateStatistics(skillName string) {
-	var totalInvocations, successCount int
-	var qualitySum, durationSum int64
-	var positiveCount int
-	var lastUsed time.Time
-
-	for _, record := range em.records {
-		if record.SkillName != skillName {
-			continue
-		}
-
-		totalInvocations++
-		if record.Success {
-			successCount++
-		}
-		qualitySum += int64(record.OutputQuality)
-		durationSum += record.Duration
-
-		if record.UserFeedback == "positive" {
-			positiveCount++
-		}
-
-		if record.Timestamp.After(lastUsed) {
-			lastUsed = record.Timestamp
-		}
-	}
-
-	if totalInvocations == 0 {
+	rs, exists := em.runningStats[skillName]
+	if !exists {
 		return
 	}
-
-	stats := &SkillStatistics{
-		SkillName:        skillName,
-		TotalInvocations: totalInvocations,
-		SuccessRate:      float64(successCount) / float64(totalInvocations) * 100,
-		AvgQuality:       float64(qualitySum) / float64(totalInvocations),
-		AvgDuration:      durationSum / int64(totalInvocations),
-		PositiveRate:     float64(positiveCount) / float64(totalInvocations) * 100,
-		LastUsed:         lastUsed,
-		Trend:            em.calculateTrend(skillName),
-	}
-
-	em.stats[skillName] = stats
-	em.saveStats()
+	em.syncStats(skillName, rs)
 }
 
 // recalculateAllStats 重新计算所有统计
@@ -391,7 +397,18 @@ func (em *EffectivenessManager) recalculateAllStats() {
 func (em *EffectivenessManager) saveRecords() error {
 	em.mu.RLock()
 	defer em.mu.RUnlock()
+	return em.saveRecordsLocked()
+}
 
+// saveStats 保存统计到文件
+func (em *EffectivenessManager) saveStats() error {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+	return em.saveStatsLocked()
+}
+
+// saveRecordsLocked 保存记录（调用者需持有写锁）
+func (em *EffectivenessManager) saveRecordsLocked() error {
 	records := make([]*SkillEffectivenessRecord, 0, len(em.records))
 	for _, record := range em.records {
 		records = append(records, record)
@@ -402,18 +419,11 @@ func (em *EffectivenessManager) saveRecords() error {
 		return fmt.Errorf("failed to marshal records: %w", err)
 	}
 
-	if err := os.WriteFile(em.recordsDB, data, 0644); err != nil {
-		return fmt.Errorf("failed to write records file: %w", err)
-	}
-
-	return nil
+	return os.WriteFile(em.recordsDB, data, 0644)
 }
 
-// saveStats 保存统计到文件
-func (em *EffectivenessManager) saveStats() error {
-	em.mu.RLock()
-	defer em.mu.RUnlock()
-
+// saveStatsLocked 保存统计（调用者需持有写锁）
+func (em *EffectivenessManager) saveStatsLocked() error {
 	stats := make([]*SkillStatistics, 0, len(em.stats))
 	for _, s := range em.stats {
 		stats = append(stats, s)
@@ -424,11 +434,90 @@ func (em *EffectivenessManager) saveStats() error {
 		return fmt.Errorf("failed to marshal stats: %w", err)
 	}
 
-	if err := os.WriteFile(em.statsDB, data, 0644); err != nil {
-		return fmt.Errorf("failed to write stats file: %w", err)
+	return os.WriteFile(em.statsDB, data, 0644)
+}
+
+// syncStats 从增量统计同步到 SkillStatistics
+func (em *EffectivenessManager) syncStats(skillName string, rs *runningStat) {
+	if rs.totalInvocations == 0 {
+		return
 	}
 
-	return nil
+	em.stats[skillName] = &SkillStatistics{
+		SkillName:        skillName,
+		TotalInvocations: rs.totalInvocations,
+		SuccessRate:      float64(rs.successCount) / float64(rs.totalInvocations) * 100,
+		AvgQuality:       rs.qualitySum / float64(rs.totalInvocations),
+		AvgDuration:      rs.durationSum / int64(rs.totalInvocations),
+		PositiveRate:     float64(rs.positiveCount) / float64(rs.totalInvocations) * 100,
+		LastUsed:         rs.lastUsed,
+		Trend:            em.calculateTrend(skillName),
+	}
+}
+
+// rebuildRunningStats 从已有记录重建增量统计
+func (em *EffectivenessManager) rebuildRunningStats() {
+	for _, record := range em.records {
+		rs, exists := em.runningStats[record.SkillName]
+		if !exists {
+			rs = &runningStat{}
+			em.runningStats[record.SkillName] = rs
+		}
+		rs.totalInvocations++
+		if record.Success {
+			rs.successCount++
+		}
+		rs.qualitySum += record.OutputQuality
+		rs.durationSum += record.Duration
+		if record.UserFeedback == "positive" {
+			rs.positiveCount++
+		}
+		if record.Timestamp.After(rs.lastUsed) {
+			rs.lastUsed = record.Timestamp
+		}
+	}
+}
+
+// StartAutoSave 启动自动保存（每30秒检查脏标记）
+func (em *EffectivenessManager) StartAutoSave() {
+	em.saveTimer = time.NewTicker(30 * time.Second)
+	em.stopChan = make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-em.saveTimer.C:
+				em.mu.RLock()
+				if em.dirty {
+					em.mu.RUnlock()
+					em.Flush()
+				} else {
+					em.mu.RUnlock()
+				}
+			case <-em.stopChan:
+				em.saveTimer.Stop()
+				return
+			}
+		}
+	}()
+}
+
+// StopAutoSave 停止自动保存
+func (em *EffectivenessManager) StopAutoSave() {
+	if em.stopChan != nil {
+		close(em.stopChan)
+	}
+	em.Flush()
+}
+
+// Flush 强制保存所有数据到磁盘
+func (em *EffectivenessManager) Flush() {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+
+	_ = em.saveRecordsLocked()
+	_ = em.saveStatsLocked()
+	em.dirty = false
 }
 
 // loadRecords 从文件加载记录

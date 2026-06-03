@@ -1974,14 +1974,52 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSkillsStatistics(w http.ResponseWriter, r *http.Request) {
-	// Return empty statistics for now (would need effectiveness manager integration)
 	stats := []map[string]interface{}{}
+
+	if s.skillMgr != nil {
+		allStats := s.skillMgr.GetAllStatistics()
+		for _, stat := range allStats {
+			stats = append(stats, map[string]interface{}{
+				"skill_name":         stat.SkillName,
+				"total_invocations":  stat.TotalInvocations,
+				"success_rate":      stat.SuccessRate,
+				"avg_quality":        stat.AvgQuality,
+				"avg_duration":       stat.AvgDuration,
+				"positive_rate":      stat.PositiveRate,
+				"last_used":          stat.LastUsed,
+				"trend":              stat.Trend,
+			})
+		}
+	}
+
 	jsonResponse(w, stats)
 }
 
 func (s *Server) handleSkillsRecommendations(w http.ResponseWriter, r *http.Request) {
-	// Return empty recommendations for now
 	recs := []map[string]interface{}{}
+
+	// 从 URL 参数获取上下文
+	query := r.URL.Query().Get("q")
+
+	if s.skillMgr != nil {
+		context := &skills.RecommendationContext{
+			UserInput: query,
+		}
+		recommendations := s.skillMgr.GetRecommendations(context)
+		for _, rec := range recommendations {
+			skillName := ""
+			if rec.Skill != nil {
+				skillName = rec.Skill.Name
+			}
+			recs = append(recs, map[string]interface{}{
+				"skill":         skillName,
+				"score":         rec.Score,
+				"reason":        rec.Reason,
+				"match_factors": rec.MatchFactors,
+			})
+		}
+	}
+
 	jsonResponse(w, recs)
 }
 
@@ -1989,84 +2027,151 @@ func (s *Server) getRealSkills() []Skill {
 	if s.skillMgr == nil {
 		return make([]Skill, 0)
 	}
-	// Get skills list from manager and parse
-	skillsList := s.skillMgr.GetSkillsList()
-	if skillsList == "" {
-		return []Skill{}
+
+	// 优先使用 Manager 的内存数据（已包含所有来源和分类）
+	allSkills := s.skillMgr.List()
+	if allSkills == nil || len(allSkills) == 0 {
+		// 回退到文件系统扫描
+		return s.scanSkillsDir()
 	}
-	// Parse the skills list (it's typically a text format)
-	// For now, return a structured list based on the skills directory
-	return s.scanSkillsDir()
+
+	s.disabledSkillsMu.Lock()
+	defer s.disabledSkillsMu.Unlock()
+
+	result := make([]Skill, 0, len(allSkills))
+	for _, skill := range allSkills {
+		isDisabled := s.disabledSkills[skill.Name]
+		tags := skill.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+
+		result = append(result, Skill{
+			ID:          skill.Name,
+			Name:        skill.Name,
+			Description: skill.Description,
+			Category:    skill.Category,
+			Tags:        tags,
+			Enabled:     !isDisabled,
+		})
+	}
+
+	// 按名称排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+
+	return result
 }
 
 func (s *Server) scanSkillsDir() []Skill {
 	skillsDir := filepath.Join(s.magicHome, "skills")
 	result := make([]Skill, 0)
 
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		return result
-	}
-
 	s.disabledSkillsMu.Lock()
 	defer s.disabledSkillsMu.Unlock()
+
+	// 递归扫描技能目录（支持目录层级分类）
+	s.scanSkillsDirRecursive(skillsDir, "", &result)
+
+	// 按名称排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+
+	return result
+}
+
+// scanSkillsDirRecursive 递归扫描技能目录
+func (s *Server) scanSkillsDirRecursive(dir, parentCategory string, result *[]Skill) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
+
+		// 跳过排除目录
+		if skills.IsExcludedDir(entry.Name()) {
+			continue
+		}
+
 		name := entry.Name()
-		isDisabled := s.disabledSkills[name]
+		subPath := filepath.Join(dir, name)
 
-		// Try to read skill definition files in priority order:
-		// 1. skill.yaml / skill.yml
-		// 2. SKILL.md
-		// 3. skill.json / manifest.json
-		skill := Skill{ID: name, Name: name, Enabled: !isDisabled}
-		found := false
+		// 检查是否包含 SKILL.md（是技能目录）
+		_, hasSkillMdErr := os.Stat(filepath.Join(subPath, "SKILL.md"))
+		hasSkillMd := hasSkillMdErr == nil
 
-		// Try skill.yaml / skill.yml
-		for _, yamlName := range []string{"skill.yaml", "skill.yml"} {
-			skillFile := filepath.Join(skillsDir, name, yamlName)
-			data, err := os.ReadFile(skillFile)
-			if err == nil {
-				parseSkillYAML(data, &skill)
-				found = true
-				break
+		// 检查其他定义文件
+		_, hasYAMLErr := os.Stat(filepath.Join(subPath, "skill.yaml"))
+		_, hasJSONErr := os.Stat(filepath.Join(subPath, "manifest.json"))
+		hasYAML := hasYAMLErr == nil
+		hasJSON := hasJSONErr == nil
+
+		if hasSkillMd || hasYAML || hasJSON {
+			// 这是一个技能目录
+			isDisabled := s.disabledSkills[name]
+			category := parentCategory
+			if category == "" {
+				category = name // 使用父目录名作为分类（仅当无父分类时）
 			}
-		}
 
-		// Try SKILL.md
-		if !found {
-			mdFile := filepath.Join(skillsDir, name, "SKILL.md")
-			data, err := os.ReadFile(mdFile)
-			if err == nil {
-				parseSkillMarkdown(data, &skill)
-				found = true
-			}
-		}
+			skill := Skill{ID: name, Name: name, Category: category, Enabled: !isDisabled}
+			found := false
 
-		// Try skill.json / manifest.json
-		if !found {
-			for _, jsonName := range []string{"skill.json", "manifest.json"} {
-				jsonFile := filepath.Join(skillsDir, name, jsonName)
-				data, err := os.ReadFile(jsonFile)
+			// Try SKILL.md first
+			if hasSkillMd {
+				data, err := os.ReadFile(filepath.Join(subPath, "SKILL.md"))
 				if err == nil {
-					parseSkillJSON(data, &skill)
+					parseSkillMarkdown(data, &skill)
 					found = true
-					break
 				}
 			}
-		}
 
-		// If no definition file found, still list the directory as a skill
-		if !found {
-			skill.Description = "(uploaded skill - no definition file found)"
-		}
+			// Try skill.yaml / skill.yml
+			if !found {
+				for _, yamlName := range []string{"skill.yaml", "skill.yml"} {
+					skillFile := filepath.Join(subPath, yamlName)
+					data, err := os.ReadFile(skillFile)
+					if err == nil {
+						parseSkillYAML(data, &skill)
+						found = true
+						break
+					}
+				}
+			}
 
-		result = append(result, skill)
+			// Try skill.json / manifest.json
+			if !found {
+				for _, jsonName := range []string{"skill.json", "manifest.json"} {
+					jsonFile := filepath.Join(subPath, jsonName)
+					data, err := os.ReadFile(jsonFile)
+					if err == nil {
+						parseSkillJSON(data, &skill)
+						found = true
+						break
+					}
+				}
+			}
+
+			if !found {
+				skill.Description = "(uploaded skill - no definition file found)"
+			}
+
+			*result = append(*result, skill)
+		} else {
+			// 这是一个分类目录，递归扫描
+			childCategory := name
+			if parentCategory != "" {
+				childCategory = parentCategory + "/" + name
+			}
+			s.scanSkillsDirRecursive(subPath, childCategory, result)
+		}
 	}
-	return result
 }
 
 func parseSkillYAML(data []byte, skill *Skill) {
@@ -2160,6 +2265,34 @@ func parseSkillJSON(data []byte, skill *Skill) {
 }
 
 func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
+	if s.skillMgr != nil {
+		// 优先使用 Manager 的分类数据（包含目录层级分类）
+		categories := s.skillMgr.GetCategories()
+		if len(categories) > 0 {
+			jsonResponse(w, categories)
+			return
+		}
+
+		// 也获取目录层级分类
+		dirCategories := s.skillMgr.GetSkillCategories()
+		catSet := make(map[string]bool)
+		for _, cat := range categories {
+			catSet[cat] = true
+		}
+		for _, cat := range dirCategories {
+			catSet[cat.Name] = true
+		}
+
+		result := make([]string, 0, len(catSet))
+		for cat := range catSet {
+			result = append(result, cat)
+		}
+		sort.Strings(result)
+		jsonResponse(w, result)
+		return
+	}
+
+	// 回退到从 skills 列表提取
 	skills := s.getRealSkills()
 	catSet := make(map[string]bool)
 
@@ -2174,9 +2307,7 @@ func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
 		categories = append(categories, cat)
 	}
 
-	// Sort categories alphabetically
 	sort.Strings(categories)
-
 	jsonResponse(w, categories)
 }
 
@@ -2224,6 +2355,30 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 	// Handle browse
 	if id == "browse" && r.Method == "GET" {
 		jsonResponse(w, s.getRealSkills())
+		return
+	}
+
+	// Handle versions - 获取技能版本历史
+	if strings.HasSuffix(id, "/versions") && r.Method == "GET" {
+		skillName := strings.TrimSuffix(id, "/versions")
+		if s.skillMgr != nil {
+			versions := s.skillMgr.GetVersions(skillName)
+			jsonResponse(w, versions)
+			return
+		}
+		jsonResponse(w, []map[string]interface{}{})
+		return
+	}
+
+	// Handle evolution - 获取技能演化历史
+	if strings.HasSuffix(id, "/evolution") && r.Method == "GET" {
+		skillName := strings.TrimSuffix(id, "/evolution")
+		if s.skillMgr != nil {
+			records := s.skillMgr.GetEvolutionRecords(skillName)
+			jsonResponse(w, records)
+			return
+		}
+		jsonResponse(w, []map[string]interface{}{})
 		return
 	}
 

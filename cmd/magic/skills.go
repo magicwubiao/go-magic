@@ -95,13 +95,161 @@ var skillsMatchCmd = &cobra.Command{
 	Run:   runSkillsMatch,
 }
 
+var skillsCategoryCmd = &cobra.Command{
+	Use:   "category",
+	Short: "Manage skill categories",
+	Long: `Manage skill categories (directory-based organization).
+
+Categories are organized as subdirectories under the skills directory:
+  ~/.magic/skills/
+    ├── devops/
+    │   ├── kubernetes/
+    │   │   └── SKILL.md
+    │   └── docker/
+    │       └── SKILL.md
+    ├── coding/
+    │   ├── code-review/
+    │   │   └── SKILL.md
+    │   └── debug/
+    │       └── SKILL.md
+
+Examples:
+  magic skills category list
+  magic skills category create <name>
+  magic skills category show <name>
+  magic skills category delete <name>
+  magic skills category move <skill> <category>`,
+}
+
+var skillsCategoryListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all categories",
+	Run:   runSkillsCategoryList,
+}
+
+var skillsCategoryShowCmd = &cobra.Command{
+	Use:   "show <name>",
+	Short: "Show skills in a category",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsCategoryShow,
+}
+
+var skillsCategoryCreateCmd = &cobra.Command{
+	Use:   "create <name>",
+	Short: "Create a new category",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsCategoryCreate,
+}
+
+var skillsCategoryDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Delete an empty category",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsCategoryDelete,
+}
+
+var skillsCategoryMoveCmd = &cobra.Command{
+	Use:   "move <skill> <category>",
+	Short: "Move a skill to a category",
+	Args:  cobra.ExactArgs(2),
+	Run:   runSkillsCategoryMove,
+}
+
+// Hub management commands
+var skillsUninstallCmd = &cobra.Command{
+	Use:   "uninstall <name>",
+	Short: "Uninstall a hub skill",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsUninstall,
+}
+
+var skillsDisableCmd = &cobra.Command{
+	Use:   "disable <name>",
+	Short: "Disable a skill (won't be shown to agent)",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsDisable,
+}
+
+var skillsEnableCmd = &cobra.Command{
+	Use:   "enable <name>",
+	Short: "Enable a disabled skill",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsEnable,
+}
+
+var skillsHubCmd = &cobra.Command{
+	Use:   "hub",
+	Short: "Manage hub skills",
+	Long: `Manage hub-installed skills.
+
+Examples:
+  magic skills hub list
+  magic skills hub audit`,
+}
+
+var skillsHubListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List hub-installed skills",
+	Run:   runSkillsHubList,
+}
+
+var skillsHubAuditCmd = &cobra.Command{
+	Use:   "audit",
+	Short: "Show hub audit log",
+	Run:   runSkillsHubAudit,
+}
+
+var skillsConfigCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Manage skill configuration",
+	Long: `Manage skill configuration (disabled skills, etc.)
+
+Examples:
+  magic skills config list
+  magic skills config disabled`,
+}
+
+var skillsConfigListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all configuration",
+	Run:   runSkillsConfigList,
+}
+
+var skillsConfigDisabledCmd = &cobra.Command{
+	Use:   "disabled",
+	Short: "List disabled skills",
+	Run:   runSkillsConfigDisabled,
+}
+
 func init() {
 	skillsCmd.AddCommand(skillsShowCmd)
 	skillsCmd.AddCommand(skillsSearchCmd)
 	skillsCmd.AddCommand(skillsInstallCmd)
+	skillsCmd.AddCommand(skillsUninstallCmd)
 	skillsCmd.AddCommand(skillsCreateCmd)
 	skillsCmd.AddCommand(skillsDeleteCmd)
 	skillsCmd.AddCommand(skillsMatchCmd)
+	skillsCmd.AddCommand(skillsDisableCmd)
+	skillsCmd.AddCommand(skillsEnableCmd)
+	skillsCmd.AddCommand(skillsHubCmd)
+	skillsCmd.AddCommand(skillsConfigCmd)
+
+	// Hub subcommands
+	skillsHubCmd.AddCommand(skillsHubListCmd)
+	skillsHubCmd.AddCommand(skillsHubAuditCmd)
+
+	// Config subcommands
+	skillsConfigCmd.AddCommand(skillsConfigListCmd)
+	skillsConfigCmd.AddCommand(skillsConfigDisabledCmd)
+
+	// Category subcommands
+	skillsCategoryCmd.AddCommand(skillsCategoryListCmd)
+	skillsCategoryCmd.AddCommand(skillsCategoryShowCmd)
+	skillsCategoryCmd.AddCommand(skillsCategoryCreateCmd)
+	skillsCategoryCmd.AddCommand(skillsCategoryDeleteCmd)
+	skillsCategoryCmd.AddCommand(skillsCategoryMoveCmd)
+	skillsCmd.AddCommand(skillsCategoryCmd)
+
 	// migrate command is added in skill_migrate.go
 	// list command is added in skill_list.go
 
@@ -183,20 +331,38 @@ func runSkillsInstall(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Determine source
+	// Determine source and install
 	if from != "" {
 		// Install from local path or URL
 		installSkillFromPath(name, from)
 	} else {
-		// Try to install from registry
-		fmt.Printf("Installing skill '%s' from registry...\n", name)
-		fmt.Println("Note: Registry installation not yet implemented.")
-		fmt.Println("Place skill files in:")
-		fmt.Println("  ~/.magic/skills/")
+		// Try to install from official Hermes registry
+		fmt.Printf("Installing skill '%s' from Hermes official registry...\n", name)
+
+		// 使用 Hub 安装
+		err := mgr.InstallFromHub(skills.HubSourceOfficial, name)
+		if err != nil {
+			fmt.Printf("Failed to install from registry: %v\n", err)
+			fmt.Println("\nSupported sources:")
+			fmt.Println("  - GitHub: magic skills install my-skill --from github:owner/repo/path")
+			fmt.Println("  - URL: magic skills install my-skill --from https://example.com/skill.zip")
+			fmt.Println("  - skills.sh: magic skills install my-skill --from skills.sh/name")
+			fmt.Println("  - Local: magic skills install my-skill --from /path/to/skill")
+			os.Exit(1)
+		}
+
+		fmt.Println("\n✓ Skill installed successfully from registry!")
 	}
 }
 
 func installSkillFromPath(name, path string) {
+	// Check if it's a URL (remote source)
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") ||
+		strings.HasPrefix(path, "github:") || strings.HasPrefix(path, "skills.sh/") {
+		installSkillFromURL(name, path)
+		return
+	}
+
 	// Check if source exists
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -242,6 +408,41 @@ func installSkillFromPath(name, path string) {
 			fmt.Printf("Failed to copy file: %v\n", err)
 			os.Exit(1)
 		}
+	}
+
+	fmt.Println("\n✓ Skill installed successfully!")
+}
+
+// installSkillFromURL 从远程 URL 安装技能
+func installSkillFromURL(name, url string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Installing skill '%s' from remote source...\n", name)
+	fmt.Printf("  URL: %s\n", url)
+
+	// 解析 URL 类型并确定 HubSource
+	var source skills.HubSource
+	switch {
+	case strings.HasPrefix(url, "github:"):
+		source = skills.HubSourceGitHub
+		url = strings.TrimPrefix(url, "github:")
+		url = "https://github.com/" + url
+	case strings.HasPrefix(url, "skills.sh/"):
+		source = skills.HubSourceSkillsSh
+	case strings.Contains(url, "well-known"):
+		source = skills.HubSourceWellKnown
+	default:
+		source = skills.HubSourceHub
+	}
+
+	err = mgr.InstallFromHub(source, url)
+	if err != nil {
+		fmt.Printf("Failed to install from URL: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("\n✓ Skill installed successfully!")
@@ -351,5 +552,291 @@ func runSkillsMatch(cmd *cobra.Command, args []string) {
 	fmt.Printf("Found %d skills matching '%s':\n\n", len(results), input)
 	for _, s := range results {
 		fmt.Printf("  • %s: %s\n", s.Name, s.Description)
+	}
+}
+
+// =============================================================================
+// Category Commands (分类命令)
+// =============================================================================
+
+func runSkillsCategoryList(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	categories := mgr.GetSkillCategories()
+	if len(categories) == 0 {
+		fmt.Println("No categories found.")
+		fmt.Println("Categories are automatically created from directory structure:")
+		fmt.Println("  ~/.magic/skills/<category>/<skill>/SKILL.md")
+		return
+	}
+
+	fmt.Printf("Found %d categories:\n\n", len(categories))
+	for _, cat := range categories {
+		fmt.Printf("  📁 %s", cat.Name)
+		if cat.SkillCount > 0 {
+			fmt.Printf(" (%d skills)", cat.SkillCount)
+		}
+		fmt.Println()
+		if cat.Description != "" {
+			fmt.Printf("     %s\n", cat.Description)
+		}
+	}
+}
+
+func runSkillsCategoryShow(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	catName := args[0]
+	cat, err := mgr.GetCategory(catName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("📁 Category: %s\n", cat.Name)
+	if cat.Description != "" {
+		fmt.Printf("   Description: %s\n", cat.Description)
+	}
+	fmt.Printf("   Path: %s\n", cat.Path)
+	fmt.Printf("   Skills: %d\n\n", cat.SkillCount)
+
+	if cat.SkillCount > 0 {
+		fmt.Println("Skills in this category:")
+		skills := mgr.GetSkillsInCategory(catName)
+		for _, s := range skills {
+			fmt.Printf("  • %s: %s\n", s.Name, s.Description)
+		}
+	}
+}
+
+func runSkillsCategoryCreate(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	catName := args[0]
+	catDir, err := mgr.CreateCategory(catName, "")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Created category '%s'\n", catName)
+	fmt.Printf("  Path: %s\n", catDir)
+	fmt.Println("  Place skill directories inside this category.")
+}
+
+func runSkillsCategoryDelete(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	catName := args[0]
+	err = mgr.DeleteCategory(catName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Deleted category '%s'\n", catName)
+}
+
+func runSkillsCategoryMove(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	catName := args[1]
+
+	err = mgr.MoveSkillToCategory(skillName, catName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Moved skill '%s' to category '%s'\n", skillName, catName)
+}
+
+// =============================================================================
+// Hub, Disable/Enable Commands
+// =============================================================================
+
+func runSkillsUninstall(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	err = mgr.UninstallHubSkill(skillName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Uninstalled hub skill '%s'\n", skillName)
+}
+
+func runSkillsDisable(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	err = mgr.DisableSkill(skillName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Disabled skill '%s'\n", skillName)
+	fmt.Println("  Use 'magic skills enable " + skillName + "' to re-enable.")
+}
+
+func runSkillsEnable(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	err = mgr.EnableSkill(skillName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Enabled skill '%s'\n", skillName)
+}
+
+func runSkillsHubList(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	entries := mgr.GetHubLockEntries()
+	if len(entries) == 0 {
+		fmt.Println("No hub skills installed.")
+		return
+	}
+
+	fmt.Printf("Hub-installed skills (%d):\n\n", len(entries))
+	for _, e := range entries {
+		fmt.Printf("  📦 %s\n", e.SkillName)
+		fmt.Printf("     Source: %s\n", e.Source)
+		fmt.Printf("     Installed: %s\n", e.InstalledAt.Format("2006-01-02 15:04"))
+		if e.SecurityAudit != "" {
+			fmt.Printf("     Security: %s\n", e.SecurityAudit)
+		}
+		fmt.Println()
+	}
+}
+
+func runSkillsHubAudit(cmd *cobra.Command, args []string) {
+	// 读取审计日志
+	home, _ := os.UserHomeDir()
+	auditLog := filepath.Join(home, ".magic", "skills", ".hub", "audit.log")
+
+	data, err := os.ReadFile(auditLog)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No audit log found.")
+		} else {
+			fmt.Printf("Error reading audit log: %v\n", err)
+		}
+		return
+	}
+
+	fmt.Print(string(data))
+}
+
+func runSkillsConfigList(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	disabled := mgr.GetDisabledSkills()
+
+	fmt.Println("Skill Configuration:")
+	fmt.Println()
+
+	fmt.Println("Disabled Skills (Global):")
+	if len(disabled.Global) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for _, name := range disabled.Global {
+			fmt.Printf("  • %s\n", name)
+		}
+	}
+	fmt.Println()
+
+	fmt.Println("Disabled Skills (By Platform):")
+	if len(disabled.Platform) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for platform, names := range disabled.Platform {
+			fmt.Printf("  %s:\n", platform)
+			for _, name := range names {
+				fmt.Printf("    • %s\n", name)
+			}
+		}
+	}
+}
+
+func runSkillsConfigDisabled(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	disabled := mgr.GetDisabledSkills()
+
+	fmt.Println("Disabled Skills:")
+	fmt.Println()
+
+	fmt.Println("Global:")
+	if len(disabled.Global) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for _, name := range disabled.Global {
+			fmt.Printf("  • %s\n", name)
+		}
+	}
+	fmt.Println()
+
+	fmt.Println("By Platform:")
+	if len(disabled.Platform) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for platform, names := range disabled.Platform {
+			fmt.Printf("  %s:\n", platform)
+			for _, name := range names {
+				fmt.Printf("    • %s\n", name)
+			}
+		}
 	}
 }

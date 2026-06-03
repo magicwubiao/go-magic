@@ -9,7 +9,7 @@ import (
 // SkillData represents skill data as a map to avoid circular imports
 type SkillData map[string]interface{}
 
-// SkillsManager interface for skills manager
+// SkillsManager 技能管理器接口，提供技能的增删改查及文件管理能力
 type SkillsManager interface {
 	List() map[string]SkillData
 	Get(name string) (SkillData, error)
@@ -18,6 +18,9 @@ type SkillsManager interface {
 	Create(name, description, content, category string, tags []string) (SkillData, error)
 	Update(name, content string) error
 	Delete(name string) error
+	Patch(name, oldString, newString string) error             // 定向修补：替换技能内容中的指定字符串
+	WriteSkillFile(name, filePath, content string) error       // 添加参考文件到技能目录
+	RemoveSkillFile(name, filePath string) error               // 删除技能目录中的参考文件
 }
 
 // SkillListTool lists all available skills
@@ -241,7 +244,7 @@ func NewSkillManageTool() *SkillManageTool {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "Action to perform: create, update, delete, patch, edit",
+						"description": "Action to perform: create, update, edit, delete, patch, write_file, remove_file",
 					},
 					"name": map[string]interface{}{
 						"type":        "string",
@@ -271,6 +274,14 @@ func NewSkillManageTool() *SkillManageTool {
 					"new_string": map[string]interface{}{
 						"type":        "string",
 						"description": "Replacement text (for patch action)",
+					},
+					"write_file": map[string]interface{}{
+						"type":        "string",
+						"description": "File path relative to skill directory to write (for write_file action), e.g. references/guide.md",
+					},
+					"file_content": map[string]interface{}{
+						"type":        "string",
+						"description": "Content to write to the file (for write_file action)",
 					},
 				},
 				"required": []string{"action", "name"},
@@ -344,11 +355,71 @@ func (t *SkillManageTool) Execute(ctx context.Context, args map[string]interface
 		}, nil
 
 	case "patch":
-		// Patch is not directly supported, use update instead
-		return nil, fmt.Errorf("patch action not directly supported, use update with full content")
+		// 定向修补：替换技能内容中的指定字符串
+		oldStr := getString(args, "old_string")
+		newStr := getString(args, "new_string")
+		if oldStr == "" {
+			return nil, fmt.Errorf("old_string is required for patch action")
+		}
+		if newStr == "" {
+			return nil, fmt.Errorf("new_string is required for patch action")
+		}
+
+		err := t.manager.Patch(name, oldStr, newStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to patch skill: %w", err)
+		}
+
+		return map[string]interface{}{
+			"success": true,
+			"action":  "patched",
+			"name":    name,
+		}, nil
+
+	case "write_file":
+		// 向技能目录写入参考文件
+		filePath := getString(args, "write_file")
+		fileContent := getString(args, "file_content")
+		if filePath == "" {
+			return nil, fmt.Errorf("write_file path is required")
+		}
+		if fileContent == "" {
+			return nil, fmt.Errorf("file_content is required for write_file action")
+		}
+
+		err := t.manager.WriteSkillFile(name, filePath, fileContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write skill file: %w", err)
+		}
+
+		return map[string]interface{}{
+			"success": true,
+			"action":  "write_file",
+			"name":    name,
+			"path":    filePath,
+		}, nil
+
+	case "remove_file":
+		// 从技能目录中删除参考文件
+		filePath := getString(args, "write_file")
+		if filePath == "" {
+			return nil, fmt.Errorf("file path is required for remove_file action")
+		}
+
+		err := t.manager.RemoveSkillFile(name, filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to remove skill file: %w", err)
+		}
+
+		return map[string]interface{}{
+			"success": true,
+			"action":  "remove_file",
+			"name":    name,
+			"path":    filePath,
+		}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown action: %s, supported: create, update, delete", action)
+		return nil, fmt.Errorf("unknown action: %s, supported: create, update, edit, delete, patch, write_file, remove_file", action)
 	}
 }
 

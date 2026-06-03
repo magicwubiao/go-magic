@@ -16,6 +16,7 @@ const (
 	SkillSourceGlobal   SkillSource = "global"
 	SkillSourceBuiltin  SkillSource = "builtin"
 	SkillSourceRegistry SkillSource = "registry"
+	SkillSourceAuto     SkillSource = "auto" // Agent 自动创建
 )
 
 // SkillMeta contains metadata about a skill
@@ -342,21 +343,162 @@ func (c *SkillActivationCondition) IsVisible(availableToolsets []string, availab
 		}
 	}
 
-	// Fallback for tools check (show when tools are UNAVAILABLE)
+	// Fallback for tools check (show when ALL fallback tools are UNAVAILABLE)
 	if len(c.FallbackForTools) > 0 {
 		allAvailable := true
 		for _, tool := range c.FallbackForTools {
+			found := false
 			for _, t := range availableTools {
 				if t == tool {
-					allAvailable = true
+					found = true
 					break
 				}
 			}
-			if !allAvailable {
-				return false
+			if !found {
+				allAvailable = false
+				break
 			}
+		}
+		if allAvailable {
+			return false // All fallback tools available, don't show
 		}
 	}
 
 	return true
+}
+
+// =============================================================================
+// Skill Bundles (技能捆绑包) - 参考 Hermes Agent
+// =============================================================================
+
+// SkillBundleConfig represents a skill bundle configuration
+type SkillBundleConfig struct {
+	Name        string   `yaml:"name" json:"name"`
+	Description string   `yaml:"description" json:"description"`
+	Skills      []string `yaml:"skills" json:"skills"`
+	Instruction string   `yaml:"instruction" json:"instruction,omitempty"`
+}
+
+// SkillBundle represents a loaded skill bundle
+type SkillBundle struct {
+	Name        string
+	Description string
+	Skills      []*Skill
+	Instruction string
+}
+
+// =============================================================================
+// Security Scanner (安全扫描) - 参考 Hermes Agent
+// =============================================================================
+
+// SecurityScanResult represents the result of a security scan
+type SecurityScanResult struct {
+	Safe      bool     `json:"safe"`
+	Threats   []string `json:"threats,omitempty"`
+	Severity  string   `json:"severity,omitempty"` // low, medium, high
+	ScannedAt string   `json:"scanned_at"`
+}
+
+// =============================================================================
+// Skills Guidance (技能使用指导) - 参考 Hermes Agent
+// =============================================================================
+
+// SkillsGuidance 是注入系统提示词的技能使用指导
+// 参考 Hermes Agent 的 SKILLS_GUIDANCE
+const SkillsGuidance = `After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time.
+When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') -- don't wait to be asked. Skills that aren't maintained become liabilities.`
+
+// =============================================================================
+// Skill Categories (技能分类) - 参考 Hermes Agent 目录层级分类
+// =============================================================================
+
+// SkillCategory 表示一个技能分类（对应目录层级）
+type SkillCategory struct {
+	Name        string    `json:"name"`        // 分类名称（目录名）
+	Description string    `json:"description"` // 分类描述
+	Path        string    `json:"path"`        // 分类目录绝对路径
+	SkillCount  int       `json:"skill_count"` // 该分类下的技能数量
+	Skills      []string  `json:"skills"`      // 技能名称列表
+	Parent      string    `json:"parent,omitempty"` // 父分类名称
+	Source      SkillSource `json:"source"`    // 来源
+}
+
+// CategoryTree 表示分类树结构
+type CategoryTree struct {
+	Category *SkillCategory   `json:"category"`
+	Children []*CategoryTree  `json:"children,omitempty"`
+}
+
+// =============================================================================
+// Hub Lock (Hub 安装跟踪) - 参考 Hermes Agent .hub/lock.json
+// =============================================================================
+
+// HubLockEntry 表示一条 Hub 技能安装记录
+type HubLockEntry struct {
+	SkillName    string    `json:"skill_name"`
+	Source       HubSource `json:"source"`
+	SourceID     string    `json:"source_id"`
+	URL          string    `json:"url,omitempty"`
+	Version      string    `json:"version,omitempty"`
+	InstalledAt  time.Time `json:"installed_at"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	SecurityAudit string   `json:"security_audit,omitempty"` // passed, failed, pending
+}
+
+// HubLock 表示完整的 lock.json
+type HubLock struct {
+	Entries   []HubLockEntry `json:"entries"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// =============================================================================
+// Bundled Manifest (内置技能跟踪) - 参考 Hermes Agent .bundled_manifest
+// =============================================================================
+
+// BundledManifestEntry 表示一条内置技能种子化记录
+type BundledManifestEntry struct {
+	SkillName string    `json:"skill_name"`
+	Category  string    `json:"category,omitempty"`
+	Path      string    `json:"path"`        // 相对路径
+	SHA256    string    `json:"sha256"`      // 原始内容哈希，用于检测用户修改
+	SeededAt  time.Time `json:"seeded_at"`
+}
+
+// BundledManifest 表示完整的 .bundled_manifest
+type BundledManifest struct {
+	Entries   []BundledManifestEntry `json:"entries"`
+	UpdatedAt time.Time              `json:"updated_at"`
+}
+
+// =============================================================================
+// Disabled Skills (禁用技能) - 参考 Hermes Agent config.yaml skills.disabled
+// =============================================================================
+
+// DisabledSkillsConfig 表示禁用技能配置
+type DisabledSkillsConfig struct {
+	Global    []string            `json:"global,omitempty"`    // 全局禁用
+	Platform  map[string][]string `json:"platform,omitempty"`  // 按平台禁用
+}
+
+// =============================================================================
+// Excluded Directories (排除目录) - 参考 Hermes Agent EXCLUDED_SKILL_DIRS
+// =============================================================================
+
+// DefaultExcludedDirs 是默认排除的目录名列表
+// 这些目录不会被当作技能或分类扫描
+var DefaultExcludedDirs = []string{
+	".git", ".github", ".hub", ".archive",
+	".venv", "venv", "node_modules", "site-packages",
+	"__pycache__", ".tox", ".nox", ".pytest_cache",
+	".mypy_cache", ".ruff_cache", ".bundle",
+}
+
+// IsExcludedDir 检查目录名是否在排除列表中
+func IsExcludedDir(name string) bool {
+	for _, excluded := range DefaultExcludedDirs {
+		if name == excluded {
+			return true
+		}
+	}
+	return false
 }
