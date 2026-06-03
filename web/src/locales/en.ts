@@ -363,6 +363,7 @@ export default {
     skillDisabled: 'Skill disabled',
     failedToToggle: 'Failed to toggle skill',
     categoryNames: {
+      all: 'All',
       coding: 'Coding',
       development: 'Development',
       'software-development': 'Software Development',
@@ -407,7 +408,9 @@ export default {
     failedToInstallFile: 'Failed to install "{name}"',
     installedSkill: 'Installed skill "{name}" with {count} files',
     statistics: 'Skill Statistics',
-    sources: {
+    sources: 'Sources',
+    sourceOptions: {
+      all: 'All',
       builtin: 'Built-in',
       local: 'Local',
       global: 'Global',

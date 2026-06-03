@@ -27,36 +27,51 @@
         </n-grid>
       </n-card>
 
-      <!-- Categories -->
-      <n-card :title="t('skills.categories')" style="margin-bottom: 24px;" v-if="skillsStore.categories.length">
-        <n-space>
-          <n-tag 
-            v-for="cat in skillsStore.categories" 
-            :key="cat" 
-            size="large"
-            :checked="selectedCategory === cat"
-            checkable
-            @update:checked="selectedCategory = selectedCategory === cat ? '' : cat"
-          >
-            {{ t(`skills.categoryNames.${cat}`) || cat }}
-          </n-tag>
-        </n-space>
-      </n-card>
-
-      <!-- Skill Sources Filter -->
-      <n-card :title="t('skills.sources')" style="margin-bottom: 24px;">
-        <n-space>
-          <n-tag 
-            v-for="source in skillSources" 
-            :key="source" 
-            size="large"
-            :checked="selectedSource === source"
-            checkable
-            :type="getSourceType(source)"
-            @update:checked="selectedSource = selectedSource === source ? '' : source"
-          >
-            {{ t(`skills.sources.${source}`) || source }}
-          </n-tag>
+      <!-- Categories & Sources Filter -->
+      <n-card title="筛选" style="margin-bottom: 24px;">
+        <n-space vertical size="medium">
+          <!-- Categories -->
+          <div v-if="skillsStore.categories.length">
+            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
+            <n-space>
+              <n-tag 
+                size="large"
+                :checked="selectedCategory === ''"
+                checkable
+                @update:checked="selectedCategory = selectedCategory === '' ? '' : ''"
+              >
+                {{ t('skills.categoryNames.all') || 'All' }}
+              </n-tag>
+              <n-tag 
+                v-for="cat in skillsStore.categories" 
+                :key="cat" 
+                size="large"
+                :checked="selectedCategory === cat"
+                checkable
+                @update:checked="selectedCategory = selectedCategory === cat ? '' : cat"
+              >
+                {{ t(`skills.categoryNames.${cat}`) || cat }}
+              </n-tag>
+            </n-space>
+          </div>
+          
+          <!-- Sources -->
+          <div>
+            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.sources') }}</n-text>
+            <n-space>
+              <n-tag 
+                v-for="source in skillSources" 
+                :key="source" 
+                size="large"
+                :checked="selectedSource === source"
+                checkable
+                :type="getSourceType(source)"
+                @update:checked="selectedSource = selectedSource === source ? '' : source"
+              >
+                {{ t(`skills.sourceOptions.${source}`) || source }}
+              </n-tag>
+            </n-space>
+          </div>
         </n-space>
       </n-card>
 
@@ -122,7 +137,7 @@
                       {{ skill.enabled ? t('tools.enabled') : t('tools.disabled') }}
                     </n-tag>
                     <n-tag :type="getSourceTagType(skill.source)" size="tiny">
-                      {{ t(`skills.sources.${skill.source}`) || skill.source }}
+                      {{ t(`skills.sourceOptions.${skill.source}`) || skill.source }}
                     </n-tag>
                   </n-space>
                   <n-space align="center" size="small">
@@ -282,7 +297,7 @@ const selectedSkill = ref<Skill | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
-const skillSources = ref<string[]>(['builtin', 'local', 'global', 'registry', 'auto'])
+const skillSources = ref<string[]>(['all', 'builtin', 'local', 'global', 'registry', 'auto'])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
 
@@ -325,11 +340,11 @@ interface EvolutionRecord {
 const filteredSkills = computed(() => {
   let result = skillsStore.skills
   
-  if (selectedCategory.value) {
+  if (selectedCategory.value && selectedCategory.value !== 'all') {
     result = result.filter(s => s.category === selectedCategory.value)
   }
   
-  if (selectedSource.value) {
+  if (selectedSource.value && selectedSource.value !== 'all') {
     result = result.filter(s => s.source === selectedSource.value)
   }
   
@@ -375,6 +390,7 @@ function getTrendType(trend: string): 'success' | 'warning' | 'error' | 'default
 
 function getSourceType(source: string): 'success' | 'warning' | 'error' | 'info' | 'primary' | 'default' {
   switch (source) {
+    case 'all': return 'primary'
     case 'builtin': return 'success'
     case 'local': return 'info'
     case 'global': return 'primary'

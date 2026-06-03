@@ -363,6 +363,7 @@ export default {
     skillDisabled: '技能已禁用',
     failedToToggle: '切换技能失败',
     categoryNames: {
+      all: '全部',
       coding: '编程开发',
       development: '开发',
       'software-development': '软件开发',
@@ -407,7 +408,9 @@ export default {
     failedToInstallFile: '安装 "{name}" 失败',
     installedSkill: '已安装技能 "{name}"，包含 {count} 个文件',
     statistics: '技能统计',
-    sources: {
+    sources: '来源',
+    sourceOptions: {
+      all: '全部',
       builtin: '内置',
       local: '本地',
       global: '全局',
