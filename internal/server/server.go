@@ -1823,14 +1823,6 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		}
 	}
 
-	fmt.Printf("[server] buildToolsets: categorized tools: %d categories\n", len(categoryTools))
-	for cat, tools := range categoryTools {
-		fmt.Printf("[server] buildToolsets:   %s: %d tools - %v\n", cat, len(tools), tools)
-	}
-	if len(ungrouped) > 0 {
-		fmt.Printf("[server] buildToolsets:   ungrouped: %d tools - %v\n", len(ungrouped), ungrouped)
-	}
-
 	// Build toolset list
 	toolsets := make([]map[string]interface{}, 0, len(categoryTools))
 
@@ -1866,25 +1858,6 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		return allEnabled || len(s.cfg.Tools.Enabled) == 0
 	}
 
-	// Helper to convert tool names to tool objects
-	makeToolObjects := func(names []string, category string) []map[string]interface{} {
-		result := make([]map[string]interface{}, 0, len(names))
-		for _, name := range names {
-			desc := ""
-			if t, err := s.toolReg.Get(name); err == nil {
-				desc = t.Description()
-			}
-			result = append(result, map[string]interface{}{
-				"id":          name,
-				"name":        name,
-				"description": desc,
-				"category":    category,
-				"enabled":     true,
-			})
-		}
-		return result
-	}
-
 	// Add categorized toolsets in a fixed order (based on categoryMap order)
 	categoryOrder := []string{"File", "Web", "Browser", "Code Execution", "Memory", "Delegation", "Skills", "MCP"}
 	for _, catName := range categoryOrder {
@@ -1897,7 +1870,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 				"description": categoryDescriptions[catName],
 				"enabled":     isEnabled(id),
 				"configured":  true,
-				"tools":       makeToolObjects(tools, catName),
+				"tools":       tools, // Return tool names as []string for frontend compatibility
 			})
 		}
 	}
@@ -1911,7 +1884,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 			"description": "Other tools",
 			"enabled":     isEnabled("other"),
 			"configured":  true,
-			"tools":       makeToolObjects(ungrouped, "Other"),
+			"tools":       ungrouped, // Return tool names as []string for frontend compatibility
 		})
 	}
 
