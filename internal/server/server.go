@@ -2297,6 +2297,49 @@ func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, categories)
 }
 
+func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
+	keyword := r.URL.Query().Get("q")
+	
+	if s.skillMgr != nil {
+		skills, err := s.skillMgr.SearchHub(keyword, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, skills)
+		return
+	}
+	jsonResponse(w, []interface{}{})
+}
+
+func (s *Server) handleSkillHubInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Source   string `json:"source"`
+		SourceID string `json:"sourceID"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if s.skillMgr != nil {
+		err := s.skillMgr.InstallFromHub(skills.HubSource(req.Source), req.SourceID)
+		if err != nil {
+			http.Error(w, "failed to install skill: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.skillMgr.Reload()
+		jsonResponse(w, map[string]interface{}{"ok": true})
+		return
+	}
+	http.Error(w, "skill manager not available", http.StatusInternalServerError)
+}
+
 func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/skills/")
 
@@ -2377,46 +2420,34 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 
-		// Get user skills directory
-		skillsDir := s.getUserSkillsDir()
-
-		// If URL is provided, download from Git URL
+		// If URL is provided, use skill manager to install from URL
 		if req.URL != "" {
-			skillName := req.Name
-			if skillName == "" {
-				// Extract name from URL (e.g., github.com/user/repo -> repo)
-				parts := strings.Split(strings.TrimSuffix(req.URL, ".git"), "/")
-				if len(parts) > 0 {
-					skillName = parts[len(parts)-1]
+			if s.skillMgr != nil {
+				if err := s.skillMgr.InstallFromURL(req.URL); err != nil {
+					http.Error(w, "failed to install skill: "+err.Error(), http.StatusInternalServerError)
+					return
 				}
+				// Reload skills to include the newly installed one
+				s.skillMgr.Reload()
+				jsonResponse(w, map[string]interface{}{"ok": true, "url": req.URL})
+				return
 			}
-			if skillName == "" {
-				skillName = "installed-skill"
-			}
-			skillDir := filepath.Join(skillsDir, skillName)
-			os.MkdirAll(skillDir, 0755)
-
-			// Clone or download from URL (simplified: just create a marker file for now)
-			markerFile := filepath.Join(skillDir, "source.url")
-			os.WriteFile(markerFile, []byte(req.URL), 0644)
-
-			// If content provided, save as skill.yaml
-			if req.Content != "" {
-				skillFile := filepath.Join(skillDir, "skill.yaml")
-				os.WriteFile(skillFile, []byte(req.Content), 0644)
-			}
-
-			jsonResponse(w, map[string]interface{}{"ok": true, "name": skillName, "url": req.URL})
+			http.Error(w, "skill manager not available", http.StatusInternalServerError)
 			return
 		}
 
 		// Legacy: create from name/content
 		if req.Name != "" {
+			skillsDir := s.getUserSkillsDir()
 			skillDir := filepath.Join(skillsDir, req.Name)
 			os.MkdirAll(skillDir, 0755)
 			if req.Content != "" {
 				skillFile := filepath.Join(skillDir, "skill.yaml")
 				os.WriteFile(skillFile, []byte(req.Content), 0644)
+			}
+			// Reload skills
+			if s.skillMgr != nil {
+				s.skillMgr.Reload()
 			}
 		}
 		jsonResponse(w, map[string]bool{"ok": true})

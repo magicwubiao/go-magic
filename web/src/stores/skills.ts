@@ -32,6 +32,15 @@ export const useSkillsStore = defineStore('skills', () => {
     await loadSkills()
   }
 
+  async function searchHubSkills(keyword?: string) {
+    return skillsApi.searchHubSkills(keyword)
+  }
+
+  async function installHubSkill(source: string, sourceID: string) {
+    await skillsApi.installHubSkill(source, sourceID)
+    await loadSkills()
+  }
+
   return {
     skills,
     categories,
@@ -40,5 +49,7 @@ export const useSkillsStore = defineStore('skills', () => {
     loadCategories,
     toggleSkill,
     installSkill,
+    searchHubSkills,
+    installHubSkill,
   }
 })

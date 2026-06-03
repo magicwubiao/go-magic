@@ -56,6 +56,27 @@ export async function installSkill(url: string): Promise<void> {
   })
 }
 
+export interface HubSkill {
+  Name: string
+  Description: string
+  Category: string
+  Source: string
+  SourceID: string
+  URL?: string
+}
+
+export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {
+  const params = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
+  return request<HubSkill[]>(`/skills/hub/search${params}`)
+}
+
+export async function installHubSkill(source: string, sourceID: string): Promise<void> {
+  return request('/skills/hub/install', {
+    method: 'POST',
+    body: JSON.stringify({ source, sourceID }),
+  })
+}
+
 export async function uploadSkill(file: File, name?: string, relativePath?: string): Promise<{ ok: boolean; name: string }> {
   const formData = new FormData()
   formData.append('file', file)
