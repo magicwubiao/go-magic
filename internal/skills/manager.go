@@ -52,12 +52,16 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 
+	// Get the path to built-in skills directory
+	builtinDir := filepath.Join("internal", "skills", "builtin")
+
 	config := &ManagerConfig{
 		SearchDirs: []string{
 			filepath.Join(home, ".magic", "skills"),
 			"skills",
 			filepath.Join(".magic", "skills"),
 		},
+		BuiltinDir: builtinDir,
 	}
 
 	return NewManagerWithConfig(config)
