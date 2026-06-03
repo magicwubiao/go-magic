@@ -31,7 +31,7 @@
       <n-card title="筛选" style="margin-bottom: 24px;">
         <n-space vertical size="medium">
           <!-- Categories -->
-          <div v-if="skillsStore.categories.length">
+          <div>
             <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
             <n-space>
               <n-tag 
@@ -41,6 +41,14 @@
                 @update:checked="selectedCategory = selectedCategory === '' ? '' : ''"
               >
                 {{ t('skills.categoryNames.all') || 'All' }}
+              </n-tag>
+              <n-tag 
+                size="large"
+                :checked="selectedCategory === 'general'"
+                checkable
+                @update:checked="selectedCategory = selectedCategory === 'general' ? '' : 'general'"
+              >
+                {{ t('skills.general') || 'General' }}
               </n-tag>
               <n-tag 
                 v-for="cat in skillsStore.categories" 
@@ -323,7 +331,11 @@ const filteredSkills = computed(() => {
   let result = skillsStore.skills
   
   if (selectedCategory.value && selectedCategory.value !== 'all') {
-    result = result.filter(s => s.category === selectedCategory.value)
+    if (selectedCategory.value === 'general') {
+      result = result.filter(s => !s.category || s.category === '' || s.category === 'general')
+    } else {
+      result = result.filter(s => s.category === selectedCategory.value)
+    }
   }
   
   if (selectedSource.value && selectedSource.value !== 'all') {
