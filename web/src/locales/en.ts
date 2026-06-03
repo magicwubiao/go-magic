@@ -348,7 +348,6 @@ export default {
     dragDropInstall: 'Drag & Drop Install',
     dragDropDesc: 'Click or drag skill files here to install',
     supportedFormats: 'Supported: .yaml, .yml, .md, .json, .zip (SKILL.md, skill.yaml)',
-    selectSkillFolder: 'Select Skill Folder',
     description: 'Description',
     tags: 'Tags',
     noDescription: 'No description',

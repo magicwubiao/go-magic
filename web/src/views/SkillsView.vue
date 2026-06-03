@@ -103,24 +103,7 @@
             </n-upload-dragger>
           </n-upload>
           
-          <!-- Directory Upload Button -->
-          <n-space justify="center">
-            <input
-              ref="dirInputRef"
-              type="file"
-              webkitdirectory
-              directory
-              multiple
-              style="display: none"
-              @change="handleDirectorySelect"
-            />
-            <n-button @click="dirInputRef?.click()">
-              <template #icon>
-                <n-icon><folder-icon /></n-icon>
-              </template>
-              {{ t('skills.selectSkillFolder') }}
-            </n-button>
-          </n-space>
+          
         </n-space>
       </n-card>
 
@@ -275,7 +258,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Folder as FolderIcon } from '@vicons/ionicons5'
+import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
 import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
 import type { UploadFileInfo } from 'naive-ui'
@@ -290,7 +273,6 @@ const showDetailModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
-const dirInputRef = ref<HTMLInputElement | null>(null)
 const selectedCategory = ref('')
 const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
@@ -557,42 +539,6 @@ function handleUploadFinish() {
 
 function handleUploadError() {
   // Upload failed
-}
-
-async function handleDirectorySelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = input.files
-  if (!files || files.length === 0) return
-
-  uploadingCount.value += files.length
-
-  const firstFile = files[0]
-  // @ts-ignore
-  const relativePath = firstFile.webkitRelativePath || ''
-  const folderName = relativePath.split('/')[0] || 'skill'
-
-  const uploadPromises = Array.from(files).map(async (file) => {
-    // @ts-ignore
-    const filePath = file.webkitRelativePath || file.name
-    try {
-      await uploadSkill(file, folderName, filePath)
-    } catch (e) {
-      console.error('[Directory Upload] Failed:', file.name, e)
-      throw e
-    }
-  })
-
-  try {
-    await Promise.all(uploadPromises)
-    message.success(t('skills.installedSkill', { name: folderName, count: files.length }))
-    await skillsStore.loadSkills()
-    await skillsStore.loadCategories()
-  } catch (e) {
-    message.error(t('skills.failedToInstall'))
-  } finally {
-    uploadingCount.value -= files.length
-    input.value = ''
-  }
 }
 
 // Load data on mount
