@@ -391,7 +391,6 @@ export default {
     installedFile: 'Installed "{name}" successfully',
     failedToInstallFile: 'Failed to install "{name}"',
     installedSkill: 'Installed skill "{name}" with {count} files',
-    recommendations: 'Recommended Skills',
     statistics: 'Skill Statistics',
     totalInvocations: 'Total Invocations',
     avgSuccessRate: 'Avg Success Rate',

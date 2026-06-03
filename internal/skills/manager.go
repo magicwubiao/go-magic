@@ -2899,16 +2899,3 @@ func (m *Manager) GetAllStatistics() []*SkillStatistics {
 	}
 	return effMgr.GetAllStatistics()
 }
-
-// GetRecommendations 获取技能推荐（委托给 Recommender）
-func (m *Manager) GetRecommendations(ctx *RecommendationContext) []*SkillRecommendation {
-	if len(m.searchDirs) == 0 {
-		return []*SkillRecommendation{}
-	}
-	effMgr, err := NewEffectivenessManager(m.searchDirs[0])
-	if err != nil {
-		return []*SkillRecommendation{}
-	}
-	rec := NewRecommender(m, effMgr, nil)
-	return rec.Recommend(context.Background(), ctx, 10)
-}

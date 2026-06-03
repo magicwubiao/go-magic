@@ -661,7 +661,6 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
 	mux.HandleFunc("/api/skills/upload", withCORS(requireAuth(s.handleSkillUpload)))
 	mux.HandleFunc("/api/skills/statistics", withCORS(requireAuth(s.handleSkillsStatistics)))
-	mux.HandleFunc("/api/skills/recommendations", withCORS(requireAuth(s.handleSkillsRecommendations)))
 	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
 	mux.HandleFunc("/api/dashboard/skills", withCORS(requireAuth(s.handleDashboardSkills)))
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
@@ -1987,34 +1986,6 @@ func (s *Server) handleSkillsStatistics(w http.ResponseWriter, r *http.Request) 
 	}
 
 	jsonResponse(w, stats)
-}
-
-func (s *Server) handleSkillsRecommendations(w http.ResponseWriter, r *http.Request) {
-	recs := []map[string]interface{}{}
-
-	// 从 URL 参数获取上下文
-	query := r.URL.Query().Get("q")
-
-	if s.skillMgr != nil {
-		context := &skills.RecommendationContext{
-			UserInput: query,
-		}
-		recommendations := s.skillMgr.GetRecommendations(context)
-		for _, rec := range recommendations {
-			skillName := ""
-			if rec.Skill != nil {
-				skillName = rec.Skill.Name
-			}
-			recs = append(recs, map[string]interface{}{
-				"skill":         skillName,
-				"score":         rec.Score,
-				"reason":        rec.Reason,
-				"match_factors": rec.MatchFactors,
-			})
-		}
-	}
-
-	jsonResponse(w, recs)
 }
 
 func (s *Server) getRealSkills() []Skill {

@@ -391,7 +391,6 @@ export default {
     installedFile: '已成功安装 "{name}"',
     failedToInstallFile: '安装 "{name}" 失败',
     installedSkill: '已安装技能 "{name}"，包含 {count} 个文件',
-    recommendations: '推荐技能',
     statistics: '技能统计',
     totalInvocations: '总调用次数',
     avgSuccessRate: '平均成功率',

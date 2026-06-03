@@ -90,10 +90,6 @@ export async function deleteSkill(id: string): Promise<{ ok: boolean; id: string
 }
 
 // New Cortex-based APIs
-export async function getSkillRecommendations(): Promise<SkillRecommendation[]> {
-  return request('/skills/recommendations')
-}
-
 export async function getSkillStatistics(): Promise<SkillStatistics[]> {
   return request('/skills/statistics')
 }

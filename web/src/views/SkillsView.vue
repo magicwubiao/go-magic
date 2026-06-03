@@ -9,32 +9,6 @@
 
     <n-spin v-if="skillsStore.loading" />
     <template v-else>
-      <!-- Skill Recommendations -->
-      <n-card v-if="recommendations.length > 0" :title="t('skills.recommendations')" style="margin-bottom: 24px;">
-        <n-grid :cols="3" :x-gap="12" :y-gap="12">
-          <n-gi v-for="rec in recommendations" :key="rec.skill.id">
-            <n-card size="small" hoverable @click="selectSkill(rec.skill)">
-              <template #header>
-                <n-space align="center" justify="space-between">
-                  <span style="font-weight: 500;">{{ rec.skill.name }}</span>
-                  <n-tag :type="getScoreType(rec.score)" size="small">
-                    {{ rec.score.toFixed(0) }}
-                  </n-tag>
-                </n-space>
-              </template>
-              <n-space vertical size="small">
-                <n-text depth="3" style="font-size: 12px;">{{ rec.reason }}</n-text>
-                <n-space size="small">
-                  <n-tag v-for="factor in rec.match_factors.slice(0, 2)" :key="factor" size="tiny" type="info">
-                    {{ factor }}
-                  </n-tag>
-                </n-space>
-              </n-space>
-            </n-card>
-          </n-gi>
-        </n-grid>
-      </n-card>
-
       <!-- Skill Statistics Overview -->
       <n-card :title="t('skills.statistics')" style="margin-bottom: 24px;" v-if="skillStats.length > 0">
         <n-grid :cols="4" :x-gap="12">
@@ -274,7 +248,7 @@ import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Folder as FolderIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
-import { uploadSkill, deleteSkill, getSkillRecommendations, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
+import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
 import type { UploadFileInfo } from 'naive-ui'
 
 const { t } = useI18n()
@@ -292,7 +266,6 @@ const selectedCategory = ref('')
 const selectedSkill = ref<Skill | null>(null)
 
 // Data
-const recommendations = ref<SkillRecommendation[]>([])
 const skillStats = ref<SkillStatistics[]>([])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
@@ -306,13 +279,6 @@ interface Skill {
   tags: string[]
   enabled: boolean
   source: 'default' | 'user'
-}
-
-interface SkillRecommendation {
-  skill: Skill
-  score: number
-  reason: string
-  match_factors: string[]
 }
 
 interface SkillStatistics {
@@ -365,12 +331,7 @@ const improvingSkillsCount = computed(() => {
   return skillStats.value.filter(s => s.trend === 'improving').length
 })
 
-// Methods
-function getScoreType(score: number): 'success' | 'warning' | 'error' {
-  if (score >= 80) return 'success'
-  if (score >= 50) return 'warning'
-  return 'error'
-}
+
 
 function getSuccessRateType(rate: number): 'success' | 'warning' | 'error' {
   if (rate >= 0.8) return 'success'
@@ -576,13 +537,9 @@ onMounted(async () => {
     skillsStore.loadCategories()
   ])
   
-  // Load recommendations and statistics
+  // Load statistics
   try {
-    const [recs, stats] = await Promise.all([
-      getSkillRecommendations(),
-      getSkillStatistics()
-    ])
-    recommendations.value = recs
+    const stats = await getSkillStatistics()
     skillStats.value = stats
   } catch (e) {
     console.error('Failed to load skill data:', e)
