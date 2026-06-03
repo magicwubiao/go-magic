@@ -288,9 +288,21 @@ func (m *Manager) loadSkills() error {
 				if _, err := os.Stat(skillMdPath); err == nil {
 					skill := m.loadSkillFromFile(skillMdPath)
 					if skill != nil {
-						skill.Source = "local"
-						if dir == m.searchDirs[0] || strings.Contains(dir, ".magic") {
-							skill.Source = "global"
+						// Preserve existing source if it's builtin or uploaded
+						if existingSkill, exists := m.skills[skill.Name]; exists {
+							if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+								skill.Source = existingSkill.Source
+							} else {
+								skill.Source = "local"
+								if dir == m.searchDirs[0] || strings.Contains(dir, ".magic") {
+									skill.Source = "global"
+								}
+							}
+						} else {
+							skill.Source = "local"
+							if dir == m.searchDirs[0] || strings.Contains(dir, ".magic") {
+								skill.Source = "global"
+							}
 						}
 						m.skills[skill.Name] = skill
 					}
@@ -316,7 +328,16 @@ func (m *Manager) loadSkills() error {
 
 			skill := m.loadSkillFromFile(path)
 			if skill != nil {
-				skill.Source = "local"
+				// Preserve existing source if it's builtin or uploaded
+				if existingSkill, exists := m.skills[skill.Name]; exists {
+					if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+						skill.Source = existingSkill.Source
+					} else {
+						skill.Source = "local"
+					}
+				} else {
+					skill.Source = "local"
+				}
 				m.skills[skill.Name] = skill
 			}
 		}
@@ -354,9 +375,21 @@ func (m *Manager) scanCategoryDir(categoryPath, parentDir, categoryName string) 
 		if _, err := os.Stat(skillMdPath); err == nil {
 			skill := m.loadSkillFromFile(skillMdPath)
 			if skill != nil {
-				skill.Source = "local"
-				if strings.Contains(parentDir, ".magic") {
-					skill.Source = "global"
+				// Preserve existing source if it's builtin or uploaded
+				if existingSkill, exists := m.skills[skill.Name]; exists {
+					if existingSkill.Source == "builtin" || existingSkill.Source == "uploaded" {
+						skill.Source = existingSkill.Source
+					} else {
+						skill.Source = "local"
+						if strings.Contains(parentDir, ".magic") {
+							skill.Source = "global"
+						}
+					}
+				} else {
+					skill.Source = "local"
+					if strings.Contains(parentDir, ".magic") {
+						skill.Source = "global"
+					}
 				}
 				// 自动设置分类
 				if skill.Category == "" {
@@ -900,6 +933,13 @@ func (m *Manager) Reload() error {
 	m.mu.Lock()
 	m.skills = make(map[string]*Skill)
 	m.mu.Unlock()
+
+	// Reload built-in skills first
+	if m.builtinDir != "" {
+		if err := m.loadBuiltinSkills(); err != nil {
+			fmt.Printf("Warning: failed to load built-in skills: %v\n", err)
+		}
+	}
 
 	return m.loadSkills()
 }
