@@ -2635,9 +2635,9 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Reload skills to include the newly uploaded one
+	// Load the uploaded skill and mark it as uploaded
 	if s.skillMgr != nil {
-		s.skillMgr.Reload()
+		s.skillMgr.LoadUploadedSkill(skillDir)
 	}
 
 	jsonResponse(w, map[string]interface{}{
