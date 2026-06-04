@@ -1308,28 +1308,6 @@ func ScanSkillSecurity(content string) *SecurityScanResult {
 		}
 	}
 
-	// 检测数据泄露模式
-	dataLeakPatterns := []string{
-		"api_key",
-		"secret_key",
-		"password",
-		"credential",
-		"private_key",
-		"token",
-	}
-	for _, pattern := range dataLeakPatterns {
-		if strings.Contains(strings.ToLower(content), pattern) {
-			// 检查是否是模板变量（如 ${API_KEY}）而非实际值
-			if !strings.Contains(content, "${") && !strings.Contains(content, "{{") {
-				result.Safe = false
-				result.Threats = append(result.Threats, "potential data leak: "+pattern)
-				if result.Severity != "high" {
-					result.Severity = "medium"
-				}
-			}
-		}
-	}
-
 	// 检测破坏性命令
 	destructivePatterns := []string{
 		"rm -rf /",
