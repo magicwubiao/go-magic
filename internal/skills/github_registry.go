@@ -139,17 +139,18 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 	var allResults []HubSkill
 	seen := make(map[string]bool)
 
-	// Search for repos with SKILL.md
+	// Search for repositories containing skills
+	// Use repository search instead of code search for better results
 	searchQueries := []string{
-		fmt.Sprintf("%s filename:SKILL.md", query),
-		fmt.Sprintf("%s filename:skill.md", query),
-		fmt.Sprintf("%s in:name,description topic:ai-skill", query),
-		fmt.Sprintf("%s in:name,description topic:claudeskill", query),
-		fmt.Sprintf("%s in:name,description topic:hermes-skill", query),
+		fmt.Sprintf("%s SKILL.md", query),
+		fmt.Sprintf("%s skill", query),
+		fmt.Sprintf("%s claude skill", query),
+		fmt.Sprintf("%s hermes skill", query),
 	}
 
 	for _, q := range searchQueries {
-		apiURL := fmt.Sprintf("%s/search/code?q=%s&per_page=%d", r.baseURL, url.QueryEscape(q), limit)
+		// Use repository search API instead of code search
+		apiURL := fmt.Sprintf("%s/search/repositories?q=%s&per_page=%d", r.baseURL, url.QueryEscape(q), limit)
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
 			continue
@@ -178,13 +179,12 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 
 		var result struct {
 			Items []struct {
-				Repository struct {
-					FullName    string `json:"full_name"`
-					Description string `json:"description"`
-					HTMLURL     string `json:"html_url"`
-					Stargazers  int    `json:"stargazers_count"`
-				} `json:"repository"`
-				Path string `json:"path"`
+				FullName    string   `json:"full_name"`
+				Name        string   `json:"name"`
+				Description string   `json:"description"`
+				HTMLURL     string   `json:"html_url"`
+				Stargazers  int      `json:"stargazers_count"`
+				Topics      []string `json:"topics"`
 			} `json:"items"`
 			Message string `json:"message"`
 		}
@@ -201,30 +201,58 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 		}
 
 		for _, item := range result.Items {
-			repo := item.Repository.FullName
+			repo := item.FullName
 			if seen[repo] {
 				continue
 			}
 			seen[repo] = true
 
-			skillName := repo
-			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
-				skillName = repo[idx+1:]
+			// Skip known skill collection repositories (they are handled separately)
+			isCollection := false
+			for _, coll := range knownSkillCollections {
+				if coll.Owner+"/"+coll.Repo == repo {
+					isCollection = true
+					break
+				}
+			}
+			if isCollection {
+				continue
 			}
 
-			desc := item.Repository.Description
+			// Determine category from topics
+			category := "github"
+			for _, topic := range item.Topics {
+				switch topic {
+				case "ai", "machine-learning", "llm":
+					category = "ai"
+				case "devops", "kubernetes", "docker":
+					category = "devops"
+				case "security":
+					category = "security"
+				case "productivity", "automation":
+					category = "productivity"
+				case "testing", "qa":
+					category = "testing"
+				case "documentation":
+					category = "documentation"
+				case "web", "api":
+					category = "web"
+				}
+			}
+
+			desc := item.Description
 			if desc == "" {
 				desc = fmt.Sprintf("Skill from %s", repo)
 			}
 
 			allResults = append(allResults, HubSkill{
-				Name:        skillName,
+				Name:        item.Name,
 				Description: desc,
-				Category:    "github",
+				Category:    category,
 				Source:      HubSourceGitHub,
 				SourceID:    repo,
-				URL:         item.Repository.HTMLURL,
-				Stars:       item.Repository.Stargazers,
+				URL:         item.HTMLURL,
+				Stars:       item.Stargazers,
 			})
 		}
 
