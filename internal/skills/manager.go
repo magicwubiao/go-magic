@@ -3,6 +3,7 @@ package skills
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,10 +40,8 @@ type Manager struct {
 	hubDir            string                    // Hub 目录路径 (~/.magic/skills/.hub)
 	autoSkillCreation bool                      // 是否自动创建技能
 	minPatternFreq    int                       // 最小模式频率阈值
-	// Hub search cache
-	hubCache     map[string][]HubSkill // 缓存搜索结果
-	hubCacheTime map[string]time.Time  // 缓存时间
-	hubCacheMu   sync.RWMutex          // 缓存锁
+	// Registry manager for hub search/install
+	registryMgr *RegistryManager
 }
 
 // ManagerConfig 配置管理器
@@ -108,8 +107,7 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
 		autoSkillCreation: config.AutoSkillCreation,
 		minPatternFreq:    config.MinPatternFreq,
-		hubCache:          make(map[string][]HubSkill),
-		hubCacheTime:      make(map[string]time.Time),
+		registryMgr:       NewRegistryManager(),
 	}
 
 	// 创建 Hub 目录
@@ -2197,19 +2195,13 @@ type HubSourceConfig struct {
 	URL  string    `json:"url,omitempty"`
 }
 
-// SearchHub searches all configured hubs for skills
+// SearchHub searches all configured hubs for skills using the new registry manager
 func (m *Manager) SearchHub(keyword string, sources []HubSource) ([]HubSkill, error) {
-	var allSkills []HubSkill
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	for _, source := range sources {
-		skills, err := m.searchHubSource(keyword, source)
-		if err != nil {
-			continue // Skip errors, try next source
-		}
-		allSkills = append(allSkills, skills...)
-	}
-
-	return allSkills, nil
+	// Use the new registry manager
+	return m.registryMgr.SearchAll(ctx, keyword, 20)
 }
 
 // searchHubSource searches a specific hub source
@@ -2471,22 +2463,112 @@ func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 	return results, nil
 }
 
-// InstallFromHub installs a skill from a hub source
-// 支持从 GitHub 仓库、skills.sh、well-known 端点等来源安装
+// InstallFromHub installs a skill from a hub source using the registry manager
 func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Map source to registry name
+	var registryName string
 	switch source {
 	case HubSourceGitHub, HubSourceOfficial:
-		// GitHub 仓库：使用 git clone 安装
-		return m.installFromGitHub(sourceID, source)
+		registryName = "github"
+	case HubSourceHub:
+		registryName = "clawhub"
+	default:
+		// Fallback to old method for other sources
+		return m.installFromHubLegacy(source, sourceID)
+	}
+
+	// Get the registry
+	reg := m.registryMgr.GetRegistry(registryName)
+	if reg == nil {
+		return fmt.Errorf("registry %s not found", registryName)
+	}
+
+	// Create staging directory
+	tmpDir, err := os.MkdirTemp("", "go-magic-skill-staging-*")
+	if err != nil {
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download and install to staging
+	if err := reg.DownloadAndInstall(ctx, sourceID, "", tmpDir); err != nil {
+		return fmt.Errorf("failed to download skill: %w", err)
+	}
+
+	// Security scan
+	if err := m.scanAndInstallFromStaging(tmpDir, source, sourceID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// installFromHubLegacy handles legacy installation methods
+func (m *Manager) installFromHubLegacy(source HubSource, sourceID string) error {
+	switch source {
 	case HubSourceSkillsSh:
 		return m.installFromRemoteURL(fmt.Sprintf("https://%s", sourceID), source)
 	case HubSourceWellKnown:
 		return m.installFromRemoteURL(sourceID, source)
-	case HubSourceHub:
-		return m.installFromRemoteURL(fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID), source)
 	default:
 		return fmt.Errorf("unsupported hub source: %s", source)
 	}
+}
+
+// scanAndInstallFromStaging scans staged skills and installs them
+func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource, sourceID string) error {
+	// Find all SKILL.md files
+	var installed int
+	err := filepath.WalkDir(stagingDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(d.Name()), "skill.md") {
+			skill := m.loadSkillFromFile(filepath.Dir(path))
+			if skill == nil {
+				skill = m.loadSkillFromFile(path)
+			}
+			if skill != nil {
+				// Security scan
+				scanResult := ScanSkillSecurity(skill.Content)
+				if !scanResult.Safe {
+					fmt.Printf("Security scan failed for %s: %v\n", skill.Name, scanResult.Threats)
+					return nil
+				}
+				skill.Source = SkillSourceRegistry
+				if err := m.Add(skill); err != nil {
+					fmt.Printf("Failed to add skill %s: %v\n", skill.Name, err)
+				} else {
+					installed++
+					fmt.Printf("Installed skill: %s\n", skill.Name)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to scan staged skills: %w", err)
+	}
+
+	if installed == 0 {
+		return fmt.Errorf("no valid SKILL.md found in downloaded content")
+	}
+
+	// Record to Hub lock
+	lockEntry := HubLockEntry{
+		SkillName:     fmt.Sprintf("%s (%d skills)", sourceID, installed),
+		Source:        source,
+		SourceID:      sourceID,
+		InstalledAt:   time.Now(),
+		SecurityAudit: "passed",
+	}
+	_ = m.AddHubLockEntry(lockEntry)
+
+	return nil
 }
 
 // installFromGitHub clones a GitHub repo and installs skills from it

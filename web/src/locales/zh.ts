@@ -453,6 +453,13 @@ export default {
     failedToAddCategory: '添加分类失败',
     pleaseEnterCategoryName: '请输入分类名称',
     categoryNamePlaceholder: '输入新分类名称',
+    browseHub: '浏览技能库',
+    searchHub: '搜索技能库...',
+    noHubSkills: '没有找到技能',
+    failedToSearchHub: '搜索技能库失败',
+    installed: '安装成功',
+    failedToInstall: '安装失败',
+    search: '搜索',
   },
   plugins: {
     title: '插件',

@@ -453,6 +453,13 @@ export default {
     failedToAddCategory: 'Failed to add category',
     pleaseEnterCategoryName: 'Please enter category name',
     categoryNamePlaceholder: 'Enter new category name',
+    browseHub: 'Browse Skill Hub',
+    searchHub: 'Search skill hub...',
+    noHubSkills: 'No skills found',
+    failedToSearchHub: 'Failed to search skill hub',
+    installed: 'Installed',
+    failedToInstall: 'Failed to install',
+    search: 'Search',
   },
   plugins: {
     title: 'Plugins',

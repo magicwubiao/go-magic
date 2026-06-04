@@ -108,3 +108,31 @@ export async function getSkillVersions(skillName: string): Promise<SkillVersion[
 export async function getSkillEvolutionHistory(skillName: string): Promise<EvolutionRecord[]> {
   return request(`/skills/${encodeURIComponent(skillName)}/evolution`)
 }
+
+// Hub / Skill Market APIs
+export interface HubSkill {
+  Name: string
+  Description: string
+  Category: string
+  Tags: string[]
+  Source: string
+  SourceID: string
+  URL: string
+  Author: string
+  Stars: number
+  Installs: number
+  Verified: boolean
+  Version: string
+}
+
+export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {
+  const params = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
+  return request<HubSkill[]>(`/skills/hub/search${params}`)
+}
+
+export async function installHubSkill(source: string, sourceID: string): Promise<void> {
+  return request('/skills/hub/install', {
+    method: 'POST',
+    body: JSON.stringify({ source, sourceID }),
+  })
+}
