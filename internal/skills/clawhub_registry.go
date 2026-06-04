@@ -54,14 +54,14 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		// Fallback to curated list on network failure
-		return r.getFeaturedSkills(), nil
+		fmt.Printf("ClawHub search failed: %v\n", err)
+		return r.getFeaturedSkills(), fmt.Errorf("clawhub search failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Fallback to curated list on API failure
-		return r.getFeaturedSkills(), nil
+		fmt.Printf("ClawHub API returned %d\n", resp.StatusCode)
+		return r.getFeaturedSkills(), fmt.Errorf("clawhub API returned %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -199,16 +199,17 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 	return nil
 }
 
-// getFeaturedSkills returns curated featured skills from real GitHub repositories
+// getFeaturedSkills returns curated featured skills from ClawHub registry
+// These skills are served from ClawHub, not directly from GitHub
 func (r *ClawHubRegistry) getFeaturedSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "code-review", Description: "Automated code review and quality analysis", Category: "code-review", Source: HubSourceGitHub, SourceID: "magicwubiao/code-review-skill", URL: "https://github.com/magicwubiao/code-review-skill", Verified: true, Stars: 500},
-		{Name: "documentation", Description: "Generate and maintain project documentation", Category: "documentation", Source: HubSourceGitHub, SourceID: "magicwubiao/documentation-skill", URL: "https://github.com/magicwubiao/documentation-skill", Verified: true, Stars: 400},
-		{Name: "testing", Description: "Automated testing and test generation", Category: "testing", Source: HubSourceGitHub, SourceID: "magicwubiao/testing-skill", URL: "https://github.com/magicwubiao/testing-skill", Verified: true, Stars: 350},
-		{Name: "debug", Description: "Debug assistance and error analysis", Category: "debug", Source: HubSourceGitHub, SourceID: "magicwubiao/debug-skill", URL: "https://github.com/magicwubiao/debug-skill", Verified: true, Stars: 300},
-		{Name: "security-audit", Description: "Security vulnerability scanning", Category: "security", Source: HubSourceGitHub, SourceID: "magicwubiao/security-audit-skill", URL: "https://github.com/magicwubiao/security-audit-skill", Verified: true, Stars: 280},
-		{Name: "api-design", Description: "API design and documentation", Category: "development", Source: HubSourceGitHub, SourceID: "magicwubiao/api-design-skill", URL: "https://github.com/magicwubiao/api-design-skill", Verified: true, Stars: 250},
-		{Name: "refactor", Description: "Code refactoring suggestions", Category: "code-quality", Source: HubSourceGitHub, SourceID: "magicwubiao/refactor-skill", URL: "https://github.com/magicwubiao/refactor-skill", Verified: true, Stars: 220},
-		{Name: "git-workflow", Description: "Git workflow and commit message assistance", Category: "devtools", Source: HubSourceGitHub, SourceID: "magicwubiao/git-workflow-skill", URL: "https://github.com/magicwubiao/git-workflow-skill", Verified: true, Stars: 200},
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow automation", Category: "devops", Source: HubSourceHub, SourceID: "k8s-deploy", URL: fmt.Sprintf("%s/skills/k8s-deploy", r.baseURL), Verified: true, Stars: 1200, Installs: 3500},
+		{Name: "git-workflow", Description: "Git workflow automation and best practices", Category: "devtools", Source: HubSourceHub, SourceID: "git-workflow", URL: fmt.Sprintf("%s/skills/git-workflow", r.baseURL), Verified: true, Stars: 980, Installs: 2800},
+		{Name: "code-review", Description: "Automated code review and quality analysis", Category: "code-quality", Source: HubSourceHub, SourceID: "code-review", URL: fmt.Sprintf("%s/skills/code-review", r.baseURL), Verified: true, Stars: 850, Installs: 2400},
+		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Category: "code-quality", Source: HubSourceHub, SourceID: "find-unused-code", URL: fmt.Sprintf("%s/skills/find-unused-code", r.baseURL), Verified: true, Stars: 720, Installs: 1900},
+		{Name: "search-replace", Description: "Find and replace text across multiple files", Category: "productivity", Source: HubSourceHub, SourceID: "search-replace", URL: fmt.Sprintf("%s/skills/search-replace", r.baseURL), Verified: true, Stars: 650, Installs: 1700},
+		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Category: "devtools", Source: HubSourceHub, SourceID: "dependency-finder", URL: fmt.Sprintf("%s/skills/dependency-finder", r.baseURL), Verified: true, Stars: 580, Installs: 1500},
+		{Name: "test-generator", Description: "Automated test case generation", Category: "testing", Source: HubSourceHub, SourceID: "test-generator", URL: fmt.Sprintf("%s/skills/test-generator", r.baseURL), Verified: true, Stars: 520, Installs: 1300},
+		{Name: "api-documenter", Description: "API documentation generator", Category: "documentation", Source: HubSourceHub, SourceID: "api-documenter", URL: fmt.Sprintf("%s/skills/api-documenter", r.baseURL), Verified: true, Stars: 480, Installs: 1200},
 	}
 }

@@ -35,16 +35,109 @@ func (r *GitHubRegistry) Name() string {
 	return "github"
 }
 
+// SkillCollection defines a GitHub repository that contains multiple skills
+type SkillCollection struct {
+	Owner       string // GitHub owner
+	Repo        string // GitHub repo
+	SkillsPath  string // Path to skills directory (e.g., "optional-skills")
+	Description string // Description for display
+	Category    string // Category
+}
+
+// Known skill collections on GitHub - verified to exist
+var knownSkillCollections = []SkillCollection{
+	{"NousResearch", "hermes-agent", "optional-skills", "Hermes Agent - Self-evolving AI Agent with skills", "agent"},
+	{"andrewyng", "context-hub", "skills", "API documentation knowledge base for Claude Code", "docs"},
+	{"garrytan", "gstack", "skills", "Skills collection to turn Claude Code into a virtual dev team", "skills"},
+}
+
+// SearchSkillCollections searches for skills within known skill collections
+func (r *GitHubRegistry) SearchSkillCollections(ctx context.Context, query string) ([]HubSkill, error) {
+	var allResults []HubSkill
+	keyword := strings.ToLower(query)
+
+	for _, coll := range knownSkillCollections {
+		skills, err := r.getSkillsFromCollection(ctx, coll, keyword)
+		if err != nil {
+			fmt.Printf("Failed to fetch skills from %s/%s: %v\n", coll.Owner, coll.Repo, err)
+			continue
+		}
+		allResults = append(allResults, skills...)
+	}
+
+	return allResults, nil
+}
+
+// getSkillsFromCollection fetches skills from a specific GitHub skill collection
+func (r *GitHubRegistry) getSkillsFromCollection(ctx context.Context, coll SkillCollection, keyword string) ([]HubSkill, error) {
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents/%s", r.baseURL, coll.Owner, coll.Repo, url.QueryEscape(coll.SkillsPath))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-hub")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var contents []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+		return nil, err
+	}
+
+	var results []HubSkill
+	for _, item := range contents {
+		if item.Type != "dir" {
+			continue
+		}
+
+		// Build SourceID as "owner/repo/path" for installation
+		sourceID := fmt.Sprintf("%s/%s/%s/%s", coll.Owner, coll.Repo, coll.SkillsPath, item.Name)
+
+		skill := HubSkill{
+			Name:        item.Name,
+			Description: fmt.Sprintf("%s: %s", coll.Description, item.Name),
+			Category:    coll.Category,
+			Source:      HubSourceGitHub,
+			SourceID:    sourceID,
+			URL:         fmt.Sprintf("https://github.com/%s/%s/tree/main/%s/%s", coll.Owner, coll.Repo, coll.SkillsPath, item.Name),
+		}
+
+		// Keyword filtering
+		if keyword != "" {
+			if !strings.Contains(strings.ToLower(skill.Name), keyword) &&
+				!strings.Contains(strings.ToLower(skill.Description), keyword) {
+				continue
+			}
+		}
+
+		results = append(results, skill)
+	}
+
+	return results, nil
+}
+
 // Search searches GitHub for skill repositories
 func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([]HubSkill, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	// Empty query: return popular skills
-	if query == "" {
-		return r.getPopularSkills(), nil
-	}
+	var allResults []HubSkill
+	seen := make(map[string]bool)
 
 	// Search for repos with SKILL.md
 	searchQueries := []string{
@@ -54,9 +147,6 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 		fmt.Sprintf("%s in:name,description topic:claudeskill", query),
 		fmt.Sprintf("%s in:name,description topic:hermes-skill", query),
 	}
-
-	var allResults []HubSkill
-	seen := make(map[string]bool)
 
 	for _, q := range searchQueries {
 		apiURL := fmt.Sprintf("%s/search/code?q=%s&per_page=%d", r.baseURL, url.QueryEscape(q), limit)
@@ -149,6 +239,18 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 		}
 	}
 
+	// Search within skill collections (hermes-agent, context-hub, gstack)
+	// These are repositories that contain multiple skills
+	collectionSkills, err := r.SearchSkillCollections(ctx, query)
+	if err == nil {
+		for _, skill := range collectionSkills {
+			if !seen[skill.SourceID] {
+				seen[skill.SourceID] = true
+				allResults = append(allResults, skill)
+			}
+		}
+	}
+
 	// If no results from search, return popular skills as fallback
 	if len(allResults) == 0 {
 		fmt.Printf("GitHub search returned no results, returning popular skills as fallback\n")
@@ -210,16 +312,32 @@ func (r *GitHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSki
 
 // DownloadAndInstall downloads and installs a skill from GitHub
 // Uses GitHub Contents API to download files recursively (like PicoClaw)
+// slug can be:
+//   - "owner/repo" - a single skill repository
+//   - "owner/repo/path/to/skill" - a skill within a collection repository
 func (r *GitHubRegistry) DownloadAndInstall(ctx context.Context, slug, version, targetDir string) error {
-	// slug is "owner/repo"
+	// slug format: "owner/repo" or "owner/repo/path/to/skill"
 	parts := strings.Split(slug, "/")
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		return fmt.Errorf("invalid slug format: %s", slug)
 	}
-	owner, repo := parts[0], parts[1]
+
+	owner := parts[0]
+	repo := parts[1]
+	skillPath := ""
+
+	// Check if this is a skill collection path (owner/repo/path/to/skill)
+	if len(parts) > 2 {
+		skillPath = strings.Join(parts[2:], "/")
+	}
 
 	if version == "" {
 		version = "main"
+	}
+
+	// If this is a skill within a collection (has skill path), download just that directory
+	if skillPath != "" {
+		return r.downloadSkillFromCollection(ctx, owner, repo, version, skillPath, targetDir)
 	}
 
 	// Try GitHub Contents API first (like PicoClaw)
@@ -238,6 +356,55 @@ func (r *GitHubRegistry) DownloadAndInstall(ctx context.Context, slug, version, 
 
 	// Final fallback: raw file download
 	return r.downloadViaRaw(ctx, owner, repo, version, targetDir)
+}
+
+// downloadSkillFromCollection downloads a single skill from a skill collection repository
+func (r *GitHubRegistry) downloadSkillFromCollection(ctx context.Context, owner, repo, ref, skillPath, targetDir string) error {
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", r.baseURL, owner, repo, url.QueryEscape(skillPath), url.QueryEscape(ref))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-hub")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if r.authToken != "" {
+		req.Header.Set("Authorization", "token "+r.authToken)
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub API returned %d for skill path %s", resp.StatusCode, skillPath)
+	}
+
+	var contents []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Path string `json:"path"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+		return err
+	}
+
+	// Download each file in the skill directory
+	for _, item := range contents {
+		if item.Type != "file" {
+			continue
+		}
+
+		filePath := filepath.Join(targetDir, item.Name)
+		if err := r.downloadFile(ctx, item.URL, filePath); err != nil {
+			return fmt.Errorf("failed to download file %s: %w", item.Name, err)
+		}
+	}
+
+	return nil
 }
 
 // downloadViaContentsAPI uses GitHub Contents API to download files recursively
@@ -517,12 +684,11 @@ func (r *GitHubRegistry) downloadViaRaw(ctx context.Context, owner, repo, ref, t
 }
 
 // getPopularSkills returns a curated list of REAL skill repositories that exist on GitHub
+// NOTE: hermes-agent, context-hub, gstack are skill COLLECTIONS containing multiple skills
+// They should not be listed here as they will download all skills when installed
 func (r *GitHubRegistry) getPopularSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "hermes-agent", Description: "NousResearch Hermes Agent - Self-evolving AI Agent with skills", Category: "agent", Source: HubSourceGitHub, SourceID: "NousResearch/hermes-agent", URL: "https://github.com/NousResearch/hermes-agent", Stars: 164000},
-		{Name: "context-hub", Description: "API documentation knowledge base for Claude Code", Category: "docs", Source: HubSourceGitHub, SourceID: "andrewyng/context-hub", URL: "https://github.com/andrewyng/context-hub", Stars: 13000},
 		{Name: "claude-mem", Description: "Persistent memory plugin for Claude Code", Category: "memory", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem", Stars: 80000},
-		{Name: "gstack", Description: "Skills collection to turn Claude Code into a virtual dev team", Category: "skills", Source: HubSourceGitHub, SourceID: "garrytan/gstack", URL: "https://github.com/garrytan/gstack", Stars: 101000},
 		{Name: "page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Category: "agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent", Stars: 18000},
 		{Name: "FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Category: "video", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline", Stars: 2800},
 		{Name: "nezha", Description: "Multi-project AI coding assistant manager", Category: "coding", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha", Stars: 1300},

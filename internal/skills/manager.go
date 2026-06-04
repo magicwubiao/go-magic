@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2399,16 +2400,16 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 }
 
 // getPopularGitHubSkills returns popular skill repositories from GitHub
+// NOTE: Removed skill collections (hermes-agent, etc.) as they download all contained skills
+// Users should search for individual skills or browse the official skills collection
 func (m *Manager) getPopularGitHubSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "NousResearch/hermes-agent", Description: "Hermes Agent - Official skill collection with optional skills", Category: "official", Source: HubSourceGitHub, SourceID: "NousResearch/hermes-agent", URL: "https://github.com/NousResearch/hermes-agent"},
-		{Name: "anthropics/skills", Description: "Anthropic official skills for Claude Code", Category: "official", Source: HubSourceGitHub, SourceID: "anthropics/skills", URL: "https://github.com/anthropics/skills"},
-		{Name: "vercel-labs/agent-skills", Description: "Vercel Labs agent skills collection", Category: "frontend", Source: HubSourceGitHub, SourceID: "vercel-labs/agent-skills", URL: "https://github.com/vercel-labs/agent-skills"},
-		{Name: "github/copilot-skills", Description: "GitHub Copilot skills and extensions", Category: "devtools", Source: HubSourceGitHub, SourceID: "github/copilot-skills", URL: "https://github.com/github/copilot-skills"},
+		{Name: "thedotmack/claude-mem", Description: "Persistent memory plugin for Claude Code", Category: "memory", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem"},
+		{Name: "alibaba/page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Category: "agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent"},
+		{Name: "FireRedTeam/FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Category: "video", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline"},
+		{Name: "hanshuaikang/nezha", Description: "Multi-project AI coding assistant manager", Category: "coding", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha"},
+		{Name: "getpaseo/paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Category: "platform", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo"},
 		{Name: "microsoft/promptflow-skills", Description: "Microsoft PromptFlow skill templates", Category: "ai", Source: HubSourceGitHub, SourceID: "microsoft/promptflow-skills", URL: "https://github.com/microsoft/promptflow-skills"},
-		{Name: "openai/openai-agents-python", Description: "OpenAI Agents Python SDK with built-in skills", Category: "ai", Source: HubSourceGitHub, SourceID: "openai/openai-agents-python", URL: "https://github.com/openai/openai-agents-python"},
-		{Name: "langchain-ai/langchain", Description: "LangChain framework with skill components", Category: "ai", Source: HubSourceGitHub, SourceID: "langchain-ai/langchain", URL: "https://github.com/langchain-ai/langchain"},
-		{Name: "mastra-ai/mastra", Description: "Mastra AI agent framework skills", Category: "ai", Source: HubSourceGitHub, SourceID: "mastra-ai/mastra", URL: "https://github.com/mastra-ai/mastra"},
 	}
 }
 
@@ -2468,10 +2469,16 @@ func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
+	// Special handling for official skills from Hermes Agent
+	// These skills are located in NousResearch/hermes-agent/optional-skills/<skillName>
+	if source == HubSourceOfficial {
+		return m.installFromOfficial(ctx, sourceID)
+	}
+
 	// Map source to registry name
 	var registryName string
 	switch source {
-	case HubSourceGitHub, HubSourceOfficial:
+	case HubSourceGitHub:
 		registryName = "github"
 	case HubSourceHub:
 		registryName = "clawhub"
@@ -2504,6 +2511,119 @@ func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
 	}
 
 	return nil
+}
+
+// installFromOfficial installs a skill from Hermes Agent official skill collection
+// sourceID is the skill name (e.g., "security/1password")
+func (m *Manager) installFromOfficial(ctx context.Context, skillName string) error {
+	// Hermes Agent official skills are in: https://github.com/NousResearch/hermes-agent/tree/main/optional-skills
+	owner := "NousResearch"
+	repo := "hermes-agent"
+	ref := "main"
+	skillPath := "optional-skills/" + skillName
+
+	// Create staging directory
+	tmpDir, err := os.MkdirTemp("", "go-magic-official-skill-*")
+	if err != nil {
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download the specific skill directory from GitHub
+	client := &http.Client{Timeout: 30 * time.Second}
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+		owner, repo, url.QueryEscape(skillPath), url.QueryEscape(ref))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-manager")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to fetch skill directory: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub API returned %d for skill %s", resp.StatusCode, skillName)
+	}
+
+	// Parse directory contents
+	var contents []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Path string `json:"path"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+		return fmt.Errorf("failed to parse directory contents: %w", err)
+	}
+
+	// Download each file in the skill directory
+	for _, item := range contents {
+		if item.Type != "file" {
+			continue
+		}
+
+		filePath := filepath.Join(tmpDir, item.Name)
+		if err := m.downloadGitHubFile(ctx, item.URL, filePath); err != nil {
+			return fmt.Errorf("failed to download file %s: %w", item.Name, err)
+		}
+	}
+
+	// Check if we downloaded any files
+	files, err := os.ReadDir(tmpDir)
+	if err != nil || len(files) == 0 {
+		return fmt.Errorf("no files downloaded for skill %s", skillName)
+	}
+
+	// Security scan and install
+	return m.scanAndInstallFromStaging(tmpDir, HubSourceOfficial, skillName)
+}
+
+// downloadGitHubFile downloads a single file from GitHub Contents API
+func (m *Manager) downloadGitHubFile(ctx context.Context, apiURL, filePath string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-manager")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var fileInfo struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&fileInfo); err != nil {
+		return err
+	}
+
+	if fileInfo.Encoding == "base64" && fileInfo.Content != "" {
+		decoded, err := base64.StdEncoding.DecodeString(fileInfo.Content)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(filePath, decoded, 0644)
+	}
+
+	return fmt.Errorf("no content available for file")
 }
 
 // installFromHubLegacy handles legacy installation methods
