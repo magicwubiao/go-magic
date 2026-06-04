@@ -2545,7 +2545,7 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 
 			// Get skill directory (parent of SKILL.md)
 			skillDir := filepath.Dir(path)
-			
+
 			// Try to load skill from parent directory first (for SKILL.md)
 			skill := m.loadSkillFromFile(skillDir)
 			if skill == nil {
@@ -2560,7 +2560,7 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 					fmt.Printf("  -> Security scan failed: %v\n", scanResult.Threats)
 					return nil
 				}
-				
+
 				// Install skill with proper directory structure
 				if err := m.installSkillWithDirectory(skill, skillDir, source, sourceID); err != nil {
 					fmt.Printf("  -> Failed to install skill: %v\n", err)
@@ -2622,7 +2622,7 @@ func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, sour
 		OriginKind:  "third_party",
 		Registry:    string(source),
 		Slug:        sourceID,
-		RegistryURL: skill.URL,
+		RegistryURL: "",
 		VersionStr:  "1.0.0",
 		InstalledAt: time.Now().Unix(),
 	}

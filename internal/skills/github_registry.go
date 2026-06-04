@@ -57,13 +57,11 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 
 	var allResults []HubSkill
 	seen := make(map[string]bool)
-	var lastErr error
 
 	for _, q := range searchQueries {
 		apiURL := fmt.Sprintf("%s/search/code?q=%s&per_page=%d", r.baseURL, url.QueryEscape(q), limit)
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to create request: %w", err)
 			continue
 		}
 		req.Header.Set("User-Agent", "go-magic-skill-hub")
@@ -74,20 +72,17 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 
 		resp, err := r.client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
 			continue
 		}
 
 		// Check for rate limiting
 		if resp.StatusCode == http.StatusForbidden {
 			resp.Body.Close()
-			lastErr = fmt.Errorf("github API rate limit exceeded")
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			lastErr = fmt.Errorf("github API returned %d", resp.StatusCode)
 			continue
 		}
 
@@ -106,14 +101,12 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			resp.Body.Close()
-			lastErr = fmt.Errorf("failed to decode response: %w", err)
 			continue
 		}
 		resp.Body.Close()
 
 		// Check for API error message
 		if result.Message != "" {
-			lastErr = fmt.Errorf("github API error: %s", result.Message)
 			continue
 		}
 
@@ -250,7 +243,7 @@ func (r *GitHubRegistry) DownloadAndInstall(ctx context.Context, slug, version, 
 // downloadViaContentsAPI uses GitHub Contents API to download files recursively
 func (r *GitHubRegistry) downloadViaContentsAPI(ctx context.Context, owner, repo, ref, targetDir string) error {
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents?ref=%s", r.baseURL, owner, repo, url.QueryEscape(ref))
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return err
@@ -334,10 +327,10 @@ func (r *GitHubRegistry) downloadDirContents(ctx context.Context, apiURL, target
 	}
 
 	var items []struct {
-		Name  string `json:"name"`
-		Path  string `json:"path"`
-		Type  string `json:"type"`
-		URL   string `json:"url"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Type string `json:"type"`
+		URL  string `json:"url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return err
@@ -492,7 +485,7 @@ func (r *GitHubRegistry) downloadViaZipball(ctx context.Context, owner, repo, re
 // downloadViaRaw downloads SKILL.md directly from raw.githubusercontent.com
 func (r *GitHubRegistry) downloadViaRaw(ctx context.Context, owner, repo, ref, targetDir string) error {
 	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/SKILL.md", owner, repo, url.QueryEscape(ref))
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return err
