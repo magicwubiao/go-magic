@@ -29,23 +29,20 @@
       </n-card>
 
       <!-- Sources Filter -->
-      <n-card title="筛选" style="margin-bottom: 24px;">
-        <div>
-          <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.sources') }}</n-text>
-          <n-space>
-            <n-tag 
-              v-for="source in skillSources" 
-              :key="source" 
-              size="large"
-              :checked="selectedSource === source"
-              checkable
-              :type="getSourceType(source)"
-              @update:checked="selectedSource = selectedSource === source ? '' : source"
-            >
-              {{ t(`skills.sourceOptions.${source}`) || source }}
-            </n-tag>
-          </n-space>
-        </div>
+      <n-card :title="t('skills.sources')" style="margin-bottom: 24px;">
+        <n-space>
+          <n-tag 
+            v-for="source in skillSources" 
+            :key="source" 
+            size="large"
+            :checked="selectedSource === source"
+            checkable
+            :type="getSourceType(source)"
+            @update:checked="selectedSource = selectedSource === source ? '' : source"
+          >
+            {{ t(`skills.sourceOptions.${source}`) || source }}
+          </n-tag>
+        </n-space>
       </n-card>
 
       <!-- Drag & Drop Zone -->
@@ -628,7 +625,6 @@ async function deleteSkillConfirm(id: string, name: string): Promise<void> {
     await deleteSkill(id)
     message.success(t('skills.deleted'))
     await skillsStore.loadSkills()
-    await skillsStore.loadCategories()
   } catch (e) {
     message.error(t('skills.failedToDelete'))
   }
