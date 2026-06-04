@@ -32,14 +32,15 @@ func (r *ClawHubRegistry) Name() string {
 }
 
 // Search searches ClawHub for skills
+// Returns empty results if query is empty - user must explicitly search
 func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) ([]HubSkill, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	// Empty query: return featured skills
+	// Don't return results for empty query - user must search explicitly
 	if query == "" {
-		return r.getFeaturedSkills(), nil
+		return []HubSkill{}, nil
 	}
 
 	apiURL := fmt.Sprintf("%s/api/v1/search?q=%s&limit=%d", r.baseURL, url.QueryEscape(query), limit)
@@ -55,13 +56,13 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 	resp, err := r.client.Do(req)
 	if err != nil {
 		fmt.Printf("ClawHub search failed: %v\n", err)
-		return r.getFeaturedSkills(), fmt.Errorf("clawhub search failed: %w", err)
+		return []HubSkill{}, fmt.Errorf("clawhub search failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		fmt.Printf("ClawHub API returned %d\n", resp.StatusCode)
-		return r.getFeaturedSkills(), fmt.Errorf("clawhub API returned %d", resp.StatusCode)
+		return []HubSkill{}, fmt.Errorf("clawhub API returned %d", resp.StatusCode)
 	}
 
 	var result struct {

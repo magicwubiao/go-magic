@@ -131,9 +131,15 @@ func (r *GitHubRegistry) getSkillsFromCollection(ctx context.Context, coll Skill
 }
 
 // Search searches GitHub for skill repositories
+// Returns empty results if query is empty - user must explicitly search
 func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([]HubSkill, error) {
 	if limit <= 0 {
 		limit = 10
+	}
+
+	// Don't return results for empty query - user must search explicitly
+	if query == "" {
+		return []HubSkill{}, nil
 	}
 
 	var allResults []HubSkill
