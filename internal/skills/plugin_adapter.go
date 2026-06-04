@@ -29,7 +29,6 @@ func (a *PluginAdapter) Manifest() *plugin.PluginManifest {
 		License:     a.skill.License,
 		APIVersion:  "1.0",
 		Type:        plugin.TypeScript, // Skills are script-based
-		Category:    a.skill.Category,
 		Tags:        a.skill.Tags,
 		Permissions: []string{"filesystem"},
 		Hooks:       []string{"on_load"},
@@ -118,19 +117,17 @@ type BuiltinSkillPlugin struct {
 	name        string
 	description string
 	content     string
-	category    string
 	tags        []string
 	author      string
 	version     string
 }
 
 // NewBuiltinSkillPlugin creates a new built-in skill plugin
-func NewBuiltinSkillPlugin(name, description, content, category string, tags []string) *BuiltinSkillPlugin {
+func NewBuiltinSkillPlugin(name, description, content string, tags []string) *BuiltinSkillPlugin {
 	return &BuiltinSkillPlugin{
 		name:        name,
 		description: description,
 		content:     content,
-		category:    category,
 		tags:        tags,
 		author:      "go-magic",
 		version:     "1.0.0",
@@ -161,7 +158,6 @@ func (p *BuiltinSkillPlugin) Manifest() *plugin.PluginManifest {
 		License:     "MIT",
 		APIVersion:  "1.0",
 		Type:        plugin.TypeScript,
-		Category:    p.category,
 		Tags:        p.tags,
 		Permissions: []string{"filesystem"},
 		Hooks:       []string{"on_load"},
@@ -183,7 +179,6 @@ func (p *BuiltinSkillPlugin) Execute(cmd string, args []string) (interface{}, er
 		"name":        p.name,
 		"description": p.description,
 		"content":     p.content,
-		"category":    p.category,
 		"tags":        p.tags,
 		"author":      p.author,
 	}, nil
@@ -203,7 +198,6 @@ func RegisterBuiltinSkills(registry *plugin.Registry) error {
 			skill.Name,
 			skill.Description,
 			skill.Content,
-			skill.Category,
 			skill.Tags,
 		).WithAuthor(skill.Author).WithVersion(skill.Version)
 

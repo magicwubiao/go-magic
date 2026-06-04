@@ -28,60 +28,24 @@
         </n-grid>
       </n-card>
 
-      <!-- Categories & Sources Filter -->
+      <!-- Sources Filter -->
       <n-card title="筛选" style="margin-bottom: 24px;">
-        <n-space vertical size="medium">
-          <!-- Categories -->
-          <div>
-            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
-            <n-space style="margin-top: 4px;">
-              <n-tag 
-                size="large"
-                :checked="selectedCategory === ''"
-                checkable
-                @update:checked="selectedCategory = selectedCategory === '' ? '' : ''"
-              >
-                {{ t('skills.categoryNames.all') || 'All' }}
-              </n-tag>
-              <n-tag 
-                size="large"
-                :checked="selectedCategory === 'general'"
-                checkable
-                @update:checked="selectedCategory = selectedCategory === 'general' ? '' : 'general'"
-              >
-                {{ t('skills.general') || 'General' }}
-              </n-tag>
-              <n-tag 
-                v-for="cat in filteredCategories" 
-                :key="cat" 
-                size="large"
-                :checked="selectedCategory === cat"
-                checkable
-                @update:checked="selectedCategory = selectedCategory === cat ? '' : cat"
-              >
-                {{ t(`skills.categoryNames.${cat}`) || cat }}
-              </n-tag>
-            </n-space>
-          </div>
-          
-          <!-- Sources -->
-          <div>
-            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.sources') }}</n-text>
-            <n-space>
-              <n-tag 
-                v-for="source in skillSources" 
-                :key="source" 
-                size="large"
-                :checked="selectedSource === source"
-                checkable
-                :type="getSourceType(source)"
-                @update:checked="selectedSource = selectedSource === source ? '' : source"
-              >
-                {{ t(`skills.sourceOptions.${source}`) || source }}
-              </n-tag>
-            </n-space>
-          </div>
-        </n-space>
+        <div>
+          <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.sources') }}</n-text>
+          <n-space>
+            <n-tag 
+              v-for="source in skillSources" 
+              :key="source" 
+              size="large"
+              :checked="selectedSource === source"
+              checkable
+              :type="getSourceType(source)"
+              @update:checked="selectedSource = selectedSource === source ? '' : source"
+            >
+              {{ t(`skills.sourceOptions.${source}`) || source }}
+            </n-tag>
+          </n-space>
+        </div>
       </n-card>
 
       <!-- Drag & Drop Zone -->
@@ -158,10 +122,7 @@
                 <n-text depth="3" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">
                   {{ skill.description || t('skills.noDescription') }}
                 </n-text>
-                <n-space justify="space-between" align="center">
-                  <n-text depth="3" style="font-size: 12px;">
-                    {{ t('skills.category') }}: {{ skill.category ? t(`skills.categoryNames.${skill.category}`) || skill.category : t('skills.general') }}
-                  </n-text>
+                <n-space justify="end" align="center">
                   <n-tag v-if="getSkillTrend(skill.name)" size="tiny" :type="getTrendType(getSkillTrend(skill.name)!)">
                     {{ t(`skills.trends.${getSkillTrend(skill.name)}`) }}
                   </n-tag>
@@ -209,9 +170,6 @@
             <n-descriptions bordered>
               <n-descriptions-item :label="t('skills.description')">
                 {{ selectedSkill.description || t('skills.noDescription') }}
-              </n-descriptions-item>
-              <n-descriptions-item :label="t('skills.category')">
-                {{ selectedSkill.category ? t(`skills.categoryNames.${selectedSkill.category}`) || selectedSkill.category : t('skills.general') }}
               </n-descriptions-item>
               <n-descriptions-item :label="t('skills.tags')">
                 <n-space>
@@ -280,9 +238,6 @@
         </n-form-item>
         <n-form-item :label="t('skills.description')">
           <n-input v-model:value="editingSkill.description" type="textarea" :rows="3" />
-        </n-form-item>
-        <n-form-item :label="t('skills.category')">
-          <n-select v-model:value="editingSkill.category" :options="categoryOptions" />
         </n-form-item>
         <n-form-item :label="t('skills.tags')">
           <n-dynamic-tags v-model:value="editingSkill.tags" />
@@ -381,7 +336,6 @@ const showEditModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
-const selectedCategory = ref('')
 const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
 
@@ -409,7 +363,6 @@ interface Skill {
   id: string
   name: string
   description: string
-  category: string
   tags: string[]
   enabled: boolean
   source: 'builtin' | 'local' | 'global' | 'registry' | 'auto' | string
@@ -442,7 +395,6 @@ interface EvolutionRecord {
 interface HubSkill {
   name: string
   description: string
-  category: string
   tags: string[]
   source: string
   source_id: string
@@ -456,14 +408,6 @@ interface HubSkill {
 // Computed
 const filteredSkills = computed(() => {
   let result = skillsStore.skills
-  
-  if (selectedCategory.value && selectedCategory.value !== 'all') {
-    if (selectedCategory.value === 'general') {
-      result = result.filter(s => !s.category || s.category === '' || s.category === 'general')
-    } else {
-      result = result.filter(s => s.category === selectedCategory.value)
-    }
-  }
   
   if (selectedSource.value && selectedSource.value !== 'all') {
     result = result.filter(s => s.source === selectedSource.value)
@@ -490,23 +434,6 @@ const topSkillName = computed(() => {
 
 const improvingSkillsCount = computed(() => {
   return skillStats.value.filter(s => s.trend === 'improving').length
-})
-
-const categoryOptions = computed(() => {
-  return [
-    { label: t('skills.general'), value: 'general' },
-    ...skillsStore.categories
-      .filter(c => c !== 'general')
-      .map(c => ({
-        label: t(`skills.categoryNames.${c}`) || c,
-        value: c
-      }))
-  ]
-})
-
-// 过滤掉 "general" 和空字符串，因为已单独显示
-const filteredCategories = computed(() => {
-  return skillsStore.categories.filter(c => c && c !== 'general')
 })
 
 function getSuccessRateType(rate: number): 'success' | 'warning' | 'error' {
@@ -606,7 +533,6 @@ async function saveEdit() {
     await skillsStore.updateSkill(editingSkill.value.id, {
       name: editingSkill.value.name,
       description: editingSkill.value.description,
-      category: editingSkill.value.category,
       tags: editingSkill.value.tags,
     })
     message.success(t('skills.updated'))
@@ -647,7 +573,6 @@ async function installHubSkill(source: string, sourceID: string): Promise<void> 
     await skillsStore.installHubSkill(source, sourceID)
     message.success(t('skills.installed'))
     await skillsStore.loadSkills()
-    await skillsStore.loadCategories()
     showHubModal.value = false
     hubSearchKeyword.value = ''
     hubSkills.value = []
@@ -762,10 +687,7 @@ function handleUploadError() {
 
 // Load data on mount
 onMounted(async () => {
-  await Promise.all([
-    skillsStore.loadSkills(),
-    skillsStore.loadCategories()
-  ])
+  await skillsStore.loadSkills()
   
   // Load statistics
   try {

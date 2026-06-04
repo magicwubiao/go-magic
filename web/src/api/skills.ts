@@ -4,7 +4,6 @@ export interface Skill {
   id: string
   name: string
   description: string
-  category: string
   tags: string[]
   enabled: boolean
   source: 'builtin' | 'local' | 'global' | 'registry' | 'auto' | string
@@ -36,17 +35,6 @@ export interface EvolutionRecord {
 
 export async function getSkills(): Promise<Skill[]> {
   return request('/skills')
-}
-
-export async function getSkillCategories(): Promise<string[]> {
-  return request('/skills/categories')
-}
-
-export async function createCategory(name: string, description?: string): Promise<void> {
-  return request('/skills/categories', {
-    method: 'POST',
-    body: JSON.stringify({ name, description }),
-  })
 }
 
 export async function toggleSkill(name: string, enabled: boolean): Promise<void> {
@@ -113,7 +101,6 @@ export async function getSkillEvolutionHistory(skillName: string): Promise<Evolu
 export interface HubSkill {
   name: string
   description: string
-  category: string
   tags: string[]
   source: string
   source_id: string

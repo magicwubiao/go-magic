@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [documentation, technical-writing, markdown, docs]
-    category: practices
+    category: software-development
 ---
 
 # Technical Documentation Writing Guide

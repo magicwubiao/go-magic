@@ -27,7 +27,6 @@ type SkillMeta struct {
 	Author      string      `json:"author,omitempty"`
 	License     string      `json:"license,omitempty"`
 	Tags        []string    `json:"tags,omitempty"`
-	Category    string      `json:"category,omitempty"`
 	Source      SkillSource `json:"source,omitempty"`
 	InstalledAt time.Time   `json:"installed_at,omitempty"`
 }
@@ -93,7 +92,6 @@ func (s *Skill) ToSkillMeta() *SkillMeta {
 		Author:      s.Author,
 		License:     s.License,
 		Tags:        s.Tags,
-		Category:    s.Category,
 		Source:      s.Source,
 		InstalledAt: s.InstalledAt,
 	}
@@ -166,7 +164,7 @@ func (s *Skill) SupportingFiles() string {
 type SkillLoadLevel int
 
 const (
-	// Level0: List only - returns name, description, category (~3k tokens equivalent)
+	// Level0: List only - returns name, description (~3k tokens equivalent)
 	Level0 SkillLoadLevel = iota
 	// Level1: Metadata + Summary - returns full content and metadata
 	Level1
@@ -192,7 +190,6 @@ func (l SkillLoadLevel) String() string {
 type SkillListItem struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Category    string   `json:"category,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Version     string   `json:"version,omitempty"`
 }
@@ -406,27 +403,6 @@ type SecurityScanResult struct {
 // 参考 Hermes Agent 的 SKILLS_GUIDANCE
 const SkillsGuidance = `After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time.
 When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') -- don't wait to be asked. Skills that aren't maintained become liabilities.`
-
-// =============================================================================
-// Skill Categories (技能分类) - 参考 Hermes Agent 目录层级分类
-// =============================================================================
-
-// SkillCategory 表示一个技能分类（对应目录层级）
-type SkillCategory struct {
-	Name        string      `json:"name"`             // 分类名称（目录名）
-	Description string      `json:"description"`      // 分类描述
-	Path        string      `json:"path"`             // 分类目录绝对路径
-	SkillCount  int         `json:"skill_count"`      // 该分类下的技能数量
-	Skills      []string    `json:"skills"`           // 技能名称列表
-	Parent      string      `json:"parent,omitempty"` // 父分类名称
-	Source      SkillSource `json:"source"`           // 来源
-}
-
-// CategoryTree 表示分类树结构
-type CategoryTree struct {
-	Category *SkillCategory  `json:"category"`
-	Children []*CategoryTree `json:"children,omitempty"`
-}
 
 // =============================================================================
 // Hub Lock (Hub 安装跟踪) - 参考 Hermes Agent .hub/lock.json

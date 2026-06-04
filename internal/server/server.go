@@ -2025,7 +2025,6 @@ func (s *Server) getRealSkills() []Skill {
 			ID:          skill.Name,
 			Name:        skill.Name,
 			Description: skill.Description,
-			Category:    skill.Category,
 			Tags:        tags,
 			Enabled:     !isDisabled,
 			Source:      string(skill.Source),
@@ -2184,10 +2183,6 @@ func parseSkillYAML(data []byte, skill *Skill) {
 			skill.Description = strings.TrimSpace(skill.Description)
 			skill.Description = strings.Trim(skill.Description, "\"'")
 		}
-		if strings.HasPrefix(line, "category:") {
-			skill.Category = strings.TrimPrefix(line, "category:")
-			skill.Category = strings.TrimSpace(skill.Category)
-		}
 		if strings.HasPrefix(line, "tags:") {
 			tags := strings.TrimPrefix(line, "tags:")
 			tags = strings.TrimSpace(tags)
@@ -2209,10 +2204,6 @@ func parseSkillMarkdown(data []byte, skill *Skill) {
 			skill.Description = strings.TrimPrefix(line, "description:")
 			skill.Description = strings.TrimSpace(skill.Description)
 			skill.Description = strings.Trim(skill.Description, "\"'")
-		}
-		if strings.HasPrefix(line, "category:") {
-			skill.Category = strings.TrimPrefix(line, "category:")
-			skill.Category = strings.TrimSpace(skill.Category)
 		}
 		if strings.HasPrefix(line, "tags:") {
 			tags := strings.TrimPrefix(line, "tags:")
@@ -2261,73 +2252,7 @@ func parseSkillJSON(data []byte, skill *Skill) {
 }
 
 func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
-	// POST - 创建新分类
-	if r.Method == "POST" {
-		var req struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-			http.Error(w, "invalid request: name required", 400)
-			return
-		}
-		if s.skillMgr != nil {
-			catName, err := s.skillMgr.CreateCategory(req.Name, req.Description)
-			if err != nil {
-				http.Error(w, "failed to create category: "+err.Error(), 500)
-				return
-			}
-			jsonResponse(w, map[string]interface{}{"ok": true, "name": catName})
-			return
-		}
-		http.Error(w, "skill manager not available", 500)
-		return
-	}
-
-	if s.skillMgr != nil {
-		// 优先使用 Manager 的分类数据（包含目录层级分类）
-		categories := s.skillMgr.GetCategories()
-		if len(categories) > 0 {
-			jsonResponse(w, categories)
-			return
-		}
-
-		// 也获取目录层级分类
-		dirCategories := s.skillMgr.GetSkillCategories()
-		catSet := make(map[string]bool)
-		for _, cat := range categories {
-			catSet[cat] = true
-		}
-		for _, cat := range dirCategories {
-			catSet[cat.Name] = true
-		}
-
-		result := make([]string, 0, len(catSet))
-		for cat := range catSet {
-			result = append(result, cat)
-		}
-		sort.Strings(result)
-		jsonResponse(w, result)
-		return
-	}
-
-	// 回退到从 skills 列表提取
-	skills := s.getRealSkills()
-	catSet := make(map[string]bool)
-
-	for _, skill := range skills {
-		if skill.Category != "" {
-			catSet[skill.Category] = true
-		}
-	}
-
-	categories := make([]string, 0, len(catSet))
-	for cat := range catSet {
-		categories = append(categories, cat)
-	}
-
-	sort.Strings(categories)
-	jsonResponse(w, categories)
+	jsonResponse(w, []string{})
 }
 
 func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
@@ -2521,7 +2446,6 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			err := s.skillMgr.UpdateMetadata(id, skills.SkillMeta{
 				Name:        req.Name,
 				Description: req.Description,
-				Category:    req.Category,
 				Tags:        req.Tags,
 			})
 			if err != nil {

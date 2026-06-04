@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [code-quality, standards, clean-code, best-practices]
-    category: practices
+    category: software-development
 ---
 
 # Code Quality Guide

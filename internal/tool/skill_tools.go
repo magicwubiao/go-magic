@@ -13,9 +13,8 @@ type SkillData map[string]interface{}
 type SkillsManager interface {
 	List() map[string]SkillData
 	Get(name string) (SkillData, error)
-	GetCategories() []string
 	GetSkillDir(name string) (string, error)
-	Create(name, description, content, category string, tags []string) (SkillData, error)
+	Create(name, description, content string, tags []string) (SkillData, error)
 	Update(name, content string) error
 	Delete(name string) error
 	Patch(name, oldString, newString string) error       // 定向修补：替换技能内容中的指定字符串
@@ -67,23 +66,14 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, fmt.Errorf("skills manager not initialized")
 	}
 
-	category := getString(args, "category")
 	source := getString(args, "source")
 	query := getString(args, "query")
 
 	skills := t.manager.List()
-	categories := t.manager.GetCategories()
 
 	// Filter skills
 	var filtered []SkillData
 	for _, skill := range skills {
-		// Filter by category
-		if category != "" {
-			if cat := getString(skill, "category"); cat != category {
-				continue
-			}
-		}
-
 		// Filter by source
 		if source != "" {
 			if src := getString(skill, "source"); src != source {
@@ -126,9 +116,8 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	return map[string]interface{}{
-		"count":      len(summaries),
-		"categories": categories,
-		"skills":     summaries,
+		"count":  len(summaries),
+		"skills": summaries,
 	}, nil
 }
 
@@ -311,10 +300,9 @@ func (t *SkillManageTool) Execute(ctx context.Context, args map[string]interface
 	case "create":
 		description := getString(args, "description")
 		content := getString(args, "content")
-		category := getString(args, "category")
 		tags := getStringSlice(args, "tags")
 
-		skill, err := t.manager.Create(name, description, content, category, tags)
+		skill, err := t.manager.Create(name, description, content, tags)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create skill: %w", err)
 		}

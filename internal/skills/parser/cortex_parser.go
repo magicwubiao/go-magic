@@ -119,11 +119,6 @@ func (p *HermesParser) Parse(skillDir string) (*HermesSkill, error) {
 			}
 		}
 
-		// Parse cortex.category
-		if category, ok := hermes["category"].(string); ok {
-			skill.Category = category
-		}
-
 		// Parse cortex.tools
 		if tools, ok := hermes["tools"].([]string); ok {
 			if len(skill.Tools) == 0 {
@@ -246,9 +241,6 @@ func (p *HermesParser) ParseFromFiles(files map[string]string) (*HermesSkill, er
 			if len(skill.Tags) == 0 {
 				skill.Tags = tags
 			}
-		}
-		if category, ok := hermes["category"].(string); ok {
-			skill.Category = category
 		}
 		if tools, ok := hermes["tools"].([]string); ok {
 			if len(skill.Tools) == 0 {

@@ -5,7 +5,6 @@ import type { Skill } from '@/api/skills'
 
 export const useSkillsStore = defineStore('skills', () => {
   const skills = ref<Skill[]>([])
-  const categories = ref<string[]>([])
   const loading = ref(false)
 
   async function loadSkills() {
@@ -15,10 +14,6 @@ export const useSkillsStore = defineStore('skills', () => {
     } finally {
       loading.value = false
     }
-  }
-
-  async function loadCategories() {
-    categories.value = await skillsApi.getSkillCategories()
   }
 
   async function toggleSkill(name: string, enabled: boolean) {
@@ -48,10 +43,8 @@ export const useSkillsStore = defineStore('skills', () => {
 
   return {
     skills,
-    categories,
     loading,
     loadSkills,
-    loadCategories,
     toggleSkill,
     installSkill,
     updateSkill,

@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [git, workflow, collaboration, version-control]
-    category: devtools/git
+    category: software-development
 ---
 
 # Git Workflow Guide

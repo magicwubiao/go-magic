@@ -70,7 +70,6 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 			Slug        string   `json:"slug"`
 			Name        string   `json:"name"`
 			Description string   `json:"description"`
-			Category    string   `json:"category"`
 			Tags        []string `json:"tags"`
 			Version     string   `json:"version"`
 			Stars       int      `json:"stars"`
@@ -127,7 +126,6 @@ func (r *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSk
 		Slug        string   `json:"slug"`
 		Name        string   `json:"name"`
 		Description string   `json:"description"`
-		Category    string   `json:"category"`
 		Tags        []string `json:"tags"`
 		Version     string   `json:"version"`
 		Stars       int      `json:"stars"`

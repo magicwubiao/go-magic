@@ -30,17 +30,16 @@ type Manager struct {
 	searchDirs        []string
 	builtinDir        string
 	skills            map[string]*Skill
-	bundles           map[string]*SkillBundle   // 技能捆绑包
-	categories        map[string]*SkillCategory // 技能分类（按目录层级）
-	toolNames         []string                  // Cached tool names from registry
-	registryURL       string                    // ClawHub or GitHub registry URL
-	hubLock           *HubLock                  // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest   *BundledManifest          // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills    *DisabledSkillsConfig     // 禁用技能配置
-	skillsDir         string                    // 技能目录路径 (~/.magic/skills)
-	hubDir            string                    // Hub 目录路径 (~/.magic/skills/.hub)
-	autoSkillCreation bool                      // 是否自动创建技能
-	minPatternFreq    int                       // 最小模式频率阈值
+	bundles           map[string]*SkillBundle // 技能捆绑包
+	toolNames         []string                // Cached tool names from registry
+	registryURL       string                  // ClawHub or GitHub registry URL
+	hubLock           *HubLock                // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest   *BundledManifest        // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills    *DisabledSkillsConfig   // 禁用技能配置
+	skillsDir         string                  // 技能目录路径 (~/.magic/skills)
+	hubDir            string                  // Hub 目录路径 (~/.magic/skills/.hub)
+	autoSkillCreation bool                    // 是否自动创建技能
+	minPatternFreq    int                     // 最小模式频率阈值
 	// Registry manager for hub search/install
 	registryMgr *RegistryManager
 }
@@ -102,7 +101,6 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 		toolNames:         config.ToolNames,
 		skills:            make(map[string]*Skill),
 		bundles:           make(map[string]*SkillBundle),
-		categories:        make(map[string]*SkillCategory),
 		skillsDir:         skillsDir,
 		hubDir:            filepath.Join(skillsDir, ".hub"),
 		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
@@ -316,10 +314,7 @@ func (m *Manager) loadSkills() error {
 			path := filepath.Join(dir, entry.Name())
 
 			if entry.IsDir() {
-				// 检查是否是分类目录（包含子目录，但自身没有 SKILL.md）
-				isCategory := m.scanCategoryDir(path, dir, entry.Name())
-
-				// Check for SKILL.md (Cortex format) - 直接放在搜索目录下的技能
+				// Check for SKILL.md (Cortex format)
 				skillMdPath := filepath.Join(path, "SKILL.md")
 				if _, err := os.Stat(skillMdPath); err == nil {
 					skill := m.loadSkillFromFile(skillMdPath)
@@ -354,11 +349,6 @@ func (m *Manager) loadSkills() error {
 					}
 					continue
 				}
-
-				// 如果是分类目录且没有直接包含 SKILL.md，跳过（子技能已在 scanCategoryDir 中加载）
-				if isCategory {
-					continue
-				}
 				continue
 			}
 
@@ -380,82 +370,6 @@ func (m *Manager) loadSkills() error {
 	}
 
 	return nil
-}
-
-// scanCategoryDir 扫描分类目录，加载子目录中的技能
-// 返回 true 表示该目录被识别为分类目录
-func (m *Manager) scanCategoryDir(categoryPath, parentDir, categoryName string) bool {
-	entries, err := os.ReadDir(categoryPath)
-	if err != nil {
-		return false
-	}
-
-	// 检查是否有子目录（有子目录则视为分类目录）
-	hasSubdirs := false
-	var skillNames []string
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// 跳过排除目录
-		if IsExcludedDir(entry.Name()) {
-			continue
-		}
-		hasSubdirs = true
-
-		subPath := filepath.Join(categoryPath, entry.Name())
-
-		// 尝试加载子目录中的技能
-		skillMdPath := filepath.Join(subPath, "SKILL.md")
-		if _, err := os.Stat(skillMdPath); err == nil {
-			skill := m.loadSkillFromFile(skillMdPath)
-			if skill != nil {
-				// Preserve existing source if it's builtin
-				if existingSkill, exists := m.skills[skill.Name]; exists {
-					if existingSkill.Source == "builtin" {
-						skill.Source = existingSkill.Source
-					} else {
-						skill.Source = "local"
-						if strings.Contains(parentDir, ".magic") {
-							skill.Source = "global"
-						}
-					}
-				} else {
-					skill.Source = "local"
-					if strings.Contains(parentDir, ".magic") {
-						skill.Source = "global"
-					}
-				}
-				// 自动设置分类
-				if skill.Category == "" {
-					skill.Category = categoryName
-				}
-				m.skills[skill.Name] = skill
-				skillNames = append(skillNames, skill.Name)
-			}
-			continue
-		}
-
-		// 递归扫描更深层的分类（支持多级分类）
-		if m.scanCategoryDir(subPath, parentDir, categoryName+"/"+entry.Name()) {
-			// 子分类已在递归中处理
-		}
-	}
-
-	// 如果有子技能，注册为分类
-	if len(skillNames) > 0 {
-		absPath, _ := filepath.Abs(categoryPath)
-		m.categories[categoryName] = &SkillCategory{
-			Name:       categoryName,
-			Path:       absPath,
-			SkillCount: len(skillNames),
-			Skills:     skillNames,
-			Source:     SkillSourceGlobal,
-		}
-	}
-
-	return hasSubdirs
 }
 
 func (m *Manager) loadSkillFromManifest(manifestPath string) *Skill {
@@ -1469,26 +1383,6 @@ func (m *Manager) ListAll() map[string]*Skill {
 	return result
 }
 
-// GetCategories returns all unique skill categories
-func (m *Manager) GetCategories() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	categorySet := make(map[string]bool)
-	for _, skill := range m.skills {
-		if skill.Category != "" {
-			categorySet[skill.Category] = true
-		}
-	}
-
-	categories := make([]string, 0, len(categorySet))
-	for cat := range categorySet {
-		categories = append(categories, cat)
-	}
-	sort.Strings(categories)
-	return categories
-}
-
 // GetSkillDir returns the directory path for a skill
 func (m *Manager) GetSkillDir(name string) (string, error) {
 	m.mu.RLock()
@@ -1548,7 +1442,7 @@ func (m *Manager) GetSkillSourceStats() map[SkillSource]int {
 }
 
 // Create creates a new skill from scratch
-func (m *Manager) Create(name, description, content, category string, tags []string) (*Skill, error) {
+func (m *Manager) Create(name, description, content string, tags []string) (*Skill, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1580,7 +1474,6 @@ name: %s
 description: %s
 version: 1.0.0
 author: magic-agent
-category: %s
 tags: [%s]
 ---
 
@@ -1597,7 +1490,7 @@ tags: [%s]
 
 ## Verification
 <!-- 如何验证操作成功 -->
-`, name, description, category, strings.Join(tags, ", "), name, content)
+`, name, description, strings.Join(tags, ", "), name, content)
 
 	if err := os.WriteFile(skillMdPath, []byte(skillContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write skill file: %w", err)
@@ -1609,7 +1502,6 @@ tags: [%s]
 			Name:        name,
 			Description: description,
 			Version:     "1.0.0",
-			Category:    category,
 			Tags:        tags,
 			Source:      SkillSourceLocal,
 		},
@@ -1643,7 +1535,7 @@ func (m *Manager) Update(name, content string) error {
 	return os.WriteFile(skillMdPath, []byte(content), 0644)
 }
 
-// UpdateMetadata updates skill metadata (name, description, category, tags)
+// UpdateMetadata updates skill metadata (name, description, tags)
 func (m *Manager) UpdateMetadata(name string, meta SkillMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1656,7 +1548,6 @@ func (m *Manager) UpdateMetadata(name string, meta SkillMeta) error {
 	// Update metadata fields
 	skill.Name = meta.Name
 	skill.Description = meta.Description
-	skill.Category = meta.Category
 	skill.Tags = meta.Tags
 
 	// Write to skill.yaml if directory exists
@@ -1665,8 +1556,8 @@ func (m *Manager) UpdateMetadata(name string, meta SkillMeta) error {
 	}
 
 	skillFile := filepath.Join(skill.Dir, "skill.yaml")
-	content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
-		meta.Name, meta.Description, meta.Category, strings.Join(meta.Tags, ","))
+	content := fmt.Sprintf("name: %s\ndescription: %s\ntags: %s\n",
+		meta.Name, meta.Description, strings.Join(meta.Tags, ","))
 	return os.WriteFile(skillFile, []byte(content), 0644)
 }
 
@@ -1688,205 +1579,6 @@ func (m *Manager) Delete(name string) error {
 	}
 
 	delete(m.skills, name)
-	return nil
-}
-
-// =============================================================================
-// Category Management (分类管理) - 参考 Hermes Agent 目录层级分类
-// =============================================================================
-
-// GetSkillCategories 获取所有技能分类（目录层级分类）
-func (m *Manager) GetSkillCategories() []*SkillCategory {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]*SkillCategory, 0, len(m.categories))
-	for _, cat := range m.categories {
-		catCopy := *cat
-		catCopy.Skills = append([]string{}, cat.Skills...)
-		result = append(result, &catCopy)
-	}
-
-	// 按名称排序
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-
-	return result
-}
-
-// GetCategory 获取指定分类
-func (m *Manager) GetCategory(name string) (*SkillCategory, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	cat, ok := m.categories[name]
-	if !ok {
-		return nil, fmt.Errorf("category %s not found", name)
-	}
-
-	catCopy := *cat
-	catCopy.Skills = append([]string{}, cat.Skills...)
-	return &catCopy, nil
-}
-
-// GetSkillsInCategory 获取指定分类下的所有技能
-func (m *Manager) GetSkillsInCategory(categoryName string) []*Skill {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	cat, ok := m.categories[categoryName]
-	if !ok {
-		return nil
-	}
-
-	result := make([]*Skill, 0, len(cat.Skills))
-	for _, skillName := range cat.Skills {
-		if skill, exists := m.skills[skillName]; exists {
-			skillCopy := *skill
-			result = append(result, &skillCopy)
-		}
-	}
-
-	return result
-}
-
-// GetCategoryTree 获取分类树结构
-func (m *Manager) GetCategoryTree() []*CategoryTree {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// 构建分类树
-	rootMap := make(map[string]*CategoryTree)
-
-	for _, cat := range m.categories {
-		tree := &CategoryTree{
-			Category: &SkillCategory{
-				Name:        cat.Name,
-				Description: cat.Description,
-				Path:        cat.Path,
-				SkillCount:  cat.SkillCount,
-				Skills:      append([]string{}, cat.Skills...),
-				Parent:      cat.Parent,
-				Source:      cat.Source,
-			},
-		}
-		rootMap[cat.Name] = tree
-	}
-
-	// 构建父子关系
-	var roots []*CategoryTree
-	for name, tree := range rootMap {
-		// 检查是否是子分类（名称包含 /）
-		if idx := strings.LastIndex(name, "/"); idx > 0 {
-			parentName := name[:idx]
-			if parent, ok := rootMap[parentName]; ok {
-				parent.Children = append(parent.Children, tree)
-				tree.Category.Parent = parentName
-				continue
-			}
-		}
-		roots = append(roots, tree)
-	}
-
-	return roots
-}
-
-// CreateCategory 创建新分类目录
-func (m *Manager) CreateCategory(name, description string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 确定分类目录路径
-	var catDir string
-	for _, dir := range m.searchDirs {
-		if strings.HasPrefix(dir, os.Getenv("HOME")) || strings.Contains(dir, ".magic") {
-			catDir = filepath.Join(dir, name)
-			break
-		}
-	}
-
-	if catDir == "" {
-		catDir = filepath.Join(m.searchDirs[0], name)
-	}
-
-	// 创建目录
-	if err := os.MkdirAll(catDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create category directory: %w", err)
-	}
-
-	// 注册分类
-	absPath, _ := filepath.Abs(catDir)
-	m.categories[name] = &SkillCategory{
-		Name:        name,
-		Description: description,
-		Path:        absPath,
-		Skills:      []string{},
-		Source:      SkillSourceGlobal,
-	}
-
-	return catDir, nil
-}
-
-// DeleteCategory 删除分类（仅删除空分类）
-func (m *Manager) DeleteCategory(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	cat, ok := m.categories[name]
-	if !ok {
-		return fmt.Errorf("category %s not found", name)
-	}
-
-	// 检查分类下是否还有技能
-	if cat.SkillCount > 0 {
-		return fmt.Errorf("category %s is not empty (contains %d skills)", name, cat.SkillCount)
-	}
-
-	// 删除目录
-	if cat.Path != "" {
-		if err := os.Remove(cat.Path); err != nil {
-			return fmt.Errorf("failed to remove category directory: %w", err)
-		}
-	}
-
-	delete(m.categories, name)
-	return nil
-}
-
-// MoveSkillToCategory 将技能移动到指定分类
-func (m *Manager) MoveSkillToCategory(skillName, categoryName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	skill, ok := m.skills[skillName]
-	if !ok {
-		return fmt.Errorf("skill %s not found", skillName)
-	}
-
-	cat, ok := m.categories[categoryName]
-	if !ok {
-		return fmt.Errorf("category %s not found", categoryName)
-	}
-
-	if skill.Dir == "" {
-		return fmt.Errorf("skill %s has no directory", skillName)
-	}
-
-	// 移动目录
-	newDir := filepath.Join(cat.Path, filepath.Base(skill.Dir))
-	if err := os.Rename(skill.Dir, newDir); err != nil {
-		return fmt.Errorf("failed to move skill directory: %w", err)
-	}
-
-	// 更新技能信息
-	skill.Dir = newDir
-	skill.Category = categoryName
-
-	// 更新分类信息
-	cat.Skills = append(cat.Skills, skillName)
-	cat.SkillCount++
-
 	return nil
 }
 
@@ -2020,7 +1712,7 @@ func (m *Manager) RemoveSkillFile(name, filePath string) error {
 // =============================================================================
 
 // LoadSkillAtLevel loads a skill at the specified level
-// Level 0: List only - returns name, description, category
+// Level 0: List only - returns name, description
 // Level 1: Full content - returns complete skill content
 // Level 2: With references - returns specific reference file
 func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (interface{}, error) {
@@ -2035,7 +1727,6 @@ func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (inte
 		return SkillListItem{
 			Name:        skill.Name,
 			Description: skill.Description,
-			Category:    skill.Category,
 			Tags:        skill.Tags,
 			Version:     skill.Version,
 		}, nil
@@ -2056,7 +1747,6 @@ func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (inte
 			"name":        skill.Name,
 			"description": skill.Description,
 			"content":     content,
-			"category":    skill.Category,
 			"tags":        skill.Tags,
 			"version":     skill.Version,
 			"author":      skill.Author,
@@ -2100,34 +1790,11 @@ func (m *Manager) ListSkillsAtLevel0() ([]SkillListItem, error) {
 		items = append(items, SkillListItem{
 			Name:        skill.Name,
 			Description: skill.Description,
-			Category:    skill.Category,
 			Tags:        skill.Tags,
 			Version:     skill.Version,
 		})
 	}
 	return items, nil
-}
-
-// GetSkillsByCategory returns skills grouped by category
-func (m *Manager) GetSkillsByCategory() map[string][]SkillListItem {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make(map[string][]SkillListItem)
-	for _, skill := range m.skills {
-		cat := skill.Category
-		if cat == "" {
-			cat = "uncategorized"
-		}
-		result[cat] = append(result[cat], SkillListItem{
-			Name:        skill.Name,
-			Description: skill.Description,
-			Category:    cat,
-			Tags:        skill.Tags,
-			Version:     skill.Version,
-		})
-	}
-	return result
 }
 
 // FilterSkillsByCondition returns visible skills based on activation conditions
