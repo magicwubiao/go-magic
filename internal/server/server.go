@@ -2276,7 +2276,7 @@ func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSkillHubInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonResponse(w, map[string]interface{}{"ok": false, "error": "method not allowed"})
 		return
 	}
 
@@ -2285,21 +2285,22 @@ func (s *Server) handleSkillHubInstall(w http.ResponseWriter, r *http.Request) {
 		SourceID string `json:"sourceID"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		jsonResponse(w, map[string]interface{}{"ok": false, "error": "invalid request body"})
 		return
 	}
 
 	if s.skillMgr != nil {
 		err := s.skillMgr.InstallFromHub(skills.HubSource(req.Source), req.SourceID)
 		if err != nil {
-			http.Error(w, "failed to install skill: "+err.Error(), http.StatusInternalServerError)
+			fmt.Printf("Hub install error: source=%s sourceID=%s err=%v\n", req.Source, req.SourceID, err)
+			jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
 			return
 		}
 		s.skillMgr.Reload()
 		jsonResponse(w, map[string]interface{}{"ok": true})
 		return
 	}
-	http.Error(w, "skill manager not available", http.StatusInternalServerError)
+	jsonResponse(w, map[string]interface{}{"ok": false, "error": "skill manager not available"})
 }
 
 func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {

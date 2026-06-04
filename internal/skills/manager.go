@@ -2427,8 +2427,18 @@ func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, sour
 		return fmt.Errorf("no search directories configured")
 	}
 
+	// Use sourceID as directory name for consistency
+	// If sourceID contains '/', use the last part (e.g., "owner/repo" -> "repo")
+	skillDirName := sourceID
+	if idx := strings.LastIndex(sourceID, "/"); idx >= 0 {
+		skillDirName = sourceID[idx+1:]
+	}
+	if skillDirName == "" {
+		skillDirName = skill.Name
+	}
+
 	// Create skill directory in the first search directory
-	skillDir := filepath.Join(m.searchDirs[0], skill.Name)
+	skillDir := filepath.Join(m.searchDirs[0], skillDirName)
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("failed to create skill directory: %w", err)
 	}

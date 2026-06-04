@@ -66,17 +66,22 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 		return []HubSkill{}, fmt.Errorf("clawhub API returned %d", resp.StatusCode)
 	}
 
+	// ClawHub search API returns: {"results": [{"score", "slug", "displayName", "summary", "version", "updatedAt", "ownerHandle", "owner": {...}}]}
 	var result struct {
-		Skills []struct {
-			Slug        string   `json:"slug"`
-			Name        string   `json:"name"`
-			Description string   `json:"description"`
-			Tags        []string `json:"tags"`
-			Version     string   `json:"version"`
-			Stars       int      `json:"stars"`
-			Installs    int      `json:"installs"`
-			Verified    bool     `json:"verified"`
-		} `json:"skills"`
+		Results []struct {
+			Score       float64 `json:"score"`
+			Slug        string  `json:"slug"`
+			DisplayName string  `json:"displayName"`
+			Summary     string  `json:"summary"`
+			Version     *string `json:"version"`
+			UpdatedAt   int64   `json:"updatedAt"`
+			OwnerHandle string  `json:"ownerHandle"`
+			Owner       struct {
+				Handle      string `json:"handle"`
+				DisplayName string `json:"displayName"`
+				Image       string `json:"image"`
+			} `json:"owner"`
+		} `json:"results"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -84,22 +89,19 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 	}
 
 	// If no results found, return featured skills as fallback
-	if len(result.Skills) == 0 {
+	if len(result.Results) == 0 {
 		return r.getFeaturedSkills(), nil
 	}
 
 	var skills []HubSkill
-	for _, s := range result.Skills {
+	for _, s := range result.Results {
 		skills = append(skills, HubSkill{
-			Name:        s.Name,
-			Description: s.Description,
-			Tags:        s.Tags,
+			Name:        s.DisplayName,
+			Description: s.Summary,
 			Source:      HubSourceHub,
 			SourceID:    s.Slug,
 			URL:         fmt.Sprintf("%s/skills/%s", r.baseURL, s.Slug),
-			Stars:       s.Stars,
-			Installs:    s.Installs,
-			Verified:    s.Verified,
+			Verified:    true,
 		})
 	}
 
@@ -128,38 +130,51 @@ func (r *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSk
 		return nil, fmt.Errorf("clawhub API returned %d", resp.StatusCode)
 	}
 
-	var s struct {
-		Slug        string   `json:"slug"`
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		Tags        []string `json:"tags"`
-		Version     string   `json:"version"`
-		Stars       int      `json:"stars"`
-		Installs    int      `json:"installs"`
-		Verified    bool     `json:"verified"`
+	// ClawHub API returns nested structure:
+	// {"skill": {"slug", "displayName", "summary", "tags", "stats": {"stars", "downloads", ...}}, "latestVersion": {...}, "owner": {...}}
+	var result struct {
+		Skill struct {
+			Slug        string `json:"slug"`
+			DisplayName string `json:"displayName"`
+			Summary     string `json:"summary"`
+			Tags        struct {
+				Latest string `json:"latest"`
+			} `json:"tags"`
+			Stats struct {
+				Stars    int `json:"stars"`
+				Downloads int `json:"downloads"`
+				InstallsAllTime int `json:"installsAllTime"`
+			} `json:"stats"`
+			Verified bool `json:"verified"`
+		} `json:"skill"`
+		LatestVersion struct {
+			Version string `json:"version"`
+		} `json:"latestVersion"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
+	s := result.Skill
 	return &HubSkill{
-		Name:        s.Name,
-		Description: s.Description,
-		Tags:        s.Tags,
+		Name:        s.DisplayName,
+		Description: s.Summary,
+		Tags:        []string{s.Tags.Latest},
 		Source:      HubSourceHub,
 		SourceID:    s.Slug,
 		URL:         fmt.Sprintf("%s/skills/%s", r.baseURL, s.Slug),
-		Stars:       s.Stars,
-		Installs:    s.Installs,
+		Stars:       s.Stats.Stars,
+		Installs:    s.Stats.InstallsAllTime,
 		Verified:    s.Verified,
 	}, nil
 }
 
 // DownloadAndInstall downloads and installs a skill from ClawHub
 func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version, targetDir string) error {
-	apiURL := fmt.Sprintf("%s/api/v1/download/%s", r.baseURL, url.QueryEscape(slug))
+	// ClawHub download API: /api/v1/download?slug={slug}&version={version}
+	apiURL := fmt.Sprintf("%s/api/v1/download?slug=%s", r.baseURL, url.QueryEscape(slug))
 	if version != "" {
-		apiURL += "?version=" + url.QueryEscape(version)
+		apiURL += "&version=" + url.QueryEscape(version)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
@@ -230,16 +245,23 @@ func (r *ClawHubRegistry) createLocalSkillFallback(slug, targetDir string) error
 	}
 
 	// Create SKILL.md file with basic content
+	// Format tags as YAML list
+	tagsYAML := ""
+	if len(skill.Tags) > 0 {
+		for _, tag := range skill.Tags {
+			tagsYAML += fmt.Sprintf("  - %s\n", tag)
+		}
+	}
 	skillContent := fmt.Sprintf(`---
 name: %s
-description: %s
-tags: %v
----
+description: "%s"
+tags:
+%s---
 
 # %s
 
 %s
-`, skill.Name, skill.Description, skill.Tags, skill.Name, skill.Description)
+`, skill.Name, skill.Description, tagsYAML, skill.Name, skill.Description)
 
 	skillFile := filepath.Join(targetDir, "SKILL.md")
 	if err := os.WriteFile(skillFile, []byte(skillContent), 0644); err != nil {
@@ -250,17 +272,17 @@ tags: %v
 	return nil
 }
 
-// getFeaturedSkills returns curated featured skills from ClawHub registry
-// These skills are served from ClawHub, not directly from GitHub
+// getFeaturedSkills returns curated featured skills from ClawHub
+// SourceID must be the ClawHub slug (not owner/repo format)
 func (r *ClawHubRegistry) getFeaturedSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow automation", Source: HubSourceHub, SourceID: "k8s-deploy", URL: fmt.Sprintf("%s/skills/k8s-deploy", r.baseURL), Verified: true, Stars: 1200, Installs: 3500},
-		{Name: "git-workflow", Description: "Git workflow automation and best practices", Source: HubSourceHub, SourceID: "git-workflow", URL: fmt.Sprintf("%s/skills/git-workflow", r.baseURL), Verified: true, Stars: 980, Installs: 2800},
-		{Name: "code-review", Description: "Automated code review and quality analysis", Source: HubSourceHub, SourceID: "code-review", URL: fmt.Sprintf("%s/skills/code-review", r.baseURL), Verified: true, Stars: 850, Installs: 2400},
-		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Source: HubSourceHub, SourceID: "find-unused-code", URL: fmt.Sprintf("%s/skills/find-unused-code", r.baseURL), Verified: true, Stars: 720, Installs: 1900},
-		{Name: "search-replace", Description: "Find and replace text across multiple files", Source: HubSourceHub, SourceID: "search-replace", URL: fmt.Sprintf("%s/skills/search-replace", r.baseURL), Verified: true, Stars: 650, Installs: 1700},
-		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Source: HubSourceHub, SourceID: "dependency-finder", URL: fmt.Sprintf("%s/skills/dependency-finder", r.baseURL), Verified: true, Stars: 580, Installs: 1500},
-		{Name: "test-generator", Description: "Automated test case generation", Source: HubSourceHub, SourceID: "test-generator", URL: fmt.Sprintf("%s/skills/test-generator", r.baseURL), Verified: true, Stars: 520, Installs: 1300},
-		{Name: "api-documenter", Description: "API documentation generator", Source: HubSourceHub, SourceID: "api-documenter", URL: fmt.Sprintf("%s/skills/api-documenter", r.baseURL), Verified: true, Stars: 480, Installs: 1200},
+		{Name: "Self-Improving Agent", Description: "Captures learnings, errors, and corrections to enable continuous improvement", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving-agent", URL: "https://clawhub.ai/skills/self-improving-agent", Verified: true, Stars: 3700, Installs: 457000},
+		{Name: "Self-Improving + Proactive", Description: "Self-reflection + Self-criticism + Self-learning + Self-organizing memory", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving", URL: "https://clawhub.ai/skills/self-improving", Verified: true, Stars: 1200, Installs: 197000},
+		{Name: "Skill Vetter", Description: "Security-first skill vetting for AI agents", Tags: []string{"security"}, Source: HubSourceHub, SourceID: "skill-vetter", URL: "https://clawhub.ai/skills/skill-vetter", Verified: true, Stars: 1200, Installs: 255000},
+		{Name: "Gog", Description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs", Tags: []string{"productivity"}, Source: HubSourceHub, SourceID: "gog", URL: "https://clawhub.ai/skills/gog", Verified: true, Stars: 910, Installs: 184000},
+		{Name: "Proactive Agent", Description: "Transform AI agents from task-followers into proactive partners", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "proactive-agent", URL: "https://clawhub.ai/skills/proactive-agent", Verified: true, Stars: 789, Installs: 167000},
+		{Name: "Multi Search Engine", Description: "Multi search engine integration with 16 engines (7 CN + 9 Global)", Tags: []string{"search"}, Source: HubSourceHub, SourceID: "multi-search-engine", URL: "https://clawhub.ai/skills/multi-search-engine", Verified: true, Stars: 711, Installs: 151000},
+		{Name: "Humanizer", Description: "Remove signs of AI-generated writing from text", Tags: []string{"writing"}, Source: HubSourceHub, SourceID: "humanizer", URL: "https://clawhub.ai/skills/humanizer", Verified: true, Stars: 648, Installs: 119000},
+		{Name: "Ontology", Description: "Typed knowledge graph for structured agent memory and composable skills", Tags: []string{"memory"}, Source: HubSourceHub, SourceID: "ontology", URL: "https://clawhub.ai/skills/ontology", Verified: true, Stars: 626, Installs: 188000},
 	}
 }

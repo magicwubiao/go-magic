@@ -567,12 +567,16 @@ async function openHubModal(): Promise<void> {
 async function installHubSkill(source: string, sourceID: string): Promise<void> {
   installingHubSkill.value = sourceID
   try {
-    await skillsStore.installHubSkill(source, sourceID)
-    message.success(t('skills.installed'))
-    await skillsStore.loadSkills()
-    showHubModal.value = false
-    hubSearchKeyword.value = ''
-    hubSkills.value = []
+    const result = await skillsStore.installHubSkill(source, sourceID)
+    if (result && !result.ok && result.error) {
+      message.error(result.error)
+    } else {
+      message.success(t('skills.installed'))
+      await skillsStore.loadSkills()
+      showHubModal.value = false
+      hubSearchKeyword.value = ''
+      hubSkills.value = []
+    }
   } catch (e) {
     message.error(t('skills.failedToInstall'))
   } finally {

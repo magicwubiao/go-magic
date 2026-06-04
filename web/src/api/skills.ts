@@ -116,8 +116,8 @@ export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {
   return request<HubSkill[]>(`/skills/hub/search${params}`)
 }
 
-export async function installHubSkill(source: string, sourceID: string): Promise<void> {
-  return request('/skills/hub/install', {
+export async function installHubSkill(source: string, sourceID: string): Promise<{ ok: boolean; error?: string }> {
+  return request<{ ok: boolean; error?: string }>('/skills/hub/install', {
     method: 'POST',
     body: JSON.stringify({ source, sourceID }),
   })
