@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -52,7 +54,8 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		// Fallback to curated list on network failure
+		return r.getFeaturedSkills(), nil
 	}
 	defer resp.Body.Close()
 
@@ -176,8 +179,24 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 	}
 
 	// Save to temp file
-	// TODO: implement zip download and extraction
-	return fmt.Errorf("clawhub download not yet fully implemented")
+	tmpFile, err := os.CreateTemp("", "clawhub-skill-*.zip")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	tmpFile.Close()
+
+	// Extract zip
+	if err := extractZip(tmpFile.Name(), targetDir); err != nil {
+		return fmt.Errorf("failed to extract: %w", err)
+	}
+
+	return nil
 }
 
 // getFeaturedSkills returns curated featured skills

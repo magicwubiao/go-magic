@@ -2542,7 +2542,7 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 		if strings.HasSuffix(lowerName, "skill.md") || strings.HasSuffix(lowerName, ".md") {
 			foundFiles = append(foundFiles, path)
 			fmt.Printf("Found markdown file: %s\n", path)
-			
+
 			// Try to load skill from parent directory first (for SKILL.md)
 			skill := m.loadSkillFromFile(filepath.Dir(path))
 			if skill == nil {
