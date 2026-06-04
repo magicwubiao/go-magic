@@ -33,12 +33,7 @@
         <n-space vertical size="medium">
           <!-- Categories -->
           <div>
-            <n-space align="center">
-              <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
-              <n-button size="tiny" quaternary @click="showAddCategoryModal = true">
-                <template #icon><AddIcon /></template>
-              </n-button>
-            </n-space>
+            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
             <n-space style="margin-top: 4px;">
               <n-tag 
                 size="large"
@@ -299,24 +294,6 @@
       </n-form>
     </n-modal>
 
-    <!-- Add Category Modal -->
-    <n-modal
-      v-model:show="showAddCategoryModal"
-      :title="t('skills.addCategory')"
-      preset="card"
-      style="width: 400px;"
-    >
-      <n-form>
-        <n-form-item :label="t('skills.name')">
-          <n-input v-model:value="newCategoryName" :placeholder="t('skills.categoryNamePlaceholder')" />
-        </n-form-item>
-        <n-space justify="end">
-          <n-button @click="showAddCategoryModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="addingCategory" @click="saveNewCategory">{{ t('common.save') }}</n-button>
-        </n-space>
-      </n-form>
-    </n-modal>
-
     <!-- Hub / Skill Market Modal -->
     <n-modal
       v-model:show="showHubModal"
@@ -387,9 +364,9 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Search as SearchIcon, CreateOutline as EditIcon, AddOutline as AddIcon } from '@vicons/ionicons5'
+import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Search as SearchIcon, CreateOutline as EditIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
-import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory, createCategory } from '@/api/skills'
+import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
 import type { UploadFileInfo } from 'naive-ui'
 
 const { t } = useI18n()
@@ -400,7 +377,7 @@ const skillsStore = useSkillsStore()
 const showInstallModal = ref(false)
 const showDetailModal = ref(false)
 const showEditModal = ref(false)
-const showAddCategoryModal = ref(false)
+
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
@@ -412,9 +389,7 @@ const selectedSkill = ref<Skill | null>(null)
 const editingSkill = ref<Skill | null>(null)
 const savingEdit = ref(false)
 
-// Category State
-const newCategoryName = ref('')
-const addingCategory = ref(false)
+
 
 // Hub State
 const showHubModal = ref(false)
@@ -644,25 +619,6 @@ async function saveEdit() {
     message.error(t('skills.failedToUpdate'))
   } finally {
     savingEdit.value = false
-  }
-}
-
-async function saveNewCategory() {
-  if (!newCategoryName.value.trim()) {
-    message.warning(t('skills.pleaseEnterCategoryName'))
-    return
-  }
-  addingCategory.value = true
-  try {
-    await createCategory(newCategoryName.value.trim())
-    message.success(t('skills.categoryAdded'))
-    showAddCategoryModal.value = false
-    newCategoryName.value = ''
-    await skillsStore.loadCategories()
-  } catch (e) {
-    message.error(t('skills.failedToAddCategory'))
-  } finally {
-    addingCategory.value = false
   }
 }
 

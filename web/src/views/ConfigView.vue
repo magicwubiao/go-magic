@@ -55,6 +55,22 @@
         </n-form>
       </n-tab-pane>
 
+      <!-- Skills Tab -->
+      <n-tab-pane name="skills" :tab="t('config.skills')">
+        <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
+          <n-form-item :label="t('config.autoSkillCreation')">
+            <n-switch v-model:value="skillsForm.auto_skill_creation" />
+            <template #feedback>{{ t('config.autoSkillCreationHint') }}</template>
+          </n-form-item>
+          <n-form-item :label="t('config.minPatternFrequency')">
+            <n-input-number v-model:value="skillsForm.min_pattern_frequency" :min="1" :max="10" />
+          </n-form-item>
+          <n-form-item>
+            <n-button type="primary" :loading="saving" @click="saveSkills">{{ t('common.save') }}</n-button>
+          </n-form-item>
+        </n-form>
+      </n-tab-pane>
+
       <!-- Security Tab -->
       <n-tab-pane name="security" :tab="t('config.security')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
@@ -137,6 +153,11 @@ const memoryForm = reactive({
   enabled: true,
 })
 
+const skillsForm = reactive({
+  auto_skill_creation: true,
+  min_pattern_frequency: 2,
+})
+
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
   generalForm.secret_redaction = cfg.secret_redaction || false
@@ -148,6 +169,10 @@ function populateFromConfig(cfg: any) {
 
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
+
+  const cortex = cfg.cortex || {}
+  skillsForm.auto_skill_creation = cortex.auto_skill_creation !== false
+  skillsForm.min_pattern_frequency = cortex.min_pattern_frequency || 2
 }
 
 async function saveGeneral() {
@@ -192,6 +217,24 @@ async function saveMemory() {
     })
     await configStore.loadConfig()
     message.success(t('config.memorySaved'))
+  } catch (e) {
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveSkills() {
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      skills: {
+        auto_skill_creation: skillsForm.auto_skill_creation,
+        min_pattern_frequency: skillsForm.min_pattern_frequency,
+      }
+    })
+    await configStore.loadConfig()
+    message.success(t('config.skillsSaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
