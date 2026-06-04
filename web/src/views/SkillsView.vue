@@ -4,7 +4,6 @@
       <h2>{{ t('skills.title') }}</h2>
       <n-space>
         <n-button @click="showInstallModal = true">{{ t('skills.installFromUrl') }}</n-button>
-        <n-button type="primary" @click="openHubModal">{{ t('skills.browseHub') }}</n-button>
       </n-space>
     </n-space>
 
@@ -33,8 +32,13 @@
         <n-space vertical size="medium">
           <!-- Categories -->
           <div>
-            <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
-            <n-space>
+            <n-space align="center">
+              <n-text depth="3" style="font-size: 14px; font-weight: 500; margin-right: 8px;">{{ t('skills.categories') }}</n-text>
+              <n-button size="tiny" quaternary @click="showAddCategoryModal = true">
+                <template #icon><AddIcon /></template>
+              </n-button>
+            </n-space>
+            <n-space style="margin-top: 4px;">
               <n-tag 
                 size="large"
                 :checked="selectedCategory === ''"
@@ -52,7 +56,7 @@
                 {{ t('skills.general') || 'General' }}
               </n-tag>
               <n-tag 
-                v-for="cat in skillsStore.categories" 
+                v-for="cat in filteredCategories" 
                 :key="cat" 
                 size="large"
                 :checked="selectedCategory === cat"
@@ -189,62 +193,6 @@
       </template>
     </n-modal>
 
-    <!-- Hub Browser Modal -->
-    <n-modal 
-      v-model:show="showHubModal" 
-      :title="t('skills.browseHub')" 
-      preset="card" 
-      style="width: 900px; max-height: 80vh;"
-    >
-      <n-space vertical>
-        <n-space align="center">
-          <n-input 
-            v-model:value="hubSearchKeyword" 
-            :placeholder="t('skills.searchHub')"
-            @keyup.enter="searchHub"
-            style="flex: 1;"
-          >
-            <template #prefix>
-              <SearchIcon />
-            </template>
-          </n-input>
-          <n-button type="primary" :loading="hubLoading" @click="searchHub">
-            {{ t('skills.search') || '搜索' }}
-          </n-button>
-        </n-space>
-        
-        <n-spin :show="hubLoading">
-          <n-list v-if="hubSkills.length > 0" bordered :data="hubSkills" style="max-height: 500px; overflow-y: auto;">
-            <template #default="{ item }">
-              <n-list-item>
-                <template #header>
-                  <n-space>
-                    <span>{{ item.Name }}</span>
-                    <n-tag size="small">{{ item.Category }}</n-tag>
-                    <n-tag size="small" type="info">{{ item.Source }}</n-tag>
-                  </n-space>
-                </template>
-                <template #description>
-                  {{ item.Description }}
-                </template>
-                <template #extra>
-                  <n-button 
-                    size="small" 
-                    type="primary"
-                    :loading="installingHubSkill === item.SourceID"
-                    @click="installHubSkill(item.Source, item.SourceID)"
-                  >
-                    {{ t('skills.install') }}
-                  </n-button>
-                </template>
-              </n-list-item>
-            </template>
-          </n-list>
-          <n-empty v-else :description="t('skills.noHubSkills')" />
-        </n-spin>
-      </n-space>
-    </n-modal>
-
     <!-- Skill Detail Modal -->
     <n-modal 
       v-model:show="showDetailModal" 
@@ -256,6 +204,12 @@
       <n-tabs v-if="selectedSkill">
         <n-tab-pane :name="t('skills.tabs.overview')" :tab="t('skills.tabs.overview')">
           <n-space vertical>
+            <n-space justify="end" style="margin-bottom: 12px;">
+              <n-button size="small" style="display: flex; align-items: center;" @click="openEditModal(selectedSkill)">
+                <template #icon><EditIcon /></template>
+                {{ t('skills.edit') }}
+              </n-button>
+            </n-space>
             <n-descriptions bordered>
               <n-descriptions-item :label="t('skills.description')">
                 {{ selectedSkill.description || t('skills.noDescription') }}
@@ -316,6 +270,51 @@
         </n-tab-pane>
       </n-tabs>
     </n-modal>
+
+    <!-- Edit Skill Modal -->
+    <n-modal
+      v-model:show="showEditModal"
+      :title="t('skills.editSkill')"
+      preset="card"
+      style="width: 600px;"
+    >
+      <n-form v-if="editingSkill">
+        <n-form-item :label="t('skills.name')">
+          <n-input v-model:value="editingSkill.name" :disabled="true" />
+        </n-form-item>
+        <n-form-item :label="t('skills.description')">
+          <n-input v-model:value="editingSkill.description" type="textarea" :rows="3" />
+        </n-form-item>
+        <n-form-item :label="t('skills.category')">
+          <n-select v-model:value="editingSkill.category" :options="categoryOptions" />
+        </n-form-item>
+        <n-form-item :label="t('skills.tags')">
+          <n-dynamic-tags v-model:value="editingSkill.tags" />
+        </n-form-item>
+        <n-space justify="end">
+          <n-button @click="showEditModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="savingEdit" @click="saveEdit">{{ t('common.save') }}</n-button>
+        </n-space>
+      </n-form>
+    </n-modal>
+
+    <!-- Add Category Modal -->
+    <n-modal
+      v-model:show="showAddCategoryModal"
+      :title="t('skills.addCategory')"
+      preset="card"
+      style="width: 400px;"
+    >
+      <n-form>
+        <n-form-item :label="t('skills.name')">
+          <n-input v-model:value="newCategoryName" :placeholder="t('skills.categoryNamePlaceholder')" />
+        </n-form-item>
+        <n-space justify="end">
+          <n-button @click="showAddCategoryModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="addingCategory" @click="saveNewCategory">{{ t('common.save') }}</n-button>
+        </n-space>
+      </n-form>
+    </n-modal>
   </div>
 </template>
 
@@ -323,9 +322,9 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Search as SearchIcon } from '@vicons/ionicons5'
+import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Search as SearchIcon, CreateOutline as EditIcon, AddOutline as AddIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
-import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
+import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory, createCategory } from '@/api/skills'
 import type { UploadFileInfo } from 'naive-ui'
 
 const { t } = useI18n()
@@ -334,8 +333,9 @@ const skillsStore = useSkillsStore()
 
 // UI State
 const showInstallModal = ref(false)
-const showHubModal = ref(false)
 const showDetailModal = ref(false)
+const showEditModal = ref(false)
+const showAddCategoryModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
@@ -343,11 +343,13 @@ const selectedCategory = ref('')
 const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
 
-// Hub State
-const hubSearchKeyword = ref('')
-const hubLoading = ref(false)
-const hubSkills = ref<HubSkill[]>([])
-const installingHubSkill = ref<string | null>(null)
+// Edit State
+const editingSkill = ref<Skill | null>(null)
+const savingEdit = ref(false)
+
+// Category State
+const newCategoryName = ref('')
+const addingCategory = ref(false)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
@@ -380,15 +382,6 @@ interface SkillVersion {
   created_at: string
   is_current: boolean
   quality_score: number
-}
-
-interface HubSkill {
-  Name: string
-  Description: string
-  Category: string
-  Source: string
-  SourceID: string
-  URL?: string
 }
 
 interface EvolutionRecord {
@@ -438,7 +431,22 @@ const improvingSkillsCount = computed(() => {
   return skillStats.value.filter(s => s.trend === 'improving').length
 })
 
+const categoryOptions = computed(() => {
+  return [
+    { label: t('skills.general'), value: 'general' },
+    ...skillsStore.categories
+      .filter(c => c !== 'general')
+      .map(c => ({
+        label: t(`skills.categoryNames.${c}`) || c,
+        value: c
+      }))
+  ]
+})
 
+// 过滤掉 "general" 和空字符串，因为已单独显示
+const filteredCategories = computed(() => {
+  return skillsStore.categories.filter(c => c && c !== 'general')
+})
 
 function getSuccessRateType(rate: number): 'success' | 'warning' | 'error' {
   if (rate >= 0.8) return 'success'
@@ -522,6 +530,56 @@ function handleModalShowChange(visible: boolean) {
   }
 }
 
+function openEditModal(skill: Skill) {
+  editingSkill.value = {
+    ...skill,
+    tags: skill.tags ? [...skill.tags] : []
+  }
+  showEditModal.value = true
+}
+
+async function saveEdit() {
+  if (!editingSkill.value) return
+  savingEdit.value = true
+  try {
+    await skillsStore.updateSkill(editingSkill.value.id, {
+      name: editingSkill.value.name,
+      description: editingSkill.value.description,
+      category: editingSkill.value.category,
+      tags: editingSkill.value.tags,
+    })
+    message.success(t('skills.updated'))
+    showEditModal.value = false
+    // Refresh detail modal if open
+    if (selectedSkill.value && selectedSkill.value.id === editingSkill.value.id) {
+      selectedSkill.value = { ...selectedSkill.value, ...editingSkill.value }
+    }
+  } catch (e) {
+    message.error(t('skills.failedToUpdate'))
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+async function saveNewCategory() {
+  if (!newCategoryName.value.trim()) {
+    message.warning(t('skills.pleaseEnterCategoryName'))
+    return
+  }
+  addingCategory.value = true
+  try {
+    await createCategory(newCategoryName.value.trim())
+    message.success(t('skills.categoryAdded'))
+    showAddCategoryModal.value = false
+    newCategoryName.value = ''
+    await skillsStore.loadCategories()
+  } catch (e) {
+    message.error(t('skills.failedToAddCategory'))
+  } finally {
+    addingCategory.value = false
+  }
+}
+
 async function loadSkillDetail(skillName: string) {
   try {
     const [versions, evolution] = await Promise.all([
@@ -559,43 +617,6 @@ async function installSkill(): Promise<void> {
     message.error(t('skills.failedToInstall'))
   } finally {
     installing.value = false
-  }
-}
-
-async function searchHub(): Promise<void> {
-  hubLoading.value = true
-  try {
-    hubSkills.value = (await skillsStore.searchHubSkills(hubSearchKeyword.value)) || []
-  } catch (e) {
-    message.error(t('skills.failedToSearchHub'))
-    hubSkills.value = []
-  } finally {
-    hubLoading.value = false
-  }
-}
-
-async function openHubModal(): Promise<void> {
-  showHubModal.value = true
-  hubSearchKeyword.value = ''
-  await searchHub()
-}
-
-async function installHubSkill(source: string, sourceID: string): Promise<void> {
-  installingHubSkill.value = sourceID
-  try {
-    await skillsStore.installHubSkill(source, sourceID)
-    message.success(t('skills.installed'))
-    // 刷新技能列表
-    await skillsStore.loadSkills()
-    await skillsStore.loadCategories()
-    // 关闭模态框
-    showHubModal.value = false
-    hubSearchKeyword.value = ''
-    hubSkills.value = []
-  } catch (e) {
-    message.error(t('skills.failedToInstall'))
-  } finally {
-    installingHubSkill.value = null
   }
 }
 

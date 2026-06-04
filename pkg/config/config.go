@@ -78,10 +78,12 @@ type ToolsConfig struct {
 
 // SkillsConfig represents skills configuration
 type SkillsConfig struct {
-	Enabled    []string `json:"enabled"`
-	Disabled   []string `json:"disabled"`
-	DefaultDir string   `json:"default_dir,omitempty"` // Path to built-in default skills
-	UserDir    string   `json:"user_dir,omitempty"`    // Path to user-installed skills
+	Enabled           []string `json:"enabled"`
+	Disabled          []string `json:"disabled"`
+	DefaultDir        string   `json:"default_dir,omitempty"`  // Path to built-in default skills
+	UserDir           string   `json:"user_dir,omitempty"`     // Path to user-installed skills
+	AutoSkillCreation bool     `json:"auto_skill_creation"`    // Auto-create skills from tool patterns
+	MinPatternFreq    int      `json:"min_pattern_frequency"`  // Minimum pattern frequency threshold
 }
 
 // PluginsConfig represents plugins configuration

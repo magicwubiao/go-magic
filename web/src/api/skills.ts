@@ -42,6 +42,13 @@ export async function getSkillCategories(): Promise<string[]> {
   return request('/skills/categories')
 }
 
+export async function createCategory(name: string, description?: string): Promise<void> {
+  return request('/skills/categories', {
+    method: 'POST',
+    body: JSON.stringify({ name, description }),
+  })
+}
+
 export async function toggleSkill(name: string, enabled: boolean): Promise<void> {
   await request('/skills/toggle', {
     method: 'PUT',
@@ -56,24 +63,10 @@ export async function installSkill(url: string): Promise<void> {
   })
 }
 
-export interface HubSkill {
-  Name: string
-  Description: string
-  Category: string
-  Source: string
-  SourceID: string
-  URL?: string
-}
-
-export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {
-  const params = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
-  return request<HubSkill[]>(`/skills/hub/search${params}`)
-}
-
-export async function installHubSkill(source: string, sourceID: string): Promise<void> {
-  return request('/skills/hub/install', {
-    method: 'POST',
-    body: JSON.stringify({ source, sourceID }),
+export async function updateSkill(id: string, data: Partial<Skill>): Promise<void> {
+  return request(`/skills/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
   })
 }
 

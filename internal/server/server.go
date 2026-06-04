@@ -221,8 +221,16 @@ func NewServer(dbPath string) *Server {
 	}
 	registry.RegisterAll(workDir)
 
-	// Create skills manager
-	skillMgr, _ := skills.NewManager()
+	// Create skills manager with config
+	var skillCfg skills.ManagerConfig
+	if cfg != nil {
+		skillCfg.AutoSkillCreation = cfg.Skills.AutoSkillCreation
+		skillCfg.MinPatternFreq = cfg.Skills.MinPatternFreq
+		if skillCfg.MinPatternFreq == 0 {
+			skillCfg.MinPatternFreq = 2
+		}
+	}
+	skillMgr, _ := skills.NewManagerWithConfig(&skillCfg)
 
 	// Create cron manager
 	cronMgr, err := cron.NewManager()
@@ -2251,6 +2259,29 @@ func parseSkillJSON(data []byte, skill *Skill) {
 }
 
 func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
+	// POST - 创建新分类
+	if r.Method == "POST" {
+		var req struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+			http.Error(w, "invalid request: name required", 400)
+			return
+		}
+		if s.skillMgr != nil {
+			catName, err := s.skillMgr.CreateCategory(req.Name, req.Description)
+			if err != nil {
+				http.Error(w, "failed to create category: "+err.Error(), 500)
+				return
+			}
+			jsonResponse(w, map[string]interface{}{"ok": true, "name": catName})
+			return
+		}
+		http.Error(w, "skill manager not available", 500)
+		return
+	}
+
 	if s.skillMgr != nil {
 		// 优先使用 Manager 的分类数据（包含目录层级分类）
 		categories := s.skillMgr.GetCategories()
@@ -2383,56 +2414,6 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 	// Handle browse
 	if id == "browse" && r.Method == "GET" {
 		jsonResponse(w, s.getRealSkills())
-		return
-	}
-
-	// Handle hub/search - 搜索技能库
-	if id == "hub/search" && r.Method == "GET" {
-		keyword := r.URL.Query().Get("q")
-		if s.skillMgr != nil {
-			// 使用所有可用的 Hub 源
-			sources := []skills.HubSource{
-				skills.HubSourceOfficial,
-				skills.HubSourceSkillsSh,
-				skills.HubSourceHub,
-			}
-			results, err := s.skillMgr.SearchHub(keyword, sources)
-			if err != nil {
-				jsonResponse(w, []skills.HubSkill{})
-				return
-			}
-			if results == nil {
-				results = []skills.HubSkill{}
-			}
-			jsonResponse(w, results)
-			return
-		}
-		jsonResponse(w, []skills.HubSkill{})
-		return
-	}
-
-	// Handle hub/install - 从技能库安装
-	if id == "hub/install" && r.Method == "POST" {
-		var req struct {
-			Source   string `json:"source"`
-			SourceID string `json:"sourceID"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceID == "" {
-			http.Error(w, "invalid request: source and sourceID required", 400)
-			return
-		}
-
-		if s.skillMgr != nil {
-			source := skills.HubSource(req.Source)
-			err := s.skillMgr.InstallFromHub(source, req.SourceID)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("install failed: %v", err), 500)
-				return
-			}
-			jsonResponse(w, map[string]interface{}{"ok": true, "source": req.Source, "sourceID": req.SourceID})
-			return
-		}
-		http.Error(w, "skill manager not available", 500)
 		return
 	}
 

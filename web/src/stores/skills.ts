@@ -32,12 +32,8 @@ export const useSkillsStore = defineStore('skills', () => {
     await loadSkills()
   }
 
-  async function searchHubSkills(keyword?: string) {
-    return skillsApi.searchHubSkills(keyword)
-  }
-
-  async function installHubSkill(source: string, sourceID: string) {
-    await skillsApi.installHubSkill(source, sourceID)
+  async function updateSkill(id: string, data: Partial<Skill>) {
+    await skillsApi.updateSkill(id, data)
     await loadSkills()
   }
 
@@ -49,7 +45,6 @@ export const useSkillsStore = defineStore('skills', () => {
     loadCategories,
     toggleSkill,
     installSkill,
-    searchHubSkills,
-    installHubSkill,
+    updateSkill,
   }
 })

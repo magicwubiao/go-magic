@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,27 +24,35 @@ import (
 
 // Manager manages skill loading and registration
 type Manager struct {
-	mu              sync.RWMutex
-	searchDirs      []string
-	builtinDir      string
-	skills          map[string]*Skill
-	bundles         map[string]*SkillBundle   // 技能捆绑包
-	categories      map[string]*SkillCategory // 技能分类（按目录层级）
-	toolNames       []string                  // Cached tool names from registry
-	registryURL     string                    // ClawHub or GitHub registry URL
-	hubLock         *HubLock                  // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest *BundledManifest          // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills  *DisabledSkillsConfig     // 禁用技能配置
-	skillsDir       string                    // 技能目录路径 (~/.magic/skills)
-	hubDir          string                    // Hub 目录路径 (~/.magic/skills/.hub)
+	mu                sync.RWMutex
+	searchDirs        []string
+	builtinDir        string
+	skills            map[string]*Skill
+	bundles           map[string]*SkillBundle   // 技能捆绑包
+	categories        map[string]*SkillCategory // 技能分类（按目录层级）
+	toolNames         []string                  // Cached tool names from registry
+	registryURL       string                    // ClawHub or GitHub registry URL
+	hubLock           *HubLock                   // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest   *BundledManifest           // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills    *DisabledSkillsConfig      // 禁用技能配置
+	skillsDir         string                     // 技能目录路径 (~/.magic/skills)
+	hubDir            string                     // Hub 目录路径 (~/.magic/skills/.hub)
+	autoSkillCreation bool                       // 是否自动创建技能
+	minPatternFreq    int                        // 最小模式频率阈值
+	// Hub search cache
+	hubCache          map[string][]HubSkill      // 缓存搜索结果
+	hubCacheTime      map[string]time.Time       // 缓存时间
+	hubCacheMu        sync.RWMutex               // 缓存锁
 }
 
 // ManagerConfig 配置管理器
 type ManagerConfig struct {
-	SearchDirs  []string // 搜索目录列表
-	BuiltinDir  string   // 内置技能目录
-	RegistryURL string   // 技能注册表 URL
-	ToolNames   []string // 可用工具名称列表（用于技能验证）
+	SearchDirs        []string // 搜索目录列表
+	BuiltinDir        string   // 内置技能目录
+	RegistryURL       string   // 技能注册表 URL
+	ToolNames         []string // 可用工具名称列表（用于技能验证）
+	AutoSkillCreation bool     // 是否自动创建技能
+	MinPatternFreq    int      // 最小模式频率阈值
 }
 
 // NewManager creates a new skill manager with default configuration
@@ -86,16 +96,20 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 	skillsDir := config.SearchDirs[0]
 
 	m := &Manager{
-		searchDirs:     config.SearchDirs,
-		builtinDir:     config.BuiltinDir,
-		registryURL:    config.RegistryURL,
-		toolNames:      config.ToolNames,
-		skills:         make(map[string]*Skill),
-		bundles:        make(map[string]*SkillBundle),
-		categories:     make(map[string]*SkillCategory),
-		skillsDir:      skillsDir,
-		hubDir:         filepath.Join(skillsDir, ".hub"),
-		disabledSkills: &DisabledSkillsConfig{Platform: make(map[string][]string)},
+		searchDirs:        config.SearchDirs,
+		builtinDir:        config.BuiltinDir,
+		registryURL:       config.RegistryURL,
+		toolNames:         config.ToolNames,
+		skills:            make(map[string]*Skill),
+		bundles:           make(map[string]*SkillBundle),
+		categories:        make(map[string]*SkillCategory),
+		skillsDir:         skillsDir,
+		hubDir:            filepath.Join(skillsDir, ".hub"),
+		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
+		autoSkillCreation: config.AutoSkillCreation,
+		minPatternFreq:    config.MinPatternFreq,
+		hubCache:          make(map[string][]HubSkill),
+		hubCacheTime:      make(map[string]time.Time),
 	}
 
 	// 创建 Hub 目录
@@ -122,7 +136,30 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 		return nil, err
 	}
 
+	// Initialize effectiveness manager with auto-save and cleanup
+	if len(m.searchDirs) > 0 {
+		if effMgr, err := NewEffectivenessManager(m.searchDirs[0]); err == nil {
+			effMgr.StartAutoSave()
+			// Start periodic cleanup (every 24 hours, remove records older than 30 days)
+			go m.startEffectivenessCleanup(effMgr)
+		}
+	}
+
 	return m, nil
+}
+
+// startEffectivenessCleanup starts a background goroutine to periodically clean old effectiveness records
+func (m *Manager) startEffectivenessCleanup(effMgr *EffectivenessManager) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := effMgr.ClearOldRecords(30 * 24 * time.Hour); err != nil {
+			fmt.Printf("[skills] Failed to clean old effectiveness records: %v\n", err)
+		} else {
+			fmt.Printf("[skills] Cleaned old effectiveness records (older than 30 days)\n")
+		}
+	}
 }
 
 // NewManagerWithToolRegistry creates a manager with tool registry integration
@@ -2184,9 +2221,97 @@ func (m *Manager) searchHubSource(keyword string, source HubSource) ([]HubSkill,
 		return m.searchSkillsSh(keyword)
 	case HubSourceHub:
 		return m.searchHubSkills(keyword)
+	case HubSourceGitHub:
+		return m.searchGitHub(keyword)
 	default:
 		return nil, fmt.Errorf("unsupported hub source: %s", source)
 	}
+}
+
+// searchGitHub searches GitHub for skill repositories using GitHub Search API
+func (m *Manager) searchGitHub(keyword string) ([]HubSkill, error) {
+	// 空关键词时返回热门技能仓库
+	if keyword == "" {
+		return m.getPopularGitHubSkills(), nil
+	}
+
+	// Search GitHub repos with SKILL.md or skill-related topics
+	searchQueries := []string{
+		fmt.Sprintf("SKILL.md %s in:file", keyword),
+		fmt.Sprintf("magic-skill %s in:name,description", keyword),
+		fmt.Sprintf("agent-skill %s in:name,description", keyword),
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	var allResults []HubSkill
+	seen := make(map[string]bool)
+
+	for _, query := range searchQueries {
+		apiURL := fmt.Sprintf("https://api.github.com/search/code?q=%s&per_page=10", url.QueryEscape(query))
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "go-magic-skill-hub")
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
+		}
+
+		var searchResult struct {
+			Items []struct {
+				Repository struct {
+					FullName    string `json:"full_name"`
+					Description string `json:"description"`
+					HTMLURL     string `json:"html_url"`
+					Stargazers  int    `json:"stargazers_count"`
+				} `json:"repository"`
+				Path string `json:"path"`
+			} `json:"items"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		for _, item := range searchResult.Items {
+			repo := item.Repository.FullName
+			if seen[repo] {
+				continue
+			}
+			seen[repo] = true
+
+			// Extract skill name from repo path
+			skillName := repo
+			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+				skillName = repo[idx+1:]
+			}
+
+			desc := item.Repository.Description
+			if desc == "" {
+				desc = fmt.Sprintf("Skill from %s", repo)
+			}
+
+			allResults = append(allResults, HubSkill{
+				Name:        skillName,
+				Description: desc,
+				Category:    "github",
+				Source:      HubSourceGitHub,
+				SourceID:    repo,
+				URL:         item.Repository.HTMLURL,
+			})
+		}
+
+		// Rate limit: don't send too many requests
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	return allResults, nil
 }
 
 // searchOfficialSkills searches Hermes official skills from GitHub
@@ -2281,6 +2406,20 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 	return results
 }
 
+// getPopularGitHubSkills returns popular skill repositories from GitHub
+func (m *Manager) getPopularGitHubSkills() []HubSkill {
+	return []HubSkill{
+		{Name: "NousResearch/hermes-agent", Description: "Hermes Agent - Official skill collection with optional skills", Category: "official", Source: HubSourceGitHub, SourceID: "NousResearch/hermes-agent", URL: "https://github.com/NousResearch/hermes-agent"},
+		{Name: "anthropics/skills", Description: "Anthropic official skills for Claude Code", Category: "official", Source: HubSourceGitHub, SourceID: "anthropics/skills", URL: "https://github.com/anthropics/skills"},
+		{Name: "vercel-labs/agent-skills", Description: "Vercel Labs agent skills collection", Category: "frontend", Source: HubSourceGitHub, SourceID: "vercel-labs/agent-skills", URL: "https://github.com/vercel-labs/agent-skills"},
+		{Name: "github/copilot-skills", Description: "GitHub Copilot skills and extensions", Category: "devtools", Source: HubSourceGitHub, SourceID: "github/copilot-skills", URL: "https://github.com/github/copilot-skills"},
+		{Name: "microsoft/promptflow-skills", Description: "Microsoft PromptFlow skill templates", Category: "ai", Source: HubSourceGitHub, SourceID: "microsoft/promptflow-skills", URL: "https://github.com/microsoft/promptflow-skills"},
+		{Name: "openai/openai-agents-python", Description: "OpenAI Agents Python SDK with built-in skills", Category: "ai", Source: HubSourceGitHub, SourceID: "openai/openai-agents-python", URL: "https://github.com/openai/openai-agents-python"},
+		{Name: "langchain-ai/langchain", Description: "LangChain framework with skill components", Category: "ai", Source: HubSourceGitHub, SourceID: "langchain-ai/langchain", URL: "https://github.com/langchain-ai/langchain"},
+		{Name: "mastra-ai/mastra", Description: "Mastra AI agent framework skills", Category: "ai", Source: HubSourceGitHub, SourceID: "mastra-ai/mastra", URL: "https://github.com/mastra-ai/mastra"},
+	}
+}
+
 // searchSkillsSh searches skills.sh registry
 func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call skills.sh API
@@ -2289,6 +2428,10 @@ func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Category: "document", Source: HubSourceSkillsSh, SourceID: "anthropics/skills/pdf"},
 		{Name: "github-search/skills/code-search", Description: "Find code across GitHub repositories", Category: "search", Source: HubSourceSkillsSh, SourceID: "github-search/skills/code-search"},
 		{Name: "log-finder/skills/trace", Description: "Find and analyze log traces", Category: "monitoring", Source: HubSourceSkillsSh, SourceID: "log-finder/skills/trace"},
+	}
+
+	if keyword == "" {
+		return mockSkills, nil
 	}
 
 	var results []HubSkill
@@ -2313,6 +2456,10 @@ func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Category: "devtools", Source: HubSourceHub, SourceID: "dependency-finder"},
 	}
 
+	if keyword == "" {
+		return mockSkills, nil
+	}
+
 	var results []HubSkill
 	keyword = strings.ToLower(keyword)
 	for _, skill := range mockSkills {
@@ -2325,31 +2472,204 @@ func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 }
 
 // InstallFromHub installs a skill from a hub source
-// 支持从 GitHub 仓库目录、skills.sh、well-known 端点等来源安装
+// 支持从 GitHub 仓库、skills.sh、well-known 端点等来源安装
 func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
-	var installURL string
-
 	switch source {
-	case HubSourceOfficial:
-		// Hermes 官方技能：从 GitHub 仓库目录安装
-		installURL = fmt.Sprintf("https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/%s", sourceID)
+	case HubSourceGitHub, HubSourceOfficial:
+		// GitHub 仓库：使用 git clone 安装
+		return m.installFromGitHub(sourceID, source)
 	case HubSourceSkillsSh:
-		// skills.sh 注册表
-		installURL = fmt.Sprintf("https://%s", sourceID)
+		return m.installFromRemoteURL(fmt.Sprintf("https://%s", sourceID), source)
 	case HubSourceWellKnown:
-		// well-known 端点
-		installURL = sourceID
-	case HubSourceGitHub:
-		// 直接 GitHub 仓库路径
-		installURL = fmt.Sprintf("https://github.com/%s", sourceID)
+		return m.installFromRemoteURL(sourceID, source)
 	case HubSourceHub:
-		installURL = fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID)
+		return m.installFromRemoteURL(fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID), source)
 	default:
 		return fmt.Errorf("unsupported hub source: %s", source)
 	}
+}
 
-	// 使用 importer 下载器从远程安装
-	return m.installFromRemoteURL(installURL, source)
+// installFromGitHub clones a GitHub repo and installs skills from it
+func (m *Manager) installFromGitHub(repoPath string, source HubSource) error {
+	repoURL := fmt.Sprintf("https://github.com/%s.git", repoPath)
+	fmt.Printf("Cloning skill repo: %s\n", repoURL)
+
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "go-magic-hub-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// git clone --depth 1
+	cloneDir := filepath.Join(tmpDir, "repo")
+	cmd := exec.Command("git", "clone", "--depth", "1", repoURL, cloneDir)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// Fallback: try raw file download via GitHub API
+		fmt.Printf("Git clone failed, trying raw download: %v\n", err)
+		return m.installFromGitHubRaw(repoPath, source)
+	}
+
+	// Find all SKILL.md files in the cloned repo
+	var installed int
+	err = filepath.WalkDir(cloneDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(d.Name()), "skill.md") {
+			skill := m.loadSkillFromFile(filepath.Dir(path))
+			if skill == nil {
+				skill = m.loadSkillFromFile(path)
+			}
+			if skill != nil {
+				// Security scan
+				scanResult := ScanSkillSecurity(skill.Content)
+				if !scanResult.Safe {
+					fmt.Printf("Security scan failed for %s: %v\n", skill.Name, scanResult.Threats)
+					return nil
+				}
+				skill.Source = SkillSourceRegistry
+				if err := m.Add(skill); err != nil {
+					fmt.Printf("Failed to add skill %s: %v\n", skill.Name, err)
+				} else {
+					installed++
+					fmt.Printf("Installed skill: %s\n", skill.Name)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to scan repo: %w", err)
+	}
+
+	if installed == 0 {
+		return fmt.Errorf("no valid SKILL.md found in repository %s", repoPath)
+	}
+
+	// Record to Hub lock
+	lockEntry := HubLockEntry{
+		SkillName:     fmt.Sprintf("%s (%d skills)", repoPath, installed),
+		Source:        source,
+		SourceID:      repoPath,
+		URL:           repoURL,
+		InstalledAt:   time.Now(),
+		SecurityAudit: "passed",
+	}
+	_ = m.AddHubLockEntry(lockEntry)
+
+	return nil
+}
+
+// installFromGitHubRaw downloads a SKILL.md directly from GitHub raw content
+func (m *Manager) installFromGitHubRaw(repoPath string, source HubSource) error {
+	// Try common paths for SKILL.md
+	possiblePaths := []string{
+		"SKILL.md",
+		"skill.md",
+		"README.md",
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	var body []byte
+
+	for _, p := range possiblePaths {
+		rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", repoPath, p)
+		req, err := http.NewRequest("GET", rawURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "go-magic-skill-hub")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err == nil && len(body) > 0 {
+				break
+			}
+		}
+		resp.Body.Close()
+
+		// Try master branch
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/master/%s", repoPath, p)
+		req, _ = http.NewRequest("GET", rawURL, nil)
+		if req != nil {
+			req.Header.Set("User-Agent", "go-magic-skill-hub")
+			resp, err = client.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				body, err = io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err == nil && len(body) > 0 {
+					break
+				}
+			} else if resp != nil {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	if len(body) == 0 {
+		return fmt.Errorf("no SKILL.md or README.md found in repository %s", repoPath)
+	}
+
+	// Write to temp file and load using loadSkillFromFile
+	tmpDir, err := os.MkdirTemp("", "go-magic-hub-raw-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Determine file extension
+	ext := ".md"
+	skillName := repoPath
+	if idx := strings.LastIndex(repoPath, "/"); idx >= 0 {
+		skillName = repoPath[idx+1:]
+	}
+
+	tmpFile := filepath.Join(tmpDir, skillName+ext)
+	if err := os.WriteFile(tmpFile, body, 0644); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	// Load skill using existing parser
+	skill := m.loadSkillFromFile(tmpFile)
+	if skill == nil {
+		return fmt.Errorf("failed to parse skill from repository %s", repoPath)
+	}
+
+	// Override name and source
+	skill.Name = skillName
+	skill.Source = SkillSourceRegistry
+
+	// Security scan
+	scanResult := ScanSkillSecurity(skill.Content)
+	if !scanResult.Safe {
+		return fmt.Errorf("security scan failed: %s", strings.Join(scanResult.Threats, "; "))
+	}
+
+	if err := m.Add(skill); err != nil {
+		return fmt.Errorf("failed to add skill: %w", err)
+	}
+
+	// Record to Hub lock
+	lockEntry := HubLockEntry{
+		SkillName:     skillName,
+		Source:        source,
+		SourceID:      repoPath,
+		URL:           fmt.Sprintf("https://github.com/%s", repoPath),
+		InstalledAt:   time.Now(),
+		SecurityAudit: "passed",
+	}
+	_ = m.AddHubLockEntry(lockEntry)
+
+	return nil
 }
 
 // installFromRemoteURL 从远程 URL 下载并安装技能
@@ -2524,11 +2844,32 @@ func (m *Manager) CheckForUpdates() (map[string]bool, error) {
 	updates := make(map[string]bool)
 	for name, skill := range m.skills {
 		if skill.Source == SkillSourceRegistry {
-			// In real implementation, compare with remote version
-			updates[name] = false // No update available by default
+			// Check if there's a newer version in the hub lock
+			lockEntry := m.GetHubLockEntry(name)
+			if lockEntry != nil {
+				// For GitHub sources, check the last modified time of the remote repo
+				// by comparing the installed_at time with a 24h threshold
+				// In a real implementation, this would fetch the remote commit hash
+				// and compare with the installed version
+				updates[name] = m.checkRemoteUpdate(lockEntry)
+			} else {
+				updates[name] = false
+			}
 		}
 	}
 	return updates, nil
+}
+
+// checkRemoteUpdate checks if a remote skill has been updated
+// Returns true if the skill was installed more than 24 hours ago
+// (simplified heuristic - real implementation would compare commit hashes)
+func (m *Manager) checkRemoteUpdate(lockEntry *HubLockEntry) bool {
+	if lockEntry == nil || lockEntry.InstalledAt.IsZero() {
+		return false
+	}
+	// Consider skills installed more than 24h ago as potentially outdated
+	// This is a simplified check - real implementation would compare commit hashes
+	return time.Since(lockEntry.InstalledAt) > 24*time.Hour
 }
 
 // UpdateHubSkill updates a skill from its hub source
