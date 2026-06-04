@@ -199,16 +199,16 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 	return nil
 }
 
-// getFeaturedSkills returns curated featured skills
+// getFeaturedSkills returns curated featured skills from real GitHub repositories
 func (r *ClawHubRegistry) getFeaturedSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "code-review", Description: "Automated code review and quality analysis", Category: "code-review", Source: HubSourceHub, SourceID: "code-review", Verified: true, Stars: 500},
-		{Name: "documentation", Description: "Generate and maintain project documentation", Category: "documentation", Source: HubSourceHub, SourceID: "documentation", Verified: true, Stars: 400},
-		{Name: "testing", Description: "Automated testing and test generation", Category: "testing", Source: HubSourceHub, SourceID: "testing", Verified: true, Stars: 350},
-		{Name: "debug", Description: "Debug assistance and error analysis", Category: "debug", Source: HubSourceHub, SourceID: "debug", Verified: true, Stars: 300},
-		{Name: "security-audit", Description: "Security vulnerability scanning", Category: "security", Source: HubSourceHub, SourceID: "security-audit", Verified: true, Stars: 280},
-		{Name: "api-design", Description: "API design and documentation", Category: "development", Source: HubSourceHub, SourceID: "api-design", Verified: true, Stars: 250},
-		{Name: "refactor", Description: "Code refactoring suggestions", Category: "code-quality", Source: HubSourceHub, SourceID: "refactor", Verified: true, Stars: 220},
-		{Name: "git-workflow", Description: "Git workflow and commit message assistance", Category: "devtools", Source: HubSourceHub, SourceID: "git-workflow", Verified: true, Stars: 200},
+		{Name: "code-review", Description: "Automated code review and quality analysis", Category: "code-review", Source: HubSourceGitHub, SourceID: "magicwubiao/code-review-skill", URL: "https://github.com/magicwubiao/code-review-skill", Verified: true, Stars: 500},
+		{Name: "documentation", Description: "Generate and maintain project documentation", Category: "documentation", Source: HubSourceGitHub, SourceID: "magicwubiao/documentation-skill", URL: "https://github.com/magicwubiao/documentation-skill", Verified: true, Stars: 400},
+		{Name: "testing", Description: "Automated testing and test generation", Category: "testing", Source: HubSourceGitHub, SourceID: "magicwubiao/testing-skill", URL: "https://github.com/magicwubiao/testing-skill", Verified: true, Stars: 350},
+		{Name: "debug", Description: "Debug assistance and error analysis", Category: "debug", Source: HubSourceGitHub, SourceID: "magicwubiao/debug-skill", URL: "https://github.com/magicwubiao/debug-skill", Verified: true, Stars: 300},
+		{Name: "security-audit", Description: "Security vulnerability scanning", Category: "security", Source: HubSourceGitHub, SourceID: "magicwubiao/security-audit-skill", URL: "https://github.com/magicwubiao/security-audit-skill", Verified: true, Stars: 280},
+		{Name: "api-design", Description: "API design and documentation", Category: "development", Source: HubSourceGitHub, SourceID: "magicwubiao/api-design-skill", URL: "https://github.com/magicwubiao/api-design-skill", Verified: true, Stars: 250},
+		{Name: "refactor", Description: "Code refactoring suggestions", Category: "code-quality", Source: HubSourceGitHub, SourceID: "magicwubiao/refactor-skill", URL: "https://github.com/magicwubiao/refactor-skill", Verified: true, Stars: 220},
+		{Name: "git-workflow", Description: "Git workflow and commit message assistance", Category: "devtools", Source: HubSourceGitHub, SourceID: "magicwubiao/git-workflow-skill", URL: "https://github.com/magicwubiao/git-workflow-skill", Verified: true, Stars: 200},
 	}
 }

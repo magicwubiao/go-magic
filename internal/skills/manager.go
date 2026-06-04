@@ -2518,7 +2518,7 @@ func (m *Manager) installFromHubLegacy(source HubSource, sourceID string) error 
 	}
 }
 
-// scanAndInstallFromStaging scans staged skills and installs them
+// scanAndInstallFromStaging scans staged skills and installs them with proper directory structure
 func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource, sourceID string) error {
 	// Debug: list staging directory contents
 	fmt.Printf("Scanning staging directory: %s\n", stagingDir)
@@ -2543,8 +2543,11 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 			foundFiles = append(foundFiles, path)
 			fmt.Printf("Found markdown file: %s\n", path)
 
+			// Get skill directory (parent of SKILL.md)
+			skillDir := filepath.Dir(path)
+			
 			// Try to load skill from parent directory first (for SKILL.md)
-			skill := m.loadSkillFromFile(filepath.Dir(path))
+			skill := m.loadSkillFromFile(skillDir)
 			if skill == nil {
 				// Fallback: load from file itself
 				skill = m.loadSkillFromFile(path)
@@ -2557,9 +2560,10 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 					fmt.Printf("  -> Security scan failed: %v\n", scanResult.Threats)
 					return nil
 				}
-				skill.Source = SkillSourceRegistry
-				if err := m.Add(skill); err != nil {
-					fmt.Printf("  -> Failed to add skill: %v\n", err)
+				
+				// Install skill with proper directory structure
+				if err := m.installSkillWithDirectory(skill, skillDir, source, sourceID); err != nil {
+					fmt.Printf("  -> Failed to install skill: %v\n", err)
 				} else {
 					installed++
 					fmt.Printf("  -> Installed successfully\n")
@@ -2593,6 +2597,88 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 	_ = m.AddHubLockEntry(lockEntry)
 
 	return nil
+}
+
+// installSkillWithDirectory installs a skill with its complete directory structure
+func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, source HubSource, sourceID string) error {
+	if len(m.searchDirs) == 0 {
+		return fmt.Errorf("no search directories configured")
+	}
+
+	// Create skill directory in the first search directory
+	skillDir := filepath.Join(m.searchDirs[0], skill.Name)
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return fmt.Errorf("failed to create skill directory: %w", err)
+	}
+
+	// Copy all files from source directory to skill directory
+	if err := copyDirectory(sourceDir, skillDir); err != nil {
+		return fmt.Errorf("failed to copy skill files: %w", err)
+	}
+
+	// Save origin metadata
+	originMeta := &SkillOriginMeta{
+		Version:     1,
+		OriginKind:  "third_party",
+		Registry:    string(source),
+		Slug:        sourceID,
+		RegistryURL: skill.URL,
+		VersionStr:  "1.0.0",
+		InstalledAt: time.Now().Unix(),
+	}
+	if err := SaveSkillOriginMeta(skillDir, originMeta); err != nil {
+		fmt.Printf("Warning: failed to save origin metadata: %v\n", err)
+	}
+
+	// Reload skill from the new directory
+	reloadedSkill := m.loadSkillFromFile(skillDir)
+	if reloadedSkill != nil {
+		reloadedSkill.Source = SkillSourceRegistry
+		m.mu.Lock()
+		m.skills[reloadedSkill.Name] = reloadedSkill
+		m.mu.Unlock()
+	}
+
+	return nil
+}
+
+// copyDirectory copies all files from source to destination directory
+func copyDirectory(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Get relative path from source
+		relPath, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip if it's the source directory itself
+		if relPath == "." {
+			return nil
+		}
+
+		destPath := filepath.Join(destination, relPath)
+
+		if d.IsDir() {
+			return os.MkdirAll(destPath, d.Type().Perm())
+		}
+
+		// Copy file
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		// Ensure parent directory exists
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+
+		return os.WriteFile(destPath, data, d.Type().Perm())
+	})
 }
 
 // installFromGitHub clones a GitHub repo and installs skills from it
