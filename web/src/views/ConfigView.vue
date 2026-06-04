@@ -170,9 +170,9 @@ function populateFromConfig(cfg: any) {
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
 
-  const cortex = cfg.cortex || {}
-  skillsForm.auto_skill_creation = cortex.auto_skill_creation !== false
-  skillsForm.min_pattern_frequency = cortex.min_pattern_frequency || 2
+  const skills = cfg.skills || {}
+  skillsForm.auto_skill_creation = skills.auto_skill_creation !== false
+  skillsForm.min_pattern_frequency = skills.min_pattern_frequency || 2
 }
 
 async function saveGeneral() {
