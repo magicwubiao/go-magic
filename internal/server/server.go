@@ -2380,7 +2380,10 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			Content  string `json:"content"`
 			Category string `json:"category"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 
 		// If URL is provided, use skill manager to install from URL
 		if req.URL != "" {
@@ -2411,8 +2414,11 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			if s.skillMgr != nil {
 				s.skillMgr.Reload()
 			}
+			jsonResponse(w, map[string]bool{"ok": true})
+			return
 		}
-		jsonResponse(w, map[string]bool{"ok": true})
+
+		http.Error(w, "invalid request: either url or name is required", http.StatusBadRequest)
 		return
 	}
 
