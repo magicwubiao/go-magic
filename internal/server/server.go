@@ -2334,15 +2334,19 @@ func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
 	keyword := r.URL.Query().Get("q")
 
 	if s.skillMgr != nil {
-		skills, err := s.skillMgr.SearchHub(keyword, nil)
+		skillsList, err := s.skillMgr.SearchHub(keyword, nil)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			// Return empty array on error instead of 500, since registries may be unavailable
+			jsonResponse(w, []skills.HubSkill{})
 			return
 		}
-		jsonResponse(w, skills)
+		if skillsList == nil {
+			skillsList = []skills.HubSkill{}
+		}
+		jsonResponse(w, skillsList)
 		return
 	}
-	jsonResponse(w, []interface{}{})
+	jsonResponse(w, []skills.HubSkill{})
 }
 
 func (s *Server) handleSkillHubInstall(w http.ResponseWriter, r *http.Request) {

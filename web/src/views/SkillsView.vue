@@ -343,25 +343,27 @@
 
         <n-spin :show="hubLoading">
           <div v-if="hubSkills.length > 0" style="max-height: 500px; overflow-y: auto;">
-            <n-list bordered>
-              <n-list-item v-for="item in hubSkills" :key="item.source_id || item.name">
-                <template #header>
-                  <n-space align="center">
-                    <span style="font-weight: 600;">{{ item.name }}</span>
-                    <n-tag size="small" type="info">{{ item.source }}</n-tag>
-                    <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
-                    <n-tag v-if="item.stars > 0" size="small">{{ item.stars }}</n-tag>
-                  </n-space>
-                </template>
-                <template #description>
-                  <n-space vertical size="small">
-                    <n-text depth="2">{{ item.description }}</n-text>
+            <n-space vertical>
+              <n-card
+                v-for="item in hubSkills"
+                :key="item.source_id || item.name"
+                size="small"
+                hoverable
+                style="margin-bottom: 8px;"
+              >
+                <n-space justify="space-between" align="center">
+                  <n-space vertical size="small" style="flex: 1; min-width: 0;">
+                    <n-space align="center">
+                      <span style="font-weight: 600;">{{ item.name }}</span>
+                      <n-tag size="small" type="info">{{ item.source }}</n-tag>
+                      <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
+                      <n-tag v-if="item.stars > 0" size="small">⭐ {{ item.stars }}</n-tag>
+                    </n-space>
+                    <n-text depth="2" style="font-size: 13px;">{{ item.description }}</n-text>
                     <n-space v-if="item.tags && item.tags.length > 0">
-                      <n-tag v-for="tag in item.tags" :key="tag" size="tiny">{{ tag }}</n-tag>
+                      <n-tag v-for="tag in item.tags" :key="tag" size="tiny" type="default">{{ tag }}</n-tag>
                     </n-space>
                   </n-space>
-                </template>
-                <template #extra>
                   <n-button
                     size="small"
                     type="primary"
@@ -370,11 +372,11 @@
                   >
                     {{ t('skills.install') }}
                   </n-button>
-                </template>
-              </n-list-item>
-            </n-list>
+                </n-space>
+              </n-card>
+            </n-space>
           </div>
-          <n-empty v-else :description="t('skills.noHubSkills')" />
+          <n-empty v-else-if="!hubLoading" :description="t('skills.noHubSkills')" />
         </n-spin>
       </n-space>
     </n-modal>
@@ -465,15 +467,15 @@ interface EvolutionRecord {
 interface HubSkill {
   name: string
   description: string
-  category?: string
-  tags?: string[]
+  category: string
+  tags: string[]
   source: string
   source_id: string
-  url?: string
-  author?: string
-  stars?: number
-  installs?: number
-  verified?: boolean
+  url: string
+  author: string
+  stars: number
+  installs: number
+  verified: boolean
 }
 
 // Computed

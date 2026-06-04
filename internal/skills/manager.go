@@ -2520,31 +2520,52 @@ func (m *Manager) installFromHubLegacy(source HubSource, sourceID string) error 
 
 // scanAndInstallFromStaging scans staged skills and installs them
 func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource, sourceID string) error {
+	// Debug: list staging directory contents
+	fmt.Printf("Scanning staging directory: %s\n", stagingDir)
+	entries, _ := os.ReadDir(stagingDir)
+	for _, e := range entries {
+		fmt.Printf("  - %s (dir=%v)\n", e.Name(), e.IsDir())
+	}
+
 	// Find all SKILL.md files
 	var installed int
+	var foundFiles []string
 	err := filepath.WalkDir(stagingDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			fmt.Printf("Walk error at %s: %v\n", path, err)
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(d.Name()), "skill.md") {
+		if d.IsDir() {
+			return nil
+		}
+		lowerName := strings.ToLower(d.Name())
+		if strings.HasSuffix(lowerName, "skill.md") || strings.HasSuffix(lowerName, ".md") {
+			foundFiles = append(foundFiles, path)
+			fmt.Printf("Found markdown file: %s\n", path)
+			
+			// Try to load skill from parent directory first (for SKILL.md)
 			skill := m.loadSkillFromFile(filepath.Dir(path))
 			if skill == nil {
+				// Fallback: load from file itself
 				skill = m.loadSkillFromFile(path)
 			}
 			if skill != nil {
+				fmt.Printf("  -> Loaded skill: %s\n", skill.Name)
 				// Security scan
 				scanResult := ScanSkillSecurity(skill.Content)
 				if !scanResult.Safe {
-					fmt.Printf("Security scan failed for %s: %v\n", skill.Name, scanResult.Threats)
+					fmt.Printf("  -> Security scan failed: %v\n", scanResult.Threats)
 					return nil
 				}
 				skill.Source = SkillSourceRegistry
 				if err := m.Add(skill); err != nil {
-					fmt.Printf("Failed to add skill %s: %v\n", skill.Name, err)
+					fmt.Printf("  -> Failed to add skill: %v\n", err)
 				} else {
 					installed++
-					fmt.Printf("Installed skill: %s\n", skill.Name)
+					fmt.Printf("  -> Installed successfully\n")
 				}
+			} else {
+				fmt.Printf("  -> Failed to load skill from file\n")
 			}
 		}
 		return nil
@@ -2555,7 +2576,10 @@ func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource,
 	}
 
 	if installed == 0 {
-		return fmt.Errorf("no valid SKILL.md found in downloaded content")
+		if len(foundFiles) == 0 {
+			return fmt.Errorf("no SKILL.md or .md files found in downloaded content")
+		}
+		return fmt.Errorf("found %d markdown files but none could be loaded as valid skills", len(foundFiles))
 	}
 
 	// Record to Hub lock
