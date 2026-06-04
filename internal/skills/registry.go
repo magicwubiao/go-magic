@@ -58,58 +58,15 @@ func (rm *RegistryManager) AddRegistry(r SkillRegistry) {
 	rm.registries = append(rm.registries, r)
 }
 
-// SearchAll searches all registries concurrently
+// SearchAll searches only ClawHub registry
 func (rm *RegistryManager) SearchAll(ctx context.Context, query string, limit int) ([]HubSkill, error) {
-	rm.mu.RLock()
-	regs := make([]SkillRegistry, len(rm.registries))
-	copy(regs, rm.registries)
-	rm.mu.RUnlock()
-
-	if len(regs) == 0 {
+	// Only search ClawHub - simplified to single source
+	reg := rm.GetRegistry("clawhub")
+	if reg == nil {
 		return []HubSkill{}, nil
 	}
 
-	// Semaphore for concurrency control
-	sem := make(chan struct{}, rm.maxConcurrent)
-	var wg sync.WaitGroup
-	resultsMu := sync.Mutex{}
-	var allResults []HubSkill
-	var firstErr error
-
-	for _, reg := range regs {
-		wg.Add(1)
-		go func(r SkillRegistry) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
-
-			results, err := r.Search(ctx, query, limit)
-			if err != nil {
-				resultsMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				resultsMu.Unlock()
-				return
-			}
-			resultsMu.Lock()
-			allResults = append(allResults, results...)
-			resultsMu.Unlock()
-		}(reg)
-	}
-
-	wg.Wait()
-
-	// If no results but there was an error, return the error
-	if len(allResults) == 0 && firstErr != nil {
-		return nil, firstErr
-	}
-
-	return allResults, nil
+	return reg.Search(ctx, query, limit)
 }
 
 // GetRegistry returns a registry by name

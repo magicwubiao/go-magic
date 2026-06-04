@@ -110,7 +110,6 @@ func (r *GitHubRegistry) getSkillsFromCollection(ctx context.Context, coll Skill
 		skill := HubSkill{
 			Name:        item.Name,
 			Description: fmt.Sprintf("%s: %s", coll.Description, item.Name),
-			Category:    coll.Category,
 			Source:      HubSourceGitHub,
 			SourceID:    sourceID,
 			URL:         fmt.Sprintf("https://github.com/%s/%s/tree/main/%s/%s", coll.Owner, coll.Repo, coll.SkillsPath, item.Name),
@@ -225,27 +224,6 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 				continue
 			}
 
-			// Determine category from topics
-			category := "github"
-			for _, topic := range item.Topics {
-				switch topic {
-				case "ai", "machine-learning", "llm":
-					category = "ai"
-				case "devops", "kubernetes", "docker":
-					category = "devops"
-				case "security":
-					category = "security"
-				case "productivity", "automation":
-					category = "productivity"
-				case "testing", "qa":
-					category = "testing"
-				case "documentation":
-					category = "documentation"
-				case "web", "api":
-					category = "web"
-				}
-			}
-
 			desc := item.Description
 			if desc == "" {
 				desc = fmt.Sprintf("Skill from %s", repo)
@@ -254,7 +232,6 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 			allResults = append(allResults, HubSkill{
 				Name:        item.Name,
 				Description: desc,
-				Category:    category,
 				Source:      HubSourceGitHub,
 				SourceID:    repo,
 				URL:         item.HTMLURL,
@@ -336,7 +313,6 @@ func (r *GitHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSki
 	return &HubSkill{
 		Name:        repo.Name,
 		Description: repo.Description,
-		Category:    "github",
 		Source:      HubSourceGitHub,
 		SourceID:    slug,
 		URL:         repo.HTMLURL,
@@ -735,11 +711,11 @@ func (r *GitHubRegistry) downloadViaRaw(ctx context.Context, owner, repo, ref, t
 // They should not be listed here as they will download all skills when installed
 func (r *GitHubRegistry) getPopularSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "claude-mem", Description: "Persistent memory plugin for Claude Code", Category: "memory", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem", Stars: 80000},
-		{Name: "page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Category: "agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent", Stars: 18000},
-		{Name: "FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Category: "video", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline", Stars: 2800},
-		{Name: "nezha", Description: "Multi-project AI coding assistant manager", Category: "coding", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha", Stars: 1300},
-		{Name: "paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Category: "platform", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo", Stars: 6600},
+		{Name: "claude-mem", Description: "Persistent memory plugin for Claude Code", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem", Stars: 80000},
+		{Name: "page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent", Stars: 18000},
+		{Name: "FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline", Stars: 2800},
+		{Name: "nezha", Description: "Multi-project AI coding assistant manager", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha", Stars: 1300},
+		{Name: "paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo", Stars: 6600},
 	}
 }
 

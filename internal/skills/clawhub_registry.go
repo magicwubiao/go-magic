@@ -88,7 +88,6 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 		skills = append(skills, HubSkill{
 			Name:        s.Name,
 			Description: s.Description,
-			Category:    s.Category,
 			Tags:        s.Tags,
 			Source:      HubSourceHub,
 			SourceID:    s.Slug,
@@ -142,7 +141,6 @@ func (r *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSk
 	return &HubSkill{
 		Name:        s.Name,
 		Description: s.Description,
-		Category:    s.Category,
 		Tags:        s.Tags,
 		Source:      HubSourceHub,
 		SourceID:    s.Slug,
@@ -204,13 +202,13 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 // These skills are served from ClawHub, not directly from GitHub
 func (r *ClawHubRegistry) getFeaturedSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow automation", Category: "devops", Source: HubSourceHub, SourceID: "k8s-deploy", URL: fmt.Sprintf("%s/skills/k8s-deploy", r.baseURL), Verified: true, Stars: 1200, Installs: 3500},
-		{Name: "git-workflow", Description: "Git workflow automation and best practices", Category: "devtools", Source: HubSourceHub, SourceID: "git-workflow", URL: fmt.Sprintf("%s/skills/git-workflow", r.baseURL), Verified: true, Stars: 980, Installs: 2800},
-		{Name: "code-review", Description: "Automated code review and quality analysis", Category: "code-quality", Source: HubSourceHub, SourceID: "code-review", URL: fmt.Sprintf("%s/skills/code-review", r.baseURL), Verified: true, Stars: 850, Installs: 2400},
-		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Category: "code-quality", Source: HubSourceHub, SourceID: "find-unused-code", URL: fmt.Sprintf("%s/skills/find-unused-code", r.baseURL), Verified: true, Stars: 720, Installs: 1900},
-		{Name: "search-replace", Description: "Find and replace text across multiple files", Category: "productivity", Source: HubSourceHub, SourceID: "search-replace", URL: fmt.Sprintf("%s/skills/search-replace", r.baseURL), Verified: true, Stars: 650, Installs: 1700},
-		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Category: "devtools", Source: HubSourceHub, SourceID: "dependency-finder", URL: fmt.Sprintf("%s/skills/dependency-finder", r.baseURL), Verified: true, Stars: 580, Installs: 1500},
-		{Name: "test-generator", Description: "Automated test case generation", Category: "testing", Source: HubSourceHub, SourceID: "test-generator", URL: fmt.Sprintf("%s/skills/test-generator", r.baseURL), Verified: true, Stars: 520, Installs: 1300},
-		{Name: "api-documenter", Description: "API documentation generator", Category: "documentation", Source: HubSourceHub, SourceID: "api-documenter", URL: fmt.Sprintf("%s/skills/api-documenter", r.baseURL), Verified: true, Stars: 480, Installs: 1200},
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow automation", Source: HubSourceHub, SourceID: "k8s-deploy", URL: fmt.Sprintf("%s/skills/k8s-deploy", r.baseURL), Verified: true, Stars: 1200, Installs: 3500},
+		{Name: "git-workflow", Description: "Git workflow automation and best practices", Source: HubSourceHub, SourceID: "git-workflow", URL: fmt.Sprintf("%s/skills/git-workflow", r.baseURL), Verified: true, Stars: 980, Installs: 2800},
+		{Name: "code-review", Description: "Automated code review and quality analysis", Source: HubSourceHub, SourceID: "code-review", URL: fmt.Sprintf("%s/skills/code-review", r.baseURL), Verified: true, Stars: 850, Installs: 2400},
+		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Source: HubSourceHub, SourceID: "find-unused-code", URL: fmt.Sprintf("%s/skills/find-unused-code", r.baseURL), Verified: true, Stars: 720, Installs: 1900},
+		{Name: "search-replace", Description: "Find and replace text across multiple files", Source: HubSourceHub, SourceID: "search-replace", URL: fmt.Sprintf("%s/skills/search-replace", r.baseURL), Verified: true, Stars: 650, Installs: 1700},
+		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Source: HubSourceHub, SourceID: "dependency-finder", URL: fmt.Sprintf("%s/skills/dependency-finder", r.baseURL), Verified: true, Stars: 580, Installs: 1500},
+		{Name: "test-generator", Description: "Automated test case generation", Source: HubSourceHub, SourceID: "test-generator", URL: fmt.Sprintf("%s/skills/test-generator", r.baseURL), Verified: true, Stars: 520, Installs: 1300},
+		{Name: "api-documenter", Description: "API documentation generator", Source: HubSourceHub, SourceID: "api-documenter", URL: fmt.Sprintf("%s/skills/api-documenter", r.baseURL), Verified: true, Stars: 480, Installs: 1200},
 	}
 }

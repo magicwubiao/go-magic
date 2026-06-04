@@ -256,7 +256,6 @@ const (
 type HubSkill struct {
 	Name          string    `json:"name"`
 	Description   string    `json:"description"`
-	Category      string    `json:"category,omitempty"`
 	Tags          []string  `json:"tags,omitempty"`
 	Source        HubSource `json:"source"`
 	SourceID      string    `json:"source_id,omitempty"` // e.g., "openai/skills/k8s"

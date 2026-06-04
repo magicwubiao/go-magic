@@ -2201,24 +2201,8 @@ func (m *Manager) SearchHub(keyword string, sources []HubSource) ([]HubSkill, er
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Use the new registry manager
+	// Only search ClawHub - simplified to single source
 	return m.registryMgr.SearchAll(ctx, keyword, 20)
-}
-
-// searchHubSource searches a specific hub source
-func (m *Manager) searchHubSource(keyword string, source HubSource) ([]HubSkill, error) {
-	switch source {
-	case HubSourceOfficial:
-		return m.searchOfficialSkills(keyword)
-	case HubSourceSkillsSh:
-		return m.searchSkillsSh(keyword)
-	case HubSourceHub:
-		return m.searchHubSkills(keyword)
-	case HubSourceGitHub:
-		return m.searchGitHub(keyword)
-	default:
-		return nil, fmt.Errorf("unsupported hub source: %s", source)
-	}
 }
 
 // searchGitHub searches GitHub for skill repositories using GitHub Search API
@@ -2293,7 +2277,6 @@ func (m *Manager) searchGitHub(keyword string) ([]HubSkill, error) {
 			allResults = append(allResults, HubSkill{
 				Name:        skillName,
 				Description: desc,
-				Category:    "github",
 				Source:      HubSourceGitHub,
 				SourceID:    repo,
 				URL:         item.Repository.HTMLURL,
@@ -2349,7 +2332,6 @@ func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
 		skill := HubSkill{
 			Name:        item.Name,
 			Description: fmt.Sprintf("Hermes official skill: %s", item.Name),
-			Category:    "official",
 			Source:      HubSourceOfficial,
 			SourceID:    item.Name,
 			URL:         fmt.Sprintf("https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/%s", item.Name),
@@ -2372,16 +2354,16 @@ func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
 // getFallbackOfficialSkills 返回硬编码的官方技能列表（API 失败时使用）
 func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 	officialSkills := []HubSkill{
-		{Name: "security/1password", Description: "1Password integration for secure credential management", Category: "security", Source: HubSourceOfficial, SourceID: "security/1password"},
-		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Category: "security", Source: HubSourceOfficial, SourceID: "security/bitwarden"},
-		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Category: "migration", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
-		{Name: "devtools/kubernetes", Description: "Kubernetes deployment and management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/kubernetes"},
-		{Name: "devtools/docker", Description: "Docker container management", Category: "devtools", Source: HubSourceOfficial, SourceID: "devtools/docker"},
-		{Name: "utils/file-finder", Description: "Find and search files in your project", Category: "utils", Source: HubSourceOfficial, SourceID: "utils/file-finder"},
-		{Name: "utils/text-search", Description: "Search text patterns in code and documents", Category: "utils", Source: HubSourceOfficial, SourceID: "utils/text-search"},
-		{Name: "database/sql-finder", Description: "Find and analyze SQL queries", Category: "database", Source: HubSourceOfficial, SourceID: "database/sql-finder"},
-		{Name: "code/bug-finder", Description: "Find bugs and issues in code", Category: "code", Source: HubSourceOfficial, SourceID: "code/bug-finder"},
-		{Name: "docs/content-search", Description: "Search and find content in documentation", Category: "docs", Source: HubSourceOfficial, SourceID: "docs/content-search"},
+		{Name: "security/1password", Description: "1Password integration for secure credential management", Source: HubSourceOfficial, SourceID: "security/1password"},
+		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Source: HubSourceOfficial, SourceID: "security/bitwarden"},
+		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
+		{Name: "devtools/kubernetes", Description: "Kubernetes deployment and management", Source: HubSourceOfficial, SourceID: "devtools/kubernetes"},
+		{Name: "devtools/docker", Description: "Docker container management", Source: HubSourceOfficial, SourceID: "devtools/docker"},
+		{Name: "utils/file-finder", Description: "Find and search files in your project", Source: HubSourceOfficial, SourceID: "utils/file-finder"},
+		{Name: "utils/text-search", Description: "Search text patterns in code and documents", Source: HubSourceOfficial, SourceID: "utils/text-search"},
+		{Name: "database/sql-finder", Description: "Find and analyze SQL queries", Source: HubSourceOfficial, SourceID: "database/sql-finder"},
+		{Name: "code/bug-finder", Description: "Find bugs and issues in code", Source: HubSourceOfficial, SourceID: "code/bug-finder"},
+		{Name: "docs/content-search", Description: "Search and find content in documentation", Source: HubSourceOfficial, SourceID: "docs/content-search"},
 	}
 
 	if keyword == "" {
@@ -2404,12 +2386,12 @@ func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
 // Users should search for individual skills or browse the official skills collection
 func (m *Manager) getPopularGitHubSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "thedotmack/claude-mem", Description: "Persistent memory plugin for Claude Code", Category: "memory", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem"},
-		{Name: "alibaba/page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Category: "agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent"},
-		{Name: "FireRedTeam/FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Category: "video", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline"},
-		{Name: "hanshuaikang/nezha", Description: "Multi-project AI coding assistant manager", Category: "coding", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha"},
-		{Name: "getpaseo/paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Category: "platform", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo"},
-		{Name: "microsoft/promptflow-skills", Description: "Microsoft PromptFlow skill templates", Category: "ai", Source: HubSourceGitHub, SourceID: "microsoft/promptflow-skills", URL: "https://github.com/microsoft/promptflow-skills"},
+		{Name: "thedotmack/claude-mem", Description: "Persistent memory plugin for Claude Code", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem"},
+		{Name: "alibaba/page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent"},
+		{Name: "FireRedTeam/FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline"},
+		{Name: "hanshuaikang/nezha", Description: "Multi-project AI coding assistant manager", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha"},
+		{Name: "getpaseo/paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo"},
+		{Name: "microsoft/promptflow-skills", Description: "Microsoft PromptFlow skill templates", Source: HubSourceGitHub, SourceID: "microsoft/promptflow-skills", URL: "https://github.com/microsoft/promptflow-skills"},
 	}
 }
 
@@ -2417,10 +2399,10 @@ func (m *Manager) getPopularGitHubSkills() []HubSkill {
 func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call skills.sh API
 	mockSkills := []HubSkill{
-		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Category: "frontend", Source: HubSourceSkillsSh, SourceID: "vercel-labs/agent-skills/vercel-react-best-practices"},
-		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Category: "document", Source: HubSourceSkillsSh, SourceID: "anthropics/skills/pdf"},
-		{Name: "github-search/skills/code-search", Description: "Find code across GitHub repositories", Category: "search", Source: HubSourceSkillsSh, SourceID: "github-search/skills/code-search"},
-		{Name: "log-finder/skills/trace", Description: "Find and analyze log traces", Category: "monitoring", Source: HubSourceSkillsSh, SourceID: "log-finder/skills/trace"},
+		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Source: HubSourceSkillsSh, SourceID: "vercel-labs/agent-skills/vercel-react-best-practices"},
+		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Source: HubSourceSkillsSh, SourceID: "anthropics/skills/pdf"},
+		{Name: "github-search/skills/code-search", Description: "Find code across GitHub repositories", Source: HubSourceSkillsSh, SourceID: "github-search/skills/code-search"},
+		{Name: "log-finder/skills/trace", Description: "Find and analyze log traces", Source: HubSourceSkillsSh, SourceID: "log-finder/skills/trace"},
 	}
 
 	if keyword == "" {
@@ -2442,11 +2424,11 @@ func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
 func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
 	// For now, return mock data - real implementation would call clawhub.ai API
 	mockSkills := []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Category: "devtools", Source: HubSourceHub, SourceID: "k8s-deploy"},
-		{Name: "git-workflow", Description: "Git workflow automation", Category: "devtools/git", Source: HubSourceHub, SourceID: "git-workflow"},
-		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Category: "code-quality", Source: HubSourceHub, SourceID: "find-unused-code"},
-		{Name: "search-replace", Description: "Find and replace text across multiple files", Category: "productivity", Source: HubSourceHub, SourceID: "search-replace"},
-		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Category: "devtools", Source: HubSourceHub, SourceID: "dependency-finder"},
+		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Source: HubSourceHub, SourceID: "k8s-deploy"},
+		{Name: "git-workflow", Description: "Git workflow automation", Source: HubSourceHub, SourceID: "git-workflow"},
+		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Source: HubSourceHub, SourceID: "find-unused-code"},
+		{Name: "search-replace", Description: "Find and replace text across multiple files", Source: HubSourceHub, SourceID: "search-replace"},
+		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Source: HubSourceHub, SourceID: "dependency-finder"},
 	}
 
 	if keyword == "" {
@@ -2469,28 +2451,15 @@ func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Special handling for official skills from Hermes Agent
-	// These skills are located in NousResearch/hermes-agent/optional-skills/<skillName>
-	if source == HubSourceOfficial {
-		return m.installFromOfficial(ctx, sourceID)
+	// Only ClawHub is supported for remote installation
+	if source != HubSourceHub {
+		return fmt.Errorf("only ClawHub source is supported for remote installation")
 	}
 
-	// Map source to registry name
-	var registryName string
-	switch source {
-	case HubSourceGitHub:
-		registryName = "github"
-	case HubSourceHub:
-		registryName = "clawhub"
-	default:
-		// Fallback to old method for other sources
-		return m.installFromHubLegacy(source, sourceID)
-	}
-
-	// Get the registry
-	reg := m.registryMgr.GetRegistry(registryName)
+	// Get ClawHub registry
+	reg := m.registryMgr.GetRegistry("clawhub")
 	if reg == nil {
-		return fmt.Errorf("registry %s not found", registryName)
+		return fmt.Errorf("ClawHub registry not found")
 	}
 
 	// Create staging directory
