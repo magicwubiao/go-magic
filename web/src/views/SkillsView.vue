@@ -465,15 +465,15 @@ interface EvolutionRecord {
 interface HubSkill {
   name: string
   description: string
-  category: string
-  tags: string[]
+  category?: string
+  tags?: string[]
   source: string
   source_id: string
-  url: string
-  author: string
-  stars: number
-  installs: number
-  verified: boolean
+  url?: string
+  author?: string
+  stars?: number
+  installs?: number
+  verified?: boolean
 }
 
 // Computed
