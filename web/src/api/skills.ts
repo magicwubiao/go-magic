@@ -111,18 +111,17 @@ export async function getSkillEvolutionHistory(skillName: string): Promise<Evolu
 
 // Hub / Skill Market APIs
 export interface HubSkill {
-  Name: string
-  Description: string
-  Category: string
-  Tags: string[]
-  Source: string
-  SourceID: string
-  URL: string
-  Author: string
-  Stars: number
-  Installs: number
-  Verified: boolean
-  Version: string
+  name: string
+  description: string
+  category: string
+  tags: string[]
+  source: string
+  source_id: string
+  url: string
+  author: string
+  stars: number
+  installs: number
+  verified: boolean
 }
 
 export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {

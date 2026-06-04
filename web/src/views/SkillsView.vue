@@ -344,20 +344,20 @@
         <n-spin :show="hubLoading">
           <div v-if="hubSkills.length > 0" style="max-height: 500px; overflow-y: auto;">
             <n-list bordered>
-              <n-list-item v-for="item in hubSkills" :key="item.SourceID || item.Name">
+              <n-list-item v-for="item in hubSkills" :key="item.source_id || item.name">
                 <template #header>
                   <n-space align="center">
-                    <span style="font-weight: 600;">{{ item.Name }}</span>
-                    <n-tag size="small" type="info">{{ item.Source }}</n-tag>
-                    <n-tag v-if="item.Verified" size="small" type="success">Verified</n-tag>
-                    <n-tag v-if="item.Stars > 0" size="small">{{ item.Stars }}</n-tag>
+                    <span style="font-weight: 600;">{{ item.name }}</span>
+                    <n-tag size="small" type="info">{{ item.source }}</n-tag>
+                    <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
+                    <n-tag v-if="item.stars > 0" size="small">{{ item.stars }}</n-tag>
                   </n-space>
                 </template>
                 <template #description>
                   <n-space vertical size="small">
-                    <n-text depth="2">{{ item.Description }}</n-text>
-                    <n-space v-if="item.Tags && item.Tags.length > 0">
-                      <n-tag v-for="tag in item.Tags" :key="tag" size="tiny">{{ tag }}</n-tag>
+                    <n-text depth="2">{{ item.description }}</n-text>
+                    <n-space v-if="item.tags && item.tags.length > 0">
+                      <n-tag v-for="tag in item.tags" :key="tag" size="tiny">{{ tag }}</n-tag>
                     </n-space>
                   </n-space>
                 </template>
@@ -365,8 +365,8 @@
                   <n-button
                     size="small"
                     type="primary"
-                    :loading="installingHubSkill === item.SourceID"
-                    @click="installHubSkill(item.Source, item.SourceID)"
+                    :loading="installingHubSkill === item.source_id"
+                    @click="installHubSkill(item.source, item.source_id)"
                   >
                     {{ t('skills.install') }}
                   </n-button>
@@ -463,18 +463,17 @@ interface EvolutionRecord {
 }
 
 interface HubSkill {
-  Name: string
-  Description: string
-  Category: string
-  Tags: string[]
-  Source: string
-  SourceID: string
-  URL: string
-  Author: string
-  Stars: number
-  Installs: number
-  Verified: boolean
-  Version: string
+  name: string
+  description: string
+  category: string
+  tags: string[]
+  source: string
+  source_id: string
+  url: string
+  author: string
+  stars: number
+  installs: number
+  verified: boolean
 }
 
 // Computed
