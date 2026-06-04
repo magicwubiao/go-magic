@@ -123,9 +123,17 @@ func (r *GitHubRegistry) Search(ctx context.Context, query string, limit int) ([
 		// Rate limit: sleep between requests
 		select {
 		case <-ctx.Done():
+			if len(allResults) == 0 {
+				return r.getPopularSkills(), nil
+			}
 			return allResults, nil
 		case <-time.After(200 * time.Millisecond):
 		}
+	}
+
+	// Fallback to popular skills if no results found or API failed
+	if len(allResults) == 0 {
+		return r.getPopularSkills(), nil
 	}
 
 	return allResults, nil
