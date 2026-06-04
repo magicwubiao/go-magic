@@ -2330,7 +2330,7 @@ func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
 	keyword := r.URL.Query().Get("q")
-	
+
 	if s.skillMgr != nil {
 		skills, err := s.skillMgr.SearchHub(keyword, nil)
 		if err != nil {

@@ -32,17 +32,17 @@ type Manager struct {
 	categories        map[string]*SkillCategory // 技能分类（按目录层级）
 	toolNames         []string                  // Cached tool names from registry
 	registryURL       string                    // ClawHub or GitHub registry URL
-	hubLock           *HubLock                   // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest   *BundledManifest           // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills    *DisabledSkillsConfig      // 禁用技能配置
-	skillsDir         string                     // 技能目录路径 (~/.magic/skills)
-	hubDir            string                     // Hub 目录路径 (~/.magic/skills/.hub)
-	autoSkillCreation bool                       // 是否自动创建技能
-	minPatternFreq    int                        // 最小模式频率阈值
+	hubLock           *HubLock                  // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest   *BundledManifest          // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills    *DisabledSkillsConfig     // 禁用技能配置
+	skillsDir         string                    // 技能目录路径 (~/.magic/skills)
+	hubDir            string                    // Hub 目录路径 (~/.magic/skills/.hub)
+	autoSkillCreation bool                      // 是否自动创建技能
+	minPatternFreq    int                       // 最小模式频率阈值
 	// Hub search cache
-	hubCache          map[string][]HubSkill      // 缓存搜索结果
-	hubCacheTime      map[string]time.Time       // 缓存时间
-	hubCacheMu        sync.RWMutex               // 缓存锁
+	hubCache     map[string][]HubSkill // 缓存搜索结果
+	hubCacheTime map[string]time.Time  // 缓存时间
+	hubCacheMu   sync.RWMutex          // 缓存锁
 }
 
 // ManagerConfig 配置管理器
