@@ -672,6 +672,8 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
 	mux.HandleFunc("/api/dashboard/skills", withCORS(requireAuth(s.handleDashboardSkills)))
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
+	mux.HandleFunc("/api/skills/hub/search", withCORS(requireAuth(s.handleSkillHubSearch)))
+	mux.HandleFunc("/api/skills/hub/install", withCORS(requireAuth(s.handleSkillHubInstall)))
 
 	// Plugins
 	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
