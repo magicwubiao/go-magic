@@ -359,6 +359,7 @@ func (r *GitHubRegistry) DownloadAndInstall(ctx context.Context, slug, version, 
 }
 
 // downloadSkillFromCollection downloads a single skill from a skill collection repository
+// This supports recursive downloading of subdirectories
 func (r *GitHubRegistry) downloadSkillFromCollection(ctx context.Context, owner, repo, ref, skillPath, targetDir string) error {
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", r.baseURL, owner, repo, url.QueryEscape(skillPath), url.QueryEscape(ref))
 
@@ -392,8 +393,20 @@ func (r *GitHubRegistry) downloadSkillFromCollection(ctx context.Context, owner,
 		return err
 	}
 
-	// Download each file in the skill directory
+	// Download each item (file or directory) in the skill directory
 	for _, item := range contents {
+		if item.Type == "dir" {
+			// Recursively download subdirectory
+			subDir := filepath.Join(targetDir, item.Name)
+			if err := os.MkdirAll(subDir, 0755); err != nil {
+				return err
+			}
+			if err := r.downloadDirContents(ctx, item.URL, subDir); err != nil {
+				return fmt.Errorf("failed to download directory %s: %w", item.Name, err)
+			}
+			continue
+		}
+
 		if item.Type != "file" {
 			continue
 		}
