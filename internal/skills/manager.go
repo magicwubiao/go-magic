@@ -2562,8 +2562,20 @@ func (m *Manager) installFromOfficial(ctx context.Context, skillName string) err
 		return fmt.Errorf("failed to parse directory contents: %w", err)
 	}
 
-	// Download each file in the skill directory
+	// Download each item (file or directory) in the skill directory
 	for _, item := range contents {
+		if item.Type == "dir" {
+			// Recursively download subdirectory
+			subDir := filepath.Join(tmpDir, item.Name)
+			if err := os.MkdirAll(subDir, 0755); err != nil {
+				return err
+			}
+			if err := m.downloadGitHubDir(ctx, item.URL, subDir); err != nil {
+				return fmt.Errorf("failed to download directory %s: %w", item.Name, err)
+			}
+			continue
+		}
+
 		if item.Type != "file" {
 			continue
 		}
@@ -2624,6 +2636,60 @@ func (m *Manager) downloadGitHubFile(ctx context.Context, apiURL, filePath strin
 	}
 
 	return fmt.Errorf("no content available for file")
+}
+
+// downloadGitHubDir recursively downloads a directory from GitHub Contents API
+func (m *Manager) downloadGitHubDir(ctx context.Context, apiURL, targetDir string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "go-magic-skill-manager")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub API returned %d for directory", resp.StatusCode)
+	}
+
+	var contents []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+		return err
+	}
+
+	for _, item := range contents {
+		if item.Type == "dir" {
+			subDir := filepath.Join(targetDir, item.Name)
+			if err := os.MkdirAll(subDir, 0755); err != nil {
+				return err
+			}
+			if err := m.downloadGitHubDir(ctx, item.URL, subDir); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if item.Type != "file" {
+			continue
+		}
+
+		filePath := filepath.Join(targetDir, item.Name)
+		if err := m.downloadGitHubFile(ctx, item.URL, filePath); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // installFromHubLegacy handles legacy installation methods
