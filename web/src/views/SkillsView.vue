@@ -285,6 +285,7 @@
                       <n-tag size="small" type="info">{{ t(`skills.hubSources.${item.source}`) || item.source }}</n-tag>
                       <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
                       <n-tag v-if="item.stars > 0" size="small">⭐ {{ item.stars }}</n-tag>
+                      <n-tag v-if="item.installs > 0" size="small">⬇️ {{ item.installs }}</n-tag>
                     </n-space>
                     <n-text depth="2" style="font-size: 13px;">{{ item.description }}</n-text>
                     <n-space v-if="item.tags && item.tags.length > 0">

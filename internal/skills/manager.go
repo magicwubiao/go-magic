@@ -319,17 +319,17 @@ func (m *Manager) loadSkills() error {
 				if _, err := os.Stat(skillMdPath); err == nil {
 					skill := m.loadSkillFromFile(skillMdPath)
 					if skill != nil {
-						// Preserve existing source if it's builtin
+						// Preserve existing source if it's builtin or registry (from hub)
 						if existingSkill, exists := m.skills[skill.Name]; exists {
 							if existingSkill.Source == "builtin" {
 								skill.Source = existingSkill.Source
-							} else {
+							} else if skill.Source != SkillSourceRegistry {
 								skill.Source = "local"
 								if dir == m.searchDirs[0] || strings.Contains(dir, ".magic") {
 									skill.Source = "global"
 								}
 							}
-						} else {
+						} else if skill.Source != SkillSourceRegistry {
 							skill.Source = "local"
 							if dir == m.searchDirs[0] || strings.Contains(dir, ".magic") {
 								skill.Source = "global"
@@ -354,14 +354,14 @@ func (m *Manager) loadSkills() error {
 
 			skill := m.loadSkillFromFile(path)
 			if skill != nil {
-				// Preserve existing source if it's builtin
+				// Preserve existing source if it's builtin or registry (from hub)
 				if existingSkill, exists := m.skills[skill.Name]; exists {
 					if existingSkill.Source == "builtin" {
 						skill.Source = existingSkill.Source
-					} else {
+					} else if skill.Source != SkillSourceRegistry {
 						skill.Source = "local"
 					}
-				} else {
+				} else if skill.Source != SkillSourceRegistry {
 					skill.Source = "local"
 				}
 				m.skills[skill.Name] = skill
