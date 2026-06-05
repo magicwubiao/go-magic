@@ -282,7 +282,7 @@
                   <n-space vertical size="small" style="flex: 1; min-width: 0;">
                     <n-space align="center">
                       <span style="font-weight: 600;">{{ item.name }}</span>
-                      <n-tag size="small" type="info">{{ item.source }}</n-tag>
+                      <n-tag size="small" type="info">{{ t(`skills.hubSources.${item.source}`) || item.source }}</n-tag>
                       <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
                       <n-tag v-if="item.stars > 0" size="small">⭐ {{ item.stars }}</n-tag>
                     </n-space>

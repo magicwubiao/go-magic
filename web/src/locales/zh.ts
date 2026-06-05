@@ -422,6 +422,13 @@ export default {
       registry: '仓库',
       auto: '自动生成',
     },
+    hubSources: {
+      hub: 'ClawHub',
+      github: 'GitHub',
+      official: '官方',
+      'skills.sh': 'skills.sh',
+      'well-known': '知名',
+    },
     totalInvocations: '总调用次数',
     avgSuccessRate: '平均成功率',
     topSkill: '最常用技能',
