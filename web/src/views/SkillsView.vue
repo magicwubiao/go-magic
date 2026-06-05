@@ -567,13 +567,16 @@ async function installHubSkill(source: string, sourceID: string): Promise<void> 
   installingHubSkill.value = sourceID
   try {
     const result = await skillsStore.installHubSkill(source, sourceID)
-    if (result && !result.ok && result.error) {
-      message.error(result.error)
+    if (!result) {
+      message.error(t('skills.failedToInstall'))
+    } else if (!result.ok) {
+      message.error(result.error || t('skills.failedToInstall'))
     } else {
       message.success(t('skills.installed'))
       showHubModal.value = false
       hubSearchKeyword.value = ''
       hubSkills.value = []
+      await skillsStore.loadSkills()
     }
   } catch (e) {
     message.error(t('skills.failedToInstall'))
@@ -677,7 +680,6 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
   if (uploadingCount.value === 0) {
     if (uploadSuccessFiles.value.size > 0) {
       await skillsStore.loadSkills()
-      await skillsStore.loadCategories()
       message.success(t('skills.installed'))
     }
     uploadSuccessFiles.value.clear()
