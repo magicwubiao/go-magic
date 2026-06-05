@@ -400,6 +400,13 @@ func (m *Manager) loadSkillFromManifest(manifestPath string) *Skill {
 func (m *Manager) loadSkillFromFile(path string) *Skill {
 	ext := filepath.Ext(path)
 
+	// If path is a directory, it's an internal error - return nil
+	if ext == "" && path != "" {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return nil
+		}
+	}
+
 	var skill *Skill
 	switch ext {
 	case ".json":
@@ -415,6 +422,15 @@ func (m *Manager) loadSkillFromFile(path string) *Skill {
 		absPath, _ := filepath.Abs(path)
 		skillDir := filepath.Dir(absPath)
 		skill.Dir = skillDir
+
+		// Load origin metadata to determine source
+		if originMeta, err := LoadSkillOriginMeta(skillDir); err == nil && originMeta != nil {
+			// Any hub source should be marked as registry source
+			switch HubSource(originMeta.Registry) {
+			case HubSourceHub, HubSourceGitHub, HubSourceOfficial, HubSourceSkillsSh, HubSourceWellKnown:
+				skill.Source = SkillSourceRegistry
+			}
+		}
 
 		// Scan scripts/ directory
 		scriptsDir := filepath.Join(skillDir, "scripts")
@@ -1290,15 +1306,11 @@ func ScanSkillSecurity(content string) *SecurityScanResult {
 		Safe:      true,
 	}
 
-	// 检测提示注入模式
+	// 检测高危提示注入模式（只检测真正危险的组合）
 	injectionPatterns := []string{
-		"ignore all previous instructions",
-		"ignore all above instructions",
-		"you are now",
-		"pretend you are",
-		"new instructions:",
-		"system prompt:",
-		"forget everything",
+		"ignore all previous instructions and",
+		"ignore all above instructions and",
+		"ignore previous instructions and do",
 	}
 	for _, pattern := range injectionPatterns {
 		if strings.Contains(strings.ToLower(content), pattern) {
@@ -1311,6 +1323,7 @@ func ScanSkillSecurity(content string) *SecurityScanResult {
 	// 检测破坏性命令
 	destructivePatterns := []string{
 		"rm -rf /",
+		"rm -rf /*",
 		"mkfs",
 		"dd if=",
 		":(){ :|:& };:", // fork bomb
@@ -2320,75 +2333,52 @@ func (m *Manager) installFromHubLegacy(source HubSource, sourceID string) error 
 
 // scanAndInstallFromStaging scans staged skills and installs them with proper directory structure
 func (m *Manager) scanAndInstallFromStaging(stagingDir string, source HubSource, sourceID string) error {
-	// Debug: list staging directory contents
-	fmt.Printf("Scanning staging directory: %s\n", stagingDir)
-	entries, _ := os.ReadDir(stagingDir)
-	for _, e := range entries {
-		fmt.Printf("  - %s (dir=%v)\n", e.Name(), e.IsDir())
-	}
+	// Find the main SKILL.md file (only install once per download)
+	var skillMDPath string
+	var found bool
 
-	// Find all SKILL.md files
-	var installed int
-	var foundFiles []string
 	err := filepath.WalkDir(stagingDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			fmt.Printf("Walk error at %s: %v\n", path, err)
+		if err != nil || d.IsDir() {
 			return nil
 		}
-		if d.IsDir() {
-			return nil
-		}
-		lowerName := strings.ToLower(d.Name())
-		if strings.HasSuffix(lowerName, "skill.md") || strings.HasSuffix(lowerName, ".md") {
-			foundFiles = append(foundFiles, path)
-			fmt.Printf("Found markdown file: %s\n", path)
-
-			// Get skill directory (parent of SKILL.md)
-			skillDir := filepath.Dir(path)
-
-			// Try to load skill from parent directory first (for SKILL.md)
-			skill := m.loadSkillFromFile(skillDir)
-			if skill == nil {
-				// Fallback: load from file itself
-				skill = m.loadSkillFromFile(path)
-			}
-			if skill != nil {
-				fmt.Printf("  -> Loaded skill: %s\n", skill.Name)
-				// Security scan
-				scanResult := ScanSkillSecurity(skill.Content)
-				if !scanResult.Safe {
-					fmt.Printf("  -> Security scan failed: %v\n", scanResult.Threats)
-					return nil
-				}
-
-				// Install skill with proper directory structure
-				if err := m.installSkillWithDirectory(skill, skillDir, source, sourceID); err != nil {
-					fmt.Printf("  -> Failed to install skill: %v\n", err)
-				} else {
-					installed++
-					fmt.Printf("  -> Installed successfully\n")
-				}
-			} else {
-				fmt.Printf("  -> Failed to load skill from file\n")
-			}
+		if strings.EqualFold(d.Name(), "SKILL.md") {
+			skillMDPath = path
+			found = true
+			return filepath.SkipAll // Stop after finding first SKILL.md
 		}
 		return nil
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to scan staged skills: %w", err)
 	}
 
-	if installed == 0 {
-		if len(foundFiles) == 0 {
-			return fmt.Errorf("no SKILL.md or .md files found in downloaded content")
-		}
-		return fmt.Errorf("found %d markdown files but none could be loaded as valid skills", len(foundFiles))
+	if !found {
+		return fmt.Errorf("no SKILL.md found in downloaded content")
+	}
+
+	// skillDir is the directory containing SKILL.md
+	skillDir := filepath.Dir(skillMDPath)
+
+	// Load skill from the SKILL.md file
+	skill := m.loadSkillFromFile(skillMDPath)
+	if skill == nil {
+		return fmt.Errorf("failed to load skill from %s", skillMDPath)
+	}
+
+	// Security scan
+	scanResult := ScanSkillSecurity(skill.Content)
+	if !scanResult.Safe {
+		return fmt.Errorf("security scan failed: %v", scanResult.Threats)
+	}
+
+	// Install skill with proper directory structure
+	if err := m.installSkillWithDirectory(skill, skillDir, source, sourceID); err != nil {
+		return fmt.Errorf("failed to install skill: %w", err)
 	}
 
 	// Record to Hub lock
 	lockEntry := HubLockEntry{
-		SkillName:     fmt.Sprintf("%s (%d skills)", sourceID, installed),
+		SkillName:     skill.Name,
 		Source:        source,
 		SourceID:      sourceID,
 		InstalledAt:   time.Now(),
@@ -2427,12 +2417,23 @@ func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, sour
 	}
 
 	// Save origin metadata
+	registryURL := ""
+	switch source {
+	case HubSourceHub:
+		registryURL = fmt.Sprintf("https://clawhub.ai/skills/%s", sourceID)
+	case HubSourceGitHub:
+		registryURL = fmt.Sprintf("https://github.com/%s", sourceID)
+	default:
+		if sourceID != "" {
+			registryURL = sourceID
+		}
+	}
 	originMeta := &SkillOriginMeta{
 		Version:     1,
 		OriginKind:  "third_party",
 		Registry:    string(source),
 		Slug:        sourceID,
-		RegistryURL: "",
+		RegistryURL: registryURL,
 		VersionStr:  "1.0.0",
 		InstalledAt: time.Now().Unix(),
 	}
@@ -2440,8 +2441,18 @@ func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, sour
 		fmt.Printf("Warning: failed to save origin metadata: %v\n", err)
 	}
 
-	// Reload skill from the new directory
-	reloadedSkill := m.loadSkillFromFile(skillDir)
+	// Reload skill from the new directory by finding SKILL.md inside it
+	var reloadedSkill *Skill
+	_ = filepath.WalkDir(skillDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(d.Name(), "SKILL.md") {
+			reloadedSkill = m.loadSkillFromFile(path)
+			return filepath.SkipAll
+		}
+		return nil
+	})
 	if reloadedSkill != nil {
 		reloadedSkill.Source = SkillSourceRegistry
 		m.mu.Lock()
@@ -2473,7 +2484,7 @@ func copyDirectory(source, destination string) error {
 		destPath := filepath.Join(destination, relPath)
 
 		if d.IsDir() {
-			return os.MkdirAll(destPath, d.Type().Perm())
+			return os.MkdirAll(destPath, 0755)
 		}
 
 		// Copy file
@@ -2487,7 +2498,8 @@ func copyDirectory(source, destination string) error {
 			return err
 		}
 
-		return os.WriteFile(destPath, data, d.Type().Perm())
+		// Use 0644 for all files (Windows compatible)
+		return os.WriteFile(destPath, data, 0644)
 	})
 }
 

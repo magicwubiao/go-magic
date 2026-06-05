@@ -55,8 +55,6 @@
             :max="5"
             accept=".yaml,.yml,.md,.json,.zip"
             :custom-request="handleCustomUpload"
-            @finish="handleUploadFinish"
-            @error="handleUploadError"
           >
             <n-upload-dragger>
               <div style="padding: 40px 0">
@@ -333,6 +331,7 @@ const showEditModal = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uploadingCount = ref(0)
+const uploadSuccessFiles = ref<Set<string>>(new Set())
 const selectedSource = ref('')
 const selectedSkill = ref<Skill | null>(null)
 
@@ -572,7 +571,6 @@ async function installHubSkill(source: string, sourceID: string): Promise<void> 
       message.error(result.error)
     } else {
       message.success(t('skills.installed'))
-      await skillsStore.loadSkills()
       showHubModal.value = false
       hubSearchKeyword.value = ''
       hubSkills.value = []
@@ -651,7 +649,8 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
   }
 
   uploadingCount.value++
-
+  const fileId = `${rawFile.name}-${Date.now()}`
+  
   try {
     let skillName = rawFile.name.replace(/\.(yaml|yml|md|json|zip)$/i, '')
     // @ts-ignore
@@ -665,24 +664,24 @@ async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFil
     }
     
     await uploadSkill(rawFile, skillName, relativePath)
-    message.success(t('skills.installedFile', { name: rawFile.name }))
+    uploadSuccessFiles.value.add(fileId)
     onFinish()
-    await skillsStore.loadSkills()
-    await skillsStore.loadCategories()
   } catch (e) {
     message.error(t('skills.failedToInstallFile', { name: rawFile.name }))
     onError()
-  } finally {
-    uploadingCount.value--
   }
-}
-
-function handleUploadFinish() {
-  // File uploaded successfully
-}
-
-function handleUploadError() {
-  // Upload failed
+  
+  uploadingCount.value--
+  
+  // Only show success message when ALL uploads are done
+  if (uploadingCount.value === 0) {
+    if (uploadSuccessFiles.value.size > 0) {
+      await skillsStore.loadSkills()
+      await skillsStore.loadCategories()
+      message.success(t('skills.installed'))
+    }
+    uploadSuccessFiles.value.clear()
+  }
 }
 
 // Load data on mount
