@@ -93,8 +93,20 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 		return r.getFeaturedSkills(), nil
 	}
 
+	// Build featured skills map for quick lookup of stars/installs
+	featuredMap := make(map[string]HubSkill)
+	for _, f := range r.getFeaturedSkills() {
+		featuredMap[f.SourceID] = f
+	}
+
 	var skills []HubSkill
 	for _, s := range result.Results {
+		stars := 0
+		installs := 0
+		if f, ok := featuredMap[s.Slug]; ok {
+			stars = f.Stars
+			installs = f.Installs
+		}
 		skills = append(skills, HubSkill{
 			Name:        s.DisplayName,
 			Description: s.Summary,
@@ -102,6 +114,8 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 			SourceID:    s.Slug,
 			URL:         fmt.Sprintf("%s/skills/%s", r.baseURL, s.Slug),
 			Verified:    true,
+			Stars:       stars,
+			Installs:    installs,
 		})
 	}
 
@@ -188,14 +202,12 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		fmt.Printf("ClawHub download failed: %v\n", err)
 		// Fallback: create a local skill file for featured skills
 		return r.createLocalSkillFallback(slug, targetDir)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("ClawHub download returned %d\n", resp.StatusCode)
 		// Fallback: create a local skill file for featured skills
 		return r.createLocalSkillFallback(slug, targetDir)
 	}
@@ -215,11 +227,76 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 
 	// Extract zip
 	if err := extractZip(tmpFile.Name(), targetDir); err != nil {
-		fmt.Printf("Failed to extract zip: %v\n", err)
 		// Fallback: create a local skill file for featured skills
 		return r.createLocalSkillFallback(slug, targetDir)
 	}
 
+	// Flatten zip structure if there's a single top-level directory
+	if err := flattenZipStructure(targetDir); err != nil {
+		// Non-fatal: continue with original structure
+	}
+
+	return nil
+}
+
+// flattenZipStructure moves files from a single top-level subdirectory up to targetDir
+func flattenZipStructure(targetDir string) error {
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		return err
+	}
+
+	// Find single top-level directory
+	var subDir string
+	for _, e := range entries {
+		if e.IsDir() {
+			if subDir != "" {
+				// More than one directory, don't flatten
+				return nil
+			}
+			subDir = e.Name()
+		} else {
+			// Files exist at top level, don't flatten
+			return nil
+		}
+	}
+
+	if subDir == "" {
+		return nil
+	}
+
+	subDirPath := filepath.Join(targetDir, subDir)
+	subEntries, err := os.ReadDir(subDirPath)
+	if err != nil {
+		return err
+	}
+
+	// Move all files from subDir to targetDir
+	for _, e := range subEntries {
+		src := filepath.Join(subDirPath, e.Name())
+		dst := filepath.Join(targetDir, e.Name())
+		if err := os.Rename(src, dst); err != nil {
+			// If rename fails (cross-device), copy instead
+			if e.IsDir() {
+				if err := copyDirectory(src, dst); err != nil {
+					return err
+				}
+				os.RemoveAll(src)
+			} else {
+				data, err := os.ReadFile(src)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(dst, data, 0644); err != nil {
+					return err
+				}
+				os.Remove(src)
+			}
+		}
+	}
+
+	// Remove empty subDir
+	os.Remove(subDirPath)
 	return nil
 }
 
