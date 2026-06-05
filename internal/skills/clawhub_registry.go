@@ -155,8 +155,8 @@ func (r *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*HubSk
 				Latest string `json:"latest"`
 			} `json:"tags"`
 			Stats struct {
-				Stars    int `json:"stars"`
-				Downloads int `json:"downloads"`
+				Stars           int `json:"stars"`
+				Downloads       int `json:"downloads"`
 				InstallsAllTime int `json:"installsAllTime"`
 			} `json:"stats"`
 			Verified bool `json:"verified"`
