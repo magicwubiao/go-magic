@@ -197,20 +197,82 @@ func isCommonWord(word string) bool {
 }
 
 // generateDescription generates a skill description
+// Uses LLM if provider is available, otherwise falls back to simple truncation
 func (ac *AutoCreator) generateDescription() string {
+	if ac.currentTask == nil {
+		return "Auto-generated skill"
+	}
+
+	// Try to use LLM for better description
+	if ac.config != nil && ac.config.Provider != nil {
+		desc, err := ac.generateDescriptionWithLLM()
+		if err == nil && desc != "" {
+			return desc
+		}
+		// Fall back to simple generation if LLM fails
+	}
+
+	// Fallback: generate description from task context
 	var desc strings.Builder
 	desc.WriteString("Auto-generated skill for: ")
 
-	if ac.currentTask != nil {
-		// Summarize the task
-		input := ac.currentTask.UserInput
-		if len(input) > 100 {
-			input = input[:100] + "..."
-		}
-		desc.WriteString(input)
+	input := ac.currentTask.UserInput
+	if len(input) > 100 {
+		input = input[:100] + "..."
 	}
+	desc.WriteString(input)
 
 	return desc.String()
+}
+
+// generateDescriptionWithLLM uses LLM to generate a meaningful skill description
+func (ac *AutoCreator) generateDescriptionWithLLM() (string, error) {
+	if ac.config == nil || ac.config.Provider == nil || ac.currentTask == nil {
+		return "", fmt.Errorf("provider or task not available")
+	}
+
+	// Build context for LLM
+	var context strings.Builder
+	context.WriteString("User request: ")
+	context.WriteString(ac.currentTask.UserInput)
+	context.WriteString("\n\nTools used:\n")
+	for _, tc := range ac.currentTask.ToolCalls {
+		context.WriteString(fmt.Sprintf("- %s: %v\n", tc.Name, tc.Arguments))
+	}
+	if len(ac.currentTask.ToolResults) > 0 {
+		// Include first result as sample
+		result := ac.currentTask.ToolResults[0]
+		if len(result) > 200 {
+			result = result[:200] + "..."
+		}
+		context.WriteString(fmt.Sprintf("\nSample result: %s\n", result))
+	}
+
+	prompt := fmt.Sprintf(`Based on the following task context, generate a concise skill description (1-2 sentences):
+
+%s
+
+Generate a description that:
+1. Explains what this skill does
+2. Is clear and actionable
+3. Is in English
+4. Does not exceed 200 characters
+
+Respond only with the description, no other text.`, context.String())
+
+	// Call LLM
+	resp, err := ac.config.Provider.Chat([]provider.Message{
+		{Role: "user", Content: prompt},
+	}, nil)
+	if err != nil || resp == nil || resp.Content == "" {
+		return "", fmt.Errorf("LLM call failed: %v", err)
+	}
+
+	desc := strings.TrimSpace(resp.Content)
+	if len(desc) > 200 {
+		desc = desc[:197] + "..."
+	}
+	return desc, nil
 }
 
 // generateTags generates tags for the skill

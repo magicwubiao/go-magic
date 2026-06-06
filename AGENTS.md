@@ -114,6 +114,30 @@ go-magic/
 | Skills | skill_list, skill_view, skill_manage |
 | SOLO | solo_coding |
 
+### 记忆系统
+
+**功能**: 对话上下文记忆，支持短期和长期记忆
+
+**文件**:
+- `internal/memory/store.go` - 记忆存储（SQLite + FTS5）
+- `internal/memory/fts_store.go` - 全文搜索
+- `internal/memory/snapshot_manager.go` - 上下文快照
+- `internal/cortex/` - 思考引擎（Cortex Manager）
+- `internal/cortex/user_profile.go` - 用户画像
+- `internal/cortex/integration.go` - 记忆集成
+
+**记忆工具**:
+- `memory_store` - 存储记忆（key, value, category）
+- `memory_recall` - 按 key 召回记忆
+
+**Cortex Manager 功能**:
+- FTS 全文搜索记忆
+- 用户画像管理（USER.md）
+- 上下文摘要
+- 智能召回
+
+**启用方式**: Server 启动时自动初始化 Cortex Manager
+
 ## 运行方式
 
 ```bash

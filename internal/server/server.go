@@ -156,6 +156,9 @@ type Server struct {
 	// Goal manager
 	goalMgr *goal.Manager
 
+	// Cortex Agent manager for memory and context
+	cortexMgr *cortex.Manager
+
 	// Background actions tracking
 	actions   map[string]*ActionStatus
 	actionsMu sync.RWMutex
@@ -232,6 +235,11 @@ func NewServer(dbPath string) *Server {
 	}
 	skillMgr, _ := skills.NewManagerWithConfig(&skillCfg)
 
+	// Initialize auto skill creator with LLM provider for better description generation
+	if prov != nil {
+		skillMgr.InitAutoCreator(prov)
+	}
+
 	// Create cron manager
 	cronMgr, err := cron.NewManager()
 	if err != nil {
@@ -281,6 +289,19 @@ func NewServer(dbPath string) *Server {
 		}
 	}
 
+	// Initialize Cortex Manager for memory and context (always enabled for better UX)
+	cortexDir := filepath.Join(magicHome, "cortex")
+	var cortexMgr *cortex.Manager
+	if prov != nil {
+		cortexMgr = cortex.NewManager(cortexDir, prov)
+		if err := cortexMgr.Start(); err != nil {
+			fmt.Printf("[server] Warning: Failed to start cortex manager: %v\n", err)
+			cortexMgr = nil
+		} else {
+			fmt.Printf("[server] Cortex memory system enabled\n")
+		}
+	}
+
 	// Get version
 	version := "dev"
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -325,6 +346,7 @@ func NewServer(dbPath string) *Server {
 		pluginMgr:        pluginMgr,
 		groupchatStorage: groupchatStorage,
 		goalMgr:          goalMgr,
+		cortexMgr:        cortexMgr,
 		actions:          make(map[string]*ActionStatus),
 		authToken:        authToken,
 	}
@@ -377,6 +399,11 @@ RULES:
 	var agentOpts []agent.AgentOption
 	if s.cfg != nil && s.cfg.Memory.Enabled {
 		agentOpts = append(agentOpts, agent.WithMemory(true))
+	}
+	// Enable Cortex for memory and context management
+	if s.cortexMgr != nil {
+		agentOpts = append(agentOpts, agent.WithCortex(s.cortexMgr))
+		fmt.Printf("[server] Agent %s: Cortex memory enabled\n", sessionID)
 	}
 
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)

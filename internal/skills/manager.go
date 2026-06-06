@@ -159,6 +159,19 @@ func (m *Manager) startEffectivenessCleanup(effMgr *EffectivenessManager) {
 	}
 }
 
+// InitAutoCreator initializes the auto skill creator with a provider for LLM-based description generation
+func (m *Manager) InitAutoCreator(provider provider.Provider) {
+	m.autoCreator = NewAutoCreator(m, &AutoCreatorConfig{
+		AutoDir:         filepath.Join(m.searchDirs[0], ".auto"),
+		MinToolCalls:    5,    // Require at least 5 tool calls to trigger skill creation
+		MinUserMessages: 2,    // Require at least 2 user messages
+		SummaryMaxTokens: 500, // Max tokens for LLM-generated summary
+	})
+	if provider != nil {
+		m.autoCreator.SetProvider(provider)
+	}
+}
+
 // NewManagerWithToolRegistry creates a manager with tool registry integration
 func NewManagerWithToolRegistry(toolNames []string) (*Manager, error) {
 	home, err := os.UserHomeDir()
