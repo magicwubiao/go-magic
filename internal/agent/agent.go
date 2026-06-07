@@ -938,6 +938,12 @@ type StreamHandler func(content string, done bool)
 
 // RunConversationStream runs a streaming conversation
 func (a *Agent) RunConversationStream(ctx context.Context, input string, handler StreamHandler) error {
+	return a.RunConversationStreamWithMedia(ctx, input, nil, handler)
+}
+
+// RunConversationStreamWithMedia runs a streaming conversation with multimodal input support.
+// If contentParts is provided, it takes priority over plain text input.
+func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string, contentParts []types.ContentPart, handler StreamHandler) error {
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
@@ -956,32 +962,40 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 		}
 	}
 
-	// Auto sub-task delegation for complex tasks
-	if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
-		if err != nil {
-			handler(fmt.Sprintf("\nError delegating sub-tasks: %v\n", err), true)
-			return err
-		}
-		// Stream the delegation result
-		handler(fmt.Sprintf("\n[⚡ Task Auto-Delegated to Sub-Task Executor]\n"), false)
-		handler(result, false)
-		handler("\n\n[Synthesizing final response...]\n\n", false)
+	// Skip sub-task delegation when contentParts are present (e.g., multimodal input with images)
+	if len(contentParts) == 0 {
+		// Auto sub-task delegation for complex tasks
+		if delegated, result, err := a.trySubTaskDelegation(ctx, input); delegated {
+			if err != nil {
+				handler(fmt.Sprintf("\nError delegating sub-tasks: %v\n", err), true)
+				return err
+			}
+			// Stream the delegation result
+			handler(fmt.Sprintf("\n[⚡ Task Auto-Delegated to Sub-Task Executor]\n"), false)
+			handler(result, false)
+			handler("\n\n[Synthesizing final response...]\n\n", false)
 
-		// Run synthesis via streaming
-		return a.RunConversationStream(ctx,
-			fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
+			// Run synthesis via streaming
+			return a.RunConversationStream(ctx,
+				fmt.Sprintf(`I have completed the sub-tasks for the task. The sub-tasks execution results are:
 
 %s
 
 Please provide a comprehensive, well-structured final response based on these sub-task results.`, result),
-			handler)
+				handler)
+		}
 	}
 
-	// Truncate input (stream path)
-	a.history = append(a.history, provider.Message{
-		Role:    "user",
-		Content: utils.TruncateDetailed(input, a.maxMsgLen),
-	})
+	// Build user message - use content parts if available, otherwise fall back to plain text
+	userMsg := provider.Message{
+		Role: "user",
+	}
+	if len(contentParts) > 0 {
+		userMsg.ContentParts = contentParts
+	} else {
+		userMsg.Content = utils.TruncateDetailed(input, a.maxMsgLen)
+	}
+	a.history = append(a.history, userMsg)
 
 	// Truncate history to prevent overflow
 	a.truncateHistory()

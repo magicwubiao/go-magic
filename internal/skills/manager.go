@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/provider"
+
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
 
@@ -42,6 +44,8 @@ type Manager struct {
 	minPatternFreq    int                     // 最小模式频率阈值
 	// Registry manager for hub search/install
 	registryMgr *RegistryManager
+	// Auto skill creator
+	autoCreator *AutoCreator
 }
 
 // ManagerConfig 配置管理器
@@ -160,16 +164,11 @@ func (m *Manager) startEffectivenessCleanup(effMgr *EffectivenessManager) {
 }
 
 // InitAutoCreator initializes the auto skill creator with a provider for LLM-based description generation
-func (m *Manager) InitAutoCreator(provider provider.Provider) {
-	m.autoCreator = NewAutoCreator(m, &AutoCreatorConfig{
-		AutoDir:         filepath.Join(m.searchDirs[0], ".auto"),
-		MinToolCalls:    5,    // Require at least 5 tool calls to trigger skill creation
-		MinUserMessages: 2,    // Require at least 2 user messages
-		SummaryMaxTokens: 500, // Max tokens for LLM-generated summary
-	})
-	if provider != nil {
-		m.autoCreator.SetProvider(provider)
-	}
+func (m *Manager) InitAutoCreator(prov provider.Provider) {
+	cfg := DefaultAutoCreatorConfig()
+	cfg.MinToolCalls = 5
+	cfg.Provider = prov
+	m.autoCreator = NewAutoCreator(m, cfg)
 }
 
 // NewManagerWithToolRegistry creates a manager with tool registry integration

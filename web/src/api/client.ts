@@ -10,9 +10,10 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     ...options.headers as Record<string, string>,
   }
 
-  // Only set Content-Type for JSON requests, not for FormData
+  // Only set Content-Type for JSON requests with body, not for FormData or bodyless requests
   const isFormData = options.body instanceof FormData
-  if (!isFormData) {
+  const hasBody = options.body !== undefined && options.body !== null
+  if (!isFormData && hasBody) {
     headers['Content-Type'] = 'application/json'
   }
 
@@ -39,5 +40,15 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     throw new Error(`HTTP ${response.status}: ${text}`)
   }
 
-  return response.json()
+  // Handle empty responses (e.g., DELETE)
+  const contentLength = response.headers.get('content-length')
+  if (contentLength === '0' || response.status === 204) {
+    return undefined as T
+  }
+
+  const text = await response.text()
+  if (!text) {
+    return undefined as T
+  }
+  return JSON.parse(text) as T
 }

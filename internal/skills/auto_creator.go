@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -232,12 +233,12 @@ func (ac *AutoCreator) generateDescriptionWithLLM() (string, error) {
 	}
 
 	// Build context for LLM
-	var context strings.Builder
-	context.WriteString("User request: ")
-	context.WriteString(ac.currentTask.UserInput)
-	context.WriteString("\n\nTools used:\n")
+	var taskContext strings.Builder
+	taskContext.WriteString("User request: ")
+	taskContext.WriteString(ac.currentTask.UserInput)
+	taskContext.WriteString("\n\nTools used:\n")
 	for _, tc := range ac.currentTask.ToolCalls {
-		context.WriteString(fmt.Sprintf("- %s: %v\n", tc.Name, tc.Arguments))
+		taskContext.WriteString(fmt.Sprintf("- %s: %v\n", tc.Name, tc.Arguments))
 	}
 	if len(ac.currentTask.ToolResults) > 0 {
 		// Include first result as sample
@@ -245,7 +246,7 @@ func (ac *AutoCreator) generateDescriptionWithLLM() (string, error) {
 		if len(result) > 200 {
 			result = result[:200] + "..."
 		}
-		context.WriteString(fmt.Sprintf("\nSample result: %s\n", result))
+		taskContext.WriteString(fmt.Sprintf("\nSample result: %s\n", result))
 	}
 
 	prompt := fmt.Sprintf(`Based on the following task context, generate a concise skill description (1-2 sentences):
@@ -258,12 +259,13 @@ Generate a description that:
 3. Is in English
 4. Does not exceed 200 characters
 
-Respond only with the description, no other text.`, context.String())
+Respond only with the description, no other text.`, taskContext.String())
 
 	// Call LLM
-	resp, err := ac.config.Provider.Chat([]provider.Message{
+	ctx := context.Background()
+	resp, err := ac.config.Provider.Chat(ctx, []provider.Message{
 		{Role: "user", Content: prompt},
-	}, nil)
+	})
 	if err != nil || resp == nil || resp.Content == "" {
 		return "", fmt.Errorf("LLM call failed: %v", err)
 	}

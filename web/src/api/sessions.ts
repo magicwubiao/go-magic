@@ -1,5 +1,13 @@
 import { request, getAuthToken } from './client'
 
+export interface UploadedFile {
+  id: string
+  name: string
+  filename: string
+  url: string
+  size: number
+}
+
 export interface Session {
   id: string
   title: string
@@ -24,6 +32,7 @@ export interface Message {
   tool_calls?: unknown[]
   tool_name?: string
   tool_call_id?: string
+  images?: string[]
 }
 
 export async function getSessions(): Promise<Session[]> {
@@ -50,9 +59,67 @@ export async function sendMessage(sessionId: string, content: string): Promise<v
   })
 }
 
-export function streamChat(sessionId: string, content: string): EventSource {
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const token = getAuthToken()
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.statusText}`)
+  }
+
+  const result: UploadedFile = await response.json()
+  result.url = addTokenToUrl(result.url)
+  return result
+}
+
+export interface FileItem {
+  filename: string
+  size: number
+  url: string
+  updated: string
+}
+
+export function addTokenToUrl(url: string): string {
+  const token = getAuthToken()
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
+}
+
+export async function listFiles(): Promise<FileItem[]> {
+  const res = await request<{ files: FileItem[] }>('/files')
+  return (res.files || []).map(f => ({
+    ...f,
+    url: addTokenToUrl(f.url),
+  }))
+}
+
+export async function deleteFile(filename: string): Promise<void> {
+  return request(`/files/${filename}`, { method: 'DELETE' })
+}
+
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[]): EventSource {
   const token = getAuthToken()
   let url = `/api/sessions/${sessionId}/stream?content=${encodeURIComponent(content)}`
+  if (images && images.length) {
+    url += `&images=${encodeURIComponent(JSON.stringify(images))}`
+  }
+  if (files && files.length) {
+    // Only pass file IDs to avoid long URLs
+    url += `&files=${encodeURIComponent(JSON.stringify(files.map(f => ({ name: f.name, filename: f.filename }))))}`
+  }
   if (token) {
     url += `&token=${encodeURIComponent(token)}`
   }

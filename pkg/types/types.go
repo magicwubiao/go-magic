@@ -36,6 +36,7 @@ type FileInfo struct {
 	MimeType string `json:"mime_type,omitempty"`
 	URL      string `json:"url,omitempty"`
 	Size     int64  `json:"size,omitempty"`
+	Contents string `json:"contents,omitempty"` // Base64 encoded file contents
 }
 
 type ToolCall struct {

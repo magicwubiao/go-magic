@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, NModal } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -76,8 +76,10 @@ import {
   FlagOutline,
   LogOutOutline,
   ShieldCheckmarkOutline,
+  FolderOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
+import { getPendingApprovals } from '@/api/approval'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -85,10 +87,33 @@ const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
 const siderCollapsed = ref(false)
+const pendingApprovalCount = ref(0)
 
 const isLoginPage = computed(() => route.path === '/login')
 
 const activeKey = computed(() => route.path)
+
+// Poll pending approvals for sidebar badge
+let approvalPollTimer: ReturnType<typeof setInterval> | null = null
+async function pollPendingApprovals() {
+  try {
+    const items = await getPendingApprovals()
+    pendingApprovalCount.value = items?.length || 0
+  } catch {
+    // silent
+  }
+}
+
+onMounted(() => {
+  pollPendingApprovals()
+  approvalPollTimer = setInterval(pollPendingApprovals, 10000)
+})
+
+onUnmounted(() => {
+  if (approvalPollTimer) {
+    clearInterval(approvalPollTimer)
+  }
+})
 
 function handleMenuClick(key: string) {
   router.push(key)
@@ -116,8 +141,9 @@ const menuOptions = computed(() => [
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
+  { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
-  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
+  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline), badge: pendingApprovalCount.value > 0 ? pendingApprovalCount.value : undefined },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },

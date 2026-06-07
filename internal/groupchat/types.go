@@ -20,15 +20,18 @@ type Room struct {
 
 // RoomAgent represents an AI agent in a room
 type RoomAgent struct {
-	ID          string `json:"id"`
-	RoomID      string `json:"roomId"`
-	AgentID     string `json:"agentId"`
-	Profile     string `json:"profile"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Invited     int    `json:"invited"`
-	SessionID   string `json:"sessionId,omitempty"`
-	CreatedAt   int64  `json:"createdAt"`
+	ID           string  `json:"id"`
+	RoomID       string  `json:"roomId"`
+	AgentID      string  `json:"agentId"`
+	Profile      string  `json:"profile"`
+	Name         string  `json:"name"`
+	Description  string  `json:"description"`
+	SystemPrompt string  `json:"systemPrompt,omitempty"`
+	Temperature  float64 `json:"temperature,omitempty"`
+	Tools        string  `json:"tools,omitempty"` // JSON array of tool names, empty means all
+	Invited      int     `json:"invited"`
+	SessionID    string  `json:"sessionId,omitempty"`
+	CreatedAt    int64   `json:"createdAt"`
 }
 
 // Member represents a user in a room

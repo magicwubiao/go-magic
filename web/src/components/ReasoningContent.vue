@@ -25,6 +25,7 @@ import { useI18n } from 'vue-i18n'
 import { ChevronForward, ChevronDown } from '@vicons/ionicons5'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
 
 const props = defineProps<{
   content: string

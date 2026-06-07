@@ -2,7 +2,11 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('approval.title') }}</h2>
-      <n-button @click="loadAll" :loading="loading">{{ t('common.refresh') }}</n-button>
+      <n-space>
+        <n-badge :value="pendingApprovals.length" :max="99">
+          <n-button @click="loadAll" :loading="loading">{{ t('common.refresh') }}</n-button>
+        </n-badge>
+      </n-space>
     </n-space>
 
     <n-alert v-if="error" type="error" style="margin-bottom: 16px;" closable @close="error = null">
@@ -10,9 +14,9 @@
     </n-alert>
 
     <n-spin :show="loading">
-      <n-tabs type="line" animated>
+      <n-tabs v-model:value="activeTab" type="line" animated>
         <!-- Tab 1: Dashboard -->
-        <n-tab-pane :name="'dashboard'" :tab="t('approval.tabs.dashboard')">
+        <n-tab-pane name="dashboard" :tab="t('approval.tabs.dashboard')">
           <n-grid :cols="4" :x-gap="16" style="margin-bottom: 24px;">
             <n-gi>
               <n-card size="small">
@@ -23,7 +27,7 @@
               <n-card size="small">
                 <n-statistic :label="t('approval.stats.autoApproved')">
                   <template #default>
-                    {{ formatPercent(stats.autoApproved, stats.totalRequests) }}
+                    <n-text type="success">{{ formatPercent(stats.autoApproved, stats.totalRequests) }}</n-text>
                   </template>
                 </n-statistic>
               </n-card>
@@ -32,7 +36,7 @@
               <n-card size="small">
                 <n-statistic :label="t('approval.stats.userApproved')">
                   <template #default>
-                    {{ formatPercent(stats.userApproved, stats.totalRequests) }}
+                    <n-text type="info">{{ formatPercent(stats.userApproved, stats.totalRequests) }}</n-text>
                   </template>
                 </n-statistic>
               </n-card>
@@ -41,54 +45,59 @@
               <n-card size="small">
                 <n-statistic :label="t('approval.stats.userDenied')">
                   <template #default>
-                    {{ formatPercent(stats.userDenied, stats.totalRequests) }}
+                    <n-text type="error">{{ formatPercent(stats.userDenied, stats.totalRequests) }}</n-text>
                   </template>
                 </n-statistic>
               </n-card>
             </n-gi>
           </n-grid>
 
-          <n-card size="small" :title="t('approval.stats.riskDistribution')" style="margin-bottom: 24px;">
-            <n-space vertical>
-              <div v-for="level in riskLevels" :key="level.key">
-                <n-space align="center" justify="space-between" style="margin-bottom: 4px;">
-                  <n-tag :type="riskTagType(level.key)" size="small">{{ t(`approval.riskLevels.${level.key}`) }}</n-tag>
-                  <n-text depth="3" style="font-size: 12px;">{{ getRiskCount(level.key) }}</n-text>
-                </n-space>
-                <n-progress
-                  type="line"
-                  :percentage="getRiskPercent(level.key)"
-                  :color="riskColor(level.key)"
-                  :show-indicator="false"
-                  :height="8"
-                  :border-radius="4"
-                />
-              </div>
-            </n-space>
-          </n-card>
+          <n-empty v-if="stats.totalRequests === 0" :description="t('approval.stats.noData')" style="margin-bottom: 24px;" />
 
-          <n-card size="small" :title="t('approval.stats.topCommands')">
-            <n-data-table
-              :columns="topCommandColumns"
-              :data="stats.topCommands || []"
-              :bordered="false"
-              size="small"
-            />
-          </n-card>
+          <template v-if="stats.totalRequests > 0">
+            <n-card size="small" :title="t('approval.stats.riskDistribution')" style="margin-bottom: 24px;">
+              <n-space vertical>
+                <div v-for="level in riskLevels" :key="level.key">
+                  <n-space align="center" justify="space-between" style="margin-bottom: 4px;">
+                    <n-tag :type="riskTagType(level.key)" size="small">{{ t(`approval.riskLevels.${level.key}`) }}</n-tag>
+                    <n-text depth="3" style="font-size: 12px;">{{ getRiskCount(level.key) }}</n-text>
+                  </n-space>
+                  <n-progress
+                    type="line"
+                    :percentage="getRiskPercent(level.key)"
+                    :color="riskColor(level.key)"
+                    :show-indicator="false"
+                    :height="8"
+                    :border-radius="4"
+                  />
+                </div>
+              </n-space>
+            </n-card>
+
+            <n-card v-if="stats.topCommands?.length" size="small" :title="t('approval.stats.topCommands')">
+              <n-data-table
+                :columns="topCommandColumns"
+                :data="stats.topCommands || []"
+                :bordered="false"
+                size="small"
+              />
+            </n-card>
+          </template>
         </n-tab-pane>
 
         <!-- Tab 2: History -->
-        <n-tab-pane :name="'history'" :tab="t('approval.tabs.history')">
+        <n-tab-pane name="history" :tab="t('approval.tabs.history')">
           <n-space justify="space-between" style="margin-bottom: 16px;">
-            <n-text depth="3">{{ t('approval.history.noRecords') }}</n-text>
+            <n-text depth="3">{{ historyRecords.length ? `${historyRecords.length} ${t('approval.history.records')}` : t('approval.history.noRecords') }}</n-text>
             <n-popconfirm @positive-click="handleClearHistory">
               <template #trigger>
-                <n-button type="error" size="small">{{ t('approval.history.clearHistory') }}</n-button>
+                <n-button type="error" size="small" :disabled="!historyRecords.length">{{ t('approval.history.clearHistory') }}</n-button>
               </template>
               {{ t('approval.history.clearConfirm') }}
             </n-popconfirm>
           </n-space>
           <n-data-table
+            v-if="historyRecords.length"
             :columns="historyColumns"
             :data="historyRecords"
             :bordered="false"
@@ -96,32 +105,35 @@
             :pagination="historyPagination"
             :row-key="(row: any) => row.id"
           />
+          <n-empty v-else :description="t('approval.history.noRecords')" />
         </n-tab-pane>
 
         <!-- Tab 3: Patterns -->
-        <n-tab-pane :name="'patterns'" :tab="t('approval.tabs.patterns')">
+        <n-tab-pane name="patterns" :tab="t('approval.tabs.patterns')">
           <h4 style="margin-bottom: 12px;">{{ t('approval.patterns.trusted') }}</h4>
           <n-data-table
+            v-if="trustedCommands.length"
             :columns="trustedColumns"
             :data="trustedCommands"
             :bordered="false"
             size="small"
             style="margin-bottom: 24px;"
           />
-          <n-empty v-if="!trustedCommands.length" :description="t('approval.patterns.noTrusted')" style="margin-bottom: 24px;" />
+          <n-empty v-else :description="t('approval.patterns.noTrusted')" style="margin-bottom: 24px;" />
 
           <h4 style="margin-bottom: 12px;">{{ t('approval.patterns.denied') }}</h4>
           <n-data-table
+            v-if="deniedCommands.length"
             :columns="deniedColumns"
             :data="deniedCommands"
             :bordered="false"
             size="small"
           />
-          <n-empty v-if="!deniedCommands.length" :description="t('approval.patterns.noDenied')" />
+          <n-empty v-else :description="t('approval.patterns.noDenied')" />
         </n-tab-pane>
 
         <!-- Tab 4: Settings -->
-        <n-tab-pane :name="'settings'" :tab="t('approval.tabs.settings')">
+        <n-tab-pane name="settings" :tab="t('approval.tabs.settings')">
           <n-card size="small">
             <n-form label-placement="left" label-width="140">
               <n-form-item :label="t('approval.settings.strategy')">
@@ -176,35 +188,68 @@
           </n-card>
         </n-tab-pane>
 
-        <!-- Tab 5: Pending (only shown when there are pending items) -->
-        <n-tab-pane v-if="pendingApprovals.length > 0" :name="'pending'" :tab="t('approval.tabs.pending')">
-          <n-space vertical>
-            <n-card v-for="item in pendingApprovals" :key="item.id" size="small">
-              <n-space vertical>
-                <n-space align="center" justify="space-between">
-                  <n-text strong>{{ t('approval.pending.command') }}</n-text>
-                  <n-tag :type="riskTagType(item.riskLevel || 'medium')" size="small">
-                    {{ t(`approval.riskLevels.${item.riskLevel || 'medium'}`) }}
-                  </n-tag>
+        <!-- Tab 5: Pending -->
+        <n-tab-pane name="pending" :tab="pendingTabTitle">
+          <template v-if="pendingApprovals.length > 0">
+            <n-space justify="end" style="margin-bottom: 12px;">
+              <n-button size="small" type="warning" @click="handleBatchResolve(true)">{{ t('approval.pending.batchApprove') }}</n-button>
+              <n-button size="small" type="error" @click="handleBatchResolve(false)">{{ t('approval.pending.batchDeny') }}</n-button>
+            </n-space>
+            <n-space vertical>
+              <n-alert v-for="item in pendingApprovals" :key="item.id" type="warning" :bordered="true" style="padding: 12px 16px;">
+                <n-space vertical style="width: 100%;">
+                  <n-space align="center" justify="space-between">
+                    <n-space align="center">
+                      <n-text strong>{{ t('approval.pending.command') }}</n-text>
+                      <n-tag :type="riskTagType(item.riskLevel || 'medium')" size="small">
+                        {{ t(`approval.riskLevels.${item.riskLevel || 'medium'}`) }}
+                      </n-tag>
+                    </n-space>
+                    <n-text depth="3" style="font-size: 12px;">{{ formatTime(item.createdAt) }}</n-text>
+                  </n-space>
+                  <n-text code style="word-break: break-all; font-size: 13px;">{{ item.command }}</n-text>
+                  <n-space v-if="item.args?.length" vertical style="margin-top: 4px;">
+                    <n-text depth="3" style="font-size: 12px;">{{ t('approval.pending.arguments') }}:</n-text>
+                    <n-text v-for="(arg, idx) in item.args" :key="idx" code depth="3" style="font-size: 12px; word-break: break-all;">
+                      {{ arg }}
+                    </n-text>
+                  </n-space>
+                  <n-space v-if="item.workingDir" style="margin-top: 4px;">
+                    <n-text depth="3" style="font-size: 12px;">{{ t('approval.pending.workingDir') }}: {{ item.workingDir }}</n-text>
+                  </n-space>
+                  <n-space justify="end" style="margin-top: 8px;">
+                    <n-button type="error" size="small" @click="handleResolve(item.id, false)">{{ t('approval.pending.deny') }}</n-button>
+                    <n-button type="primary" size="small" @click="handleResolve(item.id, true)">{{ t('approval.pending.approve') }}</n-button>
+                  </n-space>
                 </n-space>
-                <n-text code style="word-break: break-all;">{{ item.command }}</n-text>
-                <n-text depth="3" style="font-size: 12px;">{{ t('approval.pending.createdAt') }}: {{ formatTime(item.createdAt) }}</n-text>
-                <n-space justify="end">
-                  <n-button type="error" size="small" @click="handleResolve(item.id, false)">{{ t('approval.pending.deny') }}</n-button>
-                  <n-button type="primary" size="small" @click="handleResolve(item.id, true)">{{ t('approval.pending.approve') }}</n-button>
-                </n-space>
-              </n-space>
-            </n-card>
-          </n-space>
-          <n-empty v-if="!pendingApprovals.length" :description="t('approval.pending.noPending')" />
+              </n-alert>
+            </n-space>
+          </template>
+          <n-empty v-else :description="t('approval.pending.noPending')" />
         </n-tab-pane>
       </n-tabs>
     </n-spin>
+
+    <!-- Deny Reason Modal -->
+    <n-modal v-model:show="showDenyModal" preset="dialog" :title="t('approval.pending.denyReason')">
+      <n-input
+        v-model:value="denyReason"
+        type="textarea"
+        :rows="3"
+        :placeholder="t('approval.pending.denyReasonPlaceholder')"
+      />
+      <template #action>
+        <n-space justify="end">
+          <n-button @click="showDenyModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="error" @click="confirmDeny">{{ t('approval.pending.deny') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, NTag, useMessage } from 'naive-ui'
 
@@ -214,6 +259,7 @@ const message = useMessage()
 // Loading & error
 const loading = ref(false)
 const error = ref<string | null>(null)
+const activeTab = ref('dashboard')
 
 // Stats
 interface ApprovalStats {
@@ -238,10 +284,12 @@ const stats = ref<ApprovalStats>({
 interface HistoryRecord {
   id: string
   command: string
+  normalized?: string
   riskLevel: string
   decision: string
   strategy: string
   duration: number
+  workingDir?: string
   timestamp: string
 }
 
@@ -286,11 +334,31 @@ const newWhitelistPattern = ref('')
 interface PendingApproval {
   id: string
   command: string
+  args?: string[]
+  workingDir?: string
   riskLevel: string
   createdAt: string
 }
 
 const pendingApprovals = ref<PendingApproval[]>([])
+
+// Deny modal
+const showDenyModal = ref(false)
+const denyReason = ref('')
+const denyCallback: ((reason: string) => void) | null = null
+
+// Auto-switch to pending tab when there are pending items
+watch(() => pendingApprovals.value.length, (newLen) => {
+  if (newLen > 0 && activeTab.value !== 'pending') {
+    activeTab.value = 'pending'
+  }
+})
+
+// Pending tab title with badge
+const pendingTabTitle = computed(() => {
+  const count = pendingApprovals.value.length
+  return count > 0 ? `${t('approval.tabs.pending')} (${count})` : t('approval.tabs.pending')
+})
 
 // Risk levels
 const riskLevels = [
@@ -732,17 +800,84 @@ async function handleRemoveWhitelist(pattern: string): Promise<void> {
 }
 
 async function handleResolve(id: string, approved: boolean): Promise<void> {
-  try {
-    await resolvePendingApproval(id, approved, approved ? 'approved' : 'denied')
-    message.success(t('approval.pending.resolved'))
-    await loadPending()
-    await loadStats()
-  } catch {
-    message.error(t('approval.pending.resolveFailed'))
+  if (approved) {
+    try {
+      await resolvePendingApproval(id, true, 'approved')
+      message.success(t('approval.pending.resolved'))
+      await loadPending()
+      await loadStats()
+    } catch {
+      message.error(t('approval.pending.resolveFailed'))
+    }
+  } else {
+    // Show deny reason modal
+    denyReason.value = ''
+    denyCallback = async (reason: string) => {
+      try {
+        await resolvePendingApproval(id, false, reason || 'denied')
+        message.success(t('approval.pending.resolved'))
+        await loadPending()
+        await loadStats()
+      } catch {
+        message.error(t('approval.pending.resolveFailed'))
+      }
+    }
+    showDenyModal.value = true
   }
 }
 
+async function confirmDeny(): Promise<void> {
+  showDenyModal.value = false
+  if (denyCallback) {
+    await denyCallback(denyReason.value)
+    denyCallback = null
+  }
+}
+
+async function handleBatchResolve(approved: boolean): Promise<void> {
+  if (approved) {
+    try {
+      for (const item of pendingApprovals.value) {
+        await resolvePendingApproval(item.id, true, 'batch approved')
+      }
+      message.success(t('approval.pending.batchResolved'))
+      await loadPending()
+      await loadStats()
+    } catch {
+      message.error(t('approval.pending.resolveFailed'))
+    }
+  } else {
+    denyReason.value = ''
+    denyCallback = async (reason: string) => {
+      try {
+        for (const item of pendingApprovals.value) {
+          await resolvePendingApproval(item.id, false, reason || 'batch denied')
+        }
+        message.success(t('approval.pending.batchResolved'))
+        await loadPending()
+        await loadStats()
+      } catch {
+        message.error(t('approval.pending.resolveFailed'))
+      }
+    }
+    showDenyModal.value = true
+  }
+}
+
+let pendingPollTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   loadAll()
+  // Auto-poll pending approvals every 5 seconds
+  pendingPollTimer = setInterval(() => {
+    loadPending()
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (pendingPollTimer) {
+    clearInterval(pendingPollTimer)
+    pendingPollTimer = null
+  }
 })
 </script>

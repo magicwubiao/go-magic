@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/goal"
@@ -159,6 +161,9 @@ type Server struct {
 	// Cortex Agent manager for memory and context
 	cortexMgr *cortex.Manager
 
+	// Approval manager (independent of agents)
+	approvalMgr *approval.Manager
+
 	// Background actions tracking
 	actions   map[string]*ActionStatus
 	actionsMu sync.RWMutex
@@ -214,6 +219,12 @@ func NewServer(dbPath string) *Server {
 	var prov provider.Provider
 	if cfg != nil && cfg.Provider != "" {
 		prov = createProvider(cfg)
+		if prov == nil {
+			fmt.Printf("[server] Warning: No LLM provider available. Chat will not work until provider is configured.\n")
+			fmt.Printf("[server] Please configure a provider in Settings or config.json\n")
+		}
+	} else {
+		fmt.Printf("[server] Warning: No provider configured. Chat will not work.\n")
 	}
 
 	// Create tool registry
@@ -290,16 +301,29 @@ func NewServer(dbPath string) *Server {
 	}
 
 	// Initialize Cortex Manager for memory and context (always enabled for better UX)
+	// Cortex local features (SOUL.md, USER.md, Snapshot, Trajectory) work without LLM provider
 	cortexDir := filepath.Join(magicHome, "cortex")
-	var cortexMgr *cortex.Manager
-	if prov != nil {
-		cortexMgr = cortex.NewManager(cortexDir, prov)
-		if err := cortexMgr.Start(); err != nil {
-			fmt.Printf("[server] Warning: Failed to start cortex manager: %v\n", err)
-			cortexMgr = nil
+	cortexMgr := cortex.NewManager(cortexDir, prov)
+	if err := cortexMgr.Start(); err != nil {
+		fmt.Printf("[server] Warning: Failed to start cortex manager: %v\n", err)
+		cortexMgr = nil
+	} else {
+		if prov != nil {
+			fmt.Printf("[server] Cortex memory system enabled (with LLM features)\n")
 		} else {
-			fmt.Printf("[server] Cortex memory system enabled\n")
+			fmt.Printf("[server] Cortex memory system enabled (local features only, no LLM provider)\n")
 		}
+	}
+
+	// Initialize Approval Manager independently (not tied to agents)
+	approvalCfg := approval.DefaultConfig()
+	approvalCfg.Strategy = approval.StrategySmart // Use smart strategy by default for web
+	approvalMgr, err := approval.NewManager(approvalCfg)
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create approval manager: %v\n", err)
+		approvalMgr = nil
+	} else {
+		fmt.Printf("[server] Approval system enabled (strategy: %s)\n", approvalCfg.Strategy)
 	}
 
 	// Get version
@@ -347,6 +371,7 @@ func NewServer(dbPath string) *Server {
 		groupchatStorage: groupchatStorage,
 		goalMgr:          goalMgr,
 		cortexMgr:        cortexMgr,
+		approvalMgr:      approvalMgr,
 		actions:          make(map[string]*ActionStatus),
 		authToken:        authToken,
 	}
@@ -356,13 +381,50 @@ func NewServer(dbPath string) *Server {
 		cronMgr.Start()
 	}
 
+	// Start agent cleanup goroutine to prevent memory leaks
+	go s.agentCleanupLoop()
+
 	return s
+}
+
+// agentCleanupLoop periodically removes inactive agents to prevent memory leaks
+func (s *Server) agentCleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.cleanupInactiveAgents()
+		}
+	}
+}
+
+// cleanupInactiveAgents removes agents that haven't been used for a while
+func (s *Server) cleanupInactiveAgents() {
+	s.agentsMu.Lock()
+	defer s.agentsMu.Unlock()
+
+	// For now, simple strategy: if we have more than 20 agents, remove half
+	// In the future, agent could track lastUsed timestamp
+	if len(s.agents) > 20 {
+		count := 0
+		removeCount := len(s.agents) / 2
+		for id := range s.agents {
+			if count >= removeCount {
+				break
+			}
+			delete(s.agents, id)
+			count++
+			fmt.Printf("[server] Cleaned up inactive agent for session %s\n", id)
+		}
+	}
 }
 
 // createProvider creates a provider instance from config (unified with pkg/config)
 func createProvider(cfg *appconfig.Config) provider.Provider {
 	prov, err := appconfig.CreateProvider(cfg)
 	if err != nil {
+		fmt.Printf("[server] Provider creation failed: %v\n", err)
 		return nil
 	}
 	return prov
@@ -640,6 +702,12 @@ func (s *Server) Start(port int) error {
 				return
 			}
 
+			// Check X-Magic-Session-Token header
+			if r.Header.Get("X-Magic-Session-Token") == token {
+				h(w, r)
+				return
+			}
+
 			// Check query parameter
 			if r.URL.Query().Get("token") == token {
 				h(w, r)
@@ -787,7 +855,7 @@ func (s *Server) Start(port int) error {
 
 	// GroupChat
 	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
-	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomByID)))
+	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomSubroutes)))
 
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
@@ -811,6 +879,16 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/approval/strategy", withCORS(requireAuth(s.handleApprovalStrategy)))
 	mux.HandleFunc("/api/approval/clear-history", withCORS(requireAuth(s.handleApprovalClearHistory)))
 	mux.HandleFunc("/api/approval/settings", withCORS(requireAuth(s.handleApprovalSettings)))
+
+	// File upload
+	mux.HandleFunc("/api/upload", withCORS(requireAuth(s.handleFileUpload)))
+	mux.HandleFunc("/api/files", withCORS(requireAuth(s.handleFileList)))
+	mux.HandleFunc("/api/files/", withCORS(requireAuth(s.handleFileDelete)))
+
+	// Serve uploaded files (auth required)
+	uploadsDir := filepath.Join(s.magicHome, "uploads")
+	os.MkdirAll(uploadsDir, 0755)
+	mux.Handle("/api/uploads/", withCORS(requireAuth(http.StripPrefix("/api/uploads/", http.FileServer(http.Dir(uploadsDir))).ServeHTTP)))
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
@@ -1194,7 +1272,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 
 		aiAgent := s.getOrCreateAgent(sessionID)
 		if aiAgent == nil {
-			http.Error(w, "failed to create agent", 500)
+			http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -1274,14 +1352,82 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	content := r.URL.Query().Get("content")
-	if content == "" {
-		http.Error(w, "content query parameter required", 400)
+
+	// Parse images from query parameter (JSON array of base64 data URLs)
+	var contentParts []types.ContentPart
+	imagesJSON := r.URL.Query().Get("images")
+	if imagesJSON != "" {
+		var imageURLs []string
+		if err := json.Unmarshal([]byte(imagesJSON), &imageURLs); err == nil {
+			for _, imgURL := range imageURLs {
+				if imgURL != "" {
+					contentParts = append(contentParts, types.ContentPart{
+						Type:     "image_url",
+						ImageURL: &types.MediaURL{URL: imgURL},
+					})
+				}
+			}
+		}
+	}
+
+	// Parse files from query parameter (JSON array of {name, data})
+	filesJSON := r.URL.Query().Get("files")
+	if filesJSON != "" {
+		var files []struct {
+			Name     string `json:"name"`
+			Filename string `json:"filename"`
+		}
+		if err := json.Unmarshal([]byte(filesJSON), &files); err == nil {
+			for _, f := range files {
+				if f.Filename != "" {
+					// Read file from uploads directory
+					uploadsDir := filepath.Join(s.magicHome, "uploads")
+					filePath := filepath.Join(uploadsDir, f.Filename)
+					data, err := os.ReadFile(filePath)
+					if err == nil {
+						// Encode to base64 data URL
+						mimeType := "application/octet-stream"
+						ext := filepath.Ext(f.Name)
+						switch ext {
+						case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql":
+							mimeType = "text/plain"
+						case ".png":
+							mimeType = "image/png"
+						case ".jpg", ".jpeg":
+							mimeType = "image/jpeg"
+						case ".gif":
+							mimeType = "image/gif"
+						case ".pdf":
+							mimeType = "application/pdf"
+						case ".doc", ".docx":
+							mimeType = "application/msword"
+						case ".xls", ".xlsx":
+							mimeType = "application/vnd.ms-excel"
+						}
+						base64Data := base64.StdEncoding.EncodeToString(data)
+						dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+						contentParts = append(contentParts, types.ContentPart{
+							Type: "file",
+							File: &types.FileInfo{
+								Name:     f.Name,
+								Contents: dataURL,
+							},
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Validate that we have at least content or media to send
+	if content == "" && len(contentParts) == 0 {
+		http.Error(w, "content or media required", 400)
 		return
 	}
 
 	aiAgent := s.getOrCreateAgent(sessionID)
 	if aiAgent == nil {
-		http.Error(w, "failed to create agent", 500)
+		http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1295,7 +1441,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	ctx := context.Background()
+	// Use timeout context to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 
 	// Save user message to session
 	if s.sessionStore != nil {
@@ -1309,11 +1457,34 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 
+	// Start heartbeat goroutine to keep connection alive during long tool executions
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(w, ":heartbeat\n\n")
+				flusher.Flush()
+			case <-heartbeatDone:
+				return
+			}
+		}
+	}()
+
 	// Check if provider supports streaming
 	_, supportsStream := s.provider.(provider.StreamingToolCaller)
 	if !supportsStream {
 		// Fallback: non-streaming response sent as single chunk
-		resp, err := aiAgent.RunConversation(ctx, content)
+		var resp string
+		var err error
+		if len(contentParts) > 0 {
+			resp, err = aiAgent.RunConversationWithMedia(ctx, content, contentParts)
+		} else {
+			resp, err = aiAgent.RunConversation(ctx, content)
+		}
+		close(heartbeatDone)
 		if err != nil {
 			data, _ := json.Marshal(map[string]string{"error": err.Error()})
 			fmt.Fprintf(w, "data: %s\n\n", string(data))
@@ -1349,7 +1520,8 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	// Real streaming
 	var fullResponse strings.Builder
-	streamErr := aiAgent.RunConversationStream(ctx, content, func(chunk string, done bool) {
+	var streamErr error
+	streamHandler := func(chunk string, done bool) {
 		if done {
 			return
 		}
@@ -1419,7 +1591,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		data, _ := json.Marshal(map[string]string{"delta": chunk})
 		fmt.Fprintf(w, "data: %s\n\n", string(data))
 		flusher.Flush()
-	})
+	}
+	if len(contentParts) > 0 {
+		streamErr = aiAgent.RunConversationStreamWithMedia(ctx, content, contentParts, streamHandler)
+	} else {
+		streamErr = aiAgent.RunConversationStream(ctx, content, streamHandler)
+	}
+
+	close(heartbeatDone)
 
 	if streamErr != nil {
 		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
@@ -1442,6 +1621,136 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	doneData, _ := json.Marshal(map[string]bool{"done": true})
 	fmt.Fprintf(w, "data: %s\n\n", string(doneData))
 	flusher.Flush()
+}
+
+// handleFileUpload handles multipart file uploads
+func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	// Parse multipart form (32MB max memory)
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), 400)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "failed to get file: "+err.Error(), 400)
+		return
+	}
+	defer file.Close()
+
+	// Create uploads directory
+	uploadsDir := filepath.Join(s.magicHome, "uploads")
+	os.MkdirAll(uploadsDir, 0755)
+
+	// Generate unique filename
+	fileID := uuid.New().String()
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".bin"
+	}
+	filename := fileID + ext
+	filepath_ := filepath.Join(uploadsDir, filename)
+
+	// Save file
+	out, err := os.Create(filepath_)
+	if err != nil {
+		http.Error(w, "failed to save file: "+err.Error(), 500)
+		return
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, file)
+	if err != nil {
+		http.Error(w, "failed to write file: "+err.Error(), 500)
+		return
+	}
+
+	// Return file info
+	jsonResponse(w, map[string]interface{}{
+		"id":       fileID,
+		"name":     header.Filename,
+		"filename": filename,
+		"url":      "/api/uploads/" + filename,
+		"size":     header.Size,
+	})
+}
+
+// handleFileList returns a list of uploaded files
+func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	uploadsDir := filepath.Join(s.magicHome, "uploads")
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"files": []map[string]interface{}{}})
+		return
+	}
+
+	files := []map[string]interface{}{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, map[string]interface{}{
+			"filename": info.Name(),
+			"size":     info.Size(),
+			"url":      "/api/uploads/" + info.Name(),
+			"updated":  info.ModTime().Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{"files": files})
+}
+
+// handleFileDelete deletes an uploaded file
+func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	// Extract filename from URL: /api/files/{filename}
+	filename := strings.TrimPrefix(r.URL.Path, "/api/files/")
+	if filename == "" || strings.Contains(filename, "..") {
+		http.Error(w, "invalid filename", 400)
+		return
+	}
+
+	uploadsDir := filepath.Join(s.magicHome, "uploads")
+	filePath := filepath.Join(uploadsDir, filename)
+
+	// Security: ensure path is within uploads directory
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		http.Error(w, "invalid path", 400)
+		return
+	}
+	absUploadsDir, _ := filepath.Abs(uploadsDir)
+	if !strings.HasPrefix(absPath, absUploadsDir) {
+		http.Error(w, "invalid path", 400)
+		return
+	}
+
+	err = os.Remove(filePath)
+	if err != nil {
+		http.Error(w, "failed to delete file: "+err.Error(), 500)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"success": true})
 }
 
 func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
@@ -1517,7 +1826,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Get or create agent
 	aiAgent := s.getOrCreateAgent(sessionID)
 	if aiAgent == nil {
-		http.Error(w, "failed to create agent", 500)
+		http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1639,7 +1948,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	aiAgent := s.getOrCreateAgent(sessionID)
 	if aiAgent == nil {
-		http.Error(w, "failed to create agent", 500)
+		http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -5743,12 +6052,17 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 		rooms, _ := s.groupchatStorage.ListRooms()
 		result := make([]interface{}, 0)
 		for _, room := range rooms {
+			agents, _ := s.groupchatStorage.GetAgents(room.ID)
+			agentIDs := make([]string, 0, len(agents))
+			for _, a := range agents {
+				agentIDs = append(agentIDs, a.ID)
+			}
 			result = append(result, map[string]interface{}{
 				"id":          room.ID,
 				"name":        room.Name,
 				"description": room.InviteCode,
 				"members":     []string{},
-				"agent_ids":   []string{},
+				"agent_ids":   agentIDs,
 				"created_at":  room.CreatedAt,
 			})
 		}
@@ -5759,27 +6073,44 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "method not allowed", 405)
 }
 
-func (s *Server) handleGroupchatRoomByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/")
-
-	if id == "" {
+func (s *Server) handleGroupchatRoomSubroutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/")
+	if path == "" {
 		http.Error(w, "not found", 404)
 		return
 	}
 
-	// Check for messages subroute
-	if strings.HasSuffix(r.URL.Path, "/messages") {
-		roomID := strings.TrimSuffix(id, "/messages")
-		s.handleGroupchatMessages(w, r, roomID)
-		return
+	parts := strings.Split(path, "/")
+	roomID := parts[0]
+
+	// Sub-routes: /messages, /members, /agents, /invite, /stream
+	if len(parts) >= 2 {
+		switch parts[1] {
+		case "messages":
+			s.handleGroupchatMessages(w, r, roomID)
+			return
+		case "members":
+			s.handleGroupchatRoomMembers(w, r, roomID)
+			return
+		case "agents":
+			s.handleGroupchatRoomAgents(w, r, roomID)
+			return
+		case "invite":
+			s.handleGroupchatRoomInvite(w, r, roomID)
+			return
+		case "stream":
+			s.handleGroupchatStream(w, r, roomID)
+			return
+		}
 	}
 
+	// Room-level operations (GET/DELETE)
 	if s.groupchatStorage == nil {
 		http.Error(w, "groupchat not initialized", 500)
 		return
 	}
 
-	room, err := s.groupchatStorage.GetRoom(id)
+	room, err := s.groupchatStorage.GetRoom(roomID)
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
@@ -5796,7 +6127,7 @@ func (s *Server) handleGroupchatRoomByID(w http.ResponseWriter, r *http.Request)
 			"created_at":  room.CreatedAt,
 		})
 	case "DELETE":
-		if err := s.groupchatStorage.DeleteRoom(id); err != nil {
+		if err := s.groupchatStorage.DeleteRoom(roomID); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -5816,10 +6147,15 @@ func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request,
 		messages, _ := s.groupchatStorage.GetMessages(roomID, 100)
 		result := make([]interface{}, 0)
 		for _, msg := range messages {
+			// Use SenderName for display, fallback to SenderID
+			sender := msg.SenderName
+			if sender == "" {
+				sender = msg.SenderID
+			}
 			result = append(result, map[string]interface{}{
 				"id":        msg.ID,
 				"room_id":   msg.RoomID,
-				"sender":    msg.SenderID,
+				"sender":    sender,
 				"role":      msg.Type,
 				"content":   msg.Content,
 				"timestamp": msg.Timestamp,
@@ -5856,10 +6192,554 @@ func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request,
 		jsonResponse(w, map[string]interface{}{
 			"id":        msg.ID,
 			"room_id":   msg.RoomID,
-			"sender":    msg.SenderID,
+			"sender":    msg.SenderName,
 			"role":      msg.Type,
 			"content":   msg.Content,
 			"timestamp": msg.Timestamp,
+		})
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
+}
+
+// handleAgentMentions checks for @agent mentions and triggers LLM auto-reply
+func (s *Server) handleAgentMentions(roomID, content string) {
+	if s.provider == nil || s.groupchatStorage == nil {
+		return
+	}
+
+	agents, err := s.groupchatStorage.GetAgents(roomID)
+	if err != nil || len(agents) == 0 {
+		return
+	}
+
+	// Find mentioned agents (e.g., "@AgentName" or "@agent_name")
+	mentioned := make(map[string]*groupchat.RoomAgent)
+	for _, a := range agents {
+		// Match @Name or @name (case insensitive)
+		mention := "@" + a.Name
+		if strings.Contains(content, mention) {
+			mentioned[a.ID] = &a
+		}
+	}
+
+	if len(mentioned) == 0 {
+		return
+	}
+
+	// Get recent messages for context
+	recentMsgs, _ := s.groupchatStorage.GetMessages(roomID, 20)
+
+	for _, agent := range mentioned {
+		s.replyAsAgent(roomID, agent, recentMsgs, content)
+	}
+}
+
+// replyAsAgent calls the LLM provider and saves the agent's reply
+func (s *Server) replyAsAgent(roomID string, agent *groupchat.RoomAgent, history []groupchat.ChatMessage, userMessage string) {
+	// Build message history for LLM
+	messages := make([]provider.Message, 0)
+
+	// System prompt
+	systemPrompt := agent.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = fmt.Sprintf("You are %s, an AI assistant in a group chat. Your profile is: %s. Description: %s. Reply concisely and helpfully.",
+			agent.Name, agent.Profile, agent.Description)
+	}
+	messages = append(messages, provider.Message{
+		Role:    "system",
+		Content: systemPrompt,
+	})
+
+	// Add recent history as context
+	for _, msg := range history {
+		role := "user"
+		if msg.Type == "agent" {
+			role = "assistant"
+		}
+		if msg.SenderID == "system" {
+			role = "system"
+		}
+		messages = append(messages, provider.Message{
+			Role:    role,
+			Content: msg.Content,
+		})
+	}
+
+	// Call LLM
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := s.provider.Chat(ctx, messages)
+	if err != nil {
+		// Save error as agent message
+		errMsg := &groupchat.ChatMessage{
+			ID:         uuid.New().String(),
+			RoomID:     roomID,
+			SenderID:   agent.ID,
+			SenderName: agent.Name,
+			Content:    fmt.Sprintf("[Error: %s]", err.Error()),
+			Timestamp:  time.Now().UnixMilli(),
+			Type:       "agent",
+		}
+		s.groupchatStorage.SaveMessage(errMsg)
+		return
+	}
+
+	// Save agent reply
+	replyMsg := &groupchat.ChatMessage{
+		ID:         uuid.New().String(),
+		RoomID:     roomID,
+		SenderID:   agent.ID,
+		SenderName: agent.Name,
+		Content:    resp.Content,
+		Timestamp:  time.Now().UnixMilli(),
+		Type:       "agent",
+	}
+	s.groupchatStorage.SaveMessage(replyMsg)
+}
+
+// handleGroupchatStream handles SSE streaming for agent replies
+func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, roomID string) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	if s.provider == nil {
+		http.Error(w, "provider not configured", 400)
+		return
+	}
+
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+
+	// Find mentioned agents
+	agents, err := s.groupchatStorage.GetAgents(roomID)
+	if err != nil || len(agents) == 0 {
+		http.Error(w, "no agents in room", 400)
+		return
+	}
+
+	mentioned := make([]*groupchat.RoomAgent, 0)
+	for i := range agents {
+		mention := "@" + agents[i].Name
+		if strings.Contains(req.Content, mention) {
+			mentioned = append(mentioned, &agents[i])
+		}
+	}
+
+	if len(mentioned) == 0 {
+		http.Error(w, "no agent mentioned", 400)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", 500)
+		return
+	}
+
+	// Get recent messages for context
+	recentMsgs, _ := s.groupchatStorage.GetMessages(roomID, 20)
+
+	// Start heartbeat to prevent proxy/browser timeout
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(w, ":heartbeat\n\n")
+				flusher.Flush()
+			case <-heartbeatDone:
+				return
+			}
+		}
+	}()
+
+	// Stream each mentioned agent's reply
+	for _, agent := range mentioned {
+		// Send agent start event
+		startData, _ := json.Marshal(map[string]interface{}{
+			"type":    "start",
+			"agent":   agent.Name,
+			"agentId": agent.ID,
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(startData))
+		flusher.Flush()
+
+		// Build messages
+		messages := make([]provider.Message, 0)
+		systemPrompt := agent.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = fmt.Sprintf("You are %s, an AI assistant in a group chat. Your profile is: %s. Description: %s. Reply concisely and helpfully.",
+				agent.Name, agent.Profile, agent.Description)
+		}
+		messages = append(messages, provider.Message{Role: "system", Content: systemPrompt})
+
+		for _, msg := range recentMsgs {
+			role := "user"
+			if msg.Type == "agent" {
+				role = "assistant"
+			}
+			if msg.SenderID == "system" {
+				role = "system"
+			}
+			messages = append(messages, provider.Message{Role: role, Content: msg.Content})
+		}
+
+		// Try streaming first
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		fullContent := ""
+
+		streamer, supportsStream := s.provider.(provider.Streamer)
+		if supportsStream {
+			streamErr := streamer.Stream(ctx, messages, func(resp *provider.StreamResponse) {
+				if resp.Content != "" {
+					fullContent += resp.Content
+					data, _ := json.Marshal(map[string]interface{}{
+						"type":    "content",
+						"agent":   agent.Name,
+						"agentId": agent.ID,
+						"content": resp.Content,
+					})
+					fmt.Fprintf(w, "data: %s\n\n", string(data))
+					flusher.Flush()
+				}
+			})
+			cancel()
+			if streamErr != nil {
+				errData, _ := json.Marshal(map[string]interface{}{
+					"type":  "error",
+					"agent": agent.Name,
+					"error": streamErr.Error(),
+				})
+				fmt.Fprintf(w, "data: %s\n\n", string(errData))
+				flusher.Flush()
+				continue
+			}
+		} else {
+			// Fallback to non-streaming
+			resp, chatErr := s.provider.Chat(ctx, messages)
+			cancel()
+			if chatErr != nil {
+				errData, _ := json.Marshal(map[string]interface{}{
+					"type":  "error",
+					"agent": agent.Name,
+					"error": chatErr.Error(),
+				})
+				fmt.Fprintf(w, "data: %s\n\n", string(errData))
+				flusher.Flush()
+				continue
+			}
+			fullContent = resp.Content
+			// Send as pseudo-stream
+			chars := []rune(resp.Content)
+			for i, ch := range chars {
+				data, _ := json.Marshal(map[string]interface{}{
+					"type":    "content",
+					"agent":   agent.Name,
+					"agentId": agent.ID,
+					"content": string(ch),
+				})
+				fmt.Fprintf(w, "data: %s\n\n", string(data))
+				flusher.Flush()
+				// Small delay for pseudo-streaming
+				if i%10 == 0 {
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+		}
+
+		// Save complete message to database
+		replyMsg := &groupchat.ChatMessage{
+			ID:         uuid.New().String(),
+			RoomID:     roomID,
+			SenderID:   agent.ID,
+			SenderName: agent.Name,
+			Content:    fullContent,
+			Timestamp:  time.Now().UnixMilli(),
+			Type:       "agent",
+		}
+		s.groupchatStorage.SaveMessage(replyMsg)
+
+		// Send done event
+		doneData, _ := json.Marshal(map[string]interface{}{
+			"type":      "done",
+			"agent":     agent.Name,
+			"agentId":   agent.ID,
+			"messageId": replyMsg.ID,
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(doneData))
+		flusher.Flush()
+	}
+
+	// Stop heartbeat
+	close(heartbeatDone)
+
+	// Send final done
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func (s *Server) handleGroupchatRoomMembers(w http.ResponseWriter, r *http.Request, roomID string) {
+
+	if s.groupchatStorage == nil {
+		http.Error(w, "groupchat not initialized", 500)
+		return
+	}
+
+	if r.Method == "GET" {
+		members, _ := s.groupchatStorage.GetMembers(roomID)
+		result := make([]interface{}, 0)
+		for _, m := range members {
+			result = append(result, map[string]interface{}{
+				"id":        m.ID,
+				"user_id":   m.UserID,
+				"name":      m.Name,
+				"online":    m.Online,
+				"joined_at": m.JoinedAt,
+				"last_seen": m.LastSeenAt,
+			})
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			UserID string `json:"user_id"`
+			Name   string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		member := &groupchat.Member{
+			ID:       uuid.New().String(),
+			RoomID:   roomID,
+			UserID:   req.UserID,
+			Name:     req.Name,
+			JoinedAt: time.Now().UnixMilli(),
+			Online:   true,
+		}
+		if err := s.groupchatStorage.AddMember(member); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"id":        member.ID,
+			"user_id":   member.UserID,
+			"name":      member.Name,
+			"online":    true,
+			"joined_at": member.JoinedAt,
+		})
+		return
+	}
+
+	if r.Method == "DELETE" {
+		// Parse member ID from URL path: /api/groupchat/rooms/{roomId}/members/{memberId}
+		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/"), "/")
+		if len(pathParts) >= 4 {
+			memberID := pathParts[3]
+			if err := s.groupchatStorage.RemoveMember(roomID, memberID); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			jsonResponse(w, map[string]bool{"ok": true})
+			return
+		}
+		http.Error(w, "member ID required", 400)
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleGroupchatRoomAgents(w http.ResponseWriter, r *http.Request, roomID string) {
+
+	if s.groupchatStorage == nil {
+		http.Error(w, "groupchat not initialized", 500)
+		return
+	}
+
+	if r.Method == "GET" {
+		agents, _ := s.groupchatStorage.GetAgents(roomID)
+		result := make([]interface{}, 0)
+		for _, a := range agents {
+			result = append(result, map[string]interface{}{
+				"id":            a.ID,
+				"agent_id":      a.AgentID,
+				"name":          a.Name,
+				"profile":       a.Profile,
+				"description":   a.Description,
+				"system_prompt": a.SystemPrompt,
+				"temperature":   a.Temperature,
+				"tools":         a.Tools,
+				"invited":       a.Invited,
+			})
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			AgentID      string  `json:"agent_id"`
+			Name         string  `json:"name"`
+			Profile      string  `json:"profile"`
+			Description  string  `json:"description"`
+			SystemPrompt string  `json:"system_prompt"`
+			Temperature  float64 `json:"temperature"`
+			Tools        string  `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		temp := req.Temperature
+		if temp <= 0 {
+			temp = 0.7
+		}
+		agent := &groupchat.RoomAgent{
+			ID:           uuid.New().String(),
+			RoomID:       roomID,
+			AgentID:      req.AgentID,
+			Name:         req.Name,
+			Profile:      req.Profile,
+			Description:  req.Description,
+			SystemPrompt: req.SystemPrompt,
+			Temperature:  temp,
+			Tools:        req.Tools,
+			Invited:      1,
+			CreatedAt:    time.Now().UnixMilli(),
+		}
+		if err := s.groupchatStorage.CreateAgent(agent); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"id":            agent.ID,
+			"agent_id":      agent.AgentID,
+			"name":          agent.Name,
+			"profile":       agent.Profile,
+			"description":   agent.Description,
+			"system_prompt": agent.SystemPrompt,
+			"temperature":   agent.Temperature,
+			"tools":         agent.Tools,
+			"invited":       true,
+		})
+		return
+	}
+
+	if r.Method == "PUT" {
+		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/"), "/")
+		if len(pathParts) >= 3 {
+			agentID := pathParts[2]
+			var req struct {
+				Name         string  `json:"name"`
+				Profile      string  `json:"profile"`
+				Description  string  `json:"description"`
+				SystemPrompt string  `json:"system_prompt"`
+				Temperature  float64 `json:"temperature"`
+				Tools        string  `json:"tools"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", 400)
+				return
+			}
+			existing, err := s.groupchatStorage.GetAgent(agentID)
+			if err != nil || existing == nil {
+				http.Error(w, "agent not found", 404)
+				return
+			}
+			if req.Name != "" {
+				existing.Name = req.Name
+			}
+			if req.Profile != "" {
+				existing.Profile = req.Profile
+			}
+			existing.Description = req.Description
+			existing.SystemPrompt = req.SystemPrompt
+			if req.Temperature > 0 {
+				existing.Temperature = req.Temperature
+			}
+			existing.Tools = req.Tools
+			if err := s.groupchatStorage.UpdateAgent(existing); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			jsonResponse(w, map[string]interface{}{
+				"id":            existing.ID,
+				"agent_id":      existing.AgentID,
+				"name":          existing.Name,
+				"profile":       existing.Profile,
+				"description":   existing.Description,
+				"system_prompt": existing.SystemPrompt,
+				"temperature":   existing.Temperature,
+				"tools":         existing.Tools,
+			})
+			return
+		}
+		http.Error(w, "agent ID required", 400)
+		return
+	}
+
+	if r.Method == "DELETE" {
+		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/groupchat/rooms/"), "/")
+		if len(pathParts) >= 3 {
+			agentID := pathParts[2]
+			if err := s.groupchatStorage.DeleteAgent(agentID); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			jsonResponse(w, map[string]bool{"ok": true})
+			return
+		}
+		http.Error(w, "agent ID required", 400)
+		return
+	}
+
+	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleGroupchatRoomInvite(w http.ResponseWriter, r *http.Request, roomID string) {
+
+	if s.groupchatStorage == nil {
+		http.Error(w, "groupchat not initialized", 500)
+		return
+	}
+
+	if r.Method == "POST" {
+		room, err := s.groupchatStorage.GetRoom(roomID)
+		if err != nil {
+			http.Error(w, "room not found", 404)
+			return
+		}
+		if room.InviteCode == "" {
+			room.InviteCode = uuid.New().String()[:8]
+			room.UpdatedAt = time.Now().UnixMilli()
+			if err := s.groupchatStorage.UpdateRoom(room); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+		jsonResponse(w, map[string]string{
+			"invite_code": room.InviteCode,
 		})
 		return
 	}
@@ -5971,24 +6851,18 @@ func getContentType(path string) string {
 
 // --- Approval Management ---
 
-// getApprovalManager returns the approval manager from any active agent.
-// If no agent is available, it returns nil.
+// getApprovalManager returns the approval manager.
+// Uses the independent approvalMgr if available, otherwise falls back to agent hooks.
 func (s *Server) getApprovalManager() *approval.Manager {
-	s.agentsMu.Lock()
-	defer s.agentsMu.Unlock()
-
-	// Try to find any agent with an approval hook
-	for _, a := range s.agents {
-		if hook := a.GetApprovalHook(); hook != nil {
-			return hook.GetManager()
-		}
+	// Prefer the independent approval manager (always available after server init)
+	if s.approvalMgr != nil {
+		return s.approvalMgr
 	}
 
-	// No active agents - create a temporary one to get the manager
-	// This ensures the API works even before any chat session is created
-	if s.provider != nil {
-		toolsSchema := getToolsSchema(s.toolReg)
-		a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, "")
+	// Fallback: try to find any agent with an approval hook
+	s.agentsMu.Lock()
+	defer s.agentsMu.Unlock()
+	for _, a := range s.agents {
 		if hook := a.GetApprovalHook(); hook != nil {
 			return hook.GetManager()
 		}

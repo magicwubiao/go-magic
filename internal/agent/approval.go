@@ -67,12 +67,33 @@ func (h *ApprovalHook) GetManager() *approval.Manager {
 }
 
 // BeforeTool handles approval for tool execution.
+// Intercepts high-risk tools: execute_command, write_file, file_edit, execute_code
 func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookRequest) (*hooks.ToolCallHookRequest, hooks.HookDecision, error) {
-	if call.ToolName != "execute_command" {
+	var command string
+	var toolDesc string
+
+	switch call.ToolName {
+	case "execute_command":
+		command, _ = call.ToolArgs["command"].(string)
+		toolDesc = "shell command"
+	case "write_file":
+		path, _ := call.ToolArgs["path"].(string)
+		content, _ := call.ToolArgs["content"].(string)
+		command = fmt.Sprintf("write_file %s (%d bytes)", path, len(content))
+		toolDesc = "file write"
+	case "file_edit":
+		path, _ := call.ToolArgs["path"].(string)
+		command = fmt.Sprintf("file_edit %s", path)
+		toolDesc = "file edit"
+	case "execute_code":
+		lang, _ := call.ToolArgs["language"].(string)
+		code, _ := call.ToolArgs["code"].(string)
+		command = fmt.Sprintf("execute_code %s (%d bytes)", lang, len(code))
+		toolDesc = "code execution"
+	default:
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
 
-	command, _ := call.ToolArgs["command"].(string)
 	if command == "" {
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
@@ -85,6 +106,7 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		SessionID:  sessionID,
 		WorkingDir: workingDir,
 	}
+	_ = toolDesc // used for future logging extensions
 
 	// Check session-level skip list first.
 	if h.isSessionSkipped(sessionID, command) {

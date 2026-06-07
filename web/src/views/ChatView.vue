@@ -70,7 +70,25 @@
           <template v-if="msg.role === 'user'">
             <div class="avatar user-avatar">👤</div>
             <div class="message-body">
-              <div class="message-bubble user-bubble" v-html="renderMarkdown(msg.content)"></div>
+              <div class="message-bubble user-bubble">
+                <!-- File attachments in message -->
+                <div v-if="msg.files?.length" class="message-files">
+                  <n-space>
+                    <div
+                      v-for="(file, idx) in msg.files"
+                      :key="idx"
+                      class="message-file-item"
+                      @click="goToFilesPage"
+                      title="点击查看文件管理"
+                    >
+                      <n-icon size="20"><DocumentOutline /></n-icon>
+                      <span class="message-file-name">{{ file.name }}</span>
+                    </div>
+                  </n-space>
+                </div>
+                <div v-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
+                <div v-else-if="!msg.files?.length" class="empty-content">[文件]</div>
+              </div>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </template>
@@ -131,21 +149,85 @@
         </n-text>
       </div>
 
+      <!-- File preview before sending -->
+      <div v-if="selectedFiles.length" class="preview-bar">
+        <n-space>
+          <div v-for="(file, idx) in selectedFiles" :key="'file-'+idx" class="preview-item file-preview">
+            <n-icon size="24"><DocumentOutline /></n-icon>
+            <span class="file-name">{{ file.name }}</span>
+            <n-tag v-if="file.size" size="tiny" type="info">{{ (file.size / 1024).toFixed(1) }} KB</n-tag>
+            <n-button class="preview-remove" size="tiny" circle type="error" @click="removeFile(idx)">×</n-button>
+          </div>
+        </n-space>
+      </div>
+
+      <!-- ChatGPT-style input box -->
       <div class="input-area">
-        <n-input
-          v-model:value="inputValue"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 6 }"
-          :placeholder="t('chat.placeholder')"
-          @keydown.enter.exact.prevent="send"
-          @keydown.enter.shift.prevent="() => {}"
-        />
-        <n-button v-if="!chatStore.streaming" type="primary" @click="send" :disabled="!inputValue.trim()" style="align-self: flex-end;">
-          {{ t('chat.send') }}
-        </n-button>
-        <n-button v-else type="warning" @click="stopGeneration" style="align-self: flex-end;">
-          ⏹ {{ t('chat.stop') }}
-        </n-button>
+        <div class="chat-input-box">
+          <!-- Text input -->
+          <n-input
+            v-model:value="inputValue"
+            type="textarea"
+            :autosize="{ minRows: 1, maxRows: 8 }"
+            :placeholder="t('chat.placeholder')"
+            class="chat-textarea"
+            @keydown.enter.exact.prevent="send"
+            @keydown.enter.shift.prevent="() => {}"
+          />
+          <!-- Toolbar inside input box -->
+          <div class="input-toolbar">
+            <div class="toolbar-left">
+              <!-- Model selector -->
+              <n-select
+                v-model:value="currentModelId"
+                :options="modelOptions"
+                size="tiny"
+                class="toolbar-model-select"
+                :placeholder="t('chat.selectModel')"
+                @update:value="handleModelChange"
+              />
+              <!-- File upload -->
+              <n-upload
+                :show-file-list="false"
+                :multiple="true"
+                @before-upload="handleFileSelect"
+              >
+                <n-button size="tiny" quaternary class="toolbar-btn" title="上传文件">
+                  <template #icon>
+                    <n-icon><AttachOutline /></n-icon>
+                  </template>
+                </n-button>
+              </n-upload>
+            </div>
+            <div class="toolbar-right">
+              <n-button
+                v-if="!chatStore.streaming"
+                type="primary"
+                size="small"
+                circle
+                @click="send"
+                :disabled="!inputValue.trim() && !selectedFiles.length"
+                class="send-circle-btn"
+              >
+                <template #icon>
+                  <n-icon><SendOutline /></n-icon>
+                </template>
+              </n-button>
+              <n-button
+                v-else
+                type="warning"
+                size="small"
+                circle
+                @click="stopGeneration"
+                class="send-circle-btn"
+              >
+                <template #icon>
+                  <n-icon><StopCircleOutline /></n-icon>
+                </template>
+              </n-button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -156,16 +238,36 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
-import 'highlight.js/styles/github.css'
+import 'highlight.js/styles/github-dark.css'
 import { useChatStore } from '@/stores/chat'
+import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import CurrentGoal from '@/components/CurrentGoal.vue'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline } from '@vicons/ionicons5'
+import type { UploadFileInfo } from 'naive-ui'
+import * as sessionsApi from '@/api/sessions'
+import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
+const modelsStore = useModelsStore()
+const router = useRouter()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
+
+// Model selector
+const currentModelId = ref('')
+const modelOptions = computed(() => {
+  return modelsStore.models.map(m => ({
+    label: `${m.provider} / ${m.name}`,
+    value: m.id,
+  }))
+})
+
+// File upload
+const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
+const uploadingFiles = ref<Set<string>>(new Set())
 
 // Custom code renderer for highlight.js
 const codeRenderer = (code: string, lang?: string): string => {
@@ -230,16 +332,65 @@ function formatTime(timestamp: string): string {
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// File handling - upload to server
+async function handleFileSelect({ file }: { file: UploadFileInfo }) {
+  const nativeFile = file.file
+  if (!nativeFile) return false
+
+  const fileKey = nativeFile.name + '-' + nativeFile.size
+  if (uploadingFiles.value.has(fileKey)) return false
+  uploadingFiles.value.add(fileKey)
+
+  try {
+    const uploaded = await sessionsApi.uploadFile(nativeFile)
+    selectedFiles.value.push(uploaded)
+  } catch (e) {
+    console.error('Upload failed:', e)
+    alert('文件上传失败: ' + (e as Error).message)
+  } finally {
+    uploadingFiles.value.delete(fileKey)
+  }
+  return false // Prevent default upload
+}
+
+function removeFile(index: number) {
+  selectedFiles.value.splice(index, 1)
+}
+
+function goToFilesPage() {
+  router.push('/files')
+}
+
 async function send() {
   const content = inputValue.value.trim()
-  if (!content || chatStore.streaming) return
+  if ((!content && !selectedFiles.value.length) || chatStore.streaming) return
+
+  // Build content with file URL references for AI processing
+  let finalContent = content
+  const files = [...selectedFiles.value]
+
+  // Append file URL references to message for AI
+  // Note: file.url already contains token from uploadFile()
+  for (const file of files) {
+    if (finalContent) finalContent += '\n\n'
+    finalContent += `[附件: ${file.name}](${file.url})`
+  }
 
   inputValue.value = ''
-  await chatStore.sendMessage(content)
+  selectedFiles.value = []
+  await chatStore.sendMessage(finalContent, undefined, files)
 }
 
 function stopGeneration() {
   chatStore.stopGeneration()
+}
+
+async function handleModelChange(modelId: string) {
+  try {
+    await modelsStore.setModel(modelId)
+  } catch (e) {
+    console.error('Failed to switch model:', e)
+  }
 }
 
 async function createSession() {
@@ -262,12 +413,30 @@ function scrollToBottom() {
   })
 }
 
+// Throttled scroll to bottom - only scroll on message count changes, not on every stream content update
+let scrollTimer: ReturnType<typeof setTimeout> | null = null
+function throttledScrollToBottom() {
+  if (scrollTimer) return
+  scrollTimer = setTimeout(() => {
+    scrollToBottom()
+    scrollTimer = null
+  }, 150)
+}
+
 watch(() => chatStore.messages.length, scrollToBottom)
-watch(() => chatStore.streamContent, scrollToBottom)
 watch(() => chatStore.toolCalls.length, scrollToBottom)
+// Do NOT watch streamContent - the throttled buffer flush in chatStore handles updates
 
 onMounted(async () => {
   await chatStore.loadSessions()
+  await modelsStore.loadModels()
+  await modelsStore.loadCurrentModel()
+  // Set default model value
+  if (modelsStore.currentModel) {
+    currentModelId.value = modelsStore.currentModel.id
+  } else if (modelsStore.models.length > 0) {
+    currentModelId.value = modelsStore.models[0].id
+  }
 })
 </script>
 
@@ -452,6 +621,30 @@ onMounted(async () => {
   white-space: pre-wrap;
 }
 
+/* ========== Message Images ========== */
+.message-images {
+  margin-bottom: 8px;
+}
+
+/* ========== Image Preview Bar ========== */
+.image-preview-bar {
+  padding: 8px 24px;
+  border-top: 1px solid #e0e0e0;
+  background: #fafafa;
+}
+
+.preview-item {
+  position: relative;
+  display: inline-block;
+}
+
+.preview-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  opacity: 0.8;
+}
+
 /* ========== Message Time ========== */
 .message-time {
   font-size: 11px;
@@ -525,11 +718,13 @@ onMounted(async () => {
   font-weight: 600;
 }
 .message-bubble :deep(a) {
-  color: #18a058;
-  text-decoration: none;
+  color: #e0f7e0;
+  text-decoration: underline;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }
 .message-bubble :deep(a:hover) {
-  text-decoration: underline;
+  color: #ffffff;
 }
 
 /* ========== Code Block ========== */
@@ -576,17 +771,112 @@ onMounted(async () => {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* ========== Input Area ========== */
-.input-area {
-  display: flex;
-  gap: 12px;
-  padding: 16px 24px;
-  border-top: 1px solid #e0e0e0;
+/* ========== Preview Bar ========== */
+.preview-bar {
+  padding: 8px 24px 0;
   background: #fff;
 }
 
-.input-area .n-input {
-  flex: 1;
+.preview-item {
+  position: relative;
+  display: inline-block;
+}
+
+.preview-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.file-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.file-name {
+  font-size: 12px;
+  color: #333;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ========== ChatGPT-style Input Box ========== */
+.input-area {
+  padding: 12px 24px 16px;
+  background: #fff;
+  border-top: 1px solid #e0e0e0;
+}
+
+.chat-input-box {
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.chat-input-box:focus-within {
+  border-color: #18a058;
+  box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.15);
+}
+
+.chat-textarea {
+  --n-border: none !important;
+  --n-border-hover: none !important;
+  --n-border-focus: none !important;
+  --n-box-shadow-focus: none !important;
+  --n-padding-left: 0 !important;
+  --n-padding-right: 0 !important;
+  background: transparent !important;
+}
+
+.chat-textarea :deep(.n-input__textarea-el) {
+  resize: none;
+}
+
+.input-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-model-select {
+  width: 220px;
+}
+
+.toolbar-btn {
+  padding: 4px 8px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+}
+
+.send-circle-btn {
+  width: 32px;
+  height: 32px;
 }
 
 /* ========== Dark Mode ========== */
@@ -630,8 +920,35 @@ onMounted(async () => {
   }
 
   .input-area {
-    background: #fff;
+    background: #1a1a1a;
     border-top-color: #333;
+  }
+
+  .chat-input-box {
+    background: #2a2a2a;
+    border-color: #444;
+  }
+
+  .chat-input-box:focus-within {
+    border-color: #18a058;
+    box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.2);
+  }
+
+  .input-toolbar {
+    border-top-color: #3a3a3a;
+  }
+
+  .file-preview {
+    background: #333;
+    border-color: #444;
+  }
+
+  .file-name {
+    color: #ddd;
+  }
+
+  .preview-bar {
+    background: #1a1a1a;
   }
 
   .message-bubble :deep(th) {
@@ -646,5 +963,33 @@ onMounted(async () => {
     border-left-color: #444;
     color: #999;
   }
+}
+
+/* ========== Message File Attachments ========== */
+.message-files {
+  margin-bottom: 8px;
+}
+.message-file-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  font-size: 13px;
+  color: #fff;
+}
+.message-file-item:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.message-file-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

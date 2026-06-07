@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -19,7 +21,7 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 
 		// Handle content based on type
 		if len(msg.ContentParts) > 0 {
-			// Multi-modal content (text + images)
+			// Multi-modal content (text + images + files)
 			parts := make([]map[string]interface{}, 0, len(msg.ContentParts))
 			for _, part := range msg.ContentParts {
 				if part.Type == "text" {
@@ -34,6 +36,52 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 							"url": part.ImageURL.URL,
 						},
 					})
+				} else if part.Type == "file" && part.File != nil {
+					// Convert file to text content or image based on mime type
+					if part.File.Contents != "" {
+						if strings.HasPrefix(part.File.Contents, "data:image/") {
+							// Image file -> convert to image_url
+							parts = append(parts, map[string]interface{}{
+								"type": "image_url",
+								"image_url": map[string]interface{}{
+									"url": part.File.Contents,
+								},
+							})
+						} else if strings.HasPrefix(part.File.Contents, "data:text") || strings.HasPrefix(part.File.Contents, "data:application") {
+							// Text/binary file -> decode base64 and send as text
+							// Format: data:<mime>;base64,<content>
+							dataParts := strings.SplitN(part.File.Contents, ",", 2)
+							var fileContent string
+							if len(dataParts) == 2 {
+								decoded, err := base64.StdEncoding.DecodeString(dataParts[1])
+								if err == nil {
+									fileContent = string(decoded)
+									// Truncate if too large
+									if len(fileContent) > 30000 {
+										fileContent = fileContent[:30000] + "\n... [file truncated]"
+									}
+								} else {
+									fileContent = part.File.Contents
+								}
+							} else {
+								fileContent = part.File.Contents
+							}
+							parts = append(parts, map[string]interface{}{
+								"type": "text",
+								"text": fmt.Sprintf("[File: %s]\n%s", part.File.Name, fileContent),
+							})
+						} else {
+							parts = append(parts, map[string]interface{}{
+								"type": "text",
+								"text": fmt.Sprintf("[File: %s]\n%s", part.File.Name, part.File.Contents),
+							})
+						}
+					} else if part.File.URL != "" {
+						parts = append(parts, map[string]interface{}{
+							"type": "text",
+							"text": fmt.Sprintf("[File: %s](%s)", part.File.Name, part.File.URL),
+						})
+					}
 				}
 			}
 			openAIMsg["content"] = parts

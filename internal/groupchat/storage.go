@@ -160,7 +160,7 @@ func (s *Storage) DeleteRoom(roomID string) error {
 // GetAgents 获取房间代理
 func (s *Storage) GetAgents(roomID string) ([]RoomAgent, error) {
 	rows, err := s.db.Query(`
-		SELECT id, roomId, agentId, profile, name, description, invited, sessionId, createdAt
+		SELECT id, roomId, agentId, profile, name, description, systemPrompt, temperature, tools, invited, sessionId, createdAt
 		FROM gc_room_agents WHERE roomId = ?`, roomID)
 	if err != nil {
 		return nil, err
@@ -172,7 +172,8 @@ func (s *Storage) GetAgents(roomID string) ([]RoomAgent, error) {
 		var agent RoomAgent
 		var sessionID sql.NullString
 		if err := rows.Scan(&agent.ID, &agent.RoomID, &agent.AgentID, &agent.Profile, &agent.Name,
-			&agent.Description, &agent.Invited, &sessionID, &agent.CreatedAt); err != nil {
+			&agent.Description, &agent.SystemPrompt, &agent.Temperature, &agent.Tools,
+			&agent.Invited, &sessionID, &agent.CreatedAt); err != nil {
 			return nil, err
 		}
 		if sessionID.Valid {
@@ -186,13 +187,14 @@ func (s *Storage) GetAgents(roomID string) ([]RoomAgent, error) {
 // GetAgent 获取代理
 func (s *Storage) GetAgent(agentID string) (*RoomAgent, error) {
 	row := s.db.QueryRow(`
-		SELECT id, roomId, agentId, profile, name, description, invited, sessionId, createdAt
+		SELECT id, roomId, agentId, profile, name, description, systemPrompt, temperature, tools, invited, sessionId, createdAt
 		FROM gc_room_agents WHERE id = ?`, agentID)
 
 	var agent RoomAgent
 	var sessionID sql.NullString
 	err := row.Scan(&agent.ID, &agent.RoomID, &agent.AgentID, &agent.Profile, &agent.Name,
-		&agent.Description, &agent.Invited, &sessionID, &agent.CreatedAt)
+		&agent.Description, &agent.SystemPrompt, &agent.Temperature, &agent.Tools,
+		&agent.Invited, &sessionID, &agent.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -208,9 +210,10 @@ func (s *Storage) GetAgent(agentID string) (*RoomAgent, error) {
 // CreateAgent 创建代理
 func (s *Storage) CreateAgent(agent *RoomAgent) error {
 	_, err := s.db.Exec(`
-		INSERT INTO gc_room_agents (id, roomId, agentId, profile, name, description, invited, sessionId, createdAt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO gc_room_agents (id, roomId, agentId, profile, name, description, systemPrompt, temperature, tools, invited, sessionId, createdAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		agent.ID, agent.RoomID, agent.AgentID, agent.Profile, agent.Name, agent.Description,
+		agent.SystemPrompt, agent.Temperature, agent.Tools,
 		agent.Invited, agent.SessionID, agent.CreatedAt)
 	return err
 }
@@ -218,8 +221,8 @@ func (s *Storage) CreateAgent(agent *RoomAgent) error {
 // UpdateAgent 更新代理
 func (s *Storage) UpdateAgent(agent *RoomAgent) error {
 	_, err := s.db.Exec(`
-		UPDATE gc_room_agents SET profile = ?, name = ?, description = ?, sessionId = ? WHERE id = ?`,
-		agent.Profile, agent.Name, agent.Description, agent.SessionID, agent.ID)
+		UPDATE gc_room_agents SET profile = ?, name = ?, description = ?, systemPrompt = ?, temperature = ?, tools = ?, sessionId = ? WHERE id = ?`,
+		agent.Profile, agent.Name, agent.Description, agent.SystemPrompt, agent.Temperature, agent.Tools, agent.SessionID, agent.ID)
 	return err
 }
 
@@ -270,8 +273,8 @@ func (s *Storage) UpdateMember(member *Member) error {
 }
 
 // RemoveMember 移除成员
-func (s *Storage) RemoveMember(roomID, userID string) error {
-	_, err := s.db.Exec("DELETE FROM gc_room_members WHERE roomId = ? AND userId = ?", roomID, userID)
+func (s *Storage) RemoveMember(roomID, memberID string) error {
+	_, err := s.db.Exec("DELETE FROM gc_room_members WHERE roomId = ? AND id = ?", roomID, memberID)
 	return err
 }
 

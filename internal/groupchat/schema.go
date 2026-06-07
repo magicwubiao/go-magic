@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS gc_room_agents (
     profile TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    systemPrompt TEXT NOT NULL DEFAULT '',
+    temperature REAL NOT NULL DEFAULT 0.7,
+    tools TEXT NOT NULL DEFAULT '',
     invited INTEGER DEFAULT 0,
     sessionId TEXT,
     createdAt INTEGER NOT NULL,
@@ -90,5 +93,19 @@ CREATE INDEX IF NOT EXISTS idx_gc_session_profiles_profile ON gc_session_profile
 // InitSchema 初始化数据库表
 func InitSchema(db *sql.DB) error {
 	_, err := db.Exec(SchemaSQL)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: add new columns to gc_room_agents if they don't exist
+	migrations := []string{
+		"ALTER TABLE gc_room_agents ADD COLUMN systemPrompt TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE gc_room_agents ADD COLUMN temperature REAL NOT NULL DEFAULT 0.7",
+		"ALTER TABLE gc_room_agents ADD COLUMN tools TEXT NOT NULL DEFAULT ''",
+	}
+	for _, m := range migrations {
+		db.Exec(m) // ignore errors (column may already exist)
+	}
+
+	return nil
 }

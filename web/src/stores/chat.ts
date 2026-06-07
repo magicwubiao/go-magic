@@ -29,6 +29,11 @@ export const useChatStore = defineStore('chat', () => {
   let currentEventSource: EventSource | null = null
   let toolCallIdCounter = 0
 
+  // Throttling for stream content updates
+  let streamBuffer = ''
+  let streamFlushTimer: ReturnType<typeof setTimeout> | null = null
+  const STREAM_FLUSH_INTERVAL = 80 // ms
+
   const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value)
   )
@@ -94,7 +99,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string): Promise<void> {
+  function flushStreamBuffer(): void {
+    if (streamBuffer) {
+      streamContent.value += streamBuffer
+      streamBuffer = ''
+    }
+    streamFlushTimer = null
+  }
+
+  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
       if (!session) return
@@ -109,11 +122,18 @@ export const useChatStore = defineStore('chat', () => {
       content,
       timestamp: new Date().toISOString(),
       session_id: sessionId,
+      images,
+      files,
     })
 
     // Start streaming
     streaming.value = true
     streamContent.value = ''
+    streamBuffer = ''
+    if (streamFlushTimer) {
+      clearTimeout(streamFlushTimer)
+      streamFlushTimer = null
+    }
     toolCalls.value = []
     error.value = null
 
@@ -121,7 +141,7 @@ export const useChatStore = defineStore('chat', () => {
     closeEventSource()
 
     try {
-      currentEventSource = sessionsApi.streamChat(sessionId, content)
+      currentEventSource = sessionsApi.streamChat(sessionId, content, images, files)
 
       currentEventSource.onmessage = (event) => {
         try {
@@ -129,6 +149,11 @@ export const useChatStore = defineStore('chat', () => {
 
           // Handle structured tool events
           if (data.type === 'tool_start') {
+            // Flush any pending stream content before tool event
+            if (streamFlushTimer) {
+              clearTimeout(streamFlushTimer)
+              flushStreamBuffer()
+            }
             const id = `tc_${++toolCallIdCounter}`
             toolCalls.value.push({
               id,
@@ -140,7 +165,6 @@ export const useChatStore = defineStore('chat', () => {
           }
 
           if (data.type === 'tool_result') {
-            // Find the matching running tool call and update it
             const tc = toolCalls.value.find(t => t.name === data.name && t.status === 'running')
             if (tc) {
               tc.success = data.success
@@ -148,7 +172,6 @@ export const useChatStore = defineStore('chat', () => {
               tc.content = data.content
               tc.status = data.success ? 'completed' : 'error'
             } else {
-              // No matching running tool, add as completed
               toolCalls.value.push({
                 id: `tc_${++toolCallIdCounter}`,
                 name: data.name,
@@ -162,11 +185,19 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
-          // Handle normal delta
+          // Handle normal delta with throttling
           if (data.delta) {
-            streamContent.value += data.delta
+            streamBuffer += data.delta
+            if (!streamFlushTimer) {
+              streamFlushTimer = setTimeout(flushStreamBuffer, STREAM_FLUSH_INTERVAL)
+            }
           }
           if (data.done) {
+            // Flush remaining buffer
+            if (streamFlushTimer) {
+              clearTimeout(streamFlushTimer)
+            }
+            flushStreamBuffer()
             closeEventSource()
             streaming.value = false
             messages.value.push({
@@ -184,6 +215,10 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       currentEventSource.onerror = () => {
+        if (streamFlushTimer) {
+          clearTimeout(streamFlushTimer)
+          flushStreamBuffer()
+        }
         closeEventSource()
         streaming.value = false
         error.value = { message: 'Connection lost' }
@@ -196,6 +231,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function stopGeneration(): void {
+    if (streamFlushTimer) {
+      clearTimeout(streamFlushTimer)
+      flushStreamBuffer()
+    }
     closeEventSource()
     streaming.value = false
     // Mark any running tool calls as error
@@ -218,6 +257,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function cleanup(): void {
+    if (streamFlushTimer) {
+      clearTimeout(streamFlushTimer)
+    }
     closeEventSource()
   }
 
