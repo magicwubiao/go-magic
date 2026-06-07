@@ -26,6 +26,8 @@ const emojiMap: Record<string, string> = {
   image_edit: '🖼️', tts: '🔊', asr: '🎤', send_message: '💬',
   todo: '✅', gitignore: '📋', batch_file_ops: '📦',
   project_analyze: '📊', diff_patch: '🔀', ha: '🏠',
+  kanban_show: '📋', kanban_complete: '✅', kanban_block: '🚫',
+  kanban_heartbeat: '💓', kanban_comment: '💬', kanban_create: '➕', kanban_link: '🔗',
 }
 
 const emoji = computed(() => emojiMap[props.toolCall.name] || '🔧')

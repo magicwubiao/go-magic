@@ -93,7 +93,10 @@ func (t *TodoTool) Name() string {
 
 // Description returns the tool description
 func (t *TodoTool) Description() string {
-	return "Manage todo items. Use this to create, list, update, or delete todo items. Supports priorities and status tracking."
+	return "Task planning and tracking tool. Use this to break down complex tasks into manageable steps. " +
+		"WHEN TO USE: When the user asks for something requiring 3+ steps; Before starting a multi-step workflow (coding, research, analysis); To track progress on long-running tasks. " +
+		"HOW TO USE: 1) First call action=create to add each step, 2) Call action=list to show progress, 3) Call action=complete when done, 4) Call action=update if plans change. " +
+		"EXAMPLE: User says 'Build a login page' -> Create todos for: Design form, Add validation, Connect API, Test -> Complete each as you finish."
 }
 
 // Parameters returns the tool parameters schema

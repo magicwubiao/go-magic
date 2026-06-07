@@ -453,7 +453,12 @@ RULES:
 - Create/write files → Call write_file
 - Web search → Call web_search
 - Execute command/code → Call execute_command
-- Do not call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- For complex multi-step tasks (3+ steps), ALWAYS use todo tool first:
+  1. Create a todo for each step with action="create"
+  2. List todos to show the plan with action="list"
+  3. Complete each todo as you finish with action="complete"
+  4. If user adds new requirements, create additional todos
+- Do not call time, system, math, memory_recall, session_search unless explicitly requested
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
 

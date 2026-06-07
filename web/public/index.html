@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Agent - 高性能 AI Agent 框架</title>
+    <style>
+        /* ===== Reset & Base ===== */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        a { color: #6c5ce7; text-decoration: none; transition: color 0.3s; }
+        a:hover { color: #a29bfe; }
+        img { max-width: 100%; }
+        section { padding: 80px 24px; max-width: 1100px; margin: 0 auto; }
+
+        /* ===== Animated Background ===== */
+        .bg-grid {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(108, 92, 231, 0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(108, 92, 231, 0.06) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none; z-index: 0;
+        }
+        .bg-glow {
+            position: fixed; top: -30%; left: -10%; width: 60%; height: 80%;
+            background: radial-gradient(circle, rgba(108,92,231,0.12) 0%, transparent 70%);
+            pointer-events: none; z-index: 0;
+            animation: glowFloat 10s ease-in-out infinite alternate;
+        }
+        @keyframes glowFloat {
+            0% { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(10%, 5%) scale(1.1); }
+        }
+
+        /* ===== Navbar ===== */
+        nav {
+            position: fixed; top: 0; width: 100%; z-index: 100;
+            padding: 16px 32px;
+            display: flex; justify-content: space-between; align-items: center;
+            background: rgba(10, 10, 15, 0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(108, 92, 231, 0.15);
+        }
+        nav .logo {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 1.3rem; font-weight: 700; color: #fff;
+        }
+        nav .logo span { background: linear-gradient(135deg, #6c5ce7, #a29bfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        nav .logo small { font-size: 0.7rem; font-weight: 400; color: #888; -webkit-text-fill-color: #888; }
+        nav .links { display: flex; gap: 24px; align-items: center; }
+        nav .links a { color: #aaa; font-size: 0.9rem; transition: color 0.3s; }
+        nav .links a:hover { color: #fff; }
+        .btn-nav { 
+            padding: 8px 20px; border-radius: 8px;
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            color: #fff !important; font-weight: 600; font-size: 0.85rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn-nav:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(108,92,231,0.4); }
+
+        /* ===== Hero ===== */
+        .hero {
+            min-height: 100vh; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; text-align: center;
+            padding: 120px 24px 80px; position: relative; z-index: 1;
+        }
+        .hero-badge {
+            display: inline-block; padding: 6px 18px; border-radius: 100px;
+            background: rgba(108,92,231,0.15); border: 1px solid rgba(108,92,231,0.25);
+            color: #a29bfe; font-size: 0.8rem; font-weight: 500;
+            margin-bottom: 24px; letter-spacing: 0.5px;
+        }
+        .hero h1 {
+            font-size: 3.5rem; font-weight: 800; letter-spacing: -1px;
+            background: linear-gradient(135deg, #fff 30%, #6c5ce7 70%, #a29bfe);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            margin-bottom: 20px; line-height: 1.15;
+        }
+        .hero p {
+            font-size: 1.2rem; color: #999; max-width: 640px;
+            margin-bottom: 40px;
+        }
+        .hero-buttons { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+        .btn-primary, .btn-secondary {
+            padding: 14px 36px; border-radius: 12px; font-size: 1rem;
+            font-weight: 600; transition: all 0.3s; cursor: pointer;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            color: #fff; border: none;
+            box-shadow: 0 4px 20px rgba(108,92,231,0.35);
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(108,92,231,0.5); }
+        .btn-secondary {
+            background: transparent; color: #ccc;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .btn-secondary:hover { border-color: #6c5ce7; color: #fff; transform: translateY(-2px); }
+
+        .hero-stats {
+            display: flex; gap: 48px; margin-top: 60px;
+            flex-wrap: wrap; justify-content: center;
+        }
+        .hero-stats .stat { text-align: center; }
+        .hero-stats .stat .num {
+            font-size: 2rem; font-weight: 700;
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .hero-stats .stat .label { font-size: 0.85rem; color: #666; margin-top: 4px; }
+
+        /* ===== Section Headers ===== */
+        .section-header {
+            text-align: center; margin-bottom: 56px;
+        }
+        .section-header h2 {
+            font-size: 2.2rem; font-weight: 700; color: #fff;
+            margin-bottom: 12px;
+        }
+        .section-header h2 span { color: #6c5ce7; }
+        .section-header p { color: #888; font-size: 1rem; max-width: 500px; margin: 0 auto; }
+
+        /* ===== Features ===== */
+        .features-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .feature-card {
+            padding: 28px; border-radius: 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            transition: all 0.4s; position: relative; overflow: hidden;
+        }
+        .feature-card::before {
+            content: ''; position: absolute; top: 0; left: 0;
+            width: 100%; height: 3px;
+            background: linear-gradient(90deg, transparent, #6c5ce7, transparent);
+            opacity: 0; transition: opacity 0.4s;
+        }
+        .feature-card:hover { transform: translateY(-4px); border-color: rgba(108,92,231,0.3); }
+        .feature-card:hover::before { opacity: 1; }
+        .feature-card .icon { font-size: 2rem; margin-bottom: 14px; }
+        .feature-card h3 { font-size: 1.1rem; color: #fff; margin-bottom: 8px; }
+        .feature-card p { font-size: 0.9rem; color: #888; }
+        .feature-card .tag {
+            display: inline-block; margin-top: 12px; padding: 3px 10px;
+            border-radius: 6px; background: rgba(108,92,231,0.12);
+            color: #a29bfe; font-size: 0.75rem; font-weight: 500;
+        }
+
+        /* ===== Tools ===== */
+        .tools-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .tool-group {
+            padding: 24px; border-radius: 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .tool-group h4 { color: #6c5ce7; font-size: 0.95rem; margin-bottom: 12px; }
+        .tool-group .tools { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tool-group .tools span {
+            padding: 4px 12px; border-radius: 6px;
+            background: rgba(255,255,255,0.05); font-size: 0.8rem;
+            color: #bbb; font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        /* ===== Providers ===== */
+        .providers-list {
+            display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+            margin-top: 32px;
+        }
+        .providers-list .provider {
+            padding: 10px 20px; border-radius: 10px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            font-size: 0.85rem; color: #bbb; transition: all 0.3s;
+        }
+        .providers-list .provider:hover {
+            border-color: rgba(108,92,231,0.3); color: #fff;
+            background: rgba(108,92,231,0.08);
+        }
+
+        /* ===== Commands ===== */
+        .cmd-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+        }
+        .cmd-item {
+            padding: 10px 16px; border-radius: 8px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.05);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .cmd-item code {
+            color: #a29bfe; font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.8rem;
+        }
+        .cmd-item .desc { color: #888; font-size: 0.8rem; }
+
+        /* ===== Code Block ===== */
+        .code-block {
+            background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px; padding: 20px 24px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.82rem; line-height: 1.7; color: #ccc;
+            overflow-x: auto; margin: 16px 0;
+        }
+        .code-block .comment { color: #6a6a7a; }
+        .code-block .keyword { color: #a29bfe; }
+        .code-block .string { color: #9bcb7b; }
+        .code-block .func { color: #7dc4e4; }
+
+        /* ===== Quick Start ===== */
+        .quick-steps {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .step-card {
+            padding: 28px; border-radius: 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            position: relative;
+        }
+        .step-card .step-num {
+            position: absolute; top: 16px; right: 20px;
+            font-size: 2.5rem; font-weight: 800;
+            color: rgba(108,92,231,0.15);
+        }
+        .step-card h3 { color: #fff; font-size: 1rem; margin-bottom: 8px; }
+        .step-card p { color: #888; font-size: 0.88rem; margin-bottom: 12px; }
+
+        /* ===== Footer ===== */
+        footer {
+            text-align: center; padding: 48px 24px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            color: #555; font-size: 0.85rem;
+        }
+        footer a { color: #777; }
+        footer .social-links { display: flex; gap: 16px; justify-content: center; margin-bottom: 16px; }
+        footer .social-links a { font-size: 0.9rem; }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            nav .links a:not(.btn-nav) { display: none; }
+            .hero h1 { font-size: 2.2rem; }
+            .hero p { font-size: 1rem; }
+            .hero-stats { gap: 24px; }
+            .hero-stats .stat .num { font-size: 1.6rem; }
+            section { padding: 60px 16px; }
+            .section-header h2 { font-size: 1.8rem; }
+            .features-grid, .tools-grid, .quick-steps { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 480px) {
+            nav .logo small { display: none; }
+            .hero h1 { font-size: 1.8rem; }
+            .btn-primary, .btn-secondary { padding: 12px 24px; font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+
+<!-- ===== Navbar ===== -->
+<nav>
+    <div class="logo">
+        <span>✦ Magic Agent</span>
+        <small>v0.3.1</small>
+    </div>
+    <div class="links">
+        <a href="#features">特性</a>
+        <a href="#providers">提供商</a>
+        <a href="#tools">工具</a>
+        <a href="#quickstart">快速开始</a>
+        <a href="https://github.com/magicwubiao/go-magic" target="_blank" class="btn-nav">GitHub</a>
+    </div>
+</nav>
+
+<!-- ===== Hero ===== -->
+<section class="hero">
+    <div class="hero-badge">🚀 高性能 · 超轻量 · 全功能</div>
+    <h1>Magic Agent<br/>AI Agent 框架</h1>
+    <p>
+        用 Go 语言编写的全功能 AI Agent 框架，支持 20+ AI 提供商、Web Dashboard、TUI 界面、
+        丰富的工具系统和多平台消息网关。
+    </p>
+    <div class="hero-buttons">
+        <a href="#quickstart" class="btn-primary">快速开始</a>
+        <a href="https://github.com/magicwubiao/go-magic" target="_blank" class="btn-secondary">GitHub →</a>
+    </div>
+    <div class="hero-stats">
+        <div class="stat">
+            <div class="num">20+</div>
+            <div class="label">AI 提供商</div>
+        </div>
+        <div class="stat">
+            <div class="num">15+</div>
+            <div class="label">内置工具</div>
+        </div>
+        <div class="stat">
+            <div class="num">11+</div>
+            <div class="label">消息平台</div>
+        </div>
+        <div class="stat">
+            <div class="num">Go</div>
+            <div class="label">语言核心</div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Features ===== -->
+<section id="features">
+    <div class="section-header">
+        <h2>核心 <span>特性</span></h2>
+        <p>一站式 AI Agent 解决方案，从 CLI 到 Web 到消息平台全覆盖</p>
+    </div>
+    <div class="features-grid">
+        <div class="feature-card">
+            <div class="icon">🤖</div>
+            <h3>多 Provider 支持</h3>
+            <p>DeepSeek、OpenAI、Anthropic、Gemini、Ollama 等 20+ 主流 AI 提供商一键切换。</p>
+            <span class="tag">20+ 提供商</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🖥️</div>
+            <h3>TUI 界面</h3>
+            <p>基于 BubbleTea，支持多行输入、Markdown 渲染、流式输出、斜杠命令。</p>
+            <span class="tag">终端原生</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🌐</div>
+            <h3>Web Dashboard</h3>
+            <p>React + TypeScript 构建的 Web 管理界面，实时聊天、会话管理、配置管理。</p>
+            <span class="tag">单文件部署</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">⚡</div>
+            <h3>Coding 模式</h3>
+            <p>专为编程任务优化，放宽权限、更长超时、支持 Python/Node.js 代码执行。</p>
+            <span class="tag">开发利器</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🧰</div>
+            <h3>丰富工具系统</h3>
+            <p>15+ 内置工具：文件操作、命令执行、Web 搜索、浏览器自动化、代码执行等。</p>
+            <span class="tag">可扩展</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🧠</div>
+            <h3>技能系统</h3>
+            <p>自动创建、渐进式加载（L0/L1/L2），Skills Hub 集成，越用越聪明。</p>
+            <span class="tag">自我进化</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">📡</div>
+            <h3>消息网关</h3>
+            <p>对接 Telegram、Discord、Slack、微信、飞书、钉钉等 11+ 消息平台。</p>
+            <span class="tag">多平台</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🔗</div>
+            <h3>MCP 协议</h3>
+            <p>连接外部 MCP（Model Context Protocol）服务器，无限扩展 Agent 能力。</p>
+            <span class="tag">开放协议</span>
+        </div>
+        <div class="feature-card">
+            <div class="icon">💾</div>
+            <h3>会话管理</h3>
+            <p>SQLite 持久化存储，FTS5 全文搜索，跨会话检索历史记录。</p>
+            <span class="tag">全文搜索</span>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Providers ===== -->
+<section id="providers">
+    <div class="section-header">
+        <h2>支持的 AI <span>提供商</span></h2>
+        <p>自由切换你最爱的 AI 模型</p>
+    </div>
+    <div class="providers-list">
+        <span class="provider">DeepSeek</span>
+        <span class="provider">OpenAI</span>
+        <span class="provider">Anthropic</span>
+        <span class="provider">Gemini</span>
+        <span class="provider">Ollama</span>
+        <span class="provider">OpenRouter</span>
+        <span class="provider">Groq</span>
+        <span class="provider">Mistral</span>
+        <span class="provider">Cohere</span>
+        <span class="provider">Perplexity</span>
+        <span class="provider">Together</span>
+        <span class="provider">DashScope</span>
+        <span class="provider">Kimi</span>
+        <span class="provider">MiniMax</span>
+        <span class="provider">Zhipu</span>
+        <span class="provider">Doubao</span>
+        <span class="provider">Wenxin</span>
+        <span class="provider">Moonshot</span>
+        <span class="provider">Hunyuan</span>
+        <span class="provider">Mimo</span>
+        <span class="provider">Any OpenAI-compatible</span>
+    </div>
+</section>
+
+<!-- ===== Tools ===== -->
+<section id="tools">
+    <div class="section-header">
+        <h2>工具 <span>系统</span></h2>
+        <p>15+ 内置工具，按功能分组，轻松扩展</p>
+    </div>
+    <div class="tools-grid">
+        <div class="tool-group">
+            <h4>🌐 Web</h4>
+            <div class="tools">
+                <span>web_search</span>
+                <span>web_extract</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>📁 文件</h4>
+            <div class="tools">
+                <span>read_file</span>
+                <span>write_file</span>
+                <span>file_edit</span>
+                <span>list_files</span>
+                <span>search_in_files</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>💻 终端</h4>
+            <div class="tools">
+                <span>execute_command</span>
+                <span>terminal</span>
+                <span>process</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>🌍 浏览器</h4>
+            <div class="tools">
+                <span>browser_navigate</span>
+                <span>browser_snapshot</span>
+                <span>browser_click</span>
+                <span>browser_type</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>⚙️ 代码执行</h4>
+            <div class="tools">
+                <span>execute_code (Python)</span>
+                <span>execute_code (Node.js)</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>🧠 记忆 & 技能</h4>
+            <div class="tools">
+                <span>memory_store</span>
+                <span>memory_recall</span>
+                <span>skill_list</span>
+                <span>skill_view</span>
+                <span>skill_manage</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>🔗 MCP</h4>
+            <div class="tools">
+                <span>mcp_* (来自连接服务器)</span>
+            </div>
+        </div>
+        <div class="tool-group">
+            <h4>📱 消息网关</h4>
+            <div class="tools">
+                <span>Telegram</span>
+                <span>Discord</span>
+                <span>Slack</span>
+                <span>WhatsApp</span>
+                <span>WeChat</span>
+                <span>WeCom</span>
+                <span>DingTalk</span>
+                <span>Feishu</span>
+                <span>QQ</span>
+                <span>LINE</span>
+                <span>Matrix</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== TUI Commands ===== -->
+<section id="commands">
+    <div class="section-header">
+        <h2>TUI 斜杠 <span>命令</span></h2>
+        <p>终端中的生产力利器</p>
+    </div>
+    <div class="cmd-grid">
+        <div class="cmd-item">
+            <code>/help</code>
+            <span class="desc">显示帮助</span>
+        </div>
+        <div class="cmd-item">
+            <code>/new</code>
+            <span class="desc">新建会话</span>
+        </div>
+        <div class="cmd-item">
+            <code>/model</code>
+            <span class="desc">切换模型</span>
+        </div>
+        <div class="cmd-item">
+            <code>/mode</code>
+            <span class="desc">切换模式</span>
+        </div>
+        <div class="cmd-item">
+            <code>/tools</code>
+            <span class="desc">管理工具</span>
+        </div>
+        <div class="cmd-item">
+            <code>/skills</code>
+            <span class="desc">管理技能</span>
+        </div>
+        <div class="cmd-item">
+            <code>/sessions</code>
+            <span class="desc">浏览会话</span>
+        </div>
+        <div class="cmd-item">
+            <code>/compress</code>
+            <span class="desc">压缩上下文</span>
+        </div>
+        <div class="cmd-item">
+            <code>/export</code>
+            <span class="desc">导出对话</span>
+        </div>
+        <div class="cmd-item">
+            <code>/status</code>
+            <span class="desc">系统状态</span>
+        </div>
+        <div class="cmd-item">
+            <code>/retry</code>
+            <span class="desc">重试响应</span>
+        </div>
+        <div class="cmd-item">
+            <code>/undo</code>
+            <span class="desc">撤销操作</span>
+        </div>
+        <div class="cmd-item">
+            <code>/context</code>
+            <span class="desc">管理上下文</span>
+        </div>
+        <div class="cmd-item">
+            <code>/usage</code>
+            <span class="desc">Token 用量</span>
+        </div>
+        <div class="cmd-item">
+            <code>/insights</code>
+            <span class="desc">用量分析</span>
+        </div>
+        <div class="cmd-item">
+            <code>/stop</code>
+            <span class="desc">停止操作</span>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Quick Start ===== -->
+<section id="quickstart">
+    <div class="section-header">
+        <h2>快速 <span>开始</span></h2>
+        <p>几分钟内启动你的 AI Agent</p>
+    </div>
+    <div class="quick-steps">
+        <div class="step-card">
+            <div class="step-num">01</div>
+            <h3>📥 下载安装</h3>
+            <p>从 GitHub Releases 下载对应平台二进制，或通过 Go、Docker 安装。</p>
+            <div class="code-block">
+                <span class="comment"># 一键安装 (Linux/macOS)</span><br/>
+                curl -fsSL https://raw.githubusercontent.com/<br/>
+                &nbsp;&nbsp;magicwubiao/go-magic/main/scripts/install.sh | bash
+            </div>
+        </div>
+        <div class="step-card">
+            <div class="step-num">02</div>
+            <h3>🔧 初始化配置</h3>
+            <p>运行交互式配置向导，设置 API Key 和 AI 提供商。</p>
+            <div class="code-block">
+                <span class="keyword">magic</span> setup
+            </div>
+        </div>
+        <div class="step-card">
+            <div class="step-num">03</div>
+            <h3>💬 开始聊天</h3>
+            <p>使用 TUI 界面或 Web Dashboard 与 AI Agent 交互。</p>
+            <div class="code-block">
+                <span class="keyword">magic</span> chat&nbsp;&nbsp;&nbsp;<span class="comment"># TUI 模式</span><br/>
+                <span class="keyword">magic</span> server&nbsp;<span class="comment"># Web Dashboard</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Coding Mode Comparison ===== -->
+<section>
+    <div class="section-header">
+        <h2>Coding <span>模式</span></h2>
+        <p>Chat 模式 vs Coding 模式，按需切换</p>
+    </div>
+    <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+            <thead>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <th style="padding: 14px 20px; text-align: left; color: #888;">特性</th>
+                    <th style="padding: 14px 20px; text-align: left; color: #6c5ce7;">Chat 模式</th>
+                    <th style="padding: 14px 20px; text-align: left; color: #a29bfe;">Coding 模式</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 12px 20px; color: #bbb;">文件写入权限</td>
+                    <td style="padding: 12px 20px; color: #888;">受限</td>
+                    <td style="padding: 12px 20px; color: #ccc;">宽松</td>
+                </tr>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 12px 20px; color: #bbb;">命令超时时间</td>
+                    <td style="padding: 12px 20px; color: #888;">30s</td>
+                    <td style="padding: 12px 20px; color: #ccc;">300s</td>
+                </tr>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 12px 20px; color: #bbb;">代码执行</td>
+                    <td style="padding: 12px 20px; color: #888;">禁用</td>
+                    <td style="padding: 12px 20px; color: #ccc;">✅ Python / Node.js</td>
+                </tr>
+                <tr>
+                    <td style="padding: 12px 20px; color: #bbb;">自动审批工具</td>
+                    <td style="padding: 12px 20px; color: #888;">否</td>
+                    <td style="padding: 12px 20px; color: #ccc;">✅ 是</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <div style="text-align: center; margin-top: 24px;">
+        <span style="padding: 8px 16px; border-radius: 8px; background: rgba(108,92,231,0.1); color: #a29bfe; font-size: 0.85rem;">
+            💡 使用 <code style="color: #fff;">/mode coding</code> 或 <code style="color: #fff;">/mode chat</code> 切换
+        </span>
+    </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<footer>
+    <div class="social-links">
+        <a href="https://github.com/magicwubiao/go-magic" target="_blank">GitHub</a>
+        <a href="https://github.com/magicwubiao/go-magic/releases" target="_blank">Releases</a>
+        <a href="https://github.com/magicwubiao/go-magic/blob/main/LICENSE" target="_blank">LICENSE</a>
+    </div>
+    <p>
+        Magic Agent &mdash; MIT License &bull; Built with Go + React + ❤️
+    </p>
+</footer>
+
+</body>
+</html>
