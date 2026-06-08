@@ -192,6 +192,21 @@ func NewServer(dbPath string) *Server {
 	}
 	os.MkdirAll(magicHome, 0755)
 
+	// Create default profile directory structure
+	defaultProfileDir := filepath.Join(magicHome, "profiles", "default")
+	defaultProfileDirs := []string{
+		defaultProfileDir,
+		filepath.Join(defaultProfileDir, "skills"),
+		filepath.Join(defaultProfileDir, "memory"),
+		filepath.Join(defaultProfileDir, "sessions"),
+		filepath.Join(defaultProfileDir, "plugins"),
+		filepath.Join(defaultProfileDir, "cache"),
+		filepath.Join(defaultProfileDir, "logs"),
+	}
+	for _, dir := range defaultProfileDirs {
+		os.MkdirAll(dir, 0755)
+	}
+
 	// Create logs directory for web logs
 	logDir := filepath.Join(magicHome, "logs")
 	os.MkdirAll(logDir, 0755)
@@ -562,6 +577,7 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 				},
 			},
 		},
+
 	}
 }
 

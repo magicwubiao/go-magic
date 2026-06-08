@@ -27,12 +27,12 @@ const SummaryPrefix = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns wer
 // Compressor handles context window compression for long-running conversations.
 type Compressor struct {
 	// Configuration
-	ThresholdTokens      int     // Token threshold to trigger compression
-	ProtectFirstN        int     // Number of messages to protect at the head
-	ProtectLastN         int     // Number of messages to protect at the tail
-	MinSummaryTokens     int     // Minimum tokens for summary output
-	SummaryRatio         float64 // Proportion of compressed content for summary
-	SummaryTokensCeiling int     // Absolute ceiling for summary tokens
+	ThresholdTokens    int  // Token threshold to trigger compression
+	ProtectFirstN      int  // Number of messages to protect at the head
+	ProtectLastN       int  // Number of messages to protect at the tail
+	MinSummaryTokens   int  // Minimum tokens for summary output
+	SummaryRatio       float64 // Proportion of compressed content for summary
+	SummaryTokensCeiling int // Absolute ceiling for summary tokens
 
 	// State
 	lastPromptTokens     int
@@ -48,12 +48,12 @@ type Compressor struct {
 func NewCompressor(thresholdTokens int) *Compressor {
 	return &Compressor{
 		ThresholdTokens:      thresholdTokens,
-		ProtectFirstN:        2, // Protect system + first user message
-		ProtectLastN:         4, // Protect recent turns
+		ProtectFirstN:        2,     // Protect system + first user message
+		ProtectLastN:         4,     // Protect recent turns
 		MinSummaryTokens:     2000,
 		SummaryRatio:         0.20,
 		SummaryTokensCeiling: 12000,
-		lastPromptTokens:     -1, // -1 sentinel: no real API usage yet
+		lastPromptTokens:     -1,    // -1 sentinel: no real API usage yet
 		lastRealPromptTokens: 0,
 		summaryCache:         make(map[string]string),
 	}

@@ -238,7 +238,11 @@ function renderMarkdown(content: string): string {
 /* 最终内容 */
 .final-content {
   font-size: 15px;
-  line-height: 1.7;
+  line-height: 1.8;
+}
+
+.final-content :deep(p) {
+  margin: 0 0 12px 0;
 }
 
 .final-content :deep(p:first-child) {
@@ -247,6 +251,50 @@ function renderMarkdown(content: string): string {
 
 .final-content :deep(p:last-child) {
   margin-bottom: 0;
+}
+
+.final-content :deep(ul),
+.final-content :deep(ol) {
+  margin: 10px 0;
+  padding-left: 28px;
+}
+
+.final-content :deep(li) {
+  margin: 6px 0;
+}
+
+.final-content :deep(h1),
+.final-content :deep(h2),
+.final-content :deep(h3),
+.final-content :deep(h4) {
+  margin: 20px 0 12px 0;
+  font-weight: 600;
+}
+
+.final-content :deep(h1) { font-size: 20px; }
+.final-content :deep(h2) { font-size: 18px; }
+.final-content :deep(h3) { font-size: 16px; }
+.final-content :deep(h4) { font-size: 15px; }
+
+.final-content :deep(blockquote) {
+  border-left: 3px solid #d0d0d0;
+  padding-left: 14px;
+  margin: 12px 0;
+  color: #666;
+}
+
+.final-content :deep(hr) {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 16px 0;
+}
+
+.final-content :deep(table) {
+  margin: 12px 0;
+}
+
+.final-content :deep(pre) {
+  margin: 12px 0;
 }
 
 /* Code blocks */

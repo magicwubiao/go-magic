@@ -104,15 +104,8 @@
             </div>
           </template>
 
-          <!-- Tool message -->
+          <!-- Tool message: hidden from chat display -->
           <template v-else-if="msg.role === 'tool'">
-            <div class="avatar tool-avatar">🔧</div>
-            <div class="message-body">
-              <div class="message-bubble tool-bubble">
-                <div class="tool-name-inline">{{ msg.tool_name || 'Tool' }}</div>
-                <div class="tool-content-inline">{{ msg.content }}</div>
-              </div>
-            </div>
           </template>
         </div>
 
@@ -151,14 +144,6 @@
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body">
-              <!-- Tool calls inline (compact) -->
-              <div v-if="chatStore.toolCalls.length > 0" class="tool-calls-inline">
-                <ToolCallBlock
-                  v-for="tc in chatStore.toolCalls"
-                  :key="tc.id"
-                  :tool-call="tc"
-                />
-              </div>
               <!-- Streaming text -->
               <div v-if="chatStore.streamContent" class="message-bubble assistant-bubble">
                 <ReasoningContent :content="chatStore.streamContent" />
@@ -667,9 +652,9 @@ onMounted(async () => {
 
 /* ========== Message Bubbles ========== */
 .message-bubble {
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-radius: 16px;
-  line-height: 1.65;
+  line-height: 1.75;
   word-break: break-word;
   overflow-wrap: break-word;
 }
@@ -687,25 +672,27 @@ onMounted(async () => {
 }
 
 .tool-bubble {
-  background: #f0f7ff;
-  border: 1px solid #d6e4ff;
+  background: transparent;
+  border: none;
   border-bottom-left-radius: 4px;
+  padding: 4px 0;
 }
 
 .tool-name-inline {
-  font-weight: 600;
-  font-size: 12px;
-  color: #1890ff;
-  margin-bottom: 4px;
+  font-weight: 500;
+  font-size: 11px;
+  color: #aaa;
+  margin-bottom: 2px;
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
 .tool-content-inline {
-  font-size: 13px;
-  color: #666;
-  max-height: 200px;
+  font-size: 12px;
+  color: #bbb;
+  max-height: 120px;
   overflow-y: auto;
   white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 /* ========== Message Images ========== */
@@ -746,10 +733,12 @@ onMounted(async () => {
 
 /* ========== Tool Call Area ========== */
 .tool-calls-inline {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
+  max-height: 60px;
+  overflow: hidden;
 }
 
 /* ========== Waiting Indicator ========== */
@@ -787,20 +776,20 @@ onMounted(async () => {
 }
 
 /* ========== Markdown Content Styles ========== */
-.message-bubble :deep(p) { margin: 0 0 8px 0; }
+.message-bubble :deep(p) { margin: 0 0 10px 0; }
 .message-bubble :deep(p:last-child) { margin-bottom: 0; }
-.message-bubble :deep(ul), .message-bubble :deep(ol) { margin: 8px 0; padding-left: 24px; }
-.message-bubble :deep(li) { margin: 4px 0; }
+.message-bubble :deep(ul), .message-bubble :deep(ol) { margin: 10px 0; padding-left: 28px; }
+.message-bubble :deep(li) { margin: 5px 0; }
 .message-bubble :deep(blockquote) {
   border-left: 3px solid #d0d0d0;
-  padding-left: 12px;
-  margin: 8px 0;
+  padding-left: 14px;
+  margin: 10px 0;
   color: #666;
 }
 .message-bubble :deep(table) {
   border-collapse: collapse;
   width: 100%;
-  margin: 8px 0;
+  margin: 10px 0;
   font-size: 14px;
 }
 .message-bubble :deep(th), .message-bubble :deep(td) {
@@ -811,6 +800,25 @@ onMounted(async () => {
 .message-bubble :deep(th) {
   background: #f0f0f0;
   font-weight: 600;
+}
+.message-bubble :deep(h1),
+.message-bubble :deep(h2),
+.message-bubble :deep(h3),
+.message-bubble :deep(h4) {
+  margin: 18px 0 10px 0;
+  font-weight: 600;
+}
+.message-bubble :deep(h1) { font-size: 20px; }
+.message-bubble :deep(h2) { font-size: 18px; }
+.message-bubble :deep(h3) { font-size: 16px; }
+.message-bubble :deep(h4) { font-size: 15px; }
+.message-bubble :deep(hr) {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 14px 0;
+}
+.message-bubble :deep(pre) {
+  margin: 10px 0;
 }
 .message-bubble :deep(a) {
   color: #e0f7e0;
@@ -998,8 +1006,7 @@ onMounted(async () => {
   }
 
   .tool-bubble {
-    background: #1a2332;
-    border-color: #1a3a5c;
+    background: transparent;
   }
 
   .waiting-indicator {

@@ -18,11 +18,11 @@ var (
 
 // BackoffConfig configures the backoff behavior.
 type BackoffConfig struct {
-	BaseDelay       time.Duration // Base delay for attempt 1 (default 5s)
-	MaxDelay        time.Duration // Maximum delay cap (default 120s)
-	JitterRatio     float64       // Fraction of delay for random jitter range (default 0.5)
-	MaxAttempts     int           // Maximum retry attempts (default 5)
-	ExponentialBase float64       // Exponential base (default 2.0)
+	BaseDelay     time.Duration // Base delay for attempt 1 (default 5s)
+	MaxDelay      time.Duration // Maximum delay cap (default 120s)
+	JitterRatio   float64       // Fraction of delay for random jitter range (default 0.5)
+	MaxAttempts   int           // Maximum retry attempts (default 5)
+	ExponentialBase float64     // Exponential base (default 2.0)
 }
 
 // DefaultBackoffConfig returns the default backoff configuration.

@@ -37,50 +37,47 @@ const emoji = computed(() => emojiMap[props.toolCall.name] || '🔧')
 .tool-call-compact {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: #f5f5f5;
-  border-radius: 12px;
-  font-size: 12px;
-  color: #666;
-  margin: 2px 4px 2px 0;
+  gap: 4px;
+  padding: 2px 8px;
+  background: transparent;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #aaa;
+  margin: 1px 2px 1px 0;
   transition: background 0.2s;
 }
 
 .tool-call-compact.status-running {
-  background: #e6f7ff;
-  color: #1890ff;
+  color: #999;
 }
 
 .tool-call-compact.status-completed {
-  background: #f6ffed;
-  color: #52c41a;
+  color: #bbb;
 }
 
 .tool-call-compact.status-error {
-  background: #fff2f0;
-  color: #ff4d4f;
+  color: #d9a0a0;
 }
 
 .tool-emoji {
-  font-size: 13px;
-  opacity: 0.8;
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 .tool-name {
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px;
-}
-
-.tool-indicator {
   font-size: 10px;
 }
 
+.tool-indicator {
+  font-size: 9px;
+}
+
 .tool-indicator.running {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background: #1890ff;
+  background: #999;
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -90,31 +87,27 @@ const emoji = computed(() => emojiMap[props.toolCall.name] || '🔧')
 }
 
 .tool-indicator.completed {
-  color: #52c41a;
+  color: #bbb;
 }
 
 .tool-indicator.error {
-  color: #ff4d4f;
+  color: #d9a0a0;
   font-weight: bold;
 }
 
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .tool-call-compact {
-    background: #2a2a2a;
-    color: #999;
+    color: #666;
   }
   .tool-call-compact.status-running {
-    background: #1a3a4a;
-    color: #40a9ff;
+    color: #777;
   }
   .tool-call-compact.status-completed {
-    background: #1a3a1a;
-    color: #73d13d;
+    color: #555;
   }
   .tool-call-compact.status-error {
-    background: #3a1a1a;
-    color: #ff7875;
+    color: #855;
   }
 }
 </style>
