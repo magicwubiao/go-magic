@@ -577,7 +577,6 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 				},
 			},
 		},
-
 	}
 }
 

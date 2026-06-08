@@ -142,15 +142,15 @@ func (b *Budget) UsagePercent() float64 {
 
 // Stats returns comprehensive budget statistics.
 type Stats struct {
-	MaxTotal      int
-	Used          int
-	Remaining     int
-	Refunded      int
-	UsagePercent  float64
-	IsExhausted   bool
-	CreatedAt     time.Time
-	LastUsedAt    time.Time
-	Duration      time.Duration // Time since creation
+	MaxTotal     int
+	Used         int
+	Remaining    int
+	Refunded     int
+	UsagePercent float64
+	IsExhausted  bool
+	CreatedAt    time.Time
+	LastUsedAt   time.Time
+	Duration     time.Duration // Time since creation
 }
 
 // GetStats returns comprehensive budget statistics.

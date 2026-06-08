@@ -116,8 +116,8 @@ func TestClassifiedErrorIsRetryable(t *testing.T) {
 
 func TestGetRecoveryStrategy(t *testing.T) {
 	tests := []struct {
-		reason       FailoverReason
-		expectAbort  bool
+		reason         FailoverReason
+		expectAbort    bool
 		expectCompress bool
 	}{
 		{FailoverAuth, false, false},
@@ -148,8 +148,8 @@ func TestClassifierCustomRules(t *testing.T) {
 	c.AddRule(func(err error, statusCode int, provider, model string) *ClassifiedError {
 		if err != nil && err.Error() == "custom_error" {
 			return &ClassifiedError{
-				Reason:    "custom_reason",
-				Retryable: false,
+				Reason:      "custom_reason",
+				Retryable:   false,
 				ShouldAbort: true,
 			}
 		}

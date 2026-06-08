@@ -15,7 +15,7 @@ type FailoverReason string
 
 const (
 	// Authentication / authorization
-	FailoverAuth         FailoverReason = "auth"         // Transient auth (401/403) — refresh/rotate
+	FailoverAuth          FailoverReason = "auth"           // Transient auth (401/403) — refresh/rotate
 	FailoverAuthPermanent FailoverReason = "auth_permanent" // Auth failed after refresh — abort
 
 	// Billing / quota
@@ -23,24 +23,24 @@ const (
 	FailoverRateLimit FailoverReason = "rate_limit" // 429 or throttling — backoff then rotate
 
 	// Server-side
-	FailoverOverloaded   FailoverReason = "overloaded"   // 503/529 — provider overloaded, backoff
-	FailoverServerError  FailoverReason = "server_error" // 500/502 — internal error, retry
+	FailoverOverloaded  FailoverReason = "overloaded"   // 503/529 — provider overloaded, backoff
+	FailoverServerError FailoverReason = "server_error" // 500/502 — internal error, retry
 
 	// Transport
 	FailoverTimeout FailoverReason = "timeout" // Connection/read timeout — rebuild + retry
 
 	// Context / payload
-	FailoverContextOverflow  FailoverReason = "context_overflow"  // Context too large — compress
-	FailoverPayloadTooLarge  FailoverReason = "payload_too_large" // 413 — compress payload
-	FailoverImageTooLarge    FailoverReason = "image_too_large"   // Image exceeds limit — shrink
+	FailoverContextOverflow FailoverReason = "context_overflow"  // Context too large — compress
+	FailoverPayloadTooLarge FailoverReason = "payload_too_large" // 413 — compress payload
+	FailoverImageTooLarge   FailoverReason = "image_too_large"   // Image exceeds limit — shrink
 
 	// Model / provider policy
-	FailoverModelNotFound       FailoverReason = "model_not_found"       // 404 or invalid model
+	FailoverModelNotFound         FailoverReason = "model_not_found"         // 404 or invalid model
 	FailoverProviderPolicyBlocked FailoverReason = "provider_policy_blocked" // Policy blocked
 	FailoverContentPolicyBlocked  FailoverReason = "content_policy_blocked"  // Safety filter
 
 	// Request format
-	FailoverFormatError            FailoverReason = "format_error"             // 400 bad request
+	FailoverFormatError             FailoverReason = "format_error"              // 400 bad request
 	FailoverInvalidEncryptedContent FailoverReason = "invalid_encrypted_content" // Replay blob rejected
 
 	// Catch-all
@@ -49,11 +49,11 @@ const (
 
 // ClassifiedError contains structured error classification with recovery hints.
 type ClassifiedError struct {
-	Reason   FailoverReason
-	StatusCode int
-	Provider   string
-	Model      string
-	Message    string
+	Reason       FailoverReason
+	StatusCode   int
+	Provider     string
+	Model        string
+	Message      string
 	ErrorContext map[string]interface{}
 
 	// Recovery action hints
