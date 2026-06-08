@@ -3,13 +3,17 @@
     <!-- 思考过程部分 - 仅在有明确 <think> 标签时显示 -->
     <div v-if="reasoningPart" class="reasoning-section">
       <div class="reasoning-header" @click="toggleExpand">
-        <n-icon size="16">
-          <ChevronForward v-if="!expanded" />
-          <ChevronDown v-else />
-        </n-icon>
-        <span class="reasoning-title">💭 {{ t('chat.thinking') }}</span>
+        <div class="reasoning-left">
+          <n-icon size="14" class="reasoning-icon">
+            <ChevronForward v-if="!expanded" />
+            <ChevronDown v-else />
+          </n-icon>
+          <span class="reasoning-label">{{ t('chat.thinking') }}</span>
+        </div>
+        <span class="reasoning-hint">{{ expanded ? t('chat.collapse') : t('chat.expand') }}</span>
       </div>
       <n-collapse-transition :show="expanded">
+        <div class="reasoning-divider"></div>
         <div class="reasoning-content" v-html="renderMarkdown(reasoningPart)"></div>
       </n-collapse-transition>
     </div>
@@ -103,10 +107,11 @@ function renderMarkdown(content: string): string {
   width: 100%;
 }
 
+/* 思考过程区域 - 简洁折叠卡片 */
 .reasoning-section {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   border: 1px solid #e8e8e8;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #fafafa;
   overflow: hidden;
 }
@@ -114,41 +119,123 @@ function renderMarkdown(content: string): string {
 .reasoning-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  justify-content: space-between;
+  padding: 6px 12px;
   cursor: pointer;
-  background: #f5f5f5;
   transition: background 0.15s;
-  font-size: 13px;
 }
 
 .reasoning-header:hover {
-  background: #eeeeee;
+  background: #f0f0f0;
 }
 
-.reasoning-title {
-  font-weight: 500;
+.reasoning-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reasoning-icon {
+  color: #999;
+  transition: transform 0.2s;
+}
+
+.reasoning-label {
+  font-size: 13px;
   color: #888;
-  flex: 1;
+  font-weight: 500;
+}
+
+.reasoning-hint {
+  font-size: 12px;
+  color: #bbb;
+}
+
+.reasoning-divider {
+  height: 1px;
+  background: #e8e8e8;
+  margin: 0 12px;
 }
 
 .reasoning-content {
-  padding: 12px;
+  padding: 10px 12px;
   max-height: 400px;
   overflow-y: auto;
-  font-size: 14px;
-  color: #666;
+  font-size: 13px;
+  color: #999;
   line-height: 1.6;
 }
 
 .reasoning-content :deep(p) {
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
 }
 
 .reasoning-content :deep(p:last-child) {
   margin-bottom: 0;
 }
 
+.reasoning-content :deep(ul),
+.reasoning-content :deep(ol) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.reasoning-content :deep(li) {
+  margin: 2px 0;
+}
+
+.reasoning-content :deep(code) {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #888;
+}
+
+.reasoning-content :deep(.code-block) {
+  position: relative;
+  margin: 6px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.reasoning-content :deep(.code-block pre) {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.reasoning-content :deep(.code-block code) {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #d4d4d4;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.reasoning-content :deep(.code-copy-btn) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ccc;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.reasoning-content :deep(.code-block:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+/* 最终内容 */
 .final-content {
   font-size: 15px;
   line-height: 1.7;
@@ -163,8 +250,7 @@ function renderMarkdown(content: string): string {
 }
 
 /* Code blocks */
-.final-content :deep(.code-block),
-.reasoning-content :deep(.code-block) {
+.final-content :deep(.code-block) {
   position: relative;
   margin: 8px 0;
   border-radius: 8px;
@@ -172,22 +258,19 @@ function renderMarkdown(content: string): string {
   background: #1e1e1e;
 }
 
-.final-content :deep(.code-block pre),
-.reasoning-content :deep(.code-block pre) {
+.final-content :deep(.code-block pre) {
   margin: 0;
   padding: 12px 16px;
   overflow-x: auto;
 }
 
-.final-content :deep(.code-block code),
-.reasoning-content :deep(.code-block code) {
+.final-content :deep(.code-block code) {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
   color: #d4d4d4;
 }
 
-.final-content :deep(.code-copy-btn),
-.reasoning-content :deep(.code-copy-btn) {
+.final-content :deep(.code-copy-btn) {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -202,8 +285,7 @@ function renderMarkdown(content: string): string {
   transition: opacity 0.2s;
 }
 
-.final-content :deep(.code-block:hover .code-copy-btn),
-.reasoning-content :deep(.code-block:hover .code-copy-btn) {
+.final-content :deep(.code-block:hover .code-copy-btn) {
   opacity: 1;
 }
 
@@ -259,24 +341,33 @@ function renderMarkdown(content: string): string {
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .reasoning-section {
-    background: #222;
-    border-color: #444;
-  }
-
-  .reasoning-header {
-    background: #2a2a2a;
+    background: #1a1a1a;
+    border-color: #333;
   }
 
   .reasoning-header:hover {
+    background: #252525;
+  }
+
+  .reasoning-label {
+    color: #777;
+  }
+
+  .reasoning-hint {
+    color: #555;
+  }
+
+  .reasoning-divider {
     background: #333;
   }
 
-  .reasoning-title {
-    color: #999;
+  .reasoning-content {
+    color: #777;
   }
 
-  .reasoning-content {
-    color: #aaa;
+  .reasoning-content :deep(code) {
+    background: #2a2a2a;
+    color: #999;
   }
 
   .final-content :deep(th) {

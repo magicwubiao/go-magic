@@ -417,10 +417,18 @@ func (l *Loader) loadBinaryPlugin(pluginPath string, manifest *PluginManifest) (
 	}, nil
 }
 
-// createContext creates a plugin context
+// createContext creates a plugin context with config from schema defaults
 func (l *Loader) createContext(manifest *PluginManifest) *Context {
 	home, _ := os.UserHomeDir()
 	pluginDir := filepath.Join(l.config.PluginDir, manifest.ID)
+
+	// Build config from schema defaults
+	config := make(map[string]interface{})
+	for _, field := range manifest.ConfigSchema {
+		if field.Default != nil {
+			config[field.Key] = field.Default
+		}
+	}
 
 	return &Context{
 		PluginID:    manifest.ID,
@@ -430,7 +438,7 @@ func (l *Loader) createContext(manifest *PluginManifest) *Context {
 		DataDir:     filepath.Join(pluginDir, "data"),
 		CacheDir:    filepath.Join(pluginDir, "cache"),
 		ConfigDir:   filepath.Join(pluginDir, "config"),
-		Config:      make(map[string]interface{}),
+		Config:      config,
 		Logger:      NewSimpleLogger(manifest.ID),
 		Metadata:    make(map[string]interface{}),
 	}
@@ -618,7 +626,7 @@ esac
 }
 
 // resolveEntrypoint picks the correct entrypoint for the current platform.
-// Priority: entrypoints[GOOS] > entrypoint_windows shortcut > entrypoint (default)
+// Priority: entrypoints[GOOS] > entrypoint_windows shortcut > entrypoint > entry (backward compat)
 func resolveEntrypoint(manifest *PluginManifest) string {
 	// 1. Check entrypoints map (most flexible)
 	if manifest.Entrypoints != nil {
@@ -640,6 +648,11 @@ func resolveEntrypoint(manifest *PluginManifest) string {
 		}
 	}
 
-	// 3. Default
-	return manifest.Entrypoint
+	// 3. Default entrypoint
+	if manifest.Entrypoint != "" {
+		return manifest.Entrypoint
+	}
+
+	// 4. Backward compatibility: "entry" field
+	return manifest.Entry
 }

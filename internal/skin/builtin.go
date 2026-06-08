@@ -60,7 +60,6 @@ var DefaultSkin = &Config{
 	ToolPrefix: "┊",
 	ToolEmojis: ToolEmojis{
 		"web_search":       "🌐",
-		"web_extract":      "🔍",
 		"read_file":        "📄",
 		"write_file":       "✏️",
 		"execute_command":  "⚡",

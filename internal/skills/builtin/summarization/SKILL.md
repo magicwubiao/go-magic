@@ -4,7 +4,7 @@ description: "Summarize and condense content effectively"
 version: 1.0.0
 author: go-magic
 tags: [summarization, content, writing, analysis]
-tools: [web_extract]
+tools: [web_fetch]
 ---
 
 # Summarization Skill

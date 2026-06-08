@@ -4,7 +4,7 @@ description: "Translate content between languages with context awareness"
 version: 1.0.0
 author: go-magic
 tags: [translation, languages, localization, i18n]
-tools: [web_extract]
+tools: [web_fetch]
 ---
 
 # Translation Skill
@@ -81,4 +81,4 @@ Many languages have formal/informal "you":
 
 ## Tools Integration
 
-Use `web_extract` to pull content from foreign language websites, then translate using this skill framework.
+Use `web_fetch` to pull content from foreign language websites, then translate using this skill framework.

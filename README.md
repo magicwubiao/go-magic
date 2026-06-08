@@ -34,7 +34,7 @@ React/TypeScript frontend with real-time chat, session management, and configura
 
 | Toolset | Tools |
 |---------|-------|
-| **Web** | web_search, web_extract |
+| **Web** | web_search, web_fetch |
 | **File** | read_file, write_file, file_edit, list_files, search_in_files |
 | **Terminal** | execute_command, terminal, process |
 | **Browser** | browser_navigate, browser_snapshot, browser_click, browser_type |

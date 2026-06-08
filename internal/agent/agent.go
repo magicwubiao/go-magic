@@ -10,11 +10,14 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
+	"github.com/magicwubiao/go-magic/internal/budget"
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/complexity"
+	"github.com/magicwubiao/go-magic/internal/compress"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
+	"github.com/magicwubiao/go-magic/internal/retry"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -125,6 +128,15 @@ type Agent struct {
 
 	// Secret redaction (default true)
 	secretRedaction bool
+
+	// Iteration budget for long-running tasks (Hermes-inspired)
+	budget *budget.Budget
+
+	// Context compressor for long conversations
+	compressor *compress.Compressor
+
+	// Error classifier for intelligent retry
+	errorClassifier *retry.Classifier
 }
 
 // ToolRegistry interface for tool execution
@@ -167,6 +179,9 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		subTaskEnabled:   true,
 		hooks:            hooks.NewHookManager(),
 		bus:              bus.NewEventBus(),
+		budget:           budget.Preset("parent"),
+		compressor:       compress.NewCompressor(8000),
+		errorClassifier:  retry.NewClassifier(),
 	}
 
 	agent.registerBuiltinHooks()
@@ -692,6 +707,11 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Consume budget for this iteration
+		if a.budget != nil && !a.budget.Consume() {
+			return "", fmt.Errorf("exceeded iteration budget (%d/%d used)", a.budget.Used(), a.budget.MaxTotal())
+		}
+
 		// Cortex: OnTurnStart - freezes memory snapshot for prefix cache
 		if a.cortexManager != nil {
 			a.cortexManager.OnTurnStart()
@@ -705,10 +725,54 @@ Please provide a comprehensive, well-structured final response based on these su
 			return "", fmt.Errorf("exceeded token budget (%d)", a.maxTokenBudget)
 		}
 
-		// Emit turn start event
+		// Emit turn start event with progress
 		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
-			"turn": a.iterationCount,
+			"turn":        a.iterationCount,
+			"maxTurns":    a.maxTurns,
+			"budgetUsed":  a.budget.Used(),
+			"budgetTotal": a.budget.MaxTotal(),
 		})
+
+		// Check if context compression is needed
+		if a.compressor != nil {
+			totalChars := 0
+			for _, msg := range a.history {
+				totalChars += len(msg.Content)
+			}
+			if a.compressor.ShouldCompress(totalChars / 4) { // rough token estimate
+				a.Emit(bus.EventKindTurnStart, map[string]interface{}{
+					"type":   "progress",
+					"phase":  "compressing",
+					"detail": "Context window full, compressing history...",
+				})
+				msgs := make([]compress.Message, 0, len(a.history))
+				for _, msg := range a.history {
+					if msg.Role != "system" {
+						msgs = append(msgs, compress.Message{
+							Role:    msg.Role,
+							Content: msg.Content,
+						})
+					}
+				}
+				result, err := a.compressor.Compress(msgs, "")
+				if err == nil && result != nil {
+					// Replace history with compressed version
+					newHistory := make([]provider.Message, 0)
+					for _, msg := range a.history {
+						if msg.Role == "system" {
+							newHistory = append(newHistory, msg)
+						}
+					}
+					for _, msg := range result.Messages {
+						newHistory = append(newHistory, provider.Message{
+							Role:    msg.Role,
+							Content: msg.Content,
+						})
+					}
+					a.history = newHistory
+				}
+			}
+		}
 
 		// Build LLM request
 		req := &hooks.LLMHookRequest{
@@ -743,6 +807,17 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		if err != nil {
 			lastErr = err
+			// Use error classifier for intelligent retry
+			if a.errorClassifier != nil {
+				ce := a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+				strategy := retry.GetRecoveryStrategy(ce, 1)
+				if strategy.Abort {
+					return "", fmt.Errorf("non-retryable error: %w", err)
+				}
+				if strategy.Delay > 0 {
+					time.Sleep(strategy.Delay)
+				}
+			}
 			a.Emit(bus.EventKindError, err.Error())
 			continue
 		}

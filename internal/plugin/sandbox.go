@@ -196,7 +196,7 @@ func (s *Sandbox) runBinary(plugin *BinaryPlugin, input interface{}) (interface{
 	return nil, fmt.Errorf("binary plugins must be executed via Execute method")
 }
 
-// canRead checks if a path can be read
+// canRead checks if a path can be read (safe against path traversal)
 func (s *Sandbox) canRead(path string) bool {
 	if len(s.fsRead) == 0 {
 		return false
@@ -206,14 +206,21 @@ func (s *Sandbox) canRead(path string) bool {
 	if err != nil {
 		return false
 	}
+	// Clean the path to resolve ".." and "."
+	absPath = filepath.Clean(absPath)
 
 	for _, allowed := range s.fsRead {
 		absAllowed, err := filepath.Abs(allowed)
 		if err != nil {
 			continue
 		}
+		absAllowed = filepath.Clean(absAllowed)
+		// Ensure the allowed path ends with separator for proper prefix check
+		if !strings.HasSuffix(absAllowed, string(filepath.Separator)) {
+			absAllowed += string(filepath.Separator)
+		}
 
-		if strings.HasPrefix(absPath, absAllowed) {
+		if strings.HasPrefix(absPath+string(filepath.Separator), absAllowed) || absPath == filepath.Clean(allowed) {
 			return true
 		}
 	}
@@ -221,7 +228,7 @@ func (s *Sandbox) canRead(path string) bool {
 	return false
 }
 
-// canWrite checks if a path can be written
+// canWrite checks if a path can be written (safe against path traversal)
 func (s *Sandbox) canWrite(path string) bool {
 	if len(s.fsWrite) == 0 {
 		return false
@@ -231,14 +238,21 @@ func (s *Sandbox) canWrite(path string) bool {
 	if err != nil {
 		return false
 	}
+	// Clean the path to resolve ".." and "."
+	absPath = filepath.Clean(absPath)
 
 	for _, allowed := range s.fsWrite {
 		absAllowed, err := filepath.Abs(allowed)
 		if err != nil {
 			continue
 		}
+		absAllowed = filepath.Clean(absAllowed)
+		// Ensure the allowed path ends with separator for proper prefix check
+		if !strings.HasSuffix(absAllowed, string(filepath.Separator)) {
+			absAllowed += string(filepath.Separator)
+		}
 
-		if strings.HasPrefix(absPath, absAllowed) {
+		if strings.HasPrefix(absPath+string(filepath.Separator), absAllowed) || absPath == filepath.Clean(allowed) {
 			return true
 		}
 	}

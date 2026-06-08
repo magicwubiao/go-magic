@@ -163,7 +163,7 @@ func (m *Manager) registerDefaultCommands() {
 				if len(args) > 0 {
 					return fmt.Sprintf("Tools in %s:", args[0]), nil
 				}
-				return "Available tools: web_search, web_extract, read_file, write_file, execute_command, execute_code, skills_list, memory_recall...", nil
+				return "Available tools: web_search, web_fetch, read_file, write_file, execute_command, execute_code, skills_list, memory_recall...", nil
 			},
 		},
 		{

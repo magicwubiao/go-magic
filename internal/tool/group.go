@@ -210,7 +210,7 @@ func DefaultToolGroups(registry *Registry) *GroupManager {
 
 	// Web 操作分组
 	webGroup := gm.CreateGroup("web", "Web operations")
-	for _, name := range []string{"web_search", "web_extract", "web_fetch"} {
+	for _, name := range []string{"web_search", "web_fetch"} {
 		if tool, err := registry.Get(name); err == nil {
 			webGroup.Add(tool)
 		}

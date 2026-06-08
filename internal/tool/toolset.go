@@ -131,7 +131,7 @@ func InitializeDefaultToolsets() {
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "web",
 		Description: "Web research and content extraction tools",
-		Tools:       []string{"web_search", "web_extract"},
+		Tools:       []string{"web_search", "web_fetch"},
 		Includes:    []string{},
 	})
 

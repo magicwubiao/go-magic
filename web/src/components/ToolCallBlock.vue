@@ -17,7 +17,7 @@ const props = defineProps<{
 }>()
 
 const emojiMap: Record<string, string> = {
-  web_search: '🔍', web_extract: '📄', web_fetch: '🌐', web_select: '🖱️',
+  web_search: '🔍', web_fetch: '🌐', web_select: '🖱️',
   read_file: '📄', write_file: '✏️', file_edit: '📝', list_files: '📁',
   directory_tree: '📂', search_in_files: '🔎', execute_command: '⚡',
   execute_code: '💻', browser_navigate: '🌍', delegate_task: '🎭',

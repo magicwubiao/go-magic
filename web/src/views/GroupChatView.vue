@@ -327,9 +327,14 @@ async function streamAgentReplies(content: string, mentions: { id: string, name:
   }
 
   try {
+    const token = localStorage.getItem('auth_token')
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
     const response = await fetch(`/api/groupchat/rooms/${roomId}/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ content }),
       signal,
     })

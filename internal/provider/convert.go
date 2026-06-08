@@ -168,26 +168,28 @@ func sanitizeToolCallSequence(messages []map[string]interface{}) []map[string]in
 				continue
 			}
 
-			// Check if all tool_calls have corresponding tool messages following
-			allMatched := true
-			for j := range toolCalls {
-				expectedIdx := i + 1 + j
-				if expectedIdx >= len(messages) {
-					allMatched = false
+			// Check if all tool_calls have corresponding tool messages following.
+			// We need exactly `len(toolCalls)` consecutive tool messages right after
+			// the assistant message, but we also tolerate interleaved non-tool
+			// messages as long as the *total* number of tool messages that belong
+			// to this sequence is correct.
+			toolMsgCount := 0
+			for k := i + 1; k < len(messages); k++ {
+				r, _ := messages[k]["role"].(string)
+				if r == "tool" {
+					toolMsgCount++
+				} else if r == "assistant" {
+					// Another assistant message starts – stop counting for this sequence
 					break
 				}
-				nextMsg := messages[expectedIdx]
-				nextRole, _ := nextMsg["role"].(string)
-				if nextRole != "tool" {
-					allMatched = false
-					break
-				}
+				// user / system messages are ignored (they shouldn't appear here,
+				// but if they do we keep counting until the next assistant)
 			}
 
-			if !allMatched {
+			if toolMsgCount != len(toolCalls) {
 				// Incomplete sequence - remove the assistant message with tool_calls
 				// and any orphaned tool messages that follow
-				log.Warnf("[ConvertMessages] Removing incomplete tool_call sequence at message %d (%d tool_calls)", i, len(toolCalls))
+				log.Warnf("[ConvertMessages] Removing incomplete tool_call sequence at message %d (%d tool_calls, %d tool replies)", i, len(toolCalls), toolMsgCount)
 				// Skip this assistant message
 				i++
 				// Skip any tool messages that belong to this sequence

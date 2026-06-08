@@ -8,8 +8,18 @@ import (
 	"time"
 )
 
+// PluginResult represents the standardized result of a plugin execution
+type PluginResult struct {
+	Success bool        `json:"success"`
+	Output  interface{} `json:"output,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Stderr  string      `json:"stderr,omitempty"`
+	Elapsed string      `json:"elapsed"`
+}
+
 // executePluginCommand runs a plugin entrypoint with the given arguments
-// and returns structured output.
+// and returns structured output. Errors are returned as structured results
+// with success=false, not as Go errors, to allow the agent to handle failures gracefully.
 func executePluginCommand(entrypoint string, args []string) (interface{}, error) {
 	cmd := exec.Command(entrypoint, args...)
 
@@ -24,25 +34,40 @@ func executePluginCommand(entrypoint string, args []string) (interface{}, error)
 	output := stdout.String()
 	errOutput := stderr.String()
 
+	result := PluginResult{
+		Success: err == nil,
+		Elapsed: elapsed.String(),
+		Stderr:  errOutput,
+	}
+
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("plugin execution failed: %v", err),
-			"stderr":  errOutput,
-			"elapsed": elapsed.String(),
-		}, nil // Return error as result, don't fail the tool call
+		result.Error = fmt.Sprintf("plugin execution failed: %v", err)
+		// Try to parse any JSON output even on error
+		var jsonOut interface{}
+		if json.Unmarshal([]byte(output), &jsonOut) == nil {
+			result.Output = jsonOut
+		} else {
+			result.Output = output
+		}
+		return result, nil
 	}
 
 	// Try to parse as JSON
-	var result interface{}
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
+	var jsonResult interface{}
+	if err := json.Unmarshal([]byte(output), &jsonResult); err != nil {
 		// Return raw output if not JSON
-		return map[string]interface{}{
-			"success": true,
-			"output":  output,
-			"elapsed": elapsed.String(),
-		}, nil
+		result.Output = output
+		return result, nil
 	}
 
+	// If the plugin returned a JSON object that already has a "success" field,
+	// merge it with our wrapper
+	if m, ok := jsonResult.(map[string]interface{}); ok {
+		if _, hasSuccess := m["success"]; hasSuccess {
+			return m, nil
+		}
+	}
+
+	result.Output = jsonResult
 	return result, nil
 }

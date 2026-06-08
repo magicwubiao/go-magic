@@ -192,7 +192,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Set default timeouts
 	r.SetTimeout("execute_command", 120*time.Second)
 	r.SetTimeout("web_search", 30*time.Second)
-	r.SetTimeout("web_extract", 60*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
 	r.SetTimeout("web_select", 30*time.Second)
 

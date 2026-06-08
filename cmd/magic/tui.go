@@ -1091,7 +1091,6 @@ func (m TUIModel) renderStatus() string {
 func toolEmoji(name string) string {
 	emojis := map[string]string{
 		"web_search":       "🌐",
-		"web_extract":      "🔍",
 		"web_fetch":        "🌐",
 		"web_select":       "🖱️",
 		"read_file":        "📄",

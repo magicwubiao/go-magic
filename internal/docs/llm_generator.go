@@ -271,7 +271,7 @@ func (g *LLMGenerator) getToolsEntries() []DocumentationEntry {
 	return []DocumentationEntry{
 		{
 			Title:       "Web Tools",
-			Description: "web_search, web_extract - Search and extract web content.",
+			Description: "web_search, web_fetch - Search and fetch web content.",
 			Tags:        []string{"tools", "web"},
 		},
 		{
@@ -527,7 +527,7 @@ func (g *LLMGenerator) generateToolsReference() string {
 	buf.WriteString("# Tools Reference\n\n")
 	buf.WriteString("## Toolset: web\n\n")
 	buf.WriteString("- `web_search` - Search the web\n")
-	buf.WriteString("- `web_extract` - Extract content from URLs\n\n")
+	buf.WriteString("- `web_fetch` - Fetch content from URLs\n\n")
 	buf.WriteString("## Toolset: browser\n\n")
 	buf.WriteString("- `browser_navigate` - Navigate to URL\n")
 	buf.WriteString("- `browser_snapshot` - Get page snapshot\n")

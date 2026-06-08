@@ -4,7 +4,7 @@ description: "Search the web for information using DuckDuckGo"
 version: 1.0.0
 author: go-magic
 tags: [search, web, information, research]
-tools: [web_search, web_extract]
+tools: [web_search, web_fetch]
 ---
 
 # Web Search Skill
@@ -22,8 +22,8 @@ Load this skill when:
 ### Step 1: Use web_search
 Search for relevant results using the search query.
 
-### Step 2: Use web_extract
-Extract detailed content from promising URLs.
+### Step 2: Use web_fetch
+Fetch detailed content from promising URLs.
 
 ### Step 3: Synthesize
 Combine and summarize the findings for the user.
@@ -46,10 +46,10 @@ Combine and summarize the findings for the user.
 
 ```
 web_search: { query: "latest AI developments 2024" }
-web_extract: { url: "https://example.com/article" }
+web_fetch: { url: "https://example.com/article" }
 ```
 
 ## Related Tools
 
 - `web_search`: Search DuckDuckGo for results
-- `web_extract`: Extract content from URLs
+- `web_fetch`: Fetch content from URLs

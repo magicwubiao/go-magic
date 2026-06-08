@@ -694,7 +694,7 @@ func (h *Handler) forceCompress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update room token count
-	if room != nil && summary != nil {
+	if room != nil && summary != "" {
 		newTokens := 0
 		for _, msg := range compressed {
 			newTokens += compress.EstimateTokens(msg.Content)

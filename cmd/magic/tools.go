@@ -112,7 +112,7 @@ func getAllTools() []string {
 	return []string{
 		// Web tools
 		"web_search",
-		"web_extract",
+		"web_fetch",
 		// Browser tools
 		"browser_navigate",
 		"browser_snapshot",
@@ -177,7 +177,7 @@ func getAllTools() []string {
 func getToolDescription(name string) string {
 	descriptions := map[string]string{
 		"web_search":         "Search the web",
-		"web_extract":        "Extract content from web pages",
+		"web_fetch":          "Fetch content from web pages",
 		"browser_navigate":   "Navigate to a URL",
 		"browser_snapshot":   "Get page snapshot",
 		"browser_click":      "Click page element",
@@ -239,7 +239,7 @@ var toolsetDefinitions = map[string]struct {
 }{
 	"web": {
 		Description: "Web search and content extraction",
-		Tools:       []string{"web_search", "web_extract"},
+		Tools:       []string{"web_search", "web_fetch"},
 		Tags:        []string{"search", "web"},
 	},
 	"browser": {

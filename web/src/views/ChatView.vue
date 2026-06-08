@@ -79,7 +79,7 @@
                       :key="idx"
                       class="message-file-item"
                       @click="goToFilesPage"
-                      title="点击查看文件管理"
+                      :title="t('chat.viewFileManagement')"
                     >
                       <n-icon size="20"><DocumentOutline /></n-icon>
                       <span class="message-file-name">{{ file.name }}</span>
@@ -87,7 +87,7 @@
                   </n-space>
                 </div>
                 <div v-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
-                <div v-else-if="!msg.files?.length" class="empty-content">[文件]</div>
+                <div v-else-if="!msg.files?.length" class="empty-content">{{ t('chat.fileBtn') }}</div>
               </div>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
@@ -118,6 +118,35 @@
 
         <!-- Streaming area -->
         <template v-if="chatStore.streaming">
+          <!-- Task Timeline for long tasks -->
+          <div v-if="taskTimelineSteps.length > 0" style="margin: 8px 12px;">
+            <TaskTimeline
+              :steps="taskTimelineSteps"
+              :title="taskTimelineTitle"
+              :overall-percent="taskTimelinePercent"
+            />
+          </div>
+          <!-- Long task progress bar (fallback) -->
+          <div v-else-if="chatStore.taskProgress" class="long-task-progress">
+            <n-progress
+              type="line"
+              :percentage="chatStore.taskProgress.percent"
+              :indicator-placement="'inside'"
+              :status="chatStore.taskProgress.percent >= 100 ? 'success' : 'processing'"
+              :height="20"
+            >
+              <template #default>
+                <span style="font-size: 12px;">
+                  {{ chatStore.taskProgress.phase }} — {{ chatStore.taskProgress.detail }}
+                  ({{ chatStore.taskProgress.iteration }}/{{ chatStore.taskProgress.maxIterations }})
+                </span>
+              </template>
+            </n-progress>
+            <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block;">
+              Tokens: {{ chatStore.taskProgress.tokensUsed }} used
+              <span v-if="chatStore.taskProgress.tokensRemaining > 0">, {{ chatStore.taskProgress.tokensRemaining }} remaining</span>
+            </n-text>
+          </div>
           <!-- Streaming message with tool calls inline -->
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
@@ -192,7 +221,7 @@
                 :multiple="true"
                 @before-upload="handleFileSelect"
               >
-                <n-button size="tiny" quaternary class="toolbar-btn" title="上传文件">
+                <n-button size="tiny" quaternary class="toolbar-btn" :title="t('chat.uploadFile')">
                   <template #icon>
                     <n-icon><AttachOutline /></n-icon>
                   </template>
@@ -244,6 +273,8 @@ import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import CurrentGoal from '@/components/CurrentGoal.vue'
+import TaskTimeline from '@/components/TaskTimeline.vue'
+import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
@@ -309,6 +340,62 @@ const activeSessionSource = computed(() => {
   return chatStore.activeSession?.source || ''
 })
 
+// Task timeline computed from tool calls and progress
+const taskTimelineSteps = computed((): TimelineStep[] => {
+  const steps: TimelineStep[] = []
+  const tcs = chatStore.toolCalls
+
+  // Phase 1: Planning (if we have a task progress)
+  if (chatStore.taskProgress) {
+    steps.push({
+      title: t('chat.taskPlanning'),
+      description: t('chat.taskPlanningDesc'),
+      status: 'completed',
+    })
+  }
+
+  // Phase 2: Tool execution steps
+  for (const tc of tcs) {
+    const existing = steps.find(s => s.title === tc.name)
+    if (existing) continue
+
+    steps.push({
+      title: tc.name,
+      description: tc.args?.substring(0, 80) || '',
+      status: tc.status === 'running' ? 'running' : tc.status === 'completed' ? 'completed' : tc.status === 'error' ? 'failed' : 'pending',
+      detail: tc.status === 'running' ? t('chat.executing') : tc.duration ? `${t('chat.duration')} ${tc.duration}` : undefined,
+      duration: tc.duration,
+    })
+  }
+
+  // Phase 3: Synthesis (if streaming and no running tools)
+  if (chatStore.streaming && chatStore.activeToolCalls.length === 0 && chatStore.streamContent) {
+    steps.push({
+      title: t('chat.resultSynthesis'),
+      description: t('chat.resultSynthesisDesc'),
+      status: 'running',
+      detail: t('chat.generating'),
+    })
+  }
+
+  return steps
+})
+
+const taskTimelineTitle = computed(() => {
+  if (chatStore.taskProgress?.phase) {
+    return `${t('chat.taskExecuting')} ${chatStore.taskProgress.phase}`
+  }
+  return t('chat.taskProgress')
+})
+
+const taskTimelinePercent = computed(() => {
+  const steps = taskTimelineSteps.value
+  if (steps.length === 0) return undefined
+  const completed = steps.filter(s => s.status === 'completed').length
+  const running = steps.filter(s => s.status === 'running').length
+  return Math.round(((completed + running * 0.5) / steps.length) * 100)
+})
+
 function sourceType(source: string) {
   const map: Record<string, string> = {
     telegram: 'info',
@@ -346,7 +433,7 @@ async function handleFileSelect({ file }: { file: UploadFileInfo }) {
     selectedFiles.value.push(uploaded)
   } catch (e) {
     console.error('Upload failed:', e)
-    alert('文件上传失败: ' + (e as Error).message)
+    ElMessage.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
   } finally {
     uploadingFiles.value.delete(fileKey)
   }
@@ -373,7 +460,7 @@ async function send() {
   // Note: file.url already contains token from uploadFile()
   for (const file of files) {
     if (finalContent) finalContent += '\n\n'
-    finalContent += `[附件: ${file.name}](${file.url})`
+    finalContent += `[${t('chat.attachmentName')}: ${file.name}](${file.url})`
   }
 
   inputValue.value = ''
@@ -666,6 +753,14 @@ onMounted(async () => {
 }
 
 /* ========== Waiting Indicator ========== */
+.long-task-progress {
+  padding: 12px 16px;
+  margin: 8px 12px;
+  background: #f0f7ff;
+  border: 1px solid #d0e3ff;
+  border-radius: 8px;
+}
+
 .waiting-indicator {
   display: flex;
   gap: 5px;

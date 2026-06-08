@@ -562,20 +562,6 @@ func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 				},
 			},
 		},
-		{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        "web_extract",
-				"description": "Extract content from a URL",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"url": map[string]interface{}{"type": "string", "description": "URL to extract from"},
-					},
-					"required": []string{"url"},
-				},
-			},
-		},
 	}
 }
 
@@ -2127,7 +2113,6 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	}
 
 	allTools := s.toolReg.List()
-	fmt.Printf("[server] buildToolsets: total tools registered: %d\n", len(allTools))
 	if len(allTools) == 0 {
 		fmt.Println("[server] buildToolsets: no tools registered, returning empty list")
 		return []map[string]interface{}{}
@@ -3099,8 +3084,6 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 		return plugins
 	}
 
-	fmt.Printf("[server] Scanning plugins dir: %s (found %d entries)\n", pluginsDir, len(entries))
-
 	// Build enabled/disabled lookup maps from config
 	enabledPlugins := make(map[string]bool)
 	disabledPlugins := make(map[string]bool)
@@ -3153,7 +3136,6 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 			})
 		}
 	}
-	fmt.Printf("[server] Found %d plugins\n", len(plugins))
 	return plugins
 }
 

@@ -168,7 +168,7 @@ magic server
 | **文件操作** | read_file、write_file、file_edit、list_files、search_in_files |
 | **命令执行** | execute_command、terminal、process |
 | **代码执行** | execute_code（Python / Node.js） |
-| **Web** | web_search、web_extract |
+| **Web** | web_search、web_fetch |
 | **浏览器** | browser_navigate、browser_snapshot、browser_click、browser_type |
 | **记忆** | memory_store、memory_recall |
 | **技能** | skill_list、skill_view、skill_manage |

@@ -334,7 +334,7 @@ func (m *Manager) GetCompatibleTools(id string) []string {
 	// Map personalities to tools
 	toolMap := map[string][]string{
 		"coder":      {"read_file", "write_file", "search_in_files", "execute_command", "execute_code"},
-		"researcher": {"web_search", "web_extract", "read_file", "memory_recall"},
+		"researcher": {"web_search", "web_fetch", "read_file", "memory_recall"},
 		"creative":   {"web_search", "read_file", "write_file"},
 		"teacher":    {"web_search", "read_file", "memory_recall", "skills_list"},
 		"assistant":  {"web_search", "read_file", "write_file", "execute_command", "skills_list"},

@@ -18,6 +18,16 @@ export interface ToolCallEvent {
   status: 'running' | 'completed' | 'error'
 }
 
+export interface TaskProgress {
+  phase: string        // e.g. 'planning', 'executing', 'compressing', 'synthesizing'
+  detail: string       // human readable description
+  percent: number      // 0-100
+  iteration: number    // current iteration
+  maxIterations: number
+  tokensUsed: number
+  tokensRemaining: number
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
@@ -26,6 +36,7 @@ export const useChatStore = defineStore('chat', () => {
   const streamContent = ref('')
   const error = ref<ChatError | null>(null)
   const toolCalls = ref<ToolCallEvent[]>([])
+  const taskProgress = ref<TaskProgress | null>(null)
   let currentEventSource: EventSource | null = null
   let toolCallIdCounter = 0
 
@@ -34,6 +45,11 @@ export const useChatStore = defineStore('chat', () => {
   let streamFlushTimer: ReturnType<typeof setTimeout> | null = null
   const STREAM_FLUSH_INTERVAL = 80 // ms
 
+  // Heartbeat / timeout detection
+  let lastHeartbeat = 0
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
+  const HEARTBEAT_TIMEOUT = 45000 // 45s without any event = dead connection
+
   const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value)
   )
@@ -41,6 +57,11 @@ export const useChatStore = defineStore('chat', () => {
   const activeToolCalls = computed(() =>
     toolCalls.value.filter(tc => tc.status === 'running')
   )
+
+  const isLongTask = computed(() => {
+    if (!taskProgress.value) return false
+    return taskProgress.value.maxIterations > 20 || taskProgress.value.percent > 0
+  })
 
   async function loadSessions(): Promise<void> {
     try {
@@ -107,6 +128,28 @@ export const useChatStore = defineStore('chat', () => {
     streamFlushTimer = null
   }
 
+  function resetHeartbeat(): void {
+    lastHeartbeat = Date.now()
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer)
+    }
+    heartbeatTimer = setTimeout(() => {
+      // No event received for HEARTBEAT_TIMEOUT
+      if (streaming.value && Date.now() - lastHeartbeat >= HEARTBEAT_TIMEOUT) {
+        console.warn('SSE heartbeat timeout - connection may be dead')
+        error.value = { message: 'Connection stalled - no response for 45s. The task may still be running on the server.', code: 'HEARTBEAT_TIMEOUT' }
+        // Don't close immediately - let user decide to stop
+      }
+    }, HEARTBEAT_TIMEOUT)
+  }
+
+  function clearHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
   async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
@@ -135,17 +178,40 @@ export const useChatStore = defineStore('chat', () => {
       streamFlushTimer = null
     }
     toolCalls.value = []
+    taskProgress.value = null
     error.value = null
 
     // Close any existing EventSource
     closeEventSource()
+    clearHeartbeat()
 
     try {
       currentEventSource = sessionsApi.streamChat(sessionId, content, images, files)
+      resetHeartbeat()
 
       currentEventSource.onmessage = (event) => {
+        resetHeartbeat()
         try {
           const data = JSON.parse(event.data)
+
+          // Handle progress events (new for long tasks)
+          if (data.type === 'progress') {
+            taskProgress.value = {
+              phase: data.phase || 'executing',
+              detail: data.detail || '',
+              percent: data.percent || 0,
+              iteration: data.iteration || 0,
+              maxIterations: data.maxIterations || 0,
+              tokensUsed: data.tokensUsed || 0,
+              tokensRemaining: data.tokensRemaining || 0,
+            }
+            return
+          }
+
+          // Handle heartbeat/ping from server
+          if (data.type === 'ping') {
+            return
+          }
 
           // Handle structured tool events
           if (data.type === 'tool_start') {
@@ -199,7 +265,9 @@ export const useChatStore = defineStore('chat', () => {
             }
             flushStreamBuffer()
             closeEventSource()
+            clearHeartbeat()
             streaming.value = false
+            taskProgress.value = null
             messages.value.push({
               id: Date.now().toString(),
               role: 'assistant',
@@ -220,11 +288,16 @@ export const useChatStore = defineStore('chat', () => {
           flushStreamBuffer()
         }
         closeEventSource()
+        clearHeartbeat()
         streaming.value = false
-        error.value = { message: 'Connection lost' }
+        // Only show error if we didn't get a done event
+        if (!streamContent.value && !messages.value.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
+          error.value = { message: 'Connection lost' }
+        }
       }
     } catch (e) {
       streaming.value = false
+      clearHeartbeat()
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
       error.value = { message: 'Failed to send message: ' + errMsg }
     }
@@ -236,7 +309,9 @@ export const useChatStore = defineStore('chat', () => {
       flushStreamBuffer()
     }
     closeEventSource()
+    clearHeartbeat()
     streaming.value = false
+    taskProgress.value = null
     // Mark any running tool calls as error
     for (const tc of toolCalls.value) {
       if (tc.status === 'running') {
@@ -261,6 +336,7 @@ export const useChatStore = defineStore('chat', () => {
       clearTimeout(streamFlushTimer)
     }
     closeEventSource()
+    clearHeartbeat()
   }
 
   return {
@@ -273,6 +349,8 @@ export const useChatStore = defineStore('chat', () => {
     activeSession,
     toolCalls,
     activeToolCalls,
+    taskProgress,
+    isLongTask,
     loadSessions,
     createSession,
     selectSession,

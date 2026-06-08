@@ -216,7 +216,7 @@ func isAppropriateTool(toolName, input string) bool {
 		"read_file":       {"file", "path", ".go", ".md", ".txt"},
 		"write_file":      {"file", "path", "content"},
 		"web_search":      {"search", "query", "find"},
-		"web_extract":     {"url", "http", "extract"},
+		"web_fetch":       {"url", "http", "fetch"},
 		"execute_command": {"command", "run", "execute"},
 	}
 
