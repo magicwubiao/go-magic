@@ -257,6 +257,7 @@ func NewServer(dbPath string) *Server {
 		workDir, _ = os.Getwd()
 	}
 	registry.RegisterAll(workDir)
+	s.toolReg = registry
 
 	// Create skills manager with config
 	var skillCfg skills.ManagerConfig
@@ -2392,8 +2393,45 @@ func (s *Server) handleToolsStatistics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToolsetsStatistics(w http.ResponseWriter, r *http.Request) {
-	// Return empty statistics for now
 	stats := []map[string]interface{}{}
+	toolsets := s.buildToolsets()
+
+	for _, ts := range toolsets {
+		name, _ := ts["name"].(string)
+		tools, _ := ts["tools"].([]string)
+
+		// Calculate total calls from all tools in this toolset
+		totalCalls := 0
+		toolStats := make(map[string]int)
+		if s.toolReg != nil {
+			allStats := s.toolReg.GetStats()
+			for _, toolName := range tools {
+				if stat, ok := allStats[toolName]; ok {
+					totalCalls += stat.TotalCalls
+					toolStats[toolName] = stat.TotalCalls
+				}
+			}
+		}
+
+		// Find last used time
+		lastUsed := time.Time{}
+		if s.toolReg != nil {
+			allStats := s.toolReg.GetStats()
+			for _, toolName := range tools {
+				if stat, ok := allStats[toolName]; ok && stat.LastUsed.After(lastUsed) {
+					lastUsed = stat.LastUsed
+				}
+			}
+		}
+
+		stats = append(stats, map[string]interface{}{
+			"toolset_name": name,
+			"total_calls":  totalCalls,
+			"tool_stats":   toolStats,
+			"last_used":    lastUsed.Format(time.RFC3339),
+		})
+	}
+
 	jsonResponse(w, stats)
 }
 
