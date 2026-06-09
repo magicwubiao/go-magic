@@ -231,7 +231,7 @@ type ApprovalConfig struct {
 // DefaultConfig returns the default approval configuration.
 func DefaultConfig() *ApprovalConfig {
 	return &ApprovalConfig{
-		Strategy:          StrategyAutoApprove,
+		Strategy:          StrategySmart,
 		TrustThreshold:    1,
 		DenylistThreshold: 2,
 		EnableLearning:    true,

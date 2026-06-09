@@ -193,7 +193,10 @@ func defaultConfig() *Config {
 		Provider:      "deepseek",
 		Model:         "deepseek-chat",
 		Mode:          "chat",
-		CortexEnabled: false,
+		CortexEnabled: true,
+		Memory: MemoryConfig{
+			Enabled: true,
+		},
 		Providers:     make(map[string]ProviderConfig),
 		Tools: ToolsConfig{
 			Enabled: []string{"all"},
