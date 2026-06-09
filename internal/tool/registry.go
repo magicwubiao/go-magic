@@ -18,6 +18,16 @@ var (
 	ErrToolTimeout         = errors.New("tool execution timeout")
 )
 
+// ToolStats holds execution statistics for a single tool
+type ToolStats struct {
+	TotalCalls   int           `json:"total_calls"`
+	SuccessCalls int           `json:"success_calls"`
+	FailedCalls  int           `json:"failed_calls"`
+	SuccessRate  float64       `json:"success_rate"`
+	AvgDuration  time.Duration `json:"avg_duration"`
+	LastUsed     time.Time     `json:"last_used"`
+}
+
 // Registry 管理工具注册和执行
 type Registry struct {
 	mu       sync.RWMutex
@@ -31,6 +41,10 @@ type Registry struct {
 
 	// 日志
 	logger Logger
+
+	// 统计
+	stats   map[string]*ToolStats
+	statsMu sync.RWMutex
 }
 
 // Logger 工具日志接口
@@ -78,6 +92,7 @@ func NewRegistry() *Registry {
 		executor:     NewDefaultToolExecutor(),
 		dynamicTools: make(map[string]*DynamicTool),
 		logger:       &defaultLogger{},
+		stats:        make(map[string]*ToolStats),
 	}
 }
 
@@ -365,6 +380,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	// 使用执行器执行
 	result := r.executor.ExecuteWithProtection(ctx, t, args, timeout)
 
+	// 记录统计
+	r.recordStat(name, result)
+
 	// 记录日志
 	r.mu.RLock()
 	logger := r.logger
@@ -378,6 +396,46 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	}
 
 	return result.Result, result.Error
+}
+
+// recordStat records execution statistics for a tool
+func (r *Registry) recordStat(name string, result ToolExecutionResult) {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+
+	stat, ok := r.stats[name]
+	if !ok {
+		stat = &ToolStats{}
+		r.stats[name] = stat
+	}
+
+	stat.TotalCalls++
+	if result.Error != nil {
+		stat.FailedCalls++
+	} else {
+		stat.SuccessCalls++
+	}
+	stat.SuccessRate = float64(stat.SuccessCalls) / float64(stat.TotalCalls)
+	// Simple moving average for duration
+	if stat.AvgDuration == 0 {
+		stat.AvgDuration = result.Duration
+	} else {
+		stat.AvgDuration = (stat.AvgDuration + result.Duration) / 2
+	}
+	stat.LastUsed = time.Now()
+}
+
+// GetStats returns all tool statistics
+func (r *Registry) GetStats() map[string]*ToolStats {
+	r.statsMu.RLock()
+	defer r.statsMu.RUnlock()
+
+	result := make(map[string]*ToolStats, len(r.stats))
+	for k, v := range r.stats {
+		cp := *v
+		result[k] = &cp
+	}
+	return result
 }
 
 // ExecuteWithTimeout 执行工具并指定超时时间

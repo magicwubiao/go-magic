@@ -142,6 +142,20 @@ func (m *Manager) UpdateTask(id string, updates map[string]interface{}) (*Task, 
 			task.Skills[i] = fmt.Sprintf("%v", s)
 		}
 	}
+	if dueDate, ok := updates["due_date"].(string); ok && dueDate != "" {
+		if t, err := time.Parse(time.RFC3339, dueDate); err == nil {
+			task.DueDate = &t
+		}
+	}
+	if dueDate, ok := updates["due_date"].(*time.Time); ok {
+		task.DueDate = dueDate
+	}
+	if estHours, ok := updates["estimated_hours"].(float64); ok {
+		task.EstimatedHours = estHours
+	}
+	if goalID, ok := updates["goal_id"].(string); ok {
+		task.GoalID = goalID
+	}
 
 	if err := m.db.UpdateTask(task); err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
+	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/budget"
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/complexity"
@@ -251,6 +252,22 @@ func WithMemory(enabled bool) AgentOption {
 func WithCortex(mgr *cortex.Manager) AgentOption {
 	return func(a *Agent) {
 		a.cortexManager = mgr
+	}
+}
+
+// WithApprovalManager sets an external approval manager for the agent.
+func WithApprovalManager(mgr *approval.Manager) AgentOption {
+	return func(a *Agent) {
+		if mgr != nil {
+			ah := NewApprovalHookWithManager(mgr)
+			a.approvalHook = ah
+			// Re-register the approval hook with the new manager
+			a.hooks.Register(hooks.HookRegistration{
+				Name:   "approval",
+				Source: hooks.HookSourceBuiltIn,
+				Hook:   ah,
+			})
+		}
 	}
 }
 
@@ -822,6 +839,9 @@ Please provide a comprehensive, well-structured final response based on these su
 			continue
 		}
 
+		// Track token usage from the response
+		a.trackUsage(resp)
+
 		// Call AfterLLM hooks
 		llmResp := &hooks.LLMHookResponse{
 			Content:   resp.Content,
@@ -1158,6 +1178,11 @@ Please provide a comprehensive, well-structured final response based on these su
 						}
 						toolCalls[i].Normalize()
 					}
+					// Track token usage from final stream chunk
+					if resp.Usage != nil {
+						a.inputTokens += resp.Usage.PromptTokens
+						a.outputTokens += resp.Usage.CompletionTokens
+					}
 				} else {
 					fullContent += resp.Content
 				}
@@ -1178,6 +1203,8 @@ Please provide a comprehensive, well-structured final response based on these su
 							stdlog.Printf("[WARN] ChatWithTools returned %d tool calls (stream parser bug)", len(nonStreamResp.ToolCalls))
 							toolCalls = nonStreamResp.ToolCalls
 							fullContent = nonStreamResp.Content
+							// Track usage from fallback response
+							a.trackUsage(nonStreamResp)
 						}
 					}
 				}
@@ -1192,6 +1219,11 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 				if resp.Done {
 					fullContent = resp.Content
+					// Track token usage from final stream chunk
+					if resp.Usage != nil {
+						a.inputTokens += resp.Usage.PromptTokens
+						a.outputTokens += resp.Usage.CompletionTokens
+					}
 				} else {
 					fullContent += resp.Content
 				}
@@ -1222,6 +1254,9 @@ Please provide a comprehensive, well-structured final response based on these su
 				handler("", true)
 				continue
 			}
+
+			// Track token usage from the response
+			a.trackUsage(resp)
 
 			fullContent = resp.Content
 			toolCalls = resp.ToolCalls
@@ -1594,6 +1629,14 @@ func (a *Agent) GetHistory() []provider.Message {
 // GetTokenStats returns the token usage statistics
 func (a *Agent) GetTokenStats() (inputTokens, outputTokens, cacheReadTokens int) {
 	return a.inputTokens, a.outputTokens, a.cacheReadTokens
+}
+
+// trackUsage accumulates token usage from an LLM response
+func (a *Agent) trackUsage(resp *provider.ChatResponse) {
+	if resp != nil && resp.Usage != nil {
+		a.inputTokens += resp.Usage.PromptTokens
+		a.outputTokens += resp.Usage.CompletionTokens
+	}
 }
 
 // TokenUsage represents token usage statistics for tracking

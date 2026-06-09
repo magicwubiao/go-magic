@@ -87,6 +87,11 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
+		Usage: &Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
@@ -212,6 +217,9 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 		"model":    p.Model,
 		"messages": ConvertMessages(messages),
 		"stream":   true,
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
 	}
 
 	if withTools && tools != nil {

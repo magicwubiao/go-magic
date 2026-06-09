@@ -151,10 +151,8 @@ func (m *Manager) Record(inputTokens, outputTokens int, model, provider, session
 	m.updateDailyStats(&record)
 	m.updateMonthlyBudget(cost)
 
-	// 每 10 条记录保存一次
-	if len(m.records) >= 10 || time.Since(m.lastSave) > time.Minute {
-		m.save()
-	}
+	// Always save after recording
+	m.save()
 
 	return nil
 }
@@ -434,8 +432,8 @@ func (m *Manager) load() error {
 		json.Unmarshal(data, &m.budget)
 	}
 
-	// 检查是否是当月
-	if m.budget != nil && m.budget.Month != time.Now().Format("2006-01") {
+	// 确保预算已初始化
+	if m.budget == nil || m.budget.Month != time.Now().Format("2006-01") {
 		m.initCurrentMonth()
 	}
 

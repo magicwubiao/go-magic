@@ -206,6 +206,7 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 	// Use map for delta tracking: index -> current accumulated tool call
 	deltaMap := make(map[int]*types.ToolCall)
 	var mu sync.Mutex
+	var finalUsage *Usage
 
 	done := false
 
@@ -277,6 +278,10 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 
 		if resp.Done {
 			done = true
+			// Capture usage from final chunk
+			if resp.Usage != nil {
+				finalUsage = resp.Usage
+			}
 		}
 		mu.Unlock()
 
@@ -302,6 +307,7 @@ func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamP
 		Content:   accumulatedContent.String(),
 		ToolCalls: accumulatedToolCalls,
 		Done:      true,
+		Usage:     finalUsage,
 	})
 	mu.Unlock()
 

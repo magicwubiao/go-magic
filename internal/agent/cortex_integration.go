@@ -168,6 +168,9 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			continue
 		}
 
+		// Track token usage from the response
+		a.trackUsage(resp)
+
 		llmResp := &hooks.LLMHookResponse{
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,

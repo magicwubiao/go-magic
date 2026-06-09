@@ -101,7 +101,7 @@
               <template #header-extra>
                 <n-space align="center" size="small">
                   <n-switch v-model:value="skill.enabled" size="small" @update:value="toggleSkill(skill.name, $event)" @click.stop />
-                  <n-popconfirm @positive-click="deleteSkillConfirm(skill.id, skill.name)" @click.stop>
+                  <n-popconfirm v-if="skill.source !== 'builtin'" @positive-click="deleteSkillConfirm(skill.id, skill.name)" @click.stop>
                     <template #trigger>
                       <n-button size="small" type="error" quaternary circle @click.stop>
                         <template #icon>
@@ -157,7 +157,7 @@
         <n-tab-pane :name="t('skills.tabs.overview')" :tab="t('skills.tabs.overview')">
           <n-space vertical>
             <n-space justify="end" style="margin-bottom: 12px;">
-              <n-button size="small" style="display: flex; align-items: center;" @click="openEditModal(selectedSkill)">
+              <n-button v-if="selectedSkill?.source !== 'builtin'" size="small" style="display: flex; align-items: center;" @click="openEditModal(selectedSkill)">
                 <template #icon><EditIcon /></template>
                 {{ t('skills.edit') }}
               </n-button>
@@ -351,7 +351,7 @@ const installingHubSkill = ref<string | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
-const skillSources = ref<string[]>(['all', 'local', 'global', 'registry', 'auto'])
+const skillSources = ref<string[]>(['all', 'builtin', 'local', 'global', 'registry', 'auto'])
 const skillVersions = ref<SkillVersion[]>([])
 const evolutionHistory = ref<EvolutionRecord[]>([])
 

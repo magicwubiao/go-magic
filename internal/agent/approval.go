@@ -51,6 +51,18 @@ func NewApprovalHook() *ApprovalHook {
 	}
 }
 
+// NewApprovalHookWithManager creates a new approval hook using an existing manager.
+func NewApprovalHookWithManager(mgr *approval.Manager) *ApprovalHook {
+	if mgr == nil {
+		return NewApprovalHook()
+	}
+	return &ApprovalHook{
+		manager:      mgr,
+		cliTimeout:   defaultApprovalTimeout,
+		skipPatterns: make(map[string]map[string]bool),
+	}
+}
+
 // Name returns the hook name.
 func (h *ApprovalHook) Name() string { return "approval" }
 

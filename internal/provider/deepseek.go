@@ -58,6 +58,9 @@ func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Messa
 		"model":    bp.Model,
 		"messages": ConvertMessages(messages),
 		"stream":   true,
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
 	}
 
 	headers := map[string]string{}
@@ -86,6 +89,9 @@ func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []ty
 		"messages": ConvertMessages(messages),
 		"tools":    tools,
 		"stream":   true,
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
 	}
 
 	headers := map[string]string{}

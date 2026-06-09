@@ -125,12 +125,10 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 	// 加载禁用技能配置
 	m.loadDisabledSkills()
 
-	// Load built-in skills
-	if config.BuiltinDir != "" {
-		if err := m.loadBuiltinSkills(); err != nil {
-			// Don't fail on error, just log
-			fmt.Printf("Warning: failed to load built-in skills: %v\n", err)
-		}
+	// Load built-in skills (always try embedded FS, fallback to filesystem)
+	if err := m.loadBuiltinSkills(); err != nil {
+		// Don't fail on error, just log
+		fmt.Printf("Warning: failed to load built-in skills: %v\n", err)
 	}
 
 	if err := m.loadSkills(); err != nil {
@@ -206,16 +204,37 @@ func (m *Manager) SetToolNames(names []string) {
 
 // loadBuiltinSkills 加载内置技能
 func (m *Manager) loadBuiltinSkills() error {
+	// First try embedded builtin skills (always available in compiled binary)
+	entries, err := BuiltinSkillsFS.ReadDir(BuiltinDirName)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillMdPath := BuiltinDirName + "/" + entry.Name() + "/SKILL.md"
+			data, err := BuiltinSkillsFS.ReadFile(skillMdPath)
+			if err == nil {
+				skill := m.loadSkillFromContent(string(data), entry.Name())
+				if skill != nil {
+					skill.Source = "builtin"
+					m.skills[skill.Name] = skill
+				}
+			}
+		}
+		return nil
+	}
+
+	// Fallback to filesystem (for development mode)
 	if m.builtinDir == "" {
 		return nil
 	}
 
-	entries, err := os.ReadDir(m.builtinDir)
+	osEntries, err := os.ReadDir(m.builtinDir)
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
+	for _, entry := range osEntries {
 		if !entry.IsDir() {
 			continue
 		}
@@ -561,6 +580,34 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 	}
 
 	return skill
+}
+
+// loadSkillFromContent loads a skill from markdown content string (for embedded skills)
+func (m *Manager) loadSkillFromContent(content, dirName string) *Skill {
+	name := dirName
+	description := "Built-in skill"
+
+	tags := []string{}
+	tools := []string{}
+
+	if strings.HasPrefix(content, "---") {
+		endMarker := strings.Index(content[3:], "---")
+		if endMarker != -1 {
+			frontmatter := content[3 : endMarker+3]
+			name, description, tags, tools = parseFrontmatter(frontmatter, name)
+		}
+	}
+
+	return &Skill{
+		SkillMeta: SkillMeta{
+			Name:        name,
+			Description: description,
+			Tags:        tags,
+		},
+		Tools:    tools,
+		Content:  content,
+		Metadata: make(map[string]interface{}),
+	}
 }
 
 // extractString safely extracts a string value from a map

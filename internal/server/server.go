@@ -38,6 +38,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
@@ -164,6 +165,13 @@ type Server struct {
 	// Approval manager (independent of agents)
 	approvalMgr *approval.Manager
 
+	// Usage manager
+	usageMgr *usage.Manager
+
+	// Track cumulative token counts per session to compute deltas
+	sessionTokens   map[string][2]int // [inputTokens, outputTokens]
+	sessionTokensMu sync.Mutex
+
 	// Background actions tracking
 	actions   map[string]*ActionStatus
 	actionsMu sync.RWMutex
@@ -259,6 +267,8 @@ func NewServer(dbPath string) *Server {
 			skillCfg.MinPatternFreq = 2
 		}
 	}
+	// Always load built-in skills from embedded FS (via filesystem fallback)
+	skillCfg.BuiltinDir = filepath.Join(magicHome, "builtin_skills")
 	skillMgr, _ := skills.NewManagerWithConfig(&skillCfg)
 
 	// Initialize auto skill creator with LLM provider for better description generation
@@ -341,6 +351,13 @@ func NewServer(dbPath string) *Server {
 		fmt.Printf("[server] Approval system enabled (strategy: %s)\n", approvalCfg.Strategy)
 	}
 
+	// Create usage manager
+	usageMgr, err := usage.NewManager(filepath.Join(magicHome, "usage"))
+	if err != nil {
+		fmt.Printf("[server] Warning: Failed to create usage manager: %v\n", err)
+		usageMgr = nil
+	}
+
 	// Get version
 	version := "dev"
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -387,7 +404,9 @@ func NewServer(dbPath string) *Server {
 		goalMgr:          goalMgr,
 		cortexMgr:        cortexMgr,
 		approvalMgr:      approvalMgr,
+		usageMgr:         usageMgr,
 		actions:          make(map[string]*ActionStatus),
+		sessionTokens:    make(map[string][2]int),
 		authToken:        authToken,
 	}
 
@@ -486,6 +505,10 @@ RULES:
 	if s.cortexMgr != nil {
 		agentOpts = append(agentOpts, agent.WithCortex(s.cortexMgr))
 		fmt.Printf("[server] Agent %s: Cortex memory enabled\n", sessionID)
+	}
+	// Share approval manager with agent so web API can see approval history
+	if s.approvalMgr != nil {
+		agentOpts = append(agentOpts, agent.WithApprovalManager(s.approvalMgr))
 	}
 
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
@@ -829,6 +852,12 @@ func (s *Server) Start(port int) error {
 	// System
 	mux.HandleFunc("/api/system/info", withCORS(requireAuth(s.handleSystemInfo)))
 	mux.HandleFunc("/api/system/stats", withCORS(requireAuth(s.handleSystemStats)))
+	mux.HandleFunc("/api/usage/today", withCORS(requireAuth(s.handleUsageToday)))
+	mux.HandleFunc("/api/usage/daily", withCORS(requireAuth(s.handleUsageDaily)))
+	mux.HandleFunc("/api/usage/weekly", withCORS(requireAuth(s.handleUsageWeekly)))
+	mux.HandleFunc("/api/usage/monthly", withCORS(requireAuth(s.handleUsageMonthly)))
+	mux.HandleFunc("/api/usage/insights", withCORS(requireAuth(s.handleUsageInsights)))
+	mux.HandleFunc("/api/usage/budget", withCORS(requireAuth(s.handleUsageBudget)))
 	mux.HandleFunc("/api/system/health", withCORS(requireAuth(s.handleSystemHealth)))
 	mux.HandleFunc("/api/system/version", withCORS(requireAuth(s.handleSystemVersion)))
 	mux.HandleFunc("/api/system/version/check", withCORS(requireAuth(s.handleVersionCheck)))
@@ -857,7 +886,7 @@ func (s *Server) Start(port int) error {
 	// Kanban
 	mux.HandleFunc("/api/kanban/board", withCORS(requireAuth(s.handleKanbanBoard)))
 	mux.HandleFunc("/api/kanban/tasks", withCORS(requireAuth(s.handleKanbanTasks)))
-	mux.HandleFunc("/api/kanban/tasks/", withCORS(requireAuth(s.handleKanbanTaskByID)))
+	mux.HandleFunc("/api/kanban/tasks/", withCORS(requireAuth(s.handleKanbanTaskByIDOrSubroute)))
 
 	// GroupChat
 	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
@@ -1918,6 +1947,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Record usage statistics
+	s.recordUsage(aiAgent, sessionID)
+
 	response := map[string]interface{}{
 		"id":      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		"content": respContent,
@@ -2039,6 +2071,42 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	// Record usage statistics after stream completes
+	s.recordUsage(aiAgent, sessionID)
+}
+
+// recordUsage records token usage to the usage manager (delta since last call)
+func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
+	if s.usageMgr == nil || aiAgent == nil {
+		return
+	}
+	inputTokens, outputTokens, _ := aiAgent.GetTokenStats()
+
+	s.sessionTokensMu.Lock()
+	prev, ok := s.sessionTokens[sessionID]
+	if !ok {
+		prev = [2]int{0, 0}
+	}
+	deltaInput := inputTokens - prev[0]
+	deltaOutput := outputTokens - prev[1]
+	s.sessionTokens[sessionID] = [2]int{inputTokens, outputTokens}
+	s.sessionTokensMu.Unlock()
+
+	// Only record if there are new tokens consumed in this turn
+	if deltaInput > 0 || deltaOutput > 0 {
+		model := s.cfg.Model
+		if model == "" {
+			model = "unknown"
+		}
+		provider := s.cfg.Provider
+		if provider == "" {
+			provider = "unknown"
+		}
+		if err := s.usageMgr.Record(deltaInput, deltaOutput, model, provider, sessionID); err != nil {
+			fmt.Printf("[server] Failed to record usage: %v\n", err)
+		}
+	}
 }
 
 // --- Tools ---
@@ -2299,8 +2367,27 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToolsStatistics(w http.ResponseWriter, r *http.Request) {
-	// Return empty statistics for now (would need effectiveness manager integration)
 	stats := []map[string]interface{}{}
+	if s.toolReg != nil {
+		for name, stat := range s.toolReg.GetStats() {
+			trend := "stable"
+			if stat.SuccessRate >= 0.9 && stat.TotalCalls > 10 {
+				trend = "improving"
+			} else if stat.SuccessRate < 0.5 && stat.TotalCalls > 5 {
+				trend = "declining"
+			}
+			stats = append(stats, map[string]interface{}{
+				"tool_name":     name,
+				"total_calls":   stat.TotalCalls,
+				"success_calls": stat.SuccessCalls,
+				"failed_calls":  stat.FailedCalls,
+				"success_rate":  stat.SuccessRate,
+				"avg_duration":  stat.AvgDuration.Milliseconds(),
+				"last_used":     stat.LastUsed.Format(time.RFC3339),
+				"trend":         trend,
+			})
+		}
+	}
 	jsonResponse(w, stats)
 }
 
@@ -4582,9 +4669,13 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 	sessions := 0
+	messages := 0
 	if s.sessionStore != nil {
 		if list, err := s.sessionStore.ListSessions(context.Background(), ""); err == nil {
 			sessions = len(list)
+			for _, sess := range list {
+				messages += len(sess.Messages)
+			}
 		}
 	}
 
@@ -4595,11 +4686,131 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, map[string]interface{}{
 		"sessions":     sessions,
-		"messages":     0,
+		"messages":     messages,
 		"uptime":       uptimeSeconds,
 		"memory_usage": memStats.Alloc,
 		"goroutines":   runtime.NumGoroutine(),
 	})
+}
+
+// --- Usage Statistics ---
+
+func (s *Server) handleUsageToday(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	stats, err := s.usageMgr.GetTodayStats()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, stats)
+}
+
+func (s *Server) handleUsageDaily(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+	// Collect daily stats for the last N days
+	now := time.Now()
+	result := make([]map[string]interface{}, 0, days)
+	for i := days - 1; i >= 0; i-- {
+		date := now.AddDate(0, 0, -i).Format("2006-01-02")
+		stats, err := s.usageMgr.GetDailyStats(date)
+		if err != nil {
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"date":                stats.Date,
+			"total_requests":      stats.TotalRequests,
+			"total_input_tokens":  stats.TotalInput,
+			"total_output_tokens": stats.TotalOutput,
+			"total_cost":          stats.TotalCost,
+			"by_model":            stats.ByModel,
+		})
+	}
+	jsonResponse(w, result)
+}
+
+func (s *Server) handleUsageWeekly(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	stats, err := s.usageMgr.GetWeeklyStats()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, stats)
+}
+
+func (s *Server) handleUsageMonthly(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	stats, err := s.usageMgr.GetMonthlyStats()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, stats)
+}
+
+func (s *Server) handleUsageInsights(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+	insights, err := s.usageMgr.GetInsights(days)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, insights)
+}
+
+func (s *Server) handleUsageBudget(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	switch r.Method {
+	case "GET":
+		budget := s.usageMgr.GetBudget()
+		jsonResponse(w, budget)
+	case "PUT":
+		var req struct {
+			Limit          float64 `json:"limit"`
+			AlertThreshold float64 `json:"alert_threshold"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", 400)
+			return
+		}
+		if err := s.usageMgr.SetBudget(req.Limit, req.AlertThreshold); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"status": "ok"})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
 }
 
 // --- User Profile Helper Methods ---
@@ -5769,15 +5980,21 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	for _, taskList := range board {
 		for _, task := range taskList {
 			tasks = append(tasks, map[string]interface{}{
-				"id":          task.ID,
-				"title":       task.Title,
-				"description": task.Body,
-				"status":      task.Status,
-				"priority":    task.Priority,
-				"assignee":    task.Assignee,
-				"tags":        task.Skills,
-				"created_at":  task.CreatedAt.Unix(),
-				"updated_at":  task.UpdatedAt.Unix(),
+				"id":              task.ID,
+				"title":           task.Title,
+				"description":     task.Body,
+				"status":          task.Status,
+				"priority":        task.Priority,
+				"assignee":        task.Assignee,
+				"tags":            task.Skills,
+				"created_at":      task.CreatedAt.Unix(),
+				"updated_at":      task.UpdatedAt.Unix(),
+				"due_date":        task.DueDate,
+				"estimated_hours": task.EstimatedHours,
+				"goal_id":         task.GoalID,
+				"parent_count":    task.ParentCount,
+				"child_count":     task.ChildCount,
+				"comment_count":   task.CommentCount,
 			})
 		}
 	}
@@ -5807,9 +6024,12 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var req struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Priority    string `json:"priority"`
+			Title          string  `json:"title"`
+			Description    string  `json:"description"`
+			Priority       string  `json:"priority"`
+			DueDate        string  `json:"due_date"`
+			EstimatedHours float64 `json:"estimated_hours"`
+			GoalID         string  `json:"goal_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -5824,6 +6044,8 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 		priority := 1
 		if req.Priority == "high" {
 			priority = 2
+		} else if req.Priority == "critical" {
+			priority = 3
 		} else if req.Priority == "low" {
 			priority = 0
 		}
@@ -5834,15 +6056,33 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Apply optional fields
+		updates := make(map[string]interface{})
+		if req.DueDate != "" {
+			updates["due_date"] = req.DueDate
+		}
+		if req.EstimatedHours > 0 {
+			updates["estimated_hours"] = req.EstimatedHours
+		}
+		if req.GoalID != "" {
+			updates["goal_id"] = req.GoalID
+		}
+		if len(updates) > 0 {
+			task, _ = s.kanbanMgr.UpdateTask(task.ID, updates)
+		}
+
 		jsonResponse(w, map[string]interface{}{
-			"id":          task.ID,
-			"title":       task.Title,
-			"description": task.Body,
-			"status":      task.Status,
-			"priority":    task.Priority,
-			"tags":        task.Skills,
-			"created_at":  task.CreatedAt.Unix(),
-			"updated_at":  task.UpdatedAt.Unix(),
+			"id":              task.ID,
+			"title":           task.Title,
+			"description":     task.Body,
+			"status":          task.Status,
+			"priority":        task.Priority,
+			"tags":            task.Skills,
+			"created_at":      task.CreatedAt.Unix(),
+			"updated_at":      task.UpdatedAt.Unix(),
+			"due_date":        task.DueDate,
+			"estimated_hours": task.EstimatedHours,
+			"goal_id":         task.GoalID,
 		})
 		return
 	}
@@ -5857,13 +6097,16 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 		for _, taskList := range board {
 			for _, task := range taskList {
 				tasks = append(tasks, map[string]interface{}{
-					"id":          task.ID,
-					"title":       task.Title,
-					"description": task.Body,
-					"status":      task.Status,
-					"priority":    task.Priority,
-					"created_at":  task.CreatedAt.Unix(),
-					"updated_at":  task.UpdatedAt.Unix(),
+					"id":              task.ID,
+					"title":           task.Title,
+					"description":     task.Body,
+					"status":          task.Status,
+					"priority":        task.Priority,
+					"created_at":      task.CreatedAt.Unix(),
+					"updated_at":      task.UpdatedAt.Unix(),
+					"due_date":        task.DueDate,
+					"estimated_hours": task.EstimatedHours,
+					"goal_id":         task.GoalID,
 				})
 			}
 		}
@@ -5872,6 +6115,35 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "method not allowed", 405)
+}
+
+func (s *Server) handleKanbanTaskByIDOrSubroute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/kanban/tasks/")
+	parts := strings.SplitN(path, "/", 2)
+
+	// If there's a sub-route (e.g. <id>/comments, <id>/children, <id>/triage, <id>/block, <id>/move)
+	if len(parts) == 2 && parts[1] != "" {
+		id := parts[0]
+		subroute := parts[1]
+		switch subroute {
+		case "move":
+			s.handleKanbanTaskMove(w, r, id)
+		case "comments":
+			s.handleKanbanComments(w, r, id)
+		case "children":
+			s.handleKanbanChildren(w, r, id)
+		case "triage":
+			s.handleKanbanTriage(w, r, id)
+		case "block":
+			s.handleKanbanBlock(w, r, id)
+		default:
+			http.Error(w, "not found", 404)
+		}
+		return
+	}
+
+	// Otherwise it's a task ID only — delegate to the original handler
+	s.handleKanbanTaskByID(w, r)
 }
 
 func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
@@ -5902,15 +6174,21 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		jsonResponse(w, map[string]interface{}{
-			"id":          task.ID,
-			"title":       task.Title,
-			"description": task.Body,
-			"status":      task.Status,
-			"priority":    task.Priority,
-			"assignee":    task.Assignee,
-			"tags":        task.Skills,
-			"created_at":  task.CreatedAt.Unix(),
-			"updated_at":  task.UpdatedAt.Unix(),
+			"id":              task.ID,
+			"title":           task.Title,
+			"description":     task.Body,
+			"status":          task.Status,
+			"priority":        task.Priority,
+			"assignee":        task.Assignee,
+			"tags":            task.Skills,
+			"created_at":      task.CreatedAt.Unix(),
+			"updated_at":      task.UpdatedAt.Unix(),
+			"due_date":        task.DueDate,
+			"estimated_hours": task.EstimatedHours,
+			"goal_id":         task.GoalID,
+			"parent_count":    task.ParentCount,
+			"child_count":     task.ChildCount,
+			"comment_count":   task.CommentCount,
 		})
 	case "PUT":
 		var req struct {
@@ -5951,11 +6229,14 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		jsonResponse(w, map[string]interface{}{
-			"id":         updatedTask.ID,
-			"title":      updatedTask.Title,
-			"status":     updatedTask.Status,
-			"priority":   updatedTask.Priority,
-			"updated_at": updatedTask.UpdatedAt.Unix(),
+			"id":              updatedTask.ID,
+			"title":           updatedTask.Title,
+			"status":          updatedTask.Status,
+			"priority":        updatedTask.Priority,
+			"updated_at":      updatedTask.UpdatedAt.Unix(),
+			"due_date":        updatedTask.DueDate,
+			"estimated_hours": updatedTask.EstimatedHours,
+			"goal_id":         updatedTask.GoalID,
 		})
 	case "DELETE":
 		if err := s.kanbanMgr.DeleteTask(id); err != nil {
@@ -5997,6 +6278,128 @@ func (s *Server) handleKanbanTaskMove(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
+	jsonResponse(w, map[string]interface{}{
+		"id":              task.ID,
+		"status":          task.Status,
+		"due_date":        task.DueDate,
+		"estimated_hours": task.EstimatedHours,
+		"goal_id":         task.GoalID,
+	})
+}
+
+func (s *Server) handleKanbanComments(w http.ResponseWriter, r *http.Request, taskID string) {
+	switch r.Method {
+	case "GET":
+		comments, err := s.kanbanMgr.ListComments(taskID)
+		if err != nil {
+			jsonResponse(w, []interface{}{})
+			return
+		}
+		result := make([]map[string]interface{}, 0, len(comments))
+		for _, c := range comments {
+			result = append(result, map[string]interface{}{
+				"id":         c.ID,
+				"task_id":    c.TaskID,
+				"author":     c.Author,
+				"body":       c.Body,
+				"created_at": c.CreatedAt.Unix(),
+			})
+		}
+		jsonResponse(w, result)
+	case "POST":
+		var req struct {
+			Author string `json:"author"`
+			Body   string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		comment, err := s.kanbanMgr.AddComment(taskID, req.Author, req.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"id":         comment.ID,
+			"task_id":    comment.TaskID,
+			"author":     comment.Author,
+			"body":       comment.Body,
+			"created_at": comment.CreatedAt.Unix(),
+		})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (s *Server) handleKanbanChildren(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	children, err := s.kanbanMgr.GetChildren(taskID)
+	if err != nil {
+		jsonResponse(w, []interface{}{})
+		return
+	}
+	result := make([]map[string]interface{}, 0, len(children))
+	for _, t := range children {
+		result = append(result, map[string]interface{}{
+			"id":              t.ID,
+			"title":           t.Title,
+			"status":          t.Status,
+			"priority":        t.Priority,
+			"due_date":        t.DueDate,
+			"estimated_hours": t.EstimatedHours,
+		})
+	}
+	jsonResponse(w, result)
+}
+
+func (s *Server) handleKanbanTriage(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.provider == nil {
+		http.Error(w, "provider not available", 500)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	task, err := s.kanbanMgr.TriageTask(ctx, taskID, s.provider)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"id":              task.ID,
+		"title":           task.Title,
+		"description":     task.Body,
+		"status":          task.Status,
+		"priority":        task.Priority,
+		"due_date":        task.DueDate,
+		"estimated_hours": task.EstimatedHours,
+	})
+}
+
+func (s *Server) handleKanbanBlock(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	task, err := s.kanbanMgr.BlockTask(taskID, req.Reason)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	jsonResponse(w, map[string]interface{}{
 		"id":     task.ID,
 		"status": task.Status,

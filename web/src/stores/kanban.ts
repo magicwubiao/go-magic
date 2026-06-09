@@ -22,6 +22,17 @@ export const useKanbanStore = defineStore('kanban', () => {
     { key: 'done', titleKey: 'kanban.statusOptions.done', tasks: (tasks.value ?? []).filter(t => t.status === 'done' || t.status === 'archived') },
   ])
 
+  // Stats computed from tasks
+  const stats = computed(() => {
+    const all = tasks.value ?? []
+    return {
+      total: all.length,
+      completed: all.filter(t => t.status === 'done' || t.status === 'archived').length,
+      in_progress: all.filter(t => t.status === 'running').length,
+      pending: all.filter(t => ['triage', 'todo', 'ready'].includes(t.status)).length,
+    }
+  })
+
   async function loadBoard() {
     loading.value = true
     try {
@@ -58,5 +69,5 @@ export const useKanbanStore = defineStore('kanban', () => {
     tasks.value = tasks.value.filter(t => t.id !== id)
   }
 
-  return { tasks, upperColumns, lowerColumns, loading, loadBoard, addTask, updateTask, moveTask, removeTask }
+  return { tasks, upperColumns, lowerColumns, loading, stats, loadBoard, addTask, updateTask, moveTask, removeTask }
 })

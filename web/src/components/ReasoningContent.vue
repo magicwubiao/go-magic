@@ -158,16 +158,16 @@ function renderMarkdown(content: string): string {
 }
 
 .reasoning-content {
-  padding: 10px 12px;
+  padding: 12px 14px;
   max-height: 400px;
   overflow-y: auto;
   font-size: 13px;
   color: #999;
-  line-height: 1.6;
+  line-height: 1.75;
 }
 
 .reasoning-content :deep(p) {
-  margin: 0 0 6px 0;
+  margin: 0 0 10px 0;
 }
 
 .reasoning-content :deep(p:last-child) {
@@ -176,12 +176,43 @@ function renderMarkdown(content: string): string {
 
 .reasoning-content :deep(ul),
 .reasoning-content :deep(ol) {
-  margin: 4px 0;
-  padding-left: 20px;
+  margin: 8px 0;
+  padding-left: 24px;
 }
 
 .reasoning-content :deep(li) {
-  margin: 2px 0;
+  margin: 4px 0;
+}
+
+.reasoning-content :deep(h1),
+.reasoning-content :deep(h2),
+.reasoning-content :deep(h3),
+.reasoning-content :deep(h4) {
+  margin: 14px 0 8px 0;
+  font-weight: 600;
+  color: #888;
+}
+
+.reasoning-content :deep(h1) { font-size: 16px; }
+.reasoning-content :deep(h2) { font-size: 15px; }
+.reasoning-content :deep(h3) { font-size: 14px; }
+.reasoning-content :deep(h4) { font-size: 13px; }
+
+.reasoning-content :deep(blockquote) {
+  border-left: 3px solid #d0d0d0;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #aaa;
+}
+
+.reasoning-content :deep(hr) {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 10px 0;
+}
+
+.reasoning-content :deep(pre) {
+  margin: 8px 0;
 }
 
 .reasoning-content :deep(code) {
