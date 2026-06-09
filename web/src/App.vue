@@ -147,7 +147,7 @@ const menuOptions = computed(() => [
   { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline), badge: pendingApprovalCount.value > 0 ? pendingApprovalCount.value : undefined },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
-  { label: t('nav.usage'), key: '/usage', icon: renderIcon(StatsChartOutline) },
+  
   { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: '/config', icon: renderIcon(SettingsOutline) },
 ])
