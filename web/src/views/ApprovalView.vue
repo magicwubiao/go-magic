@@ -132,63 +132,7 @@
           <n-empty v-else :description="t('approval.patterns.noDenied')" />
         </n-tab-pane>
 
-        <!-- Tab 4: Settings -->
-        <n-tab-pane name="settings" :tab="t('approval.tabs.settings')">
-          <n-card size="small">
-            <n-form label-placement="left" label-width="140">
-              <n-form-item :label="t('approval.settings.strategy')">
-                <n-select
-                  v-model:value="settings.strategy"
-                  :options="strategyOptions"
-                  style="width: 320px;"
-                  @update:value="handleStrategyChange"
-                />
-              </n-form-item>
-              <n-form-item :label="t('approval.settings.trustThreshold')">
-                <n-input-number
-                  v-model:value="settings.trustThreshold"
-                  :min="1"
-                  :max="100"
-                  style="width: 160px;"
-                  @update:value="handleSettingsChange"
-                />
-              </n-form-item>
-              <n-form-item :label="t('approval.settings.enableLearning')">
-                <n-switch v-model:value="settings.enableLearning" @update:value="handleSettingsChange" />
-              </n-form-item>
-              <n-form-item :label="t('approval.settings.cliConfirm')">
-                <n-switch v-model:value="settings.cliConfirm" @update:value="handleSettingsChange" />
-              </n-form-item>
-            </n-form>
-          </n-card>
-
-          <n-card size="small" :title="t('approval.settings.whitelist')" style="margin-top: 16px;">
-            <n-space style="margin-bottom: 12px; flex-wrap: wrap;">
-              <n-tag
-                v-for="pattern in settings.whitelist"
-                :key="pattern"
-                closable
-                @close="handleRemoveWhitelist(pattern)"
-                type="info"
-                size="medium"
-              >
-                {{ pattern }}
-              </n-tag>
-              <n-text v-if="!settings.whitelist.length" depth="3">{{ t('common.noData') }}</n-text>
-            </n-space>
-            <n-space>
-              <n-input
-                v-model:value="newWhitelistPattern"
-                :placeholder="t('approval.settings.whitelistPlaceholder')"
-                style="width: 300px;"
-                @keyup.enter="handleAddWhitelist"
-              />
-              <n-button type="primary" @click="handleAddWhitelist">{{ t('approval.settings.addWhitelist') }}</n-button>
-            </n-space>
-          </n-card>
-        </n-tab-pane>
-
-        <!-- Tab 5: Pending -->
+        <!-- Tab 4: Pending -->
         <n-tab-pane name="pending" :tab="pendingTabTitle">
           <template v-if="pendingApprovals.length > 0">
             <n-space justify="end" style="margin-bottom: 12px;">
@@ -252,6 +196,7 @@
 import { ref, computed, onMounted, onUnmounted, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, NTag, useMessage } from 'naive-ui'
+import { request } from '@/api/client'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -310,25 +255,6 @@ interface DeniedCommand {
 
 const trustedCommands = ref<TrustedCommand[]>([])
 const deniedCommands = ref<DeniedCommand[]>([])
-
-// Settings
-interface ApprovalSettings {
-  strategy: string
-  trustThreshold: number
-  enableLearning: boolean
-  cliConfirm: boolean
-  whitelist: string[]
-}
-
-const settings = ref<ApprovalSettings>({
-  strategy: 'smart',
-  trustThreshold: 5,
-  enableLearning: true,
-  cliConfirm: true,
-  whitelist: [],
-})
-
-const newWhitelistPattern = ref('')
 
 // Pending
 interface PendingApproval {
@@ -417,14 +343,6 @@ function truncate(str: string, len: number): string {
   if (!str) return ''
   return str.length > len ? str.substring(0, len) + '...' : str
 }
-
-// Strategy options
-const strategyOptions = computed(() => [
-  { label: t('approval.settings.strategies.manual'), value: 'manual' },
-  { label: t('approval.settings.strategies.auto'), value: 'auto' },
-  { label: t('approval.settings.strategies.smart'), value: 'smart' },
-  { label: t('approval.settings.strategies.whitelist'), value: 'whitelist' },
-])
 
 // Top commands columns
 const topCommandColumns = computed(() => [
@@ -554,12 +472,6 @@ const deniedColumns = computed(() => [
 ])
 
 // API functions
-import { request } from '@/api/client'
-
-async function fetchApprovalStatus(): Promise<ApprovalSettings> {
-  return request('/approval/status')
-}
-
 async function fetchApprovalHistory(limit: number, offset: number): Promise<{ records: HistoryRecord[]; total: number }> {
   return request(`/approval/history?limit=${limit}&offset=${offset}`)
 }
@@ -615,27 +527,6 @@ async function fetchDeniedCommands(): Promise<DeniedCommand[]> {
   }))
 }
 
-async function addWhitelist(pattern: string): Promise<void> {
-  return request('/approval/whitelist', {
-    method: 'POST',
-    body: JSON.stringify({ pattern }),
-  })
-}
-
-async function removeWhitelist(pattern: string): Promise<void> {
-  return request('/approval/whitelist', {
-    method: 'DELETE',
-    body: JSON.stringify({ pattern }),
-  })
-}
-
-async function setStrategy(strategy: string): Promise<void> {
-  return request('/approval/settings', {
-    method: 'PUT',
-    body: JSON.stringify({ strategy }),
-  })
-}
-
 async function clearHistory(olderThanHours: number): Promise<void> {
   return request('/approval/clear-history', {
     method: 'POST',
@@ -652,7 +543,6 @@ async function loadAll(): Promise<void> {
       loadStats(),
       loadHistory(),
       loadPatterns(),
-      loadSettings(),
       loadPending(),
     ])
   } catch (e) {
@@ -687,21 +577,6 @@ async function loadPatterns(): Promise<void> {
     ])
     trustedCommands.value = trusted || []
     deniedCommands.value = denied || []
-  } catch {
-    // silent
-  }
-}
-
-async function loadSettings(): Promise<void> {
-  try {
-    const status = await fetchApprovalStatus()
-    settings.value = {
-      strategy: status.strategy || 'smart',
-      trustThreshold: status.trustThreshold || 5,
-      enableLearning: status.enableLearning !== false,
-      cliConfirm: status.cliConfirm !== false,
-      whitelist: status.whitelist || [],
-    }
   } catch {
     // silent
   }
@@ -750,55 +625,6 @@ async function handleClearDenial(pattern: string): Promise<void> {
   }
 }
 
-async function handleStrategyChange(value: string): Promise<void> {
-  try {
-    await setStrategy(value)
-    message.success(t('approval.settings.saved'))
-  } catch {
-    message.error(t('approval.settings.saveFailed'))
-  }
-}
-
-async function handleSettingsChange(): Promise<void> {
-  try {
-    await request('/approval/settings', {
-      method: 'PUT',
-      body: JSON.stringify({
-        strategy: settings.value.strategy,
-        trust_threshold: settings.value.trustThreshold,
-        cli_confirm: settings.value.cliConfirm,
-        enable_learning: settings.value.enableLearning,
-      }),
-    })
-    message.success(t('approval.settings.saved'))
-  } catch {
-    message.error(t('approval.settings.saveFailed'))
-  }
-}
-
-async function handleAddWhitelist(): Promise<void> {
-  const pattern = newWhitelistPattern.value.trim()
-  if (!pattern) return
-  try {
-    await addWhitelist(pattern)
-    newWhitelistPattern.value = ''
-    settings.value.whitelist.push(pattern)
-    message.success(t('approval.settings.saved'))
-  } catch {
-    message.error(t('approval.settings.saveFailed'))
-  }
-}
-
-async function handleRemoveWhitelist(pattern: string): Promise<void> {
-  try {
-    await removeWhitelist(pattern)
-    settings.value.whitelist = settings.value.whitelist.filter(p => p !== pattern)
-    message.success(t('approval.settings.saved'))
-  } catch {
-    message.error(t('approval.settings.saveFailed'))
-  }
-}
-
 async function handleResolve(id: string, approved: boolean): Promise<void> {
   if (approved) {
     try {
@@ -810,7 +636,6 @@ async function handleResolve(id: string, approved: boolean): Promise<void> {
       message.error(t('approval.pending.resolveFailed'))
     }
   } else {
-    // Show deny reason modal
     denyReason.value = ''
     denyCallback = async (reason: string) => {
       try {
@@ -868,7 +693,6 @@ let pendingPollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
   loadAll()
-  // Auto-poll pending approvals every 5 seconds
   pendingPollTimer = setInterval(() => {
     loadPending()
   }, 5000)

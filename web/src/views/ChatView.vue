@@ -326,6 +326,13 @@ const activeSessionSource = computed(() => {
 })
 
 // Task timeline computed from tool calls and progress
+const synthesisStarted = ref(false)
+
+// Reset synthesis flag when a new message starts streaming
+watch(() => chatStore.streaming, (val) => {
+  if (!val) synthesisStarted.value = false
+})
+
 const taskTimelineSteps = computed((): TimelineStep[] => {
   const steps: TimelineStep[] = []
   const tcs = chatStore.toolCalls
@@ -354,7 +361,10 @@ const taskTimelineSteps = computed((): TimelineStep[] => {
   }
 
   // Phase 3: Synthesis (if streaming and no running tools)
-  if (chatStore.streaming && chatStore.activeToolCalls.length === 0 && chatStore.streamContent) {
+  const showSynthesis = chatStore.streaming && chatStore.activeToolCalls.length === 0 && chatStore.streamContent
+  if (showSynthesis) synthesisStarted.value = true
+
+  if (synthesisStarted.value && chatStore.streaming) {
     steps.push({
       title: t('chat.resultSynthesis'),
       description: t('chat.resultSynthesisDesc'),

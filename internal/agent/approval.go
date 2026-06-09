@@ -271,7 +271,7 @@ func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reas
 		}
 		input := strings.TrimSpace(strings.ToLower(res.input))
 		switch input {
-		case "a", "approve", "":
+		case "a", "approve":
 			return actionApprove
 		case "d", "deny":
 			return actionDeny

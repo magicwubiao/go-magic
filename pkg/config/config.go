@@ -47,6 +47,8 @@ type Config struct {
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
 	} `json:"agent,omitempty"`
+	// Approval settings
+	Approval *ApprovalConfig `json:"approval,omitempty"`
 }
 
 // MemoryConfig represents memory configuration
@@ -148,6 +150,26 @@ type SubAgentConfig struct {
 // VoiceConfig represents voice configuration (alias for voice.VoiceConfig)
 type VoiceConfig = voice.VoiceConfig
 
+// ApprovalConfig represents command approval system configuration
+type ApprovalConfig struct {
+	Strategy         string `json:"strategy"`           // "smart", "manual", "auto"
+	TrustThreshold   int    `json:"trust_threshold"`    // Auto-approve after N trusted uses
+	EnableLearning   bool   `json:"enable_learning"`    // Learn from user decisions
+	EnableCLIConfirm bool   `json:"enable_cli_confirm"` // Enable CLI confirmation prompt
+	ApprovalTimeout  int    `json:"approval_timeout"`   // Approval timeout in seconds
+}
+
+// DefaultApprovalConfig returns default approval configuration
+func DefaultApprovalConfig() *ApprovalConfig {
+	return &ApprovalConfig{
+		Strategy:         "smart",
+		TrustThreshold:   1,
+		EnableLearning:   true,
+		EnableCLIConfirm: false,
+		ApprovalTimeout:  300,
+	}
+}
+
 // DefaultSubAgentConfig returns default subagent configuration
 func DefaultSubAgentConfig() *SubAgentConfig {
 	return &SubAgentConfig{
@@ -197,7 +219,7 @@ func defaultConfig() *Config {
 		Memory: MemoryConfig{
 			Enabled: true,
 		},
-		Providers:     make(map[string]ProviderConfig),
+		Providers: make(map[string]ProviderConfig),
 		Tools: ToolsConfig{
 			Enabled: []string{"all"},
 		},

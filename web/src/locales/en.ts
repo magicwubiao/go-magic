@@ -328,6 +328,10 @@ export default {
     secretRedaction: 'Secret Redaction',
     workingDirectory: 'Working Directory',
     chatMode: 'Chat Mode',
+    chatModes: {
+      chat: 'Chat',
+      coding: 'Coding',
+    },
     goalMaxTurns: 'Goal Max Turns',
     enableMemory: 'Enable Memory',
     authStatus: 'Auth Status',
@@ -835,6 +839,7 @@ export default {
       whitelist: 'Whitelist',
       addWhitelist: 'Add Whitelist',
       whitelistPlaceholder: 'Enter command pattern...',
+      settingsSaved: 'Approval settings saved',
       strategies: {
         manual: 'Manual - All commands require confirmation',
         auto: 'Auto - Auto-approve trusted commands',

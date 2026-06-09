@@ -257,7 +257,6 @@ func NewServer(dbPath string) *Server {
 		workDir, _ = os.Getwd()
 	}
 	registry.RegisterAll(workDir)
-	s.toolReg = registry
 
 	// Create skills manager with config
 	var skillCfg skills.ManagerConfig
@@ -342,14 +341,27 @@ func NewServer(dbPath string) *Server {
 	}
 
 	// Initialize Approval Manager independently (not tied to agents)
+	// Read approval config from main config file if available
 	approvalCfg := approval.DefaultConfig()
-	approvalCfg.Strategy = approval.StrategySmart // Use smart strategy by default for web
+	if cfg != nil && cfg.Approval != nil {
+		ac := cfg.Approval
+		approvalCfg.Strategy = approval.Strategy(ac.Strategy)
+		approvalCfg.TrustThreshold = ac.TrustThreshold
+		approvalCfg.EnableLearning = ac.EnableLearning
+		approvalCfg.EnableCLIConfirm = ac.EnableCLIConfirm
+		approvalCfg.ApprovalTimeout = ac.ApprovalTimeout
+	}
 	approvalMgr, err := approval.NewManager(approvalCfg)
 	if err != nil {
 		fmt.Printf("[server] Warning: Failed to create approval manager: %v\n", err)
 		approvalMgr = nil
 	} else {
-		fmt.Printf("[server] Approval system enabled (strategy: %s)\n", approvalCfg.Strategy)
+		// If no persisted config, use main config values (already set above)
+		loadedStrategy := approvalMgr.GetConfig().Strategy
+		if loadedStrategy == "" {
+			approvalMgr.SetStrategy(approval.StrategySmart)
+		}
+		fmt.Printf("[server] Approval system enabled (strategy: %s)\n", approvalMgr.GetConfig().Strategy)
 	}
 
 	// Create usage manager
@@ -513,6 +525,11 @@ RULES:
 	}
 
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
+
+	// Enable web approval mode for server-side agents
+	if ah := a.GetApprovalHook(); ah != nil {
+		ah.SetWebMode(true)
+	}
 
 	// Load skills
 	if s.skillMgr != nil {
@@ -3774,6 +3791,23 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			s.provider = createProvider(s.cfg)
 			s.mu.Unlock()
 			fmt.Printf("[server] Provider hot-reloaded: %s / %s\n", s.cfg.Provider, s.cfg.Model)
+		}
+
+		// Hot-reload approval config if approval section changed
+		if _, ok := expanded["approval"]; ok && s.approvalMgr != nil {
+			if ac := s.cfg.Approval; ac != nil {
+				s.approvalMgr.SetStrategy(approval.Strategy(ac.Strategy))
+				cfg := s.approvalMgr.GetConfig()
+				if ac.TrustThreshold > 0 {
+					cfg.TrustThreshold = ac.TrustThreshold
+				}
+				cfg.EnableLearning = ac.EnableLearning
+				cfg.EnableCLIConfirm = ac.EnableCLIConfirm
+				if ac.ApprovalTimeout > 0 {
+					cfg.ApprovalTimeout = ac.ApprovalTimeout
+				}
+				fmt.Printf("[server] Approval config hot-reloaded (strategy: %s)\n", ac.Strategy)
+			}
 		}
 
 		// Return updated config
@@ -7738,7 +7772,9 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		cfg.EnableCLIConfirm = req.CLIPrompt
 		cfg.EnableLearning = req.EnableLearning
-		mgr.SaveConfig()
+
+		// Sync to main config file (the single source of truth)
+		s.syncApprovalToMainConfig(mgr)
 
 		jsonResponse(w, map[string]bool{"success": true})
 	default:
@@ -7749,6 +7785,22 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+// syncApprovalToMainConfig syncs the approval manager's current config back to the main config file
+func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
+	if s.cfg == nil {
+		return
+	}
+	ac := mgr.GetConfig()
+	s.cfg.Approval = &appconfig.ApprovalConfig{
+		Strategy:         string(ac.Strategy),
+		TrustThreshold:   ac.TrustThreshold,
+		EnableLearning:   ac.EnableLearning,
+		EnableCLIConfirm: ac.EnableCLIConfirm,
+		ApprovalTimeout:  ac.ApprovalTimeout,
+	}
+	_ = s.cfg.Save()
 }
 
 func maskAPIKey(key string) string {

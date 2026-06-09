@@ -88,6 +88,38 @@
             </n-popconfirm>
           </n-form-item>
         </n-form>
+
+        <n-divider />
+
+        <!-- Approval Settings -->
+        <n-card size="small" :title="t('approval.title')">
+          <n-form label-placement="left" label-width="200" style="max-width: 600px;">
+            <n-form-item :label="t('approval.settings.strategy')">
+              <n-select
+                v-model:value="approvalForm.strategy"
+                :options="strategyOptions"
+                style="width: 320px;"
+              />
+            </n-form-item>
+            <n-form-item :label="t('approval.settings.trustThreshold')">
+              <n-input-number
+                v-model:value="approvalForm.trust_threshold"
+                :min="1"
+                :max="100"
+                style="width: 160px;"
+              />
+            </n-form-item>
+            <n-form-item :label="t('approval.settings.enableLearning')">
+              <n-switch v-model:value="approvalForm.enable_learning" />
+            </n-form-item>
+            <n-form-item :label="t('approval.settings.cliConfirm')">
+              <n-switch v-model:value="approvalForm.enable_cli_confirm" />
+            </n-form-item>
+            <n-form-item>
+              <n-button type="primary" :loading="saving" @click="saveApproval">{{ t('common.save') }}</n-button>
+            </n-form-item>
+          </n-form>
+        </n-card>
       </n-tab-pane>
 
       <!-- Raw JSON Tab -->
@@ -115,7 +147,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
@@ -140,10 +172,10 @@ const generalForm = reactive({
   chat_mode: 'chat',
 })
 
-const chatModeOptions = [
-  { label: 'Chat', value: 'chat' },
-  { label: 'Coding', value: 'coding' },
-]
+const chatModeOptions = computed(() => [
+  { label: t('config.chatModes.chat'), value: 'chat' },
+  { label: t('config.chatModes.coding'), value: 'coding' },
+])
 
 const agentForm = reactive({
   goal_max_turns: 60,
@@ -157,6 +189,19 @@ const skillsForm = reactive({
   auto_skill_creation: true,
   min_pattern_frequency: 2,
 })
+
+const approvalForm = reactive({
+  strategy: 'smart',
+  trust_threshold: 1,
+  enable_learning: true,
+  enable_cli_confirm: false,
+})
+
+const strategyOptions = computed(() => [
+  { label: t('approval.settings.strategies.smart'), value: 'smart' },
+  { label: t('approval.settings.strategies.manual'), value: 'manual' },
+  { label: t('approval.settings.strategies.auto'), value: 'auto' },
+])
 
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
@@ -173,6 +218,12 @@ function populateFromConfig(cfg: any) {
   const skills = cfg.skills || {}
   skillsForm.auto_skill_creation = skills.auto_skill_creation !== false
   skillsForm.min_pattern_frequency = skills.min_pattern_frequency || 2
+
+  const ac = cfg.approval || {}
+  approvalForm.strategy = ac.strategy || 'smart'
+  approvalForm.trust_threshold = ac.trust_threshold || 1
+  approvalForm.enable_learning = ac.enable_learning !== false
+  approvalForm.enable_cli_confirm = ac.enable_cli_confirm || false
 }
 
 async function saveGeneral() {
@@ -235,6 +286,26 @@ async function saveSkills() {
     })
     await configStore.loadConfig()
     message.success(t('config.skillsSaved'))
+  } catch (e) {
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveApproval() {
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      approval: {
+        strategy: approvalForm.strategy,
+        trust_threshold: approvalForm.trust_threshold,
+        enable_learning: approvalForm.enable_learning,
+        enable_cli_confirm: approvalForm.enable_cli_confirm,
+      }
+    })
+    await configStore.loadConfig()
+    message.success(t('approval.settings.settingsSaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {

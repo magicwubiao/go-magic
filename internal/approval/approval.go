@@ -282,7 +282,6 @@ type Manager struct {
 	mu             sync.RWMutex
 	patternsDB     string
 	historyDB      string
-	configDB       string // 配置持久化文件
 	callbacks      []ApprovalCallback
 	webCallback    *WebApprovalCallback
 }
@@ -308,7 +307,6 @@ func NewManager(config *ApprovalConfig) (*Manager, error) {
 		pendingWeb:     make(map[string]*PendingApproval),
 		patternsDB:     filepath.Join(dbDir, "patterns.json"),
 		historyDB:      filepath.Join(dbDir, "history.json"),
-		configDB:       filepath.Join(dbDir, "config.json"),
 		webCallback: &WebApprovalCallback{
 			pendingApprovals: make(map[string]*PendingApproval),
 		},
@@ -317,7 +315,6 @@ func NewManager(config *ApprovalConfig) (*Manager, error) {
 	m.loadPatterns()
 	m.loadWhitelist()
 	m.loadHistory()
-	m.loadConfig() // 加载持久化配置
 
 	return m, nil
 }
@@ -968,71 +965,15 @@ func (m *Manager) GetConfig() *ApprovalConfig {
 	return m.config
 }
 
-// SetStrategy updates the approval strategy and saves to disk.
+// SetStrategy updates the approval strategy (in-memory only; caller must persist to main config).
 func (m *Manager) SetStrategy(s Strategy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config.Strategy = s
-	m.saveConfigLocked()
 }
 
-// loadConfig loads config from disk.
-func (m *Manager) loadConfig() {
-	if _, err := os.Stat(m.configDB); os.IsNotExist(err) {
-		return
-	}
-
-	data, err := os.ReadFile(m.configDB)
-	if err != nil {
-		return
-	}
-
-	var savedConfig struct {
-		Strategy         Strategy `json:"strategy"`
-		TrustThreshold   int      `json:"trust_threshold"`
-		EnableCLIConfirm bool     `json:"enable_cli_confirm"`
-		EnableLearning   bool     `json:"enable_learning"`
-	}
-
-	if err := json.Unmarshal(data, &savedConfig); err != nil {
-		return
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.config.Strategy = savedConfig.Strategy
-	m.config.TrustThreshold = savedConfig.TrustThreshold
-	m.config.EnableCLIConfirm = savedConfig.EnableCLIConfirm
-	m.config.EnableLearning = savedConfig.EnableLearning
-}
-
-// saveConfigLocked saves config to disk (must be called with lock held).
-func (m *Manager) saveConfigLocked() {
-	configData := struct {
-		Strategy         Strategy `json:"strategy"`
-		TrustThreshold   int      `json:"trust_threshold"`
-		EnableCLIConfirm bool     `json:"enable_cli_confirm"`
-		EnableLearning   bool     `json:"enable_learning"`
-	}{
-		Strategy:         m.config.Strategy,
-		TrustThreshold:   m.config.TrustThreshold,
-		EnableCLIConfirm: m.config.EnableCLIConfirm,
-		EnableLearning:   m.config.EnableLearning,
-	}
-
-	data, err := json.MarshalIndent(configData, "", "  ")
-	if err != nil {
-		return
-	}
-
-	os.WriteFile(m.configDB, data, 0644)
-}
-
-// SaveConfig saves config to disk.
+// SaveConfig is a no-op; config is persisted via the main config file.
 func (m *Manager) SaveConfig() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.saveConfigLocked()
 	return nil
 }
 

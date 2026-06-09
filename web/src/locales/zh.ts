@@ -328,6 +328,10 @@ export default {
     secretRedaction: '敏感信息脱敏',
     workingDirectory: '工作目录',
     chatMode: '聊天模式',
+    chatModes: {
+      chat: '聊天',
+      coding: '编程',
+    },
     goalMaxTurns: '目标最大轮数',
     enableMemory: '启用记忆',
     authStatus: '认证状态',
@@ -842,6 +846,7 @@ export default {
       whitelist: '白名单',
       addWhitelist: '添加白名单',
       whitelistPlaceholder: '输入命令模式...',
+      settingsSaved: '审批设置已保存',
       strategies: {
         manual: '手动审批 - 所有命令需确认',
         auto: '自动批准 - 自动批准可信命令',
