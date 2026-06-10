@@ -224,9 +224,11 @@ func defaultConfig() *Config {
 			Enabled: []string{"all"},
 		},
 		Skills: SkillsConfig{
-			Enabled:    []string{"all"},
-			DefaultDir: "skills",
-			UserDir:    "skills",
+			Enabled:           []string{"all"},
+			DefaultDir:        "skills",
+			UserDir:           "skills",
+			AutoSkillCreation: true,
+			MinPatternFreq:    2,
 		},
 		Plugins: PluginsConfig{
 			Enabled: []string{"all"},

@@ -1383,6 +1383,11 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Check context after tool execution
 		a.truncateHistory()
 		a.Emit(bus.EventKindTurnEnd, nil)
+
+		// Cortex: analyze tool sequence for skill evolution
+		if a.cortexManager != nil {
+			a.cortexManager.OnTurnEnd()
+		}
 	}
 
 	a.Emit(bus.EventKindAgentEnd, nil)

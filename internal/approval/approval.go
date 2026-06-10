@@ -159,12 +159,12 @@ type ApprovalStats struct {
 
 // CommandStat 单个命令的审批统计.
 type CommandStat struct {
-	Pattern    string    `json:"pattern"`
-	Count      int       `json:"count"`
-	Approved   int       `json:"approved"`
-	Denied     int       `json:"denied"`
-	RiskLevel  RiskLevel `json:"risk_level"`
-	LastSeen   time.Time `json:"last_seen"`
+	Pattern   string    `json:"pattern"`
+	Count     int       `json:"count"`
+	Approved  int       `json:"approved"`
+	Denied    int       `json:"denied"`
+	RiskLevel RiskLevel `json:"risk_level"`
+	LastSeen  time.Time `json:"last_seen"`
 }
 
 // ---------------------------------------------------------------------------
@@ -316,9 +316,9 @@ type Manager struct {
 	statsCacheTime time.Time
 	statsCacheMu   sync.Mutex
 	// Async save to avoid blocking on disk I/O
-	patternsDirty  bool
-	historyDirty   bool
-	saveMu         sync.Mutex // prevents concurrent disk writes
+	patternsDirty bool
+	historyDirty  bool
+	saveMu        sync.Mutex // prevents concurrent disk writes
 }
 
 // NewManager creates a new approval manager.
