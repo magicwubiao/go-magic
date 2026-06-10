@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -51,6 +52,7 @@ func (bm *BrowserManager) Initialize() error {
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.ExecPath(bm.findChrome()),
 	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -58,6 +60,30 @@ func (bm *BrowserManager) Initialize() error {
 	bm.allocCancel = allocCancel
 
 	return nil
+}
+
+// findChrome locates the Chrome executable on the system.
+func (bm *BrowserManager) findChrome() string {
+	// Try common Chrome paths
+	paths := []string{
+		"chrome",
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		`C:\Users\Default\AppData\Local\Google\Chrome\Application\chrome.exe`,
+		"/usr/bin/google-chrome",
+		"/usr/bin/chromium",
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "" // Let chromedp use its default finder
 }
 
 // Close closes the browser manager and all tabs
@@ -92,8 +118,8 @@ func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 		}
 	}
 
-	// Create new tab context
-	tabCtx, tabCancel := chromedp.NewContext(bm.allocCtx)
+	// Create new tab context with initialization timeout
+	tabCtx, tabCancel := context.WithTimeout(bm.allocCtx, 15*time.Second)
 
 	tab := &BrowserTab{
 		ID:      tabID,

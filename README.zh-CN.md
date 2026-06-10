@@ -1,4 +1,4 @@
-# Go Magic (Magic Agent) v0.4.11
+# Go Magic (Magic Agent) v0.3.1
 
 高性能、超轻量级的 AI Agent 框架，使用 Go 语言编写，支持多 AI Provider，内置 Web Dashboard 和 TUI 界面。
 
@@ -9,7 +9,7 @@
 | **多 AI Provider 支持** | 20+ 提供商：DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenRouter、Groq、Doubao、Zhipu、Kimi、MiniMax、DashScope、vLLM 等 |
 | **TUI 界面** | 基于 BubbleTea，支持多行输入（Shift+Enter 换行）、Markdown 渲染、流式输出、斜杠命令 |
 | **Coding 模式** | 放宽权限、更长超时、允许 Python/Node 代码执行 |
-| **Web Dashboard** | Vue3 + TypeScript 前端，实时聊天、会话管理、配置管理 |
+| **Web Dashboard** | React + TypeScript 前端，实时聊天、会话管理、配置管理 |
 | **工具系统** | 15+ 内置工具：文件操作、命令执行、代码执行、Web 搜索、浏览器自动化等 |
 | **技能系统** | 自动创建、渐进式加载（L0/L1/L2），Skills Hub 集成 |
 | **消息网关** | Telegram、Discord、Slack、WhatsApp、WeChat、WeCom 等多平台消息接入 |

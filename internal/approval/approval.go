@@ -63,6 +63,29 @@ func (r RiskLevel) String() string {
 	}
 }
 
+// MarshalJSON serializes RiskLevel as a string.
+func (r RiskLevel) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + r.String() + `"`), nil
+}
+
+// UnmarshalJSON deserializes RiskLevel from a string or number.
+func (r *RiskLevel) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), `"`)
+	switch s {
+	case "low", "1":
+		*r = RiskLow
+	case "medium", "2":
+		*r = RiskMedium
+	case "high", "3":
+		*r = RiskHigh
+	case "critical", "4":
+		*r = RiskCritical
+	default:
+		*r = RiskMedium
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // ParsedCommand represents a parsed shell command structure.
 // ---------------------------------------------------------------------------
@@ -105,6 +128,7 @@ type ApprovalRecord struct {
 	Normalized string    `json:"normalized"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	RiskScore  float64   `json:"risk_score"`
+	Category   string    `json:"category"` // risk category
 	Decision   string    `json:"decision"` // approved, denied, auto_approved, timeout
 	Strategy   Strategy  `json:"strategy"`
 	Reason     string    `json:"reason"`
@@ -135,10 +159,12 @@ type ApprovalStats struct {
 
 // CommandStat 单个命令的审批统计.
 type CommandStat struct {
-	Pattern  string `json:"pattern"`
-	Count    int    `json:"count"`
-	Approved int    `json:"approved"`
-	Denied   int    `json:"denied"`
+	Pattern    string    `json:"pattern"`
+	Count      int       `json:"count"`
+	Approved   int       `json:"approved"`
+	Denied     int       `json:"denied"`
+	RiskLevel  RiskLevel `json:"risk_level"`
+	LastSeen   time.Time `json:"last_seen"`
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +223,7 @@ type ApprovalRequest struct {
 	SessionID  string
 	UserID     string
 	RiskLevel  RiskLevel
+	Category   string // risk category from assessment
 	Reason     string
 	Timestamp  time.Time
 }
@@ -284,6 +311,14 @@ type Manager struct {
 	historyDB      string
 	callbacks      []ApprovalCallback
 	webCallback    *WebApprovalCallback
+	// Stats cache to avoid O(n) computation on every page load
+	statsCache     *ApprovalStats
+	statsCacheTime time.Time
+	statsCacheMu   sync.Mutex
+	// Async save to avoid blocking on disk I/O
+	patternsDirty  bool
+	historyDirty   bool
+	saveMu         sync.Mutex // prevents concurrent disk writes
 }
 
 // NewManager creates a new approval manager.
@@ -713,6 +748,7 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 	// 3. Calculate risk level via enhanced engine
 	assessment := m.assessRisk(req.Command)
 	req.RiskLevel = assessment.Level
+	req.Category = assessment.Category
 
 	// 4. Check learned patterns
 	if m.config.EnableLearning {
@@ -893,7 +929,6 @@ func (m *Manager) Approve(req *ApprovalRequest) error {
 
 	hash := m.hashPattern(req.Command)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	pattern, exists := m.patterns[hash]
 	if !exists {
@@ -916,8 +951,12 @@ func (m *Manager) Approve(req *ApprovalRequest) error {
 
 	// Update session context
 	m.updateSessionContext(req.SessionID, req.RiskLevel)
+	m.patternsDirty = true
+	m.mu.Unlock()
 
-	return m.savePatterns()
+	// Save async to avoid blocking
+	go m.savePatterns()
+	return nil
 }
 
 // Deny records a user denial decision.
@@ -928,7 +967,6 @@ func (m *Manager) Deny(req *ApprovalRequest) error {
 
 	hash := m.hashPattern(req.Command)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	pattern, exists := m.patterns[hash]
 	if !exists {
@@ -947,25 +985,33 @@ func (m *Manager) Deny(req *ApprovalRequest) error {
 	if pattern.Trusted {
 		pattern.Trusted = false
 	}
+	m.patternsDirty = true
+	m.mu.Unlock()
 
-	return m.savePatterns()
+	// Save async to avoid blocking
+	go m.savePatterns()
+	return nil
 }
 
 // AddToWhitelist adds a command pattern to whitelist.
 func (m *Manager) AddToWhitelist(pattern string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.whitelist[pattern] = true
+	m.mu.Unlock()
+
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
 	return m.saveWhitelist()
 }
 
 // RemoveFromWhitelist removes a pattern from whitelist.
 func (m *Manager) RemoveFromWhitelist(pattern string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	delete(m.whitelist, pattern)
+	m.mu.Unlock()
+
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
 	return m.saveWhitelist()
 }
 
@@ -1223,6 +1269,7 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 		Normalized: normalizeCommand(req.Command),
 		RiskLevel:  req.RiskLevel,
 		RiskScore:  float64(req.RiskLevel) * 25, // simplified score
+		Category:   req.Category,
 		Decision:   decision,
 		Strategy:   result.Strategy,
 		Reason:     result.Reason,
@@ -1269,6 +1316,7 @@ func (m *Manager) RecordDecision(req *ApprovalRequest, result string, duration i
 	m.history = append(m.history, record)
 	m.mu.Unlock()
 
+	m.invalidateStatsCache()
 	_ = m.saveHistory()
 }
 
@@ -1294,10 +1342,32 @@ func (m *Manager) GetHistory(limit int, offset int) []*ApprovalRecord {
 	return result
 }
 
-// GetStats returns aggregated approval statistics.
-func (m *Manager) GetStats() *ApprovalStats {
+// HistoryLen returns the total number of history records.
+func (m *Manager) HistoryLen() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return len(m.history)
+}
+
+// GetStats returns aggregated approval statistics with caching.
+// The cache is invalidated when history changes (RecordDecision, ClearHistory).
+func (m *Manager) GetStats() *ApprovalStats {
+	m.statsCacheMu.Lock()
+	defer m.statsCacheMu.Unlock()
+
+	// Return cached stats if still valid (5 second TTL)
+	if m.statsCache != nil && time.Since(m.statsCacheTime) < 5*time.Second {
+		return m.statsCache
+	}
+
+	m.mu.RLock()
+	history := make([]*ApprovalRecord, len(m.history))
+	copy(history, m.history)
+	patterns := make(map[string]*CommandPattern, len(m.patterns))
+	for k, v := range m.patterns {
+		patterns[k] = v
+	}
+	m.mu.RUnlock()
 
 	stats := &ApprovalStats{
 		ByRiskLevel: make(map[RiskLevel]int),
@@ -1307,9 +1377,12 @@ func (m *Manager) GetStats() *ApprovalStats {
 	totalTime := int64(0)
 	cmdMap := make(map[string]*CommandStat)
 
-	for _, rec := range m.history {
+	for _, rec := range history {
 		stats.TotalRequests++
 		stats.ByRiskLevel[rec.RiskLevel]++
+		if rec.Category != "" {
+			stats.ByCategory[rec.Category]++
+		}
 		totalTime += rec.Duration
 
 		switch rec.Decision {
@@ -1323,13 +1396,16 @@ func (m *Manager) GetStats() *ApprovalStats {
 			stats.TimedOut++
 		}
 
-		// Aggregate by normalized command
 		cs, exists := cmdMap[rec.Normalized]
 		if !exists {
-			cs = &CommandStat{Pattern: rec.Normalized}
+			cs = &CommandStat{Pattern: rec.Normalized, RiskLevel: rec.RiskLevel, LastSeen: rec.Timestamp}
 			cmdMap[rec.Normalized] = cs
 		}
 		cs.Count++
+		if rec.Timestamp.After(cs.LastSeen) {
+			cs.LastSeen = rec.Timestamp
+			cs.RiskLevel = rec.RiskLevel
+		}
 		if rec.Decision == "approved" || rec.Decision == "auto_approved" {
 			cs.Approved++
 		} else {
@@ -1337,8 +1413,7 @@ func (m *Manager) GetStats() *ApprovalStats {
 		}
 	}
 
-	// Count trusted/denied patterns
-	for _, p := range m.patterns {
+	for _, p := range patterns {
 		if p.Trusted {
 			stats.TrustedPatterns++
 		}
@@ -1347,7 +1422,6 @@ func (m *Manager) GetStats() *ApprovalStats {
 		}
 	}
 
-	// Top commands by count
 	var cmdStats []CommandStat
 	for _, cs := range cmdMap {
 		cmdStats = append(cmdStats, *cs)
@@ -1364,10 +1438,20 @@ func (m *Manager) GetStats() *ApprovalStats {
 		stats.AvgResponseTime = float64(totalTime) / float64(stats.TotalRequests)
 	}
 
+	m.statsCache = stats
+	m.statsCacheTime = time.Now()
 	return stats
 }
 
+// invalidateStatsCache clears the stats cache. Call after any history mutation.
+func (m *Manager) invalidateStatsCache() {
+	m.statsCacheMu.Lock()
+	m.statsCache = nil
+	m.statsCacheMu.Unlock()
+}
+
 // ClearHistory removes approval records older than the given duration.
+// Also cleans up stale session contexts and patterns that no longer have history entries.
 func (m *Manager) ClearHistory(olderThan time.Duration) {
 	cutoff := time.Now().Add(-olderThan)
 
@@ -1379,8 +1463,16 @@ func (m *Manager) ClearHistory(olderThan time.Duration) {
 		}
 	}
 	m.history = filtered
+
+	// Clean up session contexts that are older than cutoff
+	for sid, ctx := range m.sessionContext {
+		if ctx.CreatedAt.Before(cutoff) {
+			delete(m.sessionContext, sid)
+		}
+	}
 	m.mu.Unlock()
 
+	m.invalidateStatsCache()
 	_ = m.saveHistory()
 }
 
@@ -1396,10 +1488,8 @@ func (m *Manager) getSessionContext(sessionID string) *SessionApprovalContext {
 }
 
 // updateSessionContext updates session context after an approval.
+// updateSessionContext updates session context. Caller must hold m.mu.
 func (m *Manager) updateSessionContext(sessionID string, riskLevel RiskLevel) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	ctx, exists := m.sessionContext[sessionID]
 	if !exists {
 		ctx = &SessionApprovalContext{
@@ -1549,23 +1639,51 @@ func (m *Manager) loadPatterns() {
 	}
 }
 
-// savePatterns saves patterns to disk.
+// savePatterns saves patterns to disk if dirty.
 func (m *Manager) savePatterns() error {
+	m.mu.RLock()
+	if !m.patternsDirty {
+		m.mu.RUnlock()
+		return nil
+	}
+	m.mu.RUnlock()
+
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
+	// Re-check dirty flag under save lock
+	m.mu.RLock()
+	if !m.patternsDirty {
+		m.mu.RUnlock()
+		return nil
+	}
+
 	// Ensure directory exists
 	dir := filepath.Dir(m.patternsDB)
+	m.mu.RUnlock()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
+	m.mu.RLock()
 	var patterns []*CommandPattern
 	for _, p := range m.patterns {
 		patterns = append(patterns, p)
 	}
+	m.mu.RUnlock()
+
 	data, err := json.MarshalIndent(patterns, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.patternsDB, data, 0644)
+	if err := os.WriteFile(m.patternsDB, data, 0644); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.patternsDirty = false
+	m.mu.Unlock()
+	return nil
 }
 
 // loadWhitelist loads whitelist from disk.
@@ -1625,6 +1743,9 @@ func (m *Manager) saveHistory() error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
+
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
 
 	m.mu.RLock()
 	records := make([]*ApprovalRecord, len(m.history))

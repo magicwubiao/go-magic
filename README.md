@@ -26,7 +26,7 @@ A dedicated mode with relaxed permissions, longer timeouts, and support for Pyth
 
 ### Web Dashboard
 
-Vue3 + TypeScript frontend with real-time chat, session management, and configuration management. Embedded into the binary for single-file deployment.
+React/TypeScript frontend with real-time chat, session management, and configuration management. Embedded into the binary for single-file deployment.
 
 ### Tool System
 

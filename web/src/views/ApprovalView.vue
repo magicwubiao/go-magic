@@ -146,7 +146,7 @@
                     <n-space align="center">
                       <n-text strong>{{ t('approval.pending.command') }}</n-text>
                       <n-tag :type="riskTagType(item.riskLevel || 'medium')" size="small">
-                        {{ t(`approval.riskLevels.${item.riskLevel || 'medium'}`) }}
+                        {{ t(`approval.riskLevels.${riskLevelKey(item.riskLevel || 'medium')}`) }}
                       </n-tag>
                     </n-space>
                     <n-text depth="3" style="font-size: 12px;">{{ formatTime(item.createdAt) }}</n-text>
@@ -271,7 +271,7 @@ const pendingApprovals = ref<PendingApproval[]>([])
 // Deny modal
 const showDenyModal = ref(false)
 const denyReason = ref('')
-const denyCallback: ((reason: string) => void) | null = null
+let denyCallback: ((reason: string) => void) | null = null
 
 // Auto-switch to pending tab when there are pending items
 watch(() => pendingApprovals.value.length, (newLen) => {
@@ -300,6 +300,10 @@ function riskColor(level: string): string {
     medium: '#f0a020',
     high: '#d03050',
     critical: '#7b2ff2',
+    '1': '#18a058',
+    '2': '#f0a020',
+    '3': '#d03050',
+    '4': '#7b2ff2',
   }
   return colors[level] || '#2080f0'
 }
@@ -310,8 +314,20 @@ function riskTagType(level: string): 'success' | 'warning' | 'error' | 'info' {
     medium: 'warning',
     high: 'error',
     critical: 'error',
+    '1': 'success',
+    '2': 'warning',
+    '3': 'error',
+    '4': 'error',
   }
   return map[level] || 'info'
+}
+
+function riskLevelKey(level: string | number): string {
+  const map: Record<string, string> = {
+    low: 'low', medium: 'medium', high: 'high', critical: 'critical',
+    '1': 'low', '2': 'medium', '3': 'high', '4': 'critical',
+  }
+  return map[String(level)] || 'medium'
 }
 
 function getRiskCount(level: string): number {
@@ -366,7 +382,7 @@ const topCommandColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 100,
-    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel || 'medium'}`) }),
+    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'medium')}`) }),
   },
 ])
 
@@ -388,7 +404,7 @@ const historyColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 80,
-    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${row.riskLevel || 'medium'}`) }),
+    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'medium')}`) }),
   },
   {
     title: t('approval.history.decision'),
@@ -494,7 +510,7 @@ async function fetchApprovalStats(): Promise<ApprovalStats> {
     topCommands: (raw.top_commands || []).map(c => ({
       command: c.pattern,
       count: c.count,
-      riskLevel: 'medium',
+      riskLevel: c.risk_level || 'medium',
     })),
   }
 }
@@ -564,6 +580,7 @@ async function loadHistory(): Promise<void> {
   try {
     const result = await fetchApprovalHistory(100, 0)
     historyRecords.value = result.records || []
+    historyPagination.value = { ...historyPagination.value, itemCount: result.total || 0 }
   } catch {
     // silent
   }
@@ -582,15 +599,23 @@ async function loadPatterns(): Promise<void> {
   }
 }
 
+let pendingLoading = false
+
 async function loadPending(): Promise<void> {
+  if (pendingLoading) return
+  pendingLoading = true
   try {
     pendingApprovals.value = await fetchPendingApprovals()
   } catch {
     // silent
+  } finally {
+    pendingLoading = false
   }
 }
 
 async function handleClearHistory(): Promise<void> {
+  pausePendingPoll()
+  loading.value = true
   try {
     await clearHistory(168) // 7 days
     message.success(t('approval.history.cleared'))
@@ -598,30 +623,45 @@ async function handleClearHistory(): Promise<void> {
     await loadStats()
   } catch {
     message.error(t('approval.history.clearFailed'))
+  } finally {
+    loading.value = false
+    resumePendingPoll()
   }
 }
 
 async function handleRemoveTrust(pattern: string): Promise<void> {
+  pausePendingPoll()
+  loading.value = true
   try {
     await request('/approval/patterns/trusted', {
       method: 'DELETE',
       body: JSON.stringify({ pattern }),
     })
     await loadPatterns()
+    await loadStats()
   } catch {
-    // silent
+    message.error(t('approval.failedToLoad'))
+  } finally {
+    loading.value = false
+    resumePendingPoll()
   }
 }
 
 async function handleClearDenial(pattern: string): Promise<void> {
+  pausePendingPoll()
+  loading.value = true
   try {
     await request('/approval/patterns/denied', {
       method: 'DELETE',
       body: JSON.stringify({ pattern }),
     })
     await loadPatterns()
+    await loadStats()
   } catch {
-    // silent
+    message.error(t('approval.failedToLoad'))
+  } finally {
+    loading.value = false
+    resumePendingPoll()
   }
 }
 
@@ -690,11 +730,22 @@ async function handleBatchResolve(approved: boolean): Promise<void> {
 }
 
 let pendingPollTimer: ReturnType<typeof setInterval> | null = null
+let pendingPollPaused = false
+
+function pausePendingPoll() {
+  pendingPollPaused = true
+}
+
+function resumePendingPoll() {
+  pendingPollPaused = false
+}
 
 onMounted(() => {
   loadAll()
   pendingPollTimer = setInterval(() => {
-    loadPending()
+    if (!pendingPollPaused) {
+      loadPending()
+    }
   }, 5000)
 })
 

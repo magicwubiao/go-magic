@@ -23,10 +23,14 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     headers['Authorization'] = `Bearer ${token}`
   }
 
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 10000) // 10s timeout
+
   const response = await fetch(url, {
     ...options,
     headers,
-  })
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeoutId))
 
   if (response.status === 401) {
     // Clear invalid token and redirect to login

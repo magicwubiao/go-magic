@@ -505,13 +505,15 @@ RULES:
   2. List todos to show the plan with action="list"
   3. Complete each todo as you finish with action="complete"
   4. If user adds new requirements, create additional todos
-- Do not call time, system, math, memory_recall, session_search unless explicitly requested
+- Do not call time, system, math, session_search unless explicitly requested
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
 
 	// Build agent options
 	var agentOpts []agent.AgentOption
-	if s.cfg != nil && s.cfg.Memory.Enabled {
+	// Enable memory if config says so OR if cortex is available (cortex provides snapshot memory)
+	memoryEnabled := (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil
+	if memoryEnabled {
 		agentOpts = append(agentOpts, agent.WithMemory(true))
 	}
 	// Enable Cortex for memory and context management
@@ -1469,7 +1471,10 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprintf(w, ":heartbeat\n\n")
+				// Send as a parseable SSE data event so the browser's EventSource
+				// triggers onmessage and the frontend can reset its heartbeat timer.
+				// SSE comments (": ...") are silently ignored by EventSource.
+				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n")
 				flusher.Flush()
 			case <-heartbeatDone:
 				return
@@ -6791,7 +6796,7 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprintf(w, ":heartbeat\n\n")
+				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n")
 				flusher.Flush()
 			case <-heartbeatDone:
 				return
@@ -7349,13 +7354,11 @@ func (s *Server) handleApprovalHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	records := mgr.GetHistory(limit, offset)
-
-	// Count total from stats
-	stats := mgr.GetStats()
+	total := mgr.HistoryLen()
 
 	jsonResponse(w, map[string]interface{}{
 		"records": records,
-		"total":   stats.TotalRequests,
+		"total":   total,
 	})
 }
 
