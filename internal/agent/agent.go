@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	stdlog "log"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/internal/retry"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -887,7 +887,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				a.toolCallCount[name]++
 				a.toolCallHistory = append(a.toolCallHistory, name)
 			} else {
-				stdlog.Printf("[TOOL] skipping empty tool call in response (ID: %s)", tc.ID)
+				log.Debugf("[TOOL] skipping empty tool call in response (ID: %s)", tc.ID)
 			}
 		}
 
@@ -1193,14 +1193,14 @@ Please provide a comprehensive, well-structured final response based on these su
 				// Fallback: if streaming returned no tool calls but the content looks like
 				// the model should have called a tool, retry with non-streaming ChatWithTools
 				if len(toolCalls) == 0 && fullContent != "" {
-					stdlog.Printf("[WARN] Stream returned no tool calls, falling back to ChatWithTools")
+					log.Debugf("[WARN] Stream returned no tool calls, falling back to ChatWithTools")
 					type openAIlikeFallback interface {
 						ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 					}
 					if oa, ok := a.provider.(openAIlikeFallback); ok {
 						nonStreamResp, nsErr := oa.ChatWithTools(ctx, req.Messages, req.Tools)
 						if nsErr == nil && len(nonStreamResp.ToolCalls) > 0 {
-							stdlog.Printf("[WARN] ChatWithTools returned %d tool calls (stream parser bug)", len(nonStreamResp.ToolCalls))
+							log.Debugf("[WARN] ChatWithTools returned %d tool calls (stream parser bug)", len(nonStreamResp.ToolCalls))
 							toolCalls = nonStreamResp.ToolCalls
 							fullContent = nonStreamResp.Content
 							// Track usage from fallback response
@@ -1423,7 +1423,7 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 		toolName := tc.GetToolName()
 		if toolName == "" {
 			// Skip empty tool call - this can happen when AI returns malformed response
-			stdlog.Printf("[TOOL] skipping empty tool call (ID: %s)", tc.ID)
+			log.Debugf("[TOOL] skipping empty tool call (ID: %s)", tc.ID)
 			// Add an error result for this empty tool call
 			results[tc.ID] = ToolCallResult{
 				ID:      tc.ID,
@@ -1544,9 +1544,9 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	elapsed := time.Since(start)
 
 	if err != nil {
-		stdlog.Printf("[TOOL] %s error after %v: %v", toolName, elapsed, err)
+		log.Debugf("[TOOL] %s error after %v: %v", toolName, elapsed, err)
 	} else {
-		stdlog.Printf("[TOOL] %s success after %v", toolName, elapsed)
+		log.Debugf("[TOOL] %s success after %v", toolName, elapsed)
 	}
 
 	content := ""

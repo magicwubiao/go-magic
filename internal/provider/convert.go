@@ -189,7 +189,7 @@ func sanitizeToolCallSequence(messages []map[string]interface{}) []map[string]in
 			if toolMsgCount != len(toolCalls) {
 				// Incomplete sequence - remove the assistant message with tool_calls
 				// and any orphaned tool messages that follow
-				log.Warnf("[ConvertMessages] Removing incomplete tool_call sequence at message %d (%d tool_calls, %d tool replies)", i, len(toolCalls), toolMsgCount)
+				log.Debugf("[ConvertMessages] Removing incomplete tool_call sequence at message %d (%d tool_calls, %d tool replies)", i, len(toolCalls), toolMsgCount)
 				// Skip this assistant message
 				i++
 				// Skip any tool messages that belong to this sequence
