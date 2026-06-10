@@ -101,32 +101,26 @@ func (r *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 
 	var skills []HubSkill
 	for _, s := range result.Results {
-		// Try to get full metadata including stars and installs
-		meta, err := r.GetSkillMeta(ctx, s.Slug)
-		if err == nil && meta != nil {
-			skills = append(skills, *meta)
-		} else {
-			// Fallback to featured data or defaults
-			stars := 0
-			installs := 0
-			var tags []string
-			if f, ok := featuredMap[s.Slug]; ok {
-				stars = f.Stars
-				installs = f.Installs
-				tags = f.Tags
-			}
-			skills = append(skills, HubSkill{
-				Name:        s.DisplayName,
-				Description: s.Summary,
-				Tags:        tags,
-				Source:      HubSourceHub,
-				SourceID:    s.Slug,
-				URL:         fmt.Sprintf("%s/skills/%s", r.baseURL, s.Slug),
-				Verified:    true,
-				Stars:       stars,
-				Installs:    installs,
-			})
+		// Use search result data directly (avoid N+1 API calls)
+		stars := 0
+		installs := 0
+		var tags []string
+		if f, ok := featuredMap[s.Slug]; ok {
+			stars = f.Stars
+			installs = f.Installs
+			tags = f.Tags
 		}
+		skills = append(skills, HubSkill{
+			Name:        s.DisplayName,
+			Description: s.Summary,
+			Tags:        tags,
+			Source:      HubSourceHub,
+			SourceID:    s.Slug,
+			URL:         fmt.Sprintf("%s/skills/%s", r.baseURL, s.Slug),
+			Verified:    true,
+			Stars:       stars,
+			Installs:    installs,
+		})
 	}
 
 	return skills, nil

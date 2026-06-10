@@ -233,7 +233,7 @@ interface HistoryRecord {
   riskLevel: string
   decision: string
   strategy: string
-  duration: number
+  duration_ms: number
   workingDir?: string
   timestamp: string
 }
@@ -429,7 +429,7 @@ const historyColumns = computed(() => [
     title: t('approval.history.duration'),
     key: 'duration',
     width: 80,
-    render: (row: HistoryRecord) => row.duration ? `${row.duration}ms` : '-',
+    render: (row: HistoryRecord) => row.duration_ms ? `${row.duration_ms}ms` : '-',
   },
 ])
 

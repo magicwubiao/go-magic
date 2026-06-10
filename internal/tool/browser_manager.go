@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -46,13 +48,23 @@ func (bm *BrowserManager) Initialize() error {
 		return nil // Already initialized
 	}
 
+	chromePath := bm.findChrome()
+	if chromePath == "" {
+		return fmt.Errorf("chrome not found: please install Google Chrome or set CHROME_PATH environment variable")
+	}
+
+	// Verify chrome executable exists
+	if _, err := os.Stat(chromePath); err != nil {
+		return fmt.Errorf("chrome not found at %s: %w", chromePath, err)
+	}
+
 	// Create allocator context (headless mode)
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.ExecPath(bm.findChrome()),
+		chromedp.ExecPath(chromePath),
 	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -64,6 +76,13 @@ func (bm *BrowserManager) Initialize() error {
 
 // findChrome locates the Chrome executable on the system.
 func (bm *BrowserManager) findChrome() string {
+	// Check environment variable first
+	if envPath := os.Getenv("CHROME_PATH"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath
+		}
+	}
+
 	// Try common Chrome paths
 	paths := []string{
 		"chrome",
@@ -71,13 +90,38 @@ func (bm *BrowserManager) findChrome() string {
 		"google-chrome-stable",
 		"chromium",
 		"chromium-browser",
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-		`C:\Users\Default\AppData\Local\Google\Chrome\Application\chrome.exe`,
-		"/usr/bin/google-chrome",
-		"/usr/bin/chromium",
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 	}
+
+	// Windows common paths
+	if runtime.GOOS == "windows" {
+		paths = append(paths,
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			`C:\Users\Administrator\AppData\Local\Google\Chrome\Application\chrome.exe`,
+			`C:\Users\Default\AppData\Local\Google\Chrome\Application\chrome.exe`,
+		)
+		// Try to find Chrome from LOCALAPPDATA
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Google", "Chrome", "Application", "chrome.exe"))
+		}
+		// Try ProgramFiles and ProgramFiles(x86)
+		if pf := os.Getenv("ProgramFiles"); pf != "" {
+			paths = append(paths, filepath.Join(pf, "Google", "Chrome", "Application", "chrome.exe"))
+		}
+		if pf86 := os.Getenv("ProgramFiles(x86)"); pf86 != "" {
+			paths = append(paths, filepath.Join(pf86, "Google", "Chrome", "Application", "chrome.exe"))
+		}
+	} else if runtime.GOOS == "darwin" {
+		paths = append(paths, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+	} else {
+		// Linux
+		paths = append(paths,
+			"/usr/bin/google-chrome",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+		)
+	}
+
 	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
 			return p
@@ -118,13 +162,15 @@ func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 		}
 	}
 
-	// Create new tab context with initialization timeout
-	tabCtx, tabCancel := context.WithTimeout(bm.allocCtx, 15*time.Second)
+	// Create new tab context with chromedp and initialization timeout
+	tabCtx, tabCancel := chromedp.NewContext(bm.allocCtx)
+	// Wrap with timeout for initialization
+	tabCtx, initCancel := context.WithTimeout(tabCtx, 15*time.Second)
 
 	tab := &BrowserTab{
 		ID:      tabID,
 		Ctx:     tabCtx,
-		Cancel:  tabCancel,
+		Cancel:  func() { initCancel(); tabCancel() },
 		History: make([]string, 0),
 	}
 
