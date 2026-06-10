@@ -192,13 +192,28 @@ func (m *Manager) OnTurnStart() {
 }
 
 // OnTurnEnd is called at the end of each LLM turn
+// Triggers mid-turn learning: records tool calls for skill pattern detection
 func (m *Manager) OnTurnEnd() {
-	// Can trigger mid-turn learning here if needed
+	// Feed tool call data into Skill Evolution (System 6)
+	// This is called after each tool execution round
+	tools := m.Trigger.GetToolCalls()
+	task := m.Trigger.GetCurrentTask()
+	if len(tools) >= 3 && task != "" {
+		m.SkillCreator.AnalyzeToolSequence(task, tools)
+	}
 }
 
 // OnSessionEnd is called when a session completes
-// Refreshes the memory snapshot with latest changes
+// Refreshes the memory snapshot and finalizes skill pattern analysis
 func (m *Manager) OnSessionEnd() {
+	// Final skill analysis pass with all accumulated tool calls
+	tools := m.Trigger.GetToolCalls()
+	task := m.Trigger.GetCurrentTask()
+	if len(tools) >= 3 && task != "" {
+		m.SkillCreator.AnalyzeToolSequence(task, tools)
+	}
+
+	// Refresh memory snapshot with latest changes
 	m.Snapshot.RefreshSnapshot()
 }
 

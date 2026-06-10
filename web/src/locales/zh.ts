@@ -114,7 +114,6 @@ export default {
     untitled: '未命名',
     default: '默认',
     selectModel: '选择模型',
-    thinking: '思考过程',
     collapse: '收起',
     expand: '展开',
     gatewaySession: '此会话来自 {source}。消息可能在网页视图中不可用。',

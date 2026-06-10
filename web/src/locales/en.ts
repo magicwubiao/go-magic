@@ -114,7 +114,6 @@ export default {
     untitled: 'Untitled',
     default: 'Default',
     selectModel: 'Select Model',
-    thinking: 'Thinking',
     collapse: 'Collapse',
     expand: 'Expand',
     gatewaySession: 'This session is from {source}. Messages may not be available in web view.',

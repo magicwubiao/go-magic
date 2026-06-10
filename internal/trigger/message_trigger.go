@@ -19,6 +19,10 @@ type MessageTrigger struct {
 	nudgeHandlers  []func() // Functions to call on nudge
 	taskStartTime  time.Time
 	currentTask    string
+
+	// Tool call tracking for skill auto-creation
+	currentToolCalls []string // Ordered tool names in current task
+	toolCallCount    int      // Total tool calls in current task
 }
 
 // NewMessageTrigger creates a new message trigger
@@ -53,18 +57,25 @@ func (mt *MessageTrigger) triggerNudge() {
 	}
 }
 
-// OnToolCall increments the tool call counter for skill creation
+// OnToolCall records a tool call for skill creation pattern detection.
+// This feeds into System 6 (Skill Evolution) to detect repeated tool sequences.
 func (mt *MessageTrigger) OnToolCall(toolName string, args map[string]interface{}) {
-	// Track tool calls for skill creation pattern detection
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+
+	mt.toolCallCount++
+	mt.currentToolCalls = append(mt.currentToolCalls, toolName)
 }
 
-// OnTaskComplete marks the end of a task, returns duration
+// OnTaskComplete marks the end of a task, returns duration and resets tool tracking
 func (mt *MessageTrigger) OnTaskComplete() time.Duration {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	duration := time.Since(mt.taskStartTime)
 	mt.currentTask = ""
+	mt.currentToolCalls = nil
+	mt.toolCallCount = 0
 	return duration
 }
 
@@ -92,12 +103,14 @@ func (mt *MessageTrigger) SetNudgeThreshold(threshold int) {
 	}
 }
 
-// Reset resets the turn counter (for new sessions)
+// Reset resets the turn counter and tool tracking for new sessions
 func (mt *MessageTrigger) Reset() {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 	mt.turnCount = 0
 	mt.currentTask = ""
+	mt.currentToolCalls = nil
+	mt.toolCallCount = 0
 }
 
 // GetCurrentTask returns the current task description
@@ -105,4 +118,24 @@ func (mt *MessageTrigger) GetCurrentTask() string {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.currentTask
+}
+
+// GetToolCalls returns the ordered tool call names for the current task.
+// Returns a copy to avoid data races.
+func (mt *MessageTrigger) GetToolCalls() []string {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	if mt.currentToolCalls == nil {
+		return nil
+	}
+	result := make([]string, len(mt.currentToolCalls))
+	copy(result, mt.currentToolCalls)
+	return result
+}
+
+// GetToolCallCount returns the total number of tool calls in current task
+func (mt *MessageTrigger) GetToolCallCount() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.toolCallCount
 }

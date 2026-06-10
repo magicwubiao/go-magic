@@ -229,6 +229,11 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			continue
 		}
 
+		// Cortex: Record each tool call for skill pattern detection
+		for _, tc := range resp.ToolCalls {
+			a.cortexManager.Trigger.OnToolCall(tc.GetToolName(), nil)
+		}
+
 		// ========== LAYER 3: Update checkpoint + record trajectory steps ==========
 		if checkpoint != nil {
 			for _, tc := range resp.ToolCalls {
@@ -304,6 +309,9 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 		a.truncateHistory()
 		a.Emit(bus.EventKindTurnEnd, nil)
+
+		// Cortex: OnTurnEnd - feed tool calls into skill pattern detection
+		a.cortexManager.OnTurnEnd()
 
 		if lastErr != nil && lastErr.Error() == "recovery needed" {
 			break

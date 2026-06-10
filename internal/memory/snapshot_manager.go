@@ -30,10 +30,10 @@ type SnapshotManager struct {
 	compressor   *MemoryCompressor
 }
 
-// MemoryCompressor handles memory summarization when limits are reached
-type MemoryCompressor struct {
-	// Can be enhanced with LLM-based summarization
-}
+// MemoryCompressor handles memory summarization when limits are reached.
+// Uses a section-aware strategy: preserves structure (headers, key facts)
+// while trimming verbose sections and removing duplicates.
+type MemoryCompressor struct{}
 
 // NewSnapshotManager creates a new snapshot manager
 func NewSnapshotManager(baseDir string) *SnapshotManager {
@@ -50,13 +50,11 @@ func (sm *SnapshotManager) Load() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Load MEMORY.md
 	if content, err := os.ReadFile(sm.memoryPath); err == nil {
 		sm.latestMemory = string(content)
 		sm.frozenMemory = sm.latestMemory
 	}
 
-	// Load USER.md
 	if content, err := os.ReadFile(sm.userPath); err == nil {
 		sm.latestUser = string(content)
 		sm.frozenUser = sm.latestUser
@@ -65,17 +63,17 @@ func (sm *SnapshotManager) Load() error {
 	return nil
 }
 
-// OnTurnStart is called at the beginning of each turn
-// Uses the frozen snapshot for this turn, does NOT refresh
+// OnTurnStart is called at the beginning of each turn.
+// Uses the frozen snapshot for this turn, does NOT refresh.
+// This protects prefix cache from being invalidated mid-conversation.
 func (sm *SnapshotManager) OnTurnStart() {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	// frozenMemory remains as-is for the entire turn
-	// This protects prefix cache from being invalidated mid-conversation
 }
 
-// RefreshSnapshot is called at session end or start of a new conversation
-// Refreshes the frozen snapshot with latest memory
+// RefreshSnapshot is called at session end or start of a new conversation.
+// Refreshes the frozen snapshot with latest memory.
 func (sm *SnapshotManager) RefreshSnapshot() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -85,16 +83,16 @@ func (sm *SnapshotManager) RefreshSnapshot() {
 	sm.version++
 }
 
-// GetMemoryForPrompt returns the memory content to include in system prompt
-// Uses the frozen snapshot, NOT the latest
+// GetMemoryForPrompt returns the memory content to include in system prompt.
+// Uses the frozen snapshot, NOT the latest.
 func (sm *SnapshotManager) GetMemoryForPrompt() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.frozenMemory
 }
 
-// GetUserForPrompt returns the user profile to include in system prompt
-// Uses the frozen snapshot, NOT the latest
+// GetUserForPrompt returns the user profile to include in system prompt.
+// Uses the frozen snapshot, NOT the latest.
 func (sm *SnapshotManager) GetUserForPrompt() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -102,14 +100,13 @@ func (sm *SnapshotManager) GetUserForPrompt() string {
 }
 
 // UpdateMemory updates memory, writes to disk immediately
-// but does NOT refresh the frozen snapshot
+// but does NOT refresh the frozen snapshot.
 func (sm *SnapshotManager) UpdateMemory(content string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Apply character limit
 	if len(content) > MemoryLimitChars {
-		content = sm.compressor.compressMemory(content, MemoryLimitChars)
+		content = sm.compressor.CompressMemory(content, MemoryLimitChars)
 	}
 
 	sm.latestMemory = content
@@ -117,12 +114,11 @@ func (sm *SnapshotManager) UpdateMemory(content string) error {
 }
 
 // UpdateUser updates user profile, writes to disk immediately
-// but does NOT refresh the frozen snapshot
+// but does NOT refresh the frozen snapshot.
 func (sm *SnapshotManager) UpdateUser(content string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Apply character limit
 	if len(content) > UserLimitChars {
 		content = sm.compressor.compressUser(content, UserLimitChars)
 	}
@@ -142,9 +138,8 @@ func (sm *SnapshotManager) AppendToMemory(line string) error {
 	}
 	newContent += line + "\n"
 
-	// Check limit and compress if needed
 	if len(newContent) > MemoryLimitChars {
-		newContent = sm.compressor.compressMemory(newContent, MemoryLimitChars)
+		newContent = sm.compressor.CompressMemory(newContent, MemoryLimitChars)
 	}
 
 	sm.latestMemory = newContent
@@ -162,7 +157,6 @@ func (sm *SnapshotManager) AppendToUser(line string) error {
 	}
 	newContent += line + "\n"
 
-	// Check limit and compress if needed
 	if len(newContent) > UserLimitChars {
 		newContent = sm.compressor.compressUser(newContent, UserLimitChars)
 	}
@@ -192,29 +186,185 @@ func (sm *SnapshotManager) GetVersion() int {
 	return sm.version
 }
 
-// compressMemory compresses memory content to fit within limit
-func (mc *MemoryCompressor) compressMemory(content string, limit int) string {
-	// Simple compression: keep first lines and last lines,
-	// with a summary note in between
-	// In production, this would use LLM summarization
+// CompressMemory uses a section-aware strategy to compress memory:
+// 1. Split by sections (## headers)
+// 2. Keep all section headers
+// 3. Within each section, keep the first and last sentence
+// 4. Deduplicate consecutive identical lines
+// 5. If still over limit, keep first 60% and last 40% of sections
+func (mc *MemoryCompressor) CompressMemory(content string, limit int) string {
+	// Step 1: Deduplicate consecutive identical lines
+	content = deduplicateLines(content)
 
-	lines := strings.Split(content, "\n")
-	if len(lines) <= 10 {
+	// Step 2: Split into sections by ## headers
+	sections := splitSections(content)
+	if len(sections) == 0 {
 		return truncateString(content, limit)
 	}
 
-	// Keep header + first 5 lines
-	result := strings.Join(lines[:5], "\n") + "\n"
-	result += "\n[... compressed memory ...]\n\n"
-	// Keep last 5 lines
-	result += strings.Join(lines[len(lines)-5:], "\n")
+	// Step 3: Compress each section individually
+	compressed := make([]string, 0, len(sections))
+	for _, sec := range sections {
+		compressed = append(compressed, mc.compressSection(sec))
+	}
 
-	return truncateString(result, limit)
+	result := strings.Join(compressed, "\n\n")
+
+	// Step 4: If still over limit, trim sections from the middle
+	if len(result) > limit {
+		result = mc.trimSectionsToLimit(sections, limit)
+	}
+
+	return result
 }
 
-// compressUser compresses user profile to fit within limit
+// compressUser compresses user profile with a simpler strategy:
+// Keep all unique lines, truncating verbose ones
 func (mc *MemoryCompressor) compressUser(content string, limit int) string {
+	content = deduplicateLines(content)
 	return truncateString(content, limit)
+}
+
+// section represents a markdown section with its header and body
+type section struct {
+	header string
+	body   string
+}
+
+// splitSections splits content by ## markdown headers
+func splitSections(content string) []section {
+	lines := strings.Split(content, "\n")
+	var sections []section
+	var current section
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			// Save previous section
+			if current.header != "" || current.body != "" {
+				sections = append(sections, current)
+			}
+			current = section{header: trimmed}
+		} else {
+			if current.body != "" {
+				current.body += "\n"
+			}
+			current.body += line
+		}
+	}
+	// Don't forget the last section
+	if current.header != "" || current.body != "" {
+		sections = append(sections, current)
+	}
+
+	return sections
+}
+
+// compressSection keeps the header and trims the body to key sentences
+func (mc *MemoryCompressor) compressSection(sec section) string {
+	if sec.header == "" {
+		// No header - this is a preamble, keep first 2 lines
+		lines := nonEmptyLines(sec.body)
+		if len(lines) <= 2 {
+			return sec.body
+		}
+		return strings.Join(lines[:2], "\n")
+	}
+
+	bodyLines := nonEmptyLines(sec.body)
+	if len(bodyLines) <= 3 {
+		return sec.header + "\n" + sec.body
+	}
+
+	// Keep first 2 and last line of body
+	result := sec.header + "\n"
+	result += strings.Join(bodyLines[:2], "\n") + "\n"
+	result += bodyLines[len(bodyLines)-1]
+	return result
+}
+
+// trimSectionsToLimit keeps first 60% and last 40% of sections to fit limit
+func (mc *MemoryCompressor) trimSectionsToLimit(sections []section, limit int) string {
+	if len(sections) <= 2 {
+		result := sections[0].header + "\n" + sections[0].body
+		if len(sections) > 1 {
+			result += "\n\n" + sections[1].header + "\n" + sections[1].body
+		}
+		return truncateString(result, limit)
+	}
+
+	// Keep first 60% of sections
+	headCount := len(sections) * 3 / 5
+	if headCount < 1 {
+		headCount = 1
+	}
+	tailCount := len(sections) - headCount
+	if tailCount < 1 {
+		tailCount = 1
+		headCount = len(sections) - 1
+	}
+
+	var sb strings.Builder
+	for i := 0; i < headCount; i++ {
+		sb.WriteString(sections[i].header)
+		sb.WriteString("\n")
+		sb.WriteString(sections[i].body)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("[... compressed ...]\n\n")
+
+	for i := len(sections) - tailCount; i < len(sections); i++ {
+		sb.WriteString(sections[i].header)
+		sb.WriteString("\n")
+		sb.WriteString(sections[i].body)
+		if i < len(sections)-1 {
+			sb.WriteString("\n\n")
+		}
+	}
+
+	result := sb.String()
+	if len(result) > limit {
+		return truncateString(result, limit)
+	}
+	return result
+}
+
+// deduplicateLines removes consecutive identical lines
+func deduplicateLines(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 1 {
+		return content
+	}
+
+	filtered := make([]string, 0, len(lines))
+	prev := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			filtered = append(filtered, line)
+			continue
+		}
+		if trimmed != prev {
+			filtered = append(filtered, line)
+			prev = trimmed
+		}
+		// Skip consecutive duplicates
+	}
+
+	return strings.Join(filtered, "\n")
+}
+
+// nonEmptyLines returns non-empty trimmed lines from content
+func nonEmptyLines(content string) []string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 func truncateString(s string, limit int) string {
