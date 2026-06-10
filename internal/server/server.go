@@ -543,82 +543,33 @@ RULES:
 	return a
 }
 
-// getToolsSchema converts tool registry to provider tools schema
+// getToolsSchema dynamically builds tool schemas from the registry.
+// This ensures all registered tools are visible to the LLM, not just a hardcoded subset.
 func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
-	// The tool registry exposes tools; we build schema from it
-	// For now, return a standard set based on what RegisterAll creates
-	return []map[string]interface{}{
-		{
+	tools := []map[string]interface{}{}
+	for _, tName := range registry.List() {
+		t, err := registry.Get(tName)
+		if err != nil {
+			continue
+		}
+		name := t.Name()
+		if name == "" {
+			continue
+		}
+		desc := t.Description()
+		if desc == "" {
+			desc = name + " tool"
+		}
+		tools = append(tools, map[string]interface{}{
 			"type": "function",
 			"function": map[string]interface{}{
-				"name":        "read_file",
-				"description": "Read contents of a file",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path": map[string]interface{}{"type": "string", "description": "File path to read"},
-					},
-					"required": []string{"path"},
-				},
+				"name":        name,
+				"description": desc,
+				"parameters":  t.Schema(),
 			},
-		},
-		{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        "write_file",
-				"description": "Write content to a file",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path":    map[string]interface{}{"type": "string", "description": "File path to write"},
-						"content": map[string]interface{}{"type": "string", "description": "Content to write"},
-					},
-					"required": []string{"path", "content"},
-				},
-			},
-		},
-		{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        "list_files",
-				"description": "List files in a directory",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path": map[string]interface{}{"type": "string", "description": "Directory path"},
-					},
-				},
-			},
-		},
-		{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        "execute_command",
-				"description": "Execute a shell command",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"command": map[string]interface{}{"type": "string", "description": "Shell command to execute"},
-					},
-					"required": []string{"command"},
-				},
-			},
-		},
-		{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        "web_search",
-				"description": "Search the web for information",
-				"parameters": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{"type": "string", "description": "Search query"},
-					},
-					"required": []string{"query"},
-				},
-			},
-		},
+		})
 	}
+	return tools
 }
 
 // convertDBSessionToAPI converts a DB session to API format

@@ -201,23 +201,37 @@ func NewHookManagerWithBus(eventBus *bus.EventBus) *HookManager {
 	return hm
 }
 
-// Register registers a hook
+// Register registers a hook into all matching hook lists.
+// A single hook value may implement multiple interfaces (e.g. both LLMHook and ToolHook);
+// each matching list gets its own registration so that no interface is missed by a
+// type-switch that only takes the first match.
 func (m *HookManager) Register(reg HookRegistration) error {
-	switch h := reg.Hook.(type) {
-	case LLMHook:
-		m.llmHooks = append(m.llmHooks, h)
-	case ToolHook:
-		m.toolHooks = append(m.toolHooks, h)
-	case ApprovalHook:
-		m.approvalHooks = append(m.approvalHooks, h)
-	case EventHook:
-		m.eventHooks = append(m.eventHooks, h)
+	h := reg.Hook
+	registered := false
+
+	if v, ok := h.(LLMHook); ok {
+		m.llmHooks = append(m.llmHooks, v)
+		registered = true
+	}
+	if v, ok := h.(ToolHook); ok {
+		m.toolHooks = append(m.toolHooks, v)
+		registered = true
+	}
+	if v, ok := h.(ApprovalHook); ok {
+		m.approvalHooks = append(m.approvalHooks, v)
+		registered = true
+	}
+	if v, ok := h.(EventHook); ok {
+		m.eventHooks = append(m.eventHooks, v)
+		registered = true
 		// Auto-bridge to EventBus if available
 		if m.eventBus != nil {
 			_ = m.eventBus.Subscribe(16)
 		}
-	default:
-		return fmt.Errorf("unsupported hook type: %T", reg.Hook)
+	}
+
+	if !registered {
+		return fmt.Errorf("unsupported hook type: %T", h)
 	}
 	return nil
 }

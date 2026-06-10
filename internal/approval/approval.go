@@ -248,9 +248,9 @@ func DefaultConfig() *ApprovalConfig {
 			`:\(\)\{:\|\:&\};:`,
 		},
 		AllowedPatterns: []string{
-			`^(ls|pwd|whoami|echo|date|cat|head|tail|grep|find|which)$`,
-			`^(cd|mkdir|ls|rmdir)$`,
-			`^git\s+(status|log|diff|show|branch)$`,
+			`^(ls|pwd|whoami|echo|date|cat|head|tail|grep|find|which|file|stat|env|id|uname|hostname|df|du|free|ps)(\s|$)`,
+			`^(cd|mkdir|rmdir|touch|cp|mv|chmod|chown)(\s|$)`,
+			`^git\s+(status|log|diff|show|branch|remote|stash)(\s|$)`,
 		},
 		ApprovalTimeout:   60,
 		LearnFromSameUser: true,
@@ -760,13 +760,14 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 	return result, nil
 }
 
-// autoApprove approves all commands (use with caution).
+// autoApprove approves all commands except dangerous patterns.
+// StrategyAutoApprove means "trust me, I'm an expert" — only dangerous patterns are blocked.
 func (m *Manager) autoApprove(req *ApprovalRequest) *ApprovalResult {
 	return &ApprovalResult{
 		Approved: true,
 		Strategy: StrategyAutoApprove,
 		Reason:   "Auto-approve strategy",
-		AskUser:  req.RiskLevel >= RiskHigh,
+		AskUser:  false,
 	}
 }
 
@@ -788,9 +789,14 @@ func (m *Manager) manualApprove(req *ApprovalRequest) *ApprovalResult {
 	}
 }
 
-// smartApprove uses learned patterns, risk assessment, and session context.
+// smartApprove uses a tiered approach:
+//   - Dangerous: always block (already checked in RequestApproval)
+//   - Read-only / safe: auto-approve
+//   - Medium risk: auto-approve if pattern known, else ask
+//   - High risk: ask for confirmation
+//   - Critical: always ask
 func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment) *ApprovalResult {
-	// Always ask for critical risk
+	// Critical risk → ask
 	if req.RiskLevel >= RiskCritical {
 		return &ApprovalResult{
 			Approved: false,
@@ -800,7 +806,7 @@ func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment)
 		}
 	}
 
-	// Bypass attempt → always ask
+	// Bypass attempt → ask
 	if assessment.BypassAttempt {
 		return &ApprovalResult{
 			Approved: false,
@@ -810,17 +816,18 @@ func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment)
 		}
 	}
 
-	// Low risk + trusted pattern → auto approve
-	if req.RiskLevel == RiskLow && m.isAllowedPattern(req.Command) {
-		hash := m.hashPattern(req.Command)
-		if pattern, exists := m.patterns[hash]; exists && pattern.Trusted {
-			return &ApprovalResult{
-				Approved: true,
-				Strategy: StrategySmart,
-				Reason:   "Low risk trusted command",
-				Trusted:  true,
-			}
+	// Read-only / safe commands → auto-approve
+	if m.isReadOnlyCommand(req.Command) {
+		return &ApprovalResult{
+			Approved: true,
+			Strategy: StrategySmart,
+			Reason:   "Read-only command",
+			Trusted:  true,
 		}
+	}
+
+	// Low risk → auto-approve (no need to check isAllowedPattern)
+	if req.RiskLevel == RiskLow {
 		return &ApprovalResult{
 			Approved: true,
 			Strategy: StrategySmart,
@@ -829,43 +836,47 @@ func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment)
 		}
 	}
 
-	// Session learning: check if similar commands were recently approved in this session
-	if m.config.EnableLearning && req.SessionID != "" {
-		ctx := m.getSessionContext(req.SessionID)
-		if ctx != nil && req.RiskLevel == RiskMedium {
-			// If same risk level approved 3+ times in this session, auto-approve
-			if ctx.ApprovedHash[int(req.RiskLevel)] >= 3 {
-				return &ApprovalResult{
-					Approved: true,
-					Strategy: StrategySmart,
-					Reason:   "Session learning: similar commands previously approved",
-					Trusted:  true,
-				}
-			}
-		}
-	}
-
-	// Medium risk: check global pattern count for auto-approve
+	// Medium risk: auto-approve if pattern known and approved before
 	if req.RiskLevel == RiskMedium && m.config.EnableLearning {
 		hash := m.hashPattern(req.Command)
 		if pattern, exists := m.patterns[hash]; exists {
-			if pattern.Action == "approved" && pattern.Count >= 3 {
+			if pattern.Action == "approved" && pattern.Count >= 2 {
 				return &ApprovalResult{
 					Approved: true,
 					Strategy: StrategySmart,
-					Reason:   "Medium risk command approved 3+ times previously",
+					Reason:   "Medium risk command approved before",
 					Trusted:  true,
 					Pattern:  pattern,
 				}
 			}
 		}
+		// Session learning: 3+ similar approvals this session
+		ctx := m.getSessionContext(req.SessionID)
+		if ctx != nil && ctx.ApprovedHash[int(req.RiskLevel)] >= 3 {
+			return &ApprovalResult{
+				Approved: true,
+				Strategy: StrategySmart,
+				Reason:   "Session learning: similar commands previously approved",
+				Trusted:  true,
+			}
+		}
 	}
 
-	// Default: ask for confirmation
+	// High risk → ask
+	if req.RiskLevel >= RiskHigh {
+		return &ApprovalResult{
+			Approved: false,
+			Strategy: StrategySmart,
+			Reason:   fmt.Sprintf("High risk (%s) requires confirmation", assessment.Category),
+			AskUser:  true,
+		}
+	}
+
+	// Medium risk without prior approval → ask
 	return &ApprovalResult{
 		Approved: false,
 		Strategy: StrategySmart,
-		Reason:   fmt.Sprintf("Risk level %s requires confirmation", req.RiskLevel),
+		Reason:   fmt.Sprintf("Medium risk (%s) — first time, requires confirmation", assessment.Category),
 		AskUser:  true,
 	}
 }
@@ -1109,6 +1120,46 @@ func (m *Manager) isAllowedPattern(cmd string) bool {
 	return m.matchAnyPattern(cmd, m.config.AllowedPatterns).Matched
 }
 
+// readOnlyCommands are commands that only read data and never modify the system.
+var readOnlyCommands = []string{
+	"ls", "pwd", "whoami", "date", "cat", "head", "tail", "grep", "find",
+	"which", "whereis", "file", "stat", "echo", "printf", "env", "id",
+	"uname", "hostname", "df", "du", "free", "top", "ps", "pgrep",
+	"git status", "git log", "git diff", "git show", "git branch",
+	"git remote", "git config --list",
+}
+
+// isReadOnlyCommand returns true if the command is known to be read-only.
+func (m *Manager) isReadOnlyCommand(cmd string) bool {
+	lower := strings.ToLower(strings.TrimSpace(cmd))
+	// Extract the binary (first token)
+	tokens := strings.Fields(lower)
+	if len(tokens) == 0 {
+		return false
+	}
+	binary := tokens[0]
+
+	// Check simple read-only binaries
+	for _, ro := range readOnlyCommands {
+		if binary == ro {
+			return true
+		}
+	}
+
+	// Check git read-only subcommands
+	if binary == "git" && len(tokens) >= 2 {
+		roGit := map[string]bool{
+			"status": true, "log": true, "diff": true, "show": true,
+			"branch": true, "remote": true, "config": true,
+		}
+		if roGit[tokens[1]] {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // CLI confirmation
 // ---------------------------------------------------------------------------
@@ -1321,8 +1372,6 @@ func (m *Manager) ClearHistory(olderThan time.Duration) {
 	cutoff := time.Now().Add(-olderThan)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	var filtered []*ApprovalRecord
 	for _, rec := range m.history {
 		if rec.Timestamp.After(cutoff) {
@@ -1330,6 +1379,8 @@ func (m *Manager) ClearHistory(olderThan time.Duration) {
 		}
 	}
 	m.history = filtered
+	m.mu.Unlock()
+
 	_ = m.saveHistory()
 }
 
@@ -1567,16 +1618,18 @@ func (m *Manager) loadHistory() {
 }
 
 // saveHistory saves approval history to disk.
+// Caller must NOT hold m.mu lock — this function handles its own locking.
 func (m *Manager) saveHistory() error {
-	m.mu.RLock()
-	records := m.history
-	m.mu.RUnlock()
-
-	// Ensure directory exists
+	// Ensure directory exists (no lock needed)
 	dir := filepath.Dir(m.historyDB)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
+
+	m.mu.RLock()
+	records := make([]*ApprovalRecord, len(m.history))
+	copy(records, m.history)
+	m.mu.RUnlock()
 
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {

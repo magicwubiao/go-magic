@@ -11,6 +11,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"golang.org/x/term"
 )
 
 // defaultApprovalTimeout is the default CLI confirmation timeout.
@@ -29,14 +30,22 @@ const (
 
 // ApprovalHook provides command approval functionality using the smart approval system.
 // It supports CLI interactive prompts with rich risk display, Web-based approval mode,
-// approval timeout handling, and session-level skip behavior.
+// TUI mode via injectable PromptFunc, approval timeout handling, and session-level skip behavior.
 type ApprovalHook struct {
 	manager      *approval.Manager
 	webMode      bool
 	cliTimeout   time.Duration
 	skipMutex    sync.Mutex
 	skipPatterns map[string]map[string]bool // sessionID -> normalizedPattern -> skipped
+
+	// promptFunc allows TUI or other non-stdio environments to provide
+	// a custom confirmation prompt. When nil, the default CLI stdin reader is used.
+	promptFunc func(command, reason string, riskLevel approval.RiskLevel) bool
 }
+
+// ApprovalPromptFunc is the signature for a custom approval prompt.
+// Returns true to approve, false to deny.
+type ApprovalPromptFunc func(command, reason string, riskLevel approval.RiskLevel) bool
 
 // NewApprovalHook creates a new approval hook with smart approval.
 func NewApprovalHook() *ApprovalHook {
@@ -71,6 +80,13 @@ func (h *ApprovalHook) Name() string { return "approval" }
 // system (PendingWebApproval) instead of CLI prompts.
 func (h *ApprovalHook) SetWebMode(enabled bool) {
 	h.webMode = enabled
+}
+
+// SetPromptFunc injects a custom approval prompt function for TUI or other
+// non-stdio environments. When set, this function is called instead of the
+// default CLI stdin reader.
+func (h *ApprovalHook) SetPromptFunc(fn ApprovalPromptFunc) {
+	h.promptFunc = fn
 }
 
 // GetManager exposes the underlying approval.Manager for Web API usage.
@@ -156,6 +172,19 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 			approved = webResult.Approved
 			// Notify callbacks of the web decision.
 			h.manager.NotifyApproval(webResult, req)
+		} else if h.promptFunc != nil {
+			// TUI or other custom prompt (e.g. bubbletea integration).
+			approved = h.promptFunc(command, result.Reason, result.RiskLevel)
+			if approved {
+				h.manager.Approve(req)
+			} else {
+				h.manager.Deny(req)
+			}
+		} else if !isStdinTerminal() {
+			// Non-interactive, no custom prompt: auto-approve with warning.
+			fmt.Printf("  [AUTO-APPROVED] Non-interactive mode: %s\n", command)
+			approved = true
+			h.manager.Approve(req)
 		} else {
 			// CLI interactive prompt with timeout.
 			act := h.promptUserConfirmation(ctx, command, result.Reason, result.RiskLevel)
@@ -394,7 +423,7 @@ func getWorkingDir(ctx context.Context) string {
 // Display helpers
 // ---------------------------------------------------------------------------
 
-// riskLevelEmoji returns a colored emoji for the given risk level.
+// riskLevelEmoji returns a text label for the given risk level.
 func riskLevelEmoji(level approval.RiskLevel) string {
 	switch level {
 	case approval.RiskLow:
@@ -406,7 +435,7 @@ func riskLevelEmoji(level approval.RiskLevel) string {
 	case approval.RiskCritical:
 		return "critical"
 	default:
-		return "unknown"
+		return "low"
 	}
 }
 
@@ -450,10 +479,12 @@ func riskCategoryLabel(command string, level approval.RiskLevel) string {
 }
 
 // hasBypassWarning returns true if the command contains known bypass patterns.
+// This detects obfuscation techniques, not legitimate use of these tools.
 func hasBypassWarning(command string) bool {
 	lower := strings.ToLower(command)
+	// Only flag actual obfuscation attempts: decode+execute or shell pipeline
 	bypassIndicators := []string{
-		"base64 -d", "xxd -r", "eval ", "echo ", "| sh", "| bash",
+		"base64 -d", "xxd -r", "eval $", "| sh", "| bash",
 	}
 	for _, indicator := range bypassIndicators {
 		if strings.Contains(lower, indicator) {
@@ -469,4 +500,9 @@ func truncateCommand(cmd string, maxLen int) string {
 		return cmd
 	}
 	return cmd[:maxLen-3] + "..."
+}
+
+// isStdinTerminal returns true if os.Stdin is a real terminal (interactive).
+func isStdinTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
