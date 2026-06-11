@@ -1,4 +1,4 @@
-# Go Magic (Magic Agent) v0.3.1
+# Go Magic
 
 高性能、超轻量级的 AI Agent 框架，使用 Go 语言编写，支持多 AI Provider，内置 Web Dashboard 和 TUI 界面。
 
@@ -201,8 +201,8 @@ magic gateway config discord --bot-token <token>
 ### 手动编译
 
 **要求：**
-- Go 1.21+
-- Node.js 18+（用于 Web Dashboard）
+- Go 1.25+
+- Node.js 20+（用于 Web Dashboard）
 
 **构建当前平台：**
 

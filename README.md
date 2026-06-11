@@ -178,7 +178,7 @@ Start the web server:
 magic server
 ```
 
-Then open `http://localhost:8642` in your browser.
+Then open `http://localhost:5000` in your browser.
 
 Features:
 - Real-time chat with streaming responses
@@ -285,16 +285,6 @@ make build-windows
 | Windows | amd64, arm64, 386 |
 | BSD | freebsd, openbsd, netbsd |
 
-### GitHub Actions
-
-Releases are built automatically via GitHub Actions when a version tag is pushed:
-
-```bash
-git tag v0.3.1
-git push origin v0.3.1
-```
-
-The workflow builds binaries for Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64), creates archives, and publishes a GitHub Release.
 
 ## Download
 
