@@ -17,9 +17,31 @@
             :class="{ active: chatStore.activeSessionId === session.id }"
             @click="selectSession(session.id)"
           >
-            <div v-if="editingSessionId !== session.id" class="session-title-wrapper">
-              <div class="session-title">{{ session.title || t('chat.untitled') }}</div>
+            <div class="session-content">
+              <div v-if="editingSessionId !== session.id" class="session-title">
+                {{ session.title || t('chat.untitled') }}
+              </div>
+              <div v-else class="session-title-edit">
+                <n-input
+                  v-model:value="editingName"
+                  class="session-title-input"
+                  size="small"
+                  @keydown.enter="saveRename(session.id)"
+                  @keydown.esc="cancelRename"
+                  @blur="saveRename(session.id)"
+                  autofocus
+                />
+              </div>
+              <div class="session-meta">
+                <n-tag v-if="session.source && session.source !== 'web'" size="tiny" :type="sourceType(session.source)" style="margin-right: 4px;">
+                  {{ session.source }}
+                </n-tag>
+                {{ session.message_count || 0 }} {{ t('chat.messages') }}
+              </div>
+            </div>
+            <div class="session-actions">
               <n-button
+                v-if="editingSessionId !== session.id"
                 class="session-rename-btn"
                 size="tiny"
                 quaternary
@@ -31,39 +53,22 @@
                   <n-icon size="14"><PencilOutline /></n-icon>
                 </template>
               </n-button>
+              <n-popconfirm @positive-click="deleteSession(session.id)">
+                <template #trigger>
+                  <n-button
+                    class="session-delete"
+                    size="tiny"
+                    quaternary
+                    circle
+                    type="error"
+                    @click.stop
+                  >
+                    ×
+                  </n-button>
+                </template>
+                {{ t('common.confirmDelete') }}
+              </n-popconfirm>
             </div>
-            <div v-else class="session-title-edit">
-              <n-input
-                v-model:value="editingName"
-                class="session-title-input"
-                size="small"
-                @keydown.enter="saveRename(session.id)"
-                @keydown.esc="cancelRename"
-                @blur="saveRename(session.id)"
-                autofocus
-              />
-            </div>
-            <div class="session-meta">
-              <n-tag v-if="session.source && session.source !== 'web'" size="tiny" :type="sourceType(session.source)" style="margin-right: 4px;">
-                {{ session.source }}
-              </n-tag>
-              {{ session.message_count || 0 }} {{ t('chat.messages') }}
-            </div>
-            <n-popconfirm @positive-click="deleteSession(session.id)">
-              <template #trigger>
-                <n-button
-                  class="session-delete"
-                  size="tiny"
-                  quaternary
-                  circle
-                  type="error"
-                  @click.stop
-                >
-                  ×
-                </n-button>
-              </template>
-              {{ t('common.confirmDelete') }}
-            </n-popconfirm>
           </div>
         </template>
         <n-text v-if="!chatStore.sessions.length" depth="3" style="padding: 16px; display: block; text-align: center;">
@@ -614,6 +619,7 @@ onMounted(async () => {
   position: relative;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   transition: background 0.15s;
 }
@@ -621,27 +627,60 @@ onMounted(async () => {
 .session-item:hover { background: #f0f0f0; }
 .session-item.active { background: #e8f5e9; }
 
-.session-title {
+.session-content {
   flex: 1;
+  min-width: 0;
+}
+
+.session-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
 }
 
+.session-title-edit {
+  margin: -4px 0;
+}
+
+.session-title-input {
+  width: 100%;
+}
+
 .session-meta {
   font-size: 12px;
   color: #999;
+  margin-top: 2px;
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.session-item:hover .session-actions {
+  opacity: 1;
+}
+
+.session-rename-btn {
+  opacity: 0.7;
+}
+
+.session-rename-btn:hover {
+  opacity: 1;
 }
 
 .session-delete {
-  opacity: 0;
-  transition: opacity 0.2s;
-  flex-shrink: 0;
+  opacity: 0.7;
 }
 
-.session-item:hover .session-delete { opacity: 1; }
+.session-delete:hover {
+  opacity: 1;
+}
 
 /* ========== Chat Main ========== */
 .chat-main {
