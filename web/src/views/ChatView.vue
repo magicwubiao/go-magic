@@ -613,7 +613,7 @@ onMounted(async () => {
 }
 
 .session-item {
-  padding: 10px 12px;
+  padding: 8px 12px;
   cursor: pointer;
   border-bottom: 1px solid #f0f0f0;
   position: relative;
@@ -630,6 +630,9 @@ onMounted(async () => {
 .session-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .session-title {
@@ -640,7 +643,7 @@ onMounted(async () => {
 }
 
 .session-title-edit {
-  margin: -4px 0;
+  flex: 1;
 }
 
 .session-title-input {
@@ -650,7 +653,7 @@ onMounted(async () => {
 .session-meta {
   font-size: 12px;
   color: #999;
-  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 .session-actions {
