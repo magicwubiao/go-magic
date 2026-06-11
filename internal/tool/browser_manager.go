@@ -72,7 +72,7 @@ func (bm *BrowserManager) Initialize() error {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("remote-debugging-port", "9222"),
 		chromedp.Flag("disable-logging", true),
-		chromedp.Flag("log-level", 3),
+		chromedp.Flag("log-level", "3"),
 		chromedp.Flag("enable-logging", false),
 		chromedp.ExecPath(browserPath),
 	)
