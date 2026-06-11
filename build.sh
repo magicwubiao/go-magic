@@ -25,12 +25,7 @@ TARGET=${1:-"all"}
 # Ensure build directory
 mkdir -p "$BUILD_DIR"
 
-# Copy web dist to internal/server/dist for embedding
-if [ -d "web/dist" ]; then
-    mkdir -p internal/server/dist
-    cp -r web/dist/* internal/server/dist/
-    echo "Copied web/dist to internal/server/dist"
-fi
+# Web is built directly to internal/server/dist by vite
 
 # Get Go info
 GO_VERSION=$(go version | grep -oP 'go\d+\.\d+')

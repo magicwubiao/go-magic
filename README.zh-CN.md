@@ -219,11 +219,8 @@ magic gateway config discord --bot-token <token>
 **开发构建：**
 
 ```bash
-# 构建 Web 资源
+# 构建 Web 资源（vite 直接构建到 internal/server/dist）
 cd web && npm install && npm run build && cd ..
-
-# 复制 Web 资源用于嵌入
-cp -r web/dist internal/server/dist
 
 # 构建 Go 二进制
 go build -o magic ./cmd/magic

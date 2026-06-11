@@ -38,14 +38,7 @@ if (-not (Test-Path $Output)) {
     New-Item -ItemType Directory -Path $Output | Out-Null
 }
 
-# Copy web/dist to internal/server/dist for embedding
-Write-Host ""
-Write-Host "[COPY] Copying web/dist to internal/server/dist..." -ForegroundColor Cyan
-if (Test-Path "internal\server\dist") {
-    Remove-Item -Recurse -Force "internal\server\dist"
-}
-Copy-Item -Recurse "web\dist" "internal\server\dist"
-Write-Host "[OK] Frontend files copied" -ForegroundColor Green
+# Web is built directly to internal/server/dist by vite
 
 # Get version
 $version = "dev"

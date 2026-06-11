@@ -33,8 +33,8 @@ RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy web dist from web-builder
-COPY --from=web-builder /app/web/dist /app/internal/server/dist
+# Copy web dist from web-builder (vite builds directly to internal/server/dist)
+COPY --from=web-builder /app/internal/server/dist /app/internal/server/dist
 
 # Copy source code
 COPY . .

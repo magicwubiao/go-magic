@@ -27,24 +27,7 @@ clean() {
     mkdir -p "$BUILD_DIR"
 }
 
-# Copy web dist to internal/server/dist for embedding
-copy_web_dist() {
-    info "Copying web/dist to internal/server/dist..."
-    
-    local web_dist="${PROJECT_DIR}/web/dist"
-    local server_dist="${PROJECT_DIR}/internal/server/dist"
-    
-    if [ -d "$server_dist" ]; then
-        rm -rf "$server_dist"
-    fi
-    
-    if [ -d "$web_dist" ]; then
-        cp -r "$web_dist" "$server_dist"
-        success "Frontend files copied"
-    else
-        info "web/dist not found, skipping copy"
-    fi
-}
+# Web is built directly to internal/server/dist by vite
 
 # Build Go binary
 build_go() {
@@ -127,8 +110,8 @@ package_all() {
     
     cd "$BUILD_DIR"
     
-    # Copy web dist to each binary
-    local web_dist="${PROJECT_DIR}/web/dist"
+    # Copy web dist to each binary (built by vite to internal/server/dist)
+    local web_dist="${PROJECT_DIR}/internal/server/dist"
     
     for dir in go-magic-*/; do
         if [ -d "$dir" ]; then
@@ -201,7 +184,7 @@ a = Analysis(['../web_wrapper.py'],
              pathex=[],
              binaries=[],
              datas=[
-                 ('../web/dist', 'web'),
+                 ('../internal/server/dist', 'web'),
              ],
              hiddenimports=[],
              hookspath=[],
