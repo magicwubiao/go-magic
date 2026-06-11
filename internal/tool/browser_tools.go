@@ -77,38 +77,44 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 		urlStr = "https://" + urlStr
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(urlStr)
-	if err == nil {
-		resp.Body.Close()
-	}
-
 	tabID := "default"
 	if id, ok := args["tab_id"].(string); ok && id != "" {
 		tabID = id
 	}
 
-	// Get browser manager
+	// Try browser automation first
+	title, text, err := t.tryBrowserAutomation(tabID, urlStr)
+	if err == nil && text != "" {
+		return map[string]interface{}{
+			"url":     urlStr,
+			"title":   title,
+			"tab_id":  tabID,
+			"content": utils.Truncate(text, 5000),
+			"success": true,
+			"method":  "browser",
+		}, nil
+	}
+
+	// Fallback to HTTP fetch if browser automation fails
+	result, err := t.fetchWithHTTP(urlStr, tabID)
+	if err != nil {
+		return nil, fmt.Errorf("both browser automation and HTTP fetch failed: %w", err)
+	}
+
+	return result, nil
+}
+
+// tryBrowserAutomation attempts to use chromedp for browser automation
+func (t *BrowserNavigateTool) tryBrowserAutomation(tabID, urlStr string) (string, string, error) {
 	bm := GetBrowserManager()
 
 	// Create or get tab
 	if _, err := bm.NewTab(tabID); err != nil {
-		return nil, fmt.Errorf("failed to create browser tab: %w", err)
+		return "", "", fmt.Errorf("failed to create browser tab: %w", err)
 	}
 
 	// Navigate to URL and get content in single chromedp.Run call
-	title, text, err := bm.NavigateAndGetContent(tabID, urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to navigate and get content: %w", err)
-	}
-
-	return map[string]interface{}{
-		"url":     urlStr,
-		"title":   title,
-		"tab_id":  tabID,
-		"content": utils.Truncate(text, 5000),
-		"success": true,
-	}, nil
+	return bm.NavigateAndGetContent(tabID, urlStr)
 }
 
 // fetchWithHTTP fetches URL content using HTTP

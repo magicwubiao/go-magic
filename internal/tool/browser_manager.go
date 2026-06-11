@@ -60,17 +60,59 @@ func (bm *BrowserManager) Initialize() error {
 		return fmt.Errorf("browser not found: please install Google Chrome or Microsoft Edge, or set CHROME_PATH or EDGE_PATH environment variable")
 	}
 
+	// Check if running in a sandboxed environment (e.g., Tauri, Flatpak, Snap)
+	isSandboxed := isSandboxedEnvironment()
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", false),
-		chromedp.Flag("start-maximized", true),
+		// Use headless mode in sandboxed environments or when explicitly requested
+		chromedp.Flag("headless", isSandboxed || os.Getenv("BROWSER_HEADLESS") == "true"),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("remote-debugging-port", "9222"),
 		chromedp.Flag("disable-logging", true),
 		chromedp.Flag("log-level", 3),
 		chromedp.Flag("enable-logging", false),
 		chromedp.ExecPath(browserPath),
 	)
 
+	if !isSandboxed {
+		opts = append(opts, chromedp.Flag("start-maximized", true))
+	}
+
 	bm.allocCtx, bm.allocCancel = chromedp.NewExecAllocator(context.Background(), opts...)
 	return nil
+}
+
+// isSandboxedEnvironment detects if running in a sandboxed environment
+func isSandboxedEnvironment() bool {
+	// Check for Tauri environment
+	if os.Getenv("TAURI_ENV") != "" || os.Getenv("TAURI_APP_DIR") != "" {
+		return true
+	}
+
+	// Check for Flatpak sandbox
+	if os.Getenv("FLATPAK_ID") != "" {
+		return true
+	}
+
+	// Check for Snap sandbox
+	if os.Getenv("SNAP") != "" {
+		return true
+	}
+
+	// Check if running as a bundled app (common in Tauri)
+	if _, err := os.Stat("/.flatpak-info"); err == nil {
+		return true
+	}
+
+	// Check for AppImage or other containerized environments
+	if os.Getenv("APPIMAGE") != "" {
+		return true
+	}
+
+	return false
 }
 
 func (bm *BrowserManager) findBrowser() string {
