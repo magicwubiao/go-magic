@@ -77,8 +77,25 @@ func initSchema(db *sql.DB) error {
 		return err
 	}
 
-	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS name TEXT DEFAULT ''`)
-	return err
+	return addNameColumnIfNotExists(db)
+}
+
+func addNameColumnIfNotExists(db *sql.DB) error {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'name')`
+	err := db.QueryRow(query).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT DEFAULT ''`)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) SaveSession(ctx context.Context, session *Session) error {
