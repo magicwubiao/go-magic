@@ -209,6 +209,15 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("web_search", 30*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
 	r.SetTimeout("web_select", 30*time.Second)
+	// Browser automation tools - longer timeout for page loading
+	r.SetTimeout("browser_navigate", 60*time.Second)
+	r.SetTimeout("browser_snapshot", 60*time.Second)
+	r.SetTimeout("browser_click", 30*time.Second)
+	r.SetTimeout("browser_type", 30*time.Second)
+	r.SetTimeout("browser_scroll", 30*time.Second)
+	r.SetTimeout("browser_back", 30*time.Second)
+	r.SetTimeout("browser_console", 30*time.Second)
+	r.SetTimeout("browser_get_images", 60*time.Second)
 
 	// Register plugin tools
 	r.registerPluginTools()

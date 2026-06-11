@@ -1,13 +1,16 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/util"
 
@@ -70,9 +73,14 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 		return nil, fmt.Errorf("url is required")
 	}
 
-	// Validate URL
 	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
 		urlStr = "https://" + urlStr
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(urlStr)
+	if err == nil {
+		resp.Body.Close()
 	}
 
 	tabID := "default"
@@ -84,25 +92,77 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 	bm := GetBrowserManager()
 
 	// Create or get tab
-	tab, err := bm.NewTab(tabID)
-	if err != nil {
+	if _, err := bm.NewTab(tabID); err != nil {
 		return nil, fmt.Errorf("failed to create browser tab: %w", err)
 	}
 
-	// Navigate to URL
-	if err := bm.Navigate(tabID, urlStr); err != nil {
-		return nil, fmt.Errorf("failed to navigate: %w", err)
-	}
-
-	// Get page content
-	text, err := bm.GetPageText(tabID)
+	// Navigate to URL and get content in single chromedp.Run call
+	title, text, err := bm.NavigateAndGetContent(tabID, urlStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get page content: %w", err)
+		return nil, fmt.Errorf("failed to navigate and get content: %w", err)
 	}
 
 	return map[string]interface{}{
-		"url":     tab.URL,
-		"title":   tab.Title,
+		"url":     urlStr,
+		"title":   title,
+		"tab_id":  tabID,
+		"content": utils.Truncate(text, 5000),
+		"success": true,
+	}, nil
+}
+
+// fetchWithHTTP fetches URL content using HTTP
+func (t *BrowserNavigateTool) fetchWithHTTP(urlStr string, tabID string) (interface{}, error) {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
+
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set user agent to avoid being blocked
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse HTML to extract text content
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		// If parsing fails, return raw content
+		return map[string]interface{}{
+			"url":     urlStr,
+			"title":   "",
+			"tab_id":  tabID,
+			"content": utils.Truncate(string(body), 5000),
+			"success": true,
+		}, nil
+	}
+
+	title := doc.Find("title").Text()
+	text := doc.Find("body").Text()
+
+	return map[string]interface{}{
+		"url":     urlStr,
+		"title":   title,
 		"tab_id":  tabID,
 		"content": utils.Truncate(text, 5000),
 		"success": true,
@@ -259,7 +319,8 @@ func (t *BrowserSnapshotTool) navigateAndGetContent(urlStr, tabID string) (strin
 	if _, err := bm.NewTab(tabID); err != nil {
 		return "", err
 	}
-	if err := bm.Navigate(tabID, urlStr); err != nil {
+	_, _, err := bm.NavigateAndGetContent(tabID, urlStr)
+	if err != nil {
 		return "", err
 	}
 
@@ -414,6 +475,12 @@ func ExportBrowserToolsJSON() string {
 	typeTool := NewBrowserTypeTool(bt)
 	scrollTool := NewBrowserScrollTool(bt)
 	backTool := NewBrowserBackTool()
+	forwardTool := NewBrowserForwardTool()
+	refreshTool := NewBrowserRefreshTool()
+	waitTool := NewBrowserWaitTool()
+	infoTool := NewBrowserGetInfoTool()
+	clearCacheTool := NewBrowserClearCacheTool()
+	cookiesTool := NewBrowserGetCookiesTool()
 	imgTool := NewBrowserGetImagesTool(bt)
 	consoleTool := NewBrowserConsoleTool()
 
@@ -424,6 +491,12 @@ func ExportBrowserToolsJSON() string {
 		{"name": "browser_type", "description": "Type text into element", "schema": typeTool.Schema()},
 		{"name": "browser_scroll", "description": "Scroll page", "schema": scrollTool.Schema()},
 		{"name": "browser_back", "description": "Go back to previous page", "schema": backTool.Schema()},
+		{"name": "browser_forward", "description": "Go forward to next page", "schema": forwardTool.Schema()},
+		{"name": "browser_refresh", "description": "Refresh current page", "schema": refreshTool.Schema()},
+		{"name": "browser_wait", "description": "Wait for element or page load", "schema": waitTool.Schema()},
+		{"name": "browser_get_info", "description": "Get page information", "schema": infoTool.Schema()},
+		{"name": "browser_clear_cache", "description": "Clear browser cache", "schema": clearCacheTool.Schema()},
+		{"name": "browser_get_cookies", "description": "Get page cookies", "schema": cookiesTool.Schema()},
 		{"name": "browser_get_images", "description": "Extract image URLs", "schema": imgTool.Schema()},
 		{"name": "browser_console", "description": "Execute JavaScript", "schema": consoleTool.Schema()},
 	}

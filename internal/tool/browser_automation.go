@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // BrowserClickTool simulates clicking an element using real browser automation
@@ -393,6 +394,316 @@ func (t *BrowserConsoleTool) Execute(ctx context.Context, args map[string]interf
 		"action":  "execute_js",
 		"script":  script,
 		"result":  result,
+		"success": true,
+	}, nil
+}
+
+// BrowserForwardTool navigates forward in browser history
+type BrowserForwardTool struct{}
+
+func NewBrowserForwardTool() *BrowserForwardTool {
+	return &BrowserForwardTool{}
+}
+
+func (t *BrowserForwardTool) Name() string { return "browser_forward" }
+
+func (t *BrowserForwardTool) Description() string {
+	return "Navigate forward to the next page in browser history."
+}
+
+func (t *BrowserForwardTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserForwardTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	if err := bm.Forward(tabID); err != nil {
+		return nil, fmt.Errorf("failed to go forward: %w", err)
+	}
+
+	text, _ := bm.GetPageText(tabID)
+	title := ""
+	url := ""
+	if tab, ok := bm.GetTab(tabID); ok {
+		title = tab.Title
+		url = tab.URL
+	}
+
+	return map[string]interface{}{
+		"action":     "forward",
+		"success":    true,
+		"page_title": title,
+		"page_url":   url,
+		"page_text":  truncateString(text, 1000),
+	}, nil
+}
+
+// BrowserRefreshTool refreshes the current page
+type BrowserRefreshTool struct{}
+
+func NewBrowserRefreshTool() *BrowserRefreshTool {
+	return &BrowserRefreshTool{}
+}
+
+func (t *BrowserRefreshTool) Name() string { return "browser_refresh" }
+
+func (t *BrowserRefreshTool) Description() string {
+	return "Refresh/reload the current page."
+}
+
+func (t *BrowserRefreshTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserRefreshTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	if err := bm.Refresh(tabID); err != nil {
+		return nil, fmt.Errorf("failed to refresh page: %w", err)
+	}
+
+	return map[string]interface{}{
+		"action":  "refresh",
+		"success": true,
+	}, nil
+}
+
+// BrowserWaitTool waits for an element or page load
+type BrowserWaitTool struct{}
+
+func NewBrowserWaitTool() *BrowserWaitTool {
+	return &BrowserWaitTool{}
+}
+
+func (t *BrowserWaitTool) Name() string { return "browser_wait" }
+
+func (t *BrowserWaitTool) Description() string {
+	return "Wait for an element to appear or for the page to finish loading."
+}
+
+func (t *BrowserWaitTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"selector": map[string]interface{}{
+				"type":        "string",
+				"description": "CSS selector to wait for (optional, waits for page load if not provided)",
+			},
+			"timeout": map[string]interface{}{
+				"type":        "number",
+				"description": "Timeout in seconds (default: 30)",
+			},
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserWaitTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	selector, _ := args["selector"].(string)
+	timeout := 30.0
+	if t, ok := args["timeout"].(float64); ok && t > 0 {
+		timeout = t
+	}
+
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	var err error
+	if selector != "" {
+		err = bm.WaitForElement(tabID, selector, time.Duration(timeout)*time.Second)
+	} else {
+		err = bm.WaitForLoad(tabID, time.Duration(timeout)*time.Second)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("wait timed out: %w", err)
+	}
+
+	return map[string]interface{}{
+		"action":   "wait",
+		"selector": selector,
+		"success":  true,
+	}, nil
+}
+
+// BrowserGetInfoTool gets page information
+type BrowserGetInfoTool struct{}
+
+func NewBrowserGetInfoTool() *BrowserGetInfoTool {
+	return &BrowserGetInfoTool{}
+}
+
+func (t *BrowserGetInfoTool) Name() string { return "browser_get_info" }
+
+func (t *BrowserGetInfoTool) Description() string {
+	return "Get current page information including title, URL, and load state."
+}
+
+func (t *BrowserGetInfoTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserGetInfoTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	info, err := bm.GetPageInfo(tabID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page info: %w", err)
+	}
+
+	return info, nil
+}
+
+// BrowserClearCacheTool clears browser cache
+type BrowserClearCacheTool struct{}
+
+func NewBrowserClearCacheTool() *BrowserClearCacheTool {
+	return &BrowserClearCacheTool{}
+}
+
+func (t *BrowserClearCacheTool) Name() string { return "browser_clear_cache" }
+
+func (t *BrowserClearCacheTool) Description() string {
+	return "Clear browser localStorage and sessionStorage for the current page."
+}
+
+func (t *BrowserClearCacheTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserClearCacheTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	if err := bm.ClearCache(tabID); err != nil {
+		return nil, fmt.Errorf("failed to clear cache: %w", err)
+	}
+
+	return map[string]interface{}{
+		"action":  "clear_cache",
+		"success": true,
+	}, nil
+}
+
+// BrowserGetCookiesTool gets cookies
+type BrowserGetCookiesTool struct{}
+
+func NewBrowserGetCookiesTool() *BrowserGetCookiesTool {
+	return &BrowserGetCookiesTool{}
+}
+
+func (t *BrowserGetCookiesTool) Name() string { return "browser_get_cookies" }
+
+func (t *BrowserGetCookiesTool) Description() string {
+	return "Get all cookies for the current page."
+}
+
+func (t *BrowserGetCookiesTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+	}
+}
+
+func (t *BrowserGetCookiesTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	cookies, err := bm.GetCookies(tabID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cookies: %w", err)
+	}
+
+	return map[string]interface{}{
+		"action":  "get_cookies",
+		"count":   len(cookies),
+		"cookies": cookies,
 		"success": true,
 	}, nil
 }

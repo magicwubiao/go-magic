@@ -382,7 +382,7 @@ const topCommandColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 100,
-    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'medium')}`) }),
+    render: (row: any) => h(NTag, { type: riskTagType(row.riskLevel || 'low'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'low')}`) }),
   },
 ])
 
@@ -404,7 +404,7 @@ const historyColumns = computed(() => [
     title: t('approval.history.riskLevel'),
     key: 'riskLevel',
     width: 80,
-    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel || 'medium'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'medium')}`) }),
+    render: (row: HistoryRecord) => h(NTag, { type: riskTagType(row.riskLevel || 'low'), size: 'small' }, { default: () => t(`approval.riskLevels.${riskLevelKey(row.riskLevel || 'low')}`) }),
   },
   {
     title: t('approval.history.decision'),
@@ -510,7 +510,7 @@ async function fetchApprovalStats(): Promise<ApprovalStats> {
     topCommands: (raw.top_commands || []).map(c => ({
       command: c.pattern,
       count: c.count,
-      riskLevel: c.risk_level || 'medium',
+      riskLevel: c.risk_level || 'low',
     })),
   }
 }
