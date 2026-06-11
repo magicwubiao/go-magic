@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import type { Session, Message } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 
@@ -19,49 +19,96 @@ export interface ToolCallEvent {
 }
 
 export interface TaskProgress {
-  phase: string        // e.g. 'planning', 'executing', 'compressing', 'synthesizing'
-  detail: string       // human readable description
-  percent: number      // 0-100
-  iteration: number    // current iteration
+  phase: string
+  detail: string
+  percent: number
+  iteration: number
   maxIterations: number
   tokensUsed: number
   tokensRemaining: number
 }
 
+interface SessionState {
+  messages: Message[]
+  streaming: boolean
+  streamContent: string
+  streamBuffer: string
+  toolCalls: ToolCallEvent[]
+  taskProgress: TaskProgress | null
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
-  const messages = ref<Message[]>([])
-  const streaming = ref(false)
-  const streamContent = ref('')
   const error = ref<ChatError | null>(null)
-  const toolCalls = ref<ToolCallEvent[]>([])
-  const taskProgress = ref<TaskProgress | null>(null)
-  let currentEventSource: EventSource | null = null
+  
+  const sessionStates = ref<Record<string, SessionState>>({})
+  const sessionEventSources = ref<Record<string, EventSource | null>>({})
+  const sessionFlushTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
+  
   let toolCallIdCounter = 0
 
-  // Throttling for stream content updates
-  let streamBuffer = ''
-  let streamFlushTimer: ReturnType<typeof setTimeout> | null = null
-  const STREAM_FLUSH_INTERVAL = 80 // ms
-
-  // Heartbeat / timeout detection
-  let lastHeartbeat = 0
-  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
-  const HEARTBEAT_TIMEOUT = 45000 // 45s without any event = dead connection
+  const STREAM_FLUSH_INTERVAL = 80
 
   const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value)
   )
 
-  const activeToolCalls = computed(() =>
-    toolCalls.value.filter(tc => tc.status === 'running')
-  )
+  const activeSessionState = computed(() => {
+    if (!activeSessionId.value) return null
+    return sessionStates.value[activeSessionId.value] || null
+  })
+
+  const messages = computed(() => {
+    const state = activeSessionState.value
+    return state?.messages || []
+  })
+
+  const streaming = computed(() => {
+    const state = activeSessionState.value
+    return state?.streaming || false
+  })
+
+  const streamContent = computed(() => {
+    const state = activeSessionState.value
+    return state?.streamContent || ''
+  })
+
+  const toolCalls = computed(() => {
+    const state = activeSessionState.value
+    return state?.toolCalls || []
+  })
+
+  const activeToolCalls = computed(() => {
+    return toolCalls.value.filter(tc => tc.status === 'running')
+  })
+
+  const taskProgress = computed(() => {
+    const state = activeSessionState.value
+    return state?.taskProgress || null
+  })
 
   const isLongTask = computed(() => {
     if (!taskProgress.value) return false
-    return taskProgress.value.maxIterations > 20 || taskProgress.value.percent > 0
+    const tp = taskProgress.value
+    return tp.maxIterations > 20 || tp.percent > 0
   })
+
+  function getOrCreateSessionState(sessionId: string): SessionState {
+    let state = sessionStates.value[sessionId]
+    if (!state) {
+      state = reactive({
+        messages: [],
+        streaming: false,
+        streamContent: '',
+        streamBuffer: '',
+        toolCalls: [],
+        taskProgress: null,
+      })
+      sessionStates.value = { ...sessionStates.value, [sessionId]: state }
+    }
+    return state
+  }
 
   async function loadSessions(): Promise<void> {
     try {
@@ -77,9 +124,9 @@ export const useChatStore = defineStore('chat', () => {
     try {
       error.value = null
       const session = await sessionsApi.createSession()
-      sessions.value.unshift(session)
+      sessions.value = [session, ...sessions.value]
       activeSessionId.value = session.id
-      messages.value = []
+      getOrCreateSessionState(session.id)
       return session
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
@@ -91,12 +138,16 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectSession(id: string): Promise<void> {
     activeSessionId.value = id
-    try {
-      const res = await sessionsApi.getSession(id)
-      messages.value = res.messages || []
-    } catch (e) {
-      console.error('Failed to load session messages:', e)
-      messages.value = []
+    const state = getOrCreateSessionState(id)
+    
+    if (state.messages.length === 0) {
+      try {
+        const res = await sessionsApi.getSession(id)
+        state.messages = res.messages || []
+      } catch (e) {
+        console.error('Failed to load session messages:', e)
+        state.messages = []
+      }
     }
   }
 
@@ -104,9 +155,24 @@ export const useChatStore = defineStore('chat', () => {
     try {
       await sessionsApi.deleteSession(id)
       sessions.value = sessions.value.filter(s => s.id !== id)
+      
+      if (sessionFlushTimers.value[id]) {
+        clearTimeout(sessionFlushTimers.value[id]!)
+      }
+      if (sessionEventSources.value[id]) {
+        sessionEventSources.value[id]!.close()
+      }
+      
+      const newStates = { ...sessionStates.value }
+      delete newStates[id]
+      sessionStates.value = newStates
+      
+      const newEventSources = { ...sessionEventSources.value }
+      delete newEventSources[id]
+      sessionEventSources.value = newEventSources
+      
       if (activeSessionId.value === id) {
         activeSessionId.value = null
-        messages.value = []
       }
     } catch (e) {
       console.error('Failed to delete session:', e)
@@ -125,41 +191,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function closeEventSource(): void {
-    if (currentEventSource) {
-      currentEventSource.close()
-      currentEventSource = null
+  function flushStreamBuffer(sessionId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    
+    if (state.streamBuffer) {
+      state.streamContent += state.streamBuffer
+      state.streamBuffer = ''
     }
-  }
-
-  function flushStreamBuffer(): void {
-    if (streamBuffer) {
-      streamContent.value += streamBuffer
-      streamBuffer = ''
-    }
-    streamFlushTimer = null
-  }
-
-  function resetHeartbeat(): void {
-    lastHeartbeat = Date.now()
-    if (heartbeatTimer) {
-      clearTimeout(heartbeatTimer)
-    }
-    heartbeatTimer = setTimeout(() => {
-      // No event received for HEARTBEAT_TIMEOUT
-      if (streaming.value && Date.now() - lastHeartbeat >= HEARTBEAT_TIMEOUT) {
-        console.warn('SSE heartbeat timeout - connection may be dead')
-        error.value = { message: 'Connection stalled - no response for 45s. The task may still be running on the server.', code: 'HEARTBEAT_TIMEOUT' }
-        // Don't close immediately - let user decide to stop
-      }
-    }, HEARTBEAT_TIMEOUT)
-  }
-
-  function clearHeartbeat(): void {
-    if (heartbeatTimer) {
-      clearTimeout(heartbeatTimer)
-      heartbeatTimer = null
-    }
+    sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
   }
 
   async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[]): Promise<void> {
@@ -169,9 +209,9 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const sessionId = activeSessionId.value!
+    const state = getOrCreateSessionState(sessionId)
 
-    // Add user message
-    messages.value.push({
+    state.messages.push({
       id: Date.now().toString(),
       role: 'user',
       content,
@@ -181,34 +221,32 @@ export const useChatStore = defineStore('chat', () => {
       files,
     })
 
-    // Start streaming
-    streaming.value = true
-    streamContent.value = ''
-    streamBuffer = ''
-    if (streamFlushTimer) {
-      clearTimeout(streamFlushTimer)
-      streamFlushTimer = null
-    }
-    toolCalls.value = []
-    taskProgress.value = null
+    state.streaming = true
+    state.streamContent = ''
+    state.streamBuffer = ''
+    state.toolCalls = []
+    state.taskProgress = null
     error.value = null
 
-    // Close any existing EventSource
-    closeEventSource()
-    clearHeartbeat()
+    if (sessionFlushTimers.value[sessionId]) {
+      clearTimeout(sessionFlushTimers.value[sessionId]!)
+      sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
+    }
+    if (sessionEventSources.value[sessionId]) {
+      sessionEventSources.value[sessionId]!.close()
+      sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+    }
 
     try {
-      currentEventSource = sessionsApi.streamChat(sessionId, content, images, files)
-      resetHeartbeat()
+      const eventSource = sessionsApi.streamChat(sessionId, content, images, files)
+      sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
 
-      currentEventSource.onmessage = (event) => {
-        resetHeartbeat()
+      eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
 
-          // Handle progress events (new for long tasks)
           if (data.type === 'progress') {
-            taskProgress.value = {
+            state.taskProgress = {
               phase: data.phase || 'executing',
               detail: data.detail || '',
               percent: data.percent || 0,
@@ -220,20 +258,19 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
-          // Handle heartbeat/ping from server
           if (data.type === 'ping') {
             return
           }
 
-          // Handle structured tool events
           if (data.type === 'tool_start') {
-            // Flush any pending stream content before tool event
-            if (streamFlushTimer) {
-              clearTimeout(streamFlushTimer)
-              flushStreamBuffer()
+            if (sessionFlushTimers.value[sessionId]) {
+              clearTimeout(sessionFlushTimers.value[sessionId]!)
+              sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
             }
+            flushStreamBuffer(sessionId)
+            
             const id = `tc_${++toolCallIdCounter}`
-            toolCalls.value.push({
+            state.toolCalls.push({
               id,
               name: data.name,
               args: data.args,
@@ -243,14 +280,14 @@ export const useChatStore = defineStore('chat', () => {
           }
 
           if (data.type === 'tool_result') {
-            const tc = toolCalls.value.find(t => t.name === data.name && t.status === 'running')
+            const tc = state.toolCalls.find(t => t.name === data.name && t.status === 'running')
             if (tc) {
               tc.success = data.success
               tc.duration = data.duration
               tc.content = data.content
               tc.status = data.success ? 'completed' : 'error'
             } else {
-              toolCalls.value.push({
+              state.toolCalls.push({
                 id: `tc_${++toolCallIdCounter}`,
                 name: data.name,
                 args: '',
@@ -263,92 +300,125 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
-          // Handle normal delta with throttling
           if (data.delta) {
-            streamBuffer += data.delta
-            if (!streamFlushTimer) {
-              streamFlushTimer = setTimeout(flushStreamBuffer, STREAM_FLUSH_INTERVAL)
+            state.streamBuffer += data.delta
+            
+            if (!sessionFlushTimers.value[sessionId]) {
+              const timer = setTimeout(() => {
+                flushStreamBuffer(sessionId)
+              }, STREAM_FLUSH_INTERVAL)
+              sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: timer }
             }
           }
+          
           if (data.done) {
-            // Flush remaining buffer
-            if (streamFlushTimer) {
-              clearTimeout(streamFlushTimer)
+            if (sessionFlushTimers.value[sessionId]) {
+              clearTimeout(sessionFlushTimers.value[sessionId]!)
+              sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
             }
-            flushStreamBuffer()
-            closeEventSource()
-            clearHeartbeat()
-            streaming.value = false
-            taskProgress.value = null
-            messages.value.push({
+            
+            flushStreamBuffer(sessionId)
+            
+            if (sessionEventSources.value[sessionId]) {
+              sessionEventSources.value[sessionId]!.close()
+              sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+            }
+            
+            state.streaming = false
+            state.taskProgress = null
+            
+            const finalContent = state.streamContent
+            state.messages.push({
               id: Date.now().toString(),
-              role: 'assistant',
-              content: streamContent.value,
+              role: 'assistant' as const,
+              content: finalContent,
               timestamp: new Date().toISOString(),
               session_id: sessionId,
             })
-            streamContent.value = ''
+            state.streamContent = ''
+            
+            loadSessions()
           }
         } catch (e) {
           console.error('Failed to parse stream event:', e)
         }
       }
 
-      currentEventSource.onerror = () => {
-        if (streamFlushTimer) {
-          clearTimeout(streamFlushTimer)
-          flushStreamBuffer()
+      eventSource.onerror = () => {
+        if (sessionFlushTimers.value[sessionId]) {
+          clearTimeout(sessionFlushTimers.value[sessionId]!)
+          sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
         }
-        closeEventSource()
-        clearHeartbeat()
-        streaming.value = false
-        // Only show error if we didn't get a done event
-        if (!streamContent.value && !messages.value.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
+        flushStreamBuffer(sessionId)
+        if (sessionEventSources.value[sessionId]) {
+          sessionEventSources.value[sessionId]!.close()
+          sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+        }
+        
+        state.streaming = false
+        
+        if (!state.streamContent && !state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
           error.value = { message: 'Connection lost' }
         }
       }
     } catch (e) {
-      streaming.value = false
-      clearHeartbeat()
+      state.streaming = false
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
       error.value = { message: 'Failed to send message: ' + errMsg }
     }
   }
 
   function stopGeneration(): void {
-    if (streamFlushTimer) {
-      clearTimeout(streamFlushTimer)
-      flushStreamBuffer()
+    if (!activeSessionId.value) return
+    
+    const sessionId = activeSessionId.value
+    const state = getOrCreateSessionState(sessionId)
+    
+    if (sessionFlushTimers.value[sessionId]) {
+      clearTimeout(sessionFlushTimers.value[sessionId]!)
+      sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
     }
-    closeEventSource()
-    clearHeartbeat()
-    streaming.value = false
-    taskProgress.value = null
-    // Mark any running tool calls as error
-    for (const tc of toolCalls.value) {
+    flushStreamBuffer(sessionId)
+    
+    if (sessionEventSources.value[sessionId]) {
+      sessionEventSources.value[sessionId]!.close()
+      sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+    }
+    
+    state.streaming = false
+    state.taskProgress = null
+    
+    for (const tc of state.toolCalls) {
       if (tc.status === 'running') {
         tc.status = 'error'
         tc.success = false
       }
     }
-    if (streamContent.value) {
-      messages.value.push({
+    
+    if (state.streamContent) {
+      state.messages.push({
         id: Date.now().toString(),
         role: 'assistant',
-        content: streamContent.value + '\n\n*[Stopped by user]*',
+        content: state.streamContent + '\n\n*[Stopped by user]*',
         timestamp: new Date().toISOString(),
-        session_id: activeSessionId.value || '',
+        session_id: sessionId,
       })
-      streamContent.value = ''
+      state.streamContent = ''
     }
   }
 
   function cleanup(): void {
-    if (streamFlushTimer) {
-      clearTimeout(streamFlushTimer)
+    for (const sessionId of Object.keys(sessionStates.value)) {
+      if (sessionFlushTimers.value[sessionId]) {
+        clearTimeout(sessionFlushTimers.value[sessionId]!)
+      }
+      if (sessionEventSources.value[sessionId]) {
+        sessionEventSources.value[sessionId]!.close()
+      }
     }
-    closeEventSource()
-    clearHeartbeat()
+    sessionStates.value = {}
+    sessionEventSources.value = {}
+    sessionFlushTimers.value = {}
   }
 
   return {

@@ -4,7 +4,7 @@
 
 # Web build
 web/node_modules/
-!web/dist/
+web/dist/
 web/dist-node/
 web/*.tsbuildinfo
 web/pnpm-lock.yaml
@@ -29,7 +29,7 @@ Thumbs.db
 *.log
 
 # Build outputs
-!internal/server/dist/
+internal/server/dist/
 build/
 output/
 *.wav
