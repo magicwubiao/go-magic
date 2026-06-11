@@ -17,7 +17,32 @@
             :class="{ active: chatStore.activeSessionId === session.id }"
             @click="selectSession(session.id)"
           >
-            <div class="session-title">{{ session.title || t('chat.untitled') }}</div>
+            <div v-if="editingSessionId !== session.id" class="session-title-wrapper">
+              <div class="session-title">{{ session.title || t('chat.untitled') }}</div>
+              <n-button
+                class="session-rename-btn"
+                size="tiny"
+                quaternary
+                circle
+                @click.stop="startRename(session.id)"
+                :title="t('chat.rename')"
+              >
+                <template #icon>
+                  <n-icon size="14"><PencilOutline /></n-icon>
+                </template>
+              </n-button>
+            </div>
+            <div v-else class="session-title-edit">
+              <n-input
+                v-model:value="editingName"
+                class="session-title-input"
+                size="small"
+                @keydown.enter="saveRename(session.id)"
+                @keydown.esc="cancelRename"
+                @blur="saveRename(session.id)"
+                autofocus
+              />
+            </div>
             <div class="session-meta">
               <n-tag v-if="session.source && session.source !== 'web'" size="tiny" :type="sourceType(session.source)" style="margin-right: 4px;">
                 {{ session.source }}
@@ -260,7 +285,7 @@ import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import CurrentGoal from '@/components/CurrentGoal.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -271,6 +296,10 @@ const modelsStore = useModelsStore()
 const router = useRouter()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
+
+// Rename session
+const editingSessionId = ref<string | null>(null)
+const editingName = ref('')
 
 // Model selector
 const currentModelId = ref('')
@@ -483,6 +512,27 @@ async function createSession() {
 async function deleteSession(id: string) {
   await chatStore.deleteSession(id)
   await chatStore.loadSessions()
+}
+
+function startRename(id: string) {
+  const session = chatStore.sessions.find(s => s.id === id)
+  if (session) {
+    editingSessionId.value = id
+    editingName.value = session.title || ''
+  }
+}
+
+function cancelRename() {
+  editingSessionId.value = null
+  editingName.value = ''
+}
+
+async function saveRename(id: string) {
+  if (editingName.value.trim()) {
+    await chatStore.renameSession(id, editingName.value.trim())
+  }
+  editingSessionId.value = null
+  editingName.value = ''
 }
 
 async function selectSession(id: string) {

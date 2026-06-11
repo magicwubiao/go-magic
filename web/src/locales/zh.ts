@@ -104,6 +104,8 @@ export default {
     newSession: '新建会话',
     newChat: '新建聊天',
     deleteSession: '删除会话',
+    renameSession: '重命名会话',
+    rename: '重命名',
     clearHistory: '清空历史',
     model: '模型',
     provider: '供应商',

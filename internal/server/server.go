@@ -607,8 +607,10 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		preview = preview[:200] + "..."
 	}
 
-	// If no title found, use a shortened ID
-	if title == "" {
+	// Use custom name if available, otherwise fallback to auto-generated title
+	if s.Name != "" {
+		title = s.Name
+	} else if title == "" {
 		title = "Untitled"
 	}
 
@@ -1231,6 +1233,19 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		jsonResponse(w, convertDBSessionToAPI(dbSession))
+	case "PUT":
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if err := s.sessionStore.RenameSession(context.Background(), id, req.Name); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		jsonResponse(w, map[string]bool{"ok": true})
 	case "DELETE":
 		s.sessionStore.DeleteSession(context.Background(), id)
 		// Clean up agent

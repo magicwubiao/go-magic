@@ -113,6 +113,18 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function renameSession(id: string, name: string): Promise<void> {
+    try {
+      await sessionsApi.renameSession(id, name)
+      const session = sessions.value.find(s => s.id === id)
+      if (session) {
+        session.title = name
+      }
+    } catch (e) {
+      console.error('Failed to rename session:', e)
+    }
+  }
+
   function closeEventSource(): void {
     if (currentEventSource) {
       currentEventSource.close()
@@ -355,6 +367,7 @@ export const useChatStore = defineStore('chat', () => {
     createSession,
     selectSession,
     deleteSession,
+    renameSession,
     sendMessage,
     stopGeneration,
     cleanup,

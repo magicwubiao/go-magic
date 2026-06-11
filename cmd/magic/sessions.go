@@ -59,10 +59,22 @@ Use 'magic backup' to create a backup of all magic data.`,
 	Run:  runSessionsDelete,
 }
 
+var sessionsRenameCmd = &cobra.Command{
+	Use:   "rename <id> <name>",
+	Short: "Rename a session",
+	Long: `Rename a chat session with a new name.
+	
+This allows you to give meaningful names to your chat sessions for easier identification.
+The session ID remains unchanged.`,
+	Args: cobra.ExactArgs(2),
+	Run:  runSessionsRename,
+}
+
 func init() {
 	sessionsCmd.AddCommand(sessionsListCmd)
 	sessionsCmd.AddCommand(sessionsShowCmd)
 	sessionsCmd.AddCommand(sessionsDeleteCmd)
+	sessionsCmd.AddCommand(sessionsRenameCmd)
 	rootCmd.AddCommand(sessionsCmd)
 }
 
@@ -98,11 +110,14 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 	fmt.Println("==============")
 	for _, s := range sessions {
 		fmt.Printf("ID: %s\n", s.ID)
+		if s.Name != "" {
+			fmt.Printf("  Name:      %s\n", s.Name)
+		}
 		fmt.Printf("  Platform:  %s\n", s.Platform)
-		fmt.Printf("  Created:  %s\n", s.CreatedAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("  Updated:  %s\n", s.UpdatedAt.Format("2006-01-02 15:04:05"))
+		fmt.Printf("  Created:   %s\n", s.CreatedAt.Format("2006-01-02 15:04:05"))
+		fmt.Printf("  Updated:   %s\n", s.UpdatedAt.Format("2006-01-02 15:04:05"))
 		if len(s.Messages) > 0 {
-			fmt.Printf("  Messages: %d\n", len(s.Messages))
+			fmt.Printf("  Messages:  %d\n", len(s.Messages))
 		}
 		fmt.Println()
 	}
@@ -126,6 +141,9 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("Session: %s\n", sess.ID)
+	if sess.Name != "" {
+		fmt.Printf("Name:    %s\n", sess.Name)
+	}
 	fmt.Printf("Platform: %s\n", sess.Platform)
 	fmt.Printf("Created:  %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Updated:  %s\n", sess.UpdatedAt.Format("2006-01-02 15:04:05"))
@@ -168,4 +186,27 @@ func runSessionsDelete(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("Session '%s' deleted successfully.\n", sessionID)
+}
+
+func runSessionsRename(cmd *cobra.Command, args []string) {
+	sessionID := args[0]
+	newName := args[1]
+
+	home, _ := os.UserHomeDir()
+	dbPath := filepath.Join(home, ".magic", "sessions.db")
+
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		fmt.Printf("Failed to open session store: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	err = store.RenameSession(context.Background(), sessionID, newName)
+	if err != nil {
+		fmt.Printf("Failed to rename session: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Session '%s' renamed to '%s' successfully.\n", sessionID, newName)
 }

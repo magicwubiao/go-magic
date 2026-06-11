@@ -104,6 +104,8 @@ export default {
     newSession: 'New Session',
     newChat: 'New Chat',
     deleteSession: 'Delete Session',
+    renameSession: 'Rename Session',
+    rename: 'Rename',
     clearHistory: 'Clear History',
     model: 'Model',
     provider: 'Provider',

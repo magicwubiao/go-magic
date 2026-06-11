@@ -52,6 +52,13 @@ export async function deleteSession(id: string): Promise<void> {
   return request(`/sessions/${id}`, { method: 'DELETE' })
 }
 
+export async function renameSession(id: string, name: string): Promise<void> {
+  return request(`/sessions/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  })
+}
+
 export async function sendMessage(sessionId: string, content: string): Promise<void> {
   return request(`/sessions/${sessionId}/messages`, {
     method: 'POST',
