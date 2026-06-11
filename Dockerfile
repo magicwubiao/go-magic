@@ -6,7 +6,7 @@
 # ===========================================
 
 # Stage 1: Web Build
-FROM node:20-alpine AS web-builder
+FROM node:22-alpine AS web-builder
 
 WORKDIR /app/web
 
@@ -22,7 +22,7 @@ COPY web/ .
 RUN npm run build
 
 # Stage 2: Go Build
-FROM golang:1.25-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
@@ -46,7 +46,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/magic
 
 # Stage 3: Runtime
-FROM alpine:3.19
+FROM alpine:3.20
 
 LABEL maintainer="go-magic"
 LABEL description="High-performance AI Agent in Go"
@@ -57,7 +57,9 @@ RUN apk add --no-cache \
     curl \
     git \
     bash \
-    openssh-client
+    openssh-client \
+    chromium \
+    chromium-chromedriver
 
 # Create non-root user
 RUN addgroup -g 1000 magic && \
