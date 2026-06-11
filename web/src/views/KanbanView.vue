@@ -607,7 +607,7 @@ async function moveTaskForward(task: KanbanTask) {
 }
 
 async function unblockTask(id: string) {
-  await kanbanStore.moveTask(id, 'todo')
+  await kanbanStore.moveTask(id, 'ready')
   message.success(t('kanban.taskUnblocked'))
 }
 

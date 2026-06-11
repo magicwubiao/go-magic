@@ -5987,6 +5987,34 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 
 // --- Kanban Handlers ---
 
+// priorityToString converts int priority (0-3) to string label
+func priorityToString(p int) string {
+	switch p {
+	case 3:
+		return "critical"
+	case 2:
+		return "high"
+	case 1:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+// priorityFromString converts string priority to int
+func priorityFromString(s string) int {
+	switch s {
+	case "critical":
+		return 3
+	case "high":
+		return 2
+	case "medium":
+		return 1
+	default:
+		return 0
+	}
+}
+
 func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "method not allowed", 405)
@@ -6012,7 +6040,7 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 				"title":           task.Title,
 				"description":     task.Body,
 				"status":          task.Status,
-				"priority":        task.Priority,
+				"priority":        priorityToString(task.Priority),
 				"assignee":        task.Assignee,
 				"tags":            task.Skills,
 				"created_at":      task.CreatedAt.Unix(),
@@ -6069,14 +6097,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		priority := 1
-		if req.Priority == "high" {
-			priority = 2
-		} else if req.Priority == "critical" {
-			priority = 3
-		} else if req.Priority == "low" {
-			priority = 0
-		}
+		priority := priorityFromString(req.Priority)
 
 		task, err := s.kanbanMgr.CreateTask(req.Title, req.Description, "", kanban.WithPriority(priority))
 		if err != nil {
@@ -6104,7 +6125,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 			"title":           task.Title,
 			"description":     task.Body,
 			"status":          task.Status,
-			"priority":        task.Priority,
+			"priority":        priorityToString(task.Priority),
 			"tags":            task.Skills,
 			"created_at":      task.CreatedAt.Unix(),
 			"updated_at":      task.UpdatedAt.Unix(),
@@ -6129,7 +6150,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 					"title":           task.Title,
 					"description":     task.Body,
 					"status":          task.Status,
-					"priority":        task.Priority,
+					"priority":        priorityToString(task.Priority),
 					"created_at":      task.CreatedAt.Unix(),
 					"updated_at":      task.UpdatedAt.Unix(),
 					"due_date":        task.DueDate,
@@ -6164,6 +6185,8 @@ func (s *Server) handleKanbanTaskByIDOrSubroute(w http.ResponseWriter, r *http.R
 			s.handleKanbanTriage(w, r, id)
 		case "block":
 			s.handleKanbanBlock(w, r, id)
+		case "split":
+			s.handleKanbanSplit(w, r, id)
 		default:
 			http.Error(w, "not found", 404)
 		}
@@ -6206,7 +6229,7 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 			"title":           task.Title,
 			"description":     task.Body,
 			"status":          task.Status,
-			"priority":        task.Priority,
+			"priority":        priorityToString(task.Priority),
 			"assignee":        task.Assignee,
 			"tags":            task.Skills,
 			"created_at":      task.CreatedAt.Unix(),
@@ -6405,7 +6428,7 @@ func (s *Server) handleKanbanTriage(w http.ResponseWriter, r *http.Request, task
 		"title":           task.Title,
 		"description":     task.Body,
 		"status":          task.Status,
-		"priority":        task.Priority,
+		"priority":        priorityToString(task.Priority),
 		"due_date":        task.DueDate,
 		"estimated_hours": task.EstimatedHours,
 	})
@@ -6432,6 +6455,34 @@ func (s *Server) handleKanbanBlock(w http.ResponseWriter, r *http.Request, taskI
 		"id":     task.ID,
 		"status": task.Status,
 	})
+}
+
+func (s *Server) handleKanbanSplit(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.kanbanMgr == nil || s.provider == nil {
+		http.Error(w, "kanban or provider not initialized", 500)
+		return
+	}
+	subtasks, err := s.kanbanMgr.SplitTask(r.Context(), taskID, s.provider)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	result := make([]interface{}, 0, len(subtasks))
+	for _, st := range subtasks {
+		result = append(result, map[string]interface{}{
+			"id":              st.ID,
+			"title":           st.Title,
+			"description":     st.Body,
+			"status":          st.Status,
+			"priority":        priorityToString(st.Priority),
+			"estimated_hours": st.EstimatedHours,
+		})
+	}
+	jsonResponse(w, result)
 }
 
 // --- GroupChat Handlers ---

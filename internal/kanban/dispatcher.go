@@ -132,7 +132,11 @@ func (d *Dispatcher) Tick() error {
 	if err := d.dispatchReadyTasks(); err != nil {
 		log.Warnf("[Dispatcher] Failed to dispatch ready tasks: %v", err)
 		d.recordFailure()
+		return err
 	}
+
+	// All steps succeeded
+	d.recordSuccess()
 
 	return nil
 }
@@ -199,6 +203,18 @@ func (d *Dispatcher) checkCrashedProcesses() error {
 
 		if run.PID <= 0 {
 			continue // No PID to check
+		}
+
+		// Check retry count
+		if d.maxRetries > 0 && run.RetryCount >= d.maxRetries {
+			log.Infof("[Dispatcher] Task %s exceeded max retries (%d), marking as failed", task.ID, run.RetryCount)
+			finishedAt := time.Now()
+			run.Status = RunStatusFailed
+			run.FinishedAt = &finishedAt
+			run.Summary = fmt.Sprintf("Task failed after %d retries", run.RetryCount)
+			d.db.UpdateRun(run)
+			d.db.UpdateTaskStatus(task.ID, string(StatusBlocked), fmt.Sprintf("Exceeded max retries (%d)", d.maxRetries))
+			continue
 		}
 
 		// Check if process exists

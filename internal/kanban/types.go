@@ -82,6 +82,7 @@ type Run struct {
 	TaskID     string     `json:"task_id"`
 	Status     string     `json:"status"` // running/completed/failed/crashed/timed_out
 	PID        int        `json:"pid"`
+	RetryCount int        `json:"retry_count"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	Summary    string     `json:"summary"`

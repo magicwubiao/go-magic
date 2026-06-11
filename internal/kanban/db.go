@@ -60,6 +60,12 @@ func (kdb *KanbanDB) Init() error {
 		max_runtime_seconds INTEGER DEFAULT 0,
 		idempotency_key TEXT DEFAULT '',
 		current_run_id TEXT DEFAULT '',
+		due_date DATETIME,
+		estimated_hours REAL DEFAULT 0,
+		actual_hours REAL DEFAULT 0,
+		started_at DATETIME,
+		completed_at DATETIME,
+		goal_id TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -87,6 +93,7 @@ func (kdb *KanbanDB) Init() error {
 		task_id TEXT NOT NULL,
 		status TEXT DEFAULT 'running',
 		pid INTEGER DEFAULT 0,
+		retry_count INTEGER DEFAULT 0,
 		started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		finished_at DATETIME,
 		summary TEXT DEFAULT '',
@@ -117,6 +124,20 @@ func (kdb *KanbanDB) Init() error {
 	_, err := kdb.db.Exec(schema)
 	if err != nil {
 		return fmt.Errorf("failed to initialize schema: %w", err)
+	}
+
+	// Migration: add missing columns for existing databases
+	migrations := []string{
+		"ALTER TABLE tasks ADD COLUMN due_date DATETIME",
+		"ALTER TABLE tasks ADD COLUMN estimated_hours REAL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN actual_hours REAL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN started_at DATETIME",
+		"ALTER TABLE tasks ADD COLUMN completed_at DATETIME",
+		"ALTER TABLE tasks ADD COLUMN goal_id TEXT DEFAULT ''",
+		"ALTER TABLE task_runs ADD COLUMN retry_count INTEGER DEFAULT 0",
+	}
+	for _, m := range migrations {
+		kdb.db.Exec(m) // Ignore errors (column may already exist)
 	}
 
 	log.Infof("[KanbanDB] Initialized database at %s", kdb.path)
@@ -151,14 +172,17 @@ func (kdb *KanbanDB) CreateTask(task *Task) error {
 
 	query := `
 	INSERT INTO tasks (id, title, body, assignee, status, priority, tenant, workspace, skills, 
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
+		actual_hours, started_at, completed_at, goal_id, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := kdb.db.Exec(query,
 		task.ID, task.Title, task.Body, task.Assignee, string(task.Status), task.Priority,
 		task.Tenant, task.Workspace, string(skillsJSON), task.MaxRuntimeSeconds,
-		task.IdempotencyKey, task.CurrentRunID, task.CreatedAt, task.UpdatedAt)
+		task.IdempotencyKey, task.CurrentRunID, task.DueDate, task.EstimatedHours,
+		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID,
+		task.CreatedAt, task.UpdatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create task: %w", err)
@@ -171,7 +195,8 @@ func (kdb *KanbanDB) CreateTask(task *Task) error {
 func (kdb *KanbanDB) GetTask(id string) (*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills, 
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at
+		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
+		actual_hours, started_at, completed_at, goal_id, created_at, updated_at
 	FROM tasks WHERE id = ?
 	`
 
@@ -180,7 +205,9 @@ func (kdb *KanbanDB) GetTask(id string) (*Task, error) {
 	err := kdb.db.QueryRow(query, id).Scan(
 		&task.ID, &task.Title, &task.Body, &task.Assignee, &task.Status, &task.Priority,
 		&task.Tenant, &task.Workspace, &skillsJSON, &task.MaxRuntimeSeconds,
-		&task.IdempotencyKey, &task.CurrentRunID, &task.CreatedAt, &task.UpdatedAt)
+		&task.IdempotencyKey, &task.CurrentRunID, &task.DueDate, &task.EstimatedHours,
+		&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID,
+		&task.CreatedAt, &task.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("task not found: %s", id)
@@ -206,14 +233,16 @@ func (kdb *KanbanDB) UpdateTask(task *Task) error {
 	query := `
 	UPDATE tasks SET title = ?, body = ?, assignee = ?, status = ?, priority = ?, 
 		tenant = ?, workspace = ?, skills = ?, max_runtime_seconds = ?, 
-		idempotency_key = ?, current_run_id = ?, updated_at = ?
+		idempotency_key = ?, current_run_id = ?, due_date = ?, estimated_hours = ?,
+		actual_hours = ?, started_at = ?, completed_at = ?, goal_id = ?, updated_at = ?
 	WHERE id = ?
 	`
 
 	result, err := kdb.db.Exec(query,
 		task.Title, task.Body, task.Assignee, string(task.Status), task.Priority,
 		task.Tenant, task.Workspace, string(skillsJSON), task.MaxRuntimeSeconds,
-		task.IdempotencyKey, task.CurrentRunID, task.UpdatedAt, task.ID)
+		task.IdempotencyKey, task.CurrentRunID, task.DueDate, task.EstimatedHours,
+		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID, task.UpdatedAt, task.ID)
 
 	if err != nil {
 		return fmt.Errorf("failed to update task: %w", err)
@@ -231,7 +260,8 @@ func (kdb *KanbanDB) UpdateTask(task *Task) error {
 func (kdb *KanbanDB) ListTasks(filter TaskFilter) ([]*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills,
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at
+		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
+		actual_hours, started_at, completed_at, goal_id, created_at, updated_at
 	FROM tasks WHERE 1=1
 	`
 	args := []interface{}{}
@@ -288,7 +318,9 @@ func (kdb *KanbanDB) ListTasks(filter TaskFilter) ([]*Task, error) {
 		if err := rows.Scan(
 			&task.ID, &task.Title, &task.Body, &task.Assignee, &task.Status, &task.Priority,
 			&task.Tenant, &task.Workspace, &skillsJSON, &task.MaxRuntimeSeconds,
-			&task.IdempotencyKey, &task.CurrentRunID, &task.CreatedAt, &task.UpdatedAt,
+			&task.IdempotencyKey, &task.CurrentRunID, &task.DueDate, &task.EstimatedHours,
+			&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID,
+			&task.CreatedAt, &task.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -502,11 +534,11 @@ func (kdb *KanbanDB) CreateRun(run *Run) error {
 	}
 
 	query := `
-	INSERT INTO task_runs (id, task_id, status, pid, started_at, summary, result)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO task_runs (id, task_id, status, pid, retry_count, started_at, summary, result)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := kdb.db.Exec(query, run.ID, run.TaskID, run.Status, run.PID, run.StartedAt, run.Summary, run.Result)
+	_, err := kdb.db.Exec(query, run.ID, run.TaskID, run.Status, run.PID, run.RetryCount, run.StartedAt, run.Summary, run.Result)
 	if err != nil {
 		return fmt.Errorf("failed to create run: %w", err)
 	}
@@ -517,11 +549,11 @@ func (kdb *KanbanDB) CreateRun(run *Run) error {
 // UpdateRun updates a task run
 func (kdb *KanbanDB) UpdateRun(run *Run) error {
 	query := `
-	UPDATE task_runs SET status = ?, pid = ?, finished_at = ?, summary = ?, result = ?
+	UPDATE task_runs SET status = ?, pid = ?, retry_count = ?, finished_at = ?, summary = ?, result = ?
 	WHERE id = ?
 	`
 
-	_, err := kdb.db.Exec(query, run.Status, run.PID, run.FinishedAt, run.Summary, run.Result, run.ID)
+	_, err := kdb.db.Exec(query, run.Status, run.PID, run.RetryCount, run.FinishedAt, run.Summary, run.Result, run.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update run: %w", err)
 	}
@@ -532,14 +564,14 @@ func (kdb *KanbanDB) UpdateRun(run *Run) error {
 // GetCurrentRun gets the current running task for a task
 func (kdb *KanbanDB) GetCurrentRun(taskID string) (*Run, error) {
 	query := `
-	SELECT id, task_id, status, pid, started_at, finished_at, summary, result
+	SELECT id, task_id, status, pid, retry_count, started_at, finished_at, summary, result
 	FROM task_runs WHERE task_id = ? AND status = 'running'
 	ORDER BY started_at DESC LIMIT 1
 	`
 
 	var run Run
 	err := kdb.db.QueryRow(query, taskID).Scan(
-		&run.ID, &run.TaskID, &run.Status, &run.PID, &run.StartedAt, &run.FinishedAt, &run.Summary, &run.Result)
+		&run.ID, &run.TaskID, &run.Status, &run.PID, &run.RetryCount, &run.StartedAt, &run.FinishedAt, &run.Summary, &run.Result)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -553,7 +585,7 @@ func (kdb *KanbanDB) GetCurrentRun(taskID string) (*Run, error) {
 // ListRuns lists all runs for a task
 func (kdb *KanbanDB) ListRuns(taskID string) ([]*Run, error) {
 	query := `
-	SELECT id, task_id, status, pid, started_at, finished_at, summary, result
+	SELECT id, task_id, status, pid, retry_count, started_at, finished_at, summary, result
 	FROM task_runs WHERE task_id = ? ORDER BY started_at DESC
 	`
 
@@ -567,7 +599,7 @@ func (kdb *KanbanDB) ListRuns(taskID string) ([]*Run, error) {
 	for rows.Next() {
 		var run Run
 		if err := rows.Scan(
-			&run.ID, &run.TaskID, &run.Status, &run.PID, &run.StartedAt, &run.FinishedAt, &run.Summary, &run.Result,
+			&run.ID, &run.TaskID, &run.Status, &run.PID, &run.RetryCount, &run.StartedAt, &run.FinishedAt, &run.Summary, &run.Result,
 		); err != nil {
 			continue
 		}

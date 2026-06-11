@@ -69,5 +69,11 @@ export const useKanbanStore = defineStore('kanban', () => {
     tasks.value = tasks.value.filter(t => t.id !== id)
   }
 
-  return { tasks, upperColumns, lowerColumns, loading, stats, loadBoard, addTask, updateTask, moveTask, removeTask }
+  async function splitTask(id: string) {
+    const subtasks = await kanbanApi.splitTask(id)
+    tasks.value.push(...subtasks)
+    return subtasks
+  }
+
+  return { tasks, upperColumns, lowerColumns, loading, stats, loadBoard, addTask, updateTask, moveTask, removeTask, splitTask }
 })

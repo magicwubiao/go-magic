@@ -78,3 +78,7 @@ export async function blockTask(taskId: string, reason: string): Promise<KanbanT
     body: JSON.stringify({ reason }),
   })
 }
+
+export async function splitTask(taskId: string): Promise<KanbanTask[]> {
+  return request(`/kanban/tasks/${taskId}/split`, { method: 'POST' })
+}

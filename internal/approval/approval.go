@@ -72,7 +72,7 @@ func (r RiskLevel) MarshalJSON() ([]byte, error) {
 func (r *RiskLevel) UnmarshalJSON(data []byte) error {
 	s := strings.Trim(string(data), `"`)
 	switch s {
-	case "low", "1":
+	case "low", "1", "0":
 		*r = RiskLow
 	case "medium", "2":
 		*r = RiskMedium
@@ -81,7 +81,7 @@ func (r *RiskLevel) UnmarshalJSON(data []byte) error {
 	case "critical", "4":
 		*r = RiskCritical
 	default:
-		*r = RiskMedium
+		*r = RiskLow // Default to low risk for unknown values
 	}
 	return nil
 }
@@ -1277,6 +1277,11 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 		WorkingDir: req.WorkingDir,
 		Duration:   duration,
 		Timestamp:  time.Now(),
+	}
+
+	// Ensure valid risk level (zero-value means unset → low)
+	if record.RiskLevel < RiskLow || record.RiskLevel > RiskCritical {
+		record.RiskLevel = RiskLow
 	}
 
 	m.mu.Lock()

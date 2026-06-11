@@ -145,8 +145,8 @@
                   <n-space align="center" justify="space-between">
                     <n-space align="center">
                       <n-text strong>{{ t('approval.pending.command') }}</n-text>
-                      <n-tag :type="riskTagType(item.riskLevel || 'medium')" size="small">
-                        {{ t(`approval.riskLevels.${riskLevelKey(item.riskLevel || 'medium')}`) }}
+                      <n-tag :type="riskTagType(item.riskLevel || 'low')" size="small">
+                        {{ t(`approval.riskLevels.${riskLevelKey(item.riskLevel || 'low')}`) }}
                       </n-tag>
                     </n-space>
                     <n-text depth="3" style="font-size: 12px;">{{ formatTime(item.createdAt) }}</n-text>
@@ -325,9 +325,9 @@ function riskTagType(level: string): 'success' | 'warning' | 'error' | 'info' {
 function riskLevelKey(level: string | number): string {
   const map: Record<string, string> = {
     low: 'low', medium: 'medium', high: 'high', critical: 'critical',
-    '1': 'low', '2': 'medium', '3': 'high', '4': 'critical',
+    '0': 'low', '1': 'low', '2': 'medium', '3': 'high', '4': 'critical',
   }
-  return map[String(level)] || 'medium'
+  return map[String(level)] || 'low'
 }
 
 function getRiskCount(level: string): number {
