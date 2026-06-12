@@ -89,6 +89,11 @@ export default {
     goalCompleted: 'Goal completed!',
     details: 'Details',
     adjust: 'Adjust',
+    statusOptions: {
+      active: 'Active',
+      completed: 'Completed',
+      abandoned: 'Abandoned',
+    },
   },
   chat: {
     title: 'Chat',
@@ -284,6 +289,7 @@ export default {
     reset: 'Reset',
     dueDate: 'Due Date',
     estimatedHours: 'Estimated Hours',
+    hoursUnit: 'h',
     selectGoal: 'Select goal',
     aiSplit: 'AI Split',
     statsTitle: 'Kanban Statistics',
@@ -303,6 +309,7 @@ export default {
     comments: 'Comments',
     addComment: 'Add a comment...',
     send: 'Send',
+    aiLabel: 'AI',
     aiTriage: 'AI Triage',
     moveForward: 'Move Forward',
     blockReason: 'Block Reason',

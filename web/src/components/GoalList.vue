@@ -12,7 +12,7 @@
         <n-space justify="space-between" align="center">
           <n-space align="center" :size="8">
             <n-text strong style="font-size: 16px;">{{ goal.title }}</n-text>
-            <n-tag :type="statusType(goal.status)" size="small">{{ goal.status }}</n-tag>
+            <n-tag :type="statusType(goal.status)" size="small">{{ t('goals.statusOptions.' + goal.status) }}</n-tag>
           </n-space>
           <n-space :size="4">
             <!-- Quick progress buttons -->

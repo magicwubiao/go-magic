@@ -1,42 +1,23 @@
 <template>
   <div v-if="currentGoal" class="current-goal">
-    <n-card size="small" :class="{ 'goal-completed': currentGoal.status === 'completed' }">
-      <n-space align="center" justify="space-between">
-        <n-space align="center" :size="8">
-          <n-icon :component="FlagOutline" :color="currentGoal.status === 'completed' ? '#18a058' : '#2080f0'" />
-          <n-text strong style="font-size: 14px;">{{ currentGoal.title }}</n-text>
-          <n-tag :type="statusType(currentGoal.status)" size="tiny">{{ currentGoal.status }}</n-tag>
-        </n-space>
-        <n-space :size="4">
-          <n-button v-if="currentGoal.status !== 'completed'" size="tiny" type="success" @click="completeGoal">
-            <template #icon><n-icon :component="CheckmarkOutline" /></template>
-            {{ t('goals.completeGoal') }}
-          </n-button>
-          <n-button size="tiny" @click="goToGoals">
-            <template #icon><n-icon :component="OpenOutline" /></template>
-            {{ t('goals.details') }}
-          </n-button>
-        </n-space>
-      </n-space>
+    <n-space align="center" :size="8" wrap="false">
+      <n-icon :component="FlagOutline" :size="14" :color="currentGoal.status === 'completed' ? '#18a058' : '#2080f0'" />
+      <n-text strong style="font-size: 13px; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ currentGoal.title }}</n-text>
+      <n-tag v-if="currentGoal.status === 'completed'" type="success" size="tiny">{{ t('goals.complete') }}</n-tag>
       <n-progress
         v-if="currentGoal.status !== 'completed'"
         type="line"
         :percentage="currentGoal.progress"
         :status="currentGoal.progress === 100 ? 'success' : 'default'"
         :show-indicator="false"
-        style="margin-top: 8px;"
-        :height="4"
+        :height="3"
+        style="flex: 1; min-width: 80px;"
       />
-    </n-card>
-  </div>
-  <div v-else class="current-goal-empty">
-    <n-card size="small">
-      <n-space align="center" justify="center" :size="8">
-        <n-icon :component="FlagOutline" color="#999" />
-        <n-text depth="3" style="font-size: 13px;">{{ t('goals.noActiveGoal') }}</n-text>
-        <n-button size="tiny" text type="primary" @click="goToGoals">{{ t('goals.createGoal') }}</n-button>
-      </n-space>
-    </n-card>
+      <n-button v-if="currentGoal.status !== 'completed'" size="tiny" type="success" quaternary @click="completeGoal">
+        {{ t('goals.completeGoal') }}
+      </n-button>
+      <n-button size="tiny" quaternary @click="goToGoals">{{ t('goals.details') }}</n-button>
+    </n-space>
   </div>
 </template>
 
@@ -44,7 +25,7 @@
 import { onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import { FlagOutline, CheckmarkOutline, OpenOutline } from '@vicons/ionicons5'
+import { FlagOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
 
@@ -58,15 +39,6 @@ const currentGoal = computed(() => goalsStore.currentGoal)
 onMounted(() => {
   goalsStore.loadCurrentGoal()
 })
-
-function statusType(status: string) {
-  const map: Record<string, string> = {
-    active: 'info',
-    completed: 'success',
-    abandoned: 'default',
-  }
-  return (map[status] || 'default') as any
-}
 
 async function completeGoal() {
   if (!currentGoal.value) return
@@ -85,21 +57,16 @@ function goToGoals() {
 
 <style scoped>
 .current-goal {
-  margin-bottom: 12px;
+  padding: 6px 12px;
+  background: #f9f9f9;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
 }
 
-.current-goal-empty {
-  margin-bottom: 12px;
-}
-
-.goal-completed {
-  opacity: 0.9;
-}
-
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
-  .current-goal-empty .n-card {
-    background: #2a2a2a !important;
+  .current-goal {
+    background: #1e1e1e;
+    border-bottom-color: #333;
   }
 }
 </style>

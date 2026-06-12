@@ -89,6 +89,11 @@ export default {
     goalCompleted: '目标已完成！',
     details: '详情',
     adjust: '调整',
+    statusOptions: {
+      active: '进行中',
+      completed: '已完成',
+      abandoned: '已放弃',
+    },
   },
   chat: {
     title: '聊天',
@@ -285,6 +290,7 @@ export default {
     reset: '重置',
     dueDate: '截止日期',
     estimatedHours: '预估工时(小时)',
+    hoursUnit: '小时',
     selectGoal: '选择目标',
     aiSplit: 'AI拆分',
     statsTitle: '看板统计',
@@ -304,6 +310,7 @@ export default {
     comments: '评论',
     addComment: '添加评论...',
     send: '发送',
+    aiLabel: 'AI',
     aiTriage: 'AI充实',
     moveForward: '推进',
     blockReason: '阻塞原因',

@@ -79,7 +79,7 @@
 
     <!-- Chat Area -->
     <div class="chat-main">
-      <CurrentGoal style="margin: 12px 12px 0 12px;" />
+      <CurrentGoal />
 
       <n-alert v-if="chatStore.error" type="error" closable style="margin: 12px;" @close="chatStore.error = null">
         {{ chatStore.error.message }}

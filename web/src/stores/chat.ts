@@ -49,13 +49,10 @@ export const useChatStore = defineStore('chat', () => {
   const error = ref<ChatError | null>(null)
 
   const builtinCommands: commandsApi.Command[] = [
-    { name: 'help', usage: '/help', aliases: ['/?'], category: 'general' },
-    { name: 'new', usage: '/new', aliases: ['/n'], category: 'session' },
-    { name: 'clear', usage: '/clear', aliases: ['/c'], category: 'session' },
-    { name: 'compress', usage: '/compress', aliases: [], category: 'session' },
-    { name: 'retry', usage: '/retry', aliases: ['/r'], category: 'session' },
+    { name: 'help', usage: '/help', aliases: [], category: 'general' },
+    { name: 'new', usage: '/new', aliases: [], category: 'session' },
+    { name: 'clear', usage: '/clear', aliases: [], category: 'session' },
     { name: 'undo', usage: '/undo', aliases: [], category: 'session' },
-    { name: 'export', usage: '/export', aliases: [], category: 'session' },
   ]
 
   const commands = computed<commandsApi.Command[]>(() => {
