@@ -325,14 +325,41 @@
       </n-card>
     </n-modal>
 
+    <!-- Error Banner -->
+    <n-alert
+      v-if="kanbanStore.error"
+      type="error"
+      show-icon
+      style="margin-bottom: 16px;"
+      :title="t('kanban.loadError')"
+    >
+      {{ kanbanStore.error }}
+    </n-alert>
+
     <!-- Stats Modal -->
     <n-modal v-model:show="showStats" :title="t('kanban.statsTitle')">
       <n-card style="width: 600px;">
         <n-space vertical>
-          <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats?.total || 0" />
-          <n-statistic :label="t('kanban.completedTasks')" :value="kanbanStore.stats?.completed || 0" />
-          <n-statistic :label="t('kanban.inProgressTasks')" :value="kanbanStore.stats?.in_progress || 0" />
-          <n-statistic :label="t('kanban.pendingTasks')" :value="kanbanStore.stats?.pending || 0" />
+          <n-grid :cols="2" :x-gap="12" :y-gap="12">
+            <n-gi>
+              <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats.total" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.completedTasks')" :value="kanbanStore.stats.completed" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.inProgressTasks')" :value="kanbanStore.stats.in_progress" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.pendingTasks')" :value="kanbanStore.stats.pending" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.blockedTasks')" :value="(kanbanStore.tasks ?? []).filter(t => t.status === 'blocked').length" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.completionRate')" :value="kanbanStore.stats.total > 0 ? Math.round((kanbanStore.stats.completed / kanbanStore.stats.total) * 100) : 0" suffix="%" />
+            </n-gi>
+          </n-grid>
         </n-space>
       </n-card>
     </n-modal>

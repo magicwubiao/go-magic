@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 export const useKanbanStore = defineStore('kanban', () => {
   const tasks = ref<KanbanTask[]>([])
   const loading = ref(false)
+  const error = ref<string | null>(null)
 
   // Upper row: Triage / To Do / Ready
   const upperColumns = computed(() => [
@@ -35,11 +36,13 @@ export const useKanbanStore = defineStore('kanban', () => {
 
   async function loadBoard() {
     loading.value = true
+    error.value = null
     try {
       const board = await kanbanApi.getBoard()
       tasks.value = board.tasks || []
-    } catch {
+    } catch (e) {
       tasks.value = []
+      error.value = e instanceof Error ? e.message : 'Failed to load board'
     } finally {
       loading.value = false
     }
@@ -75,5 +78,5 @@ export const useKanbanStore = defineStore('kanban', () => {
     return subtasks
   }
 
-  return { tasks, upperColumns, lowerColumns, loading, stats, loadBoard, addTask, updateTask, moveTask, removeTask, splitTask }
+  return { tasks, upperColumns, lowerColumns, loading, error, stats, loadBoard, addTask, updateTask, moveTask, removeTask, splitTask }
 })

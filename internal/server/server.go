@@ -6042,13 +6042,13 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.kanbanMgr == nil {
-		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		http.Error(w, "kanban manager not initialized", 503)
 		return
 	}
 
 	board, err := s.kanbanMgr.GetBoard("")
 	if err != nil {
-		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		http.Error(w, fmt.Sprintf("failed to get board: %v", err), 500)
 		return
 	}
 
