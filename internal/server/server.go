@@ -869,8 +869,8 @@ func (s *Server) Start(port int) error {
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
 	mux.HandleFunc("/api/goals/current", withCORS(requireAuth(s.handleGoalCurrent)))
-	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 	mux.HandleFunc("/api/goals/analyze", withCORS(requireAuth(s.handleGoalAnalyze)))
+	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 
 	// Approval Management
 	mux.HandleFunc("/api/approval/status", withCORS(requireAuth(s.handleApprovalStatus)))
