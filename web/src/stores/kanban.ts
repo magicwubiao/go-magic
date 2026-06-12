@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as kanbanApi from '@/api/kanban'
 import type { KanbanTask } from '@/api/kanban'
-import { useI18n } from 'vue-i18n'
 
 export const useKanbanStore = defineStore('kanban', () => {
   const tasks = ref<KanbanTask[]>([])

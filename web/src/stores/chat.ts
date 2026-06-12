@@ -48,7 +48,7 @@ export const useChatStore = defineStore('chat', () => {
   const activeSessionId = ref<string | null>(null)
   const error = ref<ChatError | null>(null)
 
-  const builtinCommands: commandsApi.Command[] = [
+  const builtinCommands: Array<Omit<commandsApi.Command, 'description'>> = [
     { name: 'help', usage: '/help', aliases: [], category: 'general' },
     { name: 'new', usage: '/new', aliases: [], category: 'session' },
     { name: 'clear', usage: '/clear', aliases: [], category: 'session' },
@@ -166,10 +166,8 @@ export const useChatStore = defineStore('chat', () => {
 
     const parts = trimmed.split(/\s+/)
     const cmd = parts[0].toLowerCase()
-    const args = parts.slice(1).join(' ')
 
-    const isNewCmd = cmd === '/new' || cmd === '/n'
-    if (!activeSessionId.value && !isNewCmd) {
+    if (!activeSessionId.value && cmd !== '/new') {
       await createSession()
       if (!activeSessionId.value) return
     }
@@ -177,34 +175,22 @@ export const useChatStore = defineStore('chat', () => {
     let result: string | null = null
 
     switch (cmd) {
-      case '/help':
-      case '/?': {
+      case '/help': {
         const lines = commands.value.map(c => `  ${c.usage.padEnd(20)} ${c.description}`)
         result = `**${$t('chat.commands.available')}**：\n\n${lines.join('\n')}\n\n${$t('chat.commands.hint')}`
         break
       }
-      case '/new':
-      case '/n': {
+      case '/new': {
         await createSession()
         result = $t('chat.commands.created')
         break
       }
-      case '/clear':
-      case '/c': {
+      case '/clear': {
         if (activeSessionId.value) {
           const state = sessionStates.value[activeSessionId.value]
           if (state) state.messages = []
         }
         result = $t('chat.commands.cleared')
-        break
-      }
-      case '/compress': {
-        result = $t('chat.commands.compressed')
-        break
-      }
-      case '/retry':
-      case '/r': {
-        result = $t('chat.commands.retryHint')
         break
       }
       case '/undo': {
@@ -219,10 +205,6 @@ export const useChatStore = defineStore('chat', () => {
         } else {
           result = $t('chat.commands.noSession')
         }
-        break
-      }
-      case '/export': {
-        result = $t('chat.commands.exportHint')
         break
       }
       default: {

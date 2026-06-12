@@ -133,7 +133,6 @@
             </div>
           </div>
         </div>
-      </div>
 
       <!-- Lower Row: Running / Blocked / Done -->
         <div class="kanban-board">
