@@ -37,6 +37,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/internal/slash"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
@@ -887,6 +888,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/approval/strategy", withCORS(requireAuth(s.handleApprovalStrategy)))
 	mux.HandleFunc("/api/approval/clear-history", withCORS(requireAuth(s.handleApprovalClearHistory)))
 	mux.HandleFunc("/api/approval/settings", withCORS(requireAuth(s.handleApprovalSettings)))
+
+	// Commands
+	mux.HandleFunc("/api/commands", withCORS(requireAuth(s.handleCommands)))
+	mux.HandleFunc("/api/commands/execute", withCORS(requireAuth(s.handleCommandExecute)))
 
 	// File upload
 	mux.HandleFunc("/api/upload", withCORS(requireAuth(s.handleFileUpload)))
@@ -8116,5 +8121,56 @@ func (s *Server) handlePluginProviders(w http.ResponseWriter, r *http.Request) {
 		"memory_options":  []map[string]interface{}{},
 		"context_engine":  "",
 		"context_options": []map[string]interface{}{},
+	})
+}
+
+// --- Command Handlers ---
+
+// handleCommands handles GET /api/commands - returns list of available commands
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	manager := slash.NewManager()
+	commands := manager.List()
+
+	jsonResponse(w, commands)
+}
+
+// handleCommandExecute handles POST /api/commands/execute - executes a command
+func (s *Server) handleCommandExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Command   string `json:"command"`
+		SessionID string `json:"session_id,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Command == "" {
+		http.Error(w, "Command is required", http.StatusBadRequest)
+		return
+	}
+
+	manager := slash.NewManager()
+	result, err := manager.Execute(r.Context(), req.Command)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"success": true,
+		"result":  result,
 	})
 }

@@ -137,6 +137,17 @@
           <!-- Tool message: hidden from chat display -->
           <template v-else-if="msg.role === 'tool'">
           </template>
+
+          <!-- System message: command results, notifications -->
+          <template v-else-if="msg.role === 'system'">
+            <div class="avatar system-avatar">💡</div>
+            <div class="message-body">
+              <div class="message-bubble system-bubble">
+                <div v-html="renderMarkdown(msg.content)"></div>
+              </div>
+              <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
+            </div>
+          </template>
         </div>
 
         <!-- Streaming area -->
@@ -207,16 +218,28 @@
 
       <!-- ChatGPT-style input box -->
       <div class="input-area">
+        <!-- Command suggestions -->
+        <div v-if="commandSuggestions.length > 0" class="command-suggestions">
+          <div
+            v-for="suggestion in commandSuggestions"
+            :key="suggestion"
+            class="suggestion-item"
+            @click="selectCommand(suggestion)"
+          >
+            {{ suggestion }}
+          </div>
+        </div>
         <div class="chat-input-box">
           <!-- Text input -->
           <n-input
             v-model:value="inputValue"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 8 }"
-            :placeholder="t('chat.placeholder')"
+            :placeholder="chatStore.isCommand(inputValue) ? t('chat.commandPlaceholder') : t('chat.placeholder')"
             class="chat-textarea"
             @keydown.enter.exact.prevent="send"
             @keydown.enter.shift.prevent="() => {}"
+            @input="handleInput"
           />
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
@@ -477,9 +500,32 @@ function goToFilesPage() {
   router.push('/files')
 }
 
+const commandSuggestions = ref<string[]>([])
+
+function handleInput() {
+  if (chatStore.isCommand(inputValue.value)) {
+    commandSuggestions.value = chatStore.autocompleteCommand(inputValue.value)
+  } else {
+    commandSuggestions.value = []
+  }
+}
+
+function selectCommand(suggestion: string) {
+  inputValue.value = suggestion + ' '
+  commandSuggestions.value = []
+}
+
 async function send() {
   const content = inputValue.value.trim()
   if ((!content && !selectedFiles.value.length) || chatStore.streaming) return
+
+  // Handle commands - all logic (session create, execution, message push) handled in chatStore
+  if (chatStore.isCommand(content)) {
+    inputValue.value = ''
+    commandSuggestions.value = []
+    await chatStore.executeCommand(content)
+    return
+  }
 
   // Build content with file URL references for AI processing
   let finalContent = content
@@ -494,6 +540,7 @@ async function send() {
 
   inputValue.value = ''
   selectedFiles.value = []
+  commandSuggestions.value = []
   await chatStore.sendMessage(finalContent, undefined, files)
 }
 
@@ -566,6 +613,7 @@ watch(() => chatStore.toolCalls.length, scrollToBottom)
 
 onMounted(async () => {
   await chatStore.loadSessions()
+  await chatStore.loadCommands()
   await modelsStore.loadModels()
   await modelsStore.loadCurrentModel()
   // Set default model value
@@ -766,6 +814,19 @@ onMounted(async () => {
   background: #f5f5f5;
   color: #333;
   border-bottom-left-radius: 4px;
+}
+
+.system-bubble {
+  background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
+  color: #854d0e;
+  border: 1px solid #fcd34d;
+  border-bottom-left-radius: 4px;
+  font-size: 13px;
+}
+
+.system-avatar {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
 }
 
 .tool-bubble {
@@ -1017,6 +1078,39 @@ onMounted(async () => {
   padding: 12px 24px 16px;
   background: #fff;
   border-top: 1px solid #e0e0e0;
+  position: relative;
+}
+
+/* Command suggestions dropdown */
+.command-suggestions {
+  position: absolute;
+  bottom: 100%;
+  left: 24px;
+  right: 24px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: -1px;
+}
+
+.suggestion-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+  border-bottom: 1px solid #f0f0f0;
+  transition: background 0.15s;
+}
+
+.suggestion-item:hover {
+  background: #f5f5f5;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
 }
 
 .chat-input-box {
@@ -1100,6 +1194,17 @@ onMounted(async () => {
   .assistant-bubble {
     background: #1e1e1e;
     color: #ddd;
+  }
+
+  .system-bubble {
+    background: #2a2410;
+    color: #fbbf24;
+    border: 1px solid #78350f;
+  }
+
+  .system-avatar {
+    background: #2a2410;
+    border: 1px solid #78350f;
   }
 
   .tool-bubble {
