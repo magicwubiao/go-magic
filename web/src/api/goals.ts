@@ -56,3 +56,7 @@ export async function unlinkSession(goalId: string, sessionId: string): Promise<
     body: JSON.stringify({ session_id: sessionId }),
   })
 }
+
+export async function decomposeGoal(goalId: string): Promise<{ goal_id: string; count: number; tasks: any[] }> {
+  return request(`/goals/${goalId}/decompose`, { method: 'POST' })
+}

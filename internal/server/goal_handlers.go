@@ -231,6 +231,35 @@ func (s *Server) handleGoalByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle decompose - auto-break goal into kanban tasks
+	if strings.HasSuffix(path, "/decompose") {
+		goalID := strings.TrimSuffix(path, "/decompose")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if s.kanbanMgr == nil {
+			http.Error(w, "Kanban manager not initialized", http.StatusServiceUnavailable)
+			return
+		}
+		goal, err := s.goalMgr.Get(ctx, goalID)
+		if err != nil {
+			http.Error(w, "Goal not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		tasks, err := s.kanbanMgr.DecomposeGoal(ctx, goal.ID, goal.Title, goal.Description, s.provider)
+		if err != nil {
+			http.Error(w, "Decompose failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"goal_id": goal.ID,
+			"count":   len(tasks),
+			"tasks":   tasks,
+		})
+		return
+	}
+
 	// Handle goal by ID
 	goalID := path
 

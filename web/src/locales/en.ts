@@ -94,6 +94,9 @@ export default {
       completed: 'Completed',
       abandoned: 'Abandoned',
     },
+    decompose: 'Auto-Decompose',
+    decomposeSuccess: 'Successfully decomposed into {count} tasks',
+    decomposeFailed: 'Decomposition failed, please check LLM configuration',
   },
   chat: {
     title: 'Chat',

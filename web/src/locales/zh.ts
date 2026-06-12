@@ -94,6 +94,9 @@ export default {
       completed: '已完成',
       abandoned: '已放弃',
     },
+    decompose: '自动拆解',
+    decomposeSuccess: '成功拆解为 {count} 个任务',
+    decomposeFailed: '拆解失败，请检查 LLM 配置',
   },
   chat: {
     title: '聊天',
