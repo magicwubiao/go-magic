@@ -6035,6 +6035,28 @@ func priorityFromString(s string) int {
 	}
 }
 
+// taskToJSON converts a kanban task to the standard JSON response
+// matching the client-side KanbanTask interface.
+func (s *Server) taskToJSON(t *kanban.Task) map[string]interface{} {
+	return map[string]interface{}{
+		"id":              t.ID,
+		"title":           t.Title,
+		"description":     t.Body,
+		"status":          t.Status,
+		"priority":        priorityToString(t.Priority),
+		"assignee":        t.Assignee,
+		"tags":            t.Skills,
+		"created_at":      t.CreatedAt.Unix(),
+		"updated_at":      t.UpdatedAt.Unix(),
+		"due_date":        t.DueDate,
+		"estimated_hours": t.EstimatedHours,
+		"goal_id":         t.GoalID,
+		"parent_count":    t.ParentCount,
+		"child_count":     t.ChildCount,
+		"comment_count":   t.CommentCount,
+	}
+}
+
 func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "method not allowed", 405)
@@ -6055,23 +6077,7 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	tasks := make([]interface{}, 0)
 	for _, taskList := range board {
 		for _, task := range taskList {
-			tasks = append(tasks, map[string]interface{}{
-				"id":              task.ID,
-				"title":           task.Title,
-				"description":     task.Body,
-				"status":          task.Status,
-				"priority":        priorityToString(task.Priority),
-				"assignee":        task.Assignee,
-				"tags":            task.Skills,
-				"created_at":      task.CreatedAt.Unix(),
-				"updated_at":      task.UpdatedAt.Unix(),
-				"due_date":        task.DueDate,
-				"estimated_hours": task.EstimatedHours,
-				"goal_id":         task.GoalID,
-				"parent_count":    task.ParentCount,
-				"child_count":     task.ChildCount,
-				"comment_count":   task.CommentCount,
-			})
+			tasks = append(tasks, s.taskToJSON(task))
 		}
 	}
 
@@ -6165,18 +6171,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 		tasks := make([]interface{}, 0)
 		for _, taskList := range board {
 			for _, task := range taskList {
-				tasks = append(tasks, map[string]interface{}{
-					"id":              task.ID,
-					"title":           task.Title,
-					"description":     task.Body,
-					"status":          task.Status,
-					"priority":        priorityToString(task.Priority),
-					"created_at":      task.CreatedAt.Unix(),
-					"updated_at":      task.UpdatedAt.Unix(),
-					"due_date":        task.DueDate,
-					"estimated_hours": task.EstimatedHours,
-					"goal_id":         task.GoalID,
-				})
+				tasks = append(tasks, s.taskToJSON(task))
 			}
 		}
 		jsonResponse(w, tasks)
@@ -6244,23 +6239,7 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		jsonResponse(w, map[string]interface{}{
-			"id":              task.ID,
-			"title":           task.Title,
-			"description":     task.Body,
-			"status":          task.Status,
-			"priority":        priorityToString(task.Priority),
-			"assignee":        task.Assignee,
-			"tags":            task.Skills,
-			"created_at":      task.CreatedAt.Unix(),
-			"updated_at":      task.UpdatedAt.Unix(),
-			"due_date":        task.DueDate,
-			"estimated_hours": task.EstimatedHours,
-			"goal_id":         task.GoalID,
-			"parent_count":    task.ParentCount,
-			"child_count":     task.ChildCount,
-			"comment_count":   task.CommentCount,
-		})
+		jsonResponse(w, s.taskToJSON(task))
 	case "PUT":
 		var req struct {
 			Title       string `json:"title"`
@@ -6299,16 +6278,7 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		jsonResponse(w, map[string]interface{}{
-			"id":              updatedTask.ID,
-			"title":           updatedTask.Title,
-			"status":          updatedTask.Status,
-			"priority":        updatedTask.Priority,
-			"updated_at":      updatedTask.UpdatedAt.Unix(),
-			"due_date":        updatedTask.DueDate,
-			"estimated_hours": updatedTask.EstimatedHours,
-			"goal_id":         updatedTask.GoalID,
-		})
+		jsonResponse(w, s.taskToJSON(updatedTask))
 	case "DELETE":
 		if err := s.kanbanMgr.DeleteTask(id); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -6349,13 +6319,7 @@ func (s *Server) handleKanbanTaskMove(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
-	jsonResponse(w, map[string]interface{}{
-		"id":              task.ID,
-		"status":          task.Status,
-		"due_date":        task.DueDate,
-		"estimated_hours": task.EstimatedHours,
-		"goal_id":         task.GoalID,
-	})
+	jsonResponse(w, s.taskToJSON(task))
 }
 
 func (s *Server) handleKanbanComments(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -6471,10 +6435,7 @@ func (s *Server) handleKanbanBlock(w http.ResponseWriter, r *http.Request, taskI
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	jsonResponse(w, map[string]interface{}{
-		"id":     task.ID,
-		"status": task.Status,
-	})
+	jsonResponse(w, s.taskToJSON(task))
 }
 
 func (s *Server) handleKanbanSplit(w http.ResponseWriter, r *http.Request, taskID string) {
