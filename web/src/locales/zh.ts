@@ -460,6 +460,9 @@ export default {
     selectProviderType: '选择供应商类型',
     noProviders: '暂无供应商，请添加',
     switchToThisProvider: '切换为当前供应商',
+    apiKey: 'API Key',
+    baseUrl: '接口地址',
+    baseUrlPlaceholder: '选填，如使用默认地址可不填',
   },
   tools: {
     title: '工具',

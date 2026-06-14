@@ -16,15 +16,27 @@
             v-for="prov in configProviders"
             :key="prov.name"
             :class="{ active: selectedProvider === prov.name }"
-            @click="selectProvider(prov.name)"
           >
-            <div class="provider-item">
+            <div class="provider-item" @click="selectProvider(prov.name)">
               <div class="provider-info">
                 <span class="provider-name">{{ prov.name }}</span>
                 <n-tag v-if="prov.isCurrent" size="small" type="success">{{ t('modelsProviders.current') }}</n-tag>
               </div>
               <span class="model-count">{{ prov.models.length }} {{ t('modelsProviders.models') }}</span>
             </div>
+            <template #action>
+              <n-space>
+                <n-button
+                  v-if="configProviders.length > 1"
+                  size="tiny"
+                  type="error"
+                  ghost
+                  @click.stop="deleteProvider(prov.name)"
+                >
+                  {{ t('common.delete') }}
+                </n-button>
+              </n-space>
+            </template>
           </n-list-item>
         </n-list>
         <n-empty v-else :description="t('modelsProviders.noProviders')" />
@@ -90,8 +102,8 @@
 
     <!-- 添加供应商弹窗 -->
     <n-modal v-model:show="showAddProviderModal" preset="card" :title="t('modelsProviders.addProvider')" style="width: 500px">
-      <n-form :model="newProvider" label-placement="top">
-        <n-form-item :label="t('modelsProviders.providerName')">
+      <n-form :model="newProvider" label-placement="top" :rules="providerFormRules">
+        <n-form-item :label="t('modelsProviders.providerName')" path="name">
           <n-select
             v-model:value="newProvider.name"
             :options="availableProviders"
@@ -99,18 +111,24 @@
             :placeholder="t('modelsProviders.selectProviderType')"
           />
         </n-form-item>
-        <n-form-item :label="t('modelsProviders.models')">
+        <n-form-item :label="t('modelsProviders.models')" path="models">
           <n-dynamic-input
             v-model:value="newProvider.models"
             :placeholder="t('modelsProviders.modelPlaceholder')"
           />
         </n-form-item>
-        <n-form-item label="API Key">
+        <n-form-item :label="t('modelsProviders.apiKey') + ' *'">
           <n-input
             v-model:value="newProvider.apiKey"
             type="password"
             show-password-on="click"
             :placeholder="t('modelsProviders.apiKeyPlaceholder')"
+          />
+        </n-form-item>
+        <n-form-item :label="t('modelsProviders.baseUrl')">
+          <n-input
+            v-model:value="newProvider.baseUrl"
+            :placeholder="t('modelsProviders.baseUrlPlaceholder')"
           />
         </n-form-item>
       </n-form>
@@ -167,8 +185,14 @@ const newModelName = ref('')
 const newProvider = ref({
   name: '',
   models: [] as string[],
-  apiKey: ''
+  apiKey: '',
+  baseUrl: ''
 })
+
+const providerFormRules = {
+  name: { required: true, message: '请选择供应商', trigger: 'blur' },
+  models: { required: true, message: '请至少添加一个模型', trigger: 'blur' },
+}
 
 // 从配置中获取已添加的供应商列表
 const configProviders = computed(() => {
@@ -196,21 +220,27 @@ const currentConfigModel = computed(() => {
 
 const availableProviders = [
   { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Anthropic (Claude)', value: 'anthropic' },
   { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'Gemini', value: 'gemini' },
+  { label: 'Google Gemini', value: 'gemini' },
   { label: 'Groq', value: 'groq' },
-  { label: 'Ollama', value: 'ollama' },
+  { label: 'Ollama (本地)', value: 'ollama' },
   { label: '硅基流动 SiliconFlow', value: 'siliconflow' },
   { label: 'Kimi (Moonshot)', value: 'kimi' },
-  { label: 'Zhipu (智谱 GLM)', value: 'zhipu' },
-  { label: 'DashScope (通义千问)', value: 'dashscope' },
-  { label: 'Wenxin (文心一言)', value: 'wenxin' },
-  { label: 'Minimax', value: 'minimax' },
-  { label: 'Hunyuan (腾讯混元)', value: 'hunyuan' },
-  { label: 'Doubao (豆包)', value: 'doubao' },
+  { label: '智谱 GLM (Zhipu)', value: 'zhipu' },
+  { label: '通义千问 (DashScope)', value: 'dashscope' },
+  { label: '文心一言 (Wenxin)', value: 'wenxin' },
+  { label: 'MiniMax', value: 'minimax' },
+  { label: '腾讯混元 (Hunyuan)', value: 'hunyuan' },
+  { label: '豆包 (Doubao)', value: 'doubao' },
+  { label: '月之暗面 (Moonshot)', value: 'moonshot' },
   { label: 'OpenRouter', value: 'openrouter' },
-  { label: 'Custom (自定义)', value: 'custom' },
+  { label: 'Together AI', value: 'together' },
+  { label: 'Mistral AI', value: 'mistral' },
+  { label: 'Cohere', value: 'cohere' },
+  { label: 'Perplexity', value: 'perplexity' },
+  { label: 'vLLM (本地)', value: 'vllm' },
+  { label: '自定义 (Custom)', value: 'custom' },
 ]
 
 // 当前选中的供应商
@@ -236,12 +266,32 @@ async function handleAddProvider() {
   await configStore.saveProvider({
     name: providerName,
     apiKey: newProvider.value.apiKey,
+    baseUrl: newProvider.value.baseUrl,
     models: newProvider.value.models
   })
   showAddProviderModal.value = false
-  newProvider.value = { name: '', models: [], apiKey: '' }
+  newProvider.value = { name: '', models: [], apiKey: '', baseUrl: '' }
   await configStore.loadConfig()
   selectedProvider.value = providerName
+}
+
+async function deleteProvider(name: string) {
+  const providers = { ...configStore.config?.providers }
+  delete providers[name]
+  // 如果删除的是当前供应商，需要切换到其他供应商
+  const updates: any = { providers }
+  if (name === currentConfigProvider.value) {
+    const remainingProviders = Object.keys(providers)
+    if (remainingProviders.length > 0) {
+      updates.provider = remainingProviders[0]
+      updates.model = providers[remainingProviders[0]]?.models?.[0] || ''
+    }
+  }
+  await configStore.updateConfig(updates)
+  await configStore.loadConfig()
+  if (selectedProvider.value === name) {
+    selectedProvider.value = currentConfigProvider.value || Object.keys(providers)[0] || ''
+  }
 }
 
 async function handleAddModel() {

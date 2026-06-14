@@ -463,6 +463,9 @@ export default {
     selectProviderType: 'Select provider type',
     noProviders: 'No providers yet, add one',
     switchToThisProvider: 'Switch to This Provider',
+    apiKey: 'API Key',
+    baseUrl: 'Base URL',
+    baseUrlPlaceholder: 'Optional, leave empty for default',
   },
   tools: {
     title: 'Tools',

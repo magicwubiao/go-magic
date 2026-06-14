@@ -244,15 +244,6 @@
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
             <div class="toolbar-left">
-              <!-- Model selector -->
-              <n-select
-                v-model:value="currentModelId"
-                :options="modelOptions"
-                size="tiny"
-                class="toolbar-model-select"
-                :placeholder="t('chat.selectModel')"
-                @update:value="handleModelChange"
-              />
               <!-- File upload -->
               <n-upload
                 :show-file-list="false"
@@ -307,7 +298,6 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import { useChatStore } from '@/stores/chat'
-import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import CurrentGoal from '@/components/CurrentGoal.vue'
@@ -320,7 +310,6 @@ import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
-const modelsStore = useModelsStore()
 const router = useRouter()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
@@ -328,15 +317,6 @@ const messagesRef = ref<HTMLDivElement>()
 // Rename session
 const editingSessionId = ref<string | null>(null)
 const editingName = ref('')
-
-// Model selector
-const currentModelId = ref('')
-const modelOptions = computed(() => {
-  return modelsStore.models.map(m => ({
-    label: `${m.provider} / ${m.name}${m.description ? ' - ' + m.description : ''}`,
-    value: m.id,
-  }))
-})
 
 // File upload
 const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
@@ -548,14 +528,6 @@ function stopGeneration() {
   chatStore.stopGeneration()
 }
 
-async function handleModelChange(modelId: string) {
-  try {
-    await modelsStore.setModel(modelId)
-  } catch (e) {
-    console.error('Failed to switch model:', e)
-  }
-}
-
 async function createSession() {
   await chatStore.createSession()
   await chatStore.loadSessions()
@@ -614,14 +586,6 @@ watch(() => chatStore.toolCalls.length, scrollToBottom)
 onMounted(async () => {
   await chatStore.loadSessions()
   await chatStore.loadCommands()
-  await modelsStore.loadModels()
-  await modelsStore.loadCurrentModel()
-  // Set default model value
-  if (modelsStore.currentModel) {
-    currentModelId.value = modelsStore.currentModel.id
-  } else if (modelsStore.models.length > 0) {
-    currentModelId.value = modelsStore.models[0].id
-  }
 })
 </script>
 
