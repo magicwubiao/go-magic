@@ -3556,7 +3556,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 	// Handle DELETE /{name} - delete provider
 	if r.Method == http.MethodDelete && subRoute == "" {
+		fmt.Printf("[DEBUG] DELETE provider: name=%s, cfg=%+v\n", name, s.cfg)
 		if s.cfg != nil && s.cfg.Providers != nil {
+			fmt.Printf("[DEBUG] Providers map: %+v\n", s.cfg.Providers)
 			if _, exists := s.cfg.Providers[name]; exists {
 				delete(s.cfg.Providers, name)
 				// If deleted provider was current, clear top-level fields
@@ -3564,10 +3566,16 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					s.cfg.Provider = ""
 					s.cfg.Model = ""
 				}
+				fmt.Printf("[DEBUG] After delete, Providers: %+v\n", s.cfg.Providers)
 				s.cfg.Save()
+				fmt.Printf("[DEBUG] Save completed\n")
 				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 				return
+			} else {
+				fmt.Printf("[DEBUG] Provider %s not found in map\n", name)
 			}
+		} else {
+			fmt.Printf("[DEBUG] cfg or Providers is nil\n")
 		}
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
