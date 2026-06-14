@@ -3392,6 +3392,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 				"api_key":  provCfg.APIKey,
 				"base_url": provCfg.BaseURL,
 				"model":    provCfg.Model,
+				"models":   provCfg.Models,
 			})
 		}
 	}
@@ -3457,6 +3458,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.APIKey != "" {
 				provCfg.APIKey = req.APIKey
 			}
+			if req.Models != nil {
+				provCfg.Models = req.Models
+			}
 			s.cfg.Providers[name] = provCfg
 			s.cfg.Save()
 		}
@@ -3506,6 +3510,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 			if req.APIKey != "" {
 				provCfg.APIKey = req.APIKey
+			}
+			if req.Models != nil {
+				provCfg.Models = req.Models
 			}
 			s.cfg.Providers[providerName] = provCfg
 			s.cfg.Save()
