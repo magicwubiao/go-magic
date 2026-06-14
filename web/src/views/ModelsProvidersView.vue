@@ -169,6 +169,7 @@ import {
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
 import * as modelsApi from '@/api/models'
+import * as providersApi from '@/api/providers'
 
 const { t } = useI18n()
 const modelsStore = useModelsStore()
