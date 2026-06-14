@@ -85,8 +85,8 @@ type DisplayConfig struct {
 type ProviderConfig struct {
 	APIKey  string   `json:"api_key,omitempty"`
 	BaseURL string   `json:"base_url,omitempty"`
-	Model   string   `json:"model,omitempty"`   // Deprecated: use Models[0] instead, kept for backward compatibility
-	Models  []string `json:"models,omitempty"`  // List of supported models, first element is current model
+	Model   string   `json:"model,omitempty"`  // Deprecated: use Models[0] instead, kept for backward compatibility
+	Models  []string `json:"models,omitempty"` // List of supported models, first element is current model
 }
 
 // GetCurrentModel returns the current model (first element of Models, fallback to Model field)

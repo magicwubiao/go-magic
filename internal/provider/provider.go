@@ -19,10 +19,10 @@ type ChatResponse struct {
 
 // ModelInfo represents information about a supported model
 type ModelInfo struct {
-	ID          string `json:"id"`           // Model ID used in API calls
-	Name        string `json:"name"`         // Human-readable name
-	Description string `json:"description"`   // Model description
-	ContextLen  int    `json:"context_len"`  // Context window size (0 = unknown)
+	ID          string `json:"id"`          // Model ID used in API calls
+	Name        string `json:"name"`        // Human-readable name
+	Description string `json:"description"` // Model description
+	ContextLen  int    `json:"context_len"` // Context window size (0 = unknown)
 }
 
 // Modeler is an optional interface for providers that support multiple models.

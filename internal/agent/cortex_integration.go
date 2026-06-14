@@ -329,7 +329,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		}
 	}
 
-		// ========== Session end cleanup ==========
+	// ========== Session end cleanup ==========
 	a.Emit(bus.EventKindAgentEnd, nil)
 
 	// Set conversation history for memory extraction before OnSessionEnd

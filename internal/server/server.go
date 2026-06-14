@@ -3309,22 +3309,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		for name, provCfg := range s.cfg.Providers {
 			// Collect all models from the provider's Models array and Model field
 			modelSet := make(map[string]bool)
-			
+
 			// Add models from Models array (multi-model support)
 			for _, m := range provCfg.Models {
 				modelSet[m] = true
 			}
-			
+
 			// Add Model field if it's not already in the set
 			if provCfg.Model != "" {
 				modelSet[provCfg.Model] = true
 			}
-			
+
 			// If no models configured, use "default"
 			if len(modelSet) == 0 {
 				modelSet["default"] = true
 			}
-			
+
 			// Generate model entries
 			for modelName := range modelSet {
 				id := fmt.Sprintf("%s/%s", name, modelName)
@@ -3344,7 +3344,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// Always include current provider's models
 	if s.cfg != nil && s.cfg.Provider != "" {
 		modelSet := make(map[string]bool)
-		
+
 		// Add from Models array
 		if s.cfg.Providers != nil {
 			if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok {
@@ -3743,7 +3743,7 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, map[string]interface{}{
 		"model":                    fmt.Sprintf("%s/%s", providerName, modelName),
-		"model_display_name":        modelDisplayName,
+		"model_display_name":       modelDisplayName,
 		"provider":                 providerName,
 		"auto_context_length":      contextLen,
 		"config_context_length":    0,
