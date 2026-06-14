@@ -36,7 +36,7 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 	}
 
 	return &OpenAICompatibleProvider{
-		BaseProvider: NewBaseProvider(baseURL),
+		BaseProvider: NewBaseProvider(baseURL).WithAPIKey(apiKey),
 		name:         name,
 		model:        model,
 		models:       modelList,
