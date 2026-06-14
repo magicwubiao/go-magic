@@ -69,7 +69,8 @@ type DisplayConfig struct {
 type ProviderConfig struct {
 	APIKey  string `json:"api_key,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Model   string `json:"model,omitempty"`  // Current active model
+	Models  []string `json:"models,omitempty"` // List of supported models
 }
 
 // ToolsConfig represents tools configuration

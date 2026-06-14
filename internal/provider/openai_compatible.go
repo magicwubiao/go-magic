@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -12,19 +13,25 @@ import (
 // OpenAICompatibleProvider provides OpenAI-compatible API functionality
 type OpenAICompatibleProvider struct {
 	*BaseProvider
-	name  string
-	Model string
+	name   string
+	model  string
+	models []ModelInfo
+	mu     sync.RWMutex
 }
 
 // NewOpenAICompatibleProvider creates a new OpenAI-compatible provider
 func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string) *OpenAICompatibleProvider {
-	bp := NewBaseProvider(baseURL)
-	bp.APIKey = apiKey
+	// Get default models for this provider if available
+	defaultModels := GetDefaultModels(name)
+	if defaultModels == nil {
+		defaultModels = []ModelInfo{{ID: model, Name: model, Description: "Default model"}}
+	}
 
 	return &OpenAICompatibleProvider{
-		BaseProvider: bp,
+		BaseProvider: NewBaseProvider(baseURL),
 		name:         name,
-		Model:        model,
+		model:        model,
+		models:       defaultModels,
 	}
 }
 
@@ -33,10 +40,51 @@ func (p *OpenAICompatibleProvider) Name() string {
 	return p.name
 }
 
+// SetModel sets the current model. Returns error if model is not supported.
+func (p *OpenAICompatibleProvider) SetModel(model string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Validate model exists in the list
+	for _, m := range p.models {
+		if m.ID == model {
+			p.model = model
+			return nil
+		}
+	}
+
+	return fmt.Errorf("model %s is not supported by provider %s", model, p.name)
+}
+
+// GetModel returns the current model ID.
+func (p *OpenAICompatibleProvider) GetModel() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.model
+}
+
+// ListModels returns the list of supported models.
+func (p *OpenAICompatibleProvider) ListModels() []ModelInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	// Return a copy to prevent external modification
+	result := make([]ModelInfo, len(p.models))
+	copy(result, p.models)
+	return result
+}
+
+// SetModels sets the list of supported models.
+func (p *OpenAICompatibleProvider) SetModels(models []ModelInfo) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.models = models
+}
+
 // Chat implements the Provider interface
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
-		"model":    p.Model,
+		"model":    p.GetModel(),
 		"messages": ConvertMessages(messages),
 	}
 
@@ -119,7 +167,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 // ChatWithTools implements the ToolCaller interface
 func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
-		"model":       p.Model,
+		"model":       p.GetModel(),
 		"messages":    ConvertMessages(messages),
 		"tools":       tools,
 		"tool_choice": "auto",
@@ -214,7 +262,7 @@ func (p *OpenAICompatibleProvider) StreamWithTools(ctx context.Context, messages
 // streamWithContext is the internal streaming implementation
 func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messages []types.Message, tools []map[string]interface{}, withTools bool, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
-		"model":    p.Model,
+		"model":    p.GetModel(),
 		"messages": ConvertMessages(messages),
 		"stream":   true,
 		"stream_options": map[string]interface{}{

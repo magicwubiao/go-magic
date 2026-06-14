@@ -3532,6 +3532,14 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	providerName := s.cfg.Provider
 	modelName := s.cfg.Model
+
+	// Try to get current model from Modeler interface
+	if s.provider != nil {
+		if modeler, ok := provider.GetModeler(s.provider); ok {
+			modelName = modeler.GetModel()
+		}
+	}
+
 	if modelName == "" {
 		modelName = "default"
 	}
@@ -3542,6 +3550,24 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	supportsVision := false
 	supportsReasoning := false
 	modelFamily := providerName
+	modelDisplayName := modelName
+
+	// Try to get accurate model info from Modeler interface
+	if s.provider != nil {
+		if modeler, ok := provider.GetModeler(s.provider); ok {
+			for _, m := range modeler.ListModels() {
+				if m.ID == modelName {
+					if m.ContextLen > 0 {
+						contextLen = m.ContextLen
+					}
+					if m.Name != "" {
+						modelDisplayName = m.Name
+					}
+					break
+				}
+			}
+		}
+	}
 
 	modelLower := strings.ToLower(modelName)
 	switch {
@@ -3620,6 +3646,7 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, map[string]interface{}{
 		"model":                    fmt.Sprintf("%s/%s", providerName, modelName),
+		"model_display_name":        modelDisplayName,
 		"provider":                 providerName,
 		"auto_context_length":      contextLen,
 		"config_context_length":    0,
@@ -3640,11 +3667,31 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
 			isCurrent := name == s.cfg.Provider
+
+			// Get models from config or provider's Modeler interface
+			models := []string{}
+			if len(provCfg.Models) > 0 {
+				models = provCfg.Models
+			} else if provCfg.Model != "" {
+				models = []string{provCfg.Model}
+			}
+
+			// If current provider, try to get models from Modeler interface
+			if isCurrent && s.provider != nil {
+				if modeler, ok := provider.GetModeler(s.provider); ok {
+					modelInfos := modeler.ListModels()
+					models = make([]string, len(modelInfos))
+					for i, m := range modelInfos {
+						models[i] = m.ID
+					}
+				}
+			}
+
 			providerList = append(providerList, map[string]interface{}{
 				"name":         name,
 				"slug":         name,
-				"models":       []string{provCfg.Model},
-				"total_models": 1,
+				"models":       models,
+				"total_models": len(models),
 				"is_current":   isCurrent,
 			})
 		}
@@ -3655,6 +3702,12 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil {
 		model = s.cfg.Model
 		provider = s.cfg.Provider
+		// Try to get current model from Modeler interface
+		if s.provider != nil {
+			if modeler, ok := provider.GetModeler(s.provider); ok {
+				model = modeler.GetModel()
+			}
+		}
 	}
 	jsonResponse(w, map[string]interface{}{
 		"model":     model,
@@ -3675,9 +3728,34 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update config
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// If only changing model (not provider), try to use Modeler interface
+	if req.Provider == "" && req.Model != "" && s.provider != nil {
+		if modeler, ok := provider.GetModeler(s.provider); ok {
+			if err := modeler.SetModel(req.Model); err == nil {
+				// Update config for persistence
+				if s.cfg != nil {
+					s.cfg.Model = req.Model
+					configPath := filepath.Join(s.magicHome, "config.json")
+					data, _ := json.MarshalIndent(s.cfg, "", "  ")
+					os.WriteFile(configPath, data, 0644)
+				}
+				jsonResponse(w, map[string]interface{}{
+					"ok":       true,
+					"scope":    req.Scope,
+					"provider": s.cfg.Provider,
+					"model":    req.Model,
+					"message":  "model switched dynamically",
+				})
+				return
+			}
+		}
+	}
+
+	// Full provider switch (recreate provider)
 	if req.Provider != "" && req.Model != "" {
-		s.mu.Lock()
 		s.cfg.Provider = req.Provider
 		s.cfg.Model = req.Model
 		// Save config
@@ -3688,7 +3766,6 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		s.provider = createProvider(s.cfg)
 		// Clear all agents to force re-creation
 		s.agents = make(map[string]*agent.Agent)
-		s.mu.Unlock()
 	}
 
 	jsonResponse(w, map[string]interface{}{
