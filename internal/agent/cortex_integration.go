@@ -195,6 +195,17 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
+
+			// Set conversation history for memory extraction before OnSessionEnd
+			conversationHistory := make([]struct {
+				Role    string
+				Content string
+			}, len(a.history))
+			for i, msg := range a.history {
+				conversationHistory[i].Role = string(msg.Role)
+				conversationHistory[i].Content = msg.Content
+			}
+			a.cortexManager.SetConversationHistory(conversationHistory)
 			a.cortexManager.OnSessionEnd()
 
 			// ========== CORTEX: Record trajectory (no tools) ==========
@@ -318,8 +329,19 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		}
 	}
 
-	// ========== Session end cleanup ==========
+		// ========== Session end cleanup ==========
 	a.Emit(bus.EventKindAgentEnd, nil)
+
+	// Set conversation history for memory extraction before OnSessionEnd
+	conversationHistory := make([]struct {
+		Role    string
+		Content string
+	}, len(a.history))
+	for i, msg := range a.history {
+		conversationHistory[i].Role = string(msg.Role)
+		conversationHistory[i].Content = msg.Content
+	}
+	a.cortexManager.SetConversationHistory(conversationHistory)
 	a.cortexManager.OnSessionEnd()
 
 	// ========== CORTEX: Record trajectory (with tools) ==========

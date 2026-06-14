@@ -3,6 +3,7 @@ package cortex
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/cognition"
 	"github.com/magicwubiao/go-magic/internal/execution"
@@ -52,6 +53,12 @@ type Manager struct {
 	LastPerception *perception.PerceptionResult
 	LastDecision   *cognition.Decision   // Last cognition decision
 	LastCheckpoint *execution.Checkpoint // Current execution checkpoint
+
+	// Conversation history for memory extraction
+	conversationHistory []struct {
+		Role    string
+		Content string
+	}
 }
 
 // NewManager creates a new Cortex integration manager
@@ -205,16 +212,140 @@ func (m *Manager) OnTurnEnd() {
 
 // OnSessionEnd is called when a session completes
 // Refreshes the memory snapshot and finalizes skill pattern analysis
+// Extracts information from conversation history for memory building
 func (m *Manager) OnSessionEnd() {
-	// Final skill analysis pass with all accumulated tool calls
+	// ========== Memory Extraction from Conversation ==========
+	// Extract key information and learn from conversation
+	if len(m.conversationHistory) > 0 {
+		m.extractAndLearnFromConversation()
+	}
+
+	// ========== Final skill analysis pass with all accumulated tool calls ==========
 	tools := m.Trigger.GetToolCalls()
 	task := m.Trigger.GetCurrentTask()
 	if len(tools) >= 3 && task != "" {
 		m.SkillCreator.AnalyzeToolSequence(task, tools)
 	}
 
-	// Refresh memory snapshot with latest changes
+	// ========== Refresh memory snapshot with latest changes ==========
 	m.Snapshot.RefreshSnapshot()
+}
+
+// SetConversationHistory sets the conversation history for memory extraction
+func (m *Manager) SetConversationHistory(history []struct {
+	Role    string
+	Content string
+}) {
+	m.conversationHistory = history
+}
+
+// extractAndLearnFromConversation extracts information from conversation and updates memory
+func (m *Manager) extractAndLearnFromConversation() {
+	// Build summary from conversation
+	var summary strings.Builder
+	for _, msg := range m.conversationHistory {
+		summary.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, msg.Content))
+	}
+	conversationText := summary.String()
+
+	// Extract key information and update SOUL.md
+	if m.Soul != nil && m.provider != nil {
+		// Generate feedback summary for soul update
+		feedback := m.generateMemoryFeedback(conversationText)
+		if feedback != "" {
+			_ = m.Soul.UpdateFromFeedback(feedback)
+		}
+	}
+
+	// Learn user preferences from conversation
+	if m.UserProfile != nil {
+		m.learnUserPreferences(conversationText)
+	}
+
+	// Extract and store memories
+	if m.FTSMemory != nil {
+		m.extractAndStoreMemories(conversationText)
+	}
+}
+
+// generateMemoryFeedback generates feedback for SOUL.md from conversation
+func (m *Manager) generateMemoryFeedback(conversation string) string {
+	// Extract key themes and patterns from conversation
+	// This is a simple implementation - could be enhanced with LLM
+	var feedback strings.Builder
+
+	// Check for repeated patterns that indicate user preferences
+	lines := strings.Split(conversation, "\n")
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "prefer") ||
+			strings.Contains(strings.ToLower(line), "like") ||
+			strings.Contains(strings.ToLower(line), "don't like") ||
+			strings.Contains(strings.ToLower(line), "always") {
+			feedback.WriteString(line + "\n")
+		}
+	}
+
+	return feedback.String()
+}
+
+// learnUserPreferences extracts and learns user preferences
+func (m *Manager) learnUserPreferences(conversation string) {
+	// Simple pattern matching for preferences
+	preferencePatterns := []struct {
+		pattern string
+		key     string
+	}{
+		{"preferred language", "language"},
+		{"like to use", "tool_preference"},
+		{"usually work with", "work_style"},
+		{"prefer detailed", "response_style"},
+		{"like brief", "response_style"},
+	}
+
+	for _, p := range preferencePatterns {
+		if strings.Contains(strings.ToLower(conversation), p.pattern) {
+			// Extract context around the pattern
+			idx := strings.Index(strings.ToLower(conversation), p.pattern)
+			start := 0
+			if idx-50 > 0 {
+				start = idx - 50
+			}
+			end := len(conversation)
+			if idx+len(p.pattern)+50 < len(conversation) {
+				end = idx + len(p.pattern) + 50
+			}
+			context := strings.TrimSpace(conversation[start:end])
+			_ = m.UserProfile.LearnPreference(p.key, p.pattern, context)
+		}
+	}
+}
+
+// extractAndStoreMemories extracts and stores important information
+func (m *Manager) extractAndStoreMemories(conversation string) {
+	// Store conversation summary as a memory entry
+	memoryTypes := []memory.MemoryType{memory.TypeAgent, memory.TypeKnowledge}
+
+	for _, memType := range memoryTypes {
+		// Extract key points (simple implementation)
+		lines := strings.Split(conversation, "\n")
+		for _, line := range lines {
+			// Skip very short lines and system messages
+			if len(line) < 20 || strings.HasPrefix(line, "[system]") {
+				continue
+			}
+			// Store significant lines as memories
+			if strings.Contains(line, "learned") ||
+				strings.Contains(line, "important") ||
+				strings.Contains(line, "remember") {
+				record := &memory.MemoryRecord{
+					Content:     line,
+					ContentType: string(memType),
+					Importance:  5,
+				}
+				_ = m.FTSMemory.Add(record)
+			}
+		}
+	}
 }
 
 // GetPromptContext returns the memory context to include in system prompt
