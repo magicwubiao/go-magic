@@ -273,25 +273,12 @@ async function handleAddProvider() {
 }
 
 async function deleteProvider(name: string) {
-  const providers = { ...configStore.config?.providers }
-  delete providers[name]
-  // 如果删除的是当前供应商，需要切换到其他供应商或清空
-  const updates: any = { providers }
-  if (name === currentConfigProvider.value) {
-    const remainingProviders = Object.keys(providers)
-    if (remainingProviders.length > 0) {
-      updates.provider = remainingProviders[0]
-      updates.model = providers[remainingProviders[0]]?.models?.[0] || ''
-    } else {
-      // 所有供应商都删除了，清空 provider 和 model
-      updates.provider = ''
-      updates.model = ''
-    }
-  }
-  await configStore.updateConfig(updates)
+  await providersApi.deleteProvider(name)
   await configStore.loadConfig()
+  // Update selected provider
+  const providers = configStore.config?.providers || {}
   if (selectedProvider.value === name) {
-    selectedProvider.value = currentConfigProvider.value || Object.keys(providers)[0] || ''
+    selectedProvider.value = Object.keys(providers)[0] || ''
   }
 }
 

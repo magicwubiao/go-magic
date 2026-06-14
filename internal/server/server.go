@@ -3554,6 +3554,25 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Handle DELETE /{name} - delete provider
+	if r.Method == http.MethodDelete && subRoute == "" {
+		if s.cfg != nil && s.cfg.Providers != nil {
+			if _, exists := s.cfg.Providers[name]; exists {
+				delete(s.cfg.Providers, name)
+				// If deleted provider was current, clear top-level fields
+				if s.cfg.Provider == name {
+					s.cfg.Provider = ""
+					s.cfg.Model = ""
+				}
+				s.cfg.Save()
+				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
+				return
+			}
+		}
+		http.Error(w, "provider not found", http.StatusNotFound)
+		return
+	}
+
 	// Handle POST /{name}/enable - enable provider
 	if r.Method == http.MethodPost && subRoute == "enable" {
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
