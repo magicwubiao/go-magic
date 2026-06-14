@@ -15,7 +15,7 @@ func NewDoubaoProvider(apiKey, baseURL, model string) *DoubaoProvider {
 		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
 	}
 	return &DoubaoProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("doubao", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("doubao", apiKey, baseURL, model),
 	}
 }
 
@@ -23,7 +23,7 @@ func NewDoubaoProvider(apiKey, baseURL, model string) *DoubaoProvider {
 func NewDoubaoProviderWithEndpoint(apiKey, endpointID string) *DoubaoProvider {
 	baseURL := "https://ark.cn-beijing.volces.com/api/v3"
 	return &DoubaoProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("doubao", apiKey, baseURL, endpointID),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("doubao", apiKey, baseURL, endpointID),
 		endpointID:               endpointID,
 	}
 }

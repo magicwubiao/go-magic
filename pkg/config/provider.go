@@ -6,6 +6,22 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 )
 
+// toModelInfo converts a slice of model IDs to ModelInfo slice
+func toModelInfo(modelIDs []string) []provider.ModelInfo {
+	if len(modelIDs) == 0 {
+		return nil
+	}
+	models := make([]provider.ModelInfo, len(modelIDs))
+	for i, id := range modelIDs {
+		models[i] = provider.ModelInfo{
+			ID:          id,
+			Name:        id,
+			Description: "User configured model",
+		}
+	}
+	return models
+}
+
 // CreateProvider creates a provider.Provider from the given Config.
 // It uses cfg.Provider as the provider name and looks up cfg.Providers[cfg.Provider]
 // for API key, base URL, and model overrides.
@@ -22,13 +38,16 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 		model = cfg.Model
 	}
 
+	// Convert user-configured models to ModelInfo
+	userModels := toModelInfo(provCfg.Models)
+
 	switch cfg.Provider {
 	case "openai":
 		return provider.NewOpenAIProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "anthropic":
 		return provider.NewAnthropicProvider(provCfg.APIKey, model), nil
 	case "deepseek":
-		return provider.NewDeepSeekProvider(provCfg.APIKey, model), nil
+		return provider.NewDeepSeekProvider(provCfg.APIKey, model, userModels), nil
 	case "dashscope":
 		return provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "kimi":
@@ -67,9 +86,10 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 	case "hunyuan":
 		return provider.NewHunyuanProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "custom":
-		return provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, model), nil
+		return provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	default:
-		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
+		// For unknown providers, try to use OpenAI-compatible provider with user models
+		return provider.NewOpenAICompatibleProvider(cfg.Provider, provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	}
 }
 

@@ -14,7 +14,7 @@ func NewHuoshanProvider(apiKey, baseURL, model string) *HuoshanProvider {
 		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
 	}
 	return &HuoshanProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("huoshan", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("huoshan", apiKey, baseURL, model),
 	}
 }
 

@@ -14,7 +14,7 @@ func NewZhipuProvider(apiKey, baseURL, model string) *ZhipuProvider {
 		baseURL = "https://open.bigmodel.cn/api/paas/v4"
 	}
 	return &ZhipuProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("zhipu", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("zhipu", apiKey, baseURL, model),
 	}
 }
 

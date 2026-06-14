@@ -16,7 +16,7 @@ func NewMoonshotProvider(apiKey, baseURL, model string) *MoonshotProvider {
 		baseURL = "https://api.moonshot.cn/v1"
 	}
 	return &MoonshotProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("moonshot", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("moonshot", apiKey, baseURL, model),
 	}
 }
 

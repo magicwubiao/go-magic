@@ -14,7 +14,7 @@ func NewKimiProvider(apiKey, baseURL, model string) *KimiProvider {
 		baseURL = "https://api.moonshot.cn/v1"
 	}
 	return &KimiProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("kimi", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("kimi", apiKey, baseURL, model),
 	}
 }
 

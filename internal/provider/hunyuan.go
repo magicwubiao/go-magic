@@ -14,7 +14,7 @@ func NewHunyuanProvider(apiKey, baseURL, model string) *HunyuanProvider {
 		baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
 	}
 	return &HunyuanProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("hunyuan", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("hunyuan", apiKey, baseURL, model),
 	}
 }
 

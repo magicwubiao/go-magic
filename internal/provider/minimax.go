@@ -14,7 +14,7 @@ func NewMiniMaxProvider(apiKey, baseURL, model string) *MiniMaxProvider {
 		baseURL = "https://api.minimax.chat/v1"
 	}
 	return &MiniMaxProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("minimax", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("minimax", apiKey, baseURL, model),
 	}
 }
 

@@ -14,7 +14,7 @@ func NewOpenRouterProvider(apiKey, baseURL, model string) *OpenRouterProvider {
 		baseURL = "https://openrouter.ai/api/v1"
 	}
 	return &OpenRouterProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("openrouter", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("openrouter", apiKey, baseURL, model),
 	}
 }
 

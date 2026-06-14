@@ -14,7 +14,7 @@ func NewMiMoProvider(apiKey, baseURL, model string) *MiMoProvider {
 		baseURL = "https://api.xiaomimimo.com/v1"
 	}
 	return &MiMoProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("mimo", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("mimo", apiKey, baseURL, model),
 	}
 }
 

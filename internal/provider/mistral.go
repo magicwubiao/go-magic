@@ -14,7 +14,7 @@ func NewMistralProvider(apiKey, baseURL, model string) *MistralProvider {
 		baseURL = "https://api.mistral.ai/v1"
 	}
 	return &MistralProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("mistral", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("mistral", apiKey, baseURL, model),
 	}
 }
 

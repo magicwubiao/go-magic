@@ -20,19 +20,33 @@ type OpenAICompatibleProvider struct {
 }
 
 // NewOpenAICompatibleProvider creates a new OpenAI-compatible provider
-func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string) *OpenAICompatibleProvider {
-	// Get default models for this provider if available
-	defaultModels := GetDefaultModels(name)
-	if defaultModels == nil {
-		defaultModels = []ModelInfo{{ID: model, Name: model, Description: "Default model"}}
+// If userModels is provided (non-nil), it will be used; otherwise defaults are loaded
+func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels []ModelInfo) *OpenAICompatibleProvider {
+	var modelList []ModelInfo
+
+	// Use user-provided models if available
+	if len(userModels) > 0 {
+		modelList = userModels
+	} else {
+		// Get default models for this provider if available
+		modelList = GetDefaultModels(name)
+		if modelList == nil {
+			modelList = []ModelInfo{{ID: model, Name: model, Description: "Default model"}}
+		}
 	}
 
 	return &OpenAICompatibleProvider{
 		BaseProvider: NewBaseProvider(baseURL),
 		name:         name,
 		model:        model,
-		models:       defaultModels,
+		models:       modelList,
 	}
+}
+
+// NewOpenAICompatibleProviderWithDefaults creates a new OpenAI-compatible provider with default models
+// This is a convenience function for providers that don't need custom model lists
+func NewOpenAICompatibleProviderWithDefaults(name, apiKey, baseURL, model string) *OpenAICompatibleProvider {
+	return NewOpenAICompatibleProvider(name, apiKey, baseURL, model, nil)
 }
 
 // Name returns the provider name

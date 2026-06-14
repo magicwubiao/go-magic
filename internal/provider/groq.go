@@ -15,7 +15,7 @@ func NewGroqProvider(apiKey, baseURL, model string) *GroqProvider {
 		baseURL = "https://api.groq.com/openai/v1"
 	}
 	return &GroqProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("groq", apiKey, baseURL, model),
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("groq", apiKey, baseURL, model),
 	}
 }
 
