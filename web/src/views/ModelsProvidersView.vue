@@ -223,6 +223,7 @@ async function saveProvider() {
 
     showModal.value = false
     await providersStore.loadProviders()
+    await modelsStore.loadModels() // Reload models after saving provider
     message.success(t('models.saved'))
   } catch (e) {
     message.error(t('models.failedToSave') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
@@ -234,12 +235,14 @@ async function deleteProvider() {
   await providersStore.deleteProvider(editingId.value)
   showModal.value = false
   await providersStore.loadProviders()
+  await modelsStore.loadModels() // Reload models after deleting provider
   message.success(t('models.deleted'))
 }
 
 async function deleteProviderById(id: string) {
   await providersStore.deleteProvider(id)
   await providersStore.loadProviders()
+  await modelsStore.loadModels() // Reload models after deleting provider
   message.success(t('models.deleted'))
 }
 
