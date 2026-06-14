@@ -117,7 +117,7 @@
             :placeholder="t('modelsProviders.modelPlaceholder')"
           />
         </n-form-item>
-        <n-form-item :label="t('modelsProviders.apiKey') + ' *'">
+        <n-form-item :label="t('modelsProviders.apiKey')">
           <n-input
             v-model:value="newProvider.apiKey"
             type="password"
