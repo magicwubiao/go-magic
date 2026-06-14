@@ -3802,6 +3802,7 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 	// Full provider switch (recreate provider)
 	if req.Provider != "" && req.Model != "" {
 		s.cfg.Provider = req.Provider
+		s.cfg.Model = req.Model
 		// Update provider models array: move selected model to front
 		if s.cfg.Providers != nil {
 			if provCfg, ok := s.cfg.Providers[req.Provider]; ok {

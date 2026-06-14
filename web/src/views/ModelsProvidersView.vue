@@ -162,13 +162,29 @@ const newProvider = ref({
 })
 
 const availableProviders = [
-  { label: 'DeepSeek', value: 'deepseek' },
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic', value: 'anthropic' },
+  { label: 'DeepSeek', value: 'deepseek' },
   { label: 'Gemini', value: 'gemini' },
   { label: 'Groq', value: 'groq' },
   { label: 'Ollama', value: 'ollama' },
-  { label: '硅基流动', value: 'siliconflow' },
+  { label: '硅基流动 SiliconFlow', value: 'siliconflow' },
+  { label: 'Kimi (Moonshot)', value: 'kimi' },
+  { label: 'Zhipu (智谱 GLM)', value: 'zhipu' },
+  { label: 'DashScope (通义千问)', value: 'dashscope' },
+  { label: 'Wenxin (文心一言)', value: 'wenxin' },
+  { label: 'Minimax', value: 'minimax' },
+  { label: 'Hunyuan (腾讯混元)', value: 'hunyuan' },
+  { label: 'Moonshot (月之暗面)', value: 'moonshot' },
+  { label: 'Doubao (豆包)', value: 'doubao' },
+  { label: 'OpenRouter', value: 'openrouter' },
+  { label: 'Together', value: 'together' },
+  { label: 'Mistral', value: 'mistral' },
+  { label: 'Cohere', value: 'cohere' },
+  { label: 'Perplexity', value: 'perplexity' },
+  { label: 'vLLM', value: 'vllm' },
+  { label: 'Cohere', value: 'cohere' },
+  { label: 'Custom (自定义)', value: 'custom' },
 ]
 
 const providerModels = computed(() => {
