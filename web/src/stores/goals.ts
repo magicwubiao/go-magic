@@ -72,6 +72,13 @@ export const useGoalsStore = defineStore('goals', () => {
     await loadGoal(goalId)
   }
 
+  async function decomposeGoal(goalId: string) {
+    const result = await goalsApi.decomposeGoal(goalId)
+    // Refresh goals and board to reflect new tasks
+    await loadGoals()
+    return result
+  }
+
   return {
     goals,
     currentGoal,
@@ -87,5 +94,6 @@ export const useGoalsStore = defineStore('goals', () => {
     completeGoal,
     linkSession,
     unlinkSession,
+    decomposeGoal,
   }
 })

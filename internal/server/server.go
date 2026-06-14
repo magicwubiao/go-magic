@@ -37,6 +37,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/internal/slash"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
@@ -868,8 +869,8 @@ func (s *Server) Start(port int) error {
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
 	mux.HandleFunc("/api/goals/current", withCORS(requireAuth(s.handleGoalCurrent)))
-	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 	mux.HandleFunc("/api/goals/analyze", withCORS(requireAuth(s.handleGoalAnalyze)))
+	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 
 	// Approval Management
 	mux.HandleFunc("/api/approval/status", withCORS(requireAuth(s.handleApprovalStatus)))
@@ -887,6 +888,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/approval/strategy", withCORS(requireAuth(s.handleApprovalStrategy)))
 	mux.HandleFunc("/api/approval/clear-history", withCORS(requireAuth(s.handleApprovalClearHistory)))
 	mux.HandleFunc("/api/approval/settings", withCORS(requireAuth(s.handleApprovalSettings)))
+
+	// Commands
+	mux.HandleFunc("/api/commands", withCORS(requireAuth(s.handleCommands)))
+	mux.HandleFunc("/api/commands/execute", withCORS(requireAuth(s.handleCommandExecute)))
 
 	// File upload
 	mux.HandleFunc("/api/upload", withCORS(requireAuth(s.handleFileUpload)))
@@ -6030,6 +6035,28 @@ func priorityFromString(s string) int {
 	}
 }
 
+// taskToJSON converts a kanban task to the standard JSON response
+// matching the client-side KanbanTask interface.
+func (s *Server) taskToJSON(t *kanban.Task) map[string]interface{} {
+	return map[string]interface{}{
+		"id":              t.ID,
+		"title":           t.Title,
+		"description":     t.Body,
+		"status":          t.Status,
+		"priority":        priorityToString(t.Priority),
+		"assignee":        t.Assignee,
+		"tags":            t.Skills,
+		"created_at":      t.CreatedAt.Unix(),
+		"updated_at":      t.UpdatedAt.Unix(),
+		"due_date":        t.DueDate,
+		"estimated_hours": t.EstimatedHours,
+		"goal_id":         t.GoalID,
+		"parent_count":    t.ParentCount,
+		"child_count":     t.ChildCount,
+		"comment_count":   t.CommentCount,
+	}
+}
+
 func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "method not allowed", 405)
@@ -6037,36 +6064,20 @@ func (s *Server) handleKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.kanbanMgr == nil {
-		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		http.Error(w, "kanban manager not initialized", 503)
 		return
 	}
 
 	board, err := s.kanbanMgr.GetBoard("")
 	if err != nil {
-		jsonResponse(w, map[string]interface{}{"tasks": []interface{}{}, "columns": []interface{}{}})
+		http.Error(w, fmt.Sprintf("failed to get board: %v", err), 500)
 		return
 	}
 
 	tasks := make([]interface{}, 0)
 	for _, taskList := range board {
 		for _, task := range taskList {
-			tasks = append(tasks, map[string]interface{}{
-				"id":              task.ID,
-				"title":           task.Title,
-				"description":     task.Body,
-				"status":          task.Status,
-				"priority":        priorityToString(task.Priority),
-				"assignee":        task.Assignee,
-				"tags":            task.Skills,
-				"created_at":      task.CreatedAt.Unix(),
-				"updated_at":      task.UpdatedAt.Unix(),
-				"due_date":        task.DueDate,
-				"estimated_hours": task.EstimatedHours,
-				"goal_id":         task.GoalID,
-				"parent_count":    task.ParentCount,
-				"child_count":     task.ChildCount,
-				"comment_count":   task.CommentCount,
-			})
+			tasks = append(tasks, s.taskToJSON(task))
 		}
 	}
 
@@ -6160,18 +6171,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 		tasks := make([]interface{}, 0)
 		for _, taskList := range board {
 			for _, task := range taskList {
-				tasks = append(tasks, map[string]interface{}{
-					"id":              task.ID,
-					"title":           task.Title,
-					"description":     task.Body,
-					"status":          task.Status,
-					"priority":        priorityToString(task.Priority),
-					"created_at":      task.CreatedAt.Unix(),
-					"updated_at":      task.UpdatedAt.Unix(),
-					"due_date":        task.DueDate,
-					"estimated_hours": task.EstimatedHours,
-					"goal_id":         task.GoalID,
-				})
+				tasks = append(tasks, s.taskToJSON(task))
 			}
 		}
 		jsonResponse(w, tasks)
@@ -6239,23 +6239,7 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		jsonResponse(w, map[string]interface{}{
-			"id":              task.ID,
-			"title":           task.Title,
-			"description":     task.Body,
-			"status":          task.Status,
-			"priority":        priorityToString(task.Priority),
-			"assignee":        task.Assignee,
-			"tags":            task.Skills,
-			"created_at":      task.CreatedAt.Unix(),
-			"updated_at":      task.UpdatedAt.Unix(),
-			"due_date":        task.DueDate,
-			"estimated_hours": task.EstimatedHours,
-			"goal_id":         task.GoalID,
-			"parent_count":    task.ParentCount,
-			"child_count":     task.ChildCount,
-			"comment_count":   task.CommentCount,
-		})
+		jsonResponse(w, s.taskToJSON(task))
 	case "PUT":
 		var req struct {
 			Title       string `json:"title"`
@@ -6294,16 +6278,7 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		jsonResponse(w, map[string]interface{}{
-			"id":              updatedTask.ID,
-			"title":           updatedTask.Title,
-			"status":          updatedTask.Status,
-			"priority":        updatedTask.Priority,
-			"updated_at":      updatedTask.UpdatedAt.Unix(),
-			"due_date":        updatedTask.DueDate,
-			"estimated_hours": updatedTask.EstimatedHours,
-			"goal_id":         updatedTask.GoalID,
-		})
+		jsonResponse(w, s.taskToJSON(updatedTask))
 	case "DELETE":
 		if err := s.kanbanMgr.DeleteTask(id); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -6344,13 +6319,7 @@ func (s *Server) handleKanbanTaskMove(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
-	jsonResponse(w, map[string]interface{}{
-		"id":              task.ID,
-		"status":          task.Status,
-		"due_date":        task.DueDate,
-		"estimated_hours": task.EstimatedHours,
-		"goal_id":         task.GoalID,
-	})
+	jsonResponse(w, s.taskToJSON(task))
 }
 
 func (s *Server) handleKanbanComments(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -6466,10 +6435,7 @@ func (s *Server) handleKanbanBlock(w http.ResponseWriter, r *http.Request, taskI
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	jsonResponse(w, map[string]interface{}{
-		"id":     task.ID,
-		"status": task.Status,
-	})
+	jsonResponse(w, s.taskToJSON(task))
 }
 
 func (s *Server) handleKanbanSplit(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -8116,5 +8082,56 @@ func (s *Server) handlePluginProviders(w http.ResponseWriter, r *http.Request) {
 		"memory_options":  []map[string]interface{}{},
 		"context_engine":  "",
 		"context_options": []map[string]interface{}{},
+	})
+}
+
+// --- Command Handlers ---
+
+// handleCommands handles GET /api/commands - returns list of available commands
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	manager := slash.NewManager()
+	commands := manager.List()
+
+	jsonResponse(w, commands)
+}
+
+// handleCommandExecute handles POST /api/commands/execute - executes a command
+func (s *Server) handleCommandExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Command   string `json:"command"`
+		SessionID string `json:"session_id,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Command == "" {
+		http.Error(w, "Command is required", http.StatusBadRequest)
+		return
+	}
+
+	manager := slash.NewManager()
+	result, err := manager.Execute(r.Context(), req.Command)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"success": true,
+		"result":  result,
 	})
 }

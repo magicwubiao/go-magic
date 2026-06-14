@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
 import type { Session, Message } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
+import * as commandsApi from '@/api/commands'
+import { i18n } from '@/locales'
 
 export interface ChatError {
   message: string
@@ -37,10 +39,28 @@ interface SessionState {
   taskProgress: TaskProgress | null
 }
 
+function $t(key: string, params?: Record<string, string | number>): string {
+  return i18n.global.t(key, params)
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
   const error = ref<ChatError | null>(null)
+
+  const builtinCommands: Array<Omit<commandsApi.Command, 'description'>> = [
+    { name: 'help', usage: '/help', aliases: [], category: 'general' },
+    { name: 'new', usage: '/new', aliases: [], category: 'session' },
+    { name: 'clear', usage: '/clear', aliases: [], category: 'session' },
+    { name: 'undo', usage: '/undo', aliases: [], category: 'session' },
+  ]
+
+  const commands = computed<commandsApi.Command[]>(() => {
+    return builtinCommands.map(cmd => ({
+      ...cmd,
+      description: $t(`chat.commands.${cmd.name}`),
+    }))
+  })
   
   const sessionStates = ref<Record<string, SessionState>>({})
   const sessionEventSources = ref<Record<string, EventSource | null>>({})
@@ -114,10 +134,122 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const allSessions = await sessionsApi.getSessions()
       sessions.value = allSessions.filter(s => !s.source || s.source === 'web')
+      if (!activeSessionId.value && sessions.value.length > 0) {
+        const first = sessions.value[0]
+        activeSessionId.value = first.id
+        getOrCreateSessionState(first.id)
+      }
     } catch (e) {
       console.error('Failed to load sessions:', e)
       sessions.value = []
     }
+  }
+
+  async function loadCommands(): Promise<void> {
+    try {
+      const serverCmds = await commandsApi.getCommandList()
+      if (Array.isArray(serverCmds) && serverCmds.length > 0) {
+        console.warn('Server commands not yet integrated; using builtin translated list')
+      }
+    } catch (e) {
+      console.warn('Failed to load commands from server, using defaults')
+    }
+  }
+
+  function isCommand(input: string): boolean {
+    return input.trim().startsWith('/')
+  }
+
+  async function executeCommand(input: string): Promise<void> {
+    const trimmed = input.trim()
+    if (!trimmed) return
+
+    const parts = trimmed.split(/\s+/)
+    const cmd = parts[0].toLowerCase()
+
+    if (!activeSessionId.value && cmd !== '/new') {
+      await createSession()
+      if (!activeSessionId.value) return
+    }
+
+    let result: string | null = null
+
+    switch (cmd) {
+      case '/help': {
+        const lines = commands.value.map(c => `  ${c.usage.padEnd(20)} ${c.description}`)
+        result = `**${$t('chat.commands.available')}**：\n\n${lines.join('\n')}\n\n${$t('chat.commands.hint')}`
+        break
+      }
+      case '/new': {
+        await createSession()
+        result = $t('chat.commands.created')
+        break
+      }
+      case '/clear': {
+        if (activeSessionId.value) {
+          const state = sessionStates.value[activeSessionId.value]
+          if (state) state.messages = []
+        }
+        result = $t('chat.commands.cleared')
+        break
+      }
+      case '/undo': {
+        if (activeSessionId.value) {
+          const state = sessionStates.value[activeSessionId.value]
+          if (state && state.messages.length > 0) {
+            state.messages = state.messages.slice(0, -1)
+            result = $t('chat.commands.undone')
+          } else {
+            result = $t('chat.commands.noUndo')
+          }
+        } else {
+          result = $t('chat.commands.noSession')
+        }
+        break
+      }
+      default: {
+        result = $t('chat.commands.unknown', { cmd })
+      }
+    }
+
+    if (result && activeSessionId.value) {
+      addSystemMessage(result)
+    }
+  }
+
+  function addSystemMessage(content: string): void {
+    if (!activeSessionId.value) return
+    
+    const sessionId = activeSessionId.value
+    const state = getOrCreateSessionState(sessionId)
+    state.messages.push({
+      id: Date.now().toString(),
+      role: 'system',
+      content,
+      timestamp: new Date().toISOString(),
+      session_id: sessionId,
+    })
+  }
+
+  function autocompleteCommand(input: string): string[] {
+    if (!input.startsWith('/')) return []
+
+    const partial = input.toLowerCase().slice(1)
+    const suggestions: string[] = []
+    const cmdList = commands.value
+
+    for (const cmd of cmdList) {
+      if (cmd.name.toLowerCase().startsWith(partial)) {
+        suggestions.push('/' + cmd.name)
+      }
+      for (const alias of cmd.aliases || []) {
+        if (alias.toLowerCase().startsWith(partial)) {
+          suggestions.push(alias)
+        }
+      }
+    }
+
+    return [...new Set(suggestions)].slice(0, 10)
   }
 
   async function createSession(): Promise<Session | null> {
@@ -433,7 +565,9 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls,
     taskProgress,
     isLongTask,
+    commands,
     loadSessions,
+    loadCommands,
     createSession,
     selectSession,
     deleteSession,
@@ -441,5 +575,10 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     stopGeneration,
     cleanup,
+    isCommand,
+    executeCommand,
+    autocompleteCommand,
+    addSystemMessage,
+    getOrCreateSessionState,
   }
 })

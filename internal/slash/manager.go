@@ -66,7 +66,7 @@ func (m *Manager) registerDefaultCommands() {
 			Name:        "new",
 			Description: "Start a new conversation",
 			Usage:       "/new",
-			Aliases:     []string{"/reset"},
+			Aliases:     []string{},
 			Category:    "conversation",
 			Handler: func(ctx context.Context, args []string, flags map[string]interface{}) (string, error) {
 				return "Starting new conversation...", nil

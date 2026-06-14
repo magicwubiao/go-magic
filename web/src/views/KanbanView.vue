@@ -107,7 +107,7 @@
                     </n-tag>
                     <n-tag v-if="task.estimated_hours" size="tiny" type="info">
                       <template #icon><n-icon :component="TimeOutline" /></template>
-                      {{ task.estimated_hours }}h
+                      {{ task.estimated_hours }}{{ t('kanban.hoursUnit') }}
                     </n-tag>
                     <n-tag v-if="(task.comment_count || 0) > 0" size="tiny">
                       <template #icon><n-icon :component="ChatbubbleOutline" /></template>
@@ -123,7 +123,7 @@
                   <n-space>
                     <n-button v-if="task.status === 'triage'" size="tiny" type="primary" @click.stop="runTriage(task)">
                       <template #icon><n-icon :component="SparklesOutline" /></template>
-                      AI
+                      {{ t('kanban.aiLabel') }}
                     </n-button>
                     <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
                     <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
@@ -134,7 +134,7 @@
           </div>
         </div>
 
-        <!-- Lower Row: Running / Blocked / Done -->
+      <!-- Lower Row: Running / Blocked / Done -->
         <div class="kanban-board">
           <div
             v-for="col in filteredLowerColumns"
@@ -260,7 +260,7 @@
             </n-tag>
             <n-tag v-if="detailTask.estimated_hours" type="info">
               <template #icon><n-icon :component="TimeOutline" /></template>
-              {{ detailTask.estimated_hours }}h
+              {{ detailTask.estimated_hours }}{{ t('kanban.hoursUnit') }}
             </n-tag>
           </n-space>
           <n-divider />
@@ -325,14 +325,41 @@
       </n-card>
     </n-modal>
 
+    <!-- Error Banner -->
+    <n-alert
+      v-if="kanbanStore.error"
+      type="error"
+      show-icon
+      style="margin-bottom: 16px;"
+      :title="t('kanban.loadError')"
+    >
+      {{ kanbanStore.error }}
+    </n-alert>
+
     <!-- Stats Modal -->
     <n-modal v-model:show="showStats" :title="t('kanban.statsTitle')">
       <n-card style="width: 600px;">
         <n-space vertical>
-          <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats?.total || 0" />
-          <n-statistic :label="t('kanban.completedTasks')" :value="kanbanStore.stats?.completed || 0" />
-          <n-statistic :label="t('kanban.inProgressTasks')" :value="kanbanStore.stats?.in_progress || 0" />
-          <n-statistic :label="t('kanban.pendingTasks')" :value="kanbanStore.stats?.pending || 0" />
+          <n-grid :cols="2" :x-gap="12" :y-gap="12">
+            <n-gi>
+              <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats.total" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.completedTasks')" :value="kanbanStore.stats.completed" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.inProgressTasks')" :value="kanbanStore.stats.in_progress" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.pendingTasks')" :value="kanbanStore.stats.pending" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.blockedTasks')" :value="(kanbanStore.tasks ?? []).filter(t => t.status === 'blocked').length" />
+            </n-gi>
+            <n-gi>
+              <n-statistic :label="t('kanban.completionRate')" :value="kanbanStore.stats.total > 0 ? Math.round((kanbanStore.stats.completed / kanbanStore.stats.total) * 100) : 0" suffix="%" />
+            </n-gi>
+          </n-grid>
         </n-space>
       </n-card>
     </n-modal>
@@ -488,11 +515,11 @@ function dueDateType(task: KanbanTask) {
 }
 
 function formatDueDate(date: string | number) {
-  return new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  return new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 function formatTime(ts: number) {
-  return new Date(ts * 1000).toLocaleString('zh-CN')
+  return new Date(ts * 1000).toLocaleString(undefined)
 }
 
 const statusFlow = ['triage', 'todo', 'ready', 'running', 'done', 'archived']
@@ -535,7 +562,7 @@ async function onDrop(colKey: string) {
     await kanbanStore.moveTask(taskId, colKey)
     message.success(`${t('kanban.movedTo')} ${t('kanban.statusOptions.' + colKey)}`)
   } catch (e) {
-    message.error(`${t('kanban.movedTo')} ${colKey} failed`)
+    message.error(`${t('kanban.movedTo')} ${t('kanban.statusOptions.' + colKey)} ${t('common.error')}`)
   }
 }
 
