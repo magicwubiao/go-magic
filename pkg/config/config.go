@@ -51,6 +51,21 @@ type Config struct {
 	Approval *ApprovalConfig `json:"approval,omitempty"`
 }
 
+// GetCurrentModel returns the current model from the configured provider's Models array
+func (c *Config) GetCurrentModel() string {
+	if c.Provider == "" {
+		return ""
+	}
+	provCfg, ok := c.Providers[c.Provider]
+	if !ok {
+		return ""
+	}
+	if len(provCfg.Models) > 0 {
+		return provCfg.Models[0]
+	}
+	return c.Model // Fallback to deprecated field for compatibility
+}
+
 // MemoryConfig represents memory configuration
 type MemoryConfig struct {
 	Enabled bool `json:"enabled"`

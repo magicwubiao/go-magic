@@ -908,7 +908,7 @@ func (s *Server) Start(port int) error {
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
-	fmt.Printf("[server] Provider: %s | Model: %s\n", s.cfg.Provider, s.cfg.Model)
+	fmt.Printf("[server] Provider: %s | Model: %s\n", s.cfg.Provider, s.cfg.GetCurrentModel())
 
 	return http.ListenAndServe(addr, mux)
 }
@@ -1139,7 +1139,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		model := req.Model
 		if model == "" {
-			model = s.cfg.Model
+			model = s.cfg.GetCurrentModel()
 		}
 
 		newSession := &session.Session{
@@ -1811,7 +1811,7 @@ func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
 					"snippet":         utils.Truncate(m.Content, 200),
 					"role":            m.Role,
 					"source":          sess.Platform,
-					"model":           s.cfg.Model,
+					"model":           s.cfg.GetCurrentModel(),
 					"session_started": sess.CreatedAt.Unix(),
 				})
 				break // One match per session
@@ -1905,7 +1905,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		response := map[string]interface{}{
 			"id":            fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 			"content":       "",
-			"model":         s.cfg.Model,
+			"model":         s.cfg.GetCurrentModel(),
 			"tool_messages": toolMessages,
 		}
 		jsonResponse(w, response)
@@ -1947,7 +1947,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"id":      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		"content": respContent,
-		"model":   s.cfg.Model,
+		"model":   s.cfg.GetCurrentModel(),
 	}
 
 	jsonResponse(w, response)
@@ -2089,7 +2089,7 @@ func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
 
 	// Only record if there are new tokens consumed in this turn
 	if deltaInput > 0 || deltaOutput > 0 {
-		model := s.cfg.Model
+		model := s.cfg.GetCurrentModel()
 		if model == "" {
 			model = "unknown"
 		}
@@ -3348,12 +3348,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
-		// Add current model
-		if s.cfg.Model != "" {
-			modelSet[s.cfg.Model] = true
-		}
-		
+
 		for modelName := range modelSet {
 			id := fmt.Sprintf("%s/%s", s.cfg.Provider, modelName)
 			if !seen[id] {
@@ -3568,7 +3563,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	providerName := s.cfg.Provider
-	modelName := s.cfg.Model
+	modelName := s.cfg.GetCurrentModel()
 
 	// Try to get current model from Modeler interface
 	if s.provider != nil {
@@ -3739,7 +3734,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	model := ""
 	currentProviderName := ""
 	if s.cfg != nil {
-		model = s.cfg.Model
+		model = s.cfg.GetCurrentModel()
 		currentProviderName = s.cfg.Provider
 		// Try to get current model from Modeler interface
 		if s.provider != nil {
@@ -3905,7 +3900,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			s.provider = createProvider(s.cfg)
 			s.mu.Unlock()
-			fmt.Printf("[server] Provider hot-reloaded: %s / %s\n", s.cfg.Provider, s.cfg.Model)
+			fmt.Printf("[server] Provider hot-reloaded: %s / %s\n", s.cfg.Provider, s.cfg.GetCurrentModel())
 		}
 
 		// Hot-reload approval config if approval section changed
