@@ -3802,6 +3802,8 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 						}
 						provCfg.Models = newModels
 						s.cfg.Providers[provName] = provCfg
+						// Also update the top-level model field for consistency
+						s.cfg.Model = req.Model
 						configPath := filepath.Join(s.magicHome, "config.json")
 						data, _ := json.MarshalIndent(s.cfg, "", "  ")
 						os.WriteFile(configPath, data, 0644)
