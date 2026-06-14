@@ -195,6 +195,7 @@ const availableProviders = [
   { label: '通义千问 (DashScope)', value: 'dashscope' },
   { label: '文心一言 (Wenxin)', value: 'wenxin' },
   { label: 'MiniMax', value: 'minimax' },
+  { label: 'MiMo', value: 'mimo' },
   { label: '腾讯混元 (Hunyuan)', value: 'hunyuan' },
   { label: '豆包 (Doubao)', value: 'doubao' },
   { label: '月之暗面 (Moonshot)', value: 'moonshot' },
