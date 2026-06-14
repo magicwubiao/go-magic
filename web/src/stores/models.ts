@@ -85,12 +85,14 @@ export const useModelsStore = defineStore('models', () => {
   }
 
   async function loadCurrentModel() {
-    // Reload from config
+    // Reload from config - get current model from provider's models[0]
     await configStore.loadConfig()
     const cfg = configStore.config
     if (cfg) {
       currentProvider.value = cfg.provider || ''
-      currentModel.value = cfg.model || ''
+      // Get current model from first element of provider's models array
+      const prov = cfg.providers?.[cfg.provider]
+      currentModel.value = prov?.models?.[0] || ''
     }
   }
 

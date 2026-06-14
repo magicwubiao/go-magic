@@ -1,8 +1,13 @@
 import { request } from './client'
 
+export interface ProviderInfo {
+  api_key: string
+  models: string[]
+  base_url?: string
+}
+
 export interface Config {
   provider: string
-  model: string
   api_key: string
   base_url?: string
   temperature?: number
@@ -13,7 +18,7 @@ export interface Config {
   agent?: Record<string, unknown>
   memory?: Record<string, unknown>
   provider_config?: Record<string, unknown>
-  providers?: unknown[]
+  providers?: Record<string, ProviderInfo>
   secret_redaction?: boolean
 }
 
