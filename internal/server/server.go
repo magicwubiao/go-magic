@@ -3456,7 +3456,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					Name:    name,
 					Label:   name,
 					BaseURL: provCfg.BaseURL,
-					Models:  []string{provCfg.Model},
+					Models:  provCfg.Models,
 					APIKey:  maskAPIKey(provCfg.APIKey),
 				})
 				return
@@ -3710,16 +3710,18 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		for name, provCfg := range s.cfg.Providers {
 			isCurrent := name == s.cfg.Provider
 
-			// Get models from config or provider's Modeler interface
+			// Get models from config first (user-configured models take priority)
 			models := []string{}
 			if len(provCfg.Models) > 0 {
+				// Use user-configured models from config file
 				models = provCfg.Models
 			} else if provCfg.Model != "" {
+				// Fallback to single model
 				models = []string{provCfg.Model}
 			}
 
-			// If current provider, try to get models from Modeler interface
-			if isCurrent && s.provider != nil {
+			// Only use Modeler interface as fallback when no config is available
+			if len(models) == 0 && isCurrent && s.provider != nil {
 				if modeler, ok := provider.GetModeler(s.provider); ok {
 					modelInfos := modeler.ListModels()
 					models = make([]string, len(modelInfos))
