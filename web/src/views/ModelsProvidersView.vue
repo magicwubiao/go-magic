@@ -31,7 +31,10 @@
               <n-input v-model:value="form.base_url" :placeholder="t('config.serverUrl')" />
             </n-form-item>
             <n-form-item :label="t('models.model')">
-              <n-input v-model:value="form.model" :placeholder="t('models.model')" />
+              <n-input v-model:value="form.model" :placeholder="t('models.currentModelPlaceholder')" />
+            </n-form-item>
+            <n-form-item :label="t('models.supportedModels')">
+              <n-dynamic-input v-model:value="form.models" :placeholder="t('models.modelPlaceholder')" />
             </n-form-item>
           </n-form>
           <template #action>
@@ -93,6 +96,7 @@ const form = reactive({
   api_key: '',
   base_url: '',
   model: '',
+  models: [] as string[],
   enabled: true,
 })
 
@@ -124,6 +128,18 @@ const providerOptions = [
 const providerColumns = [
   { title: t('common.name'), key: 'name' },
   { title: t('models.model'), key: 'model' },
+  {
+    title: t('models.supportedModels'),
+    key: 'models',
+    render: (row: Provider) => {
+      if (!row.models || row.models.length === 0) {
+        return h(NTag, { size: 'small', type: 'default' }, () => '-')
+      }
+      return h('div', { style: 'display: flex; flex-wrap: wrap; gap: 4px;' },
+        row.models.map((model: string) => h(NTag, { size: 'small', type: model === row.model ? 'success' : 'info' }, () => model))
+      )
+    },
+  },
   {
     title: t('models.apiKey'),
     key: 'api_key',
@@ -163,6 +179,7 @@ function openAddModal() {
   form.api_key = ''
   form.base_url = ''
   form.model = ''
+  form.models = []
   showModal.value = true
 }
 
@@ -172,6 +189,7 @@ function editProvider(provider: Provider) {
   form.api_key = provider.api_key || ''
   form.base_url = provider.base_url || ''
   form.model = provider.model || ''
+  form.models = provider.models || []
   form.enabled = provider.enabled ?? true
   showModal.value = true
 }
@@ -197,6 +215,7 @@ async function saveProvider() {
             api_key: form.api_key,
             base_url: form.base_url,
             model: form.model,
+            models: form.models,
           },
         },
       })

@@ -421,6 +421,9 @@ export default {
     dashscope: 'DashScope (Tongyi)',
     wenxin: 'Wenxin (Ernie)',
     hunyuan: 'Hunyuan (Tencent)',
+    supportedModels: 'Supported Models',
+    currentModelPlaceholder: 'Default model (required)',
+    modelPlaceholder: 'Model ID',
   },
   tools: {
     title: 'Tools',

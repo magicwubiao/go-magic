@@ -422,6 +422,9 @@ export default {
     dashscope: 'DashScope (通义千问)',
     wenxin: 'Wenxin (文心一言)',
     hunyuan: 'Hunyuan (腾讯混元)',
+    supportedModels: '支持的模型',
+    currentModelPlaceholder: '默认模型（必填）',
+    modelPlaceholder: '模型 ID',
   },
   tools: {
     title: '工具',

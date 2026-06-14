@@ -333,7 +333,7 @@ const editingName = ref('')
 const currentModelId = ref('')
 const modelOptions = computed(() => {
   return modelsStore.models.map(m => ({
-    label: `${m.provider} / ${m.name}`,
+    label: `${m.provider} / ${m.name}${m.description ? ' - ' + m.description : ''}`,
     value: m.id,
   }))
 })

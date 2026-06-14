@@ -7,6 +7,7 @@ export interface Provider {
   api_key?: string
   base_url?: string
   model?: string
+  models?: string[]  // Supported models list
   config?: Record<string, string>
   isBuiltin?: boolean
 }
@@ -29,6 +30,7 @@ export async function createProvider(provider: Omit<Provider, 'id'>): Promise<Pr
       base_url: provider.base_url,
       model: provider.model,
       api_key: provider.api_key,
+      models: provider.models,
     }),
   })
 }
@@ -40,6 +42,7 @@ export async function updateProvider(id: string, provider: Partial<Provider>): P
       base_url: provider.base_url,
       model: provider.model,
       api_key: provider.api_key,
+      models: provider.models,
     }),
   })
 }
