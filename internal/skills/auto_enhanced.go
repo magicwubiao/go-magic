@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,11 +35,30 @@ func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	skillsDir := filepath.Join(baseDir, "auto_skills")
 	os.MkdirAll(skillsDir, 0755)
 
+	patternsFile := filepath.Join(skillsDir, "patterns.json")
+	var patterns []Pattern
+	if data, err := os.ReadFile(patternsFile); err == nil {
+		json.Unmarshal(data, &patterns)
+	}
+
 	return &EnhancedAutoCreator{
 		baseDir:      skillsDir,
-		patterns:     make([]Pattern, 0),
+		patterns:     patterns,
 		minFrequency: 2, // Generate skill after seeing pattern twice
 	}
+}
+
+// SavePatterns persists patterns to disk
+func (e *EnhancedAutoCreator) SavePatterns() error {
+	if len(e.patterns) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(e.patterns, "", "  ")
+	if err != nil {
+		return err
+	}
+	patternsFile := filepath.Join(e.baseDir, "patterns.json")
+	return os.WriteFile(patternsFile, data, 0644)
 }
 
 // AnalyzeToolSequence analyzes a sequence of tool calls for patterns
@@ -59,6 +79,11 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 			existingKey := strings.Join(e.patterns[pIdx].ToolSequence, " → ")
 			if existingKey == patternKey {
 				e.patterns[pIdx].Frequency++
+				// Update confidence based on frequency
+				e.patterns[pIdx].Confidence = 0.5 + float64(e.patterns[pIdx].Frequency)*0.1
+				if e.patterns[pIdx].Confidence > 0.95 {
+					e.patterns[pIdx].Confidence = 0.95
+				}
 				e.patterns[pIdx].ExampleTasks = append(e.patterns[pIdx].ExampleTasks, task)
 				found = true
 				break
@@ -78,6 +103,34 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 			})
 		}
 	}
+
+	// Save patterns to disk
+	e.SavePatterns()
+
+	// Check if any pattern is ready for skill generation
+	e.CheckAndGenerateSkills()
+}
+
+// CheckAndGenerateSkills checks patterns and generates skills for those meeting criteria
+func (e *EnhancedAutoCreator) CheckAndGenerateSkills() {
+	for _, pattern := range e.patterns {
+		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.6 {
+			// Check if skill already generated for this pattern
+			entries, _ := os.ReadDir(e.baseDir)
+			exists := false
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), fmt.Sprintf("auto-%s-", pattern.Name)) && entry.IsDir() {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				log.Printf("[SkillCreator] Pattern '%s' meets criteria (freq=%d, conf=%.2f), generating skill...",
+					pattern.Name, pattern.Frequency, pattern.Confidence)
+				e.GenerateSkillFromPattern(pattern)
+			}
+		}
+	}
 }
 
 // AnalyzeFullSession analyzes a complete session for skill generation
@@ -91,15 +144,8 @@ func (e *EnhancedAutoCreator) AnalyzeFullSession(sessionData map[string]interfac
 		toolSequence = tools
 	}
 
-	// Analyze for patterns
+	// Analyze for patterns - this will also check and generate skills
 	e.AnalyzeToolSequence(taskDesc, toolSequence)
-
-	// Check if any pattern is now ready for skill generation
-	for _, pattern := range e.patterns {
-		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.6 {
-			e.GenerateSkillFromPattern(pattern)
-		}
-	}
 }
 
 // GenerateSkillFromPattern generates a skill file from a detected pattern

@@ -2,6 +2,7 @@ package cortex
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -225,6 +226,13 @@ func (m *Manager) OnSessionEnd() {
 	task := m.Trigger.GetCurrentTask()
 	if len(tools) >= 3 && task != "" {
 		m.SkillCreator.AnalyzeToolSequence(task, tools)
+
+		// ========== Check and generate skills from patterns ==========
+		// After analyzing, check if any patterns are ready for skill generation
+		generatedSkills := m.SkillCreator.GetGeneratedSkills()
+		if len(generatedSkills) > 0 {
+			log.Printf("[Cortex] Generated %d new skills from session patterns", len(generatedSkills))
+		}
 	}
 
 	// ========== Refresh memory snapshot with latest changes ==========
