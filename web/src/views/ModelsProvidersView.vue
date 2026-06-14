@@ -16,26 +16,25 @@
             v-for="prov in configProviders"
             :key="prov.name"
             :class="{ active: selectedProvider === prov.name }"
+            @click="selectProvider(prov.name)"
           >
-            <div class="provider-item" @click="selectProvider(prov.name)">
-              <div class="provider-info">
-                <span class="provider-name">{{ prov.name }}</span>
-                <n-tag v-if="prov.isCurrent" size="small" type="success">{{ t('modelsProviders.current') }}</n-tag>
+            <div class="provider-item-row">
+              <div class="provider-item">
+                <div class="provider-info">
+                  <span class="provider-name">{{ prov.name }}</span>
+                  <n-tag v-if="prov.isCurrent" size="small" type="success">{{ t('modelsProviders.current') }}</n-tag>
+                </div>
+                <span class="model-count">{{ prov.models.length }} {{ t('modelsProviders.models') }}</span>
               </div>
-              <span class="model-count">{{ prov.models.length }} {{ t('modelsProviders.models') }}</span>
+              <n-button
+                size="tiny"
+                type="error"
+                ghost
+                @click.stop="deleteProvider(prov.name)"
+              >
+                {{ t('common.delete') }}
+              </n-button>
             </div>
-            <template #action>
-              <n-space>
-                <n-button
-                  size="tiny"
-                  type="error"
-                  ghost
-                  @click.stop="deleteProvider(prov.name)"
-                >
-                  {{ t('common.delete') }}
-                </n-button>
-              </n-space>
-            </template>
           </n-list-item>
         </n-list>
         <n-empty v-else :description="t('modelsProviders.noProviders')" />
@@ -410,6 +409,13 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
+}
+
+.provider-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
 }
 
