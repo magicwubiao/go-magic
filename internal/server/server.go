@@ -3302,33 +3302,68 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
-			modelName := provCfg.Model
-			if modelName == "" {
-				modelName = "default"
+			// Collect all models from the provider's Models array and Model field
+			modelSet := make(map[string]bool)
+			
+			// Add models from Models array (multi-model support)
+			for _, m := range provCfg.Models {
+				modelSet[m] = true
 			}
-			id := fmt.Sprintf("%s/%s", name, modelName)
-			if !seen[id] {
-				seen[id] = true
-				models = append(models, map[string]interface{}{
-					"id":         id,
-					"name":       modelName,
-					"provider":   name,
-					"contextLen": 128000,
-				})
+			
+			// Add Model field if it's not already in the set
+			if provCfg.Model != "" {
+				modelSet[provCfg.Model] = true
+			}
+			
+			// If no models configured, use "default"
+			if len(modelSet) == 0 {
+				modelSet["default"] = true
+			}
+			
+			// Generate model entries
+			for modelName := range modelSet {
+				id := fmt.Sprintf("%s/%s", name, modelName)
+				if !seen[id] {
+					seen[id] = true
+					models = append(models, map[string]interface{}{
+						"id":         id,
+						"name":       modelName,
+						"provider":   name,
+						"contextLen": 128000,
+					})
+				}
 			}
 		}
 	}
 
-	// Always include current provider
+	// Always include current provider's models
 	if s.cfg != nil && s.cfg.Provider != "" {
-		id := fmt.Sprintf("%s/%s", s.cfg.Provider, s.cfg.Model)
-		if !seen[id] {
-			models = append(models, map[string]interface{}{
-				"id":         id,
-				"name":       s.cfg.Model,
-				"provider":   s.cfg.Provider,
-				"contextLen": 128000,
-			})
+		modelSet := make(map[string]bool)
+		
+		// Add from Models array
+		if s.cfg.Providers != nil {
+			if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok {
+				for _, m := range provCfg.Models {
+					modelSet[m] = true
+				}
+			}
+		}
+		
+		// Add current model
+		if s.cfg.Model != "" {
+			modelSet[s.cfg.Model] = true
+		}
+		
+		for modelName := range modelSet {
+			id := fmt.Sprintf("%s/%s", s.cfg.Provider, modelName)
+			if !seen[id] {
+				models = append(models, map[string]interface{}{
+					"id":         id,
+					"name":       modelName,
+					"provider":   s.cfg.Provider,
+					"contextLen": 128000,
+				})
+			}
 		}
 	}
 
