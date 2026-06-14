@@ -310,7 +310,8 @@ async function deleteProviderById(id: string) {
 
 async function selectModel(model: Model) {
   try {
-    await modelsStore.setModel(model.id)
+    // Pass provider and model id to setModel
+    await modelsStore.setModel(model.provider, model.id)
     message.success(`${t('models.modelSet')}: ${model.name}`)
   } catch (e) {
     message.error(t('models.failedToSet') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))

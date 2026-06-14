@@ -96,8 +96,8 @@ export const useModelsStore = defineStore('models', () => {
     }
   }
 
-  async function setModel(modelId: string) {
-    const result = await modelsApi.setModel(modelId)
+  async function setModel(modelId: string, providerId?: string) {
+    const result = await modelsApi.setModel(modelId, providerId)
     // Reload to get updated state
     await loadModels()
     // Update current values from response
