@@ -3696,9 +3696,13 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	providerList := make([]map[string]interface{}, 0)
+	providerNames := make(map[string]bool) // Track which providers are already added
+
+	// First: Add all configured providers from config
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
 			isCurrent := name == s.cfg.Provider
+			providerNames[name] = true
 
 			// Get models from config first (user-configured models take priority)
 			models := []string{}
@@ -3726,6 +3730,22 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 				"slug":         name,
 				"models":       models,
 				"total_models": len(models),
+				"is_current":   isCurrent,
+			})
+		}
+	}
+
+	// Second: Add built-in providers that are not yet in the list
+	builtinProviders := appconfig.ListProviders()
+	for _, bp := range builtinProviders {
+		if !providerNames[bp.Name] {
+			isCurrent := s.cfg != nil && bp.Name == s.cfg.Provider
+			providerList = append(providerList, map[string]interface{}{
+				"name":         bp.Name,
+				"slug":         bp.Name,
+				"display_name": bp.DisplayName,
+				"models":       bp.Models,
+				"total_models": len(bp.Models),
 				"is_current":   isCurrent,
 			})
 		}
