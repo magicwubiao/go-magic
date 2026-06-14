@@ -40,12 +40,12 @@ func (p *OpenAICompatibleProvider) Name() string {
 	return p.name
 }
 
-// SetModel sets the current model. Returns error if model is not supported.
+// SetModel sets the current model. If model is not in the list, it will be added.
 func (p *OpenAICompatibleProvider) SetModel(model string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Validate model exists in the list
+	// Check if model is already in the list
 	for _, m := range p.models {
 		if m.ID == model {
 			p.model = model
@@ -53,7 +53,14 @@ func (p *OpenAICompatibleProvider) SetModel(model string) error {
 		}
 	}
 
-	return fmt.Errorf("model %s is not supported by provider %s", model, p.name)
+	// Model not in list, add it dynamically
+	p.models = append(p.models, ModelInfo{
+		ID:          model,
+		Name:        model,
+		Description: "User configured model",
+	})
+	p.model = model
+	return nil
 }
 
 // GetModel returns the current model ID.
