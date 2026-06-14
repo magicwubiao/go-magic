@@ -27,7 +27,6 @@
             <template #action>
               <n-space>
                 <n-button
-                  v-if="configProviders.length > 1"
                   size="tiny"
                   type="error"
                   ghost
@@ -77,7 +76,6 @@
                   {{ t('modelsProviders.setAsCurrent') }}
                 </n-button>
                 <n-button
-                  v-if="providerModels.length > 1"
                   size="tiny"
                   type="error"
                   ghost
@@ -278,13 +276,17 @@ async function handleAddProvider() {
 async function deleteProvider(name: string) {
   const providers = { ...configStore.config?.providers }
   delete providers[name]
-  // 如果删除的是当前供应商，需要切换到其他供应商
+  // 如果删除的是当前供应商，需要切换到其他供应商或清空
   const updates: any = { providers }
   if (name === currentConfigProvider.value) {
     const remainingProviders = Object.keys(providers)
     if (remainingProviders.length > 0) {
       updates.provider = remainingProviders[0]
       updates.model = providers[remainingProviders[0]]?.models?.[0] || ''
+    } else {
+      // 所有供应商都删除了，清空 provider 和 model
+      updates.provider = ''
+      updates.model = ''
     }
   }
   await configStore.updateConfig(updates)
@@ -329,11 +331,17 @@ async function setCurrentModel(model: string) {
 async function removeModel(model: string) {
   const providers = { ...configStore.config?.providers }
   const currentModels = providers[selectedProvider.value]?.models || []
+  const newModels = currentModels.filter(m => m !== model)
   providers[selectedProvider.value] = {
     ...providers[selectedProvider.value],
-    models: currentModels.filter(m => m !== model)
+    models: newModels
   }
-  await configStore.updateConfig({ providers })
+  // 如果这是当前供应商，且删除的是当前模型，需要更新顶层的 model
+  const updates: any = { providers }
+  if (selectedProvider.value === currentConfigProvider.value && currentModels[0] === model) {
+    updates.model = newModels[0] || ''
+  }
+  await configStore.updateConfig(updates)
   await configStore.loadConfig()
 }
 
