@@ -470,11 +470,14 @@ func (s *Server) cleanupInactiveAgents() {
 
 // createProvider creates a provider instance from config (unified with pkg/config)
 func createProvider(cfg *appconfig.Config) provider.Provider {
+	fmt.Printf("[server] Creating provider: cfg.Provider=%s, cfg.Model=%s\n", cfg.Provider, cfg.Model)
+	fmt.Printf("[server] Providers config: %+v\n", cfg.Providers)
 	prov, err := appconfig.CreateProvider(cfg)
 	if err != nil {
 		fmt.Printf("[server] Provider creation failed: %v\n", err)
 		return nil
 	}
+	fmt.Printf("[server] Provider created successfully: %s\n", prov.Name())
 	return prov
 }
 
@@ -1372,8 +1375,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
+	fmt.Printf("[server] handleSessionStream: provider=%v, cfg.Provider=%s\n", s.provider, s.cfg.Provider)
 	if s.provider == nil {
-		http.Error(w, "provider not configured", 400)
+		http.Error(w, "LLM provider not configured. Please add a provider in Models page.", 400)
 		return
 	}
 
