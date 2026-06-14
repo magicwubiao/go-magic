@@ -26,7 +26,7 @@ type Config struct {
 	MagicHome     string                    `json:"magic_home"`
 	WorkingDir    string                    `json:"working_dir,omitempty"`
 	Provider      string                    `json:"provider"`
-	Model         string                    `json:"model"`
+	Model         string                    `json:"model"` // Deprecated: Use Providers[].Models[0] instead
 	Providers     map[string]ProviderConfig `json:"providers"`
 	Tools         ToolsConfig               `json:"tools"`
 	Skills        SkillsConfig              `json:"skills"`
@@ -66,11 +66,20 @@ type DisplayConfig struct {
 
 // ProviderConfig represents provider configuration
 // Note: api_key uses omitempty to prevent accidentally overwriting with empty value on Save()
+// Model is deprecated, use Models[0] as current model instead
 type ProviderConfig struct {
-	APIKey  string `json:"api_key,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
-	Model   string `json:"model,omitempty"`  // Current active model
-	Models  []string `json:"models,omitempty"` // List of supported models
+	APIKey  string   `json:"api_key,omitempty"`
+	BaseURL string   `json:"base_url,omitempty"`
+	Model   string   `json:"model,omitempty"`   // Deprecated: use Models[0] instead, kept for backward compatibility
+	Models  []string `json:"models,omitempty"`  // List of supported models, first element is current model
+}
+
+// GetCurrentModel returns the current model (first element of Models, fallback to Model field)
+func (p *ProviderConfig) GetCurrentModel() string {
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return p.Model
 }
 
 // ToolsConfig represents tools configuration

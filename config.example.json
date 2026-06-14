@@ -2,211 +2,57 @@
   "profile": "default",
   "magic_home": "~/.magic",
   "provider": "openai",
-  "model": "gpt-4",
+  "model": "gpt-4o",
   "providers": {
     "openai": {
       "api_key": "your-openai-api-key-here",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4",
       "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]
     },
     "anthropic": {
       "api_key": "your-anthropic-api-key-here",
-      "model": "claude-sonnet-4-20250514",
       "models": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022"]
     },
     "openrouter": {
       "api_key": "your-openrouter-api-key-here",
-      "model": "openai/gpt-4",
       "models": ["openai/gpt-4o", "anthropic/claude-3.5-sonnet"]
     },
     "deepseek": {
       "api_key": "your-deepseek-api-key-here",
-      "model": "deepseek-chat",
       "models": ["deepseek-chat", "deepseek-reasoner"]
     },
     "doubao": {
       "api_key": "your-doubao-api-key-here",
-      "model": "doubao-pro-32k"
+      "models": ["doubao-pro-32k"]
     },
     "qwen": {
       "api_key": "your-qwen-api-key-here",
-      "model": "qwen-plus",
-      "models": ["qwen-turbo", "qwen-plus", "qwen-max"]
+      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
     },
     "minimax": {
       "api_key": "your-minimax-api-key-here",
-      "model": "minimax-chat"
+      "models": ["minimax-chat"]
     },
     "kimi": {
       "api_key": "your-kimi-api-key-here",
-      "model": "moonshot-v1-8k",
       "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]
     },
     "zhipu": {
       "api_key": "your-zhipu-api-key-here",
-      "model": "glm-4",
       "models": ["glm-4", "glm-4-plus", "glm-4-flash"]
     },
     "dashscope": {
       "api_key": "your-dashscope-api-key-here",
-      "model": "qwen-plus",
-      "models": ["qwen-turbo", "qwen-plus", "qwen-max"]
+      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
     },
     "gemini": {
       "api_key": "your-google-api-key-here",
-      "model": "gemini-1.5-flash",
       "models": ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
     },
-    "groq": {
-      "api_key": "your-groq-api-key-here",
-      "model": "mixtral-8x7b-32768",
-      "models": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
-    },
-    "together": {
-      "api_key": "your-together-api-key-here",
-      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
-    },
-    "mistral": {
-      "api_key": "your-mistral-api-key-here",
-      "model": "mistral-small-latest",
-      "models": ["mistral-large-latest", "mistral-small-latest", "open-mistral-nemo"]
-    },
-    "cohere": {
-      "api_key": "your-cohere-api-key-here",
-      "model": "command-r-plus"
-    },
-    "perplexity": {
-      "api_key": "your-perplexity-api-key-here",
-      "model": "sonar"
-    },
-    "wenxin": {
-      "api_key": "your-baidu-api-key-here",
-      "model": "ernie-4.0-8k-latest"
-    },
-    "moonshot": {
-      "api_key": "your-moonshot-api-key-here",
-      "model": "moonshot-v1-8k",
-      "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]
-    },
-    "mimo": {
-      "api_key": "your-mimo-api-key-here",
-      "model": "mimo-v2-flash"
-    },
-    "hunyuan": {
-      "api_key": "your-hunyuan-api-key-here",
-      "model": "hunyuan-turbo"
+    "ollama": {
+      "api_key": "not-required",
+      "base_url": "http://localhost:11434",
+      "models": ["llama3.2", "qwen2.5", "codellama"]
     }
-  },
-  "tools": {
-    "enabled": ["all"],
-    "disabled": []
-  },
-  "gateway": {
-    "enabled": false,
-    "platforms": {
-      "telegram": {
-        "token": "your-telegram-bot-token",
-        "enabled": false
-      },
-      "discord": {
-        "token": "your-discord-bot-token",
-        "enabled": false
-      },
-      "wecom": {
-        "corp_id": "your-corp-id",
-        "agent_id": "your-agent-id",
-        "secret": "your-secret",
-        "enabled": false
-      },
-      "qq": {
-        "app_id": "your-qq-app-id",
-        "app_secret": "your-qq-app-secret",
-        "enabled": false
-      },
-      "dingtalk": {
-        "app_key": "your-dingtalk-app-key",
-        "app_secret": "your-dingtalk-app-secret",
-        "enabled": false
-      },
-      "feishu": {
-        "app_id": "your-feishu-app-id",
-        "app_secret": "your-feishu-app-secret",
-        "enabled": false
-      },
-      "wechat": {
-        "app_id": "your-wechat-official-account-app-id",
-        "app_secret": "your-wechat-official-account-app-secret",
-        "token": "your-wechat-callback-token",
-        "aes_key": "your-wechat-aes-key",
-        "enabled": false
-      },
-      "wechat_ilink": {
-        "data_dir": "~/.magic/wechat_ilink",
-        "api_url": "https://ilinkai.weixin.qq.com",
-        "auto_login": false,
-        "enabled": false
-      },
-      "whatsapp": {
-        "app_id": "your-whatsapp-phone-number-id",
-        "token": "your-whatsapp-access-token",
-        "app_secret": "your-whatsapp-app-secret",
-        "verify_token": "your-webhook-verify-token",
-        "enabled": false
-      },
-      "line": {
-        "token": "your-line-channel-access-token",
-        "app_secret": "your-line-channel-secret",
-        "enabled": false
-      },
-      "matrix": {
-        "api_url": "https://your-matrix-homeserver.com",
-        "app_id": "your-user-id",
-        "token": "your-matrix-access-token",
-        "enabled": false
-      }
-    }
-  },
-  "notification": {
-    "email": {
-      "smtp_host": "smtp.gmail.com",
-      "smtp_port": 587,
-      "username": "your-email@gmail.com",
-      "password": "your-app-password",
-      "from": "your-email@gmail.com",
-      "from_name": "Go-Magic",
-      "use_tls": false,
-      "use_starttls": true,
-      "insecure_skip": false
-    },
-    "sms": {
-      "provider": "twilio",
-      "twilio": {
-        "account_sid": "your-twilio-account-sid",
-        "auth_token": "your-twilio-auth-token",
-        "from_number": "+1234567890"
-      },
-      "aliyun": {
-        "access_key_id": "your-aliyun-access-key-id",
-        "access_key_secret": "your-aliyun-access-key-secret",
-        "sign_name": "your-sign-name",
-        "endpoint": "https://dysmsapi.aliyuncs.com"
-      },
-      "tencent": {
-        "secret_id": "your-tencent-secret-id",
-        "secret_key": "your-tencent-secret-key",
-        "sdk_app_id": "your-sdk-app-id",
-        "sign_name": "your-sign-name",
-        "endpoint": "sms.tencentcloudapi.com"
-      }
-    }
-  },
-  "image_gen": {
-    "provider": "dall-e",
-    "api_key": "your-openai-api-key-for-dalle",
-    "base_url": "",
-    "default_size": "1024x1024",
-    "default_style": "digital-art",
-    "output_directory": "./generated_images"
   }
 }

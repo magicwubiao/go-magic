@@ -30,11 +30,9 @@
             <n-form-item :label="t('models.baseUrl')">
               <n-input v-model:value="form.base_url" :placeholder="t('config.serverUrl')" />
             </n-form-item>
-            <n-form-item :label="t('models.model')">
-              <n-input v-model:value="form.model" :placeholder="t('models.currentModelPlaceholder')" />
-            </n-form-item>
             <n-form-item :label="t('models.supportedModels')">
               <n-dynamic-input v-model:value="form.models" :placeholder="t('models.modelPlaceholder')" />
+              <template #feedback>{{ t('models.firstAsCurrent') }}</template>
             </n-form-item>
           </n-form>
           <template #action>

@@ -32,8 +32,8 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 		return nil, fmt.Errorf("provider %s not configured", cfg.Provider)
 	}
 
-	// Use provider-level model as primary, fall back to config-level model
-	model := provCfg.Model
+	// Get current model: Models[0] > Model field > config-level Model
+	model := provCfg.GetCurrentModel()
 	if model == "" {
 		model = cfg.Model
 	}

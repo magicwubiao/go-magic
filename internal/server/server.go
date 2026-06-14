@@ -3400,7 +3400,7 @@ func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
 			auxiliaryModels = append(auxiliaryModels, map[string]interface{}{
 				"id":         name,
 				"name":       name,
-				"model":      provCfg.Model,
+				"model":      provCfg.GetCurrentModel(),
 				"contextLen": 128000,
 			})
 		}
@@ -3426,7 +3426,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 				"enabled":  true,
 				"api_key":  provCfg.APIKey,
 				"base_url": provCfg.BaseURL,
-				"model":    provCfg.Model,
+				"model":    provCfg.GetCurrentModel(),
 				"models":   provCfg.Models,
 			})
 		}
@@ -3487,12 +3487,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
-			if req.Model != "" {
-				provCfg.Model = req.Model
-			}
 			if req.APIKey != "" {
 				provCfg.APIKey = req.APIKey
 			}
+			// Models array: first element is current model
 			if req.Models != nil {
 				provCfg.Models = req.Models
 			}
@@ -3518,7 +3516,6 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		var req struct {
 			Name    string   `json:"name"`
 			BaseURL string   `json:"base_url"`
-			Model   string   `json:"model"`
 			APIKey  string   `json:"api_key"`
 			Models  []string `json:"models"`
 		}
@@ -3540,12 +3537,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
-			if req.Model != "" {
-				provCfg.Model = req.Model
-			}
 			if req.APIKey != "" {
 				provCfg.APIKey = req.APIKey
 			}
+			// Models array: first element is current model
 			if req.Models != nil {
 				provCfg.Models = req.Models
 			}
@@ -3779,12 +3774,23 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 	if req.Provider == "" && req.Model != "" && s.provider != nil {
 		if modeler, ok := provider.GetModeler(s.provider); ok {
 			if err := modeler.SetModel(req.Model); err == nil {
-				// Update config for persistence
-				if s.cfg != nil {
-					s.cfg.Model = req.Model
-					configPath := filepath.Join(s.magicHome, "config.json")
-					data, _ := json.MarshalIndent(s.cfg, "", "  ")
-					os.WriteFile(configPath, data, 0644)
+				// Update config for persistence: move model to first position in models array
+				if s.cfg != nil && s.cfg.Providers != nil {
+					provName := s.cfg.Provider
+					if provCfg, ok := s.cfg.Providers[provName]; ok {
+						// Remove model if exists and add to front
+						newModels := []string{req.Model}
+						for _, m := range provCfg.Models {
+							if m != req.Model {
+								newModels = append(newModels, m)
+							}
+						}
+						provCfg.Models = newModels
+						s.cfg.Providers[provName] = provCfg
+						configPath := filepath.Join(s.magicHome, "config.json")
+						data, _ := json.MarshalIndent(s.cfg, "", "  ")
+						os.WriteFile(configPath, data, 0644)
+					}
 				}
 				jsonResponse(w, map[string]interface{}{
 					"ok":       true,
@@ -3801,7 +3807,19 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 	// Full provider switch (recreate provider)
 	if req.Provider != "" && req.Model != "" {
 		s.cfg.Provider = req.Provider
-		s.cfg.Model = req.Model
+		// Update provider models array: move selected model to front
+		if s.cfg.Providers != nil {
+			if provCfg, ok := s.cfg.Providers[req.Provider]; ok {
+				newModels := []string{req.Model}
+				for _, m := range provCfg.Models {
+					if m != req.Model {
+						newModels = append(newModels, m)
+					}
+				}
+				provCfg.Models = newModels
+				s.cfg.Providers[req.Provider] = provCfg
+			}
+		}
 		// Save config
 		configPath := filepath.Join(s.magicHome, "config.json")
 		data, _ := json.MarshalIndent(s.cfg, "", "  ")
