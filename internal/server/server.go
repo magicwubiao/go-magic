@@ -3488,6 +3488,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			// Models array: first element is current model
 			if req.Models != nil {
 				provCfg.Models = req.Models
+				// If this is the current provider, also update top-level model
+				if s.cfg.Provider == name && len(req.Models) > 0 {
+					s.cfg.Model = req.Models[0]
+				}
 			}
 			s.cfg.Providers[name] = provCfg
 			s.cfg.Save()
@@ -3538,6 +3542,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			// Models array: first element is current model
 			if req.Models != nil {
 				provCfg.Models = req.Models
+				// If this is the current provider, also update top-level model
+				if s.cfg.Provider == providerName && len(req.Models) > 0 {
+					s.cfg.Model = req.Models[0]
+				}
 			}
 			s.cfg.Providers[providerName] = provCfg
 			s.cfg.Save()
