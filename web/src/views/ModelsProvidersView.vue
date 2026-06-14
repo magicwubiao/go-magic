@@ -2,7 +2,7 @@
   <div class="models-providers-page">
     <div class="page-header">
       <h2>{{ t('modelsProviders.title') }}</h2>
-      <n-button type="primary" @click="showAddProviderModal = true">
+      <n-button type="primary" @click="openAddProviderModal">
         {{ t('modelsProviders.addProvider') }}
       </n-button>
     </div>
@@ -28,6 +28,14 @@
               </div>
               <n-button
                 size="tiny"
+                type="warning"
+                ghost
+                @click.stop="openEditProviderModal(prov.name)"
+              >
+                {{ t('common.edit') }}
+              </n-button>
+              <n-button
+                size="tiny"
                 type="error"
                 ghost
                 @click.stop="deleteProvider(prov.name)"
@@ -45,9 +53,6 @@
         <template v-if="selectedProvider">
           <div class="panel-header">
             <h3>{{ selectedProvider }} - {{ t('modelsProviders.models') }}</h3>
-            <n-button size="small" @click="showAddModelModal = true">
-              {{ t('modelsProviders.addModel') }}
-            </n-button>
           </div>
 
           <n-empty v-if="!providerModels.length" :description="t('modelsProviders.noModels')" />
@@ -74,14 +79,6 @@
                 >
                   {{ t('modelsProviders.setAsCurrent') }}
                 </n-button>
-                <n-button
-                  size="tiny"
-                  type="error"
-                  ghost
-                  @click="removeModel(model)"
-                >
-                  {{ t('common.delete') }}
-                </n-button>
               </div>
             </div>
           </div>
@@ -97,26 +94,28 @@
       </div>
     </div>
 
-    <!-- 添加供应商弹窗 -->
-    <n-modal v-model:show="showAddProviderModal" preset="card" :title="t('modelsProviders.addProvider')" style="width: 500px">
-      <n-form :model="newProvider" label-placement="top" :rules="providerFormRules">
+    <!-- 添加/编辑供应商弹窗 -->
+    <n-modal v-model:show="showProviderModal" preset="card" :title="isEditing ? t('modelsProviders.editProvider') : t('modelsProviders.addProvider')" style="width: 500px">
+      <n-form :model="editingProvider" label-placement="top">
         <n-form-item :label="t('modelsProviders.providerName')" path="name">
           <n-select
-            v-model:value="newProvider.name"
+            v-if="!isEditing"
+            v-model:value="editingProvider.name"
             :options="availableProviders"
             filterable
             :placeholder="t('modelsProviders.selectProviderType')"
           />
+          <n-input v-else :value="editingProvider.name" disabled />
         </n-form-item>
-        <n-form-item :label="t('modelsProviders.models')" path="models">
+        <n-form-item :label="t('modelsProviders.models')">
           <n-dynamic-input
-            v-model:value="newProvider.models"
+            v-model:value="editingProvider.models"
             :placeholder="t('modelsProviders.modelPlaceholder')"
           />
         </n-form-item>
         <n-form-item :label="t('modelsProviders.apiKey')">
           <n-input
-            v-model:value="newProvider.apiKey"
+            v-model:value="editingProvider.apiKey"
             type="password"
             show-password-on="click"
             :placeholder="t('modelsProviders.apiKeyPlaceholder')"
@@ -124,31 +123,15 @@
         </n-form-item>
         <n-form-item :label="t('modelsProviders.baseUrl')">
           <n-input
-            v-model:value="newProvider.baseUrl"
+            v-model:value="editingProvider.baseUrl"
             :placeholder="t('modelsProviders.baseUrlPlaceholder')"
           />
         </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
-          <n-button @click="showAddProviderModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAddProvider">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- 添加模型弹窗 -->
-    <n-modal v-model:show="showAddModelModal" preset="card" :title="t('modelsProviders.addModel')" style="width: 400px">
-      <n-form-item :label="t('modelsProviders.modelName')">
-        <n-input
-          v-model:value="newModelName"
-          :placeholder="t('modelsProviders.modelPlaceholder')"
-        />
-      </n-form-item>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showAddModelModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAddModel">{{ t('common.add') }}</n-button>
+          <n-button @click="showProviderModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="handleSaveProvider">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -168,7 +151,6 @@ import {
 } from 'naive-ui'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
-import * as modelsApi from '@/api/models'
 import * as providersApi from '@/api/providers'
 
 const { t } = useI18n()
@@ -176,21 +158,15 @@ const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 
 const loading = computed(() => modelsStore.loading)
-const showAddProviderModal = ref(false)
-const showAddModelModal = ref(false)
-const newModelName = ref('')
+const showProviderModal = ref(false)
+const isEditing = ref(false)
 
-const newProvider = ref({
+const editingProvider = ref({
   name: '',
   models: [] as string[],
   apiKey: '',
   baseUrl: ''
 })
-
-const providerFormRules = {
-  name: { required: true, message: '请选择供应商', trigger: 'blur' },
-  models: { required: true, message: '请至少添加一个模型', trigger: 'blur' },
-}
 
 // 从配置中获取已添加的供应商列表
 const configProviders = computed(() => {
@@ -205,16 +181,6 @@ const configProviders = computed(() => {
 
 // 当前使用的供应商
 const currentConfigProvider = computed(() => configStore.config?.provider || '')
-
-// 当前使用的模型
-const currentConfigModel = computed(() => {
-  const providers = configStore.config?.providers || {}
-  const currentProv = providers[currentConfigProvider.value]
-  if (currentProv?.models?.length > 0) {
-    return currentProv.models[0]
-  }
-  return configStore.config?.model || ''
-})
 
 const availableProviders = [
   { label: 'OpenAI', value: 'openai' },
@@ -254,23 +220,44 @@ function selectProvider(name: string) {
   selectedProvider.value = name
 }
 
-function getProviderApiKey(name: string): string {
-  return configStore.config?.providers?.[name]?.api_key || ''
+function openAddProviderModal() {
+  isEditing.value = false
+  editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '' }
+  showProviderModal.value = true
 }
 
-async function handleAddProvider() {
-  if (!newProvider.value.name || !newProvider.value.models.length) return
-  const providerName = newProvider.value.name
+function openEditProviderModal(name: string) {
+  isEditing.value = true
+  const providers = configStore.config?.providers || {}
+  const prov = providers[name] || {}
+  editingProvider.value = {
+    name,
+    models: prov.models || [],
+    apiKey: prov.api_key || '',
+    baseUrl: prov.base_url || ''
+  }
+  showProviderModal.value = true
+}
+
+async function handleSaveProvider() {
+  if (!editingProvider.value.name) return
+  
   await configStore.saveProvider({
-    name: providerName,
-    apiKey: newProvider.value.apiKey,
-    baseUrl: newProvider.value.baseUrl,
-    models: newProvider.value.models
+    name: editingProvider.value.name,
+    apiKey: editingProvider.value.apiKey,
+    baseUrl: editingProvider.value.baseUrl,
+    models: editingProvider.value.models
   })
-  showAddProviderModal.value = false
-  newProvider.value = { name: '', models: [], apiKey: '', baseUrl: '' }
+  showProviderModal.value = false
   await configStore.loadConfig()
-  selectedProvider.value = providerName
+  
+  if (isEditing.value) {
+    // 编辑后刷新当前选择
+    await refreshModelsList()
+  } else {
+    // 添加后选中新供应商
+    selectedProvider.value = editingProvider.value.name
+  }
 }
 
 async function deleteProvider(name: string) {
@@ -281,20 +268,6 @@ async function deleteProvider(name: string) {
   if (selectedProvider.value === name) {
     selectedProvider.value = Object.keys(providers)[0] || ''
   }
-}
-
-async function handleAddModel() {
-  if (!newModelName.value || !selectedProvider.value) return
-  const providers = { ...configStore.config?.providers }
-  const currentModels = providers[selectedProvider.value]?.models || []
-  providers[selectedProvider.value] = {
-    ...providers[selectedProvider.value],
-    models: [...currentModels, newModelName.value]
-  }
-  await configStore.updateConfig({ providers })
-  showAddModelModal.value = false
-  newModelName.value = ''
-  await configStore.loadConfig()
 }
 
 async function setCurrentModel(model: string) {
@@ -315,23 +288,6 @@ async function setCurrentModel(model: string) {
   await configStore.loadConfig()
 }
 
-async function removeModel(model: string) {
-  const providers = { ...configStore.config?.providers }
-  const currentModels = providers[selectedProvider.value]?.models || []
-  const newModels = currentModels.filter(m => m !== model)
-  providers[selectedProvider.value] = {
-    ...providers[selectedProvider.value],
-    models: newModels
-  }
-  // 如果这是当前供应商，且删除的是当前模型，需要更新顶层的 model
-  const updates: any = { providers }
-  if (selectedProvider.value === currentConfigProvider.value && currentModels[0] === model) {
-    updates.model = newModels[0] || ''
-  }
-  await configStore.updateConfig(updates)
-  await configStore.loadConfig()
-}
-
 async function switchToProvider(providerName: string) {
   const providers = configStore.config?.providers || {}
   const models = providers[providerName]?.models || []
@@ -342,6 +298,11 @@ async function switchToProvider(providerName: string) {
     provider: providerName,
     model: models[0]
   })
+  await configStore.loadConfig()
+}
+
+async function refreshModelsList() {
+  // 重新获取配置
   await configStore.loadConfig()
 }
 
@@ -382,7 +343,7 @@ onMounted(async () => {
 }
 
 .providers-list {
-  width: 280px;
+  width: 350px;
   flex-shrink: 0;
 }
 
@@ -393,18 +354,17 @@ onMounted(async () => {
   padding-left: 10px;
 }
 
-.provider-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-}
-
 .provider-item-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  gap: 8px;
+}
+
+.provider-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .provider-info {
@@ -431,7 +391,7 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .panel-header h3 {
@@ -441,28 +401,28 @@ onMounted(async () => {
 .models-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .model-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  border: 1px solid #e8e8e8;
+  padding: 16px;
+  background: #f5f5f5;
   border-radius: 8px;
-  background: #fff;
+  border: 2px solid transparent;
 }
 
 .model-card.current {
   border-color: #18a058;
-  background: #f0fdf4;
+  background: #f0fff0;
 }
 
 .model-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .model-name {
@@ -475,13 +435,11 @@ onMounted(async () => {
 }
 
 .switch-provider {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #e8e8e8;
+  margin-top: 20px;
 }
 
 .loading {
-  position: fixed;
+  position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);

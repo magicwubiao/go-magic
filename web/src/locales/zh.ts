@@ -447,7 +447,7 @@ export default {
     providers: '供应商',
     models: '模型',
     addProvider: '添加供应商',
-    addModel: '添加模型',
+    editProvider: '编辑供应商',
     current: '当前',
     currentModel: '当前模型',
     setAsCurrent: '设为当前',

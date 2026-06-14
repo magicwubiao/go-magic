@@ -450,6 +450,7 @@ export default {
     providers: 'Providers',
     models: 'Models',
     addProvider: 'Add Provider',
+    editProvider: 'Edit Provider',
     addModel: 'Add Model',
     current: 'Current',
     currentModel: 'Current Model',
