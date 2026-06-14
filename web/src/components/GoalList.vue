@@ -16,15 +16,23 @@
           </n-space>
           <n-space :size="4">
             <!-- Quick progress buttons -->
-            <template v-if="goal.status !== 'completed'">
+            <template v-if="goal.status === 'active'">
               <n-button-group size="tiny">
                 <n-button @click="quickUpdate(goal, 25)">+25%</n-button>
                 <n-button @click="quickUpdate(goal, 50)">50%</n-button>
                 <n-button @click="quickUpdate(goal, 75)">75%</n-button>
+                <n-button type="warning" @click="$emit('abandon', goal)">
+                  {{ t('goals.abandon') }}
+                </n-button>
                 <n-button type="success" @click="$emit('complete', goal)">
                   <template #icon><n-icon :component="CheckmarkOutline" /></template>
                 </n-button>
               </n-button-group>
+            </template>
+            <template v-else-if="goal.status === 'abandoned'">
+              <n-button type="success" size="tiny" @click="$emit('reactivate', goal)">
+                {{ t('goals.reactivate') }}
+              </n-button>
             </template>
           </n-space>
         </n-space>
@@ -85,6 +93,8 @@ const emit = defineEmits<{
   edit: [goal: Goal]
   delete: [goal: Goal]
   complete: [goal: Goal]
+  abandon: [goal: Goal]
+  reactivate: [goal: Goal]
   updateProgress: [goal: Goal, progress: number]
 }>()
 

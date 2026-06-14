@@ -7,13 +7,16 @@
 
     <n-tabs type="line" animated>
       <n-tab-pane name="active" :tab="t('common.active')">
-        <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @update-progress="updateProgress" />
+        <GoalList :goals="goalsStore.activeGoals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @abandon="abandonGoal" @update-progress="updateProgress" />
       </n-tab-pane>
       <n-tab-pane name="completed" :tab="t('common.completed')">
         <GoalList :goals="goalsStore.completedGoals" @edit="openEditGoal" @delete="deleteGoal" />
       </n-tab-pane>
+      <n-tab-pane name="abandoned" :tab="t('goals.abandoned')">
+        <GoalList :goals="goalsStore.abandonedGoals" @edit="openEditGoal" @delete="deleteGoal" @reactivate="reactivateGoal" />
+      </n-tab-pane>
       <n-tab-pane name="all" :tab="t('common.all')">
-        <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @update-progress="updateProgress" />
+        <GoalList :goals="goalsStore.goals" @edit="openEditGoal" @delete="deleteGoal" @complete="completeGoal" @abandon="abandonGoal" @update-progress="updateProgress" />
       </n-tab-pane>
     </n-tabs>
 
@@ -116,6 +119,24 @@ async function completeGoal(goal: Goal) {
   try {
     await goalsStore.completeGoal(goal.id)
     message.success(t('goals.completed'))
+  } catch (e) {
+    message.error(t('common.error'))
+  }
+}
+
+async function abandonGoal(goal: Goal) {
+  try {
+    await goalsStore.abandonGoal(goal.id)
+    message.success(t('goals.abandoned'))
+  } catch (e) {
+    message.error(t('common.error'))
+  }
+}
+
+async function reactivateGoal(goal: Goal) {
+  try {
+    await goalsStore.reactivateGoal(goal.id)
+    message.success(t('goals.reactivated'))
   } catch (e) {
     message.error(t('common.error'))
   }

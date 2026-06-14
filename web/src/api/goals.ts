@@ -60,3 +60,19 @@ export async function unlinkSession(goalId: string, sessionId: string): Promise<
 export async function decomposeGoal(goalId: string): Promise<{ goal_id: string; count: number; tasks: any[] }> {
   return request(`/goals/${goalId}/decompose`, { method: 'POST' })
 }
+
+export interface GoalAnalysis {
+  goal_id: string
+  title: string
+  current_progress: number
+  suggested_progress: number
+  reason: string
+  completed: boolean
+}
+
+export async function analyzeGoal(goalId: string, conversation: string): Promise<GoalAnalysis> {
+  return request(`/goals/${goalId}/analyze`, {
+    method: 'POST',
+    body: JSON.stringify({ conversation }),
+  })
+}
