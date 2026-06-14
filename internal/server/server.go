@@ -795,6 +795,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/model/options", withCORS(requireAuth(s.handleModelOptions)))
 	mux.HandleFunc("/api/model/set", withCORS(requireAuth(s.handleModelSet)))
 	mux.HandleFunc("/api/model/auxiliary", withCORS(requireAuth(s.handleModelAuxiliary)))
+	mux.HandleFunc("/api/model/circuit-reset", withCORS(requireAuth(s.handleCircuitReset)))
 	mux.HandleFunc("/api/providers", withCORS(requireAuth(s.handleProviders)))
 	mux.HandleFunc("/api/providers/", withCORS(requireAuth(s.handleProvidersSubRoutes)))
 
@@ -3431,6 +3432,31 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResponse(w, providers)
+}
+
+// handleCircuitReset resets the circuit breaker for the current provider
+func (s *Server) handleCircuitReset(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		http.Error(w, "no provider configured", 400)
+		return
+	}
+
+	// Try to reset circuit breaker using type switch for embedded BaseProvider
+	switch p := s.provider.(type) {
+	case *provider.DeepSeekProvider:
+		if p.OpenAICompatibleProvider != nil && p.OpenAICompatibleProvider.BaseProvider != nil {
+			p.OpenAICompatibleProvider.BaseProvider.ResetCircuitBreaker()
+		}
+	case *provider.OpenAICompatibleProvider:
+		if p.BaseProvider != nil {
+			p.BaseProvider.ResetCircuitBreaker()
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"success": true,
+		"message": "circuit breaker reset",
+	})
 }
 
 func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request) {

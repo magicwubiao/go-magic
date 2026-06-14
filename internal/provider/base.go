@@ -370,6 +370,18 @@ func (bp *BaseProvider) GetHealthState() CircuitState {
 	return bp.HealthStatus.State
 }
 
+// ResetCircuitBreaker resets the circuit breaker to closed state
+func (bp *BaseProvider) ResetCircuitBreaker() {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	bp.HealthStatus.State = CircuitClosed
+	bp.HealthStatus.Failures = 0
+	bp.HealthStatus.Successes = 0
+	bp.HealthStatus.CoolingDown = false
+	log.Infof("Circuit breaker reset for provider")
+}
+
 // DoRequest performs an HTTP request with error handling and optional retry
 func (bp *BaseProvider) DoRequest(ctx context.Context, method, url string, body interface{}, headers map[string]string) ([]byte, int, error) {
 	return bp.doRequestWithRetry(ctx, method, url, body, headers, 0)
