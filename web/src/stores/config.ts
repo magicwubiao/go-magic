@@ -1,11 +1,19 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as configApi from '@/api/config'
+import * as providersApi from '@/api/providers'
 import type { Config } from '@/api/config'
 
 export interface ConfigError {
   message: string
   code?: string
+}
+
+export interface ProviderInput {
+  name: string
+  apiKey?: string
+  baseUrl?: string
+  models: string[]
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -54,6 +62,35 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function saveProvider(input: ProviderInput): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      const existing = await providersApi.getProvider(input.name).catch(() => null)
+      if (existing) {
+        await providersApi.updateProvider(input.name, {
+          api_key: input.apiKey,
+          base_url: input.baseUrl,
+          models: input.models,
+        })
+      } else {
+        await providersApi.createProvider({
+          name: input.name,
+          api_key: input.apiKey,
+          base_url: input.baseUrl,
+          models: input.models,
+          enabled: true,
+        })
+      }
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      error.value = { message: 'Failed to save provider: ' + errMsg }
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     config,
     defaults,
@@ -64,5 +101,6 @@ export const useConfigStore = defineStore('config', () => {
     loadConfig,
     loadDefaults,
     updateConfig,
+    saveProvider,
   }
 })

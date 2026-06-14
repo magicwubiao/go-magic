@@ -1,337 +1,363 @@
 <template>
-  <div>
-    <h2 style="margin-bottom: 24px;">{{ t('models.title') }}</h2>
+  <div class="models-providers-page">
+    <div class="page-header">
+      <h2>{{ t('modelsProviders.title') }}</h2>
+      <n-button type="primary" @click="showAddProviderModal = true">
+        {{ t('modelsProviders.addProvider') }}
+      </n-button>
+    </div>
 
-    <n-tabs type="line" animated>
-      <!-- Models Tab -->
-      <n-tab-pane name="models" :tab="t('models.models')">
-        <n-spin v-if="modelsStore.loading" />
-        <div v-else>
-          <!-- Current Model Card -->
-          <n-card :title="t('models.currentModel')" size="small" style="margin-bottom: 16px;" embedded>
-            <n-result
-              v-if="!modelsStore.currentModel"
-              status="warning"
-              :title="t('models.notSet')"
-              :description="t('models.selectPrompt')"
-            />
-            <n-space v-else align="center">
-              <n-tag type="success" size="large" :bordered="false">
-                {{ modelsStore.currentModel.name }}
-              </n-tag>
-              <n-tag size="small" type="info">
-                {{ modelsStore.currentModel.provider }}
-              </n-tag>
-            </n-space>
-          </n-card>
+    <div class="page-content">
+      <!-- 供应商列表 -->
+      <div class="providers-list">
+        <div class="section-title">{{ t('modelsProviders.providers') }}</div>
+        <n-list hoverable clickable>
+          <n-list-item
+            v-for="prov in providerList"
+            :key="prov.name"
+            :class="{ active: selectedProvider === prov.name }"
+            @click="selectProvider(prov.name)"
+          >
+            <div class="provider-item">
+              <div class="provider-info">
+                <span class="provider-name">{{ prov.name }}</span>
+                <n-tag v-if="prov.isCurrent" size="small" type="success">{{ t('modelsProviders.current') }}</n-tag>
+              </div>
+              <span class="model-count">{{ prov.models.length }} {{ t('modelsProviders.models') }}</span>
+            </div>
+          </n-list-item>
+        </n-list>
+      </div>
 
-          <!-- Models Grouped by Provider -->
-          <n-space vertical size="large">
-            <n-collapse>
-              <n-collapse-item
-                v-for="(models, provider) in groupedModels"
-                :key="provider"
-                :title="provider"
-                :name="provider"
-              >
-                <template #header>
-                  <n-space>
-                    <n-tag type="info">{{ provider }}</n-tag>
-                    <n-tag size="small">{{ models.length }} {{ t('models.models') }}</n-tag>
-                  </n-space>
-                </template>
-                <n-grid :cols="3" :x-gap="12" :y-gap="12">
-                  <n-gi
-                    v-for="model in models"
-                    :key="model.id"
-                  >
-                    <n-card
-                      size="small"
-                      hoverable
-                      :class="{ 'model-card-active': isCurrentModel(model) }"
-                      @click="selectModel(model)"
-                    >
-                      <template #header>
-                        <n-space justify="space-between" align="center">
-                          <n-text strong>{{ model.name }}</n-text>
-                          <n-badge
-                            v-if="isCurrentModel(model)"
-                            type="success"
-                            :value="t('models.active')"
-                          />
-                        </n-space>
-                      </template>
-                      <n-space vertical size="small">
-                        <n-tag size="small" :type="isCurrentModel(model) ? 'success' : 'default'">
-                          {{ isCurrentModel(model) ? t('models.current') : t('models.clickToUse') }}
-                        </n-tag>
-                      </n-space>
-                    </n-card>
-                  </n-gi>
-                </n-grid>
-              </n-collapse-item>
-            </n-collapse>
-          </n-space>
-        </div>
-      </n-tab-pane>
+      <!-- 模型列表 -->
+      <div class="models-panel">
+        <template v-if="selectedProvider">
+          <div class="panel-header">
+            <h3>{{ selectedProvider }} - {{ t('modelsProviders.models') }}</h3>
+            <n-button size="small" @click="showAddModelModal = true">
+              {{ t('modelsProviders.addModel') }}
+            </n-button>
+          </div>
 
-      <!-- Providers Tab -->
-      <n-tab-pane name="providers" :tab="t('models.providers')">
-        <n-space style="margin-bottom: 16px;">
-          <n-button type="primary" @click="openAddModal">{{ t('models.addProvider') }}</n-button>
+          <n-empty v-if="!providerModels.length" :description="t('modelsProviders.noModels')" />
+
+          <div v-else class="models-grid">
+            <div
+              v-for="(model, index) in providerModels"
+              :key="model"
+              class="model-card"
+              :class="{ current: index === 0 }"
+            >
+              <div class="model-info">
+                <span class="model-name">{{ model }}</span>
+                <n-tag v-if="index === 0" size="small" type="success">
+                  {{ t('modelsProviders.currentModel') }}
+                </n-tag>
+              </div>
+              <div class="model-actions">
+                <n-button
+                  v-if="index !== 0"
+                  size="tiny"
+                  @click="setCurrentModel(model)"
+                >
+                  {{ t('modelsProviders.setAsCurrent') }}
+                </n-button>
+                <n-button
+                  size="tiny"
+                  type="error"
+                  ghost
+                  @click="removeModel(model)"
+                >
+                  {{ t('common.delete') }}
+                </n-button>
+              </div>
+            </div>
+          </div>
+        </template>
+        <n-empty v-else :description="t('modelsProviders.selectProvider')" />
+      </div>
+    </div>
+
+    <!-- 添加供应商弹窗 -->
+    <n-modal v-model:show="showAddProviderModal" preset="card" :title="t('modelsProviders.addProvider')" style="width: 500px">
+      <n-form :model="newProvider" label-placement="top">
+        <n-form-item :label="t('modelsProviders.providerName')">
+          <n-select
+            v-model:value="newProvider.name"
+            :options="availableProviders"
+            filterable
+            :placeholder="t('modelsProviders.selectProviderType')"
+          />
+        </n-form-item>
+        <n-form-item :label="t('modelsProviders.models')">
+          <n-dynamic-input
+            v-model:value="newProvider.models"
+            :placeholder="t('modelsProviders.modelPlaceholder')"
+          />
+        </n-form-item>
+        <n-form-item label="API Key">
+          <n-input
+            v-model:value="newProvider.apiKey"
+            type="password"
+            show-password-on="click"
+            :placeholder="t('modelsProviders.apiKeyPlaceholder')"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showAddProviderModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="handleAddProvider">{{ t('common.save') }}</n-button>
         </n-space>
+      </template>
+    </n-modal>
 
-        <n-spin v-if="providersStore.loading" />
-        <n-data-table
-          v-else
-          :columns="providerColumns"
-          :data="providersStore.providers"
-          :bordered="false"
-          size="small"
+    <!-- 添加模型弹窗 -->
+    <n-modal v-model:show="showAddModelModal" preset="card" :title="t('modelsProviders.addModel')" style="width: 400px">
+      <n-form-item :label="t('modelsProviders.modelName')">
+        <n-input
+          v-model:value="newModelName"
+          :placeholder="t('modelsProviders.modelPlaceholder')"
         />
+      </n-form-item>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showAddModelModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="handleAddModel">{{ t('common.add') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
 
-        <!-- Add/Edit Modal -->
-        <n-modal v-model:show="showModal" :title="editingId ? t('models.editProvider') : t('models.addProvider')" preset="dialog" style="width: 600px;">
-          <n-form label-placement="left" label-width="120">
-            <n-form-item :label="t('models.providerName')">
-              <n-select v-model:value="form.name" :options="providerOptions" :disabled="!!editingId" />
-            </n-form-item>
-            <n-form-item :label="t('models.apiKey')">
-              <n-input v-model:value="form.api_key" type="password" show-password-on="click" :placeholder="t('models.apiKey')" />
-            </n-form-item>
-            <n-form-item :label="t('models.baseUrl')">
-              <n-input v-model:value="form.base_url" :placeholder="t('config.serverUrl')" />
-            </n-form-item>
-            <n-form-item :label="t('models.models')">
-              <n-dynamic-input
-                v-model:value="form.models"
-                :placeholder="t('models.modelPlaceholder')"
-                preset="card"
-                #default="{ value }"
-              >
-                <n-input v-model:value="value.value" :placeholder="t('models.modelPlaceholder')" />
-              </n-dynamic-input>
-              <template #feedback>
-                <n-text depth="3" style="font-size: 12px;">
-                  {{ t('models.firstAsCurrent') }}
-                </n-text>
-              </template>
-            </n-form-item>
-          </n-form>
-          <template #action>
-            <n-space justify="end">
-              <n-button v-if="editingId" type="error" @click="deleteProvider">{{ t('common.delete') }}</n-button>
-              <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-              <n-button type="primary" @click="saveProvider">{{ t('common.save') }}</n-button>
-            </n-space>
-          </template>
-        </n-modal>
-      </n-tab-pane>
-    </n-tabs>
+    <n-space v-if="loading" vertical class="loading">
+      <n-spin size="large" />
+    </n-space>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useProvidersStore } from '@/stores/providers'
+import {
+  NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
+  NInput, NDynamicInput, NSpace, NEmpty, NSpin
+} from 'naive-ui'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
-import type { Provider } from '@/api/providers'
-import type { Model } from '@/api/models'
 
 const { t } = useI18n()
-const message = useMessage()
-const providersStore = useProvidersStore()
 const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 
-const showModal = ref(false)
-const editingId = ref<string | null>(null)
+const loading = computed(() => modelsStore.loading)
+const providerList = computed(() => modelsStore.providerOptions)
+const selectedProvider = ref('')
+const showAddProviderModal = ref(false)
+const showAddModelModal = ref(false)
+const newModelName = ref('')
 
-const form = reactive({
+const newProvider = ref({
   name: '',
-  api_key: '',
-  base_url: '',
   models: [] as string[],
-  enabled: true,
+  apiKey: ''
 })
 
-// Group models by provider
-const groupedModels = computed(() => {
-  const groups: Record<string, Model[]> = {}
-  for (const model of modelsStore.models) {
-    if (!groups[model.provider]) {
-      groups[model.provider] = []
-    }
-    groups[model.provider].push(model)
-  }
-  return groups
-})
-
-// Check if model is current
-function isCurrentModel(model: Model): boolean {
-  return modelsStore.currentModel?.id === model.id
-}
-
-const providerOptions = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic (Claude)', value: 'anthropic' },
+const availableProviders = [
   { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'Google (Gemini)', value: 'gemini' },
-  { label: 'Kimi (Moonshot)', value: 'kimi' },
-  { label: 'Doubao (Volcano/ByteDance)', value: 'doubao' },
-  { label: t('models.zhipu') || '智谱 AI', value: 'zhipu' },
-  { label: t('models.dashscope') || 'DashScope', value: 'dashscope' },
-  { label: 'MiniMax', value: 'minimax' },
-  { label: t('models.wenxin') || '文心一言', value: 'wenxin' },
-  { label: t('models.hunyuan') || '腾讯混元', value: 'hunyuan' },
-  { label: 'Moonshot', value: 'moonshot' },
-  { label: 'MiMo', value: 'mimo' },
-  { label: 'OpenRouter', value: 'openrouter' },
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Gemini', value: 'gemini' },
   { label: 'Groq', value: 'groq' },
-  { label: 'Mistral', value: 'mistral' },
-  { label: 'Cohere', value: 'cohere' },
-  { label: 'Perplexity', value: 'perplexity' },
-  { label: 'Together AI', value: 'together' },
-  { label: 'Ollama (Local)', value: 'ollama' },
-  { label: 'vLLM (Local)', value: 'vllm' },
-  { label: 'Custom (OpenAI Compatible)', value: 'custom' },
+  { label: 'Ollama', value: 'ollama' },
+  { label: '硅基流动', value: 'siliconflow' },
 ]
 
-const providerColumns = [
-  { title: t('common.name'), key: 'name', width: 150 },
-  {
-    title: t('models.models'),
-    key: 'models',
-    render: (row: Provider) => {
-      if (!row.models || row.models.length === 0) {
-        return h('span', { style: 'color: #999;' }, '-')
-      }
-      return h('div', { style: 'display: flex; flex-wrap: wrap; gap: 4px; max-width: 300px;' },
-        row.models.map((model: string, index: number) =>
-          h('span', {
-            style: `
-              display: inline-block;
-              padding: 2px 8px;
-              border-radius: 4px;
-              font-size: 12px;
-              background: ${index === 0 ? '#d4edda' : '#e9ecef'};
-              color: ${index === 0 ? '#155724' : '#495057'};
-              margin: 2px;
-            `
-          }, model)
-        )
-      )
-    },
-  },
-  {
-    title: t('models.apiKey'),
-    key: 'api_key',
-    width: 100,
-    render: (row: Provider) => h('span', {
-      style: `color: ${row.api_key ? '#52c41a' : '#999;'}`
-    }, row.api_key ? '✓' : '-'),
-  },
-  {
-    title: t('common.actions'),
-    key: 'actions',
-    width: 150,
-    render: (row: Provider) => h('div', { style: 'display: flex; gap: 8px;' }, [
-      h('button', {
-        onClick: () => editProvider(row),
-        style: 'border: none; background: #1890ff; color: white; padding: 4px 12px; border-radius: 4px; cursor: pointer;'
-      }, t('common.edit')),
-      h('button', {
-        onClick: () => deleteProviderById(row.id),
-        style: 'border: none; background: #ff4d4f; color: white; padding: 4px 12px; border-radius: 4px; cursor: pointer;'
-      }, t('common.delete')),
-    ]),
-  },
-]
+const providerModels = computed(() => {
+  const prov = providerList.value.find(p => p.name === selectedProvider.value)
+  return prov?.models || []
+})
 
-function openAddModal() {
-  editingId.value = null
-  form.name = ''
-  form.api_key = ''
-  form.base_url = ''
-  form.models = []
-  showModal.value = true
+function selectProvider(name: string) {
+  selectedProvider.value = name
 }
 
-function editProvider(provider: Provider) {
-  editingId.value = provider.id
-  form.name = provider.name
-  form.api_key = provider.api_key || ''
-  form.base_url = provider.base_url || ''
-  form.models = provider.models || []
-  form.enabled = provider.enabled ?? true
-  showModal.value = true
+function getProviderApiKey(name: string): string {
+  return configStore.config?.providers?.[name]?.api_key || ''
 }
 
-async function saveProvider() {
-  if (!form.name.trim()) {
-    message.warning(t('models.pleaseEnterName'))
-    return
-  }
-
-  try {
-    if (editingId.value) {
-      await providersStore.updateProvider(editingId.value, { ...form })
-    } else {
-      await providersStore.createProvider({ ...form })
-    }
-
-    showModal.value = false
-    await providersStore.loadProviders()
-    await modelsStore.loadModels()
-    message.success(t('models.saved'))
-  } catch (e) {
-    message.error(t('models.failedToSave') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  }
-}
-
-async function deleteProvider() {
-  if (!editingId.value) return
-  await providersStore.deleteProvider(editingId.value)
-  showModal.value = false
-  await providersStore.loadProviders()
+async function handleAddProvider() {
+  if (!newProvider.value.name || !newProvider.value.models.length) return
+  const providerName = newProvider.value.name
+  await configStore.saveProvider({
+    name: providerName,
+    apiKey: newProvider.value.apiKey,
+    models: newProvider.value.models
+  })
+  showAddProviderModal.value = false
+  newProvider.value = { name: '', models: [], apiKey: '' }
   await modelsStore.loadModels()
-  message.success(t('models.deleted'))
+  selectedProvider.value = providerName
 }
 
-async function deleteProviderById(id: string) {
-  await providersStore.deleteProvider(id)
-  await providersStore.loadProviders()
+async function handleAddModel() {
+  if (!newModelName.value || !selectedProvider.value) return
+  const prov = providerList.value.find(p => p.name === selectedProvider.value)
+  if (!prov) return
+  await configStore.saveProvider({
+    name: prov.name,
+    apiKey: getProviderApiKey(prov.name),
+    models: [...prov.models, newModelName.value]
+  })
+  showAddModelModal.value = false
+  newModelName.value = ''
   await modelsStore.loadModels()
-  message.success(t('models.deleted'))
 }
 
-async function selectModel(model: Model) {
-  try {
-    // Pass provider and model id to setModel
-    await modelsStore.setModel(model.provider, model.id)
-    message.success(`${t('models.modelSet')}: ${model.name}`)
-  } catch (e) {
-    message.error(t('models.failedToSet') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+async function setCurrentModel(model: string) {
+  const prov = providerList.value.find(p => p.name === selectedProvider.value)
+  if (!prov) return
+  const newModels = [model, ...prov.models.filter(m => m !== model)]
+  await configStore.saveProvider({
+    name: prov.name,
+    apiKey: getProviderApiKey(prov.name),
+    models: newModels
+  })
+  await modelsStore.loadModels()
+}
+
+async function removeModel(model: string) {
+  const prov = providerList.value.find(p => p.name === selectedProvider.value)
+  if (!prov) return
+  await configStore.saveProvider({
+    name: prov.name,
+    apiKey: getProviderApiKey(prov.name),
+    models: prov.models.filter(m => m !== model)
+  })
+  await modelsStore.loadModels()
+}
+
+onMounted(async () => {
+  await modelsStore.loadModels()
+  if (providerList.value.length > 0) {
+    selectedProvider.value = providerList.value[0].name
   }
-}
-
-onMounted(() => {
-  providersStore.loadProviders()
-  modelsStore.loadModels()
-  modelsStore.loadCurrentModel()
 })
 </script>
 
 <style scoped>
-.model-card-active {
-  border-color: #52c41a !important;
-  background: #f6ffed;
+.models-providers-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
-.model-card-active:hover {
-  background: #f6ffed !important;
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.page-header h2 {
+  margin: 0;
+}
+
+.page-content {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.providers-list {
+  width: 280px;
+  flex-shrink: 0;
+}
+
+.providers-list .section-title {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 10px;
+  padding-left: 10px;
+}
+
+.provider-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.provider-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-name {
+  font-weight: 500;
+}
+
+.model-count {
+  font-size: 12px;
+  color: #999;
+}
+
+.models-panel {
+  flex: 1;
+  overflow: auto;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.panel-header h3 {
+  margin: 0;
+}
+
+.models-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.model-card.current {
+  border-color: #18a058;
+  background: #f0fdf4;
+}
+
+.model-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-name {
+  font-weight: 500;
+}
+
+.model-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.loading {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 </style>
