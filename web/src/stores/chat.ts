@@ -432,6 +432,20 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
+          if (data.error) {
+            state.streaming = false
+            state.taskProgress = null
+            
+            if (sessionEventSources.value[sessionId]) {
+              sessionEventSources.value[sessionId]!.close()
+              sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+            }
+            
+            error.value = { message: data.error }
+            console.error('Stream error:', data.error)
+            return
+          }
+
           if (data.delta) {
             state.streamBuffer += data.delta
             
