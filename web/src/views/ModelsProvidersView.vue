@@ -8,12 +8,12 @@
     </div>
 
     <div class="page-content">
-      <!-- 供应商列表 -->
+      <!-- 供应商列表（只显示已添加的） -->
       <div class="providers-list">
         <div class="section-title">{{ t('modelsProviders.providers') }}</div>
-        <n-list hoverable clickable>
+        <n-list hoverable clickable v-if="configProviders.length > 0">
           <n-list-item
-            v-for="prov in providerList"
+            v-for="prov in configProviders"
             :key="prov.name"
             :class="{ active: selectedProvider === prov.name }"
             @click="selectProvider(prov.name)"
@@ -27,6 +27,7 @@
             </div>
           </n-list-item>
         </n-list>
+        <n-empty v-else :description="t('modelsProviders.noProviders')" />
       </div>
 
       <!-- 模型列表 -->
@@ -58,11 +59,13 @@
                 <n-button
                   v-if="index !== 0"
                   size="tiny"
+                  type="primary"
                   @click="setCurrentModel(model)"
                 >
                   {{ t('modelsProviders.setAsCurrent') }}
                 </n-button>
                 <n-button
+                  v-if="providerModels.length > 1"
                   size="tiny"
                   type="error"
                   ghost
@@ -72,6 +75,13 @@
                 </n-button>
               </div>
             </div>
+          </div>
+
+          <!-- 切换为当前供应商按钮 -->
+          <div v-if="selectedProvider !== currentConfigProvider" class="switch-provider">
+            <n-button type="primary" @click="switchToProvider(selectedProvider)">
+              {{ t('modelsProviders.switchToThisProvider') }}
+            </n-button>
           </div>
         </template>
         <n-empty v-else :description="t('modelsProviders.selectProvider')" />
@@ -143,14 +153,13 @@ import {
 } from 'naive-ui'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
+import * as modelsApi from '@/api/models'
 
 const { t } = useI18n()
 const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 
 const loading = computed(() => modelsStore.loading)
-const providerList = computed(() => modelsStore.providerOptions)
-const selectedProvider = ref('')
 const showAddProviderModal = ref(false)
 const showAddModelModal = ref(false)
 const newModelName = ref('')
@@ -159,6 +168,30 @@ const newProvider = ref({
   name: '',
   models: [] as string[],
   apiKey: ''
+})
+
+// 从配置中获取已添加的供应商列表
+const configProviders = computed(() => {
+  const providers = configStore.config?.providers || {}
+  const currentProvider = configStore.config?.provider || ''
+  return Object.entries(providers).map(([name, prov]: [string, any]) => ({
+    name,
+    models: prov.models || [],
+    isCurrent: name === currentProvider
+  }))
+})
+
+// 当前使用的供应商
+const currentConfigProvider = computed(() => configStore.config?.provider || '')
+
+// 当前使用的模型
+const currentConfigModel = computed(() => {
+  const providers = configStore.config?.providers || {}
+  const currentProv = providers[currentConfigProvider.value]
+  if (currentProv?.models?.length > 0) {
+    return currentProv.models[0]
+  }
+  return configStore.config?.model || ''
 })
 
 const availableProviders = [
@@ -175,21 +208,18 @@ const availableProviders = [
   { label: 'Wenxin (文心一言)', value: 'wenxin' },
   { label: 'Minimax', value: 'minimax' },
   { label: 'Hunyuan (腾讯混元)', value: 'hunyuan' },
-  { label: 'Moonshot (月之暗面)', value: 'moonshot' },
   { label: 'Doubao (豆包)', value: 'doubao' },
   { label: 'OpenRouter', value: 'openrouter' },
-  { label: 'Together', value: 'together' },
-  { label: 'Mistral', value: 'mistral' },
-  { label: 'Cohere', value: 'cohere' },
-  { label: 'Perplexity', value: 'perplexity' },
-  { label: 'vLLM', value: 'vllm' },
-  { label: 'Cohere', value: 'cohere' },
   { label: 'Custom (自定义)', value: 'custom' },
 ]
 
+// 当前选中的供应商
+const selectedProvider = ref('')
+
+// 当前选中供应商的模型列表
 const providerModels = computed(() => {
-  const prov = providerList.value.find(p => p.name === selectedProvider.value)
-  return prov?.models || []
+  const providers = configStore.config?.providers || {}
+  return providers[selectedProvider.value]?.models || []
 })
 
 function selectProvider(name: string) {
@@ -210,51 +240,73 @@ async function handleAddProvider() {
   })
   showAddProviderModal.value = false
   newProvider.value = { name: '', models: [], apiKey: '' }
-  await modelsStore.loadModels()
+  await configStore.loadConfig()
   selectedProvider.value = providerName
 }
 
 async function handleAddModel() {
   if (!newModelName.value || !selectedProvider.value) return
-  const prov = providerList.value.find(p => p.name === selectedProvider.value)
-  if (!prov) return
-  await configStore.saveProvider({
-    name: prov.name,
-    apiKey: getProviderApiKey(prov.name),
-    models: [...prov.models, newModelName.value]
-  })
+  const providers = { ...configStore.config?.providers }
+  const currentModels = providers[selectedProvider.value]?.models || []
+  providers[selectedProvider.value] = {
+    ...providers[selectedProvider.value],
+    models: [...currentModels, newModelName.value]
+  }
+  await configStore.updateConfig({ providers })
   showAddModelModal.value = false
   newModelName.value = ''
-  await modelsStore.loadModels()
+  await configStore.loadConfig()
 }
 
 async function setCurrentModel(model: string) {
-  const prov = providerList.value.find(p => p.name === selectedProvider.value)
-  if (!prov) return
-  const newModels = [model, ...prov.models.filter(m => m !== model)]
-  await configStore.saveProvider({
-    name: prov.name,
-    apiKey: getProviderApiKey(prov.name),
+  // 将模型移到数组第一位
+  const providers = { ...configStore.config?.providers }
+  const currentModels = providers[selectedProvider.value]?.models || []
+  const newModels = [model, ...currentModels.filter(m => m !== model)]
+  providers[selectedProvider.value] = {
+    ...providers[selectedProvider.value],
     models: newModels
-  })
-  await modelsStore.loadModels()
+  }
+  // 如果这是当前供应商，也更新顶层的 model 字段
+  const updates: any = { providers }
+  if (selectedProvider.value === currentConfigProvider.value) {
+    updates.model = model
+  }
+  await configStore.updateConfig(updates)
+  await configStore.loadConfig()
 }
 
 async function removeModel(model: string) {
-  const prov = providerList.value.find(p => p.name === selectedProvider.value)
-  if (!prov) return
-  await configStore.saveProvider({
-    name: prov.name,
-    apiKey: getProviderApiKey(prov.name),
-    models: prov.models.filter(m => m !== model)
+  const providers = { ...configStore.config?.providers }
+  const currentModels = providers[selectedProvider.value]?.models || []
+  providers[selectedProvider.value] = {
+    ...providers[selectedProvider.value],
+    models: currentModels.filter(m => m !== model)
+  }
+  await configStore.updateConfig({ providers })
+  await configStore.loadConfig()
+}
+
+async function switchToProvider(providerName: string) {
+  const providers = configStore.config?.providers || {}
+  const models = providers[providerName]?.models || []
+  if (models.length === 0) return
+  
+  // 切换供应商和模型
+  await configStore.updateConfig({
+    provider: providerName,
+    model: models[0]
   })
-  await modelsStore.loadModels()
+  await configStore.loadConfig()
 }
 
 onMounted(async () => {
-  await modelsStore.loadModels()
-  if (providerList.value.length > 0) {
-    selectedProvider.value = providerList.value[0].name
+  await configStore.loadConfig()
+  // 默认选中当前供应商
+  if (currentConfigProvider.value) {
+    selectedProvider.value = currentConfigProvider.value
+  } else if (configProviders.value.length > 0) {
+    selectedProvider.value = configProviders.value[0].name
   }
 })
 </script>
@@ -368,6 +420,12 @@ onMounted(async () => {
 .model-actions {
   display: flex;
   gap: 8px;
+}
+
+.switch-provider {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e8e8e8;
 }
 
 .loading {

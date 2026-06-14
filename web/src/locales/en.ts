@@ -461,6 +461,8 @@ export default {
     modelPlaceholder: 'Enter model name',
     apiKeyPlaceholder: 'API Key (optional)',
     selectProviderType: 'Select provider type',
+    noProviders: 'No providers yet, add one',
+    switchToThisProvider: 'Switch to This Provider',
   },
   tools: {
     title: 'Tools',

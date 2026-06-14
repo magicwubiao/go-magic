@@ -458,6 +458,8 @@ export default {
     modelPlaceholder: '输入模型名称',
     apiKeyPlaceholder: '输入 API Key（可选）',
     selectProviderType: '选择供应商类型',
+    noProviders: '暂无供应商，请添加',
+    switchToThisProvider: '切换为当前供应商',
   },
   tools: {
     title: '工具',
