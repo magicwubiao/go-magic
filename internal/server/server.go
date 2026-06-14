@@ -3698,10 +3698,10 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model := ""
-	provider := ""
+	currentProviderName := ""
 	if s.cfg != nil {
 		model = s.cfg.Model
-		provider = s.cfg.Provider
+		currentProviderName = s.cfg.Provider
 		// Try to get current model from Modeler interface
 		if s.provider != nil {
 			if modeler, ok := provider.GetModeler(s.provider); ok {
@@ -3711,7 +3711,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, map[string]interface{}{
 		"model":     model,
-		"provider":  provider,
+		"provider":  currentProviderName,
 		"providers": providerList,
 	})
 }
