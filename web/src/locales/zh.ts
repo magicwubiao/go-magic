@@ -463,6 +463,7 @@ export default {
     apiKey: 'API Key',
     baseUrl: '接口地址',
     baseUrlPlaceholder: '选填，如使用默认地址可不填',
+    confirmDeleteProvider: '确定要删除供应商 "{name}" 吗？',
   },
   tools: {
     title: '工具',

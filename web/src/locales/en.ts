@@ -467,6 +467,7 @@ export default {
     apiKey: 'API Key',
     baseUrl: 'Base URL',
     baseUrlPlaceholder: 'Optional, leave empty for default',
+    confirmDeleteProvider: 'Are you sure you want to delete provider "{name}"?',
   },
   tools: {
     title: 'Tools',
