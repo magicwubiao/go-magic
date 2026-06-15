@@ -637,6 +637,7 @@ export default {
     enabled: '已启用',
     disabled: '已禁用',
     delete: '删除',
+    confirmDelete: '确定要删除插件 "{name}" 吗？',
     installPlugin: '安装插件',
     pluginUrl: '插件 URL',
     installed: '插件已安装',

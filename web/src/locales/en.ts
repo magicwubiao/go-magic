@@ -634,6 +634,7 @@ export default {
     enabled: 'Enabled',
     disabled: 'Disabled',
     delete: 'Delete',
+    confirmDelete: 'Are you sure you want to delete plugin "{name}"?',
     installPlugin: 'Install Plugin',
     pluginUrl: 'Plugin URL',
     installed: 'Plugin installed',
