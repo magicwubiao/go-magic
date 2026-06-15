@@ -191,14 +191,7 @@ async function install() {
 
 async function deletePlugin(id: string) {
   const plugin = pluginsStore.plugins.find(p => p.id === id)
-  const confirmed = await window.$dialog.warning({
-    title: t('common.confirm'),
-    content: t('plugins.confirmDelete', { name: plugin?.name || id }),
-    positiveText: t('common.confirm'),
-    negativeText: t('common.cancel'),
-    maskClosable: false
-  })
-  if (!confirmed) return
+  if (!confirm(t('plugins.confirmDelete', { name: plugin?.name || id }))) return
   await pluginsStore.deletePlugin(id)
   message.success(t('plugins.deleted'))
 }

@@ -262,14 +262,7 @@ async function handleSaveProvider() {
 }
 
 async function deleteProvider(name: string) {
-  const confirmed = await window.$dialog.warning({
-    title: t('common.confirm'),
-    content: t('modelsProviders.confirmDeleteProvider', { name }),
-    positiveText: t('common.confirm'),
-    negativeText: t('common.cancel'),
-    maskClosable: false
-  })
-  if (!confirmed) return
+  if (!confirm(t('modelsProviders.confirmDeleteProvider', { name }))) return
   
   await providersApi.deleteProvider(name)
   await configStore.loadConfig()
