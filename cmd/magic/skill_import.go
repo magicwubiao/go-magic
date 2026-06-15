@@ -15,22 +15,16 @@ import (
 var (
 	importForce     bool
 	importRecursive bool
-	importDryRun    bool
 	importListOnly  bool
 )
 
 var skillImportCmd = &cobra.Command{
-	Use:   "import <path|url>",
-	Short: "Import skills from local path or remote URL",
-	Long: `Import skills from OpenClaw or Hermes format to go-magic.
+	Use:   "import <path>",
+	Short: "Import skills from local path",
+	Long: `Import skills from local path to go-magic.
 
 Supported sources:
   - Local path: ./path/to/skill
-  - GitHub repo: https://github.com/user/repo/tree/main/skills/my-skill
-  - GitHub raw: https://raw.githubusercontent.com/user/repo/main/skills/my-skill/SKILL.md
-  - GitHub Gist: https://gist.github.com/user/hash
-  - HTTP file: https://example.com/skills/my-skill.zip
-  - GitHub archive: https://github.com/user/repo/archive/main.zip
 
 Supported formats:
   - OpenClaw: Skills with trigger_conditions in SKILL.md
@@ -40,18 +34,6 @@ Supported formats:
 Examples:
   # Import from local path
   magic skill import ./path/to/skill
-
-  # Import from GitHub repository (single skill)
-  magic skill import https://github.com/user/repo/tree/main/skills/excel-processor
-
-  # Import from GitHub repository (all skills in directory)
-  magic skill import https://github.com/user/repo/tree/main/skills --recursive
-
-  # Import from GitHub Gist
-  magic skill import https://gist.github.com/user/abc123
-
-  # Import from HTTP URL (ZIP archive)
-  magic skill import https://example.com/skills/my-skill.zip
 
   # Import with overwrite
   magic skill import ./path/to/skill --force
@@ -67,8 +49,7 @@ Examples:
 
 func init() {
 	skillImportCmd.Flags().BoolVarP(&importForce, "force", "f", false, "Overwrite existing skills")
-	skillImportCmd.Flags().BoolVarP(&importRecursive, "recursive", "r", false, "Import all skills from directory (local or URL)")
-	skillImportCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "Show what would be imported without importing")
+	skillImportCmd.Flags().BoolVarP(&importRecursive, "recursive", "r", false, "Import all skills from directory")
 	skillImportCmd.Flags().BoolVar(&importListOnly, "list", false, "List available skills without importing")
 
 	skillsCmd.AddCommand(skillImportCmd)
@@ -77,13 +58,7 @@ func init() {
 func runSkillImport(cmd *cobra.Command, args []string) {
 	path := args[0]
 
-	// Check if it's a URL
-	if importer.IsURL(path) {
-		runURLImport(path)
-		return
-	}
-
-	// Local path import
+	// Local path import only (GitHub import removed)
 	runLocalImport(path)
 }
 
@@ -135,130 +110,7 @@ func runLocalImport(path string) {
 	os.Exit(1)
 }
 
-func runURLImport(url string) {
-	// Detect URL type for display
-	downloader, err := importer.NewDownloader()
-	if err != nil {
-		fmt.Printf("Error: failed to create downloader: %v\n", err)
-		os.Exit(1)
-	}
-	urlType := downloader.DetectURLType(url)
-	fmt.Printf("Detected URL type: %s\n\n", urlType)
-
-	// Create manager for duplicate checking
-	mgr, err := skills.NewManager()
-	if err != nil {
-		fmt.Printf("Warning: could not load skill manager: %v\n", err)
-		mgr = nil
-	}
-
-	fmt.Println("=== URL Import Mode ===")
-	fmt.Printf("Source: %s\n\n", url)
-
-	// Dry run mode
-	if importDryRun {
-		fmt.Println("[DRY RUN] Would import skill from URL")
-		previewURLSkill(url)
-		return
-	}
-
-	// Handle recursive URL import
-	if importRecursive {
-		importURLRecursive(mgr, url)
-		return
-	}
-
-	// Single URL import
-	importURL(mgr, url)
-}
-
-func importURL(mgr *skills.Manager, url string) {
-	result, err := importer.ImportFromURLWithManager(mgr, url, importForce)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if result.Success {
-		fmt.Printf("\n✓ Successfully imported: %s\n", result.Name)
-		fmt.Printf("  Location: %s\n", result.Path)
-
-		if len(result.Warnings) > 0 {
-			fmt.Println("\nWarnings:")
-			for _, w := range result.Warnings {
-				fmt.Printf("  • %s\n", w)
-			}
-		}
-	} else {
-		fmt.Printf("\n✗ Failed to import: %v\n", result.Error)
-		os.Exit(1)
-	}
-}
-
-func importURLRecursive(mgr *skills.Manager, url string) {
-	results, err := importer.ImportFromURLRecursiveWithManager(mgr, url, importForce)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	successCount := 0
-	failCount := 0
-
-	fmt.Printf("Importing skills from URL...\n\n")
-
-	for _, result := range results {
-		if result.Success {
-			successCount++
-			fmt.Printf("✓ %s\n", result.Name)
-		} else {
-			failCount++
-			name := "unknown"
-			if result.Name != "" {
-				name = result.Name
-			} else {
-				name = filepath.Base(result.Path)
-			}
-			fmt.Printf("✗ %s: %v\n", name, result.Error)
-		}
-	}
-
-	fmt.Printf("\n--- Summary ---\n")
-	fmt.Printf("Success: %d\n", successCount)
-	fmt.Printf("Failed:  %d\n", failCount)
-
-	if failCount > 0 {
-		os.Exit(1)
-	}
-}
-
-func previewURLSkill(url string) {
-	fmt.Println("Source URL:", url)
-
-	// Try to show basic info about the URL
-	downloader, err := importer.NewDownloader()
-	if err != nil {
-		fmt.Printf("  (Could not analyze URL: %v)\n", err)
-		return
-	}
-
-	urlType := downloader.DetectURLType(url)
-	fmt.Printf("  Type: %s\n", urlType)
-
-	// For GitHub URLs, try to show branch/path info
-	if strings.Contains(url, "github.com") {
-		fmt.Println("  Format: GitHub repository")
-	}
-}
-
 func importSingleSkill(imp *importer.Importer, skillDir string) {
-	// Dry run mode
-	if importDryRun {
-		fmt.Printf("[DRY RUN] Would import skill from: %s\n", skillDir)
-		previewSkill(imp, skillDir)
-		return
-	}
-
 	result := imp.Import(skillDir, importForce)
 
 	if result.Success {
