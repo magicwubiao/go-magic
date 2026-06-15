@@ -39,19 +39,19 @@ type Config struct {
 
 // ProviderCfg defines provider-specific configuration.
 type ProviderCfg struct {
-	Provider  string   `json:"provider"`
-	APIKey    string   `json:"api_key"`
-	BaseURL   string   `json:"base_url,omitempty"`
-	Proxy     string   `json:"proxy,omitempty"`
-	Fallback  []string `json:"fallback,omitempty"`
+	Provider  string            `json:"provider"`
+	APIKey    string            `json:"api_key"`
+	BaseURL   string            `json:"base_url,omitempty"`
+	Proxy     string            `json:"proxy,omitempty"`
+	Fallback  []string          `json:"fallback,omitempty"`
 	ExtraBody map[string]string `json:"extra_body,omitempty"`
 
 	// Extended fields for advanced configuration
-	APIVersion string   `json:"api_version,omitempty"`
+	APIVersion string            `json:"api_version,omitempty"`
 	Extra      map[string]string `json:"extra,omitempty"`
-	Models     []string `json:"models,omitempty"` // List of supported models, first element is current model
-	MaxRPM     int      `json:"max_rpm,omitempty"`
-	MaxTPM     int      `json:"max_tpm,omitempty"`
+	Models     []string          `json:"models,omitempty"` // List of supported models, first element is current model
+	MaxRPM     int               `json:"max_rpm,omitempty"`
+	MaxTPM     int               `json:"max_tpm,omitempty"`
 }
 
 // GetCurrentModel returns the current model (first element of Models array)
