@@ -2561,7 +2561,6 @@ func copyDirectory(source, destination string) error {
 	})
 }
 
-
 // installFromRemoteURL 从远程 URL 下载并安装技能
 // 复用 InstallFromURL 的下载逻辑，避免循环导入 importer 包
 func (m *Manager) installFromRemoteURL(rawURL string, source HubSource) error {
