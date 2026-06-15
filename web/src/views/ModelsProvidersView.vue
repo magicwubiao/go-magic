@@ -83,12 +83,7 @@
             </div>
           </div>
 
-          <!-- 切换为当前供应商按钮 -->
-          <div v-if="selectedProvider !== currentConfigProvider" class="switch-provider">
-            <n-button type="primary" @click="switchToProvider(selectedProvider)">
-              {{ t('modelsProviders.switchToThisProvider') }}
-            </n-button>
-          </div>
+
         </template>
         <n-empty v-else :description="t('modelsProviders.selectProvider')" />
       </div>
@@ -310,19 +305,6 @@ async function setCurrentModel(model: string) {
       }
     })
   }
-  await configStore.loadConfig()
-}
-
-async function switchToProvider(providerName: string) {
-  const providers = configStore.config?.providers || {}
-  const models = providers[providerName]?.models || []
-  if (models.length === 0) return
-  
-  // 切换供应商和模型
-  await configStore.updateConfig({
-    provider: providerName,
-    model: models[0]
-  })
   await configStore.loadConfig()
 }
 
