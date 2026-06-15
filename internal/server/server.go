@@ -233,22 +233,14 @@ func NewServer(dbPath string) *Server {
 	fmt.Printf("[server] Session DB path: %s\n", dbPath)
 	store, err := session.NewStore(dbPath)
 	if err != nil {
-		fmt.Printf("[server] Warning: Failed to open session store: %v\n", err)
+		// Session store unavailable, chat sessions will not be persisted
 		store = nil
-	} else {
-		fmt.Printf("[server] Session store opened successfully\n")
 	}
 
 	// Create provider
 	var prov provider.Provider
 	if cfg != nil && cfg.Provider != "" {
 		prov = createProvider(cfg)
-		if prov == nil {
-			fmt.Printf("[server] Warning: No LLM provider available. Chat will not work until provider is configured.\n")
-			fmt.Printf("[server] Please configure a provider in Settings or config.json\n")
-		}
-	} else {
-		fmt.Printf("[server] Warning: No provider configured. Chat will not work.\n")
 	}
 
 	// Create tool registry
@@ -280,7 +272,7 @@ func NewServer(dbPath string) *Server {
 	// Create cron manager
 	cronMgr, err := cron.NewManager()
 	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create cron manager: %v\n", err)
+		// Cron manager unavailable
 	} else if prov != nil && registry != nil {
 		// Set LLM provider and tools for cron agent mode
 		cronMgr.SetAgentDeps(prov, registry)
@@ -290,33 +282,24 @@ func NewServer(dbPath string) *Server {
 	var kanbanMgr *kanban.Manager
 	kanbanMgr, err = kanban.NewManager(magicHome)
 	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create kanban manager: %v\n", err)
+		// Kanban manager unavailable
 	} else {
-		if err := kanbanMgr.Init(); err != nil {
-			fmt.Printf("[server] Warning: Failed to init kanban manager: %v\n", err)
-		}
+		kanbanMgr.Init()
 	}
 
 	// Initialize Plugin Manager
 	var pluginMgr *plugin.Manager
 	pluginMgr, err = plugin.NewManager(nil)
-	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create plugin manager: %v\n", err)
-	}
+	// Plugin manager may fail, continue without it
 
 	// Initialize GroupChat Storage
 	var groupchatStorage *groupchat.Storage
 	groupchatStorage, err = groupchat.NewStorageFromHome(magicHome)
-	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create groupchat storage: %v\n", err)
-	}
 
 	// Initialize Goal Manager
 	var goalMgr *goal.Manager
 	goalMgr, err = goal.NewManager(magicHome)
-	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create goal manager: %v\n", err)
-	}
+	// Goal manager may fail, continue without it
 
 	// Load disabled skills from config
 	disabledSkills := make(map[string]bool)
@@ -330,16 +313,8 @@ func NewServer(dbPath string) *Server {
 	// Cortex local features (SOUL.md, USER.md, Snapshot, Trajectory) work without LLM provider
 	cortexDir := filepath.Join(magicHome, "cortex")
 	cortexMgr := cortex.NewManager(cortexDir, prov)
-	if err := cortexMgr.Start(); err != nil {
-		fmt.Printf("[server] Warning: Failed to start cortex manager: %v\n", err)
-		cortexMgr = nil
-	} else {
-		if prov != nil {
-			fmt.Printf("[server] Cortex memory system enabled (with LLM features)\n")
-		} else {
-			fmt.Printf("[server] Cortex memory system enabled (local features only, no LLM provider)\n")
-		}
-	}
+	cortexMgr.Start()
+	// Cortex manager may fail, continue without it
 
 	// Initialize Approval Manager independently (not tied to agents)
 	// Read approval config from main config file if available
@@ -354,7 +329,6 @@ func NewServer(dbPath string) *Server {
 	}
 	approvalMgr, err := approval.NewManager(approvalCfg)
 	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create approval manager: %v\n", err)
 		approvalMgr = nil
 	} else {
 		// If no persisted config, use main config values (already set above)
@@ -362,13 +336,11 @@ func NewServer(dbPath string) *Server {
 		if loadedStrategy == "" {
 			approvalMgr.SetStrategy(approval.StrategySmart)
 		}
-		fmt.Printf("[server] Approval system enabled (strategy: %s)\n", approvalMgr.GetConfig().Strategy)
 	}
 
 	// Create usage manager
 	usageMgr, err := usage.NewManager(filepath.Join(magicHome, "usage"))
 	if err != nil {
-		fmt.Printf("[server] Warning: Failed to create usage manager: %v\n", err)
 		usageMgr = nil
 	}
 
@@ -463,21 +435,16 @@ func (s *Server) cleanupInactiveAgents() {
 			}
 			delete(s.agents, id)
 			count++
-			fmt.Printf("[server] Cleaned up inactive agent for session %s\n", id)
 		}
 	}
 }
 
 // createProvider creates a provider instance from config (unified with pkg/config)
 func createProvider(cfg *appconfig.Config) provider.Provider {
-	fmt.Printf("[server] Creating provider: cfg.Provider=%s, cfg.Model=%s\n", cfg.Provider, cfg.Model)
-	fmt.Printf("[server] Providers config: %+v\n", cfg.Providers)
 	prov, err := appconfig.CreateProvider(cfg)
 	if err != nil {
-		fmt.Printf("[server] Provider creation failed: %v\n", err)
 		return nil
 	}
-	fmt.Printf("[server] Provider created successfully: %s\n", prov.Name())
 	return prov
 }
 
@@ -523,7 +490,6 @@ RULES:
 	// Enable Cortex for memory and context management
 	if s.cortexMgr != nil {
 		agentOpts = append(agentOpts, agent.WithCortex(s.cortexMgr))
-		fmt.Printf("[server] Agent %s: Cortex memory enabled\n", sessionID)
 	}
 	// Share approval manager with agent so web API can see approval history
 	if s.approvalMgr != nil {
@@ -912,7 +878,6 @@ func (s *Server) Start(port int) error {
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
-	fmt.Printf("[server] Provider: %s | Model: %s\n", s.cfg.Provider, s.cfg.GetCurrentModel())
 
 	return http.ListenAndServe(addr, mux)
 }
@@ -1376,7 +1341,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	fmt.Printf("[server] handleSessionStream: provider=%v, cfg.Provider=%s\n", s.provider, s.cfg.Provider)
 	if s.provider == nil {
 		http.Error(w, "LLM provider not configured. Please add a provider in Models page.", 400)
 		return
@@ -2102,9 +2066,7 @@ func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
 		if provider == "" {
 			provider = "unknown"
 		}
-		if err := s.usageMgr.Record(deltaInput, deltaOutput, model, provider, sessionID); err != nil {
-			fmt.Printf("[server] Failed to record usage: %v\n", err)
-		}
+		s.usageMgr.Record(deltaInput, deltaOutput, model, provider, sessionID)
 	}
 }
 
@@ -2190,13 +2152,11 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 // buildToolsets dynamically generates toolsets from s.toolReg
 func (s *Server) buildToolsets() []map[string]interface{} {
 	if s.toolReg == nil {
-		fmt.Println("[server] buildToolsets: toolReg is nil")
 		return []map[string]interface{}{}
 	}
 
 	allTools := s.toolReg.List()
 	if len(allTools) == 0 {
-		fmt.Println("[server] buildToolsets: no tools registered, returning empty list")
 		return []map[string]interface{}{}
 	}
 
@@ -3218,7 +3178,6 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
-		fmt.Printf("[server] Failed to read plugins dir: %v\n", err)
 		return plugins
 	}
 
@@ -3586,9 +3545,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 	// Handle DELETE /{name} - delete provider
 	if r.Method == http.MethodDelete && subRoute == "" {
-		fmt.Printf("[DEBUG] DELETE provider: name=%s, cfg=%+v\n", name, s.cfg)
 		if s.cfg != nil && s.cfg.Providers != nil {
-			fmt.Printf("[DEBUG] Providers map: %+v\n", s.cfg.Providers)
 			if _, exists := s.cfg.Providers[name]; exists {
 				delete(s.cfg.Providers, name)
 				// If deleted provider was current, clear top-level fields
@@ -3596,16 +3553,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					s.cfg.Provider = ""
 					s.cfg.Model = ""
 				}
-				fmt.Printf("[DEBUG] After delete, Providers: %+v\n", s.cfg.Providers)
 				s.cfg.Save()
-				fmt.Printf("[DEBUG] Save completed\n")
 				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 				return
-			} else {
-				fmt.Printf("[DEBUG] Provider %s not found in map\n", name)
 			}
-		} else {
-			fmt.Printf("[DEBUG] cfg or Providers is nil\n")
 		}
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
@@ -3968,7 +3919,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}
-		fmt.Printf("[server] Config saved to %s\n", configPath)
 
 		// Check which config sections changed and hot-reload accordingly
 		hotReloadKeys := []string{"provider", "model", "api_key", "base_url", "secret_redaction", "profile", "working_dir"}
@@ -3988,7 +3938,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			s.provider = createProvider(s.cfg)
 			s.mu.Unlock()
-			fmt.Printf("[server] Provider hot-reloaded: %s / %s\n", s.cfg.Provider, s.cfg.GetCurrentModel())
 		}
 
 		// Hot-reload approval config if approval section changed
@@ -4004,7 +3953,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				if ac.ApprovalTimeout > 0 {
 					cfg.ApprovalTimeout = ac.ApprovalTimeout
 				}
-				fmt.Printf("[server] Approval config hot-reloaded (strategy: %s)\n", ac.Strategy)
 			}
 		}
 
