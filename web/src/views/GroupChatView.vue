@@ -500,13 +500,26 @@ async function addAgent() {
 }
 
 async function handleDeleteRoom(roomId: string) {
-  if (!confirm(t('groupchat.confirmDeleteRoom'))) return
+  const confirmed = await window.$dialog.warning({
+    title: t('common.confirm'),
+    content: t('groupchat.confirmDeleteRoom'),
+    positiveText: t('common.confirm'),
+    negativeText: t('common.cancel'),
+    maskClosable: false
+  })
+  if (!confirmed) return
   await groupchatStore.deleteRoom(roomId)
   message.success(t('groupchat.roomDeleted'))
 }
 
 async function handleRemoveAgent(agent: any) {
-  const confirmed = await message.warning(t('groupchat.confirmRemoveAgent', { name: agent.name }), { positiveText: t('common.confirm'), negativeText: t('common.cancel'), closeable: false })
+  const confirmed = await window.$dialog.warning({
+    title: t('common.confirm'),
+    content: t('groupchat.confirmRemoveAgent', { name: agent.name }),
+    positiveText: t('common.confirm'),
+    negativeText: t('common.cancel'),
+    maskClosable: false
+  })
   if (!confirmed) return
   await groupchatStore.removeAgent(agent.id)
   message.success(t('groupchat.agentRemoved'))
