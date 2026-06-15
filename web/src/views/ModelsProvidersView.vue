@@ -184,6 +184,7 @@ const availableProviders = [
   { label: 'Google Gemini', value: 'gemini' },
   { label: 'Groq', value: 'groq' },
   { label: 'Ollama (本地)', value: 'ollama' },
+  { label: 'vLLM (本地)', value: 'vllm' },
   { label: '硅基流动 SiliconFlow', value: 'siliconflow' },
   { label: 'Kimi (Moonshot)', value: 'kimi' },
   { label: '智谱 GLM (Zhipu)', value: 'zhipu' },
@@ -199,7 +200,6 @@ const availableProviders = [
   { label: 'Mistral AI', value: 'mistral' },
   { label: 'Cohere', value: 'cohere' },
   { label: 'Perplexity', value: 'perplexity' },
-  { label: 'vLLM (本地)', value: 'vllm' },
   { label: '自定义 (Custom)', value: 'custom' },
 ]
 
