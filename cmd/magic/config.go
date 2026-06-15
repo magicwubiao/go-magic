@@ -111,7 +111,12 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 			case "base_url":
 				provCfg.BaseURL = value
 			case "model":
-				provCfg.Model = value
+				// Set model as first element of Models array
+				if len(provCfg.Models) == 0 {
+					provCfg.Models = []string{value}
+				} else {
+					provCfg.Models[0] = value
+				}
 			default:
 				fmt.Printf("Unknown provider field: %s\n", field)
 				fmt.Println("Available fields: api_key, base_url, model")
@@ -249,7 +254,9 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 			case "base_url":
 				fmt.Println(provCfg.BaseURL)
 			case "model":
-				fmt.Println(provCfg.Model)
+				if len(provCfg.Models) > 0 {
+					fmt.Println(provCfg.Models[0])
+				}
 			default:
 				fmt.Printf("Unknown field: %s\n", field)
 				os.Exit(1)
@@ -351,7 +358,9 @@ func runConfigList(cmd *cobra.Command, args []string) {
 			fmt.Printf("  %s%s:\n", name, isPrimary)
 			fmt.Printf("    API Key:  %s\n", maskSecret(prov.APIKey))
 			fmt.Printf("    Base URL: %s\n", prov.BaseURL)
-			fmt.Printf("    Model:    %s\n", prov.Model)
+			if len(prov.Models) > 0 {
+				fmt.Printf("    Models:   %s\n", strings.Join(prov.Models, ", "))
+			}
 		}
 	}
 
@@ -459,8 +468,8 @@ func runConfigValidate(cmd *cobra.Command, args []string) {
 		if provCfg.APIKey == "" {
 			errors = append(errors, "API key not set for current provider")
 		}
-		if provCfg.Model == "" {
-			errors = append(errors, "Model not set for current provider")
+		if len(provCfg.Models) == 0 {
+			errors = append(errors, "No models configured for current provider")
 		}
 	}
 

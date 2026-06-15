@@ -131,7 +131,7 @@ func (l *Loader) applyDefaults(cfg *configtypes.Config) {
 	// Auto-set Model from first element of Models array if Model is still empty
 	if cfg.Model == "" && cfg.Providers != nil {
 		if prov, ok := cfg.Providers[cfg.Provider]; ok && len(prov.Models) > 0 {
-			cfg.Model = prov.Models[0].Name
+			cfg.Model = prov.Models[0]
 		}
 	}
 	if cfg.Agent.MaxIterations == 0 {

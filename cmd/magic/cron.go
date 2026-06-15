@@ -315,14 +315,17 @@ func runCronTest(cmd *cobra.Command, args []string) {
 	}
 
 	var prov provider.Provider
-	userModels := convertModelStringsToModelInfo(provCfg.Models)
+	userModels := make([]provider.ModelInfo, len(provCfg.Models))
+	for i, m := range provCfg.Models {
+		userModels[i] = provider.ModelInfo{ID: m, Name: m}
+	}
 	switch cfg.Provider {
 	case "openai":
-		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.Model, cfg.Provider, userModels)
+		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.GetCurrentModel(), cfg.Provider, userModels)
 	case "anthropic":
-		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, "", provCfg.Model, cfg.Provider, userModels)
+		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, "", provCfg.GetCurrentModel(), cfg.Provider, userModels)
 	case "deepseek":
-		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.Model, userModels)
+		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.GetCurrentModel(), userModels)
 	default:
 		fmt.Printf("Unsupported provider: %s\n", cfg.Provider)
 		os.Exit(1)

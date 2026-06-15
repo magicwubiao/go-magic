@@ -196,9 +196,13 @@ func runModel(cmd *cobra.Command, args []string) {
 		cfg.Provider = providerName
 		cfg.Model = model
 
-		// Update provider config
+		// Update provider config - set model as first element of Models array
 		if provCfg, ok := cfg.Providers[providerName]; ok {
-			provCfg.Model = model
+			if len(provCfg.Models) == 0 {
+				provCfg.Models = []string{model}
+			} else {
+				provCfg.Models[0] = model
+			}
 			cfg.Providers[providerName] = provCfg
 		}
 
@@ -213,9 +217,13 @@ func runModel(cmd *cobra.Command, args []string) {
 		// Just update model for current provider
 		cfg.Model = model
 
-		// Update provider config
+		// Update provider config - set model as first element of Models array
 		if provCfg, ok := cfg.Providers[cfg.Provider]; ok {
-			provCfg.Model = model
+			if len(provCfg.Models) == 0 {
+				provCfg.Models = []string{model}
+			} else {
+				provCfg.Models[0] = model
+			}
 			cfg.Providers[cfg.Provider] = provCfg
 		}
 

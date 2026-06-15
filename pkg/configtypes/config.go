@@ -39,27 +39,27 @@ type Config struct {
 
 // ProviderCfg defines provider-specific configuration.
 type ProviderCfg struct {
-	Provider  string            `json:"provider"`
-	APIKey    string            `json:"api_key"`
-	BaseURL   string            `json:"base_url,omitempty"`
-	Model     string            `json:"model,omitempty"`
-	Proxy     string            `json:"proxy,omitempty"`
-	Fallback  []string          `json:"fallback,omitempty"`
+	Provider  string   `json:"provider"`
+	APIKey    string   `json:"api_key"`
+	BaseURL   string   `json:"base_url,omitempty"`
+	Proxy     string   `json:"proxy,omitempty"`
+	Fallback  []string `json:"fallback,omitempty"`
 	ExtraBody map[string]string `json:"extra_body,omitempty"`
 
 	// Extended fields for advanced configuration
-	APIVersion string            `json:"api_version,omitempty"`
+	APIVersion string   `json:"api_version,omitempty"`
 	Extra      map[string]string `json:"extra,omitempty"`
-	Models     []ModelInfo       `json:"models,omitempty"`
-	MaxRPM     int               `json:"max_rpm,omitempty"`
-	MaxTPM     int               `json:"max_tpm,omitempty"`
+	Models     []string `json:"models,omitempty"` // List of supported models, first element is current model
+	MaxRPM     int      `json:"max_rpm,omitempty"`
+	MaxTPM     int      `json:"max_tpm,omitempty"`
 }
 
-// ModelInfo defines model metadata.
-type ModelInfo struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
-	MaxTokens   int    `json:"max_tokens,omitempty"`
+// GetCurrentModel returns the current model (first element of Models array)
+func (p *ProviderCfg) GetCurrentModel() string {
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return ""
 }
 
 // MemoryConfig defines memory system configuration.
