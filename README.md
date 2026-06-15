@@ -3,30 +3,40 @@
 **Magic Agent** -- A high-performance, ultra-lightweight AI Agent framework written in Go.
 
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
-[![Version](https://img.shields.io/badge/version-v0.3.1-green)](https://github.com/magicwubiao/go-magic/releases)
+[![Version](https://img.shields.io/badge/version-v0.4.14-green)](https://github.com/magicwubiao/go-magic/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## Overview
 
-go-magic is a full-featured AI Agent framework that combines a powerful Go backend with a modern React/TypeScript web dashboard. It supports 20+ AI providers, ships a built-in TUI (BubbleTea), and offers extensive tooling for file operations, code execution, web browsing, and more.
+go-magic is a full-featured AI Agent framework that combines a powerful Go backend with a modern React/TypeScript web dashboard. It supports 22+ AI providers, ships a built-in TUI (BubbleTea), and offers extensive tooling for file operations, code execution, web browsing, and more.
 
 ## Features
 
-### Multi-Provider Support (20+)
+### Multi-Provider Support (22+)
 
-DeepSeek, OpenAI, Anthropic, Gemini, Ollama, OpenRouter, Groq, Mistral, Cohere, Perplexity, Together, DashScope, Kimi, MiniMax, Zhipu, Doubao (Volcano), Wenxin, Moonshot, Hunyuan, Mimo, and any OpenAI-compatible endpoint.
+DeepSeek, OpenAI, Anthropic, Gemini, Ollama, vLLM, Groq, 硅基流动, Kimi, 智谱GLM, 通义千问, 文心一言, MiniMax, MiMo, 腾讯混元, 豆包, Moonshot, OpenRouter, Together AI, Mistral AI, Cohere, Perplexity, and any OpenAI-compatible endpoint.
+
+### Multi-Model per Provider
+
+Each provider can configure multiple models. The first model in the array is the current active model. Switch models instantly without restart (hot-reload).
 
 ### TUI Interface
 
 Built with [BubbleTea](https://github.com/charmbracelet/bubbletea), featuring multi-line input, Markdown rendering, streaming output, and slash commands.
 
+### Web Dashboard
+
+React/TypeScript frontend with:
+- Real-time chat with streaming responses
+- Session management (create, search, resume)
+- Provider and model configuration with hot-reload
+- Skills management
+- Plugins configuration
+- Token usage dashboard
+
 ### Coding Mode
 
 A dedicated mode with relaxed permissions, longer timeouts, and support for Python/Node.js code execution -- designed for development workflows.
-
-### Web Dashboard
-
-React/TypeScript frontend with real-time chat, session management, and configuration management. Embedded into the binary for single-file deployment.
 
 ### Tool System
 
@@ -45,7 +55,16 @@ React/TypeScript frontend with real-time chat, session management, and configura
 
 ### Skills System
 
-Auto-creation and progressive loading (L0/L1/L2). Skills are learned from usage patterns and can be shared via Skills Hub.
+Auto-creation and progressive loading (L0/L1/L2). Skills are learned from usage patterns and can be installed from Skills Hub.
+
+### Cortex (Cognitive Architecture)
+
+A complete agent cognitive system:
+- **Memory System**: SOUL.md (personality), USER.md (user profile), snapshot memory, FTS search
+- **Perception**: Input analysis, intent recognition, complexity assessment
+- **Cognition**: Planning, decision making, LLM-based task decomposition
+- **Execution**: Tool invocation and result processing
+- **Skill Evolution (GEPA)**: Automatic skill creation from historical patterns
 
 ### Messaging Gateway
 
@@ -57,13 +76,17 @@ Telegram, Discord, Slack, WhatsApp, WeChat, WeCom, DingTalk, Feishu, QQ, LINE, M
 
 Connect to external MCP (Model Context Protocol) servers to extend agent capabilities.
 
+### Group Chat
+
+Create group conversations with multiple AI agents. Each agent can have different providers and models.
+
 ### Session Management
 
 SQLite-based persistence with FTS5 full-text search across all sessions.
 
-### CI/CD
+### Sensitive Data Redaction
 
-GitHub Actions workflow for automatic multi-platform compilation and release.
+Automatic redaction of API keys, tokens, passwords, and other sensitive information in logs and outputs.
 
 ## Quick Start
 
@@ -123,7 +146,7 @@ magic chat
 | `/undo` | | Undo last action |
 | `/export [format]` | `/save` | Export conversation |
 | `/model [provider:model]` | `/m` | Change the AI model |
-| `/mode [chat\|coding]` | | Switch agent mode |
+| `/mode [chat|coding]` | | Switch agent mode |
 | `/personality [name]` | `/persona`, `/tone` | Set agent personality |
 | `/tools [category]` | | List available tools |
 | `/skills [name]` | `/skill` | List available skills |
@@ -131,9 +154,9 @@ magic chat
 | `/version` | `/ver` | Show version |
 | `/usage [--days N]` | | Show token usage |
 | `/insights [--days N]` | `-d` | Get usage insights |
-| `/sessions [list\|search]` | `/session` | List sessions |
+| `/sessions [list|search]` | `/session` | List sessions |
 | `/sethome [session_id]` | | Set home session for messaging |
-| `/context [add\|remove\|list]` | `/ctx` | Manage context files |
+| `/context [add|remove|list]` | `/ctx` | Manage context files |
 | `/stop` | `/cancel` | Stop current operation |
 
 ## Coding Mode
@@ -156,7 +179,7 @@ Switch back with `/mode chat`.
 
 ### Default Mode Configuration
 
-Set the default startup mode in your config file so you don't need to switch manually every time:
+Set the default startup mode in your config file:
 
 ```json
 {
@@ -165,10 +188,6 @@ Set the default startup mode in your config file so you don't need to switch man
 ```
 
 Available values: `"chat"` (default) or `"coding"`.
-
-You can also configure this via Web Dashboard → Config → General → Chat Mode.
-
-After startup, you can still switch temporarily with `/mode chat` or `/mode coding`.
 
 ## Web Dashboard
 
@@ -183,8 +202,9 @@ Then open `http://localhost:5000` in your browser.
 Features:
 - Real-time chat with streaming responses
 - Session management (create, search, resume)
-- Provider and model configuration
-- Tool and skill management
+- Provider and model configuration with hot-reload
+- Skills management
+- Plugins configuration
 - Token usage dashboard
 
 ## Configuration
@@ -199,20 +219,20 @@ Create or edit `~/.magic/config.json`:
   "providers": {
     "deepseek": {
       "api_key": "your-deepseek-api-key",
-      "model": "deepseek-chat"
+      "models": ["deepseek-chat", "deepseek-coder"]
     },
     "openai": {
       "api_key": "your-openai-api-key",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4"
+      "models": ["gpt-4", "gpt-3.5-turbo"]
     },
     "anthropic": {
       "api_key": "your-anthropic-api-key",
-      "model": "claude-3-opus-20240229"
+      "models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229"]
     },
     "ollama": {
       "base_url": "http://localhost:11434",
-      "model": "llama3"
+      "models": ["llama3", "codellama"]
     }
   },
   "tools": {
@@ -234,6 +254,23 @@ Create or edit `~/.magic/config.json`:
   }
 }
 ```
+
+### Multi-Model Configuration
+
+Each provider supports multiple models:
+
+```json
+"providers": {
+  "deepseek": {
+    "api_key": "your-api-key",
+    "models": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"]
+  }
+}
+```
+
+- The first model in the array is the current active model
+- Switch models instantly from Web Dashboard (no restart needed)
+- Use `/model provider:model` in TUI to switch
 
 ### Environment Variables
 
@@ -284,7 +321,6 @@ make build-windows
 | macOS | amd64, arm64 |
 | Windows | amd64, arm64, 386 |
 | BSD | freebsd, openbsd, netbsd |
-
 
 ## Download
 
