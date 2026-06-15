@@ -44,12 +44,7 @@ export async function toggleSkill(name: string, enabled: boolean): Promise<void>
   })
 }
 
-export async function installSkill(url: string): Promise<void> {
-  return request('/skills/install', {
-    method: 'POST',
-    body: JSON.stringify({ url }),
-  })
-}
+
 
 export async function updateSkill(id: string, data: Partial<Skill>): Promise<void> {
   return request(`/skills/${id}`, {
@@ -97,28 +92,3 @@ export async function getSkillEvolutionHistory(skillName: string): Promise<Evolu
   return request(`/skills/${encodeURIComponent(skillName)}/evolution`)
 }
 
-// Hub / Skill Market APIs
-export interface HubSkill {
-  name: string
-  description: string
-  tags: string[]
-  source: string
-  source_id: string
-  url: string
-  author: string
-  stars: number
-  installs: number
-  verified: boolean
-}
-
-export async function searchHubSkills(keyword?: string): Promise<HubSkill[]> {
-  const params = keyword ? `?q=${encodeURIComponent(keyword)}` : ''
-  return request<HubSkill[]>(`/skills/hub/search${params}`)
-}
-
-export async function installHubSkill(source: string, sourceID: string): Promise<{ ok: boolean; error?: string }> {
-  return request<{ ok: boolean; error?: string }>('/skills/hub/install', {
-    method: 'POST',
-    body: JSON.stringify({ source, sourceID }),
-  })
-}

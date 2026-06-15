@@ -2,10 +2,6 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('skills.title') }}</h2>
-      <n-space>
-        <n-button @click="showInstallModal = true">{{ t('skills.installFromUrl') }}</n-button>
-        <n-button type="primary" @click="openHubModal">{{ t('skills.browseHub') }}</n-button>
-      </n-space>
     </n-space>
 
     <n-spin v-if="skillsStore.loading" />
@@ -130,21 +126,6 @@
       </n-card>
     </template>
 
-    <!-- Install Modal -->
-    <n-modal v-model:show="showInstallModal" :title="t('skills.installFromUrl')" preset="dialog">
-      <n-form>
-        <n-form-item :label="t('skills.gitUrl')">
-          <n-input v-model:value="installUrl" placeholder="https://github.com/user/skill-repo.git" />
-        </n-form-item>
-      </n-form>
-      <template #action>
-        <n-space justify="end">
-          <n-button @click="showInstallModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="installing" @click="installSkill">{{ t('skills.install') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
     <!-- Skill Detail Modal -->
     <n-modal 
       v-model:show="showDetailModal" 
@@ -243,71 +224,6 @@
         </n-space>
       </n-form>
     </n-modal>
-
-    <!-- Hub / Skill Market Modal -->
-    <n-modal
-      v-model:show="showHubModal"
-      :title="t('skills.browseHub')"
-      preset="card"
-      style="width: 900px; max-height: 80vh;"
-    >
-      <n-space vertical>
-        <n-space align="center">
-          <n-input
-            v-model:value="hubSearchKeyword"
-            :placeholder="t('skills.searchHub')"
-            @keyup.enter="searchHub"
-            style="flex: 1;"
-          >
-            <template #prefix>
-              <SearchIcon />
-            </template>
-          </n-input>
-          <n-button type="primary" :loading="hubLoading" @click="searchHub">
-            {{ t('skills.search') }}
-          </n-button>
-        </n-space>
-
-        <n-spin :show="hubLoading">
-          <div v-if="hubSkills.length > 0" style="max-height: 500px; overflow-y: auto;">
-            <n-space vertical>
-              <n-card
-                v-for="item in hubSkills"
-                :key="item.source_id || item.name"
-                size="small"
-                hoverable
-                style="margin-bottom: 8px;"
-              >
-                <n-space justify="space-between" align="center">
-                  <n-space vertical size="small" style="flex: 1; min-width: 0;">
-                    <n-space align="center">
-                      <span style="font-weight: 600;">{{ item.name }}</span>
-                      <n-tag size="small" type="info">{{ t(`skills.hubSources.${item.source}`) || item.source }}</n-tag>
-                      <n-tag v-if="item.verified" size="small" type="success">Verified</n-tag>
-                      <n-tag v-if="item.stars > 0" size="small">⭐ {{ item.stars }}</n-tag>
-                      <n-tag v-if="item.installs > 0" size="small">⬇️ {{ item.installs }}</n-tag>
-                    </n-space>
-                    <n-text depth="2" style="font-size: 13px;">{{ item.description }}</n-text>
-                    <n-space v-if="item.tags && item.tags.length > 0">
-                      <n-tag v-for="tag in item.tags" :key="tag" size="tiny" type="default">{{ tag }}</n-tag>
-                    </n-space>
-                  </n-space>
-                  <n-button
-                    size="small"
-                    type="primary"
-                    :loading="installingHubSkill === item.source_id"
-                    @click="installHubSkill(item.source, item.source_id)"
-                  >
-                    {{ t('skills.install') }}
-                  </n-button>
-                </n-space>
-              </n-card>
-            </n-space>
-          </div>
-          <n-empty v-else-if="!hubLoading" :description="t('skills.noHubSkills')" />
-        </n-spin>
-      </n-space>
-    </n-modal>
   </div>
 </template>
 
@@ -315,7 +231,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, Search as SearchIcon, CreateOutline as EditIcon } from '@vicons/ionicons5'
+import { CloudUploadOutline as UploadIcon, Trash as DeleteIcon, CreateOutline as EditIcon } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
 import { uploadSkill, deleteSkill, getSkillStatistics, getSkillVersions, getSkillEvolutionHistory } from '@/api/skills'
 import type { UploadFileInfo } from 'naive-ui'
@@ -325,12 +241,9 @@ const message = useMessage()
 const skillsStore = useSkillsStore()
 
 // UI State
-const showInstallModal = ref(false)
 const showDetailModal = ref(false)
 const showEditModal = ref(false)
 
-const installUrl = ref('')
-const installing = ref(false)
 const uploadingCount = ref(0)
 const uploadSuccessFiles = ref<Set<string>>(new Set())
 const selectedSource = ref('')
@@ -339,15 +252,6 @@ const selectedSkill = ref<Skill | null>(null)
 // Edit State
 const editingSkill = ref<Skill | null>(null)
 const savingEdit = ref(false)
-
-
-
-// Hub State
-const showHubModal = ref(false)
-const hubSearchKeyword = ref('')
-const hubLoading = ref(false)
-const hubSkills = ref<HubSkill[]>([])
-const installingHubSkill = ref<string | null>(null)
 
 // Data
 const skillStats = ref<SkillStatistics[]>([])
@@ -387,19 +291,6 @@ interface EvolutionRecord {
   reason: string
   status: string
   timestamp: string
-}
-
-interface HubSkill {
-  name: string
-  description: string
-  tags: string[]
-  source: string
-  source_id: string
-  url: string
-  author: string
-  stars: number
-  installs: number
-  verified: boolean
 }
 
 // Computed
@@ -545,47 +436,6 @@ async function saveEdit() {
   }
 }
 
-// Hub functions
-async function searchHub(): Promise<void> {
-  hubLoading.value = true
-  try {
-    hubSkills.value = (await skillsStore.searchHubSkills(hubSearchKeyword.value)) || []
-  } catch (e) {
-    message.error(t('skills.failedToSearchHub'))
-    hubSkills.value = []
-  } finally {
-    hubLoading.value = false
-  }
-}
-
-async function openHubModal(): Promise<void> {
-  showHubModal.value = true
-  hubSearchKeyword.value = ''
-  await searchHub()
-}
-
-async function installHubSkill(source: string, sourceID: string): Promise<void> {
-  installingHubSkill.value = sourceID
-  try {
-    const result = await skillsStore.installHubSkill(source, sourceID)
-    if (!result) {
-      message.error(t('skills.failedToInstall'))
-    } else if (!result.ok) {
-      message.error(result.error || t('skills.failedToInstall'))
-    } else {
-      message.success(t('skills.installed'))
-      showHubModal.value = false
-      hubSearchKeyword.value = ''
-      hubSkills.value = []
-      await skillsStore.loadSkills()
-    }
-  } catch (e) {
-    message.error(t('skills.failedToInstall'))
-  } finally {
-    installingHubSkill.value = null
-  }
-}
-
 async function loadSkillDetail(skillName: string) {
   try {
     const [versions, evolution] = await Promise.all([
@@ -605,24 +455,6 @@ async function toggleSkill(id: string, enabled: boolean): Promise<void> {
     message.success(enabled ? t('skills.skillEnabled') : t('skills.skillDisabled'))
   } catch (e) {
     message.error(t('skills.failedToToggle'))
-  }
-}
-
-async function installSkill(): Promise<void> {
-  if (!installUrl.value.trim()) {
-    message.warning(t('skills.pleaseEnterUrl'))
-    return
-  }
-  installing.value = true
-  try {
-    await skillsStore.installSkill(installUrl.value)
-    message.success(t('skills.installed'))
-    showInstallModal.value = false
-    installUrl.value = ''
-  } catch (e) {
-    message.error(t('skills.failedToInstall'))
-  } finally {
-    installing.value = false
   }
 }
 

@@ -22,26 +22,9 @@ export const useSkillsStore = defineStore('skills', () => {
     if (skill) skill.enabled = enabled
   }
 
-  async function installSkill(url: string) {
-    await skillsApi.installSkill(url)
-    await loadSkills()
-  }
-
   async function updateSkill(id: string, data: Partial<Skill>) {
     await skillsApi.updateSkill(id, data)
     await loadSkills()
-  }
-
-  async function searchHubSkills(keyword?: string) {
-    return skillsApi.searchHubSkills(keyword)
-  }
-
-  async function installHubSkill(source: string, sourceID: string) {
-    const result = await skillsApi.installHubSkill(source, sourceID)
-    if (result && result.ok) {
-      await loadSkills()
-    }
-    return result
   }
 
   return {
@@ -49,9 +32,6 @@ export const useSkillsStore = defineStore('skills', () => {
     loading,
     loadSkills,
     toggleSkill,
-    installSkill,
     updateSkill,
-    searchHubSkills,
-    installHubSkill,
   }
 })
