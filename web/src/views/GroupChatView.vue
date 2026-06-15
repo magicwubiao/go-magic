@@ -544,14 +544,14 @@ onMounted(() => groupchatStore.loadRooms())
   flex-direction: column;
 }
 
-/* User messages - left aligned */
+/* User messages - right aligned */
 .message:not(.agent):not(.system) {
-  align-items: flex-start;
+  align-items: flex-end;
 }
 
-/* Agent messages - right aligned */
+/* Agent messages - left aligned */
 .message.agent {
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 /* System messages - center */
@@ -604,8 +604,12 @@ onMounted(() => groupchatStore.loadRooms())
   font-size: 13px;
 }
 
-.message.agent .msg-bubble-header {
+.message:not(.agent):not(.system) .msg-bubble-header {
   justify-content: flex-end;
+}
+
+.message.agent .msg-bubble-header {
+  justify-content: flex-start;
 }
 
 .msg-bubble-header strong {
