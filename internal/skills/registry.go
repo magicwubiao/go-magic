@@ -44,8 +44,7 @@ func NewRegistryManager() *RegistryManager {
 	rm := &RegistryManager{
 		maxConcurrent: 3,
 	}
-	// Add default registries
-	rm.AddRegistry(NewGitHubRegistry())
+	// Add default registries (GitHub registry removed)
 	rm.AddRegistry(NewClawHubRegistry())
 	return rm
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
-	"github.com/magicwubiao/go-magic/internal/skills/importer"
 )
 
 var (
@@ -59,7 +58,6 @@ func init() {
 	skillListCmd.Flags().BoolVarP(&listJSON, "json", "j", false, "Output in JSON format")
 
 	skillsCmd.AddCommand(skillListCmd)
-	skillListCmd.AddCommand(skillAvailableCmd)
 }
 
 func runSkillList(cmd *cobra.Command, args []string) {
@@ -263,81 +261,4 @@ func showSkillsLocations() {
 		fmt.Printf("\nCreate global skills directory:\n")
 		fmt.Printf("  mkdir -p %s\n", globalDir)
 	}
-}
-
-// ShowAvailableSkills shows skills available in a directory (for import preview)
-var skillAvailableCmd = &cobra.Command{
-	Use:   "available [path]",
-	Short: "List skills available in a directory",
-	Long: `List skills available in a directory for import.
-
-Shows all skill directories with SKILL.md files, including their format
-(OpenClaw, Hermes, or Magic) and basic metadata.
-
-Examples:
-  # List available skills in ./skills
-  magic skill available ./skills
-
-  # List in current directory
-  magic skill available`,
-	Args: cobra.RangeArgs(0, 1),
-	Run:  runSkillAvailable,
-}
-
-func runSkillAvailable(cmd *cobra.Command, args []string) {
-	path := "./skills"
-	if len(args) > 0 {
-		path = args[0]
-	}
-
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		fmt.Printf("Error: invalid path: %v\n", err)
-		os.Exit(1)
-	}
-
-	info, err := os.Stat(absPath)
-	if os.IsNotExist(err) {
-		fmt.Printf("Error: path not found: %s\n", absPath)
-		os.Exit(1)
-	}
-
-	if !info.IsDir() {
-		fmt.Printf("Error: %s is not a directory\n", absPath)
-		os.Exit(1)
-	}
-
-	imp := importer.NewImporter(nil)
-	skills, err := imp.ListAvailableSkills(absPath)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(skills) == 0 {
-		fmt.Printf("No skills found in %s\n", absPath)
-		return
-	}
-
-	fmt.Printf("Available skills in %s:\n\n", absPath)
-
-	for _, s := range skills {
-		formatBadge := s.Format
-		if s.Format == "openclaw" {
-			formatBadge = "openclaw"
-		} else if s.Format == "hermes" {
-			formatBadge = "hermes"
-		}
-
-		fmt.Printf("  • %s [%s]\n", s.Name, formatBadge)
-		if s.Description != "" {
-			desc := s.Description
-			if len(desc) > 60 {
-				desc = desc[:57] + "..."
-			}
-			fmt.Printf("    %s\n", desc)
-		}
-	}
-
-	fmt.Printf("\nImport with: magic skill import <path> --recursive\n")
 }

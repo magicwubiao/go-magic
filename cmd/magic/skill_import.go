@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
-	"github.com/magicwubiao/go-magic/internal/skills/importer"
 )
 
 var (
@@ -39,10 +38,7 @@ Examples:
   magic skill import ./path/to/skill --force
 
   # List available skills without importing
-  magic skill import ./skills --list
-
-  # Dry run to see what would be imported
-  magic skill import ./skills --dry-run`,
+  magic skill import ./skills --list`,
 	Args: cobra.ExactArgs(1),
 	Run:  runSkillImport,
 }
@@ -57,168 +53,201 @@ func init() {
 
 func runSkillImport(cmd *cobra.Command, args []string) {
 	path := args[0]
-
-	// Local path import only (GitHub import removed)
-	runLocalImport(path)
-}
-
-func runLocalImport(path string) {
-	// Resolve path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Printf("Error: invalid path: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Check if path exists
 	info, err := os.Stat(absPath)
 	if os.IsNotExist(err) {
 		fmt.Printf("Error: path not found: %s\n", absPath)
 		os.Exit(1)
 	}
 
-	// Create manager for duplicate checking
 	mgr, err := skills.NewManager()
 	if err != nil {
 		fmt.Printf("Warning: could not load skill manager: %v\n", err)
 		mgr = nil
 	}
 
-	imp := importer.NewImporter(mgr)
-
-	// Handle list-only mode
 	if importListOnly {
-		listSkills(imp, absPath, info.IsDir())
+		listLocalSkills(absPath, info.IsDir())
 		return
 	}
 
-	// Handle recursive import
 	if info.IsDir() && importRecursive {
-		importRecursiveSkills(imp, absPath)
+		importRecursiveSkills(mgr, absPath)
 		return
 	}
 
-	// Handle single skill import
 	if info.IsDir() {
-		importSingleSkill(imp, absPath)
+		importSingleSkill(mgr, absPath)
 		return
 	}
 
-	// File path - need to determine if it's a skill directory or file
 	fmt.Printf("Error: %s is a file, not a directory\n", absPath)
 	fmt.Println("Provide a directory path containing SKILL.md")
 	os.Exit(1)
 }
 
-func importSingleSkill(imp *importer.Importer, skillDir string) {
-	result := imp.Import(skillDir, importForce)
+func importSingleSkill(mgr *skills.Manager, skillDir string) {
+	skillName := filepath.Base(skillDir)
+	skillMdPath := filepath.Join(skillDir, "SKILL.md")
 
-	if result.Success {
-		fmt.Printf("✓ Successfully imported: %s\n", result.Name)
-		fmt.Printf("  Location: %s\n", result.Path)
-
-		if len(result.Warnings) > 0 {
-			fmt.Println("\nWarnings:")
-			for _, w := range result.Warnings {
-				fmt.Printf("  • %s\n", w)
-			}
-		}
-	} else {
-		fmt.Printf("✗ Failed to import: %v\n", result.Error)
+	if _, err := os.Stat(skillMdPath); os.IsNotExist(err) {
+		fmt.Printf("Error: %s does not contain SKILL.md\n", skillDir)
 		os.Exit(1)
 	}
+
+	destDir := filepath.Join(getGlobalSkillsDir(), skillName)
+	if _, err := os.Stat(destDir); err == nil && !importForce {
+		fmt.Printf("Error: skill '%s' already exists. Use --force to overwrite\n", skillName)
+		os.Exit(1)
+	}
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		fmt.Printf("Error: failed to create skill directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	files, _ := os.ReadDir(skillDir)
+	for _, f := range files {
+		src := filepath.Join(skillDir, f.Name())
+		dst := filepath.Join(destDir, f.Name())
+		data, _ := os.ReadFile(src)
+		os.WriteFile(dst, data, 0644)
+	}
+
+	fmt.Printf("Successfully imported: %s\n", skillName)
+	fmt.Printf("  Location: %s\n", destDir)
 }
 
-func importRecursiveSkills(imp *importer.Importer, skillsDir string) {
-	results := imp.ImportRecursive(skillsDir, importForce)
+func importRecursiveSkills(mgr *skills.Manager, skillsDir string) {
+	files, err := os.ReadDir(skillsDir)
+	if err != nil {
+		fmt.Printf("Error: failed to read directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	successCount := 0
 	failCount := 0
 
 	fmt.Printf("Importing skills from: %s\n\n", skillsDir)
 
-	for _, result := range results {
-		if result.Success {
-			successCount++
-			fmt.Printf("✓ %s\n", result.Name)
-		} else {
-			failCount++
-			fmt.Printf("✗ %s: %v\n", filepath.Base(result.Path), result.Error)
+	for _, f := range files {
+		if !f.IsDir() {
+			continue
 		}
+		skillDir := filepath.Join(skillsDir, f.Name())
+		skillMdPath := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillMdPath); os.IsNotExist(err) {
+			continue
+		}
+
+		destDir := filepath.Join(getGlobalSkillsDir(), f.Name())
+		if _, err := os.Stat(destDir); err == nil && !importForce {
+			fmt.Printf("Skipped %s: already exists (use --force to overwrite)\n", f.Name())
+			failCount++
+			continue
+		}
+
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			fmt.Printf("Failed %s: %v\n", f.Name(), err)
+			failCount++
+			continue
+		}
+
+		subFiles, _ := os.ReadDir(skillDir)
+		for _, sf := range subFiles {
+			src := filepath.Join(skillDir, sf.Name())
+			dst := filepath.Join(destDir, sf.Name())
+			data, _ := os.ReadFile(src)
+			os.WriteFile(dst, data, 0644)
+		}
+
+		fmt.Printf("Imported: %s\n", f.Name())
+		successCount++
 	}
 
 	fmt.Printf("\n--- Summary ---\n")
 	fmt.Printf("Success: %d\n", successCount)
-	fmt.Printf("Failed:  %d\n", failCount)
-
-	if failCount > 0 {
-		os.Exit(1)
-	}
+	fmt.Printf("Skipped: %d\n", failCount)
 }
 
-func listSkills(imp *importer.Importer, path string, isDir bool) {
-	var skills []*importer.AvailableSkill
-	var err error
-
-	if isDir {
-		skills, err = imp.ListAvailableSkills(path)
-	} else {
+func listLocalSkills(path string, isDir bool) {
+	if !isDir {
 		fmt.Printf("Error: --list requires a directory path\n")
 		os.Exit(1)
 	}
 
+	files, err := os.ReadDir(path)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if len(skills) == 0 {
+	var skillDirs []string
+	for _, f := range files {
+		if !f.IsDir() {
+			continue
+		}
+		skillMdPath := filepath.Join(path, f.Name(), "SKILL.md")
+		if _, err := os.Stat(skillMdPath); err == nil {
+			skillDirs = append(skillDirs, f.Name())
+		}
+	}
+
+	if len(skillDirs) == 0 {
 		fmt.Println("No skills found in directory")
 		return
 	}
 
-	fmt.Printf("Found %d skills:\n\n", len(skills))
+	fmt.Printf("Found %d skills:\n\n", len(skillDirs))
+	for _, name := range skillDirs {
+		skillMdPath := filepath.Join(path, name, "SKILL.md")
+		data, _ := os.ReadFile(skillMdPath)
+		format := detectSkillFormat(string(data))
 
-	for _, s := range skills {
-		format := strings.ToUpper(s.Format)
-		if s.Format == "openclaw" || s.Format == "hermes" {
-			format = s.Format
-		}
-		fmt.Printf("  • %s [%s]\n", s.Name, format)
-		if s.Description != "" {
-			desc := s.Description
+		fmt.Printf("  - %s [%s]\n", name, format)
+		desc := extractDescription(string(data))
+		if desc != "" {
 			if len(desc) > 60 {
 				desc = desc[:57] + "..."
 			}
 			fmt.Printf("    %s\n", desc)
 		}
-		fmt.Printf("    Path: %s\n\n", s.Path)
+		fmt.Printf("    Path: %s\n\n", filepath.Join(path, name))
 	}
 
 	fmt.Println("\nUse 'magic skill import <path>' to import")
 }
 
-func previewSkill(imp *importer.Importer, skillDir string) {
-	format, _ := importer.DetectFormat(skillDir)
-
-	fmt.Printf("  Format: %s\n", format)
-
-	// Try to read and display basic info
-	skillMdPath := filepath.Join(skillDir, "SKILL.md")
-	data, err := os.ReadFile(skillMdPath)
-	if err == nil {
-		frontmatter, content, _ := importer.ParseYAMLFrontmatter(string(data))
-		if frontmatter != nil {
-			if name, ok := frontmatter["name"].(string); ok {
-				fmt.Printf("  Name: %s\n", name)
-			}
-			if desc, ok := frontmatter["description"].(string); ok {
-				fmt.Printf("  Description: %s\n", desc)
-			}
-			if version, ok := frontmatter["version"].(string); ok {
-				fmt.Printf("  Version: %s\n", version)
-			}
-		}
-		_ = content // suppress unused warning
+func detectSkillFormat(content string) string {
+	if strings.Contains(content, "trigger_conditions:") || strings.Contains(content, "trigger_condition:") {
+		return "openclaw"
 	}
+	if strings.Contains(content, "hermes_version:") || strings.Contains(content, "hermes:") {
+		return "hermes"
+	}
+	return "generic"
+}
+
+func extractDescription(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "description:") {
+			desc := strings.TrimPrefix(line, "description:")
+			desc = strings.TrimSpace(desc)
+			desc = strings.Trim(desc, "\"")
+			return desc
+		}
+	}
+	return ""
+}
+
+func getGlobalSkillsDir() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".magic", "skills")
 }

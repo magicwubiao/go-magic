@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -238,6 +239,49 @@ func (r *ClawHubRegistry) DownloadAndInstall(ctx context.Context, slug, version,
 	// Flatten zip structure if there's a single top-level directory
 	if err := flattenZipStructure(targetDir); err != nil {
 		// Non-fatal: continue with original structure
+	}
+
+	return nil
+}
+
+// extractZip extracts a zip file to the target directory
+func extractZip(zipPath, targetDir string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		filePath := filepath.Join(targetDir, file.Name)
+
+		if file.FileInfo().IsDir() {
+			os.MkdirAll(filePath, file.Mode())
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return err
+		}
+
+		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			return err
+		}
+
+		srcFile, err := file.Open()
+		if err != nil {
+			dstFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(dstFile, srcFile)
+		srcFile.Close()
+		dstFile.Close()
+
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
