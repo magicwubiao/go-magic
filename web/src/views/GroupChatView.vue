@@ -131,7 +131,7 @@
               </n-space>
               <n-space :wrap="false">
                 <n-button size="tiny" @click="editAgent(a)">{{ t('common.edit') }}</n-button>
-                <n-button size="tiny" type="error" @click="groupchatStore.removeAgent(a.id)">{{ t('common.remove') }}</n-button>
+                <n-button size="tiny" type="error" @click="handleRemoveAgent(a)">{{ t('common.remove') }}</n-button>
               </n-space>
             </n-space>
           </n-list-item>
@@ -503,6 +503,13 @@ async function handleDeleteRoom(roomId: string) {
   if (!confirm(t('groupchat.confirmDeleteRoom'))) return
   await groupchatStore.deleteRoom(roomId)
   message.success(t('groupchat.roomDeleted'))
+}
+
+async function handleRemoveAgent(agent: any) {
+  const confirmed = await message.warning(t('groupchat.confirmRemoveAgent', { name: agent.name }), { positiveText: t('common.confirm'), negativeText: t('common.cancel'), closeable: false })
+  if (!confirmed) return
+  await groupchatStore.removeAgent(agent.id)
+  message.success(t('groupchat.agentRemoved'))
 }
 
 function insertMention(name: string) {

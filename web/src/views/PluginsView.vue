@@ -190,6 +190,9 @@ async function install() {
 }
 
 async function deletePlugin(id: string) {
+  const plugin = pluginsStore.plugins.find(p => p.id === id)
+  const confirmed = await message.warning(t('plugins.confirmDelete', { name: plugin?.name || id }), { positiveText: t('common.confirm'), negativeText: t('common.cancel'), closeable: false })
+  if (!confirmed) return
   await pluginsStore.deletePlugin(id)
   message.success(t('plugins.deleted'))
 }
