@@ -62,17 +62,17 @@
               v-for="(model, index) in providerModels"
               :key="model"
               class="model-card"
-              :class="{ current: index === 0 }"
+              :class="{ current: isCurrentProvider && index === 0 }"
             >
               <div class="model-info">
                 <span class="model-name">{{ model }}</span>
-                <n-tag v-if="index === 0" size="small" type="success">
+                <n-tag v-if="isCurrentProvider && index === 0" size="small" type="success">
                   {{ t('modelsProviders.currentModel') }}
                 </n-tag>
               </div>
               <div class="model-actions">
                 <n-button
-                  v-if="index !== 0"
+                  v-if="!isCurrentProvider || index !== 0"
                   size="tiny"
                   type="primary"
                   @click="setCurrentModel(model)"
@@ -211,6 +211,11 @@ const availableProviders = [
 // 当前选中的供应商
 const selectedProvider = ref('')
 
+// 当前选中的供应商是否是当前供应商
+const isCurrentProvider = computed(() => {
+  return selectedProvider.value === currentConfigProvider.value
+})
+
 // 当前选中供应商的模型列表
 const providerModels = computed(() => {
   const providers = configStore.config?.providers || {}
@@ -272,20 +277,39 @@ async function deleteProvider(name: string) {
 }
 
 async function setCurrentModel(model: string) {
-  // 将模型移到数组第一位
-  const providers = { ...configStore.config?.providers }
-  const currentModels = providers[selectedProvider.value]?.models || []
-  const newModels = [model, ...currentModels.filter(m => m !== model)]
-  providers[selectedProvider.value] = {
-    ...providers[selectedProvider.value],
-    models: newModels
+  // 如果不在当前供应商，先切换到该供应商
+  if (selectedProvider.value !== currentConfigProvider.value) {
+    const providers = configStore.config?.providers || {}
+    const currentModels = providers[selectedProvider.value]?.models || []
+    const newModels = [model, ...currentModels.filter(m => m !== model)]
+    // 切换供应商并设置当前模型
+    await configStore.updateConfig({
+      provider: selectedProvider.value,
+      model: model,
+      providers: {
+        ...providers,
+        [selectedProvider.value]: {
+          ...providers[selectedProvider.value],
+          models: newModels
+        }
+      }
+    })
+  } else {
+    // 在当前供应商，只需更新模型顺序
+    const providers = { ...configStore.config?.providers }
+    const currentModels = providers[selectedProvider.value]?.models || []
+    const newModels = [model, ...currentModels.filter(m => m !== model)]
+    await configStore.updateConfig({
+      model: model,
+      providers: {
+        ...providers,
+        [selectedProvider.value]: {
+          ...providers[selectedProvider.value],
+          models: newModels
+        }
+      }
+    })
   }
-  // 如果这是当前供应商，也更新顶层的 model 字段
-  const updates: any = { providers }
-  if (selectedProvider.value === currentConfigProvider.value) {
-    updates.model = model
-  }
-  await configStore.updateConfig(updates)
   await configStore.loadConfig()
 }
 
