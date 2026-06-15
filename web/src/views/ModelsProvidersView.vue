@@ -34,14 +34,19 @@
               >
                 {{ t('common.edit') }}
               </n-button>
-              <n-button
-                size="tiny"
-                type="error"
-                ghost
-                @click.stop="deleteProvider(prov.name)"
-              >
-                {{ t('common.delete') }}
-              </n-button>
+              <n-popconfirm @positive-click="deleteProvider(prov.name)">
+                <template #trigger>
+                  <n-button
+                    size="tiny"
+                    type="error"
+                    ghost
+                    @click.stop
+                  >
+                    {{ t('common.delete') }}
+                  </n-button>
+                </template>
+                {{ t('modelsProviders.confirmDeleteProvider', { name: prov.name }) }}
+              </n-popconfirm>
             </div>
           </n-list-item>
         </n-list>

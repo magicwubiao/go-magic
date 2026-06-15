@@ -76,7 +76,12 @@
                 <n-space>
                   <n-button v-if="!plugin.enabled" size="small" type="primary" @click="pluginsStore.enablePlugin(plugin.id)">{{ t('common.enable') }}</n-button>
                   <n-button v-else size="small" @click="pluginsStore.disablePlugin(plugin.id)">{{ t('common.disable') }}</n-button>
-                  <n-button size="small" type="error" @click="deletePlugin(plugin.id)">{{ t('common.delete') }}</n-button>
+                  <n-popconfirm @positive-click="deletePlugin(plugin.id)">
+                    <template #trigger>
+                      <n-button size="small" type="error">{{ t('common.delete') }}</n-button>
+                    </template>
+                    {{ t('plugins.confirmDelete', { name: plugin.name }) }}
+                  </n-popconfirm>
                 </n-space>
               </template>
             </n-thing>
@@ -190,8 +195,6 @@ async function install() {
 }
 
 async function deletePlugin(id: string) {
-  const plugin = pluginsStore.plugins.find(p => p.id === id)
-  if (!confirm(t('plugins.confirmDelete', { name: plugin?.name || id }))) return
   await pluginsStore.deletePlugin(id)
   message.success(t('plugins.deleted'))
 }

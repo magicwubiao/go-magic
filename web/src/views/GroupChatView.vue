@@ -18,18 +18,23 @@
             <br />
             <n-text depth="3" style="font-size: 12px;">{{ room.agent_ids?.length || 0 }} {{ t('groupchat.agents') }}</n-text>
           </div>
-          <n-button
-            size="tiny"
-            text
-            type="error"
-            @click.stop="handleDeleteRoom(room.id)"
-            style="opacity: 0; transition: opacity 0.2s;"
-            class="room-delete-btn"
-          >
-            <template #icon>
-              <n-icon><close-outline /></n-icon>
+          <n-popconfirm @positive-click="handleDeleteRoom(room.id)">
+            <template #trigger>
+              <n-button
+                size="tiny"
+                text
+                type="error"
+                @click.stop
+                style="opacity: 0; transition: opacity 0.2s;"
+                class="room-delete-btn"
+              >
+                <template #icon>
+                  <n-icon><close-outline /></n-icon>
+                </template>
+              </n-button>
             </template>
-          </n-button>
+            {{ t('groupchat.confirmDeleteRoom') }}
+          </n-popconfirm>
         </n-space>
       </div>
     </div>
@@ -131,7 +136,12 @@
               </n-space>
               <n-space :wrap="false">
                 <n-button size="tiny" @click="editAgent(a)">{{ t('common.edit') }}</n-button>
-                <n-button size="tiny" type="error" @click="handleRemoveAgent(a)">{{ t('common.remove') }}</n-button>
+                <n-popconfirm @positive-click="handleRemoveAgent(a)">
+                  <template #trigger>
+                    <n-button size="tiny" type="error">{{ t('common.remove') }}</n-button>
+                  </template>
+                  {{ t('groupchat.confirmRemoveAgent', { name: a.name }) }}
+                </n-popconfirm>
               </n-space>
             </n-space>
           </n-list-item>
@@ -500,13 +510,11 @@ async function addAgent() {
 }
 
 async function handleDeleteRoom(roomId: string) {
-  if (!confirm(t('groupchat.confirmDeleteRoom'))) return
   await groupchatStore.deleteRoom(roomId)
   message.success(t('groupchat.roomDeleted'))
 }
 
 async function handleRemoveAgent(agent: any) {
-  if (!confirm(t('groupchat.confirmRemoveAgent', { name: agent.name }))) return
   await groupchatStore.removeAgent(agent.id)
   message.success(t('groupchat.agentRemoved'))
 }
