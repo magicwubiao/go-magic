@@ -52,7 +52,7 @@
       <div class="models-panel">
         <template v-if="selectedProvider">
           <div class="panel-header">
-            <h3>{{ selectedProvider }} - {{ t('modelsProviders.models') }}</h3>
+            <h3>{{ providerModels.length > 0 ? selectedProvider + ' - ' + t('modelsProviders.models') : t('modelsProviders.models') }}</h3>
           </div>
 
           <n-empty v-if="!providerModels.length" :description="t('modelsProviders.noModels')" />
