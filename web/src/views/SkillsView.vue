@@ -38,7 +38,7 @@
       </n-card>
 
       <!-- Skills by Source (Collapsible Panels) -->
-      <n-collapse default-expanded-names="['builtin', 'local', 'global', 'registry', 'auto']">
+      <n-collapse v-model:expanded-names="expandedSources">
         <n-collapse-item v-for="source in displaySources" :key="source" :name="source">
           <template #header>
             <n-space align="center">
@@ -326,6 +326,7 @@ const showEditModal = ref(false)
 const showHubModal = ref(false)
 const selectedSkill = ref<Skill | null>(null)
 const performingAction = ref<string | null>(null)
+const expandedSources = ref(['builtin', 'local', 'global', 'registry', 'auto'])
 
 // Edit State
 const editingSkill = ref<Skill | null>(null)
