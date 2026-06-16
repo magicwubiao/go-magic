@@ -70,10 +70,6 @@ type CortexConfig struct {
 	// Cognition settings
 	PlanningMaxSteps int           `json:"planning_max_steps"`
 	PlanningTimeout  time.Duration `json:"planning_timeout"`
-
-	// Skills settings
-	AutoSkillCreation bool `json:"auto_skill_creation"`
-	MinPatternFreq    int  `json:"min_pattern_frequency"`
 }
 
 // PluginConfig contains plugin system configuration
@@ -207,8 +203,6 @@ func DefaultConfig() *Config {
 		PerceptionMaxHistory:          100,
 		PlanningMaxSteps:              50,
 		PlanningTimeout:               30 * time.Second,
-		AutoSkillCreation:             true,
-		MinPatternFreq:                2,
 	}
 
 	return &Config{

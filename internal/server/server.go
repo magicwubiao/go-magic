@@ -253,16 +253,9 @@ func NewServer(dbPath string) *Server {
 	registry.RegisterAll(workDir)
 
 	// Create skills manager with config
-	var skillCfg skills.ManagerConfig
-	if cfg != nil {
-		skillCfg.AutoSkillCreation = cfg.Skills.AutoSkillCreation
-		skillCfg.MinPatternFreq = cfg.Skills.MinPatternFreq
-		if skillCfg.MinPatternFreq == 0 {
-			skillCfg.MinPatternFreq = 2
-		}
+	skillCfg := skills.ManagerConfig{
+		BuiltinDir: filepath.Join(magicHome, "builtin_skills"),
 	}
-	// Always load built-in skills from embedded FS (via filesystem fallback)
-	skillCfg.BuiltinDir = filepath.Join(magicHome, "builtin_skills")
 	skillMgr, _ := skills.NewManagerWithConfig(&skillCfg)
 
 	// Register skill invoke tool with the tool registry

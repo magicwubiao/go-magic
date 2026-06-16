@@ -23,33 +23,29 @@ import (
 
 // Manager manages skill loading and registration
 type Manager struct {
-	mu                sync.RWMutex
-	searchDirs        []string
-	builtinDir        string
-	skills            map[string]*Skill
-	toolNames         []string              // Cached tool names from registry
-	registryURL       string                // ClawHub or GitHub registry URL
-	hubLock           *HubLock              // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest   *BundledManifest      // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills    *DisabledSkillsConfig // 禁用技能配置
-	skillsDir         string                // 技能目录路径 (~/.magic/skills)
-	hubDir            string                // Hub 目录路径 (~/.magic/skills/.hub)
-	autoSkillsDir     string                // 自动技能根目录 (.../auto_skills)
-	autoSkillCreation bool                  // 是否自动创建技能
-	minPatternFreq    int                   // 最小模式频率阈值
+	mu              sync.RWMutex
+	searchDirs      []string
+	builtinDir      string
+	skills          map[string]*Skill
+	toolNames       []string              // Cached tool names from registry
+	registryURL     string                // ClawHub or GitHub registry URL
+	hubLock         *HubLock              // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest *BundledManifest      // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills  *DisabledSkillsConfig // 禁用技能配置
+	skillsDir       string                // 技能目录路径 (~/.magic/skills)
+	hubDir          string                // Hub 目录路径 (~/.magic/skills/.hub)
+	autoSkillsDir   string                // 自动技能根目录 (.../auto_skills)
 	// Registry manager for hub search/install
 	registryMgr *RegistryManager
 }
 
 // ManagerConfig 配置管理器
 type ManagerConfig struct {
-	SearchDirs        []string // 搜索目录列表
-	BuiltinDir        string   // 内置技能目录
-	RegistryURL       string   // 技能注册表 URL
-	ToolNames         []string // 可用工具名称列表（用于技能验证）
-	AutoSkillCreation bool     // 是否自动创建技能
-	MinPatternFreq    int      // 最小模式频率阈值
-	AutoSkillsDir     string   // 自动技能目录路径（三态管理根目录）
+	SearchDirs    []string // 搜索目录列表
+	BuiltinDir    string   // 内置技能目录
+	RegistryURL   string   // 技能注册表 URL
+	ToolNames     []string // 可用工具名称列表（用于技能验证）
+	AutoSkillsDir string   // 自动技能目录路径（三态管理根目录）
 }
 
 // NewManager creates a new skill manager with default configuration
@@ -99,18 +95,16 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 	}
 
 	m := &Manager{
-		searchDirs:        config.SearchDirs,
-		builtinDir:        config.BuiltinDir,
-		registryURL:       config.RegistryURL,
-		toolNames:         config.ToolNames,
-		skills:            make(map[string]*Skill),
-		skillsDir:         skillsDir,
-		hubDir:            filepath.Join(skillsDir, ".hub"),
-		autoSkillsDir:     autoDir,
-		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
-		autoSkillCreation: config.AutoSkillCreation,
-		minPatternFreq:    config.MinPatternFreq,
-		registryMgr:       NewRegistryManager(),
+		searchDirs:     config.SearchDirs,
+		builtinDir:     config.BuiltinDir,
+		registryURL:    config.RegistryURL,
+		toolNames:      config.ToolNames,
+		skills:         make(map[string]*Skill),
+		skillsDir:      skillsDir,
+		hubDir:         filepath.Join(skillsDir, ".hub"),
+		autoSkillsDir:  autoDir,
+		disabledSkills: &DisabledSkillsConfig{Platform: make(map[string][]string)},
+		registryMgr:    NewRegistryManager(),
 	}
 
 	// 创建 Hub 目录
