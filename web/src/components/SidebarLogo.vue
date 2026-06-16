@@ -15,7 +15,7 @@ defineProps<{
 .sidebar-logo {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 14px 16px;
   border-bottom: 1px solid #e0e0e0;
 }
