@@ -585,7 +585,6 @@ watch(() => chatStore.toolCalls.length, scrollToBottom)
 
 onMounted(async () => {
   await chatStore.loadSessions()
-  await chatStore.loadCommands()
 })
 </script>
 
