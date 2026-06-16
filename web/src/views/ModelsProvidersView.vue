@@ -267,8 +267,6 @@ async function handleSaveProvider() {
 }
 
 async function deleteProvider(name: string) {
-  if (!confirm(t('modelsProviders.confirmDeleteProvider', { name }))) return
-  
   await providersApi.deleteProvider(name)
   await configStore.loadConfig()
   // Update selected provider
