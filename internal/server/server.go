@@ -4270,13 +4270,21 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 				"options": []string{"openai", "anthropic", "deepseek", "ollama", "gemini", "groq", "mistral", "cohere", "custom"},
 			},
 			"model": map[string]interface{}{
-				"type":    "string",
-				"default": "deepseek-chat",
+				"type":       "string",
+				"default":    "deepseek-chat",
+				"deprecated": true,
 			},
-			"cortex_enabled": map[string]interface{}{
+			"cortex.enabled": map[string]interface{}{
 				"type":     "boolean",
-				"default":  false,
+				"default":  true,
 				"category": "cortex",
+			},
+			"cortex.skill_min_pattern_freq": map[string]interface{}{
+				"type":     "number",
+				"default":  3,
+				"category": "cortex",
+				"min":      1,
+				"max":      10,
 			},
 			"secret_redaction": map[string]interface{}{
 				"type":    "boolean",

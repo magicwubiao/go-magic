@@ -22,23 +22,23 @@ var ErrNoConfig = fmt.Errorf("config file not found")
 
 // Config represents the application configuration
 type Config struct {
-	Profile       string                    `json:"profile"`
-	MagicHome     string                    `json:"magic_home"`
-	WorkingDir    string                    `json:"working_dir,omitempty"`
-	Provider      string                    `json:"provider"`
-	Model         string                    `json:"model"` // Deprecated: Use Providers[].Models[0] instead
-	Providers     map[string]ProviderConfig `json:"providers"`
-	Tools         ToolsConfig               `json:"tools"`
-	Skills        SkillsConfig              `json:"skills"`
-	Plugins       PluginsConfig             `json:"plugins"`
-	Memory        MemoryConfig              `json:"memory"`
-	Gateway       GatewayConfig             `json:"gateway"`
-	CortexEnabled bool                      `json:"cortex_enabled,omitempty"`
-	MCP           *MCPConfig                `json:"mcp,omitempty"`
-	SubAgent      *SubAgentConfig           `json:"subagent,omitempty"`
-	Voice         *VoiceConfig              `json:"voice,omitempty"`
-	Privacy       *privacy.Config           `json:"privacy,omitempty"`
-	Display       DisplayConfig             `json:"display,omitempty"`
+	Profile    string                    `json:"profile"`
+	MagicHome  string                    `json:"magic_home"`
+	WorkingDir string                    `json:"working_dir,omitempty"`
+	Provider   string                    `json:"provider"`
+	Model      string                    `json:"model"` // Deprecated: Use Providers[].Models[0] instead
+	Providers  map[string]ProviderConfig `json:"providers"`
+	Tools      ToolsConfig               `json:"tools"`
+	Skills     SkillsConfig              `json:"skills"`
+	Plugins    PluginsConfig             `json:"plugins"`
+	Memory     MemoryConfig              `json:"memory"`
+	Gateway    GatewayConfig             `json:"gateway"`
+	Cortex     CortexConfig              `json:"cortex"`
+	MCP        *MCPConfig                `json:"mcp,omitempty"`
+	SubAgent   *SubAgentConfig           `json:"subagent,omitempty"`
+	Voice      *VoiceConfig              `json:"voice,omitempty"`
+	Privacy    *privacy.Config           `json:"privacy,omitempty"`
+	Display    DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"`            // chat, plan, act
@@ -69,6 +69,12 @@ func (c *Config) GetCurrentModel() string {
 // MemoryConfig represents memory configuration
 type MemoryConfig struct {
 	Enabled bool `json:"enabled"`
+}
+
+// CortexConfig represents Cortex AI configuration
+type CortexConfig struct {
+	Enabled             bool `json:"enabled"`                // Enable/disable Cortex system
+	SkillMinPatternFreq int  `json:"skill_min_pattern_freq"` // Min frequency for skill pattern detection
 }
 
 // DisplayConfig represents display/UI configuration
@@ -232,13 +238,16 @@ func Load() (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Profile:       "default",
-		MagicHome:     "~/.magic",
-		WorkingDir:    getDefaultWorkingDir(),
-		Provider:      "deepseek",
-		Model:         "deepseek-chat",
-		Mode:          "chat",
-		CortexEnabled: true,
+		Profile:    "default",
+		MagicHome:  "~/.magic",
+		WorkingDir: getDefaultWorkingDir(),
+		Provider:   "deepseek",
+		Model:      "deepseek-chat",
+		Mode:       "chat",
+		Cortex: CortexConfig{
+			Enabled:             true,
+			SkillMinPatternFreq: 3,
+		},
 		Memory: MemoryConfig{
 			Enabled: true,
 		},

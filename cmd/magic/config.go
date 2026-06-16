@@ -419,7 +419,7 @@ func runConfigList(cmd *cobra.Command, args []string) {
 
 	// Show Cortex
 	fmt.Printf("\nCortex AI:\n")
-	fmt.Printf("  Enabled: %v\n", cfg.CortexEnabled)
+	fmt.Printf("  Enabled: %v\n", cfg.Cortex.Enabled)
 }
 
 func runConfigPath(cmd *cobra.Command, args []string) {

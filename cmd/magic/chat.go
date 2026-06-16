@@ -166,7 +166,7 @@ OUTPUT FORMAT:
 - Keep responses focused and practical
 - For errors, explain the cause and provide a fix`
 
-	if cfg.CortexEnabled {
+	if cfg.Cortex.Enabled {
 		prompt += "\n\nMEMORY: You have access to persistent memory via the cortex system. Use it to remember important context across sessions."
 	}
 
@@ -321,7 +321,7 @@ OUTPUT FORMAT:
 - Include file paths for created/modified files
 - After tool calls, always summarize the results for the user`
 
-	if cfg.CortexEnabled {
+	if cfg.Cortex.Enabled {
 		prompt += "\n\nMEMORY: You have access to persistent memory via the cortex system. Use it to remember important context across sessions."
 	}
 

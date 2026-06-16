@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/cognition"
 	"github.com/magicwubiao/go-magic/internal/execution"
@@ -31,17 +32,18 @@ import (
 type Manager struct {
 	baseDir  string
 	provider provider.Provider // For LLM features
+	enabled  bool              // Whether Cortex system is enabled
 
 	// Core systems
-	Snapshot     *memory.SnapshotManager     // System 4: Frozen snapshot memory
-	Trigger      *trigger.MessageTrigger     // System 1 + 2: Nudge mechanism
-	Review       *review.BackgroundReview    // System 3: Background review
-	Perception   *perception.Parser          // Layer 1: Intent classification
-	Cognition    *cognition.Planner          // Layer 2: Planning and decision making
-	LLMPlanner   *cognition.LLMPlanner       // LLM-based planning (NEW)
-	Execution    *execution.Manager          // Layer 3: Checkpoint + Resume
-	FTSMemory    *memory.FTSStore            // System 5: FTS full-text search
-	SkillCreator *skills.EnhancedAutoCreator // System 6: Auto skill evolution
+	Snapshot     *memory.SnapshotManager          // System 4: Frozen snapshot memory
+	Trigger      *trigger.MessageTrigger          // System 1 + 2: Nudge mechanism
+	Review       *review.EnhancedBackgroundReview // System 3: Background review
+	Perception   *perception.Parser               // Layer 1: Intent classification
+	Cognition    *cognition.Planner               // Layer 2: Planning and decision making
+	LLMPlanner   *cognition.LLMPlanner            // LLM-based planning (NEW)
+	Execution    *execution.Manager               // Layer 3: Checkpoint + Resume
+	FTSMemory    *memory.FTSStore                 // System 5: FTS full-text search
+	SkillCreator *skills.EnhancedAutoCreator      // System 6: Auto skill evolution
 
 	// NEW: Hermes-inspired systems
 	Soul              *SoulManager       // System personality (SOUL.md)
@@ -62,15 +64,43 @@ type Manager struct {
 	}
 }
 
+// ManagerConfig holds configuration for Cortex systems
+type ManagerConfig struct {
+	// Master switch
+	Enabled bool // Enable/disable Cortex system
+
+	// Review settings
+	ReviewInterval      time.Duration
+	ReviewEnabled       bool
+	SkillMinPatternFreq int // Minimum frequency for skill pattern detection
+
+	// Perception settings
+	PerceptionConfidenceThreshold float64
+	PerceptionMaxHistory          int
+
+	// Cognition settings
+	PlanningMaxSteps int
+	PlanningTimeout  time.Duration
+
+	// Trigger settings
+	NudgeInterval time.Duration
+	NudgeEnabled  bool
+}
+
 // NewManager creates a new Cortex integration manager
 // Initializes all Cortex systems including Hermes Agent-inspired features
 func NewManager(baseDir string, prov provider.Provider) *Manager {
-	return NewManagerWithProfile(baseDir, prov, "")
+	return NewManagerWithProfileAndConfig(baseDir, prov, "", nil)
 }
 
 // NewManagerWithProfile creates a new Cortex manager with specific profile
 // The profile parameter specifies which profile's user.md to load
 func NewManagerWithProfile(baseDir string, prov provider.Provider, profile string) *Manager {
+	return NewManagerWithProfileAndConfig(baseDir, prov, profile, nil)
+}
+
+// NewManagerWithProfileAndConfig creates a new Cortex manager with profile and custom config
+func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, profile string, config *ManagerConfig) *Manager {
 	cortexDir := filepath.Join(baseDir, "cortex")
 
 	// Determine UserProfile path based on profile
@@ -79,24 +109,58 @@ func NewManagerWithProfile(baseDir string, prov provider.Provider, profile strin
 		userProfileDir = filepath.Join(baseDir, "profiles", profile)
 	}
 
-	mgr := &Manager{
-		baseDir:      baseDir,
-		provider:     prov,
-		Snapshot:     memory.NewSnapshotManager(baseDir),
-		Trigger:      trigger.NewMessageTrigger(),
-		Review:       review.NewBackgroundReview(filepath.Join(cortexDir, "reviews")),
-		Perception:   perception.NewParser(),
-		Cognition:    cognition.NewPlanner(),
-		Execution:    execution.NewManager(baseDir),
-		SkillCreator: skills.NewEnhancedAutoCreator(baseDir),
-
-		// NEW: Hermes-inspired systems
-		Soul:              NewSoulManager(cortexDir),
-		UserProfile:       NewUserProfile(userProfileDir),
-		PromptCache:       nil, // Initialized in Start()
-		ContextCompressor: NewContextCompressor(prov, 0, 0),
-		TrajectoryStore:   nil, // Initialized in Start()
+	// Apply defaults for nil config
+	if config == nil {
+		config = &ManagerConfig{
+			Enabled:                       true,
+			ReviewInterval:                30 * time.Minute,
+			ReviewEnabled:                 true,
+			SkillMinPatternFreq:           3,
+			PerceptionConfidenceThreshold: 0.7,
+			PerceptionMaxHistory:          100,
+			PlanningMaxSteps:              50,
+			PlanningTimeout:               30 * time.Second,
+			NudgeInterval:                 15 * time.Minute,
+			NudgeEnabled:                  true,
+		}
 	}
+
+	// Create manager with basic fields
+	mgr := &Manager{
+		baseDir:  baseDir,
+		provider: prov,
+		enabled:  config.Enabled,
+	}
+
+	// Skip cortex system initialization if disabled
+	if !config.Enabled {
+		return mgr
+	}
+
+	// Create review config from ManagerConfig
+	reviewConfig := &review.ReviewConfig{
+		ReviewInterval:   config.ReviewInterval,
+		MinPatternFreq:   config.SkillMinPatternFreq,
+		MaxPatterns:      100,
+		AutoSaveEnabled:  true,
+		SnapshotInterval: 5,
+	}
+
+	// Initialize all Cortex systems
+	mgr.Snapshot = memory.NewSnapshotManager(baseDir)
+	mgr.Trigger = trigger.NewMessageTrigger()
+	mgr.Review = review.NewEnhancedBackgroundReviewWithConfig(filepath.Join(cortexDir, "reviews"), reviewConfig)
+	mgr.Perception = perception.NewParser()
+	mgr.Cognition = cognition.NewPlanner()
+	mgr.Execution = execution.NewManager(baseDir)
+	mgr.SkillCreator = skills.NewEnhancedAutoCreator(baseDir)
+
+	// NEW: Hermes-inspired systems
+	mgr.Soul = NewSoulManager(cortexDir)
+	mgr.UserProfile = NewUserProfile(userProfileDir)
+	mgr.PromptCache = nil // Initialized in Start()
+	mgr.ContextCompressor = NewContextCompressor(prov, 0, 0)
+	mgr.TrajectoryStore = nil // Initialized in Start()
 
 	// Initialize LLM Planner if provider is available
 	if prov != nil {
@@ -109,13 +173,28 @@ func NewManagerWithProfile(baseDir string, prov provider.Provider, profile strin
 	return mgr
 }
 
+// Deprecated: Use NewManagerWithProfileAndConfig instead
+func NewManagerWithConfig(baseDir string, prov provider.Provider, config *ManagerConfig) *Manager {
+	return NewManagerWithProfileAndConfig(baseDir, prov, "", config)
+}
+
+// IsEnabled returns whether the Cortex system is enabled
+func (m *Manager) IsEnabled() bool {
+	return m.enabled
+}
+
 // setupConnections wires the six systems together
 func (m *Manager) setupConnections() {
+	// Skip if cortex is disabled
+	if !m.enabled {
+		return
+	}
+
 	// Trigger -> Review: Nudge triggers background review
 	m.Trigger.RegisterNudgeHandler(func() {
 		turnCount := m.Trigger.GetTurnCount()
 		// In a real implementation, we would pass actual tool call history
-		m.Review.TriggerNudgeReview(turnCount, []string{})
+		m.Review.TriggerNudgeReview(turnCount, []string{}, nil)
 	})
 }
 
@@ -130,6 +209,11 @@ func (m *Manager) BindSkillsManager(sm *skills.Manager) {
 // Start initializes all Cortex systems
 // Systems started in order of dependency:
 func (m *Manager) Start() error {
+	// Skip if cortex is disabled
+	if !m.enabled {
+		return nil
+	}
+
 	cortexDir := filepath.Join(m.baseDir, "cortex")
 
 	// System 4: Load frozen snapshot from disk

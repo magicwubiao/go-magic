@@ -48,6 +48,9 @@ type Config struct {
 
 // CortexConfig contains Cortex agent configuration
 type CortexConfig struct {
+	// Enable/disable Cortex system
+	Enabled bool `json:"enabled"` // Master switch for Cortex system
+
 	// Memory settings
 	MemoryLimit int `json:"memory_limit_mb"` // Memory limit in MB
 
@@ -58,6 +61,9 @@ type CortexConfig struct {
 	// Review settings
 	ReviewInterval time.Duration `json:"review_interval"` // Background review interval
 	ReviewEnabled  bool          `json:"review_enabled"`  // Enable/disable reviews
+
+	// Skill auto-creation settings
+	SkillMinPatternFreq int `json:"skill_min_pattern_freq"` // Min frequency to detect skill pattern (default: 3)
 
 	// FTS settings
 	EnableFTS bool `json:"enable_fts"` // Enable full-text search
@@ -192,11 +198,13 @@ type ConfigManager struct {
 func DefaultConfig() *Config {
 	// Create default core config (shared between all agents)
 	defaultCore := CortexConfig{
+		Enabled:                       true,
 		MemoryLimit:                   1024,
 		NudgeInterval:                 15 * time.Minute,
 		NudgeEnabled:                  true,
 		ReviewInterval:                30 * time.Minute,
 		ReviewEnabled:                 true,
+		SkillMinPatternFreq:           3,
 		EnableFTS:                     true,
 		FTSCache:                      true,
 		PerceptionConfidenceThreshold: 0.7,

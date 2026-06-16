@@ -20,6 +20,12 @@ export interface Config {
   provider_config?: Record<string, unknown>
   providers?: Record<string, ProviderInfo>
   secret_redaction?: boolean
+  cortex?: CortexConfig
+}
+
+export interface CortexConfig {
+  enabled: boolean
+  skill_min_pattern_freq?: number
 }
 
 export async function getConfig(): Promise<Config> {

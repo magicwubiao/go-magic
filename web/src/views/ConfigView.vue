@@ -55,18 +55,19 @@
         </n-form>
       </n-tab-pane>
 
-      <!-- Skills Tab -->
-      <n-tab-pane name="skills" :tab="t('config.skills')">
+      <!-- Cortex Tab -->
+      <n-tab-pane name="cortex" :tab="t('config.cortex')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item :label="t('config.autoSkillCreation')">
-            <n-switch v-model:value="skillsForm.auto_skill_creation" />
-            <template #feedback>{{ t('config.autoSkillCreationHint') }}</template>
+          <n-form-item :label="t('config.cortexEnabled')">
+            <n-switch v-model:value="cortexForm.enabled" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.cortexEnabledHint') }}</span>
           </n-form-item>
-          <n-form-item :label="t('config.minPatternFrequency')">
-            <n-input-number v-model:value="skillsForm.min_pattern_frequency" :min="1" :max="10" />
+          <n-form-item :label="t('config.cortexSkillPatternFreq')">
+            <n-input-number v-model:value="cortexForm.skill_min_pattern_freq" :min="1" :max="10" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.cortexSkillPatternFreqHint') }}</span>
           </n-form-item>
           <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveSkills">{{ t('common.save') }}</n-button>
+            <n-button type="primary" :loading="saving" @click="saveCortex">{{ t('common.save') }}</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -185,9 +186,9 @@ const memoryForm = reactive({
   enabled: true,
 })
 
-const skillsForm = reactive({
-  auto_skill_creation: true,
-  min_pattern_frequency: 2,
+const cortexForm = reactive({
+  enabled: true,
+  skill_min_pattern_freq: 3,
 })
 
 const approvalForm = reactive({
@@ -215,9 +216,9 @@ function populateFromConfig(cfg: any) {
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
 
-  const skills = cfg.skills || {}
-  skillsForm.auto_skill_creation = skills.auto_skill_creation !== false
-  skillsForm.min_pattern_frequency = skills.min_pattern_frequency || 2
+  const cortex = cfg.cortex || {}
+  cortexForm.enabled = cortex.enabled !== false
+  cortexForm.skill_min_pattern_freq = cortex.skill_min_pattern_freq || 3
 
   const ac = cfg.approval || {}
   approvalForm.strategy = ac.strategy || 'smart'
@@ -275,17 +276,17 @@ async function saveMemory() {
   }
 }
 
-async function saveSkills() {
+async function saveCortex() {
   saving.value = true
   try {
     await configStore.updateConfig({
-      skills: {
-        auto_skill_creation: skillsForm.auto_skill_creation,
-        min_pattern_frequency: skillsForm.min_pattern_frequency,
+      cortex: {
+        enabled: cortexForm.enabled,
+        skill_min_pattern_freq: cortexForm.skill_min_pattern_freq,
       }
     })
     await configStore.loadConfig()
-    message.success(t('config.skillsSaved'))
+    message.success(t('config.cortexSaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {

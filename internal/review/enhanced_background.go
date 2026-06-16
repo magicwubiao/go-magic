@@ -127,12 +127,41 @@ func NewEnhancedBackgroundReview(baseDir string) *EnhancedBackgroundReview {
 		latencyTracker: make([]time.Duration, 0),
 		config: &ReviewConfig{
 			ReviewInterval:   15 * time.Minute,
-			MinPatternFreq:   2,
+			MinPatternFreq:   3,
 			MaxPatterns:      100,
 			AutoSaveEnabled:  true,
 			SnapshotInterval: 5,
 		},
 	}
+}
+
+// NewEnhancedBackgroundReviewWithConfig creates an enhanced background review manager with custom config
+func NewEnhancedBackgroundReviewWithConfig(baseDir string, config *ReviewConfig) *EnhancedBackgroundReview {
+	br := &EnhancedBackgroundReview{
+		baseDir:        filepath.Join(baseDir, "reviews"),
+		reviewLog:      make([]ReviewEntry, 0),
+		patternsFound:  make([]DetectedPattern, 0),
+		stats:          &ReviewStats{},
+		toolFrequency:  make(map[string]int),
+		sessionHistory: make([]SessionSnapshot, 0),
+		errorPatterns:  make([]ErrorPattern, 0),
+		latencyTracker: make([]time.Duration, 0),
+	}
+
+	// Use provided config or defaults
+	if config != nil {
+		br.config = config
+	} else {
+		br.config = &ReviewConfig{
+			ReviewInterval:   15 * time.Minute,
+			MinPatternFreq:   3,
+			MaxPatterns:      100,
+			AutoSaveEnabled:  true,
+			SnapshotInterval: 5,
+		}
+	}
+
+	return br
 }
 
 // Start initializes the background review system
