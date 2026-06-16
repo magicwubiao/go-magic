@@ -248,6 +248,23 @@ func (m *Manager) GetTodayStats() (*DailyStats, error) {
 	return m.GetDailyStats(time.Now().Format("2006-01-02"))
 }
 
+// EstimateTokenSplit 估算最近 N 天的输入/输出令牌分布
+func (m *Manager) EstimateTokenSplit(days int) (int, int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now()
+	var totalIn, totalOut int
+	for i := 0; i < days; i++ {
+		date := now.AddDate(0, 0, -i).Format("2006-01-02")
+		if stats, ok := m.dailyStats[date]; ok {
+			totalIn += stats.TotalInput
+			totalOut += stats.TotalOutput
+		}
+	}
+	return totalIn, totalOut
+}
+
 // GetWeeklyStats 获取本周统计
 func (m *Manager) GetWeeklyStats() (*DailyStats, error) {
 	m.mu.RLock()
@@ -720,19 +737,299 @@ func (m *Manager) generateRecommendations(insights *Insights) []string {
 	return recs
 }
 
-// GetInsightsJSON generates insights and returns as JSON string
-func (m *Manager) GetInsightsJSON(days int) (string, error) {
-	insights, err := m.GetInsights(days)
-	if err != nil {
-		return "", err
+// SessionStats 会话统计
+type SessionStats struct {
+	SessionID     string  `json:"session_id"`
+	Date          string  `json:"date"`
+	MessageCount  int     `json:"message_count"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	TotalTokens   int     `json:"total_tokens"`
+	Cost          float64 `json:"cost"`
+	AvgResponseMs int64   `json:"avg_response_ms"`
+	Model         string  `json:"model"`
+	Provider      string  `json:"provider"`
+}
+
+// SessionUsage 会话使用量
+type SessionUsage struct {
+	SessionID    string  `json:"session_id"`
+	Title        string  `json:"title"`
+	Messages     int     `json:"messages"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalTokens  int     `json:"total_tokens"`
+	Cost         float64 `json:"cost"`
+	FirstMessage string  `json:"first_message"`
+	LastMessage  string  `json:"last_message"`
+	Duration     int64   `json:"duration_seconds"`
+}
+
+// GetSessionStats 获取会话统计
+func (m *Manager) GetSessionStats(date string) ([]SessionStats, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []SessionStats
+
+	for _, record := range m.records {
+		recordDate := record.Timestamp.Format("2006-01-02")
+		if recordDate != date {
+			continue
+		}
+
+		// 按会话分组
+		found := false
+		for i := range result {
+			if result[i].SessionID == record.SessionID {
+				result[i].MessageCount++
+				result[i].InputTokens += record.InputTokens
+				result[i].OutputTokens += record.OutputTokens
+				result[i].TotalTokens += record.InputTokens + record.OutputTokens
+				result[i].Cost += record.Cost
+				found = true
+				break
+			}
+		}
+
+		if !found && record.SessionID != "" {
+			result = append(result, SessionStats{
+				SessionID:    record.SessionID,
+				Date:         recordDate,
+				MessageCount: 1,
+				InputTokens:  record.InputTokens,
+				OutputTokens: record.OutputTokens,
+				TotalTokens:  record.InputTokens + record.OutputTokens,
+				Cost:         record.Cost,
+				Model:        record.Model,
+				Provider:     record.Provider,
+			})
+		}
 	}
 
-	data, err := json.MarshalIndent(insights, "", "  ")
-	if err != nil {
-		return "", err
+	return result, nil
+}
+
+// GetTopSessions 获取使用量最多的会话
+func (m *Manager) GetTopSessions(limit int) ([]SessionUsage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 10
 	}
 
-	return string(data), nil
+	// 按会话分组
+	sessionMap := make(map[string]*SessionUsage)
+	var firstTime, lastTime time.Time
+
+	for _, record := range m.records {
+		if record.SessionID == "" {
+			continue
+		}
+
+		su, ok := sessionMap[record.SessionID]
+		if !ok {
+			su = &SessionUsage{
+				SessionID:    record.SessionID,
+				FirstMessage: record.Timestamp.Format(time.RFC3339),
+			}
+			sessionMap[record.SessionID] = su
+		}
+
+		su.Messages++
+		su.InputTokens += record.InputTokens
+		su.OutputTokens += record.OutputTokens
+		su.TotalTokens += record.InputTokens + record.OutputTokens
+		su.Cost += record.Cost
+		su.LastMessage = record.Timestamp.Format(time.RFC3339)
+
+		if firstTime.IsZero() || record.Timestamp.Before(firstTime) {
+			firstTime = record.Timestamp
+		}
+		if lastTime.IsZero() || record.Timestamp.After(lastTime) {
+			lastTime = record.Timestamp
+		}
+	}
+
+	// 转换为切片并排序
+	var result []SessionUsage
+	for _, su := range sessionMap {
+		if firstTime.IsZero() || lastTime.IsZero() {
+			su.Duration = 0
+		} else {
+			su.Duration = int64(lastTime.Sub(firstTime).Seconds())
+		}
+		result = append(result, *su)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].TotalTokens > result[j].TotalTokens
+	})
+
+	if len(result) > limit {
+		result = result[:limit]
+	}
+
+	return result, nil
+}
+
+// GetProviderBreakdown 获取按提供者分组的统计
+func (m *Manager) GetProviderBreakdown(days int) (map[string]ProviderUsage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]ProviderUsage)
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	for _, record := range m.records {
+		if record.Timestamp.Before(startDate) {
+			continue
+		}
+
+		pu, ok := result[record.Provider]
+		if !ok {
+			pu = ProviderUsage{Provider: record.Provider}
+			result[record.Provider] = pu
+		}
+
+		pu.Requests++
+		tokens := record.InputTokens + record.OutputTokens
+		pu.Tokens += tokens
+		pu.Cost += record.Cost
+		result[record.Provider] = pu
+	}
+
+	// 计算百分比
+	totalTokens := 0
+	for _, pu := range result {
+		totalTokens += pu.Tokens
+	}
+	for provider, pu := range result {
+		if totalTokens > 0 {
+			pu.Percentage = float64(pu.Tokens) / float64(totalTokens) * 100
+		}
+		result[provider] = pu
+	}
+
+	return result, nil
+}
+
+// GetHourlyBreakdown 获取按小时分组的统计（用于分析使用高峰）
+func (m *Manager) GetHourlyBreakdown(days int) (map[int]HourlyUsage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[int]HourlyUsage)
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	for i := 0; i < 24; i++ {
+		result[i] = HourlyUsage{Hour: i}
+	}
+
+	for _, record := range m.records {
+		if record.Timestamp.Before(startDate) {
+			continue
+		}
+
+		hour := record.Timestamp.Hour()
+		hu := result[hour]
+		hu.Requests++
+		hu.Tokens += record.InputTokens + record.OutputTokens
+		result[hour] = hu
+	}
+
+	return result, nil
+}
+
+// ExportToCSV 导出为 CSV 格式
+func (m *Manager) ExportToCSV() (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var b strings.Builder
+
+	// 写入表头
+	b.WriteString("ID,Timestamp,Model,Provider,InputTokens,OutputTokens,Cost,SessionID,RequestType\n")
+
+	// 写入数据
+	for _, record := range m.records {
+		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%d,%d,%.6f,%s,%s\n",
+			record.ID,
+			record.Timestamp.Format(time.RFC3339),
+			record.Model,
+			record.Provider,
+			record.InputTokens,
+			record.OutputTokens,
+			record.Cost,
+			record.SessionID,
+			record.RequestType,
+		))
+	}
+
+	return b.String(), nil
+}
+
+// ClearOldRecords 清理旧记录（保留最近 N 天）
+func (m *Manager) ClearOldRecords(daysToKeep int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cutoffDate := time.Now().AddDate(0, 0, -daysToKeep)
+
+	var newRecords []UsageRecord
+	for _, record := range m.records {
+		if record.Timestamp.After(cutoffDate) {
+			newRecords = append(newRecords, record)
+		}
+	}
+
+	m.records = newRecords
+
+	return m.save()
+}
+
+// GetRecordsCount 获取记录总数
+func (m *Manager) GetRecordsCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.records)
+}
+
+// GetProviders 获取所有使用的提供者列表
+func (m *Manager) GetProviders() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	providerSet := make(map[string]bool)
+	for _, record := range m.records {
+		providerSet[record.Provider] = true
+	}
+
+	var providers []string
+	for p := range providerSet {
+		providers = append(providers, p)
+	}
+	sort.Strings(providers)
+	return providers
+}
+
+// GetModels 获取所有使用的模型列表
+func (m *Manager) GetModels() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	modelSet := make(map[string]bool)
+	for _, record := range m.records {
+		modelSet[record.Model] = true
+	}
+
+	var models []string
+	for m := range modelSet {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+	return models
 }
 
 // FormatInsightsText formats insights as human-readable text

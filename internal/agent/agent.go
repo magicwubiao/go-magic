@@ -573,6 +573,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
+
 			return content, nil
 		}
 

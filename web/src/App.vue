@@ -138,7 +138,6 @@ const menuOptions = computed(() => [
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
-  { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },

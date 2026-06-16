@@ -95,7 +95,8 @@ type Skill struct {
 	Category    string   `json:"category"`
 	Tags        []string `json:"tags"`
 	Enabled     bool     `json:"enabled"`
-	Source      string   `json:"source"` // "default" or "user"
+	Source      string   `json:"source"`           // "default" or "user"
+	Status      string   `json:"status,omitempty"` // auto-skill status: pending/approved/archived/rejected
 }
 
 // LogEntry represents a log entry
@@ -264,10 +265,8 @@ func NewServer(dbPath string) *Server {
 	skillCfg.BuiltinDir = filepath.Join(magicHome, "builtin_skills")
 	skillMgr, _ := skills.NewManagerWithConfig(&skillCfg)
 
-	// Initialize auto skill creator with LLM provider for better description generation
-	if prov != nil {
-		skillMgr.InitAutoCreator(prov)
-	}
+	// Register skill invoke tool with the tool registry
+	registry.RegisterSkillTool(skillMgr)
 
 	// Create cron manager
 	cronMgr, err := cron.NewManager()
@@ -315,6 +314,15 @@ func NewServer(dbPath string) *Server {
 	cortexMgr := cortex.NewManager(cortexDir, prov)
 	cortexMgr.Start()
 	// Cortex manager may fail, continue without it
+
+	// Bridge cortex's auto skill creator with the skills Manager so
+	// auto-generated skills (in <cortexDir>/auto_skills) are registered
+	// and visible via /api/skills.
+	if skillMgr != nil {
+		cortexMgr.BindSkillsManager(skillMgr)
+		// Also load any previously generated auto skills from disk.
+		loadAutoSkillsIntoManager(skillMgr, filepath.Join(cortexDir, "auto_skills"))
+	}
 
 	// Initialize Approval Manager independently (not tied to agents)
 	// Read approval config from main config file if available
@@ -733,7 +741,6 @@ func (s *Server) Start(port int) error {
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
-	mux.HandleFunc("/api/skills/categories", withCORS(requireAuth(s.handleSkillCategories)))
 	mux.HandleFunc("/api/skills/upload", withCORS(requireAuth(s.handleSkillUpload)))
 	mux.HandleFunc("/api/skills/statistics", withCORS(requireAuth(s.handleSkillsStatistics)))
 	mux.HandleFunc("/api/skills/", withCORS(requireAuth(s.handleSkillByID)))
@@ -741,6 +748,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/dashboard/skills/search", withCORS(requireAuth(s.handleSkillsSearch)))
 	mux.HandleFunc("/api/skills/hub/search", withCORS(requireAuth(s.handleSkillHubSearch)))
 	mux.HandleFunc("/api/skills/hub/install", withCORS(requireAuth(s.handleSkillHubInstall)))
+	// Auto-skill lifecycle management (three-state)
+	mux.HandleFunc("/api/skills/auto/status", withCORS(requireAuth(s.handleAutoSkillStatus)))
+	mux.HandleFunc("/api/skills/auto/stats", withCORS(requireAuth(s.handleAutoSkillStats)))
+	mux.HandleFunc("/api/skills/auto/action", withCORS(requireAuth(s.handleAutoSkillAction)))
 
 	// Plugins
 	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
@@ -802,6 +813,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/usage/monthly", withCORS(requireAuth(s.handleUsageMonthly)))
 	mux.HandleFunc("/api/usage/insights", withCORS(requireAuth(s.handleUsageInsights)))
 	mux.HandleFunc("/api/usage/budget", withCORS(requireAuth(s.handleUsageBudget)))
+	mux.HandleFunc("/api/usage/sessions", withCORS(requireAuth(s.handleUsageSessions)))
+	mux.HandleFunc("/api/usage/top-sessions", withCORS(requireAuth(s.handleUsageTopSessions)))
+	mux.HandleFunc("/api/usage/providers", withCORS(requireAuth(s.handleUsageProviders)))
+	mux.HandleFunc("/api/usage/hourly", withCORS(requireAuth(s.handleUsageHourly)))
 	mux.HandleFunc("/api/system/health", withCORS(requireAuth(s.handleSystemHealth)))
 	mux.HandleFunc("/api/system/version", withCORS(requireAuth(s.handleSystemVersion)))
 	mux.HandleFunc("/api/system/version/check", withCORS(requireAuth(s.handleVersionCheck)))
@@ -1505,10 +1520,17 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					Role:    "assistant",
 					Content: resp,
 				})
+				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
+				sess.InputTokens += inputTokens
+				sess.OutputTokens += outputTokens
+				sess.CacheReadTokens += cacheTokens
 				sess.UpdatedAt = time.Now()
 				s.sessionStore.SaveSession(ctx, sess)
 			}
 		}
+
+		// Record usage statistics
+		s.recordUsage(aiAgent, sessionID)
 
 		doneData, _ := json.Marshal(map[string]bool{"done": true})
 		fmt.Fprintf(w, "data: %s\n\n", string(doneData))
@@ -1611,10 +1633,17 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				Role:    "assistant",
 				Content: fullResponse.String(),
 			})
+			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
+			sess.InputTokens += inputTokens
+			sess.OutputTokens += outputTokens
+			sess.CacheReadTokens += cacheTokens
 			sess.UpdatedAt = time.Now()
 			s.sessionStore.SaveSession(ctx, sess)
 		}
 	}
+
+	// Record usage statistics
+	s.recordUsage(aiAgent, sessionID)
 
 	doneData, _ := json.Marshal(map[string]bool{"done": true})
 	fmt.Fprintf(w, "data: %s\n\n", string(doneData))
@@ -2393,6 +2422,82 @@ func (s *Server) handleToolsetsStatistics(w http.ResponseWriter, r *http.Request
 	jsonResponse(w, stats)
 }
 
+// loadAutoSkillsIntoManager walks the cortex auto_skills directory and
+// registers any previously generated skills into the skills Manager.
+// This ensures the web /api/skills endpoint shows skills that were
+// generated in earlier sessions (when BindSkillsManager had no effect
+// because the skill was already on disk before the bridge was wired).
+func loadAutoSkillsIntoManager(mgr *skills.Manager, autoDir string) {
+	if mgr == nil {
+		return
+	}
+	entries, err := os.ReadDir(autoDir)
+	if err != nil {
+		return // directory may not exist yet
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Skip non-auto entries (e.g. patterns.json, generation.log).
+		if !strings.HasPrefix(name, "auto-") {
+			continue
+		}
+		skillDir := filepath.Join(autoDir, name)
+
+		metaPath := filepath.Join(skillDir, "meta.json")
+		metaData, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var rawMeta struct {
+			Name         string   `json:"name"`
+			Description  string   `json:"description"`
+			PatternTools []string `json:"pattern_tools"`
+			CreatedAt    string   `json:"created_at"`
+			Frequency    int      `json:"frequency"`
+		}
+		if err := json.Unmarshal(metaData, &rawMeta); err != nil {
+			continue
+		}
+
+		skillName := rawMeta.Name
+		if skillName == "" {
+			skillName = name
+		}
+
+		// Read SKILL.md content if present.
+		var content string
+		if mdData, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md")); err == nil {
+			content = string(mdData)
+		}
+
+		installedAt := time.Now()
+		if rawMeta.CreatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, rawMeta.CreatedAt); err == nil {
+				installedAt = t
+			}
+		}
+
+		mgr.RegisterSkill(&skills.Skill{
+			SkillMeta: skills.SkillMeta{
+				Name:        skillName,
+				Description: rawMeta.Description,
+				Version:     "1.0.0",
+				Author:      "cortex-auto",
+				Tags:        []string{"auto-generated"},
+				Source:      skills.SkillSourceAuto,
+				InstalledAt: installedAt,
+			},
+			Tools:   rawMeta.PatternTools,
+			Content: content,
+			Dir:     skillDir,
+		})
+	}
+}
+
 // --- Skills ---
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
@@ -2445,6 +2550,15 @@ func (s *Server) getRealSkills() []Skill {
 			tags = []string{}
 		}
 
+		// 填充自动技能的状态
+		status := ""
+		if skill.Source == skills.SkillSourceAuto {
+			status = string(skill.Status)
+			if status == "" {
+				status = string(skills.SkillStatusPending)
+			}
+		}
+
 		result = append(result, Skill{
 			ID:          skill.Name,
 			Name:        skill.Name,
@@ -2452,6 +2566,7 @@ func (s *Server) getRealSkills() []Skill {
 			Tags:        tags,
 			Enabled:     !isDisabled,
 			Source:      string(skill.Source),
+			Status:      status,
 		})
 	}
 
@@ -2673,10 +2788,6 @@ func parseSkillJSON(data []byte, skill *Skill) {
 		}
 		skill.Tags = tags
 	}
-}
-
-func (s *Server) handleSkillCategories(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, []string{})
 }
 
 func (s *Server) handleSkillHubSearch(w http.ResponseWriter, r *http.Request) {
@@ -3067,6 +3178,130 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		"ok":   true,
 		"name": skillName,
 		"path": skillDir,
+	})
+}
+
+// --- Auto-Skill Lifecycle Management (three-state) ---
+
+// handleAutoSkillStatus returns the status of a specific auto skill
+// URL: /api/skills/auto/status?name=skill_name (GET)
+func (s *Server) handleAutoSkillStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.skillMgr == nil {
+		jsonResponse(w, map[string]interface{}{"status": "pending", "message": "skill manager not initialized"})
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		// Return status of all auto skills
+		statuses := map[string]string{}
+		for _, status := range []skills.SkillStatus{
+			skills.SkillStatusPending, skills.SkillStatusApproved,
+			skills.SkillStatusArchived, skills.SkillStatusRejected,
+		} {
+			for _, skill := range s.skillMgr.ListAutoSkillsByStatus(status) {
+				statuses[skill.Name] = string(status)
+			}
+		}
+		jsonResponse(w, statuses)
+		return
+	}
+
+	status, err := s.skillMgr.GetSkillStatus(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"name": name, "status": status})
+}
+
+// handleAutoSkillStats returns counts of auto skills per status
+// URL: /api/skills/auto/stats (GET)
+func (s *Server) handleAutoSkillStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.skillMgr == nil {
+		jsonResponse(w, map[string]int{"pending": 0, "approved": 0, "archived": 0, "rejected": 0})
+		return
+	}
+	counts := s.skillMgr.GetSkillStatusCounts()
+	// Convert map keyed by SkillStatus to string-keyed
+	out := map[string]int{}
+	for k, v := range counts {
+		out[string(k)] = v
+	}
+	jsonResponse(w, out)
+}
+
+// handleAutoSkillAction performs lifecycle actions: approve, reject, archive, restore, delete
+// URL: /api/skills/auto/action (POST with JSON body { "name": "...", "action": "approve" })
+func (s *Server) handleAutoSkillAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.skillMgr == nil {
+		http.Error(w, "skill manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	var req map[string]interface{}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	name, _ := req["name"].(string)
+	action, _ := req["action"].(string)
+	if name == "" || action == "" {
+		http.Error(w, "missing name or action", http.StatusBadRequest)
+		return
+	}
+
+	var err2 error
+	var message string
+	switch action {
+	case "approve":
+		err2 = s.skillMgr.ApproveAutoSkill(name)
+		message = "Skill '" + name + "' has been approved"
+	case "reject":
+		err2 = s.skillMgr.RejectAutoSkill(name)
+		message = "Skill '" + name + "' has been rejected"
+	case "archive":
+		err2 = s.skillMgr.ArchiveAutoSkill(name)
+		message = "Skill '" + name + "' has been archived"
+	case "restore":
+		err2 = s.skillMgr.RestoreAutoSkill(name)
+		message = "Skill '" + name + "' has been restored from archive"
+	case "delete":
+		err2 = s.skillMgr.DeleteAutoSkill(name)
+		message = "Skill '" + name + "' has been permanently deleted"
+	default:
+		http.Error(w, "unknown action: "+action, http.StatusBadRequest)
+		return
+	}
+
+	if err2 != nil {
+		http.Error(w, err2.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":      true,
+		"action":  action,
+		"name":    name,
+		"message": message,
 	})
 }
 
@@ -3483,7 +3718,6 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 		return
 	}
-
 
 	// Handle POST /{name} - create provider (alias for PUT to create new)
 	if r.Method == http.MethodPost && subRoute == "" {
@@ -4898,7 +5132,16 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUsageToday(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
-		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		jsonResponse(w, map[string]interface{}{
+			"sessions":          0,
+			"messages":          0,
+			"input_tokens":      0,
+			"output_tokens":     0,
+			"total_tokens":      0,
+			"cost":              0.0,
+			"avg_response_time": 0,
+			"top_models":        []interface{}{},
+		})
 		return
 	}
 	stats, err := s.usageMgr.GetTodayStats()
@@ -4906,12 +5149,24 @@ func (s *Server) handleUsageToday(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	jsonResponse(w, stats)
+	// Normalize to frontend-friendly field names
+	// TotalRequests represents both sessions and messages in our usage-tracking model
+	result := map[string]interface{}{
+		"sessions":          stats.TotalRequests,
+		"messages":          stats.TotalRequests,
+		"input_tokens":      stats.TotalInput,
+		"output_tokens":     stats.TotalOutput,
+		"total_tokens":      stats.TotalInput + stats.TotalOutput,
+		"cost":              stats.TotalCost,
+		"avg_response_time": 0,
+		"top_models":        []interface{}{},
+	}
+	jsonResponse(w, result)
 }
 
 func (s *Server) handleUsageDaily(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
-		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		jsonResponse(w, []map[string]interface{}{})
 		return
 	}
 	days := 30
@@ -4920,22 +5175,22 @@ func (s *Server) handleUsageDaily(w http.ResponseWriter, r *http.Request) {
 			days = n
 		}
 	}
-	// Collect daily stats for the last N days
 	now := time.Now()
 	result := make([]map[string]interface{}, 0, days)
-	for i := days - 1; i >= 0; i-- {
+	for i := 0; i < days; i++ {
 		date := now.AddDate(0, 0, -i).Format("2006-01-02")
 		stats, err := s.usageMgr.GetDailyStats(date)
 		if err != nil {
 			continue
 		}
 		result = append(result, map[string]interface{}{
-			"date":                stats.Date,
-			"total_requests":      stats.TotalRequests,
-			"total_input_tokens":  stats.TotalInput,
-			"total_output_tokens": stats.TotalOutput,
-			"total_cost":          stats.TotalCost,
-			"by_model":            stats.ByModel,
+			"date":          stats.Date,
+			"sessions":      stats.TotalRequests,
+			"messages":      stats.TotalRequests,
+			"input_tokens":  stats.TotalInput,
+			"output_tokens": stats.TotalOutput,
+			"total_tokens":  stats.TotalInput + stats.TotalOutput,
+			"cost":          stats.TotalCost,
 		})
 	}
 	jsonResponse(w, result)
@@ -4943,7 +5198,14 @@ func (s *Server) handleUsageDaily(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUsageWeekly(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
-		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		jsonResponse(w, map[string]interface{}{
+			"sessions":      0,
+			"messages":      0,
+			"input_tokens":  0,
+			"output_tokens": 0,
+			"total_tokens":  0,
+			"cost":          0.0,
+		})
 		return
 	}
 	stats, err := s.usageMgr.GetWeeklyStats()
@@ -4951,25 +5213,89 @@ func (s *Server) handleUsageWeekly(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	jsonResponse(w, stats)
+	jsonResponse(w, map[string]interface{}{
+		"sessions":      stats.TotalRequests,
+		"messages":      stats.TotalRequests,
+		"input_tokens":  stats.TotalInput,
+		"output_tokens": stats.TotalOutput,
+		"total_tokens":  stats.TotalInput + stats.TotalOutput,
+		"cost":          stats.TotalCost,
+	})
 }
 
 func (s *Server) handleUsageMonthly(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
-		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		jsonResponse(w, []map[string]interface{}{})
 		return
 	}
-	stats, err := s.usageMgr.GetMonthlyStats()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+	// Build last N months of aggregated data (front-end shows table)
+	now := time.Now()
+	result := make([]map[string]interface{}, 0, 12)
+
+	// Go through all available daily stats, aggregated by month
+	type monthTotals struct {
+		sessions int
+		input    int
+		output   int
+		cost     float64
 	}
-	jsonResponse(w, stats)
+	months := make(map[string]*monthTotals)
+
+	// We need to query all days for up to 12 months
+	for i := 0; i < 365; i++ {
+		date := now.AddDate(0, 0, -i)
+		dateStr := date.Format("2006-01-02")
+		monthStr := date.Format("2006-01")
+		stats, err := s.usageMgr.GetDailyStats(dateStr)
+		if err != nil {
+			continue
+		}
+		if _, ok := months[monthStr]; !ok {
+			months[monthStr] = &monthTotals{}
+		}
+		months[monthStr].sessions += stats.TotalRequests
+		months[monthStr].input += stats.TotalInput
+		months[monthStr].output += stats.TotalOutput
+		months[monthStr].cost += stats.TotalCost
+	}
+
+	// Sort month keys (descending)
+	keys := make([]string, 0, len(months))
+	for k := range months {
+		keys = append(keys, k)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+
+	for _, month := range keys {
+		m := months[month]
+		totalTokens := m.input + m.output
+		result = append(result, map[string]interface{}{
+			"month":          month,
+			"total_sessions": m.sessions,
+			"total_messages": m.sessions,
+			"total_tokens":   totalTokens,
+			"total_cost":     m.cost,
+		})
+	}
+
+	jsonResponse(w, result)
 }
 
 func (s *Server) handleUsageInsights(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
-		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		jsonResponse(w, map[string]interface{}{
+			"total_sessions":         0,
+			"total_messages":         0,
+			"total_input_tokens":     0,
+			"total_output_tokens":    0,
+			"total_cost":             0.0,
+			"avg_cost_per_session":   0.0,
+			"avg_cost_per_message":   0.0,
+			"avg_tokens_per_message": 0,
+			"most_used_model":        "",
+			"most_active_hour":       0,
+			"most_active_day":        "",
+		})
 		return
 	}
 	days := 30
@@ -4983,7 +5309,37 @@ func (s *Server) handleUsageInsights(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	jsonResponse(w, insights)
+	// Map backend Insights to frontend UsageInsight fields
+	totalSessions := insights.TotalRequests
+	totalCost := insights.TotalCost
+	var mostUsedModel string
+	if len(insights.TopModels) > 0 {
+		mostUsedModel = insights.TopModels[0].Model
+	}
+
+	result := map[string]interface{}{
+		"total_sessions":         totalSessions,
+		"total_messages":         totalSessions,
+		"total_input_tokens":     0, // Not tracked separately in insights
+		"total_output_tokens":    0,
+		"total_cost":             totalCost,
+		"avg_cost_per_session":   insights.AvgCostPerReq,
+		"avg_cost_per_message":   insights.AvgCostPerReq,
+		"avg_tokens_per_message": int(insights.AvgTokensPerReq),
+		"most_used_model":        mostUsedModel,
+		"most_active_hour":       0,
+		"most_active_day":        "",
+	}
+
+	// Also include raw token breakdown from the manager itself if possible
+	// For now, try to get a more accurate input/output split using daily totals
+	// over the same period using the dailyStats data.
+	totalIn, totalOut := s.usageMgr.EstimateTokenSplit(days)
+	result["total_input_tokens"] = totalIn
+	result["total_output_tokens"] = totalOut
+	result["total_tokens"] = totalIn + totalOut
+
+	jsonResponse(w, result)
 }
 
 func (s *Server) handleUsageBudget(w http.ResponseWriter, r *http.Request) {
@@ -5012,6 +5368,80 @@ func (s *Server) handleUsageBudget(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+func (s *Server) handleUsageSessions(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	sessions, err := s.usageMgr.GetSessionStats(date)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, sessions)
+}
+
+func (s *Server) handleUsageTopSessions(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	limit := 10
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil {
+			limit = v
+		}
+	}
+	sessions, err := s.usageMgr.GetTopSessions(limit)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, sessions)
+}
+
+func (s *Server) handleUsageProviders(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil {
+			days = v
+		}
+	}
+	providers, err := s.usageMgr.GetProviderBreakdown(days)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, providers)
+}
+
+func (s *Server) handleUsageHourly(w http.ResponseWriter, r *http.Request) {
+	if s.usageMgr == nil {
+		jsonResponse(w, map[string]interface{}{"error": "usage manager not available"})
+		return
+	}
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil {
+			days = v
+		}
+	}
+	hourly, err := s.usageMgr.GetHourlyBreakdown(days)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, hourly)
 }
 
 // --- User Profile Helper Methods ---

@@ -161,6 +161,99 @@ var skillsConfigDisabledCmd = &cobra.Command{
 	Run:   runSkillsConfigDisabled,
 }
 
+// =============================================================================
+// Auto-Skill Lifecycle Management (Three-State Management)
+// =============================================================================
+
+var skillsAutoCmd = &cobra.Command{
+	Use:   "auto",
+	Short: "Manage auto-generated skills (pending/approved/archived)",
+	Long: `Manage auto-generated skills with a three-state lifecycle.
+
+Automatically generated skills start in the "pending" state and are NOT
+used by the Agent until you approve them.
+
+States:
+  pending   - waiting for manual review (not used by agent)
+  approved  - approved and will be injected into agent prompts
+  archived  - kept on disk but not active (can be restored)
+  rejected  - rejected, pending deletion
+
+Examples:
+  magic skills auto list              # list all auto skills with status
+  magic skills auto pending           # list pending skills
+  magic skills auto approve <name>    # approve a pending skill
+  magic skills auto reject <name>     # reject a pending skill
+  magic skills auto archive <name>    # archive an approved skill
+  magic skills auto restore <name>    # restore from archive
+  magic skills auto delete <name>     # permanently delete a skill
+  magic skills auto status <name>     # show current status
+  magic skills auto stats             # show counts by status`,
+}
+
+var skillsAutoListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all auto-generated skills with their status",
+	Args:  cobra.NoArgs,
+	Run:   runSkillsAutoList,
+}
+
+var skillsAutoPendingCmd = &cobra.Command{
+	Use:   "pending",
+	Short: "List pending auto skills (awaiting review)",
+	Args:  cobra.NoArgs,
+	Run:   runSkillsAutoPending,
+}
+
+var skillsAutoApproveCmd = &cobra.Command{
+	Use:   "approve <name>",
+	Short: "Approve a pending skill (it will now be used by agent)",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoApprove,
+}
+
+var skillsAutoRejectCmd = &cobra.Command{
+	Use:   "reject <name>",
+	Short: "Reject a pending skill",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoReject,
+}
+
+var skillsAutoArchiveCmd = &cobra.Command{
+	Use:   "archive <name>",
+	Short: "Archive an approved skill (kept but not used)",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoArchive,
+}
+
+var skillsAutoRestoreCmd = &cobra.Command{
+	Use:   "restore <name>",
+	Short: "Restore an archived skill back to approved",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoRestore,
+}
+
+var skillsAutoDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Permanently delete an auto skill (rejected/archived)",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoDelete,
+}
+
+var skillsAutoStatusCmd = &cobra.Command{
+	Use:   "status <name>",
+	Short: "Show current status of an auto skill",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSkillsAutoStatus,
+}
+
+var skillsAutoStatsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "Show counts of auto skills by status",
+	Args:  cobra.NoArgs,
+	Run:   runSkillsAutoStats,
+}
+
 func init() {
 	skillsCmd.AddCommand(skillsShowCmd)
 	skillsCmd.AddCommand(skillsSearchCmd)
@@ -181,6 +274,18 @@ func init() {
 	// Config subcommands
 	skillsConfigCmd.AddCommand(skillsConfigListCmd)
 	skillsConfigCmd.AddCommand(skillsConfigDisabledCmd)
+
+	// Auto-skill lifecycle subcommands
+	skillsCmd.AddCommand(skillsAutoCmd)
+	skillsAutoCmd.AddCommand(skillsAutoListCmd)
+	skillsAutoCmd.AddCommand(skillsAutoPendingCmd)
+	skillsAutoCmd.AddCommand(skillsAutoApproveCmd)
+	skillsAutoCmd.AddCommand(skillsAutoRejectCmd)
+	skillsAutoCmd.AddCommand(skillsAutoArchiveCmd)
+	skillsAutoCmd.AddCommand(skillsAutoRestoreCmd)
+	skillsAutoCmd.AddCommand(skillsAutoDeleteCmd)
+	skillsAutoCmd.AddCommand(skillsAutoStatusCmd)
+	skillsAutoCmd.AddCommand(skillsAutoStatsCmd)
 
 	// migrate command is added in skill_migrate.go
 	// list command is added in skill_list.go
@@ -654,4 +759,169 @@ func runSkillsConfigDisabled(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
+}
+
+// =============================================================================
+// Auto-Skill Lifecycle Command Handlers
+// =============================================================================
+
+func printAutoSkillTable(title string, autoSkills []*skills.Skill) {
+	fmt.Printf("%s (%d):\n", title, len(autoSkills))
+	if len(autoSkills) == 0 {
+		fmt.Println("  (none)")
+		return
+	}
+	for _, s := range autoSkills {
+		status := s.Status
+		if status == "" {
+			status = skills.SkillStatusPending
+		}
+		tags := strings.Join(s.Tags, ", ")
+		fmt.Printf("  • %s\n", s.Name)
+		fmt.Printf("      Description: %s\n", s.Description)
+		fmt.Printf("      Status:      %s\n", status)
+		fmt.Printf("      Directory:   %s\n", s.Dir)
+		if tags != "" {
+			fmt.Printf("      Tags:        %s\n", tags)
+		}
+		fmt.Println()
+	}
+}
+
+func runSkillsAutoList(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+
+	pending := mgr.ListAutoSkillsByStatus(skills.SkillStatusPending)
+	approved := mgr.ListAutoSkillsByStatus(skills.SkillStatusApproved)
+	archived := mgr.ListAutoSkillsByStatus(skills.SkillStatusArchived)
+	rejected := mgr.ListAutoSkillsByStatus(skills.SkillStatusRejected)
+
+	total := len(pending) + len(approved) + len(archived) + len(rejected)
+	fmt.Printf("Auto-Generated Skills (%d total)\n", total)
+	fmt.Println()
+
+	printAutoSkillTable("  Pending (awaiting review)", pending)
+	fmt.Println()
+	printAutoSkillTable("  Approved (active, used by agent)", approved)
+	fmt.Println()
+	printAutoSkillTable("  Archived (kept, not active)", archived)
+	fmt.Println()
+	printAutoSkillTable("  Rejected", rejected)
+}
+
+func runSkillsAutoPending(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	pending := mgr.ListAutoSkillsByStatus(skills.SkillStatusPending)
+	printAutoSkillTable("Pending skills", pending)
+}
+
+func runSkillsAutoApprove(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	if err := mgr.ApproveAutoSkill(name); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Skill '%s' has been approved and will now be used by the agent.\n", name)
+}
+
+func runSkillsAutoReject(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	if err := mgr.RejectAutoSkill(name); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Skill '%s' has been rejected.\n", name)
+}
+
+func runSkillsAutoArchive(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	if err := mgr.ArchiveAutoSkill(name); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Skill '%s' has been archived.\n", name)
+}
+
+func runSkillsAutoRestore(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	if err := mgr.RestoreAutoSkill(name); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Skill '%s' has been restored from archive to approved.\n", name)
+}
+
+func runSkillsAutoDelete(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	if err := mgr.DeleteAutoSkill(name); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Skill '%s' has been permanently deleted.\n", name)
+}
+
+func runSkillsAutoStatus(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	name := args[0]
+	status, err := mgr.GetSkillStatus(name)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Skill '%s' status: %s\n", name, status)
+}
+
+func runSkillsAutoStats(cmd *cobra.Command, args []string) {
+	mgr, err := skills.NewManager()
+	if err != nil {
+		fmt.Printf("Failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	counts := mgr.GetSkillStatusCounts()
+	fmt.Println("Auto-Generated Skill Status Counts:")
+	fmt.Println()
+	total := 0
+	for status, count := range counts {
+		fmt.Printf("  %-10s: %d\n", status, count)
+		total += count
+	}
+	fmt.Println("  ----------: ----")
+	fmt.Printf("  %-10s: %d\n", "Total", total)
 }

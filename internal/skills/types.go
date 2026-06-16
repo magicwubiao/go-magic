@@ -19,6 +19,17 @@ const (
 	SkillSourceAuto     SkillSource = "auto" // Agent 自动创建
 )
 
+// SkillStatus represents the approval status of an auto-generated skill
+// Reference: Hermes Agent's three-state skill lifecycle management
+type SkillStatus string
+
+const (
+	SkillStatusPending  SkillStatus = "pending"  // 待审核（自动生成后默认状态，不会被 Agent 使用）
+	SkillStatusApproved SkillStatus = "approved" // 已批准（会被 Agent 使用）
+	SkillStatusArchived SkillStatus = "archived" // 已归档（保留但不活跃）
+	SkillStatusRejected SkillStatus = "rejected" // 已拒绝（可清理）
+)
+
 // SkillMeta contains metadata about a skill
 type SkillMeta struct {
 	Name        string      `json:"name"`
@@ -28,6 +39,7 @@ type SkillMeta struct {
 	License     string      `json:"license,omitempty"`
 	Tags        []string    `json:"tags,omitempty"`
 	Source      SkillSource `json:"source,omitempty"`
+	Status      SkillStatus `json:"status,omitempty"` // 三态状态（仅 auto 技能使用）
 	InstalledAt time.Time   `json:"installed_at,omitempty"`
 }
 
@@ -156,51 +168,6 @@ func (s *Skill) SupportingFiles() string {
 	return "Supporting files:\n" + strings.Join(files, "\n")
 }
 
-// ============================================================================
-// Progressive Disclosure (渐进式加载)
-// ============================================================================
-
-// SkillLoadLevel represents the level of skill content to load
-type SkillLoadLevel int
-
-const (
-	// Level0: List only - returns name, description (~3k tokens equivalent)
-	Level0 SkillLoadLevel = iota
-	// Level1: Metadata + Summary - returns full content and metadata
-	Level1
-	// Level2: Full with references - returns specific reference files
-	Level2
-)
-
-// String returns the string representation of the load level
-func (l SkillLoadLevel) String() string {
-	switch l {
-	case Level0:
-		return "list"
-	case Level1:
-		return "full"
-	case Level2:
-		return "reference"
-	default:
-		return "unknown"
-	}
-}
-
-// SkillListItem is a lightweight item for Level 0 listing
-type SkillListItem struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Tags        []string `json:"tags,omitempty"`
-	Version     string   `json:"version,omitempty"`
-}
-
-// SkillViewOptions contains options for viewing a skill at different levels
-type SkillViewOptions struct {
-	Level    SkillLoadLevel `json:"level"`
-	Path     string         `json:"path,omitempty"`     // For Level2: specific reference file
-	Platform string         `json:"platform,omitempty"` // For platform-specific skills
-}
-
 // =============================================================================
 // Skill Manifest & Hub
 // =============================================================================
@@ -262,125 +229,6 @@ type HubSkill struct {
 	Installs      int       `json:"installs,omitempty"`       // Weekly installs
 	SecurityAudit string    `json:"security_audit,omitempty"` // audit status
 	Verified      bool      `json:"verified,omitempty"`
-}
-
-// =============================================================================
-// Conditional Activation
-// =============================================================================
-
-// SkillActivationCondition represents conditions for skill visibility
-type SkillActivationCondition struct {
-	FallbackForToolset string   `yaml:"fallback_for_toolset,omitempty"`
-	FallbackForTools   []string `yaml:"fallback_for_tools,omitempty"`
-	RequiresToolset    string   `yaml:"requires_toolset,omitempty"`
-	RequiresTools      []string `yaml:"requires_tools,omitempty"`
-	Platforms          []string `yaml:"platforms,omitempty"`
-}
-
-// IsVisible checks if the skill should be visible given available tools/toolsets
-func (c *SkillActivationCondition) IsVisible(availableToolsets []string, availableTools []string, platform string) bool {
-	// Platform check
-	if len(c.Platforms) > 0 {
-		platformMatch := false
-		for _, p := range c.Platforms {
-			if p == platform || (p == "linux" && platform == "linux") ||
-				(p == "macos" && platform == "darwin") ||
-				(p == "windows" && platform == "windows") {
-				platformMatch = true
-				break
-			}
-		}
-		if !platformMatch {
-			return false
-		}
-	}
-
-	// Requires toolset check
-	if c.RequiresToolset != "" {
-		hasToolset := false
-		for _, ts := range availableToolsets {
-			if ts == c.RequiresToolset {
-				hasToolset = true
-				break
-			}
-		}
-		if !hasToolset {
-			return false
-		}
-	}
-
-	// Requires tools check
-	if len(c.RequiresTools) > 0 {
-		hasAllTools := true
-		for _, tool := range c.RequiresTools {
-			found := false
-			for _, t := range availableTools {
-				if t == tool {
-					found = true
-					break
-				}
-			}
-			if !found {
-				hasAllTools = false
-				break
-			}
-		}
-		if !hasAllTools {
-			return false
-		}
-	}
-
-	// Fallback for toolset check (show when toolset is UNAVAILABLE)
-	if c.FallbackForToolset != "" {
-		for _, ts := range availableToolsets {
-			if ts == c.FallbackForToolset {
-				return false // Toolset is available, don't show
-			}
-		}
-	}
-
-	// Fallback for tools check (show when ALL fallback tools are UNAVAILABLE)
-	if len(c.FallbackForTools) > 0 {
-		allAvailable := true
-		for _, tool := range c.FallbackForTools {
-			found := false
-			for _, t := range availableTools {
-				if t == tool {
-					found = true
-					break
-				}
-			}
-			if !found {
-				allAvailable = false
-				break
-			}
-		}
-		if allAvailable {
-			return false // All fallback tools available, don't show
-		}
-	}
-
-	return true
-}
-
-// =============================================================================
-// Skill Bundles (技能捆绑包) - 参考 Hermes Agent
-// =============================================================================
-
-// SkillBundleConfig represents a skill bundle configuration
-type SkillBundleConfig struct {
-	Name        string   `yaml:"name" json:"name"`
-	Description string   `yaml:"description" json:"description"`
-	Skills      []string `yaml:"skills" json:"skills"`
-	Instruction string   `yaml:"instruction" json:"instruction,omitempty"`
-}
-
-// SkillBundle represents a loaded skill bundle
-type SkillBundle struct {
-	Name        string
-	Description string
-	Skills      []*Skill
-	Instruction string
 }
 
 // =============================================================================

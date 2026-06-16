@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/subagent"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -114,6 +115,11 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 
 	registry := tool.NewRegistry()
 	registry.RegisterAll(cfg.WorkingDir)
+
+	// Register skill invoke tool
+	if skillMgr, err := skills.NewManager(); err == nil {
+		registry.RegisterSkillTool(skillMgr)
+	}
 
 	// Create adapter for tool registry
 	registryAdapter := newToolRegistryAdapter(registry)

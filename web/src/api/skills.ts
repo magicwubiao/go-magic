@@ -7,6 +7,7 @@ export interface Skill {
   tags: string[]
   enabled: boolean
   source: 'builtin' | 'local' | 'global' | 'registry' | 'auto' | string
+  status?: 'pending' | 'approved' | 'archived' | 'rejected' | string  // auto-skill lifecycle status
 }
 
 export interface SkillStatistics {
@@ -120,5 +121,13 @@ export async function installHubSkill(source: string, sourceID: string): Promise
   return request<{ ok: boolean; error?: string }>('/skills/hub/install', {
     method: 'POST',
     body: JSON.stringify({ source, sourceID }),
+  })
+}
+
+// Auto-skill lifecycle management
+export async function performAutoSkillAction(name: string, action: 'approve' | 'reject' | 'archive' | 'restore' | 'delete'): Promise<{ ok: boolean; name: string; action: string; message?: string }> {
+  return request('/skills/auto/action', {
+    method: 'POST',
+    body: JSON.stringify({ name, action }),
   })
 }

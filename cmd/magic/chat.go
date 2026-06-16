@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
@@ -52,6 +53,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// Initialize tool registry with auto-registration
 	registry := tool.NewRegistry()
 	registry.RegisterAll(cfg.WorkingDir)
+
+	// Create skills manager and register skill invoke tool
+	skillMgr, err := skills.NewManager()
+	if err == nil {
+		registry.RegisterSkillTool(skillMgr)
+	}
 
 	// Initialize session store
 	home, _ := os.UserHomeDir()

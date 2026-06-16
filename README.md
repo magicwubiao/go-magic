@@ -31,8 +31,10 @@ React/TypeScript frontend with:
 - Session management (create, search, resume)
 - Provider and model configuration with hot-reload
 - Skills management
-- Plugins configuration
-- Token usage dashboard
+- Cron job scheduling
+- Kanban board
+- Token usage dashboard with budget alerts
+- Group chat for multi-agent conversations
 
 ### Coding Mode
 
@@ -84,6 +86,14 @@ Create group conversations with multiple AI agents. Each agent can have differen
 
 SQLite-based persistence with FTS5 full-text search across all sessions.
 
+### Token Usage Statistics
+
+Track API consumption with detailed statistics:
+- Real-time usage dashboard in Web Dashboard
+- CLI command: `magic usage`
+- Monthly budget with alert thresholds
+- Per-model and per-session breakdown
+
 ### Sensitive Data Redaction
 
 Automatic redaction of API keys, tokens, passwords, and other sensitive information in logs and outputs.
@@ -113,7 +123,7 @@ go install github.com/magicwubiao/go-magic/cmd/magic@latest
 # Quick run
 docker run -it magicwubiao/go-magic
 
-# With Docker Compose (includes optional Redis and PostgreSQL)
+# Docker Compose (includes optional Redis and PostgreSQL)
 docker compose up -d
 ```
 
@@ -131,7 +141,28 @@ magic setup
 
 # Start chatting
 magic chat
+
+# Start web dashboard
+magic server
 ```
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `magic chat` | Start interactive TUI chat |
+| `magic server` | Start web dashboard server |
+| `magic usage [-d N]` | Show token usage statistics |
+| `magic stats` | Show system statistics |
+| `magic config` | Manage configuration |
+| `magic skills` | Manage skills |
+| `magic cron` | Manage scheduled tasks |
+| `magic kanban` | Kanban board management |
+| `magic gateway` | Start messaging gateway |
+| `magic mcp` | Manage MCP servers |
+| `magic logs` | View logs |
+| `magic doctor` | Diagnose issues |
+| `magic backup` | Backup data |
 
 ## TUI Slash Commands
 
@@ -152,8 +183,7 @@ magic chat
 | `/skills [name]` | `/skill` | List available skills |
 | `/status` | | Show system status |
 | `/version` | `/ver` | Show version |
-| `/usage [--days N]` | | Show token usage |
-| `/insights [--days N]` | `-d` | Get usage insights |
+| `/usage` | | Show token usage |
 | `/sessions [list|search]` | `/session` | List sessions |
 | `/sethome [session_id]` | | Set home session for messaging |
 | `/context [add|remove|list]` | `/ctx` | Manage context files |
@@ -204,8 +234,32 @@ Features:
 - Session management (create, search, resume)
 - Provider and model configuration with hot-reload
 - Skills management
-- Plugins configuration
-- Token usage dashboard
+- Cron job scheduling
+- Kanban board
+- Token usage dashboard with budget tracking
+- Group chat for multi-agent conversations
+
+## Token Usage Tracking
+
+Track your API consumption:
+
+```bash
+# Show today's usage
+magic usage
+
+# Show last 7 days
+magic usage -d 7
+
+# Show last 30 days
+magic usage -d 30
+```
+
+In the Web Dashboard, navigate to the Usage page to see:
+- Today's statistics
+- Daily trend chart
+- Monthly breakdown
+- Budget progress bar with alerts
+- Top models and sessions
 
 ## Configuration
 

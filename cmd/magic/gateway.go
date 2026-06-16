@@ -26,6 +26,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -146,6 +147,11 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	}
 	registry.RegisterAll(workDir)
 
+	// Register skill invoke tool
+	if skillMgr, err := skills.NewManager(); err == nil {
+		registry.RegisterSkillTool(skillMgr)
+	}
+
 	// Generate system prompt
 	systemPrompt := generateGatewaySystemPrompt(cfg)
 
@@ -256,6 +262,9 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 
 					h.registry = tool.NewRegistry()
 					h.registry.RegisterAll(workDir)
+					if skillMgr, err := skills.NewManager(); err == nil {
+						h.registry.RegisterSkillTool(skillMgr)
+					}
 					h.systemPrompt = generateGatewaySystemPrompt(cfg)
 				}
 			}

@@ -119,6 +119,14 @@ func (m *Manager) setupConnections() {
 	})
 }
 
+// BindSkillsManager connects the cortex skill auto creator to the skills Manager
+// so auto-generated skills are visible via /api/skills.
+func (m *Manager) BindSkillsManager(sm *skills.Manager) {
+	if m.SkillCreator != nil && sm != nil {
+		m.SkillCreator.SetManager(sm)
+	}
+}
+
 // Start initializes all Cortex systems
 // Systems started in order of dependency:
 func (m *Manager) Start() error {

@@ -4,20 +4,16 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/magicwubiao/go-magic/internal/provider"
 
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 )
@@ -31,20 +27,18 @@ type Manager struct {
 	searchDirs        []string
 	builtinDir        string
 	skills            map[string]*Skill
-	bundles           map[string]*SkillBundle // 技能捆绑包
-	toolNames         []string                // Cached tool names from registry
-	registryURL       string                  // ClawHub or GitHub registry URL
-	hubLock           *HubLock                // Hub 安装跟踪 (.hub/lock.json)
-	bundledManifest   *BundledManifest        // 内置技能跟踪 (.bundled_manifest)
-	disabledSkills    *DisabledSkillsConfig   // 禁用技能配置
-	skillsDir         string                  // 技能目录路径 (~/.magic/skills)
-	hubDir            string                  // Hub 目录路径 (~/.magic/skills/.hub)
-	autoSkillCreation bool                    // 是否自动创建技能
-	minPatternFreq    int                     // 最小模式频率阈值
+	toolNames         []string              // Cached tool names from registry
+	registryURL       string                // ClawHub or GitHub registry URL
+	hubLock           *HubLock              // Hub 安装跟踪 (.hub/lock.json)
+	bundledManifest   *BundledManifest      // 内置技能跟踪 (.bundled_manifest)
+	disabledSkills    *DisabledSkillsConfig // 禁用技能配置
+	skillsDir         string                // 技能目录路径 (~/.magic/skills)
+	hubDir            string                // Hub 目录路径 (~/.magic/skills/.hub)
+	autoSkillsDir     string                // 自动技能根目录 (.../auto_skills)
+	autoSkillCreation bool                  // 是否自动创建技能
+	minPatternFreq    int                   // 最小模式频率阈值
 	// Registry manager for hub search/install
 	registryMgr *RegistryManager
-	// Auto skill creator
-	autoCreator *AutoCreator
 }
 
 // ManagerConfig 配置管理器
@@ -55,6 +49,7 @@ type ManagerConfig struct {
 	ToolNames         []string // 可用工具名称列表（用于技能验证）
 	AutoSkillCreation bool     // 是否自动创建技能
 	MinPatternFreq    int      // 最小模式频率阈值
+	AutoSkillsDir     string   // 自动技能目录路径（三态管理根目录）
 }
 
 // NewManager creates a new skill manager with default configuration
@@ -97,15 +92,21 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 
 	skillsDir := config.SearchDirs[0]
 
+	// 自动技能目录：显式指定时用指定路径，否则在第一个 searchDir 下建 auto_skills
+	autoDir := config.AutoSkillsDir
+	if autoDir == "" {
+		autoDir = filepath.Join(skillsDir, "auto_skills")
+	}
+
 	m := &Manager{
 		searchDirs:        config.SearchDirs,
 		builtinDir:        config.BuiltinDir,
 		registryURL:       config.RegistryURL,
 		toolNames:         config.ToolNames,
 		skills:            make(map[string]*Skill),
-		bundles:           make(map[string]*SkillBundle),
 		skillsDir:         skillsDir,
 		hubDir:            filepath.Join(skillsDir, ".hub"),
+		autoSkillsDir:     autoDir,
 		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
 		autoSkillCreation: config.AutoSkillCreation,
 		minPatternFreq:    config.MinPatternFreq,
@@ -114,6 +115,10 @@ func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
 
 	// 创建 Hub 目录
 	os.MkdirAll(m.hubDir, 0755)
+	// 创建三态目录
+	os.MkdirAll(filepath.Join(m.autoSkillsDir, "pending"), 0755)
+	os.MkdirAll(filepath.Join(m.autoSkillsDir, "approved"), 0755)
+	os.MkdirAll(filepath.Join(m.autoSkillsDir, "archived"), 0755)
 
 	// 加载 Hub lock.json
 	m.loadHubLock()
@@ -158,47 +163,6 @@ func (m *Manager) startEffectivenessCleanup(effMgr *EffectivenessManager) {
 			fmt.Printf("[skills] Cleaned old effectiveness records (older than 30 days)\n")
 		}
 	}
-}
-
-// InitAutoCreator initializes the auto skill creator with a provider for LLM-based description generation
-func (m *Manager) InitAutoCreator(prov provider.Provider) {
-	cfg := DefaultAutoCreatorConfig()
-	cfg.MinToolCalls = 5
-	cfg.Provider = prov
-	m.autoCreator = NewAutoCreator(m, cfg)
-}
-
-// NewManagerWithToolRegistry creates a manager with tool registry integration
-func NewManagerWithToolRegistry(toolNames []string) (*Manager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	config := &ManagerConfig{
-		SearchDirs: []string{
-			filepath.Join(home, ".magic", "skills"),
-			"skills",
-			filepath.Join(".magic", "skills"),
-		},
-		ToolNames: toolNames,
-	}
-
-	m, err := NewManagerWithConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	m.toolNames = toolNames
-
-	return m, nil
-}
-
-// SetToolNames 设置可用工具名称列表
-func (m *Manager) SetToolNames(names []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.toolNames = names
 }
 
 // loadBuiltinSkills 加载内置技能
@@ -247,86 +211,6 @@ func (m *Manager) loadBuiltinSkills() error {
 				skill.Source = "builtin"
 				m.skills[skill.Name] = skill
 			}
-		}
-	}
-
-	return nil
-}
-
-// LoadBundles 从配置目录加载技能捆绑包
-func (m *Manager) LoadBundles(bundlesDir string) error {
-	if bundlesDir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(bundlesDir)
-	if err != nil {
-		return nil // 目录不存在不算错误
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
-			continue
-		}
-
-		path := filepath.Join(bundlesDir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-
-		var config SkillBundleConfig
-		if err := parseBundleYAML(data, &config); err != nil {
-			continue
-		}
-
-		bundle := &SkillBundle{
-			Name:        config.Name,
-			Description: config.Description,
-			Instruction: config.Instruction,
-		}
-
-		// 加载捆绑包中的技能
-		for _, skillName := range config.Skills {
-			if skill, err := m.Get(skillName); err == nil {
-				bundle.Skills = append(bundle.Skills, skill)
-			}
-			// 缺失的技能被跳过而非报错（参考 Hermes 行为）
-		}
-
-		m.mu.Lock()
-		m.bundles[config.Name] = bundle
-		m.mu.Unlock()
-	}
-
-	return nil
-}
-
-// parseBundleYAML 解析捆绑包 YAML 配置（简易解析器）
-func parseBundleYAML(data []byte, config *SkillBundleConfig) error {
-	lines := strings.Split(string(data), "\n")
-	var currentList *[]string
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-
-		if strings.HasPrefix(trimmed, "name:") {
-			config.Name = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "name:")), "\"'")
-		} else if strings.HasPrefix(trimmed, "description:") {
-			config.Description = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "description:")), "\"'")
-		} else if strings.HasPrefix(trimmed, "instruction:") {
-			// 多行 instruction
-			config.Instruction = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "instruction:")), "\"'")
-			currentList = nil
-		} else if strings.HasPrefix(trimmed, "skills:") {
-			currentList = &config.Skills
-		} else if currentList != nil && strings.HasPrefix(trimmed, "- ") {
-			item := strings.TrimSpace(trimmed[2:])
-			item = strings.Trim(item, "\"'")
-			*currentList = append(*currentList, item)
 		}
 	}
 
@@ -772,25 +656,6 @@ func (m *Manager) List() []*Skill {
 	return skills
 }
 
-// ListByTags returns skills filtered by tags
-func (m *Manager) ListByTags(tags []string) []*Skill {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]*Skill, 0)
-	for _, s := range m.skills {
-		for _, tag := range tags {
-			for _, skillTag := range s.GetTags() {
-				if strings.EqualFold(skillTag, tag) {
-					result = append(result, s)
-					break
-				}
-			}
-		}
-	}
-	return result
-}
-
 // Get retrieves a skill by name
 func (m *Manager) Get(name string) (*Skill, error) {
 	m.mu.RLock()
@@ -808,6 +673,18 @@ func (m *Manager) Add(skill *Skill) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.addInternal(skill)
+}
+
+// RegisterSkill registers a skill in memory (no save to disk) - used by auto-creator
+func (m *Manager) RegisterSkill(skill *Skill) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.skills[skill.Name] = skill
+}
+
+// addInternal is the locked add implementation
+func (m *Manager) addInternal(skill *Skill) error {
 	data, err := json.MarshalIndent(skill, "", "  ")
 	if err != nil {
 		return err
@@ -856,28 +733,15 @@ func (m *Manager) Remove(name string) error {
 }
 
 // GetSkillsContext returns all skills formatted for system prompt
+// Note: pending/rejected auto-skills are NOT included here - they need manual approval first.
 func (m *Manager) GetSkillsContext() string {
 	var ctx string
 	for _, skill := range m.skills {
-		content := skill.ResolveContent("")
-		ctx += fmt.Sprintf("\n--- Skill: %s ---\n[Skill directory: %s]\n", skill.Name, skill.Dir)
-		if files := skill.SupportingFiles(); files != "" {
-			ctx += files + "\n"
+		// 跳过未批准和已拒绝的自动生成技能
+		if skill.Source == SkillSourceAuto &&
+			(skill.Status == SkillStatusPending || skill.Status == SkillStatusRejected) {
+			continue
 		}
-		ctx += content + "\n"
-	}
-	return ctx
-}
-
-// GetSkillsContextForTags returns skills context for specific tags
-func (m *Manager) GetSkillsContextForTags(tags []string) string {
-	skills := m.ListByTags(tags)
-	if len(skills) == 0 {
-		return ""
-	}
-
-	var ctx string
-	for _, skill := range skills {
 		content := skill.ResolveContent("")
 		ctx += fmt.Sprintf("\n--- Skill: %s ---\n[Skill directory: %s]\n", skill.Name, skill.Dir)
 		if files := skill.SupportingFiles(); files != "" {
@@ -1003,261 +867,6 @@ func (m *Manager) Search(keyword string) []*Skill {
 	return matched
 }
 
-// SkillMetadata represents skill metadata from registry
-type SkillMetadata struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Version     string   `json:"version"`
-	Author      string   `json:"author"`
-	Tags        []string `json:"tags"`
-	URL         string   `json:"url"`
-}
-
-// SearchRegistry searches the skill registry
-func (m *Manager) SearchRegistry(keyword string) ([]SkillMetadata, error) {
-	// First, search local skills directory
-	localResults := m.searchLocalSkills(keyword)
-
-	// If registry URL is configured, search remote
-	if m.registryURL != "" {
-		remoteResults, err := m.searchRemoteRegistry(keyword)
-		if err != nil {
-			// Return local results even if remote fails
-			return localResults, nil
-		}
-		// Merge results, avoiding duplicates
-		return m.mergeMetadata(localResults, remoteResults), nil
-	}
-
-	return localResults, nil
-}
-
-// searchLocalSkills searches local skills directory
-func (m *Manager) searchLocalSkills(keyword string) []SkillMetadata {
-	keyword = strings.ToLower(keyword)
-	var results []SkillMetadata
-
-	for _, skill := range m.skills {
-		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
-			strings.Contains(strings.ToLower(skill.Description), keyword) {
-			results = append(results, SkillMetadata{
-				Name:        skill.Name,
-				Description: skill.Description,
-				Version:     "local",
-				Tags:        skill.GetTags(),
-				URL:         "", // Local skill, no URL
-			})
-		}
-	}
-
-	return results
-}
-
-// searchRemoteRegistry searches the remote registry
-func (m *Manager) searchRemoteRegistry(keyword string) ([]SkillMetadata, error) {
-	// Build registry search URL
-	searchURL := fmt.Sprintf("%s/skills/search?q=%s", strings.TrimSuffix(m.registryURL, "/"), keyword)
-
-	resp, err := http.Get(searchURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search registry: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("registry returned status %d", resp.StatusCode)
-	}
-
-	var results []SkillMetadata
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("failed to parse registry response: %w", err)
-	}
-
-	return results, nil
-}
-
-// mergeMetadata merges local and remote metadata, avoiding duplicates
-func (m *Manager) mergeMetadata(local, remote []SkillMetadata) []SkillMetadata {
-	seen := make(map[string]bool)
-
-	var merged []SkillMetadata
-
-	// Add local first (they take precedence)
-	for _, m := range local {
-		seen[m.Name] = true
-		merged = append(merged, m)
-	}
-
-	// Add remote that aren't duplicates
-	for _, r := range remote {
-		if !seen[r.Name] {
-			merged = append(merged, r)
-		}
-	}
-
-	return merged
-}
-
-// InstallFromRegistry installs a skill from registry
-func (m *Manager) InstallFromRegistry(name string) error {
-	// Check if already installed
-	if _, err := m.Get(name); err == nil {
-		return fmt.Errorf("skill %s is already installed", name)
-	}
-
-	// If registry URL is set, try to download from remote
-	if m.registryURL != "" {
-		if err := m.installFromRemote(name); err != nil {
-			return fmt.Errorf("failed to install from registry: %w", err)
-		}
-		return nil
-	}
-
-	// Try to find in local skills directory
-	if err := m.installFromLocal(name); err != nil {
-		return fmt.Errorf("skill %s not found in local registry", name)
-	}
-
-	return nil
-}
-
-// installFromRemote downloads and installs a skill from remote registry
-func (m *Manager) installFromRemote(name string) error {
-	// Build download URL
-	downloadURL := fmt.Sprintf("%s/skills/%s/download", strings.TrimSuffix(m.registryURL, "/"), name)
-
-	resp, err := http.Get(downloadURL)
-	if err != nil {
-		return fmt.Errorf("failed to download skill: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("skill not found in registry (status %d)", resp.StatusCode)
-	}
-
-	// Check content type
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "zip") {
-		return m.installZipSkill(name, resp.Body)
-	}
-
-	// Otherwise, treat as JSON
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read skill data: %w", err)
-	}
-
-	var skill Skill
-	if err := json.Unmarshal(data, &skill); err != nil {
-		return fmt.Errorf("failed to parse skill: %w", err)
-	}
-
-	return m.Add(&skill)
-}
-
-// installZipSkill installs a skill from a ZIP archive
-func (m *Manager) installZipSkill(name string, reader io.Reader) error {
-	// Create temporary directory for extraction
-	tmpDir, err := os.MkdirTemp("", "skill-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Extract ZIP
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("failed to read zip data: %w", err)
-	}
-
-	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return fmt.Errorf("failed to read zip: %w", err)
-	}
-
-	// Extract all files
-	for _, f := range zipReader.File {
-		fpath := filepath.Join(tmpDir, f.Name)
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, 0755)
-			continue
-		}
-
-		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-		if err != nil {
-			return fmt.Errorf("failed to extract file %s: %w", f.Name, err)
-		}
-
-		inFile, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return fmt.Errorf("failed to open zip file %s: %w", f.Name, err)
-		}
-
-		_, err = io.Copy(outFile, inFile)
-		outFile.Close()
-		inFile.Close()
-		if err != nil {
-			return fmt.Errorf("failed to write file %s: %w", f.Name, err)
-		}
-	}
-
-	// Find skill file
-	skillPath := filepath.Join(tmpDir, name+".json")
-	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
-		// Try SKILL.md
-		skillPath = filepath.Join(tmpDir, "SKILL.md")
-	}
-
-	// Load and add skill
-	skill := m.loadSkillFromFile(skillPath)
-	if skill == nil {
-		return fmt.Errorf("failed to load skill from extracted files")
-	}
-
-	return m.Add(skill)
-}
-
-// installFromLocal installs a skill from local skills directory
-func (m *Manager) installFromLocal(name string) error {
-	// Search in local skills
-	for _, dir := range m.searchDirs {
-		// Try direct file match
-		skillPath := filepath.Join(dir, name+".json")
-		if _, err := os.Stat(skillPath); err == nil {
-			skill := m.loadSkillFromFile(skillPath)
-			if skill != nil {
-				return m.Add(skill)
-			}
-		}
-
-		// Try directory match
-		skillDir := filepath.Join(dir, name)
-		if info, err := os.Stat(skillDir); err == nil && info.IsDir() {
-			// Check for SKILL.md
-			manifestPath := filepath.Join(skillDir, "SKILL.md")
-			if _, err := os.Stat(manifestPath); err == nil {
-				skill := m.loadSkillFromManifest(manifestPath)
-				if skill != nil {
-					return m.Add(skill)
-				}
-			}
-
-			// Check for manifest.json
-			manifestPath = filepath.Join(skillDir, "manifest.json")
-			if _, err := os.Stat(manifestPath); err == nil {
-				skill := m.loadSkillFromManifest(manifestPath)
-				if skill != nil {
-					return m.Add(skill)
-				}
-			}
-		}
-	}
-
-	return fmt.Errorf("skill %s not found in local directories", name)
-}
-
 // InstallFromURL installs a skill directly from a URL
 func (m *Manager) InstallFromURL(url string) error {
 	resp, err := http.Get(url)
@@ -1316,6 +925,7 @@ func (m *Manager) GetSkillInfo(name string) (description string, tools []string,
 
 // GetSkillsList returns a compact list of skill names and descriptions
 // for system prompt injection (instead of full skill content which can be 48KB+)
+// Note: pending/rejected auto-skills are NOT included - they need manual approval.
 func (m *Manager) GetSkillsList() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1327,33 +937,13 @@ func (m *Manager) GetSkillsList() string {
 	var sb strings.Builder
 	sb.WriteString("Available skills (use /skill <name> for details):\n")
 	for name, skill := range m.skills {
+		if skill.Source == SkillSourceAuto &&
+			(skill.Status == SkillStatusPending || skill.Status == SkillStatusRejected) {
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", name, skill.Description))
 	}
 	return sb.String()
-}
-
-// GetBundle 获取技能捆绑包
-func (m *Manager) GetBundle(name string) (*SkillBundle, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	bundle, ok := m.bundles[name]
-	if !ok {
-		return nil, fmt.Errorf("bundle %s not found", name)
-	}
-	return bundle, nil
-}
-
-// ListBundles 列出所有捆绑包
-func (m *Manager) ListBundles() []*SkillBundle {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	bundles := make([]*SkillBundle, 0, len(m.bundles))
-	for _, b := range m.bundles {
-		bundles = append(bundles, b)
-	}
-	return bundles
 }
 
 // ScanSkillSecurity 扫描技能内容的安全性
@@ -1400,6 +990,7 @@ func ScanSkillSecurity(content string) *SecurityScanResult {
 
 // GetSkillsContextForPrompt 返回用于系统提示词注入的技能索引（Level 0）
 // 参考 Hermes Agent 的 ephemeral 注入：只注入名称和描述，不注入完整内容
+// Note: pending/rejected auto-skills are NOT included - they need manual approval.
 func (m *Manager) GetSkillsContextForPrompt() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1411,6 +1002,11 @@ func (m *Manager) GetSkillsContextForPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("Available skills (use skill_view for details):\n")
 	for name, skill := range m.skills {
+		// 跳过未批准和已拒绝的自动生成技能
+		if skill.Source == SkillSourceAuto &&
+			(skill.Status == SkillStatusPending || skill.Status == SkillStatusRejected) {
+			continue
+		}
 		desc := skill.Description
 		if desc == "" {
 			desc = "No description"
@@ -1680,220 +1276,6 @@ func (m *Manager) Patch(name, oldString, newString string) error {
 	return nil
 }
 
-// WriteSkillFile 向技能目录写入参考文件（参考 Hermes Agent 的 write_file 操作）
-// 支持 references/、scripts/、templates/ 子目录
-func (m *Manager) WriteSkillFile(name, filePath, content string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	skill, ok := m.skills[name]
-	if !ok {
-		return fmt.Errorf("skill %s not found", name)
-	}
-
-	if skill.Dir == "" {
-		return fmt.Errorf("skill %s has no directory", name)
-	}
-
-	// 安全扫描
-	scanResult := ScanSkillSecurity(content)
-	if !scanResult.Safe {
-		return fmt.Errorf("write blocked by security scan: %s", strings.Join(scanResult.Threats, "; "))
-	}
-
-	// 构建完整路径（防止路径遍历攻击）
-	cleanPath := filepath.Clean(filePath)
-	if strings.Contains(cleanPath, "..") {
-		return fmt.Errorf("path traversal detected: %s", filePath)
-	}
-
-	fullPath := filepath.Join(skill.Dir, cleanPath)
-
-	// 确保父目录存在
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	// 写入文件
-	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return nil
-}
-
-// RemoveSkillFile 从技能目录删除参考文件（参考 Hermes Agent 的 remove_file 操作）
-func (m *Manager) RemoveSkillFile(name, filePath string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	skill, ok := m.skills[name]
-	if !ok {
-		return fmt.Errorf("skill %s not found", name)
-	}
-
-	if skill.Dir == "" {
-		return fmt.Errorf("skill %s has no directory", name)
-	}
-
-	// 防止路径遍历攻击
-	cleanPath := filepath.Clean(filePath)
-	if strings.Contains(cleanPath, "..") {
-		return fmt.Errorf("path traversal detected: %s", filePath)
-	}
-
-	// 保护 SKILL.md 不被删除
-	if cleanPath == "SKILL.md" || cleanPath == filepath.Join(skill.Dir, "SKILL.md") {
-		return fmt.Errorf("cannot remove SKILL.md, use delete action instead")
-	}
-
-	fullPath := filepath.Join(skill.Dir, cleanPath)
-
-	if err := os.Remove(fullPath); err != nil {
-		return fmt.Errorf("failed to remove file: %w", err)
-	}
-
-	return nil
-}
-
-// =============================================================================
-// Progressive Disclosure (渐进式加载)
-// =============================================================================
-
-// LoadSkillAtLevel loads a skill at the specified level
-// Level 0: List only - returns name, description
-// Level 1: Full content - returns complete skill content
-// Level 2: With references - returns specific reference file
-func (m *Manager) LoadSkillAtLevel(name string, options *SkillViewOptions) (interface{}, error) {
-	skill, err := m.Get(name)
-	if err != nil {
-		return nil, err
-	}
-
-	switch options.Level {
-	case Level0:
-		// Return lightweight list item
-		return SkillListItem{
-			Name:        skill.Name,
-			Description: skill.Description,
-			Tags:        skill.Tags,
-			Version:     skill.Version,
-		}, nil
-
-	case Level1:
-		// Return full skill content
-		content := skill.Content
-		if content == "" {
-			// Try to load from SKILL.md
-			if skill.Dir != "" {
-				skillMdPath := filepath.Join(skill.Dir, "SKILL.md")
-				if data, err := os.ReadFile(skillMdPath); err == nil {
-					content = string(data)
-				}
-			}
-		}
-		return map[string]interface{}{
-			"name":        skill.Name,
-			"description": skill.Description,
-			"content":     content,
-			"tags":        skill.Tags,
-			"version":     skill.Version,
-			"author":      skill.Author,
-			"source":      skill.Source,
-			"tools":       skill.GetTools(),
-			"dir":         skill.Dir,
-			"supporting":  skill.SupportingFiles(),
-		}, nil
-
-	case Level2:
-		// Return specific reference file
-		if options.Path == "" {
-			return nil, fmt.Errorf("path required for Level2 load")
-		}
-		if skill.Dir == "" {
-			return nil, fmt.Errorf("skill has no directory")
-		}
-		refPath := filepath.Join(skill.Dir, options.Path)
-		data, err := os.ReadFile(refPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read reference file: %w", err)
-		}
-		return map[string]interface{}{
-			"name":    skill.Name,
-			"path":    options.Path,
-			"content": string(data),
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("unknown load level: %d", options.Level)
-	}
-}
-
-// ListSkillsAtLevel0 returns lightweight skill list for efficient indexing
-func (m *Manager) ListSkillsAtLevel0() ([]SkillListItem, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	items := make([]SkillListItem, 0, len(m.skills))
-	for _, skill := range m.skills {
-		items = append(items, SkillListItem{
-			Name:        skill.Name,
-			Description: skill.Description,
-			Tags:        skill.Tags,
-			Version:     skill.Version,
-		})
-	}
-	return items, nil
-}
-
-// FilterSkillsByCondition returns visible skills based on activation conditions
-func (m *Manager) FilterSkillsByCondition(availableToolsets, availableTools []string, platform string) []*Skill {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var visible []*Skill
-	for _, skill := range m.skills {
-		if skill.Metadata == nil {
-			// No conditions, always visible
-			visible = append(visible, skill)
-			continue
-		}
-
-		// Check hermes conditions
-		if hermes, ok := skill.Metadata["hermes"].(map[string]interface{}); ok {
-			cond := &SkillActivationCondition{}
-
-			if v, ok := hermes["fallback_for_toolset"].(string); ok {
-				cond.FallbackForToolset = v
-			}
-			if v, ok := hermes["requires_toolset"].(string); ok {
-				cond.RequiresToolset = v
-			}
-			if v, ok := hermes["platforms"]; ok {
-				if platforms, ok := v.([]interface{}); ok {
-					for _, p := range platforms {
-						if pStr, ok := p.(string); ok {
-							cond.Platforms = append(cond.Platforms, pStr)
-						}
-					}
-				}
-			}
-
-			if cond.RequiresToolset != "" || len(cond.Platforms) > 0 ||
-				cond.FallbackForToolset != "" {
-				if cond.IsVisible(availableToolsets, availableTools, platform) {
-					visible = append(visible, skill)
-				}
-			} else {
-				visible = append(visible, skill)
-			}
-		} else {
-			visible = append(visible, skill)
-		}
-	}
-	return visible
-}
-
 // =============================================================================
 // Skills Hub Integration
 // =============================================================================
@@ -1919,247 +1301,6 @@ func (m *Manager) SearchHub(keyword string, sources []HubSource) ([]HubSkill, er
 
 	// Only search ClawHub - simplified to single source
 	return m.registryMgr.SearchAll(ctx, keyword, 20)
-}
-
-// searchGitHub searches GitHub for skill repositories using GitHub Search API
-func (m *Manager) searchGitHub(keyword string) ([]HubSkill, error) {
-	// 空关键词时返回热门技能仓库
-	if keyword == "" {
-		return m.getPopularGitHubSkills(), nil
-	}
-
-	// Search GitHub repos with SKILL.md or skill-related topics
-	searchQueries := []string{
-		fmt.Sprintf("SKILL.md %s in:file", keyword),
-		fmt.Sprintf("magic-skill %s in:name,description", keyword),
-		fmt.Sprintf("agent-skill %s in:name,description", keyword),
-	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	var allResults []HubSkill
-	seen := make(map[string]bool)
-
-	for _, query := range searchQueries {
-		apiURL := fmt.Sprintf("https://api.github.com/search/code?q=%s&per_page=10", url.QueryEscape(query))
-		req, err := http.NewRequest("GET", apiURL, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("User-Agent", "go-magic-skill-hub")
-		req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			continue
-		}
-
-		var searchResult struct {
-			Items []struct {
-				Repository struct {
-					FullName    string `json:"full_name"`
-					Description string `json:"description"`
-					HTMLURL     string `json:"html_url"`
-					Stargazers  int    `json:"stargazers_count"`
-				} `json:"repository"`
-				Path string `json:"path"`
-			} `json:"items"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-
-		for _, item := range searchResult.Items {
-			repo := item.Repository.FullName
-			if seen[repo] {
-				continue
-			}
-			seen[repo] = true
-
-			// Extract skill name from repo path
-			skillName := repo
-			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
-				skillName = repo[idx+1:]
-			}
-
-			desc := item.Repository.Description
-			if desc == "" {
-				desc = fmt.Sprintf("Skill from %s", repo)
-			}
-
-			allResults = append(allResults, HubSkill{
-				Name:        skillName,
-				Description: desc,
-				Source:      HubSourceGitHub,
-				SourceID:    repo,
-				URL:         item.Repository.HTMLURL,
-			})
-		}
-
-		// Rate limit: don't send too many requests
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	return allResults, nil
-}
-
-// searchOfficialSkills searches Hermes official skills from GitHub
-func (m *Manager) searchOfficialSkills(keyword string) ([]HubSkill, error) {
-	// 从 Hermes Agent 官方仓库获取可选技能列表
-	// https://github.com/NousResearch/hermes-agent/tree/main/optional-skills
-	apiURL := "https://api.github.com/repos/NousResearch/hermes-agent/contents/optional-skills"
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		// 如果 API 调用失败，返回硬编码的常用技能
-		return m.getFallbackOfficialSkills(keyword), nil
-	}
-
-	req.Header.Set("User-Agent", "go-magic-skill-manager")
-
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return m.getFallbackOfficialSkills(keyword), nil
-	}
-	defer resp.Body.Close()
-
-	var contents []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-		Path string `json:"path"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
-		return m.getFallbackOfficialSkills(keyword), nil
-	}
-
-	var results []HubSkill
-	keyword = strings.ToLower(keyword)
-
-	for _, item := range contents {
-		if item.Type != "dir" {
-			continue
-		}
-
-		skill := HubSkill{
-			Name:        item.Name,
-			Description: fmt.Sprintf("Hermes official skill: %s", item.Name),
-			Source:      HubSourceOfficial,
-			SourceID:    item.Name,
-			URL:         fmt.Sprintf("https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/%s", item.Name),
-		}
-
-		// 关键词过滤
-		if keyword != "" {
-			if !strings.Contains(strings.ToLower(skill.Name), keyword) &&
-				!strings.Contains(strings.ToLower(skill.Description), keyword) {
-				continue
-			}
-		}
-
-		results = append(results, skill)
-	}
-
-	return results, nil
-}
-
-// getFallbackOfficialSkills 返回硬编码的官方技能列表（API 失败时使用）
-func (m *Manager) getFallbackOfficialSkills(keyword string) []HubSkill {
-	officialSkills := []HubSkill{
-		{Name: "security/1password", Description: "1Password integration for secure credential management", Source: HubSourceOfficial, SourceID: "security/1password"},
-		{Name: "security/bitwarden", Description: "Bitwarden password manager integration", Source: HubSourceOfficial, SourceID: "security/bitwarden"},
-		{Name: "migration/openclaw", Description: "Migration guide from OpenClaw", Source: HubSourceOfficial, SourceID: "migration/openclaw"},
-		{Name: "devtools/kubernetes", Description: "Kubernetes deployment and management", Source: HubSourceOfficial, SourceID: "devtools/kubernetes"},
-		{Name: "devtools/docker", Description: "Docker container management", Source: HubSourceOfficial, SourceID: "devtools/docker"},
-		{Name: "utils/file-finder", Description: "Find and search files in your project", Source: HubSourceOfficial, SourceID: "utils/file-finder"},
-		{Name: "utils/text-search", Description: "Search text patterns in code and documents", Source: HubSourceOfficial, SourceID: "utils/text-search"},
-		{Name: "database/sql-finder", Description: "Find and analyze SQL queries", Source: HubSourceOfficial, SourceID: "database/sql-finder"},
-		{Name: "code/bug-finder", Description: "Find bugs and issues in code", Source: HubSourceOfficial, SourceID: "code/bug-finder"},
-		{Name: "docs/content-search", Description: "Search and find content in documentation", Source: HubSourceOfficial, SourceID: "docs/content-search"},
-	}
-
-	if keyword == "" {
-		return officialSkills
-	}
-
-	var results []HubSkill
-	keyword = strings.ToLower(keyword)
-	for _, skill := range officialSkills {
-		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
-			strings.Contains(strings.ToLower(skill.Description), keyword) {
-			results = append(results, skill)
-		}
-	}
-	return results
-}
-
-// getPopularGitHubSkills returns popular skill repositories from GitHub
-// NOTE: Removed skill collections (hermes-agent, etc.) as they download all contained skills
-// Users should search for individual skills or browse the official skills collection
-func (m *Manager) getPopularGitHubSkills() []HubSkill {
-	return []HubSkill{
-		{Name: "thedotmack/claude-mem", Description: "Persistent memory plugin for Claude Code", Source: HubSourceGitHub, SourceID: "thedotmack/claude-mem", URL: "https://github.com/thedotmack/claude-mem"},
-		{Name: "alibaba/page-agent", Description: "Alibaba Page Agent - Web page interaction agent", Source: HubSourceGitHub, SourceID: "alibaba/page-agent", URL: "https://github.com/alibaba/page-agent"},
-		{Name: "FireRedTeam/FireRed-OpenStoryline", Description: "AI-driven conversational video creation agent", Source: HubSourceGitHub, SourceID: "FireRedTeam/FireRed-OpenStoryline", URL: "https://github.com/FireRedTeam/FireRed-OpenStoryline"},
-		{Name: "hanshuaikang/nezha", Description: "Multi-project AI coding assistant manager", Source: HubSourceGitHub, SourceID: "hanshuaikang/nezha", URL: "https://github.com/hanshuaikang/nezha"},
-		{Name: "getpaseo/paseo", Description: "Unified platform for Claude Code, Codex and OpenCode", Source: HubSourceGitHub, SourceID: "getpaseo/paseo", URL: "https://github.com/getpaseo/paseo"},
-		{Name: "microsoft/promptflow-skills", Description: "Microsoft PromptFlow skill templates", Source: HubSourceGitHub, SourceID: "microsoft/promptflow-skills", URL: "https://github.com/microsoft/promptflow-skills"},
-	}
-}
-
-// searchSkillsSh searches skills.sh registry
-func (m *Manager) searchSkillsSh(keyword string) ([]HubSkill, error) {
-	// For now, return mock data - real implementation would call skills.sh API
-	mockSkills := []HubSkill{
-		{Name: "vercel-labs/agent-skills/vercel-react-best-practices", Description: "React best practices for Vercel", Source: HubSourceSkillsSh, SourceID: "vercel-labs/agent-skills/vercel-react-best-practices"},
-		{Name: "anthropics/skills/pdf", Description: "PDF processing and analysis", Source: HubSourceSkillsSh, SourceID: "anthropics/skills/pdf"},
-		{Name: "github-search/skills/code-search", Description: "Find code across GitHub repositories", Source: HubSourceSkillsSh, SourceID: "github-search/skills/code-search"},
-		{Name: "log-finder/skills/trace", Description: "Find and analyze log traces", Source: HubSourceSkillsSh, SourceID: "log-finder/skills/trace"},
-	}
-
-	if keyword == "" {
-		return mockSkills, nil
-	}
-
-	var results []HubSkill
-	keyword = strings.ToLower(keyword)
-	for _, skill := range mockSkills {
-		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
-			strings.Contains(strings.ToLower(skill.Description), keyword) {
-			results = append(results, skill)
-		}
-	}
-	return results, nil
-}
-
-// searchHubSkills searches ClawHub marketplace
-func (m *Manager) searchHubSkills(keyword string) ([]HubSkill, error) {
-	// For now, return mock data - real implementation would call clawhub.ai API
-	mockSkills := []HubSkill{
-		{Name: "k8s-deploy", Description: "Kubernetes deployment workflow", Source: HubSourceHub, SourceID: "k8s-deploy"},
-		{Name: "git-workflow", Description: "Git workflow automation", Source: HubSourceHub, SourceID: "git-workflow"},
-		{Name: "find-unused-code", Description: "Find and remove unused code in your project", Source: HubSourceHub, SourceID: "find-unused-code"},
-		{Name: "search-replace", Description: "Find and replace text across multiple files", Source: HubSourceHub, SourceID: "search-replace"},
-		{Name: "dependency-finder", Description: "Find outdated dependencies in your project", Source: HubSourceHub, SourceID: "dependency-finder"},
-	}
-
-	if keyword == "" {
-		return mockSkills, nil
-	}
-
-	var results []HubSkill
-	keyword = strings.ToLower(keyword)
-	for _, skill := range mockSkills {
-		if strings.Contains(strings.ToLower(skill.Name), keyword) ||
-			strings.Contains(strings.ToLower(skill.Description), keyword) {
-			results = append(results, skill)
-		}
-	}
-	return results, nil
 }
 
 // InstallFromHub installs a skill from a hub source using the registry manager
@@ -2196,197 +1337,6 @@ func (m *Manager) InstallFromHub(source HubSource, sourceID string) error {
 	}
 
 	return nil
-}
-
-// installFromOfficial installs a skill from Hermes Agent official skill collection
-// sourceID is the skill name (e.g., "security/1password")
-func (m *Manager) installFromOfficial(ctx context.Context, skillName string) error {
-	// Hermes Agent official skills are in: https://github.com/NousResearch/hermes-agent/tree/main/optional-skills
-	owner := "NousResearch"
-	repo := "hermes-agent"
-	ref := "main"
-	skillPath := "optional-skills/" + skillName
-
-	// Create staging directory
-	tmpDir, err := os.MkdirTemp("", "go-magic-official-skill-*")
-	if err != nil {
-		return fmt.Errorf("failed to create staging directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Download the specific skill directory from GitHub
-	client := &http.Client{Timeout: 30 * time.Second}
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
-		owner, repo, url.QueryEscape(skillPath), url.QueryEscape(ref))
-
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("User-Agent", "go-magic-skill-manager")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch skill directory: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub API returned %d for skill %s", resp.StatusCode, skillName)
-	}
-
-	// Parse directory contents
-	var contents []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-		Path string `json:"path"`
-		URL  string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
-		return fmt.Errorf("failed to parse directory contents: %w", err)
-	}
-
-	// Download each item (file or directory) in the skill directory
-	for _, item := range contents {
-		if item.Type == "dir" {
-			// Recursively download subdirectory
-			subDir := filepath.Join(tmpDir, item.Name)
-			if err := os.MkdirAll(subDir, 0755); err != nil {
-				return err
-			}
-			if err := m.downloadGitHubDir(ctx, item.URL, subDir); err != nil {
-				return fmt.Errorf("failed to download directory %s: %w", item.Name, err)
-			}
-			continue
-		}
-
-		if item.Type != "file" {
-			continue
-		}
-
-		filePath := filepath.Join(tmpDir, item.Name)
-		if err := m.downloadGitHubFile(ctx, item.URL, filePath); err != nil {
-			return fmt.Errorf("failed to download file %s: %w", item.Name, err)
-		}
-	}
-
-	// Check if we downloaded any files
-	files, err := os.ReadDir(tmpDir)
-	if err != nil || len(files) == 0 {
-		return fmt.Errorf("no files downloaded for skill %s", skillName)
-	}
-
-	// Security scan and install
-	return m.scanAndInstallFromStaging(tmpDir, HubSourceOfficial, skillName)
-}
-
-// downloadGitHubFile downloads a single file from GitHub Contents API
-func (m *Manager) downloadGitHubFile(ctx context.Context, apiURL, filePath string) error {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "go-magic-skill-manager")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub API returned %d", resp.StatusCode)
-	}
-
-	var fileInfo struct {
-		Content  string `json:"content"`
-		Encoding string `json:"encoding"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&fileInfo); err != nil {
-		return err
-	}
-
-	if fileInfo.Encoding == "base64" && fileInfo.Content != "" {
-		decoded, err := base64.StdEncoding.DecodeString(fileInfo.Content)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return err
-		}
-		return os.WriteFile(filePath, decoded, 0644)
-	}
-
-	return fmt.Errorf("no content available for file")
-}
-
-// downloadGitHubDir recursively downloads a directory from GitHub Contents API
-func (m *Manager) downloadGitHubDir(ctx context.Context, apiURL, targetDir string) error {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "go-magic-skill-manager")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub API returned %d for directory", resp.StatusCode)
-	}
-
-	var contents []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-		URL  string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
-		return err
-	}
-
-	for _, item := range contents {
-		if item.Type == "dir" {
-			subDir := filepath.Join(targetDir, item.Name)
-			if err := os.MkdirAll(subDir, 0755); err != nil {
-				return err
-			}
-			if err := m.downloadGitHubDir(ctx, item.URL, subDir); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if item.Type != "file" {
-			continue
-		}
-
-		filePath := filepath.Join(targetDir, item.Name)
-		if err := m.downloadGitHubFile(ctx, item.URL, filePath); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// installFromHubLegacy handles legacy installation methods
-func (m *Manager) installFromHubLegacy(source HubSource, sourceID string) error {
-	switch source {
-	case HubSourceSkillsSh:
-		return m.installFromRemoteURL(fmt.Sprintf("https://%s", sourceID), source)
-	case HubSourceWellKnown:
-		return m.installFromRemoteURL(sourceID, source)
-	default:
-		return fmt.Errorf("unsupported hub source: %s", source)
-	}
 }
 
 // scanAndInstallFromStaging scans staged skills and installs them with proper directory structure
@@ -2561,122 +1511,6 @@ func copyDirectory(source, destination string) error {
 	})
 }
 
-// installFromRemoteURL 从远程 URL 下载并安装技能
-// 复用 InstallFromURL 的下载逻辑，避免循环导入 importer 包
-func (m *Manager) installFromRemoteURL(rawURL string, source HubSource) error {
-	fmt.Printf("Downloading skill from: %s\n", rawURL)
-
-	// 创建临时目录
-	tmpDir, err := os.MkdirTemp("", "go-magic-skill-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// 下载文件
-	client := &http.Client{Timeout: 60 * time.Second}
-	req, err := http.NewRequest("GET", rawURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("User-Agent", "go-magic-skill-manager")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status: %s", resp.Status)
-	}
-
-	// 读取响应内容
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	// 判断内容类型并处理
-	contentType := resp.Header.Get("Content-Type")
-	isZip := strings.Contains(contentType, "zip") || strings.HasSuffix(rawURL, ".zip")
-	isTarGz := strings.Contains(contentType, "gzip") || strings.HasSuffix(rawURL, ".tar.gz")
-
-	var skillDir string
-
-	if isZip || isTarGz {
-		// 解压到临时目录
-		if isZip {
-			if err := m.extractZip(body, tmpDir); err != nil {
-				return fmt.Errorf("failed to extract zip: %w", err)
-			}
-		}
-		skillDir = tmpDir
-	} else if strings.Contains(contentType, "json") || strings.HasSuffix(rawURL, ".json") {
-		// JSON 格式（manifest.json）
-		manifestPath := filepath.Join(tmpDir, "manifest.json")
-		if err := os.WriteFile(manifestPath, body, 0644); err != nil {
-			return fmt.Errorf("failed to write manifest: %w", err)
-		}
-		skillDir = tmpDir
-	} else {
-		// 可能是 Markdown 或文本（SKILL.md）
-		skillMdPath := filepath.Join(tmpDir, "SKILL.md")
-		if err := os.WriteFile(skillMdPath, body, 0644); err != nil {
-			return fmt.Errorf("failed to write SKILL.md: %w", err)
-		}
-		skillDir = tmpDir
-	}
-
-	fmt.Printf("Downloaded to: %s\n", skillDir)
-
-	// 尝试加载下载的技能
-	skill := m.loadSkillFromFile(skillDir)
-	if skill == nil {
-		// 可能是目录，尝试找到 SKILL.md
-		skillMdPath := filepath.Join(skillDir, "SKILL.md")
-		if _, err := os.Stat(skillMdPath); err == nil {
-			skill = m.loadSkillFromFile(skillMdPath)
-		}
-	}
-
-	if skill == nil {
-		return fmt.Errorf("no valid skill found in downloaded content")
-	}
-
-	// 安全扫描
-	scanResult := ScanSkillSecurity(skill.Content)
-	if !scanResult.Safe {
-		return fmt.Errorf("security scan failed: %s", strings.Join(scanResult.Threats, "; "))
-	}
-
-	// 设置来源
-	skill.Source = SkillSourceRegistry
-
-	// 安装到全局技能目录
-	if err := m.Add(skill); err != nil {
-		return err
-	}
-
-	// 记录到 Hub lock.json
-	lockEntry := HubLockEntry{
-		SkillName:     skill.Name,
-		Source:        source,
-		SourceID:      rawURL,
-		URL:           rawURL,
-		InstalledAt:   time.Now(),
-		SecurityAudit: "passed",
-	}
-	if err := m.AddHubLockEntry(lockEntry); err != nil {
-		fmt.Printf("Warning: failed to save hub lock entry: %v\n", err)
-	}
-
-	// 添加审计日志
-	m.appendAuditLog("install", skill.Name, source, "success")
-
-	return nil
-}
-
 // extractZip 解压 ZIP 数据到指定目录
 func (m *Manager) extractZip(data []byte, destDir string) error {
 	reader := bytes.NewReader(data)
@@ -2723,57 +1557,6 @@ func (m *Manager) extractZip(data []byte, destDir string) error {
 	}
 
 	return nil
-}
-
-// CheckForUpdates checks installed hub skills for updates
-func (m *Manager) CheckForUpdates() (map[string]bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	updates := make(map[string]bool)
-	for name, skill := range m.skills {
-		if skill.Source == SkillSourceRegistry {
-			// Check if there's a newer version in the hub lock
-			lockEntry := m.GetHubLockEntry(name)
-			if lockEntry != nil {
-				// For GitHub sources, check the last modified time of the remote repo
-				// by comparing the installed_at time with a 24h threshold
-				// In a real implementation, this would fetch the remote commit hash
-				// and compare with the installed version
-				updates[name] = m.checkRemoteUpdate(lockEntry)
-			} else {
-				updates[name] = false
-			}
-		}
-	}
-	return updates, nil
-}
-
-// checkRemoteUpdate checks if a remote skill has been updated
-// Returns true if the skill was installed more than 24 hours ago
-// (simplified heuristic - real implementation would compare commit hashes)
-func (m *Manager) checkRemoteUpdate(lockEntry *HubLockEntry) bool {
-	if lockEntry == nil || lockEntry.InstalledAt.IsZero() {
-		return false
-	}
-	// Consider skills installed more than 24h ago as potentially outdated
-	// This is a simplified check - real implementation would compare commit hashes
-	return time.Since(lockEntry.InstalledAt) > 24*time.Hour
-}
-
-// UpdateHubSkill updates a skill from its hub source
-func (m *Manager) UpdateHubSkill(name string) error {
-	skill, ok := m.skills[name]
-	if !ok {
-		return fmt.Errorf("skill %s not found", name)
-	}
-
-	if skill.Source != SkillSourceRegistry {
-		return fmt.Errorf("skill %s is not a hub skill", name)
-	}
-
-	// Re-install from hub
-	return m.InstallFromHub(HubSource(skill.Source), name)
 }
 
 // =============================================================================
@@ -2878,6 +1661,48 @@ func (m *Manager) GetHubLockEntry(skillName string) *HubLockEntry {
 // IsHubInstalled 检查技能是否从 Hub 安装
 func (m *Manager) IsHubInstalled(skillName string) bool {
 	return m.GetHubLockEntry(skillName) != nil
+}
+
+// UninstallHubSkill 从 Hub 卸载技能（参考 Hermes Agent hermes skills uninstall）
+func (m *Manager) UninstallHubSkill(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查是否从 Hub 安装
+	entry := m.GetHubLockEntry(skillName)
+	if entry == nil {
+		return fmt.Errorf("skill %s is not a hub skill", skillName)
+	}
+
+	// 删除技能文件
+	skill, ok := m.skills[skillName]
+	if ok && skill.Dir != "" {
+		if err := os.RemoveAll(skill.Dir); err != nil {
+			return fmt.Errorf("failed to remove skill directory: %w", err)
+		}
+		delete(m.skills, skillName)
+	}
+
+	// 从 lock.json 移除记录
+	if err := m.RemoveHubLockEntry(skillName); err != nil {
+		return fmt.Errorf("failed to remove lock entry: %w", err)
+	}
+
+	return nil
+}
+
+// appendAuditLog 添加审计日志
+func (m *Manager) appendAuditLog(action, skillName string, source HubSource, status string) {
+	auditLog := filepath.Join(m.hubDir, "audit.log")
+	timestamp := time.Now().Format(time.RFC3339)
+	logEntry := fmt.Sprintf("[%s] %s: skill=%s source=%s status=%s\n", timestamp, action, skillName, source, status)
+
+	f, err := os.OpenFile(auditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(logEntry)
 }
 
 // =============================================================================
@@ -3020,50 +1845,6 @@ func (m *Manager) EnableSkill(skillName string) error {
 	return nil
 }
 
-// DisableSkillForPlatform 按平台禁用技能
-func (m *Manager) DisableSkillForPlatform(skillName, platform string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.disabledSkills.Platform == nil {
-		m.disabledSkills.Platform = make(map[string][]string)
-	}
-
-	platformDisabled, ok := m.disabledSkills.Platform[platform]
-	if !ok {
-		platformDisabled = []string{}
-	}
-
-	for _, name := range platformDisabled {
-		if name == skillName {
-			return nil // 已禁用
-		}
-	}
-
-	m.disabledSkills.Platform[platform] = append(platformDisabled, skillName)
-	return m.saveDisabledSkills()
-}
-
-// EnableSkillForPlatform 按平台启用技能
-func (m *Manager) EnableSkillForPlatform(skillName, platform string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	platformDisabled, ok := m.disabledSkills.Platform[platform]
-	if !ok {
-		return nil
-	}
-
-	for i, name := range platformDisabled {
-		if name == skillName {
-			m.disabledSkills.Platform[platform] = append(platformDisabled[:i], platformDisabled[i+1:]...)
-			return m.saveDisabledSkills()
-		}
-	}
-
-	return nil
-}
-
 // IsSkillDisabled 检查技能是否被禁用
 func (m *Manager) IsSkillDisabled(skillName string, platform string) bool {
 	m.mu.RLock()
@@ -3101,101 +1882,9 @@ func (m *Manager) GetDisabledSkills() *DisabledSkillsConfig {
 	}
 }
 
-// UninstallHubSkill 从 Hub 卸载技能（参考 Hermes Agent hermes skills uninstall）
-func (m *Manager) UninstallHubSkill(skillName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 检查是否从 Hub 安装
-	entry := m.GetHubLockEntry(skillName)
-	if entry == nil {
-		return fmt.Errorf("skill %s is not a hub skill", skillName)
-	}
-
-	// 删除技能文件
-	skill, ok := m.skills[skillName]
-	if ok && skill.Dir != "" {
-		if err := os.RemoveAll(skill.Dir); err != nil {
-			return fmt.Errorf("failed to remove skill directory: %w", err)
-		}
-		delete(m.skills, skillName)
-	}
-
-	// 从 lock.json 移除记录
-	if err := m.RemoveHubLockEntry(skillName); err != nil {
-		return fmt.Errorf("failed to remove lock entry: %w", err)
-	}
-
-	// 添加审计日志
-	m.appendAuditLog("uninstall", skillName, entry.Source, "success")
-
-	return nil
-}
-
-// appendAuditLog 添加审计日志
-func (m *Manager) appendAuditLog(action, skillName string, source HubSource, status string) {
-	auditLog := filepath.Join(m.hubDir, "audit.log")
-	timestamp := time.Now().Format(time.RFC3339)
-	logEntry := fmt.Sprintf("[%s] %s: skill=%s source=%s status=%s\n", timestamp, action, skillName, source, status)
-
-	f, err := os.OpenFile(auditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.WriteString(logEntry)
-}
-
 // =============================================================================
 // External Skill Directories
 // =============================================================================
-
-// ExternalDir represents an external skill directory configuration
-type ExternalDir struct {
-	Path     string `yaml:"path"`
-	ReadOnly bool   `yaml:"read_only"`
-}
-
-// SetExternalDirs sets additional external skill directories to scan
-func (m *Manager) SetExternalDirs(dirs []ExternalDir) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Scan external directories but don't allow writes to them
-	for _, dir := range dirs {
-		if dir.Path == "" {
-			continue
-		}
-
-		// Expand ~ to home directory
-		expandPath := os.Expand(dir.Path, func(key string) string {
-			if key == "~" {
-				home, _ := os.UserHomeDir()
-				return home
-			}
-			return os.Getenv(key)
-		})
-
-		// Add to search dirs if not already present
-		found := false
-		for _, existing := range m.searchDirs {
-			if existing == expandPath {
-				found = true
-				break
-			}
-		}
-		if !found {
-			m.searchDirs = append(m.searchDirs, expandPath)
-		}
-	}
-}
-
-// GetExternalDirs returns configured external directories
-func (m *Manager) GetExternalDirs() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.searchDirs
-}
 
 // GetVersions 获取技能版本历史（委托给 VersionManager）
 func (m *Manager) GetVersions(skillName string) []SkillVersion {
@@ -3227,4 +1916,207 @@ func (m *Manager) GetAllStatistics() []*SkillStatistics {
 		return []*SkillStatistics{}
 	}
 	return effMgr.GetAllStatistics()
+}
+
+// =============================================================================
+// Auto-Skill Three-State Lifecycle Management (参考 Hermes Agent 的 approve/reject)
+// =============================================================================
+
+// GetAutoSkillsDir 返回自动技能的根目录
+func (m *Manager) GetAutoSkillsDir() string {
+	return m.autoSkillsDir
+}
+
+// SetAutoSkillsDir 设置自动技能根目录（供 server.go 在 cortex 绑定后覆盖）
+func (m *Manager) SetAutoSkillsDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.autoSkillsDir = dir
+	os.MkdirAll(filepath.Join(dir, "pending"), 0755)
+	os.MkdirAll(filepath.Join(dir, "approved"), 0755)
+	os.MkdirAll(filepath.Join(dir, "archived"), 0755)
+}
+
+// moveAutoSkill 将技能从一个状态目录移动到另一个状态目录
+// 同时更新内存中的 skill.Status
+func (m *Manager) moveAutoSkill(skillName string, from, to SkillStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[skillName]
+	if !ok {
+		return fmt.Errorf("skill %s not found", skillName)
+	}
+	if skill.Source != SkillSourceAuto {
+		return fmt.Errorf("skill %s is not an auto-generated skill, cannot change status", skillName)
+	}
+
+	if skill.Status != from && skill.Status != "" {
+		// 允许 from="" 表示首次从根目录迁移（兼容历史数据）
+		if from != SkillStatusPending || skill.Status != from {
+			return fmt.Errorf("skill %s status is %s, expected %s",
+				skillName, skill.Status, from)
+		}
+	}
+
+	// 确定源目录和目标目录
+	srcDir := skill.Dir
+	// 如果 skill.Dir 不包含状态子目录名，尝试根据当前状态推断
+	if !strings.Contains(srcDir, string(from)) && from != "" {
+		// 从 autoSkillsDir 的子目录中查找实际的源目录
+		// 通过 dir 路径中的名字来精确定位
+		candidate := filepath.Join(m.autoSkillsDir, string(from), filepath.Base(srcDir))
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			srcDir = candidate
+		}
+	}
+	dstDir := filepath.Join(m.autoSkillsDir, string(to), filepath.Base(srcDir))
+
+	if _, err := os.Stat(srcDir); err != nil {
+		// 源目录不存在，只更新内存状态
+		skill.Status = to
+		skill.Dir = dstDir
+		return nil
+	}
+
+	// 移动目录
+	if err := os.Rename(srcDir, dstDir); err != nil {
+		return fmt.Errorf("failed to move skill from %s to %s: %w", srcDir, dstDir, err)
+	}
+
+	skill.Status = to
+	skill.Dir = dstDir
+
+	// 同步更新 meta.json（如果存在）
+	metaPath := filepath.Join(dstDir, "meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta map[string]interface{}
+		if json.Unmarshal(data, &meta) == nil {
+			meta["status"] = string(to)
+			if newData, err := json.MarshalIndent(meta, "", "  "); err == nil {
+				os.WriteFile(metaPath, newData, 0644)
+			}
+		}
+	}
+
+	// 更新 tags 显示状态
+	// 清理旧状态 tag，添加新状态 tag
+	newTags := make([]string, 0, len(skill.Tags))
+	for _, t := range skill.Tags {
+		if t == "pending" || t == "approved" || t == "archived" || t == "rejected" {
+			continue
+		}
+		newTags = append(newTags, t)
+	}
+	newTags = append(newTags, string(to))
+	skill.Tags = newTags
+
+	return nil
+}
+
+// ApproveAutoSkill 批准一个 pending 的自动生成技能（approved 状态会被 Agent 使用）
+func (m *Manager) ApproveAutoSkill(skillName string) error {
+	return m.moveAutoSkill(skillName, SkillStatusPending, SkillStatusApproved)
+}
+
+// RejectAutoSkill 拒绝一个 pending 的自动生成技能（标记为 rejected）
+func (m *Manager) RejectAutoSkill(skillName string) error {
+	return m.moveAutoSkill(skillName, SkillStatusPending, SkillStatusRejected)
+}
+
+// ArchiveAutoSkill 归档一个已批准技能（archive 状态，不被使用，保留内容）
+func (m *Manager) ArchiveAutoSkill(skillName string) error {
+	return m.moveAutoSkill(skillName, SkillStatusApproved, SkillStatusArchived)
+}
+
+// RestoreAutoSkill 从归档恢复到 approved
+func (m *Manager) RestoreAutoSkill(skillName string) error {
+	return m.moveAutoSkill(skillName, SkillStatusArchived, SkillStatusApproved)
+}
+
+// DeleteAutoSkill 彻底删除一个自动技能（通常是 rejected 或 archived 状态）
+func (m *Manager) DeleteAutoSkill(skillName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, ok := m.skills[skillName]
+	if !ok {
+		return fmt.Errorf("skill %s not found", skillName)
+	}
+	if skill.Source != SkillSourceAuto {
+		return fmt.Errorf("skill %s is not an auto-generated skill", skillName)
+	}
+
+	if skill.Dir != "" {
+		if err := os.RemoveAll(skill.Dir); err != nil {
+			return fmt.Errorf("failed to remove skill directory: %w", err)
+		}
+	}
+
+	delete(m.skills, skillName)
+	return nil
+}
+
+// ListAutoSkillsByStatus 按状态列出自动生成的技能
+func (m *Manager) ListAutoSkillsByStatus(status SkillStatus) []*Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]*Skill, 0)
+	for _, skill := range m.skills {
+		if skill.Source != SkillSourceAuto {
+			continue
+		}
+		// 空状态视同 pending（兼容历史数据）
+		effectiveStatus := skill.Status
+		if effectiveStatus == "" {
+			effectiveStatus = SkillStatusPending
+		}
+		if effectiveStatus == status {
+			result = append(result, skill)
+		}
+	}
+	return result
+}
+
+// GetSkillStatus 返回技能的有效状态（空状态视为 pending）
+func (m *Manager) GetSkillStatus(skillName string) (SkillStatus, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	skill, ok := m.skills[skillName]
+	if !ok {
+		return "", fmt.Errorf("skill %s not found", skillName)
+	}
+	if skill.Source != SkillSourceAuto {
+		return "", fmt.Errorf("skill %s is not an auto-generated skill", skillName)
+	}
+	if skill.Status == "" {
+		return SkillStatusPending, nil
+	}
+	return skill.Status, nil
+}
+
+// GetSkillStatusCounts 返回各状态的自动技能数量（用于 Web UI 展示）
+func (m *Manager) GetSkillStatusCounts() map[SkillStatus]int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	counts := map[SkillStatus]int{
+		SkillStatusPending:  0,
+		SkillStatusApproved: 0,
+		SkillStatusArchived: 0,
+		SkillStatusRejected: 0,
+	}
+	for _, skill := range m.skills {
+		if skill.Source != SkillSourceAuto {
+			continue
+		}
+		status := skill.Status
+		if status == "" {
+			status = SkillStatusPending
+		}
+		counts[status]++
+	}
+	return counts
 }

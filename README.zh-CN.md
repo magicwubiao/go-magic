@@ -31,8 +31,10 @@ React/TypeScript 前端，功能包括：
 - 会话管理（创建、搜索、恢复）
 - Provider 和模型配置，支持热加载
 - 技能管理
-- 插件配置
-- Token 使用统计
+- Cron 定时任务管理
+- 看板（Kanban）
+- Token 使用统计，支持预算告警
+- 群聊，支持多 Agent 对话
 
 ### Coding 模式
 
@@ -84,6 +86,14 @@ Telegram、Discord、Slack、WhatsApp、WeChat、WeCom、钉钉、飞书、QQ、
 
 基于 SQLite 的持久化存储，支持 FTS5 全文搜索所有会话。
 
+### Token 使用统计
+
+详细追踪 API 消耗：
+- Web Dashboard 实时用量面板
+- CLI 命令：`magic usage`
+- 月度预算与告警阈值
+- 按模型、按会话的用量细分
+
 ### 敏感信息脱敏
 
 自动对日志和输出中的 API Key、Token、密码等敏感信息进行脱敏处理。
@@ -131,7 +141,28 @@ magic setup
 
 # 开始聊天
 magic chat
+
+# 启动 Web Dashboard
+magic server
 ```
+
+## CLI 命令
+
+| 命令 | 描述 |
+|------|------|
+| `magic chat` | 启动交互式 TUI 聊天 |
+| `magic server` | 启动 Web Dashboard 服务器 |
+| `magic usage [-d N]` | 显示 Token 使用统计 |
+| `magic stats` | 显示系统统计信息 |
+| `magic config` | 管理配置 |
+| `magic skills` | 管理技能 |
+| `magic cron` | 管理定时任务 |
+| `magic kanban` | 看板管理 |
+| `magic gateway` | 启动消息网关 |
+| `magic mcp` | 管理 MCP 服务器 |
+| `magic logs` | 查看日志 |
+| `magic doctor` | 诊断问题 |
+| `magic backup` | 备份数据 |
 
 ## TUI 斜杠命令
 
@@ -152,8 +183,7 @@ magic chat
 | `/skills [name]` | `/skill` | 列出可用技能 |
 | `/status` | | 显示系统状态 |
 | `/version` | `/ver` | 显示版本 |
-| `/usage [--days N]` | | 显示 Token 使用量 |
-| `/insights [--days N]` | `-d` | 获取使用洞察 |
+| `/usage` | | 显示 Token 使用量 |
 | `/sessions [list|search]` | `/session` | 列出会话 |
 | `/sethome [session_id]` | | 设置消息网关的主会话 |
 | `/context [add|remove|list]` | `/ctx` | 管理上下文文件 |
@@ -204,8 +234,32 @@ magic server
 - 会话管理（创建、搜索、恢复）
 - Provider 和模型配置，支持热加载
 - 技能管理
-- 插件配置
-- Token 使用统计
+- Cron 定时任务管理
+- 看板（Kanban）
+- Token 使用统计，含预算追踪
+- 群聊，支持多 Agent 对话
+
+## Token 使用追踪
+
+追踪 API 消耗：
+
+```bash
+# 显示今日用量
+magic usage
+
+# 显示最近7天
+magic usage -d 7
+
+# 显示最近30天
+magic usage -d 30
+```
+
+在 Web Dashboard 中，访问 Usage 页面可查看：
+- 今日统计
+- 每日趋势图表
+- 月度明细
+- 预算进度条与告警
+- Top 模型和会话
 
 ## 配置
 

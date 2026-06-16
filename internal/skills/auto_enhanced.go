@@ -27,13 +27,18 @@ type EnhancedAutoCreator struct {
 	baseDir      string
 	patterns     []Pattern
 	skillCount   int
-	minFrequency int // Minimum occurrences to generate skill
+	minFrequency int      // Minimum occurrences to generate skill
+	manager      *Manager // optional: register generated skills
 }
 
 // NewEnhancedAutoCreator creates an enhanced skill auto-creator
 func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	skillsDir := filepath.Join(baseDir, "auto_skills")
 	os.MkdirAll(skillsDir, 0755)
+	// 三态子目录：pending / approved / archived
+	os.MkdirAll(filepath.Join(skillsDir, "pending"), 0755)
+	os.MkdirAll(filepath.Join(skillsDir, "approved"), 0755)
+	os.MkdirAll(filepath.Join(skillsDir, "archived"), 0755)
 
 	patternsFile := filepath.Join(skillsDir, "patterns.json")
 	var patterns []Pattern
@@ -44,8 +49,13 @@ func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	return &EnhancedAutoCreator{
 		baseDir:      skillsDir,
 		patterns:     patterns,
-		minFrequency: 2, // Generate skill after seeing pattern twice
+		minFrequency: 5, // 提高阈值：模式出现 5 次才生成，减少噪音
 	}
+}
+
+// SetManager binds a skills Manager so generated skills get registered
+func (e *EnhancedAutoCreator) SetManager(mgr *Manager) {
+	e.manager = mgr
 }
 
 // SavePatterns persists patterns to disk
@@ -114,13 +124,19 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 // CheckAndGenerateSkills checks patterns and generates skills for those meeting criteria
 func (e *EnhancedAutoCreator) CheckAndGenerateSkills() {
 	for _, pattern := range e.patterns {
-		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.6 {
-			// Check if skill already generated for this pattern
-			entries, _ := os.ReadDir(e.baseDir)
+		// 提高置信度阈值也提高到 0.8，避免低质量的自动生成
+		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.8 {
+			// Check if skill already generated for this pattern (look in pending, approved, archived)
 			exists := false
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), fmt.Sprintf("auto-%s-", pattern.Name)) && entry.IsDir() {
-					exists = true
+			for _, subdir := range []string{"pending", "approved", "archived"} {
+				entries, _ := os.ReadDir(filepath.Join(e.baseDir, subdir))
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), fmt.Sprintf("auto-%s-", pattern.Name)) && entry.IsDir() {
+						exists = true
+						break
+					}
+				}
+				if exists {
 					break
 				}
 			}
@@ -149,19 +165,23 @@ func (e *EnhancedAutoCreator) AnalyzeFullSession(sessionData map[string]interfac
 }
 
 // GenerateSkillFromPattern generates a skill file from a detected pattern
+// Newly generated skills go to auto_skills/pending/ and won't be used by the Agent
+// until the user approves them (via CLI or Web UI).
 func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
 	skillID := fmt.Sprintf("auto-%s-%d", pattern.Name, time.Now().Unix())
-	skillDir := filepath.Join(e.baseDir, skillID)
+	skillName := fmt.Sprintf("Automated %s", pattern.Name)
+	// 三态管理：新生成的技能放入 pending 目录
+	skillDir := filepath.Join(e.baseDir, "pending", skillID)
 	os.MkdirAll(skillDir, 0755)
 
 	// Generate skill metadata
 	skillMeta := map[string]interface{}{
 		"id":            skillID,
-		"name":          fmt.Sprintf("Automated %s", pattern.Name),
+		"name":          skillName,
 		"description":   pattern.Description,
 		"author":        "cortex-auto",
 		"created_at":    time.Now().Format(time.RFC3339),
-		"level":         "Level 1",
+		"status":        string(SkillStatusPending),
 		"pattern_tools": pattern.Tools,
 		"frequency":     pattern.Frequency,
 		"examples":      pattern.ExampleTasks,
@@ -176,9 +196,29 @@ func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
 
 	e.skillCount++
 
+	// Register with skills manager so it shows up in /api/skills with pending status
+	// Note: pending status skills are NOT injected into Agent context until approved
+	if e.manager != nil {
+		e.manager.RegisterSkill(&Skill{
+			SkillMeta: SkillMeta{
+				Name:        skillName,
+				Description: pattern.Description,
+				Version:     "1.0.0",
+				Author:      "cortex-auto",
+				Tags:        []string{"auto-generated", "pending"},
+				Source:      SkillSourceAuto,
+				Status:      SkillStatusPending,
+				InstalledAt: time.Now(),
+			},
+			Tools:   pattern.Tools,
+			Content: skillMD,
+			Dir:     skillDir,
+		})
+	}
+
 	// Log skill generation
-	logContent := fmt.Sprintf("[%s] Generated skill '%s' from pattern seen %d times\n",
-		time.Now().Format(time.RFC3339), pattern.Name, pattern.Frequency)
+	logContent := fmt.Sprintf("[%s] Generated pending skill '%s' from pattern seen %d times (dir: %s)\n",
+		time.Now().Format(time.RFC3339), pattern.Name, pattern.Frequency, skillDir)
 	os.WriteFile(filepath.Join(e.baseDir, "generation.log"), []byte(logContent), 0644)
 
 	return nil

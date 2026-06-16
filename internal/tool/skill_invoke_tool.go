@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"fmt"
+
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // SkillInfoProvider 技能信息提供者接口（用于解耦循环依赖）
@@ -53,6 +55,8 @@ func (t *SkillInvokeTool) Execute(ctx context.Context, params map[string]interfa
 	if action == "" {
 		action = "list"
 	}
+
+	log.Infof("[skill] Action: %s", action)
 
 	switch action {
 	case "list":
@@ -126,14 +130,19 @@ func (t *SkillInvokeTool) invokeSkill(params map[string]interface{}) (interface{
 
 	input, _ := params["input"].(string)
 
+	log.Infof("[skill] Invoking skill: %s, input: %s", name, input)
+
 	if t.provider == nil {
 		return nil, fmt.Errorf("skill provider not initialized")
 	}
 
 	desc, tools, content, err := t.provider.GetSkillInfo(name)
 	if err != nil {
+		log.Warnf("[skill] Failed to get skill %s: %v", name, err)
 		return nil, err
 	}
+
+	log.Infof("[skill] Skill %s invoked successfully, content length: %d", name, len(content))
 
 	// 返回技能内容和工具信息
 	result := map[string]interface{}{

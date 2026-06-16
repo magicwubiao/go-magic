@@ -2375,6 +2375,12 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 		}
 	}
 
+	// Initialize skill manager
+	var skillMgr *skills.Manager
+	if sm, err := skills.NewManager(); err == nil {
+		skillMgr = sm
+	}
+
 	// Initialize agent (with cortex option if enabled)
 	aiAgent := agent.NewEnhancedAgent(prov, registry, toolsSchema, systemPrompt, agentOpts...)
 
@@ -2383,8 +2389,8 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 	aiAgent.SetSession(sessionID)
 
 	// Load skills context (compact list only)
-	if mgr, err := skills.NewManager(); err == nil {
-		if skillsList := mgr.GetSkillsList(); skillsList != "" {
+	if skillMgr != nil {
+		if skillsList := skillMgr.GetSkillsList(); skillsList != "" {
 			aiAgent.AddSkillsContext(skillsList)
 		}
 	}
