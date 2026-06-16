@@ -3484,15 +3484,6 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Handle DELETE /{name} - delete provider
-	if r.Method == http.MethodDelete && subRoute == "" {
-		if s.cfg != nil && s.cfg.Providers != nil {
-			delete(s.cfg.Providers, name)
-			s.cfg.Save()
-		}
-		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "deleted": true})
-		return
-	}
 
 	// Handle POST /{name} - create provider (alias for PUT to create new)
 	if r.Method == http.MethodPost && subRoute == "" {
