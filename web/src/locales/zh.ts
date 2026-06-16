@@ -25,7 +25,6 @@ export default {
     save: '保存',
     cancel: '取消',
     delete: '删除',
-    confirmDelete: '确定要删除插件 "{name}" 吗？',
     edit: '编辑',
     add: '添加',
     refresh: '刷新',

@@ -80,7 +80,7 @@
                     <template #trigger>
                       <n-button size="small" type="error">{{ t('common.delete') }}</n-button>
                     </template>
-                    {{ t('plugins.confirmDelete', { name: plugin.name }) }}
+                    {{ t('plugins.confirmDeletePlugin', { name: plugin.name }) }}
                   </n-popconfirm>
                 </n-space>
               </template>
