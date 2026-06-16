@@ -6,7 +6,7 @@ defineProps<{
 
 <template>
   <div class="sidebar-logo" :class="{ collapsed }">
-    <span v-if="!collapsed" class="logo-text">MAGIC</span>
+    <span v-if="!collapsed" class="logo-text">GO MAGIC</span>
     <span v-else class="logo-text-collapsed">M</span>
   </div>
 </template>
