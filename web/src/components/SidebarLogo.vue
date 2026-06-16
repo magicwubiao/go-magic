@@ -27,15 +27,14 @@ defineProps<{
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+.collapsed {
+  justify-content: center;
+}
+
 .logo-text-collapsed {
   font-size: 16px;
   font-weight: 700;
   color: #333;
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-:deep(.n-layout--collapsed) .sidebar-logo {
-  justify-content: center;
-  padding: 10px 0;
 }
 </style>
