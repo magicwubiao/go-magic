@@ -16,20 +16,19 @@ defineProps<{
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 14px 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid #e0e0e0;
 }
 
 .logo-text {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: #333;
-  letter-spacing: -0.5px;
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 .logo-text-collapsed {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: #333;
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -37,13 +36,6 @@ defineProps<{
 
 :deep(.n-layout--collapsed) .sidebar-logo {
   justify-content: center;
-  padding: 14px 0;
-}
-
-.logo-text-collapsed {
-  font-size: 20px;
-  font-weight: 700;
-  color: #333;
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  padding: 10px 0;
 }
 </style>
