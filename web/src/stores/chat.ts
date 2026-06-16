@@ -501,6 +501,10 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       state.streaming = false
       const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      // Ignore abort errors (user cancelled or timeout)
+      if (errMsg.includes('aborted') || errMsg.includes('abort')) {
+        return
+      }
       error.value = { message: 'Failed to send message: ' + errMsg }
     }
   }

@@ -117,6 +117,7 @@ async function onDecompose(goal: Goal) {
     const result = await goalsStore.decomposeGoal(goal.id)
     message.success(t('goals.decomposeSuccess', { count: result.count }))
   } catch (e: any) {
+    if (e?.name === 'AbortError' || e?.message?.includes('aborted')) return
     message.error(e?.message || t('goals.decomposeFailed'))
   } finally {
     decomposing.value = null

@@ -72,9 +72,18 @@ export const useKanbanStore = defineStore('kanban', () => {
   }
 
   async function splitTask(id: string) {
-    const subtasks = await kanbanApi.splitTask(id)
-    tasks.value.push(...subtasks)
-    return subtasks
+    try {
+      const subtasks = await kanbanApi.splitTask(id)
+      tasks.value.push(...subtasks)
+      return subtasks
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : 'Failed to split task'
+      // Ignore abort errors
+      if (errMsg.includes('aborted') || errMsg.includes('abort')) {
+        return []
+      }
+      throw new Error(errMsg)
+    }
   }
 
   return { tasks, upperColumns, lowerColumns, loading, error, stats, loadBoard, addTask, updateTask, moveTask, removeTask, splitTask }
