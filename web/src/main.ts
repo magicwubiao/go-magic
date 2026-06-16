@@ -47,7 +47,8 @@ const router = createRouter({
     { path: '/goals', component: GoalsView },
     { path: '/approval', component: ApprovalView },
     { path: '/files', component: FilesView },
-    
+    { path: '/usage', component: UsageView },
+
   ],
 })
 

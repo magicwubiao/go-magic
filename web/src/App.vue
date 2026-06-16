@@ -77,6 +77,7 @@ import {
   LogOutOutline,
   ShieldCheckmarkOutline,
   FolderOutline,
+  PieChartOutline,
   StatsChartOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
@@ -148,6 +149,7 @@ const menuOptions = computed(() => [
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   
+  { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },
   { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: '/config', icon: renderIcon(SettingsOutline) },
 ])
