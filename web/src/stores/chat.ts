@@ -145,16 +145,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function loadCommands(): Promise<void> {
-    try {
-      const serverCmds = await commandsApi.getCommandList()
-      if (Array.isArray(serverCmds) && serverCmds.length > 0) {
-        console.warn('Server commands not yet integrated; using builtin translated list')
-      }
-    } catch (e) {
-      console.warn('Failed to load commands from server, using defaults')
-    }
-  }
+  // Server commands integration not yet implemented, using builtin commands only
 
   function isCommand(input: string): boolean {
     return input.trim().startsWith('/')
