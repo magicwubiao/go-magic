@@ -710,6 +710,8 @@ onMounted(async () => {
   flex-direction: column;
   flex-shrink: 0;
   background: #fff;
+  overflow: hidden;
+  height: 100%;
 }
 
 .sidebar-header {
