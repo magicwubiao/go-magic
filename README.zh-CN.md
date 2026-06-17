@@ -184,7 +184,7 @@ magic server
 | `/status` | | 显示系统状态 |
 | `/version` | `/ver` | 显示版本 |
 | `/usage` | | 显示 Token 使用量 |
-| `/sessions [list|search]` | `/session` | 列出会话 |
+| `/sessions [list search]` | `/session` | 列出会话 |
 | `/sethome [session_id]` | | 设置消息网关的主会话 |
 | `/context [add|remove|list]` | `/ctx` | 管理上下文文件 |
 | `/stop` | `/cancel` | 停止当前操作 |

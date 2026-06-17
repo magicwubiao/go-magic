@@ -177,16 +177,15 @@ magic server
 | `/undo` | | Undo last action |
 | `/export [format]` | `/save` | Export conversation |
 | `/model [provider:model]` | `/m` | Change the AI model |
-| `/mode [chat|coding]` | | Switch agent mode |
+| `/mode [chat coding]` | | Switch agent mode |
 | `/personality [name]` | `/persona`, `/tone` | Set agent personality |
 | `/tools [category]` | | List available tools |
 | `/skills [name]` | `/skill` | List available skills |
 | `/status` | | Show system status |
 | `/version` | `/ver` | Show version |
 | `/usage` | | Show token usage |
-| `/sessions [list|search]` | `/session` | List sessions |
+| `/sessions [list search]` | `/session` | List sessions |
 | `/sethome [session_id]` | | Set home session for messaging |
-| `/context [add|remove|list]` | `/ctx` | Manage context files |
 | `/stop` | `/cancel` | Stop current operation |
 
 ## Coding Mode
