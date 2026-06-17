@@ -299,6 +299,8 @@ export default {
     estimatedHours: '预估工时(小时)',
     hoursUnit: '小时',
     selectGoal: '选择目标',
+    pleaseInput: '请输入',
+    selectDate: '选择日期',
     aiSplit: 'AI拆分',
     statsTitle: '看板统计',
     totalTasks: '总任务数',

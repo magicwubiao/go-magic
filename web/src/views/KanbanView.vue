@@ -215,10 +215,10 @@
             <n-input v-model:value="taskForm.title" :placeholder="t('kanban.taskTitle')" />
           </n-form-item>
           <n-form-item :label="t('kanban.formDescription')">
-            <n-input v-model:value="taskForm.description" type="textarea" :rows="4" />
+            <n-input v-model:value="taskForm.description" type="textarea" :rows="4" :placeholder="t('kanban.pleaseInput')" />
           </n-form-item>
           <n-form-item :label="t('kanban.dueDate')">
-            <n-date-picker v-model:value="taskForm.due_date" type="date" clearable style="width: 100%;" />
+            <n-date-picker v-model:value="taskForm.due_date" type="date" clearable style="width: 100%;" :placeholder="t('kanban.selectDate')" />
           </n-form-item>
           <n-form-item :label="t('kanban.estimatedHours')">
             <n-input-number v-model:value="taskForm.estimated_hours" :min="0" :step="0.5" style="width: 100%;" />

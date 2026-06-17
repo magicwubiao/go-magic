@@ -297,6 +297,8 @@ export default {
     estimatedHours: 'Estimated Hours',
     hoursUnit: 'h',
     selectGoal: 'Select goal',
+    pleaseInput: 'Please input',
+    selectDate: 'Select date',
     aiSplit: 'AI Split',
     statsTitle: 'Kanban Statistics',
     totalTasks: 'Total Tasks',
