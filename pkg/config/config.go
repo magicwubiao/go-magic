@@ -41,9 +41,9 @@ type Config struct {
 	Display    DisplayConfig             `json:"display,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
-	Mode            string `json:"mode,omitempty"`            // chat, plan, act
-	ChatMode        string `json:"chat_mode,omitempty"`       // chat, coding - default mode for magic chat
-	AutoLinkGoals   bool   `json:"auto_link_goals,omitempty"` // Auto-link new sessions to active goals
+	Mode            string `json:"mode,omitempty"`      // chat, plan, act
+	ChatMode        string `json:"chat_mode,omitempty"` // chat, coding - default mode for magic chat
+	AutoLinkGoals   bool   `json:"auto_link_goals"`     // Auto-link new sessions to active goals (must save false value)
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
 	} `json:"agent,omitempty"`
@@ -238,12 +238,13 @@ func Load() (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Profile:    "default",
-		MagicHome:  "~/.magic",
-		WorkingDir: getDefaultWorkingDir(),
-		Provider:   "deepseek",
-		Model:      "deepseek-chat",
-		Mode:       "chat",
+		Profile:       "default",
+		MagicHome:     "~/.magic",
+		WorkingDir:    getDefaultWorkingDir(),
+		Provider:      "deepseek",
+		Model:         "deepseek-chat",
+		Mode:          "chat",
+		AutoLinkGoals: false,
 		Cortex: CortexConfig{
 			Enabled:             true,
 			SkillMinPatternFreq: 3,

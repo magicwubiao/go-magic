@@ -76,3 +76,24 @@ export async function analyzeGoal(goalId: string, conversation: string): Promise
     body: JSON.stringify({ conversation }),
   })
 }
+
+export interface GoalSession {
+  id: string
+  title: string
+  preview: string
+  model: string
+  message_count: number
+  created_at: number
+  updated_at: number
+  is_active: boolean
+}
+
+export interface GoalSessionsResponse {
+  goal_id: string
+  sessions: GoalSession[]
+  total: number
+}
+
+export async function getGoalSessions(goalId: string): Promise<GoalSessionsResponse> {
+  return request(`/goals/sessions/${goalId}`)
+}

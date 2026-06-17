@@ -16,10 +16,52 @@
             class="session-item"
             :class="{ active: chatStore.activeSessionId === session.id }"
             @click="selectSession(session.id)"
+            @mouseenter="loadSessionGoals(session.id)"
           >
             <div class="session-content">
               <div v-if="editingSessionId !== session.id" class="session-title">
-                {{ session.title || t('chat.untitled') }}
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <!-- Goal indicator - icon only, hover shows details -->
+                  <n-popover 
+                    v-if="getSessionGoals(session.id).length" 
+                    trigger="hover"
+                    placement="right"
+                    :show-arrow="true"
+                    :duration="100"
+                    :show="popoverShow[session.id]"
+                    @mouseenter="popoverShow[session.id] = true"
+                    @mouseleave="popoverShow[session.id] = false"
+                  >
+                    <template #trigger>
+                      <n-icon :component="FlagOutline" :size="14" color="#2080f0" style="cursor: pointer; flex-shrink: 0;" />
+                    </template>
+                    <template #default>
+                      <div style="min-width: 240px; padding: 8px;">
+                        <n-text strong style="font-size: 13px; display: block; margin-bottom: 8px;">
+                          {{ t('goals.linkedGoals') }}
+                        </n-text>
+                        <div class="session-goal-list">
+                          <div 
+                            v-for="goal in getSessionGoals(session.id)" 
+                            :key="goal.id" 
+                            class="session-goal-item"
+                          >
+                            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                              <span style="font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ goal.title }}</span>
+                              <n-progress :percentage="goal.progress" :show-indicator="false" :height="6" style="width: 60px; margin-left: 8px;" />
+                            </div>
+                            <n-text depth="3" style="font-size: 11px;">{{ t('goals.statusOptions.' + goal.status) }}</n-text>
+                            <n-space :size="4" style="margin-top: 4px;">
+                              <n-button size="tiny" text @click="(e: Event) => { e.stopPropagation(); goToGoal(goal.id); }">{{ t('goals.details') }}</n-button>
+                              <n-button size="tiny" text type="error" @click="(e: Event) => { e.stopPropagation(); unlinkSessionGoal(goal.id, session.id, session.id); }">{{ t('goals.unlinkGoal') }}</n-button>
+                            </n-space>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </n-popover>
+                  <span class="session-title-text">{{ session.title || t('chat.untitled') }}</span>
+                </div>
               </div>
               <div v-else class="session-title-edit">
                 <n-input
@@ -79,8 +121,6 @@
 
     <!-- Chat Area -->
     <div class="chat-main">
-      <CurrentGoal />
-
       <n-alert v-if="chatStore.error" type="error" closable style="margin: 12px;" @close="chatStore.error = null">
         {{ chatStore.error.message }}
       </n-alert>
@@ -288,29 +328,36 @@
         </div>
       </div>
     </div>
+
+    <!-- Goal Sidebar -->
+    <GoalSidebar />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import { useChatStore } from '@/stores/chat'
+import { useGoalsStore } from '@/stores/goals'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
-import CurrentGoal from '@/components/CurrentGoal.vue'
+import GoalSidebar from '@/components/GoalSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
+const goalsStore = useGoalsStore()
 const router = useRouter()
+const message = useMessage()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
 
@@ -321,6 +368,12 @@ const editingName = ref('')
 // File upload
 const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
 const uploadingFiles = ref<Set<string>>(new Set())
+
+// Session goals cache
+const sessionGoals = ref<Record<string, sessionsApi.SessionGoal[]>>({})
+
+// Popover show state
+const popoverShow = ref<Record<string, boolean>>({})
 
 // Custom code renderer for highlight.js
 const codeRenderer = (code: string, lang?: string): string => {
@@ -563,6 +616,54 @@ async function selectSession(id: string) {
   await chatStore.selectSession(id)
 }
 
+// Load goals for a session
+async function loadSessionGoals(sessionId: string) {
+  // 等待 Vue 更新完成后再检查缓存
+  await nextTick()
+  if (sessionGoals.value[sessionId]) return
+  try {
+    sessionGoals.value[sessionId] = await sessionsApi.getSessionGoals(sessionId)
+  } catch (e) {
+    sessionGoals.value[sessionId] = []
+  }
+}
+
+// Get goals for a session
+function getSessionGoals(sessionId: string): sessionsApi.SessionGoal[] {
+  return sessionGoals.value[sessionId] || []
+}
+
+// Get goal progress for display
+function getSessionGoalProgress(goalId: string, sessionId: string): number {
+  const goals = getSessionGoals(sessionId)
+  const goal = goals.find(g => g.id === goalId)
+  return goal?.progress || 0
+}
+
+// Navigate to goals page
+function goToGoal(goalId: string) {
+  router.push(`/goals/${goalId}`)
+}
+
+// Unlink session from goal
+async function unlinkSessionGoal(goalId: string, sessionId: string, popoverKey: string) {
+  try {
+    console.log('Unlinking session:', goalId, sessionId)
+    await goalsStore.unlinkSession(goalId, sessionId)
+    console.log('Unlink successful')
+    // 替换对象触发响应式更新
+    popoverShow.value = { ...popoverShow.value, [popoverKey]: false }
+    const newGoals = { ...sessionGoals.value }
+    delete newGoals[sessionId]
+    sessionGoals.value = newGoals
+    await loadSessionGoals(sessionId)
+    message.success(t('goals.unlinked'))
+  } catch (e: any) {
+    console.error('Unlink failed:', e)
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
 function scrollToBottom() {
   nextTick(() => {
     messagesRef.value?.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' })
@@ -581,6 +682,13 @@ function throttledScrollToBottom() {
 
 watch(() => chatStore.messages.length, scrollToBottom)
 watch(() => chatStore.toolCalls.length, scrollToBottom)
+
+// 监听关联变化，清空会话目标缓存
+watch(() => goalsStore.linkVersion, () => {
+  // 清空所有会话的目标缓存，下次鼠标悬停时会重新加载
+  sessionGoals.value = {}
+})
+
 // Do NOT watch streamContent - the throttled buffer flush in chatStore handles updates
 
 onMounted(async () => {
@@ -648,6 +756,16 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-title-edit {

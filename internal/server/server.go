@@ -481,6 +481,40 @@ RULES:
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
 
+	// Inject goal context if session has linked goals
+	if s.goalMgr != nil {
+		goals, err := s.goalMgr.GetGoalsBySession(context.Background(), sessionID)
+		if err == nil && len(goals) > 0 {
+			// Find the most recent active goal
+			var activeGoal *goal.Goal
+			for _, g := range goals {
+				if g.Status == goal.StatusActive {
+					activeGoal = g
+					break
+				}
+			}
+			if activeGoal != nil {
+				systemPrompt += fmt.Sprintf(`
+
+CURRENT USER GOAL:
+- Title: %s
+- Description: %s
+- Progress: %d%%
+- Status: %s
+
+GOAL GUIDANCE:
+- Help the user progress toward this goal
+- When completing significant steps, suggest updating the goal progress
+- Keep responses focused on advancing the goal
+- If the conversation drifts, gently remind the user of their goal`,
+					activeGoal.Title,
+					activeGoal.Description,
+					activeGoal.Progress,
+					activeGoal.Status)
+			}
+		}
+	}
+
 	// Build agent options
 	var agentOpts []agent.AgentOption
 	// Enable memory if config says so OR if cortex is available (cortex provides snapshot memory)
@@ -849,6 +883,8 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/goals/current", withCORS(requireAuth(s.handleGoalCurrent)))
 	mux.HandleFunc("/api/goals/analyze", withCORS(requireAuth(s.handleGoalAnalyze)))
 	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
+	// Goal sessions - get linked sessions with details
+	mux.HandleFunc("/api/goals/sessions/", withCORS(requireAuth(s.handleGoalSessions)))
 
 	// Approval Management
 	mux.HandleFunc("/api/approval/status", withCORS(requireAuth(s.handleApprovalStatus)))
@@ -1195,6 +1231,13 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for goals endpoint - get goals linked to this session
+	if strings.HasSuffix(path, "/goals") {
+		sessionID := strings.TrimSuffix(path, "/goals")
+		s.handleSessionGoals(w, r, sessionID)
+		return
+	}
+
 	id := path
 	if id == "" {
 		http.Error(w, "not found", 404)
@@ -1238,6 +1281,42 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// handleSessionGoals handles /api/sessions/{id}/goals - returns goals linked to this session
+func (s *Server) handleSessionGoals(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if s.goalMgr == nil {
+		jsonResponse(w, map[string]interface{}{"session_id": sessionID, "goals": []map[string]interface{}{}})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	ctx := r.Context()
+	goals, err := s.goalMgr.GetGoalsBySession(ctx, sessionID)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"session_id": sessionID, "goals": []map[string]interface{}{}})
+		return
+	}
+
+	// Convert to simple format for display
+	result := []map[string]interface{}{}
+	for _, g := range goals {
+		result = append(result, map[string]interface{}{
+			"id":       g.ID,
+			"title":    g.Title,
+			"status":   g.Status,
+			"progress": g.Progress,
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"session_id": sessionID,
+		"goals":      result,
+	})
 }
 
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -9005,4 +9084,99 @@ func (s *Server) handleGoalByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleGoalSessions handles /api/goals/sessions/{goal_id} - returns linked sessions with details
+func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
+	if s.goalMgr == nil {
+		http.Error(w, "Goal manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	path := strings.TrimPrefix(r.URL.Path, "/api/goals/sessions/")
+	goalID := path
+
+	if goalID == "" {
+		http.Error(w, "Goal ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Get goal
+	g, err := s.goalMgr.Get(ctx, goalID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Get session details for each linked session
+	sessions := []map[string]interface{}{}
+	if s.sessionStore != nil && len(g.SessionIDs) > 0 {
+		for _, sessionID := range g.SessionIDs {
+			sess, err := s.sessionStore.LoadSession(ctx, sessionID)
+			if err != nil {
+				continue // Skip if session not found
+			}
+
+			// Build session summary
+			title := sess.Name
+			if title == "" {
+				// Extract title from first user message
+				for _, m := range sess.Messages {
+					if m.Role == "user" && m.Content != "" {
+						title = strings.TrimSpace(m.Content)
+						if len(title) > 50 {
+							title = title[:50] + "..."
+						}
+						break
+					}
+				}
+			}
+			if title == "" {
+				title = "Untitled"
+			}
+
+			// Build preview from messages
+			preview := ""
+			for _, m := range sess.Messages {
+				if m.Role == "user" || m.Role == "assistant" {
+					preview += m.Content + " "
+					if len(preview) > 150 {
+						break
+					}
+				}
+			}
+			preview = strings.TrimSpace(preview)
+			if len(preview) > 150 {
+				preview = preview[:150] + "..."
+			}
+
+			sessions = append(sessions, map[string]interface{}{
+				"id":            sess.ID,
+				"title":         title,
+				"preview":       preview,
+				"model":         sess.Model,
+				"message_count": len(sess.Messages),
+				"created_at":    sess.CreatedAt.Unix(),
+				"updated_at":    sess.UpdatedAt.Unix(),
+				"is_active":     time.Since(sess.UpdatedAt) < 30*time.Minute,
+			})
+		}
+	}
+
+	// Sort by updated_at desc (most recent first)
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i]["updated_at"].(int64) > sessions[j]["updated_at"].(int64)
+	})
+
+	jsonResponse(w, map[string]interface{}{
+		"goal_id":  goalID,
+		"sessions": sessions,
+		"total":    len(sessions),
+	})
 }

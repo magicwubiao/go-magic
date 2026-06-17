@@ -132,3 +132,22 @@ export function streamChat(sessionId: string, content: string, images?: string[]
   }
   return new EventSource(url)
 }
+
+export interface SessionGoal {
+  id: string
+  title: string
+  status: string
+  progress: number
+}
+
+export async function getSessionGoals(sessionId: string): Promise<SessionGoal[]> {
+  const res = await request<{ session_id: string; goals: SessionGoal[] }>(`/sessions/${sessionId}/goals`)
+  return res.goals || []
+}
+
+export async function unlinkSessionGoal(goalId: string, sessionId: string): Promise<void> {
+  return request(`/goals/${goalId}/unlink`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+}

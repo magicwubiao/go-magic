@@ -7,6 +7,8 @@ export const useGoalsStore = defineStore('goals', () => {
   const goals = ref<Goal[]>([])
   const currentGoal = ref<Goal | null>(null)
   const loading = ref(false)
+  // 用于触发关联变化通知
+  const linkVersion = ref(0)
 
   const activeGoals = computed(() => (goals.value ?? []).filter(g => g.status === 'active'))
   const completedGoals = computed(() => (goals.value ?? []).filter(g => g.status === 'completed'))
@@ -73,12 +75,27 @@ export const useGoalsStore = defineStore('goals', () => {
 
   async function linkSession(goalId: string, sessionId: string) {
     await goalsApi.linkSession(goalId, sessionId)
-    await loadGoal(goalId)
+    linkVersion.value++
+    const idx = goals.value.findIndex(g => g.id === goalId)
+    if (idx >= 0) {
+      const currentIds = goals.value[idx].session_ids || []
+      if (!currentIds.includes(sessionId)) {
+        goals.value[idx] = { ...goals.value[idx], session_ids: [...currentIds, sessionId] }
+      }
+    }
+    try {
+      await loadGoal(goalId)
+    } catch (e) {}
   }
 
   async function unlinkSession(goalId: string, sessionId: string) {
     await goalsApi.unlinkSession(goalId, sessionId)
+    linkVersion.value++
     await loadGoal(goalId)
+    const idx = goals.value.findIndex(g => g.id === goalId)
+    if (idx >= 0) {
+      goals.value[idx] = { ...goals.value[idx], session_ids: goals.value[idx].session_ids.filter(sid => sid !== sessionId) }
+    }
   }
 
   async function decomposeGoal(goalId: string) {
@@ -96,6 +113,7 @@ export const useGoalsStore = defineStore('goals', () => {
     goals,
     currentGoal,
     loading,
+    linkVersion,
     activeGoals,
     completedGoals,
     abandonedGoals,

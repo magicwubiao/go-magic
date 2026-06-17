@@ -15,6 +15,7 @@ export interface Config {
   gateway?: Record<string, unknown>
   working_dir?: string
   chat_mode?: string
+  auto_link_goals?: boolean
   agent?: Record<string, unknown>
   memory?: Record<string, unknown>
   provider_config?: Record<string, unknown>
