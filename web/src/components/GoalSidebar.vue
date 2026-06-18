@@ -51,7 +51,7 @@
           <n-collapse-transition>
             <div v-if="expandedGoals.includes(goal.id)" class="goal-card-details">
               <!-- Description -->
-              <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 8px;">
+              <n-text v-if="goal.description && goal.description !== goal.title" depth="3" style="font-size: 12px; display: block; margin-bottom: 8px;">
                 {{ goal.description }}
               </n-text>
 

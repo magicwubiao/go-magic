@@ -37,7 +37,7 @@
           </n-space>
         </n-space>
 
-        <n-text depth="3">{{ goal.description }}</n-text>
+        <n-text v-if="goal.description && goal.description !== goal.title" depth="3">{{ goal.description }}</n-text>
 
         <n-space align="center">
           <n-progress
