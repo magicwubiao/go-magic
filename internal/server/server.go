@@ -9156,8 +9156,9 @@ func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			preview = strings.TrimSpace(preview)
-			if len(preview) > 150 {
-				preview = preview[:150] + "..."
+			runes := []rune(preview)
+			if len(runes) > 150 {
+				preview = string(runes[:150]) + "..."
 			}
 
 			sessions = append(sessions, map[string]interface{}{

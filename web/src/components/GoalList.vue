@@ -82,7 +82,6 @@
               >
                 <n-space align="center" justify="space-between">
                   <n-space align="center" :size="8">
-                    <n-tag v-if="session.is_active" type="success" size="tiny">{{ t('common.active') }}</n-tag>
                     <n-text style="font-size: 13px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                       {{ session.title }}
                     </n-text>
