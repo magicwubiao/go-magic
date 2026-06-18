@@ -40,7 +40,7 @@
           <!-- Goal header -->
           <div class="goal-card-header" @click="selectGoal(goal)">
             <n-space align="center" justify="space-between" style="width: 100%;">
-              <n-text strong style="font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <n-text strong style="font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all;">
                 {{ goal.title }}
               </n-text>
               <n-tag :type="statusType(goal.status)" size="tiny">{{ t('goals.statusOptions.' + goal.status) }}</n-tag>
