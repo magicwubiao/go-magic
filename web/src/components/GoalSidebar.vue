@@ -278,7 +278,7 @@ async function loadSessionGoals(goalId: string) {
 async function quickUpdate(goal: Goal, progress: number) {
   try {
     await goalsStore.updateGoal(goal.id, { progress })
-    message.success(t('goals.progressUpdated'))
+    message.success(t('goals.progressUpdated', { progress }))
   } catch (e) {
     message.error(t('common.operationFailed'))
   }
