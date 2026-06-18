@@ -399,6 +399,7 @@ function formatTime(timestamp: number): string {
   position: relative;
   transition: width 0.2s;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .goal-sidebar.collapsed {
