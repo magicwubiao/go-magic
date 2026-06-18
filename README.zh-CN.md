@@ -186,7 +186,7 @@ magic server
 | `/usage` | | 显示 Token 使用量 |
 | `/sessions [list search]` | `/session` | 列出会话 |
 | `/sethome [session_id]` | | 设置消息网关的主会话 |
-| `/context [add|remove|list]` | `/ctx` | 管理上下文文件 |
+| `/context [add removel ist]` | `/ctx` | 管理上下文文件 |
 | `/stop` | `/cancel` | 停止当前操作 |
 
 ## Coding 模式
