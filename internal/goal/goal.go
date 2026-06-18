@@ -153,6 +153,12 @@ func (m *Manager) Update(ctx context.Context, id string, updates map[string]inte
 		if goal.Progress < 0 {
 			goal.Progress = 0
 		}
+		// Auto-complete when progress reaches 100%
+		if goal.Progress == 100 && goal.Status != StatusCompleted {
+			goal.Status = StatusCompleted
+			now := time.Now()
+			goal.CompletedAt = &now
+		}
 	}
 
 	goal.UpdatedAt = time.Now()
