@@ -421,6 +421,7 @@ function formatTime(timestamp: number): string {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding-right: 10px;
 }
 
 .sidebar-header {
