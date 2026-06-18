@@ -177,7 +177,7 @@ magic server
 | `/undo` | | 撤销上一次操作 |
 | `/export [format]` | `/save` | 导出对话 |
 | `/model [provider:model]` | `/m` | 切换 AI 模型 |
-| `/mode [chat|coding]` | | 切换 Agent 模式 |
+| `/mode [chat coding]` | | 切换 Agent 模式 |
 | `/personality [name]` | `/persona`, `/tone` | 设置 Agent 人格 |
 | `/tools [category]` | | 列出可用工具 |
 | `/skills [name]` | `/skill` | 列出可用技能 |
