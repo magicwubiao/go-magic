@@ -9130,8 +9130,10 @@ func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
 				for _, m := range sess.Messages {
 					if m.Role == "user" && m.Content != "" {
 						title = strings.TrimSpace(m.Content)
-						if len(title) > 50 {
-							title = title[:50] + "..."
+						// Truncate by runes, not bytes, to avoid cutting UTF-8 characters
+						runes := []rune(title)
+						if len(runes) > 50 {
+							title = string(runes[:50]) + "..."
 						}
 						break
 					}
@@ -9146,7 +9148,9 @@ func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
 			for _, m := range sess.Messages {
 				if m.Role == "user" || m.Role == "assistant" {
 					preview += m.Content + " "
-					if len(preview) > 150 {
+					runes := []rune(preview)
+					if len(runes) > 150 {
+						preview = string(runes[:150]) + "..."
 						break
 					}
 				}
