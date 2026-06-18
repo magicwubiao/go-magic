@@ -446,6 +446,8 @@ function formatTime(timestamp: number): string {
   cursor: pointer;
   transition: background 0.2s;
   position: relative;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .goal-card:hover {
