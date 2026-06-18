@@ -9161,6 +9161,10 @@ func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
 				preview = string(runes[:150]) + "..."
 			}
 
+			// Determine if session is active based on goal status
+			// Session is not active if goal is completed or abandoned
+			isActive := time.Since(sess.UpdatedAt) < 30*time.Minute && g.Status != "completed" && g.Status != "abandoned"
+
 			sessions = append(sessions, map[string]interface{}{
 				"id":            sess.ID,
 				"title":         title,
@@ -9169,7 +9173,7 @@ func (s *Server) handleGoalSessions(w http.ResponseWriter, r *http.Request) {
 				"message_count": len(sess.Messages),
 				"created_at":    sess.CreatedAt.Unix(),
 				"updated_at":    sess.UpdatedAt.Unix(),
-				"is_active":     time.Since(sess.UpdatedAt) < 30*time.Minute,
+				"is_active":     isActive,
 			})
 		}
 	}
