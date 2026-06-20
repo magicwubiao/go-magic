@@ -178,14 +178,19 @@ func (p *TogetherProvider) buildRequest(messages []Message, tools []map[string]i
 func (p *TogetherProvider) convertMessages(messages []Message) []map[string]interface{} {
 	var converted []map[string]interface{}
 
-	for _, msg := range messages {
+	for i, msg := range messages {
 		m := map[string]interface{}{
 			"role":    msg.Role,
 			"content": msg.Content,
 		}
 
 		if msg.Role == "tool" {
-			m["tool_call_id"] = msg.ToolCallID
+			// Use ToolCallID directly if available, otherwise generate a fallback ID
+			if msg.ToolCallID != "" {
+				m["tool_call_id"] = msg.ToolCallID
+			} else {
+				m["tool_call_id"] = fmt.Sprintf("call_together_%d", i)
+			}
 			m["role"] = "tool"
 		}
 
