@@ -1487,7 +1487,13 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 					// Try to get file content from URL
 					if f.URL != "" {
-						if strings.HasPrefix(f.URL, "/api/uploads/") {
+						// Extract path part (remove query parameters if any)
+						fileURLPath := f.URL
+						if idx := strings.IndexAny(fileURLPath, "?"); idx != -1 {
+							fileURLPath = fileURLPath[:idx]
+						}
+
+						if strings.HasPrefix(fileURLPath, "/api/uploads/") {
 							// Local file - read from filesystem
 							uploadsDir := filepath.Join(s.magicHome, "uploads")
 							filePath := filepath.Join(uploadsDir, f.Filename)
@@ -1589,8 +1595,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = append(sess.Messages, types.Message{
-				Role:    "user",
-				Content: content,
+				Role:         "user",
+				Content:      content,
+				ContentParts: contentParts,
 			})
 			sess.UpdatedAt = time.Now()
 			s.sessionStore.SaveSession(ctx, sess)
