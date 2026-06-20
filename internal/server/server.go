@@ -1472,26 +1472,53 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 
-	// Parse files from query parameter (JSON array of {name, data})
-	filesJSON := r.URL.Query().Get("files")
-	if filesJSON != "" {
-		var files []struct {
-			Name     string `json:"name"`
-			Filename string `json:"filename"`
-		}
-		if err := json.Unmarshal([]byte(filesJSON), &files); err == nil {
-			for _, f := range files {
-				if f.Filename != "" {
-					// Read file from uploads directory
-					uploadsDir := filepath.Join(s.magicHome, "uploads")
-					filePath := filepath.Join(uploadsDir, f.Filename)
-					data, err := os.ReadFile(filePath)
-					if err == nil {
-						// Encode to base64 data URL
+	// Parse files from query parameter (JSON array of {name, filename, url})
+		filesJSON := r.URL.Query().Get("files")
+		if filesJSON != "" {
+			var files []struct {
+				Name     string `json:"name"`
+				Filename string `json:"filename"`
+				URL      string `json:"url"`
+			}
+			if err := json.Unmarshal([]byte(filesJSON), &files); err == nil {
+				for _, f := range files {
+					var data []byte
+					var err error
+
+					// Try to get file content from URL
+					if f.URL != "" {
+						if strings.HasPrefix(f.URL, "/api/uploads/") {
+							// Local file - read from filesystem
+							uploadsDir := filepath.Join(s.magicHome, "uploads")
+							filePath := filepath.Join(uploadsDir, f.Filename)
+							data, err = os.ReadFile(filePath)
+						} else {
+							// External URL - fetch content
+							req, _ := http.NewRequest("GET", f.URL, nil)
+							if token := r.URL.Query().Get("token"); token != "" {
+								req.Header.Set("Authorization", "Bearer "+token)
+							}
+							resp, fetchErr := http.DefaultClient.Do(req)
+							if fetchErr == nil {
+								defer resp.Body.Close()
+								data, err = io.ReadAll(resp.Body)
+							} else {
+								err = fetchErr
+							}
+						}
+					} else if f.Filename != "" {
+						// Fallback: try to read from filesystem using filename
+						uploadsDir := filepath.Join(s.magicHome, "uploads")
+						filePath := filepath.Join(uploadsDir, f.Filename)
+						data, err = os.ReadFile(filePath)
+					}
+
+					if err == nil && data != nil {
+						// Determine MIME type from extension
 						mimeType := "application/octet-stream"
-						ext := filepath.Ext(f.Name)
+						ext := strings.ToLower(filepath.Ext(f.Name))
 						switch ext {
-						case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql":
+						case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
 							mimeType = "text/plain"
 						case ".png":
 							mimeType = "image/png"
@@ -1499,19 +1526,31 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 							mimeType = "image/jpeg"
 						case ".gif":
 							mimeType = "image/gif"
+						case ".webp":
+							mimeType = "image/webp"
+						case ".svg":
+							mimeType = "image/svg+xml"
 						case ".pdf":
 							mimeType = "application/pdf"
-						case ".doc", ".docx":
+						case ".doc":
 							mimeType = "application/msword"
+						case ".docx":
+							mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 						case ".xls", ".xlsx":
 							mimeType = "application/vnd.ms-excel"
+						case ".ppt", ".pptx":
+							mimeType = "application/vnd.ms-powerpoint"
+						case ".zip":
+							mimeType = "application/zip"
 						}
+
 						base64Data := base64.StdEncoding.EncodeToString(data)
 						dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
 						contentParts = append(contentParts, types.ContentPart{
 							Type: "file",
 							File: &types.FileInfo{
 								Name:     f.Name,
+								URL:      f.URL,
 								Contents: dataURL,
 							},
 						})
@@ -1519,7 +1558,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				}
 			}
 		}
-	}
 
 	// Validate that we have at least content or media to send
 	if content == "" && len(contentParts) == 0 {

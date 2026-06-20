@@ -124,8 +124,8 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     url += `&images=${encodeURIComponent(JSON.stringify(images))}`
   }
   if (files && files.length) {
-    // Only pass file IDs to avoid long URLs
-    url += `&files=${encodeURIComponent(JSON.stringify(files.map(f => ({ name: f.name, filename: f.filename }))))}`
+    // Include file content as base64 data URL for reliable processing
+    url += `&files=${encodeURIComponent(JSON.stringify(files.map(f => ({ name: f.name, filename: f.filename, url: f.url }))))}`
   }
   if (token) {
     url += `&token=${encodeURIComponent(token)}`
