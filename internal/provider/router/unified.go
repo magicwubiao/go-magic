@@ -36,7 +36,7 @@ func (p *UnifiedProvider) Name() string {
 	return p.name
 }
 
-func (p *UnifiedProvider) Chat(ctx context.Context, messages []types.Message) (*types.ChatResponse, error) {
+func (p *UnifiedProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	candidates := p.buildCandidates()
 
 	run := func(ctx context.Context, provName, model string) (*LLMResponse, error) {
@@ -62,11 +62,8 @@ func (p *UnifiedProvider) Chat(ctx context.Context, messages []types.Message) (*
 	}
 
 	// Safe type assertion with error handling
-	if chatResp, ok := result.Response.RawResponse.(*provider.ChatResponse); ok {
-		return &types.ChatResponse{
-			Content:   chatResp.Content,
-			ToolCalls: chatResp.ToolCalls,
-		}, nil
+	if chatResp, ok := result.Response.RawResponse.(*ChatResponse); ok {
+		return chatResp, nil
 	}
 	return nil, fmt.Errorf("unexpected response type: %T", result.Response.RawResponse)
 }

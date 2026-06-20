@@ -110,7 +110,7 @@ func (p *OpenAICompatibleProvider) SetConvertConfig(cfg *ConvertConfig) {
 }
 
 // Chat implements the Provider interface
-func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*types.ChatResponse, error) {
+func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
 		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
@@ -156,12 +156,12 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 
 	if len(response.Choices) == 0 {
-		return &types.ChatResponse{Content: ""}, nil
+		return &ChatResponse{Content: ""}, nil
 	}
 
 	choice := response.Choices[0]
 
-	chatResp := &types.ChatResponse{
+	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
 	}
 
@@ -188,7 +188,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 }
 
 // ChatWithTools implements the ToolCaller interface
-func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*types.ChatResponse, error) {
+func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":       p.GetModel(),
 		"messages":    ConvertMessagesForProvider(messages, p.BaseProvider),
@@ -236,12 +236,12 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 
 	if len(response.Choices) == 0 {
-		return &types.ChatResponse{Content: ""}, nil
+		return &ChatResponse{Content: ""}, nil
 	}
 
 	choice := response.Choices[0]
 
-	chatResp := &types.ChatResponse{
+	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
 	}
 
