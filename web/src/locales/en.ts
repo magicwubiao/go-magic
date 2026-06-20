@@ -467,6 +467,18 @@ export default {
     cortexEnabledHint: 'Enable the Cortex AI system for enhanced memory and skill evolution',
     cortexSkillPatternFreq: 'Skill Pattern Frequency',
     cortexSkillPatternFreqHint: 'Minimum frequency to detect a skill pattern (1-10)',
+    server: 'Server',
+    serverSaved: 'Server configuration saved',
+    uploadUrlPrefix: 'Upload URL Prefix',
+    uploadUrlPrefixPlaceholder: 'https://your-domain.com/uploads',
+    uploadUrlPrefixHint: 'When set, uploaded files will return publicly accessible URLs',
+    fileStrategy: 'File Strategy',
+    fileStrategyHint: 'auto: small files use base64, large files use URL',
+    fileStrategies: {
+      auto: 'Auto (Recommended)',
+      url: 'URL Reference',
+      base64: 'Base64 Embed',
+    },
   },
   models: {
     title: 'Models & Providers',

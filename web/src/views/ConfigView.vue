@@ -72,6 +72,35 @@
         </n-form>
       </n-tab-pane>
 
+      <!-- Server Tab -->
+      <n-tab-pane name="server" :tab="t('config.server')">
+        <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
+          <n-form-item :label="t('config.uploadUrlPrefix')">
+            <n-input
+              v-model:value="serverForm.upload_url_prefix"
+              :placeholder="t('config.uploadUrlPrefixPlaceholder')"
+              style="width: 400px;"
+            />
+            <template #feedback>
+              <span style="color: #999; font-size: 12px;">{{ t('config.uploadUrlPrefixHint') }}</span>
+            </template>
+          </n-form-item>
+          <n-form-item :label="t('config.fileStrategy')">
+            <n-select
+              v-model:value="serverForm.file_strategy"
+              :options="fileStrategyOptions"
+              style="width: 200px;"
+            />
+            <template #feedback>
+              <span style="color: #999; font-size: 12px;">{{ t('config.fileStrategyHint') }}</span>
+            </template>
+          </n-form-item>
+          <n-form-item>
+            <n-button type="primary" :loading="saving" @click="saveServer">{{ t('common.save') }}</n-button>
+          </n-form-item>
+        </n-form>
+      </n-tab-pane>
+
       <!-- Security Tab -->
       <n-tab-pane name="security" :tab="t('config.security')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
@@ -191,6 +220,17 @@ const cortexForm = reactive({
   skill_min_pattern_freq: 3,
 })
 
+const serverForm = reactive({
+  upload_url_prefix: '',
+  file_strategy: 'auto',
+})
+
+const fileStrategyOptions = computed(() => [
+  { label: t('config.fileStrategies.auto'), value: 'auto' },
+  { label: t('config.fileStrategies.url'), value: 'url' },
+  { label: t('config.fileStrategies.base64'), value: 'base64' },
+])
+
 const approvalForm = reactive({
   strategy: 'smart',
   trust_threshold: 1,
@@ -219,6 +259,10 @@ function populateFromConfig(cfg: any) {
   const cortex = cfg.cortex || {}
   cortexForm.enabled = cortex.enabled !== false
   cortexForm.skill_min_pattern_freq = cortex.skill_min_pattern_freq || 3
+
+  const server = cfg.server || {}
+  serverForm.upload_url_prefix = server.upload_url_prefix || ''
+  serverForm.file_strategy = server.file_strategy || 'auto'
 
   const ac = cfg.approval || {}
   approvalForm.strategy = ac.strategy || 'smart'
@@ -287,6 +331,24 @@ async function saveCortex() {
     })
     await configStore.loadConfig()
     message.success(t('config.cortexSaved'))
+  } catch (e) {
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveServer() {
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      server: {
+        upload_url_prefix: serverForm.upload_url_prefix,
+        file_strategy: serverForm.file_strategy,
+      }
+    })
+    await configStore.loadConfig()
+    message.success(t('config.serverSaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
