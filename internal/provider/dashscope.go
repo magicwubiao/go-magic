@@ -16,6 +16,7 @@ type DashScopeProvider struct {
 	apiKey  string
 	model   string
 	baseURL string
+	*BaseProvider
 }
 
 func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
@@ -26,9 +27,10 @@ func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
 		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	}
 	return &DashScopeProvider{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: baseURL,
+		apiKey:      apiKey,
+		model:       model,
+		baseURL:     baseURL,
+		BaseProvider: NewBaseProvider(),
 	}
 }
 
@@ -39,7 +41,7 @@ func (p *DashScopeProvider) Name() string {
 func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.model,
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -122,7 +124,7 @@ func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*Chat
 func (p *DashScopeProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.model,
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
 		"tools":    tools,
 	}
 

@@ -57,7 +57,7 @@ type BaseStreamProvider struct {
 func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Message, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
 		"model":    bp.GetModel(),
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, &bp.BaseProvider),
 		"stream":   true,
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
@@ -87,7 +87,7 @@ func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Messa
 func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
 		"model":    bp.GetModel(),
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, &bp.BaseProvider),
 		"tools":    tools,
 		"stream":   true,
 		"stream_options": map[string]interface{}{

@@ -531,6 +531,15 @@ GOAL GUIDANCE:
 		agentOpts = append(agentOpts, agent.WithApprovalManager(s.approvalMgr))
 	}
 
+	// Set file conversion config if server config is available
+	if s.cfg != nil && s.cfg.Server.UploadURLPrefix != "" {
+		convertCfg := &provider.ConvertConfig{
+			UploadURLPrefix: s.cfg.Server.UploadURLPrefix,
+			StrategyName:    s.cfg.Server.GetFileStrategy(),
+		}
+		agentOpts = append(agentOpts, agent.WithConvertConfig(convertCfg))
+	}
+
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
 
 	// Enable web approval mode for server-side agents

@@ -102,11 +102,18 @@ func (p *OpenAICompatibleProvider) SetModels(models []ModelInfo) {
 	p.models = models
 }
 
+// SetConvertConfig implements ConvertConfigProvider
+func (p *OpenAICompatibleProvider) SetConvertConfig(cfg *ConvertConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ConvertCfg = cfg
+}
+
 // Chat implements the Provider interface
-func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
+func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*types.ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, &p.BaseProvider),
 	}
 
 	url := p.BaseURL + "/chat/completions"
@@ -189,7 +196,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":       p.GetModel(),
-		"messages":    ConvertMessages(messages),
+		"messages":    ConvertMessagesForProvider(messages, &p.BaseProvider),
 		"tools":       tools,
 		"tool_choice": "auto",
 	}
@@ -284,7 +291,7 @@ func (p *OpenAICompatibleProvider) StreamWithTools(ctx context.Context, messages
 func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messages []types.Message, tools []map[string]interface{}, withTools bool, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessages(messages),
+		"messages": ConvertMessagesForProvider(messages, &p.BaseProvider),
 		"stream":   true,
 		"stream_options": map[string]interface{}{
 			"include_usage": true,

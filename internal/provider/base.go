@@ -189,6 +189,9 @@ type BaseProvider struct {
 
 	// Configuration validation
 	Validated bool
+
+	// File conversion settings
+	ConvertCfg *ConvertConfig
 }
 
 // HealthStatus tracks provider health state for circuit breaker
@@ -271,6 +274,12 @@ func (bp *BaseProvider) WithAPIKeyPrefix(prefix string) *BaseProvider {
 // WithRetryDisabled disables automatic retries
 func (bp *BaseProvider) WithRetryDisabled() *BaseProvider {
 	bp.RetryEnabled = false
+	return bp
+}
+
+// WithConvertConfig sets the file conversion configuration
+func (bp *BaseProvider) WithConvertConfig(cfg *ConvertConfig) *BaseProvider {
+	bp.ConvertCfg = cfg
 	return bp
 }
 

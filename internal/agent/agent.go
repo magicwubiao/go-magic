@@ -213,6 +213,30 @@ func WithSteering(cfg SteeringConfig) AgentOption {
 	}
 }
 
+// WithConvertConfig sets the file conversion configuration
+func WithConvertConfig(cfg *provider.ConvertConfig) AgentOption {
+	return func(a *Agent) {
+		if a.provider != nil {
+			// Try to access BaseProvider if available
+			switch p := a.provider.(type) {
+			case *provider.OpenAICompatibleProvider:
+				p.BaseProvider.WithConvertConfig(cfg)
+			case *provider.DashScopeProvider:
+				if p.BaseProvider != nil {
+					p.BaseProvider.WithConvertConfig(cfg)
+				}
+			case *provider.DeepSeekProvider:
+				p.OpenAICompatibleProvider.BaseProvider.WithConvertConfig(cfg)
+			default:
+				// Try to access SetConvertConfig method via interface
+				if ccp, ok := a.provider.(interface{ SetConvertConfig(*provider.ConvertConfig) }); ok {
+					ccp.SetConvertConfig(cfg)
+				}
+			}
+		}
+	}
+}
+
 // WithLoopLimits configures loop detection limits
 func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 	return func(a *Agent) {

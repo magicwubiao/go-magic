@@ -62,6 +62,11 @@ type CapableProvider interface {
 	GetCapabilities() *Capabilities
 }
 
+// ConvertConfigProvider is an optional interface for providers that support file conversion config
+type ConvertConfigProvider interface {
+	SetConvertConfig(cfg *ConvertConfig)
+}
+
 // Registry manages provider instances.
 type Registry struct {
 	providers map[string]Provider

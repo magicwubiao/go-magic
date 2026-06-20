@@ -279,6 +279,15 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 	return result
 }
 
+// ConvertMessagesForProvider converts messages using the provider's configuration
+func ConvertMessagesForProvider(messages []types.Message, bp *BaseProvider) []map[string]interface{} {
+	var config *ConvertConfig
+	if bp != nil && bp.ConvertCfg != nil {
+		config = bp.ConvertCfg
+	}
+	return ConvertMessagesWithConfig(messages, config)
+}
+
 // convertContentPart converts a single content part based on its type and config
 func convertContentPart(part types.ContentPart, config *ConvertConfig) map[string]interface{} {
 	switch part.Type {
