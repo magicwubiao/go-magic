@@ -27,10 +27,10 @@ func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
 		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	}
 	return &DashScopeProvider{
-		apiKey:      apiKey,
-		model:       model,
-		baseURL:     baseURL,
-		BaseProvider: NewBaseProvider(),
+		apiKey:       apiKey,
+		model:        model,
+		baseURL:      baseURL,
+		BaseProvider: NewBaseProvider(baseURL),
 	}
 }
 

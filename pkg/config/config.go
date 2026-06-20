@@ -81,7 +81,7 @@ type CortexConfig struct {
 // ServerConfig represents server-related configuration
 type ServerConfig struct {
 	UploadURLPrefix string `json:"upload_url_prefix,omitempty"` // Public URL prefix for uploaded files (e.g., "https://your-domain.com/uploads")
-	FileStrategy    string `json:"file_strategy,omitempty"`    // "auto" (default), "url", "base64"
+	FileStrategy    string `json:"file_strategy,omitempty"`     // "auto" (default), "url", "base64"
 }
 
 // GetFileStrategy returns the file strategy, defaulting to "auto"

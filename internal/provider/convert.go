@@ -13,9 +13,9 @@ import (
 type FileStrategy int
 
 const (
-	FileStrategyAuto FileStrategy = iota // Auto-select based on file type
-	FileStrategyURL                      // Prefer URL references (for large files)
-	FileStrategyBase64                   // Always use base64
+	FileStrategyAuto   FileStrategy = iota // Auto-select based on file type
+	FileStrategyURL                        // Prefer URL references (for large files)
+	FileStrategyBase64                     // Always use base64
 )
 
 // LargeFileThreshold is the size (bytes) above which files should use URL instead of base64
@@ -23,9 +23,9 @@ const LargeFileThreshold = 1024 * 1024 // 1MB
 
 // ConvertConfig holds conversion settings
 type ConvertConfig struct {
-	UploadURLPrefix string        // Public URL prefix for uploaded files
-	Strategy        FileStrategy  // File conversion strategy
-	StrategyName    string        // String representation of strategy ("auto", "url", "base64")
+	UploadURLPrefix string       // Public URL prefix for uploaded files
+	Strategy        FileStrategy // File conversion strategy
+	StrategyName    string       // String representation of strategy ("auto", "url", "base64")
 }
 
 // DefaultConvertConfig returns default conversion config
@@ -51,24 +51,24 @@ func ParseFileStrategy(s string) FileStrategy {
 // MIME type categories
 var (
 	imageMimeTypes = map[string]bool{
-		"image/png":  true,
-		"image/jpeg": true,
-		"image/gif":  true,
-		"image/webp": true,
+		"image/png":     true,
+		"image/jpeg":    true,
+		"image/gif":     true,
+		"image/webp":    true,
 		"image/svg+xml": true,
 	}
 
 	textMimeTypes = map[string]bool{
-		"text/plain":                  true,
-		"text/html":                   true,
-		"text/css":                    true,
-		"text/csv":                    true,
-		"text/markdown":                true,
-		"application/json":            true,
-		"application/xml":             true,
-		"application/javascript":       true,
-		"application/x-yaml":          true,
-		"application/x-sh":            true,
+		"text/plain":             true,
+		"text/html":              true,
+		"text/css":               true,
+		"text/csv":               true,
+		"text/markdown":          true,
+		"application/json":       true,
+		"application/xml":        true,
+		"application/javascript": true,
+		"application/x-yaml":     true,
+		"application/x-sh":       true,
 	}
 
 	codeMimeTypes = map[string]bool{
@@ -86,12 +86,12 @@ var (
 	}
 
 	documentMimeTypes = map[string]bool{
-		"application/pdf":         true,
-		"application/msword":                         true,
+		"application/pdf":    true,
+		"application/msword": true,
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
-		"application/vnd.ms-excel":                  true,
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
-		"application/vnd.ms-powerpoint":             true,
+		"application/vnd.ms-excel": true,
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+		"application/vnd.ms-powerpoint":                                             true,
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
 	}
 )
@@ -339,7 +339,7 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		if strings.HasPrefix(file.Contents, "data:") {
 			parts := strings.SplitN(file.Contents, ",", 2)
 			if len(parts) == 2 {
-				fileSize = len(parts[1]) * 3 / 4
+				fileSize = int64(len(parts[1]) * 3 / 4)
 			}
 		}
 	}

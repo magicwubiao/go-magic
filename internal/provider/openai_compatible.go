@@ -113,7 +113,7 @@ func (p *OpenAICompatibleProvider) SetConvertConfig(cfg *ConvertConfig) {
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*types.ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, &p.BaseProvider),
+		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
 	}
 
 	url := p.BaseURL + "/chat/completions"
@@ -156,18 +156,13 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 
 	if len(response.Choices) == 0 {
-		return &ChatResponse{Content: ""}, nil
+		return &types.ChatResponse{Content: ""}, nil
 	}
 
 	choice := response.Choices[0]
 
-	chatResp := &ChatResponse{
+	chatResp := &types.ChatResponse{
 		Content: choice.Message.Content,
-		Usage: &Usage{
-			PromptTokens:     response.Usage.PromptTokens,
-			CompletionTokens: response.Usage.CompletionTokens,
-			TotalTokens:      response.Usage.TotalTokens,
-		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
@@ -193,10 +188,10 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 }
 
 // ChatWithTools implements the ToolCaller interface
-func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
+func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*types.ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":       p.GetModel(),
-		"messages":    ConvertMessagesForProvider(messages, &p.BaseProvider),
+		"messages":    ConvertMessagesForProvider(messages, p.BaseProvider),
 		"tools":       tools,
 		"tool_choice": "auto",
 	}
@@ -241,18 +236,13 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 
 	if len(response.Choices) == 0 {
-		return &ChatResponse{Content: ""}, nil
+		return &types.ChatResponse{Content: ""}, nil
 	}
 
 	choice := response.Choices[0]
 
-	chatResp := &ChatResponse{
+	chatResp := &types.ChatResponse{
 		Content: choice.Message.Content,
-		Usage: &Usage{
-			PromptTokens:     response.Usage.PromptTokens,
-			CompletionTokens: response.Usage.CompletionTokens,
-			TotalTokens:      response.Usage.TotalTokens,
-		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
@@ -291,7 +281,7 @@ func (p *OpenAICompatibleProvider) StreamWithTools(ctx context.Context, messages
 func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messages []types.Message, tools []map[string]interface{}, withTools bool, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, &p.BaseProvider),
+		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
 		"stream":   true,
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
