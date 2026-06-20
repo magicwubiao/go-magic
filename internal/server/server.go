@@ -531,14 +531,25 @@ GOAL GUIDANCE:
 		agentOpts = append(agentOpts, agent.WithApprovalManager(s.approvalMgr))
 	}
 
-	// Set file conversion config if server config is available
-	if s.cfg != nil && s.cfg.Server.UploadURLPrefix != "" {
-		convertCfg := &provider.ConvertConfig{
-			UploadURLPrefix: s.cfg.Server.UploadURLPrefix,
-			StrategyName:    s.cfg.Server.GetFileStrategy(),
-		}
-		agentOpts = append(agentOpts, agent.WithConvertConfig(convertCfg))
+	// Set file conversion config
+	convertCfg := &provider.ConvertConfig{
+		UploadURLPrefix: "",
+		StrategyName:    "auto",
+		SupportVision:   false,
 	}
+	// Get model name to check vision support
+	if s.cfg != nil && s.provider != nil {
+		if m, ok := s.provider.(interface{ GetModel() string }); ok {
+			modelName := m.GetModel()
+			convertCfg.SupportVision = provider.ModelSupportsVision(modelName)
+		}
+		// Set upload URL prefix if configured
+		if s.cfg.Server.UploadURLPrefix != "" {
+			convertCfg.UploadURLPrefix = s.cfg.Server.UploadURLPrefix
+		}
+		convertCfg.StrategyName = s.cfg.Server.GetFileStrategy()
+	}
+	agentOpts = append(agentOpts, agent.WithConvertConfig(convertCfg))
 
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
 

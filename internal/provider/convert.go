@@ -26,6 +26,7 @@ type ConvertConfig struct {
 	UploadURLPrefix string       // Public URL prefix for uploaded files
 	Strategy        FileStrategy // File conversion strategy
 	StrategyName    string       // String representation of strategy ("auto", "url", "base64")
+	SupportVision   bool         // Whether the model supports vision (image_url format)
 }
 
 // DefaultConvertConfig returns default conversion config
@@ -46,6 +47,38 @@ func ParseFileStrategy(s string) FileStrategy {
 	default:
 		return FileStrategyAuto
 	}
+}
+
+// ModelSupportsVision checks if a model supports vision (image_url format)
+func ModelSupportsVision(modelName string) bool {
+	if modelName == "" {
+		return false
+	}
+	modelLower := strings.ToLower(modelName)
+
+	// Models that support vision
+	visionModels := []string{
+		"gpt-4o", "gpt-4-turbo", "gpt-4-vision",
+		"claude-3", "claude-3.5", "claude-3-opus", "claude-3-sonnet",
+		"gemini-1.5", "gemini-pro-vision",
+		"qwen-vl", "qwen-vl-max", "qwen2-vl",
+	}
+
+	for _, m := range visionModels {
+		if strings.Contains(modelLower, m) {
+			return true
+		}
+	}
+
+	// Check for common vision model patterns
+	visionPatterns := []string{"vision", "vl", "gpt-4o", "claude-3", "gemini-1.5"}
+	for _, pattern := range visionPatterns {
+		if strings.Contains(modelLower, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // MIME type categories
@@ -298,7 +331,19 @@ func convertContentPart(part types.ContentPart, config *ConvertConfig) map[strin
 		}
 
 	case "image_url":
-		// Direct image URL reference
+		// Check if model supports vision
+		if config == nil || !config.SupportVision {
+			// Model doesn't support vision, convert to text description
+			desc := "Image attachment"
+			if part.ImageURL != nil && part.ImageURL.URL != "" {
+				desc = "[Image] " + part.ImageURL.URL
+			}
+			return map[string]interface{}{
+				"type": "text",
+				"text": desc,
+			}
+		}
+		// Model supports vision, use image_url format
 		detail := "auto"
 		if part.ImageURL != nil && part.ImageURL.Detail != "" {
 			detail = part.ImageURL.Detail
