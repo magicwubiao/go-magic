@@ -595,6 +595,7 @@ export default {
     description: 'Description',
     tags: 'Tags',
     noDescription: 'No description',
+    status: 'Status',
     category: 'Category',
     general: 'General',
     install: 'Install',
