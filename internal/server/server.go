@@ -1771,11 +1771,18 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return file info
+	// Use configured URL prefix if available, otherwise use relative path
+	var fileURL string
+	if s.cfg.Server.UploadURLPrefix != "" {
+		fileURL = s.cfg.Server.UploadURLPrefix + "/" + filename
+	} else {
+		fileURL = "/api/uploads/" + filename
+	}
 	jsonResponse(w, map[string]interface{}{
 		"id":       fileID,
 		"name":     header.Filename,
 		"filename": filename,
-		"url":      "/api/uploads/" + filename,
+		"url":      fileURL,
 		"size":     header.Size,
 	})
 }
@@ -1794,6 +1801,18 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build URL based on configuration
+	var getFileURL func(name string) string
+	if s.cfg.Server.UploadURLPrefix != "" {
+		getFileURL = func(name string) string {
+			return s.cfg.Server.UploadURLPrefix + "/" + name
+		}
+	} else {
+		getFileURL = func(name string) string {
+			return "/api/uploads/" + name
+		}
+	}
+
 	files := []map[string]interface{}{}
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -1806,7 +1825,7 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 		files = append(files, map[string]interface{}{
 			"filename": info.Name(),
 			"size":     info.Size(),
-			"url":      "/api/uploads/" + info.Name(),
+			"url":      getFileURL(info.Name()),
 			"updated":  info.ModTime().Format("2006-01-02 15:04:05"),
 		})
 	}

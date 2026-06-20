@@ -9,8 +9,174 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+// FileStrategy defines how files should be converted
+type FileStrategy int
+
+const (
+	FileStrategyAuto FileStrategy = iota // Auto-select based on file type
+	FileStrategyURL                      // Prefer URL references
+	FileStrategyBase64                   // Always use base64
+)
+
+// ConvertConfig holds conversion settings
+type ConvertConfig struct {
+	UploadURLPrefix string      // Public URL prefix for uploaded files
+	Strategy        FileStrategy // File conversion strategy
+}
+
+// DefaultConvertConfig returns default conversion config
+func DefaultConvertConfig() *ConvertConfig {
+	return &ConvertConfig{
+		Strategy: FileStrategyAuto,
+	}
+}
+
+// MIME type categories
+var (
+	imageMimeTypes = map[string]bool{
+		"image/png":  true,
+		"image/jpeg": true,
+		"image/gif":  true,
+		"image/webp": true,
+		"image/svg+xml": true,
+	}
+
+	textMimeTypes = map[string]bool{
+		"text/plain":                  true,
+		"text/html":                   true,
+		"text/css":                    true,
+		"text/csv":                    true,
+		"text/markdown":                true,
+		"application/json":            true,
+		"application/xml":             true,
+		"application/javascript":       true,
+		"application/x-yaml":          true,
+		"application/x-sh":            true,
+	}
+
+	codeMimeTypes = map[string]bool{
+		"text/x-go":          true,
+		"text/x-python":      true,
+		"text/x-java":        true,
+		"text/x-c":           true,
+		"text/x-c++":         true,
+		"text/x-csharp":      true,
+		"text/x-php":         true,
+		"text/x-ruby":        true,
+		"text/x-sql":         true,
+		"text/x-typescript":  true,
+		"text/x-java-script": true,
+	}
+
+	documentMimeTypes = map[string]bool{
+		"application/pdf":         true,
+		"application/msword":                         true,
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+		"application/vnd.ms-excel":                  true,
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
+		"application/vnd.ms-powerpoint":             true,
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+	}
+)
+
+// isImage checks if mime type is an image
+func isImage(mimeType string) bool {
+	return imageMimeTypes[mimeType]
+}
+
+// isText checks if mime type is text content
+func isText(mimeType string) bool {
+	return textMimeTypes[mimeType] || codeMimeTypes[mimeType]
+}
+
+// isDocument checks if mime type is a document that can be read
+func isDocument(mimeType string) bool {
+	return documentMimeTypes[mimeType] || isText(mimeType)
+}
+
+// extractMimeType extracts mime type from data URL
+func extractMimeType(dataURL string) string {
+	if strings.HasPrefix(dataURL, "data:") {
+		parts := strings.SplitN(dataURL, ";", 2)
+		if len(parts) >= 2 {
+			return strings.TrimPrefix(parts[0], "data:")
+		}
+	}
+	return ""
+}
+
+// fileContentType returns the content type based on filename extension
+func fileContentType(filename string) string {
+	ext := strings.ToLower(filename)
+	switch {
+	case strings.HasSuffix(ext, ".png"):
+		return "image/png"
+	case strings.HasSuffix(ext, ".jpg") || strings.HasSuffix(ext, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(ext, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(ext, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(ext, ".svg"):
+		return "image/svg+xml"
+	case strings.HasSuffix(ext, ".pdf"):
+		return "application/pdf"
+	case strings.HasSuffix(ext, ".txt"), strings.HasSuffix(ext, ".md"):
+		return "text/plain"
+	case strings.HasSuffix(ext, ".json"):
+		return "application/json"
+	case strings.HasSuffix(ext, ".html"), strings.HasSuffix(ext, ".htm"):
+		return "text/html"
+	case strings.HasSuffix(ext, ".css"):
+		return "text/css"
+	case strings.HasSuffix(ext, ".js"):
+		return "application/javascript"
+	case strings.HasSuffix(ext, ".ts"):
+		return "text/typescript"
+	case strings.HasSuffix(ext, ".py"):
+		return "text/x-python"
+	case strings.HasSuffix(ext, ".go"):
+		return "text/x-go"
+	case strings.HasSuffix(ext, ".java"):
+		return "text/x-java"
+	case strings.HasSuffix(ext, ".c"):
+		return "text/x-c"
+	case strings.HasSuffix(ext, ".cpp"), strings.HasSuffix(ext, ".cc"), strings.HasSuffix(ext, ".cxx"):
+		return "text/x-c++"
+	case strings.HasSuffix(ext, ".sh"), strings.HasSuffix(ext, ".bash"):
+		return "application/x-sh"
+	case strings.HasSuffix(ext, ".sql"):
+		return "text/x-sql"
+	case strings.HasSuffix(ext, ".xml"):
+		return "application/xml"
+	case strings.HasSuffix(ext, ".yaml"), strings.HasSuffix(ext, ".yml"):
+		return "application/x-yaml"
+	case strings.HasSuffix(ext, ".csv"):
+		return "text/csv"
+	case strings.HasSuffix(ext, ".doc"):
+		return "application/msword"
+	case strings.HasSuffix(ext, ".docx"):
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case strings.HasSuffix(ext, ".xls"), strings.HasSuffix(ext, ".xlsx"):
+		return "application/vnd.ms-excel"
+	case strings.HasSuffix(ext, ".ppt"), strings.HasSuffix(ext, ".pptx"):
+		return "application/vnd.ms-powerpoint"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 // ConvertMessages converts internal Message type to OpenAI-compatible format
 func ConvertMessages(messages []types.Message) []map[string]interface{} {
+	return ConvertMessagesWithConfig(messages, nil)
+}
+
+// ConvertMessagesWithConfig converts messages with custom config
+func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) []map[string]interface{} {
+	if config == nil {
+		config = DefaultConvertConfig()
+	}
+
 	result := make([]map[string]interface{}, 0, len(messages))
 
 	for i, msg := range messages {
@@ -24,64 +190,9 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 			// Multi-modal content (text + images + files)
 			parts := make([]map[string]interface{}, 0, len(msg.ContentParts))
 			for _, part := range msg.ContentParts {
-				if part.Type == "text" {
-					parts = append(parts, map[string]interface{}{
-						"type": "text",
-						"text": part.Text,
-					})
-				} else if part.Type == "image_url" {
-					parts = append(parts, map[string]interface{}{
-						"type": "image_url",
-						"image_url": map[string]interface{}{
-							"url": part.ImageURL.URL,
-						},
-					})
-				} else if part.Type == "file" && part.File != nil {
-					// Convert file to text content or image based on mime type
-					if part.File.Contents != "" {
-						if strings.HasPrefix(part.File.Contents, "data:image/") {
-							// Image file -> convert to image_url
-							parts = append(parts, map[string]interface{}{
-								"type": "image_url",
-								"image_url": map[string]interface{}{
-									"url": part.File.Contents,
-								},
-							})
-						} else if strings.HasPrefix(part.File.Contents, "data:text") || strings.HasPrefix(part.File.Contents, "data:application") {
-							// Text/binary file -> decode base64 and send as text
-							// Format: data:<mime>;base64,<content>
-							dataParts := strings.SplitN(part.File.Contents, ",", 2)
-							var fileContent string
-							if len(dataParts) == 2 {
-								decoded, err := base64.StdEncoding.DecodeString(dataParts[1])
-								if err == nil {
-									fileContent = string(decoded)
-									// Truncate if too large
-									if len(fileContent) > 30000 {
-										fileContent = fileContent[:30000] + "\n... [file truncated]"
-									}
-								} else {
-									fileContent = part.File.Contents
-								}
-							} else {
-								fileContent = part.File.Contents
-							}
-							parts = append(parts, map[string]interface{}{
-								"type": "text",
-								"text": fmt.Sprintf("[File: %s]\n%s", part.File.Name, fileContent),
-							})
-						} else {
-							parts = append(parts, map[string]interface{}{
-								"type": "text",
-								"text": fmt.Sprintf("[File: %s]\n%s", part.File.Name, part.File.Contents),
-							})
-						}
-					} else if part.File.URL != "" {
-						parts = append(parts, map[string]interface{}{
-							"type": "text",
-							"text": fmt.Sprintf("[File: %s](%s)", part.File.Name, part.File.URL),
-						})
-					}
+				convertedPart := convertContentPart(part, config)
+				if convertedPart != nil {
+					parts = append(parts, convertedPart)
 				}
 			}
 			openAIMsg["content"] = parts
@@ -149,6 +260,186 @@ func ConvertMessages(messages []types.Message) []map[string]interface{} {
 	result = sanitizeToolCallSequence(result)
 
 	return result
+}
+
+// convertContentPart converts a single content part based on its type and config
+func convertContentPart(part types.ContentPart, config *ConvertConfig) map[string]interface{} {
+	switch part.Type {
+	case "text":
+		return map[string]interface{}{
+			"type": "text",
+			"text": part.Text,
+		}
+
+	case "image_url":
+		// Direct image URL reference
+		detail := "auto"
+		if part.ImageURL != nil && part.ImageURL.Detail != "" {
+			detail = part.ImageURL.Detail
+		}
+		return map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url":    part.ImageURL.URL,
+				"detail": detail,
+			},
+		}
+
+	case "file":
+		return convertFilePart(part.File, config)
+
+	default:
+		log.Debugf("[ConvertMessages] Unknown content part type: %s", part.Type)
+		return nil
+	}
+}
+
+// convertFilePart converts a file to the appropriate API format
+func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]interface{} {
+	if file == nil {
+		return nil
+	}
+
+	// Priority 1: Use URL if available and configured
+	if file.URL != "" && config.UploadURLPrefix != "" {
+		// Convert relative URL to absolute if needed
+		url := file.URL
+		if strings.HasPrefix(url, "/") {
+			url = config.UploadURLPrefix + url
+		}
+
+		// Determine file type from name or URL
+		mimeType := file.MimeType
+		if mimeType == "" {
+			mimeType = fileContentType(file.Name)
+		}
+
+		// For images, use image_url format
+		if isImage(mimeType) {
+			return map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": url,
+				},
+			}
+		}
+
+		// For text files, fetch and embed content
+		if isText(mimeType) {
+			content, err := fetchFileContent(file.Name, url)
+			if err == nil && content != "" {
+				return map[string]interface{}{
+					"type": "text",
+					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
+				}
+			}
+		}
+
+		// For other files, return a reference
+		return map[string]interface{}{
+			"type": "text",
+			"text": fmt.Sprintf("[File: %s](%s)", file.Name, url),
+		}
+	}
+
+	// Priority 2: Handle base64 encoded content
+	if file.Contents != "" {
+		mimeType := file.MimeType
+		if mimeType == "" {
+			mimeType = extractMimeType(file.Contents)
+		}
+
+		// For images: use image_url with base64 data
+		if isImage(mimeType) {
+			return map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": file.Contents,
+				},
+			}
+		}
+
+		// For text files: decode and embed as text
+		if isText(mimeType) {
+			content := decodeFileContent(file.Contents)
+			if content != "" {
+				return map[string]interface{}{
+					"type": "text",
+					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
+				}
+			}
+		}
+
+		// For documents: try to extract text or return reference
+		if isDocument(mimeType) {
+			content := decodeFileContent(file.Contents)
+			if content != "" && isReadable(content) {
+				return map[string]interface{}{
+					"type": "text",
+					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
+				}
+			}
+		}
+
+		// For unsupported files: return metadata as text
+		return map[string]interface{}{
+			"type": "text",
+			"text": fmt.Sprintf("[File: %s] (type: %s, size: %d bytes) - content not directly readable", 
+				file.Name, mimeType, file.Size),
+		}
+	}
+
+	// No content or URL available
+	return map[string]interface{}{
+		"type": "text",
+		"text": fmt.Sprintf("[File: %s] - no content available", file.Name),
+	}
+}
+
+// fetchFileContent attempts to fetch content from URL (for future use with remote storage)
+func fetchFileContent(filename, url string) (string, error) {
+	// For now, return empty - would need HTTP client
+	return "", fmt.Errorf("remote fetch not implemented")
+}
+
+// decodeFileContent decodes base64 content and returns text
+func decodeFileContent(dataURL string) string {
+	// Handle data URL format: data:<mime>;base64,<content>
+	if strings.HasPrefix(dataURL, "data:") {
+		parts := strings.SplitN(dataURL, ",", 2)
+		if len(parts) == 2 {
+			decoded, err := base64.StdEncoding.DecodeString(parts[1])
+			if err == nil {
+				content := string(decoded)
+				// Truncate if too large (30KB limit for text content)
+				if len(content) > 30000 {
+					content = content[:30000] + "\n... [file truncated]"
+				}
+				return content
+			}
+		}
+	}
+	return ""
+}
+
+// isReadable checks if content appears to be readable text
+func isReadable(content string) bool {
+	if len(content) == 0 {
+		return false
+	}
+	// Simple check: if most characters are printable or common control chars
+	readable := 0
+	for _, r := range content {
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			readable++
+		} else if r >= 32 && r < 127 {
+			readable++
+		} else if r >= 128 {
+			// Allow UTF-8 characters
+			readable++
+		}
+	}
+	return float64(readable)/float64(len(content)) > 0.8
 }
 
 // sanitizeToolCallSequence removes incomplete tool_call sequences from the message list.

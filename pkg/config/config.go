@@ -39,6 +39,7 @@ type Config struct {
 	Voice      *VoiceConfig              `json:"voice,omitempty"`
 	Privacy    *privacy.Config           `json:"privacy,omitempty"`
 	Display    DisplayConfig             `json:"display,omitempty"`
+	Server     ServerConfig              `json:"server,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"`      // chat, plan, act
@@ -75,6 +76,11 @@ type MemoryConfig struct {
 type CortexConfig struct {
 	Enabled             bool `json:"enabled"`                // Enable/disable Cortex system
 	SkillMinPatternFreq int  `json:"skill_min_pattern_freq"` // Min frequency for skill pattern detection
+}
+
+// ServerConfig represents server-related configuration
+type ServerConfig struct {
+	UploadURLPrefix string `json:"upload_url_prefix,omitempty"` // Public URL prefix for uploaded files (e.g., "https://your-domain.com/uploads")
 }
 
 // DisplayConfig represents display/UI configuration
