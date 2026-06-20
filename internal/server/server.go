@@ -1472,86 +1472,97 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 
-	// Parse files from query parameter (JSON array of {name, filename, url})
+	// Parse files from query parameter (JSON array of {name, filename, url, data})
 		filesJSON := r.URL.Query().Get("files")
 		if filesJSON != "" {
 			var files []struct {
 				Name     string `json:"name"`
 				Filename string `json:"filename"`
 				URL      string `json:"url"`
+				Data     string `json:"data"` // base64 data URL from frontend
 			}
 			if err := json.Unmarshal([]byte(filesJSON), &files); err == nil {
 				for _, f := range files {
-					var data []byte
-					var err error
+					var dataURL string
 
-					// Try to get file content from URL
-					if f.URL != "" {
-						// Extract path part (remove query parameters if any)
-						fileURLPath := f.URL
-						if idx := strings.IndexAny(fileURLPath, "?"); idx != -1 {
-							fileURLPath = fileURLPath[:idx]
-						}
+					// Priority 1: Use base64 data directly from frontend (most reliable)
+					if f.Data != "" {
+						dataURL = f.Data
+					} else {
+						// Priority 2: Fetch file content from URL
+						var data []byte
+						var err error
 
-						if strings.HasPrefix(fileURLPath, "/api/uploads/") {
-							// Local file - read from filesystem
+						if f.URL != "" {
+							// Extract path part (remove query parameters if any)
+							fileURLPath := f.URL
+							if idx := strings.IndexAny(fileURLPath, "?"); idx != -1 {
+								fileURLPath = fileURLPath[:idx]
+							}
+
+							if strings.HasPrefix(fileURLPath, "/api/uploads/") {
+								// Local file - read from filesystem
+								uploadsDir := filepath.Join(s.magicHome, "uploads")
+								filePath := filepath.Join(uploadsDir, f.Filename)
+								data, err = os.ReadFile(filePath)
+							} else {
+								// External URL - fetch content
+								req, _ := http.NewRequest("GET", f.URL, nil)
+								if token := r.URL.Query().Get("token"); token != "" {
+									req.Header.Set("Authorization", "Bearer "+token)
+								}
+								resp, fetchErr := http.DefaultClient.Do(req)
+								if fetchErr == nil {
+									defer resp.Body.Close()
+									data, err = io.ReadAll(resp.Body)
+								} else {
+									err = fetchErr
+								}
+							}
+						} else if f.Filename != "" {
+							// Fallback: try to read from filesystem using filename
 							uploadsDir := filepath.Join(s.magicHome, "uploads")
 							filePath := filepath.Join(uploadsDir, f.Filename)
 							data, err = os.ReadFile(filePath)
-						} else {
-							// External URL - fetch content
-							req, _ := http.NewRequest("GET", f.URL, nil)
-							if token := r.URL.Query().Get("token"); token != "" {
-								req.Header.Set("Authorization", "Bearer "+token)
-							}
-							resp, fetchErr := http.DefaultClient.Do(req)
-							if fetchErr == nil {
-								defer resp.Body.Close()
-								data, err = io.ReadAll(resp.Body)
-							} else {
-								err = fetchErr
-							}
 						}
-					} else if f.Filename != "" {
-						// Fallback: try to read from filesystem using filename
-						uploadsDir := filepath.Join(s.magicHome, "uploads")
-						filePath := filepath.Join(uploadsDir, f.Filename)
-						data, err = os.ReadFile(filePath)
+
+						if err == nil && data != nil {
+							// Determine MIME type from extension
+							mimeType := "application/octet-stream"
+							ext := strings.ToLower(filepath.Ext(f.Name))
+							switch ext {
+							case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
+								mimeType = "text/plain"
+							case ".png":
+								mimeType = "image/png"
+							case ".jpg", ".jpeg":
+								mimeType = "image/jpeg"
+							case ".gif":
+								mimeType = "image/gif"
+							case ".webp":
+								mimeType = "image/webp"
+							case ".svg":
+								mimeType = "image/svg+xml"
+							case ".pdf":
+								mimeType = "application/pdf"
+							case ".doc":
+								mimeType = "application/msword"
+							case ".docx":
+								mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+							case ".xls", ".xlsx":
+								mimeType = "application/vnd.ms-excel"
+							case ".ppt", ".pptx":
+								mimeType = "application/vnd.ms-powerpoint"
+							case ".zip":
+								mimeType = "application/zip"
+							}
+
+							base64Data := base64.StdEncoding.EncodeToString(data)
+							dataURL = fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+						}
 					}
 
-					if err == nil && data != nil {
-						// Determine MIME type from extension
-						mimeType := "application/octet-stream"
-						ext := strings.ToLower(filepath.Ext(f.Name))
-						switch ext {
-						case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
-							mimeType = "text/plain"
-						case ".png":
-							mimeType = "image/png"
-						case ".jpg", ".jpeg":
-							mimeType = "image/jpeg"
-						case ".gif":
-							mimeType = "image/gif"
-						case ".webp":
-							mimeType = "image/webp"
-						case ".svg":
-							mimeType = "image/svg+xml"
-						case ".pdf":
-							mimeType = "application/pdf"
-						case ".doc":
-							mimeType = "application/msword"
-						case ".docx":
-							mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-						case ".xls", ".xlsx":
-							mimeType = "application/vnd.ms-excel"
-						case ".ppt", ".pptx":
-							mimeType = "application/vnd.ms-powerpoint"
-						case ".zip":
-							mimeType = "application/zip"
-						}
-
-						base64Data := base64.StdEncoding.EncodeToString(data)
-						dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+					if dataURL != "" {
 						contentParts = append(contentParts, types.ContentPart{
 							Type: "file",
 							File: &types.FileInfo{

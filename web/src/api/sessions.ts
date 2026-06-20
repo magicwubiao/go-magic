@@ -6,6 +6,7 @@ export interface UploadedFile {
   filename: string
   url: string
   size: number
+  data?: string  // base64 data URL for reliable message sending
 }
 
 export interface Session {
@@ -76,6 +77,9 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
     headers['Authorization'] = `Bearer ${token}`
   }
 
+  // Read file as base64 for reliable message sending
+  const base64Data = await fileToBase64(file)
+
   const response = await fetch('/api/upload', {
     method: 'POST',
     headers,
@@ -88,7 +92,19 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
 
   const result: UploadedFile = await response.json()
   result.url = addTokenToUrl(result.url)
+  // Store base64 data for message sending
+  result.data = base64Data
   return result
+}
+
+// Convert File to base64 data URL
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 export interface FileItem {
@@ -124,8 +140,16 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     url += `&images=${encodeURIComponent(JSON.stringify(images))}`
   }
   if (files && files.length) {
-    // Include file content as base64 data URL for reliable processing
-    url += `&files=${encodeURIComponent(JSON.stringify(files.map(f => ({ name: f.name, filename: f.filename, url: f.url }))))}`
+    // Send file info with base64 content embedded directly
+    // This avoids file system access issues on the backend
+    const filesData = files.map(f => ({
+      name: f.name,
+      filename: f.filename,
+      url: f.url,
+      // Include data URL if available (for immediate use)
+      data: f.data || null
+    }))
+    url += `&files=${encodeURIComponent(JSON.stringify(filesData))}`
   }
   if (token) {
     url += `&token=${encodeURIComponent(token)}`
