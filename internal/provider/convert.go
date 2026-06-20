@@ -14,20 +14,37 @@ type FileStrategy int
 
 const (
 	FileStrategyAuto FileStrategy = iota // Auto-select based on file type
-	FileStrategyURL                      // Prefer URL references
+	FileStrategyURL                      // Prefer URL references (for large files)
 	FileStrategyBase64                   // Always use base64
 )
 
+// LargeFileThreshold is the size (bytes) above which files should use URL instead of base64
+const LargeFileThreshold = 1024 * 1024 // 1MB
+
 // ConvertConfig holds conversion settings
 type ConvertConfig struct {
-	UploadURLPrefix string      // Public URL prefix for uploaded files
-	Strategy        FileStrategy // File conversion strategy
+	UploadURLPrefix string        // Public URL prefix for uploaded files
+	Strategy        FileStrategy  // File conversion strategy
+	StrategyName    string        // String representation of strategy ("auto", "url", "base64")
 }
 
 // DefaultConvertConfig returns default conversion config
 func DefaultConvertConfig() *ConvertConfig {
 	return &ConvertConfig{
-		Strategy: FileStrategyAuto,
+		Strategy:     FileStrategyAuto,
+		StrategyName: "auto",
+	}
+}
+
+// ParseFileStrategy converts string to FileStrategy
+func ParseFileStrategy(s string) FileStrategy {
+	switch strings.ToLower(s) {
+	case "url":
+		return FileStrategyURL
+	case "base64":
+		return FileStrategyBase64
+	default:
+		return FileStrategyAuto
 	}
 }
 
@@ -300,106 +317,138 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		return nil
 	}
 
-	// Priority 1: Use URL if available and configured
-	if file.URL != "" && config.UploadURLPrefix != "" {
-		// Convert relative URL to absolute if needed
+	// Determine file type from name or stored MIME type
+	mimeType := file.MimeType
+	if mimeType == "" {
+		mimeType = fileContentType(file.Name)
+	}
+
+	// Calculate actual file size (estimate from base64 if not stored)
+	fileSize := file.Size
+	if fileSize == 0 && file.Contents != "" {
+		// Estimate: base64 is ~4/3 of original, so divide by 4/3
+		if strings.HasPrefix(file.Contents, "data:") {
+			parts := strings.SplitN(file.Contents, ",", 2)
+			if len(parts) == 2 {
+				fileSize = len(parts[1]) * 3 / 4
+			}
+		}
+	}
+
+	// Determine strategy: check config, then apply rules
+	strategy := config.Strategy
+	if config.StrategyName != "" {
+		strategy = ParseFileStrategy(config.StrategyName)
+	} else if config.Strategy == 0 && config.StrategyName == "" {
+		strategy = FileStrategyAuto
+	}
+
+	// Helper to build image_url part
+	buildImagePart := func(url string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url": url,
+			},
+		}
+	}
+
+	// Helper to build text part
+	buildTextPart := func(text string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "text",
+			"text": text,
+		}
+	}
+
+	// Helper to build file reference text
+	buildFileRef := func() map[string]interface{} {
+		if file.URL != "" && config.UploadURLPrefix != "" {
+			url := file.URL
+			if strings.HasPrefix(url, "/") {
+				url = config.UploadURLPrefix + url
+			}
+			return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
+		}
+		return buildTextPart(fmt.Sprintf("[File: %s] (type: %s, size: %d bytes)", file.Name, mimeType, fileSize))
+	}
+
+	// === Strategy: URL (always prefer URL when available) ===
+	if strategy == FileStrategyURL {
+		if file.URL != "" && config.UploadURLPrefix != "" {
+			url := file.URL
+			if strings.HasPrefix(url, "/") {
+				url = config.UploadURLPrefix + url
+			}
+			if isImage(mimeType) {
+				return buildImagePart(url)
+			}
+			return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
+		}
+		// Fall back to base64 if no URL
+	}
+
+	// === Strategy: Base64 (always use base64) ===
+	if strategy == FileStrategyBase64 {
+		if file.Contents != "" {
+			if isImage(mimeType) {
+				return buildImagePart(file.Contents)
+			}
+			// For text files, decode and embed
+			if isText(mimeType) || isDocument(mimeType) {
+				content := decodeFileContent(file.Contents)
+				if content != "" {
+					return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
+				}
+			}
+			return buildFileRef()
+		}
+		return buildTextPart(fmt.Sprintf("[File: %s] - no content available", file.Name))
+	}
+
+	// === Strategy: Auto (smart routing) ===
+	// Large file (>1MB) + URL available: use URL
+	if fileSize > LargeFileThreshold && file.URL != "" && config.UploadURLPrefix != "" {
 		url := file.URL
 		if strings.HasPrefix(url, "/") {
 			url = config.UploadURLPrefix + url
 		}
-
-		// Determine file type from name or URL
-		mimeType := file.MimeType
-		if mimeType == "" {
-			mimeType = fileContentType(file.Name)
-		}
-
-		// For images, use image_url format
 		if isImage(mimeType) {
-			return map[string]interface{}{
-				"type": "image_url",
-				"image_url": map[string]interface{}{
-					"url": url,
-				},
-			}
+			return buildImagePart(url)
 		}
-
-		// For text files, fetch and embed content
-		if isText(mimeType) {
-			content, err := fetchFileContent(file.Name, url)
-			if err == nil && content != "" {
-				return map[string]interface{}{
-					"type": "text",
-					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
-				}
-			}
-		}
-
-		// For other files, return a reference
-		return map[string]interface{}{
-			"type": "text",
-			"text": fmt.Sprintf("[File: %s](%s)", file.Name, url),
-		}
+		return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
 	}
 
-	// Priority 2: Handle base64 encoded content
+	// Small file or no URL: use base64 / embedded content
 	if file.Contents != "" {
-		mimeType := file.MimeType
-		if mimeType == "" {
-			mimeType = extractMimeType(file.Contents)
-		}
-
-		// For images: use image_url with base64 data
+		// Images: always use image_url format with base64
 		if isImage(mimeType) {
-			return map[string]interface{}{
-				"type": "image_url",
-				"image_url": map[string]interface{}{
-					"url": file.Contents,
-				},
-			}
+			return buildImagePart(file.Contents)
 		}
 
-		// For text files: decode and embed as text
+		// Text/code files: decode and embed as text
 		if isText(mimeType) {
 			content := decodeFileContent(file.Contents)
 			if content != "" {
-				return map[string]interface{}{
-					"type": "text",
-					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
-				}
+				return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
 			}
 		}
 
-		// For documents: try to extract text or return reference
+		// Documents (PDF, Office): try to extract readable content
 		if isDocument(mimeType) {
 			content := decodeFileContent(file.Contents)
 			if content != "" && isReadable(content) {
-				return map[string]interface{}{
-					"type": "text",
-					"text": fmt.Sprintf("[File: %s]\n%s", file.Name, content),
-				}
+				return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
 			}
 		}
 
-		// For unsupported files: return metadata as text
-		return map[string]interface{}{
-			"type": "text",
-			"text": fmt.Sprintf("[File: %s] (type: %s, size: %d bytes) - content not directly readable", 
-				file.Name, mimeType, file.Size),
-		}
+		// Binary files: return metadata
+		return buildTextPart(fmt.Sprintf("[File: %s] (type: %s, size: %d bytes) - content not directly readable",
+			file.Name, mimeType, fileSize))
 	}
 
-	// No content or URL available
-	return map[string]interface{}{
-		"type": "text",
-		"text": fmt.Sprintf("[File: %s] - no content available", file.Name),
-	}
-}
-
-// fetchFileContent attempts to fetch content from URL (for future use with remote storage)
-func fetchFileContent(filename, url string) (string, error) {
-	// For now, return empty - would need HTTP client
-	return "", fmt.Errorf("remote fetch not implemented")
+	// No content available
+	return buildTextPart(fmt.Sprintf("[File: %s] - no content available", file.Name))
 }
 
 // decodeFileContent decodes base64 content and returns text
