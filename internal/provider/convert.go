@@ -397,21 +397,26 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		strategy = FileStrategyAuto
 	}
 
+	// Helper to build text part (must be defined first as it's used by buildImagePart)
+	buildTextPart := func(text string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "text",
+			"text": text,
+		}
+	}
+
 	// Helper to build image_url part
 	buildImagePart := func(url string) map[string]interface{} {
+		// Check if model supports vision
+		if config != nil && !config.SupportVision {
+			// Model doesn't support vision, return text description instead
+			return buildTextPart("[Image] " + url)
+		}
 		return map[string]interface{}{
 			"type": "image_url",
 			"image_url": map[string]interface{}{
 				"url": url,
 			},
-		}
-	}
-
-	// Helper to build text part
-	buildTextPart := func(text string) map[string]interface{} {
-		return map[string]interface{}{
-			"type": "text",
-			"text": text,
 		}
 	}
 
