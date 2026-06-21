@@ -332,12 +332,15 @@ func convertContentPart(part types.ContentPart, config *ConvertConfig) map[strin
 
 	case "image_url":
 		// Check if model supports vision
-		if config == nil || !config.SupportVision {
+		supportVision := config != nil && config.SupportVision
+		log.Debugf("[convertContentPart] image_url: SupportVision=%v", supportVision)
+		if !supportVision {
 			// Model doesn't support vision, convert to text description
 			desc := "Image attachment"
 			if part.ImageURL != nil && part.ImageURL.URL != "" {
 				desc = "[Image] " + part.ImageURL.URL
 			}
+			log.Debugf("[convertContentPart] Converting image_url to text: %s", desc)
 			return map[string]interface{}{
 				"type": "text",
 				"text": desc,
