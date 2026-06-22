@@ -35,6 +35,29 @@ import (
 
 const pidFileName = "gateway.pid"
 
+// getConfigDir returns the configuration directory path
+// Priority: GO_MAGIC_HOME env > current directory/.magic > ~/.magic
+func getConfigDir() string {
+	// Check GO_MAGIC_HOME environment variable first
+	if home := os.Getenv("GO_MAGIC_HOME"); home != "" {
+		return home
+	}
+	// Check current directory for .magic
+	cwd, err := os.Getwd()
+	if err == nil {
+		magicDir := filepath.Join(cwd, ".magic")
+		if _, err := os.Stat(magicDir); err == nil {
+			return magicDir
+		}
+	}
+	// Fallback to ~/.magic
+	home, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(home, ".magic")
+	}
+	return ".magic"
+}
+
 var gatewayPlatform string // --platform 参数
 
 var gatewayCmd = &cobra.Command{
@@ -1439,11 +1462,10 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Save PID file
-	home, _ := os.UserHomeDir()
-	pidDir := filepath.Join(home, ".magic")
-	os.MkdirAll(pidDir, 0755)
-	pidFile := filepath.Join(pidDir, pidFileName)
+	// Save PID file - use config directory
+	configDir := getConfigDir()
+	os.MkdirAll(configDir, 0755)
+	pidFile := filepath.Join(configDir, pidFileName)
 	pidData := map[string]interface{}{
 		"pid":     os.Getpid(),
 		"started": time.Now().Format(time.RFC3339),
@@ -1459,13 +1481,8 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 }
 
 func runGatewayStop(cmd *cobra.Command, args []string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	pidFile := filepath.Join(home, ".magic", pidFileName)
+	configDir := getConfigDir()
+	pidFile := filepath.Join(configDir, pidFileName)
 
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -1517,14 +1534,9 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 func runGatewayRestart(cmd *cobra.Command, args []string) {
 	fmt.Println("Restarting Gateway...")
 
-	// Stop first
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	pidFile := filepath.Join(home, ".magic", pidFileName)
+	// Stop first - use config directory
+	configDir := getConfigDir()
+	pidFile := filepath.Join(configDir, pidFileName)
 
 	// Check if running
 	if data, err := os.ReadFile(pidFile); err == nil {
@@ -1557,10 +1569,14 @@ func runGatewayRestart(cmd *cobra.Command, args []string) {
 		execPath = os.Args[0]
 	}
 
-	// Start gateway in background
+	// Start gateway in background with GO_MAGIC_HOME
 	gatewayCmd := exec.Command(execPath, "gateway", "start")
 	if gatewayPlatform != "" {
 		gatewayCmd.Args = append(gatewayCmd.Args, "--platform", gatewayPlatform)
+	}
+	// Preserve GO_MAGIC_HOME if set
+	if magicHome := os.Getenv("GO_MAGIC_HOME"); magicHome != "" {
+		gatewayCmd.Env = append(os.Environ(), "GO_MAGIC_HOME="+magicHome)
 	}
 	gatewayCmd.Stdout = os.Stdout
 	gatewayCmd.Stderr = os.Stderr
