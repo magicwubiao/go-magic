@@ -13,7 +13,7 @@ import (
 
 type vLLMProvider struct {
 	baseURL       string
-	model        string
+	model         string
 	ConvertConfig *ConvertConfig
 }
 

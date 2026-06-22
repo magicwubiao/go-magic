@@ -18,8 +18,8 @@ import (
 type TogetherProvider struct {
 	apiKey        string
 	model         string
-	baseURL      string
-	client       *http.Client
+	baseURL       string
+	client        *http.Client
 	ConvertConfig *ConvertConfig
 }
 

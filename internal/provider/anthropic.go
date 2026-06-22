@@ -15,9 +15,9 @@ import (
 
 // AnthropicProvider implements the Anthropic Claude API
 type AnthropicProvider struct {
-	apiKey       string
-	model        string
-	client       *http.Client
+	apiKey        string
+	model         string
+	client        *http.Client
 	ConvertConfig *ConvertConfig
 }
 
@@ -62,8 +62,8 @@ func (p *AnthropicProvider) GetCapabilities() *Capabilities {
 
 // anthropicMessage represents Anthropic's message format
 type anthropicMessage struct {
-	Role    string                    `json:"role"`
-	Content interface{}               `json:"content"` // string or []interface{} for multi-modal
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"` // string or []interface{} for multi-modal
 }
 
 // anthropicRequest represents Anthropic's chat request

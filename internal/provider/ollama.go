@@ -13,7 +13,7 @@ import (
 
 type OllamaProvider struct {
 	baseURL       string
-	model        string
+	model         string
 	ConvertConfig *ConvertConfig
 }
 
