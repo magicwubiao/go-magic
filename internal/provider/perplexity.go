@@ -16,10 +16,21 @@ import (
 
 // PerplexityProvider implements the Perplexity API
 type PerplexityProvider struct {
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	apiKey        string
+	model         string
+	baseURL      string
+	client       *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *PerplexityProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *PerplexityProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // NewPerplexityProvider creates a new Perplexity provider
@@ -177,7 +188,7 @@ func (p *PerplexityProvider) buildRequest(messages []Message, tools []map[string
 	return req
 }
 
-// convertMessages converts messages to OpenAI format
+// convertMessages converts messages to OpenAI format with ContentParts support
 func (p *PerplexityProvider) convertMessages(messages []Message) []map[string]interface{} {
 	var converted []map[string]interface{}
 
@@ -185,6 +196,14 @@ func (p *PerplexityProvider) convertMessages(messages []Message) []map[string]in
 		m := map[string]interface{}{
 			"role":    msg.Role,
 			"content": msg.Content,
+		}
+
+		// Handle ContentParts for multi-modal content
+		if len(msg.ContentParts) > 0 {
+			convertedParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+			if len(convertedParts) > 0 {
+				m["content"] = convertedParts
+			}
 		}
 
 		if msg.Role == "tool" {

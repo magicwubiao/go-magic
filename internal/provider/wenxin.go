@@ -15,14 +15,25 @@ import (
 
 // WenxinProvider implements the Baidu Wenxin (ERNIE) API
 type WenxinProvider struct {
-	apiKey      string
-	secretKey   string
-	model       string
-	accessToken string
-	tokenExpiry time.Time
-	tokenMu     sync.RWMutex
-	baseURL     string
-	client      *http.Client
+	apiKey        string
+	secretKey     string
+	model         string
+	accessToken   string
+	tokenExpiry   time.Time
+	tokenMu       sync.RWMutex
+	baseURL       string
+	client        *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *WenxinProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *WenxinProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // NewWenxinProvider creates a new Wenxin provider

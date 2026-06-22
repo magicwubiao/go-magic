@@ -15,9 +15,20 @@ import (
 
 // AnthropicProvider implements the Anthropic Claude API
 type AnthropicProvider struct {
-	apiKey string
-	model  string
-	client *http.Client
+	apiKey       string
+	model        string
+	client       *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *AnthropicProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *AnthropicProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // NewAnthropicProvider creates a new Anthropic provider
@@ -51,8 +62,8 @@ func (p *AnthropicProvider) GetCapabilities() *Capabilities {
 
 // anthropicMessage represents Anthropic's message format
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string                    `json:"role"`
+	Content interface{}               `json:"content"` // string or []interface{} for multi-modal
 }
 
 // anthropicRequest represents Anthropic's chat request
@@ -265,9 +276,23 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]
 			} else {
 				role = "user"
 			}
+
+			// Handle ContentParts for multi-modal content
+			var content interface{}
+			if len(msg.ContentParts) > 0 {
+				contentParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+				if len(contentParts) > 0 {
+					content = contentParts
+				} else {
+					content = msg.Content
+				}
+			} else {
+				content = msg.Content
+			}
+
 			anthropicMessages = append(anthropicMessages, anthropicMessage{
 				Role:    role,
-				Content: msg.Content,
+				Content: content,
 			})
 		}
 	}

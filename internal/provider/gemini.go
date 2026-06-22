@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,10 +17,21 @@ import (
 
 // GeminiProvider implements the Google Gemini API
 type GeminiProvider struct {
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	apiKey        string
+	model         string
+	baseURL      string
+	client       *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *GeminiProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *GeminiProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // NewGeminiProvider creates a new Gemini provider
@@ -334,11 +346,21 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 			continue
 		}
 
-		part := geminiPart{Text: msg.Content}
+		// Handle ContentParts for multi-modal content
+		var parts []geminiPart
+		if len(msg.ContentParts) > 0 {
+			convertedParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+			for _, cp := range convertedParts {
+				geminiPart := convertToGeminiPart(cp)
+				if geminiPart.Text != "" || geminiPart.InlineData != nil {
+					parts = append(parts, geminiPart)
+				}
+			}
+		}
 
 		// Handle tool results
 		if msg.ToolCallID != "" {
-			part = geminiPart{
+			part := geminiPart{
 				FunctionResponse: &struct {
 					Name     string                 `json:"name"`
 					Response map[string]interface{} `json:"response"`
@@ -347,11 +369,15 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 					Response: map[string]interface{}{"result": msg.Content},
 				},
 			}
+			parts = append(parts, part)
+		} else if len(parts) == 0 {
+			// Only add text part if no other parts
+			parts = append(parts, geminiPart{Text: msg.Content})
 		}
 
 		content := geminiContent{
 			Role:  role,
-			Parts: []geminiPart{part},
+			Parts: parts,
 		}
 
 		contents = append(contents, content)
@@ -370,6 +396,45 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 	}
 
 	return req
+}
+
+// convertToGeminiPart converts a content part to Gemini format
+func convertToGeminiPart(part map[string]interface{}) geminiPart {
+	partType, _ := part["type"].(string)
+
+	switch partType {
+	case "text":
+		if text, ok := part["text"].(string); ok {
+			return geminiPart{Text: text}
+		}
+	case "image_url":
+		if url, ok := part["image_url"].(map[string]interface{}); ok {
+			if urlStr, ok := url["url"].(string); ok {
+				// Gemini supports inline data with mimeType
+				if strings.HasPrefix(urlStr, "data:") {
+					// Extract mime type and data from data URL
+					parts := strings.SplitN(urlStr, ",", 2)
+					if len(parts) == 2 {
+						header := parts[0] // e.g., "data:image/png;base64"
+						data := parts[1]
+						mimeType := strings.TrimPrefix(strings.TrimSuffix(header, ";base64"), "data:")
+						decoded, _ := base64.StdEncoding.DecodeString(data)
+						return geminiPart{
+							InlineData: &struct {
+								MimeType string `json:"mime_type"`
+								Data     string `json:"data"`
+							}{
+								MimeType: mimeType,
+								Data:     base64.StdEncoding.EncodeToString(decoded),
+							},
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return geminiPart{Text: ""}
 }
 
 // convertTools converts OpenAI-style tools to Gemini format

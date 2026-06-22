@@ -16,10 +16,21 @@ import (
 
 // TogetherProvider implements the Together AI API
 type TogetherProvider struct {
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	apiKey        string
+	model         string
+	baseURL      string
+	client       *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *TogetherProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *TogetherProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // NewTogetherProvider creates a new Together AI provider
@@ -174,7 +185,7 @@ func (p *TogetherProvider) buildRequest(messages []Message, tools []map[string]i
 	return req
 }
 
-// convertMessages converts messages to OpenAI format
+// convertMessages converts messages to OpenAI format with ContentParts support
 func (p *TogetherProvider) convertMessages(messages []Message) []map[string]interface{} {
 	var converted []map[string]interface{}
 
@@ -182,6 +193,14 @@ func (p *TogetherProvider) convertMessages(messages []Message) []map[string]inte
 		m := map[string]interface{}{
 			"role":    msg.Role,
 			"content": msg.Content,
+		}
+
+		// Handle ContentParts for multi-modal content
+		if len(msg.ContentParts) > 0 {
+			convertedParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+			if len(convertedParts) > 0 {
+				m["content"] = convertedParts
+			}
 		}
 
 		if msg.Role == "tool" {

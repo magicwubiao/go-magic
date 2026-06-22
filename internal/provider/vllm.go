@@ -12,8 +12,19 @@ import (
 )
 
 type vLLMProvider struct {
-	baseURL string
-	model   string
+	baseURL       string
+	model        string
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *vLLMProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *vLLMProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 // vllmUsageInfo represents token usage from vLLM API

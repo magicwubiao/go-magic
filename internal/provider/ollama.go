@@ -12,8 +12,19 @@ import (
 )
 
 type OllamaProvider struct {
-	baseURL string
-	model   string
+	baseURL       string
+	model        string
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *OllamaProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *OllamaProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
 }
 
 func NewOllamaProvider(baseURL, model string) *OllamaProvider {

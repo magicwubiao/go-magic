@@ -321,6 +321,18 @@ func ConvertMessagesForProvider(messages []types.Message, bp *BaseProvider) []ma
 	return ConvertMessagesWithConfig(messages, config)
 }
 
+// ConvertContentPartsToMap converts content parts using the provider's configuration
+func ConvertContentPartsToMap(parts []types.ContentPart, config *ConvertConfig) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(parts))
+	for _, part := range parts {
+		converted := convertContentPart(part, config)
+		if converted != nil {
+			result = append(result, converted)
+		}
+	}
+	return result
+}
+
 // convertContentPart converts a single content part based on its type and config
 func convertContentPart(part types.ContentPart, config *ConvertConfig) map[string]interface{} {
 	switch part.Type {
