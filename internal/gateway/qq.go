@@ -29,23 +29,23 @@ type QQGateway struct {
 	apiBaseURL string
 	httpClient *http.Client
 
-	wsConn     *websocket.Conn
-	wsMutex    sync.Mutex
+	wsConn            *websocket.Conn
+	wsMutex           sync.Mutex
 	heartbeatInterval time.Duration
-	seq          int
-	sessionID    string
-	shardCount   int
-	shardID      int
+	seq               int
+	sessionID         string
+	shardCount        int
+	shardID           int
 }
 
 func NewQQGateway(appID, appSecret string) *QQGateway {
 	return &QQGateway{
-		appID:        appID,
-		appSecret:    appSecret,
-		agents:       make(map[string]*AgentSession),
-		msgCh:        make(chan Message, 100),
-		stopCh:       make(chan struct{}),
-		apiBaseURL:   "https://api.sgroup.qq.com",
+		appID:      appID,
+		appSecret:  appSecret,
+		agents:     make(map[string]*AgentSession),
+		msgCh:      make(chan Message, 100),
+		stopCh:     make(chan struct{}),
+		apiBaseURL: "https://api.sgroup.qq.com",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
