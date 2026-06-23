@@ -245,7 +245,8 @@ watch(sessionId, async (newSessionId) => {
 
 async function selectGoal(goal: Goal) {
   goalsStore.currentGoal = goal
-  if (sessionId.value && !goal.session_ids?.includes(sessionId.value)) {
+  // Only auto-link if auto_link_goals is enabled
+  if (sessionId.value && !goal.session_ids?.includes(sessionId.value) && configStore.config?.auto_link_goals) {
     await goalsStore.linkSession(goal.id, sessionId.value)
   }
 }
