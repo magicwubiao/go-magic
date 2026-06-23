@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // ToolEffectivenessRecord 工具效果记录
@@ -57,11 +59,7 @@ type EffectivenessManager struct {
 // NewEffectivenessManager 创建新的效果管理器
 func NewEffectivenessManager(baseDir string) (*EffectivenessManager, error) {
 	if baseDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get home directory: %w", err)
-		}
-		baseDir = filepath.Join(homeDir, ".magic")
+		baseDir = config.GetMagicHome()
 	}
 
 	toolsDir := filepath.Join(baseDir, "tools")

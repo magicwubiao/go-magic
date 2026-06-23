@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/mdp/qrterminal/v3"
 )
@@ -73,8 +74,7 @@ type WeChatSession struct {
 
 // NewWeChatQRGateway creates a new WeChat QR code login gateway
 func NewWeChatQRGateway(appID, appSecret string) *WeChatQRGateway {
-	home, _ := os.UserHomeDir()
-	sessionPath := filepath.Join(home, ".magic", "wechat", "session.json")
+	sessionPath := filepath.Join(config.GetMagicHome(), "wechat", "session.json")
 
 	return &WeChatQRGateway{
 		appID:          appID,

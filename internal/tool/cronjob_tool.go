@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // CronJobTool manages scheduled tasks (cron jobs)
@@ -16,8 +18,7 @@ type CronJobTool struct {
 
 // NewCronJobTool creates a new cron job tool
 func NewCronJobTool() *CronJobTool {
-	home, _ := os.UserHomeDir()
-	cronDir := filepath.Join(home, ".magic", "cron")
+	cronDir := filepath.Join(config.GetMagicHome(), "cron")
 	// Ensure cron subdirectory exists
 	os.MkdirAll(cronDir, 0755)
 	jobsFile := filepath.Join(cronDir, "cron_jobs.json")

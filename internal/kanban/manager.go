@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -24,7 +25,7 @@ type Manager struct {
 // NewManager creates a new kanban manager
 func NewManager(homeDir string) (*Manager, error) {
 	if homeDir == "" {
-		homeDir = "~/.magic"
+		homeDir = config.GetMagicHome()
 	}
 	homeDir = os.ExpandEnv(homeDir)
 

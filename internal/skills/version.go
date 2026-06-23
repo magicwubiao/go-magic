@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // SkillVersion 技能版本
@@ -37,12 +39,7 @@ type VersionManager struct {
 // NewVersionManager 创建版本管理器
 func NewVersionManager(baseDir string) *VersionManager {
 	if baseDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			baseDir = "."
-		} else {
-			baseDir = filepath.Join(homeDir, ".magic")
-		}
+		baseDir = config.GetMagicHome()
 	}
 
 	versionDir := filepath.Join(baseDir, "skills", "versions")

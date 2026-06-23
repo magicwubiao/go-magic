@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Level 审计级别
@@ -506,9 +508,5 @@ func (m *Manager) LogError(category Category, action, resource, errMsg string) *
 
 // getMagicHomeDir returns the magic home directory
 func getMagicHomeDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "/tmp"
-	}
-	return filepath.Join(home, ".magic")
+	return appconfig.GetMagicHome()
 }

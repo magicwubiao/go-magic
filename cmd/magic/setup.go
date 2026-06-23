@@ -163,6 +163,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
+	_ = homeDir // kept for backward compatibility / future use
+
 	// Step 1: Provider selection
 	var selectedProvider *providerInfo
 	if !skipModel {
@@ -228,7 +230,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  - Run 'magic model' to switch AI Provider/model")
 	fmt.Println("  - Run 'magic gateway start' to start messaging gateway")
 	fmt.Println()
-	fmt.Println("Config file: " + filepath.Join(homeDir, ".magic", "config.json"))
+	fmt.Println("Config file: " + filepath.Join(config.GetMagicHome(), "config.json"))
 	fmt.Println()
 
 	return nil
@@ -761,8 +763,7 @@ func verifySetup() {
 	fmt.Println("  Verifying configuration...")
 	fmt.Println()
 
-	homeDir, _ := os.UserHomeDir()
-	configPath := filepath.Join(homeDir, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	if _, err := os.Stat(configPath); err == nil {
 		fmt.Println("  Config file created")

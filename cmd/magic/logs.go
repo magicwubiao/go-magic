@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var logsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "View magic logs",
 	Long: `View and manage Magic Agent log files.
-	
-Log files are stored in ~/.magic/logs/ and contain
+
+Log files are stored under your magic home directory in /logs/ and contain
 debugging information about magic operations.
 	
 Examples:
@@ -62,8 +64,7 @@ func init() {
 }
 
 func runLogsList(cmd *cobra.Command, args []string) {
-	home, _ := os.UserHomeDir()
-	logsDir := filepath.Join(home, ".magic", "logs")
+	logsDir := filepath.Join(config.GetMagicHome(), "logs")
 
 	entries, err := os.ReadDir(logsDir)
 	if err != nil {
@@ -90,8 +91,7 @@ func runLogsList(cmd *cobra.Command, args []string) {
 }
 
 func runLogsShow(cmd *cobra.Command, args []string) {
-	home, _ := os.UserHomeDir()
-	logsDir := filepath.Join(home, ".magic", "logs")
+	logsDir := filepath.Join(config.GetMagicHome(), "logs")
 
 	var logFile string
 	var logName string
@@ -145,8 +145,7 @@ func runLogsShow(cmd *cobra.Command, args []string) {
 }
 
 func runLogsLatest(cmd *cobra.Command, args []string) {
-	home, _ := os.UserHomeDir()
-	logsDir := filepath.Join(home, ".magic", "logs")
+	logsDir := filepath.Join(config.GetMagicHome(), "logs")
 
 	entries, err := os.ReadDir(logsDir)
 	if err != nil || len(entries) == 0 {

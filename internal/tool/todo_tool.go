@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // TodoItem represents a single todo item
@@ -37,8 +39,7 @@ var (
 // GetTodoTool returns the singleton todo tool
 func GetTodoTool() *TodoTool {
 	todoOnce.Do(func() {
-		home, _ := os.UserHomeDir()
-		dataDir := filepath.Join(home, ".magic", "todos")
+		dataDir := filepath.Join(config.GetMagicHome(), "todos")
 		os.MkdirAll(dataDir, 0755)
 
 		todoTool = &TodoTool{

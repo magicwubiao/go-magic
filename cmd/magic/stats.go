@@ -58,8 +58,8 @@ func runStats(cmd *cobra.Command, args []string) {
 	fmt.Printf("Skills:   %d loaded\n", skillCount)
 
 	// Sessions count
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	magicHome := config.GetMagicHome()
+	dbPath := filepath.Join(magicHome, "sessions.db")
 	if _, err := os.Stat(dbPath); err == nil {
 		// Simple file size as proxy
 		info, _ := os.Stat(dbPath)
@@ -69,7 +69,7 @@ func runStats(cmd *cobra.Command, args []string) {
 	}
 
 	// Logs
-	logsDir := filepath.Join(home, ".magic", "logs")
+	logsDir := filepath.Join(magicHome, "logs")
 	entries, err := os.ReadDir(logsDir)
 	if err == nil {
 		fmt.Printf("Logs:     %d log files\n", len(entries))

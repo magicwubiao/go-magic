@@ -61,8 +61,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize session store
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 
 	store, err := session.NewStore(dbPath)

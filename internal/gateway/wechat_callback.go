@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"encoding/json"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -209,8 +210,7 @@ func (g *WeChatCallbackGateway) downloadMedia(mediaID, mediaType string) (string
 	}
 
 	// Save to disk
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".magic", "wechat", "media", mediaType)
+	dir := filepath.Join(config.GetMagicHome(), "wechat", "media", mediaType)
 	os.MkdirAll(dir, 0755)
 
 	filename := fmt.Sprintf("%s_%s.%s", mediaID, mediaType, ext)

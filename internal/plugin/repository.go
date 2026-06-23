@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Repository provides remote plugin discovery and installation
@@ -32,8 +34,7 @@ type RepositoryIndex struct {
 
 // NewRepository creates a new repository client
 func NewRepository(baseURL string) (*Repository, error) {
-	home, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(home, ".magic", "plugins", "cache", "repo")
+	cacheDir := filepath.Join(config.GetMagicHome(), "plugins", "cache", "repo")
 
 	os.MkdirAll(cacheDir, 0755)
 

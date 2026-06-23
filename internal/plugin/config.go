@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // ConfigManager manages plugin configurations
@@ -22,8 +24,7 @@ type ConfigManager struct {
 // NewConfigManager creates a new configuration manager
 func NewConfigManager(configDir string) (*ConfigManager, error) {
 	if configDir == "" {
-		home, _ := os.UserHomeDir()
-		configDir = filepath.Join(home, ".magic", "plugins", "config")
+		configDir = filepath.Join(config.GetMagicHome(), "plugins", "config")
 	}
 
 	os.MkdirAll(configDir, 0755)

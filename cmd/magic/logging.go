@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/config"
 	pkglog "github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -75,8 +76,9 @@ func initLogging() {
 	if err != nil {
 		return
 	}
+	_ = home // home dir no longer used for magic paths
 
-	logDir := home + "/.magic/logs"
+	logDir := config.GetMagicHome() + "/logs"
 	os.MkdirAll(logDir, 0755)
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")

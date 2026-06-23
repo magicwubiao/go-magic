@@ -92,7 +92,7 @@ Built-in skins:
   - slate: Cool blue developer-focused theme
   - cyber: Neon cyberpunk terminal theme
 
-User skins are stored in ~/.magic/skins/`,
+User skins are stored under your magic home directory in /skins/`,
 	}
 
 	// Add subcommands
@@ -108,12 +108,9 @@ User skins are stored in ~/.magic/skins/`,
 }
 
 func getSkinManager() *skin.Manager {
-	// Get the config directory (~/.magic)
-	cfgDir := ""
-	home, err := os.UserHomeDir()
-	if err == nil {
-		cfgDir = filepath.Join(home, ".magic")
-	}
+	// Get the config directory (magic home)
+	cfgDir := config.GetMagicHome()
+	_ = cfgDir
 
 	skinDir := filepath.Join(cfgDir, "skins")
 	return skin.NewManager(skinDir)
@@ -346,7 +343,7 @@ func runSkinCreate(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("✓ Created skin '%s' based on '%s'\n", name, source)
-	fmt.Printf("  Edit ~/.magic/skins/%s.yaml to customize\n", name)
+	fmt.Printf("  Edit %s/skins/%s.yaml to customize\n", config.GetMagicHome(), name)
 }
 
 func runSkinDelete(cmd *cobra.Command, args []string) {
@@ -443,11 +440,6 @@ func min(a, b int) int {
 
 // Ensure skins directory exists
 func ensureSkinsDir() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	cfgDir := filepath.Join(home, ".magic")
-	skinDir := filepath.Join(cfgDir, "skins")
+	skinDir := filepath.Join(config.GetMagicHome(), "skins")
 	os.MkdirAll(skinDir, 0755)
 }

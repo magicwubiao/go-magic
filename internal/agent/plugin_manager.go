@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/magicwubiao/go-magic/internal/plugin"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // PluginManager manages plugin integration with the Agent
@@ -27,8 +28,7 @@ type PluginManager struct {
 
 // NewPluginManager creates a new plugin manager
 func NewPluginManager(agent *Agent) (*PluginManager, error) {
-	home, _ := os.UserHomeDir()
-	pluginDir := filepath.Join(home, ".magic", "plugins")
+	pluginDir := filepath.Join(config.GetMagicHome(), "plugins")
 	os.MkdirAll(pluginDir, 0755)
 
 	// Create components
@@ -263,8 +263,7 @@ func (pm *PluginManager) InstallPlugin(pluginID string, version string) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	home, _ := os.UserHomeDir()
-	pluginDir := filepath.Join(home, ".magic", "plugins")
+	pluginDir := filepath.Join(config.GetMagicHome(), "plugins")
 
 	// Check if we have a repository
 	if pm.repo == nil {
@@ -284,8 +283,7 @@ func (pm *PluginManager) UninstallPlugin(pluginID string) error {
 		return fmt.Errorf("cannot uninstall enabled plugin: %s", pluginID)
 	}
 
-	home, _ := os.UserHomeDir()
-	pluginDir := filepath.Join(home, ".magic", "plugins")
+	pluginDir := filepath.Join(config.GetMagicHome(), "plugins")
 
 	return pm.repo.Uninstall(pluginID, pluginDir)
 }
@@ -300,8 +298,7 @@ func (pm *PluginManager) UpdatePlugin(pluginID string) (bool, string, error) {
 		return false, "", fmt.Errorf("plugin not found: %s", pluginID)
 	}
 
-	home, _ := os.UserHomeDir()
-	pluginDir := filepath.Join(home, ".magic", "plugins")
+	pluginDir := filepath.Join(config.GetMagicHome(), "plugins")
 
 	return pm.repo.Update(pluginID, info.Version, pluginDir)
 }

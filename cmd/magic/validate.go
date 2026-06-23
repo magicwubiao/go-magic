@@ -25,13 +25,7 @@ func runValidate(cmd *cobra.Command, args []string) {
 	fmt.Println()
 
 	// Check if config file exists
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Error: Cannot get home directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	configPath := filepath.Join(home, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		fmt.Printf("Config file not found: %s\n", configPath)
 		fmt.Println("Run 'magic setup' to create configuration.")

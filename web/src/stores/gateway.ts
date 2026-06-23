@@ -40,5 +40,31 @@ export const useGatewayStore = defineStore('gateway', () => {
     }
   }
 
-  return { status, loading, error, loadStatus, restart }
+  async function start(): Promise<boolean> {
+    try {
+      error.value = null
+      await gatewayApi.startGateway()
+      await loadStatus()
+      return true
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      error.value = { message: 'Failed to start gateway: ' + errMsg }
+      return false
+    }
+  }
+
+  async function stop(): Promise<boolean> {
+    try {
+      error.value = null
+      await gatewayApi.stopGateway()
+      await loadStatus()
+      return true
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      error.value = { message: 'Failed to stop gateway: ' + errMsg }
+      return false
+    }
+  }
+
+  return { status, loading, error, loadStatus, restart, start, stop }
 })

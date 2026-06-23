@@ -16,6 +16,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	robfigcron "github.com/robfig/cron/v3"
 )
@@ -71,13 +72,12 @@ type Manager struct {
 
 // NewManager creates a new cron manager
 func NewManager() (*Manager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
+	// Use GetMagicHome() to respect GO_MAGIC_HOME environment variable
+	magicHome := config.GetMagicHome()
+	home, _ := os.UserHomeDir() // non-fatal if fails
 
 	// Ensure cron subdirectory exists
-	cronDir := filepath.Join(home, ".magic", "cron")
+	cronDir := filepath.Join(magicHome, "cron")
 	if err := os.MkdirAll(cronDir, 0755); err != nil {
 		return nil, err
 	}
@@ -85,8 +85,10 @@ func NewManager() (*Manager, error) {
 	jobsFile := filepath.Join(cronDir, "cron_jobs.json")
 	logsFile := filepath.Join(cronDir, "cron_logs.json")
 
-	// Migrate legacy files if they exist
-	migrateLegacyFiles(home, cronDir, jobsFile, logsFile)
+	// Migrate legacy files if they exist (legacy files are always under ~/.magic/)
+	if home != "" {
+		migrateLegacyFiles(home, cronDir, jobsFile, logsFile)
+	}
 
 	m := &Manager{
 		jobsFile: jobsFile,

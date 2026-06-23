@@ -16,6 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -62,9 +63,9 @@ type MemoryConfig struct {
 
 // DefaultConfig returns the default memory configuration
 func DefaultConfig() *MemoryConfig {
-	home, _ := os.UserHomeDir()
+	home := config.GetMagicHome()
 	return &MemoryConfig{
-		DBPath:             filepath.Join(home, ".magic", "memories", "memory.db"),
+		DBPath:             filepath.Join(home, "memories", "memory.db"),
 		MaxContentLength:   5000,
 		MaxAgentMemLength:  2200,
 		MaxUserMemLength:   1375,
@@ -86,26 +87,26 @@ type Store struct {
 }
 
 // NewStore creates a new memory store
-func NewStore(config *MemoryConfig) (*Store, error) {
-	if config == nil {
-		config = DefaultConfig()
+func NewStore(memCfg *MemoryConfig) (*Store, error) {
+	if memCfg == nil {
+		memCfg = DefaultConfig()
 	}
 
 	// Ensure directory exists
-	dir := filepath.Dir(config.DBPath)
+	dir := filepath.Dir(memCfg.DBPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create memory directory: %w", err)
 	}
 
 	// Initialize SQLite database
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open("sqlite", memCfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	store := &Store{
 		db:     db,
-		config: config,
+		config: memCfg,
 	}
 
 	// Initialize schema
@@ -115,8 +116,7 @@ func NewStore(config *MemoryConfig) (*Store, error) {
 	}
 
 	// Set up file paths
-	home, _ := os.UserHomeDir()
-	memoryDir := filepath.Join(home, ".magic", "memories")
+	memoryDir := filepath.Join(config.GetMagicHome(), "memories")
 	store.agentMemoryPath = filepath.Join(memoryDir, "MEMORY.md")
 	store.userMemoryPath = filepath.Join(memoryDir, "USER.md")
 

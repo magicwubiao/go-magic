@@ -1668,8 +1668,7 @@ func (m *TUIModel) doExport(args string) {
 
 	// Write to file
 	filename := fmt.Sprintf("export_%s_%d.%s", format, time.Now().Unix(), format)
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".magic", "exports", filename)
+	path := filepath.Join(config.GetMagicHome(), "exports", filename)
 
 	os.MkdirAll(filepath.Dir(path), 0755)
 	if err := os.WriteFile(path, []byte(output.String()), 0644); err != nil {
@@ -1939,8 +1938,7 @@ func (m *TUIModel) doShowContext() {
 // ---------------------------------------------------------------------------
 
 func (m *TUIModel) doGoal(args string) {
-	home, _ := os.UserHomeDir()
-	goalsDir := filepath.Join(home, ".magic", "goals")
+	goalsDir := filepath.Join(config.GetMagicHome(), "goals")
 
 	// Initialize goal manager if needed
 	if m.goalManager == nil {
@@ -2015,8 +2013,7 @@ func (m *TUIModel) doGoal(args string) {
 // ---------------------------------------------------------------------------
 
 func (m *TUIModel) doKanban(args string) {
-	home, _ := os.UserHomeDir()
-	mgr, err := kanban.NewManager(filepath.Join(home, ".magic"))
+	mgr, err := kanban.NewManager(config.GetMagicHome())
 	if err != nil {
 		m.addMessage("error", fmt.Sprintf("Failed to initialize kanban: %v", err))
 		m.refreshViewport()
@@ -2367,8 +2364,7 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 
 	// Initialize Cortex if enabled
 	if cfg.Cortex.Enabled {
-		home, _ := os.UserHomeDir()
-		cortexDir := filepath.Join(home, ".magic", "cortex")
+		cortexDir := filepath.Join(config.GetMagicHome(), "cortex")
 		cortexMgr := cortex.NewManager(cortexDir, prov)
 		if err := cortexMgr.Start(); err == nil {
 			agentOpts = append(agentOpts, agent.WithCortex(cortexMgr))

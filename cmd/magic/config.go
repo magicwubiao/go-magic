@@ -423,13 +423,7 @@ func runConfigList(cmd *cobra.Command, args []string) {
 }
 
 func runConfigPath(cmd *cobra.Command, args []string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	configPath := filepath.Join(home, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 	fmt.Println(configPath)
 
 	if _, err := os.Stat(configPath); err == nil {
@@ -492,12 +486,9 @@ func runConfigValidate(cmd *cobra.Command, args []string) {
 	}
 
 	// Check magic home
-	home, err := os.UserHomeDir()
-	if err == nil {
-		magicDir := filepath.Join(home, ".magic")
-		if _, err := os.Stat(magicDir); os.IsNotExist(err) {
-			errors = append(errors, fmt.Sprintf("magic directory does not exist: %s", magicDir))
-		}
+	magicDir := config.GetMagicHome()
+	if _, err := os.Stat(magicDir); os.IsNotExist(err) {
+		errors = append(errors, fmt.Sprintf("magic directory does not exist: %s", magicDir))
 	}
 
 	if len(errors) == 0 {

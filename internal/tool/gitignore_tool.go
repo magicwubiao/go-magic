@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // =============================================================================
@@ -19,7 +21,7 @@ const (
 	// GitHubGitignoreRepo is the URL to the github/gitignore repository
 	GitHubGitignoreRepo = "https://raw.githubusercontent.com/github/gitignore/main"
 	// GitignoreCacheDir is the directory for caching gitignore templates
-	GitignoreCacheDir = ".magic/cache/gitignore"
+	GitignoreCacheDir = "cache/gitignore"
 )
 
 // GitignoreTool provides functionality to generate .gitignore files
@@ -30,8 +32,7 @@ type GitignoreTool struct {
 
 // NewGitignoreTool creates a new gitignore tool
 func NewGitignoreTool() *GitignoreTool {
-	home, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(home, GitignoreCacheDir)
+	cacheDir := filepath.Join(config.GetMagicHome(), "cache", "gitignore")
 
 	return &GitignoreTool{
 		cacheDir: cacheDir,

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -669,8 +670,7 @@ func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, erro
 	}
 
 	// Save to disk
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".magic", "wecom", "media", mediaType)
+	dir := filepath.Join(config.GetMagicHome(), "wecom", "media", mediaType)
 	os.MkdirAll(dir, 0755)
 
 	filename := fmt.Sprintf("%s_%s.%s", mediaID, mediaType, ext)

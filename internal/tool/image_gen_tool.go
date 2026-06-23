@@ -184,7 +184,7 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 			"size":               size,
 			"count":              count,
 			"message":            "Image generation API key not configured. Please set image_gen_api_key in your config.",
-			"configuration_help": "Add 'image_gen_api_key' and optionally 'image_gen_provider' to your ~/.magic/config.json",
+			"configuration_help": "Add 'image_gen_api_key' and optionally 'image_gen_provider' to your config.json (the magic home directory)",
 		}, nil
 	}
 

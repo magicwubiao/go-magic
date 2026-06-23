@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Manager handles batch processing operations
@@ -32,12 +34,13 @@ type Config struct {
 
 // DefaultConfig returns default configuration
 func DefaultConfig() *Config {
+	magicHome := config.GetMagicHome()
 	return &Config{
 		MaxConcurrent: 5,
 		RetryCount:    3,
 		RetryDelay:    5 * time.Second,
-		ResultDir:     filepath.Join(os.Getenv("HOME"), ".magic", "batch-results"),
-		ProgressDir:   filepath.Join(os.Getenv("HOME"), ".magic", "batch-progress"),
+		ResultDir:     filepath.Join(magicHome, "batch-results"),
+		ProgressDir:   filepath.Join(magicHome, "batch-progress"),
 		Timeout:       1 * time.Hour,
 	}
 }

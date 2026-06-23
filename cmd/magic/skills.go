@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Skill metadata for templates
@@ -33,7 +34,7 @@ var skillsCmd = &cobra.Command{
 
 Skills are loaded from three levels:
   - Built-in skills: bundled with the application
-  - Global skills: ~/.magic/skills/
+  - Global skills: under your magic home directory (/skills)
   - Workspace skills: ./skills/ or .magic/skills/
 
 Supports multiple formats:
@@ -408,8 +409,7 @@ func installSkillFromPath(name, path string) {
 	}
 
 	// Create skills directory
-	home, _ := os.UserHomeDir()
-	skillsDir := filepath.Join(home, ".magic", "skills")
+	skillsDir := filepath.Join(config.GetMagicHome(), "skills")
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
 		fmt.Printf("Failed to create skills directory: %v\n", err)
 		os.Exit(1)
@@ -489,8 +489,7 @@ func runSkillsCreate(cmd *cobra.Command, args []string) {
 	name := args[0]
 
 	// Create skills directory
-	home, _ := os.UserHomeDir()
-	skillsDir := filepath.Join(home, ".magic", "skills")
+	skillsDir := filepath.Join(config.GetMagicHome(), "skills")
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
 		fmt.Printf("Failed to create skills directory: %v\n", err)
 		os.Exit(1)
@@ -675,8 +674,7 @@ func runSkillsHubList(cmd *cobra.Command, args []string) {
 
 func runSkillsHubAudit(cmd *cobra.Command, args []string) {
 	// 读取审计日志
-	home, _ := os.UserHomeDir()
-	auditLog := filepath.Join(home, ".magic", "skills", ".hub", "audit.log")
+	auditLog := filepath.Join(config.GetMagicHome(), "skills", ".hub", "audit.log")
 
 	data, err := os.ReadFile(auditLog)
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // PluginToolLoader discovers plugins and creates PluginTool instances
@@ -15,11 +17,7 @@ type PluginToolLoader struct {
 
 // newPluginToolLoader creates a plugin tool loader
 func newPluginToolLoader() *PluginToolLoader {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	dir := filepath.Join(home, ".magic", "plugins")
+	dir := filepath.Join(config.GetMagicHome(), "plugins")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}

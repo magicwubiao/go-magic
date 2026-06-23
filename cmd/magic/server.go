@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/magicwubiao/go-magic/internal/server"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -28,11 +29,7 @@ var serverCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		magicHome := viper.GetString("magic-home")
 		if magicHome == "" {
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				homeDir = os.TempDir()
-			}
-			magicHome = homeDir + "/.magic"
+			magicHome = config.GetMagicHome()
 		}
 
 		dbPath := magicHome + "/sessions.db"

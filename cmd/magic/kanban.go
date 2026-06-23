@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/kanban"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var (
@@ -182,16 +183,9 @@ func init() {
 }
 
 func getKanbanManager() (*kanban.Manager, error) {
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		home = "~"
-	}
-	magicHome := os.Getenv("MAGIC_HOME")
-	if magicHome != "" {
-		home = magicHome
-	}
+	home := config.GetMagicHome()
 
-	mgr, err := kanban.NewManager(home + "/.magic")
+	mgr, err := kanban.NewManager(home)
 	if err != nil {
 		return nil, err
 	}

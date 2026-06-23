@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // SkillEffectivenessRecord 技能效果记录
@@ -65,11 +67,7 @@ type runningStat struct {
 // NewEffectivenessManager 创建效果管理器
 func NewEffectivenessManager(baseDir string) (*EffectivenessManager, error) {
 	if baseDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get home directory: %w", err)
-		}
-		baseDir = filepath.Join(homeDir, ".magic")
+		baseDir = config.GetMagicHome()
 	}
 
 	skillsDir := filepath.Join(baseDir, "skills")

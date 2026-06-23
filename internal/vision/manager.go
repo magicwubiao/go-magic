@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Manager handles image understanding and generation
@@ -142,7 +144,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Enabled:       true,
 		DefaultMode:   "understand",
-		ImageCacheDir: filepath.Join(os.Getenv("HOME"), ".magic", "vision-cache"),
+		ImageCacheDir: filepath.Join(config.GetMagicHome(), "vision-cache"),
 		MaxImageSize:  50 * 1024 * 1024, // 50MB
 		Timeout:       120 * time.Second,
 	}

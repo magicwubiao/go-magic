@@ -3,12 +3,12 @@ package tool
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var (
@@ -18,8 +18,7 @@ var (
 // GetSessionSearchTool creates a new session search tool
 func GetSessionSearchTool() *SessionSearchTool {
 	if sessionSearchTool == nil {
-		home, _ := os.UserHomeDir()
-		dbPath := filepath.Join(home, ".magic", "sessions.db")
+		dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 		store, err := session.NewStore(dbPath)
 		if err != nil {

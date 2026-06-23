@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // TriggerCondition 触发条件
@@ -42,12 +44,7 @@ type TriggerOptimizer struct {
 // NewTriggerOptimizer 创建触发优化器
 func NewTriggerOptimizer(effMgr *EffectivenessManager, baseDir string) *TriggerOptimizer {
 	if baseDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			baseDir = "."
-		} else {
-			baseDir = filepath.Join(homeDir, ".magic")
-		}
+		baseDir = config.GetMagicHome()
 	}
 
 	skillsDir := filepath.Join(baseDir, "skills")

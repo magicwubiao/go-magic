@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
@@ -16,6 +18,53 @@ const (
 	DefaultMagicHome = "~/.magic"
 	ConfigFileName   = "config.json"
 )
+
+func GetMagicHome() string {
+	if magicHome := os.Getenv("GO_MAGIC_HOME"); magicHome != "" {
+		return magicHome
+	}
+
+	// Try HOME env var first (most reliable on Linux)
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".magic")
+	}
+
+	// Fallback: use os.UserHomeDir()
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".magic")
+	}
+
+	// Last resort: read /etc/passwd for current user's home directory.
+	// This handles cases where UserHomeDir() fails (e.g. root in containers).
+	if home := getHomeFromPasswd(); home != "" {
+		return filepath.Join(home, ".magic")
+	}
+
+	// Absolute last resort
+	return "/tmp/.magic"
+}
+
+// getHomeFromPasswd reads /etc/passwd to find the home directory of
+// the current user. This is more reliable than os.UserHomeDir() in
+// containerized or unusual Linux environments.
+func getHomeFromPasswd() string {
+	uid := syscall.Getuid()
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Split(line, ":")
+		if len(fields) < 6 {
+			continue
+		}
+		if fields[2] == fmt.Sprintf("%d", uid) {
+			return fields[5]
+		}
+	}
+	return ""
+}
 
 // ErrNoConfig indicates that no config file exists (first run).
 var ErrNoConfig = fmt.Errorf("config file not found")
@@ -224,12 +273,8 @@ func DefaultSubAgentConfig() *SubAgentConfig {
 }
 
 func Load() (*Config, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	configPath := filepath.Join(home, ".magic", ConfigFileName)
+	magicHome := GetMagicHome()
+	configPath := filepath.Join(magicHome, ConfigFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -293,12 +338,9 @@ func DefaultConfig() *Config {
 }
 
 // GetConfigDir returns the configuration directory path.
+// Uses GO_MAGIC_HOME environment variable if set, otherwise ~/.magic.
 func GetConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".magic")
+	return GetMagicHome()
 }
 
 // getDefaultWorkingDir returns the default working directory.
@@ -321,12 +363,9 @@ func getDefaultWorkingDir() string {
 // 2. Merges in-memory changes on top
 // 3. Writes result to a temp file, then renames
 func (c *Config) Save() error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
+	magicHome := GetMagicHome()
 
-	configDir := filepath.Join(home, ".magic")
+	configDir := magicHome
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return err
 	}

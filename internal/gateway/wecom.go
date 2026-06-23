@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/mdp/qrterminal/v3"
 )
@@ -82,8 +83,7 @@ type WeComSession struct {
 
 // NewWeComQRGateway creates a new WeCom QR code login gateway
 func NewWeComQRGateway(corpID, agentID, secret string) *WeComQRGateway {
-	home, _ := os.UserHomeDir()
-	sessionPath := filepath.Join(home, ".magic", "wecom", "session.json")
+	sessionPath := filepath.Join(config.GetMagicHome(), "wecom", "session.json")
 
 	return &WeComQRGateway{
 		corpID:         corpID,

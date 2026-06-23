@@ -158,8 +158,7 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	// Initialize cortex if enabled
 	var cortexMgr *cortex.Manager
 	if cfg.Cortex.Enabled {
-		home, _ := os.UserHomeDir()
-		cortexMgr = cortex.NewManager(filepath.Join(home, ".magic", "cortex"), prov)
+		cortexMgr = cortex.NewManager(filepath.Join(config.GetMagicHome(), "cortex"), prov)
 		if err := cortexMgr.Start(); err != nil {
 			log.Warnf("[Gateway] Cortex start failed: %v", err)
 			cortexMgr = nil
@@ -615,8 +614,7 @@ func (h *gatewayAgentHandler) handleGoalCommand(ctx context.Context, userID stri
 	gm, ok := h.goalManagers[userID]
 	if !ok {
 		// Create goal manager
-		home, _ := os.UserHomeDir()
-		goalsDir := filepath.Join(home, ".magic", "goals")
+		goalsDir := filepath.Join(config.GetMagicHome(), "goals")
 		gm = agent.NewGoalManager(h.provider, goalsDir)
 		h.goalManagers[userID] = gm
 
@@ -678,8 +676,7 @@ func (h *gatewayAgentHandler) handleGoalCommand(ctx context.Context, userID stri
 // handleKanbanCommand handles /kanban and /kb commands from gateway platforms
 func (h *gatewayAgentHandler) handleKanbanCommand(ctx context.Context, userID string, input string) (string, error) {
 	// Initialize kanban manager
-	home, _ := os.UserHomeDir()
-	mgr, err := kanban.NewManager(filepath.Join(home, ".magic"))
+	mgr, err := kanban.NewManager(config.GetMagicHome())
 	if err != nil {
 		return fmt.Sprintf("⚠ Failed to initialize kanban: %v", err), nil
 	}
@@ -1029,7 +1026,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	if !cfg.Gateway.Enabled {
 		fmt.Println("Gateway is not enabled in config.")
-		fmt.Println("Please run 'magic setup' or edit ~/.magic/config.json")
+		fmt.Println("Please run 'magic setup' or edit your magic home config.json")
 		os.Exit(1)
 	}
 
@@ -1037,6 +1034,20 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	defer cancel()
 
 	go startHealthServer(ctx)
+
+	// Create PID file immediately so the web UI knows gateway is starting
+	magicHome := config.GetMagicHome()
+	os.MkdirAll(magicHome, 0755)
+	pidFile := filepath.Join(magicHome, pidFileName)
+	savePIDFile := func() {
+		pidData := map[string]interface{}{
+			"pid":     os.Getpid(),
+			"started": time.Now().Format(time.RFC3339),
+		}
+		pidBytes, _ := json.MarshalIndent(pidData, "", "  ")
+		os.WriteFile(pidFile, pidBytes, 0644)
+	}
+	savePIDFile()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -1049,8 +1060,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	})
 
 	// Set up session persistence for analytics
-	homeDir, _ := os.UserHomeDir()
-	sessionDBPath := filepath.Join(homeDir, ".magic", "sessions.db")
+	sessionDBPath := filepath.Join(magicHome, "sessions.db")
 	store, err := session.NewStore(sessionDBPath)
 	if err != nil {
 		fmt.Printf("Warning: Failed to create session store: %v\n", err)
@@ -1289,7 +1299,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 			// Personal WhatsApp with QR login (default)
 			dataDir := waCfg.DataDir
 			if dataDir == "" {
-				dataDir = "" // will use default ~/.magic/whatsapp
+				dataDir = "" // will use the default magic home / whatsapp directory
 			}
 			fmt.Println("[WhatsApp] Starting with QR login...")
 			waGw := gateway.NewWhatsAppGateway(dataDir)
@@ -1360,8 +1370,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 		dataDir := ilinkCfg.DataDir
 		if dataDir == "" {
-			homeDir, _ := os.UserHomeDir()
-			dataDir = filepath.Join(homeDir, ".magic", "wechat_ilink")
+			dataDir = filepath.Join(config.GetMagicHome(), "wechat_ilink")
 		}
 
 		baseURL := ilinkCfg.APIURL
@@ -1391,8 +1400,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 			dataDir := clawCfg.DataDir
 			if dataDir == "" {
-				homeDir, _ := os.UserHomeDir()
-				dataDir = filepath.Join(homeDir, ".magic", "clawbot")
+				dataDir = filepath.Join(config.GetMagicHome(), "clawbot")
 			}
 
 			baseURL := clawCfg.APIURL
@@ -1415,22 +1423,23 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	}
 
 	if platformCount == 0 {
+		// Even with no platforms, keep running with health server active
+		// This allows the web UI to show the gateway as "running"
 		if gatewayPlatform != "" {
 			fmt.Printf("Platform '%s' is not configured or not enabled.\n", gatewayPlatform)
 			fmt.Println("Run 'magic gateway setup' to configure platforms.")
 		} else {
-			fmt.Println("No platforms configured/enabled.")
-			fmt.Println()
-			fmt.Print("Would you like to configure a platform now? (Y/n): ")
-			reader := bufio.NewReader(os.Stdin)
-			choice, _ := reader.ReadString('\n')
-			choice = strings.TrimSpace(choice)
-			if choice == "" || choice == "y" || choice == "Y" {
-				runGatewayPlatformSetup(cmd, args)
-				return
-			}
-			fmt.Println("Run 'magic gateway setup' to configure platforms later.")
+			fmt.Println("No platforms configured/enabled. Gateway running in idle mode.")
+			fmt.Println("Run 'magic gateway setup' to configure platforms.")
 		}
+		// Keep PID file and wait for signal
+		fmt.Printf("Gateway PID: %d\n", os.Getpid())
+		fmt.Println("Press Ctrl+C to stop.")
+
+		sig := <-sigCh
+		fmt.Printf("\nShutting down gateway (%v)...\n", sig)
+		cancel()
+		os.Remove(pidFile)
 		return
 	}
 
@@ -1438,18 +1447,6 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 		fmt.Printf("Failed to start gateway: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Save PID file
-	home, _ := os.UserHomeDir()
-	pidDir := filepath.Join(home, ".magic")
-	os.MkdirAll(pidDir, 0755)
-	pidFile := filepath.Join(pidDir, pidFileName)
-	pidData := map[string]interface{}{
-		"pid":     os.Getpid(),
-		"started": time.Now().Format(time.RFC3339),
-	}
-	pidBytes, _ := json.MarshalIndent(pidData, "", "  ")
-	os.WriteFile(pidFile, pidBytes, 0644)
 
 	fmt.Printf("\nStarted %d platform(s). Press Ctrl+C to stop.\n", platformCount)
 	fmt.Printf("PID saved: %s\n", pidFile)
@@ -1459,117 +1456,214 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 }
 
 func runGatewayStop(cmd *cobra.Command, args []string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
+	magicHome := config.GetMagicHome()
+	pidFile := filepath.Join(magicHome, pidFileName)
 
-	pidFile := filepath.Join(home, ".magic", pidFileName)
-
+	// Try to read the PID file. If it doesn't exist, also check whether
+	// a previous gateway is still holding 8080/8081 (PID file might have
+	// been cleaned up but the process orphaned).
 	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Gateway is not running (no PID file found).")
-			return
-		}
+	if err != nil && !os.IsNotExist(err) {
 		fmt.Printf("Failed to read PID file: %v\n", err)
 		os.Exit(1)
 	}
 
-	var pidData map[string]interface{}
-	if err := json.Unmarshal(data, &pidData); err != nil {
-		fmt.Printf("Failed to parse PID file: %v\n", err)
-		os.Exit(1)
+	if err == nil {
+		var pidData map[string]interface{}
+		if json.Unmarshal(data, &pidData) == nil {
+			if pid, ok := pidData["pid"].(float64); ok {
+				stopGatewayProcess(int(pid))
+			}
+		}
 	}
 
-	pid, ok := pidData["pid"].(float64)
-	if !ok {
-		fmt.Println("Invalid PID file format.")
-		os.Exit(1)
-	}
-
-	process, err := os.FindProcess(int(pid))
-	if err != nil {
-		fmt.Printf("Failed to find process: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		fmt.Printf("Failed to stop gateway: %v\n", err)
-		fmt.Println("Try killing the process manually: kill", int(pid))
-		os.Exit(1)
-	}
-
-	fmt.Printf("Sent stop signal to gateway (PID: %d)...\n", int(pid))
-	time.Sleep(2 * time.Second)
-
-	if process.Pid == 0 {
-	} else {
-		process.Kill()
-		fmt.Println("Process forcefully killed.")
+	// Belt-and-braces: if a previous gateway is still bound to 8080/8081
+	// even after the PID-based kill, try to find and kill whatever is
+	// holding those ports. This handles the case where the PID file was
+	// cleaned up but the process is still alive.
+	if !isPortFree(8080) || !isPortFree(8081) {
+		fmt.Println("Ports 8080/8081 still in use; attempting to clear them...")
+		orphanPid := findPidByPort(8080)
+		if orphanPid == 0 {
+			orphanPid = findPidByPort(8081)
+		}
+		if orphanPid > 0 {
+			fmt.Printf("Killing orphan gateway process holding the port: PID %d\n", orphanPid)
+			stopGatewayProcess(orphanPid)
+		}
 	}
 
 	os.Remove(pidFile)
-	fmt.Println("✓ Gateway stopped.")
+	if isPortFree(8080) && isPortFree(8081) {
+		fmt.Println("✓ Gateway stopped.")
+	} else {
+		fmt.Println("⚠ Ports 8080/8081 may still be in use. Check manually.")
+	}
+}
+
+// stopGatewayProcess performs a graceful-then-forced shutdown of the
+// gateway process identified by pid. It:
+//  1. Sends SIGTERM (or TerminateProcess on Windows) to the process
+//     group so all children also receive the signal.
+//  2. Polls until the process is gone or 8 seconds elapse.
+//  3. Falls back to SIGKILL (force kill) if still alive.
+//  4. Waits up to 5 more seconds for the gateway ports to free up.
+func stopGatewayProcess(pid int) {
+	if pid <= 0 {
+		return
+	}
+	if !processAlive(pid) {
+		fmt.Printf("Process %d is not running.\n", pid)
+		return
+	}
+
+	fmt.Printf("Stopping gateway (PID: %d)...\n", pid)
+
+	// Step 1: graceful shutdown via process group kill
+	if err := killProcessGroup(pid, syscall.SIGTERM); err != nil {
+		fmt.Printf("  SIGTERM to process group failed: %v\n", err)
+	}
+
+	// Step 2: wait for the process to exit (up to 8s)
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			fmt.Println("  Gateway exited gracefully.")
+			// Give the OS a moment to release the sockets
+			time.Sleep(500 * time.Millisecond)
+			waitForPortsFree(2 * time.Second)
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Step 3: still alive - force kill
+	fmt.Println("  Gateway did not exit; sending SIGKILL...")
+	if err := killProcessGroup(pid, syscall.SIGKILL); err != nil {
+		// Fall back to per-process kill if group kill fails
+		if proc, err := os.FindProcess(pid); err == nil {
+			_ = proc.Kill()
+		}
+	}
+
+	// Step 4: wait for ports to free up (up to 5s)
+	if waitForPortsFree(5 * time.Second) {
+		fmt.Println("  Gateway forcefully killed, ports released.")
+	} else {
+		fmt.Println("  Gateway killed, but ports may still be in TIME_WAIT.")
+	}
 }
 
 func runGatewayRestart(cmd *cobra.Command, args []string) {
 	fmt.Println("Restarting Gateway...")
 
-	// Stop first
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
+	magicHome := config.GetMagicHome()
+	pidFile := filepath.Join(magicHome, pidFileName)
 
-	pidFile := filepath.Join(home, ".magic", pidFileName)
-
-	// Check if running
+	// Check if running and stop it gracefully
+	stopped := false
 	if data, err := os.ReadFile(pidFile); err == nil {
 		var pidData map[string]interface{}
 		if json.Unmarshal(data, &pidData) == nil {
 			if pid, ok := pidData["pid"].(float64); ok {
-				process, err := os.FindProcess(int(pid))
-				if err == nil && process != nil {
-					// Send SIGTERM
-					process.Signal(syscall.SIGTERM)
-					fmt.Printf("Sent stop signal to gateway (PID: %d)...\n", int(pid))
-					time.Sleep(2 * time.Second)
-					os.Remove(pidFile)
+				if processAlive(int(pid)) {
+					stopGatewayProcess(int(pid))
+					stopped = true
 				}
 			}
 		}
-	} else {
-		if !os.IsNotExist(err) {
-			fmt.Printf("Warning: Failed to read PID file: %v\n", err)
+	}
+
+	// If no PID file or stale PID, but ports are still occupied, hunt
+	// down the orphan process holding 8080/8081.
+	if !stopped && (!isPortFree(8080) || !isPortFree(8081)) {
+		fmt.Println("Ports 8080/8081 in use; attempting to clear orphan process...")
+		orphanPid := findPidByPort(8080)
+		if orphanPid == 0 {
+			orphanPid = findPidByPort(8081)
 		}
+		if orphanPid > 0 {
+			fmt.Printf("Killing orphan gateway process holding the port: PID %d\n", orphanPid)
+			stopGatewayProcess(orphanPid)
+		}
+	}
+
+	// Always remove stale PID file before starting
+	os.Remove(pidFile)
+
+	// Final safety: wait for ports to be free (up to 3s)
+	if !waitForPortsFree(3 * time.Second) {
+		fmt.Println("⚠ Warning: ports 8080/8081 may still be busy. New gateway may fail to bind.")
 	}
 
 	// Start again
 	fmt.Println("Starting Gateway...")
 
-	// Get the current executable path
 	execPath, err := os.Executable()
 	if err != nil {
-		// Fallback to os.Args[0] if we can't get the executable path
 		execPath = os.Args[0]
 	}
 
-	// Start gateway in background
 	gatewayCmd := exec.Command(execPath, "gateway", "start")
 	if gatewayPlatform != "" {
 		gatewayCmd.Args = append(gatewayCmd.Args, "--platform", gatewayPlatform)
 	}
-	gatewayCmd.Stdout = os.Stdout
-	gatewayCmd.Stderr = os.Stderr
+
+	// Set up environment - ensure GO_MAGIC_HOME is passed
+	env := os.Environ()
+	goMagicHomeSet := false
+	for _, e := range env {
+		if strings.HasPrefix(e, "GO_MAGIC_HOME=") {
+			goMagicHomeSet = true
+			break
+		}
+	}
+	if !goMagicHomeSet && magicHome != "" {
+		env = append(env, "GO_MAGIC_HOME="+magicHome)
+	}
+	gatewayCmd.Env = env
+
+	// Set up log file - use file path to avoid issues with setsid
+	logDir := filepath.Join(magicHome, "logs")
+	os.MkdirAll(logDir, 0755)
+	logPath := filepath.Join(logDir, "gateway.log")
+	if _, err := os.Stat(logPath); err == nil {
+		// Log file exists, truncate it for fresh start
+		os.Truncate(logPath, 0)
+	}
+	gatewayCmd.Stdout, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Printf("Warning: Failed to open log file: %v\n", err)
+	}
+	gatewayCmd.Stderr = gatewayCmd.Stdout
+
 	setSysProcAttr(gatewayCmd)
 	if err := gatewayCmd.Start(); err != nil {
 		fmt.Printf("Failed to start gateway: %v\n", err)
+		os.Remove(pidFile)
 		os.Exit(1)
 	}
+
 	fmt.Printf("Gateway restart initiated (new PID: %d)\n", gatewayCmd.Process.Pid)
+
+	// Wait for gateway to start by checking for PID file
+	maxWait := 10
+	for i := 0; i < maxWait; i++ {
+		time.Sleep(1 * time.Second)
+		if _, err := os.Stat(pidFile); err == nil {
+			fmt.Println("Gateway started successfully!")
+			return
+		}
+	}
+
+	// PID file never appeared - the subprocess likely failed to start
+	// (e.g. port still in use). Surface that to the user.
+	if !processAlive(gatewayCmd.Process.Pid) {
+		fmt.Println("✗ Gateway process exited immediately. Check logs at:")
+		fmt.Println("  " + filepath.Join(logDir, "gateway.log"))
+	} else {
+		fmt.Printf("Warning: Gateway PID file not found after %d seconds. Process may still be starting.\n", maxWait)
+	}
 }
 
 func runGatewayStatus(cmd *cobra.Command, args []string) {
@@ -1583,8 +1677,9 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 	fmt.Println("==============")
 	fmt.Printf("Enabled in config: %v\n", cfg.Gateway.Enabled)
 
-	home, _ := os.UserHomeDir()
-	pidFile := filepath.Join(home, ".magic", pidFileName)
+	// Use GetMagicHome() to respect GO_MAGIC_HOME environment variable
+	magicHome := config.GetMagicHome()
+	pidFile := filepath.Join(magicHome, pidFileName)
 
 	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
 		fmt.Println("\n● Gateway: NOT RUNNING")
@@ -1594,8 +1689,7 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 			var pidData map[string]interface{}
 			if json.Unmarshal(data, &pidData) == nil {
 				if pid, ok := pidData["pid"].(float64); ok {
-					process, err := os.FindProcess(int(pid))
-					if err == nil && process.Pid != 0 {
+					if processAlive(int(pid)) {
 						fmt.Printf("\n● Gateway: RUNNING (PID: %d)\n", int(pid))
 						if started, ok := pidData["started"].(string); ok {
 							fmt.Printf("  Started: %s\n", started)
@@ -1636,8 +1730,7 @@ func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 	fmt.Println("╚════════════════════════════════════════╝")
 	fmt.Println()
 
-	homeDir, _ := os.UserHomeDir()
-	magicDir := filepath.Join(homeDir, ".magic")
+	magicDir := config.GetMagicHome()
 
 	// Load existing config
 	cfg, loadErr := config.Load()
@@ -1670,7 +1763,7 @@ func runGatewayPlatformSetup(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println("\n✓ Gateway setup complete!")
-	fmt.Println("Configuration saved to ~/.magic/config.json")
+	fmt.Println("Configuration saved to your magic home config.json")
 	fmt.Println()
 	fmt.Println("Start the gateway with:")
 	fmt.Println("  magic gateway start")

@@ -4,16 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 func main() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	magicDir := filepath.Join(home, ".magic")
+	magicDir := config.GetMagicHome()
 	os.MkdirAll(magicDir, 0755)
 
 	configPath := filepath.Join(magicDir, "config.json")
@@ -22,7 +18,7 @@ func main() {
 		fmt.Println("Creating default config at", configPath)
 		defaultConfig := `{
   "profile": "default",
-  "magic_home": "~/.magic",
+  "magic_home": "` + magicDir + `",
   "provider": "openai",
   "model": "gpt-4",
   "providers": {

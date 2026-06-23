@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Locale 区域设置
@@ -28,11 +30,7 @@ type Manager struct {
 func NewManager(dataDir, defaultLocale string) (*Manager, error) {
 	// Use default dir if empty
 	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = "/tmp"
-		}
-		dataDir = filepath.Join(home, ".magic", "i18n")
+		dataDir = filepath.Join(config.GetMagicHome(), "i18n")
 	}
 
 	m := &Manager{

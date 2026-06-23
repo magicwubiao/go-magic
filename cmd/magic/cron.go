@@ -163,7 +163,7 @@ func runCronAdd(cmd *cobra.Command, args []string) {
 	} else {
 		fmt.Printf("  Prompt: %s\n", cronPrompt)
 	}
-	fmt.Printf("\nEdit job details in ~/.magic/cron/cron_jobs.json")
+	fmt.Printf("\nEdit job details in your magic home directory /cron/cron_jobs.json")
 }
 
 func runCronRemove(cmd *cobra.Command, args []string) {

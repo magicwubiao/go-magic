@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Loader handles plugin loading from various sources
@@ -33,9 +35,9 @@ type LoaderConfig struct {
 
 // DefaultLoaderConfig returns default loader configuration
 func DefaultLoaderConfig() *LoaderConfig {
-	home, _ := os.UserHomeDir()
+	home := config.GetMagicHome()
 	return &LoaderConfig{
-		PluginDir:    filepath.Join(home, ".magic", "plugins"),
+		PluginDir:    filepath.Join(home, "plugins"),
 		AutoEnable:   true,
 		ValidateDeps: true,
 		LoadBuiltins: true,
@@ -419,26 +421,26 @@ func (l *Loader) loadBinaryPlugin(pluginPath string, manifest *PluginManifest) (
 
 // createContext creates a plugin context with config from schema defaults
 func (l *Loader) createContext(manifest *PluginManifest) *Context {
-	home, _ := os.UserHomeDir()
+	pluginHome := config.GetMagicHome()
 	pluginDir := filepath.Join(l.config.PluginDir, manifest.ID)
 
 	// Build config from schema defaults
-	config := make(map[string]interface{})
+	configMap := make(map[string]interface{})
 	for _, field := range manifest.ConfigSchema {
 		if field.Default != nil {
-			config[field.Key] = field.Default
+			configMap[field.Key] = field.Default
 		}
 	}
 
 	return &Context{
 		PluginID:    manifest.ID,
-		HomeDir:     home,
+		HomeDir:     pluginHome,
 		WorkingDir:  pluginDir,
 		Environment: os.Environ(),
 		DataDir:     filepath.Join(pluginDir, "data"),
 		CacheDir:    filepath.Join(pluginDir, "cache"),
 		ConfigDir:   filepath.Join(pluginDir, "config"),
-		Config:      config,
+		Config:      configMap,
 		Logger:      NewSimpleLogger(manifest.ID),
 		Metadata:    make(map[string]interface{}),
 	}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Sandbox provides security isolation for plugins
@@ -38,6 +40,7 @@ type SandboxConfig struct {
 // DefaultSandboxConfig returns default sandbox configuration
 func DefaultSandboxConfig() *SandboxConfig {
 	home, _ := os.UserHomeDir()
+	magicHome := config.GetMagicHome()
 	return &SandboxConfig{
 		Timeout:      30 * time.Second,
 		MemLimit:     256 * 1024 * 1024, // 256MB
@@ -49,7 +52,7 @@ func DefaultSandboxConfig() *SandboxConfig {
 			"/var/tmp",
 		},
 		FilesystemWrite: []string{
-			filepath.Join(home, ".magic", "plugins"),
+			filepath.Join(magicHome, "plugins"),
 			"/tmp",
 			"/var/tmp",
 		},

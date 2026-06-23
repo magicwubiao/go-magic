@@ -18,12 +18,7 @@ type Loader struct {
 
 // NewLoader creates a new configuration loader
 func NewLoader() (*Loader, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	configDir := filepath.Join(home, ".magic")
+	configDir := GetMagicHome()
 	return &Loader{
 		configDir:  configDir,
 		configFile: filepath.Join(configDir, "config.json"),
@@ -120,7 +115,7 @@ func (l *Loader) applyDefaults(cfg *configtypes.Config) {
 		cfg.Profile = "default"
 	}
 	if cfg.MagicHome == "" {
-		cfg.MagicHome = "~/.magic"
+		cfg.MagicHome = GetMagicHome()
 	}
 	if cfg.Provider == "" {
 		cfg.Provider = "openai"

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Storage 数据存储
@@ -23,7 +25,7 @@ func NewStorage(db *sql.DB) *Storage {
 // NewStorageFromHome creates a new storage instance from a home directory path
 func NewStorageFromHome(homeDir string) (*Storage, error) {
 	if homeDir == "" {
-		homeDir = "~/.magic"
+		homeDir = config.GetMagicHome()
 	}
 	homeDir = os.ExpandEnv(homeDir)
 

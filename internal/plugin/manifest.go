@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // LoadManifest loads a plugin manifest from file
@@ -55,8 +57,7 @@ func FindPlugins(pluginsDir string) ([]string, error) {
 
 // GetPluginDir returns the default plugin directory
 func GetPluginDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".magic", "plugins")
+	return filepath.Join(config.GetMagicHome(), "plugins")
 }
 
 // EnsurePluginDir ensures the plugin directory exists

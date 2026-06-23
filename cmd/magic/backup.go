@@ -7,23 +7,25 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var backupCmd = &cobra.Command{
 	Use:   "backup",
 	Short: "Backup magic configuration and data",
 	Long: `Create a backup of all magic data.
-	
-This command copies the entire ~/.magic directory to a timestamped backup folder.
+
+This command copies the entire magic home directory to a timestamped backup folder.
 The backup includes:
   - Configuration file (config.json)
   - Skills (skills/)
   - Session database (sessions.db)
   - Log files (logs/)
   - SOUL.md, MEMORY.md, USER.md
-	
-Backup location: ~/.magic_backup_YYYYMMDD_HHMMSS
-	
+
+Backup location: <home>/.magic_backup_YYYYMMDD_HHMMSS
+
 Use 'magic stats' to check your current data status.`,
 	Run: runBackup,
 }
@@ -33,13 +35,11 @@ func init() {
 }
 
 func runBackup(cmd *cobra.Command, args []string) {
+	magicDir := config.GetMagicHome()
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Printf("Failed to get home directory: %v\n", err)
-		os.Exit(1)
+		home = os.TempDir()
 	}
-
-	magicDir := filepath.Join(home, ".magic")
 	backupDir := filepath.Join(home, ".magic_backup_"+getTimestamp())
 
 	fmt.Printf("Backing up %s to %s...\n", magicDir, backupDir)

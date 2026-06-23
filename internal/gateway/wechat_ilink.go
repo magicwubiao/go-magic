@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -916,11 +917,7 @@ func (g *WeChatILinkGateway) sendTextMessage(ctx context.Context, toUserID, cont
 
 // checkTokenUpdate checks if the token in config.json has changed and updates the gateway if needed
 func (g *WeChatILinkGateway) checkTokenUpdate() {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	configPath := filepath.Join(homeDir, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1190,12 +1187,7 @@ func (g *WeChatILinkGateway) getTypingTicket(ctx context.Context, userID, contex
 // saveTokenToConfig persists the bot token to ~/.magic/config.json
 // so the token survives process restarts (no re-scan needed).
 func (g *WeChatILinkGateway) saveTokenToConfig(token, baseURL string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home dir: %w", err)
-	}
-
-	configPath := filepath.Join(homeDir, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1251,12 +1243,7 @@ func ensureMap(m map[string]interface{}, key string) map[string]interface{} {
 // loadTokenFromConfig loads the bot token from config.json or fallback token.json
 // Returns (token, baseURL, error)
 func (g *WeChatILinkGateway) loadTokenFromConfig() (string, string) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", ""
-	}
-
-	configPath := filepath.Join(homeDir, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	// Try to load from config.json first
 	data, err := os.ReadFile(configPath)

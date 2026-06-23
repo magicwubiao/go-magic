@@ -85,8 +85,7 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 	store, err := session.NewStore(dbPath)
 	if err != nil {
@@ -124,8 +123,7 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 }
 
 func runSessionsShow(cmd *cobra.Command, args []string) {
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 	store, err := session.NewStore(dbPath)
 	if err != nil {
@@ -169,8 +167,7 @@ func runSessionsDelete(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 	store, err := session.NewStore(dbPath)
 	if err != nil {
@@ -192,8 +189,7 @@ func runSessionsRename(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	newName := args[1]
 
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".magic", "sessions.db")
+	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 	store, err := session.NewStore(dbPath)
 	if err != nil {

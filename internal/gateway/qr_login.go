@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -814,13 +815,7 @@ func (m *QRCodeManager) saveILinkToken(token, baseURL string) {
 		return
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Errorf("Failed to get home dir for saving token: %v", err)
-		return
-	}
-
-	configPath := filepath.Join(homeDir, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	// Read existing config
 	data, err := os.ReadFile(configPath)

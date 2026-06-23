@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Manager provides high-level plugin management
@@ -28,10 +30,10 @@ type ManagerConfig struct {
 
 // DefaultManagerConfig returns default manager configuration
 func DefaultManagerConfig() *ManagerConfig {
-	home, _ := os.UserHomeDir()
+	home := config.GetMagicHome()
 	return &ManagerConfig{
-		PluginDir:     filepath.Join(home, ".magic", "plugins"),
-		CacheDir:      filepath.Join(home, ".magic", "plugins", "cache"),
+		PluginDir:     filepath.Join(home, "plugins"),
+		CacheDir:      filepath.Join(home, "plugins", "cache"),
 		AllowNetwork:  true,
 		EnableSandbox: true,
 	}

@@ -10,12 +10,24 @@
         <n-tag v-if="gatewayStore.status" :type="gatewayStore.status.running ? 'success' : 'error'" size="small">
           {{ gatewayStore.status.running ? `${t('gateway.running')} (PID: ${gatewayStore.status.pid})` : t('gateway.notRunning') }}
         </n-tag>
-        <n-popconfirm @positive-click="restartGateway">
-          <template #trigger>
-            <n-button type="warning" :disabled="!gatewayEnabled">{{ t('gateway.restart') }}</n-button>
-          </template>
-          {{ t('gateway.restartConfirm') }}
-        </n-popconfirm>
+        <n-button
+          v-if="!gatewayStore.status?.running"
+          type="success"
+          size="small"
+          :disabled="!gatewayEnabled || actionLoading"
+          @click="startGateway"
+        >
+          {{ actionLoading ? t('gateway.starting') : t('gateway.start') }}
+        </n-button>
+        <n-button
+          v-else
+          type="warning"
+          size="small"
+          :disabled="actionLoading"
+          @click="stopGateway"
+        >
+          {{ actionLoading ? t('gateway.stopping') : t('gateway.stop') }}
+        </n-button>
       </n-space>
     </n-space>
 
@@ -250,6 +262,7 @@ const message = useMessage()
 const gatewayStore = useGatewayStore()
 const configStore = useConfigStore()
 const gatewayEnabled = ref(false)
+const actionLoading = ref(false)
 const showEditModal = ref(false)
 const showQRModal = ref(false)
 const editingPlatform = ref<Platform | null>(null)
@@ -355,6 +368,58 @@ async function saveGatewayEnabled(): Promise<void> {
     message.success(gatewayEnabled.value ? t('gateway.enabled') : t('gateway.disabled'))
   } catch (e) {
     message.error(t('gateway.updateFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  }
+}
+
+async function startGateway(): Promise<void> {
+  try {
+    actionLoading.value = true
+    await gatewayStore.start()
+    message.success(t('gateway.starting'))
+    
+    // Poll status until gateway is running or timeout
+    let pollCount = 0
+    const maxPolls = 30
+    const pollInterval = setInterval(async () => {
+      pollCount++
+      await gatewayStore.loadStatus()
+      if (gatewayStore.status?.running || pollCount >= maxPolls) {
+        clearInterval(pollInterval)
+        actionLoading.value = false
+        if (gatewayStore.status?.running) {
+          message.success(t('gateway.running'))
+        }
+      }
+    }, 1000)
+  } catch (e) {
+    actionLoading.value = false
+    message.error(t('gateway.startFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  }
+}
+
+async function stopGateway(): Promise<void> {
+  try {
+    actionLoading.value = true
+    await gatewayStore.stop()
+    message.success(t('gateway.stopping'))
+    
+    // Poll status until gateway is stopped or timeout
+    let pollCount = 0
+    const maxPolls = 15
+    const pollInterval = setInterval(async () => {
+      pollCount++
+      await gatewayStore.loadStatus()
+      if (!gatewayStore.status?.running || pollCount >= maxPolls) {
+        clearInterval(pollInterval)
+        actionLoading.value = false
+        if (!gatewayStore.status?.running) {
+          message.success(t('gateway.stopped'))
+        }
+      }
+    }, 1000)
+  } catch (e) {
+    actionLoading.value = false
+    message.error(t('gateway.stopFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var (
@@ -248,6 +249,5 @@ func extractDescription(content string) string {
 }
 
 func getGlobalSkillsDir() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".magic", "skills")
+	return filepath.Join(config.GetMagicHome(), "skills")
 }

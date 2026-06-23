@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -33,12 +34,7 @@ type CheckpointManager struct {
 
 // NewCheckpointManager creates a new checkpoint manager
 func NewCheckpointManager() (*CheckpointManager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	dir := filepath.Join(home, ".magic", "checkpoints")
+	dir := filepath.Join(config.GetMagicHome(), "checkpoints")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}

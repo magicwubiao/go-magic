@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // VersionInfo 版本信息
@@ -336,8 +338,8 @@ func createBackup() error {
 		return err
 	}
 
-	homeDir, _ := os.UserHomeDir()
-	backupDir := filepath.Join(homeDir, ".magic", "backups")
+	homeDir := config.GetMagicHome()
+	backupDir := filepath.Join(homeDir, "backups")
 	os.MkdirAll(backupDir, 0755)
 
 	backupName := fmt.Sprintf("magic-backup-%s", getCurrentVersion())
@@ -347,8 +349,8 @@ func createBackup() error {
 }
 
 func rollback() error {
-	homeDir, _ := os.UserHomeDir()
-	backupDir := filepath.Join(homeDir, ".magic", "backups")
+	homeDir := config.GetMagicHome()
+	backupDir := filepath.Join(homeDir, "backups")
 
 	files, err := os.ReadDir(backupDir)
 	if err != nil {

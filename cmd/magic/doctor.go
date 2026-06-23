@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // doctorCmd represents the doctor command
@@ -142,8 +144,7 @@ func getCurrentTime() string {
 }
 
 func runConfigCheck() error {
-	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -168,8 +169,7 @@ func runConfigCheck() error {
 }
 
 func runProviderCheck() error {
-	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, ".magic", "config.json")
+	configPath := filepath.Join(config.GetMagicHome(), "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -192,8 +192,7 @@ func runProviderCheck() error {
 
 func runToolsCheck() error {
 	// Check if tools are registered
-	home, _ := os.UserHomeDir()
-	skillsDir := filepath.Join(home, ".magic", "skills")
+	skillsDir := filepath.Join(config.GetMagicHome(), "skills")
 
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		fmt.Printf("   Skills dir: NOT FOUND\n")
@@ -203,7 +202,7 @@ func runToolsCheck() error {
 
 	// Check common tool directories
 	toolDirs := []string{
-		filepath.Join(home, ".magic", "plugins"),
+		filepath.Join(config.GetMagicHome(), "plugins"),
 	}
 
 	for _, dir := range toolDirs {
@@ -232,8 +231,7 @@ func runGatewayCheck() error {
 }
 
 func runSkillsCheck() error {
-	home, _ := os.UserHomeDir()
-	skillsDir := filepath.Join(home, ".magic", "skills")
+	skillsDir := filepath.Join(config.GetMagicHome(), "skills")
 
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		fmt.Println("   Skills directory: NOT FOUND")

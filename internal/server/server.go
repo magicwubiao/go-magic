@@ -134,6 +134,7 @@ type Server struct {
 	toolReg      *tool.Registry
 	skillMgr     *skills.Manager
 	magicHome    string
+	execPath     string // Store the executable path for gateway restart
 	version      string
 	commit       string
 	buildDate    string
@@ -195,11 +196,7 @@ type ActionStatus struct {
 
 // NewServer creates a new server instance connected to real backend systems
 func NewServer(dbPath string) *Server {
-	home, _ := os.UserHomeDir()
-	magicHome := os.Getenv("GO_MAGIC_HOME")
-	if magicHome == "" {
-		magicHome = filepath.Join(home, ".magic")
-	}
+	magicHome := appconfig.GetMagicHome()
 	os.MkdirAll(magicHome, 0755)
 
 	// Create default profile directory structure
@@ -370,6 +367,13 @@ func NewServer(dbPath string) *Server {
 		authToken = strings.TrimSpace(string(data))
 	}
 
+	// Get the executable path for gateway restart
+	// Use /home/www/magic if it exists, otherwise fall back to os.Executable()
+	execPath, _ := os.Executable()
+	if _, err := os.Stat("/home/www/magic"); err == nil {
+		execPath = "/home/www/magic"
+	}
+
 	s := &Server{
 		mu:               sync.RWMutex{},
 		startTime:        time.Now(),
@@ -379,6 +383,7 @@ func NewServer(dbPath string) *Server {
 		toolReg:          registry,
 		skillMgr:         skillMgr,
 		magicHome:        magicHome,
+		execPath:         execPath,
 		version:          version,
 		commit:           "unknown",
 		buildDate:        "unknown",
@@ -879,6 +884,8 @@ func (s *Server) Start(port int) error {
 
 	// Gateway
 	mux.HandleFunc("/api/gateway/status", withCORS(requireAuth(s.handleGatewayStatus)))
+	mux.HandleFunc("/api/gateway/start", withCORS(requireAuth(s.handleGatewayStart)))
+	mux.HandleFunc("/api/gateway/stop", withCORS(requireAuth(s.handleGatewayStop)))
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
 	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
@@ -6225,23 +6232,24 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if gateway is running by checking the health endpoint
 	status := map[string]interface{}{
-		"running":   false,
-		"pid":       0,
-		"health_ok": false,
+		"running":    false,
+		"pid":        0,
+		"health_ok":  false,
+		"magic_home": s.magicHome, // debug: show which dir we look in
 	}
 
-	// Read PID file
-	home, _ := os.UserHomeDir()
-	pidFile := filepath.Join(home, ".magic", "gateway.pid")
+	pidFile := filepath.Join(s.magicHome, "gateway.pid")
+	status["pid_file"] = pidFile
 
-	if data, err := os.ReadFile(pidFile); err == nil {
+	if data, err := os.ReadFile(pidFile); err != nil {
+		status["pid_file_error"] = err.Error()
+	} else {
+		status["pid_file_content"] = string(data)
 		var pidData map[string]interface{}
 		if json.Unmarshal(data, &pidData) == nil {
 			if pid, ok := pidData["pid"].(float64); ok {
-				process, err := os.FindProcess(int(pid))
-				if err == nil && process != nil {
+				if isProcessAlive(int(pid)) {
 					status["running"] = true
 					status["pid"] = int(pid)
 					if started, ok := pidData["started"].(string); ok {
@@ -6252,12 +6260,13 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check health endpoint
-	client := &http.Client{Timeout: 2 * time.Second}
-	if resp, err := client.Get("http://localhost:8081/health"); err == nil {
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			status["health_ok"] = true
+	if running, _ := status["running"].(bool); running {
+		client := &http.Client{Timeout: 2 * time.Second}
+		if resp, err := client.Get("http://localhost:8081/health"); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				status["health_ok"] = true
+			}
 		}
 	}
 
@@ -6270,19 +6279,248 @@ func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start gateway restart as a background action
 	actionID := "gateway-restart"
+	doneCh := make(chan struct{})
+
+	// Implement restart in-process: stop existing gateway, then start a new one
+	// (avoiding the fork/exec permission issues with the restart subcommand)
 	s.runAction(actionID, "gateway restart", func() (int, error) {
-		cmd := exec.Command(os.Args[0], "gateway", "restart")
-		cmd.Env = os.Environ()
+		defer close(doneCh)
+
+		pidFile := filepath.Join(s.magicHome, "gateway.pid")
+
+		// Step 1: Stop the existing gateway (if running)
+		if data, err := os.ReadFile(pidFile); err == nil {
+			var pidData map[string]interface{}
+			if json.Unmarshal(data, &pidData) == nil {
+				if pid, ok := pidData["pid"].(float64); ok {
+					pid := int(pid)
+					if isProcessAlive(pid) {
+						// Kill the process group
+						pgid := -pid
+						if err := syscallKill(pgid, syscallSIGTERM); err == nil {
+							// Wait up to 8s for graceful exit
+							for i := 0; i < 80; i++ {
+								time.Sleep(100 * time.Millisecond)
+								if !isProcessAlive(pid) {
+									break
+								}
+							}
+						}
+						// Force kill if still alive
+						if isProcessAlive(pid) {
+							syscallKill(pgid, syscallSIGKILL)
+							time.Sleep(500 * time.Millisecond)
+						}
+					}
+				}
+			}
+		}
+		os.Remove(pidFile)
+
+		// Step 2: Wait for ports 8080/8081 to be free (up to 3s)
+		for i := 0; i < 30; i++ {
+			if isPort8080Free() && isPort8081Free() {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Step 3: Start a new gateway in-process
+		execPath := s.execPath
+		if execPath == "" {
+			execPath, _ = os.Executable()
+		}
+
+		cmd := exec.Command(execPath, "gateway", "start")
+		env := os.Environ()
+		goMagicHomeSet := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "GO_MAGIC_HOME=") {
+				goMagicHomeSet = true
+				break
+			}
+		}
+		if !goMagicHomeSet && s.magicHome != "" {
+			env = append(env, "GO_MAGIC_HOME="+s.magicHome)
+		}
+		cmd.Env = env
+
+		// Set up log file
+		logDir := filepath.Join(s.magicHome, "logs")
+		os.MkdirAll(logDir, 0755)
+		logPath := filepath.Join(logDir, "gateway.log")
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+
+		if err := cmd.Start(); err != nil {
+			if logFile != nil {
+				logFile.Close()
+			}
+			return 1, fmt.Errorf("gateway start failed: %w", err)
+		}
+
+		// Wait for PID file to appear (up to 10s)
+		for i := 0; i < 100; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if _, err := os.Stat(pidFile); err == nil {
+				if logFile != nil {
+					logFile.Close()
+				}
+				return 0, nil
+			}
+		}
+
+		if logFile != nil {
+			logFile.Close()
+		}
+		return 1, fmt.Errorf("gateway PID file not created after 10s")
+	})
+
+	resp := map[string]interface{}{"action": actionID}
+	select {
+	case <-doneCh:
+		status := s.getActionStatus(actionID)
+		if status != nil {
+			resp["ok"] = status.ExitCode == nil || *status.ExitCode == 0
+			if len(status.Lines) > 0 {
+				resp["message"] = strings.Join(status.Lines, "\n")
+			}
+			if status.ExitCode != nil && *status.ExitCode != 0 {
+				resp["ok"] = false
+			}
+		} else {
+			resp["ok"] = true
+		}
+	case <-time.After(30 * time.Second):
+		resp["ok"] = false
+		resp["message"] = "gateway restart timed out after 30s"
+	}
+
+	jsonResponse(w, resp)
+}
+
+func (s *Server) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	actionID := "gateway-start"
+	doneCh := make(chan struct{})
+
+	s.runAction(actionID, "gateway start", func() (int, error) {
+		defer close(doneCh)
+		execPath := s.execPath
+		if execPath == "" {
+			execPath, _ = os.Executable()
+		}
+
+		cmd := exec.Command(execPath, "gateway", "start")
+		env := os.Environ()
+		goMagicHomeSet := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "GO_MAGIC_HOME=") {
+				goMagicHomeSet = true
+				break
+			}
+		}
+		if !goMagicHomeSet && s.magicHome != "" {
+			env = append(env, "GO_MAGIC_HOME="+s.magicHome)
+		}
+		cmd.Env = env
+
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return 1, fmt.Errorf("gateway restart failed: %w\nOutput: %s", err, string(output))
+			return 1, fmt.Errorf("gateway start failed: %w\nOutput: %s", err, string(output))
 		}
 		return 0, nil
 	})
 
-	jsonResponse(w, map[string]interface{}{"ok": true, "action": actionID})
+	resp := map[string]interface{}{"action": actionID}
+	select {
+	case <-doneCh:
+		status := s.getActionStatus(actionID)
+		if status != nil {
+			resp["ok"] = status.ExitCode == nil || *status.ExitCode == 0
+			if len(status.Lines) > 0 {
+				resp["message"] = strings.Join(status.Lines, "\n")
+			}
+			if status.ExitCode != nil && *status.ExitCode != 0 {
+				resp["ok"] = false
+			}
+		} else {
+			resp["ok"] = true
+		}
+	case <-time.After(30 * time.Second):
+		resp["ok"] = false
+		resp["message"] = "gateway start timed out after 30s"
+	}
+
+	jsonResponse(w, resp)
+}
+
+func (s *Server) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	actionID := "gateway-stop"
+	doneCh := make(chan struct{})
+
+	s.runAction(actionID, "gateway stop", func() (int, error) {
+		defer close(doneCh)
+		execPath := s.execPath
+		if execPath == "" {
+			execPath, _ = os.Executable()
+		}
+
+		cmd := exec.Command(execPath, "gateway", "stop")
+		env := os.Environ()
+		goMagicHomeSet := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "GO_MAGIC_HOME=") {
+				goMagicHomeSet = true
+				break
+			}
+		}
+		if !goMagicHomeSet && s.magicHome != "" {
+			env = append(env, "GO_MAGIC_HOME="+s.magicHome)
+		}
+		cmd.Env = env
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return 1, fmt.Errorf("gateway stop failed: %w\nOutput: %s", err, string(output))
+		}
+		return 0, nil
+	})
+
+	resp := map[string]interface{}{"action": actionID}
+	select {
+	case <-doneCh:
+		status := s.getActionStatus(actionID)
+		if status != nil {
+			resp["ok"] = status.ExitCode == nil || *status.ExitCode == 0
+			if len(status.Lines) > 0 {
+				resp["message"] = strings.Join(status.Lines, "\n")
+			}
+			if status.ExitCode != nil && *status.ExitCode != 0 {
+				resp["ok"] = false
+			}
+		} else {
+			resp["ok"] = true
+		}
+	case <-time.After(30 * time.Second):
+		resp["ok"] = false
+		resp["message"] = "gateway stop timed out after 30s"
+	}
+
+	jsonResponse(w, resp)
 }
 
 // --- Gateway QR Code Login ---
@@ -6508,8 +6746,7 @@ func (s *Server) generateWhatsAppQR() (string, string, error) {
 
 	// Fallback: create a temporary WhatsApp gateway instance to generate QR directly
 	// This works even without the gateway process running (same approach as WeChat iLink)
-	homeDir, _ := os.UserHomeDir()
-	dataDir := filepath.Join(homeDir, ".magic", "whatsapp")
+	dataDir := filepath.Join(s.magicHome, "whatsapp")
 	waGw := gateway.NewWhatsAppGateway(dataDir)
 
 	qrData, err := waGw.StartQRLogin(context.Background())

@@ -22,6 +22,14 @@ export async function restartGateway(): Promise<{ ok: boolean }> {
   return request('/gateway/restart', { method: 'POST' })
 }
 
+export async function startGateway(): Promise<{ ok: boolean }> {
+  return request('/gateway/start', { method: 'POST' })
+}
+
+export async function stopGateway(): Promise<{ ok: boolean }> {
+  return request('/gateway/stop', { method: 'POST' })
+}
+
 export async function getPlatforms(): Promise<PlatformStatus[]> {
   const status = await getGatewayStatus()
   return []

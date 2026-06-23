@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 type MemoryStoreTool struct{}
@@ -53,16 +55,11 @@ func (t *MemoryStoreTool) Execute(ctx context.Context, args map[string]interface
 		category = c
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	memDir := filepath.Join(home, ".magic", "memories", category)
+	memDir := filepath.Join(config.GetMagicHome(), "memories", category)
 	os.MkdirAll(memDir, 0755)
 
 	memPath := filepath.Join(memDir, key+".txt")
-	err = os.WriteFile(memPath, []byte(value), 0644)
+	err := os.WriteFile(memPath, []byte(value), 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store memory: %w", err)
 	}
@@ -108,19 +105,15 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, args map[string]interfac
 		return nil, fmt.Errorf("key argument is required")
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
 	// Search in all categories or specific one
 	categories := []string{"general", "user", "project"}
 	if cat, ok := args["category"].(string); ok {
 		categories = []string{cat}
 	}
 
+	memHome := config.GetMagicHome()
 	for _, cat := range categories {
-		memPath := filepath.Join(home, ".magic", "memories", cat, key+".txt")
+		memPath := filepath.Join(memHome, "memories", cat, key+".txt")
 		data, err := os.ReadFile(memPath)
 		if err == nil {
 			return map[string]interface{}{

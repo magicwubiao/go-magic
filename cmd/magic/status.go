@@ -218,12 +218,7 @@ func checkConfigHealth() (bool, string) {
 }
 
 func checkMagicHomeHealth() (bool, string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false, "Cannot determine home directory"
-	}
-
-	magicHome := filepath.Join(home, ".magic")
+	magicHome := config.GetMagicHome()
 	if _, err := os.Stat(magicHome); os.IsNotExist(err) {
 		return true, "Magic home will be created on first run"
 	}

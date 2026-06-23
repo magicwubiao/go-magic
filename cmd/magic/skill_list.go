@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var (
@@ -29,7 +30,7 @@ var skillListCmd = &cobra.Command{
 
 Skills are loaded from:
   - Built-in skills: bundled with the application
-  - Global skills: ~/.magic/skills/
+  - Global skills: {magic home}/skills/
   - Workspace skills: ./skills/ or .magic/skills/
 
 Examples:
@@ -248,15 +249,15 @@ func outputJSON(list []*skills.Skill) {
 }
 
 func showSkillsLocations() {
-	home, _ := os.UserHomeDir()
+	magicHome := config.GetMagicHome()
 
 	fmt.Println("Skills directories:")
-	fmt.Printf("  ~/.magic/skills/ (global)\n")
+	fmt.Printf("  %s/skills/ (global)\n", magicHome)
 	fmt.Printf("  ./skills/ (workspace)\n")
 	fmt.Printf("  .magic/skills/ (workspace)\n")
 
 	// Check if global skills directory exists
-	globalDir := filepath.Join(home, ".magic", "skills")
+	globalDir := filepath.Join(magicHome, "skills")
 	if _, err := os.Stat(globalDir); os.IsNotExist(err) {
 		fmt.Printf("\nCreate global skills directory:\n")
 		fmt.Printf("  mkdir -p %s\n", globalDir)

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/usage"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 var usageDays int
@@ -36,8 +37,7 @@ func init() {
 }
 
 func runUsage(cmd *cobra.Command, args []string) {
-	home, _ := os.UserHomeDir()
-	usageDir := filepath.Join(home, ".magic", "usage")
+	usageDir := filepath.Join(config.GetMagicHome(), "usage")
 
 	mgr, err := usage.NewManager(usageDir)
 	if err != nil {

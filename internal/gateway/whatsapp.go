@@ -23,6 +23,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"github.com/skip2/go-qrcode"
 
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 
 	_ "modernc.org/sqlite"
@@ -55,8 +56,7 @@ type WhatsAppGateway struct {
 // NewWhatsAppGateway creates a new WhatsApp gateway with QR login support
 func NewWhatsAppGateway(dataDir string) *WhatsAppGateway {
 	if dataDir == "" {
-		home, _ := os.UserHomeDir()
-		dataDir = filepath.Join(home, ".magic", "whatsapp")
+		dataDir = filepath.Join(config.GetMagicHome(), "whatsapp")
 	}
 
 	return &WhatsAppGateway{

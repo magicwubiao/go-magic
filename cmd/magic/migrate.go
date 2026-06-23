@@ -26,7 +26,7 @@ func init() {
 func runMigrate(cmd *cobra.Command, args []string) error {
 	homeDir, _ := os.UserHomeDir()
 	openclawDir := filepath.Join(homeDir, ".openclaw")
-	magicDir := filepath.Join(homeDir, ".magic")
+	magicDir := config.GetMagicHome()
 
 	// Check if OpenClaw config exists
 	if _, err := os.Stat(openclawDir); os.IsNotExist(err) {
@@ -42,9 +42,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Target: %s\n", magicDir)
 	fmt.Println()
 
-	// Ensure .magic directory exists
+	// Ensure magic home directory exists
 	if err := os.MkdirAll(magicDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .magic directory: %w", err)
+		return fmt.Errorf("failed to create magic home directory: %w", err)
 	}
 
 	// Load or create config

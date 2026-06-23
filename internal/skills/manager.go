@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // Skill is now defined in types.go - this file re-exports it for backwards compatibility
@@ -54,62 +55,57 @@ type ManagerConfig struct {
 
 // NewManager creates a new skill manager with default configuration
 func NewManager() (*Manager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
+	magicHome := config.GetMagicHome()
 
 	// Get the path to built-in skills directory
 	builtinDir := filepath.Join("internal", "skills", "builtin")
 
-	config := &ManagerConfig{
+	cfg := &ManagerConfig{
 		SearchDirs: []string{
-			filepath.Join(home, ".magic", "skills"),
+			filepath.Join(magicHome, "skills"),
 			"skills",
-			filepath.Join(".magic", "skills"),
 		},
 		BuiltinDir: builtinDir,
 	}
 
-	return NewManagerWithConfig(config)
+	return NewManagerWithConfig(cfg)
 }
 
 // NewManagerWithConfig creates a manager with custom configuration
-func NewManagerWithConfig(config *ManagerConfig) (*Manager, error) {
-	if config == nil {
-		config = &ManagerConfig{}
+func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
+	if cfg == nil {
+		cfg = &ManagerConfig{}
 	}
 
 	// Set defaults
-	if len(config.SearchDirs) == 0 {
-		home, _ := os.UserHomeDir()
-		config.SearchDirs = []string{
-			filepath.Join(home, ".magic", "skills"),
+	if len(cfg.SearchDirs) == 0 {
+		mh := config.GetMagicHome()
+		cfg.SearchDirs = []string{
+			filepath.Join(mh, "skills"),
 			"skills",
-			filepath.Join(".magic", "skills"),
 		}
 	}
 
-	skillsDir := config.SearchDirs[0]
+	skillsDir := cfg.SearchDirs[0]
 
 	// 自动技能目录：显式指定时用指定路径，否则在第一个 searchDir 下建 auto_skills
-	autoDir := config.AutoSkillsDir
+	autoDir := cfg.AutoSkillsDir
 	if autoDir == "" {
 		autoDir = filepath.Join(skillsDir, "auto_skills")
 	}
 
 	m := &Manager{
-		searchDirs:        config.SearchDirs,
-		builtinDir:        config.BuiltinDir,
-		registryURL:       config.RegistryURL,
-		toolNames:         config.ToolNames,
+		searchDirs:        cfg.SearchDirs,
+		builtinDir:        cfg.BuiltinDir,
+		registryURL:       cfg.RegistryURL,
+		toolNames:         cfg.ToolNames,
 		skills:            make(map[string]*Skill),
 		skillsDir:         skillsDir,
 		hubDir:            filepath.Join(skillsDir, ".hub"),
 		autoSkillsDir:     autoDir,
 		disabledSkills:    &DisabledSkillsConfig{Platform: make(map[string][]string)},
-		autoSkillCreation: config.AutoSkillCreation,
-		minPatternFreq:    config.MinPatternFreq,
+		autoSkillCreation: cfg.AutoSkillCreation,
+		minPatternFreq:    cfg.MinPatternFreq,
 		registryMgr:       NewRegistryManager(),
 	}
 

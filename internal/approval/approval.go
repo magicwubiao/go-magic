@@ -21,6 +21,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	configpkg "github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -327,8 +329,7 @@ func NewManager(config *ApprovalConfig) (*Manager, error) {
 		config = DefaultConfig()
 	}
 
-	home, _ := os.UserHomeDir()
-	dbDir := filepath.Join(home, ".magic", "approval")
+	dbDir := filepath.Join(configpkg.GetMagicHome(), "approval")
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create approval directory: %w", err)
 	}
@@ -1693,8 +1694,7 @@ func (m *Manager) savePatterns() error {
 
 // loadWhitelist loads whitelist from disk.
 func (m *Manager) loadWhitelist() {
-	home, _ := os.UserHomeDir()
-	wlPath := filepath.Join(home, ".magic", "approval", "whitelist.txt")
+	wlPath := filepath.Join(configpkg.GetMagicHome(), "approval", "whitelist.txt")
 
 	data, err := os.ReadFile(wlPath)
 	if err != nil {
@@ -1711,8 +1711,7 @@ func (m *Manager) loadWhitelist() {
 
 // saveWhitelist saves whitelist to disk.
 func (m *Manager) saveWhitelist() error {
-	home, _ := os.UserHomeDir()
-	wlPath := filepath.Join(home, ".magic", "approval", "whitelist.txt")
+	wlPath := filepath.Join(configpkg.GetMagicHome(), "approval", "whitelist.txt")
 
 	// Ensure directory exists
 	dir := filepath.Dir(wlPath)
