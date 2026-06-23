@@ -937,8 +937,8 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 	qrManager := GetQRManager()
 	session := qrManager.GetSession(platform)
 
-	if session == nil || session.Status == "expired" || session.Status == "confirmed" {
-		// Generate new QR code
+	if session == nil || session.Status == "expired" || session.Status == "confirmed" || platform == "whatsapp" {
+		// Generate new QR code (for WhatsApp, always fetch latest since QR rotates every ~60s)
 		g.mu.RLock()
 		handler, ok := g.platforms[platform]
 		g.mu.RUnlock()
@@ -956,10 +956,18 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			session, err = qrManager.CreateSession(platform, qrData, "")
-			if err != nil {
-				http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
-				return
+			// If qrData is empty, it means already logged in
+			if qrData == "" {
+				// Create a confirmed session
+				session, _ = qrManager.CreateSession(platform, "confirmed", "")
+				session.Status = "confirmed"
+				session.Message = "Already logged in"
+			} else {
+				session, err = qrManager.CreateSession(platform, qrData, "")
+				if err != nil {
+					http.Error(w, fmt.Sprintf("failed to create QR session: %v", err), http.StatusInternalServerError)
+					return
+				}
 			}
 		} else {
 			http.Error(w, fmt.Sprintf("platform '%s' does not support QR login", platform), http.StatusBadRequest)

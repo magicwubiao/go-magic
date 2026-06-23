@@ -170,7 +170,7 @@
         <div v-else class="qr-display">
           <!-- QR Code Image -->
           <div class="qr-canvas-container">
-            <img v-if="qrImageUrl" :src="qrImageUrl" class="qr-image" style="width: 200px; height: 200px;" />
+            <img v-if="qrImageUrl" :src="qrImageUrl" class="qr-image" style="width: 200px;" />
             <canvas v-else ref="qrCanvas" class="qr-canvas"></canvas>
           </div>
           
@@ -525,14 +525,14 @@ function startPolling(): void {
       stopPolling()
       return
     }
-    
+
     try {
       const data: QRResponse = await request(`/gateway/qr/status?platform=${qrPlatform.value.id}`)
-      
+
       if (data.status !== qrStatus.value) {
         qrStatus.value = data.status as typeof qrStatus.value
         qrMessage.value = data.message || getDefaultMessage(data.status)
-        
+
         if (data.status === 'confirmed') {
           message.success(t('gateway.qrLoginSuccess'))
           stopPolling()
@@ -545,9 +545,20 @@ function startPolling(): void {
           stopCountdown()
         }
       }
-      
+
       if (data.expires_in !== undefined) {
         qrExpiresIn.value = data.expires_in
+      }
+
+      // Refresh the QR code image whenever the server returns a new one
+      // (e.g. WhatsApp rotates the QR every ~60s). Without this, users
+      // would keep scanning the very first QR and the phone would
+      // reject it as expired.
+      if (data.qr_code && data.qr_code !== qrImageUrl.value) {
+        qrImageUrl.value = data.qr_code
+        // Reset countdown so the user gets the full window for the new QR
+        qrCountdown.value = data.expires_in || qrExpiresIn.value || 60
+        qrCountdownPercent.value = 100
       }
     } catch (e) {
       console.error('Poll error:', e)

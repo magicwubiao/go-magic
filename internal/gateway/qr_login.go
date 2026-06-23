@@ -24,6 +24,14 @@ type QRCodeManager struct {
 	codes   map[string]*QRCodeSession // platform -> session
 	cleanup chan string
 	pollers map[string]*QRPollContext // active pollers
+
+	// latestWhatsAppQR caches the most recent QR data from whatsmeow so we
+	// never lose the very first QR event that fires before CreateSession.
+	latestWhatsAppQR string
+
+	// Persistent platform instances (e.g. WhatsApp) so we can capture
+	// rotating QR codes and login events after the initial request returns.
+	whatsapp *WhatsAppGateway
 }
 
 // QRPollContext holds the context for QR status polling
@@ -119,7 +127,7 @@ func (m *QRCodeManager) CreateSession(platform string, qrData string, qrImage st
 		Status:    "pending",
 		QRData:    qrData,
 		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(120 * time.Second), // 2 minutes expiry
+		ExpiresAt: time.Now().Add(60 * time.Second), // 60 seconds expiry
 		Metadata:  make(map[string]interface{}),
 	}
 
@@ -694,6 +702,160 @@ func GenerateQRCodePNG(data string) (string, error) {
 
 	// Convert to base64 data URL
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes), nil
+}
+
+// GetOrCreateWhatsApp returns the persistent WhatsApp gateway instance,
+// creating it on first use. The instance is reused across requests so the
+// whatsmeow client can keep generating rotating QR codes and we can capture
+// the latest one.
+func (m *QRCodeManager) GetOrCreateWhatsApp(dataDir string) *WhatsAppGateway {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.whatsapp != nil {
+		return m.whatsapp
+	}
+
+	if dataDir == "" {
+		dataDir = filepath.Join(config.GetMagicHome(), "whatsapp")
+	}
+	m.whatsapp = NewWhatsAppGateway(dataDir)
+
+	// Set up a callback that updates the QR session in the manager every
+	// time whatsmeow generates a new QR code.
+	m.whatsapp.SetQRCallback(func(qr string) {
+		m.refreshWhatsAppQR(qr)
+	})
+
+	return m.whatsapp
+}
+
+// refreshWhatsAppQR updates the stored WhatsApp QR session with a freshly
+// generated QR data string from whatsmeow, including regenerating the
+// base64 PNG image so the web UI can render it.
+func (m *QRCodeManager) refreshWhatsAppQR(qr string) {
+	if qr == "" {
+		return
+	}
+
+	img, err := GenerateQRCodePNG(qr)
+	if err != nil {
+		log.Errorf("Failed to regenerate WhatsApp QR image: %v", err)
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Always cache the latest QR, even before the first CreateSession call.
+	// whatsmeow fires the first QR event while StartQRLogin is still waiting on
+	// the initial Connect() round-trip, and if we drop it, the user ends
+	// with an expired code and a pairing failure.
+	m.latestWhatsAppQR = qr
+
+	session, ok := m.codes["whatsapp"]
+	if ok {
+		if session.Status != "confirmed" && session.Status != "expired" {
+			session.QRData = qr
+			session.QRCode = img
+			session.ExpiresAt = time.Now().Add(60 * time.Second)
+			log.Infof("Refreshed WhatsApp QR code (len=%d)", len(qr))
+		}
+	}
+}
+
+// GetLatestWhatsAppQR returns the most recent WhatsApp QR data and base64 image
+// currently known to the manager. Useful when StartQRLogin could not return one (e.g. the
+// client was already connected).
+func (m *QRCodeManager) GetLatestWhatsAppQR() (qrData, qrImage string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	qrData = m.latestWhatsAppQR
+	if qrData == "" {
+		return
+	}
+	img, err := GenerateQRCodePNG(qrData)
+	if err == nil {
+		qrImage = img
+	}
+	return
+}
+
+// OnWhatsAppLoginSuccess is called when the whatsmeow PairSuccess event
+// fires so the QR session is marked as confirmed and the persisted gateway
+// is reset for the next login.
+func (m *QRCodeManager) OnWhatsAppLoginSuccess() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if session, ok := m.codes["whatsapp"]; ok {
+		session.Status = "confirmed"
+		session.Message = "Login successful!"
+		session.ExpiresAt = time.Now().Add(24 * time.Hour)
+		log.Info("WhatsApp QR session marked as confirmed")
+	}
+}
+
+// OnWhatsAppPairError is called when whatsmeow reports a pairing failure
+// so the web UI can show a meaningful error and let the user retry.
+func (m *QRCodeManager) OnWhatsAppPairError(errMsg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if session, ok := m.codes["whatsapp"]; ok {
+		session.Status = "error"
+		if errMsg != "" {
+			session.Message = fmt.Sprintf("Pairing failed: %s. Please try again.", errMsg)
+		} else {
+			session.Message = "Pairing failed. Please refresh and try again."
+		}
+		log.Warnf("WhatsApp pairing error: %s", errMsg)
+	}
+}
+
+// OnWhatsAppLogout clears any confirmed state so the next QR can be issued.
+func (m *QRCodeManager) OnWhatsAppLogout() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if session, ok := m.codes["whatsapp"]; ok {
+		session.Status = "pending"
+		session.Message = "Logged out, please scan again"
+		session.ExpiresAt = time.Now().Add(60 * time.Second)
+	}
+}
+
+// ResetWhatsApp drops the persistent WhatsApp gateway instance. Useful when
+// a user wants to re-link from scratch.
+func (m *QRCodeManager) ResetWhatsApp() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var dataDir string
+	if m.whatsapp != nil {
+		dataDir = m.whatsapp.dataDir
+		if m.whatsapp.client != nil {
+			m.whatsapp.client.Disconnect()
+		}
+	}
+	m.whatsapp = nil
+	if session, ok := m.codes["whatsapp"]; ok {
+		session.Status = "expired"
+		session.Message = "WhatsApp session reset"
+	}
+	// Also drop the cached QR so we don't hand out stale data to callers.
+	m.latestWhatsAppQR = ""
+
+	// Remove the on-disk session store so whatsmeow creates a brand-new device
+	// the next time around. Without this, re-linking would reuse the previous
+	// device and never actually prompt for a new QR scan.
+	if dataDir != "" {
+		storePath := filepath.Join(dataDir, "store.db")
+		if err := os.Remove(storePath); err != nil && !os.IsNotExist(err) {
+			log.Warnf("Failed to remove WhatsApp store.db: %v", err)
+		}
+	}
 }
 
 // GenerateQRCodePNGBytes generates QR code as raw PNG bytes

@@ -6546,6 +6546,11 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if platform == "whatsapp" {
+		s.proxyGatewayQR(w, r, platform)
+		return
+	}
+
 	// Get the global QR manager
 	qrManager := gateway.GetQRManager()
 	if qrManager == nil {
@@ -6568,8 +6573,6 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 		switch platform {
 		case "wechat_ilink":
 			qrData, qrImage, err = s.generateWeChatILinkQR()
-		case "whatsapp":
-			qrData, qrImage, err = s.generateWhatsAppQR()
 		case "wecom":
 			qrData, qrImage, err = s.generateWeComQR()
 		case "wechat":
@@ -6623,6 +6626,56 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) proxyGatewayQR(w http.ResponseWriter, r *http.Request, platform string) {
+	gatewayURL := fmt.Sprintf("http://127.0.0.1:8080/api/login/qr/%s", platform)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(gatewayURL)
+	if err != nil {
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  "Gateway is not running. Please start the gateway first.",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  fmt.Sprintf("Gateway error: %s", string(body)),
+		})
+		return
+	}
+
+	var result struct {
+		Platform  string `json:"platform"`
+		Status    string `json:"status"`
+		QRCode    string `json:"qr_code"`
+		Message   string `json:"message"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		jsonResponse(w, QRStatus{
+			Platform: platform,
+			Status:   "error",
+			Message:  "Failed to parse gateway response",
+		})
+		return
+	}
+
+	jsonResponse(w, QRStatus{
+		Platform:  result.Platform,
+		Status:    result.Status,
+		QRCode:    result.QRCode,
+		Message:   result.Message,
+		ExpiresIn: result.ExpiresIn,
+	})
+}
+
 func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", 405)
@@ -6632,6 +6685,11 @@ func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 	platform := r.URL.Query().Get("platform")
 	if platform == "" {
 		http.Error(w, "platform parameter is required", 400)
+		return
+	}
+
+	if platform == "whatsapp" {
+		s.proxyGatewayQR(w, r, platform)
 		return
 	}
 
@@ -6723,44 +6781,41 @@ func (s *Server) generateWeChatILinkQR() (string, string, error) {
 // generateWhatsAppQR generates a QR code for WhatsApp login
 // Returns (qrData, qrImage, error)
 func (s *Server) generateWhatsAppQR() (string, string, error) {
-	// Try Gateway API first (if gateway is running)
-	gatewayPort := 8080
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/login/qr/whatsapp", gatewayPort))
-
-	if err == nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			var result struct {
-				QRCode    string `json:"qr_code"`
-				ExpiresIn int    `json:"expires_in_seconds"`
-				Status    string `json:"status"`
-			}
-			if err := json.Unmarshal(body, &result); err == nil && result.QRCode != "" {
-				return result.QRCode, result.QRCode, nil
-			}
-		}
-	}
-
-	// Fallback: create a temporary WhatsApp gateway instance to generate QR directly
-	// This works even without the gateway process running (same approach as WeChat iLink)
+	qrManager := gateway.GetQRManager()
 	dataDir := filepath.Join(s.magicHome, "whatsapp")
-	waGw := gateway.NewWhatsAppGateway(dataDir)
+	waGw := qrManager.GetOrCreateWhatsApp(dataDir)
+
+	// If the persistent gateway is already logged in, the user wants to
+	// re-link. Reset everything so we get a fresh client and new QR.
+	if waGw.IsLoggedIn() {
+		qrManager.ResetWhatsApp()
+		waGw = qrManager.GetOrCreateWhatsApp(dataDir)
+	}
 
 	qrData, err := waGw.StartQRLogin(context.Background())
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate WhatsApp QR: %w", err)
 	}
+
+	// If StartQRLogin returned empty but the manager has a cached QR
+	// (rotating code from an already-connected client), use that instead.
 	if qrData == "" {
+		cachedData, cachedImg := qrManager.GetLatestWhatsAppQR()
+		if cachedData != "" {
+			if cachedImg != "" {
+				return cachedData, cachedImg, nil
+			}
+			img, err := gateway.GenerateQRCodePNG(cachedData)
+			if err != nil {
+				return cachedData, cachedData, nil
+			}
+			return cachedData, img, nil
+		}
 		return "", "", fmt.Errorf("WhatsApp already logged in, no QR code needed")
 	}
 
-	// Generate QR image from the data
 	qrImage, err := gateway.GenerateQRCodePNG(qrData)
 	if err != nil {
-		// Return raw data even if image generation fails
 		return qrData, qrData, nil
 	}
 

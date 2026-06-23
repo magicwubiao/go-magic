@@ -88,12 +88,19 @@ func (g *WhatsAppGateway) Name() string {
 // Connect establishes connection with QR code login
 func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
+	defer g.mu.Unlock()
+
+	if g.running && g.client != nil && g.client.IsConnected() {
 		return nil
 	}
-	g.running = true
-	g.mu.Unlock()
+	// Reset state if reconnecting after a failure
+	if g.client != nil {
+		g.client.Disconnect()
+		g.client = nil
+		g.container = nil
+		g.device = nil
+	}
+	g.running = false
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(g.dataDir, 0700); err != nil {
@@ -133,15 +140,18 @@ func (g *WhatsAppGateway) Connect(ctx context.Context) error {
 
 	// Connect
 	if client.IsConnected() {
+		g.running = true
 		return nil
 	}
 
 	log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
 	err = client.Connect()
 	if err != nil {
+		g.running = false
 		return fmt.Errorf("failed to connect to WhatsApp: %w", err)
 	}
 
+	g.running = true
 	log.Info("WhatsApp gateway connecting...")
 	return nil
 }
@@ -157,12 +167,13 @@ func (g *WhatsAppGateway) Disconnect() error {
 
 	if g.client != nil {
 		g.client.Disconnect()
+		g.client = nil
 	}
 	if g.container != nil {
 		g.container.Close()
+		g.container = nil
 	}
-	close(g.stopCh)
-	close(g.msgCh)
+	g.device = nil
 	g.running = false
 
 	log.Info("WhatsApp gateway disconnected")
@@ -282,21 +293,31 @@ func (g *WhatsAppGateway) GetLoginStatus() string {
 	return "disconnected"
 }
 
-// StartQRLogin initiates QR code login and returns the QR data string
+// StartQRLogin initiates QR code login and returns the QR data string.
+// It handles three scenarios:
+//  1. Already logged in -> returns empty (no QR needed)
+//  2. Fresh client -> Connect() and wait for first QR event
+//  3. Already connected but not logged in (re-link scenario) ->
+//     returns the latest cached QR code from the rotating codes.
 func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	g.mu.Lock()
 
-	// If already logged in, return empty
 	if g.client != nil && g.client.IsLoggedIn() {
 		g.mu.Unlock()
 		return "", nil
 	}
 
-	// Create a channel to receive QR code
-	qrChan := make(chan string, 1)
+	// If already connected but not logged in, return the latest cached QR code immediately.
+	// whatsmeow keeps generating rotating QR codes every ~60s, and we cache the latest one.
+	if g.client != nil && g.client.IsConnected() && g.latestQR != "" {
+		cachedQR := g.latestQR
+		g.mu.Unlock()
+		return cachedQR, nil
+	}
 
-	// Set up temporary QR callback
+	qrChan := make(chan string, 1)
 	originalCallback := g.qrCallback
+
 	g.qrCallback = func(qr string) {
 		select {
 		case qrChan <- qr:
@@ -306,27 +327,17 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 			originalCallback(qr)
 		}
 	}
-
-	// Ensure client is initialized
-	if g.client == nil {
-		if err := g.initClientLocked(ctx); err != nil {
-			g.qrCallback = originalCallback
-			g.mu.Unlock()
-			return "", err
-		}
-	}
-
-	// Trigger QR code generation by connecting
-	if !g.client.IsConnected() {
-		if err := g.client.Connect(); err != nil {
-			g.qrCallback = originalCallback
-			g.mu.Unlock()
-			return "", fmt.Errorf("failed to connect: %w", err)
-		}
-	}
 	g.mu.Unlock()
 
-	// Wait for QR code with timeout
+	// Connect() handles all initialization atomically under its own lock.
+	if err := g.Connect(ctx); err != nil {
+		g.mu.Lock()
+		g.qrCallback = originalCallback
+		g.mu.Unlock()
+		return "", fmt.Errorf("failed to connect: %w", err)
+	}
+
+	// Check if we got a QR code from the event fired during Connect().
 	select {
 	case qr := <-qrChan:
 		g.mu.Lock()
@@ -336,8 +347,10 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	case <-time.After(30 * time.Second):
 		g.mu.Lock()
 		g.qrCallback = originalCallback
+		// Fallback: if we have a cached QR, return it even if we missed the event
+		cachedQR := g.latestQR
 		g.mu.Unlock()
-		return "", fmt.Errorf("timeout waiting for QR code")
+		return cachedQR, nil
 	case <-ctx.Done():
 		g.mu.Lock()
 		g.qrCallback = originalCallback
@@ -445,19 +458,31 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		g.mu.Unlock()
 
 	case *events.QRScannedWithoutMultidevice:
-		log.Warn("QR scanned but multi-device not enabled. Please enable multi-device on your WhatsApp.")
-		fmt.Println("\n[WARNING] Your WhatsApp does not have multi-device enabled.")
-		fmt.Println("Please enable it in WhatsApp Settings > Linked Devices > Multi-device")
+		log.Warn("QR scanned but multi-device not enabled on the phone.")
+		GetQRManager().OnWhatsAppPairError("multi-device not enabled on WhatsApp phone")
 
 	case *events.PairError:
 		log.Errorf("Pairing failed: %v", evt.Error)
-		fmt.Printf("\n[ERROR] WhatsApp pairing failed: %v\n", evt.Error)
-		fmt.Println("Possible reasons:")
-		fmt.Println("  1. QR code expired - wait for a new QR code and try again")
-		fmt.Println("  2. Multi-device not enabled on your phone")
-		fmt.Println("  3. Too many linked devices (max 4)")
-		fmt.Println("  4. Network connectivity issues")
-		fmt.Println("  5. Phone and computer time not synchronized")
+		// PairError means the stored WhatsApp session is no longer valid
+		// (device was unlinked from the phone, or credentials expired).
+		// Automatically clean up so the next StartQRLogin can generate a
+		// fresh QR code for re-linking.
+		g.mu.Lock()
+		g.running = false
+		g.mu.Unlock()
+		if g.client != nil {
+			g.client.Disconnect()
+		}
+		// Delete the invalid device store so next login starts fresh.
+		if g.device != nil {
+			if err := g.device.Delete(context.Background()); err != nil {
+				log.Warnf("Failed to delete invalid WhatsApp device: %v", err)
+			}
+		}
+		g.device = nil
+		g.client = nil
+		g.container = nil
+		GetQRManager().OnWhatsAppPairError(fmt.Sprintf("%v", evt.Error))
 
 	case *events.Connected:
 		log.Info("WhatsApp connected to servers")
@@ -467,6 +492,7 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		g.mu.Lock()
 		g.running = false
 		g.mu.Unlock()
+		GetQRManager().OnWhatsAppLogout()
 
 	case *events.Disconnected:
 		log.Warn("WhatsApp disconnected, will attempt to reconnect...")
@@ -475,7 +501,10 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 		log.Infof("WhatsApp paired successfully: %s", evt.ID.String())
 		g.mu.Lock()
 		g.ownJID = evt.ID
+		g.running = true
 		g.mu.Unlock()
+		// Notify QR manager so the web UI is updated
+		GetQRManager().OnWhatsAppLoginSuccess()
 
 	case *events.Contact:
 		// Contact sync
