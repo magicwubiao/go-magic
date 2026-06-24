@@ -2,9 +2,7 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,141 +27,111 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// WhatsAppGateway implements WhatsApp via whatsmeow (personal account, QR code login)
 type WhatsAppGateway struct {
+	*BasePlatform
+
 	client    *whatsmeow.Client
 	container *sqlstore.Container
 	device    *store.Device
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	dataDir    string
+	qrCallback func(qr string)
+	latestQR   string
 
-	dataDir    string          // Where session data is stored
-	qrCallback func(qr string) // Called when QR code is generated
-	latestQR   string          // Store latest QR code for web access
-
-	// Track own JID for filtering
 	ownJID types.JID
 
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
+	mu sync.RWMutex
 }
 
-// NewWhatsAppGateway creates a new WhatsApp gateway with QR login support
 func NewWhatsAppGateway(dataDir string) *WhatsAppGateway {
+	acConfig := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
 	if dataDir == "" {
 		dataDir = filepath.Join(config.GetMagicHome(), "whatsapp")
 	}
 
-	return &WhatsAppGateway{
-		agents:  make(map[string]*AgentSession),
-		msgCh:   make(chan Message, 100),
-		stopCh:  make(chan struct{}),
+	g := &WhatsAppGateway{
 		dataDir: dataDir,
 	}
+
+	g.BasePlatform = NewBasePlatform("whatsapp", acConfig)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g
 }
 
-// SetQRCallback sets a callback for QR code events (for CLI display or API push)
 func (g *WhatsAppGateway) SetQRCallback(cb func(qr string)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.qrCallback = cb
 }
 
-// SetChannelFilter sets the channel allowlist and blocklist
-func (g *WhatsAppGateway) SetChannelFilter(allowed, blocked []string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
-}
-
-// Name returns the platform name
-func (g *WhatsAppGateway) Name() string {
-	return "whatsapp"
-}
-
-// Connect establishes connection with QR code login
-func (g *WhatsAppGateway) Connect(ctx context.Context) error {
+func (g *WhatsAppGateway) onConnect(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.running && g.client != nil && g.client.IsConnected() {
+	if g.client != nil && g.client.IsConnected() {
 		return nil
 	}
-	// Reset state if reconnecting after a failure
+
 	if g.client != nil {
 		g.client.Disconnect()
 		g.client = nil
 		g.container = nil
 		g.device = nil
 	}
-	g.running = false
 
-	// Ensure data directory exists
 	if err := os.MkdirAll(g.dataDir, 0700); err != nil {
 		return fmt.Errorf("failed to create whatsapp data dir: %w", err)
 	}
 
-	// Initialize SQL store for session persistence
 	dbPath := filepath.Join(g.dataDir, "store.db")
-	container, err := sqlstore.New(context.Background(), "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
 	if err != nil {
 		return fmt.Errorf("failed to create session store: %w", err)
 	}
 	g.container = container
 
-	// Get or create device
-	devices, err := container.GetAllDevices(context.Background())
+	devices, err := container.GetAllDevices(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get devices: %w", err)
 	}
 
 	if len(devices) > 0 {
-		// Use existing device (already logged in)
 		g.device = devices[0]
 		log.Info("Found existing WhatsApp session, connecting...")
 	} else {
-		// Create new device (will need QR login)
 		g.device = container.NewDevice()
 		log.Info("No WhatsApp session found, will generate QR code for login")
 	}
 
-	// Create client
 	client := whatsmeow.NewClient(g.device, waLog.Noop)
 	g.client = client
 
-	// Register event handlers
 	client.AddEventHandler(g.eventHandler)
 
-	// Connect
 	if client.IsConnected() {
-		g.running = true
 		return nil
 	}
 
-	log.Info("[QR Login] No saved session, starting QR code login. Please scan with your app...")
 	err = client.Connect()
 	if err != nil {
-		g.running = false
 		return fmt.Errorf("failed to connect to WhatsApp: %w", err)
 	}
 
-	g.running = true
 	log.Info("WhatsApp gateway connecting...")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *WhatsAppGateway) Disconnect() error {
+func (g *WhatsAppGateway) onDisconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
 
 	if g.client != nil {
 		g.client.Disconnect()
@@ -174,55 +142,17 @@ func (g *WhatsAppGateway) Disconnect() error {
 		g.container = nil
 	}
 	g.device = nil
-	g.running = false
 
 	log.Info("WhatsApp gateway disconnected")
 	return nil
 }
 
-// CheckHealth returns health status
-func (g *WhatsAppGateway) CheckHealth() *HealthStatus {
+func (g *WhatsAppGateway) onSend(ctx context.Context, resp Response) error {
 	g.mu.RLock()
-	running := g.running
+	client := g.client
 	g.mu.RUnlock()
 
-	status := &HealthStatus{
-		Platform:  "whatsapp",
-		Connected: running && g.client != nil && g.client.IsConnected(),
-		Status:    "healthy",
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
-	}
-
-	if g.client != nil && g.client.IsLoggedIn() {
-		status.Details["logged_in"] = true
-		status.Details["own_jid"] = g.ownJID.String()
-	} else {
-		status.Details["logged_in"] = false
-		status.Details["message"] = "Not logged in, use QR code to login"
-		if !status.Connected {
-			status.Status = "disconnected"
-		} else {
-			status.Status = "waiting_login"
-		}
-	}
-
-	platformStatus := PlatformStatus{
-		Name:   "whatsapp",
-		Status: status.Status,
-	}
-	status.Platforms["whatsapp"] = platformStatus
-	return status
-}
-
-// Receive returns the message channel
-func (g *WhatsAppGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// Send sends a message via WhatsApp
-func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
-	if g.client == nil || !g.client.IsLoggedIn() {
+	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("WhatsApp not logged in")
 	}
 
@@ -231,14 +161,12 @@ func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
 		return fmt.Errorf("recipient (channel_id) is required")
 	}
 
-	// Parse JID
 	jid, err := g.parseJID(to)
 	if err != nil {
 		return fmt.Errorf("invalid recipient: %w", err)
 	}
 
-	// Send text message
-	_, err = g.client.SendMessage(ctx, jid, &waE2E.Message{
+	_, err = client.SendMessage(ctx, jid, &waE2E.Message{
 		Conversation: &resp.Content,
 	})
 	if err != nil {
@@ -248,57 +176,29 @@ func (g *WhatsAppGateway) Send(ctx context.Context, resp Response) error {
 	return nil
 }
 
-// HandleSlashCommand handles commands
-func (g *WhatsAppGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	switch cmd {
-	case "logout":
-		if g.client != nil {
-			g.client.Logout(context.Background())
-		}
-		return Response{
-			ChannelID: msg.UserID,
-			Content:   "Logged out of WhatsApp. Restart to login again.",
-		}, nil
-	case "status":
-		loggedIn := g.client != nil && g.client.IsLoggedIn()
-		connected := g.client != nil && g.client.IsConnected()
-		return Response{
-			ChannelID: msg.UserID,
-			Content:   fmt.Sprintf("WhatsApp: connected=%v, logged_in=%v", connected, loggedIn),
-		}, nil
-	default:
-		return Response{
-			ChannelID: msg.UserID,
-			Content:   "Available commands: /logout, /status",
-		}, nil
-	}
-}
-
-// IsLoggedIn returns whether the client is logged in
 func (g *WhatsAppGateway) IsLoggedIn() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	return g.client != nil && g.client.IsLoggedIn()
 }
 
-// GetLoginStatus returns the current login status
 func (g *WhatsAppGateway) GetLoginStatus() string {
-	if g.client == nil {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
+
+	if client == nil {
 		return "not_initialized"
 	}
-	if g.client.IsLoggedIn() {
+	if client.IsLoggedIn() {
 		return "confirmed"
 	}
-	if g.client.IsConnected() {
+	if client.IsConnected() {
 		return "waiting_scan"
 	}
 	return "disconnected"
 }
 
-// StartQRLogin initiates QR code login and returns the QR data string.
-// It handles three scenarios:
-//  1. Already logged in -> returns empty (no QR needed)
-//  2. Fresh client -> Connect() and wait for first QR event
-//  3. Already connected but not logged in (re-link scenario) ->
-//     returns the latest cached QR code from the rotating codes.
 func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	g.mu.Lock()
 
@@ -307,8 +207,6 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	// If already connected but not logged in, return the latest cached QR code immediately.
-	// whatsmeow keeps generating rotating QR codes every ~60s, and we cache the latest one.
 	if g.client != nil && g.client.IsConnected() && g.latestQR != "" {
 		cachedQR := g.latestQR
 		g.mu.Unlock()
@@ -329,7 +227,6 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	}
 	g.mu.Unlock()
 
-	// Connect() handles all initialization atomically under its own lock.
 	if err := g.Connect(ctx); err != nil {
 		g.mu.Lock()
 		g.qrCallback = originalCallback
@@ -337,7 +234,6 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to connect: %w", err)
 	}
 
-	// Check if we got a QR code from the event fired during Connect().
 	select {
 	case qr := <-qrChan:
 		g.mu.Lock()
@@ -347,7 +243,6 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	case <-time.After(30 * time.Second):
 		g.mu.Lock()
 		g.qrCallback = originalCallback
-		// Fallback: if we have a cached QR, return it even if we missed the event
 		cachedQR := g.latestQR
 		g.mu.Unlock()
 		return cachedQR, nil
@@ -359,68 +254,17 @@ func (g *WhatsAppGateway) StartQRLogin(ctx context.Context) (string, error) {
 	}
 }
 
-// initClientLocked initializes the WhatsApp client (caller must hold g.mu)
-func (g *WhatsAppGateway) initClientLocked(ctx context.Context) error {
-	// Ensure data directory exists
-	if err := os.MkdirAll(g.dataDir, 0700); err != nil {
-		return fmt.Errorf("failed to create whatsapp data dir: %w", err)
-	}
-
-	// Initialize SQL store for session persistence
-	dbPath := filepath.Join(g.dataDir, "store.db")
-	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
-	if err != nil {
-		return fmt.Errorf("failed to create session store: %w", err)
-	}
-	g.container = container
-
-	// Get or create device
-	devices, err := container.GetAllDevices(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get devices: %w", err)
-	}
-
-	if len(devices) > 0 {
-		g.device = devices[0]
-		log.Info("Found existing WhatsApp session")
-	} else {
-		g.device = container.NewDevice()
-		log.Info("No WhatsApp session found, will generate QR code for login")
-	}
-
-	// Create client
-	client := whatsmeow.NewClient(g.device, waLog.Noop)
-	g.client = client
-
-	// Register event handlers
-	client.AddEventHandler(g.eventHandler)
-
-	return nil
-}
-
-// GetQRCode returns the current QR code for login (if waiting)
-// This is called after Connect() if the session is new
-func (g *WhatsAppGateway) GetQRCode() string {
-	// QR code is delivered via event handler, this method is for polling
-	return ""
-}
-
-// parseJID parses a phone number or JID string into a types.JID
 func (g *WhatsAppGateway) parseJID(input string) (types.JID, error) {
-	// If already a full JID
 	if strings.Contains(input, "@") {
 		return types.ParseJID(input)
 	}
 
-	// Treat as phone number - clean it
 	number := input
 	number = strings.TrimPrefix(number, "+")
 	number = strings.ReplaceAll(number, " ", "")
 	number = strings.ReplaceAll(number, "-", "")
 
-	// Determine if it's a group or personal
 	if strings.HasPrefix(number, "g-") || strings.HasPrefix(number, "group-") {
-		// Group JID
 		groupID := strings.TrimPrefix(number, "g-")
 		groupID = strings.TrimPrefix(groupID, "group-")
 		return types.JID{
@@ -429,31 +273,24 @@ func (g *WhatsAppGateway) parseJID(input string) (types.JID, error) {
 		}, nil
 	}
 
-	// Personal JID
 	return types.JID{
 		Server: types.DefaultUserServer,
 		User:   number,
 	}, nil
 }
 
-// eventHandler processes WhatsApp events
 func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 	switch evt := rawEvt.(type) {
 	case *events.QR:
-		// QR code generated, display in terminal
-		// evt.Codes contains rotating QR codes, use the last one
 		qrData := evt.Codes[len(evt.Codes)-1]
 		log.Infof("WhatsApp QR code received, length: %d", len(qrData))
 
-		// Always display QR code with maximum verbosity
 		ForceDisplayQR(qrData)
 
+		g.mu.Lock()
 		if g.qrCallback != nil {
 			g.qrCallback(qrData)
 		}
-
-		// Store latest QR for web dashboard access
-		g.mu.Lock()
 		g.latestQR = qrData
 		g.mu.Unlock()
 
@@ -463,25 +300,21 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 
 	case *events.PairError:
 		log.Errorf("Pairing failed: %v", evt.Error)
-		// PairError means the stored WhatsApp session is no longer valid
-		// (device was unlinked from the phone, or credentials expired).
-		// Automatically clean up so the next StartQRLogin can generate a
-		// fresh QR code for re-linking.
 		g.mu.Lock()
-		g.running = false
 		g.mu.Unlock()
 		if g.client != nil {
 			g.client.Disconnect()
 		}
-		// Delete the invalid device store so next login starts fresh.
 		if g.device != nil {
 			if err := g.device.Delete(context.Background()); err != nil {
 				log.Warnf("Failed to delete invalid WhatsApp device: %v", err)
 			}
 		}
+		g.mu.Lock()
 		g.device = nil
 		g.client = nil
 		g.container = nil
+		g.mu.Unlock()
 		GetQRManager().OnWhatsAppPairError(fmt.Sprintf("%v", evt.Error))
 
 	case *events.Connected:
@@ -489,64 +322,45 @@ func (g *WhatsAppGateway) eventHandler(rawEvt interface{}) {
 
 	case *events.LoggedOut:
 		log.Warn("WhatsApp logged out")
-		g.mu.Lock()
-		g.running = false
-		g.mu.Unlock()
 		GetQRManager().OnWhatsAppLogout()
 
 	case *events.Disconnected:
 		log.Warn("WhatsApp disconnected, will attempt to reconnect...")
+		g.HandleDisconnection(fmt.Errorf("whatsapp disconnected"))
 
 	case *events.PairSuccess:
 		log.Infof("WhatsApp paired successfully: %s", evt.ID.String())
 		g.mu.Lock()
 		g.ownJID = evt.ID
-		g.running = true
 		g.mu.Unlock()
-		// Notify QR manager so the web UI is updated
+		g.SetUserInfo(evt.ID.String(), evt.ID.User)
 		GetQRManager().OnWhatsAppLoginSuccess()
 
 	case *events.Contact:
-		// Contact sync
 
 	case *events.PushName:
-		// Push name update
 
 	case *events.Message:
 		g.handleIncomingMessage(evt)
 
 	case *events.Receipt:
-		// Message receipt (read/delivered)
 
 	case *events.AppStateSyncComplete:
-		if len(g.client.Store.PushName) > 0 && g.client.Store.PushName != "go-magic" {
+		if g.client != nil && len(g.client.Store.PushName) > 0 && g.client.Store.PushName != "go-magic" {
 			_ = g.client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
-
 		log.Info("WhatsApp offline sync completed")
 	}
 }
 
-// handleIncomingMessage processes an incoming WhatsApp message
 func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 	msg := evt.Message
 	info := evt.Info
 
-	// Skip messages from self
 	if info.Sender.User == g.ownJID.User {
 		return
 	}
 
-	// Check channel allowlist/blocklist
-	g.mu.RLock()
-	allowed := g.allowedChannels
-	blocked := g.blockedChannels
-	g.mu.RUnlock()
-	if !ShouldProcessChannel(info.Chat.User, allowed, blocked) {
-		return
-	}
-
-	// Extract text content and media attachments
 	var content string
 	var msgType string
 	var mediaURLs []MediaAttachment
@@ -571,7 +385,6 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 			content = "[用户发送了一张图片]"
 		}
 		msgType = "image"
-		// Download image
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.ImageMessage)
 			if err == nil && len(data) > 0 {
@@ -602,7 +415,6 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 			content = "[用户发送了一个视频]"
 		}
 		msgType = "video"
-		// Download video
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.VideoMessage)
 			if err == nil && len(data) > 0 {
@@ -622,7 +434,6 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 	case msg.AudioMessage != nil:
 		content = "[语音消息]"
 		msgType = "audio"
-		// Download audio
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.AudioMessage)
 			if err == nil && len(data) > 0 {
@@ -648,11 +459,9 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		content = "[文件]"
 		msgType = "document"
 		filename := msg.DocumentMessage.GetFileName()
-		// Download document
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.DocumentMessage)
 			if err == nil && len(data) > 0 {
-				// Extract extension from filename or mime type
 				ext := "bin"
 				if idx := strings.LastIndex(filename, "."); idx > 0 {
 					ext = filename[idx+1:]
@@ -683,7 +492,6 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 	case msg.StickerMessage != nil:
 		content = "[贴纸]"
 		msgType = "sticker"
-		// Download sticker (as image)
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.StickerMessage)
 			if err == nil && len(data) > 0 {
@@ -709,10 +517,18 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		msgType = "unknown"
 	}
 
-	// Determine source (group or DM)
 	sender := info.Sender.String()
 	chatJID := info.Chat
 	isGroup := chatJID.Server == types.GroupServer
+
+	isMentioned := false
+	if etm := msg.GetExtendedTextMessage(); etm != nil {
+		if ctxInfo := etm.GetContextInfo(); ctxInfo != nil {
+			if len(ctxInfo.GetMentionedJID()) > 0 {
+				isMentioned = true
+			}
+		}
+	}
 
 	metadata := map[string]interface{}{
 		"type":      msgType,
@@ -725,143 +541,163 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		metadata["group_jid"] = chatJID.String()
 	}
 
-	// Build gateway message
 	waMsg := Message{
-		ID:        info.ID,
-		Platform:  "whatsapp",
-		ChannelID: chatJID.String(),
-		UserID:    sender,
-		Content:   content,
-		Timestamp: info.Timestamp,
-		Metadata:  metadata,
-		MediaURLs: mediaURLs,
+		ID:          info.ID,
+		Platform:    "whatsapp",
+		ChannelID:   chatJID.String(),
+		UserID:      sender,
+		Content:     content,
+		Timestamp:   info.Timestamp,
+		Metadata:    metadata,
+		MediaURLs:   mediaURLs,
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 	}
 
-	select {
-	case g.msgCh <- waMsg:
-	default:
-		log.Warnf("WhatsApp message channel full, dropping message")
+	if !g.ShouldProcessChannel(chatJID.String()) {
+		return
 	}
+
+	g.EmitMessage(waMsg)
 }
 
-// RequestAppState requests full app state sync (contacts, etc.)
 func (g *WhatsAppGateway) RequestAppState() error {
-	if g.client == nil || !g.client.IsLoggedIn() {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
+
+	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	err := g.client.FetchAppState(context.Background(), appstate.WAPatchCriticalBlock, false, false)
+	err := client.FetchAppState(context.Background(), appstate.WAPatchCriticalBlock, false, false)
 	if err != nil {
 		return fmt.Errorf("failed to fetch app state: %w", err)
 	}
-	err = g.client.FetchAppState(context.Background(), appstate.WAPatchRegularHigh, false, false)
+	err = client.FetchAppState(context.Background(), appstate.WAPatchRegularHigh, false, false)
 	if err != nil {
 		return fmt.Errorf("failed to fetch regular app state: %w", err)
 	}
 	return nil
 }
 
-// SendPresence updates the user's presence (available/unavailable/composing)
 func (g *WhatsAppGateway) SendPresence(presence types.Presence) error {
-	if g.client == nil || !g.client.IsLoggedIn() {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
+
+	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	return g.client.SendPresence(context.Background(), presence)
+	return client.SendPresence(context.Background(), presence)
 }
 
-// SendTyping sends a typing indicator to a chat
 func (g *WhatsAppGateway) SendTyping(chatJID types.JID) error {
-	if g.client == nil || !g.client.IsLoggedIn() {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
+
+	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("not logged in")
 	}
-	return g.client.SendChatPresence(context.Background(), chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	return client.SendChatPresence(context.Background(), chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 }
 
-// GetContactName resolves a JID to a contact name
 func (g *WhatsAppGateway) GetContactName(jid types.JID) string {
-	if g.client == nil {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
+
+	if client == nil {
 		return jid.User
 	}
-	contact, err := g.client.Store.Contacts.GetContact(context.Background(), jid)
+	contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 	if err != nil || contact.FullName == "" {
 		return jid.User
 	}
 	return contact.FullName
 }
 
-// ExportSession exports the current session as JSON (for backup)
-func (g *WhatsAppGateway) ExportSession() ([]byte, error) {
-	if g.device == nil {
-		return nil, fmt.Errorf("no device session")
+func (g *WhatsAppGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
+	switch cmd {
+	case "logout":
+		g.mu.RLock()
+		client := g.client
+		g.mu.RUnlock()
+		if client != nil {
+			client.Logout(context.Background())
+		}
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   "Logged out of WhatsApp. Restart to login again.",
+		}, nil
+	case "status":
+		g.mu.RLock()
+		client := g.client
+		g.mu.RUnlock()
+		loggedIn := client != nil && client.IsLoggedIn()
+		connected := client != nil && client.IsConnected()
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   fmt.Sprintf("WhatsApp: connected=%v, logged_in=%v", connected, loggedIn),
+		}, nil
+	default:
+		return Response{
+			ChannelID: msg.UserID,
+			Content:   "Available commands: /logout, /status",
+		}, nil
 	}
-	return json.Marshal(g.device)
 }
 
-// ---- Keep backward compatibility with old Business API constructor ----
+func (g *WhatsAppGateway) CheckHealth() *HealthStatus {
+	g.mu.RLock()
+	client := g.client
+	g.mu.RUnlock()
 
-// NewWhatsAppBusinessGateway creates a WhatsApp Business API gateway (legacy)
-// Deprecated: Use NewWhatsAppGateway for personal accounts with QR login
-func NewWhatsAppBusinessGateway(phoneNumberID, accessToken, appSecret, verifyToken string) *WhatsAppBusinessGateway {
-	return &WhatsAppBusinessGateway{
-		phoneNumberID: phoneNumberID,
-		accessToken:   accessToken,
-		appSecret:     appSecret,
-		verifyToken:   verifyToken,
-		agents:        make(map[string]*AgentSession),
-		msgCh:         make(chan Message, 100),
-		stopCh:        make(chan struct{}),
-		callbackPort:  8086,
+	status := g.BasePlatform.CheckHealth()
+
+	status.Platform = "whatsapp"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
 	}
-}
 
-// SetChannelFilter sets the channel allowlist and blocklist for WhatsApp Business
-func (g *WhatsAppBusinessGateway) SetChannelFilter(allowed, blocked []string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
-}
-
-// displayQRCode displays the QR code by saving as PNG file
-func displayQRCode(qrData string) {
-	qrFile, err := saveQRToFile(qrData)
-	if err != nil {
-		fmt.Printf("  [WARNING] Failed to save QR image: %v\n", err)
+	if client != nil && client.IsLoggedIn() {
+		status.Details["logged_in"] = true
+		status.Details["own_jid"] = g.ownJID.String()
 	} else {
-		fmt.Printf("  QR code saved to: %s\n", qrFile)
-		fmt.Println("  Please open this file and scan with WhatsApp!")
-		fmt.Println()
-	}
-}
-
-// saveQRToFile generates a QR code PNG file and returns the file path
-func saveQRToFile(qrData string) (string, error) {
-	// Create a temporary file for the QR code
-	tmpDir := os.TempDir()
-	qrFile := filepath.Join(tmpDir, "whatsapp-qr.png")
-
-	// Generate PNG QR code using skip2/go-qrcode (256x256 pixels)
-	err := qrcode.WriteFile(qrData, qrcode.Medium, 256, qrFile)
-	if err != nil {
-		return "", err
+		status.Details["logged_in"] = false
+		status.Details["message"] = "Not logged in, use QR code to login"
+		if !status.Connected {
+			status.Status = "disconnected"
+		} else {
+			status.Status = "waiting_login"
+		}
 	}
 
-	return qrFile, nil
-}
-
-// isTerminal checks if the file descriptor is a terminal (cross-platform)
-func isTerminal(fd uintptr) bool {
-	// Simple cross-platform terminal detection
-	fileInfo, err := os.Stdout.Stat()
-	if err != nil {
-		return false
+	platformStatus := PlatformStatus{
+		Name:   "whatsapp",
+		Status: status.Status,
 	}
-	mode := fileInfo.Mode()
-	return (mode & os.ModeCharDevice) != 0
+	status.Platforms["whatsapp"] = platformStatus
+	return status
 }
 
-// isTTY returns true if running in a terminal
-func isTTY() bool {
-	return isTerminal(os.Stdout.Fd())
+func (g *WhatsAppGateway) GetLatestQR() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.latestQR
+}
+
+func (g *WhatsAppGateway) GetQRCodeForAPI() *QRCodeResponse {
+	qr := g.GetLatestQR()
+	if qr == "" {
+		return nil
+	}
+	return &QRCodeResponse{
+		QRCode: qr,
+		Expiry: 60,
+	}
 }
 
 func ForceDisplayQR(qrData string) {
@@ -882,7 +718,6 @@ func ForceDisplayQR(qrData string) {
 	fmt.Println("  4. Scan the QR code below")
 	fmt.Println()
 
-	// Try to save as PNG file
 	qrFile, err := saveQRToFile(qrData)
 	if err != nil {
 		fmt.Printf("  [ERROR] Failed to save QR image: %v\n", err)
@@ -892,7 +727,6 @@ func ForceDisplayQR(qrData string) {
 	}
 	fmt.Println()
 
-	// Also try ASCII QR display as backup
 	fmt.Println("  [ASCII QR Code - if not displayed correctly, use the PNG file above]")
 	fmt.Println()
 	qrterminal.GenerateHalfBlock(qrData, qrterminal.L, os.Stdout)
@@ -912,37 +746,19 @@ func ForceDisplayQR(qrData string) {
 	os.Stdout.Sync()
 }
 
-// GetQRCodeURL returns a URL to display the QR code in a browser
-func GetQRCodeURL(qrData string) string {
-	return fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", url.QueryEscape(qrData))
+func saveQRToFile(qrData string) (string, error) {
+	tmpDir := os.TempDir()
+	qrFile := filepath.Join(tmpDir, "whatsapp-qr.png")
+
+	err := qrcode.WriteFile(qrData, qrcode.Medium, 256, qrFile)
+	if err != nil {
+		return "", err
+	}
+
+	return qrFile, nil
 }
 
-// GetLatestQR returns the most recent QR code data
-func (g *WhatsAppGateway) GetLatestQR() string {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.latestQR
-}
-
-// QRCodeResponse represents QR code data for API response
 type QRCodeResponse struct {
 	QRCode string `json:"qr_code"`
 	Expiry int    `json:"expires_in_seconds"`
-}
-
-// GetQRCodeForAPI returns QR code data suitable for web display
-func (g *WhatsAppGateway) GetQRCodeForAPI() *QRCodeResponse {
-	qr := g.GetLatestQR()
-	if qr == "" {
-		return nil
-	}
-	return &QRCodeResponse{
-		QRCode: qr,
-		Expiry: 60, // QR codes typically expire in 60 seconds
-	}
-}
-
-// IsConnected returns whether the gateway is connected
-func (g *WhatsAppGateway) IsConnected() bool {
-	return g.client != nil && g.client.IsLoggedIn()
 }

@@ -13,34 +13,24 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// SlackGateway implements the Slack platform handler
 type SlackGateway struct {
+	*BasePlatform
+
 	botToken      string
 	appToken      string
 	signingSecret string
 	wsURL         string
 	rtmConn       *rtmConnection
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	httpServer *http.Server
 
-	callbackPort int
-	httpServer   *http.Server
-
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
+	mu sync.RWMutex
 }
 
-// rtmConnection represents RTM websocket connection
 type rtmConnection struct {
 	URL string `json:"url"`
 }
 
-// slackEvent represents incoming Slack events
 type slackEvent struct {
 	Type      string          `json:"type"`
 	Challenge string          `json:"challenge,omitempty"`
@@ -53,7 +43,6 @@ type slackEvent struct {
 	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
-// slackMessageEvent represents a message event
 type slackMessageEvent struct {
 	Type        string `json:"type"`
 	Channel     string `json:"channel"`
@@ -64,116 +53,54 @@ type slackMessageEvent struct {
 	ChannelType string `json:"channel_type,omitempty"`
 }
 
-// NewSlackGateway creates a new Slack gateway
 func NewSlackGateway(botToken, signingSecret string) *SlackGateway {
-	return &SlackGateway{
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &SlackGateway{
 		botToken:      botToken,
 		signingSecret: signingSecret,
-		agents:        make(map[string]*AgentSession),
-		msgCh:         make(chan Message, 100),
-		stopCh:        make(chan struct{}),
-		callbackPort:  8085,
 	}
+
+	g.BasePlatform = NewBasePlatform("slack", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+	g.SetCallbackPort(8085)
+
+	return g
 }
 
-// SetChannelFilter sets the channel allowlist and blocklist
-func (g *SlackGateway) SetChannelFilter(allowed, blocked []string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
-}
+func (g *SlackGateway) onConnect(ctx context.Context) error {
+	log.Infof("[Slack] Connecting to Slack gateway...")
 
-// Name returns the platform name
-func (g *SlackGateway) Name() string {
-	return "slack"
-}
-
-// Connect establishes connection to Slack
-func (g *SlackGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
-	}
-	g.running = true
-	g.mu.Unlock()
-
-	log.Infof("Connecting to Slack gateway...")
-
-	// Get RTM websocket URL
 	if err := g.startRTM(); err != nil {
-		g.mu.Lock()
-		g.running = false
-		g.mu.Unlock()
 		return fmt.Errorf("failed to start RTM: %w", err)
 	}
 
-	// Start HTTP server for events
 	go g.startHTTPServer()
 
-	log.Info("Slack gateway connected")
+	log.Info("[Slack] Gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *SlackGateway) Disconnect() error {
+func (g *SlackGateway) onDisconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
 	if g.httpServer != nil {
 		g.httpServer.Shutdown(context.Background())
+		g.httpServer = nil
 	}
-	close(g.msgCh)
-	g.running = false
 
-	log.Info("Slack gateway disconnected")
+	log.Info("[Slack] Gateway disconnected")
 	return nil
 }
 
-// CheckHealth returns health status
-func (g *SlackGateway) CheckHealth() *HealthStatus {
-	g.mu.RLock()
-	running := g.running
-	g.mu.RUnlock()
-
-	status := &HealthStatus{
-		Platform:  "slack",
-		Connected: running,
-		Status:    "healthy",
-		Details: map[string]interface{}{
-			"callback_port": g.callbackPort,
-		},
-		Platforms: make(map[string]PlatformStatus),
-	}
-
-	platformStatus := PlatformStatus{
-		Name:   "slack",
-		Status: "connected",
-	}
-
-	if !running {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-	}
-
-	status.Platforms["slack"] = platformStatus
-	return status
-}
-
-// Receive returns the message channel
-func (g *SlackGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// Send sends a message to Slack
-func (g *SlackGateway) Send(ctx context.Context, resp Response) error {
+func (g *SlackGateway) onSend(ctx context.Context, resp Response) error {
 	channel := resp.ChannelID
 	if channel == "" {
 		return fmt.Errorf("channel ID is required")
@@ -214,7 +141,6 @@ func (g *SlackGateway) Send(ctx context.Context, resp Response) error {
 	return nil
 }
 
-// HandleSlashCommand handles slash commands
 func (g *SlackGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":
@@ -243,7 +169,6 @@ func (g *SlackGateway) HandleSlashCommand(cmd string, msg Message) (Response, er
 	}
 }
 
-// startRTM starts the RTM connection
 func (g *SlackGateway) startRTM() error {
 	req, err := http.NewRequest("POST", "https://slack.com/api/rtm.connect", nil)
 	if err != nil {
@@ -281,28 +206,27 @@ func (g *SlackGateway) startRTM() error {
 	return nil
 }
 
-// startHTTPServer starts the HTTP server for events
 func (g *SlackGateway) startHTTPServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/slack/events", g.handleSlackEvents)
 	mux.HandleFunc("/slack/interactive", g.handleInteractive)
 
+	g.mu.Lock()
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.callbackPort),
+		Addr:    fmt.Sprintf(":%d", g.GetCallbackPort()),
 		Handler: mux,
 	}
+	g.mu.Unlock()
 
 	go func() {
 		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("Slack HTTP server error: %v", err)
+			log.Errorf("[Slack] HTTP server error: %v", err)
 		}
 	}()
 }
 
-// handleSlackEvents handles incoming Slack events
 func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		// URL verification challenge
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(r.URL.Query().Get("challenge")))
 		return
@@ -314,7 +238,6 @@ func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Handle URL verification
 	if event.Type == "url_verification" {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"challenge": event.Challenge})
@@ -324,48 +247,48 @@ func (g *SlackGateway) handleSlackEvents(w http.ResponseWriter, r *http.Request)
 	if event.Type == "event_callback" {
 		var msgEvent slackMessageEvent
 		if err := json.Unmarshal(event.Raw, &msgEvent); err != nil {
-			log.Errorf("Failed to parse message event: %v", err)
+			log.Errorf("[Slack] Failed to parse message event: %v", err)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		// Ignore bot messages
 		if msgEvent.User == "" || strings.HasPrefix(msgEvent.Text, "<@U") {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		// Check channel allowlist/blocklist
-		g.mu.RLock()
-		allowed := g.allowedChannels
-		blocked := g.blockedChannels
-		g.mu.RUnlock()
-		if !ShouldProcessChannel(msgEvent.Channel, allowed, blocked) {
+		if !g.ShouldProcessChannel(msgEvent.Channel) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		msg := Message{
-			ID:        msgEvent.Ts,
-			Platform:  "slack",
-			ChannelID: msgEvent.Channel,
-			UserID:    msgEvent.User,
-			Content:   msgEvent.Text,
-			Timestamp: time.Now(),
-			Metadata:  map[string]interface{}{"thread_ts": msgEvent.ThreadTs},
+		isGroup := false
+		if msgEvent.ChannelType != "" {
+			isGroup = msgEvent.ChannelType == "channel" || msgEvent.ChannelType == "group"
+		} else if len(msgEvent.Channel) > 0 {
+			isGroup = msgEvent.Channel[0] == 'C' || msgEvent.Channel[0] == 'G'
 		}
 
-		select {
-		case g.msgCh <- msg:
-		default:
-			log.Warnf("Slack message channel full, dropping message")
+		isMentioned := strings.Contains(msgEvent.Text, "<@")
+
+		msg := Message{
+			ID:          msgEvent.Ts,
+			Platform:    "slack",
+			ChannelID:   msgEvent.Channel,
+			UserID:      msgEvent.User,
+			Content:     msgEvent.Text,
+			Timestamp:   time.Now(),
+			Metadata:    map[string]interface{}{"thread_ts": msgEvent.ThreadTs},
+			IsGroup:     isGroup,
+			IsMentioned: isMentioned,
 		}
+
+		g.EmitMessage(msg)
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleInteractive handles interactive payloads
 func (g *SlackGateway) handleInteractive(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Channel   string `json:"channel"`
@@ -382,7 +305,6 @@ func (g *SlackGateway) handleInteractive(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
-// postMessage posts a message using chat.postMessage API
 func (g *SlackGateway) postMessage(channel, text string) error {
 	payload := map[string]interface{}{
 		"channel": channel,
@@ -430,9 +352,29 @@ func (g *SlackGateway) postMessage(channel, text string) error {
 	return nil
 }
 
-// IsConnected returns whether the gateway is connected
-func (g *SlackGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.rtmConn != nil
+func (g *SlackGateway) CheckHealth() *HealthStatus {
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "slack"
+	status.Platforms = make(map[string]PlatformStatus)
+
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
+	}
+	status.Details["callback_port"] = g.GetCallbackPort()
+
+	platformStatus := PlatformStatus{
+		Name:   "slack",
+		Status: "connected",
+	}
+
+	if !status.Connected {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+	} else {
+		status.Status = "healthy"
+	}
+
+	status.Platforms["slack"] = platformStatus
+	return status
 }

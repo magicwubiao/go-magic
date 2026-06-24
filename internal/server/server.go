@@ -889,6 +889,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
 	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
+	mux.HandleFunc("/api/gateway/qq/scan-status", withCORS(requireAuth(s.handleQQScanStatus)))
 
 	// Magic update
 	mux.HandleFunc("/api/magic/update", withCORS(requireAuth(s.handleMagicUpdate)))
@@ -6546,7 +6547,7 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if platform == "whatsapp" {
+	if platform == "whatsapp" || platform == "qq" {
 		s.proxyGatewayQR(w, r, platform)
 		return
 	}
@@ -6575,8 +6576,6 @@ func (s *Server) handleGatewayQR(w http.ResponseWriter, r *http.Request) {
 			qrData, qrImage, err = s.generateWeChatILinkQR()
 		case "wecom":
 			qrData, qrImage, err = s.generateWeComQR()
-		case "wechat":
-			qrData, qrImage, err = s.generateWeChatQR()
 		case "dingtalk":
 			qrData, qrImage, err = s.generateDingTalkQR()
 		case "feishu":
@@ -6688,7 +6687,7 @@ func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if platform == "whatsapp" {
+	if platform == "whatsapp" || platform == "qq" {
 		s.proxyGatewayQR(w, r, platform)
 		return
 	}
@@ -6723,6 +6722,69 @@ func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 		Status:    session.Status,
 		QRCode:    session.QRCode,
 		Message:   session.Message,
+		ExpiresIn: expiresIn,
+	})
+}
+
+// handleQQScanStatus handles QQ scan login status polling
+// GET /api/gateway/qq/scan-status?sig=xxx
+func (s *Server) handleQQScanStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	sig := r.URL.Query().Get("sig")
+	if sig == "" {
+		jsonResponse(w, QRStatus{
+			Platform: "qq",
+			Status:   "error",
+			Message:  "sig parameter is required",
+		})
+		return
+	}
+
+	// Proxy to gateway process
+	gatewayURL := fmt.Sprintf("http://127.0.0.1:8080/api/login/qr/qq/status?sig=%s", sig)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(gatewayURL)
+	if err != nil {
+		jsonResponse(w, QRStatus{
+			Platform: "qq",
+			Status:   "error",
+			Message:  "Gateway is not running. Please start the gateway first.",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status    string `json:"status"`
+		Message   string `json:"message"`
+		AppID     string `json:"app_id"`
+		AppSecret string `json:"app_secret"`
+		Token     string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		jsonResponse(w, QRStatus{
+			Platform: "qq",
+			Status:   "error",
+			Message:  "Failed to parse gateway response",
+		})
+		return
+	}
+
+	expiresIn := 0
+	if result.Status == "pending" {
+		expiresIn = 300 // 5 minutes for QR code expiry
+	}
+
+	jsonResponse(w, QRStatus{
+		Platform:  "qq",
+		Status:    result.Status,
+		Message:   result.Message,
+		QRCode:    "", // QQ QR code is returned from the main QR endpoint
 		ExpiresIn: expiresIn,
 	})
 }
@@ -6846,39 +6908,6 @@ func (s *Server) generateWeComQR() (string, string, error) {
 	authURL := fmt.Sprintf(
 		"https://login.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%s&redirect_uri=%s&state=%s",
 		corpID, agentID, url.QueryEscape(redirectURI), state,
-	)
-
-	// Generate QR image from the URL
-	img, err := gateway.GenerateQRCodePNG(authURL)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate QR image: %w", err)
-	}
-
-	return authURL, img, nil
-}
-
-// generateWeChatQR generates a QR code for WeChat Open Platform login
-// Returns (qrData, qrImage, error)
-func (s *Server) generateWeChatQR() (string, string, error) {
-	// WeChat Open Platform requires app_id
-	appID := ""
-
-	if s.cfg.Gateway.Platforms != nil {
-		if p, ok := s.cfg.Gateway.Platforms["wechat"]; ok {
-			appID = p.AppID
-		}
-	}
-
-	if appID == "" {
-		return "", "", fmt.Errorf("WeChat QR login requires app_id. Please configure it in gateway settings.")
-	}
-
-	// Build WeChat OAuth URL
-	state := uuid.New().String()
-	redirectURI := fmt.Sprintf("http://localhost:8083/wechat/qr/callback")
-	authURL := fmt.Sprintf(
-		"https://open.weixin.qq.com/connect/qrConnect?appid=%s&redirect_uri=%s&response_type=code&scope=snsapi_login&state=%s#wechat_redirect",
-		appID, url.QueryEscape(redirectURI), state,
 	)
 
 	// Generate QR image from the URL

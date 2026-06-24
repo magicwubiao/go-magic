@@ -267,6 +267,8 @@ export default {
     qqBotHint: 'QQ Bot requires registration on QQ Open Platform to get App ID and Token',
     qqGuildBot: 'QQ Guild Bot',
     qqBotAppId: 'QQ Bot App ID',
+    qqScanLogin: 'Scan to Get Credentials',
+    qqCredentialsReceived: 'App ID and App Secret received',
   },
   kanban: {
     title: 'Kanban',

@@ -11,23 +11,16 @@ import (
 )
 
 type DiscordGateway struct {
+	*BasePlatform
+
 	session *discordgo.Session
-	config  map[string]interface{}
-	agents  map[string]*AgentSession // key is user ID string
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	token   string
 
-	callbackPort int
-	server       interface{} // discordgo doesn't use http.Server for its own callbacks
-	serverOnce   sync.Once
+	agents map[string]*AgentSession
+	mu     sync.RWMutex
 
-	// Message channel for Receive()
-	msgCh chan Message
-
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
+	server     interface{}
+	serverOnce sync.Once
 }
 
 func NewDiscordGateway(token string) (*DiscordGateway, error) {
@@ -36,79 +29,81 @@ func NewDiscordGateway(token string) (*DiscordGateway, error) {
 		return nil, fmt.Errorf("failed to create discord session: %w", err)
 	}
 
-	return &DiscordGateway{
-		session:      session,
-		agents:       make(map[string]*AgentSession),
-		stopCh:       make(chan struct{}),
-		callbackPort: 8084, // Discord-specific port
-		msgCh:        make(chan Message, 100),
-	}, nil
-}
-
-func (g *DiscordGateway) Name() string {
-	return "discord"
-}
-
-func (g *DiscordGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
 	}
-	g.running = true
-	g.mu.Unlock()
 
-	log.Infof("Connecting to Discord gateway...")
+	g := &DiscordGateway{
+		session: session,
+		token:   token,
+		agents:  make(map[string]*AgentSession),
+	}
+
+	g.BasePlatform = NewBasePlatform("discord", config)
+	g.BasePlatform.SetCallbackPort(8084)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g, nil
+}
+
+func (g *DiscordGateway) onConnect(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.session == nil {
+		return fmt.Errorf("discord session not initialized")
+	}
+
+	log.Infof("[Discord] Connecting to Discord gateway...")
+
 	g.session.AddHandler(g.handleMessage)
 	g.session.AddHandler(g.handleSlashCommand)
 
 	err := g.session.Open()
 	if err != nil {
-		g.mu.Lock()
-		g.running = false
-		g.mu.Unlock()
 		return fmt.Errorf("failed to open discord session: %w", err)
 	}
 
-	log.Info("Discord gateway connected")
-	return nil
-}
-
-func (g *DiscordGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
+	if g.session.State != nil && g.session.State.User != nil {
+		g.SetUserInfo(g.session.State.User.ID, g.session.State.User.Username)
 	}
 
-	g.serverOnce.Do(func() {
-		g.session.Close()
-		close(g.stopCh)
-		close(g.msgCh)
-	})
-	g.running = false
-
-	log.Info("Discord gateway disconnected")
+	log.Info("[Discord] Gateway connected")
 	return nil
 }
 
-func (g *DiscordGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running
-}
-
-// SetChannelFilter sets the channel allowlist and blocklist
-func (g *DiscordGateway) SetChannelFilter(allowed, blocked []string) {
+func (g *DiscordGateway) onDisconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
+
+	g.serverOnce.Do(func() {
+		if g.session != nil {
+			g.session.Close()
+		}
+	})
+
+	log.Info("[Discord] Gateway disconnected")
+	return nil
+}
+
+func (g *DiscordGateway) onSend(ctx context.Context, resp Response) error {
+	if !g.IsConnected() {
+		return fmt.Errorf("discord gateway not connected")
+	}
+
+	channelID := resp.ChannelID
+	if channelID == "" {
+		return fmt.Errorf("channel ID is required")
+	}
+
+	return g.sendMessage(channelID, resp.Content)
 }
 
 func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
-	// Ignore own messages
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
@@ -116,12 +111,7 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	userID := m.Author.ID
 	channelID := m.ChannelID
 
-	// Check channel allowlist/blocklist
-	g.mu.RLock()
-	allowed := g.allowedChannels
-	blocked := g.blockedChannels
-	g.mu.RUnlock()
-	if !ShouldProcessChannel(channelID, allowed, blocked) {
+	if !g.ShouldProcessChannel(channelID) {
 		return
 	}
 
@@ -133,13 +123,11 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	}
 	g.mu.Unlock()
 
-	// Check if it's a slash command
 	if strings.HasPrefix(m.Content, "/") {
 		g.handleCommand(s, m)
 		return
 	}
 
-	// Extract media attachments
 	var mediaURLs []MediaAttachment
 
 	for _, attachment := range m.Attachments {
@@ -163,7 +151,6 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		})
 	}
 
-	// Handle embeds (often used for rich content)
 	for _, embed := range m.Embeds {
 		if embed.Type == "image" && embed.URL != "" {
 			mediaURLs = append(mediaURLs, MediaAttachment{
@@ -178,15 +165,27 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		}
 	}
 
-	// Create message for the channel
+	isGroup := m.GuildID != ""
+	isMentioned := m.MentionEveryone || len(m.MentionRoles) > 0
+	if s.State != nil && s.State.User != nil {
+		for _, user := range m.Mentions {
+			if user.ID == s.State.User.ID {
+				isMentioned = true
+				break
+			}
+		}
+	}
+
 	msg := Message{
-		ID:        m.ID,
-		Platform:  "discord",
-		ChannelID: channelID,
-		UserID:    userID,
-		Content:   m.Content,
-		Timestamp: m.Timestamp,
-		MediaURLs: mediaURLs,
+		ID:          m.ID,
+		Platform:    "discord",
+		ChannelID:   channelID,
+		UserID:      userID,
+		Content:     m.Content,
+		Timestamp:   m.Timestamp,
+		MediaURLs:   mediaURLs,
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"author":           m.Author.Username,
 			"author_id":        m.Author.ID,
@@ -196,20 +195,12 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		},
 	}
 
-	// Send to Receive channel
-	select {
-	case g.msgCh <- msg:
-		// Message sent to channel
-	default:
-		log.Warnf("Discord message channel full, dropping message: %s", m.ID)
-	}
+	g.EmitMessage(msg)
 
-	// Process with agent via callback if configured
 	g.processWithAgent(msg)
 }
 
 func (g *DiscordGateway) processWithAgent(msg Message) {
-	// Send processing indicator
 	g.sendMessage(msg.ChannelID, "Processing your message...")
 }
 
@@ -241,7 +232,6 @@ func (g *DiscordGateway) handleCommand(s *discordgo.Session, m *discordgo.Messag
 }
 
 func (g *DiscordGateway) handleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Handle slash commands from Discord
 	handler := i.ApplicationCommandData().Name
 	switch handler {
 	case "help":
@@ -260,29 +250,12 @@ func (g *DiscordGateway) sendInteractionResponse(i *discordgo.InteractionCreate,
 	})
 }
 
-// Send sends a message via Discord
-func (g *DiscordGateway) Send(ctx context.Context, resp Response) error {
-	if !g.IsConnected() {
-		return fmt.Errorf("Discord gateway not connected")
-	}
-
-	channelID := resp.ChannelID
-	if channelID == "" {
-		return fmt.Errorf("channel ID is required")
-	}
-
-	return g.sendMessage(channelID, resp.Content)
-}
-
-// sendMessage sends a message to a Discord channel
 func (g *DiscordGateway) sendMessage(channelID, content string) error {
 	if g.session == nil {
-		return fmt.Errorf("Discord session not initialized")
+		return fmt.Errorf("discord session not initialized")
 	}
 
-	// Discord has a 2000 character limit per message
 	if len(content) > 2000 {
-		// Split into multiple messages
 		for i := 0; i < len(content); i += 1990 {
 			end := i + 1990
 			if end > len(content) {
@@ -304,12 +277,6 @@ func (g *DiscordGateway) sendMessage(channelID, content string) error {
 	return nil
 }
 
-// Receive returns a channel of incoming messages
-func (g *DiscordGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// HandleSlashCommand handles slash commands
 func (g *DiscordGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":
@@ -344,14 +311,14 @@ func (g *DiscordGateway) HandleSlashCommand(cmd string, msg Message) (Response, 
 	}
 }
 
-// CheckHealth returns detailed health status for Discord gateway
 func (g *DiscordGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:  "discord",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+	status := g.BasePlatform.CheckHealth()
+
+	status.Platform = "discord"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
 	}
 
 	platformStatus := PlatformStatus{
@@ -375,30 +342,22 @@ func (g *DiscordGateway) CheckHealth() *HealthStatus {
 		return status
 	}
 
-	// Check session state
 	if g.session.State != nil {
 		status.Details["user_id"] = g.session.State.User.ID
 		status.Details["user_name"] = g.session.State.User.Username
 	}
 
-	// Check websocket status
 	if g.session.DataReady {
 		status.Details["websocket_ready"] = true
 	}
 
-	status.Details["callback_port"] = g.callbackPort
+	status.Details["callback_port"] = g.GetCallbackPort()
 	status.Details["http_client_ok"] = true
 	status.Platforms["discord"] = platformStatus
 
 	return status
 }
 
-// SetCallbackPort sets the callback server port
-func (g *DiscordGateway) SetCallbackPort(port int) {
-	g.callbackPort = port
-}
-
-// GetSession returns the Discord session for advanced use
 func (g *DiscordGateway) GetSession() *discordgo.Session {
 	return g.session
 }

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as gatewayApi from '@/api/gateway'
 import type { GatewayStatus } from '@/api/gateway'
+import type { QRResponse } from '@/api/gateway'
 
 export interface GatewayError {
   message: string
@@ -66,5 +67,9 @@ export const useGatewayStore = defineStore('gateway', () => {
     }
   }
 
-  return { status, loading, error, loadStatus, restart, start, stop }
+  async function fetchGatewayQR(platform: string): Promise<QRResponse> {
+    return gatewayApi.fetchGatewayQR(platform)
+  }
+
+  return { status, loading, error, loadStatus, restart, start, stop, fetchGatewayQR }
 })

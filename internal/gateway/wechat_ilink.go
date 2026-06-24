@@ -123,6 +123,8 @@ type WeChatILinkConfig struct {
 //   - Supports media upload/download via CDN
 //   - Supports QR code login flow
 type WeChatILinkGateway struct {
+	*BasePlatform
+
 	config WeChatILinkConfig
 
 	// API client
@@ -132,16 +134,7 @@ type WeChatILinkGateway struct {
 	// CDN downloader for media files
 	cdnDownloader *CDNDownloader
 
-	// Message channel (incoming)
-	msgCh  chan Message
-	stopCh chan struct{}
-
-	mu      sync.RWMutex
-	running bool
-
-	// Context management
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu sync.RWMutex
 
 	// Session state
 	pauseUntil    time.Time
@@ -152,10 +145,8 @@ type WeChatILinkGateway struct {
 	syncBuf       string // get_updates_buf cursor
 
 	// Connection tracking
-	connectedAt    time.Time
-	reconnectCount int
-	reconnecting   bool
-	loginMu        sync.Mutex
+	connectedAt time.Time
+	loginMu     sync.Mutex
 
 	// Stats
 	msgCount  int64
@@ -184,34 +175,28 @@ func NewWeChatILinkGateway(cfg WeChatILinkConfig) *WeChatILinkGateway {
 		cfg.DataDir = "./data/wechat-ilink"
 	}
 
-	return &WeChatILinkGateway{
+	bpConfig := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &WeChatILinkGateway{
 		config:        cfg,
-		msgCh:         make(chan Message, 200),
-		stopCh:        make(chan struct{}),
 		typingCache:   make(map[string]typingCacheEntry),
 		cdnDownloader: NewCDNDownloader(cfg.CDNBaseURL, cfg.Proxy),
 	}
+
+	g.BasePlatform = NewBasePlatform("wechat_ilink", bpConfig)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g
 }
 
-// Name returns the platform name.
-func (g *WeChatILinkGateway) Name() string {
-	return "wechat-ilink"
-}
-
-// Connect establishes connection to the WeChat iLink Bot API.
-func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
-	}
-
-	g.ctx, g.cancel = context.WithCancel(ctx)
-	g.running = true
-	g.reconnectCount = 0
-	g.reconnecting = false
-	g.mu.Unlock()
-
+// onConnect establishes connection to the WeChat iLink Bot API.
+func (g *WeChatILinkGateway) onConnect(ctx context.Context) error {
 	log.Infof("[WeChat-iLink] Connecting to %s", g.config.BaseURL)
 
 	// Try to load token from config if not already set
@@ -228,9 +213,6 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	// Create API client
 	api, err := NewILinkAPIClient(g.config.BaseURL, g.config.Token, g.config.Proxy)
 	if err != nil {
-		g.mu.Lock()
-		g.running = false
-		g.mu.Unlock()
 		return fmt.Errorf("failed to create iLink API client: %w", err)
 	}
 	g.api = api
@@ -250,9 +232,6 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 			Silent:  false, // Show QR code in terminal for easy scanning
 		})
 		if err != nil {
-			g.mu.Lock()
-			g.running = false
-			g.mu.Unlock()
 			return fmt.Errorf("QR login failed: %w", err)
 		}
 		g.config.Token = token
@@ -262,9 +241,6 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 		// Re-create API client with new token
 		api, err = NewILinkAPIClient(baseURL, token, g.config.Proxy)
 		if err != nil {
-			g.mu.Lock()
-			g.running = false
-			g.mu.Unlock()
 			return fmt.Errorf("failed to re-create API client after login: %w", err)
 		}
 		g.api = api
@@ -272,7 +248,7 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 
 	// Validate token by calling GetUpdates once
 	log.Debug("[WeChat-iLink] Validating token...")
-	testResp, err := g.api.GetUpdates(g.ctx, ILinkGetUpdatesReq{
+	testResp, err := g.api.GetUpdates(ctx, ILinkGetUpdatesReq{
 		GetUpdatesBuf: g.syncBuf,
 	})
 	if err != nil || (testResp != nil && isSessionExpired(testResp.Ret, testResp.Errcode)) {
@@ -300,28 +276,14 @@ func (g *WeChatILinkGateway) Connect(ctx context.Context) error {
 	}
 
 	g.connectedAt = time.Now()
-	go g.pollLoop(g.ctx)
+	go g.pollLoop(ctx)
 
 	log.Debug("[WeChat-iLink] Gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection and stops all goroutines.
-func (g *WeChatILinkGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	if g.cancel != nil {
-		g.cancel()
-	}
-
-	close(g.stopCh)
-	g.running = false
-
+// onDisconnect closes the connection and stops all goroutines.
+func (g *WeChatILinkGateway) onDisconnect() error {
 	log.Debug("[WeChat-iLink] Gateway disconnected")
 	return nil
 }
@@ -330,11 +292,11 @@ func (g *WeChatILinkGateway) Disconnect() error {
 func (g *WeChatILinkGateway) IsConnected() bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.running && g.config.Token != ""
+	return g.BasePlatform.IsConnected() && g.config.Token != ""
 }
 
-// Send sends a text message to a WeChat user.
-func (g *WeChatILinkGateway) Send(ctx context.Context, resp Response) error {
+// onSend sends a text message to a WeChat user.
+func (g *WeChatILinkGateway) onSend(ctx context.Context, resp Response) error {
 	if !g.IsConnected() {
 		return fmt.Errorf("wechat-ilink: not connected")
 	}
@@ -371,11 +333,6 @@ func (g *WeChatILinkGateway) SendText(ctx context.Context, toUserID, text string
 	return g.sendTextMessage(ctx, toUserID, contextToken, text)
 }
 
-// Receive returns a channel of incoming messages.
-func (g *WeChatILinkGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
 // HandleSlashCommand handles slash commands.
 func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch cmd {
@@ -405,7 +362,7 @@ func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Respon
 					"Connected for: %v\n"+
 					"Reconnections: %d",
 					time.Since(g.connectedAt).Round(time.Second),
-					g.reconnectCount),
+					g.ReconnectManager().RetryCount()),
 			}, nil
 		}
 		return Response{Content: "WeChat iLink Bot is not connected 🔴"}, nil
@@ -462,24 +419,28 @@ func (g *WeChatILinkGateway) HandleSlashCommand(cmd string, msg Message) (Respon
 
 // CheckHealth returns detailed health status.
 func (g *WeChatILinkGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:  "wechat-ilink",
-		Status:    "healthy",
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "wechat_ilink"
+	status.Status = "healthy"
+
+	if status.Platforms == nil {
+		status.Platforms = make(map[string]PlatformStatus)
+	}
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
 	}
 
 	platformStatus := PlatformStatus{
-		Name:   "wechat-ilink",
+		Name:   "wechat_ilink",
 		Status: "connected",
 	}
 
 	g.mu.RLock()
-	status.Connected = g.running && g.config.Token != ""
+	status.Connected = status.Connected && g.config.Token != ""
 	status.Details["has_token"] = g.config.Token != ""
 	status.Details["base_url"] = g.config.BaseURL
-	status.Details["reconnect_count"] = g.reconnectCount
-	status.Details["reconnecting"] = g.reconnecting
+	status.Details["reconnect_count"] = g.ReconnectManager().RetryCount()
+	status.Details["reconnecting"] = g.ReconnectManager().IsReconnecting()
 	if !g.connectedAt.IsZero() {
 		status.Details["connected_since"] = g.connectedAt.Format(time.RFC3339)
 		status.Details["uptime"] = time.Since(g.connectedAt).Round(time.Second).String()
@@ -512,7 +473,9 @@ func (g *WeChatILinkGateway) CheckHealth() *HealthStatus {
 		platformStatus.Status = "disconnected"
 		platformStatus.Error = "Gateway not connected"
 		status.Status = "error"
-		status.Error = "Gateway not connected"
+		if status.Error == "" {
+			status.Error = "Gateway not connected"
+		}
 	}
 
 	status.Platforms["wechat-ilink"] = platformStatus
@@ -609,7 +572,7 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 			// Try auto re-login if configured
 			if g.config.AutoLogin {
 				log.Info("[WeChat-iLink] Attempting auto re-login...")
-				if token, _, _, baseURL, err := PerformILinkLogin(g.ctx, ILinkLoginOpts{
+				if token, _, _, baseURL, err := PerformILinkLogin(ctx, ILinkLoginOpts{
 					BaseURL: g.config.BaseURL,
 					BotType: g.config.BotType,
 					Proxy:   g.config.Proxy,
@@ -689,6 +652,10 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 	fromUserID := msg.FromUserID
 	if fromUserID == "" {
+		return
+	}
+
+	if !g.ShouldProcessChannel(fromUserID) {
 		return
 	}
 
@@ -854,14 +821,19 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 	atomic.AddInt64(&g.msgCount, 1)
 	g.lastMsgAt.Store(time.Now())
 
+	isGroup := chatType == "group"
+	isMentioned := false
+
 	gatewayMsg := Message{
-		ID:        messageID,
-		Platform:  "wechat-ilink",
-		ChannelID: fromUserID,
-		UserID:    fromUserID,
-		Content:   content,
-		Timestamp: time.UnixMilli(msg.CreateTimeMs),
-		MediaURLs: mediaURLs,
+		ID:          messageID,
+		Platform:    "wechat-ilink",
+		ChannelID:   fromUserID,
+		UserID:      fromUserID,
+		Content:     content,
+		Timestamp:   time.UnixMilli(msg.CreateTimeMs),
+		MediaURLs:   mediaURLs,
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"from_user_id":  fromUserID,
 			"context_token": msg.ContextToken,
@@ -875,11 +847,7 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 	log.Debugf("[WeChat-iLink] 📨 Message from %s: %s",
 		gatewayMsg.UserID, utils.Truncate(content, 50))
 
-	select {
-	case g.msgCh <- gatewayMsg:
-	default:
-		log.Warnf("[WeChat-iLink] ⚠️ Message channel full, dropping from %s", fromUserID)
-	}
+	g.EmitMessage(gatewayMsg)
 }
 
 // ============================================================================

@@ -11,28 +11,25 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// TelegramConfig holds Telegram-specific configuration
 type TelegramConfig struct {
 	Token           string
-	AdminUsers      []int64  // List of admin user IDs
-	AllowGroups     bool     // Allow bot in groups
-	StreamingReply  bool     // Enable streaming reply for long messages
-	AllowedChannels []string `json:"allowed_channels,omitempty"` // Whitelist of channel/chat IDs
-	BlockedChannels []string `json:"blocked_channels,omitempty"` // Blacklist of channel/chat IDs
+	AdminUsers      []int64
+	AllowGroups     bool
+	StreamingReply  bool
+	AllowedChannels []string `json:"allowed_channels,omitempty"`
+	BlockedChannels []string `json:"blocked_channels,omitempty"`
 }
 
-// TelegramHandler implements PlatformHandler for Telegram
 type TelegramHandler struct {
-	bot      *tgbotapi.BotAPI
-	config   *TelegramConfig
-	gateway  *Gateway
-	stopCh   chan struct{}
-	running  bool
+	*BasePlatform
+
+	bot    *tgbotapi.BotAPI
+	config *TelegramConfig
+
 	mu       sync.RWMutex
 	stopOnce sync.Once
 }
 
-// NewTelegramHandler creates a new Telegram platform handler
 func NewTelegramHandler(token string, config *TelegramConfig) (*TelegramHandler, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -46,64 +43,54 @@ func NewTelegramHandler(token string, config *TelegramConfig) (*TelegramHandler,
 		}
 	}
 
-	return &TelegramHandler{
+	acConfig := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	t := &TelegramHandler{
 		bot:    bot,
 		config: config,
-		stopCh: make(chan struct{}),
-	}, nil
+	}
+
+	t.BasePlatform = NewBasePlatform("telegram", acConfig)
+	t.BasePlatform.onConnect = t.onConnect
+	t.BasePlatform.onDisconnect = t.onDisconnect
+	t.BasePlatform.onSend = t.onSend
+	t.SetChannelFilter(config.AllowedChannels, config.BlockedChannels)
+
+	return t, nil
 }
 
-// Connect establishes connection to Telegram
-func (t *TelegramHandler) Connect(ctx context.Context) error {
+func (t *TelegramHandler) onConnect(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.running {
-		return fmt.Errorf("Telegram handler already running")
-	}
+	log.Info("[Telegram] Starting update listener")
 
-	t.running = true
+	go t.listenUpdates(ctx)
+
 	return nil
 }
 
-// Disconnect closes the connection
-func (t *TelegramHandler) Disconnect() error {
+func (t *TelegramHandler) onDisconnect() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	if !t.running {
-		return nil
-	}
 
 	t.stopOnce.Do(func() {
-		close(t.stopCh)
 	})
-	t.running = false
 
-	log.Info("Telegram handler disconnected")
+	log.Info("[Telegram] Handler disconnected")
 	return nil
 }
 
-// Name returns the platform name
-func (t *TelegramHandler) Name() string {
-	return "telegram"
-}
-
-// IsConnected checks if connected to Telegram
-func (t *TelegramHandler) IsConnected() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.running
-}
-
-// Send sends a message to Telegram
-func (t *TelegramHandler) Send(ctx context.Context, resp Response) error {
+func (t *TelegramHandler) onSend(ctx context.Context, resp Response) error {
 	chatID, err := strconv.ParseInt(resp.ChannelID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid channel ID: %w", err)
 	}
 
-	// For streaming responses, split into chunks
 	if t.config.StreamingReply && len(resp.Content) > 4096 {
 		return t.sendStreamingMessage(chatID, resp.Content)
 	}
@@ -114,9 +101,7 @@ func (t *TelegramHandler) Send(ctx context.Context, resp Response) error {
 	return err
 }
 
-// sendStreamingMessage sends a long message in chunks
 func (t *TelegramHandler) sendStreamingMessage(chatID int64, content string) error {
-	// Split into chunks of ~4000 chars (leaving room for formatting)
 	const chunkSize = 4000
 	messages := splitMessage(content, chunkSize)
 
@@ -133,7 +118,6 @@ func (t *TelegramHandler) sendStreamingMessage(chatID int64, content string) err
 	return nil
 }
 
-// splitMessage splits a message into chunks
 func splitMessage(text string, chunkSize int) []string {
 	var chunks []string
 	lines := make([]string, 0, len(text)/50)
@@ -183,193 +167,184 @@ func joinLines(lines []string) string {
 	return result
 }
 
-// Receive returns a channel of incoming messages
-func (t *TelegramHandler) Receive() <-chan Message {
-	msgCh := make(chan Message, 100)
+func (t *TelegramHandler) listenUpdates(ctx context.Context) {
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
 
-	go func() {
-		defer close(msgCh)
+	updates := t.bot.GetUpdatesChan(u)
+	defer t.bot.StopReceivingUpdates()
 
-		u := tgbotapi.NewUpdate(0)
-		u.Timeout = 60
-
-		updates := t.bot.GetUpdatesChan(u)
-
-		for {
-			select {
-			case <-t.stopCh:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update, ok := <-updates:
+			if !ok {
+				t.HandleDisconnection(fmt.Errorf("update channel closed"))
 				return
-			case update, ok := <-updates:
-				if !ok {
-					return
-				}
-				if update.Message == nil {
-					continue
-				}
-
-				// Check group permissions
-				if update.Message.Chat.Type != "private" && !t.config.AllowGroups {
-					continue
-				}
-
-				// Check channel allowlist/blocklist
-				channelID := fmt.Sprintf("%d", update.Message.Chat.ID)
-				if !ShouldProcessChannel(channelID, t.config.AllowedChannels, t.config.BlockedChannels) {
-					continue
-				}
-
-				// Handle different message types
-				var content string
-				var mediaURLs []MediaAttachment
-
-				msg := update.Message
-
-				// Check for caption (photos, videos, documents can have captions)
-				caption := msg.Caption
-
-				// Get text content
-				text := msg.Text
-				if text == "" && caption != "" {
-					text = caption
-				}
-				content = text
-
-				// Handle media
-				if msg.Photo != nil {
-					// Download photo
-					photo := msg.Photo[len(msg.Photo)-1] // Get largest photo
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "image",
-							URL:      file.Link(t.bot.Token),
-							MimeType: "image/jpeg",
-							Caption:  caption,
-							Size:     int64(photo.FileSize),
-						})
-					}
-					// If photo has no caption, set a meaningful default content
-					if content == "" {
-						content = "[用户发送了一张图片]"
-					}
-				}
-
-				if msg.Video != nil {
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Video.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "video",
-							URL:      file.Link(t.bot.Token),
-							MimeType: "video/mp4",
-							Caption:  caption,
-							Size:     int64(msg.Video.FileSize),
-						})
-					}
-					// If video has no caption, set a meaningful default content
-					if content == "" {
-						content = "[用户发送了一个视频]"
-					}
-				}
-
-				if msg.Document != nil {
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Document.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "file",
-							URL:      file.Link(t.bot.Token),
-							MimeType: msg.Document.MimeType,
-							Filename: msg.Document.FileName,
-							Caption:  caption,
-							Size:     int64(msg.Document.FileSize),
-						})
-					}
-					// If document has no caption, set a meaningful default content
-					if content == "" {
-						content = fmt.Sprintf("[用户发送了文件: %s]", msg.Document.FileName)
-					}
-				}
-
-				if msg.Voice != nil {
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Voice.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "audio",
-							URL:      file.Link(t.bot.Token),
-							MimeType: msg.Voice.MimeType,
-							Size:     int64(msg.Voice.FileSize),
-						})
-					}
-					// If voice has no caption, set a meaningful default content
-					if content == "" {
-						content = "[用户发送了一段语音]"
-					}
-				}
-
-				if msg.Audio != nil {
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Audio.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "audio",
-							URL:      file.Link(t.bot.Token),
-							MimeType: msg.Audio.MimeType,
-							Filename: msg.Audio.Title,
-							Caption:  caption,
-							Size:     int64(msg.Audio.FileSize),
-						})
-					}
-					// If audio has no caption, set a meaningful default content
-					if content == "" {
-						content = "[用户发送了一段音频]"
-					}
-				}
-
-				if msg.Sticker != nil {
-					if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Sticker.FileID}); err == nil {
-						mediaURLs = append(mediaURLs, MediaAttachment{
-							Type:     "image",
-							URL:      file.Link(t.bot.Token),
-							MimeType: "image/webp",
-							Caption:  "Sticker",
-							Size:     int64(msg.Sticker.FileSize),
-						})
-					}
-					// Sticker is already descriptive
-					if content == "" {
-						content = "[用户发送了一个表情包]"
-					}
-				}
-
-				if msg.Location != nil {
-					content = fmt.Sprintf("[Location: %.6f, %.6f]", msg.Location.Latitude, msg.Location.Longitude)
-				}
-
-				gwMsg := Message{
-					ID:        fmt.Sprintf("tg-%d-%d", msg.Chat.ID, msg.MessageID),
-					ChannelID: fmt.Sprintf("%d", msg.Chat.ID),
-					Content:   content,
-					Role:      "user",
-					From:      msg.From.UserName,
-					MediaURLs: mediaURLs,
-					Metadata: map[string]interface{}{
-						"chat_type": msg.Chat.Type,
-					},
-				}
-
-				select {
-				case msgCh <- gwMsg:
-				case <-t.stopCh:
-					return
-				}
 			}
-		}
-	}()
+			if update.Message == nil {
+				continue
+			}
 
-	return msgCh
+			if update.Message.Chat.Type != "private" && !t.config.AllowGroups {
+				continue
+			}
+
+			channelID := fmt.Sprintf("%d", update.Message.Chat.ID)
+			if !t.ShouldProcessChannel(channelID) {
+				continue
+			}
+
+			t.handleIncomingMessage(update.Message)
+		}
+	}
 }
 
-// CheckHealth returns detailed health status for Telegram gateway
+func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
+	var content string
+	var mediaURLs []MediaAttachment
+
+	caption := msg.Caption
+
+	text := msg.Text
+	if text == "" && caption != "" {
+		text = caption
+	}
+	content = text
+
+	if msg.Photo != nil {
+		photo := msg.Photo[len(msg.Photo)-1]
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "image",
+				URL:      file.Link(t.bot.Token),
+				MimeType: "image/jpeg",
+				Caption:  caption,
+				Size:     int64(photo.FileSize),
+			})
+		}
+		if content == "" {
+			content = "[用户发送了一张图片]"
+		}
+	}
+
+	if msg.Video != nil {
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Video.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "video",
+				URL:      file.Link(t.bot.Token),
+				MimeType: "video/mp4",
+				Caption:  caption,
+				Size:     int64(msg.Video.FileSize),
+			})
+		}
+		if content == "" {
+			content = "[用户发送了一个视频]"
+		}
+	}
+
+	if msg.Document != nil {
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Document.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "file",
+				URL:      file.Link(t.bot.Token),
+				MimeType: msg.Document.MimeType,
+				Filename: msg.Document.FileName,
+				Caption:  caption,
+				Size:     int64(msg.Document.FileSize),
+			})
+		}
+		if content == "" {
+			content = fmt.Sprintf("[用户发送了文件: %s]", msg.Document.FileName)
+		}
+	}
+
+	if msg.Voice != nil {
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Voice.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "audio",
+				URL:      file.Link(t.bot.Token),
+				MimeType: msg.Voice.MimeType,
+				Size:     int64(msg.Voice.FileSize),
+			})
+		}
+		if content == "" {
+			content = "[用户发送了一段语音]"
+		}
+	}
+
+	if msg.Audio != nil {
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Audio.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "audio",
+				URL:      file.Link(t.bot.Token),
+				MimeType: msg.Audio.MimeType,
+				Filename: msg.Audio.Title,
+				Caption:  caption,
+				Size:     int64(msg.Audio.FileSize),
+			})
+		}
+		if content == "" {
+			content = "[用户发送了一段音频]"
+		}
+	}
+
+	if msg.Sticker != nil {
+		if file, err := t.bot.GetFile(tgbotapi.FileConfig{FileID: msg.Sticker.FileID}); err == nil {
+			mediaURLs = append(mediaURLs, MediaAttachment{
+				Type:     "image",
+				URL:      file.Link(t.bot.Token),
+				MimeType: "image/webp",
+				Caption:  "Sticker",
+				Size:     int64(msg.Sticker.FileSize),
+			})
+		}
+		if content == "" {
+			content = "[用户发送了一个表情包]"
+		}
+	}
+
+	if msg.Location != nil {
+		content = fmt.Sprintf("[Location: %.6f, %.6f]", msg.Location.Latitude, msg.Location.Longitude)
+	}
+
+	isGroup := msg.Chat.Type != "private"
+	isMentioned := false
+	if msg.Entities != nil && len(msg.Entities) > 0 {
+		for _, entity := range msg.Entities {
+			if entity.Type == "mention" {
+				isMentioned = true
+				break
+			}
+		}
+	}
+
+	gwMsg := Message{
+		ID:          fmt.Sprintf("tg-%d-%d", msg.Chat.ID, msg.MessageID),
+		ChannelID:   fmt.Sprintf("%d", msg.Chat.ID),
+		Content:     content,
+		Role:        "user",
+		From:        msg.From.UserName,
+		MediaURLs:   mediaURLs,
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
+		Metadata: map[string]interface{}{
+			"chat_type": msg.Chat.Type,
+		},
+	}
+
+	t.EmitMessage(gwMsg)
+}
+
 func (t *TelegramHandler) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:  "telegram",
-		Connected: t.IsConnected(),
-		Status:    "healthy",
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+	status := t.BasePlatform.CheckHealth()
+
+	status.Platform = "telegram"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
 	}
 
 	platformStatus := PlatformStatus{
@@ -377,7 +352,7 @@ func (t *TelegramHandler) CheckHealth() *HealthStatus {
 		Status: "connected",
 	}
 
-	if !t.IsConnected() {
+	if !status.Connected {
 		platformStatus.Status = "disconnected"
 		platformStatus.Error = "Telegram handler not connected"
 		status.Status = "unhealthy"
@@ -388,7 +363,6 @@ func (t *TelegramHandler) CheckHealth() *HealthStatus {
 	return status
 }
 
-// HandleSlashCommand handles a slash command
 func (t *TelegramHandler) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":

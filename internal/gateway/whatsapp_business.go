@@ -17,30 +17,42 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// WhatsAppBusinessGateway implements WhatsApp Business API (webhook-based)
-// For personal WhatsApp with QR login, use WhatsAppGateway instead.
 type WhatsAppBusinessGateway struct {
+	*BasePlatform
+
 	phoneNumberID string
 	accessToken   string
 	appSecret     string
 	verifyToken   string
 	webhookURL    string
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
-
-	callbackPort int
-	httpServer   *http.Server
-
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
+	mu         sync.RWMutex
+	httpServer *http.Server
 }
 
-// whatsappWebhookRequest represents incoming webhook data
+func NewWhatsAppBusinessGateway(phoneNumberID, accessToken, appSecret, verifyToken string) *WhatsAppBusinessGateway {
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &WhatsAppBusinessGateway{
+		phoneNumberID: phoneNumberID,
+		accessToken:   accessToken,
+		appSecret:     appSecret,
+		verifyToken:   verifyToken,
+	}
+
+	g.BasePlatform = NewBasePlatform("whatsapp_business", config)
+	g.SetCallbackPort(8082)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g
+}
+
 type whatsappWebhookRequest struct {
 	Object string `json:"object"`
 	Entry  []struct {
@@ -102,7 +114,6 @@ type whatsappWebhookRequest struct {
 	} `json:"entry"`
 }
 
-// whatsappMessageRequest represents outgoing message payload
 type whatsappMessageRequest struct {
 	MessagingProduct string `json:"messaging_product"`
 	RecipientType    string `json:"recipient_type"`
@@ -128,88 +139,28 @@ type whatsappMessageRequest struct {
 	} `json:"audio,omitempty"`
 }
 
-// Name returns the platform name
-func (g *WhatsAppBusinessGateway) Name() string {
-	return "whatsapp_business"
-}
+func (g *WhatsAppBusinessGateway) onConnect(ctx context.Context) error {
+	log.Infof("[WhatsApp Business] Connecting gateway...")
 
-// Connect establishes connection to WhatsApp Business API
-func (g *WhatsAppBusinessGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
-	}
-	g.running = true
-	g.mu.Unlock()
+	go g.startHTTPServer(ctx)
 
-	log.Infof("Connecting to WhatsApp Business gateway...")
-
-	go g.startHTTPServer()
-
-	log.Info("WhatsApp Business gateway connected (webhook server started)")
+	log.Info("[WhatsApp Business] Gateway connected (webhook server started)")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *WhatsAppBusinessGateway) Disconnect() error {
+func (g *WhatsAppBusinessGateway) onDisconnect() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
 	if g.httpServer != nil {
 		g.httpServer.Shutdown(context.Background())
+		g.httpServer = nil
 	}
-	close(g.msgCh)
-	g.running = false
+	g.mu.Unlock()
 
-	log.Info("WhatsApp Business gateway disconnected")
+	log.Info("[WhatsApp Business] Gateway disconnected")
 	return nil
 }
 
-// CheckHealth returns health status
-func (g *WhatsAppBusinessGateway) CheckHealth() *HealthStatus {
-	g.mu.RLock()
-	running := g.running
-	g.mu.RUnlock()
-
-	status := &HealthStatus{
-		Platform:  "whatsapp_business",
-		Connected: running,
-		Status:    "healthy",
-		Details: map[string]interface{}{
-			"phone_number_id": g.phoneNumberID,
-			"callback_port":   g.callbackPort,
-		},
-		Platforms: make(map[string]PlatformStatus),
-	}
-
-	platformStatus := PlatformStatus{
-		Name:   "whatsapp_business",
-		Status: "connected",
-	}
-
-	if !running {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-	}
-
-	status.Platforms["whatsapp_business"] = platformStatus
-	return status
-}
-
-// Receive returns the message channel
-func (g *WhatsAppBusinessGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// Send sends a message via WhatsApp Business API
-func (g *WhatsAppBusinessGateway) Send(ctx context.Context, resp Response) error {
+func (g *WhatsAppBusinessGateway) onSend(ctx context.Context, resp Response) error {
 	to := resp.ChannelID
 	if to == "" {
 		return fmt.Errorf("recipient phone number (channel_id) is required")
@@ -233,7 +184,6 @@ func (g *WhatsAppBusinessGateway) Send(ctx context.Context, resp Response) error
 	return g.sendMessage(ctx, reqBody)
 }
 
-// HandleSlashCommand handles commands
 func (g *WhatsAppBusinessGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":
@@ -256,24 +206,61 @@ func (g *WhatsAppBusinessGateway) HandleSlashCommand(cmd string, msg Message) (R
 	}
 }
 
-// startHTTPServer starts the webhook server
-func (g *WhatsAppBusinessGateway) startHTTPServer() {
+func (g *WhatsAppBusinessGateway) CheckHealth() *HealthStatus {
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "whatsapp_business"
+	status.Platforms = make(map[string]PlatformStatus)
+
+	platformStatus := PlatformStatus{
+		Name:   "whatsapp_business",
+		Status: "connected",
+	}
+
+	if !g.IsConnected() {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["whatsapp_business"] = platformStatus
+		return status
+	}
+
+	status.Details["phone_number_id"] = g.phoneNumberID
+	status.Details["callback_port"] = g.GetCallbackPort()
+	status.Platforms["whatsapp_business"] = platformStatus
+
+	return status
+}
+
+func (g *WhatsAppBusinessGateway) startHTTPServer(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook", g.handleWebhook)
 
+	addr := fmt.Sprintf(":%d", g.GetCallbackPort())
+	g.mu.Lock()
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.callbackPort),
+		Addr:    addr,
 		Handler: mux,
 	}
+	g.mu.Unlock()
 
 	go func() {
-		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("WhatsApp Business HTTP server error: %v", err)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		g.mu.Lock()
+		if g.httpServer != nil {
+			g.httpServer.Shutdown(shutdownCtx)
 		}
+		g.mu.Unlock()
 	}()
+
+	log.Infof("[WhatsApp Business] Webhook server starting on %s", addr)
+	if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Errorf("[WhatsApp Business] HTTP server error: %v", err)
+		g.HandleDisconnection(err)
+	}
 }
 
-// handleWebhook handles incoming WhatsApp Business webhooks
 func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		mode := r.URL.Query().Get("hub.mode")
@@ -281,7 +268,7 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 		challenge := r.URL.Query().Get("hub.challenge")
 
 		if mode == "subscribe" && token == g.verifyToken {
-			log.Info("WhatsApp Business webhook verified")
+			log.Info("[WhatsApp Business] Webhook verified")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(challenge))
 			return
@@ -299,7 +286,7 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 
 	var webhookReq whatsappWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&webhookReq); err != nil {
-		log.Errorf("Failed to decode webhook: %v", err)
+		log.Errorf("[WhatsApp Business] Failed to decode webhook: %v", err)
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -307,12 +294,7 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 	for _, entry := range webhookReq.Entry {
 		for _, change := range entry.Changes {
 			for _, msg := range change.Value.Messages {
-				// Check channel allowlist/blocklist
-				g.mu.RLock()
-				allowed := g.allowedChannels
-				blocked := g.blockedChannels
-				g.mu.RUnlock()
-				if !ShouldProcessChannel(msg.From, allowed, blocked) {
+				if !g.ShouldProcessChannel(msg.From) {
 					continue
 				}
 
@@ -344,24 +326,24 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 
 				timestamp, _ := strconv.ParseInt(msg.Timestamp, 10, 64)
 
+				isGroup := false
+				isMentioned := false
+
 				waMsg := Message{
-					ID:        msg.ID,
-					Platform:  "whatsapp_business",
-					ChannelID: msg.From,
-					UserID:    msg.From,
-					Content:   content,
-					Timestamp: time.Unix(timestamp, 0),
+					ID:          msg.ID,
+					ChannelID:   msg.From,
+					UserID:      msg.From,
+					Content:     content,
+					Timestamp:   time.Unix(timestamp, 0),
+					IsGroup:     isGroup,
+					IsMentioned: isMentioned,
 					Metadata: map[string]interface{}{
 						"type":            msgType,
 						"phone_number_id": g.phoneNumberID,
 					},
 				}
 
-				select {
-				case g.msgCh <- waMsg:
-				default:
-					log.Warnf("WhatsApp Business message channel full, dropping message")
-				}
+				g.EmitMessage(waMsg)
 			}
 		}
 	}
@@ -369,7 +351,6 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusOK)
 }
 
-// verifySignature verifies the webhook signature
 func (g *WhatsAppBusinessGateway) verifySignature(r *http.Request, signature string) bool {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -385,7 +366,6 @@ func (g *WhatsAppBusinessGateway) verifySignature(r *http.Request, signature str
 	return hmac.Equal([]byte(signature), []byte(expectedSig))
 }
 
-// sendMessage sends a message payload to WhatsApp Business API
 func (g *WhatsAppBusinessGateway) sendMessage(ctx context.Context, reqBody whatsappMessageRequest) error {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -414,11 +394,4 @@ func (g *WhatsAppBusinessGateway) sendMessage(ctx context.Context, reqBody whats
 	}
 
 	return nil
-}
-
-// IsConnected returns whether the gateway is connected
-func (g *WhatsAppBusinessGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.httpServer != nil
 }

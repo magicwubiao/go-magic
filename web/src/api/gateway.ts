@@ -34,3 +34,16 @@ export async function getPlatforms(): Promise<PlatformStatus[]> {
   const status = await getGatewayStatus()
   return []
 }
+
+export interface QRResponse {
+  platform: string
+  status: string
+  qr_code?: string
+  qr_data?: string
+  message?: string
+  expires_in?: number
+}
+
+export async function fetchGatewayQR(platform: string): Promise<QRResponse> {
+  return request(`/gateway/qr?platform=${platform}`)
+}

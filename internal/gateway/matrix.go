@@ -14,8 +14,9 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// MatrixGateway implements the Matrix protocol platform handler
 type MatrixGateway struct {
+	*BasePlatform
+
 	homeserver  string
 	userID      string
 	accessToken string
@@ -24,17 +25,13 @@ type MatrixGateway struct {
 	roomID string
 	txnID  int64
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	agents map[string]*AgentSession
+	mu     sync.RWMutex
 
 	longPollTimeout time.Duration
 	lastNextBatch   string
 }
 
-// matrixLoginRequest represents login request
 type matrixLoginRequest struct {
 	Type     string `json:"type"`
 	Username string `json:"username,omitempty"`
@@ -44,7 +41,6 @@ type matrixLoginRequest struct {
 	Token    string `json:"token,omitempty"`
 }
 
-// matrixLoginResponse represents login response
 type matrixLoginResponse struct {
 	AccessToken string `json:"access_token"`
 	DeviceID    string `json:"device_id"`
@@ -53,7 +49,6 @@ type matrixLoginResponse struct {
 	Token       string `json:"token,omitempty"`
 }
 
-// matrixSyncResponse represents sync response
 type matrixSyncResponse struct {
 	NextBatch string `json:"next_batch"`
 	Rooms     struct {
@@ -65,7 +60,6 @@ type matrixSyncResponse struct {
 	} `json:"rooms"`
 }
 
-// matrixEvent represents a Matrix event
 type matrixEvent struct {
 	Type           string          `json:"type"`
 	EventID        string          `json:"event_id"`
@@ -77,7 +71,6 @@ type matrixEvent struct {
 	StateKey       string          `json:"state_key,omitempty"`
 }
 
-// matrixRoomMessage represents room message content
 type matrixRoomMessage struct {
 	Body          string `json:"body"`
 	MsgType       string `json:"msgtype"`
@@ -85,50 +78,60 @@ type matrixRoomMessage struct {
 	FormattedBody string `json:"formatted_body,omitempty"`
 }
 
-// matrixSendRequest represents send message request
 type matrixSendRequest struct {
 	TxID string `json:"txn_id,omitempty"`
 }
 
-// NewMatrixGateway creates a new Matrix gateway
 func NewMatrixGateway(homeserver, userID, accessToken string) *MatrixGateway {
-	return &MatrixGateway{
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &MatrixGateway{
 		homeserver:      strings.TrimRight(homeserver, "/"),
 		userID:          userID,
 		accessToken:     accessToken,
 		agents:          make(map[string]*AgentSession),
-		msgCh:           make(chan Message, 100),
-		stopCh:          make(chan struct{}),
 		longPollTimeout: 30 * time.Second,
 	}
+
+	g.BasePlatform = NewBasePlatform("matrix", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g
 }
 
-// NewMatrixGatewayWithLogin creates a Matrix gateway with login
 func NewMatrixGatewayWithLogin(homeserver, userID, password, deviceID string) (*MatrixGateway, error) {
-	gw := &MatrixGateway{
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &MatrixGateway{
 		homeserver:      strings.TrimRight(homeserver, "/"),
 		userID:          userID,
 		deviceID:        deviceID,
 		agents:          make(map[string]*AgentSession),
-		msgCh:           make(chan Message, 100),
-		stopCh:          make(chan struct{}),
 		longPollTimeout: 30 * time.Second,
 	}
 
-	// Perform login
-	if err := gw.login(userID, password); err != nil {
+	g.BasePlatform = NewBasePlatform("matrix", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	if err := g.login(userID, password); err != nil {
 		return nil, err
 	}
 
-	return gw, nil
+	return g, nil
 }
 
-// Name returns the platform name
-func (g *MatrixGateway) Name() string {
-	return "matrix"
-}
-
-// login performs Matrix login
 func (g *MatrixGateway) login(userID, password string) error {
 	loginReq := matrixLoginRequest{
 		Type:     "m.login.password",
@@ -158,86 +161,25 @@ func (g *MatrixGateway) login(userID, password string) error {
 	return nil
 }
 
-// Connect establishes connection to Matrix homeserver
-func (g *MatrixGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
-	}
-	g.running = true
-	g.mu.Unlock()
+func (g *MatrixGateway) onConnect(ctx context.Context) error {
+	log.Infof("[Matrix] Connecting to Matrix gateway (homeserver: %s)...", g.homeserver)
 
-	log.Infof("Connecting to Matrix gateway (homeserver: %s)...", g.homeserver)
-
-	// Initial sync
 	if err := g.sync(ctx); err != nil {
-		log.Errorf("Initial Matrix sync failed: %v", err)
+		log.Errorf("[Matrix] Initial sync failed: %v", err)
 	}
 
-	// Start long-polling loop
 	go g.syncLoop()
 
-	log.Info("Matrix gateway connected")
+	log.Info("[Matrix] Gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *MatrixGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
-	close(g.msgCh)
-	g.running = false
-
-	log.Info("Matrix gateway disconnected")
+func (g *MatrixGateway) onDisconnect() error {
+	log.Info("[Matrix] Gateway disconnected")
 	return nil
 }
 
-// CheckHealth returns health status
-func (g *MatrixGateway) CheckHealth() *HealthStatus {
-	g.mu.RLock()
-	running := g.running
-	g.mu.RUnlock()
-
-	status := &HealthStatus{
-		Platform:  "matrix",
-		Connected: running,
-		Status:    "healthy",
-		Details: map[string]interface{}{
-			"homeserver": g.homeserver,
-			"user_id":    g.userID,
-		},
-		Platforms: make(map[string]PlatformStatus),
-	}
-
-	platformStatus := PlatformStatus{
-		Name:   "matrix",
-		Status: "connected",
-	}
-
-	if !running {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-	}
-
-	status.Platforms["matrix"] = platformStatus
-	return status
-}
-
-// Receive returns the message channel
-func (g *MatrixGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// Send sends a message to a Matrix room
-func (g *MatrixGateway) Send(ctx context.Context, resp Response) error {
+func (g *MatrixGateway) onSend(ctx context.Context, resp Response) error {
 	roomID := resp.ChannelID
 	if roomID == "" {
 		return fmt.Errorf("room ID (channel_id) is required")
@@ -251,19 +193,46 @@ func (g *MatrixGateway) Send(ctx context.Context, resp Response) error {
 	return g.sendRoomMessage(ctx, roomID, "m.text", text)
 }
 
-// JoinRoom joins a Matrix room
+func (g *MatrixGateway) CheckHealth() *HealthStatus {
+	status := g.BasePlatform.CheckHealth()
+
+	status.Platform = "matrix"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "matrix",
+		Status: "connected",
+	}
+
+	if !status.Connected {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["matrix"] = platformStatus
+		return status
+	}
+
+	status.Details["homeserver"] = g.homeserver
+	status.Details["user_id"] = g.userID
+	status.Platforms["matrix"] = platformStatus
+
+	return status
+}
+
 func (g *MatrixGateway) JoinRoom(ctx context.Context, roomIDOrAlias string) error {
 	_, err := g.doRequest("POST", fmt.Sprintf("/_matrix/client/v3/join/%s", url.PathEscape(roomIDOrAlias)), nil, true)
 	return err
 }
 
-// LeaveRoom leaves a Matrix room
 func (g *MatrixGateway) LeaveRoom(ctx context.Context, roomID string) error {
 	_, err := g.doRequest("POST", fmt.Sprintf("/_matrix/client/v3/rooms/%s/leave", url.PathEscape(roomID)), nil, true)
 	return err
 }
 
-// sendRoomMessage sends a message to a Matrix room
 func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, content string) error {
 	msgContent := matrixRoomMessage{
 		Body:    content,
@@ -286,7 +255,6 @@ func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, co
 	return err
 }
 
-// HandleSlashCommand handles Matrix commands
 func (g *MatrixGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":
@@ -312,7 +280,6 @@ func (g *MatrixGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 	}
 }
 
-// sync performs a sync request
 func (g *MatrixGateway) sync(ctx context.Context) error {
 	syncURL := fmt.Sprintf("/_matrix/client/v3/sync?timeout=%d", int(g.longPollTimeout.Seconds()*1000))
 	if g.lastNextBatch != "" {
@@ -337,15 +304,12 @@ func (g *MatrixGateway) sync(ctx context.Context) error {
 
 	g.lastNextBatch = syncResp.NextBatch
 
-	// Process joined rooms
 	for roomID, room := range syncResp.Rooms.Join {
 		for _, event := range room.Timeline.Events {
 			msg := g.processEvent(&event, roomID)
 			if msg != nil {
-				select {
-				case g.msgCh <- *msg:
-				default:
-					log.Warnf("Matrix message channel full, dropping message")
+				if g.ShouldProcessChannel(roomID) {
+					g.EmitMessage(*msg)
 				}
 			}
 		}
@@ -354,16 +318,15 @@ func (g *MatrixGateway) sync(ctx context.Context) error {
 	return nil
 }
 
-// syncLoop continuously syncs with the Matrix homeserver
 func (g *MatrixGateway) syncLoop() {
 	for {
 		select {
-		case <-g.stopCh:
+		case <-g.ctx.Done():
 			return
 		default:
 			ctx, cancel := context.WithTimeout(context.Background(), g.longPollTimeout+10*time.Second)
 			if err := g.sync(ctx); err != nil {
-				log.Errorf("Matrix sync error: %v", err)
+				log.Errorf("[Matrix] Sync error: %v", err)
 				time.Sleep(5 * time.Second)
 			}
 			cancel()
@@ -371,9 +334,7 @@ func (g *MatrixGateway) syncLoop() {
 	}
 }
 
-// processEvent processes a Matrix event and converts it to our Message format
 func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message {
-	// Ignore non-room messages and our own messages
 	if event.Sender == g.userID {
 		return nil
 	}
@@ -385,13 +346,18 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 			return nil
 		}
 
+		isGroup := true
+		isMentioned := strings.Contains(content.Body, "@") || strings.Contains(content.Body, g.userID)
+
 		return &Message{
-			ID:        event.EventID,
-			Platform:  "matrix",
-			ChannelID: roomID,
-			UserID:    event.Sender,
-			Content:   content.Body,
-			Timestamp: time.Unix(event.OriginServerTS/1000, 0),
+			ID:          event.EventID,
+			Platform:    "matrix",
+			ChannelID:   roomID,
+			UserID:      event.Sender,
+			Content:     content.Body,
+			Timestamp:   time.Unix(event.OriginServerTS/1000, 0),
+			IsGroup:     isGroup,
+			IsMentioned: isMentioned,
 			Metadata: map[string]interface{}{
 				"msg_type": content.MsgType,
 				"format":   content.Format,
@@ -406,13 +372,18 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 			return nil
 		}
 
+		isGroup := true
+		isMentioned := false
+
 		return &Message{
-			ID:        event.EventID,
-			Platform:  "matrix",
-			ChannelID: roomID,
-			UserID:    event.Sender,
-			Content:   fmt.Sprintf("[%s joined/left]", event.Sender),
-			Timestamp: time.Unix(event.OriginServerTS/1000, 0),
+			ID:          event.EventID,
+			Platform:    "matrix",
+			ChannelID:   roomID,
+			UserID:      event.Sender,
+			Content:     fmt.Sprintf("[%s joined/left]", event.Sender),
+			Timestamp:   time.Unix(event.OriginServerTS/1000, 0),
+			IsGroup:     isGroup,
+			IsMentioned: isMentioned,
 			Metadata: map[string]interface{}{
 				"event_type": "membership",
 				"membership": content.Membership,
@@ -423,7 +394,6 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 	return nil
 }
 
-// doRequest performs an HTTP request to the Matrix homeserver
 func (g *MatrixGateway) doRequest(method, path string, body []byte, withAuth bool) ([]byte, error) {
 	resp, err := g.doRequestRaw(method, path, body, withAuth)
 	if err != nil {
@@ -443,7 +413,6 @@ func (g *MatrixGateway) doRequest(method, path string, body []byte, withAuth boo
 	return respBody, nil
 }
 
-// doRequestRaw performs an HTTP request and returns the raw response
 func (g *MatrixGateway) doRequestRaw(method, path string, body []byte, withAuth bool) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != nil {
@@ -464,7 +433,6 @@ func (g *MatrixGateway) doRequestRaw(method, path string, body []byte, withAuth 
 	return client.Do(req)
 }
 
-// GetJoinedRooms returns list of joined rooms
 func (g *MatrixGateway) GetJoinedRooms() ([]string, error) {
 	resp, err := g.doRequest("GET", "/_matrix/client/v3/joined_rooms", nil, true)
 	if err != nil {
@@ -481,7 +449,6 @@ func (g *MatrixGateway) GetJoinedRooms() ([]string, error) {
 	return result.JoinedRooms, nil
 }
 
-// GetRoomMembers returns members of a room
 func (g *MatrixGateway) GetRoomMembers(roomID string) ([]string, error) {
 	resp, err := g.doRequest("GET", fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", url.PathEscape(roomID)), nil, true)
 	if err != nil {
@@ -505,7 +472,6 @@ func (g *MatrixGateway) GetRoomMembers(roomID string) ([]string, error) {
 	return members, nil
 }
 
-// UploadContent uploads media content
 func (g *MatrixGateway) UploadContent(content []byte, contentType, filename string) (string, error) {
 	req, err := http.NewRequest("POST", g.homeserver+"/_matrix/media/v3/upload", strings.NewReader(string(content)))
 	if err != nil {
@@ -540,7 +506,6 @@ func (g *MatrixGateway) UploadContent(content []byte, contentType, filename stri
 	return result.ContentURI, nil
 }
 
-// SendFormattedMessage sends a formatted message (HTML)
 func (g *MatrixGateway) SendFormattedMessage(ctx context.Context, roomID, body, formattedBody string) error {
 	msgContent := matrixRoomMessage{
 		Body:          body,
@@ -565,7 +530,6 @@ func (g *MatrixGateway) SendFormattedMessage(ctx context.Context, roomID, body, 
 	return err
 }
 
-// SetTypingIndicator sends a typing indicator
 func (g *MatrixGateway) SetTypingIndicator(roomID string, isTyping bool, timeout time.Duration) error {
 	payload := map[string]interface{}{
 		"typing": isTyping,
@@ -579,11 +543,4 @@ func (g *MatrixGateway) SetTypingIndicator(roomID string, isTyping bool, timeout
 		url.PathEscape(roomID), url.PathEscape(g.userID)), jsonData, true)
 
 	return err
-}
-
-// IsConnected returns whether the gateway is connected
-func (g *MatrixGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running
 }

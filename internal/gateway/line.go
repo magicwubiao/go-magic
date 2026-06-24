@@ -11,29 +11,21 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// LineGateway implements the LINE Messaging API platform handler
 type LineGateway struct {
+	*BasePlatform
+
 	channelSecret string
 	channelToken  string
 	userID        string
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
-
-	callbackPort int
-	httpServer   *http.Server
+	httpServer *http.Server
 }
 
-// lineWebhookRequest represents incoming webhook data
 type lineWebhookRequest struct {
 	Destination string `json:"destination"`
 	Events      []struct {
@@ -102,53 +94,42 @@ type lineWebhookRequest struct {
 	} `json:"events"`
 }
 
-// lineReplyRequest represents reply message payload
 type lineReplyRequest struct {
 	ReplyToken string               `json:"replyToken"`
 	Messages   []lineMessageContent `json:"messages"`
 }
 
-// linePushRequest represents push message payload
 type linePushRequest struct {
 	To       string               `json:"to"`
 	Messages []lineMessageContent `json:"messages"`
 }
 
-// lineMessageContent represents LINE message content
 type lineMessageContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-	// For image/video/audio messages
-	OriginalContentURL string `json:"originalContentUrl,omitempty"`
-	PreviewImageURL    string `json:"previewImageUrl,omitempty"`
-	// For location message
-	Title     string  `json:"title,omitempty"`
-	Address   string  `json:"address,omitempty"`
-	Latitude  float64 `json:"latitude,omitempty"`
-	Longitude float64 `json:"longitude,omitempty"`
-	// For sticker message
-	PackageID string `json:"packageId,omitempty"`
-	StickerID string `json:"stickerId,omitempty"`
-	// For template message
-	AltText  string      `json:"altText,omitempty"`
-	Template interface{} `json:"template,omitempty"`
-	// For quick reply
-	QuickReply *lineQuickReply `json:"quickReply,omitempty"`
+	Type               string          `json:"type"`
+	Text               string          `json:"text,omitempty"`
+	OriginalContentURL string          `json:"originalContentUrl,omitempty"`
+	PreviewImageURL    string          `json:"previewImageUrl,omitempty"`
+	Title              string          `json:"title,omitempty"`
+	Address            string          `json:"address,omitempty"`
+	Latitude           float64         `json:"latitude,omitempty"`
+	Longitude          float64         `json:"longitude,omitempty"`
+	PackageID          string          `json:"packageId,omitempty"`
+	StickerID          string          `json:"stickerId,omitempty"`
+	AltText            string          `json:"altText,omitempty"`
+	Template           interface{}     `json:"template,omitempty"`
+	QuickReply         *lineQuickReply `json:"quickReply,omitempty"`
 }
 
-// lineQuickReply represents quick reply buttons
 type lineQuickReply struct {
 	Items []lineQuickReplyItem `json:"items"`
 }
 
-// lineQuickReplyItem represents a quick reply item
 type lineQuickReplyItem struct {
 	Type     string               `json:"type"`
 	ImageURL string               `json:"imageUrl,omitempty"`
 	Action   lineQuickReplyAction `json:"action"`
 }
 
-// lineQuickReplyAction represents a quick reply action
 type lineQuickReplyAction struct {
 	Type           string `json:"type"`
 	Label          string `json:"label,omitempty"`
@@ -162,100 +143,51 @@ type lineQuickReplyAction struct {
 	} `json:"datetimePicker,omitempty"`
 }
 
-// NewLineGateway creates a new LINE gateway
 func NewLineGateway(channelSecret, channelToken string) *LineGateway {
-	return &LineGateway{
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &LineGateway{
 		channelSecret: channelSecret,
 		channelToken:  channelToken,
-		agents:        make(map[string]*AgentSession),
-		msgCh:         make(chan Message, 100),
-		stopCh:        make(chan struct{}),
-		callbackPort:  8087,
 	}
+
+	g.BasePlatform = NewBasePlatform("line", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+	g.SetCallbackPort(8087)
+
+	return g
 }
 
-// Name returns the platform name
-func (g *LineGateway) Name() string {
-	return "line"
-}
-
-// Connect establishes connection to LINE
-func (g *LineGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
+func (g *LineGateway) onConnect(ctx context.Context) error {
+	if g.channelSecret == "" || g.channelToken == "" {
+		return fmt.Errorf("LINE channel_secret and channel_token are required")
 	}
-	g.running = true
-	g.mu.Unlock()
 
-	log.Infof("Connecting to LINE gateway...")
+	log.Infof("[LINE] Connecting with webhook server on port %d", g.GetCallbackPort())
 
-	// Start webhook server
 	go g.startHTTPServer()
 
-	log.Info("LINE gateway connected (webhook server started)")
+	log.Info("[LINE] Gateway connected (webhook server started)")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *LineGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
+func (g *LineGateway) onDisconnect() error {
 	if g.httpServer != nil {
 		g.httpServer.Shutdown(context.Background())
+		g.httpServer = nil
 	}
-	close(g.msgCh)
-	g.running = false
 
-	log.Info("LINE gateway disconnected")
+	log.Info("[LINE] Gateway disconnected")
 	return nil
 }
 
-// CheckHealth returns health status
-func (g *LineGateway) CheckHealth() *HealthStatus {
-	g.mu.RLock()
-	running := g.running
-	g.mu.RUnlock()
-
-	status := &HealthStatus{
-		Platform:  "line",
-		Connected: running,
-		Status:    "healthy",
-		Details: map[string]interface{}{
-			"callback_port": g.callbackPort,
-		},
-		Platforms: make(map[string]PlatformStatus),
-	}
-
-	platformStatus := PlatformStatus{
-		Name:   "line",
-		Status: "connected",
-	}
-
-	if !running {
-		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
-		status.Status = "error"
-	}
-
-	status.Platforms["line"] = platformStatus
-	return status
-}
-
-// Receive returns the message channel
-func (g *LineGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// Send sends a push message via LINE
-func (g *LineGateway) Send(ctx context.Context, resp Response) error {
+func (g *LineGateway) onSend(ctx context.Context, resp Response) error {
 	to := resp.ChannelID
 	if to == "" {
 		return fmt.Errorf("user ID (channel_id) is required")
@@ -276,7 +208,6 @@ func (g *LineGateway) Send(ctx context.Context, resp Response) error {
 	return g.pushMessage(ctx, reqBody)
 }
 
-// Reply sends a reply using reply token
 func (g *LineGateway) Reply(replyToken, text string) error {
 	if replyToken == "" {
 		return fmt.Errorf("reply token is required")
@@ -292,7 +223,6 @@ func (g *LineGateway) Reply(replyToken, text string) error {
 	return g.sendReply(context.Background(), reqBody)
 }
 
-// pushMessage sends a push message
 func (g *LineGateway) pushMessage(ctx context.Context, reqBody linePushRequest) error {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -322,7 +252,6 @@ func (g *LineGateway) pushMessage(ctx context.Context, reqBody linePushRequest) 
 	return nil
 }
 
-// sendReply sends a reply message
 func (g *LineGateway) sendReply(ctx context.Context, reqBody lineReplyRequest) error {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -352,7 +281,6 @@ func (g *LineGateway) sendReply(ctx context.Context, reqBody lineReplyRequest) e
 	return nil
 }
 
-// HandleSlashCommand handles commands (not applicable for LINE)
 func (g *LineGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch strings.ToLower(cmd) {
 	case "help":
@@ -378,53 +306,80 @@ func (g *LineGateway) HandleSlashCommand(cmd string, msg Message) (Response, err
 	}
 }
 
-// startHTTPServer starts the webhook server
+func (g *LineGateway) CheckHealth() *HealthStatus {
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "line"
+	status.CallbackPort = g.GetCallbackPort()
+	status.Details["callback_port"] = g.GetCallbackPort()
+
+	if status.Platforms == nil {
+		status.Platforms = make(map[string]PlatformStatus)
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "line",
+		Status: "connected",
+	}
+
+	if !status.Connected {
+		platformStatus.Status = "disconnected"
+		if status.Error != "" {
+			platformStatus.Error = status.Error
+		} else {
+			platformStatus.Error = "Gateway not connected"
+		}
+		status.Status = "error"
+		status.Platforms["line"] = platformStatus
+		return status
+	}
+
+	status.Details["user_id"] = g.userID
+	status.Platforms["line"] = platformStatus
+	return status
+}
+
 func (g *LineGateway) startHTTPServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook", g.handleWebhook)
 
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.callbackPort),
+		Addr:    fmt.Sprintf(":%d", g.GetCallbackPort()),
 		Handler: mux,
 	}
 
 	go func() {
 		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("LINE HTTP server error: %v", err)
+			log.Errorf("[LINE] HTTP server error: %v", err)
+			g.HandleDisconnection(fmt.Errorf("http server error: %w", err))
 		}
 	}()
 }
 
-// handleWebhook handles incoming LINE webhooks
 func (g *LineGateway) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Verify signature
 	signature := r.Header.Get("X-Line-Signature")
 	if !g.verifySignature(r, signature) {
-		log.Warnf("Invalid LINE webhook signature")
+		log.Warnf("[LINE] Invalid webhook signature")
 		http.Error(w, "Invalid signature", http.StatusUnauthorized)
 		return
 	}
 
 	var webhookReq lineWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&webhookReq); err != nil {
-		log.Errorf("Failed to decode webhook: %v", err)
+		log.Errorf("[LINE] Failed to decode webhook: %v", err)
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	// Process events
 	for _, event := range webhookReq.Events {
 		msg := g.processEvent(&event)
 		if msg != nil {
-			select {
-			case g.msgCh <- *msg:
-			default:
-				log.Warnf("LINE message channel full, dropping message")
+			if g.ShouldProcessChannel(msg.ChannelID) {
+				g.EmitMessage(*msg)
 			}
 		}
 	}
@@ -432,14 +387,12 @@ func (g *LineGateway) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// verifySignature verifies the webhook signature
 func (g *LineGateway) verifySignature(r *http.Request, signature string) bool {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return false
 	}
 
-	// Restore body
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
 	hash := hmac.New(sha256.New, []byte(g.channelSecret))
@@ -449,7 +402,6 @@ func (g *LineGateway) verifySignature(r *http.Request, signature string) bool {
 	return hmac.Equal([]byte(signature), []byte(expectedSig))
 }
 
-// processEvent processes a LINE event and converts it to our Message format
 func (g *LineGateway) processEvent(event *struct {
 	Type       string `json:"type"`
 	ReplyToken string `json:"replyToken,omitempty"`
@@ -514,7 +466,6 @@ func (g *LineGateway) processEvent(event *struct {
 		DeviceID string `json:"deviceId"`
 	} `json:"things,omitempty"`
 }) *Message {
-	// Get user ID from source
 	var userID string
 	var channelID string
 	switch event.Source.Type {
@@ -529,7 +480,6 @@ func (g *LineGateway) processEvent(event *struct {
 		channelID = event.Source.RoomID
 	}
 
-	// Process different event types
 	var content string
 	var msgType string
 
@@ -583,13 +533,18 @@ func (g *LineGateway) processEvent(event *struct {
 		return nil
 	}
 
+	isGroup := event.Source.Type == "group" || event.Source.Type == "room"
+	isMentioned := false
+
 	return &Message{
-		ID:        event.Message.ID,
-		Platform:  "line",
-		ChannelID: channelID,
-		UserID:    userID,
-		Content:   content,
-		Timestamp: time.Unix(event.Timestamp/1000, 0),
+		ID:          event.Message.ID,
+		Platform:    "line",
+		ChannelID:   channelID,
+		UserID:      userID,
+		Content:     content,
+		Timestamp:   time.Unix(event.Timestamp/1000, 0),
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"type":         event.Type,
 			"message_type": msgType,
@@ -599,7 +554,6 @@ func (g *LineGateway) processEvent(event *struct {
 	}
 }
 
-// SendText sends a text message
 func (g *LineGateway) SendText(to, text string) error {
 	reqBody := linePushRequest{
 		To: to,
@@ -610,7 +564,6 @@ func (g *LineGateway) SendText(to, text string) error {
 	return g.pushMessage(context.Background(), reqBody)
 }
 
-// SendImage sends an image message
 func (g *LineGateway) SendImage(to, originalURL, previewURL string) error {
 	reqBody := linePushRequest{
 		To: to,
@@ -625,7 +578,6 @@ func (g *LineGateway) SendImage(to, originalURL, previewURL string) error {
 	return g.pushMessage(context.Background(), reqBody)
 }
 
-// SendLocation sends a location message
 func (g *LineGateway) SendLocation(to, title, address string, lat, lon float64) error {
 	reqBody := linePushRequest{
 		To: to,
@@ -642,7 +594,6 @@ func (g *LineGateway) SendLocation(to, title, address string, lat, lon float64) 
 	return g.pushMessage(context.Background(), reqBody)
 }
 
-// SendTemplate sends a template message
 func (g *LineGateway) SendTemplate(to, altText string, template interface{}) error {
 	reqBody := linePushRequest{
 		To: to,
@@ -657,7 +608,6 @@ func (g *LineGateway) SendTemplate(to, altText string, template interface{}) err
 	return g.pushMessage(context.Background(), reqBody)
 }
 
-// GetUserProfile gets user profile information
 func (g *LineGateway) GetUserProfile(userID string) (map[string]interface{}, error) {
 	req, err := http.NewRequest("GET", "https://api.line.me/v2/bot/profile/"+userID, nil)
 	if err != nil {
@@ -681,7 +631,6 @@ func (g *LineGateway) GetUserProfile(userID string) (map[string]interface{}, err
 	return profile, nil
 }
 
-// GetGroupMemberProfile gets group member profile
 func (g *LineGateway) GetGroupMemberProfile(groupID, userID string) (map[string]interface{}, error) {
 	req, err := http.NewRequest("GET", fmt.Sprintf("https://api.line.me/v2/bot/group/%s/member/%s", groupID, userID), nil)
 	if err != nil {
@@ -705,7 +654,6 @@ func (g *LineGateway) GetGroupMemberProfile(groupID, userID string) (map[string]
 	return profile, nil
 }
 
-// LeaveGroup makes the bot leave a group
 func (g *LineGateway) LeaveGroup(groupID string) error {
 	req, err := http.NewRequest("POST", fmt.Sprintf("https://api.line.me/v2/bot/group/%s/leave", groupID), nil)
 	if err != nil {
@@ -724,7 +672,6 @@ func (g *LineGateway) LeaveGroup(groupID string) error {
 	return nil
 }
 
-// LeaveRoom makes the bot leave a room
 func (g *LineGateway) LeaveRoom(roomID string) error {
 	req, err := http.NewRequest("POST", fmt.Sprintf("https://api.line.me/v2/bot/room/%s/leave", roomID), nil)
 	if err != nil {
@@ -743,7 +690,6 @@ func (g *LineGateway) LeaveRoom(roomID string) error {
 	return nil
 }
 
-// RichMenu represents LINE rich menu
 type RichMenu struct {
 	Size        richMenuSize `json:"size"`
 	Selected    bool         `json:"selected"`
@@ -755,23 +701,14 @@ type RichMenu struct {
 	} `json:"areas"`
 }
 
-// richMenuSize represents rich menu size
 type richMenuSize struct {
 	Width  int `json:"width"`
 	Height int `json:"height"`
 }
 
-// richMenuBounds represents rich menu bounds
 type richMenuBounds struct {
 	X      int `json:"x"`
 	Y      int `json:"y"`
 	Width  int `json:"width"`
 	Height int `json:"height"`
-}
-
-// IsConnected returns whether the gateway is connected
-func (g *LineGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.httpServer != nil
 }

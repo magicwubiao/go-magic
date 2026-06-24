@@ -21,12 +21,9 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// WeComAppGateway implements WeCom (Enterprise WeChat) application message mode
-// This mode requires:
-// - A verified enterprise account (已认证企业)
-// - Application credentials (corpID + secret)
-// - Properly configured callback URL in WeCom admin console
 type WeComAppGateway struct {
+	*BasePlatform
+
 	corpID         string
 	agentID        string
 	secret         string
@@ -36,111 +33,66 @@ type WeComAppGateway struct {
 	tokenMu        sync.RWMutex
 	tokenExpiresAt time.Time
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	agents map[string]*AgentSession
+	mu     sync.RWMutex
 
-	// Callback config
-	callbackPort int
-
-	// AES encryption
 	aesKey []byte
 
-	// Reconnection
-	maxRetries     int
-	retryDelay     time.Duration
-	currentRetries int
-
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
-
-	// HTTP client
 	httpClient *http.Client
 }
 
-// NewWeComAppGateway creates a new WeCom application message mode gateway
 func NewWeComAppGateway(corpID, agentID, secret string) *WeComAppGateway {
-	return &WeComAppGateway{
-		corpID:       corpID,
-		agentID:      agentID,
-		secret:       secret,
-		agents:       make(map[string]*AgentSession),
-		msgCh:        make(chan Message, 100),
-		stopCh:       make(chan struct{}),
-		callbackPort: 8080,
-		maxRetries:   5,
-		retryDelay:   time.Second * 5,
-		httpClient:   &http.Client{},
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  5,
+		"retry_delay":  5,
 	}
-}
 
-// SetChannelFilter sets the channel allowlist and blocklist
-func (g *WeComAppGateway) SetChannelFilter(allowed, blocked []string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
-}
-
-// Name returns the platform name
-func (g *WeComAppGateway) Name() string {
-	return "wecom_app"
-}
-
-// Connect establishes connection to WeCom
-func (g *WeComAppGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
+	g := &WeComAppGateway{
+		corpID:     corpID,
+		agentID:    agentID,
+		secret:     secret,
+		agents:     make(map[string]*AgentSession),
+		httpClient: &http.Client{},
 	}
-	g.running = true
-	g.mu.Unlock()
 
-	log.Infof("Connecting to WeCom App gateway...")
+	g.BasePlatform = NewBasePlatform("wecom", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+	g.SetCallbackPort(8080)
+
+	return g
+}
+
+func (g *WeComAppGateway) onConnect(ctx context.Context) error {
+	log.Infof("[WeCom App] Connecting gateway...")
 
 	if err := g.refreshToken(); err != nil {
-		log.Errorf("Failed to get WeCom token: %v", err)
+		log.Errorf("[WeCom App] Failed to get token: %v", err)
 		return err
 	}
 
-	go g.tokenRefresher()
-	go g.startCallbackServer()
+	go g.tokenRefresher(ctx)
+	go g.startCallbackServer(ctx)
 
-	log.Info("WeCom App gateway connected")
+	log.Info("[WeCom App] Gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *WeComAppGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
-	g.running = false
-	g.currentRetries = 0
-
-	log.Info("WeCom App gateway disconnected")
+func (g *WeComAppGateway) onDisconnect() error {
+	log.Info("[WeCom App] Gateway disconnected")
 	return nil
 }
 
-// Send sends a message (enhanced to support rich content)
-func (g *WeComAppGateway) Send(ctx context.Context, resp Response) error {
+func (g *WeComAppGateway) onSend(ctx context.Context, resp Response) error {
 	if resp.ChannelID != "" {
 		content := resp.Content
-		// Check if content is rich text (starts with { or [)
 		if strings.HasPrefix(strings.TrimSpace(content), "{") ||
 			strings.HasPrefix(strings.TrimSpace(content), "[") {
-			// Try to send as rich content
 			if err := g.sendRichMessage(resp.ChannelID, content); err != nil {
-				log.Warnf("Failed to send rich message, falling back to text: %v", err)
+				log.Warnf("[WeCom App] Failed to send rich message, falling back to text: %v", err)
 				return g.sendMessage(resp.ChannelID, content)
 			}
 			return nil
@@ -150,12 +102,6 @@ func (g *WeComAppGateway) Send(ctx context.Context, resp Response) error {
 	return nil
 }
 
-// Receive returns a channel of incoming messages
-func (g *WeComAppGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// HandleSlashCommand handles a slash command
 func (g *WeComAppGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
 	switch cmd {
 	case "help":
@@ -167,15 +113,15 @@ func (g *WeComAppGateway) HandleSlashCommand(cmd string, msg Message) (Response,
 	}
 }
 
-// CheckHealth returns detailed health status for WeCom App gateway
 func (g *WeComAppGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:     "wecom_app",
-		Connected:    g.IsConnected(),
-		Status:       "healthy",
-		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
-		Platforms:    make(map[string]PlatformStatus),
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "wecom"
+	status.CallbackPort = g.GetCallbackPort()
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
+	}
+	if status.Platforms == nil {
+		status.Platforms = make(map[string]PlatformStatus)
 	}
 
 	platformStatus := PlatformStatus{
@@ -191,7 +137,6 @@ func (g *WeComAppGateway) CheckHealth() *HealthStatus {
 		return status
 	}
 
-	// Check token validity
 	g.tokenMu.RLock()
 	token := g.accessToken
 	tokenExpiry := g.tokenExpiresAt
@@ -218,20 +163,12 @@ func (g *WeComAppGateway) CheckHealth() *HealthStatus {
 	}
 
 	status.Details["mode"] = "app"
-	status.Details["callback_port"] = g.callbackPort
+	status.Details["callback_port"] = g.GetCallbackPort()
 	status.Platforms["wecom_app"] = platformStatus
 
 	return status
 }
 
-// IsConnected checks if connected to WeCom
-func (g *WeComAppGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.accessToken != ""
-}
-
-// refreshToken gets a new access token
 func (g *WeComAppGateway) refreshToken() error {
 	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s",
 		g.corpID, g.secret)
@@ -264,73 +201,67 @@ func (g *WeComAppGateway) refreshToken() error {
 	g.tokenExpiresAt = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
 	g.tokenMu.Unlock()
 
-	log.Debugf("WeCom token refreshed")
+	log.Debugf("[WeCom App] Token refreshed")
 	return nil
 }
 
-// tokenRefresher periodically refreshes the token
-func (g *WeComAppGateway) tokenRefresher() {
+func (g *WeComAppGateway) tokenRefresher(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			g.mu.RLock()
-			running := g.running
-			g.mu.RUnlock()
-
-			if !running {
+			if !g.IsConnected() {
 				return
 			}
 
 			if err := g.refreshToken(); err != nil {
-				log.Errorf("Failed to refresh WeCom token: %v", err)
+				log.Errorf("[WeCom App] Failed to refresh token: %v", err)
 			}
 		}
 	}
 }
 
-// startCallbackServer starts the HTTP server for callbacks
-func (g *WeComAppGateway) startCallbackServer() {
+func (g *WeComAppGateway) startCallbackServer(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/wecom/callback", g.handleCallback)
 
-	addr := fmt.Sprintf(":%d", g.callbackPort)
+	addr := fmt.Sprintf(":%d", g.GetCallbackPort())
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
 
-	log.Infof("WeCom App callback server starting on %s", addr)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(shutdownCtx)
+	}()
+
+	log.Infof("[WeCom App] Callback server starting on %s", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Errorf("WeCom App callback server error: %v", err)
+		log.Errorf("[WeCom App] Callback server error: %v", err)
+		g.HandleDisconnection(err)
 	}
 }
 
-// SetCallbackPort sets the callback server port
-func (g *WeComAppGateway) SetCallbackPort(port int) {
-	g.callbackPort = port
-}
-
-// SetAESKey sets the AES key for callback encryption
 func (g *WeComAppGateway) SetAESKey(key string) {
 	g.encodingAESKey = key
 	g.aesKey = []byte(key + "=")[:32]
 }
 
-// handleCallback handles incoming callbacks from WeCom
 func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	echostr := r.URL.Query().Get("echostr")
 
-	// Handle URL verification
 	if echostr != "" {
 		decoded, err := base64.StdEncoding.DecodeString(echostr)
 		if err != nil {
-			log.Errorf("Failed to decode echostr: %v", err)
+			log.Errorf("[WeCom App] Failed to decode echostr: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -338,7 +269,7 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 		if g.encodingAESKey != "" {
 			decrypted, err := g.decryptWeCom(decoded)
 			if err != nil {
-				log.Errorf("Failed to decrypt echostr: %v", err)
+				log.Errorf("[WeCom App] Failed to decrypt echostr: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -356,12 +287,11 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Errorf("Failed to read callback body: %v", err)
+		log.Errorf("[WeCom App] Failed to read callback body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Parse XML callback
 	var callback struct {
 		XMLName      xml.Name `xml:"xml"`
 		Encrypt      string   `xml:"Encrypt"`
@@ -372,24 +302,23 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := xml.Unmarshal(body, &callback); err != nil {
-		log.Errorf("Failed to parse callback XML: %v", err)
+		log.Errorf("[WeCom App] Failed to parse callback XML: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Decrypt if needed
 	var msgStr string
 	if callback.Encrypt != "" && g.encodingAESKey != "" {
 		decoded, err := base64.StdEncoding.DecodeString(callback.Encrypt)
 		if err != nil {
-			log.Errorf("Failed to decode encrypt: %v", err)
+			log.Errorf("[WeCom App] Failed to decode encrypt: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		decrypted, err := g.decryptWeCom(decoded)
 		if err != nil {
-			log.Errorf("Failed to decrypt callback: %v", err)
+			log.Errorf("[WeCom App] Failed to decrypt callback: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -398,7 +327,6 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 		msgStr = callback.Content
 	}
 
-	// Parse decrypted message
 	var event struct {
 		MsgType      string `xml:"MsgType"`
 		Content      string `xml:"Content"`
@@ -408,38 +336,34 @@ func (g *WeComAppGateway) handleCallback(w http.ResponseWriter, r *http.Request)
 		AgentID      string `xml:"AgentID"`
 		Event        string `xml:"Event"`
 		CreateTime   int64  `xml:"CreateTime"`
-		// Media fields
-		MediaID  string `xml:"MediaId,omitempty"`
-		PicURL   string `xml:"PicUrl,omitempty"`
-		Format   string `xml:"Format,omitempty"`
-		ThumbURL string `xml:"ThumbMediaId,omitempty"`
-		Location string `xml:"Location,omitempty"`
-		Scale    string `xml:"Scale,omitempty"`
-		Label    string `xml:"Label,omitempty"`
-		Title    string `xml:"Title,omitempty"`
-		Desc     string `xml:"Description,omitempty"`
-		URL      string `xml:"Url,omitempty"`
+		MediaID      string `xml:"MediaId,omitempty"`
+		PicURL       string `xml:"PicUrl,omitempty"`
+		Format       string `xml:"Format,omitempty"`
+		ThumbURL     string `xml:"ThumbMediaId,omitempty"`
+		Location     string `xml:"Location,omitempty"`
+		Scale        string `xml:"Scale,omitempty"`
+		Label        string `xml:"Label,omitempty"`
+		Title        string `xml:"Title,omitempty"`
+		Desc         string `xml:"Description,omitempty"`
+		URL          string `xml:"Url,omitempty"`
 	}
 
 	if err := xml.Unmarshal([]byte(msgStr), &event); err != nil {
-		log.Errorf("Failed to parse callback event: %v", err)
+		log.Errorf("[WeCom App] Failed to parse callback event: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Handle different message types
 	switch event.MsgType {
 	case "text", "event":
 		g.handleMessageEvent(event)
 	default:
-		log.Debugf("Unhandled message type: %s", event.MsgType)
+		log.Debugf("[WeCom App] Unhandled message type: %s", event.MsgType)
 	}
 
-	// Respond success
 	w.WriteHeader(http.StatusOK)
 }
 
-// decryptWeCom decrypts a WeCom callback
 func (g *WeComAppGateway) decryptWeCom(encrypted []byte) ([]byte, error) {
 	if len(g.aesKey) != 32 {
 		return nil, fmt.Errorf("invalid AES key length")
@@ -456,19 +380,15 @@ func (g *WeComAppGateway) decryptWeCom(encrypted []byte) ([]byte, error) {
 	mode := cipher.NewCBCDecrypter(block, iv)
 	mode.CryptBlocks(encrypted, encrypted)
 
-	// Remove PKCS5 padding
 	padding := int(encrypted[len(encrypted)-1])
 	encrypted = encrypted[:len(encrypted)-padding]
 
-	// Remove random bytes and appid from beginning
-	// Format: random(16) + msg_len(4) + msg + appid
 	msgLen := int(encrypted[16])<<24 | int(encrypted[17])<<16 | int(encrypted[18])<<8 | int(encrypted[19])
 	msg := encrypted[20 : 20+msgLen]
 
 	return msg, nil
 }
 
-// handleMessageEvent processes a message receive event
 func (g *WeComAppGateway) handleMessageEvent(event struct {
 	MsgType      string `xml:"MsgType"`
 	Content      string `xml:"Content"`
@@ -478,33 +398,25 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 	AgentID      string `xml:"AgentID"`
 	Event        string `xml:"Event"`
 	CreateTime   int64  `xml:"CreateTime"`
-	// Media fields
-	MediaID  string `xml:"MediaId,omitempty"`
-	PicURL   string `xml:"PicUrl,omitempty"`
-	Format   string `xml:"Format,omitempty"`
-	ThumbURL string `xml:"ThumbMediaId,omitempty"`
-	Location string `xml:"Location,omitempty"`
-	Scale    string `xml:"Scale,omitempty"`
-	Label    string `xml:"Label,omitempty"`
-	Title    string `xml:"Title,omitempty"`
-	Desc     string `xml:"Description,omitempty"`
-	URL      string `xml:"Url,omitempty"`
+	MediaID      string `xml:"MediaId,omitempty"`
+	PicURL       string `xml:"PicUrl,omitempty"`
+	Format       string `xml:"Format,omitempty"`
+	ThumbURL     string `xml:"ThumbMediaId,omitempty"`
+	Location     string `xml:"Location,omitempty"`
+	Scale        string `xml:"Scale,omitempty"`
+	Label        string `xml:"Label,omitempty"`
+	Title        string `xml:"Title,omitempty"`
+	Desc         string `xml:"Description,omitempty"`
+	URL          string `xml:"Url,omitempty"`
 }) {
-	// Check if this is for our agent
 	if event.AgentID != "" && event.AgentID != g.agentID {
 		return
 	}
 
-	// Check channel allowlist/blocklist (WeCom uses FromUserName as channel/user ID)
-	g.mu.RLock()
-	allowed := g.allowedChannels
-	blocked := g.blockedChannels
-	g.mu.RUnlock()
-	if !ShouldProcessChannel(event.FromUserName, allowed, blocked) {
+	if !g.ShouldProcessChannel(event.FromUserName) {
 		return
 	}
 
-	// Handle different message types
 	var content string
 	var mediaURLs []MediaAttachment
 
@@ -522,7 +434,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 					Caption: event.PicURL,
 				})
 			} else {
-				log.Debugf("Failed to download WeCom image: %v", err)
+				log.Debugf("[WeCom App] Failed to download image: %v", err)
 				content = "[Image]"
 			}
 		}
@@ -537,7 +449,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 					MimeType: "audio/" + event.Format,
 				})
 			} else {
-				log.Debugf("Failed to download WeCom voice: %v", err)
+				log.Debugf("[WeCom App] Failed to download voice: %v", err)
 				content = "[Voice message]"
 			}
 		} else {
@@ -554,7 +466,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 					Caption: event.Desc,
 				})
 			} else {
-				log.Debugf("Failed to download WeCom video: %v", err)
+				log.Debugf("[WeCom App] Failed to download video: %v", err)
 				content = "[Video]"
 			}
 		} else {
@@ -568,21 +480,25 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		content = fmt.Sprintf("[Link: %s] %s - %s", event.Title, event.Desc, event.URL)
 
 	case "event":
-		// Event messages (like menu clicks) - content is typically in event type
 		content = "[事件]"
 
 	default:
-		log.Debugf("Unhandled WeCom message type: %s", event.MsgType)
+		log.Debugf("[WeCom App] Unhandled message type: %s", event.MsgType)
 		return
 	}
 
+	isGroup := strings.HasPrefix(event.FromUserName, "wr")
+	isMentioned := false
+
 	msg := Message{
-		ID:        event.MsgId,
-		Platform:  "wecom_app",
-		ChannelID: event.FromUserName, // User ID is channel ID in this context
-		UserID:    event.FromUserName,
-		Content:   content,
-		Timestamp: time.Unix(event.CreateTime, 0),
+		ID:          event.MsgId,
+		Platform:    "wecom_app",
+		ChannelID:   event.FromUserName,
+		UserID:      event.FromUserName,
+		Content:     content,
+		Timestamp:   time.Unix(event.CreateTime, 0),
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"to_user":  event.ToUserName,
 			"agent_id": event.AgentID,
@@ -592,24 +508,13 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		MediaURLs: mediaURLs,
 	}
 
-	// 企业微信事件消息（如 click 菜单事件）的 MsgId 可能为空
-	// 此时使用 "wecom_" + 时间戳 + FromUserName 生成唯一ID
 	if msg.ID == "" {
 		msg.ID = fmt.Sprintf("wecom_%d_%s", event.CreateTime, event.FromUserName)
 	}
 
-	g.mu.RLock()
-	msgCh := g.msgCh
-	g.mu.RUnlock()
-
-	select {
-	case msgCh <- msg:
-	default:
-		log.Warnf("WeCom App message channel full, dropping message")
-	}
+	g.EmitMessage(msg)
 }
 
-// downloadMedia downloads a media file from WeCom using media_id
 func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, error) {
 	g.tokenMu.RLock()
 	token := g.accessToken
@@ -631,7 +536,6 @@ func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, erro
 		return "", fmt.Errorf("failed to download media: status %d", resp.StatusCode)
 	}
 
-	// Check content type
 	contentType := resp.Header.Get("Content-Type")
 	var ext string
 	switch mediaType {
@@ -664,12 +568,10 @@ func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, erro
 		return "", fmt.Errorf("empty media data")
 	}
 
-	// Check if this is an error response
 	if strings.HasPrefix(string(data), "{\"errcode\"") {
 		return "", fmt.Errorf("WeCom API error: %s", string(data))
 	}
 
-	// Save to disk
 	dir := filepath.Join(config.GetMagicHome(), "wecom", "media", mediaType)
 	os.MkdirAll(dir, 0755)
 
@@ -682,7 +584,6 @@ func (g *WeComAppGateway) downloadMedia(mediaID, mediaType string) (string, erro
 	return path, nil
 }
 
-// sendMessage sends a message via WeCom API
 func (g *WeComAppGateway) sendMessage(userID, content string) error {
 	g.tokenMu.RLock()
 	token := g.accessToken
@@ -722,12 +623,10 @@ func (g *WeComAppGateway) sendMessage(userID, content string) error {
 	return nil
 }
 
-// SendText sends a text message
 func (g *WeComAppGateway) SendText(userID, content string) error {
 	return g.sendMessage(userID, content)
 }
 
-// sendRichMessage sends a rich text or markdown message
 func (g *WeComAppGateway) sendRichMessage(userID, content string) error {
 	g.tokenMu.RLock()
 	token := g.accessToken
@@ -735,10 +634,8 @@ func (g *WeComAppGateway) sendRichMessage(userID, content string) error {
 
 	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=%s", token)
 
-	// Try to parse as JSON (rich content format)
 	var richContent map[string]interface{}
 	if err := json.Unmarshal([]byte(content), &richContent); err == nil {
-		// It's valid JSON, use it directly
 		richContent["touser"] = userID
 		richContent["agentid"] = g.agentID
 
@@ -764,40 +661,17 @@ func (g *WeComAppGateway) sendRichMessage(userID, content string) error {
 		return nil
 	}
 
-	// Fallback to text
 	return g.sendMessage(userID, content)
 }
 
-// SendToUser sends a message to a user
 func (g *WeComAppGateway) SendToUser(userID, content string) error {
 	return g.sendMessage(userID, content)
 }
 
-// Reconnect attempts to reconnect with exponential backoff
 func (g *WeComAppGateway) Reconnect(ctx context.Context) error {
-	g.mu.Lock()
-	g.currentRetries++
-	retryDelay := g.retryDelay * time.Duration(g.currentRetries)
-	g.mu.Unlock()
-
-	log.Infof("Attempting to reconnect to WeCom App (attempt %d, delay %v)", g.currentRetries, retryDelay)
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(retryDelay):
-	}
-
-	if err := g.Connect(ctx); err != nil {
-		if g.currentRetries < g.maxRetries {
-			return g.Reconnect(ctx)
-		}
-		return err
-	}
-	return nil
+	return g.Connect(ctx)
 }
 
-// GetAccessToken returns the current access token
 func (g *WeComAppGateway) GetAccessToken() string {
 	g.tokenMu.RLock()
 	defer g.tokenMu.RUnlock()

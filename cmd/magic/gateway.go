@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -1052,7 +1051,6 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	platformCount := 0
 	agentHandler := NewGatewayAgentHandler()
 	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{
 		EnableAPI: true,
@@ -1074,353 +1072,12 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	go func() {
 		sig := <-sigCh
 		fmt.Printf("\nShutting down gateway (%v)...\n", sig)
-		// Mark all active sessions as interrupted before shutdown
 		agentHandler.markAllInterrupted()
 		cancel()
 	}()
 
-	// Start Telegram if configured
-	if tgCfg, ok := cfg.Gateway.Platforms["telegram"]; ok && tgCfg.Enabled && shouldStartPlatform("telegram") {
-		platformCount++
-		if tgCfg.Token == "" {
-			fmt.Println("[Telegram] Token not configured!")
-		} else {
-			fmt.Println("[Telegram] Starting...")
-			tgConfig := &gateway.TelegramConfig{
-				Token:           tgCfg.Token,
-				AllowGroups:     true,
-				StreamingReply:  true,
-				AllowedChannels: tgCfg.AllowedChannels,
-				BlockedChannels: tgCfg.BlockedChannels,
-			}
-			tgGw, err := gateway.NewTelegramHandler(tgCfg.Token, tgConfig)
-			if err != nil {
-				fmt.Printf("[Telegram] Failed: %v\n", err)
-			} else {
-				gw.RegisterPlatform("telegram", tgGw)
-			}
-		}
-	}
-
-	// Start Discord if configured
-	if dcCfg, ok := cfg.Gateway.Platforms["discord"]; ok && dcCfg.Enabled && shouldStartPlatform("discord") {
-		platformCount++
-		if dcCfg.Token == "" {
-			fmt.Println("[Discord] Token not configured!")
-		} else {
-			fmt.Println("[Discord] Starting...")
-			dgw, err := gateway.NewDiscordGateway(dcCfg.Token)
-			if err != nil {
-				fmt.Printf("[Discord] Failed: %v\n", err)
-			} else {
-				// Set channel filter
-				dgw.SetChannelFilter(dcCfg.AllowedChannels, dcCfg.BlockedChannels)
-				if err := dgw.Connect(ctx); err != nil {
-					fmt.Printf("[Discord] Failed to connect: %v\n", err)
-				} else {
-					gw.RegisterPlatform("discord", dgw)
-				}
-			}
-		}
-	}
-
-	// Start WeCom if configured
-	if wcCfg, ok := cfg.Gateway.Platforms["wecom"]; ok && wcCfg.Enabled && shouldStartPlatform("wecom") {
-		platformCount++
-		if wcCfg.Mode == "app" {
-			// Traditional app message mode (requires corp_id + secret + public IP)
-			if wcCfg.CorpID == "" || wcCfg.Secret == "" {
-				fmt.Println("[WeCom] Config incomplete (app mode requires corp_id and secret)!")
-			} else {
-				fmt.Println("[WeCom] Starting in app mode (callback-based)...")
-				wcgw := gateway.NewWeComAppGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
-				if err := wcgw.Connect(ctx); err != nil {
-					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
-				} else {
-					gw.RegisterPlatform("wecom", wcgw)
-				}
-			}
-		} else {
-			// QR code login mode (default, only needs corp_id + agent_id)
-			if wcCfg.CorpID == "" || wcCfg.AgentID == "" {
-				fmt.Println("[WeCom] Config incomplete (QR mode requires corp_id and agent_id)!")
-			} else {
-				fmt.Println("[WeCom] Starting in QR mode...")
-				wcgw := gateway.NewWeComQRGateway(wcCfg.CorpID, wcCfg.AgentID, wcCfg.Secret)
-				wcgw.SetChannelFilter(wcCfg.AllowedChannels, wcCfg.BlockedChannels)
-				wcgw.SetQRCallback(func(qrURL string) {
-					fmt.Println("\n[WeCom] Scan this QR code with WeCom App:")
-					qrterminal.GenerateHalfBlock(qrURL, qrterminal.M, os.Stdout)
-					fmt.Println()
-				})
-				if err := wcgw.Connect(ctx); err != nil {
-					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
-				} else {
-					gw.RegisterPlatform("wecom", wcgw)
-				}
-			}
-		}
-	}
-
-	// Start QQ if configured
-	if qqCfg, ok := cfg.Gateway.Platforms["qq"]; ok && qqCfg.Enabled && shouldStartPlatform("qq") {
-		platformCount++
-		if qqCfg.Number == "" && qqCfg.AppID == "" {
-			fmt.Println("[QQ] Config incomplete (need app_id/number and app_secret)!")
-		} else {
-			fmt.Println("[QQ] Starting...")
-			appID := qqCfg.AppID
-			if appID == "" {
-				appID = qqCfg.Number
-			}
-			appSecret := qqCfg.AppSecret
-			if appSecret == "" {
-				appSecret = qqCfg.Password
-			}
-			qqGw := gateway.NewQQGateway(appID, appSecret)
-			if err := qqGw.Connect(ctx); err != nil {
-				fmt.Printf("[QQ] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("qq", qqGw)
-			}
-		}
-	}
-
-	// Start DingTalk if configured
-	if dtCfg, ok := cfg.Gateway.Platforms["dingtalk"]; ok && dtCfg.Enabled && shouldStartPlatform("dingtalk") {
-		platformCount++
-		if dtCfg.AppKey == "" || dtCfg.AppSecret == "" {
-			fmt.Println("[DingTalk] Config incomplete (need app_key and app_secret)!")
-		} else {
-			fmt.Println("[DingTalk] Starting...")
-			dtGw := gateway.NewDingTalkGateway(dtCfg.AppKey, dtCfg.AppSecret)
-			if dtCfg.AgentID != "" {
-				dtGw.SetAgentID(dtCfg.AgentID)
-			}
-			if err := dtGw.Connect(ctx); err != nil {
-				fmt.Printf("[DingTalk] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("dingtalk", dtGw)
-			}
-		}
-	}
-
-	// Start Feishu/Lark if configured
-	if fsCfg, ok := cfg.Gateway.Platforms["feishu"]; ok && fsCfg.Enabled && shouldStartPlatform("feishu") {
-		platformCount++
-		if fsCfg.AppID == "" || fsCfg.AppSecret == "" {
-			fmt.Println("[Feishu] Config incomplete (need app_id and app_secret)!")
-		} else {
-			fmt.Println("[Feishu/Lark] Starting...")
-			fsGw := gateway.NewFeishuGateway(fsCfg.AppID, fsCfg.AppSecret)
-			// Set channel filter
-			fsGw.SetChannelFilter(fsCfg.AllowedChannels, fsCfg.BlockedChannels)
-			if err := fsGw.Connect(ctx); err != nil {
-				fmt.Printf("[Feishu] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("feishu", fsGw)
-			}
-		}
-	}
-
-	// Start WeChat (Official Account) if configured
-	if wxCfg, ok := cfg.Gateway.Platforms["wechat"]; ok && wxCfg.Enabled && shouldStartPlatform("wechat") {
-		platformCount++
-		if wxCfg.AppID == "" || wxCfg.AppSecret == "" {
-			fmt.Println("[WeChat] Config incomplete (need app_id and app_secret)!")
-			fmt.Println("[WeChat] For personal WeChat account, use 'wechat_ilink' platform instead.")
-		} else if wxCfg.Mode == "callback" {
-			// Traditional callback mode (requires public IP + verified service account)
-			fmt.Println("[WeChat] Starting in callback mode (webhook-based)...")
-			wxGw := gateway.NewWeChatCallbackGateway(wxCfg.AppID, wxCfg.AppSecret, wxCfg.Token, wxCfg.AESKey)
-			if err := wxGw.Connect(ctx); err != nil {
-				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("wechat", wxGw)
-			}
-		} else {
-			// QR code login mode (default, no public IP required)
-			fmt.Println("[WeChat] Starting in QR mode (OAuth2 scan)...")
-			wxGw := gateway.NewWeChatQRGateway(wxCfg.AppID, wxCfg.AppSecret)
-
-			// Set QR callback for display
-			wxGw.SetQRCallback(func(qrURL string) {
-				fmt.Println("\n[WeChat] Scan this QR code with WeChat App:")
-				qrterminal.GenerateHalfBlock(qrURL, qrterminal.M, os.Stdout)
-				fmt.Println()
-			})
-
-			if err := wxGw.Connect(ctx); err != nil {
-				fmt.Printf("[WeChat] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("wechat", wxGw)
-			}
-		}
-	}
-
-	// Start Slack if configured
-	if slackCfg, ok := cfg.Gateway.Platforms["slack"]; ok && slackCfg.Enabled && shouldStartPlatform("slack") {
-		platformCount++
-		if slackCfg.Token == "" || slackCfg.AppSecret == "" {
-			fmt.Println("[Slack] Config incomplete (need token and app_secret)!")
-		} else {
-			fmt.Println("[Slack] Starting...")
-			slackGw := gateway.NewSlackGateway(slackCfg.Token, slackCfg.AppSecret)
-			// Set channel filter
-			slackGw.SetChannelFilter(slackCfg.AllowedChannels, slackCfg.BlockedChannels)
-			if err := slackGw.Connect(ctx); err != nil {
-				fmt.Printf("[Slack] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("slack", slackGw)
-			}
-		}
-	}
-
-	// Start WhatsApp if configured
-	if waCfg, ok := cfg.Gateway.Platforms["whatsapp"]; ok && waCfg.Enabled && shouldStartPlatform("whatsapp") {
-		platformCount++
-		if waCfg.Mode == "business" {
-			// WhatsApp Business API mode (webhook-based)
-			if waCfg.Token == "" || waCfg.AppSecret == "" {
-				fmt.Println("[WhatsApp] Business mode: need token and app_secret!")
-			} else {
-				fmt.Println("[WhatsApp Business] Starting...")
-				waGw := gateway.NewWhatsAppBusinessGateway(waCfg.AppID, waCfg.Token, waCfg.AppSecret, waCfg.VerifyToken)
-				// Set channel filter
-				waGw.SetChannelFilter(waCfg.AllowedChannels, waCfg.BlockedChannels)
-				if err := waGw.Connect(ctx); err != nil {
-					fmt.Printf("[WhatsApp Business] Failed to connect: %v\n", err)
-				} else {
-					gw.RegisterPlatform("whatsapp_business", waGw)
-				}
-			}
-		} else {
-			// Personal WhatsApp with QR login (default)
-			dataDir := waCfg.DataDir
-			if dataDir == "" {
-				dataDir = "" // will use the default magic home / whatsapp directory
-			}
-			fmt.Println("[WhatsApp] Starting with QR login...")
-			waGw := gateway.NewWhatsAppGateway(dataDir)
-
-			// Set QR callback for display
-			waGw.SetQRCallback(func(qr string) {
-				// QR is displayed by eventHandler in whatsapp.go, no need to print again
-			})
-
-			// Always register platform, even if initial connect fails
-			// This allows Web QR login to trigger reconnection
-			if err := waGw.Connect(ctx); err != nil {
-				fmt.Printf("[WhatsApp] Initial connection failed: %v\n", err)
-				fmt.Println("[WhatsApp] Platform registered. Use Web QR Login to reconnect.")
-			}
-			gw.RegisterPlatform("whatsapp", waGw)
-		}
-	}
-
-	// Start LINE if configured
-	if lineCfg, ok := cfg.Gateway.Platforms["line"]; ok && lineCfg.Enabled && shouldStartPlatform("line") {
-		platformCount++
-		if lineCfg.Token == "" || lineCfg.AppSecret == "" {
-			fmt.Println("[LINE] Config incomplete (need token and app_secret)!")
-		} else {
-			fmt.Println("[LINE] Starting...")
-			lineGw := gateway.NewLineGateway(lineCfg.AppSecret, lineCfg.Token)
-			if err := lineGw.Connect(ctx); err != nil {
-				fmt.Printf("[LINE] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("line", lineGw)
-			}
-		}
-	}
-
-	// Start Matrix if configured
-	if matrixCfg, ok := cfg.Gateway.Platforms["matrix"]; ok && matrixCfg.Enabled && shouldStartPlatform("matrix") {
-		platformCount++
-		if matrixCfg.Mode == "password" && matrixCfg.AppSecret != "" {
-			// Password login mode
-			fmt.Println("[Matrix] Starting with password login...")
-			matrixGw, err := gateway.NewMatrixGatewayWithLogin(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.AppSecret, "")
-			if err != nil {
-				fmt.Printf("[Matrix] Failed to login: %v\n", err)
-			} else if err := matrixGw.Connect(ctx); err != nil {
-				fmt.Printf("[Matrix] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("matrix", matrixGw)
-			}
-		} else if matrixCfg.Token != "" {
-			// Access token mode
-			fmt.Println("[Matrix] Starting...")
-			matrixGw := gateway.NewMatrixGateway(matrixCfg.APIURL, matrixCfg.AppID, matrixCfg.Token)
-			if err := matrixGw.Connect(ctx); err != nil {
-				fmt.Printf("[Matrix] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("matrix", matrixGw)
-			}
-		} else {
-			fmt.Println("[Matrix] Config incomplete (need access token or password)!")
-		}
-	}
-
-	// Start WeChat iLink (Personal WeChat via iLink Bot API) if configured
-	if ilinkCfg, ok := cfg.Gateway.Platforms["wechat_ilink"]; ok && ilinkCfg.Enabled && shouldStartPlatform("wechat_ilink") {
-		platformCount++
-		fmt.Println("[WeChat-iLink] Starting...")
-
-		dataDir := ilinkCfg.DataDir
-		if dataDir == "" {
-			dataDir = filepath.Join(config.GetMagicHome(), "wechat_ilink")
-		}
-
-		baseURL := ilinkCfg.APIURL
-		if baseURL == "" {
-			baseURL = "https://ilinkai.weixin.qq.com"
-		}
-		ilinkGw := gateway.NewWeChatILinkGateway(gateway.WeChatILinkConfig{
-			Token:     ilinkCfg.Token,
-			DataDir:   dataDir,
-			BaseURL:   baseURL,
-			AutoLogin: ilinkCfg.AutoLogin,
-		})
-
-		if err := ilinkGw.Connect(ctx); err != nil {
-			fmt.Printf("[WeChat-iLink] Failed to connect: %v\n", err)
-		} else {
-			gw.RegisterPlatform("wechat_ilink", ilinkGw)
-		}
-	}
-
-	// Also support the old "wechat_clawbot" config name for backward compatibility
-	if clawCfg, ok := cfg.Gateway.Platforms["wechat_clawbot"]; ok && clawCfg.Enabled &&
-		(shouldStartPlatform("wechat_clawbot") || shouldStartPlatform("wechat_ilink")) {
-		if _, already := cfg.Gateway.Platforms["wechat_ilink"]; !already {
-			platformCount++
-			fmt.Println("[WeChat-ClawBot] Starting (using iLink API)...")
-
-			dataDir := clawCfg.DataDir
-			if dataDir == "" {
-				dataDir = filepath.Join(config.GetMagicHome(), "clawbot")
-			}
-
-			baseURL := clawCfg.APIURL
-			if baseURL == "" {
-				baseURL = "https://ilinkai.weixin.qq.com"
-			}
-
-			clawGw := gateway.NewWeChatILinkGateway(gateway.WeChatILinkConfig{
-				DataDir:   dataDir,
-				BaseURL:   baseURL,
-				AutoLogin: clawCfg.AutoLogin,
-			})
-
-			if err := clawGw.Connect(ctx); err != nil {
-				fmt.Printf("[WeChat-ClawBot] Failed to connect: %v\n", err)
-			} else {
-				gw.RegisterPlatform("wechat_clawbot", clawGw)
-			}
-		}
-	}
+	// Start all enabled platforms via registry
+	platformCount := startPlatforms(ctx, gw, cfg)
 
 	if platformCount == 0 {
 		// Even with no platforms, keep running with health server active
@@ -1453,6 +1110,113 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	<-ctx.Done()
 	os.Remove(pidFile)
+}
+
+func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config) int {
+	registry := gateway.GetRegistry()
+	count := 0
+
+	// Always register QQ for QR login support
+	{
+		count++
+		qqCfg, qqHasCfg := cfg.Gateway.Platforms["qq"]
+		configMap := platformConfigToMap(qqCfg)
+		if !qqHasCfg || !qqCfg.Enabled {
+			configMap = map[string]interface{}{}
+		}
+		handler, err := registry.Create(ctx, "qq", configMap)
+		if err != nil {
+			fmt.Printf("[QQ] Failed to create: %v\n", err)
+		} else {
+			if qqHasCfg && qqCfg.Enabled && (qqCfg.Number != "" || qqCfg.AppID != "") {
+				fmt.Println("[QQ] Starting with configured credentials...")
+				if err := handler.Connect(ctx); err != nil {
+					fmt.Printf("[QQ] Failed to connect: %v\n", err)
+				}
+			} else {
+				fmt.Println("[QQ] Registered for QR login (no credentials configured)")
+			}
+			if qqHasCfg {
+				handler.SetChannelFilter(qqCfg.AllowedChannels, qqCfg.BlockedChannels)
+			}
+			gw.RegisterPlatform("qq", handler)
+		}
+	}
+
+	// Start all other configured platforms
+	for name, platCfg := range cfg.Gateway.Platforms {
+		if !platCfg.Enabled {
+			continue
+		}
+		if !shouldStartPlatform(name) {
+			continue
+		}
+		if name == "qq" {
+			continue
+		}
+
+		platformID := name
+		// WhatsApp mode handling
+		if name == "whatsapp" && platCfg.Mode == "business" {
+			platformID = "whatsapp_business"
+		}
+
+		info, ok := registry.GetInfo(platformID)
+		if !ok {
+			fmt.Printf("[%s] Unknown platform, skipping\n", name)
+			continue
+		}
+
+		configMap := platformConfigToMap(platCfg)
+
+		// Apply default values for specific platforms
+		switch name {
+		case "wechat_ilink":
+			if _, has := configMap["data_dir"]; !has || configMap["data_dir"] == "" {
+				configMap["data_dir"] = filepath.Join(config.GetMagicHome(), "wechat_ilink")
+			}
+			if _, has := configMap["base_url"]; !has || configMap["base_url"] == "" {
+				configMap["base_url"] = "https://ilinkai.weixin.qq.com"
+			}
+		}
+
+		fmt.Printf("[%s] Starting...\n", info.Name)
+		handler, err := registry.Create(ctx, platformID, configMap)
+		if err != nil {
+			fmt.Printf("[%s] Failed to create: %v\n", info.Name, err)
+			continue
+		}
+
+		handler.SetChannelFilter(platCfg.AllowedChannels, platCfg.BlockedChannels)
+
+		if err := handler.Connect(ctx); err != nil {
+			fmt.Printf("[%s] Failed to connect: %v\n", info.Name, err)
+			// For QR-based platforms, still register even if connect fails
+			if name == "whatsapp" {
+				fmt.Printf("[%s] Platform registered. Use Web QR Login to reconnect.\n", info.Name)
+				gw.RegisterPlatform(platformID, handler)
+				count++
+			}
+			continue
+		}
+
+		gw.RegisterPlatform(platformID, handler)
+		count++
+	}
+
+	return count
+}
+
+func platformConfigToMap(cfg config.PlatformConfig) map[string]interface{} {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return map[string]interface{}{}
+	}
+	return m
 }
 
 func runGatewayStop(cmd *cobra.Command, args []string) {
@@ -1781,7 +1545,7 @@ func runPlatformSetupInteractiveV2(cfg *config.Config, reader *bufio.Reader, mag
 		{"telegram", "Telegram", "Telegram Bot"},
 		{"discord", "Discord", "Discord Bot"},
 		{"slack", "Slack", "Slack Bot"},
-		{"wechat", "WeChat", "WeChat (ClawBot)"},
+		{"wechat_ilink", "WeChat iLink", "WeChat Personal (iLink)"},
 		{"wecom", "WeCom", "WeCom (Enterprise WeChat)"},
 		{"qq", "QQ", "QQ Bot"},
 		{"dingtalk", "DingTalk", "DingTalk Bot"},
@@ -1880,59 +1644,21 @@ func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
 			fmt.Println("✓ Slack configured")
 		}
 
-	case "wechat":
-		fmt.Println("WeChat Configuration")
-		fmt.Println("  Options:")
-		fmt.Println("    1. WeChat (iLink) - Personal WeChat via QR code login (recommended)")
-		fmt.Println("    2. WeChat Official Account - Enterprise account with callback")
-		fmt.Print("Select option (1/2, default 1): ")
-		option, _ := reader.ReadString('\n')
-		option = strings.TrimSpace(option)
-		if option == "" || option == "1" {
-			// iLink mode for personal WeChat
-			fmt.Println("  WeChat (iLink) - Personal WeChat via QR code login")
-			fmt.Println("  You will need to scan a QR code to login after starting the gateway.")
-			fmt.Print("  Enable WeChat iLink? (y/N): ")
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer == "y" {
-				cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
-					Enabled: true,
-				}
-				fmt.Printf("  ✓ WeChat iLink configured.\n")
-				fmt.Println("  Note: Run 'magic gateway start' and scan the QR code to login.")
-			} else {
-				fmt.Println("  ✗ Skipped")
+	case "wechat_ilink":
+		fmt.Println("WeChat iLink Configuration")
+		fmt.Println("  WeChat Personal via iLink Bot API")
+		fmt.Println("  You will need to scan a QR code to login after starting the gateway.")
+		fmt.Print("  Enable WeChat iLink? (y/N): ")
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer == "y" {
+			cfg.Gateway.Platforms["wechat_ilink"] = config.PlatformConfig{
+				Enabled: true,
 			}
-		} else if option == "2" {
-			// Official Account callback mode
-			fmt.Print("Enter App ID: ")
-			appID, _ := reader.ReadString('\n')
-			appID = strings.TrimSpace(appID)
-			fmt.Print("Enter App Secret: ")
-			appSecret, _ := reader.ReadString('\n')
-			appSecret = strings.TrimSpace(appSecret)
-			fmt.Print("Enter Token (optional): ")
-			token, _ := reader.ReadString('\n')
-			token = strings.TrimSpace(token)
-			fmt.Print("Enter AES Key (optional): ")
-			aesKey, _ := reader.ReadString('\n')
-			aesKey = strings.TrimSpace(aesKey)
-			if appID != "" {
-				cfg.Gateway.Platforms["wechat"] = config.PlatformConfig{
-					Enabled: true,
-					CorpID:  appID,
-					Secret:  appSecret,
-					Token:   token,
-					AESKey:  aesKey,
-					Mode:    "callback",
-				}
-				fmt.Println("✓ WeChat Official Account configured")
-			} else {
-				fmt.Println("✗ Skipped (App ID is required)")
-			}
+			fmt.Printf("  ✓ WeChat iLink configured.\n")
+			fmt.Println("  Note: Run 'magic gateway start' and scan the QR code to login.")
 		} else {
-			fmt.Println("✗ Invalid option")
+			fmt.Println("  ✗ Skipped")
 		}
 
 	case "wecom":

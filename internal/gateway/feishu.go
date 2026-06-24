@@ -15,8 +15,9 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// FeishuGateway implements the Feishu (Lark) platform handler
 type FeishuGateway struct {
+	*BasePlatform
+
 	appID             string
 	appSecret         string
 	verificationToken string
@@ -25,109 +26,57 @@ type FeishuGateway struct {
 	tenantAccessToken string
 	tokenExpiresAt    time.Time
 	tokenMu           sync.RWMutex
-
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
-
-	// Configurable callback port
-	callbackPort int
-
-	// Reconnection config
-	maxRetries     int
-	retryDelay     time.Duration
-	currentRetries int
-
-	// Channel allowlist/blocklist
-	allowedChannels []string
-	blockedChannels []string
 }
 
-// NewFeishuGateway creates a new Feishu gateway
 func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
-	return &FeishuGateway{
-		appID:        appID,
-		appSecret:    appSecret,
-		agents:       make(map[string]*AgentSession),
-		msgCh:        make(chan Message, 100),
-		stopCh:       make(chan struct{}),
-		callbackPort: 8081,
-		maxRetries:   5,
-		retryDelay:   time.Second * 5,
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  5,
+		"retry_delay":  5,
 	}
-}
 
-// SetChannelFilter sets the channel allowlist and blocklist
-func (g *FeishuGateway) SetChannelFilter(allowed, blocked []string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.allowedChannels = allowed
-	g.blockedChannels = blocked
-}
-
-// Name returns the platform name
-func (g *FeishuGateway) Name() string {
-	return "feishu"
-}
-
-// Connect establishes connection to Feishu
-func (g *FeishuGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
+	g := &FeishuGateway{
+		appID:     appID,
+		appSecret: appSecret,
 	}
-	g.running = true
-	g.mu.Unlock()
 
-	log.Infof("Connecting to Feishu gateway...")
+	g.BasePlatform = NewBasePlatform("feishu", config)
+	g.SetCallbackPort(8081)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
 
-	// Get initial token
+	return g
+}
+
+func (g *FeishuGateway) onConnect(ctx context.Context) error {
+	log.Infof("[Feishu] Connecting gateway...")
+
 	if err := g.refreshToken(); err != nil {
-		log.Errorf("Failed to get Feishu token: %v", err)
+		log.Errorf("[Feishu] Failed to get token: %v", err)
 		return err
 	}
 
-	// Start token refresh goroutine
-	go g.tokenRefresher()
+	go g.tokenRefresher(ctx)
+	go g.startCallbackServer(ctx)
 
-	// Start callback server
-	go g.startCallbackServer()
-
-	log.Info("Feishu gateway connected")
+	log.Info("[Feishu] Gateway connected")
 	return nil
 }
 
-// Disconnect closes the connection
-func (g *FeishuGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
-	g.running = false
-	g.currentRetries = 0
-
-	log.Info("Feishu gateway disconnected")
+func (g *FeishuGateway) onDisconnect() error {
+	log.Info("[Feishu] Gateway disconnected")
 	return nil
 }
 
-// Send sends a message (enhanced to support rich text)
-func (g *FeishuGateway) Send(ctx context.Context, resp Response) error {
-	// Try to send via API if we have channel info
+func (g *FeishuGateway) onSend(ctx context.Context, resp Response) error {
 	if resp.ChannelID != "" {
-		// Check if content is rich text (starts with { or [)
 		content := resp.Content
 		if strings.HasPrefix(strings.TrimSpace(content), "{") ||
 			strings.HasPrefix(strings.TrimSpace(content), "[") {
-			// Try to send as rich text/card
 			if err := g.sendRichMessage(resp.ChannelID, content); err != nil {
-				log.Warnf("Failed to send rich message, falling back to text: %v", err)
+				log.Warnf("[Feishu] Failed to send rich message, falling back to text: %v", err)
 				return g.sendMessageAPI(resp.ChannelID, resp.Content)
 			}
 			return nil
@@ -138,14 +87,7 @@ func (g *FeishuGateway) Send(ctx context.Context, resp Response) error {
 	return nil
 }
 
-// Receive returns a channel of incoming messages
-func (g *FeishuGateway) Receive() <-chan Message {
-	return g.msgCh
-}
-
-// HandleSlashCommand handles a slash command
 func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
-	// Implement slash command handling
 	switch cmd {
 	case "help":
 		return Response{
@@ -175,15 +117,14 @@ func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 	}
 }
 
-// CheckHealth returns detailed health status for Feishu gateway
 func (g *FeishuGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:     "feishu",
-		Connected:    g.IsConnected(),
-		Status:       "healthy",
-		CallbackPort: g.callbackPort,
-		Details:      make(map[string]interface{}),
-		Platforms:    make(map[string]PlatformStatus),
+	status := g.BasePlatform.CheckHealth()
+	status.Platform = "feishu"
+	status.CallbackPort = g.GetCallbackPort()
+	status.Details["callback_port"] = g.GetCallbackPort()
+
+	if status.Platforms == nil {
+		status.Platforms = make(map[string]PlatformStatus)
 	}
 
 	platformStatus := PlatformStatus{
@@ -193,13 +134,16 @@ func (g *FeishuGateway) CheckHealth() *HealthStatus {
 
 	if !status.Connected {
 		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
+		if status.Error != "" {
+			platformStatus.Error = status.Error
+		} else {
+			platformStatus.Error = "Gateway not connected"
+		}
 		status.Status = "error"
 		status.Platforms["feishu"] = platformStatus
 		return status
 	}
 
-	// Check token validity
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
 	tokenExpiry := g.tokenExpiresAt
@@ -225,20 +169,11 @@ func (g *FeishuGateway) CheckHealth() *HealthStatus {
 		}
 	}
 
-	status.Details["callback_port"] = g.callbackPort
 	status.Platforms["feishu"] = platformStatus
 
 	return status
 }
 
-// IsConnected checks if connected to Feishu
-func (g *FeishuGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.tenantAccessToken != ""
-}
-
-// refreshToken gets a new tenant access token
 func (g *FeishuGateway) refreshToken() error {
 	url := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 
@@ -276,61 +211,56 @@ func (g *FeishuGateway) refreshToken() error {
 	g.tokenExpiresAt = time.Now().Add(time.Duration(result.Expire-60) * time.Second)
 	g.tokenMu.Unlock()
 
-	log.Debugf("Feishu token refreshed, expires in %d seconds", result.Expire)
+	log.Debugf("[Feishu] Token refreshed, expires in %d seconds", result.Expire)
 	return nil
 }
 
-// tokenRefresher periodically refreshes the token
-func (g *FeishuGateway) tokenRefresher() {
-	ticker := time.NewTicker(time.Hour) // Refresh every hour
+func (g *FeishuGateway) tokenRefresher(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			g.mu.RLock()
-			running := g.running
-			g.mu.RUnlock()
-
-			if !running {
+			if !g.IsConnected() {
 				return
 			}
 
 			if err := g.refreshToken(); err != nil {
-				log.Errorf("Failed to refresh Feishu token: %v", err)
+				log.Errorf("[Feishu] Failed to refresh token: %v", err)
 			}
 		}
 	}
 }
 
-// startCallbackServer starts the HTTP server for callbacks
-func (g *FeishuGateway) startCallbackServer() {
+func (g *FeishuGateway) startCallbackServer(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/feishu/callback", g.handleCallback)
 
-	addr := fmt.Sprintf(":%d", g.callbackPort)
+	addr := fmt.Sprintf(":%d", g.GetCallbackPort())
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
 
-	log.Infof("Feishu callback server starting on %s", addr)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(shutdownCtx)
+	}()
+
+	log.Infof("[Feishu] Callback server starting on %s", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Errorf("Feishu callback server error: %v", err)
+		log.Errorf("[Feishu] Callback server error: %v", err)
+		g.HandleDisconnection(err)
 	}
 }
 
-// SetCallbackPort sets the callback server port
-func (g *FeishuGateway) SetCallbackPort(port int) {
-	g.callbackPort = port
-}
-
-// handleCallback handles incoming callbacks from Feishu
 func (g *FeishuGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		// URL verification challenge
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -342,12 +272,11 @@ func (g *FeishuGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Errorf("Failed to read callback body: %v", err)
+		log.Errorf("[Feishu] Failed to read callback body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Parse callback event
 	var event struct {
 		Schema string `json:"schema"`
 		Header struct {
@@ -361,24 +290,22 @@ func (g *FeishuGateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.Unmarshal(body, &event); err != nil {
-		log.Errorf("Failed to parse callback event: %v", err)
+		log.Errorf("[Feishu] Failed to parse callback event: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Handle different event types
 	switch event.Header.EventType {
 	case "im.message.receive_v1":
 		g.handleMessageEvent(event.Event)
 	default:
-		log.Debugf("Unhandled event type: %s", event.Header.EventType)
+		log.Debugf("[Feishu] Unhandled event type: %s", event.Header.EventType)
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"code":0}`))
 }
 
-// handleMessageEvent processes a message receive event
 func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 	var msgEvent struct {
 		Sender struct {
@@ -398,62 +325,57 @@ func (g *FeishuGateway) handleMessageEvent(event json.RawMessage) {
 			ChatType    string `json:"chat_type"`
 			MessageType string `json:"message_type"`
 			Content     string `json:"content"`
+			Mentions    []struct {
+				Key       string `json:"key"`
+				ID        string `json:"id"`
+				IDType    string `json:"id_type"`
+				Name      string `json:"name"`
+				TenantKey string `json:"tenant_key"`
+			} `json:"mentions"`
 		} `json:"message"`
 	}
 
 	if err := json.Unmarshal(event, &msgEvent); err != nil {
-		log.Errorf("Failed to parse message event: %v", err)
+		log.Errorf("[Feishu] Failed to parse message event: %v", err)
 		return
 	}
 
-	// Only handle user messages
 	if msgEvent.Sender.SenderType != "user" {
 		return
 	}
 
-	// Check channel allowlist/blocklist
-	g.mu.RLock()
-	allowed := g.allowedChannels
-	blocked := g.blockedChannels
-	g.mu.RUnlock()
-	if !ShouldProcessChannel(msgEvent.Message.ChatID, allowed, blocked) {
+	if !g.ShouldProcessChannel(msgEvent.Message.ChatID) {
 		return
 	}
 
-	// Parse message content
 	var content struct {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(msgEvent.Message.Content), &content); err != nil {
-		log.Errorf("Failed to parse message content: %v", err)
+		log.Errorf("[Feishu] Failed to parse message content: %v", err)
 		return
 	}
 
+	isGroup := msgEvent.Message.ChatType != "p2p"
+	isMentioned := len(msgEvent.Message.Mentions) > 0 || strings.Contains(content.Text, "@")
+
 	msg := Message{
-		ID:        msgEvent.Message.MessageID,
-		Platform:  "feishu",
-		ChannelID: msgEvent.Message.ChatID,
-		UserID:    msgEvent.Sender.SenderID.OpenID,
-		Content:   content.Text,
-		Timestamp: time.Now(),
+		ID:          msgEvent.Message.MessageID,
+		ChannelID:   msgEvent.Message.ChatID,
+		UserID:      msgEvent.Sender.SenderID.OpenID,
+		Content:     content.Text,
+		Timestamp:   time.Now(),
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"chat_type":    msgEvent.Message.ChatType,
 			"message_type": msgEvent.Message.MessageType,
 		},
 	}
 
-	g.mu.RLock()
-	msgCh := g.msgCh
-	g.mu.RUnlock()
-
-	select {
-	case msgCh <- msg:
-	default:
-		log.Warnf("Feishu message channel full, dropping message")
-	}
+	g.EmitMessage(msg)
 }
 
-// sendMessageAPI sends a message via Feishu API
 func (g *FeishuGateway) sendMessageAPI(chatID, content string) error {
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
@@ -461,7 +383,6 @@ func (g *FeishuGateway) sendMessageAPI(chatID, content string) error {
 
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 
-	// 使用 json.Marshal 确保 content 中的特殊字符（引号、换行符等）被正确转义
 	textContent, _ := json.Marshal(content)
 	msg := map[string]interface{}{
 		"receive_id": chatID,
@@ -493,12 +414,10 @@ func (g *FeishuGateway) sendMessageAPI(chatID, content string) error {
 	return nil
 }
 
-// SendText sends a text message
 func (g *FeishuGateway) SendText(chatID, text string) error {
 	return g.sendMessageAPI(chatID, text)
 }
 
-// sendRichMessage sends a rich text or card message
 func (g *FeishuGateway) sendRichMessage(chatID, content string) error {
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
@@ -506,10 +425,8 @@ func (g *FeishuGateway) sendRichMessage(chatID, content string) error {
 
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 
-	// Try to parse as JSON (card format)
 	var cardContent map[string]interface{}
 	if err := json.Unmarshal([]byte(content), &cardContent); err == nil {
-		// It's valid JSON, try as interactive card
 		msg := map[string]interface{}{
 			"receive_id": chatID,
 			"msg_type":   "interactive",
@@ -539,14 +456,12 @@ func (g *FeishuGateway) sendRichMessage(chatID, content string) error {
 		return nil
 	}
 
-	// If not JSON, try as post (rich text)
 	paragraphs := []map[string]string{
 		{"text": content},
 	}
 	return g.SendRichText(chatID, paragraphs)
 }
 
-// SendRichText sends a rich text message with paragraphs
 func (g *FeishuGateway) SendRichText(chatID string, paragraphs []map[string]string) error {
 	g.tokenMu.RLock()
 	token := g.tenantAccessToken
@@ -554,7 +469,6 @@ func (g *FeishuGateway) SendRichText(chatID string, paragraphs []map[string]stri
 
 	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 
-	// Build post content
 	postContent := make([]interface{}, len(paragraphs))
 	for i, p := range paragraphs {
 		postContent[i] = map[string]interface{}{
@@ -602,31 +516,6 @@ func (g *FeishuGateway) SendRichText(chatID string, paragraphs []map[string]stri
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("send message error (%d): %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-// Reconnect attempts to reconnect with exponential backoff
-func (g *FeishuGateway) Reconnect(ctx context.Context) error {
-	g.mu.Lock()
-	g.currentRetries++
-	retryDelay := g.retryDelay * time.Duration(g.currentRetries)
-	g.mu.Unlock()
-
-	log.Infof("Attempting to reconnect to Feishu (attempt %d, delay %v)", g.currentRetries, retryDelay)
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(retryDelay):
-	}
-
-	if err := g.Connect(ctx); err != nil {
-		if g.currentRetries < g.maxRetries {
-			return g.Reconnect(ctx)
-		}
-		return fmt.Errorf("max retries exceeded")
 	}
 
 	return nil

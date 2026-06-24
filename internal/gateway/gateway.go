@@ -16,17 +16,18 @@ import (
 
 // Message represents an incoming or outgoing message
 type Message struct {
-	ID        string                 `json:"id"`
-	Platform  string                 `json:"platform"`
-	ChannelID string                 `json:"channel_id"`
-	UserID    string                 `json:"user_id"`
-	Content   string                 `json:"content"`
-	Role      string                 `json:"role,omitempty"`
-	From      string                 `json:"from,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-	// 媒体附件列表
-	MediaURLs []MediaAttachment `json:"media_urls,omitempty"`
+	ID          string                 `json:"id"`
+	Platform    string                 `json:"platform"`
+	ChannelID   string                 `json:"channel_id"`
+	UserID      string                 `json:"user_id"`
+	Content     string                 `json:"content"`
+	Role        string                 `json:"role,omitempty"`
+	From        string                 `json:"from,omitempty"`
+	Timestamp   time.Time              `json:"timestamp"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	MediaURLs   []MediaAttachment      `json:"media_urls,omitempty"`
+	IsGroup     bool                   `json:"is_group"`
+	IsMentioned bool                   `json:"is_mentioned"`
 }
 
 // MediaAttachment represents a media file attachment
@@ -72,6 +73,12 @@ type PlatformHandler interface {
 
 	// IsConnected returns whether the platform is connected
 	IsConnected() bool
+
+	// SetChannelFilter sets the channel allowlist/blocklist
+	SetChannelFilter(allowed, blocked []string)
+
+	// ShouldProcessChannel returns whether a channel should be processed
+	ShouldProcessChannel(channelID string) bool
 }
 
 // AgentHandler defines the interface for the agent
@@ -247,43 +254,6 @@ func containsSensitiveWord(content, word string) bool {
 		}
 	}
 	return false
-}
-
-// ShouldProcessChannel 检查频道是否在白名单/黑名单中
-// 规则:
-// 1. 如果黑名单中有该频道，返回 false
-// 2. 如果白名单非空且不包含该频道（或 "*"），返回 false
-// 3. 否则返回 true
-func ShouldProcessChannel(channelID string, allowed, blocked []string) bool {
-	// 检查黑名单
-	for _, ch := range blocked {
-		if ch == channelID {
-			return false
-		}
-	}
-
-	// 如果白名单为空，允许所有
-	if len(allowed) == 0 {
-		return true
-	}
-
-	// 检查白名单
-	for _, ch := range allowed {
-		if ch == channelID || ch == "*" {
-			return true
-		}
-	}
-
-	return false
-}
-
-// ConvertToChannelSet 将字符串切片转换为 map[string]bool 集合
-func ConvertToChannelSet(channels []string) map[string]bool {
-	set := make(map[string]bool)
-	for _, ch := range channels {
-		set[ch] = true
-	}
-	return set
 }
 
 // Gateway manages multiple platform connections and routes messages to the agent
@@ -793,11 +763,6 @@ type PlatformStatus struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// HealthCheckable is an interface for health-checkable handlers
-type HealthCheckable interface {
-	CheckHealth() error
-}
-
 // startAPIServer starts the HTTP API server
 func (g *Gateway) startAPIServer() {
 	mux := http.NewServeMux()
@@ -811,6 +776,7 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/login/status", g.handleLoginStatus)
 	mux.HandleFunc("/api/login/qr/", g.handleQRCode)
 	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
+	mux.HandleFunc("/api/login/qr/qq/status", g.handleQQScanStatus)
 
 	g.apiServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", g.apiPort),
@@ -1020,9 +986,59 @@ func (g *Gateway) handleQRRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// AddQRCodeHandler registers a platform handler that supports QR login
-func (g *Gateway) AddQRCodeHandler(platform string, handler PlatformHandler) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.platforms[platform] = handler
+// handleQQScanStatus handles QQ scan login status polling
+// GET /api/login/qr/qq/status
+func (g *Gateway) handleQQScanStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	sig := r.URL.Query().Get("sig")
+	if sig == "" {
+		http.Error(w, "sig is required", http.StatusBadRequest)
+		return
+	}
+
+	status, err := PollQQScanStatus(r.Context(), sig)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "error",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	switch status.Stat {
+	case 0:
+		// 未扫码
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "pending",
+			"message": "Please scan the QR code with QQ",
+		})
+	case 1:
+		// 已扫码未确认
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "scanning",
+			"message": "QR code scanned, please confirm in QQ",
+		})
+	case 2:
+		// 已确认，授权成功
+		if status.AppID == "" || status.AppSecret == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "error",
+				"message": "Failed to get app credentials",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "confirmed",
+			"message":    "Login successful",
+			"app_id":     status.AppID,
+			"app_secret": status.AppSecret,
+			"token":      status.Token,
+		})
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "error",
+			"message": fmt.Sprintf("Unknown status: %d", status.Stat),
+		})
+	}
 }

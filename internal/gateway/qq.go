@@ -3,6 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,15 +19,17 @@ import (
 )
 
 type QQGateway struct {
+	*BasePlatform
+
 	appID     string
 	appSecret string
 	token     string
 
-	agents  map[string]*AgentSession
-	msgCh   chan Message
-	mu      sync.RWMutex
-	stopCh  chan struct{}
-	running bool
+	accessToken string
+	tokenExpiry time.Time
+
+	sandbox bool
+	intent  int
 
 	apiBaseURL string
 	httpClient *http.Client
@@ -36,15 +41,22 @@ type QQGateway struct {
 	sessionID         string
 	shardCount        int
 	shardID           int
+
+	scanKey string // 用于扫码登录的 AES 密钥
 }
 
-func NewQQGateway(appID, appSecret string) *QQGateway {
-	return &QQGateway{
+func NewQQGateway(appID, appSecret string, sandbox bool, intent int) *QQGateway {
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &QQGateway{
 		appID:      appID,
 		appSecret:  appSecret,
-		agents:     make(map[string]*AgentSession),
-		msgCh:      make(chan Message, 100),
-		stopCh:     make(chan struct{}),
+		sandbox:    sandbox,
+		intent:     intent,
 		apiBaseURL: "https://api.sgroup.qq.com",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -52,22 +64,22 @@ func NewQQGateway(appID, appSecret string) *QQGateway {
 		shardCount: 1,
 		shardID:    0,
 	}
-}
 
-func (g *QQGateway) Name() string {
-	return "qq"
-}
+	g.BasePlatform = NewBasePlatform("qq", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
 
-func (g *QQGateway) Connect(ctx context.Context) error {
-	g.mu.Lock()
-	if g.running {
-		g.mu.Unlock()
-		return nil
+	if g.intent == 0 {
+		g.intent = 1<<30 | 1<<0 | 1<<1 | 1<<25 | 1<<9
 	}
-	g.mu.Unlock()
 
+	return g
+}
+
+func (g *QQGateway) onConnect(ctx context.Context) error {
 	if g.appID == "" || g.appSecret == "" {
-		return fmt.Errorf("QQ app_id and app_secret/token are required")
+		return fmt.Errorf("QQ app_id and app_secret are required")
 	}
 
 	g.token = g.appSecret
@@ -83,23 +95,101 @@ func (g *QQGateway) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to connect WebSocket: %w", err)
 	}
 
-	g.mu.Lock()
-	g.running = true
-	g.mu.Unlock()
-
 	go g.listenWebSocket()
 
 	log.Info("[QQ] Gateway connected and listening for events")
 	return nil
 }
 
+func (g *QQGateway) onDisconnect() error {
+	g.wsMutex.Lock()
+	if g.wsConn != nil {
+		g.wsConn.Close()
+		g.wsConn = nil
+	}
+	g.wsMutex.Unlock()
+
+	log.Info("[QQ] Gateway disconnected")
+	return nil
+}
+
+func (g *QQGateway) onSend(ctx context.Context, resp Response) error {
+	if !g.IsConnected() {
+		return fmt.Errorf("QQ gateway not connected")
+	}
+
+	channelID := resp.ChannelID
+	if channelID == "" {
+		return fmt.Errorf("channel ID is required")
+	}
+
+	return g.SendText(channelID, resp.Content)
+}
+
+func (g *QQGateway) getAccessToken() (string, error) {
+	g.wsMutex.Lock()
+	defer g.wsMutex.Unlock()
+
+	if g.accessToken != "" && time.Now().Before(g.tokenExpiry) {
+		return g.accessToken, nil
+	}
+
+	tokenURL := fmt.Sprintf("%s/app/token", g.apiBaseURL)
+	reqBody := fmt.Sprintf("app_id=%s&app_secret=%s", g.appID, g.appSecret)
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get access token: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		Code        int    `json:"code"`
+		Message     string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	if result.Code != 0 {
+		return "", fmt.Errorf("QQ token API error: code %d, message: %s", result.Code, result.Message)
+	}
+
+	g.accessToken = result.AccessToken
+	g.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-300) * time.Second)
+
+	log.Info("[QQ] Access token refreshed, expires in %d seconds", result.ExpiresIn)
+	return g.accessToken, nil
+}
+
 func (g *QQGateway) getGatewayURL() (string, error) {
+	accessToken, err := g.getAccessToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to get access token: %w", err)
+	}
+
 	url := fmt.Sprintf("%s/gateway", g.apiBaseURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bot %s.%s", g.appID, g.token))
+	req.Header.Set("Authorization", "QQBot "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.httpClient.Do(req)
@@ -154,14 +244,12 @@ func (g *QQGateway) listenWebSocket() {
 			g.wsConn = nil
 		}
 		g.wsMutex.Unlock()
-		g.mu.Lock()
-		g.running = false
-		g.mu.Unlock()
+		g.HandleDisconnection(fmt.Errorf("websocket closed"))
 	}()
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-g.ctx.Done():
 			return
 		default:
 		}
@@ -170,13 +258,8 @@ func (g *QQGateway) listenWebSocket() {
 		conn := g.wsConn
 		g.wsMutex.Unlock()
 		if conn == nil {
-			log.Warn("[QQ] WebSocket connection lost, attempting reconnect...")
-			if err := g.reconnect(); err != nil {
-				log.Errorf("[QQ] Reconnect failed: %v", err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			continue
+			log.Warn("[QQ] WebSocket connection lost")
+			return
 		}
 
 		_, msg, err := conn.ReadMessage()
@@ -184,8 +267,7 @@ func (g *QQGateway) listenWebSocket() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Warnf("[QQ] WebSocket read error: %v", err)
 			}
-			time.Sleep(2 * time.Second)
-			continue
+			return
 		}
 
 		g.handleWSMessage(msg)
@@ -229,7 +311,7 @@ func (g *QQGateway) handleWSMessage(data []byte) {
 
 	case 7:
 		log.Info("[QQ] Reconnect requested by server")
-		g.reconnect()
+		g.HandleDisconnection(fmt.Errorf("server requested reconnect"))
 
 	case 9:
 		log.Warn("[QQ] Invalid session, re-identifying")
@@ -242,11 +324,17 @@ func (g *QQGateway) handleWSMessage(data []byte) {
 }
 
 func (g *QQGateway) sendIdentify() {
+	accessToken, err := g.getAccessToken()
+	if err != nil {
+		log.Errorf("[QQ] Failed to get access token for identify: %v", err)
+		return
+	}
+
 	payload := map[string]interface{}{
 		"op": 2,
 		"d": map[string]interface{}{
-			"token":   fmt.Sprintf("Bot %s.%s", g.appID, g.token),
-			"intents": 1<<30 | 1<<0 | 1<<1 | 1<<25 | 1<<9,
+			"token":   accessToken,
+			"intents": g.intent,
 			"shards":  []int{g.shardID, g.shardCount},
 			"properties": map[string]string{
 				"os":      "linux",
@@ -289,7 +377,7 @@ func (g *QQGateway) heartbeatLoop() {
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
 			g.sendHeartbeat()
@@ -304,28 +392,6 @@ func (g *QQGateway) sendHeartbeat() {
 	}
 	g.sendWSMessage(payload)
 	log.Debugf("[QQ] Heartbeat sent, seq=%d", g.seq)
-}
-
-func (g *QQGateway) reconnect() error {
-	g.wsMutex.Lock()
-	if g.wsConn != nil {
-		g.wsConn.Close()
-		g.wsConn = nil
-	}
-	g.wsMutex.Unlock()
-
-	time.Sleep(2 * time.Second)
-
-	gatewayURL, err := g.getGatewayURL()
-	if err != nil {
-		return fmt.Errorf("failed to get gateway URL for reconnect: %w", err)
-	}
-
-	if err := g.connectWebSocket(gatewayURL); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (g *QQGateway) handleDispatchEvent(eventType string, data json.RawMessage) {
@@ -343,6 +409,7 @@ func (g *QQGateway) handleDispatchEvent(eventType string, data json.RawMessage) 
 		}
 		if err := json.Unmarshal(data, &ready); err == nil {
 			g.sessionID = ready.SessionID
+			g.SetUserInfo(ready.User.ID, ready.User.Username)
 			log.Infof("[QQ] Ready! Bot: %s (ID: %s), session: %s", ready.User.Username, ready.User.ID, ready.SessionID)
 		}
 
@@ -363,7 +430,12 @@ func (g *QQGateway) handleMessageEvent(data json.RawMessage) {
 		ChannelID string `json:"channel_id"`
 		GuildID   string `json:"guild_id"`
 		Content   string `json:"content"`
-		Author    struct {
+		Mentions  []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+			Bot      bool   `json:"bot"`
+		} `json:"mentions"`
+		Author struct {
 			ID       string `json:"id"`
 			Username string `json:"username"`
 			Bot      bool   `json:"bot"`
@@ -385,13 +457,22 @@ func (g *QQGateway) handleMessageEvent(data json.RawMessage) {
 		return
 	}
 
+	if !g.ShouldProcessChannel(msgData.ChannelID) {
+		return
+	}
+
+	isGroup := msgData.GuildID != ""
+	isMentioned := len(msgData.Mentions) > 0 || strings.Contains(msgData.Content, "@")
+
 	msg := Message{
-		ID:        msgData.ID,
-		Platform:  "qq",
-		ChannelID: msgData.ChannelID,
-		UserID:    msgData.Author.ID,
-		Content:   content,
-		Timestamp: time.Now(),
+		ID:          msgData.ID,
+		Platform:    "qq",
+		ChannelID:   msgData.ChannelID,
+		UserID:      msgData.Author.ID,
+		Content:     content,
+		Timestamp:   time.Now(),
+		IsGroup:     isGroup,
+		IsMentioned: isMentioned,
 		Metadata: map[string]interface{}{
 			"guild_id":   msgData.GuildID,
 			"author":     msgData.Author.Username,
@@ -399,53 +480,7 @@ func (g *QQGateway) handleMessageEvent(data json.RawMessage) {
 		},
 	}
 
-	select {
-	case g.msgCh <- msg:
-		log.Debugf("[QQ] Message received: id=%s from=%s", msg.ID, msg.UserID)
-	default:
-		log.Warnf("[QQ] Message channel full, dropping: %s", msg.ID)
-	}
-}
-
-func (g *QQGateway) Disconnect() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !g.running {
-		return nil
-	}
-
-	close(g.stopCh)
-
-	g.wsMutex.Lock()
-	if g.wsConn != nil {
-		g.wsConn.Close()
-		g.wsConn = nil
-	}
-	g.wsMutex.Unlock()
-
-	g.running = false
-	log.Info("[QQ] Gateway disconnected")
-	return nil
-}
-
-func (g *QQGateway) IsConnected() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.running && g.wsConn != nil
-}
-
-func (g *QQGateway) Send(ctx context.Context, resp Response) error {
-	if !g.IsConnected() {
-		return fmt.Errorf("QQ gateway not connected")
-	}
-
-	channelID := resp.ChannelID
-	if channelID == "" {
-		return fmt.Errorf("channel ID is required")
-	}
-
-	return g.SendText(channelID, resp.Content)
+	g.EmitMessage(msg)
 }
 
 func (g *QQGateway) SendText(channelID string, text string) error {
@@ -487,7 +522,11 @@ func (g *QQGateway) sendQQMessage(url, content string) error {
 		return err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bot %s.%s", g.appID, g.token))
+	accessToken, err := g.getAccessToken()
+	if err != nil {
+		return fmt.Errorf("failed to get access token: %w", err)
+	}
+	req.Header.Set("Authorization", "QQBot "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.httpClient.Do(req)
@@ -514,10 +553,6 @@ func (g *QQGateway) sendQQMessage(url, content string) error {
 	}
 
 	return nil
-}
-
-func (g *QQGateway) Receive() <-chan Message {
-	return g.msgCh
 }
 
 func (g *QQGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
@@ -555,12 +590,13 @@ func (g *QQGateway) HandleSlashCommand(cmd string, msg Message) (Response, error
 }
 
 func (g *QQGateway) CheckHealth() *HealthStatus {
-	status := &HealthStatus{
-		Platform:  "qq",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+	status := g.BasePlatform.CheckHealth()
+
+	status.Platform = "qq"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
 	}
 
 	platformStatus := PlatformStatus{
@@ -570,7 +606,11 @@ func (g *QQGateway) CheckHealth() *HealthStatus {
 
 	if !status.Connected {
 		platformStatus.Status = "disconnected"
-		platformStatus.Error = "Gateway not connected"
+		if status.Error != "" {
+			platformStatus.Error = status.Error
+		} else {
+			platformStatus.Error = "Gateway not connected"
+		}
 		status.Status = "error"
 		status.Platforms["qq"] = platformStatus
 		return status
@@ -582,6 +622,7 @@ func (g *QQGateway) CheckHealth() *HealthStatus {
 	} else {
 		status.HTTPClientOK = false
 		status.Error = "HTTP client not initialized"
+		status.Platforms["qq"] = platformStatus
 		return status
 	}
 
@@ -602,5 +643,263 @@ func (g *QQGateway) CheckHealth() *HealthStatus {
 	return status
 }
 
-func (g *QQGateway) SetCallbackPort(port int) {
+func (g *QQGateway) StartQRLogin(ctx context.Context) (string, error) {
+	return g.StartQQScanLogin(ctx)
+}
+
+func (g *QQGateway) IsLoggedIn() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.accessToken != "" || (g.appID != "" && g.appSecret != "")
+}
+
+func (g *QQGateway) GetLoginStatus() string {
+	if g.IsLoggedIn() {
+		if g.IsConnected() {
+			return "confirmed"
+		}
+		return "configured"
+	}
+	return "waiting_qr"
+}
+
+type QQScanLoginResult struct {
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+	UserID    string `json:"user_id"`
+}
+
+const (
+	QQBindAPIBase    = "https://q.qq.com/api/v2/bind_robot"
+	QQBindCreatePath = "/create"
+	QQBindPollPath   = "/poll"
+)
+
+const (
+	QQBindStatusPending   = 0
+	QQBindStatusScanned   = 1
+	QQBindStatusConfirmed = 2
+	QQBindStatusExpired   = 3
+)
+
+type QQBindResponse struct {
+	RetCode int    `json:"retcode"`
+	Msg     string `json:"msg"`
+	Data    struct {
+		TaskID string `json:"task_id"`
+	} `json:"data"`
+}
+
+type QQBindPollResponse struct {
+	RetCode int    `json:"retcode"`
+	Msg     string `json:"msg"`
+	Data    struct {
+		Status           int    `json:"status"`
+		BotAppID         string `json:"bot_appid"`
+		BotEncryptSecret string `json:"bot_encrypt_secret"`
+		UserOpenID       string `json:"user_openid"`
+	} `json:"data"`
+}
+
+func generateAESKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("failed to generate random key: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(key), nil
+}
+
+func decryptQQSecret(encrypted, keyBase64 string) (string, error) {
+	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode key: %w", err)
+	}
+
+	ciphertext, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode ciphertext: %w", err)
+	}
+
+	if len(key) != 32 {
+		return "", fmt.Errorf("key must be 32 bytes for AES-256")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	if len(ciphertext) < aes.BlockSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	plaintext := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+
+	if len(plaintext) == 0 {
+		return "", fmt.Errorf("decrypted to empty plaintext")
+	}
+	paddingLen := int(plaintext[len(plaintext)-1])
+	if paddingLen > aes.BlockSize || paddingLen == 0 {
+		return "", fmt.Errorf("invalid PKCS7 padding")
+	}
+	plaintext = plaintext[:len(plaintext)-paddingLen]
+
+	return string(plaintext), nil
+}
+
+func createQQBindTask(key string) (*QQBindResponse, error) {
+	body := map[string]string{"key": key}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", QQBindAPIBase+QQBindCreatePath, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "QQBotSDK/1.0")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result QQBindResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if result.RetCode != 0 {
+		return nil, fmt.Errorf("create bind task failed: retcode=%d, msg=%s", result.RetCode, result.Msg)
+	}
+
+	return &result, nil
+}
+
+func pollQQBindResult(taskID string) (*QQBindPollResponse, error) {
+	body := map[string]string{"task_id": taskID}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", QQBindAPIBase+QQBindPollPath, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "QQBotSDK/1.0")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result QQBindPollResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if result.RetCode != 0 {
+		return nil, fmt.Errorf("poll bind result failed: retcode=%d, msg=%s", result.RetCode, result.Msg)
+	}
+
+	return &result, nil
+}
+
+func (g *QQGateway) StartQQScanLogin(ctx context.Context) (string, error) {
+	key, err := generateAESKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate AES key: %w", err)
+	}
+
+	result, err := createQQBindTask(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create bind task: %w", err)
+	}
+
+	taskID := result.Data.TaskID
+	if taskID == "" {
+		return "", fmt.Errorf("empty task_id in response")
+	}
+
+	g.scanKey = taskID + ":" + key
+
+	qrURL := fmt.Sprintf("https://q.qq.com/qrcode?task_id=%s", taskID)
+	log.Infof("[QQ] Bind task created: %s", taskID)
+
+	return qrURL, nil
+}
+
+type QQScanStatusResponse struct {
+	Stat      int    `json:"stat"`
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+	Token     string `json:"token"`
+	OpenID    string `json:"open_id"`
+}
+
+func PollQQScanStatus(ctx context.Context, sig string) (*QQScanStatusResponse, error) {
+	taskID := sig
+	key := ""
+	if idx := strings.Index(sig, ":"); idx != -1 {
+		taskID = sig[:idx]
+		key = sig[idx+1:]
+	}
+
+	if taskID == "" {
+		return nil, fmt.Errorf("empty task_id")
+	}
+
+	result, err := pollQQBindResult(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	status := &QQScanStatusResponse{
+		Stat:   result.Data.Status,
+		OpenID: result.Data.UserOpenID,
+	}
+
+	switch result.Data.Status {
+	case QQBindStatusConfirmed:
+		status.AppID = result.Data.BotAppID
+		if key != "" && result.Data.BotEncryptSecret != "" {
+			decryptedSecret, err := decryptQQSecret(result.Data.BotEncryptSecret, key)
+			if err != nil {
+				log.Warnf("[QQ] Failed to decrypt secret: %v, using encrypted", err)
+				status.AppSecret = result.Data.BotEncryptSecret
+			} else {
+				status.AppSecret = decryptedSecret
+			}
+		}
+		log.Infof("[QQ] Bind confirmed! AppID: %s", status.AppID)
+	case QQBindStatusExpired:
+		log.Infof("[QQ] Bind QR code expired")
+	case QQBindStatusScanned:
+		log.Infof("[QQ] QR code scanned, waiting for confirmation")
+	default:
+		log.Debugf("[QQ] Bind pending, status: %d", result.Data.Status)
+	}
+
+	return status, nil
 }
