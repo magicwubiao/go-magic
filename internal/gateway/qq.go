@@ -291,8 +291,8 @@ func (g *QQGateway) getGatewayURL() (string, error) {
 	}
 
 	var result struct {
-		URL    string `json:"url"`
-		Shards int    `json:"shards"`
+		URL     string `json:"url"`
+		Shards  int    `json:"shards"`
 		Session struct {
 			StartLimit struct {
 				Total          int `json:"total"`
@@ -732,7 +732,7 @@ func (g *QQGateway) sendMessage(channelID, content, msgType, msgID string) error
 
 	var url string
 	body := map[string]interface{}{
-		"content": content,
+		"content":  content,
 		"msg_type": 0,
 	}
 
