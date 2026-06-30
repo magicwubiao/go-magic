@@ -246,6 +246,10 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 				}
 			}
 			openAIMsg["content"] = parts
+		} else if len(msg.ToolCalls) > 0 && msg.Content == "" {
+			// Assistant message with tool_calls and no content: use null instead of empty string
+			// Some providers (zhipu, kimi, deepseek, doubao) reject "content": "" in this case
+			openAIMsg["content"] = nil
 		} else {
 			// Fallback to plain text content
 			openAIMsg["content"] = msg.Content

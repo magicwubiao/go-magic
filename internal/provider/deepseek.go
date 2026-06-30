@@ -13,12 +13,16 @@ type DeepSeekProvider struct {
 
 // NewDeepSeekProvider creates a new DeepSeek provider
 // If userModels is provided (non-nil and non-empty), it will be used; otherwise defaults are loaded
-func NewDeepSeekProvider(apiKey, model string, userModels []ModelInfo) *DeepSeekProvider {
+// If baseURL is empty, the default DeepSeek API URL will be used
+func NewDeepSeekProvider(apiKey, baseURL, model string, userModels []ModelInfo) *DeepSeekProvider {
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
 	if model == "" {
 		model = "deepseek-chat"
 	}
 	return &DeepSeekProvider{
-		OpenAICompatibleProvider: NewOpenAICompatibleProvider("deepseek", apiKey, "https://api.deepseek.com", model, userModels),
+		OpenAICompatibleProvider: NewOpenAICompatibleProvider("deepseek", apiKey, baseURL, model, userModels),
 	}
 }
 

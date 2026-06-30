@@ -305,12 +305,24 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]
 		Stream:       stream,
 	}
 
-	// Convert tools
+	// Convert tools (support both OpenAI nested format and flat format)
 	if len(tools) > 0 {
 		for _, tool := range tools {
-			name, _ := tool["name"].(string)
-			description, _ := tool["description"].(string)
-			parameters, _ := tool["parameters"].(map[string]interface{})
+			var name, description string
+			var parameters map[string]interface{}
+
+			// Check for OpenAI nested format: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+			if funcObj, ok := tool["function"].(map[string]interface{}); ok {
+				name, _ = funcObj["name"].(string)
+				description, _ = funcObj["description"].(string)
+				parameters, _ = funcObj["parameters"].(map[string]interface{})
+			} else {
+				// Flat format: {"name": "...", "description": "...", "parameters": {...}}
+				name, _ = tool["name"].(string)
+				description, _ = tool["description"].(string)
+				parameters, _ = tool["parameters"].(map[string]interface{})
+			}
+
 			if parameters == nil {
 				parameters = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
 			}

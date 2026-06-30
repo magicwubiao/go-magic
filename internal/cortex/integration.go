@@ -341,46 +341,52 @@ func (m *Manager) SetConversationHistory(history []struct {
 
 // extractAndLearnFromConversation extracts information from conversation and updates memory
 func (m *Manager) extractAndLearnFromConversation() {
-	// Build summary from conversation
-	var summary strings.Builder
+	var userOnly strings.Builder
+	var nonSystem strings.Builder
 	for _, msg := range m.conversationHistory {
-		summary.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, msg.Content))
+		if msg.Role == "system" {
+			continue
+		}
+		nonSystem.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, msg.Content))
+		if msg.Role == "user" {
+			userOnly.WriteString(msg.Content + "\n")
+		}
 	}
-	conversationText := summary.String()
+	userText := userOnly.String()
+	nonSystemText := nonSystem.String()
 
-	// Extract key information and update SOUL.md
 	if m.Soul != nil && m.provider != nil {
-		// Generate feedback summary for soul update
-		feedback := m.generateMemoryFeedback(conversationText)
+		feedback := m.generateMemoryFeedback(userText)
 		if feedback != "" {
 			_ = m.Soul.UpdateFromFeedback(feedback)
 		}
 	}
 
-	// Learn user preferences from conversation
 	if m.UserProfile != nil {
-		m.learnUserPreferences(conversationText)
+		m.learnUserPreferences(userText)
 	}
 
-	// Extract and store memories
 	if m.FTSMemory != nil {
-		m.extractAndStoreMemories(conversationText)
+		m.extractAndStoreMemories(nonSystemText)
 	}
 }
 
 // generateMemoryFeedback generates feedback for SOUL.md from conversation
 func (m *Manager) generateMemoryFeedback(conversation string) string {
-	// Extract key themes and patterns from conversation
-	// This is a simple implementation - could be enhanced with LLM
 	var feedback strings.Builder
 
-	// Check for repeated patterns that indicate user preferences
 	lines := strings.Split(conversation, "\n")
 	for _, line := range lines {
-		if strings.Contains(strings.ToLower(line), "prefer") ||
-			strings.Contains(strings.ToLower(line), "like") ||
-			strings.Contains(strings.ToLower(line), "don't like") ||
-			strings.Contains(strings.ToLower(line), "always") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "learn from user preferences") ||
+			strings.Contains(lower, "[auto-generated from interactions]") ||
+			strings.HasPrefix(strings.TrimSpace(line), "## Learned Preferences") {
+			continue
+		}
+		if strings.Contains(lower, "prefer") ||
+			strings.Contains(lower, "like") ||
+			strings.Contains(lower, "don't like") ||
+			strings.Contains(lower, "always") {
 			feedback.WriteString(line + "\n")
 		}
 	}

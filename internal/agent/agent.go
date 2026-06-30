@@ -842,8 +842,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 		}
 		if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
+			log.Infof("[Agent:RunConversationWithMedia] Calling ChatWithTools: provider=%s, messages=%d, tools=%d",
+				a.provider.Name(), len(req.Messages), len(a.tools))
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
+			log.Warnf("[Agent:RunConversationWithMedia] Falling back to Chat (no tools): provider=%s, hasToolIface=%v, toolsCount=%d",
+				a.provider.Name(), ok, len(a.tools))
 			resp, err = a.provider.Chat(ctx, req.Messages)
 		}
 
@@ -1268,6 +1272,8 @@ Please provide a comprehensive, well-structured final response based on these su
 				ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
 			}
 			if oa, ok := a.provider.(openAIlike); ok && len(a.tools) > 0 {
+				log.Infof("[Agent:Stream] Fallback ChatWithTools: provider=%s, messages=%d, tools=%d",
+					a.provider.Name(), len(req.Messages), len(a.tools))
 				resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 			} else {
 				resp, err = a.provider.Chat(ctx, req.Messages)
@@ -1701,7 +1707,6 @@ func (a *Agent) GetHistoryLength() int {
 
 // truncateHistory truncates message history to prevent overflow
 func (a *Agent) truncateHistory() {
-	// If maxTotalLen is 0 (unset), skip truncation entirely
 	if a.maxTotalLen <= 0 {
 		return
 	}
@@ -1725,21 +1730,34 @@ func (a *Agent) truncateHistory() {
 		}
 	}
 
+	const maxSystemLen = 50000
+	if systemIdx >= 0 && len(a.history[systemIdx].Content) > maxSystemLen {
+		truncated := a.history[systemIdx].Content[:maxSystemLen]
+		lastNewline := strings.LastIndex(truncated, "\n")
+		if lastNewline > maxSystemLen/2 {
+			truncated = truncated[:lastNewline]
+		}
+		truncated += "\n\n[...system prompt truncated...]"
+		totalLen -= len(a.history[systemIdx].Content) - len(truncated)
+		a.history[systemIdx].Content = truncated
+		log.Warnf("[Agent] System prompt truncated from %d to %d chars (maxSystemLen=%d)",
+			len(a.history[systemIdx].Content), len(truncated), maxSystemLen)
+	}
+
+	if totalLen < a.maxTotalLen {
+		return
+	}
+
 	for totalLen > a.maxTotalLen && len(a.history) > 1 {
 		idx := 0
 		if systemIdx == 0 {
 			idx = 1
 		}
 
-		// Skip if this message is a tool result — we must delete the
-		// preceding assistant (tool_calls) message first to keep the
-		// sequence valid for the API.
 		if a.history[idx].Role == "tool" {
-			// Find the assistant message that owns this tool result
 			found := false
 			for j := idx - 1; j >= 0; j-- {
 				if a.history[j].Role == "assistant" && len(a.history[j].ToolCalls) > 0 {
-					// Remove the entire group: assistant(tool_calls) + all following tool messages
 					removeStart := j
 					removeEnd := j + 1
 					for removeEnd < len(a.history) && a.history[removeEnd].Role == "tool" {
@@ -1753,7 +1771,6 @@ func (a *Agent) truncateHistory() {
 				}
 			}
 			if found {
-				// Recalculate systemIdx
 				systemIdx = -1
 				for i, m := range a.history {
 					if m.Role == "system" {
@@ -1765,7 +1782,6 @@ func (a *Agent) truncateHistory() {
 			}
 		}
 
-		// If this is an assistant message with tool_calls, also remove following tool messages
 		if a.history[idx].Role == "assistant" && len(a.history[idx].ToolCalls) > 0 {
 			removeEnd := idx + 1
 			for removeEnd < len(a.history) && a.history[removeEnd].Role == "tool" {

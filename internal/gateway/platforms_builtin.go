@@ -118,9 +118,6 @@ func RegisterBuiltinPlatforms() {
 	}, func(ctx context.Context, config map[string]interface{}) (PlatformHandler, error) {
 		appID, _ := config["app_id"].(string)
 		appSecret, _ := config["app_secret"].(string)
-		if appID == "" || appSecret == "" {
-			return nil, fmt.Errorf("feishu: app_id and app_secret are required")
-		}
 		return NewFeishuGateway(appID, appSecret), nil
 	})
 
@@ -161,9 +158,6 @@ func RegisterBuiltinPlatforms() {
 		corpID, _ := config["corp_id"].(string)
 		agentID, _ := config["agent_id"].(string)
 		secret, _ := config["secret"].(string)
-		if corpID == "" || secret == "" {
-			return nil, fmt.Errorf("wecom: corp_id and secret are required")
-		}
 		return NewWeComAppGateway(corpID, agentID, secret), nil
 	})
 
@@ -179,9 +173,6 @@ func RegisterBuiltinPlatforms() {
 		appKey, _ := config["app_key"].(string)
 		appSecret, _ := config["app_secret"].(string)
 		agentID, _ := config["agent_id"].(string)
-		if appKey == "" {
-			return nil, fmt.Errorf("dingtalk: app_key is required")
-		}
 		gw := NewDingTalkGateway(appKey, appSecret)
 		if agentID != "" {
 			gw.SetAgentID(agentID)

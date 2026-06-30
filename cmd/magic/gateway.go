@@ -220,7 +220,6 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 		return nil, fmt.Errorf("provider not configured")
 	}
 
-	// Generate tools schema
 	toolsSchema := getToolsSchema(h.registry)
 
 	// Build agent options
@@ -241,7 +240,6 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 // It handles both plain text and multimodal messages.
 func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) (string, error) {
 	if h.provider == nil {
-		// Lazy init
 		h.mu.Lock()
 		if h.provider == nil {
 			cfg, err := config.Load()
@@ -250,7 +248,6 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 				if ok {
 					h.provider = createProvider(cfg.Provider, provCfg)
 
-					// Get workDir with fallback
 					workDir := cfg.WorkingDir
 					if workDir == "" {
 						if cwd, err := os.Getwd(); err == nil {
@@ -264,21 +261,26 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 						h.registry.RegisterSkillTool(skillMgr)
 					}
 					h.systemPrompt = generateGatewaySystemPrompt(cfg)
+				} else {
+					log.Errorf("[Gateway] Provider %q not found in config", cfg.Provider)
 				}
+			} else {
+				log.Errorf("[Gateway] Failed to load config: %v", err)
 			}
 		}
 		h.mu.Unlock()
 	}
 
 	if h.provider == nil {
+		log.Warnf("[Gateway] Provider is still nil after init, returning default message")
 		return fmt.Sprintf("Hello! I received your message but the AI provider is not configured.\n"+
 			"Please run 'magic setup' to configure an AI provider.\n\n"+
 			"Message: %s", msg.Content), nil
 	}
 
-	// Get or create agent for this user
 	ag, err := h.getOrCreateAgent(msg.UserID)
 	if err != nil {
+		log.Errorf("[Gateway] Failed to get agent: %v", err)
 		return "", fmt.Errorf("failed to get agent: %w", err)
 	}
 
@@ -413,10 +415,8 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			break
 		}
 	}
-	log.Debugf("[Process] Built %d contentParts, hasImage=%v, will use RunConversationWithMedia=%v",
-		len(contentParts), hasImagePart, len(contentParts) > 0)
+	log.Debugf("[Process] Built %d contentParts, hasImage=%v", len(contentParts), hasImagePart)
 
-	// Run conversation with full agent capabilities (multimodal if contentParts available)
 	var response string
 	if len(contentParts) > 0 {
 		response, err = ag.RunConversationWithMedia(ctx, msg.Content, contentParts)
@@ -424,6 +424,7 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		response, err = ag.RunConversation(ctx, msg.Content)
 	}
 	if err != nil {
+		log.Errorf("[Gateway] Agent error: %v", err)
 		return "", fmt.Errorf("AI processing failed: %w", err)
 	}
 
@@ -435,13 +436,11 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 
 // ProcessWithStats processes a message and returns response with token statistics.
 func (h *gatewayAgentHandler) ProcessWithStats(ctx context.Context, msg gateway.Message) (string, int, int, int, error) {
-	// Use the same logic as Process but capture token stats
 	response, err := h.Process(ctx, msg)
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
 
-	// Get token stats from agent
 	ag, err := h.getOrCreateAgent(msg.UserID)
 	if err != nil {
 		return response, 0, 0, 0, nil
@@ -1116,7 +1115,7 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 	registry := gateway.GetRegistry()
 	count := 0
 
-	// Always register QQ for QR login support
+	// Always register QQ
 	{
 		count++
 		qqCfg, qqHasCfg := cfg.Gateway.Platforms["qq"]
@@ -1134,12 +1133,133 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 					fmt.Printf("[QQ] Failed to connect: %v\n", err)
 				}
 			} else {
-				fmt.Println("[QQ] Registered for QR login (no credentials configured)")
+				fmt.Println("[QQ] Registered (no credentials configured)")
 			}
 			if qqHasCfg {
 				handler.SetChannelFilter(qqCfg.AllowedChannels, qqCfg.BlockedChannels)
 			}
 			gw.RegisterPlatform("qq", handler)
+		}
+	}
+
+	// Always register WhatsApp for QR login support
+	{
+		waCfg, waHasCfg := cfg.Gateway.Platforms["whatsapp"]
+		waMode := "personal"
+		if waCfg.Mode != "" {
+			waMode = waCfg.Mode
+		}
+
+		// Only auto-register personal WhatsApp for QR login (business mode is webhook-based)
+		if waMode != "business" {
+			count++
+			configMap := platformConfigToMap(waCfg)
+			if !waHasCfg || !waCfg.Enabled {
+				configMap = map[string]interface{}{}
+			}
+			if _, has := configMap["data_dir"]; !has || configMap["data_dir"] == "" {
+				configMap["data_dir"] = filepath.Join(config.GetMagicHome(), "whatsapp")
+			}
+
+			handler, err := registry.Create(ctx, "whatsapp", configMap)
+			if err != nil {
+				fmt.Printf("[WhatsApp] Failed to create: %v\n", err)
+			} else {
+				if waHasCfg && waCfg.Enabled {
+					fmt.Println("[WhatsApp] Starting with configured credentials...")
+					if err := handler.Connect(ctx); err != nil {
+						fmt.Printf("[WhatsApp] Failed to connect: %v\n", err)
+						fmt.Println("[WhatsApp] Platform registered. Use Web QR Login to reconnect.")
+					}
+				} else {
+					fmt.Println("[WhatsApp] Registered for QR login (not enabled in config)")
+				}
+				if waHasCfg {
+					handler.SetChannelFilter(waCfg.AllowedChannels, waCfg.BlockedChannels)
+				}
+				gw.RegisterPlatform("whatsapp", handler)
+			}
+		}
+	}
+
+	// Always register WeCom for API access
+	{
+		weCfg, weHasCfg := cfg.Gateway.Platforms["wecom"]
+		count++
+		configMap := platformConfigToMap(weCfg)
+		if !weHasCfg || !weCfg.Enabled {
+			configMap = map[string]interface{}{}
+		}
+		handler, err := registry.Create(ctx, "wecom", configMap)
+		if err != nil {
+			fmt.Printf("[WeCom] Failed to create: %v\n", err)
+		} else {
+			if weHasCfg && weCfg.Enabled {
+				fmt.Println("[WeCom] Starting with configured credentials...")
+				if err := handler.Connect(ctx); err != nil {
+					fmt.Printf("[WeCom] Failed to connect: %v\n", err)
+				}
+			} else {
+				fmt.Println("[WeCom] Registered (not enabled in config)")
+			}
+			if weHasCfg {
+				handler.SetChannelFilter(weCfg.AllowedChannels, weCfg.BlockedChannels)
+			}
+			gw.RegisterPlatform("wecom", handler)
+		}
+	}
+
+	// Always register DingTalk for API access
+	{
+		ddCfg, ddHasCfg := cfg.Gateway.Platforms["dingtalk"]
+		count++
+		configMap := platformConfigToMap(ddCfg)
+		if !ddHasCfg || !ddCfg.Enabled {
+			configMap = map[string]interface{}{}
+		}
+		handler, err := registry.Create(ctx, "dingtalk", configMap)
+		if err != nil {
+			fmt.Printf("[DingTalk] Failed to create: %v\n", err)
+		} else {
+			if ddHasCfg && ddCfg.Enabled {
+				fmt.Println("[DingTalk] Starting with configured credentials...")
+				if err := handler.Connect(ctx); err != nil {
+					fmt.Printf("[DingTalk] Failed to connect: %v\n", err)
+				}
+			} else {
+				fmt.Println("[DingTalk] Registered (not enabled in config)")
+			}
+			if ddHasCfg {
+				handler.SetChannelFilter(ddCfg.AllowedChannels, ddCfg.BlockedChannels)
+			}
+			gw.RegisterPlatform("dingtalk", handler)
+		}
+	}
+
+	// Always register Feishu/Lark for API access
+	{
+		fsCfg, fsHasCfg := cfg.Gateway.Platforms["feishu"]
+		count++
+		configMap := platformConfigToMap(fsCfg)
+		if !fsHasCfg || !fsCfg.Enabled {
+			configMap = map[string]interface{}{}
+		}
+		handler, err := registry.Create(ctx, "feishu", configMap)
+		if err != nil {
+			fmt.Printf("[Feishu] Failed to create: %v\n", err)
+		} else {
+			if fsHasCfg && fsCfg.Enabled {
+				fmt.Println("[Feishu] Starting with configured credentials...")
+				if err := handler.Connect(ctx); err != nil {
+					fmt.Printf("[Feishu] Failed to connect: %v\n", err)
+				}
+			} else {
+				fmt.Println("[Feishu] Registered (not enabled in config)")
+			}
+			if fsHasCfg {
+				handler.SetChannelFilter(fsCfg.AllowedChannels, fsCfg.BlockedChannels)
+			}
+			gw.RegisterPlatform("feishu", handler)
 		}
 	}
 
@@ -1152,6 +1272,14 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 			continue
 		}
 		if name == "qq" {
+			continue
+		}
+		// WhatsApp personal is already registered above; only process business mode here
+		if name == "whatsapp" && platCfg.Mode != "business" {
+			continue
+		}
+		// These platforms are already registered above
+		if name == "wecom" || name == "dingtalk" || name == "feishu" {
 			continue
 		}
 

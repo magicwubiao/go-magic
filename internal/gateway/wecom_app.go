@@ -67,6 +67,11 @@ func NewWeComAppGateway(corpID, agentID, secret string) *WeComAppGateway {
 }
 
 func (g *WeComAppGateway) onConnect(ctx context.Context) error {
+	if g.corpID == "" || g.secret == "" {
+		log.Warn("[WeCom App] No corp_id/secret configured, skipping connect. Configure credentials to enable WeCom support.")
+		return nil
+	}
+
 	log.Infof("[WeCom App] Connecting gateway...")
 
 	if err := g.refreshToken(); err != nil {

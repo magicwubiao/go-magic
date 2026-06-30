@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // WenxinProvider implements the Baidu Wenxin (ERNIE) API
@@ -238,43 +240,114 @@ func (p *WenxinProvider) Stream(ctx context.Context, messages []Message, handler
 }
 
 // buildRequest builds the Wenxin request from messages
+// Wenxin uses "functions" (flat format) instead of OpenAI's "tools" (nested format)
 func (p *WenxinProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
-		"messages": p.convertMessages(messages),
+		"messages": p.convertMessages(messages, tools),
 		"stream":   stream,
 	}
 
 	if len(tools) > 0 {
-		// Wenxin uses "tools" field
-		req["tools"] = tools
+		// Wenxin uses flat "functions" format, NOT OpenAI-style "tools"
+		req["functions"] = p.convertTools(tools)
 	}
 
 	return req
 }
 
-// convertMessages converts messages to Wenxin format
-func (p *WenxinProvider) convertMessages(messages []Message) []map[string]interface{} {
+// convertTools converts OpenAI-style nested tools to Wenxin flat function format
+// OpenAI format: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+// Wenxin format: {"name": "...", "description": "...", "parameters": {...}}
+func (p *WenxinProvider) convertTools(tools []map[string]interface{}) []map[string]interface{} {
+	converted := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		var funcData map[string]interface{}
+		if fn, ok := tool["function"].(map[string]interface{}); ok {
+			// OpenAI nested format
+			funcData = fn
+		} else {
+			// Already in flat format
+			funcData = tool
+		}
+
+		// Wenxin wants just name, description, parameters at top level
+		converted = append(converted, map[string]interface{}{
+			"name":        funcData["name"],
+			"description": funcData["description"],
+			"parameters":  funcData["parameters"],
+		})
+	}
+	return converted
+}
+
+// convertMessages converts internal message format to Wenxin's native format
+// Wenxin rules:
+// - No "system" role - merge into first user message
+// - "assistant" messages with function calls use "function_call" field
+// - Tool results use "function" role with "name" and "content"
+func (p *WenxinProvider) convertMessages(messages []Message, tools []map[string]interface{}) []map[string]interface{} {
 	var converted []map[string]interface{}
+	var systemContent string
 
 	for _, msg := range messages {
-		role := "user"
-		if msg.Role == "assistant" {
-			role = "assistant"
-		} else if msg.Role == "system" {
-			role = "user" // Wenxin handles system differently
-		}
+		switch msg.Role {
+		case "system":
+			// Wenxin doesn't support system role; accumulate and prepend to first user message
+			if msg.Content != "" {
+				systemContent = msg.Content
+			}
+			continue
 
-		m := map[string]interface{}{
-			"role":    role,
-			"content": msg.Content,
-		}
+		case "assistant":
+			m := map[string]interface{}{
+				"role":    "assistant",
+				"content": msg.Content,
+			}
+			// If this assistant message has tool calls, add function_call
+			if len(msg.ToolCalls) > 0 {
+				tc := msg.ToolCalls[0]
+				m["function_call"] = map[string]interface{}{
+					"name":      tc.Function.Name,
+					"arguments": tc.Function.Arguments,
+				}
+				m["content"] = "" // When calling function, content must be empty
+			}
+			converted = append(converted, m)
 
-		if msg.Role == "tool" {
-			m["role"] = "assistant"
-			m["content"] = msg.Content
-		}
+		case "tool", "function":
+			// Wenxin uses "function" role for tool results
+			name := ""
+			if msg.ToolCallID != "" {
+				name = msg.ToolCallID
+			}
+			converted = append(converted, map[string]interface{}{
+				"role":    "function",
+				"name":    name,
+				"content": msg.Content,
+			})
 
-		converted = append(converted, m)
+		case "user":
+			fallthrough
+		default:
+			content := msg.Content
+			// Prepend system prompt to the first user message
+			if systemContent != "" {
+				content = systemContent + "\n\n" + msg.Content
+				systemContent = ""
+			}
+			converted = append(converted, map[string]interface{}{
+				"role":    "user",
+				"content": content,
+			})
+		}
+	}
+
+	// If there were only system messages with no user messages, create one
+	if len(converted) == 0 && systemContent != "" {
+		converted = append(converted, map[string]interface{}{
+			"role":    "user",
+			"content": systemContent,
+		})
 	}
 
 	return converted
@@ -293,8 +366,12 @@ func (p *WenxinProvider) parseResponse(body []byte) (*ChatResponse, error) {
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
-		ErrorCode int    `json:"error_code"`
-		ErrorMsg  string `json:"error_msg"`
+		ErrorCode    int    `json:"error_code"`
+		ErrorMsg     string `json:"error_msg"`
+		FunctionCall struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function_call"`
 	}
 
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -305,20 +382,38 @@ func (p *WenxinProvider) parseResponse(body []byte) (*ChatResponse, error) {
 		return nil, fmt.Errorf("wenxin error [%d]: %s", resp.ErrorCode, resp.ErrorMsg)
 	}
 
-	return &ChatResponse{
+	chatResp := &ChatResponse{
 		Content: resp.Result,
 		Usage: &Usage{
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
 			TotalTokens:      resp.Usage.TotalTokens,
 		},
-	}, nil
+	}
+
+	// Handle function_call (Wenxin's tool calling format)
+	if resp.FunctionCall.Name != "" {
+		chatResp.ToolCalls = []types.ToolCall{
+			{
+				ID:   resp.FunctionCall.Name,
+				Type: "function",
+				Function: types.Function{
+					Name:      resp.FunctionCall.Name,
+					Arguments: resp.FunctionCall.Arguments,
+				},
+			},
+		}
+	}
+
+	return chatResp, nil
 }
 
 // parseStreamResponse parses streaming SSE response
 func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandler) error {
 	scanner := bufio.NewScanner(body)
 	var accumulatedContent string
+	var functionCallName, functionCallArgs strings.Builder
+	var hasFunctionCall bool
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -345,10 +440,24 @@ func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 				CompletionTokens int `json:"completion_tokens"`
 				TotalTokens      int `json:"total_tokens"`
 			} `json:"usage"`
+			FunctionCall struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function_call"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+
+		// Accumulate function call info if present
+		if chunk.FunctionCall.Name != "" {
+			functionCallName.WriteString(chunk.FunctionCall.Name)
+			hasFunctionCall = true
+		}
+		if chunk.FunctionCall.Arguments != "" {
+			functionCallArgs.WriteString(chunk.FunctionCall.Arguments)
+			hasFunctionCall = true
 		}
 
 		if chunk.Result != "" {
@@ -360,10 +469,27 @@ func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 		}
 
 		if chunk.IsEnd {
-			handler(&StreamResponse{
-				Content: "",
-				Done:    true,
-			})
+			if hasFunctionCall {
+				handler(&StreamResponse{
+					Content: "",
+					ToolCalls: []types.ToolCall{
+						{
+							ID:   functionCallName.String(),
+							Type: "function",
+							Function: types.Function{
+								Name:      functionCallName.String(),
+								Arguments: functionCallArgs.String(),
+							},
+						},
+					},
+					Done: true,
+				})
+			} else {
+				handler(&StreamResponse{
+					Content: "",
+					Done:    true,
+				})
+			}
 			return nil
 		}
 	}

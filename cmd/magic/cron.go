@@ -319,16 +319,20 @@ func runCronTest(cmd *cobra.Command, args []string) {
 	for i, m := range provCfg.Models {
 		userModels[i] = provider.ModelInfo{ID: m, Name: m}
 	}
+	model := provCfg.GetCurrentModel()
 	switch cfg.Provider {
 	case "openai":
-		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, provCfg.BaseURL, provCfg.GetCurrentModel(), cfg.Provider, userModels)
+		prov = provider.NewOpenAIProvider(provCfg.APIKey, provCfg.BaseURL, model)
 	case "anthropic":
-		prov = provider.NewOpenAICompatibleProvider(provCfg.APIKey, "", provCfg.GetCurrentModel(), cfg.Provider, userModels)
+		prov = provider.NewAnthropicProvider(provCfg.APIKey, model)
 	case "deepseek":
-		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.GetCurrentModel(), userModels)
+		prov = provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.BaseURL, model, userModels)
 	default:
-		fmt.Printf("Unsupported provider: %s\n", cfg.Provider)
-		os.Exit(1)
+		prov = createProvider(cfg.Provider, provCfg)
+		if prov == nil {
+			fmt.Printf("Unsupported provider: %s\n", cfg.Provider)
+			os.Exit(1)
+		}
 	}
 
 	// Create a simple tool registry (no tools for cron test)

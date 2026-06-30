@@ -62,6 +62,11 @@ func NewDingTalkGateway(appKey, appSecret string) *DingTalkGateway {
 }
 
 func (g *DingTalkGateway) onConnect(ctx context.Context) error {
+	if g.appKey == "" || g.appSecret == "" {
+		log.Warn("[DingTalk] No app_key/app_secret configured, skipping connect. Configure credentials to enable DingTalk support.")
+		return nil
+	}
+
 	log.Infof("[DingTalk] Connecting to DingTalk gateway...")
 
 	if err := g.refreshToken(); err != nil {

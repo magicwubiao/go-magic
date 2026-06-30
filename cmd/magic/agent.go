@@ -13,6 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/subagent"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // convertModelStringsToModelInfo converts []string to []provider.ModelInfo
@@ -248,54 +249,62 @@ func runAgentStats(cmd *cobra.Command, args []string) {
 }
 
 func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
+	// Use the same model selection logic as config.CreateProvider:
+	// Models[0] > Model field > config-level Model (this ensures consistency between chat and gateway modes)
 	userModels := convertModelStringsToModelInfo(cfg.Models)
+	model := cfg.GetCurrentModel()
+
+	log.Infof("[createProvider] name=%s, baseURL=%s, model=%q, models=%v, apiKeyLen=%d",
+		name, cfg.BaseURL, model, cfg.Models, len(cfg.APIKey))
+
 	switch name {
 	case "openai":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewOpenAIProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "anthropic":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewAnthropicProvider(cfg.APIKey, model)
 	case "deepseek":
-		return provider.NewDeepSeekProvider(cfg.APIKey, cfg.Model, userModels)
+		return provider.NewDeepSeekProvider(cfg.APIKey, cfg.BaseURL, model, userModels)
 	case "dashscope":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewDashScopeProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "kimi":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewKimiProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "minimax":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewMiniMaxProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "ollama":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, "", cfg.Model, name, userModels)
+		return provider.NewOllamaProvider(cfg.BaseURL, model)
 	case "openrouter":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewOpenRouterProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "vllm":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, "", cfg.Model, name, userModels)
+		return provider.NewVLLMProvider(cfg.BaseURL, model)
 	case "zhipu":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewZhipuProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "gemini":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewGeminiProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "groq":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewGroqProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "together":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewTogetherProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "mistral":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewMistralProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "cohere":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewCohereProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "perplexity":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewPerplexityProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "doubao":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewDoubaoProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "wenxin":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewWenxinProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "moonshot":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewMoonshotProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "mimo":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "hunyuan":
-		return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+		return provider.NewHunyuanProvider(cfg.APIKey, cfg.BaseURL, model)
+	case "huoshan":
+		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, model)
 	default:
-		// Fallback: try to use openai-compatible endpoint
 		if cfg.BaseURL != "" {
-			return provider.NewOpenAICompatibleProvider(cfg.APIKey, cfg.BaseURL, cfg.Model, name, userModels)
+			return provider.NewOpenAICompatibleProvider(name, cfg.APIKey, cfg.BaseURL, model, userModels)
 		}
 		return nil
 	}

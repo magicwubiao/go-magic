@@ -844,7 +844,7 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 		},
 	}
 
-	log.Debugf("[WeChat-iLink] 📨 Message from %s: %s",
+	log.Debugf("[WeChat-iLink] Message from %s: %s",
 		gatewayMsg.UserID, utils.Truncate(content, 50))
 
 	g.EmitMessage(gatewayMsg)

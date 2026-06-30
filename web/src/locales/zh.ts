@@ -269,8 +269,6 @@ export default {
     qqBotHint: 'QQ Bot 需要在 QQ 开放平台注册后获取 App ID 和 Token',
     qqGuildBot: 'QQ Guild Bot (频道机器人)',
     qqBotAppId: 'QQ Bot App ID',
-    qqScanLogin: '扫码获取凭证',
-    qqCredentialsReceived: '已获取 App ID 和 App Secret',
   },
   kanban: {
     title: '看板',

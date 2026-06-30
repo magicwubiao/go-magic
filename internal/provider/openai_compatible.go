@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -22,6 +24,81 @@ type OpenAICompatibleProvider struct {
 // NewOpenAICompatibleProvider creates a new OpenAI-compatible provider
 // If userModels is provided (non-nil), it will be used; otherwise defaults are loaded
 func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels []ModelInfo) *OpenAICompatibleProvider {
+	// Defensive: apply default base URL per provider if not provided
+	if baseURL == "" {
+		switch name {
+		case "openai", "custom":
+			baseURL = "https://api.openai.com/v1"
+		case "anthropic":
+			baseURL = "https://api.anthropic.com/v1"
+		case "deepseek":
+			baseURL = "https://api.deepseek.com"
+		case "kimi", "moonshot":
+			baseURL = "https://api.moonshot.cn/v1"
+		case "zhipu":
+			baseURL = "https://open.bigmodel.cn/api/paas/v4"
+		case "minimax":
+			baseURL = "https://api.minimax.chat/v1"
+		case "groq":
+			baseURL = "https://api.groq.com/openai/v1"
+		case "openrouter":
+			baseURL = "https://openrouter.ai/api/v1"
+		case "mistral":
+			baseURL = "https://api.mistral.ai/v1"
+		case "dashscope":
+			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		case "doubao", "huoshan":
+			baseURL = "https://ark.cn-beijing.volces.com/api/v3"
+		case "perplexity":
+			baseURL = "https://api.perplexity.ai"
+		case "hunyuan":
+			baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
+		case "mimo":
+			baseURL = "https://api.xiaomimimo.com/v1"
+		case "ollama":
+			baseURL = "http://localhost:11434"
+		case "vllm":
+			baseURL = "http://localhost:8000/v1"
+		}
+	}
+
+	if model == "" {
+		switch name {
+		case "openai", "custom":
+			model = "gpt-4o-mini"
+		case "anthropic":
+			model = "claude-3-5-sonnet-20241022"
+		case "deepseek":
+			model = "deepseek-chat"
+		case "kimi", "moonshot":
+			model = "moonshot-v1-8k"
+		case "zhipu":
+			model = "glm-4"
+		case "minimax":
+			model = "abab6.5s-chat"
+		case "groq":
+			model = "llama3-70b-8192"
+		case "openrouter":
+			model = "gpt-4o-mini"
+		case "mistral":
+			model = "mistral-small-latest"
+		case "dashscope":
+			model = "qwen-plus"
+		case "doubao", "huoshan":
+			model = "doubao-pro-32k"
+		case "perplexity":
+			model = "llama-3.1-sonar-small-128k-online"
+		case "hunyuan":
+			model = "hunyuan-lite"
+		case "mimo":
+			model = "moa-v1"
+		case "ollama":
+			model = "llama3.2"
+		case "vllm":
+			model = "default-model"
+		}
+	}
+
 	var modelList []ModelInfo
 
 	// Use user-provided models if available
@@ -189,11 +266,26 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 
 // ChatWithTools implements the ToolCaller interface
 func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
+	convertedMessages := ConvertMessagesForProvider(messages, p.BaseProvider)
 	reqBody := map[string]interface{}{
-		"model":       p.GetModel(),
-		"messages":    ConvertMessagesForProvider(messages, p.BaseProvider),
-		"tools":       tools,
-		"tool_choice": "auto",
+		"model":    p.GetModel(),
+		"messages": convertedMessages,
+		"tools":    tools,
+	}
+
+	// tool_choice strategy:
+	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
+	// - Chinese providers (zhipu, kimi, minimax, doubao, hunyuan) also use "auto"
+	// - DashScope and others may reject tool_choice
+	switch p.name {
+	case "dashscope", "mimo":
+		// These providers don't require tool_choice
+	default:
+		reqBody["tool_choice"] = "auto"
+	}
+
+	if strings.TrimSpace(p.GetModel()) == "" {
+		log.Warnf("[ChatWithTools] model parameter is empty for provider=%s", p.name)
 	}
 
 	url := p.BaseURL + "/chat/completions"
@@ -205,7 +297,8 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 
 	if statusCode != 200 {
-		return nil, p.ParseAPIError(respBody, statusCode)
+		parsedErr := p.ParseAPIError(respBody, statusCode)
+		return nil, fmt.Errorf("chat with tools request failed: status %d, %w", statusCode, parsedErr)
 	}
 
 	var response struct {

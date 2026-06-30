@@ -585,7 +585,15 @@ func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 	}
 
 	if err := json.Unmarshal(body, &openAIErr); err == nil && openAIErr.Error.Message != "" {
-		return fmt.Errorf("api error [%s]: %s", openAIErr.Error.Type, openAIErr.Error.Message)
+		// Use type or code as fallback label when type is empty
+		label := openAIErr.Error.Type
+		if label == "" {
+			label = openAIErr.Error.Code
+		}
+		if label == "" {
+			label = fmt.Sprintf("http_%d", statusCode)
+		}
+		return fmt.Errorf("api error [%s]: %s", label, openAIErr.Error.Message)
 	}
 
 	// Try to parse as Anthropic error format

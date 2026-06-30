@@ -423,6 +423,12 @@ func (g *Gateway) handleMessages(platform string, handler PlatformHandler) {
 
 // processMessage processes a single message
 func (g *Gateway) processMessage(platform string, msg Message, handler PlatformHandler) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("[Gateway] PANIC in processMessage for platform=%s user=%s: %v", platform, msg.UserID, r)
+		}
+	}()
+
 	// Apply middleware
 	g.mu.RLock()
 	middleware := g.middleware
@@ -464,13 +470,15 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	var inputTokens, outputTokens, cacheTokens int
 	var err error
 
-	// Try ProcessWithStats first, fall back to Process
+	log.Infof("[Gateway] Processing message from user=%s platform=%s", msg.UserID, platform)
+
 	if psHandler, ok := g.agent.(AgentHandlerWithStats); ok {
 		resp, inputTokens, outputTokens, cacheTokens, err = psHandler.ProcessWithStats(context.Background(), msg)
 	} else {
 		resp, err = g.agent.Process(context.Background(), msg)
 	}
 	if err != nil {
+		log.Errorf("[Gateway] Agent processing error: %v", err)
 		resp = fmt.Sprintf("Error: %v", err)
 	}
 
@@ -776,7 +784,6 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/login/status", g.handleLoginStatus)
 	mux.HandleFunc("/api/login/qr/", g.handleQRCode)
 	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
-	mux.HandleFunc("/api/login/qr/qq/status", g.handleQQScanStatus)
 
 	g.apiServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", g.apiPort),
@@ -983,62 +990,5 @@ func (g *Gateway) handleQRRefresh(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(session.ToAPIResponse())
 	} else {
 		http.Error(w, fmt.Sprintf("platform '%s' does not support QR login", platform), http.StatusBadRequest)
-	}
-}
-
-// handleQQScanStatus handles QQ scan login status polling
-// GET /api/login/qr/qq/status
-func (g *Gateway) handleQQScanStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	sig := r.URL.Query().Get("sig")
-	if sig == "" {
-		http.Error(w, "sig is required", http.StatusBadRequest)
-		return
-	}
-
-	status, err := PollQQScanStatus(r.Context(), sig)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "error",
-			"message": err.Error(),
-		})
-		return
-	}
-
-	switch status.Stat {
-	case 0:
-		// 未扫码
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "pending",
-			"message": "Please scan the QR code with QQ",
-		})
-	case 1:
-		// 已扫码未确认
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "scanning",
-			"message": "QR code scanned, please confirm in QQ",
-		})
-	case 2:
-		// 已确认，授权成功
-		if status.AppID == "" || status.AppSecret == "" {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":  "error",
-				"message": "Failed to get app credentials",
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":     "confirmed",
-			"message":    "Login successful",
-			"app_id":     status.AppID,
-			"app_secret": status.AppSecret,
-			"token":      status.Token,
-		})
-	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "error",
-			"message": fmt.Sprintf("Unknown status: %d", status.Stat),
-		})
 	}
 }

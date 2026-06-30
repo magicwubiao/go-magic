@@ -51,6 +51,11 @@ func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
 }
 
 func (g *FeishuGateway) onConnect(ctx context.Context) error {
+	if g.appID == "" || g.appSecret == "" {
+		log.Warn("[Feishu] No app_id/app_secret configured, skipping connect. Configure credentials to enable Feishu support.")
+		return nil
+	}
+
 	log.Infof("[Feishu] Connecting gateway...")
 
 	if err := g.refreshToken(); err != nil {

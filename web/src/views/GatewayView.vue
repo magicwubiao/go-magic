@@ -129,10 +129,6 @@
           <n-text depth="3" style="font-size: 12px;">
             {{ t('gateway.qqBotHint') }}
           </n-text>
-          <n-divider />
-          <n-button type="info" block @click="openQQScanLogin">
-            {{ t('gateway.qqScanLogin') }}
-          </n-button>
         </template>
       </n-form>
       <template #action>
@@ -143,36 +139,7 @@
       </template>
     </n-modal>
 
-    <!-- QQ Scan Login Modal -->
-    <n-modal v-model:show="showQQScanModal" :title="t('gateway.qqScanLogin')" preset="card" style="width: 400px;">
-      <div class="qr-modal-content">
-        <div v-if="qqScanStatus === 'loading'" class="qr-loading">
-          <n-spin size="large" />
-          <n-text depth="3">{{ t('gateway.qrGenerating') }}</n-text>
-        </div>
-        <div v-else-if="qqScanStatus === 'error'" class="qr-error">
-          <n-result status="error" :title="t('gateway.qrError')" :description="qqScanMessage" />
-          <n-button type="primary" @click="initQQScan">{{ t('gateway.qrRetry') }}</n-button>
-        </div>
-        <div v-else>
-          <div class="qr-canvas-container">
-            <img v-if="qqScanQRUrl" :src="qqScanQRUrl" style="width: 200px;" />
-          </div>
-          <div class="qr-status" :class="`qr-status--${qqScanStatus}`">
-            <n-icon v-if="qqScanStatus === 'pending'" size="20">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zm8-2v8h-2V3h-4v8h6zm2 10h2v-6h-2v6zm-6-6v2h-2v-2h2zm8-8v6h2V3h-6v2h4z"/></svg>
-            </n-icon>
-            <n-icon v-else-if="qqScanStatus === 'scanning'" size="20" class="qr-icon--pulse">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M9.5 6.5v3h-3v-3h3M11 5H5v6h6V5zm-1.5 9.5v3h-3v-3h3M11 13H5v6h6v-6zm6.5-6.5v3h-3v-3h3M19 5h-6v6h6V5zm-6 8h1.5v1.5H13V13zm1.5 1.5H16V16h-1.5v-1.5zM16 13h1.5v1.5H16V13zm-3 3h1.5v1.5H13V16zm1.5 1.5H16V19h-1.5v-1.5zM16 16h1.5v1.5H16V16zm1.5-1.5H19V16h-1.5v-1.5zm0 3H19V19h-1.5v-1.5zM19 16h1.5v1.5H19V16zm-3-3h1.5v1.5H16v-1.5zm0 3H19V16h-1.5v1.5zM19 13h1.5v1.5H19V13z"/></svg>
-            </n-icon>
-            <n-icon v-else-if="qqScanStatus === 'confirmed'" size="20">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
-            </n-icon>
-            <n-text>{{ qqScanMessage }}</n-text>
-          </div>
-        </div>
-      </div>
-    </n-modal>
+
 
     <!-- QR Login Modal -->
     <n-modal v-model:show="showQRModal" :title="`QR Code Login - ${qrPlatform?.label}`" preset="card" style="width: 400px;">
@@ -304,14 +271,6 @@ const qrExpiresIn = ref(60)
 const qrImageUrl = ref<string>('')
 let qrPollInterval: ReturnType<typeof setInterval> | null = null
 let qrCountdownInterval: ReturnType<typeof setInterval> | null = null
-
-// QQ Scan State
-const showQQScanModal = ref(false)
-const qqScanStatus = ref<'loading' | 'pending' | 'scanning' | 'confirmed' | 'error'>('loading')
-const qqScanMessage = ref('Please wait...')
-const qqScanQRUrl = ref<string>('')
-const qqScanSig = ref<string>('')
-let qqScanPollInterval: ReturnType<typeof setInterval> | null = null
 
 function createPlatform(id: string, label: string, description: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
   return reactive({
@@ -633,95 +592,6 @@ function closeQRModal(): void {
   qrImageUrl.value = ''
 }
 
-// QQ Scan Login functions
-function openQQScanLogin(): void {
-  showQQScanModal.value = true
-  initQQScan()
-}
-
-async function initQQScan(): Promise<void> {
-  qqScanStatus.value = 'loading'
-  qqScanMessage.value = t('gateway.qrGenerating')
-  qqScanQRUrl.value = ''
-
-  try {
-    const response = await gatewayStore.fetchGatewayQR('qq')
-    if (response.qr_code) {
-      qqScanQRUrl.value = response.qr_code
-      // Extract sig from QR data (for polling)
-      qqScanSig.value = response.qr_data || ''
-      qqScanStatus.value = 'pending'
-      qqScanMessage.value = t('gateway.qrScanPending')
-      startQQScanPoll()
-    } else {
-      qqScanStatus.value = 'error'
-      qqScanMessage.value = response.message || 'Failed to get QR code'
-    }
-  } catch (e) {
-    qqScanStatus.value = 'error'
-    qqScanMessage.value = String(e)
-  }
-}
-
-function startQQScanPoll(): void {
-  stopQQScanPoll()
-  qqScanPollInterval = setInterval(async () => {
-    if (!qqScanSig.value) return
-
-    try {
-      const response = await fetch(`/api/gateway/qq/scan-status?sig=${qqScanSig.value}`)
-      const data = await response.json()
-
-      if (data.status === 'pending') {
-        qqScanStatus.value = 'pending'
-        qqScanMessage.value = data.message || t('gateway.qrScanPending')
-      } else if (data.status === 'scanning') {
-        qqScanStatus.value = 'scanning'
-        qqScanMessage.value = data.message || t('gateway.qrScanScanning')
-      } else if (data.status === 'confirmed') {
-        qqScanStatus.value = 'confirmed'
-        qqScanMessage.value = data.message || t('gateway.qrScanConfirmed')
-        stopQQScanPoll()
-
-        // Auto-fill credentials
-        if (editingPlatform.value && data.app_id && data.app_secret) {
-          editingPlatform.value.appId = data.app_id
-          editingPlatform.value.appSecret = data.app_secret
-          message.success(t('gateway.qqCredentialsReceived'))
-        }
-
-        // Auto-save
-        setTimeout(() => {
-          closeQQScanModal()
-          saveEditingPlatform()
-        }, 1500)
-      } else if (data.status === 'error') {
-        qqScanStatus.value = 'error'
-        qqScanMessage.value = data.message || 'Error'
-        stopQQScanPoll()
-      }
-    } catch (e) {
-      console.error('QQ scan poll error:', e)
-    }
-  }, 2000)
-}
-
-function stopQQScanPoll(): void {
-  if (qqScanPollInterval) {
-    clearInterval(qqScanPollInterval)
-    qqScanPollInterval = null
-  }
-}
-
-function closeQQScanModal(): void {
-  stopQQScanPoll()
-  showQQScanModal.value = false
-  qqScanStatus.value = 'loading'
-  qqScanMessage.value = ''
-  qqScanQRUrl.value = ''
-  qqScanSig.value = ''
-}
-
 function getDefaultMessage(status?: string): string {
   switch (status) {
     case 'pending': return t('gateway.qrScanPending')
@@ -751,7 +621,6 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPolling()
   stopCountdown()
-  stopQQScanPoll()
 })
 </script>
 

@@ -47,7 +47,7 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 	case "anthropic":
 		return provider.NewAnthropicProvider(provCfg.APIKey, model), nil
 	case "deepseek":
-		return provider.NewDeepSeekProvider(provCfg.APIKey, model, userModels), nil
+		return provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	case "dashscope":
 		return provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "kimi":

@@ -501,17 +501,17 @@ func (s *Store) getLLMProvider() provider.Provider {
 	// For now, try common providers
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey != "" {
-		return provider.NewOpenAICompatibleProvider(apiKey, "", "gpt-3.5-turbo", "openai", nil)
+		return provider.NewOpenAICompatibleProvider("openai", apiKey, "https://api.openai.com/v1", "gpt-3.5-turbo", nil)
 	}
 
 	apiKey = os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey != "" {
-		return provider.NewOpenAICompatibleProvider(apiKey, "", "claude-3-haiku-20240307", "anthropic", nil)
+		return provider.NewOpenAICompatibleProvider("anthropic", apiKey, "https://api.anthropic.com/v1", "claude-3-haiku-20240307", nil)
 	}
 
 	apiKey = os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey != "" {
-		return provider.NewDeepSeekProvider(apiKey, "deepseek-chat", nil)
+		return provider.NewDeepSeekProvider(apiKey, "", "deepseek-chat", nil)
 	}
 
 	return nil

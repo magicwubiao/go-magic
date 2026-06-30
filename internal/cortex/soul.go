@@ -3,6 +3,7 @@ package cortex
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -89,10 +90,22 @@ func (m *SoulManager) SetSoul(content string) error {
 
 // UpdateFromFeedback updates the soul based on user feedback
 func (m *SoulManager) UpdateFromFeedback(feedback string) error {
+	if strings.TrimSpace(feedback) == "" {
+		return nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Append feedback as learning
+	if strings.Contains(m.content, feedback) {
+		return nil
+	}
+
+	const maxSoulSize = 32 * 1024
+	if len(m.content) >= maxSoulSize {
+		m.content = m.defaultSoul
+	}
+
 	update := "\n\n## Learned Preferences\n" + feedback + "\n[Auto-generated from interactions]"
 	m.content += update
 

@@ -889,7 +889,6 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
 	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
-	mux.HandleFunc("/api/gateway/qq/scan-status", withCORS(requireAuth(s.handleQQScanStatus)))
 
 	// Magic update
 	mux.HandleFunc("/api/magic/update", withCORS(requireAuth(s.handleMagicUpdate)))
@@ -6722,69 +6721,6 @@ func (s *Server) handleGatewayQRStatus(w http.ResponseWriter, r *http.Request) {
 		Status:    session.Status,
 		QRCode:    session.QRCode,
 		Message:   session.Message,
-		ExpiresIn: expiresIn,
-	})
-}
-
-// handleQQScanStatus handles QQ scan login status polling
-// GET /api/gateway/qq/scan-status?sig=xxx
-func (s *Server) handleQQScanStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
-	sig := r.URL.Query().Get("sig")
-	if sig == "" {
-		jsonResponse(w, QRStatus{
-			Platform: "qq",
-			Status:   "error",
-			Message:  "sig parameter is required",
-		})
-		return
-	}
-
-	// Proxy to gateway process
-	gatewayURL := fmt.Sprintf("http://127.0.0.1:8080/api/login/qr/qq/status?sig=%s", sig)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(gatewayURL)
-	if err != nil {
-		jsonResponse(w, QRStatus{
-			Platform: "qq",
-			Status:   "error",
-			Message:  "Gateway is not running. Please start the gateway first.",
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Status    string `json:"status"`
-		Message   string `json:"message"`
-		AppID     string `json:"app_id"`
-		AppSecret string `json:"app_secret"`
-		Token     string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		jsonResponse(w, QRStatus{
-			Platform: "qq",
-			Status:   "error",
-			Message:  "Failed to parse gateway response",
-		})
-		return
-	}
-
-	expiresIn := 0
-	if result.Status == "pending" {
-		expiresIn = 300 // 5 minutes for QR code expiry
-	}
-
-	jsonResponse(w, QRStatus{
-		Platform:  "qq",
-		Status:    result.Status,
-		Message:   result.Message,
-		QRCode:    "", // QQ QR code is returned from the main QR endpoint
 		ExpiresIn: expiresIn,
 	})
 }
