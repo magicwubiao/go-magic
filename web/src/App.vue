@@ -9,13 +9,10 @@
       <n-layout v-else style="height: 100vh;" position="absolute">
         <!-- Top Header -->
         <n-layout-header style="height: 56px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e0e0; background: #fff;">
-          <!-- Left: Logo & Project Name -->
+          <!-- Left: Project Name -->
           <div style="display: flex; align-items: center; gap: 12px;">
             <n-button text tag="a" :href="githubUrl" target="_blank" style="font-size: 18px; font-weight: 600; color: #333; text-decoration: none;">
-              <template #icon>
-                <img src="/logo.svg" alt="logo" style="width: 28px; height: 28px;" />
-              </template>
-              Go Magic
+              GO MAGIC
             </n-button>
           </div>
 

@@ -479,7 +479,6 @@ export default {
     cortexEnabledHint: '启用 Cortex AI 系统以增强记忆和技能演进',
     cortexSkillPatternFreq: '技能模式频率',
     cortexSkillPatternFreqHint: '检测技能模式的最小频率 (1-10)',
-    server: '服务器',
     serverSaved: '服务器配置已保存',
     uploadUrlPrefix: '上传 URL 前缀',
     uploadUrlPrefixPlaceholder: 'https://your-domain.com/uploads',

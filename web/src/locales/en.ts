@@ -477,7 +477,6 @@ export default {
     cortexEnabledHint: 'Enable the Cortex AI system for enhanced memory and skill evolution',
     cortexSkillPatternFreq: 'Skill Pattern Frequency',
     cortexSkillPatternFreqHint: 'Minimum frequency to detect a skill pattern (1-10)',
-    server: 'Server',
     serverSaved: 'Server configuration saved',
     uploadUrlPrefix: 'Upload URL Prefix',
     uploadUrlPrefixPlaceholder: 'https://your-domain.com/uploads',
