@@ -7,7 +7,7 @@
           + {{ t('chat.newChat') }}
         </n-button>
       </div>
-      <div class="session-list">
+      <div class="session-list" ref="sessionListRef">
         <template v-for="(sessions, profile) in groupedSessions" :key="profile">
           <div class="profile-group-header">{{ profile || t('chat.default') }}</div>
           <div
@@ -113,7 +113,10 @@
             </div>
           </div>
         </template>
-        <n-text v-if="!chatStore.sessions.length" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <div v-if="chatStore.sessionsLoading" style="padding: 16px; text-align: center;">
+          <n-spin size="small" />
+        </div>
+        <n-text v-if="!chatStore.sessions.length && !chatStore.sessionsLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.noSessions') }}
         </n-text>
       </div>
@@ -360,6 +363,7 @@ const router = useRouter()
 const message = useMessage()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
+const sessionListRef = ref<HTMLDivElement>()
 
 // Rename session
 const editingSessionId = ref<string | null>(null)
@@ -670,6 +674,25 @@ function scrollToBottom() {
   })
 }
 
+// Handle session list scroll - load more when scrolled to bottom
+let loadMoreThrottleTimer: ReturnType<typeof setTimeout> | null = null
+function handleSessionScroll(e: Event) {
+  if (loadMoreThrottleTimer) return
+  if (chatStore.sessionsLoading) return
+  if (!chatStore.sessionsHasMore) return
+
+  const target = e.target as HTMLDivElement
+  const threshold = 100
+  const isNearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < threshold
+
+  if (isNearBottom) {
+    loadMoreThrottleTimer = setTimeout(() => {
+      loadMoreThrottleTimer = null
+      chatStore.loadMoreSessions()
+    }, 200)
+  }
+}
+
 // Throttled scroll to bottom - only scroll on message count changes, not on every stream content update
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
 function throttledScrollToBottom() {
@@ -693,13 +716,18 @@ watch(() => goalsStore.linkVersion, () => {
 
 onMounted(async () => {
   await chatStore.loadSessions()
+  // Bind scroll event for session list infinite scroll
+  if (sessionListRef.value) {
+    sessionListRef.value.addEventListener('scroll', handleSessionScroll)
+  }
 })
 </script>
 
 <style scoped>
 .chat-container {
   display: flex;
-  height: calc(100vh - 48px);
+  height: calc(100vh - 56px);
+  min-height: 0;
 }
 
 /* ========== Sidebar ========== */
@@ -710,17 +738,25 @@ onMounted(async () => {
   flex-direction: column;
   flex-shrink: 0;
   background: #fff;
+  height: calc(100vh - 56px);
   overflow: hidden;
-  height: 100%;
+  position: relative;
 }
 
 .sidebar-header {
+  flex-shrink: 0;
   padding: 12px;
   border-bottom: 1px solid #e0e0e0;
+  height: 49px;
+  box-sizing: border-box;
 }
 
 .session-list {
-  flex: 1;
+  position: absolute;
+  top: 49px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   overflow-y: auto;
 }
 
@@ -824,6 +860,7 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
+  padding-bottom: 80px;
 }
 
 .empty-hint {
@@ -1161,7 +1198,7 @@ onMounted(async () => {
   padding: 12px 24px 16px;
   background: #fff;
   border-top: 1px solid #e0e0e0;
-  position: relative;
+  flex-shrink: 0;
 }
 
 /* Command suggestions dropdown */

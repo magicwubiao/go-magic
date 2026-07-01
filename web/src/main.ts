@@ -25,6 +25,7 @@ import GoalsView from './views/GoalsView.vue'
 import ApprovalView from './views/ApprovalView.vue'
 import FilesView from './views/FilesView.vue'
 import UsageView from './views/UsageView.vue'
+import MCPView from './views/MCPView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -48,6 +49,7 @@ const router = createRouter({
     { path: '/approval', component: ApprovalView },
     { path: '/files', component: FilesView },
     { path: '/usage', component: UsageView },
+    { path: '/mcp', component: MCPView },
 
   ],
 })

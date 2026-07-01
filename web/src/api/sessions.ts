@@ -36,9 +36,9 @@ export interface Message {
   images?: string[]
 }
 
-export async function getSessions(): Promise<Session[]> {
-  const res = await request<{ sessions: Session[] }>('/sessions')
-  return res.sessions || []
+export async function getSessions(limit: number = 20, offset: number = 0): Promise<{ sessions: Session[]; total: number }> {
+  const res = await request<{ sessions: Session[]; total: number }>(`/sessions?limit=${limit}&offset=${offset}`)
+  return { sessions: res.sessions || [], total: res.total || 0 }
 }
 
 export async function getSession(id: string): Promise<{ session_id: string; messages: Message[] }> {

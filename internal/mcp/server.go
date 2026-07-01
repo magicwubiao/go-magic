@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -14,20 +16,63 @@ import (
 // MCPServer represents an MCP server that can be connected to by MCP clients
 type MCPServer struct {
 	// Server configuration
-	Port       int
-	Path       string
-	AuthToken  string
-	EnableCORS bool
+	Port         int
+	Path         string
+	AuthToken    string
+	EnableCORS   bool
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 
 	// Handler for MCP requests
 	Handler MCPServerHandler
 
 	// Internal state
-	server    *http.Server
-	upgrader  websocket.Upgrader
-	mu        sync.RWMutex
-	connected map[string]*websocket.Conn
-	clientMu  sync.RWMutex
+	server      *http.Server
+	upgrader    websocket.Upgrader
+	mu          sync.RWMutex
+	connected   map[string]*websocket.Conn
+	clientMu    sync.RWMutex
+	rateLimiter *rateLimiter
+	shutdown    int32
+}
+
+// rateLimiter implements simple token bucket rate limiting
+type rateLimiter struct {
+	mu         sync.Mutex
+	tokens     int
+	maxTokens  int
+	refillRate time.Duration
+	lastRefill time.Time
+}
+
+// newRateLimiter creates a new rate limiter
+func newRateLimiter(maxTokens int, refillRate time.Duration) *rateLimiter {
+	return &rateLimiter{
+		maxTokens:  maxTokens,
+		tokens:     maxTokens,
+		refillRate: refillRate,
+		lastRefill: time.Now(),
+	}
+}
+
+// Allow checks if a request is allowed
+func (r *rateLimiter) Allow() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(r.lastRefill)
+	if elapsed >= r.refillRate {
+		tokensToAdd := int(elapsed / r.refillRate)
+		r.tokens = min(r.maxTokens, r.tokens+tokensToAdd)
+		r.lastRefill = now
+	}
+
+	if r.tokens > 0 {
+		r.tokens--
+		return true
+	}
+	return false
 }
 
 // MCPServerHandler defines the interface for handling MCP server requests
@@ -103,11 +148,14 @@ type SamplingResponse struct {
 // NewMCPServer creates a new MCP server
 func NewMCPServer(port int, handler MCPServerHandler) *MCPServer {
 	return &MCPServer{
-		Port:       port,
-		Path:       "/mcp",
-		EnableCORS: true,
-		Handler:    handler,
-		connected:  make(map[string]*websocket.Conn),
+		Port:         port,
+		Path:         "/mcp",
+		EnableCORS:   true,
+		Handler:      handler,
+		connected:    make(map[string]*websocket.Conn),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		rateLimiter:  newRateLimiter(100, time.Second), // 100 requests per second
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins in development
@@ -156,16 +204,46 @@ func (s *MCPServer) StartTLS(certFile, keyFile string) error {
 	return s.server.ListenAndServeTLS(certFile, keyFile)
 }
 
-// Stop stops the MCP server
+// Stop stops the MCP server gracefully
 func (s *MCPServer) Stop() error {
+	if !atomic.CompareAndSwapInt32(&s.shutdown, 0, 1) {
+		return nil // Already shutting down
+	}
+
+	// Close all connected WebSocket clients
+	s.clientMu.Lock()
+	for clientID, conn := range s.connected {
+		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
+		conn.Close()
+		delete(s.connected, clientID)
+	}
+	s.clientMu.Unlock()
+
 	if s.server != nil {
 		return s.server.Shutdown(context.Background())
 	}
 	return nil
 }
 
+// isShuttingDown returns true if the server is shutting down
+func (s *MCPServer) isShuttingDown() bool {
+	return atomic.LoadInt32(&s.shutdown) == 1
+}
+
 // handleWebSocket handles WebSocket connections
 func (s *MCPServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Check if server is shutting down
+	if s.isShuttingDown() {
+		http.Error(w, "Server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Apply rate limiting
+	if !s.rateLimiter.Allow() {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	// Check auth token if configured
 	if s.AuthToken != "" {
 		token := r.Header.Get("Authorization")
@@ -192,6 +270,10 @@ func (s *MCPServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		delete(s.connected, clientID)
 		s.clientMu.Unlock()
 	}()
+
+	// Set read/write deadlines
+	conn.SetReadDeadline(time.Now().Add(s.ReadTimeout))
+	conn.SetWriteDeadline(time.Now().Add(s.WriteTimeout))
 
 	// Handle incoming messages
 	for {

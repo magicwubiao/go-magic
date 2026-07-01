@@ -1,54 +1,81 @@
 <template>
   <n-notification-provider>
     <n-message-provider>
-      <!-- Login page: no sidebar -->
+      <!-- Login page: no header -->
       <template v-if="isLoginPage">
         <router-view />
       </template>
-      <!-- Main layout: with sidebar -->
-      <n-layout v-else has-sider style="height: 100vh;">
-        <n-layout-sider
-          bordered
-          collapse-mode="width"
-          :collapsed-width="64"
-          :width="220"
-          show-trigger
-          v-model:collapsed="siderCollapsed"
+      <!-- Main layout: with top header -->
+      <n-layout v-else style="height: 100vh;" position="absolute">
+        <!-- Top Header -->
+        <n-layout-header style="height: 56px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e0e0; background: #fff;">
+          <!-- Left: Logo & Project Name -->
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <n-button text tag="a" :href="githubUrl" target="_blank" style="font-size: 18px; font-weight: 600; color: #333; text-decoration: none;">
+              <template #icon>
+                <img src="/logo.svg" alt="logo" style="width: 28px; height: 28px;" />
+              </template>
+              Go Magic
+            </n-button>
+          </div>
+
+          <!-- Right: Dropdown Menu -->
+          <n-dropdown :options="headerOptions" @select="handleHeaderSelect">
+            <n-button text style="font-size: 14px;">
+              <template #icon>
+                <n-icon><settings-outline /></n-icon>
+              </template>
+              <span style="margin-left: 4px;">{{ t('common.options') }}</span>
+              <template #suffix>
+                <n-icon><chevron-down-outline /></n-icon>
+              </template>
+            </n-button>
+          </n-dropdown>
+        </n-layout-header>
+
+        <!-- Main Content Area -->
+        <n-layout
+          has-sider
+          position="absolute"
+          style="top: 56px; bottom: 0; left: 0; right: 0;"
         >
-          <sidebar-logo :collapsed="siderCollapsed" />
-          <n-menu
+          <!-- Sidebar -->
+          <n-layout-sider
+            bordered
+            collapse-mode="width"
             :collapsed-width="64"
-            :collapsed-icon-size="22"
-            :options="menuOptions"
-            :value="activeKey"
-            @update:value="handleMenuClick"
-          />
-          <div style="padding: 8px 0; border-top: 1px solid #e0e0e0; margin-top: auto;">
+            :width="220"
+            show-trigger
+            v-model:collapsed="siderCollapsed"
+          >
             <n-menu
               :collapsed-width="64"
               :collapsed-icon-size="22"
-              :options="logoutOption"
-              @update:value="handleLogoutClick"
+              :options="menuOptions"
+              :value="activeKey"
+              @update:value="handleMenuClick"
             />
-          </div>
-        </n-layout-sider>
+          </n-layout-sider>
 
-        <!-- Logout Confirm Modal -->
-        <n-modal
-          v-model:show="showLogoutConfirm"
-          preset="dialog"
-          :title="t('common.logout')"
-          :content="t('common.confirmLogout')"
-          :positive-text="t('common.confirm')"
-          :negative-text="t('common.cancel')"
-          @positive-click="handleLogout"
-        />
-        <n-layout>
-          <n-layout-content style="padding: 24px; overflow: auto;">
-            <router-view />
-          </n-layout-content>
+          <!-- Content -->
+          <n-layout>
+            <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
+              <router-view />
+            </n-layout-content>
+          </n-layout>
         </n-layout>
       </n-layout>
+
+      <!-- Logout Confirm Modal -->
+      <n-modal
+        v-model:show="showLogoutConfirm"
+        preset="dialog"
+        :title="t('common.logout')"
+        :content="t('common.confirmLogout')"
+        :positive-text="t('common.confirm')"
+        :negative-text="t('common.cancel')"
+        @positive-click="handleLogout"
+      />
     </n-message-provider>
   </n-notification-provider>
 </template>
@@ -56,9 +83,8 @@
 <script setup lang="ts">
 import { computed, h, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon, NModal } from 'naive-ui'
+import { NIcon } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import SidebarLogo from '@/components/SidebarLogo.vue'
 import {
   ChatbubbleOutline,
   SettingsOutline,
@@ -74,11 +100,12 @@ import {
   PeopleOutline,
   PersonOutline,
   FlagOutline,
-  LogOutOutline,
   ShieldCheckmarkOutline,
   FolderOutline,
   PieChartOutline,
-  StatsChartOutline,
+  ServerOutline,
+  ChevronDownOutline,
+  LogOutOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { getPendingApprovals } from '@/api/approval'
@@ -91,8 +118,10 @@ const showLogoutConfirm = ref(false)
 const siderCollapsed = ref(false)
 const pendingApprovalCount = ref(0)
 
-const isLoginPage = computed(() => route.path === '/login')
+const githubUrl = 'https://github.com/magicwubiao/go-magic'
 
+const isLoginPage = computed(() => route.path === '/login')
+const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat')
 const activeKey = computed(() => route.path)
 
 // Poll pending approvals for sidebar badge
@@ -130,6 +159,20 @@ function handleLogout() {
   router.push('/login')
 }
 
+function handleHeaderSelect(key: string) {
+  switch (key) {
+    case 'system':
+      router.push('/system')
+      break
+    case 'config':
+      router.push('/config')
+      break
+    case 'logout':
+      showLogoutConfirm.value = true
+      break
+  }
+}
+
 const menuOptions = computed(() => [
   { label: t('nav.chat'), key: '/chat', icon: renderIcon(ChatbubbleOutline) },
   { label: t('nav.kanban'), key: '/kanban', icon: renderIcon(GridOutline) },
@@ -145,15 +188,16 @@ const menuOptions = computed(() => [
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
   { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline), badge: pendingApprovalCount.value > 0 ? pendingApprovalCount.value : undefined },
+  { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
-  
   { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },
-  { label: t('nav.system'), key: '/system', icon: renderIcon(HardwareChipOutline) },
-  { label: t('nav.config'), key: '/config', icon: renderIcon(SettingsOutline) },
 ])
 
-const logoutOption = computed(() => [
+const headerOptions = computed(() => [
+  { label: t('nav.system'), key: 'system', icon: renderIcon(HardwareChipOutline) },
+  { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
+  { type: 'divider' as const },
   { label: t('common.logout'), key: 'logout', icon: renderIcon(LogOutOutline) },
 ])
 
@@ -180,5 +224,9 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #c0c0c0;
   border-radius: 3px;
+}
+
+.full-content {
+  padding: 0 !important;
 }
 </style>

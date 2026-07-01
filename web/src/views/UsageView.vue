@@ -1,8 +1,8 @@
 <template>
-  <div class="usage-view">
-    <div class="view-header">
+  <div>
+    <n-space justify="space-between" style="margin-bottom: 24px;" align="center">
       <h2>{{ t('usage.title') }}</h2>
-      <div class="header-actions">
+      <n-space>
         <n-select
           v-model:value="selectedDays"
           :options="daysOptions"
@@ -21,11 +21,11 @@
           </template>
           {{ t('usage.editBudget') }}
         </n-button>
-      </div>
-    </div>
+      </n-space>
+    </n-space>
 
     <!-- 预算状态 -->
-    <n-card :title="t('usage.budget')" style="margin-bottom: 16px" v-if="budget.limit > 0">
+    <n-card :title="t('usage.budget')" style="margin-bottom: 24px" v-if="budget.limit > 0">
       <div class="budget-card">
         <div class="budget-info">
           <n-statistic :value="formatCost(budget.current)">
@@ -407,28 +407,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.usage-view {
-  padding: 16px;
-}
-
-.view-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.view-header h2 {
-  margin: 0;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .stats-grid {
-  margin-bottom: 0;
+  margin-bottom: 24px;
 }
 
 .budget-card {

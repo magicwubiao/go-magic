@@ -12,7 +12,10 @@ import (
 
 // Protocol constants
 const (
-	JSONRPCVersion = "2.0"
+	JSONRPCVersion        = "2.0"
+	DefaultTimeout        = 30 * time.Second
+	DefaultReconnectDelay = 5 * time.Second
+	MaxReconnectAttempts  = 3
 )
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request
@@ -62,12 +65,16 @@ type ServerConfig struct {
 
 // Client represents an MCP client
 type Client struct {
-	name      string
-	config    ServerConfig
-	transport Transport
-	tools     map[string]Tool
-	mu        sync.RWMutex
-	connected bool
+	name            string
+	config          ServerConfig
+	transport       Transport
+	tools           map[string]Tool
+	mu              sync.RWMutex
+	connected       bool
+	lastHealthCheck time.Time
+	timeout         time.Duration
+	reconnect       bool
+	reconnectDelay  time.Duration
 }
 
 // Transport interface for MCP transport layers
@@ -78,15 +85,26 @@ type Transport interface {
 
 // Manager manages multiple MCP server connections
 type Manager struct {
-	mu      sync.RWMutex
-	clients map[string]*Client
+	mu             sync.RWMutex
+	clients        map[string]*Client
+	autoReconnect  bool
+	reconnectDelay time.Duration
 }
 
 // NewManager creates a new MCP manager
 func NewManager() *Manager {
 	return &Manager{
-		clients: make(map[string]*Client),
+		clients:        make(map[string]*Client),
+		autoReconnect:  true,
+		reconnectDelay: DefaultReconnectDelay,
 	}
+}
+
+// SetAutoReconnect enables or disables automatic reconnection
+func (m *Manager) SetAutoReconnect(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.autoReconnect = enabled
 }
 
 // ConnectStdio connects to an MCP server using stdio transport
@@ -99,9 +117,12 @@ func (m *Manager) ConnectStdio(name string, config ServerConfig) error {
 	}
 
 	client := &Client{
-		name:   name,
-		config: config,
-		tools:  make(map[string]Tool),
+		name:           name,
+		config:         config,
+		tools:          make(map[string]Tool),
+		timeout:        DefaultTimeout,
+		reconnect:      true,
+		reconnectDelay: DefaultReconnectDelay,
 	}
 
 	transport, err := NewStdioTransport(config.Command, config.Args, config.Env)
@@ -132,9 +153,12 @@ func (m *Manager) ConnectSSE(name string, config ServerConfig) error {
 	}
 
 	client := &Client{
-		name:   name,
-		config: config,
-		tools:  make(map[string]Tool),
+		name:           name,
+		config:         config,
+		tools:          make(map[string]Tool),
+		timeout:        DefaultTimeout,
+		reconnect:      true,
+		reconnectDelay: DefaultReconnectDelay,
 	}
 
 	transport, err := NewSSETransport(config.URL)
@@ -400,9 +424,17 @@ func (m *Manager) HealthCheck(name string) error {
 	m.mu.RLock()
 	client, exists := m.clients[name]
 	if !exists {
+		m.mu.RUnlock()
 		return fmt.Errorf("MCP server '%s' not found", name)
 	}
+	client.mu.RLock()
+	connected := client.connected
+	client.mu.RUnlock()
 	m.mu.RUnlock()
+
+	if !connected {
+		return fmt.Errorf("MCP server '%s' is disconnected", name)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -422,6 +454,84 @@ func (m *Manager) HealthCheck(name string) error {
 		return fmt.Errorf("ping error: %s", resp.Error.Message)
 	}
 
+	// Update last health check time
+	client.mu.Lock()
+	client.lastHealthCheck = time.Now()
+	client.mu.Unlock()
+
+	return nil
+}
+
+// Reconnect attempts to reconnect to an MCP server
+func (m *Manager) Reconnect(name string) error {
+	m.mu.RLock()
+	client, exists := m.clients[name]
+	if !exists {
+		m.mu.RUnlock()
+		return fmt.Errorf("MCP server '%s' not found", name)
+	}
+	config := client.config
+	client.mu.RUnlock()
+	m.mu.RUnlock()
+
+	// Disconnect first
+	if err := m.Disconnect(name); err != nil {
+		// Ignore disconnect errors
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Reconnect with same config
+	client = &Client{
+		name:           name,
+		config:         config,
+		tools:          make(map[string]Tool),
+		timeout:        DefaultTimeout,
+		reconnect:      true,
+		reconnectDelay: DefaultReconnectDelay,
+	}
+
+	var transport Transport
+	var err error
+
+	switch config.Transport {
+	case "sse":
+		transport, err = NewSSETransport(config.URL)
+	default:
+		transport, err = NewStdioTransport(config.Command, config.Args, config.Env)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to create transport: %w", err)
+	}
+
+	client.transport = transport
+	client.connected = true
+
+	if err := client.initialize(); err != nil {
+		transport.Close()
+		return fmt.Errorf("failed to initialize MCP server: %w", err)
+	}
+
+	m.clients[name] = client
+	return nil
+}
+
+// RefreshTools rediscovers tools from a connected MCP server
+func (m *Manager) RefreshTools(name string) error {
+	m.mu.RLock()
+	client, exists := m.clients[name]
+	if !exists {
+		m.mu.RUnlock()
+		return fmt.Errorf("MCP server '%s' not found", name)
+	}
+	m.mu.RUnlock()
+
+	if err := client.discoverTools(context.Background()); err != nil {
+		return fmt.Errorf("failed to refresh tools: %w", err)
+	}
+
 	return nil
 }
 
@@ -430,18 +540,21 @@ func (m *Manager) GetServerInfo(name string) (map[string]interface{}, error) {
 	m.mu.RLock()
 	client, exists := m.clients[name]
 	if !exists {
+		m.mu.RUnlock()
 		return nil, fmt.Errorf("MCP server '%s' not found", name)
 	}
 	client.mu.RLock()
 	toolCount := len(client.tools)
+	lastCheck := client.lastHealthCheck
 	client.mu.RUnlock()
 	m.mu.RUnlock()
 
 	return map[string]interface{}{
-		"name":       name,
-		"connected":  client.connected,
-		"tool_count": toolCount,
-		"transport":  client.config.Transport,
+		"name":              name,
+		"connected":         client.connected,
+		"tool_count":        toolCount,
+		"transport":         client.config.Transport,
+		"last_health_check": lastCheck,
 	}, nil
 }
 

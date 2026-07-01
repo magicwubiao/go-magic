@@ -47,6 +47,10 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
   const error = ref<ChatError | null>(null)
+  const sessionsLoading = ref(false)
+  const sessionsHasMore = ref(true)
+  const sessionsOffset = ref(0)
+  const SESSIONS_LIMIT = 20
 
   const builtinCommands: Array<Omit<commandsApi.Command, 'description'>> = [
     { name: 'help', usage: '/help', aliases: [], category: 'general' },
@@ -131,9 +135,15 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadSessions(): Promise<void> {
+    sessionsOffset.value = 0
+    sessionsHasMore.value = true
     try {
-      const allSessions = await sessionsApi.getSessions()
-      sessions.value = allSessions.filter(s => !s.source || s.source === 'web')
+      const result = await sessionsApi.getSessions(SESSIONS_LIMIT, 0)
+      const filtered = result.sessions.filter(s => !s.source || s.source === 'web')
+      sessions.value = filtered
+      if (filtered.length < SESSIONS_LIMIT) {
+        sessionsHasMore.value = false
+      }
       if (!activeSessionId.value && sessions.value.length > 0) {
         const first = sessions.value[0]
         activeSessionId.value = first.id
@@ -142,6 +152,31 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       console.error('Failed to load sessions:', e)
       sessions.value = []
+    }
+  }
+
+  async function loadMoreSessions(): Promise<boolean> {
+    if (sessionsLoading.value) return false
+    if (!sessionsHasMore.value) return false
+
+    sessionsLoading.value = true
+    sessionsOffset.value += SESSIONS_LIMIT
+    try {
+      const result = await sessionsApi.getSessions(SESSIONS_LIMIT, sessionsOffset.value)
+      const newSessions = result.sessions.filter(s => !s.source || s.source === 'web')
+      if (newSessions.length > 0) {
+        sessions.value = [...sessions.value, ...newSessions]
+      }
+      if (newSessions.length < SESSIONS_LIMIT) {
+        sessionsHasMore.value = false
+      }
+      return newSessions.length > 0
+    } catch (e) {
+      console.error('Failed to load more sessions:', e)
+      sessionsHasMore.value = false
+      return false
+    } finally {
+      sessionsLoading.value = false
     }
   }
 
@@ -574,7 +609,10 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls,
     taskProgress,
     isLongTask,
+    sessionsLoading,
+    sessionsHasMore,
     loadSessions,
+    loadMoreSessions,
     createSession,
     selectSession,
     deleteSession,

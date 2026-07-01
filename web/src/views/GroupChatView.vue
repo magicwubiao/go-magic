@@ -1,49 +1,51 @@
 <template>
-  <div style="height: calc(100vh - 48px); display: flex;">
+  <div class="groupchat-container">
     <!-- Room List -->
-    <div style="width: 240px; border-right: 1px solid #e8e8e8; padding: 12px; overflow-y: auto;">
+    <div class="room-sidebar">
       <n-space justify="space-between" style="margin-bottom: 12px;">
         <n-text strong>{{ t('groupchat.rooms') }}</n-text>
         <n-button size="small" type="primary" @click="showCreateRoom = true">+</n-button>
       </n-space>
-      <div
-        v-for="room in groupchatStore.rooms"
-        :key="room.id"
-        :class="['room-item', { active: groupchatStore.activeRoomId === room.id }]"
-        @click="groupchatStore.selectRoom(room.id)"
-      >
-        <n-space justify="space-between" align="start">
-          <div>
-            <n-text strong>{{ room.name }}</n-text>
-            <br />
-            <n-text depth="3" style="font-size: 12px;">{{ room.agent_ids?.length || 0 }} {{ t('groupchat.agents') }}</n-text>
-          </div>
-          <n-popconfirm @positive-click="handleDeleteRoom(room.id)">
-            <template #trigger>
-              <n-button
-                size="tiny"
-                text
-                type="error"
-                @click.stop
-                style="opacity: 0; transition: opacity 0.2s;"
-                class="room-delete-btn"
-              >
-                <template #icon>
-                  <n-icon><close-outline /></n-icon>
-                </template>
-              </n-button>
-            </template>
-            {{ t('groupchat.confirmDeleteRoom') }}
-          </n-popconfirm>
-        </n-space>
+      <div class="room-list">
+        <div
+          v-for="room in groupchatStore.rooms"
+          :key="room.id"
+          :class="['room-item', { active: groupchatStore.activeRoomId === room.id }]"
+          @click="groupchatStore.selectRoom(room.id)"
+        >
+          <n-space justify="space-between" align="start">
+            <div>
+              <n-text strong>{{ room.name }}</n-text>
+              <br />
+              <n-text depth="3" style="font-size: 12px;">{{ room.agent_ids?.length || 0 }} {{ t('groupchat.agents') }}</n-text>
+            </div>
+            <n-popconfirm @positive-click="handleDeleteRoom(room.id)">
+              <template #trigger>
+                <n-button
+                  size="tiny"
+                  text
+                  type="error"
+                  @click.stop
+                  style="opacity: 0; transition: opacity 0.2s;"
+                  class="room-delete-btn"
+                >
+                  <template #icon>
+                    <n-icon><close-outline /></n-icon>
+                  </template>
+                </n-button>
+              </template>
+              {{ t('groupchat.confirmDeleteRoom') }}
+            </n-popconfirm>
+          </n-space>
+        </div>
       </div>
     </div>
 
     <!-- Chat Area -->
-    <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+    <div class="chat-main">
       <template v-if="groupchatStore.activeRoomId">
         <!-- Room Header -->
-        <div style="padding: 12px 16px; border-bottom: 1px solid #e8e8e8; display: flex; justify-content: space-between; align-items: center;">
+        <div class="chat-header">
           <n-text strong style="font-size: 16px;">{{ activeRoom?.name }}</n-text>
           <n-button size="small" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
         </div>
@@ -527,6 +529,27 @@ onMounted(() => groupchatStore.loadRooms())
 </script>
 
 <style scoped>
+.groupchat-container {
+  display: flex;
+  height: calc(100vh - 56px);
+  min-height: 0;
+}
+
+.room-sidebar {
+  width: 240px;
+  border-right: 1px solid #e8e8e8;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  padding: 12px;
+}
+
+.room-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
 .room-item {
   padding: 8px 12px;
   border-radius: 6px;
@@ -546,10 +569,27 @@ onMounted(() => groupchatStore.loadRooms())
   opacity: 1 !important;
 }
 
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-header {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e8e8e8;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  min-height: 0;
 }
 
 .message {
