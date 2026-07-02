@@ -346,6 +346,9 @@ func NewServer(dbPath string) *Server {
 		usageMgr = nil
 	}
 
+	// Initialize MCP manager
+	mcpMgr := mcp.NewManager()
+
 	// Get version
 	version := "dev"
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -401,6 +404,7 @@ func NewServer(dbPath string) *Server {
 		cortexMgr:        cortexMgr,
 		approvalMgr:      approvalMgr,
 		usageMgr:         usageMgr,
+		mcpMgr:           mcpMgr,
 		actions:          make(map[string]*ActionStatus),
 		sessionTokens:    make(map[string][2]int),
 		authToken:        authToken,
@@ -798,6 +802,7 @@ func (s *Server) Start(port int) error {
 	// MCP Servers
 	mux.HandleFunc("/api/mcp/servers", withCORS(requireAuth(s.handleMCPServers)))
 	mux.HandleFunc("/api/mcp/servers/", withCORS(requireAuth(s.handleMCPServerByID)))
+	mux.HandleFunc("/api/mcp/health", withCORS(requireAuth(s.handleMCPHealth)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
@@ -2538,32 +2543,42 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 
 // MCP Handlers
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
 		servers := []map[string]interface{}{}
 		if s.mcpMgr != nil {
-			for _, server := range s.mcpMgr.ListServers() {
+			for _, name := range s.mcpMgr.ListServers() {
+				info, _ := s.mcpMgr.GetServerInfo(name)
+				connected := info != nil && info["connected"] == true
+				toolCount := 0
+				if info != nil {
+					if tc, ok := info["tool_count"].(int); ok {
+						toolCount = tc
+					}
+				}
+				lastCheck := ""
+				if info != nil {
+					if lc, ok := info["last_health_check"].(time.Time); ok {
+						lastCheck = lc.Format(time.RFC3339)
+					}
+				}
 				servers = append(servers, map[string]interface{}{
-					"id":      server.ID,
-					"name":    server.Name,
-					"type":    server.Type,
-					"url":     server.URL,
-					"command": server.Command,
-					"enabled": server.Enabled,
-					"status":  server.Status,
+					"name":              name,
+					"connected":         connected,
+					"tool_count":        toolCount,
+					"last_health_check": lastCheck,
 				})
 			}
 		}
 		jsonResponse(w, servers)
-		return
-	}
-	if r.Method == http.MethodPost {
+	case http.MethodPost:
 		var req struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			URL     string `json:"url"`
-			Command string `json:"command"`
-			Enabled bool   `json:"enabled"`
+			Name      string   `json:"name"`
+			Transport string   `json:"transport"`
+			Command   string   `json:"command"`
+			Args      []string `json:"args"`
+			Env       []string `json:"env"`
+			URL       string   `json:"url"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2573,65 +2588,132 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "MCP manager not initialized", http.StatusInternalServerError)
 			return
 		}
-		server := &mcp.ServerConfig{
-			ID:      req.ID,
-			Name:    req.Name,
-			Type:    req.Type,
-			URL:     req.URL,
-			Command: req.Command,
-			Enabled: req.Enabled,
+		cfg := mcp.ServerConfig{
+			Command:   req.Command,
+			Args:      req.Args,
+			Env:       req.Env,
+			Transport: req.Transport,
+			URL:       req.URL,
 		}
-		if err := s.mcpMgr.AddServer(server); err != nil {
+		var err error
+		switch req.Transport {
+		case "sse":
+			err = s.mcpMgr.ConnectSSE(req.Name, cfg)
+		default:
+			err = s.mcpMgr.ConnectStdio(req.Name, cfg)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, server)
-		return
+		jsonResponse(w, map[string]interface{}{"name": req.Name, "success": true})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/mcp/servers/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/mcp/servers/")
+	parts := strings.Split(path, "/")
+	name := parts[0]
+
 	if s.mcpMgr == nil {
 		http.Error(w, "MCP manager not initialized", http.StatusInternalServerError)
 		return
 	}
-	server := s.mcpMgr.GetServer(id)
-	if server == nil {
-		http.Error(w, "Server not found", http.StatusNotFound)
-		return
+
+	if len(parts) >= 2 {
+		switch parts[1] {
+		case "connect":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if err := s.mcpMgr.Reconnect(name); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, map[string]bool{"success": true})
+			return
+		case "disconnect":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if err := s.mcpMgr.Disconnect(name); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, map[string]bool{"success": true})
+			return
+		case "reconnect":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if err := s.mcpMgr.Reconnect(name); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, map[string]bool{"success": true})
+			return
+		case "health":
+			if r.Method == http.MethodPost {
+				err := s.mcpMgr.HealthCheck(name)
+				healthy := err == nil
+				result := map[string]interface{}{
+					"name":    name,
+					"healthy": healthy,
+				}
+				if err != nil {
+					result["error"] = err.Error()
+				}
+				jsonResponse(w, []map[string]interface{}{result})
+				return
+			}
+			info, _ := s.mcpMgr.GetServerInfo(name)
+			connected := info != nil && info["connected"] == true
+			result := map[string]interface{}{
+				"name":    name,
+				"healthy": connected,
+			}
+			jsonResponse(w, []map[string]interface{}{result})
+			return
+		case "tools":
+			if r.Method == http.MethodPost && len(parts) >= 3 && parts[2] == "refresh" {
+				if err := s.mcpMgr.RefreshTools(name); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				tools, _ := s.mcpMgr.ListToolsByServer(name)
+				jsonResponse(w, tools)
+				return
+			}
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			tools, err := s.mcpMgr.ListToolsByServer(name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, tools)
+			return
+		}
 	}
+
 	if r.Method == http.MethodGet {
-		jsonResponse(w, server)
-		return
-	}
-	if r.Method == http.MethodPut {
-		var req struct {
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			URL     string `json:"url"`
-			Command string `json:"command"`
-			Enabled bool   `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		info, err := s.mcpMgr.GetServerInfo(name)
+		if err != nil || info == nil {
+			http.Error(w, "Server not found", http.StatusNotFound)
 			return
 		}
-		server.Name = req.Name
-		server.Type = req.Type
-		server.URL = req.URL
-		server.Command = req.Command
-		server.Enabled = req.Enabled
-		if err := s.mcpMgr.UpdateServer(server); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(w, server)
+		jsonResponse(w, info)
 		return
 	}
 	if r.Method == http.MethodDelete {
-		if err := s.mcpMgr.RemoveServer(id); err != nil {
+		if err := s.mcpMgr.Disconnect(name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -2639,6 +2721,29 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleMCPHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	results := []map[string]interface{}{}
+	if s.mcpMgr != nil {
+		for _, name := range s.mcpMgr.ListServers() {
+			err := s.mcpMgr.HealthCheck(name)
+			healthy := err == nil
+			result := map[string]interface{}{
+				"name":    name,
+				"healthy": healthy,
+			}
+			if err != nil {
+				result["error"] = err.Error()
+			}
+			results = append(results, result)
+		}
+	}
+	jsonResponse(w, results)
 }
 
 func (s *Server) handleToolsStatistics(w http.ResponseWriter, r *http.Request) {
