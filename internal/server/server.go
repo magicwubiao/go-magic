@@ -33,6 +33,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/goal"
 	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/kanban"
+	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/plugin"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
@@ -152,6 +153,9 @@ type Server struct {
 
 	// Kanban manager
 	kanbanMgr *kanban.Manager
+
+	// MCP manager
+	mcpMgr *mcp.Manager
 
 	// Plugin manager
 	pluginMgr *plugin.Manager
@@ -790,6 +794,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/tools/toolsets/", withCORS(requireAuth(s.handleToolsetByID)))
 	mux.HandleFunc("/api/tools/categories", withCORS(requireAuth(s.handleToolCategories)))
 	mux.HandleFunc("/api/tools/", withCORS(requireAuth(s.handleToolByID)))
+
+	// MCP Servers
+	mux.HandleFunc("/api/mcp/servers", withCORS(requireAuth(s.handleMCPServers)))
+	mux.HandleFunc("/api/mcp/servers/", withCORS(requireAuth(s.handleMCPServerByID)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
@@ -2526,6 +2534,111 @@ func (s *Server) handleToolByID(w http.ResponseWriter, r *http.Request) {
 		"parameters":  map[string]interface{}{},
 	}
 	jsonResponse(w, tool)
+}
+
+// MCP Handlers
+func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		servers := []map[string]interface{}{}
+		if s.mcpMgr != nil {
+			for _, server := range s.mcpMgr.ListServers() {
+				servers = append(servers, map[string]interface{}{
+					"id":      server.ID,
+					"name":    server.Name,
+					"type":    server.Type,
+					"url":     server.URL,
+					"command": server.Command,
+					"enabled": server.Enabled,
+					"status":  server.Status,
+				})
+			}
+		}
+		jsonResponse(w, servers)
+		return
+	}
+	if r.Method == http.MethodPost {
+		var req struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			URL     string `json:"url"`
+			Command string `json:"command"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if s.mcpMgr == nil {
+			http.Error(w, "MCP manager not initialized", http.StatusInternalServerError)
+			return
+		}
+		server := &mcp.ServerConfig{
+			ID:      req.ID,
+			Name:    req.Name,
+			Type:    req.Type,
+			URL:     req.URL,
+			Command: req.Command,
+			Enabled: req.Enabled,
+		}
+		if err := s.mcpMgr.AddServer(server); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, server)
+		return
+	}
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/mcp/servers/")
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not initialized", http.StatusInternalServerError)
+		return
+	}
+	server := s.mcpMgr.GetServer(id)
+	if server == nil {
+		http.Error(w, "Server not found", http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodGet {
+		jsonResponse(w, server)
+		return
+	}
+	if r.Method == http.MethodPut {
+		var req struct {
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			URL     string `json:"url"`
+			Command string `json:"command"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		server.Name = req.Name
+		server.Type = req.Type
+		server.URL = req.URL
+		server.Command = req.Command
+		server.Enabled = req.Enabled
+		if err := s.mcpMgr.UpdateServer(server); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, server)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		if err := s.mcpMgr.RemoveServer(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, map[string]string{"status": "deleted"})
+		return
+	}
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (s *Server) handleToolsStatistics(w http.ResponseWriter, r *http.Request) {
