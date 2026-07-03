@@ -82,6 +82,83 @@ export async function listDirs(path?: string): Promise<{ current: string; dirs: 
   return request(`/fs/dirs${query}`)
 }
 
+export interface FSEntry {
+  path: string
+  name: string
+  is_dir: boolean
+  size: number
+  modified: number
+}
+
+export async function listFSEntries(path?: string): Promise<{ current: string; entries: FSEntry[] }> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  return request(`/fs/list${query}`)
+}
+
+export async function readFSFile(path: string): Promise<string> {
+  const query = `?path=${encodeURIComponent(path)}`
+  const token = getAuthToken()
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  const res = await fetch(`/api/fs/read${query}`, { headers })
+  if (!res.ok) {
+    throw new Error(`Failed to read file: ${res.statusText}`)
+  }
+  return res.text()
+}
+
+export function getFSAuthHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
+export function getFSReadUrl(path: string): string {
+  const token = getAuthToken()
+  const auth = token ? `&token=${encodeURIComponent(token)}` : ''
+  return `/api/fs/read?path=${encodeURIComponent(path)}${auth}`
+}
+
+export function getFSDownloadUrl(path: string): string {
+  const token = getAuthToken()
+  const auth = token ? `&token=${encodeURIComponent(token)}` : ''
+  return `/api/fs/download?path=${encodeURIComponent(path)}${auth}`
+}
+
+export function getFSZipUrl(path: string): string {
+  const token = getAuthToken()
+  const auth = token ? `&token=${encodeURIComponent(token)}` : ''
+  return `/api/fs/zip?path=${encodeURIComponent(path)}${auth}`
+}
+
+export interface ShareResponse {
+  token: string
+  url: string
+  path: string
+  name: string
+  is_dir: boolean
+  expires_at: number
+}
+
+export async function createShare(path: string, seconds: number = 3600): Promise<ShareResponse> {
+  return request<ShareResponse>('/fs/share', {
+    method: 'POST',
+    body: JSON.stringify({ path, seconds }),
+  })
+}
+
+export async function createDir(parent: string, name: string): Promise<{ path: string; name: string }> {
+  return request('/fs/mkdir', {
+    method: 'POST',
+    body: JSON.stringify({ parent, name }),
+  })
+}
+
 export async function sendMessage(sessionId: string, content: string): Promise<void> {
   return request(`/sessions/${sessionId}/messages`, {
     method: 'POST',

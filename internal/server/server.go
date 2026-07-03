@@ -3,6 +3,7 @@ package server
 import (
 	"archive/zip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/base64"
@@ -187,6 +188,19 @@ type Server struct {
 	// Auth
 	authToken string
 	authMu    sync.RWMutex
+
+	// Share tokens for temporary read-only file access
+	shareTokens   map[string]*ShareToken
+	shareTokensMu sync.RWMutex
+}
+
+// ShareToken represents a temporary, read-only link to a file or directory.
+type ShareToken struct {
+	Path      string    `json:"path"`
+	Name      string    `json:"name"`
+	IsDir     bool      `json:"is_dir"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // ActionStatus tracks the status of a background action
@@ -409,6 +423,7 @@ func NewServer(dbPath string) *Server {
 		actions:          make(map[string]*ActionStatus),
 		sessionTokens:    make(map[string][2]int),
 		authToken:        authToken,
+		shareTokens:      make(map[string]*ShareToken),
 	}
 
 	// Start cron scheduler
@@ -866,6 +881,15 @@ func (s *Server) Start(port int) error {
 
 	// File system
 	mux.HandleFunc("/api/fs/dirs", withCORS(requireAuth(s.handleListDirs)))
+	mux.HandleFunc("/api/fs/list", withCORS(requireAuth(s.handleFSList)))
+	mux.HandleFunc("/api/fs/read", withCORS(requireAuth(s.handleFSRead)))
+	mux.HandleFunc("/api/fs/download", withCORS(requireAuth(s.handleFSDownload)))
+	mux.HandleFunc("/api/fs/zip", withCORS(requireAuth(s.handleFSZip)))
+	mux.HandleFunc("/api/fs/share", withCORS(requireAuth(s.handleFSShare)))
+	mux.HandleFunc("/api/fs/mkdir", withCORS(requireAuth(s.handleFSCreateDir)))
+	// Shared resources are accessed via token in the URL (no auth required,
+	// because the token itself is the credential). Bound by TTL.
+	mux.HandleFunc("/api/fs/shared/", withCORS(s.handleFSShared))
 
 	// Profiles
 	mux.HandleFunc("/api/profiles", withCORS(requireAuth(s.handleProfiles)))
@@ -5073,6 +5097,574 @@ func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
 		"current": absPath,
 		"dirs":    result,
+	})
+}
+
+// sanitizeFSPath resolves a path to absolute and performs basic security checks.
+func sanitizeFSPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return absPath, nil
+}
+
+func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = s.cfg.WorkingDir
+	}
+
+	absPath, err := sanitizeFSPath(path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "cannot read directory: " + err.Error()})
+		return
+	}
+
+	type fsEntry struct {
+		Path     string `json:"path"`
+		Name     string `json:"name"`
+		IsDir    bool   `json:"is_dir"`
+		Size     int64  `json:"size"`
+		Modified int64  `json:"modified"`
+	}
+
+	var result []fsEntry
+	// Add parent directory option
+	parent := filepath.Dir(absPath)
+	if parent != absPath {
+		result = append(result, fsEntry{Path: parent, Name: "..", IsDir: true})
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		info, err := entry.Info()
+		var size int64
+		var modTime int64
+		if err == nil {
+			size = info.Size()
+			modTime = info.ModTime().Unix()
+		}
+		result = append(result, fsEntry{
+			Path:     filepath.Join(absPath, name),
+			Name:     name,
+			IsDir:    entry.IsDir(),
+			Size:     size,
+			Modified: modTime,
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"current": absPath,
+		"entries": result,
+	})
+}
+
+func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	absPath, err := sanitizeFSPath(path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "file not found"})
+		return
+	}
+	if info.IsDir() {
+		jsonResponse(w, map[string]interface{}{"error": "path is a directory"})
+		return
+	}
+
+	// Size limit: 2MB for preview
+	if info.Size() > 2*1024*1024 {
+		jsonResponse(w, map[string]interface{}{"error": "file too large for preview (>2MB)"})
+		return
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "cannot read file: " + err.Error()})
+		return
+	}
+
+	contentType := "text/plain"
+	ext := strings.ToLower(filepath.Ext(absPath))
+	switch ext {
+	case ".json":
+		contentType = "application/json"
+	case ".html", ".htm":
+		contentType = "text/html"
+	case ".css":
+		contentType = "text/css"
+	case ".js":
+		contentType = "application/javascript"
+	case ".md":
+		contentType = "text/markdown"
+	case ".xml":
+		contentType = "application/xml"
+	case ".csv":
+		contentType = "text/csv"
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	case ".bmp":
+		contentType = "image/bmp"
+	case ".webp":
+		contentType = "image/webp"
+	case ".svg":
+		contentType = "image/svg+xml"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	if strings.HasPrefix(contentType, "text/") || contentType == "application/json" || contentType == "application/javascript" {
+		w.Header().Set("Content-Type", contentType+"; charset=utf-8")
+	}
+	w.Write(data)
+}
+
+func (s *Server) handleFSDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	absPath, err := sanitizeFSPath(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		http.Error(w, "cannot open file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	filename := filepath.Base(absPath)
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+
+	io.Copy(w, file)
+}
+
+// handleFSZip streams a zip archive of the given path. If path is a directory,
+// the archive includes the whole subtree rooted at that path. If path is a
+// single file, the archive contains just that file.
+func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = s.cfg.WorkingDir
+	}
+
+	absPath, err := sanitizeFSPath(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	// Build the archive name
+	archiveName := filepath.Base(absPath) + ".zip"
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+archiveName+"\"")
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	if info.IsDir() {
+		base := absPath
+		err = filepath.Walk(base, func(p string, fi os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			// Skip hidden files/dirs
+			name := fi.Name()
+			if strings.HasPrefix(name, ".") && p != base {
+				if fi.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			rel, relErr := filepath.Rel(base, p)
+			if relErr != nil {
+				return relErr
+			}
+			if rel == "." {
+				return nil
+			}
+			// Always use forward slashes inside the zip
+			zipName := filepath.ToSlash(rel)
+			if fi.IsDir() {
+				_, err := zw.CreateHeader(&zip.FileHeader{
+					Name:     zipName + "/",
+					Method:   zip.Deflate,
+					Modified: fi.ModTime(),
+				})
+				return err
+			}
+			header := &zip.FileHeader{
+				Name:     zipName,
+				Method:   zip.Deflate,
+				Modified: fi.ModTime(),
+			}
+			fw, err := zw.CreateHeader(header)
+			if err != nil {
+				return err
+			}
+			f, err := os.Open(p)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(fw, f)
+			return err
+		})
+		if err != nil {
+			// Headers already sent, best effort log via stderr.
+			fmt.Fprintf(os.Stderr, "zip walk error: %v\n", err)
+			return
+		}
+		return
+	}
+
+	// Single file archive
+	header := &zip.FileHeader{
+		Name:     filepath.ToSlash(filepath.Base(absPath)),
+		Method:   zip.Deflate,
+		Modified: info.ModTime(),
+	}
+	fw, err := zw.CreateHeader(header)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "zip header error: %v\n", err)
+		return
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "zip open error: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if _, err := io.Copy(fw, f); err != nil {
+		fmt.Fprintf(os.Stderr, "zip copy error: %v\n", err)
+	}
+}
+
+// handleFSShare creates a temporary read-only share token for a file or
+// directory. The token is returned together with the absolute share URL so the
+// caller can hand it to a third party.
+func (s *Server) handleFSShare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path    string `json:"path"`
+		Seconds int    `json:"seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := sanitizeFSPath(req.Path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "path not found"})
+		return
+	}
+
+	// Default lifetime 1h, clamped to [60s, 7d]
+	ttl := time.Duration(req.Seconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	if ttl < 60*time.Second {
+		ttl = 60 * time.Second
+	}
+	if ttl > 7*24*time.Hour {
+		ttl = 7 * 24 * time.Hour
+	}
+
+	tokenBytes := make([]byte, 24)
+	if _, err := io.ReadFull(rand.Reader, tokenBytes); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "failed to generate token"})
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+
+	tk := &ShareToken{
+		Path:      absPath,
+		Name:      filepath.Base(absPath),
+		IsDir:     info.IsDir(),
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	s.shareTokensMu.Lock()
+	s.shareTokens[token] = tk
+	// Best-effort cleanup of expired tokens
+	for k, v := range s.shareTokens {
+		if time.Now().After(v.ExpiresAt) {
+			delete(s.shareTokens, k)
+		}
+	}
+	s.shareTokensMu.Unlock()
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = fwd
+	}
+	host := r.Host
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		host = fwd
+	}
+	shareURL := fmt.Sprintf("%s://%s/api/fs/shared/%s", scheme, host, token)
+
+	jsonResponse(w, map[string]interface{}{
+		"token":      token,
+		"url":        shareURL,
+		"path":       tk.Path,
+		"name":       tk.Name,
+		"is_dir":     tk.IsDir,
+		"expires_at": tk.ExpiresAt.Unix(),
+	})
+}
+
+// handleFSShared serves a shared resource by token. For files it serves the
+// raw content (with preview-friendly Content-Type). For directories it returns
+// a JSON listing.
+func (s *Server) handleFSShared(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.URL.Path, "/api/fs/shared/")
+	token = strings.TrimSuffix(token, "/")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	s.shareTokensMu.RLock()
+	tk, ok := s.shareTokens[token]
+	s.shareTokensMu.RUnlock()
+	if !ok {
+		http.Error(w, "share link not found or expired", http.StatusNotFound)
+		return
+	}
+	if time.Now().After(tk.ExpiresAt) {
+		s.shareTokensMu.Lock()
+		delete(s.shareTokens, token)
+		s.shareTokensMu.Unlock()
+		http.Error(w, "share link expired", http.StatusGone)
+		return
+	}
+
+	info, err := os.Stat(tk.Path)
+	if err != nil {
+		http.Error(w, "resource not found", http.StatusNotFound)
+		return
+	}
+
+	if info.IsDir() {
+		entries, err := os.ReadDir(tk.Path)
+		if err != nil {
+			http.Error(w, "cannot read directory", http.StatusInternalServerError)
+			return
+		}
+		type fsEntry struct {
+			Path     string `json:"path"`
+			Name     string `json:"name"`
+			IsDir    bool   `json:"is_dir"`
+			Size     int64  `json:"size"`
+			Modified int64  `json:"modified"`
+		}
+		result := []fsEntry{}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			ei, ierr := entry.Info()
+			var size int64
+			var modTime int64
+			if ierr == nil {
+				size = ei.Size()
+				modTime = ei.ModTime().Unix()
+			}
+			result = append(result, fsEntry{
+				Path:     filepath.Join(tk.Path, name),
+				Name:     name,
+				IsDir:    entry.IsDir(),
+				Size:     size,
+				Modified: modTime,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"name":      tk.Name,
+			"path":      tk.Path,
+			"entries":   result,
+			"expire_at": tk.ExpiresAt.Unix(),
+		})
+		return
+	}
+
+	// Single file: serve with content type
+	ext := strings.ToLower(filepath.Ext(tk.Path))
+	contentType := "application/octet-stream"
+	switch ext {
+	case ".txt", ".md", ".log", ".csv":
+		contentType = "text/plain; charset=utf-8"
+	case ".json":
+		contentType = "application/json; charset=utf-8"
+	case ".html", ".htm":
+		contentType = "text/html; charset=utf-8"
+	case ".css":
+		contentType = "text/css; charset=utf-8"
+	case ".js":
+		contentType = "application/javascript; charset=utf-8"
+	case ".xml":
+		contentType = "application/xml; charset=utf-8"
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	case ".webp":
+		contentType = "image/webp"
+	case ".svg":
+		contentType = "image/svg+xml"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+tk.Name+"\"")
+	http.ServeFile(w, r, tk.Path)
+}
+
+// handleFSCreateDir creates a new directory under the given parent path.
+func (s *Server) handleFSCreateDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
+		return
+	}
+
+	if req.Name == "" {
+		jsonResponse(w, map[string]interface{}{"error": "directory name is required"})
+		return
+	}
+	// Basic validation: no path separators, no hidden prefix
+	if strings.ContainsAny(req.Name, "/\\") || strings.HasPrefix(req.Name, ".") {
+		jsonResponse(w, map[string]interface{}{"error": "invalid directory name"})
+		return
+	}
+
+	parent := req.Parent
+	if parent == "" {
+		parent = s.cfg.WorkingDir
+	}
+	absParent, err := sanitizeFSPath(parent)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	// Check parent exists and is a directory
+	pInfo, err := os.Stat(absParent)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "parent directory not found"})
+		return
+	}
+	if !pInfo.IsDir() {
+		jsonResponse(w, map[string]interface{}{"error": "parent path is not a directory"})
+		return
+	}
+
+	newDir := filepath.Join(absParent, req.Name)
+	absNew, err := filepath.Abs(newDir)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "cannot resolve new directory path"})
+		return
+	}
+
+	// Ensure the resolved path is still under the parent (prevent traversal)
+	if !strings.HasPrefix(absNew, absParent) {
+		jsonResponse(w, map[string]interface{}{"error": "directory path escapes parent"})
+		return
+	}
+
+	if err := os.MkdirAll(absNew, 0755); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "cannot create directory: " + err.Error()})
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"path": absNew,
+		"name": req.Name,
 	})
 }
 

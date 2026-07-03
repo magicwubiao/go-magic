@@ -352,6 +352,21 @@
           </n-button>
           <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
         </div>
+        <!-- New folder input -->
+        <div class="dir-new-folder">
+          <n-input
+            v-model:value="newFolderName"
+            :placeholder="t('chat.newFolderPlaceholder')"
+            size="small"
+            clearable
+            @keydown.enter="createNewFolder"
+            style="flex: 1;"
+          />
+          <n-button size="small" :disabled="!newFolderName.trim()" :loading="newFolderLoading" @click="createNewFolder">
+            <template #icon><n-icon><AddOutline /></n-icon></template>
+            {{ t('chat.newFolder') }}
+          </n-button>
+        </div>
         <div class="dir-list">
           <div v-if="dirLoading" class="dir-loading">
             <n-spin size="small" /> <span style="margin-left: 8px;">{{ t('chat.workDirLoading') }}</span>
@@ -400,7 +415,7 @@ import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import GoalSidebar from '@/components/GoalSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -670,6 +685,8 @@ const showDirPicker = ref(false)
 const dirCurrentPath = ref('')
 const dirEntries = ref<sessionsApi.DirEntry[]>([])
 const dirLoading = ref(false)
+const newFolderName = ref('')
+const newFolderLoading = ref(false)
 
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
@@ -699,13 +716,31 @@ function openDirPicker() {
     message.warning(t('chat.selectSession'))
     return
   }
+  newFolderName.value = ''
   loadDirs(chatStore.currentWorkDir || undefined)
   showDirPicker.value = true
 }
 
 function navigateDir(path: string) {
   if (!path) return
+  newFolderName.value = ''
   loadDirs(path)
+}
+
+async function createNewFolder() {
+  if (!newFolderName.value.trim() || !dirCurrentPath.value) return
+  newFolderLoading.value = true
+  try {
+    await sessionsApi.createDir(dirCurrentPath.value, newFolderName.value.trim())
+    message.success(t('chat.folderCreated') || 'Folder created')
+    newFolderName.value = ''
+    await loadDirs(dirCurrentPath.value)
+  } catch (e) {
+    message.error(t('chat.folderCreateFailed') || 'Failed to create folder')
+    console.error(e)
+  } finally {
+    newFolderLoading.value = false
+  }
 }
 
 async function selectWorkDir() {
@@ -1414,6 +1449,13 @@ onMounted(async () => {
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--n-border-color, #eee);
+}
+
+.dir-new-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
 }
 
 .dir-current {
