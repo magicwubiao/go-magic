@@ -56,6 +56,7 @@ type Session struct {
 	Source          string  `json:"source"`
 	Model           string  `json:"model"`
 	Title           string  `json:"title"`
+	WorkDir         string  `json:"work_dir"`
 	StartedAt       int64   `json:"started_at"`
 	EndedAt         *int64  `json:"ended_at"`
 	LastActive      int64   `json:"last_active"`
@@ -661,6 +662,7 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		Source:        s.Platform,
 		Model:         s.Model,
 		Title:         title,
+		WorkDir:       s.WorkDir,
 		StartedAt:     s.CreatedAt.Unix(),
 		LastActive:    s.UpdatedAt.Unix(),
 		IsActive:      isActive,
@@ -1167,6 +1169,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Title    string `json:"title"`
 			Model    string `json:"model"`
 			Platform string `json:"platform"`
+			WorkDir  string `json:"work_dir"`
 		}
 		// Allow empty body for simple session creation
 		if r.ContentLength > 0 {
@@ -1195,11 +1198,17 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			model = s.cfg.GetCurrentModel()
 		}
 
+		workDir := req.WorkDir
+		if workDir == "" {
+			workDir = s.cfg.WorkingDir
+		}
+
 		newSession := &session.Session{
 			ID:              sessionID,
 			Profile:         s.cfg.Profile,
 			Platform:        platform,
 			Model:           model,
+			WorkDir:         workDir,
 			Messages:        []types.Message{},
 			InputTokens:     0,
 			OutputTokens:    0,
@@ -1300,15 +1309,24 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, convertDBSessionToAPI(dbSession))
 	case "PUT":
 		var req struct {
-			Name string `json:"name"`
+			Name    string  `json:"name"`
+			WorkDir *string `json:"work_dir"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		if err := s.sessionStore.RenameSession(context.Background(), id, req.Name); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
+		if req.Name != "" {
+			if err := s.sessionStore.RenameSession(context.Background(), id, req.Name); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+		}
+		if req.WorkDir != nil {
+			if err := s.sessionStore.UpdateWorkDir(context.Background(), id, *req.WorkDir); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
 		}
 		jsonResponse(w, map[string]bool{"ok": true})
 	case "DELETE":
@@ -1622,9 +1640,13 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Save user message to session
+	// Inject the session's working directory into the context so file and
+	// command tools resolve relative paths against it, then save the user
+	// message to the session.
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+			ctx = tool.WithWorkDir(ctx, sess.WorkDir)
+
 			sess.Messages = append(sess.Messages, types.Message{
 				Role:         "user",
 				Content:      content,

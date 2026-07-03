@@ -128,7 +128,7 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 			continue
 		}
 
-		absPath, err := filepath.Abs(filePath)
+		absPath, err := resolvePath(ctx, filePath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"error": fmt.Sprintf("failed to resolve path: %v", err)}
 			continue
@@ -207,7 +207,7 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 			createDirs = cd
 		}
 
-		absPath, err := filepath.Abs(filePath)
+		absPath, err := resolvePath(ctx, filePath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to resolve path: %v", err)}
 			continue
@@ -267,7 +267,7 @@ func (t *BatchFileOpsTool) batchDelete(ctx context.Context, params map[string]in
 			continue
 		}
 
-		absPath, err := filepath.Abs(filePath)
+		absPath, err := resolvePath(ctx, filePath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to resolve path: %v", err)}
 			continue
@@ -319,7 +319,7 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 			continue
 		}
 
-		absPath, err := filepath.Abs(filePath)
+		absPath, err := resolvePath(ctx, filePath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to resolve path: %v", err)}
 			continue

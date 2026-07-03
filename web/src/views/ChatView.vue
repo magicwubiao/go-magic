@@ -299,6 +299,13 @@
                   </template>
                 </n-button>
               </n-upload>
+              <!-- Working directory selector -->
+              <n-button size="tiny" quaternary class="toolbar-btn workdir-btn" :title="t('chat.workDir')" @click="openDirPicker">
+                <template #icon>
+                  <n-icon><FolderOpenOutline /></n-icon>
+                </template>
+                <span v-if="chatStore.currentWorkDir" class="workdir-label">{{ shortWorkDir }}</span>
+              </n-button>
             </div>
             <div class="toolbar-right">
               <n-button
@@ -334,6 +341,48 @@
 
     <!-- Goal Sidebar -->
     <GoalSidebar />
+
+    <!-- Working directory picker modal -->
+    <n-modal v-model:show="showDirPicker" preset="card" :title="t('chat.workDirSelect')" style="max-width: 560px;">
+      <div class="dir-picker">
+        <div class="dir-breadcrumb">
+          <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
+            <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+            ..
+          </n-button>
+          <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        </div>
+        <div class="dir-list">
+          <div v-if="dirLoading" class="dir-loading">
+            <n-spin size="small" /> <span style="margin-left: 8px;">{{ t('chat.workDirLoading') }}</span>
+          </div>
+          <div v-else-if="dirEntries.length === 0" class="dir-empty">
+            {{ t('chat.workDirEmpty') }}
+          </div>
+          <div
+            v-for="entry in dirEntries"
+            v-else
+            :key="entry.path"
+            class="dir-item"
+            @click="navigateDir(entry.path)"
+          >
+            <n-icon size="16"><FolderOutline /></n-icon>
+            <span>{{ entry.name }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+          <n-text depth="3" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            {{ t('chat.workDirCurrent') }}: {{ chatStore.currentWorkDir || t('chat.workDirNone') }}
+          </n-text>
+          <n-space :size="8">
+            <n-button size="small" @click="clearWorkDir">{{ t('chat.workDirClear') }}</n-button>
+            <n-button size="small" type="primary" @click="selectWorkDir">{{ t('chat.workDirSet') }}</n-button>
+          </n-space>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -351,7 +400,7 @@ import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import GoalSidebar from '@/components/GoalSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -614,6 +663,62 @@ async function saveRename(id: string) {
   }
   editingSessionId.value = null
   editingName.value = ''
+}
+
+// Working directory picker
+const showDirPicker = ref(false)
+const dirCurrentPath = ref('')
+const dirEntries = ref<sessionsApi.DirEntry[]>([])
+const dirLoading = ref(false)
+
+const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
+
+const shortWorkDir = computed(() => {
+  const dir = chatStore.currentWorkDir
+  if (!dir) return ''
+  if (dir.length > 22) return '…/' + dir.split('/').pop()
+  return dir
+})
+
+async function loadDirs(path?: string) {
+  dirLoading.value = true
+  try {
+    const res = await sessionsApi.listDirs(path)
+    dirCurrentPath.value = res.current
+    dirEntries.value = res.dirs || []
+  } catch (e) {
+    console.error('Failed to list directories:', e)
+    dirEntries.value = []
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+function openDirPicker() {
+  if (!chatStore.activeSessionId) {
+    message.warning(t('chat.selectSession'))
+    return
+  }
+  loadDirs(chatStore.currentWorkDir || undefined)
+  showDirPicker.value = true
+}
+
+function navigateDir(path: string) {
+  if (!path) return
+  loadDirs(path)
+}
+
+async function selectWorkDir() {
+  if (!chatStore.activeSessionId || !dirCurrentPath.value) return
+  await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
+  showDirPicker.value = false
+  message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
+}
+
+async function clearWorkDir() {
+  if (!chatStore.activeSessionId) return
+  await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
+  showDirPicker.value = false
 }
 
 async function selectSession(id: string) {
@@ -1281,6 +1386,72 @@ onMounted(async () => {
 
 .toolbar-btn {
   padding: 4px 8px;
+}
+
+.workdir-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+}
+
+.workdir-label {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dir-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--n-border-color, #eee);
+}
+
+.dir-current {
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.dir-list {
+  max-height: 320px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.dir-item:hover {
+  background: var(--n-color-hover, #f5f5f5);
+}
+
+.dir-empty,
+.dir-loading {
+  display: flex;
+  align-items: center;
+  padding: 24px;
+  color: #999;
+  justify-content: center;
 }
 
 .toolbar-right {

@@ -91,7 +91,7 @@ func (t *DirectoryTreeTool) Execute(ctx context.Context, params map[string]inter
 		}
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path: %w", err)
 	}

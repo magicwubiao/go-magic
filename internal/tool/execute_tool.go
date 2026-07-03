@@ -290,6 +290,8 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 
 	if workdir, ok := args["workdir"].(string); ok && workdir != "" {
 		cmd.Dir = workdir
+	} else if ctxWorkDir := WorkDirFromContext(ctx); ctxWorkDir != "" {
+		cmd.Dir = ctxWorkDir
 	} else if t.workDir != "" {
 		cmd.Dir = t.workDir
 	} else {

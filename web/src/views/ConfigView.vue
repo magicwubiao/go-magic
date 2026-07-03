@@ -20,7 +20,12 @@
             <template #feedback>{{ t('config.autoLinkGoalsHint') }}</template>
           </n-form-item>
           <n-form-item :label="t('config.workingDirectory')">
-            <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" />
+            <n-space>
+              <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" style="flex: 1;" />
+              <n-button size="small" @click="openDirPicker">
+                <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+              </n-button>
+            </n-space>
           </n-form-item>
           <n-form-item :label="t('config.chatMode')">
             <n-select v-model:value="generalForm.chat_mode" :options="chatModeOptions" />
@@ -173,6 +178,43 @@
         </div>
       </n-tab-pane>
     </n-tabs>
+
+    <!-- Directory picker modal -->
+    <n-modal v-model:show="showDirPicker" preset="card" :title="t('chat.workDirSelect')" style="max-width: 560px;">
+      <div class="dir-picker">
+        <div class="dir-breadcrumb">
+          <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
+            <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+            ..
+          </n-button>
+          <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        </div>
+        <div class="dir-list">
+          <div v-if="dirLoading" class="dir-loading">
+            <n-spin size="small" /> <span style="margin-left: 8px;">{{ t('chat.workDirLoading') }}</span>
+          </div>
+          <div v-else-if="dirEntries.length === 0" class="dir-empty">
+            {{ t('chat.workDirEmpty') }}
+          </div>
+          <div
+            v-for="entry in dirEntries"
+            v-else
+            :key="entry.path"
+            class="dir-item"
+            @click="navigateDir(entry.path)"
+          >
+            <n-icon size="16"><FolderOutline /></n-icon>
+            <span>{{ entry.name }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <n-space>
+          <n-button @click="showDirPicker = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="selectWorkDir">{{ t('chat.workDirSet') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -184,6 +226,8 @@ import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
+import { FolderOpenOutline, FolderOutline } from '@vicons/ionicons5'
+import { listDirs } from '@/api/sessions'
 
 const { t } = useI18n()
 
@@ -237,6 +281,13 @@ const approvalForm = reactive({
   enable_learning: true,
   enable_cli_confirm: false,
 })
+
+const showDirPicker = ref(false)
+const dirCurrentPath = ref('')
+const dirEntries = ref<any[]>([])
+const dirLoading = ref(false)
+
+const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
 const strategyOptions = computed(() => [
   { label: t('approval.settings.strategies.smart'), value: 'smart' },
@@ -430,6 +481,36 @@ async function loadRaw() {
   }
 }
 
+async function loadDirs(path?: string) {
+  dirLoading.value = true
+  try {
+    const res = await listDirs(path)
+    dirCurrentPath.value = res.current
+    dirEntries.value = res.dirs || []
+  } catch (e) {
+    console.error('Failed to list directories:', e)
+    dirEntries.value = []
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+function openDirPicker() {
+  loadDirs(generalForm.working_dir || undefined)
+  showDirPicker.value = true
+}
+
+function navigateDir(path: string) {
+  if (!path) return
+  loadDirs(path)
+}
+
+function selectWorkDir() {
+  if (!dirCurrentPath.value) return
+  generalForm.working_dir = dirCurrentPath.value
+  showDirPicker.value = false
+}
+
 onMounted(async () => {
   await configStore.loadConfig()
   if (configStore.config) {
@@ -440,3 +521,57 @@ onMounted(async () => {
   await loadRaw()
 })
 </script>
+
+<style scoped>
+.dir-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dir-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--n-border-color, #eee);
+}
+
+.dir-current {
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.dir-list {
+  max-height: 320px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.dir-item:hover {
+  background: var(--n-color-hover, #f5f5f5);
+}
+
+.dir-empty,
+.dir-loading {
+  display: flex;
+  align-items: center;
+  padding: 24px;
+  color: #999;
+  justify-content: center;
+}
+</style>

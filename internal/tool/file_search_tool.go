@@ -130,7 +130,7 @@ func (t *FileSearchTool) Execute(ctx context.Context, params map[string]interfac
 		maxResults = int(mr)
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path: %w", err)
 	}

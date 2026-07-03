@@ -57,7 +57,7 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		includeHidden = h
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +208,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return nil, fmt.Errorf("path argument is required")
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +344,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, fmt.Errorf("content argument is required")
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}

@@ -62,8 +62,13 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, fmt.Errorf("path is required")
 	}
 
+	absPath, err := resolvePath(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
+	}
+
 	// Read existing file
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -85,12 +90,12 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, err
 	}
 
-	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	result := map[string]interface{}{
-		"path":          path,
+		"path":          absPath,
 		"operation":     operation,
 		"bytes_written": len(newContent),
 	}

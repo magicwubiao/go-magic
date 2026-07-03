@@ -14,6 +14,7 @@ export interface Session {
   title: string
   source: string
   model: string
+  work_dir?: string
   profile?: string
   started_at: number
   last_active: number
@@ -45,8 +46,11 @@ export async function getSession(id: string): Promise<{ session_id: string; mess
   return request(`/sessions/${id}/messages`)
 }
 
-export async function createSession(): Promise<Session> {
-  return request('/sessions', { method: 'POST' })
+export async function createSession(workDir?: string): Promise<Session> {
+  return request('/sessions', {
+    method: 'POST',
+    body: workDir ? JSON.stringify({ work_dir: workDir }) : undefined,
+  })
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -58,6 +62,24 @@ export async function renameSession(id: string, name: string): Promise<void> {
     method: 'PUT',
     body: JSON.stringify({ name }),
   })
+}
+
+export async function updateSessionWorkDir(id: string, workDir: string): Promise<void> {
+  return request(`/sessions/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ work_dir: workDir }),
+  })
+}
+
+export interface DirEntry {
+  path: string
+  name: string
+  is_dir: boolean
+}
+
+export async function listDirs(path?: string): Promise<{ current: string; dirs: DirEntry[] }> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  return request(`/fs/dirs${query}`)
 }
 
 export async function sendMessage(sessionId: string, content: string): Promise<void> {

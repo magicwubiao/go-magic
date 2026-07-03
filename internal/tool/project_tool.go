@@ -62,7 +62,7 @@ func (t *ProjectAnalyzeTool) Execute(ctx context.Context, params map[string]inte
 		return nil, fmt.Errorf("action parameter is required")
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}

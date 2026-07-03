@@ -78,6 +78,8 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.find(s => s.id === activeSessionId.value)
   )
 
+  const currentWorkDir = computed(() => activeSession.value?.work_dir || '')
+
   const activeSessionState = computed(() => {
     if (!activeSessionId.value) return null
     return sessionStates.value[activeSessionId.value] || null
@@ -278,10 +280,10 @@ export const useChatStore = defineStore('chat', () => {
     return [...new Set(suggestions)].slice(0, 10)
   }
 
-  async function createSession(): Promise<Session | null> {
+  async function createSession(workDir?: string): Promise<Session | null> {
     try {
       error.value = null
-      const session = await sessionsApi.createSession()
+      const session = await sessionsApi.createSession(workDir)
       sessions.value = [session, ...sessions.value]
       activeSessionId.value = session.id
       getOrCreateSessionState(session.id)
@@ -346,6 +348,18 @@ export const useChatStore = defineStore('chat', () => {
       }
     } catch (e) {
       console.error('Failed to rename session:', e)
+    }
+  }
+
+  async function updateSessionWorkDir(id: string, workDir: string): Promise<void> {
+    try {
+      await sessionsApi.updateSessionWorkDir(id, workDir)
+      const session = sessions.value.find(s => s.id === id)
+      if (session) {
+        session.work_dir = workDir
+      }
+    } catch (e) {
+      console.error('Failed to update working directory:', e)
     }
   }
 
@@ -605,6 +619,7 @@ export const useChatStore = defineStore('chat', () => {
     streamContent,
     error,
     activeSession,
+    currentWorkDir,
     toolCalls,
     activeToolCalls,
     taskProgress,
@@ -617,6 +632,7 @@ export const useChatStore = defineStore('chat', () => {
     selectSession,
     deleteSession,
     renameSession,
+    updateSessionWorkDir,
     sendMessage,
     stopGeneration,
     cleanup,
