@@ -130,6 +130,27 @@ export function getFSDownloadUrl(path: string): string {
   return `/api/fs/download?path=${encodeURIComponent(path)}${auth}`
 }
 
+export async function deleteFSPath(path: string): Promise<void> {
+  return request('/fs/delete', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
+export async function renameFSPath(path: string, newName: string): Promise<{ path: string; name: string }> {
+  return request('/fs/rename', {
+    method: 'POST',
+    body: JSON.stringify({ path, new_name: newName }),
+  })
+}
+
+export async function writeFSFile(path: string, content: string): Promise<{ path: string; size: number }> {
+  return request('/fs/write', {
+    method: 'POST',
+    body: JSON.stringify({ path, content }),
+  })
+}
+
 export function getFSZipUrl(path: string): string {
   const token = getAuthToken()
   const auth = token ? `&token=${encodeURIComponent(token)}` : ''

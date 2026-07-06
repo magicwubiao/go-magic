@@ -887,6 +887,9 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/fs/zip", withCORS(requireAuth(s.handleFSZip)))
 	mux.HandleFunc("/api/fs/share", withCORS(requireAuth(s.handleFSShare)))
 	mux.HandleFunc("/api/fs/mkdir", withCORS(requireAuth(s.handleFSCreateDir)))
+	mux.HandleFunc("/api/fs/delete", withCORS(requireAuth(s.handleFSDelete)))
+	mux.HandleFunc("/api/fs/rename", withCORS(requireAuth(s.handleFSRename)))
+	mux.HandleFunc("/api/fs/write", withCORS(requireAuth(s.handleFSWrite)))
 	// Shared resources are accessed via token in the URL (no auth required,
 	// because the token itself is the credential). Bound by TTL.
 	mux.HandleFunc("/api/fs/shared/", withCORS(s.handleFSShared))
@@ -5666,6 +5669,149 @@ func (s *Server) handleFSCreateDir(w http.ResponseWriter, r *http.Request) {
 		"path": absNew,
 		"name": req.Name,
 	})
+}
+
+func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
+		return
+	}
+
+	if req.Path == "" {
+		jsonResponse(w, map[string]interface{}{"error": "path is required"})
+		return
+	}
+
+	absPath, err := sanitizeFSPath(req.Path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	if absPath == s.cfg.WorkingDir {
+		jsonResponse(w, map[string]interface{}{"error": "cannot delete root working directory"})
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "file not found"})
+		return
+	}
+
+	if info.IsDir() {
+		if err := os.RemoveAll(absPath); err != nil {
+			jsonResponse(w, map[string]interface{}{"error": "cannot delete directory: " + err.Error()})
+			return
+		}
+	} else {
+		if err := os.Remove(absPath); err != nil {
+			jsonResponse(w, map[string]interface{}{"error": "cannot delete file: " + err.Error()})
+			return
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+func (s *Server) handleFSRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path    string `json:"path"`
+		NewName string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
+		return
+	}
+
+	if req.Path == "" || req.NewName == "" {
+		jsonResponse(w, map[string]interface{}{"error": "path and new_name are required"})
+		return
+	}
+
+	if strings.ContainsAny(req.NewName, "/\\") || strings.HasPrefix(req.NewName, ".") {
+		jsonResponse(w, map[string]interface{}{"error": "invalid name"})
+		return
+	}
+
+	absPath, err := sanitizeFSPath(req.Path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	if _, err := os.Stat(absPath); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "file not found"})
+		return
+	}
+
+	parent := filepath.Dir(absPath)
+	newPath := filepath.Join(parent, req.NewName)
+
+	if _, err := os.Stat(newPath); err == nil {
+		jsonResponse(w, map[string]interface{}{"error": "target already exists"})
+		return
+	}
+
+	if err := os.Rename(absPath, newPath); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "rename failed: " + err.Error()})
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{"path": newPath, "name": req.NewName})
+}
+
+func (s *Server) handleFSWrite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
+		return
+	}
+
+	if req.Path == "" {
+		jsonResponse(w, map[string]interface{}{"error": "path is required"})
+		return
+	}
+
+	absPath, err := sanitizeFSPath(req.Path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	if err := os.WriteFile(absPath, []byte(req.Content), 0644); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "write failed: " + err.Error()})
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	var size int64
+	if err == nil {
+		size = info.Size()
+	}
+
+	jsonResponse(w, map[string]interface{}{"path": absPath, "size": size})
 }
 
 // --- Env ---

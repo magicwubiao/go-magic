@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="files-container">
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('files.title') }}</h2>
     </n-space>
@@ -84,14 +84,14 @@
 
       <!-- Workspace Tab -->
       <n-tab-pane name="workspace" :tab="t('files.workspaceTab')">
-        <n-space justify="space-between" style="margin-bottom: 16px;">
+        <n-space justify="space-between" style="margin-bottom: 12px;">
           <n-space>
             <n-input
               v-model:value="wsSearchQuery"
               :placeholder="t('files.search')"
               size="small"
               clearable
-              style="width: 240px"
+              style="width: 200px"
             >
               <template #prefix>
                 <n-icon><SearchOutline /></n-icon>
@@ -103,19 +103,16 @@
               <template #icon><n-icon><ArchiveOutline /></n-icon></template>
               {{ t('files.zipDownload') }}
             </n-button>
-            <n-button size="small" type="primary" @click="shareWorkspace" :disabled="!wsCurrentPath">
-              <template #icon><n-icon><LinkOutline /></n-icon></template>
-              {{ t('files.shareLink') }}
+            <n-button size="small" @click="createNewFolder" :disabled="!wsCurrentPath">
+              <template #icon><n-icon><AddOutline /></n-icon></template>
+              {{ t('files.newFolder') }}
             </n-button>
             <n-button size="small" @click="loadWorkspace(wsCurrentPath)" :loading="wsLoading">
-              <template #icon>
-                <n-icon><RefreshOutline /></n-icon>
-              </template>
+              <template #icon><n-icon><RefreshOutline /></n-icon></template>
             </n-button>
           </n-space>
         </n-space>
 
-        <!-- Breadcrumb -->
         <n-card size="small" style="margin-bottom: 12px;">
           <n-space align="center" size="small" wrap>
             <n-button size="tiny" quaternary :disabled="!wsParentPath" @click="navigateWorkspace(wsParentPath)">
@@ -127,27 +124,34 @@
         </n-card>
 
         <n-spin :show="wsLoading">
-          <n-card :title="t('files.workspaceList')" size="small">
+          <div class="workspace-table-container">
             <n-data-table
               :columns="workspaceColumns"
               :data="filteredWorkspaceEntries"
               :loading="wsLoading"
-              :pagination="wsPagination"
               size="small"
               bordered
               striped
             />
-            <n-empty v-if="!wsLoading && filteredWorkspaceEntries.length === 0" :description="t('files.workspaceEmpty')" style="margin-top: 24px;" />
-          </n-card>
+          </div>
+          <n-empty v-if="!wsLoading && filteredWorkspaceEntries.length === 0" :description="t('files.workspaceEmpty')" style="margin-top: 24px;" />
         </n-spin>
       </n-tab-pane>
     </n-tabs>
 
-    <!-- File preview modal -->
-    <n-modal v-model:show="showPreview" preset="card" :title="previewTitle" style="max-width: 900px; width: 90vw;">
+    <!-- File preview/editor modal -->
+    <n-modal v-model:show="showPreview" preset="card" :title="previewTitle" style="max-width: 950px; width: 95vw;">
       <n-scrollbar style="max-height: 70vh;">
         <div v-if="previewType === 'image'" class="image-preview-wrapper">
           <img :src="previewImageUrl" :alt="previewTitle" style="max-width: 100%; max-height: 65vh;" />
+        </div>
+        <div v-else-if="previewType === 'text' && isEditing">
+          <n-input
+            v-model:value="editContent"
+            type="textarea"
+            :autosize="{ minRows: 20, maxRows: 40 }"
+            style="width: 100%; font-family: monospace; font-size: 13px;"
+          />
         </div>
         <pre v-else-if="previewContent" class="file-preview-content">{{ previewContent }}</pre>
         <n-empty v-else :description="t('files.noPreview')" />
@@ -155,52 +159,46 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showPreview = false">{{ t('common.close') }}</n-button>
+          <template v-if="previewType === 'text' && !isImageFile(previewTitle)">
+            <n-button v-if="!isEditing" @click="startEdit">{{ t('common.edit') }}</n-button>
+            <template v-else>
+              <n-button @click="cancelEdit">{{ t('common.cancel') }}</n-button>
+              <n-button type="primary" @click="saveEdit">{{ t('common.save') }}</n-button>
+            </template>
+          </template>
           <n-button type="primary" @click="downloadPreviewFile">{{ t('files.download') }}</n-button>
         </n-space>
       </template>
     </n-modal>
 
-    <!-- Share link modal -->
-    <n-modal v-model:show="showShare" preset="card" :title="t('files.shareLinkTitle')" style="max-width: 600px; width: 90vw;">
-      <n-space vertical size="medium">
-        <n-space align="center" size="small">
-          <n-text>{{ t('files.sharePath') }}:</n-text>
-          <n-text code style="font-size: 12px; word-break: break-all;">{{ sharePath }}</n-text>
-        </n-space>
-
-        <n-form-item :label="t('files.shareExpiresIn')" label-placement="left">
-          <n-select
-            v-model:value="shareTTL"
-            :options="shareTTLOptions"
-            size="small"
-            style="width: 200px"
-          />
-        </n-form-item>
-
-        <n-input
-          v-model:value="shareURL"
-          readonly
-          size="small"
-          :placeholder="t('files.sharePlaceholder')"
-        />
-
-        <n-text v-if="shareExpiry" depth="3" style="font-size: 12px;">
-          {{ t('files.shareExpiresAt') }}: {{ shareExpiry }}
-        </n-text>
-      </n-space>
+    <!-- Rename modal -->
+    <n-modal v-model:show="showRename" preset="card" :title="t('common.edit')" style="max-width: 400px;">
+      <n-input
+        v-model:value="renameNewName"
+        :placeholder="t('files.newFolderPlaceholder')"
+        size="small"
+        @keyup.enter="confirmRename"
+      />
       <template #footer>
         <n-space justify="end">
-          <n-button @click="showShare = false">{{ t('common.close') }}</n-button>
-          <n-button :disabled="!shareURL" @click="copyShareURL">
-            <template #icon><n-icon><CopyOutline /></n-icon></template>
-            {{ t('files.copyUrl') }}
-          </n-button>
-          <n-button :disabled="!shareURL" @click="openShareURL">
-            {{ t('files.openInNewTab') }}
-          </n-button>
-          <n-button type="primary" :loading="shareLoading" @click="createWorkspaceShare">
-            {{ t('files.createShare') }}
-          </n-button>
+          <n-button @click="showRename = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="confirmRename">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- New folder modal -->
+    <n-modal v-model:show="showNewFolder" preset="card" :title="t('files.newFolder')" style="max-width: 400px;">
+      <n-input
+        v-model:value="newFolderName"
+        :placeholder="t('files.newFolderPlaceholder')"
+        size="small"
+        @keyup.enter="confirmCreateFolder"
+      />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showNewFolder = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="confirmCreateFolder">{{ t('common.create') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -249,7 +247,8 @@ import {
   FilmOutline,
   CodeOutline,
   ArchiveOutline,
-  LinkOutline,
+  AddOutline,
+  CreateOutline,
 } from '@vicons/ionicons5'
 import * as sessionsApi from '@/api/sessions'
 import type { DataTableColumns, PaginationProps } from 'naive-ui'
@@ -424,29 +423,7 @@ const filteredWorkspaceEntries = computed(() => {
   return entries
 })
 
-const wsPagination = ref<PaginationProps>({
-  page: 1,
-  pageSize: 20,
-  showSizePicker: true,
-  pageSizes: [10, 20, 50, 100],
-  itemCount: 0,
-  prefix: ({ itemCount }) => `${itemCount}`,
-  onUpdatePage: (page: number) => {
-    wsPagination.value.page = page
-  },
-  onUpdatePageSize: (pageSize: number) => {
-    wsPagination.value.pageSize = pageSize
-    wsPagination.value.page = 1
-  },
-})
-
-watch(filteredWorkspaceEntries, (val) => {
-  wsPagination.value.itemCount = val.length
-}, { immediate: true })
-
-watch(wsSearchQuery, () => {
-  wsPagination.value.page = 1
-})
+watch(wsSearchQuery, () => {})
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -506,10 +483,9 @@ const workspaceColumns: DataTableColumns<sessionsApi.FSEntry> = [
   {
     title: t('files.actions'),
     key: 'actions',
-    width: 140,
+    width: 180,
     align: 'center',
     render(row) {
-      if (row.is_dir) return null
       return h(NSpace, { size: 4, justify: 'center' }, {
         default: () => [
           h(NButton, {
@@ -523,10 +499,32 @@ const workspaceColumns: DataTableColumns<sessionsApi.FSEntry> = [
           h(NButton, {
             size: 'tiny',
             quaternary: true,
+            title: t('common.edit'),
+            onClick: () => startRename(row),
+          }, {
+            icon: () => h(NIcon, null, { default: () => h(CreateOutline) }),
+          }),
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
             title: t('files.download'),
             onClick: () => downloadWorkspaceFile(row),
+            disabled: row.is_dir,
           }, {
             icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
+          }),
+          h(NPopconfirm, {
+            onPositiveClick: () => deleteWorkspaceItem(row),
+          }, {
+            trigger: () => h(NButton, {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              title: t('files.delete'),
+            }, {
+              icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
+            }),
+            default: () => t('files.confirmDelete'),
           }),
         ],
       })
@@ -600,6 +598,7 @@ async function previewUploadFile(file: sessionsApi.FileItem) {
     }
     const content = await res.text()
     previewContent.value = content
+    editContent.value = content
     previewType.value = 'text'
     showPreview.value = true
   } catch (e) {
@@ -624,7 +623,6 @@ async function loadWorkspace(path?: string) {
     const res = await sessionsApi.listFSEntries(path)
     wsCurrentPath.value = res.current
     wsEntries.value = res.entries || []
-    // Find parent path from ".." entry
     const parentEntry = res.entries?.find(e => e.name === '..')
     wsParentPath.value = parentEntry ? parentEntry.path : ''
   } catch (e) {
@@ -640,6 +638,7 @@ function navigateWorkspace(path: string) {
   loadWorkspace(path)
 }
 
+// Preview/Editor
 const showPreview = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
@@ -647,6 +646,13 @@ const previewPath = ref('')
 const previewType = ref<'text' | 'image' | 'none'>('none')
 const previewImageUrl = ref('')
 const previewDownloadUrl = ref('')
+const isEditing = ref(false)
+const editContent = ref('')
+
+// Rename
+const showRename = ref(false)
+const renamePath = ref('')
+const renameNewName = ref('')
 
 function isImageFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || ''
@@ -664,6 +670,7 @@ async function previewWorkspaceFile(row: sessionsApi.FSEntry) {
   previewContent.value = ''
   previewImageUrl.value = ''
   previewDownloadUrl.value = sessionsApi.getFSDownloadUrl(row.path)
+  isEditing.value = false
 
   if (isImageFile(row.name)) {
     previewType.value = 'image'
@@ -675,10 +682,34 @@ async function previewWorkspaceFile(row: sessionsApi.FSEntry) {
   try {
     const content = await sessionsApi.readFSFile(row.path)
     previewContent.value = content
+    editContent.value = content
     previewType.value = 'text'
     showPreview.value = true
   } catch (e) {
     message.error(t('files.previewError') || 'Failed to preview file')
+  }
+}
+
+function startEdit() {
+  isEditing.value = true
+}
+
+function cancelEdit() {
+  isEditing.value = false
+  editContent.value = previewContent.value
+}
+
+async function saveEdit() {
+  if (!previewPath.value) return
+  try {
+    await sessionsApi.writeFSFile(previewPath.value, editContent.value)
+    previewContent.value = editContent.value
+    isEditing.value = false
+    message.success(t('common.success'))
+    await loadWorkspace(wsCurrentPath.value)
+  } catch (e) {
+    message.error(t('files.uploadError') || 'Save failed')
+    console.error(e)
   }
 }
 
@@ -713,65 +744,66 @@ function downloadPreviewFile() {
   downloadWithAuth(previewDownloadUrl.value, previewTitle.value)
 }
 
-// ===== Zip and share =====
-const showShare = ref(false)
-const sharePath = ref('')
-const shareURL = ref('')
-const shareLoading = ref(false)
-const shareExpiry = ref('')
-const shareTTL = ref(3600)
+// Rename
+function startRename(row: sessionsApi.FSEntry) {
+  renamePath.value = row.path
+  renameNewName.value = row.name
+  showRename.value = true
+}
 
-const shareTTLOptions = computed(() => [
-  { label: t('files.ttl1h'), value: 3600 },
-  { label: t('files.ttl24h'), value: 86400 },
-  { label: t('files.ttl7d'), value: 604800 },
-])
+async function confirmRename() {
+  if (!renamePath.value || !renameNewName.value.trim()) return
+  try {
+    await sessionsApi.renameFSPath(renamePath.value, renameNewName.value.trim())
+    message.success(t('common.success'))
+    showRename.value = false
+    await loadWorkspace(wsCurrentPath.value)
+  } catch (e) {
+    message.error((e as Error).message || t('common.error'))
+    console.error(e)
+  }
+}
 
+// New folder
+const showNewFolder = ref(false)
+const newFolderName = ref('')
+
+function createNewFolder() {
+  newFolderName.value = ''
+  showNewFolder.value = true
+}
+
+async function confirmCreateFolder() {
+  if (!newFolderName.value.trim()) return
+  try {
+    await sessionsApi.createDir(wsCurrentPath.value || '', newFolderName.value.trim())
+    message.success(t('files.folderCreated'))
+    showNewFolder.value = false
+    await loadWorkspace(wsCurrentPath.value)
+  } catch (e) {
+    message.error((e as Error).message || t('files.folderCreateFailed'))
+    console.error(e)
+  }
+}
+
+// Delete
+async function deleteWorkspaceItem(row: sessionsApi.FSEntry) {
+  try {
+    await sessionsApi.deleteFSPath(row.path)
+    message.success(t('files.deleteSuccess'))
+    await loadWorkspace(wsCurrentPath.value)
+  } catch (e) {
+    message.error((e as Error).message || t('files.deleteError'))
+    console.error(e)
+  }
+}
+
+// ===== Zip =====
 function zipWorkspace() {
   if (!wsCurrentPath.value) return
   const url = sessionsApi.getFSZipUrl(wsCurrentPath.value)
   const filename = (wsCurrentPath.value.split('/').filter(Boolean).pop() || 'workspace') + '.zip'
   downloadWithAuth(url, filename)
-}
-
-function shareWorkspace() {
-  if (!wsCurrentPath.value) return
-  sharePath.value = wsCurrentPath.value
-  shareURL.value = ''
-  shareExpiry.value = ''
-  shareTTL.value = 3600
-  showShare.value = true
-}
-
-async function createWorkspaceShare() {
-  if (!sharePath.value) return
-  shareLoading.value = true
-  try {
-    const res = await sessionsApi.createShare(sharePath.value, shareTTL.value)
-    shareURL.value = res.url
-    shareExpiry.value = new Date(res.expires_at * 1000).toLocaleString()
-    message.success(t('files.shareCreated') || 'Share link created')
-  } catch (e) {
-    message.error(t('files.shareFailed') || `Failed to create share link: ${(e as Error).message}`)
-    console.error(e)
-  } finally {
-    shareLoading.value = false
-  }
-}
-
-async function copyShareURL() {
-  if (!shareURL.value) return
-  try {
-    await navigator.clipboard.writeText(shareURL.value)
-    message.success(t('files.copyUrlSuccess'))
-  } catch {
-    message.error(t('files.copyUrlError'))
-  }
-}
-
-function openShareURL() {
-  if (!shareURL.value) return
-  window.open(shareURL.value, '_blank', 'noopener')
 }
 
 onMounted(() => {
@@ -781,6 +813,15 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.files-container {
+  height: 100%;
+}
+
+.workspace-table-container {
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+}
+
 .file-preview-content {
   background: #f5f5f5;
   padding: 16px;
@@ -792,5 +833,11 @@ onMounted(() => {
   word-break: break-all;
   max-height: 70vh;
   overflow: auto;
+}
+
+.image-preview-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 </style>
