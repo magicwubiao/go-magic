@@ -194,7 +194,20 @@ type ImageGenConfig struct {
 
 // SecurityConfig defines security configuration.
 type SecurityConfig struct {
-	PII PIIConfig `json:"pii,omitempty"`
+	PII  PIIConfig    `json:"pii,omitempty"`
+	File FileSecurity `json:"file,omitempty"`
+}
+
+// FileSecurity defines file operation security configuration.
+type FileSecurity struct {
+	Enabled          bool     `json:"enabled,omitempty"`
+	AllowedPaths     []string `json:"allowed_paths,omitempty"`
+	BlockedPaths     []string `json:"blocked_paths,omitempty"`
+	SessionIsolation bool     `json:"session_isolation,omitempty"`
+	DefaultFileMode  string   `json:"default_file_mode,omitempty"`
+	DefaultDirMode   string   `json:"default_dir_mode,omitempty"`
+	MaxFileSizeKB    int      `json:"max_file_size_kb,omitempty"`
+	AllowSymlinks    bool     `json:"allow_symlinks,omitempty"`
 }
 
 // PIIConfig defines PII redaction configuration.

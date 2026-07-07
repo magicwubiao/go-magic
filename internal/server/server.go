@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -58,6 +59,7 @@ type Session struct {
 	Model           string  `json:"model"`
 	Title           string  `json:"title"`
 	WorkDir         string  `json:"work_dir"`
+	WorkDirUserSet  bool    `json:"work_dir_user_set"`
 	StartedAt       int64   `json:"started_at"`
 	EndedAt         *int64  `json:"ended_at"`
 	LastActive      int64   `json:"last_active"`
@@ -672,20 +674,21 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 	isActive := time.Since(s.UpdatedAt) < 30*time.Minute
 
 	return &Session{
-		ID:            s.ID,
-		Profile:       s.Profile,
-		Source:        s.Platform,
-		Model:         s.Model,
-		Title:         title,
-		WorkDir:       s.WorkDir,
-		StartedAt:     s.CreatedAt.Unix(),
-		LastActive:    s.UpdatedAt.Unix(),
-		IsActive:      isActive,
-		MessageCount:  msgCount,
-		ToolCallCount: toolCallCount,
-		InputTokens:   s.InputTokens,
-		OutputTokens:  s.OutputTokens,
-		Preview:       preview,
+		ID:             s.ID,
+		Profile:        s.Profile,
+		Source:         s.Platform,
+		Model:          s.Model,
+		Title:          title,
+		WorkDir:        s.WorkDir,
+		WorkDirUserSet: s.WorkDirUserSet,
+		StartedAt:      s.CreatedAt.Unix(),
+		LastActive:     s.UpdatedAt.Unix(),
+		IsActive:       isActive,
+		MessageCount:   msgCount,
+		ToolCallCount:  toolCallCount,
+		InputTokens:    s.InputTokens,
+		OutputTokens:   s.OutputTokens,
+		Preview:        preview,
 	}
 }
 
@@ -1226,8 +1229,16 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		workDir := req.WorkDir
+		workDirUserSet := false
 		if workDir == "" {
-			workDir = s.cfg.WorkingDir
+			workDir = s.getSessionWorkDir(sessionID, name)
+		} else {
+			workDirUserSet = true
+		}
+
+		if err := s.ensureSessionWorkDir(workDir); err != nil {
+			http.Error(w, "failed to create session workdir: "+err.Error(), 500)
+			return
 		}
 
 		newSession := &session.Session{
@@ -1236,6 +1247,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Platform:        platform,
 			Model:           model,
 			WorkDir:         workDir,
+			WorkDirUserSet:  workDirUserSet,
 			Messages:        []types.Message{},
 			InputTokens:     0,
 			OutputTokens:    0,
@@ -1350,18 +1362,31 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if req.WorkDir != nil {
-			if err := s.sessionStore.UpdateWorkDir(context.Background(), id, *req.WorkDir); err != nil {
+			if dbSession.WorkDirUserSet {
+				http.Error(w, "work directory already set by user and cannot be changed", 400)
+				return
+			}
+			if err := s.sessionStore.UpdateWorkDir(context.Background(), id, *req.WorkDir, true); err != nil {
 				http.Error(w, err.Error(), 400)
 				return
 			}
 		}
 		jsonResponse(w, map[string]bool{"ok": true})
 	case "DELETE":
+		var req struct {
+			DeleteFiles bool `json:"delete_files"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+
 		s.sessionStore.DeleteSession(context.Background(), id)
-		// Clean up agent
 		s.agentsMu.Lock()
 		delete(s.agents, id)
 		s.agentsMu.Unlock()
+
+		if req.DeleteFiles && dbSession.WorkDir != "" && !dbSession.WorkDirUserSet {
+			s.cleanupSessionWorkDir(dbSession.WorkDir)
+		}
+
 		jsonResponse(w, map[string]bool{"ok": true})
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -5104,6 +5129,114 @@ func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
 }
 
 // sanitizeFSPath resolves a path to absolute and performs basic security checks.
+func (s *Server) getSessionWorkDir(sessionID string, sessionName string) string {
+	baseDir := s.cfg.WorkingDir
+	if baseDir == "" {
+		baseDir = filepath.Join(s.magicHome, "workspace")
+	}
+	safeName := sanitizeDirName(sessionName)
+	if safeName == "" {
+		safeName = "chat"
+	}
+	shortID := sessionID[:8]
+	return filepath.Join(baseDir, fmt.Sprintf("%s-%s", safeName, shortID))
+}
+
+func sanitizeDirName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	var safeName strings.Builder
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ' ' ||
+			unicode.Is(unicode.Han, r) {
+			safeName.WriteRune(r)
+		} else {
+			safeName.WriteRune('_')
+		}
+	}
+	result := strings.ReplaceAll(strings.TrimSpace(safeName.String()), " ", "_")
+	if len(result) > 64 {
+		result = result[:64]
+	}
+	return result
+}
+
+func (s *Server) ensureSessionWorkDir(workDir string) error {
+	if workDir == "" {
+		return fmt.Errorf("workdir is required")
+	}
+	return os.MkdirAll(workDir, 0700)
+}
+
+func (s *Server) cleanupSessionWorkDir(workDir string) {
+	if workDir == "" {
+		return
+	}
+	baseDir := s.cfg.WorkingDir
+	if baseDir == "" {
+		baseDir = filepath.Join(s.magicHome, "workspace")
+	}
+	absWorkDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return
+	}
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(absWorkDir, absBaseDir+string(filepath.Separator)) && absWorkDir != absBaseDir {
+		return
+	}
+	os.RemoveAll(absWorkDir)
+}
+
+func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
+	if sessionID != "" {
+		sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
+		if err != nil {
+			return "", fmt.Errorf("session not found: %w", err)
+		}
+		sessionWorkDir := sess.WorkDir
+		if sessionWorkDir == "" {
+			return "", fmt.Errorf("session has no work_dir")
+		}
+		if err := s.ensureSessionWorkDir(sessionWorkDir); err != nil {
+			return "", fmt.Errorf("failed to ensure session workdir: %w", err)
+		}
+		absSessionDir, err := filepath.Abs(sessionWorkDir)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve session workdir: %w", err)
+		}
+		absSessionDir = filepath.Clean(absSessionDir)
+		if path == "" {
+			return absSessionDir, nil
+		}
+		var targetPath string
+		if filepath.IsAbs(path) {
+			targetPath = filepath.Clean(path)
+		} else {
+			targetPath = filepath.Clean(filepath.Join(absSessionDir, path))
+		}
+		relPath, err := filepath.Rel(absSessionDir, targetPath)
+		if err != nil {
+			return "", fmt.Errorf("path outside session directory")
+		}
+		if relPath == "." {
+			return absSessionDir, nil
+		}
+		if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
+			return "", fmt.Errorf("path outside session directory")
+		}
+		return targetPath, nil
+	}
+	if path == "" {
+		path = s.cfg.WorkingDir
+	}
+	return sanitizeFSPath(path)
+}
+
 func sanitizeFSPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
@@ -5122,11 +5255,9 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = s.cfg.WorkingDir
-	}
+	sessionID := r.URL.Query().Get("session_id")
 
-	absPath, err := sanitizeFSPath(path)
+	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
@@ -5147,10 +5278,11 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result []fsEntry
-	// Add parent directory option
-	parent := filepath.Dir(absPath)
-	if parent != absPath {
-		result = append(result, fsEntry{Path: parent, Name: "..", IsDir: true})
+	if sessionID == "" {
+		parent := filepath.Dir(absPath)
+		if parent != absPath {
+			result = append(result, fsEntry{Path: parent, Name: "..", IsDir: true})
+		}
 	}
 
 	for _, entry := range entries {
@@ -5187,7 +5319,8 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Query().Get("path")
-	absPath, err := sanitizeFSPath(path)
+	sessionID := r.URL.Query().Get("session_id")
+	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
@@ -5260,7 +5393,8 @@ func (s *Server) handleFSDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Query().Get("path")
-	absPath, err := sanitizeFSPath(path)
+	sessionID := r.URL.Query().Get("session_id")
+	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -5301,11 +5435,8 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = s.cfg.WorkingDir
-	}
-
-	absPath, err := sanitizeFSPath(path)
+	sessionID := r.URL.Query().Get("session_id")
+	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -5608,8 +5739,9 @@ func (s *Server) handleFSCreateDir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Parent string `json:"parent"`
-		Name   string `json:"name"`
+		Parent    string `json:"parent"`
+		Name      string `json:"name"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
@@ -5620,17 +5752,12 @@ func (s *Server) handleFSCreateDir(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]interface{}{"error": "directory name is required"})
 		return
 	}
-	// Basic validation: no path separators, no hidden prefix
 	if strings.ContainsAny(req.Name, "/\\") || strings.HasPrefix(req.Name, ".") {
 		jsonResponse(w, map[string]interface{}{"error": "invalid directory name"})
 		return
 	}
 
-	parent := req.Parent
-	if parent == "" {
-		parent = s.cfg.WorkingDir
-	}
-	absParent, err := sanitizeFSPath(parent)
+	absParent, err := s.resolveFSPath(req.Parent, req.SessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
@@ -5678,7 +5805,8 @@ func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Path string `json:"path"`
+		Path      string `json:"path"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
@@ -5690,13 +5818,26 @@ func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	absPath, err := sanitizeFSPath(req.Path)
+	absPath, err := s.resolveFSPath(req.Path, req.SessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
-	if absPath == s.cfg.WorkingDir {
+	if req.SessionID != "" {
+		sess, err := s.sessionStore.LoadSession(context.Background(), req.SessionID)
+		if err == nil && sess.WorkDir != "" {
+			absSessionDir, err := filepath.Abs(sess.WorkDir)
+			if err == nil {
+				absSessionDir = filepath.Clean(absSessionDir)
+				absPathClean := filepath.Clean(absPath)
+				if absPathClean == absSessionDir {
+					jsonResponse(w, map[string]interface{}{"error": "cannot delete session root directory"})
+					return
+				}
+			}
+		}
+	} else if absPath == s.cfg.WorkingDir {
 		jsonResponse(w, map[string]interface{}{"error": "cannot delete root working directory"})
 		return
 	}
@@ -5729,8 +5870,9 @@ func (s *Server) handleFSRename(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Path    string `json:"path"`
-		NewName string `json:"new_name"`
+		Path      string `json:"path"`
+		NewName   string `json:"new_name"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
@@ -5747,7 +5889,7 @@ func (s *Server) handleFSRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	absPath, err := sanitizeFSPath(req.Path)
+	absPath, err := s.resolveFSPath(req.Path, req.SessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
@@ -5781,8 +5923,9 @@ func (s *Server) handleFSWrite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
+		Path      string `json:"path"`
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "invalid body"})
@@ -5794,13 +5937,19 @@ func (s *Server) handleFSWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	absPath, err := sanitizeFSPath(req.Path)
+	absPath, err := s.resolveFSPath(req.Path, req.SessionID)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
-	if err := os.WriteFile(absPath, []byte(req.Content), 0644); err != nil {
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "cannot create directory: " + err.Error()})
+		return
+	}
+
+	if err := os.WriteFile(absPath, []byte(req.Content), 0600); err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "write failed: " + err.Error()})
 		return
 	}

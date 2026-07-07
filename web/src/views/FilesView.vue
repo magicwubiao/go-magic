@@ -21,17 +21,6 @@
                 {{ t('files.upload') }}
               </n-button>
             </n-upload>
-            <n-input
-              v-model:value="searchQuery"
-              :placeholder="t('files.search')"
-              size="small"
-              clearable
-              style="width: 200px"
-            >
-              <template #prefix>
-                <n-icon><SearchOutline /></n-icon>
-              </template>
-            </n-input>
           </n-space>
           <n-button size="small" @click="loadFiles" :loading="loading">
             <template #icon>
@@ -70,56 +59,57 @@
           <n-card :title="t('files.fileList')" size="small">
             <n-data-table
               :columns="uploadColumns"
-              :data="filteredFiles"
+              :data="files"
               :loading="loading"
               :pagination="pagination"
               size="small"
               bordered
               striped
             />
-            <n-empty v-if="!loading && filteredFiles.length === 0" :description="searchQuery ? t('files.noSearchResult') : t('files.empty')" style="margin-top: 24px;" />
+            <n-empty v-if="!loading && files.length === 0" :description="t('files.empty')" style="margin-top: 24px;" />
           </n-card>
         </n-spin>
       </n-tab-pane>
 
       <!-- Workspace Tab -->
       <n-tab-pane name="workspace" :tab="t('files.workspaceTab')">
-        <n-space justify="space-between" style="margin-bottom: 12px;">
-          <n-space>
-            <n-input
-              v-model:value="wsSearchQuery"
-              :placeholder="t('files.search')"
-              size="small"
-              clearable
-              style="width: 200px"
-            >
-              <template #prefix>
-                <n-icon><SearchOutline /></n-icon>
-              </template>
-            </n-input>
-          </n-space>
-          <n-space>
-            <n-button size="small" @click="zipWorkspace" :disabled="!wsCurrentPath">
-              <template #icon><n-icon><ArchiveOutline /></n-icon></template>
-              {{ t('files.zipDownload') }}
-            </n-button>
-            <n-button size="small" @click="createNewFolder" :disabled="!wsCurrentPath">
-              <template #icon><n-icon><AddOutline /></n-icon></template>
-              {{ t('files.newFolder') }}
-            </n-button>
-            <n-button size="small" @click="loadWorkspace(wsCurrentPath)" :loading="wsLoading">
-              <template #icon><n-icon><RefreshOutline /></n-icon></template>
-            </n-button>
-          </n-space>
-        </n-space>
-
         <n-card size="small" style="margin-bottom: 12px;">
+          <n-space justify="space-between" align="center">
+            <n-space align="center">
+              <n-text strong :depth="3" style="font-size: 13px;">{{ t('files.session') }}:</n-text>
+              <n-select
+                v-model:value="selectedSessionId"
+                :options="sessionOptions"
+                size="small"
+                filterable
+                :placeholder="t('files.selectSession')"
+                style="width: 300px;"
+                @update:value="onSessionChange"
+              />
+            </n-space>
+            <n-space>
+              <n-button size="small" @click="zipWorkspace" :disabled="!selectedSessionId">
+                <template #icon><n-icon><ArchiveOutline /></n-icon></template>
+                {{ t('files.zipDownload') }}
+              </n-button>
+              <n-button size="small" @click="createNewFolder" :disabled="!selectedSessionId">
+                <template #icon><n-icon><AddOutline /></n-icon></template>
+                {{ t('files.newFolder') }}
+              </n-button>
+              <n-button size="small" @click="loadWorkspace()" :loading="wsLoading">
+                <template #icon><n-icon><RefreshOutline /></n-icon></template>
+              </n-button>
+            </n-space>
+          </n-space>
+        </n-card>
+
+        <n-card size="small" style="margin-bottom: 12px;" v-if="selectedSessionId">
           <n-space align="center" size="small" wrap>
-            <n-button size="tiny" quaternary :disabled="!wsParentPath" @click="navigateWorkspace(wsParentPath)">
-              <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+            <n-button v-if="showBackButton" size="tiny" text @click="goBack">
+              <template #icon><n-icon><FolderOutline /></n-icon></template>
               ..
             </n-button>
-            <n-text code style="font-size: 13px;">{{ wsCurrentPath || '/' }}</n-text>
+            <n-text code style="font-size: 13px;">{{ currentRelativePath || '/' }}</n-text>
           </n-space>
         </n-card>
 
@@ -127,14 +117,15 @@
           <div class="workspace-table-container">
             <n-data-table
               :columns="workspaceColumns"
-              :data="filteredWorkspaceEntries"
+              :data="wsEntries"
               :loading="wsLoading"
               size="small"
               bordered
               striped
             />
           </div>
-          <n-empty v-if="!wsLoading && filteredWorkspaceEntries.length === 0" :description="t('files.workspaceEmpty')" style="margin-top: 24px;" />
+          <n-empty v-if="!wsLoading && selectedSessionId && wsEntries.length === 0" :description="t('files.workspaceEmpty')" style="margin-top: 24px;" />
+          <n-empty v-if="!wsLoading && !selectedSessionId" :description="t('files.selectSession')" style="margin-top: 24px;" />
         </n-spin>
       </n-tab-pane>
     </n-tabs>
@@ -202,12 +193,29 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- Delete session confirm modal -->
+    <n-modal v-model:show="showDeleteSessionConfirm" preset="card" :title="t('files.deleteSession')" style="max-width: 450px;">
+      <n-space vertical size="medium">
+        <n-text>{{ t('files.deleteSessionConfirm') }}</n-text>
+        <n-switch v-model:value="deleteSessionFiles" :label="t('files.deleteSessionFiles')" />
+      </n-space>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showDeleteSessionConfirm = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="error" @click="confirmDeleteSession(deleteSessionFiles)">
+            {{ t('common.delete') }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, h, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useChatStore } from '@/stores/chat'
 import {
   NSpace,
   NUpload,
@@ -228,13 +236,13 @@ import {
   NText,
   NSelect,
   NFormItem,
+  NSwitch,
   useMessage,
 } from 'naive-ui'
 import {
   CloudUploadOutline,
   TrashOutline,
   DownloadOutline,
-  SearchOutline,
   EyeOutline,
   CopyOutline,
   RefreshOutline,
@@ -256,20 +264,13 @@ import type { DataTableColumns, PaginationProps } from 'naive-ui'
 const { t } = useI18n()
 const message = useMessage()
 
-const activeTab = ref('uploads')
+const activeTab = ref('workspace')
 
 // ===== Uploads Tab =====
 const files = ref<sessionsApi.FileItem[]>([])
 const loading = ref(false)
-const searchQuery = ref('')
 
 const totalSize = computed(() => files.value.reduce((sum, f) => sum + f.size, 0))
-
-const filteredFiles = computed(() => {
-  if (!searchQuery.value) return files.value
-  const q = searchQuery.value.toLowerCase()
-  return files.value.filter(f => f.filename.toLowerCase().includes(q))
-})
 
 const pagination = ref<PaginationProps>({
   page: 1,
@@ -287,13 +288,9 @@ const pagination = ref<PaginationProps>({
   },
 })
 
-watch(filteredFiles, (val) => {
+watch(files, (val) => {
   pagination.value.itemCount = val.length
 }, { immediate: true })
-
-watch(searchQuery, () => {
-  pagination.value.page = 1
-})
 
 function getFileIcon(filename: string) {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
@@ -411,19 +408,61 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
 const wsEntries = ref<sessionsApi.FSEntry[]>([])
 const wsLoading = ref(false)
 const wsCurrentPath = ref('')
-const wsParentPath = ref('')
-const wsSearchQuery = ref('')
+const selectedSessionId = ref<string>('')
 
-const filteredWorkspaceEntries = computed(() => {
-  let entries = wsEntries.value
-  if (wsSearchQuery.value) {
-    const q = wsSearchQuery.value.toLowerCase()
-    entries = entries.filter(e => e.name.toLowerCase().includes(q))
-  }
-  return entries
+const chatStore = useChatStore()
+
+const sessionOptions = computed(() => {
+  return chatStore.sessions
+    .filter(s => s.work_dir && s.source === 'web')
+    .map(s => ({
+      label: s.title || s.id,
+      value: s.id,
+    }))
 })
 
-watch(wsSearchQuery, () => {})
+const currentRelativePath = computed(() => {
+  if (!selectedSessionId.value || !wsCurrentPath.value) return '/'
+  const session = chatStore.sessions.find(s => s.id === selectedSessionId.value)
+  if (!session || !session.work_dir) return '/'
+  const idx = wsCurrentPath.value.indexOf(session.work_dir)
+  if (idx === -1) return '/'
+  const rel = wsCurrentPath.value.substring(idx + session.work_dir.length)
+  return rel || '/'
+})
+
+const showBackButton = computed(() => {
+  if (!selectedSessionId.value || !wsCurrentPath.value) return false
+  const session = chatStore.sessions.find(s => s.id === selectedSessionId.value)
+  if (!session || !session.work_dir) return false
+  return wsCurrentPath.value !== session.work_dir
+})
+
+async function loadSessions() {
+  if (chatStore.sessions.length === 0) {
+    await chatStore.loadSessions()
+  }
+}
+
+function onSessionChange() {
+  wsCurrentPath.value = ''
+  loadWorkspace()
+}
+
+function goBack() {
+  if (!wsCurrentPath.value) return
+  const parts = wsCurrentPath.value.split('/').filter(Boolean)
+  if (parts.length <= 1) {
+    const session = chatStore.sessions.find(s => s.id === selectedSessionId.value)
+    if (session && session.work_dir) {
+      wsCurrentPath.value = session.work_dir
+    }
+  } else {
+    parts.pop()
+    wsCurrentPath.value = '/' + parts.join('/')
+  }
+  loadWorkspace(wsCurrentPath.value)
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -620,11 +659,12 @@ async function copyUrl(file: sessionsApi.FileItem) {
 async function loadWorkspace(path?: string) {
   wsLoading.value = true
   try {
-    const res = await sessionsApi.listFSEntries(path)
+    const sessionId = selectedSessionId.value || undefined
+    const session = sessionId ? chatStore.sessions.find(s => s.id === sessionId) : undefined
+    const loadPath = path || session?.work_dir
+    const res = await sessionsApi.listFSEntries(loadPath, sessionId)
     wsCurrentPath.value = res.current
-    wsEntries.value = res.entries || []
-    const parentEntry = res.entries?.find(e => e.name === '..')
-    wsParentPath.value = parentEntry ? parentEntry.path : ''
+    wsEntries.value = (res.entries || []).filter(e => e.name !== '..')
   } catch (e) {
     message.error(t('files.workspaceLoadError') || 'Failed to load workspace files')
     console.error(e)
@@ -664,23 +704,24 @@ async function previewWorkspaceFile(row: sessionsApi.FSEntry) {
     navigateWorkspace(row.path)
     return
   }
+  const sessionId = selectedSessionId.value || undefined
   previewPath.value = row.path
   previewTitle.value = row.name
   previewType.value = 'none'
   previewContent.value = ''
   previewImageUrl.value = ''
-  previewDownloadUrl.value = sessionsApi.getFSDownloadUrl(row.path)
+  previewDownloadUrl.value = sessionsApi.getFSDownloadUrl(row.path, sessionId)
   isEditing.value = false
 
   if (isImageFile(row.name)) {
     previewType.value = 'image'
-    previewImageUrl.value = sessionsApi.getFSReadUrl(row.path)
+    previewImageUrl.value = sessionsApi.getFSReadUrl(row.path, sessionId)
     showPreview.value = true
     return
   }
 
   try {
-    const content = await sessionsApi.readFSFile(row.path)
+    const content = await sessionsApi.readFSFile(row.path, sessionId)
     previewContent.value = content
     editContent.value = content
     previewType.value = 'text'
@@ -702,7 +743,8 @@ function cancelEdit() {
 async function saveEdit() {
   if (!previewPath.value) return
   try {
-    await sessionsApi.writeFSFile(previewPath.value, editContent.value)
+    const sessionId = selectedSessionId.value || undefined
+    await sessionsApi.writeFSFile(previewPath.value, editContent.value, sessionId)
     previewContent.value = editContent.value
     isEditing.value = false
     message.success(t('common.success'))
@@ -735,7 +777,8 @@ async function downloadWithAuth(url: string, filename: string) {
 }
 
 function downloadWorkspaceFile(row: sessionsApi.FSEntry) {
-  const url = sessionsApi.getFSDownloadUrl(row.path)
+  const sessionId = selectedSessionId.value || undefined
+  const url = sessionsApi.getFSDownloadUrl(row.path, sessionId)
   downloadWithAuth(url, row.name)
 }
 
@@ -754,7 +797,8 @@ function startRename(row: sessionsApi.FSEntry) {
 async function confirmRename() {
   if (!renamePath.value || !renameNewName.value.trim()) return
   try {
-    await sessionsApi.renameFSPath(renamePath.value, renameNewName.value.trim())
+    const sessionId = selectedSessionId.value || undefined
+    await sessionsApi.renameFSPath(renamePath.value, renameNewName.value.trim(), sessionId)
     message.success(t('common.success'))
     showRename.value = false
     await loadWorkspace(wsCurrentPath.value)
@@ -776,7 +820,8 @@ function createNewFolder() {
 async function confirmCreateFolder() {
   if (!newFolderName.value.trim()) return
   try {
-    await sessionsApi.createDir(wsCurrentPath.value || '', newFolderName.value.trim())
+    const sessionId = selectedSessionId.value || undefined
+    await sessionsApi.createDir(wsCurrentPath.value || '', newFolderName.value.trim(), sessionId)
     message.success(t('files.folderCreated'))
     showNewFolder.value = false
     await loadWorkspace(wsCurrentPath.value)
@@ -789,7 +834,8 @@ async function confirmCreateFolder() {
 // Delete
 async function deleteWorkspaceItem(row: sessionsApi.FSEntry) {
   try {
-    await sessionsApi.deleteFSPath(row.path)
+    const sessionId = selectedSessionId.value || undefined
+    await sessionsApi.deleteFSPath(row.path, sessionId)
     message.success(t('files.deleteSuccess'))
     await loadWorkspace(wsCurrentPath.value)
   } catch (e) {
@@ -801,13 +847,66 @@ async function deleteWorkspaceItem(row: sessionsApi.FSEntry) {
 // ===== Zip =====
 function zipWorkspace() {
   if (!wsCurrentPath.value) return
-  const url = sessionsApi.getFSZipUrl(wsCurrentPath.value)
+  const sessionId = selectedSessionId.value || undefined
+  const url = sessionsApi.getFSZipUrl(wsCurrentPath.value, sessionId)
   const filename = (wsCurrentPath.value.split('/').filter(Boolean).pop() || 'workspace') + '.zip'
   downloadWithAuth(url, filename)
 }
 
-onMounted(() => {
+// Delete Session with confirmation
+const showDeleteSessionConfirm = ref(false)
+const deleteSessionId = ref('')
+const deleteSessionFiles = ref(false)
+
+function deleteSessionWithConfirm(sessionId: string) {
+  deleteSessionId.value = sessionId
+  showDeleteSessionConfirm.value = true
+}
+
+async function confirmDeleteSession(deleteFiles: boolean) {
+  if (!deleteSessionId.value) return
+  try {
+    await sessionsApi.deleteSession(deleteSessionId.value)
+    if (deleteFiles) {
+      const session = chatStore.sessions.find(s => s.id === deleteSessionId.value)
+      if (session && session.work_dir) {
+        await sessionsApi.deleteFSPath(session.work_dir, deleteSessionId.value)
+      }
+    }
+    await chatStore.loadSessions()
+    message.success(t('common.success'))
+    showDeleteSessionConfirm.value = false
+    deleteSessionId.value = ''
+    selectedSessionId.value = ''
+    wsEntries.value = []
+    wsCurrentPath.value = ''
+  } catch (e) {
+    message.error((e as Error).message || t('common.error'))
+    console.error(e)
+  }
+}
+
+watch(() => chatStore.sessions, () => {
+  if (selectedSessionId.value && !chatStore.sessions.find(s => s.id === selectedSessionId.value)) {
+    selectedSessionId.value = ''
+    wsCurrentPath.value = ''
+    loadWorkspace()
+  }
+}, { deep: true })
+
+watch(selectedSessionId, (val) => {
+  if (val) {
+    localStorage.setItem('files_last_session_id', val)
+  }
+})
+
+onMounted(async () => {
   loadFiles()
+  await loadSessions()
+  const lastSessionId = localStorage.getItem('files_last_session_id')
+  if (lastSessionId && chatStore.sessions.find(s => s.id === lastSessionId && s.work_dir)) {
+    selectedSessionId.value = lastSessionId
+  }
   loadWorkspace()
 })
 </script>

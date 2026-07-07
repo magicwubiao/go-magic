@@ -21,6 +21,21 @@ type SecurityConfig struct {
 
 	// Rate limiting
 	RateLimit RateLimitConfig `yaml:"rate_limit" json:"rate_limit"`
+
+	// File security
+	File FileSecurity `yaml:"file" json:"file"`
+}
+
+// FileSecurity configures file operation security
+type FileSecurity struct {
+	Enabled          bool     `yaml:"enabled" json:"enabled"`
+	AllowedPaths     []string `yaml:"allowed_paths" json:"allowed_paths"`
+	BlockedPaths     []string `yaml:"blocked_paths" json:"blocked_paths"`
+	SessionIsolation bool     `yaml:"session_isolation" json:"session_isolation"`
+	DefaultFileMode  string   `yaml:"default_file_mode" json:"default_file_mode"`
+	DefaultDirMode   string   `yaml:"default_dir_mode" json:"default_dir_mode"`
+	MaxFileSizeKB    int      `yaml:"max_file_size_kb" json:"max_file_size_kb"`
+	AllowSymlinks    bool     `yaml:"allow_symlinks" json:"allow_symlinks"`
 }
 
 // PIIConfig configures PII handling
@@ -93,6 +108,16 @@ func DefaultSecurityConfig() *SecurityConfig {
 			Enabled:              true,
 			MaxRequestsPerMinute: 60,
 			MaxTokenBudget:       100000,
+		},
+		File: FileSecurity{
+			Enabled:          true,
+			AllowedPaths:     []string{},
+			BlockedPaths:     []string{"/etc/", "/usr/", "/var/", "/root/", "/home/"},
+			SessionIsolation: true,
+			DefaultFileMode:  "0600",
+			DefaultDirMode:   "0700",
+			MaxFileSizeKB:    10240,
+			AllowSymlinks:    false,
 		},
 	}
 }

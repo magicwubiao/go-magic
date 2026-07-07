@@ -34,6 +34,7 @@ type Session struct {
 	Platform        string          `json:"platform"`
 	Model           string          `json:"model"`
 	WorkDir         string          `json:"work_dir"`
+	WorkDirUserSet  bool            `json:"work_dir_user_set"`
 	Messages        []types.Message `json:"messages"`
 	InputTokens     int             `json:"input_tokens"`
 	OutputTokens    int             `json:"output_tokens"`
@@ -82,7 +83,10 @@ func initSchema(db *sql.DB) error {
 	if err := addNameColumnIfNotExists(db); err != nil {
 		return err
 	}
-	return addWorkDirColumnIfNotExists(db)
+	if err := addWorkDirColumnIfNotExists(db); err != nil {
+		return err
+	}
+	return addWorkDirUserSetColumnIfNotExists(db)
 }
 
 func addWorkDirColumnIfNotExists(db *sql.DB) error {
@@ -121,6 +125,24 @@ func addNameColumnIfNotExists(db *sql.DB) error {
 	return nil
 }
 
+func addWorkDirUserSetColumnIfNotExists(db *sql.DB) error {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'workdir_user_set')`
+	err := db.QueryRow(query).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN workdir_user_set INTEGER DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	messages, err := json.Marshal(session.Messages)
 	if err != nil {
@@ -128,10 +150,10 @@ func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	}
 
 	query := `
-	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, messages, input_tokens, output_tokens, cache_read_tokens, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
-	_, err = s.db.ExecContext(ctx, query, session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, string(messages), session.InputTokens, session.OutputTokens, session.CacheReadTokens)
+	_, err = s.db.ExecContext(ctx, query, session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, session.WorkDirUserSet, string(messages), session.InputTokens, session.OutputTokens, session.CacheReadTokens)
 	return err
 }
 
@@ -177,15 +199,17 @@ func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string
 }
 
 func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {
-	query := `SELECT id, name, profile, platform, model, workdir, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, query, id)
 
 	var session Session
 	var messagesStr string
-	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+	var workDirUserSet int
+	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	session.WorkDirUserSet = workDirUserSet != 0
 
 	if messagesStr != "" {
 		if err := json.Unmarshal([]byte(messagesStr), &session.Messages); err != nil {
@@ -203,10 +227,10 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	var err error
 
 	if profile == "" {
-		query = `SELECT id, name, profile, platform, model, workdir, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query)
 	} else {
-		query = `SELECT id, name, profile, platform, model, workdir, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query, profile)
 	}
 	if err != nil {
@@ -218,10 +242,12 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	for rows.Next() {
 		var session Session
 		var messagesStr sql.NullString
-		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+		var workDirUserSet int
+		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
+		session.WorkDirUserSet = workDirUserSet != 0
 		if messagesStr.Valid && messagesStr.String != "" {
 			json.Unmarshal([]byte(messagesStr.String), &session.Messages)
 		}
@@ -251,9 +277,14 @@ func (s *Store) RenameSession(ctx context.Context, id, name string) error {
 }
 
 // UpdateWorkDir updates the working directory of a session.
-func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string) error {
-	query := `UPDATE sessions SET workdir = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-	result, err := s.db.ExecContext(ctx, query, workDir, id)
+// If userSet is true, marks the workdir as user-set (immutable thereafter from the API).
+func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string, userSet bool) error {
+	query := `UPDATE sessions SET workdir = ?, workdir_user_set = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	userSetInt := 0
+	if userSet {
+		userSetInt = 1
+	}
+	result, err := s.db.ExecContext(ctx, query, workDir, userSetInt, id)
 	if err != nil {
 		return err
 	}

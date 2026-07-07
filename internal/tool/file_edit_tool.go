@@ -90,7 +90,8 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, err
 	}
 
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+	security := FileSecurityFromContext(ctx)
+	if err := os.WriteFile(absPath, []byte(newContent), security.DefaultFileMode); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 

@@ -103,6 +103,7 @@ import {
   ServerOutline,
   ChevronDownOutline,
   LogOutOutline,
+  BriefcaseOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { getPendingApprovals } from '@/api/approval'

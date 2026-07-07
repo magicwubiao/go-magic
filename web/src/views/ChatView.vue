@@ -108,7 +108,7 @@
                     ×
                   </n-button>
                 </template>
-                {{ t('common.confirmDelete') }}
+                {{ getDeleteConfirmMessage(session) }}
               </n-popconfirm>
             </div>
           </div>
@@ -299,13 +299,16 @@
                   </template>
                 </n-button>
               </n-upload>
-              <!-- Working directory selector -->
-              <n-button size="tiny" quaternary class="toolbar-btn workdir-btn" :title="t('chat.workDir')" @click="openDirPicker">
-                <template #icon>
-                  <n-icon><FolderOpenOutline /></n-icon>
-                </template>
-                <span v-if="chatStore.currentWorkDir" class="workdir-label">{{ shortWorkDir }}</span>
-              </n-button>
+              <!-- Working directory dropdown -->
+              <n-dropdown :options="workDirMenuOptions" @select="handleWorkDirMenu" trigger="click" size="small">
+                <n-button size="tiny" quaternary class="toolbar-btn workdir-btn" :title="t('chat.workDir')">
+                  <template #icon>
+                    <n-icon><FolderOpenOutline /></n-icon>
+                  </template>
+                  <span v-if="chatStore.currentWorkDir" class="workdir-label">{{ shortWorkDir }}</span>
+                  <n-icon size="14"><ChevronDownOutline /></n-icon>
+                </n-button>
+              </n-dropdown>
             </div>
             <div class="toolbar-right">
               <n-button
@@ -351,6 +354,21 @@
             ..
           </n-button>
           <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+          <div class="dir-actions">
+            <n-input
+              v-if="showNewFolderInput"
+              v-model:value="newFolderName"
+              size="tiny"
+              placeholder="文件夹名"
+              style="width: 140px;"
+              @keyup.enter="createNewFolder"
+              @blur="cancelNewFolder"
+              ref="newFolderInputRef"
+            />
+            <n-button v-else size="tiny" quaternary :title="t('chat.newFolder')" @click="startNewFolder">
+              <template #icon><n-icon><AddOutline /></n-icon></template>
+            </n-button>
+          </div>
         </div>
         <div class="dir-list">
           <div v-if="dirLoading" class="dir-loading">
@@ -377,7 +395,6 @@
             {{ t('chat.workDirCurrent') }}: {{ chatStore.currentWorkDir || t('chat.workDirNone') }}
           </n-text>
           <n-space :size="8">
-            <n-button size="small" @click="clearWorkDir">{{ t('chat.workDirClear') }}</n-button>
             <n-button size="small" type="primary" @click="selectWorkDir">{{ t('chat.workDirSet') }}</n-button>
           </n-space>
         </div>
@@ -400,7 +417,7 @@ import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import GoalSidebar from '@/components/GoalSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, ChevronDownOutline, AddOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -639,8 +656,17 @@ async function createSession() {
   await chatStore.loadSessions()
 }
 
+function getDeleteConfirmMessage(session: any) {
+  if (session.work_dir_user_set) {
+    return t('chat.deleteSessionKeepFiles')
+  }
+  return t('chat.deleteSessionDeleteFiles')
+}
+
 async function deleteSession(id: string) {
-  await chatStore.deleteSession(id)
+  const session = chatStore.sessions.find(s => s.id === id)
+  const deleteFiles = !session?.work_dir_user_set
+  await chatStore.deleteSession(id, deleteFiles)
   await chatStore.loadSessions()
 }
 
@@ -670,6 +696,9 @@ const showDirPicker = ref(false)
 const dirCurrentPath = ref('')
 const dirEntries = ref<sessionsApi.DirEntry[]>([])
 const dirLoading = ref(false)
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+const newFolderInputRef = ref<{ focus: () => void } | null>(null)
 
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
@@ -679,6 +708,32 @@ const shortWorkDir = computed(() => {
   if (dir.length > 22) return '…/' + dir.split('/').pop()
   return dir
 })
+
+const workDirMenuOptions = computed(() => {
+  const options: Array<{ label: string; key: string }> = []
+  if (!chatStore.currentWorkDir || !chatStore.currentWorkDirUserSet) {
+    options.push({ label: t('chat.workDirSelect'), key: 'select' })
+  }
+  options.push({ label: t('chat.openFiles'), key: 'openFiles' })
+  return options
+})
+
+function handleWorkDirMenu(key: string) {
+  if (!chatStore.activeSessionId) {
+    message.warning(t('chat.selectSession'))
+    return
+  }
+  switch (key) {
+    case 'select':
+      loadDirs(chatStore.currentWorkDir || undefined)
+      showDirPicker.value = true
+      break
+    case 'openFiles':
+      localStorage.setItem('files_last_session_id', chatStore.activeSessionId)
+      router.push('/files')
+      break
+  }
+}
 
 async function loadDirs(path?: string) {
   dirLoading.value = true
@@ -694,18 +749,42 @@ async function loadDirs(path?: string) {
   }
 }
 
-function openDirPicker() {
-  if (!chatStore.activeSessionId) {
-    message.warning(t('chat.selectSession'))
-    return
-  }
-  loadDirs(chatStore.currentWorkDir || undefined)
-  showDirPicker.value = true
-}
-
 function navigateDir(path: string) {
   if (!path) return
+  showNewFolderInput.value = false
+  newFolderName.value = ''
   loadDirs(path)
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  newFolderName.value = ''
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+function cancelNewFolder() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    newFolderName.value = ''
+  }, 150)
+}
+
+async function createNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    showNewFolderInput.value = false
+    return
+  }
+  try {
+    await sessionsApi.createDir(dirCurrentPath.value, name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+    loadDirs(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
 }
 
 async function selectWorkDir() {
@@ -713,12 +792,6 @@ async function selectWorkDir() {
   await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
   showDirPicker.value = false
   message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
-}
-
-async function clearWorkDir() {
-  if (!chatStore.activeSessionId) return
-  await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
-  showDirPicker.value = false
 }
 
 async function selectSession(id: string) {
@@ -1423,6 +1496,12 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: monospace;
+}
+
+.dir-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .dir-list {

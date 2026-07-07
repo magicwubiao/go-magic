@@ -80,6 +80,8 @@ export const useChatStore = defineStore('chat', () => {
 
   const currentWorkDir = computed(() => activeSession.value?.work_dir || '')
 
+  const currentWorkDirUserSet = computed(() => activeSession.value?.work_dir_user_set || false)
+
   const activeSessionState = computed(() => {
     if (!activeSessionId.value) return null
     return sessionStates.value[activeSessionId.value] || null
@@ -311,9 +313,9 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function deleteSession(id: string): Promise<void> {
+  async function deleteSession(id: string, deleteFiles: boolean = false): Promise<void> {
     try {
-      await sessionsApi.deleteSession(id)
+      await sessionsApi.deleteSession(id, deleteFiles)
       sessions.value = sessions.value.filter(s => s.id !== id)
       
       if (sessionFlushTimers.value[id]) {
@@ -357,6 +359,7 @@ export const useChatStore = defineStore('chat', () => {
       const session = sessions.value.find(s => s.id === id)
       if (session) {
         session.work_dir = workDir
+        session.work_dir_user_set = true
       }
     } catch (e) {
       console.error('Failed to update working directory:', e)
@@ -620,6 +623,7 @@ export const useChatStore = defineStore('chat', () => {
     error,
     activeSession,
     currentWorkDir,
+    currentWorkDirUserSet,
     toolCalls,
     activeToolCalls,
     taskProgress,

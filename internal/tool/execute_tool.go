@@ -288,17 +288,43 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 		cmd = exec.CommandContext(ctx, "bash", "-c", command)
 	}
 
+	var finalWorkDir string
 	if workdir, ok := args["workdir"].(string); ok && workdir != "" {
-		cmd.Dir = workdir
-	} else if ctxWorkDir := WorkDirFromContext(ctx); ctxWorkDir != "" {
-		cmd.Dir = ctxWorkDir
-	} else if t.workDir != "" {
-		cmd.Dir = t.workDir
-	} else {
-		// Fallback to current working directory if no workDir configured
-		if cwd, err := os.Getwd(); err == nil {
-			cmd.Dir = cwd
+		resolved, err := resolvePath(ctx, workdir)
+		if err != nil {
+			return map[string]interface{}{
+				"exit_code": 1,
+				"error":     fmt.Sprintf("invalid workdir: %v", err),
+				"blocked":   "path_not_allowed",
+			}, nil
 		}
+		finalWorkDir = resolved
+	} else if ctxWorkDir := WorkDirFromContext(ctx); ctxWorkDir != "" {
+		if sessionDir, err := EnsureSessionDir(ctx); err == nil && sessionDir != "" {
+			finalWorkDir = sessionDir
+		} else {
+			finalWorkDir = ctxWorkDir
+		}
+	} else if t.workDir != "" {
+		finalWorkDir = t.workDir
+	} else {
+		if cwd, err := os.Getwd(); err == nil {
+			finalWorkDir = cwd
+		}
+	}
+
+	if finalWorkDir != "" {
+		security := FileSecurityFromContext(ctx)
+		if security.Enabled {
+			if err := checkPathBlocked(finalWorkDir, security); err != nil {
+				return map[string]interface{}{
+					"exit_code": 1,
+					"error":     fmt.Sprintf("workdir blocked: %v", err),
+					"blocked":   "path_blocked",
+				}, nil
+			}
+		}
+		cmd.Dir = finalWorkDir
 	}
 
 	output, err := cmd.CombinedOutput()

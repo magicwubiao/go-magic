@@ -188,6 +188,21 @@
             ..
           </n-button>
           <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+          <div class="dir-actions">
+            <n-input
+              v-if="showNewFolderInput"
+              v-model:value="newFolderName"
+              size="tiny"
+              placeholder="文件夹名"
+              style="width: 140px;"
+              @keyup.enter="createNewFolder"
+              @blur="cancelNewFolder"
+              ref="newFolderInputRef"
+            />
+            <n-button v-else size="tiny" quaternary :title="t('chat.newFolder')" @click="startNewFolder">
+              <template #icon><n-icon><AddOutline /></n-icon></template>
+            </n-button>
+          </div>
         </div>
         <div class="dir-list">
           <div v-if="dirLoading" class="dir-loading">
@@ -219,15 +234,15 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
-import { FolderOpenOutline, FolderOutline } from '@vicons/ionicons5'
-import { listDirs } from '@/api/sessions'
+import { FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
+import { listDirs, createDir } from '@/api/sessions'
 
 const { t } = useI18n()
 
@@ -286,6 +301,9 @@ const showDirPicker = ref(false)
 const dirCurrentPath = ref('')
 const dirEntries = ref<any[]>([])
 const dirLoading = ref(false)
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+const newFolderInputRef = ref<{ focus: () => void } | null>(null)
 
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
@@ -502,7 +520,40 @@ function openDirPicker() {
 
 function navigateDir(path: string) {
   if (!path) return
+  showNewFolderInput.value = false
+  newFolderName.value = ''
   loadDirs(path)
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  newFolderName.value = ''
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+function cancelNewFolder() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    newFolderName.value = ''
+  }, 150)
+}
+
+async function createNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    showNewFolderInput.value = false
+    return
+  }
+  try {
+    await createDir(dirCurrentPath.value, name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+    loadDirs(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
 }
 
 function selectWorkDir() {
@@ -544,6 +595,12 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: monospace;
+}
+
+.dir-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .dir-list {

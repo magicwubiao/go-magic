@@ -349,8 +349,16 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, err
 	}
 
+	security := FileSecurityFromContext(ctx)
+
+	if security.MaxFileSizeKB > 0 && len(content) > security.MaxFileSizeKB*1024 {
+		return nil, fmt.Errorf("file size %d bytes exceeds maximum allowed size of %d KB", len(content), security.MaxFileSizeKB)
+	}
+
 	dir := filepath.Dir(absPath)
-	os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, security.DefaultDirMode); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
 
 	appendMode := false
 	if a, ok := args["append"].(bool); ok {
@@ -360,13 +368,13 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	var err2 error
 	if appendMode {
 		var f *os.File
-		f, err2 = os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err2 = os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, security.DefaultFileMode)
 		if err2 == nil {
 			f.Write([]byte(content))
 			f.Close()
 		}
 	} else {
-		err2 = os.WriteFile(absPath, []byte(content), 0644)
+		err2 = os.WriteFile(absPath, []byte(content), security.DefaultFileMode)
 	}
 
 	if err2 != nil {
