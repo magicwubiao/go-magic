@@ -179,8 +179,6 @@ export default {
     newFolderPlaceholder: 'Enter new folder name',
     folderCreated: 'Folder created',
     folderCreateFailed: 'Failed to create folder',
-    deleteSessionKeepFiles: 'Delete session, keep your selected working directory',
-    deleteSessionDeleteFiles: 'Delete session and system-created working directory',
     commands: {
       help: 'Show help information',
       new: 'New session',

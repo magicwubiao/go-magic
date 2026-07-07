@@ -108,7 +108,7 @@
                     ×
                   </n-button>
                 </template>
-                {{ getDeleteConfirmMessage(session) }}
+                {{ t('chat.deleteSession') }}
               </n-popconfirm>
             </div>
           </div>
@@ -654,13 +654,6 @@ function stopGeneration() {
 async function createSession() {
   await chatStore.createSession()
   await chatStore.loadSessions()
-}
-
-function getDeleteConfirmMessage(session: any) {
-  if (session.work_dir_user_set) {
-    return t('chat.deleteSessionKeepFiles')
-  }
-  return t('chat.deleteSessionDeleteFiles')
 }
 
 async function deleteSession(id: string) {

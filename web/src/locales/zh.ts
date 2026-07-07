@@ -180,8 +180,6 @@ export default {
     newFolderPlaceholder: '输入新文件夹名称',
     folderCreated: '文件夹已创建',
     folderCreateFailed: '创建文件夹失败',
-    deleteSessionKeepFiles: '删除会话，保留您选择的工作目录',
-    deleteSessionDeleteFiles: '删除会话及系统创建的工作目录',
     commands: {
       help: '显示帮助信息',
       new: '新建会话',
