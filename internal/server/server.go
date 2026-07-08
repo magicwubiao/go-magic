@@ -652,15 +652,17 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		// Extract title from first user message
 		if title == "" && m.Role == "user" && m.Content != "" {
 			title = strings.TrimSpace(m.Content)
-			if len(title) > 50 {
-				title = title[:50] + "..."
+			runes := []rune(title)
+			if len(runes) > 50 {
+				title = string(runes[:50]) + "..."
 			}
 		}
 	}
 
 	preview = strings.TrimSpace(preview)
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
+	runes := []rune(preview)
+	if len(runes) > 200 {
+		preview = string(runes[:200]) + "..."
 	}
 
 	// Use custom name if available, otherwise fallback to auto-generated title
@@ -5229,7 +5231,15 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 		if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
 			return "", fmt.Errorf("path outside session directory")
 		}
-		return targetPath, nil
+		realPath, err := filepath.EvalSymlinks(targetPath)
+		if err != nil {
+			return "", fmt.Errorf("invalid path")
+		}
+		realRelPath, err := filepath.Rel(absSessionDir, realPath)
+		if err != nil || strings.HasPrefix(realRelPath, ".."+string(filepath.Separator)) || realRelPath == ".." {
+			return "", fmt.Errorf("path outside session directory")
+		}
+		return realPath, nil
 	}
 	if path == "" {
 		path = s.cfg.WorkingDir
@@ -6636,6 +6646,7 @@ func (s *Server) handleUsageInsights(w http.ResponseWriter, r *http.Request) {
 		"avg_cost_per_message":   insights.AvgCostPerReq,
 		"avg_tokens_per_message": int(insights.AvgTokensPerReq),
 		"most_used_model":        mostUsedModel,
+		"top_models":             insights.TopModels,
 		"most_active_hour":       0,
 		"most_active_day":        "",
 	}

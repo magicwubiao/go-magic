@@ -118,11 +118,6 @@
     <!-- 详细洞察 -->
     <n-grid :cols="3" :x-gap="16" :y-gap="16" class="stats-grid" style="margin-top: 16px">
       <n-gi>
-        <n-card :title="t('usage.mostUsedModel')" size="small">
-          <n-tag type="info">{{ insights.most_used_model || '-' }}</n-tag>
-        </n-card>
-      </n-gi>
-      <n-gi>
         <n-card :title="t('usage.avgCostPerSession')" size="small">
           <n-statistic :value="formatCost(insights.avg_cost_per_session || 0)">
             <template #prefix>$</template>
@@ -135,7 +130,23 @@
           </n-statistic>
         </n-card>
       </n-gi>
+      <n-gi>
+        <n-card :title="t('usage.mostUsedModel')" size="small">
+          <n-statistic :value="insights.most_used_model || '-'">
+          </n-statistic>
+        </n-card>
+      </n-gi>
     </n-grid>
+
+    <!-- 模型用量表格 -->
+    <n-card :title="t('usage.modelUsage')" style="margin-top: 16px">
+      <n-data-table
+        :columns="modelColumns"
+        :data="insights.top_models || []"
+        :pagination="false"
+        :bordered="false"
+      />
+    </n-card>
 
     <!-- 每日趋势图表 -->
     <n-card :title="t('usage.dailyTrend')" style="margin-top: 16px">
@@ -336,6 +347,32 @@ const dailyColumns: DataTableColumns<DailyUsage> = [
     title: t('usage.cost'),
     key: 'cost',
     render: (row) => `$${formatCost(row.cost)}`
+  }
+]
+
+const modelColumns: DataTableColumns<{
+  model: string
+  requests: number
+  tokens: number
+  cost: number
+  percentage: number
+}> = [
+  { title: t('usage.model'), key: 'model' },
+  { title: t('usage.requests'), key: 'requests' },
+  {
+    title: t('usage.tokens'),
+    key: 'tokens',
+    render: (row) => formatNumber(row.tokens)
+  },
+  {
+    title: t('usage.cost'),
+    key: 'cost',
+    render: (row) => `$${formatCost(row.cost)}`
+  },
+  {
+    title: t('usage.percentage'),
+    key: 'percentage',
+    render: (row) => `${row.percentage.toFixed(1)}%`
   }
 ]
 

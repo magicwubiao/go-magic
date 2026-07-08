@@ -53,6 +53,13 @@ export interface UsageInsight {
   most_used_model?: string
   most_active_hour?: number
   most_active_day?: string
+  top_models?: Array<{
+    model: string
+    requests: number
+    tokens: number
+    cost: number
+    percentage: number
+  }>
 }
 
 export interface UsageBudget {
