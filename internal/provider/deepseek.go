@@ -84,7 +84,7 @@ func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Messa
 	}
 	defer resp.Body.Close()
 
-	return ParseStreamResponse(resp.Body, handler)
+	return ParseStreamResponse(ctx, resp.Body, handler)
 }
 
 // StreamWithTools implements the StreamingToolCaller interface for base provider
@@ -115,7 +115,7 @@ func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []ty
 	}
 	defer resp.Body.Close()
 
-	return ParseStreamResponseWithTools(resp.Body, handler)
+	return ParseStreamResponseWithTools(ctx, resp.Body, handler)
 }
 
 // NewBaseStreamProvider creates a new provider with streaming support

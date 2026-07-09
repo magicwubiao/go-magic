@@ -54,6 +54,78 @@ import (
 //go:embed dist
 var distFS embed.FS
 
+// sseWriter writes SSE data through a buffered channel so the producer
+// (heartbeat goroutine and stream handler) never blocks on a slow or
+// disconnected client. The dedicated goroutine is the only one that touches
+// the http.ResponseWriter.
+type sseWriter struct {
+	ch           chan string
+	done         chan struct{}
+	err          error
+	mu           sync.Mutex
+	clientGone   bool
+	flushTimeout time.Duration
+	writeTimeout time.Duration
+}
+
+func newSSEWriter(w http.ResponseWriter, flusher http.Flusher) *sseWriter {
+	sw := &sseWriter{
+		ch:           make(chan string, 128),
+		done:         make(chan struct{}),
+		flushTimeout: 5 * time.Second,
+		writeTimeout: 5 * time.Second,
+	}
+	go sw.run(w, flusher)
+	return sw
+}
+
+func (sw *sseWriter) run(w http.ResponseWriter, flusher http.Flusher) {
+	defer close(sw.done)
+	for data := range sw.ch {
+		_, err := fmt.Fprint(w, data)
+		if err != nil {
+			sw.setErr(err)
+			return
+		}
+		flusher.Flush()
+	}
+}
+
+func (sw *sseWriter) Write(data string) bool {
+	sw.mu.Lock()
+	if sw.clientGone || sw.err != nil {
+		sw.mu.Unlock()
+		return false
+	}
+	sw.mu.Unlock()
+
+	select {
+	case sw.ch <- data:
+		return true
+	case <-time.After(sw.flushTimeout):
+		sw.setClientGone()
+		return false
+	}
+}
+
+func (sw *sseWriter) Close() {
+	close(sw.ch)
+	<-sw.done
+}
+
+func (sw *sseWriter) setErr(err error) {
+	sw.mu.Lock()
+	sw.err = err
+	sw.clientGone = true
+	sw.mu.Unlock()
+}
+
+func (sw *sseWriter) setClientGone() {
+	sw.mu.Lock()
+	sw.clientGone = true
+	sw.mu.Unlock()
+}
+
 // Session represents a chat session (API response format)
 type Session struct {
 	ID              string  `json:"id"`
@@ -1714,6 +1786,11 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// Disable server-wide WriteTimeout for SSE streams (long-running connections)
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1721,9 +1798,17 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	// Use timeout context to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	sseW := newSSEWriter(w, flusher)
+	writeSSE := sseW.Write
+
+	// Flush headers immediately so the client/proxy knows the stream is alive.
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
+
+	// Use r.Context() directly so we detect client disconnects immediately.
+	// Use a generous timeout for long-running tasks.
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
+	defer sseW.Close()
 
 	// Inject the session's working directory into the context so file and
 	// command tools resolve relative paths against it, then save the user
@@ -1745,17 +1830,18 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// Start heartbeat goroutine to keep connection alive during long tool executions
 	heartbeatDone := make(chan struct{})
 	safeGo(func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				// Send as a parseable SSE data event so the browser's EventSource
-				// triggers onmessage and the frontend can reset its heartbeat timer.
-				// SSE comments (": ...") are silently ignored by EventSource.
-				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n")
-				flusher.Flush()
+				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
+					cancel()
+					return
+				}
 			case <-heartbeatDone:
+				return
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -1775,17 +1861,22 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		close(heartbeatDone)
 		if err != nil {
 			data, _ := json.Marshal(map[string]string{"error": err.Error()})
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+			writeSSE("data: " + string(data) + "\n\n")
 			return
 		}
 
 		// Send as delta chunks
 		words := strings.Split(resp, "")
 		for _, word := range words {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			data, _ := json.Marshal(map[string]string{"delta": word})
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+			if !writeSSE("data: " + string(data) + "\n\n") {
+				return
+			}
 		}
 
 		// Save assistant message
@@ -1808,8 +1899,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		s.recordUsage(aiAgent, sessionID)
 
 		doneData, _ := json.Marshal(map[string]bool{"done": true})
-		fmt.Fprintf(w, "data: %s\n\n", string(doneData))
-		flusher.Flush()
+		writeSSE("data: " + string(doneData) + "\n\n")
 		return
 	}
 
@@ -1822,6 +1912,12 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		}
 		if chunk == "" {
 			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 
 		// Parse tool markers and emit structured events for web frontend
@@ -1840,8 +1936,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					"name": toolName,
 					"args": toolArgs,
 				})
-				fmt.Fprintf(w, "data: %s\n\n", string(eventData))
-				flusher.Flush()
+				writeSSE("data: " + string(eventData) + "\n\n")
 			}
 			return
 		}
@@ -1870,8 +1965,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 						"duration": toolDuration,
 						"content":  strings.TrimSpace(toolContent),
 					})
-					fmt.Fprintf(w, "data: %s\n\n", string(eventData))
-					flusher.Flush()
+					writeSSE("data: " + string(eventData) + "\n\n")
 				}
 			}
 			return
@@ -1884,8 +1978,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 		fullResponse.WriteString(chunk)
 		data, _ := json.Marshal(map[string]string{"delta": chunk})
-		fmt.Fprintf(w, "data: %s\n\n", string(data))
-		flusher.Flush()
+		writeSSE("data: " + string(data) + "\n\n")
 	}
 	if len(contentParts) > 0 {
 		streamErr = aiAgent.RunConversationStreamWithMedia(ctx, content, contentParts, streamHandler)
@@ -1897,8 +1990,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	if streamErr != nil {
 		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", string(data))
-		flusher.Flush()
+		writeSSE("data: " + string(data) + "\n\n")
 	}
 
 	// Save assistant message
@@ -1921,8 +2013,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	s.recordUsage(aiAgent, sessionID)
 
 	doneData, _ := json.Marshal(map[string]bool{"done": true})
-	fmt.Fprintf(w, "data: %s\n\n", string(doneData))
-	flusher.Flush()
+	writeSSE("data: " + string(doneData) + "\n\n")
 }
 
 // handleFileUpload handles multipart file uploads
@@ -2279,6 +2370,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// Disable server-wide WriteTimeout for SSE streams (long-running connections)
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -2286,38 +2382,73 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sseW := newSSEWriter(w, flusher)
+	writeSSE := sseW.Write
+
+	// Flush headers immediately so the client/proxy knows the stream is alive.
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+	defer sseW.Close()
+
+	// Start heartbeat to prevent proxy/browser timeout
+	heartbeatDone := make(chan struct{})
+	safeGo(func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
+					cancel()
+					return
+				}
+			case <-heartbeatDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
 	// Check if agent supports streaming
 	_, supportsStream := s.provider.(provider.StreamingToolCaller)
 	if !supportsStream {
 		// Fall back to non-streaming via agent (which still executes tools)
-		ctx := context.Background()
 		resp, err := aiAgent.RunConversation(ctx, req.Message)
 		if err != nil {
-			fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(`{"error":"%v"}`, err))
-			flusher.Flush()
+			writeSSE("data: {\"error\":\"" + fmt.Sprintf("%v", err) + "\"}\n\n")
 			return
 		}
 
 		// Send content word by word for pseudo-streaming
 		words := strings.Split(resp, "")
 		for _, word := range words {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			data, _ := json.Marshal(map[string]string{"content": word})
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+			writeSSE("data: " + string(data) + "\n\n")
 		}
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeSSE("data: [DONE]\n\n")
 		return
 	}
 
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
-	ctx := context.Background()
 	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
 		if done {
 			// Stream finished
 			return
 		}
 		if content != "" {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			// Check if this is a tool result
 			if strings.Contains(content, ">>>TOOL_RESULT_START|") {
 				// Extract tool name
@@ -2338,25 +2469,22 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 						"tool":    toolName,
 						"content": toolContent,
 					})
-					fmt.Fprintf(w, "data: %s\n\n", string(data))
-					flusher.Flush()
+					writeSSE("data: " + string(data) + "\n\n")
 					return
 				}
 			}
 			// Regular content
 			data, _ := json.Marshal(map[string]string{"content": content})
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+			writeSSE("data: " + string(data) + "\n\n")
 		}
 	})
+	close(heartbeatDone)
 	if streamErr != nil {
 		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", string(data))
-		flusher.Flush()
+		writeSSE("data: " + string(data) + "\n\n")
 	}
 
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	writeSSE("data: [DONE]\n\n")
 
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)
@@ -8995,11 +9123,25 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// Disable server-wide WriteTimeout for SSE streams (long-running connections)
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", 500)
 		return
 	}
+
+	sseW := newSSEWriter(w, flusher)
+	writeSSE := sseW.Write
+
+	// Flush headers immediately so the client/proxy knows the stream is alive.
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+	defer sseW.Close()
 
 	// Get recent messages for context
 	recentMsgs, _ := s.groupchatStorage.GetMessages(roomID, 20)
@@ -9007,14 +9149,18 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 	// Start heartbeat to prevent proxy/browser timeout
 	heartbeatDone := make(chan struct{})
 	safeGo(func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n")
-				flusher.Flush()
+				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
+					cancel()
+					return
+				}
 			case <-heartbeatDone:
+				return
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -9022,14 +9168,20 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 
 	// Stream each mentioned agent's reply
 	for _, agent := range mentioned {
+		select {
+		case <-ctx.Done():
+			close(heartbeatDone)
+			return
+		default:
+		}
+
 		// Send agent start event
 		startData, _ := json.Marshal(map[string]interface{}{
 			"type":    "start",
 			"agent":   agent.Name,
 			"agentId": agent.ID,
 		})
-		fmt.Fprintf(w, "data: %s\n\n", string(startData))
-		flusher.Flush()
+		writeSSE("data: " + string(startData) + "\n\n")
 
 		// Build messages
 		messages := make([]provider.Message, 0)
@@ -9052,13 +9204,18 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 		}
 
 		// Try streaming first
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		agentCtx, agentCancel := context.WithTimeout(ctx, 10*time.Minute)
 		fullContent := ""
 
 		streamer, supportsStream := s.provider.(provider.Streamer)
 		if supportsStream {
-			streamErr := streamer.Stream(ctx, messages, func(resp *provider.StreamResponse) {
+			streamErr := streamer.Stream(agentCtx, messages, func(resp *provider.StreamResponse) {
 				if resp.Content != "" {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
 					fullContent += resp.Content
 					data, _ := json.Marshal(map[string]interface{}{
 						"type":    "content",
@@ -9066,47 +9223,49 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 						"agentId": agent.ID,
 						"content": resp.Content,
 					})
-					fmt.Fprintf(w, "data: %s\n\n", string(data))
-					flusher.Flush()
+					writeSSE("data: " + string(data) + "\n\n")
 				}
 			})
-			cancel()
+			agentCancel()
 			if streamErr != nil {
 				errData, _ := json.Marshal(map[string]interface{}{
 					"type":  "error",
 					"agent": agent.Name,
 					"error": streamErr.Error(),
 				})
-				fmt.Fprintf(w, "data: %s\n\n", string(errData))
-				flusher.Flush()
+				writeSSE("data: " + string(errData) + "\n\n")
 				continue
 			}
 		} else {
 			// Fallback to non-streaming
-			resp, chatErr := s.provider.Chat(ctx, messages)
-			cancel()
+			resp, chatErr := s.provider.Chat(agentCtx, messages)
+			agentCancel()
 			if chatErr != nil {
 				errData, _ := json.Marshal(map[string]interface{}{
 					"type":  "error",
 					"agent": agent.Name,
 					"error": chatErr.Error(),
 				})
-				fmt.Fprintf(w, "data: %s\n\n", string(errData))
-				flusher.Flush()
+				writeSSE("data: " + string(errData) + "\n\n")
 				continue
 			}
 			fullContent = resp.Content
 			// Send as pseudo-stream
 			chars := []rune(resp.Content)
 			for i, ch := range chars {
+				select {
+				case <-ctx.Done():
+					close(heartbeatDone)
+					return
+				default:
+				}
 				data, _ := json.Marshal(map[string]interface{}{
 					"type":    "content",
 					"agent":   agent.Name,
 					"agentId": agent.ID,
 					"content": string(ch),
 				})
-				fmt.Fprintf(w, "data: %s\n\n", string(data))
-				flusher.Flush()
+				writeSSE("data: " + string(data) + "\n\n")
 				// Small delay for pseudo-streaming
 				if i%10 == 0 {
 					time.Sleep(5 * time.Millisecond)
@@ -9133,16 +9292,14 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 			"agentId":   agent.ID,
 			"messageId": replyMsg.ID,
 		})
-		fmt.Fprintf(w, "data: %s\n\n", string(doneData))
-		flusher.Flush()
+		writeSSE("data: " + string(doneData) + "\n\n")
 	}
 
 	// Stop heartbeat
 	close(heartbeatDone)
 
 	// Send final done
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	writeSSE("data: [DONE]\n\n")
 }
 
 func (s *Server) handleGroupchatRoomMembers(w http.ResponseWriter, r *http.Request, roomID string) {

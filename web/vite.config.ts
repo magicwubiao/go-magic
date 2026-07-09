@@ -13,6 +13,15 @@ export default defineConfig({
     outDir: '../internal/server/dist',
     emptyOutDir: true,
     minify: 'esbuild',
+    chunkSizeWarningLimit: 3000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'naive-ui': ['naive-ui'],
+          'vendor': ['vue', 'vue-router', 'pinia', 'vue-i18n'],
+        },
+      },
+    },
   },
   server: {
     proxy: {

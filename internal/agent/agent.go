@@ -1797,6 +1797,11 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	for _, group := range groups {
 		if group.sequential {
 			for _, tc := range group.tools {
+				select {
+				case <-ctx.Done():
+					return results, ctx.Err()
+				default:
+				}
 				result := a.executeSingleToolWithHooks(ctx, tc)
 				mu.Lock()
 				results[tc.ID] = result

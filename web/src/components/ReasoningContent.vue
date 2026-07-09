@@ -1,24 +1,37 @@
 <template>
   <div class="reasoning-wrapper">
-    <!-- 思考过程部分 - 仅在有明确 <think> 标签时显示 -->
-    <div v-if="reasoningPart" class="reasoning-section">
-      <div class="reasoning-header" @click="toggleExpand">
-        <div class="reasoning-left">
-          <n-icon size="14" class="reasoning-icon">
-            <ChevronForward v-if="!expanded" />
+    <div v-if="reasoningPart" class="deep-thinking-panel" :class="{ collapsed: !expanded }">
+      <div class="thinking-header" @click="toggleExpand">
+        <div class="thinking-left">
+          <div class="thinking-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a7 7 0 0 0-4 12.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26A7 7 0 0 0 12 2z"/>
+              <path d="M9 22h6"/>
+              <path d="M12 18v4"/>
+            </svg>
+          </div>
+          <span class="thinking-label">{{ t('chat.thinking') }}</span>
+          <span v-if="reasoningDuration" class="thinking-duration">{{ reasoningDuration }}</span>
+        </div>
+        <div class="thinking-toggle">
+          <n-icon size="16" class="toggle-icon">
+            <ChevronUp v-if="expanded" />
             <ChevronDown v-else />
           </n-icon>
-          <span class="reasoning-label">{{ t('chat.thinking') }}</span>
         </div>
-        <span class="reasoning-hint">{{ expanded ? t('chat.collapse') : t('chat.expand') }}</span>
       </div>
+
       <n-collapse-transition :show="expanded">
-        <div class="reasoning-divider"></div>
-        <div class="reasoning-content" v-html="renderMarkdown(reasoningPart)"></div>
+        <div class="thinking-body">
+          <div class="thinking-content" v-html="renderMarkdown(reasoningPart)"></div>
+        </div>
       </n-collapse-transition>
+
+      <div v-if="!expanded && reasoningPreview" class="thinking-preview">
+        {{ reasoningPreview }}
+      </div>
     </div>
 
-    <!-- 最终内容 -->
     <div v-if="finalPart" class="final-content" v-html="renderMarkdown(finalPart)"></div>
   </div>
 </template>
@@ -26,25 +39,22 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronForward, ChevronDown } from '@vicons/ionicons5'
+import { ChevronUp, ChevronDown } from '@vicons/ionicons5'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 
 const props = defineProps<{
   content: string
+  duration?: string
 }>()
 
 const { t } = useI18n()
-const expanded = ref(false)
+const expanded = ref(true)
 
-// Only split thinking/reasoning when there are explicit markers.
-// <think>...</think> tags or specific headings like "### 思考过程".
-// Everything else is rendered as normal content — no false positives.
 const parsedContent = computed(() => {
   const content = props.content
 
-  // 1. <think>...</think> tags (DeepSeek, QwQ, etc.)
   const thinkOpen = '<think>'
   const thinkClose = '</think>'
   const openIdx = content.toLowerCase().indexOf(thinkOpen)
@@ -59,7 +69,6 @@ const parsedContent = computed(() => {
     }
   }
 
-  // 2. Explicit headings: "### 思考过程" / "### Thinking" etc.
   const headingRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)\s*\n([\s\S]*?)(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
   const headingMatch = content.match(headingRe)
   if (headingMatch) {
@@ -74,18 +83,23 @@ const parsedContent = computed(() => {
     }
   }
 
-  // Default: no thinking markers found, render everything as normal content
   return { reasoning: '', final: content }
 })
 
 const reasoningPart = computed(() => parsedContent.value.reasoning)
 const finalPart = computed(() => parsedContent.value.final)
 
+const reasoningDuration = computed(() => props.duration || '')
+
+const reasoningPreview = computed(() => {
+  const text = reasoningPart.value.replace(/[#*`>\-\n]/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length > 100 ? text.substring(0, 100) + '...' : text
+})
+
 function toggleExpand() {
   expanded.value = !expanded.value
 }
 
-// Markdown rendering with syntax highlighting
 const codeRenderer = (code: string, lang?: string): string => {
   const language = lang && hljs.getLanguage(lang) ? lang : null
   const highlighted = language
@@ -105,156 +119,188 @@ function renderMarkdown(content: string): string {
 <style scoped>
 .reasoning-wrapper {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-/* 思考过程区域 - 简洁折叠卡片 */
-.reasoning-section {
-  margin-bottom: 12px;
-  border: 1px solid #e8e8e8;
-  border-radius: 6px;
-  background: #fafafa;
+.deep-thinking-panel {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
   overflow: hidden;
+  transition: all 0.2s ease;
 }
 
-.reasoning-header {
+.deep-thinking-panel.collapsed {
+  background: #f1f3f5;
+}
+
+.thinking-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 12px 16px;
   cursor: pointer;
+  user-select: none;
   transition: background 0.15s;
 }
 
-.reasoning-header:hover {
-  background: #f0f0f0;
+.thinking-header:hover {
+  background: rgba(0, 0, 0, 0.02);
 }
 
-.reasoning-left {
+.collapsed .thinking-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.thinking-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
-.reasoning-icon {
-  color: #999;
-  transition: transform 0.2s;
+.thinking-icon {
+  width: 20px;
+  height: 20px;
+  color: #868e96;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.reasoning-label {
-  font-size: 13px;
-  color: #888;
+.thinking-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.thinking-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #495057;
+}
+
+.thinking-duration {
+  font-size: 12px;
+  color: #adb5bd;
+  background: #e9ecef;
+  padding: 2px 8px;
+  border-radius: 10px;
   font-weight: 500;
 }
 
-.reasoning-hint {
-  font-size: 12px;
-  color: #bbb;
+.thinking-toggle {
+  display: flex;
+  align-items: center;
 }
 
-.reasoning-divider {
-  height: 1px;
-  background: #e8e8e8;
-  margin: 0 12px;
+.toggle-icon {
+  color: #adb5bd;
+  transition: transform 0.2s;
 }
 
-.reasoning-content {
-  padding: 12px 14px;
-  max-height: 400px;
-  overflow-y: auto;
-  font-size: 13px;
-  color: #999;
+.thinking-body {
+  border-top: 1px solid #e9ecef;
+  padding: 16px 20px;
+  background: #fdfdfd;
+}
+
+.thinking-content {
+  font-size: 13.5px;
   line-height: 1.75;
+  color: #495057;
 }
 
-.reasoning-content :deep(p) {
-  margin: 0 0 10px 0;
+.thinking-content :deep(p) {
+  margin: 0 0 12px 0;
 }
 
-.reasoning-content :deep(p:last-child) {
+.thinking-content :deep(p:last-child) {
   margin-bottom: 0;
 }
 
-.reasoning-content :deep(ul),
-.reasoning-content :deep(ol) {
-  margin: 8px 0;
+.thinking-content :deep(ul),
+.thinking-content :deep(ol) {
+  margin: 10px 0;
   padding-left: 24px;
 }
 
-.reasoning-content :deep(li) {
+.thinking-content :deep(li) {
   margin: 4px 0;
 }
 
-.reasoning-content :deep(h1),
-.reasoning-content :deep(h2),
-.reasoning-content :deep(h3),
-.reasoning-content :deep(h4) {
-  margin: 14px 0 8px 0;
+.thinking-content :deep(h1),
+.thinking-content :deep(h2),
+.thinking-content :deep(h3),
+.thinking-content :deep(h4) {
+  margin: 16px 0 8px 0;
   font-weight: 600;
-  color: #888;
+  color: #343a40;
 }
 
-.reasoning-content :deep(h1) { font-size: 16px; }
-.reasoning-content :deep(h2) { font-size: 15px; }
-.reasoning-content :deep(h3) { font-size: 14px; }
-.reasoning-content :deep(h4) { font-size: 13px; }
+.thinking-content :deep(h1) { font-size: 17px; }
+.thinking-content :deep(h2) { font-size: 16px; }
+.thinking-content :deep(h3) { font-size: 15px; }
+.thinking-content :deep(h4) { font-size: 14px; }
 
-.reasoning-content :deep(blockquote) {
-  border-left: 3px solid #d0d0d0;
+.thinking-content :deep(blockquote) {
+  border-left: 3px solid #ced4da;
   padding-left: 12px;
-  margin: 8px 0;
-  color: #aaa;
+  margin: 10px 0;
+  color: #6c757d;
+  font-style: italic;
 }
 
-.reasoning-content :deep(hr) {
+.thinking-content :deep(hr) {
   border: none;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px dashed #dee2e6;
+  margin: 14px 0;
+}
+
+.thinking-content :deep(pre) {
   margin: 10px 0;
 }
 
-.reasoning-content :deep(pre) {
-  margin: 8px 0;
-}
-
-.reasoning-content :deep(code) {
+.thinking-content :deep(code) {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
-  background: #f0f0f0;
-  padding: 1px 4px;
-  border-radius: 3px;
-  color: #888;
+  font-size: 12.5px;
+  background: #e9ecef;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #495057;
 }
 
-.reasoning-content :deep(.code-block) {
+.thinking-content :deep(.code-block) {
   position: relative;
-  margin: 6px 0;
-  border-radius: 6px;
+  margin: 8px 0;
+  border-radius: 8px;
   overflow: hidden;
   background: #1e1e1e;
 }
 
-.reasoning-content :deep(.code-block pre) {
+.thinking-content :deep(.code-block pre) {
   margin: 0;
-  padding: 10px 12px;
+  padding: 12px 16px;
   overflow-x: auto;
 }
 
-.reasoning-content :deep(.code-block code) {
+.thinking-content :deep(.code-block code) {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   color: #d4d4d4;
   background: transparent;
   padding: 0;
   border-radius: 0;
 }
 
-.reasoning-content :deep(.code-copy-btn) {
+.thinking-content :deep(.code-copy-btn) {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 6px;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #ccc;
-  padding: 2px 8px;
+  padding: 2px 10px;
   border-radius: 4px;
   font-size: 11px;
   cursor: pointer;
@@ -262,18 +308,28 @@ function renderMarkdown(content: string): string {
   transition: opacity 0.2s;
 }
 
-.reasoning-content :deep(.code-block:hover .code-copy-btn) {
+.thinking-content :deep(.code-block:hover .code-copy-btn) {
   opacity: 1;
 }
 
-/* 最终内容 */
+.thinking-preview {
+  padding: 0 16px 12px;
+  font-size: 12.5px;
+  color: #868e96;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .final-content {
   font-size: 15px;
   line-height: 1.8;
+  color: #222;
 }
 
 .final-content :deep(p) {
-  margin: 0 0 12px 0;
+  margin: 0 0 14px 0;
 }
 
 .final-content :deep(p:first-child) {
@@ -286,7 +342,7 @@ function renderMarkdown(content: string): string {
 
 .final-content :deep(ul),
 .final-content :deep(ol) {
-  margin: 10px 0;
+  margin: 12px 0;
   padding-left: 28px;
 }
 
@@ -298,88 +354,100 @@ function renderMarkdown(content: string): string {
 .final-content :deep(h2),
 .final-content :deep(h3),
 .final-content :deep(h4) {
-  margin: 20px 0 12px 0;
+  margin: 22px 0 12px 0;
   font-weight: 600;
+  color: #111;
 }
 
-.final-content :deep(h1) { font-size: 20px; }
-.final-content :deep(h2) { font-size: 18px; }
-.final-content :deep(h3) { font-size: 16px; }
+.final-content :deep(h1) { font-size: 22px; }
+.final-content :deep(h2) { font-size: 19px; }
+.final-content :deep(h3) { font-size: 17px; }
 .final-content :deep(h4) { font-size: 15px; }
 
 .final-content :deep(blockquote) {
-  border-left: 3px solid #d0d0d0;
-  padding-left: 14px;
-  margin: 12px 0;
-  color: #666;
+  border-left: 4px solid #18a058;
+  padding-left: 16px;
+  margin: 14px 0;
+  color: #555;
+  background: #f0faf0;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-radius: 0 8px 8px 0;
 }
 
 .final-content :deep(hr) {
   border: none;
   border-top: 1px solid #e0e0e0;
-  margin: 16px 0;
+  margin: 18px 0;
 }
 
 .final-content :deep(table) {
-  margin: 12px 0;
+  margin: 14px 0;
 }
 
 .final-content :deep(pre) {
   margin: 12px 0;
 }
 
-/* Code blocks */
 .final-content :deep(.code-block) {
   position: relative;
-  margin: 8px 0;
-  border-radius: 8px;
+  margin: 10px 0;
+  border-radius: 10px;
   overflow: hidden;
   background: #1e1e1e;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .final-content :deep(.code-block pre) {
   margin: 0;
-  padding: 12px 16px;
+  padding: 14px 18px;
   overflow-x: auto;
 }
 
 .final-content :deep(.code-block code) {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
+  font-size: 13.5px;
   color: #d4d4d4;
+  line-height: 1.65;
 }
 
 .final-content :deep(.code-copy-btn) {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 8px;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #ccc;
-  padding: 2px 10px;
-  border-radius: 4px;
+  padding: 3px 12px;
+  border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, background 0.2s;
 }
 
 .final-content :deep(.code-block:hover .code-copy-btn) {
   opacity: 1;
 }
 
-/* Tables */
+.final-content :deep(.code-copy-btn:hover) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .final-content :deep(table) {
   border-collapse: collapse;
   width: 100%;
-  margin: 8px 0;
+  margin: 10px 0;
   font-size: 14px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 .final-content :deep(th),
 .final-content :deep(td) {
   border: 1px solid #e0e0e0;
-  padding: 8px 12px;
+  padding: 10px 14px;
   text-align: left;
 }
 
@@ -388,65 +456,89 @@ function renderMarkdown(content: string): string {
   font-weight: 600;
 }
 
-/* Lists */
-.final-content :deep(ul),
-.final-content :deep(ol) {
-  margin: 8px 0;
-  padding-left: 24px;
-}
-
-.final-content :deep(li) {
-  margin: 4px 0;
-}
-
-/* Blockquote */
-.final-content :deep(blockquote) {
-  border-left: 3px solid #d0d0d0;
-  padding-left: 12px;
-  margin: 8px 0;
-  color: #666;
-}
-
-/* Links */
 .final-content :deep(a) {
   color: #18a058;
   text-decoration: none;
+  font-weight: 500;
 }
 
 .final-content :deep(a:hover) {
   text-decoration: underline;
 }
 
-/* Dark mode */
+.final-content :deep(img) {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 10px 0;
+}
+
 @media (prefers-color-scheme: dark) {
-  .reasoning-section {
+  .deep-thinking-panel {
+    background: #1e1e1e;
+    border-color: #2d2d2d;
+  }
+
+  .deep-thinking-panel.collapsed {
     background: #1a1a1a;
-    border-color: #333;
   }
 
-  .reasoning-header:hover {
-    background: #252525;
+  .thinking-header:hover {
+    background: rgba(255, 255, 255, 0.03);
   }
 
-  .reasoning-label {
-    color: #777;
+  .collapsed .thinking-header:hover {
+    background: rgba(255, 255, 255, 0.05);
   }
 
-  .reasoning-hint {
-    color: #555;
+  .thinking-label {
+    color: #dee2e6;
   }
 
-  .reasoning-divider {
-    background: #333;
+  .thinking-icon {
+    color: #868e96;
   }
 
-  .reasoning-content {
-    color: #777;
+  .thinking-duration {
+    background: #2d2d2d;
+    color: #adb5bd;
   }
 
-  .reasoning-content :deep(code) {
-    background: #2a2a2a;
-    color: #999;
+  .toggle-icon {
+    color: #6c757d;
+  }
+
+  .thinking-body {
+    border-top-color: #2d2d2d;
+    background: #1a1a1a;
+  }
+
+  .thinking-content {
+    color: #adb5bd;
+  }
+
+  .thinking-content :deep(h1),
+  .thinking-content :deep(h2),
+  .thinking-content :deep(h3),
+  .thinking-content :deep(h4) {
+    color: #ced4da;
+  }
+
+  .thinking-content :deep(code) {
+    background: #2d2d2d;
+    color: #dee2e6;
+  }
+
+  .thinking-content :deep(blockquote) {
+    border-left-color: #495057;
+    color: #868e96;
+  }
+
+  .thinking-preview {
+    color: #6c757d;
+  }
+
+  .final-content {
+    color: #ddd;
   }
 
   .final-content :deep(th) {
@@ -459,8 +551,9 @@ function renderMarkdown(content: string): string {
   }
 
   .final-content :deep(blockquote) {
-    border-left-color: #444;
-    color: #999;
+    border-left-color: #36ad6a;
+    color: #aaa;
+    background: #1a2a1a;
   }
 }
 </style>

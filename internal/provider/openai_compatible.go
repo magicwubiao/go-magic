@@ -401,7 +401,7 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	}
 
 	if withTools {
-		return ParseStreamResponseWithTools(resp.Body, handler)
+		return ParseStreamResponseWithTools(ctx, resp.Body, handler)
 	}
-	return ParseStreamResponse(resp.Body, handler)
+	return ParseStreamResponse(ctx, resp.Body, handler)
 }

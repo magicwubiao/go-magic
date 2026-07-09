@@ -543,10 +543,23 @@ export const useChatStore = defineStore('chat', () => {
           sessionEventSources.value[sessionId]!.close()
           sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
         }
-        
+
         state.streaming = false
-        
-        if (!state.streamContent && !state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
+        state.taskProgress = null
+
+        // Save any partial content received before disconnect
+        if (state.streamContent) {
+          const partialContent = state.streamContent
+          state.messages.push({
+            id: Date.now().toString(),
+            role: 'assistant' as const,
+            content: partialContent + '\n\n*[Connection interrupted, partial response saved]*',
+            timestamp: new Date().toISOString(),
+            session_id: sessionId,
+          })
+          state.streamContent = ''
+          loadSessions()
+        } else if (!state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
           error.value = { message: 'Connection lost' }
         }
       }

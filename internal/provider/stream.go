@@ -180,22 +180,37 @@ func (p *AnthropicStreamParser) Parse(line string) (*StreamResponse, error) {
 }
 
 // ParseStreamResponse parses a standard OpenAI-compatible streaming response
-func ParseStreamResponse(body io.Reader, handler StreamHandler) error {
-	return ParseStreamWithParser(body, handler, &OpenAIStreamParser{}, DefaultStreamConfig())
+// contextReader wraps an io.Reader and checks context cancellation on each Read.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (cr *contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-cr.ctx.Done():
+		return 0, cr.ctx.Err()
+	default:
+	}
+	return cr.r.Read(p)
+}
+
+func ParseStreamResponse(ctx context.Context, body io.Reader, handler StreamHandler) error {
+	return ParseStreamWithParser(ctx, body, handler, &OpenAIStreamParser{}, DefaultStreamConfig())
 }
 
 // ParseStreamResponseWithTools parses streaming response handling tool calls
-func ParseStreamResponseWithTools(body io.Reader, handler StreamHandler) error {
-	return ParseStreamWithParser(body, handler, &OpenAIStreamParser{}, DefaultStreamConfig())
+func ParseStreamResponseWithTools(ctx context.Context, body io.Reader, handler StreamHandler) error {
+	return ParseStreamWithParser(ctx, body, handler, &OpenAIStreamParser{}, DefaultStreamConfig())
 }
 
 // ParseStreamWithParser parses streaming response using a specific parser
-func ParseStreamWithParser(body io.Reader, handler StreamHandler, parser StreamParser, config *StreamConfig) error {
+func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHandler, parser StreamParser, config *StreamConfig) error {
 	if config == nil {
 		config = DefaultStreamConfig()
 	}
 
-	scanner := bufio.NewScanner(body)
+	scanner := bufio.NewScanner(&contextReader{ctx: ctx, r: body})
 
 	// Set buffer size for large content
 	buf := make([]byte, 0, config.BufferSize)
@@ -376,7 +391,7 @@ func StreamWithTimeout(ctx context.Context, duration time.Duration, body io.Read
 	done := make(chan error, 1)
 
 	go func() {
-		done <- ParseStreamResponse(body, handler)
+		done <- ParseStreamResponse(ctx, body, handler)
 	}()
 
 	select {

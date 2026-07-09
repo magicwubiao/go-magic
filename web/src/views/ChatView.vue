@@ -232,11 +232,22 @@
               <div v-if="chatStore.streamContent" class="message-bubble assistant-bubble">
                 <ReasoningContent :content="chatStore.streamContent" />
               </div>
-              <!-- Waiting indicator -->
-              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0" class="waiting-indicator">
-                <span class="dot"></span>
-                <span class="dot"></span>
-                <span class="dot"></span>
+              <!-- Status panel when no content yet -->
+              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0" class="agent-status-panel">
+                <div class="status-header">
+                  <div class="status-spinner"></div>
+                  <span class="status-phase">{{ agentPhase }}</span>
+                  <span class="status-elapsed">{{ elapsedDisplay }}</span>
+                </div>
+                <div class="status-hint">{{ t(thinkingHints[hintIndex]) }}</div>
+              </div>
+              <!-- Tool running indicator -->
+              <div v-if="chatStore.activeToolCalls.length > 0 && !chatStore.streamContent" class="agent-status-panel">
+                <div class="status-header">
+                  <div class="status-spinner"></div>
+                  <span class="status-phase">{{ agentPhase }}</span>
+                  <span class="status-elapsed">{{ elapsedDisplay }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -404,7 +415,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
@@ -430,6 +441,86 @@ const message = useMessage()
 const inputValue = ref('')
 const messagesRef = ref<HTMLDivElement>()
 const sessionListRef = ref<HTMLDivElement>()
+
+// Elapsed timer for streaming
+const elapsedSeconds = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+watch(() => chatStore.streaming, (streaming) => {
+  if (streaming) {
+    elapsedSeconds.value = 0
+    elapsedTimer = setInterval(() => {
+      elapsedSeconds.value++
+    }, 1000)
+  } else {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer)
+      elapsedTimer = null
+    }
+  }
+})
+
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer)
+})
+
+const elapsedDisplay = computed(() => {
+  const s = elapsedSeconds.value
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return `${m}m${sec}s`
+})
+
+// Current agent phase
+const agentPhase = computed(() => {
+  if (!chatStore.streaming) return ''
+  const runningTools = chatStore.activeToolCalls
+  if (runningTools.length > 0) {
+    return t('chat.executingTool', { name: runningTools[0].name })
+  }
+  if (chatStore.streamContent) {
+    return t('chat.generating')
+  }
+  if (chatStore.toolCalls.length > 0) {
+    return t('chat.generating')
+  }
+  return t('chat.thinkingPhase')
+})
+
+// Rotating hints during thinking
+const thinkingHints = [
+  'chat.hintAnalyzing',
+  'chat.hintPlanning',
+  'chat.hintReasoning',
+]
+const hintIndex = ref(0)
+let hintTimer: ReturnType<typeof setInterval> | null = null
+
+watch(() => chatStore.streaming, (streaming) => {
+  if (streaming && !chatStore.streamContent && chatStore.activeToolCalls.length === 0) {
+    hintIndex.value = 0
+    hintTimer = setInterval(() => {
+      hintIndex.value = (hintIndex.value + 1) % thinkingHints.length
+    }, 4000)
+  } else {
+    if (hintTimer) {
+      clearInterval(hintTimer)
+      hintTimer = null
+    }
+  }
+})
+
+watch(() => chatStore.streamContent, (val) => {
+  if (val && hintTimer) {
+    clearInterval(hintTimer)
+    hintTimer = null
+  }
+})
+
+onUnmounted(() => {
+  if (hintTimer) clearInterval(hintTimer)
+})
 
 // Rename session
 const editingSessionId = ref<string | null>(null)
@@ -1199,29 +1290,62 @@ onMounted(async () => {
   border-radius: 8px;
 }
 
-.waiting-indicator {
-  display: flex;
-  gap: 5px;
-  padding: 16px 20px;
+/* Agent status panel */
+.agent-status-panel {
+  padding: 14px 18px;
   background: #f5f5f5;
   border-radius: 16px;
   border-bottom-left-radius: 4px;
+  min-width: 200px;
 }
 
-.waiting-indicator .dot {
-  width: 7px;
-  height: 7px;
+.status-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #d0d0d0;
+  border-top-color: #666;
   border-radius: 50%;
-  background: #999;
-  animation: waitBounce 1.4s ease-in-out infinite;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
 }
 
-.waiting-indicator .dot:nth-child(2) { animation-delay: 0.2s; }
-.waiting-indicator .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
-@keyframes waitBounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
+.status-phase {
+  font-size: 13px;
+  color: #333;
+  font-weight: 500;
+  flex: 1;
+}
+
+.status-elapsed {
+  font-size: 12px;
+  color: #999;
+  font-variant-numeric: tabular-nums;
+  background: #e8e8e8;
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+
+.status-hint {
+  font-size: 12px;
+  color: #888;
+  margin-top: 8px;
+  padding-left: 26px;
+  animation: fadeInOut 4s ease-in-out infinite;
+}
+
+@keyframes fadeInOut {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 /* ========== Markdown Content Styles ========== */
@@ -1574,12 +1698,26 @@ onMounted(async () => {
     background: transparent;
   }
 
-  .waiting-indicator {
+  .agent-status-panel {
     background: #1e1e1e;
   }
 
-  .waiting-indicator .dot {
-    background: #666;
+  .status-spinner {
+    border-color: #333;
+    border-top-color: #888;
+  }
+
+  .status-phase {
+    color: #ddd;
+  }
+
+  .status-elapsed {
+    color: #666;
+    background: #2a2a2a;
+  }
+
+  .status-hint {
+    color: #666;
   }
 
   .message-time {

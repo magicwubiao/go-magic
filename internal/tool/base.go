@@ -76,7 +76,6 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 		Params:   params,
 	}
 
-	// 设置超时
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -87,7 +86,6 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Panic 保护
 	defer func() {
 		if r := recover(); r != nil {
 			result.Recovered = true
@@ -95,7 +93,6 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 		}
 	}()
 
-	// 参数验证（如果工具实现了参数验证器）
 	if validator, ok := tool.(ParamValidator); ok {
 		if err := validator.ValidateParams(params); err != nil {
 			result.Error = fmt.Errorf("parameter validation failed: %w", err)
@@ -104,13 +101,37 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 		}
 	}
 
-	// 执行工具
-	res, err := tool.Execute(ctx, params)
-	result.Result = res
-	result.Error = err
-	result.Duration = time.Since(start)
+	done := make(chan ToolExecutionResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- ToolExecutionResult{
+					ToolName:  tool.Name(),
+					Params:    params,
+					Recovered: true,
+					Error:     fmt.Errorf("panic recovered: %v", r),
+					Duration:  time.Since(start),
+				}
+			}
+		}()
+		res, err := tool.Execute(ctx, params)
+		done <- ToolExecutionResult{
+			ToolName: tool.Name(),
+			Params:   params,
+			Result:   res,
+			Error:    err,
+			Duration: time.Since(start),
+		}
+	}()
 
-	return result
+	select {
+	case <-ctx.Done():
+		result.Error = ctx.Err()
+		result.Duration = time.Since(start)
+		return result
+	case res := <-done:
+		return res
+	}
 }
 
 // ParamValidator 参数验证器接口
