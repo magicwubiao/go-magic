@@ -34,6 +34,10 @@ const (
 	EventKindError
 	EventKindWarning
 	EventKindSteering
+	EventKindReflection
+	EventKindPlanUpdate
+	EventKindTrajectory
+	EventKindMemoryUpdate
 	EventKindCount
 )
 
@@ -63,6 +67,14 @@ func (k EventKind) String() string {
 		return "warning"
 	case EventKindSteering:
 		return "steering"
+	case EventKindReflection:
+		return "reflection"
+	case EventKindPlanUpdate:
+		return "plan_update"
+	case EventKindTrajectory:
+		return "trajectory"
+	case EventKindMemoryUpdate:
+		return "memory_update"
 	default:
 		return "unknown"
 	}

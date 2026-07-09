@@ -138,6 +138,26 @@ type Agent struct {
 
 	// Error classifier for intelligent retry
 	errorClassifier *retry.Classifier
+
+	// Self-reflection mechanism (Hermes-inspired)
+	reflector      *Reflector
+	reflectionCfg  ReflectionConfig
+	reflectEnabled bool
+
+	// Plan-guided execution
+	planExecutor *PlanExecutor
+	planEnabled  bool
+	planCfg      PlanExecutorConfig
+	failStreak   int
+
+	// Trajectory-based learning
+	trajInjector *cortex.TrajectoryInjector
+	trajEnabled  bool
+	trajCfg      cortex.TrajectoryInjectorConfig
+	trajStore    *cortex.TrajectoryStore
+
+	// Smart error recovery for tool execution
+	smartRecovery *retry.SmartRecovery
 }
 
 // ToolRegistry interface for tool execution
@@ -183,6 +203,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		budget:           budget.Preset("parent"),
 		compressor:       compress.NewCompressor(8000),
 		errorClassifier:  retry.NewClassifier(),
+		smartRecovery:    retry.NewSmartRecovery(retry.DefaultSmartRecoveryConfig()),
 	}
 
 	agent.registerBuiltinHooks()
@@ -307,6 +328,223 @@ func WithSecretRedaction(enabled bool) AgentOption {
 	return func(a *Agent) {
 		a.secretRedaction = enabled
 	}
+}
+
+// WithReflection configures the self-reflection mechanism
+func WithReflection(cfg ReflectionConfig) AgentOption {
+	return func(a *Agent) {
+		a.reflectionCfg = cfg
+		a.reflectEnabled = cfg.Enabled
+	}
+}
+
+// initReflector initializes the reflector with the current goal
+func (a *Agent) initReflector(goal string) {
+	if a.reflectEnabled && a.reflector == nil {
+		a.reflector = NewReflector(a.reflectionCfg, a.provider, goal)
+	}
+}
+
+// performReflection runs a self-reflection cycle and injects insights
+func (a *Agent) performReflection(ctx context.Context, turn int) error {
+	if !a.reflectEnabled || a.reflector == nil {
+		return nil
+	}
+	if !a.reflector.ShouldReflect(turn) {
+		return nil
+	}
+
+	result, err := a.reflector.Reflect(ctx, a.history, turn)
+	if err != nil {
+		return err
+	}
+
+	// Emit reflection event
+	a.Emit(bus.EventKindReflection, map[string]interface{}{
+		"turn":     turn,
+		"status":   result.Status,
+		"progress": result.Progress,
+	})
+
+	// Inject reflection insights into history as a user message
+	reflectionPrompt := a.reflector.InjectReflectionPrompt(result)
+	if reflectionPrompt != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: reflectionPrompt,
+		})
+	}
+
+	// If stuck or off track, trigger replan by injecting guidance
+	if result.Status == ProgressStuck || result.Status == ProgressOffTrack {
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: "\n\n⚠ IMPORTANT: You appear to be stuck or off-track. Re-evaluate your approach. Consider:\n1. What is the core goal?\n2. What have you tried that didn't work?\n3. What's a completely different approach you could try?\n4. What information are you missing?\n\nProvide a revised plan and try again with a fresh perspective.",
+		})
+	}
+
+	return nil
+}
+
+// WithPlanExecution enables plan-guided agent execution
+func WithPlanExecution(cfg PlanExecutorConfig) AgentOption {
+	return func(a *Agent) {
+		a.planCfg = cfg
+		a.planEnabled = true
+	}
+}
+
+// initPlanExecutor initializes the plan executor
+func (a *Agent) initPlanExecutor(ctx context.Context, goal string) error {
+	if !a.planEnabled || a.planExecutor != nil {
+		return nil
+	}
+
+	a.planExecutor = NewPlanExecutor(a.provider, a.planCfg)
+	plan, err := a.planExecutor.CreatePlan(ctx, goal)
+	if err != nil {
+		return err
+	}
+
+	// Emit plan event
+	a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
+		"action": "created",
+		"steps":  len(plan.Steps),
+	})
+
+	// Inject plan into conversation history
+	planPrompt := a.planExecutor.GetPlanPrompt()
+	if planPrompt != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: planPrompt,
+		})
+	}
+
+	return nil
+}
+
+// updatePlanProgress checks for step completion and updates the plan
+func (a *Agent) updatePlanProgress(ctx context.Context) {
+	if a.planExecutor == nil {
+		return
+	}
+
+	currentStep := a.planExecutor.GetCurrentStep()
+	if currentStep == nil {
+		return
+	}
+
+	// Detect if current step is complete
+	if a.planExecutor.DetectStepCompletion(a.history, nil) {
+		summary := a.planExecutor.GenerateStepSummary(ctx, currentStep.ID, a.history)
+		a.planExecutor.MarkStepComplete(currentStep.ID)
+
+		// Record achievement for reflection
+		if a.reflector != nil {
+			a.reflector.RecordAchievement(summary)
+		}
+
+		a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
+			"action":    "step_complete",
+			"step_id":   currentStep.ID,
+			"step_desc": currentStep.Description,
+			"progress":  a.planExecutor.GetProgress(),
+			"summary":   summary,
+		})
+
+		// If plan is complete, inject completion message
+		if a.planExecutor.IsPlanComplete() {
+			a.history = append(a.history, provider.Message{
+				Role:    "user",
+				Content: "\n\n📋 All plan steps have been completed. Please provide a comprehensive final summary of everything that was accomplished.",
+			})
+		}
+	}
+}
+
+// handlePlanFailure handles a tool execution failure in plan context
+func (a *Agent) handlePlanFailure(ctx context.Context, errMsg string) {
+	if a.planExecutor == nil {
+		return
+	}
+
+	a.failStreak++
+
+	currentStep := a.planExecutor.GetCurrentStep()
+	if currentStep != nil {
+		a.planExecutor.MarkStepFailed(currentStep.ID, errMsg)
+
+		if a.reflector != nil {
+			a.reflector.RecordBlocker(errMsg)
+		}
+	}
+
+	// Check if we need to replan
+	if a.planExecutor.ShouldReplan(a.failStreak) {
+		adjustment, err := a.planExecutor.Replan(ctx, errMsg)
+		if err == nil && adjustment != nil {
+			a.failStreak = 0
+			a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
+				"action":     "replan",
+				"adjustment": adjustment,
+			})
+
+			// Inject replan notification
+			a.history = append(a.history, provider.Message{
+				Role: "user",
+				Content: fmt.Sprintf("\n\n🔄 Plan has been adjusted: %s\nNew plan steps:\n%s",
+					adjustment.Reason, a.planExecutor.GetPlanPrompt()),
+			})
+		}
+	}
+}
+
+// WithTrajectoryLearning enables trajectory-based learning from past executions
+func WithTrajectoryLearning(store *cortex.TrajectoryStore, cfg cortex.TrajectoryInjectorConfig) AgentOption {
+	return func(a *Agent) {
+		a.trajStore = store
+		a.trajCfg = cfg
+		a.trajEnabled = cfg.Enabled
+	}
+}
+
+// initTrajectoryInjector initializes the trajectory injector
+func (a *Agent) initTrajectoryInjector() {
+	if !a.trajEnabled || a.trajInjector != nil || a.trajStore == nil {
+		return
+	}
+	a.trajInjector = cortex.NewTrajectoryInjector(a.trajStore, a.provider, a.trajCfg)
+}
+
+// injectTrajectoryInsights injects trajectory-based learning into the conversation
+func (a *Agent) injectTrajectoryInsights(goal string) {
+	if a.trajInjector == nil {
+		return
+	}
+
+	// Inject few-shot examples
+	fewShot := a.trajInjector.BuildFewShotPrompt(goal)
+	if fewShot != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: fewShot,
+		})
+	}
+
+	// Inject failure avoidance
+	pitfalls := a.trajInjector.BuildFailureAvoidancePrompt(goal)
+	if pitfalls != "" {
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: pitfalls,
+		})
+	}
+
+	a.Emit(bus.EventKindTrajectory, map[string]interface{}{
+		"action": "injected",
+		"goal":   goal,
+	})
 }
 
 func (a *Agent) registerBuiltinHooks() {
@@ -744,6 +982,24 @@ Please provide a comprehensive, well-structured final response based on these su
 		Content: utils.TruncateDetailed(input, a.maxMsgLen),
 	})
 
+	// Initialize self-reflection with the goal
+	if a.reflectEnabled {
+		a.initReflector(input)
+	}
+
+	// Initialize plan executor
+	if a.planEnabled {
+		if err := a.initPlanExecutor(ctx, input); err != nil {
+			log.Warnf("[Agent] Plan executor init failed: %v", err)
+		}
+	}
+
+	// Initialize and inject trajectory-based learning
+	if a.trajEnabled && a.trajStore != nil {
+		a.initTrajectoryInjector()
+		a.injectTrajectoryInsights(input)
+	}
+
 	// Truncate history to prevent overflow
 	a.truncateHistory()
 
@@ -774,6 +1030,13 @@ Please provide a comprehensive, well-structured final response based on these su
 			"budgetUsed":  a.budget.Used(),
 			"budgetTotal": a.budget.MaxTotal(),
 		})
+
+		// Self-reflection check (every N turns)
+		if a.reflector != nil {
+			if err := a.performReflection(ctx, a.iterationCount); err != nil {
+				log.Warnf("[Agent] Reflection failed: %v", err)
+			}
+		}
 
 		// Check if context compression is needed
 		if a.compressor != nil {
@@ -991,6 +1254,20 @@ Please provide a comprehensive, well-structured final response based on these su
 			// Continue to add messages - toolResults may contain partial results
 		}
 
+		// Record tool calls for self-reflection analysis
+		if a.reflector != nil {
+			for _, tc := range resp.ToolCalls {
+				toolName := tc.GetToolName()
+				result, ok := toolResults[tc.ID]
+				success := ok && result.Err == nil
+				duration := time.Duration(0)
+				if ok {
+					duration = result.Execution
+				}
+				a.reflector.RecordToolCall(toolName, success, duration)
+			}
+		}
+
 		// Add assistant message with tool_calls
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
@@ -1005,10 +1282,12 @@ Please provide a comprehensive, well-structured final response based on these su
 				tcID = "call_unknown"
 			}
 
+			var toolErr error
 			var resultContent string
 			if result, ok := toolResults[tcID]; ok {
 				if result.Err != nil {
 					resultContent = fmt.Sprintf("Error: %v", result.Err)
+					toolErr = result.Err
 				} else {
 					resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 				}
@@ -1016,6 +1295,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				// No result found for this tool call
 				if execErr != nil {
 					resultContent = fmt.Sprintf("Error: %v", execErr)
+					toolErr = execErr
 				} else {
 					resultContent = "Error: No result returned for tool call"
 				}
@@ -1026,7 +1306,41 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:    resultContent,
 				ToolCallID: tcID,
 			})
+
+			// Smart recovery: provide guidance for failed tools
+			if a.smartRecovery != nil && toolErr != nil {
+				toolName := tc.GetToolName()
+				errInfo := a.smartRecovery.AnalyzeToolError(toolName, toolErr, nil)
+				if errInfo != nil {
+					a.smartRecovery.RecordFailure(toolName, errInfo)
+					recoveryPrompt := a.smartRecovery.GetRecoveryPrompt(errInfo)
+					if recoveryPrompt != "" {
+						a.history = append(a.history, provider.Message{
+							Role:    "user",
+							Content: recoveryPrompt,
+						})
+					}
+
+					// Record blocker for reflection
+					if a.reflector != nil {
+						a.reflector.RecordBlocker(fmt.Sprintf("%s: %s", toolName, errInfo.RootCause))
+					}
+
+					// Handle plan failure
+					if a.planExecutor != nil {
+						a.handlePlanFailure(ctx, errInfo.ErrorMessage)
+					}
+				}
+			} else if a.smartRecovery != nil && toolErr == nil {
+				a.smartRecovery.RecordSuccess(tc.GetToolName())
+			}
 		}
+
+		// Update plan progress at end of iteration
+		a.updatePlanProgress(ctx)
+
+		// Truncate history to prevent overflow
+		a.truncateHistory()
 	}
 
 	// Try to get a summary from the LLM before giving up
