@@ -620,11 +620,10 @@ func (t *TCPTransport) IsConnected() bool {
 	return true
 }
 
-// mustMarshal marshals a value to JSON or panics
-func mustMarshal(v interface{}) json.RawMessage {
+func jsonMarshal(v interface{}) (json.RawMessage, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}
-	return data
+	return data, nil
 }

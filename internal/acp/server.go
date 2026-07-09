@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // HandlerFunc is the function signature for ACP method handlers
@@ -229,7 +230,11 @@ func (s *Server) registerBuiltinHandlers() {
 			return SkillCallResponse{Success: false, Error: err.Error()}, nil
 		}
 
-		return SkillCallResponse{Success: true, Result: mustMarshal(result)}, nil
+		resultJSON, err := jsonMarshal(result)
+		if err != nil {
+			return SkillCallResponse{Success: false, Error: err.Error()}, nil
+		}
+		return SkillCallResponse{Success: true, Result: resultJSON}, nil
 	})
 
 	// Ping
@@ -311,7 +316,11 @@ func GenerateRequestID() string {
 func NewJSONRPCRequest(method string, params interface{}, id interface{}) *JSONRPCRequest {
 	var rawParams json.RawMessage
 	if params != nil {
-		rawParams = mustMarshal(params)
+		var err error
+		rawParams, err = jsonMarshal(params)
+		if err != nil {
+			log.Errorf("[ACP] Failed to marshal params for %s: %v", method, err)
+		}
 	}
 
 	return &JSONRPCRequest{
@@ -326,7 +335,11 @@ func NewJSONRPCRequest(method string, params interface{}, id interface{}) *JSONR
 func NewJSONRPCResponse(id interface{}, result interface{}) *JSONRPCResponse {
 	var rawResult json.RawMessage
 	if result != nil {
-		rawResult = mustMarshal(result)
+		var err error
+		rawResult, err = jsonMarshal(result)
+		if err != nil {
+			log.Errorf("[ACP] Failed to marshal result: %v", err)
+		}
 	}
 
 	return &JSONRPCResponse{

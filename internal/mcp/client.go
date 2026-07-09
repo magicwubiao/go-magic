@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // Protocol constants
@@ -266,7 +267,7 @@ func (c *Client) initialize() error {
 	initReq := &JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		Method:  "initialize",
-		Params:  mustMarshal(map[string]interface{}{"protocolVersion": "2024-11-05"}),
+		Params:  jsonMarshal(map[string]interface{}{"protocolVersion": "2024-11-05"}),
 		ID:      1,
 	}
 
@@ -335,7 +336,7 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 	req := &JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		Method:  "tools/call",
-		Params:  mustMarshal(params),
+		Params:  jsonMarshal(params),
 		ID:      uuid.New().String(),
 	}
 
@@ -558,10 +559,11 @@ func (m *Manager) GetServerInfo(name string) (map[string]interface{}, error) {
 	}, nil
 }
 
-func mustMarshal(v interface{}) json.RawMessage {
+func jsonMarshal(v interface{}) json.RawMessage {
 	data, err := json.Marshal(v)
 	if err != nil {
-		panic(err)
+		log.Errorf("[MCP] Failed to marshal JSON: %v", err)
+		return nil
 	}
 	return data
 }

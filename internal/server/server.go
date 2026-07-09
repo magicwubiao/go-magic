@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -44,8 +45,10 @@ import (
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //go:embed dist
@@ -439,6 +442,18 @@ func NewServer(dbPath string) *Server {
 	return s
 }
 
+// safeGo runs a function in a goroutine with panic recovery
+func safeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("[server] PANIC in goroutine: %v\n%s", r, debug.Stack())
+			}
+		}()
+		fn()
+	}()
+}
+
 // agentCleanupLoop periodically removes inactive agents to prevent memory leaks
 func (s *Server) agentCleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -751,27 +766,23 @@ func (s *Server) Start(port int) error {
 			token := s.authToken
 			s.authMu.RUnlock()
 
-			// No token configured = no auth required
 			if token == "" {
 				h(w, r)
 				return
 			}
 
-			// Check Authorization header
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "Bearer "+token {
+			if subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+token)) == 1 {
 				h(w, r)
 				return
 			}
 
-			// Check X-Magic-Session-Token header
-			if r.Header.Get("X-Magic-Session-Token") == token {
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Magic-Session-Token")), []byte(token)) == 1 {
 				h(w, r)
 				return
 			}
 
-			// Check query parameter
-			if r.URL.Query().Get("token") == token {
+			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
 				h(w, r)
 				return
 			}
@@ -784,7 +795,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/auth/status", withCORS(s.handleAuthStatus))
 	mux.HandleFunc("/api/auth/setup", withCORS(s.handleAuthSetup))
 	mux.HandleFunc("/api/auth/login", withCORS(s.handleAuthLogin))
-	mux.HandleFunc("/api/auth/reset", withCORS(s.handleAuthReset))
+	mux.HandleFunc("/api/auth/reset", withCORS(requireAuth(s.handleAuthReset)))
 
 	// Base API handler for CORS preflight
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -997,7 +1008,15 @@ func (s *Server) Start(port int) error {
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
 
-	return http.ListenAndServe(addr, mux)
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	return srv.ListenAndServe()
 }
 
 // --- Health & Status ---
@@ -1032,28 +1051,30 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Password) < 4 {
-		http.Error(w, `{"error":"password must be at least 4 characters"}`, http.StatusBadRequest)
+	if len(req.Password) < 8 {
+		http.Error(w, `{"error":"password must be at least 8 characters"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Generate token from password using SHA-256
-	hash := sha256.Sum256([]byte(req.Password))
-	newToken := hex.EncodeToString(hash[:])
+	// Generate secure bcrypt hash with cost 12
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)
+		return
+	}
 
 	authTokenPath := filepath.Join(s.magicHome, ".auth_token")
-	if err := os.WriteFile(authTokenPath, []byte(newToken), 0600); err != nil {
+	if err := os.WriteFile(authTokenPath, hash, 0600); err != nil {
 		http.Error(w, `{"error":"failed to save token"}`, http.StatusInternalServerError)
 		return
 	}
 
 	s.authMu.Lock()
-	s.authToken = newToken
+	s.authToken = string(hash)
 	s.authMu.Unlock()
 
 	jsonResponse(w, map[string]interface{}{
-		"ok":    true,
-		"token": newToken,
+		"ok": true,
 	})
 }
 
@@ -1075,18 +1096,28 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash := sha256.Sum256([]byte(req.Password))
-	inputToken := hex.EncodeToString(hash[:])
-
-	if inputToken != token {
-		http.Error(w, `{"error":"invalid password"}`, http.StatusUnauthorized)
+	// First try bcrypt verification (new format)
+	if err := bcrypt.CompareHashAndPassword([]byte(token), []byte(req.Password)); err == nil {
+		jsonResponse(w, map[string]interface{}{
+			"ok":    true,
+			"token": token,
+		})
 		return
 	}
 
-	jsonResponse(w, map[string]interface{}{
-		"ok":    true,
-		"token": token,
-	})
+	// Fallback to old SHA-256 format for backward compatibility
+	hash := sha256.Sum256([]byte(req.Password))
+	inputToken := hex.EncodeToString(hash[:])
+
+	if subtle.ConstantTimeCompare([]byte(inputToken), []byte(token)) == 1 {
+		jsonResponse(w, map[string]interface{}{
+			"ok":    true,
+			"token": token,
+		})
+		return
+	}
+
+	http.Error(w, `{"error":"invalid password"}`, http.StatusUnauthorized)
 }
 
 func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
@@ -1713,7 +1744,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	// Start heartbeat goroutine to keep connection alive during long tool executions
 	heartbeatDone := make(chan struct{})
-	go func() {
+	safeGo(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -1728,7 +1759,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				return
 			}
 		}
-	}()
+	})
 
 	// Check if provider supports streaming
 	_, supportsStream := s.provider.(provider.StreamingToolCaller)
@@ -4916,9 +4947,9 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "job not found", http.StatusNotFound)
 			return
 		}
-		go func() {
+		go safeGo(func() {
 			_ = s.cronMgr.RunJob(context.Background(), job)
-		}()
+		})
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
@@ -8093,7 +8124,7 @@ func (s *Server) runAction(id, name string, fn func() (int, error)) {
 	}
 	s.actionsMu.Unlock()
 
-	go func() {
+	safeGo(func() {
 		exitCode, err := fn()
 
 		s.actionsMu.Lock()
@@ -8108,7 +8139,7 @@ func (s *Server) runAction(id, name string, fn func() (int, error)) {
 				action.Lines = append(action.Lines, fmt.Sprintf("Error: %v", err))
 			}
 		}
-	}()
+	})
 }
 
 // getActionStatus retrieves the status of a background action
@@ -8975,7 +9006,7 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 
 	// Start heartbeat to prevent proxy/browser timeout
 	heartbeatDone := make(chan struct{})
-	go func() {
+	safeGo(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -8987,7 +9018,7 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 		}
-	}()
+	})
 
 	// Stream each mentioned agent's reply
 	for _, agent := range mentioned {

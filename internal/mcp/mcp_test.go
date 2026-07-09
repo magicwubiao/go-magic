@@ -237,10 +237,10 @@ func TestDefaultConstants(t *testing.T) {
 	}
 }
 
-func TestMustMarshal(t *testing.T) {
-	data := mustMarshal(map[string]string{"key": "value"})
+func TestJsonMarshal(t *testing.T) {
+	data := jsonMarshal(map[string]string{"key": "value"})
 	if data == nil {
-		t.Fatal("mustMarshal returned nil")
+		t.Fatal("jsonMarshal returned nil")
 	}
 }
 

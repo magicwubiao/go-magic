@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -247,7 +248,7 @@ func (s *MCPServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check auth token if configured
 	if s.AuthToken != "" {
 		token := r.Header.Get("Authorization")
-		if token != "Bearer "+s.AuthToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte("Bearer "+s.AuthToken)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

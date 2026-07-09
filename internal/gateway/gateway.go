@@ -100,6 +100,7 @@ type AgentHandlerWithStats interface {
 
 // Session represents a user session
 type Session struct {
+	mu              sync.Mutex
 	ID              string                 `json:"id"`
 	UserID          string                 `json:"user_id"`
 	Platform        string                 `json:"platform"`
@@ -456,9 +457,11 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	// Get or create session
 	session := g.getOrCreateSession(msg.UserID, platform)
 
-	// Update session
+	// Update session (thread-safe)
+	session.mu.Lock()
 	session.LastActive = time.Now()
 	session.History = append(session.History, msg)
+	session.mu.Unlock()
 
 	// Call message handler if set
 	if g.onMessage != nil {
@@ -482,11 +485,13 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		resp = fmt.Sprintf("Error: %v", err)
 	}
 
-	// Update session with token stats
+	// Update session with token stats (thread-safe)
+	session.mu.Lock()
 	session.InputTokens += inputTokens
 	session.OutputTokens += outputTokens
 	session.CacheReadTokens += cacheTokens
 	session.LastActive = time.Now()
+	session.mu.Unlock()
 
 	// Persist session to store if available
 	if g.sessionStore != nil {

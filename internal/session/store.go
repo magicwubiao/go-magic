@@ -44,10 +44,14 @@ type Session struct {
 }
 
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?mode=rwc&_journal=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
 
 	if err := initSchema(db); err != nil {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
@@ -169,33 +173,35 @@ func (s *Store) SaveSessionDataFromMap(ctx context.Context, id, platform string,
 }
 
 func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string, inputTokens, outputTokens, cacheTokens int) error {
-	// Check if session exists
-	var exists bool
-	query := `SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`
-	s.db.QueryRowContext(ctx, query, id).Scan(&exists)
-
-	if exists {
-		// Update existing session with token stats
-		updateQuery := `
-		UPDATE sessions SET 
-			platform = ?, 
-			input_tokens = input_tokens + ?, 
-			output_tokens = output_tokens + ?,
-			cache_read_tokens = cache_read_tokens + ?,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-		`
-		_, err := s.db.ExecContext(ctx, updateQuery, platform, inputTokens, outputTokens, cacheTokens, id)
+	updateQuery := `
+	UPDATE sessions SET 
+		platform = ?, 
+		input_tokens = input_tokens + ?, 
+		output_tokens = output_tokens + ?,
+		cache_read_tokens = cache_read_tokens + ?,
+		updated_at = CURRENT_TIMESTAMP
+	WHERE id = ?
+	`
+	result, err := s.db.ExecContext(ctx, updateQuery, platform, inputTokens, outputTokens, cacheTokens, id)
+	if err != nil {
 		return err
 	}
 
-	// Insert new session
-	insertQuery := `
-	INSERT INTO sessions (id, profile, platform, input_tokens, output_tokens, cache_read_tokens, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`
-	_, err := s.db.ExecContext(ctx, insertQuery, id, "", platform, inputTokens, outputTokens, cacheTokens)
-	return err
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		insertQuery := `
+		INSERT INTO sessions (id, profile, platform, input_tokens, output_tokens, cache_read_tokens, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		`
+		_, err = s.db.ExecContext(ctx, insertQuery, id, "", platform, inputTokens, outputTokens, cacheTokens)
+		return err
+	}
+
+	return nil
 }
 
 func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {

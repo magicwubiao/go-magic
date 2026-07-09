@@ -591,13 +591,14 @@ func (p *GoogleTTSProvider) TTS(ctx context.Context, text string) ([]byte, error
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://texttospeech.googleapis.com/v1/text:synthesize?key=%s", p.config.APIKey)
+	url := "https://texttospeech.googleapis.com/v1/text:synthesize"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", p.config.APIKey)
 
 	resp, err := HTTPClient.Do(req)
 	if err != nil {
@@ -650,13 +651,14 @@ func (p *GoogleTTSProvider) ASR(ctx context.Context, audio []byte) (string, erro
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://speech.googleapis.com/v1/speech:recognize?key=%s", p.config.APIKey)
+	url := "https://speech.googleapis.com/v1/speech:recognize"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", p.config.APIKey)
 
 	resp, err := HTTPClient.Do(req)
 	if err != nil {
