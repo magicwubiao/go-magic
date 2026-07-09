@@ -270,7 +270,7 @@ type Gateway struct {
 
 	// Event handlers
 	onMessage    func(Message)
-	onSessionEnd func(Session)
+	onSessionEnd func(*Session)
 
 	// HTTP API server
 	apiServer *http.Server
@@ -584,7 +584,7 @@ func (g *Gateway) cleanupExpiredSessions() {
 	for key, session := range g.sessions {
 		if now.Sub(session.LastActive) > g.config.SessionTimeout {
 			if g.onSessionEnd != nil {
-				g.onSessionEnd(*session)
+				g.onSessionEnd(session)
 			}
 			delete(g.sessions, key)
 		}
@@ -605,7 +605,7 @@ func (g *Gateway) removeOldestSession() {
 
 	if oldest != nil {
 		if g.onSessionEnd != nil {
-			g.onSessionEnd(*oldest)
+			g.onSessionEnd(oldest)
 		}
 		delete(g.sessions, oldestKey)
 	}
@@ -630,7 +630,7 @@ func (g *Gateway) ResetSession(userID, platform string) {
 
 	if session, exists := g.sessions[key]; exists {
 		if g.onSessionEnd != nil {
-			g.onSessionEnd(*session)
+			g.onSessionEnd(session)
 		}
 		delete(g.sessions, key)
 	}
@@ -640,13 +640,13 @@ func (g *Gateway) ResetSession(userID, platform string) {
 }
 
 // ListSessions returns all active sessions
-func (g *Gateway) ListSessions() []Session {
+func (g *Gateway) ListSessions() []*Session {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	sessions := make([]Session, 0, len(g.sessions))
+	sessions := make([]*Session, 0, len(g.sessions))
 	for _, s := range g.sessions {
-		sessions = append(sessions, *s)
+		sessions = append(sessions, s)
 	}
 	return sessions
 }
@@ -744,7 +744,7 @@ func (g *Gateway) SetMessageHandler(handler func(Message)) {
 }
 
 // SetSessionEndHandler sets the session end handler callback
-func (g *Gateway) SetSessionEndHandler(handler func(Session)) {
+func (g *Gateway) SetSessionEndHandler(handler func(*Session)) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.onSessionEnd = handler
