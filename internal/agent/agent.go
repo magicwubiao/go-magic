@@ -139,6 +139,11 @@ type Agent struct {
 	// Error classifier for intelligent retry
 	errorClassifier *retry.Classifier
 
+	// RepeatedFailureDetector escalates when the same equivalent failure
+	// recurs N times within a window, closing the Hermes Agent Issue #22112
+	// gap where the loop retried silently until the turn cap terminated it.
+	failureDetector *retry.RepeatedFailureDetector
+
 	// Self-reflection mechanism (Hermes-inspired)
 	reflector      *Reflector
 	reflectionCfg  ReflectionConfig
@@ -203,6 +208,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		budget:           budget.Preset("parent"),
 		compressor:       compress.NewCompressor(8000),
 		errorClassifier:  retry.NewClassifier(),
+		failureDetector:  retry.NewRepeatedFailureDetector(retry.DefaultRepeatedFailureConfig()),
 		smartRecovery:    retry.NewSmartRecovery(retry.DefaultSmartRecoveryConfig()),
 	}
 
@@ -267,6 +273,16 @@ func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 		if consecutiveLimit > 0 {
 			a.consecutiveLimit = consecutiveLimit
 		}
+	}
+}
+
+// WithRepeatedFailureDetector installs a custom repeated-failure detector. Pass
+// nil to disable escalation. When enabled, the agent halts with a structured
+// diagnostic once the same equivalent failure recurs Threshold times within
+// Window, instead of silently retrying until the turn cap (Hermes #22112).
+func WithRepeatedFailureDetector(d *retry.RepeatedFailureDetector) AgentOption {
+	return func(a *Agent) {
+		a.failureDetector = d
 	}
 }
 
@@ -789,6 +805,17 @@ Please provide a comprehensive, well-structured final response based on these su
 			return "", fmt.Errorf("hook rejected: %s", decision.Reason)
 		}
 
+		// Defensive: enforce message alternation before sending to the
+		// provider. Providers reject malformed histories (two assistants in a
+		// row, a tool message without a preceding assistant tool_call) with
+		// opaque 400 errors. Sanitizing here turns those into a clean,
+		// best-effort repair so the loop self-corrects instead of burning a
+		// retry (Hermes-style pre-provider validation).
+		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
+			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			req.Messages = SanitizeMessageHistory(req.Messages)
+		}
+
 		// Use ChatWithTools for OpenAI provider if tools are available
 		var resp *provider.ChatResponse
 		type openAIlike interface {
@@ -1099,6 +1126,17 @@ Please provide a comprehensive, well-structured final response based on these su
 			return "", fmt.Errorf("hook rejected: %s", decision.Reason)
 		}
 
+		// Defensive: enforce message alternation before sending to the
+		// provider. Providers reject malformed histories (two assistants in a
+		// row, a tool message without a preceding assistant tool_call) with
+		// opaque 400 errors. Sanitizing here turns those into a clean,
+		// best-effort repair so the loop self-corrects instead of burning a
+		// retry (Hermes-style pre-provider validation).
+		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
+			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			req.Messages = SanitizeMessageHistory(req.Messages)
+		}
+
 		// Use ChatWithTools for OpenAI provider if tools are available
 		var resp *provider.ChatResponse
 		type openAIlike interface {
@@ -1117,14 +1155,23 @@ Please provide a comprehensive, well-structured final response based on these su
 		if err != nil {
 			lastErr = err
 			// Use error classifier for intelligent retry
+			var classified *retry.ClassifiedError
 			if a.errorClassifier != nil {
-				ce := a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
-				strategy := retry.GetRecoveryStrategy(ce, 1)
+				classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+				strategy := retry.GetRecoveryStrategy(classified, 1)
 				if strategy.Abort {
 					return "", fmt.Errorf("non-retryable error: %w", err)
 				}
 				if strategy.Delay > 0 {
 					time.Sleep(strategy.Delay)
+				}
+			}
+			// Repeated-failure escalation: halt with a structured diagnostic
+			// instead of silently retrying until the turn cap (Hermes #22112).
+			if a.failureDetector != nil {
+				if esc := a.failureDetector.Record(classified, "", err.Error()); esc != nil {
+					a.Emit(bus.EventKindError, esc.Error())
+					return "", esc
 				}
 			}
 			a.Emit(bus.EventKindError, err.Error())
@@ -1321,9 +1368,22 @@ Please provide a comprehensive, well-structured final response based on these su
 						})
 					}
 
-					// Record blocker for reflection
-					if a.reflector != nil {
+					// Record blocker for reflection — but only for non-transient
+					// failures. Transient failures (timeouts, rate limits, 5xx)
+					// reflect environment conditions, not a flawed approach, and
+					// must not be encoded as permanent lessons (Hermes #6051).
+					classified := a.errorClassifier.Classify(toolErr, 0, a.provider.Name(), "")
+					if a.reflector != nil && !classified.IsTransient() {
 						a.reflector.RecordBlocker(fmt.Sprintf("%s: %s", toolName, errInfo.RootCause))
+					}
+
+					// Repeated-failure escalation for tools: halt with a structured
+					// diagnostic instead of looping on the same failing tool call.
+					if a.failureDetector != nil {
+						if esc := a.failureDetector.Record(classified, toolName, errInfo.ErrorMessage); esc != nil {
+							a.Emit(bus.EventKindToolError, esc.Error())
+							return "", esc
+						}
 					}
 
 					// Handle plan failure
@@ -1333,6 +1393,11 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			} else if a.smartRecovery != nil && toolErr == nil {
 				a.smartRecovery.RecordSuccess(tc.GetToolName())
+				// A successful call resets this tool's failure streak so a later
+				// unrelated failure does not unfairly trigger escalation.
+				if a.failureDetector != nil {
+					a.failureDetector.ResetTool(tc.GetToolName())
+				}
 			}
 		}
 
@@ -1974,6 +2039,11 @@ func (a *Agent) Reset() {
 	a.cacheReadTokens = 0
 	a.toolCallHistory = nil
 	a.toolCallCount = make(map[string]int)
+	// Clear the repeated-failure memory so prior-task failures do not poison a
+	// new conversation's escalation decisions.
+	if a.failureDetector != nil {
+		a.failureDetector.Reset()
+	}
 }
 
 // GetHistory returns the conversation history

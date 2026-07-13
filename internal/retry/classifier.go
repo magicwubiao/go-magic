@@ -74,6 +74,28 @@ func (ce *ClassifiedError) IsRetryable() bool {
 	return ce.Retryable && !ce.ShouldAbort
 }
 
+// IsTransient returns true if this failure is transient (timeouts, rate limits,
+// server-side 5xx, provider overload). Transient failures must NOT be encoded
+// as permanent skill or reflection lessons — they reflect environment conditions,
+// not a flawed approach. This closes the Hermes Agent Issue #6051 pattern where
+// transient failures were being captured as permanent "this tool doesn't work"
+// lessons. Callers that gate skill creation / blocker recording on this method
+// avoid poisoning procedural memory with ephemeral noise.
+func (ce *ClassifiedError) IsTransient() bool {
+	if ce == nil {
+		return false
+	}
+	switch ce.Reason {
+	case FailoverTimeout,
+		FailoverRateLimit,
+		FailoverOverloaded,
+		FailoverServerError:
+		return true
+	default:
+		return false
+	}
+}
+
 // String returns a human-readable description.
 func (ce *ClassifiedError) String() string {
 	return fmt.Sprintf("[%s] %s (retryable=%v, compress=%v, fallback=%v)",
