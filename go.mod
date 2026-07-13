@@ -24,7 +24,7 @@ require (
 	github.com/spf13/viper v1.20.0-alpha.6
 	go.mau.fi/whatsmeow v0.0.0-20260531220358-9ff5508a26c2
 	golang.org/x/crypto v0.52.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.30.2
