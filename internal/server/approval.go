@@ -67,20 +67,25 @@ func (s *Server) handleApprovalWhitelist(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if err := mgr.AddToWhitelist(req.Pattern); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		jsonResponse(w, map[string]bool{"success": true})
 
 	case http.MethodDelete:
-		var req struct {
-			Pattern string `json:"pattern"`
+		// 同时支持 query param 和 body，便于不同客户端调用
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			var req struct {
+				Pattern string `json:"pattern"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			pattern = req.Pattern
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-		if err := mgr.RemoveFromWhitelist(req.Pattern); err != nil {
+		if err := mgr.RemoveFromWhitelist(pattern); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -107,15 +112,24 @@ func (s *Server) handleApprovalPatternsDenied(w http.ResponseWriter, r *http.Req
 		})
 
 	case http.MethodDelete:
-		var req struct {
-			Pattern string `json:"pattern"`
+		// 同时支持 query param 和 body
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			var req struct {
+				Pattern string `json:"pattern"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			pattern = req.Pattern
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		// 直接删除该 pattern 记录，避免 Approve 副作用（如新增 trusted pattern、记录 history）。
+		// 之前的实现用 Approve 来"抵消" denied，反而会把命令加入 trusted，造成安全风险。
+		if err := mgr.RemovePattern(pattern); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Remove from denied patterns by approving it
-		mgr.Approve(&approval.ApprovalRequest{Command: req.Pattern})
 		jsonResponse(w, map[string]bool{"success": true})
 
 	default:
@@ -139,20 +153,37 @@ func (s *Server) handleApprovalPatternsTrusted(w http.ResponseWriter, r *http.Re
 		})
 
 	case http.MethodDelete:
-		var req struct {
-			Pattern string `json:"pattern"`
+		// 同时支持 query param 和 body
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			var req struct {
+				Pattern string `json:"pattern"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			pattern = req.Pattern
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		// 直接删除该 pattern 记录，避免 Deny 副作用（新增 denied pattern + history 记录）。
+		if err := mgr.RemovePattern(pattern); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Remove from trusted patterns by denying it
-		mgr.Deny(&approval.ApprovalRequest{Command: req.Pattern})
 		jsonResponse(w, map[string]bool{"success": true})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// isValidStrategy 校验 strategy 是否合法。
+func isValidStrategy(s string) bool {
+	switch s {
+	case "manual", "auto", "smart", "whitelist":
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleApprovalStrategy(w http.ResponseWriter, r *http.Request) {
@@ -171,19 +202,14 @@ func (s *Server) handleApprovalStrategy(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		switch req.Strategy {
-		case "manual":
-			mgr.SetStrategy(approval.StrategyManual)
-		case "auto":
-			mgr.SetStrategy(approval.StrategyAutoApprove)
-		case "smart":
-			mgr.SetStrategy(approval.StrategySmart)
-		case "whitelist":
-			mgr.SetStrategy(approval.StrategyWhitelist)
-		default:
+		if !isValidStrategy(req.Strategy) {
 			http.Error(w, "Invalid strategy. Must be: manual, auto, smart, or whitelist", http.StatusBadRequest)
 			return
 		}
+		mgr.SetStrategy(approval.Strategy(req.Strategy))
+
+		// 持久化到主配置文件，避免重启丢失
+		s.syncApprovalToMainConfig(mgr)
 
 		jsonResponse(w, map[string]bool{"success": true})
 		return
@@ -284,6 +310,8 @@ func (s *Server) handleApprovalDenied(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleApprovalSettings 同时承担 GET（返回当前设置）和 PUT（更新设置）。
+// GET 路径与 handleApprovalStatus 行为一致，二者路由不同但返回字段相同。
 func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) {
 	mgr := s.getApprovalManager()
 	if mgr == nil {
@@ -293,25 +321,8 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 
 	switch r.Method {
 	case http.MethodGet:
-		// GET current settings
-		cfg := mgr.GetConfig()
-		stats := mgr.GetStats()
-		jsonResponse(w, map[string]interface{}{
-			"strategy":             cfg.Strategy,
-			"enableLearning":       cfg.EnableLearning,
-			"cliConfirm":           cfg.EnableCLIConfirm,
-			"trustThreshold":       cfg.TrustThreshold,
-			"whitelist":            mgr.GetWhitelist(),
-			"trusted_patterns":     stats.TrustedPatterns,
-			"denied_patterns":      stats.DeniedPatterns,
-			"total_requests":       stats.TotalRequests,
-			"auto_approved":        stats.AutoApproved,
-			"user_approved":        stats.UserApproved,
-			"user_denied":          stats.UserDenied,
-			"avg_response_time_ms": stats.AvgResponseTime,
-		})
+		s.respondApprovalSettings(w, mgr)
 	case http.MethodPut:
-		// PUT update settings
 		var req struct {
 			Strategy       string `json:"strategy"`
 			TrustThreshold int    `json:"trust_threshold"`
@@ -322,25 +333,52 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		// Update strategy
+		// 校验 strategy 合法性（空字符串表示不更新）
+		if req.Strategy != "" && !isValidStrategy(req.Strategy) {
+			http.Error(w, "Invalid strategy. Must be: manual, auto, smart, or whitelist", http.StatusBadRequest)
+			return
+		}
+
+		// 使用 SetXxx 方法更新，避免修改 GetConfig() 返回的局部拷贝（GetConfig 现在返回值类型）。
 		if req.Strategy != "" {
 			mgr.SetStrategy(approval.Strategy(req.Strategy))
 		}
-		// Update other settings
-		cfg := mgr.GetConfig()
 		if req.TrustThreshold > 0 {
-			cfg.TrustThreshold = req.TrustThreshold
+			mgr.SetTrustThreshold(req.TrustThreshold)
 		}
-		cfg.EnableCLIConfirm = req.CLIPrompt
-		cfg.EnableLearning = req.EnableLearning
+		mgr.SetEnableCLIConfirm(req.CLIPrompt)
+		mgr.SetEnableLearning(req.EnableLearning)
 
-		// Sync to main config file (the single source of truth)
+		// 持久化到主配置文件
 		s.syncApprovalToMainConfig(mgr)
 
 		jsonResponse(w, map[string]bool{"success": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// respondApprovalSettings 统一构造 settings/status 响应体，避免两处字段不一致。
+// JSON 字段统一使用 snake_case，与 ApprovalRecord 等其它接口保持一致。
+func (s *Server) respondApprovalSettings(w http.ResponseWriter, mgr *approval.Manager) {
+	cfg := mgr.GetConfig()
+	stats := mgr.GetStats()
+	jsonResponse(w, map[string]interface{}{
+		"strategy":             cfg.Strategy,
+		"enable_learning":      cfg.EnableLearning,
+		"cli_confirm":          cfg.EnableCLIConfirm,
+		"trust_threshold":      cfg.TrustThreshold,
+		"approval_timeout":     cfg.ApprovalTimeout,
+		"enable_whitelist":     cfg.EnableWhitelist,
+		"whitelist":            mgr.GetWhitelist(),
+		"trusted_patterns":     stats.TrustedPatterns,
+		"denied_patterns":      stats.DeniedPatterns,
+		"total_requests":       stats.TotalRequests,
+		"auto_approved":        stats.AutoApproved,
+		"user_approved":        stats.UserApproved,
+		"user_denied":          stats.UserDenied,
+		"avg_response_time_ms": stats.AvgResponseTime,
+	})
 }
 
 func (s *Server) handleApprovalTrusted(w http.ResponseWriter, r *http.Request) {
@@ -387,6 +425,9 @@ func (s *Server) handleApprovalStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// syncApprovalToMainConfig 将 approval.Manager 中的配置回写到主配置文件，
+// 使 strategy / trust_threshold / enable_learning / cli_confirm / approval_timeout
+// 等可在重启后保留。其它字段（dangerous_patterns 等）由 DefaultConfig 维护，不在此同步。
 func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 	if s.cfg == nil {
 		return
@@ -424,7 +465,18 @@ func (s *Server) handleApprovalPendingByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		mgr.ResolveWebApproval(id, req.Approved, req.Reason)
+		// ResolveWebApproval 现在返回 error，需要根据错误类型返回合适的状态码。
+		if err := mgr.ResolveWebApproval(id, req.Approved, req.Reason); err != nil {
+			// 区分 not found（404）与 expired（410）；其它统一 500
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+			} else if strings.Contains(err.Error(), "expired") {
+				http.Error(w, err.Error(), http.StatusGone)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
 		jsonResponse(w, map[string]bool{"success": true})
 		return
 	}
@@ -448,28 +500,12 @@ func (s *Server) handleApprovalPendingByID(w http.ResponseWriter, r *http.Reques
 	http.Error(w, "Pending approval not found", http.StatusNotFound)
 }
 
+// handleApprovalStatus 返回当前审批系统状态（与 settings GET 等价，保留独立路由以兼容前端）。
 func (s *Server) handleApprovalStatus(w http.ResponseWriter, r *http.Request) {
 	mgr := s.getApprovalManager()
 	if mgr == nil {
 		jsonResponse(w, map[string]interface{}{"error": "approval system not available"})
 		return
 	}
-
-	cfg := mgr.GetConfig()
-	stats := mgr.GetStats()
-
-	jsonResponse(w, map[string]interface{}{
-		"strategy":             cfg.Strategy,
-		"enableLearning":       cfg.EnableLearning,
-		"cliConfirm":           cfg.EnableCLIConfirm,
-		"trustThreshold":       cfg.TrustThreshold,
-		"whitelist":            mgr.GetWhitelist(),
-		"trusted_patterns":     stats.TrustedPatterns,
-		"denied_patterns":      stats.DeniedPatterns,
-		"total_requests":       stats.TotalRequests,
-		"auto_approved":        stats.AutoApproved,
-		"user_approved":        stats.UserApproved,
-		"user_denied":          stats.UserDenied,
-		"avg_response_time_ms": stats.AvgResponseTime,
-	})
+	s.respondApprovalSettings(w, mgr)
 }

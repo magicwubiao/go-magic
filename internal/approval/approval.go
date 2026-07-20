@@ -228,6 +228,10 @@ type ApprovalRequest struct {
 	Category   string // risk category from assessment
 	Reason     string
 	Timestamp  time.Time
+	// Context 携带与命令相关的可读上下文片段，例如 execute_code 的源码预览、
+	// file_edit 的 diff 摘要等。审批 UI 可以展示该字段，避免审批者只看到
+	// "execute_code python (N bytes)" 这样不透明的描述。
+	Context string
 }
 
 // ApprovalResult is the result of an approval decision.
@@ -270,11 +274,17 @@ func DefaultConfig() *ApprovalConfig {
 		DangerousPatterns: []string{
 			`rm\s+-rf\s+/(?:\*|$)`,
 			`rm\s+-rf\s+/\*\s*$`,
+			`rm\s+-rf\s+/(?:home|usr|var|etc|boot|root|bin|sbin|lib|proc|sys|dev)(?:/|\s|$)`,
+			`rm\s+-rf\s+~(?:\s|$)`,
+			`rm\s+-rf\s+\$HOME`,
 			`dd\s+if=.*of=/dev/sd`,
 			`mkfs\.`,
 			`shutdown\s+-h\s+now`,
 			`reboot`,
 			`:\(\)\{:\|\:&\};:`,
+			`>\s*/dev/sda`,
+			`chmod\s+-R\s+777\s+/`,
+			`chown\s+-R\s+.*\s+/`,
 		},
 		AllowedPatterns: []string{
 			`^(ls|pwd|whoami|echo|date|cat|head|tail|grep|find|which|file|stat|env|id|uname|hostname|df|du|free|ps)(\s|$)`,
@@ -370,14 +380,19 @@ func parseCommand(cmd string) *ParsedCommand {
 	trimmed := strings.TrimSpace(cmd)
 	pc.RawArgs = trimmed
 
-	// Detect pipes and chains
-	if strings.Contains(trimmed, "|") {
-		pc.HasPipe = true
-		pc.PipeSegments = splitSegments(trimmed, '|')
-	}
-	if strings.Contains(trimmed, "&&") || strings.Contains(trimmed, "||") || strings.Contains(trimmed, "; ") {
+	// 检测链式命令（&&、||、;），必须在管道检测之前处理
+	if strings.Contains(trimmed, "&&") || strings.Contains(trimmed, "||") || strings.Contains(trimmed, ";") {
 		pc.HasChain = true
 		pc.ChainSegments = splitChainSegments(trimmed)
+	}
+
+	// 检测管道（单 |），排除 || 逻辑或
+	// 先移除 || 后再检查是否还有单个 |
+	strippedOr := strings.ReplaceAll(trimmed, "||", "\x00\x00")
+	if strings.Contains(strippedOr, "|") {
+		pc.HasPipe = true
+		// 用移除 || 后的字符串分割，再映射回原始段
+		pc.PipeSegments = splitSegments(strippedOr, '|')
 	}
 
 	// Tokenize the first segment (or the whole command if no pipes)
@@ -418,6 +433,7 @@ func parseCommand(cmd string) *ParsedCommand {
 }
 
 // tokenizeShell performs basic shell tokenization respecting quotes.
+// 引号字符本身不会被写入 token，只保留引号内的内容。
 func tokenizeShell(s string) []string {
 	var tokens []string
 	var current strings.Builder
@@ -437,13 +453,17 @@ func tokenizeShell(s string) []string {
 		case '\'':
 			if !inDouble {
 				inSingle = !inSingle
+				// 不写入引号字符本身
+			} else {
+				current.WriteRune(ch)
 			}
-			current.WriteRune(ch)
 		case '"':
 			if !inSingle {
 				inDouble = !inDouble
+				// 不写入引号字符本身
+			} else {
+				current.WriteRune(ch)
 			}
-			current.WriteRune(ch)
 		case ' ', '\t':
 			if !inSingle && !inDouble {
 				if current.Len() > 0 {
@@ -617,15 +637,20 @@ var sensitiveDirectories = []string{
 }
 
 // bypassPatterns detect attempts to evade approval checks.
+// 仅匹配真正可疑的绕过模式，避免对正常命令的大量误报。
 var bypassPatterns = map[string]string{
-	`base64\s+-d`:           "encoding",
-	`xxd\s+-r`:              "encoding",
-	`\$\{?\w+\}?`:           "variable",
-	`\$\(\s*\w+`:            "variable_subshell",
-	`\.\./`:                 "path_traversal",
-	`/proc/self/`:           "path_traversal",
-	`eval\s+`:               "encoding",
-	`echo\s+.*\|\s*(ba)?sh`: "encoding",
+	`base64\s+-d`:            "encoding",
+	`xxd\s+-r`:               "encoding",
+	`eval\s+\$`:              "eval_var",
+	`eval\s*\$\(`:            "eval_subshell",
+	`echo\s+.*\|\s*(ba)?sh`:  "pipe_to_shell",
+	`curl\s+.*\|\s*(ba)?sh`:  "curl_pipe_shell",
+	`wget\s+.*\|\s*(ba)?sh`:  "wget_pipe_shell",
+	`\$\(\s*curl`:            "curl_subshell",
+	`\$\(\s*wget`:            "wget_subshell",
+	`/proc/self/fd`:          "proc_fd_access",
+	`>\s*/dev/(tcp|udp)`:     "dev_network",
+	`python\s+-c\s+import\s`: "python_import_c",
 }
 
 // calculateRiskLevel assesses the risk of a command and returns a RiskAssessment.
@@ -689,11 +714,34 @@ func (m *Manager) assessRisk(cmd string) *RiskAssessment {
 	}
 
 	// --- Environment awareness: sensitive directory ---
+	// 检查命令参数中是否访问敏感目录，而非检查命令字符串前缀
 	if pc.Binary != "" {
+		for _, arg := range pc.Args {
+			for _, sd := range sensitiveDirectories {
+				if strings.HasPrefix(arg, sd) {
+					ra.Factors = append(ra.Factors, "sensitive_directory:"+sd)
+					ra.Score += 20
+					break
+				}
+			}
+		}
+		// 也检查完整命令中是否有空格后跟敏感目录路径
 		for _, sd := range sensitiveDirectories {
-			if strings.HasPrefix(lower, sd) || strings.Contains(lower, " "+sd) {
+			if strings.Contains(lower, " "+sd) || strings.Contains(lower, "="+sd) {
 				ra.Factors = append(ra.Factors, "sensitive_directory:"+sd)
 				ra.Score += 20
+				break
+			}
+		}
+	}
+
+	// --- 重定向到敏感文件检测 ---
+	if strings.Contains(lower, ">") || strings.Contains(lower, ">>") {
+		sensitiveTargets := []string{"/etc/passwd", "/etc/shadow", "/etc/sudoers", "/boot/", "/sys/", "/proc/"}
+		for _, st := range sensitiveTargets {
+			if strings.Contains(lower, st) {
+				ra.Factors = append(ra.Factors, "redirect_to_sensitive:"+st)
+				ra.Score += 40
 				break
 			}
 		}
@@ -721,12 +769,14 @@ func (m *Manager) assessRisk(cmd string) *RiskAssessment {
 func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error) {
 	req.Timestamp = time.Now()
 	start := time.Now()
+	// 在入口处快照配置，避免后续多处解锁读 m.config 造成的竞态。
+	cfg := m.GetConfig()
 
 	// 1. Check dangerous patterns (always deny)
 	if m.isDangerous(req.Command) {
 		result := &ApprovalResult{
 			Approved:  false,
-			Strategy:  m.config.Strategy,
+			Strategy:  cfg.Strategy,
 			Reason:    "Command matches dangerous pattern",
 			RiskLevel: RiskCritical,
 		}
@@ -735,7 +785,7 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 	}
 
 	// 2. Check whitelist
-	if m.config.EnableWhitelist && m.isWhitelisted(req.Command) {
+	if cfg.EnableWhitelist && m.isWhitelisted(req.Command) {
 		result := &ApprovalResult{
 			Approved: true,
 			Strategy: StrategyWhitelist,
@@ -752,9 +802,12 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 	req.Category = assessment.Category
 
 	// 4. Check learned patterns
-	if m.config.EnableLearning {
+	if cfg.EnableLearning {
 		hash := m.hashPattern(req.Command)
-		if pattern, exists := m.patterns[hash]; exists {
+		m.mu.RLock()
+		pattern, exists := m.patterns[hash]
+		m.mu.RUnlock()
+		if exists {
 			if pattern.Trusted {
 				result := &ApprovalResult{
 					Approved:  true,
@@ -767,7 +820,7 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 				m.recordDecision(req, result, start)
 				return result, nil
 			}
-			if pattern.Action == "denied" && pattern.Count >= m.config.DenylistThreshold {
+			if pattern.Action == "denied" && pattern.Count >= cfg.DenylistThreshold {
 				result := &ApprovalResult{
 					Approved: false,
 					Strategy: StrategySmart,
@@ -782,11 +835,19 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 
 	// 5. Strategy-based decision
 	var result *ApprovalResult
-	switch m.config.Strategy {
+	switch cfg.Strategy {
 	case StrategyAutoApprove:
 		result = m.autoApprove(req)
 	case StrategyManual:
 		result = m.manualApprove(req)
+	case StrategyWhitelist:
+		// 白名单策略：仅放行白名单命令（已在第2步检查），其余一律拒绝
+		result = &ApprovalResult{
+			Approved: false,
+			Strategy: StrategyWhitelist,
+			Reason:   "Command not in whitelist",
+			AskUser:  false,
+		}
 	case StrategySmart:
 		result = m.smartApprove(req, assessment)
 	default:
@@ -810,7 +871,10 @@ func (m *Manager) autoApprove(req *ApprovalRequest) *ApprovalResult {
 
 // manualApprove requires explicit user confirmation.
 func (m *Manager) manualApprove(req *ApprovalRequest) *ApprovalResult {
-	if !m.config.EnableCLIConfirm && req.RiskLevel >= RiskHigh {
+	m.mu.RLock()
+	enableCLI := m.config.EnableCLIConfirm
+	m.mu.RUnlock()
+	if !enableCLI && req.RiskLevel >= RiskHigh {
 		return &ApprovalResult{
 			Approved: false,
 			Strategy: StrategyManual,
@@ -874,9 +938,15 @@ func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment)
 	}
 
 	// Medium risk: auto-approve if pattern known and approved before
-	if req.RiskLevel == RiskMedium && m.config.EnableLearning {
+	m.mu.RLock()
+	enableLearning := m.config.EnableLearning
+	m.mu.RUnlock()
+	if req.RiskLevel == RiskMedium && enableLearning {
 		hash := m.hashPattern(req.Command)
-		if pattern, exists := m.patterns[hash]; exists {
+		m.mu.RLock()
+		pattern, exists := m.patterns[hash]
+		m.mu.RUnlock()
+		if exists {
 			if pattern.Action == "approved" && pattern.Count >= 2 {
 				return &ApprovalResult{
 					Approved: true,
@@ -924,7 +994,11 @@ func (m *Manager) smartApprove(req *ApprovalRequest, assessment *RiskAssessment)
 
 // Approve records a user approval decision.
 func (m *Manager) Approve(req *ApprovalRequest) error {
-	if !m.config.EnableLearning {
+	m.mu.RLock()
+	enableLearning := m.config.EnableLearning
+	trustThreshold := m.config.TrustThreshold
+	m.mu.RUnlock()
+	if !enableLearning {
 		return nil
 	}
 
@@ -944,9 +1018,26 @@ func (m *Manager) Approve(req *ApprovalRequest) error {
 	pattern.Action = "approved"
 	pattern.Count++
 	pattern.LastSeen = time.Now()
-	pattern.SessionIDs = append(pattern.SessionIDs, req.SessionID)
 
-	if pattern.Count >= m.config.TrustThreshold {
+	// 限制 SessionIDs 长度，避免无限增长
+	// 只添加未记录的 session ID，且总数不超过 100
+	if req.SessionID != "" {
+		alreadyExists := false
+		for _, sid := range pattern.SessionIDs {
+			if sid == req.SessionID {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
+			pattern.SessionIDs = append(pattern.SessionIDs, req.SessionID)
+			if len(pattern.SessionIDs) > 100 {
+				pattern.SessionIDs = pattern.SessionIDs[len(pattern.SessionIDs)-100:]
+			}
+		}
+	}
+
+	if pattern.Count >= trustThreshold {
 		pattern.Trusted = true
 	}
 
@@ -957,12 +1048,23 @@ func (m *Manager) Approve(req *ApprovalRequest) error {
 
 	// Save async to avoid blocking
 	go m.savePatterns()
+
+	// 记录历史，使 stats 完整
+	m.recordDecision(req, &ApprovalResult{
+		Approved: true,
+		Strategy: StrategySmart,
+		Reason:   "User approved",
+		Trusted:  pattern.Trusted,
+	}, time.Now())
 	return nil
 }
 
 // Deny records a user denial decision.
 func (m *Manager) Deny(req *ApprovalRequest) error {
-	if !m.config.EnableLearning {
+	m.mu.RLock()
+	enableLearning := m.config.EnableLearning
+	m.mu.RUnlock()
+	if !enableLearning {
 		return nil
 	}
 
@@ -991,11 +1093,38 @@ func (m *Manager) Deny(req *ApprovalRequest) error {
 
 	// Save async to avoid blocking
 	go m.savePatterns()
+
+	// 记录历史，使 stats 完整
+	m.recordDecision(req, &ApprovalResult{
+		Approved: false,
+		Strategy: StrategySmart,
+		Reason:   "User denied",
+	}, time.Now())
 	return nil
 }
 
 // AddToWhitelist adds a command pattern to whitelist.
+// 校验 pattern，禁止过宽模式（如 .*）以防全局绕过审批。
 func (m *Manager) AddToWhitelist(pattern string) error {
+	// 校验 pattern 不为空
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("whitelist pattern cannot be empty")
+	}
+	// 禁止过宽模式
+	lower := strings.ToLower(pattern)
+	dangerous := []string{".*", "^.*$", ".*", "^.", ".+"}
+	for _, d := range dangerous {
+		if lower == d {
+			return fmt.Errorf("pattern %q is too broad and would bypass all approvals", pattern)
+		}
+	}
+	// 校验正则可编译且不会灾难性回溯
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex pattern: %w", err)
+	}
+	_ = re // 编译成功即可
+
 	m.mu.Lock()
 	m.whitelist[pattern] = true
 	m.mu.Unlock()
@@ -1003,6 +1132,29 @@ func (m *Manager) AddToWhitelist(pattern string) error {
 	m.saveMu.Lock()
 	defer m.saveMu.Unlock()
 	return m.saveWhitelist()
+}
+
+// RemovePattern 从 patterns 中直接删除指定模式的记录（不触发 Approve/Deny 副作用）。
+func (m *Manager) RemovePattern(pattern string) error {
+	hash := m.hashPattern(pattern)
+	m.mu.Lock()
+	delete(m.patterns, hash)
+	m.patternsDirty = true
+	m.mu.Unlock()
+
+	go m.savePatterns()
+	return nil
+}
+
+// RemovePatternByHash 按 hash 从 patterns 中删除记录。
+func (m *Manager) RemovePatternByHash(hash string) error {
+	m.mu.Lock()
+	delete(m.patterns, hash)
+	m.patternsDirty = true
+	m.mu.Unlock()
+
+	go m.savePatterns()
+	return nil
 }
 
 // RemoveFromWhitelist removes a pattern from whitelist.
@@ -1016,11 +1168,11 @@ func (m *Manager) RemoveFromWhitelist(pattern string) error {
 	return m.saveWhitelist()
 }
 
-// GetConfig returns the current approval configuration.
-func (m *Manager) GetConfig() *ApprovalConfig {
+// GetConfig 返回当前审批配置的拷贝（调用方可安全修改，不影响内部状态）。
+func (m *Manager) GetConfig() ApprovalConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.config
+	return *m.config
 }
 
 // SetStrategy updates the approval strategy (in-memory only; caller must persist to main config).
@@ -1028,6 +1180,34 @@ func (m *Manager) SetStrategy(s Strategy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config.Strategy = s
+}
+
+// SetTrustThreshold 更新信任阈值。
+func (m *Manager) SetTrustThreshold(t int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.TrustThreshold = t
+}
+
+// SetEnableLearning 更新学习开关。
+func (m *Manager) SetEnableLearning(b bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.EnableLearning = b
+}
+
+// SetEnableCLIConfirm 更新 CLI 确认开关。
+func (m *Manager) SetEnableCLIConfirm(b bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.EnableCLIConfirm = b
+}
+
+// SetApprovalTimeout 更新审批超时（秒）。
+func (m *Manager) SetApprovalTimeout(t int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.ApprovalTimeout = t
 }
 
 // SaveConfig is a no-op; config is persisted via the main config file.
@@ -1086,6 +1266,7 @@ type PatternMatchResult struct {
 }
 
 // matchPattern matches a command against a pattern with variable extraction.
+// 对于白名单 glob 模式（含 * 或 ?），将 glob 转为正则；对于纯正则，直接编译。
 func (m *Manager) matchPattern(cmd, pattern string) *PatternMatchResult {
 	result := &PatternMatchResult{
 		Matched:   false,
@@ -1093,40 +1274,21 @@ func (m *Manager) matchPattern(cmd, pattern string) *PatternMatchResult {
 		Variables: make(map[string]string),
 	}
 
-	if strings.Contains(pattern, "*") || strings.Contains(pattern, "?") {
-		regexPattern := regexp.QuoteMeta(pattern)
-		regexPattern = strings.ReplaceAll(regexPattern, `\*`, `.*`)
-		regexPattern = strings.ReplaceAll(regexPattern, `\?`, `.`)
-		regexPattern = `^` + regexPattern + `$`
-
-		re, err := regexp.Compile(regexPattern)
-		if err != nil {
-			return result
-		}
-		if re.MatchString(cmd) {
+	// 纯正则匹配（不转义），用于 AllowedPatterns 等正则模式
+	re, err := regexp.Compile(`^` + pattern + `$`)
+	if err != nil {
+		// 正则编译失败，回退到字面量匹配
+		if pattern == cmd {
 			result.Matched = true
-			matches := re.FindStringSubmatch(cmd)
-			for i, name := range re.SubexpNames() {
-				if i > 0 && i < len(matches) && name != "" {
-					result.Variables[name] = matches[i]
-				}
-			}
 		}
-	} else {
-		re, err := regexp.Compile(`^` + pattern + `$`)
-		if err != nil {
-			if pattern == cmd {
-				result.Matched = true
-			}
-			return result
-		}
-		if re.MatchString(cmd) {
-			result.Matched = true
-			matches := re.FindStringSubmatch(cmd)
-			for i, name := range re.SubexpNames() {
-				if i > 0 && i < len(matches) && name != "" {
-					result.Variables[name] = matches[i]
-				}
+		return result
+	}
+	if re.MatchString(cmd) {
+		result.Matched = true
+		matches := re.FindStringSubmatch(cmd)
+		for i, name := range re.SubexpNames() {
+			if i > 0 && i < len(matches) && name != "" {
+				result.Variables[name] = matches[i]
 			}
 		}
 	}
@@ -1144,9 +1306,42 @@ func (m *Manager) matchAnyPattern(cmd string, patterns []string) *PatternMatchRe
 	return &PatternMatchResult{Matched: false}
 }
 
-// isDangerous checks if command matches dangerous patterns.
+// matchDangerousPattern 检查命令是否匹配危险模式（无锚点正则，匹配子串即可）。
+func (m *Manager) matchDangerousPattern(cmd string) bool {
+	m.mu.RLock()
+	patterns := m.config.DangerousPatterns
+	m.mu.RUnlock()
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDangerous 检查命令（含管道和链式命令的每个段）是否匹配危险模式。
 func (m *Manager) isDangerous(cmd string) bool {
-	return m.matchAnyPattern(cmd, m.config.DangerousPatterns).Matched
+	// 检查完整命令
+	if m.matchDangerousPattern(cmd) {
+		return true
+	}
+	// 解析管道和链式段，逐段检查
+	pc := parseCommand(cmd)
+	for _, seg := range pc.PipeSegments {
+		if m.matchDangerousPattern(seg) {
+			return true
+		}
+	}
+	for _, seg := range pc.ChainSegments {
+		if m.matchDangerousPattern(seg) {
+			return true
+		}
+	}
+	return false
 }
 
 // isWhitelisted checks if command is whitelisted.
@@ -1164,7 +1359,10 @@ func (m *Manager) isWhitelisted(cmd string) bool {
 
 // isAllowedPattern checks if command matches allowed patterns.
 func (m *Manager) isAllowedPattern(cmd string) bool {
-	return m.matchAnyPattern(cmd, m.config.AllowedPatterns).Matched
+	m.mu.RLock()
+	patterns := append([]string(nil), m.config.AllowedPatterns...)
+	m.mu.RUnlock()
+	return m.matchAnyPattern(cmd, patterns).Matched
 }
 
 // readOnlyCommands are commands that only read data and never modify the system.
@@ -1177,8 +1375,18 @@ var readOnlyCommands = []string{
 }
 
 // isReadOnlyCommand returns true if the command is known to be read-only.
+// 先检查重定向操作符（>, >>, <, tee, dd），有则不是 read-only。
 func (m *Manager) isReadOnlyCommand(cmd string) bool {
 	lower := strings.ToLower(strings.TrimSpace(cmd))
+
+	// 检查重定向操作符 — 有重定向的命令不是 read-only
+	redirPatterns := []string{">", ">>", "<", "<<", "tee", "dd "}
+	for _, rp := range redirPatterns {
+		if strings.Contains(lower, rp) {
+			return false
+		}
+	}
+
 	// Extract the binary (first token)
 	tokens := strings.Fields(lower)
 	if len(tokens) == 0 {
@@ -1200,6 +1408,22 @@ func (m *Manager) isReadOnlyCommand(cmd string) bool {
 			"branch": true, "remote": true, "config": true,
 		}
 		if roGit[tokens[1]] {
+			// git config 只有 --list 或 get 操作才是 read-only
+			if tokens[1] == "config" {
+				hasSet := false
+				for _, t := range tokens[2:] {
+					if t == "--global" || t == "--local" || t == "--system" {
+						continue
+					}
+					if strings.Contains(t, "=") || t == "--add" || t == "--unset" || t == "--replace-all" {
+						hasSet = true
+						break
+					}
+				}
+				if hasSet {
+					return false
+				}
+			}
 			return true
 		}
 	}
@@ -1213,7 +1437,10 @@ func (m *Manager) isReadOnlyCommand(cmd string) bool {
 
 // CLIConfirm prompts user for confirmation in terminal.
 func (m *Manager) CLIConfirm(req *ApprovalRequest) (bool, error) {
-	if !m.config.EnableCLIConfirm {
+	m.mu.RLock()
+	enableCLI := m.config.EnableCLIConfirm
+	m.mu.RUnlock()
+	if !enableCLI {
 		return false, nil
 	}
 
@@ -1231,20 +1458,18 @@ func (m *Manager) CLIConfirm(req *ApprovalRequest) (bool, error) {
 
 	input = strings.TrimSpace(strings.ToLower(input))
 	switch input {
-	case "a", "":
+	case "a":
 		return true, nil
-	case "d":
+	case "d", "": // 空输入默认拒绝，防止误操作
 		return false, nil
 	case "t":
 		m.AddToWhitelist(req.Command)
 		return true, nil
 	case "q":
-		fmt.Println("Exiting...")
-		os.Exit(0)
+		return false, fmt.Errorf("user requested to quit")
 	default:
 		return false, nil
 	}
-	return false, fmt.Errorf("unreachable")
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,12 +1489,21 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 		}
 	}
 
+	// 如果 req.RiskLevel 未设置（危险/白名单早退路径），使用 result.RiskLevel
+	riskLevel := req.RiskLevel
+	if riskLevel < RiskLow || riskLevel > RiskCritical {
+		riskLevel = result.RiskLevel
+	}
+	if riskLevel < RiskLow || riskLevel > RiskCritical {
+		riskLevel = RiskLow
+	}
+
 	record := &ApprovalRecord{
 		ID:         uuid.New().String(),
 		Command:    req.Command,
 		Normalized: normalizeCommand(req.Command),
-		RiskLevel:  req.RiskLevel,
-		RiskScore:  float64(req.RiskLevel) * 25, // simplified score
+		RiskLevel:  riskLevel,
+		RiskScore:  float64(riskLevel) * 25, // simplified score
 		Category:   req.Category,
 		Decision:   decision,
 		Strategy:   result.Strategy,
@@ -1280,20 +1514,23 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 		Timestamp:  time.Now(),
 	}
 
-	// Ensure valid risk level (zero-value means unset → low)
-	if record.RiskLevel < RiskLow || record.RiskLevel > RiskCritical {
-		record.RiskLevel = RiskLow
-	}
-
 	m.mu.Lock()
 	m.history = append(m.history, record)
 	// Keep history bounded to last 10000 records
+	// 用 make + copy 避免底层数组内存泄漏
 	if len(m.history) > 10000 {
-		m.history = m.history[len(m.history)-5000:]
+		newHistory := make([]*ApprovalRecord, 5000)
+		copy(newHistory, m.history[len(m.history)-5000:])
+		m.history = newHistory
 	}
+	m.historyDirty = true
 	m.mu.Unlock()
 
-	_ = m.saveHistory()
+	// 失效 stats 缓存
+	m.invalidateStatsCache()
+
+	// 异步保存历史，避免阻塞热路径
+	go m.saveHistory()
 }
 
 // RecordDecision records a specific approval decision to history (public API).
@@ -1303,6 +1540,10 @@ func (m *Manager) RecordDecision(req *ApprovalRequest, result string, duration i
 		decision = "approved"
 	}
 
+	m.mu.RLock()
+	strategy := m.config.Strategy
+	m.mu.RUnlock()
+
 	record := &ApprovalRecord{
 		ID:         uuid.New().String(),
 		Command:    req.Command,
@@ -1310,7 +1551,7 @@ func (m *Manager) RecordDecision(req *ApprovalRequest, result string, duration i
 		RiskLevel:  req.RiskLevel,
 		RiskScore:  float64(req.RiskLevel) * 25,
 		Decision:   decision,
-		Strategy:   m.config.Strategy,
+		Strategy:   strategy,
 		Reason:     "manual recording",
 		SessionID:  req.SessionID,
 		WorkingDir: req.WorkingDir,
@@ -1457,7 +1698,7 @@ func (m *Manager) invalidateStatsCache() {
 }
 
 // ClearHistory removes approval records older than the given duration.
-// Also cleans up stale session contexts and patterns that no longer have history entries.
+// 同时清理过期的 session 上下文和非 trusted 的 stale patterns。
 func (m *Manager) ClearHistory(olderThan time.Duration) {
 	cutoff := time.Now().Add(-olderThan)
 
@@ -1469,17 +1710,27 @@ func (m *Manager) ClearHistory(olderThan time.Duration) {
 		}
 	}
 	m.history = filtered
+	m.historyDirty = true
 
-	// Clean up session contexts that are older than cutoff
+	// 清理过期的 session 上下文
 	for sid, ctx := range m.sessionContext {
 		if ctx.CreatedAt.Before(cutoff) {
 			delete(m.sessionContext, sid)
 		}
 	}
+
+	// 清理非 trusted 且 LastSeen 早于 cutoff 的 stale patterns
+	for hash, p := range m.patterns {
+		if !p.Trusted && p.LastSeen.Before(cutoff) {
+			delete(m.patterns, hash)
+		}
+	}
+	m.patternsDirty = true
 	m.mu.Unlock()
 
 	m.invalidateStatsCache()
-	_ = m.saveHistory()
+	go m.saveHistory()
+	go m.savePatterns()
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,7 +1766,9 @@ func (m *Manager) updateSessionContext(sessionID string, riskLevel RiskLevel) {
 // PendingWebApproval creates a pending approval that waits for web resolution.
 func (m *Manager) PendingWebApproval(req *ApprovalRequest) (*ApprovalResult, error) {
 	id := uuid.New().String()
+	m.mu.RLock()
 	timeout := time.Duration(m.config.ApprovalTimeout) * time.Second
+	m.mu.RUnlock()
 
 	pa := &PendingApproval{
 		ID:        id,
@@ -1549,13 +1802,22 @@ func (m *Manager) PendingWebApproval(req *ApprovalRequest) (*ApprovalResult, err
 }
 
 // ResolveWebApproval resolves a pending web approval.
-func (m *Manager) ResolveWebApproval(id string, approved bool, reason string) {
+// 返回 error 以便 handler 向前端返回正确的错误状态。
+func (m *Manager) ResolveWebApproval(id string, approved bool, reason string) error {
 	m.webCallback.mu.Lock()
 	pa, exists := m.webCallback.pendingApprovals[id]
 	m.webCallback.mu.Unlock()
 
 	if !exists {
-		return
+		return fmt.Errorf("pending approval %s not found", id)
+	}
+
+	// 检查是否已过期
+	if time.Now().After(pa.ExpiresAt) {
+		m.webCallback.mu.Lock()
+		delete(m.webCallback.pendingApprovals, id)
+		m.webCallback.mu.Unlock()
+		return fmt.Errorf("pending approval %s has expired", id)
 	}
 
 	decision := "approved"
@@ -1566,11 +1828,20 @@ func (m *Manager) ResolveWebApproval(id string, approved bool, reason string) {
 		reason = "Web approval: " + decision
 	}
 
-	pa.Result <- &ApprovalResult{
+	result := &ApprovalResult{
 		Approved: approved,
 		Strategy: StrategyManual,
 		Reason:   reason,
 	}
+
+	// 非阻塞 send，防止重复 resolve 导致 goroutine 泄漏
+	select {
+	case pa.Result <- result:
+	default:
+		// channel 已满（已被 resolve 或 timeout），安全忽略
+	}
+
+	return nil
 }
 
 // GetPendingApprovals returns all pending web approvals.
@@ -1646,6 +1917,7 @@ func (m *Manager) loadPatterns() {
 }
 
 // savePatterns saves patterns to disk if dirty.
+// 在同一个 Lock 下读取 snapshot 并清除 dirty flag，避免 lost-update。
 func (m *Manager) savePatterns() error {
 	m.mu.RLock()
 	if !m.patternsDirty {
@@ -1657,39 +1929,30 @@ func (m *Manager) savePatterns() error {
 	m.saveMu.Lock()
 	defer m.saveMu.Unlock()
 
-	// Re-check dirty flag under save lock
-	m.mu.RLock()
+	// 在同一个 Lock 下读取 snapshot 并清除 dirty flag，保证原子性
+	m.mu.Lock()
 	if !m.patternsDirty {
-		m.mu.RUnlock()
+		m.mu.Unlock()
 		return nil
 	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(m.patternsDB)
-	m.mu.RUnlock()
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	m.mu.RLock()
 	var patterns []*CommandPattern
 	for _, p := range m.patterns {
 		patterns = append(patterns, p)
 	}
-	m.mu.RUnlock()
+	m.patternsDirty = false
+	m.mu.Unlock()
+
+	// 确保目录存在
+	dir := filepath.Dir(m.patternsDB)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
 
 	data, err := json.MarshalIndent(patterns, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.patternsDB, data, 0644); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	m.patternsDirty = false
-	m.mu.Unlock()
-	return nil
+	return os.WriteFile(m.patternsDB, data, 0644)
 }
 
 // loadWhitelist loads whitelist from disk.
@@ -1739,22 +2002,35 @@ func (m *Manager) loadHistory() {
 	m.history = records
 }
 
-// saveHistory saves approval history to disk.
-// Caller must NOT hold m.mu lock — this function handles its own locking.
+// saveHistory saves approval history to disk if dirty.
 func (m *Manager) saveHistory() error {
-	// Ensure directory exists (no lock needed)
-	dir := filepath.Dir(m.historyDB)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
+	// 检查 dirty flag
+	m.mu.RLock()
+	if !m.historyDirty {
+		m.mu.RUnlock()
+		return nil
 	}
+	m.mu.RUnlock()
 
 	m.saveMu.Lock()
 	defer m.saveMu.Unlock()
 
-	m.mu.RLock()
+	// 在同一个 Lock 下读取 snapshot 并清除 dirty flag，避免 lost-update
+	m.mu.Lock()
+	if !m.historyDirty {
+		m.mu.Unlock()
+		return nil
+	}
 	records := make([]*ApprovalRecord, len(m.history))
 	copy(records, m.history)
-	m.mu.RUnlock()
+	m.historyDirty = false
+	m.mu.Unlock()
+
+	// 确保目录存在
+	dir := filepath.Dir(m.historyDB)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
 
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {
@@ -1821,19 +2097,21 @@ func (m *Manager) ConfigCommand() *cobra.Command {
 			Short: "Set approval strategy",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
+				var s Strategy
 				switch args[0] {
 				case "manual":
-					m.config.Strategy = StrategyManual
+					s = StrategyManual
 				case "auto":
-					m.config.Strategy = StrategyAutoApprove
+					s = StrategyAutoApprove
 				case "smart":
-					m.config.Strategy = StrategySmart
+					s = StrategySmart
 				case "whitelist":
-					m.config.Strategy = StrategyWhitelist
+					s = StrategyWhitelist
 				default:
 					return fmt.Errorf("unknown strategy: %s", args[0])
 				}
-				viper.Set("approval.strategy", string(m.config.Strategy))
+				m.SetStrategy(s)
+				viper.Set("approval.strategy", string(s))
 				return viper.WriteConfig()
 			},
 		},
@@ -1841,11 +2119,12 @@ func (m *Manager) ConfigCommand() *cobra.Command {
 			Use:   "status",
 			Short: "Show approval system status",
 			RunE: func(cmd *cobra.Command, args []string) error {
+				cfg := m.GetConfig()
 				stats := m.GetStats()
-				fmt.Printf("Strategy: %s\n", m.config.Strategy)
-				fmt.Printf("Learning: %v\n", m.config.EnableLearning)
-				fmt.Printf("CLI Confirm: %v\n", m.config.EnableCLIConfirm)
-				fmt.Printf("Trust Threshold: %d\n", m.config.TrustThreshold)
+				fmt.Printf("Strategy: %s\n", cfg.Strategy)
+				fmt.Printf("Learning: %v\n", cfg.EnableLearning)
+				fmt.Printf("CLI Confirm: %v\n", cfg.EnableCLIConfirm)
+				fmt.Printf("Trust Threshold: %d\n", cfg.TrustThreshold)
 				fmt.Printf("Trusted Patterns: %d\n", stats.TrustedPatterns)
 				fmt.Printf("Denied Patterns: %d\n", stats.DeniedPatterns)
 				fmt.Printf("Total Requests: %d\n", stats.TotalRequests)
@@ -1902,11 +2181,13 @@ func (m *Manager) ConfigCommand() *cobra.Command {
 }
 
 // truncateCmd truncates a command string for display.
+// 使用 []rune 切割，避免截断多字节 UTF-8 字符。
 func truncateCmd(cmd string, maxLen int) string {
-	if len(cmd) <= maxLen {
+	runes := []rune(cmd)
+	if len(runes) <= maxLen {
 		return cmd
 	}
-	return cmd[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // SyncWithMemory syncs patterns with memory store.

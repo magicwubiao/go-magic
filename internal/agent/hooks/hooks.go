@@ -236,6 +236,38 @@ func (m *HookManager) Register(reg HookRegistration) error {
 	return nil
 }
 
+// Unregister removes all hooks with the given name from every hook list.
+// Returns true if at least one hook was removed. This is primarily used to
+// replace a built-in hook with an externally injected variant (e.g. swapping
+// the default approval hook for one configured with a server-side manager),
+// avoiding duplicate execution of same-purpose hooks.
+func (m *HookManager) Unregister(name string) bool {
+	removed := false
+	m.llmHooks, removed = filterHooksByName(m.llmHooks, name, removed)
+	m.toolHooks, removed = filterHooksByName(m.toolHooks, name, removed)
+	m.approvalHooks, removed = filterHooksByName(m.approvalHooks, name, removed)
+	m.eventHooks, removed = filterHooksByName(m.eventHooks, name, removed)
+	return removed
+}
+
+// filterHooksByName drops every hook whose Name() matches the supplied name.
+// The removed flag is OR-ed into the returned value so callers can chain calls
+// across multiple hook slices.
+func filterHooksByName[T Hook](hooks []T, name string, removed bool) ([]T, bool) {
+	if len(hooks) == 0 {
+		return hooks, removed
+	}
+	result := make([]T, 0, len(hooks))
+	for _, h := range hooks {
+		if h.Name() == name {
+			removed = true
+			continue
+		}
+		result = append(result, h)
+	}
+	return result, removed
+}
+
 // BeforeLLM calls all LLM hooks before an LLM call
 func (m *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLMHookRequest, HookDecision, error) {
 	currentReq := req

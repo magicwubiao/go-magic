@@ -597,15 +597,21 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Hot-reload approval config if approval section changed
 		if _, ok := expanded["approval"]; ok && s.approvalMgr != nil {
 			if ac := s.cfg.Approval; ac != nil {
-				s.approvalMgr.SetStrategy(approval.Strategy(ac.Strategy))
-				cfg := s.approvalMgr.GetConfig()
-				if ac.TrustThreshold > 0 {
-					cfg.TrustThreshold = ac.TrustThreshold
+				// 校验 strategy 合法性，空字符串保持不变
+				if ac.Strategy != "" {
+					switch ac.Strategy {
+					case "manual", "auto", "smart", "whitelist":
+						s.approvalMgr.SetStrategy(approval.Strategy(ac.Strategy))
+					}
 				}
-				cfg.EnableLearning = ac.EnableLearning
-				cfg.EnableCLIConfirm = ac.EnableCLIConfirm
+				// 使用 SetXxx 方法，避免修改 GetConfig() 返回的局部拷贝
+				if ac.TrustThreshold > 0 {
+					s.approvalMgr.SetTrustThreshold(ac.TrustThreshold)
+				}
+				s.approvalMgr.SetEnableLearning(ac.EnableLearning)
+				s.approvalMgr.SetEnableCLIConfirm(ac.EnableCLIConfirm)
 				if ac.ApprovalTimeout > 0 {
-					cfg.ApprovalTimeout = ac.ApprovalTimeout
+					s.approvalMgr.SetApprovalTimeout(ac.ApprovalTimeout)
 				}
 			}
 		}

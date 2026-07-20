@@ -322,6 +322,9 @@ func WithApprovalManager(mgr *approval.Manager) AgentOption {
 		if mgr != nil {
 			ah := NewApprovalHookWithManager(mgr)
 			a.approvalHook = ah
+			// 先移除 registerBuiltinHooks 注册的默认 approval hook，
+			// 避免同一工具调用触发两次审批（默认 manager 与外部 manager 各一次）。
+			a.hooks.Unregister("approval")
 			// Re-register the approval hook with the new manager
 			a.hooks.Register(hooks.HookRegistration{
 				Name:   "approval",
@@ -1947,11 +1950,21 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		}
 	}
 	if decision.Action == hooks.HookActionReject {
+		// 调用 AfterTool 以允许 hook 清理资源（例如审批 hook 记录拒绝结果、
+		// 释放会话级锁等）。传入一个合成的、表示被拒绝的 result。
+		rejectErr := fmt.Errorf("rejected: %s", decision.Reason)
+		rejectResp := &hooks.ToolResultHookResponse{
+			ToolName: toolName,
+			ToolArgs: toolArgs,
+			Result:   nil,
+			Error:    rejectErr,
+		}
+		a.hooks.AfterTool(ctx, rejectResp)
 		return ToolCallResult{
 			ID:      tc.ID,
 			Name:    toolName,
 			Content: fmt.Sprintf("Rejected by hook: %s", decision.Reason),
-			Err:     fmt.Errorf("rejected: %s", decision.Reason),
+			Err:     rejectErr,
 		}
 	}
 
@@ -2043,6 +2056,11 @@ func (a *Agent) Reset() {
 	// new conversation's escalation decisions.
 	if a.failureDetector != nil {
 		a.failureDetector.Reset()
+	}
+	// 清理审批 hook 的会话级 skip 列表，避免上个会话跳过的命令
+	// 在新会话中继续被静默跳过。
+	if a.approvalHook != nil {
+		a.approvalHook.ClearAllSessionSkip()
 	}
 }
 

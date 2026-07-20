@@ -126,35 +126,7 @@
 
         <n-divider />
 
-        <!-- Approval Settings -->
-        <n-card size="small" :title="t('approval.title')">
-          <n-form label-placement="left" label-width="200" style="max-width: 600px;">
-            <n-form-item :label="t('approval.settings.strategy')">
-              <n-select
-                v-model:value="approvalForm.strategy"
-                :options="strategyOptions"
-                style="width: 320px;"
-              />
-            </n-form-item>
-            <n-form-item :label="t('approval.settings.trustThreshold')">
-              <n-input-number
-                v-model:value="approvalForm.trust_threshold"
-                :min="1"
-                :max="100"
-                style="width: 160px;"
-              />
-            </n-form-item>
-            <n-form-item :label="t('approval.settings.enableLearning')">
-              <n-switch v-model:value="approvalForm.enable_learning" />
-            </n-form-item>
-            <n-form-item :label="t('approval.settings.cliConfirm')">
-              <n-switch v-model:value="approvalForm.enable_cli_confirm" />
-            </n-form-item>
-            <n-form-item>
-              <n-button type="primary" :loading="saving" @click="saveApproval">{{ t('common.save') }}</n-button>
-            </n-form-item>
-          </n-form>
-        </n-card>
+        <!-- 审批设置已移至「审批」页面统一管理，避免双入口导致状态不一致 -->
       </n-tab-pane>
 
       <!-- Raw JSON Tab -->
@@ -290,13 +262,6 @@ const fileStrategyOptions = computed(() => [
   { label: t('config.fileStrategies.base64'), value: 'base64' },
 ])
 
-const approvalForm = reactive({
-  strategy: 'smart',
-  trust_threshold: 1,
-  enable_learning: true,
-  enable_cli_confirm: false,
-})
-
 const showDirPicker = ref(false)
 const dirCurrentPath = ref('')
 const dirEntries = ref<any[]>([])
@@ -306,12 +271,6 @@ const newFolderName = ref('')
 const newFolderInputRef = ref<{ focus: () => void } | null>(null)
 
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
-
-const strategyOptions = computed(() => [
-  { label: t('approval.settings.strategies.smart'), value: 'smart' },
-  { label: t('approval.settings.strategies.manual'), value: 'manual' },
-  { label: t('approval.settings.strategies.auto'), value: 'auto' },
-])
 
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
@@ -332,12 +291,6 @@ function populateFromConfig(cfg: any) {
   const server = cfg.server || {}
   serverForm.upload_url_prefix = server.upload_url_prefix || ''
   serverForm.file_strategy = server.file_strategy || 'auto'
-
-  const ac = cfg.approval || {}
-  approvalForm.strategy = ac.strategy || 'smart'
-  approvalForm.trust_threshold = ac.trust_threshold || 1
-  approvalForm.enable_learning = ac.enable_learning !== false
-  approvalForm.enable_cli_confirm = ac.enable_cli_confirm || false
 }
 
 async function saveGeneral() {
@@ -418,26 +371,6 @@ async function saveServer() {
     })
     await configStore.loadConfig()
     message.success(t('config.serverSaved'))
-  } catch (e) {
-    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  } finally {
-    saving.value = false
-  }
-}
-
-async function saveApproval() {
-  saving.value = true
-  try {
-    await configStore.updateConfig({
-      approval: {
-        strategy: approvalForm.strategy,
-        trust_threshold: approvalForm.trust_threshold,
-        enable_learning: approvalForm.enable_learning,
-        enable_cli_confirm: approvalForm.enable_cli_confirm,
-      }
-    })
-    await configStore.loadConfig()
-    message.success(t('approval.settings.settingsSaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {

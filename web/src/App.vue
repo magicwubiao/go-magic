@@ -125,6 +125,10 @@ const activeKey = computed(() => route.path)
 // Poll pending approvals for sidebar badge
 let approvalPollTimer: ReturnType<typeof setInterval> | null = null
 async function pollPendingApprovals() {
+  // 用户停留在审批页面时由 ApprovalView 自行轮询，避免双重轮询
+  if ((window as any).__approvalViewActive) {
+    return
+  }
   try {
     const items = await getPendingApprovals()
     pendingApprovalCount.value = items?.length || 0

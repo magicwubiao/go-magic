@@ -11,6 +11,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"golang.org/x/term"
 )
 
@@ -99,6 +100,7 @@ func (h *ApprovalHook) GetManager() *approval.Manager {
 func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookRequest) (*hooks.ToolCallHookRequest, hooks.HookDecision, error) {
 	var command string
 	var toolDesc string
+	var approvalCtx string
 
 	switch call.ToolName {
 	case "execute_command":
@@ -109,15 +111,18 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		content, _ := call.ToolArgs["content"].(string)
 		command = fmt.Sprintf("write_file %s (%d bytes)", path, len(content))
 		toolDesc = "file write"
+		approvalCtx = buildWriteFileContext(path, content)
 	case "file_edit":
 		path, _ := call.ToolArgs["path"].(string)
 		command = fmt.Sprintf("file_edit %s", path)
 		toolDesc = "file edit"
+		approvalCtx = buildFileEditContext(call.ToolArgs)
 	case "execute_code":
 		lang, _ := call.ToolArgs["language"].(string)
 		code, _ := call.ToolArgs["code"].(string)
 		command = fmt.Sprintf("execute_code %s (%d bytes)", lang, len(code))
 		toolDesc = "code execution"
+		approvalCtx = buildExecuteCodeContext(lang, code)
 	default:
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
@@ -133,6 +138,7 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		Command:    command,
 		SessionID:  sessionID,
 		WorkingDir: workingDir,
+		Context:    approvalCtx,
 	}
 	_ = toolDesc // used for future logging extensions
 
@@ -161,8 +167,9 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		var approved bool
 
 		if h.webMode {
-			// Route to Web approval callback.
-			webResult, webErr := h.manager.PendingWebApproval(req)
+			// Route to Web approval callback. 用 select 同时监听 ctx.Done()，
+			// 以便 agent 取消时能立即返回，而不是被 PendingWebApproval 阻塞到超时。
+			webResult, webErr := h.pendingWebApprovalWithCtx(ctx, req)
 			if webErr != nil {
 				return call, hooks.HookDecision{
 					Action: hooks.HookActionReject,
@@ -181,10 +188,17 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				h.manager.Deny(req)
 			}
 		} else if !isStdinTerminal() {
-			// Non-interactive, no custom prompt: auto-approve with warning.
-			fmt.Printf("  [AUTO-APPROVED] Non-interactive mode: %s\n", command)
-			approved = true
-			h.manager.Approve(req)
+			// 非交互模式且没有自定义 prompt：fail-closed（默认拒绝）。
+			// 之前的行为是自动批准，这会让 Critical 风险命令在 CI/管道里
+			// 静默执行。要求调用方显式配置 web 审批或注入 promptFunc。
+			fmt.Printf("  [DENIED] Non-interactive mode requires web approval or promptFunc: %s\n", command)
+			approved = false
+			h.manager.Deny(req)
+			h.manager.NotifyApproval(&approval.ApprovalResult{
+				Approved: false,
+				Strategy: result.Strategy,
+				Reason:   "Non-interactive mode denied (fail-closed)",
+			}, req)
 		} else {
 			// CLI interactive prompt with timeout.
 			act := h.promptUserConfirmation(ctx, command, result.Reason, result.RiskLevel)
@@ -258,9 +272,72 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	}, nil
 }
 
+// pendingWebApprovalWithCtx 包装 h.manager.PendingWebApproval，使其可被 ctx 取消。
+// 当 ctx 取消时立即返回 ctx.Err()；后台 goroutine 仍会阻塞到 PendingWebApproval
+// 超时或被解析，但 agent 主流程可以及时响应取消信号。
+func (h *ApprovalHook) pendingWebApprovalWithCtx(ctx context.Context, req *approval.ApprovalRequest) (*approval.ApprovalResult, error) {
+	type webOutcome struct {
+		result *approval.ApprovalResult
+		err    error
+	}
+	outcomeCh := make(chan webOutcome, 1)
+	go func() {
+		r, err := h.manager.PendingWebApproval(req)
+		outcomeCh <- webOutcome{result: r, err: err}
+	}()
+	select {
+	case out := <-outcomeCh:
+		return out.result, out.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// buildExecuteCodeContext 构造 execute_code 的审批上下文：包含语言和源码预览。
+func buildExecuteCodeContext(lang, code string) string {
+	if code == "" {
+		return ""
+	}
+	preview := truncateCommand(code, 600)
+	if lang == "" {
+		lang = "unknown"
+	}
+	return fmt.Sprintf("language: %s\n--- code preview ---\n%s", lang, preview)
+}
+
+// buildWriteFileContext 构造 write_file 的审批上下文：包含目标路径和内容预览。
+func buildWriteFileContext(path, content string) string {
+	if path == "" && content == "" {
+		return ""
+	}
+	preview := truncateCommand(content, 600)
+	return fmt.Sprintf("path: %s\n--- content preview ---\n%s", path, preview)
+}
+
+// buildFileEditContext 构造 file_edit 的审批上下文：尝试展示 old/new 字段。
+func buildFileEditContext(args map[string]interface{}) string {
+	path, _ := args["path"].(string)
+	oldText, _ := args["old_text"].(string)
+	newText, _ := args["new_text"].(string)
+	if path == "" && oldText == "" && newText == "" {
+		return ""
+	}
+	return fmt.Sprintf("path: %s\n--- old ---\n%s\n--- new ---\n%s",
+		path,
+		truncateCommand(oldText, 300),
+		truncateCommand(newText, 300))
+}
+
 // promptUserConfirmation displays a rich interactive CLI prompt and returns the
 // user's action. It supports a configurable timeout (default 30s); if the timeout
 // expires the command is automatically rejected.
+//
+// 实现说明：stdin 的阻塞读取在 Go 中无法被外部取消（reader.ReadString 会一直
+// 等到换行或 EOF）。因此当 ctx 取消或超时时，后台 goroutine 仍会阻塞在
+// ReadString 上，直到下一次 stdin 输入到达才会退出。这是已知限制；为避免多个
+// goroutine 同时竞争 stdin，本方法在 select 退出后通过 ch（容量 1）确保
+// goroutine 最终能把结果写入 channel 而不阻塞自身。如果想彻底避免泄漏，
+// 调用方应使用 promptFunc 注入可取消的 TUI 实现。
 func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reason string, riskLevel approval.RiskLevel) userAction {
 	// Display rich approval prompt.
 	fmt.Println()
@@ -284,6 +361,8 @@ func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reas
 		input string
 		err   error
 	}
+	// 容量为 1 的 channel：即使 select 已通过 ctx.Done()/timeout 退出，
+	// 后台 goroutine 仍能写入结果而不阻塞，避免 goroutine 永久挂起在发送上。
 	ch := make(chan cliResult, 1)
 
 	go func() {
@@ -316,6 +395,9 @@ func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reas
 		}
 	case <-time.After(h.cliTimeout):
 		fmt.Printf("\n  Approval timed out (%s) -> denied\n", h.cliTimeout.Round(time.Second))
+		return actionDeny
+	case <-ctx.Done():
+		fmt.Printf("\n  Approval cancelled by context (%v) -> denied\n", ctx.Err())
 		return actionDeny
 	}
 }
@@ -373,14 +455,13 @@ func (h *ApprovalHook) isSessionSkipped(sessionID, command string) bool {
 	if !ok {
 		return false
 	}
-	// Use a simple prefix / contains heuristic: if any skipped pattern is a
-	// prefix of the command, consider it skipped.
-	for pattern := range patterns {
-		if strings.HasPrefix(command, pattern) {
-			return true
-		}
+	// 用归一化后的 key（binary + 子命令）做精确匹配，避免仅凭 binary
+	// 名匹配导致同 binary 的其它子命令被错误跳过。
+	key := normalizeForSkip(command)
+	if key == "" {
+		return false
 	}
-	return false
+	return patterns[key]
 }
 
 // addSessionSkip records that a command pattern should be skipped for this session.
@@ -391,28 +472,84 @@ func (h *ApprovalHook) addSessionSkip(sessionID, command string) {
 	if _, ok := h.skipPatterns[sessionID]; !ok {
 		h.skipPatterns[sessionID] = make(map[string]bool)
 	}
-	// Extract the binary (first token) as the skip key so that all commands
-	// sharing the same binary are skipped.
-	tokens := strings.Fields(command)
-	if len(tokens) > 0 {
-		h.skipPatterns[sessionID][tokens[0]] = true
+	// 使用 binary + 第一个子命令作为 skip key，而非仅 binary 名。
+	// 这样 "git push" 与 "git status" 不会被同一次 skip 误伤。
+	key := normalizeForSkip(command)
+	if key == "" {
+		return
 	}
+	h.skipPatterns[sessionID][key] = true
+}
+
+// ClearSessionSkip removes all skip patterns for the given session.
+func (h *ApprovalHook) ClearSessionSkip(sessionID string) {
+	h.skipMutex.Lock()
+	defer h.skipMutex.Unlock()
+	delete(h.skipPatterns, sessionID)
+}
+
+// ClearAllSessionSkip removes all skip patterns for every session.
+// Agent.Reset 调用此方法以避免上个会话的 skip 决策污染新会话。
+func (h *ApprovalHook) ClearAllSessionSkip() {
+	h.skipMutex.Lock()
+	defer h.skipMutex.Unlock()
+	h.skipPatterns = make(map[string]map[string]bool)
+}
+
+// normalizeForSkip 提取 binary + 第一个非 flag 子命令作为 skip key。
+// 例如 "git push origin main" -> "git push"，"rm -rf /tmp" -> "rm"。
+// 这比仅用 binary 名更精准，又比完整命令更通用。
+func normalizeForSkip(cmd string) string {
+	tokens := strings.Fields(cmd)
+	if len(tokens) == 0 {
+		return ""
+	}
+	// 跳过开头的 flag tokens（罕见但稳健）
+	idx := 0
+	for idx < len(tokens) && strings.HasPrefix(tokens[idx], "-") {
+		idx++
+	}
+	if idx >= len(tokens) {
+		return tokens[0]
+	}
+	binary := tokens[idx]
+	if idx+1 < len(tokens) && !strings.HasPrefix(tokens[idx+1], "-") {
+		return binary + " " + tokens[idx+1]
+	}
+	return binary
 }
 
 // ---------------------------------------------------------------------------
 // Context helpers
 // ---------------------------------------------------------------------------
 
-// getSessionID extracts session ID from context
+// getSessionID extracts session ID from context.
+// 优先使用 tool 包导出的类型化键（tool.WithSessionID 设置），
+// 回退到字符串键 "session_id"（兼容旧调用方），最终回退到 "cli"。
 func getSessionID(ctx context.Context) string {
-	if id, ok := ctx.Value("session_id").(string); ok {
-		return id
+	if ctx == nil {
+		return "cli"
+	}
+	// 优先使用 tool 包的类型化键（与 tool.WithSessionID 配对）
+	if sid := tool.SessionIDFromContext(ctx); sid != "" {
+		return sid
+	}
+	// 回退到字符串键以兼容未使用 tool.WithSessionID 的调用方
+	if sid, ok := ctx.Value("session_id").(string); ok && sid != "" {
+		return sid
 	}
 	return "cli"
 }
 
 // getWorkingDir extracts working_dir from context if available.
+// 优先使用 tool.WorkDirFromContext（类型化键），回退到字符串键 "working_dir"。
 func getWorkingDir(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if dir := tool.WorkDirFromContext(ctx); dir != "" {
+		return dir
+	}
 	if dir, ok := ctx.Value("working_dir").(string); ok {
 		return dir
 	}
