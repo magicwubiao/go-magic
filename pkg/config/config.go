@@ -393,6 +393,10 @@ func (c *Config) Save() error {
 				if currentProv.Model == "" && existingProv.Model != "" {
 					currentProv.Model = existingProv.Model
 				}
+				// Preserve Models if current is empty but exists on disk
+				if len(currentProv.Models) == 0 && len(existingProv.Models) > 0 {
+					currentProv.Models = existingProv.Models
+				}
 				c.Providers[name] = currentProv
 			}
 		}
@@ -435,14 +439,14 @@ func (c *Config) Save() error {
 
 	// Write to temp file first
 	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return err
 	}
 
 	// Rename temp file to actual path (atomic on most OS)
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		// Fallback: try direct write
-		return os.WriteFile(configPath, data, 0644)
+		return os.WriteFile(configPath, data, 0600)
 	}
 
 	return nil

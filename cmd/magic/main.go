@@ -136,9 +136,13 @@ func init() {
 }
 
 func main() {
-	// Check for version flag first
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		os.Args[1] = "version"
+	// Check for version flag first (scan all args, not just os.Args[1])
+	// Note: -v is reserved for --verbose, so only --version triggers version output here.
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" {
+			fmt.Printf("go-magic version %s\n", Version)
+			os.Exit(0)
+		}
 	}
 
 	initLogging()
@@ -150,17 +154,17 @@ func main() {
 
 	// Execute with error handling
 	if err := rootCmd.Execute(); err != nil {
-		// Output error in appropriate format
+		// Output error in appropriate format to stderr
 		switch flagOutput {
 		case "json":
-			fmt.Printf(`{"error": %q}`, err.Error())
+			fmt.Fprintf(os.Stderr, `{"error": %q}`, err.Error())
 		case "yaml":
-			fmt.Printf("error: %s\n", err.Error())
+			fmt.Fprintf(os.Stderr, "error: %s\n", err.Error())
 		default:
 			if !flagNoColor {
-				fmt.Printf("\033[1;31mError:\033[0m %v\n", err)
+				fmt.Fprintf(os.Stderr, "\033[1;31mError:\033[0m %v\n", err)
 			} else {
-				fmt.Printf("Error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			}
 		}
 		os.Exit(1)

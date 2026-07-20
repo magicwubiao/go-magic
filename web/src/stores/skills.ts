@@ -44,6 +44,13 @@ export const useSkillsStore = defineStore('skills', () => {
     return result
   }
 
+  function updateSkillStatus(id: string, status: string) {
+    const idx = skills.value.findIndex(s => s.id === id)
+    if (idx >= 0) {
+      skills.value[idx] = { ...skills.value[idx], status }
+    }
+  }
+
   return {
     skills,
     loading,
@@ -51,6 +58,7 @@ export const useSkillsStore = defineStore('skills', () => {
     toggleSkill,
     installSkill,
     updateSkill,
+    updateSkillStatus,
     searchHubSkills,
     installHubSkill,
   }

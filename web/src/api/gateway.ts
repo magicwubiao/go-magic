@@ -31,6 +31,9 @@ export async function stopGateway(): Promise<{ ok: boolean }> {
 }
 
 export async function getPlatforms(): Promise<PlatformStatus[]> {
+  // GatewayStatus 类型当前不包含 platforms/connectedPlatforms 字段，
+  // 后端 /gateway/status 响应未返回已连接平台列表。
+  // 待后端支持后，此处改为从 status 中提取 platforms 字段。
   const status = await getGatewayStatus()
   return []
 }

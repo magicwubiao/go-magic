@@ -138,6 +138,8 @@ export function getFSReadUrl(path: string, sessionId?: string, workspaceId?: str
   if (sessionId) params.set('session_id', sessionId)
   if (workspaceId) params.set('workspace_id', workspaceId)
   const token = getAuthToken()
+  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
+  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
   if (token) params.set('token', token)
   return `/api/fs/read?${params.toString()}`
 }
@@ -148,6 +150,8 @@ export function getFSDownloadUrl(path: string, sessionId?: string, workspaceId?:
   if (sessionId) params.set('session_id', sessionId)
   if (workspaceId) params.set('workspace_id', workspaceId)
   const token = getAuthToken()
+  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
+  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
   if (token) params.set('token', token)
   return `/api/fs/download?${params.toString()}`
 }
@@ -188,6 +192,8 @@ export function getFSZipUrl(path: string, sessionId?: string, workspaceId?: stri
   if (sessionId) params.set('session_id', sessionId)
   if (workspaceId) params.set('workspace_id', workspaceId)
   const token = getAuthToken()
+  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
+  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
   if (token) params.set('token', token)
   return `/api/fs/zip?${params.toString()}`
 }
@@ -275,6 +281,8 @@ export interface FileItem {
 export function addTokenToUrl(url: string): string {
   const token = getAuthToken()
   if (!token) return url
+  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
+  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
   const sep = url.includes('?') ? '&' : '?'
   return `${url}${sep}token=${encodeURIComponent(token)}`
 }
@@ -310,6 +318,8 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     url += `&files=${encodeURIComponent(JSON.stringify(filesData))}`
   }
   if (token) {
+    // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
+    // EventSource 不支持自定义 header，后续应改用 fetch-event-source 库或一次性短 token
     url += `&token=${encodeURIComponent(token)}`
   }
   return new EventSource(url)

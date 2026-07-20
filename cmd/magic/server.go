@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/server"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -32,7 +34,7 @@ var serverCmd = &cobra.Command{
 			magicHome = config.GetMagicHome()
 		}
 
-		dbPath := magicHome + "/sessions.db"
+		dbPath := filepath.Join(magicHome, "sessions.db")
 
 		// Ensure directory exists
 		if err := os.MkdirAll(magicHome, 0755); err != nil {
@@ -46,8 +48,18 @@ var serverCmd = &cobra.Command{
 		srv := server.NewServer(dbPath)
 
 		// Handle shutdown signals
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+			if srv != nil {
+				srv.Stop()
+			}
+			// 给一点时间让 goroutine 退出
+			time.Sleep(500 * time.Millisecond)
+			os.Exit(0)
+		}()
 
 		fmt.Printf("Starting server on http://localhost:%d\n", serverPort)
 		fmt.Println()
@@ -73,15 +85,10 @@ var serverCmd = &cobra.Command{
 			}()
 		}
 
-		// Wait for shutdown signal or error
-		select {
-		case err := <-errCh:
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-				os.Exit(1)
-			}
-		case <-quit:
-			fmt.Println("\nShutting down server...")
+		// Wait for server error (signal handled by goroutine above)
+		if err := <-errCh; err != nil {
+			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+			os.Exit(1)
 		}
 	},
 }

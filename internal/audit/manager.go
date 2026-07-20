@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -395,63 +396,114 @@ func (m *Manager) exportCSV(entries []*Entry) ([]byte, error) {
 }
 
 // flush 刷新到磁盘
+// 日常追加写已由 appendToFile 以 JSONL 方式完成，flush 仅作为周期性整理：
+// 将内存中的条目（截断到 maxSize）以 JSONL 整体覆盖写回，去除重复行/无效行。
 func (m *Manager) flush() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 写入所有条目到文件
 	path := filepath.Join(m.dataDir, "audit.json")
-	data, err := json.MarshalIndent(m.entries, "", "  ")
+
+	// 以 JSONL 格式整体覆盖写
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 
-	return os.WriteFile(path, data, 0644)
+	bw := bufio.NewWriter(f)
+	for _, entry := range m.entries {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if _, err := bw.Write(data); err != nil {
+			return err
+		}
+		if err := bw.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	return bw.Flush()
 }
 
-// appendToFile 追加到文件
+// appendToFile 追加到文件（JSONL：每行一条 JSON 记录）。
+// 采用 O_APPEND 追加写，避免每次记录都重写整个文件。
 func (m *Manager) appendToFile(entry *Entry) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	path := filepath.Join(m.dataDir, "audit.json")
 
-	// 读取现有数据
-	var entries []*Entry
-	if data, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(data, &entries)
-	}
-
-	// 添加新条目
-	entries = append(entries, entry)
-
-	// 限制文件大小（保留最近 100000 条）
-	if len(entries) > 100000 {
-		entries = entries[len(entries)-100000:]
-	}
-
-	// 写入
-	data, err := json.MarshalIndent(entries, "", "  ")
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
 	}
+	data = append(data, '\n')
 
-	return os.WriteFile(path, data, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.Write(data)
+	return err
 }
 
-// load 加载历史记录
+// load 加载历史记录（JSONL 格式，兼容旧的 JSON 数组格式）
 func (m *Manager) load() error {
 	path := filepath.Join(m.dataDir, "audit.json")
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	defer f.Close()
 
-	return json.Unmarshal(data, &m.entries)
+	scanner := bufio.NewScanner(f)
+	// 允许较大的单行（审计条目可能携带 metadata）
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	var entries []*Entry
+	anyLineParsed := false
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry Entry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			// 跳过无法解析的行
+			continue
+		}
+		entries = append(entries, &entry)
+		anyLineParsed = true
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// 兼容旧版 JSON 数组格式：若一行都没解析出来，尝试整体 unmarshal
+	if !anyLineParsed {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		var legacyEntries []*Entry
+		if err := json.Unmarshal(data, &legacyEntries); err == nil {
+			entries = legacyEntries
+		}
+	}
+
+	m.entries = entries
+	return nil
 }
 
 // generateID 生成唯一 ID

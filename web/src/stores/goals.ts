@@ -109,6 +109,10 @@ export const useGoalsStore = defineStore('goals', () => {
     return goalsApi.analyzeGoal(goalId, conversation)
   }
 
+  function setCurrentGoal(goal: Goal | null) {
+    currentGoal.value = goal
+  }
+
   return {
     goals,
     currentGoal,
@@ -130,5 +134,6 @@ export const useGoalsStore = defineStore('goals', () => {
     unlinkSession,
     decomposeGoal,
     analyzeGoal,
+    setCurrentGoal,
   }
 })

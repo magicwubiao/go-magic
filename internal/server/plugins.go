@@ -77,7 +77,11 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 	if r.Method == http.MethodDelete {
 		name := path
 		pluginsDir := filepath.Join(s.magicHome, "plugins")
-		pluginPath := filepath.Join(pluginsDir, name)
+		pluginPath, err := SafeJoin(pluginsDir, name)
+		if err != nil {
+			http.Error(w, "Invalid plugin path", http.StatusBadRequest)
+			return
+		}
 
 		// Check if it's a file or directory
 		info, err := os.Stat(pluginPath)

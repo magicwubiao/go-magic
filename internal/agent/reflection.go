@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
@@ -61,6 +62,7 @@ func DefaultReflectionConfig() ReflectionConfig {
 
 // Reflector manages self-reflection for an agent
 type Reflector struct {
+	mu              sync.Mutex
 	config          ReflectionConfig
 	provider        provider.Provider
 	originalGoal    string
@@ -97,6 +99,8 @@ func NewReflector(cfg ReflectionConfig, prov provider.Provider, goal string) *Re
 
 // ShouldReflect checks if it's time to reflect based on turn count
 func (r *Reflector) ShouldReflect(turn int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.config.Enabled {
 		return false
 	}
@@ -108,6 +112,8 @@ func (r *Reflector) ShouldReflect(turn int) bool {
 
 // RecordToolCall records a tool call for later analysis
 func (r *Reflector) RecordToolCall(name string, success bool, duration time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.toolCallRecords = append(r.toolCallRecords, toolCallRecord{
 		Name:      name,
 		Success:   success,
@@ -118,16 +124,23 @@ func (r *Reflector) RecordToolCall(name string, success bool, duration time.Dura
 
 // RecordAchievement records something that was accomplished
 func (r *Reflector) RecordAchievement(achievement string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.achievementLog = append(r.achievementLog, achievement)
 }
 
 // RecordBlocker records an obstacle encountered
 func (r *Reflector) RecordBlocker(blocker string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.blockerLog = append(r.blockerLog, blocker)
 }
 
 // Reflect performs a self-reflection using LLM
 func (r *Reflector) Reflect(ctx context.Context, history []provider.Message, currentTurn int) (*ReflectionResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.provider == nil {
 		return r.fallbackReflect(currentTurn), nil
 	}
@@ -394,6 +407,8 @@ func (r *Reflector) estimateProgressRuleBased(turn int) float64 {
 
 // GetLastResult returns the most recent reflection result
 func (r *Reflector) GetLastResult() *ReflectionResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.lastResult
 }
 

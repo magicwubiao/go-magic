@@ -411,10 +411,3 @@ func formatConfidence(c float64) string {
 	// Convert to percentage format
 	return s
 }
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}

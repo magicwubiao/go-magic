@@ -55,6 +55,8 @@ func (gm *GoalManager) GetSubGoals() []SubGoal {
 // BuildSubGoalPrompt builds the prompt text including all sub-goals
 // This is appended to the judge prompt so the LLM considers sub-goals
 func (gm *GoalManager) BuildSubGoalPrompt() string {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
 	if len(gm.subGoals) == 0 {
 		return ""
 	}
@@ -71,11 +73,15 @@ func (gm *GoalManager) BuildSubGoalPrompt() string {
 
 // ClearSubGoals removes all sub-goals
 func (gm *GoalManager) ClearSubGoals() {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
 	gm.subGoals = nil
 }
 
 // RemoveSubGoal removes a sub-goal by ID
 func (gm *GoalManager) RemoveSubGoal(id string) bool {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
 	for i, sg := range gm.subGoals {
 		if sg.ID == id {
 			gm.subGoals = append(gm.subGoals[:i], gm.subGoals[i+1:]...)

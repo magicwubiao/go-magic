@@ -64,6 +64,7 @@
                 tag="a"
                 :href="updateResult.html_url"
                 target="_blank"
+                rel="noopener noreferrer"
               >
                 {{ t('system.update.viewRelease') }}
               </n-button>
@@ -72,6 +73,8 @@
                 size="small"
                 tag="a"
                 :href="updateResult.download_url"
+                target="_blank"
+                rel="noopener noreferrer"
               >
                 {{ t('system.update.downloadUpdate') }}
               </n-button>
@@ -89,6 +92,7 @@ import { useI18n } from 'vue-i18n'
 import { RefreshOutline } from '@vicons/ionicons5'
 import * as systemApi from '@/api/system'
 import type { SystemVersion, VersionCheckResult } from '@/api/system'
+import { getLocale } from '@/locales'
 
 const { t } = useI18n()
 const versionInfo = ref<SystemVersion | null>(null)
@@ -116,7 +120,9 @@ async function checkUpdate() {
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr)
-  return date.toLocaleDateString('zh-CN', {
+  if (isNaN(date.getTime())) return dateStr
+  const locale = getLocale() === 'zh' ? 'zh-CN' : 'en-US'
+  return date.toLocaleDateString(locale, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',

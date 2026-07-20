@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -245,15 +246,10 @@ func (ts *TrajectoryStore) evictOldTrajectories() {
 		return
 	}
 
-	// Sort by end time (oldest first)
-	// Simple selection sort for small datasets
-	for i := 0; i < len(ts.trajectories)-1; i++ {
-		for j := i + 1; j < len(ts.trajectories); j++ {
-			if ts.trajectories[i].EndTime.After(ts.trajectories[j].EndTime) {
-				ts.trajectories[i], ts.trajectories[j] = ts.trajectories[j], ts.trajectories[i]
-			}
-		}
-	}
+	// Sort by end time (oldest first) using stdlib instead of O(n^2) selection sort.
+	sort.Slice(ts.trajectories, func(i, j int) bool {
+		return ts.trajectories[i].EndTime.Before(ts.trajectories[j].EndTime)
+	})
 
 	// Remove oldest
 	toRemove := len(ts.trajectories) - maxTrajectories
@@ -296,16 +292,12 @@ func (ts *TrajectoryStore) GetPatterns(minSuccessRate float64) []TrajectoryPatte
 func (ts *TrajectoryStore) GetTopPatterns(limit int) []TrajectoryPattern {
 	patterns := ts.GetPatterns(0) // Get all
 
-	// Sort by success rate and occurrences
-	for i := 0; i < len(patterns)-1; i++ {
-		for j := i + 1; j < len(patterns); j++ {
-			scoreI := patterns[i].SuccessRate * float64(patterns[i].Occurrences)
-			scoreJ := patterns[j].SuccessRate * float64(patterns[j].Occurrences)
-			if scoreI < scoreJ {
-				patterns[i], patterns[j] = patterns[j], patterns[i]
-			}
-		}
-	}
+	// Sort by success rate * occurrences (descending) using stdlib instead of O(n^2) selection sort.
+	sort.Slice(patterns, func(i, j int) bool {
+		scoreI := patterns[i].SuccessRate * float64(patterns[i].Occurrences)
+		scoreJ := patterns[j].SuccessRate * float64(patterns[j].Occurrences)
+		return scoreI > scoreJ
+	})
 
 	if limit > len(patterns) {
 		limit = len(patterns)

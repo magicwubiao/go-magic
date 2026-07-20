@@ -126,7 +126,7 @@
                           </template>
                           {{ t('skills.deleteConfirm', { name: skill.name }) }}
                         </n-popconfirm>
-                        <n-switch v-model:value="skill.enabled" size="small" @update:value="toggleSkill(skill.name, $event)" @click.stop />
+                        <n-switch :value="skill.enabled" size="small" @update:value="toggleSkill(skill.name, $event)" @click.stop />
                       </template>
                     </div>
                   </div>
@@ -498,11 +498,8 @@ async function performAction(skill: Skill, action: string) {
         restore: 'approved',
       }
       const newStatus = statusMap[action]
-      // Update local skill object
-      const idx = skillsStore.skills.findIndex(s => s.id === skill.id)
-      if (idx >= 0) {
-        (skillsStore.skills as any)[idx] = { ...skillsStore.skills[idx], status: newStatus }
-      }
+      // Update via store action to keep state mutations centralized
+      skillsStore.updateSkillStatus(skill.id, newStatus)
       if (selectedSkill.value && selectedSkill.value.id === skill.id) {
         selectedSkill.value = { ...selectedSkill.value, status: newStatus }
       }

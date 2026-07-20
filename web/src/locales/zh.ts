@@ -21,6 +21,7 @@ export default {
     system: '系统',
     files: '文件',
     mcp: 'MCP',
+    workspaces: '工作区',
   },
   common: {
     save: '保存',
@@ -586,6 +587,7 @@ export default {
     models: '模型',
     addProvider: '添加供应商',
     editProvider: '编辑供应商',
+    addModel: '添加模型',
     current: '当前',
     currentModel: '当前模型',
     setAsCurrent: '设为当前',
@@ -650,6 +652,7 @@ export default {
     description: '描述',
     tags: '标签',
     noDescription: '暂无描述',
+    status: '状态',
     category: '分类',
     general: '通用',
     install: '安装',
@@ -796,6 +799,7 @@ export default {
     disabled: '已禁用',
     delete: '删除',
     confirmDelete: '确定要删除插件 "{name}" 吗？',
+    confirmDeletePlugin: '确定要删除插件 "{name}" 吗？',
     installPlugin: '安装插件',
     pluginUrl: '插件 URL',
     installed: '插件已安装',
@@ -1194,7 +1198,7 @@ export default {
     loginButton: '登录',
     setPasswordButton: '设置密码并登录',
     firstTimeSetup: '首次使用 — 设置密码以保护您的仪表板',
-    passwordMinLength: '密码至少需要 4 个字符',
+    passwordMinLength: '密码至少需要 8 个字符',
   },
 
 }

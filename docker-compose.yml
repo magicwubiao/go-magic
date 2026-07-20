@@ -14,12 +14,10 @@ services:
     ports:
       - "8642:8642"   # API
       - "8643:8643"   # Webhook
-      - "8648:8648"   # Web UI
     environment:
       - TZ=UTC
     volumes:
       - magic-config:/home/magic/.magic
-      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - magic-network
     healthcheck:
@@ -42,22 +40,6 @@ services:
       - magic-network
     command: redis-server --appendonly yes
 
-  # Optional: PostgreSQL for sessions
-  postgres:
-    image: postgres:16-alpine
-    container_name: magic-postgres
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=magic
-      - POSTGRES_USER=magic
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-    secrets:
-      - postgres_password
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - magic-network
-
 networks:
   magic-network:
     driver: bridge
@@ -65,8 +47,3 @@ networks:
 volumes:
   magic-config:
   redis-data:
-  postgres-data:
-
-secrets:
-  postgres_password:
-    file: .postgres_password

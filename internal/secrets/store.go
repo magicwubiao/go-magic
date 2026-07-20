@@ -306,8 +306,16 @@ func (s *Store) load() error {
 }
 
 // saveMasterKey 保存主密钥
+// 注意：masterKey 文件与 secrets.enc 故意分开存放——masterKey 写入 secrets 目录的
+// 上级目录（如 ~/.magic/.masterkey），避免与加密后的密钥文件位于同一目录。
+// 当前为简化方案（base64 明文 + 0600 权限），生产环境应改用 OS 密钥环。
 func (s *Store) saveMasterKey() error {
-	keyPath := filepath.Join(s.dataDir, ".masterkey")
+	keyPath := filepath.Join(filepath.Dir(s.dataDir), ".masterkey")
+
+	// 确保上级目录存在
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
+		return err
+	}
 
 	// 用系统密钥环或环境变量加密存储
 	// 简化版本：直接 base64 存储
@@ -317,7 +325,7 @@ func (s *Store) saveMasterKey() error {
 
 // loadMasterKey 加载主密钥
 func (s *Store) loadMasterKey() error {
-	keyPath := filepath.Join(s.dataDir, ".masterkey")
+	keyPath := filepath.Join(filepath.Dir(s.dataDir), ".masterkey")
 
 	data, err := os.ReadFile(keyPath)
 	if err != nil {

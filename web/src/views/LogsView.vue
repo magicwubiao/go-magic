@@ -5,8 +5,8 @@
       <n-space>
         <n-select v-model:value="logLevel" :options="levelOptions" style="width: 120px;" clearable :placeholder="t('common.all')" />
         <n-button @click="loadLogs" :loading="loading">{{ t('common.refresh') }}</n-button>
-        <n-button :type="streaming ? 'error' : 'primary'" @click="toggleStreaming">
-          {{ streaming ? t('logs.stopStream') : t('logs.startStream') }}
+        <n-button :type="logsStore.streaming ? 'error' : 'primary'" @click="toggleStreaming">
+          {{ logsStore.streaming ? t('logs.stopStream') : t('logs.startStream') }}
         </n-button>
       </n-space>
     </n-space>
@@ -28,7 +28,7 @@
         >
           {{ line }}
         </div>
-        <n-empty v-if="lines.length === 0 && !loading" :description="t('logs.noLogs')" />
+        <n-empty v-if="displayLines.length === 0 && !loading" :description="t('logs.noLogs')" />
       </div>
     </n-spin>
   </div>
@@ -37,17 +37,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { request } from '@/api/client'
+import { useLogsStore } from '@/stores/logs'
 
 const { t } = useI18n()
+const logsStore = useLogsStore()
 
-const lines = ref<string[]>([])
 const loading = ref(false)
-const streaming = ref(false)
 const error = ref<string | null>(null)
 const logLevel = ref<string | null>(null)
 const logContainer = ref<HTMLDivElement>()
-let eventSource: EventSource | null = null
+let abortController: AbortController | null = null
 
 const levelOptions = [
   { label: 'DEBUG', value: 'debug' },
@@ -56,10 +55,18 @@ const levelOptions = [
   { label: 'ERROR', value: 'error' },
 ]
 
+function formatLogLine(line: { timestamp: string; level: string; message: string; source: string }): string {
+  const level = (line.level || 'info').toUpperCase()
+  const source = line.source ? ` ${line.source}` : ''
+  return `[${line.timestamp}] [${level}]${source} ${line.message}`
+}
+
+const displayLines = computed(() => logsStore.logs.map(formatLogLine))
+
 const filteredLines = computed(() => {
-  if (!logLevel.value) return lines.value
+  if (!logLevel.value) return displayLines.value
   const levelUpper = logLevel.value.toUpperCase()
-  return lines.value.filter(line => line.includes(`[${levelUpper}]`))
+  return displayLines.value.filter(line => line.includes(`[${levelUpper}]`))
 })
 
 function getLineStyle(line: string): Record<string, string> {
@@ -74,64 +81,39 @@ async function loadLogs(): Promise<void> {
   loading.value = true
   error.value = null
   try {
-    const res = await request<{ file: string; lines: string[] }>('/logs?limit=200')
-    lines.value = res.lines || []
+    await logsStore.loadLogs(200)
     scrollToBottom()
-  } catch (e) {
+  } catch {
     error.value = t('logs.failedToLoad')
-    lines.value = []
   } finally {
     loading.value = false
   }
 }
 
-function toggleStreaming(): void {
-  if (streaming.value) {
+async function toggleStreaming(): Promise<void> {
+  if (logsStore.streaming) {
     stopStreaming()
   } else {
-    startStreaming()
+    await startStreaming()
   }
 }
 
-function startStreaming(): void {
-  if (eventSource) return
-  streaming.value = true
+async function startStreaming(): Promise<void> {
+  if (abortController) return
   error.value = null
-  eventSource = new EventSource('/api/logs/tail')
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (typeof data === 'string') {
-        lines.value.push(data)
-      } else if (data.line) {
-        lines.value.push(data.line)
-      } else if (data.message) {
-        const line = `[${data.timestamp || new Date().toISOString()}] [${(data.level || 'info').toUpperCase()}] ${data.message}`
-        lines.value.push(line)
-      }
-      if (lines.value.length > 1000) {
-        lines.value = lines.value.slice(-1000)
-      }
-      scrollToBottom()
-    } catch {
-      // ignore
-    }
-  }
-  eventSource.onerror = () => {
-    streaming.value = false
-    if (eventSource) {
-      eventSource.close()
-      eventSource = null
-    }
+  try {
+    abortController = await logsStore.startStreaming()
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e)
+    error.value = errMsg
   }
 }
 
 function stopStreaming(): void {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+  if (abortController) {
+    logsStore.stopStreaming(abortController)
+    abortController = null
   }
-  streaming.value = false
 }
 
 function scrollToBottom(): void {

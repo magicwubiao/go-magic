@@ -153,7 +153,7 @@ async function onSelectGoal(goalId: string) {
   try {
     const goal = goalsStore.goals.find(g => g.id === goalId)
     if (goal) {
-      goalsStore.currentGoal = goal
+      goalsStore.setCurrentGoal(goal)
       if (sessionId.value && !goal.session_ids?.includes(sessionId.value)) {
         await goalsStore.linkSession(goalId, sessionId.value)
       }
@@ -192,7 +192,7 @@ async function createGoal() {
   creating.value = true
   try {
     const goal = await goalsStore.createGoal(newGoalForm.title, newGoalForm.description)
-    goalsStore.currentGoal = goal
+    goalsStore.setCurrentGoal(goal)
     if (sessionId.value) {
       await goalsStore.linkSession(goal.id, sessionId.value)
     }

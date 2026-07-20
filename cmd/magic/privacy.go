@@ -197,7 +197,7 @@ func runPrivacyAudit(cmd *cobra.Command, args []string) {
 
 	for i, entry := range log {
 		fmt.Printf("%d. Detected: %s\n", i+1, strings.Join(entry.Detected, ", "))
-		fmt.Printf("   Original: %s\n", utils.Truncate(entry.Original, 50))
+		fmt.Printf("   OriginalHash: %s\n", entry.OriginalHash)
 		fmt.Printf("   Redacted: %s\n", utils.Truncate(entry.Redacted, 50))
 		fmt.Println()
 	}

@@ -35,6 +35,7 @@ export default {
     error: 'Error',
     loading: 'Loading...',
     noData: 'No Data',
+    confirmDelete: 'Are you sure you want to delete?',
     confirmLogout: 'Are you sure you want to logout?',
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -1183,6 +1184,6 @@ export default {
     loginButton: 'Login',
     setPasswordButton: 'Set Password & Login',
     firstTimeSetup: 'First time setup — choose a password to protect your dashboard',
-    passwordMinLength: 'Password must be at least 4 characters',
+    passwordMinLength: 'Password must be at least 8 characters',
   },
 }

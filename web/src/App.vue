@@ -106,6 +106,7 @@ import {
   BriefcaseOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
+import { useChatStore } from '@/stores/chat'
 import { getPendingApprovals } from '@/api/approval'
 
 const { t } = useI18n()
@@ -146,6 +147,7 @@ onUnmounted(() => {
   if (approvalPollTimer) {
     clearInterval(approvalPollTimer)
   }
+  useChatStore().cleanup()
 })
 
 function handleMenuClick(key: string) {
@@ -157,6 +159,7 @@ function handleLogoutClick() {
 }
 
 function handleLogout() {
+  useChatStore().cleanup()
   authStore.logout()
   router.push('/login')
 }

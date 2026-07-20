@@ -3,12 +3,55 @@ package tool
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
+
+var safeHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
+
+// isPrivateIP 校验 IP 是否为内网/保留地址
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// validateURL 校验 URL 协议和目标地址，防止 SSRF
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	// 仅允许 http/https
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme: %s", u.Scheme)
+	}
+	// 解析 host，校验是否为内网地址
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("empty host")
+	}
+	// 解析 DNS
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("DNS lookup failed: %w", err)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip.String()) {
+			return fmt.Errorf("access to private IP denied: %s", ip)
+		}
+	}
+	return nil
+}
 
 // WebSearchTool provides web search capabilities with China-friendly engines
 type WebSearchTool struct{}
@@ -127,6 +170,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 func (t *WebSearchTool) searchBaidu(ctx context.Context, query string, count int) ([]WebSearchResult, error) {
 	searchURL := fmt.Sprintf("https://www.baidu.com/s?wd=%s&rn=%d", url.QueryEscape(query), count)
 
+	if err := validateURL(searchURL); err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
 		return nil, err
@@ -134,7 +181,7 @@ func (t *WebSearchTool) searchBaidu(ctx context.Context, query string, count int
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +237,17 @@ func (t *WebSearchTool) searchBaidu(ctx context.Context, query string, count int
 func (t *WebSearchTool) searchBing(ctx context.Context, query string, count int) ([]WebSearchResult, error) {
 	searchURL := fmt.Sprintf("https://cn.bing.com/search?q=%s&count=%d", url.QueryEscape(query), count)
 
+	if err := validateURL(searchURL); err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -247,13 +298,17 @@ func (t *WebSearchTool) searchBing(ctx context.Context, query string, count int)
 func (t *WebSearchTool) searchDuckDuckGo(ctx context.Context, query string, count int) ([]WebSearchResult, error) {
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
 
+	if err := validateURL(searchURL); err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GoMagic/1.0)")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

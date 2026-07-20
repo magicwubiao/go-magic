@@ -9,10 +9,22 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/slash"
 )
+
+// versionCheck cache state (lives for the lifetime of the process).
+var (
+	versionCheckCache     map[string]interface{}
+	versionCheckCacheTime time.Time
+	versionCheckMu        sync.Mutex
+)
+
+// versionCheckHTTPClient carries a hard 10s timeout as a backstop in case the
+// per-request context is missing or its deadline is not respected.
+var versionCheckHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func (s *Server) handleUsageMonthly(w http.ResponseWriter, r *http.Request) {
 	if s.usageMgr == nil {
@@ -32,15 +44,15 @@ func (s *Server) handleUsageMonthly(w http.ResponseWriter, r *http.Request) {
 	}
 	months := make(map[string]*monthTotals)
 
-	// We need to query all days for up to 12 months
-	for i := 0; i < 365; i++ {
-		date := now.AddDate(0, 0, -i)
-		dateStr := date.Format("2006-01-02")
-		monthStr := date.Format("2006-01")
-		stats, err := s.usageMgr.GetDailyStats(dateStr)
+	// Single bulk fetch over the last 12 months instead of 365 daily lock acquisitions.
+	start := now.AddDate(0, 0, -365)
+	dailyStats := s.usageMgr.GetDailyStatsRange(start, now)
+	for dateStr, stats := range dailyStats {
+		t, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			continue
 		}
+		monthStr := t.Format("2006-01")
 		if _, ok := months[monthStr]; !ok {
 			months[monthStr] = &monthTotals{}
 		}
@@ -84,11 +96,23 @@ func (s *Server) handleUsageDaily(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now()
+	start := now.AddDate(0, 0, -days+1)
+	// Single bulk fetch instead of N individual lock acquisitions.
+	dailyStats := s.usageMgr.GetDailyStatsRange(start, now)
 	result := make([]map[string]interface{}, 0, days)
 	for i := 0; i < days; i++ {
 		date := now.AddDate(0, 0, -i).Format("2006-01-02")
-		stats, err := s.usageMgr.GetDailyStats(date)
-		if err != nil {
+		stats, ok := dailyStats[date]
+		if !ok {
+			result = append(result, map[string]interface{}{
+				"date":          date,
+				"sessions":      0,
+				"messages":      0,
+				"input_tokens":  0,
+				"output_tokens": 0,
+				"total_tokens":  0,
+				"cost":          0.0,
+			})
 			continue
 		}
 		result = append(result, map[string]interface{}{
@@ -450,6 +474,16 @@ func (s *Server) handleUsageToday(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
+	// Serve cached result if still fresh (avoids hammering GitHub API).
+	versionCheckMu.Lock()
+	if versionCheckCache != nil && time.Since(versionCheckCacheTime) < time.Hour {
+		cached := versionCheckCache
+		versionCheckMu.Unlock()
+		jsonResponse(w, cached)
+		return
+	}
+	versionCheckMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -465,7 +499,7 @@ func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "go-magic/"+s.version)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := versionCheckHTTPClient.Do(req)
 	if err != nil {
 		http.Error(w, "failed to check for updates: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -546,7 +580,7 @@ func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	jsonResponse(w, map[string]interface{}{
+	result := map[string]interface{}{
 		"current_version": currentVersion,
 		"latest_version":  latestVersion,
 		"has_update":      hasUpdate,
@@ -557,7 +591,15 @@ func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 		"download_url":    downloadURL,
 		"asset_size":      assetSize,
 		"prerelease":      release.Prerelease,
-	})
+	}
+
+	// Cache for 1 hour so subsequent requests don't re-hit GitHub.
+	versionCheckMu.Lock()
+	versionCheckCache = result
+	versionCheckCacheTime = time.Now()
+	versionCheckMu.Unlock()
+
+	jsonResponse(w, result)
 }
 
 func (s *Server) handleCommandExecute(w http.ResponseWriter, r *http.Request) {

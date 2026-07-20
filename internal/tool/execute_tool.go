@@ -412,22 +412,25 @@ func (t *ExecuteCommandTool) SetAllowAny(allow bool) {
 }
 
 // SetCodingMode enables coding mode with relaxed restrictions
+// coding 模式仅放宽超时和输出大小限制，不再绕过 dangerousPatterns/injectionPatterns 检查，
+// 也不再设置 allowAny=true，以保留命令白名单校验。
 func (t *ExecuteCommandTool) SetCodingMode(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
 		t.timeout = 300 * time.Second // 5 minutes for coding mode (was 120s)
 		t.maxOutput = 1024 * 1024     // 1MB output (was 200KB)
-		t.allowAny = true
+		// 不再设置 allowAny = true，保留安全检查
 	}
 }
 
 // SetCodingModeAdvanced enables advanced coding mode with even more relaxed restrictions
+// 同样不再绕过白名单，仅放宽超时和输出限制。
 func (t *ExecuteCommandTool) SetCodingModeAdvanced(enabled bool) {
 	t.codingMode = enabled
 	if enabled {
 		t.timeout = 600 * time.Second // 10 minutes for advanced coding
 		t.maxOutput = 2 * 1024 * 1024 // 2MB output
-		t.allowAny = true
+		// 不再设置 allowAny = true，保留安全检查
 	}
 }
 

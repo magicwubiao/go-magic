@@ -190,7 +190,7 @@ func (pm *ProfileManager) setActive(name string) error {
 
 	// Write marker file
 	currentFile := filepath.Join(pm.homeBase, ".current_profile")
-	return os.WriteFile(currentFile, []byte(name), 0644)
+	return os.WriteFile(currentFile, []byte(name), 0600)
 }
 
 // Current returns the currently active profile

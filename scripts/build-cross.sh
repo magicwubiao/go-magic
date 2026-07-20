@@ -188,7 +188,7 @@ build_platform() {
     CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build \
         -ldflags="$(get_ldflags)" \
         -o "$output_path" \
-        ./cmd/magic 2>/dev/null
+        ./cmd/magic
 
     if [[ -f "$output_path" ]]; then
         log_info "Built: ${output_path} ($(du -h "$output_path" | cut -f1))"

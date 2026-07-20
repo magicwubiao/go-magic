@@ -2,13 +2,13 @@
 
 **Magic Agent** -- A high-performance, ultra-lightweight AI Agent framework written in Go.
 
-[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.26%2B-00ADD8)](https://go.dev)
 [![Version](https://img.shields.io/badge/version-v0.4.14-green)](https://github.com/magicwubiao/go-magic/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## Overview
 
-go-magic is a full-featured AI Agent framework that combines a powerful Go backend with a modern React/TypeScript web dashboard. It supports 22+ AI providers, ships a built-in TUI (BubbleTea), and offers extensive tooling for file operations, code execution, web browsing, and more.
+go-magic is a full-featured AI Agent framework that combines a powerful Go backend with a modern Vue 3/TypeScript web dashboard. It supports 22+ AI providers, ships a built-in TUI (BubbleTea), and offers extensive tooling for file operations, code execution, web browsing, and more.
 
 ## Features
 
@@ -26,7 +26,7 @@ Built with [BubbleTea](https://github.com/charmbracelet/bubbletea), featuring mu
 
 ### Web Dashboard
 
-React/TypeScript frontend with:
+Vue 3/TypeScript frontend with:
 - Real-time chat with streaming responses
 - Session management (create, search, resume)
 - Provider and model configuration with hot-reload

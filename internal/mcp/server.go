@@ -35,6 +35,11 @@ type MCPServer struct {
 	clientMu    sync.RWMutex
 	rateLimiter *rateLimiter
 	shutdown    int32
+
+	// ctx is cancelled when the server stops, so handlers can short-circuit
+	// long-running operations instead of relying on context.Background().
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // rateLimiter implements simple token bucket rate limiting
@@ -148,6 +153,7 @@ type SamplingResponse struct {
 
 // NewMCPServer creates a new MCP server
 func NewMCPServer(port int, handler MCPServerHandler) *MCPServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MCPServer{
 		Port:         port,
 		Path:         "/mcp",
@@ -157,6 +163,8 @@ func NewMCPServer(port int, handler MCPServerHandler) *MCPServer {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		rateLimiter:  newRateLimiter(100, time.Second), // 100 requests per second
+		ctx:          ctx,
+		cancel:       cancel,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins in development
@@ -182,8 +190,10 @@ func (s *MCPServer) Start() error {
 	mux.HandleFunc("/tools/call", s.handleCallTool)
 
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.Port),
-		Handler: mux,
+		Addr:              fmt.Sprintf(":%d", s.Port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	return s.server.ListenAndServe()
@@ -198,8 +208,10 @@ func (s *MCPServer) StartTLS(certFile, keyFile string) error {
 	mux.HandleFunc("/tools/call", s.handleCallTool)
 
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.Port),
-		Handler: mux,
+		Addr:              fmt.Sprintf(":%d", s.Port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	return s.server.ListenAndServeTLS(certFile, keyFile)
@@ -209,6 +221,12 @@ func (s *MCPServer) StartTLS(certFile, keyFile string) error {
 func (s *MCPServer) Stop() error {
 	if !atomic.CompareAndSwapInt32(&s.shutdown, 0, 1) {
 		return nil // Already shutting down
+	}
+
+	// Cancel the server-level context so any in-flight handler using it
+	// can short-circuit instead of relying on context.Background().
+	if s.cancel != nil {
+		s.cancel()
 	}
 
 	// Close all connected WebSocket clients
@@ -389,7 +407,12 @@ func (s *MCPServer) handleToolsCall(conn *websocket.Conn, msg *JSONRPCMessage) {
 		return
 	}
 
-	ctx := context.Background()
+	// Use the server's lifecycle context so in-flight tool calls are
+	// cancelled when Stop() is invoked, instead of relying on context.Background().
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	result, err := s.Handler.HandleToolCall(ctx, req.Name, req.Arguments)
 	if err != nil {
 		s.sendError(conn, msg.ID, -32603, err.Error())
@@ -619,7 +642,8 @@ func (s *MCPServer) handleCallTool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx := context.Background()
+	// Use the request context so the call is cancelled when the client disconnects.
+	ctx := r.Context()
 	result, err := s.Handler.HandleToolCall(ctx, req.Tool, req.Args)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

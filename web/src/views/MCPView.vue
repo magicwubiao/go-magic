@@ -388,7 +388,7 @@ async function handleSave() {
 
   try {
     if (isEditing.value) {
-      await mcpStore.addServer(formData.name, config)
+      await mcpStore.updateServer(formData.name, config)
       message.success(t('mcp.serverUpdated'))
     } else {
       await mcpStore.addServer(formData.name, config)

@@ -71,6 +71,13 @@ export async function addMCPServer(name: string, config: MCPConfig): Promise<voi
   })
 }
 
+export async function updateMCPServer(name: string, config: MCPConfig): Promise<void> {
+  return request(`/mcp/servers/${name}`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  })
+}
+
 export async function removeMCPServer(name: string): Promise<void> {
   return request(`/mcp/servers/${name}`, {
     method: 'DELETE',

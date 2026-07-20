@@ -194,7 +194,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
@@ -261,19 +261,19 @@ const userData = ref<UserData>({
 const loadingPreferences = ref(false)
 const preferences = ref<Preference[]>([])
 
-const communicationStyleOptions = [
+const communicationStyleOptions = computed(() => [
   { label: t('profiles.user.styles.concise'), value: 'concise' },
   { label: t('profiles.user.styles.detailed'), value: 'detailed' },
   { label: t('profiles.user.styles.technical'), value: 'technical' },
   { label: t('profiles.user.styles.casual'), value: 'casual' }
-]
+])
 
-const codeStyleOptions = [
+const codeStyleOptions = computed(() => [
   { label: t('profiles.user.styles.clean'), value: 'clean' },
   { label: t('profiles.user.styles.documented'), value: 'documented' },
   { label: t('profiles.user.styles.efficient'), value: 'efficient' },
   { label: t('profiles.user.styles.verbose'), value: 'verbose' }
-]
+])
 
 async function loadProfiles(): Promise<void> {
   loading.value = true
@@ -313,9 +313,12 @@ async function switchProfile(name: string): Promise<void> {
   try {
     await request(`/profiles/${name}/switch`, { method: 'POST' })
     message.success(t('profiles.switched', { name }))
-    await configStore.loadConfig()
-    await chatStore.loadSessions()
-    await loadProfiles()
+    // 后 3 个无依赖可并行
+    await Promise.all([
+      configStore.loadConfig(),
+      chatStore.loadSessions(),
+      loadProfiles(),
+    ])
   } catch (e) {
     message.error(t('profiles.failedToSwitch'))
   }
@@ -337,11 +340,16 @@ async function openProfileDetail(name: string): Promise<void> {
   showDetailModal.value = true
 
   // Load all data
-  await Promise.all([
+  const results = await Promise.allSettled([
     loadUserProfile(name),
     loadSoul(name),
     loadPreferences(name)
   ])
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      console.error(`openProfileDetail [${i}] failed:`, r.reason)
+    }
+  })
 }
 
 async function loadUserProfile(name: string): Promise<void> {

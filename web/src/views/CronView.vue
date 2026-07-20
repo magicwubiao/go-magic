@@ -142,6 +142,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { useCronStore } from '@/stores/cron'
 import type { CronJob } from '@/api/cron'
+import { getLocale } from '@/locales'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -190,13 +191,12 @@ function stateLabel(state: string) {
   return map[state] || state
 }
 
-function formatTime(t: string) {
-  try {
-    const d = new Date(t)
-    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  } catch {
-    return t
-  }
+function formatTime(timeStr: string) {
+  if (!timeStr) return ''
+  const t = new Date(timeStr)
+  if (isNaN(t.getTime())) return timeStr
+  const locale = getLocale() === 'zh' ? 'zh-CN' : 'en-US'
+  return t.toLocaleString(locale, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function setSchedule(s: string) {

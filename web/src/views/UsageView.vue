@@ -308,7 +308,7 @@ const budgetStatusText = computed(() => {
   return t('usage.budgetOK')
 })
 
-const monthlyColumns: DataTableColumns<MonthlyUsage> = [
+const monthlyColumns = computed<DataTableColumns<MonthlyUsage>>(() => [
   { title: t('usage.month'), key: 'month' },
   { title: t('usage.sessions'), key: 'total_sessions' },
   { title: t('usage.messages'), key: 'total_messages' },
@@ -322,9 +322,9 @@ const monthlyColumns: DataTableColumns<MonthlyUsage> = [
     key: 'total_cost',
     render: (row) => `$${formatCost(row.total_cost)}`
   }
-]
+])
 
-const dailyColumns: DataTableColumns<DailyUsage> = [
+const dailyColumns = computed<DataTableColumns<DailyUsage>>(() => [
   { title: t('usage.date'), key: 'date' },
   { title: t('usage.sessions'), key: 'sessions' },
   { title: t('usage.messages'), key: 'messages' },
@@ -348,15 +348,15 @@ const dailyColumns: DataTableColumns<DailyUsage> = [
     key: 'cost',
     render: (row) => `$${formatCost(row.cost)}`
   }
-]
+])
 
-const modelColumns: DataTableColumns<{
+const modelColumns = computed<DataTableColumns<{
   model: string
   requests: number
   tokens: number
   cost: number
   percentage: number
-}> = [
+}>>(() => [
   { title: t('usage.model'), key: 'model' },
   { title: t('usage.requests'), key: 'requests' },
   {
@@ -374,7 +374,7 @@ const modelColumns: DataTableColumns<{
     key: 'percentage',
     render: (row) => `${row.percentage.toFixed(1)}%`
   }
-]
+])
 
 function formatNumber(num: number): string {
   if (num === undefined || num === null || isNaN(num)) return '0'
@@ -384,7 +384,7 @@ function formatNumber(num: number): string {
   if (num >= 1000) {
     return (num / 1000).toFixed(2) + 'K'
   }
-  return num.toString()
+  return Math.round(num).toLocaleString()
 }
 
 function formatCost(cost: number): string {

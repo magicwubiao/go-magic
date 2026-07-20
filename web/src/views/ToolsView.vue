@@ -61,7 +61,7 @@
                 </n-space>
               </template>
               <template #header-extra>
-                <n-switch v-model:value="toolset.enabled" size="small" @update:value="toggleToolset(toolset.id, $event)" />
+                <n-switch :value="toolset.enabled" size="small" @update:value="toggleToolset(toolset.id, $event)" />
               </template>
               <n-text depth="3">{{ toolset.description || t('tools.noDescription') }}</n-text>
               <template #footer>

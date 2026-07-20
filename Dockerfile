@@ -22,7 +22,7 @@ COPY web/ .
 RUN npm run build
 
 # Stage 2: Go Build
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -84,7 +84,7 @@ EXPOSE 8642 8643
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8642/api/health || exit 1
+    CMD curl -sf http://localhost:8642/api/health || exit 1
 
 # Default command - start server with web UI
 ENTRYPOINT ["/app/magic"]

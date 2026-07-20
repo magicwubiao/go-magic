@@ -4,7 +4,10 @@ package memory
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -247,8 +250,10 @@ func (s *Store) Store(m *Memory) error {
 
 // Recall searches for relevant memories based on query
 func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Recall only reads from the DB, so use the read lock for better
+	// concurrency between parallel Recall/Search calls.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if limit <= 0 {
 		limit = 10
@@ -506,7 +511,7 @@ func (s *Store) getLLMProvider() provider.Provider {
 
 	apiKey = os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey != "" {
-		return provider.NewOpenAICompatibleProvider("anthropic", apiKey, "https://api.anthropic.com/v1", "claude-3-haiku-20240307", nil)
+		return provider.NewAnthropicProvider(apiKey, "claude-3-haiku-20240307")
 	}
 
 	apiKey = os.Getenv("DEEPSEEK_API_KEY")
@@ -625,17 +630,18 @@ func (s *Store) Close() error {
 
 // generateID creates a unique ID
 func generateID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%10000)
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// 回退到时间戳
+		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // hashCommand creates a hash for command pattern matching
 func hashCommand(cmd string) string {
-	// Simple hash - normalize the command
-	normalized := strings.ToLower(strings.TrimSpace(cmd))
-	// Remove specific values but keep structure
-	normalized = strings.ReplaceAll(normalized, "1234", "{NUM}")
-	normalized = strings.ReplaceAll(normalized, "test-user", "{USER}")
-	return fmt.Sprintf("%x", len(normalized))
+	h := sha256.Sum256([]byte(cmd))
+	return hex.EncodeToString(h[:])
 }
 
 // Stats returns memory statistics

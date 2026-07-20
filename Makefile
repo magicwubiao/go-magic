@@ -11,7 +11,7 @@ GOFLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
 DOCKER_REPO := magicwubiao/go-magic
 
 # Go version for cross-compilation
-GO_VERSION := 1.22
+GO_VERSION := 1.26
 
 # Help
 help:

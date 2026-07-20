@@ -430,6 +430,19 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		}
 	}()
 
+	// Derive a context that is cancelled when the gateway stops so that
+	// downstream handlers (slash commands, agent.Process, sessionStore.Save)
+	// can short-circuit instead of relying on context.Background().
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-g.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	// Apply middleware
 	g.mu.RLock()
 	middleware := g.middleware
@@ -449,7 +462,7 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	if g.config.EnableSlashCmd && len(msg.Content) > 0 && msg.Content[0] == '/' {
 		cmd := msg.Content[1:]
 		if resp, err := handler.HandleSlashCommand(cmd, msg); err == nil {
-			handler.Send(context.Background(), resp)
+			handler.Send(ctx, resp)
 			return
 		}
 	}
@@ -476,9 +489,9 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	log.Infof("[Gateway] Processing message from user=%s platform=%s", msg.UserID, platform)
 
 	if psHandler, ok := g.agent.(AgentHandlerWithStats); ok {
-		resp, inputTokens, outputTokens, cacheTokens, err = psHandler.ProcessWithStats(context.Background(), msg)
+		resp, inputTokens, outputTokens, cacheTokens, err = psHandler.ProcessWithStats(ctx, msg)
 	} else {
-		resp, err = g.agent.Process(context.Background(), msg)
+		resp, err = g.agent.Process(ctx, msg)
 	}
 	if err != nil {
 		log.Errorf("[Gateway] Agent processing error: %v", err)
@@ -496,8 +509,19 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	// Persist session to store if available
 	if g.sessionStore != nil {
 		go func(s *Session) {
+			// Use a separate context for the persistence goroutine, otherwise
+			// the parent ctx is cancelled as soon as processMessage returns.
+			saveCtx, saveCancel := context.WithCancel(context.Background())
+			defer saveCancel()
+			go func() {
+				select {
+				case <-g.stopCh:
+					saveCancel()
+				case <-saveCtx.Done():
+				}
+			}()
 			if err := g.sessionStore.SaveSessionDataFromMap(
-				context.Background(),
+				saveCtx,
 				s.ID,
 				s.Platform,
 				s.InputTokens,
@@ -515,7 +539,7 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		Content:   resp,
 		ChannelID: msg.ChannelID,
 	}
-	handler.Send(context.Background(), response)
+	handler.Send(ctx, response)
 }
 
 // getOrCreateSession gets or creates a session for a user
@@ -791,8 +815,10 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
 
 	g.apiServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.apiPort),
-		Handler: mux,
+		Addr:              fmt.Sprintf(":%d", g.apiPort),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	log.Infof("Gateway API server starting on port %d", g.apiPort)

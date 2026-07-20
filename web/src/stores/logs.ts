@@ -19,7 +19,9 @@ export const useLogsStore = defineStore('logs', () => {
   const streaming = ref(false)
   const loading = ref(false)
   const error = ref<LogsError | null>(null)
-  let eventSource: EventSource | null = null
+  // Track active abort controllers per stream invocation, so multiple
+  // components can stream independently without interfering with each other.
+  const controllers = new Set<AbortController>()
 
   function parseLogLine(line: string): LogLine {
     // Try to parse format: [2026-05-19 14:42:52] [INFO] source message
@@ -51,6 +53,29 @@ export const useLogsStore = defineStore('logs', () => {
     }
   }
 
+  function handleLogLine(rawData: string): void {
+    try {
+      const data = JSON.parse(rawData) as { line?: string; message?: string; level?: string; timestamp?: string }
+      if (typeof data === 'string') {
+        logs.value.unshift(parseLogLine(data))
+      } else if (data.line) {
+        logs.value.unshift(parseLogLine(data.line))
+      } else if (data.message) {
+        logs.value.unshift({
+          timestamp: data.timestamp || new Date().toISOString(),
+          level: (data.level || 'info').toLowerCase(),
+          source: '',
+          message: data.message,
+        })
+      }
+      if (logs.value.length > 1000) {
+        logs.value = logs.value.slice(0, 1000)
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
   async function loadLogs(limit = 100): Promise<void> {
     loading.value = true
     error.value = null
@@ -66,51 +91,39 @@ export const useLogsStore = defineStore('logs', () => {
     }
   }
 
-  function startStreaming(): void {
-    // Prevent multiple EventSource instances
-    if (eventSource) {
-      return
-    }
+  // Each call returns an independent AbortController so multiple components
+  // can stream concurrently; stopping one does not affect the others.
+  async function startStreaming(): Promise<AbortController> {
     streaming.value = true
     error.value = null
-    eventSource = logsApi.streamLogs()
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as { line?: string; message?: string; level?: string; timestamp?: string }
-        if (typeof data === 'string') {
-          logs.value.unshift(parseLogLine(data))
-        } else if (data.line) {
-          logs.value.unshift(parseLogLine(data.line))
-        } else if (data.message) {
-          logs.value.unshift({
-            timestamp: data.timestamp || new Date().toISOString(),
-            level: (data.level || 'info').toLowerCase(),
-            source: '',
-            message: data.message,
-          })
+    const controller = await logsApi.streamLogs(
+      (rawData: string) => {
+        handleLogLine(rawData)
+      },
+      (e: Error) => {
+        error.value = { message: e.message }
+        controllers.delete(controller)
+        if (controllers.size === 0) {
+          streaming.value = false
         }
-        if (logs.value.length > 1000) {
-          logs.value = logs.value.slice(0, 1000)
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
-    eventSource.onerror = () => {
-      streaming.value = false
-      if (eventSource) {
-        eventSource.close()
-        eventSource = null
-      }
-    }
+      },
+    )
+    controllers.add(controller)
+    return controller
   }
 
-  function stopStreaming(): void {
-    if (eventSource) {
-      eventSource.close()
-      eventSource = null
+  function stopStreaming(controller?: AbortController): void {
+    if (controller) {
+      controller.abort()
+      controllers.delete(controller)
+    } else {
+      // Stop all active streams (e.g. on full cleanup)
+      controllers.forEach((c) => c.abort())
+      controllers.clear()
     }
-    streaming.value = false
+    if (controllers.size === 0) {
+      streaming.value = false
+    }
   }
 
   function cleanup(): void {

@@ -3,6 +3,7 @@
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('plugins.title') }}</h2>
       <n-space>
+        <!-- Using emoji for icon: project has @vicons/ionicons5 but keeping emoji for simplicity/consistency with other views -->
         <n-button @click="pluginsStore.rescan()">🔄 {{ t('plugins.rescan') }}</n-button>
         <n-button type="primary" @click="showInstall = true">+ {{ t('plugins.install') }}</n-button>
       </n-space>

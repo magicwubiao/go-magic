@@ -82,7 +82,8 @@ func (f *FTSStore) initSchema() error {
 			DELETE FROM memories_fts WHERE rowid = old.id;
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-			UPDATE memories_fts SET content = new.content, tags = new.tags WHERE rowid = new.id;
+			DELETE FROM memories_fts WHERE rowid = old.id;
+			INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
 		END`,
 	}
 

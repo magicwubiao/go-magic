@@ -77,7 +77,7 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate secure bcrypt hash with cost 12
+	// Generate secure bcrypt hash with default cost
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)

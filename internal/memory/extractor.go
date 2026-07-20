@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -356,13 +357,10 @@ func (me *MemoryExtractor) GetTopMemories(query string, limit int, now time.Time
 		scored = append(scored, scoredMem{mem: m, score: score})
 	}
 
-	for i := 0; i < len(scored)-1; i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[i].score < scored[j].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
+	// Sort by relevance score (descending) using stdlib instead of O(n^2) selection sort.
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
 
 	if limit > len(scored) {
 		limit = len(scored)

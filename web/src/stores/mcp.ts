@@ -66,6 +66,11 @@ export const useMCPStore = defineStore('mcp', () => {
     await loadServers()
   }
 
+  async function updateServer(name: string, config: MCPConfig) {
+    await mcpApi.updateMCPServer(name, config)
+    await loadServers()
+  }
+
   async function removeServer(name: string) {
     await mcpApi.removeMCPServer(name)
     delete serverTools.value[name]
@@ -96,6 +101,7 @@ export const useMCPStore = defineStore('mcp', () => {
     reconnectServer,
     refreshTools,
     addServer,
+    updateServer,
     removeServer,
     getTools,
     getHealthStatus,

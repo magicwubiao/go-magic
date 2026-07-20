@@ -24,7 +24,16 @@ export const useSystemStore = defineStore('system', () => {
   async function loadAll() {
     loading.value = true
     try {
-      await Promise.all([loadInfo(), loadStats(), checkHealth()])
+      const results = await Promise.allSettled([
+        loadInfo(),
+        loadStats(),
+        checkHealth(),
+      ])
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          console.error(`loadAll [${i}] failed:`, r.reason)
+        }
+      })
     } finally {
       loading.value = false
     }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Character limits (not tokens) because char counts are model-independent
@@ -371,5 +372,19 @@ func truncateString(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	return s[:limit-3] + "..."
+	truncated := s[:limit]
+	// Walk back to a valid UTF-8 rune boundary so we don't cut a multi-byte
+	// character in half (which would produce invalid UTF-8 in the output).
+	for len(truncated) > 0 {
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r == utf8.RuneError && size == 1 {
+			truncated = truncated[:len(truncated)-1]
+		} else {
+			break
+		}
+	}
+	if len(truncated) > 3 {
+		truncated = truncated[:len(truncated)-3]
+	}
+	return truncated + "..."
 }

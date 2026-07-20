@@ -40,8 +40,6 @@ export interface TimelineStep {
 
 defineProps({
   steps: { type: Array as PropType<TimelineStep[]>, required: true },
-  title: { type: String, default: '' },
-  overallPercent: { type: Number, default: undefined },
 })
 </script>
 

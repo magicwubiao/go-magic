@@ -12,7 +12,7 @@
             type="password"
             show-password-on="click"
             :placeholder="t('auth.enterPassword')"
-            :minlength="4"
+            :minlength="8"
             autofocus
             @keydown.enter="handleSubmit"
           />
@@ -48,7 +48,7 @@ onMounted(async () => {
 })
 
 async function handleSubmit(): Promise<void> {
-  if (!password.value || password.value.length < 4) {
+  if (!password.value || password.value.length < 8) {
     authStore.error = t('auth.passwordMinLength')
     return
   }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -96,8 +97,8 @@ func (pc *PromptCache) CachePrefix(ctx context.Context, prefixContent string) (s
 
 // GetCachedPrefix retrieves a cached prefix by key
 func (pc *PromptCache) GetCachedPrefix(key string) (string, bool) {
-	pc.mu.RLock()
-	defer pc.mu.RUnlock()
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
 
 	if cached, ok := pc.cache[key]; ok {
 		// Check TTL
@@ -178,15 +179,10 @@ func (pc *PromptCache) evictIfNeeded() {
 		entries = append(entries, entry{key, cached.LastUsedAt})
 	}
 
-	// Sort by access time (oldest first)
-	// Simple bubble sort for small datasets
-	for i := 0; i < len(entries)-1; i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].access.After(entries[j].access) {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
+	// Sort by access time (oldest first) using stdlib instead of O(n^2) bubble sort.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].access.Before(entries[j].access)
+	})
 
 	// Remove oldest entries
 	toRemove := len(entries) - pc.maxCacheSize + 10 // Keep some buffer

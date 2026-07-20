@@ -881,6 +881,19 @@ func (s *Server) handleFSShare(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
 	}
+	// 白名单校验：仅允许在允许的根目录内分享
+	allowedRoots := s.getAllowedFSRoots()
+	allowed := false
+	for _, root := range allowedRoots {
+		if IsPathWithin(absPath, root) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "Path not allowed", http.StatusForbidden)
+		return
+	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"error": "path not found"})

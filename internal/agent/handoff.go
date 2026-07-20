@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ type HandoffResult struct {
 
 // HandoffManager manages session handoffs between models/profiles
 type HandoffManager struct {
+	mu       sync.RWMutex
 	handoffs []HandoffRecord
 }
 
@@ -89,7 +91,9 @@ func (hm *HandoffManager) ExecuteHandoff(ctx context.Context, sessionID, current
 		Reason:      req.Reason,
 		Timestamp:   time.Now(),
 	}
+	hm.mu.Lock()
 	hm.handoffs = append(hm.handoffs, record)
+	hm.mu.Unlock()
 
 	result.Success = true
 	return result
@@ -97,6 +101,8 @@ func (hm *HandoffManager) ExecuteHandoff(ctx context.Context, sessionID, current
 
 // GetHandoffHistory returns the handoff history for a session
 func (hm *HandoffManager) GetHandoffHistory(sessionID string) []HandoffRecord {
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
 	var records []HandoffRecord
 	for _, h := range hm.handoffs {
 		if h.SessionID == sessionID {

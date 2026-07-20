@@ -2,7 +2,16 @@ import { createI18n } from 'vue-i18n'
 import en from './en'
 import zh from './zh'
 
-const savedLocale = localStorage.getItem('locale') || 'zh'
+function getDefaultLocale(): 'zh' | 'en' {
+  const saved = localStorage.getItem('locale')
+  if (saved === 'zh' || saved === 'en') return saved
+  // Infer from browser language
+  const browserLang = navigator.language || (navigator as any).userLanguage || ''
+  if (browserLang.startsWith('zh')) return 'zh'
+  return 'en'
+}
+
+const savedLocale = getDefaultLocale()
 
 export const i18n = createI18n({
   legacy: false,

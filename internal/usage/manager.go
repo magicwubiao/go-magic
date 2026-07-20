@@ -243,6 +243,31 @@ func (m *Manager) GetDailyStats(date string) (*DailyStats, error) {
 	return &result, nil
 }
 
+// GetDailyStatsRange 批量获取 [start, end] 区间内的每日统计。
+// 与循环调用 GetDailyStats 不同，本方法只获取一次读锁，避免高频加锁开销。
+// 返回值按日期字符串映射，仅包含实际存在记录的日期。
+func (m *Manager) GetDailyStatsRange(start, end time.Time) map[string]*DailyStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	startStr := start.Format("2006-01-02")
+	endStr := end.Format("2006-01-02")
+
+	result := make(map[string]*DailyStats)
+	for date, stats := range m.dailyStats {
+		if date < startStr || date > endStr {
+			continue
+		}
+		clone := *stats
+		clone.ByModel = make(map[string]ModelStats)
+		for k, v := range stats.ByModel {
+			clone.ByModel[k] = v
+		}
+		result[date] = &clone
+	}
+	return result
+}
+
 // GetTodayStats 获取今日统计
 func (m *Manager) GetTodayStats() (*DailyStats, error) {
 	return m.GetDailyStats(time.Now().Format("2006-01-02"))

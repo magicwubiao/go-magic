@@ -335,7 +335,7 @@ func (cm *ConfigManager) Save() error {
 		return err
 	}
 
-	return os.WriteFile(cm.filePath, data, 0644)
+	return os.WriteFile(cm.filePath, data, 0600)
 }
 
 // Get returns the current configuration
@@ -464,7 +464,7 @@ func (cm *ConfigManager) saveLocked() error {
 		return err
 	}
 
-	return os.WriteFile(cm.filePath, data, 0644)
+	return os.WriteFile(cm.filePath, data, 0600)
 }
 
 // notifyWatchers notifies all config watchers

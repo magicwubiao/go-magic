@@ -419,8 +419,27 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import go from 'highlight.js/lib/languages/go'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import markdown from 'highlight.js/lib/languages/markdown'
 import 'highlight.js/styles/github-dark.css'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('markdown', markdown)
 import { useChatStore } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import ReasoningContent from '@/components/ReasoningContent.vue'
@@ -542,11 +561,33 @@ const codeRenderer = (code: string, lang?: string): string => {
   const highlighted = language
     ? hljs.highlight(code, { language }).value
     : hljs.highlightAuto(code).value
-  const copyBtn = `<button class="code-copy-btn" onclick="(function(btn){var code=btn.parentElement.querySelector('code');navigator.clipboard.writeText(code.textContent);btn.textContent='✓ Copied';setTimeout(()=>btn.textContent='Copy',2000)})(this)">Copy</button>`
+  // 移除 inline onclick，改用 class + 事件委托（见 handleCodeBlockClick）
+  const copyBtn = `<button class="code-copy-btn" type="button">Copy</button>`
   return `<div class="code-block">${copyBtn}<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`
 }
 
 marked.use({ renderer: { code: codeRenderer } })
+
+// 处理代码块按钮点击（事件委托替代 inline onclick，避免 v-html + inline handler XSS 风险）
+function handleCodeBlockClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  const btn = target.closest('.code-copy-btn') as HTMLElement | null
+  if (!btn) return
+  const codeEl = btn.parentElement?.querySelector('code')
+  const code = codeEl?.textContent || ''
+  navigator.clipboard.writeText(code).catch(() => { /* ignore */ })
+  const original = btn.textContent
+  btn.textContent = '✓ Copied'
+  setTimeout(() => { btn.textContent = original }, 2000)
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleCodeBlockClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleCodeBlockClick)
+})
 
 function renderMarkdown(content: string): string {
   return marked.parse(content) as string
@@ -679,7 +720,7 @@ async function handleFileSelect({ file }: { file: UploadFileInfo }) {
     selectedFiles.value.push(uploaded)
   } catch (e) {
     console.error('Upload failed:', e)
-    ElMessage.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
+    message.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
   } finally {
     uploadingFiles.value.delete(fileKey)
   }

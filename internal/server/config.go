@@ -14,12 +14,19 @@ import (
 )
 
 func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
+	// Build provider options dynamically from appconfig.ListProviders() so the schema
+	// stays in sync with the full set of supported providers (currently 23).
+	providerOptions := make([]string, 0, 32)
+	for _, p := range appconfig.ListProviders() {
+		providerOptions = append(providerOptions, p.Name)
+	}
+
 	schema := map[string]interface{}{
 		"fields": map[string]interface{}{
 			"provider": map[string]interface{}{
 				"type":    "string",
 				"default": "deepseek",
-				"options": []string{"openai", "anthropic", "deepseek", "ollama", "gemini", "groq", "mistral", "cohere", "custom"},
+				"options": providerOptions,
 			},
 			"model": map[string]interface{}{
 				"type":       "string",
@@ -338,28 +345,6 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
-}
-
-func (s *Server) handleEnvReveal(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Key string `json:"key"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	envPath := filepath.Join(s.magicHome, ".env")
-	envVars := s.readEnvFile(envPath)
-	value := ""
-	if v, ok := envVars[req.Key]; ok {
-		value = v
-	}
-	jsonResponse(w, map[string]string{"key": req.Key, "value": value})
 }
 
 func (s *Server) writeEnvFile(path string, vars map[string]string) {

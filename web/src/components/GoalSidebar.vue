@@ -217,15 +217,6 @@ const currentGoal = computed(() => goalsStore.currentGoal)
 const activeGoals = computed(() => goalsStore.activeGoals)
 const sessionId = computed(() => chatStore.activeSessionId || '')
 
-function statusType(status: string) {
-  const map: Record<string, string> = {
-    active: 'info',
-    completed: 'success',
-    abandoned: 'default',
-  }
-  return (map[status] || 'default') as any
-}
-
 onMounted(() => {
   goalsStore.loadCurrentGoal()
   goalsStore.loadGoals('active')
@@ -244,7 +235,7 @@ watch(sessionId, async (newSessionId) => {
 }, { immediate: true })
 
 async function selectGoal(goal: Goal) {
-  goalsStore.currentGoal = goal
+  goalsStore.setCurrentGoal(goal)
   // Only auto-link if auto_link_goals is enabled
   if (sessionId.value && !goal.session_ids?.includes(sessionId.value) && configStore.config?.auto_link_goals) {
     await goalsStore.linkSession(goal.id, sessionId.value)
@@ -317,7 +308,7 @@ async function createGoal() {
   creating.value = true
   try {
     const goal = await goalsStore.createGoal(newGoalForm.title, newGoalForm.description)
-    goalsStore.currentGoal = goal
+    goalsStore.setCurrentGoal(goal)
     if (sessionId.value) {
       await goalsStore.linkSession(goal.id, sessionId.value)
     }

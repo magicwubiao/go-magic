@@ -295,7 +295,10 @@ func (t *ExecuteCodeTool) isDirAllowed(dir string) bool {
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(absDir, absAllowed) || strings.HasPrefix(absAllowed, absDir) {
+		sep := string(filepath.Separator)
+		if absDir == absAllowed ||
+			strings.HasPrefix(absDir, absAllowed+sep) ||
+			strings.HasPrefix(absAllowed, absDir+sep) {
 			return true
 		}
 	}

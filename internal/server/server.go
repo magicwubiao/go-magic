@@ -25,6 +25,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/mcp"
+	"github.com/magicwubiao/go-magic/internal/metrics"
 	"github.com/magicwubiao/go-magic/internal/plugin"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
@@ -100,9 +101,44 @@ type Server struct {
 	authToken string
 	authMu    sync.RWMutex
 
+	// CORS allowed origins (empty list => default to local-only)
+	allowedOrigins []string
+
 	// Share tokens for temporary read-only file access
 	shareTokens   map[string]*ShareToken
 	shareTokensMu sync.RWMutex
+
+	// HTTP server reference for graceful shutdown
+	httpServer *http.Server
+
+	// Metrics collector ( lazily usable via /metrics endpoint )
+	metricsMgr *metrics.Metrics
+}
+
+// isAllowedOrigin 校验 origin 是否在允许列表内。
+// 当 allowedOrigins 为空时，默认仅允许本地回环地址。
+func (s *Server) isAllowedOrigin(origin string) bool {
+	if len(s.allowedOrigins) == 0 {
+		// 默认仅允许本地
+		allowed := []string{
+			"http://localhost:8642",
+			"http://127.0.0.1:8642",
+			"http://localhost:8643",
+			"http://127.0.0.1:8643",
+		}
+		for _, a := range allowed {
+			if a == origin {
+				return true
+			}
+		}
+		return false
+	}
+	for _, a := range s.allowedOrigins {
+		if a == origin || a == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func NewServer(dbPath string) *Server {
@@ -287,6 +323,17 @@ func NewServer(dbPath string) *Server {
 		execPath = "/home/www/magic"
 	}
 
+	// Load allowed CORS origins from env (comma-separated). Empty => default local-only.
+	var allowedOrigins []string
+	if envOrigins := os.Getenv("GO_MAGIC_CORS_ORIGINS"); envOrigins != "" {
+		for _, o := range strings.Split(envOrigins, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedOrigins = append(allowedOrigins, o)
+			}
+		}
+	}
+
 	s := &Server{
 		mu:               sync.RWMutex{},
 		startTime:        time.Now(),
@@ -314,7 +361,9 @@ func NewServer(dbPath string) *Server {
 		actions:          make(map[string]*ActionStatus),
 		sessionTokens:    make(map[string][2]int),
 		authToken:        authToken,
+		allowedOrigins:   allowedOrigins,
 		shareTokens:      make(map[string]*ShareToken),
+		metricsMgr:       metrics.NewMetrics(),
 	}
 
 	// Start cron scheduler
@@ -624,9 +673,15 @@ func (s *Server) Start(port int) error {
 	// CORS middleware wrapper
 	withCORS := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			origin := r.Header.Get("Origin")
+			if origin != "" && s.isAllowedOrigin(origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Magic-Session-Token")
+			w.Header().Set("Access-Control-Max-Age", "86400")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(204)
 				return
@@ -643,7 +698,11 @@ func (s *Server) Start(port int) error {
 			s.authMu.RUnlock()
 
 			if token == "" {
-				h(w, r)
+				// 未设置认证 token 时拒绝所有受保护接口，要求先完成初始化设置
+				// 仅 /api/auth/setup、/api/auth/login、/api/health 等公开路由不需要认证
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprintf(w, `{"error":"authentication required, please setup via /api/auth/setup first"}`)
 				return
 			}
 
@@ -675,9 +734,15 @@ func (s *Server) Start(port int) error {
 
 	// Base API handler for CORS preflight
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" && s.isAllowedOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Magic-Session-Token")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
@@ -688,6 +753,9 @@ func (s *Server) Start(port int) error {
 	// Health (public)
 	mux.HandleFunc("/api/health", withCORS(s.handleHealth))
 	mux.HandleFunc("/api/status", withCORS(s.handleStatus))
+
+	// Prometheus metrics (public, for scraper access)
+	mux.HandleFunc("/metrics", withCORS(s.handleMetrics))
 
 	// Sessions
 	mux.HandleFunc("/api/sessions", withCORS(requireAuth(s.handleSessions)))
@@ -769,9 +837,7 @@ func (s *Server) Start(port int) error {
 
 	// Env
 	mux.HandleFunc("/api/env", withCORS(requireAuth(s.handleEnv)))
-	mux.HandleFunc("/api/env/reveal", withCORS(requireAuth(s.handleEnvReveal)))
 
-	// File system
 	mux.HandleFunc("/api/fs/dirs", withCORS(requireAuth(s.handleListDirs)))
 	mux.HandleFunc("/api/fs/list", withCORS(requireAuth(s.handleFSList)))
 	mux.HandleFunc("/api/fs/read", withCORS(requireAuth(s.handleFSRead)))
@@ -885,14 +951,40 @@ func (s *Server) Start(port int) error {
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              addr,
+		Handler:           mux,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
+	s.httpServer = srv
 
 	return srv.ListenAndServe()
+}
+
+// Stop gracefully shuts down the HTTP server. It is safe to call from
+// signal handlers when the server is no longer needed.
+func (s *Server) Stop() {
+	if s.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.httpServer.Shutdown(ctx)
+	}
+}
+
+// handleMetrics exposes Prometheus-format metrics at /metrics.
+// It is intentionally unauthenticated to allow standard Prometheus scraping.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	if s.metricsMgr != nil {
+		w.Write([]byte(s.metricsMgr.ExportPrometheus()))
+	}
 }
 
 func (s *Server) buildToolsets() []map[string]interface{} {
@@ -1149,6 +1241,18 @@ func (s *Server) getDefaultSkillsDir() string {
 		defaultDir = s.cfg.Skills.DefaultDir
 	}
 	return filepath.Join(s.magicHome, defaultDir)
+}
+
+// getAllowedFSRoots 返回文件分享允许的根目录白名单。
+func (s *Server) getAllowedFSRoots() []string {
+	roots := []string{s.magicHome}
+	if s.cfg != nil && s.cfg.WorkingDir != "" {
+		roots = append(roots, s.cfg.WorkingDir)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		roots = append(roots, cwd)
+	}
+	return roots
 }
 
 func (s *Server) scanSkillsDir() []Skill {

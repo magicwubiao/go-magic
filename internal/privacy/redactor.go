@@ -1,9 +1,12 @@
 package privacy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Pattern represents a PII pattern
@@ -24,10 +27,13 @@ type Redactor struct {
 
 // AuditEntry represents a redaction audit log entry
 type AuditEntry struct {
-	Original  string   `json:"original"`
-	Detected  []string `json:"detected"` // Types of PII found
-	Redacted  string   `json:"redacted"`
-	Timestamp string   `json:"timestamp"`
+	// OriginalHash stores a short hash of the original text instead of the raw PII,
+	// so that PII never lingers in memory or in audit logs. The hash is useful
+	// for de-duplication/lookup but cannot be reversed to recover the PII.
+	OriginalHash string   `json:"original_hash"`
+	Detected     []string `json:"detected"` // Types of PII found
+	Redacted     string   `json:"redacted"`
+	Timestamp    string   `json:"timestamp"`
 }
 
 // Config holds privacy configuration
@@ -276,10 +282,17 @@ func (r *Redactor) logAudit(original string, detected []string, redacted string)
 	r.auditMu.Lock()
 	defer r.auditMu.Unlock()
 
+	// Compute a short SHA-256 hash of the original PII-bearing text.
+	// We only keep the first 16 hex chars so the value is compact yet
+	// still useful for de-duplication. The raw PII is never persisted.
+	h := sha256.Sum256([]byte(original))
+	hashPrefix := hex.EncodeToString(h[:])[:16]
+
 	r.auditLog = append(r.auditLog, AuditEntry{
-		Original: truncate(original, 100),
-		Detected: detected,
-		Redacted: truncate(redacted, 100),
+		OriginalHash: hashPrefix,
+		Detected:     detected,
+		Redacted:     truncate(redacted, 100),
+		Timestamp:    time.Now().Format(time.RFC3339),
 	})
 
 	// Keep only last 1000 entries

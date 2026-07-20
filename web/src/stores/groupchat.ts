@@ -64,8 +64,13 @@ export const useGroupChatStore = defineStore('groupchat', () => {
 
   async function removeMember(memberId: string) {
     if (!activeRoomId.value) return
-    await groupchatApi.removeRoomMember(activeRoomId.value, memberId)
-    members.value = members.value.filter(m => m.id !== memberId)
+    try {
+      await groupchatApi.removeRoomMember(activeRoomId.value, memberId)
+      members.value = members.value.filter(m => m.id !== memberId)
+    } catch (e) {
+      console.error('Failed to remove member:', e)
+      throw e
+    }
   }
 
   // Agents
@@ -82,17 +87,6 @@ export const useGroupChatStore = defineStore('groupchat', () => {
       agents.value = agents.value.filter(a => a.id !== agentId)
     } catch (e) {
       console.error('Failed to remove agent:', e)
-      throw e
-    }
-  }
-
-  async function removeMember(memberId: string) {
-    if (!activeRoomId.value) return
-    try {
-      await groupchatApi.removeRoomMember(activeRoomId.value, memberId)
-      members.value = members.value.filter(m => m.id !== memberId)
-    } catch (e) {
-      console.error('Failed to remove member:', e)
       throw e
     }
   }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/cognition"
@@ -62,6 +63,7 @@ type Manager struct {
 		Role    string
 		Content string
 	}
+	mu sync.RWMutex // protects conversationHistory
 }
 
 // ManagerConfig holds configuration for Cortex systems
@@ -309,7 +311,10 @@ func (m *Manager) OnTurnEnd() {
 func (m *Manager) OnSessionEnd() {
 	// ========== Memory Extraction from Conversation ==========
 	// Extract key information and learn from conversation
-	if len(m.conversationHistory) > 0 {
+	m.mu.RLock()
+	hasHistory := len(m.conversationHistory) > 0
+	m.mu.RUnlock()
+	if hasHistory {
 		m.extractAndLearnFromConversation()
 	}
 
@@ -336,14 +341,25 @@ func (m *Manager) SetConversationHistory(history []struct {
 	Role    string
 	Content string
 }) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.conversationHistory = history
 }
 
 // extractAndLearnFromConversation extracts information from conversation and updates memory
 func (m *Manager) extractAndLearnFromConversation() {
+	// Snapshot conversation history under lock to avoid holding lock during long operations
+	m.mu.RLock()
+	history := make([]struct {
+		Role    string
+		Content string
+	}, len(m.conversationHistory))
+	copy(history, m.conversationHistory)
+	m.mu.RUnlock()
+
 	var userOnly strings.Builder
 	var nonSystem strings.Builder
-	for _, msg := range m.conversationHistory {
+	for _, msg := range history {
 		if msg.Role == "system" {
 			continue
 		}

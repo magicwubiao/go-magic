@@ -107,7 +107,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 				"id":       name,
 				"name":     name,
 				"enabled":  true,
-				"api_key":  provCfg.APIKey,
+				"api_key":  maskAPIKey(provCfg.APIKey),
 				"base_url": provCfg.BaseURL,
 				"model":    provCfg.GetCurrentModel(),
 				"models":   provCfg.Models,
