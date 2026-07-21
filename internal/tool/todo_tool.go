@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -170,7 +171,9 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 
 	now := time.Now()
 	todo := &TodoItem{
-		ID:        fmt.Sprintf("todo_%d", now.UnixNano()),
+		// 用 base36 编码时间戳，避免纯数字 ID 被 PII 脱敏器误判为手机号
+		// （如 todo_1784515845... 中的子串匹配 1[3-9]\d{9} 被替换为 [PHONE]）
+		ID:        fmt.Sprintf("todo_%s", strconv.FormatInt(now.UnixNano(), 36)),
 		Title:     title,
 		Status:    "pending",
 		CreatedAt: now,

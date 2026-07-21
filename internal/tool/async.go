@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -84,7 +85,7 @@ func (e *AsyncToolExecutor) Submit(ctx context.Context, toolName string, params 
 	asyncTool, ok := tool.(AsyncTool)
 	if !ok {
 		// 如果不是异步工具，直接执行
-		jobID := fmt.Sprintf("sync_%d", time.Now().UnixNano())
+		jobID := fmt.Sprintf("sync_%s", strconv.FormatInt(time.Now().UnixNano(), 36))
 		job := &AsyncJob{
 			ID:        jobID,
 			ToolName:  toolName,

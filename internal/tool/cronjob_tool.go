@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -112,7 +113,7 @@ func (t *CronJobTool) addJob(ctx context.Context, args map[string]interface{}) (
 	}
 
 	job := &Job{
-		ID:        fmt.Sprintf("job_%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("job_%s", strconv.FormatInt(time.Now().UnixNano(), 36)),
 		Schedule:  schedule,
 		Prompt:    prompt,
 		Enabled:   true,
