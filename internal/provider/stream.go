@@ -309,6 +309,12 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 		return fmt.Errorf("stream parsing error: %w", err)
 	}
 
+	// 流提前结束（未收到 Done 标志），说明网络中断或连接异常关闭
+	// 返回错误让上层进入 fallback，而非发送空内容
+	if !done {
+		return fmt.Errorf("stream ended prematurely: no completion signal received (accumulated %d bytes)", accumulatedContent.Len())
+	}
+
 	// Convert delta map to accumulated tool calls slice
 	for i := 0; i <= len(deltaMap); i++ {
 		if tc, ok := deltaMap[i]; ok {

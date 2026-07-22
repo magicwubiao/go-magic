@@ -1581,7 +1581,13 @@ Please provide a comprehensive, well-structured final response based on these su
 					return
 				}
 				if resp.Done {
-					fullContent = resp.Content
+					// Done chunk 携带的 Content 语义因 provider 而异：
+					// - stream.go/anthropic.go: 完整累积内容（覆盖正确）
+					// - perplexity/gemini/wenxin: 空字符串（覆盖会清空已累积内容）
+					// 仅在非空时覆盖，空时保留已累积的内容
+					if resp.Content != "" {
+						fullContent = resp.Content
+					}
 					toolCalls = resp.ToolCalls
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
@@ -1601,9 +1607,16 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			if err == nil {
 				streamed = true
+				// 流式成功但内容为空且无工具调用，说明流异常（如网络中断导致提前结束）
+				// 标记为未流式成功，进入 fallback 非流式重试
+				if fullContent == "" && len(toolCalls) == 0 {
+					log.Warnf("[Agent:Stream] Stream succeeded but empty content, falling back to non-streaming")
+					streamed = false
+					lastErr = fmt.Errorf("stream returned empty content")
+				}
 				// Fallback: if streaming returned no tool calls but the content looks like
 				// the model should have called a tool, retry with non-streaming ChatWithTools
-				if len(toolCalls) == 0 && fullContent != "" {
+				if streamed && len(toolCalls) == 0 && fullContent != "" {
 					log.Debugf("[WARN] Stream returned no tool calls, falling back to ChatWithTools")
 					type openAIlikeFallback interface {
 						ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
@@ -1629,7 +1642,11 @@ Please provide a comprehensive, well-structured final response based on these su
 					return
 				}
 				if resp.Done {
-					fullContent = resp.Content
+					// Done chunk 的 Content 可能为空（perplexity/gemini/wenxin），
+					// 仅在非空时覆盖，避免清空已累积的内容
+					if resp.Content != "" {
+						fullContent = resp.Content
+					}
 					// Track token usage from final stream chunk
 					if resp.Usage != nil {
 						a.inputTokens += resp.Usage.PromptTokens
@@ -1642,6 +1659,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			if err == nil {
 				streamed = true
+				// 流式成功但内容为空，进入 fallback 非流式重试
+				if fullContent == "" {
+					log.Warnf("[Agent:Stream] Simple stream succeeded but empty content, falling back")
+					streamed = false
+					lastErr = fmt.Errorf("stream returned empty content")
+				}
 			} else {
 				lastErr = err
 			}
