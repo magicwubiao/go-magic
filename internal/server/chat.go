@@ -109,53 +109,75 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				return
 			default:
 			}
-			data, _ := json.Marshal(map[string]string{"content": word})
+			data, _ := json.Marshal(map[string]string{"delta": word})
 			writeSSE("data: " + string(data) + "\n\n")
 		}
-		writeSSE("data: [DONE]\n\n")
+		writeSSE("data: {\"done\":true}\n\n")
 		return
 	}
+
+	// Pre-compiled regexes for parsing agent stream markers
+	toolStartRe := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
+	toolResultRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
 
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
 		if done {
-			// Stream finished
+			// Stream finished — closing think tag (if any) already sent by agent
 			return
 		}
-		if content != "" {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			// Check if this is a tool result
-			if strings.Contains(content, ">>>TOOL_RESULT_START|") {
-				// Extract tool name
-				re := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^<]+)<<<`)
-				matches := re.FindStringSubmatch(content)
-				if len(matches) > 1 {
-					toolName := matches[1]
-					// Extract tool content
-					contentRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|[^<]+<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
-					contentMatches := contentRe.FindStringSubmatch(content)
-					toolContent := ""
-					if len(contentMatches) > 1 {
-						toolContent = strings.TrimSpace(contentMatches[1])
-					}
-					// Send as tool result event
-					data, _ := json.Marshal(map[string]interface{}{
-						"type":    "tool_result",
-						"tool":    toolName,
-						"content": toolContent,
-					})
-					writeSSE("data: " + string(data) + "\n\n")
-					return
-				}
-			}
-			// Regular content
-			data, _ := json.Marshal(map[string]string{"content": content})
-			writeSSE("data: " + string(data) + "\n\n")
+		if content == "" {
+			return
 		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Check for TURN_START marker (multi-turn tool loop) — skip silently
+		if strings.TrimSpace(content) == ">>>TURN_START<<<" {
+			return
+		}
+
+		// Check if this is a tool start event
+		if strings.Contains(content, ">>>TOOL_START|") {
+			matches := toolStartRe.FindStringSubmatch(content)
+			if len(matches) > 2 {
+				data, _ := json.Marshal(map[string]interface{}{
+					"type": "tool_start",
+					"name": matches[1],
+					"args": matches[2],
+				})
+				writeSSE("data: " + string(data) + "\n\n")
+				return
+			}
+		}
+
+		// Check if this is a tool result event
+		if strings.Contains(content, ">>>TOOL_RESULT_START|") {
+			matches := toolResultRe.FindStringSubmatch(content)
+			if len(matches) > 4 {
+				toolName := matches[1]
+				successStr := matches[2]
+				duration := matches[3]
+				toolContent := strings.TrimSpace(matches[4])
+				success := successStr == "true"
+				data, _ := json.Marshal(map[string]interface{}{
+					"type":     "tool_result",
+					"name":     toolName,
+					"success":  success,
+					"duration": duration,
+					"content":  toolContent,
+				})
+				writeSSE("data: " + string(data) + "\n\n")
+				return
+			}
+		}
+
+		// Regular content (includes <think> tags for reasoning/thinking process)
+		data, _ := json.Marshal(map[string]string{"delta": content})
+		writeSSE("data: " + string(data) + "\n\n")
 	})
 	close(heartbeatDone)
 	if streamErr != nil {
@@ -163,7 +185,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeSSE("data: " + string(data) + "\n\n")
 	}
 
-	writeSSE("data: [DONE]\n\n")
+	writeSSE("data: {\"done\":true}\n\n")
 
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)

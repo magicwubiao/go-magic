@@ -1,45 +1,32 @@
 <template>
   <div class="reasoning-wrapper">
-    <div v-if="reasoningPart" class="deep-thinking-panel" :class="{ collapsed: !expanded }">
-      <div class="thinking-header" @click="toggleExpand">
-        <div class="thinking-left">
-          <div class="thinking-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a7 7 0 0 0-4 12.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26A7 7 0 0 0 12 2z"/>
-              <path d="M9 22h6"/>
-              <path d="M12 18v4"/>
-            </svg>
-          </div>
-          <span class="thinking-label">{{ t('chat.thinking') }}</span>
-          <span v-if="reasoningDuration" class="thinking-duration">{{ reasoningDuration }}</span>
-        </div>
-        <div class="thinking-toggle">
-          <n-icon size="16" class="toggle-icon">
-            <ChevronUp v-if="expanded" />
-            <ChevronDown v-else />
-          </n-icon>
-        </div>
-      </div>
-
+    <!-- 思考过程：单个可折叠区域（WorkBuddy 风格，极简） -->
+    <div v-if="reasoningPart" class="thinking-block" :class="{ collapsed: !expanded }">
+      <button class="thinking-toggle" type="button" @click="expanded = !expanded">
+        <span class="thinking-indicator" :class="{ pulsing: isStreaming }"></span>
+        <span class="thinking-title">{{ isStreaming ? t('chat.thinking') : t('chat.thoughtFor') }}</span>
+        <span v-if="durationText" class="thinking-duration">{{ durationText }}</span>
+        <n-icon size="14" class="thinking-chevron">
+          <ChevronDownOutline v-if="!expanded" />
+          <ChevronUpOutline v-else />
+        </n-icon>
+      </button>
       <n-collapse-transition :show="expanded">
         <div class="thinking-body">
           <div class="thinking-content" v-html="renderMarkdown(reasoningPart)"></div>
         </div>
       </n-collapse-transition>
-
-      <div v-if="!expanded && reasoningPreview" class="thinking-preview">
-        {{ reasoningPreview }}
-      </div>
     </div>
 
+    <!-- 最终回答 -->
     <div v-if="finalPart" class="final-content" v-html="renderMarkdown(finalPart)"></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronUp, ChevronDown } from '@vicons/ionicons5'
+import { ChevronUpOutline, ChevronDownOutline } from '@vicons/ionicons5'
 import { marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -66,14 +53,60 @@ hljs.registerLanguage('markdown', markdown)
 const props = defineProps<{
   content: string
   duration?: string
+  streaming?: boolean
 }>()
 
 const { t } = useI18n()
-const expanded = ref(true)
+const expanded = ref(false) // 默认折叠（成品导向，过程最小化）
 
+// 流式耗时计时
+const startTime = ref<number | null>(null)
+const endTime = ref<number | null>(null)
+const liveTick = ref(0)
+let tickTimer: ReturnType<typeof setInterval> | null = null
+
+const isStreaming = computed(() => props.streaming === true)
+
+watch(isStreaming, (v) => {
+  if (v) {
+    if (startTime.value === null) startTime.value = Date.now()
+    if (!tickTimer) {
+      tickTimer = setInterval(() => { liveTick.value++ }, 500)
+    }
+    // 流式时默认展开，让用户看到实时思考
+    expanded.value = true
+  } else {
+    if (tickTimer) {
+      clearInterval(tickTimer)
+      tickTimer = null
+    }
+    endTime.value = Date.now()
+    // 流式结束后自动折叠（成品导向）
+    expanded.value = false
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  if (tickTimer) clearInterval(tickTimer)
+})
+
+const durationText = computed(() => {
+  // 优先用外部传入的 duration
+  if (props.duration) return props.duration
+  liveTick.value // 触发实时刷新
+  if (startTime.value === null) return ''
+  const end = endTime.value ?? Date.now()
+  const ms = end - startTime.value
+  if (ms < 1000) return `${Math.round(ms / 100) / 10}s`
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`
+  const m = Math.floor(ms / 60000)
+  const s = Math.round((ms % 60000) / 1000)
+  return `${m}m${s}s`
+})
+
+// ---- 解析 <think>...</think> 分离思考与最终回答 ----
 const parsedContent = computed(() => {
   const content = props.content
-
   const thinkOpen = '<think>'
   const thinkClose = '</think>'
   const openIdx = content.toLowerCase().indexOf(thinkOpen)
@@ -83,55 +116,43 @@ const parsedContent = computed(() => {
       const reasoning = content.substring(openIdx + thinkOpen.length, closeIdx).trim()
       const before = content.substring(0, openIdx).trim()
       const after = content.substring(closeIdx + thinkClose.length).trim()
-      const final = (before + '\n' + after).trim()
-      return { reasoning, final }
+      return { reasoning, final: (before + '\n' + after).trim() }
     }
   }
-
+  // 兜底：Markdown 标题
   const headingRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)\s*\n([\s\S]*?)(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
-  const headingMatch = content.match(headingRe)
-  if (headingMatch) {
+  const m = content.match(headingRe)
+  if (m) {
     const fullRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)[\s\S]*?(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
     const fullMatch = content.match(fullRe)
     if (fullMatch) {
-      const reasoning = headingMatch[1].trim()
+      const reasoning = m[1].trim()
       const final = content.replace(fullMatch[0], '').replace(/\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)\s*\n?/i, '').trim()
-      if (reasoning) {
-        return { reasoning, final }
-      }
+      if (reasoning) return { reasoning, final }
     }
   }
-
   return { reasoning: '', final: content }
 })
 
 const reasoningPart = computed(() => parsedContent.value.reasoning)
 const finalPart = computed(() => parsedContent.value.final)
 
-const reasoningDuration = computed(() => props.duration || '')
-
-const reasoningPreview = computed(() => {
-  const text = reasoningPart.value.replace(/[#*`>\-\n]/g, ' ').replace(/\s+/g, ' ').trim()
-  return text.length > 100 ? text.substring(0, 100) + '...' : text
-})
-
-function toggleExpand() {
-  expanded.value = !expanded.value
-}
-
+// ---- Markdown 渲染 ----
 const codeRenderer = (code: string, lang?: string): string => {
   const language = lang && hljs.getLanguage(lang) ? lang : null
   const highlighted = language
     ? hljs.highlight(code, { language }).value
     : hljs.highlightAuto(code).value
-  // 移除 inline onclick，改用 class + 事件委托（见 handleCodeBlockClick）
   const copyBtn = `<button class="code-copy-btn" type="button">Copy</button>`
   return `<div class="code-block">${copyBtn}<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`
 }
 
-marked.use({ renderer: { code: codeRenderer } })
+marked.use({
+  renderer: { code: codeRenderer },
+  breaks: true, // 单换行转 <br>
+  gfm: true,
+})
 
-// 处理代码块按钮点击（事件委托替代 inline onclick，避免 v-html + inline handler XSS 风险）
 function handleCodeBlockClick(e: MouseEvent) {
   const target = e.target as HTMLElement
   const btn = target.closest('.code-copy-btn') as HTMLElement | null
@@ -162,179 +183,275 @@ function renderMarkdown(content: string): string {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.deep-thinking-panel {
-  background: #f8f9fa;
-  border: 1px solid #e9ecef;
-  border-radius: 12px;
-  overflow: hidden;
-  transition: all 0.2s ease;
-}
-
-.deep-thinking-panel.collapsed {
-  background: #f1f3f5;
-}
-
-.thinking-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
-}
-
-.thinking-header:hover {
-  background: rgba(0, 0, 0, 0.02);
-}
-
-.collapsed .thinking-header:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.thinking-left {
-  display: flex;
-  align-items: center;
   gap: 10px;
 }
 
-.thinking-icon {
-  width: 20px;
-  height: 20px;
-  color: #868e96;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* ============ 思考过程折叠区 ============ */
+.thinking-block {
+  border-left: 2px solid #e5e7eb;
+  padding-left: 14px;
+  margin-bottom: 2px;
 }
 
-.thinking-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.thinking-label {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: #495057;
-}
-
-.thinking-duration {
-  font-size: 12px;
-  color: #adb5bd;
-  background: #e9ecef;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-weight: 500;
+.thinking-block.collapsed {
+  border-left-color: #f3f4f6;
 }
 
 .thinking-toggle {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.toggle-icon {
-  color: #adb5bd;
+.thinking-toggle:hover {
+  color: #374151;
+}
+
+.thinking-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.thinking-indicator.pulsing {
+  background: #3b82f6;
+  animation: pulse 1.4s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  100% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+}
+
+.thinking-title {
+  flex: 1;
+  text-align: left;
+}
+
+.thinking-duration {
+  font-size: 11.5px;
+  color: #9ca3af;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-chevron {
+  color: #9ca3af;
   transition: transform 0.2s;
 }
 
+.thinking-toggle:hover .thinking-chevron {
+  color: #6b7280;
+}
+
+/* 思考内容 */
 .thinking-body {
-  border-top: 1px solid #e9ecef;
-  padding: 16px 20px;
-  background: #fdfdfd;
+  padding: 10px 0 6px 0;
 }
 
 .thinking-content {
-  font-size: 13.5px;
-  line-height: 1.75;
-  color: #495057;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #6b7280;
 }
 
 .thinking-content :deep(p) {
-  margin: 0 0 12px 0;
+  margin: 0 0 10px 0;
 }
-
-.thinking-content :deep(p:last-child) {
-  margin-bottom: 0;
-}
+.thinking-content :deep(p:last-child) { margin-bottom: 0; }
 
 .thinking-content :deep(ul),
 .thinking-content :deep(ol) {
-  margin: 10px 0;
-  padding-left: 24px;
+  margin: 8px 0;
+  padding-left: 22px;
 }
 
 .thinking-content :deep(li) {
-  margin: 4px 0;
+  margin: 2px 0;
 }
 
 .thinking-content :deep(h1),
 .thinking-content :deep(h2),
 .thinking-content :deep(h3),
 .thinking-content :deep(h4) {
-  margin: 16px 0 8px 0;
+  margin: 12px 0 6px 0;
   font-weight: 600;
-  color: #343a40;
+  color: #4b5563;
 }
-
-.thinking-content :deep(h1) { font-size: 17px; }
-.thinking-content :deep(h2) { font-size: 16px; }
-.thinking-content :deep(h3) { font-size: 15px; }
-.thinking-content :deep(h4) { font-size: 14px; }
+.thinking-content :deep(h1) { font-size: 15px; }
+.thinking-content :deep(h2) { font-size: 14px; }
+.thinking-content :deep(h3) { font-size: 13.5px; }
+.thinking-content :deep(h4) { font-size: 13px; }
 
 .thinking-content :deep(blockquote) {
-  border-left: 3px solid #ced4da;
-  padding-left: 12px;
-  margin: 10px 0;
-  color: #6c757d;
-  font-style: italic;
-}
-
-.thinking-content :deep(hr) {
-  border: none;
-  border-top: 1px dashed #dee2e6;
-  margin: 14px 0;
-}
-
-.thinking-content :deep(pre) {
-  margin: 10px 0;
+  border-left: 2px solid #e5e7eb;
+  padding-left: 10px;
+  margin: 8px 0;
+  color: #9ca3af;
 }
 
 .thinking-content :deep(code) {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12.5px;
-  background: #e9ecef;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #495057;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 12px;
+  background: #f3f4f6;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #4b5563;
 }
 
 .thinking-content :deep(.code-block) {
   position: relative;
-  margin: 8px 0;
-  border-radius: 8px;
+  margin: 6px 0;
+  border-radius: 6px;
   overflow: hidden;
   background: #1e1e1e;
 }
 
 .thinking-content :deep(.code-block pre) {
   margin: 0;
-  padding: 12px 16px;
+  padding: 10px 13px;
   overflow-x: auto;
 }
 
 .thinking-content :deep(.code-block code) {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12.5px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 12px;
   color: #d4d4d4;
   background: transparent;
   padding: 0;
-  border-radius: 0;
 }
 
 .thinking-content :deep(.code-copy-btn) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ccc;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.thinking-content :deep(.code-block:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+/* ============ 最终回答 ============ */
+.final-content {
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: #1f2937;
+}
+
+.final-content :deep(p) {
+  margin: 0 0 12px 0;
+}
+.final-content :deep(p:first-child) { margin-top: 0; }
+.final-content :deep(p:last-child) { margin-bottom: 0; }
+
+.final-content :deep(ul),
+.final-content :deep(ol) {
+  margin: 10px 0;
+  padding-left: 24px;
+}
+
+.final-content :deep(li) {
+  margin: 4px 0;
+}
+
+.final-content :deep(h1),
+.final-content :deep(h2),
+.final-content :deep(h3),
+.final-content :deep(h4) {
+  margin: 18px 0 10px 0;
+  font-weight: 600;
+  color: #111;
+}
+.final-content :deep(h1) { font-size: 20px; }
+.final-content :deep(h2) { font-size: 17px; }
+.final-content :deep(h3) { font-size: 15px; }
+.final-content :deep(h4) { font-size: 14px; }
+
+.final-content :deep(blockquote) {
+  border-left: 3px solid #3b82f6;
+  padding: 8px 14px;
+  margin: 12px 0;
+  color: #555;
+  background: #f8fafc;
+  border-radius: 0 6px 6px 0;
+}
+
+.final-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 13.5px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+
+.final-content :deep(th),
+.final-content :deep(td) {
+  border: 1px solid #e5e7eb;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.final-content :deep(th) {
+  background: #f9fafb;
+  font-weight: 600;
+}
+
+.final-content :deep(a) {
+  color: #3b82f6;
+  text-decoration: none;
+}
+.final-content :deep(a:hover) { text-decoration: underline; }
+
+.final-content :deep(img) {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.final-content :deep(.code-block) {
+  position: relative;
+  margin: 10px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.final-content :deep(.code-block pre) {
+  margin: 0;
+  padding: 12px 15px;
+  overflow-x: auto;
+}
+
+.final-content :deep(.code-block code) {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 13px;
+  color: #d4d4d4;
+  line-height: 1.6;
+}
+
+.final-content :deep(.code-copy-btn) {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -349,252 +466,82 @@ function renderMarkdown(content: string): string {
   transition: opacity 0.2s;
 }
 
-.thinking-content :deep(.code-block:hover .code-copy-btn) {
-  opacity: 1;
-}
-
-.thinking-preview {
-  padding: 0 16px 12px;
-  font-size: 12.5px;
-  color: #868e96;
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.final-content {
-  font-size: 15px;
-  line-height: 1.8;
-  color: #222;
-}
-
-.final-content :deep(p) {
-  margin: 0 0 14px 0;
-}
-
-.final-content :deep(p:first-child) {
-  margin-top: 0;
-}
-
-.final-content :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.final-content :deep(ul),
-.final-content :deep(ol) {
-  margin: 12px 0;
-  padding-left: 28px;
-}
-
-.final-content :deep(li) {
-  margin: 6px 0;
-}
-
-.final-content :deep(h1),
-.final-content :deep(h2),
-.final-content :deep(h3),
-.final-content :deep(h4) {
-  margin: 22px 0 12px 0;
-  font-weight: 600;
-  color: #111;
-}
-
-.final-content :deep(h1) { font-size: 22px; }
-.final-content :deep(h2) { font-size: 19px; }
-.final-content :deep(h3) { font-size: 17px; }
-.final-content :deep(h4) { font-size: 15px; }
-
-.final-content :deep(blockquote) {
-  border-left: 4px solid #18a058;
-  padding-left: 16px;
-  margin: 14px 0;
-  color: #555;
-  background: #f0faf0;
-  padding-top: 10px;
-  padding-bottom: 10px;
-  border-radius: 0 8px 8px 0;
-}
-
-.final-content :deep(hr) {
-  border: none;
-  border-top: 1px solid #e0e0e0;
-  margin: 18px 0;
-}
-
-.final-content :deep(table) {
-  margin: 14px 0;
-}
-
-.final-content :deep(pre) {
-  margin: 12px 0;
-}
-
-.final-content :deep(.code-block) {
-  position: relative;
-  margin: 10px 0;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #1e1e1e;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.final-content :deep(.code-block pre) {
-  margin: 0;
-  padding: 14px 18px;
-  overflow-x: auto;
-}
-
-.final-content :deep(.code-block code) {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 13.5px;
-  color: #d4d4d4;
-  line-height: 1.65;
-}
-
-.final-content :deep(.code-copy-btn) {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ccc;
-  padding: 3px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s, background 0.2s;
-}
-
 .final-content :deep(.code-block:hover .code-copy-btn) {
   opacity: 1;
 }
 
-.final-content :deep(.code-copy-btn:hover) {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.final-content :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 10px 0;
-  font-size: 14px;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-.final-content :deep(th),
-.final-content :deep(td) {
-  border: 1px solid #e0e0e0;
-  padding: 10px 14px;
-  text-align: left;
-}
-
-.final-content :deep(th) {
-  background: #f0f0f0;
-  font-weight: 600;
-}
-
-.final-content :deep(a) {
-  color: #18a058;
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.final-content :deep(a:hover) {
-  text-decoration: underline;
-}
-
-.final-content :deep(img) {
-  max-width: 100%;
-  border-radius: 8px;
-  margin: 10px 0;
-}
-
+/* ============ 暗色模式 ============ */
 @media (prefers-color-scheme: dark) {
-  .deep-thinking-panel {
-    background: #1e1e1e;
-    border-color: #2d2d2d;
+  .thinking-block {
+    border-left-color: #374151;
   }
-
-  .deep-thinking-panel.collapsed {
-    background: #1a1a1a;
+  .thinking-block.collapsed {
+    border-left-color: #2c2c33;
   }
-
-  .thinking-header:hover {
-    background: rgba(255, 255, 255, 0.03);
+  .thinking-toggle {
+    color: #9ca3af;
   }
-
-  .collapsed .thinking-header:hover {
-    background: rgba(255, 255, 255, 0.05);
+  .thinking-toggle:hover {
+    color: #d1d5db;
   }
-
-  .thinking-label {
-    color: #dee2e6;
+  .thinking-indicator {
+    background: #6b7280;
   }
-
-  .thinking-icon {
-    color: #868e96;
+  .thinking-indicator.pulsing {
+    background: #60a5fa;
   }
-
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.4); }
+    100% { box-shadow: 0 0 0 6px rgba(96, 165, 250, 0); }
+  }
   .thinking-duration {
-    background: #2d2d2d;
-    color: #adb5bd;
+    color: #6b7280;
   }
-
-  .toggle-icon {
-    color: #6c757d;
-  }
-
-  .thinking-body {
-    border-top-color: #2d2d2d;
-    background: #1a1a1a;
+  .thinking-chevron {
+    color: #6b7280;
   }
 
   .thinking-content {
-    color: #adb5bd;
+    color: #9ca3af;
   }
-
   .thinking-content :deep(h1),
   .thinking-content :deep(h2),
   .thinking-content :deep(h3),
   .thinking-content :deep(h4) {
-    color: #ced4da;
+    color: #d1d5db;
   }
-
   .thinking-content :deep(code) {
-    background: #2d2d2d;
-    color: #dee2e6;
+    background: #374151;
+    color: #d1d5db;
   }
-
   .thinking-content :deep(blockquote) {
-    border-left-color: #495057;
-    color: #868e96;
-  }
-
-  .thinking-preview {
-    color: #6c757d;
+    border-left-color: #4b5563;
+    color: #6b7280;
   }
 
   .final-content {
-    color: #ddd;
+    color: #e5e7eb;
   }
-
+  .final-content :deep(h1),
+  .final-content :deep(h2),
+  .final-content :deep(h3),
+  .final-content :deep(h4) {
+    color: #f3f4f6;
+  }
+  .final-content :deep(blockquote) {
+    border-left-color: #60a5fa;
+    color: #d1d5db;
+    background: #1e293b;
+  }
   .final-content :deep(th) {
-    background: #252525;
+    background: #1f1f23;
   }
-
   .final-content :deep(th),
   .final-content :deep(td) {
-    border-color: #333;
+    border-color: #374151;
   }
-
-  .final-content :deep(blockquote) {
-    border-left-color: #36ad6a;
-    color: #aaa;
-    background: #1a2a1a;
+  .final-content :deep(a) {
+    color: #60a5fa;
   }
 }
 </style>

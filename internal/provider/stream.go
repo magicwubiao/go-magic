@@ -24,13 +24,14 @@ type StreamToolCall struct {
 
 // StreamResponse represents a chunk of streaming response
 type StreamResponse struct {
-	Content   string           `json:"content,omitempty"`
-	ToolCall  *types.ToolCall  `json:"tool_call,omitempty"`
-	ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
-	StreamTCs []StreamToolCall `json:"-"` // Internal use for delta tracking
-	Done      bool             `json:"done"`
-	Error     error            `json:"error,omitempty"`
-	Usage     *Usage           `json:"usage,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCall         *types.ToolCall  `json:"tool_call,omitempty"`
+	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
+	StreamTCs        []StreamToolCall `json:"-"` // Internal use for delta tracking
+	Done             bool             `json:"done"`
+	Error            error            `json:"error,omitempty"`
+	Usage            *Usage           `json:"usage,omitempty"`
 }
 
 // StreamConfig configures streaming behavior
@@ -90,9 +91,10 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 		Choices []struct {
 			Index int `json:"index"`
 			Delta struct {
-				Role      string `json:"role"`
-				Content   string `json:"content"`
-				ToolCalls []struct {
+				Role             string `json:"role"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
 					Type     string `json:"type"`
@@ -122,6 +124,10 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 
 		if choice.Delta.Content != "" {
 			resp.Content = choice.Delta.Content
+		}
+
+		if choice.Delta.ReasoningContent != "" {
+			resp.ReasoningContent = choice.Delta.ReasoningContent
 		}
 
 		for _, tc := range choice.Delta.ToolCalls {
@@ -217,6 +223,7 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 	scanner.Buffer(buf, config.BufferSize)
 
 	var accumulatedContent strings.Builder
+	var accumulatedReasoning strings.Builder
 	var accumulatedToolCalls []types.ToolCall
 	// Use map for delta tracking: index -> current accumulated tool call
 	deltaMap := make(map[int]*types.ToolCall)
@@ -256,6 +263,10 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 			}
 		}
 
+		if resp.ReasoningContent != "" {
+			accumulatedReasoning.WriteString(resp.ReasoningContent)
+		}
+
 		// Merge tool calls by index (streaming delta format)
 		if len(resp.StreamTCs) > 0 {
 			for _, stc := range resp.StreamTCs {
@@ -285,9 +296,10 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 		if !resp.Done {
 			// Send incremental response
 			handler(&StreamResponse{
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-				Done:      false,
+				Content:          resp.Content,
+				ReasoningContent: resp.ReasoningContent,
+				ToolCalls:        resp.ToolCalls,
+				Done:             false,
 			})
 		}
 
@@ -325,10 +337,11 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 	// Send final accumulated response
 	mu.Lock()
 	handler(&StreamResponse{
-		Content:   accumulatedContent.String(),
-		ToolCalls: accumulatedToolCalls,
-		Done:      true,
-		Usage:     finalUsage,
+		Content:          accumulatedContent.String(),
+		ReasoningContent: accumulatedReasoning.String(),
+		ToolCalls:        accumulatedToolCalls,
+		Done:             true,
+		Usage:            finalUsage,
 	})
 	mu.Unlock()
 
@@ -491,10 +504,11 @@ func (sa *StreamAccumulator) Handle(resp *StreamResponse) {
 
 	if resp.Done && sa.finalHandler != nil {
 		sa.finalHandler(&StreamResponse{
-			Content:   sa.content.String(),
-			ToolCalls: sa.toolCalls,
-			Done:      true,
-			Usage:     resp.Usage,
+			Content:          sa.content.String(),
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        sa.toolCalls,
+			Done:             true,
+			Usage:            resp.Usage,
 		})
 	}
 }

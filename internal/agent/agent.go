@@ -1565,6 +1565,51 @@ Please provide a comprehensive, well-structured final response based on these su
 		var toolCalls []types.ToolCall
 		streamed := false
 
+		// Reasoning/thinking process state: wrap reasoning_content in <think> tags
+		// so the frontend ReasoningContent component can parse and display it.
+		// fullContent includes <think> tags to preserve the thinking in history.
+		var reasoningStarted, thinkClosed bool
+		var accumulatedReasoning strings.Builder
+
+		// buildStreamHandlerContent wraps reasoning content with <think> markers
+		// and transitions to normal content with </think> closing tag.
+		buildStreamHandlerContent := func(resp *provider.StreamResponse) string {
+			handlerContent := ""
+			if resp.ReasoningContent != "" {
+				accumulatedReasoning.WriteString(resp.ReasoningContent)
+				if !reasoningStarted {
+					handlerContent += "<think>"
+					reasoningStarted = true
+				}
+				handlerContent += resp.ReasoningContent
+			}
+			if resp.Content != "" {
+				if reasoningStarted && !thinkClosed {
+					handlerContent += "</think>\n"
+					thinkClosed = true
+				}
+				handlerContent += resp.Content
+			}
+			return handlerContent
+		}
+
+		// finalizeFullContent constructs fullContent with <think> tags from
+		// the Done chunk's accumulated reasoning and content.
+		finalizeFullContent := func(resp *provider.StreamResponse) {
+			reasoning := accumulatedReasoning.String()
+			if resp.Content != "" {
+				if reasoning != "" {
+					fullContent = "<think>" + reasoning + "</think>\n" + resp.Content
+				} else {
+					fullContent = resp.Content
+				}
+			} else if reasoning != "" {
+				// Some providers send empty Content at Done; prepend reasoning
+				// to the delta-accumulated fullContent.
+				fullContent = "<think>" + reasoning + "</think>\n" + fullContent
+			}
+		}
+
 		// Check if provider supports streaming
 		type streamer interface {
 			StreamWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}, handler provider.StreamHandler) error
@@ -1585,9 +1630,7 @@ Please provide a comprehensive, well-structured final response based on these su
 					// - stream.go/anthropic.go: 完整累积内容（覆盖正确）
 					// - perplexity/gemini/wenxin: 空字符串（覆盖会清空已累积内容）
 					// 仅在非空时覆盖，空时保留已累积的内容
-					if resp.Content != "" {
-						fullContent = resp.Content
-					}
+					finalizeFullContent(resp)
 					toolCalls = resp.ToolCalls
 					for i := range toolCalls {
 						if toolCalls[i].ID == "" {
@@ -1600,10 +1643,20 @@ Please provide a comprehensive, well-structured final response based on these su
 						a.inputTokens += resp.Usage.PromptTokens
 						a.outputTokens += resp.Usage.CompletionTokens
 					}
+					// Close think tag if still open (for handler completeness)
+					handlerContent := ""
+					if reasoningStarted && !thinkClosed {
+						handlerContent = "</think>\n"
+						thinkClosed = true
+					}
+					handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
 				} else {
 					fullContent += resp.Content
+					handlerContent := buildStreamHandlerContent(resp)
+					if handlerContent != "" {
+						handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
+					}
 				}
-				handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), resp.Done)
 			})
 			if err == nil {
 				streamed = true
@@ -1644,18 +1697,26 @@ Please provide a comprehensive, well-structured final response based on these su
 				if resp.Done {
 					// Done chunk 的 Content 可能为空（perplexity/gemini/wenxin），
 					// 仅在非空时覆盖，避免清空已累积的内容
-					if resp.Content != "" {
-						fullContent = resp.Content
-					}
+					finalizeFullContent(resp)
 					// Track token usage from final stream chunk
 					if resp.Usage != nil {
 						a.inputTokens += resp.Usage.PromptTokens
 						a.outputTokens += resp.Usage.CompletionTokens
 					}
+					// Close think tag if still open
+					handlerContent := ""
+					if reasoningStarted && !thinkClosed {
+						handlerContent = "</think>\n"
+						thinkClosed = true
+					}
+					handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
 				} else {
 					fullContent += resp.Content
+					handlerContent := buildStreamHandlerContent(resp)
+					if handlerContent != "" {
+						handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
+					}
 				}
-				handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), resp.Done)
 			})
 			if err == nil {
 				streamed = true

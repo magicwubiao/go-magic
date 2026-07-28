@@ -417,6 +417,33 @@ export const useChatStore = defineStore('chat', () => {
       sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
 
       eventSource.onmessage = (event) => {
+        // Handle legacy [DONE] signal (now backend sends {"done":true}, but keep for safety)
+        if (event.data === '[DONE]') {
+          if (sessionFlushTimers.value[sessionId]) {
+            clearTimeout(sessionFlushTimers.value[sessionId]!)
+            sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
+          }
+          flushStreamBuffer(sessionId)
+          if (sessionEventSources.value[sessionId]) {
+            sessionEventSources.value[sessionId]!.close()
+            sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+          }
+          state.streaming = false
+          state.taskProgress = null
+          if (state.streamContent) {
+            state.messages.push({
+              id: Date.now().toString(),
+              role: 'assistant' as const,
+              content: state.streamContent,
+              timestamp: new Date().toISOString(),
+              session_id: sessionId,
+            })
+            state.streamContent = ''
+            loadSessions()
+          }
+          return
+        }
+
         try {
           const data = JSON.parse(event.data)
 

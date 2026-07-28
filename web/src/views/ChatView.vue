@@ -169,10 +169,8 @@
           <!-- Assistant message -->
           <template v-else-if="msg.role === 'assistant'">
             <div class="avatar bot-avatar">🤖</div>
-            <div class="message-body">
-              <div class="message-bubble assistant-bubble">
-                <ReasoningContent :content="msg.content" />
-              </div>
+            <div class="message-body assistant-body">
+              <ReasoningContent :content="msg.content" :streaming="false" />
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </template>
@@ -227,10 +225,10 @@
           <!-- Streaming message with tool calls inline -->
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
-            <div class="message-body">
+            <div class="message-body assistant-body">
               <!-- Streaming text -->
-              <div v-if="chatStore.streamContent" class="message-bubble assistant-bubble">
-                <ReasoningContent :content="chatStore.streamContent" />
+              <div v-if="chatStore.streamContent" class="assistant-content">
+                <ReasoningContent :content="chatStore.streamContent" :streaming="chatStore.streaming" />
               </div>
               <!-- Status panel when no content yet -->
               <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0" class="agent-status-panel">
@@ -1194,6 +1192,11 @@ onMounted(async () => {
   min-width: 0;
 }
 
+/* Assistant 回答不使用气泡，撑满宽度 */
+.message-body.assistant-body {
+  max-width: calc(100% - 50px);
+}
+
 /* ========== Avatars ========== */
 .avatar {
   width: 34px;
@@ -1233,10 +1236,12 @@ onMounted(async () => {
   border-bottom-right-radius: 4px;
 }
 
-.assistant-bubble {
-  background: #f5f5f5;
-  color: #333;
-  border-bottom-left-radius: 4px;
+/* Assistant 回答不使用气泡，直接展示内容 */
+.assistant-content {
+  color: #1f2937;
+  line-height: 1.75;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .system-bubble {
@@ -1719,9 +1724,8 @@ onMounted(async () => {
     background: #141414;
   }
 
-  .assistant-bubble {
-    background: #1e1e1e;
-    color: #ddd;
+  .assistant-content {
+    color: #e5e7eb;
   }
 
   .system-bubble {
