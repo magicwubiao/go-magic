@@ -18,6 +18,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/internal/retry"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
@@ -1911,6 +1912,17 @@ func (a *Agent) RunConversationStreamWithOutput(ctx context.Context, input strin
 
 // executeToolsWithHooks executes tools with hook support
 func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.ToolCall) (map[string]ToolCallResult, error) {
+	// Inject the agent's session ID into the context so that hooks (e.g. ApprovalHook)
+	// can read the real session ID via tool.SessionIDFromContext. Without this, the
+	// approval hook falls back to "cli" and cannot match the SSE handler registered
+	// under the real session ID, causing approval cards to never appear in the chat.
+	a.mu.RLock()
+	sessionID := a.session
+	a.mu.RUnlock()
+	if sessionID != "" {
+		ctx = tool.WithSessionID(ctx, sessionID)
+	}
+
 	results := make(map[string]ToolCallResult)
 	var mu sync.Mutex
 

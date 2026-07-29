@@ -67,6 +67,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// Flush headers immediately so the client/proxy knows the stream is alive.
 	writeSSE("data: {\"type\":\"connected\"}\n\n")
 
+	// 注册本 session 的审批 SSE 推送回调：当 ApprovalHook 创建 pending 时，
+	// 立即向当前 SSE 流推送 approval_required 事件，前端在对话流内渲染审批卡片。
+	defer s.registerApprovalSSEHandler(sessionID, writeSSE)()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 	defer sseW.Close()

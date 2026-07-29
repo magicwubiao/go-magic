@@ -177,6 +177,31 @@ type CommandStat struct {
 type WebApprovalCallback struct {
 	pendingApprovals map[string]*PendingApproval
 	mu               sync.Mutex
+	// onCreated 在创建 pending 后同步触发，用于向 SSE 流推送 approval_required 事件。
+	// 回调返回的 info 含 id/command/riskLevel/sessionId/expiresAt。
+	// 回调为 nil 时跳过（如非 Web 场景）。
+	onCreated func(info PendingApprovalInfo)
+}
+
+// PendingApprovalInfo 是 OnPendingCreated 回调传递给外部的待审批信息。
+// 设计为值类型，避免外部拿到内部 *PendingApproval 指针后误改 channel。
+type PendingApprovalInfo struct {
+	ID         string
+	Command    string
+	SessionID  string
+	WorkingDir string
+	RiskLevel  string
+	Reason     string
+	Context    string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
+// SetOnPendingCreated 注册 pending 创建回调（SSE 流注入点）。
+func (m *Manager) SetOnPendingCreated(fn func(info PendingApprovalInfo)) {
+	m.webCallback.mu.Lock()
+	m.webCallback.onCreated = fn
+	m.webCallback.mu.Unlock()
 }
 
 // PendingApproval 待Web审批的请求.
@@ -265,7 +290,7 @@ type ApprovalConfig struct {
 func DefaultConfig() *ApprovalConfig {
 	return &ApprovalConfig{
 		Strategy:          StrategySmart,
-		TrustThreshold:    1,
+		TrustThreshold:    3,
 		DenylistThreshold: 2,
 		EnableLearning:    true,
 		EnableWhitelist:   true,
@@ -808,7 +833,11 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 		pattern, exists := m.patterns[hash]
 		m.mu.RUnlock()
 		if exists {
-			if pattern.Trusted {
+			// 受信 pattern 仅在 smart 策略下自动放行；manual/whitelist 策略
+			// 要求每条都问或只认白名单，不应被受信 pattern 旁路。
+			// 此外 High/Critical 风险命令即使受信也需重新确认，避免一次批准
+			// 后高危命令被永久静默放行。
+			if pattern.Trusted && cfg.Strategy == StrategySmart && req.RiskLevel < RiskHigh {
 				result := &ApprovalResult{
 					Approved:  true,
 					Strategy:  StrategySmart,
@@ -821,13 +850,16 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 				return result, nil
 			}
 			if pattern.Action == "denied" && pattern.Count >= cfg.DenylistThreshold {
+				// 历史上被多次拒绝的 pattern 不再静默拒绝，改为询问用户。
+				// 静默拒绝会导致用户永远无法重新批准该命令（审批卡片不弹出），
+				// 与"所有命令需要审批"的预期不符。仍保留 denied 标记用于风险提示。
 				result := &ApprovalResult{
 					Approved: false,
 					Strategy: StrategySmart,
-					Reason:   "Command pattern has been denied multiple times",
+					Reason:   "Command pattern previously denied — confirm to proceed",
+					AskUser:  true,
 					Pattern:  pattern,
 				}
-				m.recordDecision(req, result, start)
 				return result, nil
 			}
 		}
@@ -854,7 +886,12 @@ func (m *Manager) RequestApproval(req *ApprovalRequest) (*ApprovalResult, error)
 		result = m.smartApprove(req, assessment)
 	}
 
-	m.recordDecision(req, result, start)
+	// 仅在策略给出最终决策（无需询问用户）时记录历史；AskUser=true 的决策
+	// 会在后续 Approve/Deny/超时时由 recordDecision 记录，避免在此提前记一条
+	// 假的 "denied" 污染历史与统计。
+	if !result.AskUser {
+		m.recordDecision(req, result, start)
+	}
 	return result, nil
 }
 
@@ -870,18 +907,11 @@ func (m *Manager) autoApprove(req *ApprovalRequest) *ApprovalResult {
 }
 
 // manualApprove requires explicit user confirmation.
+// manual 策略下所有命令都应询问用户（Web 模式走审批卡片，CLI 模式走交互确认），
+// 不因 EnableCLIConfirm 或风险等级而静默拒绝——静默拒绝会让用户看到"命令被拒"
+// 却没有任何审批入口，与"所有命令需要审批"的预期不符。
+// EnableCLIConfirm 仅在 agent approval hook 的 CLI 路径中决定是否阻塞 stdin。
 func (m *Manager) manualApprove(req *ApprovalRequest) *ApprovalResult {
-	m.mu.RLock()
-	enableCLI := m.config.EnableCLIConfirm
-	m.mu.RUnlock()
-	if !enableCLI && req.RiskLevel >= RiskHigh {
-		return &ApprovalResult{
-			Approved: false,
-			Strategy: StrategyManual,
-			Reason:   "CLI confirmation disabled for high-risk commands",
-			AskUser:  false,
-		}
-	}
 	return &ApprovalResult{
 		Approved: false,
 		Strategy: StrategyManual,
@@ -1764,11 +1794,25 @@ func (m *Manager) updateSessionContext(sessionID string, riskLevel RiskLevel) {
 // ---------------------------------------------------------------------------
 
 // PendingWebApproval creates a pending approval that waits for web resolution.
+// 兼容旧调用方：内部调用 CreatePendingApproval + WaitPendingApproval。
 func (m *Manager) PendingWebApproval(req *ApprovalRequest) (*ApprovalResult, error) {
+	pa := m.CreatePendingApproval(req)
+	return m.WaitPendingApproval(pa)
+}
+
+// CreatePendingApproval 创建一个待审批请求并返回，不阻塞。
+// 调用方可在此之后触发 OnPendingCreated 回调，再调用 WaitPendingApproval 等待结果。
+// 这种拆分让 ApprovalHook 能在"创建后、等待前"拿到 id 通知 SSE 流。
+func (m *Manager) CreatePendingApproval(req *ApprovalRequest) *PendingApproval {
 	id := uuid.New().String()
 	m.mu.RLock()
 	timeout := time.Duration(m.config.ApprovalTimeout) * time.Second
 	m.mu.RUnlock()
+	// 兜底：若 ApprovalTimeout 被错误地设为 0 或负值（如配置文件漏写），
+	// 使用 60s 默认值，避免 pending 审批立即过期导致用户来不及操作。
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
 
 	pa := &PendingApproval{
 		ID:        id,
@@ -1780,18 +1824,50 @@ func (m *Manager) PendingWebApproval(req *ApprovalRequest) (*ApprovalResult, err
 
 	m.webCallback.mu.Lock()
 	m.webCallback.pendingApprovals[id] = pa
+	onCreated := m.webCallback.onCreated
 	m.webCallback.mu.Unlock()
 
-	// Wait for resolution or timeout
+	// 触发回调，通知外部（SSE 流）有新的待审批
+	if onCreated != nil {
+		onCreated(PendingApprovalInfo{
+			ID:         pa.ID,
+			Command:    req.Command,
+			SessionID:  req.SessionID,
+			WorkingDir: req.WorkingDir,
+			RiskLevel:  req.RiskLevel.String(),
+			Reason:     req.Reason,
+			Context:    req.Context,
+			CreatedAt:  pa.CreatedAt,
+			ExpiresAt:  pa.ExpiresAt,
+		})
+	}
+
+	return pa
+}
+
+// WaitPendingApproval 阻塞等待待审批结果（被 Resolve 或超时）。
+func (m *Manager) WaitPendingApproval(pa *PendingApproval) (*ApprovalResult, error) {
+	timeout := time.Until(pa.ExpiresAt)
+	if timeout <= 0 {
+		m.webCallback.mu.Lock()
+		delete(m.webCallback.pendingApprovals, pa.ID)
+		m.webCallback.mu.Unlock()
+		return &ApprovalResult{
+			Approved: false,
+			Strategy: StrategyManual,
+			Reason:   "Web approval timed out",
+		}, nil
+	}
+
 	select {
 	case result := <-pa.Result:
 		m.webCallback.mu.Lock()
-		delete(m.webCallback.pendingApprovals, id)
+		delete(m.webCallback.pendingApprovals, pa.ID)
 		m.webCallback.mu.Unlock()
 		return result, nil
 	case <-time.After(timeout):
 		m.webCallback.mu.Lock()
-		delete(m.webCallback.pendingApprovals, id)
+		delete(m.webCallback.pendingApprovals, pa.ID)
 		m.webCallback.mu.Unlock()
 		return &ApprovalResult{
 			Approved: false,

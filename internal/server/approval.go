@@ -267,6 +267,10 @@ func (s *Server) handleApprovalPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 按 session_id 过滤，避免跨会话泄露其他会话的待审批命令。
+	// 前端 restorePendingApprovals 会传入当前 sessionId。
+	sessionFilter := r.URL.Query().Get("session_id")
+
 	pending := mgr.GetPendingApprovals()
 
 	type pendingItem struct {
@@ -280,6 +284,9 @@ func (s *Server) handleApprovalPending(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]pendingItem, 0, len(pending))
 	for _, pa := range pending {
+		if sessionFilter != "" && pa.Request.SessionID != sessionFilter {
+			continue
+		}
 		items = append(items, pendingItem{
 			ID:        pa.ID,
 			Command:   pa.Request.Command,

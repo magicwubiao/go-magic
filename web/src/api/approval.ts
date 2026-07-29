@@ -128,8 +128,12 @@ export async function getDeniedPatterns(): Promise<DeniedPattern[]> {
 }
 
 // 待审批：后端返回 { pending: [...], total: N }，记录字段为 snake_case
-export async function getPendingApprovals(): Promise<PendingApproval[]> {
-  const raw = await request<{ pending?: AnyRecord[]; total?: number }>(`${API_BASE}/pending`)
+// sessionId 可选，传入时后端按会话过滤，避免跨会话泄露其他会话的待审批命令。
+export async function getPendingApprovals(sessionId?: string): Promise<PendingApproval[]> {
+  const url = sessionId
+    ? `${API_BASE}/pending?session_id=${encodeURIComponent(sessionId)}`
+    : `${API_BASE}/pending`
+  const raw = await request<{ pending?: AnyRecord[]; total?: number }>(url)
   const items = raw?.pending || []
   return items.map((p: AnyRecord) => ({
     id: p.id,
@@ -189,13 +193,14 @@ export async function removeWhitelist(pattern: string): Promise<void> {
 }
 
 // 获取审批设置：后端返回 snake_case 字段
+// fallback 值与后端 DefaultConfig / DefaultApprovalConfig 保持一致
 export async function getSettings(): Promise<ApprovalSettings> {
   const raw = await request<AnyRecord>(`${API_BASE}/settings`)
   return {
-    strategy: raw.strategy || 'manual',
-    trustThreshold: raw.trust_threshold ?? raw.trustThreshold ?? 5,
-    enableLearning: raw.enable_learning ?? raw.enableLearning ?? false,
-    cliConfirm: raw.cli_confirm ?? raw.cliConfirm ?? true,
+    strategy: raw.strategy || 'smart',
+    trustThreshold: raw.trust_threshold ?? raw.trustThreshold ?? 3,
+    enableLearning: raw.enable_learning ?? raw.enableLearning ?? true,
+    cliConfirm: raw.cli_confirm ?? raw.cliConfirm ?? false,
     whitelist: raw.whitelist || [],
   }
 }

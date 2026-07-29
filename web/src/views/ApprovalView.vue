@@ -11,87 +11,7 @@
 
     <n-spin :show="loading">
       <n-tabs v-model:value="activeTab" type="line" animated>
-        <!-- Tab 1: Pending (most important, put first) -->
-        <n-tab-pane name="pending" :tab="pendingTabTitle">
-          <template v-if="pendingApprovals.length > 0">
-            <n-space justify="space-between" align="center" style="margin-bottom: 12px;">
-              <n-space align="center">
-                <n-text depth="3" style="font-size: 13px;">
-                  {{ pendingApprovals.length }} {{ t('approval.pending.items') }}
-                </n-text>
-                <n-text depth="3" style="font-size: 12px;">
-                  {{ t('approval.pending.shortcutHint') }}
-                </n-text>
-              </n-space>
-              <n-space>
-                <n-button size="small" type="warning" :loading="batchLoading" @click="handleBatchResolve(true)">
-                  {{ t('approval.pending.batchApprove') }}
-                </n-button>
-                <n-button size="small" type="error" :loading="batchLoading" @click="handleBatchResolve(false)">
-                  {{ t('approval.pending.batchDeny') }}
-                </n-button>
-              </n-space>
-            </n-space>
-            <n-space vertical>
-              <n-alert
-                v-for="(item, idx) in pendingApprovals"
-                :key="item.id"
-                :type="riskAlertType(item.riskLevel)"
-                :bordered="true"
-                style="padding: 12px 16px;"
-              >
-                <n-space vertical style="width: 100%;">
-                  <n-space align="center" justify="space-between">
-                    <n-space align="center">
-                      <n-tag strong size="small" round :bordered="false" :type="riskTagType(item.riskLevel)">
-                        #{{ idx + 1 }}
-                      </n-tag>
-                      <n-text strong>{{ t('approval.pending.command') }}</n-text>
-                      <n-tag :type="riskTagType(item.riskLevel)" size="small" :bordered="false">
-                        {{ t(`approval.riskLevels.${riskLevelKey(item.riskLevel)}`) }}
-                      </n-tag>
-                    </n-space>
-                    <n-space align="center" size="small">
-                      <n-text v-if="item.sessionId" depth="3" style="font-size: 12px;" code>
-                        {{ t('approval.pending.sessionId') }}: {{ item.sessionId.substring(0, 8) }}
-                      </n-text>
-                      <n-text depth="3" style="font-size: 12px;">{{ formatTime(item.createdAt) }}</n-text>
-                      <n-tag v-if="item.expiresAt" size="tiny" :type="expiryTagType(item.expiresAt)" round :bordered="false">
-                        {{ t('approval.pending.expiresIn') }}: {{ formatExpiry(item.expiresAt) }}
-                      </n-tag>
-                    </n-space>
-                  </n-space>
-                  <n-text code style="word-break: break-all; font-size: 13px; white-space: pre-wrap;">{{ sanitizeCommand(item.command) }}</n-text>
-                  <n-space justify="end" style="margin-top: 8px;">
-                    <n-button
-                      type="error"
-                      size="small"
-                      :loading="resolvingId === item.id && lastResolveAction === false"
-                      :disabled="resolvingId === item.id && lastResolveAction === true"
-                      @click="handleResolve(item.id, false)"
-                    >
-                      <template #icon><span style="font-weight: bold;">D</span></template>
-                      {{ t('approval.pending.deny') }}
-                    </n-button>
-                    <n-button
-                      type="primary"
-                      size="small"
-                      :loading="resolvingId === item.id && lastResolveAction === true"
-                      :disabled="resolvingId === item.id && lastResolveAction === false"
-                      @click="handleResolve(item.id, true)"
-                    >
-                      <template #icon><span style="font-weight: bold;">A</span></template>
-                      {{ t('approval.pending.approve') }}
-                    </n-button>
-                  </n-space>
-                </n-space>
-              </n-alert>
-            </n-space>
-          </template>
-          <n-empty v-else :description="t('approval.pending.noPending')" />
-        </n-tab-pane>
-
-        <!-- Tab 2: Dashboard -->
+        <!-- Tab 1: Dashboard -->
         <n-tab-pane name="dashboard" :tab="t('approval.tabs.dashboard')">
           <n-grid cols="1 s:2 m:4" responsive="screen" :x-gap="16" :y-gap="16" style="margin-bottom: 24px;">
             <n-gi>
@@ -161,7 +81,7 @@
           </template>
         </n-tab-pane>
 
-        <!-- Tab 3: History -->
+        <!-- Tab 2: History -->
         <n-tab-pane name="history" :tab="t('approval.tabs.history')">
           <n-space justify="space-between" style="margin-bottom: 16px;">
             <n-text depth="3">{{ historyRecords.length ? `${historyRecords.length} ${t('approval.history.records')}` : t('approval.history.noRecords') }}</n-text>
@@ -184,7 +104,7 @@
           <n-empty v-else :description="t('approval.history.noRecords')" />
         </n-tab-pane>
 
-        <!-- Tab 4: Patterns -->
+        <!-- Tab 3: Patterns -->
         <n-tab-pane name="patterns" :tab="t('approval.tabs.patterns')">
           <h4 style="margin-bottom: 12px;">{{ t('approval.patterns.trusted') }}</h4>
           <n-data-table
@@ -208,7 +128,7 @@
           <n-empty v-else :description="t('approval.patterns.noDenied')" />
         </n-tab-pane>
 
-        <!-- Tab 5: Settings -->
+        <!-- Tab 4: Settings -->
         <n-tab-pane name="settings" :tab="t('approval.tabs.settings')">
           <n-spin :show="settingsLoading">
             <n-card size="small" style="margin-bottom: 16px;">
@@ -267,35 +187,16 @@
         </n-tab-pane>
       </n-tabs>
     </n-spin>
-
-    <!-- Deny Reason Modal -->
-    <n-modal v-model:show="showDenyModal" preset="dialog" :title="denyModalTitle" :mask-closable="false" @after-leave="onDenyModalClose">
-      <n-input
-        v-model:value="denyReason"
-        type="textarea"
-        :rows="3"
-        :placeholder="t('approval.pending.denyReasonPlaceholder')"
-        :disabled="denySubmitting"
-      />
-      <template #action>
-        <n-space justify="end">
-          <n-button :disabled="denySubmitting" @click="cancelDeny">{{ t('common.cancel') }}</n-button>
-          <n-button type="error" :loading="denySubmitting" @click="confirmDeny">{{ t('approval.pending.deny') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, h, watch } from 'vue'
+import { ref, computed, onMounted, watch, h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NButton, NSpace, NTag, useMessage, useNotification } from 'naive-ui'
+import { NButton, NTag, useMessage } from 'naive-ui'
 import {
   getApprovalHistory,
   getApprovalStats,
-  getPendingApprovals,
-  resolvePendingApproval,
   getTrustedPatterns,
   getDeniedPatterns,
   removeTrustedPattern,
@@ -308,7 +209,6 @@ import {
   clearHistory,
   type ApprovalHistoryRecord,
   type ApprovalStats,
-  type PendingApproval,
   type TrustedPattern,
   type DeniedPattern,
   type ApprovalSettings,
@@ -316,12 +216,11 @@ import {
 
 const { t } = useI18n()
 const message = useMessage()
-const notification = useNotification()
 
 // Loading & error
 const loading = ref(false)
 const error = ref<string | null>(null)
-const activeTab = ref('pending')
+const activeTab = ref('dashboard')
 
 // Stats
 const stats = ref<ApprovalStats>({
@@ -341,15 +240,12 @@ const historyPagination = ref({ pageSize: 20 })
 const trustedCommands = ref<TrustedPattern[]>([])
 const deniedCommands = ref<DeniedPattern[]>([])
 
-// Pending
-const pendingApprovals = ref<PendingApproval[]>([])
-
 // Settings
 const settingsForm = ref<ApprovalSettings>({
-  strategy: 'manual',
-  trustThreshold: 5,
-  enableLearning: false,
-  cliConfirm: true,
+  strategy: 'smart',
+  trustThreshold: 3,
+  enableLearning: true,
+  cliConfirm: false,
   whitelist: [],
 })
 const newWhitelistPattern = ref('')
@@ -358,53 +254,12 @@ const settingsLoading = ref(false)
 const settingsSaving = ref(false)
 let settingsLoaded = false
 
-// Deny modal
-const showDenyModal = ref(false)
-const denyReason = ref('')
-const denySubmitting = ref(false)
-const denyIsBatch = ref(false)
-let denyCallback: ((reason: string) => Promise<void>) | null = null
-
-// Per-item resolving state (prevents double clicks)
-const resolvingId = ref<string | null>(null)
-const lastResolveAction = ref<boolean | null>(null)
-const batchLoading = ref(false)
-
-// Track previous pending count to detect new arrivals (for notification)
-let prevPendingCount = 0
-let lastNotifiedPendingKey: string | null = null
-
-// Track previous pending length for auto-switch tab logic
-let prevPendingLen = 0
-
-// Force re-render tick for expiry countdowns
-const nowTick = ref(Date.now())
-
-// Auto-switch to pending tab only when count goes from 0 to >0 (avoid interrupting user)
-watch(() => pendingApprovals.value.length, (newLen) => {
-  if (newLen > 0 && prevPendingLen === 0 && activeTab.value !== 'pending' && activeTab.value !== 'dashboard') {
-    activeTab.value = 'pending'
-  }
-  prevPendingLen = newLen
-})
-
 // Lazy load settings when settings tab is first opened
 watch(activeTab, (newTab) => {
   if (newTab === 'settings' && !settingsLoaded) {
     settingsLoaded = true
     loadSettings()
   }
-})
-
-// Pending tab title with badge
-const pendingTabTitle = computed(() => {
-  const count = pendingApprovals.value.length
-  return count > 0 ? `${t('approval.tabs.pending')} (${count})` : t('approval.tabs.pending')
-})
-
-// Deny modal title
-const denyModalTitle = computed(() => {
-  return denyIsBatch.value ? t('approval.pending.batchDeny') : t('approval.pending.denyReason')
 })
 
 // Strategy options for settings dropdown
@@ -425,15 +280,6 @@ const riskLevels = [
   { key: 'high' },
   { key: 'critical' },
 ]
-
-// Risk weight for sorting (higher = more dangerous = first)
-function riskWeight(level: string): number {
-  const map: Record<string, number> = {
-    critical: 4, high: 3, medium: 2, low: 1,
-    '4': 4, '3': 3, '2': 2, '1': 1, '0': 1,
-  }
-  return map[String(level)] || 0
-}
 
 function riskColor(level: string): string {
   const colors: Record<string, string> = {
@@ -461,14 +307,6 @@ function riskTagType(level: string): 'success' | 'warning' | 'error' | 'info' {
     '4': 'error',
   }
   return map[level] || 'info'
-}
-
-function riskAlertType(level: string): 'success' | 'warning' | 'error' | 'info' {
-  const w = riskWeight(level)
-  if (w >= 3) return 'error'
-  if (w === 2) return 'warning'
-  if (w === 1) return 'info'
-  return 'info'
 }
 
 function riskLevelKey(level: string | number): string {
@@ -501,35 +339,6 @@ function formatTime(ts: string): string {
     return d.toLocaleString()
   } catch {
     return ts
-  }
-}
-
-function formatExpiry(expiresAt: string): string {
-  if (!expiresAt) return '-'
-  // 引用 nowTick 让 computed 每 5 秒重新计算
-  void nowTick.value
-  try {
-    const ms = new Date(expiresAt).getTime() - Date.now()
-    if (ms <= 0) return t('approval.pending.expired')
-    const s = Math.floor(ms / 1000)
-    if (s < 60) return `${s}s`
-    const m = Math.floor(s / 60)
-    const rem = s % 60
-    return `${m}m ${rem}s`
-  } catch {
-    return '-'
-  }
-}
-
-function expiryTagType(expiresAt: string): 'error' | 'warning' | 'success' {
-  void nowTick.value
-  try {
-    const ms = new Date(expiresAt).getTime() - Date.now()
-    if (ms <= 0) return 'error'
-    if (ms < 30_000) return 'warning' // < 30s
-    return 'success'
-  } catch {
-    return 'success'
   }
 }
 
@@ -731,7 +540,6 @@ async function loadAll(): Promise<void> {
     loadStats(),
     loadHistory(),
     loadPatterns(),
-    loadPending(),
   ])
   const failures = results.filter(r => r.status === 'rejected')
   if (failures.length > 0) {
@@ -759,37 +567,6 @@ async function loadPatterns(): Promise<void> {
   deniedCommands.value = denied || []
 }
 
-let pendingLoading = false
-
-async function loadPending(): Promise<void> {
-  if (pendingLoading) return
-  pendingLoading = true
-  try {
-    const next = await getPendingApprovals()
-    // 按风险权重降序（critical 优先），再按创建时间升序（旧的优先）
-    next.sort((a, b) => {
-      const wDiff = riskWeight(b.riskLevel) - riskWeight(a.riskLevel)
-      if (wDiff !== 0) return wDiff
-      const ta = new Date(a.createdAt).getTime() || 0
-      const tb = new Date(b.createdAt).getTime() || 0
-      return ta - tb
-    })
-    // 检测新增项以触发通知
-    const prevIds = new Set(pendingApprovals.value.map(p => p.id))
-    const newItems = next.filter(p => !prevIds.has(p.id))
-    if (newItems.length > 0 && pendingApprovals.value.length > 0) {
-      notifyNewPending(newItems.length)
-    } else if (newItems.length > 0 && prevPendingCount === 0 && lastNotifiedPendingKey !== newItems[0]?.id) {
-      notifyNewPending(newItems.length)
-      lastNotifiedPendingKey = newItems[0]?.id || null
-    }
-    prevPendingCount = next.length
-    pendingApprovals.value = next
-  } finally {
-    pendingLoading = false
-  }
-}
-
 async function loadSettings(): Promise<void> {
   settingsLoading.value = true
   try {
@@ -811,36 +588,7 @@ async function loadSettings(): Promise<void> {
   }
 }
 
-function notifyNewPending(count: number) {
-  const title = t('approval.pending.newNotificationTitle')
-  const body = t('approval.pending.newNotificationBody', { count })
-
-  // 优先使用浏览器原生通知
-  let nativeNotified = false
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    try {
-      new Notification(title, { body })
-      nativeNotified = true
-    } catch {
-      // 原生通知失败则降级
-    }
-  }
-
-  // 原生通知不可用或未授权时，使用 naive-ui 通知作为备选
-  if (!nativeNotified) {
-    notification.warning({
-      title,
-      content: body,
-      duration: 3000,
-    })
-  }
-
-  // 同时显示消息条提示
-  message.warning(t('approval.pending.newPending', { count }), { duration: 3000 })
-}
-
 async function handleClearHistory(): Promise<void> {
-  pausePendingPoll()
   loading.value = true
   try {
     await clearHistory(168) // 7 days
@@ -850,12 +598,10 @@ async function handleClearHistory(): Promise<void> {
     message.error(t('approval.history.clearFailed'))
   } finally {
     loading.value = false
-    resumePendingPoll()
   }
 }
 
 async function handleRemoveTrust(pattern: string): Promise<void> {
-  pausePendingPoll()
   loading.value = true
   try {
     await removeTrustedPattern(pattern)
@@ -864,12 +610,10 @@ async function handleRemoveTrust(pattern: string): Promise<void> {
     message.error(t('approval.failedToLoad'))
   } finally {
     loading.value = false
-    resumePendingPoll()
   }
 }
 
 async function handleClearDenial(pattern: string): Promise<void> {
-  pausePendingPoll()
   loading.value = true
   try {
     await clearDeniedPattern(pattern)
@@ -878,152 +622,6 @@ async function handleClearDenial(pattern: string): Promise<void> {
     message.error(t('approval.failedToLoad'))
   } finally {
     loading.value = false
-    resumePendingPoll()
-  }
-}
-
-async function handleResolve(id: string, approved: boolean): Promise<void> {
-  if (resolvingId.value === id) return // prevent double click
-  resolvingId.value = id
-  lastResolveAction.value = approved
-  if (approved) {
-    pausePendingPoll()
-    try {
-      await resolvePendingApproval(id, true, 'approved')
-      message.success(t('approval.pending.resolved'))
-      // 审批后同时刷新 pending/stats/history/patterns
-      await Promise.all([
-        loadPending(),
-        loadStats(),
-        loadHistory(),
-        loadPatterns(),
-      ])
-    } catch {
-      message.error(t('approval.pending.resolveFailed'))
-    } finally {
-      resolvingId.value = null
-      lastResolveAction.value = null
-      resumePendingPoll()
-    }
-  } else {
-    denyReason.value = ''
-    denyIsBatch.value = false
-    denyCallback = async (reason: string) => {
-      pausePendingPoll()
-      try {
-        await resolvePendingApproval(id, false, reason || 'denied')
-        message.success(t('approval.pending.resolved'))
-        await Promise.all([
-          loadPending(),
-          loadStats(),
-          loadHistory(),
-          loadPatterns(),
-        ])
-      } catch {
-        message.error(t('approval.pending.resolveFailed'))
-      } finally {
-        resolvingId.value = null
-        lastResolveAction.value = null
-        resumePendingPoll()
-      }
-    }
-    showDenyModal.value = true
-  }
-}
-
-function cancelDeny() {
-  showDenyModal.value = false
-  resolvingId.value = null
-  lastResolveAction.value = null
-  denyCallback = null
-}
-
-function onDenyModalClose() {
-  denyReason.value = ''
-  denySubmitting.value = false
-}
-
-async function confirmDeny(): Promise<void> {
-  if (denySubmitting.value) return
-  const cb = denyCallback
-  denyCallback = null
-  if (!cb) {
-    showDenyModal.value = false
-    return
-  }
-  denySubmitting.value = true
-  try {
-    await cb(denyReason.value)
-    showDenyModal.value = false
-  } catch {
-    denyCallback = cb
-  } finally {
-    denySubmitting.value = false
-  }
-}
-
-async function handleBatchResolve(approved: boolean): Promise<void> {
-  if (batchLoading.value) return
-  if (pendingApprovals.value.length === 0) return
-  if (approved) {
-    pausePendingPoll()
-    batchLoading.value = true
-    try {
-      for (const item of pendingApprovals.value) {
-        await resolvePendingApproval(item.id, true, 'batch approved')
-      }
-      message.success(t('approval.pending.batchResolved'))
-      await Promise.all([
-        loadPending(),
-        loadStats(),
-        loadHistory(),
-        loadPatterns(),
-      ])
-    } catch {
-      message.error(t('approval.pending.resolveFailed'))
-      // 中途失败时也要刷新 UI，避免已成功项仍显示为待审批
-      await Promise.all([
-        loadPending(),
-        loadStats(),
-        loadHistory(),
-        loadPatterns(),
-      ])
-    } finally {
-      batchLoading.value = false
-      resumePendingPoll()
-    }
-  } else {
-    denyReason.value = ''
-    denyIsBatch.value = true
-    denyCallback = async (reason: string) => {
-      pausePendingPoll()
-      batchLoading.value = true
-      try {
-        for (const item of pendingApprovals.value) {
-          await resolvePendingApproval(item.id, false, reason || 'batch denied')
-        }
-        message.success(t('approval.pending.batchResolved'))
-        await Promise.all([
-          loadPending(),
-          loadStats(),
-          loadHistory(),
-          loadPatterns(),
-        ])
-      } catch {
-        message.error(t('approval.pending.resolveFailed'))
-        // 中途失败时也要刷新 UI
-        await Promise.all([
-          loadPending(),
-          loadStats(),
-          loadHistory(),
-          loadPatterns(),
-        ])
-      } finally {
-        batchLoading.value = false
-        resumePendingPoll()
-      }
-    }
-    showDenyModal.value = true
   }
 }
 
@@ -1031,7 +629,6 @@ async function handleAddWhitelist(): Promise<void> {
   const pattern = newWhitelistPattern.value.trim()
   if (!pattern) return
   whitelistAdding.value = true
-  pausePendingPoll()
   try {
     await addWhitelist(pattern)
     settingsForm.value.whitelist = [...settingsForm.value.whitelist, pattern]
@@ -1041,26 +638,21 @@ async function handleAddWhitelist(): Promise<void> {
     message.error(t('approval.settings.whitelistAddFailed'))
   } finally {
     whitelistAdding.value = false
-    resumePendingPoll()
   }
 }
 
 async function handleRemoveWhitelist(pattern: string): Promise<void> {
-  pausePendingPoll()
   try {
     await removeWhitelist(pattern)
     settingsForm.value.whitelist = settingsForm.value.whitelist.filter(p => p !== pattern)
     message.success(t('approval.settings.whitelistRemoved'))
   } catch {
     message.error(t('approval.settings.whitelistRemoveFailed'))
-  } finally {
-    resumePendingPoll()
   }
 }
 
 async function handleSaveSettings(): Promise<void> {
   settingsSaving.value = true
-  pausePendingPoll()
   try {
     await saveSettings(settingsForm.value)
     message.success(t('approval.settings.saved'))
@@ -1068,103 +660,10 @@ async function handleSaveSettings(): Promise<void> {
     message.error(t('approval.settings.saveFailed'))
   } finally {
     settingsSaving.value = false
-    resumePendingPoll()
-  }
-}
-
-// Keyboard shortcuts: A = approve first, D = deny first, R = refresh
-function handleKeydown(e: KeyboardEvent) {
-  const target = e.target as HTMLElement
-  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
-    return
-  }
-  if (showDenyModal.value) return
-  if (activeTab.value !== 'pending') return
-  if (pendingApprovals.value.length === 0) return
-
-  const key = e.key.toLowerCase()
-  if (key === 'a') {
-    e.preventDefault()
-    const first = pendingApprovals.value[0]
-    if (first && resolvingId.value !== first.id) {
-      handleResolve(first.id, true)
-    }
-  } else if (key === 'd') {
-    e.preventDefault()
-    const first = pendingApprovals.value[0]
-    if (first && resolvingId.value !== first.id) {
-      handleResolve(first.id, false)
-    }
-  } else if (key === 'r') {
-    e.preventDefault()
-    loadAll()
-  }
-}
-
-let pendingPollTimer: ReturnType<typeof setInterval> | null = null
-let pendingPollPaused = false
-let expiryTickTimer: ReturnType<typeof setInterval> | null = null
-
-function pausePendingPoll() {
-  pendingPollPaused = true
-}
-
-function resumePendingPoll() {
-  pendingPollPaused = false
-}
-
-function handleVisibilityChange() {
-  if (document.hidden) {
-    // 页面隐藏时不主动拉取；定时器内部也会通过 document.hidden 跳过
-    return
-  }
-  // 页面恢复可见时立即拉取一次
-  if (!pendingPollPaused) {
-    loadPending().catch(() => { /* silent */ })
   }
 }
 
 onMounted(() => {
-  // 设置全局标志，让 App.vue 跳过轮询，避免双重轮询
-  ;(window as any).__approvalViewActive = true
-
-  // 请求浏览器通知权限
-  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    try {
-      Notification.requestPermission().catch(() => { /* silent */ })
-    } catch {
-      // 某些浏览器需要用户手势触发，忽略错误
-    }
-  }
-
   loadAll()
-  // 轮询间隔与 App.vue 一致（10 秒）
-  pendingPollTimer = setInterval(() => {
-    if (!pendingPollPaused && !document.hidden) {
-      loadPending().catch(() => { /* silent */ })
-    }
-  }, 10000)
-  // 倒计时每 5 秒更新一次，过期精度到秒级已足够
-  expiryTickTimer = setInterval(() => {
-    nowTick.value = Date.now()
-  }, 5000)
-  window.addEventListener('keydown', handleKeydown)
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-})
-
-onUnmounted(() => {
-  // 清除全局标志
-  ;(window as any).__approvalViewActive = false
-
-  if (pendingPollTimer) {
-    clearInterval(pendingPollTimer)
-    pendingPollTimer = null
-  }
-  if (expiryTickTimer) {
-    clearInterval(expiryTickTimer)
-    expiryTickTimer = null
-  }
-  window.removeEventListener('keydown', handleKeydown)
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>

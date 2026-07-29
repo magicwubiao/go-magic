@@ -86,6 +86,11 @@ type Server struct {
 	// Approval manager (independent of agents)
 	approvalMgr *approval.Manager
 
+	// pendingSSEHandlers 注册每个 session 的 SSE 审批推送回调。
+	// 当 ApprovalHook 创建 pending 时，manager 的全局回调按 sessionID 查表分发。
+	pendingSSEHandlers   map[string]func(approval.PendingApprovalInfo)
+	pendingSSEHandlersMu sync.Mutex
+
 	// Usage manager
 	usageMgr *usage.Manager
 
@@ -269,7 +274,12 @@ func NewServer(dbPath string) *Server {
 		approvalCfg.TrustThreshold = ac.TrustThreshold
 		approvalCfg.EnableLearning = ac.EnableLearning
 		approvalCfg.EnableCLIConfirm = ac.EnableCLIConfirm
-		approvalCfg.ApprovalTimeout = ac.ApprovalTimeout
+		// 仅在显式设置 (>0) 时覆盖，否则保留 DefaultConfig 的 60s。
+		// 若无条件覆盖，配置文件中 approval 段未写 approval_timeout 时，
+		// Go 零值 0 会使 pending 审批立即过期，用户来不及点击批准。
+		if ac.ApprovalTimeout > 0 {
+			approvalCfg.ApprovalTimeout = ac.ApprovalTimeout
+		}
 	}
 	approvalMgr, err := approval.NewManager(approvalCfg)
 	if err != nil {
@@ -335,35 +345,49 @@ func NewServer(dbPath string) *Server {
 	}
 
 	s := &Server{
-		mu:               sync.RWMutex{},
-		startTime:        time.Now(),
-		cfg:              cfg,
-		sessionStore:     store,
-		provider:         prov,
-		toolReg:          registry,
-		skillMgr:         skillMgr,
-		magicHome:        magicHome,
-		execPath:         execPath,
-		version:          version,
-		commit:           "unknown",
-		buildDate:        "unknown",
-		agents:           make(map[string]*agent.Agent),
-		disabledSkills:   disabledSkills,
-		cronMgr:          cronMgr,
-		kanbanMgr:        kanbanMgr,
-		pluginMgr:        pluginMgr,
-		groupchatStorage: groupchatStorage,
-		goalMgr:          goalMgr,
-		cortexMgr:        cortexMgr,
-		approvalMgr:      approvalMgr,
-		usageMgr:         usageMgr,
-		mcpMgr:           mcpMgr,
-		actions:          make(map[string]*ActionStatus),
-		sessionTokens:    make(map[string][2]int),
-		authToken:        authToken,
-		allowedOrigins:   allowedOrigins,
-		shareTokens:      make(map[string]*ShareToken),
-		metricsMgr:       metrics.NewMetrics(),
+		mu:                 sync.RWMutex{},
+		startTime:          time.Now(),
+		cfg:                cfg,
+		sessionStore:       store,
+		provider:           prov,
+		toolReg:            registry,
+		skillMgr:           skillMgr,
+		magicHome:          magicHome,
+		execPath:           execPath,
+		version:            version,
+		commit:             "unknown",
+		buildDate:          "unknown",
+		agents:             make(map[string]*agent.Agent),
+		disabledSkills:     disabledSkills,
+		cronMgr:            cronMgr,
+		kanbanMgr:          kanbanMgr,
+		pluginMgr:          pluginMgr,
+		groupchatStorage:   groupchatStorage,
+		goalMgr:            goalMgr,
+		cortexMgr:          cortexMgr,
+		approvalMgr:        approvalMgr,
+		usageMgr:           usageMgr,
+		mcpMgr:             mcpMgr,
+		actions:            make(map[string]*ActionStatus),
+		sessionTokens:      make(map[string][2]int),
+		authToken:          authToken,
+		allowedOrigins:     allowedOrigins,
+		shareTokens:        make(map[string]*ShareToken),
+		metricsMgr:         metrics.NewMetrics(),
+		pendingSSEHandlers: make(map[string]func(approval.PendingApprovalInfo)),
+	}
+
+	// 注册全局 pending 回调：按 sessionID 分发到对应 SSE 流。
+	// 仅当 approvalMgr 存在时注册。
+	if s.approvalMgr != nil {
+		s.approvalMgr.SetOnPendingCreated(func(info approval.PendingApprovalInfo) {
+			s.pendingSSEHandlersMu.Lock()
+			handler, ok := s.pendingSSEHandlers[info.SessionID]
+			s.pendingSSEHandlersMu.Unlock()
+			if ok && handler != nil {
+				handler(info)
+			}
+		})
 	}
 
 	// Start cron scheduler
@@ -544,6 +568,42 @@ GOAL GUIDANCE:
 	a.SetSession(sessionID)
 	s.agents[sessionID] = a
 	return a
+}
+
+// registerApprovalSSEHandler registers an SSE push callback for the given session
+// so that approval_required events are delivered into the chat stream. Returns an
+// unregister func that removes the handler (call via defer). Both handleChatStream
+// and handleSessionStream use this to ensure approval cards appear in the chat bubble.
+func (s *Server) registerApprovalSSEHandler(sessionID string, writeSSE func(string) bool) func() {
+	if s.approvalMgr == nil {
+		return func() {}
+	}
+	s.pendingSSEHandlersMu.Lock()
+	s.pendingSSEHandlers[sessionID] = func(info approval.PendingApprovalInfo) {
+		riskLevel := ""
+		if info.RiskLevel != "" {
+			riskLevel = info.RiskLevel
+		}
+		data, _ := json.Marshal(map[string]interface{}{
+			"type":       "approval_required",
+			"id":         info.ID,
+			"command":    info.Command,
+			"session_id": info.SessionID,
+			"work_dir":   info.WorkingDir,
+			"risk_level": riskLevel,
+			"reason":     info.Reason,
+			"context":    info.Context,
+			"created_at": info.CreatedAt.Unix(),
+			"expires_at": info.ExpiresAt.Unix(),
+		})
+		writeSSE("data: " + string(data) + "\n\n")
+	}
+	s.pendingSSEHandlersMu.Unlock()
+	return func() {
+		s.pendingSSEHandlersMu.Lock()
+		delete(s.pendingSSEHandlers, sessionID)
+		s.pendingSSEHandlersMu.Unlock()
+	}
 }
 
 func getToolsSchema(registry *tool.Registry) []map[string]interface{} {

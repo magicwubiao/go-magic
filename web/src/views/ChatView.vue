@@ -231,7 +231,7 @@
                 <ReasoningContent :content="chatStore.streamContent" :streaming="chatStore.streaming" />
               </div>
               <!-- Status panel when no content yet -->
-              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0" class="agent-status-panel">
+              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
                 <div class="status-header">
                   <div class="status-spinner"></div>
                   <span class="status-phase">{{ agentPhase }}</span>
@@ -254,6 +254,18 @@
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" class="empty-hint">
           {{ t('chat.selectSession') }}
         </n-text>
+      </div>
+
+      <!-- 底部固定审批栏：待审批命令始终可见可操作，不随对话滚动。 -->
+      <div v-if="chatStore.pendingApprovals.length > 0" class="approval-bar">
+        <div class="approval-bar-list">
+          <ChatApprovalCard
+            v-for="approval in chatStore.pendingApprovals"
+            :key="approval.id"
+            :approval="approval"
+            :session-id="chatStore.activeSessionId || ''"
+          />
+        </div>
       </div>
 
       <!-- File preview before sending -->
@@ -444,6 +456,7 @@ import ReasoningContent from '@/components/ReasoningContent.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import GoalSidebar from '@/components/GoalSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
+import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, ChevronDownOutline, AddOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
@@ -1006,6 +1019,34 @@ function throttledScrollToBottom() {
 
 watch(() => chatStore.messages.length, scrollToBottom)
 watch(() => chatStore.toolCalls.length, scrollToBottom)
+// 新审批到达时自动滚动到底部，避免用户在查看历史时错过待审批卡片
+watch(() => chatStore.pendingApprovals.length, scrollToBottom)
+
+// 审批快捷键：A=批准首个待审批，D=拒绝首个待审批。输入框聚焦时不响应。
+function handleApprovalKeydown(e: KeyboardEvent) {
+  const target = e.target as HTMLElement
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+    return
+  }
+  const pending = chatStore.activePendingApprovals
+  if (pending.length === 0) return
+  const key = e.key.toLowerCase()
+  if (key === 'a') {
+    e.preventDefault()
+    const first = pending[0]
+    if (first) chatStore.resolveChatApproval(chatStore.activeSessionId || '', first.id, true)
+  } else if (key === 'd') {
+    e.preventDefault()
+    const first = pending[0]
+    if (first) chatStore.resolveChatApproval(chatStore.activeSessionId || '', first.id, false)
+  }
+}
+onMounted(() => {
+  window.addEventListener('keydown', handleApprovalKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleApprovalKeydown)
+})
 
 // 监听关联变化，清空会话目标缓存
 watch(() => goalsStore.linkVersion, () => {
@@ -1499,6 +1540,22 @@ onMounted(async () => {
   background: #fff;
 }
 
+/* 底部固定审批栏 */
+.approval-bar {
+  padding: 8px 16px;
+  background: linear-gradient(180deg, #fffdf5 0%, #fff 100%);
+  border-top: 1px solid #f0e0c0;
+  box-shadow: 0 -2px 8px rgba(240, 160, 32, 0.08);
+}
+
+.approval-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 .preview-item {
   position: relative;
   display: inline-block;
@@ -1772,6 +1829,11 @@ onMounted(async () => {
   .input-area {
     background: #1a1a1a;
     border-top-color: #333;
+  }
+
+  .approval-bar {
+    background: linear-gradient(180deg, #2a2014 0%, #1e1e1e 100%);
+    border-top-color: #4a3818;
   }
 
   .chat-input-box {

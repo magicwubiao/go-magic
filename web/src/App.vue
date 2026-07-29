@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, onMounted, onUnmounted } from 'vue'
+import { computed, h, ref, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -107,7 +107,6 @@ import {
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
-import { getPendingApprovals } from '@/api/approval'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -115,7 +114,6 @@ const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
 const siderCollapsed = ref(false)
-const pendingApprovalCount = ref(0)
 
 const githubUrl = 'https://github.com/magicwubiao/go-magic'
 
@@ -123,30 +121,7 @@ const isLoginPage = computed(() => route.path === '/login')
 const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat')
 const activeKey = computed(() => route.path)
 
-// Poll pending approvals for sidebar badge
-let approvalPollTimer: ReturnType<typeof setInterval> | null = null
-async function pollPendingApprovals() {
-  // 用户停留在审批页面时由 ApprovalView 自行轮询，避免双重轮询
-  if ((window as any).__approvalViewActive) {
-    return
-  }
-  try {
-    const items = await getPendingApprovals()
-    pendingApprovalCount.value = items?.length || 0
-  } catch {
-    // silent
-  }
-}
-
-onMounted(() => {
-  pollPendingApprovals()
-  approvalPollTimer = setInterval(pollPendingApprovals, 10000)
-})
-
 onUnmounted(() => {
-  if (approvalPollTimer) {
-    clearInterval(approvalPollTimer)
-  }
   useChatStore().cleanup()
 })
 
@@ -192,7 +167,7 @@ const menuOptions = computed(() => [
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
-  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline), badge: pendingApprovalCount.value > 0 ? pendingApprovalCount.value : undefined },
+  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },

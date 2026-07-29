@@ -3,6 +3,7 @@ import { ref, computed, reactive } from 'vue'
 import type { Session, Message } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 import * as commandsApi from '@/api/commands'
+import * as approvalApi from '@/api/approval'
 import { i18n } from '@/locales'
 
 export interface ChatError {
@@ -30,6 +31,29 @@ export interface TaskProgress {
   tokensRemaining: number
 }
 
+// 对话流内嵌审批卡片状态。pending=等待用户决策，
+// approving/denying=已点击按钮正在请求后端，approved/denied/expired=终态。
+export type ApprovalCardStatus =
+  | 'pending'
+  | 'approving'
+  | 'denying'
+  | 'approved'
+  | 'denied'
+  | 'expired'
+
+export interface PendingApprovalCard {
+  id: string
+  command: string
+  riskLevel: string
+  reason: string
+  context: string
+  workDir: string
+  createdAt: number // unix seconds
+  expiresAt: number // unix seconds
+  status: ApprovalCardStatus
+  resolveReason?: string
+}
+
 interface SessionState {
   messages: Message[]
   streaming: boolean
@@ -37,6 +61,7 @@ interface SessionState {
   streamBuffer: string
   toolCalls: ToolCallEvent[]
   taskProgress: TaskProgress | null
+  pendingApprovals: PendingApprovalCard[]
 }
 
 function $t(key: string, params?: Record<string, string | number>): string {
@@ -122,6 +147,16 @@ export const useChatStore = defineStore('chat', () => {
     return tp.maxIterations > 20 || tp.percent > 0
   })
 
+  const pendingApprovals = computed(() => {
+    const state = activeSessionState.value
+    return state?.pendingApprovals || []
+  })
+
+  // 当前会话中仍在等待用户决策的审批（用于阻塞提示与卡片渲染）
+  const activePendingApprovals = computed(() => {
+    return pendingApprovals.value.filter(p => p.status === 'pending')
+  })
+
   function getOrCreateSessionState(sessionId: string): SessionState {
     let state = sessionStates.value[sessionId]
     if (!state) {
@@ -132,6 +167,7 @@ export const useChatStore = defineStore('chat', () => {
         streamBuffer: '',
         toolCalls: [],
         taskProgress: null,
+        pendingApprovals: [],
       })
       sessionStates.value = { ...sessionStates.value, [sessionId]: state }
     }
@@ -301,7 +337,7 @@ export const useChatStore = defineStore('chat', () => {
   async function selectSession(id: string): Promise<void> {
     activeSessionId.value = id
     const state = getOrCreateSessionState(id)
-    
+
     if (state.messages.length === 0) {
       try {
         const res = await sessionsApi.getSession(id)
@@ -311,6 +347,10 @@ export const useChatStore = defineStore('chat', () => {
         state.messages = []
       }
     }
+
+    // 恢复待审批：页面刷新或 SSE 断连后，从后端拉取当前会话的 pending 审批，
+    // 确保用户不会因为连接中断而错过阻塞中的审批。
+    restorePendingApprovals(id)
   }
 
   async function deleteSession(id: string, deleteFiles: boolean = false): Promise<void> {
@@ -401,6 +441,8 @@ export const useChatStore = defineStore('chat', () => {
     state.streamBuffer = ''
     state.toolCalls = []
     state.taskProgress = null
+    // 新一轮对话开始时清空上一轮的审批卡片（此时 streaming=false 已保证无 pending 项）
+    state.pendingApprovals = []
     error.value = null
 
     if (sessionFlushTimers.value[sessionId]) {
@@ -498,6 +540,28 @@ export const useChatStore = defineStore('chat', () => {
                 content: data.content,
                 status: data.success ? 'completed' : 'error',
               })
+            }
+            return
+          }
+
+          // 审批请求：后端在 ApprovalHook 创建 pending 时通过 SSE 推送，
+          // 前端在对话流内渲染审批卡片，用户点击批准/拒绝后调用 resolve API。
+          if (data.type === 'approval_required') {
+            const card: PendingApprovalCard = {
+              id: data.id || '',
+              command: data.command || '',
+              riskLevel: data.risk_level || data.riskLevel || 'low',
+              reason: data.reason || '',
+              context: data.context || '',
+              workDir: data.work_dir || data.workDir || '',
+              createdAt: data.created_at || Math.floor(Date.now() / 1000),
+              expiresAt: data.expires_at || 0,
+              status: 'pending',
+            }
+            // 同一 id 不重复插入（避免重复推送造成多张卡片）
+            const exists = state.pendingApprovals.some(p => p.id === card.id)
+            if (!exists) {
+              state.pendingApprovals.push(card)
             }
             return
           }
@@ -603,31 +667,31 @@ export const useChatStore = defineStore('chat', () => {
 
   function stopGeneration(): void {
     if (!activeSessionId.value) return
-    
+
     const sessionId = activeSessionId.value
     const state = getOrCreateSessionState(sessionId)
-    
+
     if (sessionFlushTimers.value[sessionId]) {
       clearTimeout(sessionFlushTimers.value[sessionId]!)
       sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
     }
     flushStreamBuffer(sessionId)
-    
+
     if (sessionEventSources.value[sessionId]) {
       sessionEventSources.value[sessionId]!.close()
       sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
     }
-    
+
     state.streaming = false
     state.taskProgress = null
-    
+
     for (const tc of state.toolCalls) {
       if (tc.status === 'running') {
         tc.status = 'error'
         tc.success = false
       }
     }
-    
+
     if (state.streamContent) {
       state.messages.push({
         id: Date.now().toString(),
@@ -637,6 +701,99 @@ export const useChatStore = defineStore('chat', () => {
         session_id: sessionId,
       })
       state.streamContent = ''
+    }
+  }
+
+  // 标记某个 pending 卡片为已过期（由组件倒计时触发）。
+  // 与 resolveChatApproval 一致：短暂展示终态后自动移除卡片，避免残留。
+  function markApprovalExpired(sessionId: string, approvalId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const card = state.pendingApprovals.find(p => p.id === approvalId)
+    if (card && card.status === 'pending') {
+      card.status = 'expired'
+      card.resolveReason = 'expired'
+      setTimeout(() => {
+        const st = sessionStates.value[sessionId]
+        if (!st) return
+        const idx = st.pendingApprovals.findIndex(p => p.id === approvalId)
+        if (idx >= 0) {
+          st.pendingApprovals.splice(idx, 1)
+        }
+      }, 1500)
+    }
+  }
+
+  // 从后端恢复待审批列表（页面刷新或 SSE 断连后的 fallback）。
+  // 只填充当前会话已有的 pending 卡片，按 id 去重，避免与 SSE 事件重复。
+  // getPendingApprovals 返回的字段不如 SSE 事件完整（缺 reason/context/workDir），
+  // 但足以让用户看到命令、风险等级并完成审批操作。
+  async function restorePendingApprovals(sessionId: string): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    // 仅在没有本地 pending 时恢复，避免覆盖 SSE 实时推送的完整数据
+    if (state.pendingApprovals.some(p => p.status === 'pending')) return
+    try {
+      const items = await approvalApi.getPendingApprovals(sessionId)
+      const now = Math.floor(Date.now() / 1000)
+      for (const p of items) {
+        const exists = state.pendingApprovals.some(c => c.id === p.id)
+        if (exists) continue
+        const expiresAt = p.expiresAt
+          ? Math.floor(new Date(p.expiresAt).getTime() / 1000)
+          : 0
+        state.pendingApprovals.push({
+          id: p.id,
+          command: p.command,
+          riskLevel: p.riskLevel || 'low',
+          reason: '',
+          context: '',
+          workDir: '',
+          createdAt: p.createdAt ? Math.floor(new Date(p.createdAt).getTime() / 1000) : now,
+          expiresAt,
+          status: 'pending',
+        })
+      }
+    } catch {
+      // 静默失败，不影响会话加载
+    }
+  }
+
+  // 对话流内审批：调用后端 resolve API 并更新卡片状态。
+  // approved=true 走批准，false 走拒绝（可附理由）。
+  async function resolveChatApproval(
+    sessionId: string,
+    approvalId: string,
+    approved: boolean,
+    reason: string = '',
+  ): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const card = state.pendingApprovals.find(p => p.id === approvalId)
+    if (!card) return
+    // 防止重复点击：只处理 pending 状态的卡片
+    if (card.status !== 'pending') return
+
+    card.status = approved ? 'approving' : 'denying'
+    try {
+      await approvalApi.resolvePendingApproval(approvalId, approved, reason)
+      card.status = approved ? 'approved' : 'denied'
+      card.resolveReason = reason || (approved ? 'approved' : 'denied')
+      // 短暂展示终态后自动移除卡片，避免审批完成后卡片残留
+      setTimeout(() => {
+        const st = sessionStates.value[sessionId]
+        if (!st) return
+        const idx = st.pendingApprovals.findIndex(p => p.id === approvalId)
+        if (idx >= 0) {
+          st.pendingApprovals.splice(idx, 1)
+        }
+      }, 1500)
+    } catch (e) {
+      // 还原为 pending，允许用户重试
+      card.status = 'pending'
+      const errMsg = e instanceof Error ? e.message : String(e)
+      error.value = { message: `${$t('approval.pending.resolveFailed')}: ${errMsg}` }
+      throw e
     }
   }
 
@@ -668,6 +825,8 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls,
     taskProgress,
     isLongTask,
+    pendingApprovals,
+    activePendingApprovals,
     sessionsLoading,
     sessionsHasMore,
     loadSessions,
@@ -685,5 +844,8 @@ export const useChatStore = defineStore('chat', () => {
     autocompleteCommand,
     addSystemMessage,
     getOrCreateSessionState,
+    resolveChatApproval,
+    markApprovalExpired,
+    restorePendingApprovals,
   }
 })

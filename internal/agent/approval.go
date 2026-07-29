@@ -12,6 +12,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"golang.org/x/term"
 )
 
@@ -27,6 +28,7 @@ const (
 	actionTrust                         // [T]rust - trust this pattern permanently
 	actionSkipSession                   // [S]kip session - skip approval for similar commands in this session
 	actionQuit                          // [Q]uit - abort the entire session
+	actionTimeout                       // 超时/取消——非用户主动决策，不污染 pattern 学习
 )
 
 // ApprovalHook provides command approval functionality using the smart approval system.
@@ -150,6 +152,7 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	// Request approval from manager.
 	result, err := h.manager.RequestApproval(req)
 	if err != nil {
+		log.Errorf("RequestApproval error for %q: %v", command, err)
 		return call, hooks.HookDecision{
 			Action: hooks.HookActionReject,
 			Reason: fmt.Sprintf("Approval error: %v", err),
@@ -157,14 +160,34 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	}
 
 	// If already approved by policy, notify and continue.
+	// 但对 execute_code / write_file / file_edit 这类工具，其合成命令字符串
+	// （如 "execute_code python (50 bytes)"）不包含真实代码/内容，assessRisk
+	// 只能给出 Low 风险从而被 smartApprove 自动放行。这里对"仅因 Low 风险被放行"
+	// 的内容类工具强制改为询问用户，避免任意代码/文件写入被静默执行。
+	// 白名单/受信 pattern/只读命令 的放行 reason 不同，不受影响。
 	if result.Approved {
-		h.manager.NotifyApproval(result, req)
-		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+		if isContentTool(call.ToolName) && result.Reason == "Low risk command" {
+			result.Approved = false
+			result.AskUser = true
+			result.Reason = "Code/file operation requires confirmation"
+			if req.Reason == "" {
+				req.Reason = result.Reason
+			}
+		} else {
+			h.manager.NotifyApproval(result, req)
+			return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+		}
 	}
 
 	// If needs user confirmation.
 	if result.AskUser {
 		var approved bool
+
+		// 将 RequestApproval 给出的 reason/risk 写回 req，供 CreatePendingApproval
+		// 通过 OnPendingCreated 回调推送给 SSE 流（前端审批卡片展示）。
+		if req.Reason == "" {
+			req.Reason = result.Reason
+		}
 
 		if h.webMode {
 			// Route to Web approval callback. 用 select 同时监听 ctx.Done()，
@@ -177,8 +200,19 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				}, nil
 			}
 			approved = webResult.Approved
-			// Notify callbacks of the web decision.
-			h.manager.NotifyApproval(webResult, req)
+			// 与 CLI 路径对齐：Web 审批结果同样走 Approve/Deny，以触发 pattern
+			// 学习、受信标记和历史记录，避免 Web 端批准的命令不学习、统计缺失。
+			// 但超时/ctx 取消不应记为"用户拒绝"——否则多次超时会让命令进入 denied
+			// pattern，即使用户从未主动拒绝。超时走独立通知路径，不污染 pattern 学习。
+			if isTimeoutOrCancelled(webResult) {
+				h.manager.NotifyApproval(webResult, req)
+			} else if approved {
+				h.manager.Approve(req)
+			} else {
+				h.manager.Deny(req)
+				// Notify callbacks of the web decision.
+				h.manager.NotifyApproval(webResult, req)
+			}
 		} else if h.promptFunc != nil {
 			// TUI or other custom prompt (e.g. bubbletea integration).
 			approved = h.promptFunc(command, result.Reason, result.RiskLevel)
@@ -252,6 +286,15 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 					Action: hooks.HookActionReject,
 					Reason: "User quit the session",
 				}, nil
+			case actionTimeout:
+				// 超时/取消：不调用 Deny（避免污染 denied pattern 计数），
+				// 仅通知回调记录历史，决策为 timeout。
+				approved = false
+				h.manager.NotifyApproval(&approval.ApprovalResult{
+					Approved: false,
+					Strategy: result.Strategy,
+					Reason:   "Approval timed out",
+				}, req)
 			}
 		}
 
@@ -270,6 +313,17 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		Action: hooks.HookActionReject,
 		Reason: result.Reason,
 	}, nil
+}
+
+// isContentTool 判断是否为"内容类"工具（执行代码 / 写文件 / 编辑文件）。
+// 这类工具的审批命令是合成的（不含真实代码/内容），assessRisk 只能给出 Low 风险，
+// 因此需要在 BeforeTool 中强制要求用户确认，避免任意代码或文件写入被静默放行。
+func isContentTool(name string) bool {
+	switch name {
+	case "execute_code", "write_file", "file_edit":
+		return true
+	}
+	return false
 }
 
 // pendingWebApprovalWithCtx 包装 h.manager.PendingWebApproval，使其可被 ctx 取消。
@@ -291,6 +345,19 @@ func (h *ApprovalHook) pendingWebApprovalWithCtx(ctx context.Context, req *appro
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// isTimeoutOrCancelled 判断审批结果是否为超时或取消（非用户主动决策）。
+// 这类结果不应走 Approve/Deny 路径污染 pattern 学习，仅通知回调即可。
+func isTimeoutOrCancelled(r *approval.ApprovalResult) bool {
+	if r == nil {
+		return true
+	}
+	reason := strings.ToLower(r.Reason)
+	return strings.Contains(reason, "timed out") ||
+		strings.Contains(reason, "timeout") ||
+		strings.Contains(reason, "cancelled") ||
+		strings.Contains(reason, "canceled")
 }
 
 // buildExecuteCodeContext 构造 execute_code 的审批上下文：包含语言和源码预览。
@@ -394,11 +461,11 @@ func (h *ApprovalHook) promptUserConfirmation(ctx context.Context, command, reas
 			return actionDeny
 		}
 	case <-time.After(h.cliTimeout):
-		fmt.Printf("\n  Approval timed out (%s) -> denied\n", h.cliTimeout.Round(time.Second))
-		return actionDeny
+		fmt.Printf("\n  Approval timed out (%s)\n", h.cliTimeout.Round(time.Second))
+		return actionTimeout
 	case <-ctx.Done():
-		fmt.Printf("\n  Approval cancelled by context (%v) -> denied\n", ctx.Err())
-		return actionDeny
+		fmt.Printf("\n  Approval cancelled by context (%v)\n", ctx.Err())
+		return actionTimeout
 	}
 }
 

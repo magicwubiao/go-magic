@@ -256,7 +256,7 @@ type ApprovalConfig struct {
 func DefaultApprovalConfig() *ApprovalConfig {
 	return &ApprovalConfig{
 		Strategy:         "smart",
-		TrustThreshold:   1,
+		TrustThreshold:   3,
 		EnableLearning:   true,
 		EnableCLIConfirm: false,
 		ApprovalTimeout:  300,
