@@ -483,6 +483,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			ctx = tool.WithWorkDir(ctx, sess.WorkDir)
+			ctx = tool.WithWorkDirUserSet(ctx, sess.WorkDirUserSet)
 
 			sess.Messages = append(sess.Messages, types.Message{
 				Role:         "user",

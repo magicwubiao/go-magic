@@ -12,6 +12,7 @@ import (
 type workDirKey struct{}
 type sessionIDKey struct{}
 type fileSecurityKey struct{}
+type workDirUserSetKey struct{}
 
 type FileSecurityConfig struct {
 	Enabled          bool
@@ -29,6 +30,29 @@ func WithWorkDir(ctx context.Context, workDir string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, workDirKey{}, workDir)
+}
+
+// WithWorkDirUserSet marks whether the working directory was explicitly
+// chosen by the user. When true, session isolation is skipped so that file
+// and git operations run directly in the user-selected directory instead of
+// a nested <session_id> subdirectory.
+func WithWorkDirUserSet(ctx context.Context, userSet bool) context.Context {
+	if !userSet {
+		return ctx
+	}
+	return context.WithValue(ctx, workDirUserSetKey{}, true)
+}
+
+// WorkDirUserSetFromContext reports whether the working directory was set by
+// the user. Absent context (CLI, gateway sessions) returns false.
+func WorkDirUserSetFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if v, ok := ctx.Value(workDirUserSetKey{}).(bool); ok {
+		return v
+	}
+	return false
 }
 
 func WorkDirFromContext(ctx context.Context) string {
@@ -101,7 +125,12 @@ func resolvePath(ctx context.Context, path string) (string, error) {
 
 	baseWorkDir := WorkDirFromContext(ctx)
 
-	if security.SessionIsolation {
+	// Session isolation nests a <session_id> subdirectory under the base work
+	// dir to keep concurrent sessions from colliding. When the user has
+	// explicitly chosen a working directory, the directory itself is the
+	// intended workspace root, so we skip the nesting and operate directly
+	// in it (git/file operations included).
+	if security.SessionIsolation && !WorkDirUserSetFromContext(ctx) {
 		sessionID := SessionIDFromContext(ctx)
 		if sessionID != "" && baseWorkDir != "" {
 			baseWorkDir = filepath.Join(baseWorkDir, sanitizeSessionID(sessionID))
@@ -249,6 +278,12 @@ func EnsureSessionDir(ctx context.Context) (string, error) {
 	sessionID := SessionIDFromContext(ctx)
 
 	if baseWorkDir == "" || sessionID == "" {
+		return baseWorkDir, nil
+	}
+
+	// User-selected working directory: use it directly without creating a
+	// nested <session_id> subdirectory.
+	if WorkDirUserSetFromContext(ctx) {
 		return baseWorkDir, nil
 	}
 
