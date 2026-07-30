@@ -58,7 +58,7 @@
                 <strong>{{ msg.sender }}</strong>
                 <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">AI</n-tag>
                 <n-spin v-if="msg._streaming" size="small" />
-                <span class="msg-time">{{ formatTime(msg.timestamp) }}</span>
+                <span v-if="formatTime(msg.timestamp)" class="msg-time">{{ formatTime(msg.timestamp) }}</span>
               </div>
               <div class="msg-bubble-content" v-html="msg.content ? renderMarkdown(msg.content) : '<span style=\'color:#999\'>...</span>'"></div>
             </div>

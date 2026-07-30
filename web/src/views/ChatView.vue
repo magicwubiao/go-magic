@@ -162,7 +162,7 @@
                 <div v-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
                 <div v-else-if="!msg.files?.length" class="empty-content">{{ t('chat.fileBtn') }}</div>
               </div>
-              <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
+              <div v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </template>
 
@@ -171,7 +171,7 @@
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
               <ReasoningContent :content="msg.content" :streaming="false" />
-              <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
+              <div v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </template>
 
@@ -186,7 +186,7 @@
               <div class="message-bubble system-bubble">
                 <div v-html="renderMarkdown(msg.content)"></div>
               </div>
-              <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
+              <div v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </template>
         </div>
