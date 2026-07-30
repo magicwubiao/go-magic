@@ -138,6 +138,7 @@ export default {
     expandAll: 'Expand All',
     collapseAll: 'Collapse All',
     conclusion: 'Conclusion',
+    executionSteps: 'Execution Steps',
     running: 'Running',
     streaming: 'Streaming',
     noDetail: 'No details available',

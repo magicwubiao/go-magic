@@ -125,17 +125,11 @@ func resolvePath(ctx context.Context, path string) (string, error) {
 
 	baseWorkDir := WorkDirFromContext(ctx)
 
-	// Session isolation nests a <session_id> subdirectory under the base work
-	// dir to keep concurrent sessions from colliding. When the user has
-	// explicitly chosen a working directory, the directory itself is the
-	// intended workspace root, so we skip the nesting and operate directly
-	// in it (git/file operations included).
-	if security.SessionIsolation && !WorkDirUserSetFromContext(ctx) {
-		sessionID := SessionIDFromContext(ctx)
-		if sessionID != "" && baseWorkDir != "" {
-			baseWorkDir = filepath.Join(baseWorkDir, sanitizeSessionID(sessionID))
-		}
-	}
+	// Note: Session-level directory isolation is already handled upstream:
+	//   - If the user selected a directory explicitly, it is used as-is.
+	//   - Otherwise getSessionWorkDir produces a per-session "<name>-<shortId>"
+	//     directory under the configured WorkingDir.
+	// Therefore we no longer nest an additional <session_id> subdirectory here.
 
 	if !filepath.IsAbs(path) {
 		if baseWorkDir != "" {
@@ -269,11 +263,6 @@ func ParseFileMode(modeStr string, defaultMode os.FileMode) os.FileMode {
 }
 
 func EnsureSessionDir(ctx context.Context) (string, error) {
-	security := FileSecurityFromContext(ctx)
-	if !security.SessionIsolation {
-		return WorkDirFromContext(ctx), nil
-	}
-
 	baseWorkDir := WorkDirFromContext(ctx)
 	sessionID := SessionIDFromContext(ctx)
 
@@ -281,17 +270,14 @@ func EnsureSessionDir(ctx context.Context) (string, error) {
 		return baseWorkDir, nil
 	}
 
-	// User-selected working directory: use it directly without creating a
-	// nested <session_id> subdirectory.
-	if WorkDirUserSetFromContext(ctx) {
-		return baseWorkDir, nil
+	// Note: session work directory creation is handled upstream: either the user
+	// explicitly selected a dir, or getSessionWorkDir created a per-session
+	// "<name>-<shortId>" directory. Either way we just need to make sure the
+	// base directory exists without nesting an additional <session_id>
+	// subdirectory.
+	if err := os.MkdirAll(baseWorkDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to ensure work directory: %w", err)
 	}
 
-	sessionDir := filepath.Join(baseWorkDir, sanitizeSessionID(sessionID))
-
-	if err := os.MkdirAll(sessionDir, security.DefaultDirMode); err != nil {
-		return "", fmt.Errorf("failed to create session directory: %w", err)
-	}
-
-	return sessionDir, nil
+	return baseWorkDir, nil
 }

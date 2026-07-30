@@ -139,6 +139,7 @@ export default {
     expandAll: '展开全部',
     collapseAll: '折叠全部',
     conclusion: '最终结论',
+    executionSteps: '执行步骤',
     running: '执行中',
     streaming: '生成中',
     noDetail: '暂无详细内容',
