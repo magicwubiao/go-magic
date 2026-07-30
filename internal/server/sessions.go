@@ -489,6 +489,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				Role:         "user",
 				Content:      content,
 				ContentParts: contentParts,
+				Timestamp:    time.Now(),
 			})
 			sess.UpdatedAt = time.Now()
 			s.sessionStore.SaveSession(ctx, sess)
@@ -551,8 +552,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		if s.sessionStore != nil {
 			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 				sess.Messages = append(sess.Messages, types.Message{
-					Role:    "assistant",
-					Content: resp,
+					Role:      "assistant",
+					Content:   resp,
+					Timestamp: time.Now(),
 				})
 				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
 				sess.InputTokens += inputTokens
@@ -665,8 +667,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = append(sess.Messages, types.Message{
-				Role:    "assistant",
-				Content: fullResponse.String(),
+				Role:      "assistant",
+				Content:   fullResponse.String(),
+				Timestamp: time.Now(),
 			})
 			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
 			sess.InputTokens += inputTokens
@@ -734,12 +737,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 		if s.sessionStore != nil {
 			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 				sess.Messages = append(sess.Messages, types.Message{
-					Role:    "user",
-					Content: req.Content,
+					Role:      "user",
+					Content:   req.Content,
+					Timestamp: time.Now(),
 				})
 				sess.Messages = append(sess.Messages, types.Message{
-					Role:    "assistant",
-					Content: respContent,
+					Role:      "assistant",
+					Content:   respContent,
+					Timestamp: time.Now(),
 				})
 				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
 				sess.InputTokens += inputTokens

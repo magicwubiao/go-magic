@@ -705,9 +705,10 @@ function sourceType(source: string) {
   return (map[source] || 'default') as any
 }
 
-function formatTime(timestamp: string): string {
+function formatTime(timestamp: string | number): string {
   if (!timestamp) return ''
-  const date = new Date(timestamp)
+  const date = toDate(timestamp)
+  if (isNaN(date.getTime())) return ''
   const now = new Date()
   const isToday = date.toDateString() === now.toDateString()
   if (isToday) {
@@ -715,6 +716,37 @@ function formatTime(timestamp: string): string {
   }
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// 兼容三种 timestamp 格式：
+//   1. ISO8601 字符串  (推荐，如 "2026-07-30T12:34:56.789Z")
+//   2. 毫秒级数字      (如 1785474896789)
+//   3. 秒级数字        (如 1785474896，< 1e12 时自动当作秒处理)
+function toDate(ts: string | number): Date {
+  if (typeof ts === 'number') {
+    const n = ts as number
+    // 秒级 Unix timestamp: 10 位数 → 2001-09 ~ 2286-11 之间
+    // 毫秒级 Unix timestamp: 13 位数 → 2001-09 ~ 2286-11 之间 *1000
+    // 也兼容纳秒字符串被转成大数字
+    if (n < 1e12) return new Date(n * 1000) // 秒 → 毫秒
+    return new Date(n) // 已是毫秒
+  }
+  // 字符串
+  const s = String(ts).trim()
+  if (!s) return new Date(NaN)
+  // 纯数字字符串
+  if (/^-?\d+$/.test(s)) {
+    const n = Number(s)
+    if (isFinite(n)) {
+      if (n < 1e12) return new Date(n * 1000)
+      return new Date(n)
+    }
+  }
+  // 普通日期字符串（含 ISO RFC3339、中文格式等）
+  const d = new Date(s)
+  if (!isNaN(d.getTime())) return d
+  // 补 Z 兜底（UTC 无时区标识）
+  return new Date(s + 'Z')
 }
 
 // File handling - upload to server

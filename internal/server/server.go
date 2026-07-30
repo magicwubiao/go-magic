@@ -698,12 +698,21 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 
 func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, len(msgs))
+	// 兜底基准时间：当历史 Message 可能不带 Timestamp（如老数据），
+	// 这种情况根据索引向前递减 10s，保证时间有序可区分
+	now := time.Now()
+	baseTime := now.Add(-time.Duration(len(msgs)) * 10 * time.Second)
 	for i, m := range msgs {
+		ts := m.Timestamp
+		if ts.IsZero() {
+			ts = baseTime.Add(time.Duration(i) * 10 * time.Second)
+		}
 		msg := map[string]interface{}{
-			"id":        fmt.Sprintf("msg_%d", i),
-			"role":      m.Role,
-			"content":   m.Content,
-			"timestamp": time.Now().Unix(),
+			"id":         fmt.Sprintf("msg_%d", i),
+			"role":       m.Role,
+			"content":    m.Content,
+			"session_id": sessionID,
+			"timestamp":  ts.Format(time.RFC3339Nano),
 		}
 		if len(m.ToolCalls) > 0 {
 			tcs := make([]map[string]interface{}, len(m.ToolCalls))

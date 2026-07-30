@@ -58,7 +58,7 @@
                 <strong>{{ msg.sender }}</strong>
                 <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">AI</n-tag>
                 <n-spin v-if="msg._streaming" size="small" />
-                <span class="msg-time">{{ new Date(msg.timestamp).toLocaleTimeString() }}</span>
+                <span class="msg-time">{{ formatTime(msg.timestamp) }}</span>
               </div>
               <div class="msg-bubble-content" v-html="msg.content ? renderMarkdown(msg.content) : '<span style=\'color:#999\'>...</span>'"></div>
             </div>
@@ -289,6 +289,40 @@ function scrollToBottom() {
 // Watch messages for auto-scroll
 import { watch } from 'vue'
 watch(() => groupchatStore.messages.length, () => scrollToBottom())
+
+function formatTime(timestamp: string | number): string {
+  if (!timestamp) return ''
+  const date = toDate(timestamp)
+  if (isNaN(date.getTime())) return ''
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// 兼容三种 timestamp 格式（与 ChatView 对齐）：ISO8601 字符串 / 毫秒数字 / 秒数字
+function toDate(ts: string | number): Date {
+  if (typeof ts === 'number') {
+    const n = ts as number
+    if (n < 1e12) return new Date(n * 1000)
+    return new Date(n)
+  }
+  const s = String(ts).trim()
+  if (!s) return new Date(NaN)
+  if (/^-?\d+$/.test(s)) {
+    const n = Number(s)
+    if (isFinite(n)) {
+      if (n < 1e12) return new Date(n * 1000)
+      return new Date(n)
+    }
+  }
+  const d = new Date(s)
+  if (!isNaN(d.getTime())) return d
+  return new Date(s + 'Z')
+}
 
 async function send() {
   if (!inputValue.value.trim()) return

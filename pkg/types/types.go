@@ -1,11 +1,15 @@
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Message struct {
-	ID      string `json:"id,omitempty"`
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ID        string    `json:"id,omitempty"`
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 	// 多模态内容，非空时优先于 Content
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
 	ChannelID    string        `json:"channel_id,omitempty"`

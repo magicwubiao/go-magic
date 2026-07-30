@@ -325,12 +325,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = append(sess.Messages, types.Message{
-				Role:    "user",
-				Content: req.Message,
+				Role:      "user",
+				Content:   req.Message,
+				Timestamp: time.Now(),
 			})
 			sess.Messages = append(sess.Messages, types.Message{
-				Role:    "assistant",
-				Content: respContent,
+				Role:      "assistant",
+				Content:   respContent,
+				Timestamp: time.Now(),
 			})
 			// Update token usage from agent
 			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
