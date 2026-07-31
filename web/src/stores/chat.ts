@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, nextTick } from 'vue'
 import type { Session, Message } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 import * as commandsApi from '@/api/commands'
@@ -596,28 +596,31 @@ export const useChatStore = defineStore('chat', () => {
               clearTimeout(sessionFlushTimers.value[sessionId]!)
               sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
             }
-            
+
             flushStreamBuffer(sessionId)
-            
+
             if (sessionEventSources.value[sessionId]) {
               sessionEventSources.value[sessionId]!.close()
               sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
             }
-            
+
+            // 先恢复按钮状态，让用户可以立即操作
             state.streaming = false
             state.taskProgress = null
-            
+
+            // 用 nextTick 让按钮切换先渲染，再处理内容 push 和会话刷新
             const finalContent = state.streamContent
-            state.messages.push({
-              id: Date.now().toString(),
-              role: 'assistant' as const,
-              content: finalContent,
-              timestamp: new Date().toISOString(),
-              session_id: sessionId,
+            nextTick(() => {
+              state.messages.push({
+                id: Date.now().toString(),
+                role: 'assistant' as const,
+                content: finalContent,
+                timestamp: new Date().toISOString(),
+                session_id: sessionId,
+              })
+              state.streamContent = ''
+              loadSessions()
             })
-            state.streamContent = ''
-            
-            loadSessions()
           }
         } catch (e) {
           console.error('Failed to parse stream event:', e)

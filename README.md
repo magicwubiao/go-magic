@@ -52,7 +52,7 @@ A dedicated mode with relaxed permissions, longer timeouts, and support for Pyth
 | **Browser** | browser_navigate, browser_snapshot, browser_click, browser_type |
 | **Code Execution** | execute_code (Python, Node.js) |
 | **Memory** | memory_store, memory_recall |
-| **Skills** | skill_list, skill_view, skill_manage |
+| **Skills** | skill (list, invoke, info) |
 | **MCP** | mcp_* (from connected servers) |
 
 ### Skills System

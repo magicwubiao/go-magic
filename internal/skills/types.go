@@ -20,7 +20,6 @@ const (
 )
 
 // SkillStatus represents the approval status of an auto-generated skill
-// Reference: Hermes Agent's three-state skill lifecycle management
 type SkillStatus string
 
 const (
@@ -39,7 +38,7 @@ type SkillMeta struct {
 	License     string      `json:"license,omitempty"`
 	Tags        []string    `json:"tags,omitempty"`
 	Source      SkillSource `json:"source,omitempty"`
-	Status      SkillStatus `json:"status,omitempty"` // 三态状态（仅 auto 技能使用）
+	Status      SkillStatus `json:"status,omitempty"` // 四态生命周期（仅 auto 技能使用）
 	InstalledAt time.Time   `json:"installed_at,omitempty"`
 }
 
@@ -248,9 +247,8 @@ type SecurityScanResult struct {
 // =============================================================================
 
 // SkillsGuidance 是注入系统提示词的技能使用指导
-// 参考 Hermes Agent 的 SKILLS_GUIDANCE
-const SkillsGuidance = `After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time.
-When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') -- don't wait to be asked. Skills that aren't maintained become liabilities.`
+const SkillsGuidance = `After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, consider saving the approach as a reusable skill.
+When using a skill and finding it outdated, incomplete, or wrong, update it immediately -- don't wait to be asked. Skills that aren't maintained become liabilities.`
 
 // =============================================================================
 // Hub Lock (Hub 安装跟踪) - 参考 Hermes Agent .hub/lock.json

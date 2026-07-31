@@ -13,7 +13,7 @@
       </button>
       <n-collapse-transition :show="expanded">
         <div class="thinking-body">
-          <div class="thinking-content" v-html="renderMarkdown(reasoningPart)"></div>
+          <div class="thinking-content" v-html="renderedReasoning"></div>
         </div>
       </n-collapse-transition>
     </div>
@@ -22,7 +22,7 @@
     <div
       v-if="finalPart"
       class="final-content"
-      v-html="renderMarkdown(finalPart)"
+      v-html="renderedFinal"
     ></div>
   </div>
 </template>
@@ -198,9 +198,18 @@ onUnmounted(() => {
   document.removeEventListener('click', handleCodeBlockClick)
 })
 
-function renderMarkdown(content: string): string {
+// 缓存 Markdown 渲染结果，避免每次重渲染都重新解析全文
+const renderedReasoning = computed(() => {
+  const content = reasoningPart.value
+  if (!content) return ''
   return marked.parse(content) as string
-}
+})
+
+const renderedFinal = computed(() => {
+  const content = finalPart.value
+  if (!content) return ''
+  return marked.parse(content) as string
+})
 </script>
 
 <style scoped>

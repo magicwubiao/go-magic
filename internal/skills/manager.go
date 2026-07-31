@@ -50,7 +50,7 @@ type ManagerConfig struct {
 	ToolNames         []string // 可用工具名称列表（用于技能验证）
 	AutoSkillCreation bool     // 是否自动创建技能
 	MinPatternFreq    int      // 最小模式频率阈值
-	AutoSkillsDir     string   // 自动技能目录路径（三态管理根目录）
+	AutoSkillsDir     string   // 自动技能目录路径（四态管理根目录）
 }
 
 // NewManager creates a new skill manager with default configuration
@@ -111,7 +111,7 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 
 	// 创建 Hub 目录
 	os.MkdirAll(m.hubDir, 0755)
-	// 创建三态目录
+	// 创建四态目录
 	os.MkdirAll(filepath.Join(m.autoSkillsDir, "pending"), 0755)
 	os.MkdirAll(filepath.Join(m.autoSkillsDir, "approved"), 0755)
 	os.MkdirAll(filepath.Join(m.autoSkillsDir, "archived"), 0755)
@@ -465,15 +465,31 @@ func (m *Manager) loadMarkdownSkill(path string) *Skill {
 func (m *Manager) loadSkillFromContent(content, dirName string) *Skill {
 	name := dirName
 	description := "Built-in skill"
-
 	tags := []string{}
 	tools := []string{}
 
-	if strings.HasPrefix(content, "---") {
-		endMarker := strings.Index(content[3:], "---")
-		if endMarker != -1 {
-			frontmatter := content[3 : endMarker+3]
-			name, description, tags, tools = parseFrontmatter(frontmatter, name)
+	// 使用统一的 parser.ParseYAMLFrontmatter 解析，与 loadMarkdownSkill 保持一致
+	frontmatter, _, err := parser.ParseYAMLFrontmatter(content)
+	if err == nil && frontmatter != nil {
+		if v, ok := frontmatter["name"].(string); ok && v != "" {
+			name = v
+		}
+		if v, ok := frontmatter["description"].(string); ok && v != "" {
+			description = v
+		}
+		if v, ok := frontmatter["tags"].([]interface{}); ok {
+			for _, t := range v {
+				if s, ok := t.(string); ok {
+					tags = append(tags, s)
+				}
+			}
+		}
+		if v, ok := frontmatter["tools"].([]interface{}); ok {
+			for _, t := range v {
+				if s, ok := t.(string); ok {
+					tools = append(tools, s)
+				}
+			}
 		}
 	}
 
@@ -705,27 +721,9 @@ func (m *Manager) addInternal(skill *Skill) error {
 	return nil
 }
 
-// Remove removes a skill
+// Remove removes a skill (alias for Delete, kept for backwards compatibility)
 func (m *Manager) Remove(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Try to remove from all search directories
-	for _, dir := range m.searchDirs {
-		path := filepath.Join(dir, name+".json")
-		if err := os.Remove(path); err == nil {
-			delete(m.skills, name)
-			return nil
-		}
-		// Also try directory format
-		dirPath := filepath.Join(dir, name)
-		if err := os.RemoveAll(dirPath); err == nil {
-			delete(m.skills, name)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("skill %s not found in any search directory", name)
+	return m.Delete(name)
 }
 
 // GetSkillsContext returns all skills formatted for system prompt
@@ -875,12 +873,19 @@ func (m *Manager) InstallFromURL(url string) error {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	// Try to parse as JSON first
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// 安全扫描下载内容
+	scanResult := ScanSkillSecurity(string(data))
+	if !scanResult.Safe {
+		return fmt.Errorf("skill from URL blocked by security scan: %s",
+			strings.Join(scanResult.Threats, "; "))
+	}
+
+	// Try to parse as JSON first
 	var skill Skill
 	if err := json.Unmarshal(data, &skill); err == nil && skill.Name != "" {
 		return m.Add(&skill)
@@ -996,7 +1001,7 @@ func (m *Manager) GetSkillsContextForPrompt() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Available skills (use skill_view for details):\n")
+	sb.WriteString("Available skills (use skill tool with action=info for details):\n")
 	for name, skill := range m.skills {
 		// 跳过未批准和已拒绝的自动生成技能
 		if skill.Source == SkillSourceAuto &&
@@ -1186,20 +1191,72 @@ func (m *Manager) UpdateMetadata(name string, meta SkillMeta) error {
 		return fmt.Errorf("skill %s not found", name)
 	}
 
-	// Update metadata fields
+	oldName := skill.Name
 	skill.Name = meta.Name
 	skill.Description = meta.Description
 	skill.Tags = meta.Tags
 
-	// Write to skill.yaml if directory exists
+	// 同步写入 SKILL.md（与 Create/Update 保持一致，避免元数据与内容脱节）
 	if skill.Dir == "" {
 		return nil
 	}
 
-	skillFile := filepath.Join(skill.Dir, "skill.yaml")
-	content := fmt.Sprintf("name: %s\ndescription: %s\ntags: %s\n",
-		meta.Name, meta.Description, strings.Join(meta.Tags, ","))
-	return os.WriteFile(skillFile, []byte(content), 0644)
+	skillMdPath := filepath.Join(skill.Dir, "SKILL.md")
+	data, err := os.ReadFile(skillMdPath)
+	if err != nil {
+		return fmt.Errorf("failed to read SKILL.md: %w", err)
+	}
+
+	content := string(data)
+	// 更新 frontmatter 中的 name / description / tags 字段
+	content = updateFrontmatterField(content, "name", meta.Name)
+	content = updateFrontmatterField(content, "description", meta.Description)
+	if len(meta.Tags) > 0 {
+		content = updateFrontmatterField(content, "tags", "["+strings.Join(meta.Tags, ", ")+"]")
+	}
+
+	if err := os.WriteFile(skillMdPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write SKILL.md: %w", err)
+	}
+
+	// 如果技能改名了，更新内存中的 key
+	if oldName != meta.Name {
+		delete(m.skills, oldName)
+		m.skills[meta.Name] = skill
+	}
+
+	return nil
+}
+
+// updateFrontmatterField 替换 YAML frontmatter 中指定字段的值
+// 仅在 frontmatter 区域（--- 之间）进行替换
+func updateFrontmatterField(content, field, value string) string {
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	endIdx := strings.Index(content[3:], "---")
+	if endIdx == -1 {
+		return content
+	}
+	frontmatter := content[:endIdx+3]
+	rest := content[endIdx+3:]
+
+	lines := strings.Split(frontmatter, "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, field+":") {
+			lines[i] = field + ": " + value
+			found = true
+			break
+		}
+	}
+	if !found {
+		// 在 frontmatter 末尾（第二个 --- 之前）插入新字段
+		lines = append(lines[:len(lines)-1], field+": "+value, lines[len(lines)-1])
+	}
+
+	return strings.Join(lines, "\n") + rest
 }
 
 // Delete removes a skill
@@ -1915,7 +1972,7 @@ func (m *Manager) GetAllStatistics() []*SkillStatistics {
 }
 
 // =============================================================================
-// Auto-Skill Three-State Lifecycle Management (参考 Hermes Agent 的 approve/reject)
+// Auto-Skill Lifecycle Management
 // =============================================================================
 
 // GetAutoSkillsDir 返回自动技能的根目录

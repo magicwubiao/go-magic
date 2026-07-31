@@ -399,15 +399,16 @@ tags:
 
 // getFeaturedSkills returns curated featured skills from ClawHub
 // SourceID must be the ClawHub slug (not owner/repo format)
+// Note: Stars/Installs are not available offline; they will be populated when ClawHub API is reachable.
 func (r *ClawHubRegistry) getFeaturedSkills() []HubSkill {
 	return []HubSkill{
-		{Name: "Self-Improving Agent", Description: "Captures learnings, errors, and corrections to enable continuous improvement", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving-agent", URL: "https://clawhub.ai/skills/self-improving-agent", Verified: true, Stars: 3700, Installs: 457000},
-		{Name: "Self-Improving + Proactive", Description: "Self-reflection + Self-criticism + Self-learning + Self-organizing memory", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving", URL: "https://clawhub.ai/skills/self-improving", Verified: true, Stars: 1200, Installs: 197000},
-		{Name: "Skill Vetter", Description: "Security-first skill vetting for AI agents", Tags: []string{"security"}, Source: HubSourceHub, SourceID: "skill-vetter", URL: "https://clawhub.ai/skills/skill-vetter", Verified: true, Stars: 1200, Installs: 255000},
-		{Name: "Gog", Description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs", Tags: []string{"productivity"}, Source: HubSourceHub, SourceID: "gog", URL: "https://clawhub.ai/skills/gog", Verified: true, Stars: 910, Installs: 184000},
-		{Name: "Proactive Agent", Description: "Transform AI agents from task-followers into proactive partners", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "proactive-agent", URL: "https://clawhub.ai/skills/proactive-agent", Verified: true, Stars: 789, Installs: 167000},
-		{Name: "Multi Search Engine", Description: "Multi search engine integration with 16 engines (7 CN + 9 Global)", Tags: []string{"search"}, Source: HubSourceHub, SourceID: "multi-search-engine", URL: "https://clawhub.ai/skills/multi-search-engine", Verified: true, Stars: 711, Installs: 151000},
-		{Name: "Humanizer", Description: "Remove signs of AI-generated writing from text", Tags: []string{"writing"}, Source: HubSourceHub, SourceID: "humanizer", URL: "https://clawhub.ai/skills/humanizer", Verified: true, Stars: 648, Installs: 119000},
-		{Name: "Ontology", Description: "Typed knowledge graph for structured agent memory and composable skills", Tags: []string{"memory"}, Source: HubSourceHub, SourceID: "ontology", URL: "https://clawhub.ai/skills/ontology", Verified: true, Stars: 626, Installs: 188000},
+		{Name: "Self-Improving Agent", Description: "Captures learnings, errors, and corrections to enable continuous improvement", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving-agent", URL: "https://clawhub.ai/skills/self-improving-agent", Verified: true},
+		{Name: "Self-Improving + Proactive", Description: "Self-reflection + Self-criticism + Self-learning + Self-organizing memory", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "self-improving", URL: "https://clawhub.ai/skills/self-improving", Verified: true},
+		{Name: "Skill Vetter", Description: "Security-first skill vetting for AI agents", Tags: []string{"security"}, Source: HubSourceHub, SourceID: "skill-vetter", URL: "https://clawhub.ai/skills/skill-vetter", Verified: true},
+		{Name: "Gog", Description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs", Tags: []string{"productivity"}, Source: HubSourceHub, SourceID: "gog", URL: "https://clawhub.ai/skills/gog", Verified: true},
+		{Name: "Proactive Agent", Description: "Transform AI agents from task-followers into proactive partners", Tags: []string{"agent"}, Source: HubSourceHub, SourceID: "proactive-agent", URL: "https://clawhub.ai/skills/proactive-agent", Verified: true},
+		{Name: "Multi Search Engine", Description: "Multi search engine integration with 16 engines (7 CN + 9 Global)", Tags: []string{"search"}, Source: HubSourceHub, SourceID: "multi-search-engine", URL: "https://clawhub.ai/skills/multi-search-engine", Verified: true},
+		{Name: "Humanizer", Description: "Remove signs of AI-generated writing from text", Tags: []string{"writing"}, Source: HubSourceHub, SourceID: "humanizer", URL: "https://clawhub.ai/skills/humanizer", Verified: true},
+		{Name: "Ontology", Description: "Typed knowledge graph for structured agent memory and composable skills", Tags: []string{"memory"}, Source: HubSourceHub, SourceID: "ontology", URL: "https://clawhub.ai/skills/ontology", Verified: true},
 	}
 }

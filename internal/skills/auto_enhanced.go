@@ -35,7 +35,7 @@ type EnhancedAutoCreator struct {
 func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	skillsDir := filepath.Join(baseDir, "auto_skills")
 	os.MkdirAll(skillsDir, 0755)
-	// 三态子目录：pending / approved / archived
+	// 四态子目录：pending / approved / archived
 	os.MkdirAll(filepath.Join(skillsDir, "pending"), 0755)
 	os.MkdirAll(filepath.Join(skillsDir, "approved"), 0755)
 	os.MkdirAll(filepath.Join(skillsDir, "archived"), 0755)
@@ -170,7 +170,7 @@ func (e *EnhancedAutoCreator) AnalyzeFullSession(sessionData map[string]interfac
 func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
 	skillID := fmt.Sprintf("auto-%s-%d", pattern.Name, time.Now().Unix())
 	skillName := fmt.Sprintf("Automated %s", pattern.Name)
-	// 三态管理：新生成的技能放入 pending 目录
+	// 四态管理：新生成的技能放入 pending 目录
 	skillDir := filepath.Join(e.baseDir, "pending", skillID)
 	os.MkdirAll(skillDir, 0755)
 

@@ -600,8 +600,23 @@ onUnmounted(() => {
   document.removeEventListener('click', handleCodeBlockClick)
 })
 
+// Markdown 渲染缓存：避免 v-for 重渲染时重复解析同一内容
+const mdCache = new Map<string, string>()
+const MD_CACHE_LIMIT = 200
+
 function renderMarkdown(content: string): string {
-  return marked.parse(content) as string
+  const cached = mdCache.get(content)
+  if (cached !== undefined) return cached
+  const html = marked.parse(content) as string
+  // 简单的 LRU：超过上限时清空最早的一半
+  if (mdCache.size >= MD_CACHE_LIMIT) {
+    const keys = mdCache.keys()
+    for (let i = 0; i < MD_CACHE_LIMIT / 2; i++) {
+      mdCache.delete(keys.next().value)
+    }
+  }
+  mdCache.set(content, html)
+  return html
 }
 
 // Group sessions by profile

@@ -240,8 +240,22 @@ marked.setOptions({
   },
 })
 
+// Markdown 渲染缓存：避免 v-for 重渲染时重复解析同一内容
+const mdCache = new Map<string, string>()
+const MD_CACHE_LIMIT = 200
+
 function renderMarkdown(content: string): string {
-  return marked.parse(content) as string
+  const cached = mdCache.get(content)
+  if (cached !== undefined) return cached
+  const html = marked.parse(content) as string
+  if (mdCache.size >= MD_CACHE_LIMIT) {
+    const keys = mdCache.keys()
+    for (let i = 0; i < MD_CACHE_LIMIT / 2; i++) {
+      mdCache.delete(keys.next().value)
+    }
+  }
+  mdCache.set(content, html)
+  return html
 }
 
 function flushStreamToMessage(msgId: string) {
@@ -442,6 +456,11 @@ async function streamAgentReplies(content: string, mentions: { id: string, name:
               msg.id = event.messageId || msg.id
             }
             delete streamMsgs[event.agentId]
+
+            // 所有 agent 回复完毕后立即恢复按钮，不等 HTTP 流关闭
+            if (Object.keys(streamMsgs).length === 0) {
+              replying.value = false
+            }
           } else if (event.type === 'error') {
             const msg = groupchatStore.messages.find(m => m._streaming && m.sender === event.agent)
             if (msg) {
@@ -463,8 +482,8 @@ async function streamAgentReplies(content: string, mentions: { id: string, name:
   groupchatStore.messages = groupchatStore.messages.filter(m => !m._streaming)
   replying.value = false
 
-  // Refresh messages from server to get final state
-  await groupchatStore.selectRoom(roomId)
+  // 异步刷新最终状态，不阻塞 UI
+  groupchatStore.selectRoom(roomId).catch(() => {})
 }
 
 async function pollForReplies(agentNames: string[]) {

@@ -1329,10 +1329,10 @@ func (s *Server) scanSkillsDir() []Skill {
 	defer s.disabledSkillsMu.Unlock()
 
 	// Scan default skills directory
-	s.scanSkillsDirRecursive(s.getDefaultSkillsDir(), "", "default", &result)
+	s.scanSkillsDirRecursive(s.getDefaultSkillsDir(), "", "local", &result)
 
 	// Scan user skills directory
-	s.scanSkillsDirRecursive(s.getUserSkillsDir(), "", "user", &result)
+	s.scanSkillsDirRecursive(s.getUserSkillsDir(), "", "global", &result)
 
 	// 按名称排序
 	sort.Slice(result, func(i, j int) bool {
