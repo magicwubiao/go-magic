@@ -3,6 +3,7 @@ package cortex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +15,12 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 )
+
+// errInsufficientTrajectories is returned by evolve() when the trajectory
+// store does not yet have enough data to run an evolution iteration. This is
+// a normal condition for a freshly started system, so the evolution loop
+// treats it as a skip rather than a real error to avoid log spam.
+var errInsufficientTrajectories = errors.New("insufficient trajectories for evolution")
 
 // ============================================================================
 // GEPA Engine - Generative Evolutionary Prompt Alignment
@@ -179,7 +186,12 @@ func (g *GEPAEngine) evolutionLoop(ctx context.Context) {
 			}
 
 			if err := g.evolve(ctx); err != nil {
-				log.Printf("[GEPA] evolution error: %v", err)
+				// Insufficient trajectories is a normal condition for a fresh
+				// system — skip silently instead of spamming the log every
+				// tick. Only log genuine evolution errors.
+				if !errors.Is(err, errInsufficientTrajectories) {
+					log.Printf("[GEPA] evolution error: %v", err)
+				}
 				continue
 			}
 		}
@@ -193,8 +205,8 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 
 	// 1. Collect recent trajectories
 	trajectories := g.trajectoryStore.GetTrajectories(100)
-	if len(trajectories) < 10 {
-		return fmt.Errorf("insufficient trajectories for evolution")
+	if len(trajectories) < 3 {
+		return errInsufficientTrajectories
 	}
 
 	// 2. Evaluate effectiveness
