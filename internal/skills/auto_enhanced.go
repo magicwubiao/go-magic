@@ -45,6 +45,9 @@ func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	if data, err := os.ReadFile(patternsFile); err == nil {
 		json.Unmarshal(data, &patterns)
 	}
+	// 清理历史遗留的低质量模式：丢弃只含单一工具的平凡序列，并对示例任务
+	// 去重、封顶，避免 patterns.json 长期累积重复噪声数据。
+	patterns = prunePatterns(patterns)
 
 	return &EnhancedAutoCreator{
 		baseDir:      skillsDir,
@@ -81,6 +84,14 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 	for i := 0; i < len(tools)-2; i++ {
 		subsequence := tools[i : i+3]
 
+		// 跳过平凡子序列：模式必须涉及至少 2 种不同工具才具备可复用的技能
+		// 价值。形如 "execute_command → execute_command → execute_command"
+		// 的序列只是“连续执行了几条命令”，几乎匹配任何多步任务，记录下来
+		// 只会产生噪声模式。
+		if !hasAtLeastTwoDistinctTools(subsequence) {
+			continue
+		}
+
 		// Check if we've seen this pattern before
 		patternKey := strings.Join(subsequence, " → ")
 		found := false
@@ -94,7 +105,7 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 				if e.patterns[pIdx].Confidence > 0.95 {
 					e.patterns[pIdx].Confidence = 0.95
 				}
-				e.patterns[pIdx].ExampleTasks = append(e.patterns[pIdx].ExampleTasks, task)
+				addExampleTask(&e.patterns[pIdx], task)
 				found = true
 				break
 			}
@@ -119,6 +130,72 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 
 	// Check if any pattern is ready for skill generation
 	e.CheckAndGenerateSkills()
+}
+
+// maxExampleTasksPerPattern 限制每个模式保存的示例任务数量，避免示例列表
+// 随着调用次数无限增长而充斥重复描述。
+const maxExampleTasksPerPattern = 10
+
+// hasAtLeastTwoDistinctTools 判断工具序列是否涉及至少 2 种不同工具。只含单一
+// 工具的平凡序列不构成可复用技能，应在模式检测时跳过。
+func hasAtLeastTwoDistinctTools(seq []string) bool {
+	seen := make(map[string]struct{}, len(seq))
+	for _, t := range seq {
+		seen[t] = struct{}{}
+	}
+	return len(seen) >= 2
+}
+
+// addExampleTask 向模式的示例任务列表追加一条任务，自动跳过重复项，并在达到
+// 上限时丢弃最旧的示例，使列表成为近期不同任务的滚动窗口。
+func addExampleTask(p *Pattern, task string) {
+	if task == "" {
+		return
+	}
+	for _, existing := range p.ExampleTasks {
+		if existing == task {
+			return // 已记录过相同任务，跳过
+		}
+	}
+	if len(p.ExampleTasks) >= maxExampleTasksPerPattern {
+		p.ExampleTasks = p.ExampleTasks[1:]
+	}
+	p.ExampleTasks = append(p.ExampleTasks, task)
+}
+
+// prunePatterns 清理已加载的模式列表：丢弃只含单一工具的平凡序列，并对示例
+// 任务去重、封顶，用于在加载历史 patterns.json 时回收之前累积的噪声数据。
+func prunePatterns(patterns []Pattern) []Pattern {
+	pruned := make([]Pattern, 0, len(patterns))
+	for _, p := range patterns {
+		if !hasAtLeastTwoDistinctTools(p.ToolSequence) {
+			continue // 丢弃平凡单工具模式
+		}
+		p.ExampleTasks = dedupeExampleTasks(p.ExampleTasks)
+		pruned = append(pruned, p)
+	}
+	return pruned
+}
+
+// dedupeExampleTasks 对示例任务去重并封顶到 maxExampleTasksPerPattern 条，
+// 保留最近出现的示例。
+func dedupeExampleTasks(tasks []string) []string {
+	seen := make(map[string]struct{}, len(tasks))
+	out := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) > maxExampleTasksPerPattern {
+		out = out[len(out)-maxExampleTasksPerPattern:]
+	}
+	return out
 }
 
 // CheckAndGenerateSkills checks patterns and generates skills for those meeting criteria
