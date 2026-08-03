@@ -64,6 +64,11 @@ type Manager struct {
 		Content string
 	}
 	mu sync.RWMutex // protects conversationHistory
+
+	// Index of the last tool call that was already fed to SkillCreator.
+	// This prevents re-analyzing the same accumulated tool calls on every
+	// turn, which would inflate pattern frequencies.
+	lastAnalyzedToolIdx int
 }
 
 // ManagerConfig holds configuration for Cortex systems
@@ -306,15 +311,34 @@ func (m *Manager) OnTurnStart() {
 	m.Snapshot.OnTurnStart()
 }
 
+// analyzeNewToolCalls feeds only the tool calls that haven't been analyzed yet
+// into SkillCreator, preventing frequency inflation from re-counting.
+func (m *Manager) analyzeNewToolCalls() {
+	if m.Trigger == nil || m.SkillCreator == nil {
+		return
+	}
+	allTools := m.Trigger.GetToolCalls()
+	if m.lastAnalyzedToolIdx >= len(allTools) {
+		return // No new tool calls since last analysis
+	}
+	newTools := allTools[m.lastAnalyzedToolIdx:]
+	m.lastAnalyzedToolIdx = len(allTools)
+
+	task := m.Trigger.GetCurrentTask()
+	if len(newTools) >= 3 && task != "" {
+		m.SkillCreator.AnalyzeToolSequence(task, newTools)
+	}
+}
+
 // OnTurnEnd is called at the end of each LLM turn
 // Triggers mid-turn learning: records tool calls for skill pattern detection
 func (m *Manager) OnTurnEnd() {
 	if !m.enabled || m.Trigger == nil {
 		return
 	}
-	// Tool call pattern analysis is deferred to OnSessionEnd to avoid
-	// re-counting the same accumulated tool calls on every turn (which
-	// would inflate pattern frequencies and trigger premature skill generation).
+	// Feed only NEW tool calls (since last analysis) into SkillCreator
+	// to avoid re-counting the same accumulated calls on every turn.
+	m.analyzeNewToolCalls()
 }
 
 // OnSessionEnd is called when a session completes
@@ -333,14 +357,11 @@ func (m *Manager) OnSessionEnd() {
 		m.extractAndLearnFromConversation()
 	}
 
-	// ========== Final skill analysis pass with all accumulated tool calls ==========
-	tools := m.Trigger.GetToolCalls()
-	task := m.Trigger.GetCurrentTask()
-	if len(tools) >= 3 && task != "" {
-		m.SkillCreator.AnalyzeToolSequence(task, tools)
+	// ========== Final skill analysis pass: analyze any remaining new tool calls ==========
+	m.analyzeNewToolCalls()
 
-		// ========== Check and generate skills from patterns ==========
-		// After analyzing, check if any patterns are ready for skill generation
+	// Check and generate skills from patterns
+	if m.SkillCreator != nil {
 		generatedSkills := m.SkillCreator.GetGeneratedSkills()
 		if len(generatedSkills) > 0 {
 			log.Printf("[Cortex] Generated %d new skills from session patterns", len(generatedSkills))
@@ -516,7 +537,10 @@ func (m *Manager) GetTurnCount() int {
 
 // Reset resets the turn counter for a new session
 func (m *Manager) Reset() {
-	m.Trigger.Reset()
+	if m.Trigger != nil {
+		m.Trigger.Reset()
+	}
+	m.lastAnalyzedToolIdx = 0
 }
 
 // GetLastPerception returns the result from the perception layer
