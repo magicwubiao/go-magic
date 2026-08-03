@@ -110,53 +110,86 @@ const durationText = computed(() => {
 
 // ---- 解析 <think>...</think> 分离思考与最终回答 ----
 //
-// **流式期间的闪烁问题修复**：
-// 后端以 SSE 逐字推流，<think> 打开后到 </think> 闭合前的窗口内，
-// 旧逻辑因缺少 </think> 会走到 fallback，把"尚未闭合的思考内容"
-// 整段塞进 final → 以 final-content 直接显示（纯文本+大字号），
-// 等 </think> 到达后才切换为 thinking-block 折叠样式，造成用户感知的
-// "先出现一大段文字，过一会才变成思考折叠样式"。
-//
-// 修复：只要检测到 <think> 开头（流式中</think>可以还没到），就立即
-// 把 <think> 之后的内容放到 reasoning 部分，先应用思考样式，避免闪烁。
+// 这里需要处理三种情况：
+// 1) 多轮（含工具调用）场景：每一轮 LLM 调用都会产生一个 <think>...</think>
+//    块，全文拼接后存在多个 think 块。需要把所有 think 块都归入思考，块外
+//    的所有文本归入最终回答，避免后续 <think> 标签被当成正文泄漏到回答里。
+// 2) 流式窗口：<think> 已到但 </think> 尚未到达，把 <think> 之后的内容立刻
+//    放进 reasoning 应用思考样式，避免"先出现一大段文字再变成折叠样式"的闪烁。
+// 3) 模型把全部内容（含操作叙述与结果）都放进 reasoning_content、Content 为
+//    空：此时 </think> 已闭合但最终回答为空。若仍把整段塞进折叠区，流式结束
+//    后自动折叠，用户将看不到任何回答。因此闭合且 final 为空时，把思考内容
+//    提升为最终回答直接展示（流式窗口除外，仍实时展示在折叠区）。
 const parsedContent = computed(() => {
-  const content = props.content
+  const content = props.content || ''
   const thinkOpen = '<think>'
   const thinkClose = '</think>'
   const low = content.toLowerCase()
-  const openIdx = low.indexOf(thinkOpen)
 
-  if (openIdx !== -1) {
+  const reasoningParts: string[] = []
+  const finalParts: string[] = []
+  let cursor = 0
+  let searchFrom = 0
+  let hasOpenThink = false // 是否存在未闭合的 <think>（流式窗口）
+
+  while (true) {
+    const openIdx = low.indexOf(thinkOpen, searchFrom)
+    if (openIdx === -1) break
     const closeIdx = low.indexOf(thinkClose, openIdx + thinkOpen.length)
-
-    // 1) 完整闭合：<think>...</think> 均存在 → 正常拆分
-    if (closeIdx !== -1) {
-      const reasoning = content.substring(openIdx + thinkOpen.length, closeIdx).trim()
-      const before = content.substring(0, openIdx).trim()
-      const after = content.substring(closeIdx + thinkClose.length).trim()
-      return { reasoning, final: (before + '\n' + after).trim() }
+    if (closeIdx === -1) {
+      // 流式窗口：<think> 已到但 </think> 未到。<think> 之前归 final，
+      // 之后归 reasoning（实时展示在折叠区）。
+      finalParts.push(content.substring(cursor, openIdx))
+      reasoningParts.push(content.substring(openIdx + thinkOpen.length))
+      hasOpenThink = true
+      cursor = content.length
+      break
     }
-
-    // 2) 流式窗口：<think> 已到但 </think> 尚未到达 → 立刻放进 reasoning，
-    //    避免被塞进 final 导致样式闪烁。before 放 final（空）不影响显示。
-    const reasoning = content.substring(openIdx + thinkOpen.length).trim()
-    const before = content.substring(0, openIdx).trim()
-    return { reasoning, final: before }
+    // 已闭合块：块内归思考，块前文本归回答
+    finalParts.push(content.substring(cursor, openIdx))
+    reasoningParts.push(content.substring(openIdx + thinkOpen.length, closeIdx))
+    cursor = closeIdx + thinkClose.length
+    searchFrom = cursor
+  }
+  // 最后一个 think 块之后的尾部文本
+  if (cursor < content.length) {
+    finalParts.push(content.substring(cursor))
   }
 
-  // 兜底：Markdown 标题
-  const headingRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)\s*\n([\s\S]*?)(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
-  const m = content.match(headingRe)
-  if (m) {
-    const fullRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)[\s\S]*?(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
-    const fullMatch = content.match(fullRe)
-    if (fullMatch) {
-      const reasoning = m[1].trim()
-      const final = content.replace(fullMatch[0], '').replace(/\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)\s*\n?/i, '').trim()
-      if (reasoning) return { reasoning, final }
+  let reasoning = reasoningParts.map((s) => s.trim()).filter((s) => s).join('\n\n')
+  let final = finalParts.map((s) => s.trim()).filter((s) => s).join('\n\n')
+
+  // 兜底：无 <think> 标签时尝试 Markdown 标题式思考
+  if (!low.includes(thinkOpen) && !reasoning && !final) {
+    const headingRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)\s*\n([\s\S]*?)(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
+    const m = content.match(headingRe)
+    if (m) {
+      const fullRe = /(?:###|##)\s*(?:思考过程|Thinking|Reasoning|Thought|分析过程)[\s\S]*?(?=\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)|$)/i
+      const fullMatch = content.match(fullRe)
+      if (fullMatch) {
+        const r = m[1].trim()
+        const f = content.replace(fullMatch[0], '').replace(/\n(?:###|##)\s*(?:最终结论|结论|Conclusion|Answer|回答)\s*\n?/i, '').trim()
+        if (r) {
+          reasoning = r
+          final = f
+        }
+      }
+    }
+    if (!reasoning && !final) {
+      return { reasoning: '', final: content }
     }
   }
-  return { reasoning: '', final: content }
+
+  // 关键修复：think 块已全部闭合（非流式窗口）但最终回答为空 —— 说明模型把
+  // 全部内容都放进了 reasoning_content。把思考内容提升为最终回答直接展示，
+  // 避免整段被折叠隐藏导致用户看不到任何回答。流式窗口（hasOpenThink）不提升，
+  // 仍实时展示在展开的折叠区。
+  if (!hasOpenThink && reasoning && !final) {
+    final = reasoning
+    reasoning = ''
+  }
+
+  return { reasoning, final }
 })
 
 const reasoningPart = computed(() => parsedContent.value.reasoning)
