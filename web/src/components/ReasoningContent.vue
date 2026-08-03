@@ -137,8 +137,11 @@ const parsedContent = computed(() => {
     if (openIdx === -1) break
     const closeIdx = low.indexOf(thinkClose, openIdx + thinkOpen.length)
     if (closeIdx === -1) {
-      // 流式窗口：<think> 已到但 </think> 未到。<think> 之前归 final，
-      // 之后归 reasoning（实时展示在折叠区）。
+      // <think> 已到但 </think> 未到。
+      // - 流式中（streaming=true）：之前归 final，之后归 reasoning 实时展示在折叠区。
+      // - 非流式（streaming=false）：流已结束，未闭合的 think 是模型漏了闭合标签。
+      //   按"已闭合"处理，think 内容归 reasoning；若最终 final 为空，下方兜底逻辑
+      //   会把 reasoning 提升为 final 直接展示，避免整段被折叠隐藏。
       finalParts.push(content.substring(cursor, openIdx))
       reasoningParts.push(content.substring(openIdx + thinkOpen.length))
       hasOpenThink = true
@@ -180,11 +183,11 @@ const parsedContent = computed(() => {
     }
   }
 
-  // 关键修复：think 块已全部闭合（非流式窗口）但最终回答为空 —— 说明模型把
-  // 全部内容都放进了 reasoning_content。把思考内容提升为最终回答直接展示，
-  // 避免整段被折叠隐藏导致用户看不到任何回答。流式窗口（hasOpenThink）不提升，
-  // 仍实时展示在展开的折叠区。
-  if (!hasOpenThink && reasoning && !final) {
+  // 关键修复：非流式状态下最终回答为空（think 块已全部闭合，或模型漏了闭合标签）——
+  // 说明模型把全部内容都放进了 reasoning_content。把思考内容提升为最终回答直接展示，
+  // 避免整段被折叠隐藏导致用户看不到任何回答。
+  // 流式中（streaming=true）不提升，仍实时展示在展开的折叠区，保留"实时看思考"体验。
+  if (!props.streaming && reasoning && !final) {
     final = reasoning
     reasoning = ''
   }
