@@ -3,6 +3,8 @@ package cortex
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -382,17 +384,15 @@ func (ts *TrajectoryStore) Clear() error {
 // Helper functions
 
 func generateTrajectoryID(t *Trajectory) string {
-	// Simple ID based on timestamp and task hash
-	return fmt.Sprintf("traj_%d_%d", t.StartTime.Unix(), len(t.Task))
+	// Use nanosecond timestamp + random suffix to avoid collisions
+	return fmt.Sprintf("traj_%d_%04d", t.StartTime.UnixNano(), rand.Intn(10000))
 }
 
 func generatePatternID(pattern string) string {
-	// Simple hash-based ID
-	hash := 0
-	for _, c := range pattern {
-		hash = hash*31 + int(c)
-	}
-	return fmt.Sprintf("pattern_%d", hash)
+	// Use FNV-1a hash to avoid collisions from int overflow
+	h := fnv.New32a()
+	h.Write([]byte(pattern))
+	return fmt.Sprintf("pattern_%x", h.Sum32())
 }
 
 func joinToolSequence(seq []string) string {
@@ -407,15 +407,5 @@ func joinToolSequence(seq []string) string {
 }
 
 func containsIgnoreCase(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		(len(s) > len(substr) && searchSubstring(strings.ToLower(s), strings.ToLower(substr))))
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }

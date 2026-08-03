@@ -29,7 +29,7 @@ import (
 // 8. LLM Planner (NEW)
 // 9. Prompt Caching (NEW)
 // 10. Context Compression (NEW)
-// 12. GEPA Self-Evolution Engine (NEW)
+// 11. GEPA Self-Evolution Engine (NEW)
 type Manager struct {
 	baseDir  string
 	provider provider.Provider // For LLM features
@@ -103,7 +103,9 @@ func NewManagerWithProfile(baseDir string, prov provider.Provider, profile strin
 
 // NewManagerWithProfileAndConfig creates a new Cortex manager with profile and custom config
 func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, profile string, config *ManagerConfig) *Manager {
-	cortexDir := filepath.Join(baseDir, "cortex")
+	// baseDir is already the cortex directory (e.g. <magicHome>/cortex);
+	// do NOT add another "cortex" subdirectory here.
+	cortexDir := baseDir
 
 	// Determine UserProfile path based on profile
 	userProfileDir := cortexDir
@@ -156,6 +158,10 @@ func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, prof
 	mgr.Cognition = cognition.NewPlanner()
 	mgr.Execution = execution.NewManager(baseDir)
 	mgr.SkillCreator = skills.NewEnhancedAutoCreator(baseDir)
+	// Apply configured minimum pattern frequency (default 5 is too high, use config value)
+	if config.SkillMinPatternFreq > 0 {
+		mgr.SkillCreator.SetMinFrequency(config.SkillMinPatternFreq)
+	}
 
 	// NEW: Hermes-inspired systems
 	mgr.Soul = NewSoulManager(cortexDir)
@@ -216,7 +222,8 @@ func (m *Manager) Start() error {
 		return nil
 	}
 
-	cortexDir := filepath.Join(m.baseDir, "cortex")
+	// baseDir is already the cortex directory
+	cortexDir := m.baseDir
 
 	// System 4: Load frozen snapshot from disk
 	if err := m.Snapshot.Load(); err != nil {
@@ -275,6 +282,9 @@ func (m *Manager) Start() error {
 // - Nudge if threshold reached (async)
 // - Skill creation flow initialization
 func (m *Manager) OnUserMessage(input string) {
+	if !m.enabled || m.Perception == nil {
+		return
+	}
 	// Layer 1: Perception - understand the user's intent
 	// This is the first step of Cortex three-layer architecture:
 	// Perception → Decision → Execution
@@ -290,25 +300,30 @@ func (m *Manager) OnUserMessage(input string) {
 // OnTurnStart is called at the beginning of each LLM turn
 // Freezes the memory snapshot for prefix cache protection
 func (m *Manager) OnTurnStart() {
+	if !m.enabled || m.Snapshot == nil {
+		return
+	}
 	m.Snapshot.OnTurnStart()
 }
 
 // OnTurnEnd is called at the end of each LLM turn
 // Triggers mid-turn learning: records tool calls for skill pattern detection
 func (m *Manager) OnTurnEnd() {
-	// Feed tool call data into Skill Evolution (System 6)
-	// This is called after each tool execution round
-	tools := m.Trigger.GetToolCalls()
-	task := m.Trigger.GetCurrentTask()
-	if len(tools) >= 3 && task != "" {
-		m.SkillCreator.AnalyzeToolSequence(task, tools)
+	if !m.enabled || m.Trigger == nil {
+		return
 	}
+	// Tool call pattern analysis is deferred to OnSessionEnd to avoid
+	// re-counting the same accumulated tool calls on every turn (which
+	// would inflate pattern frequencies and trigger premature skill generation).
 }
 
 // OnSessionEnd is called when a session completes
 // Refreshes the memory snapshot and finalizes skill pattern analysis
 // Extracts information from conversation history for memory building
 func (m *Manager) OnSessionEnd() {
+	if !m.enabled || m.Snapshot == nil {
+		return
+	}
 	// ========== Memory Extraction from Conversation ==========
 	// Extract key information and learn from conversation
 	m.mu.RLock()
@@ -698,40 +713,82 @@ func (m *Manager) GetSkillEvolutionStats() map[string]interface{} {
 
 // ========== Full System Health Check ==========
 
-// GetSystemStatus returns status of all six Cortex systems
+// GetSystemStatus returns status of all Cortex systems
 func (m *Manager) GetSystemStatus() map[string]interface{} {
 	status := make(map[string]interface{})
+	totalSystems := 0
+	totalReady := 0
 
 	// Three-Layer Architecture
-	status["layer_1_perception"] = "ready"
-	status["layer_2_cognition"] = "ready"
+	totalSystems++
+	if m.Perception != nil {
+		status["layer_1_perception"] = "ready"
+		totalReady++
+	} else {
+		status["layer_1_perception"] = "not_initialized"
+	}
+	totalSystems++
+	if m.Cognition != nil {
+		status["layer_2_cognition"] = "ready"
+		totalReady++
+	} else {
+		status["layer_2_cognition"] = "not_initialized"
+	}
+	totalSystems++
 	if m.Execution != nil {
 		status["layer_3_execution"] = "ready"
+		totalReady++
 	} else {
 		status["layer_3_execution"] = "not_initialized"
 	}
 
 	// Six Systems
-	status["system_1_message_trigger"] = "ready"
-	status["system_2_nudge_mechanism"] = "ready"
-	status["system_3_background_review"] = "ready"
-	status["system_4_frozen_snapshot"] = "ready"
+	totalSystems++
+	if m.Trigger != nil {
+		status["system_1_message_trigger"] = "ready"
+		totalReady++
+	} else {
+		status["system_1_message_trigger"] = "not_initialized"
+	}
+	totalSystems++
+	if m.Trigger != nil {
+		status["system_2_nudge_mechanism"] = "ready"
+		totalReady++
+	} else {
+		status["system_2_nudge_mechanism"] = "not_initialized"
+	}
+	totalSystems++
+	if m.Review != nil {
+		status["system_3_background_review"] = "ready"
+		totalReady++
+	} else {
+		status["system_3_background_review"] = "not_initialized"
+	}
+	totalSystems++
+	if m.Snapshot != nil {
+		status["system_4_frozen_snapshot"] = "ready"
+		totalReady++
+	} else {
+		status["system_4_frozen_snapshot"] = "not_initialized"
+	}
+	totalSystems++
 	if m.FTSMemory != nil {
 		status["system_5_fts_memory"] = "ready"
+		totalReady++
 	} else {
 		status["system_5_fts_memory"] = "optional_disabled"
 	}
-	status["system_6_skill_evolution"] = "ready"
+	totalSystems++
+	if m.SkillCreator != nil {
+		status["system_6_skill_evolution"] = "ready"
+		totalReady++
+	} else {
+		status["system_6_skill_evolution"] = "not_initialized"
+	}
 
 	// Summary
-	totalReady := 0
-	for _, v := range status {
-		if v == "ready" {
-			totalReady++
-		}
-	}
 	status["total_systems_ready"] = totalReady
-	status["overall_status"] = fmt.Sprintf("%d/9 ready", totalReady)
+	status["overall_status"] = fmt.Sprintf("%d/%d ready", totalReady, totalSystems)
 
 	return status
 }

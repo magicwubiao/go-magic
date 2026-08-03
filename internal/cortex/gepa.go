@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,6 +52,9 @@ type GEPAEngine struct {
 	currentGen   int
 	bestStrategy *OptimizationStrategy
 	isConverged  bool
+
+	// Lifecycle
+	cancel context.CancelFunc // Stops the evolution goroutine
 
 	// Metrics
 	totalTrajectories int
@@ -134,10 +138,26 @@ func (g *GEPAEngine) Start(ctx context.Context) error {
 	// Load previous generations
 	g.loadGenerations()
 
+	// Create a cancellable context so the evolution goroutine can be stopped
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, g.cancel = context.WithCancel(ctx)
+
 	// Start evolution loop in background
 	go g.evolutionLoop(ctx)
 
 	return nil
+}
+
+// Stop stops the GEPA evolution goroutine
+func (g *GEPAEngine) Stop() {
+	g.mu.Lock()
+	if g.cancel != nil {
+		g.cancel()
+		g.cancel = nil
+	}
+	g.mu.Unlock()
 }
 
 // evolutionLoop runs the main GEPA evolution algorithm
@@ -145,22 +165,21 @@ func (g *GEPAEngine) evolutionLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute) // Evaluate every 5 minutes
 	defer ticker.Stop()
 
-	// Use background context if nil
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if g.isConverged {
+			// Check convergence under lock to avoid data race
+			g.mu.RLock()
+			converged := g.isConverged
+			g.mu.RUnlock()
+			if converged {
 				continue
 			}
 
 			if err := g.evolve(ctx); err != nil {
-				// Log error but continue
+				log.Printf("[GEPA] evolution error: %v", err)
 				continue
 			}
 		}
@@ -396,6 +415,8 @@ func (g *GEPAEngine) loadGenerations() {
 
 // Reset resets the GEPA engine
 func (g *GEPAEngine) Reset() error {
+	g.Stop() // Stop the evolution goroutine first
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 

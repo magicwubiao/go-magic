@@ -249,12 +249,22 @@ func NewServer(dbPath string) *Server {
 		}
 	}
 
-	// Initialize Cortex Manager for memory and context (always enabled for better UX)
-	// Cortex local features (SOUL.md, USER.md, Snapshot, Trajectory) work without LLM provider
+	// Initialize Cortex Manager for memory and context
 	cortexDir := filepath.Join(magicHome, "cortex")
-	cortexMgr := cortex.NewManager(cortexDir, prov)
-	cortexMgr.Start()
-	// Cortex manager may fail, continue without it
+	cortexConfig := &cortex.ManagerConfig{
+		Enabled:             true,
+		SkillMinPatternFreq: 3,
+	}
+	if cfg != nil {
+		cortexConfig.Enabled = cfg.Cortex.Enabled
+		if cfg.Cortex.SkillMinPatternFreq > 0 {
+			cortexConfig.SkillMinPatternFreq = cfg.Cortex.SkillMinPatternFreq
+		}
+	}
+	cortexMgr := cortex.NewManagerWithProfileAndConfig(cortexDir, prov, "", cortexConfig)
+	if err := cortexMgr.Start(); err != nil {
+		log.Warnf("Cortex manager start failed, continuing without it: %v", err)
+	}
 
 	// Bridge cortex's auto skill creator with the skills Manager so
 	// auto-generated skills (in <cortexDir>/auto_skills) are registered
