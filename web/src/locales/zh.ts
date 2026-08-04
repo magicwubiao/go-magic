@@ -363,6 +363,8 @@ export default {
     taskCreated: '任务已创建',
     taskUpdated: '任务已更新',
     taskDeleted: '任务已删除',
+    confirmDeleteTask: '确定要删除此任务吗？',
+    deleteTaskTitle: '删除任务',
     taskUnblocked: '任务已解除阻塞并移至待办',
     movedTo: '已移至',
     enterTitle: '请输入标题',

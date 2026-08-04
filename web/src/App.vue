@@ -1,4 +1,5 @@
 <template>
+  <n-config-provider :locale="naiveLocale" :date-locale="naiveDateLocale">
   <n-notification-provider>
     <n-message-provider>
       <!-- Login page: no header -->
@@ -75,12 +76,13 @@
       />
     </n-message-provider>
   </n-notification-provider>
+  </n-config-provider>
 </template>
 
 <script setup lang="ts">
 import { computed, h, ref, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon } from 'naive-ui'
+import { NIcon, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   ChatbubbleOutline,
@@ -108,12 +110,16 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
 const siderCollapsed = ref(false)
+
+// naive-ui 组件库语言跟随 i18n，确保 popconfirm/date-picker 等内置按钮翻译正确
+const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
+const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEnUS)
 
 const githubUrl = 'https://github.com/magicwubiao/go-magic'
 

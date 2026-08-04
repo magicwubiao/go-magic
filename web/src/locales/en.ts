@@ -362,6 +362,8 @@ export default {
     taskCreated: 'Task created',
     taskUpdated: 'Task updated',
     taskDeleted: 'Task deleted',
+    confirmDeleteTask: 'Are you sure you want to delete this task?',
+    deleteTaskTitle: 'Delete Task',
     taskUnblocked: 'Task unblocked and moved to To Do',
     movedTo: 'Moved to',
     enterTitle: 'Please enter a title',

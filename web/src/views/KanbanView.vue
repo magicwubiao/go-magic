@@ -126,7 +126,7 @@
                       {{ t('kanban.aiLabel') }}
                     </n-button>
                     <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
-                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
+                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task)">{{ t('kanban.delete') }}</n-button>
                   </n-space>
                 </template>
               </n-card>
@@ -197,7 +197,7 @@
                     <n-button v-if="col.key === 'blocked'" size="tiny" type="primary" @click.stop="unblockTask(task.id)">{{ t('kanban.unblock') }}</n-button>
                     <n-button v-if="task.status === 'running'" size="tiny" type="warning" @click.stop="openBlockDialog(task)">{{ t('kanban.block') }}</n-button>
                     <n-button size="tiny" quaternary @click.stop="openEditTask(task)">{{ t('kanban.edit') }}</n-button>
-                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task.id)">{{ t('kanban.delete') }}</n-button>
+                    <n-button size="tiny" quaternary type="error" @click.stop="removeTask(task)">{{ t('kanban.delete') }}</n-button>
                   </n-space>
                 </template>
               </n-card>
@@ -325,6 +325,19 @@
       </n-card>
     </n-modal>
 
+    <!-- Delete Confirm Modal -->
+    <n-modal v-model:show="showDeleteModal" :title="t('kanban.deleteTaskTitle')">
+      <n-card style="width: 400px;">
+        <n-text>{{ t('kanban.confirmDeleteTask') }}</n-text>
+        <template #footer>
+          <n-space justify="end">
+            <n-button @click="showDeleteModal = false">{{ t('common.cancel') }}</n-button>
+            <n-button type="error" :loading="deleting" @click="confirmDeleteTask">{{ t('common.confirm') }}</n-button>
+          </n-space>
+        </template>
+      </n-card>
+    </n-modal>
+
     <!-- Error Banner -->
     <n-alert
       v-if="kanbanStore.error"
@@ -391,6 +404,9 @@ const showTaskModal = ref(false)
 const showStats = ref(false)
 const showDetailModal = ref(false)
 const showBlockModal = ref(false)
+const showDeleteModal = ref(false)
+const pendingDeleteTask = ref<KanbanTask | null>(null)
+const deleting = ref(false)
 const editingTask = ref<KanbanTask | null>(null)
 const detailTask = ref<KanbanTask | null>(null)
 const blockReason = ref('')
@@ -638,9 +654,24 @@ async function unblockTask(id: string) {
   message.success(t('kanban.taskUnblocked'))
 }
 
-async function removeTask(id: string) {
-  await kanbanStore.removeTask(id)
-  message.success(t('kanban.taskDeleted'))
+function removeTask(task: KanbanTask) {
+  pendingDeleteTask.value = task
+  showDeleteModal.value = true
+}
+
+async function confirmDeleteTask() {
+  if (!pendingDeleteTask.value) return
+  deleting.value = true
+  try {
+    await kanbanStore.removeTask(pendingDeleteTask.value.id)
+    message.success(t('kanban.taskDeleted'))
+    showDeleteModal.value = false
+    pendingDeleteTask.value = null
+  } catch (e) {
+    message.error(t('kanban.taskDeleted'))
+  } finally {
+    deleting.value = false
+  }
 }
 
 // --- Detail Modal ---
