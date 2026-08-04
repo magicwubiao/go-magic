@@ -1598,22 +1598,29 @@ func (m *Manager) RecordDecision(req *ApprovalRequest, result string, duration i
 }
 
 // GetHistory returns approval history with pagination.
+//
+// m.history 按时间戳升序排列（索引 0 最旧，末尾最新）。
+// 分页从最新端开始：offset=0 返回最近的 limit 条记录，
+// offset=limit 返回更早的下一页，依次类推。
+// 返回结果按时间倒序（最新在前）。
 func (m *Manager) GetHistory(limit int, offset int) []*ApprovalRecord {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	total := len(m.history)
-	if offset >= total {
+	if offset >= total || limit <= 0 {
 		return nil
 	}
-	end := offset + limit
-	if end > total {
-		end = total
+
+	// 从最新端（切片末尾）向前分页，保证 offset=0 取到最新记录。
+	end := total - offset // newest-side exclusive bound
+	start := end - limit  // older-side inclusive bound
+	if start < 0 {
+		start = 0
 	}
 
-	// Return in reverse chronological order
-	result := make([]*ApprovalRecord, 0, end-offset)
-	for i := end - 1; i >= offset; i-- {
+	result := make([]*ApprovalRecord, 0, end-start)
+	for i := end - 1; i >= start; i-- {
 		result = append(result, m.history[i])
 	}
 	return result
@@ -2075,6 +2082,12 @@ func (m *Manager) loadHistory() {
 	if err := json.Unmarshal(data, &records); err != nil {
 		return
 	}
+	// 按时间升序排序，保证 m.history 末尾是最新记录。
+	// 历史文件可能因并发保存或旧版本写入导致顺序错乱，
+	// GetHistory 依赖物理顺序倒序取，不排序会返回错误的"最新"记录。
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].Timestamp.Before(records[j].Timestamp)
+	})
 	m.history = records
 }
 

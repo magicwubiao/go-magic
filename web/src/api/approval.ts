@@ -64,6 +64,24 @@ export interface PendingApproval {
 // 任意原始记录类型，用于从后端 snake_case 到前端 camelCase 的映射
 type AnyRecord = Record<string, any>
 
+// 后端 ByRiskLevel 的 map key 是 RiskLevel（基于 int 的自定义类型），encoding/json
+// 会把 key 序列化成数字字符串 "1"/"2"/"3"/"4"。这里归一化成前端使用的语义 key。
+function normalizeRiskDistribution(raw: AnyRecord | undefined): Record<string, number> {
+  const map: Record<string, number> = {}
+  if (!raw) return map
+  const numToKey: Record<string, string> = {
+    '0': 'low', '1': 'low',
+    '2': 'medium',
+    '3': 'high',
+    '4': 'critical',
+  }
+  for (const [k, v] of Object.entries(raw)) {
+    const key = numToKey[String(k)] || String(k)
+    map[key] = (map[key] || 0) + (Number(v) || 0)
+  }
+  return map
+}
+
 // 审批历史：后端返回 { records: [...], total: N }，记录字段为 snake_case
 export async function getApprovalHistory(limit: number = 100, offset: number = 0): Promise<ApprovalHistoryResult> {
   const raw = await request<{ records?: AnyRecord[]; total?: number; items?: AnyRecord[] } | AnyRecord[]>(
@@ -96,7 +114,7 @@ export async function getApprovalStats(): Promise<ApprovalStats> {
     autoApproved: raw.auto_approved || raw.autoApproved || 0,
     userApproved: raw.user_approved || raw.userApproved || 0,
     userDenied: raw.user_denied || raw.userDenied || 0,
-    riskDistribution: raw.by_risk_level || raw.risk_distribution || raw.riskDistribution || {},
+    riskDistribution: normalizeRiskDistribution(raw.by_risk_level || raw.risk_distribution || raw.riskDistribution),
     topCommands: (raw.top_commands || raw.topCommands || []).map((c: AnyRecord) => ({
       command: c.pattern || c.command || '',
       count: c.count || 0,
