@@ -732,11 +732,17 @@ func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request,
 			if sender == "" {
 				sender = msg.SenderID
 			}
+			// 归一化 role：存储层 Type 用 "text" 表示用户消息，
+			// 前端依赖标准 role（user/agent/system）做样式区分。
+			role := msg.Type
+			if role == "text" || role == "" {
+				role = "user"
+			}
 			result = append(result, map[string]interface{}{
 				"id":        msg.ID,
 				"room_id":   msg.RoomID,
 				"sender":    sender,
-				"role":      msg.Type,
+				"role":      role,
 				"content":   msg.Content,
 				"timestamp": msg.Timestamp,
 			})
@@ -773,7 +779,7 @@ func (s *Server) handleGroupchatMessages(w http.ResponseWriter, r *http.Request,
 			"id":        msg.ID,
 			"room_id":   msg.RoomID,
 			"sender":    msg.SenderName,
-			"role":      msg.Type,
+			"role":      "user",
 			"content":   msg.Content,
 			"timestamp": msg.Timestamp,
 		})

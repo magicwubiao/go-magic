@@ -897,6 +897,8 @@ export default {
     description: 'Description',
     selectRoom: 'Select a room to start chatting',
     typeMessage: 'Type a message...',
+    inputHint: "Type a message, {'@'} to mention, Enter to send, Shift+Enter for newline",
+    sendFailed: 'Send failed, please retry',
     send: 'Send',
     created: 'Room created',
     memberName: 'Member Name',

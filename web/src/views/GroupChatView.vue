@@ -52,47 +52,74 @@
 
         <!-- Messages -->
         <div class="messages" ref="messagesRef">
-          <div v-for="msg in groupchatStore.messages" :key="msg.id" class="message" :class="msg.role">
-            <div class="msg-bubble" :class="{ streaming: msg._streaming }">
-              <div class="msg-bubble-header">
-                <strong>{{ msg.sender }}</strong>
-                <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">AI</n-tag>
-                <n-spin v-if="msg._streaming" size="small" />
-                <span v-if="formatTime(msg.timestamp)" class="msg-time">{{ formatTime(msg.timestamp) }}</span>
-              </div>
-              <div class="msg-bubble-content" v-html="msg.content ? renderMarkdown(msg.content) : '<span style=\'color:#999\'>...</span>'"></div>
-            </div>
+          <!-- 加载骨架：切换房间或初次加载时显示，避免白屏 -->
+          <div v-if="groupchatStore.loading && groupchatStore.messages.length === 0" class="msg-skeleton">
+            <n-skeleton text :repeat="4" />
           </div>
+          <template v-else>
+            <div
+              v-for="msg in groupchatStore.messages"
+              :key="msg.id"
+              class="message"
+              :class="msg.role"
+            >
+              <!-- Avatar -->
+              <div class="avatar" :class="avatarClass(msg)">
+                {{ avatarText(msg) }}
+              </div>
+              <!-- Body -->
+              <div class="message-body" :class="{ 'agent-body': msg.role === 'agent' }">
+                <!-- Header: sender + time -->
+                <div class="message-header">
+                  <n-text strong class="sender-name">{{ msg.sender }}</n-text>
+                  <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">AI</n-tag>
+                  <span v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</span>
+                </div>
+                <!-- Bubble / content -->
+                <div class="message-bubble" :class="[bubbleClass(msg), { streaming: msg._streaming }]">
+                  <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
+                  <div
+                    class="bubble-content"
+                    v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- Input -->
         <div class="input-area">
-          <n-popover
-            v-if="groupchatStore.agents.length > 0"
-            trigger="click"
-            placement="top-start"
-          >
-            <template #trigger>
-              <n-button size="small" quaternary>@</n-button>
-            </template>
-            <n-list style="max-height: 200px; overflow-y: auto;">
-              <n-list-item
-                v-for="opt in agentMentionOptions"
-                :key="opt.key"
-                style="cursor: pointer;"
-                @click="insertMention(opt.key)"
+          <div class="input-wrapper" ref="inputWrapperRef">
+            <n-input
+              v-model:value="inputValue"
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 6 }"
+              :placeholder="inputPlaceholder"
+              :disabled="replying"
+              class="chat-input"
+              @keydown="onKeydown"
+              @input="onInput"
+              @blur="onBlur"
+            />
+            <!-- @ 提及浮层：输入 @ 自动触发，支持搜索过滤与键盘导航 -->
+            <div
+              v-if="showMention && filteredMentions.length"
+              class="mention-popup"
+            >
+              <div
+                v-for="(opt, idx) in filteredMentions"
+                :key="opt.id"
+                :class="['mention-item', { active: idx === mentionActiveIdx }]"
+                @mousedown.prevent="selectMention(opt)"
+                @mouseenter="mentionActiveIdx = idx"
               >
-                {{ opt.label }}
-              </n-list-item>
-            </n-list>
-          </n-popover>
-          <n-input
-            v-model:value="inputValue"
-            :placeholder="t('groupchat.typeMessage')"
-            @keydown.enter="send"
-            style="flex: 1;"
-          />
-          <n-button v-if="!replying" type="primary" @click="send">{{ t('groupchat.send') }}</n-button>
+                <n-tag size="tiny" type="info">{{ opt.profile || 'AI' }}</n-tag>
+                <span class="mention-name">{{ opt.name }}</span>
+              </div>
+            </div>
+          </div>
+          <n-button v-if="!replying" type="primary" :disabled="!inputValue.trim()" @click="send">{{ t('groupchat.send') }}</n-button>
           <n-button v-else type="warning" @click="stopGeneration">⏹ {{ t('groupchat.stop') }}</n-button>
         </div>
       </template>
@@ -213,6 +240,13 @@ let streamBuffer = ''
 let streamFlushTimer: ReturnType<typeof setTimeout> | null = null
 const STREAM_FLUSH_INTERVAL = 80 // ms
 
+// @ 提及：输入 @ 自动触发浮层，支持搜索过滤与键盘导航
+const showMention = ref(false)
+const mentionQuery = ref('')
+const mentionStart = ref(-1) // @ 符号在 inputValue 中的起始下标
+const mentionActiveIdx = ref(0)
+const inputWrapperRef = ref<HTMLElement | null>(null)
+
 const newAgent = reactive({
   name: '',
   profile: '',
@@ -226,9 +260,21 @@ const activeRoom = computed(() =>
   groupchatStore.rooms.find(r => r.id === groupchatStore.activeRoomId)
 )
 
-const agentMentionOptions = computed(() =>
-  groupchatStore.agents.map(a => ({ label: a.name, key: a.name }))
-)
+// @ 提及候选：按当前 query 过滤
+const filteredMentions = computed(() => {
+  const q = mentionQuery.value.toLowerCase()
+  const list = groupchatStore.agents.filter(a => a.invited !== false)
+  if (!q) return list
+  return list.filter(a =>
+    a.name.toLowerCase().includes(q) || (a.profile || '').toLowerCase().includes(q)
+  )
+})
+
+// placeholder：有 agent 时提示 @ 提及与快捷键
+const inputPlaceholder = computed(() => {
+  if (groupchatStore.agents.length === 0) return t('groupchat.typeMessage')
+  return t('groupchat.inputHint')
+})
 
 // Configure marked with highlight.js
 marked.setOptions({
@@ -338,18 +384,154 @@ function toDate(ts: string | number): Date {
   return new Date(s + 'Z')
 }
 
+// 头像样式：user 紫色渐变，agent 绿色渐变，system 橙色
+function avatarClass(msg: any): string {
+  if (msg.role === 'system') return 'system-avatar'
+  if (msg.role === 'agent') return 'bot-avatar'
+  return 'user-avatar'
+}
+
+// 头像文字：取 sender 首字符（支持中英文），system 用 'S'
+function avatarText(msg: any): string {
+  if (msg.role === 'system') return 'S'
+  const name = (msg.sender || '').trim()
+  return name ? name.charAt(0).toUpperCase() : '?'
+}
+
+// 气泡样式：user 绿色渐变白字，agent 白色，system 橙色渐变
+function bubbleClass(msg: any): string {
+  if (msg.role === 'system') return 'system-bubble'
+  if (msg.role === 'agent') return 'agent-bubble'
+  return 'user-bubble'
+}
+
+// 解析输入中的 @ 提及：用正则精确匹配 @name，避免 includes 误匹配与重名错配
+function parseMentions(content: string): { id: string, name: string }[] {
+  const regex = /@([^\s@]+)/g
+  const seen = new Set<string>()
+  const result: { id: string, name: string }[] = []
+  let m: RegExpExecArray | null
+  while ((m = regex.exec(content)) !== null) {
+    const name = m[1]
+    const agent = groupchatStore.agents.find(a => a.name === name)
+    if (agent && !seen.has(agent.id)) {
+      seen.add(agent.id)
+      result.push({ id: agent.id, name: agent.name })
+    }
+  }
+  return result
+}
+
+// 获取 textarea 光标位置（n-input 内部原生元素）
+function getCursorPos(): number {
+  const wrapper = inputWrapperRef.value
+  if (!wrapper) return inputValue.value.length
+  const el = wrapper.querySelector('textarea') as HTMLTextAreaElement | null
+  return el ? el.selectionStart : inputValue.value.length
+}
+
+// 输入回调：检测光标前的 @ 触发提及浮层
+function onInput() {
+  const pos = getCursorPos()
+  const before = inputValue.value.slice(0, pos)
+  // 匹配行内最后一个未闭合的 @xxx（xxx 不含空格和 @）
+  const match = before.match(/@([^\s@]*)$/)
+  if (match && groupchatStore.agents.length > 0) {
+    mentionStart.value = match.index!
+    mentionQuery.value = match[1]
+    showMention.value = true
+    mentionActiveIdx.value = 0
+  } else {
+    closeMention()
+  }
+}
+
+function closeMention() {
+  showMention.value = false
+  mentionQuery.value = ''
+  mentionStart.value = -1
+  mentionActiveIdx.value = 0
+}
+
+// 选中某个 agent，将输入框中的 @query 替换为 @name + 空格
+function selectMention(agent: { name: string }) {
+  const pos = getCursorPos()
+  const start = mentionStart.value
+  if (start < 0) return
+  const before = inputValue.value.slice(0, start)
+  const after = inputValue.value.slice(pos)
+  inputValue.value = `${before}@${agent.name} ${after}`
+  closeMention()
+  // 重新聚焦并将光标移到插入内容之后
+  nextTick(() => {
+    const wrapper = inputWrapperRef.value
+    const el = wrapper?.querySelector('textarea') as HTMLTextAreaElement | null
+    if (el) {
+      const newPos = before.length + agent.name.length + 2
+      el.focus()
+      el.setSelectionRange(newPos, newPos)
+    }
+  })
+}
+
+function onBlur() {
+  // 延迟关闭，让 mousedown 选择能先触发
+  setTimeout(closeMention, 150)
+}
+
+// 键盘处理：Enter 发送 / Shift+Enter 换行 / 浮层开启时方向键导航
+function onKeydown(e: KeyboardEvent) {
+  // 提及浮层开启时的键盘导航
+  if (showMention.value && filteredMentions.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionActiveIdx.value = (mentionActiveIdx.value + 1) % filteredMentions.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionActiveIdx.value = (mentionActiveIdx.value - 1 + filteredMentions.value.length) % filteredMentions.value.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      const opt = filteredMentions.value[mentionActiveIdx.value]
+      if (opt) selectMention(opt)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeMention()
+      return
+    }
+    // 空格关闭浮层（不选）
+    if (e.key === ' ') {
+      closeMention()
+    }
+  }
+  // Enter 发送（无 Shift），Shift+Enter 换行（默认行为，不阻止）
+  if (e.key === 'Enter' && !e.shiftKey && !showMention.value) {
+    e.preventDefault()
+    send()
+  }
+}
+
 async function send() {
-  if (!inputValue.value.trim()) return
+  if (!inputValue.value.trim() || replying.value) return
+  closeMention()
   const content = inputValue.value
   inputValue.value = ''
 
-  // Check if mentioning agents
-  const mentions = groupchatStore.agents
-    .filter(a => content.includes(`@${a.name}`))
-    .map(a => ({ id: a.id, name: a.name }))
+  const mentions = parseMentions(content)
 
-  await groupchatStore.sendMessage(content)
+  // 本地占位消息已在 store.sendMessage 中先 push，立即滚动可见
   scrollToBottom()
+  try {
+    await groupchatStore.sendMessage(content)
+  } catch {
+    message.error(t('groupchat.sendFailed') || '发送失败')
+    return
+  }
 
   // Stream agent replies via SSE
   if (mentions.length > 0) {
@@ -574,10 +756,6 @@ async function handleRemoveAgent(agent: any) {
   message.success(t('groupchat.agentRemoved'))
 }
 
-function insertMention(name: string) {
-  inputValue.value += `@${name} `
-}
-
 onMounted(() => groupchatStore.loadRooms())
 </script>
 
@@ -641,52 +819,153 @@ onMounted(() => groupchatStore.loadRooms())
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 20px 24px;
+  padding-bottom: 80px;
   min-height: 0;
 }
 
+/* 加载骨架 */
+.msg-skeleton {
+  padding: 12px 0;
+}
+
+/* ========== Message Layout (对齐 ChatView) ========== */
 .message {
-  margin-bottom: 12px;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* User messages - 右对齐 */
+.message.user {
+  flex-direction: row-reverse;
+}
+
+/* System messages - 居中 */
+.message.system {
+  justify-content: center;
+}
+
+.message-body {
+  max-width: 72%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-/* User messages - right aligned */
-.message:not(.agent):not(.system) {
+/* Agent 回复限制最大宽度，避免长回答占满整屏 */
+.message-body.agent-body {
+  max-width: 80%;
+}
+
+/* ========== Avatars ========== */
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+  color: #fff;
+  font-weight: 600;
+  user-select: none;
+}
+
+.user-avatar {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.bot-avatar {
+  background: linear-gradient(135deg, #18a058 0%, #36ad6a 100%);
+}
+
+.system-avatar {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  color: #854d0e;
+}
+
+/* ========== Message Header ========== */
+.message-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.message.user .message-header {
+  justify-content: flex-end;
+  flex-direction: row-reverse;
+}
+
+/* 用户消息整体右对齐：body 内的 header 和 bubble 都靠右 */
+.message.user .message-body {
   align-items: flex-end;
 }
 
-/* Agent messages - left aligned */
-.message.agent {
+.sender-name {
+  color: #333;
+}
+
+.message-time {
+  font-size: 11px;
+  color: #bbb;
+}
+
+.stream-spin {
+  margin-right: 4px;
+}
+
+/* ========== Message Bubbles ========== */
+.message-bubble {
+  padding: 14px 18px;
+  border-radius: 16px;
+  line-height: 1.75;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  display: flex;
   align-items: flex-start;
+  gap: 8px;
 }
 
-/* System messages - center */
-.message.system {
-  align-items: center;
+/* User bubble - 绿色渐变白字 */
+.user-bubble {
+  background: linear-gradient(135deg, #18a058 0%, #20803a 100%);
+  color: #fff;
+  border-bottom-right-radius: 4px;
 }
 
-.msg-bubble {
-  max-width: 85%;
-  border-radius: 12px;
-  padding: 10px 14px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-}
-
-/* User bubble - white/gray */
-.message:not(.agent):not(.system) .msg-bubble {
-  background: #ffffff;
+/* Agent bubble - 白色卡片 */
+.agent-bubble {
+  background: #fff;
+  color: #1f2937;
   border: 1px solid #e8e8e8;
+  border-bottom-left-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-/* Agent bubble - green tint */
-.message.agent .msg-bubble {
-  background: #e8f5e9;
-  border: 1px solid #c8e6c9;
+/* System bubble - 橙色渐变 */
+.system-bubble {
+  background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
+  color: #854d0e;
+  border: 1px solid #fcd34d;
+  border-radius: 12px;
+  font-size: 13px;
+  font-style: italic;
+  max-width: 80%;
 }
 
-/* Streaming bubble - pulsing border */
-.msg-bubble.streaming {
+/* Streaming bubble - 脉冲边框 */
+.message-bubble.streaming {
   border-style: dashed;
   animation: pulse-border 1.5s ease-in-out infinite;
 }
@@ -696,76 +975,166 @@ onMounted(() => groupchatStore.loadRooms())
   50% { border-color: #66bb6a; }
 }
 
-/* System bubble - orange tint */
-.message.system .msg-bubble {
-  background: #fff3e0;
-  border: 1px solid #ffe0b2;
-  font-style: italic;
+.bubble-content {
+  word-break: break-word;
+  overflow-wrap: break-word;
+  flex: 1;
+  min-width: 0;
 }
 
-.msg-bubble-header {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 6px;
-  font-size: 13px;
-}
-
-.message:not(.agent):not(.system) .msg-bubble-header {
-  justify-content: flex-end;
-}
-
-.message.agent .msg-bubble-header {
-  justify-content: flex-start;
-}
-
-.msg-bubble-header strong {
-  color: #333;
-}
-
-.msg-time {
-  font-size: 11px;
+.bubble-content :deep(.placeholder) {
   color: #999;
 }
 
-.msg-bubble-content {
-  word-break: break-word;
-  overflow-wrap: break-word;
-  line-height: 1.6;
+/* ========== Markdown Content (对齐 ChatView) ========== */
+.message-bubble :deep(p) { margin: 0 0 10px 0; }
+.message-bubble :deep(p:last-child) { margin-bottom: 0; }
+.message-bubble :deep(ul), .message-bubble :deep(ol) { margin: 10px 0; padding-left: 28px; }
+.message-bubble :deep(li) { margin: 5px 0; }
+
+.message-bubble :deep(blockquote) {
+  margin: 10px 0;
+  padding: 8px 16px;
+  border-left: 4px solid #d0d0d0;
+  background: rgba(0, 0, 0, 0.03);
+  color: inherit;
 }
 
-.msg-bubble-content :deep(pre) {
+.message-bubble :deep(table) {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+}
+
+.message-bubble :deep(th), .message-bubble :deep(td) {
+  border: 1px solid #d0d0d0;
+  padding: 6px 12px;
+}
+
+.message-bubble :deep(th) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.message-bubble :deep(h1),
+.message-bubble :deep(h2),
+.message-bubble :deep(h3),
+.message-bubble :deep(h4) {
+  margin: 14px 0 8px;
+  font-weight: 600;
+}
+
+.message-bubble :deep(h1) { font-size: 20px; }
+.message-bubble :deep(h2) { font-size: 18px; }
+.message-bubble :deep(h3) { font-size: 16px; }
+.message-bubble :deep(h4) { font-size: 15px; }
+
+.message-bubble :deep(hr) {
+  border: none;
+  border-top: 1px solid #d0d0d0;
+  margin: 14px 0;
+}
+
+.message-bubble :deep(pre) {
   background: #1e1e1e;
   color: #d4d4d4;
-  padding: 12px;
-  border-radius: 6px;
+  padding: 12px 16px;
+  border-radius: 8px;
   overflow-x: auto;
   max-width: 100%;
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
-.msg-bubble-content :deep(code) {
-  font-family: 'Fira Code', monospace;
+.message-bubble :deep(code) {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
 }
 
-.msg-bubble-content :deep(p) {
-  margin: 4px 0;
+.message-bubble :deep(a) {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 600;
 }
 
-.msg-bubble-content :deep(ul), .msg-bubble-content :deep(ol) {
-  margin: 4px 0;
-  padding-left: 20px;
+/* User 气泡内链接用浅色，保证在绿色背景上可读 */
+.user-bubble :deep(a) {
+  color: #e0f7e0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-.msg-bubble-content :deep(li) {
-  margin: 2px 0;
+.user-bubble :deep(a:hover) {
+  color: #fff;
 }
 
 .input-area {
   display: flex;
   gap: 8px;
-  padding: 12px;
-  border-top: 1px solid #e8e8e8;
+  padding: 12px 24px 16px;
+  border-top: 1px solid #e0e0e0;
+  background: #fff;
+  align-items: flex-end;
+}
+
+.input-wrapper {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-wrapper:focus-within {
+  border-color: #18a058;
+  box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.15);
+}
+
+.chat-input {
+  --n-border: none !important;
+  --n-border-hover: none !important;
+  --n-border-focus: none !important;
+  --n-box-shadow-focus: none !important;
+  --n-padding-left: 0 !important;
+  --n-padding-right: 0 !important;
+  background: transparent !important;
+}
+
+.chat-input :deep(.n-input__textarea-el) {
+  resize: none;
+}
+
+/* @ 提及浮层 */
+.mention-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 16px;
+  right: 16px;
+  margin-bottom: 4px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: #f0f7ff;
+}
+
+.mention-name {
+  color: #333;
 }
 </style>

@@ -911,6 +911,8 @@ export default {
     description: '描述',
     selectRoom: '选择房间开始聊天',
     typeMessage: '输入消息...',
+    inputHint: "输入消息，{'@'} 提及智能体，Enter 发送，Shift+Enter 换行",
+    sendFailed: '发送失败，请重试',
     send: '发送',
     created: '房间已创建',
     memberName: '成员名称',

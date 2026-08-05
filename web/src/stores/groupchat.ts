@@ -30,6 +30,8 @@ export const useGroupChatStore = defineStore('groupchat', () => {
 
   async function selectRoom(id: string) {
     activeRoomId.value = id
+    // 先清空旧消息并标记 loading，避免切换房间时短暂显示上一个房间的消息
+    messages.value = []
     loading.value = true
     try {
       const [msgs, mems, ags] = await Promise.all([
@@ -51,8 +53,31 @@ export const useGroupChatStore = defineStore('groupchat', () => {
 
   async function sendMessage(content: string) {
     if (!activeRoomId.value) return
-    const msg = await groupchatApi.sendRoomMessage(activeRoomId.value, content)
-    messages.value.push(msg)
+    const roomId = activeRoomId.value
+    // 本地先 push 占位消息，避免发送期间白屏
+    const localId = 'local_' + Date.now()
+    messages.value.push({
+      id: localId,
+      room_id: roomId,
+      sender: 'User',
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    })
+    try {
+      const msg = await groupchatApi.sendRoomMessage(roomId, content)
+      // 用服务端返回的真实消息替换本地占位
+      const idx = messages.value.findIndex(m => m.id === localId)
+      if (idx >= 0) {
+        messages.value[idx] = msg
+      } else {
+        messages.value.push(msg)
+      }
+    } catch {
+      // 发送失败：移除占位消息
+      messages.value = messages.value.filter(m => m.id !== localId)
+      throw new Error('send failed')
+    }
   }
 
   // Members
