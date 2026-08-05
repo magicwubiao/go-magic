@@ -15,6 +15,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/complexity"
 	"github.com/magicwubiao/go-magic/internal/compress"
 	"github.com/magicwubiao/go-magic/internal/cortex"
+	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/internal/retry"
@@ -130,6 +131,9 @@ type Agent struct {
 
 	// Secret redaction (default true)
 	secretRedaction bool
+
+	// Privacy PII redaction config (nil = use default)
+	privacyCfg *privacy.Config
 
 	// Iteration budget for long-running tasks (Hermes-inspired)
 	budget *budget.Budget
@@ -347,6 +351,22 @@ func WithSubTask(enabled bool) AgentOption {
 func WithSecretRedaction(enabled bool) AgentOption {
 	return func(a *Agent) {
 		a.secretRedaction = enabled
+	}
+}
+
+// WithPrivacy sets the PII redaction config for the privacy hook.
+// 若 cfg 为 nil 则使用默认配置。注意：此 Option 会重新注册 privacy hook（覆盖默认）。
+// 设置 cfg.Enabled=false 可整体关闭 PII 脱敏。
+func WithPrivacy(cfg *privacy.Config) AgentOption {
+	return func(a *Agent) {
+		a.privacyCfg = cfg
+		// 重新注册 privacy hook，覆盖 registerBuiltinHooks 中的默认注册
+		a.hooks.Unregister("privacy")
+		_ = a.hooks.Register(hooks.HookRegistration{
+			Name:   "privacy",
+			Source: hooks.HookSourceBuiltIn,
+			Hook:   hooks.NewPrivacyHook(cfg),
+		})
 	}
 }
 
@@ -568,11 +588,11 @@ func (a *Agent) injectTrajectoryInsights(goal string) {
 }
 
 func (a *Agent) registerBuiltinHooks() {
-	// Privacy hook
+	// Privacy hook（使用 a.privacyCfg；nil 时 NewPrivacyHook 内部回退到 DefaultConfig）
 	a.hooks.Register(hooks.HookRegistration{
 		Name:   "privacy",
 		Source: hooks.HookSourceBuiltIn,
-		Hook:   hooks.NewPrivacyHook(),
+		Hook:   hooks.NewPrivacyHook(a.privacyCfg),
 	})
 	// Smart approval hook
 	ah := NewApprovalHook()

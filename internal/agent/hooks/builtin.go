@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/privacy"
@@ -14,9 +15,19 @@ type PrivacyHook struct {
 	redactor *privacy.Redactor
 }
 
-// NewPrivacyHook creates a new privacy hook
-func NewPrivacyHook() *PrivacyHook {
-	cfg := privacy.DefaultConfig()
+// urlLikeKeyPattern 匹配工具参数名中暗示是 URL/链接/地址 的键
+// 命中此类键的 string 值不脱敏，避免把 URL 里的数字 ID（视频 ID、订单号等）替换为占位符
+var urlLikeKeyPattern = regexp.MustCompile(`(?i)(^|_)(url|link|href|src|endpoint|address|uri|website|web|page|path)(_|\b)`)
+
+// urlPrefixPattern 检测值是否以 http/https/file/ftp 等协议头开头
+var urlPrefixPattern = regexp.MustCompile(`(?i)^(https?|file|ftp|ws|wss)://`)
+
+// NewPrivacyHook creates a new privacy hook.
+// cfg 为 nil 时使用 DefaultConfig（保持向后兼容）。
+func NewPrivacyHook(cfg *privacy.Config) *PrivacyHook {
+	if cfg == nil {
+		cfg = privacy.DefaultConfig()
+	}
 	return &PrivacyHook{
 		redactor: privacy.NewRedactor(cfg),
 	}
@@ -52,7 +63,8 @@ func (h *PrivacyHook) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LLM
 	return resp, HookDecision{Action: HookActionContinue}, nil
 }
 
-// BeforeTool redacts PII from tool arguments before execution
+// BeforeTool redacts PII from tool arguments before execution.
+// 对 URL/链接类参数（键名或值暗示是 URL）豁免脱敏，避免破坏带数字 ID 的链接。
 func (h *PrivacyHook) BeforeTool(ctx context.Context, call *ToolCallHookRequest) (*ToolCallHookRequest, HookDecision, error) {
 	if call == nil {
 		return nil, HookDecision{Action: HookActionContinue}, nil
@@ -63,7 +75,12 @@ func (h *PrivacyHook) BeforeTool(ctx context.Context, call *ToolCallHookRequest)
 		redacted := make(map[string]interface{})
 		for k, v := range call.ToolArgs {
 			if strVal, ok := v.(string); ok {
-				redacted[k] = h.redactor.Redact(strVal)
+				// URL 类参数豁免：键名暗示是 URL，或值本身是 URL
+				if isURLLike(k, strVal) {
+					redacted[k] = strVal
+				} else {
+					redacted[k] = h.redactor.Redact(strVal)
+				}
 			} else {
 				redacted[k] = v
 			}
@@ -72,6 +89,18 @@ func (h *PrivacyHook) BeforeTool(ctx context.Context, call *ToolCallHookRequest)
 	}
 
 	return call, HookDecision{Action: HookActionContinue}, nil
+}
+
+// isURLLike 判断参数是否为 URL 类（不应脱敏）
+func isURLLike(key, value string) bool {
+	if urlLikeKeyPattern.MatchString(key) {
+		return true
+	}
+	trimmed := strings.TrimSpace(value)
+	if urlPrefixPattern.MatchString(trimmed) {
+		return true
+	}
+	return false
 }
 
 // AfterTool passes through the result without modification

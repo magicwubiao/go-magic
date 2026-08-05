@@ -23,6 +23,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/kanban"
+	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -100,9 +101,10 @@ func shouldStartPlatform(name string) bool {
 // gatewayAgentHandler implements gateway.AgentHandler to bridge gateway messages
 // to the magic AI agent for processing and response.
 type gatewayAgentHandler struct {
-	provider provider.Provider
-	registry *tool.Registry
-	mu       sync.Mutex
+	provider   provider.Provider
+	registry   *tool.Registry
+	mu         sync.Mutex
+	privacyCfg *privacy.Config
 
 	// Per-user agents for conversation context
 	agents       map[string]*agent.Agent
@@ -174,6 +176,7 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 		systemPrompt:  systemPrompt,
 		cortexMgr:     cortexMgr,
 		checkpointMgr: newCheckpointManager(),
+		privacyCfg:    cfg.Privacy,
 	}
 }
 
@@ -226,6 +229,10 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 	var agentOpts []agent.AgentOption
 	if h.cortexMgr != nil {
 		agentOpts = append(agentOpts, agent.WithCortex(h.cortexMgr))
+	}
+	// 应用 PII 脱敏配置（来自 config.Privacy）
+	if h.privacyCfg != nil {
+		agentOpts = append(agentOpts, agent.WithPrivacy(h.privacyCfg))
 	}
 
 	// Create new agent for this user

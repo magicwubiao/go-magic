@@ -545,6 +545,11 @@ Focus on the result, not the process. Keep responses concise.`
 		}),
 	}
 
+	// 应用 PII 脱敏配置（来自 config.Privacy）
+	if cfg, _ := config.Load(); cfg != nil && cfg.Privacy != nil {
+		agentOpts = append(agentOpts, agent.WithPrivacy(cfg.Privacy))
+	}
+
 	// Create agent with all tools (Cortex/Memory disabled by default)
 	a := agent.NewEnhancedAgent(m.prov, m.toolReg, tools, systemPrompt, agentOpts...)
 

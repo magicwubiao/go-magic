@@ -8,7 +8,7 @@
 
 ## 简介
 
-go-magic 是一个功能完整的 AI Agent 框架，后端使用 Go 编写，前端使用 React/TypeScript 构建 Web Dashboard。支持 22+ AI Provider，内置 TUI 界面，提供文件操作、代码执行、Web 搜索、浏览器自动化等丰富的工具集。
+go-magic 是一个功能完整的 AI Agent 框架，后端使用 Go 编写，前端使用 Vue 3 / TypeScript 构建 Web Dashboard。支持 22+ AI Provider，内置 TUI 界面，提供文件操作、代码执行、Web 搜索、浏览器自动化等丰富的工具集。
 
 ## 功能特性
 
@@ -26,7 +26,7 @@ DeepSeek、OpenAI、Anthropic、Gemini、Ollama、vLLM、Groq、硅基流动、K
 
 ### Web Dashboard
 
-React/TypeScript 前端，功能包括：
+Vue 3 / TypeScript 前端，功能包括：
 - 实时聊天对话，支持流式响应
 - 会话管理（创建、搜索、恢复）
 - Provider 和模型配置，支持热加载

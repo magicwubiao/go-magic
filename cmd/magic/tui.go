@@ -2371,6 +2371,11 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 		}
 	}
 
+	// 应用 PII 脱敏配置（来自 config.Privacy）
+	if cfg.Privacy != nil {
+		agentOpts = append(agentOpts, agent.WithPrivacy(cfg.Privacy))
+	}
+
 	// Initialize skill manager
 	var skillMgr *skills.Manager
 	if sm, err := skills.NewManager(); err == nil {

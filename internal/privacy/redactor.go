@@ -93,10 +93,9 @@ func NewRedactor(cfg *Config) *Redactor {
 	}
 
 	if cfg.RedactBankCard {
-		// Credit card numbers (13-19 digits)
-		r.AddPattern("BANK_CARD", `\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b`, "[BANK_CARD]")
-		// Generic bank card
-		r.AddPattern("BANK_CARD_GENERIC", `\b\d{13,19}\b`, "[BANK_CARD]")
+		// 银行卡号：仅匹配带空格或连字符分组的 13-19 位数字（如 4111 1111 1111 1111 / 6225-0000-0000-0000）
+		// 严格的卡 BIN 前缀（4/5/3/6）+ 分组分隔，避免把订单号、视频 ID、时间戳等任意长数字误判为银行卡
+		r.AddPattern("BANK_CARD", `\b(?:4[0-9]{3}|5[1-5][0-9]{2}|3[47][0-9]{2}|6(?:011|5[0-9]{2}))[ -]?(?:\d[ -]?){12,16}\d\b`, "[BANK_CARD]")
 	}
 
 	if cfg.RedactIP {
@@ -107,8 +106,11 @@ func NewRedactor(cfg *Config) *Redactor {
 	}
 
 	if cfg.RedactAddress {
-		// Chinese address patterns
-		r.AddPattern("ADDRESS_CN", `(?:省|市|区|县|街|路|号|栋|单元|室|[0-9]+号)`, "[ADDRESS]")
+		// 中文地址：要求 2 个以上地址关键字组合命中，避免单个"号/市/路"字误伤正常文本
+		// 形如 "北京市朝阳区"、"xx路xx号"、"xx省xx市"
+		r.AddPattern("ADDRESS_CN", `(?:省|市|区|县|镇|乡|村|街|路|道|巷|号|栋|幢|单元|室|楼|层){2,}`, "[ADDRESS]")
+		// 详细门牌：数字 + 号/栋/单元/室/楼
+		r.AddPattern("ADDRESS_DETAIL", `\d+(?:号|栋|幢|单元|室|楼|层)`, "[ADDRESS]")
 	}
 
 	// Add custom patterns
