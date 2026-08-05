@@ -118,9 +118,24 @@
                 <span class="mention-name">{{ opt.name }}</span>
               </div>
             </div>
+            <!-- 发送/停止按钮内置在输入框右下角 -->
+            <!-- @mousedown.prevent 阻止按钮点击时获取焦点，避免触发 input-wrapper 的 :focus-within 导致边框闪现 -->
+            <button
+              class="send-btn-inline"
+              :class="{ stopping: replying }"
+              :disabled="!replying && !inputValue.trim()"
+              @click="replying ? stopGeneration() : send()"
+              @mousedown.prevent
+              :title="replying ? t('groupchat.stop') : t('groupchat.send')"
+            >
+              <svg v-if="!replying" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
+              </svg>
+              <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+            </button>
           </div>
-          <n-button v-if="!replying" type="primary" :disabled="!inputValue.trim()" @click="send">{{ t('groupchat.send') }}</n-button>
-          <n-button v-else type="warning" @click="stopGeneration">⏹ {{ t('groupchat.stop') }}</n-button>
         </div>
       </template>
       <div v-else style="flex: 1; display: flex; align-items: center; justify-content: center;">
@@ -824,6 +839,13 @@ onMounted(() => groupchatStore.loadRooms())
   min-height: 0;
 }
 
+/* 消息内容区限制最大宽度并居中，宽屏下避免拉满 */
+.messages > * {
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* 加载骨架 */
 .msg-skeleton {
   padding: 12px 0;
@@ -1074,13 +1096,22 @@ onMounted(() => groupchatStore.loadRooms())
   align-items: flex-end;
 }
 
+/* 输入框内容限制最大宽度并居中，与消息区对齐 */
+.input-area > * {
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .input-wrapper {
   position: relative;
   flex: 1;
   min-width: 0;
+  width: 100%;
   border: 1px solid #d9d9d9;
   border-radius: 12px;
   padding: 12px 16px;
+  padding-right: 48px; /* 为内置发送按钮留出空间 */
   background: #fff;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -1088,6 +1119,42 @@ onMounted(() => groupchatStore.loadRooms())
 .input-wrapper:focus-within {
   border-color: #18a058;
   box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.15);
+}
+
+/* 内置发送按钮：固定在输入框右下角 */
+.send-btn-inline {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: #18a058;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.send-btn-inline:hover:not(:disabled) {
+  background: #20803a;
+}
+
+.send-btn-inline:disabled {
+  background: #c5c5c5;
+  cursor: not-allowed;
+}
+
+.send-btn-inline.stopping {
+  background: #f0a020;
+}
+
+.send-btn-inline.stopping:hover {
+  background: #d98610;
 }
 
 .chat-input {
@@ -1098,6 +1165,26 @@ onMounted(() => groupchatStore.loadRooms())
   --n-padding-left: 0 !important;
   --n-padding-right: 0 !important;
   background: transparent !important;
+}
+
+/* 彻底移除 n-input 的边框/焦点环，避免点击发送按钮后边框闪现 */
+.chat-input :deep(.n-input) {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.chat-input :deep(.n-input__border),
+.chat-input :deep(.n-input__border-focus),
+.chat-input :deep(.n-input__state-border) {
+  border: none !important;
+  box-shadow: none !important;
+  display: none !important;
+}
+/* n-input--focus 是与 .chat-input 同级的修饰类，需用组合选择器覆盖 */
+.chat-input.n-input :deep(.n-input__state-border),
+.chat-input:deep(.n-input--focus .n-input__state-border) {
+  border: none !important;
+  box-shadow: none !important;
+  display: none !important;
 }
 
 .chat-input :deep(.n-input__textarea-el) {
