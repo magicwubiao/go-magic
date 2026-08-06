@@ -54,5 +54,15 @@
       "base_url": "http://localhost:11434",
       "models": ["llama3.2", "qwen2.5", "codellama"]
     }
+  },
+  "privacy": {
+    "enabled": true,
+    "redact_phone": true,
+    "redact_email": true,
+    "redact_id_card": true,
+    "redact_bank_card": true,
+    "redact_ip": true,
+    "redact_address": true,
+    "custom_patterns": {}
   }
 }

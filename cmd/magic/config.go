@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -92,6 +93,35 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		cfg.Model = value
 	case key == "gateway.enabled":
 		cfg.Gateway.Enabled = value == "true" || value == "1" || value == "yes"
+
+	// Privacy / PII 脱敏配置：privacy.enabled / privacy.redact_phone / ...
+	// 统一存储于 config.json，与其它配置一起由末尾的 cfg.Save() 写回。
+	case strings.HasPrefix(key, "privacy."):
+		field := strings.TrimPrefix(key, "privacy.")
+		if cfg.Privacy == nil {
+			cfg.Privacy = privacy.DefaultConfig()
+		}
+		boolVal := value == "true" || value == "1" || value == "yes"
+		switch field {
+		case "enabled":
+			cfg.Privacy.Enabled = boolVal
+		case "redact_phone":
+			cfg.Privacy.RedactPhone = boolVal
+		case "redact_email":
+			cfg.Privacy.RedactEmail = boolVal
+		case "redact_id_card":
+			cfg.Privacy.RedactIDCard = boolVal
+		case "redact_bank_card":
+			cfg.Privacy.RedactBankCard = boolVal
+		case "redact_ip":
+			cfg.Privacy.RedactIP = boolVal
+		case "redact_address":
+			cfg.Privacy.RedactAddress = boolVal
+		default:
+			fmt.Printf("Unknown privacy field: %s\n", field)
+			fmt.Println("Available fields: enabled, redact_phone, redact_email, redact_id_card, redact_bank_card, redact_ip, redact_address")
+			os.Exit(1)
+		}
 
 	// Provider config: providers.<name>.api_key / base_url / model
 	case strings.HasPrefix(key, "providers."):
@@ -202,6 +232,7 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		fmt.Println("  providers.<name>.api_key, providers.<name>.base_url, providers.<name>.model")
 		fmt.Println("  gateway.enabled")
 		fmt.Println("  gateway.platforms.<name>.token, gateway.platforms.<name>.enabled, ...")
+		fmt.Println("  privacy.enabled, privacy.redact_phone, privacy.redact_email, ...")
 		os.Exit(1)
 	}
 
@@ -234,6 +265,33 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 		fmt.Println(cfg.MagicHome)
 	case key == "gateway.enabled":
 		fmt.Println(cfg.Gateway.Enabled)
+
+	// Privacy / PII 脱敏配置
+	case strings.HasPrefix(key, "privacy."):
+		field := strings.TrimPrefix(key, "privacy.")
+		if cfg.Privacy == nil {
+			fmt.Println("(not set, using defaults: all enabled)")
+			os.Exit(0)
+		}
+		switch field {
+		case "enabled":
+			fmt.Println(cfg.Privacy.Enabled)
+		case "redact_phone":
+			fmt.Println(cfg.Privacy.RedactPhone)
+		case "redact_email":
+			fmt.Println(cfg.Privacy.RedactEmail)
+		case "redact_id_card":
+			fmt.Println(cfg.Privacy.RedactIDCard)
+		case "redact_bank_card":
+			fmt.Println(cfg.Privacy.RedactBankCard)
+		case "redact_ip":
+			fmt.Println(cfg.Privacy.RedactIP)
+		case "redact_address":
+			fmt.Println(cfg.Privacy.RedactAddress)
+		default:
+			fmt.Printf("Unknown privacy field: %s\n", field)
+			os.Exit(1)
+		}
 
 	// Provider config
 	case strings.HasPrefix(key, "providers."):
@@ -329,6 +387,7 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 		fmt.Println("  profile, provider, model, magic_home, gateway.enabled")
 		fmt.Println("  providers.<name>.api_key, providers.<name>.base_url, providers.<name>.model")
 		fmt.Println("  gateway.platforms.<name>.<field>")
+		fmt.Println("  privacy.enabled, privacy.redact_phone, privacy.redact_email, ...")
 		os.Exit(1)
 	}
 }

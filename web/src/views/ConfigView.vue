@@ -129,6 +129,40 @@
         <!-- 审批设置已移至「审批」页面统一管理，避免双入口导致状态不一致 -->
       </n-tab-pane>
 
+      <!-- Privacy / PII 脱敏 Tab -->
+      <n-tab-pane name="privacy" :tab="t('config.privacy')">
+        <n-form label-placement="left" label-width="220" style="max-width: 640px; margin-top: 16px;">
+          <n-alert type="info" :show-icon="true" style="margin-bottom: 16px;">
+            {{ t('config.privacyHint') }}
+          </n-alert>
+          <n-form-item :label="t('config.privacyEnabled')">
+            <n-switch v-model:value="privacyForm.enabled" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.privacyEnabledHint') }}</span>
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactPhone')">
+            <n-switch v-model:value="privacyForm.redact_phone" />
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactEmail')">
+            <n-switch v-model:value="privacyForm.redact_email" />
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactIDCard')">
+            <n-switch v-model:value="privacyForm.redact_id_card" />
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactBankCard')">
+            <n-switch v-model:value="privacyForm.redact_bank_card" />
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactIP')">
+            <n-switch v-model:value="privacyForm.redact_ip" />
+          </n-form-item>
+          <n-form-item :label="t('config.privacyRedactAddress')">
+            <n-switch v-model:value="privacyForm.redact_address" />
+          </n-form-item>
+          <n-form-item>
+            <n-button type="primary" :loading="saving" @click="savePrivacy">{{ t('common.save') }}</n-button>
+          </n-form-item>
+        </n-form>
+      </n-tab-pane>
+
       <!-- Raw JSON Tab -->
       <n-tab-pane name="raw" :tab="t('config.rawJson')">
         <div style="margin-top: 16px;">
@@ -256,6 +290,16 @@ const serverForm = reactive({
   file_strategy: 'auto',
 })
 
+const privacyForm = reactive({
+  enabled: true,
+  redact_phone: true,
+  redact_email: true,
+  redact_id_card: true,
+  redact_bank_card: true,
+  redact_ip: true,
+  redact_address: true,
+})
+
 const fileStrategyOptions = computed(() => [
   { label: t('config.fileStrategies.auto'), value: 'auto' },
   { label: t('config.fileStrategies.url'), value: 'url' },
@@ -291,6 +335,15 @@ function populateFromConfig(cfg: any) {
   const server = cfg.server || {}
   serverForm.upload_url_prefix = server.upload_url_prefix || ''
   serverForm.file_strategy = server.file_strategy || 'auto'
+
+  const privacy = cfg.privacy || {}
+  privacyForm.enabled = privacy.enabled !== false
+  privacyForm.redact_phone = privacy.redact_phone !== false
+  privacyForm.redact_email = privacy.redact_email !== false
+  privacyForm.redact_id_card = privacy.redact_id_card !== false
+  privacyForm.redact_bank_card = privacy.redact_bank_card !== false
+  privacyForm.redact_ip = privacy.redact_ip !== false
+  privacyForm.redact_address = privacy.redact_address !== false
 }
 
 async function saveGeneral() {
@@ -371,6 +424,29 @@ async function saveServer() {
     })
     await configStore.loadConfig()
     message.success(t('config.serverSaved'))
+  } catch (e) {
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function savePrivacy() {
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      privacy: {
+        enabled: privacyForm.enabled,
+        redact_phone: privacyForm.redact_phone,
+        redact_email: privacyForm.redact_email,
+        redact_id_card: privacyForm.redact_id_card,
+        redact_bank_card: privacyForm.redact_bank_card,
+        redact_ip: privacyForm.redact_ip,
+        redact_address: privacyForm.redact_address,
+      }
+    })
+    await configStore.loadConfig()
+    message.success(t('config.privacySaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {

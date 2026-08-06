@@ -6,6 +6,17 @@ export interface ProviderInfo {
   base_url?: string
 }
 
+export interface PrivacyConfig {
+  enabled: boolean
+  redact_phone: boolean
+  redact_email: boolean
+  redact_id_card: boolean
+  redact_bank_card: boolean
+  redact_ip: boolean
+  redact_address: boolean
+  custom_patterns?: Record<string, string>
+}
+
 export interface Config {
   provider: string
   api_key: string
@@ -22,6 +33,7 @@ export interface Config {
   providers?: Record<string, ProviderInfo>
   secret_redaction?: boolean
   cortex?: CortexConfig
+  privacy?: PrivacyConfig
 }
 
 export interface CortexConfig {

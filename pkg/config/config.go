@@ -86,9 +86,10 @@ type Config struct {
 	MCP        *MCPConfig                `json:"mcp,omitempty"`
 	SubAgent   *SubAgentConfig           `json:"subagent,omitempty"`
 	Voice      *VoiceConfig              `json:"voice,omitempty"`
-	Privacy    *privacy.Config           `json:"privacy,omitempty"`
-	Display    DisplayConfig             `json:"display,omitempty"`
-	Server     ServerConfig              `json:"server,omitempty"`
+	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
+	Privacy *privacy.Config `json:"privacy,omitempty"`
+	Display DisplayConfig   `json:"display,omitempty"`
+	Server  ServerConfig    `json:"server,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"`      // chat, plan, act
@@ -278,9 +279,11 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return defaultConfig(), ErrNoConfig
+			cfg := defaultConfig()
+			return cfg, ErrNoConfig
 		}
-		return defaultConfig(), nil
+		cfg := defaultConfig()
+		return cfg, nil
 	}
 
 	var cfg Config

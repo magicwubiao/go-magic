@@ -601,6 +601,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Hot-reload privacy/PII config: clear agent cache so new sessions pick up the new redactor
+		if _, ok := expanded["privacy"]; ok {
+			s.mu.Lock()
+			s.agents = make(map[string]*agent.Agent)
+			s.mu.Unlock()
+		}
+
 		// Return updated config
 		jsonResponse(w, s.cfg)
 	default:

@@ -540,7 +540,7 @@ GOAL GUIDANCE:
 	if s.approvalMgr != nil {
 		agentOpts = append(agentOpts, agent.WithApprovalManager(s.approvalMgr))
 	}
-	// 应用 PII 脱敏配置（来自 .security.yml / config.Privacy）
+	// 应用 PII 脱敏配置（来自 config.Privacy）
 	if s.cfg != nil && s.cfg.Privacy != nil {
 		agentOpts = append(agentOpts, agent.WithPrivacy(s.cfg.Privacy))
 	}
