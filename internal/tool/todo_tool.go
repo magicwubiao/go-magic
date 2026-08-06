@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -37,6 +39,12 @@ var (
 	todoTool *TodoTool
 )
 
+// 合法状态/优先级（与 Parameters() 的 enum 保持一致，Execute 时校验防脏数据）
+var (
+	validStatuses   = map[string]bool{"pending": true, "in_progress": true, "completed": true, "cancelled": true}
+	validPriorities = map[string]bool{"low": true, "medium": true, "high": true}
+)
+
 // GetTodoTool returns the singleton todo tool
 func GetTodoTool() *TodoTool {
 	todoOnce.Do(func() {
@@ -58,11 +66,17 @@ func (t *TodoTool) load() {
 
 	data, err := os.ReadFile(t.dataFile)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// 文件存在但读取失败：记录警告，以空列表启动，但不主动覆盖原文件
+			log.Printf("[TODO] failed to read %s: %v (starting with empty list, file preserved)", t.dataFile, err)
+		}
 		return
 	}
 
 	var todos []*TodoItem
 	if err := json.Unmarshal(data, &todos); err != nil {
+		// 解析失败：保留磁盘原文件不动，内存为空，避免下次 save 把空数据覆盖回去造成二次丢失
+		log.Printf("[TODO] failed to parse %s: %v (starting with empty list, file preserved)", t.dataFile, err)
 		return
 	}
 
@@ -71,10 +85,11 @@ func (t *TodoTool) load() {
 	}
 }
 
+// save 持久化 todos 到磁盘。调用方必须已持有 t.mu 锁（读或写）。
+// 注意：不能在此处再加 RLock——update/delete/complete 在写锁内调用 save，
+// sync.RWMutex 不可重入，写锁持有期间获取读锁会永久阻塞（曾导致 todo 工具 60s 超时）。
+// 采用「写临时文件 + rename」原子写，避免写入中途崩溃导致 todos.json 损坏。
 func (t *TodoTool) save() error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
 	todos := make([]*TodoItem, 0, len(t.todos))
 	for _, todo := range t.todos {
 		todos = append(todos, todo)
@@ -85,7 +100,11 @@ func (t *TodoTool) save() error {
 		return err
 	}
 
-	return os.WriteFile(t.dataFile, data, 0644)
+	tmp := t.dataFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, t.dataFile)
 }
 
 // Name returns the tool name
@@ -184,13 +203,16 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 		todo.Description = desc
 	}
 
-	if priority, ok := args["priority"].(string); ok {
+	if priority, ok := args["priority"].(string); ok && priority != "" {
+		if !validPriorities[priority] {
+			return nil, fmt.Errorf("invalid priority: %s (allowed: low, medium, high)", priority)
+		}
 		todo.Priority = priority
 	}
 
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.todos[todo.ID] = todo
-	t.mu.Unlock()
 
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
@@ -208,8 +230,17 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	todos := make([]map[string]interface{}, 0, len(t.todos))
+	// 收集后按创建时间稳定排序，避免 map 遍历随机顺序影响可读性
+	items := make([]*TodoItem, 0, len(t.todos))
 	for _, todo := range t.todos {
+		items = append(items, todo)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+
+	todos := make([]map[string]interface{}, 0, len(items))
+	for _, todo := range items {
 		todos = append(todos, map[string]interface{}{
 			"id":         todo.ID,
 			"title":      todo.Title,
@@ -248,10 +279,16 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 	}
 
 	if status, ok := args["status"].(string); ok && status != "" {
+		if !validStatuses[status] {
+			return nil, fmt.Errorf("invalid status: %s (allowed: pending, in_progress, completed, cancelled)", status)
+		}
 		todo.Status = status
 	}
 
-	if priority, ok := args["priority"].(string); ok {
+	if priority, ok := args["priority"].(string); ok && priority != "" {
+		if !validPriorities[priority] {
+			return nil, fmt.Errorf("invalid priority: %s (allowed: low, medium, high)", priority)
+		}
 		todo.Priority = priority
 	}
 
