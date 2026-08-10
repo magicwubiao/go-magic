@@ -23,7 +23,7 @@
               <template #icon>
                 <n-icon><settings-outline /></n-icon>
               </template>
-              <span style="margin-left: 4px;">{{ t('common.options') }}</span>
+              <span style="margin-left: 4px;">{{ t('nav.settings') }}</span>
               <template #suffix>
                 <n-icon><chevron-down-outline /></n-icon>
               </template>
@@ -146,6 +146,11 @@ function handleLogout() {
 }
 
 function handleHeaderSelect(key: string) {
+  // 以 "/" 开头的是路由跳转(管理下拉的审批/日志/用量)。
+  if (key.startsWith('/')) {
+    router.push(key)
+    return
+  }
   switch (key) {
     case 'system':
       router.push('/system')
@@ -173,15 +178,17 @@ const menuOptions = computed(() => [
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
-  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
   { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
-  { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
-  { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },
 ])
 
+// 顶部"设置"下拉:管理类(审批/日志/用量) + 系统类(系统/配置) + 退出
 const headerOptions = computed(() => [
+  { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
+  { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
+  { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },
+  { type: 'divider' as const },
   { label: t('nav.system'), key: 'system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
   { type: 'divider' as const },

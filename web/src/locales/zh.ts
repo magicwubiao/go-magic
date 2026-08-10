@@ -22,6 +22,8 @@ export default {
     files: '文件',
     mcp: 'MCP',
     workspaces: '工作区',
+    manage: '管理',
+    settings: '设置',
   },
   common: {
     save: '保存',

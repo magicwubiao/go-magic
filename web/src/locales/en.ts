@@ -22,6 +22,8 @@ export default {
     files: 'Files',
     mcp: 'MCP',
     workspaces: 'Workspaces',
+    manage: 'Manage',
+    settings: 'Settings',
   },
   common: {
     save: 'Save',
