@@ -17,7 +17,6 @@ import LogsView from './views/LogsView.vue'
 import SystemView from './views/SystemView.vue'
 import KanbanView from './views/KanbanView.vue'
 import CronView from './views/CronView.vue'
-import PluginsView from './views/PluginsView.vue'
 import GatewayView from './views/GatewayView.vue'
 import GroupChatView from './views/GroupChatView.vue'
 import ProfilesView from './views/ProfilesView.vue'
@@ -26,6 +25,7 @@ import ApprovalView from './views/ApprovalView.vue'
 import FilesView from './views/FilesView.vue'
 import UsageView from './views/UsageView.vue'
 import MCPView from './views/MCPView.vue'
+import AgentPluginsView from './views/AgentPluginsView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -38,7 +38,6 @@ const router = createRouter({
     { path: '/models-providers', component: ModelsProvidersView },
     { path: '/tools', component: ToolsView },
     { path: '/skills', component: SkillsView },
-    { path: '/plugins', component: PluginsView },
     { path: '/cron', component: CronView },
     { path: '/gateway', component: GatewayView },
     { path: '/groupchat', component: GroupChatView },
@@ -50,6 +49,7 @@ const router = createRouter({
     { path: '/files', component: FilesView },
     { path: '/usage', component: UsageView },
     { path: '/mcp', component: MCPView },
+    { path: '/plugins', component: AgentPluginsView },
 
   ],
 })

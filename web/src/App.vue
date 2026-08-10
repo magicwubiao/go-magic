@@ -175,6 +175,7 @@ const menuOptions = computed(() => [
   { type: 'divider' as const },
   { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
+  { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },

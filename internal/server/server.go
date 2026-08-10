@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
@@ -118,6 +119,9 @@ type Server struct {
 
 	// Metrics collector ( lazily usable via /metrics endpoint )
 	metricsMgr *metrics.Metrics
+
+	// Agent Plugins (OpenAI Agent Plugins 1.0.0):已加载插件及其 MCP 运行时
+	agentPlugins map[string]*agentplugin.ManagedPlugin
 }
 
 // isAllowedOrigin 校验 origin 是否在允许列表内。
@@ -407,6 +411,11 @@ func NewServer(dbPath string) *Server {
 
 	// Start agent cleanup goroutine to prevent memory leaks
 	go s.agentCleanupLoop()
+
+	// Load Agent Plugins (OpenAI Agent Plugins 1.0.0 spec) and inject
+	// plugin skills / MCP tools into the skills manager and tool registry.
+	// Plugin-level failures are isolated and never block server startup.
+	_, s.agentPlugins = s.loadAgentPlugins()
 
 	return s
 }
@@ -882,9 +891,9 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/dashboard/plugins", withCORS(requireAuth(s.handleDashboardPlugins)))
 	mux.HandleFunc("/api/dashboard/plugins/rescan", withCORS(requireAuth(s.handleDashboardPluginsRescan)))
 	mux.HandleFunc("/api/dashboard/plugins/", withCORS(requireAuth(s.handleDashboardPluginsSubRoutes)))
-	// Agent plugins
-	mux.HandleFunc("/api/dashboard/agent-plugins/install", withCORS(requireAuth(s.handleAgentPluginInstall)))
-	mux.HandleFunc("/api/dashboard/agent-plugins/", withCORS(requireAuth(s.handleAgentPluginsSubRoutes)))
+	// Agent Plugins (OpenAI Agent Plugins 1.0.0 spec):list & reload
+	mux.HandleFunc("/api/agent-plugins", withCORS(requireAuth(s.handleAgentPlugins)))
+	mux.HandleFunc("/api/agent-plugins/", withCORS(requireAuth(s.handleAgentPlugins)))
 	// Plugin providers
 	mux.HandleFunc("/api/dashboard/plugin-providers", withCORS(requireAuth(s.handlePluginProviders)))
 

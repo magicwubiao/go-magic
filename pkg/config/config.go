@@ -71,21 +71,22 @@ var ErrNoConfig = fmt.Errorf("config file not found")
 
 // Config represents the application configuration
 type Config struct {
-	Profile    string                    `json:"profile"`
-	MagicHome  string                    `json:"magic_home"`
-	WorkingDir string                    `json:"working_dir,omitempty"`
-	Provider   string                    `json:"provider"`
-	Model      string                    `json:"model"` // Deprecated: Use Providers[].Models[0] instead
-	Providers  map[string]ProviderConfig `json:"providers"`
-	Tools      ToolsConfig               `json:"tools"`
-	Skills     SkillsConfig              `json:"skills"`
-	Plugins    PluginsConfig             `json:"plugins"`
-	Memory     MemoryConfig              `json:"memory"`
-	Gateway    GatewayConfig             `json:"gateway"`
-	Cortex     CortexConfig              `json:"cortex"`
-	MCP        *MCPConfig                `json:"mcp,omitempty"`
-	SubAgent   *SubAgentConfig           `json:"subagent,omitempty"`
-	Voice      *VoiceConfig              `json:"voice,omitempty"`
+	Profile      string                    `json:"profile"`
+	MagicHome    string                    `json:"magic_home"`
+	WorkingDir   string                    `json:"working_dir,omitempty"`
+	Provider     string                    `json:"provider"`
+	Model        string                    `json:"model"` // Deprecated: Use Providers[].Models[0] instead
+	Providers    map[string]ProviderConfig `json:"providers"`
+	Tools        ToolsConfig               `json:"tools"`
+	Skills       SkillsConfig              `json:"skills"`
+	Plugins      PluginsConfig             `json:"plugins"`
+	AgentPlugins AgentPluginsConfig        `json:"agent_plugins"`
+	Memory       MemoryConfig              `json:"memory"`
+	Gateway      GatewayConfig             `json:"gateway"`
+	Cortex       CortexConfig              `json:"cortex"`
+	MCP          *MCPConfig                `json:"mcp,omitempty"`
+	SubAgent     *SubAgentConfig           `json:"subagent,omitempty"`
+	Voice        *VoiceConfig              `json:"voice,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
 	Privacy *privacy.Config `json:"privacy,omitempty"`
 	Display DisplayConfig   `json:"display,omitempty"`
@@ -185,6 +186,12 @@ type SkillsConfig struct {
 // PluginsConfig represents plugins configuration
 type PluginsConfig struct {
 	Enabled  []string `json:"enabled"`
+	Disabled []string `json:"disabled"`
+}
+
+// AgentPluginsConfig 管理 OpenAI Agent Plugins 1.0.0 插件的禁用列表。
+// 启用为默认状态,仅记录被显式禁用的插件名(即 plugin.json 的 name 字段)。
+type AgentPluginsConfig struct {
 	Disabled []string `json:"disabled"`
 }
 
