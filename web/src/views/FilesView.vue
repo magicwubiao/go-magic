@@ -481,7 +481,11 @@ const workspaceColumns: DataTableColumns<sessionsApi.FSEntry> = [
     title: t('files.name'),
     key: 'name',
     ellipsis: { tooltip: true },
-    sorter: 'default',
+    // 文件夹优先于文件，组内按名称排序
+    sorter: (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+      return a.name.localeCompare(b.name)
+    },
     render(row) {
       const IconComp = row.is_dir ? FolderOutline : getFileIcon(row.name)
       const color = row.is_dir ? '#f0a020' : '#666'
@@ -504,7 +508,11 @@ const workspaceColumns: DataTableColumns<sessionsApi.FSEntry> = [
     title: t('files.size'),
     key: 'size',
     width: 120,
-    sorter: (a, b) => a.size - b.size,
+    // 文件夹优先于文件，组内按大小排序
+    sorter: (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+      return a.size - b.size
+    },
     render(row) {
       if (row.is_dir) return h('span', { style: { color: '#999' } }, '-')
       return h('span', { style: { color: '#666', fontSize: '13px' } }, formatSize(row.size))
@@ -514,7 +522,11 @@ const workspaceColumns: DataTableColumns<sessionsApi.FSEntry> = [
     title: t('files.updated'),
     key: 'modified',
     width: 170,
-    sorter: (a, b) => a.modified - b.modified,
+    // 文件夹优先于文件，组内按修改时间排序
+    sorter: (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+      return a.modified - b.modified
+    },
     render(row) {
       return h('span', { style: { color: '#999', fontSize: '13px' } }, formatDate(row.modified))
     },
@@ -664,7 +676,13 @@ async function loadWorkspace(path?: string) {
     const loadPath = path || session?.work_dir
     const res = await sessionsApi.listFSEntries(loadPath, sessionId)
     wsCurrentPath.value = res.current
-    wsEntries.value = (res.entries || []).filter(e => e.name !== '..')
+    // 文件夹优先，组内按名称排序
+    wsEntries.value = (res.entries || [])
+      .filter(e => e.name !== '..')
+      .sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
   } catch (e) {
     message.error(t('files.workspaceLoadError') || 'Failed to load workspace files')
     console.error(e)
