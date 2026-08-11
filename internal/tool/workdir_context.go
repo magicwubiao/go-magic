@@ -156,7 +156,11 @@ func resolvePath(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 
-	if err := checkPathBlocked(absPath, security); err != nil {
+	// BlockedPaths 用于禁止访问系统敏感目录(如 /etc/、/home/)。
+	// 但工作目录本身是系统/用户明确指定的安全区域，即使它位于被阻止的
+	// 路径下(例如 /home/www/.magic/workspace/...)也必须允许访问，
+	// 否则 AI 智能体无法读写自己的会话工作目录。
+	if err := checkPathBlocked(absPath, baseWorkDir, security); err != nil {
 		return "", err
 	}
 
@@ -231,12 +235,24 @@ func checkPathAllowed(absPath string, security FileSecurityConfig) error {
 	return fmt.Errorf("path '%s' is not in the allowed paths list", absPath)
 }
 
-func checkPathBlocked(absPath string, security FileSecurityConfig) error {
+func checkPathBlocked(absPath, baseWorkDir string, security FileSecurityConfig) error {
 	if len(security.BlockedPaths) == 0 {
 		return nil
 	}
 
 	absPathClean := filepath.Clean(absPath)
+
+	// 工作目录内的路径始终允许访问(已通过 checkPathEscape 校验未越界)，
+	// 即使工作目录本身位于被阻止的路径下也不例外。
+	if baseWorkDir != "" {
+		baseAbs, err := filepath.Abs(baseWorkDir)
+		if err == nil {
+			baseAbs = filepath.Clean(baseAbs)
+			if absPathClean == baseAbs || strings.HasPrefix(absPathClean, baseAbs+string(filepath.Separator)) {
+				return nil
+			}
+		}
+	}
 
 	for _, blocked := range security.BlockedPaths {
 		blocked = filepath.Clean(blocked)

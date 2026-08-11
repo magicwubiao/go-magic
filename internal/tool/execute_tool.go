@@ -316,7 +316,9 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 	if finalWorkDir != "" {
 		security := FileSecurityFromContext(ctx)
 		if security.Enabled {
-			if err := checkPathBlocked(finalWorkDir, security); err != nil {
+			// 工作目录本身始终允许访问，传 finalWorkDir 作为 baseWorkDir
+			// 让 checkPathBlocked 跳过对该路径的阻止检查。
+			if err := checkPathBlocked(finalWorkDir, finalWorkDir, security); err != nil {
 				return map[string]interface{}{
 					"exit_code": 1,
 					"error":     fmt.Sprintf("workdir blocked: %v", err),
