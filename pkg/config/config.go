@@ -354,14 +354,16 @@ func GetConfigDir() string {
 }
 
 // getDefaultWorkingDir returns the default working directory.
-// It uses the "working" subdirectory of the current working directory.
-// If the "working" directory does not exist, falls back to the current directory.
+// 当 WorkingDir 配置为空时，使用 magicHome 下的 "workspace" 目录，
+// 并确保该目录存在（先创建 workspace 目录，对话子目录再放到里面）。
 func getDefaultWorkingDir() string {
+	magicHome := GetMagicHome()
+	workspaceDir := filepath.Join(magicHome, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0755); err == nil {
+		return workspaceDir
+	}
+	// 创建失败时回退到当前工作目录
 	if wd, err := os.Getwd(); err == nil {
-		workingDir := filepath.Join(wd, "working")
-		if info, err := os.Stat(workingDir); err == nil && info.IsDir() {
-			return workingDir
-		}
 		return wd
 	}
 	return ""
