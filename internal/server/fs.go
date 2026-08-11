@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -218,6 +219,26 @@ func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	parent := filepath.Dir(absPath)
 	if parent != absPath {
 		result = append(result, dirEntry{Path: parent, Name: "..", IsDir: true})
+	}
+
+	// Windows: 处于盘符根目录(如 C:\)时，列出所有可用盘符作为可切换入口，
+	// 否则用户最上层只能停留在执行文件所在盘符，无法选择 D: 等其他盘。
+	if runtime.GOOS == "windows" {
+		vol := filepath.VolumeName(absPath)
+		// absPath 形如 "C:\\" 时，清理后与 vol+"\" 相等，表示已是该盘根目录
+		if vol != "" && filepath.Clean(absPath) == vol+string(filepath.Separator) {
+			for letter := 'A'; letter <= 'Z'; letter++ {
+				drive := string(letter) + ":" + string(filepath.Separator)
+				if _, err := os.Stat(drive); err == nil {
+					name := string(letter) + ":"
+					// 标记当前所在盘符，避免重复显示
+					if strings.EqualFold(name, vol) {
+						continue
+					}
+					result = append(result, dirEntry{Path: drive, Name: name, IsDir: true})
+				}
+			}
+		}
 	}
 
 	for _, entry := range entries {
