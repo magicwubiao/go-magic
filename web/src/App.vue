@@ -6,36 +6,13 @@
       <template v-if="isLoginPage">
         <router-view />
       </template>
-      <!-- Main layout: with top header -->
+      <!-- Main layout: no top header -->
       <n-layout v-else style="height: 100vh;" position="absolute">
-        <!-- Top Header -->
-        <n-layout-header style="height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e0e0; background: #fff;">
-          <!-- Left: Project Name -->
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <n-button text tag="a" :href="githubUrl" target="_blank" style="font-size: 18px; font-weight: 600; color: #333; text-decoration: none;">
-              GO MAGIC
-            </n-button>
-          </div>
-
-          <!-- Right: Dropdown Menu -->
-          <n-dropdown :options="headerOptions" @select="handleHeaderSelect">
-            <n-button text style="font-size: 14px;">
-              <template #icon>
-                <n-icon><settings-outline /></n-icon>
-              </template>
-              <span style="margin-left: 4px;">{{ t('nav.settings') }}</span>
-              <template #suffix>
-                <n-icon><chevron-down-outline /></n-icon>
-              </template>
-            </n-button>
-          </n-dropdown>
-        </n-layout-header>
-
         <!-- Main Content Area -->
         <n-layout
           has-sider
           position="absolute"
-          style="top: 44px; bottom: 0; left: 0; right: 0;"
+          style="top: 0; bottom: 0; left: 0; right: 0;"
         >
           <!-- Sidebar -->
           <n-layout-sider
@@ -46,13 +23,29 @@
             show-trigger
             v-model:collapsed="siderCollapsed"
           >
-            <n-menu
-              :collapsed-width="64"
-              :collapsed-icon-size="22"
-              :options="menuOptions"
-              :value="activeKey"
-              @update:value="handleMenuClick"
-            />
+            <div class="sider-flex">
+              <n-menu
+                class="sider-menu"
+                :collapsed-width="64"
+                :collapsed-icon-size="22"
+                :options="menuOptions"
+                :value="activeKey"
+                @update:value="handleMenuClick"
+              />
+              <!-- 底部"设置"下拉:点击向上弹出 -->
+              <div class="sider-footer">
+                <n-dropdown
+                  placement="top-start"
+                  :options="headerOptions"
+                  @select="handleHeaderSelect"
+                >
+                  <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
+                    <n-icon size="20"><settings-outline /></n-icon>
+                    <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
+                  </div>
+                </n-dropdown>
+              </div>
+            </div>
           </n-layout-sider>
 
           <!-- Content -->
@@ -103,7 +96,6 @@ import {
   FolderOutline,
   PieChartOutline,
   ServerOutline,
-  ChevronDownOutline,
   LogOutOutline,
   BriefcaseOutline,
 } from '@vicons/ionicons5'
@@ -120,8 +112,6 @@ const siderCollapsed = ref(false)
 // naive-ui 组件库语言跟随 i18n，确保 popconfirm/date-picker 等内置按钮翻译正确
 const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
 const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEnUS)
-
-const githubUrl = 'https://github.com/magicwubiao/go-magic'
 
 const isLoginPage = computed(() => route.path === '/login')
 const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat')
@@ -222,5 +212,42 @@ body {
 
 .full-content {
   padding: 0 !important;
+}
+
+/* 侧边栏 flex 布局:菜单占满,设置下拉固定在底部 */
+.sider-flex {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sider-menu {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.sider-footer {
+  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+.settings-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  height: 48px;
+  cursor: pointer;
+  color: #333;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+.settings-trigger:hover {
+  background: #f5f5f5;
+}
+.settings-trigger.collapsed {
+  justify-content: center;
+  padding: 0;
+}
+.settings-label {
+  white-space: nowrap;
 }
 </style>

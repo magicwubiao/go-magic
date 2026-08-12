@@ -777,7 +777,7 @@ onMounted(() => groupchatStore.loadRooms())
 <style scoped>
 .groupchat-container {
   display: flex;
-  height: calc(100vh - 56px);
+  height: 100vh;
   min-height: 0;
 }
 

@@ -1115,7 +1115,7 @@ onMounted(async () => {
 <style scoped>
 .chat-container {
   display: flex;
-  height: calc(100vh - 44px);
+  height: 100vh;
   min-height: 0;
 }
 
@@ -1127,7 +1127,7 @@ onMounted(async () => {
   flex-direction: column;
   flex-shrink: 0;
   background: #fff;
-  height: calc(100vh - 44px);
+  height: 100vh;
   overflow: hidden;
   position: relative;
 }
