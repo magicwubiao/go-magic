@@ -105,7 +105,9 @@
                     type="error"
                     @click.stop
                   >
-                    ×
+                    <template #icon>
+                      <n-icon size="14"><TrashOutline /></n-icon>
+                    </template>
                   </n-button>
                 </template>
                 {{ t('chat.deleteSession') }}
@@ -275,7 +277,9 @@
             <n-icon size="24"><DocumentOutline /></n-icon>
             <span class="file-name">{{ file.name }}</span>
             <n-tag v-if="file.size" size="tiny" type="info">{{ (file.size / 1024).toFixed(1) }} KB</n-tag>
-            <n-button class="preview-remove" size="tiny" circle type="error" @click="removeFile(idx)">×</n-button>
+            <n-button class="preview-remove" size="tiny" circle type="error" @click="removeFile(idx)">
+              <template #icon><n-icon size="12"><CloseCircleOutline /></n-icon></template>
+            </n-button>
           </div>
         </n-space>
       </div>
@@ -308,6 +312,34 @@
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
             <div class="toolbar-left">
+              <!-- 工作目录（集成在工具栏内，与输入框一体化） -->
+              <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
+              <div
+                v-if="chatStore.currentWorkDirUserSet"
+                class="workdir-chip workdir-chip-locked"
+                :title="t('chat.workDirLocked') + ' — ' + chatStore.currentWorkDir"
+              >
+                <n-icon size="13"><LockClosedOutline /></n-icon>
+                <span class="workdir-chip-path">{{ chatStore.currentWorkDir }}</span>
+              </div>
+              <!-- 系统默认目录（尚未由用户设置）：可点击浏览，可清除 -->
+              <div
+                v-else-if="chatStore.currentWorkDir"
+                class="workdir-chip"
+                @click="handleWorkDirMenu('browse')"
+                :title="chatStore.currentWorkDir"
+              >
+                <n-icon size="13"><FolderOpenOutline /></n-icon>
+                <span class="workdir-chip-path">{{ chatStore.currentWorkDir }}</span>
+                <n-icon size="13" class="workdir-chip-clear" @click.stop="clearWorkDir">
+                  <CloseCircleOutline />
+                </n-icon>
+              </div>
+              <!-- 未设置：按钮触发目录选择 -->
+              <n-button v-else size="tiny" quaternary class="workdir-set-btn" @click="handleWorkDirMenu('browse')">
+                <template #icon><n-icon size="13"><FolderOpenOutline /></n-icon></template>
+                {{ t('chat.workDirSet') }}
+              </n-button>
               <!-- File upload -->
               <n-upload
                 :show-file-list="false"
@@ -350,27 +382,6 @@
             </div>
           </div>
         </div>
-      </div>
-      <!-- Work directory bar (outside input box) -->
-      <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
-      <div v-if="chatStore.currentWorkDirUserSet" class="work-dir-bar work-dir-bar-locked" :title="t('chat.workDirLocked')">
-        <n-icon size="14"><LockClosedOutline /></n-icon>
-        <span class="work-dir-path">{{ chatStore.currentWorkDir }}</span>
-      </div>
-      <!-- 系统默认目录（尚未由用户设置）：可浏览/清除 -->
-      <div v-else-if="chatStore.currentWorkDir" class="work-dir-bar" @click="handleWorkDirMenu('browse')">
-        <n-icon size="14"><FolderOpenOutline /></n-icon>
-        <span class="work-dir-path">{{ chatStore.currentWorkDir }}</span>
-        <n-button text size="tiny" @click.stop="clearWorkDir">
-          <template #icon><n-icon><CloseCircleOutline /></n-icon></template>
-        </n-button>
-      </div>
-      <!-- 未设置：可设置工作目录 -->
-      <div v-else class="work-dir-bar work-dir-bar-empty">
-        <n-button text size="tiny" @click="handleWorkDirMenu('browse')">
-          <template #icon><n-icon size="14"><FolderOpenOutline /></n-icon></template>
-          {{ t('chat.workDirSet') }}
-        </n-button>
       </div>
     </div>
 
@@ -468,7 +479,7 @@ import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -1618,11 +1629,13 @@ onMounted(async () => {
   position: absolute;
   top: -6px;
   right: -6px;
-  width: 18px;
-  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
   padding: 0;
-  font-size: 12px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .file-preview {
@@ -1962,28 +1975,54 @@ onMounted(async () => {
   padding: 24px;
 }
 
-.work-dir-bar {
-  display: flex;
+/* 工作目录 chip：集成在输入框工具栏内，与对话框一体化 */
+.workdir-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  font-size: 12px;
-  color: var(--n-text-color-3);
+  gap: 4px;
+  max-width: 240px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #f5f5f5;
+  font-size: 11px;
+  color: #666;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
 }
 
-.work-dir-bar .work-dir-path {
-  flex: 1;
+.workdir-chip:hover {
+  background: #ececec;
+}
+
+.workdir-chip-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.work-dir-bar-empty {
-  padding-left: 8px;
+.workdir-chip-locked {
+  cursor: default;
+  background: #f0f0f0;
+  color: #999;
 }
 
-.work-dir-bar-locked {
-  cursor: default;
-  opacity: 0.85;
+.workdir-chip-locked:hover {
+  background: #f0f0f0;
+}
+
+.workdir-chip-clear {
+  cursor: pointer;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.workdir-chip-clear:hover {
+  opacity: 1;
+}
+
+.workdir-set-btn {
+  font-size: 11px;
+  flex-shrink: 0;
 }
 </style>
