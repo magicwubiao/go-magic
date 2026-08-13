@@ -352,13 +352,20 @@
         </div>
       </div>
       <!-- Work directory bar (outside input box) -->
-      <div v-if="chatStore.currentWorkDir" class="work-dir-bar" @click="handleWorkDirMenu('browse')">
+      <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
+      <div v-if="chatStore.currentWorkDirUserSet" class="work-dir-bar work-dir-bar-locked" :title="t('chat.workDirLocked')">
+        <n-icon size="14"><LockClosedOutline /></n-icon>
+        <span class="work-dir-path">{{ chatStore.currentWorkDir }}</span>
+      </div>
+      <!-- 系统默认目录（尚未由用户设置）：可浏览/清除 -->
+      <div v-else-if="chatStore.currentWorkDir" class="work-dir-bar" @click="handleWorkDirMenu('browse')">
         <n-icon size="14"><FolderOpenOutline /></n-icon>
         <span class="work-dir-path">{{ chatStore.currentWorkDir }}</span>
         <n-button text size="tiny" @click.stop="clearWorkDir">
           <template #icon><n-icon><CloseCircleOutline /></n-icon></template>
         </n-button>
       </div>
+      <!-- 未设置：可设置工作目录 -->
       <div v-else class="work-dir-bar work-dir-bar-empty">
         <n-button text size="tiny" @click="handleWorkDirMenu('browse')">
           <template #icon><n-icon size="14"><FolderOpenOutline /></n-icon></template>
@@ -461,7 +468,7 @@ import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -862,16 +869,27 @@ async function createNewFolder() {
 
 async function handleWorkDirMenu(key: string) {
   if (key === 'browse') {
+    // 已锁定的会话不再允许重新选择目录
+    if (chatStore.currentWorkDirUserSet) return
     showDirPicker.value = true
     await loadDirs(chatStore.currentWorkDir || undefined)
   } else if (key === 'set') {
     if (!chatStore.activeSessionId || !dirCurrentPath.value) return
-    await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
-    message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
+    try {
+      await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
+      showDirPicker.value = false
+      message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
+    } catch (e: any) {
+      message.error(e?.message || t('chat.workDirLocked'))
+    }
   } else if (key === 'clear') {
     if (chatStore.activeSessionId) {
-      await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
-      message.success(t('chat.workDirCleared'))
+      try {
+        await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
+        message.success(t('chat.workDirCleared'))
+      } catch (e: any) {
+        message.error(e?.message || t('chat.workDirLocked'))
+      }
     }
   }
 }
@@ -879,7 +897,8 @@ async function handleWorkDirMenu(key: string) {
 function clearWorkDir() {
   if (chatStore.activeSessionId) {
     chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
-    message.success(t('chat.workDirCleared'))
+      .then(() => message.success(t('chat.workDirCleared')))
+      .catch((e: any) => message.error(e?.message || t('chat.workDirLocked')))
   }
 }
 
@@ -1961,5 +1980,10 @@ onMounted(async () => {
 
 .work-dir-bar-empty {
   padding-left: 8px;
+}
+
+.work-dir-bar-locked {
+  cursor: default;
+  opacity: 0.85;
 }
 </style>

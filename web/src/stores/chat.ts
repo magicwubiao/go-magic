@@ -394,15 +394,13 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function updateSessionWorkDir(id: string, workDir: string): Promise<void> {
-    try {
-      await sessionsApi.updateSessionWorkDir(id, workDir)
-      const session = sessions.value.find(s => s.id === id)
-      if (session) {
-        session.work_dir = workDir
-        session.work_dir_user_set = true
-      }
-    } catch (e) {
-      console.error('Failed to update working directory:', e)
+    // 直接透传后端错误，调用方负责提示。后端在 work_dir 已被用户设置后会拒绝修改。
+    await sessionsApi.updateSessionWorkDir(id, workDir)
+    const session = sessions.value.find(s => s.id === id)
+    if (session) {
+      session.work_dir = workDir
+      // 仅在设置非空目录时锁定；清空时解除用户设置标记
+      session.work_dir_user_set = workDir !== ''
     }
   }
 
