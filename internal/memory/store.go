@@ -250,33 +250,42 @@ func (s *Store) Store(m *Memory) error {
 
 // Recall searches for relevant memories based on query
 func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
-	// Recall only reads from the DB, so use the read lock for better
-	// concurrency between parallel Recall/Search calls.
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if limit <= 0 {
 		limit = 10
 	}
 
-	typeFilter := ""
-	if len(memoryTypes) > 0 {
-		types := make([]string, len(memoryTypes))
-		for i, t := range memoryTypes {
-			types[i] = fmt.Sprintf("'%s'", t)
-		}
-		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(types, ", "))
+	// 先用读锁读取记忆，避免在读锁下执行写操作破坏锁语义
+	s.mu.RLock()
+	memories, err := s.queryRecall(query, limit, memoryTypes...)
+	s.mu.RUnlock()
+	if err != nil {
+		return nil, err
 	}
 
-	// Use FTS5 for search
-	ftsQuery := query
-	if ftsQuery != "" {
-		// Escape special FTS5 characters and add prefix matching
-		ftsQuery = fmt.Sprintf("\"%s\"*", strings.ReplaceAll(ftsQuery, "\"", "\"\""))
+	// 释放读锁后，再批量更新访问统计（内部持写锁）
+	s.batchUpdateAccess(memories)
+	return memories, nil
+}
+
+// queryRecall 执行 FTS5 检索，不持锁（由调用方持锁），也不更新访问统计
+func (s *Store) queryRecall(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	// 用参数化占位符构造 type 过滤条件，避免 SQL 注入
+	typeFilter := ""
+	typeArgs := []interface{}{}
+	if len(memoryTypes) > 0 {
+		placeholders := make([]string, len(memoryTypes))
+		for i, t := range memoryTypes {
+			placeholders[i] = "?"
+			typeArgs = append(typeArgs, t)
+		}
+		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(placeholders, ", "))
 	}
+
+	// 用 FTS5 检索
+	ftsQuery := sanitizeFTSQuery(query)
 
 	sqlQuery := fmt.Sprintf(`
-		SELECT m.id, m.type, m.content, m.scope, m.categories, m.importance, 
+		SELECT m.id, m.type, m.content, m.scope, m.categories, m.importance,
 			   m.metadata, m.created_at, m.updated_at, m.last_access, m.access_count,
 			   m.session_id, m.source,
 			   bm25(memories_fts) as rank
@@ -288,30 +297,38 @@ func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*M
 		LIMIT ?
 	`, typeFilter)
 
-	rows, err := s.db.Query(sqlQuery, ftsQuery, limit)
+	// 参数顺序：MATCH ? , type IN (?,?,?) , LIMIT ?
+	args := []interface{}{ftsQuery}
+	args = append(args, typeArgs...)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
-		// Fallback to LIKE search if FTS fails
-		return s.recallFallback(query, limit, memoryTypes...)
+		// FTS 失败时回退到 LIKE 检索
+		return s.queryRecallFallback(query, limit, memoryTypes...)
 	}
 	defer rows.Close()
 
 	return s.scanMemories(rows)
 }
 
-// recallFallback uses LIKE for basic search when FTS fails
-func (s *Store) recallFallback(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+// queryRecallFallback 在 FTS 失败时用 LIKE 进行基础检索，不持锁，也不更新访问统计
+func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	// 用参数化占位符构造 type 过滤条件，避免 SQL 注入
 	typeFilter := ""
+	typeArgs := []interface{}{}
 	if len(memoryTypes) > 0 {
-		types := make([]string, len(memoryTypes))
+		placeholders := make([]string, len(memoryTypes))
 		for i, t := range memoryTypes {
-			types[i] = fmt.Sprintf("'%s'", t)
+			placeholders[i] = "?"
+			typeArgs = append(typeArgs, t)
 		}
-		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(types, ", "))
+		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
 	likeQuery := "%" + query + "%"
 	sqlQuery := fmt.Sprintf(`
-		SELECT id, type, content, scope, categories, importance, 
+		SELECT id, type, content, scope, categories, importance,
 			   metadata, created_at, updated_at, last_access, access_count,
 			   session_id, source
 		FROM memories
@@ -321,7 +338,12 @@ func (s *Store) recallFallback(query string, limit int, memoryTypes ...MemoryTyp
 		LIMIT ?
 	`, typeFilter)
 
-	rows, err := s.db.Query(sqlQuery, likeQuery, likeQuery, likeQuery, limit)
+	// 参数顺序：LIKE ? , LIKE ? , LIKE ? , type IN (?,?,?) , LIMIT ?
+	args := []interface{}{likeQuery, likeQuery, likeQuery}
+	args = append(args, typeArgs...)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +357,7 @@ func (s *Store) Search(query string, limit int) ([]*Memory, error) {
 	return s.Recall(query, limit)
 }
 
-// scanMemories scans rows into Memory structs
+// scanMemories scans rows into Memory structs（仅扫描行，不更新访问统计）
 func (s *Store) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 	var memories []*Memory
 	for rows.Next() {
@@ -357,13 +379,57 @@ func (s *Store) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 		m.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 		m.LastAccess, _ = time.Parse(time.RFC3339, lastAccess)
 
-		// Update access stats
-		s.db.Exec("UPDATE memories SET last_access = ?, access_count = access_count + 1 WHERE id = ?",
-			time.Now().UTC().Format(time.RFC3339), m.ID)
-
 		memories = append(memories, m)
 	}
 	return memories, nil
+}
+
+// batchUpdateAccess 批量更新记忆的最后访问时间和访问次数，持写锁
+func (s *Store) batchUpdateAccess(memories []*Memory) {
+	if len(memories) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	placeholders := make([]string, len(memories))
+	args := make([]interface{}, 0, len(memories)+1)
+	// 参数顺序：SET last_access = ? , WHERE id IN (?,?,?)
+	args = append(args, time.Now().UTC().Format(time.RFC3339))
+	for i, m := range memories {
+		placeholders[i] = "?"
+		args = append(args, m.ID)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE memories SET last_access = ?, access_count = access_count + 1
+		WHERE id IN (%s)
+	`, strings.Join(placeholders, ", "))
+	if _, err := s.db.Exec(query, args...); err != nil {
+		log.Warnf("batch update access stats failed: %v", err)
+	}
+}
+
+// sanitizeFTSQuery 对 FTS5 查询进行转义与清理：
+//   - 移除控制字符（< 0x20 的 rune 替换为空格）
+//   - 双引号转义为 ""
+//   - 用双引号包裹整个查询作为短语匹配
+//   - 末尾加 * 做前缀匹配
+func sanitizeFTSQuery(query string) string {
+	if query == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range query {
+		if r < 0x20 {
+			b.WriteRune(' ')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	cleaned := b.String()
+	escaped := strings.ReplaceAll(cleaned, "\"", "\"\"")
+	return "\"" + escaped + "\"*"
 }
 
 // List returns all memories, optionally filtered by type
@@ -533,10 +599,8 @@ func (s *Store) ReadAgentMemory() (string, error) {
 
 // WriteAgentMemory writes to the Cortex-style agent memory file
 func (s *Store) WriteAgentMemory(content string) error {
-	// Enforce character limit
-	if len(content) > s.config.MaxAgentMemLength {
-		content = content[:s.config.MaxAgentMemLength]
-	}
+	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
+	content = truncateString(content, s.config.MaxAgentMemLength)
 	return os.WriteFile(s.agentMemoryPath, []byte(content), 0644)
 }
 
@@ -551,9 +615,8 @@ func (s *Store) ReadUserMemory() (string, error) {
 
 // WriteUserMemory writes to the Cortex-style user profile file
 func (s *Store) WriteUserMemory(content string) error {
-	if len(content) > s.config.MaxUserMemLength {
-		content = content[:s.config.MaxUserMemLength]
-	}
+	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
+	content = truncateString(content, s.config.MaxUserMemLength)
 	return os.WriteFile(s.userMemoryPath, []byte(content), 0644)
 }
 
@@ -570,7 +633,8 @@ func (s *Store) AppendAgentMemory(content string) error {
 		// Simple truncation - keep the newer content
 		available := s.config.MaxAgentMemLength - len(content) - 10
 		if available > 100 {
-			current = current[:available] + "\n...\n"
+			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
+			current = truncateString(current, available) + "\n...\n"
 		}
 		newContent = current + content + "\n"
 	}
@@ -589,7 +653,8 @@ func (s *Store) AppendUserMemory(content string) error {
 	if len(newContent) > s.config.MaxUserMemLength {
 		available := s.config.MaxUserMemLength - len(content) - 10
 		if available > 100 {
-			current = current[:available] + "\n...\n"
+			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
+			current = truncateString(current, available) + "\n...\n"
 		}
 		newContent = current + content + "\n"
 	}
@@ -632,8 +697,8 @@ func (s *Store) Close() error {
 func generateID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// 回退到时间戳
-		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano())
+		// 回退到时间戳+进程号，避免两次相同时间戳造成碰撞
+		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
 	}
 	return hex.EncodeToString(b)
 }
@@ -658,25 +723,35 @@ func (s *Store) Stats() (*MemoryStats, error) {
 		ByType: make(map[MemoryType]int),
 	}
 
-	// Total count
-	s.db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&stats.TotalMemories)
+	// 总数
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&stats.TotalMemories); err != nil {
+		return nil, fmt.Errorf("failed to query total memories: %w", err)
+	}
 
-	// By type
+	// 按类型分组
 	rows, err := s.db.Query("SELECT type, COUNT(*) FROM memories GROUP BY type")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query memories by type: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var t MemoryType
 		var count int
-		rows.Scan(&t, &count)
+		if err := rows.Scan(&t, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan memory type row: %w", err)
+		}
 		stats.ByType[t] = count
 	}
 
-	// Average importance
-	s.db.QueryRow("SELECT AVG(importance) FROM memories").Scan(&stats.AvgImportance)
+	// 平均重要度（空表时 AVG 返回 NULL，用 sql.NullFloat64 接收）
+	var avg sql.NullFloat64
+	if err := s.db.QueryRow("SELECT AVG(importance) FROM memories").Scan(&avg); err != nil {
+		return nil, fmt.Errorf("failed to query average importance: %w", err)
+	}
+	if avg.Valid {
+		stats.AvgImportance = avg.Float64
+	}
 
 	return stats, nil
 }

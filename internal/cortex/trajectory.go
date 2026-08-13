@@ -178,13 +178,14 @@ func (ts *TrajectoryStore) learnPattern(trajectory *Trajectory) {
 			// Update existing pattern
 			ts.patterns[i].Occurrences++
 			ts.patterns[i].LastSeen = time.Now()
-			// Update success rate
+			// 增量更新成功率：新成功率 = (旧成功率×(total-1) + 本次结果) / total
+			// 成功本次结果记 1，失败记 0
 			total := float64(ts.patterns[i].Occurrences)
+			outcome := 0.0
 			if trajectory.Success {
-				ts.patterns[i].SuccessRate = (ts.patterns[i].SuccessRate*(total-1) + 1) / total
-			} else {
-				ts.patterns[i].SuccessRate = ts.patterns[i].SuccessRate * (total - 1) / total
+				outcome = 1.0
 			}
+			ts.patterns[i].SuccessRate = (ts.patterns[i].SuccessRate*(total-1) + outcome) / total
 			ts.savePattern(&ts.patterns[i])
 			return
 		}
@@ -262,6 +263,86 @@ func (ts *TrajectoryStore) evictOldTrajectories() {
 	}
 
 	ts.trajectories = ts.trajectories[toRemove:]
+
+	// 被删除轨迹衍生的 pattern 仍会残留，这里基于剩余轨迹重新计算 pattern 统计，
+	// 并清理无任何剩余轨迹支撑的 pattern。
+	ts.recomputePatterns()
+}
+
+// recomputePatterns 基于当前剩余轨迹重新计算 pattern 的 Occurrences 与 SuccessRate，
+// 并清理无任何剩余轨迹支撑的 pattern 及其磁盘文件。
+func (ts *TrajectoryStore) recomputePatterns() {
+	type agg struct {
+		occurrences int
+		successes   int
+		lastSeen    time.Time
+		toolSeq     []string
+	}
+	aggMap := make(map[string]*agg)
+
+	for i := range ts.trajectories {
+		t := &ts.trajectories[i]
+		if len(t.Steps) < 2 {
+			continue
+		}
+		var toolSeq []string
+		toolSeq = append(toolSeq, t.Steps[0].ToolName)
+		for _, step := range t.Steps[1:] {
+			toolSeq = append(toolSeq, step.ToolName)
+		}
+		key := joinToolSequence(toolSeq)
+		a, ok := aggMap[key]
+		if !ok {
+			a = &agg{toolSeq: toolSeq}
+			aggMap[key] = a
+		}
+		a.occurrences++
+		if t.Success {
+			a.successes++
+		}
+		if t.EndTime.After(a.lastSeen) {
+			a.lastSeen = t.EndTime
+		}
+	}
+
+	// 重建 patterns，保留原 pattern 的 SkillName（若有）
+	newPatterns := make([]TrajectoryPattern, 0, len(aggMap))
+	for key, a := range aggMap {
+		var successRate float64
+		if a.occurrences > 0 {
+			successRate = float64(a.successes) / float64(a.occurrences)
+		}
+		pattern := TrajectoryPattern{
+			ID:           generatePatternID(key),
+			Pattern:      key,
+			ToolSequence: a.toolSeq,
+			SuccessRate:  successRate,
+			Occurrences:  a.occurrences,
+			LastSeen:     a.lastSeen,
+		}
+		for _, old := range ts.patterns {
+			if old.Pattern == key && old.SkillName != "" {
+				pattern.SkillName = old.SkillName
+				break
+			}
+		}
+		newPatterns = append(newPatterns, pattern)
+		ts.savePattern(&pattern)
+	}
+
+	// 删除不再有剩余轨迹支撑的 pattern 磁盘文件
+	newKeys := make(map[string]bool, len(newPatterns))
+	for _, p := range newPatterns {
+		newKeys[p.Pattern] = true
+	}
+	for _, old := range ts.patterns {
+		if !newKeys[old.Pattern] {
+			path := filepath.Join(ts.patternDir, old.ID+".json")
+			os.Remove(path)
+		}
+	}
+
+	ts.patterns = newPatterns
 }
 
 // GetTrajectories returns all trajectories

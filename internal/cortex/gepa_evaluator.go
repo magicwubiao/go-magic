@@ -2,6 +2,7 @@ package cortex
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -133,12 +134,18 @@ func (e *EffectivenessEvaluator) estimateOptimalTurns(task string) int {
 	// Simple heuristic based on task complexity indicators
 	task = strings.ToLower(task)
 
-	// Count complexity indicators
+	// Count complexity indicators（中英文词表，避免只识别英文连接词）
 	complexity := 1
 	indicators := []string{
 		"and", "then", "also", "additionally",
 		"analyze", "compare", "evaluate",
 		"multiple", "several", "various",
+		// 中文复杂度词表（连接词与顺序词，避免中文任务恒得 2 轮最优）
+		"然后", "接着", "并且", "之后", "以及",
+		"此外", "另外", "同时",
+		"首先", "其次", "最后",
+		"分析", "比较", "评估",
+		"多个", "若干", "各种",
 	}
 
 	for _, indicator := range indicators {
@@ -211,18 +218,31 @@ func isAppropriateTool(toolName, input string) bool {
 	toolName = strings.ToLower(toolName)
 	input = strings.ToLower(input)
 
-	// Tool-specific checks
+	// 工具-输入关键词映射，与 internal/tool/registry.go 注册的实际工具名对齐
 	toolChecks := map[string][]string{
-		"read_file":       {"file", "path", ".go", ".md", ".txt"},
-		"write_file":      {"file", "path", "content"},
-		"web_search":      {"search", "query", "find"},
-		"web_fetch":       {"url", "http", "fetch"},
-		"execute_command": {"command", "run", "execute"},
+		"read_file":        {"file", "path", ".go", ".md", ".txt", ".json", ".yaml", ".yml"},
+		"write_file":       {"file", "path", "content"},
+		"file_edit":        {"file", "path", "old", "new"},
+		"list_files":       {"dir", "directory", "path", "folder"},
+		"search_in_files":  {"search", "pattern", "find", "grep"},
+		"directory_tree":   {"dir", "directory", "path", "tree"},
+		"web_search":       {"search", "query", "find"},
+		"web_fetch":        {"url", "http", "fetch"},
+		"web_select":       {"url", "select", "css", "selector"},
+		"execute_command":  {"command", "run", "execute", "cmd"},
+		"execute_code":     {"code", "language", "python", "javascript"},
+		"memory_store":     {"key", "value", "store", "memory"},
+		"memory_recall":    {"key", "query", "recall", "memory"},
+		"browser_navigate": {"url", "http", "navigate"},
+		"browser_click":    {"click", "selector", "element"},
+		"browser_type":     {"type", "input", "text", "selector"},
+		"browser_snapshot": {"snapshot", "page", "screenshot"},
 	}
 
 	checks, exists := toolChecks[toolName]
 	if !exists {
-		return true // Unknown tool, assume appropriate
+		// 未知工具默认不判定为合适，避免 tool_accuracy 恒为 1.0
+		return false
 	}
 
 	// Check if input contains relevant keywords
@@ -282,18 +302,13 @@ func (e *EffectivenessEvaluator) GetTopPerformers(
 	scores []EffectivenessScore,
 	n int,
 ) []EffectivenessScore {
-	// Sort by overall score (descending)
+	// Sort by overall score (descending) using stdlib sort.Slice instead of O(n^2) bubble sort
 	sorted := make([]EffectivenessScore, len(scores))
 	copy(sorted, scores)
 
-	// Simple bubble sort for small datasets
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i].OverallScore < sorted[j].OverallScore {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].OverallScore > sorted[j].OverallScore
+	})
 
 	if n > len(sorted) {
 		n = len(sorted)

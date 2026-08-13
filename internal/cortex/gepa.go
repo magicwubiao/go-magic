@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -200,9 +201,26 @@ func (g *GEPAEngine) evolutionLoop(ctx context.Context) {
 
 // evolve performs one evolution iteration
 func (g *GEPAEngine) evolve(ctx context.Context) error {
+	// 阶段 (a)：持锁读取当前代数据并拷贝到局部变量，然后立即解锁，
+	// 避免在阶段 (b) 的 LLM 网络调用期间长时间持锁阻塞其它读操作。
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	currentGen := g.currentGen
+	populationSize := g.populationSize
+	convergenceThreshold := g.convergenceThreshold
+	prevGenerationsCount := len(g.generations)
+	var prevBestFitness float64
+	prevBestExists := false
+	if prevGenerationsCount > 0 {
+		prevBest := g.generations[prevGenerationsCount-1].BestStrategy
+		if prevBest != nil {
+			prevBestFitness = prevBest.Fitness
+			prevBestExists = true
+		}
+	}
+	g.mu.Unlock()
 
+	// 阶段 (b)：不持锁执行耗时操作（含 LLM 网络调用）。
+	// trajectoryStore 内部已有自己的锁，无需 g.mu 保护。
 	// 1. Collect recent trajectories
 	trajectories := g.trajectoryStore.GetTrajectories(100)
 	if len(trajectories) < 3 {
@@ -212,8 +230,8 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 	// 2. Evaluate effectiveness
 	scores := g.evaluator.EvaluateBatch(trajectories)
 
-	// 3. Generate optimization strategies
-	strategies, err := g.generator.GenerateStrategies(ctx, scores, g.populationSize)
+	// 3. Generate optimization strategies（LLM 调用，不持锁）
+	strategies, err := g.generator.GenerateStrategies(ctx, scores, populationSize)
 	if err != nil {
 		return err
 	}
@@ -225,19 +243,23 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 
 	// 5. Select best strategy
 	best := g.selectBestStrategy(strategies)
-
-	// 6. Calculate improvement
-	improvement := 0.0
-	if len(g.generations) > 0 {
-		prevBest := g.generations[len(g.generations)-1].BestStrategy
-		if prevBest != nil {
-			improvement = best.Fitness - prevBest.Fitness
-		}
+	if best == nil {
+		return nil
 	}
+
+	// 6. Calculate improvement（基于阶段 (a) 读取的上一代最优 fitness）
+	improvement := 0.0
+	if prevBestExists {
+		improvement = best.Fitness - prevBestFitness
+	}
+
+	// 阶段 (c)：重新持锁写回结果
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
 	// 7. Create new generation
 	gen := Generation{
-		ID:           g.currentGen + 1,
+		ID:           currentGen + 1,
 		Timestamp:    time.Now(),
 		Strategies:   strategies,
 		BestStrategy: best,
@@ -246,7 +268,7 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 	}
 
 	// 8. Check convergence
-	if improvement < g.convergenceThreshold && len(g.generations) > 50 {
+	if improvement < convergenceThreshold && len(g.generations) > 50 {
 		g.isConverged = true
 	}
 
@@ -264,54 +286,114 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 
 // ApplyBestStrategy applies the best strategy to the system
 func (g *GEPAEngine) ApplyBestStrategy(soul *SoulManager, systemPrompt string) (string, error) {
+	// 读锁取 best 指针
 	g.mu.RLock()
-	best := g.bestStrategy
+	bestPtr := g.bestStrategy
 	g.mu.RUnlock()
 
-	if best == nil {
+	if bestPtr == nil {
 		return systemPrompt, nil
 	}
 
-	// Apply strategy using optimizer
-	optimized, err := g.optimizer.Optimize(systemPrompt, best.Changes)
+	// 拷贝一份再修改，避免直接写共享对象导致数据竞争，
+	// 同时不污染 generations 历史中保存的同源 BestStrategy 指针。
+	bestCopy := *bestPtr
+
+	// Apply strategy using optimizer（不持锁，避免长耗时操作阻塞引擎）
+	optimized, err := g.optimizer.Optimize(systemPrompt, bestCopy.Changes)
 	if err != nil {
 		return systemPrompt, err
 	}
 
-	// Mark as applied
+	// 修改副本并取写锁写回
 	now := time.Now()
-	best.Applied = true
-	best.AppliedAt = &now
+	bestCopy.Applied = true
+	bestCopy.AppliedAt = &now
+
+	g.mu.Lock()
+	g.bestStrategy = &bestCopy
+	g.mu.Unlock()
 
 	return optimized, nil
 }
 
 // evaluateStrategyFitness evaluates a strategy's potential fitness
 func (g *GEPAEngine) evaluateStrategyFitness(strategy *OptimizationStrategy, scores []EffectivenessScore) float64 {
-	// Base fitness on average effectiveness
+	// 基础分：平均效果分
 	avgScore := 0.0
-	for _, s := range scores {
-		avgScore += s.OverallScore
+	if len(scores) > 0 {
+		for _, s := range scores {
+			avgScore += s.OverallScore
+		}
+		avgScore /= float64(len(scores))
 	}
-	avgScore /= float64(len(scores))
 
-	// Adjust based on strategy type
+	// 基于策略 changes 的实际内容计算差异化 fitness，使不同策略 fitness 不同，
+	// 让 selection 真正有意义（避免所有策略 fitness 仅由 avgScore 决定的"假进化"）。
+	changesScore := 0.0
+	totalContentLen := 0
+	actionKeywordHits := 0
+	// 中英文动作/优化关键词词表
+	actionKeywords := []string{
+		"add", "modify", "improve", "optimize", "enhance", "refine",
+		"remove", "reorder", "fix", "clarify",
+		"增加", "修改", "改进", "优化", "增强", "完善",
+		"删除", "调整", "修复", "明确", "简化", "重排",
+	}
+	for _, c := range strategy.Changes {
+		// 把可评估文本拼到一起做关键词密度统计
+		text := strings.ToLower(c.NewContent + " " + c.Reason + " " + c.Section)
+		totalContentLen += len(c.NewContent)
+		for _, kw := range actionKeywords {
+			if strings.Contains(text, kw) {
+				actionKeywordHits++
+			}
+		}
+	}
+
+	// changes 数量贡献：1~5 个较为合理
+	changeCount := len(strategy.Changes)
+	switch {
+	case changeCount == 0:
+		// 没有 changes 的策略无意义，大幅降权
+		changesScore = 0.1
+	case changeCount <= 5:
+		changesScore = 0.1 + 0.03*float64(changeCount)
+	default:
+		// 过多 changes 视为过度复杂，递减
+		changesScore = 0.25 - 0.02*float64(changeCount-5)
+		if changesScore < 0.05 {
+			changesScore = 0.05
+		}
+	}
+
+	// 内容实质度：基于 NewContent 字符长度（对数压缩，避免长文本主导）
+	if totalContentLen > 0 {
+		changesScore += math.Min(0.2, math.Log2(float64(totalContentLen+1))/50.0)
+	}
+
+	// 关键词密度贡献
+	if changeCount > 0 {
+		density := float64(actionKeywordHits) / float64(changeCount)
+		changesScore += math.Min(0.15, density*0.05)
+	}
+
+	// 按目标类型加权
 	multiplier := 1.0
 	switch strategy.Target {
 	case "soul":
-		multiplier = 1.2 // Personality changes have high impact
+		multiplier = 1.2 // 人格调整影响较大
 	case "system":
 		multiplier = 1.1
 	case "skills":
 		multiplier = 1.0
 	}
 
-	// Adjust based on number of changes
-	if len(strategy.Changes) > 5 {
-		multiplier *= 0.9 // Penalize overly complex strategies
+	fitness := (avgScore + changesScore) * multiplier
+	if fitness < 0 {
+		fitness = 0
 	}
-
-	return avgScore * multiplier
+	return fitness
 }
 
 // selectBestStrategy selects the best strategy from a population
@@ -423,6 +505,12 @@ func (g *GEPAEngine) loadGenerations() {
 			g.bestStrategy = gen.BestStrategy
 		}
 	}
+
+	// 加载后按 generation ID 升序排序，确保 generations[len-1] 为最新代。
+	// os.ReadDir 返回顺序不确定，不排序会导致末尾元素不一定是最新代。
+	sort.Slice(g.generations, func(i, j int) bool {
+		return g.generations[i].ID < g.generations[j].ID
+	})
 }
 
 // Reset resets the GEPA engine

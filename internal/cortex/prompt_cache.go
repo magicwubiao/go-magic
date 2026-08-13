@@ -127,6 +127,9 @@ func (pc *PromptCache) AddCacheBreak(key string, messageIndex int64) error {
 
 // BuildMessagesWithCache builds messages with cache control hints
 // Returns messages with cache_control metadata for providers that support it
+//
+// 注意：不再向 system 消息追加 `<!-- cached: key -->` 注释——该注释纯增 token
+// 且无实际用途。缓存键仍通过返回值供调用方统计命中，但不修改消息内容。
 func (pc *PromptCache) BuildMessagesWithCache(
 	systemPrefix string,
 	memoryCtx string,
@@ -136,17 +139,17 @@ func (pc *PromptCache) BuildMessagesWithCache(
 	// Combine prefix content
 	prefixContent := systemPrefix + "\n\n" + memoryCtx + "\n\n" + userCtx
 
-	// Get or create cache key
+	// Get or create cache key（仅用于命中统计，不注入消息）
 	key, err := pc.CachePrefix(context.Background(), prefixContent)
 	if err != nil {
 		return nil, "", err
 	}
 
-	// Build messages with cache headers
+	// Build messages without appending cache comments（避免反增 token）
 	messages := []provider.Message{
 		{
 			Role:    "system",
-			Content: prefixContent + "\n<!-- cached: " + key + " -->",
+			Content: prefixContent,
 		},
 	}
 

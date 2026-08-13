@@ -1,8 +1,8 @@
 package cortex
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +16,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/review"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/trigger"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // Manager integrates all Cortex Agent systems with Hermes Agent-inspired features:
@@ -69,6 +70,17 @@ type Manager struct {
 	// This prevents re-analyzing the same accumulated tool calls on every
 	// turn, which would inflate pattern frequencies.
 	lastAnalyzedToolIdx int
+
+	// 结构化记忆存储（与 FTSMemory 双写，保持数据一致）
+	memoryStore *memory.Store
+	// LLM 记忆抽取器（抽取失败时回退到行匹配）
+	memoryExtractor *memory.MemoryExtractor
+
+	// 启动期初始化失败的子系统及错误信息（用于 GetSystemStatus 区分未初始化与初始化失败）
+	initFailures map[string]string
+
+	// GEPA 最优策略应用循环的取消函数
+	gepaApplyCancel context.CancelFunc
 }
 
 // ManagerConfig holds configuration for Cortex systems
@@ -196,6 +208,13 @@ func (m *Manager) IsEnabled() bool {
 	return m.enabled
 }
 
+// GetTrajectoryStore returns the Manager's TrajectoryStore, or nil if not initialized.
+// 外部调用方（如 agent）应优先通过此方法复用 Manager 的 TrajectoryStore，
+// 避免创建独立实例导致两套轨迹数据互不可见。
+func (m *Manager) GetTrajectoryStore() *TrajectoryStore {
+	return m.TrajectoryStore
+}
+
 // setupConnections wires the six systems together
 func (m *Manager) setupConnections() {
 	// Skip if cortex is disabled
@@ -203,12 +222,36 @@ func (m *Manager) setupConnections() {
 		return
 	}
 
-	// Trigger -> Review: Nudge triggers background review
+	// Trigger -> Review: Nudge 触发后台评审
 	m.Trigger.RegisterNudgeHandler(func() {
 		turnCount := m.Trigger.GetTurnCount()
 		// In a real implementation, we would pass actual tool call history
 		m.Review.TriggerNudgeReview(turnCount, []string{}, nil)
+
+		// Soul <-> UserProfile: 在 nudge 时把高置信度用户偏好同步到 SOUL，
+		// 实现两个系统间的偏好数据共享
+		m.syncPreferencesToSoul()
 	})
+
+	// 注：Trajectory -> GEPA 的接线在 Start() 中通过
+	// NewGEPAEngine(cortexDir, provider, TrajectoryStore) 完成（二者在构造期才可用），
+	// 此处无法提前接线；最优策略应用循环亦在 Start() 中启动。
+}
+
+// syncPreferencesToSoul 将 UserProfile 中高置信度偏好同步到 SOUL.md，实现 Soul↔UserProfile 偏好共享
+func (m *Manager) syncPreferencesToSoul() {
+	if m.Soul == nil || m.UserProfile == nil {
+		return
+	}
+	prefs := m.UserProfile.GetHighConfidence(0.7)
+	if len(prefs) == 0 {
+		return
+	}
+	var sb strings.Builder
+	for _, p := range prefs {
+		sb.WriteString("- " + p.Key + ": " + p.Value + "\n")
+	}
+	_ = m.Soul.UpdateFromFeedback(sb.String())
 }
 
 // BindSkillsManager connects the cortex skill auto creator to the skills Manager
@@ -230,14 +273,35 @@ func (m *Manager) Start() error {
 	// baseDir is already the cortex directory
 	cortexDir := m.baseDir
 
+	// 初始化失败记录表（用于 GetSystemStatus 区分 not_initialized / init_failed）
+	m.initFailures = make(map[string]string)
+
 	// System 4: Load frozen snapshot from disk
 	if err := m.Snapshot.Load(); err != nil {
 		return err
 	}
 
-	// System 5: Initialize FTS holographic memory (best effort)
+	// System 5: Initialize FTS holographic memory (best effort，失败不再静默吞错)
 	if fts, err := memory.NewFTSStore(filepath.Join(cortexDir, "fts")); err == nil {
 		m.FTSMemory = fts
+	} else {
+		log.Warnf("[Cortex] FTS memory init failed: %v", err)
+		m.recordInitFailure("fts_memory", err)
+	}
+
+	// 初始化结构化记忆 Store（与 FTSStore 双写，保持数据一致）
+	memCfg := memory.DefaultConfig()
+	memCfg.DBPath = filepath.Join(cortexDir, "memories", "memory.db")
+	if ms, err := memory.NewStore(memCfg); err == nil {
+		m.memoryStore = ms
+	} else {
+		log.Warnf("[Cortex] memory Store init failed: %v", err)
+		m.recordInitFailure("memory_store", err)
+	}
+
+	// 初始化 LLM 记忆抽取器（需要 provider 与 Store，行匹配作为 fallback）
+	if m.memoryStore != nil && m.provider != nil {
+		m.memoryExtractor = memory.NewMemoryExtractor(m.provider, m.memoryStore, memory.DefaultMemoryExtractorConfig())
 	}
 
 	// System 3: Start background review system
@@ -255,29 +319,109 @@ func (m *Manager) Start() error {
 		return err
 	}
 
-	// NEW: Initialize Prompt Cache
+	// NEW: Initialize Prompt Cache（失败不再静默吞错）
 	if m.provider != nil {
 		pc, err := NewPromptCache(m.provider, filepath.Join(cortexDir, "prompt_cache"))
 		if err == nil {
 			m.PromptCache = pc
+		} else {
+			log.Warnf("[Cortex] PromptCache init failed: %v", err)
+			m.recordInitFailure("prompt_cache", err)
 		}
 	}
 
-	// NEW: Initialize Trajectory Store
-	ts, err := NewTrajectoryStore(cortexDir)
-	if err == nil {
+	// NEW: Initialize Trajectory Store（失败不再静默吞错）
+	if ts, err := NewTrajectoryStore(cortexDir); err == nil {
 		m.TrajectoryStore = ts
+	} else {
+		log.Warnf("[Cortex] TrajectoryStore init failed: %v", err)
+		m.recordInitFailure("trajectory_store", err)
 	}
 
-	// NEW: Initialize GEPA Engine (self-evolution)
+	// NEW: Initialize GEPA Engine (self-evolution)（Trajectory→GEPA 接线；失败不再静默吞错）
 	if m.provider != nil && m.TrajectoryStore != nil {
 		gepa := NewGEPAEngine(cortexDir, m.provider, m.TrajectoryStore)
 		if err := gepa.Start(nil); err == nil {
 			m.GEPAEngine = gepa
+		} else {
+			log.Warnf("[Cortex] GEPA engine init failed: %v", err)
+			m.recordInitFailure("gepa_engine", err)
 		}
 	}
 
+	// 启动 GEPA 最优策略定期应用循环（将最优策略写入 SOUL.md）
+	m.startGEPAStrategyApplier()
+
 	return nil
+}
+
+// Stop 停止 Cortex 各后台循环（GEPA 引擎与最优策略应用循环）
+func (m *Manager) Stop() {
+	if m.gepaApplyCancel != nil {
+		m.gepaApplyCancel()
+		m.gepaApplyCancel = nil
+	}
+	if m.GEPAEngine != nil {
+		m.GEPAEngine.Stop()
+	}
+}
+
+// recordInitFailure 记录启动期初始化失败的子系统，供 GetSystemStatus 区分未初始化与初始化失败
+func (m *Manager) recordInitFailure(system string, err error) {
+	if m.initFailures == nil {
+		m.initFailures = make(map[string]string)
+	}
+	if err != nil {
+		m.initFailures[system] = err.Error()
+	}
+}
+
+// initFailed 判断某子系统是否在启动期初始化失败
+func (m *Manager) initFailed(system string) bool {
+	_, ok := m.initFailures[system]
+	return ok
+}
+
+// startGEPAStrategyApplier 启动一个定期循环，将 GEPA 当前最优策略应用到 SOUL.md
+func (m *Manager) startGEPAStrategyApplier() {
+	if m.GEPAEngine == nil || m.Soul == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.gepaApplyCancel = cancel
+	go m.gepaStrategyApplyLoop(ctx)
+}
+
+// gepaStrategyApplyLoop 定期把最优策略应用到 SOUL.md
+func (m *Manager) gepaStrategyApplyLoop(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.applyGEPABestStrategy()
+		}
+	}
+}
+
+// applyGEPABestStrategy 将 GEPA 最优策略应用到 SOUL.md
+func (m *Manager) applyGEPABestStrategy() {
+	if m.GEPAEngine == nil || m.Soul == nil {
+		return
+	}
+	current := m.Soul.GetSoul()
+	optimized, err := m.GEPAEngine.ApplyBestStrategy(m.Soul, current)
+	if err != nil {
+		log.Warnf("[Cortex] GEPA ApplyBestStrategy failed: %v", err)
+		return
+	}
+	if optimized != "" && optimized != current {
+		if err := m.Soul.SetSoul(optimized); err != nil {
+			log.Warnf("[Cortex] SOUL update from GEPA strategy failed: %v", err)
+		}
+	}
 }
 
 // OnUserMessage handles a new user message, triggering:
@@ -364,7 +508,7 @@ func (m *Manager) OnSessionEnd() {
 	if m.SkillCreator != nil {
 		generatedSkills := m.SkillCreator.GetGeneratedSkills()
 		if len(generatedSkills) > 0 {
-			log.Printf("[Cortex] Generated %d new skills from session patterns", len(generatedSkills))
+			log.Infof("[Cortex] Generated %d new skills from session patterns", len(generatedSkills))
 		}
 	}
 
@@ -407,6 +551,15 @@ func (m *Manager) extractAndLearnFromConversation() {
 	userText := userOnly.String()
 	nonSystemText := nonSystem.String()
 
+	// 构造 provider.Message 切片供 LLM 记忆抽取器使用
+	var provMsgs []provider.Message
+	for _, msg := range history {
+		if msg.Role == "system" {
+			continue
+		}
+		provMsgs = append(provMsgs, provider.Message{Role: msg.Role, Content: msg.Content})
+	}
+
 	if m.Soul != nil && m.provider != nil {
 		feedback := m.generateMemoryFeedback(userText)
 		if feedback != "" {
@@ -418,27 +571,59 @@ func (m *Manager) extractAndLearnFromConversation() {
 		m.learnUserPreferences(userText)
 	}
 
-	if m.FTSMemory != nil {
-		m.extractAndStoreMemories(nonSystemText)
+	if m.FTSMemory != nil || m.memoryStore != nil {
+		m.extractAndStoreMemories(provMsgs, nonSystemText)
 	}
 }
 
 // generateMemoryFeedback generates feedback for SOUL.md from conversation
+// 收紧匹配：仅收集明确表达偏好的语句，排除 "I would like" 等非偏好句式，降低误报率
 func (m *Manager) generateMemoryFeedback(conversation string) string {
 	var feedback strings.Builder
 
+	// 非偏好句式：包含这些子串的行即便含 like/always 也不应灌入 SOUL
+	nonPreferenceMarkers := []string{
+		"would like", "i'd like", "id like", "i would like",
+		"would you like", "do you like", "if you like", "as you like",
+		"feel like", "looks like", "sounds like", "something like",
+		"seems like", "like to ask", "like to know", "like to request",
+	}
+
 	lines := strings.Split(conversation, "\n")
 	for _, line := range lines {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "learn from user preferences") ||
-			strings.Contains(lower, "[auto-generated from interactions]") ||
-			strings.HasPrefix(strings.TrimSpace(line), "## Learned Preferences") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
-		if strings.Contains(lower, "prefer") ||
-			strings.Contains(lower, "like") ||
-			strings.Contains(lower, "don't like") ||
-			strings.Contains(lower, "always") {
+		lower := strings.ToLower(line)
+
+		// 跳过自动生成标记，避免把已写入 SOUL 的内容再次回灌
+		if strings.Contains(lower, "learn from user preferences") ||
+			strings.Contains(lower, "[auto-generated from interactions]") ||
+			strings.HasPrefix(trimmed, "## Learned Preferences") {
+			continue
+		}
+
+		// 排除非偏好句式（如 "I would like to..." 这类请求/意愿表达）
+		isNonPreference := false
+		for _, marker := range nonPreferenceMarkers {
+			if strings.Contains(lower, marker) {
+				isNonPreference = true
+				break
+			}
+		}
+		if isNonPreference {
+			continue
+		}
+
+		// 收紧匹配：仅当行明确以偏好/喜好表达开头时才收集
+		if strings.Contains(lower, "i prefer") ||
+			strings.Contains(lower, "i like") ||
+			strings.Contains(lower, "i don't like") ||
+			strings.Contains(lower, "i do not like") ||
+			strings.Contains(lower, "i hate") ||
+			strings.Contains(lower, "i always") ||
+			strings.Contains(lower, "i usually") {
 			feedback.WriteString(line + "\n")
 		}
 	}
@@ -447,62 +632,132 @@ func (m *Manager) generateMemoryFeedback(conversation string) string {
 }
 
 // learnUserPreferences extracts and learns user preferences
+// 支持英文与中文偏好模式匹配
 func (m *Manager) learnUserPreferences(conversation string) {
-	// Simple pattern matching for preferences
+	// 偏好模式（英文 + 中文）
 	preferencePatterns := []struct {
 		pattern string
 		key     string
 	}{
+		// 英文模式
 		{"preferred language", "language"},
 		{"like to use", "tool_preference"},
 		{"usually work with", "work_style"},
 		{"prefer detailed", "response_style"},
 		{"like brief", "response_style"},
+		{"i prefer", "tool_preference"},
+		{"i like to use", "tool_preference"},
+		// 中文模式
+		{"用户喜欢", "tool_preference"},
+		{"用户偏好", "tool_preference"},
+		{"习惯使用", "tool_preference"},
+		{"喜欢用", "tool_preference"},
+		{"偏好语言", "language"},
+		{"喜欢详细", "response_style"},
+		{"喜欢简洁", "response_style"},
+		{"通常使用", "work_style"},
 	}
 
+	// ToLower 不影响中文字符，统一用小写做匹配
+	lower := strings.ToLower(conversation)
 	for _, p := range preferencePatterns {
-		if strings.Contains(strings.ToLower(conversation), p.pattern) {
-			// Extract context around the pattern
-			idx := strings.Index(strings.ToLower(conversation), p.pattern)
-			start := 0
-			if idx-50 > 0 {
-				start = idx - 50
-			}
-			end := len(conversation)
-			if idx+len(p.pattern)+50 < len(conversation) {
-				end = idx + len(p.pattern) + 50
-			}
-			context := strings.TrimSpace(conversation[start:end])
-			_ = m.UserProfile.LearnPreference(p.key, p.pattern, context)
+		if !strings.Contains(lower, p.pattern) {
+			continue
 		}
+		// 提取模式周围的上下文
+		idx := strings.Index(lower, p.pattern)
+		start := 0
+		if idx-50 > 0 {
+			start = idx - 50
+		}
+		end := len(lower)
+		if idx+len(p.pattern)+50 < end {
+			end = idx + len(p.pattern) + 50
+		}
+		context := strings.TrimSpace(lower[start:end])
+		_ = m.UserProfile.LearnPreference(p.key, p.pattern, context)
 	}
 }
 
-// extractAndStoreMemories extracts and stores important information
-func (m *Manager) extractAndStoreMemories(conversation string) {
-	// Store conversation summary as a memory entry
-	memoryTypes := []memory.MemoryType{memory.TypeAgent, memory.TypeKnowledge}
+// extractAndStoreMemories 抽取并存储重要信息
+// 优先使用 LLM 抽取器（internal/memory.MemoryExtractor），失败时回退到行匹配；
+// 同时写入 Store（结构化）与 FTSStore（全文检索），保持两者数据一致
+func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string) {
+	ctx := context.Background()
 
-	for _, memType := range memoryTypes {
-		// Extract key points (simple implementation)
-		lines := strings.Split(conversation, "\n")
-		for _, line := range lines {
-			// Skip very short lines and system messages
-			if len(line) < 20 || strings.HasPrefix(line, "[system]") {
-				continue
+	// 优先使用 LLM 抽取器
+	if m.memoryExtractor != nil && m.provider != nil && len(messages) > 0 {
+		memories, err := m.memoryExtractor.ExtractMemories(ctx, messages, "")
+		if err == nil && len(memories) > 0 {
+			// 写入 Store（结构化存储，含衰减/检索能力）
+			if m.memoryStore != nil {
+				_ = m.memoryExtractor.StoreMemories(memories)
 			}
-			// Store significant lines as memories
-			if strings.Contains(line, "learned") ||
-				strings.Contains(line, "important") ||
-				strings.Contains(line, "remember") {
+			// 同步写入 FTSStore（全文检索）
+			if m.FTSMemory != nil {
+				for _, mem := range memories {
+					_ = m.FTSMemory.Add(memoryRecordFromMemory(mem))
+				}
+			}
+			return
+		}
+		// LLM 抽取失败则回退到行匹配
+		if err != nil {
+			log.Warnf("[Cortex] LLM memory extraction failed, fallback to line matching: %v", err)
+		}
+	}
+
+	// Fallback：简陋行匹配（LLM 不可用或抽取失败时），双写 Store 与 FTSStore
+	m.fallbackLineMatchStore(conversation)
+}
+
+// fallbackLineMatchStore 用简陋行匹配抽取记忆，双写 Store 与 FTSStore
+func (m *Manager) fallbackLineMatchStore(conversation string) {
+	lines := strings.Split(conversation, "\n")
+	for _, line := range lines {
+		// 跳过过短行与系统消息
+		if len(line) < 20 || strings.HasPrefix(line, "[system]") {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "learned") ||
+			strings.Contains(lower, "important") ||
+			strings.Contains(lower, "remember") {
+			// 写入 FTSStore（全文检索）
+			if m.FTSMemory != nil {
 				record := &memory.MemoryRecord{
 					Content:     line,
-					ContentType: string(memType),
+					ContentType: string(memory.TypeKnowledge),
 					Importance:  5,
 				}
 				_ = m.FTSMemory.Add(record)
 			}
+			// 写入 Store（结构化存储）
+			if m.memoryStore != nil {
+				mem := &memory.Memory{
+					Type:       memory.TypeKnowledge,
+					Content:    line,
+					Importance: 0.5,
+					Source:     "fallback",
+				}
+				_ = m.memoryStore.Store(mem)
+			}
 		}
+	}
+}
+
+// memoryRecordFromMemory 将结构化 Memory 转换为 FTSStore 的 MemoryRecord
+// Importance 范围 0-1，MemoryRecord.Importance 为 int，映射到 0-10
+func memoryRecordFromMemory(mem *memory.Memory) *memory.MemoryRecord {
+	importance := int(mem.Importance * 10)
+	if importance < 0 {
+		importance = 0
+	}
+	return &memory.MemoryRecord{
+		Content:     mem.Content,
+		ContentType: string(mem.Type),
+		Importance:  importance,
+		CreatedAt:   mem.CreatedAt,
 	}
 }
 
@@ -799,8 +1054,10 @@ func (m *Manager) GetSystemStatus() map[string]interface{} {
 	if m.FTSMemory != nil {
 		status["system_5_fts_memory"] = "ready"
 		totalReady++
+	} else if m.initFailed("fts_memory") {
+		status["system_5_fts_memory"] = "init_failed"
 	} else {
-		status["system_5_fts_memory"] = "optional_disabled"
+		status["system_5_fts_memory"] = "not_initialized"
 	}
 	totalSystems++
 	if m.SkillCreator != nil {

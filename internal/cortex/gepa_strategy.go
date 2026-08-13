@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
@@ -21,6 +22,7 @@ import (
 // StrategyGenerator generates optimization strategies
 type StrategyGenerator struct {
 	provider provider.Provider
+	mu       sync.Mutex // 保护 rng 的并发访问，rand.Rand 非并发安全
 	rng      *rand.Rand
 }
 
@@ -30,6 +32,26 @@ func NewStrategyGenerator(prov provider.Provider) *StrategyGenerator {
 		provider: prov,
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+}
+
+// randIntn 返回 [0,n) 的随机整数，串行化对 rng 的访问以保证并发安全
+func (g *StrategyGenerator) randIntn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.rng.Intn(n)
+}
+
+// shuffle 串行化 rng.Shuffle 以保证并发安全
+func (g *StrategyGenerator) shuffle(n int, swap func(i, j int)) {
+	if n <= 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.rng.Shuffle(n, swap)
 }
 
 // GenerateStrategies generates optimization strategies based on effectiveness scores
@@ -224,7 +246,7 @@ func (g *StrategyGenerator) mutateStrategies(
 
 	for i := 0; i < count && len(strategies) > 0; i++ {
 		// Select random parent
-		parent := strategies[g.rng.Intn(len(strategies))]
+		parent := strategies[g.randIntn(len(strategies))]
 
 		// Create mutation
 		mutation := g.mutateStrategy(&parent)
@@ -234,33 +256,58 @@ func (g *StrategyGenerator) mutateStrategies(
 	return mutated
 }
 
-// mutateStrategy creates a single mutation
+// mutateStrategy creates a single mutation。
+// 对 changes 做实质性变异（裁剪/重排/合并/增强），而非仅修改名字后缀。
 func (g *StrategyGenerator) mutateStrategy(parent *OptimizationStrategy) OptimizationStrategy {
 	mutation := OptimizationStrategy{
-		ID:          fmt.Sprintf("mut_%d_%d", time.Now().Unix(), g.rng.Intn(1000)),
-		Name:        parent.Name + " (Mutated)",
+		ID:          fmt.Sprintf("mut_%d_%d", time.Now().Unix(), g.randIntn(1000)),
+		Name:        parent.Name + " (变异)",
 		Description: parent.Description,
 		Target:      parent.Target,
 		Changes:     make([]PromptChange, len(parent.Changes)),
 	}
-
 	copy(mutation.Changes, parent.Changes)
 
-	// Apply random mutation
-	if len(mutation.Changes) > 0 {
-		idx := g.rng.Intn(len(mutation.Changes))
+	if len(mutation.Changes) == 0 {
+		return mutation
+	}
+
+	// 随机选择一种实质性变异算子
+	switch g.randIntn(4) {
+	case 0:
+		// 裁剪：删除一个随机 change，简化策略
+		idx := g.randIntn(len(mutation.Changes))
+		mutation.Changes = append(mutation.Changes[:idx], mutation.Changes[idx+1:]...)
+	case 1:
+		// 重排序：打乱 changes 顺序
+		g.shuffle(len(mutation.Changes), func(i, j int) {
+			mutation.Changes[i], mutation.Changes[j] = mutation.Changes[j], mutation.Changes[i]
+		})
+	case 2:
+		// 合并：将两个相邻 changes 合并为一个
+		if len(mutation.Changes) >= 2 {
+			idx := g.randIntn(len(mutation.Changes) - 1)
+			merged := PromptChange{
+				Type:       "modify",
+				Section:    mutation.Changes[idx].Section,
+				OldContent: mutation.Changes[idx].OldContent,
+				NewContent: mutation.Changes[idx].NewContent + " " + mutation.Changes[idx+1].NewContent,
+				Reason:     mutation.Changes[idx].Reason + "; " + mutation.Changes[idx+1].Reason,
+			}
+			mutation.Changes = append(mutation.Changes[:idx], append([]PromptChange{merged}, mutation.Changes[idx+2:]...)...)
+		}
+	case 3:
+		// 增强内容：对某个 change 的 NewContent 做实质性补充
+		idx := g.randIntn(len(mutation.Changes))
 		change := &mutation.Changes[idx]
-
-		mutations := []func(*PromptChange){
-			func(c *PromptChange) { c.Type = "add" },
-			func(c *PromptChange) { c.Type = "modify" },
-			func(c *PromptChange) { c.NewContent += " (enhanced)" },
-			func(c *PromptChange) { c.Reason += " [mutated]" },
+		augmentations := []string{
+			"（增加示例以提升清晰度）",
+			"（明确边界条件）",
+			"（补充错误处理指引）",
+			"（增加中文说明）",
 		}
-
-		if len(mutations) > 0 {
-			mutations[g.rng.Intn(len(mutations))](change)
-		}
+		change.NewContent = change.NewContent + " " + augmentations[g.randIntn(len(augmentations))]
+		change.Reason = change.Reason + " [变异增强]"
 	}
 
 	return mutation
@@ -275,8 +322,8 @@ func (g *StrategyGenerator) crossoverStrategies(
 
 	for i := 0; i < count && len(strategies) >= 2; i++ {
 		// Select two random parents
-		parent1 := strategies[g.rng.Intn(len(strategies))]
-		parent2 := strategies[g.rng.Intn(len(strategies))]
+		parent1 := strategies[g.randIntn(len(strategies))]
+		parent2 := strategies[g.randIntn(len(strategies))]
 
 		// Create crossover
 		child := g.crossover(&parent1, &parent2)
@@ -286,28 +333,49 @@ func (g *StrategyGenerator) crossoverStrategies(
 	return crossover
 }
 
-// crossover combines two strategies
+// crossover combines two strategies。
+// 交替从两个父代选取 changes 并去重，实现真正的基因重组而非仅截断前缀。
 func (g *StrategyGenerator) crossover(parent1, parent2 *OptimizationStrategy) OptimizationStrategy {
 	child := OptimizationStrategy{
-		ID:          fmt.Sprintf("cross_%d_%d", time.Now().Unix(), g.rng.Intn(1000)),
+		ID:          fmt.Sprintf("cross_%d_%d", time.Now().Unix(), g.randIntn(1000)),
 		Name:        parent1.Name + " + " + parent2.Name,
-		Description: "Combined strategy from " + parent1.Name + " and " + parent2.Name,
+		Description: "组合策略：" + parent1.Name + " 与 " + parent2.Name,
 		Target:      parent1.Target,
 		Changes:     []PromptChange{},
 	}
 
-	// Combine changes
-	allChanges := append(parent1.Changes, parent2.Changes...)
+	// 交叉：交替从两个父代选取 changes，每侧最多取若干条以保证规模可控
+	const maxFromEach = 3
+	for i := 0; i < len(parent1.Changes) && i < maxFromEach; i++ {
+		child.Changes = append(child.Changes, parent1.Changes[i])
+	}
+	for i := 0; i < len(parent2.Changes) && i < maxFromEach; i++ {
+		child.Changes = append(child.Changes, parent2.Changes[i])
+	}
 
-	// Select random subset
-	if len(allChanges) > 0 {
-		numChanges := g.rng.Intn(len(allChanges)) + 1
-		for i := 0; i < numChanges && i < len(allChanges); i++ {
-			child.Changes = append(child.Changes, allChanges[i])
-		}
+	// 去重：避免完全相同的 change 重复出现
+	child.Changes = dedupChanges(child.Changes)
+
+	// 限制总 changes 数量，避免过度膨胀
+	if len(child.Changes) > 6 {
+		child.Changes = child.Changes[:6]
 	}
 
 	return child
+}
+
+// dedupChanges 去除 Section 与 NewContent 完全相同的 change
+func dedupChanges(changes []PromptChange) []PromptChange {
+	seen := make(map[string]bool, len(changes))
+	result := make([]PromptChange, 0, len(changes))
+	for _, c := range changes {
+		key := c.Section + "|" + c.NewContent
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, c)
+		}
+	}
+	return result
 }
 
 // RefineStrategy refines a strategy based on feedback

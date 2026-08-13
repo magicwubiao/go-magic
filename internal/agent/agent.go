@@ -550,11 +550,23 @@ func WithTrajectoryLearning(store *cortex.TrajectoryStore, cfg cortex.Trajectory
 }
 
 // initTrajectoryInjector initializes the trajectory injector
+// 统一数据源：优先复用 cortex.Manager 的 TrajectoryStore，
+// 避免与 cortexManager.TrajectoryStore 形成双实例
 func (a *Agent) initTrajectoryInjector() {
-	if !a.trajEnabled || a.trajInjector != nil || a.trajStore == nil {
+	if !a.trajEnabled || a.trajInjector != nil {
 		return
 	}
-	a.trajInjector = cortex.NewTrajectoryInjector(a.trajStore, a.provider, a.trajCfg)
+	store := a.trajStore
+	// 若 cortexManager 已有 TrajectoryStore 则优先使用之，统一为单一数据源
+	if a.cortexManager != nil && a.cortexManager.GetTrajectoryStore() != nil {
+		store = a.cortexManager.GetTrajectoryStore()
+	}
+	if store == nil {
+		return
+	}
+	// 保持 a.trajStore 与实际使用的存储一致
+	a.trajStore = store
+	a.trajInjector = cortex.NewTrajectoryInjector(store, a.provider, a.trajCfg)
 }
 
 // injectTrajectoryInsights injects trajectory-based learning into the conversation
@@ -1046,7 +1058,8 @@ Please provide a comprehensive, well-structured final response based on these su
 	}
 
 	// Initialize and inject trajectory-based learning
-	if a.trajEnabled && a.trajStore != nil {
+	// 同时考虑 cortexManager 的 TrajectoryStore（统一数据源，避免双实例）
+	if a.trajEnabled && (a.trajStore != nil || (a.cortexManager != nil && a.cortexManager.GetTrajectoryStore() != nil)) {
 		a.initTrajectoryInjector()
 		a.injectTrajectoryInsights(input)
 	}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // SoulManager manages the system personality (SOUL.md)
@@ -90,28 +91,76 @@ func (m *SoulManager) SetSoul(content string) error {
 
 // UpdateFromFeedback updates the soul based on user feedback
 func (m *SoulManager) UpdateFromFeedback(feedback string) error {
-	if strings.TrimSpace(feedback) == "" {
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return nil
+	}
+
+	// 仅在反馈中包含明确的偏好信号时才更新 SOUL，
+	// 排除 "I would like"/"It always depends" 等非偏好句式，降低误报率。
+	preference := extractPreference(feedback)
+	if preference == "" {
 		return nil
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if strings.Contains(m.content, feedback) {
+	if strings.Contains(m.content, preference) {
 		return nil
 	}
 
 	const maxSoulSize = 32 * 1024
-	update := "\n\n## Learned Preferences\n" + feedback + "\n[Auto-generated from interactions]"
+	update := "\n\n## Learned Preferences\n" + preference + "\n[Auto-generated from interactions]"
 	newContent := m.content + update
 	if len(newContent) > maxSoulSize {
 		// Trim the oldest content to stay within the limit rather than wiping
 		// everything back to defaultSoul (which would discard all learning).
-		newContent = newContent[len(newContent)-maxSoulSize:]
+		// 按字节回退到有效的 UTF-8 边界，避免在多字节字符（如中文）中间截断造成乱码。
+		cut := newContent[len(newContent)-maxSoulSize:]
+		for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
+			cut = cut[1:]
+		}
+		newContent = cut
 	}
 	m.content = newContent
 
 	return m.save()
+}
+
+// extractPreference 从反馈文本中抽取明确的用户偏好。
+// 要求带具体动词的偏好信号（如 "I prefer X"/"用户喜欢 X"/"always use X"），
+// 排除 "I would like"/"It always depends" 等非偏好句式。
+func extractPreference(feedback string) string {
+	lower := strings.ToLower(feedback)
+
+	// 明确的非偏好句式：命中即跳过，即使同时包含偏好关键词也不灌入 SOUL
+	nonPreferencePatterns := []string{
+		"i would like", "i'd like", "it always depends", "it depends on",
+		"i would prefer not", "let me think", "i'm not sure", "maybe later",
+	}
+	for _, p := range nonPreferencePatterns {
+		if strings.Contains(lower, p) {
+			return ""
+		}
+	}
+
+	// 要求明确的偏好信号（带具体动词）
+	preferenceSignals := []string{
+		"i prefer", "i like", "i love", "i always use", "i always prefer",
+		"please always", "always use", "always prefer", "always respond",
+		"i want you to always", "from now on",
+		"用户喜欢", "用户偏好", "用户希望", "用户总是",
+		"我喜欢", "我偏好", "我希望", "我总是",
+		"总是使用", "请总是", "以后总是", "从现在开始",
+	}
+	for _, signal := range preferenceSignals {
+		if strings.Contains(lower, signal) {
+			return feedback
+		}
+	}
+
+	return ""
 }
 
 // GetSoulForPrompt returns the soul formatted for system prompt

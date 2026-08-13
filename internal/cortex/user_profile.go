@@ -26,6 +26,7 @@ type UserProfile struct {
 	mu          sync.RWMutex
 	baseDir     string
 	userPath    string
+	jsonPath    string // JSON 权威存储路径（无损持久化所有偏好键）
 	preferences map[string]*UserPreference
 	interests   []string
 	workStyle   string
@@ -60,6 +61,7 @@ func NewUserProfile(baseDir string) *UserProfile {
 	return &UserProfile{
 		baseDir:     baseDir,
 		userPath:    filepath.Join(baseDir, "USER.md"),
+		jsonPath:    filepath.Join(baseDir, "USER.json"),
 		preferences: make(map[string]*UserPreference),
 		interests:   make([]string, 0),
 		techStack:   make([]string, 0),
@@ -67,11 +69,24 @@ func NewUserProfile(baseDir string) *UserProfile {
 	}
 }
 
-// Load loads the USER.md file
+// Load loads the user profile from disk
+// 优先从 JSON 权威存储加载（无损保留所有偏好键），不存在或失败时回退到解析 USER.md（向后兼容）
 func (up *UserProfile) Load() error {
 	up.mu.Lock()
 	defer up.mu.Unlock()
 
+	// 优先从 JSON 权威存储加载（无损持久化）
+	if data, err := os.ReadFile(up.jsonPath); err == nil {
+		if err := up.loadFromJSON(data); err == nil {
+			// 同步刷新 markdown 人类可读视图
+			up.updateContent()
+			_ = os.WriteFile(up.userPath, []byte(up.content), 0644)
+			return nil
+		}
+		// JSON 加载失败则回退到 markdown 解析
+	}
+
+	// 回退：从 USER.md 解析（向后兼容已有文件）
 	data, err := os.ReadFile(up.userPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -87,10 +102,59 @@ func (up *UserProfile) Load() error {
 	return nil
 }
 
+// loadFromJSON 从 JSON 数据加载偏好（调用方需持有锁）
+func (up *UserProfile) loadFromJSON(data []byte) error {
+	var importData struct {
+		Preferences map[string]*UserPreference `json:"preferences"`
+		Interests   []string                   `json:"interests"`
+		TechStack   []string                   `json:"tech_stack"`
+	}
+	if err := json.Unmarshal(data, &importData); err != nil {
+		return err
+	}
+	up.preferences = importData.Preferences
+	if up.preferences == nil {
+		up.preferences = make(map[string]*UserPreference)
+	}
+	up.interests = importData.Interests
+	if up.interests == nil {
+		up.interests = make([]string, 0)
+	}
+	up.techStack = importData.TechStack
+	if up.techStack == nil {
+		up.techStack = make([]string, 0)
+	}
+	return nil
+}
+
 // save saves the user profile to disk
+// 同时写入 JSON 权威存储（无损）与 markdown 人类可读视图
 func (up *UserProfile) save() error {
 	up.updateContent()
+	// 写入 JSON 权威存储（保留所有偏好键，避免持久化有损）
+	if err := up.saveJSON(); err != nil {
+		return err
+	}
+	// 写入 markdown 人类可读视图
 	return os.WriteFile(up.userPath, []byte(up.content), 0644)
+}
+
+// saveJSON 将结构化偏好写入 JSON 权威存储（调用方需持有锁）
+func (up *UserProfile) saveJSON() error {
+	export := struct {
+		Preferences map[string]*UserPreference `json:"preferences"`
+		Interests   []string                   `json:"interests"`
+		TechStack   []string                   `json:"tech_stack"`
+	}{
+		Preferences: up.preferences,
+		Interests:   up.interests,
+		TechStack:   up.techStack,
+	}
+	data, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(up.jsonPath, data, 0644)
 }
 
 // parseContent parses USER.md into structured data
@@ -125,6 +189,7 @@ func (up *UserProfile) parseContent() {
 }
 
 // updateContent updates the markdown content from structured data
+// 遍历所有 preferences 输出，避免 SetPreference 设置的非固定键在持久化时丢失
 func (up *UserProfile) updateContent() {
 	var lines []string
 
@@ -182,12 +247,16 @@ func (up *UserProfile) updateContent() {
 		lines = append(lines, "- [Not set]")
 	}
 
+	// 输出所有偏好键（含 explicit/learned/parsed 等），确保 SetPreference 设置的
+	// 任意键都不会在持久化时丢失。JSON 权威存储已保留全部，此处为人类可读视图。
 	lines = append(lines, "")
-	lines = append(lines, "## Learned Preferences")
-
-	for _, pref := range up.preferences {
-		if pref.Source == "learned" {
-			lines = append(lines, "- "+pref.Key+": "+pref.Value+" (confidence: "+formatConfidence(pref.Confidence)+")")
+	lines = append(lines, "## All Preferences")
+	if len(up.preferences) == 0 {
+		lines = append(lines, "- [Not set]")
+	} else {
+		for _, pref := range up.preferences {
+			lines = append(lines, "- "+pref.Key+": "+pref.Value+
+				" (source: "+pref.Source+", confidence: "+formatConfidence(pref.Confidence)+")")
 		}
 	}
 
@@ -221,11 +290,11 @@ func (up *UserProfile) LearnPreference(key, value, context string) error {
 	defer up.mu.Unlock()
 
 	if existing, ok := up.preferences[key]; ok {
-		// Update existing with lower confidence
+		// 更新已存在偏好，多次强化置信度最高可达 0.95（与 explicit 的 1.0 仍有差距）
 		existing.Value = value
 		existing.Context = context
 		existing.Source = "learned"
-		existing.Confidence = min(existing.Confidence+0.1, 0.8) // Cap at 0.8
+		existing.Confidence = min(existing.Confidence+0.1, 0.95) // 不再封顶 0.8
 		existing.UpdatedAt = time.Now()
 	} else {
 		up.preferences[key] = &UserPreference{
@@ -330,9 +399,9 @@ func (up *UserProfile) GetForPrompt() string {
 	lines = append(lines, "## User Profile")
 	lines = append(lines, "")
 
-	// Add high-confidence preferences
+	// Add high-confidence preferences（阈值从 0.6 降到 0.5，让强化后的 learned 偏好可显示）
 	for _, p := range up.preferences {
-		if p.Confidence >= 0.6 {
+		if p.Confidence >= 0.5 {
 			lines = append(lines, "- "+p.Key+": "+p.Value)
 		}
 	}
@@ -388,19 +457,9 @@ func (up *UserProfile) Import(data []byte) error {
 	up.mu.Lock()
 	defer up.mu.Unlock()
 
-	var importData struct {
-		Preferences map[string]*UserPreference `json:"preferences"`
-		Interests   []string                   `json:"interests"`
-		TechStack   []string                   `json:"tech_stack"`
-	}
-
-	if err := json.Unmarshal(data, &importData); err != nil {
+	if err := up.loadFromJSON(data); err != nil {
 		return err
 	}
-
-	up.preferences = importData.Preferences
-	up.interests = importData.Interests
-	up.techStack = importData.TechStack
 
 	return up.save()
 }

@@ -121,12 +121,33 @@ func (c *Config) GetCurrentModel() string {
 // MemoryConfig represents memory configuration
 type MemoryConfig struct {
 	Enabled bool `json:"enabled"`
+
+	// 以下为可选字段，零值（nil）表示使用默认值。
+	// 与 internal/memory.MemoryConfig 对应，便于配置驱动 cortex.Manager 的记忆子系统。
+	DBPath             *string `json:"db_path,omitempty" yaml:"db_path,omitempty"`                           // 记忆 SQLite 数据库路径
+	MaxContentLength   *int    `json:"max_content_length,omitempty" yaml:"max_content_length,omitempty"`     // 单条记忆最大字符数
+	MaxAgentMemLength  *int    `json:"max_agent_mem_length,omitempty" yaml:"max_agent_mem_length,omitempty"` // agent 记忆文件最大字符数
+	MaxUserMemLength   *int    `json:"max_user_mem_length,omitempty" yaml:"max_user_mem_length,omitempty"`   // user 记忆文件最大字符数
+	AutoSummarize      *bool   `json:"auto_summarize,omitempty" yaml:"auto_summarize,omitempty"`             // 是否开启自动摘要
+	SummarizeThreshold *int    `json:"summarize_threshold,omitempty" yaml:"summarize_threshold,omitempty"`   // 触发摘要的字符阈值
+	LLMProvider        *string `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`                 // 摘要使用的 LLM provider
 }
 
 // CortexConfig represents Cortex AI configuration
 type CortexConfig struct {
 	Enabled             bool `json:"enabled"`                // Enable/disable Cortex system
 	SkillMinPatternFreq int  `json:"skill_min_pattern_freq"` // Min frequency for skill pattern detection
+
+	// 以下为可选字段，零值（nil）表示使用默认值。
+	// 与 internal/cortex.ManagerConfig 对应，便于配置驱动 Cortex 调参。
+	ReviewInterval                *time.Duration `json:"review_interval,omitempty" yaml:"review_interval,omitempty"`                                 // 后台评审间隔
+	ReviewEnabled                 *bool          `json:"review_enabled,omitempty" yaml:"review_enabled,omitempty"`                                   // 是否启用后台评审
+	NudgeInterval                 *time.Duration `json:"nudge_interval,omitempty" yaml:"nudge_interval,omitempty"`                                   // Nudge 间隔
+	NudgeEnabled                  *bool          `json:"nudge_enabled,omitempty" yaml:"nudge_enabled,omitempty"`                                     // 是否启用 Nudge
+	PerceptionConfidenceThreshold *float64       `json:"perception_confidence_threshold,omitempty" yaml:"perception_confidence_threshold,omitempty"` // 感知置信度阈值
+	PerceptionMaxHistory          *int           `json:"perception_max_history,omitempty" yaml:"perception_max_history,omitempty"`                   // 感知最大历史条数
+	PlanningMaxSteps              *int           `json:"planning_max_steps,omitempty" yaml:"planning_max_steps,omitempty"`                           // 规划最大步数
+	PlanningTimeout               *time.Duration `json:"planning_timeout,omitempty" yaml:"planning_timeout,omitempty"`                               // 规划超时
 }
 
 // ServerConfig represents server-related configuration
