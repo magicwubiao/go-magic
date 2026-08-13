@@ -628,6 +628,12 @@ func extractZip(zipPath, destDir string) error {
 		}
 	}
 
+	// 预先计算 destDir 绝对路径用于安全校验
+	absDest, err := filepath.Abs(filepath.Clean(destDir))
+	if err != nil {
+		return fmt.Errorf("invalid dest dir: %w", err)
+	}
+
 	for _, f := range r.File {
 		// Skip hidden files and __MACOSX
 		if strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "__MACOSX") {
@@ -643,10 +649,16 @@ func extractZip(zipPath, destDir string) error {
 			continue
 		}
 
-		fpath := filepath.Join(destDir, fpathName)
+		// 安全拼接：用 safepath.SafeJoin 校验，防止路径穿越
+		fpath, err := SafeJoin(absDest, fpathName)
+		if err != nil {
+			return fmt.Errorf("unsafe zip entry %q: %w", fpathName, err)
+		}
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, os.ModePerm)
+			if err := os.MkdirAll(fpath, f.Mode()); err != nil {
+				return err
+			}
 			continue
 		}
 

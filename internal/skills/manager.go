@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/skills/parser"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/safepath"
 )
 
 // Skill is now defined in types.go - this file re-exports it for backwards compatibility
@@ -28,7 +31,6 @@ type Manager struct {
 	searchDirs        []string
 	builtinDir        string
 	skills            map[string]*Skill
-	toolNames         []string              // Cached tool names from registry
 	registryURL       string                // ClawHub or GitHub registry URL
 	hubLock           *HubLock              // Hub 安装跟踪 (.hub/lock.json)
 	bundledManifest   *BundledManifest      // 内置技能跟踪 (.bundled_manifest)
@@ -40,6 +42,10 @@ type Manager struct {
 	minPatternFreq    int                   // 最小模式频率阈值
 	// Registry manager for hub search/install
 	registryMgr *RegistryManager
+	// 后台 goroutine 控制：stopChan 关闭后所有后台 goroutine 退出，避免泄漏
+	stopChan chan struct{}
+	stopOnce sync.Once
+	effMgr   *EffectivenessManager // 持有引用便于 Close 时停止
 }
 
 // ManagerConfig 配置管理器
@@ -98,7 +104,6 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 		searchDirs:        cfg.SearchDirs,
 		builtinDir:        cfg.BuiltinDir,
 		registryURL:       cfg.RegistryURL,
-		toolNames:         cfg.ToolNames,
 		skills:            make(map[string]*Skill),
 		skillsDir:         skillsDir,
 		hubDir:            filepath.Join(skillsDir, ".hub"),
@@ -109,12 +114,16 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 		registryMgr:       NewRegistryManager(),
 	}
 
-	// 创建 Hub 目录
-	os.MkdirAll(m.hubDir, 0755)
+	// 创建 Hub 目录（错误转为警告日志，不中断初始化）
+	if err := os.MkdirAll(m.hubDir, 0755); err != nil {
+		log.Warnf("failed to create hub dir %s: %v", m.hubDir, err)
+	}
 	// 创建四态目录
-	os.MkdirAll(filepath.Join(m.autoSkillsDir, "pending"), 0755)
-	os.MkdirAll(filepath.Join(m.autoSkillsDir, "approved"), 0755)
-	os.MkdirAll(filepath.Join(m.autoSkillsDir, "archived"), 0755)
+	for _, sub := range []string{"pending", "approved", "archived"} {
+		if err := os.MkdirAll(filepath.Join(m.autoSkillsDir, sub), 0755); err != nil {
+			log.Warnf("failed to create auto skill subdir %s: %v", sub, err)
+		}
+	}
 
 	// 加载 Hub lock.json
 	m.loadHubLock()
@@ -128,7 +137,7 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	// Load built-in skills (always try embedded FS, fallback to filesystem)
 	if err := m.loadBuiltinSkills(); err != nil {
 		// Don't fail on error, just log
-		fmt.Printf("Warning: failed to load built-in skills: %v\n", err)
+		log.Warnf("failed to load built-in skills: %v", err)
 	}
 
 	if err := m.loadSkills(); err != nil {
@@ -139,6 +148,8 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	if len(m.searchDirs) > 0 {
 		if effMgr, err := NewEffectivenessManager(m.searchDirs[0]); err == nil {
 			effMgr.StartAutoSave()
+			m.effMgr = effMgr
+			m.stopChan = make(chan struct{})
 			// Start periodic cleanup (every 24 hours, remove records older than 30 days)
 			go m.startEffectivenessCleanup(effMgr)
 		}
@@ -147,22 +158,47 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	return m, nil
 }
 
-// startEffectivenessCleanup starts a background goroutine to periodically clean old effectiveness records
+// startEffectivenessCleanup starts a background goroutine to periodically clean old effectiveness records.
+// 监听 m.stopChan 退出，避免 goroutine 永久阻塞导致 Manager 无法 GC。
 func (m *Manager) startEffectivenessCleanup(effMgr *EffectivenessManager) {
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if err := effMgr.ClearOldRecords(30 * 24 * time.Hour); err != nil {
-			fmt.Printf("[skills] Failed to clean old effectiveness records: %v\n", err)
-		} else {
-			fmt.Printf("[skills] Cleaned old effectiveness records (older than 30 days)\n")
+	for {
+		select {
+		case <-ticker.C:
+			if err := effMgr.ClearOldRecords(30 * 24 * time.Hour); err != nil {
+				log.Warnf("failed to clean old effectiveness records: %v", err)
+			} else {
+				log.Infof("cleaned old effectiveness records (older than 30 days)")
+			}
+		case <-m.stopChan:
+			return
 		}
 	}
 }
 
-// loadBuiltinSkills 加载内置技能
+// Close 停止 Manager 的所有后台 goroutine 并刷新未保存数据。
+// 调用后 Manager 不应再被使用。
+func (m *Manager) Close() {
+	m.stopOnce.Do(func() {
+		if m.stopChan != nil {
+			close(m.stopChan)
+		}
+		if m.effMgr != nil {
+			m.effMgr.StopAutoSave()
+		}
+	})
+}
+
+// loadBuiltinSkills 加载内置技能（写入 m.skills，调用方需保证不在持锁上下文，
+// 或调用 loadBuiltinSkillsInto 写入指定 map 用于 Reload 原子替换）。
 func (m *Manager) loadBuiltinSkills() error {
+	return m.loadBuiltinSkillsInto(m.skills)
+}
+
+// loadBuiltinSkillsInto 加载内置技能到指定 map，供 Reload 在临时 map 上构建后原子替换。
+func (m *Manager) loadBuiltinSkillsInto(target map[string]*Skill) error {
 	// First try embedded builtin skills (always available in compiled binary)
 	entries, err := BuiltinSkillsFS.ReadDir(BuiltinDirName)
 	if err == nil {
@@ -176,7 +212,7 @@ func (m *Manager) loadBuiltinSkills() error {
 				skill := m.loadSkillFromContent(string(data), entry.Name())
 				if skill != nil {
 					skill.Source = "builtin"
-					m.skills[skill.Name] = skill
+					target[skill.Name] = skill
 				}
 			}
 		}
@@ -205,7 +241,7 @@ func (m *Manager) loadBuiltinSkills() error {
 			skill := m.loadSkillFromFile(skillMdPath)
 			if skill != nil {
 				skill.Source = "builtin"
-				m.skills[skill.Name] = skill
+				target[skill.Name] = skill
 			}
 		}
 	}
@@ -214,6 +250,12 @@ func (m *Manager) loadBuiltinSkills() error {
 }
 
 func (m *Manager) loadSkills() error {
+	return m.loadSkillsInto(m.skills)
+}
+
+// loadSkillsInto 加载 searchDirs 下的技能到指定 map，供 Reload 原子替换。
+// 通过 existing 参数保留已加载的 builtin/registry source 信息。
+func (m *Manager) loadSkillsInto(target map[string]*Skill) error {
 	for _, dir := range m.searchDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -230,7 +272,7 @@ func (m *Manager) loadSkills() error {
 					skill := m.loadSkillFromFile(skillMdPath)
 					if skill != nil {
 						// Preserve existing source if it's builtin or registry (from hub)
-						if existingSkill, exists := m.skills[skill.Name]; exists {
+						if existingSkill, exists := target[skill.Name]; exists {
 							if existingSkill.Source == "builtin" {
 								skill.Source = existingSkill.Source
 							} else if skill.Source != SkillSourceRegistry {
@@ -245,7 +287,7 @@ func (m *Manager) loadSkills() error {
 								skill.Source = "global"
 							}
 						}
-						m.skills[skill.Name] = skill
+						target[skill.Name] = skill
 					}
 					continue
 				}
@@ -255,7 +297,7 @@ func (m *Manager) loadSkills() error {
 					skill := m.loadSkillFromManifest(manifestPath)
 					if skill != nil {
 						skill.Source = "local"
-						m.skills[skill.Name] = skill
+						target[skill.Name] = skill
 					}
 					continue
 				}
@@ -265,7 +307,7 @@ func (m *Manager) loadSkills() error {
 			skill := m.loadSkillFromFile(path)
 			if skill != nil {
 				// Preserve existing source if it's builtin or registry (from hub)
-				if existingSkill, exists := m.skills[skill.Name]; exists {
+				if existingSkill, exists := target[skill.Name]; exists {
 					if existingSkill.Source == "builtin" {
 						skill.Source = existingSkill.Source
 					} else if skill.Source != SkillSourceRegistry {
@@ -274,7 +316,7 @@ func (m *Manager) loadSkills() error {
 				} else if skill.Source != SkillSourceRegistry {
 					skill.Source = "local"
 				}
-				m.skills[skill.Name] = skill
+				target[skill.Name] = skill
 			}
 		}
 	}
@@ -697,6 +739,17 @@ func (m *Manager) RegisterSkill(skill *Skill) {
 
 // addInternal is the locked add implementation
 func (m *Manager) addInternal(skill *Skill) error {
+	if skill == nil {
+		return fmt.Errorf("skill is nil")
+	}
+	if skill.Name == "" {
+		return fmt.Errorf("skill name is required")
+	}
+	// 校验 skill.Name 防止路径穿越：外部输入（JSON 反序列化）可能含 ../
+	if err := safepath.SanitizeName(skill.Name); err != nil {
+		return fmt.Errorf("invalid skill name: %w", err)
+	}
+
 	data, err := json.MarshalIndent(skill, "", "  ")
 	if err != nil {
 		return err
@@ -712,7 +765,11 @@ func (m *Manager) addInternal(skill *Skill) error {
 		return err
 	}
 
-	path := filepath.Join(m.searchDirs[0], skill.Name+".json")
+	// 安全拼接文件名（skill.Name 已校验，SafeJoin 二次防御）
+	path, err := safepath.SafeJoin(m.searchDirs[0], skill.Name+".json")
+	if err != nil {
+		return fmt.Errorf("invalid skill path: %w", err)
+	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return err
 	}
@@ -729,6 +786,9 @@ func (m *Manager) Remove(name string) error {
 // GetSkillsContext returns all skills formatted for system prompt
 // Note: pending/rejected auto-skills are NOT included here - they need manual approval first.
 func (m *Manager) GetSkillsContext() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var ctx string
 	for _, skill := range m.skills {
 		// 跳过未批准和已拒绝的自动生成技能
@@ -811,19 +871,33 @@ func (m *Manager) MatchSkillsByInput(input string) []*Skill {
 }
 
 // Reload reloads all skills
+// 在临时 map 上构建完整技能集合，最后持写锁原子替换，避免加载过程中
+// 释放锁导致其他 goroutine 读到空 map 或部分加载状态。
 func (m *Manager) Reload() error {
-	m.mu.Lock()
-	m.skills = make(map[string]*Skill)
-	m.mu.Unlock()
+	// 在临时 map 上构建，不持锁，允许 IO 并发
+	tmp := make(map[string]*Skill)
 
-	// Reload built-in skills first
-	if m.builtinDir != "" {
-		if err := m.loadBuiltinSkills(); err != nil {
-			fmt.Printf("Warning: failed to load built-in skills: %v\n", err)
+	if m.builtinDir != "" || hasEmbeddedBuiltin() {
+		if err := m.loadBuiltinSkillsInto(tmp); err != nil {
+			log.Warnf("failed to load built-in skills: %v", err)
 		}
 	}
 
-	return m.loadSkills()
+	if err := m.loadSkillsInto(tmp); err != nil {
+		return err
+	}
+
+	// 原子替换：持写锁替换 m.skills
+	m.mu.Lock()
+	m.skills = tmp
+	m.mu.Unlock()
+	return nil
+}
+
+// hasEmbeddedBuiltin 报告是否存在 embed 内置技能 FS（用于 Reload 决定是否加载内置技能）。
+func hasEmbeddedBuiltin() bool {
+	entries, err := BuiltinSkillsFS.ReadDir(BuiltinDirName)
+	return err == nil && len(entries) > 0
 }
 
 // Count returns the number of skills
@@ -916,12 +990,19 @@ func (m *Manager) ListSkills() []string {
 }
 
 // GetSkillInfo returns skill info by name
+// 返回的 content 已剥离 YAML frontmatter，仅保留正文，避免向 LLM 暴露原始元数据。
 func (m *Manager) GetSkillInfo(name string) (description string, tools []string, content string, err error) {
 	skill, err := m.Get(name)
 	if err != nil {
 		return "", nil, "", err
 	}
-	return skill.Description, skill.GetTools(), skill.Content, nil
+	// 剥离 frontmatter，只返回正文 body
+	_, body, parseErr := parser.ParseYAMLFrontmatter(skill.Content)
+	if parseErr != nil || body == "" {
+		// 解析失败或无 frontmatter，原样返回
+		body = skill.Content
+	}
+	return skill.Description, skill.GetTools(), body, nil
 }
 
 // GetSkillsList returns a compact list of skill names and descriptions
@@ -949,37 +1030,49 @@ func (m *Manager) GetSkillsList() string {
 
 // ScanSkillSecurity 扫描技能内容的安全性
 // 参考 Hermes Agent 的安全扫描：检测数据泄露、提示注入、破坏性命令
+// 使用正则匹配并规范化空白，避免双空格、引号等简单绕过。
 func ScanSkillSecurity(content string) *SecurityScanResult {
 	result := &SecurityScanResult{
 		ScannedAt: time.Now().Format(time.RFC3339),
 		Safe:      true,
 	}
 
-	// 检测高危提示注入模式（只检测真正危险的组合）
-	injectionPatterns := []string{
-		"ignore all previous instructions and",
-		"ignore all above instructions and",
-		"ignore previous instructions and do",
+	// 检测高危提示注入模式（正则，忽略大小写与多余空白）
+	// 关键短语 "ignore ... instructions" 是经典 prompt injection 开头
+	injectionRegexes := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)ignore\s+(?:all\s+)?(?:previous|above)\s+instructions?\s+and`),
+		regexp.MustCompile(`(?i)disregard\s+(?:all\s+)?(?:previous|above)\s+instructions?`),
+		regexp.MustCompile(`(?i)you\s+are\s+(?:now|actually)\s+(?:a\s+)?(?:different|new)\s+(?:assistant|ai|mode)`),
 	}
-	for _, pattern := range injectionPatterns {
-		if strings.Contains(strings.ToLower(content), pattern) {
+	for _, re := range injectionRegexes {
+		if loc := re.FindStringIndex(content); loc != nil {
+			matched := strings.TrimSpace(content[loc[0]:loc[1]])
 			result.Safe = false
-			result.Threats = append(result.Threats, "potential prompt injection: "+pattern)
+			result.Threats = append(result.Threats, "potential prompt injection: "+matched)
 			result.Severity = "high"
 		}
 	}
 
-	// 检测破坏性命令
+	// 检测破坏性命令：先规范化空白（连续空白压成单空格）再匹配，
+	// 这样 "rm  -rf  /"（双空格）也能被检出。
+	normalized := destructiveCmdNormalizer.ReplaceAllString(content, " ")
+	lower := strings.ToLower(normalized)
+
 	destructivePatterns := []string{
 		"rm -rf /",
 		"rm -rf /*",
-		"mkfs",
+		"rm -fr /",
+		"mkfs.",
 		"dd if=",
 		":(){ :|:& };:", // fork bomb
-		"chmod -R 777 /",
+		"chmod -r 777 /",
+		"chown -r root /",
+		"> /dev/sda",
+		"shutdown -h",
+		"reboot",
 	}
 	for _, pattern := range destructivePatterns {
-		if strings.Contains(strings.ToLower(content), pattern) {
+		if strings.Contains(lower, pattern) {
 			result.Safe = false
 			result.Threats = append(result.Threats, "destructive command: "+pattern)
 			result.Severity = "high"
@@ -988,6 +1081,10 @@ func ScanSkillSecurity(content string) *SecurityScanResult {
 
 	return result
 }
+
+// destructiveCmdNormalizer 将连续空白（含 tab/换行）压缩为单个空格，
+// 用于破坏性命令检测前置规范化，避免 "rm  -rf  /" 等绕过。
+var destructiveCmdNormalizer = regexp.MustCompile(`\s+`)
 
 // GetSkillsContextForPrompt 返回用于系统提示词注入的技能索引（Level 0）
 // 参考 Hermes Agent 的 ephemeral 注入：只注入名称和描述，不注入完整内容
@@ -1089,6 +1186,11 @@ func (m *Manager) GetSkillSourceStats() map[SkillSource]int {
 
 // Create creates a new skill from scratch
 func (m *Manager) Create(name, description, content string, tags []string) (*Skill, error) {
+	// 校验 name 防止路径穿越（外部用户输入）
+	if err := safepath.SanitizeName(name); err != nil {
+		return nil, fmt.Errorf("invalid skill name: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1097,20 +1199,40 @@ func (m *Manager) Create(name, description, content string, tags []string) (*Ski
 		return nil, fmt.Errorf("skill %s already exists", name)
 	}
 
-	// Find or create skill directory
-	var skillDir string
+	if len(m.searchDirs) == 0 {
+		return nil, fmt.Errorf("no search directories configured")
+	}
+
+	// 在用户目录（HOME 下的 magic 目录）或第一个搜索目录下创建技能目录。
+	// 不再硬编码 /workspace/projects（不可移植）；优先用 config.GetMagicHome()。
+	skillDir := ""
+	magicHome := config.GetMagicHome()
 	for _, dir := range m.searchDirs {
-		if strings.HasPrefix(dir, os.Getenv("HOME")) || strings.HasPrefix(dir, "/workspace/projects") {
-			skillDir = filepath.Join(dir, name)
-			if err := os.MkdirAll(skillDir, 0755); err == nil {
-				break
+		// 优先选择位于 magic home 下的目录（用户可写）
+		if strings.HasPrefix(dir, magicHome) {
+			safeDir, err := safepath.SafeJoin(dir, name)
+			if err != nil {
+				continue
 			}
+			if err := os.MkdirAll(safeDir, 0755); err != nil {
+				log.Warnf("failed to create skill dir in %s: %v", dir, err)
+				continue
+			}
+			skillDir = safeDir
+			break
 		}
 	}
 
 	if skillDir == "" {
-		skillDir = filepath.Join(m.searchDirs[0], name)
-		os.MkdirAll(skillDir, 0755)
+		// 回退到第一个搜索目录
+		safeDir, err := safepath.SafeJoin(m.searchDirs[0], name)
+		if err != nil {
+			return nil, fmt.Errorf("invalid skill dir: %w", err)
+		}
+		if err := os.MkdirAll(safeDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create skill directory: %w", err)
+		}
+		skillDir = safeDir
 	}
 
 	// Write SKILL.md file
@@ -1269,8 +1391,12 @@ func (m *Manager) Delete(name string) error {
 		return fmt.Errorf("skill %s not found", name)
 	}
 
-	// Remove directory
+	// Remove directory（安全校验：skill.Dir 必须在某个搜索目录或 autoSkillsDir 内，
+	// 防止被篡改的 Dir 指向任意目录导致误删用户数据）
 	if skill.Dir != "" {
+		if !m.isSkillDirManaged(skill.Dir) {
+			return fmt.Errorf("refuse to delete unmanaged skill dir: %s (not under any search dir)", skill.Dir)
+		}
 		if err := os.RemoveAll(skill.Dir); err != nil {
 			return fmt.Errorf("failed to remove skill directory: %w", err)
 		}
@@ -1278,6 +1404,27 @@ func (m *Manager) Delete(name string) error {
 
 	delete(m.skills, name)
 	return nil
+}
+
+// isSkillDirManaged 检查 dir 是否位于某个受管理的目录（搜索目录或 autoSkillsDir）内。
+// 防止 Delete 误删受管理目录之外的文件。
+func (m *Manager) isSkillDirManaged(dir string) bool {
+	absDir, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return false
+	}
+	for _, base := range m.searchDirs {
+		if safepath.IsWithin(absDir, base) {
+			return true
+		}
+	}
+	if m.autoSkillsDir != "" && safepath.IsWithin(absDir, m.autoSkillsDir) {
+		return true
+	}
+	if m.hubDir != "" && safepath.IsWithin(absDir, m.hubDir) {
+		return true
+	}
+	return false
 }
 
 // Patch 对技能内容进行定向修补（参考 Hermes Agent 的 patch 操作）
@@ -1499,7 +1646,7 @@ func (m *Manager) installSkillWithDirectory(skill *Skill, sourceDir string, sour
 		InstalledAt: time.Now().Unix(),
 	}
 	if err := SaveSkillOriginMeta(skillDir, originMeta); err != nil {
-		fmt.Printf("Warning: failed to save origin metadata: %v\n", err)
+		log.Warnf("failed to save origin metadata: %v", err)
 	}
 
 	// Reload skill from the new directory by finding SKILL.md inside it
@@ -1564,48 +1711,72 @@ func copyDirectory(source, destination string) error {
 	})
 }
 
-// extractZip 解压 ZIP 数据到指定目录
+// extractZip 解压 ZIP 数据到指定目录（安全版本：使用 safepath 校验每个条目，
+// 防止路径穿越、绝对路径、Windows 盘符攻击）。
 func (m *Manager) extractZip(data []byte, destDir string) error {
 	reader := bytes.NewReader(data)
 	zipReader, err := zip.NewReader(reader, int64(len(data)))
 	if err != nil {
 		return err
 	}
+	return extractZipReaderToFile(zipReader, destDir)
+}
+
+// extractZipFile 解压 ZIP 文件到指定目录（安全版本）。
+func extractZipFile(zipPath, destDir string) error {
+	zipReader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer zipReader.Close()
+	return extractZipReaderToFile(&zipReader.Reader, destDir)
+}
+
+// extractZipReaderToFile 将 zip.Reader 内容安全解压到 destDir。
+// 对每个条目用 safepath.SafeJoin 校验，拒绝穿越 destDir 的路径。
+// 使用 defer 确保文件句柄在错误路径下也能关闭。
+func extractZipReaderToFile(zipReader *zip.Reader, destDir string) error {
+	// 预先计算 destDir 绝对路径，用于后续校验
+	absDest, err := filepath.Abs(filepath.Clean(destDir))
+	if err != nil {
+		return fmt.Errorf("invalid dest dir: %w", err)
+	}
 
 	for _, file := range zipReader.File {
-		// 防止路径遍历
-		if strings.Contains(file.Name, "..") {
-			continue
+		// 安全拼接：拒绝绝对路径、盘符、含 ".." 的穿越
+		targetPath, err := safepath.SafeJoin(absDest, file.Name)
+		if err != nil {
+			return fmt.Errorf("unsafe zip entry %q: %w", file.Name, err)
 		}
-
-		path := filepath.Join(destDir, file.Name)
 
 		if file.FileInfo().IsDir() {
-			os.MkdirAll(path, file.Mode())
+			if err := os.MkdirAll(targetPath, file.Mode()); err != nil {
+				return fmt.Errorf("failed to create dir %s: %w", targetPath, err)
+			}
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return fmt.Errorf("failed to create parent dir: %w", err)
 		}
 
-		outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 		}
 
 		rc, err := file.Open()
 		if err != nil {
 			outFile.Close()
-			return err
+			return fmt.Errorf("failed to open zip entry %s: %w", file.Name, err)
 		}
 
-		_, err = io.Copy(outFile, rc)
+		_, copyErr := io.Copy(outFile, rc)
+		// 无论 copy 是否成功都关闭两个句柄
 		rc.Close()
 		outFile.Close()
-
-		if err != nil {
-			return err
+		if copyErr != nil {
+			return fmt.Errorf("failed to write file %s: %w", targetPath, copyErr)
 		}
 	}
 
@@ -1632,7 +1803,7 @@ func (m *Manager) loadHubLock() {
 	}
 
 	if err := json.Unmarshal(data, m.hubLock); err != nil {
-		fmt.Printf("Warning: failed to parse hub lock: %v\n", err)
+		log.Warnf("failed to parse hub lock: %v", err)
 	}
 }
 
@@ -1672,7 +1843,12 @@ func (m *Manager) AddHubLockEntry(entry HubLockEntry) error {
 func (m *Manager) RemoveHubLockEntry(skillName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.removeHubLockEntryLocked(skillName)
+}
 
+// removeHubLockEntryLocked 移除 Hub 安装记录（调用者需持有 m.mu 写锁）。
+// 供已持锁的内部方法复用，避免 sync.RWMutex 递归加锁导致死锁。
+func (m *Manager) removeHubLockEntryLocked(skillName string) error {
 	for i, e := range m.hubLock.Entries {
 		if e.SkillName == skillName {
 			m.hubLock.Entries = append(m.hubLock.Entries[:i], m.hubLock.Entries[i+1:]...)
@@ -1698,7 +1874,11 @@ func (m *Manager) GetHubLockEntries() []HubLockEntry {
 func (m *Manager) GetHubLockEntry(skillName string) *HubLockEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.getHubLockEntryLocked(skillName)
+}
 
+// getHubLockEntryLocked 获取指定技能的 Hub 安装记录（调用者需持有 m.mu 读/写锁）。
+func (m *Manager) getHubLockEntryLocked(skillName string) *HubLockEntry {
 	if m.hubLock == nil {
 		return nil
 	}
@@ -1721,8 +1901,8 @@ func (m *Manager) UninstallHubSkill(skillName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 检查是否从 Hub 安装
-	entry := m.GetHubLockEntry(skillName)
+	// 检查是否从 Hub 安装（使用 locked 版本避免递归加锁导致死锁）
+	entry := m.getHubLockEntryLocked(skillName)
 	if entry == nil {
 		return fmt.Errorf("skill %s is not a hub skill", skillName)
 	}
@@ -1736,8 +1916,8 @@ func (m *Manager) UninstallHubSkill(skillName string) error {
 		delete(m.skills, skillName)
 	}
 
-	// 从 lock.json 移除记录
-	if err := m.RemoveHubLockEntry(skillName); err != nil {
+	// 从 lock.json 移除记录（使用 locked 版本避免递归加锁导致死锁）
+	if err := m.removeHubLockEntryLocked(skillName); err != nil {
 		return fmt.Errorf("failed to remove lock entry: %w", err)
 	}
 
@@ -1752,10 +1932,13 @@ func (m *Manager) appendAuditLog(action, skillName string, source HubSource, sta
 
 	f, err := os.OpenFile(auditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		log.Warnf("failed to open audit log: %v", err)
 		return
 	}
 	defer f.Close()
-	f.WriteString(logEntry)
+	if _, err := f.WriteString(logEntry); err != nil {
+		log.Warnf("failed to write audit log: %v", err)
+	}
 }
 
 // =============================================================================
@@ -1778,7 +1961,7 @@ func (m *Manager) loadBundledManifest() {
 	}
 
 	if err := json.Unmarshal(data, m.bundledManifest); err != nil {
-		fmt.Printf("Warning: failed to parse bundled manifest: %v\n", err)
+		log.Warnf("failed to parse bundled manifest: %v", err)
 	}
 }
 
@@ -1854,7 +2037,7 @@ func (m *Manager) loadDisabledSkills() {
 	}
 
 	if err := json.Unmarshal(data, m.disabledSkills); err != nil {
-		fmt.Printf("Warning: failed to parse disabled skills: %v\n", err)
+		log.Warnf("failed to parse disabled skills: %v", err)
 	}
 }
 
@@ -1924,14 +2107,20 @@ func (m *Manager) IsSkillDisabled(skillName string, platform string) bool {
 	return false
 }
 
-// GetDisabledSkills 返回禁用技能列表
+// GetDisabledSkills 返回禁用技能列表（深拷贝，避免调用方修改返回值影响内部状态）
 func (m *Manager) GetDisabledSkills() *DisabledSkillsConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// 深拷贝 Platform map，避免浅拷贝导致调用方修改影响 Manager 内部状态
+	platformCopy := make(map[string][]string, len(m.disabledSkills.Platform))
+	for k, v := range m.disabledSkills.Platform {
+		platformCopy[k] = append([]string{}, v...)
+	}
+
 	return &DisabledSkillsConfig{
 		Global:   append([]string{}, m.disabledSkills.Global...),
-		Platform: m.disabledSkills.Platform,
+		Platform: platformCopy,
 	}
 }
 
@@ -2004,12 +2193,14 @@ func (m *Manager) moveAutoSkill(skillName string, from, to SkillStatus) error {
 		return fmt.Errorf("skill %s is not an auto-generated skill, cannot change status", skillName)
 	}
 
-	if skill.Status != from && skill.Status != "" {
-		// 允许 from="" 表示首次从根目录迁移（兼容历史数据）
-		if from != SkillStatusPending || skill.Status != from {
+	// 状态校验：skill.Status 必须等于 from，或为空（兼容历史数据首次迁移）
+	// from 为空时表示接受任意非空状态迁移（极少用，保留兼容）
+	if skill.Status != from {
+		if skill.Status != "" && from != "" {
 			return fmt.Errorf("skill %s status is %s, expected %s",
 				skillName, skill.Status, from)
 		}
+		// skill.Status=="" 或 from=="" 的组合允许通过（历史数据迁移）
 	}
 
 	// 确定源目录和目标目录

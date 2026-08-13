@@ -374,11 +374,10 @@ func runSkillsInstall(cmd *cobra.Command, args []string) {
 		// Install from local path or URL
 		installSkillFromPath(name, from)
 	} else {
-		// Try to install from official Hermes registry
-		fmt.Printf("Installing skill '%s' from Hermes official registry...\n", name)
+		// 从官方 Hub registry 安装（InstallFromHub 仅支持 HubSourceHub）
+		fmt.Printf("Installing skill '%s' from Hub registry...\n", name)
 
-		// 使用 Hub 安装
-		err := mgr.InstallFromHub(skills.HubSourceOfficial, name)
+		err := mgr.InstallFromHub(skills.HubSourceHub, name)
 		if err != nil {
 			fmt.Printf("Failed to install from registry: %v\n", err)
 			fmt.Println("\nSupported sources:")

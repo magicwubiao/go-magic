@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // SkillEffectivenessRecord 技能效果记录
@@ -113,11 +114,8 @@ func (em *EffectivenessManager) RecordInvocation(
 		outputQuality = 100
 	}
 
-	// 生成输入摘要（限制长度）
-	inputSummary := input
-	if len(inputSummary) > 200 {
-		inputSummary = inputSummary[:200] + "..."
-	}
+	// 生成输入摘要（按 rune 安全截断，避免切断多字节 UTF-8 字符）
+	inputSummary := utils.Truncate(input, 200)
 
 	record := &SkillEffectivenessRecord{
 		ID:            uuid.New().String(),

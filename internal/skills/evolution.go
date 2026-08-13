@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // SkillEvolutionConfig 进化配置
@@ -347,7 +348,7 @@ func (em *SkillEvolutionManager) buildEvolutionPrompt(evoCtx EvolutionContext) s
 				successStr = "成功"
 			}
 			sb.WriteString(fmt.Sprintf("### 案例 %d (%s)\n", i+1, successStr))
-			sb.WriteString(fmt.Sprintf("输入: %s\n", truncateString(failure.InputSummary, 200)))
+			sb.WriteString(fmt.Sprintf("输入: %s\n", utils.Truncate(failure.InputSummary, 200)))
 			sb.WriteString("\n")
 		}
 	}
@@ -566,12 +567,4 @@ func (em *SkillEvolutionManager) GetConfig() SkillEvolutionConfig {
 	defer em.mu.RUnlock()
 
 	return em.config
-}
-
-// truncateString 截断字符串
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

@@ -256,9 +256,16 @@ func (m *Manager) syncPreferencesToSoul() {
 
 // BindSkillsManager connects the cortex skill auto creator to the skills Manager
 // so auto-generated skills are visible via /api/skills.
+// 同时同步 SkillCreator 的 baseDir 到 Manager 的 autoSkillsDir，避免两者
+// 各自维护不同的 auto_skills 路径导致重启后丢失已批准的自动技能。
 func (m *Manager) BindSkillsManager(sm *skills.Manager) {
 	if m.SkillCreator != nil && sm != nil {
 		m.SkillCreator.SetManager(sm)
+		// 同步路径：以 Manager 的 autoSkillsDir 为准
+		autoDir := sm.GetAutoSkillsDir()
+		if autoDir != "" {
+			m.SkillCreator.SetBaseDir(autoDir)
+		}
 	}
 }
 

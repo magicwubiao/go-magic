@@ -34,16 +34,13 @@ type RegistrySearchResult struct {
 
 // RegistryManager manages multiple skill registries
 type RegistryManager struct {
-	registries    []SkillRegistry
-	maxConcurrent int
-	mu            sync.RWMutex
+	registries []SkillRegistry
+	mu         sync.RWMutex
 }
 
 // NewRegistryManager creates a new registry manager with default registries
 func NewRegistryManager() *RegistryManager {
-	rm := &RegistryManager{
-		maxConcurrent: 3,
-	}
+	rm := &RegistryManager{}
 	// Add default registries (GitHub registry removed)
 	rm.AddRegistry(NewClawHubRegistry())
 	return rm

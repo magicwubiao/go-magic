@@ -13,6 +13,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 var (
@@ -171,14 +172,8 @@ func outputTable(list []*skills.Skill) {
 				if len(s.Tags) > 0 {
 					tags = "[" + strings.Join(s.Tags, ", ") + "]"
 				}
-				desc := s.Description
-				if len(desc) > 38 {
-					desc = desc[:35] + "..."
-				}
-				tools := strings.Join(s.Tools, ", ")
-				if len(tools) > 18 {
-					tools = tools[:15] + "..."
-				}
+				desc := utils.Truncate(s.Description, 35)
+				tools := utils.Truncate(strings.Join(s.Tools, ", "), 15)
 				fmt.Fprintf(w, "  %-25s %-40s %s %s\n", s.Name, desc, tools, tags)
 			}
 			w.Flush()
@@ -189,10 +184,7 @@ func outputTable(list []*skills.Skill) {
 				if len(s.Tags) > 0 {
 					tags = fmt.Sprintf(" [%s]", strings.Join(s.Tags, ", "))
 				}
-				desc := s.Description
-				if len(desc) > 50 {
-					desc = desc[:47] + "..."
-				}
+				desc := utils.Truncate(s.Description, 47)
 				fmt.Printf("  • %s: %s%s\n", s.Name, desc, tags)
 			}
 		}

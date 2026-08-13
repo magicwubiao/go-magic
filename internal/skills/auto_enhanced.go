@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type EnhancedAutoCreator struct {
 	skillCount   int
 	minFrequency int      // Minimum occurrences to generate skill
 	manager      *Manager // optional: register generated skills
+	mu           sync.Mutex
 }
 
 // NewEnhancedAutoCreator creates an enhanced skill auto-creator
@@ -58,11 +60,42 @@ func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 
 // SetManager binds a skills Manager so generated skills get registered
 func (e *EnhancedAutoCreator) SetManager(mgr *Manager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.manager = mgr
+}
+
+// SetBaseDir 更新自动技能根目录（供 cortex 绑定 Manager 时同步路径，
+// 避免 SkillCreator 与 Manager 各自维护不同的 auto_skills 路径导致重启后丢失已批准技能）。
+// 会确保 pending/approved/archived 子目录存在，并迁移已有的 patterns.json。
+func (e *EnhancedAutoCreator) SetBaseDir(dir string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	oldBase := e.baseDir
+	e.baseDir = dir
+	// 确保四态子目录存在
+	os.MkdirAll(filepath.Join(dir, "pending"), 0755)
+	os.MkdirAll(filepath.Join(dir, "approved"), 0755)
+	os.MkdirAll(filepath.Join(dir, "archived"), 0755)
+	// 若新目录下没有 patterns.json 但旧目录有，则迁移过去
+	newPatternsFile := filepath.Join(dir, "patterns.json")
+	oldPatternsFile := filepath.Join(oldBase, "patterns.json")
+	if _, err := os.Stat(newPatternsFile); os.IsNotExist(err) {
+		if data, err := os.ReadFile(oldPatternsFile); err == nil {
+			os.WriteFile(newPatternsFile, data, 0644)
+		}
+	}
 }
 
 // SavePatterns persists patterns to disk
 func (e *EnhancedAutoCreator) SavePatterns() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.savePatternsLocked()
+}
+
+// savePatternsLocked 持锁保存 patterns（调用者需持有 e.mu）
+func (e *EnhancedAutoCreator) savePatternsLocked() error {
 	if len(e.patterns) == 0 {
 		return nil
 	}
@@ -79,6 +112,8 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 	if len(tools) < 3 {
 		return // Need at least 3 tools to form a meaningful pattern
 	}
+
+	e.mu.Lock()
 
 	// Look for subsequences that repeat across tasks
 	for i := 0; i < len(tools)-2; i++ {
@@ -125,11 +160,18 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 		}
 	}
 
-	// Save patterns to disk
-	e.SavePatterns()
+	// 持锁保存 patterns 到磁盘
+	if err := e.savePatternsLocked(); err != nil {
+		log.Printf("[SkillCreator] failed to save patterns: %v", err)
+	}
 
-	// Check if any pattern is ready for skill generation
-	e.CheckAndGenerateSkills()
+	// 拷贝一份 patterns 快照用于后续生成检查，避免长时间持锁做 IO
+	snapshot := make([]Pattern, len(e.patterns))
+	copy(snapshot, e.patterns)
+	e.mu.Unlock()
+
+	// Check if any pattern is ready for skill generation（基于快照，不持锁）
+	e.checkAndGenerateSkillsFromSnapshot(snapshot)
 }
 
 // maxExampleTasksPerPattern 限制每个模式保存的示例任务数量，避免示例列表
@@ -200,7 +242,16 @@ func dedupeExampleTasks(tasks []string) []string {
 
 // CheckAndGenerateSkills checks patterns and generates skills for those meeting criteria
 func (e *EnhancedAutoCreator) CheckAndGenerateSkills() {
-	for _, pattern := range e.patterns {
+	e.mu.Lock()
+	snapshot := make([]Pattern, len(e.patterns))
+	copy(snapshot, e.patterns)
+	e.mu.Unlock()
+	e.checkAndGenerateSkillsFromSnapshot(snapshot)
+}
+
+// checkAndGenerateSkillsFromSnapshot 基于快照检查并生成技能（不持锁，可安全做 IO）
+func (e *EnhancedAutoCreator) checkAndGenerateSkillsFromSnapshot(patterns []Pattern) {
+	for _, pattern := range patterns {
 		// 提高置信度阈值也提高到 0.8，避免低质量的自动生成
 		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.8 {
 			// Check if skill already generated for this pattern (look in pending, approved, archived)
@@ -350,9 +401,13 @@ func (e *EnhancedAutoCreator) generateSkillMarkdown(pattern Pattern, meta map[st
 	return sb.String()
 }
 
-// GetPatterns returns all detected patterns
+// GetPatterns returns all detected patterns（返回拷贝，避免外部修改影响内部状态）
 func (e *EnhancedAutoCreator) GetPatterns() []Pattern {
-	return e.patterns
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]Pattern, len(e.patterns))
+	copy(out, e.patterns)
+	return out
 }
 
 // GetGeneratedSkills returns all auto-generated skills
@@ -375,31 +430,34 @@ func (e *EnhancedAutoCreator) GetGeneratedSkills() []string {
 
 // GetStats returns statistics about pattern detection and skills
 func (e *EnhancedAutoCreator) GetStats() map[string]interface{} {
-	return map[string]interface{}{
-		"patterns_detected": len(e.patterns),
-		"skills_generated":  e.skillCount,
-		"min_frequency":     e.minFrequency,
-		"pending_patterns":  e.countPendingPatterns(),
-	}
-}
-
-func (e *EnhancedAutoCreator) countPendingPatterns() int {
-	count := 0
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	patternsCount := len(e.patterns)
+	pendingCount := 0
 	for _, p := range e.patterns {
 		if p.Frequency < e.minFrequency {
-			count++
+			pendingCount++
 		}
 	}
-	return count
+	return map[string]interface{}{
+		"patterns_detected": patternsCount,
+		"skills_generated":  e.skillCount,
+		"min_frequency":     e.minFrequency,
+		"pending_patterns":  pendingCount,
+	}
 }
 
 // SetMinFrequency sets the minimum frequency threshold for skill generation
 func (e *EnhancedAutoCreator) SetMinFrequency(freq int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.minFrequency = freq
 }
 
 // ExportPatterns exports all patterns for analysis
 func (e *EnhancedAutoCreator) ExportPatterns(path string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	data, err := json.MarshalIndent(e.patterns, "", "  ")
 	if err != nil {
 		return err

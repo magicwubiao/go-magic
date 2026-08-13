@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
@@ -184,10 +185,17 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Fallback: update skill.yaml directly
-			skillDir := filepath.Join(s.getUserSkillsDir(), id)
+			// 安全拼接 skillDir：防止 id 含 "../" 穿越到 skillsDir 之外
+			skillDir, err := SafeJoin(s.getUserSkillsDir(), id)
+			if err != nil {
+				http.Error(w, "invalid skill id: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 			skillFile := filepath.Join(skillDir, "skill.yaml")
 
-			content := fmt.Sprintf("name: %s\ndescription: %s\ncategory: %s\ntags: %s\n",
+			// 用 YAML 双引号字符串转义用户输入，防止换行注入额外字段。
+			// YAML 双引号字符串中需转义反斜杠和双引号，换行符转为 \n 字面量。
+			content := fmt.Sprintf("name: %q\ndescription: %q\ncategory: %q\ntags: %q\n",
 				req.Name, req.Description, req.Category, strings.Join(req.Tags, ","))
 			if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
 				http.Error(w, "failed to write skill file: "+err.Error(), http.StatusInternalServerError)
@@ -209,7 +217,12 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Fallback: remove from file system directly
-			skillDir := filepath.Join(s.getUserSkillsDir(), id)
+			// 安全拼接：防止 id 含 "../" 删除 skillsDir 之外的目录
+			skillDir, err := SafeJoin(s.getUserSkillsDir(), id)
+			if err != nil {
+				http.Error(w, "invalid skill id: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 			if err := os.RemoveAll(skillDir); err != nil {
 				http.Error(w, "failed to delete skill directory: "+err.Error(), http.StatusInternalServerError)
 				return
@@ -312,12 +325,21 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Sanitize skill name (only replace spaces, keep path separators for folder detection)
-	skillName = strings.ReplaceAll(skillName, " ", "_")
+	// 安全校验 skillName：只允许字母、数字、下划线、连字符，拒绝路径分隔符和 ".."
+	// 防止 skillName 含 "../" 导致写到 skillsDir 之外
+	if err := SanitizeName(skillName); err != nil {
+		http.Error(w, "invalid skill name: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Get user skills directory
 	skillsDir := s.getUserSkillsDir()
-	skillDir := filepath.Join(skillsDir, skillName)
+	// SafeJoin 二次防御路径穿越
+	skillDir, err := SafeJoin(skillsDir, skillName)
+	if err != nil {
+		http.Error(w, "invalid skill directory: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Create skill directory
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
@@ -331,13 +353,18 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 
 	switch ext {
 	case ".zip":
-		// Save zip file and extract
-		zipPath := filepath.Join(skillDir, header.Filename)
+		// 安全拼接 zip 文件名，防止 header.Filename 含路径
+		zipBaseName := filepath.Base(header.Filename)
+		zipPath, err := SafeJoin(skillDir, zipBaseName)
+		if err != nil {
+			http.Error(w, "invalid zip filename: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := saveUploadedFile(file, zipPath); err != nil {
 			http.Error(w, "failed to save zip file: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Extract zip
+		// Extract zip（extractZip 内部已用 SafeJoin 校验每个条目）
 		if err := extractZip(zipPath, skillDir); err != nil {
 			http.Error(w, "failed to extract zip: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -349,23 +376,39 @@ func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
 		if relativePath != "" {
 			// Remove the top-level folder from path (it's the skill name)
 			parts := strings.SplitN(relativePath, "/", 2)
+			var relPath string
 			if len(parts) > 1 {
-				destPath = filepath.Join(skillDir, parts[1])
+				relPath = parts[1]
 			} else {
-				destPath = filepath.Join(skillDir, header.Filename)
+				relPath = filepath.Base(header.Filename)
 			}
+			// 安全拼接：防止 parts[1] 含 "../../../" 穿越到 skillDir 之外
+			safeDest, err := SafeJoin(skillDir, relPath)
+			if err != nil {
+				http.Error(w, "invalid file path in upload: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			destPath = safeDest
 		} else {
 			// Save as skill.yaml or SKILL.md based on extension
+			var relName string
 			switch ext {
 			case ".md":
-				destPath = filepath.Join(skillDir, "SKILL.md")
+				relName = "SKILL.md"
 			case ".yaml", ".yml":
-				destPath = filepath.Join(skillDir, "skill.yaml")
+				relName = "skill.yaml"
 			case ".json":
-				destPath = filepath.Join(skillDir, "skill.json")
+				relName = "skill.json"
 			default:
-				destPath = filepath.Join(skillDir, header.Filename)
+				// 用 Base 防止 header.Filename 含路径分隔符
+				relName = filepath.Base(header.Filename)
 			}
+			safeDest, err := SafeJoin(skillDir, relName)
+			if err != nil {
+				http.Error(w, "invalid file path in upload: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			destPath = safeDest
 		}
 
 		// Ensure parent directory exists
@@ -425,10 +468,7 @@ func parseSkillMarkdown(data []byte, skill *Skill) {
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "---") {
-				skill.Description = line
-				if len(skill.Description) > 100 {
-					skill.Description = skill.Description[:100] + "..."
-				}
+				skill.Description = utils.Truncate(line, 100)
 				break
 			}
 		}
