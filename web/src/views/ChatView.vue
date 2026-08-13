@@ -320,16 +320,6 @@
                   </template>
                 </n-button>
               </n-upload>
-              <!-- Working directory dropdown -->
-              <n-dropdown :options="workDirMenuOptions" @select="handleWorkDirMenu" trigger="click" size="small">
-                <n-button size="tiny" quaternary class="toolbar-btn workdir-btn" :title="t('chat.workDir')">
-                  <template #icon>
-                    <n-icon><FolderOpenOutline /></n-icon>
-                  </template>
-                  <span v-if="chatStore.currentWorkDir" class="workdir-label">{{ shortWorkDir }}</span>
-                  <n-icon size="14"><ChevronDownOutline /></n-icon>
-                </n-button>
-              </n-dropdown>
             </div>
             <div class="toolbar-right">
               <n-button
@@ -361,64 +351,78 @@
           </div>
         </div>
       </div>
+      <!-- Work directory bar (outside input box) -->
+      <div v-if="chatStore.currentWorkDir" class="work-dir-bar" @click="handleWorkDirMenu('browse')">
+        <n-icon size="14"><FolderOpenOutline /></n-icon>
+        <span class="work-dir-path">{{ chatStore.currentWorkDir }}</span>
+        <n-button text size="tiny" @click.stop="clearWorkDir">
+          <template #icon><n-icon><CloseCircleOutline /></n-icon></template>
+        </n-button>
+      </div>
+      <div v-else class="work-dir-bar work-dir-bar-empty">
+        <n-button text size="tiny" @click="handleWorkDirMenu('browse')">
+          <template #icon><n-icon size="14"><FolderOpenOutline /></n-icon></template>
+          {{ t('chat.workDirSet') }}
+        </n-button>
+      </div>
     </div>
 
     <!-- Goal Sidebar -->
-    <GoalSidebar />
+    <RightSidebar />
 
-    <!-- Working directory picker modal -->
-    <n-modal v-model:show="showDirPicker" preset="card" :title="t('chat.workDirSelect')" style="max-width: 560px;">
-      <div class="dir-picker">
-        <div class="dir-breadcrumb">
-          <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
-            <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
-            ..
-          </n-button>
-          <n-text class="dir-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
-          <div class="dir-actions">
-            <n-input
-              v-if="showNewFolderInput"
-              v-model:value="newFolderName"
-              size="tiny"
-              placeholder="文件夹名"
-              style="width: 140px;"
-              @keyup.enter="createNewFolder"
-              @blur="cancelNewFolder"
-              ref="newFolderInputRef"
-            />
-            <n-button v-else size="tiny" quaternary :title="t('chat.newFolder')" @click="startNewFolder">
-              <template #icon><n-icon><AddOutline /></n-icon></template>
-            </n-button>
-          </div>
+    <!-- Work Directory Picker Modal -->
+    <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" style="width: 500px;">
+      <!-- Breadcrumb -->
+      <div class="dir-picker-breadcrumb">
+        <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
+          <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+          ..
+        </n-button>
+        <n-text class="dir-picker-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        <n-button size="tiny" quaternary @click="startNewFolder" :title="t('chat.newFolder')">
+          <template #icon><n-icon><AddOutline /></n-icon></template>
+        </n-button>
+      </div>
+
+      <!-- New folder input -->
+      <div v-if="showNewFolderInput" class="dir-picker-new-folder">
+        <n-input
+          v-model:value="newFolderName"
+          size="small"
+          :placeholder="t('chat.newFolder')"
+          @keyup.enter="createNewFolder"
+          @blur="cancelNewFolder"
+          ref="newFolderInputRef"
+        />
+      </div>
+
+      <!-- Directory list -->
+      <div class="dir-picker-list">
+        <div v-if="dirLoading" class="dir-picker-loading">
+          <n-spin size="small" />
         </div>
-        <div class="dir-list">
-          <div v-if="dirLoading" class="dir-loading">
-            <n-spin size="small" /> <span style="margin-left: 8px;">{{ t('chat.workDirLoading') }}</span>
-          </div>
-          <div v-else-if="dirEntries.length === 0" class="dir-empty">
-            {{ t('chat.workDirEmpty') }}
-          </div>
-          <div
-            v-for="entry in dirEntries"
-            v-else
-            :key="entry.path"
-            class="dir-item"
-            @click="navigateDir(entry.path)"
-          >
-            <n-icon size="16"><FolderOutline /></n-icon>
-            <span>{{ entry.name }}</span>
-          </div>
+        <div v-else-if="dirEntries.length === 0" class="dir-picker-empty">
+          <n-text depth="3">{{ t('chat.workDirEmpty') }}</n-text>
+        </div>
+        <div
+          v-for="entry in dirEntries"
+          v-else
+          :key="entry.path"
+          class="dir-picker-item"
+          @click="navigateDir(entry.path)"
+        >
+          <n-icon size="16"><FolderOutline /></n-icon>
+          <span>{{ entry.name }}</span>
         </div>
       </div>
+
       <template #footer>
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
-          <n-text depth="3" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            {{ t('chat.workDirCurrent') }}: {{ chatStore.currentWorkDir || t('chat.workDirNone') }}
-          </n-text>
-          <n-space :size="8">
-            <n-button size="small" type="primary" @click="selectWorkDir">{{ t('chat.workDirSet') }}</n-button>
-          </n-space>
-        </div>
+        <n-space justify="end">
+          <n-button @click="showDirPicker = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="handleWorkDirMenu('set')" :disabled="!chatStore.activeSessionId || !dirCurrentPath">
+            {{ t('chat.workDirSet') }}
+          </n-button>
+        </n-space>
       </template>
     </n-modal>
   </div>
@@ -453,12 +457,11 @@ hljs.registerLanguage('markdown', markdown)
 import { useChatStore } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import ReasoningContent from '@/components/ReasoningContent.vue'
-import ToolCallBlock from '@/components/ToolCallBlock.vue'
-import GoalSidebar from '@/components/GoalSidebar.vue'
+import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, ChevronDownOutline, AddOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -559,6 +562,17 @@ const editingName = ref('')
 // File upload
 const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
 const uploadingFiles = ref<Set<string>>(new Set())
+
+// Work directory
+const showDirPicker = ref(false)
+const dirCurrentPath = ref('')
+const dirEntries = ref<sessionsApi.DirEntry[]>([])
+const dirLoading = ref(false)
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+const newFolderInputRef = ref<{ focus: () => void } | null>(null)
+
+const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
 // Session goals cache
 const sessionGoals = ref<Record<string, sessionsApi.SessionGoal[]>>({})
@@ -793,6 +807,82 @@ function goToFilesPage() {
   router.push('/files')
 }
 
+// Work directory functions
+async function loadDirs(path?: string) {
+  dirLoading.value = true
+  try {
+    const res = await sessionsApi.listDirs(path)
+    dirCurrentPath.value = res.current
+    dirEntries.value = res.dirs || []
+  } catch (e) {
+    console.error('Failed to list directories:', e)
+    dirEntries.value = []
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+function navigateDir(path: string) {
+  if (!path) return
+  showNewFolderInput.value = false
+  newFolderName.value = ''
+  loadDirs(path)
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  newFolderName.value = ''
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+function cancelNewFolder() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    newFolderName.value = ''
+  }, 150)
+}
+
+async function createNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    showNewFolderInput.value = false
+    return
+  }
+  try {
+    await sessionsApi.createDir(dirCurrentPath.value, name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+    loadDirs(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+async function handleWorkDirMenu(key: string) {
+  if (key === 'browse') {
+    showDirPicker.value = true
+    await loadDirs(chatStore.currentWorkDir || undefined)
+  } else if (key === 'set') {
+    if (!chatStore.activeSessionId || !dirCurrentPath.value) return
+    await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
+    message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
+  } else if (key === 'clear') {
+    if (chatStore.activeSessionId) {
+      await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
+      message.success(t('chat.workDirCleared'))
+    }
+  }
+}
+
+function clearWorkDir() {
+  if (chatStore.activeSessionId) {
+    chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
+    message.success(t('chat.workDirCleared'))
+  }
+}
+
 const commandSuggestions = ref<string[]>([])
 
 function handleInput() {
@@ -872,109 +962,6 @@ async function saveRename(id: string) {
   }
   editingSessionId.value = null
   editingName.value = ''
-}
-
-// Working directory picker
-const showDirPicker = ref(false)
-const dirCurrentPath = ref('')
-const dirEntries = ref<sessionsApi.DirEntry[]>([])
-const dirLoading = ref(false)
-const showNewFolderInput = ref(false)
-const newFolderName = ref('')
-const newFolderInputRef = ref<{ focus: () => void } | null>(null)
-
-const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
-
-const shortWorkDir = computed(() => {
-  const dir = chatStore.currentWorkDir
-  if (!dir) return ''
-  if (dir.length > 22) return '…/' + dir.split('/').pop()
-  return dir
-})
-
-const workDirMenuOptions = computed(() => {
-  const options: Array<{ label: string; key: string }> = []
-  if (!chatStore.currentWorkDir || !chatStore.currentWorkDirUserSet) {
-    options.push({ label: t('chat.workDirSelect'), key: 'select' })
-  }
-  options.push({ label: t('chat.openFiles'), key: 'openFiles' })
-  return options
-})
-
-function handleWorkDirMenu(key: string) {
-  if (!chatStore.activeSessionId) {
-    message.warning(t('chat.selectSession'))
-    return
-  }
-  switch (key) {
-    case 'select':
-      loadDirs(chatStore.currentWorkDir || undefined)
-      showDirPicker.value = true
-      break
-    case 'openFiles':
-      localStorage.setItem('files_last_session_id', chatStore.activeSessionId)
-      router.push('/files')
-      break
-  }
-}
-
-async function loadDirs(path?: string) {
-  dirLoading.value = true
-  try {
-    const res = await sessionsApi.listDirs(path)
-    dirCurrentPath.value = res.current
-    dirEntries.value = res.dirs || []
-  } catch (e) {
-    console.error('Failed to list directories:', e)
-    dirEntries.value = []
-  } finally {
-    dirLoading.value = false
-  }
-}
-
-function navigateDir(path: string) {
-  if (!path) return
-  showNewFolderInput.value = false
-  newFolderName.value = ''
-  loadDirs(path)
-}
-
-function startNewFolder() {
-  showNewFolderInput.value = true
-  newFolderName.value = ''
-  nextTick(() => {
-    newFolderInputRef.value?.focus()
-  })
-}
-
-function cancelNewFolder() {
-  setTimeout(() => {
-    showNewFolderInput.value = false
-    newFolderName.value = ''
-  }, 150)
-}
-
-async function createNewFolder() {
-  const name = newFolderName.value.trim()
-  if (!name) {
-    showNewFolderInput.value = false
-    return
-  }
-  try {
-    await sessionsApi.createDir(dirCurrentPath.value, name)
-    newFolderName.value = ''
-    showNewFolderInput.value = false
-    loadDirs(dirCurrentPath.value)
-  } catch (e: any) {
-    message.error(e?.message || t('common.operationFailed'))
-  }
-}
-
-async function selectWorkDir() {
-  if (!chatStore.activeSessionId || !dirCurrentPath.value) return
-  await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
-  showDirPicker.value = false
-  message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
 }
 
 async function selectSession(id: string) {
@@ -1742,64 +1729,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.dir-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.dir-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--n-border-color, #eee);
-}
-
-.dir-current {
-  font-size: 13px;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: monospace;
-}
-
-.dir-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.dir-list {
-  max-height: 320px;
-  overflow-y: auto;
-  min-height: 120px;
-}
-
-.dir-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.dir-item:hover {
-  background: var(--n-color-hover, #f5f5f5);
-}
-
-.dir-empty,
-.dir-loading {
-  display: flex;
-  align-items: center;
-  padding: 24px;
-  color: #999;
-  justify-content: center;
-}
-
 .toolbar-right {
   display: flex;
   align-items: center;
@@ -1950,5 +1879,87 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Work directory picker */
+.work-dir-label {
+  font-size: 11px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+.dir-picker-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dir-picker-current {
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  color: #666;
+}
+
+.dir-picker-new-folder {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dir-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.dir-picker-item:hover {
+  background: #f0f0f0;
+}
+
+.dir-picker-empty,
+.dir-picker-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.work-dir-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--n-text-color-3);
+}
+
+.work-dir-bar .work-dir-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-dir-bar-empty {
+  padding-left: 8px;
 }
 </style>
