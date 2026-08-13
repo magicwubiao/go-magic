@@ -312,34 +312,6 @@
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
             <div class="toolbar-left">
-              <!-- 工作目录（集成在工具栏内，与输入框一体化） -->
-              <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
-              <div
-                v-if="chatStore.currentWorkDirUserSet"
-                class="workdir-chip workdir-chip-locked"
-                :title="t('chat.workDirLocked') + ' — ' + chatStore.currentWorkDir"
-              >
-                <n-icon size="13"><LockClosedOutline /></n-icon>
-                <span class="workdir-chip-path">{{ chatStore.currentWorkDir }}</span>
-              </div>
-              <!-- 系统默认目录（尚未由用户设置）：可点击浏览，可清除 -->
-              <div
-                v-else-if="chatStore.currentWorkDir"
-                class="workdir-chip"
-                @click="handleWorkDirMenu('browse')"
-                :title="chatStore.currentWorkDir"
-              >
-                <n-icon size="13"><FolderOpenOutline /></n-icon>
-                <span class="workdir-chip-path">{{ chatStore.currentWorkDir }}</span>
-                <n-icon size="13" class="workdir-chip-clear" @click.stop="clearWorkDir">
-                  <CloseCircleOutline />
-                </n-icon>
-              </div>
-              <!-- 未设置：按钮触发目录选择 -->
-              <n-button v-else size="tiny" quaternary class="workdir-set-btn" @click="handleWorkDirMenu('browse')">
-                <template #icon><n-icon size="13"><FolderOpenOutline /></n-icon></template>
-                {{ t('chat.workDirSet') }}
-              </n-button>
               <!-- File upload -->
               <n-upload
                 :show-file-list="false"
@@ -381,6 +353,42 @@
               </n-button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 工作目录栏（最下层） -->
+      <div class="workdir-bar">
+        <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
+        <div
+          v-if="chatStore.currentWorkDirUserSet"
+          class="workdir-bar-inner workdir-bar-locked"
+          :title="t('chat.workDirLocked') + ' — ' + chatStore.currentWorkDir"
+        >
+          <n-icon size="13"><LockClosedOutline /></n-icon>
+          <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
+          <span class="workdir-bar-hint">{{ t('chat.workDirLocked') }}</span>
+        </div>
+        <!-- 系统默认目录（尚未由用户设置）：可点击浏览，可清除 -->
+        <div
+          v-else-if="chatStore.currentWorkDir"
+          class="workdir-bar-inner"
+          @click="handleWorkDirMenu('browse')"
+          :title="t('chat.workDir') + ' — ' + chatStore.currentWorkDir"
+        >
+          <n-icon size="13"><FolderOpenOutline /></n-icon>
+          <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
+          <n-icon size="13" class="workdir-bar-clear" @click.stop="clearWorkDir">
+            <CloseCircleOutline />
+          </n-icon>
+        </div>
+        <!-- 未设置：按钮触发目录选择 -->
+        <div v-else class="workdir-bar-inner workdir-bar-empty">
+          <n-icon size="13"><FolderOutline /></n-icon>
+          <span>{{ t('chat.workDirNone') }}</span>
+          <n-button size="tiny" quaternary class="workdir-bar-set-btn" @click="handleWorkDirMenu('browse')">
+            <template #icon><n-icon size="13"><FolderOpenOutline /></n-icon></template>
+            {{ t('chat.workDirSet') }}
+          </n-button>
         </div>
       </div>
     </div>
@@ -1858,6 +1866,32 @@ onMounted(async () => {
     border-top-color: #3a3a3a;
   }
 
+  .workdir-bar {
+    background: #161616;
+    border-top-color: #333;
+  }
+
+  .workdir-bar-inner {
+    color: #aaa;
+  }
+
+  .workdir-bar-path {
+    color: #aaa;
+  }
+
+  .workdir-bar-hint {
+    background: #2a2a2a;
+    color: #777;
+  }
+
+  .workdir-bar-locked .workdir-bar-path {
+    color: #777;
+  }
+
+  .workdir-bar-empty {
+    color: #777;
+  }
+
   .file-preview {
     background: #333;
     border-color: #444;
@@ -1975,53 +2009,69 @@ onMounted(async () => {
   padding: 24px;
 }
 
-/* 工作目录 chip：集成在输入框工具栏内，与对话框一体化 */
-.workdir-chip {
+/* ========== Work Directory Bar（chat 最下层） ========== */
+.workdir-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 24px;
+  background: #fafafa;
+  border-top: 1px solid #e8e8e8;
+  font-size: 12px;
+}
+
+.workdir-bar-inner {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  max-width: 240px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: #f5f5f5;
-  font-size: 11px;
-  color: #666;
+  gap: 6px;
+  min-width: 0;
   cursor: pointer;
-  transition: background 0.15s;
-  flex-shrink: 0;
+  color: #555;
 }
 
-.workdir-chip:hover {
-  background: #ececec;
-}
-
-.workdir-chip-path {
+.workdir-bar-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #555;
 }
 
-.workdir-chip-locked {
+.workdir-bar-hint {
+  font-size: 11px;
+  color: #999;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  background: #ececec;
+  border-radius: 4px;
+}
+
+.workdir-bar-locked {
   cursor: default;
-  background: #f0f0f0;
+}
+
+.workdir-bar-locked .workdir-bar-path {
   color: #999;
 }
 
-.workdir-chip-locked:hover {
-  background: #f0f0f0;
+.workdir-bar-empty {
+  color: #999;
+  cursor: default;
 }
 
-.workdir-chip-clear {
+.workdir-bar-clear {
   cursor: pointer;
   opacity: 0.55;
   flex-shrink: 0;
 }
 
-.workdir-chip-clear:hover {
+.workdir-bar-clear:hover {
   opacity: 1;
 }
 
-.workdir-set-btn {
+.workdir-bar-set-btn {
   font-size: 11px;
   flex-shrink: 0;
 }

@@ -336,7 +336,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick, h } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, NIcon } from 'naive-ui'
 import { 
   FlagOutline, 
   AddOutline, 
@@ -720,20 +720,20 @@ function getFileActions(entry: sessionsApi.FSEntry): any[] {
     actions.push({
       label: t('chat.download'),
       key: 'download',
-      icon: () => h(DownloadOutline, { size: 14 }),
+      icon: () => h(NIcon, { size: 14 }, { default: () => h(DownloadOutline) }),
     })
   }
   
   actions.push({
     label: t('chat.rename'),
     key: 'rename',
-    icon: () => h(PencilOutline, { size: 14 }),
+    icon: () => h(NIcon, { size: 14 }, { default: () => h(PencilOutline) }),
   })
   
   actions.push({
     label: t('chat.delete'),
     key: 'delete',
-    icon: () => h(TrashOutline, { size: 14 }),
+    icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }),
     props: { style: { color: '#d03050' } },
   })
   
