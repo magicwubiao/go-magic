@@ -57,6 +57,8 @@ export default {
     options: 'Options',
     completed: 'Completed',
     name: 'Name',
+    downloading: 'Downloading...',
+    downloadComplete: 'Download complete',
     description: 'Description',
     status: 'Status',
     type: 'Type',

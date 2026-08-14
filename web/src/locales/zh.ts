@@ -47,6 +47,8 @@ export default {
     new: '新建',
     close: '关闭',
     back: '返回',
+    downloading: '下载中...',
+    downloadComplete: '下载完成',
     next: '下一步',
     finish: '完成',
     remove: '移除',

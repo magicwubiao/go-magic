@@ -186,7 +186,7 @@
             <n-button size="tiny" quaternary @click="startNewFile" :title="t('chat.newFile')">
               <template #icon><n-icon :component="FileTrayOutline" :size="14" /></template>
             </n-button>
-            <n-button size="tiny" quaternary @click="downloadZip" :title="t('chat.downloadZip')" :disabled="!dirCurrentPath">
+            <n-button size="tiny" quaternary @click="downloadZip" :title="t('chat.downloadZip')" :disabled="!dirCurrentPath || isDownloading">
               <template #icon><n-icon :component="DownloadOutline" :size="14" /></template>
             </n-button>
           </n-space>
@@ -330,6 +330,25 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- File preview modal -->
+    <n-modal
+      v-model:show="showFilePreview"
+      preset="card"
+      :title="previewFile?.name || ''"
+      :style="{ width: '700px', maxHeight: '80vh' }"
+    >
+      <div v-if="previewLoading" style="text-align: center; padding: 40px;">
+        <n-spin size="large" />
+        <n-text depth="3" style="display: block; margin-top: 12px;">Loading...</n-text>
+      </div>
+      <div v-else-if="previewError" style="text-align: center; padding: 40px;">
+        <n-text type="error">{{ previewError }}</n-text>
+      </div>
+      <div v-else style="max-height: 60vh; overflow: auto;">
+        <pre style="white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5; margin: 0;">{{ previewContent }}</pre>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -387,6 +406,7 @@ const newGoalForm = reactive({
 
 // File manager state
 const dirCurrentPath = ref('')
+const isDownloading = ref(false)
 const fsEntries = ref<sessionsApi.FSEntry[]>([])
 const filesLoading = ref(false)
 const showNewFolderInput = ref(false)
@@ -406,6 +426,13 @@ const renameNewName = ref('')
 // Delete modal state
 const showDeleteModal = ref(false)
 const deleteTarget = ref<sessionsApi.FSEntry | null>(null)
+
+// File preview state
+const showFilePreview = ref(false)
+const previewFile = ref<sessionsApi.FSEntry | null>(null)
+const previewContent = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -646,13 +673,29 @@ function navigateDir(path: string) {
   loadFiles(path || undefined)
 }
 
-function handleFileClick(entry: sessionsApi.FSEntry) {
+async function handleFileClick(entry: sessionsApi.FSEntry) {
   if (entry.is_dir) {
     navigateDir(entry.path)
   } else {
-    // Open file in new tab or download
-    const url = sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
-    window.open(url, '_blank')
+    // Show file preview
+    await openFilePreview(entry)
+  }
+}
+
+async function openFilePreview(entry: sessionsApi.FSEntry) {
+  previewFile.value = entry
+  previewContent.value = ''
+  previewError.value = ''
+  showFilePreview.value = true
+  previewLoading.value = true
+  
+  try {
+    previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
+  } catch (e: any) {
+    previewError.value = e.message || 'Failed to read file'
+    previewContent.value = ''
+  } finally {
+    previewLoading.value = false
   }
 }
 
@@ -707,10 +750,21 @@ async function createNewItem() {
   }
 }
 
+function downloadFile(url: string, filename?: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || 'download'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  message.success(t('common.downloadComplete'))
+}
+
 function downloadZip() {
   if (!dirCurrentPath.value) return
-  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId || undefined)
-  window.open(url, '_blank')
+  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!)
+  downloadFile(url, 'files.zip')
 }
 
 function getFileActions(entry: sessionsApi.FSEntry): any[] {
@@ -743,7 +797,7 @@ function getFileActions(entry: sessionsApi.FSEntry): any[] {
 async function handleFileAction(key: string, entry: sessionsApi.FSEntry) {
   if (key === 'download') {
     const url = sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
-    window.open(url, '_blank')
+    downloadFile(url, entry.name)
   } else if (key === 'rename') {
     renameTarget.value = entry
     renameNewName.value = entry.name

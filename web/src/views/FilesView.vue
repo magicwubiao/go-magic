@@ -94,7 +94,6 @@
               <n-button type="primary" @click="saveEdit">{{ t('common.save') }}</n-button>
             </template>
           </template>
-          <n-button type="primary" @click="downloadPreviewFile">{{ t('files.download') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -294,8 +293,8 @@ async function loadFiles() {
   }
 }
 
-async function handleUpload({ file }: { file: { file: File } }) {
-  const nativeFile = file.file
+async function handleUpload(options: any) {
+  const nativeFile = options.file
   if (!nativeFile) return false
   try {
     await sessionsApi.uploadFile(nativeFile)
@@ -318,12 +317,15 @@ async function handleDelete(filename: string) {
 }
 
 function downloadUploadFile(file: sessionsApi.FileItem) {
-  const link = document.createElement('a')
-  link.href = file.url
-  link.download = file.filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+  downloadWithAuth(file.url, file.filename)
+}
+
+function copyUrl(file: sessionsApi.FileItem) {
+  navigator.clipboard.writeText(file.url).then(() => {
+    message.success(t('common.copied') || 'Copied!')
+  }).catch(() => {
+    message.error(t('common.copyFailed') || 'Copy failed')
+  })
 }
 
 // ===== Preview/Editor =====
@@ -398,29 +400,14 @@ async function saveEdit() {
 }
 
 async function downloadWithAuth(url: string, filename: string) {
-  try {
-    const res = await fetch(url, { headers: sessionsApi.getFSAuthHeaders() })
-    if (!res.ok) {
-      throw new Error(`Download failed: ${res.statusText}`)
-    }
-    const blob = await res.blob()
-    const blobUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = blobUrl
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(blobUrl)
-  } catch (e) {
-    message.error(t('files.downloadError') || 'Download failed')
-    console.error(e)
-  }
-}
-
-function downloadPreviewFile() {
-  if (!previewDownloadUrl.value) return
-  downloadWithAuth(previewDownloadUrl.value, previewTitle.value)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  message.success(t('common.downloadComplete'))
 }
 
 function formatSize(bytes: number): string {
