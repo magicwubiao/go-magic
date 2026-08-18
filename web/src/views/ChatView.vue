@@ -134,6 +134,8 @@
         {{ t('chat.gatewaySession', { source: activeSessionSource }) }}
       </n-alert>
 
+      
+
       <div class="messages" ref="messagesRef">
         <div
           v-for="msg in chatStore.messages"
@@ -326,6 +328,17 @@
               </n-upload>
             </div>
             <div class="toolbar-right">
+              <n-select
+                v-if="modelOptions.length > 0"
+                v-model:value="currentModelId"
+                :options="modelOptions"
+                size="small"
+                style="min-width: 160px; max-width: 260px; margin-right: 8px"
+                :placeholder="t('chat.selectModel')"
+                :consistent-menu-width="false"
+                :render-label="renderModelLabel"
+                @update:value="handleModelChange"
+              />
               <n-button
                 v-if="!chatStore.streaming"
                 type="primary"
@@ -455,7 +468,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
@@ -482,6 +495,7 @@ hljs.registerLanguage('css', css)
 hljs.registerLanguage('markdown', markdown)
 import { useChatStore } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
+import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
@@ -495,6 +509,7 @@ import { useRouter } from 'vue-router'
 const { t } = useI18n()
 const chatStore = useChatStore()
 const goalsStore = useGoalsStore()
+const modelsStore = useModelsStore()
 const router = useRouter()
 const message = useMessage()
 const inputValue = ref('')
@@ -530,6 +545,37 @@ const elapsedDisplay = computed(() => {
   const sec = s % 60
   return `${m}m${sec}s`
 })
+
+// Model selection
+const modelOptions = computed(() => modelsStore.modelSelectOptions)
+const currentModelId = ref(modelsStore.currentModelInfo?.id || '')
+
+// Sync currentModelId when store changes
+watch(() => modelsStore.currentModelInfo, (info) => {
+  if (info?.id) {
+    currentModelId.value = info.id
+  }
+}, { immediate: true })
+
+function handleModelChange(value: string) {
+  const [provider, ...rest] = value.split('/')
+  const model = rest.join('/')
+  if (provider && model) {
+    modelsStore.setModel(model, provider.trim())
+  }
+}
+
+function renderModelLabel(option: { label: string; value: string }) {
+  const parts = option.label.split(' / ')
+  const provider = parts[0] || ''
+  const model = parts[1] || ''
+  return h('div', {
+    style: 'display: flex; align-items: center; gap: 6px; padding: 4px 0;'
+  }, [
+    h('span', null, provider),
+    h('span', null, `/ ${model}`),
+  ])
+}
 
 // Current agent phase
 const agentPhase = computed(() => {
@@ -1130,6 +1176,7 @@ watch(() => goalsStore.linkVersion, () => {
 
 onMounted(async () => {
   await chatStore.loadSessions()
+  modelsStore.loadModels()
   // Bind scroll event for session list infinite scroll
   if (sessionListRef.value) {
     sessionListRef.value.addEventListener('scroll', handleSessionScroll)
@@ -2074,5 +2121,56 @@ onMounted(async () => {
 .workdir-bar-set-btn {
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* Responsive: Mobile devices */
+@media (max-width: 768px) {
+  .chat-container {
+    flex-direction: column;
+  }
+  
+  .session-sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  
+  .session-list {
+    position: relative;
+    top: 0;
+    max-height: 30vh;
+  }
+  
+  .chat-main {
+    flex: 1;
+    min-height: 0;
+  }
+  
+  .messages {
+    padding: 8px;
+  }
+  
+  .message {
+    gap: 6px;
+  }
+  
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+  
+  .message-bubble {
+    max-width: 85%;
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+  
+  .input-area {
+    padding: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
 }
 </style>

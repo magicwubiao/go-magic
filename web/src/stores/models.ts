@@ -42,12 +42,16 @@ export const useModelsStore = defineStore('models', () => {
     }
   })
 
-  // Model options for select dropdown
+  // Model options for select dropdown - only show configured providers
   const modelSelectOptions = computed(() => {
-    return models.value.map(m => ({
-      label: `${m.provider} / ${m.name}${m.description ? ` (${m.description})` : ''}`,
-      value: m.id,
-    }))
+    const configuredProviders = configStore.config?.providers || {}
+    return models.value
+      .filter(m => configuredProviders[m.provider])
+      .map(m => ({
+        label: `${m.provider} / ${m.name}${m.contextLen ? ` (${(m.contextLen / 1000).toFixed(0)}K)` : ''}`,
+        value: m.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label))
   })
 
   async function loadModels() {

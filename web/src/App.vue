@@ -250,4 +250,33 @@ body {
 .settings-label {
   white-space: nowrap;
 }
+
+/* Responsive: Mobile devices */
+@media (max-width: 768px) {
+  .n-layout-sider {
+    position: fixed !important;
+    z-index: 100;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+  
+  .n-layout-sider.n-layout-sider--collapsed {
+    transform: translateX(-100%);
+  }
+  
+  .n-layout-sider:not(.n-layout-sider--collapsed) {
+    transform: translateX(0);
+    box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+  }
+  
+  .n-layout-content {
+    margin-left: 0 !important;
+  }
+  
+  /* Hide sidebar trigger on mobile, use hamburger menu instead */
+  .n-layout-sider__trigger {
+    display: none;
+  }
+}
 </style>

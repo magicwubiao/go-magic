@@ -445,4 +445,27 @@ onMounted(() => {
   justify-content: center;
   align-items: center;
 }
+
+/* Responsive: Mobile devices */
+@media (max-width: 768px) {
+  .files-container {
+    padding: 0 8px;
+  }
+  
+  .files-container :deep(.n-grid) {
+    grid-template-columns: 1fr !important;
+  }
+  
+  .files-container :deep(.n-data-table) {
+    font-size: 12px;
+  }
+  
+  .files-container :deep(.n-card) {
+    margin-bottom: 12px;
+  }
+  
+  .files-container :deep(.n-space) {
+    flex-wrap: wrap;
+  }
+}
 </style>
