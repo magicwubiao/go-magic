@@ -288,6 +288,10 @@ func NewServer(dbPath string) *Server {
 		approvalCfg.TrustThreshold = ac.TrustThreshold
 		approvalCfg.EnableLearning = ac.EnableLearning
 		approvalCfg.EnableCLIConfirm = ac.EnableCLIConfirm
+		// 仅在显式设置时覆盖 timeout_strategy，否则保留 DefaultConfig 的 deny。
+		if ac.TimeoutStrategy != "" {
+			approvalCfg.TimeoutStrategy = approval.TimeoutStrategy(ac.TimeoutStrategy)
+		}
 		// 仅在显式设置 (>0) 时覆盖，否则保留 DefaultConfig 的 60s。
 		// 若无条件覆盖，配置文件中 approval 段未写 approval_timeout 时，
 		// Go 零值 0 会使 pending 审批立即过期，用户来不及点击批准。

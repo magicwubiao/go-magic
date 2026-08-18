@@ -136,6 +136,12 @@
                 <n-form-item :label="t('approval.settings.strategy')">
                   <n-select v-model:value="settingsForm.strategy" :options="strategyOptions" />
                 </n-form-item>
+                <n-form-item :label="t('approval.settings.timeoutStrategy')">
+                  <n-select v-model:value="settingsForm.timeoutStrategy" :options="timeoutStrategyOptions" />
+                  <template #feedback>
+                    <n-text depth="3" style="font-size: 12px;">{{ t('approval.settings.timeoutStrategyHint') }}</n-text>
+                  </template>
+                </n-form-item>
                 <n-form-item :label="t('approval.settings.trustThreshold')">
                   <n-input-number v-model:value="settingsForm.trustThreshold" :min="0" :max="100" style="width: 100%;" />
                   <template #feedback>
@@ -243,6 +249,7 @@ const deniedCommands = ref<DeniedPattern[]>([])
 // Settings
 const settingsForm = ref<ApprovalSettings>({
   strategy: 'smart',
+  timeoutStrategy: 'deny',
   trustThreshold: 3,
   enableLearning: true,
   cliConfirm: false,
@@ -268,6 +275,13 @@ const strategyOptions = computed(() => [
   { label: t('approval.settings.strategies.auto'), value: 'auto' },
   { label: t('approval.settings.strategies.smart'), value: 'smart' },
   { label: t('approval.settings.strategies.whitelist'), value: 'whitelist' },
+])
+
+// Timeout strategy options for settings dropdown
+const timeoutStrategyOptions = computed(() => [
+  { label: t('approval.settings.timeoutStrategies.deny'), value: 'deny' },
+  { label: t('approval.settings.timeoutStrategies.allowLowMedium'), value: 'allow_low_medium' },
+  { label: t('approval.settings.timeoutStrategies.allowAll'), value: 'allow_all' },
 ])
 
 // Whitelist rows for data table
@@ -576,6 +590,7 @@ async function loadSettings(): Promise<void> {
     ])
     settingsForm.value = {
       strategy: settings.strategy,
+      timeoutStrategy: settings.timeoutStrategy,
       trustThreshold: settings.trustThreshold,
       enableLearning: settings.enableLearning,
       cliConfirm: settings.cliConfirm,

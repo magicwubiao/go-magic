@@ -1140,6 +1140,13 @@ export default {
       enableLearningHint: '从用户审批决策中学习命令模式',
       cliConfirm: 'CLI 确认',
       cliConfirmHint: '在 CLI 中执行命令前要求用户确认',
+      timeoutStrategy: '超时策略',
+      timeoutStrategyHint: '审批请求超时（如无人值守的 cron/kanban 任务）后的处理方式',
+      timeoutStrategies: {
+        deny: '拒绝 - 超时后拒绝命令',
+        allowLowMedium: '放行低/中风险 - 超时后自动放行低/中风险命令',
+        allowAll: '全部放行 - 超时后放行所有命令（保留审计）',
+      },
       whitelist: '白名单',
       addWhitelist: '添加白名单',
       whitelistPlaceholder: '输入命令模式...',

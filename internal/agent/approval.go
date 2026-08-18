@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,21 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	// 白名单/受信 pattern/只读命令 的放行 reason 不同，不受影响。
 	if result.Approved {
 		if isContentTool(call.ToolName) && result.Reason == "Low risk command" {
+			// C2：内容工具"范围放行"。write_file/file_edit 的目标路径位于会话
+			// 工作目录内时，自动放行并写入审计历史；工作目录外仍要求用户确认。
+			// execute_code 无路径可判定范围，保持强制确认。
+			if h.isPathWithinWorkdir(call.ToolName, call.ToolArgs, workingDir) {
+				scoped := &approval.ApprovalResult{
+					Approved:  true,
+					Trusted:   true,
+					Strategy:  result.Strategy,
+					Reason:    "Path within working directory (scoped auto-approval)",
+					RiskLevel: result.RiskLevel,
+				}
+				h.manager.RecordResult(req, scoped)
+				h.manager.NotifyApproval(scoped, req)
+				return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+			}
 			result.Approved = false
 			result.AskUser = true
 			result.Reason = "Code/file operation requires confirmation"
@@ -205,7 +221,10 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 			// 但超时/ctx 取消不应记为"用户拒绝"——否则多次超时会让命令进入 denied
 			// pattern，即使用户从未主动拒绝。超时走独立通知路径，不污染 pattern 学习。
 			if isTimeoutOrCancelled(webResult) {
-				h.manager.NotifyApproval(webResult, req)
+				// C1：审批超时按配置的超时策略处理（ResolveTimeout 内部根据
+				// timeout_strategy 决定放行/拒绝，写入审计历史并通知回调）。
+				timeoutResult := h.manager.ResolveTimeout(req)
+				approved = timeoutResult.Approved
 			} else if approved {
 				h.manager.Approve(req)
 			} else {
@@ -287,14 +306,11 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 					Reason: "User quit the session",
 				}, nil
 			case actionTimeout:
-				// 超时/取消：不调用 Deny（避免污染 denied pattern 计数），
-				// 仅通知回调记录历史，决策为 timeout。
-				approved = false
-				h.manager.NotifyApproval(&approval.ApprovalResult{
-					Approved: false,
-					Strategy: result.Strategy,
-					Reason:   "Approval timed out",
-				}, req)
+				// C1：审批超时按配置的超时策略处理（ResolveTimeout 根据
+				// timeout_strategy 决定放行/拒绝，写入审计历史并通知回调）。
+				// 不调用 Deny，避免污染 denied pattern 计数。
+				timeoutResult := h.manager.ResolveTimeout(req)
+				approved = timeoutResult.Approved
 			}
 		}
 
@@ -324,6 +340,44 @@ func isContentTool(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isPathWithinWorkdir 判断内容工具（write_file/file_edit）的目标路径是否位于
+// 会话工作目录内（C2 范围放行判定）。路径解析方式与文件工具一致：
+// 相对路径基于 workdir 解析，绝对路径按原样。
+func (h *ApprovalHook) isPathWithinWorkdir(toolName string, args map[string]interface{}, workdir string) bool {
+	if workdir == "" {
+		return false
+	}
+	var path string
+	switch toolName {
+	case "write_file", "file_edit":
+		path, _ = args["path"].(string)
+	default:
+		return false
+	}
+	if path == "" {
+		return false
+	}
+
+	absWorkdir, err := filepath.Abs(workdir)
+	if err != nil {
+		return false
+	}
+	absPath := path
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(absWorkdir, path)
+	}
+	absPath, err = filepath.Abs(absPath)
+	if err != nil {
+		return false
+	}
+
+	rel, err := filepath.Rel(absWorkdir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // pendingWebApprovalWithCtx 包装 h.manager.PendingWebApproval，使其可被 ctx 取消。

@@ -1126,6 +1126,13 @@ export default {
       enableLearningHint: 'Learn command patterns from user approval decisions',
       cliConfirm: 'CLI Confirm',
       cliConfirmHint: 'Require user confirmation before running commands in CLI',
+      timeoutStrategy: 'Timeout Strategy',
+      timeoutStrategyHint: 'When an approval request times out (e.g. unattended cron/kanban tasks): deny, or auto-allow low/medium risk',
+      timeoutStrategies: {
+        deny: 'Deny - Reject timed-out commands',
+        allowLowMedium: 'Allow Low/Medium - Auto-allow low/medium risk commands',
+        allowAll: 'Allow All - Auto-allow all commands (audited)',
+      },
       whitelist: 'Whitelist',
       addWhitelist: 'Add Whitelist',
       whitelistPlaceholder: 'Enter command pattern...',

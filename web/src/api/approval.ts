@@ -46,6 +46,7 @@ export interface DeniedPattern {
 
 export interface ApprovalSettings {
   strategy: string
+  timeoutStrategy: string
   trustThreshold: number
   enableLearning: boolean
   cliConfirm: boolean
@@ -216,6 +217,7 @@ export async function getSettings(): Promise<ApprovalSettings> {
   const raw = await request<AnyRecord>(`${API_BASE}/settings`)
   return {
     strategy: raw.strategy || 'smart',
+    timeoutStrategy: raw.timeout_strategy ?? raw.timeoutStrategy ?? 'deny',
     trustThreshold: raw.trust_threshold ?? raw.trustThreshold ?? 3,
     enableLearning: raw.enable_learning ?? raw.enableLearning ?? true,
     cliConfirm: raw.cli_confirm ?? raw.cliConfirm ?? false,
@@ -229,6 +231,7 @@ export async function saveSettings(settings: ApprovalSettings): Promise<void> {
     method: 'PUT',
     body: JSON.stringify({
       strategy: settings.strategy,
+      timeout_strategy: settings.timeoutStrategy,
       trust_threshold: settings.trustThreshold,
       enable_learning: settings.enableLearning,
       cli_confirm: settings.cliConfirm,

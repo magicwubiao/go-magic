@@ -39,6 +39,21 @@ const (
 	StrategyWhitelist   Strategy = "whitelist"
 )
 
+// TimeoutStrategy 定义审批请求超时（无人值守）后的处理策略（C1）。
+// cron/kanban 等无人值守任务没有用户点击审批卡片，超时后的行为由该策略决定，
+// 而不是一律拒绝导致任务失败。
+type TimeoutStrategy string
+
+const (
+	// TimeoutStrategyDeny 超时后拒绝命令（默认，向后兼容）。
+	TimeoutStrategyDeny TimeoutStrategy = "deny"
+	// TimeoutStrategyAllowLowMedium 超时后自动放行低/中风险命令，高风险/关键风险仍拒绝。
+	TimeoutStrategyAllowLowMedium TimeoutStrategy = "allow_low_medium"
+	// TimeoutStrategyAllowAllAudit 超时后放行所有非危险命令（危险命令在黑名单层已拦截），
+	// 每次放行都会写入审计历史。
+	TimeoutStrategyAllowAllAudit TimeoutStrategy = "allow_all"
+)
+
 // RiskLevel represents the danger level of a command.
 type RiskLevel int
 
@@ -281,9 +296,10 @@ type ApprovalConfig struct {
 	GatewayEnabled    bool     `mapstructure:"gateway_enabled"`
 	GatewayURL        string   `mapstructure:"gateway_url"`
 	DangerousPatterns []string `mapstructure:"dangerous_patterns"`
-	AllowedPatterns   []string `mapstructure:"allowed_patterns"`
-	ApprovalTimeout   int      `mapstructure:"approval_timeout"`
-	LearnFromSameUser bool     `mapstructure:"learn_from_same_user"`
+	AllowedPatterns   []string         `mapstructure:"allowed_patterns"`
+	ApprovalTimeout   int              `mapstructure:"approval_timeout"`
+	TimeoutStrategy   TimeoutStrategy  `mapstructure:"timeout_strategy"`
+	LearnFromSameUser bool             `mapstructure:"learn_from_same_user"`
 }
 
 // DefaultConfig returns the default approval configuration.
@@ -317,6 +333,7 @@ func DefaultConfig() *ApprovalConfig {
 			`^git\s+(status|log|diff|show|branch|remote|stash)(\s|$)`,
 		},
 		ApprovalTimeout:   60,
+		TimeoutStrategy:   TimeoutStrategyDeny,
 		LearnFromSameUser: true,
 	}
 }
@@ -1240,6 +1257,76 @@ func (m *Manager) SetApprovalTimeout(t int) {
 	m.config.ApprovalTimeout = t
 }
 
+// SetTimeoutStrategy 更新审批超时策略（deny / allow_low_medium / allow_all）。
+func (m *Manager) SetTimeoutStrategy(ts TimeoutStrategy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.TimeoutStrategy = ts
+}
+
+// ApplyTimeoutStrategy 根据配置的超时策略，将一次超时的审批请求转化为最终决策（C1）。
+// 用于 Web / CLI 审批超时路径：而不是一律拒绝，支持：
+//   - deny：拒绝命令（默认，向后兼容）
+//   - allow_low_medium：低/中风险自动放行，高风险及以上拒绝
+//   - allow_all：全部放行（危险命令已在黑名单层拦截），保留审计记录
+func (m *Manager) ApplyTimeoutStrategy(req *ApprovalRequest) *ApprovalResult {
+	cfg := m.GetConfig()
+
+	risk := req.RiskLevel
+	if risk < RiskLow || risk > RiskCritical {
+		risk = RiskLow
+	}
+
+	switch cfg.TimeoutStrategy {
+	case TimeoutStrategyAllowLowMedium:
+		if risk <= RiskMedium {
+			return &ApprovalResult{
+				Approved:  true,
+				Trusted:   true,
+				Strategy:  cfg.Strategy,
+				Reason:    "Timeout strategy: auto-approved (low/medium risk)",
+				RiskLevel: risk,
+			}
+		}
+		return &ApprovalResult{
+			Approved:  false,
+			Strategy:  cfg.Strategy,
+			Reason:    "Timeout strategy: denied (high/critical risk)",
+			RiskLevel: risk,
+		}
+	case TimeoutStrategyAllowAllAudit:
+		return &ApprovalResult{
+			Approved:  true,
+			Trusted:   true,
+			Strategy:  cfg.Strategy,
+			Reason:    "Timeout strategy: auto-approved (allow all, audited)",
+			RiskLevel: risk,
+		}
+	default: // TimeoutStrategyDeny
+		return &ApprovalResult{
+			Approved:  false,
+			Strategy:  cfg.Strategy,
+			Reason:    "Approval timed out",
+			RiskLevel: risk,
+		}
+	}
+}
+
+// ResolveTimeout 处理一次审批超时：根据超时策略计算最终决策，写入审计历史并通知回调。
+// 返回最终决策，供调用方决定放行/拒绝。不调用 Deny，避免污染 denied pattern 计数。
+func (m *Manager) ResolveTimeout(req *ApprovalRequest) *ApprovalResult {
+	result := m.ApplyTimeoutStrategy(req)
+	m.recordDecision(req, result, time.Now())
+	m.NotifyApproval(result, req)
+	return result
+}
+
+// RecordResult 将一次审批结果写入历史（供审计），不修改 pattern 学习状态。
+// 用于策略性自动放行（如 C2 工作目录范围放行）的审计记录。
+func (m *Manager) RecordResult(req *ApprovalRequest, result *ApprovalResult) {
+	m.recordDecision(req, result, time.Now())
+}
+
 // SaveConfig is a no-op; config is persisted via the main config file.
 func (m *Manager) SaveConfig() error {
 	return nil
@@ -1506,6 +1593,15 @@ func (m *Manager) CLIConfirm(req *ApprovalRequest) (bool, error) {
 // Approval history
 // ---------------------------------------------------------------------------
 
+// isTimeoutDecision 判断结果是否代表一次超时决策（用于历史记录标记为 timeout）。
+func isTimeoutDecision(r *ApprovalResult) bool {
+	if r == nil {
+		return false
+	}
+	reason := strings.ToLower(r.Reason)
+	return strings.Contains(reason, "timed out") || strings.Contains(reason, "timeout")
+}
+
 // recordDecision records an approval decision to the history.
 func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, start time.Time) {
 	duration := time.Since(start).Milliseconds()
@@ -1517,6 +1613,9 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 		} else {
 			decision = "approved"
 		}
+	} else if isTimeoutDecision(result) {
+		// 超时导致的拒绝标记为 timeout（而非 denied），避免与用户主动拒绝混淆。
+		decision = "timeout"
 	}
 
 	// 如果 req.RiskLevel 未设置（危险/白名单早退路径），使用 result.RiskLevel
@@ -2205,6 +2304,27 @@ func (m *Manager) ConfigCommand() *cobra.Command {
 			},
 		},
 		&cobra.Command{
+			Use:   "set-timeout-strategy [deny|allow_low_medium|allow_all]",
+			Short: "Set approval timeout strategy (C1: unattended task behavior)",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				var ts TimeoutStrategy
+				switch args[0] {
+				case "deny":
+					ts = TimeoutStrategyDeny
+				case "allow_low_medium":
+					ts = TimeoutStrategyAllowLowMedium
+				case "allow_all":
+					ts = TimeoutStrategyAllowAllAudit
+				default:
+					return fmt.Errorf("unknown timeout strategy: %s (must be deny, allow_low_medium, or allow_all)", args[0])
+				}
+				m.SetTimeoutStrategy(ts)
+				viper.Set("approval.timeout_strategy", string(ts))
+				return viper.WriteConfig()
+			},
+		},
+		&cobra.Command{
 			Use:   "status",
 			Short: "Show approval system status",
 			RunE: func(cmd *cobra.Command, args []string) error {
@@ -2213,6 +2333,7 @@ func (m *Manager) ConfigCommand() *cobra.Command {
 				fmt.Printf("Strategy: %s\n", cfg.Strategy)
 				fmt.Printf("Learning: %v\n", cfg.EnableLearning)
 				fmt.Printf("CLI Confirm: %v\n", cfg.EnableCLIConfirm)
+				fmt.Printf("Timeout Strategy: %s\n", cfg.TimeoutStrategy)
 				fmt.Printf("Trust Threshold: %d\n", cfg.TrustThreshold)
 				fmt.Printf("Trusted Patterns: %d\n", stats.TrustedPatterns)
 				fmt.Printf("Denied Patterns: %d\n", stats.DeniedPatterns)

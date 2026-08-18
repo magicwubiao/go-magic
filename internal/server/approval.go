@@ -186,6 +186,15 @@ func isValidStrategy(s string) bool {
 	return false
 }
 
+// isValidTimeoutStrategy 校验 timeout_strategy 是否合法。
+func isValidTimeoutStrategy(s string) bool {
+	switch s {
+	case "deny", "allow_low_medium", "allow_all":
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleApprovalStrategy(w http.ResponseWriter, r *http.Request) {
 	mgr := s.getApprovalManager()
 	if mgr == nil {
@@ -331,10 +340,11 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		s.respondApprovalSettings(w, mgr)
 	case http.MethodPut:
 		var req struct {
-			Strategy       string `json:"strategy"`
-			TrustThreshold int    `json:"trust_threshold"`
-			CLIPrompt      bool   `json:"cli_confirm"`
-			EnableLearning bool   `json:"enable_learning"`
+			Strategy        string `json:"strategy"`
+			TrustThreshold  int    `json:"trust_threshold"`
+			CLIPrompt       bool   `json:"cli_confirm"`
+			EnableLearning  bool   `json:"enable_learning"`
+			TimeoutStrategy string `json:"timeout_strategy"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -345,10 +355,18 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "Invalid strategy. Must be: manual, auto, smart, or whitelist", http.StatusBadRequest)
 			return
 		}
+		// 校验 timeout_strategy 合法性（空字符串表示不更新）
+		if req.TimeoutStrategy != "" && !isValidTimeoutStrategy(req.TimeoutStrategy) {
+			http.Error(w, "Invalid timeout strategy. Must be: deny, allow_low_medium, or allow_all", http.StatusBadRequest)
+			return
+		}
 
 		// 使用 SetXxx 方法更新，避免修改 GetConfig() 返回的局部拷贝（GetConfig 现在返回值类型）。
 		if req.Strategy != "" {
 			mgr.SetStrategy(approval.Strategy(req.Strategy))
+		}
+		if req.TimeoutStrategy != "" {
+			mgr.SetTimeoutStrategy(approval.TimeoutStrategy(req.TimeoutStrategy))
 		}
 		if req.TrustThreshold > 0 {
 			mgr.SetTrustThreshold(req.TrustThreshold)
@@ -372,6 +390,7 @@ func (s *Server) respondApprovalSettings(w http.ResponseWriter, mgr *approval.Ma
 	stats := mgr.GetStats()
 	jsonResponse(w, map[string]interface{}{
 		"strategy":             cfg.Strategy,
+		"timeout_strategy":     cfg.TimeoutStrategy,
 		"enable_learning":      cfg.EnableLearning,
 		"cli_confirm":          cfg.EnableCLIConfirm,
 		"trust_threshold":      cfg.TrustThreshold,
@@ -446,6 +465,7 @@ func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 		EnableLearning:   ac.EnableLearning,
 		EnableCLIConfirm: ac.EnableCLIConfirm,
 		ApprovalTimeout:  ac.ApprovalTimeout,
+		TimeoutStrategy:  string(ac.TimeoutStrategy),
 	}
 	_ = s.cfg.Save()
 }

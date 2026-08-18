@@ -279,6 +279,7 @@ type ApprovalConfig struct {
 	EnableLearning   bool   `json:"enable_learning"`    // Learn from user decisions
 	EnableCLIConfirm bool   `json:"enable_cli_confirm"` // Enable CLI confirmation prompt
 	ApprovalTimeout  int    `json:"approval_timeout"`   // Approval timeout in seconds
+	TimeoutStrategy  string `json:"timeout_strategy"`   // "deny", "allow_low_medium", "allow_all"
 }
 
 // DefaultApprovalConfig returns default approval configuration
@@ -289,6 +290,7 @@ func DefaultApprovalConfig() *ApprovalConfig {
 		EnableLearning:   true,
 		EnableCLIConfirm: false,
 		ApprovalTimeout:  300,
+		TimeoutStrategy:  "deny",
 	}
 }
 
