@@ -115,8 +115,9 @@ func (t *DiffPatchTool) showDiff(params map[string]interface{}) (interface{}, er
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	oldLines := strings.Split(string(data), "\n")
-	newLines := strings.Split(newContent, "\n")
+	// 规范化行尾后再做行级 diff，避免 CRLF 文件的每行混入 \r 干扰比较。
+	oldLines := strings.Split(normalizeLineEndings(string(data)), "\n")
+	newLines := strings.Split(normalizeLineEndings(newContent), "\n")
 
 	diff := generateUnifiedDiff(path, oldLines, newLines)
 
@@ -167,14 +168,18 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	content := string(data)
+	lineEnding := detectLineEnding(content)
+	content = normalizeLineEndings(content)
 
-	// Validate all patches can be applied before making any changes (atomic check)
+	// Validate all patches can be applied before making any changes (atomic check).
+	// old_text 与文件内容均规范化为 LF 后匹配，兼容 CRLF 文件。
 	for i, p := range patches {
-		if !strings.Contains(content, p.OldText) {
+		normOld := normalizeLineEndings(p.OldText)
+		if !strings.Contains(content, normOld) {
 			return nil, fmt.Errorf("patch[%d]: old_text not found in file", i)
 		}
 		// Check for ambiguous matches (old_text appears more than once)
-		count := strings.Count(content, p.OldText)
+		count := strings.Count(content, normOld)
 		if count > 1 {
 			return nil, fmt.Errorf("patch[%d]: old_text matches %d occurrences in file (ambiguous), please provide more context to uniquely identify the target", i, count)
 		}
@@ -186,8 +191,8 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 	appliedCount := 0
 
 	for _, p := range patches {
-		oldLines := strings.Split(p.OldText, "\n")
-		newLines := strings.Split(p.NewText, "\n")
+		oldLines := strings.Split(normalizeLineEndings(p.OldText), "\n")
+		newLines := strings.Split(normalizeLineEndings(p.NewText), "\n")
 
 		idx := findExactMatch(originalLines, oldLines)
 		if idx < 0 {
@@ -205,8 +210,8 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 		appliedCount++
 	}
 
-	// Write the result
-	newContent := strings.Join(originalLines, "\n")
+	// Write the result, preserving the file's original line ending style.
+	newContent := convertLineEndings(strings.Join(originalLines, "\n"), lineEnding)
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
@@ -239,8 +244,9 @@ func (t *DiffPatchTool) showChanges(params map[string]interface{}) (interface{},
 		return nil, fmt.Errorf("failed to read file_b: %w", err)
 	}
 
-	linesA := strings.Split(string(dataA), "\n")
-	linesB := strings.Split(string(dataB), "\n")
+	// 规范化行尾后再比较，CRLF 与 LF 内容视为等价。
+	linesA := strings.Split(normalizeLineEndings(string(dataA)), "\n")
+	linesB := strings.Split(normalizeLineEndings(string(dataB)), "\n")
 
 	diff := generateUnifiedDiff(fmt.Sprintf("%s vs %s", filepath.Base(fileA), filepath.Base(fileB)), linesA, linesB)
 

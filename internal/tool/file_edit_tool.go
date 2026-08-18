@@ -55,8 +55,8 @@ func (t *FileEditTool) Schema() map[string]interface{} {
 }
 
 func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-	path, _ := params["path"].(string)
-	operation, _ := params["operation"].(string)
+	path := paramString(params, "path")
+	operation := paramString(params, "operation")
 
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -110,25 +110,31 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 }
 
 func (t *FileEditTool) replaceContent(content string, params map[string]interface{}) (string, error) {
-	lineStartF, _ := params["line_start"].(float64)
-	lineEndF := lineStartF
-	if le, ok := params["line_end"].(float64); ok {
-		lineEndF = le
+	lineStart := paramInt(params, "line_start")
+	lineEnd := paramInt(params, "line_end")
+	if _, ok := params["line_end"]; !ok {
+		lineEnd = lineStart
 	}
-	lineStart := int(lineStartF)
-	lineEnd := int(lineEndF)
-	newContent, _ := params["new_content"].(string)
-	oldContent, _ := params["old_content"].(string)
+	newContent := paramString(params, "new_content")
+	oldContent := paramString(params, "old_content")
 
-	// If old_content provided, use text replacement
+	// 检测文件主导行尾。匹配前统一规范化为 LF，写回时还原，避免 CRLF 文件
+	// 用 LF 文本匹配失败，以及插入 LF 内容导致混合行尾。
+	lineEnding := detectLineEnding(content)
+	content = normalizeLineEndings(content)
+
+	// If old_content provided, use text replacement (line-ending insensitive)
 	if oldContent != "" {
-		if !strings.Contains(content, oldContent) {
+		normOld := normalizeLineEndings(oldContent)
+		if !strings.Contains(content, normOld) {
 			return "", fmt.Errorf("old_content not found in file")
 		}
-		return strings.Replace(content, oldContent, newContent, 1), nil
+		normNew := normalizeLineEndings(newContent)
+		result := strings.Replace(content, normOld, normNew, 1)
+		return convertLineEndings(result, lineEnding), nil
 	}
 
-	// Otherwise use line-based replacement
+	// Otherwise use line-based replacement. 行号为 1-based，替换 [line_start, line_end]（含）。
 	lines := strings.Split(content, "\n")
 	startIdx := lineStart - 1
 	endIdx := lineEnd
@@ -140,39 +146,48 @@ func (t *FileEditTool) replaceContent(content string, params map[string]interfac
 		return "", fmt.Errorf("line_end %d out of range", lineEnd)
 	}
 
-	// Replace lines
-	newLines := append(lines[:startIdx], strings.Split(newContent, "\n")...)
-	newLines = append(newLines, lines[endIdx+1:]...)
+	// 使用新分配的切片，避免 append 写入 lines 底层数组造成别名污染。
+	inserted := strings.Split(normalizeLineEndings(newContent), "\n")
+	newLines := make([]string, 0, len(lines)+len(inserted))
+	newLines = append(newLines, lines[:startIdx]...)
+	newLines = append(newLines, inserted...)
+	newLines = append(newLines, lines[endIdx:]...)
 
-	return strings.Join(newLines, "\n"), nil
+	return convertLineEndings(strings.Join(newLines, "\n"), lineEnding), nil
 }
 
 func (t *FileEditTool) insertContent(content string, params map[string]interface{}) (string, error) {
-	lineStartF, _ := params["line_start"].(float64)
-	insertIdx := int(lineStartF)
-	newContent, _ := params["new_content"].(string)
+	insertIdx := paramInt(params, "line_start")
+	newContent := paramString(params, "new_content")
 
+	lineEnding := detectLineEnding(content)
+	content = normalizeLineEndings(content)
 	lines := strings.Split(content, "\n")
 
 	if insertIdx < 0 || insertIdx > len(lines) {
 		return "", fmt.Errorf("line_start %d out of range (file has %d lines)", insertIdx, len(lines))
 	}
 
-	// Insert at specified position
-	newLines := append(lines[:insertIdx], strings.Split(newContent, "\n")...)
+	// 在第 insertIdx 行之后插入，新内容行尾转换为文件行尾。
+	// 使用新分配的切片，避免 append 写入 lines 底层数组造成别名污染。
+	inserted := strings.Split(normalizeLineEndings(newContent), "\n")
+	newLines := make([]string, 0, len(lines)+len(inserted))
+	newLines = append(newLines, lines[:insertIdx]...)
+	newLines = append(newLines, inserted...)
 	newLines = append(newLines, lines[insertIdx:]...)
 
-	return strings.Join(newLines, "\n"), nil
+	return convertLineEndings(strings.Join(newLines, "\n"), lineEnding), nil
 }
 
 func (t *FileEditTool) deleteContent(content string, params map[string]interface{}) (string, error) {
-	lineStartF, _ := params["line_start"].(float64)
-	lineStart := int(lineStartF)
+	lineStart := paramInt(params, "line_start")
 	lineEnd := lineStart
-	if le, ok := params["line_end"].(float64); ok {
-		lineEnd = int(le)
+	if le := paramInt(params, "line_end"); le != 0 || params["line_end"] != nil {
+		lineEnd = le
 	}
 
+	lineEnding := detectLineEnding(content)
+	content = normalizeLineEndings(content)
 	lines := strings.Split(content, "\n")
 	startIdx := lineStart - 1
 	endIdx := lineEnd
@@ -184,8 +199,10 @@ func (t *FileEditTool) deleteContent(content string, params map[string]interface
 		return "", fmt.Errorf("line_end %d out of range (file has %d lines)", lineEnd, len(lines))
 	}
 
-	// Delete lines
-	newLines := append(lines[:startIdx], lines[endIdx+1:]...)
+	// 删除 [line_start, line_end]（含）。使用新分配的切片避免别名污染。
+	newLines := make([]string, 0, len(lines)-(endIdx-startIdx))
+	newLines = append(newLines, lines[:startIdx]...)
+	newLines = append(newLines, lines[endIdx:]...)
 
-	return strings.Join(newLines, "\n"), nil
+	return convertLineEndings(strings.Join(newLines, "\n"), lineEnding), nil
 }

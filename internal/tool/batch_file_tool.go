@@ -140,7 +140,8 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 			continue
 		}
 
-		content := string(data)
+		// 统一规范化为 LF 再按行分割，避免 CRLF 文件每行混入 \r。
+		content := normalizeLineEndings(string(data))
 		lines := strings.Split(content, "\n")
 		totalLines := len(lines)
 
@@ -331,24 +332,26 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 			continue
 		}
 
-		content := string(data)
+		// 规范化行尾后匹配与替换，写回时还原文件原行尾，兼容 CRLF 文件。
+		lineEnding := detectLineEnding(string(data))
+		content := normalizeLineEndings(string(data))
+		normOld := normalizeLineEndings(oldText)
+		normNew := normalizeLineEndings(newText)
 
-		if !strings.Contains(content, oldText) {
+		if !strings.Contains(content, normOld) {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": "old_text not found in file"}
 			continue
 		}
 
-		newContent := strings.Replace(content, oldText, newText, 1)
-		changes := strings.Count(newContent, newText) - strings.Count(content, newText)
+		newContent := strings.Replace(content, normOld, normNew, 1)
 		// Since we only replace the first occurrence, changes is at most 1
 		// A more accurate count: check if replacement actually changed content
+		changes := 0
 		if newContent != content {
 			changes = 1
-		} else {
-			changes = 0
 		}
 
-		if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+		if err := os.WriteFile(absPath, []byte(convertLineEndings(newContent, lineEnding)), 0644); err != nil {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to write file: %v", err)}
 			continue
 		}
