@@ -362,7 +362,7 @@
 
       <div v-if="previewLoading" style="text-align: center; padding: 60px;">
         <n-spin size="large" />
-        <n-text depth="3" style="display: block; margin-top: 16px;">Loading...</n-text>
+        <n-text depth="3" style="display: block; margin-top: 16px;">{{ t('common.loading') }}</n-text>
       </div>
       <div v-else-if="previewError" style="text-align: center; padding: 60px;">
         <n-text type="error">{{ previewError }}</n-text>
@@ -815,7 +815,7 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   try {
     previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
   } catch (e: any) {
-    previewError.value = e.message || 'Failed to read file'
+    previewError.value = e.message || t('chat.readFail')
     previewContent.value = ''
   } finally {
     previewLoading.value = false
