@@ -287,19 +287,19 @@ type ApprovalResult struct {
 
 // ApprovalConfig holds approval system configuration.
 type ApprovalConfig struct {
-	Strategy          Strategy `mapstructure:"strategy"`
-	TrustThreshold    int      `mapstructure:"trust_threshold"`
-	DenylistThreshold int      `mapstructure:"denylist_threshold"`
-	EnableLearning    bool     `mapstructure:"enable_learning"`
-	EnableWhitelist   bool     `mapstructure:"enable_whitelist"`
-	EnableCLIConfirm  bool     `mapstructure:"enable_cli_confirm"`
-	GatewayEnabled    bool     `mapstructure:"gateway_enabled"`
-	GatewayURL        string   `mapstructure:"gateway_url"`
-	DangerousPatterns []string `mapstructure:"dangerous_patterns"`
-	AllowedPatterns   []string         `mapstructure:"allowed_patterns"`
-	ApprovalTimeout   int              `mapstructure:"approval_timeout"`
-	TimeoutStrategy   TimeoutStrategy  `mapstructure:"timeout_strategy"`
-	LearnFromSameUser bool             `mapstructure:"learn_from_same_user"`
+	Strategy          Strategy        `mapstructure:"strategy"`
+	TrustThreshold    int             `mapstructure:"trust_threshold"`
+	DenylistThreshold int             `mapstructure:"denylist_threshold"`
+	EnableLearning    bool            `mapstructure:"enable_learning"`
+	EnableWhitelist   bool            `mapstructure:"enable_whitelist"`
+	EnableCLIConfirm  bool            `mapstructure:"enable_cli_confirm"`
+	GatewayEnabled    bool            `mapstructure:"gateway_enabled"`
+	GatewayURL        string          `mapstructure:"gateway_url"`
+	DangerousPatterns []string        `mapstructure:"dangerous_patterns"`
+	AllowedPatterns   []string        `mapstructure:"allowed_patterns"`
+	ApprovalTimeout   int             `mapstructure:"approval_timeout"`
+	TimeoutStrategy   TimeoutStrategy `mapstructure:"timeout_strategy"`
+	LearnFromSameUser bool            `mapstructure:"learn_from_same_user"`
 }
 
 // DefaultConfig returns the default approval configuration.
