@@ -333,38 +333,118 @@
 
     <!-- File preview modal -->
     <n-modal
-      v-model:show="showFilePreview"
+      v-model:show="previewModalVisible"
       preset="card"
-      :title="previewFile?.name || ''"
-      :style="{ width: '700px', maxHeight: '80vh' }"
+      :style="{ width: '780px', maxWidth: '95vw' }"
+      class="file-preview-modal"
     >
-      <div v-if="previewLoading" style="text-align: center; padding: 40px;">
+      <template #header>
+        <div class="preview-header">
+          <div class="preview-header-left">
+            <n-icon :component="DocumentTextOutline" :size="18" color="#2080f0" />
+            <n-text strong :title="previewFile?.path" class="preview-filename">{{ previewFile?.name }}</n-text>
+            <n-tag v-if="previewFile" size="small" :type="isEditing ? 'warning' : 'success'" :bordered="false" round class="preview-mode-tag">
+              <n-icon :component="isEditing ? PencilOutline : EyeOutline" :size="12" />
+              <span style="margin-left: 2px;">{{ isEditing ? t('chat.editMode') : t('chat.previewMode') }}</span>
+            </n-tag>
+            <n-tag v-if="isEditing && isDirty" size="small" type="error" :bordered="false" round class="preview-dirty-tag">
+              <n-icon :component="ArrowUndoOutline" :size="12" />
+              <span style="margin-left: 2px;">{{ t('chat.hasChanges') }}</span>
+            </n-tag>
+          </div>
+          <div v-if="previewFile" class="preview-header-right">
+            <n-text depth="3" style="font-size: 11px;">
+              {{ t('chat.fileSize') }}: {{ formatSize(previewFile.size || 0) }} · {{ t('chat.modifiedTime') }}: {{ formatPreviewModified(previewFile.modified) }}
+            </n-text>
+          </div>
+        </div>
+      </template>
+
+      <div v-if="previewLoading" style="text-align: center; padding: 60px;">
         <n-spin size="large" />
-        <n-text depth="3" style="display: block; margin-top: 12px;">Loading...</n-text>
+        <n-text depth="3" style="display: block; margin-top: 16px;">Loading...</n-text>
       </div>
-      <div v-else-if="previewError" style="text-align: center; padding: 40px;">
+      <div v-else-if="previewError" style="text-align: center; padding: 60px;">
         <n-text type="error">{{ previewError }}</n-text>
       </div>
-      <div v-else>
-        <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center;">
-          <n-button size="tiny" @click="toggleEdit">
-            <template #icon>
-              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></n-icon>
+      <div v-else class="preview-body">
+        <!-- Toolbar -->
+        <div class="preview-toolbar">
+          <!-- Preview mode actions -->
+          <n-space v-if="!isEditing" :size="6">
+            <n-button size="small" quaternary @click="copyContent">
+              <template #icon><n-icon :component="CopyOutline" :size="14" /></template>
+              {{ t('chat.copyContent') }}
+            </n-button>
+            <n-button size="small" quaternary @click="downloadCurrentFile">
+              <template #icon><n-icon :component="DownloadOutline" :size="14" /></template>
+              {{ t('chat.download') }}
+            </n-button>
+          </n-space>
+          <!-- Edit mode actions -->
+          <n-space v-else :size="6">
+            <n-button size="small" quaternary :disabled="!isDirty" @click="resetEdit">
+              <template #icon><n-icon :component="ArrowUndoOutline" :size="14" /></template>
+              {{ t('chat.reset') }}
+            </n-button>
+          </n-space>
+
+          <n-space :size="6" justify="end">
+            <template v-if="!isEditing">
+              <n-button size="small" type="primary" @click="startEdit">
+                <template #icon><n-icon :component="PencilOutline" :size="14" /></template>
+                {{ t('chat.edit') }}
+              </n-button>
             </template>
-            {{ isEditing ? $t('sidebar.cancel') : $t('sidebar.edit') }}
-          </n-button>
-          <n-button v-if="isEditing" size="tiny" type="primary" :loading="editSaving" @click="saveFile">
-            <template #icon>
-              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></n-icon>
+            <template v-else>
+              <n-button size="small" @click="cancelEdit">
+                {{ t('chat.cancel') }}
+              </n-button>
+              <n-button 
+                size="small" 
+                type="primary" 
+                :disabled="!isDirty" 
+                :loading="editSaving" 
+                @click="saveFile"
+              >
+                <template #icon><n-icon :component="CheckmarkOutline" :size="14" /></template>
+                {{ t('chat.save') }}
+              </n-button>
             </template>
-            {{ $t('sidebar.save') }}
-          </n-button>
+          </n-space>
         </div>
-        <div style="max-height: 60vh; overflow: auto;">
-          <textarea v-if="isEditing" v-model="editingContent"
-            style="width: 100%; min-height: 300px; font-family: monospace; font-size: 13px; line-height: 1.5; padding: 8px; border: 1px solid #d9d9d9; border-radius: 4px; resize: vertical; box-sizing: border-box;"
-          ></textarea>
-          <pre v-else style="white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5; margin: 0;">{{ previewContent }}</pre>
+
+        <!-- Content Area -->
+        <div class="preview-content-wrapper">
+          <n-input
+            v-if="isEditing"
+            v-model:value="editingContent"
+            type="textarea"
+            :autosize="{ minRows: 18, maxRows: 30 }"
+            :placeholder="''"
+            class="preview-editor"
+          />
+          <pre v-else class="preview-pre">{{ previewContent }}</pre>
+        </div>
+
+        <!-- Status bar -->
+        <div class="preview-status-bar">
+          <n-space align="center" :size="12">
+            <n-text depth="3" style="font-size: 11px;">
+              {{ contentLineCount }} {{ t('chat.lineCount') }}
+            </n-text>
+            <n-divider vertical />
+            <n-text depth="3" style="font-size: 11px;">
+              {{ contentCharCount }} {{ t('chat.charCount') }}
+            </n-text>
+          </n-space>
+          <n-space align="center" :size="6">
+            <n-text v-if="isEditing" depth="3" style="font-size: 11px;">
+              <span :style="{ color: isDirty ? '#d03050' : undefined }">
+                {{ isDirty ? t('chat.hasChanges') : t('chat.noChanges') }}
+              </span>
+            </n-text>
+          </n-space>
         </div>
       </div>
     </n-modal>
@@ -374,7 +454,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick, h } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage, NIcon } from 'naive-ui'
+import { useMessage, useDialog, NIcon } from 'naive-ui'
 import { 
   FlagOutline, 
   AddOutline, 
@@ -392,7 +472,11 @@ import {
   EllipsisHorizontalOutline,
   PencilOutline,
   TrashOutline,
-  RefreshOutline
+  RefreshOutline,
+  CopyOutline,
+  ArrowUndoOutline,
+  CheckmarkOutline,
+  EyeOutline
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -405,6 +489,7 @@ import * as sessionsApi from '@/api/sessions'
 const { t } = useI18n()
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 const goalsStore = useGoalsStore()
 const chatStore = useChatStore()
@@ -455,6 +540,32 @@ const previewError = ref('')
 const isEditing = ref(false)
 const editingContent = ref('')
 const editSaving = ref(false)
+
+const isDirty = computed(() => isEditing.value && editingContent.value !== previewContent.value)
+const activeContent = computed(() => isEditing.value ? editingContent.value : previewContent.value)
+const contentLineCount = computed(() => activeContent.value ? activeContent.value.split('\n').length : 0)
+const contentCharCount = computed(() => activeContent.value ? activeContent.value.length : 0)
+
+const previewModalVisible = computed({
+  get: () => showFilePreview.value,
+  set: (val: boolean) => {
+    if (!val && isDirty.value) {
+      dialog.warning({
+        title: t('chat.unsavedChanges'),
+        content: t('chat.confirmDiscard'),
+        positiveText: t('common.confirm'),
+        negativeText: t('common.cancel'),
+        onPositiveClick: () => {
+          isEditing.value = false
+          editingContent.value = ''
+          showFilePreview.value = false
+        },
+      })
+      return
+    }
+    showFilePreview.value = val
+  },
+})
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -711,28 +822,66 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   }
 }
 
-function toggleEdit() {
-  if (isEditing.value) {
-    isEditing.value = false
-    editingContent.value = ''
-    return
-  }
+function startEdit() {
   editingContent.value = previewContent.value
   isEditing.value = true
 }
 
-async function saveFile() {
+function cancelEdit() {
+  if (isDirty.value) {
+    dialog.warning({
+      title: t('chat.unsavedChanges'),
+      content: t('chat.confirmDiscard'),
+      positiveText: t('common.confirm'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: () => {
+        isEditing.value = false
+        editingContent.value = ''
+      },
+    })
+    return
+  }
+  isEditing.value = false
+  editingContent.value = ''
+}
+
+function resetEdit() {
+  editingContent.value = previewContent.value
+  message.success(t('chat.reset'))
+}
+
+async function copyContent() {
+  try {
+    await navigator.clipboard.writeText(previewContent.value)
+    message.success(t('chat.contentCopied'))
+  } catch (e) {
+    message.error(t('chat.copyFail'))
+  }
+}
+
+function downloadCurrentFile() {
   if (!previewFile.value) return
+  const url = sessionsApi.getFSDownloadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
+  downloadFile(url, previewFile.value.name)
+}
+
+function formatPreviewModified(ts?: number) {
+  if (!ts) return '-'
+  const d = new Date(ts * 1000)
+  return d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+async function saveFile() {
+  if (!previewFile.value || !isDirty.value) return
   editSaving.value = true
   try {
     await sessionsApi.writeFSFile(previewFile.value.path, editingContent.value, chatStore.activeSessionId || undefined)
     previewContent.value = editingContent.value
     isEditing.value = false
-    window.$message?.success?.(t('sidebar.saveSuccess'))
-    // Refresh the file listing
+    message.success(t('chat.saveSuccess'))
     loadFiles()
   } catch (e: any) {
-    window.$message?.error?.(e.message || t('sidebar.saveFail'))
+    message.error(e.message || t('chat.saveFail'))
   } finally {
     editSaving.value = false
   }
@@ -1241,5 +1390,127 @@ function formatSize(bytes: number): string {
   .file-tree-item:hover {
     background: #2a2a2a;
   }
+
+  .preview-toolbar,
+  .preview-status-bar,
+  .preview-content-wrapper {
+    border-color: #333;
+  }
+
+  .preview-pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+  }
+}
+
+/* ===== File Preview Modal Styles ===== */
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.preview-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.preview-filename {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.preview-mode-tag {
+  flex-shrink: 0;
+}
+
+.preview-dirty-tag {
+  flex-shrink: 0;
+  animation: dirtyPulse 2s ease-in-out infinite;
+}
+
+@keyframes dirtyPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.preview-header-right {
+  flex-shrink: 0;
+}
+
+.preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: -8px;
+  margin-left: -24px;
+  margin-right: -24px;
+  margin-bottom: -24px;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.preview-content-wrapper {
+  padding: 0;
+  flex: 1;
+  overflow: auto;
+  max-height: 60vh;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.preview-pre {
+  margin: 0;
+  padding: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, Monaco, monospace;
+  background: #fafbfc;
+  color: #24292f;
+  min-height: 300px;
+}
+
+.preview-editor {
+  width: 100%;
+}
+
+.preview-editor :deep(.n-input__textarea-el) {
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  padding: 16px;
+  resize: vertical;
+}
+
+.preview-editor :deep(.n-input--textarea) {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+}
+
+.preview-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  background: #fafafa;
+  min-height: 28px;
 }
 </style>
