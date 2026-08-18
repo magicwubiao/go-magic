@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/magicwubiao/go-magic/internal/goal"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/tool"
@@ -277,15 +276,6 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			if err := s.sessionStore.SaveSession(context.Background(), newSession); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
-			}
-		}
-
-		// Auto-link to active goal if enabled
-		if s.goalMgr != nil && s.cfg.AutoLinkGoals {
-			goals, err := s.goalMgr.List(context.Background(), goal.StatusActive)
-			if err == nil && len(goals) > 0 {
-				// Link to the most recently updated active goal
-				s.goalMgr.LinkSession(context.Background(), goals[0].ID, sessionID)
 			}
 		}
 

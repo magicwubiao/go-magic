@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h2 style="margin-bottom: 24px;">{{ t('tools.title') }}</h2>
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
+      <h2 style="margin: 0;">{{ t('tools.title') }}</h2>
+      <n-button :loading="loading" @click="toolsStore.loadToolsets()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
+    </div>
     <n-spin v-if="toolsStore.loading" />
     <template v-else>
       <!-- Tool Statistics Overview -->
@@ -138,6 +141,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useToolsStore } from '@/stores/tools'
 import { getToolStatistics, getToolsetStatistics } from '@/api/tools'

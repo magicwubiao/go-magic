@@ -15,10 +15,6 @@
           <n-form-item :label="t('config.secretRedaction')">
             <n-switch v-model:value="generalForm.secret_redaction" />
           </n-form-item>
-          <n-form-item :label="t('config.autoLinkGoals')">
-            <n-switch v-model:value="generalForm.auto_link_goals" />
-            <template #feedback>{{ t('config.autoLinkGoalsHint') }}</template>
-          </n-form-item>
           <n-form-item :label="t('config.workingDirectory')">
             <n-space>
               <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" style="flex: 1;" />
@@ -263,7 +259,6 @@ const authConfigured = ref(false)
 const generalForm = reactive({
   working_dir: '',
   secret_redaction: false,
-  auto_link_goals: false,
   chat_mode: 'chat',
 })
 
@@ -319,7 +314,6 @@ const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.pa
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
   generalForm.secret_redaction = cfg.secret_redaction || false
-  generalForm.auto_link_goals = cfg.auto_link_goals || false
   generalForm.chat_mode = cfg.chat_mode || 'chat'
 
   const agent = cfg.agent || {}
@@ -352,7 +346,6 @@ async function saveGeneral() {
     await configStore.updateConfig({
       working_dir: generalForm.working_dir,
       secret_redaction: generalForm.secret_redaction,
-      auto_link_goals: generalForm.auto_link_goals,
       chat_mode: generalForm.chat_mode,
     })
     // Reload to ensure sync with server

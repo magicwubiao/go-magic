@@ -56,18 +56,19 @@ type ExecutionLog struct {
 
 // Manager manages cron jobs with real scheduling
 type Manager struct {
-	jobsFile string
-	logsFile string
-	jobs     map[string]*Job
-	jobsMu   sync.RWMutex
-	logs     []ExecutionLog
-	logsMu   sync.RWMutex
-	cron     *robfigcron.Cron
-	entryMap map[string]robfigcron.EntryID // job.ID -> cron entry ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	prov     provider.Provider // LLM provider
-	toolReg  *tool.Registry    // Tool registry for agent tools
+	jobsFile   string
+	logsFile   string
+	jobs       map[string]*Job
+	jobsMu     sync.RWMutex
+	logs       []ExecutionLog
+	logsMu     sync.RWMutex
+	cron       *robfigcron.Cron
+	entryMap   map[string]robfigcron.EntryID // job.ID -> cron entry ID
+	ctx        context.Context
+	cancel     context.CancelFunc
+	prov       provider.Provider // LLM provider
+	toolReg    *tool.Registry    // Tool registry for agent tools
+	workingDir string            // Default working directory from config
 }
 
 // NewManager creates a new cron manager
@@ -113,9 +114,10 @@ func NewManager() (*Manager, error) {
 }
 
 // SetAgentDeps sets the agent dependencies (provider, tool registry)
-func (m *Manager) SetAgentDeps(prov provider.Provider, reg *tool.Registry) {
+func (m *Manager) SetAgentDeps(prov provider.Provider, reg *tool.Registry, workingDir string) {
 	m.prov = prov
 	m.toolReg = reg
+	m.workingDir = workingDir
 }
 
 // Start begins the cron scheduler loop and loads all enabled jobs
@@ -532,10 +534,24 @@ func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, err
 	tools := m.toolReg.ListWithSchemas()
 	log.Infof("[Cron] Agent job %s has %d tools available", job.Name, len(tools))
 
+	// Determine working directory - always use a "cron" subdirectory
+	baseDir := m.workingDir
+	if baseDir == "" {
+		baseDir = filepath.Join(config.GetMagicHome(), "workspace")
+	}
+	workDir := filepath.Join(baseDir, "cron")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		log.Warnf("[Cron] Failed to create workspace %s: %v", workDir, err)
+	}
+
 	// System prompt for cron agent - simple, direct, no explanation
-	systemPrompt := `You are a reliable task execution assistant. You have access to various tools.
+	systemPrompt := fmt.Sprintf(`You are a reliable task execution assistant. You have access to various tools.
 Complete the user's request efficiently using available tools.
-Focus on the result, not the process. Keep responses concise.`
+Focus on the result, not the process. Keep responses concise.
+
+Your working directory is: %%s
+- Use write_file with RELATIVE paths to write files to this directory.
+- Do NOT use absolute paths like /tmp/.`, workDir)
 
 	// Agent options - balance between capability and safety
 	agentOpts := []agent.AgentOption{
@@ -552,6 +568,11 @@ Focus on the result, not the process. Keep responses concise.`
 
 	// Create agent with all tools (Cortex/Memory disabled by default)
 	a := agent.NewEnhancedAgent(m.prov, m.toolReg, tools, systemPrompt, agentOpts...)
+
+	// Set working directory in context
+	if workDir != "" {
+		ctx = tool.WithWorkDir(ctx, workDir)
+	}
 
 	// Run the conversation
 	result, err := a.RunConversation(ctx, job.Prompt)

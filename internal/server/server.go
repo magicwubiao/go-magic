@@ -219,7 +219,7 @@ func NewServer(dbPath string) *Server {
 		// Cron manager unavailable
 	} else if prov != nil && registry != nil {
 		// Set LLM provider and tools for cron agent mode
-		cronMgr.SetAgentDeps(prov, registry)
+		cronMgr.SetAgentDeps(prov, registry, workDir)
 	}
 
 	// Initialize Kanban Manager
@@ -229,6 +229,76 @@ func NewServer(dbPath string) *Server {
 		// Kanban manager unavailable
 	} else {
 		kanbanMgr.Init()
+		// Set up kanban worker spawner
+		disp := kanbanMgr.GetDispatcher()
+		if disp != nil {
+			disp.SetSpawner(func(task *kanban.Task) error {
+				workDir := filepath.Join(cfg.WorkingDir, "kanban", task.ID)
+				if err := os.MkdirAll(workDir, 0755); err != nil {
+					return fmt.Errorf("create workspace: %w", err)
+				}
+
+				// Claim the task (atomic: ready -> running)
+				claimedTask, err := kanbanMgr.ClaimTask(task.ID, "system")
+				if err != nil {
+					return fmt.Errorf("claim task %s: %w", task.ID, err)
+				}
+				log.Infof("[Kanban] Task %s claimed, spawning worker in %s", task.ID, workDir)
+
+				// If no provider configured, block the task
+				if prov == nil {
+					_, _ = kanbanMgr.BlockTask(task.ID, "No LLM provider configured")
+					return nil
+				}
+
+				// Run agent in background
+				go func() {
+					ctx := context.Background()
+
+					// Set working directory in context
+					ctx = tool.WithWorkDir(ctx, workDir)
+
+					// Get all available tools
+					tools := registry.ListWithSchemas()
+					log.Infof("[Kanban] Worker for task %s has %d tools available", task.ID, len(tools))
+
+					// System prompt for kanban worker
+					systemPrompt := fmt.Sprintf(`You are a reliable kanban task execution assistant. Complete the assigned task using available tools. Focus on the result, not the process. Keep responses concise.
+
+Your working directory is: %%s
+- Use write_file with RELATIVE paths to write files to this directory.
+- Do NOT use absolute paths like /tmp/.`, workDir)
+
+					// Agent options
+					agentOpts := []agent.AgentOption{
+						agent.WithLoopLimits(5, 15),
+						agent.WithSteering(agent.SteeringConfig{MaxIterations: 30}),
+					}
+
+					// Create agent with all tools
+					a := agent.NewEnhancedAgent(prov, registry, tools, systemPrompt, agentOpts...)
+
+					// Run the conversation
+					result, err := a.RunConversation(ctx, claimedTask.Body)
+					if err != nil {
+						log.Errorf("[Kanban] Worker for task %s failed: %v", task.ID, err)
+						if _, blockErr := kanbanMgr.BlockTask(task.ID, fmt.Sprintf("Agent execution failed: %v", err)); blockErr != nil {
+							log.Errorf("[Kanban] Failed to block task %s: %v", task.ID, blockErr)
+						}
+						return
+					}
+
+					// Complete the task
+					if _, err := kanbanMgr.CompleteTask(task.ID, result); err != nil {
+						log.Errorf("[Kanban] Failed to complete task %s: %v", task.ID, err)
+						return
+					}
+					log.Infof("[Kanban] Worker completed task %s", task.ID)
+				}()
+
+				return nil
+			})
+		}
 	}
 
 	// Initialize Plugin Manager

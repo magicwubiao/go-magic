@@ -9,6 +9,9 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
+// WorkerSpawner spawns a worker agent to execute a kanban task.
+type WorkerSpawner func(task *Task) error
+
 // Dispatcher manages task dispatch and lifecycle
 type Dispatcher struct {
 	db                     *KanbanDB
@@ -20,6 +23,7 @@ type Dispatcher struct {
 	stopCh                 chan struct{}
 	wg                     sync.WaitGroup
 	mu                     sync.Mutex
+	spawner                WorkerSpawner
 }
 
 // NewDispatcher creates a new dispatcher
@@ -31,6 +35,11 @@ func NewDispatcher(db *KanbanDB) *Dispatcher {
 		maxConsecutiveFailures: 5,
 		stopCh:                 make(chan struct{}),
 	}
+}
+
+// SetSpawner sets the worker spawner function.
+func (d *Dispatcher) SetSpawner(s WorkerSpawner) {
+	d.spawner = s
 }
 
 // SetTickInterval sets the tick interval
@@ -288,10 +297,6 @@ func (d *Dispatcher) dispatchReadyTasks() error {
 	}
 
 	for _, task := range readyTasks {
-		// In this phase, we don't actually spawn worker processes
-		// Instead, we emit events that can be picked up by the agent system
-		log.Debugf("[Dispatcher] Ready task: %s (%s)", task.ID, task.Title)
-
 		// Add spawned/pending event
 		event := &Event{
 			ID:        generateID("evt"),
@@ -300,6 +305,17 @@ func (d *Dispatcher) dispatchReadyTasks() error {
 			Payload:   fmt.Sprintf(`{"title":"%s","assignee":"%s","priority":%d}`, task.Title, task.Assignee, task.Priority),
 		}
 		d.db.AddEvent(event)
+
+		// Spawn worker agent if configured
+		if d.spawner != nil {
+			t := task // capture
+			go func() {
+				if err := d.spawner(t); err != nil {
+					log.Errorf("[Dispatcher] Spawn worker for task %s: %v", t.ID, err)
+				}
+			}()
+		}
+		log.Debugf("[Dispatcher] Ready task: %s (%s)", task.ID, task.Title)
 	}
 
 	return nil

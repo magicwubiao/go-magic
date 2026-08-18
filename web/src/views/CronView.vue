@@ -2,6 +2,7 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('cron.title') }}</h2>
+      <n-button :loading="loading" @click="cronStore.loadJobs()" style="margin-right: 8px;"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
       <n-button type="primary" @click="openCreateModal">+ {{ t('cron.createJob') }}</n-button>
     </n-space>
 
@@ -138,6 +139,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { useCronStore } from '@/stores/cron'

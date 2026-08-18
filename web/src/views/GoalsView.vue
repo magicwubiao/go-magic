@@ -2,6 +2,7 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('goals.title') }}</h2>
+      <n-button :loading="loading" @click="loadGoals()" style="margin-right: 8px;"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
       <n-button type="primary" @click="openAddGoal">+ {{ t('goals.newGoal') }}</n-button>
     </n-space>
 
@@ -49,6 +50,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
 import GoalList from '@/components/GoalList.vue'

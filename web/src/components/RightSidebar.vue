@@ -345,8 +345,27 @@
       <div v-else-if="previewError" style="text-align: center; padding: 40px;">
         <n-text type="error">{{ previewError }}</n-text>
       </div>
-      <div v-else style="max-height: 60vh; overflow: auto;">
-        <pre style="white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5; margin: 0;">{{ previewContent }}</pre>
+      <div v-else>
+        <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center;">
+          <n-button size="tiny" @click="toggleEdit">
+            <template #icon>
+              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></n-icon>
+            </template>
+            {{ isEditing ? $t('sidebar.cancel') : $t('sidebar.edit') }}
+          </n-button>
+          <n-button v-if="isEditing" size="tiny" type="primary" :loading="editSaving" @click="saveFile">
+            <template #icon>
+              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></n-icon>
+            </template>
+            {{ $t('sidebar.save') }}
+          </n-button>
+        </div>
+        <div style="max-height: 60vh; overflow: auto;">
+          <textarea v-if="isEditing" v-model="editingContent"
+            style="width: 100%; min-height: 300px; font-family: monospace; font-size: 13px; line-height: 1.5; padding: 8px; border: 1px solid #d9d9d9; border-radius: 4px; resize: vertical; box-sizing: border-box;"
+          ></textarea>
+          <pre v-else style="white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5; margin: 0;">{{ previewContent }}</pre>
+        </div>
       </div>
     </n-modal>
   </div>
@@ -433,6 +452,9 @@ const previewFile = ref<sessionsApi.FSEntry | null>(null)
 const previewContent = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
+const isEditing = ref(false)
+const editingContent = ref('')
+const editSaving = ref(false)
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -490,22 +512,10 @@ watch(() => chatStore.currentWorkDir, (newDir) => {
   }
 })
 
-watch(sessionId, async (newSessionId) => {
-  if (newSessionId && currentGoal.value && configStore.config?.auto_link_goals) {
-    if (!currentGoal.value.session_ids?.includes(newSessionId)) {
-      try {
-        await goalsStore.linkSession(currentGoal.value.id, newSessionId)
-      } catch (e) {}
-    }
-  }
-}, { immediate: true })
-
 // Goals functions
 async function selectGoal(goal: Goal) {
   goalsStore.setCurrentGoal(goal)
-  if (sessionId.value && !goal.session_ids?.includes(sessionId.value) && configStore.config?.auto_link_goals) {
-    await goalsStore.linkSession(goal.id, sessionId.value)
-  }
+
 }
 
 function toggleExpand(goalId: string) {
@@ -686,6 +696,8 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   previewFile.value = entry
   previewContent.value = ''
   previewError.value = ''
+  isEditing.value = false
+  editingContent.value = ''
   showFilePreview.value = true
   previewLoading.value = true
   
@@ -696,6 +708,33 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
     previewContent.value = ''
   } finally {
     previewLoading.value = false
+  }
+}
+
+function toggleEdit() {
+  if (isEditing.value) {
+    isEditing.value = false
+    editingContent.value = ''
+    return
+  }
+  editingContent.value = previewContent.value
+  isEditing.value = true
+}
+
+async function saveFile() {
+  if (!previewFile.value) return
+  editSaving.value = true
+  try {
+    await sessionsApi.writeFSFile(previewFile.value.path, editingContent.value, chatStore.activeSessionId || undefined)
+    previewContent.value = editingContent.value
+    isEditing.value = false
+    window.$message?.success?.(t('sidebar.saveSuccess'))
+    // Refresh the file listing
+    loadFiles()
+  } catch (e: any) {
+    window.$message?.error?.(e.message || t('sidebar.saveFail'))
+  } finally {
+    editSaving.value = false
   }
 }
 
