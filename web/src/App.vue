@@ -1,73 +1,75 @@
 <template>
   <n-config-provider :locale="naiveLocale" :date-locale="naiveDateLocale">
   <n-notification-provider>
-    <n-message-provider>
-      <!-- Login page: no header -->
-      <template v-if="isLoginPage">
-        <router-view />
-      </template>
-      <!-- Main layout: no top header -->
-      <n-layout v-else style="height: 100vh;" position="absolute">
-        <!-- Main Content Area -->
-        <n-layout
-          has-sider
-          position="absolute"
-          style="top: 0; bottom: 0; left: 0; right: 0;"
-        >
-          <!-- Sidebar -->
-          <n-layout-sider
-            bordered
-            collapse-mode="width"
-            :collapsed-width="64"
-            :width="220"
-            show-trigger
-            v-model:collapsed="siderCollapsed"
+    <n-dialog-provider>
+      <n-message-provider>
+        <!-- Login page: no header -->
+        <template v-if="isLoginPage">
+          <router-view />
+        </template>
+        <!-- Main layout: no top header -->
+        <n-layout v-else style="height: 100vh;" position="absolute">
+          <!-- Main Content Area -->
+          <n-layout
+            has-sider
+            position="absolute"
+            style="top: 0; bottom: 0; left: 0; right: 0;"
           >
-            <div class="sider-flex">
-              <n-menu
-                class="sider-menu"
-                :collapsed-width="64"
-                :collapsed-icon-size="22"
-                :options="menuOptions"
-                :value="activeKey"
-                @update:value="handleMenuClick"
-              />
-              <!-- 底部"设置"下拉:点击向上弹出 -->
-              <div class="sider-footer">
-                <n-dropdown
-                  placement="top-start"
-                  :options="headerOptions"
-                  @select="handleHeaderSelect"
-                >
-                  <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
-                    <n-icon size="20"><settings-outline /></n-icon>
-                    <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
-                  </div>
-                </n-dropdown>
+            <!-- Sidebar -->
+            <n-layout-sider
+              bordered
+              collapse-mode="width"
+              :collapsed-width="64"
+              :width="220"
+              show-trigger
+              v-model:collapsed="siderCollapsed"
+            >
+              <div class="sider-flex">
+                <n-menu
+                  class="sider-menu"
+                  :collapsed-width="64"
+                  :collapsed-icon-size="22"
+                  :options="menuOptions"
+                  :value="activeKey"
+                  @update:value="handleMenuClick"
+                />
+                <!-- 底部"设置"下拉:点击向上弹出 -->
+                <div class="sider-footer">
+                  <n-dropdown
+                    placement="top-start"
+                    :options="headerOptions"
+                    @select="handleHeaderSelect"
+                  >
+                    <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
+                      <n-icon size="20"><settings-outline /></n-icon>
+                      <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
+                    </div>
+                  </n-dropdown>
+                </div>
               </div>
-            </div>
-          </n-layout-sider>
+            </n-layout-sider>
 
-          <!-- Content -->
-          <n-layout>
-            <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
-              <router-view />
-            </n-layout-content>
+            <!-- Content -->
+            <n-layout>
+              <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
+                <router-view />
+              </n-layout-content>
+            </n-layout>
           </n-layout>
         </n-layout>
-      </n-layout>
 
-      <!-- Logout Confirm Modal -->
-      <n-modal
-        v-model:show="showLogoutConfirm"
-        preset="dialog"
-        :title="t('common.logout')"
-        :content="t('common.confirmLogout')"
-        :positive-text="t('common.confirm')"
-        :negative-text="t('common.cancel')"
-        @positive-click="handleLogout"
-      />
-    </n-message-provider>
+        <!-- Logout Confirm Modal -->
+        <n-modal
+          v-model:show="showLogoutConfirm"
+          preset="dialog"
+          :title="t('common.logout')"
+          :content="t('common.confirmLogout')"
+          :positive-text="t('common.confirm')"
+          :negative-text="t('common.cancel')"
+          @positive-click="handleLogout"
+        />
+      </n-message-provider>
+    </n-dialog-provider>
   </n-notification-provider>
   </n-config-provider>
 </template>
