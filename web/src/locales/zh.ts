@@ -996,6 +996,9 @@ export default {
     agentsCount: '智能体数量',
     membersCount: '成员数量',
     stop: '停止',
+    ai: 'AI',
+    inviteCodeFailed: '生成邀请码失败',
+    roomNameUpdated: '聊天室名称已更新',
   },
   profiles: {
     title: '分身',

@@ -980,6 +980,9 @@ export default {
     agentsCount: 'Agents',
     membersCount: 'Members',
     stop: 'Stop',
+    ai: 'AI',
+    inviteCodeFailed: 'Failed to generate invite code',
+    roomNameUpdated: 'Room name updated',
   },
   profiles: {
     title: 'Profiles',
