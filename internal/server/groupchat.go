@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	gcToolStartRe    = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
-	gcToolResultRe   = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
-	gcTurnStartRe    = regexp.MustCompile(`>>>TURN_START<<<`)
+	gcToolStartRe  = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
+	gcToolResultRe = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
+	gcTurnStartRe  = regexp.MustCompile(`>>>TURN_START<<<`)
 )
 
 // stripAgentProtocolMarks strips all internal agent protocol markers
