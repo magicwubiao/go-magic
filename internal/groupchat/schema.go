@@ -10,6 +10,7 @@ const SchemaSQL = `
 CREATE TABLE IF NOT EXISTS gc_rooms (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     inviteCode TEXT,
     triggerTokens INTEGER DEFAULT 100000,
     maxHistoryTokens INTEGER DEFAULT 32000,
@@ -96,6 +97,9 @@ func InitSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+
+	// Migration: add description column to gc_rooms
+	db.Exec("ALTER TABLE gc_rooms ADD COLUMN description TEXT NOT NULL DEFAULT ''")
 
 	// Migration: add new columns to gc_room_agents if they don't exist
 	migrations := []string{

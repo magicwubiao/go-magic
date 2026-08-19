@@ -57,12 +57,12 @@ func NewStorageFromHome(homeDir string) (*Storage, error) {
 // GetRoom 获取房间
 func (s *Storage) GetRoom(roomID string) (*Room, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
+		SELECT id, name, description, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
 		FROM gc_rooms WHERE id = ?`, roomID)
 
 	var room Room
 	var inviteCode sql.NullString
-	err := row.Scan(&room.ID, &room.Name, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
+	err := row.Scan(&room.ID, &room.Name, &room.Description, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
 		&room.TailMessageCount, &room.TotalTokens, &room.CreatedAt, &room.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -79,12 +79,12 @@ func (s *Storage) GetRoom(roomID string) (*Room, error) {
 // GetRoomByInviteCode 通过邀请码获取房间
 func (s *Storage) GetRoomByInviteCode(code string) (*Room, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
+		SELECT id, name, description, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
 		FROM gc_rooms WHERE inviteCode = ?`, code)
 
 	var room Room
 	var inviteCode sql.NullString
-	err := row.Scan(&room.ID, &room.Name, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
+	err := row.Scan(&room.ID, &room.Name, &room.Description, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
 		&room.TailMessageCount, &room.TotalTokens, &room.CreatedAt, &room.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -101,7 +101,7 @@ func (s *Storage) GetRoomByInviteCode(code string) (*Room, error) {
 // GetAllRooms 获取所有房间
 func (s *Storage) GetAllRooms() ([]Room, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
+		SELECT id, name, description, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt
 		FROM gc_rooms ORDER BY createdAt DESC`)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (s *Storage) GetAllRooms() ([]Room, error) {
 	for rows.Next() {
 		var room Room
 		var inviteCode sql.NullString
-		if err := rows.Scan(&room.ID, &room.Name, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
+		if err := rows.Scan(&room.ID, &room.Name, &room.Description, &inviteCode, &room.TriggerTokens, &room.MaxHistoryTokens,
 			&room.TailMessageCount, &room.TotalTokens, &room.CreatedAt, &room.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -127,9 +127,9 @@ func (s *Storage) GetAllRooms() ([]Room, error) {
 // CreateRoom 创建房间
 func (s *Storage) CreateRoom(room *Room) error {
 	_, err := s.db.Exec(`
-		INSERT INTO gc_rooms (id, name, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		room.ID, room.Name, room.InviteCode, room.TriggerTokens, room.MaxHistoryTokens,
+		INSERT INTO gc_rooms (id, name, description, inviteCode, triggerTokens, maxHistoryTokens, tailMessageCount, totalTokens, createdAt, updatedAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		room.ID, room.Name, room.Description, room.InviteCode, room.TriggerTokens, room.MaxHistoryTokens,
 		room.TailMessageCount, room.TotalTokens, room.CreatedAt, room.UpdatedAt)
 	return err
 }
@@ -138,9 +138,9 @@ func (s *Storage) CreateRoom(room *Room) error {
 func (s *Storage) UpdateRoom(room *Room) error {
 	room.UpdatedAt = Now()
 	_, err := s.db.Exec(`
-		UPDATE gc_rooms SET name = ?, inviteCode = ?, triggerTokens = ?, maxHistoryTokens = ?, 
+		UPDATE gc_rooms SET name = ?, description = ?, inviteCode = ?, triggerTokens = ?, maxHistoryTokens = ?, 
 		tailMessageCount = ?, totalTokens = ?, updatedAt = ? WHERE id = ?`,
-		room.Name, room.InviteCode, room.TriggerTokens, room.MaxHistoryTokens,
+		room.Name, room.Description, room.InviteCode, room.TriggerTokens, room.MaxHistoryTokens,
 		room.TailMessageCount, room.TotalTokens, room.UpdatedAt, room.ID)
 	return err
 }

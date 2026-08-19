@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/compress"
 	"github.com/magicwubiao/go-magic/internal/groupchat"
-	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/tool"
 )
 
 func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, roomID string) {
@@ -78,8 +82,13 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 	defer cancel()
 	defer sseW.Close()
 
-	// Get recent messages for context
-	recentMsgs, _ := s.groupchatStorage.GetMessages(roomID, 20)
+	// Build conversation context with optional compression
+	room, _ := s.groupchatStorage.GetRoom(roomID)
+	tailCount := 20
+	if room != nil && room.TailMessageCount > 0 {
+		tailCount = room.TailMessageCount
+	}
+	conversationContext, summary, _, _ := s.buildAgentContext(roomID, tailCount)
 
 	// Start heartbeat to prevent proxy/browser timeout
 	heartbeatDone := make(chan struct{})
@@ -102,7 +111,7 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 	})
 
 	// Stream each mentioned agent's reply
-	for _, agent := range mentioned {
+	for _, a := range mentioned {
 		select {
 		case <-ctx.Done():
 			close(heartbeatDone)
@@ -113,118 +122,90 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 		// Send agent start event
 		startData, _ := json.Marshal(map[string]interface{}{
 			"type":    "start",
-			"agent":   agent.Name,
-			"agentId": agent.ID,
+			"agent":   a.Name,
+			"agentId": a.ID,
 		})
 		writeSSE("data: " + string(startData) + "\n\n")
 
-		// Build messages
-		messages := make([]provider.Message, 0)
-		systemPrompt := agent.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = fmt.Sprintf("You are %s, an AI assistant in a group chat. Your profile is: %s. Description: %s. Reply concisely and helpfully.",
-				agent.Name, agent.Profile, agent.Description)
+		// Create working directory for this agent
+		workDir := filepath.Join(s.cfg.WorkingDir, "groupchat", roomID, a.ID)
+		os.MkdirAll(workDir, 0755)
+
+		// Build enhanced system prompt with compression summary
+		systemPrompt := buildAgentSystemPrompt(a, workDir, summary)
+
+		// Build input with conversation context
+		input := fmt.Sprintf("Recent conversation:\n%s\n\nUser message: %s", conversationContext, req.Content)
+
+		// Create context with working directory
+		agentCtx := tool.WithWorkDir(ctx, workDir)
+
+		// Get tools and filter by agent's tool permissions
+		tools := s.toolReg.ListWithSchemas()
+		if a.Tools != "" {
+			tools = filterToolsMap(a.Tools, tools)
 		}
-		messages = append(messages, provider.Message{Role: "system", Content: systemPrompt})
 
-		for _, msg := range recentMsgs {
-			role := "user"
-			if msg.Type == "agent" {
-				role = "assistant"
-			}
-			if msg.SenderID == "system" {
-				role = "system"
-			}
-			messages = append(messages, provider.Message{Role: role, Content: msg.Content})
+		// Agent options
+		agentOpts := []agent.AgentOption{
+			agent.WithLoopLimits(3, 10),
+			agent.WithSteering(agent.SteeringConfig{MaxIterations: 20}),
 		}
 
-		// Try streaming first
-		agentCtx, agentCancel := context.WithTimeout(ctx, 10*time.Minute)
-		fullContent := ""
+		// Create EnhancedAgent with full tool access
+		enhancedAgent := agent.NewEnhancedAgent(s.provider, s.toolReg, tools, systemPrompt, agentOpts...)
 
-		streamer, supportsStream := s.provider.(provider.Streamer)
-		if supportsStream {
-			streamErr := streamer.Stream(agentCtx, messages, func(resp *provider.StreamResponse) {
-				if resp.Content != "" {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-					fullContent += resp.Content
-					data, _ := json.Marshal(map[string]interface{}{
-						"type":    "content",
-						"agent":   agent.Name,
-						"agentId": agent.ID,
-						"content": resp.Content,
-					})
-					writeSSE("data: " + string(data) + "\n\n")
-				}
+		// Run streaming conversation
+		var fullContent string
+		streamErr := enhancedAgent.RunConversationStream(agentCtx, input, func(content string, done bool) {
+			if content == "" {
+				return
+			}
+			select {
+			case <-agentCtx.Done():
+				return
+			default:
+			}
+			fullContent += content
+			data, _ := json.Marshal(map[string]interface{}{
+				"type":    "content",
+				"agent":   a.Name,
+				"agentId": a.ID,
+				"content": content,
 			})
-			agentCancel()
-			if streamErr != nil {
-				errData, _ := json.Marshal(map[string]interface{}{
-					"type":  "error",
-					"agent": agent.Name,
-					"error": streamErr.Error(),
-				})
-				writeSSE("data: " + string(errData) + "\n\n")
-				continue
-			}
-		} else {
-			// Fallback to non-streaming
-			resp, chatErr := s.provider.Chat(agentCtx, messages)
-			agentCancel()
-			if chatErr != nil {
-				errData, _ := json.Marshal(map[string]interface{}{
-					"type":  "error",
-					"agent": agent.Name,
-					"error": chatErr.Error(),
-				})
-				writeSSE("data: " + string(errData) + "\n\n")
-				continue
-			}
-			fullContent = resp.Content
-			// Send as pseudo-stream
-			chars := []rune(resp.Content)
-			for i, ch := range chars {
-				select {
-				case <-ctx.Done():
-					close(heartbeatDone)
-					return
-				default:
-				}
-				data, _ := json.Marshal(map[string]interface{}{
-					"type":    "content",
-					"agent":   agent.Name,
-					"agentId": agent.ID,
-					"content": string(ch),
-				})
-				writeSSE("data: " + string(data) + "\n\n")
-				// Small delay for pseudo-streaming
-				if i%10 == 0 {
-					time.Sleep(5 * time.Millisecond)
-				}
-			}
+			writeSSE("data: " + string(data) + "\n\n")
+		})
+
+		if streamErr != nil {
+			errData, _ := json.Marshal(map[string]interface{}{
+				"type":  "error",
+				"agent": a.Name,
+				"error": streamErr.Error(),
+			})
+			writeSSE("data: " + string(errData) + "\n\n")
+			continue
 		}
 
 		// Save complete message to database
 		replyMsg := &groupchat.ChatMessage{
 			ID:         uuid.New().String(),
 			RoomID:     roomID,
-			SenderID:   agent.ID,
-			SenderName: agent.Name,
+			SenderID:   a.ID,
+			SenderName: a.Name,
 			Content:    fullContent,
 			Timestamp:  time.Now().UnixMilli(),
 			Type:       "agent",
 		}
 		s.groupchatStorage.SaveMessage(replyMsg)
 
+		// Save session profile for continuity
+		s.groupchatStorage.SaveSessionProfile(replyMsg.ID, roomID, a.ID, a.Profile)
+
 		// Send done event
 		doneData, _ := json.Marshal(map[string]interface{}{
 			"type":      "done",
-			"agent":     agent.Name,
-			"agentId":   agent.ID,
+			"agent":     a.Name,
+			"agentId":   a.ID,
 			"messageId": replyMsg.ID,
 		})
 		writeSSE("data: " + string(doneData) + "\n\n")
@@ -421,11 +402,29 @@ func (s *Server) handleGroupchatRoomSubroutes(w http.ResponseWriter, r *http.Req
 		jsonResponse(w, map[string]interface{}{
 			"id":          room.ID,
 			"name":        room.Name,
-			"description": room.InviteCode,
+			"description": room.Description,
 			"members":     []string{},
 			"agent_ids":   []string{},
 			"created_at":  room.CreatedAt,
 		})
+	case "PUT":
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", 400)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name is required", 400)
+			return
+		}
+		room.Name = req.Name
+		if err := s.groupchatStorage.UpdateRoom(room); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"ok": true, "name": room.Name})
 	case "DELETE":
 		if err := s.groupchatStorage.DeleteRoom(roomID); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -437,48 +436,56 @@ func (s *Server) handleGroupchatRoomSubroutes(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func (s *Server) replyAsAgent(roomID string, agent *groupchat.RoomAgent, history []groupchat.ChatMessage, userMessage string) {
-	// Build message history for LLM
-	messages := make([]provider.Message, 0)
-
-	// System prompt
-	systemPrompt := agent.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = fmt.Sprintf("You are %s, an AI assistant in a group chat. Your profile is: %s. Description: %s. Reply concisely and helpfully.",
-			agent.Name, agent.Profile, agent.Description)
+func (s *Server) replyAsAgent(roomID string, a *groupchat.RoomAgent, history []groupchat.ChatMessage, userMessage string) {
+	if s.provider == nil || s.groupchatStorage == nil || s.toolReg == nil {
+		return
 	}
-	messages = append(messages, provider.Message{
-		Role:    "system",
-		Content: systemPrompt,
-	})
 
-	// Add recent history as context
+	// Create working directory for this agent
+	workDir := filepath.Join(s.cfg.WorkingDir, "groupchat", roomID, a.ID)
+	os.MkdirAll(workDir, 0755)
+
+	// Build conversation context
+	var contextBuilder strings.Builder
 	for _, msg := range history {
-		role := "user"
-		if msg.Type == "agent" {
-			role = "assistant"
+		role := msg.SenderName
+		if role == "" {
+			role = msg.SenderID
 		}
-		if msg.SenderID == "system" {
-			role = "system"
-		}
-		messages = append(messages, provider.Message{
-			Role:    role,
-			Content: msg.Content,
-		})
+		contextBuilder.WriteString(fmt.Sprintf("%s: %s\n", role, msg.Content))
+	}
+	conversationContext := contextBuilder.String()
+	input := fmt.Sprintf("Recent conversation:\n%s\n\nUser message: %s", conversationContext, userMessage)
+
+	// Create context with working directory
+	ctx := tool.WithWorkDir(context.Background(), workDir)
+
+	// Get tools and filter by agent's tool permissions
+	tools := s.toolReg.ListWithSchemas()
+	if a.Tools != "" {
+		tools = filterToolsMap(a.Tools, tools)
 	}
 
-	// Call LLM
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// Agent options
+	agentOpts := []agent.AgentOption{
+		agent.WithLoopLimits(3, 10),
+		agent.WithSteering(agent.SteeringConfig{MaxIterations: 20}),
+	}
 
-	resp, err := s.provider.Chat(ctx, messages)
+	// Build enhanced system prompt with compression summary
+	systemPrompt := buildAgentSystemPrompt(a, workDir, "")
+	// Create EnhancedAgent with full tool access
+	enhancedAgent := agent.NewEnhancedAgent(s.provider, s.toolReg, tools, systemPrompt, agentOpts...)
+
+	// Run conversation
+	result, err := enhancedAgent.RunConversation(ctx, input)
 	if err != nil {
 		// Save error as agent message
 		errMsg := &groupchat.ChatMessage{
 			ID:         uuid.New().String(),
 			RoomID:     roomID,
-			SenderID:   agent.ID,
-			SenderName: agent.Name,
+			SenderID:   a.ID,
+			SenderName: a.Name,
 			Content:    fmt.Sprintf("[Error: %s]", err.Error()),
 			Timestamp:  time.Now().UnixMilli(),
 			Type:       "agent",
@@ -491,13 +498,168 @@ func (s *Server) replyAsAgent(roomID string, agent *groupchat.RoomAgent, history
 	replyMsg := &groupchat.ChatMessage{
 		ID:         uuid.New().String(),
 		RoomID:     roomID,
-		SenderID:   agent.ID,
-		SenderName: agent.Name,
-		Content:    resp.Content,
+		SenderID:   a.ID,
+		SenderName: a.Name,
+		Content:    result,
 		Timestamp:  time.Now().UnixMilli(),
 		Type:       "agent",
 	}
 	s.groupchatStorage.SaveMessage(replyMsg)
+
+	// Save session profile for continuity
+	s.groupchatStorage.SaveSessionProfile(replyMsg.ID, roomID, a.ID, a.Profile)
+}
+
+// buildAgentContext builds conversation context with optional compression.
+// Returns: context string, summary (empty if no compression), whether compression was applied.
+func (s *Server) buildAgentContext(roomID string, tailCount int) (string, string, bool, error) {
+	if tailCount <= 0 {
+		tailCount = 20
+	}
+
+	// Get messages for compression check
+	allMsgs, err := s.groupchatStorage.GetMessages(roomID, 1000)
+	if err != nil {
+		// Fallback to just recent messages
+		recent, err2 := s.groupchatStorage.GetMessages(roomID, tailCount)
+		if err2 != nil {
+			return "", "", false, err2
+		}
+		return buildSimpleContext(recent), "", false, nil
+	}
+
+	// Check if compression is needed
+	totalTokens := compress.EstimateMessagesTokens(toCompressMessages(allMsgs), "")
+	triggerTokens := 100000 // default
+
+	room, _ := s.groupchatStorage.GetRoom(roomID)
+	if room != nil && room.TriggerTokens > 0 {
+		triggerTokens = room.TriggerTokens
+	}
+
+	if totalTokens < triggerTokens || len(allMsgs) <= tailCount+2 {
+		// No compression needed, use recent messages
+		recent := allMsgs
+		if len(allMsgs) > tailCount {
+			recent = allMsgs[len(allMsgs)-tailCount:]
+		}
+		return buildSimpleContext(recent), "", false, nil
+	}
+
+	// Compression needed - compress middle messages
+	compressMgr := compress.NewManager("")
+	summary, _, err := compressMgr.CompressSession(roomID, toCompressMessages(allMsgs), tailCount)
+	if err != nil {
+		// Fallback to recent messages
+		recent := allMsgs
+		if len(allMsgs) > tailCount {
+			recent = allMsgs[len(allMsgs)-tailCount:]
+		}
+		return buildSimpleContext(recent), "", false, nil
+	}
+
+	// Build context from tail messages (most recent)
+	recent := allMsgs
+	if len(allMsgs) > tailCount {
+		recent = allMsgs[len(allMsgs)-tailCount:]
+	}
+	contextStr := buildSimpleContext(recent)
+
+	return contextStr, summary, true, nil
+}
+
+// buildSimpleContext builds a conversation context string from messages.
+func buildSimpleContext(msgs []groupchat.ChatMessage) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		role := msg.SenderName
+		if role == "" {
+			role = msg.SenderID
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n", role, msg.Content))
+	}
+	return sb.String()
+}
+
+// toCompressMessages converts ChatMessage slice to compress.Message slice.
+func toCompressMessages(msgs []groupchat.ChatMessage) []compress.Message {
+	result := make([]compress.Message, len(msgs))
+	for i, msg := range msgs {
+		role := "user"
+		if msg.Type == "agent" || msg.Type == "system" {
+			role = msg.Type
+		}
+		result[i] = compress.Message{
+			Role:      role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		}
+	}
+	return result
+}
+
+// filterToolsMap filters tools based on the agent's Tools field.
+// agent.Tools is a JSON array string like ["write_file","read_file"].
+// Empty string means all tools are available.
+func filterToolsMap(agentTools string, allTools []map[string]interface{}) []map[string]interface{} {
+	if agentTools == "" {
+		return allTools
+	}
+
+	var allowed []string
+	if err := json.Unmarshal([]byte(agentTools), &allowed); err != nil || len(allowed) == 0 {
+		return allTools
+	}
+
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		allowedSet[name] = true
+	}
+
+	filtered := make([]map[string]interface{}, 0, len(allowed))
+	for _, t := range allTools {
+		if name, ok := t["name"].(string); ok && allowedSet[name] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+// buildAgentSystemPrompt builds an enhanced system prompt for a group chat agent.
+func buildAgentSystemPrompt(a *groupchat.RoomAgent, workDir string, summary string) string {
+	systemPrompt := a.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = fmt.Sprintf(`You are %s, an AI assistant in a group chat.
+
+Your profile is: %s
+Description: %s
+
+## Guidelines
+- Reply concisely and helpfully.
+- You are part of a group conversation with multiple participants.
+- Pay attention to who is speaking and maintain context.
+- When asked about code or technical topics, provide clear explanations.
+- If you need to write files, use your working directory.`,
+			a.Name, a.Profile, a.Description)
+	}
+
+	// Add working directory instructions
+	systemPrompt += fmt.Sprintf("\n\n## Working Directory\nYour working directory is: %s\n- Use write_file with RELATIVE paths to write files to this directory.\n- Do NOT use absolute paths like /tmp/.\n- Files you write here are accessible to other agents in the same room.", workDir)
+
+	// Add tool usage guidelines
+	systemPrompt += "\n\n## Tool Usage\n- You have access to tools like file read/write, code execution, and web search.\n- Use tools when they help accomplish the task more effectively.\n- For simple questions, just reply directly without calling tools."
+
+	// Add temperature instruction
+	if a.Temperature > 0 {
+		systemPrompt += fmt.Sprintf("\n\n## Response Style\n- Temperature: %.1f (higher = more creative, lower = more precise)", a.Temperature)
+	}
+
+	// Add compressed context summary if available
+	if summary != "" {
+		systemPrompt += fmt.Sprintf("\n\n%s\n\n%s", compress.SummaryPrefix, summary)
+	}
+
+	return systemPrompt
 }
 
 func (s *Server) handleGroupchatRoomAgents(w http.ResponseWriter, r *http.Request, roomID string) {
@@ -664,11 +826,12 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 		}
 
 		room := &groupchat.Room{
-			ID:         uuid.New().String(),
-			Name:       req.Name,
-			InviteCode: "",
-			CreatedAt:  time.Now().UnixMilli(),
-			UpdatedAt:  time.Now().UnixMilli(),
+			ID:          uuid.New().String(),
+			Name:        req.Name,
+			Description: req.Description,
+			InviteCode:  "",
+			CreatedAt:   time.Now().UnixMilli(),
+			UpdatedAt:   time.Now().UnixMilli(),
 		}
 
 		if err := s.groupchatStorage.SaveRoom(room); err != nil {
@@ -679,7 +842,7 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]interface{}{
 			"id":          room.ID,
 			"name":        room.Name,
-			"description": room.InviteCode,
+			"description": room.Description,
 			"members":     []string{},
 			"agent_ids":   []string{},
 			"created_at":  room.CreatedAt,
@@ -704,7 +867,7 @@ func (s *Server) handleGroupchatRooms(w http.ResponseWriter, r *http.Request) {
 			result = append(result, map[string]interface{}{
 				"id":          room.ID,
 				"name":        room.Name,
-				"description": room.InviteCode,
+				"description": room.Description,
 				"members":     []string{},
 				"agent_ids":   agentIDs,
 				"created_at":  room.CreatedAt,

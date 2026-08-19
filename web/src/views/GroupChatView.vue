@@ -2,10 +2,15 @@
   <div class="groupchat-container">
     <!-- Room List -->
     <div class="room-sidebar">
-      <n-space justify="space-between" style="margin-bottom: 12px;">
-        <n-text strong>{{ t('groupchat.rooms') }}</n-text>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center;">
+          <n-text strong>{{ t('groupchat.rooms') }}</n-text>
+          <n-button text size="tiny" @click="handleRefresh" :loading="groupchatStore.loading">
+            <template #icon><n-icon><RefreshOutline /></n-icon></template>
+          </n-button>
+        </div>
         <n-button size="small" type="primary" @click="showCreateRoom = true">+</n-button>
-      </n-space>
+      </div>
       <div class="room-list">
         <div
           v-for="room in groupchatStore.rooms"
@@ -13,12 +18,21 @@
           :class="['room-item', { active: groupchatStore.activeRoomId === room.id }]"
           @click="groupchatStore.selectRoom(room.id)"
         >
-          <n-space justify="space-between" align="start">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
               <n-text strong>{{ room.name }}</n-text>
               <br />
               <n-text depth="3" style="font-size: 12px;">{{ room.agent_ids?.length || 0 }} {{ t('groupchat.agents') }}</n-text>
             </div>
+            <div style="display: flex; gap: 4px; align-items: center;">
+              <n-button
+                v-if="groupchatStore.activeRoomId === room.id"
+                size="tiny"
+                text
+                type="info"
+                @click.stop="groupchatStore.selectRoom(room.id); startEditRoomName()">
+                <template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></n-icon></template>
+              </n-button>
             <n-popconfirm @positive-click="handleDeleteRoom(room.id)">
               <template #trigger>
                 <n-button
@@ -26,7 +40,7 @@
                   text
                   type="error"
                   @click.stop
-                  style="opacity: 0; transition: opacity 0.2s;"
+                  style="transition: opacity 0.2s;"
                   class="room-delete-btn"
                 >
                   <template #icon>
@@ -36,7 +50,8 @@
               </template>
               {{ t('groupchat.confirmDeleteRoom') }}
             </n-popconfirm>
-          </n-space>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -46,23 +61,79 @@
       <template v-if="groupchatStore.activeRoomId">
         <!-- Room Header -->
         <div class="chat-header">
-          <n-text strong style="font-size: 16px;">{{ activeRoom?.name }}</n-text>
-          <n-button size="small" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
+          <div style="display: flex; align-items: center; flex: 1; min-width: 0;">
+            <template v-if="editingRoomName">
+            <n-input
+              v-model:value="editRoomNameValue"
+              size="small"
+              style="width: 200px;"
+              @keyup.enter="saveRoomName"
+              @keyup.escape="editingRoomName = false"
+              ref="editNameInput"
+            />
+            <n-button size="tiny" type="primary" @click="saveRoomName">{{ t('common.save') }}</n-button>
+            <n-button size="tiny" @click="editingRoomName = false">{{ t('common.cancel') }}</n-button>
+          </template>
+          <template v-else>
+            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer;" @click="startEditRoomName">
+              <n-text strong style="font-size: 16px;" :title="activeRoom?.name">{{ activeRoom?.name }}</n-text>
+              <n-icon size="14" style="color: #999;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></n-icon>
+            </div>
+          </template>
+            <n-popover v-if="activeRoom?.description" trigger="hover">
+              <template #trigger>
+                <n-icon size="14" style="color: #999; cursor: help;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon>
+              </template>
+              {{ activeRoom?.description }}
+            </n-popover>
+          </div>
+          <div style="display: flex; align-items: center;">
+            <n-button size="tiny" quaternary @click="showInviteCode = true">
+              <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template>
+            </n-button>
+            <n-button size="small" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
+            <n-popover trigger="click" placement="bottom-end">
+              <template #trigger>
+                <n-button size="tiny" quaternary>
+                  <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></n-icon></template>
+                </n-button>
+              </template>
+              <div style="display: flex; flex-direction: column; gap: 8px; min-width: 160px;">
+                <n-button text @click="showInviteCode = true"><template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
+                <n-button text @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon></template> {{ t('groupchat.info') }}</n-button>
+              </div>
+            </n-popover>
+          </div>
+        </div>
+
+        <!-- Room Info -->
+        <div v-if="showRoomInfo && activeRoom" class="room-info-panel">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-weight: 500; font-size: 13px; color: #666;">{{ activeRoom.name }}</span>
+            <button class="info-close-btn" @click="showRoomInfo = false">&times;</button>
+          </div>
+          <div v-if="activeRoom?.description" style="font-size: 12px; color: #999; margin-top: 4px;">{{ activeRoom.description }}</div>
+          <div style="margin-top: 4px; display: flex; gap: 8px;">
+            <span v-if="groupchatStore.members.length > 0" style="font-size: 11px; background: #f0f0f0; padding: 1px 8px; border-radius: 8px;">{{ t('groupchat.members') }}: {{ groupchatStore.members.length }}</span>
+            <span v-if="groupchatStore.agents.length > 0" style="font-size: 11px; background: #f0f0f0; padding: 1px 8px; border-radius: 8px;">{{ t('groupchat.agents') }}: {{ groupchatStore.agents.length }}</span>
+          </div>
         </div>
 
         <!-- Messages -->
-        <div class="messages" ref="messagesRef">
+        <div class="messages" ref="messagesRef" @click="handleCodeClick">
           <!-- 加载骨架：切换房间或初次加载时显示，避免白屏 -->
           <div v-if="groupchatStore.loading && groupchatStore.messages.length === 0" class="msg-skeleton">
             <n-skeleton text :repeat="4" />
           </div>
           <template v-else>
-            <div
-              v-for="msg in groupchatStore.messages"
-              :key="msg.id"
-              class="message"
-              :class="msg.role"
-            >
+            <div v-for="(msgs, dateKey) in groupedMessages" :key="dateKey">
+              <div v-if="dateKey" class="date-separator"><span>{{ dateKey }}</span></div>
+              <div
+                v-for="msg in msgs"
+                :key="msg.id"
+                class="message"
+                :class="msg.role"
+              >
               <!-- Avatar -->
               <div class="avatar" :class="avatarClass(msg)">
                 {{ avatarText(msg) }}
@@ -72,18 +143,23 @@
                 <!-- Header: sender + time -->
                 <div class="message-header">
                   <n-text strong class="sender-name">{{ msg.sender }}</n-text>
-                  <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">AI</n-tag>
+                  <n-tag v-if="msg.role === 'agent'" size="tiny" type="success">{{ t('groupchat.ai') }}</n-tag>
                   <span v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</span>
                 </div>
                 <!-- Bubble / content -->
                 <div class="message-bubble" :class="[bubbleClass(msg), { streaming: msg._streaming }]">
                   <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
+                  <template v-if="msg.role === 'agent' && msg.content">
+                    <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
+                  </template>
                   <div
+                    v-else
                     class="bubble-content"
-                    v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"
+                    v-html="msg.content ? renderMarkdownWithCopy(msg.content) : '<span class=\'placeholder\'>...</span>'"
                   ></div>
                 </div>
               </div>
+            </div>
             </div>
           </template>
         </div>
@@ -143,6 +219,18 @@
       </div>
     </div>
 
+    <!-- Invite Code Modal -->
+    <n-modal v-model:show="showInviteCode" :title="t('groupchat.inviteCode')" preset="card" style="width: 420px;" closable @close="showInviteCode = false">
+      <div style="display: flex; flex-direction: column;">
+        <n-button @click="generateInvite" :loading="generatingInvite" style="width: 100%;">{{ t('groupchat.generate') }}</n-button>
+        <n-input v-if="inviteCodeText" v-model:value="inviteCodeText" readonly>
+          <template #suffix>
+            <n-button text @click="copyToClipboard(inviteCodeText)"><template #icon><n-icon><CopyOutline /></n-icon></template></n-button>
+          </template>
+        </n-input>
+      </div>
+    </n-modal>
+
     <!-- Create Room Modal -->
     <n-modal v-model:show="showCreateRoom" :title="t('groupchat.newRoom')" preset="dialog" closable @close="showCreateRoom = false" style="width: 480px;">
       <n-form>
@@ -154,10 +242,10 @@
         </n-form-item>
       </n-form>
       <template #action>
-        <n-space justify="end">
+        <div style="display: flex; justify-content: flex-end;">
           <n-button @click="showCreateRoom = false">{{ t('common.cancel') }}</n-button>
           <n-button type="primary" @click="createRoom">{{ t('common.create') }}</n-button>
-        </n-space>
+        </div>
       </template>
     </n-modal>
 
@@ -166,19 +254,19 @@
       <n-card>
         <n-list>
           <n-list-item v-for="a in groupchatStore.agents" :key="a.id">
-            <n-space justify="space-between" align="start" style="width: 100%;">
-              <n-space vertical style="flex: 1; min-width: 0;">
-                <n-space align="center" :wrap="false">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+              <div style="display: flex; flex-direction: column; flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center;">
                   <n-text strong style="font-size: 15px;">{{ a.name }}</n-text>
                   <n-tag v-if="a.profile" size="tiny" type="default">{{ a.profile }}</n-tag>
                   <n-tag size="tiny" type="info">{{ a.temperature !== undefined ? a.temperature.toFixed(1) : '0.7' }}</n-tag>
-                </n-space>
+                </div>
                 <n-text v-if="a.description" depth="3" style="font-size: 12px;">{{ a.description }}</n-text>
                 <n-text v-if="a.system_prompt" depth="3" style="font-size: 11px; word-break: break-all;" :ellipsis="{ rows: 2 }">
                   {{ a.system_prompt }}
                 </n-text>
-              </n-space>
-              <n-space :wrap="false">
+              </div>
+              <div style="display: flex;">
                 <n-button size="tiny" @click="editAgent(a)">{{ t('common.edit') }}</n-button>
                 <n-popconfirm @positive-click="handleRemoveAgent(a)">
                   <template #trigger>
@@ -186,8 +274,8 @@
                   </template>
                   {{ t('groupchat.confirmRemoveAgent', { name: a.name }) }}
                 </n-popconfirm>
-              </n-space>
-            </n-space>
+              </div>
+            </div>
           </n-list-item>
         </n-list>
         <n-divider />
@@ -209,19 +297,19 @@
           </n-form-item>
           <n-grid :cols="2" :x-gap="12">
             <n-form-item-gi :label="t('groupchat.temperature')">
-              <n-space align="center">
+              <div style="display: flex; align-items: center;">
                 <n-slider v-model:value="newAgent.temperature" :min="0" :max="2" :step="0.1" style="width: 120px;" />
                 <n-text>{{ newAgent.temperature.toFixed(1) }}</n-text>
-              </n-space>
+              </div>
             </n-form-item-gi>
             <n-form-item-gi :label="t('groupchat.tools')">
               <n-input v-model:value="newAgent.tools" :placeholder="t('groupchat.toolsPlaceholder')" />
             </n-form-item-gi>
           </n-grid>
-          <n-space justify="end" style="margin-top: 8px;">
+          <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
             <n-button v-if="editingAgentId" @click="cancelEdit">{{ t('common.cancel') }}</n-button>
             <n-button type="primary" @click="addAgent">{{ editingAgentId ? t('common.save') : t('groupchat.addAgent') }}</n-button>
-          </n-space>
+          </div>
         </n-form>
       </n-card>
     </n-modal>
@@ -236,7 +324,8 @@ import { useGroupChatStore } from '@/stores/groupchat'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
-import { CloseOutline } from '@vicons/ionicons5'
+import { CloseOutline, RefreshOutline, CopyOutline, CodeSlash } from '@vicons/ionicons5'
+import ReasoningContent from '@/components/ReasoningContent.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -245,10 +334,16 @@ const inputValue = ref('')
 const showCreateRoom = ref(false)
 const showAgents = ref(false)
 const inviteCode = ref('')
+const showInviteCode = ref(false)
+const inviteCodeText = ref('')
+const showRoomInfo = ref(false)
+const editingRoomName = ref(false)
+const editRoomNameValue = ref('')
 const newRoom = reactive({ name: '', description: '' })
 const editingAgentId = ref('')
 const replying = ref(false)
 const replyingAgent = ref('')
+const generatingInvite = ref(false)
 const messagesRef = ref<HTMLElement | null>(null)
 let streamAbortController: AbortController | null = null
 let streamBuffer = ''
@@ -771,6 +866,100 @@ async function handleRemoveAgent(agent: any) {
   message.success(t('groupchat.agentRemoved'))
 }
 
+function handleRefresh() {
+  groupchatStore.loadRooms()
+  if (groupchatStore.activeRoomId) {
+    groupchatStore.selectRoom(groupchatStore.activeRoomId)
+  }
+}
+
+async function generateInvite() {
+  generatingInvite.value = true
+  try {
+    const code = await groupchatStore.generateInviteCode()
+    inviteCodeText.value = code
+    message.success(t('groupchat.inviteCodeGenerated'))
+  } catch {
+    message.error(t('groupchat.inviteCodeFailed'))
+  } finally {
+    generatingInvite.value = false
+  }
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).then(() => {
+    message.success(t('groupchat.inviteCodeCopied'))
+  }).catch(() => {
+    // Fallback
+    const el = document.createElement('textarea')
+    el.value = text
+    document.body.appendChild(el)
+    el.select()
+    document.execCommand('copy')
+    document.body.removeChild(el)
+    message.success(t('groupchat.inviteCodeCopied'))
+  })
+}
+
+// Group messages by date for display
+const groupedMessages = computed(() => {
+  const groups: Record<string, any[]> = {}
+  for (const msg of groupchatStore.messages) {
+    const key = formatDate(msg.timestamp)
+    if (!groups[key]) groups[key] = []
+    groups[key].push(msg)
+  }
+  return groups
+})
+
+function formatDate(ts: string | number): string {
+  if (!ts) return ''
+  const d = toDate(ts)
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterday = new Date(today.getTime() - 86400000)
+  const msgDate = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  if (msgDate.getTime() === today.getTime()) return ''
+  if (msgDate.getTime() === yesterday.getTime()) return 'Yesterday'
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+// Markdown render with code block copy buttons
+function startEditRoomName() {
+  if (!activeRoom.value) return
+  editRoomNameValue.value = activeRoom.value.name
+  editingRoomName.value = true
+}
+
+async function saveRoomName() {
+  if (!editRoomNameValue.value.trim()) return
+  await groupchatStore.updateRoomName(editRoomNameValue.value.trim())
+  editingRoomName.value = false
+  message.success(t('groupchat.roomNameUpdated'))
+}
+
+function handleCodeClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  // Check if click is on a code block area
+  const pre = target.closest('pre')
+  if (pre) {
+    const code = pre.querySelector('code')
+    if (code) {
+      navigator.clipboard.writeText(code.textContent || '').then(() => {
+        message.success(t('groupchat.copied'))
+      }).catch(() => {})
+    }
+  }
+}
+
+function renderMarkdownWithCopy(content: string): string {
+  return renderMarkdown(content)
+}
+
+
+
+
 onMounted(() => groupchatStore.loadRooms())
 </script>
 
@@ -811,6 +1000,9 @@ onMounted(() => groupchatStore.loadRooms())
   background: #e8f4ff;
 }
 
+.room-item .room-delete-btn {
+  opacity: 0.5 !important;
+}
 .room-item:hover .room-delete-btn {
   opacity: 1 !important;
 }
@@ -1224,4 +1416,61 @@ onMounted(() => groupchatStore.loadRooms())
 .mention-name {
   color: #333;
 }
+/* Code block clickable hint */
+.messages pre:hover {
+  outline: 2px solid #1890ff;
+  outline-offset: 2px;
+  cursor: pointer;
+  transition: outline 0.2s;
+}
+.messages pre {
+  position: relative;
+  border-radius: 6px;
+}
+.messages pre:hover::after {
+  content: 'Click to copy';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 11px;
+  color: #1890ff;
+  background: rgba(255,255,255,0.9);
+  padding: 0 6px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* Date separator */
+.date-separator {
+  text-align: center;
+  padding: 16px 0 8px;
+  font-size: 12px;
+  color: #999;
+}
+.date-separator span {
+  background: #f5f5f5;
+  padding: 2px 12px;
+  border-radius: 10px;
+}
+
+/* Room info panel */
+.room-info-panel {
+  padding: 8px 16px;
+  border-bottom: 1px solid #e8e8e8;
+  background: #fafafa;
+}
+
+/* Invite code modal */
+.invite-code-input {
+  cursor: pointer;
+}
+
+/* Copy button */
+.copy-btn {
+  cursor: pointer;
+}
+
+.info-close-btn { border: none; background: none; cursor: pointer; font-size: 16px; color: #999; padding: 0; line-height: 1; }
+.info-close-btn:hover { color: #333; }
+
 </style>

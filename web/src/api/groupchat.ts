@@ -106,3 +106,7 @@ export async function generateInviteCode(roomId: string): Promise<{ invite_code:
 export async function deleteRoom(roomId: string): Promise<void> {
   return request(`/groupchat/rooms/${roomId}`, { method: 'DELETE' })
 }
+
+export async function updateRoom(roomId: string, data: { name: string }): Promise<void> {
+  return request(`/groupchat/rooms/${roomId}`, { method: 'PUT', body: JSON.stringify(data) })
+}

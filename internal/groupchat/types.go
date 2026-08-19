@@ -9,6 +9,7 @@ import (
 type Room struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
+	Description      string `json:"description,omitempty"`
 	InviteCode       string `json:"inviteCode,omitempty"`
 	TriggerTokens    int    `json:"triggerTokens,omitempty"`
 	MaxHistoryTokens int    `json:"maxHistoryTokens,omitempty"`

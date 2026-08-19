@@ -802,8 +802,8 @@ func (s *Server) handleAgentMention(roomID string, msg *ChatMessage) {
 					ctxBuilder.WriteString(fmt.Sprintf("%s: %s\n", m.SenderName, m.Content))
 				}
 
-				// Store agent response as a system message
-				response := fmt.Sprintf("[Agent %s] Acknowledged mention. Context has %d messages.", a.Name, len(recentMsgs))
+				// Store agent response as a system message (placeholder - actual processing via REST API)
+				response := fmt.Sprintf("[Agent %s] I see your message. Processing via the AI service...", a.Name)
 				s.storage.SaveMessage(&ChatMessage{
 					RoomID:     roomID,
 					SenderID:   "agent-" + a.Name,

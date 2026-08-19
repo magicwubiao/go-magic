@@ -116,6 +116,17 @@ export const useGroupChatStore = defineStore('groupchat', () => {
     }
   }
 
+  async function updateRoomName(name: string) {
+    if (!activeRoomId.value) return
+    try {
+      await groupchatApi.updateRoom(activeRoomId.value, { name })
+      const room = rooms.value.find(r => r.id === activeRoomId.value)
+      if (room) room.name = name
+    } catch (e) {
+      console.error('Failed to update room name:', e)
+    }
+  }
+
   async function updateAgent(agentId: string, data: Partial<RoomAgent>) {
     if (!activeRoomId.value) return
     const updated = await groupchatApi.updateRoomAgent(activeRoomId.value, agentId, data)
@@ -160,6 +171,7 @@ export const useGroupChatStore = defineStore('groupchat', () => {
     addAgent,
     removeAgent,
     updateAgent,
+    updateRoomName,
     generateInviteCode,
     deleteRoom,
   }
