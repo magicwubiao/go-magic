@@ -18,7 +18,7 @@
           <n-form-item :label="t('config.workingDirectory')">
             <n-space>
               <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" style="flex: 1;" />
-              <n-button size="small" @click="openDirPicker">
+              <n-button @click="openDirPicker">
                 <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
               </n-button>
             </n-space>

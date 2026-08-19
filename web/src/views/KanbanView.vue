@@ -3,7 +3,7 @@
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('kanban.title') }}</h2>
       <n-space>
-        <n-button size="small" @click="kanbanStore.loadBoard()">
+        <n-button @click="kanbanStore.loadBoard()">
           <template #icon><n-icon :component="RefreshOutline" /></template>
         </n-button>
         <n-button @click="showStats = true">

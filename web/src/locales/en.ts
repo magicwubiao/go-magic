@@ -295,6 +295,12 @@ export default {
     deleteSession: 'Delete Session',
     deleteSessionConfirm: 'Are you sure you want to delete this session?',
     deleteSessionFiles: 'Also delete workspace files',
+    saveSuccess: 'File saved successfully',
+    saveFail: 'Failed to save file',
+    copyContent: 'Copy content',
+    contentCopied: 'Content copied',
+    unsavedChanges: 'Unsaved changes',
+    discardChanges: 'You have unsaved changes. Are you sure you want to close?',
   },
   gateway: {
     title: 'Gateway',

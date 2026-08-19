@@ -89,7 +89,7 @@
               {{ activeRoom?.description }}
             </n-popover>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 14px;">
             <n-button size="tiny" quaternary @click="showInviteCode = true">
               <template #icon><n-icon><documents-outline /></n-icon></template>
             </n-button>
@@ -253,67 +253,65 @@
 
     <!-- Agents Modal -->
     <n-modal v-model:show="showAgents" :title="t('groupchat.agents')" style="width: 640px;" preset="card" closable @close="showAgents = false">
-      <n-card>
-        <n-list>
-          <n-list-item v-for="a in groupchatStore.agents" :key="a.id">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
-              <div style="display: flex; flex-direction: column; flex: 1; min-width: 0;">
-                <div style="display: flex; align-items: center;">
-                  <n-text strong style="font-size: 15px;">{{ a.name }}</n-text>
-                  <n-tag v-if="a.profile" size="tiny" type="default">{{ a.profile }}</n-tag>
-                  <n-tag size="tiny" type="info">{{ a.temperature !== undefined ? a.temperature.toFixed(1) : '0.7' }}</n-tag>
-                </div>
-                <n-text v-if="a.description" depth="3" style="font-size: 12px;">{{ a.description }}</n-text>
-                <n-text v-if="a.system_prompt" depth="3" style="font-size: 11px; word-break: break-all;" :ellipsis="{ rows: 2 }">
-                  {{ a.system_prompt }}
-                </n-text>
+      <n-list>
+        <n-list-item v-for="a in groupchatStore.agents" :key="a.id">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
+            <div style="display: flex; flex-direction: column; flex: 1; min-width: 0;">
+              <div style="display: flex; align-items: center;">
+                <n-text strong style="font-size: 15px;">{{ a.name }}</n-text>
+                <n-tag v-if="a.profile" size="tiny" type="default">{{ a.profile }}</n-tag>
+                <n-tag size="tiny" type="info">{{ a.temperature !== undefined ? a.temperature.toFixed(1) : '0.7' }}</n-tag>
               </div>
-              <div style="display: flex;">
-                <n-button size="tiny" @click="editAgent(a)">{{ t('common.edit') }}</n-button>
-                <n-popconfirm @positive-click="handleRemoveAgent(a)">
-                  <template #trigger>
-                    <n-button size="tiny" type="error">{{ t('common.remove') }}</n-button>
-                  </template>
-                  {{ t('groupchat.confirmRemoveAgent', { name: a.name }) }}
-                </n-popconfirm>
-              </div>
+              <n-text v-if="a.description" depth="3" style="font-size: 12px;">{{ a.description }}</n-text>
+              <n-text v-if="a.system_prompt" depth="3" style="font-size: 11px; word-break: break-all;" :ellipsis="{ rows: 2 }">
+                {{ a.system_prompt }}
+              </n-text>
             </div>
-          </n-list-item>
-        </n-list>
-        <n-divider />
-        <n-text strong>{{ editingAgentId ? t('groupchat.editAgent') : t('groupchat.addAgent') }}</n-text>
-        <n-form style="margin-top: 8px;">
-          <n-grid :cols="2" :x-gap="12">
-            <n-form-item-gi :label="t('groupchat.agentName')">
-              <n-input v-model:value="newAgent.name" :placeholder="t('groupchat.agentNamePlaceholder')" />
-            </n-form-item-gi>
-            <n-form-item-gi :label="t('groupchat.agentProfile')">
-              <n-input v-model:value="newAgent.profile" :placeholder="t('groupchat.profilePlaceholder')" />
-            </n-form-item-gi>
-          </n-grid>
-          <n-form-item :label="t('groupchat.agentDescription')">
-            <n-input v-model:value="newAgent.description" :placeholder="t('groupchat.agentDescriptionPlaceholder')" />
-          </n-form-item>
-          <n-form-item :label="t('groupchat.systemPrompt')">
-            <n-input v-model:value="newAgent.system_prompt" type="textarea" :rows="3" :placeholder="t('groupchat.systemPromptPlaceholder')" />
-          </n-form-item>
-          <n-grid :cols="2" :x-gap="12">
-            <n-form-item-gi :label="t('groupchat.temperature')">
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <n-slider v-model:value="newAgent.temperature" :min="0" :max="2" :step="0.1" style="width: 120px;" />
-                <n-text>{{ newAgent.temperature.toFixed(1) }}</n-text>
-              </div>
-            </n-form-item-gi>
-            <n-form-item-gi :label="t('groupchat.tools')">
-              <n-input v-model:value="newAgent.tools" :placeholder="t('groupchat.toolsPlaceholder')" />
-            </n-form-item-gi>
-          </n-grid>
-          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;">
-            <n-button v-if="editingAgentId" @click="cancelEdit">{{ t('common.cancel') }}</n-button>
-            <n-button type="primary" @click="addAgent">{{ editingAgentId ? t('common.save') : t('groupchat.addAgent') }}</n-button>
+            <div style="display: flex;">
+              <n-button size="tiny" @click="editAgent(a)">{{ t('common.edit') }}</n-button>
+              <n-popconfirm @positive-click="handleRemoveAgent(a)">
+                <template #trigger>
+                  <n-button size="tiny" type="error">{{ t('common.remove') }}</n-button>
+                </template>
+                {{ t('groupchat.confirmRemoveAgent', { name: a.name }) }}
+              </n-popconfirm>
+            </div>
           </div>
-        </n-form>
-      </n-card>
+        </n-list-item>
+      </n-list>
+      <n-divider style="margin: 12px 0;" />
+      <n-text strong>{{ editingAgentId ? t('groupchat.editAgent') : t('groupchat.addAgent') }}</n-text>
+      <n-form style="margin-top: 8px;">
+        <n-grid :cols="2" :x-gap="12">
+          <n-form-item-gi :label="t('groupchat.agentName')">
+            <n-input v-model:value="newAgent.name" :placeholder="t('groupchat.agentNamePlaceholder')" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="t('groupchat.agentProfile')">
+            <n-input v-model:value="newAgent.profile" :placeholder="t('groupchat.profilePlaceholder')" />
+          </n-form-item-gi>
+        </n-grid>
+        <n-form-item :label="t('groupchat.agentDescription')">
+          <n-input v-model:value="newAgent.description" :placeholder="t('groupchat.agentDescriptionPlaceholder')" />
+        </n-form-item>
+        <n-form-item :label="t('groupchat.systemPrompt')">
+          <n-input v-model:value="newAgent.system_prompt" type="textarea" :rows="3" :placeholder="t('groupchat.systemPromptPlaceholder')" />
+        </n-form-item>
+        <n-grid :cols="2" :x-gap="12">
+          <n-form-item-gi :label="t('groupchat.temperature')">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <n-slider v-model:value="newAgent.temperature" :min="0" :max="2" :step="0.1" style="width: 120px;" />
+              <n-text>{{ newAgent.temperature.toFixed(1) }}</n-text>
+            </div>
+          </n-form-item-gi>
+          <n-form-item-gi :label="t('groupchat.tools')">
+            <n-input v-model:value="newAgent.tools" :placeholder="t('groupchat.toolsPlaceholder')" />
+          </n-form-item-gi>
+        </n-grid>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;">
+          <n-button v-if="editingAgentId" @click="cancelEdit">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="addAgent">{{ editingAgentId ? t('common.save') : t('groupchat.addAgent') }}</n-button>
+        </div>
+      </n-form>
     </n-modal>
   </div>
 </template>

@@ -336,8 +336,16 @@
       v-model:show="showFilePreview"
       preset="card"
       :title="previewFile?.name || ''"
-      :style="{ width: '700px', maxHeight: '80vh' }"
+      :style="{ width: '760px', maxWidth: '90vw' }"
+      :mask-closable="!hasUnsavedChanges"
+      :close-on-esc="!hasUnsavedChanges"
+      @before-leave="handleBeforePreviewClose"
     >
+      <template #header-extra>
+        <n-tag v-if="previewFile?.size !== undefined" size="small" type="info">
+          {{ formatSize(previewFile.size) }}
+        </n-tag>
+      </template>
       <div v-if="previewLoading" style="text-align: center; padding: 40px;">
         <n-spin size="large" />
         <n-text depth="3" style="display: block; margin-top: 12px;">Loading...</n-text>
@@ -346,25 +354,71 @@
         <n-text type="error">{{ previewError }}</n-text>
       </div>
       <div v-else>
-        <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center;">
-          <n-button size="tiny" @click="toggleEdit">
-            <template #icon>
-              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></n-icon>
-            </template>
-            {{ isEditing ? $t('sidebar.cancel') : $t('sidebar.edit') }}
-          </n-button>
-          <n-button v-if="isEditing" size="tiny" type="primary" :loading="editSaving" @click="saveFile">
-            <template #icon>
-              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></n-icon>
-            </template>
-            {{ $t('sidebar.save') }}
-          </n-button>
+        <div class="preview-toolbar">
+          <n-space :size="8">
+            <n-button
+              size="small"
+              :type="isEditing ? 'warning' : 'default'"
+              @click="toggleEdit"
+            >
+              <template #icon>
+                <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
+              </template>
+              {{ isEditing ? t('chat.cancel') : t('chat.edit') }}
+            </n-button>
+            <n-button
+              v-if="isEditing"
+              size="small"
+              type="primary"
+              :loading="editSaving"
+              :disabled="!hasUnsavedChanges"
+              @click="saveFile"
+            >
+              <template #icon>
+                <n-icon :component="SaveOutline" />
+              </template>
+              {{ t('chat.save') }}
+            </n-button>
+          </n-space>
+          <n-space :size="8">
+            <n-button
+              size="small"
+              quaternary
+              :disabled="!previewContent"
+              @click="copyContent"
+            >
+              <template #icon>
+                <n-icon :component="CopyOutline" />
+              </template>
+              {{ t('chat.copyContent') }}
+            </n-button>
+            <n-button
+              size="small"
+              quaternary
+              :disabled="!previewFile"
+              @click="downloadPreviewFile"
+            >
+              <template #icon>
+                <n-icon :component="DownloadOutline" />
+              </template>
+              {{ t('chat.download') }}
+            </n-button>
+          </n-space>
         </div>
-        <div style="max-height: 60vh; overflow: auto;">
-          <textarea v-if="isEditing" v-model="editingContent"
-            style="width: 100%; min-height: 300px; font-family: monospace; font-size: 13px; line-height: 1.5; padding: 8px; border: 1px solid #d9d9d9; border-radius: 4px; resize: vertical; box-sizing: border-box;"
+        <div v-if="hasUnsavedChanges" class="unsaved-hint">
+          <n-icon size="14" color="#f0a020" style="margin-right: 6px;">
+            <AlertCircleOutline />
+          </n-icon>
+          <n-text depth="2" style="font-size: 12px;">{{ t('chat.unsavedChanges') }}</n-text>
+        </div>
+        <div class="preview-content-container">
+          <textarea
+            v-if="isEditing"
+            v-model="editingContent"
+            class="preview-textarea"
+            spellcheck="false"
           ></textarea>
-          <pre v-else style="white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5; margin: 0;">{{ previewContent }}</pre>
+          <pre v-else class="preview-content">{{ previewContent }}</pre>
         </div>
       </div>
     </n-modal>
@@ -392,7 +446,11 @@ import {
   EllipsisHorizontalOutline,
   PencilOutline,
   TrashOutline,
-  RefreshOutline
+  RefreshOutline,
+  CopyOutline,
+  SaveOutline,
+  CloseOutline,
+  AlertCircleOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -455,6 +513,11 @@ const previewError = ref('')
 const isEditing = ref(false)
 const editingContent = ref('')
 const editSaving = ref(false)
+const originalContent = ref('')
+
+const hasUnsavedChanges = computed(() => {
+  return isEditing.value && editingContent.value !== originalContent.value
+})
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -698,11 +761,13 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   previewError.value = ''
   isEditing.value = false
   editingContent.value = ''
+  originalContent.value = ''
   showFilePreview.value = true
   previewLoading.value = true
   
   try {
     previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
+    originalContent.value = previewContent.value
   } catch (e: any) {
     previewError.value = e.message || 'Failed to read file'
     previewContent.value = ''
@@ -711,14 +776,55 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   }
 }
 
+function handleBeforePreviewClose(e: Event) {
+  if (hasUnsavedChanges.value) {
+    e.preventDefault()
+    if (window.confirm(t('chat.discardChanges'))) {
+      isEditing.value = false
+      editingContent.value = ''
+      showFilePreview.value = false
+    }
+  }
+}
+
 function toggleEdit() {
   if (isEditing.value) {
+    if (hasUnsavedChanges.value && !window.confirm(t('chat.discardChanges'))) {
+      return
+    }
     isEditing.value = false
     editingContent.value = ''
     return
   }
   editingContent.value = previewContent.value
+  originalContent.value = previewContent.value
   isEditing.value = true
+}
+
+async function copyContent() {
+  const content = isEditing.value ? editingContent.value : previewContent.value
+  try {
+    await navigator.clipboard.writeText(content || '')
+    message.success(t('chat.contentCopied'))
+  } catch (e: any) {
+    const textarea = document.createElement('textarea')
+    textarea.value = content || ''
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      message.success(t('chat.contentCopied'))
+    } catch (err) {
+      message.error(t('common.operationFailed'))
+    }
+    document.body.removeChild(textarea)
+  }
+}
+
+function downloadPreviewFile() {
+  if (!previewFile.value) return
+  const url = sessionsApi.getFSDownloadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
+  downloadFile(url, previewFile.value.name)
 }
 
 async function saveFile() {
@@ -727,12 +833,12 @@ async function saveFile() {
   try {
     await sessionsApi.writeFSFile(previewFile.value.path, editingContent.value, chatStore.activeSessionId || undefined)
     previewContent.value = editingContent.value
+    originalContent.value = editingContent.value
     isEditing.value = false
-    window.$message?.success?.(t('sidebar.saveSuccess'))
-    // Refresh the file listing
+    message.success(t('chat.saveSuccess'))
     loadFiles()
   } catch (e: any) {
-    window.$message?.error?.(e.message || t('sidebar.saveFail'))
+    message.error(e.message || t('chat.saveFail'))
   } finally {
     editSaving.value = false
   }
@@ -1164,8 +1270,94 @@ function formatSize(bytes: number): string {
   padding: 8px;
 }
 
+/* File preview styles */
+.preview-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.preview-content-container {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+}
+
+.preview-content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 16px;
+  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+}
+
+.preview-textarea {
+  width: 100%;
+  min-height: 400px;
+  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 16px;
+  border: none;
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.preview-textarea:focus {
+  box-shadow: inset 0 0 0 2px #2080f0;
+}
+
+.unsaved-hint {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
+  .preview-toolbar {
+    background: #252525;
+    border-color: #333;
+  }
+  
+  .preview-content-container {
+    border-color: #333;
+    background: #1e1e1e;
+  }
+  
+  .preview-content {
+    background: #1e1e1e;
+    color: #ddd;
+  }
+  
+  .preview-textarea {
+    background: #1e1e1e;
+    color: #ddd;
+  }
+  
+  .preview-textarea:focus {
+    box-shadow: inset 0 0 0 2px #409eff;
+  }
+  
+  .unsaved-hint {
+    background: #3a3520;
+    border-color: #615635;
+  }
+
   .right-sidebar {
     background: #1e1e1e;
     border-left-color: #333;

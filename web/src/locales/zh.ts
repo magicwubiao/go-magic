@@ -298,6 +298,10 @@ export default {
     cancel: '取消',
     saveSuccess: '文件已保存',
     saveFail: '保存失败',
+    copyContent: '复制内容',
+    contentCopied: '内容已复制',
+    unsavedChanges: '未保存的更改',
+    discardChanges: '您有未保存的更改，确定要关闭吗？',
   },
   gateway: {
     title: '网关',
