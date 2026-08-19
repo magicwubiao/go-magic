@@ -91,16 +91,16 @@
             <n-button size="tiny" quaternary @click="showInviteCode = true">
               <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template>
             </n-button>
-            <n-button size="small" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
-            <n-popover trigger="click" placement="bottom-end">
+            <n-button size="tiny" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
+            <n-popover trigger="click" placement="bottom-end" :content-style="{ padding: '8px' }">
               <template #trigger>
                 <n-button size="tiny" quaternary>
                   <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></n-icon></template>
                 </n-button>
               </template>
-              <div style="display: flex; flex-direction: column; gap: 8px; min-width: 160px;">
-                <n-button text @click="showInviteCode = true"><template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
-                <n-button text @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon></template> {{ t('groupchat.info') }}</n-button>
+              <div style="display: flex; flex-direction: column; gap: 2px; min-width: 130px;">
+                <n-button text size="tiny" @click="showInviteCode = true"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
+                <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon></template> {{ t('groupchat.info') }}</n-button>
               </div>
             </n-popover>
           </div>
@@ -1455,9 +1455,10 @@ onMounted(() => groupchatStore.loadRooms())
 
 /* Room info panel */
 .room-info-panel {
-  padding: 8px 16px;
+  padding: 6px 14px;
   border-bottom: 1px solid #e8e8e8;
   background: #fafafa;
+  font-size: 13px;
 }
 
 /* Invite code modal */
