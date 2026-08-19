@@ -31,7 +31,7 @@
                 text
                 type="info"
                 @click.stop="groupchatStore.selectRoom(room.id); startEditRoomName()">
-                <template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></n-icon></template>
+                <template #icon><n-icon size="14"><create-outline /></n-icon></template>
               </n-button>
             <n-popconfirm @positive-click="handleDeleteRoom(room.id)">
               <template #trigger>
@@ -79,30 +79,30 @@
           <template v-else>
             <div style="display: flex; align-items: center; gap: 4px; cursor: pointer;" @click="startEditRoomName">
               <n-text strong style="font-size: 16px;" :title="activeRoom?.name">{{ activeRoom?.name }}</n-text>
-              <n-icon size="14" style="color: #999;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></n-icon>
+              <n-icon size="14" style="color: #999;"><create-outline /></n-icon>
             </div>
           </template>
             <n-popover v-if="activeRoom?.description" trigger="hover">
               <template #trigger>
-                <n-icon size="14" style="color: #999; cursor: help;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon>
+                <n-icon size="14" style="color: #999; cursor: help;"><information-circle-outline /></n-icon>
               </template>
               {{ activeRoom?.description }}
             </n-popover>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <n-button size="tiny" quaternary @click="showInviteCode = true">
-              <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template>
+              <template #icon><n-icon><documents-outline /></n-icon></template>
             </n-button>
             <n-button size="tiny" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
             <n-popover trigger="click" placement="bottom-end" :content-style="{ padding: '8px' }">
               <template #trigger>
                 <n-button size="tiny" quaternary>
-                  <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></n-icon></template>
+                  <template #icon><n-icon><ellipsis-horizontal-outline /></n-icon></template>
                 </n-button>
               </template>
               <div style="display: flex; flex-direction: column; gap: 4px; min-width: 130px;">
-                <n-button text size="tiny" @click="showInviteCode = true"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
-                <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon></template> {{ t('groupchat.info') }}</n-button>
+                <n-button text size="tiny" @click="showInviteCode = true"><template #icon><n-icon size="14"><documents-outline /></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
+                <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon size="14"><information-circle-outline /></n-icon></template> {{ t('groupchat.info') }}</n-button>
               </div>
             </n-popover>
           </div>
@@ -326,7 +326,7 @@ import { useGroupChatStore } from '@/stores/groupchat'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
-import { CloseOutline, RefreshOutline, CopyOutline, CodeSlash } from '@vicons/ionicons5'
+import { CloseOutline, RefreshOutline, CopyOutline, CodeSlash, CreateOutline, InformationCircleOutline, DocumentsOutline, EllipsisHorizontalOutline } from '@vicons/ionicons5'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 
 const { t } = useI18n()
