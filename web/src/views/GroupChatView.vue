@@ -94,15 +94,15 @@
               <template #icon><n-icon><documents-outline /></n-icon></template>
             </n-button>
             <n-button size="tiny" @click="showAgents = true">{{ t('groupchat.agents') }} ({{ groupchatStore.agents.length }})</n-button>
-            <n-popover trigger="click" placement="bottom-end" :content-style="{ padding: '8px' }">
+            <n-popover trigger="click" placement="bottom-end" :content-style="{ padding: '4px', width: 'auto', minWidth: 'auto' }">
               <template #trigger>
                 <n-button size="tiny" quaternary>
                   <template #icon><n-icon><ellipsis-horizontal-outline /></n-icon></template>
                 </n-button>
               </template>
-              <div style="display: flex; flex-direction: column; gap: 4px; min-width: 130px;">
-                <n-button text size="tiny" @click="showInviteCode = true"><template #icon><n-icon size="14"><documents-outline /></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
-                <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon size="14"><information-circle-outline /></n-icon></template> {{ t('groupchat.info') }}</n-button>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <n-button text size="tiny" @click="showInviteCode = true" style="justify-content: flex-start;"><template #icon><n-icon size="14"><documents-outline /></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
+                <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo" style="justify-content: flex-start;"><template #icon><n-icon size="14"><information-circle-outline /></n-icon></template> {{ t('groupchat.info') }}</n-button>
               </div>
             </n-popover>
           </div>
