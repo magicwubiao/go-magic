@@ -82,12 +82,6 @@
               <n-icon size="14" style="color: #999;"><create-outline /></n-icon>
             </div>
           </template>
-            <n-popover v-if="activeRoom?.description" trigger="hover">
-              <template #trigger>
-                <n-icon size="14" style="color: #999; cursor: help;"><information-circle-outline /></n-icon>
-              </template>
-              {{ activeRoom?.description }}
-            </n-popover>
           </div>
           <div style="display: flex; align-items: center; gap: 14px;">
             <n-button size="tiny" quaternary @click="showInviteCode = true">
