@@ -3,13 +3,13 @@
     <!-- Room List -->
     <div class="room-sidebar">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <div style="display: flex; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 4px;">
           <n-text strong>{{ t('groupchat.rooms') }}</n-text>
           <n-button text size="tiny" @click="handleRefresh" :loading="groupchatStore.loading">
             <template #icon><n-icon><RefreshOutline /></n-icon></template>
           </n-button>
         </div>
-        <n-button size="small" type="primary" @click="showCreateRoom = true">+</n-button>
+        <n-button size="tiny" type="primary" @click="showCreateRoom = true">+</n-button>
       </div>
       <div class="room-list">
         <div
@@ -63,16 +63,18 @@
         <div class="chat-header">
           <div style="display: flex; align-items: center; flex: 1; min-width: 0;">
             <template v-if="editingRoomName">
-            <n-input
-              v-model:value="editRoomNameValue"
-              size="small"
-              style="width: 200px;"
-              @keyup.enter="saveRoomName"
-              @keyup.escape="editingRoomName = false"
-              ref="editNameInput"
-            />
-            <n-button size="tiny" type="primary" @click="saveRoomName">{{ t('common.save') }}</n-button>
-            <n-button size="tiny" @click="editingRoomName = false">{{ t('common.cancel') }}</n-button>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <n-input
+                v-model:value="editRoomNameValue"
+                size="small"
+                style="width: 200px;"
+                @keyup.enter="saveRoomName"
+                @keyup.escape="editingRoomName = false"
+                ref="editNameInput"
+              />
+              <n-button size="tiny" type="primary" @click="saveRoomName">{{ t('common.save') }}</n-button>
+              <n-button size="tiny" @click="editingRoomName = false">{{ t('common.cancel') }}</n-button>
+            </div>
           </template>
           <template v-else>
             <div style="display: flex; align-items: center; gap: 4px; cursor: pointer;" @click="startEditRoomName">
@@ -87,7 +89,7 @@
               {{ activeRoom?.description }}
             </n-popover>
           </div>
-          <div style="display: flex; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 8px;">
             <n-button size="tiny" quaternary @click="showInviteCode = true">
               <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template>
             </n-button>
@@ -98,7 +100,7 @@
                   <template #icon><n-icon><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></n-icon></template>
                 </n-button>
               </template>
-              <div style="display: flex; flex-direction: column; gap: 2px; min-width: 130px;">
+              <div style="display: flex; flex-direction: column; gap: 4px; min-width: 130px;">
                 <n-button text size="tiny" @click="showInviteCode = true"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></n-icon></template> {{ t('groupchat.inviteCode') }}</n-button>
                 <n-button text size="tiny" @click="showRoomInfo = !showRoomInfo"><template #icon><n-icon size="14"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></n-icon></template> {{ t('groupchat.info') }}</n-button>
               </div>
@@ -221,7 +223,7 @@
 
     <!-- Invite Code Modal -->
     <n-modal v-model:show="showInviteCode" :title="t('groupchat.inviteCode')" preset="card" style="width: 420px;" closable @close="showInviteCode = false">
-      <div style="display: flex; flex-direction: column;">
+      <div style="display: flex; flex-direction: column; gap: 12px;">
         <n-button @click="generateInvite" :loading="generatingInvite" style="width: 100%;">{{ t('groupchat.generate') }}</n-button>
         <n-input v-if="inviteCodeText" v-model:value="inviteCodeText" readonly>
           <template #suffix>
@@ -297,7 +299,7 @@
           </n-form-item>
           <n-grid :cols="2" :x-gap="12">
             <n-form-item-gi :label="t('groupchat.temperature')">
-              <div style="display: flex; align-items: center;">
+              <div style="display: flex; align-items: center; gap: 10px;">
                 <n-slider v-model:value="newAgent.temperature" :min="0" :max="2" :step="0.1" style="width: 120px;" />
                 <n-text>{{ newAgent.temperature.toFixed(1) }}</n-text>
               </div>
@@ -306,7 +308,7 @@
               <n-input v-model:value="newAgent.tools" :placeholder="t('groupchat.toolsPlaceholder')" />
             </n-form-item-gi>
           </n-grid>
-          <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;">
             <n-button v-if="editingAgentId" @click="cancelEdit">{{ t('common.cancel') }}</n-button>
             <n-button type="primary" @click="addAgent">{{ editingAgentId ? t('common.save') : t('groupchat.addAgent') }}</n-button>
           </div>
