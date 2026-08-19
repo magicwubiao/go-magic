@@ -549,7 +549,7 @@ func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, err
 Complete the user's request efficiently using available tools.
 Focus on the result, not the process. Keep responses concise.
 
-Your working directory is: %%s
+Your working directory is: %s
 - Use write_file with RELATIVE paths to write files to this directory.
 - Do NOT use absolute paths like /tmp/.`, workDir)
 
