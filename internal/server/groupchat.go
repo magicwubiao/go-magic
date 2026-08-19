@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,21 @@ import (
 	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/tool"
 )
+
+var (
+	gcToolStartRe    = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
+	gcToolResultRe   = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
+	gcTurnStartRe    = regexp.MustCompile(`>>>TURN_START<<<`)
+)
+
+// stripAgentProtocolMarks strips all internal agent protocol markers
+// (TOOL_START, TOOL_RESULT, TURN_START) from the given content string.
+func stripAgentProtocolMarks(s string) string {
+	s = gcToolStartRe.ReplaceAllString(s, "")
+	s = gcToolResultRe.ReplaceAllString(s, "")
+	s = gcTurnStartRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
 
 func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, roomID string) {
 	if r.Method != "POST" {
@@ -166,6 +182,50 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 				return
 			default:
 			}
+
+			// Skip TURN_START markers completely (internal protocol)
+			if strings.TrimSpace(content) == ">>>TURN_START<<<" {
+				return
+			}
+
+			// Handle tool start marker -> emit tool_start event, don't render as text
+			if strings.Contains(content, ">>>TOOL_START|") {
+				matches := gcToolStartRe.FindStringSubmatch(content)
+				if len(matches) > 2 {
+					data, _ := json.Marshal(map[string]interface{}{
+						"type":    "tool_start",
+						"agent":   a.Name,
+						"agentId": a.ID,
+						"name":    matches[1],
+						"args":    matches[2],
+					})
+					writeSSE("data: " + string(data) + "\n\n")
+					return
+				}
+			}
+
+			// Handle tool result marker -> emit tool_result event, don't render as text
+			if strings.Contains(content, ">>>TOOL_RESULT_START|") {
+				matches := gcToolResultRe.FindStringSubmatch(content)
+				if len(matches) > 4 {
+					toolName := matches[1]
+					success := matches[2] == "true"
+					duration := matches[3]
+					toolContent := strings.TrimSpace(matches[4])
+					data, _ := json.Marshal(map[string]interface{}{
+						"type":     "tool_result",
+						"agent":    a.Name,
+						"agentId":  a.ID,
+						"name":     toolName,
+						"success":  success,
+						"duration": duration,
+						"content":  toolContent,
+					})
+					writeSSE("data: " + string(data) + "\n\n")
+					return
+				}
+			}
+
 			fullContent += content
 			data, _ := json.Marshal(map[string]interface{}{
 				"type":    "content",
@@ -186,13 +246,14 @@ func (s *Server) handleGroupchatStream(w http.ResponseWriter, r *http.Request, r
 			continue
 		}
 
-		// Save complete message to database
+		// Save complete message to database with protocol markers stripped
+		cleanContent := stripAgentProtocolMarks(fullContent)
 		replyMsg := &groupchat.ChatMessage{
 			ID:         uuid.New().String(),
 			RoomID:     roomID,
 			SenderID:   a.ID,
 			SenderName: a.Name,
-			Content:    fullContent,
+			Content:    cleanContent,
 			Timestamp:  time.Now().UnixMilli(),
 			Type:       "agent",
 		}
@@ -494,13 +555,14 @@ func (s *Server) replyAsAgent(roomID string, a *groupchat.RoomAgent, history []g
 		return
 	}
 
-	// Save agent reply
+	// Save agent reply with internal protocol markers stripped
+	cleanResult := stripAgentProtocolMarks(result)
 	replyMsg := &groupchat.ChatMessage{
 		ID:         uuid.New().String(),
 		RoomID:     roomID,
 		SenderID:   a.ID,
 		SenderName: a.Name,
-		Content:    result,
+		Content:    cleanResult,
 		Timestamp:  time.Now().UnixMilli(),
 		Type:       "agent",
 	}
