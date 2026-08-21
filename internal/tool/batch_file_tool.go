@@ -45,6 +45,15 @@ func (t *BatchFileOpsTool) Schema() map[string]interface{} {
 								"path":   map[string]interface{}{"type": "string"},
 								"offset": map[string]interface{}{"type": "number", "description": "Line number to start reading from (1-based)"},
 								"limit":  map[string]interface{}{"type": "number", "description": "Maximum number of lines to read"},
+								"binary_ok": map[string]interface{}{
+									"type":        "boolean",
+									"description": "If true, allow reading binary files (content omitted). Default false.",
+									"default":     false,
+								},
+								"max_size_kb": map[string]interface{}{
+									"type":        "number",
+									"description": "Maximum file size to read (in KB). 0 or omitted uses security default.",
+								},
 							},
 							"required": []interface{}{"path"},
 						},
@@ -53,19 +62,22 @@ func (t *BatchFileOpsTool) Schema() map[string]interface{} {
 			},
 			"operations": map[string]interface{}{
 				"type":        "array",
-				"description": "Array of operations (for batch_write and batch_search_replace). For batch_write: {path, content, create_dirs}. For batch_search_replace: {path, old_text, new_text}.",
+				"description": "Array of operations (for batch_write and batch_search_replace).",
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"path":    map[string]interface{}{"type": "string"},
-						"content": map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
-						"create_dirs": map[string]interface{}{
-							"type":        "boolean",
-							"description": "Create parent directories if they don't exist (for batch_write)",
-							"default":     true,
-						},
-						"old_text": map[string]interface{}{"type": "string", "description": "Text to search for (for batch_search_replace)"},
-						"new_text": map[string]interface{}{"type": "string", "description": "Replacement text (for batch_search_replace)"},
+						"path":        map[string]interface{}{"type": "string"},
+						"content":     map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
+						"create_dirs": map[string]interface{}{"type": "boolean", "description": "Create parent directories if they don't exist (for batch_write, default true)", "default": true},
+						"backup":      map[string]interface{}{"type": "boolean", "description": "Create a .bak copy before overwriting (for batch_write, default false)", "default": false},
+						"atomic":      map[string]interface{}{"type": "boolean", "description": "Write atomically via tempfile+rename (for batch_write, default true)", "default": true},
+						"old_text":          map[string]interface{}{"type": "string", "description": "Text to search for (for batch_search_replace)"},
+						"new_text":          map[string]interface{}{"type": "string", "description": "Replacement text (for batch_search_replace)"},
+						"replace_all":       map[string]interface{}{"type": "boolean", "description": "Replace all occurrences. If false, replace only the first occurrence (default false).", "default": false},
+						"case_sensitive":    map[string]interface{}{"type": "boolean", "description": "Match with case sensitivity (default true).", "default": true},
+						"max_replacements":  map[string]interface{}{"type": "number", "description": "Maximum number of replacements to perform (<0 means unlimited when replace_all is true)."},
+						"dry_run":           map[string]interface{}{"type": "boolean", "description": "Report matches/positions without writing the file (default false).", "default": false},
+						"require_unique":    map[string]interface{}{"type": "boolean", "description": "If true, fail when old_text matches more than once but replace_all is false (prevents ambiguous edits).", "default": false},
 					},
 					"required": []interface{}{"path"},
 				},
@@ -95,19 +107,30 @@ func (t *BatchFileOpsTool) Execute(ctx context.Context, params map[string]interf
 	}
 }
 
-// batchRead reads multiple files at once.
-// Input: files - array of file paths (string or object with path/offset/limit)
-// Output: map of filepath -> {content, total, read, offset, error}
+// ---------------------------------------------------------------------------
+// batchRead — with binary detection, size limits, and classification metadata
+// ---------------------------------------------------------------------------
+
 func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	filesRaw, ok := params["files"].([]interface{})
 	if !ok || len(filesRaw) == 0 {
 		return nil, fmt.Errorf("files array is required for batch_read")
 	}
 
+	security := FileSecurityFromContext(ctx)
+	defaultMaxKB := security.MaxFileSizeKB
+	if defaultMaxKB <= 0 {
+		defaultMaxKB = 10240
+	}
+
 	results := make(map[string]interface{})
 	for _, f := range filesRaw {
-		var filePath string
-		var offset, limit int
+		var (
+			filePath     string
+			offset, limit int
+			binaryOK     bool
+			maxSizeKB    = defaultMaxKB
+		)
 
 		switch v := f.(type) {
 		case string:
@@ -119,6 +142,12 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 			}
 			if l, ok := v["limit"].(float64); ok {
 				limit = int(l)
+			}
+			if b, ok := v["binary_ok"].(bool); ok {
+				binaryOK = b
+			}
+			if kb, ok := v["max_size_kb"].(float64); ok && kb > 0 {
+				maxSizeKB = int(kb)
 			}
 		default:
 			continue
@@ -134,43 +163,79 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 			continue
 		}
 
+		// Size check before reading to avoid loading huge files.
+		info, err := os.Stat(absPath)
+		if err != nil {
+			results[filePath] = map[string]interface{}{"error": fmt.Sprintf("failed to stat file: %v", err)}
+			continue
+		}
+		if info.Size() > int64(maxSizeKB)*1024 {
+			results[filePath] = map[string]interface{}{
+				"error":    fmt.Sprintf("file exceeds max size (%d KB > %d KB limit)", info.Size()/1024, maxSizeKB),
+				"size":     info.Size(),
+				"max_size": int64(maxSizeKB) * 1024,
+			}
+			continue
+		}
+
 		data, err := os.ReadFile(absPath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"error": fmt.Sprintf("failed to read file: %v", err)}
 			continue
 		}
 
-		// 统一规范化为 LF 再按行分割，避免 CRLF 文件每行混入 \r。
-		content := normalizeLineEndings(string(data))
-		lines := strings.Split(content, "\n")
-		totalLines := len(lines)
-
-		// Apply offset (1-based to 0-based)
-		startIdx := 0
-		if offset > 0 {
-			startIdx = offset - 1
-			if startIdx < 0 {
-				startIdx = 0
+		// Classify: detect binary vs code/text
+		isCode, isBinary := classifyFile(absPath, data)
+		if isBinary && !binaryOK {
+			results[filePath] = map[string]interface{}{
+				"error":    "binary file detected; set binary_ok=true to read (content will be omitted)",
+				"is_code":  isCode,
+				"is_binary": true,
+				"size":     len(data),
 			}
+			continue
 		}
 
-		readLines := lines
-		if startIdx > 0 && startIdx < len(readLines) {
-			readLines = readLines[startIdx:]
-		} else if startIdx >= len(readLines) {
-			readLines = nil
+		result := map[string]interface{}{
+			"is_code":     isCode,
+			"is_binary":   isBinary,
+			"size":        len(data),
+			"line_ending": detectLineEnding(string(data)),
 		}
 
-		if limit > 0 && limit < len(readLines) {
-			readLines = readLines[:limit]
+		if !isBinary {
+			content := normalizeLineEndings(string(data))
+			lines := strings.Split(content, "\n")
+			totalLines := len(lines)
+
+			startIdx := 0
+			if offset > 0 {
+				startIdx = offset - 1
+				if startIdx < 0 {
+					startIdx = 0
+				}
+			}
+
+			readLines := lines
+			if startIdx >= len(readLines) {
+				readLines = nil
+			} else if startIdx > 0 {
+				readLines = readLines[startIdx:]
+			}
+			if limit > 0 && limit < len(readLines) {
+				readLines = readLines[:limit]
+			}
+
+			result["content"] = strings.Join(readLines, "\n")
+			result["total"] = totalLines
+			result["read"] = len(readLines)
+			result["offset"] = offset
+		} else {
+			result["content"] = ""
+			result["note"] = "binary content omitted"
 		}
 
-		results[filePath] = map[string]interface{}{
-			"content": strings.Join(readLines, "\n"),
-			"total":   totalLines,
-			"read":    len(readLines),
-			"offset":  offset,
-		}
+		results[filePath] = result
 	}
 
 	return map[string]interface{}{
@@ -180,9 +245,10 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 	}, nil
 }
 
-// batchWrite writes/creates multiple files at once.
-// Input: operations - array of {path, content, create_dirs}
-// Output: map of filepath -> {success, bytes, lines, error}
+// ---------------------------------------------------------------------------
+// batchWrite — atomic writes, optional backups, content validation
+// ---------------------------------------------------------------------------
+
 func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	opsRaw, ok := params["operations"].([]interface{})
 	if !ok || len(opsRaw) == 0 {
@@ -203,10 +269,9 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 
 		content, _ := opMap["content"].(string)
 
-		createDirs := true
-		if cd, ok := opMap["create_dirs"].(bool); ok {
-			createDirs = cd
-		}
+		createDirs := paramBool(opMap, "create_dirs", true)
+		doBackup := paramBool(opMap, "backup", false)
+		doAtomic := paramBool(opMap, "atomic", true)
 
 		absPath, err := resolvePath(ctx, filePath)
 		if err != nil {
@@ -222,22 +287,62 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 			}
 		}
 
-		if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
-			results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to write file: %v", err)}
+		// Detect target line-ending style: preserve existing file's style, else LF.
+		targetLE := LineEndingLF
+		if existing, err := os.ReadFile(absPath); err == nil && len(existing) > 0 {
+			targetLE = detectLineEnding(string(existing))
+			// Optional backup
+			if doBackup {
+				bakPath := absPath + ".bak"
+				if err := os.WriteFile(bakPath, existing, 0644); err != nil {
+					results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to create backup: %v", err)}
+					continue
+				}
+			}
+		}
+
+		// Sanity check on incoming content: refuse clearly binary data unless path is code
+		codeExt := isCodeFile(absPath)
+		if !codeExt && isBinaryContent([]byte(content)) {
+			results[filePath] = map[string]interface{}{
+				"success": false,
+				"error":   "refusing to write binary-looking content to non-code extension; use a known code extension or double-check the payload",
+			}
 			continue
+		}
+
+		// Normalize user's input to LF first; then emit target line-ending.
+		// This guarantees the written file has a consistent ending and the
+		// line-count below matches the on-disk content.
+		toWrite := convertLineEndings(content, targetLE)
+
+		if doAtomic {
+			if err := atomicWriteFile(absPath, []byte(toWrite), 0644); err != nil {
+				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to write file: %v", err)}
+				continue
+			}
+		} else {
+			if err := os.WriteFile(absPath, []byte(toWrite), 0644); err != nil {
+				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to write file: %v", err)}
+				continue
+			}
 		}
 
 		info, _ := os.Stat(absPath)
 		result := map[string]interface{}{
-			"success": true,
-			"bytes":   len(content),
-			"lines":   strings.Count(content, "\n") + 1,
+			"success":     true,
+			"bytes":       len(toWrite),
+			"lines":       countContentLines(normalizeLineEndings(toWrite)),
+			"line_ending": targetLE,
+			"is_code":     codeExt,
 		}
 		if info != nil {
 			result["size"] = info.Size()
 		}
+		if doBackup {
+			result["backup"] = filepath.Base(absPath) + ".bak"
+		}
 
-		// Post-write lint (non-blocking)
 		if issues, _ := LintFile(absPath); len(issues) > 0 {
 			result["lint_warning"] = fmt.Sprintf("Lint issues found:\n%s", strings.Join(issues, "\n"))
 		}
@@ -252,9 +357,42 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 	}, nil
 }
 
-// batchDelete deletes multiple files at once.
-// Input: files - array of file paths (strings)
-// Output: map of filepath -> {success, error}
+// atomicWriteFile writes data to path atomically via temp file + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// batchDelete — unchanged here
+// ---------------------------------------------------------------------------
+
 func (t *BatchFileOpsTool) batchDelete(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	filesRaw, ok := params["files"].([]interface{})
 	if !ok || len(filesRaw) == 0 {
@@ -291,9 +429,12 @@ func (t *BatchFileOpsTool) batchDelete(ctx context.Context, params map[string]in
 	}, nil
 }
 
-// batchSearchReplace performs search and replace across multiple files.
-// Input: operations - array of {path, old_text, new_text}
-// Output: map of filepath -> {changes, error}
+// ---------------------------------------------------------------------------
+// batchSearchReplace — precise matching, full counting, match positions,
+// case-sensitivity, replace_all, dry-run, unique-match enforcement,
+// ambiguous-match warning, proper line-ending preservation.
+// ---------------------------------------------------------------------------
+
 func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	opsRaw, ok := params["operations"].([]interface{})
 	if !ok || len(opsRaw) == 0 {
@@ -315,6 +456,12 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 		oldText, _ := opMap["old_text"].(string)
 		newText, _ := opMap["new_text"].(string)
 
+		replaceAll := paramBool(opMap, "replace_all", false)
+		caseSensitive := paramBool(opMap, "case_sensitive", true)
+		maxRepl := paramInt(opMap, "max_replacements")
+		dryRun := paramBool(opMap, "dry_run", false)
+		requireUnique := paramBool(opMap, "require_unique", false)
+
 		if oldText == "" {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": "old_text is required"}
 			continue
@@ -332,36 +479,102 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 			continue
 		}
 
-		// 规范化行尾后匹配与替换，写回时还原文件原行尾，兼容 CRLF 文件。
+		// Refuse to operate on binary content.
+		if isCodeFile, isBin := classifyFile(absPath, data); isBin {
+			results[filePath] = map[string]interface{}{
+				"changes":   0,
+				"error":     "binary file detected; search_replace is only supported for text/code files",
+				"is_code":   isCodeFile,
+				"is_binary": true,
+			}
+			continue
+		}
+
 		lineEnding := detectLineEnding(string(data))
 		content := normalizeLineEndings(string(data))
 		normOld := normalizeLineEndings(oldText)
 		normNew := normalizeLineEndings(newText)
 
-		if !strings.Contains(content, normOld) {
-			results[filePath] = map[string]interface{}{"changes": 0, "error": "old_text not found in file"}
+		// Find all matches (positions) for precise reporting and sanity checks.
+		matches := findAllMatches(content, normOld, caseSensitive)
+
+		if len(matches) == 0 {
+			results[filePath] = map[string]interface{}{
+				"changes":         0,
+				"error":           "old_text not found in file",
+				"case_sensitive":  caseSensitive,
+				"occurrences_found": 0,
+			}
 			continue
 		}
 
-		newContent := strings.Replace(content, normOld, normNew, 1)
-		// Since we only replace the first occurrence, changes is at most 1
-		// A more accurate count: check if replacement actually changed content
-		changes := 0
-		if newContent != content {
-			changes = 1
+		// Enforce uniqueness when requested.
+		if requireUnique && len(matches) != 1 {
+			results[filePath] = map[string]interface{}{
+				"changes":           0,
+				"error":             fmt.Sprintf("require_unique=true but found %d matches; use replace_all or widen old_text to be unique", len(matches)),
+				"occurrences_found": len(matches),
+				"matches":           matches,
+			}
+			continue
 		}
 
-		if err := os.WriteFile(absPath, []byte(convertLineEndings(newContent, lineEnding)), 0644); err != nil {
+		// Determine how many replacements to actually perform.
+		maxReplace := 1
+		if replaceAll {
+			if maxRepl < 0 {
+				maxReplace = len(matches)
+			} else if maxRepl == 0 {
+				maxReplace = len(matches)
+			} else {
+				maxReplace = maxRepl
+				if maxReplace > len(matches) {
+					maxReplace = len(matches)
+				}
+			}
+		} else {
+			// Single-replace mode: honor max_replacements=1 only, else warn.
+			if maxRepl > 1 {
+				maxRepl = 1
+			}
+			maxReplace = 1
+		}
+
+		newContent, actualChanges := replaceAllExact(content, normOld, normNew, caseSensitive, maxReplace)
+
+		result := map[string]interface{}{
+			"success":           actualChanges > 0,
+			"changes":           actualChanges,
+			"occurrences_found": len(matches),
+			"matches":           matches,
+			"case_sensitive":    caseSensitive,
+			"replace_all":       replaceAll,
+			"line_ending":       lineEnding,
+			"is_code":           isCodeFile(absPath),
+		}
+
+		if len(matches) > 1 && !replaceAll {
+			result["warning"] = fmt.Sprintf("found %d occurrences but replace_all=false; only the first occurrence (L%d) was replaced", len(matches), matches[0].LineStart)
+		}
+
+		if actualChanges == 0 {
+			results[filePath] = result
+			continue
+		}
+
+		if dryRun {
+			result["dry_run"] = true
+			result["note"] = "dry_run=true: file was not modified"
+			results[filePath] = result
+			continue
+		}
+
+		// Commit: preserve original line-ending style; write atomically.
+		if err := atomicWriteFile(absPath, []byte(convertLineEndings(newContent, lineEnding)), 0644); err != nil {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to write file: %v", err)}
 			continue
 		}
 
-		result := map[string]interface{}{
-			"success": true,
-			"changes": changes,
-		}
-
-		// Post-write lint (non-blocking)
 		if issues, _ := LintFile(absPath); len(issues) > 0 {
 			result["lint_warning"] = fmt.Sprintf("Lint issues found:\n%s", strings.Join(issues, "\n"))
 		}
