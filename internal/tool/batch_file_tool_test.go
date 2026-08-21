@@ -45,18 +45,18 @@ func bytesOf(b byte, n int) []byte {
 
 func TestIsCodeFile(t *testing.T) {
 	cases := map[string]bool{
-		"foo.go":           true,
-		"foo.py":           true,
-		"foo.jsx":          true,
-		"foo.scss":         true,
-		"foo.md":           true,
-		"Dockerfile":       true,
-		"Makefile":         true,
-		"Web.Dockerfile":   true,
-		"report.pdf":       false,
-		"image.png":        false,
-		"lib.so":           false,
-		"noext":            false,
+		"foo.go":         true,
+		"foo.py":         true,
+		"foo.jsx":        true,
+		"foo.scss":       true,
+		"foo.md":         true,
+		"Dockerfile":     true,
+		"Makefile":       true,
+		"Web.Dockerfile": true,
+		"report.pdf":     false,
+		"image.png":      false,
+		"lib.so":         false,
+		"noext":          false,
 	}
 	for p, want := range cases {
 		if got := isCodeFile(p); got != want {

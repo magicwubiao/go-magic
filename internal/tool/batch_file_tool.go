@@ -66,18 +66,18 @@ func (t *BatchFileOpsTool) Schema() map[string]interface{} {
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"path":        map[string]interface{}{"type": "string"},
-						"content":     map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
-						"create_dirs": map[string]interface{}{"type": "boolean", "description": "Create parent directories if they don't exist (for batch_write, default true)", "default": true},
-						"backup":      map[string]interface{}{"type": "boolean", "description": "Create a .bak copy before overwriting (for batch_write, default false)", "default": false},
-						"atomic":      map[string]interface{}{"type": "boolean", "description": "Write atomically via tempfile+rename (for batch_write, default true)", "default": true},
-						"old_text":          map[string]interface{}{"type": "string", "description": "Text to search for (for batch_search_replace)"},
-						"new_text":          map[string]interface{}{"type": "string", "description": "Replacement text (for batch_search_replace)"},
-						"replace_all":       map[string]interface{}{"type": "boolean", "description": "Replace all occurrences. If false, replace only the first occurrence (default false).", "default": false},
-						"case_sensitive":    map[string]interface{}{"type": "boolean", "description": "Match with case sensitivity (default true).", "default": true},
-						"max_replacements":  map[string]interface{}{"type": "number", "description": "Maximum number of replacements to perform (<0 means unlimited when replace_all is true)."},
-						"dry_run":           map[string]interface{}{"type": "boolean", "description": "Report matches/positions without writing the file (default false).", "default": false},
-						"require_unique":    map[string]interface{}{"type": "boolean", "description": "If true, fail when old_text matches more than once but replace_all is false (prevents ambiguous edits).", "default": false},
+						"path":             map[string]interface{}{"type": "string"},
+						"content":          map[string]interface{}{"type": "string", "description": "File content (for batch_write)"},
+						"create_dirs":      map[string]interface{}{"type": "boolean", "description": "Create parent directories if they don't exist (for batch_write, default true)", "default": true},
+						"backup":           map[string]interface{}{"type": "boolean", "description": "Create a .bak copy before overwriting (for batch_write, default false)", "default": false},
+						"atomic":           map[string]interface{}{"type": "boolean", "description": "Write atomically via tempfile+rename (for batch_write, default true)", "default": true},
+						"old_text":         map[string]interface{}{"type": "string", "description": "Text to search for (for batch_search_replace)"},
+						"new_text":         map[string]interface{}{"type": "string", "description": "Replacement text (for batch_search_replace)"},
+						"replace_all":      map[string]interface{}{"type": "boolean", "description": "Replace all occurrences. If false, replace only the first occurrence (default false).", "default": false},
+						"case_sensitive":   map[string]interface{}{"type": "boolean", "description": "Match with case sensitivity (default true).", "default": true},
+						"max_replacements": map[string]interface{}{"type": "number", "description": "Maximum number of replacements to perform (<0 means unlimited when replace_all is true)."},
+						"dry_run":          map[string]interface{}{"type": "boolean", "description": "Report matches/positions without writing the file (default false).", "default": false},
+						"require_unique":   map[string]interface{}{"type": "boolean", "description": "If true, fail when old_text matches more than once but replace_all is false (prevents ambiguous edits).", "default": false},
 					},
 					"required": []interface{}{"path"},
 				},
@@ -126,10 +126,10 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 	results := make(map[string]interface{})
 	for _, f := range filesRaw {
 		var (
-			filePath     string
+			filePath      string
 			offset, limit int
-			binaryOK     bool
-			maxSizeKB    = defaultMaxKB
+			binaryOK      bool
+			maxSizeKB     = defaultMaxKB
 		)
 
 		switch v := f.(type) {
@@ -188,10 +188,10 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 		isCode, isBinary := classifyFile(absPath, data)
 		if isBinary && !binaryOK {
 			results[filePath] = map[string]interface{}{
-				"error":    "binary file detected; set binary_ok=true to read (content will be omitted)",
-				"is_code":  isCode,
+				"error":     "binary file detected; set binary_ok=true to read (content will be omitted)",
+				"is_code":   isCode,
 				"is_binary": true,
-				"size":     len(data),
+				"size":      len(data),
 			}
 			continue
 		}
@@ -500,9 +500,9 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 
 		if len(matches) == 0 {
 			results[filePath] = map[string]interface{}{
-				"changes":         0,
-				"error":           "old_text not found in file",
-				"case_sensitive":  caseSensitive,
+				"changes":           0,
+				"error":             "old_text not found in file",
+				"case_sensitive":    caseSensitive,
 				"occurrences_found": 0,
 			}
 			continue

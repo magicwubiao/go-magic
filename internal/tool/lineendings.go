@@ -163,12 +163,12 @@ func classifyFile(path string, data []byte) (bool, bool) {
 
 // MatchInfo records the position of a single match in normalized-LF content.
 type MatchInfo struct {
-	ByteStart  int `json:"byte_start"`
-	ByteEnd    int `json:"byte_end"`
-	LineStart  int `json:"line_start"` // 1-based
-	LineEnd    int `json:"line_end"`   // 1-based, inclusive
+	ByteStart   int `json:"byte_start"`
+	ByteEnd     int `json:"byte_end"`
+	LineStart   int `json:"line_start"` // 1-based
+	LineEnd     int `json:"line_end"`   // 1-based, inclusive
 	ColumnStart int `json:"column_start"`
-	ColumnEnd  int `json:"column_end"`
+	ColumnEnd   int `json:"column_end"`
 }
 
 // findAllMatches returns the positions of all non-overlapping occurrences of
