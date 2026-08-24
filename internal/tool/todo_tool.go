@@ -525,6 +525,7 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
+	sessionID := todo.SessionID
 
 	// CONSISTENT "key present in args" semantics for every mutable field.
 	// Previous behavior was asymmetric: title/priority required "!= empty"
@@ -545,6 +546,7 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 	}
 
 	changedToCompleted := false
+	changedToTerminal := false
 	if _, hasStatus := args["status"]; hasStatus {
 		if status, ok := args["status"].(string); ok && status != "" {
 			if !validStatuses[status] {
@@ -554,6 +556,10 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 			todo.Status = status
 			if status == "completed" && prev != "completed" {
 				changedToCompleted = true
+				changedToTerminal = true
+			}
+			if status == "cancelled" && prev != "cancelled" {
+				changedToTerminal = true
 			}
 			if status != "completed" {
 				// Moving OUT of completed: clear the completed_at timestamp so
@@ -582,6 +588,9 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
 	broadcastTodoChanged(todo.ID, "update")
+	if changedToTerminal {
+		t.cleanupSessionIfAllDoneLocked(sessionID)
+	}
 
 	resp := map[string]interface{}{
 		"id":         todo.ID,
@@ -614,6 +623,7 @@ func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) 
 	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
+	sessionID := todo.SessionID
 
 	delete(t.todos, id)
 
@@ -621,11 +631,49 @@ func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) 
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
 	broadcastTodoChanged(id, "delete")
+	t.cleanupSessionIfAllDoneLocked(sessionID)
 
 	return map[string]interface{}{
 		"id":      id,
 		"message": "Todo deleted successfully",
 	}, nil
+}
+
+func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	bucket := make([]*TodoItem, 0, 8)
+	for _, todo := range t.todos {
+		if todo.SessionID == sessionID {
+			bucket = append(bucket, todo)
+		}
+	}
+	if len(bucket) == 0 {
+		return nil
+	}
+	for _, todo := range bucket {
+		if todo.Status == "pending" || todo.Status == "in_progress" {
+			return nil
+		}
+	}
+
+	removedIDs := make([]string, 0, len(bucket))
+	for _, todo := range bucket {
+		delete(t.todos, todo.ID)
+		removedIDs = append(removedIDs, todo.ID)
+	}
+	if len(removedIDs) > 0 {
+		if err := t.save(); err != nil {
+			log.Printf("[todo] cleanup bucket(%s) save failed: %v", sessionID, err)
+			return removedIDs
+		}
+		for _, id := range removedIDs {
+			broadcastTodoChanged(id, "delete")
+		}
+		log.Printf("[todo] cleanup bucket(%s): %d todos removed", sessionID, len(removedIDs))
+	}
+	return removedIDs
 }
 
 func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error) {
@@ -645,8 +693,10 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
+	sessionID := todo.SessionID
 	// 已 completed → 短路：不重打 completed_at、不 save、不 broadcast，避免无谓 IO
 	if todo.Status == "completed" {
+		t.cleanupSessionIfAllDoneLocked(sessionID)
 		return map[string]interface{}{
 			"id":      todo.ID,
 			"title":   todo.Title,
@@ -664,6 +714,7 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
 	broadcastTodoChanged(todo.ID, "complete")
+	t.cleanupSessionIfAllDoneLocked(sessionID)
 
 	return map[string]interface{}{
 		"id":      todo.ID,
