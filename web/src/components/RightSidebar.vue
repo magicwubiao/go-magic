@@ -26,17 +26,19 @@
               {{ todosStore.activeTodos.length }}
             </span>
           </div>
-          <div class="todo-panel-right" @click.stop>
-            <n-button
-              quaternary
-              circle
-              size="tiny"
-              @click="loadTodos"
-              :loading="todosStore.loading"
-              :title="t('common.refresh')"
-            >
-              <template #icon><n-icon :component="RefreshOutline" :size="12" /></template>
-            </n-button>
+          <div class="todo-panel-right" style="display: flex; align-items: center; gap: 4px;">
+            <div @click.stop style="display: flex;">
+              <n-button
+                quaternary
+                circle
+                size="tiny"
+                @click="loadTodos"
+                :loading="todosStore.loading"
+                :title="t('common.refresh')"
+              >
+                <template #icon><n-icon :component="RefreshOutline" :size="12" /></template>
+              </n-button>
+            </div>
             <n-icon
               class="todo-panel-collapse-icon"
               :component="todosPanelCollapsed ? ChevronForwardOutline : ChevronDownOutline"
