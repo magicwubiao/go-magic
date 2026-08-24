@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -50,8 +51,8 @@ func TestFileEditMultiTierLeadingWSTabVsSpaces(t *testing.T) {
 		t.Fatalf("tier1 match failed: %v", err)
 	}
 	iminfo := info.(map[string]interface{})
-	if iminfo["tier"] != "leading_ws_normalized" {
-		t.Errorf("expected leading_ws_normalized tier, got %v", iminfo["tier"])
+	if iminfo["tier"] != "leading_ws" {
+		t.Errorf("expected leading_ws tier, got %v", iminfo["tier"])
 	}
 	// IMPORTANT: actual indentation of the preserved surrounding content stays with tabs
 	if !strings.Contains(got, "func x() int {") {
@@ -74,8 +75,8 @@ func TestFileEditMultiTierTrailingWS(t *testing.T) {
 		t.Fatalf("tier2 match failed: %v", err)
 	}
 	iminfo := info.(map[string]interface{})
-	if iminfo["tier"] != "trailing_ws_tolerant" {
-		t.Errorf("expected trailing_ws_tolerant tier, got %v", iminfo["tier"])
+	if iminfo["tier"] != "trailing_ws" {
+		t.Errorf("expected trailing_ws tier, got %v", iminfo["tier"])
 	}
 	if !strings.Contains(got, "package renamed") {
 		t.Errorf("replacement missing: %q", got)
@@ -97,7 +98,8 @@ func TestFileEditMultiTierEdgeBlank(t *testing.T) {
 		t.Fatalf("tier3 match failed: %v", err)
 	}
 	iminfo := info.(map[string]interface{})
-	if iminfo["tier"] != "leading_ws_normalized" && iminfo["tier"] != "edge_blank_tolerant" {
+	if !strings.HasPrefix(iminfo["tier"].(string), "leading_ws") &&
+		!strings.HasPrefix(iminfo["tier"].(string), "edge_blank") {
 		t.Logf("note: tier resolved as %v (both acceptable)", iminfo["tier"])
 	}
 	if !strings.Contains(got, "ONE\nTWO\nTHREE") {
@@ -235,7 +237,7 @@ func TestFileEditEndToEndTolerantMatch(t *testing.T) {
 	}
 	m := res.(map[string]interface{})
 	match := m["match"].(map[string]interface{})
-	if match["tier"] != "leading_ws_normalized" {
+	if match["tier"] != "leading_ws" {
 		t.Errorf("expected tolerant leading_ws tier, got %v", match["tier"])
 	}
 
@@ -265,5 +267,110 @@ func TestFileEditExactBeatsTolerant(t *testing.T) {
 	iminfo := info.(map[string]interface{})
 	if iminfo["tier"] != "exact" {
 		t.Errorf("expected exact tier to win, got %v", iminfo["tier"])
+	}
+}
+
+// CRITICAL #1 REGRESSION TEST: combined leading + trailing whitespace tolerance
+// This used to FAIL across all 4 old tiers because tab-vs-spaces AND trailing spaces
+// existed SIMULTANEOUSLY on every line - LLM would fall back to sed every time.
+func TestFileEditCombinedLeadingAndTrailingWSTier(t *testing.T) {
+	tool := &FileEditTool{}
+	// Realistic file: 4-space indent AND invisible trailing spaces
+	content := strings.Join([]string{
+		"package p   ",
+		"",
+		"func real(a int) bool {   ",
+		"    if a > 0 {   ",
+		"        return true   ",
+		"    }   ",
+		"    return false   ",
+		"}   ",
+		"",
+	}, "\n")
+	// LLM hallucinated tab-indentation, and did not include trailing spaces.
+	// Before the fix: tier 0(exact)=no, tier1(leading only)=no (still has trailing spaces on file),
+	//                tier2(trailing only)=no (tabs vs spaces still differ),
+	//                tier4(edge blank)=no → TOTAL FAILURE, LLM falls back to sed.
+	// After fix: tier 3(leading+trailing combined) MATCHES.
+	params := map[string]interface{}{
+		"old_content": "func real(a int) bool {\n\tif a > 0 {\n\t\treturn true\n\t}\n\treturn false\n}",
+		"new_content": "func real(a int) bool {\n\treturn a > 0\n}",
+	}
+	got, info, err := tool.replaceContentDetailed(content, params, 9)
+	if err != nil {
+		t.Fatalf("combined tier should match, but failed: %v", err)
+	}
+	iminfo := info.(map[string]interface{})
+	tier := iminfo["tier"].(string)
+	if tier != "leading+trailing_ws" {
+		t.Errorf("expected combined tier 'leading+trailing_ws', got %v", tier)
+	}
+	if !strings.Contains(got, "func real(a int) bool {") {
+		t.Errorf("new_content missing: %q", got)
+	}
+	if !strings.Contains(got, "return a > 0") {
+		t.Errorf("expected simplified body, got %q", got)
+	}
+	// File should still have original trailing spaces on UNTOUCHED lines (package p line preserved)
+	if !strings.Contains(got, "package p   ") {
+		t.Errorf("untouched line's trailing spaces were corrupted: %q", got)
+	}
+}
+
+// Ensure tier priority: combined tier should NOT beat exact or single-normalizer tiers
+func TestFileEditTierPriorityCorrect(t *testing.T) {
+	cases := []struct {
+		name       string
+		content    string
+		old        string
+		expectTier string
+	}{
+		{"exact wins", "a := 1\nb := 2\n", "a := 1\nb := 2\n", "exact"},
+		{"leading only still wins when it is enough", "    a := 1\n    b := 2\n", "\ta := 1\n\tb := 2\n", "leading_ws"},
+		{"trailing only still wins", "a := 1   \nb := 2   \n", "a := 1\nb := 2\n", "trailing_ws"},
+		{"combined only as last resort", "    a := 1   \n    b := 2   \n", "\ta := 1\n\tb := 2\n", "leading+trailing_ws"},
+	}
+	tool := &FileEditTool{}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			params := map[string]interface{}{
+				"old_content": c.old,
+				"new_content": "X",
+			}
+			_, info, err := tool.replaceContentDetailed(c.content, params, -1)
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			got := info.(map[string]interface{})["tier"].(string)
+			if got != c.expectTier {
+				t.Errorf("expected %q, got %q", c.expectTier, got)
+			}
+		})
+	}
+}
+
+// UTF-8 truncate sanity (MEDIUM #7 regression)
+func TestTruncateRuneNoCorruption(t *testing.T) {
+	cases := []struct {
+		input string
+		n     int
+		want  string
+	}{
+		{"Hello World", 5, "Hello…"},
+		{"中文内容测试", 2, "中文…"},
+		{"日本語テスト", 3, "日本語…"},
+		{"Mix: 中文 abc", 6, "Mix: 中…"},
+		{"Short", 10, "Short"},
+		{"边界", 2, "边界"},
+	}
+	for _, c := range cases {
+		got := truncateRune(c.input, c.n)
+		if got != c.want {
+			t.Errorf("truncateRune(%q, %d) = %q, want %q", c.input, c.n, got, c.want)
+		}
+		// Ensure the output is valid UTF-8
+		if !utf8.ValidString(got) {
+			t.Errorf("invalid UTF-8 output from truncateRune(%q, %d): %q", c.input, c.n, got)
+		}
 	}
 }

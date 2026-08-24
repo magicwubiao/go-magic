@@ -147,29 +147,29 @@ func (t *FileSearchTool) Execute(ctx context.Context, params map[string]interfac
 
 	// 编译正则表达式
 	var regex *regexp.Regexp
+	var flagStr string
+	if !caseSensitive {
+		flagStr = "(?i)"
+	}
+
 	if useRegex {
-		flags := ""
-		if !caseSensitive {
-			flags = "(?i)"
-		}
-		patternToCompile := flags + pattern
+		patternToCompile := flagStr
 		if wholeWord {
-			patternToCompile = flags + `\b` + pattern + `\b`
+			patternToCompile += `\b` + pattern + `\b`
+		} else {
+			patternToCompile += pattern
 		}
 		regex, err = regexp.Compile(patternToCompile)
 		if err != nil {
 			return nil, fmt.Errorf("invalid regex: %w", err)
 		}
 	} else {
-		// 转换为正则表达式
 		escaped := regexp.QuoteMeta(pattern)
-		flags := "(?i)"
-		if caseSensitive {
-			flags = ""
-		}
-		patternToCompile := flags + escaped
+		patternToCompile := flagStr
 		if wholeWord {
-			patternToCompile = flags + `\b` + escaped + `\b`
+			patternToCompile += `\b` + escaped + `\b`
+		} else {
+			patternToCompile += escaped
 		}
 		regex, err = regexp.Compile(patternToCompile)
 		if err != nil {
@@ -359,12 +359,22 @@ func (t *FileSearchTool) scanLinesWithContext(ctx context.Context, filePath stri
 			end = len(lines)
 		}
 		if start < lastCtxEnd {
-			start = lastCtxEnd // 与上一个匹配的上下文重叠时去重
+			start = lastCtxEnd
 		}
 		if start >= end {
 			continue
 		}
-		contextBlock := strings.Join(lines[start:end], "\n")
+		// Build context as line-by-line slice so callers can format freely.
+		// We do NOT embed the actual match line's content multiple times --
+		// if the match itself is included in context, it becomes redundant.
+		contextSlice := make([]string, 0, end-start)
+		for ln := start; ln < end; ln++ {
+			if ln == i {
+				contextSlice = append(contextSlice, lines[ln]+"  // <<< MATCH")
+			} else {
+				contextSlice = append(contextSlice, lines[ln])
+			}
+		}
 		lastCtxEnd = end
 
 		for _, idx := range indices {
@@ -373,7 +383,7 @@ func (t *FileSearchTool) scanLinesWithContext(ctx context.Context, filePath stri
 				Line:    i + 1,
 				Column:  idx[0] + 1,
 				Content: line,
-				Context: []string{contextBlock},
+				Context: contextSlice,
 			}
 			matches = append(matches, match)
 			if len(matches) >= maxResults {

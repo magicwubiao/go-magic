@@ -121,13 +121,15 @@ func isTextRune(r rune) bool {
 		return true
 	}
 	switch r {
-	case ' ', '\t', '\n', '\r', '\f', '\v', '\b', '\u0000',
+	case ' ', '\t', '\n', '\r', '\f', '\v', '\b',
 		'\u00a0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003',
 		'\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009',
 		'\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000':
 		return true
 	}
 	// Allow C0/C1 control chars only when explicitly accepted above.
+	// NUL byte (\u0000) is deliberately excluded here -- it is the
+	// primary indicator for binary detection in the fast path above.
 	return false
 }
 

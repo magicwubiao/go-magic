@@ -398,7 +398,12 @@ func generateUnifiedDiff(label string, oldLines, newLines []string) string {
 		newStart := -1
 		oldCount := 0
 		newCount := 0
-
+		// Pre-compute the real old/new line numbers at each op index so hunk
+		// headers are not off-by-one when the hunk starts with a delete/insert.
+		// The previous implementation used `i + 1` (op index) as the line
+		// number for equal ops, which is only correct when the file starts
+		// with equal ops -- otherwise insertions/deletions before this hunk
+		// shift the numbering.
 		for i := start; i < end; i++ {
 			op := ops[i]
 			switch op.kind {
@@ -407,16 +412,15 @@ func generateUnifiedDiff(label string, oldLines, newLines []string) string {
 				oldCount++
 				newCount++
 				if oldStart < 0 {
-					oldStart = i + 1 // 1-based line number in old
+					oldStart = countOldLineNumber(ops, i)
 				}
 				if newStart < 0 {
-					newStart = i + 1
+					newStart = countNewLineNumber(ops, i)
 				}
 			case -1:
 				lines = append(lines, "-"+op.line)
 				oldCount++
 				if oldStart < 0 {
-					// Find the old line number by counting equal/delete ops before this
 					oldStart = countOldLineNumber(ops, i)
 				}
 			case 1:

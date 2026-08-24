@@ -94,7 +94,7 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 }
 
 // ============================================================================
-// Search In Files Tool
+// Search In Files Tool (fix: expose use_regex and pass through to file_search)
 // ============================================================================
 
 type SearchInFilesTool struct{}
@@ -104,7 +104,7 @@ func (t *SearchInFilesTool) Name() string {
 }
 
 func (t *SearchInFilesTool) Description() string {
-	return "Search for a pattern in file contents"
+	return "Search for a pattern in file contents. Supports both plain text and regular expressions (set use_regex=true for regex). Returns matching lines with optional context."
 }
 
 func (t *SearchInFilesTool) Schema() map[string]interface{} {
@@ -113,22 +113,42 @@ func (t *SearchInFilesTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"pattern": map[string]interface{}{
 				"type":        "string",
-				"description": "The search pattern (text or regex)",
+				"description": "The search pattern (plain text or regex when use_regex=true)",
 			},
 			"path": map[string]interface{}{
 				"type":        "string",
-				"description": "Directory to search in",
+				"description": "Directory or file path to search in",
 				"default":     ".",
 			},
 			"file_pattern": map[string]interface{}{
 				"type":        "string",
-				"description": "File pattern to match (e.g., *.go)",
+				"description": "File glob pattern to filter (e.g., '*.go', '*.txt')",
 				"default":     "*",
+			},
+			"use_regex": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Treat pattern as a regular expression instead of plain text. Enables alternation (a|b), anchors (^...$), character classes ([a-z]), etc.",
+				"default":     false,
 			},
 			"case_sensitive": map[string]interface{}{
 				"type":        "boolean",
 				"description": "Case sensitive search",
 				"default":     false,
+			},
+			"whole_word": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Match whole word only (word boundaries)",
+				"default":     false,
+			},
+			"context_lines": map[string]interface{}{
+				"type":        "number",
+				"description": "Number of lines of context before/after each match",
+				"default":     0,
+			},
+			"max_results": map[string]interface{}{
+				"type":        "number",
+				"description": "Maximum number of matches to return",
+				"default":     100,
 			},
 		},
 		"required": []string{"pattern"},
@@ -137,18 +157,23 @@ func (t *SearchInFilesTool) Schema() map[string]interface{} {
 
 func (t *SearchInFilesTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	pattern, ok := args["pattern"].(string)
-	if !ok {
+	if !ok || pattern == "" {
 		return nil, fmt.Errorf("pattern argument is required")
 	}
 
 	searchPath := "."
-	if p, ok := args["path"].(string); ok {
+	if p, ok := args["path"].(string); ok && p != "" {
 		searchPath = p
 	}
 
 	filePattern := "*"
-	if fp, ok := args["file_pattern"].(string); ok {
+	if fp, ok := args["file_pattern"].(string); ok && fp != "" {
 		filePattern = fp
+	}
+
+	useRegex := false
+	if r, ok := args["use_regex"].(bool); ok {
+		useRegex = r
 	}
 
 	caseSensitive := false
@@ -156,19 +181,38 @@ func (t *SearchInFilesTool) Execute(ctx context.Context, args map[string]interfa
 		caseSensitive = cs
 	}
 
-	// Use the advanced file_search tool for actual implementation
+	wholeWord := false
+	if ww, ok := args["whole_word"].(bool); ok {
+		wholeWord = ww
+	}
+
+	contextLines := 0
+	if cl, ok := args["context_lines"].(float64); ok {
+		contextLines = int(cl)
+	}
+
+	maxResults := 100
+	if mr, ok := args["max_results"].(float64); ok {
+		maxResults = int(mr)
+	}
+
+	// Use the advanced file_search tool for actual implementation,
+	// passing through all regex-related options.
 	searcher := &FileSearchTool{}
 	return searcher.Execute(ctx, map[string]interface{}{
 		"pattern":        pattern,
 		"path":           searchPath,
 		"file_pattern":   filePattern,
+		"use_regex":      useRegex,
 		"case_sensitive": caseSensitive,
-		"use_regex":      false,
+		"whole_word":     wholeWord,
+		"context_lines":  contextLines,
+		"max_results":    maxResults,
 	})
 }
 
 // ============================================================================
-// Read File Tool (Enhanced)
+// Read File Tool (Enhanced: explicit line offset/limit + large-file pagination)
 // ============================================================================
 
 type ReadFileTool struct{}
@@ -178,7 +222,7 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read the complete contents of a file"
+	return "Read a file. Use offset (1-based line number) and limit (max lines) to read a specific range -- required for large files, since results are truncated when too long. If the content is truncated, continue reading with offset = last shown line + 1."
 }
 
 func (t *ReadFileTool) Schema() map[string]interface{} {
@@ -191,11 +235,11 @@ func (t *ReadFileTool) Schema() map[string]interface{} {
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "Maximum number of lines to read",
+				"description": "Maximum number of lines to read (default: all lines)",
 			},
 			"offset": map[string]interface{}{
 				"type":        "number",
-				"description": "Line number to start reading from (1-based)",
+				"description": "Line number to start reading from (1-based, default: 1 = beginning of file)",
 			},
 		},
 		"required": []string{"path"},
@@ -220,8 +264,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 
 	content := string(data)
 
-	// Handle offset and limit
-	offset := 0
+	// Handle offset and limit (1-based offset)
+	offset := 0 // 0-based index into lines
 	limit := 0
 
 	if o, ok := args["offset"].(float64); ok {
@@ -235,23 +279,53 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	lines := strings.Split(content, "\n")
-	if offset > 0 && offset < len(lines) {
+	totalLines := len(lines)
+
+	// If offset is beyond the file, return a clear message instead of
+	// silently falling back to the beginning of the file.
+	if offset > 0 && offset >= totalLines {
+		return map[string]interface{}{
+			"path":      absPath,
+			"total":     totalLines,
+			"read":      0,
+			"offset":    offset,
+			"content":   "",
+			"type":      detectFileType(absPath, content),
+			"note":      fmt.Sprintf("offset %d is beyond the end of file (total %d lines)", offset+1, totalLines),
+			"truncated": false,
+		}, nil
+	}
+
+	if offset > 0 {
 		lines = lines[offset:]
 	}
 	if limit > 0 && limit < len(lines) {
 		lines = lines[:limit]
 	}
 
+	readContent := strings.Join(lines, "\n")
+	// Track whether the caller's requested range covers the whole file.
+	// If the caller did not pass offset (started at line 1) and the
+	// returned range is shorter than the file, the result was truncated
+	// by the request -- signal that reading should continue via offset.
+	truncated := limit > 0 && offset+limit < totalLines
+
 	result := map[string]interface{}{
-		"path":    absPath,
-		"total":   len(strings.Split(content, "\n")),
-		"read":    len(lines),
-		"offset":  offset,
-		"content": strings.Join(lines, "\n"),
+		"path":      absPath,
+		"total":     totalLines,
+		"read":      len(lines),
+		"offset":    offset,
+		"firstLine": offset + 1,
+		"content":   readContent,
+		"type":      detectFileType(absPath, content),
+		"truncated": truncated,
 	}
 
-	// Try to detect file type
-	result["type"] = detectFileType(absPath, content)
+	// If truncated and the caller did not specify offset, add a hint so
+	// the model knows to continue from the next chunk.
+	if truncated && offset == 0 {
+		result["note"] = fmt.Sprintf("file has %d lines; only the first %d lines were returned. Continue reading with offset=%d to get the rest.", totalLines, limit, limit+1)
+	}
 
 	return result, nil
 }
@@ -284,8 +358,6 @@ func detectFileType(path, content string) string {
 		return "yaml"
 	case ".toml":
 		return "toml"
-	case ".xml":
-		return "xml"
 	default:
 		if strings.HasPrefix(content, "#!/bin") {
 			return "shell script"
@@ -367,11 +439,16 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 
 	var err2 error
 	if appendMode {
-		var f *os.File
-		f, err2 = os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, security.DefaultFileMode)
-		if err2 == nil {
-			f.Write([]byte(content))
-			f.Close()
+		f, ferr := os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, security.DefaultFileMode)
+		if ferr != nil {
+			err2 = ferr
+		} else {
+			if _, werr := f.Write([]byte(content)); werr != nil {
+				err2 = werr
+			}
+			if cerr := f.Close(); cerr != nil && err2 == nil {
+				err2 = cerr
+			}
 		}
 	} else {
 		err2 = os.WriteFile(absPath, []byte(content), security.DefaultFileMode)

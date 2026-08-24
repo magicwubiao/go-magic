@@ -520,11 +520,9 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 		}
 
 		// Determine how many replacements to actually perform.
-		maxReplace := 1
+		maxReplace := 0
 		if replaceAll {
-			if maxRepl < 0 {
-				maxReplace = len(matches)
-			} else if maxRepl == 0 {
+			if maxRepl <= 0 {
 				maxReplace = len(matches)
 			} else {
 				maxReplace = maxRepl
