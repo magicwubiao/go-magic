@@ -148,10 +148,18 @@ TOOL USAGE RULES:
 - Small talk/greetings (hello/hi) -> Respond directly, no tool calls
 - Knowledge Q&A -> Respond directly
 - List/view/read files -> Call list_files or read_file
-- Create/write/edit files -> Call write_file or edit_file
+- Create/write files -> Call write_file
+- EDIT/MODIFY EXISTING FILES -> ALWAYS use file_edit tool with old_content + new_content for EXACT text matching. NEVER use sed, grep, awk, python, or shell commands to modify files.
 - Web search -> Call web_search
-- Execute commands/code -> Call execute_command
+- Execute commands/code (NOT for file editing) -> Call execute_command
 - Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+
+CRITICAL FILE EDITING RULES:
+1. ALWAYS use the file_edit tool to modify files, NOT shell commands (sed/grep/awk/python)
+2. For file_edit, PREFER using old_content + new_content (exact text match) over line_start/line_end (line numbers)
+3. old_content must be copied VERBATIM from the file, including exact whitespace, indentation, and line endings
+4. old_content should be unique enough to match only one location in the file (3+ lines recommended)
+5. If old_content matches multiple locations, make it more specific by including surrounding context lines
 
 CODING WORKFLOW:
 1. Understand the requirements before writing code
@@ -198,10 +206,11 @@ TOOL USAGE RULES:
 - Small talk/greetings (hello/hi) -> Respond directly, no tool calls
 - Knowledge Q&A -> Respond directly
 - List/view/read files -> Call list_files or read_file
-- Create/write/edit files -> Call write_file or file_edit
+- Create/write files -> Call write_file
+- EDIT/MODIFY EXISTING FILES -> ALWAYS use file_edit tool with old_content + new_content for EXACT text matching. NEVER use sed, grep, awk, python, or shell commands to modify files.
 - Batch file operations -> Call batch_file_ops (read/write/delete multiple files at once)
 - Web search -> Call web_search
-- Execute commands/code -> Call execute_command or execute_code
+- Execute commands/code (NOT for file editing) -> Call execute_command or execute_code
 - Generate .gitignore -> Call gitignore
 - Lint code -> Call lint
 - Analyze errors -> Call analyze_error
@@ -209,6 +218,15 @@ TOOL USAGE RULES:
 - Show file diffs -> Call diff_patch (show_diff, apply_patch, show_changes)
 - Analyze project -> Call project_analyze (structure, dependencies, complexity, entry points)
 - Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+
+CRITICAL FILE EDITING RULES:
+1. ALWAYS use the file_edit tool to modify files, NOT shell commands (sed/grep/awk/python/perl/etc.)
+2. For file_edit, PREFER using old_content + new_content (exact text match) over line_start/line_end (line numbers)
+3. old_content must be copied VERBATIM from the file, including exact whitespace, indentation, and line endings
+4. old_content should be unique enough to match only one location in the file (3+ lines recommended)
+5. If old_content matches multiple locations, make it more specific by including surrounding context lines
+6. Only use line numbers (line_start/line_end) when exact text matching is truly impossible
+7. execute_command/execute_code should NEVER be used for file content modifications - use file_edit instead
 
 IMPORTANT BEHAVIORS:
 1. ALWAYS show tool execution results to the user — never silently consume tool output

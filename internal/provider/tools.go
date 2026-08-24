@@ -335,3 +335,32 @@ func marshalResult(v interface{}) (string, error) {
 	}
 	return string(data), nil
 }
+
+// getString safely gets a string from a map
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// getInt safely gets an int from a map (supports float64 from JSON)
+func getInt(m map[string]interface{}, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
+}
+
+// getBool safely gets a bool from a map
+func getBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
+}

@@ -550,11 +550,3 @@ func (p *GeminiProvider) parseError(body []byte, statusCode int) error {
 
 	return fmt.Errorf("gemini error (%d): %s", statusCode, string(body))
 }
-
-// getString safely gets a string from a map
-func getString(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}

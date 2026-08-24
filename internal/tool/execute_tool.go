@@ -154,6 +154,31 @@ var pipeAndChainPatterns = []struct {
 	{regexp.MustCompile(`(?i)[|;&]\s*sudo\s+(rm|shutdown|reboot|halt)`), "sudo dangerous after pipe/chain"},
 }
 
+// fileEditCommandsPatterns detects commands that are commonly used to modify/edit files
+// These should NOT be used - the file_edit tool should be used instead for precise edits.
+var fileEditCommandsPatterns = []struct {
+	pattern *regexp.Regexp
+	reason  string
+}{
+	// sed with -i flag (in-place file editing)
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)sed\s+.*-i`), "sed -i (in-place edit)"},
+	// sed with file redirect for output
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)sed\s+.*>\s*`), "sed with output redirect"},
+	// awk with output redirect to file
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)awk\s+.*>\s*`), "awk with output redirect"},
+	// perl -i -pe or similar in-place edits
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)perl\s+.*-i`), "perl -i (in-place edit)"},
+	// python code writing to files via open/write
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)python\d*\s+.*open\(.*['\"]w['\"]`), "python file write mode"},
+	// echo/cat > or >> to non-trivial files (heuristic: file has extension)
+	{regexp.MustCompile(`(?i)(?:^|[|;&]\s*)(echo|cat|printf)\s+.*>{1,2}\s+[^\s]+\.[a-zA-Z0-9]{1,5}\s*($|[|;&])`), "echo/cat/printf with file redirect"},
+}
+
+const fileEditBlockHint = `USE file_edit TOOL INSTEAD! 
+The file_edit tool with old_content+new_content provides precise, safe, and deterministic file modifications.
+Shell-based editing (sed/awk/python/redirects) is error-prone, non-portable, and discouraged.
+Call: {"name": "file_edit", "parameters": {"operation": "replace", "path": "...", "old_content": "...", "new_content": "..."}}`
+
 type ExecuteCommandTool struct {
 	timeout    time.Duration
 	maxOutput  int
@@ -245,6 +270,10 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 			}, nil
 		}
 	}
+
+	// Check for commands used to edit files - advisory warning (not blocking)
+	// Prefer file_edit tool for precise edits, but allow user to decide
+	fileEditWarn := t.checkFileEditCommandsWarn(command)
 
 	// Check for dangerous patterns
 	if err := t.checkDangerous(command); err != nil {
@@ -342,6 +371,10 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 		"exit_code": 0,
 		"output":    outputStr,
 	}
+	if fileEditWarn != "" {
+		result["advisory"] = fileEditWarn
+		result["prefer_tool"] = "file_edit"
+	}
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -387,6 +420,24 @@ func (t *ExecuteCommandTool) checkDangerous(cmd string) error {
 		}
 	}
 	return nil
+}
+
+func (t *ExecuteCommandTool) checkFileEditCommands(cmd string) error {
+	for _, pat := range fileEditCommandsPatterns {
+		if pat.pattern.MatchString(cmd) {
+			return fmt.Errorf("file modification via %s is blocked. %s", pat.reason, fileEditBlockHint)
+		}
+	}
+	return nil
+}
+
+func (t *ExecuteCommandTool) checkFileEditCommandsWarn(cmd string) string {
+	for _, pat := range fileEditCommandsPatterns {
+		if pat.pattern.MatchString(cmd) {
+			return fmt.Sprintf("WARNING: %s detected. Consider using file_edit tool instead for precise, deterministic edits.", pat.reason)
+		}
+	}
+	return ""
 }
 
 func (t *ExecuteCommandTool) checkWhitelist(cmd string) error {
