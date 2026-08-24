@@ -2,10 +2,38 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
+)
+
+const (
+	fileEditLoopMaxAttempts = 2
+	fileEditLoopWindow      = 60 * time.Second
+)
+
+type badEditFingerprint struct {
+	sessionID string
+	toolName  string
+	path      string
+	operation string
+	signature string
+}
+
+type badEditRecord struct {
+	count     int
+	firstSeen time.Time
+	lastError string
+}
+
+var (
+	fileEditLoopMu      sync.Mutex
+	fileEditLoopRecords = make(map[badEditFingerprint]badEditRecord)
 )
 
 // FileEditTool handles file edit operations
@@ -54,11 +82,50 @@ func (t *FileEditTool) Schema() map[string]interface{} {
 			},
 			"new_content": map[string]interface{}{
 				"type":        "string",
-				"description": "Replacement / insertion content. Multi-line accepted with real newlines. The actual original file line endings will be preserved when tolerant matching succeeds.",
+				"description": "REQUIRED for replace and insert. Replacement / insertion content. Multi-line accepted with real newlines. The actual original file line endings will be preserved when tolerant matching succeeds. NEVER omit this argument for replace/insert.",
 			},
 		},
 		"required": []interface{}{"operation", "path"},
 	}
+}
+
+// ValidateParams implements ParamValidator. Performs STRONG validation to catch
+// missing-argument bugs BEFORE a single byte is written to disk. This is the
+// primary fix against the "forgot new_content → replaced with empty → caught in
+// retry loop" failure mode observed on multiple occasions.
+func (t *FileEditTool) ValidateParams(params map[string]interface{}) error {
+	operation := paramString(params, "operation")
+	switch operation {
+	case "insert":
+		if _, has := params["new_content"]; !has {
+			return fmt.Errorf("INSERT requires new_content argument (it was OMITTED, which would insert nothing). Add new_content=\"<the text to insert>\".")
+		}
+		if paramString(params, "new_content") == "" {
+			return fmt.Errorf("INSERT requires a non-empty new_content (got empty string, which would be a no-op and usually indicates a missing argument).")
+		}
+		if _, hasLineStart := params["line_start"]; !hasLineStart {
+			return fmt.Errorf("INSERT requires line_start. Valid values: 0 (before line 1 / top of file) .. N (after line N).")
+		}
+	case "replace":
+		if _, has := params["new_content"]; !has {
+			return fmt.Errorf("REPLACE requires new_content argument (it was OMITTED, which would WIPE OUT old_content replacing it with empty string). Add new_content=\"<replacement text>\". This is the #1 cause of 'my edit deleted content' bugs.")
+		}
+		hasOldContent := paramString(params, "old_content") != ""
+		hasLineStart := paramInt(params, "line_start") > 0
+		if !hasOldContent && !hasLineStart {
+			return fmt.Errorf("REPLACE requires either: (a) old_content=\"<exact lines to match>\" (preferred, 3+ lines for uniqueness), OR (b) line_start (+ optional line_end) for line-based replacement. Both were missing/empty.")
+		}
+	case "delete":
+		lineStart := paramInt(params, "line_start")
+		if lineStart < 1 {
+			return fmt.Errorf("DELETE requires line_start >= 1 (1-based). Optional line_end defaults to line_start. If you meant to clear content with replace, use replace + explicit old_content/new_content (both empty new_content and accidental delete-wipe are disallowed).")
+		}
+	case "":
+		return fmt.Errorf("missing 'operation' argument. Must be one of: replace (recommended), insert, delete.")
+	default:
+		return fmt.Errorf("unknown operation %q. Valid: replace, insert, delete.", operation)
+	}
+	return nil
 }
 
 // matchResult captures a found occurrence of old_content in the file
@@ -75,10 +142,49 @@ type matchResult struct {
 func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	path := paramString(params, "path")
 	operation := paramString(params, "operation")
+	tc := FromContext(ctx)
 
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
 	}
+
+	// DEFENSE-IN-DEPTH 1: ValidateParams runs in ExecuteWithProtection BEFORE
+	// Execute is called. But keep an explicit re-check here because external
+	// callers might invoke Execute directly bypassing the executor.
+	if err := t.ValidateParams(params); err != nil {
+		t.recordBadEditAttempt(tc.SessionID, path, operation, params, err.Error())
+		loopErr := t.checkEditLoop(tc.SessionID, path, operation, params)
+		if loopErr != nil {
+			return nil, loopErr
+		}
+		return nil, err
+	}
+
+	// DEFENSE-IN-DEPTH 2: Extra rule: replace with empty new_content is NEVER
+	// allowed even if the caller explicitly passed new_content="". This used to
+	// silently DELETE content (the root cause of the mailbox div bug).
+	if operation == "replace" {
+		if nc := paramString(params, "new_content"); nc == "" {
+			msg := fmt.Sprintf("REPLACE disallows empty new_content (would delete lines matched by old_content / line range). If you truly want to DELETE lines, use operation=delete with line_start/line_end instead of replace+empty new_content.")
+			t.recordBadEditAttempt(tc.SessionID, path, operation, params, msg)
+			loopErr := t.checkEditLoop(tc.SessionID, path, operation, params)
+			if loopErr != nil {
+				return nil, loopErr
+			}
+			return nil, fmt.Errorf("%s", msg)
+		}
+	}
+
+	// DEFENSE-IN-DEPTH 3: Session-level repeat-offender loop breaker.
+	// If the same bad pattern repeats within the window, block and surface a
+	// strong hint instead of letting the LLM burn tokens in a self-stimulating
+	// retry cascade.
+	if loopErr := t.checkEditLoop(tc.SessionID, path, operation, params); loopErr != nil {
+		return nil, loopErr
+	}
+
+	// Clean up stale records to avoid unbounded memory growth.
+	t.purgeOldEditRecords()
 
 	absPath, err := resolvePath(ctx, path)
 	if err != nil {
@@ -712,4 +818,118 @@ func (t *FileEditTool) deleteContent(content string, params map[string]interface
 	newLines = append(newLines, lines[endIdx:]...)
 
 	return convertLineEndings(strings.Join(newLines, "\n"), lineEnding), nil
+}
+
+// ---------------------------------------------------------------------------
+// Session-level "loop bug" breaker. Prevents the observed failure mode where
+// the LLM falls into a self-stimulating cascade of:
+//   "I must not forget new_content → issues call → forgets new_content →
+//    sees error → repeats the reminder → issues another broken call → ..."
+//
+// Mechanism: per (session, path, operation, param-signature), track BAD
+// attempts (missing new_content, empty new_content, missing old_content/line
+// range) within a short sliding window. If the same bad pattern repeats more
+// than fileEditLoopMaxAttempts times, return a HARD blocking error that
+// explicitly names the problem AND gives the model a single concrete paste-it
+// fix path (no prose to interpret). The human-readable error is deliberately
+// short and written in first-letter-caps imperative so the model treats it as
+// a hard stop rather than a suggestion.
+// ---------------------------------------------------------------------------
+
+func (t *FileEditTool) fingerprintParams(params map[string]interface{}) string {
+	keys := []string{"old_content", "new_content", "line_start", "line_end"}
+	h := sha256.New()
+	for _, k := range keys {
+		fmt.Fprintf(h, "%s\x00", k)
+		switch v := params[k].(type) {
+		case nil:
+			h.Write([]byte{0x01})
+		case string:
+			h.Write([]byte{0x02})
+			h.Write([]byte(v))
+		case float64:
+			fmt.Fprintf(h, "f%v", v)
+		case int:
+			fmt.Fprintf(h, "i%d", v)
+		default:
+			fmt.Fprintf(h, "%T=%v", v, v)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func (t *FileEditTool) recordBadEditAttempt(sessionID, path, operation string, params map[string]interface{}, errMsg string) {
+	fp := badEditFingerprint{
+		sessionID: sessionID,
+		toolName:  "file_edit",
+		path:      path,
+		operation: operation,
+		signature: t.fingerprintParams(params),
+	}
+	fileEditLoopMu.Lock()
+	defer fileEditLoopMu.Unlock()
+	prev, ok := fileEditLoopRecords[fp]
+	if !ok || time.Since(prev.firstSeen) > fileEditLoopWindow {
+		prev = badEditRecord{firstSeen: time.Now()}
+	}
+	prev.count++
+	prev.lastError = errMsg
+	fileEditLoopRecords[fp] = prev
+}
+
+func (t *FileEditTool) checkEditLoop(sessionID, path, operation string, params map[string]interface{}) error {
+	fp := badEditFingerprint{
+		sessionID: sessionID,
+		toolName:  "file_edit",
+		path:      path,
+		operation: operation,
+		signature: t.fingerprintParams(params),
+	}
+	fileEditLoopMu.Lock()
+	rec, ok := fileEditLoopRecords[fp]
+	fileEditLoopMu.Unlock()
+	if !ok {
+		return nil
+	}
+	if time.Since(rec.firstSeen) > fileEditLoopWindow {
+		return nil
+	}
+	if rec.count < fileEditLoopMaxAttempts {
+		return nil
+	}
+	// HARD STOP. Tell the model exactly what to paste, in one line, no choices.
+	var prescription string
+	switch operation {
+	case "replace":
+		prescription = "FIX PATTERN (copy-paste): operation=replace, path=SAME_PATH, old_content=<3+ verbatim lines from read_file>, new_content=<full replacement text, MUST NOT be omitted, MUST NOT be empty>. DO NOT use line_start/line_end unless read_file confirms line numbers."
+	case "insert":
+		prescription = "FIX PATTERN (copy-paste): operation=insert, path=SAME_PATH, line_start=<0..N>, new_content=<text to insert, MUST NOT be omitted, MUST NOT be empty>."
+	case "delete":
+		prescription = "FIX PATTERN (copy-paste): operation=delete, path=SAME_PATH, line_start=<1-based first line to delete>, line_end=<1-based last line to delete, >= line_start>."
+	default:
+		prescription = "FIX PATTERN: set operation to one of: replace | insert | delete."
+	}
+	return fmt.Errorf("STOP: file_edit repeated-invalid pattern detected in this session (same broken call signature %d times in < %v). Last error was: %s\n%s\n\nDO NOT issue another file_edit call with the same missing/empty arguments. Instead: 1) run read_file on the path FIRST to get fresh verbatim content, 2) then call file_edit ONCE using the FIX PATTERN above.",
+		rec.count, fileEditLoopWindow, rec.lastError, prescription)
+}
+
+// purgeOldEditRecords occasionally garbage-collects entries whose observation
+// window has expired. Runs inline on Execute (before work) to avoid spawning a
+// background goroutine per tool.
+func (t *FileEditTool) purgeOldEditRecords() {
+	fileEditLoopMu.Lock()
+	defer fileEditLoopMu.Unlock()
+	// Cheap random-start walk instead of building a temp slice. Stops scanning
+	// after we find a few live entries; amortized O(1) in the steady state.
+	const maxScan = 64
+	scanned := 0
+	for fp, rec := range fileEditLoopRecords {
+		if scanned >= maxScan {
+			break
+		}
+		scanned++
+		if time.Since(rec.firstSeen) > fileEditLoopWindow*2 {
+			delete(fileEditLoopRecords, fp)
+		}
+	}
 }
