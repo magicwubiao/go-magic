@@ -2,13 +2,14 @@ package tool
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -43,13 +44,15 @@ var (
 var (
 	validStatuses   = map[string]bool{"pending": true, "in_progress": true, "completed": true, "cancelled": true}
 	validPriorities = map[string]bool{"low": true, "medium": true, "high": true}
+	// priorityRank sorts "high" first when doing priority-ordered list output.
+	priorityRank = map[string]int{"high": 3, "medium": 2, "low": 1, "": 0}
 )
 
 // GetTodoTool returns the singleton todo tool
 func GetTodoTool() *TodoTool {
 	todoOnce.Do(func() {
 		dataDir := filepath.Join(config.GetMagicHome(), "todos")
-		os.MkdirAll(dataDir, 0755)
+		_ = os.MkdirAll(dataDir, defaultFileSecurity().DefaultDirMode)
 
 		todoTool = &TodoTool{
 			todos:    make(map[string]*TodoItem),
@@ -101,7 +104,7 @@ func (t *TodoTool) save() error {
 	}
 
 	tmp := t.dataFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, defaultFileSecurity().DefaultFileMode); err != nil {
 		return err
 	}
 	return os.Rename(tmp, t.dataFile)
@@ -138,21 +141,36 @@ func (t *TodoTool) Parameters() map[string]interface{} {
 			},
 			"title": map[string]interface{}{
 				"type":        "string",
-				"description": "Title of the todo item (required for create)",
+				"description": "Title of the todo item (required for create; optional for update). Pass empty string on update to clear the existing field explicitly.",
 			},
 			"description": map[string]interface{}{
 				"type":        "string",
-				"description": "Detailed description of the todo item",
+				"description": "Detailed description of the todo item. Pass empty string on update to clear the description explicitly.",
 			},
 			"priority": map[string]interface{}{
 				"type":        "string",
-				"description": "Priority level: low, medium, high",
+				"description": "Priority level: low, medium, high. Pass empty string on update to clear priority (no priority).",
 				"enum":        []string{"low", "medium", "high"},
 			},
 			"status": map[string]interface{}{
 				"type":        "string",
-				"description": "Status: pending, in_progress, completed, cancelled",
+				"description": "Status: pending, in_progress, completed, cancelled. Setting status=completed via update behaves exactly like action=complete (also sets completed_at timestamp).",
 				"enum":        []string{"pending", "in_progress", "completed", "cancelled"},
+			},
+			"filter_status": map[string]interface{}{
+				"type":        "string",
+				"description": "Only for action=list. Filter by status: pending/in_progress/completed/cancelled. Optional.",
+				"enum":        []string{"pending", "in_progress", "completed", "cancelled"},
+			},
+			"filter_priority": map[string]interface{}{
+				"type":        "string",
+				"description": "Only for action=list. Filter by priority: low/medium/high. Optional.",
+				"enum":        []string{"low", "medium", "high"},
+			},
+			"sort": map[string]interface{}{
+				"type":        "string",
+				"description": "Only for action=list. Sort order: created_asc (default), created_desc, priority_desc, updated_desc.",
+				"enum":        []string{"created_asc", "created_desc", "priority_desc", "updated_desc"},
 			},
 		},
 		"required": []string{"action"},
@@ -182,6 +200,48 @@ func (t *TodoTool) Execute(ctx context.Context, args map[string]interface{}) (in
 	}
 }
 
+// newTodoID generates a collision-resistant ID.
+// We previously used UnixNano in base36 only -- on Windows (time resolution ~15ms)
+// and even on Linux inside tight loops this could return duplicates, causing later
+// createTodo calls to silently overwrite the earlier entry (total data loss).
+// We now append 4 random bytes (8 hex chars) as a collision guard:
+// "todo_{base36(nanos)}_{rand8}" -> effectively unique even at 1M creates/sec.
+func newTodoID(now time.Time) string {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Fallback (extremely rare: crypto/rand broken): encode nanos twice with salt
+		return fmt.Sprintf("todo_%x%x", now.UnixNano(), now.Nanosecond()^0x9e3779b9)
+	}
+	return fmt.Sprintf("todo_%s_%s",
+		toBase36(now.UnixNano()),
+		hex.EncodeToString(buf[:]))
+}
+
+// toBase36 mirrors the old strconv.FormatInt(i,36) but avoids pulling in
+// the now-removed strconv import; equivalent semantics to the prior ID prefix.
+func toBase36(i int64) string {
+	if i == 0 {
+		return "0"
+	}
+	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var b [64]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = digits[i%36]
+		i /= 36
+	}
+	if neg {
+		pos--
+		b[pos] = '-'
+	}
+	return string(b[pos:])
+}
+
 func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) {
 	title, ok := args["title"].(string)
 	if !ok || title == "" {
@@ -190,9 +250,8 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 
 	now := time.Now()
 	todo := &TodoItem{
-		// 用 base36 编码时间戳，避免纯数字 ID 被 PII 脱敏器误判为手机号
-		// （如 todo_1784515845... 中的子串匹配 1[3-9]\d{9} 被替换为 [PHONE]）
-		ID:        fmt.Sprintf("todo_%s", strconv.FormatInt(now.UnixNano(), 36)),
+		// Collision-resistant ID (see newTodoID doc)
+		ID:        newTodoID(now),
 		Title:     title,
 		Status:    "pending",
 		CreatedAt: now,
@@ -212,6 +271,16 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Final collision guard: just in case clock+rand somehow repeat for two tasks,
+	// append a counter suffix until the slot is free.
+	baseID := todo.ID
+	suffix := 1
+	for _, exists := t.todos[todo.ID]; exists; _, exists = t.todos[todo.ID] {
+		todo.ID = fmt.Sprintf("%s_%d", baseID, suffix)
+		suffix++
+	}
+
 	t.todos[todo.ID] = todo
 
 	if err := t.save(); err != nil {
@@ -230,29 +299,69 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	// 收集后按创建时间稳定排序，避免 map 遍历随机顺序影响可读性
+	// Optional server-side filters so the LLM doesn't have to pull the entire
+	// list just to find "pending high-priority items", which is the #1 query.
+	filterStatus, _ := args["filter_status"].(string)
+	filterPriority, _ := args["filter_priority"].(string)
+	sortMode, _ := args["sort"].(string)
+	if sortMode == "" {
+		sortMode = "created_asc"
+	}
+
 	items := make([]*TodoItem, 0, len(t.todos))
 	for _, todo := range t.todos {
+		if filterStatus != "" && todo.Status != filterStatus {
+			continue
+		}
+		if filterPriority != "" && todo.Priority != filterPriority {
+			continue
+		}
 		items = append(items, todo)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreatedAt.Before(items[j].CreatedAt)
-	})
+
+	switch sortMode {
+	case "created_desc":
+		sort.Slice(items, func(i, j int) bool { return items[j].CreatedAt.Before(items[i].CreatedAt) })
+	case "priority_desc":
+		// Sort by priority (high first), tie-break by creation time.
+		sort.Slice(items, func(i, j int) bool {
+			ri, rj := priorityRank[items[i].Priority], priorityRank[items[j].Priority]
+			if ri != rj {
+				return ri > rj
+			}
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		})
+	case "updated_desc":
+		sort.Slice(items, func(i, j int) bool { return items[j].UpdatedAt.Before(items[i].UpdatedAt) })
+	default: // created_asc
+		sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
+	}
 
 	todos := make([]map[string]interface{}, 0, len(items))
 	for _, todo := range items {
-		todos = append(todos, map[string]interface{}{
+		row := map[string]interface{}{
 			"id":         todo.ID,
 			"title":      todo.Title,
 			"status":     todo.Status,
 			"priority":   todo.Priority,
 			"created_at": todo.CreatedAt.Format(time.RFC3339),
-		})
+			"updated_at": todo.UpdatedAt.Format(time.RFC3339),
+		}
+		if todo.Description != "" {
+			row["description"] = todo.Description
+		}
+		if todo.CompletedAt != nil {
+			row["completed_at"] = todo.CompletedAt.Format(time.RFC3339)
+		}
+		todos = append(todos, row)
 	}
 
 	return map[string]interface{}{
-		"total": len(todos),
-		"todos": todos,
+		"total":           len(todos),
+		"todos":           todos,
+		"filter_status":   filterStatus,
+		"filter_priority": filterPriority,
+		"sort":            sortMode,
 	}, nil
 }
 
@@ -270,40 +379,73 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
-	if title, ok := args["title"].(string); ok && title != "" {
-		todo.Title = title
-	}
-
-	if desc, ok := args["description"].(string); ok {
-		todo.Description = desc
-	}
-
-	if status, ok := args["status"].(string); ok && status != "" {
-		if !validStatuses[status] {
-			return nil, fmt.Errorf("invalid status: %s (allowed: pending, in_progress, completed, cancelled)", status)
+	// CONSISTENT "key present in args" semantics for every mutable field.
+	// Previous behavior was asymmetric: title/priority required "!= empty"
+	// (so you could never clear them) while description accepted "" as clear.
+	// New rule: if the key is in args AT ALL (checked via comma-ok on the map),
+	// the provided value is applied verbatim -- including empty string, which
+	// is interpreted as the LLM explicitly requesting to clear that field.
+	// If the key is NOT in args, we leave the existing value untouched.
+	if _, hasTitle := args["title"]; hasTitle {
+		if v, ok := args["title"].(string); ok {
+			todo.Title = v
 		}
-		todo.Status = status
 	}
-
-	if priority, ok := args["priority"].(string); ok && priority != "" {
-		if !validPriorities[priority] {
-			return nil, fmt.Errorf("invalid priority: %s (allowed: low, medium, high)", priority)
+	if _, hasDesc := args["description"]; hasDesc {
+		if v, ok := args["description"].(string); ok {
+			todo.Description = v
 		}
-		todo.Priority = priority
 	}
 
-	todo.UpdatedAt = time.Now()
+	changedToCompleted := false
+	if _, hasStatus := args["status"]; hasStatus {
+		if status, ok := args["status"].(string); ok && status != "" {
+			if !validStatuses[status] {
+				return nil, fmt.Errorf("invalid status: %s (allowed: pending, in_progress, completed, cancelled)", status)
+			}
+			prev := todo.Status
+			todo.Status = status
+			if status == "completed" && prev != "completed" {
+				changedToCompleted = true
+			}
+			if status != "completed" {
+				// Moving OUT of completed: clear the completed_at timestamp so
+				// data stays consistent with action=complete's invariants.
+				todo.CompletedAt = nil
+			}
+		}
+	}
+
+	if _, hasPriority := args["priority"]; hasPriority {
+		if priority, ok := args["priority"].(string); ok {
+			if priority != "" && !validPriorities[priority] {
+				return nil, fmt.Errorf("invalid priority: %s (allowed: low, medium, high)", priority)
+			}
+			todo.Priority = priority
+		}
+	}
+
+	now := time.Now()
+	todo.UpdatedAt = now
+	if changedToCompleted {
+		todo.CompletedAt = &now
+	}
 
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
 
-	return map[string]interface{}{
-		"id":      todo.ID,
-		"title":   todo.Title,
-		"status":  todo.Status,
-		"message": "Todo updated successfully",
-	}, nil
+	resp := map[string]interface{}{
+		"id":         todo.ID,
+		"title":      todo.Title,
+		"status":     todo.Status,
+		"updated_at": todo.UpdatedAt.Format(time.RFC3339),
+		"message":    "Todo updated successfully",
+	}
+	if todo.CompletedAt != nil {
+		resp["completed_at"] = todo.CompletedAt.Format(time.RFC3339)
+	}
+	return resp, nil
 }
 
 func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) {
