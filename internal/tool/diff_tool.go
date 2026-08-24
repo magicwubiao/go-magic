@@ -171,47 +171,43 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 	lineEnding := detectLineEnding(content)
 	content = normalizeLineEndings(content)
 
-	// Validate all patches can be applied before making any changes (atomic check).
-	// old_text 与文件内容均规范化为 LF 后匹配，兼容 CRLF 文件。
-	for i, p := range patches {
-		normOld := normalizeLineEndings(p.OldText)
-		if !strings.Contains(content, normOld) {
-			return nil, fmt.Errorf("patch[%d]: old_text not found in file", i)
-		}
-		// Check for ambiguous matches (old_text appears more than once)
-		count := strings.Count(content, normOld)
-		if count > 1 {
-			return nil, fmt.Errorf("patch[%d]: old_text matches %d occurrences in file (ambiguous), please provide more context to uniquely identify the target", i, count)
-		}
-	}
-
-	// Apply all patches
-	originalLines := strings.Split(content, "\n")
+	// Apply all patches sequentially on the string content.
+	//
+	// fix(apply_patch 重复行 bug)：旧实现先按行切片，再用
+	//   replaced := append(originalLines[:idx], newLines...)
+	//   replaced = append(replaced, originalLines[idx+len(oldLines):]...)
+	// 做行级替换。当 len(newLines) > len(oldLines) 且底层数组容量足够时，
+	// 第一个 append 会把 newLines 的尾部覆写进 originalLines 尚未消费的尾部区域，
+	// 第二个 append 再从已被污染的尾部读取，导致插入内容在文件中重复出现。
+	// 改为纯字符串顺序替换（strings.Replace n=1），不存在共享底层数组问题。
+	//
+	// 同时实现真正的原子性：每一步都对"当前内容"重新校验存在性与唯一性。
+	// （旧实现的预校验只针对原始内容，补丁 N 应用后可能破坏补丁 N+1 的前提，
+	// 校验形同虚设；且失败时文件已可能被中间状态覆盖。）
+	working := content
 	totalLinesChanged := 0
 	appliedCount := 0
 
-	for _, p := range patches {
-		oldLines := strings.Split(normalizeLineEndings(p.OldText), "\n")
-		newLines := strings.Split(normalizeLineEndings(p.NewText), "\n")
+	for i, p := range patches {
+		normOld := normalizeLineEndings(p.OldText)
+		normNew := normalizeLineEndings(p.NewText)
 
-		idx := findExactMatch(originalLines, oldLines)
-		if idx < 0 {
-			// This should not happen since we validated above, but guard against it
-			return nil, fmt.Errorf("failed to find exact match for patch in file")
+		count := strings.Count(working, normOld)
+		if count == 0 {
+			return nil, fmt.Errorf("patch[%d]: old_text not found in file (content may have been modified by an earlier patch)", i)
+		}
+		if count > 1 {
+			return nil, fmt.Errorf("patch[%d]: old_text matches %d occurrences in file (ambiguous), please provide more context to uniquely identify the target", i, count)
 		}
 
-		// Replace lines
-		replaced := append(originalLines[:idx], newLines...)
-		replaced = append(replaced, originalLines[idx+len(oldLines):]...)
-		originalLines = replaced
+		working = strings.Replace(working, normOld, normNew, 1)
 
-		// Track lines changed: count removed + added
-		totalLinesChanged += len(oldLines) + len(newLines)
+		totalLinesChanged += strings.Count(normOld, "\n") + strings.Count(normNew, "\n") + 2
 		appliedCount++
 	}
 
 	// Write the result, preserving the file's original line ending style.
-	newContent := convertLineEndings(strings.Join(originalLines, "\n"), lineEnding)
+	newContent := convertLineEndings(working, lineEnding)
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
@@ -222,7 +218,7 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 		"patches_applied":  appliedCount,
 		"total_patches":    len(patchesRaw),
 		"lines_changed":    totalLinesChanged,
-		"final_line_count": len(originalLines),
+		"final_line_count": strings.Count(working, "\n") + 1,
 	}, nil
 }
 
@@ -506,30 +502,6 @@ func countLinesByPrefix(diff, prefix string) int {
 		}
 	}
 	return count
-}
-
-// findExactMatch searches for an exact contiguous match of target lines within source lines.
-// Returns the starting index, or -1 if not found.
-func findExactMatch(source, target []string) int {
-	if len(target) == 0 {
-		return 0
-	}
-	if len(target) > len(source) {
-		return -1
-	}
-	for i := 0; i <= len(source)-len(target); i++ {
-		match := true
-		for j := 0; j < len(target); j++ {
-			if source[i+j] != target[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }
 
 // Ensure DiffPatchTool satisfies the Tool interface at compile time.

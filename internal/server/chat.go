@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -102,21 +104,37 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		resp, err := aiAgent.RunConversation(ctx, req.Message)
 		if err != nil {
 			writeSSE("data: {\"error\":\"" + fmt.Sprintf("%v", err) + "\"}\n\n")
+			// 失败轮次仅记录用户消息与 token 用量；assistant 为空会被跳过，
+			// 不产生空白回答（persistTurnMessages 内部有空内容保护）
+			s.persistTurnMessages(aiAgent, sessionID, req.Message, "")
+			s.recordUsage(aiAgent, sessionID)
 			return
 		}
 
 		// Send content word by word for pseudo-streaming
 		words := strings.Split(resp, "")
+		clientGone := false
 		for _, word := range words {
 			select {
 			case <-ctx.Done():
-				return
+				// 客户端断开/超时时回复已完整生成，仍要落库，避免整轮丢失
+				clientGone = true
 			default:
+			}
+			if clientGone {
+				break
 			}
 			data, _ := json.Marshal(map[string]string{"delta": word})
 			writeSSE("data: " + string(data) + "\n\n")
 		}
-		writeSSE("data: {\"done\":true}\n\n")
+
+		// Save user & assistant messages to session store（即使发送中途断开也保存完整回复）
+		s.persistTurnMessages(aiAgent, sessionID, req.Message, resp)
+		s.recordUsage(aiAgent, sessionID)
+
+		if !clientGone {
+			writeSSE("data: {\"done\":true}\n\n")
+		}
 		return
 	}
 
@@ -125,6 +143,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	toolResultRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
 
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
+	var fullResponse strings.Builder
 	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
 		if done {
 			// Stream finished — closing think tag (if any) already sent by agent
@@ -180,6 +199,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Regular content (includes <think> tags for reasoning/thinking process)
+		fullResponse.WriteString(content)
 		data, _ := json.Marshal(map[string]string{"delta": content})
 		writeSSE("data: " + string(data) + "\n\n")
 	})
@@ -191,8 +211,70 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	writeSSE("data: {\"done\":true}\n\n")
 
+	// Save user & assistant messages to session store。
+	// fix: 流式路径此前完全不落库，导致 Web 对话刷新后丢失；
+	// 即使流式出错，也保留已生成的部分内容。
+	s.persistTurnMessages(aiAgent, sessionID, req.Message, fullResponse.String())
+
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)
+}
+
+// persistTurnMessages 将一轮对话（user + assistant）持久化到 session store。
+// 统一使用 background context：DB 写入不应继承 SSE 请求的超时/取消信号，
+// 否则长对话或客户端断开时会导致保存失败、对话丢失（context deadline exceeded）。
+//
+// 空内容保护：assistant 内容为空时不落库，避免中断/失败后下次打开出现空白回答；
+// 此时仅保存用户消息，便于用户重试。会话行不存在时自动创建，避免静默丢弃。
+func (s *Server) persistTurnMessages(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg string) {
+	if s.sessionStore == nil || aiAgent == nil {
+		return
+	}
+	bgCtx := context.Background()
+	sess, err := s.sessionStore.LoadSession(bgCtx, sessionID)
+	if err != nil {
+		// 会话不存在（例如 /api/chat/stream 未先走创建接口）时自动补建，
+		// 而不是放弃保存导致整轮对话丢失。
+		if err.Error() == "sql: no rows in result set" {
+			now := time.Now()
+			sess = &session.Session{
+				ID:        sessionID,
+				Profile:   s.cfg.Profile,
+				Platform:  "web",
+				Model:     s.cfg.GetCurrentModel(),
+				CreatedAt: now,
+				UpdatedAt: now,
+				Messages:  []types.Message{},
+			}
+		} else {
+			log.Warnf("[Chat] failed to load session %s for persistence: %v", sessionID, err)
+			return
+		}
+	}
+	now := time.Now()
+	if strings.TrimSpace(userMsg) != "" {
+		sess.Messages = append(sess.Messages, types.Message{
+			Role:      "user",
+			Content:   userMsg,
+			Timestamp: now,
+		})
+	}
+	// 关键：assistant 为空不追加 —— 中断/异常的空回复不该出现在历史里
+	if strings.TrimSpace(assistantMsg) != "" {
+		sess.Messages = append(sess.Messages, types.Message{
+			Role:      "assistant",
+			Content:   assistantMsg,
+			Timestamp: now,
+		})
+	}
+	inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
+	sess.InputTokens += inputTokens
+	sess.OutputTokens += outputTokens
+	sess.CacheReadTokens += cacheTokens
+	sess.UpdatedAt = now
+	if err := s.sessionStore.SaveSession(bgCtx, sess); err != nil {
+		log.Errorf("[Chat] failed to save session %s: %v", sessionID, err)
+	}
 }
 
 func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
@@ -314,35 +396,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run agent conversation
-	ctx := context.Background()
-	respContent, err := aiAgent.RunConversation(ctx, req.Message)
+	respContent, err := aiAgent.RunConversation(context.Background(), req.Message)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
 		return
 	}
 
 	// Save to session store with token usage
-	if s.sessionStore != nil {
-		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-			sess.Messages = append(sess.Messages, types.Message{
-				Role:      "user",
-				Content:   req.Message,
-				Timestamp: time.Now(),
-			})
-			sess.Messages = append(sess.Messages, types.Message{
-				Role:      "assistant",
-				Content:   respContent,
-				Timestamp: time.Now(),
-			})
-			// Update token usage from agent
-			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
-			sess.InputTokens += inputTokens
-			sess.OutputTokens += outputTokens
-			sess.CacheReadTokens += cacheTokens
-			sess.UpdatedAt = time.Now()
-			s.sessionStore.SaveSession(ctx, sess)
-		}
-	}
+	s.persistTurnMessages(aiAgent, sessionID, req.Message, respContent)
 
 	// Record usage statistics
 	s.recordUsage(aiAgent, sessionID)

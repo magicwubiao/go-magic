@@ -3,13 +3,18 @@ package tool
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 )
+
+// ErrFileTooLarge 表示文件超过搜索大小限制（跳过扫描）
+var ErrFileTooLarge = errors.New("file too large to scan")
 
 // FileSearchTool 文件内容搜索工具
 type FileSearchTool struct {
@@ -193,9 +198,15 @@ func (t *FileSearchTool) Execute(ctx context.Context, params map[string]interfac
 	totalFiles := 0
 
 	for _, file := range files {
-		matches, err := t.searchInFile(file, regex, contextLines, maxResults-totalMatches)
+		// 尊重上游取消/超时（例如工具执行超时、用户中断），
+		// 避免大目录搜索时无视 deadline 一直跑到底。
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("search interrupted after %d matches: %w", totalMatches, err)
+		}
+
+		matches, err := t.searchInFile(ctx, file, regex, contextLines, maxResults-totalMatches)
 		if err != nil {
-			continue // Skip files that can't be read
+			continue // Skip files that can't be read or are too large
 		}
 
 		if len(matches) > 0 {
@@ -220,70 +231,78 @@ func (t *FileSearchTool) Execute(ctx context.Context, params map[string]interfac
 	return result, nil
 }
 
+// findFiles 收集 dir 下所有匹配 pattern 的普通文件。
+// 注意：filepath.Glob 的 "**" 只是普通的 "*"，不会跨目录分隔符递归匹配，
+// 导致 filepath.Join(dir, "**", pattern) 在多级子目录下几乎必然匹配失败；
+// 而旧的 WalkDir 回退分支又只在 glob 结果为空时才触发，语义混乱。
+// 这里统一改为基于 os.Root 的显式递归遍历：
+//   - 正确递归所有子目录；
+//   - 跳过隐藏目录与 node_modules/vendor/__pycache__ 等常见忽略目录；
+//   - 通过 os.Root 防止符号链接逃逸出搜索根目录。
 func (t *FileSearchTool) findFiles(dir, pattern string) ([]string, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
 	var files []string
-	var walkErr error
-
-	globPattern := filepath.Join(dir, "**", pattern)
-
-	// Use filepath.Glob for simpler pattern matching
-	allFiles, err := filepath.Glob(globPattern)
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // 无权限/已删除的条目直接跳过
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != "." && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "__pycache__") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		matched, mErr := filepath.Match(pattern, d.Name())
+		if mErr != nil {
+			return nil
+		}
+		if matched {
+			files = append(files, filepath.Join(dir, path))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	// If glob doesn't work, fall back to WalkDir
-	if len(allFiles) == 0 {
-		filepath.WalkDir(dir, func(path string, info os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if info.IsDir() {
-				// Skip hidden directories and common ignore directories
-				name := info.Name()
-				if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "__pycache__" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			matched, err := filepath.Match(pattern, info.Name())
-			if err != nil {
-				return nil
-			}
-			if matched {
-				files = append(files, path)
-			}
-			return nil
-		})
-	} else {
-		files = allFiles
-	}
-
-	// Filter out directories
-	var result []string
-	for _, f := range files {
-		if info, err := os.Stat(f); err == nil && !info.IsDir() {
-			result = append(result, f)
-		}
-	}
-
-	sort.Strings(result)
-	return result, walkErr
+	sort.Strings(files)
+	return files, nil
 }
 
-func (t *FileSearchTool) searchInFile(filePath string, regex *regexp.Regexp, contextLines, maxResults int) ([]Match, error) {
+func (t *FileSearchTool) searchInFile(ctx context.Context, filePath string, regex *regexp.Regexp, contextLines, maxResults int) ([]Match, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
+	// 大文件保护：跳过超过 10MB 的文件，避免扫描日志/二进制导致超时
+	if info, statErr := file.Stat(); statErr == nil && info.Size() > 10<<20 {
+		return nil, ErrFileTooLarge
+	}
+
+	if contextLines <= 0 {
+		return t.scanLines(ctx, filePath, file, regex, maxResults)
+	}
+	return t.scanLinesWithContext(ctx, filePath, file, regex, contextLines, maxResults)
+}
+
+// scanLines 逐行扫描并收集匹配（无上下文）
+func (t *FileSearchTool) scanLines(ctx context.Context, filePath string, file *os.File, regex *regexp.Regexp, maxResults int) ([]Match, error) {
 	var matches []Match
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return matches, err
+		}
 		lineNum++
 		line := scanner.Text()
 
@@ -291,10 +310,6 @@ func (t *FileSearchTool) searchInFile(filePath string, regex *regexp.Regexp, con
 		if len(indices) == 0 {
 			continue
 		}
-
-		// Get context lines
-		// Note: For simplicity, we only include the current line
-		// A full implementation would store and include surrounding lines
 
 		for _, idx := range indices {
 			match := Match{
@@ -310,7 +325,62 @@ func (t *FileSearchTool) searchInFile(filePath string, regex *regexp.Regexp, con
 			}
 		}
 	}
+	return matches, scanner.Err()
+}
 
+// scanLinesWithContext 扫描文件并为每个匹配附带前后 N 行上下文
+func (t *FileSearchTool) scanLinesWithContext(ctx context.Context, filePath string, file *os.File, regex *regexp.Regexp, contextLines, maxResults int) ([]Match, error) {
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	var matches []Match
+	lastCtxEnd := -1
+	for i, line := range lines {
+		if err := ctx.Err(); err != nil {
+			return matches, err
+		}
+		indices := regex.FindAllStringIndex(line, -1)
+		if len(indices) == 0 {
+			continue
+		}
+
+		start := i - contextLines
+		if start < 0 {
+			start = 0
+		}
+		end := i + contextLines + 1
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if start < lastCtxEnd {
+			start = lastCtxEnd // 与上一个匹配的上下文重叠时去重
+		}
+		if start >= end {
+			continue
+		}
+		contextBlock := strings.Join(lines[start:end], "\n")
+		lastCtxEnd = end
+
+		for _, idx := range indices {
+			match := Match{
+				File:    filePath,
+				Line:    i + 1,
+				Column:  idx[0] + 1,
+				Content: line,
+				Context: []string{contextBlock},
+			}
+			matches = append(matches, match)
+			if len(matches) >= maxResults {
+				return matches, nil
+			}
+		}
+	}
 	return matches, nil
 }
 

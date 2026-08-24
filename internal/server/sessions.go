@@ -482,7 +482,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				Timestamp:    time.Now(),
 			})
 			sess.UpdatedAt = time.Now()
-			s.sessionStore.SaveSession(ctx, sess)
+			s.sessionStore.SaveSession(context.Background(), sess)
 		}
 	}
 
@@ -526,20 +526,26 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 		// Send as delta chunks
 		words := strings.Split(resp, "")
+		clientGone := false
 		for _, word := range words {
 			select {
 			case <-ctx.Done():
-				return
+				// 客户端断开时回复已完整生成，仍要落库，避免整轮丢失
+				clientGone = true
 			default:
+			}
+			if clientGone {
+				break
 			}
 			data, _ := json.Marshal(map[string]string{"delta": word})
 			if !writeSSE("data: " + string(data) + "\n\n") {
-				return
+				clientGone = true
+				break
 			}
 		}
 
-		// Save assistant message
-		if s.sessionStore != nil {
+		// Save assistant message（即使发送中途断开也保存完整回复）
+		if s.sessionStore != nil && strings.TrimSpace(resp) != "" {
 			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 				sess.Messages = append(sess.Messages, types.Message{
 					Role:      "assistant",
@@ -551,7 +557,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				sess.OutputTokens += outputTokens
 				sess.CacheReadTokens += cacheTokens
 				sess.UpdatedAt = time.Now()
-				s.sessionStore.SaveSession(ctx, sess)
+				s.sessionStore.SaveSession(context.Background(), sess)
 			}
 		}
 
@@ -653,8 +659,11 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		writeSSE("data: " + string(data) + "\n\n")
 	}
 
-	// Save assistant message
-	if s.sessionStore != nil {
+	// Save assistant message。
+	// 空内容保护：中断（用户点停止、超时等）且没有任何已生成内容时，
+	// 不追加空 assistant 消息 —— 否则下次打开会话会出现空白回答气泡；
+	// 用户消息已在流开始前保存，此处跳过即可保持历史干净。
+	if assistantText := strings.TrimSpace(fullResponse.String()); s.sessionStore != nil && assistantText != "" {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			sess.Messages = append(sess.Messages, types.Message{
 				Role:      "assistant",
@@ -666,7 +675,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			sess.OutputTokens += outputTokens
 			sess.CacheReadTokens += cacheTokens
 			sess.UpdatedAt = time.Now()
-			s.sessionStore.SaveSession(ctx, sess)
+			s.sessionStore.SaveSession(context.Background(), sess)
 		}
 	}
 
@@ -741,7 +750,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 				sess.OutputTokens += outputTokens
 				sess.CacheReadTokens += cacheTokens
 				sess.UpdatedAt = time.Now()
-				s.sessionStore.SaveSession(ctx, sess)
+				s.sessionStore.SaveSession(context.Background(), sess)
 			}
 		}
 
