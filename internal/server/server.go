@@ -20,6 +20,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/goal"
@@ -122,6 +123,16 @@ type Server struct {
 
 	// Agent Plugins (OpenAI Agent Plugins 1.0.0):已加载插件及其 MCP 运行时
 	agentPlugins map[string]*agentplugin.ManagedPlugin
+
+	// Global in-process event bus for cross-cutting realtime notifications
+	// (todo updates, memory updates, etc.) that do not require a chat session.
+	globalBus *bus.EventBus
+
+	// globalBusSSEHandlers 是所有订阅 /api/events 的全局 SSE 连接集合，
+	// 由 globalBus 事件驱动推送。
+	globalBusSSEHandlers   map[uint64]func(kind string, payload []byte)
+	globalBusSSEHandlersMu sync.Mutex
+	globalBusSSENextID     uint64
 }
 
 // isAllowedOrigin 校验 origin 是否在允许列表内。
@@ -433,37 +444,47 @@ Your working directory is: %s
 	}
 
 	s := &Server{
-		mu:                 sync.RWMutex{},
-		startTime:          time.Now(),
-		cfg:                cfg,
-		sessionStore:       store,
-		provider:           prov,
-		toolReg:            registry,
-		skillMgr:           skillMgr,
-		magicHome:          magicHome,
-		execPath:           execPath,
-		version:            version,
-		commit:             "unknown",
-		buildDate:          "unknown",
-		agents:             make(map[string]*agent.Agent),
-		disabledSkills:     disabledSkills,
-		cronMgr:            cronMgr,
-		kanbanMgr:          kanbanMgr,
-		pluginMgr:          pluginMgr,
-		groupchatStorage:   groupchatStorage,
-		goalMgr:            goalMgr,
-		cortexMgr:          cortexMgr,
-		approvalMgr:        approvalMgr,
-		usageMgr:           usageMgr,
-		mcpMgr:             mcpMgr,
-		actions:            make(map[string]*ActionStatus),
-		sessionTokens:      make(map[string][2]int),
-		authToken:          authToken,
-		allowedOrigins:     allowedOrigins,
-		shareTokens:        make(map[string]*ShareToken),
-		metricsMgr:         metrics.NewMetrics(),
-		pendingSSEHandlers: make(map[string]func(approval.PendingApprovalInfo)),
+		mu:                   sync.RWMutex{},
+		startTime:            time.Now(),
+		cfg:                  cfg,
+		sessionStore:         store,
+		provider:             prov,
+		toolReg:              registry,
+		skillMgr:             skillMgr,
+		magicHome:            magicHome,
+		execPath:             execPath,
+		version:              version,
+		commit:               "unknown",
+		buildDate:            "unknown",
+		agents:               make(map[string]*agent.Agent),
+		disabledSkills:       disabledSkills,
+		cronMgr:              cronMgr,
+		kanbanMgr:            kanbanMgr,
+		pluginMgr:            pluginMgr,
+		groupchatStorage:     groupchatStorage,
+		goalMgr:              goalMgr,
+		cortexMgr:            cortexMgr,
+		approvalMgr:          approvalMgr,
+		usageMgr:             usageMgr,
+		mcpMgr:               mcpMgr,
+		actions:              make(map[string]*ActionStatus),
+		sessionTokens:        make(map[string][2]int),
+		authToken:            authToken,
+		allowedOrigins:       allowedOrigins,
+		shareTokens:          make(map[string]*ShareToken),
+		metricsMgr:           metrics.NewMetrics(),
+		pendingSSEHandlers:   make(map[string]func(approval.PendingApprovalInfo)),
+		globalBus:            bus.NewEventBus(),
+		globalBusSSEHandlers: make(map[uint64]func(kind string, payload []byte)),
 	}
+
+	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到
+	// globalBus -> SSE 订阅者（前端侧边栏通过 /api/events 订阅）。
+	tool.SetDefaultTodoChangeNotifier(&tool.GlobalBusOrDefaultTodoNotifier{Bus: s.globalBus})
+
+	// 启动一个 goroutine 把 globalBus 里感兴趣的事件（如 todo_update）分发给
+	// 所有 /api/events SSE 订阅者。
+	go s.driveGlobalBusSSESubscribers()
 
 	// 注册全局 pending 回调：按 sessionID 分发到对应 SSE 流。
 	// 仅当 approvalMgr 存在时注册。
@@ -533,6 +554,129 @@ func (s *Server) cleanupInactiveAgents() {
 			count++
 		}
 	}
+}
+
+// driveGlobalBusSSESubscribers 订阅 globalBus 事件，把 todo_update 等广播到全部
+// 当前通过 /api/events 建立的 SSE 连接。如果某个写入方返回错误，连接会被丢弃。
+func (s *Server) driveGlobalBusSSESubscribers() {
+	if s.globalBus == nil {
+		return
+	}
+	sub := s.globalBus.Subscribe(64)
+	defer s.globalBus.Unsubscribe(sub.ID)
+
+	for evt := range sub.C {
+		payload, err := json.Marshal(map[string]interface{}{
+			"type": evt.Kind.String(),
+			"time": evt.Time.UTC().Format(time.RFC3339Nano),
+			"data": evt.Data,
+		})
+		if err != nil {
+			continue
+		}
+
+		s.globalBusSSEHandlersMu.Lock()
+		handlers := make([]func(kind string, payload []byte), 0, len(s.globalBusSSEHandlers))
+		for _, h := range s.globalBusSSEHandlers {
+			handlers = append(handlers, h)
+		}
+		s.globalBusSSEHandlersMu.Unlock()
+
+		for _, h := range handlers {
+			if h != nil {
+				func() {
+					defer func() { _ = recover() }()
+					h(evt.Kind.String(), payload)
+				}()
+			}
+		}
+	}
+}
+
+// registerGlobalBusSSEHandler 添加一个 SSE 订阅回调，返回注销函数。
+func (s *Server) registerGlobalBusSSEHandler(h func(kind string, payload []byte)) (uint64, func()) {
+	s.globalBusSSEHandlersMu.Lock()
+	s.globalBusSSENextID++
+	id := s.globalBusSSENextID
+	s.globalBusSSEHandlers[id] = h
+	s.globalBusSSEHandlersMu.Unlock()
+	return id, func() {
+		s.globalBusSSEHandlersMu.Lock()
+		delete(s.globalBusSSEHandlers, id)
+		s.globalBusSSEHandlersMu.Unlock()
+	}
+}
+
+// handleGlobalEvents 提供独立的全局 SSE 事件订阅端点（不依赖 chat session），
+// 当前主要用于前端侧边栏的待办 todo_update 实时推送；未来可扩展 memory_update 等。
+func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	sseW := newSSEWriter(w, flusher)
+	writeSSE := sseW.Write
+	defer sseW.Close()
+
+	// 立即返回 connected，让前端确认 SSE 已建立
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// 把 bus 事件通过 writeSSE 推给客户端。这里只透传 todo_update、memory_update
+	// 这些「全局安全」的事件，敏感事件（审批、轨迹）需要 session 维度，走 chat 流。
+	allowedKinds := map[string]bool{
+		"todo_update":   true,
+		"memory_update": true,
+	}
+	_, unregister := s.registerGlobalBusSSEHandler(func(kind string, payload []byte) {
+		if !allowedKinds[kind] {
+			return
+		}
+		if !writeSSE("data: " + string(payload) + "\n\n") {
+			cancel()
+		}
+	})
+	defer unregister()
+
+	// 心跳，防止代理和浏览器超时断开
+	heartbeatDone := make(chan struct{})
+	safeGo(func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
+					cancel()
+					return
+				}
+			case <-heartbeatDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
+	<-ctx.Done()
+	close(heartbeatDone)
 }
 
 func createProvider(cfg *appconfig.Config) provider.Provider {
@@ -930,6 +1074,9 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/chat", withCORS(requireAuth(s.handleChat)))
 	mux.HandleFunc("/api/chat/stream", withCORS(requireAuth(s.handleChatStream)))
 
+	// Global realtime events (todo updates, etc.) via SSE (no session binding)
+	mux.HandleFunc("/api/events", withCORS(requireAuth(s.handleGlobalEvents)))
+
 	// Tools
 	mux.HandleFunc("/api/tools", withCORS(requireAuth(s.handleTools)))
 	mux.HandleFunc("/api/tools/statistics", withCORS(requireAuth(s.handleToolsStatistics)))
@@ -1076,6 +1223,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/goals/", withCORS(requireAuth(s.handleGoalByID)))
 	// Goal sessions - get linked sessions with details
 	mux.HandleFunc("/api/goals/sessions/", withCORS(requireAuth(s.handleGoalSessions)))
+
+	// Todos
+	mux.HandleFunc("/api/todos", withCORS(requireAuth(s.handleTodos)))
+	mux.HandleFunc("/api/todos/", withCORS(requireAuth(s.handleTodoByID)))
 
 	// Approval Management
 	mux.HandleFunc("/api/approval/status", withCORS(requireAuth(s.handleApprovalStatus)))

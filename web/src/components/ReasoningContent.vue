@@ -4,8 +4,7 @@
     <div v-if="reasoningPart" class="thinking-block" :class="{ collapsed: !expanded }">
       <button class="thinking-toggle" type="button" @click="expanded = !expanded">
         <span class="thinking-indicator" :class="{ pulsing: isStreaming }"></span>
-        <span class="thinking-title">{{ isStreaming ? t('chat.thinking') : t('chat.thoughtFor') }}</span>
-        <span v-if="durationText" class="thinking-duration">{{ durationText }}</span>
+        <span class="thinking-title">{{ t('chat.thinking') }}</span>
         <n-icon size="14" class="thinking-chevron">
           <ChevronDownOutline v-if="!expanded" />
           <ChevronUpOutline v-else />
@@ -56,57 +55,23 @@ hljs.registerLanguage('markdown', markdown)
 
 const props = defineProps<{
   content: string
-  duration?: string
   streaming?: boolean
 }>()
 
 const { t } = useI18n()
 const expanded = ref(false) // 思考过程默认折叠
 
-// 流式耗时计时
-const startTime = ref<number | null>(null)
-const endTime = ref<number | null>(null)
-const liveTick = ref(0)
-let tickTimer: ReturnType<typeof setInterval> | null = null
-
 const isStreaming = computed(() => props.streaming === true)
 
 watch(isStreaming, (v) => {
   if (v) {
-    if (startTime.value === null) startTime.value = Date.now()
-    if (!tickTimer) {
-      tickTimer = setInterval(() => { liveTick.value++ }, 500)
-    }
     // 流式时默认展开，让用户看到实时思考
     expanded.value = true
   } else {
-    if (tickTimer) {
-      clearInterval(tickTimer)
-      tickTimer = null
-    }
-    endTime.value = Date.now()
     // 流式结束后自动折叠（成品导向）
     expanded.value = false
   }
 }, { immediate: true })
-
-onUnmounted(() => {
-  if (tickTimer) clearInterval(tickTimer)
-})
-
-const durationText = computed(() => {
-  // 优先用外部传入的 duration
-  if (props.duration) return props.duration
-  liveTick.value // 触发实时刷新
-  if (startTime.value === null) return ''
-  const end = endTime.value ?? Date.now()
-  const ms = end - startTime.value
-  if (ms < 1000) return `${Math.round(ms / 100) / 10}s`
-  if (ms < 60000) return `${Math.round(ms / 1000)}s`
-  const m = Math.floor(ms / 60000)
-  const s = Math.round((ms % 60000) / 1000)
-  return `${m}m${s}s`
-})
 
 // ---- 解析 <think>...</think> 分离思考与最终回答 ----
 //

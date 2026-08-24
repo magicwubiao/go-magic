@@ -11,15 +11,28 @@ export interface ChatError {
   code?: string
 }
 
+export interface FileOp {
+  action: string // read, write, delete, list, search, batch, access
+  path: string
+  param?: string
+}
+
 export interface ToolCallEvent {
   id: string
   name: string
   args: string
+  args_text?: string
   success?: boolean
   duration?: string
   content?: string
   status: 'running' | 'completed' | 'error'
+  file_ops?: FileOp[]
+  todo_changed?: boolean
 }
+
+export type { ToolCallEvent as ToolCallSnapshot }
+export type { StreamSegment as TimelineSegment }
+export {}
 
 export interface TaskProgress {
   phase: string
@@ -54,6 +67,15 @@ export interface PendingApprovalCard {
   resolveReason?: string
 }
 
+// 流式渲染 timeline：按"发生顺序"记录 text 段切点和 tool 段，
+// 使思考文本与工具执行在对话中能够互相穿插，而不是工具一律堆在文本最后。
+// - text 段：end = 该段结束时 streamContent 的累计字符长度
+//   （相邻 text 段可以合并显示，end 只用于切片）
+// - tool 段：toolCallId = 对应 ToolCallEvent.id
+export interface StreamSegText { id: string; kind: 'text'; end: number }
+export interface StreamSegTool { id: string; kind: 'tool'; toolCallId: string }
+export type StreamSegment = StreamSegText | StreamSegTool
+
 interface SessionState {
   messages: Message[]
   streaming: boolean
@@ -62,6 +84,10 @@ interface SessionState {
   toolCalls: ToolCallEvent[]
   taskProgress: TaskProgress | null
   pendingApprovals: PendingApprovalCard[]
+  streamingSegments: StreamSegment[]
+  // 上次追加 text 段时 streamContent 的末尾字符长度
+  // （下次 push text 段时 end 必须大于它，否则不产生新段）
+  lastStreamSegEnd: number
 }
 
 function $t(key: string, params?: Record<string, string | number>): string {
@@ -76,6 +102,22 @@ export const useChatStore = defineStore('chat', () => {
   const sessionsHasMore = ref(true)
   const sessionsOffset = ref(0)
   const SESSIONS_LIMIT = 20
+
+  // 事件总线：用于跨 store 通知（例如 tool_result 中 todo_changed=true 时触发待办刷新）
+  type TodoChangeListener = () => void
+  const todoChangeListeners: TodoChangeListener[] = []
+  function onTodoChange(listener: TodoChangeListener) {
+    todoChangeListeners.push(listener)
+    return () => {
+      const i = todoChangeListeners.indexOf(listener)
+      if (i >= 0) todoChangeListeners.splice(i, 1)
+    }
+  }
+  function emitTodoChanged() {
+    todoChangeListeners.forEach(l => {
+      try { l() } catch (e) { console.error(e) }
+    })
+  }
 
   const builtinCommands: Array<Omit<commandsApi.Command, 'description'>> = [
     { name: 'help', usage: '/help', aliases: [], category: 'general' },
@@ -132,6 +174,43 @@ export const useChatStore = defineStore('chat', () => {
     return state?.toolCalls || []
   })
 
+  const streamingSegments = computed((): StreamSegment[] => {
+    const state = activeSessionState.value
+    return state?.streamingSegments || []
+  })
+
+  // 如果当前 streamContent 有新内容还没进入 timeline，
+  // 就追加一个 text 段（只记录 end 偏移，切片在渲染时做）。
+  function pushTextSegmentIfNeeded(sessionId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const end = state.streamContent.length
+    // 只有真的有新增字符，且跟上次位置不一样时才加段。
+    // 同时如果 timeline 末尾已经是 text 段，直接覆盖其 end 即可（避免产生无意义的多段）。
+    if (end <= state.lastStreamSegEnd) return
+    const segs = state.streamingSegments
+    const last = segs[segs.length - 1]
+    if (last && last.kind === 'text') {
+      last.end = end
+    } else {
+      segs.push({ id: `seg_t_${Date.now()}_${end}`, kind: 'text', end })
+    }
+    state.lastStreamSegEnd = end
+  }
+
+  function pushToolSegment(sessionId: string, toolCallId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    // 在插入 tool 段之前，先把当下已经 flush 完的文本切到 timeline 里，
+    // 保证"先出文字，再出该文字之后触发的工具"这个顺序正确。
+    pushTextSegmentIfNeeded(sessionId)
+    state.streamingSegments.push({
+      id: `seg_tc_${toolCallId}_${Date.now()}`,
+      kind: 'tool',
+      toolCallId,
+    })
+  }
+
   const activeToolCalls = computed(() => {
     return toolCalls.value.filter(tc => tc.status === 'running')
   })
@@ -168,6 +247,8 @@ export const useChatStore = defineStore('chat', () => {
         toolCalls: [],
         taskProgress: null,
         pendingApprovals: [],
+        streamingSegments: [],
+        lastStreamSegEnd: 0,
       })
       sessionStates.value = { ...sessionStates.value, [sessionId]: state }
     }
@@ -413,6 +494,7 @@ export const useChatStore = defineStore('chat', () => {
       state.streamBuffer = ''
     }
     sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
+    pushTextSegmentIfNeeded(sessionId)
   }
 
   async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[]): Promise<void> {
@@ -438,6 +520,8 @@ export const useChatStore = defineStore('chat', () => {
     state.streamContent = ''
     state.streamBuffer = ''
     state.toolCalls = []
+    state.streamingSegments = []
+    state.lastStreamSegEnd = 0
     state.taskProgress = null
     // 新一轮对话开始时清空上一轮的审批卡片（此时 streaming=false 已保证无 pending 项）
     state.pendingApprovals = []
@@ -471,12 +555,17 @@ export const useChatStore = defineStore('chat', () => {
           state.streaming = false
           state.taskProgress = null
           if (state.streamContent) {
+            pushTextSegmentIfNeeded(sessionId)
+            const finalToolCalls = [...state.toolCalls]
+            const finalTimeline = [...state.streamingSegments]
             state.messages.push({
               id: Date.now().toString(),
               role: 'assistant' as const,
               content: state.streamContent,
               timestamp: new Date().toISOString(),
               session_id: sessionId,
+              tool_calls_snapshot: finalToolCalls as unknown[],
+              streaming_timeline_snapshot: finalTimeline as unknown[],
             })
             state.streamContent = ''
             loadSessions()
@@ -512,22 +601,38 @@ export const useChatStore = defineStore('chat', () => {
             flushStreamBuffer(sessionId)
             
             const id = `tc_${++toolCallIdCounter}`
+            const argsVal = data.args ?? ''
+            const argsText = typeof argsVal === 'string' ? argsVal : JSON.stringify(argsVal)
             state.toolCalls.push({
               id,
               name: data.name,
-              args: data.args,
+              args: argsText,
+              args_text: data.args_text || argsText,
               status: 'running',
+              file_ops: data.file_ops || [],
             })
+            pushToolSegment(sessionId, id)
             return
           }
 
           if (data.type === 'tool_result') {
             const tc = state.toolCalls.find(t => t.name === data.name && t.status === 'running')
+            const fileOpsFromResult = data.file_ops || []
             if (tc) {
               tc.success = data.success
               tc.duration = data.duration
               tc.content = data.content
               tc.status = data.success ? 'completed' : 'error'
+              // 合并 tool_start 的 file_ops 和 tool_result 的 file_ops
+              const mergedOps = [...(tc.file_ops || []), ...fileOpsFromResult]
+              const seen = new Set<string>()
+              tc.file_ops = mergedOps.filter(op => {
+                const k = `${op.action}|${op.path}`
+                if (seen.has(k)) return false
+                seen.add(k)
+                return true
+              })
+              tc.todo_changed = !!data.todo_changed
             } else {
               state.toolCalls.push({
                 id: `tc_${++toolCallIdCounter}`,
@@ -537,7 +642,12 @@ export const useChatStore = defineStore('chat', () => {
                 duration: data.duration,
                 content: data.content,
                 status: data.success ? 'completed' : 'error',
+                file_ops: fileOpsFromResult,
+                todo_changed: !!data.todo_changed,
               })
+            }
+            if (data.todo_changed) {
+              emitTodoChanged()
             }
             return
           }
@@ -608,6 +718,9 @@ export const useChatStore = defineStore('chat', () => {
 
             // 用 nextTick 让按钮切换先渲染，再处理内容 push 和会话刷新
             const finalContent = state.streamContent
+            pushTextSegmentIfNeeded(sessionId)
+            const finalToolCalls = [...state.toolCalls]
+            const finalTimeline = [...state.streamingSegments]
             nextTick(() => {
               state.messages.push({
                 id: Date.now().toString(),
@@ -615,6 +728,8 @@ export const useChatStore = defineStore('chat', () => {
                 content: finalContent,
                 timestamp: new Date().toISOString(),
                 session_id: sessionId,
+                tool_calls_snapshot: finalToolCalls as unknown[],
+                streaming_timeline_snapshot: finalTimeline as unknown[],
               })
               state.streamContent = ''
               loadSessions()
@@ -642,12 +757,17 @@ export const useChatStore = defineStore('chat', () => {
         // Save any partial content received before disconnect
         if (state.streamContent) {
           const partialContent = state.streamContent
+          pushTextSegmentIfNeeded(sessionId)
+          const finalToolCalls = [...state.toolCalls]
+          const finalTimeline = [...state.streamingSegments]
           state.messages.push({
             id: Date.now().toString(),
             role: 'assistant' as const,
             content: partialContent + '\n\n*[Connection interrupted, partial response saved]*',
             timestamp: new Date().toISOString(),
             session_id: sessionId,
+            tool_calls_snapshot: finalToolCalls as unknown[],
+            streaming_timeline_snapshot: finalTimeline as unknown[],
           })
           state.streamContent = ''
           loadSessions()
@@ -823,6 +943,7 @@ export const useChatStore = defineStore('chat', () => {
     currentWorkDir,
     currentWorkDirUserSet,
     toolCalls,
+    streamingSegments,
     activeToolCalls,
     taskProgress,
     isLongTask,
@@ -848,5 +969,7 @@ export const useChatStore = defineStore('chat', () => {
     resolveChatApproval,
     markApprovalExpired,
     restorePendingApprovals,
+    onTodoChange,
+    emitTodoChanged,
   }
 })

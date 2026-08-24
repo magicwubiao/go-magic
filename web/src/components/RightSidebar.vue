@@ -16,6 +16,70 @@
 
     <!-- Main content -->
     <div class="sidebar-content" v-show="!isCollapsed">
+      <!-- ============ Real-time Todo Panel (Top) ============ -->
+      <div class="todo-panel" :class="{ collapsed: todosPanelCollapsed }">
+        <div class="todo-panel-header" @click="todosPanelCollapsed = !todosPanelCollapsed">
+          <div class="todo-panel-title">
+            <n-icon :component="CheckmarkCircleOutline" :size="14" color="#2d8cf0" />
+            <span class="todo-panel-title-text">{{ t('todos.title') }}</span>
+            <span class="todo-panel-count" v-if="todosStore.activeTodos.length">
+              {{ todosStore.activeTodos.length }}
+            </span>
+          </div>
+          <div class="todo-panel-right" @click.stop>
+            <n-icon
+              class="todo-panel-collapse-icon"
+              :component="todosPanelCollapsed ? ChevronForwardOutline : ChevronDownOutline"
+              :size="12"
+              color="#888"
+            />
+            <n-button
+              quaternary
+              circle
+              size="tiny"
+              @click="loadTodos"
+              :loading="todosStore.loading"
+              :title="t('common.refresh')"
+            >
+              <template #icon><n-icon :component="RefreshOutline" :size="12" /></template>
+            </n-button>
+          </div>
+        </div>
+
+        <div v-if="!todosPanelCollapsed" class="todo-panel-body">
+          <div class="todo-list-wrap" v-if="todosStore.loading && !todosStore.todos.length">
+            <n-spin size="small" style="padding: 12px; display: block; text-align: center;" />
+          </div>
+          <div v-else class="todo-list-wrap">
+            <div class="todo-list">
+              <div
+                v-for="todo in todosStore.activeTodos"
+                :key="todo.id"
+                class="todo-item"
+                :class="[`priority-${todo.priority}`, { done: todo.status === 'completed' }]"
+              >
+                <span
+                  class="todo-check"
+                  :class="{ checked: todo.status === 'completed' }"
+                  :title="todo.status === 'completed' ? t('todos.statusCompleted') : t('todos.statusPending')"
+                >
+                  <n-icon v-if="todo.status === 'completed'" :component="CheckmarkCircleOutline" :size="14" color="#3a8a3a" />
+                  <n-icon v-else :component="CheckboxOutline" :size="14" color="#aaa" />
+                </span>
+                <div class="todo-info">
+                  <span class="todo-title" :title="todo.title + (todo.description ? '\n' + todo.description : '')">{{ todo.title }}</span>
+                  <span v-if="todo.status !== 'completed'" class="todo-priority-dot" :style="{ background: priorityColor(todo.priority) }" :title="priorityLabel(todo.priority)"></span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="!todosStore.todos.length && !todosStore.loading" class="todo-empty">
+              {{ t('todos.noTodos') }}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Tab navigation -->
       <div class="sidebar-tabs">
         <div 
@@ -426,7 +490,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch, nextTick, h } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, NIcon } from 'naive-ui'
 import { 
@@ -451,11 +515,15 @@ import {
   SaveOutline,
   CloseOutline,
   AlertCircleOutline,
+  CheckmarkCircleOutline,
+  CheckboxOutline,
+  CloseCircleOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
 import { useChatStore } from '@/stores/chat'
 import { useConfigStore } from '@/stores/config'
+import { useTodosStore } from '@/stores/todos'
 import type { Goal } from '@/api/goals'
 import { getGoalSessions } from '@/api/goals'
 import * as sessionsApi from '@/api/sessions'
@@ -467,6 +535,23 @@ const message = useMessage()
 const goalsStore = useGoalsStore()
 const chatStore = useChatStore()
 const configStore = useConfigStore()
+const todosStore = useTodosStore()
+
+// ===== Real-time Todo Panel (read-only display) =====
+const todosPanelCollapsed = ref(false)
+
+function loadTodos() {
+  todosStore.loadTodos({
+    sort: 'priority_desc',
+    session_id: chatStore.activeSessionId || undefined,
+  })
+}
+function priorityLabel(p: string): string {
+  return ({ high: t('todos.priorityHigh'), medium: t('todos.priorityMedium'), low: t('todos.priorityLow') } as any)[p] || p
+}
+function priorityColor(p: string): string {
+  return ({ high: '#e44234', medium: '#f0a020', low: '#6a9955' } as any)[p] || '#999'
+}
 
 const isCollapsed = ref(true)
 const activeTab = ref<'goals' | 'files'>('goals')
@@ -556,11 +641,28 @@ const currentGoal = computed(() => goalsStore.currentGoal)
 const activeGoals = computed(() => goalsStore.activeGoals)
 const sessionId = computed(() => chatStore.activeSessionId || '')
 
+let unsubTodoChange: (() => void) | null = null
+let todosPollTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   goalsStore.loadCurrentGoal()
   goalsStore.loadGoals('active')
   configStore.loadConfig()
   loadFiles(chatStore.currentWorkDir || undefined)
+  try { loadTodos() } catch (e) {}
+  todosStore.ensureLiveSubscription()
+  unsubTodoChange = chatStore.onTodoChange(() => {
+    try { loadTodos() } catch (e) {}
+  })
+  todosPollTimer = setInterval(() => {
+    try { loadTodos() } catch (e) {}
+  }, 30000)
+})
+
+onUnmounted(() => {
+  todosStore.releaseLiveSubscription()
+  if (unsubTodoChange) { unsubTodoChange(); unsubTodoChange = null }
+  if (todosPollTimer) { clearInterval(todosPollTimer); todosPollTimer = null }
 })
 
 watch(activeTab, (newTab) => {
@@ -573,6 +675,10 @@ watch(() => chatStore.currentWorkDir, (newDir) => {
   if (activeTab.value === 'files') {
     loadFiles(newDir || undefined)
   }
+})
+
+watch(() => chatStore.activeSessionId, () => {
+  try { loadTodos() } catch (e) {}
 })
 
 // Goals functions
@@ -1033,7 +1139,155 @@ function formatSize(bytes: number): string {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-right: 10px;
+}
+
+/* ---- Todo Panel (Top of right sidebar) ---- */
+.todo-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid #e8e8e8;
+  background: #fcfdff;
+}
+.todo-panel.collapsed .todo-panel-body { display: none; }
+
+.todo-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 8px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  user-select: none;
+}
+.todo-panel-header:hover { background: #f5f8ff; }
+
+.todo-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #333;
+}
+.todo-panel-count {
+  background: #2d8cf0;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 10px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+}
+.todo-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.todo-panel-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.todo-panel-collapse-icon { margin-left: 2px; }
+
+.todo-panel-body {
+  padding: 6px 10px 10px 14px;
+}
+
+.todo-new-box {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.todo-new-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.todo-new-btns { display: flex; gap: 4px; }
+
+.todo-list-wrap {
+  max-height: calc((100vh - 120px) * 0.333);
+  min-height: 140px;
+  overflow-y: auto;
+}
+
+.todo-list { display: flex; flex-direction: column; gap: 2px; }
+.todo-list.completed { opacity: 0.85; margin-top: 4px; }
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  transition: background 0.15s;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+}
+.todo-item:hover { background: #f5f8ff; border-color: #d8e4ff; }
+.todo-item.done { background: #f7fff7; }
+.todo-item.done .todo-title {
+  text-decoration: line-through;
+  color: #888;
+}
+.todo-item.priority-high { border-left: 3px solid #e44234; }
+.todo-item.priority-medium { border-left: 3px solid #f0a020; }
+.todo-item.priority-low { border-left: 3px solid #6a9955; }
+
+.todo-check {
+  flex-shrink: 0;
+  cursor: default;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.todo-check:hover { background: transparent; }
+.todo-check.checked:hover { background: transparent; }
+
+.todo-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.todo-title {
+  font-size: 12px;
+  color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-priority-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.todo-del-btn { opacity: 0.4; flex-shrink: 0; }
+.todo-item:hover .todo-del-btn { opacity: 1; }
+
+.todo-completed-toggle {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed #eee;
+}
+
+.todo-empty {
+  padding: 14px 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #999;
 }
 
 /* Tab navigation */
@@ -1367,6 +1621,23 @@ function formatSize(bytes: number): string {
     background: #1e1e1e !important;
     border-color: #333 !important;
   }
+
+  /* Todo Panel Dark Mode */
+  .todo-panel { background: #1a1a1c; border-bottom-color: #2a2a2c; }
+  .todo-panel-header:hover { background: #222429; }
+  .todo-panel-title { color: #ddd; }
+  .todo-panel-count { background: #3a6cd2; }
+  .todo-empty { color: #666; }
+  .todo-item {
+    background: #232325;
+    border-color: #2e2e30;
+  }
+  .todo-item:hover { background: #2a2d33; border-color: #3a4a70; }
+  .todo-item.done { background: #1d2a1d; }
+  .todo-title { color: #ddd; }
+  .todo-check:hover { background: transparent; }
+  .todo-check.checked:hover { background: transparent; }
+  .todo-completed-toggle { border-top-color: #333; }
   
   .sidebar-tabs {
     border-bottom-color: #333;

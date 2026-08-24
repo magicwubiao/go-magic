@@ -142,6 +142,65 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	toolStartRe := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
 	toolResultRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
 
+	// extractFileOps 从工具参数和结果中提取文件操作信息
+	extractFileOps := func(toolName string, argsStr string, resultContent string) []map[string]interface{} {
+		var fileOps []map[string]interface{}
+		// 从 args 中提取路径参数
+		argsMap := map[string]interface{}{}
+		_ = json.Unmarshal([]byte(argsStr), &argsMap)
+		pathKeys := []string{"file_path", "path", "file", "filename", "dir", "directory", "output_path", "input_path", "target_path", "src_path", "dst_path"}
+		for _, k := range pathKeys {
+			if v, ok := argsMap[k]; ok {
+				if p, ok := v.(string); ok && p != "" {
+					op := map[string]interface{}{"path": p, "param": k}
+					switch toolName {
+					case "read_file", "file_read":
+						op["action"] = "read"
+					case "write_file", "file_edit", "file_write", "file_create":
+						op["action"] = "write"
+					case "delete_file", "file_delete":
+						op["action"] = "delete"
+					case "list_files", "directory_tree":
+						op["action"] = "list"
+					case "search_in_files":
+						op["action"] = "search"
+					case "batch_file_ops":
+						op["action"] = "batch"
+					default:
+						op["action"] = "access"
+					}
+					fileOps = append(fileOps, op)
+				}
+			}
+		}
+		// 如果 args 是文件路径列表/映射，额外提取 (如 batch_file_ops 的 items)
+		if items, ok := argsMap["items"].([]interface{}); ok {
+			for _, it := range items {
+				if itMap, ok := it.(map[string]interface{}); ok {
+					for _, k := range pathKeys {
+						if v, ok := itMap[k]; ok {
+							if p, ok := v.(string); ok && p != "" {
+								op := map[string]interface{}{"path": p, "param": k, "action": "batch"}
+								fileOps = append(fileOps, op)
+							}
+						}
+					}
+				}
+			}
+		}
+		// 去重
+		seen := map[string]bool{}
+		unique := make([]map[string]interface{}, 0, len(fileOps))
+		for _, op := range fileOps {
+			key := fmt.Sprintf("%s|%s", op["action"], op["path"])
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, op)
+			}
+		}
+		return unique
+	}
+
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	var fullResponse strings.Builder
 	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
@@ -167,10 +226,19 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(content, ">>>TOOL_START|") {
 			matches := toolStartRe.FindStringSubmatch(content)
 			if len(matches) > 2 {
+				toolName := matches[1]
+				argsStr := matches[2]
+				fileOps := extractFileOps(toolName, argsStr, "")
+				var argsParsed interface{} = argsStr
+				if json.Valid([]byte(argsStr)) {
+					_ = json.Unmarshal([]byte(argsStr), &argsParsed)
+				}
 				data, _ := json.Marshal(map[string]interface{}{
-					"type": "tool_start",
-					"name": matches[1],
-					"args": matches[2],
+					"type":      "tool_start",
+					"name":      toolName,
+					"args":      argsParsed,
+					"args_text": argsStr,
+					"file_ops":  fileOps,
 				})
 				writeSSE("data: " + string(data) + "\n\n")
 				return
@@ -186,12 +254,21 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				duration := matches[3]
 				toolContent := strings.TrimSpace(matches[4])
 				success := successStr == "true"
+				fileOps := extractFileOps(toolName, "{}", toolContent)
+				// 识别 todo_tool 调用，用于触发实时待办刷新
+				todoChanged := false
+				tnLower := strings.ToLower(toolName)
+				if strings.Contains(tnLower, "todo") || strings.Contains(tnLower, "task") {
+					todoChanged = true
+				}
 				data, _ := json.Marshal(map[string]interface{}{
-					"type":     "tool_result",
-					"name":     toolName,
-					"success":  success,
-					"duration": duration,
-					"content":  toolContent,
+					"type":         "tool_result",
+					"name":         toolName,
+					"success":      success,
+					"duration":     duration,
+					"content":      toolContent,
+					"file_ops":     fileOps,
+					"todo_changed": todoChanged,
 				})
 				writeSSE("data: " + string(data) + "\n\n")
 				return

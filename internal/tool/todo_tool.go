@@ -13,8 +13,63 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
+
+// TodoChangeNotifier 是可选的回调，TodoTool 发生写操作（创建/更新/删除/完成）后调用。
+// 默认用 DefaultTodoChangeNotifier（nil，静默）。
+// 在 server 启动时会把它替换为发送 SSE 事件的实现，让前端侧边栏实时刷新。
+type TodoChangeNotifier interface {
+	NotifyTodoChanged(changedID string, action string)
+}
+
+var (
+	todoChangeNotifierMu sync.RWMutex
+	defaultTodoNotifier  TodoChangeNotifier = nil
+)
+
+// SetDefaultTodoChangeNotifier 设置进程内全局的 todo 变更通知器。
+func SetDefaultTodoChangeNotifier(n TodoChangeNotifier) {
+	todoChangeNotifierMu.Lock()
+	defer todoChangeNotifierMu.Unlock()
+	defaultTodoNotifier = n
+}
+
+func getTodoChangeNotifier() TodoChangeNotifier {
+	todoChangeNotifierMu.RLock()
+	defer todoChangeNotifierMu.RUnlock()
+	return defaultTodoNotifier
+}
+
+// GlobalBusOrDefaultTodoNotifier 是基于 bus.EventBus 的通知器实现（供 server 注册使用）。
+type GlobalBusOrDefaultTodoNotifier struct {
+	Bus *bus.EventBus
+}
+
+func (n *GlobalBusOrDefaultTodoNotifier) NotifyTodoChanged(changedID string, action string) {
+	if n == nil || n.Bus == nil {
+		return
+	}
+	n.Bus.Emit(bus.Event{
+		Kind: bus.EventKindTodoUpdate,
+		Time: time.Now(),
+		Data: map[string]interface{}{
+			"id":     changedID,
+			"action": action,
+		},
+	})
+}
+
+// broadcastTodoChanged 是 todoTool 内部统一的广播封装：
+// 优先走进程内 notifier；如果没注册 notifier，但 bus 存在全局实例（未来扩展），也可兜底；
+// 这里保持低耦合，失败不影响原有写操作返回值。
+func broadcastTodoChanged(changedID, action string) {
+	defer func() { _ = recover() }()
+	if n := getTodoChangeNotifier(); n != nil {
+		n.NotifyTodoChanged(changedID, action)
+	}
+}
 
 // TodoItem represents a single todo item
 type TodoItem struct {
@@ -23,6 +78,7 @@ type TodoItem struct {
 	Description string     `json:"description,omitempty"`
 	Status      string     `json:"status"`             // pending, in_progress, completed, cancelled
 	Priority    string     `json:"priority,omitempty"` // low, medium, high
+	SessionID   string     `json:"session_id,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -184,6 +240,14 @@ func (t *TodoTool) Execute(ctx context.Context, args map[string]interface{}) (in
 		return nil, fmt.Errorf("action is required")
 	}
 
+	// 合并会话上下文：如果 ctx 里有 session_id，但 args 未显式指定，则注入。
+	// 这样 LLM 在某个会话里调用 todo 工具时，写操作会自动归属该会话、读操作自动过滤。
+	if _, has := args["session_id"]; !has {
+		if sid := SessionIDFromContext(ctx); sid != "" {
+			args["session_id"] = sid
+		}
+	}
+
 	switch action {
 	case "create":
 		return t.createTodo(args)
@@ -257,6 +321,9 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	if sid, ok := args["session_id"].(string); ok && sid != "" {
+		todo.SessionID = sid
+	}
 
 	if desc, ok := args["description"].(string); ok {
 		todo.Description = desc
@@ -286,6 +353,7 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
+	broadcastTodoChanged(todo.ID, "create")
 
 	return map[string]interface{}{
 		"id":      todo.ID,
@@ -303,19 +371,41 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 	// list just to find "pending high-priority items", which is the #1 query.
 	filterStatus, _ := args["filter_status"].(string)
 	filterPriority, _ := args["filter_priority"].(string)
+	filterSession, _ := args["session_id"].(string)
+	// "filter_session" 是给 HTTP API 用的显式参数名，和 Execute 注入的 "session_id" 同义
+	if v, ok := args["filter_session"].(string); ok && v != "" {
+		filterSession = v
+	}
 	sortMode, _ := args["sort"].(string)
 	if sortMode == "" {
 		sortMode = "created_asc"
 	}
 
+	pendingCount := 0
+	inProgressCount := 0
+	completedCount := 0
+	totalCount := 0
+
 	items := make([]*TodoItem, 0, len(t.todos))
 	for _, todo := range t.todos {
+		if filterSession != "" && todo.SessionID != filterSession {
+			continue
+		}
 		if filterStatus != "" && todo.Status != filterStatus {
 			continue
 		}
 		if filterPriority != "" && todo.Priority != filterPriority {
 			continue
 		}
+		switch todo.Status {
+		case "pending":
+			pendingCount++
+		case "in_progress":
+			inProgressCount++
+		case "completed":
+			completedCount++
+		}
+		totalCount++
 		items = append(items, todo)
 	}
 
@@ -347,6 +437,9 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 			"created_at": todo.CreatedAt.Format(time.RFC3339),
 			"updated_at": todo.UpdatedAt.Format(time.RFC3339),
 		}
+		if todo.SessionID != "" {
+			row["session_id"] = todo.SessionID
+		}
 		if todo.Description != "" {
 			row["description"] = todo.Description
 		}
@@ -357,11 +450,15 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 	}
 
 	return map[string]interface{}{
-		"total":           len(todos),
-		"todos":           todos,
-		"filter_status":   filterStatus,
-		"filter_priority": filterPriority,
-		"sort":            sortMode,
+		"total":             totalCount,
+		"todos":             todos,
+		"pending_count":     pendingCount,
+		"in_progress_count": inProgressCount,
+		"completed_count":   completedCount,
+		"filter_status":     filterStatus,
+		"filter_priority":   filterPriority,
+		"filter_session_id": filterSession,
+		"sort":              sortMode,
 	}, nil
 }
 
@@ -376,6 +473,12 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 
 	todo, exists := t.todos[id]
 	if !exists {
+		return nil, fmt.Errorf("todo not found: %s", id)
+	}
+
+	// 会话边界保护：如果调用方提供了 session_id（来自 ctx 或显式参数），
+	// 且 todo 本身已归属其他会话，则拒绝修改，避免串会话改数据。
+	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
@@ -434,6 +537,7 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
+	broadcastTodoChanged(todo.ID, "update")
 
 	resp := map[string]interface{}{
 		"id":         todo.ID,
@@ -457,7 +561,13 @@ func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if _, exists := t.todos[id]; !exists {
+	todo, exists := t.todos[id]
+	if !exists {
+		return nil, fmt.Errorf("todo not found: %s", id)
+	}
+
+	// 会话边界保护（同 updateTodo）
+	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
@@ -466,6 +576,7 @@ func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) 
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
+	broadcastTodoChanged(id, "delete")
 
 	return map[string]interface{}{
 		"id":      id,
@@ -487,6 +598,11 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
+	// 会话边界保护（同 updateTodo）
+	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
+		return nil, fmt.Errorf("todo not found: %s", id)
+	}
+
 	now := time.Now()
 	todo.Status = "completed"
 	todo.CompletedAt = &now
@@ -495,6 +611,7 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 	if err := t.save(); err != nil {
 		return nil, fmt.Errorf("failed to save: %v", err)
 	}
+	broadcastTodoChanged(todo.ID, "complete")
 
 	return map[string]interface{}{
 		"id":      todo.ID,

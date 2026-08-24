@@ -38,6 +38,7 @@ const (
 	EventKindPlanUpdate
 	EventKindTrajectory
 	EventKindMemoryUpdate
+	EventKindTodoUpdate
 	EventKindCount
 )
 
@@ -75,6 +76,8 @@ func (k EventKind) String() string {
 		return "trajectory"
 	case EventKindMemoryUpdate:
 		return "memory_update"
+	case EventKindTodoUpdate:
+		return "todo_update"
 	default:
 		return "unknown"
 	}

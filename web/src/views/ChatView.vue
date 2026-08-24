@@ -174,8 +174,14 @@
           <template v-else-if="msg.role === 'assistant'">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
-              <ReasoningContent :content="msg.content" :streaming="false" />
-              <div v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</div>
+              <div class="tool-calls-wrap">
+                <template v-for="item in assistantMessageRenderItems(msg)" :key="item.id">
+                  <div v-if="item.kind === 'text'" class="assistant-content">
+                    <ReasoningContent :content="item.content" :streaming="false" />
+                  </div>
+                  <ToolCallBlock v-else :tool-call="item.toolCall" />
+                </template>
+              </div>
             </div>
           </template>
 
@@ -230,12 +236,8 @@
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
-              <!-- Streaming text -->
-              <div v-if="chatStore.streamContent" class="assistant-content">
-                <ReasoningContent :content="chatStore.streamContent" :streaming="chatStore.streaming" />
-              </div>
-              <!-- Status panel when no content yet -->
-              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
+              <!-- Status panel when no content yet & no running tools -->
+              <div v-if="streamRenderItems.length === 0 && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
                 <div class="status-header">
                   <div class="status-spinner"></div>
                   <span class="status-phase">{{ agentPhase }}</span>
@@ -243,13 +245,15 @@
                 </div>
                 <div class="status-hint">{{ t(thinkingHints[hintIndex]) }}</div>
               </div>
-              <!-- Tool running indicator -->
-              <div v-if="chatStore.activeToolCalls.length > 0 && !chatStore.streamContent" class="agent-status-panel">
-                <div class="status-header">
-                  <div class="status-spinner"></div>
-                  <span class="status-phase">{{ agentPhase }}</span>
-                  <span class="status-elapsed">{{ elapsedDisplay }}</span>
-                </div>
+
+              <!-- Text & tool timeline interleaved -->
+              <div v-if="streamRenderItems.length > 0" class="tool-calls-wrap">
+                <template v-for="item in streamRenderItems" :key="item.id">
+                  <div v-if="item.kind === 'text'" class="assistant-content">
+                    <ReasoningContent :content="item.content" :streaming="chatStore.streaming" />
+                  </div>
+                  <ToolCallBlock v-else :tool-call="item.toolCall" />
+                </template>
               </div>
             </div>
           </div>
@@ -493,15 +497,16 @@ hljs.registerLanguage('json', json)
 hljs.registerLanguage('xml', xml)
 hljs.registerLanguage('css', css)
 hljs.registerLanguage('markdown', markdown)
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type ToolCallEvent, type TimelineSegment } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
+import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, ChevronDownOutline, ChevronForwardOutline, RefreshOutline } from '@vicons/ionicons5'
 import type { UploadFileInfo } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -592,6 +597,81 @@ const agentPhase = computed(() => {
   }
   return t('chat.thinkingPhase')
 })
+
+// 流式渲染/历史消息共用：把 (content + timeline + toolCalls) 切成按顺序穿插的渲染项。
+// - 有 timeline 时严格按 timeline 切片（相邻 text 段合并，末尾自动补 tail）
+// - 没有 timeline（历史老数据 / 会话详情从后端加载还没补快照）时退化为：
+//     整段 text + 末尾所有 toolCalls（保持兼容）
+type StreamRenderItem =
+  | { id: string; kind: 'text'; content: string }
+  | { id: string; kind: 'tool'; toolCall: ToolCallEvent }
+
+function buildMessageRenderItems(
+  content: string,
+  timeline: TimelineSegment[] | null | undefined,
+  toolCalls: ToolCallEvent[] | null | undefined,
+): StreamRenderItem[] {
+  const items: StreamRenderItem[] = []
+  const tools = toolCalls ?? []
+  const segs = timeline ?? []
+
+  if (segs.length === 0) {
+    // ===== 退化：无 timeline 快照 =====
+    if (content) items.push({ id: 'msg_text_all', kind: 'text', content })
+    for (const tc of tools) {
+      items.push({ id: 'msg_tc_' + tc.id, kind: 'tool', toolCall: tc })
+    }
+    return items
+  }
+
+  // ===== 有 timeline 时按段切片 =====
+  let cursor = 0
+  for (const seg of segs) {
+    if (seg.kind === 'text') {
+      const end = Math.min(seg.end, content.length)
+      if (end > cursor) {
+        items.push({
+          id: seg.id,
+          kind: 'text',
+          content: content.slice(cursor, end),
+        })
+        cursor = end
+      }
+    } else {
+      const tc = tools.find(t => t.id === seg.toolCallId)
+      if (tc) {
+        items.push({
+          id: seg.id,
+          kind: 'tool',
+          toolCall: tc,
+        })
+      }
+    }
+  }
+  if (cursor < content.length) {
+    items.push({
+      id: 'seg_tail_' + content.length,
+      kind: 'text',
+      content: content.slice(cursor),
+    })
+  }
+  return items
+}
+
+const streamRenderItems = computed<StreamRenderItem[]>(() => {
+  return buildMessageRenderItems(
+    chatStore.streamContent,
+    chatStore.streamingSegments,
+    chatStore.toolCalls,
+  )
+})
+
+// 历史 assistant 消息（msg）的穿插渲染项
+function assistantMessageRenderItems(msg: sessionsApi.Message): StreamRenderItem[] {
+  const timeline = (msg.streaming_timeline_snapshot ?? []) as TimelineSegment[]
+  const toolCalls = (msg.tool_calls_snapshot ?? []) as ToolCallEvent[]
+  return buildMessageRenderItems(msg.content ?? '', timeline, toolCalls)
+}
 
 // Rotating hints during thinking
 const thinkingHints = [
@@ -1201,7 +1281,6 @@ onMounted(async () => {
   background: #fff;
   height: 100vh;
   overflow: hidden;
-  position: relative;
 }
 
 .sidebar-header {
@@ -1213,12 +1292,9 @@ onMounted(async () => {
 }
 
 .session-list {
-  position: absolute;
-  top: 49px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .profile-group-header {
@@ -1402,6 +1478,14 @@ onMounted(async () => {
   line-height: 1.75;
   word-break: break-word;
   overflow-wrap: break-word;
+}
+
+.tool-calls-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  margin-bottom: 6px;
 }
 
 .system-bubble {

@@ -36,6 +36,14 @@ export interface Message {
   tool_name?: string
   tool_call_id?: string
   images?: string[]
+  files?: unknown[]
+  // 前端附加：assistant 回复对应本轮执行的工具调用摘要（UI 展示用）。
+  // 后端 /sessions/{id}/messages 暂不返回该字段，前端在 streaming 结束时写入内存快照。
+  tool_calls_snapshot?: unknown[]
+  // 前端附加：与 tool_calls_snapshot 搭配的时间线，
+  // 让历史消息中"思考文本 ↔ 工具块"的穿插顺序能和 streaming 时完全一致。
+  // 元素 = {kind:'text', end:number} | {kind:'tool', toolCallId:string}
+  streaming_timeline_snapshot?: unknown[]
 }
 
 export async function getSessions(limit: number = 20, offset: number = 0): Promise<{ sessions: Session[]; total: number }> {
