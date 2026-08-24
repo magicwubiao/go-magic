@@ -27,12 +27,6 @@
             </span>
           </div>
           <div class="todo-panel-right" @click.stop>
-            <n-icon
-              class="todo-panel-collapse-icon"
-              :component="todosPanelCollapsed ? ChevronForwardOutline : ChevronDownOutline"
-              :size="12"
-              color="#888"
-            />
             <n-button
               quaternary
               circle
@@ -43,6 +37,12 @@
             >
               <template #icon><n-icon :component="RefreshOutline" :size="12" /></template>
             </n-button>
+            <n-icon
+              class="todo-panel-collapse-icon"
+              :component="todosPanelCollapsed ? ChevronForwardOutline : ChevronDownOutline"
+              :size="12"
+              color="#888"
+            />
           </div>
         </div>
 

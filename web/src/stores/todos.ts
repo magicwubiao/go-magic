@@ -11,13 +11,18 @@ let globalPollingTimer: ReturnType<typeof setInterval> | null = null
 let globalPollingRefCount = 0
 const GLOBAL_POLLING_INTERVAL = 30 * 1000
 
-function resolveSessionId(explicit?: string): string | undefined {
-  if (explicit) return explicit
+// resolveSessionId 返回"本次 listTodos 应该过滤的 session_id 值"。
+// 显式传的优先；否则取当前 chatStore.activeSessionId。
+// 返回空串代表「仅看未归属任何会话的全局 todo」，不再是"不过滤"。
+// 关键契约：loadTodos 调用 todosApi.listTodos 时必须 ALWAYS 带 session_id key（哪怕是 ""），
+// 后端才会启用严格的"按值过滤"语义，避免首页空会话时把所有会话 todo 混在一起。
+function resolveSessionId(explicit?: string): string {
+  if (explicit !== undefined && explicit !== null) return explicit
   try {
     const chat = useChatStore()
-    return chat.activeSessionId || undefined
+    return chat.activeSessionId || ''
   } catch {
-    return undefined
+    return ''
   }
 }
 
@@ -93,14 +98,21 @@ export const useTodosStore = defineStore('todos', () => {
 
   const sortedTodos = computed(() => {
     const list = [...(todos.value ?? [])]
-    const statusRank: any = { pending: 0, in_progress: 0, completed: 2 }
-    const priorityRank: any = { high: 0, medium: 1, low: 2 }
+    // status 顺序：pending=0 / in_progress=0（未完成靠前），completed=2，cancelled=3
+    const statusRank: Record<string, number> = {
+      pending: 0,
+      in_progress: 0,
+      completed: 2,
+      cancelled: 3,
+    }
+    const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 }
     list.sort((a, b) => {
       const s = (statusRank[a.status] ?? 99) - (statusRank[b.status] ?? 99)
       if (s !== 0) return s
       const p = (priorityRank[a.priority] ?? 99) - (priorityRank[b.priority] ?? 99)
       if (p !== 0) return p
-      return (b.created_at || '').localeCompare(a.created_at || '')
+      // created_asc：旧的在前，新的在后，与后端默认排序一致
+      return (a.created_at || '').localeCompare(b.created_at || '')
     })
     return list
   })
@@ -120,11 +132,19 @@ export const useTodosStore = defineStore('todos', () => {
     try {
       const effectiveSessionId = resolveSessionId(params?.session_id)
       const apiParams = params ? { ...params } : {} as any
-      if (effectiveSessionId) {
-        apiParams.session_id = effectiveSessionId
-      }
+      // 必须 ALWAYS 带 session_id（空串=显式要全局 bucket），
+      // 不能省略；否则后端会把它解释为"完全未传会话 key → 返回全量"，导致跨会话混。
+      apiParams.session_id = effectiveSessionId
       const data = (await todosApi.listTodos(apiParams)) as TodoListResponse
-      todos.value = (data?.todos as TodoItem[]) ?? []
+      // 三路刷新（SSE / 轮询 / chatStore.onTodoChange）竞争时，按 id 去重，避免 UI 上出现重复卡片
+      const seen = new Set<string>()
+      const unique: TodoItem[] = []
+      for (const t of (data?.todos as TodoItem[]) ?? []) {
+        if (!t || !t.id || seen.has(t.id)) continue
+        seen.add(t.id)
+        unique.push(t)
+      }
+      todos.value = unique
       if (data) {
         responseMeta.value = {
           total: data.total ?? 0,

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -339,6 +340,35 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// 同 session_id 范围下按标题去重：如果已经有同标题且状态仍为 pending/in_progress 的项，
+	// 不创建新条目，直接返回现有条目（附带 deduplicated:true 标记）。
+	// 这样 LLM 在持续对话中反复调用 action=create 同一个步骤标题时，不会产生重复待办。
+	// 已 completed/cancelled 的同名项不阻挡，允许重新开启新任务。
+	for _, existing := range t.todos {
+		if existing.SessionID != todo.SessionID {
+			continue
+		}
+		if strings.EqualFold(existing.Title, todo.Title) &&
+			(existing.Status == "pending" || existing.Status == "in_progress") {
+			// 触发一次 update 广播，让前端侧边栏刷新（理论上内容没变化，但确保 UI 同步）。
+			broadcastTodoChanged(existing.ID, "update")
+			resp := map[string]interface{}{
+				"id":           existing.ID,
+				"title":        existing.Title,
+				"status":       existing.Status,
+				"deduplicated": true,
+				"message":      "Todo with same title already active; returning existing entry",
+			}
+			if existing.Priority != "" {
+				resp["priority"] = existing.Priority
+			}
+			if existing.SessionID != "" {
+				resp["session_id"] = existing.SessionID
+			}
+			return resp, nil
+		}
+	}
+
 	// Final collision guard: just in case clock+rand somehow repeat for two tasks,
 	// append a counter suffix until the slot is free.
 	baseID := todo.ID
@@ -386,10 +416,24 @@ func (t *TodoTool) listTodos(args map[string]interface{}) (interface{}, error) {
 	completedCount := 0
 	totalCount := 0
 
+	// 会话过滤分两种语义（由 filterSessionExplicitRequested 区分）：
+	//   - 显式传了 session_id / filter_session（哪怕是空串 ""）：严格按传入值过滤。
+	//     空串意味着"只看全局 / 未归属任何会话的 todo"，避免首页漏会话时把所有会话混在一起展示。
+	//   - 完全没传会话参数（Execute 内也没有 ctx 注入）：返回全部（兜底语义，仅当外部调用者完全未感知 session 时启用）。
+	hasSessionArg := false
+	if _, ok := args["session_id"]; ok {
+		hasSessionArg = true
+	}
+	if _, ok := args["filter_session"]; ok {
+		hasSessionArg = true
+	}
+
 	items := make([]*TodoItem, 0, len(t.todos))
 	for _, todo := range t.todos {
-		if filterSession != "" && todo.SessionID != filterSession {
-			continue
+		if hasSessionArg {
+			if todo.SessionID != filterSession {
+				continue
+			}
 		}
 		if filterStatus != "" && todo.Status != filterStatus {
 			continue
@@ -597,10 +641,18 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 	if !exists {
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
-
 	// 会话边界保护（同 updateTodo）
 	if callerSession, _ := args["session_id"].(string); callerSession != "" && todo.SessionID != "" && todo.SessionID != callerSession {
 		return nil, fmt.Errorf("todo not found: %s", id)
+	}
+	// 已 completed → 短路：不重打 completed_at、不 save、不 broadcast，避免无谓 IO
+	if todo.Status == "completed" {
+		return map[string]interface{}{
+			"id":      todo.ID,
+			"title":   todo.Title,
+			"status":  todo.Status,
+			"message": "Todo already completed",
+		}, nil
 	}
 
 	now := time.Now()

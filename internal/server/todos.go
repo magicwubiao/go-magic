@@ -58,21 +58,20 @@ func (s *Server) listTodos(w http.ResponseWriter, r *http.Request) {
 	filterPriority := r.URL.Query().Get("filter_priority")
 	filterSession := pickSessionIDFromRequest(r, "")
 	sortMode := r.URL.Query().Get("sort")
-	if sortMode == "" {
-		sortMode = "priority_desc"
-	}
 
+	// 注意：始终把 session_id 写进 args（空串也写）。
+	// TodoTool.listTodos 会以 "key 是否存在于 args" 为界区分两种语义：
+	//   存在 session_id/filter_session → 严格按值过滤（空串=只看全局未归属）
+	//   完全不带 session 相关 key → 返回全部（仅 LLM 层"未感知会话"场景兜底）
 	args := map[string]interface{}{
-		"action": "list",
+		"action":     "list",
+		"session_id": filterSession,
 	}
 	if filterStatus != "" {
 		args["filter_status"] = filterStatus
 	}
 	if filterPriority != "" {
 		args["filter_priority"] = filterPriority
-	}
-	if filterSession != "" {
-		args["session_id"] = filterSession
 	}
 	if sortMode != "" {
 		args["sort"] = sortMode
@@ -89,12 +88,11 @@ func (s *Server) listTodos(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getTodo(w http.ResponseWriter, r *http.Request, id string) {
 	todoTool := tool.GetTodoTool()
 	filterSession := pickSessionIDFromRequest(r, "")
+	// 始终传 session_id（空串=只看全局 bucket），与 listTodos 一致。
 	args := map[string]interface{}{
 		"action":        "list",
 		"filter_status": "",
-	}
-	if filterSession != "" {
-		args["session_id"] = filterSession
+		"session_id":    filterSession,
 	}
 	result, err := todoTool.Execute(r.Context(), args)
 	if err != nil {
@@ -138,17 +136,15 @@ func (s *Server) createTodo(w http.ResponseWriter, r *http.Request) {
 
 	todoTool := tool.GetTodoTool()
 	args := map[string]interface{}{
-		"action": "create",
-		"title":  req.Title,
+		"action":     "create",
+		"title":      req.Title,
+		"session_id": sessionID,
 	}
 	if req.Description != "" {
 		args["description"] = req.Description
 	}
 	if req.Priority != "" {
 		args["priority"] = req.Priority
-	}
-	if sessionID != "" {
-		args["session_id"] = sessionID
 	}
 
 	result, err := todoTool.Execute(r.Context(), args)
@@ -176,8 +172,9 @@ func (s *Server) updateTodo(w http.ResponseWriter, r *http.Request, id string) {
 
 	todoTool := tool.GetTodoTool()
 	args := map[string]interface{}{
-		"action": "update",
-		"id":     id,
+		"action":     "update",
+		"id":         id,
+		"session_id": sessionID,
 	}
 	// 这里必须显式带 key（哪怕为空串），TodoTool 用 "key present in args" 语义
 	args["title"] = req.Title
@@ -185,9 +182,6 @@ func (s *Server) updateTodo(w http.ResponseWriter, r *http.Request, id string) {
 	args["priority"] = req.Priority
 	if req.Status != "" {
 		args["status"] = req.Status
-	}
-	if sessionID != "" {
-		args["session_id"] = sessionID
 	}
 
 	result, err := todoTool.Execute(r.Context(), args)
@@ -203,11 +197,9 @@ func (s *Server) deleteTodo(w http.ResponseWriter, r *http.Request, id string) {
 
 	todoTool := tool.GetTodoTool()
 	args := map[string]interface{}{
-		"action": "delete",
-		"id":     id,
-	}
-	if sessionID != "" {
-		args["session_id"] = sessionID
+		"action":     "delete",
+		"id":         id,
+		"session_id": sessionID,
 	}
 	result, err := todoTool.Execute(r.Context(), args)
 	if err != nil {
