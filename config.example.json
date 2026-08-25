@@ -58,6 +58,12 @@
   "bot_mode": {
     "enabled": false
   },
+  "agent": {
+    "goal_max_turns": 20,
+    "max_turns": 150,
+    "max_iterations": 200,
+    "max_token_budget": 0
+  },
   "privacy": {
     "enabled": true,
     "redact_phone": true,

@@ -42,6 +42,10 @@
             <n-input-number v-model:value="agentForm.max_turns" :min="1" :max="500" />
             <span style="margin-left: 12px; color: #999;">{{ t('config.maxTurnsHint') }}</span>
           </n-form-item>
+          <n-form-item :label="t('config.maxIterations')">
+            <n-input-number v-model:value="agentForm.max_iterations" :min="1" :max="2000" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.maxIterationsHint') }}</span>
+          </n-form-item>
           <n-divider style="margin: 8px 0 24px;" />
           <h3 style="margin: 0 0 16px 0;">{{ t('config.botMode') }}</h3>
           <n-form-item :label="t('config.botModeEnabled')">
@@ -305,7 +309,8 @@ const botModeNeedsRestart = computed(
 
 const agentForm = reactive({
   goal_max_turns: 60,
-  max_turns: 60,
+  max_turns: 150,
+  max_iterations: 200,
 })
 
 // Bot Mode section on the Agent tab (config.bot_mode.*)
@@ -365,9 +370,11 @@ function populateFromConfig(cfg: any) {
 
   const agent = cfg.agent || {}
   agentForm.goal_max_turns = agent.goal_max_turns || 60
-  // 0 means "use built-in default (60)"; show the effective value in UI.
+  // 0 means "use built-in default"; show the effective value in UI.
   const maxTurns = Number(agent.max_turns) || 0
-  agentForm.max_turns = maxTurns > 0 ? maxTurns : 60
+  agentForm.max_turns = maxTurns > 0 ? maxTurns : 150
+  const maxIterations = Number(agent.max_iterations) || 0
+  agentForm.max_iterations = maxIterations > 0 ? maxIterations : 200
 
   const botMode = cfg.bot_mode || {}
   botModeForm.enabled = botMode.enabled === true
@@ -425,6 +432,7 @@ async function saveAgent() {
       agent: {
         goal_max_turns: agentForm.goal_max_turns,
         max_turns: agentForm.max_turns,
+        max_iterations: agentForm.max_iterations,
       },
       bot_mode: {
         enabled: botModeForm.enabled,
