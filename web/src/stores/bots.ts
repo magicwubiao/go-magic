@@ -7,6 +7,9 @@ export const useBotsStore = defineStore('bots', () => {
   const bots = ref<Bot[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  // True when the backend reports bot mode is not running (503), so the UI
+  // can show a warning banner and disable creation instead of failing blindly.
+  const modeDisabled = ref(false)
 
   // Per-bot chat state (single active chat panel)
   const activeBotName = ref<string | null>(null)
@@ -20,8 +23,11 @@ export const useBotsStore = defineStore('bots', () => {
     error.value = null
     try {
       bots.value = await botsApi.getBots()
+      modeDisabled.value = false
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Unknown error'
+      // 503 = bot mode not running on the server
+      modeDisabled.value = /HTTP 503/.test(error.value) || error.value.includes('bot mode')
       bots.value = []
     } finally {
       loading.value = false
@@ -96,11 +102,40 @@ export const useBotsStore = defineStore('bots', () => {
       timestamp: Date.now(),
     })
     sending.value = true
+    // Streaming assistant bubble: grows as deltas arrive.
+    const streamId = 'stream_' + Date.now()
+    messages.value.push({
+      id: streamId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    })
     try {
-      // sendBotChat blocks until the bot finishes its turn
-      const reply = await botsApi.sendBotChat(name, text)
-      messages.value.push(reply)
+      // Prefer SSE streaming; falls back to blocking endpoint internally.
+      const reply = await botsApi.sendBotChatStream(name, text, {
+        onDelta: (delta) => {
+          const bubble = messages.value.find(m => m.id === streamId)
+          if (bubble) {
+            bubble.content += delta
+            bubble.timestamp = Date.now()
+          }
+        },
+      })
+      // Replace the growing bubble with the authoritative reply.
+      const idx = messages.value.findIndex(m => m.id === streamId)
+      if (idx >= 0) {
+        if (reply.content) {
+          messages.value[idx] = reply
+        } else {
+          messages.value.splice(idx, 1)
+        }
+      }
     } catch (e) {
+      // Drop the empty streaming bubble on error.
+      const idx = messages.value.findIndex(m => m.id === streamId)
+      if (idx >= 0 && !messages.value[idx].content) {
+        messages.value.splice(idx, 1)
+      }
       throw e
     } finally {
       sending.value = false
@@ -134,7 +169,7 @@ export const useBotsStore = defineStore('bots', () => {
   }
 
   return {
-    bots, loading, error,
+    bots, loading, error, modeDisabled,
     activeBotName, messages, routines, chatLoading, sending,
     loadBots, createBot, updateBot, deleteBot,
     openChat, closeChat, refreshChat, sendMessage,

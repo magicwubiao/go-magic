@@ -20,9 +20,16 @@ type pendingMessage struct {
 	Text      string
 	From      string // "user", "bot:<tag>", or "" for routines
 	Timestamp time.Time
+	// RoutineID is set when From == "": identifies which routine produced
+	// this message so the worker can write back last-run status after the
+	// turn finishes (success/failed).
+	RoutineID string
 	// replyCh, when set, receives the turn result synchronously (used by
 	// SendToBot so gateway/CLI callers block until this exact turn finishes).
 	replyCh chan turnResult
+	// onDelta, when set, receives incremental assistant output while the
+	// worker streams this turn (SendToBotStream). May be nil.
+	onDelta StreamHandler
 }
 
 // turnResult carries one completed agent turn to a synchronous caller.
@@ -141,6 +148,21 @@ func (m *Manager) Stop() {
 	for _, sched := range m.routines {
 		sched.Stop()
 	}
+}
+
+// ReloadConfig swaps in the updated global config so subsequent agent turns
+// pick up new bot_mode settings (history window, max_turns, protocol
+// injection) without a restart. Toggling bot_mode.enabled itself still
+// requires a process restart: the manager is created/destroyed only at
+// server start/stop.
+func (m *Manager) ReloadConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	m.mu.Lock()
+	m.cfg = cfg
+	m.mu.Unlock()
+	log.Infof("[BotMode] Config reloaded (history_window=%d)", m.historyWindow())
 }
 
 // workerLoop drains one bot's queue sequentially.
@@ -280,14 +302,43 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	reply, err := ag.RunConversation(runCtx, msg.Text)
-	if err != nil {
-		log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
-		reply = fmt.Sprintf("(error: %v)", err)
+	var reply string
+	if msg.onDelta != nil {
+		// Streaming user turn: forward assistant deltas to the caller while
+		// keeping the same serialized queue/persistence semantics.
+		var sb strings.Builder
+		streamErr := ag.RunConversationStream(runCtx, msg.Text, func(content string, done bool) {
+			if done || content == "" {
+				return
+			}
+			sb.WriteString(content)
+			msg.onDelta(content, false)
+		})
+		reply = sb.String()
+		if streamErr != nil {
+			err = streamErr
+			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
+			reply = fmt.Sprintf("(error: %v)", err)
+		}
+	} else {
+		reply, err = ag.RunConversation(runCtx, msg.Text)
+		if err != nil {
+			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
+			reply = fmt.Sprintf("(error: %v)", err)
+		}
 	}
 
 	// Persist canonical chat after every turn.
 	m.saveHistory(rt.cfg.Name, ag.GetHistory())
+
+	// Write back routine last-run status when this turn came from a routine.
+	if msg.RoutineID != "" {
+		status := "success"
+		if err != nil {
+			status = "failed: " + err.Error()
+		}
+		m.recordRoutineResult(rt.cfg.Name, msg.RoutineID, status)
+	}
 
 	// Deliver the result to a synchronous caller if one is waiting.
 	if msg.replyCh != nil {
@@ -360,6 +411,46 @@ func (m *Manager) SendToBot(botName, text string) (string, error) {
 		Text:    text,
 		From:    "user",
 		replyCh: make(chan turnResult, 1),
+	}
+
+	if err := m.EnqueueMsg(key, msg); err != nil {
+		return "", err
+	}
+
+	select {
+	case res := <-msg.replyCh:
+		return res.Reply, res.Err
+	case <-m.stopCh:
+		return "", fmt.Errorf("bot manager shutting down")
+	}
+}
+
+// StreamHandler receives incremental assistant output for one streaming turn.
+type StreamHandler func(content string, done bool)
+
+// SendToBotStream is the streaming variant of SendToBot: the turn still runs
+// serialized on the bot's worker queue (same canonical session guarantees),
+// but assistant deltas are forwarded to onDelta as they are generated.
+// onDelta may be nil; the full reply is also returned when the turn ends.
+func (m *Manager) SendToBotStream(botName, text string, onDelta StreamHandler) (string, error) {
+	key := strings.ToLower(botName)
+
+	m.mu.Lock()
+	rt, ok := m.bots[key]
+	m.mu.Unlock()
+	if !ok || rt == nil {
+		return "", fmt.Errorf("bot not found: %s", botName)
+	}
+	if onDelta == nil {
+		// No callback: behave exactly like SendToBot.
+		return m.SendToBot(botName, text)
+	}
+
+	msg := pendingMessage{
+		Text:    text,
+		From:    "user",
+		replyCh: make(chan turnResult, 1),
+		onDelta: onDelta,
 	}
 
 	if err := m.EnqueueMsg(key, msg); err != nil {
@@ -459,11 +550,71 @@ func (m *Manager) loadHistory(name string) []provider.Message {
 	return out
 }
 
+// defaultHistoryWindow is the fallback cap for canonical chat length when
+// bot_mode.history_window is unset.
+const defaultHistoryWindow = 200
+
+// historyWindow returns the configured canonical-chat message cap (min 20).
+func (m *Manager) historyWindow() int {
+	w := 0
+	if m.cfg != nil && m.cfg.BotMode != nil {
+		w = m.cfg.BotMode.HistoryWindow
+	}
+	if w <= 0 {
+		w = defaultHistoryWindow
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// truncateHistoryAtTurnBoundary trims a provider-message history to at most
+// window messages, cutting back whole turns (a turn starts at a "user"
+// message and includes everything before the next "user" message) so tool
+// calls/results are never separated from their prompt. The system prompt
+// entry (leading "system" roles) is always preserved. Returns the possibly-
+// unmodified slice and whether any trim happened.
+func truncateHistoryAtTurnBoundary(history []provider.Message, window int) ([]provider.Message, bool) {
+	if window <= 0 || len(history) <= window {
+		return history, false
+	}
+	// Keep the leading system prompt(s).
+	start := 0
+	for start < len(history) && history[start].Role == "system" {
+		start++
+	}
+	// Drop whole turns from the front until we fit in the window.
+	for len(history)-start > window && start < len(history) {
+		if history[start].Role != "user" {
+			// Orphaned tool/result entry without a leading user message.
+			start++
+			continue
+		}
+		end := start + 1
+		for end < len(history) && history[end].Role != "user" {
+			end++
+		}
+		if len(history)-end == 0 {
+			break // Would erase the entire conversation; keep as-is.
+		}
+		start = end
+	}
+	if start >= len(history) || len(history)-start > window {
+		return history, false
+	}
+	return history[start:], true
+}
+
 // saveHistory persists the canonical chat (skipping the system prompt entry,
-// which is rebuilt fresh each launch).
+// which is rebuilt fresh each launch). The stored history is capped by the
+// configured history window so long-running bots don't grow without bound;
+// trimming happens on user-turn boundaries only.
 func (m *Manager) saveHistory(name string, history []provider.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	trimmed, didTrim := truncateHistoryAtTurnBoundary(history, m.historyWindow())
 
 	sessID := CanonicalSessionID(name)
 
@@ -472,13 +623,23 @@ func (m *Manager) saveHistory(name string, history []provider.Message) {
 		Name:     fmt.Sprintf("Bot Chat: %s", name),
 		Profile:  name,
 		Platform: "bot",
-		Messages: make([]types.Message, 0, len(history)),
+		Messages: make([]types.Message, 0, len(trimmed)),
 	}
-	for _, msg := range history {
+	for _, msg := range trimmed {
 		sess.Messages = append(sess.Messages, msg)
 	}
 	if err := m.sessions.SaveSession(ctx, sess); err != nil {
 		log.Warnf("[BotMode] Failed to persist chat for %s: %v", name, err)
+	}
+
+	// Keep the live agent's in-memory history aligned with what was saved,
+	// otherwise context grows unbounded even though disk stays trimmed.
+	if didTrim {
+		m.mu.Lock()
+		if rt, ok := m.bots[strings.ToLower(name)]; ok && rt != nil && rt.ag != nil {
+			rt.ag.SetHistory(trimmed)
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -666,4 +827,32 @@ func (m *Manager) rootCtxOrBackground() context.Context {
 		return m.rootCtx
 	}
 	return context.Background()
+}
+
+// recordRoutineResult writes back a routine's last-run timestamp and status
+// after its turn finishes in the worker ("success" or "failed: <err>").
+// Called from processMessage; safe to call for unknown routine IDs.
+func (m *Manager) recordRoutineResult(botName, routineID, status string) {
+	routines, err := m.store.LoadRoutines(botName)
+	if err != nil {
+		log.Warnf("[BotMode] Failed to load routines for status write-back (%s): %v", botName, err)
+		return
+	}
+	now := time.Now().Unix()
+	found := false
+	for _, r := range routines {
+		if r.ID == routineID {
+			r.LastRun = &now
+			r.LastStatus = status
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Routine was deleted while its message sat in the queue.
+		return
+	}
+	if err := m.store.SaveRoutines(botName, routines); err != nil {
+		log.Warnf("[BotMode] Failed to save routine status for %s: %v", botName, err)
+	}
 }

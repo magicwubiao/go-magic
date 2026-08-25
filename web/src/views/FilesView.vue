@@ -407,7 +407,7 @@ async function downloadWithAuth(url: string, filename: string) {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  message.success(t('common.downloadComplete'))
+  message.success(t('common.downloadStarted'))
 }
 
 function formatSize(bytes: number): string {

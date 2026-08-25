@@ -608,6 +608,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 		}
 
+		// Bot Mode: history_window / inject_bot_protocol apply to the running
+		// manager immediately; toggling enabled requires a full restart, which
+		// the UI surfaces as a warning banner (bot_mode.enabled is read by
+		// initBotMode only when the manager is (re)created).
+		if _, ok := expanded["bot_mode"]; ok && s.botManager != nil {
+			s.botManager.ReloadConfig(s.cfg)
+		}
+
 		// Return updated config
 		jsonResponse(w, s.cfg)
 	default:

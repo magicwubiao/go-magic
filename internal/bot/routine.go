@@ -29,11 +29,17 @@ func RoutineJobName(botName, routineName string) string {
 }
 
 // NewRoutineScheduler creates (but does not start) a scheduler for one bot.
+// The cron instance accepts an optional leading seconds field so that both
+// "0 9 * * *" (5 fields) and "*/10 * * * * *" (6 fields) schedules work —
+// matching the parser used for validation in AddRoutine.
 func NewRoutineScheduler(m *Manager, cfg *Config) *RoutineScheduler {
+	parser := cron.NewParser(
+		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
+	)
 	return &RoutineScheduler{
 		manager:  m,
 		botCfg:   cfg,
-		cron:     cron.New(),
+		cron:     cron.New(cron.WithParser(parser)),
 		entryIDs: make(map[string]cron.EntryID),
 	}
 }
@@ -110,13 +116,23 @@ func (s *RoutineScheduler) runRoutine(routineID string) {
 	prompt := target.Prompt
 
 	// Fire-and-forget into the bot's queue so execution stays serialized
-	// with regular chat turns on the same canonical session.
-	if err := s.manager.Enqueue(s.botCfg.Name, prompt, ""); err != nil {
+	// with regular chat turns on the same canonical session. RoutineID is
+	// carried so the worker writes back last-run status after the turn.
+	if err := s.manager.EnqueueMsg(s.botCfg.Name, pendingMessage{
+		Text:      prompt,
+		From:      "",
+		Timestamp: time.Now(),
+		RoutineID: target.ID,
+	}); err != nil {
 		log.Warnf("[BotMode] Routine %q enqueue failed for %s: %v", target.Name, s.botCfg.Name, err)
+		target.LastRun = &now
+		target.LastStatus = "failed: enqueue error"
+		s.persistRoutines(routines)
 		return
 	}
 
-	// Record last-run status.
+	// Record that the routine fired (final success/failed status lands via
+	// recordRoutineResult once the worker finishes this turn).
 	target.LastRun = &now
 	target.LastStatus = "triggered"
 	s.persistRoutines(routines)

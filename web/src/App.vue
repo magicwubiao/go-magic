@@ -204,11 +204,32 @@ body {
 
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
+/* 滚动条默认隐藏,悬停/滚动所在容器时才显示 */
 ::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
+  background: transparent;
   border-radius: 3px;
+  transition: background 0.3s ease;
+}
+
+/* Chrome/Edge/Safari: 悬停在可滚动容器上时 thumb 淡入 */
+*:hover::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+}
+*::-webkit-scrollbar-thumb:hover,
+*:hover::-webkit-scrollbar-thumb:hover {
+  background: #9ea3ab;
+}
+
+/* Firefox: 默认隐藏,hover 时显示 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: #c0c4cc transparent;
 }
 
 .full-content {

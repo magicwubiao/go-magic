@@ -68,7 +68,7 @@
           <n-button :loading="botsStore.loading" @click="botsStore.loadBots()">
             <template #icon><n-icon><RefreshOutline /></n-icon></template>
           </n-button>
-          <n-button type="primary" @click="openCreateModal">+ {{ t('bots.createBot') }}</n-button>
+          <n-button type="primary" :disabled="botModeDisabled" @click="openCreateModal">+ {{ t('bots.createBot') }}</n-button>
         </n-space>
       </n-space>
 
@@ -248,7 +248,8 @@ const activeBot = computed(() =>
 // The list endpoint already embeds runtime info; keep a non-null object for template use
 const activeBotObj = computed<Bot | null>(() => activeBot.value)
 
-const botModeDisabled = computed(() => false)
+// Driven by the store: set when GET /api/bots returns 503 (bot mode off).
+const botModeDisabled = computed(() => botsStore.modeDisabled)
 
 function cardMenuOptions(b: Bot) {
   return [

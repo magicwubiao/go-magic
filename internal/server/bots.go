@@ -102,6 +102,8 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotRoutineByID(w, r, name, parts[2])
 	case len(parts) == 2 && parts[1] == "chat":
 		s.handleBotChat(w, r, name)
+	case len(parts) == 3 && parts[1] == "chat" && parts[2] == "stream":
+		s.handleBotChatStream(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages":
 		s.handleBotMessages(w, r, name)
 	default:
@@ -384,4 +386,70 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		})
 	}
 	jsonResponse(w, result)
+}
+
+// handleBotChatStream POST /api/bots/{name}/chat/stream — SSE variant of
+// handleBotChat. The turn still runs serialized on the bot's queue; assistant
+// deltas are pushed as {"delta": "..."} events, ending with {"done": true}.
+func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	writeSSE := func(payload string) {
+		fmt.Fprint(w, "data: "+payload+"\n\n")
+		flusher.Flush()
+	}
+	writeJSONEvent := func(v interface{}) {
+		if data, err := json.Marshal(v); err == nil {
+			writeSSE(string(data))
+		}
+	}
+
+	// Headers out immediately so proxies/clients see a live stream.
+	writeSSE(`{"type":"connected"}`)
+
+	reply, err := mgr.SendToBotStream(name, req.Message, func(content string, done bool) {
+		if done || content == "" {
+			return
+		}
+		writeJSONEvent(map[string]string{"delta": content})
+	})
+
+	if err != nil {
+		msg := err.Error()
+		writeJSONEvent(map[string]string{"error": msg})
+	} else if strings.TrimSpace(reply) != "" {
+		// Ensure the client has the full final text even if some deltas were
+		// coalesced by intermediate proxies.
+		writeJSONEvent(map[string]interface{}{"final": reply})
+	}
+	writeSSE(`{"done":true}`)
 }

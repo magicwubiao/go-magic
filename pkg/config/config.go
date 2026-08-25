@@ -270,6 +270,11 @@ type BotModeConfig struct {
 	// InjectBotProtocol adds a short bot-to-bot messaging protocol section
 	// (mention tags, message_agent usage) to every bot's system prompt.
 	InjectBotProtocol *bool `json:"inject_bot_protocol,omitempty"`
+	// HistoryWindow caps how many messages of each bot's canonical chat are
+	// kept in context and on disk. 0 = default (200). The window always keeps
+	// whole turns: it is trimmed back to (not past) the oldest user message,
+	// so a turn's tool calls/results never get separated from its prompt.
+	HistoryWindow int `json:"history_window,omitempty"`
 }
 
 // DefaultBotModeConfig returns default Bot Mode settings.

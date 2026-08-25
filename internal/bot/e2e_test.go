@@ -49,7 +49,31 @@ func (m *mockLLM) handler(w http.ResponseWriter, r *http.Request) {
 
 	resp := script(m, lastUser)
 	w.Header().Set("Content-Type", "application/json")
+	// A scripted failure is signalled via __http_status/__body so tests can
+	// emulate real provider errors (e.g. 400s the agent classifies as
+	// non-retryable).
+	if status, ok := resp["__http_status"].(int); ok {
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(resp["__body"])
+		return
+	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// failResponse scripts an HTTP-level provider failure. Errors such as a 400
+// content-policy rejection are non-retryable per the agent's error
+// classifier, so the turn fails immediately instead of silently succeeding
+// on a retry.
+func failResponse(status int, message string) map[string]interface{} {
+	return map[string]interface{}{
+		"__http_status": status,
+		"__body": map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": message,
+				"type":    "content_policy_error",
+			},
+		},
+	}
 }
 
 func textResponse(text string) map[string]interface{} {
@@ -319,6 +343,128 @@ func TestUnknownBotRejected(t *testing.T) {
 	}
 	if err := mgr.Enqueue("ghost", "hi", "user"); err == nil {
 		t.Error("expected enqueue error for unknown bot")
+	}
+}
+
+// TestRoutineTriggerAndStatus covers the full routine chain:
+// cron fires -> prompt enqueued -> worker executes the turn ->
+// last_run/last_status written back as "success" (and "failed: ..." on error).
+func TestRoutineTriggerAndStatus(t *testing.T) {
+	failNext := false
+	var mu sync.Mutex
+
+	cfg, _, _ := setupEnv(t, func(m *mockLLM, lastUser string) map[string]interface{} {
+		if !strings.Contains(lastUser, "[routine] ") {
+			return textResponse("not a routine prompt")
+		}
+		mu.Lock()
+		failing := failNext
+		failNext = false
+		mu.Unlock()
+		if failing {
+			return failResponse(http.StatusBadRequest,
+				"content blocked by policy violation")
+		}
+		return textResponse("routine done: " + lastUser)
+	})
+	_ = cfg
+
+	mgr, err := NewManager(mustLoadConfig(t), nil)
+	if err != nil || mgr == nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	// Every-second schedule (6-field form exercises the optional-seconds parser).
+	err = mgr.AddRoutine("alice", &RoutineConfig{
+		Name:     "heartbeat",
+		Schedule: "* * * * * *",
+		Prompt:   "[routine] tick",
+	})
+	if err != nil {
+		t.Fatalf("AddRoutine: %v", err)
+	}
+
+	// Wait for at least one successful run to be recorded.
+	waitFor(t, 15*time.Second, "routine success status", func() bool {
+		routines, err := mgr.ListRoutines("alice")
+		if err != nil || len(routines) == 0 {
+			return false
+		}
+		r := routines[0]
+		return r.LastRun != nil && strings.HasPrefix(r.LastStatus, "success")
+	})
+
+	// Force a failing run and verify failed status write-back.
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
+	waitFor(t, 15*time.Second, "routine failed status", func() bool {
+		routines, err := mgr.ListRoutines("alice")
+		if err != nil || len(routines) == 0 {
+			return false
+		}
+		r := routines[0]
+		return r.LastRun != nil && strings.HasPrefix(r.LastStatus, "failed")
+	})
+
+	// Cleanup so the per-second job doesn't keep firing during other tests.
+	if err := mgr.RemoveRoutine("alice", "heartbeat"); err != nil {
+		t.Fatalf("RemoveRoutine: %v", err)
+	}
+}
+
+// TestHistoryWindowTruncation verifies saveHistory trims old turns while
+// keeping whole turns together and preserving the system prompt.
+func TestHistoryWindowTruncation(t *testing.T) {
+	cfg, _, _ := setupEnv(t, func(m *mockLLM, lastUser string) map[string]interface{} {
+		return textResponse("echo:" + lastUser)
+	})
+	_ = cfg
+
+	mgr, err := NewManager(mustLoadConfig(t), nil)
+	if err != nil || mgr == nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	// Tiny window for test speed.
+	mgr.cfg.BotMode.HistoryWindow = 20
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	for i := 0; i < 30; i++ {
+		msg := fmt.Sprintf("q%02d", i)
+		if _, err := mgr.SendToBot("alice", msg); err != nil {
+			t.Fatalf("SendToBot %d: %v", i, err)
+		}
+	}
+
+	hist := mgr.loadHistory("alice")
+	if len(hist) > 20+1 { // window + system prompt tolerance via boundary trim
+		t.Errorf("history not trimmed: %d entries (window=20)", len(hist))
+	}
+	// First non-system entry must start a turn (user role), never a tool/orphan.
+	foundUserStart := false
+	for _, m := range hist {
+		if m.Role == "system" {
+			continue
+		}
+		if m.Role == "user" && strings.HasPrefix(m.Content, "q") {
+			foundUserStart = true
+		}
+		break
+	}
+	if !foundUserStart {
+		t.Error("trimmed history does not start on a user turn boundary")
+	}
+	// Most recent exchange must survive.
+	last := hist[len(hist)-1]
+	if last.Role != "assistant" || !strings.Contains(last.Content, "echo:q29") {
+		t.Errorf("latest reply missing after trim: %s/%s", last.Role, last.Content)
 	}
 }
 

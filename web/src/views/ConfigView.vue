@@ -38,6 +38,31 @@
           <n-form-item :label="t('config.goalMaxTurns')">
             <n-input-number v-model:value="agentForm.goal_max_turns" :min="1" :max="200" />
           </n-form-item>
+          <n-form-item :label="t('config.maxTurns')">
+            <n-input-number v-model:value="agentForm.max_turns" :min="1" :max="500" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.maxTurnsHint') }}</span>
+          </n-form-item>
+          <n-divider style="margin: 8px 0 24px;" />
+          <h3 style="margin: 0 0 16px 0;">{{ t('config.botMode') }}</h3>
+          <n-form-item :label="t('config.botModeEnabled')">
+            <n-switch v-model:value="botModeForm.enabled" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.botModeEnabledHint') }}</span>
+          </n-form-item>
+          <n-form-item :label="t('config.botModeHistoryWindow')">
+            <n-input-number v-model:value="botModeForm.history_window" :min="20" :max="2000" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.botModeHistoryWindowHint') }}</span>
+          </n-form-item>
+          <n-form-item :label="t('config.botModeInjectProtocol')">
+            <n-select
+              v-model:value="botModeForm.inject_bot_protocol"
+              :options="injectProtocolOptions"
+              style="width: 160px;"
+            />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.botModeInjectProtocolHint') }}</span>
+          </n-form-item>
+          <n-alert v-if="botModeNeedsRestart" type="warning" style="margin-bottom: 12px;">
+            {{ t('config.botModeRestartHint') }}
+          </n-alert>
           <n-form-item>
             <n-button type="primary" :loading="saving" @click="saveAgent">{{ t('common.save') }}</n-button>
           </n-form-item>
@@ -267,9 +292,31 @@ const chatModeOptions = computed(() => [
   { label: t('config.chatModes.coding'), value: 'coding' },
 ])
 
+const injectProtocolOptions = computed(() => [
+  { label: t('config.botModeInjectDefault'), value: '' },
+  { label: t('common.enabled'), value: 'on' },
+  { label: t('common.disabled'), value: 'off' },
+])
+
+// Bot Mode enabled flag changed since page load -> manager must restart.
+const botModeNeedsRestart = computed(
+  () => botModeForm.enabled !== botModeEnabledAtLoad
+)
+
 const agentForm = reactive({
   goal_max_turns: 60,
+  max_turns: 60,
 })
+
+// Bot Mode section on the Agent tab (config.bot_mode.*)
+const botModeForm = reactive({
+  enabled: false,
+  history_window: 200,
+  // tri-state: null/'' = follow default, 'on'/'off' explicit
+  inject_bot_protocol: '' as '' | 'on' | 'off',
+})
+// Track the originally loaded enabled flag to warn when a restart is needed.
+let botModeEnabledAtLoad = false
 
 const memoryForm = reactive({
   enabled: true,
@@ -318,6 +365,19 @@ function populateFromConfig(cfg: any) {
 
   const agent = cfg.agent || {}
   agentForm.goal_max_turns = agent.goal_max_turns || 60
+  // 0 means "use built-in default (60)"; show the effective value in UI.
+  const maxTurns = Number(agent.max_turns) || 0
+  agentForm.max_turns = maxTurns > 0 ? maxTurns : 60
+
+  const botMode = cfg.bot_mode || {}
+  botModeForm.enabled = botMode.enabled === true
+  botModeEnabledAtLoad = botModeForm.enabled
+  const hw = Number(botMode.history_window) || 0
+  botModeForm.history_window = hw > 0 ? hw : 200
+  // Backend stores a JSON bool pointer; map to tri-state select value.
+  if (botMode.inject_bot_protocol === true) botModeForm.inject_bot_protocol = 'on'
+  else if (botMode.inject_bot_protocol === false) botModeForm.inject_bot_protocol = 'off'
+  else botModeForm.inject_bot_protocol = ''
 
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
@@ -362,7 +422,18 @@ async function saveAgent() {
   saving.value = true
   try {
     await configStore.updateConfig({
-      agent: { goal_max_turns: agentForm.goal_max_turns }
+      agent: {
+        goal_max_turns: agentForm.goal_max_turns,
+        max_turns: agentForm.max_turns,
+      },
+      bot_mode: {
+        enabled: botModeForm.enabled,
+        history_window: botModeForm.history_window,
+        // '' means "follow default"; send explicit bool otherwise.
+        inject_bot_protocol:
+          botModeForm.inject_bot_protocol === 'on' ? true :
+          botModeForm.inject_bot_protocol === 'off' ? false : undefined,
+      },
     })
     await configStore.loadConfig()
     message.success(t('config.agentSaved'))

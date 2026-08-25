@@ -1,4 +1,6 @@
-import { request } from './client'
+import { request, getAuthToken } from './client'
+
+const BASE_URL = '/api'
 
 export interface BotRuntime {
   online: boolean
@@ -69,6 +71,79 @@ export async function sendBotChat(name: string, message: string): Promise<BotMes
     method: 'POST',
     body: JSON.stringify({ message }),
   })
+}
+
+export interface BotChatStreamEvents {
+  onDelta?: (text: string) => void
+}
+
+/**
+ * Streaming variant of sendBotChat (SSE). Resolves with the full assistant
+ * reply once the stream finishes. Falls back to the non-streaming endpoint
+ * when EventSource-style streaming is unavailable (non-2xx before body).
+ */
+export async function sendBotChatStream(
+  name: string,
+  message: string,
+  events: BotChatStreamEvents = {}
+): Promise<BotMessage> {
+  const token = getAuthToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const resp = await fetch(`${BASE_URL}/bots/${encodeURIComponent(name)}/chat/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message }),
+  })
+  if (!resp.ok || !resp.body) {
+    // Fallback to synchronous endpoint on any pre-stream failure.
+    return sendBotChat(name, message)
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalText = ''
+
+  const handleEvent = (raw: string) => {
+    const line = raw.replace(/^data:\s*/, '').trim()
+    if (!line) return
+    try {
+      const evt = JSON.parse(line)
+      if (typeof evt.delta === 'string' && evt.delta) {
+        events.onDelta?.(evt.delta)
+        finalText += evt.delta
+      } else if (typeof evt.final === 'string' && evt.final) {
+        // Authoritative full reply from server.
+        finalText = evt.final
+      } else if (typeof evt.error === 'string' && evt.error) {
+        throw new Error(evt.error)
+      }
+    } catch {
+      /* ignore malformed keep-alive chunks */
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      for (const part of chunk.split('\n')) handleEvent(part)
+    }
+  }
+  if (buffer.trim()) handleEvent(buffer)
+
+  return {
+    id: 'stream_' + Date.now(),
+    role: 'assistant',
+    content: finalText,
+    timestamp: Date.now(),
+  }
 }
 
 export async function getBotRoutines(name: string): Promise<BotRoutine[]> {
