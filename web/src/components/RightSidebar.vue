@@ -644,7 +644,6 @@ const activeGoals = computed(() => goalsStore.activeGoals)
 const sessionId = computed(() => chatStore.activeSessionId || '')
 
 let unsubTodoChange: (() => void) | null = null
-let todosPollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
   goalsStore.loadCurrentGoal()
@@ -656,15 +655,11 @@ onMounted(() => {
   unsubTodoChange = chatStore.onTodoChange(() => {
     try { loadTodos() } catch (e) {}
   })
-  todosPollTimer = setInterval(() => {
-    try { loadTodos() } catch (e) {}
-  }, 30000)
 })
 
 onUnmounted(() => {
   todosStore.releaseLiveSubscription()
   if (unsubTodoChange) { unsubTodoChange(); unsubTodoChange = null }
-  if (todosPollTimer) { clearInterval(todosPollTimer); todosPollTimer = null }
 })
 
 watch(activeTab, (newTab) => {
