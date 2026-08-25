@@ -74,6 +74,21 @@ Connect your agent to external platforms:
 
 Telegram, Discord, Slack, WhatsApp, WeChat, WeCom, DingTalk, Feishu, QQ, LINE, Matrix.
 
+### Bot Mode
+
+Named agent profiles with persistent chats (inspired by Hermes Agent's Bot Mode):
+
+- Each bot is an isolated profile: role title, persona prompt, model/provider pins, a dedicated persistent chat session, and cron routines.
+- Bots can message each other via the `message_agent` tool; replies arrive later as background notifications to the sender.
+- On any gateway platform, address a specific bot with `/bot <name> <message>` or `@<tag>`.
+
+```bash
+magic config set bot_mode.enabled true
+magic bots create researcher --title "Research Assistant" --prompt "You find and summarize papers."
+magic bots chat researcher "Find recent papers on agent memory"
+magic bots routine add researcher daily-digest --schedule "0 9 * * *" --prompt "Summarize yesterday's findings."
+```
+
 ### MCP Protocol
 
 Connect to external MCP (Model Context Protocol) servers to extend agent capabilities.

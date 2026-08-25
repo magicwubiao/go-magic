@@ -74,6 +74,21 @@ Vue 3 / TypeScript 前端，功能包括：
 
 Telegram、Discord、Slack、WhatsApp、WeChat、WeCom、钉钉、飞书、QQ、LINE、Matrix。
 
+### Bot 模式
+
+具名 Agent 配置档案，支持持久化会话（设计参考 Hermes Agent 的 Bot Mode）：
+
+- 每个 Bot 是一个独立配置：角色标签、人设提示词、模型/Provider 绑定、专属持久化会话，以及定时例程（routines）。
+- Bot 之间可通过 `message_agent` 工具互发消息；回复稍后会以后台通知的形式送达发送方。
+- 在任意网关平台上，使用 `/bot <名称> <消息>` 或 `@<tag>` 即可与指定 Bot 对话。
+
+```bash
+magic config set bot_mode.enabled true
+magic bots create researcher --title "研究助手" --prompt "你负责查找和总结论文。"
+magic bots chat researcher "找一下关于 agent 记忆的最新论文"
+magic bots routine add researcher daily-digest --schedule "0 9 * * *" --prompt "总结昨天的发现。"
+```
+
 ### MCP 协议
 
 连接外部 MCP (Model Context Protocol) 服务器，扩展 Agent 能力。

@@ -93,6 +93,17 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		cfg.Model = value
 	case key == "gateway.enabled":
 		cfg.Gateway.Enabled = value == "true" || value == "1" || value == "yes"
+	case key == "bot_mode.enabled":
+		if cfg.BotMode == nil {
+			cfg.BotMode = config.DefaultBotModeConfig()
+		}
+		cfg.BotMode.Enabled = value == "true" || value == "1" || value == "yes"
+	case key == "bot_mode.inject_bot_protocol":
+		if cfg.BotMode == nil {
+			cfg.BotMode = config.DefaultBotModeConfig()
+		}
+		v := value == "true" || value == "1" || value == "yes"
+		cfg.BotMode.InjectBotProtocol = &v
 
 	// Privacy / PII 脱敏配置：privacy.enabled / privacy.redact_phone / ...
 	// 统一存储于 config.json，与其它配置一起由末尾的 cfg.Save() 写回。

@@ -87,6 +87,8 @@ type Config struct {
 	MCP          *MCPConfig                `json:"mcp,omitempty"`
 	SubAgent     *SubAgentConfig           `json:"subagent,omitempty"`
 	Voice        *VoiceConfig              `json:"voice,omitempty"`
+	// Bot Mode: named agent profiles with persistent canonical chats
+	BotMode *BotModeConfig `json:"bot_mode,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
 	Privacy *privacy.Config `json:"privacy,omitempty"`
 	Display DisplayConfig   `json:"display,omitempty"`
@@ -254,6 +256,23 @@ type PlatformConfig struct {
 	DataDir   string `json:"data_dir,omitempty"`
 	AutoLogin bool   `json:"auto_login,omitempty"`
 	// Slack/Line/Matrix fields
+}
+
+// BotModeConfig enables/disables Bot Mode and tunes its behavior.
+// Bots themselves are defined as files under <magicHome>/bots/<name>.json.
+type BotModeConfig struct {
+	Enabled bool `json:"enabled"`
+	// InjectBotProtocol adds a short bot-to-bot messaging protocol section
+	// (mention tags, message_agent usage) to every bot's system prompt.
+	InjectBotProtocol *bool `json:"inject_bot_protocol,omitempty"`
+}
+
+// DefaultBotModeConfig returns default Bot Mode settings.
+func DefaultBotModeConfig() *BotModeConfig {
+	return &BotModeConfig{
+		Enabled:           false,
+		InjectBotProtocol: nil, // nil = enabled by default at runtime
+	}
 }
 
 // MCPConfig represents MCP server configuration

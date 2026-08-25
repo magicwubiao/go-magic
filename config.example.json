@@ -55,6 +55,9 @@
       "models": ["llama3.2", "qwen2.5", "codellama"]
     }
   },
+  "bot_mode": {
+    "enabled": false
+  },
   "privacy": {
     "enabled": true,
     "redact_phone": true,

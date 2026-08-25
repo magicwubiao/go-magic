@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/gateway"
 	"github.com/magicwubiao/go-magic/internal/kanban"
@@ -116,6 +117,9 @@ type gatewayAgentHandler struct {
 
 	// Checkpoint manager for session persistence
 	checkpointMgr *session.CheckpointManager
+
+	// Bot Mode manager (nil when Bot Mode is disabled)
+	botMgr *bot.Manager
 }
 
 // NewGatewayAgentHandler creates a new gateway agent handler with the configured provider.
@@ -177,6 +181,7 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 		cortexMgr:     cortexMgr,
 		checkpointMgr: newCheckpointManager(),
 		privacyCfg:    cfg.Privacy,
+		botMgr:        nil, // Started separately in runGatewayStart (needs ctx)
 	}
 }
 
@@ -245,7 +250,20 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 
 // Process processes a message from a gateway platform and returns a response.
 // It handles both plain text and multimodal messages.
+// When Bot Mode is active, messages addressed to a bot (via /bot prefix or
+// @tag mention) are routed into that bot's canonical chat instead.
 func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) (string, error) {
+	// --- Bot Mode routing ---
+	if h.botMgr != nil {
+		if target, text, ok := bot.ParseBotMention(msg.Content, h.botMgr.HasBot); ok && text != "" {
+			reply, err := h.botMgr.SendToBot(target, text)
+			if err != nil {
+				return "", err
+			}
+			return reply, nil
+		}
+	}
+
 	if h.provider == nil {
 		h.mu.Lock()
 		if h.provider == nil {
@@ -1074,6 +1092,21 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	// Recover interrupted sessions from previous shutdown
 	go agentHandler.recoverInterruptedSessions(ctx)
+
+	// Start Bot Mode (named agent profiles) if enabled.
+	botMgr, err := bot.NewManager(cfg, store)
+	if err != nil {
+		fmt.Printf("Warning: Failed to initialize Bot Mode: %v\n", err)
+	} else if botMgr != nil {
+		if err := botMgr.Start(ctx); err != nil {
+			fmt.Printf("Warning: Failed to start Bot Mode: %v\n", err)
+		} else {
+			agentHandler.botMgr = botMgr
+			defer botMgr.Stop()
+			count := len(botMgr.List())
+			fmt.Printf("Bot Mode enabled with %d bot(s). Address bots via /bot <name> <message> or @<tag>.\n", count)
+		}
+	}
 
 	go func() {
 		sig := <-sigCh

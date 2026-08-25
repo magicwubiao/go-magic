@@ -31,17 +31,22 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("provider %s not configured", cfg.Provider)
 	}
+	return CreateProviderFor(cfg.Provider, provCfg)
+}
 
-	// Get current model: Models[0] > Model field > config-level Model
+// CreateProviderFor creates a provider from an explicit name + config pair.
+// Used by Bot Mode where each bot can pin its own provider/model.
+func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, error) {
+	// Get current model: Models[0] > Model field
 	model := provCfg.GetCurrentModel()
 	if model == "" {
-		model = cfg.Model
+		return nil, fmt.Errorf("no model configured for provider %s", name)
 	}
 
 	// Convert user-configured models to ModelInfo
 	userModels := toModelInfo(provCfg.Models)
 
-	switch cfg.Provider {
+	switch name {
 	case "openai":
 		return provider.NewOpenAIProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "anthropic":
@@ -89,7 +94,7 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 		return provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	default:
 		// For unknown providers, try to use OpenAI-compatible provider with user models
-		return provider.NewOpenAICompatibleProvider(cfg.Provider, provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
+		return provider.NewOpenAICompatibleProvider(name, provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	}
 }
 
