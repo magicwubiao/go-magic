@@ -1390,10 +1390,13 @@ export default {
     botUpdated: 'Bot updated (applies on next turn)',
     botDeleted: 'Bot deleted (chat history kept)',
     noMessages: 'No messages yet — say hello to your bot',
+    you: 'You',
     inputPlaceholder: 'Type a message, Enter to send…',
     send: 'Send',
+    sending: 'Sending…',
     modeDisabledTitle: 'Bot Mode is disabled',
     modeDisabledHint: 'Set bot_mode.enabled = true in the config file and restart the server',
+    loadingHistory: 'Loading history…',
   },
   auth: {
     login: 'Login',

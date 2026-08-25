@@ -1739,6 +1739,8 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			} else {
 				lastErr = err
+				log.Warnf("[Agent:Stream] StreamWithTools failed: %v (provider=%s, messages=%d, tools=%d)",
+					err, a.provider.Name(), len(req.Messages), len(a.tools))
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
 			err = ss.Stream(ctx, req.Messages, func(resp *provider.StreamResponse) {
@@ -1800,6 +1802,9 @@ Please provide a comprehensive, well-structured final response based on these su
 			if err != nil {
 				lastErr = err
 				a.Emit(bus.EventKindError, err.Error())
+				// Clean up orphaned tool messages from history so the next
+				// iteration doesn't send an invalid message sequence to the API.
+				a.sanitizeHistory()
 				handler("", true)
 				continue
 			}
@@ -2358,6 +2363,40 @@ func (a *Agent) truncateHistory() {
 				}
 			}
 		}
+	}
+}
+
+// sanitizeHistory removes orphaned tool messages that have no corresponding
+// assistant message with tool_calls. This can happen when a ChatWithTools
+// call fails after tools were executed in a previous iteration, leaving
+// tool-result messages in history without the assistant tool_calls header.
+func (a *Agent) sanitizeHistory() {
+	cleaned := make([]provider.Message, 0, len(a.history))
+	for i, m := range a.history {
+		if m.Role == "tool" {
+			hasCaller := false
+			for j := i - 1; j >= 0; j-- {
+				if cleaned[j].Role == "assistant" && len(cleaned[j].ToolCalls) > 0 {
+					for _, tc := range cleaned[j].ToolCalls {
+						if tc.ID == m.ToolCallID {
+							hasCaller = true
+							break
+						}
+					}
+				}
+				if hasCaller {
+					break
+				}
+			}
+			if !hasCaller {
+				log.Warnf("[Agent] Dropping orphaned tool message (tool_call_id=%s)", m.ToolCallID)
+				continue
+			}
+		}
+		cleaned = append(cleaned, m)
+	}
+	if len(cleaned) != len(a.history) {
+		a.history = cleaned
 	}
 }
 

@@ -40,6 +40,7 @@ export interface BotMessage {
   from?: string
   content: string
   timestamp: number
+  _streaming?: boolean
 }
 
 export async function getBots(): Promise<Bot[]> {
@@ -75,6 +76,7 @@ export async function sendBotChat(name: string, message: string): Promise<BotMes
 
 export interface BotChatStreamEvents {
   onDelta?: (text: string) => void
+  signal?: AbortSignal
 }
 
 /**
@@ -95,6 +97,7 @@ export async function sendBotChatStream(
     method: 'POST',
     headers,
     body: JSON.stringify({ message }),
+    signal: events.signal,
   })
   if (!resp.ok || !resp.body) {
     // Fallback to synchronous endpoint on any pre-stream failure.

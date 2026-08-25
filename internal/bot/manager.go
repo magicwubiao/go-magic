@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -73,17 +74,17 @@ func NewManager(cfg *config.Config, sessions *sessionstore.Store) (*Manager, err
 	if err != nil {
 		return nil, err
 	}
-	if sessions == nil {
-		dbPath := magicHome + "/sessions.db"
-		if sessions, err = sessionstore.NewStore(dbPath); err != nil {
-			return nil, fmt.Errorf("failed to open session store for bots: %w", err)
-		}
+
+	botDBPath := filepath.Join(magicHome, "bots.db")
+	botSessions, err := sessionstore.NewStore(botDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open bots.db: %w", err)
 	}
 
 	m := &Manager{
 		store:    store,
 		cfg:      cfg,
-		sessions: sessions,
+		sessions: botSessions,
 		routines: make(map[string]*RoutineScheduler),
 		bots:     make(map[string]*botRuntime),
 		stopCh:   make(chan struct{}),
@@ -229,10 +230,15 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime) (*agent.Agent, error) {
 	// Restore canonical chat history from the session store.
 	history := m.loadHistory(rt.cfg.Name)
 	ag := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), systemPrompt)
-	// Apply configurable loop caps (agent.max_turns etc.) so bots honor the
-	// same tuning knobs as the web server agents instead of the 60 default.
+	// Bot mode uses a moderate tool-loop cap.  Bots are conversational
+	// agents — a single user message typically needs 3–10 rounds of tool
+	// calls.  A reasonable cap prevents runaway loops while allowing
+	// complex multi-step tasks.
+	const botMaxTurns = 15
 	if m.cfg.Agent.MaxTurns > 0 {
 		ag.ApplyOption(agent.WithMaxTurns(m.cfg.Agent.MaxTurns))
+	} else {
+		ag.ApplyOption(agent.WithMaxTurns(botMaxTurns))
 	}
 	if m.cfg.Agent.MaxIterations > 0 || m.cfg.Agent.MaxTokenBudget > 0 {
 		ag.ApplyOption(agent.WithSteering(agent.SteeringConfig{
@@ -309,6 +315,10 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		var sb strings.Builder
 		streamErr := ag.RunConversationStream(runCtx, msg.Text, func(content string, done bool) {
 			if done || content == "" {
+				return
+			}
+			// Skip internal protocol markers that should never be shown to users.
+			if isInternalMarker(content) {
 				return
 			}
 			sb.WriteString(content)
@@ -545,9 +555,51 @@ func (m *Manager) loadHistory(name string) []provider.Message {
 	}
 	out := make([]provider.Message, 0, len(sess.Messages))
 	for _, msg := range sess.Messages {
-		out = append(out, provider.Message{Role: msg.Role, Content: msg.Content})
+		out = append(out, provider.Message{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
+		})
 	}
+	// Sanitize: drop orphaned tool messages that have no preceding assistant
+	// message with matching tool_calls. This can happen if older sessions were
+	// saved with a loadHistory that dropped ToolCalls/ToolCallID fields.
+	out = sanitizeBotHistory(out)
 	return out
+}
+
+// sanitizeBotHistory removes orphaned tool messages from bot chat history.
+func sanitizeBotHistory(history []provider.Message) []provider.Message {
+	cleaned := make([]provider.Message, 0, len(history))
+	for i, msg := range history {
+		if msg.Role == "tool" {
+			hasCaller := false
+			for j := i - 1; j >= 0; j-- {
+				if cleaned[j].Role == "assistant" && len(cleaned[j].ToolCalls) > 0 {
+					for _, tc := range cleaned[j].ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							hasCaller = true
+							break
+						}
+					}
+				}
+				if hasCaller {
+					break
+				}
+				// Don't look past another tool or user message boundary
+				if cleaned[j].Role == "user" {
+					break
+				}
+			}
+			if !hasCaller {
+				log.Warnf("[BotMode] Dropping orphaned tool message from history (tool_call_id=%s)", msg.ToolCallID)
+				continue
+			}
+		}
+		cleaned = append(cleaned, msg)
+	}
+	return cleaned
 }
 
 // defaultHistoryWindow is the fallback cap for canonical chat length when
@@ -855,4 +907,24 @@ func (m *Manager) recordRoutineResult(botName, routineID, status string) {
 	if err := m.store.SaveRoutines(botName, routines); err != nil {
 		log.Warnf("[BotMode] Failed to save routine status for %s: %v", botName, err)
 	}
+}
+
+// isInternalMarker returns true if the content is an internal protocol marker
+// (TURN_START, TOOL_START, TOOL_RESULT_START/END) that should never be
+// forwarded to end users in bot chat streams.
+func isInternalMarker(content string) bool {
+	t := strings.TrimSpace(content)
+	if t == ">>>TURN_START<<<" {
+		return true
+	}
+	if strings.Contains(t, ">>>TOOL_START|") {
+		return true
+	}
+	if strings.Contains(t, ">>>TOOL_RESULT_START|") {
+		return true
+	}
+	if strings.Contains(t, ">>>TOOL_RESULT_END<<<") {
+		return true
+	}
+	return false
 }

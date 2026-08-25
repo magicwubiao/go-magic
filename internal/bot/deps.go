@@ -43,7 +43,7 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 		workDir, _ = os.Getwd()
 	}
 	registry := tool.NewRegistry()
-	registry.RegisterAll(workDir)
+	registry.RegisterBotTools(workDir)
 	if skillMgr, err := skills.NewManager(); err == nil {
 		registry.RegisterSkillTool(skillMgr)
 	}

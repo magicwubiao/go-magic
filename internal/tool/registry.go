@@ -290,6 +290,80 @@ func (r *Registry) RegisterWithNotificationConfig(workDir string, emailConfig *E
 	r.RegisterSMSTool(smsConfig)
 }
 
+// RegisterBotTools registers the full commonly-used tool set for Bot Mode.
+// Bots are conversational agents with persistent sessions; they benefit from
+// file I/O, web access, memory, coding tools, and utilities — everything
+// except browser automation, Home Assistant, and heavy media tools.
+func (r *Registry) RegisterBotTools(workDir string) {
+	// File tools
+	r.Register(&ReadFileTool{})
+	r.Register(&WriteFileTool{})
+	r.Register(&FileEditTool{})
+	r.Register(&ListFilesTool{})
+	r.Register(NewDirectoryTreeTool())
+	r.Register(&SearchInFilesTool{})
+
+	// Web tools
+	r.Register(&WebSearchTool{})
+	r.Register(NewWebFetchTool())
+	r.Register(NewWebSelectTool())
+
+	// Command execution
+	r.Register(NewSecureExecuteCommandTool(workDir))
+
+	// Memory
+	r.Register(&MemoryStoreTool{})
+	r.Register(&MemoryRecallTool{})
+
+	// Todo
+	r.Register(GetTodoTool())
+
+	// Session search
+	r.Register(GetSessionSearchTool())
+
+	// Clarify
+	r.Register(NewClarifyTool())
+
+	// LSP diagnostic
+	r.Register(NewLSPDiagnosticTool(workDir))
+
+	// Cron
+	r.Register(NewCronJobTool())
+
+	// Interrupt
+	r.Register(NewInterruptTool())
+
+	// Code execution
+	r.Register(NewExecuteCodeTool())
+
+	// Gitignore
+	r.Register(NewGitignoreTool())
+
+	// Coding-enhanced tools
+	r.Register(NewBatchFileOpsTool())
+	r.Register(NewProjectAnalyzeTool())
+	r.Register(NewDiffPatchTool())
+
+	// Utility tools
+	r.Register(NewJSONTool())
+	r.Register(NewYAMLTool())
+	r.Register(NewStringTool())
+	r.Register(NewHashTool())
+	r.Register(NewUUIDTool())
+	r.Register(NewRandomTool())
+	r.Register(NewTimeTool())
+	r.Register(NewMathTool())
+	r.Register(NewCSVTool())
+	r.Register(NewEnvTool())
+	r.Register(NewSystemInfoTool())
+
+	// Timeouts
+	r.SetTimeout("execute_command", 120*time.Second)
+	r.SetTimeout("web_search", 30*time.Second)
+	r.SetTimeout("web_fetch", 30*time.Second)
+	r.SetTimeout("web_select", 30*time.Second)
+}
+
 // GetAllTools 返回所有内置工具实例
 func GetAllTools() []Tool {
 	return []Tool{

@@ -1404,10 +1404,13 @@ export default {
     botUpdated: 'Bot 已更新（下次对话生效）',
     botDeleted: 'Bot 已删除（会话记录保留）',
     noMessages: '暂无消息，向 Bot 发送第一条消息吧',
+    you: '我',
     inputPlaceholder: '输入消息，Enter 发送…',
     send: '发送',
+    sending: '发送中…',
     modeDisabledTitle: 'Bot Mode 未启用',
     modeDisabledHint: '请在配置文件中设置 bot_mode.enabled = true 后重启服务',
+    loadingHistory: '加载历史消息…',
   },
   auth: {
     login: '登录',

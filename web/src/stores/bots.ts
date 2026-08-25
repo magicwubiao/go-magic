@@ -18,6 +18,10 @@ export const useBotsStore = defineStore('bots', () => {
   const chatLoading = ref(false)
   const sending = ref(false)
 
+  // AbortController for the in-flight streaming request so we can cancel
+  // it when the user switches to a different bot or closes the chat.
+  let streamAbort: AbortController | null = null
+
   async function loadBots(): Promise<void> {
     loading.value = true
     error.value = null
@@ -56,16 +60,28 @@ export const useBotsStore = defineStore('bots', () => {
   }
 
   function openChat(name: string) {
+    // Cancel any in-flight stream from the previous bot.
+    cancelStream()
     activeBotName.value = name
     messages.value = []
     routines.value = []
+    sending.value = false
     void refreshChat()
   }
 
   function closeChat() {
+    cancelStream()
     activeBotName.value = null
     messages.value = []
     routines.value = []
+    sending.value = false
+  }
+
+  function cancelStream() {
+    if (streamAbort) {
+      streamAbort.abort()
+      streamAbort = null
+    }
   }
 
   async function refreshChat() {
@@ -93,6 +109,11 @@ export const useBotsStore = defineStore('bots', () => {
     const name = activeBotName.value
     if (!name || !text.trim()) return
 
+    // Cancel any previous in-flight stream (shouldn't happen, but be safe).
+    cancelStream()
+    streamAbort = new AbortController()
+    const signal = streamAbort.signal
+
     // Local optimistic user bubble
     const localId = 'local_' + Date.now()
     messages.value.push({
@@ -109,11 +130,15 @@ export const useBotsStore = defineStore('bots', () => {
       role: 'assistant',
       content: '',
       timestamp: Date.now(),
+      _streaming: true,
     })
     try {
       // Prefer SSE streaming; falls back to blocking endpoint internally.
       const reply = await botsApi.sendBotChatStream(name, text, {
+        signal,
         onDelta: (delta) => {
+          // If the user switched to a different bot, discard stale deltas.
+          if (activeBotName.value !== name) return
           const bubble = messages.value.find(m => m.id === streamId)
           if (bubble) {
             bubble.content += delta
@@ -122,25 +147,39 @@ export const useBotsStore = defineStore('bots', () => {
         },
       })
       // Replace the growing bubble with the authoritative reply.
-      const idx = messages.value.findIndex(m => m.id === streamId)
-      if (idx >= 0) {
-        if (reply.content) {
-          messages.value[idx] = reply
-        } else {
-          messages.value.splice(idx, 1)
+      // Only if we're still on the same bot.
+      if (activeBotName.value === name) {
+        const idx = messages.value.findIndex(m => m.id === streamId)
+        if (idx >= 0) {
+          if (reply.content) {
+            reply._streaming = false
+            messages.value[idx] = reply
+          } else {
+            messages.value.splice(idx, 1)
+          }
         }
       }
     } catch (e) {
-      // Drop the empty streaming bubble on error.
-      const idx = messages.value.findIndex(m => m.id === streamId)
-      if (idx >= 0 && !messages.value[idx].content) {
-        messages.value.splice(idx, 1)
+      // AbortError means we switched bots — not a real error.
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      // Drop the empty streaming bubble on error (only if still on same bot).
+      if (activeBotName.value === name) {
+        const idx = messages.value.findIndex(m => m.id === streamId)
+        if (idx >= 0 && !messages.value[idx].content) {
+          messages.value.splice(idx, 1)
+        }
       }
       throw e
     } finally {
+      if (streamAbort?.signal === signal) {
+        streamAbort = null
+      }
       sending.value = false
       // Refresh history so optimistic + server states converge
-      void refreshMessagesOnly()
+      // (only if still on the same bot).
+      if (activeBotName.value === name) {
+        void refreshMessagesOnly()
+      }
     }
   }
 
