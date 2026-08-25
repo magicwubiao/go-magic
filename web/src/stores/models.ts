@@ -42,11 +42,21 @@ export const useModelsStore = defineStore('models', () => {
     }
   })
 
-  // Model options for select dropdown - only show configured providers
+  // Model options for select dropdown - only show models explicitly configured
+  // in config.providers.<slug>.models arrays.
   const modelSelectOptions = computed(() => {
     const configuredProviders = configStore.config?.providers || {}
     return models.value
-      .filter(m => configuredProviders[m.provider])
+      .filter(m => {
+        const provCfg = configuredProviders[m.provider] as
+          | { models?: string[] }
+          | undefined
+        if (!provCfg) return false
+        const allow = provCfg.models
+        return Array.isArray(allow) && allow.length > 0
+          ? allow.includes(m.name)
+          : true
+      })
       .map(m => ({
         label: `${m.provider} / ${m.name}${m.contextLen ? ` (${(m.contextLen / 1000).toFixed(0)}K)` : ''}`,
         value: m.id,

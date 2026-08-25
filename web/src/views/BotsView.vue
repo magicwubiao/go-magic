@@ -146,10 +146,13 @@
           <n-input v-model:value="form.system_prompt" type="textarea" :rows="5" :placeholder="t('bots.systemPromptPlaceholder')" />
         </n-form-item>
         <n-form-item :label="t('bots.modelPin')">
-          <n-input v-model:value="form.model" :placeholder="t('bots.inheritGlobal')" />
-        </n-form-item>
-        <n-form-item :label="t('bots.providerPin')">
-          <n-input v-model:value="form.provider" :placeholder="t('bots.inheritGlobal')" />
+          <n-select
+            v-model:value="selectedModelId"
+            :options="modelsStore.modelSelectOptions"
+            :placeholder="t('bots.inheritGlobal')"
+            clearable
+            filterable
+          />
         </n-form-item>
       </n-form>
       <template #footer>
@@ -209,7 +212,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NGi, NGrid, NH6, NIcon, NInput, NList, NListItem, NModal,
-  NPopconfirm, NSpace, NSpin, NTag, NText, useMessage,
+  NPopconfirm, NSpace, NSelect, NSpin, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
   ArrowBackOutline, ChatbubbleEllipsesOutline, CreateOutline,
@@ -217,11 +220,13 @@ import {
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
+import { useModelsStore } from '@/stores/models'
 import type { Bot } from '@/api/bots'
 
 const { t } = useI18n()
 const message = useMessage()
 const botsStore = useBotsStore()
+const modelsStore = useModelsStore()
 
 const showEditModal = ref(false)
 const showRoutinesModal = ref(false)
@@ -250,6 +255,30 @@ const activeBotObj = computed<Bot | null>(() => activeBot.value)
 
 // Driven by the store: set when GET /api/bots returns 503 (bot mode off).
 const botModeDisabled = computed(() => botsStore.modeDisabled)
+
+// Unified "provider/model" select (matches Chat UI).
+// value === "" means inherit global; otherwise "provider/model" id string.
+const selectedModelId = computed<string>({
+  get: () => {
+    if (form.provider && form.model) return `${form.provider}/${form.model}`
+    return ''
+  },
+  set: (v: string) => {
+    if (!v) {
+      form.provider = ''
+      form.model = ''
+      return
+    }
+    const idx = v.indexOf('/')
+    if (idx < 0) {
+      form.model = v
+      form.provider = ''
+    } else {
+      form.provider = v.slice(0, idx)
+      form.model = v.slice(idx + 1)
+    }
+  },
+})
 
 function cardMenuOptions(b: Bot) {
   return [
@@ -410,7 +439,10 @@ function avatarColor(name: string) {
   return palette[h % palette.length]
 }
 
-onMounted(() => botsStore.loadBots())
+onMounted(() => {
+  void botsStore.loadBots()
+  void modelsStore.loadModels()
+})
 </script>
 
 <style scoped>
