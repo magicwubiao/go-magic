@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,9 +15,13 @@ import (
 // Protocol constants
 const (
 	JSONRPCVersion        = "2.0"
+	ProtocolVersion       = "2026-07-28" // MCP 2.0 stable (released 2026-07-28)
+	ProtocolName          = "modelcontextprotocol"
 	DefaultTimeout        = 30 * time.Second
 	DefaultReconnectDelay = 5 * time.Second
 	MaxReconnectAttempts  = 3
+	ClientName            = "go-magic"
+	ClientVersion         = "0.5.8"
 )
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request
@@ -48,11 +53,24 @@ type MCPMessage struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
-// Tool represents an MCP tool
+// Tool represents an MCP tool (2025-03-26 protocol compatible)
 type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
+	Annotations *ToolAnnotations       `json:"annotations,omitempty"` // 2025-03-26
+}
+
+// ToolAnnotations holds metadata hints for clients (2025-03-26)
+type ToolAnnotations struct {
+	Title               string   `json:"title,omitempty"`
+	ReadOnlyHint        bool     `json:"readOnlyHint,omitempty"`
+	DestructiveHint     bool     `json:"destructiveHint,omitempty"`
+	IdempotentHint      bool     `json:"idempotentHint,omitempty"`
+	OpenWorldHint       bool     `json:"openWorldHint,omitempty"`
+	ReasoningEffortHint string   `json:"reasoningEffortHint,omitempty"` // low | medium | high
+	Tags                []string `json:"tags,omitempty"`
+	Privacy             []string `json:"privacy,omitempty"`
 }
 
 // ServerConfig represents MCP server configuration
@@ -258,17 +276,44 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 	return client.callTool(ctx, toolName, arguments)
 }
 
-// initialize initializes the MCP server and discovers tools
+// initialize initializes the MCP server and discovers tools (MCP 2.0 / 2026-07-28 protocol)
 func (c *Client) initialize() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Send initialize request
+	// Send initialize request (MCP 2.0 includes protocolName + extended capabilities)
 	initReq := &JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		Method:  "initialize",
-		Params:  jsonMarshal(map[string]interface{}{"protocolVersion": "2024-11-05"}),
-		ID:      1,
+		Params: jsonMarshal(map[string]interface{}{
+			"protocolName":    ProtocolName, // MCP 2.0 required field
+			"protocolVersion": ProtocolVersion,
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{
+					"listChanged": false,
+					"batch":       false, // MCP 2.0 batch tool call support (client opt-in)
+				},
+				"logging": map[string]interface{}{},
+				"prompts": map[string]interface{}{
+					"listChanged": false,
+				},
+				"resources": map[string]interface{}{
+					"listChanged": false,
+					"subscribe":   false,
+				},
+				// MCP 2.0: progress notification support
+				"progress": map[string]interface{}{},
+				// MCP 2.0: security/privacy labels
+				"security": map[string]interface{}{
+					"dataClassification": []string{"public", "internal", "restricted"},
+				},
+			},
+			"clientInfo": map[string]interface{}{
+				"name":    ClientName,
+				"version": ClientVersion,
+			},
+		}),
+		ID: 1,
 	}
 
 	resp, err := c.transport.Send(ctx, initReq)
@@ -280,13 +325,44 @@ func (c *Client) initialize() error {
 		return fmt.Errorf("initialize error: %s", resp.Error.Message)
 	}
 
+	// Validate protocol version (negotiate: accept 2024-11-05 or newer)
+	var initResult struct {
+		ProtocolName    string `json:"protocolName"` // MCP 2.0
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(resp.Result, &initResult); err != nil {
+		// Not fatal; some older servers may return minimal payloads
+		log.Warnf("[MCP] Failed to parse initialize result: %v", err)
+	} else if initResult.ProtocolVersion != "" {
+		if initResult.ProtocolName != "" && initResult.ProtocolName != ProtocolName {
+			log.Warnf("[MCP] Server '%s' reports protocolName=%q, expected %q",
+				c.name, initResult.ProtocolName, ProtocolName)
+		}
+		switch {
+		case initResult.ProtocolVersion < "2024-11-05":
+			log.Warnf("[MCP] Server '%s' reports protocol %s (older than 2024-11-05); features may be limited",
+				c.name, initResult.ProtocolVersion)
+		case initResult.ProtocolVersion < ProtocolVersion:
+			log.Infof("[MCP] Server '%s' using protocol %s (client supports %s)",
+				c.name, initResult.ProtocolVersion, ProtocolVersion)
+		case initResult.ProtocolVersion > ProtocolVersion:
+			log.Warnf("[MCP] Server '%s' protocol %s is newer than client %s; upgrading client is recommended",
+				c.name, initResult.ProtocolVersion, ProtocolVersion)
+		default:
+			log.Infof("[MCP] Server '%s' negotiated MCP 2.0 (%s) successfully", c.name, ProtocolVersion)
+		}
+	}
+
 	// Send initialized notification
 	notif := &JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		Method:  "notifications/initialized",
 	}
-
-	c.transport.Send(context.Background(), notif)
+	_, _ = c.transport.Send(context.Background(), notif)
 
 	// Discover tools
 	return c.discoverTools(ctx)
@@ -326,7 +402,7 @@ func (c *Client) discoverTools(ctx context.Context) error {
 	return nil
 }
 
-// callTool calls a tool on the MCP server
+// callTool calls a tool on the MCP server (2025-03-26 compatible)
 func (c *Client) callTool(ctx context.Context, toolName string, arguments map[string]interface{}) (interface{}, error) {
 	params := map[string]interface{}{
 		"name":      toolName,
@@ -351,20 +427,94 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 
 	var result struct {
 		Content []struct {
+			// Text content
 			Type string `json:"type"`
-			Text string `json:"text"`
+			Text string `json:"text,omitempty"`
+
+			// Image content (2025-03-26)
+			Data     string `json:"data,omitempty"`     // base64
+			MimeType string `json:"mimeType,omitempty"` // e.g. image/png
+
+			// Embedded resource (2025-03-26)
+			URI      string `json:"uri,omitempty"`
+			BlobData string `json:"blobData,omitempty"`
+
+			// Audio content (2025-03-26)
+			// Transcript optional field for audio/image
+
 		} `json:"content"`
+		IsError    bool   `json:"isError,omitempty"`    // 2025-03-26
+		NextCursor string `json:"nextCursor,omitempty"` // 2025-03-26 paginated response
 	}
 
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse tool result: %w", err)
 	}
 
-	if len(result.Content) > 0 {
-		return result.Content[0].Text, nil
+	// Server explicitly signaled an error via the 2025-03-26 isError field
+	if result.IsError {
+		if len(result.Content) > 0 && result.Content[0].Text != "" {
+			return nil, fmt.Errorf("tool error: %s", result.Content[0].Text)
+		}
+		return nil, fmt.Errorf("tool call returned isError=true")
 	}
 
-	return nil, nil
+	// Concatenate all text-type contents; non-text (images, resources) are
+	// preserved as annotations in the raw result but summarized as text for LLM.
+	if len(result.Content) == 0 {
+		return "", nil
+	}
+
+	var combined strings.Builder
+	for i, item := range result.Content {
+		if i > 0 {
+			combined.WriteString("\n")
+		}
+		switch item.Type {
+		case "", "text":
+			combined.WriteString(item.Text)
+		case "image":
+			desc := fmt.Sprintf("[image %s (%d bytes)]", item.MimeType, base64DecodedLen(item.Data))
+			combined.WriteString(desc)
+		case "embedded_resource":
+			name := item.URI
+			if name == "" {
+				name = "embedded-resource"
+			}
+			combined.WriteString(fmt.Sprintf("[resource: %s]", name))
+			if item.Text != "" {
+				combined.WriteString("\n")
+				combined.WriteString(item.Text)
+			}
+		case "audio":
+			combined.WriteString("[audio content]")
+		default:
+			if item.Text != "" {
+				combined.WriteString(item.Text)
+			} else {
+				combined.WriteString(fmt.Sprintf("[%s content]", item.Type))
+			}
+		}
+	}
+
+	return combined.String(), nil
+}
+
+// base64DecodedLen returns the approximate byte size of a base64-encoded
+// payload without decoding the full string (cheap for logging).
+func base64DecodedLen(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := len(s)
+	pad := 0
+	if n >= 1 && s[n-1] == '=' {
+		pad++
+	}
+	if n >= 2 && s[n-2] == '=' {
+		pad++
+	}
+	return (n*3)/4 - pad
 }
 
 // MCPTool wraps an MCP tool for integration with the tool registry

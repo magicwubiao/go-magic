@@ -337,36 +337,56 @@ func (s *MCPServer) handleMessage(conn *websocket.Conn, msg *JSONRPCMessage) {
 	}
 }
 
-// handleInitialize handles the initialize request
+// handleInitialize handles the initialize request (MCP 2.0 / 2026-07-28 compatible)
 func (s *MCPServer) handleInitialize(conn *websocket.Conn, msg *JSONRPCMessage) {
 	capabilities := map[string]interface{}{
 		"tools": map[string]interface{}{
 			"listChanged": true,
+			"batch":       false, // MCP 2.0: server currently does not implement batch tool call
 		},
 		"resources": map[string]interface{}{
 			"listChanged": true,
+			"subscribe":   false,
 		},
 		"prompts": map[string]interface{}{
 			"listChanged": true,
 		},
-		"sampling": map[string]interface{}{},
+		"logging": map[string]interface{}{},
+		// MCP 2.0 progress notifications
+		"progress": map[string]interface{}{},
+		// MCP 2.0 security labels
+		"security": map[string]interface{}{
+			"supportsDataClassification": false,
+		},
 	}
 
-	protocolVersion := "2024-11-05"
+	// Negotiate:
+	//   - protocolName (MCP 2.0 required): echo client's if provided
+	//   - protocolVersion: honor client's request if it is >= 2024-11-05,
+	//     otherwise reply with the latest we support (2026-07-28).
+	respProtocolName := ProtocolName
+	protocolVersion := ProtocolVersion
+
 	var params map[string]interface{}
 	if msg.Params != nil {
-		json.Unmarshal(*msg.Params, &params)
+		_ = json.Unmarshal(*msg.Params, &params)
+		if name, ok := params["protocolName"].(string); ok && name != "" {
+			respProtocolName = name
+		}
 		if v, ok := params["protocolVersion"].(string); ok {
-			protocolVersion = v
+			if v >= "2024-11-05" {
+				protocolVersion = v
+			}
 		}
 	}
 
 	result := map[string]interface{}{
+		"protocolName":    respProtocolName,
 		"protocolVersion": protocolVersion,
 		"capabilities":    capabilities,
 		"serverInfo": map[string]interface{}{
 			"name":    "go-magic",
-			"version": "0.0.1",
+			"version": ClientVersion,
 		},
 	}
 
@@ -415,7 +435,16 @@ func (s *MCPServer) handleToolsCall(conn *websocket.Conn, msg *JSONRPCMessage) {
 	}
 	result, err := s.Handler.HandleToolCall(ctx, req.Name, req.Arguments)
 	if err != nil {
-		s.sendError(conn, msg.ID, -32603, err.Error())
+		// 2025-03-26: use isError=true for semantic error responses
+		s.sendResponse(conn, msg.ID, map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": err.Error(),
+				},
+			},
+			"isError": true,
+		})
 		return
 	}
 
@@ -426,6 +455,7 @@ func (s *MCPServer) handleToolsCall(conn *websocket.Conn, msg *JSONRPCMessage) {
 				"text": string(result),
 			},
 		},
+		"isError": false,
 	})
 }
 
