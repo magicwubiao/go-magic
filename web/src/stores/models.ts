@@ -67,6 +67,12 @@ export const useModelsStore = defineStore('models', () => {
   async function loadModels() {
     loading.value = true
     try {
+      // Ensure config.providers is available so modelSelectOptions can
+      // filter to only user-configured models. Bots page (and anywhere
+      // that calls loadModels without a prior loadConfig) now works.
+      if (!configStore.config) {
+        await configStore.loadConfig()
+      }
       // Load from model options API which includes all provider models
       const options = await modelsApi.getModelOptions()
       currentProvider.value = options.provider

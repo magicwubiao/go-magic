@@ -148,10 +148,12 @@
         <n-form-item :label="t('bots.modelPin')">
           <n-select
             v-model:value="selectedModelId"
-            :options="modelsStore.modelSelectOptions"
+            :options="botModelSelectOptions"
             :placeholder="t('bots.inheritGlobal')"
             clearable
             filterable
+            :consistent-menu-width="false"
+            :render-label="renderBotModelLabel"
           />
         </n-form-item>
       </n-form>
@@ -208,7 +210,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NGi, NGrid, NH6, NIcon, NInput, NList, NListItem, NModal,
