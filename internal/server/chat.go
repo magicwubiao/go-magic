@@ -104,9 +104,14 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		resp, err := aiAgent.RunConversation(ctx, req.Message)
 		if err != nil {
 			writeSSE("data: {\"error\":\"" + fmt.Sprintf("%v", err) + "\"}\n\n")
-			// 失败轮次仅记录用户消息与 token 用量；assistant 为空会被跳过，
-			// 不产生空白回答（persistTurnMessages 内部有空内容保护）
-			s.persistTurnMessages(aiAgent, sessionID, req.Message, "")
+			// 失败轮次也要保留已执行的工作：从 agent history 提取本轮已完成的
+			// 工具调用/结果（partial），与流式路径行为一致，避免整轮工作丢失。
+			partial := extractPartialTurnText(aiAgent.GetHistory(), req.Message)
+			if partial != "" {
+				partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
+					err.Error(), partial)
+			}
+			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial)
 			s.recordUsage(aiAgent, sessionID)
 			return
 		}
@@ -203,6 +208,12 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	var fullResponse strings.Builder
+	// executedSteps 记录本轮已执行的工具调用与结果摘要。流式 handler 会把
+	// TOOL_START/TOOL_RESULT 标记转发给前端但不写入 fullResponse，因此一旦
+	// 中途出错且无文本输出（例如 exceeded maximum turns），fullResponse 为空，
+	// persistTurnMessages 的空内容保护会把整轮已执行的工作丢弃。此摘要在
+	// 出错时作为 assistant 部分内容落库，保证"错误后已执行的对话不丢失"。
+	var executedSteps strings.Builder
 	streamErr := aiAgent.RunConversationStream(ctx, req.Message, func(content string, done bool) {
 		if done {
 			// Stream finished — closing think tag (if any) already sent by agent
@@ -233,6 +244,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				if json.Valid([]byte(argsStr)) {
 					_ = json.Unmarshal([]byte(argsStr), &argsParsed)
 				}
+				argsSummary := strings.TrimSpace(argsStr)
+				if len(argsSummary) > 200 {
+					argsSummary = argsSummary[:200] + "..."
+				}
+				fmt.Fprintf(&executedSteps, "[tool_call] %s(%s)\n", toolName, argsSummary)
 				data, _ := json.Marshal(map[string]interface{}{
 					"type":      "tool_start",
 					"name":      toolName,
@@ -261,6 +277,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(tnLower, "todo") || strings.Contains(tnLower, "task") {
 					todoChanged = true
 				}
+				resultSummary := toolContent
+				if len(resultSummary) > 400 {
+					resultSummary = resultSummary[:400] + "...(truncated)"
+				}
+				fmt.Fprintf(&executedSteps, "[tool_result:%s] %s\n", toolName, resultSummary)
 				data, _ := json.Marshal(map[string]interface{}{
 					"type":         "tool_result",
 					"name":         toolName,
@@ -291,10 +312,103 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// Save user & assistant messages to session store。
 	// fix: 流式路径此前完全不落库，导致 Web 对话刷新后丢失；
 	// 即使流式出错，也保留已生成的部分内容。
-	s.persistTurnMessages(aiAgent, sessionID, req.Message, fullResponse.String())
+	// fix2: 错误发生在工具循环中且无文本输出时（例如 exceeded maximum turns），
+	// fullResponse 为空、空内容保护会丢弃整轮工作。此处将已执行的工具调用/
+	// 结果摘要作为 partial 落库，保证"错误后已执行的对话不丢失"。
+	partial := ""
+	if streamErr != nil && strings.TrimSpace(fullResponse.String()) == "" {
+		if executedSteps.Len() > 0 {
+			partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
+				streamErr.Error(), strings.TrimRight(executedSteps.String(), "\n"))
+		} else {
+			partial = extractPartialTurnText(aiAgent.GetHistory(), req.Message)
+			if partial != "" {
+				partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
+					streamErr.Error(), partial)
+			}
+		}
+	}
+	s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, fullResponse.String(), partial)
 
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)
+}
+
+// partialTurnInjectionPrefixes are synthetic user messages the agent injects
+// itself (turn-cap summary requests). When locating the start of the current
+// turn inside agent history we must skip these, otherwise we would attribute
+// the injected prompt as the user's input.
+var partialTurnInjectionPrefixes = []string{
+	"You have reached the maximum number of turns",
+	"Please provide a final summary",
+}
+
+// extractPartialTurnText reconstructs what actually happened during the current
+// turn from the agent's in-memory history (tool calls + tool results + any
+// assistant narration). It is used when a turn fails mid-way (e.g. exceeded
+// maximum turns, provider error) so already-executed work is not lost from the
+// persisted session.
+func extractPartialTurnText(history []types.Message, userInput string) string {
+	start := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		m := history[i]
+		if m.Role != "user" {
+			continue
+		}
+		// Skip agent-injected summary prompts.
+		injected := false
+		for _, p := range partialTurnInjectionPrefixes {
+			if strings.HasPrefix(m.Content, p) {
+				injected = true
+				break
+			}
+		}
+		if injected {
+			continue
+		}
+		start = i
+		break
+	}
+	if start < 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, m := range history[start+1:] {
+		switch m.Role {
+		case "assistant":
+			text := strings.TrimSpace(m.Content)
+			if len(m.ToolCalls) == 0 {
+				if text != "" {
+					fmt.Fprintf(&b, "[assistant] %s\n", text)
+				}
+				continue
+			}
+			if text != "" {
+				fmt.Fprintf(&b, "[assistant] %s\n", text)
+			}
+			for _, tc := range m.ToolCalls {
+				argsStr := tc.Function.Arguments
+				if argsStr == "" && tc.Arguments != nil {
+					if jb, err := json.Marshal(tc.Arguments); err == nil {
+						argsStr = string(jb)
+					}
+				}
+				argsStr = strings.TrimSpace(argsStr)
+				if len(argsStr) > 200 {
+					argsStr = argsStr[:200] + "..."
+				}
+				fmt.Fprintf(&b, "[tool_call] %s(%s)\n", tc.GetToolName(), argsStr)
+			}
+		case "tool":
+			content := strings.TrimSpace(m.Content)
+			if len(content) > 400 {
+				content = content[:400] + "...(truncated)"
+			}
+			fmt.Fprintf(&b, "[tool_result:%s] %s\n", m.ToolCallID, content)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // persistTurnMessages 将一轮对话（user + assistant）持久化到 session store。
@@ -304,6 +418,14 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 // 空内容保护：assistant 内容为空时不落库，避免中断/失败后下次打开出现空白回答；
 // 此时仅保存用户消息，便于用户重试。会话行不存在时自动创建，避免静默丢弃。
 func (s *Server) persistTurnMessages(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg string) {
+	s.persistTurnMessagesWithPartial(aiAgent, sessionID, userMsg, assistantMsg, "")
+}
+
+// persistTurnMessagesWithPartial 在 persistTurnMessages 基础上支持 partial：
+// 当一轮对话中途失败（如 exceeded maximum turns、provider 报错）时，partial
+// 携带从 agent history 提取的"已执行过程"（工具调用+结果+中间叙述），作为
+// assistant 消息落库，避免已执行的工作从会话中消失。
+func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg, partial string) {
 	if s.sessionStore == nil || aiAgent == nil {
 		return
 	}
@@ -336,11 +458,19 @@ func (s *Server) persistTurnMessages(aiAgent *agent.Agent, sessionID, userMsg, a
 			Timestamp: now,
 		})
 	}
-	// 关键：assistant 为空不追加 —— 中断/异常的空回复不该出现在历史里
+	// 关键：assistant 为空不追加 —— 中断/异常的空回复不该出现在历史里；
+	// 但若携带 partial（本轮已执行的工具调用/结果摘要），则以 partial 落库，
+	// 保证出错前已完成的工作可追溯（用户重试时上下文也不丢）。
 	if strings.TrimSpace(assistantMsg) != "" {
 		sess.Messages = append(sess.Messages, types.Message{
 			Role:      "assistant",
 			Content:   assistantMsg,
+			Timestamp: now,
+		})
+	} else if strings.TrimSpace(partial) != "" {
+		sess.Messages = append(sess.Messages, types.Message{
+			Role:      "assistant",
+			Content:   partial,
 			Timestamp: now,
 		})
 	}
@@ -475,6 +605,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Run agent conversation
 	respContent, err := aiAgent.RunConversation(context.Background(), req.Message)
 	if err != nil {
+		// 失败轮次也要保留已执行的工作：从 agent history 提取本轮已完成的
+		// 工具调用/结果（partial），避免整轮工作丢失。
+		partial := extractPartialTurnText(aiAgent.GetHistory(), req.Message)
+		if partial != "" {
+			partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
+				err.Error(), partial)
+		}
+		s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial)
+		s.recordUsage(aiAgent, sessionID)
 		http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
 		return
 	}

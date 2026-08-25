@@ -255,6 +255,16 @@
             <n-button size="tiny" quaternary @click="downloadZip" :title="t('chat.downloadZip')" :disabled="!dirCurrentPath || isDownloading">
               <template #icon><n-icon :component="DownloadOutline" :size="14" /></template>
             </n-button>
+            <n-button
+              size="tiny"
+              quaternary
+              :type="showHiddenFiles ? 'primary' : 'default'"
+              :title="t('chat.showHidden')"
+              :disabled="!dirCurrentPath"
+              @click="toggleHiddenFiles"
+            >
+              <template #icon><n-icon :component="EyeOutline" :size="14" /></template>
+            </n-button>
           </n-space>
         </div>
 
@@ -323,7 +333,7 @@
             v-else
             :key="entry.path"
             class="file-tree-item"
-            :class="{ 'is-dir': entry.is_dir }"
+            :class="{ 'is-dir': entry.is_dir, 'is-hidden': entry.hidden }"
             @click="handleFileClick(entry)"
           >
             <n-icon size="16" :color="entry.is_dir ? '#18a058' : '#666'">
@@ -520,6 +530,7 @@ import {
   CheckmarkCircleOutline,
   CheckboxOutline,
   CloseCircleOutline,
+  EyeOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -571,6 +582,7 @@ const newGoalForm = reactive({
 // File manager state
 const dirCurrentPath = ref('')
 const isDownloading = ref(false)
+const showHiddenFiles = ref(false)
 const fsEntries = ref<sessionsApi.FSEntry[]>([])
 const filesLoading = ref(false)
 const showNewFolderInput = ref(false)
@@ -823,7 +835,7 @@ function formatTime(timestamp: number): string {
 async function loadFiles(path?: string) {
   filesLoading.value = true
   try {
-    const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined)
+    const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, undefined, showHiddenFiles.value)
     dirCurrentPath.value = res.current
     fsEntries.value = res.entries || []
   } catch (e) {
@@ -832,6 +844,11 @@ async function loadFiles(path?: string) {
   } finally {
     filesLoading.value = false
   }
+}
+
+function toggleHiddenFiles() {
+  showHiddenFiles.value = !showHiddenFiles.value
+  void loadFiles(dirCurrentPath.value || undefined)
 }
 
 function toggleSort(key: 'name' | 'size' | 'time') {
@@ -1011,7 +1028,7 @@ function downloadFile(url: string, filename?: string) {
 
 function downloadZip() {
   if (!dirCurrentPath.value) return
-  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!)
+  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!, undefined, showHiddenFiles.value)
   downloadFile(url, 'files.zip')
 }
 
@@ -1480,6 +1497,13 @@ function formatSize(bytes: number): string {
 
 .file-tree-item:hover {
   background: #f0f0f0;
+}
+
+/* Dot-prefixed (hidden) entries shown via the eye toggle: dimmed to keep
+   the visual hierarchy clear. */
+.file-tree-item.is-hidden .file-name {
+  opacity: 0.55;
+  font-style: italic;
 }
 
 .file-tree-item:hover .file-actions {

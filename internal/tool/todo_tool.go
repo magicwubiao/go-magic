@@ -90,6 +90,18 @@ type TodoTool struct {
 	mu       sync.RWMutex
 	todos    map[string]*TodoItem
 	dataFile string
+	// tombstones records IDs removed by auto-cleanup
+	// (cleanupSessionIfAllDoneLocked). Operations on tombstoned IDs are
+	// answered idempotently instead of failing with "todo not found", so a
+	// late update/complete/delete after cleanup never aborts an agent run.
+	tombstones map[string]tombstoneInfo
+}
+
+// tombstoneInfo keeps just enough context to answer gracefully.
+type tombstoneInfo struct {
+	SessionID string
+	Title     string
+	Status    string // status the item had when it was cleaned up (usually completed/cancelled)
 }
 
 var (
@@ -112,8 +124,9 @@ func GetTodoTool() *TodoTool {
 		_ = os.MkdirAll(dataDir, defaultFileSecurity().DefaultDirMode)
 
 		todoTool = &TodoTool{
-			todos:    make(map[string]*TodoItem),
-			dataFile: filepath.Join(dataDir, "todos.json"),
+			todos:      make(map[string]*TodoItem),
+			dataFile:   filepath.Join(dataDir, "todos.json"),
+			tombstones: make(map[string]tombstoneInfo),
 		}
 		todoTool.load()
 	})
@@ -517,6 +530,9 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 
 	todo, exists := t.todos[id]
 	if !exists {
+		if resp, handled := t.resolveTombstoneLocked(id, "update"); handled {
+			return resp, nil
+		}
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
@@ -616,6 +632,9 @@ func (t *TodoTool) deleteTodo(args map[string]interface{}) (interface{}, error) 
 
 	todo, exists := t.todos[id]
 	if !exists {
+		if resp, handled := t.resolveTombstoneLocked(id, "delete"); handled {
+			return resp, nil
+		}
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 
@@ -661,6 +680,13 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 	removedIDs := make([]string, 0, len(bucket))
 	for _, todo := range bucket {
 		delete(t.todos, todo.ID)
+		// Record a tombstone so later operations on this ID degrade
+		// gracefully instead of erroring with "todo not found".
+		t.tombstones[todo.ID] = tombstoneInfo{
+			SessionID: todo.SessionID,
+			Title:     todo.Title,
+			Status:    todo.Status,
+		}
 		removedIDs = append(removedIDs, todo.ID)
 	}
 	if len(removedIDs) > 0 {
@@ -676,6 +702,26 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 	return removedIDs
 }
 
+// resolveTombstoneLocked answers an operation on an auto-cleaned todo
+// gracefully. Caller must hold t.mu (write). Returns handled=false when the
+// ID has no tombstone (i.e. a genuinely unknown ID).
+func (t *TodoTool) resolveTombstoneLocked(id, action string) (map[string]interface{}, bool) {
+	info, ok := t.tombstones[id]
+	if !ok {
+		return nil, false
+	}
+	resp := map[string]interface{}{
+		"id":         id,
+		"status":     info.Status,
+		"tombstoned": true,
+		"message":    fmt.Sprintf("todo was auto-removed after its session finished; treating %s as no-op", action),
+	}
+	if info.Title != "" {
+		resp["title"] = info.Title
+	}
+	return resp, true
+}
+
 func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error) {
 	id, ok := args["id"].(string)
 	if !ok || id == "" {
@@ -687,6 +733,9 @@ func (t *TodoTool) completeTodo(args map[string]interface{}) (interface{}, error
 
 	todo, exists := t.todos[id]
 	if !exists {
+		if resp, handled := t.resolveTombstoneLocked(id, "complete"); handled {
+			return resp, nil
+		}
 		return nil, fmt.Errorf("todo not found: %s", id)
 	}
 	// 会话边界保护（同 updateTodo）

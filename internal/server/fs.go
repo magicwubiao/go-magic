@@ -544,6 +544,9 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Query().Get("path")
 	sessionID := r.URL.Query().Get("session_id")
+	// hidden=1 includes dot-prefixed files/dirs in the listing. Default keeps
+	// the old behaviour (hidden files filtered out).
+	showHidden := r.URL.Query().Get("hidden") == "1"
 
 	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
@@ -563,6 +566,7 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 		IsDir    bool   `json:"is_dir"`
 		Size     int64  `json:"size"`
 		Modified int64  `json:"modified"`
+		Hidden   bool   `json:"hidden"`
 	}
 
 	var result []fsEntry
@@ -575,7 +579,8 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
+		isHidden := strings.HasPrefix(name, ".")
+		if isHidden && !showHidden {
 			continue
 		}
 		info, err := entry.Info()
@@ -591,6 +596,7 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 			IsDir:    entry.IsDir(),
 			Size:     size,
 			Modified: modTime,
+			Hidden:   isHidden,
 		})
 	}
 
@@ -696,6 +702,10 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Query().Get("path")
 	sessionID := r.URL.Query().Get("session_id")
+	// hidden=1 includes dot-prefixed files/dirs in the archive. Default keeps
+	// the old behaviour (hidden entries skipped).
+	showHidden := r.URL.Query().Get("hidden") == "1"
+
 	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -723,9 +733,9 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 			if walkErr != nil {
 				return walkErr
 			}
-			// Skip hidden files/dirs
+			// Skip hidden files/dirs unless explicitly requested via ?hidden=1
 			name := fi.Name()
-			if strings.HasPrefix(name, ".") && p != base {
+			if !showHidden && strings.HasPrefix(name, ".") && p != base {
 				if fi.IsDir() {
 					return filepath.SkipDir
 				}

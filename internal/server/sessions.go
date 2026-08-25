@@ -728,6 +728,11 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 		ctx := context.Background()
 		respContent, err := aiAgent.RunConversation(ctx, req.Content)
 		if err != nil {
+			// 出错也要保存本轮已执行的内容：用户消息 + agent history 中
+			// 已完成的工具调用/结果（partial），否则整轮工作全部丢失。
+			partial := extractPartialTurnText(aiAgent.GetHistory(), req.Content)
+			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Content, "", partial)
+			s.recordUsage(aiAgent, sessionID)
 			http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
 			return
 		}

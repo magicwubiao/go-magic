@@ -164,6 +164,7 @@ const menuOptions = computed(() => [
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
   { type: 'divider' as const },
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
+  { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },

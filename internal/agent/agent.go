@@ -270,6 +270,7 @@ func WithConvertConfig(cfg *provider.ConvertConfig) AgentOption {
 }
 
 // WithLoopLimits configures loop detection limits
+// WithLoopLimits configures loop detection limits
 func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 	return func(a *Agent) {
 		if sameToolLimit > 0 {
@@ -278,6 +279,23 @@ func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 		if consecutiveLimit > 0 {
 			a.consecutiveLimit = consecutiveLimit
 		}
+	}
+}
+
+// WithMaxTurns overrides the per-turn tool-loop cap (default 60). Values <= 0
+// are ignored so callers can pass config straight through.
+func WithMaxTurns(n int) AgentOption {
+	return func(a *Agent) {
+		if n > 0 {
+			a.maxTurns = n
+		}
+	}
+}
+
+// ApplyOption applies one option to an already-constructed agent.
+func (a *Agent) ApplyOption(opt AgentOption) {
+	if opt != nil {
+		opt(a)
 	}
 }
 

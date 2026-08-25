@@ -20,6 +20,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
@@ -133,6 +134,12 @@ type Server struct {
 	globalBusSSEHandlers   map[uint64]func(kind string, payload []byte)
 	globalBusSSEHandlersMu sync.Mutex
 	globalBusSSENextID     uint64
+
+	// Bot Mode (named agent profiles with persistent chats). The manager is
+	// created lazily on first API access and shared by all /api/bots routes.
+	botMu          sync.Mutex
+	botManager     *bot.Manager
+	botModeStarted bool
 }
 
 // isAllowedOrigin 校验 origin 是否在允许列表内。
@@ -754,6 +761,20 @@ GOAL GUIDANCE:
 
 	// Build agent options
 	var agentOpts []agent.AgentOption
+	// Apply configurable loop caps from config.agent (max_turns etc.).
+	// Previously these were hard-coded defaults (60 turns) and the config
+	// keys were silently ignored by the web server path.
+	if s.cfg != nil {
+		if s.cfg.Agent.MaxTurns > 0 {
+			agentOpts = append(agentOpts, agent.WithMaxTurns(s.cfg.Agent.MaxTurns))
+		}
+		if s.cfg.Agent.MaxIterations > 0 || s.cfg.Agent.MaxTokenBudget > 0 {
+			agentOpts = append(agentOpts, agent.WithSteering(agent.SteeringConfig{
+				MaxIterations:  s.cfg.Agent.MaxIterations,
+				MaxTokenBudget: s.cfg.Agent.MaxTokenBudget,
+			}))
+		}
+	}
 	// Enable memory if config says so OR if cortex is available (cortex provides snapshot memory)
 	memoryEnabled := (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil
 	if memoryEnabled {
@@ -1215,6 +1236,8 @@ func (s *Server) Start(port int) error {
 	// GroupChat
 	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
 	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomSubroutes)))
+	mux.HandleFunc("/api/bots", withCORS(requireAuth(s.handleBots)))
+	mux.HandleFunc("/api/bots/", withCORS(requireAuth(s.handleBotByID)))
 
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
@@ -1282,10 +1305,77 @@ func (s *Server) Start(port int) error {
 // Stop gracefully shuts down the HTTP server. It is safe to call from
 // signal handlers when the server is no longer needed.
 func (s *Server) Stop() {
+	s.stopBotMode()
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.httpServer.Shutdown(ctx)
+	}
+}
+
+// readTimeout10s is the timeout used for session-store reads from HTTP handlers.
+func readTimeout10s() time.Duration { return 10 * time.Second }
+
+// botMgr returns the shared Bot Mode manager (nil when Bot Mode is off or
+// failed to start). The manager is created lazily on first access so that
+// bots defined in config come online even if no API call happened yet.
+func (s *Server) botMgr() *bot.Manager {
+	s.botMu.Lock()
+	defer s.botMu.Unlock()
+	if s.botModeStarted && s.botManager != nil {
+		return s.botManager
+	}
+	mgr, err := s.initBotMode()
+	if err != nil {
+		log.Warnf("[Server] Bot mode init failed: %v", err)
+		return nil
+	}
+	return mgr
+}
+
+// initBotMode creates and starts the shared bot Manager. Caller must hold s.botMu.
+func (s *Server) initBotMode() (*bot.Manager, error) {
+	if s.botModeStarted {
+		return s.botManager, nil
+	}
+
+	cfg := s.cfg
+	if cfg == nil {
+		cfg = appconfig.DefaultConfig()
+	}
+	if cfg.BotMode == nil || !cfg.BotMode.Enabled {
+		s.botModeStarted = true
+		return nil, fmt.Errorf("bot_mode disabled in config")
+	}
+
+	mgr, err := bot.NewManager(cfg, s.sessionStore)
+	if err != nil {
+		s.botModeStarted = true
+		return nil, err
+	}
+	if mgr == nil {
+		s.botModeStarted = true
+		return nil, fmt.Errorf("no bots configured")
+	}
+	if err := mgr.Start(context.Background()); err != nil {
+		s.botModeStarted = true
+		return nil, err
+	}
+	s.botManager = mgr
+	s.botModeStarted = true
+	log.Infof("[Server] Bot mode started with %d bot(s)", len(mgr.List()))
+	return mgr, nil
+}
+
+// stopBotMode shuts down the shared bot manager (idempotent).
+func (s *Server) stopBotMode() {
+	s.botMu.Lock()
+	mgr := s.botManager
+	s.botManager = nil
+	s.botModeStarted = true // prevent lazy re-init after shutdown
+	s.botMu.Unlock()
+	if mgr != nil {
+		mgr.Stop()
 	}
 }
 

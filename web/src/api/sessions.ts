@@ -103,13 +103,15 @@ export interface FSEntry {
   is_dir: boolean
   size: number
   modified: number
+  hidden?: boolean
 }
 
-export async function listFSEntries(path?: string, sessionId?: string, workspaceId?: string): Promise<{ current: string; entries: FSEntry[] }> {
+export async function listFSEntries(path?: string, sessionId?: string, workspaceId?: string, showHidden = false): Promise<{ current: string; entries: FSEntry[] }> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
   if (sessionId) params.set('session_id', sessionId)
   if (workspaceId) params.set('workspace_id', workspaceId)
+  if (showHidden) params.set('hidden', '1')
   const query = params.toString() ? `?${params.toString()}` : ''
   return request(`/fs/list${query}`)
 }
@@ -194,11 +196,12 @@ export async function writeFSFile(path: string, content: string, sessionId?: str
   })
 }
 
-export function getFSZipUrl(path: string, sessionId?: string, workspaceId?: string): string {
+export function getFSZipUrl(path: string, sessionId?: string, workspaceId?: string, showHidden = false): string {
   const params = new URLSearchParams()
   params.set('path', path)
   if (sessionId) params.set('session_id', sessionId)
   if (workspaceId) params.set('workspace_id', workspaceId)
+  if (showHidden) params.set('hidden', '1')
   const token = getAuthToken()
   // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
   // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token

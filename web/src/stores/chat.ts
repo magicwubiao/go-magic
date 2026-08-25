@@ -677,12 +677,57 @@ export const useChatStore = defineStore('chat', () => {
           if (data.error) {
             state.streaming = false
             state.taskProgress = null
-            
+
+            if (sessionFlushTimers.value[sessionId]) {
+              clearTimeout(sessionFlushTimers.value[sessionId]!)
+            }
+            flushStreamBuffer(sessionId)
             if (sessionEventSources.value[sessionId]) {
               sessionEventSources.value[sessionId]!.close()
               sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
             }
-            
+
+            // fix: 错误发生时不能丢弃已流式显示的内容。与 onerror 分支一致，
+            // 把出错前已生成的文本/工具调用/时间线固化为一条 assistant 消息，
+            // 否则用户会看到"已执行的对话凭空消失"。
+            pushTextSegmentIfNeeded(sessionId)
+            const errToolCalls = [...state.toolCalls]
+            const errTimeline = [...state.streamingSegments]
+            const errContent = state.streamContent
+            const executedSomething = !!errContent || errToolCalls.length > 0
+
+            nextTick(() => {
+              // 后端在无文本输出时会落库 partial（已执行工具摘要），前端刷新后可见；
+              // 这里同步固化当前内存中的内容，保证不刷新也不丢失。
+              if (executedSomething) {
+                let msgContent = errContent || ''
+                if (!msgContent && errToolCalls.length > 0) {
+                  const steps = errToolCalls.map(tc => {
+                    const mark = tc.status === 'error' ? '✗' : '✓'
+                    return `- ${mark} ${tc.name}`
+                  }).join('\n')
+                  msgContent = `⚠️ 对话在此轮执行中途出错（${data.error}），以下为出错前已完成的操作：\n\n${steps}`
+                } else {
+                  msgContent += `\n\n⚠️ 对话在此轮执行中途出错（${data.error}）`
+                }
+                state.messages.push({
+                  id: Date.now().toString(),
+                  role: 'assistant' as const,
+                  content: msgContent,
+                  timestamp: new Date().toISOString(),
+                  session_id: sessionId,
+                  tool_calls_snapshot: errToolCalls as unknown[],
+                  streaming_timeline_snapshot: errTimeline as unknown[],
+                })
+              }
+              state.streamContent = ''
+              state.streamBuffer = ''
+              state.toolCalls = []
+              state.streamingSegments = []
+              state.lastStreamSegEnd = 0
+              loadSessions()
+            })
+
             error.value = { message: data.error }
             console.error('Stream error:', data.error)
             return

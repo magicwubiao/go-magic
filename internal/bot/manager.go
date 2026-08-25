@@ -43,6 +43,7 @@ type Manager struct {
 	bots      map[string]*botRuntime
 	queueCond *sync.Cond
 	stopCh    chan struct{}
+	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg        sync.WaitGroup
 }
 
@@ -96,6 +97,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to list bots: %w", err)
 	}
+
+	m.mu.Lock()
+	m.rootCtx = ctx
+	m.mu.Unlock()
 
 	for _, bc := range configs {
 		rt := &botRuntime{cfg: bc}
@@ -202,6 +207,17 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime) (*agent.Agent, error) {
 	// Restore canonical chat history from the session store.
 	history := m.loadHistory(rt.cfg.Name)
 	ag := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), systemPrompt)
+	// Apply configurable loop caps (agent.max_turns etc.) so bots honor the
+	// same tuning knobs as the web server agents instead of the 60 default.
+	if m.cfg.Agent.MaxTurns > 0 {
+		ag.ApplyOption(agent.WithMaxTurns(m.cfg.Agent.MaxTurns))
+	}
+	if m.cfg.Agent.MaxIterations > 0 || m.cfg.Agent.MaxTokenBudget > 0 {
+		ag.ApplyOption(agent.WithSteering(agent.SteeringConfig{
+			MaxIterations:  m.cfg.Agent.MaxIterations,
+			MaxTokenBudget: m.cfg.Agent.MaxTokenBudget,
+		}))
+	}
 	ag.SetSession(CanonicalSessionID(rt.cfg.Name))
 	if len(history) > 0 {
 		ag.SetHistory(history)
@@ -464,4 +480,190 @@ func (m *Manager) saveHistory(name string, history []provider.Message) {
 	if err := m.sessions.SaveSession(ctx, sess); err != nil {
 		log.Warnf("[BotMode] Failed to persist chat for %s: %v", name, err)
 	}
+}
+
+// --- Dynamic lifecycle management (used by the Web dashboard API) ---
+
+// CreateBot persists a new bot config and, when the manager is running,
+// brings it online immediately (worker + routine scheduler).
+func (m *Manager) CreateBot(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("bot config is required")
+	}
+	if err := ValidateName(cfg.Name); err != nil {
+		return err
+	}
+	if existing, err := m.store.Load(cfg.Name); err == nil && existing != nil {
+		return fmt.Errorf("bot %q already exists", cfg.Name)
+	}
+	now := time.Now().Unix()
+	cfg.CreatedAt = now
+	cfg.UpdatedAt = now
+	if err := m.store.Save(cfg); err != nil {
+		return fmt.Errorf("failed to save bot: %w", err)
+	}
+	m.startBotLocked(cfg)
+	return nil
+}
+
+// UpdateBot applies partial updates to an existing bot and hot-reloads its
+// runtime (agent + routine scheduler) without dropping queued messages.
+func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) {
+	cfg, err := m.store.Load(name)
+	if err != nil {
+		return nil, fmt.Errorf("bot not found: %s", name)
+	}
+	mutate(cfg)
+	if cfg.Name != name {
+		// Renames are not supported: mention tags and session IDs key off Name.
+		return nil, fmt.Errorf("renaming bots is not supported")
+	}
+	if err := m.store.Save(cfg); err != nil {
+		return nil, fmt.Errorf("failed to save bot: %w", err)
+	}
+
+	key := strings.ToLower(name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rt, ok := m.bots[key]
+	if ok {
+		// Reset cached agent so the next turn picks up new persona/model.
+		rt.cfg = cfg
+		rt.ag = nil
+		rt.loaded = false
+	}
+	if sched, ok2 := m.routines[key]; ok2 && sched != nil {
+		sched.Stop()
+		delete(m.routines, key)
+	}
+	if ok {
+		sched := NewRoutineScheduler(m, cfg)
+		if err := sched.Start(m.rootCtxOrBackground()); err != nil {
+			log.Warnf("[BotMode] Failed to restart routines for %s: %v", name, err)
+		} else {
+			m.routines[key] = sched
+		}
+	}
+	return cfg, nil
+}
+
+// DeleteBot removes a bot's config and stops its runtime. Its canonical chat
+// session is kept on disk for audit/history purposes.
+func (m *Manager) DeleteBot(name string) error {
+	cfg, err := m.store.Load(name)
+	if err != nil {
+		return fmt.Errorf("bot not found: %s", name)
+	}
+
+	key := strings.ToLower(cfg.Name)
+	m.mu.Lock()
+	if sched, ok := m.routines[key]; ok && sched != nil {
+		sched.Stop()
+		delete(m.routines, key)
+	}
+	if rt, ok := m.bots[key]; ok {
+		// Drop any pending messages so the worker exits promptly.
+		rt.queue = nil
+		delete(m.bots, key)
+	}
+	m.mu.Unlock()
+
+	m.queueCond.Broadcast()
+
+	if err := m.store.Delete(cfg.Name); err != nil {
+		return fmt.Errorf("failed to delete bot: %w", err)
+	}
+	return nil
+}
+
+// GetBot loads one bot's config from disk.
+func (m *Manager) GetBot(name string) (*Config, error) {
+	return m.store.Load(name)
+}
+
+// RuntimeStatus reports live state for one bot (zero-value if not running).
+func (m *Manager) RuntimeStatus(botName string) RuntimeState {
+	state := RuntimeState{Name: botName, SessionID: CanonicalSessionID(botName)}
+	key := strings.ToLower(botName)
+
+	m.mu.Lock()
+	rt, ok := m.bots[key]
+	if ok {
+		state.QueueDepth = len(rt.queue)
+	}
+	routines, _ := m.store.LoadRoutines(rtName(key))
+	for _, r := range routines {
+		if r.Enabled {
+			state.ActiveRoutines++
+		}
+	}
+	m.mu.Unlock()
+
+	if ag := m.AgentFor(botName); ag != nil {
+		state.HistoryLength = len(ag.GetHistory())
+	}
+	return state
+}
+
+func rtName(key string) string { return key }
+
+// AgentFor exposes a bot's live agent (nil when offline). Used by the web
+// layer to read history without racing the message queue.
+func (m *Manager) AgentFor(botName string) *agent.Agent {
+	key := strings.ToLower(botName)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rt, ok := m.bots[key]
+	if !ok || rt == nil {
+		return nil
+	}
+	return rt.ag
+}
+
+// Sessions exposes the session store backing bots' canonical chats.
+func (m *Manager) Sessions() *sessionstore.Store {
+	return m.sessions
+}
+
+// startBotLocked brings one bot online (idempotent). Safe to call while
+// running or before Start().
+func (m *Manager) startBotLocked(cfg *Config) {
+	key := strings.ToLower(cfg.Name)
+
+	m.mu.Lock()
+	if _, exists := m.bots[key]; exists {
+		m.mu.Unlock()
+		return
+	}
+	rt := &botRuntime{cfg: cfg}
+	m.bots[key] = rt
+
+	var ctx context.Context
+	if m.rootCtx != nil {
+		ctx = m.rootCtx
+	} else {
+		ctx = context.Background()
+	}
+
+	sched := NewRoutineScheduler(m, cfg)
+	if err := sched.Start(ctx); err != nil {
+		log.Warnf("[BotMode] Failed to start routines for %s: %v", cfg.Name, err)
+	} else {
+		m.routines[key] = sched
+	}
+	m.mu.Unlock()
+
+	m.wg.Add(1)
+	go m.workerLoop(ctx, key)
+	log.Infof("[BotMode] Bot %q is now online (%s)", cfg.Name, cfg.Title)
+}
+
+// rootCtxOrBackground returns the lifecycle context captured by Start(),
+// falling back to Background for managers created but never started.
+func (m *Manager) rootCtxOrBackground() context.Context {
+	if m.rootCtx != nil {
+		return m.rootCtx
+	}
+	return context.Background()
 }

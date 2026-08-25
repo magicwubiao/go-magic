@@ -99,6 +99,11 @@ type Config struct {
 	ChatMode        string `json:"chat_mode,omitempty"` // chat, coding - default mode for magic chat
 	Agent           struct {
 		GoalMaxTurns int `json:"goal_max_turns"`
+		// MaxTurns caps one conversation turn's tool-loop iterations for
+		// server/bot agents (default 60). 0 keeps the built-in default.
+		MaxTurns       int   `json:"max_turns,omitempty"`
+		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 80
+		MaxTokenBudget int64 `json:"max_token_budget,omitempty"` // steering token budget
 	} `json:"agent,omitempty"`
 	// Approval settings
 	Approval *ApprovalConfig `json:"approval,omitempty"`
