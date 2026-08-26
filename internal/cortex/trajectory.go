@@ -465,8 +465,28 @@ func (ts *TrajectoryStore) Clear() error {
 // Helper functions
 
 func generateTrajectoryID(t *Trajectory) string {
-	// Use nanosecond timestamp + random suffix to avoid collisions
-	return fmt.Sprintf("traj_%d_%04d", t.StartTime.UnixNano(), rand.Intn(10000))
+	return fmt.Sprintf("traj_%d_%04d", t.StartTime.UnixNano(), globalRandIntn(10000))
+}
+
+// globalRng provides a concurrency-safe source of random numbers for
+// generatePatternID and other package-level helpers that need randomness
+// but don't have access to a StrategyGenerator.rng.
+var globalRng struct {
+	sync.Mutex
+	r *rand.Rand
+}
+
+func init() {
+	globalRng.r = rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
+func globalRandIntn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	globalRng.Lock()
+	defer globalRng.Unlock()
+	return globalRng.r.Intn(n)
 }
 
 func generatePatternID(pattern string) string {

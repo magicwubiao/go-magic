@@ -81,10 +81,35 @@ func (m *SoulManager) GetSoul() string {
 	return m.content
 }
 
-// SetSoul updates the soul/personality
+// SetSoul updates the soul/personality.
+// Enforces a maximum size limit; trims oldest Learned Preferences if exceeded.
 func (m *SoulManager) SetSoul(content string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	const maxSoulSize = 64 * 1024
+	if len(content) > maxSoulSize {
+		for len(content) > maxSoulSize {
+			lpMarker := "## Learned Preferences"
+			idx := strings.Index(content, lpMarker)
+			if idx == -1 {
+				cut := content[len(content)-maxSoulSize:]
+				for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
+					cut = cut[1:]
+				}
+				content = cut
+				break
+			}
+			nextSection := strings.Index(content[idx+1:], "\n## ")
+			if nextSection == -1 {
+				content = content[:idx]
+			} else {
+				end := idx + 1 + nextSection
+				content = content[:idx] + content[end:]
+			}
+		}
+	}
+
 	m.content = content
 	return m.save()
 }
@@ -110,7 +135,7 @@ func (m *SoulManager) UpdateFromFeedback(feedback string) error {
 		return nil
 	}
 
-	const maxSoulSize = 32 * 1024
+	const maxSoulSize = 64 * 1024
 	update := "\n\n## Learned Preferences\n" + preference + "\n[Auto-generated from interactions]"
 	newContent := m.content + update
 	if len(newContent) > maxSoulSize {

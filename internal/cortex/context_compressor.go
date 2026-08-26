@@ -404,9 +404,7 @@ func extractTopKeywords(messages []provider.Message, n int) []string {
 func (cc *ContextCompressor) estimateTokens(messages []provider.Message) int {
 	total := 0
 	for _, msg := range messages {
-		// Rough estimate: ~4 chars per token
-		total += len(msg.Content) / 4
-		// Add overhead per message
+		total += len(msg.Content) / 3
 		total += 4
 	}
 	return total

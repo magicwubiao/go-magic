@@ -297,17 +297,16 @@ func (g *StrategyGenerator) mutateStrategy(parent *OptimizationStrategy) Optimiz
 			mutation.Changes = append(mutation.Changes[:idx], append([]PromptChange{merged}, mutation.Changes[idx+2:]...)...)
 		}
 	case 3:
-		// 增强内容：对某个 change 的 NewContent 做实质性补充
+		// 增强内容：标注放入 Reason（不污染 NewContent，避免 applyAdd 幂等检查失效）
 		idx := g.randIntn(len(mutation.Changes))
 		change := &mutation.Changes[idx]
 		augmentations := []string{
-			"（增加示例以提升清晰度）",
-			"（明确边界条件）",
-			"（补充错误处理指引）",
-			"（增加中文说明）",
+			"增加示例以提升清晰度",
+			"明确边界条件",
+			"补充错误处理指引",
+			"增加中文说明",
 		}
-		change.NewContent = change.NewContent + " " + augmentations[g.randIntn(len(augmentations))]
-		change.Reason = change.Reason + " [变异增强]"
+		change.Reason = change.Reason + " [变异增强: " + augmentations[g.randIntn(len(augmentations))] + "]"
 	}
 
 	return mutation

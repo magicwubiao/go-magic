@@ -284,9 +284,9 @@ func (g *GEPAEngine) evolve(ctx context.Context) error {
 	return nil
 }
 
-// ApplyBestStrategy applies the best strategy to the system
+// ApplyBestStrategy applies the best strategy to the system.
+// Skips re-application if the strategy was already applied (idempotent).
 func (g *GEPAEngine) ApplyBestStrategy(soul *SoulManager, systemPrompt string) (string, error) {
-	// 读锁取 best 指针
 	g.mu.RLock()
 	bestPtr := g.bestStrategy
 	g.mu.RUnlock()
@@ -295,17 +295,17 @@ func (g *GEPAEngine) ApplyBestStrategy(soul *SoulManager, systemPrompt string) (
 		return systemPrompt, nil
 	}
 
-	// 拷贝一份再修改，避免直接写共享对象导致数据竞争，
-	// 同时不污染 generations 历史中保存的同源 BestStrategy 指针。
+	if bestPtr.Applied {
+		return systemPrompt, nil
+	}
+
 	bestCopy := *bestPtr
 
-	// Apply strategy using optimizer（不持锁，避免长耗时操作阻塞引擎）
 	optimized, err := g.optimizer.Optimize(systemPrompt, bestCopy.Changes)
 	if err != nil {
 		return systemPrompt, err
 	}
 
-	// 修改副本并取写锁写回
 	now := time.Now()
 	bestCopy.Applied = true
 	bestCopy.AppliedAt = &now
@@ -469,14 +469,25 @@ func (g *GEPAEngine) GetGenerations() []Generation {
 // saveGeneration saves a generation to disk
 func (g *GEPAEngine) saveGeneration(gen *Generation) {
 	path := filepath.Join(g.baseDir, "gepa", "generations", fmt.Sprintf("gen_%d.json", gen.ID))
-	os.MkdirAll(filepath.Dir(path), 0755)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		log.Printf("[GEPA] failed to create generation dir: %v", err)
+		return
+	}
 
-	data, _ := json.MarshalIndent(gen, "", "  ")
-	os.WriteFile(path, data, 0644)
+	data, err := json.MarshalIndent(gen, "", "  ")
+	if err != nil {
+		log.Printf("[GEPA] failed to marshal generation %d: %v", gen.ID, err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		log.Printf("[GEPA] failed to write generation %d: %v", gen.ID, err)
+	}
 }
 
-// loadGenerations loads previous generations from disk
+// loadGenerations loads previous generations from disk (capped at maxLoadedGenerations)
 func (g *GEPAEngine) loadGenerations() {
+	const maxLoadedGenerations = 200
+
 	genDir := filepath.Join(g.baseDir, "gepa", "generations")
 	entries, err := os.ReadDir(genDir)
 	if err != nil {
@@ -506,11 +517,13 @@ func (g *GEPAEngine) loadGenerations() {
 		}
 	}
 
-	// 加载后按 generation ID 升序排序，确保 generations[len-1] 为最新代。
-	// os.ReadDir 返回顺序不确定，不排序会导致末尾元素不一定是最新代。
 	sort.Slice(g.generations, func(i, j int) bool {
 		return g.generations[i].ID < g.generations[j].ID
 	})
+
+	if len(g.generations) > maxLoadedGenerations {
+		g.generations = g.generations[len(g.generations)-maxLoadedGenerations:]
+	}
 }
 
 // Reset resets the GEPA engine

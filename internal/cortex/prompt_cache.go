@@ -293,6 +293,5 @@ func (pc *PromptCache) Clear() error {
 
 // estimateTokens estimates token count (rough approximation)
 func estimateTokens(text string) int {
-	// Rough approximation: ~4 chars per token for English
-	return len(text) / 4
+	return len(text) / 3
 }

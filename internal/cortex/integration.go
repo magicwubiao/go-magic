@@ -626,11 +626,18 @@ func (m *Manager) generateMemoryFeedback(conversation string) string {
 		// 收紧匹配：仅当行明确以偏好/喜好表达开头时才收集
 		if strings.Contains(lower, "i prefer") ||
 			strings.Contains(lower, "i like") ||
+			strings.Contains(lower, "i enjoy") ||
 			strings.Contains(lower, "i don't like") ||
 			strings.Contains(lower, "i do not like") ||
 			strings.Contains(lower, "i hate") ||
 			strings.Contains(lower, "i always") ||
-			strings.Contains(lower, "i usually") {
+			strings.Contains(lower, "i usually") ||
+			strings.Contains(lower, "i find") && strings.Contains(lower, "helpful") ||
+			strings.Contains(lower, "我喜欢") ||
+			strings.Contains(lower, "我偏好") ||
+			strings.Contains(lower, "我讨厌") ||
+			strings.Contains(lower, "我总是") ||
+			strings.Contains(lower, "我通常") {
 			feedback.WriteString(line + "\n")
 		}
 	}

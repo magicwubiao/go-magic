@@ -175,6 +175,11 @@ func (e *EffectivenessEvaluator) evaluateQuality(trajectory *Trajectory) float64
 		"error":     -0.2,
 		"failed":    -0.2,
 		"warning":   -0.1,
+		"成功":        0.1,
+		"完成":        0.1,
+		"错误":        -0.2,
+		"失败":        -0.2,
+		"警告":        -0.1,
 	}
 
 	lowerResult := strings.ToLower(result)
@@ -241,8 +246,9 @@ func isAppropriateTool(toolName, input string) bool {
 
 	checks, exists := toolChecks[toolName]
 	if !exists {
-		// 未知工具默认不判定为合适，避免 tool_accuracy 恒为 1.0
-		return false
+		// 未知工具：若有输入则假定合理（宽容处理，避免新工具被误判为 0），
+		// 无输入则判定为不合适。
+		return input != ""
 	}
 
 	// Check if input contains relevant keywords
