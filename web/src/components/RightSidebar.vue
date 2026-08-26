@@ -603,10 +603,14 @@ const isMobile = ref(window.innerWidth <= 768)
 
 function handleResize() {
   isMobile.value = window.innerWidth <= 768
-  if (!isMobile.value) {
-    emit('update:mobileVisible', false)
-  }
 }
+
+watch(isMobile, (mobile) => {
+  if (!mobile) {
+    emit('update:mobileVisible', false)
+    isCollapsed.value = false
+  }
+})
 
 onMounted(() => {
   window.addEventListener('resize', handleResize)
@@ -632,7 +636,7 @@ function priorityColor(p: string): string {
   return ({ high: '#e44234', medium: '#f0a020', low: '#6a9955' } as any)[p] || '#999'
 }
 
-const isCollapsed = ref(true)
+const isCollapsed = ref(false)
 const activeTab = ref<'goals' | 'files'>('goals')
 const expandedGoals = ref<string[]>([])
 const goalSessions = ref<Record<string, any[]>>({})

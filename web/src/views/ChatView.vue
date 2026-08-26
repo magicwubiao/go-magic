@@ -1,13 +1,17 @@
 <template>
   <div class="chat-container">
     <!-- Session Sidebar -->
-    <div class="session-sidebar">
-      <div class="sidebar-header">
+    <div class="session-sidebar" :class="{ 'mobile-expanded': mobileSessionExpanded }">
+      <!-- Mobile drag handle -->
+      <div class="mobile-session-handle" @click="mobileSessionExpanded = !mobileSessionExpanded">
+        <div class="handle-bar"></div>
+      </div>
+      <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
         <n-button type="primary" block @click="createSession" size="small">
           + {{ t('chat.newChat') }}
         </n-button>
       </div>
-      <div class="session-list" ref="sessionListRef">
+      <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
         <template v-for="(sessions, profile) in groupedSessions" :key="profile">
           <div class="profile-group-header">{{ profile || t('chat.default') }}</div>
           <div
@@ -532,6 +536,20 @@ const router = useRouter()
 const message = useMessage()
 const inputValue = ref('')
 const rightSidebarMobileVisible = ref(false)
+const mobileSessionExpanded = ref(false)
+const isMobile = ref(window.innerWidth <= 768)
+
+function handleResize() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 const messagesRef = ref<HTMLDivElement>()
 const sessionListRef = ref<HTMLDivElement>()
 
@@ -2259,6 +2277,11 @@ onMounted(async () => {
   display: none;
 }
 
+/* Mobile drag handle - hidden on desktop */
+.mobile-session-handle {
+  display: none;
+}
+
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {
   .chat-container {
@@ -2268,15 +2291,42 @@ onMounted(async () => {
   .session-sidebar {
     width: 100%;
     height: auto;
-    max-height: 25vh;
+    max-height: 30px;
     border-right: none;
     border-bottom: 1px solid #e0e0e0;
+    transition: max-height 0.3s ease;
+    overflow: hidden;
+  }
+
+  .session-sidebar.mobile-expanded {
+    max-height: 60vh;
   }
   
   .session-list {
     position: relative;
     top: 0;
-    max-height: 18vh;
+    max-height: none;
+    flex: 1;
+  }
+
+  .mobile-session-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 0;
+    cursor: pointer;
+  }
+
+  .handle-bar {
+    width: 56px;
+    height: 6px;
+    border-radius: 3px;
+    background: #bbb;
+    transition: background 0.2s;
+  }
+
+  .mobile-session-handle:hover .handle-bar {
+    background: #888;
   }
   
   .chat-main {
