@@ -410,6 +410,102 @@ func (s *Server) handleFSWrite(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"path": absPath, "size": size})
 }
 
+func (s *Server) handleFSUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	dirPath := r.URL.Query().Get("path")
+	sessionID := r.URL.Query().Get("session_id")
+
+	if dirPath == "" {
+		jsonResponse(w, map[string]interface{}{"error": "path (target directory) is required"})
+		return
+	}
+
+	absDirPath, err := s.resolveFSPath(dirPath, sessionID)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	info, err := os.Stat(absDirPath)
+	if err != nil || !info.IsDir() {
+		jsonResponse(w, map[string]interface{}{"error": "target path is not a directory"})
+		return
+	}
+
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		jsonResponse(w, map[string]interface{}{"error": "failed to parse form: " + err.Error()})
+		return
+	}
+
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		f, _, err := r.FormFile("file")
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{"error": "no files provided"})
+			return
+		}
+		f.Close()
+		files = r.MultipartForm.File["file"]
+	}
+
+	type uploadResult struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Size int64  `json:"size"`
+	}
+
+	results := make([]uploadResult, 0, len(files))
+
+	for _, fh := range files {
+		filename := filepath.Base(fh.Filename)
+		if filename == "" || filename == "." || filename == ".." {
+			continue
+		}
+
+		dstPath := filepath.Join(absDirPath, filename)
+
+		dstDir := filepath.Dir(dstPath)
+		rel, err := filepath.Rel(absDirPath, dstDir)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+
+		src, err := fh.Open()
+		if err != nil {
+			continue
+		}
+
+		out, err := os.Create(dstPath)
+		if err != nil {
+			src.Close()
+			continue
+		}
+
+		written, err := io.Copy(out, src)
+		src.Close()
+		out.Close()
+		if err != nil {
+			os.Remove(dstPath)
+			continue
+		}
+
+		results = append(results, uploadResult{
+			Name: filename,
+			Path: dstPath,
+			Size: written,
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"uploaded": results,
+		"count":    len(results),
+	})
+}
+
 func sanitizeDirName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {

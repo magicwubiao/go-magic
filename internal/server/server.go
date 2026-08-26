@@ -1180,6 +1180,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/fs/delete", withCORS(requireAuth(s.handleFSDelete)))
 	mux.HandleFunc("/api/fs/rename", withCORS(requireAuth(s.handleFSRename)))
 	mux.HandleFunc("/api/fs/write", withCORS(requireAuth(s.handleFSWrite)))
+	mux.HandleFunc("/api/fs/upload", withCORS(requireAuth(s.handleFSUpload)))
 	// Shared resources are accessed via token in the URL (no auth required,
 	// because the token itself is the credential). Bound by TTL.
 	mux.HandleFunc("/api/fs/shared/", withCORS(s.handleFSShared))

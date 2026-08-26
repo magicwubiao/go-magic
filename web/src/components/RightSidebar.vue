@@ -252,6 +252,9 @@
             <n-button size="tiny" quaternary @click="startNewFile" :title="t('chat.newFile')">
               <template #icon><n-icon :component="FileTrayOutline" :size="14" /></template>
             </n-button>
+            <n-button size="tiny" quaternary @click="triggerUpload" :title="t('chat.uploadFile')" :disabled="!dirCurrentPath">
+              <template #icon><n-icon :component="CloudUploadOutline" :size="14" /></template>
+            </n-button>
             <n-button size="tiny" quaternary @click="downloadZip" :title="t('chat.downloadZip')" :disabled="!dirCurrentPath || isDownloading">
               <template #icon><n-icon :component="DownloadOutline" :size="14" /></template>
             </n-button>
@@ -321,7 +324,13 @@
         </div>
 
         <!-- File tree -->
-        <div class="files-tree">
+        <div
+          class="files-tree"
+          @dragover.prevent="onDragOver"
+          @dragleave.prevent="onDragLeave"
+          @drop.prevent="onDrop"
+          :class="{ 'drag-over': isDragOver }"
+        >
           <div v-if="filesLoading" class="files-loading">
             <n-spin size="small" />
           </div>
@@ -353,7 +362,18 @@
               </n-dropdown>
             </div>
           </div>
+          <div v-if="isDragOver" class="drag-overlay">
+            <n-icon :component="CloudUploadOutline" :size="32" color="#18a058" />
+            <n-text depth="2" style="font-size: 13px;">{{ t('chat.dropToUpload') }}</n-text>
+          </div>
         </div>
+        <input
+          ref="uploadInputRef"
+          type="file"
+          multiple
+          style="display: none;"
+          @change="handleUploadChange"
+        />
       </div>
     </div>
 
@@ -531,6 +551,7 @@ import {
   CheckboxOutline,
   CloseCircleOutline,
   EyeOutline,
+  CloudUploadOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -593,6 +614,11 @@ const newItemInputRef = ref<{ focus: () => void } | null>(null)
 // Sort state
 const fileSortKey = ref<'name' | 'size' | 'time'>('name')
 const fileSortOrder = ref<'asc' | 'desc'>('asc')
+
+// Upload state
+const uploadInputRef = ref<HTMLInputElement | null>(null)
+const isDragOver = ref(false)
+const isUploading = ref(false)
 
 // Rename modal state
 const showRenameModal = ref(false)
@@ -1119,6 +1145,48 @@ function formatSize(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
+
+function triggerUpload() {
+  uploadInputRef.value?.click()
+}
+
+async function handleUploadChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files || !input.files.length || !dirCurrentPath.value) return
+  await doUpload(Array.from(input.files))
+  input.value = ''
+}
+
+function onDragOver(e: DragEvent) {
+  if (!dirCurrentPath.value) return
+  if (e.dataTransfer?.types.includes('Files')) {
+    isDragOver.value = true
+  }
+}
+
+function onDragLeave() {
+  isDragOver.value = false
+}
+
+async function onDrop(e: DragEvent) {
+  isDragOver.value = false
+  if (!dirCurrentPath.value || !e.dataTransfer?.files.length) return
+  await doUpload(Array.from(e.dataTransfer.files))
+}
+
+async function doUpload(files: File[]) {
+  if (!files.length || !dirCurrentPath.value) return
+  isUploading.value = true
+  try {
+    const result = await sessionsApi.uploadFSToDir(dirCurrentPath.value, files, chatStore.activeSessionId || undefined)
+    message.success(t('chat.uploadSuccess', { count: result.count }))
+    loadFiles(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('chat.uploadFail'))
+  } finally {
+    isUploading.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -1482,6 +1550,28 @@ function formatSize(bytes: number): string {
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px;
+  position: relative;
+}
+
+.files-tree.drag-over {
+  background: rgba(24, 160, 88, 0.06);
+  outline: 2px dashed #18a058;
+  outline-offset: -4px;
+  border-radius: 4px;
+}
+
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .file-tree-item {

@@ -196,6 +196,42 @@ export async function writeFSFile(path: string, content: string, sessionId?: str
   })
 }
 
+export interface FSUploadResult {
+  name: string
+  path: string
+  size: number
+}
+
+export async function uploadFSToDir(dirPath: string, files: File[], sessionId?: string): Promise<{ uploaded: FSUploadResult[]; count: number }> {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+
+  const params = new URLSearchParams()
+  params.set('path', dirPath)
+  if (sessionId) params.set('session_id', sessionId)
+
+  const token = getAuthToken()
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const response = await fetch(`/api/fs/upload?${params.toString()}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Upload failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 export function getFSZipUrl(path: string, sessionId?: string, workspaceId?: string, showHidden = false): string {
   const params = new URLSearchParams()
   params.set('path', path)
