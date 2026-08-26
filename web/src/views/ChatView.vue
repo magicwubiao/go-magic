@@ -411,7 +411,20 @@
     </div>
 
     <!-- Goal Sidebar -->
-    <RightSidebar />
+    <RightSidebar v-model:mobile-visible="rightSidebarMobileVisible" />
+
+    <!-- Mobile right sidebar toggle FAB -->
+    <n-button
+      class="right-sidebar-fab"
+      circle
+      size="large"
+      @click="rightSidebarMobileVisible = !rightSidebarMobileVisible"
+      :title="t('sidebar.expand')"
+    >
+      <template #icon>
+        <n-icon :component="FlagOutline" :size="20" />
+      </template>
+    </n-button>
 
     <!-- Work Directory Picker Modal -->
     <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" style="width: 500px;">
@@ -518,6 +531,7 @@ const modelsStore = useModelsStore()
 const router = useRouter()
 const message = useMessage()
 const inputValue = ref('')
+const rightSidebarMobileVisible = ref(false)
 const messagesRef = ref<HTMLDivElement>()
 const sessionListRef = ref<HTMLDivElement>()
 
@@ -2241,6 +2255,10 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+.right-sidebar-fab {
+  display: none;
+}
+
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {
   .chat-container {
@@ -2250,7 +2268,7 @@ onMounted(async () => {
   .session-sidebar {
     width: 100%;
     height: auto;
-    max-height: 40vh;
+    max-height: 25vh;
     border-right: none;
     border-bottom: 1px solid #e0e0e0;
   }
@@ -2258,7 +2276,7 @@ onMounted(async () => {
   .session-list {
     position: relative;
     top: 0;
-    max-height: 30vh;
+    max-height: 18vh;
   }
   
   .chat-main {
@@ -2289,6 +2307,15 @@ onMounted(async () => {
   .input-area {
     padding: 8px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .right-sidebar-fab {
+    display: flex;
+    position: fixed;
+    right: 16px;
+    bottom: 200px;
+    z-index: 150;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
 }
 </style>

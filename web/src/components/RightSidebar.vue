@@ -1,6 +1,8 @@
 <template>
-  <div class="right-sidebar" :class="{ collapsed: isCollapsed }">
-    <!-- Collapse toggle button -->
+  <!-- Mobile backdrop -->
+  <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
+  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }">
+    <!-- Collapse toggle button (desktop only) -->
     <n-button 
       size="small" 
       quaternary 
@@ -11,6 +13,20 @@
     >
       <template #icon>
         <n-icon :component="isCollapsed ? ChevronForwardOutline : ChevronBackOutline" :size="16" />
+      </template>
+    </n-button>
+
+    <!-- Mobile close button -->
+    <n-button
+      size="small"
+      quaternary
+      circle
+      class="mobile-close-btn"
+      @click="$emit('update:mobileVisible', false)"
+      :title="t('sidebar.collapse')"
+    >
+      <template #icon>
+        <n-icon :component="CloseOutline" :size="16" />
       </template>
     </n-button>
 
@@ -566,6 +582,14 @@ import type { Goal } from '@/api/goals'
 import { getGoalSessions } from '@/api/goals'
 import * as sessionsApi from '@/api/sessions'
 
+const props = defineProps<{
+  mobileVisible?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:mobileVisible', value: boolean): void
+}>()
+
 const { t } = useI18n()
 const router = useRouter()
 const message = useMessage()
@@ -574,6 +598,23 @@ const goalsStore = useGoalsStore()
 const chatStore = useChatStore()
 const configStore = useConfigStore()
 const todosStore = useTodosStore()
+
+const isMobile = ref(window.innerWidth <= 768)
+
+function handleResize() {
+  isMobile.value = window.innerWidth <= 768
+  if (!isMobile.value) {
+    emit('update:mobileVisible', false)
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 
 // ===== Real-time Todo Panel (read-only display) =====
 const todosPanelCollapsed = ref(false)
@@ -1759,6 +1800,69 @@ async function doUpload(files: File[]) {
   border-radius: 6px;
 }
 
+/* Mobile close button - hidden on desktop */
+.mobile-close-btn {
+  display: none;
+}
+
+/* Mobile backdrop */
+.right-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 199;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .right-sidebar {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 200;
+    width: 280px;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .right-sidebar.mobile-visible {
+    transform: translateX(0);
+  }
+
+  .right-sidebar.mobile-hidden {
+    transform: translateX(100%);
+  }
+
+  .right-sidebar.collapsed {
+    width: 280px;
+  }
+
+  .collapse-toggle {
+    display: none;
+  }
+
+  .mobile-close-btn {
+    display: flex;
+    position: absolute;
+    left: -36px;
+    top: 12px;
+    z-index: 10;
+    background: #fff !important;
+    border: 1px solid #e0e0e0 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .right-sidebar.collapsed .sidebar-content {
+    display: flex !important;
+  }
+
+  .right-sidebar.collapsed .collapsed-indicator {
+    display: none;
+  }
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .preview-toolbar {
@@ -1798,6 +1902,15 @@ async function doUpload(files: File[]) {
   .collapse-toggle {
     background: #1e1e1e !important;
     border-color: #333 !important;
+  }
+
+  .mobile-close-btn {
+    background: #1e1e1e !important;
+    border-color: #333 !important;
+  }
+
+  .right-sidebar-backdrop {
+    background: rgba(0, 0, 0, 0.6);
   }
 
   /* Todo Panel Dark Mode */
