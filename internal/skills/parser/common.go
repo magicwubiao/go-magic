@@ -221,9 +221,14 @@ func DetectFormat(skillDir string) (SkillFormat, error) {
 	}
 
 	if frontmatter == nil {
-		// No frontmatter, check for hermes markers
-		if strings.Contains(string(data), "hermes") {
-			return FormatHermes, nil
+		// No frontmatter, check for structured hermes markers.
+		// 按行前缀匹配（而非全文子串），避免正文偶然提到 "hermes"
+		// 一词即被误判为 Hermes 格式；与 skill_import 的探测意图一致。
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "hermes_version:") || strings.HasPrefix(trimmed, "hermes:") {
+				return FormatHermes, nil
+			}
 		}
 		return FormatMagic, nil
 	}

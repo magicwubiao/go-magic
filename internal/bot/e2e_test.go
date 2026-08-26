@@ -417,6 +417,100 @@ func TestRoutineTriggerAndStatus(t *testing.T) {
 	}
 }
 
+// TestUpdateRoutine covers Manager.UpdateRoutine: disable stops the cron
+// entry, edits persist and take effect live, and re-enabling re-registers.
+func TestUpdateRoutine(t *testing.T) {
+	cfg, _, _ := setupEnv(t, func(m *mockLLM, lastUser string) map[string]interface{} {
+		return textResponse("done: " + lastUser)
+	})
+	_ = cfg
+
+	mgr, err := NewManager(mustLoadConfig(t), nil)
+	if err != nil || mgr == nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	// Every-second schedule so we can observe firing start/stop.
+	err = mgr.AddRoutine("alice", &RoutineConfig{
+		Name:     "ticker",
+		Schedule: "* * * * * *",
+		Prompt:   "[routine] tick",
+	})
+	if err != nil {
+		t.Fatalf("AddRoutine: %v", err)
+	}
+
+	waitFor(t, 15*time.Second, "initial success status", func() bool {
+		routines, _ := mgr.ListRoutines("alice")
+		return len(routines) > 0 && routines[0].LastRun != nil &&
+			strings.HasPrefix(routines[0].LastStatus, "success")
+	})
+
+	// Disable: last_status should stay frozen (no new runs).
+	updated, err := mgr.UpdateRoutine("alice", "ticker", func(r *RoutineConfig) {
+		r.Enabled = false
+	})
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if updated.Enabled {
+		t.Error("expected Enabled=false after disable")
+	}
+	time.Sleep(2500 * time.Millisecond)
+	frozen, _ := mgr.ListRoutines("alice")
+	var frozenRun int64
+	if len(frozen) > 0 && frozen[0].LastRun != nil {
+		frozenRun = *frozen[0].LastRun
+	}
+	time.Sleep(2 * time.Second)
+	still, _ := mgr.ListRoutines("alice")
+	if len(still) > 0 && still[0].LastRun != nil && *still[0].LastRun != frozenRun {
+		t.Errorf("disabled routine still firing (last_run %d -> %d)", frozenRun, *still[0].LastRun)
+	}
+
+	// Edit schedule + prompt while disabled; then re-enable.
+	updated, err = mgr.UpdateRoutine("alice", "ticker", func(r *RoutineConfig) {
+		r.Prompt = "[routine] tock"
+	})
+	if err != nil {
+		t.Fatalf("edit prompt: %v", err)
+	}
+	if updated.Prompt != "[routine] tock" {
+		t.Errorf("prompt not persisted: %q", updated.Prompt)
+	}
+	// Unknown routine must fail.
+	if _, err := mgr.UpdateRoutine("alice", "ghost", func(r *RoutineConfig) { r.Enabled = true }); err == nil {
+		t.Error("expected error for unknown routine")
+	}
+	// Invalid schedule must fail validation.
+	if _, err := mgr.UpdateRoutine("alice", "ticker", func(r *RoutineConfig) { r.Schedule = "not-a-cron" }); err == nil {
+		t.Error("expected error for invalid schedule")
+	}
+	// Restore a valid schedule and enable again.
+	updated, err = mgr.UpdateRoutine("alice", "ticker", func(r *RoutineConfig) {
+		r.Enabled = true
+	})
+	if err != nil {
+		t.Fatalf("re-enable after invalid schedule attempt: %v", err)
+	}
+	if !updated.Enabled || updated.Schedule != "* * * * * *" {
+		t.Errorf("unexpected state after re-enable: %+v", updated)
+	}
+	waitFor(t, 15*time.Second, "resumed runs with new prompt", func() bool {
+		routines, _ := mgr.ListRoutines("alice")
+		return len(routines) > 0 && routines[0].LastRun != nil &&
+			strings.HasPrefix(routines[0].LastStatus, "success")
+	})
+
+	if err := mgr.RemoveRoutine("alice", "ticker"); err != nil {
+		t.Fatalf("RemoveRoutine: %v", err)
+	}
+}
+
 // TestHistoryWindowTruncation verifies saveHistory trims old turns while
 // keeping whole turns together and preserving the system prompt.
 func TestHistoryWindowTruncation(t *testing.T) {

@@ -187,6 +187,62 @@ func (m *Manager) AddRoutine(botName string, r *RoutineConfig) error {
 	return nil
 }
 
+// UpdateRoutine applies partial updates to one routine (by ID or name) and
+// re-registers it with the live scheduler. Supported mutations:
+//   - Enabled: false removes the cron entry; true validates the schedule
+//     again and registers it.
+//   - Schedule/Prompt/Name: persisted immediately; if the routine is enabled,
+//     the cron entry is replaced so changes take effect without a restart.
+func (m *Manager) UpdateRoutine(botName, idOrName string, mutate func(*RoutineConfig)) (*RoutineConfig, error) {
+	routines, err := m.store.LoadRoutines(botName)
+	if err != nil {
+		return nil, err
+	}
+	var target *RoutineConfig
+	for _, r := range routines {
+		if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
+			target = r
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("routine not found: %s", idOrName)
+	}
+
+	mutate(target)
+
+	if target.Schedule == "" {
+		return nil, fmt.Errorf("schedule is required")
+	}
+	// Validate schedule by dry-parsing (same parser as AddRoutine).
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.SecondOptional)
+	if _, err := parser.Parse(target.Schedule); err != nil {
+		return nil, fmt.Errorf("invalid schedule %q: %w", target.Schedule, err)
+	}
+
+	if err := m.store.SaveRoutines(botName, routines); err != nil {
+		return nil, err
+	}
+
+	// Re-register the cron entry so live state matches the stored config.
+	key := strings.ToLower(botName)
+	m.mu.Lock()
+	if sched, ok := m.routines[key]; ok && sched != nil {
+		if entryID, exists := sched.entryIDs[target.ID]; exists {
+			sched.cron.Remove(entryID)
+			delete(sched.entryIDs, target.ID)
+		}
+		if target.Enabled && target.Schedule != "" {
+			if err := sched.add(target); err != nil {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("failed to schedule routine: %w", err)
+			}
+		}
+	}
+	m.mu.Unlock()
+	return target, nil
+}
+
 // ListRoutines returns all routines configured for a bot.
 func (m *Manager) ListRoutines(botName string) ([]*RoutineConfig, error) {
 	return m.store.LoadRoutines(botName)

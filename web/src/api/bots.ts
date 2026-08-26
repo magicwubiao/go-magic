@@ -166,3 +166,21 @@ export async function createBotRoutine(
 export async function deleteBotRoutine(name: string, routineId: string): Promise<void> {
   return request(`/bots/${name}/routines/${routineId}`, { method: 'DELETE' })
 }
+
+export interface BotRoutineUpdates {
+  name?: string
+  schedule?: string
+  prompt?: string
+  enabled?: boolean
+}
+
+export async function updateBotRoutine(
+  name: string,
+  routineId: string,
+  updates: BotRoutineUpdates
+): Promise<BotRoutine> {
+  return request(`/bots/${name}/routines/${routineId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  })
+}

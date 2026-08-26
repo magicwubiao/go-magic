@@ -294,21 +294,67 @@ func (s *Server) handleBotRoutines(w http.ResponseWriter, r *http.Request, name 
 	}
 }
 
-// handleBotRoutineByID DELETE /api/bots/{name}/routines/{id}
+// handleBotRoutineByID routes /api/bots/{name}/routines/{id}: DELETE removes,
+// PATCH applies partial updates (schedule/prompt/enabled/name).
 func (s *Server) handleBotRoutineByID(w http.ResponseWriter, r *http.Request, name, idOrName string) {
-	if r.Method != http.MethodDelete {
+	switch r.Method {
+	case http.MethodDelete:
+		mgr := s.requireBotManager(w)
+		if mgr == nil {
+			return
+		}
+		if err := mgr.RemoveRoutine(name, idOrName); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"deleted": idOrName})
+	case http.MethodPatch, http.MethodPut:
+		mgr := s.requireBotManager(w)
+		if mgr == nil {
+			return
+		}
+
+		var req struct {
+			Name     *string `json:"name,omitempty"`
+			Schedule *string `json:"schedule,omitempty"`
+			Prompt   *string `json:"prompt,omitempty"`
+			Enabled  *bool   `json:"enabled,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Name == nil && req.Schedule == nil && req.Prompt == nil && req.Enabled == nil {
+			http.Error(w, "no fields to update", http.StatusBadRequest)
+			return
+		}
+
+		rt, err := mgr.UpdateRoutine(name, idOrName, func(r *bot.RoutineConfig) {
+			if req.Name != nil {
+				r.Name = *req.Name
+			}
+			if req.Schedule != nil {
+				r.Schedule = strings.TrimSpace(*req.Schedule)
+			}
+			if req.Prompt != nil {
+				r.Prompt = *req.Prompt
+			}
+			if req.Enabled != nil {
+				r.Enabled = *req.Enabled
+			}
+		})
+		if err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		jsonResponse(w, routineToResponse(rt))
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	mgr := s.requireBotManager(w)
-	if mgr == nil {
-		return
-	}
-	if err := mgr.RemoveRoutine(name, idOrName); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	jsonResponse(w, map[string]interface{}{"deleted": idOrName})
 }
 
 // handleBotChat POST /api/bots/{name}/chat — synchronous send-and-wait turn.

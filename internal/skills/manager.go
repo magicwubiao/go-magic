@@ -2018,7 +2018,9 @@ func (m *Manager) IsBundled(skillName string) bool {
 }
 
 // =============================================================================
-// Disabled Skills (禁用技能) - 参考 Hermes Agent config.yaml skills.disabled
+// Disabled Skills (禁用技能) - Hermes 本身未提供单技能禁用配置（其官方
+// config 仅支持 agent.disabled_toolsets 的工具集级禁用），此处是将该思路
+// 扩展到技能粒度的 go-magic 自有实现
 // =============================================================================
 
 // disabled.json 路径

@@ -207,11 +207,36 @@ export const useBotsStore = defineStore('bots', () => {
     routines.value = routines.value.filter(r => r.id !== routineId)
   }
 
+  async function toggleRoutine(routine: BotRoutine, enabled: boolean) {
+    if (!activeBotName.value) return
+    // Optimistic update; revert on failure.
+    const prev = routine.enabled
+    routine.enabled = enabled
+    try {
+      const updated = await botsApi.updateBotRoutine(activeBotName.value, routine.id, { enabled })
+      const idx = routines.value.findIndex(r => r.id === routine.id)
+      if (idx >= 0) routines.value[idx] = updated
+    } catch (e) {
+      routine.enabled = prev
+      throw e
+    }
+  }
+
+  async function updateRoutine(
+    routineId: string,
+    updates: { name?: string; schedule?: string; prompt?: string }
+  ) {
+    if (!activeBotName.value) return
+    const updated = await botsApi.updateBotRoutine(activeBotName.value, routineId, updates)
+    const idx = routines.value.findIndex(r => r.id === routineId)
+    if (idx >= 0) routines.value[idx] = updated
+  }
+
   return {
     bots, loading, error, modeDisabled,
     activeBotName, messages, routines, chatLoading, sending,
     loadBots, createBot, updateBot, deleteBot,
     openChat, closeChat, refreshChat, sendMessage,
-    addRoutine, removeRoutine,
+    addRoutine, removeRoutine, toggleRoutine, updateRoutine,
   }
 })

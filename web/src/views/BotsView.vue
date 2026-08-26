@@ -229,15 +229,17 @@
       <n-empty v-if="!botsStore.routines.length" :description="t('bots.noRoutines')" />
 
       <n-space vertical v-else>
-        <n-card v-for="rt in botsStore.routines" :key="rt.id" size="small">
+        <n-card v-for="rt in botsStore.routines" :key="rt.id" size="small"
+                :class="{ 'routine-editing': rt.id === editingRoutineId }">
           <n-space justify="space-between" align="center">
             <n-space align="center" :size="8">
-              <n-tag :type="rt.enabled ? 'success' : 'default'" size="small">
-                {{ rt.enabled ? t('cron.stateActive') : t('cron.stateInactive') }}
-              </n-tag>
+              <n-switch size="small" :value="rt.enabled"
+                        :loading="togglingIds.has(rt.id)"
+                        @update:value="(v: boolean) => handleToggleRoutine(rt, v)" />
               <n-text strong style="font-size: 14px;">{{ rt.name || rt.id }}</n-text>
             </n-space>
             <n-space :size="4">
+              <n-button size="tiny" @click="openEditRoutine(rt)">{{ t('common.edit') }}</n-button>
               <n-popconfirm @positive-click="handleRemoveRoutine(rt.id)">
                 <template #trigger>
                   <n-button size="tiny" type="error">{{ t('common.delete') }}</n-button>
@@ -272,7 +274,12 @@
       </n-space>
 
       <n-divider />
-      <n-h6 style="margin: 0 0 10px 0;">{{ t('bots.addRoutine') }}</n-h6>
+      <n-h6 style="margin: 0 0 10px 0;">
+        {{ editingRoutineId ? t('bots.editRoutine') : t('bots.addRoutine') }}
+        <n-button v-if="editingRoutineId" quaternary size="tiny" style="margin-left: 8px;" @click="cancelEditRoutine">
+          {{ t('common.cancel') }}
+        </n-button>
+      </n-h6>
       <n-form label-placement="top">
         <n-form-item :label="t('cron.jobName')">
           <n-input v-model:value="routineForm.name" :placeholder="t('bots.routineName')" />
@@ -300,8 +307,8 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showRoutinesModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="addingRoutine" :disabled="!routineForm.schedule.trim() || !routineForm.prompt.trim()" @click="handleAddRoutine">
-            {{ t('common.add') }}
+          <n-button type="primary" :loading="addingRoutine" :disabled="!routineForm.schedule.trim() || !routineForm.prompt.trim()" @click="handleSaveRoutine">
+            {{ editingRoutineId ? t('common.save') : t('common.add') }}
           </n-button>
         </n-space>
       </template>
@@ -314,7 +321,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } f
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NGi, NGrid, NH6, NIcon, NInput, NList, NListItem, NModal,
-  NPopconfirm, NSpace, NSelect, NSpin, NTag, NText, useMessage,
+  NPopconfirm, NSpace, NSelect, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
   ArrowBackOutline, ChatbubbleEllipsesOutline, CreateOutline,
@@ -323,7 +330,7 @@ import {
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
 import { useModelsStore } from '@/stores/models'
-import type { Bot } from '@/api/bots'
+import type { Bot, BotRoutine } from '@/api/bots'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
@@ -352,6 +359,9 @@ const form = reactive({
 })
 
 const routineForm = reactive({ name: '', schedule: '', prompt: '' })
+// Non-null while the form is editing an existing routine instead of adding.
+const editingRoutineId = ref<string | null>(null)
+const togglingIds = reactive(new Set<string>())
 
 const scheduleHint = computed(() => {
   const s = routineForm.schedule.trim()
@@ -505,21 +515,36 @@ function openRoutinesModal() {
   routineForm.name = ''
   routineForm.schedule = ''
   routineForm.prompt = ''
+  editingRoutineId.value = null
   showRoutinesModal.value = true
 }
 
-async function handleAddRoutine() {
+function resetRoutineForm() {
+  routineForm.name = ''
+  routineForm.schedule = ''
+  routineForm.prompt = ''
+  editingRoutineId.value = null
+}
+
+async function handleSaveRoutine() {
   addingRoutine.value = true
   try {
-    await botsStore.addRoutine({
-      name: routineForm.name.trim(),
-      schedule: routineForm.schedule.trim(),
-      prompt: routineForm.prompt.trim(),
-    })
-    message.success(t('bots.routineAdded'))
-    routineForm.name = ''
-    routineForm.schedule = ''
-    routineForm.prompt = ''
+    if (editingRoutineId.value) {
+      await botsStore.updateRoutine(editingRoutineId.value, {
+        name: routineForm.name.trim(),
+        schedule: routineForm.schedule.trim(),
+        prompt: routineForm.prompt.trim(),
+      })
+      message.success(t('bots.routineUpdated'))
+    } else {
+      await botsStore.addRoutine({
+        name: routineForm.name.trim(),
+        schedule: routineForm.schedule.trim(),
+        prompt: routineForm.prompt.trim(),
+      })
+      message.success(t('bots.routineAdded'))
+    }
+    resetRoutineForm()
   } catch (e: any) {
     message.error(e.message || t('common.operationFailed'))
   } finally {
@@ -527,9 +552,36 @@ async function handleAddRoutine() {
   }
 }
 
+async function handleToggleRoutine(rt: BotRoutine, enabled: boolean) {
+  if (togglingIds.has(rt.id)) return
+  togglingIds.add(rt.id)
+  try {
+    await botsStore.toggleRoutine(rt, enabled)
+    message.success(enabled ? t('bots.routineEnabled') : t('bots.routineDisabled'))
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    togglingIds.delete(rt.id)
+  }
+}
+
+function openEditRoutine(rt: BotRoutine) {
+  editingRoutineId.value = rt.id
+  routineForm.name = rt.name || ''
+  routineForm.schedule = rt.schedule || ''
+  routineForm.prompt = rt.prompt || ''
+}
+
+function cancelEditRoutine() {
+  resetRoutineForm()
+}
+
 async function handleRemoveRoutine(routineId: string) {
   try {
     await botsStore.removeRoutine(routineId)
+    if (editingRoutineId.value === routineId) {
+      resetRoutineForm()
+    }
     message.success(t('bots.routineRemoved'))
   } catch (e: any) {
     message.error(e.message || t('common.operationFailed'))
@@ -1190,6 +1242,10 @@ onMounted(() => {
 
 .chat-input :deep(.n-input__textarea-el) {
   resize: none;
+}
+
+.routine-editing {
+  border: 1px solid var(--n-color-target, #18a058);
 }
 
 @media (max-width: 768px) {

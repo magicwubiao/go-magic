@@ -85,6 +85,22 @@ func init() {
 	routineCmd.AddCommand(routineAdd)
 	routineCmd.AddCommand(rootCmdRoutineRemove)
 	routineCmd.AddCommand(&cobra.Command{
+		Use:   "enable <bot> <routine-id-or-name>",
+		Short: "Enable a bot's routine",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBotsRoutineToggle(args[0], args[1], true)
+		},
+	})
+	routineCmd.AddCommand(&cobra.Command{
+		Use:   "disable <bot> <routine-id-or-name>",
+		Short: "Disable a bot's routine (kept, but not scheduled)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBotsRoutineToggle(args[0], args[1], false)
+		},
+	})
+	routineCmd.AddCommand(&cobra.Command{
 		Use:   "list <bot>",
 		Short: "List a bot's routines",
 		Args:  cobra.ExactArgs(1),
@@ -386,6 +402,65 @@ func runBotsRoutineAdd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("✅ Routine %q added to bot %q\n", RoutineJobLabel(botName, routineName), botName)
 	fmt.Printf("   Schedule: %s\n", botsFlagSchedule)
 	return nil
+}
+
+// runBotsRoutineToggle enables or disables a bot's routine. When the gateway
+// is live it goes through the manager (which also re-registers the cron
+// entry); otherwise it falls back to file-only persistence.
+func runBotsRoutineToggle(botName, idOrName string, enable bool) error {
+	cfgLocal, err := config.Load()
+	if err != nil && cfgLocal == nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	mgr, _ := bot.NewManager(cfgLocal, nil)
+	if mgr != nil {
+		if _, err := mgr.UpdateRoutine(botName, idOrName, func(r *bot.RoutineConfig) {
+			r.Enabled = enable
+		}); err == nil {
+			printRoutineToggled(enable, botName, idOrName)
+			return nil
+		} else if !strings.Contains(err.Error(), "not found") {
+			return err
+		}
+	}
+
+	// Fall back to file-only update (gateway down or manager unavailable).
+	store, err := openBotStore()
+	if err != nil {
+		return err
+	}
+	if _, err := store.Load(botName); err != nil {
+		return fmt.Errorf("bot not found: %s", botName)
+	}
+	routines, err := store.LoadRoutines(botName)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, r := range routines {
+		if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
+			r.Enabled = enable
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("routine not found: %s", idOrName)
+	}
+	if err := store.SaveRoutines(botName, routines); err != nil {
+		return err
+	}
+	printRoutineToggled(enable, botName, idOrName)
+	return nil
+}
+
+func printRoutineToggled(enable bool, botName, idOrName string) {
+	action := "disabled"
+	if enable {
+		action = "enabled"
+	}
+	fmt.Printf("%s Routine %q %s for %q\n",
+		map[bool]string{true: "✅", false: "⏸️"}[enable], idOrName, action, botName)
 }
 
 func runBotsRoutineRemove(cmd *cobra.Command, args []string) error {
