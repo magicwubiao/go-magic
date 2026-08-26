@@ -366,17 +366,17 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		// (the queue is keyed by name, which may differ from the tag).
 		senderTag := strings.TrimPrefix(msg.From, "bot:")
 		if senderCfg := m.FindByTag(senderTag); senderCfg != nil {
-			log.Infof("[BotMode] Bot %s -> %s: %.80s", rt.cfg.Name, senderCfg.Name, reply)
+			log.Debugf("[BotMode] Bot %s -> %s", rt.cfg.Name, senderCfg.Name)
 			_ = m.Enqueue(senderCfg.Name, fmt.Sprintf("[reply from @%s] %s", rt.cfg.MentionTag(), reply), "bot:"+rt.cfg.MentionTag())
 		} else {
 			log.Warnf("[BotMode] Reply target bot %q no longer exists", senderTag)
 		}
 	case msg.From == "":
 		// Routine output: log only (routines run headless).
-		log.Infof("[BotMode] Routine result for %s: %.120s", rt.cfg.Name, reply)
+		log.Debugf("[BotMode] Routine result for %s", rt.cfg.Name)
 	default:
 		// Human user turns are delivered via replyCh above.
-		log.Infof("[BotMode] Result for %s -> user: %.120s", rt.cfg.Name, reply)
+		log.Debugf("[BotMode] Result for %s -> user", rt.cfg.Name)
 	}
 }
 

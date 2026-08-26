@@ -660,6 +660,9 @@ func (a *Agent) Emit(kind bus.EventKind, data interface{}) {
 func (a *Agent) addToHistory(msg provider.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
 	a.history = append(a.history, msg)
 }
 
@@ -667,6 +670,12 @@ func (a *Agent) addToHistory(msg provider.Message) {
 func (a *Agent) addToHistoryMultiple(msgs []provider.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	now := time.Now()
+	for i := range msgs {
+		if msgs[i].Timestamp.IsZero() {
+			msgs[i].Timestamp = now
+		}
+	}
 	a.history = append(a.history, msgs...)
 }
 
@@ -807,6 +816,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	} else {
 		userMsg.Content = utils.TruncateDetailed(input, a.maxMsgLen)
 	}
+	userMsg.Timestamp = time.Now()
 	a.history = append(a.history, userMsg)
 
 	// Truncate history to prevent overflow
@@ -911,8 +921,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		if len(resp.ToolCalls) == 0 {
 			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: content,
+				Role:      "assistant",
+				Content:   content,
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -932,6 +943,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			Role:      "assistant",
 			Content:   llmResp.Content,
 			ToolCalls: resp.ToolCalls,
+			Timestamp: time.Now(),
 		})
 
 		for _, result := range toolResults {
@@ -944,6 +956,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
 				Content:    resultContent,
+				Timestamp:  time.Now(),
 				ToolCallID: result.ID,
 			})
 		}
@@ -981,20 +994,23 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		if loopDetected {
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
 			})
 			a.history = append(a.history, provider.Message{
-				Role:    "user",
-				Content: "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+				Role:      "user",
+				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+				Timestamp: time.Now(),
 			})
 			finalResp, finalErr := a.provider.Chat(ctx, a.history)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -1007,13 +1023,15 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Try to get a summary from the LLM before giving up
 	a.history = append(a.history, provider.Message{
-		Role:    "user",
-		Content: "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+		Role:      "user",
+		Content:   "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+		Timestamp: time.Now(),
 	})
 	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
 		a.history = append(a.history, provider.Message{
-			Role:    "assistant",
-			Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+			Role:      "assistant",
+			Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+			Timestamp: time.Now(),
 		})
 		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 	}
@@ -1059,8 +1077,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Truncate input
 	a.history = append(a.history, provider.Message{
-		Role:    "user",
-		Content: utils.TruncateDetailed(input, a.maxMsgLen),
+		Role:      "user",
+		Content:   utils.TruncateDetailed(input, a.maxMsgLen),
+		Timestamp: time.Now(),
 	})
 
 	// Initialize self-reflection with the goal
@@ -1254,8 +1273,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		if len(resp.ToolCalls) == 0 {
 			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: content,
+				Role:      "assistant",
+				Content:   content,
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -1288,8 +1308,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		// If no valid tool calls, return the response directly
 		if len(validToolCalls) == 0 {
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -1325,20 +1346,23 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		if loopDetected {
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
 			})
 			a.history = append(a.history, provider.Message{
-				Role:    "user",
-				Content: "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+				Role:      "user",
+				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+				Timestamp: time.Now(),
 			})
 			finalResp, finalErr := a.provider.Chat(ctx, a.history)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -1375,6 +1399,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			Role:      "assistant",
 			Content:   llmResp.Content,
 			ToolCalls: resp.ToolCalls,
+			Timestamp: time.Now(),
 		})
 
 		// Add tool results - ensure every tool_call has a corresponding tool message
@@ -1407,6 +1432,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				Role:       "tool",
 				Content:    resultContent,
 				ToolCallID: tcID,
+				Timestamp:  time.Now(),
 			})
 
 			// Smart recovery: provide guidance for failed tools
@@ -1465,13 +1491,15 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Try to get a summary from the LLM before giving up
 	a.history = append(a.history, provider.Message{
-		Role:    "user",
-		Content: "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+		Role:      "user",
+		Content:   "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
+		Timestamp: time.Now(),
 	})
 	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
 		a.history = append(a.history, provider.Message{
-			Role:    "assistant",
-			Content: utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+			Role:      "assistant",
+			Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+			Timestamp: time.Now(),
 		})
 		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
 	}
@@ -1553,6 +1581,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	} else {
 		userMsg.Content = utils.TruncateDetailed(input, a.maxMsgLen)
 	}
+	userMsg.Timestamp = time.Now()
 	a.history = append(a.history, userMsg)
 
 	// Truncate history to prevent overflow
@@ -1842,8 +1871,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		if len(toolCalls) == 0 {
 			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
 			a.history = append(a.history, provider.Message{
-				Role:    "assistant",
-				Content: content,
+				Role:      "assistant",
+				Content:   content,
+				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
@@ -1872,6 +1902,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			Role:      "assistant",
 			Content:   utils.TruncateDetailed(fullContent, a.maxMsgLen),
 			ToolCalls: tcs,
+			Timestamp: time.Now(),
 		})
 
 		// Execute tools with hooks
@@ -1899,6 +1930,7 @@ Please provide a comprehensive, well-structured final response based on these su
 					Role:       "tool",
 					Content:    utils.TruncateDetailed(errContent, a.maxMsgLen),
 					ToolCallID: tc.ID,
+					Timestamp:  time.Now(),
 				})
 				toolName := tc.GetToolName()
 				handler(fmt.Sprintf("\n>>>TOOL_RESULT_START|%s|false|0s<<<%s\n>>>TOOL_RESULT_END<<<\n", toolName, err), false)
@@ -1918,6 +1950,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				Role:       "tool",
 				Content:    utils.TruncateDetailed(content, a.maxMsgLen),
 				ToolCallID: tc.ID,
+				Timestamp:  time.Now(),
 			})
 
 			toolName := tc.GetToolName()

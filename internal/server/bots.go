@@ -366,7 +366,46 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		jsonResponse(w, []interface{}{})
 		return
 	}
-	result := make([]map[string]interface{}, 0, len(sess.Messages))
+	type chatMsg struct {
+		id        string
+		role      string
+		from      string
+		content   string
+		timestamp int64
+	}
+
+	var merged []chatMsg
+	var pendingAssistants []chatMsg
+
+	flushPending := func() {
+		if len(pendingAssistants) == 0 {
+			return
+		}
+		if len(pendingAssistants) == 1 {
+			merged = append(merged, pendingAssistants[0])
+		} else {
+			var sb strings.Builder
+			var lastTS int64
+			for _, pa := range pendingAssistants {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(pa.content)
+				if pa.timestamp > lastTS {
+					lastTS = pa.timestamp
+				}
+			}
+			merged = append(merged, chatMsg{
+				id:        pendingAssistants[0].id,
+				role:      "assistant",
+				from:      pendingAssistants[0].from,
+				content:   sb.String(),
+				timestamp: lastTS,
+			})
+		}
+		pendingAssistants = nil
+	}
+
 	for i, msg := range sess.Messages {
 		if msg.Role != "user" && msg.Role != "assistant" {
 			continue
@@ -374,15 +413,41 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		ts := int64(0)
 		if !msg.Timestamp.IsZero() {
 			ts = msg.Timestamp.UnixMilli()
+		} else if len(sess.Messages) > 1 {
+			ratio := float64(i) / float64(len(sess.Messages)-1)
+			startMs := sess.CreatedAt.UnixMilli()
+			endMs := sess.UpdatedAt.UnixMilli()
+			if endMs <= startMs {
+				endMs = startMs + int64(len(sess.Messages)-1)*1000
+			}
+			ts = startMs + int64(float64(endMs-startMs)*ratio)
 		} else {
 			ts = sess.UpdatedAt.UnixMilli()
 		}
+		entry := chatMsg{
+			id:        fmt.Sprintf("%s-%d", sess.ID, i),
+			role:      msg.Role,
+			from:      msg.From,
+			content:   msg.Content,
+			timestamp: ts,
+		}
+		if msg.Role == "user" {
+			flushPending()
+			merged = append(merged, entry)
+		} else {
+			pendingAssistants = append(pendingAssistants, entry)
+		}
+	}
+	flushPending()
+
+	result := make([]map[string]interface{}, 0, len(merged))
+	for _, m := range merged {
 		result = append(result, map[string]interface{}{
-			"id":        fmt.Sprintf("%s-%d", sess.ID, i),
-			"role":      msg.Role,
-			"from":      msg.From,
-			"content":   msg.Content,
-			"timestamp": ts,
+			"id":        m.id,
+			"role":      m.role,
+			"from":      m.from,
+			"content":   m.content,
+			"timestamp": m.timestamp,
 		})
 	}
 	jsonResponse(w, result)
