@@ -254,6 +254,7 @@ export default {
     copyContent: 'Copy content',
     contentCopied: 'Content copied',
     unsavedChanges: 'Unsaved changes',
+    binaryFilePreview: 'Binary file, preview not supported',
     discardChanges: 'You have unsaved changes. Are you sure you want to close?',
     commands: {
       help: 'Show help information',

@@ -314,7 +314,7 @@ import {
 } from '@vicons/ionicons5'
 import { useSkillsStore } from '@/stores/skills'
 import { uploadSkill, deleteSkill, getSkillStatistics, performAutoSkillAction } from '@/api/skills'
-import type { UploadFileInfo } from 'naive-ui'
+import type { UploadCustomRequestOptions } from 'naive-ui'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -571,7 +571,7 @@ async function deleteSkillConfirm(id: string, name: string): Promise<void> {
   }
 }
 
-async function handleCustomUpload({ file, onFinish, onError }: { file: UploadFileInfo; onFinish: () => void; onError: () => void }) {
+async function handleCustomUpload({ file, onFinish, onError }: UploadCustomRequestOptions) {
   const rawFile = file.file
   if (!rawFile) {
     onError()

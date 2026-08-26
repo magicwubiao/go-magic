@@ -310,6 +310,9 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
 
 // Convert File to base64 data URL
 async function fileToBase64(file: File): Promise<string> {
+  if (!(file instanceof Blob)) {
+    return ''
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)

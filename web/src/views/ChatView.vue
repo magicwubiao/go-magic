@@ -322,7 +322,7 @@
               <n-upload
                 :show-file-list="false"
                 :multiple="true"
-                @before-upload="handleFileSelect"
+                :custom-request="handleFileSelect"
               >
                 <n-button size="tiny" quaternary class="toolbar-btn" :title="t('chat.uploadFile')">
                   <template #icon>
@@ -507,7 +507,7 @@ import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, ChevronDownOutline, ChevronForwardOutline, RefreshOutline } from '@vicons/ionicons5'
-import type { UploadFileInfo } from 'naive-ui'
+import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
 
@@ -931,24 +931,33 @@ function toDate(ts: string | number): Date {
 }
 
 // File handling - upload to server
-async function handleFileSelect({ file }: { file: UploadFileInfo }) {
+function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
   const nativeFile = file.file
-  if (!nativeFile) return false
+  if (!nativeFile) {
+    onError()
+    return
+  }
 
   const fileKey = nativeFile.name + '-' + nativeFile.size
-  if (uploadingFiles.value.has(fileKey)) return false
+  if (uploadingFiles.value.has(fileKey)) {
+    onError()
+    return
+  }
   uploadingFiles.value.add(fileKey)
 
-  try {
-    const uploaded = await sessionsApi.uploadFile(nativeFile)
-    selectedFiles.value.push(uploaded)
-  } catch (e) {
-    console.error('Upload failed:', e)
-    message.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
-  } finally {
-    uploadingFiles.value.delete(fileKey)
-  }
-  return false // Prevent default upload
+  sessionsApi.uploadFile(nativeFile)
+    .then((uploaded) => {
+      selectedFiles.value.push(uploaded)
+      onFinish()
+    })
+    .catch((e) => {
+      console.error('Upload failed:', e)
+      message.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
+      onError()
+    })
+    .finally(() => {
+      uploadingFiles.value.delete(fileKey)
+    })
 }
 
 function removeFile(index: number) {
@@ -1750,6 +1759,9 @@ onMounted(async () => {
 .preview-bar {
   padding: 8px 24px 0;
   background: #fff;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* 底部固定审批栏 */

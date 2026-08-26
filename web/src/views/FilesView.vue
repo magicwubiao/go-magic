@@ -9,7 +9,7 @@
         <n-upload
           :show-file-list="false"
           :multiple="true"
-          @before-upload="handleUpload"
+          :custom-request="handleUpload"
         >
           <n-button type="primary" size="small">
             <template #icon>
@@ -72,6 +72,9 @@
       <n-scrollbar style="max-height: 70vh;">
         <div v-if="previewType === 'image'" class="image-preview-wrapper">
           <img :src="previewImageUrl" :alt="previewTitle" style="max-width: 100%; max-height: 65vh;" />
+        </div>
+        <div v-else-if="previewType === 'binary'" class="binary-preview-wrapper">
+          <n-empty :description="t('chat.binaryFilePreview') || 'Binary file, preview not supported'" />
         </div>
         <div v-else-if="previewType === 'text' && isEditing">
           <n-input
@@ -138,7 +141,7 @@ import {
   ArchiveOutline,
 } from '@vicons/ionicons5'
 import * as sessionsApi from '@/api/sessions'
-import type { DataTableColumns, PaginationProps } from 'naive-ui'
+import type { DataTableColumns, PaginationProps, UploadCustomRequestOptions } from 'naive-ui'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -293,17 +296,22 @@ async function loadFiles() {
   }
 }
 
-async function handleUpload(options: any) {
-  const nativeFile = options.file
-  if (!nativeFile) return false
-  try {
-    await sessionsApi.uploadFile(nativeFile)
-    message.success(t('files.uploadSuccess'))
-    await loadFiles()
-  } catch (e) {
-    message.error(t('files.uploadError') + ': ' + (e as Error).message)
+function handleUpload({ file, onFinish, onError }: UploadCustomRequestOptions) {
+  const nativeFile = file.file
+  if (!nativeFile) {
+    onError()
+    return
   }
-  return false
+  sessionsApi.uploadFile(nativeFile)
+    .then(() => {
+      message.success(t('files.uploadSuccess'))
+      loadFiles()
+      onFinish()
+    })
+    .catch((e) => {
+      message.error(t('files.uploadError') + ': ' + (e as Error).message)
+      onError()
+    })
 }
 
 async function handleDelete(filename: string) {
@@ -333,7 +341,7 @@ const showPreview = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
 const previewPath = ref('')
-const previewType = ref<'text' | 'image' | 'none'>('none')
+const previewType = ref<'text' | 'image' | 'binary' | 'none'>('none')
 const previewImageUrl = ref('')
 const previewDownloadUrl = ref('')
 const isEditing = ref(false)
@@ -341,7 +349,13 @@ const editContent = ref('')
 
 function isImageFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || ''
-  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'].includes(ext)
+  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
+}
+
+function isBinaryFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  const binaryExts = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'mp3', 'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flac', 'aac', 'ogg', 'wav', 'ico', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
+  return binaryExts.includes(ext)
 }
 
 async function previewUploadFile(file: sessionsApi.FileItem) {
@@ -360,12 +374,28 @@ async function previewUploadFile(file: sessionsApi.FileItem) {
     return
   }
 
+  if (isBinaryFile(file.filename)) {
+    previewType.value = 'binary'
+    showPreview.value = true
+    return
+  }
+
   try {
     const res = await fetch(file.url)
     if (!res.ok) {
       throw new Error(`Failed to preview file: ${res.statusText}`)
     }
     const content = await res.text()
+    if (content.includes('"binary":true') && content.includes('"error"')) {
+      try {
+        const parsed = JSON.parse(content)
+        if (parsed.binary) {
+          previewType.value = 'binary'
+          showPreview.value = true
+          return
+        }
+      } catch {}
+    }
     previewContent.value = content
     editContent.value = content
     previewType.value = 'text'
@@ -444,6 +474,13 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+.binary-preview-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px 0;
 }
 
 /* Responsive: Mobile devices */

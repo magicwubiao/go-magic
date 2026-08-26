@@ -131,6 +131,22 @@ func saveUploadedFile(src io.Reader, dst string) error {
 	return err
 }
 
+func isTextFile(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	checkLen := len(data)
+	if checkLen > 512 {
+		checkLen = 512
+	}
+	for _, b := range data[:checkLen] {
+		if b == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "method not allowed", 405)
@@ -1247,6 +1263,7 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 
 	contentType := "text/plain"
 	ext := strings.ToLower(filepath.Ext(absPath))
+	isText := true
 	switch ext {
 	case ".json":
 		contentType = "application/json"
@@ -1256,24 +1273,70 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 		contentType = "text/css"
 	case ".js":
 		contentType = "application/javascript"
+	case ".ts":
+		contentType = "application/javascript"
 	case ".md":
 		contentType = "text/markdown"
 	case ".xml":
 		contentType = "application/xml"
 	case ".csv":
 		contentType = "text/csv"
+	case ".yaml", ".yml":
+		contentType = "text/yaml"
+	case ".toml":
+		contentType = "text/toml"
+	case ".ini", ".cfg", ".conf":
+		contentType = "text/plain"
+	case ".sh", ".bash", ".zsh", ".fish":
+		contentType = "text/x-shellscript"
+	case ".py":
+		contentType = "text/x-python"
+	case ".go":
+		contentType = "text/x-go"
+	case ".rs":
+		contentType = "text/x-rust"
+	case ".java":
+		contentType = "text/x-java"
+	case ".c", ".h":
+		contentType = "text/x-c"
+	case ".cpp", ".hpp", ".cc":
+		contentType = "text/x-c++"
+	case ".rb":
+		contentType = "text/x-ruby"
+	case ".php":
+		contentType = "text/x-php"
+	case ".sql":
+		contentType = "text/x-sql"
+	case ".txt", ".log", ".env":
+		contentType = "text/plain"
 	case ".png":
 		contentType = "image/png"
+		isText = false
 	case ".jpg", ".jpeg":
 		contentType = "image/jpeg"
+		isText = false
 	case ".gif":
 		contentType = "image/gif"
+		isText = false
 	case ".bmp":
 		contentType = "image/bmp"
+		isText = false
 	case ".webp":
 		contentType = "image/webp"
+		isText = false
 	case ".svg":
 		contentType = "image/svg+xml"
+	default:
+		if !isTextFile(data) {
+			jsonResponse(w, map[string]interface{}{"error": "binary file, preview not supported", "binary": true})
+			return
+		}
+	}
+
+	if !isText {
+		w.Header().Set("Content-Type", contentType)
+		w.Write(data)
+		return
 	}
 
 	w.Header().Set("Content-Type", contentType)

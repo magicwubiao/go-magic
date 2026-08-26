@@ -255,6 +255,7 @@ export default {
     copyContent: '复制内容',
     contentCopied: '内容已复制',
     unsavedChanges: '未保存的更改',
+    binaryFilePreview: '二进制文件，不支持预览',
     discardChanges: '您有未保存的更改，确定要关闭吗？',
     commands: {
       help: '显示帮助信息',

@@ -240,9 +240,6 @@
             <n-text strong>{{ t('chat.files') }}</n-text>
           </n-space>
           <n-space :size="4">
-            <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)" :title="t('chat.goParent')">
-              <template #icon><n-icon :component="ArrowUpOutline" :size="14" /></template>
-            </n-button>
             <n-button size="tiny" quaternary @click="loadFiles(dirCurrentPath)" :title="t('chat.refresh')">
               <template #icon><n-icon :component="RefreshOutline" :size="14" /></template>
             </n-button>
@@ -254,13 +251,31 @@
           </n-space>
         </div>
 
-        <!-- Current work directory -->
-        <div class="files-workdir">
-          <n-icon :component="FolderOutline" :size="14" color="#18a058" />
-          <n-text v-if="chatStore.currentWorkDir" class="files-workdir-path" :title="chatStore.currentWorkDir">
-            {{ chatStore.currentWorkDir }}
-          </n-text>
-          <n-text v-else depth="3" style="font-size: 12px;">{{ t('chat.workDirNone') }}</n-text>
+        <!-- Breadcrumb navigation -->
+        <div class="files-breadcrumb">
+          <n-button
+            size="tiny"
+            quaternary
+            :type="dirCurrentPath ? 'default' : 'primary'"
+            @click="navigateDir('')"
+            class="breadcrumb-item"
+          >
+            <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
+          </n-button>
+          <template v-if="dirCurrentPath">
+            <template v-for="(part, idx) in dirPathParts" :key="idx">
+              <n-icon :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
+              <n-button
+                size="tiny"
+                quaternary
+                :type="idx === dirPathParts.length - 1 ? 'primary' : 'default'"
+                @click="navigateDir(dirPathParts.slice(0, idx + 1).map(p => p.path).join('/') || '/')"
+                class="breadcrumb-item"
+              >
+                {{ part.name }}
+              </n-button>
+            </template>
+          </template>
         </div>
 
         <!-- Sort header -->
@@ -497,6 +512,21 @@
             class="preview-textarea"
             spellcheck="false"
           ></textarea>
+          <div v-else-if="previewIsBinary && isImageFile(previewFile?.name || '')" style="text-align: center; padding: 16px;">
+            <img
+              :src="getPreviewImageUrl()"
+              :alt="previewFile?.name"
+              style="max-width: 100%; max-height: 60vh; border-radius: 4px;"
+            />
+          </div>
+          <div v-else-if="previewIsBinary" style="text-align: center; padding: 40px;">
+            <n-icon size="48" depth="3"><DocumentOutline /></n-icon>
+            <n-text depth="3" style="display: block; margin-top: 16px;">{{ t('chat.binaryFilePreview') || 'Binary file, preview not supported' }}</n-text>
+            <n-button size="small" style="margin-top: 12px;" @click="downloadPreviewFile">
+              <template #icon><n-icon :component="DownloadOutline" /></template>
+              {{ t('chat.download') }}
+            </n-button>
+          </div>
           <pre v-else class="preview-content">{{ previewContent }}</pre>
         </div>
       </div>
@@ -521,6 +551,7 @@ import {
   FolderOutline,
   FileTrayOutline,
   DocumentTextOutline,
+  DocumentOutline,
   DownloadOutline,
   EllipsisHorizontalOutline,
   PencilOutline,
@@ -536,6 +567,7 @@ import {
   EyeOutline,
   CloudUploadOutline,
   EllipsisVerticalOutline,
+  HomeOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -619,6 +651,7 @@ const previewFile = ref<sessionsApi.FSEntry | null>(null)
 const previewContent = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
+const previewIsBinary = ref(false)
 const isEditing = ref(false)
 const editingContent = ref('')
 const editSaving = ref(false)
@@ -633,6 +666,14 @@ const dirParent = computed(() => {
   const parts = dirCurrentPath.value.split('/')
   parts.pop()
   return parts.join('/') || '/'
+})
+
+const dirPathParts = computed(() => {
+  if (!dirCurrentPath.value) return []
+  return dirCurrentPath.value.split('/').filter(Boolean).map((name, i, arr) => ({
+    name,
+    path: arr.slice(0, i + 1).join('/')
+  }))
 })
 
 const sortedFsEntries = computed(() => {
@@ -908,14 +949,43 @@ async function openFilePreview(entry: sessionsApi.FSEntry) {
   previewFile.value = entry
   previewContent.value = ''
   previewError.value = ''
+  previewIsBinary.value = false
   isEditing.value = false
   editingContent.value = ''
   originalContent.value = ''
   showFilePreview.value = true
   previewLoading.value = true
-  
+
+  const ext = entry.name.split('.').pop()?.toLowerCase() || ''
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg']
+  const binaryExts = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'mp3', 'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flac', 'aac', 'ogg', 'wav', 'ico', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
+
+  if (imageExts.includes(ext)) {
+    previewIsBinary.value = true
+    previewLoading.value = false
+    return
+  }
+
+  if (binaryExts.includes(ext)) {
+    previewIsBinary.value = true
+    previewError.value = ''
+    previewLoading.value = false
+    return
+  }
+
   try {
     previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
+    if (previewContent.value.includes('"binary":true') && previewContent.value.includes('"error"')) {
+      try {
+        const parsed = JSON.parse(previewContent.value)
+        if (parsed.binary) {
+          previewIsBinary.value = true
+          previewContent.value = ''
+          previewLoading.value = false
+          return
+        }
+      } catch {}
+    }
     originalContent.value = previewContent.value
   } catch (e: any) {
     previewError.value = e.message || 'Failed to read file'
@@ -968,6 +1038,16 @@ async function copyContent() {
     }
     document.body.removeChild(textarea)
   }
+}
+
+function isImageFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
+}
+
+function getPreviewImageUrl(): string {
+  if (!previewFile.value) return ''
+  return sessionsApi.getFSReadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
 }
 
 function downloadPreviewFile() {
@@ -1495,31 +1575,25 @@ async function doUpload(files: File[]) {
 }
 
 /* Files section */
-.files-workdir {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
-  flex-shrink: 0;
-}
-
-.files-workdir-path {
-  font-size: 11px;
-  font-family: monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
 .files-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   padding: 6px 12px;
   border-bottom: 1px solid #f0f0f0;
   flex-shrink: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.breadcrumb-item {
+  flex-shrink: 0;
+  font-size: 12px !important;
+}
+
+.breadcrumb-sep {
+  flex-shrink: 0;
+  margin: 0 1px;
 }
 
 .files-sort-header {
@@ -1801,10 +1875,6 @@ async function doUpload(files: File[]) {
   
   .linked-sessions {
     border-top-color: #333;
-  }
-  
-  .files-workdir {
-    border-bottom-color: #333;
   }
   
   .files-breadcrumb {

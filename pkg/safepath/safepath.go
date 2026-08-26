@@ -65,13 +65,17 @@ func SanitizeName(name string) error {
 		return fmt.Errorf("name too long")
 	}
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.') {
 			return fmt.Errorf("invalid character in name: %q", r)
 		}
 	}
 	// 额外拒绝以连字符开头（避免被某些 shell 解析为选项）
 	if name[0] == '-' {
 		return fmt.Errorf("name must not start with hyphen")
+	}
+	// 拒绝 ".." 防止路径穿越（允许点号用于版本号如 "skill-0.1.0"）
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("name must not contain \"..\"")
 	}
 	return nil
 }
