@@ -256,26 +256,14 @@
           <n-button
             size="tiny"
             quaternary
-            :type="dirCurrentPath ? 'default' : 'primary'"
             @click="navigateDir('')"
             class="breadcrumb-item"
+            :title="t('chat.goParent')"
           >
             <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
           </n-button>
-          <template v-if="dirCurrentPath">
-            <template v-for="(part, idx) in dirPathParts" :key="idx">
-              <n-icon :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
-              <n-button
-                size="tiny"
-                quaternary
-                :type="idx === dirPathParts.length - 1 ? 'primary' : 'default'"
-                @click="navigateDir(dirPathParts.slice(0, idx + 1).map(p => p.path).join('/') || '/')"
-                class="breadcrumb-item"
-              >
-                {{ part.name }}
-              </n-button>
-            </template>
-          </template>
+          <n-icon v-if="dirCurrentPath" :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
+          <n-text v-if="dirCurrentPath" class="breadcrumb-path" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
         </div>
 
         <!-- Sort header -->
@@ -666,14 +654,6 @@ const dirParent = computed(() => {
   const parts = dirCurrentPath.value.split('/')
   parts.pop()
   return parts.join('/') || '/'
-})
-
-const dirPathParts = computed(() => {
-  if (!dirCurrentPath.value) return []
-  return dirCurrentPath.value.split('/').filter(Boolean).map((name, i, arr) => ({
-    name,
-    path: arr.slice(0, i + 1).join('/')
-  }))
 })
 
 const sortedFsEntries = computed(() => {
@@ -1594,6 +1574,16 @@ async function doUpload(files: File[]) {
 .breadcrumb-sep {
   flex-shrink: 0;
   margin: 0 1px;
+}
+
+.breadcrumb-path {
+  font-size: 12px;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .files-sort-header {
