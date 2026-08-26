@@ -246,28 +246,11 @@
             <n-button size="tiny" quaternary @click="loadFiles(dirCurrentPath)" :title="t('chat.refresh')">
               <template #icon><n-icon :component="RefreshOutline" :size="14" /></template>
             </n-button>
-            <n-button size="tiny" quaternary @click="startNewFolder" :title="t('chat.newFolder')">
-              <template #icon><n-icon :component="AddOutline" :size="14" /></template>
-            </n-button>
-            <n-button size="tiny" quaternary @click="startNewFile" :title="t('chat.newFile')">
-              <template #icon><n-icon :component="FileTrayOutline" :size="14" /></template>
-            </n-button>
-            <n-button size="tiny" quaternary @click="triggerUpload" :title="t('chat.uploadFile')" :disabled="!dirCurrentPath">
-              <template #icon><n-icon :component="CloudUploadOutline" :size="14" /></template>
-            </n-button>
-            <n-button size="tiny" quaternary @click="downloadZip" :title="t('chat.downloadZip')" :disabled="!dirCurrentPath || isDownloading">
-              <template #icon><n-icon :component="DownloadOutline" :size="14" /></template>
-            </n-button>
-            <n-button
-              size="tiny"
-              quaternary
-              :type="showHiddenFiles ? 'primary' : 'default'"
-              :title="t('chat.showHidden')"
-              :disabled="!dirCurrentPath"
-              @click="toggleHiddenFiles"
-            >
-              <template #icon><n-icon :component="EyeOutline" :size="14" /></template>
-            </n-button>
+            <n-dropdown trigger="click" :options="moreActions" @select="handleMoreAction">
+              <n-button size="tiny" quaternary :title="t('common.more')">
+                <template #icon><n-icon :component="EllipsisVerticalOutline" :size="14" /></template>
+              </n-button>
+            </n-dropdown>
           </n-space>
         </div>
 
@@ -552,6 +535,7 @@ import {
   CloseCircleOutline,
   EyeOutline,
   CloudUploadOutline,
+  EllipsisVerticalOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -883,6 +867,25 @@ function toggleSort(key: 'name' | 'size' | 'time') {
   } else {
     fileSortKey.value = key
     fileSortOrder.value = 'asc'
+  }
+}
+
+const moreActions = computed(() => [
+  { label: t('chat.newFolder'), key: 'newFolder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+  { label: t('chat.newFile'), key: 'newFile', icon: () => h(NIcon, { size: 14 }, { default: () => h(FileTrayOutline) }) },
+  { label: t('chat.uploadFile'), key: 'upload', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloudUploadOutline) }), disabled: !dirCurrentPath.value },
+  { label: t('chat.downloadZip'), key: 'downloadZip', icon: () => h(NIcon, { size: 14 }, { default: () => h(DownloadOutline) }), disabled: !dirCurrentPath.value || isDownloading.value },
+  { type: 'divider', key: 'd1' },
+  { label: t('chat.showHidden'), key: 'showHidden', icon: () => h(NIcon, { size: 14 }, { default: () => h(EyeOutline) }) },
+])
+
+function handleMoreAction(key: string) {
+  switch (key) {
+    case 'newFolder': startNewFolder(); break
+    case 'newFile': startNewFile(); break
+    case 'upload': triggerUpload(); break
+    case 'downloadZip': downloadZip(); break
+    case 'showHidden': toggleHiddenFiles(); break
   }
 }
 

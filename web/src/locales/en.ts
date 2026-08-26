@@ -71,6 +71,7 @@ export default {
     server: 'Server',
     apiKeys: 'API Keys',
     other: 'Other',
+    more: 'More',
     enable: 'Enable',
     disable: 'Disable',
     format: 'Format',

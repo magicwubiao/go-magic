@@ -71,6 +71,7 @@ export default {
     server: '服务器',
     apiKeys: 'API 密钥',
     other: '其他',
+    more: '更多',
     enable: '启用',
     disable: '禁用',
     format: '格式化',
