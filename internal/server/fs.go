@@ -181,9 +181,10 @@ func (s *Server) getSessionWorkDir(sessionID string, sessionName string) string 
 	if baseDir == "" {
 		baseDir = filepath.Join(s.magicHome, "workspace")
 	}
+	baseDir = filepath.Join(baseDir, "chat")
 	safeName := sanitizeDirName(sessionName)
 	if safeName == "" {
-		safeName = "chat"
+		safeName = "session"
 	}
 	shortID := sessionID[:8]
 	return filepath.Join(baseDir, fmt.Sprintf("%s-%s", safeName, shortID))

@@ -3,6 +3,7 @@ package bot
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/skills"
@@ -42,6 +43,7 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}
+	workDir = filepath.Join(workDir, "bots")
 	registry := tool.NewRegistry()
 	registry.RegisterBotTools(workDir)
 	if skillMgr, err := skills.NewManager(); err == nil {
