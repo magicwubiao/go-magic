@@ -204,7 +204,7 @@
         <!-- Streaming area -->
         <template v-if="chatStore.streaming">
           <!-- Task Timeline for long tasks -->
-          <div v-if="taskTimelineSteps.length > 0" style="margin: 8px 12px;">
+          <div v-if="taskTimelineSteps.length > 0" class="task-timeline-wrap">
             <TaskTimeline
               :steps="taskTimelineSteps"
               :title="taskTimelineTitle"
@@ -1389,7 +1389,7 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 360px;
   background: #fff;
 }
 
@@ -1411,6 +1411,9 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   margin-bottom: 20px;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
   animation: fadeIn 0.3s ease;
 }
 
@@ -1572,12 +1575,18 @@ onMounted(async () => {
 }
 
 /* ========== Waiting Indicator ========== */
+.task-timeline-wrap {
+  margin: 8px auto;
+  max-width: 900px;
+}
+
 .long-task-progress {
   padding: 12px 16px;
-  margin: 8px 12px;
+  margin: 8px auto;
   background: #f0f7ff;
   border: 1px solid #d0e3ff;
   border-radius: 8px;
+  max-width: 900px;
 }
 
 /* Agent status panel */
@@ -1757,6 +1766,9 @@ onMounted(async () => {
   gap: 8px;
   max-height: 260px;
   overflow-y: auto;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .preview-item {
@@ -1802,6 +1814,12 @@ onMounted(async () => {
   background: #fff;
   border-top: 1px solid #e0e0e0;
   flex-shrink: 0;
+}
+
+.chat-input-box {
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* Command suggestions dropdown */
@@ -2159,6 +2177,10 @@ onMounted(async () => {
   min-width: 0;
   cursor: pointer;
   color: #555;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
 
 .workdir-bar-path {
