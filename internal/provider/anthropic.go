@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -198,29 +199,59 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, hand
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", strings.NewReader(string(jsonBody)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+	const maxRetries = 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", strings.NewReader(string(jsonBody)))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", p.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+		req.Header.Set("Accept", "text/event-stream")
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				delay := time.Duration(1<<uint(attempt)) * time.Second
+				log.Debugf("[Anthropic:Stream] Network error on attempt %d/%d, retrying after %v: %v",
+					attempt+1, maxRetries, delay, err)
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return fmt.Errorf("request failed: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			apiErr := p.parseError(body, resp.StatusCode)
+
+			if attempt < maxRetries && isRetryableStatus(resp.StatusCode) {
+				delay := time.Duration(1<<uint(attempt)) * time.Second
+				log.Debugf("[Anthropic:Stream] API error on attempt %d/%d (status %d), retrying after %v: %v",
+					attempt+1, maxRetries, resp.StatusCode, delay, apiErr)
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return apiErr
+		}
+
+		defer resp.Body.Close()
+		return p.parseStreamResponse(resp.Body, handler)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", p.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return p.parseError(body, resp.StatusCode)
-	}
-
-	return p.parseStreamResponse(resp.Body, handler)
+	return fmt.Errorf("max retries exceeded")
 }
 
 // StreamWithTools implements the StreamingToolCaller interface
@@ -232,29 +263,59 @@ func (p *AnthropicProvider) StreamWithTools(ctx context.Context, messages []Mess
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", strings.NewReader(string(jsonBody)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+	const maxRetries = 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", strings.NewReader(string(jsonBody)))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", p.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+		req.Header.Set("Accept", "text/event-stream")
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				delay := time.Duration(1<<uint(attempt)) * time.Second
+				log.Debugf("[Anthropic:Stream] Network error on attempt %d/%d, retrying after %v: %v",
+					attempt+1, maxRetries, delay, err)
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return fmt.Errorf("request failed: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			apiErr := p.parseError(body, resp.StatusCode)
+
+			if attempt < maxRetries && isRetryableStatus(resp.StatusCode) {
+				delay := time.Duration(1<<uint(attempt)) * time.Second
+				log.Debugf("[Anthropic:Stream] API error on attempt %d/%d (status %d), retrying after %v: %v",
+					attempt+1, maxRetries, resp.StatusCode, delay, apiErr)
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return apiErr
+		}
+
+		defer resp.Body.Close()
+		return p.parseStreamResponse(resp.Body, handler)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", p.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return p.parseError(body, resp.StatusCode)
-	}
-
-	return p.parseStreamResponse(resp.Body, handler)
+	return fmt.Errorf("max retries exceeded")
 }
 
 // buildRequest builds an Anthropic API request from messages
@@ -536,4 +597,14 @@ func (p *AnthropicProvider) parseError(body []byte, statusCode int) error {
 	}
 
 	return fmt.Errorf("anthropic api error (%d): %s", statusCode, string(body))
+}
+
+// isRetryableStatus checks if an HTTP status code indicates a transient error worth retrying
+func isRetryableStatus(statusCode int) bool {
+	switch statusCode {
+	case 429, 500, 502, 503, 529:
+		return true
+	default:
+		return false
+	}
 }

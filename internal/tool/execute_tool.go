@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 const (
@@ -334,7 +336,7 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 	// Truncate output if too long
 	outputStr := string(output)
 	if len(outputStr) > t.maxOutput {
-		outputStr = outputStr[:t.maxOutput] + fmt.Sprintf("\n... [output truncated, total %d bytes]", len(output))
+		outputStr = utils.TruncateDetailed(outputStr, t.maxOutput)
 	}
 
 	result := map[string]interface{}{

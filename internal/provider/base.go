@@ -434,6 +434,18 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 
 	resp, err := bp.Client.Do(req)
 	if err != nil {
+		// Retry on network-level errors (timeout, connection reset, etc.)
+		if bp.RetryEnabled && attempt < bp.RetryConfig.MaxRetries {
+			delay := bp.calculateRetryDelay(attempt)
+			log.Debugf("Retrying request (attempt %d/%d) after %v due to network error: %v",
+				attempt+1, bp.RetryConfig.MaxRetries, delay, err)
+			select {
+			case <-time.After(delay):
+				return bp.doRequestWithRetry(ctx, method, url, body, headers, attempt+1)
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			}
+		}
 		bp.Metrics.AddFailure()
 		bp.RecordFailure()
 		return nil, 0, fmt.Errorf("request failed: %w", err)
@@ -442,6 +454,18 @@ func (bp *BaseProvider) doRequestWithRetry(ctx context.Context, method, url stri
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		// Retry on response body read errors (connection reset mid-read, etc.)
+		if bp.RetryEnabled && attempt < bp.RetryConfig.MaxRetries {
+			delay := bp.calculateRetryDelay(attempt)
+			log.Debugf("Retrying request (attempt %d/%d) after %v due to read error: %v",
+				attempt+1, bp.RetryConfig.MaxRetries, delay, err)
+			select {
+			case <-time.After(delay):
+				return bp.doRequestWithRetry(ctx, method, url, body, headers, attempt+1)
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			}
+		}
 		bp.Metrics.AddFailure()
 		bp.RecordFailure()
 		return nil, resp.StatusCode, fmt.Errorf("failed to read response body: %w", err)

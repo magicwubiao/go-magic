@@ -622,7 +622,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					toolContent := chunk[startMatch[1]:endMatch[0]]
 					// Truncate tool content for display
 					if len(toolContent) > 500 {
-						toolContent = toolContent[:500] + "..."
+						toolContent = utils.Truncate(toolContent, 500)
 					}
 					eventData, _ := json.Marshal(map[string]interface{}{
 						"type":     "tool_result",
