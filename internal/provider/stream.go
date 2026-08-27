@@ -107,9 +107,12 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 
@@ -160,6 +163,7 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			PromptTokens:     chunk.Usage.PromptTokens,
 			CompletionTokens: chunk.Usage.CompletionTokens,
 			TotalTokens:      chunk.Usage.TotalTokens,
+			CacheReadTokens:  chunk.Usage.PromptTokensDetails.CachedTokens,
 		}
 	}
 

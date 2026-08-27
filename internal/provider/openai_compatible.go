@@ -15,10 +15,11 @@ import (
 // OpenAICompatibleProvider provides OpenAI-compatible API functionality
 type OpenAICompatibleProvider struct {
 	*BaseProvider
-	name   string
-	model  string
-	models []ModelInfo
-	mu     sync.RWMutex
+	name        string
+	model       string
+	models      []ModelInfo
+	mu          sync.RWMutex
+	extraParams map[string]interface{} // 请求体透传参数（缓存开关等 provider 特有字段）
 }
 
 // NewOpenAICompatibleProvider creates a new OpenAI-compatible provider
@@ -186,12 +187,52 @@ func (p *OpenAICompatibleProvider) SetConvertConfig(cfg *ConvertConfig) {
 	p.ConvertCfg = cfg
 }
 
+// 保留字段：透传参数不允许覆盖这些核心请求字段，防止破坏请求完整性。
+var reservedRequestKeys = map[string]bool{
+	"model": true, "messages": true, "tools": true, "tool_choice": true,
+	"stream": true, "stream_options": true,
+}
+
+// SetExtraParam 设置一个随每次请求透传给 API 的额外参数。
+// 用途示例：
+//   - OpenAI 兼容层的显式缓存/隐私参数
+//   - provider 特有开关（如 dashscope 的 enable_thinking）
+//
+// 与缓存相关：对支持显式缓存的网关（如 one-api/new-api 类代理）可透传
+// 其约定的缓存开关；对 zhipu 等隐式缓存提供商无需设置任何参数。
+func (p *OpenAICompatibleProvider) SetExtraParam(key string, value interface{}) {
+	if reservedRequestKeys[key] {
+		log.Warnf("[OpenAICompatible] refusing to override reserved request key %q via SetExtraParam", key)
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.extraParams == nil {
+		p.extraParams = make(map[string]interface{})
+	}
+	p.extraParams[key] = value
+}
+
+// applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段）。
+func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface{}) {
+	p.mu.RLock()
+	params := p.extraParams
+	p.mu.RUnlock()
+	for k, v := range params {
+		if reservedRequestKeys[k] {
+			continue // 双重保险：合并时同样跳过保留键
+		}
+		reqBody[k] = v
+	}
+}
+
 // Chat implements the Provider interface
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
 		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
 	}
+	p.applyExtraParams(reqBody)
 
 	url := p.BaseURL + "/chat/completions"
 
@@ -222,9 +263,12 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 
@@ -240,6 +284,14 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
+		// 回填 usage：之前的实现丢弃了该信息，导致缓存命中
+		// 与真实 token 消耗不可见，成本统计失真。
+		Usage: &Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+			CacheReadTokens:  response.Usage.PromptTokensDetails.CachedTokens,
+		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
@@ -272,6 +324,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 		"messages": convertedMessages,
 		"tools":    tools,
 	}
+	p.applyExtraParams(reqBody)
 
 	// tool_choice strategy:
 	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
@@ -318,9 +371,12 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 
@@ -336,6 +392,13 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 
 	chatResp := &ChatResponse{
 		Content: choice.Message.Content,
+		// ChatWithTools 路径同样回填 usage + 缓存命中
+		Usage: &Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+			CacheReadTokens:  response.Usage.PromptTokensDetails.CachedTokens,
+		},
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {
@@ -380,6 +443,7 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 			"include_usage": true,
 		},
 	}
+	p.applyExtraParams(reqBody)
 
 	if withTools && tools != nil {
 		reqBody["tools"] = tools

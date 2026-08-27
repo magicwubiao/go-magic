@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +99,10 @@ type Agent struct {
 	sameToolLimit    int            // 同一工具最大调用次数
 	consecutiveLimit int            // 连续 tool call 最大次数
 
+	// maxParallelTools 全局并行工具执行并发上限（跨所有并行组共享）。
+	// 默认 4；<=0 视为非法并在运行时兜底为串行。
+	maxParallelTools int
+
 	// Memory integration
 	memoryEnabled bool
 
@@ -129,6 +135,12 @@ type Agent struct {
 	inputTokens     int
 	outputTokens    int
 	cacheReadTokens int
+
+	// Deadline-aware graceful finish (Hermes-style):
+	// 记录每轮实际耗时用于估算下一轮开销；ctx 剩余时间不足一个完整轮次时，
+	// 优雅收尾并把进度 checkpoint 落盘到 ~/.magic/checkpoints/。
+	turnDurations []time.Duration // 已完成轮次的耗时样本（截断保留最近 32 个）
+	turnStartTime time.Time       // 当前轮次开始时刻（零值表示未开始）
 
 	// Secret redaction (default true)
 	secretRedaction bool
@@ -207,6 +219,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		maxTokenBudget:   0,
 		sameToolLimit:    3,
 		consecutiveLimit: 10,
+		maxParallelTools: defaultMaxParallelTools,
 		toolCallCount:    make(map[string]int),
 		subTaskEnabled:   true,
 		hooks:            hooks.NewHookManager(),
@@ -220,7 +233,64 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 
 	agent.registerBuiltinHooks()
 
+	// history 摘要压缩增强：为 compressor 注入 LLM summarizer。
+	// 压缩超阈值时中段消息交由主 provider 生成语义摘要；
+	// 失败/超时(20s硬上限)由 compressor 内部兜底为规则式摘要。
+	if agent.compressor != nil {
+		agent.compressor.SetSummarizer(newProviderSummarizer(agent))
+	}
+
 	return agent
+}
+
+// newProviderSummarizer 返回基于 agent.provider 的中段历史摘要函数。
+// 输出必须保持事实密度：任务目标、已完成步骤、关键决策、文件路径、
+// 报错原文要点、未完成事项与下一步。空返回或错误都会触发规则式兜底。
+func newProviderSummarizer(a *Agent) func(ctx context.Context, middle []compress.Message) (string, error) {
+	return func(ctx context.Context, middle []compress.Message) (string, error) {
+		a.mu.RLock()
+		maxMsgLen := a.maxMsgLen
+		a.mu.RUnlock()
+
+		var b strings.Builder
+		for _, m := range middle {
+			content := m.Content
+			limit := maxMsgLen / 8
+			if limit < 500 {
+				limit = 500
+			}
+			if limit > 2000 {
+				limit = 2000
+			}
+			b.WriteString(m.Role)
+			b.WriteString(": ")
+			b.WriteString(utils.TruncateDetailed(content, limit))
+			b.WriteString("\n")
+		}
+
+		req := []provider.Message{
+			{
+				Role: "system",
+				Content: "你是对话压缩助手。将给定历史对话压缩为高信息密度的接力摘要，供后续上下文窗口继续任务使用。" +
+					"必须保留：①当前任务目标与原始用户诉求；②已完成的关键步骤及其结果；③重要决策及理由；" +
+					"④涉及的具体文件路径/命令/数据；⑤报错信息的核心内容；⑥未完成事项与建议的下一步。" +
+					"直接输出摘要正文，不要客套话，不要 Markdown 标题。",
+			},
+			{
+				Role:      "user",
+				Content:   "以下是需要压缩的历史对话：\n\n" + b.String(),
+				Timestamp: time.Now(),
+			},
+		}
+		resp, err := a.provider.Chat(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		if resp == nil || strings.TrimSpace(resp.Content) == "" {
+			return "", fmt.Errorf("summarizer returned empty content")
+		}
+		return resp.Content, nil
+	}
 }
 
 // NewEnhancedAgent creates an agent with enhanced features
@@ -832,6 +902,14 @@ Please provide a comprehensive, well-structured final response based on these su
 		default:
 		}
 
+		// Deadline 感知（Hermes-style）：剩余 ctx 寿命不足以再跑一轮完整迭代
+		// （LLM 调用 + 工具执行）时，优雅收尾并落盘 checkpoint，而不是让最后
+		// 一轮死在半路、以 opaque 的 "context deadline exceeded" 告终。
+		if !a.canStartAnotherTurn(ctx) {
+			return a.gracefulDeadlineFinish(input), nil
+		}
+		a.beginTurnTiming()
+
 		// Cortex: OnTurnStart - freezes memory snapshot for prefix cache
 		if a.cortexManager != nil {
 			a.cortexManager.OnTurnStart()
@@ -940,9 +1018,11 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Add assistant message and tool results to history
+		// assistant 消息同样受 maxMsgLen 约束：无上限的思考/长文本
+		// 会随每轮请求整包重发，是上下文雪球的主要来源之一。
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   llmResp.Content,
+			Content:   utils.TruncateDetailed(llmResp.Content, a.maxMsgLen),
 			ToolCalls: resp.ToolCalls,
 			Timestamp: time.Now(),
 		})
@@ -950,9 +1030,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		for _, result := range toolResults {
 			var resultContent string
 			if result.Err != nil {
-				resultContent = fmt.Sprintf("Error: %v", result.Err)
+				resultContent = utils.ErrTruncateWithSpill(result.Err, result.Name, a.maxMsgLen)
 			} else {
-				resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
+				resultContent = utils.TruncateWithSpill(result.Content, result.Name, a.maxMsgLen)
 			}
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
@@ -961,6 +1041,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				ToolCallID: result.ID,
 			})
 		}
+		a.endTurnTiming()
 
 		// Check for tool call loops
 		if len(a.toolCallHistory) > 0 && a.toolCallHistory[len(a.toolCallHistory)-1] == "unknown" {
@@ -1115,6 +1196,12 @@ Please provide a comprehensive, well-structured final response based on these su
 		if cerr := ctx.Err(); cerr != nil {
 			return "", fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount, cerr)
 		}
+
+		// Deadline 感知：剩余时间不足以再完成一轮完整迭代时优雅收尾 + checkpoint。
+		if !a.canStartAnotherTurn(ctx) {
+			return a.gracefulDeadlineFinish(input), nil
+		}
+		a.beginTurnTiming()
 
 		// Consume budget for this iteration
 		if a.budget != nil && !a.budget.Consume() {
@@ -1411,9 +1498,10 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Add assistant message with tool_calls
+		// 同样应用 maxMsgLen 截断（防止思考文本无上限膨胀）
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   llmResp.Content,
+			Content:   utils.TruncateDetailed(llmResp.Content, a.maxMsgLen),
 			ToolCalls: resp.ToolCalls,
 			Timestamp: time.Now(),
 		})
@@ -1429,15 +1517,15 @@ Please provide a comprehensive, well-structured final response based on these su
 			var resultContent string
 			if result, ok := toolResults[tcID]; ok {
 				if result.Err != nil {
-					resultContent = fmt.Sprintf("Error: %v", result.Err)
+					resultContent = utils.ErrTruncateWithSpill(result.Err, result.Name, a.maxMsgLen)
 					toolErr = result.Err
 				} else {
-					resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
+					resultContent = utils.TruncateWithSpill(result.Content, result.Name, a.maxMsgLen)
 				}
 			} else {
 				// No result found for this tool call
 				if execErr != nil {
-					resultContent = fmt.Sprintf("Error: %v", execErr)
+					resultContent = utils.TruncateWithSpill(fmt.Sprintf("Error: %v", execErr), tc.GetToolName(), a.maxMsgLen)
 					toolErr = execErr
 				} else {
 					resultContent = "Error: No result returned for tool call"
@@ -1497,6 +1585,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			}
 		}
+		a.endTurnTiming()
 
 		// Update plan progress at end of iteration
 		a.updatePlanProgress(ctx)
@@ -1620,6 +1709,15 @@ Please provide a comprehensive, well-structured final response based on these su
 			return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount, ctx.Err())
 		default:
 		}
+
+		// Deadline 感知：剩余时间不足以再完成一轮完整迭代时优雅收尾，
+		// 进度 checkpoint 落盘后经 handler 呈现给用户。
+		if !a.canStartAnotherTurn(ctx) {
+			handler("\n"+a.gracefulDeadlineFinish(input)+"\n", false)
+			handler("", true)
+			return nil
+		}
+		a.beginTurnTiming()
 
 		// Cortex: freeze snapshot at turn start
 		if a.cortexManager != nil {
@@ -1890,7 +1988,8 @@ Please provide a comprehensive, well-structured final response based on these su
 			// Track token usage from the response
 			a.trackUsage(resp)
 
-			fullContent = resp.Content
+			// 最终非流式兜底路径同样限制长度（截断超长思考文本）
+			fullContent = utils.TruncateDetailed(resp.Content, a.maxMsgLen)
 			toolCalls = resp.ToolCalls
 			for i := range toolCalls {
 				if toolCalls[i].ID == "" {
@@ -1960,11 +2059,8 @@ Please provide a comprehensive, well-structured final response based on these su
 			toolName := tc.GetToolName()
 			argsSummary := ""
 			if tc.Function.Arguments != "" {
-				// Truncate arguments for display
-				argsSummary = tc.Function.Arguments
-				if len(argsSummary) > 200 {
-					argsSummary = argsSummary[:200] + "..."
-				}
+				// Truncate arguments for display (rune-safe)
+				argsSummary = utils.TruncateDetailed(tc.Function.Arguments, 200)
 			}
 			handler(fmt.Sprintf("\n>>>TOOL_START|%s|%s<<<\n", toolName, argsSummary), false)
 		}
@@ -1992,15 +2088,18 @@ Please provide a comprehensive, well-structured final response based on these su
 			result := results[tc.ID]
 			content := result.Content
 			if result.Err != nil {
-				content = fmt.Sprintf("Error: %v", result.Err)
+				content = utils.ErrTruncateWithSpill(result.Err, tc.GetToolName(), a.maxMsgLen)
+			} else {
+				content = utils.TruncateWithSpill(content, tc.GetToolName(), a.maxMsgLen)
 			}
 
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
-				Content:    utils.TruncateDetailed(content, a.maxMsgLen),
+				Content:    content,
 				ToolCallID: tc.ID,
 				Timestamp:  time.Now(),
 			})
+			a.endTurnTiming()
 
 			toolName := tc.GetToolName()
 			success := result.Err == nil
@@ -2119,11 +2218,30 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 			var wg sync.WaitGroup
 			errCh := make(chan error, len(group.tools))
 
+			// 全局并发上限：信号量限制同时在飞的并行工具数量，防止 LLM 一次
+			// 吐出大量调用时打爆下游（网络/进程/文件系统），同时保留吞吐收益。
+			sem := make(chan struct{}, a.maxParallelConcurrency())
+
 			for _, tc := range group.tools {
 				tc := tc
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
+					// Acquire semaphore (ctx-aware): on cancel, record a result
+					// so downstream message assembly never sees a missing ID.
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-ctx.Done():
+						mu.Lock()
+						results[tc.ID] = ToolCallResult{
+							ID:   tc.ID,
+							Name: tc.GetToolName(),
+							Err:  ctx.Err(),
+						}
+						mu.Unlock()
+						return
+					}
 					result := a.executeSingleToolWithHooks(ctx, tc)
 					mu.Lock()
 					results[tc.ID] = result
@@ -2283,6 +2401,227 @@ func (a *Agent) groupToolsForExecution(toolCalls []types.ToolCall) []toolGroup {
 	return groups
 }
 
+// defaultMaxParallelTools 并行工具执行的默认全局并发上限。
+const defaultMaxParallelTools = 4
+
+// WithMaxParallelTools overrides the global concurrency cap for parallel
+// tool execution (default 4). Values <= 0 fall back to serial execution.
+func WithMaxParallelTools(n int) AgentOption {
+	return func(a *Agent) {
+		if n < 1 {
+			n = 1 // 退化为串行而非无界并发，安全兜底
+		}
+		a.mu.Lock()
+		a.maxParallelTools = n
+		a.mu.Unlock()
+	}
+}
+
+// maxParallelConcurrency 返回当前生效的并行工具并发上限。
+func (a *Agent) maxParallelConcurrency() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.maxParallelTools <= 0 {
+		return 1
+	}
+	return a.maxParallelTools
+}
+
+// deadlineGracefulMargin 时间余量：剩余时间 < 估算轮次耗时 × 该系数时判定
+// "再来一轮大概率跑不完"，触发优雅收尾。
+const deadlineGracefulMargin = 1.25
+
+// defaultTurnDuration 无历史样本时的默认单轮耗时估算。
+const defaultTurnDuration = 30 * time.Second
+
+// beginTurnTiming 标记一轮开始。每个 agent loop 迭代开头调用。
+func (a *Agent) beginTurnTiming() {
+	a.mu.Lock()
+	a.turnStartTime = time.Now()
+	a.mu.Unlock()
+}
+
+// endTurnTiming 记录一轮完成耗时，样本保留最近 32 个。
+func (a *Agent) endTurnTiming() {
+	a.mu.Lock()
+	if !a.turnStartTime.IsZero() {
+		a.turnDurations = append(a.turnDurations, time.Since(a.turnStartTime))
+		if len(a.turnDurations) > 32 {
+			a.turnDurations = a.turnDurations[len(a.turnDurations)-32:]
+		}
+	}
+	a.mu.Unlock()
+}
+
+// estimateTurnDuration 预估下一轮完整耗时（LLM + 工具执行）：
+// 取最近样本的 P90（保守估计），无样本时用默认值 30s。
+func (a *Agent) estimateTurnDuration() time.Duration {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	n := len(a.turnDurations)
+	if n == 0 {
+		return defaultTurnDuration
+	}
+	sorted := make([]time.Duration, n)
+	copy(sorted, a.turnDurations)
+	for i := 1; i < n; i++ { // 小样本插入排序足够
+		for j := i; j > 0 && sorted[j] < sorted[j-1]; j-- {
+			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+		}
+	}
+	idx := (n*90 + 99) / 100 // ceil(0.9*n), 范围 [1, n]
+	return sorted[idx-1]
+}
+
+// canStartAnotherTurn 判断是否还能安全启动一轮新的完整迭代：
+// ctx 有 deadline 且剩余时间 < P90轮次耗时 × margin 时返回 false。
+func (a *Agent) canStartAnotherTurn(ctx context.Context) bool {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return true // 无 deadline 约束
+	}
+	limit := time.Duration(float64(a.estimateTurnDuration()) * deadlineGracefulMargin)
+	return time.Until(dl) >= limit
+}
+
+// DeadlineCheckpoint 是优雅收尾时落盘的进度快照。
+type DeadlineCheckpoint struct {
+	Session      string             `json:"session"`
+	Task         string             `json:"task"`
+	Reason       string             `json:"reason"`
+	Completed    int                `json:"completed_turns"`
+	ToolCalls    int                `json:"tool_calls"`
+	InputTokens  int                `json:"input_tokens"`
+	OutputTokens int                `json:"output_tokens"`
+	SavedAt      time.Time          `json:"saved_at"`
+	LastMessages []CheckpointMsgDTO `json:"last_messages,omitempty"`
+}
+
+// CheckpointMsgDTO 历史消息的精简载体（截断内容防巨型文件）。
+type CheckpointMsgDTO struct {
+	Role       string   `json:"role"`
+	Content    string   `json:"content,omitempty"`
+	ToolCallID string   `json:"tool_call_id,omitempty"`
+	ToolNames  []string `json:"tool_names,omitempty"`
+}
+
+// writeDeadlineCheckpoint 将当前进度写入 ~/.magic/checkpoints/，
+// 返回文件路径；失败返回空串并打日志（不中断收尾流程）。
+// 内嵌最后 8 条历史精简版，便于恢复现场或人工排查。
+func (a *Agent) writeDeadlineCheckpoint(task, reason string) string {
+	a.mu.RLock()
+	cp := DeadlineCheckpoint{
+		Session:      a.session,
+		Task:         utils.TruncateDetailed(task, 2000),
+		Reason:       reason,
+		Completed:    a.iterationCount,
+		ToolCalls:    len(a.toolCallHistory),
+		InputTokens:  a.inputTokens,
+		OutputTokens: a.outputTokens,
+		SavedAt:      time.Now(),
+	}
+	start := len(a.history) - 8
+	if start < 0 {
+		start = 0
+	}
+	for _, m := range a.history[start:] {
+		dto := CheckpointMsgDTO{Role: m.Role}
+		content := m.Content
+		if content == "" && len(m.ContentParts) > 0 {
+			var parts []string
+			for _, p := range m.ContentParts {
+				parts = append(parts, p.Type+":...")
+			}
+			content = strings.Join(parts, ",")
+		}
+		dto.Content = utils.TruncateDetailed(content, 1500)
+		dto.ToolCallID = m.ToolCallID
+		for _, tc := range m.ToolCalls {
+			dto.ToolNames = append(dto.ToolNames, tc.GetToolName())
+		}
+		cp.LastMessages = append(cp.LastMessages, dto)
+	}
+	historyCount := len(a.history)
+	a.mu.RUnlock()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Warnf("[Agent] checkpoint skipped: resolve home dir failed: %v", err)
+		return ""
+	}
+	dir := filepath.Join(home, ".magic", "checkpoints")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warnf("[Agent] checkpoint dir create failed: %v", err)
+		return ""
+	}
+	name := fmt.Sprintf("%s_%s_turn%d.json",
+		time.Now().Format("20060102_150405"), SanitizeAgentSlug(cp.Session), cp.Completed)
+	path := filepath.Join(dir, name)
+
+	data, err := json.MarshalIndent(cp, "", "  ")
+	if err == nil {
+		err = os.WriteFile(path, data, 0o600)
+	}
+	if err != nil {
+		log.Warnf("[Agent] checkpoint write failed: %v", err)
+		return ""
+	}
+	log.Infof("[Agent] checkpoint saved (%d history msgs at cutoff): %s", historyCount, path)
+	return path
+}
+
+// SanitizeAgentSlug 把 session 名清理为安全文件名片段。
+func SanitizeAgentSlug(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "session"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
+}
+
+// gracefulDeadlineFinish deadline 不足时的优雅收尾：
+// 不再发起 LLM 请求（时间已不够完成一轮），写入 checkpoint 并返回
+// 结构化的进度说明，调用方可据此向用户呈现或续跑。
+func (a *Agent) gracefulDeadlineFinish(task string) string {
+	path := a.writeDeadlineCheckpoint(task, "deadline imminent: remaining time below estimated per-turn duration")
+	est := a.estimateTurnDuration()
+	a.mu.RLock()
+	completed := a.iterationCount
+	toolCalls := len(a.toolCallHistory)
+	a.mu.RUnlock()
+	msg := fmt.Sprintf(
+		"[Deadline approaching] Remaining context lifetime is insufficient for another full turn (~%s needed). "+
+			"Work stopped gracefully after %d completed turn(s), %d tool call(s). %s",
+		formatDuration(est), completed, toolCalls,
+		func() string {
+			if path == "" {
+				return "(checkpoint unavailable)"
+			}
+			return "Progress saved to checkpoint: " + path
+		}(),
+	)
+	a.Emit(bus.EventKindWarning, map[string]interface{}{
+		"reason":        "deadline_graceful_finish",
+		"checkpoint":    path,
+		"completed":     completed,
+		"turn_estimate": est.String(),
+	})
+	return msg
+}
+
 // Reset clears the conversation history
 func (a *Agent) Reset() {
 	a.history = a.history[:1] // Keep system prompt
@@ -2319,6 +2658,7 @@ func (a *Agent) trackUsage(resp *provider.ChatResponse) {
 	if resp != nil && resp.Usage != nil {
 		a.inputTokens += resp.Usage.PromptTokens
 		a.outputTokens += resp.Usage.CompletionTokens
+		a.cacheReadTokens += resp.Usage.CacheReadTokens
 	}
 }
 

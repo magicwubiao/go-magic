@@ -59,6 +59,11 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+
+	// CacheReadTokens 为本次请求命中 prompt cache 的 tokens 数。
+	// 来源：OpenAI 兼容接口的 usage.prompt_tokens_details.cached_tokens
+	// （zhipu GLM、DeepSeek、Moonshot 等均按此格式返回）。0 表示未命中或提供商不支持。
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 
 // ChatResponse extends types.ChatResponse with usage info
@@ -75,6 +80,13 @@ type Capabilities struct {
 	StreamingTools bool `json:"streaming_tools"`
 	MultiModal     bool `json:"multi_modal"`
 	Vision         bool `json:"vision"`
+
+	// PromptCaching 表示提供商支持 prompt/context 缓存：
+	// true 时响应 usage.prompt_tokens_details.cached_tokens 可信，
+	// 上层可将 CacheReadTokens 用于成本统计与"稳定前缀优先"策略。
+	// 注意：zhipu GLM、DeepSeek、Moonshot 等为隐式自动缓存，
+	// 请求侧无需额外参数即可命中。
+	PromptCaching bool `json:"prompt_caching"`
 }
 
 // DefaultCapabilities returns default capabilities for OpenAI-compatible providers

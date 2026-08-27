@@ -4,6 +4,7 @@
 package compress
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -33,6 +34,11 @@ type Compressor struct {
 	MinSummaryTokens     int     // Minimum tokens for summary output
 	SummaryRatio         float64 // Proportion of compressed content for summary
 	SummaryTokensCeiling int     // Absolute ceiling for summary tokens
+
+	// Summarizer 用 LLM 生成中段摘要（可选）。为 nil 时退化为
+	// buildDeterministicSummary 的规则式摘要。
+	// SetSummarizer 注入；实现方需保证并发安全与短超时（建议 ≤20s）。
+	Summarizer func(ctx context.Context, middle []Message) (string, error)
 
 	// State
 	lastPromptTokens     int
@@ -170,8 +176,21 @@ func (c *Compressor) generateSummary(middle []Message, systemPrompt string) (str
 	}
 	c.mu.RUnlock()
 
-	// Generate deterministic summary (fallback when LLM is unavailable)
-	summary := c.buildDeterministicSummary(middle)
+	// Generate summary: LLM first (if injected), deterministic fallback otherwise
+	summary := ""
+	c.mu.RLock()
+	summarizer := c.Summarizer
+	c.mu.RUnlock()
+	if summarizer != nil && len(middle) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultSummaryTimeout)
+		defer cancel()
+		if s, err := summarizer(ctx, middle); err == nil && strings.TrimSpace(s) != "" {
+			summary = c.clampSummaryTokens(s)
+		}
+	}
+	if summary == "" {
+		summary = c.buildDeterministicSummary(middle)
+	}
 
 	// Cache the result
 	c.mu.Lock()
@@ -179,6 +198,36 @@ func (c *Compressor) generateSummary(middle []Message, systemPrompt string) (str
 	c.mu.Unlock()
 
 	return summary, nil
+}
+
+// defaultSummaryTimeout LLM 摘要的默认硬超时。压缩发生在主循环关键路径上，
+// 辅助模型响应慢不能拖死 agent。
+const defaultSummaryTimeout = 20 * time.Second
+
+// clampSummaryTokens 将 LLM 生成的摘要裁剪到 SummaryTokensCeiling 之内
+// （按 ~4 chars/token 粗估），防止"摘要比原文还长"的退化情况。
+func (c *Compressor) clampSummaryTokens(s string) string {
+	maxChars := c.SummaryTokensCeiling * 4
+	if maxChars <= 0 {
+		maxChars = 12000 * 4
+	}
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return strings.TrimSpace(s)
+	}
+	trimmed := string(runes[:maxChars])
+	// 尽量在句号/换行处截断，避免半句话
+	if idx := strings.LastIndexAny(trimmed, "。\n.！!？?"); idx > maxChars*3/4 {
+		trimmed = trimmed[:idx+1]
+	}
+	return trimmed + "\n…[truncated]"
+}
+
+// SetSummarizer 注入 LLM 摘要函数（线程安全）。传 nil 可撤销并回到纯规则摘要。
+func (c *Compressor) SetSummarizer(fn func(ctx context.Context, middle []Message) (string, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Summarizer = fn
 }
 
 // buildDeterministicSummary creates a summary without LLM assistance.

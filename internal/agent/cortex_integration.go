@@ -298,17 +298,19 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		// Add tool results to history
 		for _, tc := range resp.ToolCalls {
 			result := results[tc.ID]
-			content := result.Content
+			var content string
 			if result.Err != nil {
-				content = fmt.Sprintf("Error: %v", result.Err)
+				content = utils.ErrTruncateWithSpill(result.Err, tc.GetToolName(), a.maxMsgLen)
 				if checkpoint != nil {
 					a.cortexManager.Execution.StoreError(checkpoint, tc.GetToolName(), result.Err)
 				}
+			} else {
+				content = utils.TruncateWithSpill(result.Content, tc.GetToolName(), a.maxMsgLen)
 			}
 
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
-				Content:    utils.TruncateDetailed(content, a.maxMsgLen),
+				Content:    content,
 				ToolCallID: tc.ID,
 			})
 		}
