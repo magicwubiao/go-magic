@@ -1,6 +1,6 @@
 <template>
   <div>
-    <n-space justify="space-between" style="margin-bottom: 16px;">
+    <n-space justify="space-between" class="kanban-header-space" style="margin-bottom: 16px;">
       <h2>{{ t('kanban.title') }}</h2>
       <n-space>
         <n-button @click="kanbanStore.loadBoard()">
@@ -208,9 +208,8 @@
     </n-spin>
 
     <!-- Add/Edit Task Modal -->
-    <n-modal v-model:show="showTaskModal" :title="editingTask ? t('kanban.editTask') : t('kanban.newTask')">
-      <n-card style="width: 500px;">
-        <n-form>
+    <n-modal v-model:show="showTaskModal" preset="card" class="modal-responsive modal-scroll" style="width: 540px; max-width: 96vw;" :title="editingTask ? t('kanban.editTask') : t('kanban.newTask')">
+      <n-form label-placement="top">
           <n-form-item :label="t('kanban.formTitle')">
             <n-input v-model:value="taskForm.title" :placeholder="t('kanban.taskTitle')" />
           </n-form-item>
@@ -233,23 +232,22 @@
             <n-select v-model:value="taskForm.status" :options="statusOptions" />
           </n-form-item>
         </n-form>
-        <template #footer>
-          <n-space justify="end">
-            <n-button v-if="editingTask && editingTask.status === 'triage'" type="primary" @click="runTriageFromModal">
-              <template #icon><n-icon :component="SparklesOutline" /></template>
-              {{ t('kanban.aiTriage') }}
-            </n-button>
-            <n-button v-if="editingTask" type="info" @click="splitTask">{{ t('kanban.aiSplit') }}</n-button>
-            <n-button @click="showTaskModal = false">{{ t('common.cancel') }}</n-button>
-            <n-button type="primary" @click="saveTask">{{ editingTask ? t('common.save') : t('kanban.create') }}</n-button>
-          </n-space>
-        </template>
-      </n-card>
+      <template #footer>
+        <n-space justify="end">
+          <n-button v-if="editingTask && editingTask.status === 'triage'" type="primary" @click="runTriageFromModal">
+            <template #icon><n-icon :component="SparklesOutline" /></template>
+            {{ t('kanban.aiTriage') }}
+          </n-button>
+          <n-button v-if="editingTask" type="info" @click="splitTask">{{ t('kanban.aiSplit') }}</n-button>
+          <n-button @click="showTaskModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="saveTask">{{ editingTask ? t('common.save') : t('kanban.create') }}</n-button>
+        </n-space>
+      </template>
     </n-modal>
 
-    <!-- Task Detail Modal -->
-    <n-modal v-model:show="showDetailModal" :title="detailTask?.title" style="width: 600px;">
-      <n-card v-if="detailTask">
+<!-- Task Detail Modal -->
+    <n-modal v-model:show="showDetailModal" preset="card" class="modal-responsive modal-scroll" style="width: 620px; max-width: 96vw;" :title="detailTask?.title">
+      <template v-if="detailTask">
         <n-space vertical :size="16">
           <n-space :size="12">
             <n-tag :type="priorityType(detailTask.priority)">{{ detailTask.priority }}</n-tag>
@@ -309,33 +307,29 @@
             <n-button @click="showDetailModal = false">{{ t('common.close') }}</n-button>
           </n-space>
         </n-space>
-      </n-card>
+      </template>
     </n-modal>
 
     <!-- Block Reason Modal -->
-    <n-modal v-model:show="showBlockModal" :title="t('kanban.blockReason')">
-      <n-card style="width: 400px;">
-        <n-input v-model:value="blockReason" type="textarea" :rows="3" :placeholder="t('kanban.enterBlockReason')" />
-        <template #footer>
-          <n-space justify="end">
-            <n-button @click="showBlockModal = false">{{ t('common.cancel') }}</n-button>
-            <n-button type="warning" @click="confirmBlock">{{ t('kanban.block') }}</n-button>
-          </n-space>
-        </template>
-      </n-card>
+    <n-modal v-model:show="showBlockModal" preset="card" class="modal-responsive" style="width: 420px; max-width: 96vw;" :title="t('kanban.blockReason')">
+      <n-input v-model:value="blockReason" type="textarea" :rows="3" :placeholder="t('kanban.enterBlockReason')" />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showBlockModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="warning" @click="confirmBlock">{{ t('kanban.block') }}</n-button>
+        </n-space>
+      </template>
     </n-modal>
 
     <!-- Delete Confirm Modal -->
-    <n-modal v-model:show="showDeleteModal" :title="t('kanban.deleteTaskTitle')">
-      <n-card style="width: 400px;">
-        <n-text>{{ t('kanban.confirmDeleteTask') }}</n-text>
-        <template #footer>
-          <n-space justify="end">
-            <n-button @click="showDeleteModal = false">{{ t('common.cancel') }}</n-button>
-            <n-button type="error" :loading="deleting" @click="confirmDeleteTask">{{ t('common.confirm') }}</n-button>
-          </n-space>
-        </template>
-      </n-card>
+    <n-modal v-model:show="showDeleteModal" preset="card" class="modal-responsive" style="width: 420px; max-width: 96vw;" :title="t('kanban.deleteTaskTitle')">
+      <n-text>{{ t('kanban.confirmDeleteTask') }}</n-text>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showDeleteModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="error" :loading="deleting" @click="confirmDeleteTask">{{ t('common.confirm') }}</n-button>
+        </n-space>
+      </template>
     </n-modal>
 
     <!-- Error Banner -->
@@ -350,9 +344,8 @@
     </n-alert>
 
     <!-- Stats Modal -->
-    <n-modal v-model:show="showStats" :title="t('kanban.statsTitle')">
-      <n-card style="width: 600px;">
-        <n-space vertical>
+    <n-modal v-model:show="showStats" preset="card" class="modal-responsive" style="width: 620px; max-width: 96vw;" :title="t('kanban.statsTitle')">
+      <n-space vertical>
           <n-grid :cols="2" :x-gap="12" :y-gap="12">
             <n-gi>
               <n-statistic :label="t('kanban.totalTasks')" :value="kanbanStore.stats.total" />
@@ -374,7 +367,6 @@
             </n-gi>
           </n-grid>
         </n-space>
-      </n-card>
     </n-modal>
   </div>
 </template>
@@ -839,5 +831,63 @@ onUnmounted(() => {
 }
 .task-dragging {
   opacity: 0.5;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  /* 头部标题行允许换行 */
+  .kanban-header-space {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+  }
+
+  /* 筛选栏:控件两列流式铺满 */
+  .kanban-filter-bar {
+    padding: 10px 12px;
+  }
+  .kanban-filter-bar :deep(.n-space) {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+  }
+  .kanban-filter-bar :deep(.n-input),
+  .kanban-filter-bar :deep(.n-select),
+  .kanban-filter-bar :deep(.n-date-picker) {
+    width: calc(50% - 14px) !important;
+    min-width: calc(50% - 14px);
+    flex: 0 0 calc(50% - 14px);
+  }
+
+  /* 看板改为纵向堆叠:触屏拖拽不可用,靠卡片操作按钮移动任务 */
+  .kanban-board {
+    display: block;
+    overflow-x: visible;
+    padding-bottom: 0;
+  }
+  .kanban-column {
+    width: 100%;
+    min-width: 0;
+    margin-bottom: 12px;
+  }
+  .column-header {
+    font-size: 14px;
+    padding: 10px 12px;
+  }
+  .column-body {
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+
+  /* 任务卡操作按钮增大触控面积 */
+  .kanban-container :deep(.n-card .n-card__action .n-button) {
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  /* 空列提示收敛 */
+  .empty-column-hint {
+    min-height: 60px;
+    padding: 10px;
+  }
 }
 </style>

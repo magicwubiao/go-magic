@@ -24,9 +24,9 @@
     </n-tabs>
 
     <!-- Add/Edit Goal Modal -->
-    <n-modal v-model:show="showGoalModal" :title="editingGoal ? t('goals.editGoal') : t('goals.newGoal')">
-      <n-card style="width: 500px;">
-        <n-form>
+    <!-- GoalsView: n-modal with preset="card" provides header/footer & mobile-safe responsive shell -->
+    <n-modal v-model:show="showGoalModal" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;" :title="editingGoal ? t('goals.editGoal') : t('goals.newGoal')">
+      <n-form label-placement="top">
           <n-form-item :label="t('goals.goalTitle')">
             <n-input v-model:value="goalForm.title" :placeholder="t('goals.goalTitle')" />
           </n-form-item>
@@ -38,13 +38,12 @@
             <n-text>{{ goalForm.progress }}%</n-text>
           </n-form-item>
         </n-form>
-        <template #footer>
-          <n-space justify="end">
-            <n-button @click="showGoalModal = false">{{ t('common.cancel') }}</n-button>
-            <n-button type="primary" @click="saveGoal">{{ editingGoal ? t('common.save') : t('common.create') }}</n-button>
-          </n-space>
-        </template>
-      </n-card>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showGoalModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="saveGoal">{{ editingGoal ? t('common.save') : t('common.create') }}</n-button>
+        </n-space>
+      </template>
     </n-modal>
   </div>
 </template>

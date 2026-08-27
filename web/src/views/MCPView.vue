@@ -151,8 +151,8 @@
       v-model:show="showAddModal"
       :title="isEditing ? t('mcp.editServer') : t('mcp.addServer')"
       preset="card"
-      style="width: 500px;"
-      @positive-click="handleSave"
+      class="modal-responsive modal-scroll"
+      style="width: 520px; max-width: 96vw; max-height: 85vh;"
     >
       <n-space vertical>
         <n-form-item :label="t('mcp.serverName')" required>
@@ -203,6 +203,13 @@
           />
         </n-form-item>
       </n-space>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showAddModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="handleSave">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
     </n-modal>
   </div>
 </template>
@@ -404,3 +411,18 @@ onMounted(async () => {
   await mcpStore.loadServers()
 })
 </script>
+
+<style scoped>
+/* Action buttons inside table cells: more compact to fit narrower columns */
+.btn-condensed {
+  padding: 0 6px;
+}
+
+/* 移动端:表格横向滚动 + 底部安全区 */
+@media (max-width: 768px) {
+  :deep(.n-data-table-wrapper) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+</style>

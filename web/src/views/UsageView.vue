@@ -168,12 +168,13 @@
       />
     </n-card>
 
-    <!-- 预算编辑对话框 -->
+    <!-- Budget Edit Modal -->
     <n-modal
       v-model:show="showBudgetDialog"
       preset="card"
+      class="modal-responsive"
       :title="t('usage.editBudget')"
-      style="width: 400px"
+      style="width: 420px; max-width: 96vw;"
     >
       <div class="budget-dialog">
         <n-form-item :label="t('usage.budgetLimit')">

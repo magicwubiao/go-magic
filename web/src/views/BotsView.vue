@@ -187,7 +187,7 @@
     </template>
 
     <!-- Create/Edit Modal -->
-    <n-modal v-model:show="showEditModal" :title="editingBot ? t('bots.editBot') : t('bots.createBot')" preset="card" style="width: 560px;">
+    <n-modal v-model:show="showEditModal" :title="editingBot ? t('bots.editBot') : t('bots.createBot')" preset="card" class="modal-responsive modal-scroll" style="width: 560px; max-width: 96vw;">
       <n-form label-placement="top">
         <n-form-item :label="t('bots.name')" required>
           <n-input v-model:value="form.name" :disabled="!!editingBot" :placeholder="t('bots.namePlaceholder')" />
@@ -225,7 +225,7 @@
     </n-modal>
 
     <!-- Routines Modal -->
-    <n-modal v-model:show="showRoutinesModal" :title="t('bots.routinesFor', { name: '@' + (activeBot?.mention_tag || '') })" preset="card" style="width: 660px;">
+    <n-modal v-model:show="showRoutinesModal" :title="t('bots.routinesFor', { name: '@' + (activeBot?.mention_tag || '') })" preset="card" class="modal-responsive modal-scroll" style="width: 660px; max-width: 96vw;">
       <n-empty v-if="!botsStore.routines.length" :description="t('bots.noRoutines')" />
 
       <n-space vertical v-else>

@@ -431,7 +431,7 @@
     </n-button>
 
     <!-- Work Directory Picker Modal -->
-    <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" style="width: 500px;">
+    <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
       <!-- Breadcrumb -->
       <div class="dir-picker-breadcrumb">
         <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">

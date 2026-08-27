@@ -88,8 +88,9 @@
     <n-modal 
       v-model:show="showDetailModal" 
       :title="selectedToolset?.name" 
-      preset="card" 
-      style="width: 600px;"
+      preset="card"
+      class="modal-responsive modal-scroll"
+      style="width: 640px; max-width: 96vw; max-height: 80vh;"
       @update:show="handleModalShowChange"
     >
       <n-space vertical v-if="selectedToolset">
@@ -284,3 +285,16 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+/* 移动端:头部与统计区收敛 */
+@media (max-width: 768px) {
+  div[style*="justify-content: space-between"] {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  :deep(.n-list-item) {
+    padding: 10px 0;
+  }
+}
+</style>

@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="config-page">
     <h2 style="margin-bottom: 24px;">{{ t('config.title') }}</h2>
 
     <!-- Language Settings -->
@@ -211,7 +211,7 @@
     </n-tabs>
 
     <!-- Directory picker modal -->
-    <n-modal v-model:show="showDirPicker" preset="card" :title="t('chat.workDirSelect')" style="max-width: 560px;">
+    <n-modal v-model:show="showDirPicker" preset="card" class="modal-responsive" :title="t('chat.workDirSelect')" style="width: 560px; max-width: 96vw;">
       <div class="dir-picker">
         <div class="dir-breadcrumb">
           <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
@@ -711,5 +711,49 @@ onMounted(async () => {
   padding: 24px;
   color: #999;
   justify-content: center;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  /* 页面标题留白收敛(内联 margin 用 !important 覆盖) */
+  .config-page > h2 {
+    margin-bottom: 12px !important;
+  }
+
+  /* 左置标签改为纵向堆叠,控件占满整行 */
+  .config-page :deep(.n-form-item) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .config-page :deep(.n-form-item-label) {
+    width: auto !important;
+    max-width: none !important;
+    text-align: left;
+    padding-bottom: 6px;
+  }
+
+  /* 表单内固定宽度控件放开为全宽 */
+  .config-page :deep(.n-input),
+  .config-page :deep(.n-select),
+  .config-page :deep(.n-input-number),
+  .config-page :deep(.n-date-picker) {
+    max-width: 100%;
+  }
+
+  /* Raw JSON 编辑区字号略降,便于窄屏阅读 */
+  .config-page :deep(textarea.n-input__textarea-el) {
+    font-size: 12px !important;
+  }
+
+  /* 目录选择器:增大触控行高与 tiny 按钮 */
+  .config-page :deep(.dir-item) {
+    padding: 9px 10px;
+    font-size: 14px;
+  }
+  .config-page :deep(.dir-breadcrumb .n-button--tiny-type) {
+    height: 30px;
+    padding: 0 8px;
+  }
 }
 </style>

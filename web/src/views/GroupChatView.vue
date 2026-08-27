@@ -1,8 +1,12 @@
 <template>
   <div class="groupchat-container">
     <!-- Room List -->
-    <div class="room-sidebar">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+    <div class="room-sidebar" :class="{ 'mobile-expanded': mobileRoomsExpanded }">
+      <!-- Mobile drag handle -->
+      <div class="mobile-room-handle" @click="mobileRoomsExpanded = !mobileRoomsExpanded">
+        <div class="handle-bar"></div>
+      </div>
+      <div v-show="!isMobile || mobileRoomsExpanded" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <div style="display: flex; align-items: center; gap: 4px;">
           <n-text strong>{{ t('groupchat.rooms') }}</n-text>
           <n-button text size="tiny" @click="handleRefresh" :loading="groupchatStore.loading">
@@ -11,12 +15,12 @@
         </div>
         <n-button size="tiny" type="primary" @click="showCreateRoom = true">+</n-button>
       </div>
-      <div class="room-list">
+      <div class="room-list" v-show="!isMobile || mobileRoomsExpanded">
         <div
           v-for="room in groupchatStore.rooms"
           :key="room.id"
           :class="['room-item', { active: groupchatStore.activeRoomId === room.id }]"
-          @click="groupchatStore.selectRoom(room.id)"
+          @click="onRoomClick(room.id)"
         >
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
@@ -216,7 +220,7 @@
     </div>
 
     <!-- Invite Code Modal -->
-    <n-modal v-model:show="showInviteCode" :title="t('groupchat.inviteCode')" preset="card" style="width: 420px;" closable @close="showInviteCode = false">
+    <n-modal v-model:show="showInviteCode" :title="t('groupchat.inviteCode')" preset="card" class="modal-responsive" style="width: 420px; max-width: 96vw;" closable @close="showInviteCode = false">
       <div style="display: flex; flex-direction: column; gap: 12px;">
         <n-button @click="generateInvite" :loading="generatingInvite" style="width: 100%;">{{ t('groupchat.generate') }}</n-button>
         <n-input v-if="inviteCodeText" v-model:value="inviteCodeText" readonly>
@@ -228,7 +232,7 @@
     </n-modal>
 
     <!-- Create Room Modal -->
-    <n-modal v-model:show="showCreateRoom" :title="t('groupchat.newRoom')" preset="dialog" closable @close="showCreateRoom = false" style="width: 480px;">
+    <n-modal v-model:show="showCreateRoom" :title="t('groupchat.newRoom')" preset="dialog" class="modal-responsive" closable @close="showCreateRoom = false" style="width: 480px; max-width: 96vw;">
       <n-form>
         <n-form-item :label="t('groupchat.roomName')">
           <n-input v-model:value="newRoom.name" />
@@ -246,7 +250,7 @@
     </n-modal>
 
     <!-- Agents Modal -->
-    <n-modal v-model:show="showAgents" :title="t('groupchat.agents')" style="width: 640px;" preset="card" closable @close="showAgents = false">
+    <n-modal v-model:show="showAgents" :title="t('groupchat.agents')" style="width: 640px; max-width: 96vw;" preset="card" closable @close="showAgents = false">
       <n-list>
         <n-list-item v-for="a in groupchatStore.agents" :key="a.id">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%;">
@@ -311,7 +315,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useGroupChatStore } from '@/stores/groupchat'
@@ -325,6 +329,30 @@ const { t } = useI18n()
 const message = useMessage()
 const groupchatStore = useGroupChatStore()
 const inputValue = ref('')
+
+// 移动端房间侧栏下拉状态
+const mobileRoomsExpanded = ref(false)
+const isMobile = ref(window.innerWidth <= 768)
+
+function handleResize() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
+function onRoomClick(id: string | number) {
+  groupchatStore.selectRoom(id)
+  // 移动端选中房间后自动收起抽屉
+  if (isMobile.value) {
+    mobileRoomsExpanded.value = false
+  }
+}
 const showCreateRoom = ref(false)
 const showAgents = ref(false)
 const inviteCode = ref('')
@@ -374,9 +402,10 @@ const filteredMentions = computed(() => {
   )
 })
 
-// placeholder：有 agent 时提示 @ 提及与快捷键
+// placeholder:有 agent 时提示 @ 提及与快捷键;移动端空间有限用短文案
 const inputPlaceholder = computed(() => {
   if (groupchatStore.agents.length === 0) return t('groupchat.typeMessage')
+  if (isMobile.value) return t('groupchat.inputHintShort')
   return t('groupchat.inputHint')
 })
 
@@ -973,6 +1002,11 @@ onMounted(() => groupchatStore.loadRooms())
   padding: 12px;
 }
 
+/* Mobile drag handle - hidden on desktop */
+.mobile-room-handle {
+  display: none;
+}
+
 .room-list {
   flex: 1;
   overflow-y: auto;
@@ -1468,4 +1502,62 @@ onMounted(() => groupchatStore.loadRooms())
 .info-close-btn { border: none; background: none; cursor: pointer; font-size: 16px; color: #999; padding: 0; line-height: 1; }
 .info-close-btn:hover { color: #333; }
 
+/* 移动端:房间侧栏改为 ChatView 同款顶部下拉抽屉 */
+@media (max-width: 768px) {
+  .groupchat-container {
+    flex-direction: column;
+    /* 锁定视口高度,dvh 随浏览器地址栏动态伸缩,保证输入框始终贴底 */
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .room-sidebar {
+    width: 100%;
+    max-height: 32px;
+    padding: 0;
+    border-right: none;
+    border-bottom: 1px solid #e8e8e8;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    flex-shrink: 0;
+  }
+  .room-sidebar.mobile-expanded {
+    max-height: 60vh;
+    padding: 12px;
+    overflow-y: auto;
+  }
+
+  /* 聊天主区纵向弹性:消息内部滚动,输入区固定底部 */
+  .chat-main {
+    min-height: 0;
+  }
+  .messages {
+    padding: 10px 12px;
+    padding-bottom: 16px;
+  }
+
+  /* 输入区收紧留白并适配手势条安全区 */
+  .input-area {
+    padding: 8px 12px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-room-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 11px 0;
+    cursor: pointer;
+  }
+  .handle-bar {
+    width: 56px;
+    height: 6px;
+    border-radius: 3px;
+    background: #bbb;
+    transition: background 0.2s;
+  }
+  .mobile-room-handle:hover .handle-bar {
+    background: #888;
+  }
+}
 </style>

@@ -152,7 +152,8 @@
       v-model:show="showDetailModal"
       :title="selectedSkill?.name"
       preset="card"
-      style="width: 700px; max-height: 80vh;"
+      class="modal-responsive modal-scroll"
+      style="width: 720px; max-width: 96vw; max-height: 85vh;"
     >
       <n-space vertical v-if="selectedSkill">
         <n-space justify="end" style="margin-bottom: 8px;">
@@ -212,7 +213,8 @@
       v-model:show="showEditModal"
       :title="t('skills.editSkill')"
       preset="card"
-      style="width: 600px;"
+      class="modal-responsive"
+      style="width: 620px; max-width: 96vw;"
     >
       <n-form v-if="editingSkill">
         <n-form-item :label="t('skills.name')">
@@ -236,7 +238,8 @@
       v-model:show="showHubModal"
       :title="t('skills.browseHub')"
       preset="card"
-      style="width: 900px; max-height: 80vh;"
+      class="modal-responsive modal-scroll"
+      style="width: 960px; max-width: 96vw; max-height: 85vh;"
     >
       <n-space vertical>
         <n-space align="center">
@@ -621,3 +624,15 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+/* 移动端:上传拖拽区收敛高度,头部按钮换行 */
+@media (max-width: 768px) {
+  :deep(.n-upload-dragger > div[style*="padding"]) {
+    padding: 16px 0 !important;
+  }
+  :deep(.n-collapse-item__header-main) {
+    white-space: normal;
+  }
+}
+</style>

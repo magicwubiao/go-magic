@@ -81,7 +81,7 @@
     
     <!-- New goal modal -->
     <n-modal v-model:show="showNewGoalModal" :title="t('goals.newGoal')">
-      <n-card style="width: 400px;">
+      <n-card style="width: 400px; max-width: 96vw;">
         <n-form>
           <n-form-item :label="t('goals.goalTitle')">
             <n-input v-model:value="newGoalForm.title" :placeholder="t('goals.goalTitle')" />

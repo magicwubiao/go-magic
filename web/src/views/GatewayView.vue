@@ -75,7 +75,7 @@
     </n-grid>
 
     <!-- Edit Platform Modal -->
-    <n-modal v-model:show="showEditModal" :title="editingPlatform?.label" preset="dialog" style="width: 500px;">
+    <n-modal v-model:show="showEditModal" :title="editingPlatform?.label" preset="dialog" class="modal-responsive" style="width: 500px; max-width: 96vw;">
       <n-form v-if="editingPlatform" label-placement="left" label-width="120" size="small">
         <n-form-item label="Token">
           <n-input
@@ -142,7 +142,7 @@
 
 
     <!-- QR Login Modal -->
-    <n-modal v-model:show="showQRModal" :title="`QR Code Login - ${qrPlatform?.label}`" preset="card" style="width: 400px;">
+    <n-modal v-model:show="showQRModal" :title="`QR Code Login - ${qrPlatform?.label}`" preset="card" class="modal-responsive" style="width: 400px; max-width: 96vw;">
       <div class="qr-modal-content">
         <!-- QR Code Display -->
         <div v-if="qrStatus === 'loading'" class="qr-loading">
@@ -667,4 +667,18 @@ onUnmounted(() => {
 .qr-icon--pulse { animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .qr-countdown { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+/* 移动端:会话侧栏改为顶部横向抽屉 */
+@media (max-width: 768px) {
+  .chat-container { flex-direction: column; }
+  .session-sidebar {
+    width: 100%;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid #e0e0e0;
+    flex-shrink: 0;
+  }
+  .session-list { max-height: 150px; }
+  .chat-main { min-height: 0; flex: 1; }
+}
 </style>

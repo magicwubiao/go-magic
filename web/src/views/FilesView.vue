@@ -68,7 +68,7 @@
     </n-spin>
 
     <!-- File preview/editor modal -->
-    <n-modal v-model:show="showPreview" preset="card" :title="previewTitle" style="max-width: 950px; width: 95vw;">
+    <n-modal v-model:show="showPreview" preset="card" class="modal-responsive modal-scroll" :title="previewTitle" style="width: min(950px, 95vw);">
       <n-scrollbar style="max-height: 70vh;">
         <div v-if="previewType === 'image'" class="image-preview-wrapper">
           <img :src="previewImageUrl" :alt="previewTitle" style="max-width: 100%; max-height: 65vh;" />

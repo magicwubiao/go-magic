@@ -299,8 +299,62 @@ body {
   white-space: nowrap;
 }
 
+/* 弹窗全局响应式规范:宽度自适应 + 内容滚动 */
+.modal-responsive {
+  max-width: 96vw;
+}
+
+.modal-scroll {
+  max-height: 85vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {
+  /* 页面网格在小屏统一堆叠为单列(统计卡/技能卡等) */
+  .n-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  /* 页面标题区换行、缩小留白 */
+  h2 {
+    font-size: 18px;
+  }
+
+  /* 卡片内边距收敛,腾出内容空间 */
+  .n-card > .n-card-header {
+    padding-top: 12px;
+    padding-bottom: 8px;
+  }
+  .n-card > .n-card__content {
+    padding: 10px 14px;
+  }
+
+  /* 表格在小屏用更小字号,容器允许横向滚动 */
+  .n-data-table {
+    font-size: 13px;
+  }
+  .n-data-table-wrapper {
+    overflow-x: auto;
+  }
+
+  /* 触控目标不低于 36px 高 */
+  .n-button--small-type {
+    height: 34px;
+    padding: 0 10px;
+  }
+
+  /* 标签页可横向滚动 */
+  .n-tabs .n-tabs-nav {
+    overflow-x: auto;
+  }
+
+  /* 底部安全区(刘海屏/手势条) */
+  .n-layout-scroll-container {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   .n-layout-sider {
     position: fixed !important;
     z-index: 200;

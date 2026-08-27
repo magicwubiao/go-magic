@@ -95,7 +95,7 @@
     </div>
 
     <!-- 添加/编辑供应商弹窗 -->
-    <n-modal v-model:show="showProviderModal" preset="card" :title="isEditing ? t('modelsProviders.editProvider') : t('modelsProviders.addProvider')" style="width: 500px">
+    <n-modal v-model:show="showProviderModal" preset="card" class="modal-responsive modal-scroll" :title="isEditing ? t('modelsProviders.editProvider') : t('modelsProviders.addProvider')" style="width: 500px; max-width: 96vw;">
       <n-form :model="editingProvider" label-placement="top">
         <n-form-item :label="t('modelsProviders.providerName')" path="name">
           <n-select
@@ -455,5 +455,22 @@ onMounted(async () => {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+}
+
+/* 移动端:左右分栏改为上下堆叠 */
+@media (max-width: 768px) {
+  .page-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .page-content {
+    flex-direction: column;
+    overflow: visible;
+    gap: 14px;
+  }
+  .providers-list {
+    width: 100%;
+  }
 }
 </style>

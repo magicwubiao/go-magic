@@ -1002,6 +1002,7 @@ export default {
     selectRoom: '选择聊天室开始聊天',
     typeMessage: '输入消息...',
     inputHint: "输入消息，{'@'} 提及智能体，Enter 发送，Shift+Enter 换行",
+    inputHintShort: "输入消息… {'@'} 提及",
     sendFailed: '发送失败，请重试',
     send: '发送',
     created: '聊天室已创建',

@@ -73,7 +73,7 @@
     </n-spin>
 
     <!-- Create/Edit Modal -->
-    <n-modal v-model:show="showModal" :title="editingJob ? t('cron.editJob') : t('cron.createJob')" preset="card" style="width: 550px;">
+    <n-modal v-model:show="showModal" :title="editingJob ? t('cron.editJob') : t('cron.createJob')" preset="card" class="modal-responsive modal-scroll" style="width: 550px; max-width: 96vw;">
       <n-form label-placement="top">
         <n-form-item :label="t('cron.jobName')" required>
           <n-input v-model:value="form.name" :placeholder="t('cron.jobName')" />
@@ -120,7 +120,7 @@
     </n-modal>
 
     <!-- Logs Modal -->
-    <n-modal v-model:show="showLogsModal" :title="t('cron.executionLogs')" preset="card" style="width: 700px;">
+    <n-modal v-model:show="showLogsModal" :title="t('cron.executionLogs')" preset="card" class="modal-responsive modal-scroll" style="width: 700px; max-width: 96vw;">
       <n-empty v-if="!cronStore.logs.length" :description="t('cron.noLogs')" />
       <n-timeline v-else>
         <n-timeline-item

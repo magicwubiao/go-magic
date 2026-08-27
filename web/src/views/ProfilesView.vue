@@ -65,7 +65,7 @@
       v-model:show="showDetailModal"
       preset="dialog"
       :title="`${t('profiles.edit')} - ${editingProfile}`"
-      style="width: 700px;"
+      style="width: 700px; max-width: 96vw;"
     >
       <n-tabs type="line" animated>
         <!-- Environment Tab -->
@@ -178,7 +178,7 @@
     </n-modal>
 
     <!-- Soul Editor Modal (legacy, for backward compatibility) -->
-    <n-modal v-model:show="showSoulModal" preset="dialog" :title="`${t('profiles.soul')} - ${editingProfile}`" style="width: 600px;">
+    <n-modal v-model:show="showSoulModal" preset="dialog" class="modal-responsive" :title="`${t('profiles.soul')} - ${editingProfile}`" style="width: 620px; max-width: 96vw;">
       <n-input
         v-model:value="soulContent"
         type="textarea"
