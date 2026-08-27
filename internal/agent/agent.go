@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -1027,13 +1028,15 @@ Please provide a comprehensive, well-structured final response based on these su
 		Content:   "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
 		Timestamp: time.Now(),
 	})
-	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
-		a.history = append(a.history, provider.Message{
-			Role:      "assistant",
-			Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
-			Timestamp: time.Now(),
-		})
-		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+	if ctx.Err() == nil {
+		if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+			a.history = append(a.history, provider.Message{
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
+			})
+			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+		}
 	}
 	if lastErr != nil {
 		return "", lastErr
@@ -1106,6 +1109,13 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
+		// Fast-fail when the caller's context is already finished (deadline or
+		// cancel). Retrying on a dead context only burns turns/budget and ends
+		// with an opaque "context deadline exceeded" — abort immediately.
+		if cerr := ctx.Err(); cerr != nil {
+			return "", fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount, cerr)
+		}
+
 		// Consume budget for this iteration
 		if a.budget != nil && !a.budget.Consume() {
 			return "", fmt.Errorf("exceeded iteration budget (%d/%d used)", a.budget.Used(), a.budget.MaxTotal())
@@ -1228,6 +1238,12 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		if err != nil {
 			lastErr = err
+			// A finished context cannot recover: retries and backoff sleeps are
+			// pointless. Abort the turn immediately with a clear cause.
+			if cerr := ctx.Err(); cerr != nil {
+				a.Emit(bus.EventKindError, cerr.Error())
+				return "", fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
+			}
 			// Use error classifier for intelligent retry
 			var classified *retry.ClassifiedError
 			if a.errorClassifier != nil {
@@ -1495,13 +1511,15 @@ Please provide a comprehensive, well-structured final response based on these su
 		Content:   "You have reached the maximum number of turns. Please provide a brief summary of what you accomplished and what remains incomplete. Do NOT call any more tools.",
 		Timestamp: time.Now(),
 	})
-	if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
-		a.history = append(a.history, provider.Message{
-			Role:      "assistant",
-			Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
-			Timestamp: time.Now(),
-		})
-		return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+	if ctx.Err() == nil {
+		if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+			a.history = append(a.history, provider.Message{
+				Role:      "assistant",
+				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Timestamp: time.Now(),
+			})
+			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+		}
 	}
 	if lastErr != nil {
 		return "", lastErr
@@ -1589,12 +1607,17 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
-		// Check if context was cancelled (user pressed /stop)
+		// Check if context was cancelled (user pressed /stop) or expired
+		// (turn deadline reached). Distinguish the two so the user sees why.
 		select {
 		case <-ctx.Done():
-			handler("\n\n[⏹ Stopped by user]\n", false)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				handler(fmt.Sprintf("\n\n[⏱ Turn timed out after %d turn(s)]\n", a.iterationCount), false)
+			} else {
+				handler("\n\n[⏹ Stopped by user]\n", false)
+			}
 			handler("", true)
-			return ctx.Err()
+			return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount, ctx.Err())
 		default:
 		}
 
@@ -1639,6 +1662,17 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 		if decision.Action == hooks.HookActionReject {
 			return fmt.Errorf("hook rejected: %s", decision.Reason)
+		}
+
+		// Defensive: enforce message alternation before sending to the
+		// provider — same as the non-streaming loop. Strict providers
+		// (zhipu/GLM error 1214, etc.) reject malformed histories (two user
+		// messages in a row after injected recovery prompts, tool results that
+		// lost their assistant tool_call during an aborted turn) with opaque
+		// 400 errors on EVERY retry, burning the whole turn budget.
+		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
+			log.Warnf("[Agent:Stream] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			req.Messages = SanitizeMessageHistory(req.Messages)
 		}
 
 		// Try streaming first
@@ -1768,6 +1802,12 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			} else {
 				lastErr = err
+				// Dead context: abort instead of falling into the non-streaming
+				// fallback which would fail identically.
+				if cerr := ctx.Err(); cerr != nil {
+					a.Emit(bus.EventKindError, cerr.Error())
+					return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
+				}
 				log.Warnf("[Agent:Stream] StreamWithTools failed: %v (provider=%s, messages=%d, tools=%d)",
 					err, a.provider.Name(), len(req.Messages), len(a.tools))
 			}
@@ -1811,6 +1851,10 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			} else {
 				lastErr = err
+				if cerr := ctx.Err(); cerr != nil {
+					a.Emit(bus.EventKindError, cerr.Error())
+					return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
+				}
 			}
 		}
 
@@ -1830,6 +1874,11 @@ Please provide a comprehensive, well-structured final response based on these su
 
 			if err != nil {
 				lastErr = err
+				// Dead context: no point sanitizing and looping — abort now.
+				if cerr := ctx.Err(); cerr != nil {
+					a.Emit(bus.EventKindError, cerr.Error())
+					return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
+				}
 				a.Emit(bus.EventKindError, err.Error())
 				// Clean up orphaned tool messages from history so the next
 				// iteration doesn't send an invalid message sequence to the API.
@@ -1985,8 +2034,14 @@ Please provide a comprehensive, well-structured final response based on these su
 	}
 
 	if lastErr != nil {
+		// Persisted history must not end malformed for the next turn (bot
+		// mode saves ag.GetHistory() after every outcome).
+		a.sanitizeHistory()
 		return lastErr
 	}
+	// Max turns exhausted: nothing new to call — sanitize so the stored tail
+	// is a legal sequence, then report.
+	a.sanitizeHistory()
 	return fmt.Errorf("exceeded maximum turns (%d)", a.maxTurns)
 }
 
@@ -2399,11 +2454,23 @@ func (a *Agent) truncateHistory() {
 	}
 }
 
-// sanitizeHistory removes orphaned tool messages that have no corresponding
-// assistant message with tool_calls. This can happen when a ChatWithTools
-// call fails after tools were executed in a previous iteration, leaving
-// tool-result messages in history without the assistant tool_calls header.
+// sanitizeHistory repairs malformed history so the next provider call
+// succeeds. Two classes of damage can accumulate:
+//
+//  1. Orphaned tool messages (a ChatWithTools failure after tools ran leaves
+//     tool results without their assistant tool_calls header).
+//  2. General alternation violations — most importantly consecutive user
+//     messages. These arise when a turn aborts right after an injected
+//     "recovery prompt" or summary-request user message is appended: the
+//     stored history then ends with that injected prompt, and the user's
+//     real input becomes the second consecutive user message. Strict
+//     providers (zhipu/GLM 1214) reject such payloads permanently.
+//
+// For consecutive users we keep the LATEST one (the real user input) and
+// drop the earlier injected ones — the reverse of the generic sanitizer,
+// which would silently discard the user's actual message.
 func (a *Agent) sanitizeHistory() {
+	// Pass 1: drop orphaned tool messages (existing behavior).
 	cleaned := make([]provider.Message, 0, len(a.history))
 	for i, m := range a.history {
 		if m.Role == "tool" {
@@ -2428,8 +2495,31 @@ func (a *Agent) sanitizeHistory() {
 		}
 		cleaned = append(cleaned, m)
 	}
-	if len(cleaned) != len(a.history) {
-		a.history = cleaned
+	a.history = cleaned
+
+	// Pass 2: collapse runs of consecutive user messages to the last one.
+	final := make([]provider.Message, 0, len(a.history))
+	dropped := 0
+	for _, m := range a.history {
+		if m.Role == "user" && len(final) > 0 && final[len(final)-1].Role == "user" {
+			// Keep the newer message: replace the tail.
+			final[len(final)-1] = m
+			dropped++
+			continue
+		}
+		final = append(final, m)
+	}
+	if dropped > 0 {
+		log.Warnf("[Agent] Collapsed %d consecutive duplicate user message(s)", dropped)
+	}
+	a.history = final
+
+	// Pass 3: general best-effort repair for anything left (assistant pairs,
+	// stray roles). Generic sanitizer drops the *offending* message; good
+	// enough as a last resort.
+	if violations := ValidateMessageAlternation(a.history); len(violations) > 0 {
+		log.Warnf("[Agent] sanitizeHistory repairing %d residual violation(s)", len(violations))
+		a.history = SanitizeMessageHistory(a.history)
 	}
 }
 

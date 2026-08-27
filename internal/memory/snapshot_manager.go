@@ -67,9 +67,8 @@ func (sm *SnapshotManager) Load() error {
 // OnTurnStart is called at the beginning of each turn.
 // Uses the frozen snapshot for this turn, does NOT refresh.
 // This protects prefix cache from being invalidated mid-conversation.
+// 快照读取方（GetMemoryForPrompt）自带锁保护，这里无需再持锁，保持空操作即可。
 func (sm *SnapshotManager) OnTurnStart() {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
 	// frozenMemory remains as-is for the entire turn
 }
 

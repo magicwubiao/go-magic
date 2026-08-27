@@ -14,7 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -87,6 +89,16 @@ type Store struct {
 	// File-based memory paths (Cortex style)
 	agentMemoryPath string
 	userMemoryPath  string
+
+	// fileMu 串行化 MEMORY.md / USER.md 的文件级读写，防止跨 goroutine append 互相覆盖
+	fileMu sync.Mutex
+
+	// llmProvider 允许外部注入用于 Summarize 的 provider（SetLLMProvider），
+	// 避免依赖环境变量探测
+	llmProvider atomic.Value // stores provider.Provider
+
+	// totalSearches 统计搜索次数（MemoryStats.TotalSearches 数据源）
+	totalSearches atomic.Int64
 }
 
 // NewStore creates a new memory store
@@ -101,8 +113,11 @@ func NewStore(memCfg *MemoryConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to create memory directory: %w", err)
 	}
 
-	// Initialize SQLite database
-	db, err := sql.Open("sqlite", memCfg.DBPath)
+	// Initialize SQLite database.
+	// 启用 WAL + busy_timeout：多 goroutine / 多进程并发写入时避免 SQLITE_BUSY，
+	// WAL 模式让读写不互相阻塞。
+	dsn := "file:" + memCfg.DBPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -232,16 +247,19 @@ func (s *Store) Store(m *Memory) error {
 	m.UpdatedAt = now
 	m.LastAccess = now
 
-	categories, _ := json.Marshal(m.Categories)
+	categoriesJSON, err := json.Marshal(m.Categories)
+	if err != nil {
+		return fmt.Errorf("failed to marshal categories: %w", err)
+	}
 	if m.Categories == nil {
-		categories = []byte("[]")
+		categoriesJSON = []byte("[]")
 	}
 
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		INSERT OR REPLACE INTO memories 
 		(id, type, content, scope, categories, importance, metadata, created_at, updated_at, last_access, access_count, session_id, source)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, m.ID, m.Type, m.Content, m.Scope, string(categories), m.Importance, m.Metadata,
+	`, m.ID, m.Type, m.Content, m.Scope, string(categoriesJSON), m.Importance, m.Metadata,
 		m.CreatedAt.Format(time.RFC3339), m.UpdatedAt.Format(time.RFC3339),
 		m.LastAccess.Format(time.RFC3339), m.AccessCount, m.SessionID, m.Source)
 
@@ -269,6 +287,12 @@ func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*M
 
 // queryRecall 执行 FTS5 检索，不持锁（由调用方持锁），也不更新访问统计
 func (s *Store) queryRecall(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	// CJK（中文/日文/韩文）文本没有空格分词，FTS5 默认 tokenizer 无法有效匹配，
+	// 直接走 LIKE 兜底检索，避免中文查询静默返回空结果。
+	if containsCJK(query) {
+		return s.queryRecallFallback(query, limit, memoryTypes...)
+	}
+
 	// 用参数化占位符构造 type 过滤条件，避免 SQL 注入
 	typeFilter := ""
 	typeArgs := []interface{}{}
@@ -354,6 +378,7 @@ func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...Memo
 
 // Search performs FTS5 full-text search
 func (s *Store) Search(query string, limit int) ([]*Memory, error) {
+	s.totalSearches.Add(1)
 	return s.Recall(query, limit)
 }
 
@@ -373,7 +398,10 @@ func (s *Store) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 		}
 
 		json.Unmarshal([]byte(categories), &m.Categories)
-		json.Unmarshal([]byte(metadata), &m.Metadata)
+		// Metadata 本身就是 JSON 字符串，直接赋值。
+		// （旧实现把 JSON 对象 Unmarshal 进 string 字段，必然失败且错误被忽略，
+		//  导致 decay_factor 等元数据在读取后全部丢失。）
+		m.Metadata = metadata
 
 		m.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		m.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
@@ -408,6 +436,17 @@ func (s *Store) batchUpdateAccess(memories []*Memory) {
 	if _, err := s.db.Exec(query, args...); err != nil {
 		log.Warnf("batch update access stats failed: %v", err)
 	}
+}
+
+// containsCJK checks whether text contains Chinese/Japanese/Korean characters.
+func containsCJK(text string) bool {
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeFTSQuery 对 FTS5 查询进行转义与清理：
@@ -535,6 +574,12 @@ func (s *Store) basicSummary(memories []*Memory) string {
 	return summary.String()
 }
 
+// SetLLMProvider 注入用于 Summarize 的 LLM provider。
+// 设置后不再依赖环境变量探测（OPENAI_API_KEY 等），统一走项目配置体系。
+func (s *Store) SetLLMProvider(p provider.Provider) {
+	s.llmProvider.Store(p)
+}
+
 // llmSummarize uses LLM to generate a summary
 func (s *Store) llmSummarize(memories []*Memory) (string, error) {
 	// Build prompt for summarization
@@ -549,14 +594,14 @@ func (s *Store) llmSummarize(memories []*Memory) (string, error) {
 	prompt.WriteString("\nPlease provide a brief summary highlighting the key information:")
 
 	// Try to get provider from environment or config
-	provider := s.getLLMProvider()
-	if provider == nil {
+	llm := s.getLLMProvider()
+	if llm == nil {
 		return "", fmt.Errorf("no LLM provider available")
 	}
 
 	// Call LLM
 	ctx := context.Background()
-	resp, err := provider.Chat(ctx, []types.Message{
+	resp, err := llm.Chat(ctx, []types.Message{
 		{Role: "user", Content: prompt.String()},
 	})
 	if err != nil {
@@ -566,12 +611,18 @@ func (s *Store) llmSummarize(memories []*Memory) (string, error) {
 	return resp.Content, nil
 }
 
-// getLLMProvider returns the configured LLM provider
+// getLLMProvider returns the configured LLM provider.
+// 优先使用 SetLLMProvider 注入的实例；否则回退到环境变量探测。
 func (s *Store) getLLMProvider() provider.Provider {
-	// Check if provider is configured via environment or config
-	// For now, try common providers
+	// 1) 外部显式注入的 provider（推荐路径）
+	if p, ok := s.llmProvider.Load().(provider.Provider); ok && p != nil {
+		return p
+	}
+
+	// 2) 兼容旧方式：环境变量探测
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey != "" {
+		log.Warnf("[Memory] using OPENAI_API_KEY env fallback for summarization; prefer Store.SetLLMProvider()")
 		return provider.NewOpenAICompatibleProvider("openai", apiKey, "https://api.openai.com/v1", "gpt-3.5-turbo", nil)
 	}
 
@@ -590,6 +641,10 @@ func (s *Store) getLLMProvider() provider.Provider {
 
 // ReadAgentMemory reads the Cortex-style agent memory file
 func (s *Store) ReadAgentMemory() (string, error) {
+	// 文件读写全程持 fileMu，防止并发 append 互相覆盖
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+
 	content, err := os.ReadFile(s.agentMemoryPath)
 	if err != nil {
 		return "", err
@@ -599,6 +654,13 @@ func (s *Store) ReadAgentMemory() (string, error) {
 
 // WriteAgentMemory writes to the Cortex-style agent memory file
 func (s *Store) WriteAgentMemory(content string) error {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	return s.writeAgentMemoryLocked(content)
+}
+
+// writeAgentMemoryLocked 写入 agent 记忆文件，调用方必须已持有 s.fileMu
+func (s *Store) writeAgentMemoryLocked(content string) error {
 	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
 	content = truncateString(content, s.config.MaxAgentMemLength)
 	return os.WriteFile(s.agentMemoryPath, []byte(content), 0644)
@@ -606,6 +668,10 @@ func (s *Store) WriteAgentMemory(content string) error {
 
 // ReadUserMemory reads the Cortex-style user profile file
 func (s *Store) ReadUserMemory() (string, error) {
+	// 文件读写全程持 fileMu，防止并发 append 互相覆盖
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+
 	content, err := os.ReadFile(s.userMemoryPath)
 	if err != nil {
 		return "", err
@@ -615,6 +681,13 @@ func (s *Store) ReadUserMemory() (string, error) {
 
 // WriteUserMemory writes to the Cortex-style user profile file
 func (s *Store) WriteUserMemory(content string) error {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	return s.writeUserMemoryLocked(content)
+}
+
+// writeUserMemoryLocked 写入用户记忆文件，调用方必须已持有 s.fileMu
+func (s *Store) writeUserMemoryLocked(content string) error {
 	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
 	content = truncateString(content, s.config.MaxUserMemLength)
 	return os.WriteFile(s.userMemoryPath, []byte(content), 0644)
@@ -622,44 +695,57 @@ func (s *Store) WriteUserMemory(content string) error {
 
 // AppendAgentMemory appends content to agent memory (Cortex-style)
 func (s *Store) AppendAgentMemory(content string) error {
-	current, err := s.ReadAgentMemory()
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+
+	current, err := os.ReadFile(s.agentMemoryPath)
 	if err != nil {
-		current = "# Agent Memory\n\n## Notes\n\n"
+		current = []byte("# Agent Memory\n\n## Notes\n\n")
 	}
 
 	// Check if we need to truncate
-	newContent := current + content + "\n"
+	newContent := string(current) + content + "\n"
 	if len(newContent) > s.config.MaxAgentMemLength {
 		// Simple truncation - keep the newer content
 		available := s.config.MaxAgentMemLength - len(content) - 10
 		if available > 100 {
 			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
-			current = truncateString(current, available) + "\n...\n"
+			newCurrent := truncateString(string(current), available) + "\n...\n"
+			newContent = newCurrent + content + "\n"
+		} else {
+			// 新内容本身超长或剩余空间不足：丢弃最旧内容，保留最新 content
+			log.Warnf("[Memory] agent memory overflow (content %d chars), keeping newest entry only", len(content))
+			newContent = content + "\n"
 		}
-		newContent = current + content + "\n"
 	}
 
-	return s.WriteAgentMemory(newContent)
+	return s.writeAgentMemoryLocked(newContent)
 }
 
 // AppendUserMemory appends content to user memory (Cortex-style)
 func (s *Store) AppendUserMemory(content string) error {
-	current, err := s.ReadUserMemory()
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+
+	current, err := os.ReadFile(s.userMemoryPath)
 	if err != nil {
-		current = "# User Profile\n\n## Basic Info\n\n"
+		current = []byte("# User Profile\n\n## Basic Info\n\n")
 	}
 
-	newContent := current + content + "\n"
+	newContent := string(current) + content + "\n"
 	if len(newContent) > s.config.MaxUserMemLength {
 		available := s.config.MaxUserMemLength - len(content) - 10
 		if available > 100 {
 			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
-			current = truncateString(current, available) + "\n...\n"
+			newCurrent := truncateString(string(current), available) + "\n...\n"
+			newContent = newCurrent + content + "\n"
+		} else {
+			log.Warnf("[Memory] user memory overflow (content %d chars), keeping newest entry only", len(content))
+			newContent = content + "\n"
 		}
-		newContent = current + content + "\n"
 	}
 
-	return s.WriteUserMemory(newContent)
+	return s.writeUserMemoryLocked(newContent)
 }
 
 // RecordCommandAction records a command approval/denial
@@ -752,6 +838,8 @@ func (s *Store) Stats() (*MemoryStats, error) {
 	if avg.Valid {
 		stats.AvgImportance = avg.Float64
 	}
+
+	stats.TotalSearches = int(s.totalSearches.Load())
 
 	return stats, nil
 }

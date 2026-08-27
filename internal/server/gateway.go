@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,8 +18,18 @@ import (
 	"github.com/magicwubiao/go-magic/internal/gateway"
 )
 
+// GatewayAPIPort is the port of the gateway's embedded API server.
+const GatewayAPIPort = 8080
+
+// GatewayHealthPort is the port of the gateway's health check server.
+const GatewayHealthPort = 8081
+
 func (s *Server) runAction(id, name string, fn func() (int, error)) {
 	s.actionsMu.Lock()
+	if prev, ok := s.actions[id]; ok && prev.Running {
+		s.actionsMu.Unlock()
+		return // action already in progress; do not clobber its state
+	}
 	s.actions[id] = &ActionStatus{
 		Name:      name,
 		Running:   true,
@@ -45,8 +56,19 @@ func (s *Server) runAction(id, name string, fn func() (int, error)) {
 	})
 }
 
+// qrProxyPlatforms are the only platforms proxied through the gateway's
+// embedded API. Anything else is rejected to avoid path injection.
+var qrProxyPlatforms = map[string]bool{"whatsapp": true, "qq": true}
+
+// GatewayAPIPort is the gateway's embedded API port (must match
+// gateway.DefaultGatewayConfig / cmd-magic stop checks).
+
 func (s *Server) proxyGatewayQR(w http.ResponseWriter, r *http.Request, platform string) {
-	gatewayURL := fmt.Sprintf("http://127.0.0.1:8080/api/login/qr/%s", platform)
+	if !qrProxyPlatforms[platform] {
+		jsonResponse(w, QRStatus{Platform: platform, Status: "error", Message: "platform not supported for QR proxy"})
+		return
+	}
+	gatewayURL := fmt.Sprintf("http://127.0.0.1:%d/api/login/qr/%s", GatewayAPIPort, platform)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(gatewayURL)
@@ -351,7 +373,7 @@ func (s *Server) generateDingTalkQR() (string, string, error) {
 
 	// Build DingTalk OAuth URL
 	state := uuid.New().String()
-	redirectURI := "http://localhost:8080/dingtalk/qr/callback"
+	redirectURI := fmt.Sprintf("http://localhost:%d/dingtalk/qr/callback", GatewayAPIPort)
 	authURL := fmt.Sprintf(
 		"https://oapi.dingtalk.com/connect/qrconnect?appid=%s&response_type=code&scope=snsapi_login&state=%s&redirect_uri=%s",
 		appKey, state, url.QueryEscape(redirectURI),
@@ -423,10 +445,34 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
 	if running, _ := status["running"].(bool); running {
 		client := &http.Client{Timeout: 2 * time.Second}
-		if resp, err := client.Get("http://localhost:8081/health"); err == nil {
-			resp.Body.Close()
+		healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", GatewayHealthPort)
+		if resp, err := client.Get(healthURL); err == nil {
+			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				status["health_ok"] = true
+				var health struct {
+					Status    string `json:"status"`
+					Platforms struct {
+						Total   int             `json:"total"`
+						Healthy int             `json:"healthy"`
+						Detail  map[string]bool `json:"detail"`
+					} `json:"platforms"`
+					UptimeSeconds float64 `json:"uptime_seconds"`
+					Version       string  `json:"version"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&health); err == nil {
+					status["health_status"] = health.Status
+					status["gateway_uptime_seconds"] = int64(health.UptimeSeconds)
+					status["gateway_version"] = health.Version
+					status["platforms_total"] = health.Platforms.Total
+					status["platforms_healthy"] = health.Platforms.Healthy
+					pl := make([]map[string]interface{}, 0, len(health.Platforms.Detail))
+					for name, ok := range health.Platforms.Detail {
+						pl = append(pl, map[string]interface{}{"name": name, "connected": ok})
+					}
+					sort.Slice(pl, func(i, j int) bool { return pl[i]["name"].(string) < pl[j]["name"].(string) })
+					status["platforms"] = pl
+				}
 			}
 		}
 	}
@@ -452,7 +498,7 @@ func (s *Server) generateWeComQR() (string, string, error) {
 
 	// Build WeCom OAuth URL
 	state := uuid.New().String()
-	redirectURI := fmt.Sprintf("http://localhost:8080/wecom/qr/callback")
+	redirectURI := fmt.Sprintf("http://localhost:%d/wecom/qr/callback", GatewayAPIPort)
 	authURL := fmt.Sprintf(
 		"https://login.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%s&redirect_uri=%s&state=%s",
 		corpID, agentID, url.QueryEscape(redirectURI), state,
@@ -836,7 +882,7 @@ func (s *Server) generateFeishuQR() (string, string, error) {
 
 	// Build Feishu OAuth URL
 	state := uuid.New().String()
-	redirectURI := "http://localhost:8080/feishu/qr/callback"
+	redirectURI := fmt.Sprintf("http://localhost:%d/feishu/qr/callback", GatewayAPIPort)
 	authURL := fmt.Sprintf(
 		"https://open.feishu.cn/open-apis/authen/v1/authorize?redirect_uri=%s&app_id=%s&state=%s",
 		url.QueryEscape(redirectURI), appID, state,

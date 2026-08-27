@@ -24,7 +24,9 @@ func NewFTSStore(baseDir string) (*FTSStore, error) {
 	dbPath := filepath.Join(baseDir, "memory.sqlite")
 	os.MkdirAll(baseDir, 0755)
 
-	db, err := sql.Open("sqlite", dbPath)
+	// 启用 WAL + busy_timeout，与 Store 保持一致的并发策略
+	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +66,7 @@ func (f *FTSStore) initSchema() error {
 		return err
 	}
 
-	// FTS5 virtual table for full-text search
+	// FTS5 virtual table for full-text search (external content table)
 	_, err = f.db.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts 
 		USING fts5(content, tags, content='memories', content_rowid='id')
@@ -73,16 +75,29 @@ func (f *FTSStore) initSchema() error {
 		return err
 	}
 
-	// Triggers to keep FTS index in sync
+	// 兼容迁移：旧版本 trigger 对外部内容表使用了错误的
+	// "DELETE FROM memories_fts WHERE rowid=..." 语法，会导致索引与内容表不同步。
+	// 这里删除旧 trigger 后重建，保证使用正确的 'delete' 特殊命令形式。
+	for _, t := range []string{"memories_ai", "memories_ad", "memories_au"} {
+		if _, err := f.db.Exec("DROP TRIGGER IF EXISTS " + t); err != nil {
+			return err
+		}
+	}
+
+	// Triggers to keep FTS index in sync.
+	// 注意：外部内容表必须用 'delete' 特殊命令形式同步索引，
+	// 直接 DELETE FROM memories_fts 是无效且危险的。
 	triggers := []string{
 		`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
 			INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-			DELETE FROM memories_fts WHERE rowid = old.id;
+			INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+			VALUES ('delete', old.id, old.content, old.tags);
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-			DELETE FROM memories_fts WHERE rowid = old.id;
+			INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+			VALUES ('delete', old.id, old.content, old.tags);
 			INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
 		END`,
 	}
@@ -153,6 +168,11 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 		limit = 10
 	}
 
+	// CJK 文本无空格分词，FTS5 默认 tokenizer 无法有效匹配，走 LIKE 兜底
+	if containsCJK(query) {
+		return f.searchFallback(query, limit)
+	}
+
 	// Use BM25 ranking for relevance
 	rows, err := f.db.Query(`
 		SELECT 
@@ -196,9 +216,55 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 	return results, nil
 }
 
+// searchFallback 在 FTS 无法有效匹配（如 CJK 文本）时，
+// 使用 LIKE 做基础检索，并按重要度 + 时间排序。
+func (f *FTSStore) searchFallback(query string, limit int) ([]SearchResult, error) {
+	likeQuery := "%" + query + "%"
+	rows, err := f.db.Query(`
+		SELECT 
+			m.id, m.session_id, m.turn_number, m.role, m.content, 
+			m.content_type, m.tags, m.importance, m.created_at,
+			-1.0 AS rank,
+			''
+		FROM memories m
+		WHERE m.content LIKE ? OR m.tags LIKE ?
+		ORDER BY m.importance DESC, m.created_at DESC
+		LIMIT ?
+	`, likeQuery, likeQuery, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var tags string
+
+		err := rows.Scan(
+			&r.ID, &r.SessionID, &r.TurnNumber, &r.Role, &r.Content,
+			&r.ContentType, &tags, &r.Importance, &r.CreatedAt,
+			&r.Rank, &r.Snippet,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if tags != "" {
+			r.Tags = strings.Split(tags, ",")
+		}
+
+		results = append(results, r)
+	}
+
+	return results, nil
+}
+
 // GetContext retrieves relevant context for a query
-// This is used to augment the system prompt with relevant memories
-func (f *FTSStore) GetContext(query string, maxTokens int) string {
+// GetContext retrieves relevant context for a query
+// This is used to augment the system prompt with relevant memories.
+// maxChars 实际限制的是上下文字符数（非 token），命名保持兼容。
+func (f *FTSStore) GetContext(query string, maxChars int) string {
 	results, err := f.Search(query, 5)
 	if err != nil || len(results) == 0 {
 		return ""
@@ -209,7 +275,7 @@ func (f *FTSStore) GetContext(query string, maxTokens int) string {
 
 	for _, r := range results {
 		context.WriteString(fmt.Sprintf("- [%s] %s\n", r.Role, r.Content))
-		if context.Len() > maxTokens {
+		if context.Len() > maxChars {
 			break
 		}
 	}

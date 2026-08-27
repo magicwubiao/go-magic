@@ -5,13 +5,17 @@ export interface GatewayStatus {
   pid: number
   health_ok: boolean
   started?: string
+  health_status?: string
+  gateway_uptime_seconds?: number
+  gateway_version?: string
+  platforms_total?: number
+  platforms_healthy?: number
+  platforms?: PlatformStatus[]
 }
 
 export interface PlatformStatus {
   name: string
   connected: boolean
-  platform: string
-  last_activity?: string
 }
 
 export async function getGatewayStatus(): Promise<GatewayStatus> {
@@ -31,11 +35,10 @@ export async function stopGateway(): Promise<{ ok: boolean }> {
 }
 
 export async function getPlatforms(): Promise<PlatformStatus[]> {
-  // GatewayStatus 类型当前不包含 platforms/connectedPlatforms 字段，
-  // 后端 /gateway/status 响应未返回已连接平台列表。
-  // 待后端支持后，此处改为从 status 中提取 platforms 字段。
+  // The backend now returns per-platform connection state from the gateway
+  // health endpoint (see /api/gateway/status -> platforms[]).
   const status = await getGatewayStatus()
-  return []
+  return status.platforms ?? []
 }
 
 export interface QRResponse {

@@ -215,10 +215,11 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import QRCode from 'qrcode'
 import { request } from '@/api/client'
 import { useGatewayStore } from '@/stores/gateway'
 import { useConfigStore } from '@/stores/config'
+import type { PlatformStatus } from '@/api/gateway'
+import { getPlatforms } from '@/api/gateway'
 
 const { t } = useI18n()
 
@@ -304,6 +305,17 @@ const platforms = ref<Platform[]>([
 
 const enabledCount = computed(() => (platforms.value || []).filter(p => p.enabled).length)
 
+// Real-time platform connection status from gateway health endpoint
+const connectedPlatforms = ref<PlatformStatus[]>([])
+
+async function refreshConnected(): Promise<void> {
+  try {
+    connectedPlatforms.value = await getPlatforms()
+  } catch {
+    // gateway not running - stale data is fine, non-critical
+  }
+}
+
 function populateFromConfig(cfg: any) {
   const gw = cfg.gateway || {}
   gatewayEnabled.value = gw.enabled || false
@@ -374,6 +386,7 @@ async function startGateway(): Promise<void> {
       if (gatewayStore.status?.running || pollCount >= maxPolls) {
         clearInterval(pollInterval)
         actionLoading.value = false
+        refreshConnected()
         if (gatewayStore.status?.running) {
           message.success(t('gateway.running'))
         }
@@ -400,6 +413,7 @@ async function stopGateway(): Promise<void> {
       if (!gatewayStore.status?.running || pollCount >= maxPolls) {
         clearInterval(pollInterval)
         actionLoading.value = false
+        refreshConnected()
         if (!gatewayStore.status?.running) {
           message.success(t('gateway.stopped'))
         }
@@ -411,32 +425,6 @@ async function stopGateway(): Promise<void> {
   }
 }
 
-async function restartGateway(): Promise<void> {
-  try {
-    await gatewayStore.restart()
-    message.success(t('gateway.restarting'))
-    
-    // Force immediate status refresh
-    await gatewayStore.loadStatus()
-    
-    // Poll status more frequently until gateway is running again or timeout
-    let pollCount = 0
-    const maxPolls = 30
-    const pollInterval = setInterval(async () => {
-      pollCount++
-      await gatewayStore.loadStatus()
-      // Stop polling if running or timeout
-      if (gatewayStore.status?.running || pollCount >= maxPolls) {
-        clearInterval(pollInterval)
-        if (gatewayStore.status?.running) {
-          message.success(t('gateway.running'))
-        }
-      }
-    }, 1000)
-  } catch (e) {
-    message.error(t('gateway.restartFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  }
-}
 
 function openEditModal(platform: Platform): void {
   editingPlatform.value = platform
@@ -489,22 +477,6 @@ async function initQRCode(): Promise<void> {
   }
 }
 
-async function generateQRCodeImage(data: string): Promise<void> {
-  if (!qrCanvas.value) return
-  
-  try {
-    await QRCode.toCanvas(qrCanvas.value, data, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#ffffff'
-      }
-    })
-  } catch (e) {
-    console.error('Failed to generate QR code:', e)
-  }
-}
 
 function startPolling(): void {
   stopPolling()
@@ -590,6 +562,9 @@ function closeQRModal(): void {
   qrPlatform.value = null
   qrStatus.value = 'loading'
   qrImageUrl.value = ''
+  if (qrCanvas.value) {
+    qrCanvas.value.width = 0 // clear canvas when modal closes
+  }
 }
 
 function getDefaultMessage(status?: string): string {
@@ -612,6 +587,7 @@ async function saveEditingPlatform(): Promise<void> {
 
 onMounted(async () => {
   await gatewayStore.loadStatus()
+  await refreshConnected()
   await configStore.loadConfig()
   if (configStore.config) {
     populateFromConfig(configStore.config)

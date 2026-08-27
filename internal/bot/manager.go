@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -275,6 +276,20 @@ func (m *Manager) buildBotSystemPrompt(cfg *Config) string {
 	return base
 }
 
+// turnFailureReply converts an agent turn failure into a user-facing message.
+// Context deadline/cancel errors get a friendly notice (the conversation was
+// NOT lost — history is persisted after every turn) instead of a raw
+// "context deadline exceeded" that reads like the whole chat died.
+func turnFailureReply(err error, turnTimeout time.Duration) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("(⏱ 单轮对话超时:本回合耗时超过上限 %s,已中止执行。已完成的部分已保留,发送「继续」可在新回合接着处理。)", turnTimeout)
+	}
+	if errors.Is(err, context.Canceled) {
+		return "(⏹ 本回合已被取消,已完成的部分已保留。)"
+	}
+	return fmt.Sprintf("(error: %v)", err)
+}
+
 // fleetProtocol builds the bot-to-bot messaging protocol prompt section.
 func fleetProtocol(teammates string) string {
 	return fmt.Sprintf(`
@@ -305,7 +320,11 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		return
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	turnTimeout := 5 * time.Minute
+	if m.cfg != nil && m.cfg.BotMode != nil && m.cfg.BotMode.TurnTimeoutMinutes > 0 {
+		turnTimeout = time.Duration(m.cfg.BotMode.TurnTimeoutMinutes) * time.Minute
+	}
+	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 
 	var reply string
@@ -328,13 +347,13 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		if streamErr != nil {
 			err = streamErr
 			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
-			reply = fmt.Sprintf("(error: %v)", err)
+			reply = turnFailureReply(err, turnTimeout)
 		}
 	} else {
 		reply, err = ag.RunConversation(runCtx, msg.Text)
 		if err != nil {
 			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
-			reply = fmt.Sprintf("(error: %v)", err)
+			reply = turnFailureReply(err, turnTimeout)
 		}
 	}
 

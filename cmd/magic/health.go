@@ -49,6 +49,13 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
+	platformDetails := make(map[string]bool, totalCount)
+	for name, plat := range cfg.Gateway.Platforms {
+		if plat.Enabled {
+			platformDetails[name] = platformsStatus[name]
+		}
+	}
+
 	resp := map[string]interface{}{
 		"status":         status,
 		"uptime_seconds": time.Since(gatewayStartTime).Seconds(),
@@ -56,6 +63,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"platforms": map[string]interface{}{
 			"total":   totalCount,
 			"healthy": healthyCount,
+			"detail":  platformDetails,
 		},
 		"version": Version,
 	}
@@ -69,7 +77,8 @@ func startHealthServer(ctx context.Context) {
 	mux.HandleFunc("/health", healthHandler)
 
 	server := &http.Server{
-		Addr:    ":8081",
+		// 仅绑定回环地址：health 端点仅供本地 Web UI 使用，不对外暴露
+		Addr:    "127.0.0.1:8081",
 		Handler: mux,
 	}
 
@@ -80,7 +89,7 @@ func startHealthServer(ctx context.Context) {
 		server.Shutdown(ctxShutdown)
 	}()
 
-	fmt.Println("[Health] Starting health check server on :8081")
+	fmt.Println("[Health] Starting health check server on 127.0.0.1:8081")
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Printf("[Health] Failed to start health check server: %v\n", err)
 	}

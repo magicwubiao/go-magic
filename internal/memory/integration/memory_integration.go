@@ -2,7 +2,9 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,25 +18,39 @@ var preferencePatterns = []*struct {
 	category   string
 	importance float64
 }{
-	// User preferences
+	// User preferences (English)
 	{regexp.MustCompile(`(?i)I (prefer|like|love|hate|dislike) (.+)`), "preference", 0.7},
 	{regexp.MustCompile(`(?i)my favorite (.+) is (.+)`), "preference", 0.7},
 	{regexp.MustCompile(`(?i)I usually (.+)`), "preference", 0.6},
 	{regexp.MustCompile(`(?i)(don't|do not) (.+)`), "preference", 0.6},
+
+	// User preferences (Chinese)
+	{regexp.MustCompile(`(?:我|俺|咱)(?:喜欢|偏爱|偏好|讨厌|不喜欢|爱用)(.{1,40})`), "preference", 0.7},
+	{regexp.MustCompile(`我最喜欢的是(.{1,40})`), "preference", 0.7},
+	{regexp.MustCompile(`我通常(.{1,40})`), "preference", 0.6},
 
 	// Important facts
 	{regexp.MustCompile(`(?i)I am (a |an )?(.+?)(?:,|\.|!|\n|$)`), "user_fact", 0.6},
 	{regexp.MustCompile(`(?i)I work (?:as |at |in )?(.+?)(?:,|\.|!|\n|$)`), "work_info", 0.7},
 	{regexp.MustCompile(`(?i)I live (?:in |at )?(.+?)(?:,|\.|!|\n|$)`), "location", 0.5},
 
+	// Important facts (Chinese)
+	{regexp.MustCompile(`我(?:是|在做|在用)(.{1,40})`), "user_fact", 0.6},
+	{regexp.MustCompile(`我(?:住在|坐标)(.{1,20})`), "location", 0.5},
+	{regexp.MustCompile(`我在(.{1,15}?)(?:公司|团队|项目)工作`), "work_info", 0.7},
+
 	// Task reminders
 	{regexp.MustCompile(`(?i)(remind me|todo|to-do|task):? (.+)`), "task_reminder", 0.8},
 	{regexp.MustCompile(`(?i)(remember to|don't forget to|don't forget):? (.+)`), "task_reminder", 0.8},
 	{regexp.MustCompile(`(?i)(ASAP|urgent|important):? (.+)`), "task_reminder", 0.9},
 
+	// Task reminders (Chinese)
+	{regexp.MustCompile(`(?:提醒我|记得|别忘了?|记得要)(.{1,60})`), "task_reminder", 0.8},
+	{regexp.MustCompile(`(?:紧急|尽快|重要)[:：,，]?(.{1,60})`), "task_reminder", 0.9},
+
 	// Contact info
-	{regexp.MustCompile(`(?i)(?:email|e-mail):?\s*([\w.-]+@[\w.-]+\.\w+)`), "contact", 0.8},
-	{regexp.MustCompile(`(?i)(?:phone|tel):?\s*([\d\s-]+)`), "contact", 0.8},
+	{regexp.MustCompile(`(?i)(?:email|e-mail|邮箱):?\s*([\w.-]+@[\w.-]+\.\w+)`), "contact", 0.8},
+	{regexp.MustCompile(`(?i)(?:phone|tel|电话|手机)[:：]?\s*([+\d][\d\s-]{5,})`), "contact", 0.8},
 }
 
 // keywordPatterns define importance based on keywords
@@ -91,16 +107,30 @@ func (m *MemoryIntegration) Store(mem *memory.Memory) error {
 	return m.store.Store(mem)
 }
 
-// StoreFromConversation extracts and stores key information from conversation
+// StoreFromConversation extracts and stores key information from conversation.
+// 旧实现把每条 10~500 字的用户消息无条件入库（TypeSession/0.5），
+// 长期运行会制造大量低质噪声稀释召回质量，agentMsg 也被完全忽略。
+// 现在只抽取结构化信息（偏好/事实/提醒/联系方式），
+// 未命中模式但含重要关键词时才降级存整条消息。
 func (m *MemoryIntegration) StoreFromConversation(userMsg, agentMsg string) error {
-	// Store user preferences and important information
-	// This is a simple implementation - a more sophisticated one would use LLM
+	if len(userMsg) == 0 || len(userMsg) > 2000 {
+		return nil
+	}
 
-	// Example: extract potential user info patterns
-	if len(userMsg) > 10 && len(userMsg) < 500 {
+	// 复用 pattern 抽取器处理用户消息
+	if err := m.ExtractAndStore([]struct {
+		Role    string
+		Content string
+	}{{Role: "user", Content: userMsg}}); err != nil {
+		return err
+	}
+
+	// 助手消息通常较长，只挑其中带关键洞察的短句入库，
+	// 且必须有重要关键词背书，避免污染
+	if agentMsg != "" && len(agentMsg) < 500 && m.hasImportantKeywords(agentMsg) {
 		mem := &memory.Memory{
-			Type:       memory.TypeSession,
-			Content:    userMsg,
+			Type:       memory.TypeKnowledge,
+			Content:    strings.TrimSpace(agentMsg),
 			Importance: 0.5,
 			SessionID:  m.sessionID,
 			Source:     "conversation",
@@ -315,11 +345,16 @@ func (m *MemoryIntegration) CompactSessionMemories() error {
 		return err
 	}
 
+	// List() 按 importance DESC 排序，不能直接当作时间序使用；
+	// 这里按 created_at 升序重排，保证"旧的被压缩、新的被保留"的语义正确。
+	sort.Slice(memories, func(i, j int) bool {
+		return memories[i].CreatedAt.Before(memories[j].CreatedAt)
+	})
+
 	if len(memories) < 10 {
 		return nil // Not enough to compact
 	}
 
-	// Keep recent memories, summarize older ones
 	keepRecent := 5
 	sumarizeOlder := memories[:len(memories)-keepRecent]
 
@@ -327,14 +362,14 @@ func (m *MemoryIntegration) CompactSessionMemories() error {
 	var summary strings.Builder
 	summary.WriteString("Session summary:\n")
 	for _, mem := range sumarizeOlder {
-		if len(mem.Content) > 100 {
-			summary.WriteString("- " + mem.Content[:100] + "...\n")
+		content := []rune(mem.Content)
+		if len(content) > 100 {
+			summary.WriteString("- " + string(content[:100]) + "...\n")
 		} else {
 			summary.WriteString("- " + mem.Content + "\n")
 		}
 	}
 
-	// Store summary as new memory
 	summaryMem := &memory.Memory{
 		Type:       memory.TypeSession,
 		Content:    summary.String(),
@@ -344,25 +379,37 @@ func (m *MemoryIntegration) CompactSessionMemories() error {
 		Categories: []string{"summary"},
 	}
 
-	// Delete old memories
-	for _, mem := range sumarizeOlder {
-		m.store.Delete(mem.ID)
+	// 先写入 summary，再删除旧记忆，避免 summary 写失败导致数据丢失
+	if err := m.store.Store(summaryMem); err != nil {
+		return fmt.Errorf("failed to store session summary, skipping compaction: %w", err)
 	}
 
-	// Store new summary
-	return m.store.Store(summaryMem)
+	for _, mem := range sumarizeOlder {
+		if err := m.store.Delete(mem.ID); err != nil {
+			log.Warnf("failed to delete compacted memory %s: %v", mem.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // PeriodicRecall performs periodic recall to refresh context
 func (m *MemoryIntegration) PeriodicRecall(ctx context.Context, keywords []string) ([]*memory.Memory, error) {
 	var allMemories []*memory.Memory
+	seen := make(map[string]bool) // 按 ID 去重，避免多关键词命中同一条记忆
 
 	for _, kw := range keywords {
 		memories, err := m.store.Recall(kw, 3)
 		if err != nil {
 			continue
 		}
-		allMemories = append(allMemories, memories...)
+		for _, mem := range memories {
+			if seen[mem.ID] {
+				continue
+			}
+			seen[mem.ID] = true
+			allMemories = append(allMemories, mem)
+		}
 	}
 
 	return allMemories, nil

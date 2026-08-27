@@ -408,7 +408,7 @@ func (t *ExecuteCodeTool) executeTypeScript(ctx context.Context, execCtx *codeEx
 	cmd.Dir = tempDir
 	cmd.Env = append(os.Environ(), "NODE_PATH="+filepath.Join(tempDir, "node_modules"))
 
-	return t.runCommand(cmd, execCtx.timeout)
+	return t.runCommand(ctx, cmd, execCtx.timeout)
 }
 
 // executeGo executes Go code with module support
@@ -446,7 +446,7 @@ func (t *ExecuteCodeTool) executeGo(ctx context.Context, execCtx *codeExecutionC
 	cmd.Dir = tempDir
 	cmd.Args = append(cmd.Args, execCtx.progArgs...)
 
-	return t.runCommand(cmd, execCtx.timeout)
+	return t.runCommand(ctx, cmd, execCtx.timeout)
 }
 
 // executeRust executes Rust code with cargo support
@@ -494,7 +494,7 @@ edition = "2021"
 	cmd := exec.CommandContext(ctx, "cargo", "run", "--quiet")
 	cmd.Dir = tempDir
 
-	return t.runCommand(cmd, execCtx.timeout)
+	return t.runCommand(ctx, cmd, execCtx.timeout)
 }
 
 // executeJava executes Java code with Maven/Gradle support
@@ -578,7 +578,7 @@ func (t *ExecuteCodeTool) executeJava(ctx context.Context, execCtx *codeExecutio
 
 	runCmd.Args = append(runCmd.Args, execCtx.progArgs...)
 
-	return t.runCommand(runCmd, execCtx.timeout)
+	return t.runCommand(ctx, runCmd, execCtx.timeout)
 }
 
 // executeCpp executes C/C++ code with cmake support
@@ -627,7 +627,7 @@ func (t *ExecuteCodeTool) executeCpp(ctx context.Context, execCtx *codeExecution
 	runCmd.Dir = tempDir
 	runCmd.Args = append(runCmd.Args, execCtx.progArgs...)
 
-	return t.runCommand(runCmd, execCtx.timeout)
+	return t.runCommand(ctx, runCmd, execCtx.timeout)
 }
 
 // initNpmProject initializes an npm project
@@ -670,11 +670,15 @@ func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable, f
 	cmd := exec.CommandContext(ctx, executable, cmdArgs...)
 	cmd.Dir = workDir
 
-	return t.runCommand(cmd, timeout)
+	return t.runCommand(ctx, cmd, timeout)
 }
 
-// runCommand runs a command with timeout
-func (t *ExecuteCodeTool) runCommand(cmd *exec.Cmd, timeout time.Duration) (interface{}, error) {
+// runCommand runs a command with timeout. The command is killed when either
+// its own `timeout` elapses or the parent context (session/turn deadline) is
+// finished — whichever comes first. All three outcomes are returned as result
+// payloads (not Go errors) so the agent can keep the tool-call/reply
+// conversation flowing instead of treating a cancellation as a hard failure.
+func (t *ExecuteCodeTool) runCommand(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (interface{}, error) {
 	// Capture output
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -705,8 +709,21 @@ func (t *ExecuteCodeTool) runCommand(cmd *exec.Cmd, timeout time.Duration) (inte
 
 		return result, nil
 
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		return map[string]interface{}{
+			"stdout":    stdout.String(),
+			"stderr":    stderr.String(),
+			"exit_code": -1,
+			"error":     fmt.Sprintf("execution cancelled: %v", ctx.Err()),
+		}, nil
+
 	case <-time.After(timeout):
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		return map[string]interface{}{
 			"stdout":    stdout.String(),
 			"stderr":    stderr.String(),

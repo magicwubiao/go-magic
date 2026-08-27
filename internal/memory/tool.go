@@ -347,12 +347,17 @@ func (m *MemoryTool) userMemoryCommand() *cobra.Command {
 	return cmd
 }
 
-// truncate shortens a string to maxLen characters
+// truncate shortens a string to maxLen characters (rune-safe)
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	if maxLen < 4 {
+		// 空间不足以放下省略号，直接按 rune 截断
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // ToolFunction represents a callable memory tool (for API use)
@@ -391,7 +396,7 @@ func (t *ToolFunction) ToolDefinition() map[string]interface{} {
 					},
 					"scope": map[string]interface{}{
 						"type":        "string",
-						"description": "Scope/path for the memory (e.g., /infrastructure/database)",
+						"description": "Scope/path for the memory. For agent_memory/user_memory operations, this is the sub-operation: 'read' (default), 'write', or 'append'",
 					},
 					"categories": map[string]interface{}{
 						"type": "array",
@@ -547,41 +552,67 @@ func (t *ToolFunction) executeSummarize(params map[string]interface{}) (*ToolRes
 }
 
 func (t *ToolFunction) executeAgentMemory(params map[string]interface{}) (*ToolResult, error) {
-	subOp, _ := params["content"].(string)
+	subOp, _ := params["scope"].(string)
+	content, _ := params["content"].(string)
 
-	var content string
+	// scope 字段复用为子操作（read/write/append），缺省 read
+	if subOp == "" {
+		subOp = "read"
+	}
+
 	var err error
-
 	switch subOp {
 	case "read":
-		content, err = t.store.ReadAgentMemory()
+		var data string
+		data, err = t.store.ReadAgentMemory()
+		if err != nil {
+			break
+		}
+		return &ToolResult{Success: true, Data: map[string]string{"content": data}}, nil
+	case "write":
+		err = t.store.WriteAgentMemory(content)
+	case "append":
+		err = t.store.AppendAgentMemory(content)
 	default:
-		return &ToolResult{Success: false, Error: "Use 'read' as content for agent_memory read"}, nil
+		return &ToolResult{Success: false, Error: "unknown sub-operation: " + subOp + " (use read/write/append)"}, nil
 	}
 
 	if err != nil {
 		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	return &ToolResult{Success: true, Data: map[string]string{"content": content}}, nil
+	return &ToolResult{Success: true, Data: map[string]string{"action": subOp}}, nil
 }
 
 func (t *ToolFunction) executeUserMemory(params map[string]interface{}) (*ToolResult, error) {
-	subOp, _ := params["content"].(string)
+	subOp, _ := params["scope"].(string)
+	content, _ := params["content"].(string)
 
-	var content string
+	// scope 字段复用为子操作（read/write/append），缺省 read
+	if subOp == "" {
+		subOp = "read"
+	}
+
 	var err error
-
 	switch subOp {
 	case "read":
-		content, err = t.store.ReadUserMemory()
+		var data string
+		data, err = t.store.ReadUserMemory()
+		if err != nil {
+			break
+		}
+		return &ToolResult{Success: true, Data: map[string]string{"content": data}}, nil
+	case "write":
+		err = t.store.WriteUserMemory(content)
+	case "append":
+		err = t.store.AppendUserMemory(content)
 	default:
-		return &ToolResult{Success: false, Error: "Use 'read' as content for user_memory read"}, nil
+		return &ToolResult{Success: false, Error: "unknown sub-operation: " + subOp + " (use read/write/append)"}, nil
 	}
 
 	if err != nil {
 		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	return &ToolResult{Success: true, Data: map[string]string{"content": content}}, nil
+	return &ToolResult{Success: true, Data: map[string]string{"action": subOp}}, nil
 }

@@ -44,17 +44,37 @@ func NewAccessControl(config map[string]interface{}) *AccessControl {
 	if v, ok := config["group_policy"].(string); ok {
 		ac.GroupPolicy = AccessPolicy(v)
 	}
-	if v, ok := config["dm_allowlist"].([]string); ok {
+	if v := toStringSlice(config["dm_allowlist"]); len(v) > 0 {
 		ac.DMAllowlist = v
 	}
-	if v, ok := config["group_allowlist"].([]string); ok {
+	if v := toStringSlice(config["group_allowlist"]); len(v) > 0 {
 		ac.GroupAllowlist = v
 	}
-	if v, ok := config["mention_patterns"].([]string); ok {
+	if v := toStringSlice(config["mention_patterns"]); len(v) > 0 {
 		ac.SetMentionPatterns(v)
 	}
 
 	return ac
+}
+
+// toStringSlice accepts both []string and []interface{} (the latter is what
+// JSON/YAML decoding produces), returning a []string or nil.
+func toStringSlice(v interface{}) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }
 
 // SetMentionPatterns sets regex patterns for mention detection

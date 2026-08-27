@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -281,6 +282,37 @@ func CalculateRelevanceScore(mem *Memory, query string, now time.Time) float64 {
 	return score
 }
 
+// isCJKRune 判断 rune 是否为 CJK 字符（中文/日文/韩文）
+func isCJKRune(r rune) bool {
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+		unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r)
+}
+
+// cjkBigrams 提取文本中所有 CJK 连续片段的 bigram 集合。
+// 中文没有空格分词，bigram 是轻量且效果不错的近似方案。
+func cjkBigrams(text string) map[string]bool {
+	bigrams := make(map[string]bool)
+	var runes []rune
+	flush := func() {
+		for i := 0; i+1 < len(runes); i++ {
+			bigrams[string(runes[i:i+2])] = true
+		}
+		runes = runes[:0]
+	}
+	for _, r := range text {
+		if isCJKRune(r) {
+			runes = append(runes, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return bigrams
+}
+
+// calculateContentRelevance 计算内容与查询的相关性（0.0 - 1.0）。
+// 英文按词重叠评分；CJK 文本按 bigram 命中率评分；
+// 中英混合查询取两路得分的最大值。
 func calculateContentRelevance(content, query string) float64 {
 	contentLower := strings.ToLower(content)
 	queryLower := strings.ToLower(query)
@@ -290,7 +322,49 @@ func calculateContentRelevance(content, query string) float64 {
 		return 1.0
 	}
 
-	// Word overlap
+	queryHasCJK := false
+	for _, r := range queryLower {
+		if isCJKRune(r) {
+			queryHasCJK = true
+			break
+		}
+	}
+
+	cjkScore := 0.0
+	if queryHasCJK {
+		cjkScore = cjkBigramRelevance(contentLower, queryLower)
+	}
+	latinScore := latinWordRelevance(contentLower, queryLower)
+
+	switch {
+	case queryHasCJK && latinScore > 0:
+		// 中英混合查询：两路独立评分，取较高者
+		return math.Max(latinScore, cjkScore)
+	case queryHasCJK:
+		return cjkScore
+	default:
+		return latinScore
+	}
+}
+
+// cjkBigramRelevance 计算 CJK bigram 命中率：命中的 query bigram 数 / query bigram 总数。
+func cjkBigramRelevance(contentLower, queryLower string) float64 {
+	contentBigrams := cjkBigrams(contentLower)
+	queryBigrams := cjkBigrams(queryLower)
+	if len(queryBigrams) == 0 {
+		return 0
+	}
+	hits := 0
+	for bg := range queryBigrams {
+		if contentBigrams[bg] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(queryBigrams))
+}
+
+// latinWordRelevance 按英文词重叠计算相关性（原始逻辑，提取为独立函数）
+func latinWordRelevance(contentLower, queryLower string) float64 {
 	queryWords := strings.Fields(queryLower)
 	contentWords := strings.Fields(contentLower)
 

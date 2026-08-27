@@ -1076,10 +1076,25 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	agentHandler := NewGatewayAgentHandler()
-	gw := gateway.NewGateway(agentHandler, &gateway.GatewayConfig{
+	gwCfg := gateway.GatewayConfig{
 		EnableAPI: true,
 		APIPort:   8080,
-	})
+	}
+	switch {
+	case cfg.Gateway.RateLimitPerUser > 0:
+		gwCfg.RateLimitPerUser = cfg.Gateway.RateLimitPerUser
+	case cfg.Gateway.RateLimitPerUser == 0:
+		gwCfg.RateLimitPerUser = 20 // sensible default; set negative to disable
+	default:
+		// explicitly disabled via negative value
+	}
+	if cfg.Gateway.RateLimitWindow > 0 {
+		gwCfg.RateLimitWindow = time.Duration(cfg.Gateway.RateLimitWindow) * time.Second
+	}
+	gwCfg.SensitiveWords = cfg.Gateway.SensitiveWords
+	gwCfg.BlockedUserIDs = cfg.Gateway.BlockedUsers
+
+	gw := gateway.NewGateway(agentHandler, &gwCfg)
 
 	// Set up session persistence for analytics
 	sessionDBPath := filepath.Join(magicHome, "sessions.db")

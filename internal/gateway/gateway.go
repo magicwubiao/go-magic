@@ -288,6 +288,12 @@ type GatewayConfig struct {
 	PlatformTimeout time.Duration
 	APIPort         int
 	EnableAPI       bool
+	// Optional middleware. When RateLimitPerUser > 0 a sliding-window rate
+	// limiter is mounted automatically; BlacklistedUsers seeds the blacklist.
+	RateLimitPerUser int           // messages per window per user (0 = disabled)
+	RateLimitWindow  time.Duration // default: 1 minute
+	SensitiveWords   []string      // optional word filter
+	BlockedUserIDs   []string      // users whose messages are always dropped
 }
 
 // DefaultGatewayConfig returns default gateway configuration
@@ -341,6 +347,29 @@ func (g *Gateway) Use(m Middleware) {
 	g.middleware = append(g.middleware, m)
 }
 
+// mountConfiguredMiddleware installs middleware derived from GatewayConfig
+// (rate limit / sensitive words / blacklist). Idempotent per Start().
+func (g *Gateway) mountConfiguredMiddleware() {
+	if g.config.RateLimitPerUser > 0 {
+		window := g.config.RateLimitWindow
+		if window <= 0 {
+			window = time.Minute
+		}
+		g.Use(NewRateLimitMiddleware(g.config.RateLimitPerUser, window))
+		log.Infof("[Gateway] Rate limit enabled: %d msgs/user/%v", g.config.RateLimitPerUser, window)
+	}
+	if len(g.config.SensitiveWords) > 0 {
+		g.Use(NewSensitiveWordMiddleware(g.config.SensitiveWords))
+	}
+	if len(g.config.BlockedUserIDs) > 0 {
+		bl := NewBlacklistMiddleware()
+		for _, id := range g.config.BlockedUserIDs {
+			bl.Add(id)
+		}
+		g.Use(bl)
+	}
+}
+
 // Start starts the gateway
 func (g *Gateway) Start(ctx context.Context) error {
 	g.mu.Lock()
@@ -349,6 +378,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf("gateway already running")
 	}
 	g.running = true
+	g.mountConfiguredMiddleware()
 	g.mu.Unlock()
 
 	// Connect platforms that haven't connected yet, and start message handlers
@@ -380,22 +410,31 @@ func (g *Gateway) Start(ctx context.Context) error {
 // Stop stops the gateway
 func (g *Gateway) Stop() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	if !g.running {
+		g.mu.Unlock()
 		return nil
 	}
-
 	close(g.stopCh)
 	g.running = false
+	// Snapshot what needs shutting down, then release the lock before any
+	// potentially slow network/shutdown calls (prevents deadlock with
+	// EmitMessage / session readers).
+	apiServer := g.apiServer
+	handlers := make(map[string]PlatformHandler, len(g.platforms))
+	for name, h := range g.platforms {
+		handlers[name] = h
+	}
+	// Recreate the channel so a subsequent Start()/Restart() works.
+	g.stopCh = make(chan struct{})
+	g.mu.Unlock()
 
 	// Stop API server
-	if g.apiServer != nil {
-		g.apiServer.Shutdown(context.Background())
+	if apiServer != nil {
+		apiServer.Shutdown(context.Background())
 	}
 
 	// Disconnect all platforms
-	for name, handler := range g.platforms {
+	for name, handler := range handlers {
 		handler.Disconnect()
 		log.Infof("Platform %s disconnected", name)
 	}
@@ -458,11 +497,19 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 		}
 	}
 
-	// Check for slash commands
+	// Check for slash commands. Only consume the message when the platform
+	// actually handled it: nil error AND non-empty content. Empty/unknown
+	// commands fall through to normal agent processing instead of replying
+	// with a blank message.
 	if g.config.EnableSlashCmd && len(msg.Content) > 0 && msg.Content[0] == '/' {
 		cmd := msg.Content[1:]
-		if resp, err := handler.HandleSlashCommand(cmd, msg); err == nil {
-			handler.Send(ctx, resp)
+		if resp, err := handler.HandleSlashCommand(cmd, msg); err == nil && strings.TrimSpace(resp.Content) != "" {
+			response := Response{
+				MessageID: msg.ID,
+				Content:   resp.Content,
+				ChannelID: msg.ChannelID,
+			}
+			handler.Send(ctx, response)
 			return
 		}
 	}
@@ -470,10 +517,17 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	// Get or create session
 	session := g.getOrCreateSession(msg.UserID, platform)
 
-	// Update session (thread-safe)
+	// Update session (thread-safe); keep the latest channel so
+	// broadcast() knows where to deliver messages for this user.
 	session.mu.Lock()
 	session.LastActive = time.Now()
-	session.History = append(session.History, msg)
+	session.History = trimHistory(session.History, msg)
+	if msg.ChannelID != "" {
+		if session.Metadata == nil {
+			session.Metadata = make(map[string]interface{})
+		}
+		session.Metadata["channel_id"] = msg.ChannelID
+	}
 	session.mu.Unlock()
 
 	// Call message handler if set
@@ -675,6 +729,30 @@ func (g *Gateway) ListSessions() []*Session {
 	return sessions
 }
 
+// maxSessionHistory caps in-memory history per session to bound memory use;
+// full transcripts live in the session store when persistence is enabled.
+const maxSessionHistory = 200
+
+// trimHistory appends a message and keeps only the most recent
+// maxSessionHistory entries.
+func trimHistory(hist []Message, msg Message) []Message {
+	hist = append(hist, msg)
+	if len(hist) > maxSessionHistory {
+		hist = hist[len(hist)-maxSessionHistory:]
+	}
+	return hist
+}
+
+// channelIDFor returns the best-known target channel for a session.
+// Sessions record their chat/channel under metadata["channel_id"]; the
+// per-platform ReceiveMessage path stores it when the session is created.
+func channelIDFor(s *Session) string {
+	if v, ok := s.Metadata["channel_id"].(string); ok && v != "" {
+		return v
+	}
+	return s.UserID // DM fallback: most platforms accept the user ID as target
+}
+
 // Stats returns gateway statistics
 type GatewayStats struct {
 	Platforms      int      `json:"platforms"`
@@ -815,7 +893,9 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
 
 	g.apiServer = &http.Server{
-		Addr:              fmt.Sprintf(":%d", g.apiPort),
+		// Bind to loopback only: this API exposes sessions/broadcast/QR login
+		// and must not be reachable from other machines.
+		Addr:              fmt.Sprintf("127.0.0.1:%d", g.apiPort),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
@@ -828,11 +908,19 @@ func (g *Gateway) startAPIServer() {
 }
 
 func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(g.Stats())
 }
 
 func (g *Gateway) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 
 	if r.Method == "GET" {
@@ -867,22 +955,48 @@ func (g *Gateway) handleBroadcast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Broadcast to all sessions
+	// Snapshot the routing fields under a short read lock, then perform
+	// network sends outside the lock. Note: never copy Session by value —
+	// it contains a sync.Mutex.
+	type target struct {
+		userID    string
+		channelID string
+		handler   PlatformHandler
+	}
+	targets := make([]target, 0, len(g.sessions))
 	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	for key, handler := range g.platforms {
-		for _, session := range g.sessions {
-			resp := Response{
-				Content: req.Content,
-			}
-			handler.Send(context.Background(), resp)
-			log.Infof("Broadcast to %s:%s", key, session.UserID)
+	for _, s := range g.sessions {
+		if h, ok := g.platforms[s.Platform]; ok {
+			targets = append(targets, target{
+				userID:    s.UserID,
+				channelID: channelIDFor(s),
+				handler:   h,
+			})
 		}
+	}
+	g.mu.RUnlock()
+
+	sent, failed := 0, 0
+	for _, t := range targets {
+		resp := Response{
+			Content:   req.Content,
+			ChannelID: t.channelID,
+		}
+		if err := t.handler.Send(context.Background(), resp); err != nil {
+			log.Warnf("Broadcast send failed for %q: %v", t.userID, err)
+			failed++
+			continue
+		}
+		log.Debugf("Broadcast delivered via platform handler (user=%s)", t.userID)
+		sent++
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "broadcast"})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "broadcast",
+		"sent":   sent,
+		"failed": failed,
+	})
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -890,17 +1004,29 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(g.HealthCheck())
 }
 
-// Broadcast sends a message to all connected users
+// Broadcast sends a message to every active session, routed through the
+// session's own platform handler with proper channel targeting.
 func (g *Gateway) Broadcast(content string) {
 	g.mu.RLock()
-	defer g.mu.RUnlock()
+	type target struct {
+		session *Session
+		handler PlatformHandler
+	}
+	targets := make([]target, 0, len(g.sessions))
+	for _, s := range g.sessions {
+		if h, ok := g.platforms[s.Platform]; ok {
+			targets = append(targets, target{session: s, handler: h})
+		}
+	}
+	g.mu.RUnlock()
 
-	for _, handler := range g.platforms {
-		for range g.sessions {
-			resp := Response{
-				Content: content,
-			}
-			handler.Send(context.Background(), resp)
+	for _, t := range targets {
+		resp := Response{
+			Content:   content,
+			ChannelID: channelIDFor(t.session),
+		}
+		if err := t.handler.Send(context.Background(), resp); err != nil {
+			log.Warnf("Broadcast to %s:%s failed: %v", t.session.Platform, t.session.UserID, err)
 		}
 	}
 }

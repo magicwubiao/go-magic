@@ -226,6 +226,11 @@ type AgentPluginsConfig struct {
 type GatewayConfig struct {
 	Enabled   bool                      `json:"enabled"`
 	Platforms map[string]PlatformConfig `json:"platforms"`
+	// Optional per-user rate limit and blocklist for all platforms.
+	RateLimitPerUser int      `json:"rate_limit_per_user,omitempty"`   // msgs/min (0 = default 20, negative disables)
+	RateLimitWindow  int      `json:"rate_limit_window_sec,omitempty"` // window seconds, default 60
+	BlockedUsers     []string `json:"blocked_users,omitempty"`         // user IDs never processed
+	SensitiveWords   []string `json:"sensitive_words,omitempty"`       // filtered words
 }
 
 // PlatformConfig represents platform-specific configuration
@@ -235,6 +240,12 @@ type PlatformConfig struct {
 	// Channel allowlist/blocklist - only respond to messages from allowed channels
 	AllowedChannels []string `json:"allowed_channels,omitempty"` // Whitelist of channel/chat IDs; empty means allow all
 	BlockedChannels []string `json:"blocked_channels,omitempty"` // Blacklist of channel/chat IDs; takes precedence over whitelist
+	// Access control (DM / group policies). Policies: "open", "allowlist", "disabled".
+	DMPolicy        string   `json:"dm_policy,omitempty"`        // default: open
+	DMAllowlist     []string `json:"dm_allowlist,omitempty"`     // user IDs allowed to DM when policy=allowlist
+	GroupPolicy     string   `json:"group_policy,omitempty"`     // default: open (mention required)
+	GroupAllowlist  []string `json:"group_allowlist,omitempty"`  // group IDs allowed when policy=allowlist
+	MentionPatterns []string `json:"mention_patterns,omitempty"` // extra regex patterns treated as mentions
 	// WeCom fields
 	CorpID  string `json:"corp_id,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
@@ -275,6 +286,12 @@ type BotModeConfig struct {
 	// whole turns: it is trimmed back to (not past) the oldest user message,
 	// so a turn's tool calls/results never get separated from its prompt.
 	HistoryWindow int `json:"history_window,omitempty"`
+	// TurnTimeoutMinutes caps how long a single agent turn (all LLM calls and
+	// tool executions for one inbound message) may run. 0 = default (5 min).
+	// When the deadline hits, the turn is aborted gracefully: progress made so
+	// far is persisted and the user gets a friendly timeout notice instead of
+	// a raw "context deadline exceeded" error.
+	TurnTimeoutMinutes int `json:"turn_timeout_minutes,omitempty"`
 }
 
 // DefaultBotModeConfig returns default Bot Mode settings.

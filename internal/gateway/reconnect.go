@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,56 +147,25 @@ func ClassifyError(err error) ErrorSeverity {
 }
 
 func containsLower(s, substr string) bool {
-	return len(s) >= len(substr) && (len(s) == 0 || len(substr) == 0 || stringIndexLower(s, substr) >= 0)
-}
-
-func stringIndexLower(s, substr string) int {
-	sLower := toLower(s)
-	subLower := toLower(substr)
-	return indexOf(sLower, subLower)
-}
-
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		result[i] = c
-	}
-	return string(result)
-}
-
-func indexOf(s, substr string) int {
-	if len(substr) == 0 {
-		return 0
-	}
-	if len(substr) > len(s) {
-		return -1
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // HandleDisconnection handles a disconnection and starts reconnection if needed
 func (rm *ReconnectManager) HandleDisconnection(err error) {
+	severity := ClassifyError(err)
+	log.Warnf("[Reconnect] Disconnected. Severity: %d, Error: %v", severity, err)
+
+	// Callbacks may call back into ReconnectManager methods; run them
+	// without holding rm.mu to avoid deadlocks.
+	if rm.onStatusChange != nil {
+		rm.onStatusChange("disconnected", err)
+	}
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	if rm.isReconnecting {
 		return
-	}
-
-	severity := ClassifyError(err)
-	log.Warnf("[Reconnect] Disconnected. Severity: %d, Error: %v", severity, err)
-
-	if rm.onStatusChange != nil {
-		rm.onStatusChange("disconnected", err)
 	}
 
 	if severity == ErrorFatal {
@@ -336,5 +307,8 @@ func addJitter(d time.Duration) time.Duration {
 }
 
 func randInt(min, max int) int {
-	return min + int(time.Now().UnixNano()%int64(max-min+1))
+	if max <= min {
+		return min
+	}
+	return min + rand.IntN(max-min+1)
 }
