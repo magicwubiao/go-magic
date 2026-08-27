@@ -16,42 +16,42 @@
 
     <!-- Filter Bar -->
     <div class="kanban-filter-bar">
-      <n-space align="center" wrap>
+      <div class="kanban-filter-grid">
         <n-input
           v-model:value="filterForm.search"
+          class="f-search"
           :placeholder="t('kanban.searchTasks')"
           clearable
-          style="width: 200px;"
         />
         <n-select
           v-model:value="filterForm.priority"
+          class="f-sm"
           :placeholder="t('kanban.priority')"
           clearable
           :options="priorityOptions"
-          style="width: 120px;"
         />
         <n-select
           v-model:value="filterForm.assignee"
+          class="f-sm"
           :placeholder="t('kanban.assignee')"
           clearable
           :options="assigneeOptions"
-          style="width: 120px;"
         />
         <n-select
           v-model:value="filterForm.goal_id"
+          class="f-md"
           :placeholder="t('kanban.linkedGoal')"
           clearable
           :options="goalOptions"
-          style="width: 150px;"
         />
         <n-date-picker
           v-model:value="filterForm.due_before"
+          class="f-md"
           :placeholder="t('kanban.dueBefore')"
           clearable
-          style="width: 150px;"
         />
-        <n-button @click="resetFilter">{{ t('kanban.reset') }}</n-button>
-      </n-space>
+        <n-button class="f-reset" @click="resetFilter">{{ t('kanban.reset') }}</n-button>
+      </div>
     </div>
 
     <n-spin :show="kanbanStore.loading">
@@ -772,6 +772,16 @@ onUnmounted(() => {
   border: 1px solid #e8e8e8;
   border-radius: 8px;
 }
+.kanban-filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.f-search { width: 220px; }
+.f-sm { width: 130px; }
+.f-md { width: 160px; }
+.f-reset { margin-left: auto; }
 .kanban-container {
   display: flex;
   flex-direction: column;
@@ -841,20 +851,23 @@ onUnmounted(() => {
     row-gap: 8px !important;
   }
 
-  /* 筛选栏:控件两列流式铺满 */
+  /* 筛选栏:搜索占整行,其余控件两列流式铺满 */
   .kanban-filter-bar {
     padding: 10px 12px;
   }
-  .kanban-filter-bar :deep(.n-space) {
-    flex-wrap: wrap !important;
-    row-gap: 8px !important;
+  .kanban-filter-grid {
+    gap: 8px;
   }
-  .kanban-filter-bar :deep(.n-input),
-  .kanban-filter-bar :deep(.n-select),
-  .kanban-filter-bar :deep(.n-date-picker) {
-    width: calc(50% - 14px) !important;
-    min-width: calc(50% - 14px);
-    flex: 0 0 calc(50% - 14px);
+  .f-search {
+    flex: 1 1 100% !important;
+    width: auto !important;
+    min-width: 0;
+  }
+  .f-sm,
+  .f-md {
+    flex: 1 1 calc(50% - 4px);
+    width: auto !important;
+    min-width: 0;
   }
 
   /* 看板改为纵向堆叠:触屏拖拽不可用,靠卡片操作按钮移动任务 */

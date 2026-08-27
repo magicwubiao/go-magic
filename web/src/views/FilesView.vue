@@ -55,10 +55,11 @@
 
       <n-card :title="t('files.fileList')" size="small">
         <n-data-table
-          :columns="uploadColumns"
+          :columns="uploadColumnsComputed"
           :data="files"
           :loading="loading"
           :pagination="pagination"
+          :scroll-x="isMobile ? 400 : 720"
           size="small"
           bordered
           striped
@@ -104,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, h, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, h, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NSpace,
@@ -190,11 +191,17 @@ function getFileIcon(filename: string) {
   return DocumentTextOutline
 }
 
+// ===== Responsive =====
+const isMobile = ref(window.innerWidth <= 768)
+const updateIsMobile = () => {
+  isMobile.value = window.innerWidth <= 768
+}
+
 const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
   {
     title: '#',
     key: 'index',
-    width: 50,
+    width: isMobile.value ? 44 : 50,
     align: 'center',
     render(_, index) {
       return index + 1
@@ -203,6 +210,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
   {
     title: t('files.name'),
     key: 'filename',
+    minWidth: isMobile.value ? 110 : 200,
     ellipsis: { tooltip: true },
     sorter: 'default',
     render(row) {
@@ -218,7 +226,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
   {
     title: t('files.size'),
     key: 'size',
-    width: 120,
+    width: isMobile.value ? 84 : 120,
     sorter: (a, b) => a.size - b.size,
     render(row) {
       return h('span', { style: { color: '#666', fontSize: '13px' } }, formatSize(row.size))
@@ -236,7 +244,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
   {
     title: t('files.actions'),
     key: 'actions',
-    width: 180,
+    width: isMobile.value ? 148 : 180,
     align: 'center',
     render(row) {
       return h(NSpace, { size: 4, justify: 'center' }, {
@@ -283,6 +291,13 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
     },
   },
 ]
+
+// 移动端隐藏“更新时间”列,避免固定列宽超出屏幕导致文件列表显示不全
+const uploadColumnsComputed = computed<DataTableColumns<sessionsApi.FileItem>>(() =>
+  isMobile.value
+    ? uploadColumns.filter((c) => c.key !== 'updated')
+    : uploadColumns
+)
 
 // ===== Upload Actions =====
 async function loadFiles() {
@@ -449,6 +464,11 @@ function formatSize(bytes: number): string {
 
 onMounted(() => {
   loadFiles()
+  window.addEventListener('resize', updateIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile)
 })
 </script>
 
