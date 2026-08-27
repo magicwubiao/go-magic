@@ -100,12 +100,16 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotRoutines(w, r, name)
 	case len(parts) == 3 && parts[1] == "routines":
 		s.handleBotRoutineByID(w, r, name, parts[2])
+	case len(parts) == 4 && parts[1] == "routines" && parts[3] == "run":
+		s.handleBotRoutineRun(w, r, name, parts[2])
 	case len(parts) == 2 && parts[1] == "chat":
 		s.handleBotChat(w, r, name)
 	case len(parts) == 3 && parts[1] == "chat" && parts[2] == "stream":
 		s.handleBotChatStream(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages":
 		s.handleBotMessages(w, r, name)
+	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
+		s.handleBotClearMessages(w, r, name)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -563,4 +567,47 @@ func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, nam
 		writeJSONEvent(map[string]interface{}{"final": reply})
 	}
 	writeSSE(`{"done":true}`)
+}
+
+// handleBotClearMessages DELETE /api/bots/{name}/messages — wipe the bot's
+// canonical chat history (disk + live agent memory).
+func (s *Server) handleBotClearMessages(w http.ResponseWriter, r *http.Request, name string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	if err := mgr.ClearHistory(name); err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"cleared": true})
+}
+
+// handleBotRoutineRun POST /api/bots/{name}/routines/{id}/run — trigger an
+// immediate one-off routine execution outside its cron schedule.
+func (s *Server) handleBotRoutineRun(w http.ResponseWriter, r *http.Request, name, idOrName string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	if err := mgr.RunRoutineNow(name, idOrName); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "is disabled") || strings.Contains(err.Error(), "not running") {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	jsonResponse(w, map[string]interface{}{"triggered": idOrName})
 }

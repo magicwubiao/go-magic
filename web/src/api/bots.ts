@@ -67,6 +67,18 @@ export async function getBotMessages(name: string): Promise<BotMessage[]> {
   return request(`/bots/${name}/messages`)
 }
 
+/** Wipe the bot's canonical chat history (server + UI reload afterwards). */
+export async function clearBotMessages(name: string): Promise<void> {
+  return request(`/bots/${name}/messages`, { method: 'DELETE' })
+}
+
+/** Trigger an immediate one-off run of a routine outside its schedule. */
+export async function runBotRoutineNow(name: string, routineId: string): Promise<void> {
+  return request(`/bots/${name}/routines/${encodeURIComponent(routineId)}/run`, {
+    method: 'POST',
+  })
+}
+
 export async function sendBotChat(name: string, message: string): Promise<BotMessage> {
   return request(`/bots/${name}/chat`, {
     method: 'POST',

@@ -697,6 +697,70 @@ func (m *Manager) saveHistory(name string, history []provider.Message) {
 
 // --- Dynamic lifecycle management (used by the Web dashboard API) ---
 
+// ClearHistory wipes a bot's canonical conversation: the persisted session
+// is deleted and any live in-memory agent history is reset so subsequent
+// turns start fresh. Persona/system prompt are kept — only chat turns go.
+func (m *Manager) ClearHistory(name string) error {
+	if _, err := m.GetBot(name); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	sessID := CanonicalSessionID(name)
+	if err := m.sessions.DeleteSession(ctx, sessID); err != nil {
+		// Missing session is fine (nothing to clear); anything else we log
+		// but still reset the live agent below.
+		log.Warnf("[BotMode] Failed to delete session %s for %s: %v", sessID, name, err)
+	}
+
+	key := strings.ToLower(name)
+	m.mu.Lock()
+	if rt, ok := m.bots[key]; ok && rt != nil && rt.ag != nil {
+		rt.ag.SetHistory(nil)
+		rt.loaded = true // disk is empty; don't restore stale turns next use
+	}
+	m.mu.Unlock()
+
+	log.Infof("[BotMode] Cleared canonical chat for bot %q", name)
+	return nil
+}
+
+// RunRoutineNow triggers an immediate one-off execution of a routine,
+// bypassing its cron schedule. Returns an error when the bot or routine
+// does not exist. The run itself happens asynchronously (same path as a
+// scheduled firing), updating last_run/last_status on completion.
+func (m *Manager) RunRoutineNow(botName, routineIDOrName string) error {
+	routines, err := m.ListRoutines(botName)
+	if err != nil {
+		return err
+	}
+	var target *RoutineConfig
+	for _, rt := range routines {
+		if rt.ID == routineIDOrName || strings.EqualFold(rt.Name, routineIDOrName) {
+			target = rt
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("routine not found: %s", routineIDOrName)
+	}
+	if !target.Enabled {
+		return fmt.Errorf("routine %q is disabled; enable it first", target.Name)
+	}
+
+	m.mu.Lock()
+	sched := m.routines[strings.ToLower(botName)]
+	m.mu.Unlock()
+	if sched == nil {
+		return fmt.Errorf("bot %q is not running", botName)
+	}
+
+	go sched.runRoutine(target.ID)
+	return nil
+}
+
 // CreateBot persists a new bot config and, when the manager is running,
 // brings it online immediately (worker + routine scheduler).
 func (m *Manager) CreateBot(cfg *Config) error {

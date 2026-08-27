@@ -201,6 +201,24 @@ export const useBotsStore = defineStore('bots', () => {
     routines.value.push(rt)
   }
 
+  async function runRoutineNow(routineId: string) {
+    if (!activeBotName.value) return
+    await botsApi.runBotRoutineNow(activeBotName.value, routineId)
+    // Fire-and-forget on the server; refresh last-run info shortly after.
+    setTimeout(async () => {
+      try {
+        routines.value = await botsApi.getBotRoutines(activeBotName.value as string)
+      } catch { /* ignore */ }
+    }, 1500)
+  }
+
+  /** Clear the active bot's conversation: server-side wipe + empty local view. */
+  async function clearMessages() {
+    if (!activeBotName.value) return
+    await botsApi.clearBotMessages(activeBotName.value)
+    messages.value = []
+  }
+
   async function removeRoutine(routineId: string) {
     if (!activeBotName.value) return
     await botsApi.deleteBotRoutine(activeBotName.value, routineId)
@@ -238,5 +256,6 @@ export const useBotsStore = defineStore('bots', () => {
     loadBots, createBot, updateBot, deleteBot,
     openChat, closeChat, refreshChat, sendMessage,
     addRoutine, removeRoutine, toggleRoutine, updateRoutine,
+    runRoutineNow, clearMessages,
   }
 })

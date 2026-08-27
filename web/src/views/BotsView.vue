@@ -18,6 +18,14 @@
             <template #icon><n-icon><TimeOutline /></n-icon></template>
             {{ t('bots.routines') }} ({{ botsStore.routines.length }})
           </n-button>
+          <n-popconfirm @positive-click="handleClearChat">
+            <template #trigger>
+              <n-button quaternary size="small" type="error" :loading="clearingChat">
+                {{ t('bots.clearChat') }}
+              </n-button>
+            </template>
+            {{ t('bots.clearChatConfirm') }}
+          </n-popconfirm>
           <n-button quaternary size="small" @click="openEditModal(activeBotObj)">
             <template #icon><n-icon><CreateOutline /></n-icon></template>
             {{ t('common.edit') }}
@@ -239,6 +247,11 @@
               <n-text strong style="font-size: 14px;">{{ rt.name || rt.id }}</n-text>
             </n-space>
             <n-space :size="4">
+              <n-button v-if="rt.enabled" size="tiny" type="primary"
+                        :loading="runningIds.has(rt.id)"
+                        @click="handleRunRoutineNow(rt)">
+                {{ t('bots.runNow') }}
+              </n-button>
               <n-button size="tiny" @click="openEditRoutine(rt)">{{ t('common.edit') }}</n-button>
               <n-popconfirm @positive-click="handleRemoveRoutine(rt.id)">
                 <template #trigger>
@@ -362,6 +375,8 @@ const routineForm = reactive({ name: '', schedule: '', prompt: '' })
 // Non-null while the form is editing an existing routine instead of adding.
 const editingRoutineId = ref<string | null>(null)
 const togglingIds = reactive(new Set<string>())
+const clearingChat = ref(false)
+const runningIds = reactive(new Set<string>())
 
 const scheduleHint = computed(() => {
   const s = routineForm.schedule.trim()
@@ -562,6 +577,32 @@ async function handleToggleRoutine(rt: BotRoutine, enabled: boolean) {
     message.error(e.message || t('common.operationFailed'))
   } finally {
     togglingIds.delete(rt.id)
+  }
+}
+
+async function handleRunRoutineNow(rt: BotRoutine) {
+  if (runningIds.has(rt.id)) return
+  runningIds.add(rt.id)
+  try {
+    await botsStore.runRoutineNow(rt.id)
+    message.success(t('bots.routineTriggered'))
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    runningIds.delete(rt.id)
+  }
+}
+
+async function handleClearChat() {
+  if (!botsStore.activeBotName) return
+  clearingChat.value = true
+  try {
+    await botsStore.clearMessages()
+    message.success(t('bots.chatCleared'))
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    clearingChat.value = false
   }
 }
 
@@ -1249,11 +1290,64 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  /* 页面视口:锁高 + 动态视口,保证聊天输入区贴底 */
+  .bots-page {
+    height: calc(100vh - 48px);
+    height: calc(100dvh - 48px);
+    overflow: hidden;
+  }
+
+  /* 对话面板头部:允许换行、收紧间距,四个按钮窄屏放得下 */
+  .chat-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .chat-title {
+    gap: 6px;
+  }
+  .chat-header :deep(.n-button) {
+    font-size: 12px;
+    height: 30px;
+    padding: 0 8px;
+  }
+
+  /* 消息区:留白收敛 */
+  .chat-messages {
+    padding: 10px 12px;
+    padding-bottom: 16px;
+  }
+  .message {
+    margin-bottom: 14px;
+    gap: 8px;
+  }
+  .avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
   .message-body {
     max-width: 88%;
   }
   .message-body.bot-body {
     max-width: 90%;
+  }
+
+  /* 输入区:收紧留白并适配手势条安全区 */
+  .input-area {
+    padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .input-wrapper {
+    padding: 8px 12px;
+    padding-right: 42px; /* 内置发送按钮仍留空间 */
+  }
+
+  /* Bot 卡片 tiny 按钮增大触控面积 */
+  .bot-card :deep(.n-button--tiny-type) {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 13px;
   }
 }
 
