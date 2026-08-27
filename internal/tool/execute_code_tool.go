@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -678,59 +679,117 @@ func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable, f
 // finished — whichever comes first. All three outcomes are returned as result
 // payloads (not Go errors) so the agent can keep the tool-call/reply
 // conversation flowing instead of treating a cancellation as a hard failure.
+// syncBuffer 是互斥保护的字节缓冲。exec.Cmd 在 Stdout/Stderr 为非 *os.File 时
+// 会启动内部 io 拷贝 goroutine 持续写入；普通 bytes.Buffer 非并发安全，任何
+// 并发读取都会构成数据竞争（CI -race 已实测命中）。加锁后读写两侧均安全。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// defaultCommandWaitDelay 进程被 Kill 后等待管道排空的上限。
+// 若子进程的子孙进程继承了 stdout/stderr 管道且拒不退出，WaitDelay 到期后
+// cmd.Wait 强制关闭管道返回，避免整条执行路径悬挂在收割阶段。
+const defaultCommandWaitDelay = 3 * time.Second
+
+// runCommand 执行已构造好的 exec.Cmd，并以 payload 形式（而非 Go error）
+// 报告取消/超时，保证上层对话循环可以继续而非中断。
+//
+// 并发正确性说明（修复 CI TestExecuteCodeContextCancel 的两处 data race）：
+//
+//  1. exec.Cmd 结构体文档明确「not safe for concurrent use」。旧实现里
+//     select 的 ctx.Done/timeout 分支直接读 cmd.Process 字段并调用 Kill，
+//     与后台 goroutine 中 Run()→Start() 对该字段的写入构成竞争。
+//     新实现改为显式 Start()：主协程完成 Start 后把 *os.Process 快照进
+//     局部变量交给 killer goroutine —— os.Process 的 Kill 是 syscall 级
+//     线程安全操作，且此后无人再写 Cmd 结构体字段，竞争面彻底消失。
+//
+//  2. 旧实现在 Kill 之后不等待 Run() 返回就读 stdout/stderr
+//     （bytes.Buffer 与 Cmd 内部 IO 拷贝 goroutine 并发读写）。
+//     新实现令所有终止路径统一收敛到阻塞的 cmd.Wait()：Wait 返回即保证
+//     子进程已被收割且内部 IO goroutine 全部结束，随后读缓冲绝对安全；
+//     配合 syncBuffer 双保险，即使未来引入流式读取也不再踩雷。
 func (t *ExecuteCodeTool) runCommand(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (interface{}, error) {
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
-	// Execute with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Run()
-	}()
+	if timeout <= 0 {
+		timeout = 5 * time.Minute // 防御：历史调用方始终传 >0
+	}
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = defaultCommandWaitDelay
+	}
 
-	select {
-	case err := <-done:
-		result := map[string]interface{}{
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
-			"exit_code": 0,
-		}
-
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				result["exit_code"] = exitErr.ExitCode()
-			} else {
-				result["error"] = err.Error()
-				result["exit_code"] = -1
-			}
-		}
-
-		return result, nil
-
-	case <-ctx.Done():
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+	// Start（非 Run）：成功后进程句柄可用；失败镜像旧行为以 payload 返回。
+	if err := cmd.Start(); err != nil {
 		return map[string]interface{}{
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
+			"stdout":    "",
+			"stderr":    "",
 			"exit_code": -1,
-			"error":     fmt.Sprintf("execution cancelled: %v", ctx.Err()),
-		}, nil
-
-	case <-time.After(timeout):
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		return map[string]interface{}{
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
-			"exit_code": -1,
-			"error":     "execution timed out",
+			"error":     err.Error(),
 		}, nil
 	}
+	proc := cmd.Process // 仅此处读取一次；Start 已先行发生
+
+	// Killer：唯一的终止触发器，只持有 Process 快照，绝不触碰 exec.Cmd。
+	stop := make(chan struct{})
+	reasonCh := make(chan string, 1)
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-stop:
+		case <-ctx.Done():
+			_ = proc.Kill() // 幂等：进程已退出时为 ErrProcessDone，忽略
+			reasonCh <- fmt.Sprintf("execution cancelled: %v", ctx.Err())
+		case <-timer.C:
+			_ = proc.Kill()
+			reasonCh <- "execution timed out"
+		}
+	}()
+
+	// 统一收割点：正常退出 / 被 Kill 的子进程都在此回收，
+	// 返回后内部 IO 拷贝 goroutine 必然已结束 → 读缓冲无竞争。
+	waitErr := cmd.Wait()
+	close(stop)
+
+	result := map[string]interface{}{
+		"stdout":    stdout.String(),
+		"stderr":    stderr.String(),
+		"exit_code": 0,
+	}
+
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			result["exit_code"] = exitErr.ExitCode()
+		} else {
+			result["error"] = waitErr.Error()
+			result["exit_code"] = -1
+		}
+	}
+
+	// 取消/超时语义优先：归一化为 payload 级错误（与旧版文案完全一致）。
+	select {
+	case reason := <-reasonCh:
+		result["error"] = reason
+		result["exit_code"] = -1
+	default:
+	}
+
+	return result, nil
 }
 
 // generatePythonToolWrapper creates Python code that exposes tools as callable functions
