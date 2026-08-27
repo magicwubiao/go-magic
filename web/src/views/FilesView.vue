@@ -215,10 +215,23 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
     sorter: 'default',
     render(row) {
       const IconComp = getFileIcon(row.filename)
-      return h(NSpace, { size: 8, align: 'center' }, {
+      return h('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          overflow: 'hidden',
+        },
+      }, {
         default: () => [
-          h(NIcon, { size: 18, color: '#666' }, { default: () => h(IconComp) }),
-          h('span', null, row.filename),
+          h(NIcon, { size: 18, color: '#666', style: { flexShrink: 0 } }, { default: () => h(IconComp) }),
+          h('span', {
+            style: {
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            },
+          }, row.filename),
         ],
       })
     },
