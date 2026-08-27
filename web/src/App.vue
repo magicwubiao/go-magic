@@ -51,6 +51,18 @@
           <!-- Content -->
           <n-layout>
             <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
+              <!-- Mobile hamburger menu button -->
+              <n-button
+                v-if="isMobile"
+                class="mobile-sider-toggle"
+                circle
+                size="large"
+                @click="siderCollapsed = !siderCollapsed"
+              >
+                <template #icon>
+                  <n-icon :component="siderCollapsed ? MenuOutline : CloseOutline" :size="22" />
+                </template>
+              </n-button>
               <router-view />
             </n-layout-content>
           </n-layout>
@@ -73,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, onUnmounted } from 'vue'
+import { computed, h, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -98,6 +110,8 @@ import {
   ServerOutline,
   LogOutOutline,
   BriefcaseOutline,
+  MenuOutline,
+  CloseOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -107,7 +121,23 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
-const siderCollapsed = ref(false)
+const isMobile = ref(window.innerWidth <= 768)
+
+function handleAppResize() {
+  isMobile.value = window.innerWidth <= 768
+  if (!isMobile.value) {
+    siderCollapsed.value = false
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleAppResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleAppResize)
+})
+const siderCollapsed = ref(isMobile.value)
 
 // naive-ui 组件库语言跟随 i18n，确保 popconfirm/date-picker 等内置按钮翻译正确
 const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
@@ -277,7 +307,7 @@ body {
 @media (max-width: 768px) {
   .n-layout-sider {
     position: fixed !important;
-    z-index: 100;
+    z-index: 200;
     height: 100vh;
     transform: translateX(-100%);
     transition: transform 0.3s ease;
@@ -296,9 +326,16 @@ body {
     margin-left: 0 !important;
   }
   
-  /* Hide sidebar trigger on mobile, use hamburger menu instead */
   .n-layout-sider__trigger {
     display: none;
+  }
+
+  .mobile-sider-toggle {
+    position: fixed;
+    left: 12px;
+    bottom: 200px;
+    z-index: 150;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   }
 }
 </style>

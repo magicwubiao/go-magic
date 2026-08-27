@@ -2362,7 +2362,7 @@ onMounted(async () => {
   .right-sidebar-fab {
     display: flex;
     position: fixed;
-    right: 16px;
+    right: 6px;
     bottom: 200px;
     z-index: 150;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
