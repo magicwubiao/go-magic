@@ -51,18 +51,14 @@
           <!-- Content -->
           <n-layout>
             <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
-              <!-- Mobile hamburger menu button -->
-              <n-button
+              <!-- Mobile sider toggle button -->
+              <div
                 v-if="isMobile"
                 class="mobile-sider-toggle"
-                circle
-                size="large"
                 @click="siderCollapsed = !siderCollapsed"
               >
-                <template #icon>
-                  <n-icon :component="siderCollapsed ? MenuOutline : CloseOutline" :size="22" />
-                </template>
-              </n-button>
+                <n-icon :component="siderCollapsed ? ChevronForwardOutline : ChevronBackOutline" :size="22" />
+              </div>
               <router-view />
             </n-layout-content>
           </n-layout>
@@ -110,8 +106,8 @@ import {
   ServerOutline,
   LogOutOutline,
   BriefcaseOutline,
-  MenuOutline,
-  CloseOutline,
+  ChevronForwardOutline,
+  ChevronBackOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -122,6 +118,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
 const isMobile = ref(window.innerWidth <= 768)
+const siderCollapsed = ref(isMobile.value)
 
 function handleAppResize() {
   isMobile.value = window.innerWidth <= 768
@@ -137,7 +134,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleAppResize)
 })
-const siderCollapsed = ref(isMobile.value)
 
 // naive-ui 组件库语言跟随 i18n，确保 popconfirm/date-picker 等内置按钮翻译正确
 const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
@@ -327,15 +323,29 @@ body {
   }
   
   .n-layout-sider__trigger {
-    display: none;
+    display: none !important;
   }
 
   .mobile-sider-toggle {
     position: fixed;
-    left: 12px;
-    bottom: 200px;
-    z-index: 150;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 48px;
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 0 6px 6px 0;
+    box-shadow: 2px 0 6px rgba(0, 0, 0, 0.12);
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .mobile-sider-toggle:hover {
+    background: rgba(245, 245, 245, 0.98);
   }
 }
 </style>
