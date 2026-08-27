@@ -1849,6 +1849,11 @@ async function doUpload(files: File[]) {
 
   .mobile-close-btn {
     display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
     position: absolute;
     left: -36px;
     top: 12px;
