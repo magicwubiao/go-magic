@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 
@@ -480,16 +479,11 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	url := p.BaseURL + "/chat/completions"
 
 	headers := map[string]string{}
-	resp, err := p.DoStreamRequest(ctx, url, reqBody, headers)
+	resp, err := p.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
 	if err != nil {
 		return fmt.Errorf("stream request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("stream API returned status %d: %s", resp.StatusCode, string(body))
-	}
 
 	if withTools {
 		return ParseStreamResponseWithTools(ctx, resp.Body, handler)

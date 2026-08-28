@@ -609,6 +609,48 @@ func (bp *BaseProvider) DoStreamRequest(ctx context.Context, url string, body in
 	return bp.Client.Do(req)
 }
 
+// DoStreamRequestWithBreaker performs a streaming HTTP request with circuit
+// breaker integration, mirroring doRequestWithRetry semantics:
+//   - fast-fails when the breaker is open (cooldown elapsed → half-open probe)
+//   - records failure on transport errors and non-2xx responses
+//   - records success on 2xx responses (stream body health is the caller's
+//     concern; a 200 handshake means the endpoint is accepting traffic)
+//
+// Callers MUST close resp.Body when err == nil.
+func (bp *BaseProvider) DoStreamRequestWithBreaker(ctx context.Context, url string, body interface{}, headers map[string]string) (*http.Response, error) {
+	// Fast-fail while the breaker is open. TransitionToHalfOpen flips the
+	// state once the cooldown elapses so a probe request can go through.
+	if !bp.IsHealthy() {
+		bp.TransitionToHalfOpen()
+		if !bp.IsHealthy() {
+			return nil, fmt.Errorf("circuit breaker open: provider temporarily unavailable")
+		}
+	}
+
+	start := time.Now()
+	resp, err := bp.DoStreamRequest(ctx, url, body, headers)
+	if err != nil {
+		bp.Metrics.AddFailure()
+		bp.RecordFailure()
+		return nil, fmt.Errorf("stream request failed: %w", err)
+	}
+
+	// Non-2xx handshake: the endpoint rejected the request. Read a bounded
+	// body snippet for diagnostics, then record failure.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		apiErr := bp.ParseAPIError(body, resp.StatusCode)
+		bp.Metrics.AddFailure()
+		bp.RecordFailure()
+		return nil, fmt.Errorf("stream API returned status %d: %w", resp.StatusCode, apiErr)
+	}
+
+	bp.Metrics.AddRequest(time.Since(start), nil)
+	bp.RecordSuccess()
+	return resp, nil
+}
+
 // ParseAPIError parses API error responses with support for multiple formats
 func (bp *BaseProvider) ParseAPIError(body []byte, statusCode int) error {
 	// Try to parse as standard OpenAI error format
@@ -694,4 +736,11 @@ func (bp *BaseProvider) GetMetrics() (total, failed int64, avgLatency time.Durat
 // IsHealthy returns whether the provider can accept requests
 func (bp *BaseProvider) IsHealthy() bool {
 	return bp.isHealthy()
+}
+
+// GetCircuitState returns a snapshot of the circuit breaker state.
+func (bp *BaseProvider) GetCircuitState() CircuitState {
+	bp.mu.RLock()
+	defer bp.mu.RUnlock()
+	return bp.HealthStatus.State
 }

@@ -1916,6 +1916,22 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 				log.Warnf("[Agent:Stream] StreamWithTools failed: %v (provider=%s, messages=%d, tools=%d)",
 					err, a.provider.Name(), len(req.Messages), len(a.tools))
+				// Repeated-failure escalation: a permanently failing stream
+				// (e.g. zhipu 1214 on every attempt) must not burn the whole
+				// turn budget before the non-streaming fallback also fails
+				// identically each iteration.
+				if a.failureDetector != nil {
+					var classified *retry.ClassifiedError
+					if a.errorClassifier != nil {
+						classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+					}
+					if esc := a.failureDetector.Record(classified, "", err.Error()); esc != nil {
+						a.Emit(bus.EventKindError, esc.Error())
+						a.sanitizeHistory()
+						handler("", true)
+						return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, esc)
+					}
+				}
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
 			err = ss.Stream(ctx, req.Messages, func(resp *provider.StreamResponse) {
@@ -1986,6 +2002,22 @@ Please provide a comprehensive, well-structured final response based on these su
 					return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
 				}
 				a.Emit(bus.EventKindError, err.Error())
+				// Repeated-failure escalation: sanitizeHistory+continue on a
+				// permanent error (e.g. zhipu 1214) loops until maxTurns with
+				// two API calls per iteration. Halt after the detector's
+				// threshold instead.
+				if a.failureDetector != nil {
+					var classified *retry.ClassifiedError
+					if a.errorClassifier != nil {
+						classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+					}
+					if esc := a.failureDetector.Record(classified, "", err.Error()); esc != nil {
+						a.Emit(bus.EventKindError, esc.Error())
+						a.sanitizeHistory()
+						handler("", true)
+						return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, esc)
+					}
+				}
 				// Clean up orphaned tool messages from history so the next
 				// iteration doesn't send an invalid message sequence to the API.
 				a.sanitizeHistory()
@@ -3060,6 +3092,23 @@ func (a *Agent) sanitizeHistory() {
 	}
 	if dropped > 0 {
 		log.Warnf("[Agent] Collapsed %d consecutive duplicate user message(s)", dropped)
+	}
+	a.history = final
+
+	// Pass 2.5: repair empty assistant content. zhipu (GLM) rejects
+	// assistant messages with null/missing content (error 1214) even when
+	// tool_calls are present; other providers tolerate "" but a placeholder
+	// is safe everywhere. Checkpoint-restored histories are the usual source
+	// of these half-finished assistant messages.
+	repaired := 0
+	for i := range final {
+		if final[i].Role == "assistant" && strings.TrimSpace(final[i].Content) == "" && len(final[i].ToolCalls) == 0 {
+			final[i].Content = thinkPlaceholder
+			repaired++
+		}
+	}
+	if repaired > 0 {
+		log.Warnf("[Agent] Filled %d empty assistant content message(s) with placeholder", repaired)
 	}
 	a.history = final
 

@@ -246,11 +246,21 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 					parts = append(parts, convertedPart)
 				}
 			}
+			// Defensive: if all parts were dropped (e.g. unsupported type),
+			// fall back to a text placeholder so content is never an empty array.
+			if len(parts) == 0 {
+				parts = append(parts, map[string]interface{}{
+					"type": "text",
+					"text": "(empty content)",
+				})
+			}
 			openAIMsg["content"] = parts
 		} else if len(msg.ToolCalls) > 0 && msg.Content == "" {
-			// Assistant message with tool_calls and no content: use null instead of empty string
-			// Some providers (zhipu, moonshot, deepseek, huoshan) reject "content": "" in this case
-			openAIMsg["content"] = nil
+			// Assistant message with tool_calls and no content: use empty string.
+			// zhipu (GLM) rejects BOTH "content": null AND "content": [] with
+			// error 1214 ("messages 参数非法"); "" is accepted by zhipu, OpenAI,
+			// moonshot, deepseek and huoshan alike.
+			openAIMsg["content"] = ""
 		} else {
 			// Fallback to plain text content
 			openAIMsg["content"] = msg.Content
@@ -277,7 +287,7 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 					"type": toolCallType,
 					"function": map[string]interface{}{
 						"name":      tc.GetToolName(),
-						"arguments": tc.Function.Arguments,
+						"arguments": normalizeToolArguments(tc.Function.Arguments),
 					},
 				}
 				toolCalls = append(toolCalls, toolCall)
@@ -287,10 +297,11 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 
 		// Handle tool_call_id for tool messages - ALWAYS include it for tool role
 		if msg.Role == "tool" {
-			// OpenAI requires tool messages to have content (null is ok, but not missing)
-			// If content is empty, set it to null
+			// zhipu (GLM) rejects "content": null on tool messages with error
+			// 1214 ("messages 参数非法"). Use a placeholder string instead —
+			// accepted by zhipu, OpenAI, moonshot, deepseek and huoshan alike.
 			if msg.Content == "" {
-				openAIMsg["content"] = nil
+				openAIMsg["content"] = "(empty tool result)"
 			}
 
 			// Use ToolCallID directly if available (this is the primary source)
@@ -315,6 +326,17 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 	result = sanitizeToolCallSequence(result)
 
 	return result
+}
+
+// normalizeToolArguments guarantees the arguments field is always a JSON
+// object string. zhipu (GLM) rejects empty-string arguments with error 1214;
+// "{}" is the canonical empty argument payload accepted by all providers.
+func normalizeToolArguments(args string) string {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return "{}"
+	}
+	return trimmed
 }
 
 // ConvertMessagesForProvider converts messages using the provider's configuration

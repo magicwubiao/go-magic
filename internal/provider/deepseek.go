@@ -78,7 +78,7 @@ func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Messa
 		url = bp.StreamEndpoint
 	}
 
-	resp, err := bp.DoStreamRequest(ctx, url, reqBody, headers)
+	resp, err := bp.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []ty
 		url = bp.StreamEndpoint
 	}
 
-	resp, err := bp.DoStreamRequest(ctx, url, reqBody, headers)
+	resp, err := bp.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
 	if err != nil {
 		return err
 	}
