@@ -230,6 +230,7 @@ export default {
     folderCreateFailed: '创建文件夹失败',
     files: '文件',
     filesEmpty: '空目录',
+    loadFilesFailed: '加载目录失败',
     newFile: '新建文件',
     fileCreated: '文件已创建',
     downloadZip: '打包下载',

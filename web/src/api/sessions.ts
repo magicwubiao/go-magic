@@ -113,7 +113,13 @@ export async function listFSEntries(path?: string, sessionId?: string, workspace
   if (workspaceId) params.set('workspace_id', workspaceId)
   if (showHidden) params.set('hidden', '1')
   const query = params.toString() ? `?${params.toString()}` : ''
-  return request(`/fs/list${query}`)
+  const res = await request<{ current?: string; entries?: FSEntry[]; error?: string }>(`/fs/list${query}`)
+  // Older backends may reply 200 with {"error": ...}; treat that as a failure
+  // instead of an empty listing so the UI keeps its previous state.
+  if (res && typeof res === 'object' && res.error) {
+    throw new Error(res.error)
+  }
+  return { current: res?.current || '', entries: res?.entries || [] }
 }
 
 export async function readFSFile(path: string, sessionId?: string, workspaceId?: string): Promise<string> {

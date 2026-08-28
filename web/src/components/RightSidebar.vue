@@ -742,8 +742,9 @@ function normalizeDirPath(p: string): string {
 
 // 是否显示"返回上一级(..)"入口。
 // 带 session 时后端 resolveFSPath 会把路径严格限制在会话工作目录内，
-// 在会话根目录点击".."会请求父目录并返回 "path outside session directory"，
-// 导致列表被清空（表现为"变成空目录"）。因此在会话根目录隐藏该入口。
+// 在会话根目录点击".."会请求父目录并返回 "path outside session directory"。
+// 因此仅在确认当前目录不是会话根目录时才显示该入口；
+// 路径未知（如加载失败被清空）时也隐藏，避免反复触发错误请求。
 const showParentDir = computed(() => {
   if (!dirCurrentPath.value) return false
   const root = normalizeDirPath(chatStore.currentWorkDir || '')
@@ -966,8 +967,14 @@ async function loadFiles(path?: string) {
     // 无 session 时后端会自动附加一条 ".." 父目录条目，前端已单独渲染 ".." 项，这里过滤避免重复
     fsEntries.value = (res.entries || []).filter(e => e.name !== '..')
   } catch (e) {
-    // 失败时保留原列表，避免界面闪现"空目录"
+    // 失败时保留原列表与当前路径，避免界面闪现"空目录"；
+    // 清空 dirCurrentPath 会让 showParentDir 保守隐藏 ".." 入口，
+    // 防止继续点击 ".." 反复触发同样的错误。
+    dirCurrentPath.value = ''
+    fsEntries.value = []
     console.error('Failed to list files:', e)
+    const detail = e instanceof Error ? e.message : String(e)
+    message.error(`${t('chat.loadFilesFailed')}: ${detail}`)
   } finally {
     filesLoading.value = false
   }

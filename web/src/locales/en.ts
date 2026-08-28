@@ -229,6 +229,7 @@ export default {
     folderCreateFailed: 'Failed to create folder',
     files: 'Files',
     filesEmpty: 'Empty directory',
+    loadFilesFailed: 'Failed to load directory',
     newFile: 'New File',
     fileCreated: 'File created',
     downloadZip: 'Download as ZIP',

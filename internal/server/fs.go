@@ -663,12 +663,17 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 
 	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
+		// Return a proper HTTP status so the frontend can detect the failure.
+		// Responding 200 with {"error": ...} made the client treat the error
+		// payload as a listing and wipe the directory view.
+		w.WriteHeader(http.StatusBadRequest)
 		jsonResponse(w, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		jsonResponse(w, map[string]interface{}{"error": "cannot read directory: " + err.Error()})
 		return
 	}
