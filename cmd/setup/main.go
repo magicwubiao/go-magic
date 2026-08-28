@@ -20,12 +20,12 @@ func main() {
   "profile": "default",
   "magic_home": "` + magicDir + `",
   "provider": "openai",
-  "model": "gpt-4",
+  "model": "gpt-5.6",
   "providers": {
     "openai": {
       "api_key": "your-api-key-here",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4"
+      "model": "gpt-5.6"
     }
   }
 }`

@@ -102,6 +102,7 @@ func getDefaultBaseURL(name string) string {
 		"zhipu":      "https://open.bigmodel.cn/api/paas/v4",
 		"wenxin":     "https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1",
 		"doubao":     "https://ark.cn-beijing.volces.com/api/v3",
+		"huoshan":    "https://ark.cn-beijing.volces.com/api/v3",
 		"hunyuan":    "https://hunyuan.cloud.tencent.com/v1",
 		"minimax":    "https://api.minimax.chat/v1",
 		"mimo":       "https://api.mymimo.ai/v1",
@@ -117,27 +118,28 @@ func getDefaultBaseURL(name string) string {
 // getDefaultModel returns the default model for a provider
 func getDefaultModel(name string) string {
 	defaults := map[string]string{
-		"openai":     "gpt-4",
-		"anthropic":  "claude-3-5-haiku-20241022",
-		"deepseek":   "deepseek-chat",
-		"gemini":     "gemini-1.5-flash",
-		"groq":       "mixtral-8x7b-32768",
-		"kimi":       "moonshot-v1-8k",
-		"moonshot":   "moonshot-v1-8k",
-		"openrouter": "openai/gpt-4",
-		"ollama":     "llama3",
+		"openai":     "gpt-5.6",          // GPT-5.6 Sol (alias gpt-5.6), also: gpt-5.6-terra, gpt-5.6-luna
+		"anthropic":  "claude-sonnet-5",  // also: claude-fable-5, claude-opus-5, claude-haiku-4-5
+		"deepseek":   "deepseek-chat",    // stable alias, follows latest V3.x
+		"gemini":     "gemini-3.7-flash", // latest stable; also: gemini-3.6-flash, gemini-3.1-pro-preview
+		"groq":       "llama-3.3-70b-versatile",
+		"kimi":       "kimi-k2-0905-preview",
+		"moonshot":   "kimi-k2-0905-preview",
+		"openrouter": "openai/gpt-5.6",
+		"ollama":     "llama3.3",
 		"vllm":       "llama3",
-		"cohere":     "command-r-plus",
+		"cohere":     "command-a-03-2025",
 		"mistral":    "mistral-large-latest",
-		"perplexity": "llama-3.1-sonar-small-128k-online",
-		"together":   "meta-llama/Llama-3-70b-chat-hf",
+		"perplexity": "sonar-pro",
+		"together":   "meta-llama/Llama-3.3-70B-Instruct-Turbo",
 		"dashscope":  "qwen-plus",
-		"zhipu":      "glm-4",
+		"zhipu":      "glm-4.6",
 		"wenxin":     "ernie-4.0-8k",
-		"doubao":     "doubao-pro-32k",
-		"hunyuan":    "hunyuan-pro",
-		"minimax":    "abab6.5s-chat",
-		"mimo":       "mimo-3-7b",
+		"doubao":     "doubao-1.5-pro-32k",
+		"huoshan":    "doubao-1.5-pro-32k",
+		"hunyuan":    "hunyuan-turbos-latest",
+		"minimax":    "MiniMax-M2.5",
+		"mimo":       "mimo-v2-flash",
 	}
 
 	if model, ok := defaults[strings.ToLower(name)]; ok {

@@ -8,7 +8,7 @@ type KimiProvider struct {
 // NewKimiProvider creates a new Kimi provider
 func NewKimiProvider(apiKey, baseURL, model string) *KimiProvider {
 	if model == "" {
-		model = "moonshot-v1-8k"
+		model = "kimi-k2-0905-preview"
 	}
 	if baseURL == "" {
 		baseURL = "https://api.moonshot.cn/v1"

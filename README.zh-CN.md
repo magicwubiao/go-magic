@@ -293,11 +293,11 @@ magic usage -d 30
     "openai": {
       "api_key": "your-openai-api-key",
       "base_url": "https://api.openai.com/v1",
-      "models": ["gpt-4", "gpt-3.5-turbo"]
+      "models": ["gpt-5.6", "gpt-5.6-luna"]
     },
     "anthropic": {
       "api_key": "your-anthropic-api-key",
-      "models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229"]
+      "models": ["claude-sonnet-5", "claude-haiku-4-5"]
     },
     "ollama": {
       "base_url": "http://localhost:11434",

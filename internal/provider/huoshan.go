@@ -1,20 +1,32 @@
 package provider
 
-// HuoshanProvider 火山方舟 (字节跳动，兼容OpenAI格式)
+// HuoshanProvider 火山方舟（Volcengine Ark）—— 豆包大模型的官方提供渠道。
+// 豆包（Doubao）由字节跳动通过火山引擎提供，本类型是该服务的唯一实现，
+// "doubao" 仅作为兼容别名保留（配置/命令中两者等价）。
 type HuoshanProvider struct {
 	*OpenAICompatibleProvider
+	endpointID string // Optional endpoint ID for Volcengine
 }
 
-// NewHuoshanProvider creates a new Huoshan provider
+// NewHuoshanProvider creates a new Huoshan (Volcengine Ark) provider
 func NewHuoshanProvider(apiKey, baseURL, model string) *HuoshanProvider {
 	if model == "" {
-		model = "ep-xxxxx" // 火山方舟的endpoint ID
+		model = "doubao-1.5-pro-32k"
 	}
 	if baseURL == "" {
 		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
 	}
 	return &HuoshanProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("huoshan", apiKey, baseURL, model),
+	}
+}
+
+// NewHuoshanProviderWithEndpoint creates a Huoshan provider with custom endpoint ID
+func NewHuoshanProviderWithEndpoint(apiKey, endpointID string) *HuoshanProvider {
+	baseURL := "https://ark.cn-beijing.volces.com/api/v3"
+	return &HuoshanProvider{
+		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("huoshan", apiKey, baseURL, endpointID),
+		endpointID:               endpointID,
 	}
 }
 

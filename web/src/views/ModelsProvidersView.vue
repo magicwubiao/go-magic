@@ -196,7 +196,7 @@ const availableProviders = [
   { label: 'MiniMax', value: 'minimax' },
   { label: 'MiMo', value: 'mimo' },
   { label: '腾讯混元 (Hunyuan)', value: 'hunyuan' },
-  { label: '豆包 (Doubao)', value: 'doubao' },
+  { label: '火山引擎 (Huoshan)', value: 'huoshan' },
   { label: '月之暗面 (Moonshot)', value: 'moonshot' },
   { label: 'OpenRouter', value: 'openrouter' },
   { label: 'Together AI', value: 'together' },

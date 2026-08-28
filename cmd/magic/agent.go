@@ -290,8 +290,8 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewCohereProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "perplexity":
 		return provider.NewPerplexityProvider(cfg.APIKey, cfg.BaseURL, model)
-	case "doubao":
-		return provider.NewDoubaoProvider(cfg.APIKey, cfg.BaseURL, model)
+	case "huoshan", "doubao": // doubao 为旧配置兼容别名
+		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "wenxin":
 		return provider.NewWenxinProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "moonshot":
@@ -300,8 +300,6 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "hunyuan":
 		return provider.NewHunyuanProvider(cfg.APIKey, cfg.BaseURL, model)
-	case "huoshan":
-		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, model)
 	default:
 		if cfg.BaseURL != "" {
 			return provider.NewOpenAICompatibleProvider(name, cfg.APIKey, cfg.BaseURL, model, userModels)

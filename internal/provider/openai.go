@@ -11,7 +11,7 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 		baseURL = "https://api.openai.com/v1"
 	}
 	if model == "" {
-		model = "gpt-4"
+		model = "gpt-5.6"
 	}
 	return &OpenAIProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("openai", apiKey, baseURL, model),

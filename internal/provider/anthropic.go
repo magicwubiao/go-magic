@@ -35,7 +35,7 @@ func (p *AnthropicProvider) GetConvertConfig() *ConvertConfig {
 // NewAnthropicProvider creates a new Anthropic provider
 func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
 	if model == "" {
-		model = "claude-3-5-haiku-20241022" // Default to cost-effective model
+		model = "claude-sonnet-5" // Default to balanced model
 	}
 	return &AnthropicProvider{
 		apiKey: apiKey,

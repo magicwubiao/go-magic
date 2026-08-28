@@ -37,7 +37,7 @@ func (p *GeminiProvider) GetConvertConfig() *ConvertConfig {
 // NewGeminiProvider creates a new Gemini provider
 func NewGeminiProvider(apiKey, baseURL, model string) *GeminiProvider {
 	if model == "" {
-		model = "gemini-1.5-flash" // Default to cost-effective model
+		model = "gemini-3.7-flash" // Default to latest stable model
 	}
 	if baseURL == "" {
 		baseURL = "https://generativelanguage.googleapis.com/v1beta"

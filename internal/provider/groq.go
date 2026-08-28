@@ -9,7 +9,7 @@ type GroqProvider struct {
 // NewGroqProvider creates a new Groq provider
 func NewGroqProvider(apiKey, baseURL, model string) *GroqProvider {
 	if model == "" {
-		model = "mixtral-8x7b-32768" // Default to fast model
+		model = "llama-3.3-70b-versatile" // Default to fast model
 	}
 	if baseURL == "" {
 		baseURL = "https://api.groq.com/openai/v1"

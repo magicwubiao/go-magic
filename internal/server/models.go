@@ -192,6 +192,16 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 
 	modelLower := strings.ToLower(modelName)
 	switch {
+	case strings.Contains(modelLower, "gpt-5.6"):
+		contextLen = 1050000
+		maxOutput = 128000
+		supportsVision = true
+		modelFamily = "openai"
+	case strings.Contains(modelLower, "gpt-5"):
+		contextLen = 400000
+		maxOutput = 128000
+		supportsVision = true
+		modelFamily = "openai"
 	case strings.Contains(modelLower, "gpt-4o"):
 		contextLen = 128000
 		maxOutput = 16384
@@ -210,7 +220,12 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 		contextLen = 16385
 		maxOutput = 4096
 		modelFamily = "openai"
-	case strings.Contains(modelLower, "claude-3-5") || strings.Contains(modelLower, "claude-3.5") || strings.Contains(modelLower, "claude-4"):
+	case strings.Contains(modelLower, "claude-sonnet-5") || strings.Contains(modelLower, "claude-opus-5") || strings.Contains(modelLower, "claude-fable") || strings.Contains(modelLower, "claude-haiku-4") || strings.Contains(modelLower, "claude-4"):
+		contextLen = 200000
+		maxOutput = 64000
+		supportsVision = true
+		modelFamily = "anthropic"
+	case strings.Contains(modelLower, "claude-3-5") || strings.Contains(modelLower, "claude-3.5"):
 		contextLen = 200000
 		maxOutput = 8192
 		supportsVision = true

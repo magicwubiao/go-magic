@@ -65,36 +65,38 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 
 	if model == "" {
 		switch name {
-		case "openai", "custom":
+		case "openai":
+			model = "gpt-5.6"
+		case "custom":
 			model = "gpt-4o-mini"
 		case "anthropic":
-			model = "claude-3-5-sonnet-20241022"
+			model = "claude-sonnet-5"
 		case "deepseek":
 			model = "deepseek-chat"
 		case "kimi", "moonshot":
-			model = "moonshot-v1-8k"
+			model = "kimi-k2-0905-preview"
 		case "zhipu":
-			model = "glm-4"
+			model = "glm-4.6"
 		case "minimax":
-			model = "abab6.5s-chat"
+			model = "MiniMax-M2.5"
 		case "groq":
-			model = "llama3-70b-8192"
+			model = "llama-3.3-70b-versatile"
 		case "openrouter":
-			model = "gpt-4o-mini"
+			model = "openai/gpt-5.6"
 		case "mistral":
-			model = "mistral-small-latest"
+			model = "mistral-large-latest"
 		case "dashscope":
 			model = "qwen-plus"
 		case "doubao", "huoshan":
-			model = "doubao-pro-32k"
+			model = "doubao-1.5-pro-32k"
 		case "perplexity":
-			model = "llama-3.1-sonar-small-128k-online"
+			model = "sonar-pro"
 		case "hunyuan":
-			model = "hunyuan-lite"
+			model = "hunyuan-turbos-latest"
 		case "mimo":
-			model = "moa-v1"
+			model = "mimo-v2-flash"
 		case "ollama":
-			model = "llama3.2"
+			model = "llama3.3"
 		case "vllm":
 			model = "default-model"
 		}

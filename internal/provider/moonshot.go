@@ -10,7 +10,7 @@ type MoonshotProvider struct {
 // NewMoonshotProvider creates a new Moonshot provider
 func NewMoonshotProvider(apiKey, baseURL, model string) *MoonshotProvider {
 	if model == "" {
-		model = "moonshot-v1-8k" // Default model
+		model = "kimi-k2-0905-preview" // Default model
 	}
 	if baseURL == "" {
 		baseURL = "https://api.moonshot.cn/v1"

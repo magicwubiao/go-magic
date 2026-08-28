@@ -58,10 +58,11 @@ func ModelSupportsVision(modelName string) bool {
 
 	// Models that support vision
 	visionModels := []string{
-		"gpt-4o", "gpt-4-turbo", "gpt-4-vision",
+		"gpt-5.6", "gpt-5", "gpt-4o", "gpt-4-turbo", "gpt-4-vision",
+		"claude-sonnet-5", "claude-opus-5", "claude-fable", "claude-haiku-4",
 		"claude-3", "claude-3.5", "claude-3-opus", "claude-3-sonnet",
-		"gemini-1.5", "gemini-pro-vision",
-		"qwen-vl", "qwen-vl-max", "qwen2-vl",
+		"gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5", "gemini-pro-vision",
+		"qwen-vl", "qwen-vl-max", "qwen2-vl", "qwen3-vl",
 	}
 
 	for _, m := range visionModels {
@@ -71,7 +72,7 @@ func ModelSupportsVision(modelName string) bool {
 	}
 
 	// Check for common vision model patterns
-	visionPatterns := []string{"vision", "vl", "gpt-4o", "claude-3", "gemini-1.5"}
+	visionPatterns := []string{"vision", "vl", "gpt-4o", "gpt-5", "claude-3", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3"}
 	for _, pattern := range visionPatterns {
 		if strings.Contains(modelLower, pattern) {
 			return true

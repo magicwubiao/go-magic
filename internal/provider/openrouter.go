@@ -8,7 +8,7 @@ type OpenRouterProvider struct {
 // NewOpenRouterProvider creates a new OpenRouter provider
 func NewOpenRouterProvider(apiKey, baseURL, model string) *OpenRouterProvider {
 	if model == "" {
-		model = "openai/gpt-4"
+		model = "openai/gpt-5.6"
 	}
 	if baseURL == "" {
 		baseURL = "https://openrouter.ai/api/v1"
