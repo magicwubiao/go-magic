@@ -215,7 +215,27 @@ func (p *OpenAICompatibleProvider) SetExtraParam(key string, value interface{}) 
 	p.extraParams[key] = value
 }
 
-// applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段）。
+// defaultTemperature is applied to outbound requests when neither the core
+// request nor extraParams specifies one. Providers' server-side defaults vary
+// and some are more prone to sampling degeneration (repetitive "thinking
+// loops"); an explicit, standard temperature makes behaviour predictable.
+// Users can still override it per-model via extraParams ("temperature").
+const defaultTemperature = 0.7
+
+// skipTemperatureDefault reports whether the configured model is known to
+// reject non-default temperature values (OpenAI o-series / gpt-5 style
+// reasoning models). For those we omit the default and let the provider
+// apply its own fixed value.
+func (p *OpenAICompatibleProvider) skipTemperatureDefault() bool {
+	model := strings.ToLower(p.GetModel())
+	if strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") {
+		return true
+	}
+	return strings.Contains(model, "gpt-5")
+}
+
+// applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段），
+// 并补上默认采样参数（temperature），见 defaultTemperature。
 func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface{}) {
 	p.mu.RLock()
 	params := p.extraParams
@@ -225,6 +245,11 @@ func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface
 			continue // 双重保险：合并时同样跳过保留键
 		}
 		reqBody[k] = v
+	}
+	// Anti-degeneration default: explicit temperature unless already set
+	// (either by the caller or via extraParams) or the model rejects it.
+	if _, ok := reqBody["temperature"]; !ok && !p.skipTemperatureDefault() {
+		reqBody["temperature"] = defaultTemperature
 	}
 }
 

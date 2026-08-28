@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
@@ -928,11 +929,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			"turn": a.iterationCount,
 		})
 
-		// Build LLM request
+		// Build LLM request. buildLLMMessages strips <think> reasoning trails
+		// from the outbound copy — see stripThinkContent for why.
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
-			Messages: a.history,
+			Messages: a.buildLLMMessages(),
 			Tools:    a.tools,
 		}
 
@@ -1085,7 +1087,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
 				Timestamp: time.Now(),
 			})
-			finalResp, finalErr := a.provider.Chat(ctx, a.history)
+			finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages())
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
@@ -1110,7 +1112,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		Timestamp: time.Now(),
 	})
 	if ctx.Err() == nil {
-		if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil && finalResp.Content != "" {
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
 				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
@@ -1277,11 +1279,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 		}
 
-		// Build LLM request
+		// Build LLM request. buildLLMMessages strips <think> reasoning trails
+		// from the outbound copy — see stripThinkContent for why.
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
-			Messages: a.history,
+			Messages: a.buildLLMMessages(),
 			Tools:    a.tools,
 		}
 
@@ -1458,7 +1461,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
 				Timestamp: time.Now(),
 			})
-			finalResp, finalErr := a.provider.Chat(ctx, a.history)
+			finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages())
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
@@ -1601,7 +1604,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		Timestamp: time.Now(),
 	})
 	if ctx.Err() == nil {
-		if finalResp, finalErr := a.provider.Chat(ctx, a.history); finalErr == nil && finalResp.Content != "" {
+		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil && finalResp.Content != "" {
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
 				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
@@ -1742,11 +1745,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			handler("\n>>>TURN_START<<<\n", false)
 		}
 
-		// Build LLM request
+		// Build LLM request. buildLLMMessages strips <think> reasoning trails
+		// from the outbound copy — see stripThinkContent for why.
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
-			Messages: a.history,
+			Messages: a.buildLLMMessages(),
 			Tools:    a.tools,
 		}
 
@@ -1880,9 +1884,13 @@ Please provide a comprehensive, well-structured final response based on these su
 					streamed = false
 					lastErr = fmt.Errorf("stream returned empty content")
 				}
-				// Fallback: if streaming returned no tool calls but the content looks like
-				// the model should have called a tool, retry with non-streaming ChatWithTools
-				if streamed && len(toolCalls) == 0 && fullContent != "" {
+				// Fallback: retry with non-streaming ChatWithTools ONLY when the
+				// content looks like a tool-call payload the stream parser failed
+				// to extract. Unconditionally retrying every text-only answer
+				// wasted a second LLM call per final response and re-prompted a
+				// deliberating model on the same history — a repetition-loop
+				// amplifier.
+				if streamed && len(toolCalls) == 0 && looksLikeUnparsedToolCall(fullContent) {
 					log.Debugf("[WARN] Stream returned no tool calls, falling back to ChatWithTools")
 					type openAIlikeFallback interface {
 						ChatWithTools(ctx context.Context, messages []provider.Message, tools []map[string]interface{}) (*provider.ChatResponse, error)
@@ -2792,6 +2800,207 @@ func (a *Agent) truncateHistory() {
 			}
 		}
 	}
+}
+
+// looksLikeUnparsedToolCall reports whether streamed content appears to be a
+// tool-call payload the stream parser failed to extract (JSON carrying
+// tool-call markers) rather than a legitimate final answer. Only such content
+// justifies the extra non-streaming ChatWithTools retry; retrying on every
+// text-only answer doubles latency/tokens and re-prompts a deliberating
+// model, amplifying repetition loops.
+func looksLikeUnparsedToolCall(content string) bool {
+	c := strings.TrimSpace(stripThinkContent(content))
+	if c == "" {
+		return false
+	}
+	low := strings.ToLower(c)
+	hasName := strings.Contains(low, "\"name\"")
+	hasArgs := strings.Contains(low, "\"arguments\"")
+	hasToolCall := strings.Contains(low, "\"tool_call") || strings.Contains(low, "<tool_call>")
+	if hasToolCall {
+		return true
+	}
+	jsonish := strings.HasPrefix(c, "{") || strings.HasPrefix(c, "[") ||
+		strings.HasPrefix(low, "```json") || strings.HasPrefix(c, "```")
+	return jsonish && hasName && hasArgs
+}
+
+// Repetition-degeneration detection tuning.
+const (
+	repNGramWords    = 4    // words per shingle
+	repNGramMinHits  = 8    // occurrences that indicate degeneration
+	repTailScanRunes = 8192 // only scan the tail of long content
+	repMinContentLen = 200  // don't bother below this length (runes)
+)
+
+// truncateRepetition detects degenerate repetition in the tail of content —
+// e.g. a reasoning model stuck re-emitting "look at the args. GO!" dozens of
+// times — and cuts the repetitive tail, replacing it with a short marker.
+// Near-identical loops (same key phrases recurring with cosmetic variation,
+// like escalating exclamation marks) are caught via word 4-gram frequency,
+// which exact-match comparison would miss. Returns (truncated content, true)
+// when degeneration was detected.
+func truncateRepetition(content string) (string, bool) {
+	runes := []rune(content)
+	if len(runes) < repMinContentLen {
+		return content, false
+	}
+	start := 0
+	if len(runes) > repTailScanRunes {
+		start = len(runes) - repTailScanRunes
+	}
+	tailRunes := runes[start:]
+	n := len(tailRunes)
+
+	// Tokenize into normalized words with rune offsets (for cutting later).
+	type repWord struct {
+		s string
+		o int // rune offset within tail
+	}
+	fields := make([]repWord, 0, 256)
+	i := 0
+	for i < n {
+		for i < n && unicode.IsSpace(tailRunes[i]) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		wStart := i
+		for i < n && !unicode.IsSpace(tailRunes[i]) {
+			i++
+		}
+		w := normalizeRepWord(string(tailRunes[wStart:i]))
+		if w != "" {
+			fields = append(fields, repWord{s: w, o: wStart})
+		}
+	}
+	if len(fields) < repNGramWords*repNGramMinHits {
+		return content, false
+	}
+
+	// Word 4-gram frequency; locate the degenerate run (a tail region where a
+	// shingle recurs back-to-back) and cut inside it, keeping the first two
+	// occurrences of the run for context.
+	hits := make(map[string][]int)
+	for j := 0; j+repNGramWords <= len(fields); j++ {
+		var b strings.Builder
+		for k := 0; k < repNGramWords; k++ {
+			b.WriteString(fields[j+k].s)
+			b.WriteByte(' ')
+		}
+		key := b.String()
+		hits[key] = append(hits[key], j)
+	}
+	cutAt := -1
+	for _, idxs := range hits {
+		N := len(idxs)
+		if N < repNGramMinHits {
+			continue
+		}
+		// Walk backwards from the last occurrence to find the contiguous
+		// degenerate run (occurrences separated by no more than a few words
+		// of filler count as contiguous).
+		runStart := N - 1
+		for k := N - 1; k > 0; k-- {
+			if idxs[k]-idxs[k-1] > 4*repNGramWords {
+				break
+			}
+			runStart = k - 1
+		}
+		if N-runStart >= repNGramMinHits {
+			off := fields[idxs[runStart+2]].o // 3rd occurrence in the run
+			if cutAt == -1 || off < cutAt {
+				cutAt = off
+			}
+		}
+	}
+	if cutAt == -1 {
+		return content, false
+	}
+	out := string(runes[:start]) + string(tailRunes[:cutAt]) +
+		"\n\n[repetitive content truncated by go-magic]"
+	return out, true
+}
+
+// normalizeRepWord keeps only letters/digits (lowercased) so punctuation
+// drift ("GO!" vs "GO!!!") does not break repetition matching. CJK counts as
+// letters and survives intact.
+func normalizeRepWord(w string) string {
+	var b strings.Builder
+	for _, r := range w {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
+}
+
+// stripThinkContent removes <think>...</think> reasoning blocks (and any
+// unterminated <think> tail) from message content. Reasoning trails are kept
+// in history for UI display, but feeding them back to the LLM verbatim makes
+// reasoning models imitate and progressively amplify their own deliberation,
+// which degenerates into repetitive "thinking loops" across turns. Stripping
+// them from the outbound request cuts that feedback loop.
+func stripThinkContent(s string) string {
+	if s == "" || !strings.Contains(s, "<think") {
+		return s
+	}
+	low := strings.ToLower(s)
+	var b strings.Builder
+	cursor := 0
+	for {
+		relIdx := strings.Index(low[cursor:], "<think>")
+		if relIdx == -1 {
+			b.WriteString(s[cursor:])
+			break
+		}
+		openIdx := cursor + relIdx
+		b.WriteString(s[cursor:openIdx])
+		closeRel := strings.Index(low[openIdx:], "</think>")
+		if closeRel == -1 {
+			// Unterminated <think>: drop everything from the opening tag on.
+			break
+		}
+		cursor = openIdx + closeRel + len("</think>")
+		// Skip a single newline right after the closing tag (the agent adds
+		// one when wrapping reasoning) to avoid stacking blank lines.
+		if cursor < len(s) && s[cursor] == '\n' {
+			cursor++
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// thinkPlaceholder is used when stripping would leave an assistant message
+// with no tool calls and empty content — some strict providers reject
+// assistant messages that are empty without tool calls.
+const thinkPlaceholder = "(thinking omitted)"
+
+// buildLLMMessages returns a sanitized copy of the history to send to the
+// LLM: <think> reasoning trails are stripped from assistant messages. The
+// stored history (and therefore the UI) keeps the full content untouched.
+func (a *Agent) buildLLMMessages() []provider.Message {
+	msgs := make([]provider.Message, len(a.history))
+	copy(msgs, a.history)
+	for i := range msgs {
+		if msgs[i].Role != "assistant" {
+			continue
+		}
+		stripped := stripThinkContent(msgs[i].Content)
+		if truncated, rep := truncateRepetition(stripped); rep {
+			log.Warnf("[Agent] truncated repetitive content in assistant history (len %d -> %d)",
+				len(stripped), len(truncated))
+			stripped = truncated
+		}
+		if stripped == "" && msgs[i].Content != "" && len(msgs[i].ToolCalls) == 0 {
+			// Content was pure thinking — keep a placeholder so providers
+			// that reject empty assistant content stay happy.
+			stripped = thinkPlaceholder
+		}
+		msgs[i].Content = stripped
+	}
+	return msgs
 }
 
 // sanitizeHistory repairs malformed history so the next provider call

@@ -264,7 +264,10 @@ func (r *Reflector) buildReflectionPrompt(history []provider.Message, turn int) 
 	recentMsgs := r.getRecentMessages(history, 20)
 	for _, msg := range recentMsgs {
 		role := msg.Role
-		content := msg.Content
+		// Strip <think> reasoning trails: raw deliberation text pollutes the
+		// reflection analysis and can bias the reflector toward "the agent is
+		// stuck in repetitive thinking" false positives.
+		content := stripThinkContent(msg.Content)
 		if len(content) > 500 {
 			content = content[:500] + "... [truncated]"
 		}

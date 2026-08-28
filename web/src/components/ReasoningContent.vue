@@ -152,7 +152,12 @@ const parsedContent = computed(() => {
   // 说明模型把全部内容都放进了 reasoning_content。把思考内容提升为最终回答直接展示，
   // 避免整段被折叠隐藏导致用户看不到任何回答。
   // 流式中（streaming=true）不提升，仍实时展示在展开的折叠区，保留"实时看思考"体验。
-  if (!props.streaming && reasoning && !final) {
+  // 但 hasOpenThink（流结束时 <think> 仍未闭合）是模型"思考退化中断"的典型特征：
+  // 此时整段很可能是重复思考，直接提升会把垃圾文本当正文展示。只有内容较短
+  //（模型只是漏了闭合标签的正常回答）才提升；退化的长思考保留在折叠区，
+  // 其中的重复部分由 collapseRepetitiveThinking 折叠。
+  const promoteable = !hasOpenThink || reasoning.length < 2000
+  if (!props.streaming && reasoning && !final && promoteable) {
     final = reasoning
     reasoning = ''
   }
@@ -160,7 +165,55 @@ const parsedContent = computed(() => {
   return { reasoning, final }
 })
 
-const reasoningPart = computed(() => parsedContent.value.reasoning)
+// ---- 重复思考检测与折叠 ----
+//
+// 思考型模型偶发"重复退化"：同一段短语（甚至带标点/感叹号变化的变体）在思考
+// 中反复出现几十次。这种内容展示价值为零，还会把折叠区撑得巨大。这里按行做
+// 归一化去重统计，连续重复超过阈值时把重复主体替换为占位提示，只保留首次
+// 出现的片段供追溯。
+const REP_MIN_LINE_LEN = 8 // 参与统计的最短行长度（字符）
+const REP_MAX_TAIL = 400 // 超过阈值时保留的重复开头行数
+const REP_TRIGGER_LINES = 8 // 触发折叠的连续相同行数
+
+const normalizeRepLine = (line: string): string =>
+  line
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]/gu, '') // 去掉标点/符号，让 "GO!" 与 "GO!!" 视为相同
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const collapseRepetitiveThinking = (text: string): string => {
+  if (!text) return text
+  const lines = text.split('\n')
+  const normalized = lines.map(normalizeRepLine)
+
+  const result: string[] = []
+  let i = 0
+  let collapsedAny = false
+  while (i < lines.length) {
+    const cur = normalized[i]
+    if (!cur || cur.length < REP_MIN_LINE_LEN) {
+      result.push(lines[i])
+      i++
+      continue
+    }
+    // 统计从 i 开始连续相同（归一化后）的行数
+    let j = i + 1
+    while (j < lines.length && normalized[j] === cur) j++
+    const runLen = j - i
+    if (runLen >= REP_TRIGGER_LINES) {
+      result.push(...lines.slice(i, i + REP_MAX_TAIL))
+      result.push(`… [重复思考内容已折叠，共 ${runLen} 行相似内容]`)
+      collapsedAny = true
+    } else {
+      result.push(...lines.slice(i, j))
+    }
+    i = j
+  }
+  return collapsedAny ? result.join('\n') : text
+}
+
+const reasoningPart = computed(() => collapseRepetitiveThinking(parsedContent.value.reasoning))
 const finalPart = computed(() => parsedContent.value.final)
 
 // ---- Markdown 渲染 ----

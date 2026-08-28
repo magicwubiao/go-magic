@@ -38,10 +38,15 @@ func (p *DashScopeProvider) Name() string {
 	return "dashscope"
 }
 
+// dashscopeDefaultTemperature 与 openai_compatible.applyExtraParams 的
+// 默认值保持一致：显式温度降低服务端默认采样退化（重复思考循环）的概率。
+const dashscopeDefaultTemperature = 0.7
+
 func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
-		"model":    p.model,
-		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
+		"model":       p.model,
+		"messages":    ConvertMessagesForProvider(messages, p.BaseProvider),
+		"temperature": dashscopeDefaultTemperature,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -123,9 +128,10 @@ func (p *DashScopeProvider) Chat(ctx context.Context, messages []Message) (*Chat
 // ChatWithTools implements the ToolCaller interface for DashScope
 func (p *DashScopeProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
-		"model":    p.model,
-		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
-		"tools":    tools,
+		"model":       p.model,
+		"messages":    ConvertMessagesForProvider(messages, p.BaseProvider),
+		"tools":       tools,
+		"temperature": dashscopeDefaultTemperature,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
