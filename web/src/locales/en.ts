@@ -591,6 +591,8 @@ export default {
     botModeEnabledHint: 'Named agent profiles with persistent chats (takes effect after restart)',
     botModeHistoryWindow: 'Chat History Window',
     botModeHistoryWindowHint: 'Messages kept per bot canonical chat; default 200',
+    botModeTurnTimeout: 'Turn Timeout (minutes)',
+    botModeTurnTimeoutHint: 'Time limit per inbound message (all LLM calls + tool runs); default 5 min, applies immediately',
     botModeInjectProtocol: 'Inject Bot Protocol',
     botModeInjectDefault: 'Default (on)',
     botModeInjectProtocolHint: 'Adds bot-to-bot messaging instructions to every bot system prompt',

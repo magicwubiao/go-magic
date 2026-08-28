@@ -56,6 +56,10 @@
             <n-input-number v-model:value="botModeForm.history_window" :min="20" :max="2000" />
             <span style="margin-left: 12px; color: #999;">{{ t('config.botModeHistoryWindowHint') }}</span>
           </n-form-item>
+          <n-form-item :label="t('config.botModeTurnTimeout')">
+            <n-input-number v-model:value="botModeForm.turn_timeout_minutes" :min="1" :max="120" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.botModeTurnTimeoutHint') }}</span>
+          </n-form-item>
           <n-form-item :label="t('config.botModeInjectProtocol')">
             <n-select
               v-model:value="botModeForm.inject_bot_protocol"
@@ -437,6 +441,7 @@ async function saveAgent() {
       bot_mode: {
         enabled: botModeForm.enabled,
         history_window: botModeForm.history_window,
+        turn_timeout_minutes: botModeForm.turn_timeout_minutes,
         // '' means "follow default"; send explicit bool otherwise.
         inject_bot_protocol:
           botModeForm.inject_bot_protocol === 'on' ? true :

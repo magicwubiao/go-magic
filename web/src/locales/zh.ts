@@ -592,6 +592,8 @@ export default {
     botModeEnabledHint: '具名智能体与持久会话（重启后生效）',
     botModeHistoryWindow: '会话历史窗口',
     botModeHistoryWindowHint: '每个 Bot 保留的消息条数上限，默认 200',
+    botModeTurnTimeout: '单轮超时（分钟）',
+    botModeTurnTimeoutHint: '处理一条消息的总时长上限（含所有 LLM 调用与工具执行），默认 5 分钟，保存后立即生效',
     botModeInjectProtocol: '注入 Bot 协议',
     botModeInjectDefault: '默认（开启）',
     botModeInjectProtocolHint: '向每个 Bot 的系统提示词注入 bot 间通信协议说明',
