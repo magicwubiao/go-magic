@@ -30,7 +30,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronUpOutline, ChevronDownOutline } from '@vicons/ionicons5'
-import { marked } from 'marked'
+import { Marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -56,6 +56,10 @@ hljs.registerLanguage('markdown', markdown)
 const props = defineProps<{
   content: string
   streaming?: boolean
+  // 是否允许把"纯思考内容"提升为正文直接展示（默认允许）。
+  // 分段渲染（timeline 切片）时，工具调用之间的中间思考段必须关闭此能力，
+  // 否则纯思考段会被当作正文展开显示，而不是折叠的思考块。
+  allowPromote?: boolean
 }>()
 
 const { t } = useI18n()
@@ -157,7 +161,7 @@ const parsedContent = computed(() => {
   //（模型只是漏了闭合标签的正常回答）才提升；退化的长思考保留在折叠区，
   // 其中的重复部分由 collapseRepetitiveThinking 折叠。
   const promoteable = !hasOpenThink || reasoning.length < 2000
-  if (!props.streaming && reasoning && !final && promoteable) {
+  if (!props.streaming && props.allowPromote !== false && reasoning && !final && promoteable) {
     final = reasoning
     reasoning = ''
   }
@@ -226,11 +230,43 @@ const codeRenderer = (code: string, lang?: string): string => {
   return `<div class="code-block">${copyBtn}<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`
 }
 
-marked.use({
+// 独立 marked 实例：marked 默认导出是全局单例，ChatView 等模块也会对它
+// marked.use()，配置互相覆盖导致渲染行为不可预期。组件内使用独立实例。
+const thinkingMarked = new Marked()
+thinkingMarked.use({
   renderer: { code: codeRenderer },
   breaks: true, // 单换行转 <br>
   gfm: true,
 })
+
+// ---- 思考内容清洗 ----
+// 思考文本是模型的内部草稿，常包含未闭合的代码围栏、残留的 <think> 标签、
+// 裸 HTML 等，直接按 Markdown 渲染会出现"后半段被吞进代码块、布局错乱"等
+// 混乱效果。渲染前做三步清洗：
+//  1) 去掉残留的 think 标签（嵌套/解析残留）
+//  2) 代码围栏外的 < 转义为 &lt;，防止未闭合标签破坏布局
+//     （围栏内不转义：marked 会自己转义，预先转义会二次转义成 &amp;lt;）
+//  3) 围栏出现奇数次时补一个闭合围栏，防止未闭合代码块吞掉后续内容
+function sanitizeThinking(src: string): string {
+  if (!src) return src
+  const stripped = src.replace(/<\/?\s*think\s*>/gi, '')
+  const lines = stripped.split('\n')
+  const out: string[] = []
+  let fenceCount = 0
+  for (const line of lines) {
+    if (/^\s{0,3}(```|~~~)/.test(line)) {
+      fenceCount++
+      out.push(line)
+      continue
+    }
+    out.push(fenceCount % 2 === 1 ? line : line.replace(/</g, '&lt;'))
+  }
+  let text = out.join('\n')
+  if (fenceCount % 2 === 1) {
+    text += '\n```'
+  }
+  return text
+}
 
 function handleCodeBlockClick(e: MouseEvent) {
   const target = e.target as HTMLElement
@@ -256,13 +292,13 @@ onUnmounted(() => {
 const renderedReasoning = computed(() => {
   const content = reasoningPart.value
   if (!content) return ''
-  return marked.parse(content) as string
+  return thinkingMarked.parse(sanitizeThinking(content)) as string
 })
 
 const renderedFinal = computed(() => {
   const content = finalPart.value
   if (!content) return ''
-  return marked.parse(content) as string
+  return thinkingMarked.parse(content) as string
 })
 </script>
 

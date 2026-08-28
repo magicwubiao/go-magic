@@ -181,7 +181,7 @@
               <div class="tool-calls-wrap">
                 <template v-for="item in assistantMessageRenderItems(msg)" :key="item.id">
                   <div v-if="item.kind === 'text'" class="assistant-content">
-                    <ReasoningContent :content="item.content" :streaming="false" />
+                    <ReasoningContent :content="item.content" :streaming="false" :allow-promote="item.allowPromote" />
                   </div>
                   <ToolCallBlock v-else :tool-call="item.toolCall" />
                 </template>
@@ -254,7 +254,7 @@
               <div v-if="streamRenderItems.length > 0" class="tool-calls-wrap">
                 <template v-for="item in streamRenderItems" :key="item.id">
                   <div v-if="item.kind === 'text'" class="assistant-content">
-                    <ReasoningContent :content="item.content" :streaming="chatStore.streaming" />
+                    <ReasoningContent :content="item.content" :streaming="chatStore.streaming" :allow-promote="item.allowPromote" />
                   </div>
                   <ToolCallBlock v-else :tool-call="item.toolCall" />
                 </template>
@@ -635,7 +635,7 @@ const agentPhase = computed(() => {
 // - 没有 timeline（历史老数据 / 会话详情从后端加载还没补快照）时退化为：
 //     整段 text + 末尾所有 toolCalls（保持兼容）
 type StreamRenderItem =
-  | { id: string; kind: 'text'; content: string }
+  | { id: string; kind: 'text'; content: string; allowPromote?: boolean }
   | { id: string; kind: 'tool'; toolCall: ToolCallEvent }
 
 function buildMessageRenderItems(
@@ -686,6 +686,16 @@ function buildMessageRenderItems(
       kind: 'text',
       content: content.slice(cursor),
     })
+  }
+  // 分段模式下，只有末尾的 text 段才允许 ReasoningContent 把"纯思考内容"
+  // 提升为正文展示。中间段（工具调用之间的思考）若也允许提升，纯思考段会
+  // 以普通文本展开显示而不是折叠的思考块（即"思考内容没折叠"的问题）。
+  // 退化模式（无 timeline，整段 content 一个 text 项）不标记，保持原兜底行为。
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
+    if (it && it.kind === 'text') {
+      it.allowPromote = i === items.length - 1
+    }
   }
   return items
 }
@@ -775,7 +785,9 @@ const codeRenderer = (code: string, lang?: string): string => {
   return `<div class="code-block">${copyBtn}<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`
 }
 
-marked.use({ renderer: { code: codeRenderer } })
+// ReasoningContent 已改用独立 Marked 实例，不再往全局单例上叠加配置；
+// 这里显式声明 breaks/gfm，保持正文渲染行为与之前（配置被叠加后）一致。
+marked.use({ renderer: { code: codeRenderer }, breaks: true, gfm: true })
 
 // 处理代码块按钮点击（事件委托替代 inline onclick，避免 v-html + inline handler XSS 风险）
 function handleCodeBlockClick(e: MouseEvent) {
