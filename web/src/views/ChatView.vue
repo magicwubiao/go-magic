@@ -178,13 +178,24 @@
           <template v-else-if="msg.role === 'assistant'">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
-              <div class="tool-calls-wrap">
-                <template v-for="item in assistantMessageRenderItems(msg)" :key="item.id">
-                  <div v-if="item.kind === 'text'" class="assistant-content">
-                    <ReasoningContent :content="item.content" :streaming="false" :allow-promote="item.allowPromote" />
+              <div class="assistant-content">
+                <ReasoningContent :content="msg.content" :streaming="false" />
+                <!-- 工具调用统计（置于思考过程下方，含各工具成功/失败明细） -->
+                <div v-if="toolCallStats(msg).total > 0" class="tool-stats-block">
+                  <div class="tool-stats-line">
+                    <n-icon size="13"><BuildOutline /></n-icon>
+                    <span>{{ t('chat.toolStats', toolCallStats(msg)) }}</span>
                   </div>
-                  <ToolCallBlock v-else :tool-call="item.toolCall" />
-                </template>
+                  <div class="tool-stats-detail">
+                    <span v-for="ts in toolCallStats(msg).tools" :key="ts.name" class="tool-chip" :class="{ 'has-failed': ts.failed > 0, 'is-running': ts.running > 0 }">
+                      <span class="tool-chip-name">{{ ts.name }}</span>
+                      <span class="tool-chip-count">×{{ ts.total }}</span>
+                      <span v-if="ts.success > 0" class="tool-chip-ok">✓{{ ts.success }}</span>
+                      <span v-if="ts.failed > 0" class="tool-chip-fail">✗{{ ts.failed }}</span>
+                      <span v-if="ts.running > 0" class="tool-chip-run">⟳</span>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -241,7 +252,7 @@
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
               <!-- Status panel when no content yet & no running tools -->
-              <div v-if="streamRenderItems.length === 0 && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
+              <div v-if="!streamContentOnly && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
                 <div class="status-header">
                   <div class="status-spinner"></div>
                   <span class="status-phase">{{ agentPhase }}</span>
@@ -250,14 +261,24 @@
                 <div class="status-hint">{{ t(thinkingHints[hintIndex]) }}</div>
               </div>
 
-              <!-- Text & tool timeline interleaved -->
-              <div v-if="streamRenderItems.length > 0" class="tool-calls-wrap">
-                <template v-for="item in streamRenderItems" :key="item.id">
-                  <div v-if="item.kind === 'text'" class="assistant-content">
-                    <ReasoningContent :content="item.content" :streaming="chatStore.streaming" :allow-promote="item.allowPromote" />
-                  </div>
-                  <ToolCallBlock v-else :tool-call="item.toolCall" />
-                </template>
+              <!-- 思考过程 + 最终回答，工具调用统计（思考过程下方） -->
+              <div v-if="streamContentOnly" class="assistant-content">
+                <ReasoningContent :content="streamContentOnly" :streaming="chatStore.streaming" />
+              </div>
+              <div v-if="toolCallStats().total > 0" class="tool-stats-block">
+                <div class="tool-stats-line">
+                  <n-icon size="13"><BuildOutline /></n-icon>
+                  <span>{{ t('chat.toolStats', toolCallStats()) }}</span>
+                </div>
+                <div class="tool-stats-detail">
+                  <span v-for="ts in toolCallStats().tools" :key="ts.name" class="tool-chip" :class="{ 'has-failed': ts.failed > 0, 'is-running': ts.running > 0 }">
+                    <span class="tool-chip-name">{{ ts.name }}</span>
+                    <span class="tool-chip-count">×{{ ts.total }}</span>
+                    <span v-if="ts.success > 0" class="tool-chip-ok">✓{{ ts.success }}</span>
+                    <span v-if="ts.failed > 0" class="tool-chip-fail">✗{{ ts.failed }}</span>
+                    <span v-if="ts.running > 0" class="tool-chip-run">⟳</span>
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -514,16 +535,15 @@ hljs.registerLanguage('json', json)
 hljs.registerLanguage('xml', xml)
 hljs.registerLanguage('css', css)
 hljs.registerLanguage('markdown', markdown)
-import { useChatStore, type ToolCallEvent, type TimelineSegment } from '@/stores/chat'
+import { useChatStore, type ToolCallEvent } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import { useModelsStore } from '@/stores/models'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
-import ToolCallBlock from '@/components/ToolCallBlock.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, ChevronDownOutline, ChevronForwardOutline, RefreshOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, ChevronDownOutline, ChevronForwardOutline, RefreshOutline, BuildOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -630,90 +650,44 @@ const agentPhase = computed(() => {
   return t('chat.thinkingPhase')
 })
 
-// 流式渲染/历史消息共用：把 (content + timeline + toolCalls) 切成按顺序穿插的渲染项。
-// - 有 timeline 时严格按 timeline 切片（相邻 text 段合并，末尾自动补 tail）
-// - 没有 timeline（历史老数据 / 会话详情从后端加载还没补快照）时退化为：
-//     整段 text + 末尾所有 toolCalls（保持兼容）
-type StreamRenderItem =
-  | { id: string; kind: 'text'; content: string; allowPromote?: boolean }
-  | { id: string; kind: 'tool'; toolCall: ToolCallEvent }
-
-function buildMessageRenderItems(
-  content: string,
-  timeline: TimelineSegment[] | null | undefined,
-  toolCalls: ToolCallEvent[] | null | undefined,
-): StreamRenderItem[] {
-  const items: StreamRenderItem[] = []
-  const tools = toolCalls ?? []
-  const segs = timeline ?? []
-
-  if (segs.length === 0) {
-    // ===== 退化：无 timeline 快照 =====
-    if (content) items.push({ id: 'msg_text_all', kind: 'text', content })
-    for (const tc of tools) {
-      items.push({ id: 'msg_tc_' + tc.id, kind: 'tool', toolCall: tc })
-    }
-    return items
-  }
-
-  // ===== 有 timeline 时按段切片 =====
-  let cursor = 0
-  for (const seg of segs) {
-    if (seg.kind === 'text') {
-      const end = Math.min(seg.end, content.length)
-      if (end > cursor) {
-        items.push({
-          id: seg.id,
-          kind: 'text',
-          content: content.slice(cursor, end),
-        })
-        cursor = end
-      }
-    } else {
-      const tc = tools.find(t => t.id === seg.toolCallId)
-      if (tc) {
-        items.push({
-          id: seg.id,
-          kind: 'tool',
-          toolCall: tc,
-        })
-      }
-    }
-  }
-  if (cursor < content.length) {
-    items.push({
-      id: 'seg_tail_' + content.length,
-      kind: 'text',
-      content: content.slice(cursor),
-    })
-  }
-  // 分段模式下，只有末尾的 text 段才允许 ReasoningContent 把"纯思考内容"
-  // 提升为正文展示。中间段（工具调用之间的思考）若也允许提升，纯思考段会
-  // 以普通文本展开显示而不是折叠的思考块（即"思考内容没折叠"的问题）。
-  // 退化模式（无 timeline，整段 content 一个 text 项）不标记，保持原兜底行为。
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i]
-    if (it && it.kind === 'text') {
-      it.allowPromote = i === items.length - 1
-    }
-  }
-  return items
+// 工具调用统计：不再穿插展示工具详情，只在思考过程上方汇总展示。
+// 兼容两种数据源：流式中的 chatStore.toolCalls 和历史消息的 tool_calls_snapshot。
+interface ToolStatItem {
+  name: string
+  total: number
+  success: number
+  failed: number
+  running: number
 }
 
-const streamRenderItems = computed<StreamRenderItem[]>(() => {
-  return buildMessageRenderItems(
-    chatStore.streamContent,
-    chatStore.streamingSegments,
-    chatStore.toolCalls,
-  )
-})
-
-// 历史 assistant 消息（msg）的穿插渲染项
-function assistantMessageRenderItems(msg: sessionsApi.Message): StreamRenderItem[] {
-  const timeline = (msg.streaming_timeline_snapshot ?? []) as TimelineSegment[]
-  const toolCalls = (msg.tool_calls_snapshot ?? []) as ToolCallEvent[]
-  return buildMessageRenderItems(msg.content ?? '', timeline, toolCalls)
+function toolCallStats(msg?: sessionsApi.Message): { total: number; success: number; failed: number; running: number; tools: ToolStatItem[] } {
+  const list: ToolCallEvent[] = msg
+    ? ((msg.tool_calls_snapshot ?? []) as ToolCallEvent[])
+    : chatStore.toolCalls
+  let success = 0
+  let failed = 0
+  let running = 0
+  const byName = new Map<string, ToolStatItem>()
+  for (const tc of list) {
+    let s = 0, f = 0, r = 0
+    if (tc.status === 'running') { running++; r = 1 }
+    else if (tc.status === 'error' || tc.success === false) { failed++; f = 1 }
+    else { success++; s = 1 }
+    let item = byName.get(tc.name)
+    if (!item) {
+      item = { name: tc.name, total: 0, success: 0, failed: 0, running: 0 }
+      byName.set(tc.name, item)
+    }
+    item.total++
+    item.success += s
+    item.failed += f
+    item.running += r
+  }
+  return { total: list.length, success, failed, running, tools: Array.from(byName.values()) }
 }
+
+// 流式期间只展示思考过程与最终回答文本（不再按 timeline 切片穿插工具块）
+const streamContentOnly = computed(() => chatStore.streamContent || '')
 
 // Rotating hints during thinking
 const thinkingHints = [
@@ -1544,6 +1518,88 @@ onMounted(async () => {
   margin-bottom: 6px;
 }
 
+/* 工具调用统计（思考过程下方）：汇总行 + 各工具明细 chip */
+.tool-stats-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-stats-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(108, 92, 231, 0.08);
+  color: #6c5ce7;
+  font-size: 12px;
+  line-height: 1.4;
+  width: fit-content;
+}
+
+.tool-stats-line .n-icon {
+  opacity: 0.85;
+}
+
+.tool-stats-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(108, 92, 231, 0.06);
+  border: 1px solid rgba(108, 92, 231, 0.18);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6c5ce7;
+  max-width: 100%;
+}
+
+.tool-chip-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-chip-count {
+  opacity: 0.75;
+}
+
+.tool-chip-ok {
+  color: #18a058;
+  font-weight: 600;
+}
+
+.tool-chip-fail {
+  color: #d03050;
+  font-weight: 600;
+}
+
+.tool-chip-run {
+  color: #f0a020;
+  font-weight: 600;
+}
+
+.tool-chip.has-failed {
+  border-color: rgba(208, 48, 80, 0.35);
+  background: rgba(208, 48, 80, 0.05);
+}
+
+.tool-chip.is-running {
+  border-color: rgba(240, 160, 32, 0.4);
+  background: rgba(240, 160, 32, 0.06);
+}
+
 .system-bubble {
   background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
   color: #854d0e;
@@ -2004,6 +2060,39 @@ onMounted(async () => {
 
   .assistant-content {
     color: #e5e7eb;
+  }
+
+  .tool-stats-line {
+    background: rgba(139, 124, 246, 0.15);
+    color: #a29bfe;
+  }
+
+  .tool-chip {
+    background: rgba(139, 124, 246, 0.12);
+    border-color: rgba(139, 124, 246, 0.3);
+    color: #a29bfe;
+  }
+
+  .tool-chip-ok {
+    color: #63e2b7;
+  }
+
+  .tool-chip-fail {
+    color: #e88080;
+  }
+
+  .tool-chip-run {
+    color: #f2c97d;
+  }
+
+  .tool-chip.has-failed {
+    border-color: rgba(232, 128, 128, 0.4);
+    background: rgba(232, 128, 128, 0.08);
+  }
+
+  .tool-chip.is-running {
+    border-color: rgba(242, 201, 125, 0.4);
+    background: rgba(242, 201, 125, 0.08);
   }
 
   .system-bubble {

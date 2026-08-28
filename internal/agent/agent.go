@@ -1032,9 +1032,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		for _, result := range toolResults {
 			var resultContent string
 			if result.Err != nil {
-				resultContent = utils.ErrTruncateWithSpill(result.Err, result.Name, a.maxMsgLen)
+				resultContent = utils.ErrTruncateDetailed(fmt.Sprintf("Error: %v", result.Err), result.Name+"_error", a.maxMsgLen)
 			} else {
-				resultContent = utils.TruncateWithSpill(result.Content, result.Name, a.maxMsgLen)
+				resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 			}
 			a.history = append(a.history, provider.Message{
 				Role:       "tool",
@@ -1520,15 +1520,15 @@ Please provide a comprehensive, well-structured final response based on these su
 			var resultContent string
 			if result, ok := toolResults[tcID]; ok {
 				if result.Err != nil {
-					resultContent = utils.ErrTruncateWithSpill(result.Err, result.Name, a.maxMsgLen)
+					resultContent = utils.ErrTruncateDetailed(fmt.Sprintf("Error: %v", result.Err), result.Name+"_error", a.maxMsgLen)
 					toolErr = result.Err
 				} else {
-					resultContent = utils.TruncateWithSpill(result.Content, result.Name, a.maxMsgLen)
+					resultContent = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 				}
 			} else {
 				// No result found for this tool call
 				if execErr != nil {
-					resultContent = utils.TruncateWithSpill(fmt.Sprintf("Error: %v", execErr), tc.GetToolName(), a.maxMsgLen)
+					resultContent = utils.TruncateDetailed(fmt.Sprintf("Error: %v", execErr), a.maxMsgLen)
 					toolErr = execErr
 				} else {
 					resultContent = "Error: No result returned for tool call"
@@ -2128,9 +2128,9 @@ Please provide a comprehensive, well-structured final response based on these su
 			result := results[tc.ID]
 			content := result.Content
 			if result.Err != nil {
-				content = utils.ErrTruncateWithSpill(result.Err, tc.GetToolName(), a.maxMsgLen)
+				content = utils.ErrTruncateDetailed(fmt.Sprintf("Error: %v", result.Err), tc.GetToolName()+"_error", a.maxMsgLen)
 			} else {
-				content = utils.TruncateWithSpill(content, tc.GetToolName(), a.maxMsgLen)
+				content = utils.TruncateDetailed(content, a.maxMsgLen)
 			}
 
 			a.history = append(a.history, provider.Message{

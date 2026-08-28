@@ -194,6 +194,7 @@ export default {
     taskPlanningDesc: 'Analyze task complexity and create execution plan',
     executing: 'Executing...',
     executingTool: 'Running {name}',
+    toolStats: '{total} tool call(s) · {success} succeeded · {failed} failed',
     thinkingPhase: 'Thinking...',
     hintAnalyzing: 'Analyzing your request...',
     hintPlanning: 'Creating an execution plan...',

@@ -195,6 +195,7 @@ export default {
     taskPlanningDesc: '分析任务复杂度并制定执行计划',
     executing: '执行中...',
     executingTool: '正在执行 {name}',
+    toolStats: '工具调用 {total} 次 · 成功 {success} · 失败 {failed}',
     thinkingPhase: '思考中...',
     hintAnalyzing: '正在分析你的请求...',
     hintPlanning: '正在制定执行计划...',

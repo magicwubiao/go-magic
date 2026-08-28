@@ -278,16 +278,6 @@
           >
             <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
           </n-button>
-          <n-button
-            v-if="showParentDir"
-            size="tiny"
-            quaternary
-            class="breadcrumb-item"
-            :title="t('chat.goParent')"
-            @click="navigateDir(dirParent)"
-          >
-            <template #icon><n-icon :component="ArrowUpOutline" :size="13" /></template>
-          </n-button>
           <n-icon v-if="dirCurrentPath" :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
           <n-text v-if="dirCurrentPath" class="breadcrumb-path" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
         </div>
@@ -572,7 +562,6 @@ import {
   ChevronForwardOutline, 
   ChevronDownOutline,
   ChevronUpOutline,
-  ArrowUpOutline,
   ChatbubblesOutline,
   FolderOpenOutline,
   FolderOutline,

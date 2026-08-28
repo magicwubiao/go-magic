@@ -300,12 +300,12 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			result := results[tc.ID]
 			var content string
 			if result.Err != nil {
-				content = utils.ErrTruncateWithSpill(result.Err, tc.GetToolName(), a.maxMsgLen)
+				content = utils.ErrTruncateDetailed(fmt.Sprintf("Error: %v", result.Err), tc.GetToolName()+"_error", a.maxMsgLen)
 				if checkpoint != nil {
 					a.cortexManager.Execution.StoreError(checkpoint, tc.GetToolName(), result.Err)
 				}
 			} else {
-				content = utils.TruncateWithSpill(result.Content, tc.GetToolName(), a.maxMsgLen)
+				content = utils.TruncateDetailed(result.Content, a.maxMsgLen)
 			}
 
 			a.history = append(a.history, provider.Message{
