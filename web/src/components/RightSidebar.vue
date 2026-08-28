@@ -279,7 +279,7 @@
             <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
           </n-button>
           <n-button
-            v-if="dirCurrentPath"
+            v-if="showParentDir"
             size="tiny"
             quaternary
             class="breadcrumb-item"
@@ -349,13 +349,13 @@
           <template v-else>
             <!-- Parent directory entry (..) -->
             <div
-              v-if="dirCurrentPath"
+              v-if="showParentDir"
               class="file-tree-item parent-dir-item"
               title=".."
               @click="navigateDir(dirParent)"
             >
-              <n-icon size="16" color="#999">
-                <ArrowUpOutline />
+              <n-icon size="16" color="#18a058">
+                <FolderOutline />
               </n-icon>
               <span class="file-name">..</span>
             </div>
@@ -590,7 +590,6 @@ import {
   AlertCircleOutline,
   CheckmarkCircleOutline,
   CheckboxOutline,
-  CloseCircleOutline,
   EyeOutline,
   CloudUploadOutline,
   EllipsisVerticalOutline,
@@ -732,6 +731,24 @@ const dirParent = computed(() => {
   if (isWinDrive && /^[A-Za-z]:$/.test(parent)) parent += '/'
   else if (startsWithRoot && !parent.startsWith('/')) parent = '/' + parent
   return parent
+})
+
+// 统一路径分隔符并忽略 Windows 大小写差异，用于"当前目录 == 会话工作目录"判断
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// 是否显示"返回上一级(..)"入口。
+// 带 session 时后端 resolveFSPath 会把路径严格限制在会话工作目录内，
+// 在会话根目录点击".."会请求父目录并返回 "path outside session directory"，
+// 导致列表被清空（表现为"变成空目录"）。因此在会话根目录隐藏该入口。
+const showParentDir = computed(() => {
+  if (!dirCurrentPath.value) return false
+  const root = normalizeDirPath(chatStore.currentWorkDir || '')
+  if (!root) return true
+  return normalizeDirPath(dirCurrentPath.value) !== root
 })
 
 const sortedFsEntries = computed(() => {
@@ -946,10 +963,11 @@ async function loadFiles(path?: string) {
   try {
     const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, undefined, showHiddenFiles.value)
     dirCurrentPath.value = res.current
-    fsEntries.value = res.entries || []
+    // 无 session 时后端会自动附加一条 ".." 父目录条目，前端已单独渲染 ".." 项，这里过滤避免重复
+    fsEntries.value = (res.entries || []).filter(e => e.name !== '..')
   } catch (e) {
+    // 失败时保留原列表，避免界面闪现"空目录"
     console.error('Failed to list files:', e)
-    fsEntries.value = []
   } finally {
     filesLoading.value = false
   }

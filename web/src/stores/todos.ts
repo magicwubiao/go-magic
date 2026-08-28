@@ -7,9 +7,6 @@ import { useChatStore } from './chat'
 
 let globalEventSource: EventSource | null = null
 let globalEventSourceRefCount = 0
-let globalPollingTimer: ReturnType<typeof setInterval> | null = null
-let globalPollingRefCount = 0
-const GLOBAL_POLLING_INTERVAL = 30 * 1000
 
 // resolveSessionId 返回"本次 listTodos 应该过滤的 session_id 值"。
 // 显式传的优先；否则取当前 chatStore.activeSessionId。
@@ -71,20 +68,6 @@ function releaseGlobalEventSource(): void {
   }
 }
 
-function ensureGlobalPolling(onTick: () => void): void {
-  globalPollingRefCount++
-  if (globalPollingTimer) return
-  globalPollingTimer = setInterval(() => onTick(), GLOBAL_POLLING_INTERVAL)
-}
-
-function releaseGlobalPolling(): void {
-  globalPollingRefCount = Math.max(0, globalPollingRefCount - 1)
-  if (globalPollingRefCount === 0 && globalPollingTimer) {
-    clearInterval(globalPollingTimer)
-    globalPollingTimer = null
-  }
-}
-
 export const useTodosStore = defineStore('todos', () => {
   const todos = ref<TodoItem[]>([])
   const loading = ref(false)
@@ -111,8 +94,8 @@ export const useTodosStore = defineStore('todos', () => {
       if (s !== 0) return s
       const p = (priorityRank[a.priority] ?? 99) - (priorityRank[b.priority] ?? 99)
       if (p !== 0) return p
-      // created_asc：旧的在前，新的在后，与后端默认排序一致
-      return (a.created_at || '').localeCompare(b.created_at || '')
+      // created_asc：旧的在前，新的在后，与后端默认排序一致（created_at 为 Unix 秒时间戳，数值升序）
+      return (a.created_at || 0) - (b.created_at || 0)
     })
     return list
   })
@@ -136,7 +119,7 @@ export const useTodosStore = defineStore('todos', () => {
       // 不能省略；否则后端会把它解释为"完全未传会话 key → 返回全量"，导致跨会话混。
       apiParams.session_id = effectiveSessionId
       const data = (await todosApi.listTodos(apiParams)) as TodoListResponse
-      // 三路刷新（SSE / 轮询 / chatStore.onTodoChange）竞争时，按 id 去重，避免 UI 上出现重复卡片
+      // 双路刷新（SSE / chatStore.onTodoChange）竞争时，按 id 去重，避免 UI 上出现重复卡片
       const seen = new Set<string>()
       const unique: TodoItem[] = []
       for (const t of (data?.todos as TodoItem[]) ?? []) {
@@ -163,10 +146,8 @@ export const useTodosStore = defineStore('todos', () => {
   function ensureLiveSubscription() {
     if (liveSubscribed.value) return
     liveSubscribed.value = true
+    // 仅依赖 SSE 实时推送刷新，不做定时轮询
     ensureGlobalEventSource(() => {
-      void loadTodos()
-    })
-    ensureGlobalPolling(() => {
       void loadTodos()
     })
   }
@@ -175,7 +156,6 @@ export const useTodosStore = defineStore('todos', () => {
     if (!liveSubscribed.value) return
     liveSubscribed.value = false
     releaseGlobalEventSource()
-    releaseGlobalPolling()
   }
 
   async function createTodo(data: { title: string; description?: string; priority?: string }) {
