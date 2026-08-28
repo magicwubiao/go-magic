@@ -549,7 +549,7 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("session not found: %w", err)
 		}
-		sessionWorkDir := sess.WorkDir
+		sessionWorkDir := normalizeFSPath(sess.WorkDir)
 		if sessionWorkDir == "" {
 			return "", fmt.Errorf("session has no work_dir")
 		}
@@ -565,10 +565,10 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 			return absSessionDir, nil
 		}
 		var targetPath string
-		if filepath.IsAbs(path) {
-			targetPath = filepath.Clean(path)
+		if np := normalizeFSPath(path); filepath.IsAbs(np) {
+			targetPath = filepath.Clean(np)
 		} else {
-			targetPath = filepath.Clean(filepath.Join(absSessionDir, path))
+			targetPath = filepath.Clean(filepath.Join(absSessionDir, np))
 		}
 		relPath, err := filepath.Rel(absSessionDir, targetPath)
 		if err != nil {
@@ -582,7 +582,12 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 		}
 		realPath, err := filepath.EvalSymlinks(targetPath)
 		if err != nil {
-			return "", fmt.Errorf("invalid path")
+			// 目标不存在或无法解析符号链接时，回退到清洗后的路径，
+			// 避免刚创建的文件/目录因 EvalSymlinks 失败而报 "invalid path"。
+			if _, statErr := os.Stat(targetPath); statErr == nil || os.IsNotExist(statErr) {
+				return filepath.Clean(targetPath), nil
+			}
+			return "", fmt.Errorf("invalid path: %w", err)
 		}
 		realRelPath, err := filepath.Rel(absSessionDir, realPath)
 		if err != nil || strings.HasPrefix(realRelPath, ".."+string(filepath.Separator)) || realRelPath == ".." {
@@ -593,7 +598,21 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 	if path == "" {
 		path = s.cfg.WorkingDir
 	}
-	return sanitizeFSPath(path)
+	return sanitizeFSPath(normalizeFSPath(path))
+}
+
+// normalizeFSPath 修复前端/历史数据中常见的 Windows 路径变体，
+// 使 "D:/a/b"、"/D:/a/b"、"D:\a\b" 等都能被 filepath.IsAbs 正确识别。
+// 仅在 Windows 盘符形路径上生效，Unix 路径与相对路径原样返回。
+func normalizeFSPath(path string) string {
+	// 检测 Windows 盘符前缀，兼容 "/D:/a" 与 "D:/a" 两种形态
+	off := 0
+	if len(path) >= 3 && (path[0] == '/' || path[0] == '\\') && path[2] == ':' {
+		off = 1 // 去掉盘符前多余的路径分隔符（浏览器/前端常见）
+	} else if !(len(path) >= 2 && path[1] == ':') {
+		return path // 非 Windows 盘符路径，不改动
+	}
+	return filepath.FromSlash(path[off:])
 }
 
 func (s *Server) handleFSRename(w http.ResponseWriter, r *http.Request) {
