@@ -14,7 +14,7 @@ go-magic 是一个功能完整的 AI Agent 框架，后端使用 Go 编写，前
 
 ### 多 Provider 支持 (22+)
 
-DeepSeek、OpenAI、Anthropic、Gemini、Ollama、vLLM、Groq、硅基流动、Kimi、智谱GLM、通义千问、文心一言、MiniMax、MiMo、腾讯混元、豆包、Moonshot、OpenRouter、Together AI、Mistral AI、Cohere、Perplexity，以及任何兼容 OpenAI 的端点。
+DeepSeek、OpenAI、Anthropic、Gemini、Ollama、vLLM、Groq、硅基流动、智谱GLM、通义千问、文心一言、MiniMax、MiMo、腾讯混元、豆包(火山引擎)、Moonshot (Kimi)、OpenRouter、Together AI、Mistral AI、Cohere、Perplexity，以及任何兼容 OpenAI 的端点。
 
 ### 单 Provider 多模型
 

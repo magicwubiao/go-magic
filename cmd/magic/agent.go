@@ -266,8 +266,6 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewDeepSeekProvider(cfg.APIKey, cfg.BaseURL, model, userModels)
 	case "dashscope":
 		return provider.NewDashScopeProvider(cfg.APIKey, cfg.BaseURL, model)
-	case "kimi":
-		return provider.NewKimiProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "minimax":
 		return provider.NewMiniMaxProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "ollama":
@@ -294,7 +292,7 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewHuoshanProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "wenxin":
 		return provider.NewWenxinProvider(cfg.APIKey, cfg.BaseURL, model)
-	case "moonshot":
+	case "moonshot", "kimi": // kimi 为旧配置兼容别名（Kimi 即 Moonshot 月之暗面）
 		return provider.NewMoonshotProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "mimo":
 		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, model)

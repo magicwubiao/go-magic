@@ -237,6 +237,7 @@ export default {
     download: '下载',
     refresh: '刷新',
     goParent: '返回上级',
+    goRoot: '根目录',
     delete: '删除',
     confirmDelete: '确定要删除 {name} 吗？',
     renamed: '已重命名',

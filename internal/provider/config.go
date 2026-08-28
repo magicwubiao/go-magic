@@ -89,7 +89,7 @@ func getDefaultBaseURL(name string) string {
 		"deepseek":   "https://api.deepseek.com",
 		"gemini":     "https://generativelanguage.googleapis.com/v1beta",
 		"groq":       "https://api.groq.com/openai/v1",
-		"kimi":       "https://api.moonshot.cn/v1",
+		"kimi":       "https://api.moonshot.cn/v1", // kimi 为 moonshot 兼容别名
 		"moonshot":   "https://api.moonshot.cn/v1",
 		"openrouter": "https://openrouter.ai/api/v1",
 		"ollama":     "http://localhost:11434",
@@ -101,7 +101,7 @@ func getDefaultBaseURL(name string) string {
 		"dashscope":  "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		"zhipu":      "https://open.bigmodel.cn/api/paas/v4",
 		"wenxin":     "https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1",
-		"doubao":     "https://ark.cn-beijing.volces.com/api/v3",
+		"doubao":     "https://ark.cn-beijing.volces.com/api/v3", // doubao 为 huoshan 兼容别名
 		"huoshan":    "https://ark.cn-beijing.volces.com/api/v3",
 		"hunyuan":    "https://hunyuan.cloud.tencent.com/v1",
 		"minimax":    "https://api.minimax.chat/v1",
@@ -123,7 +123,7 @@ func getDefaultModel(name string) string {
 		"deepseek":   "deepseek-chat",    // stable alias, follows latest V3.x
 		"gemini":     "gemini-3.7-flash", // latest stable; also: gemini-3.6-flash, gemini-3.1-pro-preview
 		"groq":       "llama-3.3-70b-versatile",
-		"kimi":       "kimi-k2-0905-preview",
+		"kimi":       "kimi-k2-0905-preview", // kimi 为 moonshot 兼容别名
 		"moonshot":   "kimi-k2-0905-preview",
 		"openrouter": "openai/gpt-5.6",
 		"ollama":     "llama3.3",
@@ -135,7 +135,7 @@ func getDefaultModel(name string) string {
 		"dashscope":  "qwen-plus",
 		"zhipu":      "glm-4.6",
 		"wenxin":     "ernie-4.0-8k",
-		"doubao":     "doubao-1.5-pro-32k",
+		"doubao":     "doubao-1.5-pro-32k", // doubao 为 huoshan 兼容别名
 		"huoshan":    "doubao-1.5-pro-32k",
 		"hunyuan":    "hunyuan-turbos-latest",
 		"minimax":    "MiniMax-M2.5",

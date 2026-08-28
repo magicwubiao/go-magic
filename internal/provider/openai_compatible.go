@@ -34,7 +34,7 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			baseURL = "https://api.anthropic.com/v1"
 		case "deepseek":
 			baseURL = "https://api.deepseek.com"
-		case "kimi", "moonshot":
+		case "kimi", "moonshot": // kimi 为 moonshot 兼容别名
 			baseURL = "https://api.moonshot.cn/v1"
 		case "zhipu":
 			baseURL = "https://open.bigmodel.cn/api/paas/v4"
@@ -48,7 +48,7 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			baseURL = "https://api.mistral.ai/v1"
 		case "dashscope":
 			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-		case "doubao", "huoshan":
+		case "doubao", "huoshan": // doubao 为 huoshan 兼容别名
 			baseURL = "https://ark.cn-beijing.volces.com/api/v3"
 		case "perplexity":
 			baseURL = "https://api.perplexity.ai"
@@ -73,7 +73,7 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			model = "claude-sonnet-5"
 		case "deepseek":
 			model = "deepseek-chat"
-		case "kimi", "moonshot":
+		case "kimi", "moonshot": // kimi 为 moonshot 兼容别名
 			model = "kimi-k2-0905-preview"
 		case "zhipu":
 			model = "glm-4.6"
@@ -87,7 +87,7 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			model = "mistral-large-latest"
 		case "dashscope":
 			model = "qwen-plus"
-		case "doubao", "huoshan":
+		case "doubao", "huoshan": // doubao 为 huoshan 兼容别名
 			model = "doubao-1.5-pro-32k"
 		case "perplexity":
 			model = "sonar-pro"
@@ -330,7 +330,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 
 	// tool_choice strategy:
 	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
-	// - Chinese providers (zhipu, kimi, minimax, doubao, hunyuan) also use "auto"
+	// - Chinese providers (zhipu, moonshot/kimi, minimax, huoshan/doubao, hunyuan) also use "auto"
 	// - DashScope and others may reject tool_choice
 	switch p.name {
 	case "dashscope", "mimo":

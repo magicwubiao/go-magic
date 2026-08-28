@@ -255,7 +255,7 @@ func (tc *ToolConverter) ConvertToolResult(provider string, result interface{}, 
 			"content":     resultStr,
 		}, nil
 
-	case "openai", "openrouter", "groq", "deepseek", "kimi":
+	case "openai", "openrouter", "groq", "deepseek", "kimi", "moonshot": // kimi 为 moonshot 兼容别名
 		return map[string]interface{}{
 			"role":         "tool",
 			"tool_call_id": toolCallID,

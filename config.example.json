@@ -33,8 +33,8 @@
       "api_key": "your-minimax-api-key-here",
       "models": ["MiniMax-M2.5"]
     },
-    "kimi": {
-      "api_key": "your-kimi-api-key-here",
+    "moonshot": {
+      "api_key": "your-moonshot-api-key-here",
       "models": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"]
     },
     "zhipu": {

@@ -14,7 +14,7 @@ go-magic is a full-featured AI Agent framework that combines a powerful Go backe
 
 ### Multi-Provider Support (22+)
 
-DeepSeek, OpenAI, Anthropic, Gemini, Ollama, vLLM, Groq, 硅基流动, Kimi, 智谱GLM, 通义千问, 文心一言, MiniMax, MiMo, 腾讯混元, 豆包, Moonshot, OpenRouter, Together AI, Mistral AI, Cohere, Perplexity, and any OpenAI-compatible endpoint.
+DeepSeek, OpenAI, Anthropic, Gemini, Ollama, vLLM, Groq, 硅基流动, 智谱GLM, 通义千问, 文心一言, MiniMax, MiMo, 腾讯混元, 豆包(火山引擎), Moonshot (Kimi), OpenRouter, Together AI, Mistral AI, Cohere, Perplexity, and any OpenAI-compatible endpoint.
 
 ### Multi-Model per Provider
 

@@ -55,8 +55,6 @@ func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, 
 		return provider.NewDeepSeekProvider(provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	case "dashscope":
 		return provider.NewDashScopeProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
-	case "kimi":
-		return provider.NewKimiProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "minimax":
 		return provider.NewMiniMaxProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "ollama":
@@ -84,7 +82,7 @@ func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, 
 	case "wenxin":
 		// Wenxin requires both apiKey and secretKey; use BaseURL field for secretKey
 		return provider.NewWenxinProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
-	case "moonshot":
+	case "moonshot", "kimi": // kimi 为旧配置兼容别名（Kimi 即 Moonshot 月之暗面）
 		return provider.NewMoonshotProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "mimo":
 		return provider.NewMiMoProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
@@ -140,14 +138,6 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "DashScope (通义千问)",
 			Description:  "阿里云通义千问大模型",
 			Models:       []string{"qwen-turbo", "qwen-plus", "qwen-max"},
-			NeedsAPIKey:  true,
-			NeedsBaseURL: true,
-		},
-		{
-			Name:         "kimi",
-			DisplayName:  "Kimi (Moonshot AI)",
-			Description:  "月之暗面 Kimi 大模型",
-			Models:       []string{"kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"},
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},

@@ -189,7 +189,6 @@ const availableProviders = [
   { label: 'Google Gemini', value: 'gemini' },
   { label: 'Groq', value: 'groq' },
   { label: '硅基流动 SiliconFlow', value: 'siliconflow' },
-  { label: 'Kimi (Moonshot)', value: 'kimi' },
   { label: '智谱 GLM (Zhipu)', value: 'zhipu' },
   { label: '通义千问 (DashScope)', value: 'dashscope' },
   { label: '文心一言 (Wenxin)', value: 'wenxin' },

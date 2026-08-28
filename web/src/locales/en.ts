@@ -236,6 +236,7 @@ export default {
     download: 'Download',
     refresh: 'Refresh',
     goParent: 'Go to parent',
+    goRoot: 'Root',
     delete: 'Delete',
     confirmDelete: 'Are you sure you want to delete {name}?',
     renamed: 'Renamed',

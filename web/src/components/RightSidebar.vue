@@ -274,9 +274,19 @@
             quaternary
             @click="navigateDir('')"
             class="breadcrumb-item"
-            :title="t('chat.goParent')"
+            :title="t('chat.goRoot')"
           >
             <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
+          </n-button>
+          <n-button
+            v-if="dirCurrentPath"
+            size="tiny"
+            quaternary
+            class="breadcrumb-item"
+            :title="t('chat.goParent')"
+            @click="navigateDir(dirParent)"
+          >
+            <template #icon><n-icon :component="ArrowUpOutline" :size="13" /></template>
           </n-button>
           <n-icon v-if="dirCurrentPath" :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
           <n-text v-if="dirCurrentPath" class="breadcrumb-path" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
@@ -336,34 +346,47 @@
           <div v-if="filesLoading" class="files-loading">
             <n-spin size="small" />
           </div>
-          <div v-else-if="fsEntries.length === 0" class="files-empty">
-            <n-text depth="3" style="font-size: 12px;">{{ t('chat.filesEmpty') }}</n-text>
-          </div>
-          <div
-            v-for="entry in sortedFsEntries"
-            v-else
-            :key="entry.path"
-            class="file-tree-item"
-            :class="{ 'is-dir': entry.is_dir, 'is-hidden': entry.hidden }"
-            @click="handleFileClick(entry)"
-          >
-            <n-icon size="16" :color="entry.is_dir ? '#18a058' : '#666'">
-              <component :is="entry.is_dir ? FolderOutline : DocumentTextOutline" />
-            </n-icon>
-            <span class="file-name">{{ entry.name }}</span>
-            <span v-if="!entry.is_dir" class="file-size">{{ formatSize(entry.size) }}</span>
-            <div class="file-actions" @click.stop>
-              <n-dropdown
-                trigger="click"
-                :options="getFileActions(entry)"
-                @select="(key: string) => handleFileAction(key, entry)"
-              >
-                <n-button size="tiny" quaternary circle>
-                  <template #icon><n-icon :component="EllipsisHorizontalOutline" :size="14" /></template>
-                </n-button>
-              </n-dropdown>
+          <template v-else>
+            <!-- Parent directory entry (..) -->
+            <div
+              v-if="dirCurrentPath"
+              class="file-tree-item parent-dir-item"
+              title=".."
+              @click="navigateDir(dirParent)"
+            >
+              <n-icon size="16" color="#999">
+                <ArrowUpOutline />
+              </n-icon>
+              <span class="file-name">..</span>
             </div>
-          </div>
+            <div v-if="fsEntries.length === 0" class="files-empty">
+              <n-text depth="3" style="font-size: 12px;">{{ t('chat.filesEmpty') }}</n-text>
+            </div>
+            <div
+              v-for="entry in sortedFsEntries"
+              :key="entry.path"
+              class="file-tree-item"
+              :class="{ 'is-dir': entry.is_dir, 'is-hidden': entry.hidden }"
+              @click="handleFileClick(entry)"
+            >
+              <n-icon size="16" :color="entry.is_dir ? '#18a058' : '#666'">
+                <component :is="entry.is_dir ? FolderOutline : DocumentTextOutline" />
+              </n-icon>
+              <span class="file-name">{{ entry.name }}</span>
+              <span v-if="!entry.is_dir" class="file-size">{{ formatSize(entry.size) }}</span>
+              <div class="file-actions" @click.stop>
+                <n-dropdown
+                  trigger="click"
+                  :options="getFileActions(entry)"
+                  @select="(key: string) => handleFileAction(key, entry)"
+                >
+                  <n-button size="tiny" quaternary circle>
+                    <template #icon><n-icon :component="EllipsisHorizontalOutline" :size="14" /></template>
+                  </n-button>
+                </n-dropdown>
+              </div>
+            </div>
+          </template>
           <div v-if="isDragOver" class="drag-overlay">
             <n-icon :component="CloudUploadOutline" :size="32" color="#18a058" />
             <n-text depth="2" style="font-size: 13px;">{{ t('chat.dropToUpload') }}</n-text>
@@ -696,9 +719,19 @@ const hasUnsavedChanges = computed(() => {
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
-  const parts = dirCurrentPath.value.split('/')
+  const raw = dirCurrentPath.value
+  // Support both Windows backslash and Unix slash paths
+  const isWinDrive = /^[A-Za-z]:/.test(raw)
+  const startsWithRoot = raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
+  const parts = raw.split(/[\\/]/).filter(p => p !== '' && p !== '.')
+  if (parts.length === 0) return ''
+  // Root reached: '/', 'D:\' -> no further parent (home)
+  if (parts.length === 1) return isWinDrive ? '' : (startsWithRoot ? '/' : '')
   parts.pop()
-  return parts.join('/') || '/'
+  let parent = parts.join('/')
+  if (isWinDrive && /^[A-Za-z]:$/.test(parent)) parent += '/'
+  else if (startsWithRoot && !parent.startsWith('/')) parent = '/' + parent
+  return parent
 })
 
 const sortedFsEntries = computed(() => {
@@ -1703,10 +1736,16 @@ async function doUpload(files: File[]) {
 
 /* Dot-prefixed (hidden) entries shown via the eye toggle: dimmed to keep
    the visual hierarchy clear. */
-.file-tree-item.is-hidden .file-name {
-  opacity: 0.55;
-  font-style: italic;
-}
+  .file-tree-item.is-hidden .file-name {
+    opacity: 0.55;
+    font-style: italic;
+  }
+  
+  /* ".." go-to-parent virtual entry */
+  .file-tree-item.parent-dir-item .file-name {
+    font-weight: 600;
+    opacity: 0.8;
+  }
 
 .file-tree-item:hover .file-actions {
   opacity: 1;
@@ -1999,6 +2038,10 @@ async function doUpload(files: File[]) {
   
   .file-tree-item:hover {
     background: #2a2a2a;
+  }
+  
+  .file-tree-item.parent-dir-item .file-name {
+    opacity: 0.8;
   }
 }
 </style>
