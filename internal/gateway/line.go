@@ -490,44 +490,44 @@ func (g *LineGateway) processEvent(event *struct {
 		case "text":
 			content = event.Message.Text
 		case "image":
-			content = "[Image]"
+			content = "Image:"
 		case "video":
-			content = "[Video]"
+			content = "Video:"
 		case "audio":
-			content = "[Audio]"
+			content = "Audio:"
 		case "file":
-			content = "[File]"
+			content = "File:"
 		case "location":
-			content = fmt.Sprintf("[Location: %s, %s]",
+			content = fmt.Sprintf("Location: %s, %s",
 				event.Message.Title, event.Message.Address)
 		case "sticker":
-			content = "[Sticker]"
+			content = "Sticker:"
 		default:
-			content = fmt.Sprintf("[%s]", event.Message.Type)
+			content = fmt.Sprintf("%s:", event.Message.Type)
 		}
 	case "postback":
 		content = event.Postback.Data
 		msgType = "postback"
 	case "beacon":
-		content = fmt.Sprintf("[Beacon: %s]", event.Beacon.Hwid)
+		content = fmt.Sprintf("Beacon: %s", event.Beacon.Hwid)
 		msgType = "beacon"
 	case "join":
-		content = "[Bot joined the group/room]"
+		content = "Bot joined the group/room"
 		msgType = "system"
 	case "leave":
-		content = "[Bot left the group/room]"
+		content = "Bot left the group/room"
 		msgType = "system"
 	case "memberJoined":
-		content = "[Member joined]"
+		content = "Member joined"
 		msgType = "system"
 	case "memberLeft":
-		content = "[Member left]"
+		content = "Member left"
 		msgType = "system"
 	case "unsend":
-		content = "[Message unsent]"
+		content = "Message unsent"
 		msgType = "system"
 	case "accountLink":
-		content = "[Account linked]"
+		content = "Account linked"
 		msgType = "system"
 	default:
 		return nil

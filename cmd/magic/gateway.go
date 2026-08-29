@@ -387,16 +387,17 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 		// If media failed, add descriptive fallback text to help LLM understand context
 		if mediaFailedCount > 0 {
 			var fallbackText string
+			// NOTE: avoid square brackets — GLM mimics them in its output.
 			if hasImageFailed {
-				fallbackText = "[User sent an image, but it could not be loaded]"
+				fallbackText = "User sent an image, but it could not be loaded"
 			} else if hasVideoFailed {
-				fallbackText = "[User sent a video, but it could not be loaded]"
+				fallbackText = "User sent a video, but it could not be loaded"
 			} else if hasAudioFailed {
-				fallbackText = "[User sent an audio message, but it could not be loaded]"
+				fallbackText = "User sent an audio message, but it could not be loaded"
 			} else if hasFileFailed {
-				fallbackText = "[User sent a file, but it could not be loaded]"
+				fallbackText = "User sent a file, but it could not be loaded"
 			} else {
-				fallbackText = "[User sent an attachment, but it could not be loaded]"
+				fallbackText = "User sent an attachment, but it could not be loaded"
 			}
 			// Add fallback text if no content exists
 			if msg.Content == "" {

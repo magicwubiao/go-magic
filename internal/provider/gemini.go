@@ -246,7 +246,12 @@ func (p *GeminiProvider) ChatWithTools(ctx context.Context, messages []Message, 
 
 // Stream implements the Streamer interface
 func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
-	reqBody := p.buildRequest(messages, nil, true)
+	return p.StreamWithTools(ctx, messages, nil, handler)
+}
+
+// StreamWithTools implements the StreamingToolCaller interface
+func (p *GeminiProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
+	reqBody := p.buildRequest(messages, tools, true)
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -273,12 +278,14 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
+	// Most streaming chunks are small; bump the buffer for safety when tools are present.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var accumulatedText string
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Skip empty lines and "data:" prefix
+		// Skip empty lines and "data:" prefix lines (alt=sse SSE framing)
 		if line == "" || strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -299,13 +306,18 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, handler
 				}
 
 				if part.FunctionCall != nil {
+					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 					handler(&StreamResponse{
 						ToolCall: &types.ToolCall{
-							ID:       fmt.Sprintf("call_%d", time.Now().UnixNano()),
-							Type:     "function",
-							Function: types.Function{Name: part.FunctionCall.Name, Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }()},
+							ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
+							Type: "function",
+							Function: types.Function{
+								Name:      part.FunctionCall.Name,
+								Arguments: string(argsBytes),
+							},
+							Arguments: part.FunctionCall.Args,
 						},
-						Done: true,
+						Done: candidate.FinishReason != "",
 					})
 				}
 			}

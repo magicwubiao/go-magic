@@ -132,7 +132,7 @@ func (ic *IntelligentCompressor) Compress(history []provider.Message) *Compressi
 	if result.Summary != "" {
 		summaryMsg := provider.Message{
 			Role: "system",
-			Content: fmt.Sprintf("\n\n[Previous conversation compressed - %d messages summarized]\n\n%s",
+			Content: fmt.Sprintf("\n\nPrevious conversation compressed - %d messages summarized:\n\n%s",
 				len(messagesToSummarize), result.Summary),
 		}
 		result.KeptMessages = append(result.KeptMessages, summaryMsg)

@@ -306,21 +306,21 @@ func (g *WhatsAppBusinessGateway) handleWebhook(w http.ResponseWriter, r *http.R
 					content = msg.Text.Body
 					msgType = "text"
 				case "image":
-					content = "[Image]"
+					content = "Image:"
 					msgType = "image"
 				case "audio":
-					content = "[Audio]"
+					content = "Audio:"
 					msgType = "audio"
 				case "document":
-					content = "[Document: " + msg.Document.Filename + "]"
+					content = "Document: " + msg.Document.Filename
 					msgType = "document"
 				case "location":
-					content = fmt.Sprintf("[Location: %s, %s]",
+					content = fmt.Sprintf("Location: %s, %s",
 						strconv.FormatFloat(msg.Location.Latitude, 'f', 6, 64),
 						strconv.FormatFloat(msg.Location.Longitude, 'f', 6, 64))
 					msgType = "location"
 				default:
-					content = fmt.Sprintf("[%s]", msg.Type)
+					content = fmt.Sprintf("%s:", msg.Type)
 					msgType = msg.Type
 				}
 

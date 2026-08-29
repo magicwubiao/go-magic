@@ -248,7 +248,7 @@ func (vm *VersionManager) CompareVersions(skillName, v1, v2 string) (string, err
 	diff.WriteString(fmt.Sprintf("    质量评分: %.1f\n", version2.QualityScore))
 
 	// 变更对比
-	diff.WriteString("\n[变更对比]\n")
+	diff.WriteString("\n(变更对比)\n")
 	diff.WriteString(fmt.Sprintf("  %s 变更:\n", v1))
 	for _, change := range version1.Changes {
 		diff.WriteString(fmt.Sprintf("    - %s\n", change))
@@ -259,7 +259,7 @@ func (vm *VersionManager) CompareVersions(skillName, v1, v2 string) (string, err
 	}
 
 	// 内容差异（简单行对比）
-	diff.WriteString("\n[内容差异]\n")
+	diff.WriteString("\n(内容差异)\n")
 	contentDiff := vm.generateContentDiff(version1.Content, version2.Content)
 	diff.WriteString(contentDiff)
 

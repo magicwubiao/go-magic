@@ -264,14 +264,18 @@ func (r *Reflector) buildReflectionPrompt(history []provider.Message, turn int) 
 	recentMsgs := r.getRecentMessages(history, 20)
 	for _, msg := range recentMsgs {
 		role := msg.Role
-		// Strip <think> reasoning trails: raw deliberation text pollutes the
+		// Strip  reasoning trails: raw deliberation text pollutes the
 		// reflection analysis and can bias the reflector toward "the agent is
 		// stuck in repetitive thinking" false positives.
 		content := stripThinkContent(msg.Content)
 		if len(content) > 500 {
-			content = content[:500] + "... [truncated]"
+			content = content[:500] + "... (truncated)"
 		}
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n\n", role, content))
+		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
+		// GLM mimics this format and starts wrapping every reply in [].
+		// Use "Role: content" (no brackets) so the model doesn't pick up
+		// a structural template to echo around its own output.
+		sb.WriteString(fmt.Sprintf("%s: %s\n\n", role, content))
 	}
 
 	sb.WriteString("\nPlease provide your reflection analysis as JSON.")

@@ -547,7 +547,7 @@ func (s *Server) replyAsAgent(roomID string, a *groupchat.RoomAgent, history []g
 			RoomID:     roomID,
 			SenderID:   a.ID,
 			SenderName: a.Name,
-			Content:    fmt.Sprintf("[Error: %s]", err.Error()),
+			Content:    fmt.Sprintf("(Error: %s)", err.Error()),
 			Timestamp:  time.Now().UnixMilli(),
 			Type:       "agent",
 		}

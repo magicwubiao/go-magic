@@ -444,7 +444,7 @@ func runGolangCILint(ctx context.Context, dir string, opts LintOptions) ([]LintR
 			FilePath: issue.Pos.Filename,
 			Line:     issue.Pos.Line,
 			Column:   issue.Pos.Column,
-			Message:  fmt.Sprintf("[%s] %s", issue.FromLinter, issue.Text),
+			Message:  fmt.Sprintf("%s: %s", issue.FromLinter, issue.Text),
 			Level:    level,
 			Code:     issue.FromLinter,
 		})
@@ -775,7 +775,7 @@ func runPylint(ctx context.Context, dir string) ([]LintResult, error) {
 			FilePath: pr.Path,
 			Line:     pr.Line,
 			Column:   pr.Column,
-			Message:  fmt.Sprintf("[%s] %s", pr.Symbol, pr.Message),
+			Message:  fmt.Sprintf("%s: %s", pr.Symbol, pr.Message),
 			Level:    level,
 			Code:     pr.MessageID,
 		})

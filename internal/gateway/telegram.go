@@ -225,7 +225,7 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = "[用户发送了一张图片]"
+			content = "用户发送了一张图片"
 		}
 	}
 
@@ -240,7 +240,7 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = "[用户发送了一个视频]"
+			content = "用户发送了一个视频"
 		}
 	}
 
@@ -256,7 +256,7 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = fmt.Sprintf("[用户发送了文件: %s]", msg.Document.FileName)
+			content = fmt.Sprintf("用户发送了文件: %s", msg.Document.FileName)
 		}
 	}
 
@@ -270,7 +270,7 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = "[用户发送了一段语音]"
+			content = "用户发送了一段语音"
 		}
 	}
 
@@ -286,7 +286,7 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = "[用户发送了一段音频]"
+			content = "用户发送了一段音频"
 		}
 	}
 
@@ -301,12 +301,12 @@ func (t *TelegramHandler) handleIncomingMessage(msg *tgbotapi.Message) {
 			})
 		}
 		if content == "" {
-			content = "[用户发送了一个表情包]"
+			content = "用户发送了一个表情包"
 		}
 	}
 
 	if msg.Location != nil {
-		content = fmt.Sprintf("[Location: %.6f, %.6f]", msg.Location.Latitude, msg.Location.Longitude)
+		content = fmt.Sprintf("Location: %.6f, %.6f", msg.Location.Latitude, msg.Location.Longitude)
 	}
 
 	isGroup := msg.Chat.Type != "private"

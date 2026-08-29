@@ -193,7 +193,7 @@ func (t *MCPPluginTool) Name() string {
 
 // Description 返回工具描述。
 func (t *MCPPluginTool) Description() string {
-	return fmt.Sprintf("[AgentPlugin:%s/%s] %s", t.pluginName, t.serverName, t.tool.Description)
+	return fmt.Sprintf("AgentPlugin %s/%s: %s", t.pluginName, t.serverName, t.tool.Description)
 }
 
 // Schema 返回工具输入 schema(与 tool.Tool 接口对接)。

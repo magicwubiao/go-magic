@@ -1290,10 +1290,21 @@ func (s *Server) Start(port int) error {
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
 
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		Addr:        addr,
+		Handler:     mux,
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout intentionally removed for SSE-friendly deployments.
+		// A global 60s WriteTimeout closed the TCP connection right in the
+		// middle of any long-running streaming tool chain: the agent emits
+		// regular ping/heartbeat frames, but WriteDeadline was set once at
+		// Accept()-time and never refreshed by the response writer level
+		// SetWriteDeadline cleanup in our stream handlers (race between the
+		// handler goroutine and the sseWriter.run() goroutine that actually
+		// writes bytes). This was the #1 root cause of the frontend
+		// "Connection interrupted, partial response saved" banner popping
+		// up roughly 60s into every multi-turn / tool-heavy conversation.
+		// IdleTimeout still guards slow-loris style idle connections; SSE
+		// endpoints keep writes flowing via heartbeat.
 		IdleTimeout:       120 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB

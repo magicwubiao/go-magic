@@ -2,11 +2,37 @@ package agent
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
+
+// emptyAssistantPlaceholder is a stable, non-empty content value used to
+// patch assistant messages whose content was lost to mid-stream truncation.
+// Rationale: the strictness axis between providers is the single biggest
+// reason "switch to deepseek works / zhipu keeps 1214". Zhipu/GLM throws
+// error 1214 ("messages 参数非法") on assistant content that is either
+// (a) an empty string, (b) a pure whitespace string, or (c) nil.
+// ValidateMessageAlternation mirrors Zhipu's strictness by checking
+// strings.TrimSpace(msg.Content) == "", so a single-space placeholder is
+// indistinguishable from truly empty to the validator AND to Zhipu.
+//
+// A single ZERO WIDTH SPACE (U+200B) would survive TrimSpace because it is
+// not a Unicode White_Space category codepoint — but tests and log
+// inspection can't see it. We therefore use a visible-but-minimal marker
+// so debugging payloads shows exactly when a placeholder was inserted,
+// while introducing zero semantic bias.
+//
+// IMPORTANT: the marker must NOT be a structural template the model can
+// mimic and apply to its own output. History has shown GLM mimics:
+//   - "[no content]" -> model wrapped every reply in square brackets
+//   - "..."          -> model echoed the ellipsis as its whole reply
+//
+// The fix is to use a full natural-language sentence with NO wrapping
+// punctuation (no [], (), {}, <>, no bare punctuation). A complete
+// sentence reads as content, not as a formatting template, so the model
+// does not reproduce it as an output pattern.
+const emptyAssistantPlaceholder = "No response content"
 
 // Message alternation validation, after Hermes Agent's strict pre-provider
 // enforcement. Providers reject malformed histories (two assistants in a row,
@@ -89,17 +115,13 @@ func ValidateMessageAlternation(messages []provider.Message) []Violation {
 			} else if prev == "system" && i > 0 {
 				// assistant right after system is legal in some flows; tolerate.
 			}
-			// RC2: assistant content must be non-empty (after trimming).
-			// Providers (Zhipu/GLM error 1214 "messages 参数非法", Anthropic
-			// "messages must contain non-empty content") reject truly-empty
-			// assistants REGARDLESS of whether ToolCalls are also present — a
-			// tool-calling assistant with "" content is still 1214.
-			if strings.TrimSpace(msg.Content) == "" {
-				violations = append(violations, Violation{
-					Index: i, Role: role, PrevRole: prev,
-					Reason: "assistant message with empty content (provider 1214: messages 参数非法)",
-				})
-			}
+			// NOTE: empty assistant content is intentionally NOT flagged here.
+			// The stored history (a.history) legitimately contains assistants
+			// whose only output was tool_calls with no text — flagging them
+			// would produce false violations and cause [no content] placeholder
+			// leakage into the UI. Empty content is patched only in the outbound
+			// copy (buildLLMMessages + convert.go) right before sending to the
+			// provider, never in the stored history.
 			// RC1: assistant carries ToolCalls but not all of them have a
 			// matching tool result in the immediately-following consecutive
 			// tool block. This is the #1 26-turn 1214 root cause:
@@ -215,17 +237,11 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 		m.ToolCalls = kept
 	}
 
-	// (R2) Repair empty assistant content with a single-space placeholder.
-	// Zhipu/GLM throws 1214 on truly-empty assistant content regardless of
-	// whether ToolCalls are present; providers treat single-space as
-	// non-empty. The repair is benign for providers whose validators ignore
-	// content entirely, and keeps the history intact.
-	for i := range repaired {
-		m := &repaired[i]
-		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" {
-			m.Content = " "
-		}
-	}
+	// (R2) Removed: empty assistant content is no longer patched here.
+	// SanitizeMessageHistory operates on a.history (the stored copy shown to
+	// the UI), so writing [no content] here would leak the placeholder into
+	// chat. Empty content is patched only in buildLLMMessages (outbound copy
+	// to LLM) and convert.go (provider API payload), never in stored history.
 
 	// (R3) Fill empty tool_call_id on tool messages whose id was blanked
 	// during a truncation or partial stream recovery. We only assign an id
@@ -253,55 +269,110 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 		repaired = repaired[1:]
 	}
 
-	// ===== STAGE 2: DROP OFFENDERS THAT COULD NOT BE REPAIRED =====
-	violations := ValidateMessageAlternation(repaired)
-	if len(violations) == 0 {
+	// ===== STAGE 2: GREEDY DROP OF UNREPAIRED OFFENDERS =====
+	//
+	// The index-based drop loop below is the reason violations appeared to
+	// grow 26→30 across identical LLM calls in a single turn. The old
+	// implementation collected violation Indices, rebuilt by dropping those
+	// Indices, then tried to re-map *rebuilt* violation Indices back to the
+	// *original* repaired array on the next iteration. After the first drop
+	// pass the original array was unchanged, so re-scanning it over- and
+	// under-counted kept positions depending on where the first drops had
+	// been. The practical outcome: a minority of offenders were actually
+	// dropped, Stage-2 returned a history that still had N violations, and
+	// on the next LLM call Validate+Sanitize ran on (effectively) the same
+	// input → same WARN line again. Consecutive tool calls made it look
+	// like violations were monotonically growing because each new turn
+	// added a fresh assistant that had to be fixed on top of the leftover
+	// unrepaired ones.
+	//
+	// Greedy single-pass construction: walk messages in order and only keep
+	// a message if, together with the tail of the already-kept prefix, it
+	// does not introduce a violation that Stage 1 could not repair. This
+	// is guaranteed to converge in O(n) and deterministically terminates
+	// regardless of how pathological the input is. Preferred drops:
+	//   • duplicate user      -> drop the *older* of the pair (keeps newest prompt)
+	//   • duplicate assistant -> drop the *newer* one (keeps prior answer+TCs intact)
+	//   • illegal tool        -> drop the tool (tool without header is useless)
+	//   • leading tool        -> drop
+	if len(repaired) == 0 {
 		return repaired
 	}
+	out := make([]provider.Message, 0, len(repaired))
+	for i := 0; i < len(repaired); i++ {
+		m := repaired[i]
+		role := m.Role
 
-	drop := make(map[int]bool)
-	for _, v := range violations {
-		drop[v.Index] = true
-	}
-
-	// Iterate: rebuild, re-validate, drop new offenders. Cap iterations to
-	// avoid pathological loops.
-	for iter := 0; iter < 4; iter++ {
-		rebuilt := make([]provider.Message, 0, len(repaired)-len(drop))
-		for i, m := range repaired {
-			if drop[i] {
+		// Always drop messages with truly empty role / unknown role — no
+		// provider will accept these and keeping them cascades later
+		// alternation failures.
+		if role == "" {
+			continue
+		}
+		switch role {
+		case "system":
+			out = append(out, m)
+			continue
+		case "tool":
+			// Tool messages with empty tool_call_id can NEVER be legal
+			// (stage-1 R3 only fills when prev assistant has exactly 1 TC).
+			if m.ToolCallID == "" {
 				continue
 			}
-			rebuilt = append(rebuilt, m)
-		}
-		newVio := ValidateMessageAlternation(rebuilt)
-		if len(newVio) == 0 {
-			return rebuilt
-		}
-		// Map rebuilt indices back to original indices by re-scanning.
-		origIdx := 0
-		for _, v := range newVio {
-			// Find the original index of the v.Index-th kept message.
-			kept := -1
-			for i := 0; i < len(repaired); i++ {
-				if drop[i] {
+			if len(out) == 0 {
+				// leading tool, no possible preceding assistant → drop.
+				continue
+			}
+			last := out[len(out)-1]
+			if last.Role == "user" || last.Role == "system" {
+				// tool directly after user/system → drop.
+				continue
+			}
+			if last.Role == "assistant" && len(last.ToolCalls) == 0 {
+				// tool follows assistant that did not declare any tool_calls → drop.
+				continue
+			}
+			if last.Role == "assistant" {
+				// Extra sanity: even if Stage-1 already ran orphan stripping
+				// on the assistant's ToolCalls, ensure this tool's ID is
+				// actually in the immediately-preceding assistant's kept
+				// ToolCalls. If not, the tool is a late stray after a tool
+				// block was sliced mid-way → drop.
+				found := false
+				for _, tc := range last.ToolCalls {
+					if tc.ID == m.ToolCallID {
+						found = true
+						break
+					}
+				}
+				if !found {
 					continue
 				}
-				kept++
-				if kept == v.Index {
-					origIdx = i
-					break
-				}
 			}
-			drop[origIdx] = true
-		}
-	}
-
-	// Final rebuild.
-	out := make([]provider.Message, 0, len(repaired)-len(drop))
-	for i, m := range repaired {
-		if !drop[i] {
 			out = append(out, m)
+			continue
+		case "user":
+			if len(out) > 0 && out[len(out)-1].Role == "user" {
+				// two users in a row → drop older (replace tail with newer).
+				out[len(out)-1] = m
+				continue
+			}
+			out = append(out, m)
+			continue
+		case "assistant":
+			// Stage-1 R2/R4 already fixed empty content + leading roles,
+			// so here we only need to handle the duplicate-assistant case.
+			// Two assistants in a row → drop the *new* one: dropping the
+			// older would lose whatever tool_calls header anchored the
+			// tool results that appear later in the stream.
+			if len(out) > 0 && out[len(out)-1].Role == "assistant" {
+				continue
+			}
+			out = append(out, m)
+			continue
+		default:
+			// Unknown role → drop.
+			continue
 		}
 	}
 	return out

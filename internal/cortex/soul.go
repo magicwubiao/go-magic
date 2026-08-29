@@ -136,7 +136,7 @@ func (m *SoulManager) UpdateFromFeedback(feedback string) error {
 	}
 
 	const maxSoulSize = 64 * 1024
-	update := "\n\n## Learned Preferences\n" + preference + "\n[Auto-generated from interactions]"
+	update := "\n\n## Learned Preferences\n" + preference + "\n(Auto-generated from interactions)"
 	newContent := m.content + update
 	if len(newContent) > maxSoulSize {
 		// Trim the oldest content to stay within the limit rather than wiping

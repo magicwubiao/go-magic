@@ -263,7 +263,7 @@ func (em *SkillEvolutionManager) EvolveSkill(ctx context.Context, skillName stri
 		SkillName:     skillName,
 		OldContent:    skill.Content,
 		NewContent:    result.NewContent,
-		Reason:        fmt.Sprintf("[%s] %s", result.Strategy, result.Reason),
+		Reason:        fmt.Sprintf("%s: %s", result.Strategy, result.Reason),
 		QualityBefore: stats.AvgQuality,
 		QualityAfter:  0, // 待验证
 		Generation:    evolutionCtx.CurrentGeneration + 1,

@@ -9,6 +9,128 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+// emptyAssistantPlaceholder is the provider-level placeholder for empty
+// assistant content (used when a tool_calls assistant turn has no text).
+//
+// CRITICAL: must be a full natural-language sentence with NO wrapping
+// punctuation. GLM mimics structural-looking placeholders as output
+// templates:
+//   - "[no content]" -> model wrapped replies in []
+//   - "..."          -> model echoed the ellipsis
+//
+// A complete sentence reads as content, not as a formatting template,
+// so the model does not reproduce it as an output pattern.
+const emptyAssistantPlaceholder = "No response content"
+
+// DashScopeTurnLimit is the service-side hard cap on the total number of
+// messages ("turns") per request for the DashScope compatible-mode API.
+// The server rejects requests whose messages array exceeds 150 items with
+// "exceeded maximum turns (150)". We leave a safety margin so messages
+// produced during the current turn do not push us over the line.
+const (
+	DashScopeTurnLimit   = 150
+	DashScopeTurnSafety  = 15
+	DashScopeTurnMaxSend = DashScopeTurnLimit - DashScopeTurnSafety // 135
+)
+
+// TrimDashScopeTurns drops the *oldest* contiguous message blocks from the
+// messages array so that the TOTAL message count stays within
+// DashScopeTurnMaxSend. The first message is preserved when it has role
+// "system" (the system prompt must stay anchored at the top).
+//
+// DashScope's compatible-mode API counts every message in the messages
+// array (system, user, assistant, and tool) as one "turn" toward the
+// 150-item hard cap. A long session with many short user↔assistant
+// exchanges can accumulate 150+ messages even when individual tasks are
+// short, because the agent's truncateHistory() trims by character length
+// (200K) not message count.
+//
+// Trimming strategy:
+//  1. Keep system message at index 0 if present.
+//  2. If total messages > DashScopeTurnMaxSend, drop oldest
+//     user→assistant→tool blocks from the front until under the limit.
+//  3. Each dropped block includes the leading user message, the assistant
+//     reply, and any trailing tool messages (so alternation stays valid).
+func TrimDashScopeTurns(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	// Phase 1: enforce total message count limit.
+	if len(msgs) > DashScopeTurnMaxSend {
+		msgs = trimByTotalCount(msgs, DashScopeTurnMaxSend)
+	}
+	// Phase 2: the total-count trim above may have left consecutive
+	// same-role messages; collapse them.
+	msgs = collapseConsecutiveForTrim(msgs)
+	return msgs
+}
+
+// trimByTotalCount drops the oldest message blocks (preserving a leading
+// system message) until the slice length is <= limit. A "block" is one
+// user (or system) message followed by an assistant and any trailing tool
+// messages. This keeps message alternation valid after trimming.
+func trimByTotalCount(msgs []Message, limit int) []Message {
+	// Preserve leading system message.
+	startIdx := 0
+	if msgs[0].Role == "system" {
+		startIdx = 1
+	}
+	rest := msgs[startIdx:]
+	for len(msgs) > limit && len(rest) > 0 {
+		// Find the end of the first block: user → assistant → tools...
+		blockEnd := 1
+		// If the first message is a user/system, skip it and then
+		// consume the assistant + trailing tools.
+		if rest[0].Role == "user" || rest[0].Role == "system" {
+			// Consume the assistant that follows (if any).
+			if blockEnd < len(rest) && rest[blockEnd].Role == "assistant" {
+				blockEnd++
+				// Consume trailing tool messages.
+				for blockEnd < len(rest) && rest[blockEnd].Role == "tool" {
+					blockEnd++
+				}
+			}
+		} else if rest[0].Role == "assistant" {
+			// No leading user; consume assistant + trailing tools.
+			for blockEnd < len(rest) && rest[blockEnd].Role == "tool" {
+				blockEnd++
+			}
+		} else if rest[0].Role == "tool" {
+			// Orphaned tool message; just drop it.
+			blockEnd = 1
+		}
+		rest = rest[blockEnd:]
+		msgs = append(msgs[:startIdx], rest...)
+	}
+	return msgs
+}
+
+// collapseConsecutiveForTrim merges back-to-back same-role non-tool
+// messages produced by TrimDashScopeTurns (which can place two user
+// messages adjacent after dropping an intermediate assistant+tools block).
+// Tool messages are never merged — they are tied to tool_call_id ordering.
+func collapseConsecutiveForTrim(msgs []Message) []Message {
+	if len(msgs) <= 1 {
+		return msgs
+	}
+	out := make([]Message, 0, len(msgs))
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
+		if m.Role == "tool" {
+			out = append(out, m)
+			continue
+		}
+		if i+1 < len(msgs) && msgs[i+1].Role == m.Role && msgs[i+1].Role != "tool" {
+			// Keep the newer (later) message — it carries the actual user
+			// intent and the older one is usually context that has already
+			// been digested into history memory.
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // FileStrategy defines how files should be converted
 type FileStrategy int
 
@@ -255,12 +377,31 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 				})
 			}
 			openAIMsg["content"] = parts
-		} else if len(msg.ToolCalls) > 0 && msg.Content == "" {
-			// Assistant message with tool_calls and no content: use empty string.
-			// zhipu (GLM) rejects BOTH "content": null AND "content": [] with
-			// error 1214 ("messages 参数非法"); "" is accepted by zhipu, OpenAI,
-			// moonshot, deepseek and huoshan alike.
-			openAIMsg["content"] = ""
+		} else if len(msg.ToolCalls) > 0 && strings.TrimSpace(msg.Content) == "" {
+			// Assistant message with tool_calls and no content: use a stable
+			// non-empty placeholder. A single space or "" still triggers
+			// zhipu (GLM) error 1214 ("messages 参数非法") because Zhipu's
+			// validator treats whitespace-only content equivalently to
+			// truly empty. Deepseek, OpenAI and others tolerate empty
+			// content here — this is exactly why "switch to deepseek
+			// works, zhipu still fails" on an otherwise identical
+			// payload.
+			//
+			// CRITICAL: do NOT use structural-looking placeholders.
+			// GLM mimics them as output templates:
+			//   - "[no content]" -> model wrapped replies in []
+			//   - "..."          -> model echoed the ellipsis
+			// Use a full natural-language sentence with no wrapping
+			// punctuation; a complete sentence reads as content, not as
+			// a formatting template, so the model does not reproduce it.
+			openAIMsg["content"] = emptyAssistantPlaceholder
+		} else if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+			// Defensive: empty assistant with no tool_calls reaching here means
+			// buildLLMMessages did not filter it (e.g. a code path that
+			// bypasses the agent layer). Emit the same natural-language
+			// placeholder so strict providers (GLM/Zhipu 1214) don't reject
+			// the payload.
+			openAIMsg["content"] = emptyAssistantPlaceholder
 		} else {
 			// Fallback to plain text content
 			openAIMsg["content"] = msg.Content
@@ -377,7 +518,8 @@ func convertContentPart(part types.ContentPart, config *ConvertConfig) map[strin
 			// Model doesn't support vision, convert to text description
 			desc := "Image attachment"
 			if part.ImageURL != nil && part.ImageURL.URL != "" {
-				desc = "[Image] " + part.ImageURL.URL
+				// NOTE: avoid square brackets — GLM mimics them in its output.
+				desc = "Image: " + part.ImageURL.URL
 			}
 			log.Debugf("[convertContentPart] Converting image_url to text: %s", desc)
 			return map[string]interface{}{
@@ -452,7 +594,8 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		// Check if model supports vision
 		if config != nil && !config.SupportVision {
 			// Model doesn't support vision, return text description instead
-			return buildTextPart("[Image] " + url)
+			// NOTE: avoid square brackets — GLM mimics them in its output.
+			return buildTextPart("Image: " + url)
 		}
 		return map[string]interface{}{
 			"type": "image_url",
@@ -469,9 +612,9 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 			if strings.HasPrefix(url, "/") {
 				url = config.UploadURLPrefix + url
 			}
-			return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
+			return buildTextPart(fmt.Sprintf("File: %s (%s)", file.Name, url))
 		}
-		return buildTextPart(fmt.Sprintf("[File: %s] (type: %s, size: %d bytes)", file.Name, mimeType, fileSize))
+		return buildTextPart(fmt.Sprintf("File: %s (type: %s, size: %d bytes)", file.Name, mimeType, fileSize))
 	}
 
 	// === Strategy: URL (always prefer URL when available) ===
@@ -484,7 +627,7 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 			if isImage(mimeType) {
 				return buildImagePart(url)
 			}
-			return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
+			return buildTextPart(fmt.Sprintf("File: %s (%s)", file.Name, url))
 		}
 		// Fall back to base64 if no URL
 	}
@@ -499,12 +642,12 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 			if isText(mimeType) || isDocument(mimeType) {
 				content := decodeFileContent(file.Contents)
 				if content != "" {
-					return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
+					return buildTextPart(fmt.Sprintf("File: %s:\n%s", file.Name, content))
 				}
 			}
 			return buildFileRef()
 		}
-		return buildTextPart(fmt.Sprintf("[File: %s] - no content available", file.Name))
+		return buildTextPart(fmt.Sprintf("File: %s - no content available", file.Name))
 	}
 
 	// === Strategy: Auto (smart routing) ===
@@ -517,7 +660,7 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		if isImage(mimeType) {
 			return buildImagePart(url)
 		}
-		return buildTextPart(fmt.Sprintf("[File: %s](%s)", file.Name, url))
+		return buildTextPart(fmt.Sprintf("File: %s (%s)", file.Name, url))
 	}
 
 	// Small file or no URL: use base64 / embedded content
@@ -531,7 +674,7 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		if isText(mimeType) {
 			content := decodeFileContent(file.Contents)
 			if content != "" {
-				return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
+				return buildTextPart(fmt.Sprintf("File: %s:\n%s", file.Name, content))
 			}
 		}
 
@@ -539,17 +682,17 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 		if isDocument(mimeType) {
 			content := decodeFileContent(file.Contents)
 			if content != "" && isReadable(content) {
-				return buildTextPart(fmt.Sprintf("[File: %s]\n%s", file.Name, content))
+				return buildTextPart(fmt.Sprintf("File: %s:\n%s", file.Name, content))
 			}
 		}
 
 		// Binary files: return metadata
-		return buildTextPart(fmt.Sprintf("[File: %s] (type: %s, size: %d bytes) - content not directly readable",
+		return buildTextPart(fmt.Sprintf("File: %s (type: %s, size: %d bytes) - content not directly readable",
 			file.Name, mimeType, fileSize))
 	}
 
 	// No content available
-	return buildTextPart(fmt.Sprintf("[File: %s] - no content available", file.Name))
+	return buildTextPart(fmt.Sprintf("File: %s - no content available", file.Name))
 }
 
 // decodeFileContent decodes base64 content and returns text

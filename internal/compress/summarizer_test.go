@@ -80,7 +80,7 @@ func TestClampSummaryTokens(t *testing.T) {
 	if len([]rune(got)) > 25+8 { // 允许截断标记的余量
 		t.Fatalf("summary not clamped: %d runes", len([]rune(got)))
 	}
-	if !strings.Contains(got, "[truncated]") {
+	if !strings.Contains(got, "(truncated)") {
 		t.Fatalf("missing truncation marker: %q", got)
 	}
 }

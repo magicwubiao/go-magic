@@ -550,7 +550,10 @@ func (m *Manager) extractAndLearnFromConversation() {
 		if msg.Role == "system" {
 			continue
 		}
-		nonSystem.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, msg.Content))
+		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
+		// GLM mimics this format and starts wrapping every reply in [].
+		// Use "Role: content" (no brackets).
+		nonSystem.WriteString(fmt.Sprintf("%s: %s\n", msg.Role, msg.Content))
 		if msg.Role == "user" {
 			userOnly.WriteString(msg.Content + "\n")
 		}
@@ -730,7 +733,9 @@ func (m *Manager) fallbackLineMatchStore(conversation string) {
 	lines := strings.Split(conversation, "\n")
 	for _, line := range lines {
 		// 跳过过短行与系统消息
-		if len(line) < 20 || strings.HasPrefix(line, "[system]") {
+		// Skip too-short lines and system markers (legacy "[system]" and
+		// the new "system:" prefix both should be skipped here).
+		if len(line) < 20 || strings.HasPrefix(line, "[system]") || strings.HasPrefix(line, "system:") {
 			continue
 		}
 		lower := strings.ToLower(line)

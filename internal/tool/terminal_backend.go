@@ -90,12 +90,12 @@ func (b *LocalBackend) Execute(ctx context.Context, cmd string, workDir string, 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = 124
-			result.Output += "\n[Error: Command timed out]"
+			result.Output += "\n(Error: Command timed out)"
 		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
 			result.ExitCode = 1
-			result.Output += "\n[Error: " + err.Error() + "]"
+			result.Output += "\n(Error: " + err.Error() + ")"
 		}
 	}
 
@@ -534,7 +534,7 @@ func (b *DaytonaBackend) Execute(ctx context.Context, cmd string, workDir string
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = 124
-			result.Output += "\n[Error: Command timed out]"
+			result.Output += "\n(Error: Command timed out)"
 		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {

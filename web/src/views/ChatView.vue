@@ -337,7 +337,6 @@
             :placeholder="chatStore.isCommand(inputValue) ? t('chat.commandPlaceholder') : t('chat.placeholder')"
             class="chat-textarea"
             @keydown.enter.exact.prevent="send"
-            @keydown.enter.shift.prevent="() => {}"
             @input="handleInput"
           />
           <!-- Toolbar inside input box -->

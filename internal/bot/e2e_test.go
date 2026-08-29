@@ -246,7 +246,7 @@ func TestBotToBotMessage(t *testing.T) {
 	sawDMInBob := false
 
 	cfg, _, _ := setupEnv(t, func(m *mockLLM, lastUser string) map[string]interface{} {
-		if strings.Contains(lastUser, "[reply from @alice]") {
+		if strings.Contains(lastUser, "reply from @alice:") {
 			mu.Lock()
 			sawDMInBob = true
 			mu.Unlock()

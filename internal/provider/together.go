@@ -140,7 +140,12 @@ func (p *TogetherProvider) ChatWithTools(ctx context.Context, messages []Message
 
 // Stream implements the Streamer interface
 func (p *TogetherProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
-	reqBody := p.buildRequest(messages, nil, true)
+	return p.StreamWithTools(ctx, messages, nil, handler)
+}
+
+// StreamWithTools implements the StreamingToolCaller interface
+func (p *TogetherProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
+	reqBody := p.buildRequest(messages, tools, true)
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {

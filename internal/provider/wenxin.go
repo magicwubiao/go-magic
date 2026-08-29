@@ -204,12 +204,17 @@ func (p *WenxinProvider) ChatWithTools(ctx context.Context, messages []Message, 
 
 // Stream implements the Streamer interface
 func (p *WenxinProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
+	return p.StreamWithTools(ctx, messages, nil, handler)
+}
+
+// StreamWithTools implements the StreamingToolCaller interface
+func (p *WenxinProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
 	token, err := p.getAccessToken(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	reqBody := p.buildRequest(messages, nil, true)
+	reqBody := p.buildRequest(messages, tools, true)
 	reqBody["stream"] = true
 
 	jsonBody, err := json.Marshal(reqBody)

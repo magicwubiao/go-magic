@@ -734,10 +734,13 @@ function normalizeDirPath(p: string): string {
 // 在会话根目录点击".."会请求父目录并返回 "path outside session directory"。
 // 因此仅在确认当前目录不是会话根目录时才显示该入口；
 // 路径未知（如加载失败被清空）时也隐藏，避免反复触发错误请求。
+// 没有工作目录（未选中对话或会话无 work_dir）时同样隐藏：
+// 此时无目录边界可言，放行".."会让用户逐级返回到任意文件目录，
+// 违背"文件浏览应限制在工作目录内"的约束。
 const showParentDir = computed(() => {
   if (!dirCurrentPath.value) return false
   const root = normalizeDirPath(chatStore.currentWorkDir || '')
-  if (!root) return true
+  if (!root) return false
   return normalizeDirPath(dirCurrentPath.value) !== root
 })
 

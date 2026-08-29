@@ -25,7 +25,7 @@ type RoutineScheduler struct {
 
 // RoutineJobName builds the namespaced job name shown in cron listings.
 func RoutineJobName(botName, routineName string) string {
-	return fmt.Sprintf("[bot:%s] %s", botName, routineName)
+	return fmt.Sprintf("bot:%s - %s", botName, routineName)
 }
 
 // NewRoutineScheduler creates (but does not start) a scheduler for one bot.

@@ -140,7 +140,7 @@ func (cc *ContextCompressor) Compress(ctx context.Context, messages []provider.M
 	}
 	compressed = append(compressed, provider.Message{
 		Role:    "system",
-		Content: fmt.Sprintf("[Previous conversation summarized]\n\n%s", summary),
+		Content: fmt.Sprintf("Previous conversation summarized:\n\n%s", summary),
 	})
 	compressed = append(compressed, recentMsgs...)
 
@@ -299,14 +299,14 @@ func (cc *ContextCompressor) simpleCompress(messages []provider.Message, keepCou
 }
 
 // extractFallbackSummary 在 LLM 摘要失败时，抽取被压缩消息的首末句与高频关键词，
-// 至少保留部分信息，而非完全用 "[Previous conversation truncated]" 顶替。
+// 至少保留部分信息，而非完全用 "Previous conversation truncated" 顶替。
 func (cc *ContextCompressor) extractFallbackSummary(messages []provider.Message) string {
 	if len(messages) == 0 {
-		return "[Previous conversation truncated]"
+		return "Previous conversation truncated"
 	}
 
 	var parts []string
-	parts = append(parts, "[Previous conversation summarized]")
+	parts = append(parts, "Previous conversation summarized:")
 
 	// 首条消息的首句
 	if first := firstSentence(messages[0].Content); first != "" {
@@ -325,7 +325,7 @@ func (cc *ContextCompressor) extractFallbackSummary(messages []provider.Message)
 
 	if len(parts) == 1 {
 		// 未能抽取到任何信息，回退到截断提示
-		return "[Previous conversation truncated]"
+		return "Previous conversation truncated"
 	}
 	return strings.Join(parts, "\n")
 }

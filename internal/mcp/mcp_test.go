@@ -102,7 +102,7 @@ func TestMCPTool(t *testing.T) {
 		t.Fatalf("expected tool name 'mcp_test_server_test_tool', got '%s'", mcpTool.Name())
 	}
 
-	expectedDesc := "[MCP:test_server] A test tool"
+	expectedDesc := "MCP test_server: A test tool"
 	if mcpTool.Description() != expectedDesc {
 		t.Fatalf("expected description '%s', got '%s'", expectedDesc, mcpTool.Description())
 	}

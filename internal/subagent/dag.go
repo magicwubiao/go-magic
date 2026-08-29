@@ -239,7 +239,9 @@ func (rs *ResultSynthesizer) SynthesizeResults(ctx context.Context, goal string,
 	for taskID, result := range results {
 		resultsBuilder.WriteString(fmt.Sprintf("\n--- Sub-task %d: %s ---\n", i, taskID))
 		if len(result) > 2000 {
-			resultsBuilder.WriteString(result[:2000] + "\n... [truncated]")
+			// NOTE: avoid square brackets — this text reaches the LLM and
+			// GLM mimics bracketed markers as a structural template.
+			resultsBuilder.WriteString(result[:2000] + "\n... (truncated)")
 		} else {
 			resultsBuilder.WriteString(result)
 		}

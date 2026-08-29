@@ -296,7 +296,7 @@ func fleetProtocol(teammates string) string {
 
 BOT FLEET PROTOCOL:
 - Teammate bots: %s
-- To contact a teammate directly, call the message_agent tool with target=<tag> and your composed message. Replies arrive later as "[reply from @<tag>] ..." user messages; treat them as that teammate speaking.
+- To contact a teammate directly, call the message_agent tool with target=<tag> and your composed message. Replies arrive later as "reply from @<tag>: ..." user messages; treat them as that teammate speaking.
 - Mention teammates by their tag when referring to them in your replies.
 - Escalate judgment calls to the human with plain text addressed to @user - do not use message_agent for that.`, teammates)
 }
@@ -386,7 +386,9 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		senderTag := strings.TrimPrefix(msg.From, "bot:")
 		if senderCfg := m.FindByTag(senderTag); senderCfg != nil {
 			log.Debugf("[BotMode] Bot %s -> %s", rt.cfg.Name, senderCfg.Name)
-			_ = m.Enqueue(senderCfg.Name, fmt.Sprintf("[reply from @%s] %s", rt.cfg.MentionTag(), reply), "bot:"+rt.cfg.MentionTag())
+			// NOTE: avoid square brackets — this text reaches the LLM as a user
+			// message and GLM mimics the bracket format. Use "reply from @tag:".
+			_ = m.Enqueue(senderCfg.Name, fmt.Sprintf("reply from @%s: %s", rt.cfg.MentionTag(), reply), "bot:"+rt.cfg.MentionTag())
 		} else {
 			log.Warnf("[BotMode] Reply target bot %q no longer exists", senderTag)
 		}

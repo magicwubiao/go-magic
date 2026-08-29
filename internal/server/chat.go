@@ -248,7 +248,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				if len(argsSummary) > 200 {
 					argsSummary = argsSummary[:200] + "..."
 				}
-				fmt.Fprintf(&executedSteps, "[tool_call] %s(%s)\n", toolName, argsSummary)
+				fmt.Fprintf(&executedSteps, "tool_call: %s(%s)\n", toolName, argsSummary)
 				data, _ := json.Marshal(map[string]interface{}{
 					"type":      "tool_start",
 					"name":      toolName,
@@ -281,7 +281,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				if len(resultSummary) > 400 {
 					resultSummary = resultSummary[:400] + "...(truncated)"
 				}
-				fmt.Fprintf(&executedSteps, "[tool_result:%s] %s\n", toolName, resultSummary)
+				fmt.Fprintf(&executedSteps, "tool_result %s: %s\n", toolName, resultSummary)
 				data, _ := json.Marshal(map[string]interface{}{
 					"type":         "tool_result",
 					"name":         toolName,
@@ -380,12 +380,15 @@ func extractPartialTurnText(history []types.Message, userInput string) string {
 			text := strings.TrimSpace(m.Content)
 			if len(m.ToolCalls) == 0 {
 				if text != "" {
-					fmt.Fprintf(&b, "[assistant] %s\n", text)
+					// NOTE: avoid square brackets — this text is persisted as
+					// assistant content and reaches the LLM next turn. GLM
+					// mimics "[role] ..." and starts wrapping its own replies.
+					fmt.Fprintf(&b, "assistant: %s\n", text)
 				}
 				continue
 			}
 			if text != "" {
-				fmt.Fprintf(&b, "[assistant] %s\n", text)
+				fmt.Fprintf(&b, "assistant: %s\n", text)
 			}
 			for _, tc := range m.ToolCalls {
 				argsStr := tc.Function.Arguments
@@ -398,14 +401,14 @@ func extractPartialTurnText(history []types.Message, userInput string) string {
 				if len(argsStr) > 200 {
 					argsStr = argsStr[:200] + "..."
 				}
-				fmt.Fprintf(&b, "[tool_call] %s(%s)\n", tc.GetToolName(), argsStr)
+				fmt.Fprintf(&b, "tool_call: %s(%s)\n", tc.GetToolName(), argsStr)
 			}
 		case "tool":
 			content := strings.TrimSpace(m.Content)
 			if len(content) > 400 {
 				content = content[:400] + "...(truncated)"
 			}
-			fmt.Fprintf(&b, "[tool_result:%s] %s\n", m.ToolCallID, content)
+			fmt.Fprintf(&b, "tool_result %s: %s\n", m.ToolCallID, content)
 		}
 	}
 	return strings.TrimSpace(b.String())

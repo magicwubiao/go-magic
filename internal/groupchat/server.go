@@ -803,7 +803,7 @@ func (s *Server) handleAgentMention(roomID string, msg *ChatMessage) {
 				}
 
 				// Store agent response as a system message (placeholder - actual processing via REST API)
-				response := fmt.Sprintf("[Agent %s] I see your message. Processing via the AI service...", a.Name)
+				response := fmt.Sprintf("Agent %s: I see your message. Processing via the AI service...", a.Name)
 				s.storage.SaveMessage(&ChatMessage{
 					RoomID:     roomID,
 					SenderID:   "agent-" + a.Name,

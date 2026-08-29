@@ -415,9 +415,19 @@ func (p *AnthropicProvider) parseResponse(body []byte) (*ChatResponse, error) {
 	}
 
 	for _, content := range resp.Content {
-		if content.Type == "text" {
+		switch content.Type {
+		case "text":
 			response.Content = content.Text
-		} else if content.Type == "tool_use" {
+		case "thinking":
+			// Extended thinking blocks from Claude 3.5+ thinking / Claude 4.
+			// "content" field contains the raw reasoning text, "thinking"
+			// signature block is in a different block (skipped here).
+			if content.Content != "" {
+				response.ReasoningContent = content.Content
+			} else if content.Text != "" {
+				response.ReasoningContent = content.Text
+			}
+		case "tool_use":
 			// This is a tool call request
 			args, _ := json.Marshal(content.Input)
 			argsStr := string(args)
@@ -446,6 +456,7 @@ func (p *AnthropicProvider) parseResponse(body []byte) (*ChatResponse, error) {
 func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHandler) error {
 	reader := bufio.NewReader(body)
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 	var toolCalls []types.ToolCall
 	var currentToolCall *types.ToolCall
 	var functionName strings.Builder
@@ -484,6 +495,7 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 			Delta *struct {
 				Type         string `json:"type"`
 				Text         string `json:"text,omitempty"`
+				Thinking     string `json:"thinking,omitempty"`
 				PartialJson  string `json:"partial_json,omitempty"`
 				Index        int    `json:"index,omitempty"`
 				ContentBlock *struct {
@@ -512,7 +524,21 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 					Done:    false,
 				})
 			case "thinking_delta":
-				// Skip thinking blocks for now
+				// Extended thinking: collect and forward as ReasoningContent
+				// so the UI can render the <think> wrapper inline.
+				var reasoning string
+				if event.Delta.Thinking != "" {
+					reasoning = event.Delta.Thinking
+				} else if event.Delta.Text != "" {
+					reasoning = event.Delta.Text
+				}
+				if reasoning != "" {
+					fullReasoning.WriteString(reasoning)
+					handler(&StreamResponse{
+						ReasoningContent: reasoning,
+						Done:             false,
+					})
+				}
 			case "input_json_delta":
 				if currentToolCall == nil {
 					continue
@@ -566,9 +592,10 @@ func (p *AnthropicProvider) parseStreamResponse(body io.Reader, handler StreamHa
 			}
 
 			handler(&StreamResponse{
-				Content:   fullContent.String(),
-				ToolCalls: toolCalls,
-				Done:      true,
+				Content:          fullContent.String(),
+				ReasoningContent: fullReasoning.String(),
+				ToolCalls:        toolCalls,
+				Done:             true,
 			})
 		}
 	}

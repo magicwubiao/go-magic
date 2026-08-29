@@ -265,11 +265,9 @@ export const useChatStore = defineStore('chat', () => {
       if (filtered.length < SESSIONS_LIMIT) {
         sessionsHasMore.value = false
       }
-      if (!activeSessionId.value && sessions.value.length > 0) {
-        const first = sessions.value[0]
-        activeSessionId.value = first.id
-        getOrCreateSessionState(first.id)
-      }
+      // Do NOT auto-select the first session on refresh — land on a
+      // blank new-chat state. A session is created automatically when
+      // the user sends their first message.
     } catch (e) {
       console.error('Failed to load sessions:', e)
       sessions.value = []

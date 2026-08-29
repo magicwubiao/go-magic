@@ -220,7 +220,10 @@ func (c *Compressor) clampSummaryTokens(s string) string {
 	if idx := strings.LastIndexAny(trimmed, "。\n.！!？?"); idx > maxChars*3/4 {
 		trimmed = trimmed[:idx+1]
 	}
-	return trimmed + "\n…[truncated]"
+	// NOTE: avoid square brackets here — this text reaches the LLM context
+	// and GLM picks up bracketed markers as a structural template, then
+	// starts wrapping its own replies in []. Use parentheses instead.
+	return trimmed + "\n…(truncated)"
 }
 
 // SetSummarizer 注入 LLM 摘要函数（线程安全）。传 nil 可撤销并回到纯规则摘要。
@@ -390,7 +393,9 @@ func (c *Compressor) ClearCache() {
 // PruneToolOutput replaces old tool outputs with a placeholder.
 func PruneToolOutput(content string, maxAge time.Duration) string {
 	if strings.Contains(content, "tool output") && len(content) > 1000 {
-		return "[Old tool output cleared to save context space]"
+		// NOTE: avoid square brackets — this text reaches the LLM as a tool
+		// message and GLM mimics the bracket format in its own output.
+		return "Old tool output cleared to save context space"
 	}
 	return content
 }

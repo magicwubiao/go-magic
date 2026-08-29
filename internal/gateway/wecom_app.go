@@ -430,7 +430,7 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		content = event.Content
 
 	case "image":
-		content = "[用户发送了一张图片]"
+		content = "用户发送了一张图片"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "image"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -440,12 +440,12 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 				})
 			} else {
 				log.Debugf("[WeCom App] Failed to download image: %v", err)
-				content = "[Image]"
+				content = "Image:"
 			}
 		}
 
 	case "voice":
-		content = "[语音消息]"
+		content = "语音消息"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "voice"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -455,14 +455,14 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 				})
 			} else {
 				log.Debugf("[WeCom App] Failed to download voice: %v", err)
-				content = "[Voice message]"
+				content = "Voice message"
 			}
 		} else {
-			content = "[Voice message]"
+			content = "Voice message"
 		}
 
 	case "video":
-		content = "[用户发送了一个视频]"
+		content = "用户发送了一个视频"
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "video"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
@@ -472,20 +472,20 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 				})
 			} else {
 				log.Debugf("[WeCom App] Failed to download video: %v", err)
-				content = "[Video]"
+				content = "Video:"
 			}
 		} else {
-			content = "[Video]"
+			content = "Video:"
 		}
 
 	case "location":
-		content = "[Location] " + event.Label + " (" + event.Location + ")"
+		content = "Location: " + event.Label + " (" + event.Location + ")"
 
 	case "link":
-		content = fmt.Sprintf("[Link: %s] %s - %s", event.Title, event.Desc, event.URL)
+		content = fmt.Sprintf("Link: %s - %s - %s", event.Title, event.Desc, event.URL)
 
 	case "event":
-		content = "[事件]"
+		content = "事件"
 
 	default:
 		log.Debugf("[WeCom App] Unhandled message type: %s", event.MsgType)

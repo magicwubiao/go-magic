@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
@@ -66,12 +68,14 @@ func TestStreamSanitizeUsesSameRules(t *testing.T) {
 	}
 }
 
-// TestSanitizeHistoryRepairsEmptyAssistantContent verifies Pass 2.5 patches
-// assistant messages with empty/whitespace content regardless of ToolCalls —
-// Zhipu 1214 fires on both empty-content-only assistants (old case covered by
-// the previous implementation) AND tool-call-carrying assistants with empty
-// content (the case missed by the old pass, reproduced by mid-conversation
-// truncateHistory after a streaming partial assistant write).
+// TestSanitizeHistoryRepairsEmptyAssistantContent verifies that empty
+// assistant content is NOT patched in a.history (which would leak a
+// placeholder to the UI) but IS handled correctly in the outbound copy via
+// buildLLMMessages:
+//   - empty assistant WITH tool_calls is kept and patched with a natural-language placeholder
+//   - empty assistant WITHOUT tool_calls is dropped (best practice from
+//     open-webui #25083 / Hermes #66429: such messages carry no payload and
+//     poison the model's self-view), with consecutive user/system collapsed.
 func TestSanitizeHistoryRepairsEmptyAssistantContent(t *testing.T) {
 	a := &Agent{}
 	a.history = []provider.Message{
@@ -88,19 +92,37 @@ func TestSanitizeHistoryRepairsEmptyAssistantContent(t *testing.T) {
 	}
 	a.sanitizeHistory()
 
+	// a.history should still have empty content — the UI must not see any placeholder.
 	for i, m := range a.history {
-		if m.Role == "assistant" {
-			// Pass 2.5 fills truly-empty/whitespace content with a one-space
-			// placeholder (TrimSpace on a space-placeholder returns "" so we
-			// must compare on actual emptiness instead).
-			if m.Content == "" {
-				t.Errorf("assistant[%d] still has truly empty content (len tc=%d)",
-					i, len(m.ToolCalls))
-			}
+		if m.Role == "assistant" && m.Content == emptyAssistantPlaceholder {
+			t.Errorf("assistant[%d] leaked placeholder into stored history", i)
 		}
 	}
-	if v := ValidateMessageAlternation(a.history); len(v) > 0 {
-		t.Fatalf("final history invalid: %+v", v)
+
+	// The outbound copy: tool-calling assistant keeps non-empty content
+	// (patched to a natural-language placeholder); the empty plain
+	// assistant (no tool_calls) is dropped entirely, and the resulting
+	// user→user run is collapsed to the newest user message so
+	// alternation stays valid.
+	outbound := a.buildLLMMessages()
+	for i, m := range outbound {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" {
+			t.Errorf("buildLLMMessages outbound assistant[%d] has empty content", i)
+		}
+	}
+	if v := ValidateMessageAlternation(outbound); len(v) > 0 {
+		t.Fatalf("outbound copy invalid: %+v", v)
+	}
+	// Confirm the empty-no-tool assistant was dropped (only the tool-calling
+	// assistant remains).
+	assistantCount := 0
+	for _, m := range outbound {
+		if m.Role == "assistant" {
+			assistantCount++
+		}
+	}
+	if assistantCount != 1 {
+		t.Fatalf("expected 1 assistant (tool-calling only) in outbound, got %d", assistantCount)
 	}
 }
 
@@ -179,5 +201,113 @@ func TestSanitizeHistoryDropsLeadingIllegalRoles(t *testing.T) {
 	}
 	if v := ValidateMessageAlternation(a.history); len(v) > 0 {
 		t.Fatalf("final history invalid: %+v", v)
+	}
+}
+
+// TestBuildLLMMessagesNeverProducesWhitespaceEmptyAssistant is the regression
+// test for the 1→9 violation-growth bug. The symptom was: every streaming
+// tool turn produced a new "sanitizing N message-alternation violation(s)"
+// WARN line with N monotonically increasing (1→2→3→…→9), and the sample
+// always listed positions #4/#6/#8/... as "assistant message with empty
+// content (provider 1214: messages 参数非法)".
+//
+// Root cause: buildLLMMessages wrote a single-space placeholder when an
+// assistant had ToolCalls, but ValidateMessageAlternation uses
+// strings.TrimSpace(msg.Content) == "", so a single-space placeholder still
+// counted as empty → SanitizeMessageHistory ran on every call but only
+// repaired the outbound req.Messages copy, not a.history. On the NEXT turn
+// buildLLMMessages re-read the same a.history and produced the same
+// single-space offender → validator flagged N violations again, growing N
+// whenever a fresh tool round appended a new empty-content assistant with
+// whitespace-only content (e.g. streaming returned no text chunks, only a
+// tool_calls block, so fullContent="" reached a.history).
+func TestBuildLLMMessagesNeverProducesWhitespaceEmptyAssistant(t *testing.T) {
+	a := &Agent{}
+	// Simulate 5 consecutive tool rounds, each one appending an assistant
+	// whose content is ""/whitespace (the case that triggered the growth
+	// pattern) plus a matching tool result.
+	a.history = []provider.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "start"},
+	}
+	roundNo := 0
+	appendRound := func(assistantContent, toolResult string) {
+		roundNo++
+		tc := types.ToolCall{
+			ID:   fmt.Sprintf("call_r%d_%d", roundNo, len(a.history)),
+			Type: "function",
+			Function: types.Function{
+				Name:      "ls",
+				Arguments: "{}",
+			},
+		}
+		a.history = append(a.history, provider.Message{
+			Role:      "assistant",
+			Content:   assistantContent,
+			ToolCalls: []types.ToolCall{tc},
+		})
+		a.history = append(a.history, provider.Message{
+			Role:       "tool",
+			ToolCallID: tc.ID,
+			Content:    toolResult,
+		})
+		a.history = append(a.history, provider.Message{
+			Role:    "user",
+			Content: "next",
+		})
+	}
+	// Cover every flavor of "empty-looking" content the stream path can
+	// produce after stripping a <think> block, after a newline-only chunk,
+	// or after the provider never emitted text chunks at all.
+	for _, tc := range []struct{ c, r string }{
+		{c: "", r: "tool result 1"},
+		{c: " ", r: "tool result 2"},
+		{c: "\n", r: "tool result 3"},
+		{c: " \t \n", r: "tool result 4"},
+		{c: "<think>long deliberation</think>\n", r: "tool result 5"},
+	} {
+		appendRound(tc.c, tc.r)
+	}
+
+	// Now walk the whole history the way a real streaming loop does:
+	// buildLLMMessages → validate once → expect ZERO violations because
+	// the stored history never had a whitespace-only assistant.
+	seen := -1
+	for round := 0; round < 3; round++ {
+		outbound := a.buildLLMMessages()
+		v := ValidateMessageAlternation(outbound)
+		if len(v) != 0 {
+			t.Fatalf("round %d: buildLLMMessages still produced %d violations "+
+				"(sample: %+v) — monotonic-growth regression NOT fixed",
+				round, len(v), v)
+		}
+		if seen == -1 {
+			seen = len(v)
+		} else if len(v) > seen {
+			t.Fatalf("round %d: violations grew %d→%d — monotonic-growth "+
+				"regression NOT fixed", round, seen, len(v))
+		}
+	}
+
+	// Also guarantee that when content truly comes back empty for a
+	// no-tool assistant (extreme case), buildLLMMessages DROPS those
+	// empty assistants and collapses the resulting consecutive user run
+	// so the outbound copy still passes alternation validation.
+	a2 := &Agent{}
+	a2.history = []provider.Message{
+		{Role: "user", Content: "ok"},
+		{Role: "assistant", Content: "", ToolCalls: nil},
+		{Role: "user", Content: "and?"},
+		{Role: "assistant", Content: "  \n\t  ", ToolCalls: nil},
+	}
+	out2 := a2.buildLLMMessages()
+	// No assistant should remain (both were empty with no tool_calls).
+	for i, m := range out2 {
+		if m.Role == "assistant" {
+			t.Errorf("buildLLMMessages kept empty no-tool assistant at %d (should be dropped)", i)
+		}
+	}
+	if v := ValidateMessageAlternation(out2); len(v) > 0 {
+		t.Fatalf("ValidateMessageAlternation on buildLLMMessages output: %+v", v)
 	}
 }

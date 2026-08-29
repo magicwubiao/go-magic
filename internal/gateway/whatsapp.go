@@ -382,7 +382,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		if caption != "" {
 			content = caption
 		} else {
-			content = "[用户发送了一张图片]"
+			content = "用户发送了一张图片"
 		}
 		msgType = "image"
 		if g.client != nil && g.client.IsConnected() {
@@ -412,7 +412,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		if caption != "" {
 			content = caption
 		} else {
-			content = "[用户发送了一个视频]"
+			content = "用户发送了一个视频"
 		}
 		msgType = "video"
 		if g.client != nil && g.client.IsConnected() {
@@ -432,7 +432,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.AudioMessage != nil:
-		content = "[语音消息]"
+		content = "语音消息"
 		msgType = "audio"
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.AudioMessage)
@@ -456,7 +456,7 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.DocumentMessage != nil:
-		content = "[文件]"
+		content = "文件:"
 		msgType = "document"
 		filename := msg.DocumentMessage.GetFileName()
 		if g.client != nil && g.client.IsConnected() {
@@ -480,17 +480,17 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.LocationMessage != nil:
-		content = fmt.Sprintf("[Location: %.6f, %.6f]",
+		content = fmt.Sprintf("Location: %.6f, %.6f",
 			msg.LocationMessage.GetDegreesLatitude(),
 			msg.LocationMessage.GetDegreesLongitude())
 		msgType = "location"
 
 	case msg.ContactMessage != nil:
-		content = "[Contact: " + msg.ContactMessage.GetDisplayName() + "]"
+		content = "Contact: " + msg.ContactMessage.GetDisplayName()
 		msgType = "contact"
 
 	case msg.StickerMessage != nil:
-		content = "[贴纸]"
+		content = "贴纸:"
 		msgType = "sticker"
 		if g.client != nil && g.client.IsConnected() {
 			data, err := g.client.Download(context.Background(), msg.StickerMessage)
@@ -509,11 +509,11 @@ func (g *WhatsAppGateway) handleIncomingMessage(evt *events.Message) {
 		}
 
 	case msg.ReactionMessage != nil:
-		content = "[Reaction: " + msg.ReactionMessage.GetText() + "]"
+		content = "Reaction: " + msg.ReactionMessage.GetText()
 		msgType = "reaction"
 
 	default:
-		content = "[Unsupported message]"
+		content = "Unsupported message"
 		msgType = "unknown"
 	}
 

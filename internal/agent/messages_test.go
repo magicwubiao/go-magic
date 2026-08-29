@@ -103,18 +103,13 @@ func TestValidateMessageAlternationIllegal(t *testing.T) {
 				{Role: "tool", ToolCallID: "tc_0", Content: "ok"},
 				msg("user")},
 			1},
-		{"assistant with empty content and tool_calls",
-			// RC2 root cause of 26-turn 1214: buildLLMMessages only
-			// patched empty content *from think-only* assistants; a tool
-			// calling assistant whose content was actually empty (e.g.
-			// Zhipu/stream returns no text content) went through and was
-			// rejected with 1214 "messages 参数非法".
+		{"assistant with empty content and orphan tool_calls",
+			// Empty content alone is no longer a violation (patched only in
+			// the outbound copy via buildLLMMessages). But this assistant
+			// also has tool_calls with no following tool results → orphan
+			// check (RC1) still flags it.
 			[]provider.Message{msg("system"), msg("user"),
 				{Role: "assistant", Content: "", ToolCalls: msgToolCalls("assistant").ToolCalls}},
-			1},
-		{"plain assistant with empty content",
-			[]provider.Message{msg("system"), msg("user"),
-				{Role: "assistant", Content: ""}},
 			1},
 	}
 	for _, c := range cases {

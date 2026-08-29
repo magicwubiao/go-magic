@@ -76,9 +76,12 @@ func (me *MemoryExtractor) ExtractMemories(ctx context.Context, messages []provi
 	for _, msg := range messages {
 		content := msg.Content
 		if len(content) > 1000 {
-			content = content[:1000] + "... [truncated]"
+			content = content[:1000] + "... (truncated)"
 		}
-		contextBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, content))
+		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
+		// GLM mimics this format and starts wrapping every reply in [].
+		// Use "Role: content" (no brackets).
+		contextBuilder.WriteString(fmt.Sprintf("%s: %s\n", msg.Role, content))
 	}
 
 	prompt := fmt.Sprintf(`Analyze the following conversation and extract key information to store in long-term memory.
@@ -472,7 +475,7 @@ func SummarizeMemories(memories []*Memory) string {
 			impLabel = "[low]"
 		}
 
-		typeLabel := fmt.Sprintf("[%s]", m.Type)
+		typeLabel := m.Type
 
 		sb.WriteString(fmt.Sprintf("%d. %s%s %s\n", i+1, impLabel, typeLabel, m.Content))
 	}

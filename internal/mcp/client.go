@@ -474,25 +474,26 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 		case "", "text":
 			combined.WriteString(item.Text)
 		case "image":
-			desc := fmt.Sprintf("[image %s (%d bytes)]", item.MimeType, base64DecodedLen(item.Data))
+			// NOTE: avoid square brackets — GLM mimics them in its output.
+			desc := fmt.Sprintf("image %s (%d bytes)", item.MimeType, base64DecodedLen(item.Data))
 			combined.WriteString(desc)
 		case "embedded_resource":
 			name := item.URI
 			if name == "" {
 				name = "embedded-resource"
 			}
-			combined.WriteString(fmt.Sprintf("[resource: %s]", name))
+			combined.WriteString(fmt.Sprintf("resource: %s", name))
 			if item.Text != "" {
 				combined.WriteString("\n")
 				combined.WriteString(item.Text)
 			}
 		case "audio":
-			combined.WriteString("[audio content]")
+			combined.WriteString("audio content")
 		default:
 			if item.Text != "" {
 				combined.WriteString(item.Text)
 			} else {
-				combined.WriteString(fmt.Sprintf("[%s content]", item.Type))
+				combined.WriteString(fmt.Sprintf("%s content", item.Type))
 			}
 		}
 	}
@@ -531,7 +532,7 @@ func (t *MCPTool) Name() string {
 
 // Description returns the tool description
 func (t *MCPTool) Description() string {
-	return fmt.Sprintf("[MCP:%s] %s", t.serverName, t.tool.Description)
+	return fmt.Sprintf("MCP %s: %s", t.serverName, t.tool.Description)
 }
 
 // Parameters returns the tool parameters

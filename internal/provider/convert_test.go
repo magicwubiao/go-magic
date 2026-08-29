@@ -211,3 +211,82 @@ func TestConvertMessages_ToolCallIDMismatch(t *testing.T) {
 		t.Errorf("Expected tool_call_id 'call_different', got %v", toolCallID)
 	}
 }
+
+// --- TrimDashScopeTurns tests ---
+
+func TestTrimDashScopeTurns_UnderLimit(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+	}
+	result := TrimDashScopeTurns(msgs)
+	if len(result) != len(msgs) {
+		t.Errorf("expected %d messages, got %d", len(msgs), len(result))
+	}
+}
+
+func TestTrimDashScopeTurns_OverTotalLimit(t *testing.T) {
+	// Simulate a long session: many short user↔assistant pairs that push
+	// the TOTAL message count over DashScopeTurnMaxSend even though
+	// assistant count alone is well under the old limit.
+	const numPairs = 100 // 1 system + 200 messages = 201 total
+	msgs := make([]Message, 0, numPairs*2+1)
+	msgs = append(msgs, Message{Role: "system", Content: "sys"})
+	for i := 0; i < numPairs; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: "u"})
+		msgs = append(msgs, Message{Role: "assistant", Content: "a"})
+	}
+
+	result := TrimDashScopeTurns(msgs)
+
+	if len(result) > DashScopeTurnMaxSend {
+		t.Errorf("expected <= %d total messages, got %d", DashScopeTurnMaxSend, len(result))
+	}
+	// System message must be preserved
+	if len(result) > 0 && result[0].Role != "system" {
+		t.Errorf("expected system message at index 0, got %s", result[0].Role)
+	}
+}
+
+func TestTrimDashScopeTurns_WithToolMessages(t *testing.T) {
+	const numRounds = 60 // 1 + 60*(1+1+1) = 181 total
+	msgs := make([]Message, 0, numRounds*4+1)
+	msgs = append(msgs, Message{Role: "system", Content: "sys"})
+	for i := 0; i < numRounds; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: "u"})
+		msgs = append(msgs, Message{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []types.ToolCall{
+				{ID: "call", Type: "function", Function: types.Function{Name: "f", Arguments: "{}"}},
+			},
+		})
+		msgs = append(msgs, Message{Role: "tool", Content: "r", ToolCallID: "call"})
+	}
+
+	result := TrimDashScopeTurns(msgs)
+
+	if len(result) > DashScopeTurnMaxSend {
+		t.Errorf("expected <= %d total messages, got %d", DashScopeTurnMaxSend, len(result))
+	}
+	// No orphaned tool messages at the start
+	if len(result) > 1 && result[1].Role == "tool" {
+		t.Errorf("result should not start with a tool message after system")
+	}
+}
+
+func TestTrimDashScopeTurns_NoSystemMessage(t *testing.T) {
+	const numPairs = 100
+	msgs := make([]Message, 0, numPairs*2)
+	for i := 0; i < numPairs; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: "u"})
+		msgs = append(msgs, Message{Role: "assistant", Content: "a"})
+	}
+
+	result := TrimDashScopeTurns(msgs)
+
+	if len(result) > DashScopeTurnMaxSend {
+		t.Errorf("expected <= %d total messages, got %d", DashScopeTurnMaxSend, len(result))
+	}
+}

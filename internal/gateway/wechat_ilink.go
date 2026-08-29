@@ -743,10 +743,10 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 						URL:      mediaPath,
 						Filename: item.FileItem.FileName,
 					})
-					parts = append(parts, fmt.Sprintf("[文件: %s]", item.FileItem.FileName))
+					parts = append(parts, fmt.Sprintf("文件: %s", item.FileItem.FileName))
 				} else {
 					log.Debugf("[WeChat-iLink] Failed to download file %s: %v", item.FileItem.FileName, err)
-					parts = append(parts, fmt.Sprintf("[文件: %s]", item.FileItem.FileName))
+					parts = append(parts, fmt.Sprintf("文件: %s", item.FileItem.FileName))
 				}
 			} else {
 				parts = append(parts, "[文件]")
@@ -795,13 +795,13 @@ func (g *WeChatILinkGateway) handleIncomingMessage(msg ILinkMessage) {
 			}
 		}
 		if hasImage {
-			content = "[用户发送了一张图片]"
+			content = "用户发送了一张图片"
 		} else if hasVideo {
-			content = "[用户发送了一个视频]"
+			content = "用户发送了一个视频"
 		} else if hasAudio {
-			content = "[用户发送了一段语音]"
+			content = "用户发送了一段语音"
 		} else {
-			content = "[用户发送了一个文件]"
+			content = "用户发送了一个文件"
 		}
 		log.Debugf("[WeChat-iLink] Media-only message, using default content: %s", content)
 	}

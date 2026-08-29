@@ -588,7 +588,7 @@ func (s *Store) llmSummarize(memories []*Memory) (string, error) {
 	prompt.WriteString("Memories:\n\n")
 
 	for i, m := range memories {
-		prompt.WriteString(fmt.Sprintf("[%d] (%s) %s: %s\n", i+1, m.Type, m.Scope, m.Content))
+		prompt.WriteString(fmt.Sprintf("%d. (%s) %s: %s\n", i+1, m.Type, m.Scope, m.Content))
 	}
 
 	prompt.WriteString("\nPlease provide a brief summary highlighting the key information:")

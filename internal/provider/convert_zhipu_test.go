@@ -44,9 +44,11 @@ func TestConvertZhipu1214Regression(t *testing.T) {
 		t.Errorf("converted output contains empty arguments (zhipu 1214 trigger):\n%s", s)
 	}
 
-	// Assistant with tool_calls and empty content must serialize as "".
-	if got := out[1]["content"]; got != "" {
-		t.Errorf("assistant tool_call content = %v (%T), want \"\"", got, got)
+	// Assistant with tool_calls and empty content must serialize as a
+	// non-empty placeholder so Zhipu's TrimSpace-sensitive validator does
+	// not reject it with 1214.
+	if got := out[1]["content"]; got == "" || strings.TrimSpace(got.(string)) == "" {
+		t.Errorf("assistant tool_call content = %v (%T), want non-empty placeholder", got, got)
 	}
 
 	// Tool message with empty content must get a placeholder, not null.

@@ -233,6 +233,51 @@ func (p *OpenAICompatibleProvider) skipTemperatureDefault() bool {
 	return strings.Contains(model, "gpt-5")
 }
 
+// isDashScope is true when this provider instance talks to the
+// DashScope compatible-mode endpoint. It enables a set of behavioural
+// tweaks: turn-count trimming, thinking-mode extra params and
+// incremental_output streaming.
+func (p *OpenAICompatibleProvider) isDashScope() bool {
+	return p.name == "dashscope"
+}
+
+// applyDashScopeDefaults adds DashScope-only request keys on top of the
+// outbound body: enable_thinking + preserve_thinking (non-streaming &
+// streaming bodies); for streaming bodies also turns on
+// incremental_output so reasoning_content comes through as SSE deltas.
+func (p *OpenAICompatibleProvider) applyDashScopeDefaults(reqBody map[string]interface{}, streaming bool) {
+	if !p.isDashScope() {
+		return
+	}
+	// Don't clobber user-set values (they may have used SetExtraParam).
+	if _, ok := reqBody["enable_thinking"]; !ok {
+		reqBody["enable_thinking"] = true
+	}
+	if _, ok := reqBody["preserve_thinking"]; !ok {
+		reqBody["preserve_thinking"] = true
+	}
+	if streaming {
+		if _, ok := reqBody["incremental_output"]; !ok {
+			reqBody["incremental_output"] = true
+		}
+	}
+}
+
+// prepMessages runs provider-specific preprocessing over the message list.
+// For DashScope it enforces the 140-assistant-message hard cap (see
+// TrimDashScopeTurns). Other providers currently pass through unchanged.
+func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[string]interface{} {
+	if p.isDashScope() {
+		trimmed := TrimDashScopeTurns(messages)
+		if len(trimmed) != len(messages) {
+			log.Infof("[OpenAICompat:dashscope] trimmed turns: %d -> %d (limit %d)",
+				len(messages), len(trimmed), DashScopeTurnMaxSend)
+		}
+		return ConvertMessagesForProvider(trimmed, p.BaseProvider)
+	}
+	return ConvertMessagesForProvider(messages, p.BaseProvider)
+}
+
 // applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段），
 // 并补上默认采样参数（temperature），见 defaultTemperature。
 func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface{}) {
@@ -256,9 +301,10 @@ func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
+		"messages": p.prepMessages(messages),
 	}
 	p.applyExtraParams(reqBody)
+	p.applyDashScopeDefaults(reqBody, false)
 
 	url := p.BaseURL + "/chat/completions"
 
@@ -275,9 +321,10 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	var response struct {
 		Choices []struct {
 			Message struct {
-				Content   string `json:"content"`
-				Role      string `json:"role"`
-				ToolCalls []struct {
+				Content          string `json:"content"`
+				Role             string `json:"role"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					ID       string `json:"id"`
 					Type     string `json:"type"`
 					Function struct {
@@ -309,7 +356,8 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	choice := response.Choices[0]
 
 	chatResp := &ChatResponse{
-		Content: choice.Message.Content,
+		Content:          choice.Message.Content,
+		ReasoningContent: choice.Message.ReasoningContent,
 		// 回填 usage：之前的实现丢弃了该信息，导致缓存命中
 		// 与真实 token 消耗不可见，成本统计失真。
 		Usage: &Usage{
@@ -344,13 +392,14 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 
 // ChatWithTools implements the ToolCaller interface
 func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}) (*ChatResponse, error) {
-	convertedMessages := ConvertMessagesForProvider(messages, p.BaseProvider)
+	convertedMessages := p.prepMessages(messages)
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
 		"messages": convertedMessages,
 		"tools":    tools,
 	}
 	p.applyExtraParams(reqBody)
+	p.applyDashScopeDefaults(reqBody, false)
 
 	// tool_choice strategy:
 	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
@@ -383,9 +432,10 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	var response struct {
 		Choices []struct {
 			Message struct {
-				Content   string `json:"content"`
-				Role      string `json:"role"`
-				ToolCalls []struct {
+				Content          string `json:"content"`
+				Role             string `json:"role"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					ID       string `json:"id"`
 					Type     string `json:"type"`
 					Function struct {
@@ -417,7 +467,8 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	choice := response.Choices[0]
 
 	chatResp := &ChatResponse{
-		Content: choice.Message.Content,
+		Content:          choice.Message.Content,
+		ReasoningContent: choice.Message.ReasoningContent,
 		// ChatWithTools 路径同样回填 usage + 缓存命中
 		Usage: &Usage{
 			PromptTokens:     response.Usage.PromptTokens,
@@ -463,17 +514,24 @@ func (p *OpenAICompatibleProvider) StreamWithTools(ctx context.Context, messages
 func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messages []types.Message, tools []map[string]interface{}, withTools bool, handler StreamHandler) error {
 	reqBody := map[string]interface{}{
 		"model":    p.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, p.BaseProvider),
+		"messages": p.prepMessages(messages),
 		"stream":   true,
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
 		},
 	}
 	p.applyExtraParams(reqBody)
+	p.applyDashScopeDefaults(reqBody, true)
 
 	if withTools && tools != nil {
 		reqBody["tools"] = tools
-		reqBody["tool_choice"] = "auto"
+		// DashScope / mimo do not want tool_choice (same rule as
+		// ChatWithTools non-streaming path).
+		switch p.name {
+		case "dashscope", "mimo":
+		default:
+			reqBody["tool_choice"] = "auto"
+		}
 	}
 
 	url := p.BaseURL + "/chat/completions"

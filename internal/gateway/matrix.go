@@ -380,7 +380,7 @@ func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message
 			Platform:    "matrix",
 			ChannelID:   roomID,
 			UserID:      event.Sender,
-			Content:     fmt.Sprintf("[%s joined/left]", event.Sender),
+			Content:     fmt.Sprintf("%s joined/left", event.Sender),
 			Timestamp:   time.Unix(event.OriginServerTS/1000, 0),
 			IsGroup:     isGroup,
 			IsMentioned: isMentioned,

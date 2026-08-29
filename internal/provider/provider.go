@@ -13,9 +13,10 @@ type Message = types.Message
 
 // ChatResponse represents a chat response with optional usage info
 type ChatResponse struct {
-	Content   string           `json:"content"`
-	ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
-	Usage     *Usage           `json:"usage,omitempty"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
+	Usage            *Usage           `json:"usage,omitempty"`
 }
 
 // ModelInfo represents information about a supported model

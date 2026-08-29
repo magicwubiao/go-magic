@@ -213,7 +213,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		registry:         registry,
 		tools:            tools,
 		history:          history,
-		maxTurns:         150,
+		maxTurns:         70,
 		maxIterations:    200,
 		maxTotalLen:      200000, // 200K chars max history (~50K tokens)
 		maxMsgLen:        50000,  // 50K chars per message (~12K tokens)
@@ -818,6 +818,23 @@ func (a *Agent) AddSkillsContext(skillsCtx string) {
 	}}, a.history...)
 }
 
+// wrapLLMReasoning wraps the provider's reasoning_content in <think> tags
+// alongside the normal text content. If the provider sent no reasoning the
+// original content is returned unchanged. Used by the non-streaming
+// fallbacks so thinking still shows up in the UI and is persisted to
+// history exactly like the streaming path does.
+func wrapLLMReasoning(reasoning, content string) string {
+	reasoning = strings.TrimSpace(reasoning)
+	if reasoning == "" {
+		return content
+	}
+	wrapped := "<think>" + reasoning + "</think>"
+	if content == "" {
+		return wrapped
+	}
+	return wrapped + "\n" + content
+}
+
 // trySubTaskDelegation checks if the task is complex and delegates to sub-task executor.
 // Returns true if delegated and handled, false if should proceed normally.
 func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, string, error) {
@@ -957,8 +974,21 @@ Please provide a comprehensive, well-structured final response based on these su
 		// best-effort repair so the loop self-corrects instead of burning a
 		// retry (Hermes-style pre-provider validation).
 		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
-			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			sample := make([]string, 0, 3)
+			for i, v := range violations {
+				if i >= 3 {
+					break
+				}
+				sample = append(sample, fmt.Sprintf("#%d(%s):%s", v.Index, v.Role, v.Reason))
+			}
+			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call (sample: %s)",
+				len(violations), strings.Join(sample, " | "))
+			before := len(req.Messages)
 			req.Messages = SanitizeMessageHistory(req.Messages)
+			after := len(req.Messages)
+			if after < before {
+				log.Debugf("[Agent] message-alternation repair dropped %d message(s) (%d -> %d)", before-after, before, after)
+			}
 		}
 
 		// Use ChatWithTools for OpenAI provider if tools are available
@@ -984,9 +1014,11 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.outputTokens += resp.Usage.CompletionTokens
 		}
 
-		// Call AfterLLM hooks
+		// Call AfterLLM hooks. Non-streaming path: wrap any
+		// ReasoningContent in <think> tags so the UI displays it the
+		// same way as the streaming path.
 		llmResp := &hooks.LLMHookResponse{
-			Content:   resp.Content,
+			Content:   wrapLLMReasoning(resp.ReasoningContent, resp.Content),
 			ToolCalls: resp.ToolCalls,
 		}
 		llmResp, decision, err = a.hooks.AfterLLM(ctx, llmResp)
@@ -1091,9 +1123,10 @@ Please provide a comprehensive, well-structured final response based on these su
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
+			summaryText := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
-				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Content:   utils.TruncateDetailed(summaryText, a.maxMsgLen),
 				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
@@ -1101,7 +1134,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if a.cortexManager != nil {
 				a.cortexManager.OnSessionEnd()
 			}
-			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
 	}
 
@@ -1112,13 +1145,16 @@ Please provide a comprehensive, well-structured final response based on these su
 		Timestamp: time.Now(),
 	})
 	if ctx.Err() == nil {
-		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil && finalResp.Content != "" {
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
-			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil {
+			turnSummary := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
+			if turnSummary != "" {
+				a.history = append(a.history, provider.Message{
+					Role:      "assistant",
+					Content:   utils.TruncateDetailed(turnSummary, a.maxMsgLen),
+					Timestamp: time.Now(),
+				})
+				return redact.RedactIfEnabled(turnSummary, a.secretRedaction), nil
+			}
 		}
 	}
 	if lastErr != nil {
@@ -1307,8 +1343,21 @@ Please provide a comprehensive, well-structured final response based on these su
 		// best-effort repair so the loop self-corrects instead of burning a
 		// retry (Hermes-style pre-provider validation).
 		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
-			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			sample := make([]string, 0, 3)
+			for i, v := range violations {
+				if i >= 3 {
+					break
+				}
+				sample = append(sample, fmt.Sprintf("#%d(%s):%s", v.Index, v.Role, v.Reason))
+			}
+			log.Warnf("[Agent] sanitizing %d message-alternation violation(s) before LLM call (sample: %s)",
+				len(violations), strings.Join(sample, " | "))
+			before := len(req.Messages)
 			req.Messages = SanitizeMessageHistory(req.Messages)
+			after := len(req.Messages)
+			if after < before {
+				log.Debugf("[Agent] message-alternation repair dropped %d message(s) (%d -> %d)", before-after, before, after)
+			}
 		}
 
 		// Use ChatWithTools for OpenAI provider if tools are available
@@ -1476,9 +1525,10 @@ Please provide a comprehensive, well-structured final response based on these su
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
+			summaryText := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
-				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
+				Content:   utils.TruncateDetailed(summaryText, a.maxMsgLen),
 				Timestamp: time.Now(),
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
@@ -1486,7 +1536,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if a.cortexManager != nil {
 				a.cortexManager.OnSessionEnd()
 			}
-			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
 
 		// Execute tools and add results to history
@@ -1636,13 +1686,16 @@ Please provide a comprehensive, well-structured final response based on these su
 		Timestamp: time.Now(),
 	})
 	if ctx.Err() == nil {
-		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil && finalResp.Content != "" {
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(finalResp.Content, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
-			return redact.RedactIfEnabled(finalResp.Content, a.secretRedaction), nil
+		if finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages()); finalErr == nil {
+			turnSummary := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
+			if turnSummary != "" {
+				a.history = append(a.history, provider.Message{
+					Role:      "assistant",
+					Content:   utils.TruncateDetailed(turnSummary, a.maxMsgLen),
+					Timestamp: time.Now(),
+				})
+				return redact.RedactIfEnabled(turnSummary, a.secretRedaction), nil
+			}
 		}
 	}
 	if lastErr != nil {
@@ -1699,7 +1752,7 @@ func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string
 				return err
 			}
 			// Stream the delegation result
-			handler(fmt.Sprintf("\n[⚡ Task Auto-Delegated to Sub-Task Executor]\n"), false)
+			handler(fmt.Sprintf("\n(Task Auto-Delegated to Sub-Task Executor)\n"), false)
 			handler(result, false)
 			handler("\n\n[Synthesizing final response...]\n\n", false)
 
@@ -1805,8 +1858,21 @@ Please provide a comprehensive, well-structured final response based on these su
 		// lost their assistant tool_call during an aborted turn) with opaque
 		// 400 errors on EVERY retry, burning the whole turn budget.
 		if violations := ValidateMessageAlternation(req.Messages); len(violations) > 0 {
-			log.Warnf("[Agent:Stream] sanitizing %d message-alternation violation(s) before LLM call", len(violations))
+			sample := make([]string, 0, 3)
+			for i, v := range violations {
+				if i >= 3 {
+					break
+				}
+				sample = append(sample, fmt.Sprintf("#%d(%s):%s", v.Index, v.Role, v.Reason))
+			}
+			log.Warnf("[Agent:Stream] sanitizing %d message-alternation violation(s) before LLM call (sample: %s)",
+				len(violations), strings.Join(sample, " | "))
+			before := len(req.Messages)
 			req.Messages = SanitizeMessageHistory(req.Messages)
+			after := len(req.Messages)
+			if after < before {
+				log.Debugf("[Agent:Stream] message-alternation repair dropped %d message(s) (%d -> %d)", before-after, before, after)
+			}
 		}
 
 		// Try streaming first
@@ -3084,41 +3150,96 @@ func stripThinkContent(s string) string {
 const thinkPlaceholder = "(thinking omitted)"
 
 // buildLLMMessages returns a sanitized copy of the history to send to the
-// LLM: <think> reasoning trails are stripped from assistant messages. The
+// LLM: 0x12 reasoning trails are stripped from assistant messages. The
 // stored history (and therefore the UI) keeps the full content untouched.
+//
+// Empty-content assistant messages are handled in two ways (best practice
+// distilled from open-webui #25083, Hermes #66429, AstrBot #7202):
+//   - Empty content + NO tool_calls: dropped from the outbound copy. Such
+//     messages carry no semantic payload and only poison the model's
+//     self-history — Hermes #66429 showed that a model seeing itself
+//     emit 4-12 consecutive empty turns stops calling tools and degrades
+//     into "I'll read the summaries now." intent statements. Dropping
+//     them also removes the surface where a placeholder like "[no content]"
+//     could be echoed back as a structural template (inspect_ai #3603).
+//   - Empty content + WITH tool_calls: kept (the tool_calls anchor the
+//     following tool results), and content is patched to a non-whitespace
+//     placeholder. GLM/Zhipu 1214 rejects empty/whitespace content even
+//     when tool_calls are present, so we must fill with "..." — a marker
+//     with NO opening/closing pair that the model could mimic (unlike
+//     "[no content]" or "(empty message)" which GLM began wrapping
+//     around its own replies).
 func (a *Agent) buildLLMMessages() []provider.Message {
-	msgs := make([]provider.Message, len(a.history))
-	copy(msgs, a.history)
-	for i := range msgs {
-		if msgs[i].Role != "assistant" {
+	msgs := make([]provider.Message, 0, len(a.history))
+	droppedEmpty := 0
+	for i := range a.history {
+		m := a.history[i]
+		if m.Role != "assistant" {
+			msgs = append(msgs, m)
 			continue
 		}
-		stripped := stripThinkContent(msgs[i].Content)
+		stripped := stripThinkContent(m.Content)
 		if truncated, rep := truncateRepetition(stripped); rep {
 			log.Warnf("[Agent] truncated repetitive content in assistant history (len %d -> %d)",
 				len(stripped), len(truncated))
 			stripped = truncated
 		}
-		// RC4 (26-turn 1214 root cause): the old guard below had three
-		// conjuncts (stripped=="" AND original content != "" AND no
-		// ToolCalls), which meant that an assistant message whose content
-		// was truly "" in a.history (e.g. the provider emitted no text in
-		// stream mode) was copied straight through — Zhipu/GLM treats that
-		// as 1214 regardless of ToolCalls. The new rule is: NEVER send an
-		// assistant with empty/whitespace content; if stripping produced
-		// "" AND we have tool_calls (provider sometimes tolerates that as
-		// the pure-tool-call form), leave a single-space placeholder;
-		// otherwise fall back to thinkPlaceholder.
-		if strings.TrimSpace(stripped) == "" {
-			if len(msgs[i].ToolCalls) > 0 {
-				stripped = " "
-			} else {
-				stripped = thinkPlaceholder
-			}
+		// Best practice: drop empty assistant messages that carry no
+		// tool_calls. They have zero semantic value and poison the
+		// model's self-view (Hermes #66429). Filtering them out here
+		// also prevents any placeholder string from leaking into the
+		// outbound payload at all — eliminating the mimic surface
+		// entirely for this class of message.
+		if strings.TrimSpace(stripped) == "" && len(m.ToolCalls) == 0 {
+			droppedEmpty++
+			continue
 		}
-		msgs[i].Content = stripped
+		// Assistant with tool_calls but empty content: keep it (the
+		// tool_calls anchor the following tool results) and fill with a
+		// non-whitespace, no-bracket-pair placeholder so GLM 1214 and
+		// ValidateMessageAlternation both pass.
+		if strings.TrimSpace(stripped) == "" {
+			stripped = emptyAssistantPlaceholder
+		}
+		m.Content = stripped
+		msgs = append(msgs, m)
 	}
+	if droppedEmpty > 0 {
+		log.Warnf("[Agent] dropped %d empty assistant message(s) with no tool_calls from outbound payload", droppedEmpty)
+	}
+	// Dropping empty assistant turns can place two user/system messages
+	// back-to-back. Collapse consecutive same-role non-tool messages so
+	// ValidateMessageAlternation still passes (keep the newest, which is
+	// the real user input). Tool blocks are never merged.
+	msgs = collapseConsecutive(msgs)
 	return msgs
+}
+
+// collapseConsecutive merges runs of consecutive same-role messages that
+// are not tool messages, keeping the LAST one in each run. This repairs
+// alternation breakage introduced by dropping empty assistant turns
+// (user → assistant-emptied → user becomes user → user). Tool messages
+// are passed through untouched because they have their own alternation
+// rules tied to tool_call_id matching.
+func collapseConsecutive(msgs []provider.Message) []provider.Message {
+	if len(msgs) <= 1 {
+		return msgs
+	}
+	out := make([]provider.Message, 0, len(msgs))
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
+		if m.Role == "tool" {
+			out = append(out, m)
+			continue
+		}
+		// Peek ahead: if the next message has the same role, skip this
+		// one (we keep the last of the run).
+		if i+1 < len(msgs) && msgs[i+1].Role == m.Role && msgs[i+1].Role != "tool" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // sanitizeHistory repairs malformed history so the next provider call
@@ -3181,25 +3302,10 @@ func (a *Agent) sanitizeHistory() {
 	}
 	a.history = final
 
-	// Pass 2.5: repair empty assistant content. Zhipu (GLM) rejects assistant
-	// messages with null / whitespace-only content as error 1214 ("messages
-	// 参数非法") **regardless of whether the assistant also carries tool_calls**.
-	// The previous version only patched the tool_calls-omitted case, which is
-	// why deeply nested turn 26 still produced 1214 after truncateHistory left
-	// a streaming-in-progress assistant with ToolCalls but empty content.
-	// A single space is the safest placeholder: providers treat it as visible
-	// content without introducing any new text for the model to reason about.
-	repaired := 0
-	for i := range final {
-		if final[i].Role == "assistant" && strings.TrimSpace(final[i].Content) == "" {
-			final[i].Content = " "
-			repaired++
-		}
-	}
-	if repaired > 0 {
-		log.Warnf("[Agent] Filled %d empty assistant content message(s) with whitespace placeholder", repaired)
-	}
-	a.history = final
+	// Pass 2.5 removed: empty assistant content is no longer patched in the
+	// stored history. Patching here wrote [no content] into a.history, which
+	// the UI renders verbatim. Empty content is fixed only in the outbound
+	// copy (buildLLMMessages + convert.go) before sending to the provider.
 
 	// Pass 4: repair assistant messages with orphan tool_calls. An assistant
 	// that announces tool_calls must be followed by one or more `tool` role
@@ -3354,7 +3460,7 @@ func (a *Agent) compressHistory() {
 		summary := a.generateCompressionSummary(removedMsgs)
 		summaryMsg := provider.Message{
 			Role: "system",
-			Content: fmt.Sprintf("\n\n[Previous conversation summary (%d messages summarized)]\n%s",
+			Content: fmt.Sprintf("\n\nPrevious conversation summary (%d messages summarized):\n%s",
 				len(removedMsgs), summary),
 		}
 		// Insert after the last system message

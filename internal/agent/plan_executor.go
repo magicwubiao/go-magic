@@ -388,7 +388,10 @@ func (pe *PlanExecutor) GenerateStepSummary(ctx context.Context, stepID int, his
 		if len(content) > 300 {
 			content = content[:300] + "..."
 		}
-		contextBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, content))
+		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
+		// GLM mimics this format and starts wrapping every reply in [].
+		// Use "Role: content" (no brackets).
+		contextBuilder.WriteString(fmt.Sprintf("%s: %s\n", msg.Role, content))
 	}
 
 	prompt := fmt.Sprintf(`Summarize what was accomplished in step %d: "%s"
