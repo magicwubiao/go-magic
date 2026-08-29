@@ -5,9 +5,40 @@ package retry
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// statusCodeRe extracts a 3-digit HTTP status code when it appears inside a
+// provider error string. Common formats:
+//   - "stream API returned status 402: anthropic error: ..."
+//   - "got HTTP status 429 Too Many Requests"
+//   - "StatusCode=401" / "status_code: 403"
+//
+// Agent call-sites historically hard-code statusCode=0 because the raw
+// transport status has been wrapped into err.Error(). Extracting it here
+// lets classification honour the real numeric status (401/402/429 branches
+// are deterministic and much more reliable than pure substring matching).
+var statusCodeRe = regexp.MustCompile(`(?i)(?:status(?:\s*_?\s*code)?\s*[:=]?\s*|HTTP\s+)(\d{3})`)
+
+// ExtractStatusCode returns the first 3-digit HTTP status code embedded in
+// errMsg, or 0 when none is present.
+func ExtractStatusCode(errMsg string) int {
+	if errMsg == "" {
+		return 0
+	}
+	m := statusCodeRe.FindStringSubmatch(errMsg)
+	if len(m) < 2 {
+		return 0
+	}
+	code, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return code
+}
 
 // FailoverReason categorizes why an API call or tool execution failed.
 // This determines the recovery strategy.
@@ -112,6 +143,14 @@ var (
 		"exceeded your current quota", "account is deactivated",
 		"plan does not include", "out of funds", "run out of funds",
 		"balance_depleted", "not available on the free tier",
+		// Alternative word orders used by some providers (e.g. Anthropic).
+		// Without these the error falls through to FailoverUnknown, the
+		// Retryable=false / Abort path never fires, and the agent burns
+		// turns until the repeated-failure detector escalates — producing
+		// the confusing "reason=unknown" wrapper the user sees.
+		"balance is insufficient", "balance has been depleted",
+		"quota has been exceeded", "credit limit reached",
+		"billing quota exceeded",
 	}
 
 	// Rate limit patterns
@@ -170,6 +209,22 @@ var (
 	formatErrorPatterns = []string{
 		"bad request", "invalid request", "malformed",
 		"validation failed", "schema error", "parse error",
+		// Zhipu / other Chinese providers use explicit numeric codes for
+		// permanent bad-request pathologies. 1214 is "messages parameter
+		// invalid" (role alternation violated / orphan tool messages /
+		// truncated message pairs), 1261 is "invalid parameter", etc.
+		// Without these the classifier falls through to FailoverUnknown,
+		// Retryable=true, so the agent retries a permanently broken message
+		// payload until the escalation detector fires with "reason=unknown".
+		// English permanent format errors.
+		"messages parameter", "invalid messages", "invalid parameter",
+		"bad request: messages", "messages must be",
+		"missing role", "invalid role",
+		// Chinese permanent format errors used by Zhipu, Aliyun, etc.
+		"参数非法", "参数无效", "参数格式错误", "参数不合法",
+		"messages 参数非法", "messages参数非法",
+		"[1214]", "错误码 1214", "api error 1214",
+		"[1261]", "错误码 1261", "api error 1261",
 	}
 )
 
@@ -332,11 +387,16 @@ func GetRecoveryStrategy(ce *ClassifiedError, attempt int) RecoveryStrategy {
 	case FailoverAuthPermanent:
 		return RecoveryStrategy{Action: "abort", Abort: true}
 	case FailoverBilling:
-		return RecoveryStrategy{
-			Action:     "rotate_provider",
-			Delay:      delay,
-			MaxRetries: 1,
-		}
+		// Billing / quota exhaustion is permanent for the current credential
+		// (the same key will keep returning 402 until the account is topped
+		// up). The rotate_provider action referenced in the comment above is
+		// not currently implemented in the agent loop, so returning it here
+		// would silently spin until the repeated-failure detector escalates.
+		// Aborting immediately surfaces the raw 402 / "insufficient balance"
+		// message to the user on the VERY FIRST failed call of every new
+		// request, so re-typing a prompt no longer looks like "the app is
+		// stuck repeating the same escalation wrapper".
+		return RecoveryStrategy{Action: "abort", Abort: true}
 	case FailoverRateLimit:
 		return RecoveryStrategy{
 			Action:     "backoff",
@@ -382,11 +442,22 @@ func GetRecoveryStrategy(ce *ClassifiedError, attempt int) RecoveryStrategy {
 	case FailoverContentPolicyBlocked:
 		return RecoveryStrategy{Action: "abort", Abort: true}
 	case FailoverFormatError:
-		return RecoveryStrategy{
-			Action:     "retry_with_sanitization",
-			Delay:      0,
-			MaxRetries: 1,
-		}
+		// Format errors are permanent for the same payload: e.g. Zhipu 1214
+		// "messages 参数非法" means the message sequence violated role
+		// alternation rules, left an orphan tool/tool_call pair after a
+		// mid-conversation truncate/sanitize, or sent an empty role.
+		// Retrying "with sanitization" once sounds helpful but in practice
+		// the one re-send still fails identically (the next turn still has
+		// the same malformed history), burns 1 API call, and lets the
+		// repeated-failure detector wrap the underlying error inside a
+		// confusing "reason=unknown" escalation wrapper after N turns.
+		// Aborting immediately surfaces the raw 400 / "[1214] messages
+		// 参数非法" to the user on the VERY FIRST failed call of every new
+		// request, which makes it much easier to diagnose a history bug vs.
+		// a flaky provider issue. The sanitizeHistory path on the NEXT
+		// constructRequest call is the right place to fix malformed history
+		// — not a post-failure one-shot retry with zero visibility.
+		return RecoveryStrategy{Action: "abort", Abort: true}
 	default:
 		return RecoveryStrategy{
 			Action:     "retry",

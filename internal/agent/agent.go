@@ -1337,9 +1337,20 @@ Please provide a comprehensive, well-structured final response based on these su
 			// Use error classifier for intelligent retry
 			var classified *retry.ClassifiedError
 			if a.errorClassifier != nil {
-				classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+				// Provider errors wrap the real HTTP status in the message
+				// text (e.g. "stream API returned status 402: ..."). Parse it
+				// so the classifier's status-code switchboard fires for
+				// 401/402/429 instead of falling back to FailoverUnknown.
+				status := retry.ExtractStatusCode(err.Error())
+				classified = a.errorClassifier.Classify(err, status, a.provider.Name(), "")
 				strategy := retry.GetRecoveryStrategy(classified, 1)
-				if strategy.Abort {
+				// Permanent errors must not be re-fed through the loop.
+				// strategy.Abort covers the per-reason table; the explicit
+				// classified.Retryable check is the belt-and-suspenders so a
+				// classifier table oversight (e.g. a new Retryable=false
+				// reason without Abort=true) can never silently burn turns
+				// until the repeated-failure detector escalates.
+				if strategy.Abort || (classified != nil && !classified.Retryable) {
 					return "", fmt.Errorf("non-retryable error: %w", err)
 				}
 				if strategy.Delay > 0 {
@@ -1560,7 +1571,28 @@ Please provide a comprehensive, well-structured final response based on these su
 					// failures. Transient failures (timeouts, rate limits, 5xx)
 					// reflect environment conditions, not a flawed approach, and
 					// must not be encoded as permanent lessons (Hermes #6051).
-					classified := a.errorClassifier.Classify(toolErr, 0, a.provider.Name(), "")
+					// Tool-level error strings can also wrap the real HTTP status
+					// (e.g. downstream provider 400/401/402/429 embedded by the
+					// tool adapter). Extract so classification lands on the
+					// deterministic status-code switch instead of failing back
+					// to FailoverUnknown → Retryable=true.
+					status := retry.ExtractStatusCode(toolErr.Error())
+					classified := a.errorClassifier.Classify(toolErr, status, a.provider.Name(), "")
+					// Permanent / non-retryable tool errors must not be replayed
+					// by the outer loop. strategy.Abort covers our explicit
+					// classifier table; the classified.Retryable check is the
+					// belt-and-suspenders so future Retryable=false reasons
+					// never silently burn turns until the escalation detector
+					// fires with "reason=unknown" (which is the exact symptom
+					// this fix series addresses).
+					strategy := retry.GetRecoveryStrategy(classified, 1)
+					if strategy.Abort || (classified != nil && !classified.Retryable) {
+						a.Emit(bus.EventKindToolError, toolErr.Error())
+						return "", fmt.Errorf("non-retryable tool error: %w", toolErr)
+					}
+					if strategy.Delay > 0 {
+						time.Sleep(strategy.Delay)
+					}
 					if a.reflector != nil && !classified.IsTransient() {
 						a.reflector.RecordBlocker(fmt.Sprintf("%s: %s", toolName, errInfo.RootCause))
 					}
@@ -1923,7 +1955,22 @@ Please provide a comprehensive, well-structured final response based on these su
 				if a.failureDetector != nil {
 					var classified *retry.ClassifiedError
 					if a.errorClassifier != nil {
-						classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+						status := retry.ExtractStatusCode(err.Error())
+						classified = a.errorClassifier.Classify(err, status, a.provider.Name(), "")
+						// Permanent / non-retryable failure: surface the raw
+						// error immediately instead of letting the stream
+						// path burn turns until the failure detector kicks
+						// in (the stream-with-tools failure path previously
+						// had NO strategy check at all).
+						strategy := retry.GetRecoveryStrategy(classified, 1)
+						if strategy.Abort || (classified != nil && !classified.Retryable) {
+							a.sanitizeHistory()
+							handler("", true)
+							return fmt.Errorf("non-retryable error: %w", err)
+						}
+						if strategy.Delay > 0 {
+							time.Sleep(strategy.Delay)
+						}
 					}
 					if esc := a.failureDetector.Record(classified, "", err.Error()); esc != nil {
 						a.Emit(bus.EventKindError, esc.Error())
@@ -2009,7 +2056,17 @@ Please provide a comprehensive, well-structured final response based on these su
 				if a.failureDetector != nil {
 					var classified *retry.ClassifiedError
 					if a.errorClassifier != nil {
-						classified = a.errorClassifier.Classify(err, 0, a.provider.Name(), "")
+						status := retry.ExtractStatusCode(err.Error())
+						classified = a.errorClassifier.Classify(err, status, a.provider.Name(), "")
+						strategy := retry.GetRecoveryStrategy(classified, 1)
+						if strategy.Abort || (classified != nil && !classified.Retryable) {
+							a.sanitizeHistory()
+							handler("", true)
+							return fmt.Errorf("non-retryable error: %w", err)
+						}
+						if strategy.Delay > 0 {
+							time.Sleep(strategy.Delay)
+						}
 					}
 					if esc := a.failureDetector.Record(classified, "", err.Error()); esc != nil {
 						a.Emit(bus.EventKindError, esc.Error())
@@ -2832,6 +2889,23 @@ func (a *Agent) truncateHistory() {
 			}
 		}
 	}
+
+	// RC3 (26-turn 1214 root cause): truncateHistory is the #1 producer of
+	// malformed message sequences — it slices entire prefixes of the
+	// history based on byte length alone, which can (a) drop tool results
+	// from the TAIL of a parallel-tool-call block while leaving the
+	// assistant+ToolCalls header intact (orphan assistant), (b) drop all
+	// leading system+user messages and expose an assistant/tool head, (c)
+	// cut in the middle of a tool-call block. These pass through the old
+	// Validate + SanitizeMessageHistory *silently* because the validator
+	// didn't flag them (RC1/RC2), turning any 26-turn length breach into
+	// an immediate provider 1214. Running sanitizeHistory at the END of
+	// every truncateHistory applies the Pass 2.5 / Pass 4 / Pass 5 fixes
+	// (empty-content placeholders, orphan toolcall stripping, leading role
+	// normalisation) BEFORE any caller gets a chance to buildLLMMessages —
+	// which is exactly where RC3 says the loop used to go straight into
+	// the API call with no pre-sanitize.
+	a.sanitizeHistory()
 }
 
 // looksLikeUnparsedToolCall reports whether streamed content appears to be a
@@ -3025,10 +3099,22 @@ func (a *Agent) buildLLMMessages() []provider.Message {
 				len(stripped), len(truncated))
 			stripped = truncated
 		}
-		if stripped == "" && msgs[i].Content != "" && len(msgs[i].ToolCalls) == 0 {
-			// Content was pure thinking — keep a placeholder so providers
-			// that reject empty assistant content stay happy.
-			stripped = thinkPlaceholder
+		// RC4 (26-turn 1214 root cause): the old guard below had three
+		// conjuncts (stripped=="" AND original content != "" AND no
+		// ToolCalls), which meant that an assistant message whose content
+		// was truly "" in a.history (e.g. the provider emitted no text in
+		// stream mode) was copied straight through — Zhipu/GLM treats that
+		// as 1214 regardless of ToolCalls. The new rule is: NEVER send an
+		// assistant with empty/whitespace content; if stripping produced
+		// "" AND we have tool_calls (provider sometimes tolerates that as
+		// the pure-tool-call form), leave a single-space placeholder;
+		// otherwise fall back to thinkPlaceholder.
+		if strings.TrimSpace(stripped) == "" {
+			if len(msgs[i].ToolCalls) > 0 {
+				stripped = " "
+			} else {
+				stripped = thinkPlaceholder
+			}
 		}
 		msgs[i].Content = stripped
 	}
@@ -3095,22 +3181,83 @@ func (a *Agent) sanitizeHistory() {
 	}
 	a.history = final
 
-	// Pass 2.5: repair empty assistant content. zhipu (GLM) rejects
-	// assistant messages with null/missing content (error 1214) even when
-	// tool_calls are present; other providers tolerate "" but a placeholder
-	// is safe everywhere. Checkpoint-restored histories are the usual source
-	// of these half-finished assistant messages.
+	// Pass 2.5: repair empty assistant content. Zhipu (GLM) rejects assistant
+	// messages with null / whitespace-only content as error 1214 ("messages
+	// 参数非法") **regardless of whether the assistant also carries tool_calls**.
+	// The previous version only patched the tool_calls-omitted case, which is
+	// why deeply nested turn 26 still produced 1214 after truncateHistory left
+	// a streaming-in-progress assistant with ToolCalls but empty content.
+	// A single space is the safest placeholder: providers treat it as visible
+	// content without introducing any new text for the model to reason about.
 	repaired := 0
 	for i := range final {
-		if final[i].Role == "assistant" && strings.TrimSpace(final[i].Content) == "" && len(final[i].ToolCalls) == 0 {
-			final[i].Content = thinkPlaceholder
+		if final[i].Role == "assistant" && strings.TrimSpace(final[i].Content) == "" {
+			final[i].Content = " "
 			repaired++
 		}
 	}
 	if repaired > 0 {
-		log.Warnf("[Agent] Filled %d empty assistant content message(s) with placeholder", repaired)
+		log.Warnf("[Agent] Filled %d empty assistant content message(s) with whitespace placeholder", repaired)
 	}
 	a.history = final
+
+	// Pass 4: repair assistant messages with orphan tool_calls. An assistant
+	// that announces tool_calls must be followed by one or more `tool` role
+	// replies matching each tool call ID. If truncateHistory dropped the
+	// tool-role results (e.g. because it removed the tail of a completed
+	// exchange mid-pair) the orphan assistant is structurally invalid:
+	// providers like Zhipu/Minimax throw 1214, and OpenAI silently drops
+	// the unclaimed tool_call array. The safest fix here is to STRIP the
+	// unclaimed ToolCalls slice from the assistant (keeping content so we
+	// don't trigger Pass 2.5) — which turns it back into a plain
+	// assistant reply message the user effectively "saw" before the tool
+	// calls got truncated away.
+	orphanToolCalls := 0
+	strippedAssistants := 0
+	for i, m := range a.history {
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		// Walk forward collecting which call IDs actually have a matching tool
+		// reply before we hit the next non-tool boundary.
+		claimed := make(map[string]bool, len(m.ToolCalls))
+		for j := i + 1; j < len(a.history) && a.history[j].Role == "tool"; j++ {
+			if id := strings.TrimSpace(a.history[j].ToolCallID); id != "" {
+				claimed[id] = true
+			}
+		}
+		// Filter the assistant ToolCalls: keep only IDs that have a result.
+		kept := make([]types.ToolCall, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			if claimed[tc.ID] {
+				kept = append(kept, tc)
+			} else {
+				orphanToolCalls++
+			}
+		}
+		if len(kept) != len(m.ToolCalls) {
+			a.history[i].ToolCalls = kept
+			strippedAssistants++
+		}
+	}
+	if orphanToolCalls > 0 {
+		log.Warnf("[Agent] Stripped %d orphan tool_call(s) from %d assistant message(s) — the preceding tool results were lost by truncation", orphanToolCalls, strippedAssistants)
+	}
+
+	// Pass 5: drop leading non-system messages until the head is legal. Some
+	// providers (Zhipu, Minimax) reject histories that start with an
+	// assistant role (OpenAI tolerates it, so ValidateMessageAlternation
+	// intentionally lets it through — but we're being strict here to stop
+	// 1214 mid-conversation after truncateHistory drops system+user).
+	for len(a.history) > 0 {
+		r := a.history[0].Role
+		if r == "system" || r == "user" {
+			break
+		}
+		// Don't drop tool messages in place; drop them one at a time.
+		log.Warnf("[Agent] Dropping leading illegal role=%q message from history head", r)
+		a.history = a.history[1:]
+	}
 
 	// Pass 3: general best-effort repair for anything left (assistant pairs,
 	// stray roles). Generic sanitizer drops the *offending* message; good

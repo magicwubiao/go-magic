@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
@@ -12,7 +13,18 @@ func msg(role string) provider.Message {
 }
 
 func msgToolCalls(role string) provider.Message {
-	return provider.Message{Role: role, ToolCalls: []types.ToolCall{{ID: "c1", Name: "t"}}}
+	return msgToolCallsN(role, 1)
+}
+
+func msgToolCallsN(role string, n int) provider.Message {
+	tcs := make([]types.ToolCall, 0, n)
+	for i := 0; i < n; i++ {
+		tcs = append(tcs, types.ToolCall{
+			ID:   fmt.Sprintf("tc_%d", i),
+			Name: fmt.Sprintf("tool_%d", i),
+		})
+	}
+	return provider.Message{Role: role, ToolCalls: tcs}
 }
 
 func TestValidateMessageAlternationValid(t *testing.T) {
@@ -22,10 +34,17 @@ func TestValidateMessageAlternationValid(t *testing.T) {
 		{msg("system"), msg("user")},
 		{msg("system"), msg("user"), msg("assistant")},
 		{msg("system"), msg("user"), msg("assistant"), msg("user")},
-		// Tool calling block: assistant(tool_calls) -> tool -> tool -> assistant
+		// Tool calling block: assistant(tool_calls) -> tool -> tool -> assistant.
+		// NOTE: tool messages MUST carry a non-empty ToolCallID; providers like
+		// Zhipu reject empty tool_call_id with 1214 ("messages 参数非法").
+		// Assistant content MUST be non-empty (RC2); ToolCallIDs must be a
+		// perfect match with the assistant's ToolCalls (RC1).
 		{
 			msg("system"), msg("user"),
-			msgToolCalls("assistant"), msg("tool"), msg("tool"),
+			{Role: "assistant", Content: "calling tools",
+				ToolCalls: []types.ToolCall{{ID: "tc_0", Name: "t0"}, {ID: "tc_1", Name: "t1"}}},
+			{Role: "tool", ToolCallID: "tc_0", Content: "res0"},
+			{Role: "tool", ToolCallID: "tc_1", Content: "res1"},
 			msg("assistant"),
 		},
 	}
@@ -59,6 +78,43 @@ func TestValidateMessageAlternationIllegal(t *testing.T) {
 			1},
 		{"empty role",
 			[]provider.Message{msg("system"), {Role: "", Content: "x"}},
+			1},
+		{"tool with empty tool_call_id",
+			// Zhipu/Minimax throw 1214 "messages 参数非法" for any tool
+			// message whose tool_call_id is empty. The validator now flags
+			// this so SanitizeMessageHistory drops the offender.
+			[]provider.Message{msg("system"), msg("user"), msgToolCalls("assistant"),
+				{Role: "tool", ToolCallID: "", Content: "res"}},
+			1},
+		{"assistant with orphan tool_calls -> next non-tool (user)",
+			// RC1 root cause of 26-turn 1214: truncateHistory deleted only
+			// the *tail* of a tool-call block, leaving an assistant message
+			// that still carries ToolCalls but has ZERO corresponding tool
+			// results following it, followed immediately by a user/system.
+			// Zhipu rejects this with 1214 "messages 参数非法".
+			[]provider.Message{msg("system"), msg("user"), msgToolCalls("assistant"), msg("user")},
+			1},
+		{"assistant with partial tool_calls -> only 1 of 2 tool results present",
+			// RC1 variant: assistant declares 2 tool calls, only 1 tool result
+			// follows, then a user. The orphan 2nd tool_call is the
+			// truncation artefact.
+			[]provider.Message{msg("system"), msg("user"),
+				msgToolCallsN("assistant", 2),
+				{Role: "tool", ToolCallID: "tc_0", Content: "ok"},
+				msg("user")},
+			1},
+		{"assistant with empty content and tool_calls",
+			// RC2 root cause of 26-turn 1214: buildLLMMessages only
+			// patched empty content *from think-only* assistants; a tool
+			// calling assistant whose content was actually empty (e.g.
+			// Zhipu/stream returns no text content) went through and was
+			// rejected with 1214 "messages 参数非法".
+			[]provider.Message{msg("system"), msg("user"),
+				{Role: "assistant", Content: "", ToolCalls: msgToolCalls("assistant").ToolCalls}},
+			1},
+		{"plain assistant with empty content",
+			[]provider.Message{msg("system"), msg("user"),
+				{Role: "assistant", Content: ""}},
 			1},
 	}
 	for _, c := range cases {

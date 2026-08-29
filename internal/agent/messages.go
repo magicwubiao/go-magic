@@ -2,8 +2,10 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // Message alternation validation, after Hermes Agent's strict pre-provider
@@ -87,9 +89,58 @@ func ValidateMessageAlternation(messages []provider.Message) []Violation {
 			} else if prev == "system" && i > 0 {
 				// assistant right after system is legal in some flows; tolerate.
 			}
+			// RC2: assistant content must be non-empty (after trimming).
+			// Providers (Zhipu/GLM error 1214 "messages 参数非法", Anthropic
+			// "messages must contain non-empty content") reject truly-empty
+			// assistants REGARDLESS of whether ToolCalls are also present — a
+			// tool-calling assistant with "" content is still 1214.
+			if strings.TrimSpace(msg.Content) == "" {
+				violations = append(violations, Violation{
+					Index: i, Role: role, PrevRole: prev,
+					Reason: "assistant message with empty content (provider 1214: messages 参数非法)",
+				})
+			}
+			// RC1: assistant carries ToolCalls but not all of them have a
+			// matching tool result in the immediately-following consecutive
+			// tool block. This is the #1 26-turn 1214 root cause:
+			// truncateHistory deletes tool results from the tail of a
+			// parallel-tool-call block while leaving the assistant header
+			// with its ToolCalls slice untouched.
+			if len(msg.ToolCalls) > 0 {
+				seen := make(map[string]struct{}, len(msg.ToolCalls))
+				for j := i + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
+					if messages[j].ToolCallID != "" {
+						seen[messages[j].ToolCallID] = struct{}{}
+					}
+				}
+				missing := 0
+				for _, tc := range msg.ToolCalls {
+					if tc.ID == "" {
+						missing++
+						continue
+					}
+					if _, ok := seen[tc.ID]; !ok {
+						missing++
+					}
+				}
+				if missing > 0 {
+					violations = append(violations, Violation{
+						Index: i, Role: role, PrevRole: prev,
+						Reason: fmt.Sprintf(
+							"assistant declares %d tool_call(s) but %d tool result(s) are missing in the following tool block (provider 1214: messages 参数非法)",
+							len(msg.ToolCalls), missing),
+					})
+				}
+			}
 		case "tool":
 			// A tool message must follow an assistant that had tool_calls, or
 			// another tool (parallel results). Following a user/system is illegal.
+			if msg.ToolCallID == "" {
+				violations = append(violations, Violation{
+					Index: i, Role: role, PrevRole: prev,
+					Reason: "tool message with empty tool_call_id (provider 1214: messages 参数非法)",
+				})
+			}
 			if prev == "user" || prev == "system" {
 				violations = append(violations, Violation{
 					Index: i, Role: role, PrevRole: prev,
@@ -123,16 +174,91 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	violations := ValidateMessageAlternation(messages)
-	if len(violations) == 0 {
-		// Return a shallow copy for safety.
-		out := make([]provider.Message, len(messages))
-		copy(out, messages)
-		return out
+
+	// ===== STAGE 1: IN-PLACE REPAIRS (preserve as much content as possible) =====
+	//
+	// Many violations are repairable without dropping a whole message —
+	// dropping an assistant is destructive because you lose whatever partial
+	// answer content the model did write before the truncation break. These
+	// are the RC1/RC2 cases that trigger Zhipu 1214 mid-conversation.
+	repaired := make([]provider.Message, len(messages))
+	for i := range messages {
+		repaired[i] = messages[i]
 	}
 
-	// Build a set of indices to drop. Dropping a message can change the
-	// alternation of its neighbors, so we iterate until stable.
+	// (R1) Strip orphan / partial ToolCalls from assistant messages that
+	// declare more tool_calls than have a matching tool result in the
+	// immediately-following tool block. This is RC1's preferred fix: keep
+	// the assistant content + the tool_calls that DID have results, strip
+	// only the orphan subset.
+	for i := 0; i < len(repaired); i++ {
+		m := &repaired[i]
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		// Collect IDs in the contiguous following tool block.
+		seen := make(map[string]struct{}, len(m.ToolCalls))
+		for j := i + 1; j < len(repaired) && repaired[j].Role == "tool"; j++ {
+			if repaired[j].ToolCallID != "" {
+				seen[repaired[j].ToolCallID] = struct{}{}
+			}
+		}
+		kept := make([]types.ToolCall, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
+			if _, ok := seen[tc.ID]; ok {
+				kept = append(kept, tc)
+			}
+		}
+		m.ToolCalls = kept
+	}
+
+	// (R2) Repair empty assistant content with a single-space placeholder.
+	// Zhipu/GLM throws 1214 on truly-empty assistant content regardless of
+	// whether ToolCalls are present; providers treat single-space as
+	// non-empty. The repair is benign for providers whose validators ignore
+	// content entirely, and keeps the history intact.
+	for i := range repaired {
+		m := &repaired[i]
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" {
+			m.Content = " "
+		}
+	}
+
+	// (R3) Fill empty tool_call_id on tool messages whose id was blanked
+	// during a truncation or partial stream recovery. We only assign an id
+	// when the preceding assistant has exactly one ToolCall — in that case
+	// the mapping is unambiguous. If the assistant declared several
+	// tool_calls the only safe fix remains dropping the offender in stage 2.
+	for i := 1; i < len(repaired); i++ {
+		m := &repaired[i]
+		if m.Role != "tool" || m.ToolCallID != "" {
+			continue
+		}
+		prev := &repaired[i-1]
+		if prev.Role == "assistant" && len(prev.ToolCalls) == 1 && prev.ToolCalls[0].ID != "" {
+			m.ToolCallID = prev.ToolCalls[0].ID
+		}
+		// If prev is another tool, carry its id forward only if the prior
+		// tool block is of size 1 (already handled) or 2 and 1st was blank
+		// filled in a prior iteration. Otherwise leave blank for stage-2
+		// drop.
+	}
+
+	// (R4) Drop leading illegal roles (assistant/tool with no preceding
+	// system or user) — truncateHistory cut-off after system/user deleted.
+	for len(repaired) > 0 && repaired[0].Role != "system" && repaired[0].Role != "user" {
+		repaired = repaired[1:]
+	}
+
+	// ===== STAGE 2: DROP OFFENDERS THAT COULD NOT BE REPAIRED =====
+	violations := ValidateMessageAlternation(repaired)
+	if len(violations) == 0 {
+		return repaired
+	}
+
 	drop := make(map[int]bool)
 	for _, v := range violations {
 		drop[v.Index] = true
@@ -141,8 +267,8 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 	// Iterate: rebuild, re-validate, drop new offenders. Cap iterations to
 	// avoid pathological loops.
 	for iter := 0; iter < 4; iter++ {
-		rebuilt := make([]provider.Message, 0, len(messages)-len(drop))
-		for i, m := range messages {
+		rebuilt := make([]provider.Message, 0, len(repaired)-len(drop))
+		for i, m := range repaired {
 			if drop[i] {
 				continue
 			}
@@ -157,7 +283,7 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 		for _, v := range newVio {
 			// Find the original index of the v.Index-th kept message.
 			kept := -1
-			for i := 0; i < len(messages); i++ {
+			for i := 0; i < len(repaired); i++ {
 				if drop[i] {
 					continue
 				}
@@ -172,8 +298,8 @@ func SanitizeMessageHistory(messages []provider.Message) []provider.Message {
 	}
 
 	// Final rebuild.
-	out := make([]provider.Message, 0, len(messages)-len(drop))
-	for i, m := range messages {
+	out := make([]provider.Message, 0, len(repaired)-len(drop))
+	for i, m := range repaired {
 		if !drop[i] {
 			out = append(out, m)
 		}
