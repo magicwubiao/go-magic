@@ -2151,8 +2151,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			// Track token usage from the response
 			a.trackUsage(resp)
 
-			// 最终非流式兜底路径同样限制长度（截断超长思考文本）
-			fullContent = utils.TruncateDetailed(resp.Content, a.maxMsgLen)
+			// 最终非流式兜底路径：必须和常规 RunConversation 一致地把
+			// ReasoningContent 包进 <think> 标签，否则 UI 端
+			// ReasoningContent 组件解析不到思考过程（DashScope
+			// qwen3.x thinking / zhipu GLM thinking 等都依赖该包裹）。
+			wrapped := wrapLLMReasoning(resp.ReasoningContent, resp.Content)
+			fullContent = utils.TruncateDetailed(wrapped, a.maxMsgLen)
 			toolCalls = resp.ToolCalls
 			for i := range toolCalls {
 				if toolCalls[i].ID == "" {
@@ -2160,7 +2164,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 				toolCalls[i].Normalize()
 			}
-			handler(redact.RedactIfEnabled(resp.Content, a.secretRedaction), true)
+			handler(redact.RedactIfEnabled(wrapped, a.secretRedaction), true)
 		}
 
 		// Call AfterLLM hooks

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -83,6 +84,16 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 		return nil, nil
 	}
 
+	// First pass: structured parse with primary field names.
+	// We keep a raw copy to probe for alternate reasoning/tool-call
+	// aliases that some providers (DashScope qwen3.x thinking variants,
+	// one-api/new-api proxies, etc.) emit instead of / in addition to
+	// the canonical OpenAI names.
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse SSE chunk: %w", err)
+	}
+
 	var chunk struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
@@ -115,10 +126,10 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
-
-	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-		return nil, fmt.Errorf("failed to parse SSE chunk: %w", err)
-	}
+	// Unmarshal into the typed struct — this will only capture fields
+	// whose tags match the canonical names (content / reasoning_content /
+	// tool_calls). Alternate names are probed below from the raw map.
+	_ = json.Unmarshal([]byte(data), &chunk)
 
 	resp := &StreamResponse{}
 
@@ -129,17 +140,51 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 			resp.Content = choice.Delta.Content
 		}
 
-		if choice.Delta.ReasoningContent != "" {
-			resp.ReasoningContent = choice.Delta.ReasoningContent
+		// ---- Reasoning content resolution ----
+		// Canonical: delta.reasoning_content (DashScope compatible-mode,
+		// deepseek/vLLM OpenAI layer, zhipu GLM thinking, etc.).
+		reasoning := choice.Delta.ReasoningContent
+		// If the tagged field was empty, probe the raw delta for common
+		// aliases. DashScope-native wrappers and some proxies have been
+		// observed sending thinking_content / reasoning / thinking.
+		if reasoning == "" {
+			if rawChoices, ok := raw["choices"].([]interface{}); ok && len(rawChoices) > 0 {
+				if rawChoice, ok := rawChoices[0].(map[string]interface{}); ok {
+					if rawDelta, ok := rawChoice["delta"].(map[string]interface{}); ok {
+						for _, alt := range []string{
+							"thinking_content",
+							"reasoning",
+							"thinking",
+						} {
+							if v, ok := rawDelta[alt].(string); ok && v != "" {
+								reasoning = v
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		if reasoning != "" {
+			resp.ReasoningContent = reasoning
 		}
 
+		// ---- Tool calls (delta format) ----
+		// The canonical tool_calls[] slice is already captured by the
+		// tagged struct. In addition we normalise every entry so that
+		// top-level Name is populated (some downstream code reads it
+		// instead of Function.Name before Normalize runs).
 		for _, tc := range choice.Delta.ToolCalls {
+			// Prefer function.name, fall back to top-level tc.Name already
+			// set during unmarshal; both end up on the resulting ToolCall
+			// so GetToolName/Normalize later see either one.
+			tcName := tc.Function.Name
 			resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 				ID:   tc.ID,
-				Name: tc.Function.Name, // Set Name field for compatibility
+				Name: tcName, // top-level alias for consumers that don't use Function.Name
 				Type: "function",
 				Function: types.Function{
-					Name:      tc.Function.Name,
+					Name:      tcName,
 					Arguments: tc.Function.Arguments,
 				},
 			})
@@ -148,7 +193,7 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 				Index:     tc.Index,
 				ID:        tc.ID,
 				Type:      tc.Type,
-				Name:      tc.Function.Name,
+				Name:      tcName,
 				Arguments: tc.Function.Arguments,
 			})
 		}
@@ -252,7 +297,13 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 
 		resp, err := parser.Parse(line)
 		if err != nil {
-			// Log error but continue parsing
+			// Format mismatch or malformed JSON: log at debug level so
+			// unusual provider outputs (DashScope alternate JSON shapes,
+			// proxy-wrapped errors, etc.) are traceable without blowing
+			// up the log. Continue parsing so a single bad chunk doesn't
+			// kill the whole stream.
+			log.Debugf("[StreamParser] skipping chunk due to parse error: %v (line=%s)",
+				err, truncateForLog(line))
 			continue
 		}
 
@@ -537,4 +588,15 @@ func WrappedStreamHandler(handler StreamHandler, accumulator *StreamAccumulator)
 		accumulator.Handle(resp)
 		handler(resp)
 	}
+}
+
+// truncateForLog shortens a raw SSE line for inclusion in debug logs so
+// multi-KB reasoning/tool chunks do not spam the log output. It is safe
+// for any input (including empty / already short strings).
+func truncateForLog(s string) string {
+	const max = 256
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("...(truncated %d bytes)", len(s)-max)
 }

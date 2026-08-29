@@ -157,13 +157,16 @@ func parseDashScopeToolCalls(src []struct {
 }
 
 // readDashScopeOK closes and decodes a 2xx non-streaming response body into
-// a ChatResponse including reasoning_content.
+// a ChatResponse including reasoning_content. Falls back to common alternate
+// names (thinking_content / reasoning / thinking) so DashScope-native
+// wrappers and proxied endpoints still surface the thinking phase.
 func readDashScopeOK(resp *http.Response) (*ChatResponse, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	// Typed decode for the well-known fields.
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -184,13 +187,30 @@ func readDashScopeOK(resp *http.Response) (*ChatResponse, error) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("dashscope decode: %w (body=%s)", err, truncateBody(body))
 	}
+	// Raw decode used to probe for alternate reasoning-content names.
+	var raw struct {
+		Choices []struct {
+			Message map[string]interface{} `json:"message"`
+		} `json:"choices"`
+	}
+	_ = json.Unmarshal(body, &raw)
+
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("no response from dashscope (body=%s)", truncateBody(body))
 	}
 	msg := result.Choices[0].Message
+	reasoning := msg.ReasoningContent
+	if reasoning == "" && len(raw.Choices) > 0 && raw.Choices[0].Message != nil {
+		for _, alt := range []string{"thinking_content", "reasoning", "thinking"} {
+			if v, ok := raw.Choices[0].Message[alt].(string); ok && v != "" {
+				reasoning = v
+				break
+			}
+		}
+	}
 	response := &ChatResponse{
 		Content:          msg.Content,
-		ReasoningContent: msg.ReasoningContent,
+		ReasoningContent: reasoning,
 		ToolCalls:        parseDashScopeToolCalls(msg.ToolCalls),
 		Usage:            result.Usage,
 	}

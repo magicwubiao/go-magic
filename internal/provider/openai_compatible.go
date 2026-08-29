@@ -297,6 +297,100 @@ func (p *OpenAICompatibleProvider) applyExtraParams(reqBody map[string]interface
 	}
 }
 
+// typedChatResponse is the shared non-streaming response payload used by
+// both Chat and ChatWithTools.
+type typedChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content          string `json:"content"`
+			Role             string `json:"role"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
+}
+
+// parseTypedChatResponse decodes a non-streaming /chat/completions JSON
+// body into a ChatResponse. Unlike a plain struct unmarshal it also probes
+// the raw message map for alternate reasoning-content names
+// (thinking_content / reasoning / thinking) which some DashScope
+// endpoints, proxy wrappers (one-api/new-api) and thinking-model
+// variants emit instead of the canonical "reasoning_content".
+func parseTypedChatResponse(body []byte) (*ChatResponse, error) {
+	var response typedChatResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	// Raw decode to probe alternate reasoning names on the 0th choice message.
+	var raw struct {
+		Choices []struct {
+			Message map[string]interface{} `json:"message"`
+		} `json:"choices"`
+	}
+	_ = json.Unmarshal(body, &raw)
+
+	if len(response.Choices) == 0 {
+		return &ChatResponse{Content: ""}, nil
+	}
+	choice := response.Choices[0]
+
+	reasoning := choice.Message.ReasoningContent
+	if reasoning == "" && len(raw.Choices) > 0 && raw.Choices[0].Message != nil {
+		for _, alt := range []string{"thinking_content", "reasoning", "thinking"} {
+			if v, ok := raw.Choices[0].Message[alt].(string); ok && v != "" {
+				reasoning = v
+				break
+			}
+		}
+	}
+
+	chatResp := &ChatResponse{
+		Content:          choice.Message.Content,
+		ReasoningContent: reasoning,
+		Usage: &Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+			CacheReadTokens:  response.Usage.PromptTokensDetails.CachedTokens,
+		},
+	}
+
+	if len(choice.Message.ToolCalls) > 0 {
+		chatResp.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
+		for _, tc := range choice.Message.ToolCalls {
+			tcType := tc.Type
+			if tcType == "" {
+				tcType = "function"
+			}
+			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
+				ID:   tc.ID,
+				Type: tcType,
+				Function: types.Function{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+	}
+	return chatResp, nil
+}
+
 // Chat implements the Provider interface
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
@@ -317,77 +411,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	if statusCode != 200 {
 		return nil, p.ParseAPIError(respBody, statusCode)
 	}
-
-	var response struct {
-		Choices []struct {
-			Message struct {
-				Content          string `json:"content"`
-				Role             string `json:"role"`
-				ReasoningContent string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Type     string `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens        int `json:"prompt_tokens"`
-			CompletionTokens    int `json:"completion_tokens"`
-			TotalTokens         int `json:"total_tokens"`
-			PromptTokensDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
-	}
-
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(response.Choices) == 0 {
-		return &ChatResponse{Content: ""}, nil
-	}
-
-	choice := response.Choices[0]
-
-	chatResp := &ChatResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: choice.Message.ReasoningContent,
-		// 回填 usage：之前的实现丢弃了该信息，导致缓存命中
-		// 与真实 token 消耗不可见，成本统计失真。
-		Usage: &Usage{
-			PromptTokens:     response.Usage.PromptTokens,
-			CompletionTokens: response.Usage.CompletionTokens,
-			TotalTokens:      response.Usage.TotalTokens,
-			CacheReadTokens:  response.Usage.PromptTokensDetails.CachedTokens,
-		},
-	}
-
-	if len(choice.Message.ToolCalls) > 0 {
-		chatResp.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			// Ensure type is always "function"
-			tcType := tc.Type
-			if tcType == "" {
-				tcType = "function"
-			}
-			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
-				ID:   tc.ID,
-				Type: tcType,
-				Function: types.Function{
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				},
-			})
-		}
-	}
-
-	return chatResp, nil
+	return parseTypedChatResponse(respBody)
 }
 
 // ChatWithTools implements the ToolCaller interface
@@ -428,76 +452,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 		parsedErr := p.ParseAPIError(respBody, statusCode)
 		return nil, fmt.Errorf("chat with tools request failed: status %d, %w", statusCode, parsedErr)
 	}
-
-	var response struct {
-		Choices []struct {
-			Message struct {
-				Content          string `json:"content"`
-				Role             string `json:"role"`
-				ReasoningContent string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Type     string `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens        int `json:"prompt_tokens"`
-			CompletionTokens    int `json:"completion_tokens"`
-			TotalTokens         int `json:"total_tokens"`
-			PromptTokensDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
-	}
-
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(response.Choices) == 0 {
-		return &ChatResponse{Content: ""}, nil
-	}
-
-	choice := response.Choices[0]
-
-	chatResp := &ChatResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: choice.Message.ReasoningContent,
-		// ChatWithTools 路径同样回填 usage + 缓存命中
-		Usage: &Usage{
-			PromptTokens:     response.Usage.PromptTokens,
-			CompletionTokens: response.Usage.CompletionTokens,
-			TotalTokens:      response.Usage.TotalTokens,
-			CacheReadTokens:  response.Usage.PromptTokensDetails.CachedTokens,
-		},
-	}
-
-	if len(choice.Message.ToolCalls) > 0 {
-		chatResp.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			// Ensure type is always "function"
-			tcType := tc.Type
-			if tcType == "" {
-				tcType = "function"
-			}
-			chatResp.ToolCalls = append(chatResp.ToolCalls, types.ToolCall{
-				ID:   tc.ID,
-				Type: tcType,
-				Function: types.Function{
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				},
-			})
-		}
-	}
-
-	return chatResp, nil
+	return parseTypedChatResponse(respBody)
 }
 
 // Stream implements the Streamer interface
