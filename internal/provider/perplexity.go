@@ -99,7 +99,10 @@ func (p *PerplexityProvider) Chat(ctx context.Context, messages []Message) (*Cha
 		return nil, p.parseError(body, resp.StatusCode)
 	}
 
-	return p.parseResponse(body)
+	// Perplexity is OpenAI-compatible: reuse the shared parser which also
+	// probes alternate reasoning-content names
+	// (thinking_content / reasoning / thinking) that proxied endpoints may emit.
+	return parseTypedChatResponse(body)
 }
 
 // ChatWithTools implements the ToolCaller interface
@@ -134,8 +137,7 @@ func (p *PerplexityProvider) ChatWithTools(ctx context.Context, messages []Messa
 	if resp.StatusCode != http.StatusOK {
 		return nil, p.parseError(body, resp.StatusCode)
 	}
-
-	return p.parseResponse(body)
+	return parseTypedChatResponse(body)
 }
 
 // Stream implements the Streamer interface
@@ -172,7 +174,12 @@ func (p *PerplexityProvider) StreamWithTools(ctx context.Context, messages []Mes
 		return p.parseError(body, resp.StatusCode)
 	}
 
-	return p.parseStreamResponse(resp.Body, handler)
+	// Use the shared OpenAIStreamParser: it handles alternate reasoning names
+	// (thinking_content / reasoning / thinking), proper StreamTCs[] delta
+	// index tracking, and tool-call name normalisation — the previous
+	// custom SSE loop silently dropped reasoning and used the legacy
+	// single-ToolCall format which broke delta merging.
+	return ParseStreamResponse(ctx, resp.Body, handler)
 }
 
 // buildRequest builds the OpenAI-compatible request

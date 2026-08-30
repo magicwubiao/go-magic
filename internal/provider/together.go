@@ -99,7 +99,10 @@ func (p *TogetherProvider) Chat(ctx context.Context, messages []Message) (*ChatR
 		return nil, p.parseError(body, resp.StatusCode)
 	}
 
-	return p.parseResponse(body)
+	// Together is OpenAI-compatible: reuse the shared parser which also
+	// probes alternate reasoning-content names used by Together's
+	// open-source thinking models (e.g. DeepSeek-R1 style).
+	return parseTypedChatResponse(body)
 }
 
 // ChatWithTools implements the ToolCaller interface
@@ -134,8 +137,7 @@ func (p *TogetherProvider) ChatWithTools(ctx context.Context, messages []Message
 	if resp.StatusCode != http.StatusOK {
 		return nil, p.parseError(body, resp.StatusCode)
 	}
-
-	return p.parseResponse(body)
+	return parseTypedChatResponse(body)
 }
 
 // Stream implements the Streamer interface
@@ -172,7 +174,11 @@ func (p *TogetherProvider) StreamWithTools(ctx context.Context, messages []Messa
 		return p.parseError(body, resp.StatusCode)
 	}
 
-	return p.parseStreamResponse(resp.Body, handler)
+	// Use the shared OpenAIStreamParser: it adds StreamTCs[] delta index
+	// tracking (critical for multi-tool-call merging), probes alternate
+	// reasoning-content names, and populates the top-level ToolCall.Name
+	// alias which the previous custom SSE loop missed.
+	return ParseStreamResponse(ctx, resp.Body, handler)
 }
 
 // buildRequest builds the OpenAI-compatible request

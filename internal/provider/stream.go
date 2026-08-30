@@ -343,6 +343,14 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 			}
 		}
 
+		// Legacy ToolCall (single pointer): some providers (Cohere,
+		// Gemini, Wenxin custom stream parsers) still emit this form.
+		// The downstream aggregator in agent.go only reads resp.ToolCalls,
+		// so bridge the two shapes to avoid dropped tool calls.
+		if resp.ToolCall != nil && len(resp.ToolCalls) == 0 {
+			resp.ToolCalls = []types.ToolCall{*resp.ToolCall}
+		}
+
 		// Also handle legacy ToolCalls (for non-delta format)
 		if len(resp.ToolCalls) > 0 && len(resp.StreamTCs) == 0 {
 			accumulatedToolCalls = append(accumulatedToolCalls, resp.ToolCalls...)

@@ -398,9 +398,15 @@ func (p *WenxinProvider) parseResponse(body []byte) (*ChatResponse, error) {
 
 	// Handle function_call (Wenxin's tool calling format)
 	if resp.FunctionCall.Name != "" {
+		// Do NOT use function name as ID — the dedup path in
+		// messages.go / agent.go groups tool calls by ID, so calling
+		// the same function twice would collapse into a single call.
+		// Use a nanosecond-based generated ID (matching other providers).
+		tcID := fmt.Sprintf("call_wx_%d", time.Now().UnixNano()%1000000000)
 		chatResp.ToolCalls = []types.ToolCall{
 			{
-				ID:   resp.FunctionCall.Name,
+				ID:   tcID,
+				Name: resp.FunctionCall.Name,
 				Type: "function",
 				Function: types.Function{
 					Name:      resp.FunctionCall.Name,
@@ -475,14 +481,17 @@ func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandl
 
 		if chunk.IsEnd {
 			if hasFunctionCall {
+				tcName := functionCallName.String()
+				tcID := fmt.Sprintf("call_wx_%d", time.Now().UnixNano()%1000000000)
 				handler(&StreamResponse{
 					Content: "",
 					ToolCalls: []types.ToolCall{
 						{
-							ID:   functionCallName.String(),
+							ID:   tcID,
+							Name: tcName,
 							Type: "function",
 							Function: types.Function{
-								Name:      functionCallName.String(),
+								Name:      tcName,
 								Arguments: functionCallArgs.String(),
 							},
 						},

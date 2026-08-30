@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 type vLLMProvider struct {
@@ -102,35 +100,12 @@ func (p *vLLMProvider) Chat(ctx context.Context, messages []Message) (*ChatRespo
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	// Parse response (OpenAI compatible)
-	type Choice struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-
-	type Response struct {
-		Choices []Choice      `json:"choices"`
-		Usage   vllmUsageInfo `json:"usage"`
-	}
-
-	var respData Response
-	if err := json.Unmarshal(body, &respData); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if len(respData.Choices) == 0 {
-		return nil, fmt.Errorf("no response from vLLM")
-	}
-
-	return &ChatResponse{
-		Content: respData.Choices[0].Message.Content,
-		Usage: &Usage{
-			PromptTokens:     respData.Usage.PromptTokens,
-			CompletionTokens: respData.Usage.CompletionTokens,
-			TotalTokens:      respData.Usage.TotalTokens,
-		},
-	}, nil
+	// vLLM is OpenAI-compatible. Reuse the shared parser which handles
+	// reasoning_content and well-known aliases (thinking_content /
+	// reasoning / thinking) — critical for running local thinking models
+	// (Qwen3.x, DeepSeek-R1, GLM thinking, etc.) behind vLLM which all
+	// emit thinking via one of those field names.
+	return parseTypedChatResponse(body)
 }
 
 // ChatWithTools implements the ToolCaller interface for vLLM
@@ -186,58 +161,5 @@ func (p *vLLMProvider) ChatWithTools(ctx context.Context, messages []Message, to
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-
-	// Parse response (OpenAI compatible with tools)
-	type ToolCall struct {
-		ID       string `json:"id"`
-		Function struct {
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-		} `json:"function"`
-	}
-
-	type Choice struct {
-		Message struct {
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-		} `json:"message"`
-	}
-
-	type Response struct {
-		Choices []Choice      `json:"choices"`
-		Usage   vllmUsageInfo `json:"usage"`
-	}
-
-	var respData Response
-	if err := json.Unmarshal(body, &respData); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if len(respData.Choices) == 0 {
-		return nil, fmt.Errorf("no response from vLLM")
-	}
-
-	response := &ChatResponse{
-		Content: respData.Choices[0].Message.Content,
-		Usage: &Usage{
-			PromptTokens:     respData.Usage.PromptTokens,
-			CompletionTokens: respData.Usage.CompletionTokens,
-			TotalTokens:      respData.Usage.TotalTokens,
-		},
-	}
-
-	for _, tc := range respData.Choices[0].Message.ToolCalls {
-		var args map[string]interface{}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		response.ToolCalls = append(response.ToolCalls, types.ToolCall{
-			ID:   tc.ID,
-			Type: "function",
-			Function: types.Function{
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			},
-		})
-	}
-
-	return response, nil
+	return parseTypedChatResponse(body)
 }
