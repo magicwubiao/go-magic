@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/internal/kanban"
+	"github.com/magicwubiao/go-magic/internal/subagent"
 )
 
 // Common tool errors
@@ -164,6 +168,8 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewBatchFileOpsTool())
 	r.Register(NewProjectAnalyzeTool())
 	r.Register(NewDiffPatchTool())
+	r.Register(NewLintTool())
+	r.Register(NewAnalyzeErrorTool())
 
 	// Home Assistant smart home integration
 	r.Register(NewHATool())
@@ -186,6 +192,23 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewBrowserConsoleTool())
 	r.Register(NewBrowserSnapshotTool(bt))
 	r.Register(NewBrowserGetImagesTool(bt))
+	// Additional browser tools (hermes-agent parity)
+	r.Register(NewBrowserForwardTool())
+	r.Register(NewBrowserRefreshTool())
+	r.Register(NewBrowserWaitTool())
+	r.Register(NewBrowserGetInfoTool())
+	r.Register(NewBrowserClearCacheTool())
+	r.Register(NewBrowserGetCookiesTool())
+	r.Register(NewBrowserPressTool(bt))
+	r.Register(NewBrowserVisionTool(bt))
+	r.Register(NewBrowserDialogTool(bt))
+
+	// Terminal & background process management (hermes-agent terminal toolset)
+	r.Register(NewTerminalTool())
+	r.Register(NewProcessTool())
+
+	// Vision analysis (hermes-agent vision toolset)
+	r.Register(NewVisionAnalyzeTool())
 
 	// Legacy web tools - lightweight goquery-based
 	r.Register(NewWebFetchTool())
@@ -218,6 +241,18 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("browser_back", 30*time.Second)
 	r.SetTimeout("browser_console", 30*time.Second)
 	r.SetTimeout("browser_get_images", 60*time.Second)
+	r.SetTimeout("browser_forward", 30*time.Second)
+	r.SetTimeout("browser_refresh", 30*time.Second)
+	r.SetTimeout("browser_wait", 60*time.Second)
+	r.SetTimeout("browser_get_info", 30*time.Second)
+	r.SetTimeout("browser_clear_cache", 30*time.Second)
+	r.SetTimeout("browser_get_cookies", 30*time.Second)
+	r.SetTimeout("browser_press", 30*time.Second)
+	r.SetTimeout("browser_vision", 60*time.Second)
+	r.SetTimeout("browser_dialog", 30*time.Second)
+	r.SetTimeout("vision_analyze", 120*time.Second)
+	r.SetTimeout("terminal", 120*time.Second)
+	r.SetTimeout("process", 30*time.Second)
 
 	// Register plugin tools
 	r.registerPluginTools()
@@ -310,6 +345,8 @@ func (r *Registry) RegisterBotTools(workDir string) {
 
 	// Command execution
 	r.Register(NewSecureExecuteCommandTool(workDir))
+	r.Register(NewTerminalTool())
+	r.Register(NewProcessTool())
 
 	// Memory
 	r.Register(&MemoryStoreTool{})
@@ -356,30 +393,29 @@ func (r *Registry) RegisterBotTools(workDir string) {
 	r.Register(NewCSVTool())
 	r.Register(NewEnvTool())
 	r.Register(NewSystemInfoTool())
+	r.Register(NewVisionAnalyzeTool())
 
 	// Timeouts
 	r.SetTimeout("execute_command", 120*time.Second)
 	r.SetTimeout("web_search", 30*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
 	r.SetTimeout("web_select", 30*time.Second)
+	r.SetTimeout("terminal", 120*time.Second)
+	r.SetTimeout("process", 30*time.Second)
+	r.SetTimeout("vision_analyze", 120*time.Second)
 }
 
-// GetAllTools 返回所有内置工具实例
+// GetAllTools 返回当前全部内置工具实例（基于 RegisterAll 构建，始终与注册表保持一致）。
+// 主要用于 status/version 等展示场景。
 func GetAllTools() []Tool {
-	return []Tool{
-		&ReadFileTool{},
-		&WriteFileTool{},
-		&WebSearchTool{},
-		// Note: WebExtractTool removed, use browser_navigate instead
-		NewSecureExecuteCommandTool(""),
-		&ListFilesTool{},
-		&SearchInFilesTool{},
-		&MemoryStoreTool{},
-		&MemoryRecallTool{},
-		// Browser tools - lightweight goquery-based implementation
-		NewWebFetchTool(),
-		NewWebSelectTool(),
+	r := NewRegistry()
+	r.RegisterAll("")
+	tools := make([]Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		tools = append(tools, t)
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
 }
 
 // Register 注册一个工具
@@ -421,8 +457,26 @@ func (r *Registry) List() []string {
 	return names
 }
 
-// ListWithSchemas 返回所有工具及其 Schema
+// ListWithSchemas 返回所有可用工具及其 Schema。
+// 不可用的工具（实现了 AvailabilityChecker 且 Available() 为 false）会被过滤，
+// 避免向 LLM 暴露必然失败的工具（hermes check_fn 对齐）。
 func (r *Registry) ListWithSchemas() []map[string]interface{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	schemas := make([]map[string]interface{}, 0, len(r.tools))
+	toolSchema := &ToolSchema{}
+	for _, t := range r.tools {
+		if !IsToolAvailable(t) {
+			continue
+		}
+		schemas = append(schemas, toolSchema.ToOpenAISchema(t))
+	}
+	return schemas
+}
+
+// ListAllWithSchemas 返回全部工具（含不可用的）及其 Schema，供管理界面使用。
+func (r *Registry) ListAllWithSchemas() []map[string]interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -432,6 +486,21 @@ func (r *Registry) ListWithSchemas() []map[string]interface{} {
 		schemas = append(schemas, toolSchema.ToOpenAISchema(t))
 	}
 	return schemas
+}
+
+// ListAvailable 返回当前可用的工具实例（按名称排序），供构建 LLM 工具清单使用。
+func (r *Registry) ListAvailable() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		if IsToolAvailable(t) {
+			tools = append(tools, t)
+		}
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
 }
 
 // Execute 执行工具
@@ -650,6 +719,49 @@ func (r *Registry) RegisterSkillTool(provider SkillInfoProvider) {
 func (r *Registry) RegisterWithSkillManager(skillManager SkillInfoProvider, workDir string) {
 	r.RegisterAll(workDir)
 	r.RegisterSkillTool(skillManager)
+}
+
+// RegisterDelegationTools 注册子代理委托工具（delegate_task / poll_task / list_tasks / cancel_task）。
+// 需要在 subagent.Manager 创建并启动后调用。
+func (r *Registry) RegisterDelegationTools(manager *subagent.Manager) {
+	if manager == nil {
+		return
+	}
+	r.Register(NewDelegateTaskTool(manager))
+	r.Register(NewPollTaskTool(manager))
+	r.Register(NewListTasksTool(manager))
+	r.Register(NewCancelTaskTool(manager))
+	r.SetTimeout("delegate_task", 60*time.Second)
+	r.SetTimeout("poll_task", 90*time.Second)
+	r.SetTimeout("list_tasks", 30*time.Second)
+	r.SetTimeout("cancel_task", 30*time.Second)
+}
+
+// RegisterKanbanTools 注册看板工具并绑定全局 kanban manager。
+// 需要在 kanban.Manager 初始化后调用；未初始化时调用会被安全跳过。
+func (r *Registry) RegisterKanbanTools(manager *kanban.Manager) {
+	if manager == nil {
+		return
+	}
+	KanbanManager = manager
+	r.Register(NewKanbanShowTool())
+	r.Register(NewKanbanCompleteTool())
+	r.Register(NewKanbanBlockTool())
+	r.Register(NewKanbanUnblockTool())
+	r.Register(NewKanbanListTool())
+	r.Register(NewKanbanCommentTool())
+	r.Register(NewKanbanCreateTool())
+	r.Register(NewKanbanHeartbeatTool())
+	r.Register(NewKanbanLinkTool())
+	r.SetTimeout("kanban_show", 30*time.Second)
+	r.SetTimeout("kanban_complete", 30*time.Second)
+	r.SetTimeout("kanban_block", 30*time.Second)
+	r.SetTimeout("kanban_unblock", 30*time.Second)
+	r.SetTimeout("kanban_list", 30*time.Second)
+	r.SetTimeout("kanban_comment", 30*time.Second)
+	r.SetTimeout("kanban_create", 30*time.Second)
+	r.SetTimeout("kanban_heartbeat", 30*time.Second)
+	r.SetTimeout("kanban_link", 30*time.Second)
 }
 
 // registerPluginTools discovers and registers plugin commands as agent tools.

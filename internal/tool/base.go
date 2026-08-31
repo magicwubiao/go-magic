@@ -139,6 +139,22 @@ type ParamValidator interface {
 	ValidateParams(params map[string]interface{}) error
 }
 
+// AvailabilityChecker 工具可用性检查接口（参考 hermes-agent 的 check_fn）。
+// 依赖外部配置或环境的工具（如需要 API Key 的 image_gen、需要 ffmpeg 的 video_analyze）
+// 应实现该接口；未实现此接口的工具默认始终可用。
+// Registry 在向 LLM 暴露工具清单时会过滤掉不可用的工具，避免模型调用必然失败的工具。
+type AvailabilityChecker interface {
+	Available() bool
+}
+
+// IsToolAvailable 检查工具是否可用：未实现 AvailabilityChecker 的工具默认可用。
+func IsToolAvailable(t Tool) bool {
+	if ac, ok := t.(AvailabilityChecker); ok {
+		return ac.Available()
+	}
+	return true
+}
+
 // ValidateParams 验证参数是否符合 Schema
 func ValidateParams(schema map[string]interface{}, params map[string]interface{}) error {
 	if schema == nil {

@@ -247,6 +247,9 @@ func NewServer(dbPath string) *Server {
 		// Kanban manager unavailable
 	} else {
 		kanbanMgr.Init()
+		// Bind the kanban manager to the tool registry so kanban workers
+		// can use kanban_show / kanban_complete / kanban_block / etc.
+		registry.RegisterKanbanTools(kanbanMgr)
 		// Set up kanban worker spawner
 		disp := kanbanMgr.GetDispatcher()
 		if disp != nil {

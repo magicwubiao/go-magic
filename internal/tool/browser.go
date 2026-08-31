@@ -42,9 +42,34 @@ func (t *WebFetchTool) Schema() map[string]interface{} {
 				"type": "string",
 				"enum": []string{"text", "html", "links", "all"},
 			},
+			"max_chars": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum characters for text/html output; excess is truncated keeping head and tail (default: 15000)",
+				"default":     15000,
+			},
 		},
 		"required": []string{"url"},
 	}
+}
+
+// applyCharBudget 截断超长文本，保留头尾窗口（hermes web_extract 对齐）。
+// 返回截断后的文本以及是否发生了截断。
+func applyCharBudget(s string, maxChars int) (string, bool) {
+	if maxChars <= 0 {
+		return s, false
+	}
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s, false
+	}
+	// 90% 头部 + 10% 尾部
+	headLen := maxChars * 9 / 10
+	tailLen := maxChars - headLen
+	omitted := len(runes) - maxChars
+	truncated := string(runes[:headLen]) +
+		fmt.Sprintf("\n\n[... %d characters omitted ...]\n\n", omitted) +
+		string(runes[len(runes)-tailLen:])
+	return truncated, true
 }
 
 func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -93,10 +118,26 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		selector = s
 	}
 
+	// 字符预算（hermes web_extract 对齐）：默认 15000，防止大页面撑爆上下文
+	maxChars := 15000
+	if mc, ok := args["max_chars"].(float64); ok && mc > 0 {
+		maxChars = int(mc)
+	}
+
 	result := make(map[string]interface{})
 	result["url"] = url
 	result["status_code"] = resp.StatusCode
 	result["content_type"] = resp.Header.Get("Content-Type")
+
+	budget := func(key string) {
+		if s, ok := result[key].(string); ok {
+			if trimmed, truncated := applyCharBudget(s, maxChars); truncated {
+				result[key] = trimmed
+				result["truncated"] = true
+				result["max_chars"] = maxChars
+			}
+		}
+	}
 
 	switch extract {
 	case "links":
@@ -165,6 +206,14 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		} else {
 			result["text"] = strings.TrimSpace(doc.Find("body").First().Text())
 		}
+	}
+
+	// 对文本类输出应用字符预算
+	if extract == "text" || extract == "all" {
+		budget("text")
+	}
+	if extract == "html" || extract == "all" {
+		budget("html")
 	}
 
 	return result, nil

@@ -53,6 +53,9 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			baseURL = "https://api.perplexity.ai"
 		case "hunyuan":
 			baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
+		case "longcat":
+			// 美团 LongCat 开放平台（OpenAI 兼容端点）
+			baseURL = "https://api.longcat.chat/openai/v1"
 		case "mimo":
 			baseURL = "https://api.xiaomimimo.com/v1"
 		case "ollama":
@@ -92,6 +95,8 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			model = "sonar-pro"
 		case "hunyuan":
 			model = "hunyuan-turbos-latest"
+		case "longcat":
+			model = "LongCat-Flash-Chat"
 		case "mimo":
 			model = "mimo-v2-flash"
 		case "ollama":

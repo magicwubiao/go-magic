@@ -80,6 +80,7 @@ func allProviders() []providerInfo {
 		{Name: "mistral", DisplayName: "Mistral AI", Description: "Mistral series open source models", Models: []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"}, NeedsAPIKey: true, DefaultURL: "https://api.mistral.ai/v1"},
 		{Name: "cohere", DisplayName: "Cohere", Description: "Cohere Command series models", Models: []string{"command-r-plus", "command-r", "command"}, NeedsAPIKey: true, DefaultURL: "https://api.cohere.ai/v2"},
 		{Name: "mimo", DisplayName: "MiMo", Description: "MiMo LLM", Models: []string{"mimo-3-7b"}, NeedsAPIKey: true, DefaultURL: "https://api.mymimo.ai/v1"},
+		{Name: "longcat", DisplayName: "LongCat", Description: "Meituan LongCat LLM", Models: []string{"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"}, NeedsAPIKey: true, DefaultURL: "https://api.longcat.chat/openai/v1"},
 		{Name: "custom", DisplayName: "Custom (OpenAI Compatible)", Description: "Custom service compatible with OpenAI API format", Models: []string{}, NeedsAPIKey: true, NeedsBaseURL: true},
 	}
 }

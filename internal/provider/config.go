@@ -106,6 +106,7 @@ func getDefaultBaseURL(name string) string {
 		"hunyuan":    "https://hunyuan.cloud.tencent.com/v1",
 		"minimax":    "https://api.minimax.chat/v1",
 		"mimo":       "https://api.mymimo.ai/v1",
+		"longcat":    "https://api.longcat.chat/openai/v1",
 	}
 
 	if url, ok := defaults[strings.ToLower(name)]; ok {
@@ -140,6 +141,7 @@ func getDefaultModel(name string) string {
 		"hunyuan":    "hunyuan-turbos-latest",
 		"minimax":    "MiniMax-M2.5",
 		"mimo":       "mimo-v2-flash",
+		"longcat":    "LongCat-Flash-Chat",
 	}
 
 	if model, ok := defaults[strings.ToLower(name)]; ok {

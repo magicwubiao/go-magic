@@ -2,15 +2,19 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 )
 
 // BrowserManager manages browser instances and tabs
@@ -290,6 +294,9 @@ func (bm *BrowserManager) NavigateAndGetContent(tabID string, url string) (strin
 	if err != nil {
 		return "", "", fmt.Errorf("failed to navigate and get content: %w", err)
 	}
+
+	// Install JS dialog interceptor so alert/confirm/prompt never block the session
+	_ = bm.InstallDialogInterceptor(tabID)
 
 	bm.mu.Lock()
 	tab.URL = url
@@ -691,4 +698,209 @@ func (bm *BrowserManager) GetCookies(tabID string) ([]map[string]interface{}, er
 	}
 
 	return cookies, nil
+}
+
+// ============================================================================
+// Keyboard input
+// ============================================================================
+
+// PressKey presses a named key (Enter, Tab, Escape, ArrowUp, F5, ...) or types
+// arbitrary text into the currently focused element of the page. Named keys use
+// native CDP key events (so form submission on Enter works), not synthetic JS events.
+func (bm *BrowserManager) PressKey(tabID string, key string, times int) error {
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return fmt.Errorf("tab not found: %s", tabID)
+	}
+
+	keys := normalizeKeyName(key)
+	if keys == "" {
+		return fmt.Errorf("invalid key: %s", key)
+	}
+
+	if times < 1 {
+		times = 1
+	}
+	if times > 100 {
+		times = 100
+	}
+
+	actions := make([]chromedp.Action, 0, times)
+	for i := 0; i < times; i++ {
+		actions = append(actions, chromedp.KeyEvent(keys))
+	}
+
+	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
+	defer cancel()
+
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		return fmt.Errorf("failed to press key %q: %w", key, err)
+	}
+	return nil
+}
+
+// normalizeKeyName converts a human-readable key name into the key string
+// accepted by chromedp.KeyEvent / the kb package. Unknown names pass through
+// unchanged (so arbitrary text can be typed).
+func normalizeKeyName(key string) string {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	switch lower {
+	case "enter", "return":
+		return kb.Enter
+	case "tab":
+		return kb.Tab
+	case "escape", "esc":
+		return kb.Escape
+	case "backspace":
+		return kb.Backspace
+	case "delete", "del":
+		return kb.Delete
+	case "arrowup", "up":
+		return kb.ArrowUp
+	case "arrowdown", "down":
+		return kb.ArrowDown
+	case "arrowleft", "left":
+		return kb.ArrowLeft
+	case "arrowright", "right":
+		return kb.ArrowRight
+	case "home":
+		return kb.Home
+	case "end":
+		return kb.End
+	case "pageup", "pgup":
+		return kb.PageUp
+	case "pagedown", "pgdn":
+		return kb.PageDown
+	case "space":
+		return " "
+	case "capslock", "caps lock":
+		return kb.CapsLock
+	case "control", "ctrl", "ctrlleft":
+		return kb.Control
+	case "shift", "shiftleft":
+		return kb.Shift
+	case "alt", "altleft":
+		return kb.Alt
+	case "meta", "metaleft", "super", "win", "windows":
+		return kb.Meta
+	}
+
+	// Function keys F1-F12
+	if len(lower) >= 2 && lower[0] == 'f' {
+		if n, err := strconv.Atoi(lower[1:]); err == nil && n >= 1 && n <= 12 {
+			return string(rune(0x0800 + n)) // kb.F1 = \u0801 ... kb.F12 = \u080c
+		}
+	}
+
+	// Single characters and arbitrary text pass through as-is
+	return key
+}
+
+// ============================================================================
+// Native JS dialog interception (alert / confirm / prompt)
+// ============================================================================
+
+// dialogInterceptorScript overrides window.alert/confirm/prompt so that native
+// dialogs are recorded into window.__magicDialogs instead of blocking the
+// headless automation session. Responses can be pre-set via
+// window.__magicDialogResponses (keyed by dialog type).
+const dialogInterceptorScript = `
+(function() {
+	if (window.__magicDialogsInstalled) return;
+	window.__magicDialogsInstalled = true;
+	window.__magicDialogs = window.__magicDialogs || [];
+	window.__magicDialogResponses = window.__magicDialogResponses || {};
+	function record(type, message, defaultValue) {
+		var entry = { type: type, message: String(message), timestamp: new Date().toISOString() };
+		if (defaultValue !== undefined) entry.default_value = defaultValue;
+		window.__magicDialogs.push(entry);
+	}
+	window.alert = function(msg) {
+		record('alert', msg);
+		return true;
+	};
+	window.confirm = function(msg) {
+		record('confirm', msg);
+		var resp = window.__magicDialogResponses['confirm'];
+		return resp === undefined ? false : (resp === true || resp === 'true');
+	};
+	window.prompt = function(msg, defaultValue) {
+		record('prompt', msg, defaultValue);
+		var resp = window.__magicDialogResponses['prompt'];
+		return resp === undefined ? (defaultValue !== undefined ? defaultValue : null) : resp;
+	};
+})()
+`
+
+// InstallDialogInterceptor injects the alert/confirm/prompt interceptor into the
+// current page. It is idempotent and safe to call after every navigation.
+func (bm *BrowserManager) InstallDialogInterceptor(tabID string) error {
+	_, err := bm.ExecuteJS(tabID, dialogInterceptorScript)
+	if err != nil {
+		return fmt.Errorf("failed to install dialog interceptor: %w", err)
+	}
+	return nil
+}
+
+// GetPendingDialogs returns all dialogs captured by the interceptor so far.
+func (bm *BrowserManager) GetPendingDialogs(tabID string) ([]map[string]interface{}, error) {
+	result, err := bm.ExecuteJS(tabID, `JSON.stringify(window.__magicDialogs || [])`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read pending dialogs: %w", err)
+	}
+
+	return parseDialogsResult(result)
+}
+
+// parseDialogsResult converts the raw ExecuteJS result into dialog entries.
+func parseDialogsResult(result interface{}) ([]map[string]interface{}, error) {
+	switch v := result.(type) {
+	case string:
+		var dialogs []map[string]interface{}
+		if err := json.Unmarshal([]byte(v), &dialogs); err != nil {
+			return nil, fmt.Errorf("failed to parse dialogs: %w", err)
+		}
+		return dialogs, nil
+	case []interface{}:
+		dialogs := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				dialogs = append(dialogs, m)
+			}
+		}
+		return dialogs, nil
+	case nil:
+		return []map[string]interface{}{}, nil
+	default:
+		return nil, fmt.Errorf("unexpected dialog result type: %T", result)
+	}
+}
+
+// ClearDialogs clears all recorded pending dialogs.
+func (bm *BrowserManager) ClearDialogs(tabID string) error {
+	_, err := bm.ExecuteJS(tabID, `window.__magicDialogs = []; true`)
+	if err != nil {
+		return fmt.Errorf("failed to clear dialogs: %w", err)
+	}
+	return nil
+}
+
+// SetDialogResponse pre-sets the response that the interceptor will return for
+// future dialogs of the given type ("confirm" or "prompt"). For confirm, use
+// "true"/"false". For prompt, use the text value to return.
+func (bm *BrowserManager) SetDialogResponse(tabID string, dialogType string, response string) error {
+	typ, err := json.Marshal(dialogType)
+	if err != nil {
+		return fmt.Errorf("invalid dialog type: %w", err)
+	}
+	resp, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("invalid response: %w", err)
+	}
+
+	script := fmt.Sprintf(`window.__magicDialogResponses = window.__magicDialogResponses || {}; window.__magicDialogResponses[%s] = %s; true`, typ, resp)
+	if _, err := bm.ExecuteJS(tabID, script); err != nil {
+		return fmt.Errorf("failed to set dialog response: %w", err)
+	}
+	return nil
 }

@@ -88,6 +88,8 @@ func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, 
 		return provider.NewMiMoProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "hunyuan":
 		return provider.NewHunyuanProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
+	case "longcat":
+		return provider.NewLongCatProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "custom":
 		return provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	default:
@@ -268,6 +270,13 @@ func ListProviders() []ProviderInfo {
 			Models:       []string{"hunyuan-pro", "hunyuan-standard"},
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
+		},
+		{
+			Name:        "longcat",
+			DisplayName: "LongCat (美团龙猫)",
+			Description: "美团 LongCat 大模型",
+			Models:      []string{"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"},
+			NeedsAPIKey: true,
 		},
 		{
 			Name:         "custom",

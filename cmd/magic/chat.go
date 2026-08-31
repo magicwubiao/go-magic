@@ -100,14 +100,12 @@ func parseSlashCommand(input string) (string, string) {
 	return cmdName, cmdArgs
 }
 
-// getToolsSchema generates a tools schema from the registry
+// getToolsSchema generates a tools schema from the registry.
+// Unavailable tools (AvailabilityChecker returns false) are filtered out so the
+// LLM never sees tools that would fail (hermes check_fn parity).
 func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 	tools := []map[string]interface{}{}
-	for _, tName := range registry.List() {
-		t, err := registry.Get(tName)
-		if err != nil {
-			continue
-		}
+	for _, t := range registry.ListAvailable() {
 		name := t.Name()
 		if name == "" {
 			fmt.Fprintf(os.Stderr, "[WARN] Tool with empty name found, skipping\n")

@@ -16,7 +16,7 @@ var modelCmd = &cobra.Command{
 	Short: "Choose LLM provider and model",
 	Long: `Choose or view the LLM provider and model to use.
 
-Supported providers: openai, anthropic, deepseek, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, huoshan, wenxin, moonshot, mimo, hunyuan.
+Supported providers: openai, anthropic, deepseek, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, huoshan, wenxin, moonshot, mimo, hunyuan, longcat.
 
 Formats:
   magic model                  - View current provider and model
@@ -165,6 +165,10 @@ func runModel(cmd *cobra.Command, args []string) {
 			fmt.Println("  hunyuan-turbo         - Hunyuan Turbo")
 			fmt.Println("  hunyuan-turbos-latest  - Hunyuan Turbo S (latest)")
 			fmt.Println("  hunyuan-t1            - Hunyuan T1 (thinking model)")
+		case "longcat":
+			fmt.Println("  LongCat-Flash-Chat    - LongCat Flash Chat (general)")
+			fmt.Println("  LongCat-Flash-Thinking - LongCat Flash Thinking (reasoning)")
+			fmt.Println("  LongCat-Flash-Lite    - LongCat Flash Lite (lightweight)")
 		default:
 			fmt.Printf("  Unknown provider: %s\n", listProvider)
 			fmt.Println("  Try: openai, anthropic, deepseek, ollama, zhipu, openrouter, gemini, groq, mistral, cohere, perplexity, huoshan, wenxin, moonshot")
@@ -262,12 +266,13 @@ var providerModels = map[string][]string{
 	"moonshot":   {"kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"},
 	"mimo":       {"mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"},
 	"hunyuan":    {"hunyuan-turbo", "hunyuan-turbos-latest", "hunyuan-t1"},
+	"longcat":    {"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"},
 }
 
 // interactiveModelSelect presents an interactive UI for selecting provider and model.
 func interactiveModelSelect(cfg *config.Config) (string, string) {
-	providers := []string{"openai", "anthropic", "deepseek", "minimax", "zhipu", "ollama", "openrouter", "dashscope", "vllm", "gemini", "groq", "together", "mistral", "cohere", "perplexity", "huoshan", "wenxin", "moonshot", "mimo", "hunyuan"}
-	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "火山引擎 (豆包)", "Wenxin (Baidu)", "Moonshot (Kimi)", "MiMo (Xiaomi)", "Hunyuan (Tencent)"}
+	providers := []string{"openai", "anthropic", "deepseek", "minimax", "zhipu", "ollama", "openrouter", "dashscope", "vllm", "gemini", "groq", "together", "mistral", "cohere", "perplexity", "huoshan", "wenxin", "moonshot", "mimo", "hunyuan", "longcat"}
+	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "火山引擎 (豆包)", "Wenxin (Baidu)", "Moonshot (Kimi)", "MiMo (Xiaomi)", "Hunyuan (Tencent)", "LongCat (Meituan)"}
 
 	fmt.Println("\n=== Interactive Model Selection ===")
 	fmt.Println("Use arrow keys (up/down) to navigate, Enter to select, q to quit.")

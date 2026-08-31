@@ -158,7 +158,10 @@ func InitializeDefaultToolsets() {
 		Tools: []string{
 			"browser_navigate", "browser_snapshot", "browser_click",
 			"browser_type", "browser_scroll", "browser_back",
+			"browser_forward", "browser_refresh", "browser_wait",
+			"browser_get_info", "browser_clear_cache", "browser_get_cookies",
 			"browser_get_images", "browser_console",
+			"browser_press", "browser_vision", "browser_dialog",
 			"web_fetch", "web_select", "web_search",
 		},
 		Includes: []string{},
@@ -168,7 +171,7 @@ func InitializeDefaultToolsets() {
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "vision",
 		Description: "Image analysis and generation tools",
-		Tools:       []string{"image_gen", "image_edit", "video_analyze"},
+		Tools:       []string{"image_gen", "image_edit", "video_analyze", "vision_analyze"},
 		Includes:    []string{},
 	})
 
@@ -242,7 +245,23 @@ func InitializeDefaultToolsets() {
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "kanban",
 		Description: "Kanban task management",
-		Tools:       []string{"kanban_show", "kanban_complete", "kanban_block", "kanban_heartbeat", "kanban_comment", "kanban_create", "kanban_link"},
+		Tools:       []string{"kanban_show", "kanban_complete", "kanban_block", "kanban_unblock", "kanban_list", "kanban_heartbeat", "kanban_comment", "kanban_create", "kanban_link"},
+		Includes:    []string{},
+	})
+
+	// Coding-enhanced tools
+	RegisterToolset(&ToolsetDefinition{
+		Name:        "coding",
+		Description: "Coding assistance tools: lint, error analysis, project analysis",
+		Tools:       []string{"lint", "analyze_error", "project_analyze", "batch_file_ops", "diff_patch", "gitignore", "lsp_diagnostics"},
+		Includes:    []string{},
+	})
+
+	// Delegation tools
+	RegisterToolset(&ToolsetDefinition{
+		Name:        "delegation",
+		Description: "Sub-agent delegation tools",
+		Tools:       []string{"delegate_task", "poll_task", "list_tasks", "cancel_task"},
 		Includes:    []string{},
 	})
 

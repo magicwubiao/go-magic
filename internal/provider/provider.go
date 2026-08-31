@@ -169,6 +169,11 @@ func GetDefaultModels(providerName string) []ModelInfo {
 			{ID: "qwen3", Name: "Qwen 3", Description: "阿里开源模型", ContextLen: 131072},
 			{ID: "codellama", Name: "Code Llama", Description: "代码专用", ContextLen: 16384},
 		},
+		"longcat": {
+			{ID: "LongCat-Flash-Chat", Name: "LongCat Flash Chat", Description: "通用对话模型", ContextLen: 131072},
+			{ID: "LongCat-Flash-Thinking", Name: "LongCat Flash Thinking", Description: "推理模型", ContextLen: 131072},
+			{ID: "LongCat-Flash-Lite", Name: "LongCat Flash Lite", Description: "轻量模型", ContextLen: 131072},
+		},
 	}
 
 	if models, ok := defaults[providerName]; ok {

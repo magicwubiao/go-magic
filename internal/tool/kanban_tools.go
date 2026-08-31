@@ -525,3 +525,142 @@ func ParseTaskStatus(s string) kanban.TaskStatus {
 		return kanban.StatusTriage
 	}
 }
+
+// ============================================================================
+// kanban_list / kanban_unblock (hermes-agent kanban toolset parity)
+// ============================================================================
+
+// KanbanListTool lists kanban tasks with optional filters
+type KanbanListTool struct {
+	*BaseTool
+}
+
+// NewKanbanListTool creates a new kanban list tool
+func NewKanbanListTool() *KanbanListTool {
+	return &KanbanListTool{
+		BaseTool: NewBaseTool(
+			"kanban_list",
+			"List kanban tasks with optional filters. Only available when the kanban manager is initialized (e.g. in server mode).",
+			map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by status (optional)",
+						"enum":        []string{"triage", "todo", "ready", "running", "blocked", "done", "archived"},
+					},
+					"assignee": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by assignee (optional)",
+					},
+					"search": map[string]interface{}{
+						"type":        "string",
+						"description": "Search in task title and body (optional)",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of tasks to return (default: 50)",
+						"default":     50,
+					},
+				},
+			},
+		),
+	}
+}
+
+// Execute lists tasks
+func (t *KanbanListTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+	if KanbanManager == nil {
+		return nil, fmt.Errorf("kanban manager not initialized")
+	}
+
+	filter := kanban.TaskFilter{}
+	if s, ok := params["status"].(string); ok && s != "" {
+		filter.Status = []kanban.TaskStatus{ParseTaskStatus(s)}
+	}
+	if a, ok := params["assignee"].(string); ok && a != "" {
+		filter.Assignee = a
+	}
+	if s, ok := params["search"].(string); ok && s != "" {
+		filter.Search = s
+	}
+
+	limit := 50
+	if l, ok := params["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+
+	tasks, err := KanbanManager.ListTasks(filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tasks: %w", err)
+	}
+
+	result := make([]map[string]interface{}, 0, len(tasks))
+	for _, task := range tasks {
+		if len(result) >= limit {
+			break
+		}
+		result = append(result, map[string]interface{}{
+			"id":       task.ID,
+			"title":    task.Title,
+			"status":   string(task.Status),
+			"assignee": task.Assignee,
+			"priority": task.Priority,
+		})
+	}
+
+	return map[string]interface{}{
+		"total": len(tasks),
+		"shown": len(result),
+		"tasks": result,
+	}, nil
+}
+
+// KanbanUnblockTool unblocks a blocked kanban task
+type KanbanUnblockTool struct {
+	*BaseTool
+}
+
+// NewKanbanUnblockTool creates a new kanban unblock tool
+func NewKanbanUnblockTool() *KanbanUnblockTool {
+	return &KanbanUnblockTool{
+		BaseTool: NewBaseTool(
+			"kanban_unblock",
+			"Unblock a blocked kanban task. If all parent tasks are complete, the task becomes ready; otherwise it returns to todo.",
+			map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The task ID to unblock",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		),
+	}
+}
+
+// Execute unblocks the task
+func (t *KanbanUnblockTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+	if KanbanManager == nil {
+		return nil, fmt.Errorf("kanban manager not initialized")
+	}
+
+	taskID, ok := params["task_id"].(string)
+	if !ok || taskID == "" {
+		return nil, fmt.Errorf("task_id is required")
+	}
+
+	task, err := KanbanManager.UnblockTask(taskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unblock task: %w", err)
+	}
+
+	return map[string]interface{}{
+		"task_id": task.ID,
+		"title":   task.Title,
+		"status":  string(task.Status),
+		"message": fmt.Sprintf("Task %s unblocked, status is now %s", task.ID, task.Status),
+	}, nil
+}

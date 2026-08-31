@@ -469,7 +469,7 @@ func cleanText(text string) string {
 }
 
 func timeNow() string {
-	return "2024-01-01T00:00:00Z" // Placeholder
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 // ExportBrowserToolsJSON exports browser tools as JSON

@@ -139,6 +139,9 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 	mgr.Start()
 	defer mgr.Stop()
 
+	// Register sub-agent delegation tools (delegate_task / poll_task / list_tasks / cancel_task)
+	registry.RegisterDelegationTools(mgr)
+
 	// Get input (either as args or stdin)
 	input := ""
 	if len(args) > 1 {
@@ -298,6 +301,8 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewMiMoProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "hunyuan":
 		return provider.NewHunyuanProvider(cfg.APIKey, cfg.BaseURL, model)
+	case "longcat":
+		return provider.NewLongCatProvider(cfg.APIKey, cfg.BaseURL, model)
 	default:
 		if cfg.BaseURL != "" {
 			return provider.NewOpenAICompatibleProvider(name, cfg.APIKey, cfg.BaseURL, model, userModels)

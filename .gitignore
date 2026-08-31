@@ -28,6 +28,9 @@ Thumbs.db
 *.tmp
 *.log
 
+# WorkBuddy
+.workbuddy/
+
 # Build outputs
 internal/server/dist/
 build/
