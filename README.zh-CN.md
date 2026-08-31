@@ -3,7 +3,7 @@
 **Magic Agent** -- 高性能、超轻量级的 AI Agent 框架，使用 Go 语言编写。
 
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
-[![Version](https://img.shields.io/badge/version-v0.4.14-green)](https://github.com/magicwubiao/go-magic/releases)
+[![Version](https://img.shields.io/badge/version-v0.5.9-green)](https://github.com/magicwubiao/go-magic/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## 简介
@@ -358,7 +358,7 @@ magic usage -d 30
 
 ### 要求
 
-- Go 1.25+
+- Go 1.26+
 - Node.js 20+（用于 Web Dashboard）
 
 ### 构建当前平台

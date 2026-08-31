@@ -3,7 +3,7 @@
 **Magic Agent** -- A high-performance, ultra-lightweight AI Agent framework written in Go.
 
 [![Go Version](https://img.shields.io/badge/Go-1.26%2B-00ADD8)](https://go.dev)
-[![Version](https://img.shields.io/badge/version-v0.4.14-green)](https://github.com/magicwubiao/go-magic/releases)
+[![Version](https://img.shields.io/badge/version-v0.5.9-green)](https://github.com/magicwubiao/go-magic/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## Overview
@@ -357,7 +357,7 @@ Each provider supports multiple models:
 
 ### Requirements
 
-- Go 1.25+
+- Go 1.26+
 - Node.js 20+ (for web dashboard)
 
 ### Build for Current Platform
