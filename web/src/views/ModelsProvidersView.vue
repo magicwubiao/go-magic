@@ -143,7 +143,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
@@ -195,6 +195,7 @@ const availableProviders = [
   { label: 'MiniMax', value: 'minimax' },
   { label: 'MiMo', value: 'mimo' },
   { label: '腾讯混元 (Hunyuan)', value: 'hunyuan' },
+  { label: 'LongCat (美团龙猫)', value: 'longcat' },
   { label: '火山引擎 (Huoshan)', value: 'huoshan' },
   { label: '月之暗面 (Moonshot)', value: 'moonshot' },
   { label: 'OpenRouter', value: 'openrouter' },
@@ -209,6 +210,44 @@ const availableProviders = [
 
 // 当前选中的供应商
 const selectedProvider = ref('')
+
+// 已知供应商默认配置（与后端 internal/provider/config.go 的默认值保持一致）
+const providerPresets: Record<string, { baseUrl: string; model: string }> = {
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6' },
+  anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
+  deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.7-flash' },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' },
+  dashscope: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  wenxin: { baseUrl: 'https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1', model: 'ernie-4.0-8k' },
+  minimax: { baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-M2.5' },
+  mimo: { baseUrl: 'https://api.mymimo.ai/v1', model: 'mimo-v2-flash' },
+  hunyuan: { baseUrl: 'https://hunyuan.cloud.tencent.com/v1', model: 'hunyuan-turbos-latest' },
+  longcat: { baseUrl: 'https://api.longcat.chat/openai/v1', model: 'LongCat-Flash-Chat' },
+  huoshan: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1.5-pro-32k' },
+  moonshot: { baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k2-0905-preview' },
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-5.6' },
+  together: { baseUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+  mistral: { baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
+  cohere: { baseUrl: 'https://api.cohere.ai/v2', model: 'command-a-03-2025' },
+  perplexity: { baseUrl: 'https://api.perplexity.ai', model: 'sonar-pro' },
+  ollama: { baseUrl: 'http://localhost:11434', model: 'llama3.3' },
+  vllm: { baseUrl: 'http://localhost:8000', model: 'llama3' }
+}
+
+// 新增供应商时，按已知预设自动填充 baseUrl 和默认模型
+watch(() => editingProvider.value.name, (name) => {
+  if (isEditing.value || !name) return
+  const preset = providerPresets[name]
+  if (!preset) return
+  if (!editingProvider.value.baseUrl) {
+    editingProvider.value.baseUrl = preset.baseUrl
+  }
+  if (editingProvider.value.models.length === 0) {
+    editingProvider.value.models = [preset.model]
+  }
+})
 
 // 当前选中的供应商是否是当前供应商
 const isCurrentProvider = computed(() => {
