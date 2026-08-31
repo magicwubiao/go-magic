@@ -151,20 +151,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// Check OpenClaw migration
-	homeDir, _ := os.UserHomeDir()
-	openclawDir := filepath.Join(homeDir, ".openclaw")
-	if _, statErr := os.Stat(openclawDir); statErr == nil {
-		fmt.Printf("  Detected OpenClaw config: %s\n", openclawDir)
-		fmt.Print("  Migrate config? (y/N): ")
-		if answer, _ := reader.ReadString('\n'); strings.TrimSpace(strings.ToLower(answer)) == "y" {
-			fmt.Println("  Run 'magic migrate' after setup to complete migration.")
-		}
-		fmt.Println()
-	}
-
-	_ = homeDir // kept for backward compatibility / future use
-
 	// Step 1: Provider selection
 	var selectedProvider *providerInfo
 	if !skipModel {
