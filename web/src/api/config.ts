@@ -17,9 +17,28 @@ export interface PrivacyConfig {
   custom_patterns?: Record<string, string>
 }
 
+export interface BotModeConfig {
+  enabled: boolean
+  /** Adds a short bot-to-bot messaging protocol section to every bot's system prompt. */
+  inject_bot_protocol?: boolean
+  /** Cap on messages kept in each bot's canonical chat. 0 = default (200). */
+  history_window?: number
+  /** Cap on how long a single bot turn may run (minutes). 0 = default (5). */
+  turn_timeout_minutes?: number
+  /** Shared secret remote instances must present when DMing bots via /api/relay/v1/dm. */
+  relay_token?: string
+}
+
+export interface ServerConfig {
+  upload_url_prefix?: string
+  file_strategy?: string
+}
+
 export interface Config {
   provider: string
   api_key: string
+  /** Deprecated in backend; use providers[].models[0] instead. */
+  model?: string
   base_url?: string
   temperature?: number
   max_tokens?: number
@@ -33,6 +52,8 @@ export interface Config {
   secret_redaction?: boolean
   cortex?: CortexConfig
   privacy?: PrivacyConfig
+  bot_mode?: BotModeConfig
+  server?: ServerConfig
 }
 
 export interface CortexConfig {

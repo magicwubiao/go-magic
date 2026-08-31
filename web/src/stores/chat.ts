@@ -90,8 +90,8 @@ interface SessionState {
   lastStreamSegEnd: number
 }
 
-function $t(key: string, params?: Record<string, string | number>): string {
-  return i18n.global.t(key, params)
+function $t(key: string, params?: Record<string, unknown>): string {
+  return params === undefined ? i18n.global.t(key) : i18n.global.t(key, params)
 }
 
 export const useChatStore = defineStore('chat', () => {

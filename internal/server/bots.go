@@ -23,6 +23,12 @@ func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interfac
 		"system_prompt": cfg.SystemPrompt,
 		"model":         cfg.Model,
 		"provider":      cfg.Provider,
+		"tools":         cfg.Tools,
+		"skills":        cfg.Skills,
+		"memory":        cfg.Memory,
+		"avatar":        cfg.Avatar,
+		"env":           cfg.Env,
+		"hidden":        cfg.Hidden,
 		"created_at":    cfg.CreatedAt,
 		"updated_at":    cfg.UpdatedAt,
 	}
@@ -33,6 +39,7 @@ func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interfac
 			"queue_depth":     state.QueueDepth,
 			"history_length":  state.HistoryLength,
 			"active_routines": state.ActiveRoutines,
+			"last_active":     state.LastActiveUnix,
 		}
 	} else {
 		resp["runtime"] = map[string]interface{}{
@@ -110,6 +117,8 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotMessages(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
 		s.handleBotClearMessages(w, r, name)
+	case len(parts) == 2 && parts[1] == "clone" && r.Method == http.MethodPost:
+		s.handleBotClone(w, r, name)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -148,13 +157,19 @@ func (s *Server) handleBotsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name         string `json:"name"`
-		Title        string `json:"title"`
-		Description  string `json:"description"`
-		SystemPrompt string `json:"system_prompt"`
-		Model        string `json:"model"`
-		Provider     string `json:"provider"`
-		Start        *bool  `json:"start,omitempty"` // reserved; bots are online immediately when mode is on
+		Name         string            `json:"name"`
+		Title        string            `json:"title"`
+		Description  string            `json:"description"`
+		SystemPrompt string            `json:"system_prompt"`
+		Model        string            `json:"model"`
+		Provider     string            `json:"provider"`
+		Tools        []string          `json:"tools"`
+		Skills       []string          `json:"skills"`
+		Memory       string            `json:"memory"`
+		Avatar       string            `json:"avatar"`
+		Env          map[string]string `json:"env"`
+		Hidden       bool              `json:"hidden"`
+		Start        *bool             `json:"start,omitempty"` // reserved; bots are online immediately when mode is on
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -168,6 +183,12 @@ func (s *Server) handleBotsCreate(w http.ResponseWriter, r *http.Request) {
 		SystemPrompt: req.SystemPrompt,
 		Model:        req.Model,
 		Provider:     req.Provider,
+		Tools:        req.Tools,
+		Skills:       req.Skills,
+		Memory:       req.Memory,
+		Avatar:       req.Avatar,
+		Env:          req.Env,
+		Hidden:       req.Hidden,
 	}
 	if err := mgr.CreateBot(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -201,11 +222,20 @@ func (s *Server) handleBotUpdate(w http.ResponseWriter, r *http.Request, name st
 	}
 
 	var req struct {
-		Title        *string `json:"title,omitempty"`
-		Description  *string `json:"description,omitempty"`
-		SystemPrompt *string `json:"system_prompt,omitempty"`
-		Model        *string `json:"model,omitempty"`
-		Provider     *string `json:"provider,omitempty"`
+		Title        *string           `json:"title,omitempty"`
+		Description  *string           `json:"description,omitempty"`
+		SystemPrompt *string           `json:"system_prompt,omitempty"`
+		Model        *string           `json:"model,omitempty"`
+		Provider     *string           `json:"provider,omitempty"`
+		Tools        []string          `json:"tools,omitempty"`
+		Skills       []string          `json:"skills,omitempty"`
+		Memory       *string           `json:"memory,omitempty"`
+		Avatar       *string           `json:"avatar,omitempty"`
+		Env          map[string]string `json:"env,omitempty"`
+		Hidden       *bool             `json:"hidden,omitempty"`
+		ClearTools   *bool             `json:"clear_tools,omitempty"`
+		ClearSkills  *bool             `json:"clear_skills,omitempty"`
+		ClearEnv     *bool             `json:"clear_env,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -227,6 +257,30 @@ func (s *Server) handleBotUpdate(w http.ResponseWriter, r *http.Request, name st
 		}
 		if req.Provider != nil {
 			c.Provider = *req.Provider
+		}
+		if req.Tools != nil {
+			c.Tools = req.Tools
+		} else if req.ClearTools != nil && *req.ClearTools {
+			c.Tools = nil
+		}
+		if req.Skills != nil {
+			c.Skills = req.Skills
+		} else if req.ClearSkills != nil && *req.ClearSkills {
+			c.Skills = nil
+		}
+		if req.Memory != nil {
+			c.Memory = *req.Memory
+		}
+		if req.Avatar != nil {
+			c.Avatar = *req.Avatar
+		}
+		if req.Env != nil {
+			c.Env = req.Env
+		} else if req.ClearEnv != nil && *req.ClearEnv {
+			c.Env = nil
+		}
+		if req.Hidden != nil {
+			c.Hidden = *req.Hidden
 		}
 	})
 	if err != nil {
@@ -585,6 +639,41 @@ func (s *Server) handleBotClearMessages(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	jsonResponse(w, map[string]interface{}{"cleared": true})
+}
+
+// handleBotClone POST /api/bots/{name}/clone — duplicate a bot's full profile
+// (persona, model pin, tools/skills allowlists, memory, avatar, env) under a
+// new name with empty chat history and no routines.
+func (s *Server) handleBotClone(w http.ResponseWriter, r *http.Request, name string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "new bot name is required", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := mgr.CloneBot(name, strings.TrimSpace(req.Name))
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	state := mgr.RuntimeStatus(cfg.Name)
+	w.WriteHeader(http.StatusCreated)
+	jsonResponse(w, botToResponse(cfg, &state))
 }
 
 // handleBotRoutineRun POST /api/bots/{name}/routines/{id}/run — trigger an

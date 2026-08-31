@@ -89,6 +89,17 @@ magic bots chat researcher "Find recent papers on agent memory"
 magic bots routine add researcher daily-digest --schedule "0 9 * * *" --prompt "Summarize yesterday's findings."
 ```
 
+Cross-machine peers: DM a bot on another go-magic instance over HTTP(S).
+
+```bash
+# on machine B (run the dashboard / gateway so the relay endpoint is up)
+magic config set bot_mode.relay_token "shared-secret"   # optional, recommended
+# on machine A
+magic peer add lab-b http://192.168.1.20:8642 --token shared-secret
+magic peer dm lab-b researcher "What's the status of the report?"
+# peers live in <magic_home>/peers.json; this machine's id in <magic_home>/instance_id
+```
+
 ### MCP Protocol
 
 Connect to external MCP (Model Context Protocol) servers to extend agent capabilities.

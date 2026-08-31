@@ -321,6 +321,8 @@ const agentForm = reactive({
 const botModeForm = reactive({
   enabled: false,
   history_window: 200,
+  // 0 = follow backend default (5 min); UI shows the effective value.
+  turn_timeout_minutes: 5,
   // tri-state: null/'' = follow default, 'on'/'off' explicit
   inject_bot_protocol: '' as '' | 'on' | 'off',
 })
@@ -385,6 +387,8 @@ function populateFromConfig(cfg: any) {
   botModeEnabledAtLoad = botModeForm.enabled
   const hw = Number(botMode.history_window) || 0
   botModeForm.history_window = hw > 0 ? hw : 200
+  const tt = Number(botMode.turn_timeout_minutes) || 0
+  botModeForm.turn_timeout_minutes = tt > 0 ? tt : 5
   // Backend stores a JSON bool pointer; map to tri-state select value.
   if (botMode.inject_bot_protocol === true) botModeForm.inject_bot_protocol = 'on'
   else if (botMode.inject_bot_protocol === false) botModeForm.inject_bot_protocol = 'off'

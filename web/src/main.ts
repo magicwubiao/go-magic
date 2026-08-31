@@ -19,6 +19,7 @@ import KanbanView from './views/KanbanView.vue'
 import CronView from './views/CronView.vue'
 import GatewayView from './views/GatewayView.vue'
 import GroupChatView from './views/GroupChatView.vue'
+import RoomsView from './views/RoomsView.vue'
 import BotsView from './views/BotsView.vue'
 import ProfilesView from './views/ProfilesView.vue'
 import GoalsView from './views/GoalsView.vue'
@@ -42,6 +43,7 @@ const router = createRouter({
     { path: '/cron', component: CronView },
     { path: '/gateway', component: GatewayView },
     { path: '/groupchat', component: GroupChatView },
+    { path: '/rooms', component: RoomsView },
     { path: '/bots', component: BotsView },
     { path: '/logs', component: LogsView },
     { path: '/system', component: SystemView },

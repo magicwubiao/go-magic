@@ -8,6 +8,7 @@ export interface BotRuntime {
   queue_depth?: number
   history_length?: number
   active_routines?: number
+  last_active?: number
 }
 
 export interface Bot {
@@ -18,6 +19,12 @@ export interface Bot {
   system_prompt: string
   model: string
   provider: string
+  tools?: string[]
+  skills?: string[]
+  memory?: string
+  avatar?: string
+  env?: Record<string, string>
+  hidden?: boolean
   created_at: number
   updated_at: number
   runtime?: BotRuntime
@@ -55,12 +62,39 @@ export async function getBot(name: string): Promise<Bot> {
   return request(`/bots/${name}`)
 }
 
-export async function updateBot(name: string, updates: Partial<Bot>): Promise<Bot> {
+/**
+ * Update payload for a bot. `clear_tools` / `clear_skills` / `clear_env`
+ * disambiguate "send an empty list to wipe the whitelist" from "field not
+ * provided (keep current value)" — empty list + clear flag = nil whitelist.
+ */
+export interface BotUpdate {
+  title?: string
+  description?: string
+  system_prompt?: string
+  model?: string
+  provider?: string
+  tools?: string[]
+  skills?: string[]
+  memory?: string
+  avatar?: string
+  env?: Record<string, string>
+  hidden?: boolean
+  clear_tools?: boolean
+  clear_skills?: boolean
+  clear_env?: boolean
+}
+
+export async function updateBot(name: string, updates: BotUpdate): Promise<Bot> {
   return request(`/bots/${name}`, { method: 'PUT', body: JSON.stringify(updates) })
 }
 
 export async function deleteBot(name: string): Promise<void> {
   return request(`/bots/${name}`, { method: 'DELETE' })
+}
+
+/** Clone a bot's full profile under a new name (fresh chat history). */
+export async function cloneBot(name: string, newName: string): Promise<Bot> {
+  return request(`/bots/${name}/clone`, { method: 'POST', body: JSON.stringify({ name: newName }) })
 }
 
 export async function getBotMessages(name: string): Promise<BotMessage[]> {

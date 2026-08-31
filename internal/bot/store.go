@@ -34,6 +34,25 @@ type Config struct {
 	Model        string `json:"model,omitempty"`         // Model pin, e.g. "deepseek-chat"; empty = inherit global
 	Provider     string `json:"provider,omitempty"`      // Provider pin; empty = inherit global
 
+	// Tools is an allowlist of tool names this bot may call. Empty = inherit
+	// the full bot toolset. message_agent (fleet messaging) is always kept.
+	Tools []string `json:"tools,omitempty"`
+	// Skills is an allowlist of skill names this bot may load. Empty = all.
+	Skills []string `json:"skills,omitempty"`
+	// Memory is the bot's long-term memory block (markdown), injected into its
+	// system prompt — the equivalent of a profile MEMORY.md.
+	Memory string `json:"memory,omitempty"`
+	// Avatar is a display avatar: an emoji (e.g. "🦊") or image URL.
+	Avatar string `json:"avatar,omitempty"`
+	// Env holds per-bot credentials/overrides. Written to the bot's isolated
+	// workdir (<workdir>/bots/<name>/.env) so tools and scripts run by this bot
+	// can source them without leaking into other bots' processes.
+	Env map[string]string `json:"env,omitempty"`
+	// Hidden removes the bot from the default dashboard list. Hidden bots keep
+	// running (routines, DMs, rooms) and are reachable by name; the UI can show
+	// them behind a "show hidden" toggle.
+	Hidden bool `json:"hidden,omitempty"`
+
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
 }
@@ -75,7 +94,7 @@ func (c *Config) MentionTag() string {
 }
 
 // EffectiveSystemPrompt builds the full system prompt for the bot,
-// combining its persona with role metadata.
+// combining its persona, long-term memory, and role metadata.
 func (c *Config) EffectiveSystemPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("You are ")
@@ -90,6 +109,11 @@ func (c *Config) EffectiveSystemPrompt() string {
 	sb.WriteString(".\n\n")
 	if c.SystemPrompt != "" {
 		sb.WriteString(strings.TrimSpace(c.SystemPrompt))
+		sb.WriteString("\n\n")
+	}
+	if strings.TrimSpace(c.Memory) != "" {
+		sb.WriteString("LONG-TERM MEMORY (persistent facts about you, your preferences, and what you have learned):\n")
+		sb.WriteString(strings.TrimSpace(c.Memory))
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString("You are running inside Magic's Bot Mode. Stay in character and complete tasks using your available tools.")
@@ -111,6 +135,10 @@ func NewStore(magicHome string) (*Store, error) {
 	routinesDir := filepath.Join(dir, "routines")
 	if err := os.MkdirAll(routinesDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create routines dir: %w", err)
+	}
+	roomsDir := filepath.Join(dir, "rooms")
+	if err := os.MkdirAll(roomsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create rooms dir: %w", err)
 	}
 	return s, nil
 }
@@ -219,4 +247,108 @@ type RuntimeState struct {
 	QueueDepth     int    `json:"queue_depth"`
 	HistoryLength  int    `json:"history_length"`
 	ActiveRoutines int    `json:"active_routines"`
+	// LastActiveUnix is the Unix-seconds timestamp of the bot's most recent
+	// completed turn (0 = never active). Used for the "Active now" UI strip.
+	LastActiveUnix int64 `json:"last_active_unix,omitempty"`
+}
+
+// --- Group chat rooms ---
+
+// RoomConfig is the on-disk definition of a group chat room (2-6 bots).
+type RoomConfig struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Topic   string   `json:"topic,omitempty"`
+	Members []string `json:"members"` // bot names (lowercase)
+	// MaxRounds caps how many full speaking rounds run per user message
+	// (default 3, matching Hermes).
+	MaxRounds int `json:"max_rounds,omitempty"`
+	// MaxMessages caps how many recent room messages are included in each
+	// bot's context prompt (default 10, matching Hermes' 10-message cap).
+	MaxMessages int   `json:"max_messages,omitempty"`
+	CreatedAt   int64 `json:"created_at"`
+	UpdatedAt   int64 `json:"updated_at"`
+}
+
+// RoomDefaults mirror Hermes' hard caps.
+const (
+	DefaultRoomMaxRounds   = 3
+	DefaultRoomMaxMessages = 10
+	MaxRoomMembers         = 6
+	MinRoomMembers         = 2
+)
+
+func (r *RoomConfig) Rounds() int {
+	if r.MaxRounds <= 0 {
+		return DefaultRoomMaxRounds
+	}
+	return r.MaxRounds
+}
+
+func (r *RoomConfig) MessagesCap() int {
+	if r.MaxMessages <= 0 {
+		return DefaultRoomMaxMessages
+	}
+	return r.MaxMessages
+}
+
+func (s *Store) roomPath(id string) string {
+	return filepath.Join(s.dir, "rooms", id+".json")
+}
+
+// SaveRoom persists a room config.
+func (s *Store) SaveRoom(r *RoomConfig) error {
+	r.UpdatedAt = time.Now().Unix()
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.roomPath(r.ID), data, 0644)
+}
+
+// LoadRoom reads a room config by ID.
+func (s *Store) LoadRoom(id string) (*RoomConfig, error) {
+	data, err := os.ReadFile(s.roomPath(id))
+	if err != nil {
+		return nil, err
+	}
+	var r RoomConfig
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse room %s: %w", id, err)
+	}
+	return &r, nil
+}
+
+// DeleteRoom removes a room config file.
+func (s *Store) DeleteRoom(id string) error {
+	err := os.Remove(s.roomPath(id))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+// ListRooms returns all room configs sorted by name.
+func (s *Store) ListRooms() ([]*RoomConfig, error) {
+	dir := filepath.Join(s.dir, "rooms")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*RoomConfig{}, nil
+		}
+		return nil, err
+	}
+	var rooms []*RoomConfig
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		r, err := s.LoadRoom(strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil {
+			continue
+		}
+		rooms = append(rooms, r)
+	}
+	sort.Slice(rooms, func(i, j int) bool { return rooms[i].Name < rooms[j].Name })
+	return rooms, nil
 }

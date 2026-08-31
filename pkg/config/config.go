@@ -292,6 +292,10 @@ type BotModeConfig struct {
 	// far is persisted and the user gets a friendly timeout notice instead of
 	// a raw "context deadline exceeded" error.
 	TurnTimeoutMinutes int `json:"turn_timeout_minutes,omitempty"`
+	// RelayToken is an optional shared secret that remote instances ("peers")
+	// must present when DMing this instance's bots through /api/relay/v1/dm.
+	// Empty = relay accepts anonymous requests (use only on trusted networks).
+	RelayToken string `json:"relay_token,omitempty"`
 }
 
 // DefaultBotModeConfig returns default Bot Mode settings.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +33,26 @@ type pendingMessage struct {
 	// onDelta, when set, receives incremental assistant output while the
 	// worker streams this turn (SendToBotStream). May be nil.
 	onDelta StreamHandler
+	// retried marks that this message already went through one automatic
+	// retry (transient failure or context compaction), preventing infinite
+	// retry loops within a single enqueued message.
+	retried bool
+	// RoomID, when set, runs this turn inside the named group chat session
+	// (bot:<name>:room:<roomID>) instead of the canonical chat, and routes the
+	// reply back to the room coordinator via replyCh. Used by SendToRoom.
+	RoomID string
 }
 
 // turnResult carries one completed agent turn to a synchronous caller.
 type turnResult struct {
-	Reply string
-	Err   error
+	Reply       string
+	Err         error
+	FailureCode FailureCode // machine-readable reason when Err != nil
 }
 
 // Manager runs all configured bots: it owns per-bot agents, persists their
 // canonical chat sessions, processes inbound messages sequentially per bot,
-// and routes bot-to-bot DMs.
+// routes bot-to-bot DMs, and coordinates group chat rooms.
 type Manager struct {
 	mu        sync.Mutex
 	store     *Store
@@ -50,18 +60,32 @@ type Manager struct {
 	sessions  *sessionstore.Store
 	routines  map[string]*RoutineScheduler
 	bots      map[string]*botRuntime
+	rooms     map[string]*roomRuntime // room ID (lowercase) -> coordinator
 	queueCond *sync.Cond
 	stopCh    chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg        sync.WaitGroup
 }
 
-// botRuntime holds one bot's live agent plus its message queue.
+// botRuntime holds one bot's live agents plus its message queue. A bot has
+// one canonical-chat agent (ag) and, when it participates in group chats, one
+// dedicated agent per room (roomAgents) so room context never bleeds into the
+// canonical conversation (and vice versa).
 type botRuntime struct {
 	cfg    *Config
 	ag     *agent.Agent
 	queue  []pendingMessage
 	loaded bool // History restored from session store on first use
+
+	// lastActive is the Unix-seconds timestamp of the bot's most recent
+	// completed turn (chat, DM, or routine). Guarded by m.mu. 0 = never.
+	lastActive int64
+
+	// roomAgents holds per-room agents keyed by room ID. Guarded by m.mu.
+	roomAgents map[string]*agent.Agent
+	// roomLoaded marks which room histories have been restored (keyed by room
+	// ID) so we don't re-append stale turns on agent rebuilds.
+	roomLoaded map[string]bool
 }
 
 // NewManager creates a bot manager. Returns nil (no error) when no bots are defined.
@@ -88,6 +112,7 @@ func NewManager(cfg *config.Config, sessions *sessionstore.Store) (*Manager, err
 		sessions: botSessions,
 		routines: make(map[string]*RoutineScheduler),
 		bots:     make(map[string]*botRuntime),
+		rooms:    make(map[string]*roomRuntime),
 		stopCh:   make(chan struct{}),
 	}
 	m.queueCond = sync.NewCond(&m.mu)
@@ -130,6 +155,18 @@ func (m *Manager) Start(ctx context.Context) error {
 	for name := range m.bots {
 		m.wg.Add(1)
 		go m.workerLoop(ctx, name)
+	}
+
+	// Bring persisted group chat rooms online.
+	if rooms, err := m.store.ListRooms(); err == nil {
+		for _, rc := range rooms {
+			m.startRoomLocked(rc)
+		}
+		if len(rooms) > 0 {
+			log.Infof("[BotMode] %d group chat room(s) online", len(rooms))
+		}
+	} else {
+		log.Warnf("[BotMode] Failed to list rooms: %v", err)
 	}
 
 	count := len(m.bots)
@@ -211,25 +248,51 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 	}
 }
 
-// getOrCreateAgent lazily builds a bot's agent, restoring its canonical chat history.
-// Caller must hold m.mu.
-func (m *Manager) getOrCreateAgentLocked(rt *botRuntime) (*agent.Agent, error) {
+// getOrCreateAgentLocked lazily builds a bot's agent for the given session
+// context: roomID=="" selects the canonical chat, otherwise the group-chat
+// session for that room. Caller must hold m.mu.
+func (m *Manager) getOrCreateAgentLocked(rt *botRuntime, roomID string) (*agent.Agent, error) {
+	if roomID != "" {
+		if rt.roomAgents == nil {
+			rt.roomAgents = make(map[string]*agent.Agent)
+		}
+		if a, ok := rt.roomAgents[roomID]; ok {
+			return a, nil
+		}
+		ag, err := m.buildAgent(rt.cfg, RoomSessionID(rt.cfg.Name, roomID))
+		if err != nil {
+			return nil, err
+		}
+		rt.roomAgents[roomID] = ag
+		return ag, nil
+	}
+
 	if rt.ag != nil {
 		return rt.ag, nil
 	}
+	ag, err := m.buildAgent(rt.cfg, CanonicalSessionID(rt.cfg.Name))
+	if err != nil {
+		return nil, err
+	}
+	rt.ag = ag
+	return ag, nil
+}
 
-	prov, registry, err := buildBotDeps(m.cfg, rt.cfg)
+// buildAgent constructs a fresh agent for one bot session, restoring its
+// persisted history. Caller must hold m.mu (buildBotSystemPrompt reads cfg).
+func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error) {
+	prov, registry, err := buildBotDeps(m.cfg, bc)
 	if err != nil {
 		return nil, err
 	}
 
 	// Register the bot-to-bot messaging tool (message_agent), Hermes-style.
-	registry.Register(newMessageAgentTool(m, rt.cfg.MentionTag()))
+	registry.Register(newMessageAgentTool(m, bc.MentionTag()))
 
-	systemPrompt := m.buildBotSystemPrompt(rt.cfg)
+	systemPrompt := m.buildBotSystemPrompt(bc)
 
-	// Restore canonical chat history from the session store.
-	history := m.loadHistory(rt.cfg.Name)
+	// Restore history from the session store.
+	history := m.loadHistory(sessionID)
 	ag := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), systemPrompt)
 	// Bot mode uses a moderate tool-loop cap.  Bots are conversational
 	// agents — a single user message typically needs 3–10 rounds of tool
@@ -247,19 +310,20 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime) (*agent.Agent, error) {
 			MaxTokenBudget: m.cfg.Agent.MaxTokenBudget,
 		}))
 	}
-	ag.SetSession(CanonicalSessionID(rt.cfg.Name))
+	ag.SetSession(sessionID)
 	if len(history) > 0 {
 		ag.SetHistory(history)
-		rt.loaded = true
 	}
-
-	rt.ag = ag
 	return ag, nil
 }
 
 // buildBotSystemPrompt assembles the persona prompt plus the optional
 // fleet messaging protocol section. Caller must hold m.mu (it reads
-// m.cfg.BotMode and the roster via tagListLocked).
+// m.cfg.BotMode and the roster via rosterLocked).
+//
+// Injection is idempotent: if the persona already contains the protocol
+// section (e.g. hand-written SOUL text or a bot created from a template
+// that embeds it), we skip appending to avoid duplicated instructions.
 func (m *Manager) buildBotSystemPrompt(cfg *Config) string {
 	base := cfg.EffectiveSystemPrompt()
 	inject := true // Default on, matching Hermes' agent.bot_mode_protocol default
@@ -270,24 +334,14 @@ func (m *Manager) buildBotSystemPrompt(cfg *Config) string {
 		return base
 	}
 
-	if teammates := m.tagListLocked(); teammates != "" {
-		return base + fleetProtocol(teammates)
+	if strings.Contains(base, "BOT FLEET PROTOCOL") {
+		return base // Already embedded; do not inject twice.
+	}
+
+	if roster := m.rosterLocked(); roster != "" {
+		return base + fleetProtocol(roster)
 	}
 	return base
-}
-
-// turnFailureReply converts an agent turn failure into a user-facing message.
-// Context deadline/cancel errors get a friendly notice (the conversation was
-// NOT lost — history is persisted after every turn) instead of a raw
-// "context deadline exceeded" that reads like the whole chat died.
-func turnFailureReply(err error, turnTimeout time.Duration) string {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Sprintf("(⏱ 单轮对话超时:本回合耗时超过上限 %s,已中止执行。已完成的部分已保留,发送「继续」可在新回合接着处理。)", turnTimeout)
-	}
-	if errors.Is(err, context.Canceled) {
-		return "(⏹ 本回合已被取消,已完成的部分已保留。)"
-	}
-	return fmt.Sprintf("(error: %v)", err)
 }
 
 // fleetProtocol builds the bot-to-bot messaging protocol prompt section.
@@ -309,7 +363,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		m.mu.Unlock()
 		return
 	}
-	ag, err := m.getOrCreateAgentLocked(rt)
+	ag, err := m.getOrCreateAgentLocked(rt, msg.RoomID)
 	m.mu.Unlock()
 
 	if err != nil {
@@ -327,12 +381,14 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 
-	var reply string
-	if msg.onDelta != nil {
-		// Streaming user turn: forward assistant deltas to the caller while
-		// keeping the same serialized queue/persistence semantics.
+	// runTurn executes one agent turn (streaming or blocking) and returns the
+	// full assistant text. Deltas are forwarded to msg.onDelta when set.
+	runTurn := func(stream bool, forwardDeltas bool) (string, error) {
+		if !stream {
+			return ag.RunConversation(runCtx, msg.Text)
+		}
 		var sb strings.Builder
-		streamErr := ag.RunConversationStream(runCtx, msg.Text, func(content string, done bool) {
+		err := ag.RunConversationStream(runCtx, msg.Text, func(content string, done bool) {
 			if done || content == "" {
 				return
 			}
@@ -341,24 +397,63 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 				return
 			}
 			sb.WriteString(content)
-			msg.onDelta(content, false)
+			if forwardDeltas && msg.onDelta != nil {
+				msg.onDelta(content, false)
+			}
 		})
-		reply = sb.String()
-		if streamErr != nil {
-			err = streamErr
-			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
-			reply = turnFailureReply(err, turnTimeout)
+		return sb.String(), err
+	}
+
+	streaming := msg.onDelta != nil
+	reply, err := runTurn(streaming, true)
+	if err != nil {
+		cls := classifyFailure(err)
+		log.Errorf("[BotMode] Bot %s turn failed: %v (code=%s)", rt.cfg.Name, err, cls.Code)
+
+		// Automatic retry policy:
+		//   - transient failures (rate limit, 5xx, offline, timeout) retry once;
+		//   - context overflow compacts the history then retries once.
+		if !msg.retried && cls.Transient {
+			msg.retried = true
+			if cls.Code == FailureContextOverflow {
+				compact := compactHistory(ag.GetHistory())
+				ag.SetHistory(compact)
+				log.Warnf("[BotMode] Bot %s context overflow: compacted history to %d messages, retrying", rt.cfg.Name, len(compact))
+			} else {
+				log.Warnf("[BotMode] Bot %s transient failure (%s): retrying once", rt.cfg.Name, cls.Code)
+			}
+			// On retry, don't re-forward deltas to the caller — the client
+			// already saw the first attempt's partial stream and will get the
+			// authoritative final text via replyCh.
+			reply, err = runTurn(streaming, false)
+			if err != nil {
+				log.Errorf("[BotMode] Bot %s retry failed: %v", rt.cfg.Name, err)
+			}
 		}
-	} else {
-		reply, err = ag.RunConversation(runCtx, msg.Text)
+
 		if err != nil {
-			log.Errorf("[BotMode] Bot %s turn failed: %v", rt.cfg.Name, err)
-			reply = turnFailureReply(err, turnTimeout)
+			var failCode FailureCode
+			reply, failCode = turnFailureReplyCoded(err, turnTimeout)
+			err = &TurnError{Err: err, Code: failCode}
 		}
 	}
 
-	// Persist canonical chat after every turn.
-	m.saveHistory(rt.cfg.Name, ag.GetHistory())
+	// Persist the turn's session (canonical chat or room session).
+	sessionID := CanonicalSessionID(rt.cfg.Name)
+	if msg.RoomID != "" {
+		sessionID = RoomSessionID(rt.cfg.Name, msg.RoomID)
+	}
+	if trimmed, didTrim := m.saveHistory(sessionID, ag.GetHistory()); didTrim {
+		// Keep the live agent's in-memory history aligned with what was saved,
+		// otherwise context grows unbounded even though disk stays trimmed.
+		ag.SetHistory(trimmed)
+	}
+
+	// Mark the bot active (used for the "Active now" indicator). Counts every
+	// completed turn regardless of success — a failed attempt is still work.
+	m.mu.Lock()
+	rt.lastActive = time.Now().Unix()
+	m.mu.Unlock()
 
 	// Write back routine last-run status when this turn came from a routine.
 	if msg.RoutineID != "" {
@@ -371,14 +466,23 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 
 	// Deliver the result to a synchronous caller if one is waiting.
 	if msg.replyCh != nil {
+		code := FailureUnknown
+		var te *TurnError
+		if errors.As(err, &te) {
+			code = te.Code
+		}
 		select {
-		case msg.replyCh <- turnResult{Reply: reply, Err: err}:
+		case msg.replyCh <- turnResult{Reply: reply, Err: err, FailureCode: code}:
 		default:
 		}
 	}
 
-	// Route the reply for async sources (bot DMs, routines).
+	// Route the reply for async sources (bot DMs, routines). Room turns are
+	// excluded: their result already went through replyCh above and the room
+	// coordinator owns delivery.
 	switch {
+	case msg.RoomID != "":
+		log.Debugf("[BotMode] Room %s turn finished for %s", msg.RoomID, rt.cfg.Name)
 	case strings.HasPrefix(msg.From, "bot:"):
 		// Bot-to-bot DM reply goes back to the sender's canonical chat queue.
 		// From carries the sender's mention tag; resolve it back to the bot name
@@ -549,6 +653,30 @@ func (m *Manager) tagListLocked() string {
 	return strings.Join(tags, ", ")
 }
 
+// rosterLocked returns the human-readable teammate roster with roles, e.g.
+// "@researcher (Research Assistant), @coder (Coding Bot)". Caller must hold
+// m.mu. Bots without a Title fall back to their tag only.
+func (m *Manager) rosterLocked() string {
+	var entries []string
+	for _, rt := range m.bots {
+		entry := "@" + rt.cfg.MentionTag()
+		if rt.cfg.Title != "" && !strings.EqualFold(rt.cfg.Title, rt.cfg.Name) {
+			entry += " (" + rt.cfg.Title + ")"
+		}
+		entries = append(entries, entry)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ", ")
+}
+
+// Roster returns the public roster string (role-aware teammate list) for
+// tool descriptions and CLI output.
+func (m *Manager) Roster() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rosterLocked()
+}
+
 // List returns all bot configs.
 func (m *Manager) List() []*Config {
 	m.mu.Lock()
@@ -565,12 +693,19 @@ func CanonicalSessionID(name string) string {
 	return fmt.Sprintf("bot:%s:chat", strings.ToLower(name))
 }
 
-// loadHistory restores persisted canonical-chat messages as provider messages.
-func (m *Manager) loadHistory(name string) []provider.Message {
+// RoomSessionID returns the persistent session ID for one bot inside a group
+// chat room (Hermes' "Group: <name>" persistence, namespaced per bot so each
+// member keeps its own room memory).
+func RoomSessionID(name, roomID string) string {
+	return fmt.Sprintf("bot:%s:room:%s", strings.ToLower(name), strings.ToLower(roomID))
+}
+
+// loadHistory restores persisted session messages as provider messages.
+func (m *Manager) loadHistory(sessionID string) []provider.Message {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sess, err := m.sessions.LoadSession(ctx, CanonicalSessionID(name))
+	sess, err := m.sessions.LoadSession(ctx, sessionID)
 	if err != nil || sess == nil {
 		return nil
 	}
@@ -679,22 +814,22 @@ func truncateHistoryAtTurnBoundary(history []provider.Message, window int) ([]pr
 	return history[start:], true
 }
 
-// saveHistory persists the canonical chat (skipping the system prompt entry,
-// which is rebuilt fresh each launch). The stored history is capped by the
-// configured history window so long-running bots don't grow without bound;
-// trimming happens on user-turn boundaries only.
-func (m *Manager) saveHistory(name string, history []provider.Message) {
+// saveHistory persists a session (canonical chat or room session), skipping
+// the system prompt entry (rebuilt fresh each launch). The stored history is
+// capped by the configured history window so long-running bots don't grow
+// without bound; trimming happens on user-turn boundaries only.
+// Returns the (possibly trimmed) history and whether a trim happened, so the
+// caller can keep its live agent's in-memory history aligned with disk.
+func (m *Manager) saveHistory(sessionID string, history []provider.Message) ([]provider.Message, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	trimmed, didTrim := truncateHistoryAtTurnBoundary(history, m.historyWindow())
 
-	sessID := CanonicalSessionID(name)
-
 	sess := &sessionstore.Session{
-		ID:       sessID,
-		Name:     fmt.Sprintf("Bot Chat: %s", name),
-		Profile:  name,
+		ID:       sessionID,
+		Name:     "Bot Chat: " + sessionID,
+		Profile:  sessionID,
 		Platform: "bot",
 		Messages: make([]types.Message, 0, len(trimmed)),
 	}
@@ -702,18 +837,9 @@ func (m *Manager) saveHistory(name string, history []provider.Message) {
 		sess.Messages = append(sess.Messages, msg)
 	}
 	if err := m.sessions.SaveSession(ctx, sess); err != nil {
-		log.Warnf("[BotMode] Failed to persist chat for %s: %v", name, err)
+		log.Warnf("[BotMode] Failed to persist chat %s: %v", sessionID, err)
 	}
-
-	// Keep the live agent's in-memory history aligned with what was saved,
-	// otherwise context grows unbounded even though disk stays trimmed.
-	if didTrim {
-		m.mu.Lock()
-		if rt, ok := m.bots[strings.ToLower(name)]; ok && rt != nil && rt.ag != nil {
-			rt.ag.SetHistory(trimmed)
-		}
-		m.mu.Unlock()
-	}
+	return trimmed, didTrim
 }
 
 // --- Dynamic lifecycle management (used by the Web dashboard API) ---
@@ -804,6 +930,47 @@ func (m *Manager) CreateBot(cfg *Config) error {
 	return nil
 }
 
+// CloneBot duplicates an existing bot's full profile (persona, model pin,
+// tools/skills allowlists, memory, avatar, env) under a new name with a fresh
+// identity and empty chat history. Routines are NOT copied: a clone starts
+// clean. The clone comes online immediately when the manager is running.
+func (m *Manager) CloneBot(name, newName string) (*Config, error) {
+	src, err := m.store.Load(name)
+	if err != nil {
+		return nil, fmt.Errorf("bot not found: %s", name)
+	}
+	if err := ValidateName(newName); err != nil {
+		return nil, err
+	}
+	if existing, err := m.store.Load(newName); err == nil && existing != nil {
+		return nil, fmt.Errorf("bot %q already exists", newName)
+	}
+	if strings.EqualFold(src.Name, newName) {
+		return nil, fmt.Errorf("new name must differ from the source bot")
+	}
+
+	clone := *src // shallow copy; deep-copy the slice/map fields below
+	clone.Name = newName
+	clone.Tools = append([]string(nil), src.Tools...)
+	clone.Skills = append([]string(nil), src.Skills...)
+	if src.Env != nil {
+		clone.Env = make(map[string]string, len(src.Env))
+		for k, v := range src.Env {
+			clone.Env[k] = v
+		}
+	}
+	now := time.Now().Unix()
+	clone.CreatedAt = now
+	clone.UpdatedAt = now
+
+	if err := m.store.Save(&clone); err != nil {
+		return nil, fmt.Errorf("failed to save cloned bot: %w", err)
+	}
+	m.startBotLocked(&clone)
+	log.Infof("[BotMode] Cloned bot %q -> %q", name, newName)
+	return &clone, nil
+}
+
 // UpdateBot applies partial updates to an existing bot and hot-reloads its
 // runtime (agent + routine scheduler) without dropping queued messages.
 func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) {
@@ -889,6 +1056,7 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 	rt, ok := m.bots[key]
 	if ok {
 		state.QueueDepth = len(rt.queue)
+		state.LastActiveUnix = rt.lastActive
 	}
 	routines, _ := m.store.LoadRoutines(rtName(key))
 	for _, r := range routines {

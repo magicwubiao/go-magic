@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as botsApi from '@/api/bots'
-import type { Bot, BotRoutine, BotMessage } from '@/api/bots'
+import type { Bot, BotRoutine, BotMessage, BotUpdate } from '@/api/bots'
 
 export const useBotsStore = defineStore('bots', () => {
   const bots = ref<Bot[]>([])
@@ -44,7 +44,7 @@ export const useBotsStore = defineStore('bots', () => {
     return created
   }
 
-  async function updateBot(name: string, updates: Partial<Bot>): Promise<Bot> {
+  async function updateBot(name: string, updates: BotUpdate): Promise<Bot> {
     const updated = await botsApi.updateBot(name, updates)
     const idx = bots.value.findIndex(b => b.name === name)
     if (idx >= 0) bots.value[idx] = { ...bots.value[idx], ...updated }
@@ -57,6 +57,13 @@ export const useBotsStore = defineStore('bots', () => {
     if (activeBotName.value === name) {
       closeChat()
     }
+  }
+
+  /** Clone an existing bot under a new name (fresh chat history, same config). */
+  async function cloneBot(name: string, newName: string): Promise<Bot> {
+    const created = await botsApi.cloneBot(name, newName)
+    await loadBots()
+    return created
   }
 
   function openChat(name: string) {
@@ -253,7 +260,7 @@ export const useBotsStore = defineStore('bots', () => {
   return {
     bots, loading, error, modeDisabled,
     activeBotName, messages, routines, chatLoading, sending,
-    loadBots, createBot, updateBot, deleteBot,
+    loadBots, createBot, updateBot, deleteBot, cloneBot,
     openChat, closeChat, refreshChat, sendMessage,
     addRoutine, removeRoutine, toggleRoutine, updateRoutine,
     runRoutineNow, clearMessages,

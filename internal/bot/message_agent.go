@@ -24,7 +24,7 @@ func newMessageAgentTool(m *Manager, senderTag string) *messageAgentTool {
 	return &messageAgentTool{
 		manager:   m,
 		sender:    senderTag,
-		teammates: m.tagListLocked(), // Caller holds m.mu; safe snapshot
+		teammates: m.rosterLocked(), // Caller holds m.mu; safe snapshot
 	}
 }
 

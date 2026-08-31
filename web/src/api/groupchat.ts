@@ -16,6 +16,8 @@ export interface ChatMessage {
   role: 'user' | 'agent' | 'system'
   content: string
   timestamp: number
+  // Client-side only: marks a placeholder message currently streaming from SSE.
+  _streaming?: boolean
 }
 
 export interface RoomMember {

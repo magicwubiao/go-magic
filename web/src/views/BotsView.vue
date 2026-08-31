@@ -7,13 +7,20 @@
           <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
         </n-button>
         <div class="chat-title">
-          <n-text strong style="font-size: 16px;">@{{ activeBot?.mention_tag || botsStore.activeBotName }}</n-text>
-          <n-text v-if="activeBot?.title" depth="3" style="font-size: 12px;">{{ activeBot.title }}</n-text>
+          <n-avatar v-if="isImageAvatar(activeBot?.avatar)" round size="small" :src="activeBot?.avatar" />
+          <n-avatar v-else round size="small" :style="{ backgroundColor: avatarColor(activeBot?.name || ''), fontSize: '15px' }">
+            {{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}
+          </n-avatar>
+          <div class="chat-title-text">
+            <n-text strong style="font-size: 16px;">@{{ activeBot?.mention_tag || botsStore.activeBotName }}</n-text>
+            <n-text v-if="activeBot?.title" depth="3" style="font-size: 12px;">{{ activeBot.title }}</n-text>
+          </div>
         </div>
         <n-space :size="6" align="center">
           <n-tag :type="(activeBot?.runtime?.online) ? 'success' : 'default'" size="small">
             {{ activeBot?.runtime?.online ? t('bots.online') : t('bots.offline') }}
           </n-tag>
+          <n-tag v-if="isActiveNow(activeBotObj)" type="success" size="small" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
           <n-button quaternary size="small" @click="openRoutinesModal">
             <template #icon><n-icon><TimeOutline /></n-icon></template>
             {{ t('bots.routines') }} ({{ botsStore.routines.length }})
@@ -46,7 +53,9 @@
                 :class="msg.role"
               >
                 <div class="avatar" :class="msg.role === 'assistant' ? 'bot-avatar' : 'user-avatar'">
-                  {{ msg.role === 'assistant' ? botAvatarText : 'U' }}
+                  <img v-if="msg.role === 'assistant' && isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
+                  <span v-else-if="msg.role === 'assistant'">{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
+                  <span v-else>U</span>
                 </div>
                 <div class="message-body" :class="{ 'bot-body': msg.role === 'assistant' }">
                   <div class="message-header">
@@ -71,7 +80,8 @@
           </template>
           <div v-if="botsStore.sending && !botsStore.messages.some(m => m._streaming)" class="message assistant">
             <div class="avatar bot-avatar">
-              {{ botAvatarText }}
+              <img v-if="isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
+              <span v-else>{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
             </div>
             <div class="message-body bot-body">
               <div class="message-header">
@@ -135,6 +145,9 @@
           <n-button :loading="botsStore.loading" @click="botsStore.loadBots()">
             <template #icon><n-icon><RefreshOutline /></n-icon></template>
           </n-button>
+          <n-button quaternary :type="showHidden ? 'primary' : 'default'" @click="showHidden = !showHidden">
+            {{ showHidden ? t('bots.hideHidden') : t('bots.showHidden') }}
+          </n-button>
           <n-button type="primary" :disabled="botModeDisabled" @click="openCreateModal">+ {{ t('bots.createBot') }}</n-button>
         </n-space>
       </n-space>
@@ -146,11 +159,12 @@
       <n-spin :show="botsStore.loading">
         <n-empty v-if="!botsStore.bots.length && !botsStore.loading" :description="t('bots.noBots')" style="padding: 60px 0;" />
         <n-grid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-          <n-gi v-for="b in botsStore.bots" :key="b.name" span="3 s:1 m:1 l:1">
-            <n-card size="small" hoverable class="bot-card">
+          <n-gi v-for="b in visibleBots" :key="b.name" span="3 s:1 m:1 l:1">
+            <n-card size="small" hoverable class="bot-card" :class="{ 'bot-card--hidden': b.hidden }">
               <div class="bot-card-head">
-                <n-avatar round size="medium" :style="{ backgroundColor: avatarColor(b.name) }">
-                  {{ (b.mention_tag || b.name).slice(0, 2).toUpperCase() }}
+                <n-avatar v-if="isImageAvatar(b.avatar)" round size="medium" :src="b.avatar" />
+                <n-avatar v-else round size="medium" :style="{ backgroundColor: avatarColor(b.name), fontSize: isCustomAvatar(b.avatar) ? '20px' : '14px' }">
+                  {{ isCustomAvatar(b.avatar) ? b.avatar : (b.mention_tag || b.name).slice(0, 2).toUpperCase() }}
                 </n-avatar>
                 <div class="bot-card-title">
                   <n-space align="center" :size="6">
@@ -158,6 +172,8 @@
                     <n-tag :type="b.runtime?.online ? 'success' : 'warning'" size="tiny">
                       {{ b.runtime?.online ? t('bots.online') : t('bots.offline') }}
                     </n-tag>
+                    <n-tag v-if="isActiveNow(b)" type="success" size="tiny" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
+                    <n-tag v-if="b.hidden" size="tiny" :bordered="false">{{ t('bots.hiddenBadge') }}</n-tag>
                   </n-space>
                   <n-text depth="3" style="font-size: 12px;">{{ b.title || b.description || '' }}</n-text>
                 </div>
@@ -223,11 +239,88 @@
             :render-label="renderBotModelLabel"
           />
         </n-form-item>
+        <n-divider style="margin: 4px 0 12px;">{{ t('bots.advancedSection') }}</n-divider>
+        <n-form-item :label="t('bots.avatarLabel')">
+          <n-input v-model:value="form.avatar" :placeholder="t('bots.avatarPlaceholder')" />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.avatarHint') }}</n-text>
+          </template>
+        </n-form-item>
+        <n-form-item :label="t('bots.memoryLabel')">
+          <n-input v-model:value="form.memory" type="textarea" :rows="3" :placeholder="t('bots.memoryPlaceholder')" />
+        </n-form-item>
+        <n-form-item :label="t('bots.toolsLabel')">
+          <n-select
+            v-model:value="form.tools"
+            multiple
+            filterable
+            tag
+            :options="toolOptions"
+            :placeholder="t('bots.toolsPlaceholder')"
+            :consistent-menu-width="false"
+          />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.toolsHint') }}</n-text>
+          </template>
+        </n-form-item>
+        <n-form-item :label="t('bots.skillsLabel')">
+          <n-select
+            v-model:value="form.skills"
+            multiple
+            filterable
+            tag
+            :options="skillOptions"
+            :placeholder="t('bots.skillsPlaceholder')"
+            :consistent-menu-width="false"
+          />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.skillsHint') }}</n-text>
+          </template>
+        </n-form-item>
+        <n-form-item :label="t('bots.envLabel')">
+          <n-input v-model:value="form.env_text" type="textarea" :rows="4" :placeholder="t('bots.envPlaceholder')" />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.envHint') }}</n-text>
+          </template>
+        </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showEditModal = false">{{ t('common.cancel') }}</n-button>
           <n-button type="primary" :loading="saving" @click="handleSaveBot">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- Clone Modal -->
+    <n-modal v-model:show="showCloneModal" :title="t('bots.cloneTitle')" preset="card" class="modal-responsive" style="width: 420px; max-width: 96vw;">
+      <n-form label-placement="top">
+        <n-form-item :label="t('bots.name')" required>
+          <n-input v-model:value="cloneName" :placeholder="t('bots.cloneNamePlaceholder')" @keydown.enter.prevent="handleCloneConfirm" />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.cloneHint') }}</n-text>
+          </template>
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showCloneModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="cloning" :disabled="!cloneName.trim()" @click="handleCloneConfirm">{{ t('common.confirm') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- Rename Modal -->
+    <n-modal v-model:show="showRenameModal" :title="t('bots.renameTitle')" preset="card" class="modal-responsive" style="width: 420px; max-width: 96vw;">
+      <n-form label-placement="top">
+        <n-form-item :label="t('bots.titleLabel')" required>
+          <n-input v-model:value="renameName" :placeholder="t('bots.renamePlaceholder')" @keydown.enter.prevent="handleRenameConfirm" />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showRenameModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="renaming" :disabled="!renameName.trim()" @click="handleRenameConfirm">{{ t('common.confirm') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -333,7 +426,7 @@
 import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
-  NFormItem, NGi, NGrid, NH6, NIcon, NInput, NList, NListItem, NModal,
+  NFormItem, NGi, NGrid, NH6, NIcon, NInput, NModal,
   NPopconfirm, NSpace, NSelect, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
@@ -344,6 +437,7 @@ import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
 import { useModelsStore } from '@/stores/models'
 import type { Bot, BotRoutine } from '@/api/bots'
+import { request } from '@/api/client'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
@@ -369,7 +463,29 @@ const form = reactive({
   system_prompt: '',
   model: '',
   provider: '',
+  tools: [] as string[],
+  skills: [] as string[],
+  memory: '',
+  avatar: '',
+  env_text: '',
 })
+
+// Clone modal state
+const showCloneModal = ref(false)
+const cloneName = ref('')
+const cloning = ref(false)
+let cloneTarget: Bot | null = null
+
+// Hidden-bot visibility toggle + quick rename modal
+const showHidden = ref(false)
+const showRenameModal = ref(false)
+const renameName = ref('')
+const renaming = ref(false)
+let renameTarget: Bot | null = null
+
+// Candidate whitelists fetched from /api/tools and /api/skills.
+const toolOptions = ref<{ label: string; value: string }[]>([])
+const skillOptions = ref<{ label: string; value: string }[]>([])
 
 const routineForm = reactive({ name: '', schedule: '', prompt: '' })
 // Non-null while the form is editing an existing routine instead of adding.
@@ -396,6 +512,18 @@ const activeBot = computed(() =>
 )
 // The list endpoint already embeds runtime info; keep a non-null object for template use
 const activeBotObj = computed<Bot | null>(() => activeBot.value)
+
+// Hidden bots stay running (routines/DMs/rooms) but are filtered from the grid
+// unless the user explicitly opts in to see them.
+const visibleBots = computed(() =>
+  botsStore.bots.filter(b => !b.hidden || showHidden.value)
+)
+
+// A bot is "Active now" when its most recent completed turn is under 5 min old.
+function isActiveNow(b: Bot | null | undefined): boolean {
+  if (!b?.runtime?.online || !b.runtime.last_active) return false
+  return Date.now() - b.runtime.last_active * 1000 < 5 * 60 * 1000
+}
 
 // Driven by the store: set when GET /api/bots returns 503 (bot mode off).
 const botModeDisabled = computed(() => botsStore.modeDisabled)
@@ -442,7 +570,10 @@ function cardMenuOptions(b: Bot) {
   return [
     { label: t('bots.openChat'), key: 'chat' },
     { label: t('common.edit'), key: 'edit' },
+    { label: t('bots.renameBot'), key: 'rename' },
     { label: t('bots.manageRoutines'), key: 'routines' },
+    { label: t('bots.cloneBot'), key: 'clone' },
+    { label: b.hidden ? t('bots.unhideBot') : t('bots.hideBot'), key: 'hidden' },
     { label: t('common.delete'), key: 'delete' },
   ]
 }
@@ -455,9 +586,18 @@ function handleCardAction(key: string, b: Bot) {
     case 'edit':
       openEditModal(b)
       break
+    case 'rename':
+      openRenameModal(b)
+      break
     case 'routines':
       botsStore.openChat(b.name)
       openRoutinesModal()
+      break
+    case 'clone':
+      openCloneModal(b)
+      break
+    case 'hidden':
+      void handleToggleHidden(b)
       break
     case 'delete':
       void handleDeleteBot(b)
@@ -473,6 +613,11 @@ function openCreateModal() {
   form.system_prompt = ''
   form.model = ''
   form.provider = ''
+  form.tools = []
+  form.skills = []
+  form.memory = ''
+  form.avatar = ''
+  form.env_text = ''
   showEditModal.value = true
 }
 
@@ -485,6 +630,11 @@ function openEditModal(b: Bot | null) {
   form.system_prompt = b.system_prompt || ''
   form.model = b.model || ''
   form.provider = b.provider || ''
+  form.tools = [...(b.tools || [])]
+  form.skills = [...(b.skills || [])]
+  form.memory = b.memory || ''
+  form.avatar = b.avatar || ''
+  form.env_text = envToText(b.env)
   showEditModal.value = true
 }
 
@@ -495,17 +645,37 @@ async function handleSaveBot() {
   }
   saving.value = true
   try {
-    const payload = {
+    const payload: Record<string, unknown> = {
       title: form.title,
       description: form.description,
       system_prompt: form.system_prompt,
       model: form.model,
       provider: form.provider,
+      memory: form.memory,
+      avatar: form.avatar,
     }
+    const env = parseEnvPairs(form.env_text)
     if (editingBot.value) {
+      const orig = editingBot.value
+      // Whitelists: send only on change; empty + clear flag = wipe to "inherit all".
+      if (!arraysEqual(orig.tools || [], form.tools)) {
+        if (form.tools.length === 0) payload.clear_tools = true
+        else payload.tools = form.tools
+      }
+      if (!arraysEqual(orig.skills || [], form.skills)) {
+        if (form.skills.length === 0) payload.clear_skills = true
+        else payload.skills = form.skills
+      }
+      if (!envsEqual(orig.env || {}, env)) {
+        if (Object.keys(env).length === 0) payload.clear_env = true
+        else payload.env = env
+      }
       await botsStore.updateBot(editingBot.value.name, payload)
       message.success(t('bots.botUpdated'))
     } else {
+      payload.tools = form.tools
+      payload.skills = form.skills
+      if (Object.keys(env).length > 0) payload.env = env
       await botsStore.createBot({ name: form.name.trim(), ...payload })
       message.success(t('bots.botCreated'))
     }
@@ -514,6 +684,57 @@ async function handleSaveBot() {
     message.error(e.message || t('common.operationFailed'))
   } finally {
     saving.value = false
+  }
+}
+
+function openCloneModal(b: Bot) {
+  cloneTarget = b
+  cloneName.value = ''
+  showCloneModal.value = true
+}
+
+async function handleCloneConfirm() {
+  if (!cloneTarget || !cloneName.value.trim()) return
+  const newName = cloneName.value.trim()
+  cloning.value = true
+  try {
+    await botsStore.cloneBot(cloneTarget.name, newName)
+    message.success(t('bots.cloneSuccess', { name: '@' + newName }))
+    showCloneModal.value = false
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    cloning.value = false
+  }
+}
+
+async function handleToggleHidden(b: Bot) {
+  try {
+    await botsStore.updateBot(b.name, { hidden: !b.hidden })
+    message.success(b.hidden ? t('bots.botShown') : t('bots.botHidden'))
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  }
+}
+
+function openRenameModal(b: Bot) {
+  renameTarget = b
+  renameName.value = b.title || ''
+  showRenameModal.value = true
+}
+
+async function handleRenameConfirm() {
+  if (!renameTarget || !renameName.value.trim()) return
+  const title = renameName.value.trim()
+  renaming.value = true
+  try {
+    await botsStore.updateBot(renameTarget.name, { title })
+    message.success(t('bots.renamed'))
+    showRenameModal.value = false
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    renaming.value = false
   }
 }
 
@@ -632,6 +853,12 @@ async function handleRemoveRoutine(routineId: string) {
 async function handleSend() {
   const text = draft.value.trim()
   if (!text) return
+  // Canonical chat protection: bot conversations are persistent by design,
+  // so session-reset commands are not available here. Use "Clear chat" instead.
+  if (/^\/(new|reset)\b/i.test(text)) {
+    message.warning(t('bots.canonicalChatHint'))
+    return
+  }
   draft.value = ''
   try {
     await botsStore.sendMessage(text)
@@ -768,6 +995,7 @@ function handleDocumentCodeClick(e: MouseEvent) {
 onMounted(() => {
   void botsStore.loadBots()
   void modelsStore.loadModels()
+  void loadCandidates()
   document.addEventListener('click', handleDocumentCodeClick)
 })
 
@@ -782,10 +1010,68 @@ function avatarColor(name: string) {
   return palette[h % palette.length]
 }
 
-onMounted(() => {
-  void botsStore.loadBots()
-  void modelsStore.loadModels()
-})
+// ========== Capability isolation helpers ==========
+function isImageAvatar(avatar?: string): boolean {
+  if (!avatar) return false
+  return /^(https?:\/\/|data:image\/)/.test(avatar.trim())
+}
+
+// A short multi-byte token (emoji / symbol) is rendered verbatim; anything
+// else falls back to the initials avatar.
+function isCustomAvatar(avatar?: string): boolean {
+  if (!avatar) return false
+  const a = avatar.trim()
+  if (!a || isImageAvatar(a)) return false
+  return [...a].length <= 2
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = [...a].sort()
+  const sb = [...b].sort()
+  return sa.every((v, i) => v === sb[i])
+}
+
+function envsEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ka = Object.keys(a)
+  const kb = Object.keys(b)
+  if (ka.length !== kb.length) return false
+  return ka.every(k => a[k] === b[k])
+}
+
+function envToText(env?: Record<string, string>): string {
+  if (!env) return ''
+  return Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n')
+}
+
+function parseEnvPairs(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const idx = line.indexOf('=')
+    if (idx <= 0) continue
+    const k = line.slice(0, idx).trim()
+    const v = line.slice(idx + 1).trim()
+    if (k) out[k] = v
+  }
+  return out
+}
+
+async function loadCandidates() {
+  try {
+    const tools = (await request('/tools')) as { name?: string }[]
+    toolOptions.value = (tools || [])
+      .map(x => ({ label: x.name || '', value: x.name || '' }))
+      .filter(x => x.value)
+    const skills = (await request('/skills')) as { name?: string }[]
+    skillOptions.value = (skills || [])
+      .map(x => ({ label: x.name || '', value: x.name || '' }))
+      .filter(x => x.value)
+  } catch {
+    /* candidates are optional; tag mode still allows free-text entry */
+  }
+}
 </script>
 
 <style scoped>
@@ -802,6 +1088,13 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.bot-card--hidden {
+  opacity: 0.55;
+  filter: saturate(0.7);
+}
+.bot-card--hidden:hover {
+  opacity: 0.85;
 }
 .bot-card-title {
   flex: 1;
@@ -822,8 +1115,15 @@ onMounted(() => {
 .chat-title {
   flex: 1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+.chat-title-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
 }
 .chat-body {
   flex: 1;
@@ -898,6 +1198,13 @@ onMounted(() => {
 
 .bot-avatar {
   background: linear-gradient(135deg, #18a058 0%, #36ad6a 100%);
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 /* ========== Message Header ========== */

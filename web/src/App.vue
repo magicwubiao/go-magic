@@ -105,7 +105,7 @@ import {
   PieChartOutline,
   ServerOutline,
   LogOutOutline,
-  BriefcaseOutline,
+  PeopleCircleOutline,
   ChevronForwardOutline,
   ChevronBackOutline,
 } from '@vicons/ionicons5'
@@ -140,7 +140,7 @@ const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
 const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEnUS)
 
 const isLoginPage = computed(() => route.path === '/login')
-const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat')
+const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat' || route.path === '/rooms')
 const activeKey = computed(() => route.path)
 
 onUnmounted(() => {
@@ -149,10 +149,6 @@ onUnmounted(() => {
 
 function handleMenuClick(key: string) {
   router.push(key)
-}
-
-function handleLogoutClick() {
-  showLogoutConfirm.value = true
 }
 
 function handleLogout() {
@@ -191,6 +187,7 @@ const menuOptions = computed(() => [
   { type: 'divider' as const },
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
+  { label: t('nav.botRooms'), key: '/rooms', icon: renderIcon(PeopleCircleOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },

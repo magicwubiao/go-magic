@@ -56,7 +56,8 @@
     }
   },
   "bot_mode": {
-    "enabled": false
+    "enabled": false,
+    "relay_token": ""
   },
   "agent": {
     "goal_max_turns": 20,

@@ -20,6 +20,12 @@ var (
 	botsFlagDesc     string
 	botsFlagPrompt   string
 	botsFlagSchedule string
+	botsFlagTools    string   // comma-separated tool allowlist
+	botsFlagSkills   string   // comma-separated skill allowlist
+	botsFlagMemory   string   // long-term memory block
+	botsFlagAvatar   string   // emoji or image URL
+	botsFlagEnv      []string // KEY=VALUE pairs (repeatable)
+	botsFlagHidden   bool     // hide from dashboard list (keeps running)
 )
 
 var botsCmd = &cobra.Command{
@@ -52,6 +58,12 @@ func init() {
 	createCmd.Flags().StringVar(&botsFlagPrompt, "prompt", "", "Persona / standing instructions")
 	createCmd.Flags().StringVar(&botsFlagModel, "model", "", "Pin model (default: inherit global)")
 	createCmd.Flags().StringVar(&botsFlagProvider, "provider", "", "Pin provider (default: inherit global)")
+	createCmd.Flags().StringVar(&botsFlagTools, "tools", "", "Tool allowlist (comma separated; empty = all)")
+	createCmd.Flags().StringVar(&botsFlagSkills, "skills", "", "Skill allowlist (comma separated; empty = all)")
+	createCmd.Flags().StringVar(&botsFlagMemory, "memory", "", "Long-term memory block (markdown)")
+	createCmd.Flags().StringVar(&botsFlagAvatar, "avatar", "", "Avatar: emoji or image URL")
+	createCmd.Flags().StringArrayVar(&botsFlagEnv, "env", nil, "Per-bot credential KEY=VALUE (repeatable; written to bots/<name>/.env)")
+	createCmd.Flags().BoolVar(&botsFlagHidden, "hidden", false, "Hide from the dashboard list (keeps running)")
 
 	editCmd := &cobra.Command{
 		Use:   "edit <name>",
@@ -64,6 +76,12 @@ func init() {
 	editCmd.Flags().StringVar(&botsFlagPrompt, "prompt", "", "New persona instructions")
 	editCmd.Flags().StringVar(&botsFlagModel, "model", "", "New model pin")
 	editCmd.Flags().StringVar(&botsFlagProvider, "provider", "", "New provider pin")
+	editCmd.Flags().StringVar(&botsFlagTools, "tools", "", "New tool allowlist (comma separated; empty = all)")
+	editCmd.Flags().StringVar(&botsFlagSkills, "skills", "", "New skill allowlist (comma separated; empty = all)")
+	editCmd.Flags().StringVar(&botsFlagMemory, "memory", "", "New long-term memory block")
+	editCmd.Flags().StringVar(&botsFlagAvatar, "avatar", "", "New avatar (emoji or URL)")
+	editCmd.Flags().StringArrayVar(&botsFlagEnv, "env", nil, "Replace per-bot credentials (KEY=VALUE, repeatable)")
+	editCmd.Flags().BoolVar(&botsFlagHidden, "hidden", false, "Hide from dashboard list; use --hidden=false to show again")
 
 	routineAdd := &cobra.Command{
 		Use:   "add <bot> <routine-name> --schedule <cron> --prompt <text>",
@@ -121,6 +139,28 @@ func init() {
 		RunE:  runBotsShow,
 	})
 	botsCmd.AddCommand(&cobra.Command{
+		Use:   "clone <name> <new-name>",
+		Short: "Clone a bot's full profile under a new name (fresh chat history)",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runBotsClone,
+	})
+	botsCmd.AddCommand(&cobra.Command{
+		Use:   "hide <name>",
+		Short: "Hide a bot from the dashboard list (it keeps running)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runBotsSetHidden(args[0], true)
+		},
+	})
+	botsCmd.AddCommand(&cobra.Command{
+		Use:   "unhide <name>",
+		Short: "Un-hide a bot back into the dashboard list",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runBotsSetHidden(args[0], false)
+		},
+	})
+	botsCmd.AddCommand(&cobra.Command{
 		Use:   "chat <name> <message>",
 		Short: "Send one message to a bot's canonical chat and print the reply",
 		Args:  cobra.MinimumNArgs(2),
@@ -168,6 +208,12 @@ func runBotsCreate(cmd *cobra.Command, args []string) error {
 		SystemPrompt: botsFlagPrompt,
 		Model:        botsFlagModel,
 		Provider:     botsFlagProvider,
+		Tools:        parseCSVList(botsFlagTools),
+		Skills:       parseCSVList(botsFlagSkills),
+		Memory:       botsFlagMemory,
+		Avatar:       botsFlagAvatar,
+		Env:          parseEnvPairs(botsFlagEnv),
+		Hidden:       botsFlagHidden,
 		CreatedAt:    time.Now().Unix(),
 	}
 	if cfg.Title == "" {
@@ -207,11 +253,129 @@ func runBotsEdit(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("provider") {
 		cfg.Provider = botsFlagProvider
 	}
+	if cmd.Flags().Changed("tools") {
+		cfg.Tools = parseCSVList(botsFlagTools)
+	}
+	if cmd.Flags().Changed("skills") {
+		cfg.Skills = parseCSVList(botsFlagSkills)
+	}
+	if cmd.Flags().Changed("memory") {
+		cfg.Memory = botsFlagMemory
+	}
+	if cmd.Flags().Changed("avatar") {
+		cfg.Avatar = botsFlagAvatar
+	}
+	if cmd.Flags().Changed("env") {
+		cfg.Env = parseEnvPairs(botsFlagEnv)
+	}
+	if cmd.Flags().Changed("hidden") {
+		cfg.Hidden = botsFlagHidden
+	}
 	if err := store.Save(cfg); err != nil {
 		return err
 	}
 	fmt.Printf("✅ Bot %q updated\n", cfg.Name)
 	return nil
+}
+
+// runBotsSetHidden toggles the dashboard visibility flag of a bot.
+func runBotsSetHidden(name string, hidden bool) error {
+	store, err := openBotStore()
+	if err != nil {
+		return err
+	}
+	cfg, err := store.Load(name)
+	if err != nil {
+		return fmt.Errorf("bot not found: %s", name)
+	}
+	if cfg.Hidden == hidden {
+		status := "shown"
+		if hidden {
+			status = "hidden"
+		}
+		fmt.Printf("ℹ️  Bot %q is already %s\n", name, status)
+		return nil
+	}
+	cfg.Hidden = hidden
+	if err := store.Save(cfg); err != nil {
+		return err
+	}
+	if hidden {
+		fmt.Printf("🙈 Bot %q hidden from the dashboard (still running)\n", name)
+	} else {
+		fmt.Printf("👀 Bot %q is visible in the dashboard again\n", name)
+	}
+	return nil
+}
+
+// runBotsClone duplicates a bot's full profile under a new name.
+func runBotsClone(cmd *cobra.Command, args []string) error {
+	store, err := openBotStore()
+	if err != nil {
+		return err
+	}
+	src, err := store.Load(args[0])
+	if err != nil {
+		return fmt.Errorf("bot not found: %s", args[0])
+	}
+	newName := args[1]
+	if err := bot.ValidateName(newName); err != nil {
+		return err
+	}
+	if _, err := store.Load(newName); err == nil {
+		return fmt.Errorf("bot %q already exists", newName)
+	}
+	if strings.EqualFold(src.Name, newName) {
+		return fmt.Errorf("new name must differ from the source bot")
+	}
+
+	clone := *src
+	clone.Name = newName
+	clone.Tools = append([]string(nil), src.Tools...)
+	clone.Skills = append([]string(nil), src.Skills...)
+	if src.Env != nil {
+		clone.Env = make(map[string]string, len(src.Env))
+		for k, v := range src.Env {
+			clone.Env[k] = v
+		}
+	}
+	now := time.Now().Unix()
+	clone.CreatedAt = now
+	clone.UpdatedAt = now
+	if err := store.Save(&clone); err != nil {
+		return err
+	}
+	fmt.Printf("✅ Cloned bot %q -> %q (profile copied, chat history starts fresh)\n", args[0], newName)
+	fmt.Println("   The clone comes online on the next gateway restart (or immediately when created via the web UI).")
+	return nil
+}
+
+// parseCSVList splits a comma-separated flag into a trimmed, non-empty list.
+func parseCSVList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// parseEnvPairs converts KEY=VALUE pairs into a map.
+func parseEnvPairs(pairs []string) map[string]string {
+	if len(pairs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		kv := strings.SplitN(p, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		out[strings.TrimSpace(kv[0])] = kv[1]
+	}
+	return out
 }
 
 func runBotsList(cmd *cobra.Command, args []string) error {

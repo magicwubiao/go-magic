@@ -1242,6 +1242,13 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomSubroutes)))
 	mux.HandleFunc("/api/bots", withCORS(requireAuth(s.handleBots)))
 	mux.HandleFunc("/api/bots/", withCORS(requireAuth(s.handleBotByID)))
+	// Bot Mode group chat rooms
+	mux.HandleFunc("/api/rooms", withCORS(requireAuth(s.handleRooms)))
+	mux.HandleFunc("/api/rooms/", withCORS(requireAuth(s.handleRoomByID)))
+	// Bot Mode cross-machine relay (peer DMs). NOT wrapped in requireAuth:
+	// the relay secret travels in the request body and is validated by the
+	// handler itself, so remote instances don't need the dashboard token.
+	mux.HandleFunc("/api/relay/v1/dm", withCORS(s.handleRelayDM))
 
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))

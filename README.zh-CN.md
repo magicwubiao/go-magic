@@ -89,6 +89,17 @@ magic bots chat researcher "找一下关于 agent 记忆的最新论文"
 magic bots routine add researcher daily-digest --schedule "0 9 * * *" --prompt "总结昨天的发现。"
 ```
 
+跨机器 Peer：通过 HTTP(S) 直接给另一台 go-magic 实例上的 Bot 发消息。
+
+```bash
+# 在机器 B（需要已启动 dashboard / gateway，relay 端点在线）
+magic config set bot_mode.relay_token "shared-secret"   # 可选，但推荐设置
+# 在机器 A
+magic peer add lab-b http://192.168.1.20:8642 --token shared-secret
+magic peer dm lab-b researcher "报告进展如何？"
+# peer 表保存在 <magic_home>/peers.json；本机身份标识在 <magic_home>/instance_id
+```
+
 ### MCP 协议
 
 连接外部 MCP (Model Context Protocol) 服务器，扩展 Agent 能力。

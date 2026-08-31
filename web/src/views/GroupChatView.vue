@@ -322,7 +322,7 @@ import { useGroupChatStore } from '@/stores/groupchat'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
-import { CloseOutline, RefreshOutline, CopyOutline, CodeSlash, CreateOutline, InformationCircleOutline, DocumentsOutline, EllipsisHorizontalOutline } from '@vicons/ionicons5'
+import { CloseOutline, RefreshOutline, CopyOutline, CreateOutline, InformationCircleOutline, DocumentsOutline, EllipsisHorizontalOutline } from '@vicons/ionicons5'
 import ReasoningContent from '@/components/ReasoningContent.vue'
 
 const { t } = useI18n()
@@ -346,7 +346,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-function onRoomClick(id: string | number) {
+function onRoomClick(id: string) {
   groupchatStore.selectRoom(id)
   // 移动端选中房间后自动收起抽屉
   if (isMobile.value) {
@@ -355,7 +355,6 @@ function onRoomClick(id: string | number) {
 }
 const showCreateRoom = ref(false)
 const showAgents = ref(false)
-const inviteCode = ref('')
 const showInviteCode = ref(false)
 const inviteCodeText = ref('')
 const showRoomInfo = ref(false)
@@ -409,15 +408,18 @@ const inputPlaceholder = computed(() => {
   return t('groupchat.inputHint')
 })
 
-// Configure marked with highlight.js
-marked.setOptions({
-  highlight: (code: string, lang: string) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value
-    }
-    return hljs.highlightAuto(code).value
-  },
-})
+// Configure marked with highlight.js.
+// Note: marked v12 removed the `highlight` option; use the renderer override
+// (same approach as ChatView / BotsView) so code blocks actually get highlighted.
+const codeRenderer = (code: string, lang?: string): string => {
+  const language = lang && hljs.getLanguage(lang) ? lang : null
+  const highlighted = language
+    ? hljs.highlight(code, { language }).value
+    : hljs.highlightAuto(code).value
+  return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`
+}
+
+marked.use({ renderer: { code: codeRenderer }, breaks: true, gfm: true })
 
 // Markdown 渲染缓存：避免 v-for 重渲染时重复解析同一内容
 const mdCache = new Map<string, string>()
@@ -430,7 +432,9 @@ function renderMarkdown(content: string): string {
   if (mdCache.size >= MD_CACHE_LIMIT) {
     const keys = mdCache.keys()
     for (let i = 0; i < MD_CACHE_LIMIT / 2; i++) {
-      mdCache.delete(keys.next().value)
+      const r = keys.next()
+      if (r.done) break
+      mdCache.delete(r.value)
     }
   }
   mdCache.set(content, html)
