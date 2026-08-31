@@ -187,6 +187,15 @@ func (m *Manager) Stop() {
 	for _, sched := range m.routines {
 		sched.Stop()
 	}
+
+	// Close the session store so the SQLite file handle is released
+	// (required for TempDir cleanup on Windows, where open files
+	// cannot be removed).
+	if m.sessions != nil {
+		if err := m.sessions.Close(); err != nil {
+			log.Infof("[BotMode] Failed to close session store: %v", err)
+		}
+	}
 }
 
 // ReloadConfig swaps in the updated global config so subsequent agent turns

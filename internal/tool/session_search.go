@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/session"
@@ -12,28 +13,40 @@ import (
 )
 
 var (
-	sessionSearchTool *SessionSearchTool
+	sessionSearchTool     *SessionSearchTool
+	sessionSearchToolOnce sync.Once
 )
 
-// GetSessionSearchTool creates a new session search tool
+// GetSessionSearchTool creates a new session search tool. The underlying
+// sessions.db is opened lazily on first use so that merely registering the
+// tool (e.g. in tests with a temp GO_MAGIC_HOME) does not pin the SQLite
+// file open and break TempDir cleanup on Windows.
 func GetSessionSearchTool() *SessionSearchTool {
-	if sessionSearchTool == nil {
-		dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
-
-		store, err := session.NewStore(dbPath)
-		if err != nil {
-			// Return a tool that returns error when used
-			sessionSearchTool = &SessionSearchTool{store: nil}
-		} else {
-			sessionSearchTool = &SessionSearchTool{store: store}
-		}
-	}
+	sessionSearchToolOnce.Do(func() {
+		sessionSearchTool = &SessionSearchTool{}
+	})
 	return sessionSearchTool
 }
 
 // SessionSearchTool searches through past conversation sessions
 type SessionSearchTool struct {
-	store *session.Store
+	storeOnce sync.Once
+	store     *session.Store
+	storeErr  error
+}
+
+// getStore lazily opens the sessions.db store on first use.
+func (t *SessionSearchTool) getStore() (*session.Store, error) {
+	t.storeOnce.Do(func() {
+		dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
+		store, err := session.NewStore(dbPath)
+		if err != nil {
+			t.storeErr = err
+			return
+		}
+		t.store = store
+	})
+	return t.store, t.storeErr
 }
 
 // Name returns the tool name
@@ -91,7 +104,12 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]interfa
 		profile = p
 	}
 
-	sessions, err := t.store.ListSessions(ctx, profile)
+	store, err := t.getStore()
+	if err != nil || store == nil {
+		return nil, fmt.Errorf("session store unavailable: %v", err)
+	}
+
+	sessions, err := store.ListSessions(ctx, profile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sessions: %v", err)
 	}

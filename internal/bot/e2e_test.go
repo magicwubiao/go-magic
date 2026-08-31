@@ -198,7 +198,7 @@ func TestUserTurnAndPersistence(t *testing.T) {
 	}
 
 	// History must include system + user + assistant.
-	hist := mgr.loadHistory("alice")
+	hist := mgr.loadHistory(CanonicalSessionID("alice"))
 	if len(hist) < 3 {
 		t.Fatalf("history too short after turn: %d entries", len(hist))
 	}
@@ -220,7 +220,9 @@ func TestUserTurnAndPersistence(t *testing.T) {
 
 	mgr2.mu.Lock()
 	rt := mgr2.bots["alice"]
-	ag, err := mgr2.getOrCreateAgentLocked(rt)
+	// SendToBot uses the canonical chat (empty room ID), so restore that
+	// same agent to verify history persisted across the restart.
+	ag, err := mgr2.getOrCreateAgentLocked(rt, "")
 	mgr2.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -537,7 +539,7 @@ func TestHistoryWindowTruncation(t *testing.T) {
 		}
 	}
 
-	hist := mgr.loadHistory("alice")
+	hist := mgr.loadHistory(CanonicalSessionID("alice"))
 	if len(hist) > 20+1 { // window + system prompt tolerance via boundary trim
 		t.Errorf("history not trimmed: %d entries (window=20)", len(hist))
 	}
