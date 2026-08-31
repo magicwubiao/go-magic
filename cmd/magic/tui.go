@@ -38,6 +38,7 @@ import (
 type ChatMessage struct {
 	Role         string // "user", "assistant", "system", "tool", "error"
 	Content      string
+	Reasoning    string // assistant role: <think> reasoning trail (tags stripped)
 	Timestamp    time.Time
 	Streaming    bool          // true if currently being streamed
 	ToolName     string        // tool role: the tool name (e.g. "web_search")
@@ -74,18 +75,8 @@ type appendAssistantMsg struct{ text string }
 // ---------------------------------------------------------------------------
 
 var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Background(lipgloss.Color("#1a1a2e")).
-			Foreground(lipgloss.Color("#00d2ff")).
-			Padding(0, 1)
-
-	userStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4ade80")).
-			Bold(true)
-
-	assistantStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ffffff"))
+	// 主题背景色（统一深色主题）
+	themeBg = lipgloss.Color("#1a1a2e")
 
 	systemStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#facc15"))
@@ -112,22 +103,85 @@ var (
 	toolContentStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#d1d5db"))
 
-	toolBorderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#374151"))
-
 	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1a1a2e")).
-			Foreground(lipgloss.Color("#9ca3af")).
-			Padding(0, 1)
+			Background(themeBg).
+			Foreground(lipgloss.Color("#9ca3af"))
 
 	inputPromptStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#4ade80")).
 				Bold(true)
 
-	helpPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#00d2ff")).
-			Padding(1, 2)
+	// --- 展示增强样式 ---
+
+	// 消息角色标签
+	labelUserStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#4ade80")).
+			Bold(true)
+
+	labelAssistantStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#00d2ff")).
+				Bold(true)
+
+	// 时间戳（淡灰色，弱化）
+	timeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#52525b"))
+
+	// 消息左边竖线
+	lineStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#374151"))
+
+	// 用户消息内容
+	userContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#d1d5db"))
+
+	// 占位/弱文本（thinking、no text output 等）
+	placeholderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6b7280")).
+				Italic(true)
+
+	// 思考过程：标签（紫色加粗）
+	thinkingLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#8b5cf6"))
+
+	// 思考过程：内容（淡紫斜体，弱化区分于正文）
+	thinkingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#a78bfa")).
+			Italic(true)
+
+	// 思考过程：截断省略提示
+	thinkingFoldStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6b7280")).
+				Italic(true)
+
+	// 标题栏中的模式标签
+	modeTagStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#9ca3af")).
+			Background(themeBg)
+
+	codingModeTagStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#f97316")).
+				Background(themeBg)
+
+	// 状态栏：模式/流式开关高亮
+	statusModeStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#00d2ff")).
+			Background(themeBg)
+
+	statusStreamOnStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#4ade80")).
+				Background(themeBg)
+
+	statusStreamOffStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6b7280")).
+				Background(themeBg)
+
+	statusTextStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9ca3af")).
+			Background(themeBg)
 )
 
 // ---------------------------------------------------------------------------
@@ -235,6 +289,7 @@ func NewTUIModel(aiAgent *agent.Agent, registry *tool.Registry, store *session.S
 
 	// Text input (single line)
 	ti := textinput.New()
+	ti.Prompt = inputPromptStyle.Render("❯ ")
 	ti.Placeholder = "Type a message... (Enter: send, /help for commands)"
 	ti.Focus()
 	ti.CharLimit = 0
@@ -282,11 +337,16 @@ func (m *TUIModel) refreshViewport() {
 
 // addMessage appends a new message and marks content as dirty
 func (m *TUIModel) addMessage(role, content string) {
-	m.messages = append(m.messages, ChatMessage{
+	msg := ChatMessage{
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),
-	})
+	}
+	// assistant 输出可能携带 <think> 推理轨迹，拆分为独立字段便于弱化展示
+	if role == "assistant" {
+		msg.Reasoning, msg.Content = splitThinkContent(content)
+	}
+	m.messages = append(m.messages, msg)
 	m.contentDirty = true
 }
 
@@ -337,7 +397,7 @@ func (m TUIModel) Init() tea.Cmd {
 	// Add welcome message
 	m.messages = append(m.messages, ChatMessage{
 		Role: "system",
-		Content: `Welcome to Magic Agent v0.3.1!
+		Content: `Welcome to go-magic v` + Version + ` ✦ your AI agent
 
 Quick start:
   Type a message to chat
@@ -817,9 +877,11 @@ var toolStartRegex = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
 func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 	if msg.done {
 		// Finalize the streaming message
+		reasoning, body := splitThinkContent(m.streamBuf.String())
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].Streaming {
-				m.messages[i].Content = m.streamBuf.String()
+				m.messages[i].Content = body
+				m.messages[i].Reasoning = reasoning
 				m.messages[i].Streaming = false
 				break
 			}
@@ -832,9 +894,11 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 		// Check if this is a turn start marker (for multi-turn conversations with tool calls)
 		if strings.Contains(msg.content, ">>>TURN_START<<<") {
 			// Finalize current streaming message if any
+			reasoning, body := splitThinkContent(m.streamBuf.String())
 			for i := len(m.messages) - 1; i >= 0; i-- {
 				if m.messages[i].Streaming {
-					m.messages[i].Content = m.streamBuf.String()
+					m.messages[i].Content = body
+					m.messages[i].Reasoning = reasoning
 					m.messages[i].Streaming = false
 					break
 				}
@@ -948,9 +1012,11 @@ func (m TUIModel) handleStreamMsg(msg streamMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update the streaming message
+		reasoning, body := splitThinkContent(m.streamBuf.String())
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].Streaming {
-				m.messages[i].Content = m.streamBuf.String()
+				m.messages[i].Content = body
+				m.messages[i].Reasoning = reasoning
 				break
 			}
 		}
@@ -1023,32 +1089,26 @@ func (m TUIModel) View() string {
 }
 
 func (m TUIModel) renderTitle() string {
-	left := " Magic Agent "
+	left := fmt.Sprintf(" ✦ go-magic v%s ", Version)
+
+	modeTag := modeTagStyle.Render(" [CHAT] ")
+	if m.codingMode {
+		modeTag = codingModeTagStyle.Render(" [CODING] ")
+	}
+
 	center := fmt.Sprintf(" %s ", m.modelName)
 	right := fmt.Sprintf(" #%d ", m.sessionNum)
 
-	modeLabel := "CHAT"
-	modeColor := lipgloss.Color("#9ca3af")
-	if m.codingMode {
-		modeLabel = "CODING"
-		modeColor = lipgloss.Color("#f97316")
-	}
-	modeStyled := lipgloss.NewStyle().Bold(true).Foreground(modeColor).Background(lipgloss.Color("#1a1a2e")).Render(fmt.Sprintf(" [%s] ", modeLabel))
+	leftStyled := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00d2ff")).Background(themeBg).Render(left)
+	centerStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af")).Background(themeBg).Render(center)
+	rightStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#facc15")).Background(themeBg).Render(right)
 
-	leftStyled := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00d2ff")).Background(lipgloss.Color("#1a1a2e")).Render(left)
-	centerStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af")).Background(lipgloss.Color("#1a1a2e")).Render(center)
-	rightStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#facc15")).Background(lipgloss.Color("#1a1a2e")).Render(right)
+	// 分隔符（带背景色，避免拼接处出现杂色）
+	sep := lipgloss.NewStyle().Background(themeBg).Render(" ")
 
-	gap := m.width - lipgloss.Width(leftStyled) - lipgloss.Width(modeStyled) - lipgloss.Width(centerStyled) - lipgloss.Width(rightStyled)
-	if gap < 0 {
-		gap = 0
-	}
-
-	midBar := lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(strings.Repeat(" ", gap))
-
-	return lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(
-		leftStyled + midBar + modeStyled + midBar + centerStyled + midBar + rightStyled,
-	)
+	content := leftStyled + sep + modeTag + sep + centerStyled + sep + rightStyled
+	// 用 Width 保证整行占满终端宽度（同时修复旧版 gap 计算溢出的 bug）
+	return lipgloss.NewStyle().Background(themeBg).Width(m.width).Render(content)
 }
 
 func (m TUIModel) renderInput() string {
@@ -1056,10 +1116,21 @@ func (m TUIModel) renderInput() string {
 }
 
 func (m TUIModel) renderStatus() string {
-	streamStatus := "off"
-	if m.streamingOn {
-		streamStatus = "on"
+	// 左：模式 + 模型
+	modeTag := statusModeStyle.Render(" CHAT ")
+	if m.codingMode {
+		modeTag = statusModeStyle.Render(" CODING ")
 	}
+
+	// 流式开关（绿色/灰色高亮）
+	var streamTag string
+	if m.streamingOn {
+		streamTag = statusStreamOnStyle.Render(" ●stream ")
+	} else {
+		streamTag = statusStreamOffStyle.Render(" ○stream ")
+	}
+
+	// 消息计数
 	msgCount := 0
 	for _, msg := range m.messages {
 		if msg.Role == "user" || msg.Role == "assistant" {
@@ -1067,24 +1138,33 @@ func (m TUIModel) renderStatus() string {
 		}
 	}
 
-	modeTag := "[CHAT]"
-	if m.codingMode {
-		modeTag = "[CODING]"
-	}
+	left := fmt.Sprintf(" %s %s %s", modeTag, streamTag, statusTextStyle.Render(m.modelName))
 
-	parts := []string{
-		modeTag,
-		fmt.Sprintf("stream: %s", streamStatus),
-		fmt.Sprintf("msgs: %d", msgCount),
-		m.statusText,
-	}
-
+	// 中：状态文本（生成中显示 spinner）
+	var center string
 	if m.streaming {
-		parts[3] = fmt.Sprintf("%s %s", m.spinner.View(), m.statusText)
+		center = fmt.Sprintf("%s %s", m.spinner.View(), statusTextStyle.Render(m.statusText))
+	} else {
+		center = statusTextStyle.Render(m.statusText)
 	}
 
-	content := strings.Join(parts, " | ")
-	return statusBarStyle.Width(m.width).Render(content)
+	// 右：消息数 + 时间
+	right := statusTextStyle.Render(fmt.Sprintf("msgs:%d", msgCount)) +
+		statusTextStyle.Render("  ") +
+		statusTextStyle.Render(time.Now().Format("15:04:05"))
+
+	// 用两个等分 gap 做左右布局（gap 均分到左右两段，避免溢出）
+	totalW := lipgloss.Width(left) + lipgloss.Width(center) + lipgloss.Width(right)
+	gap := m.width - totalW
+	if gap < 0 {
+		gap = 0
+	}
+	leftGap := gap / 2
+	rightGap := gap - leftGap
+	gapBarLeft := statusBarStyle.Render(strings.Repeat(" ", leftGap))
+	gapBarRight := statusBarStyle.Render(strings.Repeat(" ", rightGap))
+
+	return statusBarStyle.Width(m.width).Render(left + gapBarLeft + center + gapBarRight + right)
 }
 
 // toolEmoji returns an emoji for the given tool name
@@ -1156,6 +1236,86 @@ func formatToolDuration(d time.Duration) string {
 	return fmt.Sprintf("%.0fs", s)
 }
 
+// formatMsgTime formats a message timestamp for display (HH:MM:SS)
+func formatMsgTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("15:04:05")
+}
+
+// splitThinkContent splits raw assistant output into (reasoning, body).
+// The agent layer wraps provider reasoning_content in <think>...</think>
+// tags (see agent.go wrapLLMReasoning). It handles:
+//   - fully closed blocks: <think>...</think>body
+//   - unterminated tail:  <think>partial (mid-stream)
+//   - multiple blocks:    merges reasoning, keeps body in order
+//
+// Body keeps its own leading whitespace trimmed only at the edges; the
+// returned reasoning has all tags stripped.
+func splitThinkContent(content string) (reasoning, body string) {
+	rest := content
+	for {
+		openIdx := strings.Index(rest, "<think>")
+		if openIdx < 0 {
+			body += rest
+			break
+		}
+		body += rest[:openIdx]
+		afterOpen := rest[openIdx+len("<think>"):]
+		closeIdx := strings.Index(afterOpen, "</think>")
+		if closeIdx < 0 {
+			// Unterminated: everything after <think> is still reasoning
+			// (streaming in progress).
+			reasoning += afterOpen
+			break
+		}
+		reasoning += afterOpen[:closeIdx]
+		rest = afterOpen[closeIdx+len("</think>"):]
+	}
+	return strings.TrimSpace(reasoning), strings.TrimSpace(body)
+}
+
+// renderThinkingBlock renders the reasoning/thinking trail in a dimmed,
+// italic style with a vertical guide, truncated to keep the viewport usable.
+func renderThinkingBlock(reasoning string, streaming bool) string {
+	reasoning = strings.TrimSpace(reasoning)
+	if reasoning == "" {
+		return ""
+	}
+	var b strings.Builder
+	if streaming {
+		b.WriteString(thinkingLabelStyle.Render("🧠 Thinking"))
+	} else {
+		b.WriteString(thinkingLabelStyle.Render("💭 Thought"))
+	}
+	b.WriteString("\n")
+
+	const maxLines = 12
+	const maxChars = 1500
+	lines := strings.Split(reasoning, "\n")
+	shown := lines
+	if len(shown) > maxLines {
+		shown = shown[:maxLines]
+	}
+	joined := strings.Join(shown, "\n")
+	truncated := len(lines) > maxLines
+	if len(joined) > maxChars {
+		joined = joined[:maxChars]
+		truncated = true
+	}
+	for _, line := range strings.Split(joined, "\n") {
+		b.WriteString(thinkingStyle.Render("  │ " + line))
+		b.WriteString("\n")
+	}
+	if truncated {
+		b.WriteString(thinkingFoldStyle.Render("  ⋯ (thinking truncated)"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 func (m TUIModel) renderMessages() string {
 	var b strings.Builder
 
@@ -1169,25 +1329,54 @@ func (m TUIModel) renderMessages() string {
 	for _, msg := range m.messages[startIdx:] {
 		switch msg.Role {
 		case "user":
-			b.WriteString(userStyle.Render("> "))
-			b.WriteString(utils.Truncate(msg.Content, 2000))
+			// 标签行：角色 + 时间戳
+			b.WriteString(labelUserStyle.Render("❯ You "))
+			b.WriteString(timeStyle.Render(formatMsgTime(msg.Timestamp)))
+			b.WriteString("\n")
+			// 内容按行加左侧竖线，保持视觉对齐
+			content := utils.Truncate(msg.Content, 2000)
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(lineStyle.Render("│ "))
+				b.WriteString(userContentStyle.Render(line))
+			}
 			b.WriteString("\n\n")
 
 		case "assistant":
-			if msg.Streaming && msg.Content == "" {
-				// Show spinner while waiting for first content
+			if msg.Content != "" || msg.Reasoning != "" {
+				// 标签行 + 思考块 + markdown 内容
+				b.WriteString(labelAssistantStyle.Render("✦ Assistant "))
+				b.WriteString(timeStyle.Render(formatMsgTime(msg.Timestamp)))
+				b.WriteString("\n")
+				// 思考块：<think> 推理轨迹弱化展示
+				if msg.Reasoning != "" {
+					b.WriteString(renderThinkingBlock(msg.Reasoning, msg.Streaming))
+				}
+				// 正文
+				if msg.Content != "" {
+					content := utils.Truncate(msg.Content, 50000)
+					rendered := renderMarkdown(content)
+					b.WriteString(rendered)
+					b.WriteString("\n\n")
+				}
+			} else if msg.Streaming {
+				// 等待首段内容：spinner + thinking
+				b.WriteString(labelAssistantStyle.Render("✦ Assistant "))
 				b.WriteString(m.spinner.View())
-				b.WriteString(" Thinking...\n\n")
-			} else if msg.Content != "" {
-				// Truncate long content to prevent viewport overflow
-				content := utils.Truncate(msg.Content, 50000)
-				rendered := renderMarkdown(content)
-				b.WriteString(rendered)
+				b.WriteString(placeholderStyle.Render(" thinking..."))
+				b.WriteString("\n\n")
+			} else {
+				// 纯工具调用回合，无文本输出
+				b.WriteString(labelAssistantStyle.Render("✦ Assistant "))
+				b.WriteString(placeholderStyle.Render("(no text output)"))
 				b.WriteString("\n\n")
 			}
 
 		case "system":
-			b.WriteString(systemStyle.Render("[System] "))
+			b.WriteString(systemStyle.Render("ℹ "))
 			b.WriteString(msg.Content)
 			b.WriteString("\n\n")
 
@@ -1253,7 +1442,7 @@ func (m TUIModel) renderMessages() string {
 			b.WriteString("\n")
 
 		case "error":
-			b.WriteString(errorStyle.Render("[Error] "))
+			b.WriteString(errorStyle.Render("⚠ "))
 			b.WriteString(msg.Content)
 			b.WriteString("\n\n")
 		}
