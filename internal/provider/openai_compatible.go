@@ -55,6 +55,8 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
 		case "mimo":
 			baseURL = "https://api.xiaomimimo.com/v1"
+		case "longcat":
+			baseURL = "https://api.longcat.chat/openai/v1"
 		case "ollama":
 			baseURL = "http://localhost:11434"
 		case "vllm":
@@ -94,6 +96,8 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			model = "hunyuan-turbos-latest"
 		case "mimo":
 			model = "mimo-v2-flash"
+		case "longcat":
+			model = "LongCat-2.0-Preview"
 		case "ollama":
 			model = "llama3.3"
 		case "vllm":
