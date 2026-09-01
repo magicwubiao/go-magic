@@ -113,10 +113,12 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotChat(w, r, name)
 	case len(parts) == 3 && parts[1] == "chat" && parts[2] == "stream":
 		s.handleBotChatStream(w, r, name)
+	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
+		// Must be matched before the generic "messages" case below, otherwise
+		// DELETE falls through to handleBotMessages which rejects non-GET.
+		s.handleBotClearMessages(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages":
 		s.handleBotMessages(w, r, name)
-	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
-		s.handleBotClearMessages(w, r, name)
 	case len(parts) == 2 && parts[1] == "clone" && r.Method == http.MethodPost:
 		s.handleBotClone(w, r, name)
 	default:
