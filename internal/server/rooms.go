@@ -43,6 +43,10 @@ func (s *Server) handleRoomByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parts[0]
+	if !validNamePattern.MatchString(id) {
+		http.Error(w, "invalid room id", http.StatusBadRequest)
+		return
+	}
 
 	switch {
 	case len(parts) == 1:
