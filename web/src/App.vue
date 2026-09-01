@@ -105,7 +105,6 @@ import {
   PieChartOutline,
   ServerOutline,
   LogOutOutline,
-  PeopleCircleOutline,
   ChevronForwardOutline,
   ChevronBackOutline,
 } from '@vicons/ionicons5'
@@ -140,7 +139,7 @@ const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
 const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEnUS)
 
 const isLoginPage = computed(() => route.path === '/login')
-const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat' || route.path === '/rooms')
+const isChatPage = computed(() => route.path === '/chat' || route.path === '/groupchat' || route.path === '/rooms' || route.path === '/bots')
 const activeKey = computed(() => route.path)
 
 onUnmounted(() => {
@@ -187,7 +186,6 @@ const menuOptions = computed(() => [
   { type: 'divider' as const },
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
-  { label: t('nav.botRooms'), key: '/rooms', icon: renderIcon(PeopleCircleOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.groupChat'), key: '/groupchat', icon: renderIcon(PeopleOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },

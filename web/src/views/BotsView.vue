@@ -1,216 +1,507 @@
 <template>
-  <div class="bots-page">
-    <!-- Chat panel (when a bot is selected) -->
-    <template v-if="botsStore.activeBotName">
-      <div class="chat-header">
-        <n-button quaternary size="small" @click="botsStore.closeChat()">
-          <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
-        </n-button>
-        <div class="chat-title">
-          <n-avatar v-if="isImageAvatar(activeBot?.avatar)" round size="small" :src="activeBot?.avatar" />
-          <n-avatar v-else round size="small" :style="{ backgroundColor: avatarColor(activeBot?.name || ''), fontSize: '15px' }">
-            {{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}
-          </n-avatar>
-          <div class="chat-title-text">
-            <n-text strong style="font-size: 16px;">@{{ activeBot?.mention_tag || botsStore.activeBotName }}</n-text>
-            <n-text v-if="activeBot?.title" depth="3" style="font-size: 12px;">{{ activeBot.title }}</n-text>
-          </div>
-        </div>
-        <n-space :size="6" align="center">
-          <n-tag :type="(activeBot?.runtime?.online) ? 'success' : 'default'" size="small">
-            {{ activeBot?.runtime?.online ? t('bots.online') : t('bots.offline') }}
-          </n-tag>
-          <n-tag v-if="isActiveNow(activeBotObj)" type="success" size="small" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
-          <n-button quaternary size="small" @click="openRoutinesModal">
-            <template #icon><n-icon><TimeOutline /></n-icon></template>
-            {{ t('bots.routines') }} ({{ botsStore.routines.length }})
-          </n-button>
-          <n-popconfirm @positive-click="handleClearChat">
-            <template #trigger>
-              <n-button quaternary size="small" type="error" :loading="clearingChat">
-                {{ t('bots.clearChat') }}
-              </n-button>
-            </template>
-            {{ t('bots.clearChatConfirm') }}
-          </n-popconfirm>
-          <n-button quaternary size="small" @click="openEditModal(activeBotObj)">
-            <template #icon><n-icon><CreateOutline /></n-icon></template>
-            {{ t('common.edit') }}
-          </n-button>
-        </n-space>
-      </div>
-
-      <div class="chat-body">
-        <div ref="messagesEl" class="chat-messages" @click="handleCodeClick">
-          <n-empty v-if="!botsStore.messages.length && !botsStore.chatLoading && !botsStore.sending" :description="t('bots.noMessages')" />
-          <template v-else>
-            <div v-for="(msgs, dateKey) in groupedMessages" :key="dateKey">
-              <div v-if="dateKey" class="date-separator"><span>{{ dateKey }}</span></div>
-              <div
-                v-for="msg in msgs"
-                :key="msg.id"
-                class="message"
-                :class="msg.role"
-              >
-                <div class="avatar" :class="msg.role === 'assistant' ? 'bot-avatar' : 'user-avatar'">
-                  <img v-if="msg.role === 'assistant' && isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
-                  <span v-else-if="msg.role === 'assistant'">{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
-                  <span v-else>U</span>
-                </div>
-                <div class="message-body" :class="{ 'bot-body': msg.role === 'assistant' }">
-                  <div class="message-header">
-                    <n-text strong class="sender-name">{{ msg.role === 'assistant' ? botDisplayName : t('bots.you') }}</n-text>
-                    <n-tag v-if="msg.role === 'assistant'" size="tiny" type="success">AI</n-tag>
-                    <span v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</span>
-                  </div>
-                  <div class="message-bubble" :class="[msg.role === 'assistant' ? 'agent-bubble' : 'user-bubble', { streaming: msg._streaming }]">
-                    <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
-                    <template v-if="msg.role === 'assistant' && msg.content">
-                      <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
-                    </template>
-                    <div
-                      v-else
-                      class="bubble-content"
-                      v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"
-                    ></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <div v-if="botsStore.sending && !botsStore.messages.some(m => m._streaming)" class="message assistant">
-            <div class="avatar bot-avatar">
-              <img v-if="isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
-              <span v-else>{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
-            </div>
-            <div class="message-body bot-body">
-              <div class="message-header">
-                <n-text strong class="sender-name">{{ botDisplayName }}</n-text>
-                <n-tag size="tiny" type="success">AI</n-tag>
-              </div>
-              <div class="message-bubble agent-bubble thinking">
-                <div class="typing-indicator">
-                  <span class="dot"></span>
-                  <span class="dot"></span>
-                  <span class="dot"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-if="botsStore.chatLoading && !botsStore.messages.length" class="history-loading">
-            <n-spin size="small" />
-            <n-text depth="3" style="font-size: 13px; margin-left: 8px;">{{ t('bots.loadingHistory') }}</n-text>
-          </div>
-        </div>
-      </div>
-
-      <div class="input-area">
-        <div class="input-wrapper">
-          <n-input
-            v-model:value="draft"
-            type="textarea"
-            :placeholder="t('bots.inputPlaceholder')"
-            :autosize="{ minRows: 1, maxRows: 6 }"
-            :disabled="botsStore.sending"
-            class="chat-input"
-            @keydown.enter.exact.prevent="handleSend"
-          />
+  <div class="bots-shell">
+    <!-- ========== Left rail: bot list / room list (Grok-style) ========== -->
+    <aside class="bot-rail" :class="{ 'rail-collapsed-mobile': railHasActive }">
+      <div class="rail-header">
+        <div class="rail-tabs">
           <button
-            class="send-btn-inline"
-            :class="{ stopping: botsStore.sending }"
-            :disabled="!botsStore.sending && !draft.trim()"
-            @click="handleSend"
-            @mousedown.prevent
-            :title="botsStore.sending ? t('bots.sending') : t('bots.send')"
-          >
-            <svg v-if="!botsStore.sending" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
-            </svg>
-            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2"/>
-            </svg>
-          </button>
+            class="rail-tab"
+            :class="{ active: viewMode === 'bots' }"
+            @click="switchView('bots')"
+          >{{ t('bots.title') }}</button>
+          <button
+            class="rail-tab"
+            :class="{ active: viewMode === 'rooms' }"
+            @click="switchView('rooms')"
+          >{{ t('rooms.title') }}</button>
         </div>
-      </div>
-    </template>
-
-    <!-- Bot list (default view) -->
-    <template v-else>
-      <n-space justify="space-between" style="margin-bottom: 16px;">
-        <div>
-          <h2>{{ t('bots.title') }}</h2>
-          <n-text depth="3" style="font-size: 13px;">{{ t('bots.subtitle') }}</n-text>
-        </div>
-        <n-space>
-          <n-button :loading="botsStore.loading" @click="botsStore.loadBots()">
+        <n-space :size="4" align="center">
+          <n-button quaternary size="tiny" :loading="viewMode === 'bots' ? botsStore.loading : roomsStore.loading" @click="handleRailRefresh">
             <template #icon><n-icon><RefreshOutline /></n-icon></template>
           </n-button>
-          <n-button quaternary :type="showHidden ? 'primary' : 'default'" @click="showHidden = !showHidden">
-            {{ showHidden ? t('bots.hideHidden') : t('bots.showHidden') }}
+          <n-button size="tiny" type="primary" :disabled="viewMode === 'bots' && botModeDisabled" @click="handleRailCreate">
+            <template #icon><n-icon><AddOutline /></n-icon></template>
           </n-button>
-          <n-button type="primary" :disabled="botModeDisabled" @click="openCreateModal">+ {{ t('bots.createBot') }}</n-button>
         </n-space>
-      </n-space>
+      </div>
 
-      <n-alert v-if="botModeDisabled" type="warning" style="margin-bottom: 16px;" :title="t('bots.modeDisabledTitle')">
+      <div class="rail-search">
+        <n-input
+          v-model:value="searchQuery"
+          size="small"
+          clearable
+          :placeholder="searchPlaceholder"
+        >
+          <template #prefix><n-icon><SearchOutline /></n-icon></template>
+        </n-input>
+      </div>
+
+      <n-alert v-if="viewMode === 'bots' && botModeDisabled" type="warning" class="rail-alert" :title="t('bots.modeDisabledTitle')">
         {{ t('bots.modeDisabledHint') }}
       </n-alert>
 
-      <n-spin :show="botsStore.loading">
-        <n-empty v-if="!botsStore.bots.length && !botsStore.loading" :description="t('bots.noBots')" style="padding: 60px 0;" />
-        <n-grid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-          <n-gi v-for="b in visibleBots" :key="b.name" span="3 s:1 m:1 l:1">
-            <n-card size="small" hoverable class="bot-card" :class="{ 'bot-card--hidden': b.hidden }">
-              <div class="bot-card-head">
-                <n-avatar v-if="isImageAvatar(b.avatar)" round size="medium" :src="b.avatar" />
-                <n-avatar v-else round size="medium" :style="{ backgroundColor: avatarColor(b.name), fontSize: isCustomAvatar(b.avatar) ? '20px' : '14px' }">
-                  {{ isCustomAvatar(b.avatar) ? b.avatar : (b.mention_tag || b.name).slice(0, 2).toUpperCase() }}
-                </n-avatar>
-                <div class="bot-card-title">
-                  <n-space align="center" :size="6">
-                    <n-text strong>@{{ b.mention_tag || b.name }}</n-text>
-                    <n-tag :type="b.runtime?.online ? 'success' : 'warning'" size="tiny">
-                      {{ b.runtime?.online ? t('bots.online') : t('bots.offline') }}
-                    </n-tag>
-                    <n-tag v-if="isActiveNow(b)" type="success" size="tiny" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
-                    <n-tag v-if="b.hidden" size="tiny" :bordered="false">{{ t('bots.hiddenBadge') }}</n-tag>
-                  </n-space>
-                  <n-text depth="3" style="font-size: 12px;">{{ b.title || b.description || '' }}</n-text>
-                </div>
-                <n-dropdown trigger="click" :options="cardMenuOptions(b)" @select="(key: string) => handleCardAction(key, b)">
-                  <n-button quaternary size="tiny">
-                    <template #icon><n-icon><EllipsisHorizontalOutline /></n-icon></template>
-                  </n-button>
-                </n-dropdown>
-              </div>
+      <!-- ===== Bots list ===== -->
+      <div v-if="viewMode === 'bots'" class="bot-list">
+        <n-spin v-if="botsStore.loading && !botsStore.bots.length" size="small" class="list-spinner" />
+        <n-empty
+          v-else-if="!botsStore.bots.length"
+          :description="t('bots.noBots')"
+          class="list-empty"
+        />
+        <n-empty
+          v-else-if="!filteredBots.length"
+          :description="t('bots.noSearchResult')"
+          class="list-empty"
+        />
+        <div
+          v-for="b in filteredBots"
+          :key="b.name"
+          class="bot-row"
+          :class="{ active: b.name === botsStore.activeBotName, hidden: b.hidden }"
+          @click="botsStore.openChat(b.name)"
+        >
+          <n-avatar v-if="isImageAvatar(b.avatar)" round size="medium" :src="b.avatar" class="row-avatar" />
+          <n-avatar v-else round size="medium" class="row-avatar" :style="{ backgroundColor: avatarColor(b.name), fontSize: isCustomAvatar(b.avatar) ? '20px' : '13px' }">
+            {{ isCustomAvatar(b.avatar) ? b.avatar : (b.mention_tag || b.name).slice(0, 2).toUpperCase() }}
+          </n-avatar>
+          <div class="row-main">
+            <div class="row-name">
+              <span class="row-name-text">{{ b.title || b.name }}</span>
+              <span class="row-mention">@{{ b.mention_tag || b.name }}</span>
+            </div>
+            <n-text depth="3" class="row-sub" :title="b.title || b.description || ''">
+              {{ b.title || b.description || b.model || '' }}
+            </n-text>
+          </div>
+          <span class="row-status" :class="{ online: b.runtime?.online, 'active-now': isActiveNow(b) }" />
+          <n-dropdown
+            trigger="click"
+            :options="cardMenuOptions(b)"
+            placement="bottom-end"
+            @select="(key: string) => handleCardAction(key, b)"
+            @click.stop
+          >
+            <n-button quaternary size="tiny" class="row-menu" @click.stop>
+              <template #icon><n-icon><EllipsisHorizontalOutline /></n-icon></template>
+            </n-button>
+          </n-dropdown>
+        </div>
+      </div>
 
-              <n-text v-if="b.description" depth="3" style="font-size: 12px; display: block; margin-top: 8px;">
-                {{ b.description }}
-              </n-text>
+      <!-- ===== Rooms list ===== -->
+      <div v-else class="bot-list">
+        <n-spin v-if="roomsStore.loading && !roomsStore.rooms.length" size="small" class="list-spinner" />
+        <n-empty
+          v-else-if="!roomsStore.rooms.length"
+          :description="t('rooms.empty')"
+          class="list-empty"
+        />
+        <n-empty
+          v-else-if="!filteredRooms.length"
+          :description="t('bots.noSearchResult')"
+          class="list-empty"
+        />
+        <div
+          v-for="room in filteredRooms"
+          :key="room.id"
+          class="bot-row room-row"
+          :class="{ active: roomsStore.activeRoomId === room.id }"
+          @click="roomsStore.selectRoom(room.id)"
+        >
+          <span class="room-row-avatar">
+            <n-icon size="18"><PeopleOutline /></n-icon>
+          </span>
+          <div class="row-main">
+            <div class="row-name">
+              <span class="row-name-text">{{ room.name || room.id }}</span>
+            </div>
+            <div class="room-row-meta">
+              <span v-for="m in room.members.slice(0, 3)" :key="m" class="mini-chip">{{ m }}</span>
+              <span v-if="room.members.length > 3" class="mini-chip">+{{ room.members.length - 3 }}</span>
+            </div>
+          </div>
+          <n-popconfirm v-if="roomsStore.activeRoomId === room.id" @positive-click="handleDeleteRoom(room.id)">
+            <template #trigger>
+              <n-button quaternary size="tiny" class="row-menu room-delete-btn" @click.stop>
+                <template #icon><n-icon><CloseOutline /></n-icon></template>
+              </n-button>
+            </template>
+            {{ t('rooms.confirmDelete') }}
+          </n-popconfirm>
+        </div>
+      </div>
 
-              <n-space style="margin-top: 10px;" :size="6">
-                <n-tag v-if="b.model" size="tiny" type="info">{{ b.model }}</n-tag>
-                <n-tag v-if="b.provider" size="tiny">{{ b.provider }}</n-tag>
+      <div class="rail-footer">
+        <n-button v-if="viewMode === 'bots'" quaternary size="tiny" :type="showHidden ? 'primary' : 'default'" @click="showHidden = !showHidden">
+          {{ showHidden ? t('bots.hideHidden') : t('bots.showHidden') }}
+        </n-button>
+        <n-text v-else depth="3" style="font-size: 12px;">
+          {{ roomsStore.rooms.length }} {{ t('rooms.title') }}
+        </n-text>
+      </div>
+    </aside>
+
+    <!-- ========== Right pane ========== -->
+    <section class="chat-pane" :class="{ 'pane-collapsed-mobile': !railHasActive }">
+      <!-- ---- Welcome: bots ---- -->
+      <div v-if="viewMode === 'bots' && !botsStore.activeBotName" class="welcome">
+        <div class="welcome-inner">
+          <div class="welcome-greeting">{{ t('bots.welcomeTitle') }}</div>
+          <p class="welcome-sub">{{ t('bots.welcomeSubtitle') }}</p>
+          <n-space justify="center" :size="12" class="welcome-stats">
+            <div class="stat-card">
+              <div class="stat-value">{{ botsStore.bots.length }}</div>
+              <div class="stat-label">{{ t('bots.statTotal') }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value stat-online">{{ onlineCount }}</div>
+              <div class="stat-label">{{ t('bots.statOnline') }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ activeRoutineCount }}</div>
+              <div class="stat-label">{{ t('bots.statActiveRoutines') }}</div>
+            </div>
+          </n-space>
+          <n-text depth="3" style="display: block; margin-top: 28px;">{{ t('bots.welcomePick') }}</n-text>
+          <div class="welcome-chips">
+            <button
+              v-for="b in visibleBots.slice(0, 8)"
+              :key="b.name"
+              class="welcome-chip"
+              @click="botsStore.openChat(b.name)"
+            >
+              <n-avatar v-if="isImageAvatar(b.avatar)" round size="small" :src="b.avatar" />
+              <n-avatar v-else round size="small" :style="{ backgroundColor: avatarColor(b.name), fontSize: isCustomAvatar(b.avatar) ? '14px' : '11px' }">
+                {{ isCustomAvatar(b.avatar) ? b.avatar : (b.mention_tag || b.name).slice(0, 2).toUpperCase() }}
+              </n-avatar>
+              <span class="chip-name">@{{ b.mention_tag || b.name }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Chat: a bot is selected ---- -->
+      <template v-else-if="viewMode === 'bots' && botsStore.activeBotName">
+        <div class="chat-header">
+          <n-button quaternary size="small" class="back-btn" @click="botsStore.closeChat()">
+            <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
+          </n-button>
+          <div class="chat-title">
+            <n-avatar v-if="isImageAvatar(activeBot?.avatar)" round size="small" :src="activeBot?.avatar" />
+            <n-avatar v-else round size="small" :style="{ backgroundColor: avatarColor(activeBot?.name || ''), fontSize: '15px' }">
+              {{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}
+            </n-avatar>
+            <div class="chat-title-text">
+              <n-text strong style="font-size: 16px;">@{{ activeBot?.mention_tag || botsStore.activeBotName }}</n-text>
+              <n-text v-if="activeBot?.title" depth="3" style="font-size: 12px;">{{ activeBot.title }}</n-text>
+            </div>
+          </div>
+          <n-space :size="6" align="center">
+            <n-tag :type="(activeBot?.runtime?.online) ? 'success' : 'default'" size="small">
+              {{ activeBot?.runtime?.online ? t('bots.online') : t('bots.offline') }}
+            </n-tag>
+            <n-tag v-if="isActiveNow(activeBotObj)" type="success" size="small" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
+            <n-button quaternary size="small" @click="openRoutinesModal">
+              <template #icon><n-icon><TimeOutline /></n-icon></template>
+              {{ t('bots.routines') }} ({{ botsStore.routines.length }})
+            </n-button>
+            <n-popconfirm @positive-click="handleClearChat">
+              <template #trigger>
+                <n-button quaternary size="small" type="error" :loading="clearingChat">
+                  {{ t('bots.clearChat') }}
+                </n-button>
+              </template>
+              {{ t('bots.clearChatConfirm') }}
+            </n-popconfirm>
+            <n-button quaternary size="small" @click="openEditModal(activeBotObj)">
+              <template #icon><n-icon><CreateOutline /></n-icon></template>
+              {{ t('common.edit') }}
+            </n-button>
+          </n-space>
+        </div>
+
+        <div class="chat-body">
+          <div ref="messagesEl" class="chat-messages" @click="handleCodeClick">
+            <!-- Empty conversation: bot profile + quick starters (Grok-style) -->
+            <div
+              v-if="!botsStore.messages.length && !botsStore.chatLoading && !botsStore.sending"
+              class="empty-chat"
+            >
+              <n-avatar v-if="isImageAvatar(activeBot?.avatar)" round :size="64" :src="activeBot?.avatar" class="empty-avatar" />
+              <n-avatar v-else round :size="64" class="empty-avatar" :style="{ backgroundColor: avatarColor(activeBot?.name || ''), fontSize: isCustomAvatar(activeBot?.avatar) ? '32px' : '24px' }">
+                {{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}
+              </n-avatar>
+              <div class="empty-name">@{{ activeBot?.mention_tag || botsStore.activeBotName }}</div>
+              <p v-if="activeBot?.title || activeBot?.description" class="empty-desc">
+                {{ activeBot.title || activeBot.description }}
+              </p>
+              <p v-else class="empty-desc">{{ t('bots.noMessages') }}</p>
+              <n-space v-if="activeBot?.model || activeBot?.provider" :size="6" style="margin-top: 8px;">
+                <n-tag v-if="activeBot?.model" size="tiny" type="info">{{ activeBot.model }}</n-tag>
+                <n-tag v-if="activeBot?.provider" size="tiny">{{ activeBot.provider }}</n-tag>
                 <n-tag size="tiny" :bordered="false">
-                  {{ t('bots.routineCount', { count: b.runtime?.active_routines ?? 0 }) }}
+                  {{ t('bots.routineCount', { count: activeBot?.runtime?.active_routines ?? 0 }) }}
                 </n-tag>
               </n-space>
+              <div class="starter-title">{{ t('bots.starterTitle') }}</div>
+              <div class="starter-chips">
+                <button
+                  v-for="(s, i) in starters"
+                  :key="i"
+                  class="starter-chip"
+                  :disabled="botsStore.sending"
+                  @click="handleStarter(s)"
+                >{{ s }}</button>
+              </div>
+            </div>
+            <template v-else>
+              <div v-for="(msgs, dateKey) in groupedMessages" :key="dateKey">
+                <div v-if="dateKey" class="date-separator"><span>{{ dateKey }}</span></div>
+                <div
+                  v-for="msg in msgs"
+                  :key="msg.id"
+                  class="message"
+                  :class="msg.role"
+                >
+                  <div class="avatar" :class="msg.role === 'assistant' ? 'bot-avatar' : 'user-avatar'">
+                    <img v-if="msg.role === 'assistant' && isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
+                    <span v-else-if="msg.role === 'assistant'">{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
+                    <span v-else>U</span>
+                  </div>
+                  <div class="message-body" :class="{ 'bot-body': msg.role === 'assistant' }">
+                    <div class="message-header">
+                      <n-text strong class="sender-name">{{ msg.role === 'assistant' ? botDisplayName : t('bots.you') }}</n-text>
+                      <n-tag v-if="msg.role === 'assistant'" size="tiny" type="success">AI</n-tag>
+                      <span v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</span>
+                    </div>
+                    <div class="message-bubble" :class="[msg.role === 'assistant' ? 'agent-bubble' : 'user-bubble', { streaming: msg._streaming }]">
+                      <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
+                      <template v-if="msg.role === 'assistant' && msg.content">
+                        <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
+                      </template>
+                      <div
+                        v-else
+                        class="bubble-content"
+                        v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-if="botsStore.sending && !botsStore.messages.some(m => m._streaming)" class="message assistant">
+              <div class="avatar bot-avatar">
+                <img v-if="isImageAvatar(activeBot?.avatar)" :src="activeBot?.avatar" class="avatar-img" alt="" />
+                <span v-else>{{ isCustomAvatar(activeBot?.avatar) ? activeBot?.avatar : botAvatarText }}</span>
+              </div>
+              <div class="message-body bot-body">
+                <div class="message-header">
+                  <n-text strong class="sender-name">{{ botDisplayName }}</n-text>
+                  <n-tag size="tiny" type="success">AI</n-tag>
+                </div>
+                <div class="message-bubble agent-bubble thinking">
+                  <div class="typing-indicator">
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="botsStore.chatLoading && !botsStore.messages.length" class="history-loading">
+              <n-spin size="small" />
+              <n-text depth="3" style="font-size: 13px; margin-left: 8px;">{{ t('bots.loadingHistory') }}</n-text>
+            </div>
+          </div>
+        </div>
 
-              <template #footer>
-                <n-space justify="end">
-                  <n-button size="tiny" type="primary" @click="botsStore.openChat(b.name)">
-                    <template #icon><n-icon><ChatbubbleEllipsesOutline /></n-icon></template>
-                    {{ t('bots.openChat') }}
-                  </n-button>
-                </n-space>
+        <div class="input-area">
+          <div class="input-wrapper">
+            <n-input
+              v-model:value="draft"
+              type="textarea"
+              :placeholder="t('bots.inputPlaceholder')"
+              :autosize="{ minRows: 1, maxRows: 6 }"
+              :disabled="botsStore.sending"
+              class="chat-input"
+              @keydown.enter.exact.prevent="handleSend"
+            />
+            <button
+              class="send-btn-inline"
+              :class="{ stopping: botsStore.sending }"
+              :disabled="!botsStore.sending && !draft.trim()"
+              @click="handleSend"
+              @mousedown.prevent
+              :title="botsStore.sending ? t('bots.sending') : t('bots.send')"
+            >
+              <svg v-if="!botsStore.sending" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
+              </svg>
+              <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ---- Welcome: rooms ---- -->
+      <div v-else-if="viewMode === 'rooms' && !roomsStore.activeRoomId" class="welcome">
+        <div class="welcome-inner">
+          <div class="welcome-greeting">{{ t('rooms.welcomeTitle') }}</div>
+          <p class="welcome-sub">{{ t('rooms.welcomeSubtitle') }}</p>
+          <n-space justify="center" :size="12" class="welcome-stats">
+            <div class="stat-card">
+              <div class="stat-value">{{ roomsStore.rooms.length }}</div>
+              <div class="stat-label">{{ t('rooms.title') }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ totalRoomMembers }}</div>
+              <div class="stat-label">{{ t('rooms.memberCountTotal') }}</div>
+            </div>
+          </n-space>
+          <n-text depth="3" style="display: block; margin-top: 28px;">{{ t('rooms.selectRoom') }}</n-text>
+          <div class="welcome-chips">
+            <button
+              v-for="room in roomsStore.rooms.slice(0, 8)"
+              :key="room.id"
+              class="welcome-chip"
+              @click="roomsStore.selectRoom(room.id)"
+            >
+              <span class="chip-name">{{ room.name || room.id }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Chat: a room is selected ---- -->
+      <template v-else-if="viewMode === 'rooms' && roomsStore.activeRoomId && activeRoom">
+        <div class="chat-header">
+          <n-button quaternary size="small" class="back-btn" @click="closeRoomChat()">
+            <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
+          </n-button>
+          <div class="chat-title">
+            <div class="chat-title-text">
+              <n-text strong style="font-size: 16px;">{{ activeRoom.name || activeRoom.id }}</n-text>
+              <n-text depth="3" style="font-size: 12px;">
+                {{ activeRoom.max_rounds }} {{ t('rooms.rounds') }} · {{ activeRoom.max_messages }} {{ t('rooms.msgsCap') }}
+              </n-text>
+            </div>
+          </div>
+          <div class="member-tags">
+            <n-tag v-for="m in activeRoom.members" :key="m" size="small" :bordered="false" :color="{ color: tagColor(m), textColor: '#333' }">
+              {{ m }}
+            </n-tag>
+          </div>
+          <n-space :size="6" align="center">
+            <n-button quaternary size="small" @click="openRoomEdit">
+              <template #icon><n-icon><CreateOutline /></n-icon></template>
+            </n-button>
+            <n-popconfirm @positive-click="handleDeleteRoom(activeRoom.id)">
+              <template #trigger>
+                <n-button quaternary size="small" type="error">
+                  <template #icon><n-icon><TrashOutline /></n-icon></template>
+                </n-button>
               </template>
-            </n-card>
-          </n-gi>
-        </n-grid>
-      </n-spin>
-    </template>
+              {{ t('rooms.confirmDelete') }}
+            </n-popconfirm>
+          </n-space>
+        </div>
 
-    <!-- Create/Edit Modal -->
+        <div v-if="activeRoom.topic" class="room-topic">{{ activeRoom.topic }}</div>
+
+        <div class="chat-body">
+          <div ref="roomMessagesEl" class="chat-messages" @click="handleCodeClick">
+            <n-empty v-if="!roomsStore.loading && roomsStore.messages.length === 0 && !roomsStore.sending" size="small" :description="t('rooms.noMessages')" style="margin-top: 60px;" />
+            <div
+              v-for="msg in roomsStore.messages"
+              :key="msg.id"
+              class="message"
+              :class="[isRoomUserMsg(msg) ? 'user' : 'assistant', { system: msg.from === '@system' }]"
+            >
+              <template v-if="msg.from === '@system'">
+                <div class="system-notice">{{ msg.content }}</div>
+              </template>
+              <template v-else>
+                <div class="avatar" :class="isRoomUserMsg(msg) ? 'user-avatar' : 'room-bot-avatar'" :style="isRoomUserMsg(msg) ? {} : { background: roomAvatarColor(msg.from) }">
+                  <span v-if="isRoomUserMsg(msg)">U</span>
+                  <span v-else>{{ roomAvatarText(msg.from) }}</span>
+                </div>
+                <div class="message-body" :class="{ 'bot-body': !isRoomUserMsg(msg) }">
+                  <div class="message-header">
+                    <n-text strong class="sender-name">{{ roomDisplayName(msg.from) }}</n-text>
+                    <n-tag v-if="!isRoomUserMsg(msg)" size="tiny" type="success" :bordered="false">{{ t('rooms.bot') }}</n-tag>
+                    <span v-if="roomFormatTime(msg.timestamp)" class="message-time">{{ roomFormatTime(msg.timestamp) }}</span>
+                    <span v-if="msg.content.startsWith('⚠️')" class="send-error">{{ t('rooms.sendFailed') }}</span>
+                  </div>
+                  <div class="message-bubble" :class="[isRoomUserMsg(msg) ? 'user-bubble' : 'agent-bubble', { 'bubble-error': msg.content.startsWith('⚠️') }]">
+                    <template v-if="!isRoomUserMsg(msg)">
+                      <ReasoningContent :content="msg.content" :streaming="false" />
+                    </template>
+                    <div v-else class="bubble-content" v-html="renderMarkdown(msg.content)"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Room sending indicator -->
+            <div v-if="roomsStore.sending" class="room-typing">
+              <div class="room-typing-bubble">
+                <div class="room-typing-dots"><span></span><span></span><span></span></div>
+                <span class="room-typing-text">{{ t('rooms.botsReplying') }}</span>
+                <n-button size="tiny" text type="error" @click="roomsStore.cancelSend()">
+                  <template #icon><n-icon><CloseOutline /></n-icon></template>
+                </n-button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="input-area">
+          <div class="input-hint">
+            {{ t('rooms.inputHint') }}
+            <span v-if="roomActiveTarget" class="target-chip">→ {{ roomActiveTarget }}</span>
+          </div>
+          <div class="input-wrapper">
+            <n-input
+              v-model:value="roomDraft"
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 6 }"
+              :placeholder="t('rooms.typeMessage')"
+              :disabled="roomsStore.sending"
+              class="chat-input"
+              @keydown="onRoomKeydown"
+              @input="onRoomInput"
+            />
+            <div v-if="roomShowMention && roomFilteredMentions.length" class="mention-popup">
+              <div
+                v-for="(opt, idx) in roomFilteredMentions"
+                :key="opt"
+                :class="['mention-item', { active: idx === roomMentionActiveIdx }]"
+                @mousedown.prevent="selectRoomMention(opt)"
+                @mouseenter="roomMentionActiveIdx = idx"
+              >
+                <span class="mention-avatar" :style="{ background: roomAvatarColor(opt) }">{{ roomAvatarText(opt) }}</span>
+                <span class="mention-name">{{ opt }}</span>
+              </div>
+            </div>
+            <button
+              class="send-btn-inline"
+              :disabled="roomsStore.sending || !roomDraft.trim()"
+              @click="roomSend()"
+              @mousedown.prevent
+              :title="t('rooms.send')"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ========== Create/Edit Bot Modal ========== -->
     <n-modal v-model:show="showEditModal" :title="editingBot ? t('bots.editBot') : t('bots.createBot')" preset="card" class="modal-responsive modal-scroll" style="width: 560px; max-width: 96vw;">
       <n-form label-placement="top">
         <n-form-item :label="t('bots.name')" required>
@@ -239,7 +530,11 @@
             :render-label="renderBotModelLabel"
           />
         </n-form-item>
-        <n-divider style="margin: 4px 0 12px;">{{ t('bots.advancedSection') }}</n-divider>
+        <div class="advanced-toggle" @click="advancedExpanded = !advancedExpanded">
+          <n-icon size="15" :class="{ rotated: advancedExpanded }"><ChevronForwardOutline /></n-icon>
+          <span>{{ t('bots.advancedSection') }}</span>
+        </div>
+        <template v-if="advancedExpanded">
         <n-form-item :label="t('bots.avatarLabel')">
           <n-input v-model:value="form.avatar" :placeholder="t('bots.avatarPlaceholder')" />
           <template #feedback>
@@ -283,6 +578,7 @@
             <n-text depth="3" style="font-size: 12px;">{{ t('bots.envHint') }}</n-text>
           </template>
         </n-form-item>
+        </template>
       </n-form>
       <template #footer>
         <n-space justify="end">
@@ -419,6 +715,68 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- ========== Create/Edit Room Modal ========== -->
+    <n-modal v-model:show="showRoomEditor" preset="card" class="modal-responsive" style="width: 560px; max-width: 96vw;" closable @close="closeRoomEditor">
+      <template #header>{{ editingRoomId ? t('rooms.editRoom') : t('rooms.newRoom') }}</template>
+      <div class="editor-body">
+        <n-form label-placement="top">
+          <n-form-item :label="t('rooms.roomName')">
+            <n-input v-model:value="roomForm.name" :placeholder="t('rooms.roomNamePlaceholder')" />
+          </n-form-item>
+          <n-form-item :label="t('rooms.topic')">
+            <n-input v-model:value="roomForm.topic" :placeholder="t('rooms.topicPlaceholder')" />
+          </n-form-item>
+          <n-form-item :label="t('rooms.members')">
+            <div class="member-picker">
+              <div v-if="botsStore.loading" class="picker-loading">
+                <n-spin size="small" /> {{ t('rooms.loadingBots') }}
+              </div>
+              <n-empty v-else-if="botsStore.bots.length === 0" size="small" :description="t('rooms.noBots')" />
+              <template v-else>
+                <div
+                  v-for="b in botsStore.bots"
+                  :key="b.name"
+                  :class="['member-option', { picked: roomForm.members.includes(b.name) }]"
+                  @click="toggleRoomMember(b.name)"
+                >
+                  <span class="member-avatar" :style="{ background: avatarColor(b.name) }">{{ avatarText(b.name) }}</span>
+                  <span class="member-option-name">{{ b.name }}</span>
+                  <span v-if="b.title" class="member-option-title">{{ b.title }}</span>
+                  <n-icon v-if="roomForm.members.includes(b.name)" size="14" color="#18a058"><CheckmarkOutline /></n-icon>
+                </div>
+                <div class="member-count">{{ t('rooms.memberCount', { n: roomForm.members.length }) }}</div>
+                <n-alert v-if="botsStore.bots.length < 2" type="warning" :title="t('rooms.minMembersTitle')" style="margin-top: 10px;">
+                  {{ t('rooms.minMembersHint', { n: botsStore.bots.length }) }}
+                </n-alert>
+              </template>
+            </div>
+          </n-form-item>
+          <n-grid :cols="2" :x-gap="12">
+            <n-form-item-gi :label="t('rooms.maxRounds')">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <n-slider v-model:value="roomForm.max_rounds" :min="1" :max="6" :step="1" style="flex: 1;" />
+                <n-text style="min-width: 16px;">{{ roomForm.max_rounds }}</n-text>
+              </div>
+            </n-form-item-gi>
+            <n-form-item-gi :label="t('rooms.maxMessages')">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <n-slider v-model:value="roomForm.max_messages" :min="4" :max="40" :step="2" style="flex: 1;" />
+                <n-text style="min-width: 24px;">{{ roomForm.max_messages }}</n-text>
+              </div>
+            </n-form-item-gi>
+          </n-grid>
+        </n-form>
+      </div>
+      <template #action>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <n-button @click="closeRoomEditor">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="roomSaving" @click="saveRoomEditor">
+            {{ editingRoomId ? t('common.save') : t('common.create') }}
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -426,17 +784,19 @@
 import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
-  NFormItem, NGi, NGrid, NH6, NIcon, NInput, NModal,
-  NPopconfirm, NSpace, NSelect, NSpin, NSwitch, NTag, NText, useMessage,
+  NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NModal,
+  NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
-  ArrowBackOutline, ChatbubbleEllipsesOutline, CreateOutline,
-  EllipsisHorizontalOutline, RefreshOutline, TimeOutline,
+  AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline, CreateOutline,
+  EllipsisHorizontalOutline, PeopleOutline, RefreshOutline, SearchOutline, TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
 import { useModelsStore } from '@/stores/models'
+import { useRoomsStore } from '@/stores/rooms'
 import type { Bot, BotRoutine } from '@/api/bots'
+import type { RoomMessage, RoomSendResult } from '@/api/rooms'
 import { request } from '@/api/client'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
@@ -447,14 +807,48 @@ const { t } = useI18n()
 const message = useMessage()
 const botsStore = useBotsStore()
 const modelsStore = useModelsStore()
+const roomsStore = useRoomsStore()
 
 const showEditModal = ref(false)
+const advancedExpanded = ref(false)
 const showRoutinesModal = ref(false)
 const editingBot = ref<Bot | null>(null)
 const saving = ref(false)
 const addingRoutine = ref(false)
 const draft = ref('')
 const messagesEl = ref<HTMLElement | null>(null)
+
+// ========== View switching: bots | rooms ==========
+const viewMode = ref<'bots' | 'rooms'>('bots')
+const searchQuery = ref('')
+
+const railHasActive = computed(() =>
+  (viewMode.value === 'bots' && !!botsStore.activeBotName) ||
+  (viewMode.value === 'rooms' && !!roomsStore.activeRoomId)
+)
+
+const searchPlaceholder = computed(() =>
+  viewMode.value === 'rooms' ? t('rooms.searchPlaceholder') : t('bots.searchPlaceholder')
+)
+
+function switchView(v: 'bots' | 'rooms') {
+  viewMode.value = v
+  searchQuery.value = ''
+}
+
+function handleRailCreate() {
+  if (viewMode.value === 'rooms') openRoomCreate()
+  else openCreateModal()
+}
+
+function handleRailRefresh() {
+  if (viewMode.value === 'rooms') {
+    void roomsStore.loadRooms()
+    if (roomsStore.activeRoomId) void roomsStore.refreshMessages()
+  } else {
+    void botsStore.loadBots()
+  }
+}
 
 const form = reactive({
   name: '',
@@ -492,7 +886,7 @@ const routineForm = reactive({ name: '', schedule: '', prompt: '' })
 const editingRoutineId = ref<string | null>(null)
 const togglingIds = reactive(new Set<string>())
 const clearingChat = ref(false)
-const runningIds = reactive(new Set<string>())
+const runningIds = reactive(new Set<string>)
 
 const scheduleHint = computed(() => {
   const s = routineForm.schedule.trim()
@@ -513,11 +907,36 @@ const activeBot = computed(() =>
 // The list endpoint already embeds runtime info; keep a non-null object for template use
 const activeBotObj = computed<Bot | null>(() => activeBot.value)
 
-// Hidden bots stay running (routines/DMs/rooms) but are filtered from the grid
+// Hidden bots stay running (routines/DMs/rooms) but are filtered from the rail
 // unless the user explicitly opts in to see them.
 const visibleBots = computed(() =>
   botsStore.bots.filter(b => !b.hidden || showHidden.value)
 )
+
+const filteredBots = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return visibleBots.value
+  return visibleBots.value.filter(b =>
+    b.name.toLowerCase().includes(q) ||
+    (b.mention_tag || '').toLowerCase().includes(q) ||
+    (b.title || '').toLowerCase().includes(q) ||
+    (b.description || '').toLowerCase().includes(q)
+  )
+})
+
+const onlineCount = computed(() => botsStore.bots.filter(b => b.runtime?.online).length)
+
+const activeRoutineCount = computed(() =>
+  botsStore.bots.reduce((acc, b) => acc + (b.runtime?.active_routines ?? 0), 0)
+)
+
+// Grok-style conversation starters shown for an empty conversation.
+const starters = computed(() => [
+  t('bots.starter1'),
+  t('bots.starter2'),
+  t('bots.starter3'),
+  t('bots.starter4'),
+])
 
 // A bot is "Active now" when its most recent completed turn is under 5 min old.
 function isActiveNow(b: Bot | null | undefined): boolean {
@@ -618,6 +1037,7 @@ function openCreateModal() {
   form.memory = ''
   form.avatar = ''
   form.env_text = ''
+  advancedExpanded.value = false
   showEditModal.value = true
 }
 
@@ -635,6 +1055,7 @@ function openEditModal(b: Bot | null) {
   form.memory = b.memory || ''
   form.avatar = b.avatar || ''
   form.env_text = envToText(b.env)
+  advancedExpanded.value = false
   showEditModal.value = true
 }
 
@@ -867,11 +1288,313 @@ async function handleSend() {
   }
 }
 
+// Quick starter chips send their prompt immediately (Grok-style starters).
+async function handleStarter(text: string) {
+  if (!text || botsStore.sending) return
+  try {
+    await botsStore.sendMessage(text)
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  }
+}
+
 watch(
   () => [botsStore.messages.length, botsStore.sending],
   async () => {
     await nextTick()
     const el = messagesEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  }
+)
+
+// ========== Rooms (Bot group chat) ==========
+const activeRoom = computed(() => roomsStore.getActiveRoom())
+
+const filteredRooms = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return roomsStore.rooms
+  return roomsStore.rooms.filter(r =>
+    (r.name || '').toLowerCase().includes(q) ||
+    (r.topic || '').toLowerCase().includes(q) ||
+    r.members.some(m => m.toLowerCase().includes(q))
+  )
+})
+
+const totalRoomMembers = computed(() =>
+  roomsStore.rooms.reduce((acc, r) => acc + r.members.length, 0)
+)
+
+function closeRoomChat() {
+  roomsStore.activeRoomId = null
+  roomsStore.messages = []
+}
+
+// ---------- room editor ----------
+const showRoomEditor = ref(false)
+const editingRoomId = ref<string | null>(null)
+const roomSaving = ref(false)
+
+const roomForm = reactive({
+  name: '',
+  topic: '',
+  members: [] as string[],
+  max_rounds: 3,
+  max_messages: 10,
+})
+
+function openRoomCreate() {
+  editingRoomId.value = null
+  roomForm.name = ''
+  roomForm.topic = ''
+  roomForm.members = []
+  roomForm.max_rounds = 3
+  roomForm.max_messages = 10
+  showRoomEditor.value = true
+  if (botsStore.bots.length === 0) {
+    void botsStore.loadBots()
+  }
+}
+
+function openRoomEdit() {
+  if (!activeRoom.value) return
+  editingRoomId.value = activeRoom.value.id
+  roomForm.name = activeRoom.value.name
+  roomForm.topic = activeRoom.value.topic || ''
+  roomForm.members = [...activeRoom.value.members]
+  roomForm.max_rounds = activeRoom.value.max_rounds
+  roomForm.max_messages = activeRoom.value.max_messages
+  showRoomEditor.value = true
+  if (botsStore.bots.length === 0) {
+    void botsStore.loadBots()
+  }
+}
+
+function closeRoomEditor() {
+  showRoomEditor.value = false
+}
+
+const canSaveRoom = computed(() =>
+  roomForm.members.length >= 2 && roomForm.members.length <= 6 && !!roomForm.name.trim()
+)
+
+function toggleRoomMember(name: string) {
+  const idx = roomForm.members.indexOf(name)
+  if (idx >= 0) {
+    roomForm.members.splice(idx, 1)
+  } else if (roomForm.members.length < 6) {
+    roomForm.members.push(name)
+  } else {
+    message.warning(t('rooms.maxMembers'))
+  }
+}
+
+async function saveRoomEditor() {
+  if (roomSaving.value) return
+  if (!roomForm.name.trim()) {
+    message.warning(t('rooms.nameRequired'))
+    return
+  }
+  if (roomForm.members.length < 2) {
+    message.warning(t('rooms.minMembers'))
+    return
+  }
+  if (!canSaveRoom.value) return
+  roomSaving.value = true
+  const data = {
+    name: roomForm.name.trim(),
+    topic: roomForm.topic.trim(),
+    members: [...roomForm.members],
+    max_rounds: roomForm.max_rounds,
+    max_messages: roomForm.max_messages,
+  }
+  try {
+    if (editingRoomId.value) {
+      await roomsStore.updateRoom(editingRoomId.value, data)
+      message.success(t('rooms.updated'))
+    } else {
+      const room = await roomsStore.createRoom(data)
+      message.success(t('rooms.created'))
+      await roomsStore.selectRoom(room.id)
+    }
+    showRoomEditor.value = false
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  } finally {
+    roomSaving.value = false
+  }
+}
+
+async function handleDeleteRoom(id: string) {
+  try {
+    await roomsStore.deleteRoom(id)
+    message.success(t('rooms.deleted'))
+  } catch (e: any) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+// ---------- room chat input (@mention) ----------
+const roomDraft = ref('')
+const roomMessagesEl = ref<HTMLElement | null>(null)
+
+const roomShowMention = ref(false)
+const roomMentionActiveIdx = ref(0)
+const roomMentionQuery = ref('')
+
+const roomFilteredMentions = computed(() => {
+  const members = activeRoom.value?.members || []
+  const q = roomMentionQuery.value.toLowerCase()
+  const list = q ? members.filter(m => m.toLowerCase().includes(q)) : members
+  return list.slice(0, 8)
+})
+
+function onRoomInput() {
+  const val = roomDraft.value
+  const caret = (document.activeElement as HTMLTextAreaElement)?.selectionStart ?? val.length
+  const uptoCaret = val.slice(0, caret)
+  const m = uptoCaret.match(/@(\S*)$/)
+  if (m && !uptoCaret.slice(0, uptoCaret.length - m[0].length).endsWith('@@')) {
+    roomShowMention.value = true
+    roomMentionQuery.value = m[1] || ''
+    if (roomMentionActiveIdx.value >= roomFilteredMentions.value.length) {
+      roomMentionActiveIdx.value = 0
+    }
+  } else {
+    roomShowMention.value = false
+  }
+}
+
+function selectRoomMention(name: string) {
+  const el = document.activeElement as HTMLTextAreaElement
+  const caret = el?.selectionStart ?? roomDraft.value.length
+  const uptoCaret = roomDraft.value.slice(0, caret)
+  const m = uptoCaret.match(/@(\S*)$/)
+  if (m) {
+    const start = caret - m[0].length
+    roomDraft.value = roomDraft.value.slice(0, start) + '@' + name + ' ' + roomDraft.value.slice(caret)
+    nextTick(() => {
+      const pos = start + name.length + 2
+      el?.setSelectionRange(pos, pos)
+    })
+  }
+  roomShowMention.value = false
+}
+
+const roomActiveTarget = computed(() => {
+  if (!activeRoom.value) return ''
+  const m = roomDraft.value.match(/@(\S+)/)
+  if (!m) return ''
+  const name = m[1].replace(/[^\w-]/g, '')
+  return activeRoom.value.members.includes(name) ? name : ''
+})
+
+function onRoomKeydown(e: KeyboardEvent) {
+  if (roomShowMention.value && roomFilteredMentions.value.length) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      roomMentionActiveIdx.value = (roomMentionActiveIdx.value + 1) % roomFilteredMentions.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      roomMentionActiveIdx.value = (roomMentionActiveIdx.value - 1 + roomFilteredMentions.value.length) % roomFilteredMentions.value.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      selectRoomMention(roomFilteredMentions.value[roomMentionActiveIdx.value])
+      return
+    }
+    if (e.key === 'Escape') {
+      roomShowMention.value = false
+      return
+    }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    void roomSend()
+  }
+}
+
+async function roomSend(): Promise<void> {
+  const text = roomDraft.value.trim()
+  if (!text || roomsStore.sending || !activeRoom.value) return
+  const target = roomActiveTarget.value || undefined
+  roomDraft.value = ''
+  roomShowMention.value = false
+  try {
+    const res: RoomSendResult | null = await roomsStore.sendMessage(text, target)
+    if (res?.needs_user) {
+      roomsStore.messages.push({
+        id: 'sys_' + Date.now(),
+        from: '@system',
+        content: t('rooms.needsUser'),
+        timestamp: Date.now(),
+      })
+    }
+  } catch {
+    message.error(t('rooms.sendFailed'))
+    // restore draft so the user doesn't lose their message
+    if (!roomDraft.value) roomDraft.value = text
+  }
+}
+
+// ---------- room helpers ----------
+function isRoomUserMsg(msg: RoomMessage): boolean {
+  return msg.from === '@user' || msg.from.startsWith('user:')
+}
+
+function roomDisplayName(from: string): string {
+  if (from === '@user') return t('rooms.you')
+  if (from === '@system') return 'System'
+  return from
+}
+
+function roomAvatarText(from: string): string {
+  if (from === '@user') return t('rooms.you').slice(0, 1)
+  const n = from.replace(/^@/, '')
+  return n ? n.slice(0, 1).toUpperCase() : 'B'
+}
+
+function roomAvatarColor(from: string): string {
+  const hue = (hashCode(from) % 360 + 360) % 360
+  return `hsl(${hue}, 55%, 78%)`
+}
+
+function tagColor(name: string): string {
+  const hue = (hashCode(name) % 360 + 360) % 360
+  return `hsl(${hue}, 60%, 90%)`
+}
+
+function roomToDate(ts: string | number): Date {
+  if (typeof ts === 'number') {
+    return ts > 1e12 ? new Date(ts) : new Date(ts * 1000)
+  }
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? new Date(0) : d
+}
+
+function roomFormatTime(timestamp: string | number): string {
+  if (!timestamp) return ''
+  const date = roomToDate(timestamp)
+  if (date.getTime() === 0) return ''
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  return (
+    date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+    ' ' +
+    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  )
+}
+
+watch(
+  () => roomsStore.messages.length,
+  async () => {
+    await nextTick()
+    const el = roomMessagesEl.value
     if (el) el.scrollTop = el.scrollHeight
   }
 )
@@ -994,6 +1717,7 @@ function handleDocumentCodeClick(e: MouseEvent) {
 
 onMounted(() => {
   void botsStore.loadBots()
+  void roomsStore.loadRooms()
   void modelsStore.loadModels()
   void loadCandidates()
   document.addEventListener('click', handleDocumentCodeClick)
@@ -1008,6 +1732,11 @@ function avatarColor(name: string) {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 997
   return palette[h % palette.length]
+}
+
+function avatarText(name: string): string {
+  const n = name.replace(/^@/, '')
+  return n ? n.slice(0, 1).toUpperCase() : 'B'
 }
 
 // ========== Capability isolation helpers ==========
@@ -1058,6 +1787,14 @@ function parseEnvPairs(text: string): Record<string, string> {
   return out
 }
 
+function hashCode(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0
+  }
+  return h
+}
+
 async function loadCandidates() {
   try {
     const tools = (await request('/tools')) as { name?: string }[]
@@ -1075,35 +1812,445 @@ async function loadCandidates() {
 </script>
 
 <style scoped>
-.bots-page {
-  height: calc(100vh - 48px);
+/* ========== Shell: left rail + right pane (Grok-style) ========== */
+.bots-shell {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ========== Advanced section collapse toggle ========== */
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--n-text-color, #333);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 4px 0 10px;
+  border-bottom: 1px solid #ececec;
+  margin-bottom: 14px;
+}
+.advanced-toggle .n-icon {
+  transition: transform 0.2s ease;
+  color: #999;
+}
+.advanced-toggle .n-icon.rotated {
+  transform: rotate(90deg);
+  color: inherit;
+}
+.advanced-toggle:hover {
+  color: var(--primary-color, #18a058);
+}
+
+/* ========== Left rail ========== */
+.bot-rail {
+  width: 292px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  border-right: 1px solid #e8e8e8;
 }
-/* List view */
-.bots-page > n-space:first-child {
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 8px;
   flex-shrink: 0;
 }
-.bot-card-head {
+
+/* Segmented view switcher: Bot | 群聊 */
+.rail-tabs {
+  display: flex;
+  background: #f0f0f2;
+  border-radius: 8px;
+  padding: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rail-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-tab:hover {
+  color: #374151;
+}
+
+.rail-tab.active {
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.rail-search {
+  padding: 0 14px 8px;
+  flex-shrink: 0;
+}
+
+.rail-alert {
+  margin: 0 14px 8px;
+  flex-shrink: 0;
+}
+
+.bot-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+}
+
+.list-spinner,
+.list-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.rail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-top: 1px solid #efefef;
+  flex-shrink: 0;
+}
+
+/* ========== Bot row ========== */
+.bot-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  position: relative;
 }
-.bot-card--hidden {
+
+.bot-row:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.bot-row.active {
+  background: rgba(79, 124, 255, 0.12);
+}
+
+.bot-row.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 22px;
+  border-radius: 2px;
+  background: #4f7cff;
+}
+
+.bot-row.hidden {
   opacity: 0.55;
-  filter: saturate(0.7);
 }
-.bot-card--hidden:hover {
+
+.bot-row.hidden:hover {
   opacity: 0.85;
 }
-.bot-card-title {
+
+.row-avatar {
+  flex-shrink: 0;
+}
+
+.row-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
-/* Chat view */
+
+.row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.row-name-text {
+  font-weight: 600;
+  font-size: 13px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-mention {
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+
+.row-sub {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+  flex-shrink: 0;
+}
+
+.row-status.online {
+  background: #18a058;
+}
+
+.row-status.active-now {
+  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.25);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.15); }
+  50% { box-shadow: 0 0 0 4px rgba(24, 160, 88, 0.35); }
+}
+
+.row-menu {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.bot-row:hover .row-menu,
+.row-menu:focus-within {
+  opacity: 1;
+}
+
+/* ========== Room row ========== */
+.room-row-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  color: #fff;
+}
+
+.room-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.mini-chip {
+  font-size: 10px;
+  background: #f0f0f0;
+  color: #666;
+  padding: 0 6px;
+  border-radius: 8px;
+}
+
+.room-delete-btn {
+  opacity: 0;
+}
+
+.room-row:hover .room-delete-btn {
+  opacity: 1;
+}
+
+/* ========== Right pane ========== */
+.chat-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+/* ========== Welcome ========== */
+.welcome {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.welcome-inner {
+  max-width: 560px;
+  text-align: center;
+}
+
+.welcome-greeting {
+  font-size: 26px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.welcome-sub {
+  color: #6b7280;
+  font-size: 14px;
+  margin: 0 0 28px;
+}
+
+.welcome-stats {
+  margin-bottom: 8px;
+}
+
+.stat-card {
+  min-width: 108px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: #fafafa;
+  border: 1px solid #eee;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.stat-value.stat-online {
+  color: #18a058;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+
+.welcome-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.welcome-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.welcome-chip:hover {
+  border-color: #4f7cff;
+  box-shadow: 0 2px 8px rgba(79, 124, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.chip-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+/* ========== Empty chat (bot profile + starters) ========== */
+.empty-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 60px 16px 24px;
+  max-width: 520px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.empty-avatar {
+  margin-bottom: 14px;
+}
+
+.empty-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.empty-desc {
+  color: #6b7280;
+  font-size: 14px;
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+
+.starter-title {
+  margin-top: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.starter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.starter-chip {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.starter-chip:hover:not(:disabled) {
+  border-color: #4f7cff;
+  color: #4f7cff;
+  box-shadow: 0 2px 8px rgba(79, 124, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.starter-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ========== Chat view ========== */
 .chat-header {
   display: flex;
   align-items: center;
@@ -1112,6 +2259,7 @@ async function loadCandidates() {
   border-bottom: 1px solid #e8e8e8;
   flex-shrink: 0;
 }
+
 .chat-title {
   flex: 1;
   display: flex;
@@ -1119,12 +2267,14 @@ async function loadCandidates() {
   gap: 8px;
   min-width: 0;
 }
+
 .chat-title-text {
   display: flex;
   flex-direction: column;
   min-width: 0;
   line-height: 1.35;
 }
+
 .chat-body {
   flex: 1;
   min-height: 0;
@@ -1132,6 +2282,7 @@ async function loadCandidates() {
   display: flex;
   flex-direction: column;
 }
+
 .chat-messages {
   flex: 1;
   min-height: 0;
@@ -1142,6 +2293,7 @@ async function loadCandidates() {
   flex-direction: column;
   gap: 0;
 }
+
 .chat-messages > * {
   max-width: 960px;
   margin-left: auto;
@@ -1164,6 +2316,10 @@ async function loadCandidates() {
 
 .message.user {
   flex-direction: row-reverse;
+}
+
+.message.system {
+  justify-content: center;
 }
 
 .message-body {
@@ -1234,6 +2390,11 @@ async function loadCandidates() {
   color: #bbb;
 }
 
+.send-error {
+  font-size: 11px;
+  color: #d03050;
+}
+
 .stream-spin {
   margin-right: 4px;
 }
@@ -1262,6 +2423,10 @@ async function loadCandidates() {
   border: 1px solid #e8e8e8;
   border-bottom-left-radius: 4px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.bubble-error {
+  border-color: #f0a0b0 !important;
 }
 
 .message-bubble.thinking {
@@ -1488,26 +2653,173 @@ async function loadCandidates() {
   pointer-events: none;
 }
 
-/* ========== Input Area ========== */
-.input-area {
+/* ========== Room chat extras ========== */
+.member-tags {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  overflow: hidden;
+  max-width: 40%;
+  justify-content: flex-end;
+}
+
+.room-topic {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: #888;
+  border-bottom: 1px dashed #eee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.system-notice {
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 6px 14px;
+  max-width: 80%;
+  text-align: center;
+}
+
+.room-typing {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+.room-typing-bubble {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f5f5f5;
+  border: 1px solid #e8e8e8;
+  border-radius: 16px;
+  border-bottom-left-radius: 4px;
+  padding: 10px 14px;
+}
+
+.room-typing-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.room-typing-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #999;
+  animation: room-bounce 1.2s infinite ease-in-out;
+}
+
+.room-typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.room-typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes room-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+.room-typing-text {
+  font-size: 12px;
+  color: #888;
+}
+
+.input-hint {
+  font-size: 11px;
+  color: #aaa;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 12px 24px 16px;
-  border-top: 1px solid #e0e0e0;
+}
+
+.target-chip {
+  font-size: 11px;
+  background: #e8f4ff;
+  color: #2080f0;
+  padding: 1px 8px;
+  border-radius: 8px;
+}
+
+/* mention popup */
+.mention-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  width: 220px;
+  max-height: 240px;
+  overflow-y: auto;
   background: #fff;
-  align-items: flex-end;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+  padding: 4px;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mention-item.active {
+  background: #f0f0f0;
+}
+
+.mention-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #333;
   flex-shrink: 0;
 }
 
-.input-area > * {
+.mention-name {
+  font-size: 13px;
+  color: #333;
+}
+
+/* ========== Input Area ========== */
+.input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 24px 16px;
+  border-top: 1px solid #e0e0e0;
+  background: #fff;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.input-area > .input-wrapper {
   max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+.input-hint {
+  max-width: 960px;
+  width: 100%;
   margin-left: auto;
   margin-right: auto;
 }
 
 .input-wrapper {
   position: relative;
-  flex: 1;
   min-width: 0;
   width: 100%;
   border: 1px solid #d9d9d9;
@@ -1592,19 +2904,116 @@ async function loadCandidates() {
   resize: none;
 }
 
+/* ========== Room editor modal ========== */
+.editor-body {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.member-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.picker-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #888;
+  padding: 12px 0;
+}
+
+.member-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.member-option:hover {
+  border-color: #2080f0;
+  background: #f6fafe;
+}
+
+.member-option.picked {
+  border-color: #18a058;
+  background: #f0faf2;
+}
+
+.member-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.member-option-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+}
+
+.member-option-title {
+  font-size: 11px;
+  color: #999;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.member-count {
+  font-size: 11px;
+  color: #999;
+  text-align: right;
+}
+
 .routine-editing {
   border: 1px solid var(--n-color-target, #18a058);
 }
 
+/* ========== Mobile: single pane at a time ========== */
 @media (max-width: 768px) {
-  /* 页面视口:锁高 + 动态视口,保证聊天输入区贴底 */
-  .bots-page {
-    height: calc(100vh - 48px);
-    height: calc(100dvh - 48px);
+  .bots-shell {
+    height: 100vh;
+    height: 100dvh;
     overflow: hidden;
   }
 
-  /* 对话面板头部:允许换行、收紧间距,四个按钮窄屏放得下 */
+  .bot-rail {
+    width: 100%;
+    border-right: none;
+  }
+
+  .bot-rail.rail-collapsed-mobile {
+    display: none;
+  }
+
+  .chat-pane.pane-collapsed-mobile {
+    display: none;
+  }
+
+  .chat-pane {
+    width: 100%;
+  }
+
+  .back-btn {
+    display: flex;
+  }
+
   .chat-header {
     flex-wrap: wrap;
     gap: 6px;
@@ -1619,7 +3028,6 @@ async function loadCandidates() {
     padding: 0 8px;
   }
 
-  /* 消息区:留白收敛 */
   .chat-messages {
     padding: 10px 12px;
     padding-bottom: 16px;
@@ -1640,7 +3048,14 @@ async function loadCandidates() {
     max-width: 90%;
   }
 
-  /* 输入区:收紧留白并适配手势条安全区 */
+  .empty-chat {
+    padding: 32px 12px 16px;
+  }
+  .starter-chip {
+    font-size: 12px;
+    padding: 7px 14px;
+  }
+
   .input-area {
     padding: 8px 10px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
@@ -1650,16 +3065,101 @@ async function loadCandidates() {
     padding-right: 42px; /* 内置发送按钮仍留空间 */
   }
 
-  /* Bot 卡片 tiny 按钮增大触控面积 */
-  .bot-card :deep(.n-button--tiny-type) {
-    height: 30px;
-    padding: 0 10px;
-    font-size: 13px;
+  /* rail 行触控面积增大 */
+  .bot-row {
+    padding: 10px;
+  }
+  .row-menu {
+    opacity: 1;
+  }
+
+  .member-tags {
+    display: none;
+  }
+}
+
+/* Desktop: back button not needed */
+@media (min-width: 769px) {
+  .back-btn {
+    display: none;
   }
 }
 
 /* ========== Dark Mode ========== */
 @media (prefers-color-scheme: dark) {
+  .bot-rail {
+    background: #16161a;
+    border-right-color: #374151;
+  }
+  .rail-tabs {
+    background: #222228;
+  }
+  .rail-tab {
+    color: #9ca3af;
+  }
+  .rail-tab:hover {
+    color: #d1d5db;
+  }
+  .rail-tab.active {
+    background: #2c2c33;
+    color: #f3f4f6;
+  }
+  .bot-row:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .bot-row.active {
+    background: rgba(79, 124, 255, 0.18);
+  }
+  .row-name-text {
+    color: #e5e7eb;
+  }
+  .mini-chip {
+    background: #2c2c33;
+    color: #9ca3af;
+  }
+  .rail-footer {
+    border-top-color: #2c2c33;
+  }
+  .chat-pane {
+    background: #1a1a1f;
+  }
+  .welcome-greeting {
+    color: #f3f4f6;
+  }
+  .welcome-sub {
+    color: #9ca3af;
+  }
+  .stat-card {
+    background: #1f1f23;
+    border-color: #374151;
+  }
+  .stat-value {
+    color: #e5e7eb;
+  }
+  .welcome-chip,
+  .starter-chip {
+    background: #1f1f23;
+    border-color: #374151;
+  }
+  .welcome-chip:hover {
+    border-color: #4f7cff;
+  }
+  .chip-name {
+    color: #d1d5db;
+  }
+  .starter-chip {
+    color: #d1d5db;
+  }
+  .starter-chip:hover:not(:disabled) {
+    color: #93c5fd;
+    border-color: #4f7cff;
+  }
+  .empty-name {
+    color: #f3f4f6;
+  }
+  .empty-desc {
+    color: #9ca3af;
+  }
   .chat-header {
     border-bottom-color: #374151;
   }
@@ -1691,6 +3191,17 @@ async function loadCandidates() {
   .date-separator span {
     background: #2c2c33;
   }
+  .room-topic {
+    color: #9ca3af;
+    border-bottom-color: #2c2c33;
+  }
+  .room-typing-bubble {
+    background: #1f1f23;
+    border-color: #374151;
+  }
+  .room-typing-text {
+    color: #9ca3af;
+  }
   .input-area {
     border-top-color: #374151;
     background: #1a1a1f;
@@ -1709,6 +3220,20 @@ async function loadCandidates() {
   }
   .typing-indicator .dot {
     background: #36ad6a;
+  }
+  .mention-popup {
+    background: #1f1f23;
+    border-color: #374151;
+  }
+  .mention-item.active {
+    background: #2c2c33;
+  }
+  .mention-name {
+    color: #d1d5db;
+  }
+  .target-chip {
+    background: rgba(32, 128, 240, 0.2);
+    color: #7cb6ff;
   }
 }
 </style>

@@ -823,12 +823,19 @@ async function pollForReplies(agentNames: string[]) {
 }
 
 async function createRoom() {
-  if (!newRoom.name) return
-  await groupchatStore.createRoom({ ...newRoom })
-  newRoom.name = ''
-  newRoom.description = ''
-  showCreateRoom.value = false
-  message.success(t('groupchat.created'))
+  if (!newRoom.name.trim()) {
+    message.warning(t('groupchat.nameRequired'))
+    return
+  }
+  try {
+    await groupchatStore.createRoom({ ...newRoom })
+    newRoom.name = ''
+    newRoom.description = ''
+    showCreateRoom.value = false
+    message.success(t('groupchat.created'))
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 function editAgent(a: any) {
