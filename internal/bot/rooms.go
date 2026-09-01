@@ -109,8 +109,12 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 	seen := map[string]bool{}
 	for i, name := range cfg.Members {
 		key := strings.ToLower(name)
+		// Tolerate members whose bot was deleted: runRoomRound already skips
+		// them at runtime, and this keeps the room editable so the dead member
+		// can be removed via a later update. Only newly added members must
+		// resolve to a known bot.
 		if m.FindByTag(key) == nil {
-			return nil, fmt.Errorf("room member %q is not a known bot", name)
+			continue
 		}
 		if seen[key] {
 			return nil, fmt.Errorf("duplicate room member %q", name)
@@ -150,7 +154,8 @@ func (m *Manager) DeleteRoom(id string) error {
 	if err := m.store.DeleteRoom(cfg.ID); err != nil {
 		return fmt.Errorf("failed to delete room: %w", err)
 	}
-	// Drop persisted room sessions for all members + the shared room log.
+	// Drop persisted room sessions for all members + the shared room log so
+	// deleted rooms don't leave stale history in bots.db.
 	m.mu.Lock()
 	for _, member := range cfg.Members {
 		if rt, ok := m.bots[member]; ok && rt != nil {
@@ -160,6 +165,17 @@ func (m *Manager) DeleteRoom(id string) error {
 		}
 	}
 	m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, member := range cfg.Members {
+		if err := m.sessions.DeleteSession(ctx, RoomSessionID(member, cfg.ID)); err != nil {
+			log.Warnf("[BotMode] Failed to delete room session for %s: %v", member, err)
+		}
+	}
+	if err := m.sessions.DeleteSession(ctx, roomHistorySessionID(cfg.ID)); err != nil {
+		log.Warnf("[BotMode] Failed to delete room log %s: %v", cfg.ID, err)
+	}
 	log.Infof("[BotMode] Room %q deleted", cfg.Name)
 	return nil
 }

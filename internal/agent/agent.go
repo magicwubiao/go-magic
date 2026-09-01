@@ -2810,9 +2810,15 @@ func (a *Agent) Reset() {
 	}
 }
 
-// GetHistory returns the conversation history
+// GetHistory returns a copy of the conversation history. The copy is
+// returned (not a live slice reference) because a running conversation
+// may append to history concurrently from the worker goroutine.
 func (a *Agent) GetHistory() []provider.Message {
-	return a.history
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]provider.Message, len(a.history))
+	copy(result, a.history)
+	return result
 }
 
 // GetTokenStats returns the token usage statistics
@@ -2846,7 +2852,11 @@ func (a *Agent) GetTokenUsage() TokenUsage {
 }
 
 // SetHistory sets the conversation history
+// SetHistory replaces the conversation history. Guarded by the agent mutex:
+// callers may run concurrently with a worker goroutine executing a turn.
 func (a *Agent) SetHistory(history []provider.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.history = history
 }
 

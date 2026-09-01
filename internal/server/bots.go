@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/bot"
 )
+
+// validNamePattern matches safe bot names and room IDs: alphanumeric start,
+// letters/digits/'-'/'_' up to 64 chars. It guards against path traversal
+// via names like "../../x" that would escape the bots/ or rooms/ directory
+// in the file-backed store.
+var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // botToResponse serializes a bot config for the dashboard API.
 func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interface{} {
@@ -88,6 +95,10 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if name == "" {
 		http.Error(w, "bot name is required", http.StatusBadRequest)
+		return
+	}
+	if !validNamePattern.MatchString(name) {
+		http.Error(w, "invalid bot name", http.StatusBadRequest)
 		return
 	}
 

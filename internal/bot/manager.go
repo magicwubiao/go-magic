@@ -1002,10 +1002,14 @@ func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) 
 
 	rt, ok := m.bots[key]
 	if ok {
-		// Reset cached agent so the next turn picks up new persona/model.
+		// Reset cached agents so the next turn picks up new persona/model.
+		// This includes per-room agents: group chat turns must reflect the
+		// updated config too, not just the canonical chat.
 		rt.cfg = cfg
 		rt.ag = nil
 		rt.loaded = false
+		rt.roomAgents = nil
+		rt.roomLoaded = nil
 	}
 	if sched, ok2 := m.routines[key]; ok2 && sched != nil {
 		sched.Stop()

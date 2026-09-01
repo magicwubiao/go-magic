@@ -143,12 +143,20 @@ func NewStore(magicHome string) (*Store, error) {
 	return s, nil
 }
 
+// safeBase strips any path separators from a caller-supplied name so file
+// paths always stay inside the store's own directories. The API layer also
+// validates names up front; this is a defense-in-depth backstop for every
+// caller (API, CLI, tests).
+func safeBase(name string) string {
+	return filepath.Base(name)
+}
+
 func (s *Store) botPath(name string) string {
-	return filepath.Join(s.dir, name+".json")
+	return filepath.Join(s.dir, safeBase(name)+".json")
 }
 
 func (s *Store) routinesPath(name string) string {
-	return filepath.Join(s.dir, "routines", name+".json")
+	return filepath.Join(s.dir, "routines", safeBase(name)+".json")
 }
 
 // Save writes a bot config to disk.
@@ -293,7 +301,7 @@ func (r *RoomConfig) MessagesCap() int {
 }
 
 func (s *Store) roomPath(id string) string {
-	return filepath.Join(s.dir, "rooms", id+".json")
+	return filepath.Join(s.dir, "rooms", safeBase(id)+".json")
 }
 
 // SaveRoom persists a room config.
