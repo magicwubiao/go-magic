@@ -316,12 +316,12 @@ const monthlyColumns = computed<DataTableColumns<MonthlyUsage>>(() => [
   {
     title: t('usage.totalTokens'),
     key: 'total_tokens',
-    render: (row) => formatNumber(row.total_tokens)
+    render: (row) => formatNumber(row.total_tokens ?? 0)
   },
   {
     title: t('usage.cost'),
     key: 'total_cost',
-    render: (row) => `$${formatCost(row.total_cost)}`
+    render: (row) => `$${formatCost(row.total_cost ?? 0)}`
   }
 ])
 
@@ -332,22 +332,22 @@ const dailyColumns = computed<DataTableColumns<DailyUsage>>(() => [
   {
     title: t('usage.inputTokens'),
     key: 'input_tokens',
-    render: (row) => formatNumber(row.input_tokens)
+    render: (row) => formatNumber(row.input_tokens ?? 0)
   },
   {
     title: t('usage.outputTokens'),
     key: 'output_tokens',
-    render: (row) => formatNumber(row.output_tokens)
+    render: (row) => formatNumber(row.output_tokens ?? 0)
   },
   {
     title: t('usage.totalTokens'),
     key: 'total_tokens',
-    render: (row) => formatNumber(row.total_tokens)
+    render: (row) => formatNumber(row.total_tokens ?? 0)
   },
   {
     title: t('usage.cost'),
     key: 'cost',
-    render: (row) => `$${formatCost(row.cost)}`
+    render: (row) => `$${formatCost(row.cost ?? 0)}`
   }
 ])
 

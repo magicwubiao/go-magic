@@ -530,7 +530,7 @@ function formatTime(ts: number) {
   return new Date(ts * 1000).toLocaleString(undefined)
 }
 
-const statusFlow = ['triage', 'todo', 'ready', 'running', 'done', 'archived']
+const statusFlow: KanbanTask['status'][] = ['triage', 'todo', 'ready', 'running', 'done', 'archived']
 
 function canMoveForward(task: KanbanTask) {
   const idx = statusFlow.indexOf(task.status)

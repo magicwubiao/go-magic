@@ -145,7 +145,7 @@ import { useMessage } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useToolsStore } from '@/stores/tools'
-import { getToolStatistics, getToolsetStatistics } from '@/api/tools'
+import { getToolStatistics, getToolsetStatistics, type ToolStatistics, type ToolsetStatistics } from '@/api/tools'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -158,25 +158,6 @@ const selectedToolset = ref<any>(null)
 // Data
 const toolStats = ref<ToolStatistics[]>([])
 const toolsetStats = ref<ToolsetStatistics[]>([])
-
-// Types
-interface ToolStatistics {
-  tool_name: string
-  total_calls: number
-  success_calls: number
-  failed_calls: number
-  success_rate: number
-  avg_duration: number
-  last_used: string
-  trend: string
-}
-
-interface ToolsetStatistics {
-  toolset_name: string
-  total_calls: number
-  tool_stats: Record<string, number>
-  last_used: string
-}
 
 // Computed
 const totalCalls = computed(() => {

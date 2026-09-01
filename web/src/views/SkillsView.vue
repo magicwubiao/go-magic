@@ -474,7 +474,9 @@ async function saveEdit() {
 }
 
 // Auto-skill lifecycle action
-async function performAction(skill: Skill, action: string) {
+type AutoSkillAction = 'approve' | 'reject' | 'archive' | 'restore' | 'delete'
+
+async function performAction(skill: Skill, action: AutoSkillAction) {
   performingAction.value = action
   try {
     await performAutoSkillAction(skill.name, action)

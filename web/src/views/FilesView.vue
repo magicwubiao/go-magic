@@ -308,7 +308,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
 // 移动端隐藏“更新时间”列,避免固定列宽超出屏幕导致文件列表显示不全
 const uploadColumnsComputed = computed<DataTableColumns<sessionsApi.FileItem>>(() =>
   isMobile.value
-    ? uploadColumns.filter((c) => c.key !== 'updated')
+    ? uploadColumns.filter((c) => (c as { key?: string }).key !== 'updated')
     : uploadColumns
 )
 

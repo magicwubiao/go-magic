@@ -62,10 +62,12 @@ export interface UsageInsight {
   }>
 }
 
+// 后端 usage.Manager.GetBudget() 始终序列化全部字段（无 omitempty），
+// getUsageBudget 的 catch 兜底也返回完整对象，故字段为必填。
 export interface UsageBudget {
-  limit?: number
-  current?: number
-  alert_threshold?: number
+  limit: number
+  current: number
+  alert_threshold: number
 }
 
 export async function getUsageToday(): Promise<TodayStats> {

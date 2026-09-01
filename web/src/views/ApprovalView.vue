@@ -240,7 +240,7 @@ const stats = ref<ApprovalStats>({
 
 // History
 const historyRecords = ref<ApprovalHistoryRecord[]>([])
-const historyPagination = ref({ pageSize: 20 })
+const historyPagination = ref<{ pageSize: number; itemCount?: number }>({ pageSize: 20 })
 
 // Patterns
 const trustedCommands = ref<TrustedPattern[]>([])
