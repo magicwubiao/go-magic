@@ -196,7 +196,7 @@
               <n-text v-if="activeBot?.title" depth="3" style="font-size: 12px;">{{ activeBot.title }}</n-text>
             </div>
           </div>
-          <n-space :size="6" align="center">
+          <n-space :size="6" align="center" class="chat-actions">
             <n-tag :type="(activeBot?.runtime?.online) ? 'success' : 'default'" size="small">
               {{ activeBot?.runtime?.online ? t('bots.online') : t('bots.offline') }}
             </n-tag>
@@ -393,7 +393,7 @@
               {{ m }}
             </n-tag>
           </div>
-          <n-space :size="6" align="center">
+          <n-space :size="6" align="center" class="chat-actions">
             <n-button quaternary size="small" @click="openRoomEdit">
               <template #icon><n-icon><CreateOutline /></n-icon></template>
             </n-button>
@@ -754,13 +754,13 @@
           </n-form-item>
           <n-grid :cols="2" :x-gap="12">
             <n-form-item-gi :label="t('rooms.maxRounds')">
-              <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
                 <n-slider v-model:value="roomForm.max_rounds" :min="1" :max="6" :step="1" style="flex: 1;" />
                 <n-text style="min-width: 16px;">{{ roomForm.max_rounds }}</n-text>
               </div>
             </n-form-item-gi>
             <n-form-item-gi :label="t('rooms.maxMessages')">
-              <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
                 <n-slider v-model:value="roomForm.max_messages" :min="4" :max="40" :step="2" style="flex: 1;" />
                 <n-text style="min-width: 24px;">{{ roomForm.max_messages }}</n-text>
               </div>
@@ -1334,12 +1334,26 @@ const showRoomEditor = ref(false)
 const editingRoomId = ref<string | null>(null)
 const roomSaving = ref(false)
 
+// Room limit defaults — must match backend DefaultRoomMaxRounds/MaxMessages.
+const DEFAULT_MAX_ROUNDS = 3
+const DEFAULT_MAX_MESSAGES = 10
+
+/** Clamp a room limit into its valid range; fall back to the default when 0/NaN. */
+function normRounds(v: number | undefined): number {
+  const n = Number.isFinite(v) && (v as number) > 0 ? (v as number) : DEFAULT_MAX_ROUNDS
+  return Math.min(6, Math.max(1, Math.round(n)))
+}
+function normMessages(v: number | undefined): number {
+  const n = Number.isFinite(v) && (v as number) > 0 ? (v as number) : DEFAULT_MAX_MESSAGES
+  return Math.min(40, Math.max(4, Math.round(n)))
+}
+
 const roomForm = reactive({
   name: '',
   topic: '',
   members: [] as string[],
-  max_rounds: 3,
-  max_messages: 10,
+  max_rounds: DEFAULT_MAX_ROUNDS,
+  max_messages: DEFAULT_MAX_MESSAGES,
 })
 
 function openRoomCreate() {
@@ -1347,8 +1361,8 @@ function openRoomCreate() {
   roomForm.name = ''
   roomForm.topic = ''
   roomForm.members = []
-  roomForm.max_rounds = 3
-  roomForm.max_messages = 10
+  roomForm.max_rounds = DEFAULT_MAX_ROUNDS
+  roomForm.max_messages = DEFAULT_MAX_MESSAGES
   showRoomEditor.value = true
   if (botsStore.bots.length === 0) {
     void botsStore.loadBots()
@@ -1361,8 +1375,10 @@ function openRoomEdit() {
   roomForm.name = activeRoom.value.name
   roomForm.topic = activeRoom.value.topic || ''
   roomForm.members = [...activeRoom.value.members]
-  roomForm.max_rounds = activeRoom.value.max_rounds
-  roomForm.max_messages = activeRoom.value.max_messages
+  // Old rooms may carry 0 / missing limits — normalize before rendering so the
+  // sliders never show an out-of-range thumb (0 on a min=1 slider).
+  roomForm.max_rounds = normRounds(activeRoom.value.max_rounds)
+  roomForm.max_messages = normMessages(activeRoom.value.max_messages)
   showRoomEditor.value = true
   if (botsStore.bots.length === 0) {
     void botsStore.loadBots()
@@ -1404,8 +1420,8 @@ async function saveRoomEditor() {
     name: roomForm.name.trim(),
     topic: roomForm.topic.trim(),
     members: [...roomForm.members],
-    max_rounds: roomForm.max_rounds,
-    max_messages: roomForm.max_messages,
+    max_rounds: normRounds(roomForm.max_rounds),
+    max_messages: normMessages(roomForm.max_messages),
   }
   try {
     if (editingRoomId.value) {
@@ -2996,6 +3012,7 @@ async function loadCandidates() {
   .bot-rail {
     width: 100%;
     border-right: none;
+    animation: mobile-rail-in 0.22s ease;
   }
 
   .bot-rail.rail-collapsed-mobile {
@@ -3008,12 +3025,14 @@ async function loadCandidates() {
 
   .chat-pane {
     width: 100%;
+    animation: mobile-pane-in 0.22s ease;
   }
 
   .back-btn {
     display: flex;
   }
 
+  /* 头部两行布局：第一行 返回+标题+状态；第二行 操作按钮右对齐 */
   .chat-header {
     flex-wrap: wrap;
     gap: 6px;
@@ -3026,6 +3045,13 @@ async function loadCandidates() {
     font-size: 12px;
     height: 30px;
     padding: 0 8px;
+  }
+  .chat-actions {
+    order: 3;
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: auto;
+    flex-wrap: wrap; /* 操作按钮多时(在线/活跃/routines/清空/编辑)允许内部换行 */
   }
 
   .chat-messages {
@@ -3065,6 +3091,19 @@ async function loadCandidates() {
     padding-right: 42px; /* 内置发送按钮仍留空间 */
   }
 
+  /* 欢迎页统计卡片均分宽度，避免 3 卡片溢出小屏 */
+  .welcome {
+    padding: 16px;
+  }
+  .welcome-stats {
+    width: 100%;
+  }
+  .stat-card {
+    min-width: 0;
+    flex: 1;
+    padding: 12px 8px;
+  }
+
   /* rail 行触控面积增大 */
   .bot-row {
     padding: 10px;
@@ -3072,9 +3111,59 @@ async function loadCandidates() {
   .row-menu {
     opacity: 1;
   }
+  .room-delete-btn {
+    opacity: 1; /* 手机无 hover，删除按钮必须常显 */
+  }
 
   .member-tags {
     display: none;
+  }
+
+  /* 群聊 @ 提及浮层贴边不溢出 */
+  .mention-popup {
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
+
+  /* 弹窗内操作行(如 routines 的运行/编辑/删除)允许换行，避免溢出 */
+  .modal-responsive :deep(.n-space) {
+    flex-wrap: wrap;
+  }
+}
+
+/* rail/pane 切换进入动画（仅移动端 display 切换时播放） */
+@keyframes mobile-pane-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes mobile-rail-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* ========== Small phones (<480px) ========== */
+@media (max-width: 480px) {
+  .rail-header {
+    padding: 10px 10px 6px;
+  }
+  .welcome-greeting {
+    font-size: 22px;
+  }
+  .stat-value {
+    font-size: 20px;
+  }
+  .chat-header {
+    padding: 6px 8px;
+  }
+  .message {
+    gap: 6px;
+  }
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
   }
 }
 
