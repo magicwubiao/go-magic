@@ -2184,7 +2184,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// No tool calls - return the response
 		if len(toolCalls) == 0 {
-			content := utils.TruncateDetailed(llmResp.Content, a.maxMsgLen)
+			content := provider.StripLegacyPlaceholder(utils.TruncateDetailed(llmResp.Content, a.maxMsgLen))
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
 				Content:   content,
@@ -2215,7 +2215,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   utils.TruncateDetailed(fullContent, a.maxMsgLen),
+			Content:   provider.StripLegacyPlaceholder(utils.TruncateDetailed(fullContent, a.maxMsgLen)),
 			ToolCalls: tcs,
 			Timestamp: time.Now(),
 		})
@@ -3203,16 +3203,19 @@ func (a *Agent) buildLLMMessages() []provider.Message {
 		// model's self-view (Hermes #66429). Filtering them out here
 		// also prevents any placeholder string from leaking into the
 		// outbound payload at all — eliminating the mimic surface
-		// entirely for this class of message.
-		if strings.TrimSpace(stripped) == "" && len(m.ToolCalls) == 0 {
+		// entirely for this class of message. IsEmptyAssistantContent
+		// additionally treats the legacy "No response content" phrase as
+		// empty, so histories contaminated before the placeholder became
+		// invisible self-heal instead of re-sending the phrase.
+		if provider.IsEmptyAssistantContent(stripped) && len(m.ToolCalls) == 0 {
 			droppedEmpty++
 			continue
 		}
 		// Assistant with tool_calls but empty content: keep it (the
-		// tool_calls anchor the following tool results) and fill with a
-		// non-whitespace, no-bracket-pair placeholder so GLM 1214 and
+		// tool_calls anchor the following tool results) and fill with the
+		// invisible non-whitespace placeholder so GLM 1214 and
 		// ValidateMessageAlternation both pass.
-		if strings.TrimSpace(stripped) == "" {
+		if provider.IsEmptyAssistantContent(stripped) {
 			stripped = emptyAssistantPlaceholder
 		}
 		m.Content = stripped

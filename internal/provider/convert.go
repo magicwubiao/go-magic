@@ -12,15 +12,70 @@ import (
 // emptyAssistantPlaceholder is the provider-level placeholder for empty
 // assistant content (used when a tool_calls assistant turn has no text).
 //
-// CRITICAL: must be a full natural-language sentence with NO wrapping
-// punctuation. GLM mimics structural-looking placeholders as output
-// templates:
-//   - "[no content]" -> model wrapped replies in []
-//   - "..."          -> model echoed the ellipsis
+// It must satisfy two conflicting constraints at once:
+//  1. Survive strings.TrimSpace — zhipu/GLM throws error 1214
+//     ("messages 参数非法") on assistant content that is empty, pure
+//     whitespace, or nil, so a single space or "" is rejected.
+//  2. Be invisible to the model — any READABLE placeholder becomes part of
+//     the model's own visible history and is then echoed back verbatim as
+//     output. This has bitten us repeatedly:
+//     - "[no content]"        -> model wrapped every reply in brackets
+//     - "..."                 -> model echoed the ellipsis
+//     - "No response content" -> model repeated the sentence, flooding
+//     non-zhipu providers' output with the phrase
 //
-// A complete sentence reads as content, not as a formatting template,
-// so the model does not reproduce it as an output pattern.
-const emptyAssistantPlaceholder = "No response content"
+// A single ZERO WIDTH SPACE (U+200B) is the only marker that satisfies both:
+// it is NOT a Unicode White_Space codepoint (so TrimSpace leaves it intact),
+// yet it renders as nothing and carries no natural-language signal for the
+// model to copy. The downside — invisibility in logs — is accepted because
+// every readable placeholder tried so far leaked into output.
+const emptyAssistantPlaceholder = "\u200b"
+
+// LegacyEmptyPlaceholder is the readable placeholder used in earlier releases.
+// It leaked into model output (models echo their own visible history), so it
+// is now stripped during normalization so already-contaminated histories
+// self-heal. See IsEmptyAssistantContent and StripLegacyPlaceholder.
+const LegacyEmptyPlaceholder = "No response content"
+
+// IsEmptyAssistantContent reports whether content is effectively empty — i.e.
+// carries no information for the model: pure whitespace, invisible zero-width
+// markers only, or only the legacy readable placeholder phrase. Such content
+// must not be (re)sent to a provider, and should be treated exactly like
+// empty content by callers.
+func IsEmptyAssistantContent(content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return true
+	}
+	s := strings.Map(func(r rune) rune {
+		switch r {
+		case '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff':
+			return -1
+		}
+		return r
+	}, content)
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, strings.ToLower(LegacyEmptyPlaceholder), "")
+	return strings.TrimSpace(s) == ""
+}
+
+// StripLegacyPlaceholder removes lines that consist solely of the legacy
+// readable placeholder phrase (case-insensitive). The model echoed the phrase
+// as standalone repeated lines, so line-scoped removal is safe and does not
+// touch legitimate prose that merely contains the words.
+func StripLegacyPlaceholder(content string) string {
+	if content == "" || !strings.Contains(content, "response content") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.EqualFold(strings.TrimSpace(ln), LegacyEmptyPlaceholder) {
+			continue
+		}
+		cleaned = append(cleaned, ln)
+	}
+	return strings.Join(cleaned, "\n")
+}
 
 // DashScopeTurnLimit is the service-side hard cap on the total number of
 // messages ("turns") per request for the DashScope compatible-mode API.
@@ -377,25 +432,18 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 				})
 			}
 			openAIMsg["content"] = parts
-		} else if len(msg.ToolCalls) > 0 && strings.TrimSpace(msg.Content) == "" {
-			// Assistant message with tool_calls and no content: use a stable
-			// non-empty placeholder. A single space or "" still triggers
-			// zhipu (GLM) error 1214 ("messages 参数非法") because Zhipu's
-			// validator treats whitespace-only content equivalently to
-			// truly empty. Deepseek, OpenAI and others tolerate empty
-			// content here — this is exactly why "switch to deepseek
-			// works, zhipu still fails" on an otherwise identical
-			// payload.
-			//
-			// CRITICAL: do NOT use structural-looking placeholders.
-			// GLM mimics them as output templates:
-			//   - "[no content]" -> model wrapped replies in []
-			//   - "..."          -> model echoed the ellipsis
-			// Use a full natural-language sentence with no wrapping
-			// punctuation; a complete sentence reads as content, not as
-			// a formatting template, so the model does not reproduce it.
+		} else if len(msg.ToolCalls) > 0 && IsEmptyAssistantContent(msg.Content) {
+			// Assistant message with tool_calls and no (effective) content:
+			// use the invisible zero-width placeholder. A single space or ""
+			// still triggers zhipu (GLM) error 1214 ("messages 参数非法")
+			// because Zhipu's validator treats whitespace-only content
+			// equivalently to truly empty. Deepseek, OpenAI and others
+			// tolerate empty content here — this is exactly why "switch to
+			// deepseek works, zhipu still fails" on an otherwise identical
+			// payload. The placeholder is invisible precisely so the model
+			// does not reproduce it (see emptyAssistantPlaceholder).
 			openAIMsg["content"] = emptyAssistantPlaceholder
-		} else if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+		} else if msg.Role == "assistant" && IsEmptyAssistantContent(msg.Content) && len(msg.ToolCalls) == 0 {
 			// Defensive: empty assistant with no tool_calls reaching here means
 			// buildLLMMessages did not filter it (e.g. a code path that
 			// bypasses the agent layer). Emit the same natural-language

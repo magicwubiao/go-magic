@@ -8,31 +8,32 @@ import (
 )
 
 // emptyAssistantPlaceholder is a stable, non-empty content value used to
-// patch assistant messages whose content was lost to mid-stream truncation.
-// Rationale: the strictness axis between providers is the single biggest
-// reason "switch to deepseek works / zhipu keeps 1214". Zhipu/GLM throws
-// error 1214 ("messages 参数非法") on assistant content that is either
-// (a) an empty string, (b) a pure whitespace string, or (c) nil.
-// ValidateMessageAlternation mirrors Zhipu's strictness by checking
-// strings.TrimSpace(msg.Content) == "", so a single-space placeholder is
-// indistinguishable from truly empty to the validator AND to Zhipu.
+// patch assistant messages whose content was lost to mid-stream truncation
+// (or a tool-call-only turn). Rationale: the strictness axis between
+// providers is the single biggest reason "switch to deepseek works / zhipu
+// keeps 1214". Zhipu/GLM throws error 1214 ("messages 参数非法") on
+// assistant content that is either (a) an empty string, (b) a pure whitespace
+// string, or (c) nil. ValidateMessageAlternation mirrors Zhipu's strictness
+// by checking strings.TrimSpace(msg.Content) == "".
 //
-// A single ZERO WIDTH SPACE (U+200B) would survive TrimSpace because it is
-// not a Unicode White_Space category codepoint — but tests and log
-// inspection can't see it. We therefore use a visible-but-minimal marker
-// so debugging payloads shows exactly when a placeholder was inserted,
-// while introducing zero semantic bias.
+// The placeholder must ALSO be invisible to the model. Every readable marker
+// tried so far became part of the model's visible history and was echoed back
+// as output:
+//   - "[no content]"        -> model wrapped every reply in square brackets
+//   - "..."                 -> model echoed the ellipsis as its whole reply
+//   - "No response content" -> model repeated the sentence verbatim, flooding
+//     non-zhipu providers' output with the phrase
 //
-// IMPORTANT: the marker must NOT be a structural template the model can
-// mimic and apply to its own output. History has shown GLM mimics:
-//   - "[no content]" -> model wrapped every reply in square brackets
-//   - "..."          -> model echoed the ellipsis as its whole reply
+// A single ZERO WIDTH SPACE (U+200B) is the only marker that is non-empty to
+// TrimSpace (it is not a Unicode White_Space codepoint, so it survives) while
+// rendering as nothing and carrying no natural-language signal for the model
+// to copy. The trade-off — it is invisible in logs — is accepted because the
+// visible alternatives all leaked into output.
 //
-// The fix is to use a full natural-language sentence with NO wrapping
-// punctuation (no [], (), {}, <>, no bare punctuation). A complete
-// sentence reads as content, not as a formatting template, so the model
-// does not reproduce it as an output pattern.
-const emptyAssistantPlaceholder = "No response content"
+// IMPORTANT: empty content is patched only in the outbound copy
+// (buildLLMMessages + convert.go) right before sending to the provider, never
+// in the stored history.
+const emptyAssistantPlaceholder = "\u200b"
 
 // Message alternation validation, after Hermes Agent's strict pre-provider
 // enforcement. Providers reject malformed histories (two assistants in a row,
