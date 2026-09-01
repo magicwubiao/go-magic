@@ -31,6 +31,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronUpOutline, ChevronDownOutline } from '@vicons/ionicons5'
 import { Marked } from 'marked'
+import { stripZeroWidth } from '@/utils/text'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -249,7 +250,7 @@ thinkingMarked.use({
 //  3) 围栏出现奇数次时补一个闭合围栏，防止未闭合代码块吞掉后续内容
 function sanitizeThinking(src: string): string {
   if (!src) return src
-  const stripped = src.replace(/<\/?\s*think\s*>/gi, '')
+  const stripped = stripZeroWidth(src).replace(/<\/?\s*think\s*>/gi, '')
   const lines = stripped.split('\n')
   const out: string[] = []
   let fenceCount = 0
@@ -298,7 +299,7 @@ const renderedReasoning = computed(() => {
 const renderedFinal = computed(() => {
   const content = finalPart.value
   if (!content) return ''
-  return thinkingMarked.parse(content) as string
+  return thinkingMarked.parse(stripZeroWidth(content)) as string
 })
 </script>
 

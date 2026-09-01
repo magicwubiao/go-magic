@@ -793,6 +793,7 @@ import {
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
+import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
 import type { Bot, BotRoutine } from '@/api/bots'
@@ -1681,6 +1682,7 @@ const mdCache = new Map<string, string>()
 const MD_CACHE_LIMIT = 200
 
 function renderMarkdown(content: string): string {
+  content = stripZeroWidth(content)
   const cached = mdCache.get(content)
   if (cached !== undefined) return cached
   const html = marked.parse(content) as string

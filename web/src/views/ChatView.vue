@@ -513,6 +513,7 @@ import { ref, computed, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
+import { stripZeroWidth } from '@/utils/text'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -788,6 +789,7 @@ const mdCache = new Map<string, string>()
 const MD_CACHE_LIMIT = 200
 
 function renderMarkdown(content: string): string {
+  content = stripZeroWidth(content)
   const cached = mdCache.get(content)
   if (cached !== undefined) return cached
   const html = marked.parse(content) as string

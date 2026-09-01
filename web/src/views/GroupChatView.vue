@@ -319,6 +319,7 @@ import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useGroupChatStore } from '@/stores/groupchat'
+import { stripZeroWidth } from '@/utils/text'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
@@ -426,6 +427,7 @@ const mdCache = new Map<string, string>()
 const MD_CACHE_LIMIT = 200
 
 function renderMarkdown(content: string): string {
+  content = stripZeroWidth(content)
   const cached = mdCache.get(content)
   if (cached !== undefined) return cached
   const html = marked.parse(content) as string

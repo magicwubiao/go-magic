@@ -77,6 +77,37 @@ func StripLegacyPlaceholder(content string) string {
 	return strings.Join(cleaned, "\n")
 }
 
+// StripZeroWidth removes zero-width characters that carry no meaning in chat
+// prose: our own placeholder (U+200B) plus BOM/word-joiner lookalikes
+// (U+FEFF, U+2060). GLM echoes the placeholder from its own visible history
+// into its replies; the web frontend renders markdown with breaks:true, and a
+// line containing only U+200B is NOT a blank line (it has a character), so it
+// renders as a full line-height <br> — a run of echoed placeholders becomes a
+// wall of blank space. Rune removal is safe to apply per stream chunk
+// (JSON-decoded chunks always contain complete runes) and on full strings
+// alike; U+200C/U+200D are deliberately NOT stripped because they are
+// semantically required in some scripts and emoji sequences.
+func StripZeroWidth(content string) string {
+	if !strings.ContainsAny(content, "\u200b\u2060\ufeff") {
+		return content
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\u200b', '\u2060', '\ufeff':
+			return -1
+		}
+		return r
+	}, content)
+}
+
+// SanitizeAssistantContent normalizes final assistant content before it is
+// stored or streamed to the UI: strips the legacy readable placeholder
+// (line-scoped) and any zero-width characters (both the current invisible
+// placeholder and whatever the model echoed from it).
+func SanitizeAssistantContent(content string) string {
+	return StripZeroWidth(StripLegacyPlaceholder(content))
+}
+
 // DashScopeTurnLimit is the service-side hard cap on the total number of
 // messages ("turns") per request for the DashScope compatible-mode API.
 // The server rejects requests whose messages array exceeds 150 items with

@@ -1940,6 +1940,11 @@ Please provide a comprehensive, well-structured final response based on these su
 					lastErr = resp.Error
 					return
 				}
+				// GLM echoes the zero-width placeholder from its own history;
+				// strip it before the chunk reaches fullContent or the UI.
+				// JSON-decoded chunks always contain complete runes, so
+				// per-chunk rune removal is boundary-safe.
+				resp.Content = provider.StripZeroWidth(resp.Content)
 				if resp.Done {
 					// Done chunk 携带的 Content 语义因 provider 而异：
 					// - stream.go/anthropic.go: 完整累积内容（覆盖正确）
@@ -2052,6 +2057,11 @@ Please provide a comprehensive, well-structured final response based on these su
 					lastErr = resp.Error
 					return
 				}
+				// GLM echoes the zero-width placeholder from its own history;
+				// strip it before the chunk reaches fullContent or the UI.
+				// JSON-decoded chunks always contain complete runes, so
+				// per-chunk rune removal is boundary-safe.
+				resp.Content = provider.StripZeroWidth(resp.Content)
 				if resp.Done {
 					// Done chunk 的 Content 可能为空（perplexity/gemini/wenxin），
 					// 仅在非空时覆盖，避免清空已累积的内容
@@ -2155,7 +2165,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			// ReasoningContent 包进 <think> 标签，否则 UI 端
 			// ReasoningContent 组件解析不到思考过程（DashScope
 			// qwen3.x thinking / zhipu GLM thinking 等都依赖该包裹）。
-			wrapped := wrapLLMReasoning(resp.ReasoningContent, resp.Content)
+			wrapped := provider.SanitizeAssistantContent(wrapLLMReasoning(resp.ReasoningContent, resp.Content))
 			fullContent = utils.TruncateDetailed(wrapped, a.maxMsgLen)
 			toolCalls = resp.ToolCalls
 			for i := range toolCalls {
@@ -2184,7 +2194,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// No tool calls - return the response
 		if len(toolCalls) == 0 {
-			content := provider.StripLegacyPlaceholder(utils.TruncateDetailed(llmResp.Content, a.maxMsgLen))
+			content := provider.SanitizeAssistantContent(utils.TruncateDetailed(llmResp.Content, a.maxMsgLen))
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
 				Content:   content,
@@ -2215,7 +2225,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		a.history = append(a.history, provider.Message{
 			Role:      "assistant",
-			Content:   provider.StripLegacyPlaceholder(utils.TruncateDetailed(fullContent, a.maxMsgLen)),
+			Content:   provider.SanitizeAssistantContent(utils.TruncateDetailed(fullContent, a.maxMsgLen)),
 			ToolCalls: tcs,
 			Timestamp: time.Now(),
 		})
