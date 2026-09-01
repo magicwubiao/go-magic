@@ -543,7 +543,7 @@ import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, ChevronDownOutline, ChevronForwardOutline, RefreshOutline, BuildOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, BuildOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -797,7 +797,9 @@ function renderMarkdown(content: string): string {
   if (mdCache.size >= MD_CACHE_LIMIT) {
     const keys = mdCache.keys()
     for (let i = 0; i < MD_CACHE_LIMIT / 2; i++) {
-      mdCache.delete(keys.next().value)
+      const r = keys.next()
+      if (r.done) break
+      mdCache.delete(r.value)
     }
   }
   mdCache.set(content, html)
@@ -1177,13 +1179,6 @@ function getSessionGoals(sessionId: string): sessionsApi.SessionGoal[] {
   return sessionGoals.value[sessionId] || []
 }
 
-// Get goal progress for display
-function getSessionGoalProgress(goalId: string, sessionId: string): number {
-  const goals = getSessionGoals(sessionId)
-  const goal = goals.find(g => g.id === goalId)
-  return goal?.progress || 0
-}
-
 // Navigate to goals page
 function goToGoal(goalId: string) {
   router.push(`/goals/${goalId}`)
@@ -1231,16 +1226,6 @@ function handleSessionScroll(e: Event) {
       chatStore.loadMoreSessions()
     }, 200)
   }
-}
-
-// Throttled scroll to bottom - only scroll on message count changes, not on every stream content update
-let scrollTimer: ReturnType<typeof setTimeout> | null = null
-function throttledScrollToBottom() {
-  if (scrollTimer) return
-  scrollTimer = setTimeout(() => {
-    scrollToBottom()
-    scrollTimer = null
-  }, 150)
 }
 
 watch(() => chatStore.messages.length, scrollToBottom)

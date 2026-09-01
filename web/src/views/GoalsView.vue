@@ -3,7 +3,7 @@
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('goals.title') }}</h2>
       <n-space>
-        <n-button :loading="loading" @click="loadGoals()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
+        <n-button :loading="goalsStore.loading" @click="goalsStore.loadGoals()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
         <n-button type="primary" @click="openAddGoal">+ {{ t('goals.newGoal') }}</n-button>
       </n-space>
     </n-space>

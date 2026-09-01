@@ -45,7 +45,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ToolCallEvent, FileOp } from '@/stores/chat'
+import type { ToolCallEvent } from '@/stores/chat'
 
 const props = defineProps<{
   toolCall: ToolCallEvent

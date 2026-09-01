@@ -358,17 +358,6 @@ async function handleRefreshTools(name: string) {
   }
 }
 
-function openAddModal() {
-  isEditing.value = false
-  formData.name = ''
-  formData.transport = 'stdio'
-  formData.command = ''
-  formData.argsStr = ''
-  formData.url = ''
-  formData.envStr = ''
-  showAddModal.value = true
-}
-
 async function handleSave() {
   if (!formData.name) {
     message.error(t('mcp.serverNameRequired'))

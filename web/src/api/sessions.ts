@@ -36,7 +36,7 @@ export interface Message {
   tool_name?: string
   tool_call_id?: string
   images?: string[]
-  files?: unknown[]
+  files?: Partial<UploadedFile>[]
   // 前端附加：assistant 回复对应本轮执行的工具调用摘要（UI 展示用）。
   // 后端 /sessions/{id}/messages 暂不返回该字段，前端在 streaming 结束时写入内存快照。
   tool_calls_snapshot?: unknown[]

@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as modelsApi from '@/api/models'
-import type { ModelOptionsResponse } from '@/api/models'
 import { useConfigStore } from './config'
 
 export interface Model {

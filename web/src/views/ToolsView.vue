@@ -2,7 +2,7 @@
   <div>
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
       <h2 style="margin: 0;">{{ t('tools.title') }}</h2>
-      <n-button :loading="loading" @click="toolsStore.loadToolsets()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
+      <n-button :loading="toolsStore.loading" @click="toolsStore.loadToolsets()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
     </div>
     <n-spin v-if="toolsStore.loading" />
     <template v-else>

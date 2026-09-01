@@ -3,7 +3,7 @@
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('cron.title') }}</h2>
       <n-space>
-        <n-button :loading="loading" @click="cronStore.loadJobs()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
+        <n-button :loading="cronStore.loading" @click="cronStore.loadJobs()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
         <n-button type="primary" @click="openCreateModal">+ {{ t('cron.createJob') }}</n-button>
       </n-space>
     </n-space>

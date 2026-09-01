@@ -116,7 +116,7 @@
                       </template>
                       <!-- Regular skill delete + toggle -->
                       <template v-else>
-                        <n-popconfirm v-if="skill.source !== 'builtin'" @positive-click="deleteSkillConfirm(skill.id, skill.name)" @click.stop>
+                        <n-popconfirm v-if="skill.source !== 'builtin'" @positive-click="deleteSkillConfirm(skill.id)" @click.stop>
                           <template #trigger>
                             <n-button size="small" type="error" quaternary circle @click.stop>
                               <template #icon>
@@ -564,7 +564,7 @@ async function toggleSkill(id: string, enabled: boolean): Promise<void> {
   }
 }
 
-async function deleteSkillConfirm(id: string, name: string): Promise<void> {
+async function deleteSkillConfirm(id: string): Promise<void> {
   try {
     await deleteSkill(id)
     message.success(t('skills.deleted'))

@@ -211,7 +211,7 @@ import { useI18n } from 'vue-i18n'
 import {
   NGrid, NGi, NCard, NStatistic, NTag, NDataTable, NSelect,
   NButton, NIcon, NModal, NFormItem, NInputNumber, NSlider,
-  NProgress, NEmpty
+  NProgress
 } from 'naive-ui'
 import { RefreshCircleOutline, WalletOutline } from '@vicons/ionicons5'
 import type { DataTableColumns } from 'naive-ui'
