@@ -12,8 +12,10 @@ services:
     container_name: go-magic
     restart: unless-stopped
     ports:
-      - "8642:8642"   # API
-      - "8643:8643"   # Webhook
+      # `magic server` 默认端口是 5000；镜像 CMD 已显式指定 --port 8642，
+      # 因此这里映射 8642 才对得上。若覆盖 command，请同步修改端口。
+      - "8642:8642"   # API / Web UI
+      - "8643:8643"   # Webhook（预留，各网关平台实际用各自的回调端口）
     environment:
       - TZ=UTC
     volumes:

@@ -80,6 +80,10 @@ USER magic
 # Expose ports
 # 8642: Main API / Web UI
 # 8643: Webhook
+#
+# 注意：各网关平台（钉钉/飞书/Discord 等）的 webhook 回调用的是各自的默认端口
+# （8080 / 8081 / 8084 ...，见 internal/gateway 各平台 SetCallbackPort），
+# 并不是统一的 8643；这里的 8643 仅为预留。
 EXPOSE 8642 8643
 
 # Health check
@@ -87,5 +91,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:8642/api/health || exit 1
 
 # Default command - start server with web UI
+#
+# `magic server` 的默认端口是 5000，必须显式指定 8642 才能与上面的
+# EXPOSE / docker-compose 的端口映射对齐，否则容器内监听 5000 → 映射失效。
 ENTRYPOINT ["/app/magic"]
-CMD ["server"]
+CMD ["server", "--port", "8642"]

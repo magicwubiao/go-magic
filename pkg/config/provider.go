@@ -233,8 +233,8 @@ func ListProviders() []ProviderInfo {
 		},
 		{
 			Name:         "huoshan",
-			DisplayName:  "火山引擎 (豆包)",
-			Description:  "字节跳动豆包大模型，经火山方舟 Ark 提供",
+			DisplayName:  "Volcengine (Doubao)",
+			Description:  "ByteDance Doubao models via Volcengine Ark",
 			Models:       []string{"doubao-seed-1.6", "doubao-1.5-pro-32k", "doubao-1.5-thinking-pro"},
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,

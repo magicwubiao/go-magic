@@ -98,8 +98,10 @@ func init() {
 	codingLintCmd.Flags().StringP("format", "F", "", "Output format (text, json, xml)")
 
 	// Flags for test command
+	// 注意：本命令的本地标志不要占用 -p。全局持久化标志 --profile 已占用 -p，
+	// cobra 合并 flagset 时会因简写重复直接 panic，且改用长名也无法绕过。
 	codingTestCmd.Flags().BoolP("verbose", "v", false, "Verbose output")
-	codingTestCmd.Flags().StringP("pattern", "p", "", "Test pattern to run")
+	codingTestCmd.Flags().String("pattern", "", "Test pattern to run")
 	codingTestCmd.Flags().BoolP("coverage", "c", false, "Generate coverage report")
 
 	// Flags for build command

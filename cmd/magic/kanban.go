@@ -163,8 +163,10 @@ func init() {
 	kanbanCmd.AddCommand(kanbanDeleteCmd)
 
 	// Flags for create
+	// 注意：本地标志不要占用 -p。全局持久化标志 --profile 已占用 -p，
+	// cobra 合并 flagset 时会因简写重复直接 panic，且改用长名也无法绕过。
 	kanbanCreateCmd.Flags().StringVarP(&kanbanAssignee, "assignee", "a", "", "Task assignee")
-	kanbanCreateCmd.Flags().IntVarP(&kanbanPriority, "priority", "p", 0, "Priority (0=low, 1=medium, 2=high, 3=critical)")
+	kanbanCreateCmd.Flags().IntVar(&kanbanPriority, "priority", 0, "Priority (0=low, 1=medium, 2=high, 3=critical)")
 	kanbanCreateCmd.Flags().StringVarP(&kanbanBody, "body", "b", "", "Task description")
 	kanbanCreateCmd.Flags().StringVarP(&kanbanParentID, "parent", "", "", "Parent task ID")
 	kanbanCreateCmd.Flags().StringVarP(&kanbanTenant, "tenant", "t", "", "Tenant/namespace")

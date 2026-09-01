@@ -272,7 +272,7 @@ var providerModels = map[string][]string{
 // interactiveModelSelect presents an interactive UI for selecting provider and model.
 func interactiveModelSelect(cfg *config.Config) (string, string) {
 	providers := []string{"openai", "anthropic", "deepseek", "minimax", "zhipu", "ollama", "openrouter", "dashscope", "vllm", "gemini", "groq", "together", "mistral", "cohere", "perplexity", "huoshan", "wenxin", "moonshot", "mimo", "hunyuan", "longcat"}
-	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "火山引擎 (豆包)", "Wenxin (Baidu)", "Moonshot (Kimi)", "MiMo (Xiaomi)", "Hunyuan (Tencent)", "LongCat (Meituan)"}
+	providerNames := []string{"OpenAI", "Anthropic", "DeepSeek", "MiniMax", "ZhiPu (GLM)", "Ollama (local)", "OpenRouter", "DashScope (Ali)", "vLLM (local)", "Gemini (Google)", "Groq (Fast)", "Together AI", "Mistral AI", "Cohere", "Perplexity", "Volcengine (Doubao)", "Wenxin (Baidu)", "Moonshot (Kimi)", "MiMo (Xiaomi)", "Hunyuan (Tencent)", "LongCat (Meituan)"}
 
 	fmt.Println("\n=== Interactive Model Selection ===")
 	fmt.Println("Use arrow keys (up/down) to navigate, Enter to select, q to quit.")

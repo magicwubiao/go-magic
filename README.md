@@ -362,7 +362,9 @@ Each provider supports multiple models:
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `DISCORD_BOT_TOKEN` | Discord bot token |
 | `GO_MAGIC_HOME` | Config directory (default: `~/.magic`) |
-| `GO_MAGIC_PROFILE` | Profile name (default: `default`) |
+| `GO_MAGIC_CORS_ORIGINS` | Comma-separated CORS allowed origins (for separated web/API deploy) |
+| `MAGIC_SKILL_DIR` | Additional skill directory |
+| `MAGIC_SESSION_ID` | Bind a CLI process to a specific session ID |
 
 ## Building from Source
 

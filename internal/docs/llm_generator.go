@@ -516,8 +516,9 @@ func (g *LLMGenerator) generateConfiguration() string {
 	buf.WriteString("| OPENAI_API_KEY | OpenAI API key |\n")
 	buf.WriteString("| ANTHROPIC_API_KEY | Anthropic API key |\n")
 	buf.WriteString("| DEEPSEEK_API_KEY | DeepSeek API key |\n")
-	buf.WriteString("| MAGIC_HOME | Config directory (default: ~/.magic) |\n")
-	buf.WriteString("| MAGIC_PROFILE | Active profile name |\n")
+	buf.WriteString("| GO_MAGIC_HOME | Config directory (default: ~/.magic) |\n")
+	buf.WriteString("| GO_MAGIC_CORS_ORIGINS | Comma-separated CORS allowed origins (for separated web/API deploy) |\n")
+	buf.WriteString("| MAGIC_SKILL_DIR | Additional skill directory |\n")
 	buf.WriteString("```\n\n")
 	return buf.String()
 }

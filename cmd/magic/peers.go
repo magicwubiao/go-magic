@@ -25,8 +25,11 @@ of known peers (<magicHome>/peers.json). A DM blocks until the remote bot
 finishes its turn, so a slow bot means a slow command.
 
 Quick start (machine A -> machine B):
-  # on B:  magic server (or magic gateway)  # relay endpoint listens on :8642
-  # on A:  magic peer add b http://192.168.1.20:8642
+  # on B: start the dashboard; the relay endpoint is served on the SAME port as
+  #       the dashboard (default 5000, or whatever --port you passed):
+  #         magic server                    -> http://<B>:5000/api/relay/v1/dm
+  #         magic server --port 8642        -> http://<B>:8642/api/relay/v1/dm
+  # on A:  magic peer add b http://192.168.1.20:5000
   # on A:  magic peer dm b researcher "What's the status of the report?"
 
 Security: if the remote has bot_mode.relay_token set, add it here with --token

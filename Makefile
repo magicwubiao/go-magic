@@ -154,7 +154,6 @@ docker-run:
 	docker run -d -p 8642:8642 -p 8643:8643 \
 		--name go-magic \
 		-v ~/.magic:/home/magic/.magic \
-		-e GO_MAGIC_PROFILE=default \
 		--restart unless-stopped \
 		$(DOCKER_REPO):$(VERSION)
 

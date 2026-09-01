@@ -363,7 +363,9 @@ magic usage -d 30
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token |
 | `DISCORD_BOT_TOKEN` | Discord Bot Token |
 | `GO_MAGIC_HOME` | 配置目录（默认：`~/.magic`） |
-| `GO_MAGIC_PROFILE` | Profile 名称（默认：`default`） |
+| `GO_MAGIC_CORS_ORIGINS` | 逗号分隔的 CORS 允许源（前后端分离部署时使用） |
+| `MAGIC_SKILL_DIR` | 额外的技能目录 |
+| `MAGIC_SESSION_ID` | 将 CLI 进程绑定到指定会话 ID |
 
 ## 从源码构建
 
