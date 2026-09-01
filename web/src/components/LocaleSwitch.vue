@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NDropdown } from 'naive-ui'
-import { useI18n } from 'vue-i18n'
 import { locales, setLocale, getLocale } from '../locales'
-
-const { t } = useI18n()
 
 const currentLocale = computed(() => getLocale())
 
