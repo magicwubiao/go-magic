@@ -4,69 +4,125 @@
 # ===========================================
 
 services:
-  # Main application
+  # ============================
+  # Magic Agent (主应用)
+  # 访问: http://<服务器IP>:5000
+  # 数据持久化: ./data/.magic -> 容器 /home/magic/.magic
+  # ============================
   magic:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: go-magic
-    restart: unless-stopped
+    restart: unless-stopped         # 崩溃/重启自动恢复
+    stop_grace_period: 30s
     ports:
-      - "8642:8642"   # API
-      - "8643:8643"   # Webhook
-      - "8648:8648"   # Web UI
+      - "127.0.0.1:5000:5000"       # 只绑本地回环, 外网走 Caddy 反代
+      - "8643:8643"                 # Webhook (如需对公可放开)
     environment:
-      - TZ=UTC
+      - TZ=Asia/Shanghai
+      - GO_MAGIC_HOME=/home/magic/.magic
     volumes:
-      - magic-config:/home/magic/.magic
-      - /var/run/docker.sock:/var/run/docker.sock
+      # --- 配置和会话数据持久化 (最关键!) ---
+      - ./data/magic-config:/home/magic/.magic
+      # --- 如需 Agent 操作宿主机 Docker, 取消注释 ---
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # --- 如需 Agent 访问宿主机上的工作区代码, 取消注释并改路径 ---
+      # - /home/yourname/workspace:/workspace:rw
     networks:
       - magic-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8642/api/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
+             "http://localhost:5000/api/system/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
-  # Optional: Redis for caching
-  redis:
-    image: redis:7-alpine
-    container_name: magic-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - magic-network
-    command: redis-server --appendonly yes
+  # ============================
+  # Caddy (可选, HTTPS 自动 + 域名反代)
+  # 使用: 取消注释, 修改下面 Caddyfile 里的域名
+  # ============================
+  # caddy:
+  #   image: caddy:2-alpine
+  #   container_name: go-magic-caddy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./deploy/cloud/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+  #     - caddy-config:/config
+  #   networks:
+  #     - magic-network
+  #   depends_on:
+  #     magic:
+  #       condition: service_healthy
 
-  # Optional: PostgreSQL for sessions
-  postgres:
-    image: postgres:16-alpine
-    container_name: magic-postgres
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=magic
-      - POSTGRES_USER=magic
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-    secrets:
-      - postgres_password
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - magic-network
+  # ============================
+  # 可选: Redis (缓存层, 大流量场景使用)
+  # ============================
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: magic-redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - magic-network
+  #   command: redis-server --appendonly yes
+
+  # ============================
+  # 可选: PostgreSQL (会话存储, 默认用内置 SQLite 足够)
+  # ============================
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: magic-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: magic
+  #     POSTGRES_USER: magic
+  #     POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  #   secrets:
+  #     - postgres_password
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - magic-network
 
 networks:
   magic-network:
     driver: bridge
 
+# 匿名 volume 转 bind mount, 避免 docker volume prune 误删
+# 所有真实数据都落在 ./data/ 目录下, 方便备份/迁移
 volumes:
-  magic-config:
+  caddy-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/caddy/data
+  caddy-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/caddy/config
   redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis
   postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgres
 
-secrets:
-  postgres_password:
-    file: .postgres_password
+# secrets:
+#   postgres_password:
+#     file: .postgres_password

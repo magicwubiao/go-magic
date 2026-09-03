@@ -76,14 +76,14 @@ RUN mkdir -p /home/magic/.magic && \
 USER magic
 
 # Expose ports
-# 8642: Main API / Web UI
-# 8643: Webhook
-EXPOSE 8642 8643
+# 5000: Main API + Web Dashboard (consistent with `magic server` default --port)
+# 8643: Webhook callbacks
+EXPOSE 5000 8643
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8642/api/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5000/api/system/health || exit 1
 
-# Default command - start server with web UI
+# Default command - start server with web UI on default port
 ENTRYPOINT ["/app/magic"]
-CMD ["server"]
+CMD ["server", "--port", "5000"]

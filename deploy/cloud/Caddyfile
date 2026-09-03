@@ -1,0 +1,69 @@
+# ============================================================
+# Caddyfile — go-magic 云服务器 HTTPS 反代
+# 功能: 自动申请 Let's Encrypt HTTPS 证书 + HTTP Basic Auth 登录保护
+# ============================================================
+#
+# 👉 使用方法: 把下面两个 <你的域名> 改成你自己的即可
+#    例如: magic.example.com
+#
+# 👉 如何生成 basicauth 密码:
+#    docker run --rm caddy:2-alpine caddy hash-password --plaintext '你的强密码'
+#    把输出的 hash 替换到 JWT_TOKEN_HASH= 后面那一行
+#
+# ============================================================
+
+magic.<你的域名.com> {
+    # ---- 自动 HTTPS + HSTS ----
+    encode gzip zstd
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    header X-Content-Type-Options nosniff
+    header Referrer-Policy same-origin
+
+    # ============================================================
+    # 🔒 访问密码保护 (建议长期对公必须开启!)
+    # 如果不需要密码, 把下面 basicauth 整块注释掉即可
+    # 生成 hash: docker run --rm caddy:2-alpine caddy hash-password --plaintext '你的密码'
+    # ============================================================
+    basicauth * {
+        admin JWT_TOKEN_HASH=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    }
+
+    # ============================================================
+    # 🛡️ 简单防滥用限流 (每 IP 每秒最多 20 请求, 突发 50)
+    # ============================================================
+    rate_limit {remote.host} 20r/s 50
+
+    # ============================================================
+    # 🔀 反代到 Docker Compose 里的 magic 容器 (端口 5000)
+    #    容器名是 go-magic, 和 docker-compose.yml 里对应
+    # ============================================================
+    reverse_proxy go-magic:5000 {
+        # 大请求体 (上传文件/代码) 不限
+        flush_interval -1
+        header_up Host {host}
+        header_up X-Real-IP {remote.host}
+        header_up X-Forwarded-For {remote.host}
+        header_up X-Forwarded-Proto {scheme}
+
+        transport http {
+            versions 1.1
+            keepalive 32
+        }
+    }
+
+    # 简单日志 (按天滚动, 保留 7 天)
+    log {
+        output file /var/log/caddy/magic-access.log {
+            roll_size 50MiB
+            roll_keep 7
+            roll_keep_for 168h
+        }
+    }
+}
+
+# ============================================================
+# 可选: Webhook 回调域名 (网关飞书/微信等要用)
+# ============================================================
+# webhook.<你的域名.com> {
+#     reverse_proxy go-magic:8643
+# }

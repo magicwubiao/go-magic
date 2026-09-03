@@ -1,0 +1,73 @@
+# ============================================================
+# systemd 服务: go-magic (Magic Agent Dashboard)
+# 作用: 开机自启 + 崩溃/退出自动重启 + 资源限制 + 日志
+# 安装: sudo cp deploy/local/systemd/magic.service /etc/systemd/system/
+#       sudo systemctl daemon-reload
+#       sudo systemctl enable --now go-magic
+# 查看状态: systemctl status go-magic
+# 查看日志: journalctl -u go-magic -f
+# ============================================================
+
+[Unit]
+Description=Go Magic AI Agent Dashboard
+Documentation=https://github.com/magicwubiao/go-magic
+# 要求网络就绪后再启动
+After=network-online.target
+Wants=network-online.target
+# 如果有 cloudflared 隧道服务, 可以声明依赖
+# After=cloudflared.service
+# Wants=cloudflared.service
+
+[Service]
+Type=simple
+# -------- 运行身份 (不要用 root!) --------
+User=%i
+Group=%i
+# -------- 环境变量 --------
+Environment=GO_MAGIC_HOME=%h/.magic
+Environment=TZ=Asia/Shanghai
+# 如 API Key 用环境变量注入, 取消注释:
+# EnvironmentFile=%h/.magic/.env
+
+# -------- 可执行文件 & 参数 --------
+# 二选一: 如果 magic 命令在 PATH 里 (例如 go install 过):
+ExecStart=/usr/bin/env magic server --port 5000
+# 如果用绝对路径编译的二进制:
+# ExecStart=/home/%i/go/bin/magic server --port 5000
+# 如果用 go run 开发模式:
+# WorkingDirectory=/home/%i/code/go-magic
+# ExecStart=/usr/bin/go run ./cmd/magic server --port 5000
+
+# -------- 进程守护 --------
+Restart=always                       # 任何原因退出都重启
+RestartSec=3s                        # 重启前等 3 秒
+StartLimitBurst=5                    # 5 次连续失败后熔断
+StartLimitIntervalSec=60             # 时间窗 60 秒
+TimeoutStopSec=15s
+KillMode=mixed
+
+# -------- 工作目录 & 输出 --------
+WorkingDirectory=%h
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=go-magic
+
+# -------- 安全加固 (systemd 级沙箱) --------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# 明确允许写的路径 (根据需要加)
+ReadWritePaths=%h/.magic
+# 如果 agent 需要写工作区代码, 再加一行:
+# ReadWritePaths=%h/workspace
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+MemoryMax=8G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target
