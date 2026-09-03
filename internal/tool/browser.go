@@ -78,9 +78,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		return nil, fmt.Errorf("url argument is required")
 	}
 
-	// Validate URL
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "https://" + url
+	// Validate URL: keep any explicit scheme (file://, data://, ...) and only
+	// default bare host names to https://
+	url = normalizeURL(url)
+	if strings.HasPrefix(url, "file://") {
+		return nil, fmt.Errorf("cannot read local files (file:// URL) via HTTP; use the read_file tool instead")
 	}
 
 	// Create HTTP request
@@ -277,9 +279,11 @@ func (t *WebSelectTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil, fmt.Errorf("selectors must be an array")
 	}
 
-	// Validate URL
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "https://" + url
+	// Validate URL: keep any explicit scheme (file://, data://, ...) and only
+	// default bare host names to https://
+	url = normalizeURL(url)
+	if strings.HasPrefix(url, "file://") {
+		return nil, fmt.Errorf("cannot read local files (file:// URL) via HTTP; use the read_file tool instead")
 	}
 
 	// Create HTTP request

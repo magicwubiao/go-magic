@@ -67,15 +67,25 @@ func (t *BrowserNavigateTool) Schema() map[string]interface{} {
 	}
 }
 
+// normalizeURL keeps URLs that already carry a scheme (http, https, file,
+// data, about, ...) untouched and only prepends "https://" to bare host
+// names like "example.com/page". Previously every non-http(s) URL —
+// including valid file:///D:/... paths — was blindly prefixed, producing
+// broken URLs such as "https://file:///D:/...".
+func normalizeURL(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+		return raw
+	}
+	return "https://" + raw
+}
+
 func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	urlStr, ok := args["url"].(string)
 	if !ok {
 		return nil, fmt.Errorf("url is required")
 	}
 
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		urlStr = "https://" + urlStr
-	}
+	urlStr = normalizeURL(urlStr)
 
 	tabID := "default"
 	if id, ok := args["tab_id"].(string); ok && id != "" {
@@ -315,9 +325,7 @@ func (t *BrowserSnapshotTool) Execute(ctx context.Context, args map[string]inter
 
 func (t *BrowserSnapshotTool) navigateAndGetContent(urlStr, tabID string) (string, error) {
 	// Validate URL
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		urlStr = "https://" + urlStr
-	}
+	urlStr = normalizeURL(urlStr)
 
 	bm := GetBrowserManager()
 
