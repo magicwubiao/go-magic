@@ -75,7 +75,8 @@ type WeComAIBotGateway struct {
 	reqCounter atomic.Int64
 
 	// channelID -> 在途被动回复（占位 finish=false 已发出，等 onSend 发 finish=true 替换）。
-	// 回调到达即写一条；finish 发出或占位 write 失败后删除；断线时整体清空。
+	// 回调到达即写一条；finish 发出后删除；断线时整体清空。占位发送时连接尚未就绪
+	// （订阅确认与早期回调竞态）则保留记录，由 attach() 在置 connected 前统一补发。
 	pendingStreams   map[string]wecomPendingStream
 	pendingStreamsMu sync.RWMutex
 
@@ -107,6 +108,10 @@ type wecomAIBotHeaders struct {
 type wecomPendingStream struct {
 	ReqID    string // 透传回调的 req_id —— finish 帧必须复用
 	StreamID string // 占位时生成的 stream.id —— finish 帧必须复用
+	// ClaimSent 表示 finish=false 占位帧是否已实际发出。订阅确认与早期消息回调
+	// 存在竞态：回调可能先于 attach() 到达（此时连接尚未挂到网关上），占位发送
+	// 会被推迟，由 attach() 统一补发；该标记防止补发与直发重复。
+	ClaimSent bool
 }
 
 // wecomAIBotAck 是服务端对订阅/心跳/回复/推送请求的响应帧。
@@ -433,6 +438,23 @@ func (g *WeComAIBotGateway) heartbeatLoop(ctx context.Context, conn *websocket.C
 func (g *WeComAIBotGateway) attach(conn *websocket.Conn) {
 	g.wsMu.Lock()
 	g.wsConn = conn
+	// 补发未发出的占位帧：订阅确认与早期消息回调竞态时，回调先于 attach 到达，
+	// 当时占位发送被推迟（连接尚未挂到网关）。必须在置 connected 之前补发完成 ——
+	// 保证占位帧先于任何 finish 帧到达服务端，且 onSend 消费 pending 前占位已就位。
+	g.pendingStreamsMu.Lock()
+	for id, p := range g.pendingStreams {
+		if p.ClaimSent {
+			continue
+		}
+		if err := g.write(conn, wecomClaimFrame(p)); err != nil {
+			log.Warnf("[WeCom/AIBot] deferred claim flush failed for %s: %v — dropping placeholder, reply will fall back to active push", id, err)
+			delete(g.pendingStreams, id)
+			continue
+		}
+		p.ClaimSent = true
+		g.pendingStreams[id] = p
+	}
+	g.pendingStreamsMu.Unlock()
 	g.wsMu.Unlock()
 	g.setConnected(true)
 }
@@ -652,17 +674,27 @@ func (g *WeComAIBotGateway) onSend(ctx context.Context, resp Response) error {
 }
 
 // claimPassiveReply 为回调消息建立被动回复链路：分配 stream.id、记录 pending，
-// 并同步发出 finish=false 占位帧（用户在等待 LLM 期间立即看到"正在思考"）。
-// 占位 write 失败（连接刚断开等）时清空 pending，onSend 会自动降级为主动推送。
+// 并发出 finish=false 占位帧（用户在等待 LLM 期间立即看到"正在思考"）。
+// 连接尚未就绪（订阅确认与早期回调竞态窗口）时只登记不发送，由 attach() 在置
+// connected 前统一补发；连接就绪时直接发送并标记 ClaimSent。
+// 注意：不要在发送失败时清空 pending —— 除 attach 补发失败外，onSend 仍可复用
+// 同一 req_id/stream.id 发 finish=true 全量替换（无需占位先行的场景官方同样支持）。
 func (g *WeComAIBotGateway) claimPassiveReply(channelID, reqID string) {
 	if channelID == "" || reqID == "" {
 		return
 	}
 	p := wecomPendingStream{ReqID: reqID, StreamID: g.nextStreamID()}
 	g.cachePendingStream(channelID, p)
-	frame := wecomAIBotFrame{
+	if !g.trySendClaim(channelID, p) {
+		log.Debugf("[WeCom/AIBot] claim for %s deferred until connection attach", channelID)
+	}
+}
+
+// wecomClaimFrame 构造 finish=false 的占位帧。
+func wecomClaimFrame(p wecomPendingStream) wecomAIBotFrame {
+	return wecomAIBotFrame{
 		Cmd:     "aibot_respond_msg",
-		Headers: wecomAIBotHeaders{ReqID: reqID},
+		Headers: wecomAIBotHeaders{ReqID: p.ReqID},
 		Body: mustJSONRaw(wecomAIBotStreamReply{
 			MsgType: "stream",
 			Stream: wecomAIBotStream{
@@ -672,10 +704,30 @@ func (g *WeComAIBotGateway) claimPassiveReply(channelID, reqID string) {
 			},
 		}),
 	}
-	if err := g.sendFrame(frame); err != nil {
-		log.Warnf("[WeCom/AIBot] claim placeholder send failed for %s: %v", channelID, err)
-		g.clearPendingStream(channelID)
+}
+
+// trySendClaim 尝试立即发送占位帧。返回 false 表示连接未就绪或写入失败 ——
+// pending 记录保留，由 attach() 补发或 onSend 直接走 finish 全量替换。
+// 持有 wsMu 串行化写入（与 attach 补发互斥），成功后在同一窗口内标记 ClaimSent，
+// 防止补发与直发重复。
+func (g *WeComAIBotGateway) trySendClaim(channelID string, p wecomPendingStream) bool {
+	g.wsMu.Lock()
+	defer g.wsMu.Unlock()
+	if g.wsConn == nil {
+		return false
 	}
+	if err := g.write(g.wsConn, wecomClaimFrame(p)); err != nil {
+		log.Warnf("[WeCom/AIBot] claim placeholder send failed for %s (req_id=%s stream=%s): %v",
+			channelID, p.ReqID, p.StreamID, err)
+		return false
+	}
+	g.pendingStreamsMu.Lock()
+	if cur, ok := g.pendingStreams[channelID]; ok && cur.StreamID == p.StreamID {
+		cur.ClaimSent = true
+		g.pendingStreams[channelID] = cur
+	}
+	g.pendingStreamsMu.Unlock()
+	return true
 }
 
 // sendFrame 通过当前连接发送一帧（不等待服务端确认）。
@@ -804,12 +856,6 @@ func (g *WeComAIBotGateway) takePendingStream(channelID string) (wecomPendingStr
 		delete(g.pendingStreams, channelID)
 	}
 	return p, ok
-}
-
-func (g *WeComAIBotGateway) clearPendingStream(channelID string) {
-	g.pendingStreamsMu.Lock()
-	delete(g.pendingStreams, channelID)
-	g.pendingStreamsMu.Unlock()
 }
 
 func (g *WeComAIBotGateway) nextReqID() string {

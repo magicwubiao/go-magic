@@ -25,6 +25,9 @@ type fakeWeComAIBotServer struct {
 
 	subscribeErrCode int
 	subscribeErrMsg  string
+	// pushBeforeAck 为 true 时，服务端在回订阅确认之前先推送私聊消息回调 ——
+	// 确定性复现"订阅确认与早期消息回调竞态"（回调先于网关 attach 到达）。
+	pushBeforeAck bool
 }
 
 func newFakeWeComAIBotServer(t *testing.T) *fakeWeComAIBotServer {
@@ -67,6 +70,13 @@ func newFakeWeComAIBotServer(t *testing.T) *fakeWeComAIBotServer {
 					errcode = f.subscribeErrCode
 					errmsg = f.subscribeErrMsg
 				}
+				// 竞态复现：先推消息回调，再回订阅确认，保证网关 readLoop
+				// 一定先处理消息（此时网关尚未 attach、占位发送被推迟）。
+				if f.pushBeforeAck && errcode == 0 {
+					if err := conn.WriteMessage(websocket.TextMessage, []byte(f.privateEvent("req-priv-1", "你好"))); err != nil {
+						return
+					}
+				}
 			}
 			ackJSON := fmt.Sprintf(`{"headers":{"req_id":%q},"errcode":%d,"errmsg":%q}`,
 				fr.Headers.ReqID, errcode, errmsg)
@@ -75,8 +85,10 @@ func newFakeWeComAIBotServer(t *testing.T) *fakeWeComAIBotServer {
 			}
 			switch {
 			case fr.Cmd == "aibot_subscribe" && errcode == 0:
-				if err := conn.WriteMessage(websocket.TextMessage, []byte(f.privateEvent("req-priv-1", "你好"))); err != nil {
-					return
+				if !f.pushBeforeAck { // pushBeforeAck 模式下私聊事件已在 ack 前推送
+					if err := conn.WriteMessage(websocket.TextMessage, []byte(f.privateEvent("req-priv-1", "你好"))); err != nil {
+						return
+					}
 				}
 				time.Sleep(30 * time.Millisecond)
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(f.groupEvent("req-grp-2", "大家好"))); err != nil {
@@ -358,6 +370,52 @@ func TestWeComAIBotSubscribeRejected(t *testing.T) {
 	}
 	t.Fatalf("gateway stayed connected after subscribe rejection (errcode=%d errmsg=%q)",
 		f.subscribeErrCode, f.subscribeErrMsg)
+}
+
+// TestWeComAIBotEarlyMessageClaimFlush 回归：订阅确认与早期消息回调竞态。
+// 旧实现中消息回调先于 attach 到达时占位发送报 "not connected" 且 pending 被清空，
+// 占位帧永久丢失（CI 上 TestWeComAIBotLongReply 间歇性 "timed out waiting for
+// wecom frame" 即此因）。现实现应推迟占位发送，由 attach 在置 connected 前补发。
+func TestWeComAIBotEarlyMessageClaimFlush(t *testing.T) {
+	f := newFakeWeComAIBotServer(t)
+	f.pushBeforeAck = true // 私聊消息先于订阅确认推送，回调必然先于 attach 处理
+
+	g := NewWeComAIBotGateway("bot_x", "sec_y", f.url)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		_ = g.Disconnect()
+	}()
+	if err := g.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	waitWeComConnected(t, g)
+
+	// 被推迟的私聊占位必须在连接就绪时补发出来，且是 finish=false 占位。
+	privClaim := mustFrame(t, f.outbound)
+	if privClaim.Cmd != "aibot_respond_msg" || privClaim.Headers.ReqID != "req-priv-1" {
+		t.Fatalf("deferred claim = cmd %q req %q, want aibot_respond_msg req-priv-1",
+			privClaim.Cmd, privClaim.Headers.ReqID)
+	}
+	if b := decodeBody(t, privClaim); b.MsgType != "stream" || b.Stream.Finish {
+		t.Fatalf("deferred claim body = %+v, want msgtype=stream finish=false", b)
+	}
+
+	// 群聊消息（ack 之后 30ms 推送）走正常路径，占位照常发出且只发一次。
+	grpClaim := mustFrame(t, f.outbound)
+	if grpClaim.Headers.ReqID != "req-grp-2" {
+		t.Fatalf("group claim req = %q, want req-grp-2", grpClaim.Headers.ReqID)
+	}
+
+	recvMsg(t, g.Receive(), 5*time.Second)
+	recvMsg(t, g.Receive(), 5*time.Second)
+
+	// 群聊占位不得重复发送（补发与直发互斥）。
+	select {
+	case extra := <-f.outbound:
+		t.Fatalf("duplicate claim frame after flush: cmd=%s body=%s", extra.Cmd, extra.Body)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 // TestWeComAIBotLongReply 验证超长回复在官方 content 上限内走"单条流式消息全量替换"，
