@@ -49,7 +49,7 @@ After successful build, executables will be in the `build\` directory:
 # Start web dashboard
 magic-windows-amd64.exe server
 
-# Start gateway (WhatsApp, Discord, etc.)
+# Start gateway (all enabled platforms: Telegram, Discord, Teams, ...)
 magic-windows-amd64.exe gateway start
 
 # Interactive chat

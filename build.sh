@@ -47,8 +47,10 @@ build_cli() {
             ;;
     esac
 
+    local GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
     CGO_ENABLED=0 go build \
-        -ldflags="-s -w -X main.version=${VERSION} -X main.buildTime=${TIMESTAMP}" \
+        -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildDate=${TIMESTAMP}" \
         -o "$OUTPUT" \
         ./cmd/magic
 

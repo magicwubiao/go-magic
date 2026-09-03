@@ -72,7 +72,7 @@ A complete agent cognitive system:
 
 Connect your agent to external platforms:
 
-Telegram, Discord, Slack, WhatsApp, WeChat, WeCom, DingTalk, Feishu, QQ, LINE, Matrix.
+Telegram, Discord, Slack, WeChat (iLink), WeCom, DingTalk, Feishu, QQ, LINE, Matrix, Microsoft Teams, Google Chat, Email, SMS.
 
 ### Bot Mode
 

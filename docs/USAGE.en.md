@@ -44,7 +44,7 @@
 | **Bot mode** | Named agent profiles: independent persona, model binding, persistent sessions, scheduled routines; bots can message each other |
 | **Group chat / Rooms** | Multiple bots hold multi-round conversations in one room and @-mention each other to pull others in |
 | **Cross-machine Peer** | A bot on one machine can message a bot on another machine directly |
-| **Messaging gateways** | 12 platforms: telegram, discord, slack, whatsapp, whatsapp_business, wechat_ilink, wecom, dingtalk, feishu, qq, line, matrix |
+| **Messaging gateways** | 14 platforms: telegram, discord, slack, wechat_ilink, wecom, dingtalk, feishu, qq, line, matrix, teams, googlechat, email, sms |
 | **Tool system** | 49 built-in tools, 12 toolsets (web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility / homeassistant) |
 | **Skills system** | Progressive loading (L0/L1/L2), three-tier sources (built-in / global / workspace), with a review flow for auto-generated skills |
 | **Cortex cognitive architecture** | Memory (SOUL.md / USER.md / snapshots), perception, planning, execution, skill evolution |
@@ -681,15 +681,17 @@ magic gateway restart
 | `telegram` | Telegram | `token` |
 | `discord` | Discord | `token` |
 | `slack` | Slack | `bot_token` (or `token`), `signing_secret` (or `app_secret`) |
-| `whatsapp` | WhatsApp personal (QR) | `data_dir`, `mode: personal` |
-| `whatsapp_business` | WhatsApp Business API | `phone_number_id` (or `app_id`), `access_token` (or `token`), `app_secret`, `verify_token` |
-| `wechat_ilink` | WeChat iLink | `token`, `base_url`, `data_dir`, `auto_login` |
-| `wecom` | WeCom (Enterprise WeChat) | `corp_id`, `agent_id`, `secret`, `mode: qr \| app` |
+| `wechat_ilink` | WeChat iLink | `token`, `base_url`, `data_dir` |
+| `wecom` | WeCom (official AI Bot, scan to create) | `bot_id`, `secret` (WebSocket, no public callback URL) |
 | `dingtalk` | DingTalk | `app_key`, `app_secret` |
 | `feishu` | Feishu / Lark | `app_id`, `app_secret` |
-| `qq` | QQ | `number` (or `app_id`), `password` (or `app_secret`) |
-| `line` | LINE | `token`, `secret` |
-| `matrix` | Matrix | `token`, `base_url` |
+| `qq` | QQ (official bot only) | `app_id`, `app_secret` |
+| `line` | LINE | `channel_token` (or `token`), `channel_secret` (or `secret`) |
+| `matrix` | Matrix | `homeserver`, `user_id`, `token` (or `mode: password` + `password`) |
+| `teams` | Microsoft Teams (Bot Framework) | `app_id`, `app_secret`; Messaging endpoint → public URL + `/teams/events` (callback port 8088) |
+| `googlechat` | Google Chat | `webhook_url`, `events_token`; Events delivery → `/gchat/events` (callback port 8089) |
+| `email` | Email (IMAP receive + SMTP send) | `email`, `imap_host`/`imap_port`/`imap_user`/`imap_pass`, `smtp_host`/`smtp_port`/`smtp_user`/`smtp_pass`, `poll_interval` (polls INBOX — no callback port) |
+| `sms` | SMS (Twilio) | `account_sid`, `auth_token`, `from`; Messaging webhook → `/sms/events` (callback port 8090) |
 
 ### 12.2 Config example
 
@@ -712,11 +714,9 @@ magic gateway restart
     },
     "wecom": {
       "enabled": true,
-      "mode": "app",
-      "corp_id": "wwxxxx",
-      "agent_id": "1000002",
-      "secret": "xxxx",
-      "aes_key": "xxxx"
+      "mode": "aibot",            // official AI Bot only (scan to create in Web UI)
+      "bot_id": "bot_xxxx",
+      "secret": "sec_xxxx"
     }
   }
 }

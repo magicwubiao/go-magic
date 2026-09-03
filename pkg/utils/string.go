@@ -30,3 +30,18 @@ func TruncateDetailed(s string, maxLen int) string {
 	runes := []rune(s)
 	return string(runes[:maxLen]) + fmt.Sprintf("... [truncated, total %d chars]", total)
 }
+
+// TailString 按 rune 安全返回字符串末尾最多 maxLen 个字符，超长时在开头
+// 标注总字符数。与 TruncateDetailed 配合，用于日志中同时展示大字符串
+// （如被截断的工具参数 JSON）的头尾。
+func TailString(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	total := utf8.RuneCountInString(s)
+	if total <= maxLen {
+		return s
+	}
+	runes := []rune(s)
+	return fmt.Sprintf("[truncated, total %d chars] ...", total) + string(runes[total-maxLen:])
+}

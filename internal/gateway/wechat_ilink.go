@@ -100,9 +100,6 @@ type WeChatILinkConfig struct {
 	// Data directory for persisting sync buffers and context tokens
 	DataDir string `json:"data_dir"`
 
-	// Auto-login: if true, start QR login flow when no token is available
-	AutoLogin bool `json:"auto_login"`
-
 	// Bot type (default: "3")
 	BotType string `json:"bot_type"`
 
@@ -246,33 +243,26 @@ func (g *WeChatILinkGateway) onConnect(ctx context.Context) error {
 		g.api = api
 	}
 
-	// Validate token by calling GetUpdates once
+	// Validate token by calling GetUpdates once. This decides the real
+	// connection state: with an unusable token the platform must NOT report
+	// connected (that was the "not connected but showing connected" trap).
+	// pollLoop still starts below — it pauses on the expired session and waits
+	// for a UI re-scan, and flips to connected once a poll round-trip succeeds.
 	log.Debug("[WeChat-iLink] Validating token...")
 	testResp, err := g.api.GetUpdates(ctx, ILinkGetUpdatesReq{
 		GetUpdatesBuf: g.syncBuf,
 	})
 	if err != nil || (testResp != nil && isSessionExpired(testResp.Ret, testResp.Errcode)) {
-		log.Warn("[WeChat-iLink] Token expired or invalid")
-		log.Info("[WeChat-iLink] Starting QR code re-login...")
-		if token, _, _, baseURL, loginErr := PerformILinkLogin(ctx, ILinkLoginOpts{
-			BaseURL: g.config.BaseURL,
-			BotType: g.config.BotType,
-			Proxy:   g.config.Proxy,
-			Timeout: ilinkAuthDefaultTimeout,
-			Silent:  true, // Silent mode for re-login too
-		}); loginErr == nil {
-			g.config.Token = token
-			g.config.BaseURL = baseURL
-			_ = g.saveTokenToConfig(token, baseURL)
-			if newAPI, apiErr := NewILinkAPIClient(baseURL, token, g.config.Proxy); apiErr == nil {
-				g.api = newAPI
-			}
-			log.Info("[WeChat-iLink] ✅ Re-login successful")
-		} else {
-			log.Warnf("[WeChat-iLink] Re-login failed: %v (will retry on session expiry)", loginErr)
-		}
+		// Token expired at startup. iLink has no silent session renewal — every
+		// login requires scanning a fresh QR code. A silent PerformILinkLogin
+		// here would generate an invisible QR and block for the full timeout,
+		// so instead we report disconnected and let pollLoop hit the
+		// session-expired branch, pause, and tell the user to re-scan in the UI.
+		log.Warn("[WeChat-iLink] Token expired or invalid at startup; polling will pause and require a UI re-scan to re-login")
+		g.markDisconnected(fmt.Errorf("wechat-ilink token expired or invalid at startup — re-scan the QR code in the UI to re-login"))
 	} else {
 		log.Debug("[WeChat-iLink] Token valid, starting message polling...")
+		g.markConnected()
 	}
 
 	g.connectedAt = time.Now()
@@ -569,39 +559,24 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 			g.pauseSession(resp.Ret, resp.Errcode, resp.Errmsg)
 			log.Warnf("[WeChat-iLink] Session expired")
 
-			// Try auto re-login if configured
-			if g.config.AutoLogin {
-				log.Info("[WeChat-iLink] Attempting auto re-login...")
-				if token, _, _, baseURL, err := PerformILinkLogin(ctx, ILinkLoginOpts{
-					BaseURL: g.config.BaseURL,
-					BotType: g.config.BotType,
-					Proxy:   g.config.Proxy,
-					Timeout: ilinkAuthDefaultTimeout,
-					Silent:  true,
-				}); err == nil {
-					g.config.Token = token
-					g.config.BaseURL = baseURL
-					_ = g.saveTokenToConfig(token, baseURL)
-					if newAPI, err := NewILinkAPIClient(baseURL, token, g.config.Proxy); err == nil {
-						g.api = newAPI
-					}
-					// Clear pause
-					g.pauseMu.Lock()
-					g.pauseUntil = time.Time{}
-					g.pauseMu.Unlock()
-					log.Info("[WeChat-iLink] ✅ Re-login successful, resuming polling")
-					continue
-				} else {
-					log.Warnf("[WeChat-iLink] Auto re-login failed: %v", err)
-				}
+			// The user session is dead — a link no longer exists, so report
+			// disconnected (once per transition). This is what triggers the
+			// "not connected" state in the UI and prompts the re-scan.
+			if g.BasePlatform.IsConnected() {
+				g.markDisconnected(fmt.Errorf("wechat-ilink session expired (ret=%d errcode=%d %s)",
+					resp.Ret, resp.Errcode, resp.Errmsg))
 			}
 
-			// No auto-login or re-login failed: pause and retry later
+			// Session expiry can only be resolved by scanning a fresh QR code
+			// (iLink has no silent renewal). We never auto-trigger a silent
+			// PerformILinkLogin here: the generated QR would be invisible and
+			// the call would block polling for the full login timeout. Pause,
+			// then prompt the user to re-scan in the UI.
 			remaining := time.Until(g.pauseUntil)
 			if remaining <= 0 {
 				remaining = ilinkSessionPauseDuration
 			}
-			log.Warnf("[WeChat-iLink] Pausing for %v (set auto_login: true to enable re-login)", remaining.Round(time.Second))
+			log.Warnf("[WeChat-iLink] Paused for %v — re-scan the QR code in the UI to re-login", remaining.Round(time.Second))
 			select {
 			case <-ctx.Done():
 				return
@@ -625,6 +600,12 @@ func (g *WeChatILinkGateway) pollLoop(ctx context.Context) {
 
 		// Success - reset failure counter
 		consecutiveFails = 0
+
+		// A real poll round-trip succeeded — the link is alive (recovers the
+		// state after a re-scan that replaced the expired token).
+		if !g.BasePlatform.IsConnected() {
+			g.markConnected()
+		}
 
 		// Update long-poll timeout from server hint
 		if resp.LongpollingTimeoutMs > 0 {

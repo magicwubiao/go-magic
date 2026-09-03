@@ -539,6 +539,21 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 			}
 		}
 
+		// Content-level strictness (Zhipu/GLM error 1214): some providers
+		// reject a message whose content is an empty or whitespace-only string
+		// REGARDLESS of role — not just assistant turns. buildLLMMessages only
+		// filters/pads empty assistant content, and flows that bypass it
+		// (compression rebuilds, injected recovery prompts, media turns) can
+		// carry an empty user/system message here. Normalize to the invisible
+		// placeholder so the payload is never rejected for this reason.
+		// Tool messages are handled above ("(empty tool result)") and array
+		// content (multi-modal parts) is left untouched.
+		if msg.Role != "tool" {
+			if c, ok := openAIMsg["content"].(string); ok && IsEmptyAssistantContent(c) {
+				openAIMsg["content"] = emptyAssistantPlaceholder
+			}
+		}
+
 		result = append(result, openAIMsg)
 	}
 

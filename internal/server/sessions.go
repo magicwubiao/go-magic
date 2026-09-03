@@ -572,6 +572,10 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// Real streaming
 	var fullResponse strings.Builder
 	var streamErr error
+	// 本轮工具调用"变更的文件"（结果驱动）：写类工具成功才记录，
+	// 同路径按 delete > write 优先级取最终动作，失败调用不计入。
+	turnOps := NewTurnFileOpTracker()
+	lastToolArgs := map[string]string{}
 	streamHandler := func(chunk string, done bool) {
 		if done {
 			return
@@ -594,13 +598,17 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			if m != nil {
 				toolName := m[1]
 				toolArgs := m[2]
-				if len(toolArgs) > 200 {
-					toolArgs = toolArgs[:200] + "..."
+				fileOps := extractFileOps(toolName, toolArgs, "")
+				lastToolArgs[toolName] = toolArgs
+				argsSummary := toolArgs
+				if len(argsSummary) > 200 {
+					argsSummary = argsSummary[:200] + "..."
 				}
 				eventData, _ := json.Marshal(map[string]interface{}{
-					"type": "tool_start",
-					"name": toolName,
-					"args": toolArgs,
+					"type":     "tool_start",
+					"name":     toolName,
+					"args":     argsSummary,
+					"file_ops": fileOps,
 				})
 				writeSSE("data: " + string(eventData) + "\n\n")
 			}
@@ -620,6 +628,12 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					toolSuccess := submatch[2] == "true"
 					toolDuration := submatch[3]
 					toolContent := chunk[startMatch[1]:endMatch[0]]
+					// 结果驱动的变更统计：只在写类工具成功时记录路径，
+					// 失败的写入/删除不会进入"变更的文件"。
+					if toolSuccess {
+						turnOps.ObserveToolCall(toolName, lastToolArgs[toolName])
+					}
+					fileOps := extractFileOps(toolName, "{}", toolContent)
 					// Truncate tool content for display
 					if len(toolContent) > 500 {
 						toolContent = utils.Truncate(toolContent, 500)
@@ -630,6 +644,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 						"success":  toolSuccess,
 						"duration": toolDuration,
 						"content":  strings.TrimSpace(toolContent),
+						"file_ops": fileOps,
 					})
 					writeSSE("data: " + string(eventData) + "\n\n")
 				}
@@ -669,6 +684,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				Role:      "assistant",
 				Content:   fullResponse.String(),
 				Timestamp: time.Now(),
+				FileOps:   turnOps.Result(),
 			})
 			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
 			sess.InputTokens += inputTokens
@@ -731,7 +747,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 			// 出错也要保存本轮已执行的内容：用户消息 + agent history 中
 			// 已完成的工具调用/结果（partial），否则整轮工作全部丢失。
 			partial := extractPartialTurnText(aiAgent.GetHistory(), req.Content)
-			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Content, "", partial)
+			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Content, "", partial, nil)
 			s.recordUsage(aiAgent, sessionID)
 			http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
 			return

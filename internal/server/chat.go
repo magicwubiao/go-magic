@@ -111,7 +111,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
 					err.Error(), partial)
 			}
-			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial)
+			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial, nil)
 			s.recordUsage(aiAgent, sessionID)
 			return
 		}
@@ -147,64 +147,13 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	toolStartRe := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
 	toolResultRe := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
 
-	// extractFileOps 从工具参数和结果中提取文件操作信息
-	extractFileOps := func(toolName string, argsStr string, resultContent string) []map[string]interface{} {
-		var fileOps []map[string]interface{}
-		// 从 args 中提取路径参数
-		argsMap := map[string]interface{}{}
-		_ = json.Unmarshal([]byte(argsStr), &argsMap)
-		pathKeys := []string{"file_path", "path", "file", "filename", "dir", "directory", "output_path", "input_path", "target_path", "src_path", "dst_path"}
-		for _, k := range pathKeys {
-			if v, ok := argsMap[k]; ok {
-				if p, ok := v.(string); ok && p != "" {
-					op := map[string]interface{}{"path": p, "param": k}
-					switch toolName {
-					case "read_file", "file_read":
-						op["action"] = "read"
-					case "write_file", "file_edit", "file_write", "file_create":
-						op["action"] = "write"
-					case "delete_file", "file_delete":
-						op["action"] = "delete"
-					case "list_files", "directory_tree":
-						op["action"] = "list"
-					case "search_in_files":
-						op["action"] = "search"
-					case "batch_file_ops":
-						op["action"] = "batch"
-					default:
-						op["action"] = "access"
-					}
-					fileOps = append(fileOps, op)
-				}
-			}
-		}
-		// 如果 args 是文件路径列表/映射，额外提取 (如 batch_file_ops 的 items)
-		if items, ok := argsMap["items"].([]interface{}); ok {
-			for _, it := range items {
-				if itMap, ok := it.(map[string]interface{}); ok {
-					for _, k := range pathKeys {
-						if v, ok := itMap[k]; ok {
-							if p, ok := v.(string); ok && p != "" {
-								op := map[string]interface{}{"path": p, "param": k, "action": "batch"}
-								fileOps = append(fileOps, op)
-							}
-						}
-					}
-				}
-			}
-		}
-		// 去重
-		seen := map[string]bool{}
-		unique := make([]map[string]interface{}, 0, len(fileOps))
-		for _, op := range fileOps {
-			key := fmt.Sprintf("%s|%s", op["action"], op["path"])
-			if !seen[key] {
-				seen[key] = true
-				unique = append(unique, op)
-			}
-		}
-		return unique
-	}
+	// extractFileOps 为包级函数（见 fileops.go），此处直接调用：
+	// 从工具参数/结果中提取文件操作信息，事件透传给前端。
+	// turnOps 只统计真正发生的写类变更（结果驱动）：工具成功才记录，
+	// 同路径按 delete > write 优先级取最终动作，失败调用不计入。
+	var turnOps = NewTurnFileOpTracker()
+	// lastToolArgs: 工具名 → 最近一次调用参数，TOOL_RESULT 时用于判定写入有效性。
+	lastToolArgs := map[string]string{}
 
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	var fullResponse strings.Builder
@@ -240,6 +189,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				toolName := matches[1]
 				argsStr := matches[2]
 				fileOps := extractFileOps(toolName, argsStr, "")
+				lastToolArgs[toolName] = argsStr
 				var argsParsed interface{} = argsStr
 				if json.Valid([]byte(argsStr)) {
 					_ = json.Unmarshal([]byte(argsStr), &argsParsed)
@@ -270,6 +220,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				duration := matches[3]
 				toolContent := strings.TrimSpace(matches[4])
 				success := successStr == "true"
+				// 结果驱动的变更统计：只在写类工具成功时记录路径，
+				// 失败的写入/删除不会进入"变更的文件"。
+				if success {
+					turnOps.ObserveToolCall(toolName, lastToolArgs[toolName])
+				}
 				fileOps := extractFileOps(toolName, "{}", toolContent)
 				// 识别 todo_tool 调用，用于触发实时待办刷新
 				todoChanged := false
@@ -328,7 +283,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, fullResponse.String(), partial)
+	s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, fullResponse.String(), partial, turnOps.Result())
 
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)
@@ -421,14 +376,17 @@ func extractPartialTurnText(history []types.Message, userInput string) string {
 // 空内容保护：assistant 内容为空时不落库，避免中断/失败后下次打开出现空白回答；
 // 此时仅保存用户消息，便于用户重试。会话行不存在时自动创建，避免静默丢弃。
 func (s *Server) persistTurnMessages(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg string) {
-	s.persistTurnMessagesWithPartial(aiAgent, sessionID, userMsg, assistantMsg, "")
+	s.persistTurnMessagesWithPartial(aiAgent, sessionID, userMsg, assistantMsg, "", nil)
 }
 
 // persistTurnMessagesWithPartial 在 persistTurnMessages 基础上支持 partial：
 // 当一轮对话中途失败（如 exceeded maximum turns、provider 报错）时，partial
 // 携带从 agent history 提取的"已执行过程"（工具调用+结果+中间叙述），作为
 // assistant 消息落库，避免已执行的工作从会话中消失。
-func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg, partial string) {
+//
+// fileOps 携带本轮工具调用"变更的文件"（write/delete/batch 等写操作），
+// 一并写入 assistant 消息的 FileOps 字段供前端展示；为 nil 时不附加。
+func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID, userMsg, assistantMsg, partial string, fileOps []types.FileOp) {
 	if s.sessionStore == nil || aiAgent == nil {
 		return
 	}
@@ -469,12 +427,14 @@ func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID,
 			Role:      "assistant",
 			Content:   assistantMsg,
 			Timestamp: now,
+			FileOps:   fileOps,
 		})
 	} else if strings.TrimSpace(partial) != "" {
 		sess.Messages = append(sess.Messages, types.Message{
 			Role:      "assistant",
 			Content:   partial,
 			Timestamp: now,
+			FileOps:   fileOps,
 		})
 	}
 	inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
@@ -615,7 +575,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			partial = fmt.Sprintf("⚠️ 对话在此轮执行中途出错（%s），以下为出错前已完成的操作记录：\n\n%s",
 				err.Error(), partial)
 		}
-		s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial)
+		s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, "", partial, nil)
 		s.recordUsage(aiAgent, sessionID)
 		http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
 		return

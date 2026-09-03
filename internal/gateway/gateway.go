@@ -278,6 +278,13 @@ type Gateway struct {
 
 	// Session persistence
 	sessionStore *session.Store
+
+	// Runtime platform control (used by /api/platforms/{name}/{action})
+	startCtx context.Context // ctx passed to Start(), reused for runtime reconnects
+	// actionMu/actionBusy serialize per-platform connect/disconnect so a slow
+	// Connect (or a WS dial window) cannot be double-invoked from the API.
+	actionMu   sync.Mutex
+	actionBusy map[string]bool
 }
 
 // GatewayConfig holds gateway configuration
@@ -322,6 +329,7 @@ func NewGateway(agent AgentHandler, config *GatewayConfig) *Gateway {
 		config:     config,
 		middleware: make([]Middleware, 0),
 		apiPort:    config.APIPort,
+		actionBusy: make(map[string]bool),
 	}
 }
 
@@ -378,16 +386,26 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf("gateway already running")
 	}
 	g.running = true
-	g.mountConfiguredMiddleware()
+	g.startCtx = ctx // keep for runtime platform (re)connect via the API
 	g.mu.Unlock()
 
-	// Connect platforms that haven't connected yet, and start message handlers
+	// NOTE: mount middleware AFTER releasing g.mu — mountConfiguredMiddleware
+	// calls g.Use() which takes g.mu itself; mounting while holding the lock
+	// deadlocks the gateway on startup (regression from the config-middleware
+	// refactor): 8080 API and message handlers never start.
+	g.mountConfiguredMiddleware()
+
+	// Connect platforms that haven't connected yet, and start message handlers.
+	// Connect() returns once the platform's onConnect returns; sync platforms
+	// are already connected at that point, async ones confirm shortly after.
 	for name, handler := range g.platforms {
 		if !handler.IsConnected() {
 			if err := handler.Connect(ctx); err != nil {
 				log.Errorf("Failed to connect %s: %v", name, err)
-			} else {
+			} else if handler.IsConnected() {
 				log.Infof("Platform %s connected", name)
+			} else {
+				log.Infof("Platform %s: connect started (awaiting confirmation)", name)
 			}
 		}
 
@@ -443,13 +461,140 @@ func (g *Gateway) Stop() error {
 	return nil
 }
 
+// stopSignal returns the current stop channel. Stop() recreates g.stopCh under
+// g.mu so a later Start()/Restart() gets a fresh (open) channel; readers that
+// select on the stop signal MUST snapshot it through here (holding the lock)
+// rather than reading g.stopCh directly, otherwise their unsynchronized read
+// races with the recreate in Stop().
+func (g *Gateway) stopSignal() <-chan struct{} {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.stopCh
+}
+
+// connectPlatformLocked connects a registered platform if it is not already
+// connected. Callers must hold no locks (it acquires g.mu internally).
+func (g *Gateway) connectPlatform(name string) error {
+	g.mu.RLock()
+	handler, ok := g.platforms[name]
+	g.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("platform %q is not registered", name)
+	}
+	if handler.IsConnected() {
+		return nil // already connected: idempotent
+	}
+	ctx := g.startCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return handler.Connect(ctx)
+}
+
+// disconnectPlatform disconnects a registered platform. Disconnect is
+// idempotent (a platform that is already disconnected is a no-op).
+func (g *Gateway) disconnectPlatform(name string) error {
+	g.mu.RLock()
+	handler, ok := g.platforms[name]
+	g.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("platform %q is not registered", name)
+	}
+	if !handler.IsConnected() {
+		return nil // already disconnected: idempotent
+	}
+	return handler.Disconnect()
+}
+
+// PlatformAction connects or disconnects a registered platform at runtime,
+// serializing concurrent actions per platform. action is "connect" or
+// "disconnect".
+func (g *Gateway) PlatformAction(name, action string) error {
+	g.actionMu.Lock()
+	if g.actionBusy[name] {
+		g.actionMu.Unlock()
+		return fmt.Errorf("a connect/disconnect action for %q is already in progress", name)
+	}
+	g.actionBusy[name] = true
+	g.actionMu.Unlock()
+
+	defer func() {
+		g.actionMu.Lock()
+		delete(g.actionBusy, name)
+		g.actionMu.Unlock()
+	}()
+
+	switch action {
+	case "connect":
+		return g.connectPlatform(name)
+	case "disconnect":
+		return g.disconnectPlatform(name)
+	default:
+		return fmt.Errorf("unknown action %q (want connect or disconnect)", action)
+	}
+}
+
+// isPlatformConnected reports the live connection state of a registered platform.
+func (g *Gateway) isPlatformConnected(name string) (bool, bool) {
+	g.mu.RLock()
+	handler, ok := g.platforms[name]
+	g.mu.RUnlock()
+	if !ok {
+		return false, false
+	}
+	return handler.IsConnected(), true
+}
+
+// handlePlatformAction handles POST /api/platforms/{name}/{action} used by the
+// web UI (via the server proxy) to disconnect/reconnect a platform at runtime.
+func (g *Gateway) handlePlatformAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.PathValue("name")
+	action := r.PathValue("action")
+
+	err := g.PlatformAction(name, action)
+	if err != nil {
+		status := http.StatusBadRequest
+		switch action {
+		case "connect", "disconnect":
+			if _, ok := g.isPlatformConnected(name); !ok {
+				status = http.StatusNotFound // platform not registered
+			} else {
+				status = http.StatusInternalServerError // connect/disconnect failed
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":       false,
+			"platform": name,
+			"action":   action,
+			"error":    err.Error(),
+		})
+		return
+	}
+
+	connected, _ := g.isPlatformConnected(name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":        true,
+		"platform":  name,
+		"action":    action,
+		"connected": connected,
+	})
+}
+
 // handleMessages handles incoming messages from a platform
 func (g *Gateway) handleMessages(platform string, handler PlatformHandler) {
 	msgs := handler.Receive()
+	stop := g.stopSignal()
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-stop:
 			return
 		case msg, ok := <-msgs:
 			if !ok {
@@ -476,7 +621,7 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 	defer cancel()
 	go func() {
 		select {
-		case <-g.stopCh:
+		case <-g.stopSignal():
 			cancel()
 		case <-ctx.Done():
 		}
@@ -569,7 +714,7 @@ func (g *Gateway) processMessage(platform string, msg Message, handler PlatformH
 			defer saveCancel()
 			go func() {
 				select {
-				case <-g.stopCh:
+				case <-g.stopSignal():
 					saveCancel()
 				case <-saveCtx.Done():
 				}
@@ -642,10 +787,11 @@ func (g *Gateway) getOrCreateSession(userID, platform string) *Session {
 func (g *Gateway) cleanupSessions() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
+	stop := g.stopSignal()
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-stop:
 			return
 		case <-ticker.C:
 			g.cleanupExpiredSessions()
@@ -892,7 +1038,11 @@ func (g *Gateway) startAPIServer() {
 	mux.HandleFunc("/api/login/qr/", g.handleQRCode)
 	mux.HandleFunc("/api/login/qr/refresh/", g.handleQRRefresh)
 
-	g.apiServer = &http.Server{
+	// Runtime platform connect/disconnect (used by the web UI to cancel a
+	// connection, e.g. taking a QR-logged-in bot offline without restarting).
+	mux.HandleFunc("/api/platforms/{name}/{action}", g.handlePlatformAction)
+
+	srv := &http.Server{
 		// Bind to loopback only: this API exposes sessions/broadcast/QR login
 		// and must not be reachable from other machines.
 		Addr:              fmt.Sprintf("127.0.0.1:%d", g.apiPort),
@@ -900,9 +1050,14 @@ func (g *Gateway) startAPIServer() {
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}
+	// Publish under the lock so Stop() (which reads g.apiServer to shut it
+	// down) never races the assignment in this goroutine.
+	g.mu.Lock()
+	g.apiServer = srv
+	g.mu.Unlock()
 
 	log.Infof("Gateway API server starting on port %d", g.apiPort)
-	if err := g.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Errorf("API server error: %v", err)
 	}
 }
@@ -1067,8 +1222,8 @@ func (g *Gateway) handleQRCode(w http.ResponseWriter, r *http.Request) {
 	qrManager := GetQRManager()
 	session := qrManager.GetSession(platform)
 
-	if session == nil || session.Status == "expired" || session.Status == "confirmed" || platform == "whatsapp" {
-		// Generate new QR code (for WhatsApp, always fetch latest since QR rotates every ~60s)
+	if session == nil || session.Status == "expired" || session.Status == "confirmed" {
+		// Generate a new QR code
 		g.mu.RLock()
 		handler, ok := g.platforms[platform]
 		g.mu.RUnlock()

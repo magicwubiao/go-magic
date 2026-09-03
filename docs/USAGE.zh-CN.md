@@ -44,7 +44,7 @@
 | **Bot 模式** | 具名 Agent 档案：独立人设、模型绑定、持久化会话、定时例程，Bot 之间可互发消息 |
 | **群聊 / Rooms** | 多个 Bot 在同一房间里多轮发言、互相 @ 拉人 |
 | **跨机器 Peer** | 一台机器上的 Bot 可以直接给另一台机器上的 Bot 发消息 |
-| **消息网关** | 12 个平台：telegram、discord、slack、whatsapp、whatsapp_business、wechat_ilink、wecom、dingtalk、feishu、qq、line、matrix |
+| **消息网关** | 14 个平台：telegram、discord、slack、wechat_ilink、wecom、dingtalk、feishu、qq、line、matrix、teams、googlechat、email、sms |
 | **工具系统** | 49 个内置工具，12 个工具集（web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility / homeassistant） |
 | **技能系统** | 渐进式加载（L0/L1/L2），三级来源（内置 / 全局 / 工作区），支持自动生成的技能审核流 |
 | **Cortex 认知架构** | 记忆（SOUL.md / USER.md / 快照）、感知、规划、执行、技能进化 |
@@ -681,15 +681,17 @@ magic gateway restart
 | `telegram` | Telegram | `token` |
 | `discord` | Discord | `token` |
 | `slack` | Slack | `bot_token`（或 `token`）、`signing_secret`（或 `app_secret`） |
-| `whatsapp` | WhatsApp 个人号（扫码） | `data_dir`，`mode: personal` |
-| `whatsapp_business` | WhatsApp Business API | `phone_number_id`（或 `app_id`）、`access_token`（或 `token`）、`app_secret`、`verify_token` |
-| `wechat_ilink` | 微信 iLink | `token`、`base_url`、`data_dir`、`auto_login` |
-| `wecom` | 企业微信 | `corp_id`、`agent_id`、`secret`、`mode: qr \| app` |
+| `wechat_ilink` | 微信 iLink | `token`、`base_url`、`data_dir` |
+| `wecom` | 企业微信（官方智能机器人，扫码创建） | `bot_id`、`secret`（WebSocket 长连接，免公网回调） |
 | `dingtalk` | 钉钉 | `app_key`、`app_secret` |
 | `feishu` | 飞书 / Lark | `app_id`、`app_secret` |
-| `qq` | QQ | `number`（或 `app_id`）、`password`（或 `app_secret`） |
-| `line` | LINE | `token`、`secret` |
-| `matrix` | Matrix | `token`、`base_url` |
+| `qq` | QQ（仅官方机器人） | `app_id`、`app_secret` |
+| `line` | LINE | `channel_token`（或 `token`）、`channel_secret`（或 `secret`） |
+| `matrix` | Matrix | `homeserver`、`user_id`、`token`（或 `mode: password` + `password`） |
+| `teams` | Microsoft Teams（Bot Framework） | `app_id`、`app_secret`；Messaging endpoint 指向公网地址 + `/teams/events`（回调端口 8088） |
+| `googlechat` | Google Chat | `webhook_url`、`events_token`；Events 投递地址 → `/gchat/events`（回调端口 8089） |
+| `email` | Email（IMAP 收信 + SMTP 发信） | `email`、`imap_host`/`imap_port`/`imap_user`/`imap_pass`、`smtp_host`/`smtp_port`/`smtp_user`/`smtp_pass`、`poll_interval`（轮询收件箱，无需回调端口） |
+| `sms` | 短信（Twilio） | `account_sid`、`auth_token`、`from`；Messaging Webhook → `/sms/events`（回调端口 8090） |
 
 ### 12.2 配置示例
 
@@ -712,11 +714,9 @@ magic gateway restart
     },
     "wecom": {
       "enabled": true,
-      "mode": "app",
-      "corp_id": "wwxxxx",
-      "agent_id": "1000002",
-      "secret": "xxxx",
-      "aes_key": "xxxx"
+      "mode": "aibot",            // 仅官方智能机器人（Web UI 扫码创建）
+      "bot_id": "bot_xxxx",
+      "secret": "sec_xxxx"
     }
   }
 }

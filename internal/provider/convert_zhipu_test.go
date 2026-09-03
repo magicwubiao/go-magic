@@ -97,3 +97,45 @@ func TestNormalizeToolArguments(t *testing.T) {
 		}
 	}
 }
+
+// TestConvertEmptyUserSystemContent covers the role-agnostic empty-content
+// guard: zhipu/GLM error 1214 also fires for a user or system message whose
+// content is empty/whitespace-only — flows that bypass buildLLMMessages
+// (compression rebuilds, injected recovery prompts, media turns) can carry
+// such messages into the converter. Every non-tool message must serialize
+// with a non-empty string content.
+func TestConvertEmptyUserSystemContent(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "system", Content: ""},
+		{Role: "user", Content: "   "},
+		{Role: "assistant", Content: ""}, // no tool_calls: bare empty assistant
+		{Role: "user", Content: "今天怎么又 1214 了？"},
+	}
+
+	out := ConvertMessagesWithConfig(msgs, nil)
+	if len(out) != len(msgs) {
+		t.Fatalf("expected %d messages, got %d", len(msgs), len(out))
+	}
+
+	for i, m := range out {
+		c, ok := m["content"].(string)
+		if !ok {
+			t.Errorf("message %d (role=%v) content = %T, want string", i, m["role"], m["content"])
+			continue
+		}
+		if strings.TrimSpace(c) == "" {
+			t.Errorf("message %d (role=%v) content = %q, want non-empty placeholder", i, m["role"], c)
+		}
+		// The placeholder must be invisible: content may be the zero-width
+		// space, but never a readable marker or the raw empty string.
+		if c == "" || c == " " {
+			t.Errorf("message %d (role=%v) content = %q, want zero-width placeholder", i, m["role"], c)
+		}
+	}
+
+	b, _ := json.Marshal(out)
+	s := string(b)
+	if strings.Contains(s, `"content":""`) || strings.Contains(s, `"content":" "`) {
+		t.Errorf("payload contains empty/whitespace content (zhipu 1214 trigger):\n%s", s)
+	}
+}

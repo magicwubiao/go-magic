@@ -1,8 +1,11 @@
 package tool
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -257,13 +260,6 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return nil, err
 	}
 
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	content := string(data)
-
 	// Handle offset and limit (1-based offset)
 	offset := 0 // 0-based index into lines
 	limit := 0
@@ -278,8 +274,50 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		limit = int(l)
 	}
 
-	lines := strings.Split(content, "\n")
-	totalLines := len(lines)
+	// Stream the file line by line instead of os.ReadFile: memory use is
+	// bounded by the returned window, not by the file size, so multi-GB
+	// logs no longer load entirely into RAM just to read 100 lines.
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	defer f.Close()
+
+	const maxLineBytes = 4 * 1024 * 1024 // 4MB per line guard
+	scanner := bufio.NewScanner(bufio.NewReaderSize(f, 256*1024))
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	// Keep trailing \r on CRLF files: previous os.ReadFile+strings.Split
+	// semantics preserved them, and edit_file's verbatim old_content
+	// matching depends on read_file returning the exact bytes.
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+
+	var (
+		lines      []string
+		totalLines int
+	)
+	for scanner.Scan() {
+		totalLines++
+		if totalLines > offset && (limit <= 0 || len(lines) < limit) {
+			lines = append(lines, scanner.Text())
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return nil, fmt.Errorf("file contains a line longer than %d MB; split the file or use a different tool", maxLineBytes/(1024*1024))
+		}
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
 
 	// If offset is beyond the file, return a clear message instead of
 	// silently falling back to the beginning of the file.
@@ -290,25 +328,38 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 			"read":      0,
 			"offset":    offset,
 			"content":   "",
-			"type":      detectFileType(absPath, content),
+			"type":      detectFileType(absPath, strings.Join(lines, "\n")),
 			"note":      fmt.Sprintf("offset %d is beyond the end of file (total %d lines)", offset+1, totalLines),
 			"truncated": false,
 		}, nil
 	}
 
-	if offset > 0 {
-		lines = lines[offset:]
-	}
-	if limit > 0 && limit < len(lines) {
-		lines = lines[:limit]
+	readContent := strings.Join(lines, "\n")
+
+	// Guard against silent agent-level truncation: when the caller did not
+	// pass limit, the agent truncates oversized tool results (~50K chars)
+	// WITHOUT any truncation signal, so the model believes it saw the whole
+	// file. Cap the window here, flag it, and tell the model how to continue.
+	const maxNoLimitChars = 48000
+	if limit <= 0 && len(readContent) > maxNoLimitChars {
+		cut := readContent[:maxNoLimitChars]
+		if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
+			cut = cut[:idx]
+		}
+		shownLines := strings.Count(cut, "\n") + 1
+		readContent = cut
+		lines = lines[:shownLines]
 	}
 
-	readContent := strings.Join(lines, "\n")
 	// Track whether the caller's requested range covers the whole file.
 	// If the caller did not pass offset (started at line 1) and the
 	// returned range is shorter than the file, the result was truncated
 	// by the request -- signal that reading should continue via offset.
 	truncated := limit > 0 && offset+limit < totalLines
+	if limit <= 0 && len(readContent) > 0 {
+		// no-limit path: truncated when we did not return all lines
+		truncated = len(lines) < totalLines
+	}
 
 	result := map[string]interface{}{
 		"path":      absPath,
@@ -317,14 +368,14 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		"offset":    offset,
 		"firstLine": offset + 1,
 		"content":   readContent,
-		"type":      detectFileType(absPath, content),
+		"type":      detectFileType(absPath, readContent),
 		"truncated": truncated,
 	}
 
 	// If truncated and the caller did not specify offset, add a hint so
 	// the model knows to continue from the next chunk.
 	if truncated && offset == 0 {
-		result["note"] = fmt.Sprintf("file has %d lines; only the first %d lines were returned. Continue reading with offset=%d to get the rest.", totalLines, limit, limit+1)
+		result["note"] = fmt.Sprintf("file has %d lines; only the first %d lines were returned. Continue reading with offset=%d to get the rest.", totalLines, len(lines), len(lines)+1)
 	}
 
 	return result, nil

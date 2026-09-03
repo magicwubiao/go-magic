@@ -279,7 +279,7 @@ func (p *GeminiProvider) StreamWithTools(ctx context.Context, messages []Message
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Most streaming chunks are small; bump the buffer for safety when tools are present.
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamLineBytes)
 	var accumulatedText string
 
 	for scanner.Scan() {

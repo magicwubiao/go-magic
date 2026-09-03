@@ -389,6 +389,11 @@ const renderedFinal = computed(() => {
   font-size: 13px;
   line-height: 1.7;
   color: #6b7280;
+  /* 超长思考（数千行）展开时会撑爆整页、滚动跳脱；封顶半屏高度内部滚动 */
+  max-height: 50vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
 }
 
 .thinking-content :deep(p) {

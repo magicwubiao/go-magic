@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +17,16 @@ import (
 )
 
 const (
-	QQAPIBase     = "https://api.q.qq.com"
-	QQSandboxBase = "https://sandbox.api.q.qq.com"
+	// QQAPIBase / QQSandboxBase: QQ 开放平台 OpenAPI 主机(官方 api-v2)。
+	// 2024 年后正式/沙箱环境统一回迁到 api.sgroup.qq.com(q.qq.com 旧域名的
+	// /api/oauth2/access_token 等端点已废弃, 返回 404)。
+	QQAPIBase     = "https://api.sgroup.qq.com"
+	QQSandboxBase = "https://sandbox.api.sgroup.qq.com"
+	// QQTokenAPI: AppID+AppSecret 换取 access_token 的独立端点。
+	// 旧式 {base}/api/oauth2/access_token 已废弃(404), 现行接口固定为
+	// POST https://bots.qq.com/app/getAppAccessToken, body 字段为
+	// {"appId": ..., "clientSecret": ...}(正式/沙箱共用此主机)。
+	QQTokenAPI = "https://bots.qq.com/app/getAppAccessToken"
 
 	QQOpDispatch     = 0
 	QQOpHeartbeat    = 1
@@ -31,7 +40,7 @@ const (
 	QQIntentGuildMessages   = 1 << 0
 	QQIntentGuildAtMessages = 1 << 9
 	QQIntentDirectMessages  = 1 << 12
-	QQIntentGroupMessages   = 1 << 25
+	QQIntentGroupMessages   = 1 << 25 // = GROUP_AND_C2C_EVENT: 群 @(GROUP_AT_MESSAGE_CREATE)+ 单聊(C2C_MESSAGE_CREATE), 群聊/单聊机器人的标准订阅
 	QQIntentGuildMembers    = 1 << 1
 	QQIntentAudit           = 1 << 30
 )
@@ -82,7 +91,14 @@ func NewQQGateway(appID, appSecret string, sandbox bool, intent int) *QQGateway 
 	}
 
 	if intent == 0 {
-		intent = QQIntentGuildAtMessages | QQIntentDirectMessages | QQIntentGroupMessages | QQIntentAudit
+		// 默认只订阅 GROUP_AND_C2C_EVENT(1<<25): 覆盖群 @ 消息
+		// GROUP_AT_MESSAGE_CREATE 与单聊 C2C_MESSAGE_CREATE, 是 QQ 开放
+		// 平台"群聊/单聊"机器人的标准订阅。
+		// 注意: 订阅平台未开通的事件位会被服务端以 close 4014
+		// "disallowed intents" 直接拒连 —— 例如仅开通群聊能力的 app 订阅
+		// 1<<9/1<<12(频道消息/频道私信)就会触发。频道机器人如需频道事件,
+		// 请在调用处显式传 intent 追加 QQIntentGuildAtMessages 等位。
+		intent = QQIntentGroupMessages
 	}
 
 	g := &QQGateway{
@@ -107,7 +123,9 @@ func NewQQGateway(appID, appSecret string, sandbox bool, intent int) *QQGateway 
 
 func (g *QQGateway) onConnect(ctx context.Context) error {
 	if g.appID == "" || g.appSecret == "" {
-		log.Warn("[QQ] No app_id/app_secret configured, skipping connect. Configure credentials to enable QQ support.")
+		// Registered for API access but not configured: report the truthful
+		// state instead of letting Connect() claim a fake "connected".
+		g.markDisconnected(fmt.Errorf("qq not configured: app_id/app_secret missing (set gateway.platforms.qq to enable)"))
 		return nil
 	}
 
@@ -124,6 +142,9 @@ func (g *QQGateway) onConnect(ctx context.Context) error {
 	}
 
 	go g.listenWebSocket()
+
+	// WS dialed synchronously above — the link is real.
+	g.markConnected()
 
 	log.Info("[QQ] Gateway connected and listening for events")
 	return nil
@@ -210,15 +231,15 @@ func (g *QQGateway) getAccessToken() (string, error) {
 		return g.accessToken, nil
 	}
 
-	tokenURL := fmt.Sprintf("%s/api/oauth2/access_token", g.apiBaseURL)
+	// 现行端点: POST https://bots.qq.com/app/getAppAccessToken
+	// 注意字段名是 clientSecret(非 appSecret), 且无 grantType 参数。
 	reqBody := map[string]interface{}{
-		"appId":     g.appID,
-		"appSecret": g.appSecret,
-		"grantType": "client_credentials",
+		"appId":        g.appID,
+		"clientSecret": g.appSecret,
 	}
 
 	jsonData, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", tokenURL, bytes.NewReader(jsonData))
+	req, err := http.NewRequest("POST", QQTokenAPI, bytes.NewReader(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -239,25 +260,34 @@ func (g *QQGateway) getAccessToken() (string, error) {
 		return "", fmt.Errorf("token API returned %d: %s", resp.StatusCode, string(body))
 	}
 
+	// 响应形如 {"access_token":"...","expires_in":"3591"}(expires_in 为字符串);
+	// 鉴权失败时返回 HTTP 200 + {"code":100016,"message":"invalid appid or secret"}。
 	var result struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-		Code        int    `json:"code"`
-		Message     string `json:"message"`
-		TraceID     string `json:"trace_id"`
+		AccessToken string          `json:"access_token"`
+		ExpiresIn   json.RawMessage `json:"expires_in"`
+		Code        int             `json:"code"`
+		Message     string          `json:"message"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("failed to parse token response: %w", err)
 	}
 
-	if result.Code != 0 && result.AccessToken == "" {
+	if result.AccessToken == "" {
 		return "", fmt.Errorf("QQ token API error: code=%d, message=%s", result.Code, result.Message)
 	}
 
-	g.accessToken = result.AccessToken
-	g.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-300) * time.Second)
+	// expires_in 可能是字符串("3591")或数字(3591), 两者都兼容。
+	expiresIn := 7200
+	if len(result.ExpiresIn) > 0 {
+		if n, err := strconv.Atoi(strings.Trim(string(result.ExpiresIn), `"`)); err == nil && n > 0 {
+			expiresIn = n
+		}
+	}
 
-	log.Infof("[QQ] Access token refreshed, expires in %d seconds", result.ExpiresIn)
+	g.accessToken = result.AccessToken
+	g.tokenExpiry = time.Now().Add(time.Duration(expiresIn-300) * time.Second)
+
+	log.Infof("[QQ] Access token refreshed, expires in %d seconds", expiresIn)
 	return g.accessToken, nil
 }
 
@@ -267,7 +297,9 @@ func (g *QQGateway) getGatewayURL() (string, error) {
 		return "", fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/gateway", g.apiBaseURL)
+	// 现行官方 api-v2: GET {host}/gateway 获取 WS 网关地址
+	// (旧路径 {host}/api/gateway 已废弃, 返回 404)。
+	url := fmt.Sprintf("%s/gateway", g.apiBaseURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create gateway request: %w", err)
@@ -430,7 +462,7 @@ func (g *QQGateway) sendIdentify() {
 	payload := map[string]interface{}{
 		"op": QQOpIdentify,
 		"d": map[string]interface{}{
-			"token":   accessToken,
+			"token":   "QQBot " + accessToken,
 			"intents": g.intent,
 			"shards":  []int{g.shardID, g.shardCount},
 			"properties": map[string]string{
@@ -523,7 +555,7 @@ func (g *QQGateway) handleDispatchEvent(eventType string, data json.RawMessage) 
 	case "MESSAGE_CREATE", "AT_MESSAGE_CREATE":
 		g.handleGuildMessageEvent(data)
 
-	case "DIRECT_MESSAGE_CREATE":
+	case "DIRECT_MESSAGE_CREATE", "C2C_MESSAGE_CREATE":
 		g.handleDirectMessageEvent(data)
 
 	case "GROUP_AT_MESSAGE_CREATE":
@@ -608,9 +640,10 @@ func (g *QQGateway) handleDirectMessageEvent(data json.RawMessage) {
 		GuildID   string `json:"guild_id"`
 		Content   string `json:"content"`
 		Author    struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-			Bot      bool   `json:"bot"`
+			ID         string `json:"id"`          // 频道私信(DIRECT_MESSAGE_CREATE)
+			UserOpenID string `json:"user_openid"` // 单聊(C2C_MESSAGE_CREATE)事件使用
+			Username   string `json:"username"`
+			Bot        bool   `json:"bot"`
 		} `json:"author"`
 		Timestamp string `json:"timestamp"`
 	}
@@ -629,13 +662,24 @@ func (g *QQGateway) handleDirectMessageEvent(data json.RawMessage) {
 		return
 	}
 
-	g.cacheMessageSource(msgData.Author.ID, "dm")
+	// C2C 事件没有 channel_id/guild_id, 用户地址是 author.user_openid;
+	// 回复走 POST /v2/users/{openid}/messages。
+	userID := msgData.Author.ID
+	if userID == "" {
+		userID = msgData.Author.UserOpenID
+	}
+	if userID == "" {
+		log.Debugf("[QQ] Direct message without author id: %s", string(data))
+		return
+	}
+
+	g.cacheMessageSource(userID, "dm")
 
 	msg := Message{
 		ID:          msgData.ID,
 		Platform:    "qq",
-		ChannelID:   msgData.Author.ID,
-		UserID:      msgData.Author.ID,
+		ChannelID:   userID,
+		UserID:      userID,
 		Content:     content,
 		Timestamp:   time.Now(),
 		IsGroup:     false,

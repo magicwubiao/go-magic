@@ -57,6 +57,13 @@ func DefaultStreamConfig() *StreamConfig {
 	}
 }
 
+// maxStreamLineBytes is the maximum size of a single SSE line the scanner
+// will accept. Tool-call `arguments` for large write_file calls can exceed
+// 64KB in one chunk (whole-argument chunks are common on non-delta providers
+// and on one-api/new-api style proxies), so this must be orders of magnitude
+// above the initial read buffer.
+const maxStreamLineBytes = 10 * 1024 * 1024 // 10MB
+
 // StreamParser handles SSE stream parsing for different provider formats
 type StreamParser interface {
 	// Parse parses a single SSE data line
@@ -267,9 +274,14 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 
 	scanner := bufio.NewScanner(&contextReader{ctx: ctx, r: body})
 
-	// Set buffer size for large content
-	buf := make([]byte, 0, config.BufferSize)
-	scanner.Buffer(buf, config.BufferSize)
+	// Set buffer size for large content. The second argument is the MAX
+	// single-line size a Scanner will accept — it must be much larger than
+	// the initial buffer. A write_file tool call with large `content`
+	// arguments can produce SSE data lines of several MB in one chunk;
+	// capping the scanner at BufferSize (64KB) made every such call fail
+	// with "bufio.Scanner: token too long", which surfaced as
+	// "tool call failed / high error rate on large file writes".
+	scanner.Buffer(make([]byte, 0, config.BufferSize), maxStreamLineBytes)
 
 	var accumulatedContent strings.Builder
 	var accumulatedReasoning strings.Builder

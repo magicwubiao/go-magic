@@ -72,6 +72,9 @@ func (g *DiscordGateway) onConnect(ctx context.Context) error {
 		g.SetUserInfo(g.session.State.User.ID, g.session.State.User.Username)
 	}
 
+	// session.Open() completed synchronously above — the link is real.
+	g.markConnected()
+
 	log.Info("[Discord] Gateway connected")
 	return nil
 }

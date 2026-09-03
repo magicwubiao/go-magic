@@ -16,6 +16,18 @@ type Message struct {
 	From         string        `json:"from,omitempty"`
 	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID   string        `json:"tool_call_id,omitempty"` // Required for tool role messages
+	// 本轮回复改动的文件（write/delete/batch 等写操作），UI 用于展示"变更的文件"。
+	// 注意：仅供会话持久化/展示使用；agent history 里的消息该字段恒为 nil，
+	// 序列化给 provider 时因 omitempty 不会泄漏到请求载荷。
+	FileOps []FileOp `json:"file_ops,omitempty"`
+}
+
+// FileOp 描述一次工具调用对单个文件的操作。Action 取值与后端 extractFileOps
+// 保持一致：read / write / delete / list / search / batch / access。
+type FileOp struct {
+	Action string `json:"action"`
+	Path   string `json:"path"`
+	Param  string `json:"param,omitempty"`
 }
 
 // ContentPart represents a part of a multimodal message content

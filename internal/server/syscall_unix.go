@@ -36,3 +36,10 @@ func isPortFree(port int) bool {
 	ln.Close()
 	return true
 }
+
+// portOwnerPID reports a go-magic process listening on the port. On Unix the
+// auto-restart path kills via the recorded PID (process-group signal), so no
+// orphan lookup is needed; return 0 to keep the legacy wait-only behaviour.
+func portOwnerPID(port int) int {
+	return 0
+}

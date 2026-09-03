@@ -179,21 +179,34 @@
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
               <div class="assistant-content">
-                <ReasoningContent :content="msg.content" :streaming="false" />
-                <!-- 工具调用统计（置于思考过程下方，含各工具成功/失败明细） -->
-                <div v-if="toolCallStats(msg).total > 0" class="tool-stats-block">
-                  <div class="tool-stats-line">
-                    <n-icon size="13"><BuildOutline /></n-icon>
-                    <span>{{ t('chat.toolStats', toolCallStats(msg)) }}</span>
+                <!-- 按 streaming_timeline_snapshot 顺序穿插渲染：推理文本 ↔ 工具调用卡片。 -->
+                <TimelineMessage
+                  :content="msg.content"
+                  :segments="msg.streaming_timeline_snapshot"
+                  :tools="messageToolCalls(msg)"
+                />
+                <!-- 本轮变更的文件（仅写/删/批动作，按路径去重），默认折叠可展开 -->
+                <div v-if="changedFiles(msg).length > 0" class="file-changes-block">
+                  <div class="file-changes-head" role="button" tabindex="0" @click.stop="toggleFileChanges(`msg-${msg.id}`)" @keydown.enter.stop="toggleFileChanges(`msg-${msg.id}`)">
+                    <n-icon size="13" class="file-changes-arrow" :class="{ 'file-changes-arrow-open': isFileChangesExpanded(`msg-${msg.id}`) }"><ChevronForwardOutline /></n-icon>
+                    <n-icon size="13"><DocumentTextOutline /></n-icon>
+                    <span>{{ t('chat.changedFilesTitle') }}</span>
+                    <span class="file-changes-count">{{ changedFiles(msg).length }}</span>
                   </div>
-                  <div class="tool-stats-detail">
-                    <span v-for="ts in toolCallStats(msg).tools" :key="ts.name" class="tool-chip" :class="{ 'has-failed': ts.failed > 0, 'is-running': ts.running > 0 }">
-                      <span class="tool-chip-name">{{ ts.name }}</span>
-                      <span class="tool-chip-count">×{{ ts.total }}</span>
-                      <span v-if="ts.success > 0" class="tool-chip-ok">✓{{ ts.success }}</span>
-                      <span v-if="ts.failed > 0" class="tool-chip-fail">✗{{ ts.failed }}</span>
-                      <span v-if="ts.running > 0" class="tool-chip-run">⟳</span>
-                    </span>
+                  <div v-show="isFileChangesExpanded(`msg-${msg.id}`)" class="file-changes-list">
+                    <div
+                      v-for="f in changedFiles(msg)"
+                      :key="f.path"
+                      class="file-change-item"
+                      :class="{ 'file-change-deleted': f.action === 'delete' }"
+                      :title="f.path"
+                    >
+                      <span class="file-change-action" :class="`action-${f.action}`">{{ fileActionLabel(f.action) }}</span>
+                      <span class="file-change-path">
+                        <span v-if="fileDirName(f.path)" class="file-change-dir">{{ fileDirName(f.path) }}/</span>
+                        <span class="file-change-base">{{ fileBaseName(f.path) }}</span>
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -218,41 +231,12 @@
 
         <!-- Streaming area -->
         <template v-if="chatStore.streaming">
-          <!-- Task Timeline for long tasks -->
-          <div v-if="taskTimelineSteps.length > 0" class="task-timeline-wrap">
-            <TaskTimeline
-              :steps="taskTimelineSteps"
-              :title="taskTimelineTitle"
-              :overall-percent="taskTimelinePercent"
-            />
-          </div>
-          <!-- Long task progress bar (fallback) -->
-          <div v-else-if="chatStore.taskProgress" class="long-task-progress">
-            <n-progress
-              type="line"
-              :percentage="chatStore.taskProgress.percent"
-              :indicator-placement="'inside'"
-              :status="chatStore.taskProgress.percent >= 100 ? 'success' : 'processing'"
-              :height="20"
-            >
-              <template #default>
-                <span style="font-size: 12px;">
-                  {{ chatStore.taskProgress.phase }} — {{ chatStore.taskProgress.detail }}
-                  ({{ chatStore.taskProgress.iteration }}/{{ chatStore.taskProgress.maxIterations }})
-                </span>
-              </template>
-            </n-progress>
-            <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block;">
-              Tokens: {{ chatStore.taskProgress.tokensUsed }} used
-              <span v-if="chatStore.taskProgress.tokensRemaining > 0">, {{ chatStore.taskProgress.tokensRemaining }} remaining</span>
-            </n-text>
-          </div>
           <!-- Streaming message with tool calls inline -->
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
               <!-- Status panel when no content yet & no running tools -->
-              <div v-if="!streamContentOnly && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
+              <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
                 <div class="status-header">
                   <div class="status-spinner"></div>
                   <span class="status-phase">{{ agentPhase }}</span>
@@ -261,23 +245,36 @@
                 <div class="status-hint">{{ t(thinkingHints[hintIndex]) }}</div>
               </div>
 
-              <!-- 思考过程 + 最终回答，工具调用统计（思考过程下方） -->
-              <div v-if="streamContentOnly" class="assistant-content">
-                <ReasoningContent :content="streamContentOnly" :streaming="chatStore.streaming" />
-              </div>
-              <div v-if="toolCallStats().total > 0" class="tool-stats-block">
-                <div class="tool-stats-line">
-                  <n-icon size="13"><BuildOutline /></n-icon>
-                  <span>{{ t('chat.toolStats', toolCallStats()) }}</span>
+              <!-- 思考过程 + 最终回答 + 工具调用：按 streamingSegments 顺序穿插渲染。 -->
+              <TimelineMessage
+                v-if="chatStore.streamContent || chatStore.streamingSegments.length > 0"
+                :content="chatStore.streamContent"
+                :segments="chatStore.streamingSegments"
+                :tools="chatStore.toolCalls"
+                :streaming="chatStore.streaming"
+              />
+              <!-- 流式期间实时展示本轮已变更的文件，默认折叠可展开 -->
+              <div v-if="changedFiles().length > 0" class="file-changes-block">
+                <div class="file-changes-head" role="button" tabindex="0" @click.stop="toggleFileChanges('streaming')" @keydown.enter.stop="toggleFileChanges('streaming')">
+                  <n-icon size="13" class="file-changes-arrow" :class="{ 'file-changes-arrow-open': isFileChangesExpanded('streaming') }"><ChevronForwardOutline /></n-icon>
+                  <n-icon size="13"><DocumentTextOutline /></n-icon>
+                  <span>{{ t('chat.changedFilesTitle') }}</span>
+                  <span class="file-changes-count">{{ changedFiles().length }}</span>
                 </div>
-                <div class="tool-stats-detail">
-                  <span v-for="ts in toolCallStats().tools" :key="ts.name" class="tool-chip" :class="{ 'has-failed': ts.failed > 0, 'is-running': ts.running > 0 }">
-                    <span class="tool-chip-name">{{ ts.name }}</span>
-                    <span class="tool-chip-count">×{{ ts.total }}</span>
-                    <span v-if="ts.success > 0" class="tool-chip-ok">✓{{ ts.success }}</span>
-                    <span v-if="ts.failed > 0" class="tool-chip-fail">✗{{ ts.failed }}</span>
-                    <span v-if="ts.running > 0" class="tool-chip-run">⟳</span>
-                  </span>
+                <div v-show="isFileChangesExpanded('streaming')" class="file-changes-list">
+                  <div
+                    v-for="f in changedFiles()"
+                    :key="f.path"
+                    class="file-change-item"
+                    :class="{ 'file-change-deleted': f.action === 'delete' }"
+                    :title="f.path"
+                  >
+                    <span class="file-change-action" :class="`action-${f.action}`">{{ fileActionLabel(f.action) }}</span>
+                    <span class="file-change-path">
+                      <span v-if="fileDirName(f.path)" class="file-change-dir">{{ fileDirName(f.path) }}/</span>
+                      <span class="file-change-base">{{ fileBaseName(f.path) }}</span>
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -287,6 +284,14 @@
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" class="empty-hint">
           {{ t('chat.selectSession') }}
         </n-text>
+      </div>
+
+      <!-- 执行状态条（沉底）：任务执行期间固定在消息区下方、输入框上方，单行提示“正在执行” -->
+      <div v-if="taskDockVisible" class="task-dock-zone">
+        <TaskTimeline
+          :steps="taskTimelineSteps"
+          :progress="chatStore.taskProgress"
+        />
       </div>
 
       <!-- 底部固定审批栏：待审批命令始终可见可操作，不随对话滚动。 -->
@@ -505,6 +510,7 @@
         </n-space>
       </template>
     </n-modal>
+
   </div>
 </template>
 
@@ -538,12 +544,12 @@ hljs.registerLanguage('markdown', markdown)
 import { useChatStore, type ToolCallEvent } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import { useModelsStore } from '@/stores/models'
-import ReasoningContent from '@/components/ReasoningContent.vue'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
+import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, BuildOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -650,44 +656,86 @@ const agentPhase = computed(() => {
   return t('chat.thinkingPhase')
 })
 
-// 工具调用统计：不再穿插展示工具详情，只在思考过程上方汇总展示。
-// 兼容两种数据源：流式中的 chatStore.toolCalls 和历史消息的 tool_calls_snapshot。
-interface ToolStatItem {
-  name: string
-  total: number
-  success: number
-  failed: number
-  running: number
-}
-
-function toolCallStats(msg?: sessionsApi.Message): { total: number; success: number; failed: number; running: number; tools: ToolStatItem[] } {
-  const list: ToolCallEvent[] = msg
-    ? ((msg.tool_calls_snapshot ?? []) as ToolCallEvent[])
-    : chatStore.toolCalls
-  let success = 0
-  let failed = 0
-  let running = 0
-  const byName = new Map<string, ToolStatItem>()
-  for (const tc of list) {
-    let s = 0, f = 0, r = 0
-    if (tc.status === 'running') { running++; r = 1 }
-    else if (tc.status === 'error' || tc.success === false) { failed++; f = 1 }
-    else { success++; s = 1 }
-    let item = byName.get(tc.name)
-    if (!item) {
-      item = { name: tc.name, total: 0, success: 0, failed: 0, running: 0 }
-      byName.set(tc.name, item)
-    }
-    item.total++
-    item.success += s
-    item.failed += f
-    item.running += r
+// 单条消息对应的工具调用列表：兼容两种数据源——
+// - 历史消息：msg.tool_calls_snapshot（前端在流式结束时写入内存快照）
+// - 流式进行中：chatStore.toolCalls（实时更新）
+function messageToolCalls(msg?: sessionsApi.Message): ToolCallEvent[] {
+  if (msg) {
+    const snap = (msg.tool_calls_snapshot ?? []) as ToolCallEvent[]
+    return snap
   }
-  return { total: list.length, success, failed, running, tools: Array.from(byName.values()) }
+  return chatStore.toolCalls
 }
 
-// 流式期间只展示思考过程与最终回答文本（不再按 timeline 切片穿插工具块）
-const streamContentOnly = computed(() => chatStore.streamContent || '')
+// ===== 变更的文件（内嵌列表 + 点击预览） =====
+// 仅把"写/删/批"视为变更动作；read/list/search/access 不进入列表。
+const FILE_CHANGED_ACTIONS = new Set(['write', 'delete', 'batch'])
+
+function fileBaseName(path: string): string {
+  const norm = path.replace(/\\/g, '/')
+  const idx = norm.lastIndexOf('/')
+  return idx >= 0 ? norm.slice(idx + 1) : path
+}
+
+function fileDirName(path: string): string {
+  const norm = path.replace(/\\/g, '/')
+  const idx = norm.lastIndexOf('/')
+  return idx > 0 ? norm.slice(0, idx) : ''
+}
+
+// 本轮全部 file_ops：
+// - 历史消息：优先后端落库返回的 msg.file_ops（刷新后仍可用），
+//   内存态消息退化为从 tool_calls_snapshot 中聚合（流式结束写入的内存快照）；
+// - 流式进行中：直接聚合 chatStore.toolCalls。
+function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
+  if (msg) {
+    if (msg.file_ops && msg.file_ops.length > 0) return msg.file_ops
+    const snap = (msg.tool_calls_snapshot ?? []) as ToolCallEvent[]
+    return snap.flatMap(tc => tc.file_ops || [])
+  }
+  return chatStore.toolCalls.flatMap(tc => tc.file_ops || [])
+}
+
+// 变更的文件：按路径去重；同路径先写后删时以 delete 为准（反映最终状态）。
+function changedFiles(msg?: sessionsApi.Message): { action: string; path: string }[] {
+  const entries: { action: string; path: string }[] = []
+  const index = new Map<string, number>()
+  for (const op of collectTurnFileOps(msg)) {
+    if (!op || !op.path) continue
+    if (!FILE_CHANGED_ACTIONS.has(op.action)) continue
+    const existing = index.get(op.path)
+    if (existing === undefined) {
+      index.set(op.path, entries.length)
+      entries.push({ action: op.action, path: op.path })
+    } else if (op.action === 'delete' && entries[existing].action !== 'delete') {
+      entries[existing].action = 'delete'
+    }
+  }
+  return entries
+}
+
+function fileActionLabel(action: string): string {
+  const key = `chat.fileActions.${action}`
+  const label = t(key)
+  return label === key ? action : label
+}
+
+// 变更文件列表折叠状态（默认收起，点击头部展开/收起）
+const expandedFileChanges = ref(new Set<string>())
+
+function isFileChangesExpanded(key: string): boolean {
+  return expandedFileChanges.value.has(key)
+}
+
+function toggleFileChanges(key: string) {
+  const next = new Set(expandedFileChanges.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedFileChanges.value = next
+}
 
 // Rotating hints during thinking
 const thinkingHints = [
@@ -865,8 +913,10 @@ const taskTimelineSteps = computed((): TimelineStep[] => {
     })
   }
 
-  // Phase 3: Synthesis (if streaming and no running tools)
-  const showSynthesis = chatStore.streaming && chatStore.activeToolCalls.length === 0 && chatStore.streamContent
+  // Phase 3: Synthesis (if streaming and no running tools; 仅真正的工具/长任务回合才展示该阶段，
+  // 纯文本回答不显示任务坞)
+  const toolTurnActive = chatStore.toolCalls.length > 0 || chatStore.taskProgress !== null
+  const showSynthesis = toolTurnActive && chatStore.streaming && chatStore.activeToolCalls.length === 0 && chatStore.streamContent
   if (showSynthesis) synthesisStarted.value = true
 
   if (synthesisStarted.value && chatStore.streaming) {
@@ -881,19 +931,10 @@ const taskTimelineSteps = computed((): TimelineStep[] => {
   return steps
 })
 
-const taskTimelineTitle = computed(() => {
-  if (chatStore.taskProgress?.phase) {
-    return `${t('chat.taskExecuting')} ${chatStore.taskProgress.phase}`
-  }
-  return t('chat.taskProgress')
-})
-
-const taskTimelinePercent = computed(() => {
-  const steps = taskTimelineSteps.value
-  if (steps.length === 0) return undefined
-  const completed = steps.filter(s => s.status === 'completed').length
-  const running = steps.filter(s => s.status === 'running').length
-  return Math.round(((completed + running * 0.5) / steps.length) * 100)
+// 任务坞仅在真正的工具/长任务回合显示（纯文本回答不出现，避免噪音）
+const taskDockVisible = computed(() => {
+  if (!chatStore.streaming) return false
+  return chatStore.taskProgress !== null || chatStore.toolCalls.length > 0 || chatStore.activeToolCalls.length > 0
 })
 
 function sourceType(source: string) {
@@ -1410,7 +1451,7 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
-  padding-bottom: 80px;
+  padding-bottom: 20px;
 }
 
 .empty-hint {
@@ -1504,86 +1545,133 @@ onMounted(async () => {
   margin-bottom: 6px;
 }
 
-/* 工具调用统计（思考过程下方）：汇总行 + 各工具明细 chip */
-.tool-stats-block {
+/* 变更的文件（助手消息内嵌列表，绿系区分"文件已改动"） */
+.file-changes-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
-.tool-stats-line {
+.file-changes-head {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 3px 10px;
   border-radius: 12px;
-  background: rgba(108, 92, 231, 0.08);
-  color: #6c5ce7;
+  background: rgba(24, 160, 88, 0.08);
+  color: #18a058;
   font-size: 12px;
   line-height: 1.4;
   width: fit-content;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
 }
 
-.tool-stats-line .n-icon {
+.file-changes-head:hover {
+  background: rgba(24, 160, 88, 0.14);
+}
+
+.file-changes-head:focus-visible {
+  outline: 2px solid rgba(24, 160, 88, 0.4);
+  outline-offset: 1px;
+}
+
+.file-changes-arrow {
+  transition: transform 0.15s;
+}
+
+.file-changes-arrow-open {
+  transform: rotate(90deg);
+}
+
+.file-changes-head .n-icon {
   opacity: 0.85;
 }
 
-.tool-stats-detail {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-left: 2px;
-}
-
-.tool-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(108, 92, 231, 0.06);
-  border: 1px solid rgba(108, 92, 231, 0.18);
-  font-size: 11px;
-  line-height: 1.5;
-  color: #6c5ce7;
-  max-width: 100%;
-}
-
-.tool-chip-name {
+.file-changes-count {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: rgba(24, 160, 88, 0.14);
   font-weight: 600;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.file-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.file-change-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid #ececec;
+  background: #fff;
+  border-radius: 8px;
+  min-width: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.file-change-item:hover {
+  border-color: #b7ebcf;
+  background: #f6fffb;
+}
+
+.file-change-action {
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: #fff;
+}
+
+.file-change-action.action-write { background: #18a058; }
+.file-change-action.action-delete { background: #d03050; }
+.file-change-action.action-batch { background: #f0a020; }
+
+.file-change-path {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+.file-change-dir {
+  color: #94a3b8;
+  font-size: 11px;
+  flex-shrink: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
-.tool-chip-count {
-  opacity: 0.75;
-}
-
-.tool-chip-ok {
-  color: #18a058;
+.file-change-base {
+  color: #1f2937;
   font-weight: 600;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
 }
 
-.tool-chip-fail {
+.file-change-deleted .file-change-base {
   color: #d03050;
-  font-weight: 600;
-}
-
-.tool-chip-run {
-  color: #f0a020;
-  font-weight: 600;
-}
-
-.tool-chip.has-failed {
-  border-color: rgba(208, 48, 80, 0.35);
-  background: rgba(208, 48, 80, 0.05);
-}
-
-.tool-chip.is-running {
-  border-color: rgba(240, 160, 32, 0.4);
-  background: rgba(240, 160, 32, 0.06);
+  text-decoration: line-through;
 }
 
 .system-bubble {
@@ -1669,19 +1757,9 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-/* ========== Waiting Indicator ========== */
-.task-timeline-wrap {
-  margin: 8px auto;
-  max-width: 900px;
-}
-
-.long-task-progress {
-  padding: 12px 16px;
-  margin: 8px auto;
-  background: #f0f7ff;
-  border: 1px solid #d0e3ff;
-  border-radius: 8px;
-  max-width: 900px;
+/* ========== 长任务进度坞（沉底） ========== */
+.task-dock-zone {
+  padding: 0 24px 10px;
 }
 
 /* Agent status panel */
@@ -2048,37 +2126,35 @@ onMounted(async () => {
     color: #e5e7eb;
   }
 
-  .tool-stats-line {
-    background: rgba(139, 124, 246, 0.15);
-    color: #a29bfe;
-  }
-
-  .tool-chip {
-    background: rgba(139, 124, 246, 0.12);
-    border-color: rgba(139, 124, 246, 0.3);
-    color: #a29bfe;
-  }
-
-  .tool-chip-ok {
+  .file-changes-head {
+    background: rgba(99, 226, 183, 0.12);
     color: #63e2b7;
   }
 
-  .tool-chip-fail {
+  .file-changes-count {
+    background: rgba(99, 226, 183, 0.18);
+  }
+
+  .file-change-item {
+    border-color: #2a2a2a;
+    background: #1a1a1a;
+  }
+
+  .file-change-item:hover {
+    border-color: #2f7a5a;
+    background: #16241d;
+  }
+
+  .file-change-base {
+    color: #e5e7eb;
+  }
+
+  .file-change-dir {
+    color: #6b7280;
+  }
+
+  .file-change-deleted .file-change-base {
     color: #e88080;
-  }
-
-  .tool-chip-run {
-    color: #f2c97d;
-  }
-
-  .tool-chip.has-failed {
-    border-color: rgba(232, 128, 128, 0.4);
-    background: rgba(232, 128, 128, 0.08);
-  }
-
-  .tool-chip.is-running {
-    border-color: rgba(242, 201, 125, 0.4);
-    background: rgba(242, 201, 125, 0.08);
   }
 
   .system-bubble {

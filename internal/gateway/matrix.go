@@ -164,11 +164,18 @@ func (g *MatrixGateway) login(userID, password string) error {
 func (g *MatrixGateway) onConnect(ctx context.Context) error {
 	log.Infof("[Matrix] Connecting to Matrix gateway (homeserver: %s)...", g.homeserver)
 
-	if err := g.sync(ctx); err != nil {
-		log.Errorf("[Matrix] Initial sync failed: %v", err)
+	// Non-blocking initial /sync (timeout=0) validates the access token against
+	// the homeserver and seeds next_batch immediately. Reporting "connected"
+	// before this round-trip would hide bad tokens (the previous code swallowed
+	// the error and let the UI show connected while syncLoop failed forever).
+	if err := g.sync(ctx, 0); err != nil {
+		return fmt.Errorf("initial sync failed: %w", err)
 	}
 
-	go g.syncLoop()
+	// Real round-trip succeeded — the link is live.
+	g.markConnected()
+
+	go g.syncLoop(ctx)
 
 	log.Info("[Matrix] Gateway connected")
 	return nil
@@ -280,8 +287,11 @@ func (g *MatrixGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 	}
 }
 
-func (g *MatrixGateway) sync(ctx context.Context) error {
-	syncURL := fmt.Sprintf("/_matrix/client/v3/sync?timeout=%d", int(g.longPollTimeout.Seconds()*1000))
+// sync performs one /sync round-trip with the given long-poll timeout
+// (0 = return immediately). It returns an error when the homeserver is
+// unreachable or the access token is rejected.
+func (g *MatrixGateway) sync(ctx context.Context, pollTimeout time.Duration) error {
+	syncURL := fmt.Sprintf("/_matrix/client/v3/sync?timeout=%d", int(pollTimeout.Seconds()*1000))
 	if g.lastNextBatch != "" {
 		syncURL += "&since=" + url.QueryEscape(g.lastNextBatch)
 	}
@@ -318,14 +328,17 @@ func (g *MatrixGateway) sync(ctx context.Context) error {
 	return nil
 }
 
-func (g *MatrixGateway) syncLoop() {
+// syncLoop is the steady-state long-poll loop. It exits when ctx is canceled
+// (Disconnect), fixing a previous leak where syncLoop selected on an unset
+// internal ctx and never stopped.
+func (g *MatrixGateway) syncLoop(ctx context.Context) {
 	for {
 		select {
-		case <-g.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 			ctx, cancel := context.WithTimeout(context.Background(), g.longPollTimeout+10*time.Second)
-			if err := g.sync(ctx); err != nil {
+			if err := g.sync(ctx, g.longPollTimeout); err != nil {
 				log.Errorf("[Matrix] Sync error: %v", err)
 				time.Sleep(5 * time.Second)
 			}

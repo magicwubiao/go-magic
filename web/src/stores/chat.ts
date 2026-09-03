@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, nextTick } from 'vue'
-import type { Session, Message } from '@/api/sessions'
+import type { Session, Message, FileOp } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 import * as commandsApi from '@/api/commands'
 import * as approvalApi from '@/api/approval'
@@ -9,12 +9,6 @@ import { i18n } from '@/locales'
 export interface ChatError {
   message: string
   code?: string
-}
-
-export interface FileOp {
-  action: string // read, write, delete, list, search, batch, access
-  path: string
-  param?: string
 }
 
 export interface ToolCallEvent {
@@ -31,6 +25,7 @@ export interface ToolCallEvent {
 }
 
 export type { ToolCallEvent as ToolCallSnapshot }
+export type { FileOp }
 export type { StreamSegment as TimelineSegment }
 export {}
 

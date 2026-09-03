@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,14 @@ import (
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
+
+// parseIntOr parses an integer CLI value, falling back to def on garbage.
+func parseIntOr(value string, def int) int {
+	if n, err := strconv.Atoi(value); err == nil {
+		return n
+	}
+	return def
+}
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -209,23 +218,58 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 				platCfg.APIURL = value
 			case "api_key":
 				platCfg.APIKey = value
-			case "verify_token":
-				platCfg.VerifyToken = value
+			case "mode":
+				platCfg.Mode = value
+			case "bot_id":
+				platCfg.BotID = value
 			case "aes_key":
 				platCfg.AESKey = value
 			case "client_id":
 				platCfg.ClientID = value
 			case "data_dir":
 				platCfg.DataDir = value
-			case "auto_login":
-				platCfg.AutoLogin = value == "true" || value == "1" || value == "yes"
+			case "ws_url":
+				platCfg.WSURL = value
+			case "webhook_url":
+				platCfg.WebhookURL = value
+			case "events_token":
+				platCfg.EventsToken = value
+			case "email":
+				platCfg.Email = value
+			case "imap_host":
+				platCfg.IMAPHost = value
+			case "imap_user":
+				platCfg.IMAPUser = value
+			case "imap_pass":
+				platCfg.IMAPPass = value
+			case "smtp_host":
+				platCfg.SMTPHost = value
+			case "smtp_user":
+				platCfg.SMTPUser = value
+			case "smtp_pass":
+				platCfg.SMTPPass = value
+			case "account_sid":
+				platCfg.AccountSID = value
+			case "auth_token":
+				platCfg.AuthToken = value
+			case "from":
+				platCfg.From = value
+			case "imap_port":
+				platCfg.IMAPPort = parseIntOr(value, 993)
+			case "smtp_port":
+				platCfg.SMTPPort = parseIntOr(value, 465)
+			case "poll_interval":
+				platCfg.PollInterval = parseIntOr(value, 30)
 			default:
 				fmt.Printf("Unknown platform field: %s\n", field)
 				fmt.Println("Available fields:")
-				fmt.Println("  enabled, token, corp_id, agent_id, secret")
-				fmt.Println("  app_id, app_secret, app_key, number, password")
-				fmt.Println("  api_url, api_key, verify_token, aes_key")
-				fmt.Println("  client_id, data_dir, auto_login")
+				fmt.Println("  enabled, token, secret, app_id, app_secret, app_key")
+				fmt.Println("  number, password, api_url, api_key, mode, bot_id")
+				fmt.Println("  corp_id, agent_id, aes_key, client_id, data_dir, ws_url")
+				fmt.Println("  webhook_url, events_token          (googlechat)")
+				fmt.Println("  email, imap_host, imap_port, imap_user, imap_pass")
+				fmt.Println("  smtp_host, smtp_port, smtp_user, smtp_pass, poll_interval  (email)")
+				fmt.Println("  account_sid, auth_token, from      (sms)")
 				os.Exit(1)
 			}
 
@@ -373,16 +417,48 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 				fmt.Println(platCfg.APIURL)
 			case "api_key":
 				fmt.Println(platCfg.APIKey)
-			case "verify_token":
-				fmt.Println(platCfg.VerifyToken)
+			case "mode":
+				fmt.Println(platCfg.Mode)
+			case "bot_id":
+				fmt.Println(platCfg.BotID)
 			case "aes_key":
 				fmt.Println(platCfg.AESKey)
 			case "client_id":
 				fmt.Println(platCfg.ClientID)
 			case "data_dir":
 				fmt.Println(platCfg.DataDir)
-			case "auto_login":
-				fmt.Println(platCfg.AutoLogin)
+			case "ws_url":
+				fmt.Println(platCfg.WSURL)
+			case "webhook_url":
+				fmt.Println(platCfg.WebhookURL)
+			case "events_token":
+				fmt.Println(platCfg.EventsToken)
+			case "email":
+				fmt.Println(platCfg.Email)
+			case "imap_host":
+				fmt.Println(platCfg.IMAPHost)
+			case "imap_user":
+				fmt.Println(platCfg.IMAPUser)
+			case "imap_pass":
+				fmt.Println(platCfg.IMAPPass)
+			case "smtp_host":
+				fmt.Println(platCfg.SMTPHost)
+			case "smtp_user":
+				fmt.Println(platCfg.SMTPUser)
+			case "smtp_pass":
+				fmt.Println(platCfg.SMTPPass)
+			case "account_sid":
+				fmt.Println(platCfg.AccountSID)
+			case "auth_token":
+				fmt.Println(platCfg.AuthToken)
+			case "from":
+				fmt.Println(platCfg.From)
+			case "imap_port":
+				fmt.Println(platCfg.IMAPPort)
+			case "smtp_port":
+				fmt.Println(platCfg.SMTPPort)
+			case "poll_interval":
+				fmt.Println(platCfg.PollInterval)
 			default:
 				fmt.Printf("Unknown field: %s\n", field)
 				os.Exit(1)
@@ -547,8 +623,9 @@ func runConfigValidate(cmd *cobra.Command, args []string) {
 						errors = append(errors, fmt.Sprintf("Gateway platform '%s' enabled but token is empty", name))
 					}
 				case "wecom":
-					if plat.CorpID == "" || plat.Secret == "" {
-						errors = append(errors, fmt.Sprintf("Gateway platform '%s' enabled but corp_id/secret missing", name))
+					// 仅支持官方智能机器人（aibot，扫码创建）：bot_id/secret 必填
+					if plat.BotID == "" || plat.Secret == "" {
+						errors = append(errors, fmt.Sprintf("Gateway platform 'wecom' enabled but bot_id/secret missing (官方智能机器人，扫码创建)"))
 					}
 				}
 			}

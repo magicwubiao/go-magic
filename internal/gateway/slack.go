@@ -77,9 +77,13 @@ func NewSlackGateway(botToken, signingSecret string) *SlackGateway {
 func (g *SlackGateway) onConnect(ctx context.Context) error {
 	log.Infof("[Slack] Connecting to Slack gateway...")
 
+	// startRTM validates the bot token via rtm.connect (returns an error on
+	// invalid_auth etc.), so reaching this point means the credentials are real.
 	if err := g.startRTM(); err != nil {
 		return fmt.Errorf("failed to start RTM: %w", err)
 	}
+
+	g.markConnected()
 
 	go g.startHTTPServer()
 

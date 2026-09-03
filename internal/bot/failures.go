@@ -28,6 +28,7 @@ const (
 	FailureTurnTimeout       FailureCode = "turn_timeout"
 	FailureCanceled          FailureCode = "canceled"
 	FailureToolError         FailureCode = "tool_error"
+	FailureContentPolicy     FailureCode = "content_policy"
 )
 
 // failureClass describes how a failure should be handled by the worker.
@@ -53,6 +54,20 @@ func classifyFailure(err error) failureClass {
 	}
 
 	msg := strings.ToLower(err.Error())
+
+	// Content-policy rejections (safety/moderation filters, harmful content,
+	// etc.) — never retry. Checked before auth because some providers pair a
+	// policy block with HTTP 403. Mirrors the agent-side retry classifier's
+	// contentPolicyPatterns so both layers report the same reason.
+	if strings.Contains(msg, "content_policy_error") ||
+		strings.Contains(msg, "content policy") ||
+		strings.Contains(msg, "safety filter") ||
+		strings.Contains(msg, "moderation") ||
+		strings.Contains(msg, "content blocked") ||
+		strings.Contains(msg, "policy violation") ||
+		strings.Contains(msg, "harmful content") {
+		return failureClass{Code: FailureContentPolicy}
+	}
 
 	// Auth / credentials — never retry.
 	if strings.Contains(msg, "401") ||
@@ -166,6 +181,8 @@ func turnFailureReplyCoded(err error, turnTimeout time.Duration) (string, Failur
 		return "(📡 模型服务暂时不可用,请稍后再试。)", cls.Code
 	case FailureAuth:
 		return "(🔑 模型服务鉴权失败,请检查 API Key/Provider 配置。)", cls.Code
+	case FailureContentPolicy:
+		return "(🚫 内容被模型安全策略拦截,请调整表述后重试。)", cls.Code
 	case FailureDeliveryTimeout:
 		return "(⏱ 请求超时未收到响应,请稍后再试。)", cls.Code
 	case FailureMissingConfig:

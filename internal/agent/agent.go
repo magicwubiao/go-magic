@@ -1400,7 +1400,10 @@ Please provide a comprehensive, well-structured final response based on these su
 				// reason without Abort=true) can never silently burn turns
 				// until the repeated-failure detector escalates.
 				if strategy.Abort || (classified != nil && !classified.Retryable) {
-					return "", fmt.Errorf("non-retryable error: %w", err)
+					if isMessagesFormatError(err) {
+						log.Warnf("[Agent] permanent message-format rejection: %s", messageShapeSummary(req.Messages))
+					}
+					return "", fmt.Errorf("non-retryable error: %w (messages shape: %s)", err, messageShapeSummary(req.Messages))
 				}
 				if strategy.Delay > 0 {
 					time.Sleep(strategy.Delay)
@@ -2017,8 +2020,9 @@ Please provide a comprehensive, well-structured final response based on these su
 					a.Emit(bus.EventKindError, cerr.Error())
 					return fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
 				}
-				log.Warnf("[Agent:Stream] StreamWithTools failed: %v (provider=%s, messages=%d, tools=%d)",
-					err, a.provider.Name(), len(req.Messages), len(a.tools))
+				log.Warnf("[Agent:Stream] StreamWithTools failed: %v (provider=%s, messages=%d, tools=%d)%s",
+					err, a.provider.Name(), len(req.Messages), len(a.tools),
+					shapeSuffix(req.Messages, err))
 				// Repeated-failure escalation: a permanently failing stream
 				// (e.g. zhipu 1214 on every attempt) must not burn the whole
 				// turn budget before the non-streaming fallback also fails
@@ -2035,9 +2039,12 @@ Please provide a comprehensive, well-structured final response based on these su
 						// had NO strategy check at all).
 						strategy := retry.GetRecoveryStrategy(classified, 1)
 						if strategy.Abort || (classified != nil && !classified.Retryable) {
+							if isMessagesFormatError(err) {
+								log.Warnf("[Agent:Stream] permanent message-format rejection: %s", messageShapeSummary(req.Messages))
+							}
 							a.sanitizeHistory()
 							handler("", true)
-							return fmt.Errorf("non-retryable error: %w", err)
+							return fmt.Errorf("non-retryable error: %w (messages shape: %s)", err, messageShapeSummary(req.Messages))
 						}
 						if strategy.Delay > 0 {
 							time.Sleep(strategy.Delay)
@@ -2136,9 +2143,12 @@ Please provide a comprehensive, well-structured final response based on these su
 						classified = a.errorClassifier.Classify(err, status, a.provider.Name(), "")
 						strategy := retry.GetRecoveryStrategy(classified, 1)
 						if strategy.Abort || (classified != nil && !classified.Retryable) {
+							if isMessagesFormatError(err) {
+								log.Warnf("[Agent:Stream] permanent message-format rejection (non-stream fallback): %s", messageShapeSummary(req.Messages))
+							}
 							a.sanitizeHistory()
 							handler("", true)
-							return fmt.Errorf("non-retryable error: %w", err)
+							return fmt.Errorf("non-retryable error: %w (messages shape: %s)", err, messageShapeSummary(req.Messages))
 						}
 						if strategy.Delay > 0 {
 							time.Sleep(strategy.Delay)
@@ -2458,6 +2468,15 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 	var toolArgs map[string]interface{}
 	if tc.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs); err != nil {
+			// Malformed arguments JSON on a large tool call almost always
+			// means the model hit its per-response output limit mid-JSON
+			// (typical for write_file with big `content`). Surface it loudly
+			// instead of silently degrading to {"input": ...}, which made
+			// the tool fail with an opaque "xxx argument is required".
+			log.Warnf("[TOOL] malformed arguments JSON for tool=%s (len=%d): %v — likely truncated by model output limit; args head=%q tail=%q",
+				toolName, len(tc.Function.Arguments), err,
+				utils.TruncateDetailed(tc.Function.Arguments, 120),
+				utils.TailString(tc.Function.Arguments, 120))
 			toolArgs = map[string]interface{}{"input": tc.Function.Arguments}
 		}
 	} else if tc.Arguments != nil {
@@ -2996,6 +3015,109 @@ func (a *Agent) truncateHistory() {
 	// which is exactly where RC3 says the loop used to go straight into
 	// the API call with no pre-sanitize.
 	a.sanitizeHistory()
+}
+
+// shapeSuffix returns ", shape=..." when the error looks like a permanent
+// message-format rejection (1214 family), empty otherwise. Keeps the common
+// failure log line compact while still surfacing the payload shape for the
+// cases where it matters.
+func shapeSuffix(msgs []provider.Message, err error) string {
+	if !isMessagesFormatError(err) {
+		return ""
+	}
+	return ", shape=" + messageShapeSummary(msgs)
+}
+
+// isMessagesFormatError reports whether err is a provider rejection of the
+// message payload shape itself (the Zhipu/GLM 1214 "messages 参数非法" family
+// and its English/localized variants, plus generic format rejections from
+// other strict providers). These are the errors where surfacing the outbound
+// message shape pays off — the payload is bad, and the shape tells us why
+// (system-only array, empty/whitespace content, orphan tool block, etc.).
+func isMessagesFormatError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "[1214]") ||
+		strings.Contains(msg, "api error 1214") ||
+		strings.Contains(msg, "错误码 1214") ||
+		strings.Contains(msg, "参数非法") ||
+		strings.Contains(msg, "messages parameter") ||
+		strings.Contains(msg, "the messages parameter is illegal") ||
+		strings.Contains(msg, "invalid messages")
+}
+
+// messageShapeSummary renders a compact one-line structural profile of a
+// message slice without leaking content: role letters with byte lengths,
+// tagging messages whose content is empty (∅), whitespace/zero-width-only
+// (ws), or part of a tool round-trip (parts/tc/noID). It is embedded into the
+// surfaced error on 1214-class permanent aborts so the offending shape is
+// visible in the UI/CLI error text itself, not only in server logs.
+func messageShapeSummary(msgs []provider.Message) string {
+	total := len(msgs)
+	if total == 0 {
+		return "messages=[] (EMPTY ARRAY)"
+	}
+	const maxShow = 16
+	start := 0
+	if total > maxShow {
+		start = total - maxShow
+	}
+	userCnt, sysCnt, toolCnt := 0, 0, 0
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			userCnt++
+		case "system":
+			sysCnt++
+		case "tool":
+			toolCnt++
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "messages=%d[", total)
+	for i, m := range msgs {
+		if i < start {
+			continue
+		}
+		if i == start && start > 0 {
+			b.WriteString("…")
+		}
+		var ch string
+		switch m.Role {
+		case "system":
+			ch = "s"
+		case "user":
+			ch = "u"
+		case "assistant":
+			ch = "a"
+		case "tool":
+			ch = "t"
+		default:
+			ch = "?" + m.Role
+		}
+		cl := len(m.Content)
+		flag := ""
+		switch {
+		case cl == 0 && len(m.ContentParts) == 0:
+			flag = "∅"
+		case provider.IsEmptyAssistantContent(m.Content):
+			flag = "ws"
+		}
+		if len(m.ContentParts) > 0 {
+			flag += fmt.Sprintf("parts%d", len(m.ContentParts))
+		}
+		if n := len(m.ToolCalls); n > 0 {
+			flag += fmt.Sprintf("/tc%d", n)
+		}
+		if m.Role == "tool" && m.ToolCallID == "" {
+			flag += "/noID"
+		}
+		fmt.Fprintf(&b, "%s%s%d ", ch, flag, cl)
+	}
+	fmt.Fprintf(&b, "] s=%d u=%d t=%d", sysCnt, userCnt, toolCnt)
+	return strings.TrimSpace(b.String())
 }
 
 // looksLikeUnparsedToolCall reports whether streamed content appears to be a

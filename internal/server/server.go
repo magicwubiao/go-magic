@@ -522,6 +522,10 @@ Your working directory is: %s
 	// Plugin-level failures are isolated and never block server startup.
 	_, s.agentPlugins = s.loadAgentPlugins()
 
+	// WeCom 扫码确认后自动重启 gateway：让新写入 config.json 的 bot_id/secret
+	// 生效（否则新 bot 永不连接，表现为"扫码成功但收不到消息"）。
+	s.registerWeComQRLoginHook()
+
 	return s
 }
 
@@ -994,6 +998,9 @@ func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string
 		if m.ToolCallID != "" {
 			msg["tool_call_id"] = m.ToolCallID
 		}
+		if len(m.FileOps) > 0 {
+			msg["file_ops"] = m.FileOps
+		}
 		result[i] = msg
 	}
 	return result
@@ -1225,6 +1232,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/gateway/restart", withCORS(requireAuth(s.handleGatewayRestart)))
 	mux.HandleFunc("/api/gateway/qr", withCORS(requireAuth(s.handleGatewayQR)))
 	mux.HandleFunc("/api/gateway/qr/status", withCORS(requireAuth(s.handleGatewayQRStatus)))
+	mux.HandleFunc("/api/gateway/platforms/{id}/{action}", withCORS(requireAuth(s.handleGatewayPlatformAction)))
 
 	// Magic update
 	mux.HandleFunc("/api/magic/update", withCORS(requireAuth(s.handleMagicUpdate)))

@@ -8,6 +8,7 @@ web/dist/
 web/dist-node/
 web/*.tsbuildinfo
 web/pnpm-lock.yaml
+web/.i18n-check/
 
 # Go
 *.test

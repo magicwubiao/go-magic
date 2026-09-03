@@ -52,16 +52,22 @@ func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
 
 func (g *FeishuGateway) onConnect(ctx context.Context) error {
 	if g.appID == "" || g.appSecret == "" {
-		log.Warn("[Feishu] No app_id/app_secret configured, skipping connect. Configure credentials to enable Feishu support.")
+		// Registered for API access but not configured: report the truthful
+		// state instead of letting Connect() claim a fake "connected".
+		g.markDisconnected(fmt.Errorf("feishu not configured: app_id/app_secret missing (set gateway.platforms.feishu to enable)"))
 		return nil
 	}
 
 	log.Infof("[Feishu] Connecting gateway...")
 
+	// refreshToken validates app_id/app_secret synchronously (bad credentials
+	// return an error), so reaching this point means the platform link is real.
 	if err := g.refreshToken(); err != nil {
 		log.Errorf("[Feishu] Failed to get token: %v", err)
 		return err
 	}
+
+	g.markConnected()
 
 	go g.tokenRefresher(ctx)
 	go g.startCallbackServer(ctx)

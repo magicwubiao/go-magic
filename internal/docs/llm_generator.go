@@ -255,7 +255,7 @@ func (g *LLMGenerator) getConfigurationEntries() []DocumentationEntry {
 		},
 		{
 			Title:       "Gateway Configuration",
-			Description: "Configure messaging platforms: Telegram, Discord, Slack, WhatsApp.",
+			Description: "Configure messaging platforms: Telegram, Discord, Slack, Teams, Email, SMS.",
 			Path:        "/user-guide/configuration#gateway",
 		},
 		{
@@ -353,7 +353,7 @@ func (g *LLMGenerator) getGatewayEntries() []DocumentationEntry {
 	return []DocumentationEntry{
 		{
 			Title:       "Gateway Overview",
-			Description: "Connect to Telegram, Discord, Slack, WhatsApp, and other platforms.",
+			Description: "Connect to Telegram, Discord, Slack, Teams and other platforms.",
 			Path:        "/user-guide/messaging",
 		},
 		{
@@ -597,7 +597,6 @@ func (g *LLMGenerator) generateGatewayReference() string {
 	buf.WriteString("- Telegram\n")
 	buf.WriteString("- Discord\n")
 	buf.WriteString("- Slack\n")
-	buf.WriteString("- WhatsApp\n")
 	buf.WriteString("- Signal\n")
 	buf.WriteString("- Matrix\n")
 	buf.WriteString("- Email (SMTP)\n")

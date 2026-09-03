@@ -422,6 +422,9 @@ func (p *WenxinProvider) parseResponse(body []byte) (*ChatResponse, error) {
 // parseStreamResponse parses streaming SSE response
 func (p *WenxinProvider) parseStreamResponse(body io.Reader, handler StreamHandler) error {
 	scanner := bufio.NewScanner(body)
+	// Large tool-call argument chunks (write_file etc.) can exceed 64KB per SSE line;
+	// the default 64KB scanner cap would abort the stream with "token too long".
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamLineBytes)
 	var accumulatedContent string
 	var functionCallName, functionCallArgs strings.Builder
 	var hasFunctionCall bool

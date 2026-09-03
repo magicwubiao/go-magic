@@ -67,9 +67,20 @@ func (t *TelegramHandler) onConnect(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Validate the token with a synchronous getMe round-trip before reporting
+	// connected — a bad token previously left the UI green while the update
+	// listener silently failed (and fought with other instances over
+	// getUpdates) forever.
+	if _, err := t.bot.GetMe(); err != nil {
+		return fmt.Errorf("telegram token validation failed: %w", err)
+	}
+
 	log.Info("[Telegram] Starting update listener")
 
 	go t.listenUpdates(ctx)
+
+	// Token validated and the listener is running — the link is real.
+	t.markConnected()
 
 	return nil
 }

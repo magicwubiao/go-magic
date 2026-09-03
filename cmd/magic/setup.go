@@ -122,7 +122,6 @@ func allPlatforms() []platformInfo {
 		{Name: "qq", DisplayName: "QQ", Description: "QQ Bot"},
 		{Name: "dingtalk", DisplayName: "DingTalk", Description: "DingTalk Bot"},
 		{Name: "feishu", DisplayName: "Feishu/Lark", Description: "Feishu/Lark Bot"},
-		{Name: "whatsapp", DisplayName: "WhatsApp", Description: "WhatsApp Bot"},
 		{Name: "line", DisplayName: "LINE", Description: "LINE Bot"},
 		{Name: "matrix", DisplayName: "Matrix", Description: "Matrix Protocol"},
 	}
@@ -584,34 +583,21 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 		}
 
 	case "wecom":
-		fmt.Println("  WeCom Configuration")
-		fmt.Print("  Enter Corp ID: ")
-		corpID, _ := reader.ReadString('\n')
-		corpID = strings.TrimSpace(corpID)
-		if corpID == "" {
-			fmt.Println("  ✗ Skipped (Corp ID is required)")
+		fmt.Println("  WeCom Configuration（仅支持官方智能机器人扫码 aibot）")
+		fmt.Println("  也可在 Web UI 网关页用企业微信 App 扫码创建机器人，凭据自动写入配置。")
+		fmt.Print("  Enter Bot ID: ")
+		botID, _ := reader.ReadString('\n')
+		botID = strings.TrimSpace(botID)
+		if botID == "" {
+			fmt.Println("  ✗ Skipped (Bot ID is required)")
 			return
 		}
-		fmt.Print("  Enter Agent ID: ")
-		agentID, _ := reader.ReadString('\n')
-		agentID = strings.TrimSpace(agentID)
-		fmt.Print("  Enter Secret: ")
+		fmt.Print("  Enter Bot Secret: ")
 		secret, _ := reader.ReadString('\n')
 		secret = strings.TrimSpace(secret)
-		fmt.Print("  Mode (app/qr, default qr): ")
-		mode, _ := reader.ReadString('\n')
-		mode = strings.TrimSpace(mode)
-		if mode == "" {
-			mode = "qr"
-		}
-		cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
-			Enabled: true,
-			CorpID:  corpID,
-			AgentID: agentID,
-			Secret:  secret,
-			Mode:    mode,
-		}
-		fmt.Printf("  ✓ WeCom configured (mode: %s)\n", mode)
+		pc := config.PlatformConfig{Enabled: true, Mode: "aibot", BotID: botID, Secret: secret}
+		cfg.Gateway.Platforms["wecom"] = pc
+		fmt.Println("  ✓ WeCom configured (mode: aibot)")
 
 	case "qq":
 		fmt.Println("  QQ Bot Configuration")
@@ -672,24 +658,6 @@ func runPlatformSetup(reader *bufio.Reader, cfg *config.Config, name string) {
 			AppSecret: appSecret,
 		}
 		fmt.Printf("  ✓ Feishu configured\n")
-
-	case "whatsapp":
-		fmt.Println("  WhatsApp Configuration")
-		fmt.Print("  Enter Verify Token (optional, press Enter to skip): ")
-		verifyToken, _ := reader.ReadString('\n')
-		verifyToken = strings.TrimSpace(verifyToken)
-		fmt.Print("  Mode (personal/business, default personal): ")
-		mode, _ := reader.ReadString('\n')
-		mode = strings.TrimSpace(mode)
-		if mode == "" {
-			mode = "personal"
-		}
-		cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
-			Enabled:     true,
-			VerifyToken: verifyToken,
-			Mode:        mode,
-		}
-		fmt.Printf("  ✓ WhatsApp configured (mode: %s)\n", mode)
 
 	case "line":
 		fmt.Println("  LINE Bot Configuration")

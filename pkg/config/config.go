@@ -246,11 +246,12 @@ type PlatformConfig struct {
 	GroupPolicy     string   `json:"group_policy,omitempty"`     // default: open (mention required)
 	GroupAllowlist  []string `json:"group_allowlist,omitempty"`  // group IDs allowed when policy=allowlist
 	MentionPatterns []string `json:"mention_patterns,omitempty"` // extra regex patterns treated as mentions
-	// WeCom fields
+	// Legacy WeCom 自建应用 (app) fields —— app 模式已于 2026-09 移除；
+	// 保留字段仅为兼容读取旧配置，新配置一律用 BotID/Secret。
 	CorpID  string `json:"corp_id,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
 	Secret  string `json:"secret,omitempty"`
-	// QQ fields
+	// QQ fields（仅官方机器人；个人 QQ OneBot 模式已移除）
 	Number   string `json:"number,omitempty"`
 	Password string `json:"password,omitempty"`
 	// DingTalk fields
@@ -260,18 +261,35 @@ type PlatformConfig struct {
 	AppID  string `json:"app_id,omitempty"`
 	APIURL string `json:"api_url,omitempty"`
 	APIKey string `json:"api_key,omitempty"`
-	// WhatsApp fields
-	VerifyToken string `json:"verify_token,omitempty"`
-	Mode        string `json:"mode,omitempty"` // WhatsApp: "personal" (QR login, default) or "business" (API)
-	// WeCom fields: Mode = "qr" (QR code login, default) or "app" (API callback mode)
-	// WeChat fields: Mode = "qr" (QR code login, default) or "callback" (webhook mode)
+	// Mode 语义（whatsapp 已于 2026-09 移除）：wecom="aibot"（官方智能机器人扫码，bot_id+secret；
+	// 2026-09 起唯一接入方式，自建应用 app 已移除）；matrix="password"（密码登录）。
+	Mode   string `json:"mode,omitempty"`
+	BotID  string `json:"bot_id,omitempty"`  // WeCom AI Bot
+	AESKey string `json:"aes_key,omitempty"` // legacy (WeChat ClawBot)
 	// WeChat ClawBot fields
-	AESKey string `json:"aes_key,omitempty"`
-	// WeChat ClawBot fields
-	ClientID  string `json:"client_id,omitempty"`
-	DataDir   string `json:"data_dir,omitempty"`
-	AutoLogin bool   `json:"auto_login,omitempty"`
-	// Slack/Line/Matrix fields
+	ClientID string `json:"client_id,omitempty"`
+	DataDir  string `json:"data_dir,omitempty"`
+	// 自定义 WebSocket 端点覆盖（当前仅 WeCom AI Bot 网关使用；留空用官方默认端点）
+	WSURL string `json:"ws_url,omitempty"`
+	// Microsoft Teams（Bot Framework）复用上方 AppID/AppSecret（app_id/app_secret）
+	// Google Chat fields
+	WebhookURL  string `json:"webhook_url,omitempty"`  // googlechat space incoming webhook (send + space identity)
+	EventsToken string `json:"events_token,omitempty"` // googlechat shared secret on inbound ?token=
+	// Email fields（IMAP 收 + SMTP 发；smtp_*/imap_user 留空时默认回落到 email/password）
+	Email        string `json:"email,omitempty"` // 机器人自己的邮箱地址
+	IMAPHost     string `json:"imap_host,omitempty"`
+	IMAPPort     int    `json:"imap_port,omitempty"` // 默认 993（隐式 TLS）；143 = STARTTLS
+	IMAPUser     string `json:"imap_user,omitempty"`
+	IMAPPass     string `json:"imap_pass,omitempty"`
+	SMTPHost     string `json:"smtp_host,omitempty"`
+	SMTPPort     int    `json:"smtp_port,omitempty"` // 默认 465（隐式 TLS）；587/25 = STARTTLS
+	SMTPUser     string `json:"smtp_user,omitempty"`
+	SMTPPass     string `json:"smtp_pass,omitempty"`
+	PollInterval int    `json:"poll_interval,omitempty"` // email 收件轮询秒数，默认 30
+	// SMS（Twilio）fields
+	AccountSID string `json:"account_sid,omitempty"`
+	AuthToken  string `json:"auth_token,omitempty"`
+	From       string `json:"from,omitempty"` // Twilio 号码（E.164），sms 用
 }
 
 // BotModeConfig enables/disables Bot Mode and tunes its behavior.

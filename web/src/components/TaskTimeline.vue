@@ -1,34 +1,22 @@
 <template>
-  <div class="task-timeline">
-    <div class="timeline-body">
-      <div
-        v-for="(step, idx) in steps"
-        :key="idx"
-        class="timeline-step"
-        :class="[`status-${step.status}`]"
-      >
-        <div class="step-marker">
-          <div class="step-dot" :class="[`status-${step.status}`]">
-            <span v-if="step.status === 'completed'">✓</span>
-            <span v-else-if="step.status === 'failed'">✗</span>
-            <span v-else-if="step.status === 'running'" class="spinner"></span>
-            <span v-else>{{ idx + 1 }}</span>
-          </div>
-          <div v-if="idx < steps.length - 1" class="step-line" :class="[`status-${step.status}`]"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">{{ step.title }}</div>
-          <div v-if="step.description" class="step-desc">{{ step.description }}</div>
-          <div v-if="step.status === 'running' && step.detail" class="step-detail">{{ step.detail }}</div>
-          <div v-if="step.duration" class="step-meta">{{ step.duration }}</div>
-        </div>
-      </div>
+  <!-- 极简执行状态条：单行、不可交互、无下拉；只负责告知“正在执行” -->
+  <div class="task-dock" role="status" aria-live="polite">
+    <div class="task-dock-bar" :class="barClass">
+      <span class="td-ic">
+        <span v-if="isError" class="td-ic-x">✕</span>
+        <span v-else class="td-spin"></span>
+      </span>
+      <span class="td-label">{{ label }}</span>
+      <span v-if="showPct" class="td-pct">{{ pct }}%</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { PropType } from 'vue'
+import { useI18n } from 'vue-i18n'
+import type { TaskProgress } from '@/stores/chat'
 
 export interface TimelineStep {
   title: string
@@ -38,152 +26,146 @@ export interface TimelineStep {
   duration?: string
 }
 
-defineProps({
+const props = defineProps({
   steps: { type: Array as PropType<TimelineStep[]>, required: true },
+  progress: { type: Object as PropType<TaskProgress | null>, default: null },
 })
+
+const { t } = useI18n()
+
+const runningStep = computed(() => props.steps.find((s) => s.status === 'running'))
+const failedStep = computed(() => props.steps.find((s) => s.status === 'failed'))
+// 结果整合阶段：没有工具在跑，模型正在生成最终回复
+const synthesizing = computed(
+  () => !!runningStep.value && runningStep.value.title === t('chat.resultSynthesis'),
+)
+
+const pct = computed(() => {
+  if (props.progress && Number.isFinite(props.progress.percent)) {
+    return Math.max(0, Math.min(100, Math.round(props.progress.percent)))
+  }
+  if (props.steps.length === 0) return 0
+  const done = props.steps.filter((s) => s.status === 'completed' || s.status === 'skipped').length
+  const running = props.steps.filter((s) => s.status === 'running').length
+  return Math.round(((done + running * 0.5) / props.steps.length) * 100)
+})
+
+const isError = computed(() => !!failedStep.value && !runningStep.value)
+
+// 单行文案：正在执行 X → 后端阶段 → 生成中 → 兜底“任务进行中”
+const label = computed(() => {
+  if (runningStep.value) {
+    if (synthesizing.value) return t('chat.generating')
+    return t('chat.executingTool', { name: runningStep.value.title })
+  }
+  if (isError.value) return `${t('chat.taskFailed')} · ${failedStep.value!.title}`
+  if (props.progress && pct.value < 100) {
+    const parts = [props.progress.phase, props.progress.detail].filter(Boolean)
+    if (parts.length) return parts.join(' · ')
+  }
+  return t('chat.taskInProgress')
+})
+
+const showPct = computed(() => !isError.value && pct.value > 0 && pct.value < 100)
+
+const barClass = computed(() => (isError.value ? 'is-error' : 'is-running'))
 </script>
 
 <style scoped>
-.task-timeline {
-  padding: 4px 0;
-  margin: 4px 0;
+.task-dock {
+  max-width: 900px;
+  margin: 0 auto;
+  user-select: none;
 }
-.timeline-body {
+
+.task-dock-bar {
   display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-.timeline-step {
-  display: flex;
-  gap: 8px;
-  padding: 3px 0;
-}
-.step-marker {
-  display: flex;
-  flex-direction: column;
   align-items: center;
-  width: 16px;
-  flex-shrink: 0;
+  gap: 8px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
-.step-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  display: flex;
+
+.task-dock-bar.is-running {
+  background: #eef4ff;
+  border: 1px solid #dbe7fd;
+  color: #2563eb;
+}
+
+.task-dock-bar.is-error {
+  background: #fdf0f1;
+  border: 1px solid #f5d3d8;
+  color: #c03348;
+}
+
+.td-ic {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
-  background: transparent;
-  color: #ccc;
-  border: 1px solid #ddd;
-  transition: all 0.3s;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
 }
-.step-dot.status-pending {
-  color: #ccc;
-  border-color: #ddd;
-}
-.step-dot.status-running {
-  color: #999;
-  border-color: #bbb;
-}
-.step-dot.status-completed {
-  color: #aaa;
-  border-color: #ccc;
-}
-.step-dot.status-failed {
-  color: #d9a0a0;
-  border-color: #e0c0c0;
-}
-.step-dot.status-skipped {
-  color: #ddd;
-  border-color: #e8e8e8;
-}
-.step-line {
-  width: 1px;
-  flex: 1;
-  min-height: 12px;
-  background: #eee;
-  margin: 2px 0;
-}
-.step-line.status-completed {
-  background: #ddd;
-}
-.step-line.status-running {
-  background: #e0e0e0;
-}
-.step-line.status-failed {
-  background: #f0d0d0;
-}
-.step-content {
-  flex: 1;
-  padding-top: 0;
-}
-.step-title {
-  font-size: 12px;
-  font-weight: 400;
-  color: #888;
-}
-.step-desc {
-  font-size: 10px;
-  color: #bbb;
-  margin-top: 1px;
-}
-.step-detail {
-  font-size: 10px;
-  color: #aaa;
-  margin-top: 2px;
-}
-.step-meta {
-  font-size: 9px;
-  color: #ccc;
-  margin-top: 1px;
-}
-.spinner {
-  width: 6px;
-  height: 6px;
-  border: 1px solid #bbb;
-  border-top-color: transparent;
+
+.td-spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(32, 128, 240, 0.25);
+  border-top-color: #2080f0;
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: td-spin 0.8s linear infinite;
+  display: inline-block;
+  box-sizing: border-box;
 }
-@keyframes spin {
+.task-dock-bar.is-error .td-spin {
+  display: none;
+}
+
+.td-ic-x {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@keyframes td-spin {
   to { transform: rotate(360deg); }
 }
-/* Dark mode */
+
+.td-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.td-pct {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============ 暗色 ============ */
 @media (prefers-color-scheme: dark) {
-  .step-dot {
-    color: #555;
-    border-color: #444;
+  .task-dock-bar.is-running {
+    background: #15253d;
+    border-color: #2c4a78;
+    color: #93c5fd;
   }
-  .step-dot.status-completed {
-    color: #666;
-    border-color: #555;
+  .task-dock-bar.is-error {
+    background: #2c1318;
+    border-color: #5c232b;
+    color: #f0a0ab;
   }
-  .step-dot.status-running {
-    color: #777;
-    border-color: #666;
-  }
-  .step-dot.status-failed {
-    color: #855;
-    border-color: #644;
-  }
-  .step-line {
-    background: #333;
-  }
-  .step-line.status-completed {
-    background: #444;
-  }
-  .step-title {
-    color: #777;
-  }
-  .step-desc {
-    color: #555;
-  }
-  .step-detail {
-    color: #666;
-  }
-  .step-meta {
-    color: #444;
+  .td-spin {
+    border-color: rgba(110, 168, 255, 0.25);
+    border-top-color: #6ea8ff;
   }
 }
 </style>

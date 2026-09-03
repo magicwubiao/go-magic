@@ -72,7 +72,7 @@ Vue 3 / TypeScript 前端，功能包括：
 
 将 Agent 接入外部平台：
 
-Telegram、Discord、Slack、WhatsApp、WeChat、WeCom、钉钉、飞书、QQ、LINE、Matrix。
+Telegram、Discord、Slack、WeChat（iLink）、WeCom、钉钉、飞书、QQ、LINE、Matrix、Microsoft Teams、Google Chat、Email、SMS。
 
 ### Bot 模式
 

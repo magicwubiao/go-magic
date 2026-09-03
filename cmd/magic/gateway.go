@@ -1059,6 +1059,14 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 
 	go startHealthServer(ctx)
 
+	// 将网关侧各平台运行状态回填到 /health（platformsStatus 之前从未被更新，
+	// 导致 Web UI 的平台连接灯恒为 false）。
+	gateway.GetStatusManager().AddListener(func(st *gateway.RuntimeStatus) {
+		healthMu.Lock()
+		platformsStatus[st.Platform] = st.State == gateway.StateConnected
+		healthMu.Unlock()
+	})
+
 	// Create PID file immediately so the web UI knows gateway is starting
 	magicHome := config.GetMagicHome()
 	os.MkdirAll(magicHome, 0755)
@@ -1171,7 +1179,7 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 	registry := gateway.GetRegistry()
 	count := 0
 
-	// Always register QQ
+	// Always register QQ（仅官方机器人；个人 QQ OneBot 模式已移除）
 	{
 		count++
 		qqCfg, qqHasCfg := cfg.Gateway.Platforms["qq"]
@@ -1183,8 +1191,9 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 		if err != nil {
 			fmt.Printf("[QQ] Failed to create: %v\n", err)
 		} else {
-			if qqHasCfg && qqCfg.Enabled && (qqCfg.Number != "" || qqCfg.AppID != "") {
-				fmt.Println("[QQ] Starting with configured credentials...")
+			ready := qqHasCfg && qqCfg.Enabled && (qqCfg.Number != "" || qqCfg.AppID != "")
+			if ready {
+				fmt.Println("[QQ] Starting with configured credentials (official bot)...")
 				if err := handler.Connect(ctx); err != nil {
 					fmt.Printf("[QQ] Failed to connect: %v\n", err)
 				}
@@ -1195,46 +1204,6 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 				handler.SetChannelFilter(qqCfg.AllowedChannels, qqCfg.BlockedChannels)
 			}
 			gw.RegisterPlatform("qq", handler)
-		}
-	}
-
-	// Always register WhatsApp for QR login support
-	{
-		waCfg, waHasCfg := cfg.Gateway.Platforms["whatsapp"]
-		waMode := "personal"
-		if waCfg.Mode != "" {
-			waMode = waCfg.Mode
-		}
-
-		// Only auto-register personal WhatsApp for QR login (business mode is webhook-based)
-		if waMode != "business" {
-			count++
-			configMap := platformConfigToMap(waCfg)
-			if !waHasCfg || !waCfg.Enabled {
-				configMap = map[string]interface{}{}
-			}
-			if _, has := configMap["data_dir"]; !has || configMap["data_dir"] == "" {
-				configMap["data_dir"] = filepath.Join(config.GetMagicHome(), "whatsapp")
-			}
-
-			handler, err := registry.Create(ctx, "whatsapp", configMap)
-			if err != nil {
-				fmt.Printf("[WhatsApp] Failed to create: %v\n", err)
-			} else {
-				if waHasCfg && waCfg.Enabled {
-					fmt.Println("[WhatsApp] Starting with configured credentials...")
-					if err := handler.Connect(ctx); err != nil {
-						fmt.Printf("[WhatsApp] Failed to connect: %v\n", err)
-						fmt.Println("[WhatsApp] Platform registered. Use Web QR Login to reconnect.")
-					}
-				} else {
-					fmt.Println("[WhatsApp] Registered for QR login (not enabled in config)")
-				}
-				if waHasCfg {
-					handler.SetChannelFilter(waCfg.AllowedChannels, waCfg.BlockedChannels)
-				}
-				gw.RegisterPlatform("whatsapp", handler)
-			}
 		}
 	}
 
@@ -1330,20 +1299,12 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 		if name == "qq" {
 			continue
 		}
-		// WhatsApp personal is already registered above; only process business mode here
-		if name == "whatsapp" && platCfg.Mode != "business" {
-			continue
-		}
 		// These platforms are already registered above
 		if name == "wecom" || name == "dingtalk" || name == "feishu" {
 			continue
 		}
 
 		platformID := name
-		// WhatsApp mode handling
-		if name == "whatsapp" && platCfg.Mode == "business" {
-			platformID = "whatsapp_business"
-		}
 
 		info, ok := registry.GetInfo(platformID)
 		if !ok {
@@ -1375,12 +1336,6 @@ func startPlatforms(ctx context.Context, gw *gateway.Gateway, cfg *config.Config
 
 		if err := handler.Connect(ctx); err != nil {
 			fmt.Printf("[%s] Failed to connect: %v\n", info.Name, err)
-			// For QR-based platforms, still register even if connect fails
-			if name == "whatsapp" {
-				fmt.Printf("[%s] Platform registered. Use Web QR Login to reconnect.\n", info.Name)
-				gw.RegisterPlatform(platformID, handler)
-				count++
-			}
 			continue
 		}
 
@@ -1734,7 +1689,6 @@ func runPlatformSetupInteractiveV2(cfg *config.Config, reader *bufio.Reader, mag
 		{"qq", "QQ", "QQ Bot"},
 		{"dingtalk", "DingTalk", "DingTalk Bot"},
 		{"feishu", "Feishu/Lark", "Feishu/Lark Bot"},
-		{"whatsapp", "WhatsApp", "WhatsApp Bot"},
 		{"line", "LINE", "LINE Bot"},
 		{"matrix", "Matrix", "Matrix Protocol"},
 	}
@@ -1846,45 +1800,50 @@ func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
 		}
 
 	case "wecom":
-		fmt.Println("WeCom (Enterprise WeChat)")
-		fmt.Println("  Login method: QR code scan (recommended)")
-		fmt.Print("Enter Corp ID: ")
-		corpID, _ := reader.ReadString('\n')
-		corpID = strings.TrimSpace(corpID)
-		fmt.Print("Enter Agent ID: ")
-		agentID, _ := reader.ReadString('\n')
-		agentID = strings.TrimSpace(agentID)
-		fmt.Print("Enter Secret: ")
-		secret, _ := reader.ReadString('\n')
-		secret = strings.TrimSpace(secret)
-		if corpID != "" {
+		fmt.Println("WeCom / 企业微信（官方智能机器人，扫码创建）")
+		fmt.Println("  仅支持官方智能机器人（bot_id/secret, WebSocket 免公网）；自建应用模式已移除。")
+		fmt.Println("  可先运行 'magic serve' 后在 Web UI 网关页点「扫码登录」用企业微信 App 扫码创建，")
+		fmt.Println("  机器人创建后 Bot ID/Secret 会自动写入配置；也可以现在手动填写：")
+		fmt.Print("Enter Bot ID: ")
+		botID, _ := reader.ReadString('\n')
+		botID = strings.TrimSpace(botID)
+		fmt.Print("Enter Bot Secret: ")
+		botSecret, _ := reader.ReadString('\n')
+		botSecret = strings.TrimSpace(botSecret)
+		if botID != "" && botSecret != "" {
 			cfg.Gateway.Platforms["wecom"] = config.PlatformConfig{
 				Enabled: true,
-				CorpID:  corpID,
-				AgentID: agentID,
-				Secret:  secret,
+				Mode:    "aibot",
+				BotID:   botID,
+				Secret:  botSecret,
 			}
-			fmt.Println("✓ WeCom configured (QR code login on first start)")
+			fmt.Println("✓ WeCom configured (mode: aibot)")
+		} else {
+			fmt.Println("  ✗ Skipped (bot_id/secret 均需填写；也可在 Web UI 网关页扫码创建)")
 		}
 
 	case "qq":
 		fmt.Println("QQ Bot")
-		fmt.Print("Enter QQ Number: ")
+		fmt.Println("  接入方式：QQ 开放平台官方机器人 (AppID/AppSecret)")
+		fmt.Println("  （个人 QQ 扫码 NapCat/LLOneBot OneBot 模式已移除）")
+		fmt.Print("Enter QQ Bot App ID: ")
 		number, _ := reader.ReadString('\n')
 		number = strings.TrimSpace(number)
-		fmt.Print("Enter Password (optional): ")
+		fmt.Print("Enter App Secret (optional): ")
 		password, _ := reader.ReadString('\n')
 		password = strings.TrimSpace(password)
 		if number != "" {
 			platformCfg := config.PlatformConfig{
 				Enabled: true,
-				Number:  number,
+				AppID:   number,
 			}
 			if password != "" {
-				platformCfg.Password = password
+				platformCfg.AppSecret = password
 			}
 			cfg.Gateway.Platforms["qq"] = platformCfg
-			fmt.Println("✓ QQ configured")
+			fmt.Println("✓ QQ configured (official bot)")
+		} else {
+			fmt.Println("  ✗ Skipped (AppID 需填写；可在 Web UI 网关页配置)")
 		}
 
 	case "dingtalk":
@@ -1919,29 +1878,6 @@ func configurePlatformV2(cfg *config.Config, reader *bufio.Reader, p struct {
 				AppSecret: appSecret,
 			}
 			fmt.Println("✓ Feishu configured")
-		}
-
-	case "whatsapp":
-		fmt.Println("WhatsApp Bot")
-		fmt.Println("  Login method: QR code scan (recommended)")
-		fmt.Print("Mode (personal/business, default personal): ")
-		mode, _ := reader.ReadString('\n')
-		mode = strings.TrimSpace(mode)
-		if mode == "" {
-			mode = "personal"
-		}
-		fmt.Print("Enter Verify Token (optional, for callback mode): ")
-		verifyToken, _ := reader.ReadString('\n')
-		verifyToken = strings.TrimSpace(verifyToken)
-		cfg.Gateway.Platforms["whatsapp"] = config.PlatformConfig{
-			Enabled:     true,
-			VerifyToken: verifyToken,
-			Mode:        mode,
-		}
-		if mode == "personal" {
-			fmt.Println("✓ WhatsApp configured (personal mode - QR code login on first start)")
-		} else {
-			fmt.Printf("✓ WhatsApp configured (mode: %s)\n", mode)
 		}
 
 	case "line":

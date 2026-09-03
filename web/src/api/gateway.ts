@@ -53,3 +53,19 @@ export interface QRResponse {
 export async function fetchGatewayQR(platform: string): Promise<QRResponse> {
   return request(`/gateway/qr?platform=${platform}`)
 }
+
+export interface PlatformActionResult {
+  ok: boolean
+  platform: string
+  action: 'connect' | 'disconnect'
+  connected?: boolean
+  error?: string
+}
+
+/** Connect or disconnect a platform at runtime (gateway must be running). */
+export async function platformAction(
+  platform: string,
+  action: 'connect' | 'disconnect',
+): Promise<PlatformActionResult> {
+  return request(`/gateway/platforms/${platform}/${action}`, { method: 'POST' })
+}

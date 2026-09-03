@@ -183,7 +183,15 @@ func (sm *StatusManager) SetRetryCount(platform string, count int) {
 	}
 }
 
-// Get returns the status for a platform
+// Get returns a snapshot of the platform's current status.
+//
+// The returned *RuntimeStatus is a copy owned by the caller: writers
+// (SetState/SetError/...) mutate the manager's internal record under sm.mu, so
+// reading any field of the snapshot after Get returns is race-free. Get used
+// to hand out the internal pointer, which raced with concurrent SetState —
+// every read of st.State/st.LastError after the lock was released could
+// collide with a watchdog/reconnect write (caught by `go test -race` in
+// TestBasePlatform_ConnectConfirmation and latent in BasePlatform.CheckHealth).
 func (sm *StatusManager) Get(platform string) *RuntimeStatus {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -196,29 +204,40 @@ func (sm *StatusManager) Get(platform string) *RuntimeStatus {
 			Extra:    make(map[string]interface{}),
 		}
 	}
-
-	// Calculate uptime
-	if status.LoginTime != nil && status.Connected {
-		status.UptimeSeconds = int64(time.Since(*status.LoginTime).Seconds())
-	}
-
-	return status
+	return cloneStatus(status)
 }
 
-// GetAll returns statuses for all platforms
+// GetAll returns status snapshots for all platforms
 func (sm *StatusManager) GetAll() map[string]*RuntimeStatus {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	result := make(map[string]*RuntimeStatus, len(sm.statuses))
 	for k, v := range sm.statuses {
-		status := *v
-		if v.LoginTime != nil && v.Connected {
-			status.UptimeSeconds = int64(time.Since(*v.LoginTime).Seconds())
-		}
-		result[k] = &status
+		result[k] = cloneStatus(v)
 	}
 	return result
+}
+
+// cloneStatus deep-copies s into a snapshot owned by the caller. Must be
+// called while holding sm.mu (read or write).
+//
+// LoginTime is shared by pointer, which is safe: SetState only ever replaces
+// it wholesale (&now), never mutates the time.Time in place. Extra must be
+// copied because SetExtra mutates the map in place under sm.mu — a snapshot
+// that shared it could race with a concurrent SetExtra. UptimeSeconds is
+// computed on the copy so concurrent snapshots never write the shared record
+// (the old code wrote it under RLock, racing reader-vs-reader).
+func cloneStatus(s *RuntimeStatus) *RuntimeStatus {
+	st := *s
+	if st.LoginTime != nil && st.Connected {
+		st.UptimeSeconds = int64(time.Since(*st.LoginTime).Seconds())
+	}
+	st.Extra = make(map[string]interface{}, len(s.Extra))
+	for k, v := range s.Extra {
+		st.Extra[k] = v
+	}
+	return &st
 }
 
 // AddListener adds a status change listener

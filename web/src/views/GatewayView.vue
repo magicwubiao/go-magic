@@ -28,6 +28,10 @@
         >
           {{ actionLoading ? t('gateway.stopping') : t('gateway.stop') }}
         </n-button>
+        <n-button size="small" secondary :loading="refreshing" @click="refreshPage">
+          <template #icon><n-icon><RefreshOutline /></n-icon></template>
+          {{ t('common.refresh') }}
+        </n-button>
       </n-space>
     </n-space>
 
@@ -58,15 +62,49 @@
           </template>
           <n-space vertical size="small">
             <n-text depth="3">{{ platform.description }}</n-text>
-            <n-tag :type="platform.enabled ? 'success' : 'default'" size="small">
-              {{ platform.enabled ? t('common.enabled') : t('common.disabled') }}
-            </n-tag>
+            <n-space size="small">
+              <n-tag :type="platform.enabled ? 'success' : 'default'" size="small">
+                {{ platform.enabled ? t('common.enabled') : t('common.disabled') }}
+              </n-tag>
+              <n-tag
+                v-if="gatewayRunning"
+                :type="isConnected(platform) ? 'success' : 'warning'"
+                size="small"
+              >
+                {{ isConnected(platform) ? t('gateway.connected') : t('gateway.notConnected') }}
+              </n-tag>
+            </n-space>
           </n-space>
           <template #action>
             <n-space>
               <n-button size="small" @click="openEditModal(platform)">{{ t('gateway.config') }}</n-button>
               <n-button v-if="platform.supportsQR" size="small" type="info" @click="showQRInfo(platform)">
                 {{ t('gateway.qrLogin') }}
+              </n-button>
+              <!-- 连接成功后提供「取消连接」：断开运行中连接，配置与凭据保留 -->
+              <n-popconfirm
+                v-if="gatewayRunning && isConnected(platform)"
+                :positive-text="t('common.confirm')"
+                :negative-text="t('common.cancel')"
+                @positive-click="runPlatformAction(platform, 'disconnect')"
+              >
+                <template #trigger>
+                  <n-button size="small" type="error" :loading="!!platformBusy[platform.id]">
+                    {{ t('gateway.disconnect') }}
+                  </n-button>
+                </template>
+                {{ t('gateway.disconnectConfirm', { name: platform.label }) }}
+              </n-popconfirm>
+              <!-- 已启用但未连接：仅对可安全运行时重连的平台显示 -->
+              <n-button
+                v-if="gatewayRunning && platform.enabled && !isConnected(platform) && reconnectablePlatforms.has(platform.id)"
+                size="small"
+                type="primary"
+                secondary
+                :loading="!!platformBusy[platform.id]"
+                @click="runPlatformAction(platform, 'connect')"
+              >
+                {{ t('gateway.reconnect') }}
               </n-button>
             </n-space>
           </template>
@@ -77,7 +115,11 @@
     <!-- Edit Platform Modal -->
     <n-modal v-model:show="showEditModal" :title="editingPlatform?.label" preset="dialog" class="modal-responsive" style="width: 500px; max-width: 96vw;">
       <n-form v-if="editingPlatform" label-placement="left" label-width="120" size="small">
-        <n-form-item label="Token">
+        <!-- 通用 Token 只适用于 bot-token 类平台（telegram/discord/slack/line/matrix/wechat_ilink）。
+             QQ / WeCom / Teams 为 App 凭据专用表单；dingtalk / feishu 为 App 凭据模式，后端用
+             appKey/appSecret 自动换取并缓存 token；googlechat / email / sms 也是专用字段表单，
+             这些平台一律不走通用 Token（填了不生效）。 -->
+        <n-form-item v-if="!['qq', 'wecom', 'dingtalk', 'feishu', 'teams', 'googlechat', 'email', 'sms'].includes(editingPlatform.id)" label="Token">
           <n-input
             v-model:value="editingPlatform.token"
             type="password"
@@ -86,22 +128,25 @@
           />
         </n-form-item>
 
-        <!-- Platform-specific fields -->
+        <!-- WeCom：仅支持官方智能机器人（扫码创建，bot_id/secret） -->
         <template v-if="editingPlatform.id === 'wecom'">
-          <n-form-item label="Corp ID">
-            <n-input v-model:value="editingPlatform.corpId" placeholder="Enterprise Corp ID" />
+          <n-form-item :label="t('gateway.wecomBotId')">
+            <n-input v-model:value="editingPlatform.botId" placeholder="Bot ID" />
           </n-form-item>
-          <n-form-item label="Agent ID">
-            <n-input v-model:value="editingPlatform.agentId" placeholder="Agent ID" />
+          <n-form-item :label="t('gateway.wecomBotSecret')">
+            <n-input v-model:value="editingPlatform.secret" type="password" show-password-on="click" placeholder="Bot Secret" />
           </n-form-item>
-          <n-form-item label="Secret">
-            <n-input v-model:value="editingPlatform.secret" type="password" show-password-on="click" placeholder="Secret" />
-          </n-form-item>
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.wecomAibotHint') }}
+          </n-alert>
         </template>
 
         <template v-if="editingPlatform.id === 'dingtalk'">
           <n-form-item label="App Key">
             <n-input v-model:value="editingPlatform.appKey" placeholder="App Key" />
+          </n-form-item>
+          <n-form-item label="App Secret">
+            <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="App Secret" />
           </n-form-item>
         </template>
 
@@ -109,15 +154,16 @@
           <n-form-item label="App ID">
             <n-input v-model:value="editingPlatform.appId" placeholder="App ID" />
           </n-form-item>
-        </template>
-
-        <template v-if="editingPlatform.id === 'wechat_ilink'">
-          <n-form-item label="Auto Login">
-            <n-switch v-model:value="editingPlatform.autoLogin" />
+          <n-form-item label="App Secret">
+            <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="App Secret" />
           </n-form-item>
         </template>
 
-        <!-- WhatsApp only supports Personal (QR) mode currently -->
+        <template v-if="editingPlatform.id === 'wechat_ilink'">
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.wechatIlinkHint') }}
+          </n-alert>
+        </template>
 
         <template v-if="editingPlatform.id === 'qq'">
           <n-form-item label="App ID">
@@ -126,9 +172,91 @@
           <n-form-item label="App Secret">
             <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="Bot Token / App Secret" />
           </n-form-item>
-          <n-text depth="3" style="font-size: 12px;">
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
             {{ t('gateway.qqBotHint') }}
-          </n-text>
+            <a href="https://q.qq.com/qqbot/openclaw/login.html" target="_blank" rel="noopener" style="text-decoration: underline;">
+              {{ t('gateway.qqBotCreate') }} ↗
+            </a>
+          </n-alert>
+        </template>
+
+        <!-- Teams（Bot Framework）：Microsoft App ID + App Password -->
+        <template v-if="editingPlatform.id === 'teams'">
+          <n-form-item label="App ID">
+            <n-input v-model:value="editingPlatform.appId" placeholder="Microsoft App ID" />
+          </n-form-item>
+          <n-form-item label="App Password">
+            <n-input v-model:value="editingPlatform.appSecret" type="password" show-password-on="click" placeholder="Microsoft App Password" />
+          </n-form-item>
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.teamsHint') }}
+          </n-alert>
+        </template>
+
+        <!-- Google Chat：Incoming Webhook + Events API -->
+        <template v-if="editingPlatform.id === 'googlechat'">
+          <n-form-item label="Webhook URL">
+            <n-input v-model:value="editingPlatform.webhookUrl" placeholder="https://chat.googleapis.com/v1/spaces/..." />
+          </n-form-item>
+          <n-form-item label="Events Token">
+            <n-input v-model:value="editingPlatform.eventsToken" type="password" show-password-on="click" placeholder="Optional shared secret (delivery URL: .../gchat/events?token=)" />
+          </n-form-item>
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.googlechatHint') }}
+          </n-alert>
+        </template>
+
+        <!-- Email：IMAP 收信 + SMTP 发信（轮询，无需公网回调端口） -->
+        <template v-if="editingPlatform.id === 'email'">
+          <n-form-item label="Email">
+            <n-input v-model:value="editingPlatform.email" placeholder="bot@example.com" />
+          </n-form-item>
+          <n-form-item label="IMAP Host">
+            <n-input v-model:value="editingPlatform.imapHost" placeholder="imap.example.com" />
+          </n-form-item>
+          <n-form-item label="IMAP Port">
+            <n-input v-model:value="editingPlatform.imapPort" placeholder="993 (implicit TLS)" />
+          </n-form-item>
+          <n-form-item label="IMAP User">
+            <n-input v-model:value="editingPlatform.imapUser" placeholder="defaults to Email address" />
+          </n-form-item>
+          <n-form-item label="IMAP Password">
+            <n-input v-model:value="editingPlatform.imapPass" type="password" show-password-on="click" placeholder="App password" />
+          </n-form-item>
+          <n-form-item label="SMTP Host">
+            <n-input v-model:value="editingPlatform.smtpHost" placeholder="smtp.example.com (defaults to IMAP Host)" />
+          </n-form-item>
+          <n-form-item label="SMTP Port">
+            <n-input v-model:value="editingPlatform.smtpPort" placeholder="465 (implicit TLS)" />
+          </n-form-item>
+          <n-form-item label="SMTP User">
+            <n-input v-model:value="editingPlatform.smtpUser" placeholder="defaults to Email address" />
+          </n-form-item>
+          <n-form-item label="SMTP Password">
+            <n-input v-model:value="editingPlatform.smtpPass" type="password" show-password-on="click" placeholder="defaults to IMAP Password" />
+          </n-form-item>
+          <n-form-item label="Poll Interval (s)">
+            <n-input v-model:value="editingPlatform.pollInterval" placeholder="30" />
+          </n-form-item>
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.emailHint') }}
+          </n-alert>
+        </template>
+
+        <!-- SMS：Twilio（Account SID + Auth Token + 发信号码） -->
+        <template v-if="editingPlatform.id === 'sms'">
+          <n-form-item label="Account SID">
+            <n-input v-model:value="editingPlatform.accountSid" placeholder="Twilio Account SID" />
+          </n-form-item>
+          <n-form-item label="Auth Token">
+            <n-input v-model:value="editingPlatform.authToken" type="password" show-password-on="click" placeholder="Twilio Auth Token" />
+          </n-form-item>
+          <n-form-item label="From Number">
+            <n-input v-model:value="editingPlatform.fromNumber" placeholder="+1xxxxxxxxxx (Twilio number)" />
+          </n-form-item>
+          <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px;">
+            {{ t('gateway.smsHint') }}
+          </n-alert>
         </template>
       </n-form>
       <template #action>
@@ -216,10 +344,11 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { useGatewayStore } from '@/stores/gateway'
 import { useConfigStore } from '@/stores/config'
 import type { PlatformStatus } from '@/api/gateway'
-import { getPlatforms } from '@/api/gateway'
+import { getPlatforms, platformAction } from '@/api/gateway'
 
 const { t } = useI18n()
 
@@ -239,9 +368,28 @@ interface Platform {
   appKey: string
   appSecret: string
   appId: string
+  wsUrl: string
+  botId: string
   mode: string
   modeOptions: { label: string; value: string }[]
-  autoLogin: boolean
+  // googlechat
+  webhookUrl: string
+  eventsToken: string
+  // email (IMAP + SMTP)
+  email: string
+  imapHost: string
+  imapPort: string
+  imapUser: string
+  imapPass: string
+  smtpHost: string
+  smtpPort: string
+  smtpUser: string
+  smtpPass: string
+  pollInterval: string
+  // sms (Twilio)
+  accountSid: string
+  authToken: string
+  fromNumber: string
 }
 
 interface QRResponse {
@@ -257,6 +405,7 @@ const gatewayStore = useGatewayStore()
 const configStore = useConfigStore()
 const gatewayEnabled = ref(false)
 const actionLoading = ref(false)
+const refreshing = ref(false)
 const showEditModal = ref(false)
 const showQRModal = ref(false)
 const editingPlatform = ref<Platform | null>(null)
@@ -272,14 +421,19 @@ const qrExpiresIn = ref(60)
 const qrImageUrl = ref<string>('')
 let qrPollInterval: ReturnType<typeof setInterval> | null = null
 let qrCountdownInterval: ReturnType<typeof setInterval> | null = null
+let statusTimer: ReturnType<typeof setInterval> | null = null
 
 function createPlatform(id: string, label: string, description: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
   return reactive({
     id, label, description, enabled: false, token: '',
     tokenLabel, tokenType: 'password', tokenPlaceholder, supportsQR,
     corpId: '', agentId: '', secret: '',
-    appKey: '', appSecret: '', appId: '',
-    mode: '', modeOptions: [], autoLogin: false,
+    appKey: '', appSecret: '', appId: '', wsUrl: '', botId: '',
+    mode: '', modeOptions: [],
+    webhookUrl: '', eventsToken: '',
+    email: '', imapHost: '', imapPort: '', imapUser: '', imapPass: '',
+    smtpHost: '', smtpPort: '', smtpUser: '', smtpPass: '', pollInterval: '',
+    accountSid: '', authToken: '', fromNumber: '',
   })
 }
 
@@ -288,20 +442,22 @@ const platforms = ref<Platform[]>([
   createPlatform('discord', 'Discord', 'Discord Bot', 'Bot Token', 'Discord Bot Token'),
   createPlatform('slack', 'Slack', 'Slack Bot', 'Bot Token', 'Slack Bot Token'),
   createPlatform('wechat_ilink', 'WeChat iLink', 'WeChat Personal', 'Token', 'iLink Token', true),
-  createPlatform('wecom', 'WeCom', 'Enterprise WeChat', 'Token', 'WeCom Token', true),
+  createPlatform('wecom', 'WeCom', t('gateway.wecomAibotDesc'), 'Token', 'WeCom Token', true),
   createPlatform('qq', 'QQ', t('gateway.qqGuildBot'), 'App ID', t('gateway.qqBotAppId')),
-  createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token', true),
-  createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token', true),
-  createPlatform('whatsapp', 'WhatsApp', 'WhatsApp Bot', 'Token', 'WhatsApp Token', true),
+  createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token'),
+  createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token'),
   createPlatform('line', 'LINE', 'LINE Bot', 'Channel Token', 'LINE Channel Token'),
   createPlatform('matrix', 'Matrix', 'Matrix Protocol', 'Token', 'Matrix Token'),
+  createPlatform('teams', 'Microsoft Teams', t('gateway.teamsDesc'), 'App ID', 'Microsoft App ID'),
+  createPlatform('googlechat', 'Google Chat', t('gateway.googlechatDesc'), 'Webhook URL', 'https://chat.googleapis.com/v1/spaces/...'),
+  createPlatform('email', 'Email', t('gateway.emailDesc'), 'Email', 'bot@example.com'),
+  createPlatform('sms', 'SMS', t('gateway.smsDesc'), 'Account SID', 'Twilio Account SID'),
 ])
 
-// wechat_ilink only supports QR login, no mode selection needed
-
-// Mode options removed - platforms now use their default/login methods:
-// - wecom: QR login (app mode not implemented in QR login API)
-// - whatsapp: Personal QR mode only (Business API not implemented)
+// wechat_ilink / wecom 支持扫码登录（wecom 为官方智能机器人扫码创建；whatsapp 已于 2026-09 移除）。
+// qq 仅官方机器人（AppID/AppSecret）；个人 QQ 扫码 OneBot 模式已移除。
+// dingtalk / feishu 是企业自建应用凭据模式、官方无个人扫码通道；
+// teams / googlechat / email / sms 均为凭据/Webhook 直配模式，故这些平台不开扫码按钮。
 
 const enabledCount = computed(() => (platforms.value || []).filter(p => p.enabled).length)
 
@@ -313,6 +469,53 @@ async function refreshConnected(): Promise<void> {
     connectedPlatforms.value = await getPlatforms()
   } catch {
     // gateway not running - stale data is fine, non-critical
+  }
+}
+
+const gatewayRunning = computed(() => !!gatewayStore.status?.running)
+
+// name -> connected lookup from the gateway health detail
+const connectedMap = computed<Record<string, boolean>>(() => {
+  const m: Record<string, boolean> = {}
+  for (const p of connectedPlatforms.value) m[p.name] = p.connected
+  return m
+})
+
+function isConnected(platform: Platform): boolean {
+  return connectedMap.value[platform.id] === true
+}
+
+// Platforms whose runtime Connect is structurally safe to re-run after a
+// disconnect (each Connect builds a fresh connection / session). Webhook-style
+// platforms (dingtalk/feishu/slack/line/matrix + teams/googlechat/email/sms)
+// restore by restarting the gateway instead.
+const reconnectablePlatforms = new Set(['telegram', 'discord', 'qq', 'wecom'])
+
+// Per-platform busy state for connect/disconnect actions
+const platformBusy = ref<Record<string, boolean>>({})
+
+async function runPlatformAction(platform: Platform, action: 'connect' | 'disconnect'): Promise<void> {
+  platformBusy.value = { ...platformBusy.value, [platform.id]: true }
+  try {
+    await platformAction(platform.id, action)
+    if (action === 'disconnect') {
+      message.success(t('gateway.disconnectSuccess'))
+    } else {
+      message.success(t('gateway.connectSuccess'))
+    }
+    // Poll briefly: WS-style platforms (qq/wecom) dial in the background, so
+    // the connection light may take a moment to reflect the new state.
+    const target = action === 'disconnect' ? false : true
+    for (let i = 0; i < 8; i++) {
+      await refreshConnected()
+      if (isConnected(platform) === target) return
+      await new Promise((res) => setTimeout(res, 700))
+    }
+  } catch (e) {
+    const prefix = action === 'disconnect' ? t('gateway.disconnectFailed') : t('gateway.connectFailed')
+    message.error(prefix + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    platformBusy.value = { ...platformBusy.value, [platform.id]: false }
   }
 }
 
@@ -331,24 +534,84 @@ function populateFromConfig(cfg: any) {
     platform.appKey = pc.app_key || ''
     platform.appSecret = pc.app_secret || ''
     platform.appId = pc.app_id || ''
+    platform.wsUrl = pc.ws_url || ''
+    platform.botId = pc.bot_id || ''
     platform.mode = pc.mode || ''
-    platform.autoLogin = pc.auto_login || false
+    platform.webhookUrl = pc.webhook_url || ''
+    platform.eventsToken = pc.events_token || ''
+    platform.email = pc.email || ''
+    platform.imapHost = pc.imap_host || ''
+    platform.imapPort = pc.imap_port != null ? String(pc.imap_port) : ''
+    platform.imapUser = pc.imap_user || ''
+    platform.imapPass = pc.imap_pass || ''
+    platform.smtpHost = pc.smtp_host || ''
+    platform.smtpPort = pc.smtp_port != null ? String(pc.smtp_port) : ''
+    platform.smtpUser = pc.smtp_user || ''
+    platform.smtpPass = pc.smtp_pass || ''
+    platform.pollInterval = pc.poll_interval != null ? String(pc.poll_interval) : ''
+    platform.accountSid = pc.account_sid || ''
+    platform.authToken = pc.auth_token || ''
+    platform.fromNumber = pc.from || ''
+
+    if (platform.id === 'qq') {
+      // 仅官方机器人：强制清掉历史 onebot/onebot_v11 mode（OneBot 接入已移除）
+      platform.mode = ''
+      platform.description = t('gateway.qqGuildBot')
+    }
+
+    if (platform.id === 'wecom') {
+      // 企业微信仅保留官方智能机器人：历史 mode='app'/'' 一律按 aibot 处理
+      platform.mode = 'aibot'
+      platform.description = t('gateway.wecomAibotDesc')
+      // 自建应用已移除：清掉 corp_id/agent_id，保存时同步抹除遗留配置
+      platform.corpId = ''
+      platform.agentId = ''
+    }
   }
 }
 
 function buildPlatformPayload(platform: Platform): Record<string, any> {
   const payload: any = {
     enabled: platform.enabled,
-    token: platform.token,
   }
+  // token 仅在非空时写出，避免空值覆盖已有配置
+  if (platform.token) payload.token = platform.token
   if (platform.corpId) payload.corp_id = platform.corpId
   if (platform.agentId) payload.agent_id = platform.agentId
   if (platform.secret) payload.secret = platform.secret
   if (platform.appKey) payload.app_key = platform.appKey
   if (platform.appSecret) payload.app_secret = platform.appSecret
   if (platform.appId) payload.app_id = platform.appId
-  if (platform.mode) payload.mode = platform.mode
-  if (platform.autoLogin) payload.auto_login = platform.autoLogin
+  if (platform.wsUrl) payload.ws_url = platform.wsUrl
+  if (platform.botId) payload.bot_id = platform.botId
+  if (platform.webhookUrl) payload.webhook_url = platform.webhookUrl
+  if (platform.eventsToken) payload.events_token = platform.eventsToken
+  if (platform.email) payload.email = platform.email
+  if (platform.imapHost) payload.imap_host = platform.imapHost
+  if (platform.imapPort) payload.imap_port = platform.imapPort
+  if (platform.imapUser) payload.imap_user = platform.imapUser
+  if (platform.imapPass) payload.imap_pass = platform.imapPass
+  if (platform.smtpHost) payload.smtp_host = platform.smtpHost
+  if (platform.smtpPort) payload.smtp_port = platform.smtpPort
+  if (platform.smtpUser) payload.smtp_user = platform.smtpUser
+  if (platform.smtpPass) payload.smtp_pass = platform.smtpPass
+  if (platform.pollInterval) payload.poll_interval = platform.pollInterval
+  if (platform.accountSid) payload.account_sid = platform.accountSid
+  if (platform.authToken) payload.auth_token = platform.authToken
+  if (platform.fromNumber) payload.from = platform.fromNumber
+
+  if (platform.id === 'qq') {
+    // 仅官方机器人：OneBot 模式已移除，保存时用空串清除历史 mode=onebot/onebot_v11
+    payload.mode = ''
+  } else if (platform.id === 'wecom') {
+    // 仅官方智能机器人：mode 固定 aibot；空串清除历史 corp_id/agent_id（自建应用已移除）
+    payload.mode = 'aibot'
+    payload.bot_id = platform.botId || ''
+    payload.corp_id = ''
+    payload.agent_id = ''
+  } else if (platform.mode) {
+    payload.mode = platform.mode
+  }
   return payload
 }
 
@@ -368,6 +631,24 @@ async function saveGatewayEnabled(): Promise<void> {
     message.success(gatewayEnabled.value ? t('gateway.enabled') : t('gateway.disabled'))
   } catch (e) {
     message.error(t('gateway.updateFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  }
+}
+
+// 手动刷新：重读 config.json（扫码/CLI 在后台写入的改动在此生效）+
+// 刷新网关运行状态与各平台实时连接状态。
+async function refreshPage(): Promise<void> {
+  refreshing.value = true
+  try {
+    await gatewayStore.loadStatus()
+    await configStore.loadConfig()
+    if (configStore.config) {
+      populateFromConfig(configStore.config)
+    }
+    await refreshConnected()
+  } catch (e) {
+    message.error(t('gateway.refreshFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -511,8 +792,8 @@ function startPolling(): void {
       }
 
       // Refresh the QR code image whenever the server returns a new one
-      // (e.g. WhatsApp rotates the QR every ~60s). Without this, users
-      // would keep scanning the very first QR and the phone would
+      // (e.g. WeChat iLink / WeCom rotate the QR every ~60s). Without this,
+      // users would keep scanning the very first QR and the phone would
       // reject it as expired.
       if (data.qr_code && data.qr_code !== qrImageUrl.value) {
         qrImageUrl.value = data.qr_code
@@ -579,8 +860,14 @@ function getDefaultMessage(status?: string): string {
 }
 
 async function saveEditingPlatform(): Promise<void> {
-  if (!editingPlatform.value) return
-  await savePlatform(editingPlatform.value)
+  const p = editingPlatform.value
+  if (!p) return
+  // 官方智能机器人模式 bot_id 必填（二维码确认后会自动写入，也可手动粘贴）
+  if (p.id === 'wecom' && !p.botId) {
+    message.warning(t('gateway.wecomBotIdRequired'))
+    return
+  }
+  await savePlatform(p)
   showEditModal.value = false
   message.success(t('gateway.platformSaved'))
 }
@@ -592,11 +879,23 @@ onMounted(async () => {
   if (configStore.config) {
     populateFromConfig(configStore.config)
   }
+  // Keep the per-platform connection state fresh while the gateway runs so
+  // the disconnect/reconnect buttons reflect reality (e.g. an external bot
+  // going offline is picked up without a manual refresh).
+  statusTimer = setInterval(() => {
+    if (gatewayStore.status?.running) {
+      refreshConnected()
+    }
+  }, 5000)
 })
 
 onUnmounted(() => {
   stopPolling()
   stopCountdown()
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
 })
 </script>
 

@@ -63,16 +63,22 @@ func NewDingTalkGateway(appKey, appSecret string) *DingTalkGateway {
 
 func (g *DingTalkGateway) onConnect(ctx context.Context) error {
 	if g.appKey == "" || g.appSecret == "" {
-		log.Warn("[DingTalk] No app_key/app_secret configured, skipping connect. Configure credentials to enable DingTalk support.")
+		// Registered for API access but not configured: report the truthful
+		// state instead of letting Connect() claim a fake "connected".
+		g.markDisconnected(fmt.Errorf("dingtalk not configured: app_key/app_secret missing (set gateway.platforms.dingtalk to enable)"))
 		return nil
 	}
 
 	log.Infof("[DingTalk] Connecting to DingTalk gateway...")
 
+	// refreshToken validates app_key/app_secret synchronously (bad credentials
+	// return an error), so reaching this point means the platform link is real.
 	if err := g.refreshToken(); err != nil {
 		log.Errorf("[DingTalk] Failed to get DingTalk token: %v", err)
 		return err
 	}
+
+	g.markConnected()
 
 	go g.tokenRefresher(ctx)
 	go g.startCallbackServer(ctx)

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 )
 
@@ -97,4 +98,22 @@ func getConfigString(config map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// getConfigInt reads an integer config key (JSON numbers arrive as float64),
+// falling back to def when absent or unparsable.
+func getConfigInt(config map[string]interface{}, def int, keys ...string) int {
+	for _, k := range keys {
+		switch v := config[k].(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		case string:
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+	}
+	return def
 }

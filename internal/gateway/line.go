@@ -171,9 +171,49 @@ func (g *LineGateway) onConnect(ctx context.Context) error {
 
 	log.Infof("[LINE] Connecting with webhook server on port %d", g.GetCallbackPort())
 
+	// Validate the channel access token with a synchronous bot/info round-trip
+	// before reporting connected — a bad token previously left the UI green
+	// while every push silently failed with 401.
+	if err := g.validateToken(ctx); err != nil {
+		return fmt.Errorf("LINE token validation failed: %w", err)
+	}
+
+	g.markConnected()
+
 	go g.startHTTPServer()
 
 	log.Info("[LINE] Gateway connected (webhook server started)")
+	return nil
+}
+
+// validateToken checks the channel access token against GET /v2/bot/info and
+// records the bot's user id on success.
+func (g *LineGateway) validateToken(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.line.me/v2/bot/info", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.channelToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("bot/info request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("LINE API error: %s", string(body))
+	}
+
+	var info struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err == nil && info.UserID != "" {
+		g.userID = info.UserID
+		g.SetUserInfo(info.UserID, "")
+	}
 	return nil
 }
 

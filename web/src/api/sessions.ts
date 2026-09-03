@@ -26,6 +26,14 @@ export interface Session {
   preview: string
 }
 
+// 文件操作记录：一次工具调用对单个文件的动作。action 与后端 FileOp.Action 对齐，
+// 取值 read/write/delete/list/search/batch/access；path 可为绝对路径或会话工作目录相对路径。
+export interface FileOp {
+  action: string
+  path: string
+  param?: string
+}
+
 export interface Message {
   id: string
   session_id: string
@@ -37,6 +45,9 @@ export interface Message {
   tool_call_id?: string
   images?: string[]
   files?: Partial<UploadedFile>[]
+  // 后端落库返回：assistant 消息对应的本轮全部文件操作（含 read 等非变更动作）。
+  // 刷新/重开后由该字段驱动"变更的文件"展示；流式进行中数据源是 tool_calls_snapshot[].file_ops。
+  file_ops?: FileOp[]
   // 前端附加：assistant 回复对应本轮执行的工具调用摘要（UI 展示用）。
   // 后端 /sessions/{id}/messages 暂不返回该字段，前端在 streaming 结束时写入内存快照。
   tool_calls_snapshot?: unknown[]
