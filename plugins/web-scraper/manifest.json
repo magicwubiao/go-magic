@@ -1,0 +1,30 @@
+{
+  "id": "web-scraper",
+  "name": "Web Scraper",
+  "version": "1.0.0",
+  "description": "Fetch and extract content from web pages using Node.js",
+  "author": "go-magic",
+  "category": "utilities",
+  "tags": ["web", "scraper", "network"],
+  "type": "script",
+  "entry": "run.js",
+  "permissions": ["network"],
+  "hooks": {
+    "pre_agent": [],
+    "post_agent": []
+  },
+  "commands": [
+    {
+      "name": "scrape",
+      "description": "Scrape content from a URL"
+    }
+  ],
+  "requirements": {
+    "runtime": "node",
+    "packages": []
+  },
+  "runtime_config": {
+    "timeout": 30,
+    "memory_limit": 128
+  }
+}

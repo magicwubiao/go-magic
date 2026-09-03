@@ -1,0 +1,51 @@
+# ===========================================
+# go-magic Docker Compose
+# One-command deployment
+# ===========================================
+
+services:
+  # Main application
+  magic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go-magic
+    restart: unless-stopped
+    ports:
+      # `magic server` 默认端口是 5000；镜像 CMD 已显式指定 --port 8642，
+      # 因此这里映射 8642 才对得上。若覆盖 command，请同步修改端口。
+      - "8642:8642"   # API / Web UI
+      - "8643:8643"   # Webhook（预留，各网关平台实际用各自的回调端口）
+    environment:
+      - TZ=UTC
+    volumes:
+      - magic-config:/home/magic/.magic
+    networks:
+      - magic-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8642/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: magic-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - magic-network
+    command: redis-server --appendonly yes
+
+networks:
+  magic-network:
+    driver: bridge
+
+volumes:
+  magic-config:
+  redis-data:

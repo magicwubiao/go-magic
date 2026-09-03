@@ -1,0 +1,78 @@
+{
+  "profile": "default",
+  "magic_home": "~/.magic",
+  "provider": "openai",
+  "model": "gpt-5.6",
+  "providers": {
+    "openai": {
+      "api_key": "your-openai-api-key-here",
+      "base_url": "https://api.openai.com/v1",
+      "models": ["gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna"]
+    },
+    "anthropic": {
+      "api_key": "your-anthropic-api-key-here",
+      "models": ["claude-sonnet-5", "claude-fable-5", "claude-opus-5", "claude-haiku-4-5"]
+    },
+    "openrouter": {
+      "api_key": "your-openrouter-api-key-here",
+      "models": ["openai/gpt-5.6", "anthropic/claude-sonnet-5"]
+    },
+    "deepseek": {
+      "api_key": "your-deepseek-api-key-here",
+      "models": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    "huoshan": {
+      "api_key": "your-huoshan-api-key-here",
+      "models": ["doubao-seed-1.6", "doubao-1.5-pro-32k"]
+    },
+    "qwen": {
+      "api_key": "your-qwen-api-key-here",
+      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
+    },
+    "minimax": {
+      "api_key": "your-minimax-api-key-here",
+      "models": ["MiniMax-M2.5"]
+    },
+    "moonshot": {
+      "api_key": "your-moonshot-api-key-here",
+      "models": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"]
+    },
+    "zhipu": {
+      "api_key": "your-zhipu-api-key-here",
+      "models": ["glm-4.7", "glm-4.6", "glm-4-flash"]
+    },
+    "dashscope": {
+      "api_key": "your-dashscope-api-key-here",
+      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
+    },
+    "gemini": {
+      "api_key": "your-google-api-key-here",
+      "models": ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"]
+    },
+    "ollama": {
+      "api_key": "not-required",
+      "base_url": "http://localhost:11434",
+      "models": ["llama3.3", "qwen3", "codellama"]
+    }
+  },
+  "bot_mode": {
+    "enabled": false,
+    "relay_token": ""
+  },
+  "agent": {
+    "goal_max_turns": 20,
+    "max_turns": 150,
+    "max_iterations": 200,
+    "max_token_budget": 0
+  },
+  "privacy": {
+    "enabled": true,
+    "redact_phone": true,
+    "redact_email": true,
+    "redact_id_card": true,
+    "redact_bank_card": true,
+    "redact_ip": true,
+    "redact_address": true,
+    "custom_patterns": {}
+  }
+}

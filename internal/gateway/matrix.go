@@ -1,0 +1,559 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/log"
+)
+
+type MatrixGateway struct {
+	*BasePlatform
+
+	homeserver  string
+	userID      string
+	accessToken string
+	deviceID    string
+
+	roomID string
+	txnID  int64
+
+	agents map[string]*AgentSession
+	mu     sync.RWMutex
+
+	longPollTimeout time.Duration
+	lastNextBatch   string
+}
+
+type matrixLoginRequest struct {
+	Type     string `json:"type"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	User     string `json:"user,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
+	Token    string `json:"token,omitempty"`
+}
+
+type matrixLoginResponse struct {
+	AccessToken string `json:"access_token"`
+	DeviceID    string `json:"device_id"`
+	UserID      string `json:"user_id"`
+	HomeServer  string `json:"home_server"`
+	Token       string `json:"token,omitempty"`
+}
+
+type matrixSyncResponse struct {
+	NextBatch string `json:"next_batch"`
+	Rooms     struct {
+		Join map[string]struct {
+			Timeline struct {
+				Events []matrixEvent `json:"events"`
+			} `json:"timeline"`
+		} `json:"join"`
+	} `json:"rooms"`
+}
+
+type matrixEvent struct {
+	Type           string          `json:"type"`
+	EventID        string          `json:"event_id"`
+	Sender         string          `json:"sender"`
+	OriginServerTS int64           `json:"origin_server_ts"`
+	Content        json.RawMessage `json:"content"`
+	Unsigned       json.RawMessage `json:"unsigned,omitempty"`
+	RoomID         string          `json:"room_id,omitempty"`
+	StateKey       string          `json:"state_key,omitempty"`
+}
+
+type matrixRoomMessage struct {
+	Body          string `json:"body"`
+	MsgType       string `json:"msgtype"`
+	Format        string `json:"format,omitempty"`
+	FormattedBody string `json:"formatted_body,omitempty"`
+}
+
+type matrixSendRequest struct {
+	TxID string `json:"txn_id,omitempty"`
+}
+
+func NewMatrixGateway(homeserver, userID, accessToken string) *MatrixGateway {
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &MatrixGateway{
+		homeserver:      strings.TrimRight(homeserver, "/"),
+		userID:          userID,
+		accessToken:     accessToken,
+		agents:          make(map[string]*AgentSession),
+		longPollTimeout: 30 * time.Second,
+	}
+
+	g.BasePlatform = NewBasePlatform("matrix", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	return g
+}
+
+func NewMatrixGatewayWithLogin(homeserver, userID, password, deviceID string) (*MatrixGateway, error) {
+	config := map[string]interface{}{
+		"dm_policy":    "open",
+		"group_policy": "open",
+		"max_retries":  -1,
+	}
+
+	g := &MatrixGateway{
+		homeserver:      strings.TrimRight(homeserver, "/"),
+		userID:          userID,
+		deviceID:        deviceID,
+		agents:          make(map[string]*AgentSession),
+		longPollTimeout: 30 * time.Second,
+	}
+
+	g.BasePlatform = NewBasePlatform("matrix", config)
+	g.BasePlatform.onConnect = g.onConnect
+	g.BasePlatform.onDisconnect = g.onDisconnect
+	g.BasePlatform.onSend = g.onSend
+
+	if err := g.login(userID, password); err != nil {
+		return nil, err
+	}
+
+	return g, nil
+}
+
+func (g *MatrixGateway) login(userID, password string) error {
+	loginReq := matrixLoginRequest{
+		Type:     "m.login.password",
+		User:     userID,
+		Password: password,
+		DeviceID: g.deviceID,
+	}
+
+	jsonData, err := json.Marshal(loginReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal login request: %w", err)
+	}
+
+	resp, err := g.doRequest("POST", "/_matrix/client/v3/login", jsonData, false)
+	if err != nil {
+		return fmt.Errorf("failed to login: %w", err)
+	}
+
+	var loginResp matrixLoginResponse
+	if err := json.Unmarshal(resp, &loginResp); err != nil {
+		return fmt.Errorf("failed to parse login response: %w", err)
+	}
+
+	g.accessToken = loginResp.AccessToken
+	g.userID = loginResp.UserID
+
+	return nil
+}
+
+func (g *MatrixGateway) onConnect(ctx context.Context) error {
+	log.Infof("[Matrix] Connecting to Matrix gateway (homeserver: %s)...", g.homeserver)
+
+	// Non-blocking initial /sync (timeout=0) validates the access token against
+	// the homeserver and seeds next_batch immediately. Reporting "connected"
+	// before this round-trip would hide bad tokens (the previous code swallowed
+	// the error and let the UI show connected while syncLoop failed forever).
+	if err := g.sync(ctx, 0); err != nil {
+		return fmt.Errorf("initial sync failed: %w", err)
+	}
+
+	// Real round-trip succeeded — the link is live.
+	g.markConnected()
+
+	go g.syncLoop(ctx)
+
+	log.Info("[Matrix] Gateway connected")
+	return nil
+}
+
+func (g *MatrixGateway) onDisconnect() error {
+	log.Info("[Matrix] Gateway disconnected")
+	return nil
+}
+
+func (g *MatrixGateway) onSend(ctx context.Context, resp Response) error {
+	roomID := resp.ChannelID
+	if roomID == "" {
+		return fmt.Errorf("room ID (channel_id) is required")
+	}
+
+	text := resp.Content
+	if text == "" {
+		return nil
+	}
+
+	return g.sendRoomMessage(ctx, roomID, "m.text", text)
+}
+
+func (g *MatrixGateway) CheckHealth() *HealthStatus {
+	status := g.BasePlatform.CheckHealth()
+
+	status.Platform = "matrix"
+	status.Status = "healthy"
+	status.Platforms = make(map[string]PlatformStatus)
+	if status.Details == nil {
+		status.Details = make(map[string]interface{})
+	}
+
+	platformStatus := PlatformStatus{
+		Name:   "matrix",
+		Status: "connected",
+	}
+
+	if !status.Connected {
+		platformStatus.Status = "disconnected"
+		platformStatus.Error = "Gateway not connected"
+		status.Status = "error"
+		status.Platforms["matrix"] = platformStatus
+		return status
+	}
+
+	status.Details["homeserver"] = g.homeserver
+	status.Details["user_id"] = g.userID
+	status.Platforms["matrix"] = platformStatus
+
+	return status
+}
+
+func (g *MatrixGateway) JoinRoom(ctx context.Context, roomIDOrAlias string) error {
+	_, err := g.doRequest("POST", fmt.Sprintf("/_matrix/client/v3/join/%s", url.PathEscape(roomIDOrAlias)), nil, true)
+	return err
+}
+
+func (g *MatrixGateway) LeaveRoom(ctx context.Context, roomID string) error {
+	_, err := g.doRequest("POST", fmt.Sprintf("/_matrix/client/v3/rooms/%s/leave", url.PathEscape(roomID)), nil, true)
+	return err
+}
+
+func (g *MatrixGateway) sendRoomMessage(ctx context.Context, roomID, msgType, content string) error {
+	msgContent := matrixRoomMessage{
+		Body:    content,
+		MsgType: msgType,
+	}
+
+	jsonData, err := json.Marshal(msgContent)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	g.mu.Lock()
+	g.txnID++
+	txnID := fmt.Sprintf("m%d", g.txnID)
+	g.mu.Unlock()
+
+	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
+		url.PathEscape(roomID), txnID), jsonData, true)
+
+	return err
+}
+
+func (g *MatrixGateway) HandleSlashCommand(cmd string, msg Message) (Response, error) {
+	switch strings.ToLower(cmd) {
+	case "help":
+		return Response{
+			Content: "🤖 Magic Bot - Matrix\n\n" +
+				"📋 Commands:\n" +
+				"/help - Show this help\n" +
+				"/ping - Check bot status\n" +
+				"/status - Connection status\n" +
+				"/new - New conversation\n" +
+				"/compress - Compress context\n" +
+				"/goal - Goal management",
+		}, nil
+	case "ping":
+		return Response{Content: "Pong! 🏓"}, nil
+	case "status":
+		if g.IsConnected() {
+			return Response{Content: "✅ Connected and ready!"}, nil
+		}
+		return Response{Content: "❌ Not connected"}, nil
+	default:
+		return Response{}, fmt.Errorf("unknown command: %s", cmd)
+	}
+}
+
+// sync performs one /sync round-trip with the given long-poll timeout
+// (0 = return immediately). It returns an error when the homeserver is
+// unreachable or the access token is rejected.
+func (g *MatrixGateway) sync(ctx context.Context, pollTimeout time.Duration) error {
+	syncURL := fmt.Sprintf("/_matrix/client/v3/sync?timeout=%d", int(pollTimeout.Seconds()*1000))
+	if g.lastNextBatch != "" {
+		syncURL += "&since=" + url.QueryEscape(g.lastNextBatch)
+	}
+
+	resp, err := g.doRequestRaw("GET", syncURL, nil, true)
+	if err != nil {
+		return fmt.Errorf("sync request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("sync error: %s", string(body))
+	}
+
+	var syncResp matrixSyncResponse
+	if err := json.NewDecoder(resp.Body).Decode(&syncResp); err != nil {
+		return fmt.Errorf("failed to parse sync response: %w", err)
+	}
+
+	g.lastNextBatch = syncResp.NextBatch
+
+	for roomID, room := range syncResp.Rooms.Join {
+		for _, event := range room.Timeline.Events {
+			msg := g.processEvent(&event, roomID)
+			if msg != nil {
+				if g.ShouldProcessChannel(roomID) {
+					g.EmitMessage(*msg)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// syncLoop is the steady-state long-poll loop. It exits when ctx is canceled
+// (Disconnect), fixing a previous leak where syncLoop selected on an unset
+// internal ctx and never stopped.
+func (g *MatrixGateway) syncLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			ctx, cancel := context.WithTimeout(context.Background(), g.longPollTimeout+10*time.Second)
+			if err := g.sync(ctx, g.longPollTimeout); err != nil {
+				log.Errorf("[Matrix] Sync error: %v", err)
+				time.Sleep(5 * time.Second)
+			}
+			cancel()
+		}
+	}
+}
+
+func (g *MatrixGateway) processEvent(event *matrixEvent, roomID string) *Message {
+	if event.Sender == g.userID {
+		return nil
+	}
+
+	switch event.Type {
+	case "m.room.message":
+		var content matrixRoomMessage
+		if err := json.Unmarshal(event.Content, &content); err != nil {
+			return nil
+		}
+
+		isGroup := true
+		isMentioned := strings.Contains(content.Body, "@") || strings.Contains(content.Body, g.userID)
+
+		return &Message{
+			ID:          event.EventID,
+			Platform:    "matrix",
+			ChannelID:   roomID,
+			UserID:      event.Sender,
+			Content:     content.Body,
+			Timestamp:   time.Unix(event.OriginServerTS/1000, 0),
+			IsGroup:     isGroup,
+			IsMentioned: isMentioned,
+			Metadata: map[string]interface{}{
+				"msg_type": content.MsgType,
+				"format":   content.Format,
+			},
+		}
+	case "m.room.member":
+		var content struct {
+			Membership  string `json:"membership"`
+			Displayname string `json:"displayname,omitempty"`
+		}
+		if err := json.Unmarshal(event.Content, &content); err != nil {
+			return nil
+		}
+
+		isGroup := true
+		isMentioned := false
+
+		return &Message{
+			ID:          event.EventID,
+			Platform:    "matrix",
+			ChannelID:   roomID,
+			UserID:      event.Sender,
+			Content:     fmt.Sprintf("%s joined/left", event.Sender),
+			Timestamp:   time.Unix(event.OriginServerTS/1000, 0),
+			IsGroup:     isGroup,
+			IsMentioned: isMentioned,
+			Metadata: map[string]interface{}{
+				"event_type": "membership",
+				"membership": content.Membership,
+			},
+		}
+	}
+
+	return nil
+}
+
+func (g *MatrixGateway) doRequest(method, path string, body []byte, withAuth bool) ([]byte, error) {
+	resp, err := g.doRequestRaw(method, path, body, withAuth)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+func (g *MatrixGateway) doRequestRaw(method, path string, body []byte, withAuth bool) (*http.Response, error) {
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = strings.NewReader(string(body))
+	}
+
+	req, err := http.NewRequest(method, g.homeserver+path, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if withAuth && g.accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+g.accessToken)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	return client.Do(req)
+}
+
+func (g *MatrixGateway) GetJoinedRooms() ([]string, error) {
+	resp, err := g.doRequest("GET", "/_matrix/client/v3/joined_rooms", nil, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		JoinedRooms []string `json:"joined_rooms"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.JoinedRooms, nil
+}
+
+func (g *MatrixGateway) GetRoomMembers(roomID string) ([]string, error) {
+	resp, err := g.doRequest("GET", fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", url.PathEscape(roomID)), nil, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Chunk []struct {
+			StateKey string `json:"state_key"`
+		} `json:"chunk"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+
+	members := make([]string, len(result.Chunk))
+	for i, m := range result.Chunk {
+		members[i] = m.StateKey
+	}
+
+	return members, nil
+}
+
+func (g *MatrixGateway) UploadContent(content []byte, contentType, filename string) (string, error) {
+	req, err := http.NewRequest("POST", g.homeserver+"/_matrix/media/v3/upload", strings.NewReader(string(content)))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(content)))
+	if g.accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+g.accessToken)
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("upload error: %s", string(body))
+	}
+
+	var result struct {
+		ContentURI string `json:"content_uri"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	return result.ContentURI, nil
+}
+
+func (g *MatrixGateway) SendFormattedMessage(ctx context.Context, roomID, body, formattedBody string) error {
+	msgContent := matrixRoomMessage{
+		Body:          body,
+		MsgType:       "m.text",
+		Format:        "org.matrix.custom.html",
+		FormattedBody: formattedBody,
+	}
+
+	jsonData, err := json.Marshal(msgContent)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	g.mu.Lock()
+	g.txnID++
+	txnID := fmt.Sprintf("m%d", g.txnID)
+	g.mu.Unlock()
+
+	_, err = g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
+		url.PathEscape(roomID), txnID), jsonData, true)
+
+	return err
+}
+
+func (g *MatrixGateway) SetTypingIndicator(roomID string, isTyping bool, timeout time.Duration) error {
+	payload := map[string]interface{}{
+		"typing": isTyping,
+	}
+	if timeout > 0 {
+		payload["timeout"] = timeout.Milliseconds()
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	_, err := g.doRequest("PUT", fmt.Sprintf("/_matrix/client/v3/rooms/%s/typing/%s",
+		url.PathEscape(roomID), url.PathEscape(g.userID)), jsonData, true)
+
+	return err
+}

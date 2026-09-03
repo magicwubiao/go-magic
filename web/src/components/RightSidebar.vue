@@ -1,0 +1,2064 @@
+<template>
+  <!-- Mobile backdrop -->
+  <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
+  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }">
+    <!-- Collapse toggle button (desktop only) -->
+    <n-button 
+      size="small" 
+      quaternary 
+      circle 
+      class="collapse-toggle"
+      @click="isCollapsed = !isCollapsed"
+      :title="isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')"
+    >
+      <template #icon>
+        <n-icon :component="isCollapsed ? ChevronForwardOutline : ChevronBackOutline" :size="16" />
+      </template>
+    </n-button>
+
+    <!-- Mobile close button -->
+    <n-button
+      size="small"
+      quaternary
+      circle
+      class="mobile-close-btn"
+      @click="$emit('update:mobileVisible', false)"
+      :title="t('sidebar.collapse')"
+    >
+      <template #icon>
+        <n-icon :component="CloseOutline" :size="16" />
+      </template>
+    </n-button>
+
+    <!-- Main content -->
+    <div class="sidebar-content" v-show="!isCollapsed">
+      <!-- ============ Real-time Todo Panel (Top) ============ -->
+      <div class="todo-panel" :class="{ collapsed: todosPanelCollapsed }">
+        <div class="todo-panel-header" @click="todosPanelCollapsed = !todosPanelCollapsed">
+          <div class="todo-panel-title">
+            <n-icon :component="CheckmarkCircleOutline" :size="14" color="#2d8cf0" />
+            <span class="todo-panel-title-text">{{ t('todos.title') }}</span>
+            <span class="todo-panel-count" v-if="todosStore.activeTodos.length">
+              {{ todosStore.activeTodos.length }}
+            </span>
+          </div>
+          <div class="todo-panel-right" style="display: flex; align-items: center; gap: 4px;">
+            <div @click.stop style="display: flex;">
+              <n-button
+                quaternary
+                circle
+                size="tiny"
+                @click="loadTodos"
+                :loading="todosStore.loading"
+                :title="t('common.refresh')"
+              >
+                <template #icon><n-icon :component="RefreshOutline" :size="12" /></template>
+              </n-button>
+            </div>
+            <n-icon
+              class="todo-panel-collapse-icon"
+              :component="todosPanelCollapsed ? ChevronForwardOutline : ChevronDownOutline"
+              :size="12"
+              color="#888"
+            />
+          </div>
+        </div>
+
+        <div v-if="!todosPanelCollapsed" class="todo-panel-body">
+          <div class="todo-list-wrap" v-if="todosStore.loading && !todosStore.todos.length">
+            <n-spin size="small" style="padding: 12px; display: block; text-align: center;" />
+          </div>
+          <div v-else class="todo-list-wrap">
+            <div class="todo-list">
+              <div
+                v-for="todo in todosStore.activeTodos"
+                :key="todo.id"
+                class="todo-item"
+                :class="[`priority-${todo.priority}`, { done: todo.status === 'completed' }]"
+              >
+                <span
+                  class="todo-check"
+                  :class="{ checked: todo.status === 'completed' }"
+                  :title="todo.status === 'completed' ? t('todos.statusCompleted') : t('todos.statusPending')"
+                >
+                  <n-icon v-if="todo.status === 'completed'" :component="CheckmarkCircleOutline" :size="14" color="#3a8a3a" />
+                  <n-icon v-else :component="CheckboxOutline" :size="14" color="#aaa" />
+                </span>
+                <div class="todo-info">
+                  <span class="todo-title" :title="todo.title + (todo.description ? '\n' + todo.description : '')">{{ todo.title }}</span>
+                  <span v-if="todo.status !== 'completed'" class="todo-priority-dot" :style="{ background: priorityColor(todo.priority) }" :title="priorityLabel(todo.priority)"></span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="!todosStore.todos.length && !todosStore.loading" class="todo-empty">
+              {{ t('todos.noTodos') }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab navigation -->
+      <div class="sidebar-tabs">
+        <div 
+          class="tab-item" 
+          :class="{ active: activeTab === 'goals' }"
+          @click="activeTab = 'goals'"
+        >
+          <n-icon :component="FlagOutline" :size="14" />
+          <span>{{ t('goals.title') }}</span>
+        </div>
+        <div 
+          class="tab-item" 
+          :class="{ active: activeTab === 'files' }"
+          @click="activeTab = 'files'"
+        >
+          <n-icon :component="FolderOpenOutline" :size="14" />
+          <span>{{ t('chat.files') }}</span>
+        </div>
+      </div>
+
+      <!-- Goals Tab -->
+      <div v-if="activeTab === 'goals'" class="tab-content">
+        <!-- Header -->
+        <div class="tab-header">
+          <n-space align="center">
+            <n-icon :component="FlagOutline" :size="16" color="#2080f0" />
+            <n-text strong>{{ t('goals.title') }}</n-text>
+          </n-space>
+          <n-button size="tiny" quaternary @click="openNewGoal">
+            <template #icon><n-icon :component="AddOutline" :size="14" /></template>
+          </n-button>
+        </div>
+
+        <!-- Goal list -->
+        <div class="goal-list">
+          <n-empty v-if="!activeGoals.length" :description="t('goals.noGoals')" size="small" />
+          
+          <div 
+            v-for="goal in activeGoals" 
+            :key="goal.id" 
+            class="goal-card"
+            :class="{ active: currentGoal?.id === goal.id }"
+          >
+            <!-- Goal header -->
+            <div class="goal-card-header" @click="selectGoal(goal)">
+              <n-space align="center" justify="space-between" style="width: 100%;">
+                <n-text strong style="font-size: 14px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all;">
+                  {{ goal.title }}
+                </n-text>
+              </n-space>
+            </div>
+
+            <!-- Goal details -->
+            <n-collapse-transition>
+              <div v-if="expandedGoals.includes(goal.id)" class="goal-card-details">
+                <!-- Description -->
+                <n-text v-if="goal.description && goal.description !== goal.title" depth="3" style="font-size: 12px; display: block; margin-bottom: 8px;">
+                  {{ goal.description }}
+                </n-text>
+
+                <!-- Progress -->
+                <div class="goal-progress">
+                  <n-progress
+                    type="line"
+                    :percentage="goal.progress"
+                    :status="goal.progress === 100 ? 'success' : 'default'"
+                    :show-indicator="false"
+                    :height="6"
+                  />
+                  <n-text style="font-size: 11px; margin-top: 4px; display: block;">{{ goal.progress }}%</n-text>
+                </div>
+
+                <!-- Quick progress buttons -->
+                <n-space :size="4" style="margin-top: 8px;" align="center">
+                  <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 25)">+25%</n-button>
+                  <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 75)">75%</n-button>
+                  <n-button v-if="goal.status === 'active'" size="tiny" type="success" @click.stop="completeGoal(goal)">
+                    {{ t('goals.complete') }}
+                  </n-button>
+                </n-space>
+
+                <!-- Linked sessions -->
+                <div class="linked-sessions">
+                  <n-space align="center" :size="4" style="margin-bottom: 4px;">
+                    <n-icon :component="ChatbubblesOutline" :size="12" />
+                    <n-text depth="3" style="font-size: 11px;">
+                      {{ t('goals.linkedSessions') }}: {{ goalSessions[goal.id]?.length || goal.session_ids?.length || 0 }}
+                    </n-text>
+                  </n-space>
+                  
+                  <div v-if="sessionLoading[goal.id]" style="padding: 4px;">
+                    <n-spin size="small" />
+                  </div>
+                  <div v-else-if="goalSessions[goal.id]?.length" class="session-items">
+                    <div 
+                      v-for="session in goalSessions[goal.id]" 
+                      :key="session.id" 
+                      class="session-item"
+                      @click.stop="goToSession(session.id)"
+                    >
+                      <n-text style="font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;">
+                        {{ session.title }}
+                      </n-text>
+                      <n-text depth="3" style="font-size: 10px;">{{ formatTime(session.updated_at) }}</n-text>
+                    </div>
+                  </div>
+                  <div v-else class="session-items">
+                    <n-text depth="3" style="font-size: 11px;">{{ t('goals.noLinkedSessions') }}</n-text>
+                  </div>
+
+                  <!-- Link current session button -->
+                  <div v-if="sessionId && !goal.session_ids?.includes(sessionId)" style="margin-top: 8px;">
+                    <n-button size="tiny" type="primary" @click.stop="linkCurrentSession(goal)">
+                      {{ t('goals.linkSession') }}
+                    </n-button>
+                  </div>
+                </div>
+
+                <!-- Actions -->
+                <n-space justify="end" :size="4" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #f0f0f0;">
+                  <n-button size="tiny" text @click.stop="goToGoalsPage">
+                    {{ t('goals.details') }}
+                  </n-button>
+                  <n-button v-if="currentGoal?.id === goal.id && sessionId && goal.session_ids?.includes(sessionId)" size="tiny" text type="error" @click.stop="unlinkSession(goal)">
+                    {{ t('goals.unlinkGoal') }}
+                  </n-button>
+                </n-space>
+              </div>
+            </n-collapse-transition>
+
+            <!-- Toggle button -->
+            <n-button 
+              size="tiny" 
+              quaternary 
+              circle 
+              class="expand-toggle"
+              @click="toggleExpand(goal.id)"
+            >
+              <template #icon>
+                <n-icon 
+                  :component="expandedGoals.includes(goal.id) ? ChevronDownOutline : ChevronForwardOutline" 
+                  :size="12" 
+                />
+              </template>
+            </n-button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Files Tab - Full File Manager -->
+      <div v-if="activeTab === 'files'" class="tab-content">
+        <!-- Header with actions -->
+        <div class="tab-header">
+          <n-space align="center">
+            <n-icon :component="FolderOpenOutline" :size="16" color="#18a058" />
+            <n-text strong>{{ t('chat.files') }}</n-text>
+          </n-space>
+          <n-space :size="4">
+            <n-button size="tiny" quaternary @click="loadFiles(dirCurrentPath)" :title="t('chat.refresh')">
+              <template #icon><n-icon :component="RefreshOutline" :size="14" /></template>
+            </n-button>
+            <n-dropdown trigger="click" :options="moreActions" @select="handleMoreAction">
+              <n-button size="tiny" quaternary :title="t('common.more')">
+                <template #icon><n-icon :component="EllipsisVerticalOutline" :size="14" /></template>
+              </n-button>
+            </n-dropdown>
+          </n-space>
+        </div>
+
+        <!-- Breadcrumb navigation -->
+        <div class="files-breadcrumb">
+          <n-button
+            size="tiny"
+            quaternary
+            @click="navigateDir('')"
+            class="breadcrumb-item"
+            :title="t('chat.goRoot')"
+          >
+            <template #icon><n-icon :component="HomeOutline" :size="13" /></template>
+          </n-button>
+          <n-icon v-if="dirCurrentPath" :component="ChevronForwardOutline" :size="12" depth="3" class="breadcrumb-sep" />
+          <n-text v-if="dirCurrentPath" class="breadcrumb-path" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        </div>
+
+        <!-- Sort header -->
+        <div class="files-sort-header">
+          <n-button
+            size="tiny"
+            quaternary
+            :class="{ 'sort-active': fileSortKey === 'name' }"
+            @click="toggleSort('name')"
+          >
+            {{ t('chat.sortName') }}
+            <n-icon v-if="fileSortKey === 'name'" :component="fileSortOrder === 'asc' ? ChevronUpOutline : ChevronDownOutline" :size="12" />
+          </n-button>
+          <n-button
+            size="tiny"
+            quaternary
+            :class="{ 'sort-active': fileSortKey === 'size' }"
+            @click="toggleSort('size')"
+          >
+            {{ t('chat.sortSize') }}
+            <n-icon v-if="fileSortKey === 'size'" :component="fileSortOrder === 'asc' ? ChevronUpOutline : ChevronDownOutline" :size="12" />
+          </n-button>
+          <n-button
+            size="tiny"
+            quaternary
+            :class="{ 'sort-active': fileSortKey === 'time' }"
+            @click="toggleSort('time')"
+          >
+            {{ t('chat.sortTime') }}
+            <n-icon v-if="fileSortKey === 'time'" :component="fileSortOrder === 'asc' ? ChevronUpOutline : ChevronDownOutline" :size="12" />
+          </n-button>
+        </div>
+
+        <!-- New folder/file input -->
+        <div v-if="showNewFolderInput || showNewFileInput" class="files-new-input">
+          <n-input
+            v-model:value="newItemName"
+            size="small"
+            :placeholder="showNewFolderInput ? t('chat.newFolder') : t('chat.newFile')"
+            @keyup.enter="createNewItem"
+            @blur="cancelNewItem"
+            ref="newItemInputRef"
+          />
+        </div>
+
+        <!-- File tree -->
+        <div
+          class="files-tree"
+          @dragover.prevent="onDragOver"
+          @dragleave.prevent="onDragLeave"
+          @drop.prevent="onDrop"
+          :class="{ 'drag-over': isDragOver }"
+        >
+          <div v-if="filesLoading" class="files-loading">
+            <n-spin size="small" />
+          </div>
+          <template v-else>
+            <!-- Parent directory entry (..) -->
+            <div
+              v-if="showParentDir"
+              class="file-tree-item parent-dir-item"
+              title=".."
+              @click="navigateDir(dirParent)"
+            >
+              <n-icon size="16" color="#18a058">
+                <FolderOutline />
+              </n-icon>
+              <span class="file-name">..</span>
+            </div>
+            <div v-if="fsEntries.length === 0" class="files-empty">
+              <n-text depth="3" style="font-size: 12px;">{{ t('chat.filesEmpty') }}</n-text>
+            </div>
+            <div
+              v-for="entry in sortedFsEntries"
+              :key="entry.path"
+              class="file-tree-item"
+              :class="{ 'is-dir': entry.is_dir, 'is-hidden': entry.hidden }"
+              @click="handleFileClick(entry)"
+            >
+              <n-icon size="16" :color="entry.is_dir ? '#18a058' : '#666'">
+                <component :is="entry.is_dir ? FolderOutline : DocumentTextOutline" />
+              </n-icon>
+              <span class="file-name">{{ entry.name }}</span>
+              <span v-if="!entry.is_dir" class="file-size">{{ formatSize(entry.size) }}</span>
+              <div class="file-actions" @click.stop>
+                <n-dropdown
+                  trigger="click"
+                  :options="getFileActions(entry)"
+                  @select="(key: string) => handleFileAction(key, entry)"
+                >
+                  <n-button size="tiny" quaternary circle>
+                    <template #icon><n-icon :component="EllipsisHorizontalOutline" :size="14" /></template>
+                  </n-button>
+                </n-dropdown>
+              </div>
+            </div>
+          </template>
+          <div v-if="isDragOver" class="drag-overlay">
+            <n-icon :component="CloudUploadOutline" :size="32" color="#18a058" />
+            <n-text depth="2" style="font-size: 13px;">{{ t('chat.dropToUpload') }}</n-text>
+          </div>
+        </div>
+        <input
+          ref="uploadInputRef"
+          type="file"
+          multiple
+          style="display: none;"
+          @change="handleUploadChange"
+        />
+      </div>
+    </div>
+
+    <!-- Collapsed indicator -->
+    <div v-if="isCollapsed" class="collapsed-indicator">
+      <n-icon :component="activeTab === 'goals' ? FlagOutline : FolderOpenOutline" :size="20" :color="activeTab === 'goals' ? '#2080f0' : '#18a058'" />
+      <n-text style="font-size: 10px; writing-mode: vertical-rl; margin-top: 4px;">
+        {{ activeTab === 'goals' ? t('goals.title') : t('chat.files') }}
+      </n-text>
+    </div>
+
+    <!-- New goal modal -->
+    <n-modal v-model:show="showNewGoalModal" :title="t('goals.newGoal')">
+      <n-card style="width: 400px; max-width: 96vw;">
+        <n-form>
+          <n-form-item :label="t('goals.goalTitle')">
+            <n-input v-model:value="newGoalForm.title" :placeholder="t('goals.goalTitle')" />
+          </n-form-item>
+          <n-form-item :label="t('goals.goalDescription')">
+            <n-input v-model:value="newGoalForm.description" type="textarea" :rows="3" :placeholder="t('goals.goalDescription')" />
+          </n-form-item>
+        </n-form>
+        <template #footer>
+          <n-space justify="end">
+            <n-button @click="showNewGoalModal = false">{{ t('common.cancel') }}</n-button>
+            <n-button type="primary" @click="createGoal" :loading="creating">{{ t('common.create') }}</n-button>
+          </n-space>
+        </template>
+      </n-card>
+    </n-modal>
+
+    <!-- Rename modal -->
+    <n-modal v-model:show="showRenameModal" :title="t('chat.rename')" preset="dialog">
+      <n-input v-model:value="renameNewName" :placeholder="t('chat.rename')" @keyup.enter="confirmRename" />
+      <template #action>
+        <n-space justify="end">
+          <n-button @click="showRenameModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="confirmRename">{{ t('common.confirm') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- Delete modal -->
+    <n-modal v-model:show="showDeleteModal" :title="t('chat.delete')" preset="dialog">
+      <n-text>{{ t('chat.confirmDelete', { name: deleteTarget?.name || '' }) }}</n-text>
+      <template #action>
+        <n-space justify="end">
+          <n-button @click="showDeleteModal = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="error" @click="confirmDelete">{{ t('chat.delete') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- File preview modal -->
+    <n-modal
+      v-model:show="showFilePreview"
+      preset="card"
+      :title="previewFile?.name || ''"
+      :style="{ width: '760px', maxWidth: '90vw' }"
+      :mask-closable="!hasUnsavedChanges"
+      :close-on-esc="!hasUnsavedChanges"
+      @before-leave="handleBeforePreviewClose"
+    >
+      <template #header-extra>
+        <n-tag v-if="previewFile?.size !== undefined" size="small" type="info">
+          {{ formatSize(previewFile.size) }}
+        </n-tag>
+      </template>
+      <div v-if="previewLoading" style="text-align: center; padding: 40px;">
+        <n-spin size="large" />
+        <n-text depth="3" style="display: block; margin-top: 12px;">Loading...</n-text>
+      </div>
+      <div v-else-if="previewError" style="text-align: center; padding: 40px;">
+        <n-text type="error">{{ previewError }}</n-text>
+      </div>
+      <div v-else>
+        <div class="preview-toolbar">
+          <n-space :size="8">
+            <n-button
+              size="small"
+              :type="isEditing ? 'warning' : 'default'"
+              @click="toggleEdit"
+            >
+              <template #icon>
+                <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
+              </template>
+              {{ isEditing ? t('chat.cancel') : t('chat.edit') }}
+            </n-button>
+            <n-button
+              v-if="isEditing"
+              size="small"
+              type="primary"
+              :loading="editSaving"
+              :disabled="!hasUnsavedChanges"
+              @click="saveFile"
+            >
+              <template #icon>
+                <n-icon :component="SaveOutline" />
+              </template>
+              {{ t('chat.save') }}
+            </n-button>
+          </n-space>
+          <n-space :size="8">
+            <n-button
+              size="small"
+              quaternary
+              :disabled="!previewContent"
+              @click="copyContent"
+            >
+              <template #icon>
+                <n-icon :component="CopyOutline" />
+              </template>
+              {{ t('chat.copyContent') }}
+            </n-button>
+            <n-button
+              size="small"
+              quaternary
+              :disabled="!previewFile"
+              @click="downloadPreviewFile"
+            >
+              <template #icon>
+                <n-icon :component="DownloadOutline" />
+              </template>
+              {{ t('chat.download') }}
+            </n-button>
+          </n-space>
+        </div>
+        <div v-if="hasUnsavedChanges" class="unsaved-hint">
+          <n-icon size="14" color="#f0a020" style="margin-right: 6px;">
+            <AlertCircleOutline />
+          </n-icon>
+          <n-text depth="2" style="font-size: 12px;">{{ t('chat.unsavedChanges') }}</n-text>
+        </div>
+        <div class="preview-content-container">
+          <textarea
+            v-if="isEditing"
+            v-model="editingContent"
+            class="preview-textarea"
+            spellcheck="false"
+          ></textarea>
+          <div v-else-if="previewIsBinary && isImageFile(previewFile?.name || '')" style="text-align: center; padding: 16px;">
+            <img
+              :src="getPreviewImageUrl()"
+              :alt="previewFile?.name"
+              style="max-width: 100%; max-height: 60vh; border-radius: 4px;"
+            />
+          </div>
+          <div v-else-if="previewIsBinary" style="text-align: center; padding: 40px;">
+            <n-icon size="48" depth="3"><DocumentOutline /></n-icon>
+            <n-text depth="3" style="display: block; margin-top: 16px;">{{ t('chat.binaryFilePreview') || 'Binary file, preview not supported' }}</n-text>
+            <n-button size="small" style="margin-top: 12px;" @click="downloadPreviewFile">
+              <template #icon><n-icon :component="DownloadOutline" /></template>
+              {{ t('chat.download') }}
+            </n-button>
+          </div>
+          <pre v-else class="preview-content">{{ previewContent }}</pre>
+        </div>
+      </div>
+    </n-modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick, h } from 'vue'
+import { useRouter } from 'vue-router'
+import { useMessage, NIcon } from 'naive-ui'
+import { 
+  FlagOutline, 
+  AddOutline, 
+  ChevronBackOutline, 
+  ChevronForwardOutline, 
+  ChevronDownOutline,
+  ChevronUpOutline,
+  ChatbubblesOutline,
+  FolderOpenOutline,
+  FolderOutline,
+  FileTrayOutline,
+  DocumentTextOutline,
+  DocumentOutline,
+  DownloadOutline,
+  EllipsisHorizontalOutline,
+  PencilOutline,
+  TrashOutline,
+  RefreshOutline,
+  CopyOutline,
+  SaveOutline,
+  CloseOutline,
+  AlertCircleOutline,
+  CheckmarkCircleOutline,
+  CheckboxOutline,
+  EyeOutline,
+  CloudUploadOutline,
+  EllipsisVerticalOutline,
+  HomeOutline,
+} from '@vicons/ionicons5'
+import { useI18n } from 'vue-i18n'
+import { useGoalsStore } from '@/stores/goals'
+import { useChatStore } from '@/stores/chat'
+import { useConfigStore } from '@/stores/config'
+import { useTodosStore } from '@/stores/todos'
+import type { Goal } from '@/api/goals'
+import { getGoalSessions } from '@/api/goals'
+import * as sessionsApi from '@/api/sessions'
+
+const props = defineProps<{
+  mobileVisible?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:mobileVisible', value: boolean): void
+}>()
+
+const { t } = useI18n()
+const router = useRouter()
+const message = useMessage()
+
+const goalsStore = useGoalsStore()
+const chatStore = useChatStore()
+const configStore = useConfigStore()
+const todosStore = useTodosStore()
+
+const isMobile = ref(window.innerWidth <= 768)
+
+function handleResize() {
+  isMobile.value = window.innerWidth <= 768
+}
+
+watch(isMobile, (mobile) => {
+  if (!mobile) {
+    emit('update:mobileVisible', false)
+    isCollapsed.value = false
+  }
+})
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
+// ===== Real-time Todo Panel (read-only display) =====
+const todosPanelCollapsed = ref(false)
+
+function loadTodos() {
+  todosStore.loadTodos({
+    sort: 'priority_desc',
+    session_id: chatStore.activeSessionId || undefined,
+  })
+}
+function priorityLabel(p: string): string {
+  return ({ high: t('todos.priorityHigh'), medium: t('todos.priorityMedium'), low: t('todos.priorityLow') } as any)[p] || p
+}
+function priorityColor(p: string): string {
+  return ({ high: '#e44234', medium: '#f0a020', low: '#6a9955' } as any)[p] || '#999'
+}
+
+const isCollapsed = ref(false)
+const activeTab = ref<'goals' | 'files'>('goals')
+const expandedGoals = ref<string[]>([])
+const goalSessions = ref<Record<string, any[]>>({})
+const sessionLoading = ref<Record<string, boolean>>({})
+
+const showNewGoalModal = ref(false)
+const creating = ref(false)
+const newGoalForm = reactive({
+  title: '',
+  description: '',
+})
+
+// File manager state
+const dirCurrentPath = ref('')
+const isDownloading = ref(false)
+const showHiddenFiles = ref(false)
+const fsEntries = ref<sessionsApi.FSEntry[]>([])
+const filesLoading = ref(false)
+const showNewFolderInput = ref(false)
+const showNewFileInput = ref(false)
+const newItemName = ref('')
+const newItemInputRef = ref<{ focus: () => void } | null>(null)
+
+// Sort state
+const fileSortKey = ref<'name' | 'size' | 'time'>('name')
+const fileSortOrder = ref<'asc' | 'desc'>('asc')
+
+// Upload state
+const uploadInputRef = ref<HTMLInputElement | null>(null)
+const isDragOver = ref(false)
+const isUploading = ref(false)
+
+// Rename modal state
+const showRenameModal = ref(false)
+const renameTarget = ref<sessionsApi.FSEntry | null>(null)
+const renameNewName = ref('')
+
+// Delete modal state
+const showDeleteModal = ref(false)
+const deleteTarget = ref<sessionsApi.FSEntry | null>(null)
+
+// File preview state
+const showFilePreview = ref(false)
+const previewFile = ref<sessionsApi.FSEntry | null>(null)
+const previewContent = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewIsBinary = ref(false)
+const isEditing = ref(false)
+const editingContent = ref('')
+const editSaving = ref(false)
+const originalContent = ref('')
+
+const hasUnsavedChanges = computed(() => {
+  return isEditing.value && editingContent.value !== originalContent.value
+})
+
+const dirParent = computed(() => {
+  if (!dirCurrentPath.value) return ''
+  const raw = dirCurrentPath.value
+  // Support both Windows backslash and Unix slash paths
+  const isWinDrive = /^[A-Za-z]:/.test(raw)
+  const startsWithRoot = raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
+  const parts = raw.split(/[\\/]/).filter(p => p !== '' && p !== '.')
+  if (parts.length === 0) return ''
+  // Root reached: '/', 'D:\' -> no further parent (home)
+  if (parts.length === 1) return isWinDrive ? '' : (startsWithRoot ? '/' : '')
+  parts.pop()
+  let parent = parts.join('/')
+  if (isWinDrive && /^[A-Za-z]:$/.test(parent)) parent += '/'
+  else if (startsWithRoot && !parent.startsWith('/')) parent = '/' + parent
+  return parent
+})
+
+// 统一路径分隔符并忽略 Windows 大小写差异，用于"当前目录 == 会话工作目录"判断
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// 是否显示"返回上一级(..)"入口。
+// 带 session 时后端 resolveFSPath 会把路径严格限制在会话工作目录内，
+// 在会话根目录点击".."会请求父目录并返回 "path outside session directory"。
+// 因此仅在确认当前目录不是会话根目录时才显示该入口；
+// 路径未知（如加载失败被清空）时也隐藏，避免反复触发错误请求。
+// 没有工作目录（未选中对话或会话无 work_dir）时同样隐藏：
+// 此时无目录边界可言，放行".."会让用户逐级返回到任意文件目录，
+// 违背"文件浏览应限制在工作目录内"的约束。
+const showParentDir = computed(() => {
+  if (!dirCurrentPath.value) return false
+  const root = normalizeDirPath(chatStore.currentWorkDir || '')
+  if (!root) return false
+  return normalizeDirPath(dirCurrentPath.value) !== root
+})
+
+const sortedFsEntries = computed(() => {
+  const entries = [...fsEntries.value]
+  const key = fileSortKey.value
+  const order = fileSortOrder.value
+  
+  entries.sort((a, b) => {
+    // Directories first
+    if (a.is_dir !== b.is_dir) {
+      return a.is_dir ? -1 : 1
+    }
+    
+    let cmp = 0
+    if (key === 'name') {
+      cmp = a.name.localeCompare(b.name)
+    } else if (key === 'size') {
+      cmp = (a.size || 0) - (b.size || 0)
+    } else if (key === 'time') {
+      cmp = (a.modified || 0) - (b.modified || 0)
+    }
+    
+    return order === 'asc' ? cmp : -cmp
+  })
+  
+  return entries
+})
+
+const currentGoal = computed(() => goalsStore.currentGoal)
+const activeGoals = computed(() => goalsStore.activeGoals)
+const sessionId = computed(() => chatStore.activeSessionId || '')
+
+let unsubTodoChange: (() => void) | null = null
+
+onMounted(() => {
+  goalsStore.loadCurrentGoal()
+  goalsStore.loadGoals('active')
+  configStore.loadConfig()
+  loadFiles(chatStore.currentWorkDir || undefined)
+  try { loadTodos() } catch (e) {}
+  todosStore.ensureLiveSubscription()
+  unsubTodoChange = chatStore.onTodoChange(() => {
+    try { loadTodos() } catch (e) {}
+  })
+})
+
+onUnmounted(() => {
+  todosStore.releaseLiveSubscription()
+  if (unsubTodoChange) { unsubTodoChange(); unsubTodoChange = null }
+})
+
+watch(activeTab, (newTab) => {
+  if (newTab === 'files') {
+    loadFiles(chatStore.currentWorkDir || undefined)
+  }
+})
+
+watch(() => chatStore.currentWorkDir, (newDir) => {
+  if (activeTab.value === 'files') {
+    loadFiles(newDir || undefined)
+  }
+})
+
+watch(() => chatStore.activeSessionId, () => {
+  try { loadTodos() } catch (e) {}
+})
+
+// Goals functions
+async function selectGoal(goal: Goal) {
+  goalsStore.setCurrentGoal(goal)
+
+}
+
+function toggleExpand(goalId: string) {
+  const idx = expandedGoals.value.indexOf(goalId)
+  if (idx >= 0) {
+    expandedGoals.value.splice(idx, 1)
+  } else {
+    expandedGoals.value.push(goalId)
+    loadSessionGoals(goalId)
+  }
+}
+
+async function loadSessionGoals(goalId: string) {
+  await nextTick()
+  if (goalSessions.value[goalId] !== undefined || sessionLoading.value[goalId]) return
+  sessionLoading.value[goalId] = true
+  try {
+    const result = await getGoalSessions(goalId)
+    goalSessions.value[goalId] = result.sessions || []
+  } catch (e) {
+    goalSessions.value[goalId] = []
+  } finally {
+    sessionLoading.value[goalId] = false
+  }
+}
+
+async function quickUpdate(goal: Goal, progress: number) {
+  try {
+    await goalsStore.updateGoal(goal.id, { progress })
+    message.success(t('goals.progressUpdated', { progress }))
+  } catch (e) {
+    message.error(t('common.operationFailed'))
+  }
+}
+
+async function completeGoal(goal: Goal) {
+  try {
+    await goalsStore.completeGoal(goal.id)
+    message.success(t('goals.goalCompleted'))
+  } catch (e) {
+    message.error(t('common.operationFailed'))
+  }
+}
+
+function goToSession(sessionId: string) {
+  router.push(`/chat?session=${sessionId}`)
+}
+
+function goToGoalsPage() {
+  router.push('/goals')
+}
+
+function openNewGoal() {
+  newGoalForm.title = ''
+  newGoalForm.description = ''
+  showNewGoalModal.value = true
+}
+
+async function createGoal() {
+  if (!newGoalForm.title.trim()) {
+    message.warning(t('goals.goalTitle'))
+    return
+  }
+  
+  creating.value = true
+  try {
+    const goal = await goalsStore.createGoal(newGoalForm.title, newGoalForm.description)
+    goalsStore.setCurrentGoal(goal)
+    if (sessionId.value) {
+      await goalsStore.linkSession(goal.id, sessionId.value)
+    }
+    showNewGoalModal.value = false
+    message.success(t('goals.created'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.error'))
+  } finally {
+    creating.value = false
+  }
+}
+
+async function unlinkSession(goal: Goal) {
+  if (!sessionId.value) return
+  const wasExpanded = expandedGoals.value.includes(goal.id)
+  try {
+    await goalsStore.unlinkSession(goal.id, sessionId.value)
+    if (wasExpanded) {
+      const newSessions = { ...goalSessions.value }
+      delete newSessions[goal.id]
+      goalSessions.value = newSessions
+      await goalsStore.loadGoals('active')
+      await loadSessionGoals(goal.id)
+    } else {
+      await goalsStore.loadGoals('active')
+    }
+    message.success(t('goals.unlinked'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+async function linkCurrentSession(goal: Goal) {
+  if (!sessionId.value) return
+  const wasExpanded = expandedGoals.value.includes(goal.id)
+  try {
+    await goalsStore.linkSession(goal.id, sessionId.value)
+    if (wasExpanded) {
+      const newSessions = { ...goalSessions.value }
+      delete newSessions[goal.id]
+      goalSessions.value = newSessions
+      await goalsStore.loadGoals('active')
+      await loadSessionGoals(goal.id)
+    } else {
+      await goalsStore.loadGoals('active')
+    }
+    message.success(t('goals.sessionLinked'))
+  } catch (e) {
+    message.error(t('common.operationFailed'))
+  }
+}
+
+function formatTime(timestamp: number): string {
+  const date = new Date(timestamp * 1000)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  
+  if (diffDays === 0) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } else if (diffDays === 1) {
+    return t('common.yesterday')
+  } else if (diffDays < 7) {
+    return t('common.daysAgo', { count: diffDays })
+  } else {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  }
+}
+
+// File manager functions
+async function loadFiles(path?: string) {
+  filesLoading.value = true
+  try {
+    const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, undefined, showHiddenFiles.value)
+    dirCurrentPath.value = res.current
+    // 无 session 时后端会自动附加一条 ".." 父目录条目，前端已单独渲染 ".." 项，这里过滤避免重复
+    fsEntries.value = (res.entries || []).filter(e => e.name !== '..')
+  } catch (e) {
+    // 失败时保留原列表与当前路径，避免界面闪现"空目录"；
+    // 清空 dirCurrentPath 会让 showParentDir 保守隐藏 ".." 入口，
+    // 防止继续点击 ".." 反复触发同样的错误。
+    dirCurrentPath.value = ''
+    fsEntries.value = []
+    console.error('Failed to list files:', e)
+    const detail = e instanceof Error ? e.message : String(e)
+    message.error(`${t('chat.loadFilesFailed')}: ${detail}`)
+  } finally {
+    filesLoading.value = false
+  }
+}
+
+function toggleHiddenFiles() {
+  showHiddenFiles.value = !showHiddenFiles.value
+  void loadFiles(dirCurrentPath.value || undefined)
+}
+
+function toggleSort(key: 'name' | 'size' | 'time') {
+  if (fileSortKey.value === key) {
+    fileSortOrder.value = fileSortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    fileSortKey.value = key
+    fileSortOrder.value = 'asc'
+  }
+}
+
+const moreActions = computed(() => [
+  { label: t('chat.newFolder'), key: 'newFolder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+  { label: t('chat.newFile'), key: 'newFile', icon: () => h(NIcon, { size: 14 }, { default: () => h(FileTrayOutline) }) },
+  { label: t('chat.uploadFile'), key: 'upload', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloudUploadOutline) }), disabled: !dirCurrentPath.value },
+  { label: t('chat.downloadZip'), key: 'downloadZip', icon: () => h(NIcon, { size: 14 }, { default: () => h(DownloadOutline) }), disabled: !dirCurrentPath.value || isDownloading.value },
+  { type: 'divider', key: 'd1' },
+  { label: t('chat.showHidden'), key: 'showHidden', icon: () => h(NIcon, { size: 14 }, { default: () => h(EyeOutline) }) },
+])
+
+function handleMoreAction(key: string) {
+  switch (key) {
+    case 'newFolder': startNewFolder(); break
+    case 'newFile': startNewFile(); break
+    case 'upload': triggerUpload(); break
+    case 'downloadZip': downloadZip(); break
+    case 'showHidden': toggleHiddenFiles(); break
+  }
+}
+
+function navigateDir(path: string) {
+  if (!path && path !== '') return
+  cancelNewItem()
+  loadFiles(path || undefined)
+}
+
+async function handleFileClick(entry: sessionsApi.FSEntry) {
+  if (entry.is_dir) {
+    navigateDir(entry.path)
+  } else {
+    // Show file preview
+    await openFilePreview(entry)
+  }
+}
+
+async function openFilePreview(entry: sessionsApi.FSEntry) {
+  previewFile.value = entry
+  previewContent.value = ''
+  previewError.value = ''
+  previewIsBinary.value = false
+  isEditing.value = false
+  editingContent.value = ''
+  originalContent.value = ''
+  showFilePreview.value = true
+  previewLoading.value = true
+
+  const ext = entry.name.split('.').pop()?.toLowerCase() || ''
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg']
+  const binaryExts = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'mp3', 'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flac', 'aac', 'ogg', 'wav', 'ico', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
+
+  if (imageExts.includes(ext)) {
+    previewIsBinary.value = true
+    previewLoading.value = false
+    return
+  }
+
+  if (binaryExts.includes(ext)) {
+    previewIsBinary.value = true
+    previewError.value = ''
+    previewLoading.value = false
+    return
+  }
+
+  try {
+    previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
+    if (previewContent.value.includes('"binary":true') && previewContent.value.includes('"error"')) {
+      try {
+        const parsed = JSON.parse(previewContent.value)
+        if (parsed.binary) {
+          previewIsBinary.value = true
+          previewContent.value = ''
+          previewLoading.value = false
+          return
+        }
+      } catch {}
+    }
+    originalContent.value = previewContent.value
+  } catch (e: any) {
+    previewError.value = e.message || 'Failed to read file'
+    previewContent.value = ''
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+function handleBeforePreviewClose(e: Event) {
+  if (hasUnsavedChanges.value) {
+    e.preventDefault()
+    if (window.confirm(t('chat.discardChanges'))) {
+      isEditing.value = false
+      editingContent.value = ''
+      showFilePreview.value = false
+    }
+  }
+}
+
+function toggleEdit() {
+  if (isEditing.value) {
+    if (hasUnsavedChanges.value && !window.confirm(t('chat.discardChanges'))) {
+      return
+    }
+    isEditing.value = false
+    editingContent.value = ''
+    return
+  }
+  editingContent.value = previewContent.value
+  originalContent.value = previewContent.value
+  isEditing.value = true
+}
+
+async function copyContent() {
+  const content = isEditing.value ? editingContent.value : previewContent.value
+  try {
+    await navigator.clipboard.writeText(content || '')
+    message.success(t('chat.contentCopied'))
+  } catch (e: any) {
+    const textarea = document.createElement('textarea')
+    textarea.value = content || ''
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      message.success(t('chat.contentCopied'))
+    } catch (err) {
+      message.error(t('common.operationFailed'))
+    }
+    document.body.removeChild(textarea)
+  }
+}
+
+function isImageFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
+}
+
+function getPreviewImageUrl(): string {
+  if (!previewFile.value) return ''
+  return sessionsApi.getFSReadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
+}
+
+function downloadPreviewFile() {
+  if (!previewFile.value) return
+  const url = sessionsApi.getFSDownloadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
+  downloadFile(url, previewFile.value.name)
+}
+
+async function saveFile() {
+  if (!previewFile.value) return
+  editSaving.value = true
+  try {
+    await sessionsApi.writeFSFile(previewFile.value.path, editingContent.value, chatStore.activeSessionId || undefined)
+    previewContent.value = editingContent.value
+    originalContent.value = editingContent.value
+    isEditing.value = false
+    message.success(t('chat.saveSuccess'))
+    loadFiles()
+  } catch (e: any) {
+    message.error(e.message || t('chat.saveFail'))
+  } finally {
+    editSaving.value = false
+  }
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  showNewFileInput.value = false
+  newItemName.value = ''
+  nextTick(() => {
+    newItemInputRef.value?.focus()
+  })
+}
+
+function startNewFile() {
+  showNewFileInput.value = true
+  showNewFolderInput.value = false
+  newItemName.value = ''
+  nextTick(() => {
+    newItemInputRef.value?.focus()
+  })
+}
+
+function cancelNewItem() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    showNewFileInput.value = false
+    newItemName.value = ''
+  }, 150)
+}
+
+async function createNewItem() {
+  const name = newItemName.value.trim()
+  if (!name) {
+    cancelNewItem()
+    return
+  }
+  
+  try {
+    if (showNewFolderInput.value) {
+      await sessionsApi.createDir(dirCurrentPath.value, name, chatStore.activeSessionId || undefined)
+    } else {
+      // Create empty file
+      const filePath = dirCurrentPath.value ? `${dirCurrentPath.value}/${name}` : name
+      await sessionsApi.writeFSFile(filePath, '', chatStore.activeSessionId || undefined)
+    }
+    newItemName.value = ''
+    showNewFolderInput.value = false
+    showNewFileInput.value = false
+    loadFiles(dirCurrentPath.value)
+    message.success(showNewFolderInput.value ? t('chat.folderCreated') : t('chat.fileCreated'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+function downloadFile(url: string, filename?: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || 'download'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  message.success(t('common.downloadStarted'))
+}
+
+function downloadZip() {
+  if (!dirCurrentPath.value) return
+  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!, undefined, showHiddenFiles.value)
+  downloadFile(url, 'files.zip')
+}
+
+function getFileActions(entry: sessionsApi.FSEntry): any[] {
+  const actions: any[] = []
+  
+  if (!entry.is_dir) {
+    actions.push({
+      label: t('chat.download'),
+      key: 'download',
+      icon: () => h(NIcon, { size: 14 }, { default: () => h(DownloadOutline) }),
+    })
+  }
+  
+  actions.push({
+    label: t('chat.rename'),
+    key: 'rename',
+    icon: () => h(NIcon, { size: 14 }, { default: () => h(PencilOutline) }),
+  })
+  
+  actions.push({
+    label: t('chat.delete'),
+    key: 'delete',
+    icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }),
+    props: { style: { color: '#d03050' } },
+  })
+  
+  return actions
+}
+
+async function handleFileAction(key: string, entry: sessionsApi.FSEntry) {
+  if (key === 'download') {
+    const url = sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
+    downloadFile(url, entry.name)
+  } else if (key === 'rename') {
+    renameTarget.value = entry
+    renameNewName.value = entry.name
+    showRenameModal.value = true
+  } else if (key === 'delete') {
+    deleteTarget.value = entry
+    showDeleteModal.value = true
+  }
+}
+
+async function confirmRename() {
+  if (!renameTarget.value || !renameNewName.value.trim()) {
+    showRenameModal.value = false
+    return
+  }
+  const newName = renameNewName.value.trim()
+  if (newName === renameTarget.value.name) {
+    showRenameModal.value = false
+    return
+  }
+  try {
+    await sessionsApi.renameFSPath(renameTarget.value.path, newName, chatStore.activeSessionId || undefined)
+    loadFiles(dirCurrentPath.value)
+    message.success(t('chat.renamed'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  } finally {
+    showRenameModal.value = false
+    renameTarget.value = null
+  }
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value) {
+    showDeleteModal.value = false
+    return
+  }
+  try {
+    await sessionsApi.deleteFSPath(deleteTarget.value.path, chatStore.activeSessionId || undefined)
+    loadFiles(dirCurrentPath.value)
+    message.success(t('chat.deleted'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  } finally {
+    showDeleteModal.value = false
+    deleteTarget.value = null
+  }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function triggerUpload() {
+  uploadInputRef.value?.click()
+}
+
+async function handleUploadChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files || !input.files.length || !dirCurrentPath.value) return
+  await doUpload(Array.from(input.files))
+  input.value = ''
+}
+
+function onDragOver(e: DragEvent) {
+  if (!dirCurrentPath.value) return
+  if (e.dataTransfer?.types.includes('Files')) {
+    isDragOver.value = true
+  }
+}
+
+function onDragLeave() {
+  isDragOver.value = false
+}
+
+async function onDrop(e: DragEvent) {
+  isDragOver.value = false
+  if (!dirCurrentPath.value || !e.dataTransfer?.files.length) return
+  await doUpload(Array.from(e.dataTransfer.files))
+}
+
+async function doUpload(files: File[]) {
+  if (!files.length || !dirCurrentPath.value) return
+  isUploading.value = true
+  try {
+    const result = await sessionsApi.uploadFSToDir(dirCurrentPath.value, files, chatStore.activeSessionId || undefined)
+    message.success(t('chat.uploadSuccess', { count: result.count }))
+    loadFiles(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('chat.uploadFail'))
+  } finally {
+    isUploading.value = false
+  }
+}
+</script>
+
+<style scoped>
+.right-sidebar {
+  width: 280px;
+  border-left: 1px solid #e0e0e0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: width 0.2s;
+  flex-shrink: 0;
+}
+
+.right-sidebar.collapsed {
+  width: 48px;
+}
+
+.collapse-toggle {
+  position: absolute;
+  left: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: #fff !important;
+  border: 1px solid #e0e0e0 !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.sidebar-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- Todo Panel (Top of right sidebar) ---- */
+.todo-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid #e8e8e8;
+  background: #fcfdff;
+}
+.todo-panel.collapsed .todo-panel-body { display: none; }
+
+.todo-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 8px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  user-select: none;
+}
+.todo-panel-header:hover { background: #f5f8ff; }
+
+.todo-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #333;
+}
+.todo-panel-count {
+  background: #2d8cf0;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 10px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+}
+.todo-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.todo-panel-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.todo-panel-collapse-icon { margin-left: 2px; }
+
+.todo-panel-body {
+  padding: 6px 10px 10px 14px;
+}
+
+.todo-new-box {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.todo-new-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.todo-new-btns { display: flex; gap: 4px; }
+
+.todo-list-wrap {
+  max-height: calc((100vh - 120px) * 0.333);
+  min-height: 140px;
+  overflow-y: auto;
+}
+
+.todo-list { display: flex; flex-direction: column; gap: 2px; }
+.todo-list.completed { opacity: 0.85; margin-top: 4px; }
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  transition: background 0.15s;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+}
+.todo-item:hover { background: #f5f8ff; border-color: #d8e4ff; }
+.todo-item.done { background: #f7fff7; }
+.todo-item.done .todo-title {
+  text-decoration: line-through;
+  color: #888;
+}
+.todo-item.priority-high { border-left: 3px solid #e44234; }
+.todo-item.priority-medium { border-left: 3px solid #f0a020; }
+.todo-item.priority-low { border-left: 3px solid #6a9955; }
+
+.todo-check {
+  flex-shrink: 0;
+  cursor: default;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.todo-check:hover { background: transparent; }
+.todo-check.checked:hover { background: transparent; }
+
+.todo-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.todo-title {
+  font-size: 12px;
+  color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-priority-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.todo-del-btn { opacity: 0.4; flex-shrink: 0; }
+.todo-item:hover .todo-del-btn { opacity: 1; }
+
+.todo-completed-toggle {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed #eee;
+}
+
+.todo-empty {
+  padding: 14px 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #999;
+}
+
+/* Tab navigation */
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #666;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.tab-item:hover {
+  color: #333;
+  background: #f5f5f5;
+}
+
+.tab-item.active {
+  color: #18a058;
+  border-bottom-color: #18a058;
+}
+
+.tab-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tab-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* Goals section */
+.goal-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.goal-card {
+  background: #fafafa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+  word-break: break-all;
+  overflow-wrap: break-word;
+}
+
+.goal-card:hover {
+  background: #f0f0f0;
+}
+
+.goal-card.active {
+  background: #e8f4ff;
+  border: 1px solid #2080f0;
+}
+
+.goal-card-header {
+  padding: 4px;
+}
+
+.goal-card-details {
+  padding: 8px 4px;
+  border-top: 1px solid #e0e0e0;
+  margin-top: 4px;
+}
+
+.goal-progress {
+  margin-bottom: 8px;
+}
+
+.linked-sessions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.session-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-item {
+  padding: 4px 6px;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.session-item:hover {
+  background: #e8f4ff;
+}
+
+.expand-toggle {
+  position: absolute;
+  right: 4px;
+  top: 8px;
+}
+
+/* Files section */
+.files-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.breadcrumb-item {
+  flex-shrink: 0;
+  font-size: 12px !important;
+}
+
+.breadcrumb-sep {
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+.breadcrumb-path {
+  font-size: 12px;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.files-sort-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+  flex-shrink: 0;
+}
+
+.files-sort-header .n-button {
+  font-size: 12px;
+  height: 24px;
+  padding: 0 8px;
+}
+
+.files-sort-header .sort-active {
+  color: #2080f0;
+  font-weight: 500;
+}
+
+.files-new-input {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.files-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+  position: relative;
+}
+
+.files-tree.drag-over {
+  background: rgba(24, 160, 88, 0.06);
+  outline: 2px dashed #18a058;
+  outline-offset: -4px;
+  border-radius: 4px;
+}
+
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.file-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.file-tree-item:hover {
+  background: #f0f0f0;
+}
+
+/* Dot-prefixed (hidden) entries shown via the eye toggle: dimmed to keep
+   the visual hierarchy clear. */
+  .file-tree-item.is-hidden .file-name {
+    opacity: 0.55;
+    font-style: italic;
+  }
+  
+  /* ".." go-to-parent virtual entry */
+  .file-tree-item.parent-dir-item .file-name {
+    font-weight: 600;
+    opacity: 0.8;
+  }
+
+.file-tree-item:hover .file-actions {
+  opacity: 1;
+}
+
+.file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  font-size: 10px;
+  color: #999;
+  margin-right: 4px;
+}
+
+.file-actions {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.files-empty,
+.files-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.collapsed-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 8px;
+}
+
+/* File preview styles */
+.preview-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.preview-content-container {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+}
+
+.preview-content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 16px;
+  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+}
+
+.preview-textarea {
+  width: 100%;
+  min-height: 400px;
+  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 16px;
+  border: none;
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.preview-textarea:focus {
+  box-shadow: inset 0 0 0 2px #2080f0;
+}
+
+.unsaved-hint {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+}
+
+/* Mobile close button - hidden on desktop */
+.mobile-close-btn {
+  display: none;
+}
+
+/* Mobile backdrop */
+.right-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 199;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .right-sidebar {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 200;
+    width: 280px;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .right-sidebar.mobile-visible {
+    transform: translateX(0);
+  }
+
+  .right-sidebar.mobile-hidden {
+    transform: translateX(100%);
+  }
+
+  .right-sidebar.collapsed {
+    width: 280px;
+  }
+
+  .collapse-toggle {
+    display: none;
+  }
+
+  .mobile-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    position: absolute;
+    left: -36px;
+    top: 12px;
+    z-index: 10;
+    background: #fff !important;
+    border: 1px solid #e0e0e0 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .right-sidebar.collapsed .sidebar-content {
+    display: flex !important;
+  }
+
+  .right-sidebar.collapsed .collapsed-indicator {
+    display: none;
+  }
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .preview-toolbar {
+    background: #252525;
+    border-color: #333;
+  }
+  
+  .preview-content-container {
+    border-color: #333;
+    background: #1e1e1e;
+  }
+  
+  .preview-content {
+    background: #1e1e1e;
+    color: #ddd;
+  }
+  
+  .preview-textarea {
+    background: #1e1e1e;
+    color: #ddd;
+  }
+  
+  .preview-textarea:focus {
+    box-shadow: inset 0 0 0 2px #409eff;
+  }
+  
+  .unsaved-hint {
+    background: #3a3520;
+    border-color: #615635;
+  }
+
+  .right-sidebar {
+    background: #1e1e1e;
+    border-left-color: #333;
+  }
+  
+  .collapse-toggle {
+    background: #1e1e1e !important;
+    border-color: #333 !important;
+  }
+
+  .mobile-close-btn {
+    background: #1e1e1e !important;
+    border-color: #333 !important;
+  }
+
+  .right-sidebar-backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  /* Todo Panel Dark Mode */
+  .todo-panel { background: #1a1a1c; border-bottom-color: #2a2a2c; }
+  .todo-panel-header:hover { background: #222429; }
+  .todo-panel-title { color: #ddd; }
+  .todo-panel-count { background: #3a6cd2; }
+  .todo-empty { color: #666; }
+  .todo-item {
+    background: #232325;
+    border-color: #2e2e30;
+  }
+  .todo-item:hover { background: #2a2d33; border-color: #3a4a70; }
+  .todo-item.done { background: #1d2a1d; }
+  .todo-title { color: #ddd; }
+  .todo-check:hover { background: transparent; }
+  .todo-check.checked:hover { background: transparent; }
+  .todo-completed-toggle { border-top-color: #333; }
+  
+  .sidebar-tabs {
+    border-bottom-color: #333;
+  }
+  
+  .tab-item {
+    color: #999;
+  }
+  
+  .tab-item:hover {
+    color: #fff;
+    background: #2a2a2a;
+  }
+  
+  .tab-item.active {
+    color: #18a058;
+  }
+  
+  .tab-header {
+    border-bottom-color: #333;
+  }
+  
+  .goal-card {
+    background: #252525;
+  }
+  
+  .goal-card:hover {
+    background: #2d2d2d;
+  }
+  
+  .goal-card.active {
+    background: #1a3a5c;
+    border-color: #2080f0;
+  }
+  
+  .session-item {
+    background: #1e1e1e;
+  }
+  
+  .session-item:hover {
+    background: #2a4a6c;
+  }
+  
+  .goal-card-details {
+    border-top-color: #333;
+  }
+  
+  .linked-sessions {
+    border-top-color: #333;
+  }
+  
+  .files-breadcrumb {
+    border-bottom-color: #333;
+  }
+  
+  .files-new-input {
+    border-bottom-color: #333;
+  }
+  
+  .file-tree-item:hover {
+    background: #2a2a2a;
+  }
+  
+  .file-tree-item.parent-dir-item .file-name {
+    opacity: 0.8;
+  }
+}
+</style>

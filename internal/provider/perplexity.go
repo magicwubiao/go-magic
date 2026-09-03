@@ -1,0 +1,411 @@
+package provider
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/types"
+)
+
+// PerplexityProvider implements the Perplexity API
+type PerplexityProvider struct {
+	apiKey        string
+	model         string
+	baseURL       string
+	client        *http.Client
+	ConvertConfig *ConvertConfig
+}
+
+// SetConvertConfig implements ConvertConfigProvider
+func (p *PerplexityProvider) SetConvertConfig(config *ConvertConfig) {
+	p.ConvertConfig = config
+}
+
+// GetConvertConfig implements ConvertConfigProvider
+func (p *PerplexityProvider) GetConvertConfig() *ConvertConfig {
+	return p.ConvertConfig
+}
+
+// NewPerplexityProvider creates a new Perplexity provider
+func NewPerplexityProvider(apiKey, baseURL, model string) *PerplexityProvider {
+	if model == "" {
+		model = "sonar" // Default model
+	}
+	if baseURL == "" {
+		baseURL = "https://api.perplexity.ai"
+	}
+	return &PerplexityProvider{
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: baseURL,
+		client: &http.Client{
+			Timeout: 120 * time.Second,
+		},
+	}
+}
+
+func (p *PerplexityProvider) Name() string {
+	return "perplexity"
+}
+
+// GetCapabilities returns the capabilities of Perplexity
+func (p *PerplexityProvider) GetCapabilities() *Capabilities {
+	return &Capabilities{
+		ToolCalling:    true,
+		Streaming:      true,
+		StreamingTools: true,
+		MultiModal:     false,
+		Vision:         false,
+	}
+}
+
+// Chat implements the Provider interface
+func (p *PerplexityProvider) Chat(ctx context.Context, messages []Message) (*ChatResponse, error) {
+	reqBody := p.buildRequest(messages, nil, false)
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", p.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, p.parseError(body, resp.StatusCode)
+	}
+
+	// Perplexity is OpenAI-compatible: reuse the shared parser which also
+	// probes alternate reasoning-content names
+	// (thinking_content / reasoning / thinking) that proxied endpoints may emit.
+	return parseTypedChatResponse(body)
+}
+
+// ChatWithTools implements the ToolCaller interface
+func (p *PerplexityProvider) ChatWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}) (*ChatResponse, error) {
+	reqBody := p.buildRequest(messages, tools, false)
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", p.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, p.parseError(body, resp.StatusCode)
+	}
+	return parseTypedChatResponse(body)
+}
+
+// Stream implements the Streamer interface
+func (p *PerplexityProvider) Stream(ctx context.Context, messages []Message, handler StreamHandler) error {
+	return p.StreamWithTools(ctx, messages, nil, handler)
+}
+
+// StreamWithTools implements the StreamingToolCaller interface
+func (p *PerplexityProvider) StreamWithTools(ctx context.Context, messages []Message, tools []map[string]interface{}, handler StreamHandler) error {
+	reqBody := p.buildRequest(messages, tools, true)
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", p.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return p.parseError(body, resp.StatusCode)
+	}
+
+	// Use the shared OpenAIStreamParser: it handles alternate reasoning names
+	// (thinking_content / reasoning / thinking), proper StreamTCs[] delta
+	// index tracking, and tool-call name normalisation — the previous
+	// custom SSE loop silently dropped reasoning and used the legacy
+	// single-ToolCall format which broke delta merging.
+	return ParseStreamResponse(ctx, resp.Body, handler)
+}
+
+// buildRequest builds the OpenAI-compatible request
+func (p *PerplexityProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) map[string]interface{} {
+	req := map[string]interface{}{
+		"model":    p.model,
+		"messages": p.convertMessages(messages),
+		"stream":   stream,
+	}
+
+	if len(tools) > 0 {
+		req["tools"] = tools
+	}
+
+	// Perplexity specific: enable web search by default
+	req["search_mode"] = "auto"
+
+	return req
+}
+
+// convertMessages converts messages to OpenAI format with ContentParts support
+func (p *PerplexityProvider) convertMessages(messages []Message) []map[string]interface{} {
+	var converted []map[string]interface{}
+
+	for i, msg := range messages {
+		m := map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+
+		// Handle ContentParts for multi-modal content
+		if len(msg.ContentParts) > 0 {
+			convertedParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+			if len(convertedParts) > 0 {
+				m["content"] = convertedParts
+			}
+		}
+
+		if msg.Role == "tool" {
+			m["role"] = "tool"
+			// Use ToolCallID directly if available, otherwise generate a fallback ID
+			if msg.ToolCallID != "" {
+				m["tool_call_id"] = msg.ToolCallID
+			} else {
+				m["tool_call_id"] = fmt.Sprintf("call_perplexity_%d", i)
+			}
+		}
+
+		if len(msg.ToolCalls) > 0 {
+			var toolCalls []map[string]interface{}
+			for _, tc := range msg.ToolCalls {
+				toolCalls = append(toolCalls, map[string]interface{}{
+					"id":   tc.ID,
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      tc.Function.Name,
+						"arguments": tc.Function.Arguments,
+					},
+				})
+			}
+			m["tool_calls"] = toolCalls
+		}
+
+		converted = append(converted, m)
+	}
+
+	return converted
+}
+
+// parseResponse parses the OpenAI-compatible response
+func (p *PerplexityProvider) parseResponse(body []byte) (*ChatResponse, error) {
+	var resp struct {
+		ID      string `json:"id"`
+		Choices []struct {
+			Message struct {
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+				Citations []string `json:"citations"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	choice := resp.Choices[0]
+	var content string
+	var toolCalls []types.ToolCall
+
+	if choice.Message.Content != "" {
+		content = choice.Message.Content
+	}
+
+	for _, tc := range choice.Message.ToolCalls {
+		toolCalls = append(toolCalls, types.ToolCall{
+			ID:       tc.ID,
+			Type:     "function",
+			Function: types.Function{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
+		})
+	}
+
+	return &ChatResponse{
+		Content:   content,
+		ToolCalls: toolCalls,
+		Usage: &Usage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// parseStreamResponse parses streaming SSE response
+func (p *PerplexityProvider) parseStreamResponse(body io.Reader, handler StreamHandler) error {
+	scanner := bufio.NewScanner(body)
+	// Large tool-call argument chunks (write_file etc.) can exceed 64KB per SSE line;
+	// the default 64KB scanner cap would abort the stream with "token too long".
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamLineBytes)
+	var accumulatedContent string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+
+		for _, choice := range chunk.Choices {
+			if choice.Delta.Content != "" {
+				accumulatedContent += choice.Delta.Content
+				handler(&StreamResponse{
+					Content: choice.Delta.Content,
+					Done:    false,
+				})
+			}
+
+			for _, tc := range choice.Delta.ToolCalls {
+				handler(&StreamResponse{
+					ToolCall: &types.ToolCall{
+						ID:   tc.ID,
+						Type: "function",
+						Function: types.Function{
+							Name:      tc.Function.Name,
+							Arguments: tc.Function.Arguments,
+						},
+					},
+					Done: false,
+				})
+			}
+
+			if choice.FinishReason != "" {
+				handler(&StreamResponse{
+					Content: "",
+					Done:    true,
+				})
+				return nil
+			}
+		}
+	}
+
+	handler(&StreamResponse{
+		Content: accumulatedContent,
+		Done:    true,
+	})
+
+	return scanner.Err()
+}
+
+// parseError parses error responses
+func (p *PerplexityProvider) parseError(body []byte, statusCode int) error {
+	var errResp struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+		return fmt.Errorf("perplexity error [%s]: %s", errResp.Error.Type, errResp.Error.Message)
+	}
+
+	return fmt.Errorf("perplexity error (%d): %s", statusCode, string(body))
+}

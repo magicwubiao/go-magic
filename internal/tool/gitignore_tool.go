@@ -1,0 +1,588 @@
+package tool
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/config"
+)
+
+// =============================================================================
+// Gitignore Tool - Generate .gitignore files from GitHub templates
+// =============================================================================
+
+const (
+	// GitHubGitignoreRepo is the URL to the github/gitignore repository
+	GitHubGitignoreRepo = "https://raw.githubusercontent.com/github/gitignore/main"
+	// GitignoreCacheDir is the directory for caching gitignore templates
+	GitignoreCacheDir = "cache/gitignore"
+)
+
+// GitignoreTool provides functionality to generate .gitignore files
+type GitignoreTool struct {
+	cacheDir string
+	client   *http.Client
+}
+
+// NewGitignoreTool creates a new gitignore tool
+func NewGitignoreTool() *GitignoreTool {
+	cacheDir := filepath.Join(config.GetMagicHome(), "cache", "gitignore")
+
+	return &GitignoreTool{
+		cacheDir: cacheDir,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+func (t *GitignoreTool) Name() string { return "gitignore" }
+
+func (t *GitignoreTool) Description() string {
+	return `Generate .gitignore files for various project types.
+Supports searching and downloading templates from GitHub's gitignore repository.
+Can combine multiple templates and add custom rules.
+
+Supported project types include:
+- Go, Python, Node, Rust, Java, C/C++
+- Ruby, PHP, Swift, Kotlin, Scala
+- Visual Studio, JetBrains, Eclipse
+- macOS, Windows, Linux
+
+Examples:
+- Generate for Go: {"template": "Go"}
+- Combine templates: {"templates": ["Go", "VisualStudioCode", "macOS"]}
+- Search templates: {"action": "search", "query": "python"}
+- List all: {"action": "list"}`
+}
+
+func (t *GitignoreTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"action": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"generate", "search", "list", "show"},
+				"description": "Action to perform: generate (default), search, list, or show",
+			},
+			"template": map[string]interface{}{
+				"type":        "string",
+				"description": "Template name to generate (e.g., 'Go', 'Python', 'Node')",
+			},
+			"templates": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Multiple templates to combine",
+			},
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "Search query for template names",
+			},
+			"output": map[string]interface{}{
+				"type":        "string",
+				"description": "Output file path (default: .gitignore)",
+			},
+			"custom_rules": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Custom rules to append to the generated .gitignore",
+			},
+			"project_type": map[string]interface{}{
+				"type":        "string",
+				"description": "Auto-detect and generate based on project type (go, python, node, rust, java, cpp)",
+			},
+		},
+	}
+}
+
+// Execute runs the gitignore tool
+func (t *GitignoreTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	action, _ := args["action"].(string)
+	if action == "" {
+		action = "generate"
+	}
+
+	switch action {
+	case "generate":
+		return t.generateGitignore(ctx, args)
+	case "search":
+		return t.searchTemplates(ctx, args)
+	case "list":
+		return t.listTemplates(ctx)
+	case "show":
+		return t.showTemplate(ctx, args)
+	default:
+		return nil, fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+// generateGitignore generates a .gitignore file
+func (t *GitignoreTool) generateGitignore(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	output, _ := args["output"].(string)
+	if output == "" {
+		output = ".gitignore"
+	}
+
+	var templates []string
+
+	// Check for project_type auto-detection
+	if projectType, ok := args["project_type"].(string); ok && projectType != "" {
+		templates = append(templates, t.mapProjectTypeToTemplate(projectType))
+	}
+
+	// Check for single template
+	if template, ok := args["template"].(string); ok && template != "" {
+		templates = append(templates, template)
+	}
+
+	// Check for multiple templates
+	if tmplList, ok := args["templates"].([]interface{}); ok {
+		for _, tmpl := range tmplList {
+			if name, ok := tmpl.(string); ok {
+				templates = append(templates, name)
+			}
+		}
+	}
+
+	// Auto-detect from current directory if no templates specified
+	if len(templates) == 0 {
+		detected := t.detectProjectTemplates()
+		if len(detected) > 0 {
+			templates = detected
+		} else {
+			return nil, fmt.Errorf("no templates specified and could not auto-detect project type")
+		}
+	}
+
+	// Fetch and combine templates
+	var content strings.Builder
+	content.WriteString("# Generated by Magic Gitignore Tool\n")
+	content.WriteString(fmt.Sprintf("# Templates: %s\n", strings.Join(templates, ", ")))
+	content.WriteString("# https://github.com/github/gitignore\n")
+	content.WriteString("\n")
+
+	for _, template := range templates {
+		templateContent, err := t.fetchTemplate(ctx, template)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch template '%s': %w", template, err)
+		}
+		content.WriteString(fmt.Sprintf("### %s ###\n", template))
+		content.WriteString(templateContent)
+		content.WriteString("\n\n")
+	}
+
+	// Add custom rules
+	if customRules, ok := args["custom_rules"].([]interface{}); ok && len(customRules) > 0 {
+		content.WriteString("### Custom Rules ###\n")
+		for _, rule := range customRules {
+			if r, ok := rule.(string); ok {
+				content.WriteString(r)
+				content.WriteString("\n")
+			}
+		}
+	}
+
+	// Write to file
+	if err := os.WriteFile(output, []byte(content.String()), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write %s: %w", output, err)
+	}
+
+	return map[string]interface{}{
+		"success":    true,
+		"output":     output,
+		"templates":  templates,
+		"size_bytes": len(content.String()),
+	}, nil
+}
+
+// searchTemplates searches for gitignore templates
+func (t *GitignoreTool) searchTemplates(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	query, _ := args["query"].(string)
+	if query == "" {
+		return nil, fmt.Errorf("search query is required")
+	}
+
+	query = strings.ToLower(query)
+	allTemplates := t.getKnownTemplates()
+
+	var matches []string
+	for _, tmpl := range allTemplates {
+		if strings.Contains(strings.ToLower(tmpl), query) {
+			matches = append(matches, tmpl)
+		}
+	}
+
+	return map[string]interface{}{
+		"query":   query,
+		"matches": matches,
+		"count":   len(matches),
+	}, nil
+}
+
+// listTemplates lists all available templates
+func (t *GitignoreTool) listTemplates(ctx context.Context) (interface{}, error) {
+	templates := t.getKnownTemplates()
+
+	// Group templates by category
+	categories := map[string][]string{
+		"Languages":         {},
+		"Frameworks":        {},
+		"IDEs":              {},
+		"Operating Systems": {},
+		"Other":             {},
+	}
+
+	for _, tmpl := range templates {
+		lower := strings.ToLower(tmpl)
+		switch {
+		case t.isLanguage(lower):
+			categories["Languages"] = append(categories["Languages"], tmpl)
+		case t.isIDE(lower):
+			categories["IDEs"] = append(categories["IDEs"], tmpl)
+		case t.isOS(lower):
+			categories["Operating Systems"] = append(categories["Operating Systems"], tmpl)
+		case t.isFramework(lower):
+			categories["Frameworks"] = append(categories["Frameworks"], tmpl)
+		default:
+			categories["Other"] = append(categories["Other"], tmpl)
+		}
+	}
+
+	return map[string]interface{}{
+		"categories": categories,
+		"total":      len(templates),
+	}, nil
+}
+
+// showTemplate shows the content of a template
+func (t *GitignoreTool) showTemplate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	template, _ := args["template"].(string)
+	if template == "" {
+		return nil, fmt.Errorf("template name is required")
+	}
+
+	content, err := t.fetchTemplate(ctx, template)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"template": template,
+		"content":  content,
+		"size":     len(content),
+	}, nil
+}
+
+// fetchTemplate fetches a template from cache or GitHub
+func (t *GitignoreTool) fetchTemplate(ctx context.Context, name string) (string, error) {
+	// Normalize template name
+	name = t.normalizeTemplateName(name)
+
+	// Check cache first
+	cachePath := filepath.Join(t.cacheDir, name+".gitignore")
+	if content, err := os.ReadFile(cachePath); err == nil {
+		return string(content), nil
+	}
+
+	// Fetch from GitHub
+	url := fmt.Sprintf("%s/%s.gitignore", GitHubGitignoreRepo, name)
+	content, err := t.downloadTemplate(ctx, url)
+	if err != nil {
+		// Try with different casing
+		url = fmt.Sprintf("%s/%s.gitignore", GitHubGitignoreRepo, strings.Title(strings.ToLower(name)))
+		content, err = t.downloadTemplate(ctx, url)
+		if err != nil {
+			return "", fmt.Errorf("template not found: %s", name)
+		}
+	}
+
+	// Cache the template
+	os.MkdirAll(t.cacheDir, 0755)
+	os.WriteFile(cachePath, []byte(content), 0644)
+
+	return content, nil
+}
+
+// downloadTemplate downloads a template from URL
+func (t *GitignoreTool) downloadTemplate(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
+}
+
+// normalizeTemplateName normalizes template name
+func (t *GitignoreTool) normalizeTemplateName(name string) string {
+	// Handle common aliases
+	aliases := map[string]string{
+		"js":         "Node",
+		"javascript": "Node",
+		"ts":         "Node",
+		"typescript": "Node",
+		"py":         "Python",
+		"golang":     "Go",
+		"c++":        "C++",
+		"cpp":        "C++",
+		"csharp":     "VisualStudio",
+		"c#":         "VisualStudio",
+		"dotnet":     "VisualStudio",
+		"vs":         "VisualStudio",
+		"vscode":     "VisualStudioCode",
+		"intellij":   "JetBrains",
+		"idea":       "JetBrains",
+		"webstorm":   "JetBrains",
+		"pycharm":    "JetBrains",
+		"goland":     "JetBrains",
+		"rubymine":   "JetBrains",
+		"phpstorm":   "JetBrains",
+		"android":    "Android",
+		"xcode":      "Xcode",
+		"eclipse":    "Eclipse",
+		"sublime":    "SublimeText",
+		"vim":        "Vim",
+		"emacs":      "Emacs",
+		"linux":      "Linux",
+		"macos":      "macOS",
+		"mac":        "macOS",
+		"osx":        "macOS",
+		"windows":    "Windows",
+		"win":        "Windows",
+	}
+
+	lower := strings.ToLower(name)
+	if alias, ok := aliases[lower]; ok {
+		return alias
+	}
+
+	return name
+}
+
+// mapProjectTypeToTemplate maps project type to template name
+func (t *GitignoreTool) mapProjectTypeToTemplate(projectType string) string {
+	mappings := map[string]string{
+		"go":      "Go",
+		"python":  "Python",
+		"node":    "Node",
+		"rust":    "Rust",
+		"java":    "Java",
+		"cpp":     "C++",
+		"c":       "C",
+		"ruby":    "Ruby",
+		"php":     "PHP",
+		"swift":   "Swift",
+		"kotlin":  "Kotlin",
+		"scala":   "Scala",
+		"dart":    "Dart",
+		"flutter": "Flutter",
+		"elixir":  "Elixir",
+		"haskell": "Haskell",
+		"lua":     "Lua",
+		"r":       "R",
+		"julia":   "Julia",
+		"perl":    "Perl",
+	}
+
+	if tmpl, ok := mappings[strings.ToLower(projectType)]; ok {
+		return tmpl
+	}
+
+	return strings.Title(projectType)
+}
+
+// detectProjectTemplates auto-detects templates based on project files
+func (t *GitignoreTool) detectProjectTemplates() []string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+
+	var templates []string
+
+	files, err := os.ReadDir(cwd)
+	if err != nil {
+		return nil
+	}
+
+	for _, file := range files {
+		name := file.Name()
+		switch {
+		case name == "go.mod":
+			templates = append(templates, "Go")
+		case name == "package.json":
+			templates = append(templates, "Node")
+		case name == "Cargo.toml":
+			templates = append(templates, "Rust")
+		case name == "pom.xml" || name == "build.gradle":
+			templates = append(templates, "Java")
+		case name == "requirements.txt" || name == "setup.py" || name == "pyproject.toml":
+			templates = append(templates, "Python")
+		case name == "Gemfile":
+			templates = append(templates, "Ruby")
+		case name == "composer.json":
+			templates = append(templates, "PHP")
+		case name == "CMakeLists.txt":
+			templates = append(templates, "C++")
+		case name == "Package.swift":
+			templates = append(templates, "Swift")
+		case name == "pubspec.yaml":
+			templates = append(templates, "Dart")
+		case name == "mix.exs":
+			templates = append(templates, "Elixir")
+		}
+	}
+
+	// Add IDE/OS templates
+	templates = append(templates, "VisualStudioCode", "macOS", "Windows", "Linux")
+
+	return templates
+}
+
+// getKnownTemplates returns a list of known template names
+func (t *GitignoreTool) getKnownTemplates() []string {
+	return []string{
+		// Languages
+		"Actionscript", "Ada", "Agda", "Android", "AppEngine", "AppceleratorTitanium",
+		"ArchLinuxPackages", "Autotools", "C", "C++", "CFWheels", "CMake", "CUDA",
+		"CakePHP", "ChefCookbook", "Clojure", "CodeIgniter", "CommonLisp", "Composer",
+		"Concrete5", "Coq", "CraftCMS", "D", "DM", "Dart", "Delphi", "Drupal",
+		"EPiServer", "Eagle", "Elisp", "Elixir", "Elm", "Erlang", "ExpressionEngine",
+		"ExtJs", "Fancy", "Finale", "FlaxEngine", "ForceDotCom", "Fortran", "FuelPHP",
+		"GWT", "Gcov", "GitBook", "Go", "Godot", "Gradle", "Grails", "Haskell",
+		"IGORPro", "Idris", "JBoss", "JENKINS_HOME", "Java", "Jekyll", "Joomla",
+		"Julia", "KiCad", "Kohana", "Kotlin", "LabVIEW", "Laravel", "Leiningen",
+		"LemonStand", "Lilypond", "Lithium", "Lua", "Magento", "Maven", "Mercury",
+		"MetaProgrammingSystem", "Nanoc", "Nim", "Node", "OCaml", "Objective-C",
+		"Opa", "OpenCart", "OracleForms", "Packer", "Perl", "Phalcon", "PlayFramework",
+		"Plone", "Prestashop", "Processing", "PureScript", "Python", "Qooxdoo", "Qt",
+		"R", "ROS", "Racket", "Rails", "Raku", "RhodesRhomobile", "Ruby", "Rust",
+		"SCons", "Sass", "Scala", "Scheme", "Scrivener", "Sdcc", "SeamGen", "SketchUp",
+		"Smalltalk", "Stella", "SugarCRM", "Swift", "Symfony", "SymphonyCMS", "TeX",
+		"Terraform", "Textpattern", "TurboGears2", "TwinCAT3", "Typo3", "Unity",
+		"UnrealEngine", "VVVV", "VisualStudio", "Waf", "WordPress", "Xojo", "Yeoman",
+		"Yii", "ZendFramework", "Zephir",
+		// IDEs
+		"AndroidStudio", "Anjuta", "AppBuilder", "AppCode", " AptanaStudio", "BlueJ",
+		"Brackets", "CLion", "CVS", "CodeBlocks", "CodeKit", "CodeSniffer", "DartEditor",
+		"Dreamweaver", "Eclipse", "Emacs", "Espresso", "FlexBuilder", "GPG", "GoLand",
+		"JDeveloper", "JEdit", "JEnv", "JetBrains", "KDevelop4", "Kate", "Kdiff3",
+		"KomodoEdit", " Lazarus", "LibreOffice", "LyX", "MATLAB", "Mercurial", "ModelSim",
+		"MonoDevelop", "NetBeans", "NotepadPP", "PSoCCreator", "PhpStorm", "PyCharm",
+		"PyDev", "QML", "QtCreator", "RStudio", "Redis", "RubyMine", "SBT", "SlickEdit",
+		"SonarQube", "SourceTree", "Spyder", "SublimeText", "Synology", "SynopsysVCS",
+		"Tags", "TextMate", "TortoiseGit", "Tower", "Typings", "Vagrant", "Vim",
+		"VirtualEnv", "VisualStudioCode", "WebStorm", "Xcode", " XilinxISE",
+		// Operating Systems
+		"Linux", "Windows", "macOS",
+		// Other
+		"Backup", "Bazaar", "BitTorrent", "Dropbox", "FVWM", "Fossil", "Images",
+		"Mercurial", "ModelSim", "NGINX", "Nikola", "Puppet", "Redcar", "Redis",
+		"SVN", "Sass", "Stellar", "SVN", "Swarm", "Synology", "Vagrant", "Vim",
+	}
+}
+
+// isLanguage checks if template is a programming language
+func (t *GitignoreTool) isLanguage(name string) bool {
+	languages := []string{
+		"actionscript", "ada", "agda", "c", "c++", "clojure", "cmake", "coq",
+		"cpp", "crystal", "csharp", "d", "dart", "delphi", "elixir", "elm",
+		"erlang", "fortran", "fsharp", "go", "groovy", "haskell", "java",
+		"javascript", "julia", "kotlin", "lua", "nim", "objective-c", "ocaml",
+		"pascal", "perl", "php", "python", "r", "ruby", "rust", "scala",
+		"scheme", "smalltalk", "swift", "typescript", "vala", "zig",
+	}
+	for _, lang := range languages {
+		if name == lang || strings.Contains(name, lang) {
+			return true
+		}
+	}
+	return false
+}
+
+// isIDE checks if template is an IDE
+func (t *GitignoreTool) isIDE(name string) bool {
+	ides := []string{
+		"androidstudio", "appcode", "clion", "codeblocks", "eclipse", "emacs",
+		"goland", "intellij", "jboss", "jetbrains", "netbeans", "phpstorm",
+		"pycharm", "rubymine", "sublime", "vim", "visualstudio", "vscode",
+		"webstorm", "xcode",
+	}
+	for _, ide := range ides {
+		if name == ide || strings.Contains(name, ide) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOS checks if template is an operating system
+func (t *GitignoreTool) isOS(name string) bool {
+	oses := []string{"linux", "macos", "osx", "windows"}
+	for _, os := range oses {
+		if name == os {
+			return true
+		}
+	}
+	return false
+}
+
+// isFramework checks if template is a framework
+func (t *GitignoreTool) isFramework(name string) bool {
+	frameworks := []string{
+		"angular", "cakephp", "django", "drupal", "express", "flask", "flutter",
+		"gatsby", "gradle", "grails", "jquery", "laravel", "maven", "nextjs",
+		"nuxt", "rails", "react", "spring", "symfony", "unity", "unreal",
+		"vue", "wordpress", "yii",
+	}
+	for _, fw := range frameworks {
+		if name == fw || strings.Contains(name, fw) {
+			return true
+		}
+	}
+	return false
+}
+
+// GenerateGitignoreForProject generates a .gitignore for a specific project type
+func (t *GitignoreTool) GenerateGitignoreForProject(projectType, outputPath string) error {
+	args := map[string]interface{}{
+		"action":       "generate",
+		"project_type": projectType,
+		"output":       outputPath,
+	}
+	_, err := t.Execute(context.Background(), args)
+	return err
+}
+
+// CombineTemplates combines multiple gitignore templates
+func (t *GitignoreTool) CombineTemplates(templates []string, outputPath string, customRules []string) error {
+	args := map[string]interface{}{
+		"action":       "generate",
+		"templates":    templates,
+		"output":       outputPath,
+		"custom_rules": customRules,
+	}
+	_, err := t.Execute(context.Background(), args)
+	return err
+}

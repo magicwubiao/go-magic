@@ -1,0 +1,43 @@
+{
+  "profile": "default",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "providers": {
+    "openai": {
+      "api_key": "your-openai-api-key-here",
+      "model": "gpt-5.6"
+    }
+  },
+  "voice": {
+    "provider": "openai",
+    "model": "tts-1",
+    "voice": "alloy",
+    "language": "en",
+    "speed": 1.0,
+    "pitch": 0,
+    "api_key": "",
+    "region": "",
+    "providers": {
+      "openai": {
+        "api_key": "your-openai-api-key-here",
+        "api_url": ""
+      },
+      "azure": {
+        "api_key": "your-azure-speech-key-here",
+        "region": "eastus"
+      },
+      "google": {
+        "api_key": "your-google-api-key-here"
+      },
+      "elevenlabs": {
+        "api_key": "your-elevenlabs-api-key-here"
+      },
+      "whisper": {
+        "api_key": "your-openai-api-key-here"
+      }
+    }
+  },
+  "tools": {
+    "enabled": ["all"]
+  }
+}
