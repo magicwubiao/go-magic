@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -317,6 +318,57 @@ func (s *Server) handleWorkDirHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"dirs": dirs})
+}
+
+// handleFSOpenFolder opens the given directory in the OS file explorer
+// (Windows Explorer / macOS Finder / xdg-open on Linux). The path must exist
+// and be a directory; the explorer process is spawned detached and its exit
+// code is ignored (Windows explorer returns non-zero even on success).
+func (s *Server) handleFSOpenFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := filepath.Abs(req.Path)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if info, err := os.Stat(absPath); err != nil || !info.IsDir() {
+		http.Error(w, "directory not found: "+absPath, http.StatusBadRequest)
+		return
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", absPath)
+	case "darwin":
+		cmd = exec.Command("open", absPath)
+	default:
+		cmd = exec.Command("xdg-open", absPath)
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "failed to open: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Reap the process in the background; explorer exits 1 on success on Windows.
+	go func() { _ = cmd.Wait() }()
+
+	jsonResponse(w, map[string]interface{}{"ok": true})
 }
 
 func (s *Server) handleFSShared(w http.ResponseWriter, r *http.Request) {

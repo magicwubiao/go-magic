@@ -436,6 +436,9 @@
           <n-icon size="13"><LockClosedOutline /></n-icon>
           <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
           <span class="workdir-bar-hint">{{ t('chat.workDirLocked') }}</span>
+          <n-icon size="13" class="workdir-bar-clear" :title="t('chat.workDirOpen')" @click.stop="openWorkDirInExplorer()">
+            <OpenOutline />
+          </n-icon>
         </div>
         <!-- 系统默认目录（尚未由用户设置）：可点击浏览，可清除 -->
         <div
@@ -446,6 +449,9 @@
         >
           <n-icon size="13"><FolderOpenOutline /></n-icon>
           <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
+          <n-icon size="13" class="workdir-bar-clear" :title="t('chat.workDirOpen')" @click.stop="openWorkDirInExplorer()">
+            <OpenOutline />
+          </n-icon>
           <n-icon size="13" class="workdir-bar-clear" @click.stop="clearWorkDir">
             <CloseCircleOutline />
           </n-icon>
@@ -492,6 +498,9 @@
         >
           <n-icon size="16"><FolderOpenOutline /></n-icon>
           <span class="dir-picker-recommended-path">{{ d }}</span>
+          <n-icon size="14" class="dir-picker-recommended-open" :title="t('chat.workDirOpen')" @click.stop="openWorkDirInExplorer(d)">
+            <OpenOutline />
+          </n-icon>
         </div>
       </div>
 
@@ -587,7 +596,7 @@ import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -1192,6 +1201,15 @@ async function applyRecommendedDir(path: string) {
   } catch (e: any) {
     message.error(e?.message || t('chat.workDirLocked'))
   }
+}
+
+// 用系统文件管理器（Windows 资源管理器）打开目录；不传 path 时打开当前会话工作目录
+function openWorkDirInExplorer(path?: string) {
+  const target = path || chatStore.currentWorkDir
+  if (!target) return
+  sessionsApi.openFolderInExplorer(target).catch((e: any) => {
+    message.error(e?.message || t('common.operationFailed'))
+  })
 }
 
 async function loadDirs(path?: string) {
@@ -2568,6 +2586,15 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dir-picker-recommended-open {
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.dir-picker-recommended-open:hover {
+  opacity: 1;
 }
 
 .dir-picker-breadcrumb {

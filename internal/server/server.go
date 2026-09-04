@@ -1182,6 +1182,7 @@ func (s *Server) Start(port int) error {
 
 	mux.HandleFunc("/api/fs/dirs", withCORS(requireAuth(s.handleListDirs)))
 	mux.HandleFunc("/api/fs/workdir-history", withCORS(requireAuth(s.handleWorkDirHistory)))
+	mux.HandleFunc("/api/fs/open-folder", withCORS(requireAuth(s.handleFSOpenFolder)))
 	mux.HandleFunc("/api/fs/list", withCORS(requireAuth(s.handleFSList)))
 	mux.HandleFunc("/api/fs/read", withCORS(requireAuth(s.handleFSRead)))
 	mux.HandleFunc("/api/fs/download", withCORS(requireAuth(s.handleFSDownload)))

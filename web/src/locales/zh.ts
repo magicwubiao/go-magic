@@ -233,6 +233,7 @@ export default {
     workDir: '工作目录',
     workDirSelect: '选择工作目录',
     workDirRecommended: '推荐目录（最近使用）',
+    workDirOpen: '在文件管理器中打开',
     workDirCurrent: '当前工作目录',
     workDirNone: '未设置（使用默认目录）',
     workDirSet: '设置工作目录',

@@ -115,6 +115,14 @@ export async function listWorkDirHistory(): Promise<string[]> {
   return res?.dirs || []
 }
 
+// Open a local directory in the OS file explorer (Windows Explorer / Finder / xdg-open).
+export async function openFolderInExplorer(path: string): Promise<void> {
+  await request('/fs/open-folder', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
 export interface FSEntry {
   path: string
   name: string
