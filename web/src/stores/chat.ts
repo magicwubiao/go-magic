@@ -257,7 +257,10 @@ export const useChatStore = defineStore('chat', () => {
       const result = await sessionsApi.getSessions(SESSIONS_LIMIT, 0)
       const filtered = result.sessions.filter(s => !s.source || s.source === 'web')
       sessions.value = filtered
-      if (filtered.length < SESSIONS_LIMIT) {
+      // hasMore 必须按原始页长判断：一页里混有非 web 会话（bot/tui/平台网关
+      // 等）时 filtered 数会小于页大小，若据此判定会提前截断、老会话永远
+      // 加载不进侧栏（搜索全量补齐却能搜到，表现为"搜到的比侧栏多"）。
+      if (result.sessions.length < SESSIONS_LIMIT) {
         sessionsHasMore.value = false
       }
       // Do NOT auto-select the first session on refresh — land on a
@@ -281,7 +284,8 @@ export const useChatStore = defineStore('chat', () => {
       if (newSessions.length > 0) {
         sessions.value = [...sessions.value, ...newSessions]
       }
-      if (newSessions.length < SESSIONS_LIMIT) {
+      // 同 loadSessions：按原始页长判断 hasMore，避免非 web 会话混页导致提前截断
+      if (result.sessions.length < SESSIONS_LIMIT) {
         sessionsHasMore.value = false
       }
       return newSessions.length > 0
