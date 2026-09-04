@@ -1293,7 +1293,9 @@ async function deleteSession(id: string) {
 }
 
 function startRename(id: string) {
+  // 搜索结果里可能选中尚未并入 store 的会话，回退到搜索缓存查找
   const session = chatStore.sessions.find(s => s.id === id)
+    ?? searchCache.value?.find(s => s.id === id)
   if (session) {
     editingSessionId.value = id
     editingName.value = session.title || ''
