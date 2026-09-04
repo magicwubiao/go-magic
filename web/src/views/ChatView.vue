@@ -7,24 +7,19 @@
         <div class="handle-bar"></div>
       </div>
       <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
+        <!-- 新建聊天 -->
         <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
           </template>
         </n-button>
-        <n-button size="small" quaternary :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
-          <template #icon>
-            <n-icon :component="RefreshOutline" />
-          </template>
-        </n-button>
-      </div>
-      <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
-      <div class="sidebar-search" v-show="!isMobile || mobileSessionExpanded">
+        <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
         <n-input
           v-model:value="sessionSearch"
           size="small"
           round
           clearable
+          class="sidebar-search-input"
           :placeholder="t('chat.searchPlaceholder')"
           @keydown.esc="sessionSearch = ''"
         >
@@ -32,6 +27,12 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
+        <!-- 刷新会话列表 -->
+        <n-button size="small" quaternary circle :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+        </n-button>
       </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
         <div v-if="isSearching" class="profile-group-header">{{ t('chat.searchResults', { count: visibleSessions.length }) }}</div>
@@ -1523,28 +1524,27 @@ onMounted(async () => {
 
 .sidebar-header {
   flex-shrink: 0;
-  padding: 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid #e0e0e0;
-  height: 49px;
+  height: auto;
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .new-chat-btn {
-  flex: 1;
-}
-
-/* 会话搜索框 */
-.sidebar-search {
   flex-shrink: 0;
-  padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
-  background: #fff;
+  width: 34px;
 }
 
-.sidebar-search .n-input {
+/* 会话搜索框（与新建/刷新同一行） */
+.sidebar-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-search-input .n-input {
   --n-height: 30px;
 }
 
