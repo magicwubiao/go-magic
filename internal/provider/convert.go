@@ -271,6 +271,7 @@ func ModelSupportsVision(modelName string) bool {
 		"claude-3", "claude-3.5", "claude-3-opus", "claude-3-sonnet",
 		"gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5", "gemini-pro-vision",
 		"qwen-vl", "qwen-vl-max", "qwen2-vl", "qwen3-vl",
+		"muse-spark",
 	}
 
 	for _, m := range visionModels {

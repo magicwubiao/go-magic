@@ -107,6 +107,7 @@ func getDefaultBaseURL(name string) string {
 		"minimax":    "https://api.minimax.chat/v1",
 		"mimo":       "https://api.mymimo.ai/v1",
 		"longcat":    "https://api.longcat.chat/openai/v1",
+		"meta":       "https://api.meta.ai/v1", // Meta Model API (Muse Spark)
 	}
 
 	if url, ok := defaults[strings.ToLower(name)]; ok {
@@ -142,6 +143,7 @@ func getDefaultModel(name string) string {
 		"minimax":    "MiniMax-M2.5",
 		"mimo":       "mimo-v2-flash",
 		"longcat":    "LongCat-Flash-Chat",
+		"meta":       "muse-spark-1.3", // Meta Model API (Muse Spark)
 	}
 
 	if model, ok := defaults[strings.ToLower(name)]; ok {

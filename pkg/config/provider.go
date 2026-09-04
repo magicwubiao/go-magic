@@ -90,6 +90,8 @@ func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, 
 		return provider.NewHunyuanProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "longcat":
 		return provider.NewLongCatProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
+	case "meta":
+		return provider.NewMetaProvider(provCfg.APIKey, provCfg.BaseURL, model), nil
 	case "custom":
 		return provider.NewOpenAICompatibleProvider("custom", provCfg.APIKey, provCfg.BaseURL, model, userModels), nil
 	default:
@@ -276,6 +278,13 @@ func ListProviders() []ProviderInfo {
 			DisplayName: "LongCat (美团龙猫)",
 			Description: "美团 LongCat 大模型",
 			Models:      []string{"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"},
+			NeedsAPIKey: true,
+		},
+		{
+			Name:        "meta",
+			DisplayName: "Meta Model API (Muse Spark)",
+			Description: "Meta 超级智能实验室 Muse Spark 多模态推理模型",
+			Models:      []string{"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"},
 			NeedsAPIKey: true,
 		},
 		{

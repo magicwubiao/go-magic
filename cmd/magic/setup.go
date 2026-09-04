@@ -81,6 +81,7 @@ func allProviders() []providerInfo {
 		{Name: "cohere", DisplayName: "Cohere", Description: "Cohere Command series models", Models: []string{"command-r-plus", "command-r", "command"}, NeedsAPIKey: true, DefaultURL: "https://api.cohere.ai/v2"},
 		{Name: "mimo", DisplayName: "MiMo", Description: "MiMo LLM", Models: []string{"mimo-3-7b"}, NeedsAPIKey: true, DefaultURL: "https://api.mymimo.ai/v1"},
 		{Name: "longcat", DisplayName: "LongCat", Description: "Meituan LongCat LLM", Models: []string{"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"}, NeedsAPIKey: true, DefaultURL: "https://api.longcat.chat/openai/v1"},
+		{Name: "meta", DisplayName: "Meta Model API (Muse Spark)", Description: "Meta Muse Spark multimodal reasoning model", Models: []string{"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}, NeedsAPIKey: true, DefaultURL: "https://api.meta.ai/v1"},
 		{Name: "custom", DisplayName: "Custom (OpenAI Compatible)", Description: "Custom service compatible with OpenAI API format", Models: []string{}, NeedsAPIKey: true, NeedsBaseURL: true},
 	}
 }

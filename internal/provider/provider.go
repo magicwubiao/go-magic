@@ -174,6 +174,11 @@ func GetDefaultModels(providerName string) []ModelInfo {
 			{ID: "LongCat-Flash-Thinking", Name: "LongCat Flash Thinking", Description: "推理模型", ContextLen: 131072},
 			{ID: "LongCat-Flash-Lite", Name: "LongCat Flash Lite", Description: "轻量模型", ContextLen: 131072},
 		},
+		"meta": {
+			{ID: "muse-spark-1.3", Name: "Muse Spark 1.3", Description: "旗舰多模态推理模型", ContextLen: 1048576},
+			{ID: "muse-spark-1.2", Name: "Muse Spark 1.2", Description: "多模态推理模型", ContextLen: 1048576},
+			{ID: "muse-spark-1.1", Name: "Muse Spark 1.1", Description: "首发推理模型", ContextLen: 1048576},
+		},
 	}
 
 	if models, ok := defaults[providerName]; ok {

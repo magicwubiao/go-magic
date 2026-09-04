@@ -37,7 +37,7 @@
 
 | Capability | Description |
 |------------|-------------|
-| **Multi-Provider** | 21 built-in providers: openai, anthropic, deepseek, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, huoshan, wenxin, moonshot, mimo, hunyuan, longcat; any OpenAI-compatible endpoint via the `custom` provider |
+| **Multi-Provider** | 22 built-in providers: openai, anthropic, deepseek, minimax, ollama, dashscope, vllm, zhipu, openrouter, gemini, groq, together, mistral, cohere, perplexity, huoshan, wenxin, moonshot, mimo, hunyuan, longcat, meta; any OpenAI-compatible endpoint via the `custom` provider |
 | **Multiple models per provider** | Each provider can have several models; **the first item in the array is the active model**, switchable on the fly without restart |
 | **TUI chat** | Built on BubbleTea — streaming output, Markdown rendering, multi-line input, slash commands |
 | **Web Dashboard** | Vue 3 + TypeScript, 16 functional pages, streaming chat, hot-reload config, file management, usage panel, and more |

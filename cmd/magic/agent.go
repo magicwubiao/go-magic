@@ -303,6 +303,8 @@ func createProvider(name string, cfg config.ProviderConfig) provider.Provider {
 		return provider.NewHunyuanProvider(cfg.APIKey, cfg.BaseURL, model)
 	case "longcat":
 		return provider.NewLongCatProvider(cfg.APIKey, cfg.BaseURL, model)
+	case "meta":
+		return provider.NewMetaProvider(cfg.APIKey, cfg.BaseURL, model)
 	default:
 		if cfg.BaseURL != "" {
 			return provider.NewOpenAICompatibleProvider(name, cfg.APIKey, cfg.BaseURL, model, userModels)

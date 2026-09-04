@@ -97,6 +97,8 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 			model = "hunyuan-turbos-latest"
 		case "longcat":
 			model = "LongCat-Flash-Chat"
+		case "meta":
+			model = "muse-spark-1.3"
 		case "mimo":
 			model = "mimo-v2-flash"
 		case "ollama":

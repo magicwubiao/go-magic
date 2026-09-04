@@ -37,7 +37,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **多 Provider** | 21 个内置 Provider：openai、anthropic、deepseek、minimax、ollama、dashscope、vllm、zhipu、openrouter、gemini、groq、together、mistral、cohere、perplexity、huoshan、wenxin、moonshot、mimo、hunyuan、longcat；任意 OpenAI 兼容端点用 `custom` 接入 |
+| **多 Provider** | 22 个内置 Provider：openai、anthropic、deepseek、minimax、ollama、dashscope、vllm、zhipu、openrouter、gemini、groq、together、mistral、cohere、perplexity、huoshan、wenxin、moonshot、mimo、hunyuan、longcat、meta；任意 OpenAI 兼容端点用 `custom` 接入 |
 | **单 Provider 多模型** | 每个 Provider 可配多个模型，**数组第一项为当前活跃模型**，支持热切换，无需重启 |
 | **TUI 聊天** | 基于 BubbleTea，流式输出、Markdown 渲染、多行输入、斜杠命令 |
 | **Web Dashboard** | Vue 3 + TypeScript，16 个功能页面，支持流式对话、配置热加载、文件管理、用量面板等 |
