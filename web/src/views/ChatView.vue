@@ -1280,10 +1280,16 @@ async function createSession() {
 }
 
 async function deleteSession(id: string) {
+  // 可能直接在搜索结果中删除尚未并入 store 的会话，回退到搜索缓存查找
   const session = chatStore.sessions.find(s => s.id === id)
+    ?? searchCache.value?.find(s => s.id === id)
   const deleteFiles = !session?.work_dir_user_set
   await chatStore.deleteSession(id, deleteFiles)
   await chatStore.loadSessions()
+  // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
+  if (searchCache.value) {
+    searchCache.value = searchCache.value.filter(s => s.id !== id)
+  }
 }
 
 function startRename(id: string) {
@@ -1302,6 +1308,10 @@ function cancelRename() {
 async function saveRename(id: string) {
   if (editingName.value.trim()) {
     await chatStore.renameSession(id, editingName.value.trim())
+    // 同步搜索候选缓存：store 的 rename 是原地改对象、不会触发缓存同步
+    // watcher（只监听数组引用），这里直接改缓存条目保持搜索结果即时更新
+    const hit = searchCache.value?.find(s => s.id === id)
+    if (hit) hit.title = editingName.value.trim()
   }
   editingSessionId.value = null
   editingName.value = ''
