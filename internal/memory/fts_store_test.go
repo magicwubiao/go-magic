@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,8 +100,8 @@ func TestFTSStoreGetStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats: %v", err)
 	}
-	if total, _ := stats["total"].(int64); total != 2 {
-		t.Errorf("expected 2 total, got %v", stats["total"])
+	if total, _ := stats["total_memories"].(int); total != 2 {
+		t.Errorf("expected 2 total_memories, got %v", stats["total_memories"])
 	}
 	_ = time.Now
 }

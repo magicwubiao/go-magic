@@ -43,7 +43,8 @@ func TestStoreRecallRoundtrip(t *testing.T) {
 
 func TestStoreRecallAccessCountBatched(t *testing.T) {
 	// Regression: recall used to issue one UPDATE per result (N+1) and trigger
-	// the FTS update trigger per row. Now it should be a single UPDATE.
+	// the FTS update trigger per row. Now it should be a single UPDATE that
+	// bumps access_count for every returned ID.
 	s := newTestStore(t)
 	for i := 0; i < 3; i++ {
 		if err := s.Store(&Memory{Type: TypeKnowledge, Content: "shared fact about gophers", Scope: "/facts"}); err != nil {
@@ -57,7 +58,13 @@ func TestStoreRecallAccessCountBatched(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(got))
 	}
-	for _, m := range got {
+	// The returned structs reflect pre-touch values (0). Re-list to confirm the
+	// single batched UPDATE bumped every returned memory's access_count to 1.
+	after, err := s.List(TypeKnowledge, 10, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range after {
 		if m.AccessCount != 1 {
 			t.Fatalf("expected access_count=1 after one recall, got %d for %s", m.AccessCount, m.ID)
 		}
@@ -225,7 +232,7 @@ func TestEscapeFTSQuery(t *testing.T) {
 		{"hello world", `"hello" AND "world"*`},
 		{"error (critical)", `"error" AND "critical"*`}, // parens stripped, not parsed as operators
 		{"status: 500", `"status" AND "500"*`},          // colon stripped
-		{"a OR b", `"or" AND "b"*`},                     // OR becomes a quoted term, not the operator
+		{"a OR b", `"or"*`},                             // "a" and "b" are 1-char (dropped); "or" is quoted, not the operator
 	}
 	for _, c := range cases {
 		got := escapeFTSQuery(c.in)

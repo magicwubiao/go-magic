@@ -188,11 +188,12 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);
 	CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
 
-	-- Command approval history (for approval learning)
+	-- Command approval history (for approval learning). command_hash is UNIQUE
+	-- so the ON CONFLICT(command_hash) upsert in RecordCommandAction works.
 	CREATE TABLE IF NOT EXISTS command_history (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		command TEXT NOT NULL,
-		command_hash TEXT NOT NULL,
+		command_hash TEXT NOT NULL UNIQUE,
 		action TEXT NOT NULL, -- approved, denied, auto_approved
 		session_id TEXT DEFAULT '',
 		created_at TEXT NOT NULL,
