@@ -150,6 +150,12 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 			log.Warnf("[Gateway] Cortex start failed: %v", err)
 			cortexMgr = nil
 		} else {
+			// Share the Cortex semantic memory store with the tool registry so
+			// the memory_store / memory_recall tools use the same SQLite DB
+			// as the rest of the memory system (one canonical store).
+			if cortexMgr.SemanticMemory != nil {
+				tool.SetMemoryStore(cortexMgr.SemanticMemory)
+			}
 			log.Info("[Gateway] Cortex enabled")
 		}
 	}

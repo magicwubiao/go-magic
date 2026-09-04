@@ -19,12 +19,14 @@ type FTSStore struct {
 	dbPath string
 }
 
-// NewFTSStore creates a new FTS-based memory store
+// NewFTSStore creates a new FTS-based memory store.
 func NewFTSStore(baseDir string) (*FTSStore, error) {
 	dbPath := filepath.Join(baseDir, "memory.sqlite")
-	os.MkdirAll(baseDir, 0755)
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return nil, err
+	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := openMemoryDB(dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -36,6 +38,7 @@ func NewFTSStore(baseDir string) (*FTSStore, error) {
 
 	// Initialize schema
 	if err := store.initSchema(); err != nil {
+		db.Close()
 		return nil, err
 	}
 
@@ -73,16 +76,23 @@ func (f *FTSStore) initSchema() error {
 		return err
 	}
 
-	// Triggers to keep FTS index in sync
+	// Triggers to keep the FTS index in sync. Because memories_fts uses an
+	// external content table (content='memories'), the index can ONLY be
+	// modified through the special 'delete' command + fresh INSERTs. A plain
+	// DELETE or UPDATE on memories_fts silently corrupts the index, which is
+	// what the previous implementation did.
 	triggers := []string{
 		`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
 			INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-			DELETE FROM memories_fts WHERE rowid = old.id;
+			INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+			VALUES ('delete', old.id, old.content, old.tags);
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-			UPDATE memories_fts SET content = new.content, tags = new.tags WHERE rowid = new.id;
+			INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+			VALUES ('delete', old.id, old.content, old.tags);
+			INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
 		END`,
 	}
 
@@ -152,10 +162,18 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 		limit = 10
 	}
 
+	// Sanitize the query so FTS5-reserved characters can't corrupt the MATCH
+	// expression (same helper the semantic Store uses). An empty query yields
+	// no results rather than a syntax error.
+	match := escapeFTSQuery(query)
+	if match == "" {
+		return nil, nil
+	}
+
 	// Use BM25 ranking for relevance
 	rows, err := f.db.Query(`
-		SELECT 
-			m.id, m.session_id, m.turn_number, m.role, m.content, 
+		SELECT
+			m.id, m.session_id, m.turn_number, m.role, m.content,
 			m.content_type, m.tags, m.importance, m.created_at,
 			rank,
 			snippet(memories_fts, -1, '**', '**', '...', 64)
@@ -164,7 +182,7 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 		WHERE memories_fts MATCH ?
 		ORDER BY rank ASC
 		LIMIT ?
-	`, query, limit)
+	`, match, limit)
 
 	if err != nil {
 		return nil, err
@@ -195,22 +213,29 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 	return results, nil
 }
 
-// GetContext retrieves relevant context for a query
-// This is used to augment the system prompt with relevant memories
+// GetContext retrieves relevant context for a query, used to augment the system
+// prompt with relevant memories. maxTokens is a token budget; we approximate
+// 4 characters per token when comparing against the byte length of the buffer.
 func (f *FTSStore) GetContext(query string, maxTokens int) string {
 	results, err := f.Search(query, 5)
 	if err != nil || len(results) == 0 {
 		return ""
 	}
 
+	if maxTokens <= 0 {
+		maxTokens = 1000
+	}
+	byteBudget := maxTokens * 4
+
 	var context strings.Builder
 	context.WriteString("## Relevant Memories\n\n")
 
 	for _, r := range results {
-		context.WriteString(fmt.Sprintf("- [%s] %s\n", r.Role, r.Content))
-		if context.Len() > maxTokens {
+		line := fmt.Sprintf("- [%s] %s\n", r.Role, r.Content)
+		if context.Len()+len(line) > byteBudget {
 			break
 		}
+		context.WriteString(line)
 	}
 
 	return context.String()

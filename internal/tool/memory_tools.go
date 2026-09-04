@@ -3,10 +3,14 @@ package tool
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sync"
+
+	"github.com/magicwubiao/go-magic/internal/memory"
 )
 
+// MemoryStoreTool stores a value under a key in the persistent semantic memory
+// (the same SQLite store used by the Cortex memory systems). This replaces the
+// old per-key .txt files, which formed a third, uncoordinated memory system.
 type MemoryStoreTool struct{}
 
 func (t *MemoryStoreTool) Name() string {
@@ -40,30 +44,30 @@ func (t *MemoryStoreTool) Schema() map[string]interface{} {
 }
 
 func (t *MemoryStoreTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	key, ok := args["key"].(string)
-	if !ok {
-		return nil, fmt.Errorf("key argument is required")
-	}
-	value, ok := args["value"].(string)
-	if !ok {
-		return nil, fmt.Errorf("value argument is required")
+	key, _ := args["key"].(string)
+	value, _ := args["value"].(string)
+	if key == "" || value == "" {
+		return nil, fmt.Errorf("key and value are required")
 	}
 	category := "general"
-	if c, ok := args["category"].(string); ok {
+	if c, _ := args["category"].(string); c != "" {
 		category = c
 	}
 
-	home, err := os.UserHomeDir()
+	store, err := getDefaultMemoryStore()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("memory store unavailable: %w", err)
 	}
 
-	memDir := filepath.Join(home, ".magic", "memories", category)
-	os.MkdirAll(memDir, 0755)
-
-	memPath := filepath.Join(memDir, key+".txt")
-	err = os.WriteFile(memPath, []byte(value), 0644)
-	if err != nil {
+	mem := &memory.Memory{
+		Type:       memory.TypeAgent,
+		Content:    value,
+		Scope:      key,
+		Categories: []string{category},
+		Importance: 0.5,
+		Source:     "memory_store_tool",
+	}
+	if err := store.Store(mem); err != nil {
 		return nil, fmt.Errorf("failed to store memory: %w", err)
 	}
 
@@ -71,10 +75,11 @@ func (t *MemoryStoreTool) Execute(ctx context.Context, args map[string]interface
 		"success":  true,
 		"key":      key,
 		"category": category,
-		"path":     memPath,
+		"id":       mem.ID,
 	}, nil
 }
 
+// MemoryRecallTool recalls a value previously stored under a key.
 type MemoryRecallTool struct{}
 
 func (t *MemoryRecallTool) Name() string {
@@ -93,47 +98,83 @@ func (t *MemoryRecallTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "Memory key to recall",
 			},
-			"category": map[string]interface{}{
-				"type":        "string",
-				"description": "Category to search in",
-			},
 		},
 		"required": []string{"key"},
 	}
 }
 
 func (t *MemoryRecallTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	key, ok := args["key"].(string)
-	if !ok {
-		return nil, fmt.Errorf("key argument is required")
+	key, _ := args["key"].(string)
+	if key == "" {
+		return nil, fmt.Errorf("key is required")
 	}
 
-	home, err := os.UserHomeDir()
+	store, err := getDefaultMemoryStore()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("memory store unavailable: %w", err)
 	}
 
-	// Search in all categories or specific one
-	categories := []string{"general", "user", "project"}
-	if cat, ok := args["category"].(string); ok {
-		categories = []string{cat}
-	}
-
-	for _, cat := range categories {
-		memPath := filepath.Join(home, ".magic", "memories", cat, key+".txt")
-		data, err := os.ReadFile(memPath)
-		if err == nil {
-			return map[string]interface{}{
-				"found":    true,
-				"key":      key,
-				"category": cat,
-				"value":    string(data),
-			}, nil
-		}
+	mem, err := store.GetByScope(key)
+	if err != nil {
+		// Not found is a normal, non-error result for recall.
+		return map[string]interface{}{
+			"found": false,
+			"key":   key,
+		}, nil
 	}
 
 	return map[string]interface{}{
-		"found": false,
+		"found": true,
 		"key":   key,
+		"value": mem.Content,
+		"id":    mem.ID,
 	}, nil
+}
+
+// --- shared store accessor --------------------------------------------------
+
+// defaultMemoryStore is the process-wide semantic memory store used by the
+// memory tools. It is either injected by the Cortex manager (via
+// SetMemoryStore) or lazily opened at the default path on first use.
+var (
+	defaultMemoryStore     *memory.Store
+	defaultMemoryStoreMu   sync.Mutex
+	defaultMemoryStoreOnce sync.Once
+	defaultMemoryStoreErr  error
+)
+
+// SetMemoryStore injects the semantic memory store used by the memory tools.
+// Should be called once during process startup (after the Cortex manager is
+// initialized) so the tools share the same store instance as Cortex.
+func SetMemoryStore(s *memory.Store) {
+	defaultMemoryStoreMu.Lock()
+	defer defaultMemoryStoreMu.Unlock()
+	defaultMemoryStore = s
+}
+
+// getDefaultMemoryStore returns the shared memory store, opening it lazily at
+// the default path if nobody injected one.
+func getDefaultMemoryStore() (*memory.Store, error) {
+	defaultMemoryStoreMu.Lock()
+	if s := defaultMemoryStore; s != nil {
+		defaultMemoryStoreMu.Unlock()
+		return s, nil
+	}
+	defaultMemoryStoreMu.Unlock()
+
+	defaultMemoryStoreOnce.Do(func() {
+		var s *memory.Store
+		s, defaultMemoryStoreErr = memory.NewStore(memory.DefaultConfig())
+		if defaultMemoryStoreErr == nil {
+			defaultMemoryStoreMu.Lock()
+			defaultMemoryStore = s
+			defaultMemoryStoreMu.Unlock()
+		}
+	})
+	if defaultMemoryStoreErr != nil {
+		return nil, defaultMemoryStoreErr
+	}
+	defaultMemoryStoreMu.Lock()
+	defer defaultMemoryStoreMu.Unlock()
+	return defaultMemoryStore, nil
 }

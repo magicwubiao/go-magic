@@ -11,6 +11,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/review"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/trigger"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // Manager integrates all six Cortex Agent systems:
@@ -28,7 +29,8 @@ type Manager struct {
 	Perception     *perception.Parser          // Layer 1: Intent classification
 	Cognition      *cognition.Planner          // Layer 2: Planning and decision making
 	Execution      *execution.Manager          // Layer 3: Checkpoint + Resume
-	FTSMemory      *memory.FTSStore            // System 5: FTS full-text search
+	FTSMemory      *memory.FTSStore            // System 5: FTS full-text search (episodic)
+	SemanticMemory *memory.Store               // Semantic memory (typed facts + command trust)
 	SkillCreator   *skills.EnhancedAutoCreator // System 6: Auto skill evolution
 	LastPerception *perception.PerceptionResult
 	LastDecision   *cognition.Decision   // Last cognition decision
@@ -70,7 +72,7 @@ func (m *Manager) setupConnections() {
 
 // Start initializes all six Cortex systems
 // Systems started in order of dependency:
-//   1. Memory systems (Snapshot, FTS)
+//   1. Memory systems (Snapshot, FTS, Semantic)
 //   2. Review system
 //   3. Skill evolution system
 //   4. Trigger system
@@ -85,12 +87,36 @@ func (m *Manager) Start() error {
 		m.FTSMemory = fts
 	}
 
+	// Semantic memory store (best effort). Uses the canonical path
+	// ~/.magic/memories/memory.db so the tool-level memory tools share it.
+	if store, err := memory.NewStore(memory.DefaultConfig()); err == nil {
+		m.SemanticMemory = store
+	} else {
+		log.Warnf("[Cortex] Semantic memory store init failed: %v", err)
+	}
+
 	// System 3: Start background review system
 	if err := m.Review.Start(); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// Close releases resources held by the Cortex systems.
+func (m *Manager) Close() error {
+	var firstErr error
+	if m.FTSMemory != nil {
+		if err := m.FTSMemory.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if m.SemanticMemory != nil {
+		if err := m.SemanticMemory.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // OnUserMessage handles a new user message, triggering:
@@ -331,6 +357,57 @@ func (m *Manager) GetMemoryStats() map[string]interface{} {
 	}
 	stats, _ := m.FTSMemory.GetStats()
 	return stats
+}
+
+// ========== Semantic Memory (typed facts + command trust) ==========
+
+// StoreSemanticMemory stores a typed memory in the semantic store.
+func (m *Manager) StoreSemanticMemory(content, scope string, mType memory.MemoryType, importance float64, categories []string) (*memory.Memory, error) {
+	if m.SemanticMemory == nil {
+		return nil, fmt.Errorf("semantic memory store not initialized")
+	}
+	mem := &memory.Memory{
+		Type:       mType,
+		Content:    content,
+		Scope:      scope,
+		Categories: categories,
+		Importance: importance,
+	}
+	if err := m.SemanticMemory.Store(mem); err != nil {
+		return nil, err
+	}
+	return mem, nil
+}
+
+// SearchSemanticMemory searches the semantic store with FTS5.
+func (m *Manager) SearchSemanticMemory(query string, limit int) []*memory.Memory {
+	if m.SemanticMemory == nil {
+		return nil
+	}
+	memories, _ := m.SemanticMemory.Recall(query, limit)
+	return memories
+}
+
+// RecordCommandTrust records a command approval/denial for trust learning.
+func (m *Manager) RecordCommandTrust(command, action string) error {
+	if m.SemanticMemory == nil {
+		return nil
+	}
+	return m.SemanticMemory.RecordCommandAction(command, action, "")
+}
+
+// GetCommandTrust returns the learned (action, count) for a command hash.
+func (m *Manager) GetCommandTrust(commandHash string) (string, int, error) {
+	if m.SemanticMemory == nil {
+		return "", 0, fmt.Errorf("semantic memory store not initialized")
+	}
+	return m.SemanticMemory.GetCommandTrustLevel(commandHash)
+}
+
+// HashCommand returns the trust hash for a command (exposed for callers that
+// need to look up trust before executing).
+func (m *Manager) HashCommand(cmd string) string {
+	return memory.HashCommand(cmd)
 }
 
 // ========== Phase 4: Skill Evolution (System 6) ==========
