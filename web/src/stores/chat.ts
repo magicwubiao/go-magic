@@ -294,6 +294,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 把不在当前列表中的会话并入顶部（去重）。会话侧栏搜索命中"尚未加载的
+  // 历史会话"时，先并入列表再 select，保证 activeSession 等派生状态正常。
+  function mergeSessions(list: Session[]): void {
+    const known = new Set(sessions.value.map(s => s.id))
+    const fresh = list.filter(s => !known.has(s.id))
+    if (fresh.length > 0) sessions.value = [...fresh, ...sessions.value]
+  }
+
   // Server commands integration not yet implemented, using builtin commands only
 
   function isCommand(input: string): boolean {
@@ -991,6 +999,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionsHasMore,
     loadSessions,
     loadMoreSessions,
+    mergeSessions,
     createSession,
     selectSession,
     deleteSession,

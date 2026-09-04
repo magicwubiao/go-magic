@@ -11,15 +11,30 @@
           + {{ t('chat.newChat') }}
         </n-button>
       </div>
+      <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
+      <div class="sidebar-search" v-show="!isMobile || mobileSessionExpanded">
+        <n-input
+          v-model:value="sessionSearch"
+          size="small"
+          round
+          clearable
+          :placeholder="t('chat.searchPlaceholder')"
+          @keydown.esc="sessionSearch = ''"
+        >
+          <template #prefix>
+            <n-icon :component="SearchOutline" :size="14" />
+          </template>
+        </n-input>
+      </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
         <template v-for="(sessions, profile) in groupedSessions" :key="profile">
-          <div class="profile-group-header">{{ profile || t('chat.default') }}</div>
+          <div class="profile-group-header">{{ groupHeader(profile, sessions) }}</div>
           <div
             v-for="session in sessions"
             :key="session.id"
             class="session-item"
             :class="{ active: chatStore.activeSessionId === session.id }"
-            @click="selectSession(session.id)"
+            @click="handleSessionClick(session.id)"
             @mouseenter="loadSessionGoals(session.id)"
           >
             <div class="session-content">
@@ -119,10 +134,13 @@
             </div>
           </div>
         </template>
-        <div v-if="chatStore.sessionsLoading" style="padding: 16px; text-align: center;">
+        <div v-if="chatStore.sessionsLoading || (isSearching && searchLoading)" style="padding: 16px; text-align: center;">
           <n-spin size="small" />
         </div>
-        <n-text v-if="!chatStore.sessions.length && !chatStore.sessionsLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <n-text v-if="isSearching && !chatStore.sessionsLoading && !searchLoading && visibleSessions.length === 0" depth="3" style="padding: 16px; display: block; text-align: center;">
+          {{ t('chat.searchNoResults') }}
+        </n-text>
+        <n-text v-if="!isSearching && !chatStore.sessions.length && !chatStore.sessionsLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.noSessions') }}
         </n-text>
       </div>
@@ -549,7 +567,7 @@ import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -854,9 +872,94 @@ function renderMarkdown(content: string): string {
   return html
 }
 
-// Group sessions by profile
+// ===== 会话侧栏搜索（本地过滤） =====
+// 说明：会话列表本身按 20 条/页懒加载，仅过滤"已加载"的会话会让搜索漏掉
+// 更早的历史会话；因此搜索激活时首次会一次性补齐后端全部 web 会话到本地
+// 缓存（searchCache），后续过滤均为纯前端操作，不引入服务端搜索语义。
+const sessionSearch = ref('')
+const searchCache = ref<sessionsApi.Session[] | null>(null) // null=尚未全量补齐
+const searchLoading = ref(false)
+const SESSION_FETCH_STEP = 100
+
+const isSearching = computed(() => sessionSearch.value.trim().length > 0)
+
+function isWebSession(s: sessionsApi.Session): boolean {
+  return !s.source || s.source === 'web'
+}
+
+// 当前侧栏实际展示的会话：普通浏览 = store 分页列表；搜索 = 过滤后的候选集。
+const visibleSessions = computed(() => {
+  const q = sessionSearch.value.trim().toLowerCase()
+  if (!q) return chatStore.sessions
+  const pool = searchCache.value ?? chatStore.sessions
+  return pool.filter(s => {
+    if (!isWebSession(s)) return false
+    const title = (s.title || '').toLowerCase()
+    const preview = (s.preview || '').toLowerCase()
+    return title.includes(q) || preview.includes(q)
+  })
+})
+
+// 一次性拉全后端 web 会话作为搜索候选（分页循环，避免截断）
+async function loadFullSessions(): Promise<void> {
+  if (searchLoading.value || searchCache.value) return
+  searchLoading.value = true
+  try {
+    const web: sessionsApi.Session[] = []
+    const first = await sessionsApi.getSessions(SESSION_FETCH_STEP, 0)
+    web.push(...first.sessions.filter(isWebSession))
+    const total = first.total ?? 0
+    for (let offset = SESSION_FETCH_STEP; offset < total; offset += SESSION_FETCH_STEP) {
+      const res = await sessionsApi.getSessions(SESSION_FETCH_STEP, offset)
+      web.push(...res.sessions.filter(isWebSession))
+      if (res.sessions.length < SESSION_FETCH_STEP) break
+    }
+    searchCache.value = web
+  } catch (e) {
+    // 拉全量失败时退化为过滤已加载会话，不阻断搜索输入
+    console.error('Failed to load full sessions for search:', e)
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+// 防抖触发全量补齐：首次输入后 250ms 内不重复请求
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+watch(sessionSearch, (val) => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+  if (!val.trim() || searchCache.value) return
+  searchDebounceTimer = setTimeout(loadFullSessions, 250)
+})
+
+// 搜索候选缓存建立后，store 中新增/刷新出的会话保持同步（如新建会话后立即可搜到）
+watch(() => chatStore.sessions, (list) => {
+  if (!searchCache.value) return
+  const known = new Set(searchCache.value.map(s => s.id))
+  const fresh = list.filter(s => isWebSession(s) && !known.has(s.id))
+  if (fresh.length > 0) searchCache.value = [...searchCache.value, ...fresh]
+})
+
+// 点击搜索命中的会话：若不在 store 已加载列表中，先并入再进入，保证派生状态完整
+async function handleSessionClick(id: string) {
+  if (isSearching.value && searchCache.value) {
+    const hit = searchCache.value.find(s => s.id === id)
+    if (hit) chatStore.mergeSessions([hit])
+  }
+  await selectSession(id)
+}
+
+// Group sessions by profile（搜索时全部归入单组，展示"搜索结果 (N)"）
 const groupedSessions = computed(() => {
   const groups: Record<string, any[]> = {}
+  if (isSearching.value) {
+    if (visibleSessions.value.length > 0) {
+      groups['search'] = visibleSessions.value
+    }
+    return groups
+  }
   const sessions = chatStore.sessions || []
   for (const session of sessions) {
     let profile = session?.profile?.trim() || ''
@@ -868,6 +971,11 @@ const groupedSessions = computed(() => {
   }
   return groups
 })
+
+function groupHeader(profile: string, sessions: any[]): string {
+  if (profile === 'search') return t('chat.searchResults', { count: sessions.length })
+  return profile || t('chat.default')
+}
 
 const isGatewaySession = computed(() => {
   const session = chatStore.activeSession
@@ -1253,6 +1361,7 @@ function scrollToBottom() {
 // Handle session list scroll - load more when scrolled to bottom
 let loadMoreThrottleTimer: ReturnType<typeof setTimeout> | null = null
 function handleSessionScroll(e: Event) {
+  if (isSearching.value) return // 搜索模式候选集已全量，无需滚动加载更多
   if (loadMoreThrottleTimer) return
   if (chatStore.sessionsLoading) return
   if (!chatStore.sessionsHasMore) return
@@ -1268,6 +1377,13 @@ function handleSessionScroll(e: Event) {
     }, 200)
   }
 }
+
+onUnmounted(() => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+})
 
 watch(() => chatStore.messages.length, scrollToBottom)
 watch(() => chatStore.toolCalls.length, scrollToBottom)
@@ -1343,6 +1459,18 @@ onMounted(async () => {
   border-bottom: 1px solid #e0e0e0;
   height: 49px;
   box-sizing: border-box;
+}
+
+/* 会话搜索框 */
+.sidebar-search {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fff;
+}
+
+.sidebar-search .n-input {
+  --n-height: 30px;
 }
 
 .session-list {
