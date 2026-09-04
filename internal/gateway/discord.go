@@ -188,10 +188,10 @@ func (g *DiscordGateway) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		Timestamp: m.Timestamp,
 		MediaURLs: mediaURLs,
 		Metadata: map[string]interface{}{
-			"author":     m.Author.Username,
-			"author_id":  m.Author.ID,
-			"guild_id":   m.GuildID,
-			"msg_type":   fmt.Sprintf("%d", m.Type),
+			"author":           m.Author.Username,
+			"author_id":        m.Author.ID,
+			"guild_id":         m.GuildID,
+			"msg_type":         fmt.Sprintf("%d", m.Type),
 			"attachment_count": len(m.Attachments),
 		},
 	}

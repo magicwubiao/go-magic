@@ -17,26 +17,26 @@ import (
 
 // WhatsAppPlatform implements WhatsApp messaging
 type WhatsAppPlatform struct {
-	config     *PlatformConfig
-	phoneID    string
-	apiKey     string
-	apiBase    string
+	config      *PlatformConfig
+	phoneID     string
+	apiKey      string
+	apiBase     string
 	verifyToken string
 	webhookPath string
-	connected  bool
-	httpClient *http.Client
+	connected   bool
+	httpClient  *http.Client
 }
 
 // WhatsAppMessage represents a WhatsApp message payload
 type WhatsAppMessage struct {
-	MessagingProduct string                   `json:"messaging_product"`
-	To               string                   `json:"to"`
-	Type             string                   `json:"type"`
-	Text             *WhatsAppText            `json:"text,omitempty"`
-	Image            *WhatsAppMedia           `json:"image,omitempty"`
-	Audio            *WhatsAppMedia           `json:"audio,omitempty"`
-	Video            *WhatsAppMedia           `json:"video,omitempty"`
-	Document         *WhatsAppMedia           `json:"document,omitempty"`
+	MessagingProduct string         `json:"messaging_product"`
+	To               string         `json:"to"`
+	Type             string         `json:"type"`
+	Text             *WhatsAppText  `json:"text,omitempty"`
+	Image            *WhatsAppMedia `json:"image,omitempty"`
+	Audio            *WhatsAppMedia `json:"audio,omitempty"`
+	Video            *WhatsAppMedia `json:"video,omitempty"`
+	Document         *WhatsAppMedia `json:"document,omitempty"`
 }
 
 // WhatsAppText represents WhatsApp text message
@@ -56,10 +56,10 @@ type WhatsAppMedia struct {
 // NewWhatsAppPlatform creates a new WhatsApp platform
 func NewWhatsAppPlatform(phoneID, apiKey string) *WhatsAppPlatform {
 	return &WhatsAppPlatform{
-		phoneID:   phoneID,
-		apiKey:    apiKey,
-		apiBase:   "https://graph.facebook.com/v18.0/" + phoneID,
-		connected: false,
+		phoneID:    phoneID,
+		apiKey:     apiKey,
+		apiBase:    "https://graph.facebook.com/v18.0/" + phoneID,
+		connected:  false,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -172,7 +172,7 @@ func (w *WhatsAppPlatform) Receive(ctx context.Context) (<-chan Message, error) 
 
 // SignalPlatform implements Signal messaging
 type SignalPlatform struct {
-	config      *PlatformConfig
+	config     *PlatformConfig
 	serviceURL string
 	username   string
 	password   string
@@ -221,7 +221,7 @@ func (s *SignalPlatform) Send(ctx context.Context, recipient string, msg Message
 
 	payload := map[string]interface{}{
 		"recipient": recipient,
-		"message":  msg.Text,
+		"message":   msg.Text,
 	}
 
 	jsonData, _ := json.Marshal(payload)
@@ -257,13 +257,13 @@ func (s *SignalPlatform) Receive(ctx context.Context) (<-chan Message, error) {
 
 // MatrixPlatform implements Matrix messaging
 type MatrixPlatform struct {
-	config    *PlatformConfig
-	homeserver string
-	userID    string
+	config      *PlatformConfig
+	homeserver  string
+	userID      string
 	accessToken string
-	roomID    string
-	connected bool
-	httpClient *http.Client
+	roomID      string
+	connected   bool
+	httpClient  *http.Client
 }
 
 // NewMatrixPlatform creates a new Matrix platform
@@ -445,21 +445,21 @@ func (e *EmailPlatform) Receive(ctx context.Context) (<-chan Message, error) {
 
 // SMSPlatform implements SMS messaging
 type SMSPlatform struct {
-	config    *PlatformConfig
-	apiKey    string
-	apiURL    string
-	from      string
-	connected bool
+	config     *PlatformConfig
+	apiKey     string
+	apiURL     string
+	from       string
+	connected  bool
 	httpClient *http.Client
 }
 
 // NewSMSPlatform creates a new SMS platform
 func NewSMSPlatform(apiKey, apiURL, from string) *SMSPlatform {
 	return &SMSPlatform{
-		apiKey:    apiKey,
-		apiURL:    apiURL,
-		from:      from,
-		connected: false,
+		apiKey:     apiKey,
+		apiURL:     apiURL,
+		from:       from,
+		connected:  false,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }

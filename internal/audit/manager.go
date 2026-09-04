@@ -23,48 +23,48 @@ const (
 type Category string
 
 const (
-	CatAuth       Category = "AUTH"
-	CatConfig     Category = "CONFIG"
-	CatData       Category = "DATA"
-	CatTool       Category = "TOOL"
-	CatSkill      Category = "SKILL"
-	CatSession    Category = "SESSION"
-	CatPlugin     Category = "PLUGIN"
-	CatSystem     Category = "SYSTEM"
-	CatNetwork    Category = "NETWORK"
+	CatAuth    Category = "AUTH"
+	CatConfig  Category = "CONFIG"
+	CatData    Category = "DATA"
+	CatTool    Category = "TOOL"
+	CatSkill   Category = "SKILL"
+	CatSession Category = "SESSION"
+	CatPlugin  Category = "PLUGIN"
+	CatSystem  Category = "SYSTEM"
+	CatNetwork Category = "NETWORK"
 )
 
 // Entry 审计条目
 type Entry struct {
-	ID          string                 `json:"id"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Level       Level                  `json:"level"`
-	Category    Category               `json:"category"`
-	Action      string                 `json:"action"`
-	Actor       string                 `json:"actor"`
-	Resource    string                 `json:"resource"`
-	Result      string                 `json:"result"` // success, failure, partial
-	StatusCode  int                    `json:"status_code,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	IPAddress   string                 `json:"ip_address,omitempty"`
-	UserAgent   string                 `json:"user_agent,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-	SessionID   string                 `json:"session_id,omitempty"`
-	Duration    time.Duration          `json:"duration,omitempty"`
+	ID         string                 `json:"id"`
+	Timestamp  time.Time              `json:"timestamp"`
+	Level      Level                  `json:"level"`
+	Category   Category               `json:"category"`
+	Action     string                 `json:"action"`
+	Actor      string                 `json:"actor"`
+	Resource   string                 `json:"resource"`
+	Result     string                 `json:"result"` // success, failure, partial
+	StatusCode int                    `json:"status_code,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	IPAddress  string                 `json:"ip_address,omitempty"`
+	UserAgent  string                 `json:"user_agent,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	SessionID  string                 `json:"session_id,omitempty"`
+	Duration   time.Duration          `json:"duration,omitempty"`
 }
 
 // Query 查询条件
 type Query struct {
-	StartTime   time.Time
-	EndTime     time.Time
-	Level       Level
-	Category    Category
-	Action      string
-	Actor       string
-	Resource    string
-	Result      string
-	Limit       int
-	Offset      int
+	StartTime time.Time
+	EndTime   time.Time
+	Level     Level
+	Category  Category
+	Action    string
+	Actor     string
+	Resource  string
+	Result    string
+	Limit     int
+	Offset    int
 }
 
 // Manager 审计管理器
@@ -85,9 +85,9 @@ func NewManager(dataDir string) (*Manager, error) {
 	}
 
 	m := &Manager{
-		dataDir: dataDir,
-		entries: make([]*Entry, 0),
-		maxSize: 10000,
+		dataDir:  dataDir,
+		entries:  make([]*Entry, 0),
+		maxSize:  10000,
 		stopChan: make(chan struct{}),
 	}
 
@@ -308,9 +308,9 @@ func (m *Manager) GetStats(start, end time.Time) (*Stats, error) {
 	defer m.mu.RUnlock()
 
 	stats := &Stats{
-		ByLevel:   make(map[Level]int),
+		ByLevel:    make(map[Level]int),
 		ByCategory: make(map[Category]int),
-		ByResult:  make(map[string]int),
+		ByResult:   make(map[string]int),
 	}
 
 	for _, entry := range m.entries {

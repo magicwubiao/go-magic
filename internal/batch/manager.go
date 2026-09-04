@@ -23,7 +23,7 @@ type Manager struct {
 // Config holds batch configuration
 type Config struct {
 	MaxConcurrent int           // Max parallel jobs
-	RetryCount    int          // Number of retries on failure
+	RetryCount    int           // Number of retries on failure
 	RetryDelay    time.Duration // Delay between retries
 	ResultDir     string        // Directory to save results
 	ProgressDir   string        // Directory to save progress
@@ -44,62 +44,62 @@ func DefaultConfig() *Config {
 
 // Job represents a batch job
 type Job struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Type        string                 `json:"type"` // trajectory, query, skill
-	InputFile   string                 `json:"input_file"`
-	OutputFile  string                 `json:"output_file"`
-	Params      map[string]interface{} `json:"params"`
-	Status      string                 `json:"status"` // pending, running, completed, failed
-	Progress    float64               `json:"progress"` // 0-100
-	CreatedAt   time.Time             `json:"created_at"`
-	StartedAt   *time.Time            `json:"started_at,omitempty"`
-	CompletedAt *time.Time            `json:"completed_at,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	RetryCount  int                   `json:"retry_count"`
-	TotalItems  int                   `json:"total_items"`
-	ProcessedItems int                `json:"processed_items"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Type           string                 `json:"type"` // trajectory, query, skill
+	InputFile      string                 `json:"input_file"`
+	OutputFile     string                 `json:"output_file"`
+	Params         map[string]interface{} `json:"params"`
+	Status         string                 `json:"status"`   // pending, running, completed, failed
+	Progress       float64                `json:"progress"` // 0-100
+	CreatedAt      time.Time              `json:"created_at"`
+	StartedAt      *time.Time             `json:"started_at,omitempty"`
+	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	RetryCount     int                    `json:"retry_count"`
+	TotalItems     int                    `json:"total_items"`
+	ProcessedItems int                    `json:"processed_items"`
 }
 
 // JobResult contains job execution results
 type JobResult struct {
-	JobID       string                 `json:"job_id"`
-	Success     bool                   `json:"success"`
-	OutputFile  string                 `json:"output_file"`
-	Results     []TaskResult           `json:"results,omitempty"`
-	Errors      []TaskError            `json:"errors,omitempty"`
-	Summary     *ResultSummary         `json:"summary,omitempty"`
-	Duration    time.Duration          `json:"duration"`
-	ProcessedAt time.Time              `json:"processed_at"`
+	JobID       string         `json:"job_id"`
+	Success     bool           `json:"success"`
+	OutputFile  string         `json:"output_file"`
+	Results     []TaskResult   `json:"results,omitempty"`
+	Errors      []TaskError    `json:"errors,omitempty"`
+	Summary     *ResultSummary `json:"summary,omitempty"`
+	Duration    time.Duration  `json:"duration"`
+	ProcessedAt time.Time      `json:"processed_at"`
 }
 
 // TaskResult represents a single task result
 type TaskResult struct {
-	TaskID    string                 `json:"task_id"`
-	Input     interface{}            `json:"input"`
-	Output    interface{}            `json:"output"`
-	Duration  time.Duration          `json:"duration"`
-	Success   bool                   `json:"success"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	TaskID   string                 `json:"task_id"`
+	Input    interface{}            `json:"input"`
+	Output   interface{}            `json:"output"`
+	Duration time.Duration          `json:"duration"`
+	Success  bool                   `json:"success"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // TaskError represents a task error
 type TaskError struct {
-	TaskID string `json:"task_id"`
-	Error  string `json:"error"`
+	TaskID string      `json:"task_id"`
+	Error  string      `json:"error"`
 	Input  interface{} `json:"input"`
 }
 
 // ResultSummary summarizes batch results
 type ResultSummary struct {
-	TotalTasks     int     `json:"total_tasks"`
-	Successful     int     `json:"successful"`
-	Failed         int     `json:"failed"`
-	SuccessRate    float64 `json:"success_rate"`
-	TotalDuration  time.Duration `json:"total_duration"`
+	TotalTasks      int           `json:"total_tasks"`
+	Successful      int           `json:"successful"`
+	Failed          int           `json:"failed"`
+	SuccessRate     float64       `json:"success_rate"`
+	TotalDuration   time.Duration `json:"total_duration"`
 	AvgTaskDuration time.Duration `json:"avg_task_duration"`
-	TotalTokens    int64   `json:"total_tokens"`
-	TotalCost      float64 `json:"total_cost"`
+	TotalTokens     int64         `json:"total_tokens"`
+	TotalCost       float64       `json:"total_cost"`
 }
 
 // TrajectoryJob represents a trajectory generation job
@@ -110,31 +110,31 @@ type TrajectoryJob struct {
 
 // TrajectoryTask is a single trajectory generation task
 type TrajectoryTask struct {
-	TaskID      string                 `json:"task_id"`
-	Query       string                 `json:"query"`
-	SystemPrompt string               `json:"system_prompt,omitempty"`
-	Tools       []string               `json:"tools,omitempty"`
-	MaxSteps    int                    `json:"max_steps,omitempty"`
-	ExpectedTools []string             `json:"expected_tools,omitempty"`
-	Trajectory  []TrajectoryStep       `json:"trajectory,omitempty"`
-	Success     bool                   `json:"success"`
-	Error       string                 `json:"error,omitempty"`
+	TaskID        string           `json:"task_id"`
+	Query         string           `json:"query"`
+	SystemPrompt  string           `json:"system_prompt,omitempty"`
+	Tools         []string         `json:"tools,omitempty"`
+	MaxSteps      int              `json:"max_steps,omitempty"`
+	ExpectedTools []string         `json:"expected_tools,omitempty"`
+	Trajectory    []TrajectoryStep `json:"trajectory,omitempty"`
+	Success       bool             `json:"success"`
+	Error         string           `json:"error,omitempty"`
 }
 
 // TrajectoryStep represents a single step in trajectory
 type TrajectoryStep struct {
-	Step       int                    `json:"step"`
-	Role       string                 `json:"role"` // user, assistant, tool
-	Content    string                 `json:"content"`
-	ToolCalls  []ToolCall            `json:"tool_calls,omitempty"`
-	ToolResult string                 `json:"tool_result,omitempty"`
-	Timestamp  time.Time              `json:"timestamp"`
+	Step       int        `json:"step"`
+	Role       string     `json:"role"` // user, assistant, tool
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolResult string     `json:"tool_result,omitempty"`
+	Timestamp  time.Time  `json:"timestamp"`
 }
 
 // ToolCall represents a tool call in trajectory
 type ToolCall struct {
-	ID       string                 `json:"id"`
-	Name     string                 `json:"name"`
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments"`
 }
 
@@ -146,13 +146,13 @@ type QueryJob struct {
 
 // QueryTask is a single query task
 type QueryTask struct {
-	TaskID   string `json:"task_id"`
-	Query    string `json:"query"`
-	Response string `json:"response,omitempty"`
-	Tokens   int    `json:"tokens"`
+	TaskID   string  `json:"task_id"`
+	Query    string  `json:"query"`
+	Response string  `json:"response,omitempty"`
+	Tokens   int     `json:"tokens"`
 	Cost     float64 `json:"cost"`
-	Success  bool   `json:"success"`
-	Error    string `json:"error,omitempty"`
+	Success  bool    `json:"success"`
+	Error    string  `json:"error,omitempty"`
 }
 
 // NewManager creates a new batch manager
@@ -296,7 +296,7 @@ func (m *Manager) runTrajectoryJob(ctx context.Context, job *Job, input interfac
 			defer func() { <-sem }()
 
 			taskResult := m.executeTrajectoryTask(ctx, t)
-			
+
 			mu.Lock()
 			if taskResult.Success {
 				result.Results = append(result.Results, taskResult)
@@ -350,15 +350,15 @@ func (m *Manager) executeTrajectoryTask(ctx context.Context, task TrajectoryTask
 	// In real implementation, this would call the agent
 	trajectory := []TrajectoryStep{
 		{
-			Step:  1,
-			Role:  "user",
-			Content: task.Query,
+			Step:      1,
+			Role:      "user",
+			Content:   task.Query,
 			Timestamp: time.Now(),
 		},
 		{
-			Step:  2,
-			Role:  "assistant",
-			Content: "Processing your request...",
+			Step:      2,
+			Role:      "assistant",
+			Content:   "Processing your request...",
 			Timestamp: time.Now(),
 		},
 	}
@@ -653,22 +653,22 @@ func (m *Manager) ResultChan() <-chan *JobResult {
 // ExportTrajectories exports trajectories for RL training
 func ExportTrajectories(results []TaskResult, format string) ([]byte, error) {
 	type RLTrajectory struct {
-		TaskID     string   `json:"task_id"`
-		Query      string   `json:"query"`
-		Response   string   `json:"response"`
-		ToolsUsed  []string `json:"tools_used"`
-		Success    bool     `json:"success"`
-		Reward     float64  `json:"reward"`
+		TaskID    string   `json:"task_id"`
+		Query     string   `json:"query"`
+		Response  string   `json:"response"`
+		ToolsUsed []string `json:"tools_used"`
+		Success   bool     `json:"success"`
+		Reward    float64  `json:"reward"`
 	}
 
 	trajectories := make([]RLTrajectory, 0, len(results))
 	for _, r := range results {
 		// Convert to RL format
 		traj := RLTrajectory{
-			TaskID:   r.TaskID,
-			Query:    fmt.Sprintf("%v", r.Input),
-			Success:  r.Success,
-			Reward:   1.0,
+			TaskID:  r.TaskID,
+			Query:   fmt.Sprintf("%v", r.Input),
+			Success: r.Success,
+			Reward:  1.0,
 		}
 		if !r.Success {
 			traj.Reward = 0.0

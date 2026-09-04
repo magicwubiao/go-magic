@@ -11,11 +11,11 @@ import (
 
 // LLMConfig holds configuration for LLM documentation
 type LLMConfig struct {
-	OutputDir  string   // Output directory
-	IncludeAll bool     // Include all files, not just curated
-	Title      string   // Documentation title
-	BaseURL    string   // Base URL for links
-	Version    string   // Version string
+	OutputDir  string // Output directory
+	IncludeAll bool   // Include all files, not just curated
+	Title      string // Documentation title
+	BaseURL    string // Base URL for links
+	Version    string // Version string
 }
 
 // LLMGenerator generates machine-readable documentation
@@ -46,14 +46,14 @@ type DocumentationEntry struct {
 // GenerateLLMsTxt generates the llms.txt file (curated index)
 func (g *LLMGenerator) GenerateLLMsTxt() (string, error) {
 	var buf bytes.Buffer
-	
+
 	// Header
 	buf.WriteString("# go-magic Documentation\n\n")
 	buf.WriteString("> Machine-readable documentation index for LLM context loading.\n\n")
 	buf.WriteString("Generated: " + time.Now().Format("2006-01-02") + "\n")
 	buf.WriteString("Version: " + g.config.Version + "\n\n")
 	buf.WriteString("---\n\n")
-	
+
 	// Curated sections
 	sections := []struct {
 		name  string
@@ -67,7 +67,7 @@ func (g *LLMGenerator) GenerateLLMsTxt() (string, error) {
 		{"Messaging Gateway", g.getGatewayEntries()},
 		{"Features", g.getFeatureEntries()},
 	}
-	
+
 	for _, section := range sections {
 		if len(section.items) == 0 {
 			continue
@@ -82,21 +82,21 @@ func (g *LLMGenerator) GenerateLLMsTxt() (string, error) {
 			buf.WriteString("\n")
 		}
 	}
-	
+
 	return buf.String(), nil
 }
 
 // GenerateLLMsFullTxt generates the full documentation (llms-full.txt)
 func (g *LLMGenerator) GenerateLLMsFullTxt() (string, error) {
 	var buf bytes.Buffer
-	
+
 	// Header
 	buf.WriteString("# go-magic Complete Documentation\n\n")
 	buf.WriteString("> Complete documentation concatenated for one-shot LLM ingestion.\n\n")
 	buf.WriteString("Generated: " + time.Now().Format("2006-01-02") + "\n")
 	buf.WriteString("Version: " + g.config.Version + "\n\n")
 	buf.WriteString("---\n\n")
-	
+
 	// Generate all sections
 	buf.WriteString(g.generateGettingStarted())
 	buf.WriteString(g.generateCLIReference())
@@ -105,7 +105,7 @@ func (g *LLMGenerator) GenerateLLMsFullTxt() (string, error) {
 	buf.WriteString(g.generateSkillsReference())
 	buf.WriteString(g.generateGatewayReference())
 	buf.WriteString(g.generateFeaturesReference())
-	
+
 	return buf.String(), nil
 }
 
@@ -115,7 +115,7 @@ func (g *LLMGenerator) WriteFiles() error {
 	if err := os.MkdirAll(g.config.OutputDir, 0755); err != nil {
 		return err
 	}
-	
+
 	// Write llms.txt
 	llms, err := g.GenerateLLMsTxt()
 	if err != nil {
@@ -124,7 +124,7 @@ func (g *LLMGenerator) WriteFiles() error {
 	if err := os.WriteFile(filepath.Join(g.config.OutputDir, "llms.txt"), []byte(llms), 0644); err != nil {
 		return err
 	}
-	
+
 	// Write llms-full.txt
 	llmsFull, err := g.GenerateLLMsFullTxt()
 	if err != nil {
@@ -448,7 +448,7 @@ func (g *LLMGenerator) generateGettingStarted() string {
 func (g *LLMGenerator) generateCLIReference() string {
 	var buf bytes.Buffer
 	buf.WriteString("# CLI Command Reference\n\n")
-	
+
 	commands := []struct {
 		name        string
 		description string
@@ -477,7 +477,7 @@ func (g *LLMGenerator) generateCLIReference() string {
 		{"plugin", "Plugin system", "list, discover, load <path>, unload <name>"},
 		{"voice", "Voice mode", "list-presets, set-preset <name>, test"},
 	}
-	
+
 	for _, cmd := range commands {
 		buf.WriteString(fmt.Sprintf("## magic %s\n\n", cmd.name))
 		buf.WriteString(fmt.Sprintf("Description: %s\n\n", cmd.description))
@@ -485,7 +485,7 @@ func (g *LLMGenerator) generateCLIReference() string {
 			buf.WriteString(fmt.Sprintf("Subcommands:\n%s\n\n", cmd.subcommands))
 		}
 	}
-	
+
 	return buf.String()
 }
 
@@ -654,9 +654,9 @@ func (g *LLMGenerator) generateFeaturesReference() string {
 // GenerateIndex generates a search-friendly index
 func (g *LLMGenerator) GenerateIndex() (string, error) {
 	var buf bytes.Buffer
-	
+
 	entries := []DocumentationEntry{}
-	
+
 	// Collect all entries
 	for _, section := range [][]DocumentationEntry{
 		g.getGettingStartedEntries(),
@@ -669,18 +669,18 @@ func (g *LLMGenerator) GenerateIndex() (string, error) {
 	} {
 		entries = append(entries, section...)
 	}
-	
+
 	// Sort by title
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Title < entries[j].Title
 	})
-	
+
 	buf.WriteString("# go-magic Index\n\n")
 	buf.WriteString(fmt.Sprintf("Total entries: %d\n\n", len(entries)))
-	
+
 	for _, entry := range entries {
 		buf.WriteString(fmt.Sprintf("- [%s](%s) - %s\n", entry.Title, entry.Path, entry.Description))
 	}
-	
+
 	return buf.String(), nil
 }

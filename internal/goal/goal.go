@@ -21,22 +21,22 @@ const (
 
 // Goal represents a user goal
 type Goal struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      Status    `json:"status"`
-	Progress    int       `json:"progress"` // 0-100
-	SessionIDs  []string  `json:"session_ids"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Status      Status     `json:"status"`
+	Progress    int        `json:"progress"` // 0-100
+	SessionIDs  []string   `json:"session_ids"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // Manager manages goals
 type Manager struct {
-	mu     sync.RWMutex
-	goals  map[string]*Goal
-	dir    string
+	mu    sync.RWMutex
+	goals map[string]*Goal
+	dir   string
 }
 
 // NewManager creates a new goal manager
@@ -45,17 +45,17 @@ func NewManager(dir string) (*Manager, error) {
 		goals: make(map[string]*Goal),
 		dir:   dir,
 	}
-	
+
 	// Ensure directory exists
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	
+
 	// Load existing goals
 	if err := m.load(); err != nil {
 		return nil, err
 	}
-	
+
 	return m, nil
 }
 
@@ -63,7 +63,7 @@ func NewManager(dir string) (*Manager, error) {
 func (m *Manager) Create(ctx context.Context, title, description string) (*Goal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	goal := &Goal{
 		ID:          generateID(),
 		Title:       title,
@@ -74,13 +74,13 @@ func (m *Manager) Create(ctx context.Context, title, description string) (*Goal,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-	
+
 	m.goals[goal.ID] = goal
 	if err := m.save(); err != nil {
 		delete(m.goals, goal.ID)
 		return nil, err
 	}
-	
+
 	return goal, nil
 }
 
@@ -88,12 +88,12 @@ func (m *Manager) Create(ctx context.Context, title, description string) (*Goal,
 func (m *Manager) Get(ctx context.Context, id string) (*Goal, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	goal, ok := m.goals[id]
 	if !ok {
 		return nil, fmt.Errorf("goal not found: %s", id)
 	}
-	
+
 	return goal, nil
 }
 
@@ -101,14 +101,14 @@ func (m *Manager) Get(ctx context.Context, id string) (*Goal, error) {
 func (m *Manager) List(ctx context.Context, status Status) ([]*Goal, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var result []*Goal
 	for _, g := range m.goals {
 		if status == "" || g.Status == status {
 			result = append(result, g)
 		}
 	}
-	
+
 	// Sort by updated_at desc
 	for i := 0; i < len(result)-1; i++ {
 		for j := i + 1; j < len(result); j++ {
@@ -117,7 +117,7 @@ func (m *Manager) List(ctx context.Context, status Status) ([]*Goal, error) {
 			}
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -125,12 +125,12 @@ func (m *Manager) List(ctx context.Context, status Status) ([]*Goal, error) {
 func (m *Manager) Update(ctx context.Context, id string, updates map[string]interface{}) (*Goal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	goal, ok := m.goals[id]
 	if !ok {
 		return nil, fmt.Errorf("goal not found: %s", id)
 	}
-	
+
 	if title, ok := updates["title"].(string); ok {
 		goal.Title = title
 	}
@@ -154,13 +154,13 @@ func (m *Manager) Update(ctx context.Context, id string, updates map[string]inte
 			goal.Progress = 0
 		}
 	}
-	
+
 	goal.UpdatedAt = time.Now()
-	
+
 	if err := m.save(); err != nil {
 		return nil, err
 	}
-	
+
 	return goal, nil
 }
 
@@ -168,11 +168,11 @@ func (m *Manager) Update(ctx context.Context, id string, updates map[string]inte
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if _, ok := m.goals[id]; !ok {
 		return fmt.Errorf("goal not found: %s", id)
 	}
-	
+
 	delete(m.goals, id)
 	return m.save()
 }
@@ -181,22 +181,22 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 func (m *Manager) LinkSession(ctx context.Context, goalID, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	goal, ok := m.goals[goalID]
 	if !ok {
 		return fmt.Errorf("goal not found: %s", goalID)
 	}
-	
+
 	// Check if already linked
 	for _, id := range goal.SessionIDs {
 		if id == sessionID {
 			return nil
 		}
 	}
-	
+
 	goal.SessionIDs = append(goal.SessionIDs, sessionID)
 	goal.UpdatedAt = time.Now()
-	
+
 	return m.save()
 }
 
@@ -204,12 +204,12 @@ func (m *Manager) LinkSession(ctx context.Context, goalID, sessionID string) err
 func (m *Manager) UnlinkSession(ctx context.Context, goalID, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	goal, ok := m.goals[goalID]
 	if !ok {
 		return fmt.Errorf("goal not found: %s", goalID)
 	}
-	
+
 	var newIDs []string
 	for _, id := range goal.SessionIDs {
 		if id != sessionID {
@@ -218,7 +218,7 @@ func (m *Manager) UnlinkSession(ctx context.Context, goalID, sessionID string) e
 	}
 	goal.SessionIDs = newIDs
 	goal.UpdatedAt = time.Now()
-	
+
 	return m.save()
 }
 
@@ -226,7 +226,7 @@ func (m *Manager) UnlinkSession(ctx context.Context, goalID, sessionID string) e
 func (m *Manager) GetGoalsBySession(ctx context.Context, sessionID string) ([]*Goal, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var result []*Goal
 	for _, g := range m.goals {
 		for _, id := range g.SessionIDs {
@@ -245,7 +245,7 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
-	
+
 	file := filepath.Join(m.dir, "goals.json")
 	return os.WriteFile(file, data, 0644)
 }
@@ -260,7 +260,7 @@ func (m *Manager) load() error {
 		}
 		return err
 	}
-	
+
 	return json.Unmarshal(data, &m.goals)
 }
 

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // Mock provider that simulates tool calls
@@ -45,7 +45,7 @@ func (m *mockRegistry) Execute(ctx context.Context, name string, args map[string
 func TestAgent_ToolCallIDSync(t *testing.T) {
 	// Simulate a provider that returns tool calls with empty IDs
 	// This tests that the agent correctly generates IDs and syncs them
-	
+
 	mockProvider := &mockToolProvider{
 		responses: []*provider.ChatResponse{
 			{
@@ -90,10 +90,10 @@ func TestAgent_ToolCallIDSync(t *testing.T) {
 
 	// Check history for correct ID matching
 	history := ag.GetHistory()
-	
+
 	var assistantToolCallIDs []string
 	var toolMessageIDs []string
-	
+
 	for _, msg := range history {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
@@ -161,7 +161,7 @@ func TestAgent_MultipleToolCallIDs(t *testing.T) {
 	}
 
 	history := ag.GetHistory()
-	
+
 	// Find assistant message with tool_calls
 	for _, msg := range history {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {

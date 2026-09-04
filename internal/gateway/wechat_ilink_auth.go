@@ -73,7 +73,7 @@ func PerformILinkLogin(ctx context.Context, opts ILinkLoginOpts) (botToken, user
 		if qrData == "" {
 			qrData = qrResp.Qrcode
 		}
-		
+
 		// Generate QR code for terminal
 		fmt.Println("📱 QR Code (scan with WeChat):")
 		fmt.Println()

@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 	stdlog "log"
+	"os"
 	"time"
 
 	pkglog "github.com/magicwubiao/go-magic/pkg/log"

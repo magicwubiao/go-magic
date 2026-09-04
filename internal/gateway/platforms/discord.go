@@ -14,20 +14,20 @@ import (
 
 // DiscordPlatform implements Discord messaging
 type DiscordPlatform struct {
-	config    *PlatformConfig
-	token     string
-	botID     string
-	connected bool
-	updates   chan Message
+	config     *PlatformConfig
+	token      string
+	botID      string
+	connected  bool
+	updates    chan Message
 	httpClient *http.Client
 }
 
 // DiscordMessage represents a Discord message payload
 type DiscordMessage struct {
-	Content   string            `json:"content,omitempty"`
-	Embeds    []DiscordEmbed   `json:"embeds,omitempty"`
-	File      *multipart.File   `json:"-"`
-	Filename  string           `json:"-"`
+	Content  string          `json:"content,omitempty"`
+	Embeds   []DiscordEmbed  `json:"embeds,omitempty"`
+	File     *multipart.File `json:"-"`
+	Filename string          `json:"-"`
 }
 
 // DiscordEmbed represents a Discord embed
@@ -44,16 +44,16 @@ type DiscordEmbed struct {
 
 // DiscordWebhookPayload represents a Discord webhook payload
 type DiscordWebhookPayload struct {
-	Content   string          `json:"content,omitempty"`
-	Embeds    []DiscordEmbed `json:"embeds,omitempty"`
+	Content string         `json:"content,omitempty"`
+	Embeds  []DiscordEmbed `json:"embeds,omitempty"`
 }
 
 // NewDiscordPlatform creates a new Discord platform
 func NewDiscordPlatform(token string) *DiscordPlatform {
 	return &DiscordPlatform{
-		token:     token,
-		connected: false,
-		updates:   make(chan Message, 100),
+		token:      token,
+		connected:  false,
+		updates:    make(chan Message, 100),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -124,8 +124,8 @@ func (d *DiscordPlatform) Send(ctx context.Context, channelID string, message Me
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", 
-		"https://discord.com/api/v10/channels/"+channelID+"/messages", 
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://discord.com/api/v10/channels/"+channelID+"/messages",
 		bytes.NewReader(jsonData))
 	if err != nil {
 		return err
@@ -159,7 +159,9 @@ func (d *DiscordPlatform) sendMedia(ctx context.Context, channelID string, messa
 			Content: message.Text,
 			Embeds: []DiscordEmbed{
 				{
-					Image: &struct{ URL string `json:"url,omitempty"` }{URL: message.Media.URL},
+					Image: &struct {
+						URL string `json:"url,omitempty"`
+					}{URL: message.Media.URL},
 				},
 			},
 		}
@@ -308,8 +310,8 @@ func (d *DiscordPlatform) GetChannelMessages(ctx context.Context, channelID stri
 			Bot      bool   `json:"bot"`
 		} `json:"author"`
 		Attachments []struct {
-			URL      string `json:"url"`
-			Filename string `json:"filename"`
+			URL         string `json:"url"`
+			Filename    string `json:"filename"`
 			ContentType string `json:"content_type"`
 		} `json:"attachments"`
 	}
@@ -321,9 +323,9 @@ func (d *DiscordPlatform) GetChannelMessages(ctx context.Context, channelID stri
 	result := make([]Message, 0, len(messages))
 	for _, m := range messages {
 		msg := Message{
-			ID:      m.ID,
-			ChatID:  channelID,
-			Text:    m.Content,
+			ID:     m.ID,
+			ChatID: channelID,
+			Text:   m.Content,
 			From: User{
 				ID:       m.Author.ID,
 				Username: m.Author.Username,

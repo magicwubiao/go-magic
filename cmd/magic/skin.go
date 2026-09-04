@@ -13,13 +13,13 @@ import (
 )
 
 var (
-	skinName     string
-	skinListAll  bool
-	skinExport   bool
-	skinPreview  bool
-	skinInfo     string
-	skinCreate   string
-	skinDelete   string
+	skinName    string
+	skinListAll bool
+	skinExport  bool
+	skinPreview bool
+	skinInfo    string
+	skinCreate  string
+	skinDelete  string
 )
 
 func init() {
@@ -296,7 +296,7 @@ func runSkinPreview(cmd *cobra.Command, args []string) {
 	fmt.Println(renderer.ToolPrefix() + "  " + renderer.ToolOutput("Found 42 results"))
 	fmt.Println()
 	fmt.Println(renderer.SectionHeader("Prompt"))
-	fmt.Println("  " + renderer.Prompt() + renderer.AgentName()+" ")
+	fmt.Println("  " + renderer.Prompt() + renderer.AgentName() + " ")
 	fmt.Println()
 	fmt.Println(renderer.Welcome())
 	fmt.Println()

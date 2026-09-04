@@ -13,10 +13,10 @@ import (
 
 // TelegramConfig holds Telegram-specific configuration
 type TelegramConfig struct {
-	Token          string
-	AdminUsers     []int64 // List of admin user IDs
-	AllowGroups    bool    // Allow bot in groups
-	StreamingReply bool    // Enable streaming reply for long messages
+	Token           string
+	AdminUsers      []int64  // List of admin user IDs
+	AllowGroups     bool     // Allow bot in groups
+	StreamingReply  bool     // Enable streaming reply for long messages
 	AllowedChannels []string `json:"allowed_channels,omitempty"` // Whitelist of channel/chat IDs
 	BlockedChannels []string `json:"blocked_channels,omitempty"` // Blacklist of channel/chat IDs
 }

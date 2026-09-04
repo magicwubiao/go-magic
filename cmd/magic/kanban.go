@@ -535,12 +535,12 @@ func runKanbanBoard(cmd *cobra.Command, args []string) error {
 	}
 
 	statusLabels := map[kanban.TaskStatus]string{
-		kanban.StatusTriage:   "🔍 Triage",
-		kanban.StatusTodo:     "📋 Todo",
-		kanban.StatusReady:    "✅ Ready",
-		kanban.StatusRunning:  "🔄 Running",
-		kanban.StatusBlocked:  "🚫 Blocked",
-		kanban.StatusDone:     "🎉 Done",
+		kanban.StatusTriage:  "🔍 Triage",
+		kanban.StatusTodo:    "📋 Todo",
+		kanban.StatusReady:   "✅ Ready",
+		kanban.StatusRunning: "🔄 Running",
+		kanban.StatusBlocked: "🚫 Blocked",
+		kanban.StatusDone:    "🎉 Done",
 	}
 
 	fmt.Println("┌─────────────────────────────────────────────────────────────────────┐")

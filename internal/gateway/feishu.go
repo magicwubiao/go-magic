@@ -178,12 +178,12 @@ func (g *FeishuGateway) HandleSlashCommand(cmd string, msg Message) (Response, e
 // CheckHealth returns detailed health status for Feishu gateway
 func (g *FeishuGateway) CheckHealth() *HealthStatus {
 	status := &HealthStatus{
-		Platform:  "feishu",
-		Connected: g.IsConnected(),
-		Status:    "healthy",
+		Platform:     "feishu",
+		Connected:    g.IsConnected(),
+		Status:       "healthy",
 		CallbackPort: g.callbackPort,
-		Details:   make(map[string]interface{}),
-		Platforms: make(map[string]PlatformStatus),
+		Details:      make(map[string]interface{}),
+		Platforms:    make(map[string]PlatformStatus),
 	}
 
 	platformStatus := PlatformStatus{

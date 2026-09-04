@@ -40,18 +40,18 @@ var voiceTestCmd = &cobra.Command{
 
 // Voice flags
 var (
-	voiceProvider   string
-	voiceLanguage   string
-	voiceVoiceID    string
-	voiceModel      string
+	voiceProvider string
+	voiceLanguage string
+	voiceVoiceID  string
+	voiceModel    string
 )
 
 // Image attachment flags for message commands
 var (
-	attachImage  string
-	attachAudio  string
-	attachVideo  string
-	attachFile   string
+	attachImage string
+	attachAudio string
+	attachVideo string
+	attachFile  string
 )
 
 func init() {
@@ -187,7 +187,7 @@ func runVoiceTest(cmd *cobra.Command, args []string) {
 
 	// Create manager and test
 	manager := voice.NewManager(cfg)
-	
+
 	fmt.Println("\nTesting TTS...")
 	testText := "Hello, this is a test of the voice system."
 	result, err := manager.TTS(context.Background(), testText)

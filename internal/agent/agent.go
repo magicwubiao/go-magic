@@ -93,10 +93,10 @@ type Agent struct {
 	maxMemoryTokens    int
 
 	// Token usage tracking
-	tokenUsage       int64
-	inputTokens      int
-	outputTokens     int
-	cacheReadTokens  int
+	tokenUsage      int64
+	inputTokens     int
+	outputTokens    int
+	cacheReadTokens int
 
 	// Secret redaction (default true)
 	secretRedaction bool
@@ -127,21 +127,21 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 	}
 
 	agent := &Agent{
-		provider:           prov,
-		registry:           registry,
-		tools:              tools,
-		history:            history,
-		maxTurns:           60,
-		maxIterations:      80,
-		maxTotalLen:        200000, // 200K chars max history (~50K tokens)
-		maxMsgLen:          50000,  // 50K chars per message (~12K tokens)
-		maxTokenBudget:     0,
-		sameToolLimit:      3,
-		consecutiveLimit:   10,
-		toolCallCount:      make(map[string]int),
-		subTaskEnabled:     true,
-		hooks:              hooks.NewHookManager(),
-		bus:                bus.NewEventBus(),
+		provider:         prov,
+		registry:         registry,
+		tools:            tools,
+		history:          history,
+		maxTurns:         60,
+		maxIterations:    80,
+		maxTotalLen:      200000, // 200K chars max history (~50K tokens)
+		maxMsgLen:        50000,  // 50K chars per message (~12K tokens)
+		maxTokenBudget:   0,
+		sameToolLimit:    3,
+		consecutiveLimit: 10,
+		toolCallCount:    make(map[string]int),
+		subTaskEnabled:   true,
+		hooks:            hooks.NewHookManager(),
+		bus:              bus.NewEventBus(),
 	}
 
 	agent.registerBuiltinHooks()
@@ -450,9 +450,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// Add assistant message and tool results to history
 		a.history = append(a.history, provider.Message{
-			Role:       "assistant",
-			Content:    llmResp.Content,
-			ToolCalls:  resp.ToolCalls,
+			Role:      "assistant",
+			Content:   llmResp.Content,
+			ToolCalls: resp.ToolCalls,
 		})
 
 		for _, result := range toolResults {
@@ -739,9 +739,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// Add assistant message with tool_calls
 		a.history = append(a.history, provider.Message{
-			Role:       "assistant",
-			Content:    llmResp.Content,
-			ToolCalls:  resp.ToolCalls,
+			Role:      "assistant",
+			Content:   llmResp.Content,
+			ToolCalls: resp.ToolCalls,
 		})
 
 		// Add tool results - ensure every tool_call has a corresponding tool message
@@ -1636,7 +1636,6 @@ func (a *Agent) AddSystemContext(ctx string) {
 	}
 	a.history[0].Content += "\n\n" + ctx
 }
-
 
 // GetProvider returns the agent's provider for use by other components
 func (a *Agent) GetProvider() provider.Provider {

@@ -115,8 +115,8 @@ type CreateRoomRequest struct {
 
 // SendMessageRequest represents a request to send a message
 type SendMessageRequest struct {
-	RoomID    string `json:"roomId"`
-	Content   string `json:"content"`
+	RoomID      string `json:"roomId"`
+	Content     string `json:"content"`
 	MessageType string `json:"type,omitempty"`
 }
 

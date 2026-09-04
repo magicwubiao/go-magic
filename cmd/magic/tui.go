@@ -35,7 +35,7 @@ import (
 
 // ChatMessage represents a message in the chat
 type ChatMessage struct {
-	Role      string    // "user", "assistant", "system", "tool", "error"
+	Role      string // "user", "assistant", "system", "tool", "error"
 	Content   string
 	Timestamp time.Time
 	Streaming bool // true if currently being streamed
@@ -165,18 +165,18 @@ type TUIModel struct {
 	spinner  spinner.Model
 
 	// State
-	messages     []ChatMessage
-	sessionID    string
-	sessionNum   int
-	modelName    string
-	streaming    bool
-	streamBuf    *strings.Builder
-	cancel       context.CancelFunc
-	ctx          context.Context
-	quitting     bool
-	width        int
-	height       int
-	streamingOn  bool
+	messages    []ChatMessage
+	sessionID   string
+	sessionNum  int
+	modelName   string
+	streaming   bool
+	streamBuf   *strings.Builder
+	cancel      context.CancelFunc
+	ctx         context.Context
+	quitting    bool
+	width       int
+	height      int
+	streamingOn bool
 
 	// History for input
 	inputHistory []string
@@ -544,12 +544,12 @@ func (m TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(input, "/") {
 			completions := []string{}
 			commands := []string{
-			"/help", "/new", "/exit", "/mode", "/model", "/stream", "/compress",
-			"/tools", "/skills", "/usage", "/undo", "/retry", "/stop", "/clear",
-			"/save", "/load", "/export", "/history", "/insights",
-			"/req", "/reqs", "/req-done", "/req-del", "/req-priority", "/context",
-			"/goal", "/kanban", "/kb", "/handoff", "/clarify", "/interrupt",
-		}
+				"/help", "/new", "/exit", "/mode", "/model", "/stream", "/compress",
+				"/tools", "/skills", "/usage", "/undo", "/retry", "/stop", "/clear",
+				"/save", "/load", "/export", "/history", "/insights",
+				"/req", "/reqs", "/req-done", "/req-del", "/req-priority", "/context",
+				"/goal", "/kanban", "/kb", "/handoff", "/clarify", "/interrupt",
+			}
 			for _, cmd := range commands {
 				if strings.HasPrefix(cmd, input) {
 					completions = append(completions, cmd)
@@ -1565,7 +1565,7 @@ func (m *TUIModel) doListRequirements() {
 				shortID = shortID[:12]
 			}
 
-		b.WriteString(fmt.Sprintf("  %s %-50s (%s)\n", icon, displayTitle, shortID))
+			b.WriteString(fmt.Sprintf("  %s %-50s (%s)\n", icon, displayTitle, shortID))
 		}
 	}
 

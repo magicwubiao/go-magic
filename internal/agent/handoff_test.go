@@ -18,9 +18,9 @@ func TestNewHandoffManager(t *testing.T) {
 func TestExecuteHandoff(t *testing.T) {
 	hm := NewHandoffManager()
 	req := HandoffRequest{
-		TargetModel:     "gpt-4",
-		TargetProfile:   "coding",
-		Reason:          "switch to coding profile",
+		TargetModel:   "gpt-4",
+		TargetProfile: "coding",
+		Reason:        "switch to coding profile",
 	}
 
 	result := hm.ExecuteHandoff(context.Background(), "session-1", "claude-3", "default", req)
@@ -61,11 +61,11 @@ func TestExecuteHandoff_Fallback(t *testing.T) {
 
 func TestGetHandoffHistory(t *testing.T) {
 	hm := NewHandoffManager()
-	
+
 	// Execute two handoffs
 	req1 := HandoffRequest{TargetModel: "gpt-4", Reason: "first"}
 	hm.ExecuteHandoff(context.Background(), "session-1", "claude-3", "default", req1)
-	
+
 	req2 := HandoffRequest{TargetModel: "gemini", Reason: "second"}
 	hm.ExecuteHandoff(context.Background(), "session-1", "gpt-4", "coding", req2)
 

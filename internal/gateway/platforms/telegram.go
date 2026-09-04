@@ -12,33 +12,33 @@ import (
 
 // TelegramPlatform implements Telegram messaging
 type TelegramPlatform struct {
-	config    *PlatformConfig
-	token     string
-	apiBase   string
-	connected bool
-	updates   chan Message
+	config     *PlatformConfig
+	token      string
+	apiBase    string
+	connected  bool
+	updates    chan Message
 	httpClient *http.Client
 }
 
 // TelegramUpdate represents a Telegram update
 type TelegramUpdate struct {
 	UpdateID int64 `json:"update_id"`
-	Message *struct {
-		MessageID int64  `json:"message_id"`
-		From     TelegramUser `json:"from"`
-		Chat     TelegramChat `json:"chat"`
-		Text     string `json:"text"`
-		Date     int64  `json:"date"`
-		Voice    *struct {
+	Message  *struct {
+		MessageID int64        `json:"message_id"`
+		From      TelegramUser `json:"from"`
+		Chat      TelegramChat `json:"chat"`
+		Text      string       `json:"text"`
+		Date      int64        `json:"date"`
+		Voice     *struct {
 			FileID   string `json:"file_id"`
 			Duration int    `json:"duration"`
 			MimeType string `json:"mime_type"`
 			FileSize int    `json:"file_size"`
 		} `json:"voice"`
 		Photo []struct {
-			FileID   string `json:"file_id"`
-			Width    int    `json:"width"`
-			Height   int    `json:"height"`
+			FileID string `json:"file_id"`
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
 		} `json:"photo"`
 		Video *struct {
 			FileID   string `json:"file_id"`
@@ -84,10 +84,10 @@ type TelegramMessage struct {
 // NewTelegramPlatform creates a new Telegram platform
 func NewTelegramPlatform(token string) *TelegramPlatform {
 	return &TelegramPlatform{
-		token:     token,
-		apiBase:   "https://api.telegram.org/bot" + token,
-		connected: false,
-		updates:   make(chan Message, 100),
+		token:      token,
+		apiBase:    "https://api.telegram.org/bot" + token,
+		connected:  false,
+		updates:    make(chan Message, 100),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -264,8 +264,8 @@ func (t *TelegramPlatform) getUpdates(offset int64) ([]TelegramUpdate, error) {
 	defer resp.Body.Close()
 
 	var result struct {
-		OK      bool             `json:"ok"`
-		Result  []TelegramUpdate `json:"result"`
+		OK     bool             `json:"ok"`
+		Result []TelegramUpdate `json:"result"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

@@ -26,18 +26,18 @@ import (
 // - No public IP required
 // - No verified enterprise required
 type WeComQRGateway struct {
-	corpID   string
-	agentID  string
-	secret   string
+	corpID  string
+	agentID string
+	secret  string
 
 	// Session data
 	session     *WeComSession
 	sessionPath string
 
 	// User info (obtained from QR scan)
-	userID       string
-	userName     string
-	userDeptID   int
+	userID     string
+	userName   string
+	userDeptID int
 
 	// Token management
 	accessToken    string
@@ -72,12 +72,12 @@ type WeComQRGateway struct {
 
 // WeComSession represents the QR login session data
 type WeComSession struct {
-	UserID       string    `json:"user_id"`
-	UserName     string    `json:"user_name"`
-	UserDeptID   int       `json:"user_dept_id"`
-	AccessToken  string    `json:"access_token"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	LastActive   time.Time `json:"last_active"`
+	UserID      string    `json:"user_id"`
+	UserName    string    `json:"user_name"`
+	UserDeptID  int       `json:"user_dept_id"`
+	AccessToken string    `json:"access_token"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LastActive  time.Time `json:"last_active"`
 }
 
 // NewWeComQRGateway creates a new WeCom QR code login gateway
@@ -331,12 +331,12 @@ func (g *WeComQRGateway) exchangeCodeForUser(code string) error {
 	}
 
 	var result struct {
-		ErrCode   int    `json:"errcode"`
-		ErrMsg    string `json:"errmsg"`
-		UserID    string `json:"UserId"`
-		OpenID    string `json:"OpenId"`
-		Name      string `json:"name"`
-		DeptID    []int  `json:"deptid"`
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		UserID  string `json:"UserId"`
+		OpenID  string `json:"OpenId"`
+		Name    string `json:"name"`
+		DeptID  []int  `json:"deptid"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -443,7 +443,7 @@ func (g *WeComQRGateway) saveSession() error {
 		UserName:    userName,
 		UserDeptID:  userDeptID,
 		AccessToken: g.accessToken,
-		ExpiresAt:  g.tokenExpiresAt,
+		ExpiresAt:   g.tokenExpiresAt,
 		LastActive:  time.Now(),
 	}
 	g.tokenMu.RUnlock()

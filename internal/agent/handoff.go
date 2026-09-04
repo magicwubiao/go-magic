@@ -11,24 +11,24 @@ import (
 
 // HandoffRequest represents a session handoff request
 type HandoffRequest struct {
-	TargetModel     string `json:"target_model"`
-	TargetProfile   string `json:"target_profile"`
+	TargetModel       string `json:"target_model"`
+	TargetProfile     string `json:"target_profile"`
 	TargetPersonality string `json:"target_personality"`
-	Reason          string `json:"reason"`
+	Reason            string `json:"reason"`
 }
 
 // HandoffResult represents the result of a handoff operation
 type HandoffResult struct {
-	Success        bool      `json:"success"`
-	FromModel      string    `json:"from_model"`
-	ToModel        string    `json:"to_model"`
-	FromProfile    string    `json:"from_profile"`
-	ToProfile      string    `json:"to_profile"`
-	MessageCount   int       `json:"message_count"`
-	TokenCount     int       `json:"token_count"`
-	HandoffID      string    `json:"handoff_id"`
-	Timestamp      time.Time `json:"timestamp"`
-	Error          string    `json:"error,omitempty"`
+	Success      bool      `json:"success"`
+	FromModel    string    `json:"from_model"`
+	ToModel      string    `json:"to_model"`
+	FromProfile  string    `json:"from_profile"`
+	ToProfile    string    `json:"to_profile"`
+	MessageCount int       `json:"message_count"`
+	TokenCount   int       `json:"token_count"`
+	HandoffID    string    `json:"handoff_id"`
+	Timestamp    time.Time `json:"timestamp"`
+	Error        string    `json:"error,omitempty"`
 }
 
 // HandoffManager manages session handoffs between models/profiles
@@ -38,15 +38,15 @@ type HandoffManager struct {
 
 // HandoffRecord stores the history of handoffs
 type HandoffRecord struct {
-	ID              string    `json:"id"`
-	SessionID       string    `json:"session_id"`
-	FromModel       string    `json:"from_model"`
-	ToModel         string    `json:"to_model"`
-	FromProfile     string    `json:"from_profile"`
-	ToProfile       string    `json:"to_profile"`
-	MessageCount    int       `json:"message_count"`
-	Reason          string    `json:"reason"`
-	Timestamp       time.Time `json:"timestamp"`
+	ID           string    `json:"id"`
+	SessionID    string    `json:"session_id"`
+	FromModel    string    `json:"from_model"`
+	ToModel      string    `json:"to_model"`
+	FromProfile  string    `json:"from_profile"`
+	ToProfile    string    `json:"to_profile"`
+	MessageCount int       `json:"message_count"`
+	Reason       string    `json:"reason"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // NewHandoffManager creates a new HandoffManager
@@ -60,12 +60,12 @@ func NewHandoffManager() *HandoffManager {
 // It transfers the current session context to a new model/profile
 func (hm *HandoffManager) ExecuteHandoff(ctx context.Context, sessionID, currentModel, currentProfile string, req HandoffRequest) *HandoffResult {
 	result := &HandoffResult{
-		HandoffID: uuid.New().String(),
-		Timestamp: time.Now(),
-		FromModel: currentModel,
-		ToModel:   req.TargetModel,
+		HandoffID:   uuid.New().String(),
+		Timestamp:   time.Now(),
+		FromModel:   currentModel,
+		ToModel:     req.TargetModel,
 		FromProfile: currentProfile,
-		ToProfile: req.TargetProfile,
+		ToProfile:   req.TargetProfile,
 	}
 
 	// Determine target values (fallback to current if not specified)
@@ -80,14 +80,14 @@ func (hm *HandoffManager) ExecuteHandoff(ctx context.Context, sessionID, current
 
 	// Record the handoff
 	record := HandoffRecord{
-		ID:            result.HandoffID,
-		SessionID:     sessionID,
-		FromModel:     currentModel,
-		ToModel:       req.TargetModel,
-		FromProfile:   currentProfile,
-		ToProfile:     req.TargetProfile,
-		Reason:        req.Reason,
-		Timestamp:     time.Now(),
+		ID:          result.HandoffID,
+		SessionID:   sessionID,
+		FromModel:   currentModel,
+		ToModel:     req.TargetModel,
+		FromProfile: currentProfile,
+		ToProfile:   req.TargetProfile,
+		Reason:      req.Reason,
+		Timestamp:   time.Now(),
 	}
 	hm.handoffs = append(hm.handoffs, record)
 

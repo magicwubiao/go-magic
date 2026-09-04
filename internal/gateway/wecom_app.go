@@ -516,9 +516,9 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "image"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
-					Type:     "image",
-					URL:      path,
-					Caption:  event.PicURL,
+					Type:    "image",
+					URL:     path,
+					Caption: event.PicURL,
 				})
 			} else {
 				log.Debugf("Failed to download WeCom image: %v", err)
@@ -548,9 +548,9 @@ func (g *WeComAppGateway) handleMessageEvent(event struct {
 		if event.MediaID != "" {
 			if path, err := g.downloadMedia(event.MediaID, "video"); err == nil {
 				mediaURLs = append(mediaURLs, MediaAttachment{
-					Type:     "video",
-					URL:      path,
-					Caption:  event.Desc,
+					Type:    "video",
+					URL:     path,
+					Caption: event.Desc,
 				})
 			} else {
 				log.Debugf("Failed to download WeCom video: %v", err)

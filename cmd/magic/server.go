@@ -6,14 +6,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/magicwubiao/go-magic/internal/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/magicwubiao/go-magic/internal/server"
 )
 
 var (
-	serverPort         int
-	serverOpenBrowser  bool
+	serverPort        int
+	serverOpenBrowser bool
 )
 
 func init() {

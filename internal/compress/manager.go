@@ -24,17 +24,17 @@ type Message struct {
 
 // CompressionSummary is a summary of compressed messages
 type CompressionSummary struct {
-	OriginalCount int      `json:"original_count"`
+	OriginalCount   int    `json:"original_count"`
 	CompressedCount int    `json:"compressed_count"`
-	TokensSaved   int      `json:"tokens_saved"`
-	Summary       string   `json:"summary"`
-	CompressedAt  int64    `json:"compressed_at"`
+	TokensSaved     int    `json:"tokens_saved"`
+	Summary         string `json:"summary"`
+	CompressedAt    int64  `json:"compressed_at"`
 }
 
 // Session represents a chat session
 type Session struct {
-	ID       string    `json:"id"`
-	Messages []Message `json:"messages"`
+	ID       string              `json:"id"`
+	Messages []Message           `json:"messages"`
 	Summary  *CompressionSummary `json:"compression_summary,omitempty"`
 }
 
@@ -47,20 +47,20 @@ type Manager struct {
 
 // Config holds compression configuration
 type Config struct {
-	Enabled       bool `yaml:"enabled"`
-	MaxTokens     int  `yaml:"max_tokens"`     // Max tokens before compression
-	TargetTokens  int  `yaml:"target_tokens"`  // Target tokens after compression
-	MinMessages   int  `yaml:"min_messages"`   // Min messages to keep in summary
-	PreserveRecent int `yaml:"preserve_recent"` // Keep recent N messages
+	Enabled        bool `yaml:"enabled"`
+	MaxTokens      int  `yaml:"max_tokens"`      // Max tokens before compression
+	TargetTokens   int  `yaml:"target_tokens"`   // Target tokens after compression
+	MinMessages    int  `yaml:"min_messages"`    // Min messages to keep in summary
+	PreserveRecent int  `yaml:"preserve_recent"` // Keep recent N messages
 }
 
 // DefaultConfig returns default compression config
 func DefaultConfig() *Config {
 	return &Config{
-		Enabled:       true,
-		MaxTokens:     128000,
-		TargetTokens:  64000,
-		MinMessages:   2,
+		Enabled:        true,
+		MaxTokens:      128000,
+		TargetTokens:   64000,
+		MinMessages:    2,
 		PreserveRecent: 10,
 	}
 }
@@ -68,8 +68,8 @@ func DefaultConfig() *Config {
 // NewManager creates a new compression manager
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		dataDir:  dataDir,
-		sessions: make(map[string]*Session),
+		dataDir:   dataDir,
+		sessions:  make(map[string]*Session),
 		maxTokens: 128000,
 	}
 }
@@ -101,8 +101,8 @@ func EstimateTokens(text string) int {
 
 	nonCJK := charCount - cjkCount
 	// CJK: ~1.5 tokens per character, Non-CJK: ~4 chars per token
-	tokens := (cjkCount * 2 + 1) / 3 // ~1.5 tokens per CJK char
-	tokens += nonCJK / 4              // ~4 chars per token for Latin/etc
+	tokens := (cjkCount*2 + 1) / 3 // ~1.5 tokens per CJK char
+	tokens += nonCJK / 4           // ~4 chars per token for Latin/etc
 
 	if tokens == 0 && charCount > 0 {
 		tokens = 1
@@ -193,7 +193,7 @@ func (m *Manager) generateSummary(messages []Message) string {
 
 	// Simple extractive summarization (can be replaced with LLM)
 	var content strings.Builder
-	
+
 	for _, msg := range messages {
 		role := msg.Role
 		if role == "user" {
@@ -270,7 +270,7 @@ func splitSentences(text string) []string {
 	// Simple sentence splitting
 	re := regexp.MustCompile(`[^.!?]+[.!?]+`)
 	matches := re.FindAllString(text, -1)
-	
+
 	var sentences []string
 	for _, m := range matches {
 		m = strings.TrimSpace(m)
@@ -371,29 +371,29 @@ func (m *Manager) GetSession(sessionID string) *Session {
 // SaveSession saves a session to disk
 func (m *Manager) SaveSession(session *Session) error {
 	path := filepath.Join(m.dataDir, fmt.Sprintf("%s.json", session.ID))
-	
+
 	data, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(path, data, 0644)
 }
 
 // LoadSession loads a session from disk
 func (m *Manager) LoadSession(sessionID string) error {
 	path := filepath.Join(m.dataDir, fmt.Sprintf("%s.json", sessionID))
-	
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	
+
 	var session Session
 	if err := json.Unmarshal(data, &session); err != nil {
 		return err
 	}
-	
+
 	m.sessions[sessionID] = &session
 	return nil
 }
@@ -418,10 +418,10 @@ func (m *Manager) AutoCompress(sessionID string, messages []Message) ([]Message,
 
 // CompressionStats provides compression statistics
 type CompressionStats struct {
-	TotalSessions   int     `json:"total_sessions"`
-	CompressedCount int     `json:"compressed_count"`
-	TotalTokensSaved int   `json:"total_tokens_saved"`
-	AvgCompression  float64 `json:"avg_compression_ratio"`
+	TotalSessions    int     `json:"total_sessions"`
+	CompressedCount  int     `json:"compressed_count"`
+	TotalTokensSaved int     `json:"total_tokens_saved"`
+	AvgCompression   float64 `json:"avg_compression_ratio"`
 }
 
 // GetStats returns compression statistics
@@ -458,9 +458,9 @@ func (m *Manager) Preview(level string) (*PreviewResult, error) {
 	preview := &PreviewResult{
 		CurrentMessages: 0,
 		AfterMessages:   0,
-		TokensSaved:    0,
-		TokenReduction: 0,
-		CostSavings:    0,
+		TokensSaved:     0,
+		TokenReduction:  0,
+		CostSavings:     0,
 	}
 
 	// Get active session
@@ -474,7 +474,7 @@ func (m *Manager) Preview(level string) (*PreviewResult, error) {
 			preview.CurrentMessages = len(session.Messages)
 
 			// Estimate after compression
-			afterMessages := config.PreserveRecent + 1 // preserved + summary
+			afterMessages := config.PreserveRecent + 1        // preserved + summary
 			afterTokens := (config.PreserveRecent * 50) + 100 // rough estimate
 
 			preview.AfterMessages = afterMessages
@@ -500,8 +500,8 @@ func (m *Manager) Compress(level string) (*CompressionResult, error) {
 
 	result := &CompressionResult{
 		MessagesCompressed: 0,
-		SummaryLength:     0,
-		TokensSaved:       0,
+		SummaryLength:      0,
+		TokensSaved:        0,
 	}
 
 	// Get active session
@@ -549,6 +549,6 @@ type PreviewResult struct {
 // CompressionResult contains compression result information
 type CompressionResult struct {
 	MessagesCompressed int
-	SummaryLength     int
-	TokensSaved       int
+	SummaryLength      int
+	TokensSaved        int
 }

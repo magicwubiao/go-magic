@@ -20,7 +20,7 @@ type Message struct {
 
 // Media represents attached media
 type Media struct {
-	Type     string `json:"type"`      // voice, photo, video, document, image
+	Type     string `json:"type"` // voice, photo, video, document, image
 	URL      string `json:"url"`
 	FileID   string `json:"file_id,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
@@ -33,12 +33,12 @@ type Media struct {
 
 // User represents a platform-agnostic user
 type User struct {
-	ID         string `json:"id"`
-	Username   string `json:"username,omitempty"`
-	FirstName  string `json:"first_name,omitempty"`
-	LastName   string `json:"last_name,omitempty"`
-	Language   string `json:"language,omitempty"`
-	IsBot      bool   `json:"is_bot,omitempty"`
+	ID        string `json:"id"`
+	Username  string `json:"username,omitempty"`
+	FirstName string `json:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty"`
+	Language  string `json:"language,omitempty"`
+	IsBot     bool   `json:"is_bot,omitempty"`
 }
 
 // Platform defines the interface for messaging platforms
@@ -59,7 +59,7 @@ type Gateway struct {
 
 // GatewayConfig holds gateway configuration
 type GatewayConfig struct {
-	Port         int               `json:"port"`
+	Port         int              `json:"port"`
 	Platforms    []PlatformConfig `json:"platforms"`
 	AllowedUsers []string         `json:"allowed_users"`
 	AutoReply    bool             `json:"auto_reply"`
