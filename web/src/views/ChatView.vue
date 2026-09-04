@@ -28,7 +28,7 @@
           </template>
         </n-button>
         <!-- 新建聊天 -->
-        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
+        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
           </template>
