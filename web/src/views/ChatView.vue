@@ -34,10 +34,9 @@
         </n-input>
       </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
-        <template v-for="(sessions, profile) in groupedSessions" :key="profile">
-          <div class="profile-group-header">{{ groupHeader(profile, sessions) }}</div>
+        <div v-if="isSearching" class="profile-group-header">{{ t('chat.searchResults', { count: visibleSessions.length }) }}</div>
           <div
-            v-for="session in sessions"
+            v-for="session in visibleSessions"
             :key="session.id"
             class="session-item"
             :class="{ active: chatStore.activeSessionId === session.id }"
@@ -140,7 +139,6 @@
               </n-popconfirm>
             </div>
           </div>
-        </template>
         <div v-if="chatStore.sessionsLoading || (isSearching && searchLoading)" style="padding: 16px; text-align: center;">
           <n-spin size="small" />
         </div>
@@ -427,45 +425,41 @@
         </div>
       </div>
 
-      <!-- 工作目录栏（最下层） -->
+      <!-- 底部状态栏：紧凑一行 = 当前会话所属分身（只读）+ 工作目录（只读）+ 打开文件夹 -->
       <div class="workdir-bar">
-        <!-- 已锁定：用户已设置，只读不可改（每个会话仅允许设置一次） -->
-        <div
-          v-if="chatStore.currentWorkDirUserSet"
-          class="workdir-bar-inner workdir-bar-locked"
-          :title="t('chat.workDirLocked') + ' — ' + chatStore.currentWorkDir"
-        >
-          <n-icon size="13"><LockClosedOutline /></n-icon>
-          <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
-          <span class="workdir-bar-hint">{{ t('chat.workDirLocked') }}</span>
-          <n-icon size="13" class="workdir-bar-clear" :title="t('chat.workDirOpen')" @click.stop="openWorkDirInExplorer()">
-            <OpenOutline />
-          </n-icon>
-        </div>
-        <!-- 系统默认目录（尚未由用户设置）：可点击浏览，可清除 -->
-        <div
-          v-else-if="chatStore.currentWorkDir"
-          class="workdir-bar-inner"
-          @click="handleWorkDirMenu('browse')"
-          :title="t('chat.workDir') + ' — ' + chatStore.currentWorkDir"
-        >
-          <n-icon size="13"><FolderOpenOutline /></n-icon>
-          <span class="workdir-bar-path">{{ chatStore.currentWorkDir }}</span>
-          <n-icon size="13" class="workdir-bar-clear" :title="t('chat.workDirOpen')" @click.stop="openWorkDirInExplorer()">
-            <OpenOutline />
-          </n-icon>
-          <n-icon size="13" class="workdir-bar-clear" @click.stop="clearWorkDir">
-            <CloseCircleOutline />
-          </n-icon>
-        </div>
-        <!-- 未设置：按钮触发目录选择 -->
-        <div v-else class="workdir-bar-inner workdir-bar-empty">
-          <n-icon size="13"><FolderOutline /></n-icon>
-          <span>{{ t('chat.workDirNone') }}</span>
-          <n-button size="tiny" quaternary class="workdir-bar-set-btn" @click="handleWorkDirMenu('browse')">
+        <div class="workdir-bar-inner">
+          <span class="workdir-bar-profile" :title="t('chat.workDirProfile')">
+            <n-icon size="12"><PersonOutline /></n-icon>
+            <span class="workdir-bar-profile-name">{{ activeProfileName }}</span>
+          </span>
+          <span v-if="chatStore.currentWorkDir" class="workdir-bar-path" :title="chatStore.currentWorkDir">
+            <n-icon size="12"><FolderOutline /></n-icon>
+            <span class="workdir-bar-path-text">{{ chatStore.currentWorkDir }}</span>
+          </span>
+          <span v-else class="workdir-bar-path workdir-bar-empty" :title="t('chat.workDirNone')">
+            <n-icon size="12"><FolderOutline /></n-icon>
+            <span>{{ t('chat.workDirNone') }}</span>
+          </span>
+          <n-button
+            v-if="!chatStore.currentWorkDirUserSet"
+            size="tiny"
+            quaternary
+            class="workdir-bar-set-btn"
+            :title="t('chat.workDirSet')"
+            @click.stop="handleWorkDirMenu('browse')"
+          >
             <template #icon><n-icon size="13"><FolderOpenOutline /></n-icon></template>
             {{ t('chat.workDirSet') }}
           </n-button>
+          <n-icon
+            v-if="chatStore.currentWorkDir"
+            size="13"
+            class="workdir-bar-open"
+            :title="t('chat.workDirOpen')"
+            @click.stop="openWorkDirInExplorer()"
+          >
+            <OpenOutline />
+          </n-icon>
         </div>
       </div>
     </div>
@@ -598,7 +592,7 @@ import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -996,32 +990,8 @@ async function handleSessionClick(id: string) {
   await selectSession(id)
 }
 
-// Group sessions by profile（搜索时全部归入单组，展示"搜索结果 (N)"）
-const groupedSessions = computed(() => {
-  const groups: Record<string, any[]> = {}
-  if (isSearching.value) {
-    if (visibleSessions.value.length > 0) {
-      groups['search'] = visibleSessions.value
-    }
-    return groups
-  }
-  const sessions = chatStore.sessions || []
-  for (const session of sessions) {
-    let profile = session?.profile?.trim() || ''
-    if (profile === '' || profile.toLowerCase() === 'default') {
-      profile = t('chat.default')
-    }
-    if (!groups[profile]) groups[profile] = []
-    groups[profile].push(session)
-  }
-  return groups
-})
-
-function groupHeader(profile: string, sessions: any[]): string {
-  if (profile === 'search') return t('chat.searchResults', { count: sessions.length })
-  return profile || t('chat.default')
-}
-
+// 侧栏会话列表：不再按分身分组，展示一份展平的统一列表（按更新时间/后端返回顺序）。
+// 分身在单条会话的可视化上以会话自身的 profile 标记呈现（见底部栏“当前分身”）。
 const isGatewaySession = computed(() => {
   const session = chatStore.activeSession
   return session && session.source && session.source !== 'web'
@@ -1029,6 +999,13 @@ const isGatewaySession = computed(() => {
 
 const activeSessionSource = computed(() => {
   return chatStore.activeSession?.source || ''
+})
+
+// 底部栏展示的“当前分身”：取当前活动会话归属的 profile，default/空归一为聊天默认名
+const activeProfileName = computed(() => {
+  const p = chatStore.activeSession?.profile?.trim()
+  if (!p || p.toLowerCase() === 'default') return t('chat.default')
+  return p
 })
 
 // Task timeline computed from tool calls and progress
@@ -1282,23 +1259,6 @@ async function handleWorkDirMenu(key: string) {
     } catch (e: any) {
       message.error(e?.message || t('chat.workDirLocked'))
     }
-  } else if (key === 'clear') {
-    if (chatStore.activeSessionId) {
-      try {
-        await chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
-        message.success(t('chat.workDirCleared'))
-      } catch (e: any) {
-        message.error(e?.message || t('chat.workDirLocked'))
-      }
-    }
-  }
-}
-
-function clearWorkDir() {
-  if (chatStore.activeSessionId) {
-    chatStore.updateSessionWorkDir(chatStore.activeSessionId, '')
-      .then(() => message.success(t('chat.workDirCleared')))
-      .catch((e: any) => message.error(e?.message || t('chat.workDirLocked')))
   }
 }
 
@@ -2475,20 +2435,15 @@ onMounted(async () => {
   }
 
   .workdir-bar-path {
+    color: #888;
+  }
+
+  .workdir-bar-open {
     color: #aaa;
   }
 
-  .workdir-bar-hint {
-    background: #2a2a2a;
-    color: #777;
-  }
-
-  .workdir-bar-locked .workdir-bar-path {
-    color: #777;
-  }
-
   .workdir-bar-empty {
-    color: #777;
+    color: #555;
   }
 
   .file-preview {
@@ -2652,74 +2607,85 @@ onMounted(async () => {
 }
 
 /* ========== Work Directory Bar（chat 最下层） ========== */
+/* 底部紧凑状态栏：分身(只读) + 工作目录(只读) + 设置目录/打开文件夹 */
 .workdir-bar {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 6px 24px;
+  height: 30px;
+  padding: 0 16px;
   background: #fafafa;
   border-top: 1px solid #e8e8e8;
   font-size: 12px;
+  box-sizing: border-box;
 }
 
 .workdir-bar-inner {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  cursor: pointer;
-  color: #555;
+  width: 100%;
   max-width: 900px;
   margin-left: auto;
   margin-right: auto;
-  width: 100%;
+  color: #555;
+}
+
+.workdir-bar-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: #2080f0;
+}
+
+.workdir-bar-profile-name {
+  font-weight: 500;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workdir-bar-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #888;
+}
+
+.workdir-bar-path-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  color: #555;
-}
-
-.workdir-bar-hint {
-  font-size: 11px;
-  color: #999;
-  flex-shrink: 0;
-  padding: 1px 6px;
-  background: #ececec;
-  border-radius: 4px;
-}
-
-.workdir-bar-locked {
-  cursor: default;
-}
-
-.workdir-bar-locked .workdir-bar-path {
-  color: #999;
 }
 
 .workdir-bar-empty {
-  color: #999;
-  cursor: default;
+  color: #bbb;
 }
 
-.workdir-bar-clear {
+.workdir-bar-open {
   cursor: pointer;
   opacity: 0.55;
   flex-shrink: 0;
+  color: #555;
 }
 
-.workdir-bar-clear:hover {
+.workdir-bar-open:hover {
   opacity: 1;
 }
 
 .workdir-bar-set-btn {
   font-size: 11px;
   flex-shrink: 0;
+  color: #2080f0;
 }
 
 .right-sidebar-fab {

@@ -233,6 +233,7 @@ export default {
     workDir: 'Working Directory',
     workDirSelect: 'Select Working Directory',
     workDirRecommended: 'Recommended (recently used)',
+    workDirProfile: 'Current profile: the persona this session belongs to (display only)',
     workDirOpen: 'Open in File Explorer',
     workDirCurrent: 'Current working directory',
     workDirNone: 'Not set (using default directory)',

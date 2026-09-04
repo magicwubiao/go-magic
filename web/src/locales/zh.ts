@@ -233,6 +233,7 @@ export default {
     workDir: '工作目录',
     workDirSelect: '选择工作目录',
     workDirRecommended: '推荐目录（最近使用）',
+    workDirProfile: '当前分身：该会话所属分身，仅作标识',
     workDirOpen: '在文件管理器中打开',
     workDirCurrent: '当前工作目录',
     workDirNone: '未设置（使用默认目录）',
