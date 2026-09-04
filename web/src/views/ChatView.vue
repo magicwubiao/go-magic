@@ -21,16 +21,16 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
-        <!-- 新建聊天 -->
-        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
-          <template #icon>
-            <n-icon><AddOutline /></n-icon>
-          </template>
-        </n-button>
         <!-- 刷新会话列表 -->
         <n-button size="small" quaternary circle :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
           <template #icon>
             <n-icon :component="RefreshOutline" />
+          </template>
+        </n-button>
+        <!-- 新建聊天 -->
+        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
+          <template #icon>
+            <n-icon><AddOutline /></n-icon>
           </template>
         </n-button>
       </div>

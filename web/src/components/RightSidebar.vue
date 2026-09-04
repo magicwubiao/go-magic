@@ -1912,7 +1912,7 @@ async function doUpload(files: File[]) {
     flex-shrink: 0;
     position: absolute;
     left: -36px;
-    top: 12px;
+    top: 4px;
     z-index: 10;
     background: #fff !important;
     border: 1px solid #e0e0e0 !important;
