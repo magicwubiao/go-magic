@@ -7,12 +7,6 @@
         <div class="handle-bar"></div>
       </div>
       <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
-        <!-- 新建聊天 -->
-        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
-          <template #icon>
-            <n-icon><AddOutline /></n-icon>
-          </template>
-        </n-button>
         <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
         <n-input
           v-model:value="sessionSearch"
@@ -27,6 +21,12 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
+        <!-- 新建聊天 -->
+        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
+          <template #icon>
+            <n-icon><AddOutline /></n-icon>
+          </template>
+        </n-button>
         <!-- 刷新会话列表 -->
         <n-button size="small" quaternary circle :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
           <template #icon>
