@@ -17,6 +17,21 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+// truncateRunes 按 rune 边界安全截断（不含省略号后缀）。
+// 字节截断（s[:200]）会把多字节 UTF-8 字符切成两半，中文内容直接产生
+// 乱码（U+FFFD）。所有进入展示/落库/prompt 链路的内容截断都必须走这里。
+// max 按字符数计；字节数超限但字符数未超时不截断。
+func truncateRunes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
@@ -196,7 +211,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				}
 				argsSummary := strings.TrimSpace(argsStr)
 				if len(argsSummary) > 200 {
-					argsSummary = argsSummary[:200] + "..."
+					argsSummary = truncateRunes(argsSummary, 200) + "..."
 				}
 				fmt.Fprintf(&executedSteps, "tool_call: %s(%s)\n", toolName, argsSummary)
 				data, _ := json.Marshal(map[string]interface{}{
@@ -234,7 +249,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				}
 				resultSummary := toolContent
 				if len(resultSummary) > 400 {
-					resultSummary = resultSummary[:400] + "...(truncated)"
+					resultSummary = truncateRunes(resultSummary, 400) + "...(truncated)"
 				}
 				fmt.Fprintf(&executedSteps, "tool_result %s: %s\n", toolName, resultSummary)
 				data, _ := json.Marshal(map[string]interface{}{
@@ -354,14 +369,14 @@ func extractPartialTurnText(history []types.Message, userInput string) string {
 				}
 				argsStr = strings.TrimSpace(argsStr)
 				if len(argsStr) > 200 {
-					argsStr = argsStr[:200] + "..."
+					argsStr = truncateRunes(argsStr, 200) + "..."
 				}
 				fmt.Fprintf(&b, "tool_call: %s(%s)\n", tc.GetToolName(), argsStr)
 			}
 		case "tool":
 			content := strings.TrimSpace(m.Content)
 			if len(content) > 400 {
-				content = content[:400] + "...(truncated)"
+				content = truncateRunes(content, 400) + "...(truncated)"
 			}
 			fmt.Fprintf(&b, "tool_result %s: %s\n", m.ToolCallID, content)
 		}

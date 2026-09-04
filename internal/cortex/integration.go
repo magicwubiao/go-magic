@@ -81,6 +81,12 @@ type Manager struct {
 
 	// GEPA 最优策略应用循环的取消函数
 	gepaApplyCancel context.CancelFunc
+
+	// 记忆库维护循环（清理过期记忆 + 每日蒸馏）的停止信号
+	memoryMaintenanceStop chan struct{}
+
+	// 每日对话日志（P1-2，懒初始化）
+	dailyLog *memory.DailyLog
 }
 
 // ManagerConfig holds configuration for Cortex systems
@@ -359,10 +365,15 @@ func (m *Manager) Start() error {
 	// 启动 GEPA 最优策略定期应用循环（将最优策略写入 SOUL.md）
 	m.startGEPAStrategyApplier()
 
+	// 启动记忆库维护循环（P2-3 清理 + P1-3 每日蒸馏）
+	m.startMemoryMaintenance()
+
 	return nil
 }
 
-// Stop 停止 Cortex 各后台循环（GEPA 引擎与最优策略应用循环）
+// Stop 停止 Cortex 各后台循环（GEPA 引擎、最优策略应用循环、记忆维护循环），
+// 并关闭记忆库数据库连接（Windows 下未关闭的 sqlite 文件句柄会锁定文件，
+// 阻止临时目录清理；生产环境也应在停机时释放连接）。
 func (m *Manager) Stop() {
 	if m.gepaApplyCancel != nil {
 		m.gepaApplyCancel()
@@ -371,6 +382,112 @@ func (m *Manager) Stop() {
 	if m.GEPAEngine != nil {
 		m.GEPAEngine.Stop()
 	}
+	if m.memoryMaintenanceStop != nil {
+		close(m.memoryMaintenanceStop)
+		m.memoryMaintenanceStop = nil
+	}
+	if m.FTSMemory != nil {
+		if err := m.FTSMemory.Close(); err != nil {
+			log.Warnf("[Cortex] FTS memory close failed: %v", err)
+		}
+		m.FTSMemory = nil
+	}
+	if m.memoryStore != nil {
+		if err := m.memoryStore.Close(); err != nil {
+			log.Warnf("[Cortex] memory store close failed: %v", err)
+		}
+		m.memoryStore = nil
+	}
+}
+
+// dynamicMemoryMaxChars 限制动态记忆注入文本的最大字符数（P0-1）
+const dynamicMemoryMaxChars = 800
+
+// RecallForInput 是动态记忆召回门面（P0-1）：以用户输入为查询，从结构化
+// 记忆 Store 召回与当前工作区相关的高分记忆，压缩成 ≤800 字符的注入文本。
+// agent 主循环每轮调用一次，把返回文本插到头部 system 之后，让静态快照
+// 之外的历史记忆真正参与推理（修复「召回断路」）。
+// memoryStore 未初始化或无命中时返回空串（调用方直接跳过注入）。
+func (m *Manager) RecallForInput(query string) string {
+	if m == nil || m.memoryStore == nil {
+		return ""
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return ""
+	}
+	// 查询截断：超长输入没有更好的召回效果，反而拖慢逐条评分
+	if r := []rune(query); len(r) > 128 {
+		query = string(r[:128])
+	}
+
+	tops := m.memoryStore.GetTopMemoriesScoped(query, 5, time.Now())
+	if len(tops) == 0 {
+		return ""
+	}
+
+	summary := strings.TrimSpace(memory.SummarizeMemories(tops))
+	if r := []rune(summary); len(r) > dynamicMemoryMaxChars {
+		summary = string(r[:dynamicMemoryMaxChars]) + "\n...(truncated)"
+	}
+	return summary
+}
+
+// startMemoryMaintenance 启动记忆库维护循环（P2-3 + P1-3）：
+// 每 24 小时清理一次过期记忆——结构化 Store 删除「重要度低于 0.3 且
+// 30 天未访问」的记录；FTS 会话库删除「重要度 < 4 且 90 天前」的记录。
+// 同时驱动每日蒸馏器（P1-3）：超过 30 天的每日日志经 LLM 摘要合并进
+// MEMORY.md 后删除（每日至多一次，状态文件幂等）。
+// 启动时先跑一次；低频、幂等，失败仅告警不影响主流程。
+func (m *Manager) startMemoryMaintenance() {
+	if m.memoryMaintenanceStop != nil {
+		return // 已在运行
+	}
+	m.memoryMaintenanceStop = make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		// P1-3: 每日蒸馏器（日志层 → MEMORY.md 分节合并）
+		distiller := memory.NewDistiller(memory.DistillerConfig{
+			LogDir:       filepath.Join(m.baseDir, "daily"),
+			MemoryMDPath: filepath.Join(m.baseDir, "MEMORY.md"),
+			Retention:    30 * 24 * time.Hour,
+		}, m.memoryStore, m.FTSMemory, m.provider)
+		// 蒸馏器需要更高频的检查（每日至多一次，内部状态文件幂等），
+		// 用独立的 1h ticker 驱动
+		distillStop := make(chan struct{})
+		defer close(distillStop)
+		distiller.StartMaintenance(time.Hour, distillStop)
+
+		runCleanup := func() {
+			if m.memoryStore != nil {
+				cutoff := time.Now().Add(-30 * 24 * time.Hour)
+				if n, err := m.memoryStore.CleanupExpired(cutoff, 0.3); err != nil {
+					log.Warnf("[Cortex] memory cleanup failed: %v", err)
+				} else if n > 0 {
+					log.Infof("[Cortex] memory cleanup removed %d expired entries", n)
+				}
+			}
+			if m.FTSMemory != nil {
+				if n, err := m.FTSMemory.CleanupOld(90*24*time.Hour, 4); err != nil {
+					log.Warnf("[Cortex] FTS cleanup failed: %v", err)
+				} else if n > 0 {
+					log.Infof("[Cortex] FTS cleanup removed %d expired entries", n)
+				}
+			}
+		}
+
+		runCleanup()
+		for {
+			select {
+			case <-ticker.C:
+				runCleanup()
+			case <-m.memoryMaintenanceStop:
+				return
+			}
+		}
+	}()
 }
 
 // recordInitFailure 记录启动期初始化失败的子系统，供 GetSystemStatus 区分未初始化与初始化失败
@@ -584,6 +701,33 @@ func (m *Manager) extractAndLearnFromConversation() {
 	if m.FTSMemory != nil || m.memoryStore != nil {
 		m.extractAndStoreMemories(provMsgs, nonSystemText)
 	}
+
+	// P1-2: 对话追加写入每日日志（append-only，蒸馏器的原始数据源）。
+	// best-effort：日志失败绝不影响主流程。
+	m.appendDailyLog(history)
+}
+
+// appendDailyLog 把本轮对话追加写入当日日志文件（P1-2）。
+// 懒构造 DailyLog，首次调用时初始化；system 消息不落日志。
+func (m *Manager) appendDailyLog(history []struct {
+	Role    string
+	Content string
+}) {
+	if m.dailyLog == nil {
+		m.dailyLog = memory.NewDailyLog(filepath.Join(m.baseDir, "daily"))
+	}
+	for _, msg := range history {
+		if msg.Role == "system" || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		content := msg.Content
+		if r := []rune(content); len(r) > 2000 {
+			content = string(r[:2000]) + "..."
+		}
+		if err := m.dailyLog.Append(msg.Role, content); err != nil {
+			log.Debugf("[Cortex] daily log append failed: %v", err)
+		}
+	}
 }
 
 // generateMemoryFeedback generates feedback for SOUL.md from conversation
@@ -766,16 +910,24 @@ func (m *Manager) fallbackLineMatchStore(conversation string) {
 }
 
 // memoryRecordFromMemory 将结构化 Memory 转换为 FTSStore 的 MemoryRecord
-// Importance 范围 0-1，MemoryRecord.Importance 为 int，映射到 0-10
+// Importance 范围 0-1，MemoryRecord.Importance 为 int，映射到 0-10。
+// 补齐 SessionID（会话溯源）与 scope/categories→tags（P1-4），
+// 保证 FTS 双写副本携带与主库一致的检索维度。
 func memoryRecordFromMemory(mem *memory.Memory) *memory.MemoryRecord {
 	importance := int(mem.Importance * 10)
 	if importance < 0 {
 		importance = 0
 	}
+	tags := append([]string{}, mem.Categories...)
+	if mem.Scope != "" {
+		tags = append(tags, "scope:"+mem.Scope)
+	}
 	return &memory.MemoryRecord{
+		SessionID:   mem.SessionID,
 		Content:     mem.Content,
 		ContentType: string(mem.Type),
 		Importance:  importance,
+		Tags:        tags,
 		CreatedAt:   mem.CreatedAt,
 	}
 }

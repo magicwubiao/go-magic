@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +65,13 @@ type MemoryConfig struct {
 	AutoSummarize      bool   // Enable automatic summarization
 	SummarizeThreshold int    // Threshold for summarization (characters)
 	LLMProvider        string // LLM provider for summarization
+	// WorkspaceScope 是当前工作区的 scope 标识（通常为项目路径）。
+	// 为空时 NewStore 用 os.Getwd() 自动填充。写入时未显式指定 scope 的
+	// 非用户类记忆会自动落上这个 scope，实现 WorkBuddy 式的项目隔离。
+	WorkspaceScope string
+	// StoreSensitiveInfo 是否允许入库联系方式等敏感信息（contact 类）。
+	// 默认 false：contact 正则命中也丢弃。参考 WorkBuddy"secrets 不主动存"原则。
+	StoreSensitiveInfo bool
 }
 
 // DefaultConfig returns the default memory configuration
@@ -90,6 +98,9 @@ type Store struct {
 	agentMemoryPath string
 	userMemoryPath  string
 
+	// workspaceScope 是本项目的工作区 scope（通常为 cwd），用于项目隔离
+	workspaceScope string
+
 	// fileMu 串行化 MEMORY.md / USER.md 的文件级读写，防止跨 goroutine append 互相覆盖
 	fileMu sync.Mutex
 
@@ -99,6 +110,21 @@ type Store struct {
 
 	// totalSearches 统计搜索次数（MemoryStats.TotalSearches 数据源）
 	totalSearches atomic.Int64
+
+	// 访问统计写缓冲：Recall 命中的记忆 ID 先攒在内存，
+	// 由后台 flusher 每 accessFlushInterval 落盘一次，避免每次检索都写库。
+	pendingAccessMu sync.Mutex
+	pendingAccess   map[string]struct{}
+	stopFlusher     chan struct{}
+	flusherOnce     sync.Once
+}
+
+// accessFlushInterval 控制访问统计的落盘频率
+const accessFlushInterval = 60 * time.Second
+
+// WorkspaceScope returns the workspace scope of this store (project isolation).
+func (s *Store) WorkspaceScope() string {
+	return s.workspaceScope
 }
 
 // NewStore creates a new memory store
@@ -138,10 +164,83 @@ func NewStore(memCfg *MemoryConfig) (*Store, error) {
 	store.agentMemoryPath = filepath.Join(memoryDir, "MEMORY.md")
 	store.userMemoryPath = filepath.Join(memoryDir, "USER.md")
 
+	// Workspace scope for project isolation (P2-1)
+	if memCfg.WorkspaceScope != "" {
+		store.workspaceScope = memCfg.WorkspaceScope
+	} else if wd, err := os.Getwd(); err == nil {
+		store.workspaceScope = filepath.ToSlash(wd)
+	}
+
 	// Ensure file-based memories exist
 	store.ensureMemoryFiles()
 
+	// Start background flusher for access statistics (P2-4: 去写放大)
+	store.pendingAccess = make(map[string]struct{})
+	store.stopFlusher = make(chan struct{})
+	go store.accessFlusher()
+
 	return store, nil
+}
+
+// accessFlusher 周期性把待记录的访问统计落盘
+func (s *Store) accessFlusher() {
+	ticker := time.NewTicker(accessFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.flushAccess()
+		case <-s.stopFlusher:
+			s.flushAccess()
+			return
+		}
+	}
+}
+
+// recordAccess 把命中的记忆 ID 加入待落盘缓冲（异步统计，读路径零写库）
+func (s *Store) recordAccess(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	s.pendingAccessMu.Lock()
+	for _, id := range ids {
+		if id != "" {
+			s.pendingAccess[id] = struct{}{}
+		}
+	}
+	s.pendingAccessMu.Unlock()
+}
+
+// flushAccess 把缓冲的访问统计批量写库
+func (s *Store) flushAccess() {
+	s.pendingAccessMu.Lock()
+	if len(s.pendingAccess) == 0 {
+		s.pendingAccessMu.Unlock()
+		return
+	}
+	ids := make([]string, 0, len(s.pendingAccess))
+	for id := range s.pendingAccess {
+		ids = append(ids, id)
+	}
+	s.pendingAccess = make(map[string]struct{})
+	s.pendingAccessMu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, time.Now().UTC().Format(time.RFC3339))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	query := fmt.Sprintf(`
+		UPDATE memories SET last_access = ?, access_count = access_count + 1
+		WHERE id IN (%s)
+	`, strings.Join(placeholders, ", "))
+	if _, err := s.db.Exec(query, args...); err != nil {
+		log.Warnf("flush access stats failed: %v", err)
+	}
 }
 
 // initSchema creates the database tables
@@ -237,10 +336,37 @@ func (s *Store) Store(m *Memory) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now().UTC()
+
+	// P2-1: 项目隔离——非用户类记忆未显式指定 scope 时自动落工作区 scope
+	if m.Scope == "" && m.Type != TypeUser && m.Type != TypePreference {
+		m.Scope = s.workspaceScope
+	}
+
+	// P1-4: 内容精确去重——同内容已存在时只提升重要度并刷新时间，不再新增行。
+	// 仅对"无 ID 的新增"生效，带 ID 的显式写入（更新语义）不受影响。
+	if m.ID == "" {
+		var existingID string
+		err := s.db.QueryRow(
+			"SELECT id FROM memories WHERE content = ? ORDER BY importance DESC LIMIT 1",
+			m.Content,
+		).Scan(&existingID)
+		if err == nil && existingID != "" {
+			if _, uerr := s.db.Exec(`
+				UPDATE memories
+				SET importance = MAX(importance, ?), updated_at = ?, last_access = ?
+				WHERE id = ?
+			`, m.Importance, now.Format(time.RFC3339), now.Format(time.RFC3339), existingID); uerr != nil {
+				return uerr
+			}
+			m.ID = existingID
+			return nil
+		}
+	}
+
 	if m.ID == "" {
 		m.ID = generateID()
 	}
-	now := time.Now().UTC()
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = now
 	}
@@ -256,7 +382,7 @@ func (s *Store) Store(m *Memory) error {
 	}
 
 	_, err = s.db.Exec(`
-		INSERT OR REPLACE INTO memories 
+		INSERT OR REPLACE INTO memories
 		(id, type, content, scope, categories, importance, metadata, created_at, updated_at, last_access, access_count, session_id, source)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ID, m.Type, m.Content, m.Scope, string(categoriesJSON), m.Importance, m.Metadata,
@@ -280,9 +406,72 @@ func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*M
 		return nil, err
 	}
 
-	// 释放读锁后，再批量更新访问统计（内部持写锁）
-	s.batchUpdateAccess(memories)
+	// 释放读锁后，把访问统计加入内存缓冲，由后台 flusher 落盘（P2-4）
+	ids := make([]string, 0, len(memories))
+	for _, m := range memories {
+		ids = append(ids, m.ID)
+	}
+	s.recordAccess(ids)
 	return memories, nil
+}
+
+// RecallScoped 在 Recall 的基础上叠加工作区隔离过滤（P2-1）：
+// 命中范围为「scope 匹配当前工作区 或 scope 为空 或 类型为 user/preference」。
+// user/preference 是跨项目的用户画像，不受 scope 限制。
+func (s *Store) RecallScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	s.mu.RLock()
+	memories, err := s.queryRecallScoped(query, limit, memoryTypes...)
+	s.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(memories))
+	for _, m := range memories {
+		ids = append(ids, m.ID)
+	}
+	s.recordAccess(ids)
+	return memories, nil
+}
+
+// GetTopMemoriesScoped 带工作区过滤的高相关记忆检索（P0-1/P2-1）：
+// RecallScoped 捞 3 倍候选 → CalculateRelevanceScore 综合评分
+// （内容相关性 + 重要度 + 时间衰减）→ 取前 limit 条。
+// 供 cortex 动态召回门面使用，把散落的死代码串回主循环。
+func (s *Store) GetTopMemoriesScoped(query string, limit int, now time.Time, memTypes ...MemoryType) []*Memory {
+	if limit <= 0 {
+		limit = 5
+	}
+	memories, err := s.RecallScoped(query, limit*3, memTypes...)
+	if err != nil {
+		log.Warnf("[Memory] RecallScoped failed: %v", err)
+		return nil
+	}
+
+	type scoredMem struct {
+		mem   *Memory
+		score float64
+	}
+	all := make([]scoredMem, 0, len(memories))
+	for _, m := range memories {
+		all = append(all, scoredMem{mem: m, score: CalculateRelevanceScore(m, query, now)})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
+
+	result := make([]*Memory, 0, limit)
+	for _, sc := range all {
+		if len(result) >= limit {
+			break
+		}
+		if sc.score > 0.01 {
+			result = append(result, sc.mem)
+		}
+	}
+	return result
 }
 
 // queryRecall 执行 FTS5 检索，不持锁（由调用方持锁），也不更新访问统计
@@ -293,40 +482,31 @@ func (s *Store) queryRecall(query string, limit int, memoryTypes ...MemoryType) 
 		return s.queryRecallFallback(query, limit, memoryTypes...)
 	}
 
-	// 用参数化占位符构造 type 过滤条件，避免 SQL 注入
-	typeFilter := ""
-	typeArgs := []interface{}{}
-	if len(memoryTypes) > 0 {
-		placeholders := make([]string, len(memoryTypes))
-		for i, t := range memoryTypes {
-			placeholders[i] = "?"
-			typeArgs = append(typeArgs, t)
-		}
-		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(placeholders, ", "))
-	}
-
 	// 用 FTS5 检索
 	ftsQuery := sanitizeFTSQuery(query)
+	if ftsQuery == "" {
+		return s.queryRecallFallback(query, limit, memoryTypes...)
+	}
 
+	where, args := s.buildRecallWhere(memoryTypes, false)
 	sqlQuery := fmt.Sprintf(`
 		SELECT m.id, m.type, m.content, m.scope, m.categories, m.importance,
 			   m.metadata, m.created_at, m.updated_at, m.last_access, m.access_count,
-			   m.session_id, m.source,
-			   bm25(memories_fts) as rank
+			   m.session_id, m.source
 		FROM memories m
 		JOIN memories_fts ON m.rowid = memories_fts.rowid
 		WHERE memories_fts MATCH ?
 		%s
-		ORDER BY rank
+		ORDER BY bm25(memories_fts)
 		LIMIT ?
-	`, typeFilter)
+	`, where)
 
-	// 参数顺序：MATCH ? , type IN (?,?,?) , LIMIT ?
-	args := []interface{}{ftsQuery}
-	args = append(args, typeArgs...)
-	args = append(args, limit)
+	// 参数顺序：MATCH ? , type IN (?,?,?) [, scope ?] , LIMIT ?
+	allArgs := []interface{}{ftsQuery}
+	allArgs = append(allArgs, args...)
+	allArgs = append(allArgs, limit)
 
-	rows, err := s.db.Query(sqlQuery, args...)
+	rows, err := s.db.Query(sqlQuery, allArgs...)
 	if err != nil {
 		// FTS 失败时回退到 LIKE 检索
 		return s.queryRecallFallback(query, limit, memoryTypes...)
@@ -336,38 +516,140 @@ func (s *Store) queryRecall(query string, limit int, memoryTypes ...MemoryType) 
 	return s.scanMemories(rows)
 }
 
-// queryRecallFallback 在 FTS 失败时用 LIKE 进行基础检索，不持锁，也不更新访问统计
-func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
-	// 用参数化占位符构造 type 过滤条件，避免 SQL 注入
-	typeFilter := ""
-	typeArgs := []interface{}{}
+// queryRecallScoped 带 scope 工作区过滤的 FTS 检索（P2-1）
+func (s *Store) queryRecallScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	if containsCJK(query) {
+		return s.queryRecallFallbackScoped(query, limit, memoryTypes...)
+	}
+
+	ftsQuery := sanitizeFTSQuery(query)
+	if ftsQuery == "" {
+		return s.queryRecallFallbackScoped(query, limit, memoryTypes...)
+	}
+
+	where, args := s.buildRecallWhere(memoryTypes, true)
+	sqlQuery := fmt.Sprintf(`
+		SELECT m.id, m.type, m.content, m.scope, m.categories, m.importance,
+			   m.metadata, m.created_at, m.updated_at, m.last_access, m.access_count,
+			   m.session_id, m.source
+		FROM memories m
+		JOIN memories_fts ON m.rowid = memories_fts.rowid
+		WHERE memories_fts MATCH ?
+		%s
+		ORDER BY bm25(memories_fts)
+		LIMIT ?
+	`, where)
+
+	allArgs := []interface{}{ftsQuery}
+	allArgs = append(allArgs, args...)
+	allArgs = append(allArgs, limit)
+
+	rows, err := s.db.Query(sqlQuery, allArgs...)
+	if err != nil {
+		return s.queryRecallFallbackScoped(query, limit, memoryTypes...)
+	}
+	defer rows.Close()
+
+	return s.scanMemories(rows)
+}
+
+// buildRecallWhere 组装 type/scope 过滤条件与参数。
+// scoped=true 时叠加工作区过滤；FTS 路径用 m. 前缀，LIKE 路径用裸列名。
+func (s *Store) buildRecallWhere(memoryTypes []MemoryType, scoped bool) (string, []interface{}) {
+	tablePrefix := "m."
+	if !scoped {
+		// 非 scoped 查询历史行为保持裸列（原 SQL 为 JOIN 形式也可用 m. 前缀）
+		tablePrefix = "m."
+	}
+	clauses := make([]string, 0, 2)
+	var args []interface{}
+
 	if len(memoryTypes) > 0 {
 		placeholders := make([]string, len(memoryTypes))
 		for i, t := range memoryTypes {
 			placeholders[i] = "?"
-			typeArgs = append(typeArgs, t)
+			args = append(args, t)
 		}
-		typeFilter = fmt.Sprintf("AND type IN (%s)", strings.Join(placeholders, ", "))
+		clauses = append(clauses, fmt.Sprintf("AND %stype IN (%s)", tablePrefix, strings.Join(placeholders, ", ")))
 	}
 
-	likeQuery := "%" + query + "%"
+	if scoped && s.workspaceScope != "" {
+		clauses = append(clauses,
+			fmt.Sprintf("AND (%stype IN ('user','preference') OR %sscope IN ('', ?))", tablePrefix, tablePrefix))
+		args = append(args, s.workspaceScope)
+	}
+
+	return strings.Join(clauses, " "), args
+}
+
+// queryRecallFallback 在 FTS 失败时用 LIKE 进行基础检索，不持锁，也不更新访问统计
+func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	where, args := s.buildRecallWhere(memoryTypes, false)
+	patterns := likePatterns(query)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	conds := make([]string, 0, len(patterns))
+	likeArgs := make([]interface{}, 0, len(patterns)*3)
+	for _, p := range patterns {
+		conds = append(conds, "(content LIKE ? OR scope LIKE ? OR categories LIKE ?)")
+		likeArgs = append(likeArgs, p, p, p)
+	}
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, type, content, scope, categories, importance,
 			   metadata, created_at, updated_at, last_access, access_count,
 			   session_id, source
 		FROM memories
-		WHERE (content LIKE ? OR scope LIKE ? OR categories LIKE ?)
+		WHERE %s
 		%s
 		ORDER BY importance DESC, access_count DESC
 		LIMIT ?
-	`, typeFilter)
+	`, strings.Join(conds, " OR "), where)
 
-	// 参数顺序：LIKE ? , LIKE ? , LIKE ? , type IN (?,?,?) , LIMIT ?
-	args := []interface{}{likeQuery, likeQuery, likeQuery}
-	args = append(args, typeArgs...)
-	args = append(args, limit)
+	// 参数顺序：LIKE 组 , type IN (?,?,?) [, scope ?] , LIMIT ?
+	allArgs := likeArgs
+	allArgs = append(allArgs, args...)
+	allArgs = append(allArgs, limit)
 
-	rows, err := s.db.Query(sqlQuery, args...)
+	rows, err := s.db.Query(sqlQuery, allArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanMemories(rows)
+}
+
+// queryRecallFallbackScoped 带 scope 过滤的 LIKE 兜底检索（P2-1）。
+// 与 queryRecallFallback 相同的分词 LIKE 策略（likePatterns）。
+func (s *Store) queryRecallFallbackScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	where, args := s.buildRecallWhere(memoryTypes, true)
+	patterns := likePatterns(query)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	conds := make([]string, 0, len(patterns))
+	likeArgs := make([]interface{}, 0, len(patterns)*3)
+	for _, p := range patterns {
+		conds = append(conds, "(content LIKE ? OR scope LIKE ? OR categories LIKE ?)")
+		likeArgs = append(likeArgs, p, p, p)
+	}
+	sqlQuery := fmt.Sprintf(`
+		SELECT id, type, content, scope, categories, importance,
+			   metadata, created_at, updated_at, last_access, access_count,
+			   session_id, source
+		FROM memories
+		WHERE %s
+		%s
+		ORDER BY importance DESC, access_count DESC
+		LIMIT ?
+	`, strings.Join(conds, " OR "), where)
+
+	allArgs := likeArgs
+	allArgs = append(allArgs, args...)
+	allArgs = append(allArgs, limit)
+
+	rows, err := s.db.Query(sqlQuery, allArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -412,32 +694,6 @@ func (s *Store) scanMemories(rows *sql.Rows) ([]*Memory, error) {
 	return memories, nil
 }
 
-// batchUpdateAccess 批量更新记忆的最后访问时间和访问次数，持写锁
-func (s *Store) batchUpdateAccess(memories []*Memory) {
-	if len(memories) == 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	placeholders := make([]string, len(memories))
-	args := make([]interface{}, 0, len(memories)+1)
-	// 参数顺序：SET last_access = ? , WHERE id IN (?,?,?)
-	args = append(args, time.Now().UTC().Format(time.RFC3339))
-	for i, m := range memories {
-		placeholders[i] = "?"
-		args = append(args, m.ID)
-	}
-
-	query := fmt.Sprintf(`
-		UPDATE memories SET last_access = ?, access_count = access_count + 1
-		WHERE id IN (%s)
-	`, strings.Join(placeholders, ", "))
-	if _, err := s.db.Exec(query, args...); err != nil {
-		log.Warnf("batch update access stats failed: %v", err)
-	}
-}
-
 // containsCJK checks whether text contains Chinese/Japanese/Korean characters.
 func containsCJK(text string) bool {
 	for _, r := range text {
@@ -449,13 +705,45 @@ func containsCJK(text string) bool {
 	return false
 }
 
-// sanitizeFTSQuery 对 FTS5 查询进行转义与清理：
+// likePatterns 把自然语言查询拆成 LIKE 匹配模式集合（P2-4）：
+// 空格分词；含 CJK 的词额外拆出 bigram 子串——LIKE 对连续中文只能子串
+// 匹配，整串 LIKE 在自然语言查询上几乎必空（与旧 FTS 短语缺陷同构）。
+// 最多 24 个模式，防止超长查询炸 SQL；每个模式已带 % 包裹。
+func likePatterns(query string) []string {
+	var patterns []string
+	seen := make(map[string]bool)
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] || len(patterns) >= 24 {
+			return
+		}
+		seen[p] = true
+		patterns = append(patterns, "%"+p+"%")
+	}
+	for _, w := range strings.Fields(query) {
+		if containsCJK(w) {
+			add(w)
+			runes := []rune(w)
+			for i := 0; i+2 <= len(runes) && len(patterns) < 24; i++ {
+				add(string(runes[i : i+2]))
+			}
+		} else {
+			add(w)
+		}
+	}
+	return patterns
+}
+
+// sanitizeFTSQuery 对 FTS5 查询进行转义与清理（P0-3 修复）：
 //   - 移除控制字符（< 0x20 的 rune 替换为空格）
-//   - 双引号转义为 ""
-//   - 用双引号包裹整个查询作为短语匹配
-//   - 末尾加 * 做前缀匹配
+//   - 按空白分词，每个词转义双引号后用引号包裹 + * 前缀匹配
+//   - 词间用 OR 连接
+//
+// 旧实现把整句包成单个短语（"..."*）：FTS5 短语匹配要求词序完全一致，
+// 自然语言查询几乎必空 → 静默退回 LIKE，FTS 路径形同虚设。
+// 改为逐词 OR 后，命中越多词的记录 bm25 排名越靠前，召回率与排序双修复。
 func sanitizeFTSQuery(query string) string {
-	if query == "" {
+	if strings.TrimSpace(query) == "" {
 		return ""
 	}
 	var b strings.Builder
@@ -466,9 +754,20 @@ func sanitizeFTSQuery(query string) string {
 			b.WriteRune(r)
 		}
 	}
-	cleaned := b.String()
-	escaped := strings.ReplaceAll(cleaned, "\"", "\"\"")
-	return "\"" + escaped + "\"*"
+	words := strings.Fields(b.String())
+	if len(words) == 0 {
+		return ""
+	}
+	// 限制参与匹配的词数，避免超长查询拖垮 FTS 引擎
+	if len(words) > 12 {
+		words = words[:12]
+	}
+	parts := make([]string, 0, len(words))
+	for _, w := range words {
+		escaped := strings.ReplaceAll(w, "\"", "\"\"")
+		parts = append(parts, "\""+escaped+"\"*")
+	}
+	return strings.Join(parts, " OR ")
 }
 
 // List returns all memories, optionally filtered by type
@@ -693,7 +992,9 @@ func (s *Store) writeUserMemoryLocked(content string) error {
 	return os.WriteFile(s.userMemoryPath, []byte(content), 0644)
 }
 
-// AppendAgentMemory appends content to agent memory (Cortex-style)
+// AppendAgentMemory appends content to agent memory (Cortex-style).
+// P1-1: 与 SnapshotManager 共用 mergeIntoMarkdown 分节合并门面，
+// 超限时退化为「截旧保新」的 rune 安全截断。
 func (s *Store) AppendAgentMemory(content string) error {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
@@ -703,26 +1004,15 @@ func (s *Store) AppendAgentMemory(content string) error {
 		current = []byte("# Agent Memory\n\n## Notes\n\n")
 	}
 
-	// Check if we need to truncate
-	newContent := string(current) + content + "\n"
-	if len(newContent) > s.config.MaxAgentMemLength {
-		// Simple truncation - keep the newer content
-		available := s.config.MaxAgentMemLength - len(content) - 10
-		if available > 100 {
-			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
-			newCurrent := truncateString(string(current), available) + "\n...\n"
-			newContent = newCurrent + content + "\n"
-		} else {
-			// 新内容本身超长或剩余空间不足：丢弃最旧内容，保留最新 content
-			log.Warnf("[Memory] agent memory overflow (content %d chars), keeping newest entry only", len(content))
-			newContent = content + "\n"
-		}
-	}
+	newContent := mergeIntoMarkdown(string(current), content, s.config.MaxAgentMemLength, func(c string, limit int) string {
+		return truncateString(c, limit)
+	})
 
 	return s.writeAgentMemoryLocked(newContent)
 }
 
-// AppendUserMemory appends content to user memory (Cortex-style)
+// AppendUserMemory appends content to user memory (Cortex-style).
+// P1-1: 与 SnapshotManager 共用 mergeIntoMarkdown 分节合并门面。
 func (s *Store) AppendUserMemory(content string) error {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
@@ -732,18 +1022,9 @@ func (s *Store) AppendUserMemory(content string) error {
 		current = []byte("# User Profile\n\n## Basic Info\n\n")
 	}
 
-	newContent := string(current) + content + "\n"
-	if len(newContent) > s.config.MaxUserMemLength {
-		available := s.config.MaxUserMemLength - len(content) - 10
-		if available > 100 {
-			// 截断回退到 UTF-8 rune 边界，避免切断多字节字符
-			newCurrent := truncateString(string(current), available) + "\n...\n"
-			newContent = newCurrent + content + "\n"
-		} else {
-			log.Warnf("[Memory] user memory overflow (content %d chars), keeping newest entry only", len(content))
-			newContent = content + "\n"
-		}
-	}
+	newContent := mergeIntoMarkdown(string(current), content, s.config.MaxUserMemLength, func(c string, limit int) string {
+		return truncateString(c, limit)
+	})
 
 	return s.writeUserMemoryLocked(newContent)
 }
@@ -774,9 +1055,30 @@ func (s *Store) GetCommandTrustLevel(commandHash string) (action string, count i
 	return
 }
 
-// Close closes the memory store
+// Close closes the memory store. 关闭前先停掉后台访问统计 flusher，
+// 把缓冲中的访问统计刷盘（P1-5），避免进程退出时丢失最后一次 Recall 的统计。
 func (s *Store) Close() error {
+	s.flusherOnce.Do(func() { close(s.stopFlusher) })
 	return s.db.Close()
+}
+
+// CleanupExpired 删除过期记忆（P2-3）：重要度低于 minImportance 且
+// last_access 早于 cutoff 的记录直接清除。返回删除条数。
+// last_access 为空（从未被访问）的老记录同样按 created_at 判定。
+func (s *Store) CleanupExpired(cutoff time.Time, minImportance float64) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result, err := s.db.Exec(`
+		DELETE FROM memories
+		WHERE importance < ?
+		  AND COALESCE(last_access, created_at) < ?
+	`, minImportance, cutoff.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	deleted, _ := result.RowsAffected()
+	return int(deleted), nil
 }
 
 // generateID creates a unique ID

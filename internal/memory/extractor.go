@@ -76,7 +76,9 @@ func (me *MemoryExtractor) ExtractMemories(ctx context.Context, messages []provi
 	for _, msg := range messages {
 		content := msg.Content
 		if len(content) > 1000 {
-			content = content[:1000] + "... (truncated)"
+			// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
+			r := []rune(content)
+			content = string(r[:1000]) + "... (truncated)"
 		}
 		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
 		// GLM mimics this format and starts wrapping every reply in [].
@@ -311,6 +313,13 @@ func cjkBigrams(text string) map[string]bool {
 	}
 	flush()
 	return bigrams
+}
+
+// ContentRelevance 导出内容相关性评分（0.0 - 1.0），供 FTSStore 的
+// LIKE 兜底路径对候选结果排序使用（P2-4）。内部走 calculateContentRelevance：
+// 英文按词重叠、CJK 按 bigram 命中率、中英混合取两路最大值。
+func ContentRelevance(content, query string) float64 {
+	return calculateContentRelevance(content, query)
 }
 
 // calculateContentRelevance 计算内容与查询的相关性（0.0 - 1.0）。

@@ -602,7 +602,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				lastToolArgs[toolName] = toolArgs
 				argsSummary := toolArgs
 				if len(argsSummary) > 200 {
-					argsSummary = argsSummary[:200] + "..."
+					argsSummary = truncateRunes(argsSummary, 200) + "..."
 				}
 				eventData, _ := json.Marshal(map[string]interface{}{
 					"type":     "tool_start",

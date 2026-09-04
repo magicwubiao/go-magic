@@ -127,42 +127,147 @@ func (sm *SnapshotManager) UpdateUser(content string) error {
 	return os.WriteFile(sm.userPath, []byte(content), 0644)
 }
 
-// AppendToMemory appends a line to memory
+// AppendToMemory appends a line to memory (P1-1: 共享分节合并)
 func (sm *SnapshotManager) AppendToMemory(line string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	newContent := sm.latestMemory
-	if newContent != "" && !strings.HasSuffix(newContent, "\n") {
-		newContent += "\n"
-	}
-	newContent += line + "\n"
-
-	if len(newContent) > MemoryLimitChars {
-		newContent = sm.compressor.CompressMemory(newContent, MemoryLimitChars)
-	}
+	newContent := mergeIntoMarkdown(sm.latestMemory, line, MemoryLimitChars, sm.compressor.CompressMemory)
 
 	sm.latestMemory = newContent
 	return os.WriteFile(sm.memoryPath, []byte(newContent), 0644)
 }
 
-// AppendToUser appends a line to user profile
+// AppendToUser appends a line to user profile (P1-1: 共享分节合并)
 func (sm *SnapshotManager) AppendToUser(line string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	newContent := sm.latestUser
-	if newContent != "" && !strings.HasSuffix(newContent, "\n") {
-		newContent += "\n"
-	}
-	newContent += line + "\n"
-
-	if len(newContent) > UserLimitChars {
-		newContent = sm.compressor.compressUser(newContent, UserLimitChars)
-	}
+	newContent := mergeIntoMarkdown(sm.latestUser, line, UserLimitChars, sm.compressor.compressUser)
 
 	sm.latestUser = newContent
 	return os.WriteFile(sm.userPath, []byte(newContent), 0644)
+}
+
+// mergeIntoMarkdown 把新增内容按分节合并进现有 Markdown（P1-1 统一写入门面）：
+//   - 新增内容带 "## header" 时合并进现有同名分节（同一主题不再裂成多个分节），
+//     新分节追加到末尾；分节体内逐行去重
+//   - 新增内容不带分节头时按旧行为直接追加到末尾
+//   - 全文去重连续重复行
+//   - 超过 limit 时调用 compress 压缩（MEMORY.md 用分节压缩，USER.md 用
+//     简单去重截断），由调用方决定压缩策略
+//
+// 返回合并后的完整内容，不落盘——落盘路径由调用方（SnapshotManager /
+// Store 的文件 API）各自持锁完成。
+func mergeIntoMarkdown(existing, addition string, limit int, compress func(string, int) string) string {
+	addition = strings.TrimSpace(addition)
+	if addition == "" {
+		return existing
+	}
+	if strings.TrimSpace(existing) == "" {
+		out := addition + "\n"
+		if len(out) > limit {
+			out = compress(out, limit)
+		}
+		return out
+	}
+
+	existing = strings.TrimRight(existing, "\n")
+	addSections := splitSections(addition)
+
+	// 简单追加路径：addition 不含分节头
+	hasHeader := false
+	for _, s := range addSections {
+		if s.header != "" {
+			hasHeader = true
+			break
+		}
+	}
+	if !hasHeader {
+		merged := existing + "\n" + addition + "\n"
+		merged = deduplicateLines(merged)
+		if len(merged) > limit {
+			merged = compress(merged, limit)
+		}
+		return merged
+	}
+
+	// 分节合并路径
+	exSections := splitSections(existing)
+	headerIndex := make(map[string]int)
+	for i, s := range exSections {
+		if s.header != "" {
+			headerIndex[s.header] = i
+		}
+	}
+
+	var preamble []string // addition 中首个 "##" 之前的无分节行
+	for _, as := range addSections {
+		if as.header == "" {
+			if strings.TrimSpace(as.body) != "" {
+				preamble = append(preamble, strings.TrimSpace(as.body))
+			}
+			continue
+		}
+		if i, ok := headerIndex[as.header]; ok {
+			exSections[i].body = mergeBodyLines(exSections[i].body, as.body)
+		} else {
+			exSections = append(exSections, as)
+			headerIndex[as.header] = len(exSections) - 1
+		}
+	}
+
+	var sb strings.Builder
+	for i, s := range exSections {
+		if s.header != "" {
+			sb.WriteString(s.header)
+			sb.WriteString("\n")
+		}
+		sb.WriteString(strings.TrimRight(s.body, "\n"))
+		sb.WriteString("\n")
+		if i < len(exSections)-1 {
+			sb.WriteString("\n")
+		}
+	}
+	if len(preamble) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString(strings.Join(preamble, "\n"))
+		sb.WriteString("\n")
+	}
+
+	merged := deduplicateLines(sb.String())
+	if len(merged) > limit {
+		merged = compress(merged, limit)
+	}
+	return merged
+}
+
+// mergeBodyLines 把 additionBody 中现 body 没有的行追加进现有分节体
+func mergeBodyLines(existingBody, additionBody string) string {
+	seen := make(map[string]bool)
+	for _, l := range strings.Split(existingBody, "\n") {
+		t := strings.TrimSpace(l)
+		if t != "" {
+			seen[t] = true
+		}
+	}
+	var out []string
+	for _, l := range strings.Split(additionBody, "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, l)
+	}
+	if len(out) == 0 {
+		return existingBody
+	}
+	body := strings.TrimRight(existingBody, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	return body + strings.Join(out, "\n")
 }
 
 // GetLatestMemory returns the latest memory (not frozen)

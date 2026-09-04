@@ -328,10 +328,10 @@ func (ic *IntelligentCompressor) extractTopics(messages []provider.Message) []st
 			if !seen[u] {
 				seen[u] = true
 				if len(topics) < 5 {
-					// Shorten URL for display
+					// Shorten URL for display（rune 安全截断，防中文查询参数乱码）
 					shortURL := u
 					if len(shortURL) > 50 {
-						shortURL = shortURL[:47] + "..."
+						shortURL = truncateRunes(shortURL, 47) + "..."
 					}
 					topics = append(topics, "URL: "+shortURL)
 				}

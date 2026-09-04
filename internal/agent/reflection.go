@@ -269,7 +269,8 @@ func (r *Reflector) buildReflectionPrompt(history []provider.Message, turn int) 
 		// stuck in repetitive thinking" false positives.
 		content := stripThinkContent(msg.Content)
 		if len(content) > 500 {
-			content = content[:500] + "... (truncated)"
+			// rune 安全截断：字节截断会把中文切成乱码
+			content = truncateRunes(content, 500) + "... (truncated)"
 		}
 		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
 		// GLM mimics this format and starts wrapping every reply in [].

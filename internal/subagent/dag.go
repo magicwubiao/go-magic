@@ -241,7 +241,9 @@ func (rs *ResultSynthesizer) SynthesizeResults(ctx context.Context, goal string,
 		if len(result) > 2000 {
 			// NOTE: avoid square brackets — this text reaches the LLM and
 			// GLM mimics bracketed markers as a structural template.
-			resultsBuilder.WriteString(result[:2000] + "\n... (truncated)")
+			// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
+			r := []rune(result)
+			resultsBuilder.WriteString(string(r[:2000]) + "\n... (truncated)")
 		} else {
 			resultsBuilder.WriteString(result)
 		}

@@ -57,6 +57,7 @@ func TestManagerStart(t *testing.T) {
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
+	t.Cleanup(mgr.Stop)
 
 	if mgr.Snapshot.GetMemoryForPrompt() == "" {
 		t.Error("MEMORY.md not loaded after Start()")
@@ -71,6 +72,8 @@ func TestOnTurnStartFreezesSnapshot(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	// 初始 memory
 	mgr.Snapshot.UpdateMemory("Initial memory")
@@ -98,6 +101,8 @@ func TestOnSessionEndRefreshesSnapshot(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	mgr.Snapshot.UpdateMemory("Session memory")
 	mgr.OnTurnStart()
@@ -122,6 +127,8 @@ func TestOnTurnEndSkillAnalysis(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	// 模拟一次包含 3 个工具调用的任务
 	mgr.Trigger.OnUserMessage("Test task for skill detection")
@@ -156,6 +163,8 @@ func TestOnSessionEndFinalSkillAnalysis(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	mgr.Trigger.OnUserMessage("Another test task")
 	for _, tool := range []string{"a", "b", "c", "a", "b", "c"} {
@@ -214,6 +223,8 @@ func TestGetSystemStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	status := mgr.GetSystemStatus()
 
@@ -248,6 +259,8 @@ func TestSkillCreatorIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	// 模拟两次相同模式的工具调用（触发 minFrequency=2）
 	for i := 0; i < 2; i++ {
@@ -277,6 +290,8 @@ func TestCortexSkillsBoundary(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, nil)
 	mgr.Start()
+	// Windows 下未关闭的 sqlite 句柄会锁定 TempDir 导致清理失败
+	t.Cleanup(mgr.Stop)
 
 	// 1. Cortex SkillCreator 生成技能
 	mgr.Trigger.OnUserMessage("Code review task")

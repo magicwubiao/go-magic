@@ -107,6 +107,12 @@ type Agent struct {
 	// Memory integration
 	memoryEnabled bool
 
+	// 动态记忆注入（P0-1）：每轮新用户输入进入时经 cortex 门面召回一次，
+	// turn 内保持稳定；出站消息在头部 system 之后插入。
+	// dynamicMemoryKey 用于防止同一次输入重复召回。
+	dynamicMemory    string
+	dynamicMemoryKey string
+
 	// Cortex Agent six-system integration
 	cortexManager *cortex.Manager
 
@@ -911,6 +917,9 @@ Please provide a comprehensive, well-structured final response based on these su
 	// Truncate history to prevent overflow
 	a.truncateHistory()
 
+	// P0-1: 新用户输入进入时召回动态记忆（turn 内稳定，出站时注入）
+	a.prepareDynamicMemory(input)
+
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
 		// Check if context was cancelled (user pressed /stop)
@@ -1225,6 +1234,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Truncate history to prevent overflow
 	a.truncateHistory()
+
+	// P0-1: 新用户输入进入时召回动态记忆（turn 内稳定，出站时注入）
+	a.prepareDynamicMemory(input)
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
@@ -1784,6 +1796,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Truncate history to prevent overflow
 	a.truncateHistory()
+
+	// P0-1: 新用户输入进入时召回动态记忆（turn 内稳定，出站时注入）
+	a.prepareDynamicMemory(input)
 
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
@@ -2898,7 +2913,24 @@ func (a *Agent) GetHistoryLength() int {
 	return total
 }
 
-// truncateHistory truncates message history to prevent overflow
+// truncateHistory truncates message history to prevent overflow.
+//
+// The structural contract here is that the LAST user-role message must
+// survive: every public entry point (Chat, ChatWithTools, cortex_integration,
+// in-loop tool truncation) appends a fresh user message right before
+// calling truncateHistory. Stripping it leaves the trailing tool result
+// dangling with no caller, which makes the next provider call look like
+// "tool result with no preceding assistant tool_calls" — a structural
+// 1214 trigger on Zhipu/GLM and silently broken behaviour elsewhere.
+//
+// To keep that invariant we always treat the final user-role message and
+// every message that follows it as a single protected "tail block" that
+// we will NEVER touch (not even individually). Truncation therefore
+// proceeds by removing whole EARLIER user blocks — i.e. each user message
+// and everything between it and the next user message (assistant tool_calls
+// + trailing tool results). When only the protected tail block remains
+// below maxTotalLen we hand off to compressHistory, which is the
+// dedicated mechanism for summarising the middle of a long conversation.
 func (a *Agent) truncateHistory() {
 	if a.maxTotalLen <= 0 {
 		return
@@ -2941,62 +2973,225 @@ func (a *Agent) truncateHistory() {
 		return
 	}
 
-	for totalLen > a.maxTotalLen && len(a.history) > 1 {
+	// Locate the protected tail block: the index of the last user message,
+	// and from there the boundary every deletion must respect.
+	lastUserIdx := -1
+	for i := len(a.history) - 1; i >= 0; i-- {
+		if a.history[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+	tailBlockSize := 0
+	if lastUserIdx >= 0 {
+		for i := lastUserIdx; i < len(a.history); i++ {
+			tailBlockSize += len(a.history[i].Content)
+		}
+	}
+	// If even the protected tail alone fits under the cap, every earlier
+	// reduction candidate is by definition larger; there is nothing we can
+	// responsibly remove without destroying user context, so we exit and
+	// let compressHistory's LLM-assisted summarisation take over on the
+	// NEXT turn (or via its own threshold above).
+	if lastUserIdx >= 0 && tailBlockSize >= a.maxTotalLen {
+		log.Warnf("[Agent] truncateHistory: protected tail block (%d msgs, %d chars) >= maxTotalLen=%d — delegating to compressHistory",
+			len(a.history)-lastUserIdx, tailBlockSize, a.maxTotalLen)
+		if a.compressionEnabled {
+			a.compressHistory()
+			return
+		}
+		// Compression is disabled: fall through and at least run sanitiser
+		// so Pass 4/5 mask any structural damage the caller is about to ship.
+		a.sanitizeHistory()
+		return
+	}
+
+	// removeRange deletes [start, end) from a.history, decrements totalLen
+	// by the summed content length of that range, and keeps systemIdx in
+	// sync so subsequent iterations still skip the head system message.
+	removeRange := func(start, end int) {
+		if start >= end {
+			return
+		}
+		for k := start; k < end; k++ {
+			totalLen -= len(a.history[k].Content)
+		}
+		a.history = append(a.history[:start], a.history[end:]...)
+		if systemIdx >= start && systemIdx < end {
+			systemIdx = -1
+		} else if systemIdx >= end {
+			systemIdx -= (end - start)
+		}
+	}
+
+	// Safety net: never run more iterations than the original history
+	// length × 2. Before the fix this loop was safe-guarded by
+	// `len(a.history) > 1`, but the protected-tail invariant intentionally
+	// preserves one user message we are NOT allowed to remove — if we did
+	// keep iterating, we could spin forever on a history whose only
+	// removable content is already exhausted. The cap is large enough that
+	// every legitimate cleanup runs to completion (each iteration deletes
+	// at least one message), so reaching it means we genuinely cannot
+	// make further progress.
+	maxIters := 0
+	for i := 0; i < len(a.history); i++ {
+		maxIters++
+		_ = i
+	}
+	maxIters *= 2
+	if maxIters < 8 {
+		maxIters = 8
+	}
+
+	deletedAny := false
+	for totalLen > a.maxTotalLen && len(a.history) > 1 && maxIters > 0 {
+		maxIters--
+
+		// Pick the victim index, always skipping a leading system message.
 		idx := 0
 		if systemIdx == 0 {
 			idx = 1
 		}
+		if idx >= len(a.history) {
+			break
+		}
+		if len(a.history)-1 < lastUserIdx {
+			// lastUserIdx fell off the end (only system+protected tail remain
+			// in some shrunken form). Re-locate so the protection check below
+			// still triggers correctly.
+			lastUserIdx = -1
+			for i := len(a.history) - 1; i >= 0; i-- {
+				if a.history[i].Role == "user" {
+					lastUserIdx = i
+					break
+				}
+			}
+			if lastUserIdx < 0 {
+				break
+			}
+		}
 
-		if a.history[idx].Role == "tool" {
-			found := false
+		role := a.history[idx].Role
+
+		switch role {
+		case "tool":
+			// Reverse-find the most recent assistant-with-tool-calls that
+			// is the caller of these tool results, then strip the entire
+			// assistant+tool_calls header AND every trailing tool message
+			// that follows it. This keeps tool result↔tool_call IDs paired
+			// (no orphan tool result) and is the symmetric counterpart of
+			// the user-block removal below.
+			foundCaller := false
 			for j := idx - 1; j >= 0; j-- {
 				if a.history[j].Role == "assistant" && len(a.history[j].ToolCalls) > 0 {
-					removeStart := j
 					removeEnd := j + 1
 					for removeEnd < len(a.history) && a.history[removeEnd].Role == "tool" {
-						totalLen -= len(a.history[removeEnd].Content)
 						removeEnd++
 					}
-					totalLen -= len(a.history[j].Content)
-					a.history = append(a.history[:removeStart], a.history[removeEnd:]...)
-					found = true
+					removeRange(j, removeEnd)
+					if lastUserIdx >= j && lastUserIdx < removeEnd {
+						// The protected tail got erased by a tool-headed
+						// removal. This should not happen because idx is
+						// always < lastUserIdx here (idx sits inside an
+						// earlier user block), but guard anyway.
+						lastUserIdx = -1
+						for i := len(a.history) - 1; i >= 0; i-- {
+							if a.history[i].Role == "user" {
+								lastUserIdx = i
+								break
+							}
+						}
+					}
+					foundCaller = true
 					break
 				}
 			}
-			if found {
-				systemIdx = -1
-				for i, m := range a.history {
-					if m.Role == "system" {
-						systemIdx = i
-						break
-					}
-				}
+			if foundCaller {
+				deletedAny = true
 				continue
 			}
-		}
+			// Head-position tool with no caller (already-sanitised history
+			// in theory, but be defensive): drop it alone.
+			removeRange(idx, idx+1)
+			deletedAny = true
+			continue
 
-		if a.history[idx].Role == "assistant" && len(a.history[idx].ToolCalls) > 0 {
-			removeEnd := idx + 1
-			for removeEnd < len(a.history) && a.history[removeEnd].Role == "tool" {
-				totalLen -= len(a.history[removeEnd].Content)
-				removeEnd++
-			}
-			totalLen -= len(a.history[idx].Content)
-			a.history = append(a.history[:idx], a.history[removeEnd:]...)
-		} else {
-			totalLen -= len(a.history[idx].Content)
-			a.history = append(a.history[:idx], a.history[idx+1:]...)
-		}
-
-		if systemIdx == idx {
-			systemIdx = -1
-			for i, m := range a.history {
-				if m.Role == "system" {
-					systemIdx = i
-					break
+		case "assistant":
+			if len(a.history[idx].ToolCalls) > 0 {
+				// Discard the assistant+tool_calls header plus any trailing
+				// tool results that belong to it.
+				removeEnd := idx + 1
+				for removeEnd < len(a.history) && a.history[removeEnd].Role == "tool" {
+					removeEnd++
 				}
+				removeRange(idx, removeEnd)
+			} else {
+				// Plain assistant reply (no tool calls) — safe to drop
+				// alone. SanitizeHistory's Pass 4/5 will reconnect any
+				// neighbouring damage.
+				removeRange(idx, idx+1)
 			}
+			deletedAny = true
+			continue
+
+		case "user":
+			// Tail-block protection: if idx is the protected tail user, we
+			// cannot remove any further user block. Stop iterating and
+			// delegate to compressHistory for a summary-based reduction.
+			if idx == lastUserIdx {
+				if !deletedAny {
+					// Nothing has been deleted yet on this pass — a single
+					// protected tail block already fills the budget. This
+					// is the same edge case as the early exit above but
+					// reached after partial cleanup; still no further
+					// safe moves available without summarising.
+					log.Warnf("[Agent] truncateHistory reached protected tail user without further droppable blocks")
+				}
+				if a.compressionEnabled {
+					a.compressHistory()
+					return
+				}
+				a.sanitizeHistory()
+				return
+			}
+			// Drop the entire EARLIER user block: idx (the user) plus every
+			// assistant/tool/assistant message that follows it until just
+			// before the NEXT user message (or until the protected tail,
+			// whichever comes first). The protected tail is structurally
+			// unreached because idx < lastUserIdx guarantees the search
+			// terminates at lastUserIdx.
+			end := idx + 1
+			for end < len(a.history) && a.history[end].Role != "user" {
+				end++
+			}
+			// Defensive: refuse to cross the protected tail boundary even
+			// if idx somehow equals lastUserIdx (handled above, but cheap
+			// to double-check).
+			if end > lastUserIdx {
+				end = lastUserIdx
+			}
+			removeRange(idx, end)
+			deletedAny = true
+			continue
+
+		default:
+			// Unknown / unmodelled role — drop alone and let sanitiser
+			// re-classify on the way out.
+			removeRange(idx, idx+1)
+			deletedAny = true
+			continue
 		}
+	}
+
+	// If we exited the loop because of the safety cap or because the
+	// protected tail made further byte-level removal impossible, try the
+	// summarisation path one more time before handing the noisy payload to
+	// the provider layer. compressHistory is a no-op when its own gate
+	// (len(userMsgs) <= keepRecent+keepFirst) says there isn't enough to
+	// summarise, which is the correct response for short tails.
+	if totalLen > a.maxTotalLen && a.compressionEnabled {
+		a.compressHistory()
+		return
 	}
 
 	// RC3 (26-turn 1214 root cause): truncateHistory is the #1 producer of
@@ -3361,7 +3556,60 @@ func (a *Agent) buildLLMMessages() []provider.Message {
 	// ValidateMessageAlternation still passes (keep the newest, which is
 	// the real user input). Tool blocks are never merged.
 	msgs = collapseConsecutive(msgs)
-	return msgs
+	// P0-1: 在头部 system 之后注入本 turn 的动态记忆（必须在 collapse
+	// 之后，否则注入的 system 会被合并逻辑吞掉）
+	return a.withDynamicMemory(msgs)
+}
+
+// prepareDynamicMemory 在新用户输入进入主循环时召回一次动态记忆（P0-1）。
+// 以输入文本为查询经 cortex 门面检索结构化记忆库，结果缓存到
+// a.dynamicMemory，供 buildLLMMessages 在同一 turn 内反复注入。
+// 缓存键包含 history 长度，防止同一次输入被重复召回；召回失败或
+// cortex 未启用时静默跳过（零依赖）。
+func (a *Agent) prepareDynamicMemory(input string) {
+	if a.cortexManager == nil || !a.memoryEnabled {
+		return
+	}
+	key := fmt.Sprintf("%d:%s", len(a.history), input)
+	if key == a.dynamicMemoryKey {
+		return
+	}
+	a.dynamicMemory = a.cortexManager.RecallForInput(input)
+	a.dynamicMemoryKey = key
+}
+
+// withDynamicMemory 把本 turn 的动态记忆作为一条 system 消息插入出站
+// 消息头部 system 之后（无 system 时置于最前）。消息系统已容忍连续
+// system（messages.go），且 Zhipu 1214 约束只要求 system 之后紧跟 user，
+// 注入位置满足两端约束。无动态记忆时原样返回。
+func (a *Agent) withDynamicMemory(msgs []provider.Message) []provider.Message {
+	if a.dynamicMemory == "" || len(msgs) == 0 {
+		return msgs
+	}
+	memoryMsg := provider.Message{Role: "system", Content: a.dynamicMemory}
+	out := make([]provider.Message, 0, len(msgs)+1)
+	if msgs[0].Role == "system" {
+		out = append(out, msgs[0], memoryMsg)
+		out = append(out, msgs[1:]...)
+	} else {
+		out = append(out, memoryMsg)
+		out = append(out, msgs...)
+	}
+	return out
+}
+
+// truncateRunes 按 rune 边界安全截断（不含省略号后缀）。
+// 字节截断（s[:500]）会把多字节 UTF-8 字符切成两半，中文内容直接变成
+// 乱码（U+FFFD）——web 端工具参数/历史展示乱码的根因。max 按字符计。
+func truncateRunes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
 }
 
 // collapseConsecutive merges runs of consecutive same-role messages that
@@ -3638,7 +3886,7 @@ func (a *Agent) generateCompressionSummary(messages []provider.Message) string {
 			userCount++
 			content := m.Content
 			if len(content) > 100 {
-				content = content[:100] + "..."
+				content = truncateRunes(content, 100) + "..."
 			}
 			if userCount <= 3 {
 				summary.WriteString(fmt.Sprintf("- User: %s\n", content))
@@ -3647,7 +3895,7 @@ func (a *Agent) generateCompressionSummary(messages []provider.Message) string {
 			actionCount++
 			if actionCount <= 3 {
 				if len(m.Content) > 50 {
-					summary.WriteString(fmt.Sprintf("- Tool result: %s...\n", m.Content[:50]))
+					summary.WriteString(fmt.Sprintf("- Tool result: %s...\n", truncateRunes(m.Content, 50)))
 				} else {
 					summary.WriteString(fmt.Sprintf("- Tool result: %s\n", m.Content))
 				}

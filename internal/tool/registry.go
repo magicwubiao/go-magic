@@ -130,6 +130,7 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Memory tools
 	r.Register(&MemoryStoreTool{})
 	r.Register(&MemoryRecallTool{})
+	r.Register(&SearchHistoryTool{})
 
 	// Todo tool
 	r.Register(GetTodoTool())
@@ -351,6 +352,7 @@ func (r *Registry) RegisterBotTools(workDir string) {
 	// Memory
 	r.Register(&MemoryStoreTool{})
 	r.Register(&MemoryRecallTool{})
+	r.Register(&SearchHistoryTool{})
 
 	// Todo
 	r.Register(GetTodoTool())

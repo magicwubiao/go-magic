@@ -73,6 +73,16 @@ type MemoryIntegration struct {
 	sessionID   string
 	recallLimit int
 	autoRecall  bool
+	// allowSensitive 控制联系方式（email/电话）是否入库（P1-4，默认 false）。
+	// 敏感个人信息只在用户显式授权时才持久化。
+	allowSensitive bool
+}
+
+// SetAllowSensitive toggles whether contact-type (email/phone) extractions
+// are persisted. Default is false — sensitive personal info stays out of
+// the memory store unless explicitly enabled.
+func (m *MemoryIntegration) SetAllowSensitive(allow bool) {
+	m.allowSensitive = allow
 }
 
 // NewMemoryIntegration creates a new memory integration
@@ -126,8 +136,8 @@ func (m *MemoryIntegration) StoreFromConversation(userMsg, agentMsg string) erro
 	}
 
 	// 助手消息通常较长，只挑其中带关键洞察的短句入库，
-	// 且必须有重要关键词背书，避免污染
-	if agentMsg != "" && len(agentMsg) < 500 && m.hasImportantKeywords(agentMsg) {
+	// 且必须有重要关键词背书，避免污染（P1-4: 噪声内容直接跳过）
+	if agentMsg != "" && len(agentMsg) < 500 && m.hasImportantKeywords(agentMsg) && !isNoiseContent(agentMsg) {
 		mem := &memory.Memory{
 			Type:       memory.TypeKnowledge,
 			Content:    strings.TrimSpace(agentMsg),
@@ -191,6 +201,10 @@ func (m *MemoryIntegration) ExtractAndStore(conversation []struct {
 		extractions := m.extractFromText(msg.Content)
 
 		for _, ext := range extractions {
+			// P1-4: 敏感信息（联系方式）默认不入库
+			if ext.Category == "contact" && !m.allowSensitive {
+				continue
+			}
 			mem := &memory.Memory{
 				Type:       m.getMemoryType(ext.Category),
 				Content:    ext.Content,
@@ -209,7 +223,8 @@ func (m *MemoryIntegration) ExtractAndStore(conversation []struct {
 		}
 
 		// Also store the full message if it contains important keywords
-		if len(extractions) == 0 && m.hasImportantKeywords(msg.Content) {
+		// (P1-4: 代码块/URL/路径类噪声内容不入库)
+		if len(extractions) == 0 && m.hasImportantKeywords(msg.Content) && !isNoiseContent(msg.Content) {
 			mem := &memory.Memory{
 				Type:       memory.TypeSession,
 				Content:    msg.Content,
@@ -292,6 +307,35 @@ func (m *MemoryIntegration) getMemoryType(category string) memory.MemoryType {
 	}
 }
 
+// isNoiseContent 判断一段文本是否为低质噪声（P1-4）：
+// 代码块、URL、文件路径、命令行等技术内容没有长期记忆价值，
+// 入库只会稀释召回质量。宁可漏存，不可灌错。
+func isNoiseContent(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return true
+	}
+	// 代码围栏 / 行内代码（含单个 `cmd` 引用的行均视为命令类噪声）
+	if strings.Contains(t, "```") || strings.Count(t, "`") >= 2 {
+		return true
+	}
+	lower := strings.ToLower(t)
+	for _, marker := range []string{
+		"http://", "https://", "file://", "ftp://",
+		"c:\\", "d:\\", "e:\\", "/usr/", "/home/", "/var/", "/etc/",
+		"import ", "package ", "#include", "func ", "def ", "class ",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	// 以路径/命令样式开头
+	if strings.HasPrefix(t, "$") || strings.HasPrefix(t, ">") || strings.HasPrefix(t, "./") {
+		return true
+	}
+	return false
+}
+
 // hasImportantKeywords checks if text contains important keywords
 func (m *MemoryIntegration) hasImportantKeywords(text string) bool {
 	lower := strings.ToLower(text)
@@ -364,6 +408,7 @@ func (m *MemoryIntegration) CompactSessionMemories() error {
 	for _, mem := range sumarizeOlder {
 		content := []rune(mem.Content)
 		if len(content) > 100 {
+			// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
 			summary.WriteString("- " + string(content[:100]) + "...\n")
 		} else {
 			summary.WriteString("- " + mem.Content + "\n")

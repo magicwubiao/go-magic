@@ -386,7 +386,8 @@ func (pe *PlanExecutor) GenerateStepSummary(ctx context.Context, stepID int, his
 	for _, msg := range recentMsgs {
 		content := msg.Content
 		if len(content) > 300 {
-			content = content[:300] + "..."
+			// rune 安全截断：字节截断会把中文切成乱码
+			content = truncateRunes(content, 300) + "..."
 		}
 		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
 		// GLM mimics this format and starts wrapping every reply in [].

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -162,21 +163,28 @@ func (f *FTSStore) Add(memory *MemoryRecord) error {
 	return nil
 }
 
-// Search performs a full-text search across all memories
+// Search performs a full-text search across all memories.
+// P0-3：自然语言查询先经 sanitizeFTSQuery 转成逐词 OR 匹配（旧实现把整句
+// 包成短语，词序稍有不同即空结果）。CJK 连续文本 FTS5 默认 tokenizer 无法
+// 有效分词，仍走 LIKE 兜底；FTS 查询失败时同样回退兜底。
 func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	// CJK 文本无空格分词，FTS5 默认 tokenizer 无法有效匹配，走 LIKE 兜底
 	if containsCJK(query) {
+		return f.searchFallback(query, limit)
+	}
+
+	ftsQuery := sanitizeFTSQuery(query)
+	if ftsQuery == "" {
 		return f.searchFallback(query, limit)
 	}
 
 	// Use BM25 ranking for relevance
 	rows, err := f.db.Query(`
-		SELECT 
-			m.id, m.session_id, m.turn_number, m.role, m.content, 
+		SELECT
+			m.id, m.session_id, m.turn_number, m.role, m.content,
 			m.content_type, m.tags, m.importance, m.created_at,
 			rank,
 			snippet(memories_fts, -1, '**', '**', '...', 64)
@@ -185,10 +193,11 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 		WHERE memories_fts MATCH ?
 		ORDER BY rank ASC
 		LIMIT ?
-	`, query, limit)
+	`, ftsQuery, limit)
 
 	if err != nil {
-		return nil, err
+		// FTS 失败（如索引损坏、语法异常）时回退 LIKE 检索
+		return f.searchFallback(query, limit)
 	}
 	defer rows.Close()
 
@@ -216,21 +225,35 @@ func (f *FTSStore) Search(query string, limit int) ([]SearchResult, error) {
 	return results, nil
 }
 
-// searchFallback 在 FTS 无法有效匹配（如 CJK 文本）时，
-// 使用 LIKE 做基础检索，并按重要度 + 时间排序。
+// searchFallback 在 FTS 无法有效匹配（如 CJK 文本、索引异常）时，
+// 使用 LIKE 做基础检索。查询按空格/CJK bigram 分词（likePatterns），
+// 任一子串命中即入选；捞取 4 倍候选后按内容相关性评分（P2-4：英文词重叠 /
+// CJK bigram 命中率）排序，再截取前 limit 条；重要度作为同分时的次级排序。
 func (f *FTSStore) searchFallback(query string, limit int) ([]SearchResult, error) {
-	likeQuery := "%" + query + "%"
-	rows, err := f.db.Query(`
-		SELECT 
-			m.id, m.session_id, m.turn_number, m.role, m.content, 
+	patterns := likePatterns(query)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	conds := make([]string, 0, len(patterns))
+	likeArgs := make([]interface{}, 0, len(patterns)*2)
+	for _, p := range patterns {
+		conds = append(conds, "(m.content LIKE ? OR m.tags LIKE ?)")
+		likeArgs = append(likeArgs, p, p)
+	}
+	fetch := limit * 4
+	sqlQuery := fmt.Sprintf(`
+		SELECT
+			m.id, m.session_id, m.turn_number, m.role, m.content,
 			m.content_type, m.tags, m.importance, m.created_at,
 			-1.0 AS rank,
 			''
 		FROM memories m
-		WHERE m.content LIKE ? OR m.tags LIKE ?
+		WHERE %s
 		ORDER BY m.importance DESC, m.created_at DESC
 		LIMIT ?
-	`, likeQuery, likeQuery, limit)
+	`, strings.Join(conds, " OR "))
+	allArgs := append(likeArgs, fetch)
+	rows, err := f.db.Query(sqlQuery, allArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +280,35 @@ func (f *FTSStore) searchFallback(query string, limit int) ([]SearchResult, erro
 		results = append(results, r)
 	}
 
+	sort.SliceStable(results, func(i, j int) bool {
+		ri := ContentRelevance(results[i].Content, query)
+		rj := ContentRelevance(results[j].Content, query)
+		if ri == rj {
+			return results[i].Importance > results[j].Importance
+		}
+		return ri > rj
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	// snippet 兜底：LIKE 路径没有 FTS snippet，用内容首段截断代替
+	for i := range results {
+		if results[i].Snippet == "" {
+			results[i].Snippet = snippetFromContent(results[i].Content)
+		}
+	}
+
 	return results, nil
+}
+
+// snippetFromContent 生成简单的摘要片段（无高亮，仅截断首部内容）
+func snippetFromContent(content string) string {
+	runes := []rune(strings.TrimSpace(content))
+	if len(runes) <= 128 {
+		return string(runes)
+	}
+	return string(runes[:128]) + "..."
 }
 
 // GetContext retrieves relevant context for a query

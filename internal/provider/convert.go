@@ -561,7 +561,67 @@ func ConvertMessagesWithConfig(messages []types.Message, config *ConvertConfig) 
 	// Sanitize: remove incomplete tool_call sequences that would cause API errors
 	result = sanitizeToolCallSequence(result)
 
+	// Zhipu/GLM guard: enforce that at least one user message exists. GLM
+	// rejects messages arrays without any user role with 1214 ("messages 参数
+	// 非法") — specifically when messages[0] is system, the next non-system
+	// message must be user. After long truncate/compress cycles the stored
+	// history can degenerate to system + assistant/tool blocks with no user
+	// message anywhere (OpenAI tolerates this, so the validator lets it
+	// through). Inject a minimal synthetic user right after the system role
+	// to satisfy GLM's stricter check; the wording carries no model-facing
+	// instruction and is invisible to the UI.
+	result = EnsureUserMessage(result)
+
 	return result
+}
+
+// EnsureUserMessage guarantees the converted messages array contains at
+// least one user-role message. Zhipu/GLM rejects messages arrays with no
+// user role with error 1214 ("messages 参数非法"). The injection strategy:
+//
+//  1. If any user message is already present, return unchanged.
+//  2. Otherwise, insert a single synthetic user message immediately after
+//     the leading system message (so the head reads system → user → ...,
+//     which matches GLM's documented required shape).
+//  3. If no system message exists either, prepend the synthetic user at the
+//     front (rare — only happens when callers send raw assistant/tool
+//     arrays, but we still cover it for completeness).
+//
+// The synthetic content is a short Chinese continuation cue. We deliberately
+// do NOT use "[no content]" / "(empty)" / "..." style placeholders — those
+// were tried before and leaked into model output (GLM echoes its own visible
+// history). "请基于上文继续" is a neutral instruction that does not bias
+// the model towards any specific behaviour and is short enough to remain
+// well below the per-message token overhead.
+func EnsureUserMessage(messages []map[string]interface{}) []map[string]interface{} {
+	if len(messages) == 0 {
+		return messages
+	}
+	for _, m := range messages {
+		if r, _ := m["role"].(string); r == "user" {
+			return messages
+		}
+	}
+	synthetic := map[string]interface{}{
+		"role":    "user",
+		"content": "请基于上文继续",
+	}
+	out := make([]map[string]interface{}, 0, len(messages)+1)
+	inserted := false
+	for _, m := range messages {
+		out = append(out, m)
+		if !inserted {
+			if r, _ := m["role"].(string); r == "system" {
+				out = append(out, synthetic)
+				inserted = true
+			}
+		}
+	}
+	if !inserted {
+		// No system message at the head — prepend the synthetic user.
+		out = append([]map[string]interface{}{synthetic}, messages...)
+	}
+	return out
 }
 
 // normalizeToolArguments guarantees the arguments field is always a JSON
@@ -800,8 +860,12 @@ func decodeFileContent(dataURL string) string {
 			if err == nil {
 				content := string(decoded)
 				// Truncate if too large (30KB limit for text content)
+				// rune 安全截断：文件内容含中文时字节截断会产生乱码
 				if len(content) > 30000 {
-					content = content[:30000] + "\n... [file truncated]"
+					r := []rune(content)
+					if len(r) > 30000 {
+						content = string(r[:30000]) + "\n... [file truncated]"
+					}
 				}
 				return content
 			}

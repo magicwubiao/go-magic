@@ -115,6 +115,9 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	})
 	a.truncateHistory()
 
+	// P0-1: 新用户输入进入时召回动态记忆（turn 内稳定，出站时注入）
+	a.prepareDynamicMemory(input)
+
 	var lastErr error
 	for a.iterationCount = 0; a.iterationCount < a.maxTurns; a.iterationCount++ {
 		a.cortexManager.OnTurnStart()
@@ -138,7 +141,8 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
-			Messages: a.history,
+			// P0-1: 出站消息注入动态记忆（不改 a.history 本体）
+			Messages: a.withDynamicMemory(a.history),
 			Tools:    a.tools,
 		}
 

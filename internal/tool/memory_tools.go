@@ -283,6 +283,128 @@ func collectRelated(store *memory.Store, key string, limit int) []map[string]int
 	return related
 }
 
+// 共享的 FTS 会话历史库（进程级懒加载单例）。
+// search_history 工具用它检索 cortex 记录的完整对话历史
+// （<magicHome>/cortex/fts/memory.sqlite），与结构化记忆库分离。
+var (
+	sharedFTSStore     *memory.FTSStore
+	sharedFTSStoreOnce sync.Once
+)
+
+// GetSharedFTSStore 返回进程级共享的 FTS 会话历史库。
+// 初始化失败时返回 nil，调用方降级到结构化记忆 Store 的 Search。
+func GetSharedFTSStore() *memory.FTSStore {
+	sharedFTSStoreOnce.Do(func() {
+		f, err := memory.NewFTSStore(filepath.Join(config.GetMagicHome(), "cortex", "fts"))
+		if err != nil {
+			log.Printf("[memory] FTS history store init failed, search_history will degrade: %v", err)
+			return
+		}
+		sharedFTSStore = f
+	})
+	return sharedFTSStore
+}
+
+// SearchHistoryTool 检索历史对话记录（P0-2）：给 agent 一个「翻旧对话」的
+// 自助入口，弥补动态注入只覆盖当前相关记忆的盲区。
+type SearchHistoryTool struct{}
+
+func (t *SearchHistoryTool) Name() string {
+	return "search_history"
+}
+
+func (t *SearchHistoryTool) Description() string {
+	return "Search past conversation history and learned memories by keyword. Returns matching dialogue snippets with timestamps. Use when the user refers to something discussed before or you need to recall how a previous problem was solved."
+}
+
+func (t *SearchHistoryTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "Search keywords (natural language or keywords)",
+			},
+			"limit": map[string]interface{}{
+				"type":        "integer",
+				"description": "Max results to return (default 5, max 20)",
+			},
+		},
+		"required": []string{"query"},
+	}
+}
+
+func (t *SearchHistoryTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	query, ok := args["query"].(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("query argument is required")
+	}
+	limit := 5
+	if l, ok := args["limit"].(float64); ok && l >= 1 {
+		limit = int(l)
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	// 1) 主路径：FTS 会话历史库
+	if fts := GetSharedFTSStore(); fts != nil {
+		results, err := fts.Search(query, limit)
+		if err == nil && len(results) > 0 {
+			items := make([]map[string]interface{}, 0, len(results))
+			for _, r := range results {
+				items = append(items, map[string]interface{}{
+					"session_id": r.SessionID,
+					"turn":       r.TurnNumber,
+					"role":       r.Role,
+					"content":    truncateRunes(r.Content, 240),
+					"snippet":    r.Snippet,
+					"time":       r.CreatedAt.Format("2006-01-02 15:04"),
+					"importance": r.Importance,
+				})
+			}
+			return map[string]interface{}{
+				"found":  true,
+				"query":  query,
+				"source": "history_fts",
+				"items":  items,
+			}, nil
+		}
+		if err != nil {
+			log.Printf("[memory] FTS history search failed, degrading to memory store: %v", err)
+		}
+	}
+
+	// 2) 降级：结构化记忆 Store 的 Search（同样支持 FTS/LIKE 兜底）
+	if store := GetSharedMemoryStore(); store != nil {
+		results, err := store.Search(query, limit)
+		if err == nil && len(results) > 0 {
+			items := make([]map[string]interface{}, 0, len(results))
+			for _, m := range results {
+				items = append(items, map[string]interface{}{
+					"key":        m.Scope,
+					"type":       string(m.Type),
+					"content":    truncateRunes(m.Content, 240),
+					"time":       m.UpdatedAt.Format("2006-01-02 15:04"),
+					"importance": m.Importance,
+				})
+			}
+			return map[string]interface{}{
+				"found":  true,
+				"query":  query,
+				"source": "memory_store",
+				"items":  items,
+			}, nil
+		}
+	}
+
+	return map[string]interface{}{
+		"found": false,
+		"query": query,
+		"hint":  "No matching history found.",
+	}, nil
+}
+
 func containsString(list []string, target string) bool {
 	for _, s := range list {
 		if strings.EqualFold(s, target) {

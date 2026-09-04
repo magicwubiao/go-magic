@@ -222,7 +222,11 @@ func saveWeComBotCredentials(botID, secret string) error {
 func truncateForLog(b []byte) string {
 	s := string(b)
 	if len(s) > 300 {
-		return s[:300] + "..."
+		// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
+		r := []rune(s)
+		if len(r) > 300 {
+			return string(r[:300]) + "..."
+		}
 	}
 	return s
 }
