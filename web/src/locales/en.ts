@@ -179,6 +179,7 @@ export default {
     result: 'Result',
     newSession: 'New Session',
     newChat: 'New Chat',
+    refreshSessions: 'Refresh sessions',
     deleteSession: 'Delete Session',
     renameSession: 'Rename Session',
     rename: 'Rename',

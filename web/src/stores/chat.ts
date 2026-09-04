@@ -280,7 +280,10 @@ export const useChatStore = defineStore('chat', () => {
     sessionsOffset.value += SESSIONS_LIMIT
     try {
       const result = await sessionsApi.getSessions(SESSIONS_LIMIT, sessionsOffset.value)
-      const newSessions = result.sessions.filter(s => !s.source || s.source === 'web')
+      // 新建会话等操作会让后端按时间排序的位置漂移，数字 offset 可能取到
+      // 已加载的会话；按 id 去重兜底，避免列表出现重复条目
+      const known = new Set(sessions.value.map(s => s.id))
+      const newSessions = result.sessions.filter(s => (!s.source || s.source === 'web') && !known.has(s.id))
       if (newSessions.length > 0) {
         sessions.value = [...sessions.value, ...newSessions]
       }

@@ -7,8 +7,13 @@
         <div class="handle-bar"></div>
       </div>
       <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
-        <n-button type="primary" block @click="createSession" size="small">
+        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small">
           + {{ t('chat.newChat') }}
+        </n-button>
+        <n-button size="small" quaternary :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
         </n-button>
       </div>
       <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
@@ -567,7 +572,7 @@ import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, LockClosedOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -1276,7 +1281,27 @@ function stopGeneration() {
 
 async function createSession() {
   await chatStore.createSession()
-  await chatStore.loadSessions()
+  // store 已把新会话插入列表顶部，这里绝不能再调 loadSessions()：
+  // 它会用后端第 1 页（20 条）整表替换列表并重置分页 offset，连续新建
+  // 后侧栏永远只有 20 条，滚动加载也因此无从触发（表现为"超出隐藏、
+  // 动一下窗口/刷新滚轴才出现"）。整表刷新交给手动刷新按钮。
+  sessionListRef.value?.scrollTo({ top: 0 })
+}
+
+const sidebarRefreshing = ref(false)
+async function refreshSessions() {
+  if (sidebarRefreshing.value) return
+  sidebarRefreshing.value = true
+  try {
+    await chatStore.loadSessions()
+    if (searchCache.value) {
+      // 候选缓存已建立：作废后重建，保证刷新后搜索结果同样是最新的
+      searchCache.value = null
+      await loadFullSessions()
+    }
+  } finally {
+    sidebarRefreshing.value = false
+  }
 }
 
 async function deleteSession(id: string) {
@@ -1471,6 +1496,13 @@ onMounted(async () => {
   border-bottom: 1px solid #e0e0e0;
   height: 49px;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-chat-btn {
+  flex: 1;
 }
 
 /* 会话搜索框 */

@@ -179,6 +179,7 @@ export default {
     result: '结果',
     newSession: '新建会话',
     newChat: '新建聊天',
+    refreshSessions: '刷新会话列表',
     deleteSession: '删除会话',
     renameSession: '重命名会话',
     rename: '重命名',
