@@ -282,6 +282,33 @@ func (s *Store) RenameSession(ctx context.Context, id, name string) error {
 	return nil
 }
 
+// ListWorkDirs returns distinct non-empty user-set working directories,
+// ordered by the most recent session update time (newest first).
+// Used by the directory picker to recommend previously used directories.
+func (s *Store) ListWorkDirs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT workdir
+		FROM sessions
+		WHERE workdir != '' AND workdir_user_set = 1
+		GROUP BY workdir
+		ORDER BY MAX(updated_at) DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dirs []string
+	for rows.Next() {
+		var dir string
+		if err := rows.Scan(&dir); err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, rows.Err()
+}
+
 // UpdateWorkDir updates the working directory of a session.
 // If userSet is true, marks the workdir as user-set (immutable thereafter from the API).
 func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string, userSet bool) error {

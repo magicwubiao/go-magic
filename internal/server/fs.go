@@ -274,6 +274,51 @@ func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleWorkDirHistory returns previously used working directories for the
+// directory picker to recommend: the global config working_dir first, then
+// distinct user-set session work dirs ordered by recency. Directories that no
+// longer exist are filtered out; the list is deduplicated (case-insensitive on
+// Windows) and capped at 20 entries.
+func (s *Server) handleWorkDirHistory(w http.ResponseWriter, r *http.Request) {
+	seen := make(map[string]bool)
+	var dirs []string
+	addDir := func(dir string) {
+		if dir == "" {
+			return
+		}
+		cleaned := filepath.Clean(dir)
+		key := cleaned
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(cleaned)
+		}
+		if seen[key] {
+			return
+		}
+		if info, err := os.Stat(cleaned); err != nil || !info.IsDir() {
+			return
+		}
+		seen[key] = true
+		dirs = append(dirs, cleaned)
+	}
+
+	addDir(s.cfg.WorkingDir)
+	if s.sessionStore != nil {
+		if list, err := s.sessionStore.ListWorkDirs(r.Context()); err == nil {
+			for _, d := range list {
+				addDir(d)
+			}
+		}
+	}
+	if len(dirs) > 20 {
+		dirs = dirs[:20]
+	}
+	if dirs == nil {
+		dirs = []string{}
+	}
+
+	jsonResponse(w, map[string]interface{}{"dirs": dirs})
+}
+
 func (s *Server) handleFSShared(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.URL.Path, "/api/fs/shared/")
 	token = strings.TrimSuffix(token, "/")

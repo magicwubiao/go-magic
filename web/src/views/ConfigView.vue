@@ -217,6 +217,20 @@
     <!-- Directory picker modal -->
     <n-modal v-model:show="showDirPicker" preset="card" class="modal-responsive" :title="t('chat.workDirSelect')" style="width: 560px; max-width: 96vw;">
       <div class="dir-picker">
+        <!-- Recommended: previously used directories -->
+        <div v-if="recommendedDirs.length" class="dir-recommended">
+          <div class="dir-recommended-title">{{ t('chat.workDirRecommended') }}</div>
+          <div
+            v-for="d in recommendedDirs"
+            :key="d"
+            class="dir-recommended-item"
+            :title="d"
+            @click="applyRecommendedDir(d)"
+          >
+            <n-icon size="16"><FolderOpenOutline /></n-icon>
+            <span class="dir-recommended-path">{{ d }}</span>
+          </div>
+        </div>
         <div class="dir-breadcrumb">
           <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
             <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
@@ -277,7 +291,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 import { FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
-import { listDirs, createDir } from '@/api/sessions'
+import { listDirs, createDir, listWorkDirHistory } from '@/api/sessions'
 
 const { t } = useI18n()
 
@@ -605,7 +619,38 @@ async function loadDirs(path?: string) {
 
 function openDirPicker() {
   loadDirs(generalForm.working_dir || undefined)
+  loadWorkDirHistory()
   showDirPicker.value = true
+}
+
+// 统一路径分隔符并忽略 Windows 盘符大小写，用于排除当前已填写的工作目录
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+const workDirHistory = ref<string[]>([])
+
+// 已使用过的目录作为推荐项；排除当前表单中已填写的工作目录
+const recommendedDirs = computed(() => {
+  const current = normalizeDirPath(generalForm.working_dir || '')
+  return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
+})
+
+async function loadWorkDirHistory() {
+  try {
+    workDirHistory.value = await listWorkDirHistory()
+  } catch (e) {
+    console.error('Failed to load work dir history:', e)
+    workDirHistory.value = []
+  }
+}
+
+// 点击推荐目录直接填入全局工作目录并关闭弹窗
+function applyRecommendedDir(path: string) {
+  generalForm.working_dir = path
+  showDirPicker.value = false
 }
 
 function navigateDir(path: string) {
@@ -697,6 +742,39 @@ onMounted(async () => {
   max-height: 320px;
   overflow-y: auto;
   min-height: 120px;
+}
+
+.dir-recommended {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 4px;
+}
+
+.dir-recommended-title {
+  font-size: 12px;
+  color: #999;
+  padding: 4px 8px 6px;
+}
+
+.dir-recommended-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.dir-recommended-item:hover {
+  background: var(--n-color-hover, #f5f5f5);
+}
+
+.dir-recommended-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dir-item {

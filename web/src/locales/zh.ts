@@ -232,6 +232,7 @@ export default {
     uploadFail: '上传失败',
     workDir: '工作目录',
     workDirSelect: '选择工作目录',
+    workDirRecommended: '推荐目录（最近使用）',
     workDirCurrent: '当前工作目录',
     workDirNone: '未设置（使用默认目录）',
     workDirSet: '设置工作目录',

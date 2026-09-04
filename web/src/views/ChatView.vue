@@ -480,6 +480,21 @@
 
     <!-- Work Directory Picker Modal -->
     <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
+      <!-- Recommended: previously used directories -->
+      <div v-if="recommendedDirs.length" class="dir-picker-recommended">
+        <div class="dir-picker-recommended-title">{{ t('chat.workDirRecommended') }}</div>
+        <div
+          v-for="d in recommendedDirs"
+          :key="d"
+          class="dir-picker-recommended-item"
+          :title="d"
+          @click="applyRecommendedDir(d)"
+        >
+          <n-icon size="16"><FolderOpenOutline /></n-icon>
+          <span class="dir-picker-recommended-path">{{ d }}</span>
+        </div>
+      </div>
+
       <!-- Breadcrumb -->
       <div class="dir-picker-breadcrumb">
         <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
@@ -809,6 +824,20 @@ const dirEntries = ref<sessionsApi.DirEntry[]>([])
 const dirLoading = ref(false)
 const showNewFolderInput = ref(false)
 const newFolderName = ref('')
+const workDirHistory = ref<string[]>([])
+
+// 统一路径分隔符并忽略 Windows 盘符大小写，用于排除当前会话已设置的工作目录
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// 已使用过的目录作为推荐项；排除当前会话已设置的工作目录
+const recommendedDirs = computed(() => {
+  const current = normalizeDirPath(chatStore.currentWorkDir || '')
+  return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
+})
 const newFolderInputRef = ref<{ focus: () => void } | null>(null)
 
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
@@ -1144,6 +1173,27 @@ function goToFilesPage() {
 }
 
 // Work directory functions
+async function loadWorkDirHistory() {
+  try {
+    workDirHistory.value = await sessionsApi.listWorkDirHistory()
+  } catch (e) {
+    console.error('Failed to load work dir history:', e)
+    workDirHistory.value = []
+  }
+}
+
+// 点击推荐目录直接应用为当前会话的工作目录
+async function applyRecommendedDir(path: string) {
+  if (!chatStore.activeSessionId) return
+  try {
+    await chatStore.updateSessionWorkDir(chatStore.activeSessionId, path)
+    showDirPicker.value = false
+    message.success(t('chat.workDir') + ': ' + path)
+  } catch (e: any) {
+    message.error(e?.message || t('chat.workDirLocked'))
+  }
+}
+
 async function loadDirs(path?: string) {
   dirLoading.value = true
   try {
@@ -1201,6 +1251,7 @@ async function handleWorkDirMenu(key: string) {
     // 已锁定的会话不再允许重新选择目录
     if (chatStore.currentWorkDirUserSet) return
     showDirPicker.value = true
+    loadWorkDirHistory()
     await loadDirs(chatStore.currentWorkDir || undefined)
   } else if (key === 'set') {
     if (!chatStore.activeSessionId || !dirCurrentPath.value) return
@@ -2483,6 +2534,40 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-left: 4px;
+}
+
+.dir-picker-recommended {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 4px;
+}
+
+.dir-picker-recommended-title {
+  font-size: 12px;
+  color: #999;
+  padding: 4px 12px 6px;
+}
+
+.dir-picker-recommended-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.dir-picker-recommended-item:hover {
+  background: #f0f0f0;
+}
+
+.dir-picker-recommended-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dir-picker-breadcrumb {

@@ -232,6 +232,7 @@ export default {
     uploadFail: 'Upload failed',
     workDir: 'Working Directory',
     workDirSelect: 'Select Working Directory',
+    workDirRecommended: 'Recommended (recently used)',
     workDirCurrent: 'Current working directory',
     workDirNone: 'Not set (using default directory)',
     workDirSet: 'Set work directory',

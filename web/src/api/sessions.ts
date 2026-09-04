@@ -108,6 +108,13 @@ export async function listDirs(path?: string): Promise<{ current: string; dirs: 
   return request(`/fs/dirs${query}`)
 }
 
+// Previously used working directories (global config + user-set session dirs),
+// most recently used first; used to recommend directories in the dir picker.
+export async function listWorkDirHistory(): Promise<string[]> {
+  const res = await request<{ dirs?: string[] }>('/fs/workdir-history')
+  return res?.dirs || []
+}
+
 export interface FSEntry {
   path: string
   name: string
