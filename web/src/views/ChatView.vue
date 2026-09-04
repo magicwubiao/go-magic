@@ -7,8 +7,10 @@
         <div class="handle-bar"></div>
       </div>
       <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
-        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small">
-          + {{ t('chat.newChat') }}
+        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small" :title="t('chat.newChat')">
+          <template #icon>
+            <n-icon><AddOutline /></n-icon>
+          </template>
         </n-button>
         <n-button size="small" quaternary :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
           <template #icon>
