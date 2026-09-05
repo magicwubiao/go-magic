@@ -172,7 +172,8 @@
 
                 <!-- Quick progress buttons -->
                 <n-space :size="4" style="margin-top: 8px;" align="center">
-                  <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 25)">+25%</n-button>
+                  <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 25)">25%</n-button>
+                  <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 50)">50%</n-button>
                   <n-button v-if="goal.status === 'active'" size="tiny" @click.stop="quickUpdate(goal, 75)">75%</n-button>
                   <n-button v-if="goal.status === 'active'" size="tiny" type="success" @click.stop="completeGoal(goal)">
                     {{ t('goals.complete') }}

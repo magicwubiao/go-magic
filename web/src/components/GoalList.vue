@@ -18,7 +18,7 @@
             <!-- Quick progress buttons -->
             <template v-if="goal.status === 'active'">
               <n-button-group size="tiny">
-                <n-button @click="quickUpdate(goal, 25)">+25%</n-button>
+                <n-button @click="quickUpdate(goal, 25)">25%</n-button>
                 <n-button @click="quickUpdate(goal, 50)">50%</n-button>
                 <n-button @click="quickUpdate(goal, 75)">75%</n-button>
                 <n-button type="warning" @click="$emit('abandon', goal)">
