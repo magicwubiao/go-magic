@@ -172,8 +172,14 @@ func (t *EmailTool) Execute(ctx context.Context, params map[string]interface{}) 
 				}
 				if path, ok := attMap["path"].(string); ok {
 					attachment.Path = path
+					// 安全修复（P0）：附件路径必须经过工作目录安全解析
+					// （工作目录限制 + 符号链接检查），防止读取任意系统文件作为附件外发
+					safePath, err := resolvePath(ctx, path)
+					if err != nil {
+						return nil, fmt.Errorf("attachment path rejected: %w", err)
+					}
 					// 读取文件
-					data, err := os.ReadFile(path)
+					data, err := os.ReadFile(safePath)
 					if err != nil {
 						return nil, fmt.Errorf("failed to read attachment %s: %w", path, err)
 					}

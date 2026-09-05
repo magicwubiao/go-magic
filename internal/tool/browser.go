@@ -3,12 +3,16 @@ package tool
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/magicwubiao/go-magic/internal/util"
 )
+
+// maxWebFetchBytes 限制单次网页抓取的响应体大小（10MB），防止超大响应耗尽内存
+const maxWebFetchBytes = 10 << 20
 
 // WebFetchTool fetches and parses web pages using goquery
 type WebFetchTool struct{}
@@ -84,6 +88,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	if strings.HasPrefix(url, "file://") {
 		return nil, fmt.Errorf("cannot read local files (file:// URL) via HTTP; use the read_file tool instead")
 	}
+	// SSRF 防护：拒绝非 http/https 协议与内网地址（与 web_tools.validateURL 对齐）
+	if err := validateURL(url); err != nil {
+		return nil, err
+	}
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -105,7 +113,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Parse HTML
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, maxWebFetchBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
@@ -285,6 +293,10 @@ func (t *WebSelectTool) Execute(ctx context.Context, args map[string]interface{}
 	if strings.HasPrefix(url, "file://") {
 		return nil, fmt.Errorf("cannot read local files (file:// URL) via HTTP; use the read_file tool instead")
 	}
+	// SSRF 防护：拒绝非 http/https 协议与内网地址（与 web_tools.validateURL 对齐）
+	if err := validateURL(url); err != nil {
+		return nil, err
+	}
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -306,7 +318,7 @@ func (t *WebSelectTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	// Parse HTML
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, maxWebFetchBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}

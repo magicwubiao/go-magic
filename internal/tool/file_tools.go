@@ -341,8 +341,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	// WITHOUT any truncation signal, so the model believes it saw the whole
 	// file. Cap the window here, flag it, and tell the model how to continue.
 	const maxNoLimitChars = 48000
-	if limit <= 0 && len(readContent) > maxNoLimitChars {
-		cut := readContent[:maxNoLimitChars]
+	if limit <= 0 && len([]rune(readContent)) > maxNoLimitChars {
+		// rune 边界安全截断，避免切断多字节字符产生乱码
+		runes := []rune(readContent)
+		cut := string(runes[:maxNoLimitChars])
 		if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
 			cut = cut[:idx]
 		}

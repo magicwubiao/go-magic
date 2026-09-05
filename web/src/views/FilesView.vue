@@ -85,7 +85,7 @@
             style="width: 100%; font-family: monospace; font-size: 13px;"
           />
         </div>
-        <pre v-else-if="previewContent" class="file-preview-content">{{ previewContent }}</pre>
+        <pre v-else-if="previewContent" class="file-preview-content"><code class="preview-code" v-html="previewHtml"></code></pre>
         <n-empty v-else :description="t('files.noPreview')" />
       </n-scrollbar>
       <template #footer>
@@ -143,6 +143,34 @@ import {
 } from '@vicons/ionicons5'
 import * as sessionsApi from '@/api/sessions'
 import type { DataTableColumns, PaginationProps, UploadCustomRequestOptions } from 'naive-ui'
+
+// ===== Syntax highlighting for file preview (highlight.js, light palette) =====
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import go from 'highlight.js/lib/languages/go'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import markdown from 'highlight.js/lib/languages/markdown'
+import yaml from 'highlight.js/lib/languages/yaml'
+import sql from 'highlight.js/lib/languages/sql'
+import ini from 'highlight.js/lib/languages/ini'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('ini', ini)
 
 const { t } = useI18n()
 const message = useMessage()
@@ -375,6 +403,43 @@ const previewDownloadUrl = ref('')
 const isEditing = ref(false)
 const editContent = ref('')
 
+// 扩展名 → highlight.js 语言映射
+const extLanguageMap: Record<string, string> = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+  py: 'python', go: 'go',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  json: 'json', xml: 'xml', svg: 'xml', html: 'xml', htm: 'xml', vue: 'xml',
+  css: 'css', scss: 'css', less: 'css',
+  md: 'markdown', markdown: 'markdown',
+  yml: 'yaml', yaml: 'yaml',
+  sql: 'sql',
+  ini: 'ini', conf: 'ini', cfg: 'ini', toml: 'ini', properties: 'ini', env: 'ini',
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// 预览高亮 HTML：按扩展名选语言，未识别时自动探测；
+// 超长文件跳过高亮（避免卡顿），异常时回退纯转义文本。
+const previewHtml = computed(() => {
+  const content = previewContent.value
+  if (!content) return ''
+  if (content.length > 500000) return escapeHtml(content)
+  const name = previewPath.value || previewTitle.value
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  const lang = extLanguageMap[ext]
+  try {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value
+    }
+    return hljs.highlightAuto(content).value
+  } catch {
+    return escapeHtml(content)
+  }
+})
+
 function isImageFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || ''
   return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
@@ -501,6 +566,78 @@ onUnmounted(() => {
   word-break: break-all;
   max-height: 70vh;
   overflow: auto;
+}
+
+/* 预览高亮：GitHub Light 配色（全局已加载 github-dark.css，这里是浅色底，
+   必须用 :deep 覆盖 token 颜色，避免深色主题文字在浅色背景上不可读） */
+.file-preview-content .preview-code {
+  font: inherit;
+  white-space: inherit;
+}
+.file-preview-content :deep(.hljs-keyword),
+.file-preview-content :deep(.hljs-selector-tag),
+.file-preview-content :deep(.hljs-doctag) {
+  color: #d73a49;
+}
+.file-preview-content :deep(.hljs-string),
+.file-preview-content :deep(.hljs-regexp) {
+  color: #032f62;
+}
+.file-preview-content :deep(.hljs-comment),
+.file-preview-content :deep(.hljs-quote) {
+  color: #6a737d;
+  font-style: italic;
+}
+.file-preview-content :deep(.hljs-number),
+.file-preview-content :deep(.hljs-literal),
+.file-preview-content :deep(.hljs-symbol),
+.file-preview-content :deep(.hljs-bullet) {
+  color: #005cc5;
+}
+.file-preview-content :deep(.hljs-title),
+.file-preview-content :deep(.hljs-title.function_),
+.file-preview-content :deep(.hljs-title.class_),
+.file-preview-content :deep(.hljs-function) {
+  color: #6f42c1;
+}
+.file-preview-content :deep(.hljs-attr),
+.file-preview-content :deep(.hljs-attribute),
+.file-preview-content :deep(.hljs-variable),
+.file-preview-content :deep(.hljs-template-variable),
+.file-preview-content :deep(.hljs-name) {
+  color: #22863a;
+}
+.file-preview-content :deep(.hljs-built_in),
+.file-preview-content :deep(.hljs-type),
+.file-preview-content :deep(.hljs-class),
+.file-preview-content :deep(.hljs-params) {
+  color: #e36209;
+}
+.file-preview-content :deep(.hljs-meta),
+.file-preview-content :deep(.hljs-link),
+.file-preview-content :deep(.hljs-selector-attr),
+.file-preview-content :deep(.hljs-selector-pseudo),
+.file-preview-content :deep(.hljs-selector-id),
+.file-preview-content :deep(.hljs-selector-class) {
+  color: #005cc5;
+}
+.file-preview-content :deep(.hljs-section) {
+  color: #005cc5;
+  font-weight: 600;
+}
+.file-preview-content :deep(.hljs-emphasis) {
+  font-style: italic;
+}
+.file-preview-content :deep(.hljs-strong) {
+  font-weight: 600;
+}
+.file-preview-content :deep(.hljs-addition) {
+  color: #22863a;
+  background: #f0fff4;
+}
+.file-preview-content :deep(.hljs-deletion) {
+  color: #b31d28;
+  background: #ffeef0;
 }
 
 .image-preview-wrapper {
