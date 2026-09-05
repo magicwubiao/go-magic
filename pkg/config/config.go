@@ -158,8 +158,54 @@ type CortexConfig struct {
 
 // ServerConfig represents server-related configuration
 type ServerConfig struct {
-	UploadURLPrefix string `json:"upload_url_prefix,omitempty"` // Public URL prefix for uploaded files (e.g., "https://your-domain.com/uploads")
-	FileStrategy    string `json:"file_strategy,omitempty"`     // "auto" (default), "url", "base64"
+	UploadURLPrefix   string   `json:"upload_url_prefix,omitempty"`      // Public URL prefix for uploaded files (e.g., "https://your-domain.com/uploads")
+	FileStrategy      string   `json:"file_strategy,omitempty"`          // "auto" (default), "url", "base64"
+	UploadMaxBytes    int64    `json:"upload_max_bytes,omitempty"`       // 单文件最大字节数；0 表示 100 MiB
+	UploadBlockedExts []string `json:"upload_blocked_exts,omitempty"`    // 黑名单扩展名（含点），默认包含可执行类型
+	UploadStreamMax   bool     `json:"upload_stream_max,omitempty"`      // （保留位）true 时不再接受 base64 走 stream
+	UploadOrphanTTL   int      `json:"upload_orphan_ttl_days,omitempty"` // 孤儿文件清理阈值（天），0 默认 30
+}
+
+// GetUploadMaxBytes returns the upload size limit (default 100 MiB when unset).
+func (s *ServerConfig) GetUploadMaxBytes() int64 {
+	if s.UploadMaxBytes <= 0 {
+		return 100 << 20
+	}
+	return s.UploadMaxBytes
+}
+
+// GetUploadBlockedExts returns the executable extension blacklist (lowercase, with leading dot).
+func (s *ServerConfig) GetUploadBlockedExts() map[string]struct{} {
+	defaults := []string{
+		".exe", ".bat", ".cmd", ".com", ".msi", ".scr", ".pif",
+		".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1",
+		".sh", ".bash", ".zsh", ".csh", ".ksh", ".fish",
+		".jar", ".py", ".pl", ".rb", ".php", ".asp", ".aspx",
+		".dll", ".so", ".dylib", ".app", ".dmg", ".iso", ".elf",
+	}
+	merged := make([]string, 0, len(defaults)+len(s.UploadBlockedExts))
+	merged = append(merged, defaults...)
+	merged = append(merged, s.UploadBlockedExts...)
+	out := make(map[string]struct{}, len(merged))
+	for _, ext := range merged {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		out[ext] = struct{}{}
+	}
+	return out
+}
+
+// GetUploadOrphanTTL returns how long an orphan upload lives (default 30 days).
+func (s *ServerConfig) GetUploadOrphanTTL() time.Duration {
+	if s.UploadOrphanTTL <= 0 {
+		return 30 * 24 * time.Hour
+	}
+	return time.Duration(s.UploadOrphanTTL) * 24 * time.Hour
 }
 
 // GetFileStrategy returns the file strategy, defaulting to "auto"

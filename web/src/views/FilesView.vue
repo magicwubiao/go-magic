@@ -129,7 +129,6 @@ import {
   TrashOutline,
   DownloadOutline,
   EyeOutline,
-  CopyOutline,
   RefreshOutline,
   FolderOpenOutline,
   SaveOutline,
@@ -301,14 +300,6 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
           h(NButton, {
             size: 'tiny',
             quaternary: true,
-            title: t('files.copyUrl'),
-            onClick: () => copyUrl(row),
-          }, {
-            icon: () => h(NIcon, null, { default: () => h(CopyOutline) }),
-          }),
-          h(NButton, {
-            size: 'tiny',
-            quaternary: true,
             title: t('files.download'),
             onClick: () => downloadUploadFile(row),
           }, {
@@ -382,14 +373,6 @@ async function handleDelete(filename: string) {
 
 function downloadUploadFile(file: sessionsApi.FileItem) {
   downloadWithAuth(file.url, file.filename)
-}
-
-function copyUrl(file: sessionsApi.FileItem) {
-  navigator.clipboard.writeText(file.url).then(() => {
-    message.success(t('common.copied') || 'Copied!')
-  }).catch(() => {
-    message.error(t('common.copyFailed') || 'Copy failed')
-  })
 }
 
 // ===== Preview/Editor =====

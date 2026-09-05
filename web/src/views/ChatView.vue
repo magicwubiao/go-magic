@@ -336,7 +336,7 @@
           <div v-for="(file, idx) in selectedFiles" :key="'file-'+idx" class="preview-item file-preview">
             <n-icon size="24"><DocumentOutline /></n-icon>
             <span class="file-name">{{ file.name }}</span>
-            <n-tag v-if="file.size" size="tiny" type="info">{{ (file.size / 1024).toFixed(1) }} KB</n-tag>
+            <n-tag v-if="file.size" size="tiny" type="info">{{ formatFileSize(file.size) }}</n-tag>
             <n-button class="preview-remove" size="tiny" circle type="error" @click="removeFile(idx)">
               <template #icon><n-icon size="12"><CloseCircleOutline /></n-icon></template>
             </n-button>
@@ -377,7 +377,7 @@
                 :multiple="true"
                 :custom-request="handleFileSelect"
               >
-                <n-button size="tiny" quaternary class="toolbar-btn" :title="t('chat.uploadFile')">
+                <n-button size="tiny" quaternary class="toolbar-btn" :title="t('chat.uploadHint')">
                   <template #icon>
                     <n-icon><AttachOutline /></n-icon>
                   </template>
@@ -823,6 +823,14 @@ const editingName = ref('')
 const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
 const uploadingFiles = ref<Set<string>>(new Set())
 
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
 // Work directory
 const showDirPicker = ref(false)
 const dirCurrentPath = ref('')
@@ -1124,33 +1132,79 @@ function toDate(ts: string | number): Date {
 }
 
 // File handling - upload to server
-function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
+async function sha1OfFile(file: File): Promise<string> {
+  // SubtleCrypto gives us a real content hash for dedup without shipping the
+  // entire file off the device first. The old name+size key was trivially
+  // bypassed by changing one byte; sha1 catches real duplicates.
+  try {
+    if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+      const buf = await crypto.subtle.digest('SHA-1', await file.arrayBuffer())
+      const bytes = new Uint8Array(buf)
+      let hex = ''
+      for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0')
+      }
+      return hex
+    }
+  } catch (_e) {
+    // fall through to name-based key
+  }
+  return ''
+}
+
+async function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
   const nativeFile = file.file
   if (!nativeFile) {
     onError()
     return
   }
 
-  const fileKey = nativeFile.name + '-' + nativeFile.size
+  // Two-tier dedup key: sha1 (when supported) plus name+size as a fallback so
+  // very old browsers still get some protection.
+  const hash = await sha1OfFile(nativeFile)
+  const fileKey = (hash || `${nativeFile.name}-${nativeFile.size}-${nativeFile.lastModified}`)
   if (uploadingFiles.value.has(fileKey)) {
     onError()
     return
   }
   uploadingFiles.value.add(fileKey)
 
-  sessionsApi.uploadFile(nativeFile)
+  sessionsApi.uploadFile(nativeFile, chatStore.activeSessionId ?? undefined)
     .then((uploaded) => {
       selectedFiles.value.push(uploaded)
       onFinish()
     })
     .catch((e) => {
       console.error('Upload failed:', e)
-      message.error(`${t('chat.fileUploadFailed')} ${(e as Error).message}`)
+      message.error(describeUploadError(e as Error & { code?: string }, nativeFile))
       onError()
     })
     .finally(() => {
       uploadingFiles.value.delete(fileKey)
     })
+}
+
+// Translate backend upload errors into localized, human-readable messages.
+// The backend tags rejects with an X-Error-Code header; fall back to the raw
+// detail only for unknown failures.
+function describeUploadError(e: Error & { code?: string }, f: File): string {
+  switch (e.code) {
+    case 'upload_type_not_allowed': {
+      const ext = /\.[a-z0-9]+$/i.exec(f.name)?.[0] ?? f.name
+      return t('chat.uploadUnsupportedType', { ext })
+    }
+    case 'upload_too_large': {
+      // Backend detail is "<...> size of <N> bytes" — reuse it so the limit
+      // always matches the server config.
+      const m = /size of (\d+) bytes/.exec(e.message)
+      const size = m ? formatFileSize(parseInt(m[1], 10)) : '100 MB'
+      return t('chat.uploadTooLarge', { size })
+    }
+    case 'upload_content_mismatch':
+      return t('chat.uploadContentMismatch')
+    default:
+      return `${t('chat.fileUploadFailed')} ${e.message}`
+  }
 }
 
 function removeFile(index: number) {
@@ -1290,21 +1344,53 @@ async function send() {
     return
   }
 
-  // Build content with file URL references for AI processing
+  // Build content with file URL references for AI processing.
+  // Image/* attachments are routed to the multimodal `images` channel so the
+  // model actually sees the picture; everything else falls through to the
+  // generic file channel (the backend packages it as a text attachment).
   let finalContent = content
-  const files = [...selectedFiles.value]
+  const allFiles = [...selectedFiles.value]
+  const imageDataUrls: string[] = []
+  const nonImageFiles: sessionsApi.UploadedFile[] = []
 
-  // Append file URL references to message for AI
-  // Note: file.url already contains token from uploadFile()
-  for (const file of files) {
-    if (finalContent) finalContent += '\n\n'
-    finalContent += `[${t('chat.attachmentName')}: ${file.name}](${file.url})`
+  for (const file of allFiles) {
+    const mime = (file as any).mime as string | undefined
+    const looksLikeImage =
+      (mime && mime.startsWith('image/')) ||
+      /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(file.name)
+    if (looksLikeImage) {
+      // For the multimodal channel we need an inline data URL. The backend
+      // already has the bytes — re-derive via a blob fetch (cheap) rather
+      // than re-reading the original File.
+      try {
+        const resp = await fetch(file.url)
+        if (resp.ok) {
+          const blob = await resp.blob()
+          const reader = new FileReader()
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = reject
+            reader.readAsDataURL(blob)
+          })
+          imageDataUrls.push(dataUrl)
+          continue
+        }
+      } catch (_e) {
+        // fall through to non-image handling
+      }
+    }
+    // No [attachment](url) markdown appended: the HTTP URL is meaningless to
+    // the model (its tools are sandboxed to the workdir) and the file itself
+    // travels via the `files` field of the stream request body.
+    nonImageFiles.push(file)
   }
 
+  // Drop references to uploaded files so the GC can reclaim the base64
+  // data and uploaded URL closures as soon as the store has its own copy.
   inputValue.value = ''
   selectedFiles.value = []
   commandSuggestions.value = []
-  await chatStore.sendMessage(finalContent, undefined, files)
+  await chatStore.sendMessage(finalContent, imageDataUrls.length ? imageDataUrls : undefined, nonImageFiles.length ? nonImageFiles : undefined)
 }
 
 function stopGeneration() {

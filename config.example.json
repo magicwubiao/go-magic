@@ -65,6 +65,12 @@
     "max_iterations": 200,
     "max_token_budget": 0
   },
+  "server": {
+    "upload_max_bytes": 104857600,
+    "upload_blocked_exts": [],
+    "upload_orphan_ttl_days": 30,
+    "file_strategy": "auto"
+  },
   "privacy": {
     "enabled": true,
     "redact_phone": true,

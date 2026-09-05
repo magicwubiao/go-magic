@@ -129,7 +129,7 @@ export const useChatStore = defineStore('chat', () => {
   })
   
   const sessionStates = ref<Record<string, SessionState>>({})
-  const sessionEventSources = ref<Record<string, EventSource | null>>({})
+  const sessionEventSources = ref<Record<string, sessionsApi.ChatStream | null>>({})
   const sessionFlushTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
   
   let toolCallIdCounter = 0

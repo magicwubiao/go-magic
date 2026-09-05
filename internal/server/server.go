@@ -1293,15 +1293,29 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/commands", withCORS(requireAuth(s.handleCommands)))
 	mux.HandleFunc("/api/commands/execute", withCORS(requireAuth(s.handleCommandExecute)))
 
-	// File upload
+	// File upload — handlers live in uploads.go and now support per-session
+	// bucketing, size limits, extension blacklist, and filename sanitization.
 	mux.HandleFunc("/api/upload", withCORS(requireAuth(s.handleFileUpload)))
 	mux.HandleFunc("/api/files", withCORS(requireAuth(s.handleFileList)))
 	mux.HandleFunc("/api/files/", withCORS(requireAuth(s.handleFileDelete)))
 
-	// Serve uploaded files (auth required)
-	uploadsDir := filepath.Join(s.magicHome, "uploads")
-	os.MkdirAll(uploadsDir, 0755)
-	mux.Handle("/api/uploads/", withCORS(requireAuth(http.StripPrefix("/api/uploads/", http.FileServer(http.Dir(uploadsDir))).ServeHTTP)))
+	// Serve uploaded files (auth required). The handler is per-session aware
+	// and refuses directory listings.
+	uploadsDir := s.uploadsRoot()
+	os.MkdirAll(uploadsDir, 0o700)
+	mux.Handle("/api/uploads/", withCORS(requireAuth(s.uploadsServeHandler().ServeHTTP)))
+
+	// Register this server with the uploads GC so orphan per-session folders
+	// get cleaned up periodically.
+	registerUploadsServer(s.magicHome, func(id string) (any, error) {
+		if s.sessionStore == nil {
+			return nil, fmt.Errorf("no session store")
+		}
+		return s.sessionStore.LoadSession(context.Background(), id)
+	}, func(format string, args ...interface{}) {
+		log.Infof(format, args...)
+	})
+	startUploadsGC()
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)

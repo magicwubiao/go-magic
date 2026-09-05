@@ -310,18 +310,18 @@ export async function sendMessage(sessionId: string, content: string): Promise<v
   })
 }
 
-export async function uploadFile(file: File): Promise<UploadedFile> {
+export async function uploadFile(file: File, sessionId?: string): Promise<UploadedFile> {
   const formData = new FormData()
   formData.append('file', file)
+  if (sessionId) {
+    formData.append('session_id', sessionId)
+  }
 
   const token = getAuthToken()
   const headers: Record<string, string> = {}
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
-
-  // Read file as base64 for reliable message sending
-  const base64Data = await fileToBase64(file)
 
   const response = await fetch('/api/upload', {
     method: 'POST',
@@ -330,27 +330,24 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   })
 
   if (!response.ok) {
-    throw new Error(`Upload failed: ${response.statusText}`)
+    // Surface the machine-readable code (X-Error-Code) plus the raw detail so
+    // callers can translate the error via i18n instead of showing the raw
+    // English backend message.
+    const detail = (await response.text().catch(() => '')) || response.statusText
+    const err = new Error(detail.trim()) as Error & { code?: string; status?: number }
+    err.code = response.headers.get('X-Error-Code') || ''
+    err.status = response.status
+    throw err
   }
 
   const result: UploadedFile = await response.json()
   result.url = addTokenToUrl(result.url)
-  // Store base64 data for message sending
-  result.data = base64Data
+  // Server already persisted the file; we no longer need base64 on the wire
+  // because the SSE endpoint now reads files from disk by filename. Leaving
+  // the data field in the type for backward compatibility but clearing it
+  // so we don't carry megabytes of base64 through the app state.
+  result.data = ''
   return result
-}
-
-// Convert File to base64 data URL
-async function fileToBase64(file: File): Promise<string> {
-  if (!(file instanceof Blob)) {
-    return ''
-  }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
 }
 
 export interface FileItem {
@@ -381,30 +378,168 @@ export async function deleteFile(filename: string): Promise<void> {
   return request(`/files/${filename}`, { method: 'DELETE' })
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[]): EventSource {
-  const token = getAuthToken()
-  let url = `/api/sessions/${sessionId}/stream?content=${encodeURIComponent(content)}`
-  if (images && images.length) {
-    url += `&images=${encodeURIComponent(JSON.stringify(images))}`
+export interface ChatStreamEvent {
+  data: string
+}
+
+/**
+ * ChatStream is a thin EventSource-compatible shim over fetch + ReadableStream.
+ *
+ * The original implementation used EventSource (GET + token in URL + base64
+ * file contents in URL), which leaked the auth token into browser history,
+ * Referer, and reverse-proxy access logs, and routinely exceeded URL-length
+ * limits once any non-trivial file was attached. The backend now exposes a
+ * POST endpoint that takes a JSON body in the request and authenticates via
+ * the Authorization header, so this class reproduces the EventSource surface
+ * area (addEventListener / close) on top of fetch().
+ */
+export class ChatStream {
+  private listeners: { [type: string]: Array<(ev: ChatStreamEvent) => void> } = {}
+  private errorListeners: Array<(err: unknown) => void> = []
+  private closed = false
+  private abortController: AbortController | null = null
+
+  constructor(sessionId: string, body: {
+    content: string
+    images?: string[]
+    files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
+  }) {
+    const token = getAuthToken()
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    this.abortController = new AbortController()
+
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: this.abortController.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok || !res.body) {
+          const text = await res.text().catch(() => res.statusText)
+          this.dispatchError(new Error(`stream failed: ${res.status} ${text}`))
+          return
+        }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        try {
+          while (!this.closed) {
+            const { value, done } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            // SSE frames are separated by a blank line.
+            let idx: number
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+              const frame = buffer.slice(0, idx)
+              buffer = buffer.slice(idx + 2)
+              const dataLines: string[] = []
+              for (const line of frame.split('\n')) {
+                if (line.startsWith('data:')) {
+                  dataLines.push(line.slice(5).trimStart())
+                }
+              }
+              if (dataLines.length) {
+                this.dispatch('message', { data: dataLines.join('\n') })
+              }
+            }
+          }
+          // Drain trailing frame (server may have ended without blank line).
+          if (buffer.trim()) {
+            const lines = buffer.split('\n')
+            const dataLines: string[] = []
+            for (const line of lines) {
+                if (line.startsWith('data:')) {
+                  dataLines.push(line.slice(5).trimStart())
+                }
+              }
+            if (dataLines.length) {
+              this.dispatch('message', { data: dataLines.join('\n') })
+            }
+          }
+        } catch (err) {
+          if (!this.closed) {
+            this.dispatchError(err)
+          }
+        }
+      })
+      .catch((err) => {
+        if (!this.closed) {
+          this.dispatchError(err)
+        }
+      })
   }
-  if (files && files.length) {
-    // Send file info with base64 content embedded directly
-    // This avoids file system access issues on the backend
-    const filesData = files.map(f => ({
-      name: f.name,
-      filename: f.filename,
-      url: f.url,
-      // Include data URL if available (for immediate use)
-      data: f.data || null
-    }))
-    url += `&files=${encodeURIComponent(JSON.stringify(filesData))}`
+
+  addEventListener(type: 'message', cb: (ev: ChatStreamEvent) => void): void
+  addEventListener(type: 'error', cb: (err: unknown) => void): void
+  addEventListener(type: string, cb: (ev: any) => void): void {
+    if (type === 'error') {
+      this.errorListeners.push(cb)
+    } else {
+      ;(this.listeners[type] ||= []).push(cb)
+    }
   }
-  if (token) {
-    // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
-    // EventSource 不支持自定义 header，后续应改用 fetch-event-source 库或一次性短 token
-    url += `&token=${encodeURIComponent(token)}`
+
+  set onmessage(cb: ((ev: ChatStreamEvent) => void) | null) {
+    this.listeners['message'] = cb ? [cb] : []
   }
-  return new EventSource(url)
+
+  set onerror(cb: ((err: unknown) => void) | null) {
+    this.errorListeners = cb ? [cb] : []
+  }
+
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    if (this.abortController) {
+      this.abortController.abort()
+    }
+  }
+
+  private dispatch(type: string, ev: ChatStreamEvent): void {
+    const arr = this.listeners[type]
+    if (!arr) return
+    for (const cb of arr) {
+      try {
+        cb(ev)
+      } catch (e) {
+        console.error('ChatStream listener threw:', e)
+      }
+    }
+  }
+
+  private dispatchError(err: unknown): void {
+    for (const cb of this.errorListeners) {
+      try {
+        cb(err)
+      } catch (e) {
+        console.error('ChatStream error listener threw:', e)
+      }
+    }
+  }
+}
+
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[]): ChatStream {
+  // The server now resolves file content from the uploads directory by
+  // filename; we only need to ship the file metadata (name, filename, url),
+  // never the base64 contents.
+  const slimFiles = files?.map(f => ({
+    name: f.name,
+    filename: f.filename,
+    url: f.url,
+  }))
+  return new ChatStream(sessionId, {
+    content,
+    images,
+    files: slimFiles,
+  })
 }
 
 export interface SessionGoal {

@@ -16,46 +16,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/google/uuid"
 )
-
-func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "DELETE" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
-	// Extract filename from URL: /api/files/{filename}
-	filename := strings.TrimPrefix(r.URL.Path, "/api/files/")
-	if filename == "" || strings.Contains(filename, "..") {
-		http.Error(w, "invalid filename", 400)
-		return
-	}
-
-	uploadsDir := filepath.Join(s.magicHome, "uploads")
-	filePath := filepath.Join(uploadsDir, filename)
-
-	// Security: ensure path is within uploads directory
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		http.Error(w, "invalid path", 400)
-		return
-	}
-	absUploadsDir, _ := filepath.Abs(uploadsDir)
-	if !strings.HasPrefix(absPath, absUploadsDir) {
-		http.Error(w, "invalid path", 400)
-		return
-	}
-
-	err = os.Remove(filePath)
-	if err != nil {
-		http.Error(w, "failed to delete file: "+err.Error(), 500)
-		return
-	}
-
-	jsonResponse(w, map[string]interface{}{"success": true})
-}
 
 func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -146,51 +107,6 @@ func isTextFile(data []byte) bool {
 		}
 	}
 	return true
-}
-
-func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
-	uploadsDir := filepath.Join(s.magicHome, "uploads")
-	entries, err := os.ReadDir(uploadsDir)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"files": []map[string]interface{}{}})
-		return
-	}
-
-	// Build URL based on configuration
-	var getFileURL func(name string) string
-	if s.cfg.Server.UploadURLPrefix != "" {
-		getFileURL = func(name string) string {
-			return s.cfg.Server.UploadURLPrefix + "/" + name
-		}
-	} else {
-		getFileURL = func(name string) string {
-			return "/api/uploads/" + name
-		}
-	}
-
-	files := []map[string]interface{}{}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, map[string]interface{}{
-			"filename": info.Name(),
-			"size":     info.Size(),
-			"url":      getFileURL(info.Name()),
-			"updated":  info.ModTime().Format("2006-01-02 15:04:05"),
-		})
-	}
-
-	jsonResponse(w, map[string]interface{}{"files": files})
 }
 
 func (s *Server) getSessionWorkDir(sessionID string, sessionName string) string {
@@ -1273,70 +1189,6 @@ func (s *Server) handleFSDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
 
 	io.Copy(w, file)
-}
-
-func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
-	// Parse multipart form (32MB max memory)
-	err := r.ParseMultipartForm(32 << 20)
-	if err != nil {
-		http.Error(w, "failed to parse form: "+err.Error(), 400)
-		return
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "failed to get file: "+err.Error(), 400)
-		return
-	}
-	defer file.Close()
-
-	// Create uploads directory
-	uploadsDir := filepath.Join(s.magicHome, "uploads")
-	os.MkdirAll(uploadsDir, 0755)
-
-	// Generate unique filename
-	fileID := uuid.New().String()
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		ext = ".bin"
-	}
-	filename := fileID + ext
-	filepath_ := filepath.Join(uploadsDir, filename)
-
-	// Save file
-	out, err := os.Create(filepath_)
-	if err != nil {
-		http.Error(w, "failed to save file: "+err.Error(), 500)
-		return
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, file)
-	if err != nil {
-		http.Error(w, "failed to write file: "+err.Error(), 500)
-		return
-	}
-
-	// Return file info
-	// Use configured URL prefix if available, otherwise use relative path
-	var fileURL string
-	if s.cfg.Server.UploadURLPrefix != "" {
-		fileURL = s.cfg.Server.UploadURLPrefix + "/" + filename
-	} else {
-		fileURL = "/api/uploads/" + filename
-	}
-	jsonResponse(w, map[string]interface{}{
-		"id":       fileID,
-		"name":     header.Filename,
-		"filename": filename,
-		"url":      fileURL,
-		"size":     header.Size,
-	})
 }
 
 func (s *Server) ensureSessionWorkDir(workDir string) error {

@@ -122,8 +122,17 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		delete(s.agents, id)
 		s.agentsMu.Unlock()
 
-		if req.DeleteFiles && dbSession.WorkDir != "" && !dbSession.WorkDirUserSet {
-			s.cleanupSessionWorkDir(dbSession.WorkDir)
+		if req.DeleteFiles {
+			if dbSession.WorkDir != "" && !dbSession.WorkDirUserSet {
+				s.cleanupSessionWorkDir(dbSession.WorkDir)
+			} else if dbSession.WorkDir != "" {
+				// User-set workdir: never remove the directory itself, but
+				// still release the materialized attachment copies.
+				os.RemoveAll(filepath.Join(dbSession.WorkDir, workdirAttachmentsDir))
+			}
+			// Always try to clean per-session uploads so deleting a chat also
+			// releases disk space used by its attachments.
+			s.cleanupSessionUploads(id)
 		}
 
 		jsonResponse(w, map[string]bool{"ok": true})
@@ -291,8 +300,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, sessionID string) {
-	if r.Method != "GET" {
-		http.Error(w, "method not allowed", 405)
+	// Only POST is allowed. The frontend previously used GET with everything
+	// stuffed into query params (token, base64 file contents, etc.) which leaks
+	// secrets via browser history, Referer, reverse-proxy access logs, and
+	// hits URL-length limits. POST keeps the payload in the body and lets us
+	// authenticate via the Authorization header instead of the URL.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -301,126 +315,200 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 
-	content := r.URL.Query().Get("content")
+	// Cap body size to a reasonable limit. 16 MiB is well above any realistic
+	// chat payload but stops a malicious caller from streaming 10 GB into us.
+	const maxStreamBodyBytes = 16 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxStreamBodyBytes)
+	defer r.Body.Close()
 
-	// Parse images from query parameter (JSON array of base64 data URLs)
+	var payload struct {
+		Content string   `json:"content"`
+		Images  []string `json:"images"`
+		Files   []struct {
+			Name     string `json:"name"`
+			Filename string `json:"filename"`
+			URL      string `json:"url"`
+			Data     string `json:"data"` // legacy base64 data URL — kept for back-compat only
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "failed to decode stream payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	content := payload.Content
+
+	// Parse images from JSON body field.
 	var contentParts []types.ContentPart
-	imagesJSON := r.URL.Query().Get("images")
-	if imagesJSON != "" {
-		var imageURLs []string
-		if err := json.Unmarshal([]byte(imagesJSON), &imageURLs); err == nil {
-			for _, imgURL := range imageURLs {
-				if imgURL != "" {
-					contentParts = append(contentParts, types.ContentPart{
-						Type:     "image_url",
-						ImageURL: &types.MediaURL{URL: imgURL},
-					})
-				}
+	if len(payload.Images) > 0 {
+		for _, imgURL := range payload.Images {
+			if imgURL != "" {
+				contentParts = append(contentParts, types.ContentPart{
+					Type:     "image_url",
+					ImageURL: &types.MediaURL{URL: imgURL},
+				})
 			}
 		}
 	}
 
-	// Parse files from query parameter (JSON array of {name, filename, url, data})
-	filesJSON := r.URL.Query().Get("files")
-	if filesJSON != "" {
-		var files []struct {
-			Name     string `json:"name"`
-			Filename string `json:"filename"`
-			URL      string `json:"url"`
-			Data     string `json:"data"` // base64 data URL from frontend
-		}
-		if err := json.Unmarshal([]byte(filesJSON), &files); err == nil {
-			for _, f := range files {
-				var dataURL string
+	// Parse files from JSON body field. Priority for resolving content:
+	//   1. Filename-based lookup on local uploads (most common path — file is
+	//      already on disk from /api/upload).
+	//   2. Direct data URL provided by the client (legacy fallback; not used
+	//      by the current frontend).
+	//   3. Fetch external URL (when uploaded somewhere else).
+	// All payloads live in the request body — the URL stays clean.
+	uploadsDir := s.uploadsRoot()
+	var pendingMaterialize []uploadToMaterialize
+	for _, f := range payload.Files {
+		var dataURL string
+		handled := false // set when we already emitted a content part for this file
 
-				// Priority 1: Use base64 data directly from frontend (most reliable)
-				if f.Data != "" {
-					dataURL = f.Data
-				} else {
-					// Priority 2: Fetch file content from URL
-					var data []byte
-					var err error
-
-					if f.URL != "" {
-						// Extract path part (remove query parameters if any)
-						fileURLPath := f.URL
-						if idx := strings.IndexAny(fileURLPath, "?"); idx != -1 {
-							fileURLPath = fileURLPath[:idx]
-						}
-
-						if strings.HasPrefix(fileURLPath, "/api/uploads/") {
-							// Local file - read from filesystem
-							uploadsDir := filepath.Join(s.magicHome, "uploads")
-							filePath := filepath.Join(uploadsDir, f.Filename)
-							data, err = os.ReadFile(filePath)
-						} else {
-							// External URL - fetch content
-							req, _ := http.NewRequest("GET", f.URL, nil)
-							if token := r.URL.Query().Get("token"); token != "" {
-								req.Header.Set("Authorization", "Bearer "+token)
-							}
-							resp, fetchErr := http.DefaultClient.Do(req)
-							if fetchErr == nil {
-								defer resp.Body.Close()
-								data, err = io.ReadAll(resp.Body)
-							} else {
-								err = fetchErr
-							}
-						}
-					} else if f.Filename != "" {
-						// Fallback: try to read from filesystem using filename
-						uploadsDir := filepath.Join(s.magicHome, "uploads")
-						filePath := filepath.Join(uploadsDir, f.Filename)
-						data, err = os.ReadFile(filePath)
-					}
-
-					if err == nil && data != nil {
-						// Determine MIME type from extension
-						mimeType := "application/octet-stream"
-						ext := strings.ToLower(filepath.Ext(f.Name))
-						switch ext {
-						case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
-							mimeType = "text/plain"
-						case ".png":
-							mimeType = "image/png"
-						case ".jpg", ".jpeg":
-							mimeType = "image/jpeg"
-						case ".gif":
-							mimeType = "image/gif"
-						case ".webp":
-							mimeType = "image/webp"
-						case ".svg":
-							mimeType = "image/svg+xml"
-						case ".pdf":
-							mimeType = "application/pdf"
-						case ".doc":
-							mimeType = "application/msword"
-						case ".docx":
-							mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-						case ".xls", ".xlsx":
-							mimeType = "application/vnd.ms-excel"
-						case ".ppt", ".pptx":
-							mimeType = "application/vnd.ms-powerpoint"
-						case ".zip":
-							mimeType = "application/zip"
-						}
-
-						base64Data := base64.StdEncoding.EncodeToString(data)
-						dataURL = fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
-					}
+		switch {
+		case f.Filename != "":
+			// Resolve relative path "/api/uploads/<session>/<file>" into a
+			// real file by stripping the prefix.
+			localName := f.Filename
+			if f.URL != "" {
+				idx := strings.IndexAny(f.URL, "?")
+				clean := f.URL
+				if idx >= 0 {
+					clean = clean[:idx]
 				}
-
-				if dataURL != "" {
-					contentParts = append(contentParts, types.ContentPart{
-						Type: "file",
-						File: &types.FileInfo{
-							Name:     f.Name,
-							URL:      f.URL,
-							Contents: dataURL,
-						},
-					})
+				if strings.HasPrefix(clean, "/api/uploads/") {
+					localName = strings.TrimPrefix(clean, "/api/uploads/")
 				}
 			}
+			localName = filepath.Base(localName)
+			// search the per-session bucket first, then _shared, then flat root
+			candidates := []string{
+				filepath.Join(uploadsDir, sessionID, localName),
+				filepath.Join(uploadsDir, "_shared", localName),
+				filepath.Join(uploadsDir, localName),
+			}
+			for _, candidate := range candidates {
+				data, err := os.ReadFile(candidate)
+				if err == nil {
+					// Remember for workdir materialization: the agent's file
+					// tools are sandboxed to the workdir and cannot reach the
+					// uploads root, so we copy the file over at stream time.
+					pendingMaterialize = append(pendingMaterialize, uploadToMaterialize{Name: f.Name, Src: candidate})
+					// Zip-based Office documents (xlsx/docx) are unreadable
+					// to the LLM as raw bytes — extract their text here so
+					// the model gets real content instead of hunting the
+					// filesystem for a file its tools cannot reach.
+					if parsed, ok := parseOfficeText(f.Name, data); ok {
+						payloadText := fmt.Sprintf("（以下内容从附件 %s 自动提取）\n\n%s", f.Name, parsed)
+						contentParts = append(contentParts, types.ContentPart{
+							Type: "file",
+							File: &types.FileInfo{
+								Name:     f.Name,
+								MimeType: "text/plain",
+								URL:      f.URL,
+								Contents: "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte(payloadText)),
+							},
+						})
+						handled = true
+						break
+					}
+					mimeType := "application/octet-stream"
+					ext := strings.ToLower(filepath.Ext(f.Name))
+					switch ext {
+					case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
+						mimeType = "text/plain"
+					case ".png":
+						mimeType = "image/png"
+					case ".jpg", ".jpeg":
+						mimeType = "image/jpeg"
+					case ".gif":
+						mimeType = "image/gif"
+					case ".webp":
+						mimeType = "image/webp"
+					case ".svg":
+						mimeType = "image/svg+xml"
+					case ".pdf":
+						mimeType = "application/pdf"
+					case ".doc":
+						mimeType = "application/msword"
+					case ".docx":
+						mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+					case ".xls", ".xlsx":
+						mimeType = "application/vnd.ms-excel"
+					case ".ppt", ".pptx":
+						mimeType = "application/vnd.ms-powerpoint"
+					case ".zip":
+						mimeType = "application/zip"
+					}
+					// Extensionless or unknown files (LICENSE, Makefile, .bin
+					// fallbacks...) stay at octet-stream here. Sniff the real
+					// content and override so convertFilePart doesn't file
+					// them under "binary — not readable" and drop the payload.
+					if mimeType == "application/octet-stream" && len(data) > 0 {
+						sniffed := http.DetectContentType(data[:min(len(data), 512)])
+						if i := strings.Index(sniffed, ";"); i >= 0 {
+							sniffed = strings.TrimSpace(sniffed[:i])
+						}
+						switch {
+						case strings.HasPrefix(sniffed, "text/"):
+							// Normalize: isText() matches on exact map keys,
+							// and only "text/plain"/"text/html" are listed.
+							if sniffed == "text/html" || sniffed == "text/plain" {
+								mimeType = sniffed
+							} else {
+								mimeType = "text/plain"
+							}
+						case sniffed != "application/octet-stream":
+							// image/*, application/pdf etc. — trust the sniff.
+							mimeType = sniffed
+						}
+					}
+					base64Data := base64.StdEncoding.EncodeToString(data)
+					dataURL = fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+					break
+				}
+			}
+		case f.Data != "":
+			// Legacy fallback: client supplied a data URL directly.
+			dataURL = f.Data
+		case f.URL != "":
+			// External URL — fetch via the default client. We deliberately
+			// do NOT forward the request's Authorization header here, since
+			// it's our own dashboard token and the external service wouldn't
+			// understand it.
+			resp, err := http.Get(f.URL)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+					base64Data := base64.StdEncoding.EncodeToString(data)
+					dataURL = fmt.Sprintf("data:application/octet-stream;base64,%s", base64Data)
+				}
+			}
+		}
+
+		if handled {
+			continue
+		}
+
+		if dataURL != "" {
+			// Derive the final mime (dataURL prefix wins — it reflects both
+			// extension and sniff) and carry size/mime into FileInfo so
+			// provider/convert doesn't re-guess from the filename alone.
+			finalMime := "application/octet-stream"
+			if strings.HasPrefix(dataURL, "data:") {
+				if rest := dataURL[5:]; strings.Contains(rest, ";") {
+					finalMime = rest[:strings.Index(rest, ";")]
+				}
+			}
+			contentParts = append(contentParts, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     f.Name,
+					MimeType: finalMime,
+					URL:      f.URL,
+					Contents: dataURL,
+				},
+			})
 		}
 	}
 
@@ -475,10 +563,46 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			ctx = tool.WithWorkDir(ctx, sess.WorkDir)
 			ctx = tool.WithWorkDirUserSet(ctx, sess.WorkDirUserSet)
 
+			// Materialize uploaded attachments into the session workdir so the
+			// model's file tools (sandboxed to the workdir) can read them. The
+			// canonical copies under <magicHome>/uploads stay untouched — they
+			// remain the source of truth for GC and audit.
+			if len(pendingMaterialize) > 0 {
+				if summary := materializeUploads(pendingMaterialize, sess.WorkDir); summary != "" {
+					contentParts = append(contentParts, types.ContentPart{Type: "text", Text: summary})
+				} else {
+					// Fallback: workdir unavailable (not created yet?). At
+					// least point the model at the canonical server paths.
+					var lines []string
+					for _, it := range pendingMaterialize {
+						lines = append(lines, fmt.Sprintf("- %s → %s", it.Name, it.Src))
+					}
+					contentParts = append(contentParts, types.ContentPart{
+						Type: "text",
+						Text: "附件已保存在以下服务器路径（工作目录暂不可用，如需读取请告知用户）：\n" + strings.Join(lines, "\n"),
+					})
+				}
+			}
+
+			// Strip the inline base64 Contents before persisting. The agent
+			// already consumed it for this turn; keeping megabytes of base64
+			// in the SQLite message blob would bloat every saved session.
+			persistedParts := make([]types.ContentPart, len(contentParts))
+			for i, part := range contentParts {
+				persistedParts[i] = part
+				if part.Type == "file" && part.File != nil {
+					persistedParts[i].File = &types.FileInfo{
+						Name:     part.File.Name,
+						URL:      part.File.URL,
+						Contents: "", // not persisted
+					}
+				}
+			}
+
 			sess.Messages = append(sess.Messages, types.Message{
 				Role:         "user",
 				Content:      content,
-				ContentParts: contentParts,
+				ContentParts: persistedParts,
 				Timestamp:    time.Now(),
 			})
 			sess.UpdatedAt = time.Now()

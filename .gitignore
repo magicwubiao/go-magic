@@ -47,3 +47,6 @@ output.mp3
 .coze
 .preview
 dist/
+
+# Runtime: materialized chat attachments
+/.magic-uploads/
