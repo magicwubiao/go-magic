@@ -554,13 +554,11 @@ func (s *Store) queryRecallScoped(query string, limit int, memoryTypes ...Memory
 }
 
 // buildRecallWhere 组装 type/scope 过滤条件与参数。
-// scoped=true 时叠加工作区过滤；FTS 路径用 m. 前缀，LIKE 路径用裸列名。
+// scoped=true 时叠加工作区过滤。列名统一用 m. 前缀——FTS 路径与
+// LIKE 兜底路径的 SQL 都必须以 `FROM memories m`（带别名）执行，
+// 否则会出现 "no such column: m.type"（2026-09-05 修复的 P0 bug）。
 func (s *Store) buildRecallWhere(memoryTypes []MemoryType, scoped bool) (string, []interface{}) {
-	tablePrefix := "m."
-	if !scoped {
-		// 非 scoped 查询历史行为保持裸列（原 SQL 为 JOIN 形式也可用 m. 前缀）
-		tablePrefix = "m."
-	}
+	const tablePrefix = "m."
 	clauses := make([]string, 0, 2)
 	var args []interface{}
 
@@ -599,7 +597,7 @@ func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...Memo
 		SELECT id, type, content, scope, categories, importance,
 			   metadata, created_at, updated_at, last_access, access_count,
 			   session_id, source
-		FROM memories
+		FROM memories m
 		WHERE %s
 		%s
 		ORDER BY importance DESC, access_count DESC
@@ -638,7 +636,7 @@ func (s *Store) queryRecallFallbackScoped(query string, limit int, memoryTypes .
 		SELECT id, type, content, scope, categories, importance,
 			   metadata, created_at, updated_at, last_access, access_count,
 			   session_id, source
-		FROM memories
+		FROM memories m
 		WHERE %s
 		%s
 		ORDER BY importance DESC, access_count DESC

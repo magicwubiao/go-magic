@@ -249,6 +249,61 @@ func TestCleanupExpired(t *testing.T) {
 	}
 }
 
+// TestRecallScoped_CJKFallback 回归测试（2026-09-05 修复的 P0 bug）：
+// CJK 查询走 LIKE 兜底路径，兜底 SQL 此前无 m 别名但 where 条件带
+// m. 前缀，导致 scoped/typed 查询必报 "no such column: m.type"——
+// 中文输入的动态记忆召回曾 100% 静默失败。
+func TestRecallScoped_CJKFallback(t *testing.T) {
+	s := newTestStore(t)
+	s.Store(&Memory{Type: TypeProject, Content: "讨论了记忆系统的优化方案", Importance: 0.8})
+	s.Store(&Memory{Type: TypeProject, Content: "unrelated english memory about docker", Importance: 0.8})
+
+	res, err := s.RecallScoped("记忆系统优化", 5)
+	if err != nil {
+		t.Fatalf("RecallScoped with CJK query failed: %v", err)
+	}
+	if len(res) == 0 || !strings.Contains(res[0].Content, "记忆系统") {
+		t.Errorf("CJK scoped fallback should hit the Chinese memory, got %d results", len(res))
+	}
+
+	// 非 scoped 路径同样走兜底，必须同样可用
+	res, err = s.Recall("记忆系统", 5)
+	if err != nil {
+		t.Fatalf("Recall with CJK query failed: %v", err)
+	}
+	if len(res) == 0 {
+		t.Error("CJK non-scoped fallback should hit the Chinese memory")
+	}
+}
+
+// TestRuneLimits 验证字符上限按 rune 计（P1）：中文内容的名义容量
+// 不应因 UTF-8 字节膨胀缩水到 1/3。
+func TestRuneLimits(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+	sm := NewSnapshotManager(t.TempDir())
+
+	// 构造超过 2200 个汉字的内容
+	big := strings.Repeat("长", 3000)
+	if err := sm.AppendToMemory("## 中文分节\n" + big); err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+
+	content := sm.GetLatestMemory()
+	if got := len([]rune(content)); got > MemoryLimitChars {
+		t.Errorf("CJK content should be capped at %d runes, got %d", MemoryLimitChars, got)
+	}
+	if !strings.Contains(content, "## 中文分节") {
+		t.Error("section header should survive compression")
+	}
+
+	// truncateString 本身的 rune 语义
+	in := strings.Repeat("中", 100)
+	got := truncateString(in, 50)
+	if n := len([]rune(strings.TrimSuffix(got, "..."))); n > 50 {
+		t.Errorf("truncateString should cap at 50 runes, got %d", n)
+	}
+}
+
 // TestFTSStore_SearchSanitizeAndFallback 验证 FTSStore.Search 的
 // sanitize 接入与 CJK LIKE 兜底 + 相关性排序（P0-3/P2-4）。
 func TestFTSStore_SearchSanitizeAndFallback(t *testing.T) {

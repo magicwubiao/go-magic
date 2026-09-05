@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
 // Character limits (not tokens) because char counts are model-independent
@@ -105,7 +104,7 @@ func (sm *SnapshotManager) UpdateMemory(content string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if len(content) > MemoryLimitChars {
+	if runeLen(content) > MemoryLimitChars {
 		content = sm.compressor.CompressMemory(content, MemoryLimitChars)
 	}
 
@@ -119,7 +118,7 @@ func (sm *SnapshotManager) UpdateUser(content string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if len(content) > UserLimitChars {
+	if runeLen(content) > UserLimitChars {
 		content = sm.compressor.compressUser(content, UserLimitChars)
 	}
 
@@ -166,7 +165,7 @@ func mergeIntoMarkdown(existing, addition string, limit int, compress func(strin
 	}
 	if strings.TrimSpace(existing) == "" {
 		out := addition + "\n"
-		if len(out) > limit {
+		if runeLen(out) > limit {
 			out = compress(out, limit)
 		}
 		return out
@@ -186,7 +185,7 @@ func mergeIntoMarkdown(existing, addition string, limit int, compress func(strin
 	if !hasHeader {
 		merged := existing + "\n" + addition + "\n"
 		merged = deduplicateLines(merged)
-		if len(merged) > limit {
+		if runeLen(merged) > limit {
 			merged = compress(merged, limit)
 		}
 		return merged
@@ -236,7 +235,7 @@ func mergeIntoMarkdown(existing, addition string, limit int, compress func(strin
 	}
 
 	merged := deduplicateLines(sb.String())
-	if len(merged) > limit {
+	if runeLen(merged) > limit {
 		merged = compress(merged, limit)
 	}
 	return merged
@@ -316,7 +315,7 @@ func (mc *MemoryCompressor) CompressMemory(content string, limit int) string {
 	result := strings.Join(compressed, "\n\n")
 
 	// Step 4: If still over limit, trim sections from the middle
-	if len(result) > limit {
+	if runeLen(result) > limit {
 		result = mc.trimSectionsToLimit(sections, limit)
 	}
 
@@ -429,7 +428,7 @@ func (mc *MemoryCompressor) trimSectionsToLimit(sections []section, limit int) s
 	}
 
 	result := sb.String()
-	if len(result) > limit {
+	if runeLen(result) > limit {
 		return truncateString(result, limit)
 	}
 	return result
@@ -473,22 +472,22 @@ func nonEmptyLines(content string) []string {
 }
 
 func truncateString(s string, limit int) string {
-	if len(s) <= limit {
+	// limit 按「字符数」（rune）计，与 MemoryLimitChars 等常量的命名语义一致。
+	// 旧实现用 len(s)（字节）比较，中文内容的名义容量只剩 1/3（UTF-8 每汉字 3 字节）。
+	runes := []rune(s)
+	if len(runes) <= limit {
 		return s
 	}
-	truncated := s[:limit]
-	// Walk back to a valid UTF-8 rune boundary so we don't cut a multi-byte
-	// character in half (which would produce invalid UTF-8 in the output).
-	for len(truncated) > 0 {
-		r, size := utf8.DecodeLastRuneInString(truncated)
-		if r == utf8.RuneError && size == 1 {
-			truncated = truncated[:len(truncated)-1]
-		} else {
-			break
-		}
+	if limit <= 3 {
+		return string(runes[:limit])
 	}
-	if len(truncated) > 3 {
-		truncated = truncated[:len(truncated)-3]
-	}
-	return truncated + "..."
+	// 预留 3 个字符给省略号，保证结果不超过 limit。
+	// 注意必须在 rune 空间运算——按字节回退（truncated[:len-3]）
+	// 会切断多字节字符或导致结果超出字符上限。
+	return string(runes[:limit-3]) + "..."
+}
+
+// runeLen 返回字符串的字符数（rune），用于字符上限比较。
+func runeLen(s string) int {
+	return len([]rune(s))
 }

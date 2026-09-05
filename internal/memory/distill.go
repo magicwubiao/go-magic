@@ -108,7 +108,13 @@ func (d *Distiller) RunIfNeeded() error {
 	}
 
 	if digest != "" {
-		d.writeDigest(digest)
+		if !d.writeDigest(digest) {
+			// 摘要未能持久化到任何介质：保留旧日志，等下轮重试，
+			// 避免删了原始日志后摘要永久丢失。
+			log.Warnf("[Memory] distiller digest not persisted anywhere, keeping %d old log(s) for retry", len(oldFiles))
+			d.markDone()
+			return nil
+		}
 	}
 
 	if err := d.log.DeleteFiles(oldFiles); err != nil {
@@ -201,7 +207,9 @@ func (d *Distiller) basicDigest(content string) string {
 
 // writeDigest merges the digest into MEMORY.md (section-aware) and
 // best-effort persists it into the structured store / FTS.
-func (d *Distiller) writeDigest(digest string) {
+// Returns true if the digest was persisted to at least one medium.
+func (d *Distiller) writeDigest(digest string) bool {
+	persisted := false
 	entry := "## Conversation Digest\n\n" + digest
 
 	if d.cfg.MemoryMDPath != "" {
@@ -213,6 +221,8 @@ func (d *Distiller) writeDigest(digest string) {
 		os.MkdirAll(filepath.Dir(d.cfg.MemoryMDPath), 0755)
 		if err := os.WriteFile(d.cfg.MemoryMDPath, []byte(merged), 0644); err != nil {
 			log.Warnf("[Memory] distiller write MEMORY.md failed: %v", err)
+		} else {
+			persisted = true
 		}
 	}
 
@@ -225,11 +235,16 @@ func (d *Distiller) writeDigest(digest string) {
 		}
 		if err := d.store.Store(mem); err != nil {
 			log.Warnf("[Memory] distiller store digest failed: %v", err)
+		} else {
+			persisted = true
 		}
 	}
 	if d.fts != nil {
 		if err := d.fts.AddInsight("distiller", digest, 8); err != nil {
 			log.Warnf("[Memory] distiller FTS insight failed: %v", err)
+		} else {
+			persisted = true
 		}
 	}
+	return persisted
 }

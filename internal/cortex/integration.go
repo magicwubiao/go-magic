@@ -64,7 +64,13 @@ type Manager struct {
 		Role    string
 		Content string
 	}
-	mu sync.RWMutex // protects conversationHistory
+	// 已抽取/已写日志的消息数水位。conversationHistory 是整个会话的累积
+	// 历史，每轮结束都会触发 extractAndLearnFromConversation——没有水位
+	// 时同一批消息会被反复送 LLM 抽取、反复写入每日日志（第 N 轮写 N 遍）。
+	// 历史被 truncateHistory 收缩时水位对齐到当前长度（跳过当轮抽取，
+	// 防止截断后前缀重放导致重复）。
+	processedHistoryLen int
+	mu                  sync.RWMutex // protects conversationHistory / processedHistoryLen
 
 	// Index of the last tool call that was already fed to SkillCreator.
 	// This prevents re-analyzing the same accumulated tool calls on every
@@ -84,6 +90,8 @@ type Manager struct {
 
 	// 记忆库维护循环（清理过期记忆 + 每日蒸馏）的停止信号
 	memoryMaintenanceStop chan struct{}
+	// 维护循环退出信号：Stop() 关闭 stop 后等待 done，再关闭数据库
+	memoryMaintenanceDone chan struct{}
 
 	// 每日对话日志（P1-2，懒初始化）
 	dailyLog *memory.DailyLog
@@ -385,6 +393,15 @@ func (m *Manager) Stop() {
 	if m.memoryMaintenanceStop != nil {
 		close(m.memoryMaintenanceStop)
 		m.memoryMaintenanceStop = nil
+		// 等维护循环退出后再关数据库，避免 goroutine 还在用已关闭的连接
+		if m.memoryMaintenanceDone != nil {
+			select {
+			case <-m.memoryMaintenanceDone:
+			case <-time.After(3 * time.Second):
+				log.Warnf("[Cortex] memory maintenance loop did not stop within 3s")
+			}
+			m.memoryMaintenanceDone = nil
+		}
 	}
 	if m.FTSMemory != nil {
 		if err := m.FTSMemory.Close(); err != nil {
@@ -444,7 +461,10 @@ func (m *Manager) startMemoryMaintenance() {
 		return // 已在运行
 	}
 	m.memoryMaintenanceStop = make(chan struct{})
+	memoryMaintenanceDone := make(chan struct{})
+	m.memoryMaintenanceDone = memoryMaintenanceDone
 	go func() {
+		defer close(memoryMaintenanceDone)
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 
@@ -660,6 +680,27 @@ func (m *Manager) extractAndLearnFromConversation() {
 	}, len(m.conversationHistory))
 	copy(history, m.conversationHistory)
 	m.mu.RUnlock()
+
+	// 增量处理：只抽取上次水位之后的新消息（P0 修复——历史是累积的，
+	// 全量处理会让每轮把同样的内容重复抽取/重复写日志 N 遍）。
+	m.mu.Lock()
+	start := 0
+	switch {
+	case m.processedHistoryLen > 0 && m.processedHistoryLen <= len(history):
+		start = m.processedHistoryLen
+	case m.processedHistoryLen > len(history):
+		// 历史被 truncateHistory 收缩：水位对齐当前长度，跳过本轮
+		//（被保留的尾部都是已处理过的旧消息，重放会造成重复）。
+		log.Debugf("[Cortex] history shrank (%d -> %d), realigning extraction watermark",
+			m.processedHistoryLen, len(history))
+		start = len(history)
+	}
+	m.processedHistoryLen = len(history)
+	m.mu.Unlock()
+	if start >= len(history) {
+		return // 没有新消息
+	}
+	history = history[start:]
 
 	var userOnly strings.Builder
 	var nonSystem strings.Builder
