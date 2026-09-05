@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,7 +86,9 @@ type geminiPart struct {
 	} `json:"functionResponse,omitempty"`
 	// For media
 	InlineData *struct {
-		MimeType string `json:"mime_type"`
+		// Gemini REST API expects camelCase "mimeType" — a snake_case tag
+		// makes the API silently drop (or reject) the image.
+		MimeType string `json:"mimeType"`
 		Data     string `json:"data"`
 	} `json:"inlineData,omitempty"`
 }
@@ -361,7 +362,8 @@ func (p *GeminiProvider) buildRequest(messages []Message, tools []map[string]int
 		// Handle ContentParts for multi-modal content
 		var parts []geminiPart
 		if len(msg.ContentParts) > 0 {
-			convertedParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+			cfg := p.ConvertConfig.WithAutoVision(p.model)
+			convertedParts := ConvertContentPartsToMap(msg.ContentParts, cfg)
 			for _, cp := range convertedParts {
 				geminiPart := convertToGeminiPart(cp)
 				if geminiPart.Text != "" || geminiPart.InlineData != nil {
@@ -422,26 +424,38 @@ func convertToGeminiPart(part map[string]interface{}) geminiPart {
 	case "image_url":
 		if url, ok := part["image_url"].(map[string]interface{}); ok {
 			if urlStr, ok := url["url"].(string); ok {
-				// Gemini supports inline data with mimeType
+				// Gemini only accepts inline base64 data — pass the base64
+				// payload through untouched. Decoding and re-encoding it is
+				// pure CPU waste on multi-MB payloads.
 				if strings.HasPrefix(urlStr, "data:") {
-					// Extract mime type and data from data URL
 					parts := strings.SplitN(urlStr, ",", 2)
 					if len(parts) == 2 {
 						header := parts[0] // e.g., "data:image/png;base64"
 						data := parts[1]
+						if data == "" {
+							// Malformed/empty payload: say so instead of
+							// silently dropping the part.
+							return geminiPart{Text: "(image attachment omitted: empty image data)"}
+						}
 						mimeType := strings.TrimPrefix(strings.TrimSuffix(header, ";base64"), "data:")
-						decoded, _ := base64.StdEncoding.DecodeString(data)
+						if mimeType == "" {
+							mimeType = "image/png"
+						}
 						return geminiPart{
 							InlineData: &struct {
-								MimeType string `json:"mime_type"`
+								MimeType string `json:"mimeType"`
 								Data     string `json:"data"`
 							}{
 								MimeType: mimeType,
-								Data:     base64.StdEncoding.EncodeToString(decoded),
+								Data:     data,
 							},
 						}
 					}
 				}
+				// http(s) URLs cannot be inlined by the Gemini REST API
+				// (fileData only accepts Google-hosted URIs) — emit a
+				// placeholder so the model at least knows an image existed.
+				return geminiPart{Text: "(image attachment omitted: " + urlStr + " — not inlineable for Gemini)"}
 			}
 		}
 	}

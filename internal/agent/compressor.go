@@ -361,13 +361,13 @@ func (ic *IntelligentCompressor) messageExists(messages []provider.Message, targ
 func (ic *IntelligentCompressor) EstimateCompressionSavings(history []provider.Message) (originalSize, compressedSize, savingsPercent int) {
 	originalSize = 0
 	for _, msg := range history {
-		originalSize += len(msg.Content)
+		originalSize += messageWeight(msg)
 	}
 
 	result := ic.Compress(history)
 	compressedSize = 0
 	for _, msg := range result.KeptMessages {
-		compressedSize += len(msg.Content)
+		compressedSize += messageWeight(msg)
 	}
 
 	if originalSize > 0 {

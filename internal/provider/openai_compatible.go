@@ -274,15 +274,19 @@ func (p *OpenAICompatibleProvider) applyDashScopeDefaults(reqBody map[string]int
 // For DashScope it enforces the 140-assistant-message hard cap (see
 // TrimDashScopeTurns). Other providers currently pass through unchanged.
 func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[string]interface{} {
+	cfg := p.BaseProvider.ConvertCfg
+	if cfg != nil {
+		cfg = cfg.WithAutoVision(p.GetModel())
+	}
 	if p.isDashScope() {
 		trimmed := TrimDashScopeTurns(messages)
 		if len(trimmed) != len(messages) {
 			log.Infof("[OpenAICompat:dashscope] trimmed turns: %d -> %d (limit %d)",
 				len(messages), len(trimmed), DashScopeTurnMaxSend)
 		}
-		return ConvertMessagesForProvider(trimmed, p.BaseProvider)
+		return ConvertMessagesWithConfig(trimmed, cfg)
 	}
-	return ConvertMessagesForProvider(messages, p.BaseProvider)
+	return ConvertMessagesWithConfig(messages, cfg)
 }
 
 // applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段），

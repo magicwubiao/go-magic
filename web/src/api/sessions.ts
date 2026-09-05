@@ -7,6 +7,9 @@ export interface UploadedFile {
   url: string
   size: number
   data?: string  // base64 data URL for reliable message sending
+  // 前端附加（仅内存，不序列化、不上传）：上传时的原始 File 对象。
+  // 图片走多模态通道时直接用 FileReader 读取，绕开带鉴权的 /api/uploads。
+  _native?: File
 }
 
 export interface Session {
@@ -402,6 +405,9 @@ export class ChatStream {
   constructor(sessionId: string, body: {
     content: string
     images?: string[]
+    // 每张图片对应的已上传 /api/uploads/ 路径（与 images 同序）。
+    // 后端用它作为持久化引用，避免把 data URL base64 写进会话库。
+    imageUrls?: string[]
     files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
   }) {
     const token = getAuthToken()
@@ -526,7 +532,7 @@ export class ChatStream {
   }
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[]): ChatStream {
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[]): ChatStream {
   // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.
@@ -538,6 +544,7 @@ export function streamChat(sessionId: string, content: string, images?: string[]
   return new ChatStream(sessionId, {
     content,
     images,
+    imageUrls,
     files: slimFiles,
   })
 }

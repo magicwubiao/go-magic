@@ -1290,7 +1290,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		if a.compressor != nil {
 			totalChars := 0
 			for _, msg := range a.history {
-				totalChars += len(msg.Content)
+				totalChars += messageWeight(msg)
 			}
 			if a.compressor.ShouldCompress(totalChars / 4) { // rough token estimate
 				a.Emit(bus.EventKindTurnStart, map[string]interface{}{
@@ -2904,11 +2904,53 @@ func (a *Agent) SetHistory(history []provider.Message) {
 	a.history = history
 }
 
+// dataURLWeight estimates the "size" of a media URL for context accounting.
+// For data URLs only the base64 payload counts (the prefix is negligible);
+// everything else is counted as-is. This makes multi-MB inline images
+// visible to the history budget instead of silently inflating requests.
+func dataURLWeight(u string) int {
+	if i := strings.Index(u, ","); i >= 0 {
+		return len(u) - i - 1
+	}
+	return len(u)
+}
+
+// messageWeight returns the approximate character weight of a history
+// message: its text content plus every media payload embedded in
+// ContentParts (image/file data URLs). Plain len(Content) accounting is
+// blind to base64 media, which lets a few screenshots push a request far
+// past the context limit with no truncation ever triggering.
+func messageWeight(m provider.Message) int {
+	total := len(m.Content)
+	for _, p := range m.ContentParts {
+		switch p.Type {
+		case "image_url", "video_url", "audio_url":
+			var u *types.MediaURL
+			switch p.Type {
+			case "image_url":
+				u = p.ImageURL
+			case "video_url":
+				u = p.VideoURL
+			case "audio_url":
+				u = p.AudioURL
+			}
+			if u != nil {
+				total += dataURLWeight(u.URL)
+			}
+		case "file":
+			if p.File != nil {
+				total += dataURLWeight(p.File.Contents)
+			}
+		}
+	}
+	return total
+}
+
 // GetHistoryLength returns the current history length in characters
 func (a *Agent) GetHistoryLength() int {
 	total := 0
 	for _, m := range a.history {
-		total += len(m.Content)
+		total += messageWeight(m)
 	}
 	return total
 }
@@ -2985,7 +3027,7 @@ func (a *Agent) truncateHistory() {
 	tailBlockSize := 0
 	if lastUserIdx >= 0 {
 		for i := lastUserIdx; i < len(a.history); i++ {
-			tailBlockSize += len(a.history[i].Content)
+			tailBlockSize += messageWeight(a.history[i])
 		}
 	}
 	// If even the protected tail alone fits under the cap, every earlier
@@ -3014,7 +3056,7 @@ func (a *Agent) truncateHistory() {
 			return
 		}
 		for k := start; k < end; k++ {
-			totalLen -= len(a.history[k].Content)
+			totalLen -= messageWeight(a.history[k])
 		}
 		a.history = append(a.history[:start], a.history[end:]...)
 		if systemIdx >= start && systemIdx < end {

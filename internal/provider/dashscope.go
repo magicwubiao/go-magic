@@ -76,7 +76,11 @@ func (p *DashScopeProvider) prepareMessages(messages []Message) []map[string]int
 		log.Infof("[DashScope] trimmed turns: %d -> %d (assistant-msgs limit %d)",
 			len(messages), len(trimmed), DashScopeTurnMaxSend)
 	}
-	return ConvertMessagesForProvider(trimmed, p.BaseProvider)
+	cfg := p.BaseProvider.ConvertCfg
+	if cfg != nil {
+		cfg = cfg.WithAutoVision(p.model)
+	}
+	return ConvertMessagesWithConfig(trimmed, cfg)
 }
 
 // buildRequestBody unifies request body construction for Chat/ChatWithTools

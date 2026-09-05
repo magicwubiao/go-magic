@@ -1171,6 +1171,10 @@ async function handleFileSelect({ file, onFinish, onError }: UploadCustomRequest
 
   sessionsApi.uploadFile(nativeFile, chatStore.activeSessionId ?? undefined)
     .then((uploaded) => {
+      // Keep the raw File in memory: the multimodal channel reads it directly
+      // with FileReader (the /api/uploads URL sits behind requireAuth, so a
+      // bare fetch of it would 401 and silently kill the image channel).
+      uploaded._native = nativeFile
       selectedFiles.value.push(uploaded)
       onFinish()
     })
@@ -1345,36 +1349,84 @@ async function send() {
   }
 
   // Build content with file URL references for AI processing.
-  // Image/* attachments are routed to the multimodal `images` channel so the
-  // model actually sees the picture; everything else falls through to the
-  // generic file channel (the backend packages it as a text attachment).
+  // Raster image attachments are routed to the multimodal `images` channel so
+  // the model actually sees the picture; everything else (including SVG,
+  // which is XML text, not a raster image) falls through to the generic file
+  // channel (the backend packages it as a text attachment).
   let finalContent = content
   const allFiles = [...selectedFiles.value]
   const imageDataUrls: string[] = []
+  const imageUrlRefs: string[] = []
   const nonImageFiles: sessionsApi.UploadedFile[] = []
+
+  function readAsDataURL(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  // Downscale large raster images before sending. Multi-megabyte screenshots
+  // waste the 16 MiB stream body and get re-sent on every turn; 2048px JPEG
+  // keeps details visible while shrinking payloads ~10x. GIF is skipped
+  // (canvas would drop animation) and small images are passed through.
+  async function downscaleImage(file?: File): Promise<string | null> {
+    if (!file) return null
+    try {
+      const bitmap = await createImageBitmap(file)
+      const maxDim = 2048
+      const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height))
+      if (scale >= 1 && file.size <= 3 * 1024 * 1024) return null // not worth re-encoding
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      bitmap.close()
+      return canvas.toDataURL('image/jpeg', 0.85)
+    } catch (_e) {
+      return null
+    }
+  }
+
+  async function toImageDataUrl(f: sessionsApi.UploadedFile): Promise<string> {
+    const native = f._native
+    if (native && /image\/gif/i.test(native.type)) {
+      return await readAsDataURL(native)
+    }
+    if (native && native.size <= 1.5 * 1024 * 1024) {
+      return await readAsDataURL(native)
+    }
+    const downscaled = await downscaleImage(native)
+    if (downscaled) return downscaled
+    if (native) return await readAsDataURL(native)
+    // No raw File (e.g. restored draft): fall back to fetching the upload
+    // URL with credentials attached — a bare fetch would 401 behind auth.
+    const { getAuthToken } = await import('@/api/client')
+    const headers: Record<string, string> = {}
+    const token = getAuthToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const resp = await fetch(f.url, { headers })
+    if (!resp.ok) throw new Error(`failed to fetch upload: ${resp.status}`)
+    return await readAsDataURL(await resp.blob())
+  }
 
   for (const file of allFiles) {
     const mime = (file as any).mime as string | undefined
     const looksLikeImage =
-      (mime && mime.startsWith('image/')) ||
-      /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(file.name)
+      (mime && mime.startsWith('image/') && mime !== 'image/svg+xml') ||
+      /\.(png|jpe?g|gif|webp)(\?|$)/i.test(file.name)
     if (looksLikeImage) {
-      // For the multimodal channel we need an inline data URL. The backend
-      // already has the bytes — re-derive via a blob fetch (cheap) rather
-      // than re-reading the original File.
       try {
-        const resp = await fetch(file.url)
-        if (resp.ok) {
-          const blob = await resp.blob()
-          const reader = new FileReader()
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve(reader.result as string)
-            reader.onerror = reject
-            reader.readAsDataURL(blob)
-          })
-          imageDataUrls.push(dataUrl)
-          continue
-        }
+        const dataUrl = await toImageDataUrl(file)
+        imageDataUrls.push(dataUrl)
+        // Remember the uploaded path so the backend can persist a small
+        // reference instead of megabytes of base64.
+        imageUrlRefs.push(file.url)
+        continue
       } catch (_e) {
         // fall through to non-image handling
       }
@@ -1390,7 +1442,12 @@ async function send() {
   inputValue.value = ''
   selectedFiles.value = []
   commandSuggestions.value = []
-  await chatStore.sendMessage(finalContent, imageDataUrls.length ? imageDataUrls : undefined, nonImageFiles.length ? nonImageFiles : undefined)
+  await chatStore.sendMessage(
+    finalContent,
+    imageDataUrls.length ? imageDataUrls : undefined,
+    nonImageFiles.length ? nonImageFiles : undefined,
+    imageUrlRefs.length ? imageUrlRefs : undefined,
+  )
 }
 
 function stopGeneration() {

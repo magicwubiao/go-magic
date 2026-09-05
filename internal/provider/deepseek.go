@@ -59,9 +59,13 @@ type BaseStreamProvider struct {
 
 // Stream implements the Streamer interface for base provider
 func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Message, handler StreamHandler) error {
+	cfg := bp.BaseProvider.ConvertCfg
+	if cfg != nil {
+		cfg = cfg.WithAutoVision(bp.GetModel())
+	}
 	reqBody := map[string]interface{}{
 		"model":    bp.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, bp.BaseProvider),
+		"messages": ConvertMessagesWithConfig(messages, cfg),
 		"stream":   true,
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
@@ -89,9 +93,13 @@ func (bp *BaseStreamProvider) Stream(ctx context.Context, messages []types.Messa
 
 // StreamWithTools implements the StreamingToolCaller interface for base provider
 func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []types.Message, tools []map[string]interface{}, handler StreamHandler) error {
+	cfg := bp.BaseProvider.ConvertCfg
+	if cfg != nil {
+		cfg = cfg.WithAutoVision(bp.GetModel())
+	}
 	reqBody := map[string]interface{}{
 		"model":    bp.GetModel(),
-		"messages": ConvertMessagesForProvider(messages, bp.BaseProvider),
+		"messages": ConvertMessagesWithConfig(messages, cfg),
 		"tools":    tools,
 		"stream":   true,
 		"stream_options": map[string]interface{}{

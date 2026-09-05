@@ -800,17 +800,18 @@ GOAL GUIDANCE:
 		agentOpts = append(agentOpts, agent.WithPrivacy(s.cfg.Privacy))
 	}
 
-	// Set file conversion config
+	// Set file conversion config. AutoVision re-evaluates vision support from
+	// the CURRENT model on every request — a startup-time snapshot goes stale
+	// the moment the user switches models via /api/model/set.
 	convertCfg := &provider.ConvertConfig{
 		UploadURLPrefix: "",
 		StrategyName:    "auto",
 		SupportVision:   false,
+		AutoVision:      true,
 	}
-	// Get model name to check vision support
 	if s.cfg != nil && s.provider != nil {
 		if m, ok := s.provider.(interface{ GetModel() string }); ok {
-			modelName := m.GetModel()
-			convertCfg.SupportVision = provider.ModelSupportsVision(modelName)
+			convertCfg.SupportVision = provider.ModelSupportsVision(m.GetModel())
 		}
 		// Set upload URL prefix if configured
 		if s.cfg.Server.UploadURLPrefix != "" {

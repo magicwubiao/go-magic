@@ -322,9 +322,10 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	defer r.Body.Close()
 
 	var payload struct {
-		Content string   `json:"content"`
-		Images  []string `json:"images"`
-		Files   []struct {
+		Content   string   `json:"content"`
+		Images    []string `json:"images"`
+		ImageURLs []string `json:"imageUrls"` // uploaded /api/uploads/ path per image (same order) — used as the persisted reference
+		Files     []struct {
 			Name     string `json:"name"`
 			Filename string `json:"filename"`
 			URL      string `json:"url"`
@@ -338,16 +339,44 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	content := payload.Content
 
-	// Parse images from JSON body field.
+	// Parse images from JSON body field. Inline base64 payloads are capped —
+	// they ride in the request body, get embedded into the agent history for
+	// every subsequent turn, and would otherwise let a handful of large
+	// screenshots blow past the 16 MiB body limit and the model's context.
+	const (
+		maxImagesPerMessage  = 8
+		maxImagePayloadBytes = 12 << 20 // 12 MiB of base64 payload in total
+	)
 	var contentParts []types.ContentPart
+	var imageURLRefs []string // persisted reference per image part ("" = drop on persist)
 	if len(payload.Images) > 0 {
-		for _, imgURL := range payload.Images {
-			if imgURL != "" {
-				contentParts = append(contentParts, types.ContentPart{
-					Type:     "image_url",
-					ImageURL: &types.MediaURL{URL: imgURL},
-				})
+		if len(payload.Images) > maxImagesPerMessage {
+			http.Error(w, fmt.Sprintf("too many images: %d attached, max %d per message", len(payload.Images), maxImagesPerMessage), 400)
+			return
+		}
+		totalImageBytes := 0
+		for i, imgURL := range payload.Images {
+			if imgURL == "" {
+				continue
 			}
+			if idx := strings.Index(imgURL, ","); idx >= 0 {
+				totalImageBytes += len(imgURL) - idx - 1
+			} else {
+				totalImageBytes += len(imgURL)
+			}
+			if totalImageBytes > maxImagePayloadBytes {
+				http.Error(w, "images too large: total inline payload exceeds 12 MiB — please attach fewer or smaller images", 400)
+				return
+			}
+			ref := ""
+			if i < len(payload.ImageURLs) {
+				ref = payload.ImageURLs[i]
+			}
+			contentParts = append(contentParts, types.ContentPart{
+				Type:     "image_url",
+				ImageURL: &types.MediaURL{URL: imgURL},
+			})
+			imageURLRefs = append(imageURLRefs, ref)
 		}
 	}
 
@@ -584,18 +613,44 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				}
 			}
 
-			// Strip the inline base64 Contents before persisting. The agent
-			// already consumed it for this turn; keeping megabytes of base64
-			// in the SQLite message blob would bloat every saved session.
-			persistedParts := make([]types.ContentPart, len(contentParts))
-			for i, part := range contentParts {
-				persistedParts[i] = part
-				if part.Type == "file" && part.File != nil {
-					persistedParts[i].File = &types.FileInfo{
-						Name:     part.File.Name,
-						URL:      part.File.URL,
-						Contents: "", // not persisted
+			// Strip inline base64 payloads before persisting. The agent
+			// already consumed them for this turn; keeping megabytes of
+			// base64 in the SQLite message blob would bloat every saved
+			// session. Files keep their name/URL; images degrade to the
+			// uploaded reference path (imageUrls pairing) or are dropped
+			// entirely when no reference is known.
+			persistedParts := make([]types.ContentPart, 0, len(contentParts))
+			imgIdx := 0
+			for _, part := range contentParts {
+				switch {
+				case part.Type == "file" && part.File != nil:
+					persistedParts = append(persistedParts, types.ContentPart{
+						Type: "file",
+						File: &types.FileInfo{
+							Name: part.File.Name,
+							URL:  part.File.URL,
+							// MimeType kept — cheap and lets convert layer
+							// classify the file after a session reload.
+							MimeType: part.File.MimeType,
+							Contents: "", // not persisted
+						},
+					})
+				case part.Type == "image_url" && part.ImageURL != nil:
+					ref := ""
+					if imgIdx < len(imageURLRefs) {
+						ref = imageURLRefs[imgIdx]
 					}
+					imgIdx++
+					if ref != "" {
+						persistedParts = append(persistedParts, types.ContentPart{
+							Type:     "image_url",
+							ImageURL: &types.MediaURL{URL: ref},
+						})
+					}
+					// no reference → drop the part entirely; a bare data URL
+					// must never reach the session store.
+				default:
+					persistedParts = append(persistedParts, part)
 				}
 			}
 

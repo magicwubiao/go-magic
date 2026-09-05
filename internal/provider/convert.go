@@ -235,6 +235,12 @@ type ConvertConfig struct {
 	Strategy        FileStrategy // File conversion strategy
 	StrategyName    string       // String representation of strategy ("auto", "url", "base64")
 	SupportVision   bool         // Whether the model supports vision (image_url format)
+	// AutoVision enables per-request vision detection: when true, callers
+	// recompute SupportVision from the CURRENT model name before each
+	// provider request (see ConvertMessagesWithModel). This keeps the flag
+	// correct after /api/model/set switches models mid-session, instead of
+	// freezing the decision made at agent startup.
+	AutoVision bool
 }
 
 // DefaultConvertConfig returns default conversion config
@@ -281,7 +287,7 @@ func ModelSupportsVision(modelName string) bool {
 	}
 
 	// Check for common vision model patterns
-	visionPatterns := []string{"vision", "vl", "gpt-4o", "gpt-5", "claude-3", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3"}
+	visionPatterns := []string{"vision", "vl", "glm-4v", "glm-4.5v", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3", "pixtral", "internvl", "grok"}
 	for _, pattern := range visionPatterns {
 		if strings.Contains(modelLower, pattern) {
 			return true
@@ -291,14 +297,31 @@ func ModelSupportsVision(modelName string) bool {
 	return false
 }
 
+// WithAutoVision returns a request-scoped shallow copy of the config with
+// SupportVision recomputed from the given (current) model name when
+// AutoVision is enabled. Callers must use the returned config for this
+// request only — the original shared config is never mutated, so concurrent
+// requests switching models cannot race on it. When AutoVision is off the
+// config is returned unchanged.
+func (c *ConvertConfig) WithAutoVision(modelName string) *ConvertConfig {
+	if c == nil || !c.AutoVision {
+		return c
+	}
+	cp := *c
+	cp.SupportVision = ModelSupportsVision(modelName)
+	return &cp
+}
+
 // MIME type categories
 var (
+	// NOTE: image/svg+xml is deliberately NOT an image here. SVG is XML text
+	// the model can read verbatim, and most vision APIs reject it as an image
+	// part anyway; it is routed through the text channel.
 	imageMimeTypes = map[string]bool{
-		"image/png":     true,
-		"image/jpeg":    true,
-		"image/gif":     true,
-		"image/webp":    true,
-		"image/svg+xml": true,
+		"image/png":  true,
+		"image/jpeg": true,
+		"image/gif":  true,
+		"image/webp": true,
 	}
 
 	textMimeTypes = map[string]bool{
@@ -307,6 +330,8 @@ var (
 		"text/css":               true,
 		"text/csv":               true,
 		"text/markdown":          true,
+		"text/xml":               true,
+		"image/svg+xml":          true, // SVG is XML text — readable, not a raster image
 		"application/json":       true,
 		"application/xml":        true,
 		"application/javascript": true,
@@ -644,6 +669,14 @@ func ConvertMessagesForProvider(messages []types.Message, bp *BaseProvider) []ma
 	return ConvertMessagesWithConfig(messages, config)
 }
 
+// ConvertMessagesWithModel converts messages using the provider config plus
+// the CURRENT model name: when the config has AutoVision enabled, vision
+// support is recomputed for this request (model switches no longer leave a
+// stale startup-time decision in place). The shared config is not mutated.
+func ConvertMessagesWithModel(messages []types.Message, config *ConvertConfig, modelName string) []map[string]interface{} {
+	return ConvertMessagesWithConfig(messages, config.WithAutoVision(modelName))
+}
+
 // ConvertContentPartsToMap converts content parts using the provider's configuration
 func ConvertContentPartsToMap(parts []types.ContentPart, config *ConvertConfig) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(parts))
@@ -670,29 +703,31 @@ func convertContentPart(part types.ContentPart, config *ConvertConfig) map[strin
 		supportVision := config != nil && config.SupportVision
 		log.Debugf("[convertContentPart] image_url: SupportVision=%v", supportVision)
 		if !supportVision {
-			// Model doesn't support vision, convert to text description
-			desc := "Image attachment"
-			if part.ImageURL != nil && part.ImageURL.URL != "" {
-				// NOTE: avoid square brackets — GLM mimics them in its output.
-				desc = "Image: " + part.ImageURL.URL
-			}
-			log.Debugf("[convertContentPart] Converting image_url to text: %s", desc)
+			// Model doesn't support vision: emit a SHORT placeholder. We must
+			// never inline the URL here — chat links are data URLs (multi-MB
+			// base64 payloads), and echoing them back as "text" blows up the
+			// token budget or gets the request rejected outright.
+			// NOTE: avoid square brackets — GLM mimics them in its output.
+			desc := "(image attachment omitted: current model does not support vision)"
+			log.Debugf("[convertContentPart] Converting image_url to text placeholder")
 			return map[string]interface{}{
 				"type": "text",
 				"text": desc,
 			}
 		}
-		// Model supports vision, use image_url format
-		detail := "auto"
-		if part.ImageURL != nil && part.ImageURL.Detail != "" {
-			detail = part.ImageURL.Detail
+		if part.ImageURL == nil || part.ImageURL.URL == "" {
+			return nil
+		}
+		// Model supports vision, use image_url format. Only include "detail"
+		// when the caller actually set one — unconditional "auto" values are
+		// rejected by stricter OpenAI-compatible gateways.
+		imageURL := map[string]interface{}{"url": part.ImageURL.URL}
+		if part.ImageURL.Detail != "" {
+			imageURL["detail"] = part.ImageURL.Detail
 		}
 		return map[string]interface{}{
-			"type": "image_url",
-			"image_url": map[string]interface{}{
-				"url":    part.ImageURL.URL,
-				"detail": detail,
-			},
+			"type":      "image_url",
+			"image_url": imageURL,
 		}
 
 	case "file":
@@ -748,9 +783,10 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 	buildImagePart := func(url string) map[string]interface{} {
 		// Check if model supports vision
 		if config != nil && !config.SupportVision {
-			// Model doesn't support vision, return text description instead
+			// Model doesn't support vision: short placeholder, never inline
+			// the URL (data URLs are multi-MB base64 payloads).
 			// NOTE: avoid square brackets — GLM mimics them in its output.
-			return buildTextPart("Image: " + url)
+			return buildTextPart("(image attachment omitted: current model does not support vision)")
 		}
 		return map[string]interface{}{
 			"type": "image_url",

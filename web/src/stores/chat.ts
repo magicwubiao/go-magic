@@ -505,7 +505,7 @@ export const useChatStore = defineStore('chat', () => {
     pushTextSegmentIfNeeded(sessionId)
   }
 
-  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[]): Promise<void> {
+  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
       if (!session) return
@@ -545,7 +545,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
-      const eventSource = sessionsApi.streamChat(sessionId, content, images, files)
+      const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls)
       sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
 
       eventSource.onmessage = (event) => {

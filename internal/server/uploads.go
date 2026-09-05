@@ -640,10 +640,18 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 
 // uploadsServeHandler serves /api/uploads/ from the per-session layout. Each
 // request is auth-gated by requireAuth in the router. We never list dirs.
+//
+// Responses carry hardening headers: uploads are untrusted user content, and
+// an inline-rendered SVG (or HTML) executes in our origin — where it could
+// read localStorage tokens. "sandbox" CSP + nosniff + attachment disposition
+// guarantee download-only semantics regardless of file type.
 func (s *Server) uploadsServeHandler() http.Handler {
 	root := s.uploadsRoot()
 	fs := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", "attachment")
 		upath := r.URL.Path
 		if !strings.HasPrefix(upath, "/api/uploads/") {
 			http.NotFound(w, r)

@@ -3,6 +3,7 @@ package provider
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -341,7 +342,13 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]
 			// Handle ContentParts for multi-modal content
 			var content interface{}
 			if len(msg.ContentParts) > 0 {
-				contentParts := ConvertContentPartsToMap(msg.ContentParts, p.ConvertConfig)
+				cfg := p.ConvertConfig.WithAutoVision(p.model)
+				contentParts := ConvertContentPartsToMap(msg.ContentParts, cfg)
+				// The shared converter emits OpenAI-style parts
+				// ({"type":"image_url","image_url":{...}}). Anthropic's
+				// native Messages API rejects those with a 400 — restructure
+				// image parts into Anthropic's image/source blocks.
+				contentParts = toAnthropicContentParts(contentParts)
 				if len(contentParts) > 0 {
 					content = contentParts
 				} else {
@@ -397,6 +404,78 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]
 	}
 
 	return req
+}
+
+// toAnthropicContentParts restructures OpenAI-style content parts into the
+// format Anthropic's native Messages API expects:
+//
+//	{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+//	  → {"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}
+//
+// Text parts pass through unchanged. Sending raw image_url blocks to the
+// native endpoint is a guaranteed 400 ("image_url is not a valid content
+// block type"). Non-data-URL images (http links) cannot be inlined — they
+// degrade to a short text note so the turn still goes through.
+func toAnthropicContentParts(parts []map[string]interface{}) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(parts))
+	for _, part := range parts {
+		ptype, _ := part["type"].(string)
+		if ptype != "image_url" {
+			out = append(out, part)
+			continue
+		}
+		urlMap, ok := part["image_url"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		urlStr, _ := urlMap["url"].(string)
+		if !strings.HasPrefix(urlStr, "data:") {
+			out = append(out, map[string]interface{}{
+				"type": "text",
+				"text": "(image attachment omitted: " + urlStr + " — not inlineable for Anthropic)",
+			})
+			continue
+		}
+		commaIdx := strings.Index(urlStr, ",")
+		if commaIdx < 0 {
+			out = append(out, map[string]interface{}{
+				"type": "text",
+				"text": "(image attachment omitted: empty image data)",
+			})
+			continue
+		}
+		header := urlStr[5:commaIdx] // e.g. "image/png;base64"
+		data := urlStr[commaIdx+1:]
+		mediaType := strings.TrimSuffix(header, ";base64")
+		if mediaType == "" {
+			mediaType = "image/png"
+		}
+		// Anthropic only accepts image/* media types in base64 sources.
+		if !strings.HasPrefix(mediaType, "image/") {
+			out = append(out, map[string]interface{}{
+				"type": "text",
+				"text": "(image attachment omitted: unsupported media type " + mediaType + ")",
+			})
+			continue
+		}
+		if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+			log.Warnf("[Anthropic] dropping image part with invalid base64 payload: %v", err)
+			out = append(out, map[string]interface{}{
+				"type": "text",
+				"text": "(image attachment omitted: invalid image data)",
+			})
+			continue
+		}
+		out = append(out, map[string]interface{}{
+			"type": "image",
+			"source": map[string]interface{}{
+				"type":       "base64",
+				"media_type": mediaType,
+				"data":       data,
+			},
+		})
+	}
+	return out
 }
 
 // parseResponse parses a non-streaming Anthropic response
