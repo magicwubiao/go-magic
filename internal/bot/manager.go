@@ -121,8 +121,12 @@ func NewManager(cfg *config.Config, sessions *sessionstore.Store) (*Manager, err
 }
 
 // IsEnabled reports whether Bot Mode is turned on in config.
+// A missing bot_mode section falls back to the default (enabled).
 func IsEnabled(cfg *config.Config) bool {
-	return cfg.BotMode != nil && cfg.BotMode.Enabled
+	if cfg.BotMode == nil {
+		return config.DefaultBotModeConfig().Enabled
+	}
+	return cfg.BotMode.Enabled
 }
 
 // Start initializes all bots, registers routines, and launches worker goroutines.

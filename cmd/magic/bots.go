@@ -714,7 +714,7 @@ func truncateStr(s string, n int) string {
 // enableBotModeHint prints guidance when bots exist but bot_mode is off.
 func enableBotModeHint() error {
 	cfg, err := config.Load()
-	if err == nil && cfg.BotMode != nil && cfg.BotMode.Enabled {
+	if err == nil && bot.IsEnabled(cfg) {
 		return nil
 	}
 	fmt.Println("\n⚠️  Bot Mode is currently disabled — bots will only run inside the gateway once enabled:")

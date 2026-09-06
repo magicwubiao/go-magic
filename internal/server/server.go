@@ -1400,7 +1400,7 @@ func (s *Server) initBotMode() (*bot.Manager, error) {
 	if cfg == nil {
 		cfg = appconfig.DefaultConfig()
 	}
-	if cfg.BotMode == nil || !cfg.BotMode.Enabled {
+	if !bot.IsEnabled(cfg) {
 		s.botModeStarted = true
 		return nil, fmt.Errorf("bot_mode disabled in config")
 	}

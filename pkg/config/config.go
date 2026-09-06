@@ -370,7 +370,7 @@ type BotModeConfig struct {
 // DefaultBotModeConfig returns default Bot Mode settings.
 func DefaultBotModeConfig() *BotModeConfig {
 	return &BotModeConfig{
-		Enabled:           false,
+		Enabled:           true,
 		InjectBotProtocol: nil, // nil = enabled by default at runtime
 	}
 }
@@ -478,7 +478,8 @@ func defaultConfig() *Config {
 			Enabled:   false,
 			Platforms: make(map[string]PlatformConfig),
 		},
-		Voice: voice.DefaultVoiceConfig(),
+		BotMode: DefaultBotModeConfig(),
+		Voice:   voice.DefaultVoiceConfig(),
 	}
 }
 
