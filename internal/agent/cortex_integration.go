@@ -28,7 +28,9 @@ import (
 //   - Perception / Cognition / Execution three-layer architecture
 //   - Frozen snapshot memory protection
 func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error) {
-	if a.cortexManager == nil {
+	// A Manager built with cortex disabled is an empty shell (Perception,
+	// Cognition, Snapshot ... all nil). Gate on IsEnabled, not just nil.
+	if a.cortexManager == nil || !a.cortexManager.IsEnabled() {
 		return a.RunConversation(ctx, input)
 	}
 

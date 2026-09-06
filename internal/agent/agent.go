@@ -1743,8 +1743,10 @@ func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
-	// Cortex: inject memory context and adjust behavior
-	if a.cortexManager != nil {
+	// Cortex: inject memory context and adjust behavior.
+	// IsEnabled() matters: a Manager created with cortex disabled is a shell
+	// with nil subsystems, and touching it here panicked (Connection lost).
+	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		a.cortexManager.OnUserMessage(input)
 
 		// Inject memory and user context into system prompt

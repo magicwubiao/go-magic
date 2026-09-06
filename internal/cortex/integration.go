@@ -973,27 +973,41 @@ func memoryRecordFromMemory(mem *memory.Memory) *memory.MemoryRecord {
 	}
 }
 
-// GetPromptContext returns the memory context to include in system prompt
-// Uses the frozen snapshot, not the latest version
+// GetPromptContext returns the memory context to include in the system prompt.
+// Uses the frozen snapshot, not the latest version. A disabled Manager is
+// created as an empty shell (Snapshot == nil) and must return "" instead of
+// panicking — agents only nil-check the Manager itself.
 func (m *Manager) GetPromptContext() string {
+	if m == nil || m.Snapshot == nil {
+		return ""
+	}
 	return m.Snapshot.GetMemoryForPrompt()
 }
 
-// GetUserContext returns the user profile for system prompt
-// Uses the frozen snapshot
+// GetUserContext returns the user profile for the system prompt.
+// Uses the frozen snapshot; safe on a disabled (shell) Manager.
 func (m *Manager) GetUserContext() string {
+	if m == nil || m.Snapshot == nil {
+		return ""
+	}
 	return m.Snapshot.GetUserForPrompt()
 }
 
 // AppendMemory adds a line to the memory file
 // Writes to disk immediately but does NOT refresh frozen snapshot
 func (m *Manager) AppendMemory(line string) error {
+	if m == nil || m.Snapshot == nil {
+		return fmt.Errorf("cortex memory disabled")
+	}
 	return m.Snapshot.AppendToMemory(line)
 }
 
 // AppendUser adds a line to the user profile
 // Writes to disk immediately but does NOT refresh frozen snapshot
 func (m *Manager) AppendUser(line string) error {
+	if m == nil || m.Snapshot == nil {
+		return fmt.Errorf("cortex memory disabled")
+	}
 	return m.Snapshot.AppendToUser(line)
 }
 
@@ -1098,6 +1112,9 @@ func (m *Manager) GetRetrievalHints() []cognition.RetrievalHint {
 
 // GetMemoryVersion returns the current memory version
 func (m *Manager) GetMemoryVersion() int {
+	if m == nil || m.Snapshot == nil {
+		return 0
+	}
 	return m.Snapshot.GetVersion()
 }
 
