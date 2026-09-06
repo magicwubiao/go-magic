@@ -14,7 +14,13 @@ import (
 )
 
 const (
-	defaultTimeout  = 30 * time.Second
+	// defaultTimeout is the chat-mode default for execute_command. 120s
+	// matches the max timeout a tool-call argument may request in chat mode
+	// (see Execute): installs, builds and test runs routinely exceed 30s,
+	// and a too-eager default kills them before the model can react. The
+	// model can still pass a smaller timeout for quick commands; coding
+	// mode raises both via SetCodingMode.
+	defaultTimeout  = 120 * time.Second
 	maxOutputLength = 50 * 1024 // 50KB
 )
 
@@ -199,7 +205,7 @@ func (t *ExecuteCommandTool) Schema() map[string]interface{} {
 			},
 			"timeout": map[string]interface{}{
 				"type":        "number",
-				"description": "Timeout in seconds (default: 30)",
+				"description": "Timeout in seconds (default: 120, max: 120 in chat mode / 600 in coding mode)",
 			},
 		},
 		"required": []string{"command"},
