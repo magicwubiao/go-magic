@@ -108,6 +108,77 @@ func SanitizeAssistantContent(content string) string {
 	return StripZeroWidth(StripLegacyPlaceholder(content))
 }
 
+// SplitThinkPrefix splits a leading "<think>...</think>" block off assistant
+// content. The agent layer stores provider reasoning inline as a leading
+// think block (wrapLLMReasoning) so the UI and session persistence can show
+// the thinking process; some thinking-mode APIs instead require that
+// reasoning to travel in the dedicated reasoning_content field. Returns the
+// extracted reasoning, the remaining content, and whether a COMPLETE think
+// block was found at the start (an unterminated <think> from truncated
+// history is left untouched).
+func SplitThinkPrefix(content string) (reasoning, rest string, ok bool) {
+	trimmed := strings.TrimLeft(content, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "<think>") {
+		return "", content, false
+	}
+	body := trimmed[len("<think>"):]
+	end := strings.Index(body, "</think>")
+	if end < 0 {
+		return "", content, false
+	}
+	reasoning = body[:end]
+	rest = strings.TrimLeft(body[end+len("</think>"):], " \t\r\n")
+	return reasoning, rest, true
+}
+
+// RequiresReasoningPassback reports whether the model's API validates that
+// prior assistant turns carry their reasoning_content field back on every
+// request (thinking-mode multi-turn rule). DeepSeek V4 answers 400
+// "invalid_request_error: The reasoning_content in the thinking mode must
+// be passed back to the API" otherwise. The list is intentionally narrow:
+// extend it ONLY from provider error evidence. Other vendors handle
+// reasoning differently — DashScope (qwen3 thinking) rejects client-supplied
+// reasoning_content and instead exposes the server-side preserve_thinking
+// request flag, while OpenAI / GLM / Moonshot tolerate absent fields.
+func RequiresReasoningPassback(model string) bool {
+	return strings.HasPrefix(model, "deepseek-v4")
+}
+
+// ApplyReasoningPassback rewrites converted assistant messages for models
+// whose API requires the reasoning_content field to be passed back
+// (see RequiresReasoningPassback). Agent history stores reasoning inline as
+// a leading <think> block (wrapLLMReasoning); for the affected models that
+// block is split back out into the dedicated field. Messages without a
+// leading think block and non-assistant roles are left untouched, so
+// non-thinking histories produce byte-identical payloads as before.
+func ApplyReasoningPassback(converted []map[string]interface{}, model string) []map[string]interface{} {
+	if !RequiresReasoningPassback(model) {
+		return converted
+	}
+	for _, m := range converted {
+		if r, _ := m["role"].(string); r != "assistant" {
+			continue
+		}
+		content, isStr := m["content"].(string)
+		if !isStr {
+			continue // array content (multi-modal parts) untouched
+		}
+		reasoning, rest, found := SplitThinkPrefix(content)
+		if !found {
+			continue
+		}
+		m["reasoning_content"] = reasoning
+		if IsEmptyAssistantContent(rest) {
+			// Reasoning-only turn: keep the empty-content defenses strict
+			// validators (GLM 1214 and friends) rely on.
+			m["content"] = emptyAssistantPlaceholder
+		} else {
+			m["content"] = rest
+		}
+	}
+	return converted
+}
+
 // DashScopeTurnLimit is the service-side hard cap on the total number of
 // messages ("turns") per request for the DashScope compatible-mode API.
 // The server rejects requests whose messages array exceeds 150 items with

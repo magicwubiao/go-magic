@@ -272,7 +272,10 @@ func (p *OpenAICompatibleProvider) applyDashScopeDefaults(reqBody map[string]int
 
 // prepMessages runs provider-specific preprocessing over the message list.
 // For DashScope it enforces the 140-assistant-message hard cap (see
-// TrimDashScopeTurns). Other providers currently pass through unchanged.
+// TrimDashScopeTurns). For models whose API requires the reasoning_content
+// of prior assistant turns to be passed back (deepseek-v4 thinking mode),
+// the agent's inline <think> history blocks are split into the dedicated
+// field (see ApplyReasoningPassback).
 func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[string]interface{} {
 	cfg := p.BaseProvider.ConvertCfg
 	if cfg != nil {
@@ -284,9 +287,12 @@ func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[
 			log.Infof("[OpenAICompat:dashscope] trimmed turns: %d -> %d (limit %d)",
 				len(messages), len(trimmed), DashScopeTurnMaxSend)
 		}
+		// No client-side reasoning passback here: DashScope rejects
+		// reasoning_content on input and keeps thinking server-side via
+		// the preserve_thinking request flag.
 		return ConvertMessagesWithConfig(trimmed, cfg)
 	}
-	return ConvertMessagesWithConfig(messages, cfg)
+	return ApplyReasoningPassback(ConvertMessagesWithConfig(messages, cfg), p.GetModel())
 }
 
 // applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段），
