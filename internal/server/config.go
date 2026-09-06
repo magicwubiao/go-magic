@@ -30,7 +30,7 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 			},
 			"model": map[string]interface{}{
 				"type":       "string",
-				"default":    "deepseek-chat",
+				"default":    "deepseek-v4-flash",
 				"deprecated": true,
 			},
 			"cortex.enabled": map[string]interface{}{

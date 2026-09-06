@@ -8,7 +8,7 @@ type MiniMaxProvider struct {
 // NewMiniMaxProvider creates a new MiniMax provider
 func NewMiniMaxProvider(apiKey, baseURL, model string) *MiniMaxProvider {
 	if model == "" {
-		model = "abab6-chat"
+		model = "MiniMax-M3"
 	}
 	if baseURL == "" {
 		baseURL = "https://api.minimax.chat/v1"

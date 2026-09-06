@@ -23,7 +23,7 @@ type DashScopeProvider struct {
 
 func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
 	if model == "" {
-		model = "qwen-max"
+		model = "qwen3.7-plus"
 	}
 	if baseURL == "" {
 		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"

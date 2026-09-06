@@ -52,35 +52,35 @@ type providerInfo struct {
 func allProviders() []providerInfo {
 	return []providerInfo{
 		// Recommended
-		{Name: "deepseek", DisplayName: "DeepSeek", Description: "DeepSeek V3/R1, high cost-effective reasoning models", Models: []string{"deepseek-chat", "deepseek-reasoner"}, NeedsAPIKey: true, DefaultURL: "https://api.deepseek.com"},
+		{Name: "deepseek", DisplayName: "DeepSeek", Description: "DeepSeek V4, high cost-effective reasoning models", Models: []string{"deepseek-v4-flash", "deepseek-v4-pro"}, NeedsAPIKey: true, DefaultURL: "https://api.deepseek.com"},
 		{Name: "openai", DisplayName: "OpenAI", Description: "GPT-5.6 series models", Models: []string{"gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna"}, NeedsAPIKey: true, DefaultURL: "https://api.openai.com/v1"},
-		{Name: "anthropic", DisplayName: "Anthropic", Description: "Claude Sonnet 5, Opus 5, etc.", Models: []string{"claude-sonnet-5", "claude-fable-5", "claude-opus-5", "claude-haiku-4-5"}, NeedsAPIKey: true, DefaultURL: "https://api.anthropic.com"},
+		{Name: "anthropic", DisplayName: "Anthropic", Description: "Claude Fable 5.1, Opus 5, etc.", Models: []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"}, NeedsAPIKey: true, DefaultURL: "https://api.anthropic.com"},
 
 		// China Providers
-		{Name: "dashscope", DisplayName: "Tongyi Qianwen (DashScope)", Description: "Alibaba Cloud Tongyi Qianwen LLM", Models: []string{"qwen3-max", "qwen3-plus", "qwen-plus", "qwen-turbo", "qwen-long"}, NeedsAPIKey: true, DefaultURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{Name: "minimax", DisplayName: "MiniMax", Description: "MiniMax LLM", Models: []string{"abab6.5s-chat", "abab6.5-chat"}, NeedsAPIKey: true, DefaultURL: "https://api.minimax.chat/v1"},
-		{Name: "zhipu", DisplayName: "Zhipu AI (GLM)", Description: "Zhipu GLM series models", Models: []string{"glm-4.7", "glm-4.6", "glm-4-flash", "glm-4v"}, NeedsAPIKey: true, DefaultURL: "https://open.bigmodel.cn/api/paas/v4"},
-		{Name: "huoshan", DisplayName: "Volcengine (Doubao)", Description: "ByteDance Doubao models via Volcengine Ark", Models: []string{"doubao-seed-1.6", "doubao-1.5-pro-32k", "doubao-1.5-thinking-pro", "doubao-pro-32k"}, NeedsAPIKey: true, DefaultURL: "https://ark.cn-beijing.volces.com/api/v3"},
-		{Name: "wenxin", DisplayName: "Wenxin Yiyan", Description: "Baidu Wenxin Yiyan LLM", Models: []string{"ernie-4.0-8k", "ernie-3.5-8k", "ernie-speed-128k"}, NeedsAPIKey: true, DefaultURL: "https://aip.baidubce.com/rpc/2.0/ai_qianfan_200/v1"},
-		{Name: "moonshot", DisplayName: "Moonshot (Kimi)", Description: "Moonshot Kimi LLM", Models: []string{"kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"}, NeedsAPIKey: true, DefaultURL: "https://api.moonshot.cn/v1"},
-		{Name: "hunyuan", DisplayName: "Hunyuan", Description: "Tencent Hunyuan LLM", Models: []string{"hunyuan-pro", "hunyuan-standard", "hunyuan-lite"}, NeedsAPIKey: true, DefaultURL: "https://hunyuan.cloud.tencent.com/v1"},
+		{Name: "dashscope", DisplayName: "Tongyi Qianwen (DashScope)", Description: "Alibaba Cloud Tongyi Qianwen LLM", Models: []string{"qwen3.8-max", "qwen3.7-plus", "qwen3.7-flash", "qwen-long"}, NeedsAPIKey: true, DefaultURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{Name: "minimax", DisplayName: "MiniMax", Description: "MiniMax LLM", Models: []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}, NeedsAPIKey: true, DefaultURL: "https://api.minimax.chat/v1"},
+		{Name: "zhipu", DisplayName: "Zhipu AI (GLM)", Description: "Zhipu GLM series models", Models: []string{"glm-5.3", "glm-5.3-flash", "glm-5.2"}, NeedsAPIKey: true, DefaultURL: "https://open.bigmodel.cn/api/paas/v4"},
+		{Name: "huoshan", DisplayName: "Volcengine (Doubao)", Description: "ByteDance Doubao models via Volcengine Ark", Models: []string{"doubao-seed-2.1-pro", "doubao-seed-2.1-turbo", "doubao-seed-2.0-lite", "doubao-seed-evolving"}, NeedsAPIKey: true, DefaultURL: "https://ark.cn-beijing.volces.com/api/v3"},
+		{Name: "wenxin", DisplayName: "Wenxin Yiyan", Description: "Baidu Wenxin Yiyan LLM", Models: []string{"ernie-5.1", "ernie-5.0", "ernie-4.5-turbo-128k"}, NeedsAPIKey: true, DefaultURL: "https://aip.baidubce.com/rpc/2.0/ai_qianfan_200/v1"},
+		{Name: "moonshot", DisplayName: "Moonshot (Kimi)", Description: "Moonshot Kimi LLM", Models: []string{"kimi-k3", "kimi-k2.6", "kimi-k2.7-code"}, NeedsAPIKey: true, DefaultURL: "https://api.moonshot.cn/v1"},
+		{Name: "hunyuan", DisplayName: "Hunyuan", Description: "Tencent Hunyuan LLM", Models: []string{"hy3", "hy-2.0-think", "hunyuan-turbos"}, NeedsAPIKey: true, DefaultURL: "https://hunyuan.cloud.tencent.com/v1"},
 
 		// Local
-		{Name: "ollama", DisplayName: "Ollama", Description: "Local models (Llama, Mistral, Qwen, etc.)", Models: []string{"llama3.3", "qwen3", "mistral", "codellama", "phi3"}, NeedsAPIKey: false, DefaultURL: "http://localhost:11434"},
-		{Name: "vllm", DisplayName: "vLLM", Description: "Local high-performance inference service", Models: []string{"llama3", "qwen2.5"}, NeedsAPIKey: false, DefaultURL: "http://localhost:8000"},
+		{Name: "ollama", DisplayName: "Ollama", Description: "Local models (Qwen, GPT-OSS, Llama, etc.)", Models: []string{"qwen3.8", "gpt-oss", "deepseek-r1", "gemma4", "phi4"}, NeedsAPIKey: false, DefaultURL: "http://localhost:11434"},
+		{Name: "vllm", DisplayName: "vLLM", Description: "Local high-performance inference service", Models: []string{"llama3", "qwen3.8"}, NeedsAPIKey: false, DefaultURL: "http://localhost:8000"},
 
 		// Aggregators
-		{Name: "openrouter", DisplayName: "OpenRouter", Description: "Unified API for 100+ models", Models: []string{"openai/gpt-5.6", "anthropic/claude-sonnet-5", "google/gemini-3.7-flash", "deepseek/deepseek-chat"}, NeedsAPIKey: true, DefaultURL: "https://openrouter.ai/api/v1"},
-		{Name: "together", DisplayName: "Together AI", Description: "Open source model hosting platform", Models: []string{"meta-llama/Llama-3.3-70B-Instruct-Turbo", "deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"}, NeedsAPIKey: true, DefaultURL: "https://api.together.xyz/v1"},
-		{Name: "groq", DisplayName: "Groq", Description: "Ultra-fast LLM inference", Models: []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant"}, NeedsAPIKey: true, DefaultURL: "https://api.groq.com/openai/v1"},
+		{Name: "openrouter", DisplayName: "OpenRouter", Description: "Unified API for 100+ models", Models: []string{"openai/gpt-5.6", "anthropic/claude-sonnet-5", "google/gemini-3.8-flash", "deepseek/deepseek-v4-pro"}, NeedsAPIKey: true, DefaultURL: "https://openrouter.ai/api/v1"},
+		{Name: "together", DisplayName: "Together AI", Description: "Open source model hosting platform", Models: []string{"deepseek-ai/DeepSeek-V4-Pro", "meta-llama/Llama-4-Maverick-17B-128E-Instruct", "Qwen/Qwen3.8-2.4T-A95B"}, NeedsAPIKey: true, DefaultURL: "https://api.together.xyz/v1"},
+		{Name: "groq", DisplayName: "Groq", Description: "Ultra-fast LLM inference", Models: []string{"llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"}, NeedsAPIKey: true, DefaultURL: "https://api.groq.com/openai/v1"},
 		{Name: "perplexity", DisplayName: "Perplexity", Description: "AI search engine models", Models: []string{"sonar-pro", "sonar", "sonar-reasoning-pro", "sonar-deep-research"}, NeedsAPIKey: true, DefaultURL: "https://api.perplexity.ai"},
 
 		// Others
-		{Name: "gemini", DisplayName: "Google Gemini", Description: "Google Gemini series models", Models: []string{"gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"}, NeedsAPIKey: true, DefaultURL: "https://generativelanguage.googleapis.com/v1beta"},
-		{Name: "mistral", DisplayName: "Mistral AI", Description: "Mistral series open source models", Models: []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"}, NeedsAPIKey: true, DefaultURL: "https://api.mistral.ai/v1"},
-		{Name: "cohere", DisplayName: "Cohere", Description: "Cohere Command series models", Models: []string{"command-r-plus", "command-r", "command"}, NeedsAPIKey: true, DefaultURL: "https://api.cohere.ai/v2"},
+		{Name: "gemini", DisplayName: "Google Gemini", Description: "Google Gemini series models", Models: []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro", "gemini-2.5-pro"}, NeedsAPIKey: true, DefaultURL: "https://generativelanguage.googleapis.com/v1beta"},
+		{Name: "mistral", DisplayName: "Mistral AI", Description: "Mistral series open source models", Models: []string{"mistral-large-latest", "mistral-medium-3-5", "mistral-small-2603", "codestral-latest"}, NeedsAPIKey: true, DefaultURL: "https://api.mistral.ai/v1"},
+		{Name: "cohere", DisplayName: "Cohere", Description: "Cohere Command series models", Models: []string{"command-a-plus-05-2026", "command-a-reasoning-08-2025", "command-a-03-2025"}, NeedsAPIKey: true, DefaultURL: "https://api.cohere.ai/v2"},
 		{Name: "mimo", DisplayName: "MiMo", Description: "MiMo LLM", Models: []string{"mimo-3-7b"}, NeedsAPIKey: true, DefaultURL: "https://api.mymimo.ai/v1"},
-		{Name: "longcat", DisplayName: "LongCat", Description: "Meituan LongCat LLM", Models: []string{"LongCat-Flash-Chat", "LongCat-Flash-Thinking", "LongCat-Flash-Lite"}, NeedsAPIKey: true, DefaultURL: "https://api.longcat.chat/openai/v1"},
+		{Name: "longcat", DisplayName: "LongCat", Description: "Meituan LongCat LLM", Models: []string{"LongCat-2.0-Preview"}, NeedsAPIKey: true, DefaultURL: "https://api.longcat.chat/openai/v1"},
 		{Name: "meta", DisplayName: "Meta Model API (Muse Spark)", Description: "Meta Muse Spark multimodal reasoning model", Models: []string{"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}, NeedsAPIKey: true, DefaultURL: "https://api.meta.ai/v1"},
 		{Name: "custom", DisplayName: "Custom (OpenAI Compatible)", Description: "Custom service compatible with OpenAI API format", Models: []string{}, NeedsAPIKey: true, NeedsBaseURL: true},
 	}

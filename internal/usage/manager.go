@@ -25,8 +25,11 @@ var ModelPricing = map[string]ModelPrice{
 	"claude-3-opus-20240229":     {Input: 15.00, Output: 75.00, Unit: "1M tokens"},
 	"claude-3-sonnet-20240229":   {Input: 3.00, Output: 15.00, Unit: "1M tokens"},
 	// DeepSeek
-	"deepseek-chat":  {Input: 0.27, Output: 1.10, Unit: "1M tokens"},
-	"deepseek-coder": {Input: 0.27, Output: 1.10, Unit: "1M tokens"},
+	"deepseek-v4-flash": {Input: 0.14, Output: 0.28, Unit: "1M tokens"},
+	"deepseek-v4-pro":   {Input: 0.435, Output: 0.87, Unit: "1M tokens"},
+	"deepseek-chat":     {Input: 0.27, Output: 1.10, Unit: "1M tokens"}, // 已弃用（2026-07-24），保留供历史用量计价
+	"deepseek-coder":    {Input: 0.27, Output: 1.10, Unit: "1M tokens"}, // 已弃用
+	"deepseek-reasoner": {Input: 0.27, Output: 1.10, Unit: "1M tokens"}, // 已弃用
 	// Ollama (本地，免费)
 	"llama3.2":  {Input: 0, Output: 0, Unit: "local"},
 	"mistral":   {Input: 0, Output: 0, Unit: "local"},

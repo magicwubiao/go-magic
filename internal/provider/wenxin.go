@@ -41,7 +41,7 @@ func (p *WenxinProvider) GetConvertConfig() *ConvertConfig {
 // NewWenxinProvider creates a new Wenxin provider
 func NewWenxinProvider(apiKey, secretKey, model string) *WenxinProvider {
 	if model == "" {
-		model = "ernie-4.0-8k-latest" // Default model
+		model = "ernie-5.1" // Default model
 	}
 	return &WenxinProvider{
 		apiKey:    apiKey,

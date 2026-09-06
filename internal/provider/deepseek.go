@@ -19,7 +19,7 @@ func NewDeepSeekProvider(apiKey, baseURL, model string, userModels []ModelInfo) 
 		baseURL = "https://api.deepseek.com"
 	}
 	if model == "" {
-		model = "deepseek-chat"
+		model = "deepseek-v4-flash"
 	}
 	return &DeepSeekProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProvider("deepseek", apiKey, baseURL, model, userModels),

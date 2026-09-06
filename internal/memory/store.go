@@ -930,7 +930,7 @@ func (s *Store) getLLMProvider() provider.Provider {
 
 	apiKey = os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey != "" {
-		return provider.NewDeepSeekProvider(apiKey, "", "deepseek-chat", nil)
+		return provider.NewDeepSeekProvider(apiKey, "", "deepseek-v4-flash", nil)
 	}
 
 	return nil

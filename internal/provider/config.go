@@ -120,30 +120,30 @@ func getDefaultBaseURL(name string) string {
 // getDefaultModel returns the default model for a provider
 func getDefaultModel(name string) string {
 	defaults := map[string]string{
-		"openai":     "gpt-5.6",          // GPT-5.6 Sol (alias gpt-5.6), also: gpt-5.6-terra, gpt-5.6-luna
-		"anthropic":  "claude-sonnet-5",  // also: claude-fable-5, claude-opus-5, claude-haiku-4-5
-		"deepseek":   "deepseek-chat",    // stable alias, follows latest V3.x
-		"gemini":     "gemini-3.7-flash", // latest stable; also: gemini-3.6-flash, gemini-3.1-pro-preview
+		"openai":     "gpt-5.6",           // GPT-5.6 Sol (alias gpt-5.6), also: gpt-5.6-terra, gpt-5.6-luna
+		"anthropic":  "claude-sonnet-5",   // also: claude-fable-5-1, claude-opus-5, claude-haiku-4-5
+		"deepseek":   "deepseek-v4-flash", // V4 主力（deepseek-chat/reasoner 已于 2026-07-24 弃用）
+		"gemini":     "gemini-3.8-flash",  // latest stable; also: gemini-3.7-flash, gemini-3.1-pro
 		"groq":       "llama-3.3-70b-versatile",
-		"kimi":       "kimi-k2-0905-preview", // kimi 为 moonshot 兼容别名
-		"moonshot":   "kimi-k2-0905-preview",
+		"kimi":       "kimi-k3", // kimi 为 moonshot 兼容别名；also: kimi-k2.6, kimi-k2.7-code
+		"moonshot":   "kimi-k3",
 		"openrouter": "openai/gpt-5.6",
-		"ollama":     "llama3.3",
+		"ollama":     "qwen3.8",
 		"vllm":       "llama3",
-		"cohere":     "command-a-03-2025",
+		"cohere":     "command-a-plus-05-2026",
 		"mistral":    "mistral-large-latest",
 		"perplexity": "sonar-pro",
-		"together":   "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-		"dashscope":  "qwen-plus",
-		"zhipu":      "glm-4.6",
-		"wenxin":     "ernie-4.0-8k",
-		"doubao":     "doubao-1.5-pro-32k", // doubao 为 huoshan 兼容别名
-		"huoshan":    "doubao-1.5-pro-32k",
-		"hunyuan":    "hunyuan-turbos-latest",
-		"minimax":    "MiniMax-M2.5",
+		"together":   "deepseek-ai/DeepSeek-V4-Pro",
+		"dashscope":  "qwen3.7-plus",
+		"zhipu":      "glm-5.3",
+		"wenxin":     "ernie-5.1",
+		"doubao":     "doubao-seed-2.1-pro", // doubao 为 huoshan 兼容别名
+		"huoshan":    "doubao-seed-2.1-pro",
+		"hunyuan":    "hy3",
+		"minimax":    "MiniMax-M3",
 		"mimo":       "mimo-v2-flash",
-		"longcat":    "LongCat-Flash-Chat",
-		"meta":       "muse-spark-1.3", // Meta Model API (Muse Spark)
+		"longcat":    "LongCat-2.0-Preview", // Flash 系列已于 2026-05-29 停止服务
+		"meta":       "muse-spark-1.3",      // Meta Model API (Muse Spark)
 	}
 
 	if model, ok := defaults[strings.ToLower(name)]; ok {

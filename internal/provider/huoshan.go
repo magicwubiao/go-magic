@@ -11,7 +11,7 @@ type HuoshanProvider struct {
 // NewHuoshanProvider creates a new Huoshan (Volcengine Ark) provider
 func NewHuoshanProvider(apiKey, baseURL, model string) *HuoshanProvider {
 	if model == "" {
-		model = "doubao-1.5-pro-32k"
+		model = "doubao-seed-2.1-pro"
 	}
 	if baseURL == "" {
 		baseURL = "https://ark.cn-beijing.volces.com/api/v3"

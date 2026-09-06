@@ -31,7 +31,7 @@ type Config struct {
 	Title        string `json:"title,omitempty"`         // Short role label, e.g. "Research Assistant"
 	Description  string `json:"description,omitempty"`   // What this bot does / when to use it
 	SystemPrompt string `json:"system_prompt,omitempty"` // Persona & standing instructions (SOUL.md equivalent)
-	Model        string `json:"model,omitempty"`         // Model pin, e.g. "deepseek-chat"; empty = inherit global
+	Model        string `json:"model,omitempty"`         // Model pin, e.g. "deepseek-v4-flash"; empty = inherit global
 	Provider     string `json:"provider,omitempty"`      // Provider pin; empty = inherit global
 
 	// Tools is an allowlist of tool names this bot may call. Empty = inherit

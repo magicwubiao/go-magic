@@ -453,7 +453,7 @@ func defaultConfig() *Config {
 		MagicHome:  "~/.magic",
 		WorkingDir: getDefaultWorkingDir(),
 		Provider:   "deepseek",
-		Model:      "deepseek-chat",
+		Model:      "deepseek-v4-flash",
 		Mode:       "chat",
 		Cortex: CortexConfig{
 			Enabled:             true,

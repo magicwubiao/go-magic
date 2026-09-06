@@ -74,13 +74,13 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 		case "anthropic":
 			model = "claude-sonnet-5"
 		case "deepseek":
-			model = "deepseek-chat"
+			model = "deepseek-v4-flash"
 		case "kimi", "moonshot": // kimi 为 moonshot 兼容别名
-			model = "kimi-k2-0905-preview"
+			model = "kimi-k3"
 		case "zhipu":
-			model = "glm-4.6"
+			model = "glm-5.3"
 		case "minimax":
-			model = "MiniMax-M2.5"
+			model = "MiniMax-M3"
 		case "groq":
 			model = "llama-3.3-70b-versatile"
 		case "openrouter":
@@ -88,21 +88,21 @@ func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels
 		case "mistral":
 			model = "mistral-large-latest"
 		case "dashscope":
-			model = "qwen-plus"
+			model = "qwen3.7-plus"
 		case "doubao", "huoshan": // doubao 为 huoshan 兼容别名
-			model = "doubao-1.5-pro-32k"
+			model = "doubao-seed-2.1-pro"
 		case "perplexity":
 			model = "sonar-pro"
 		case "hunyuan":
-			model = "hunyuan-turbos-latest"
+			model = "hy3"
 		case "longcat":
-			model = "LongCat-Flash-Chat"
+			model = "LongCat-2.0-Preview"
 		case "meta":
 			model = "muse-spark-1.3"
 		case "mimo":
 			model = "mimo-v2-flash"
 		case "ollama":
-			model = "llama3.3"
+			model = "qwen3.8"
 		case "vllm":
 			model = "default-model"
 		}
