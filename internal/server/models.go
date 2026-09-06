@@ -1,16 +1,19 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
@@ -434,10 +437,11 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 	// Handle PUT /{name} - update provider
 	if r.Method == http.MethodPut && subRoute == "" {
 		var req struct {
-			BaseURL string   `json:"base_url"`
-			Model   string   `json:"model"`
-			APIKey  string   `json:"api_key"`
-			Models  []string `json:"models"`
+			BaseURL string          `json:"base_url"`
+			Model   string          `json:"model"`
+			APIKey  string          `json:"api_key"`
+			Models  []string        `json:"models"`
+			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -463,6 +467,17 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					s.cfg.Model = req.Models[0]
 				}
 			}
+			// Vision: key present with true/false sets the declaration, with
+			// null clears it (back to name-based auto-detection), key absent
+			// (nil slice) leaves the stored value untouched. A value-type
+			// RawMessage is required here: decoding null into a *RawMessage
+			// nils the pointer, making it indistinguishable from an absent key.
+			if len(req.Vision) > 0 {
+				var vb *bool
+				if err := json.Unmarshal(req.Vision, &vb); err == nil {
+					provCfg.Vision = vb
+				}
+			}
 			s.cfg.Providers[name] = provCfg
 			s.cfg.Save()
 		}
@@ -473,10 +488,11 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 	// Handle POST /{name} - create provider (alias for PUT to create new)
 	if r.Method == http.MethodPost && subRoute == "" {
 		var req struct {
-			Name    string   `json:"name"`
-			BaseURL string   `json:"base_url"`
-			APIKey  string   `json:"api_key"`
-			Models  []string `json:"models"`
+			Name    string          `json:"name"`
+			BaseURL string          `json:"base_url"`
+			APIKey  string          `json:"api_key"`
+			Models  []string        `json:"models"`
+			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -505,6 +521,14 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 				// If this is the current provider, also update top-level model
 				if s.cfg.Provider == providerName && len(req.Models) > 0 {
 					s.cfg.Model = req.Models[0]
+				}
+			}
+			// Vision declaration: true/false sets, null clears (auto),
+			// key absent leaves it untouched (see the PUT branch note).
+			if len(req.Vision) > 0 {
+				var vb *bool
+				if err := json.Unmarshal(req.Vision, &vb); err == nil {
+					provCfg.Vision = vb
 				}
 			}
 			s.cfg.Providers[providerName] = provCfg
@@ -542,6 +566,77 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 	// Handle POST /{name}/disable - disable provider
 	if r.Method == http.MethodPost && subRoute == "disable" {
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
+		return
+	}
+
+	// Handle POST /{name}/test - verify provider connectivity with a real
+	// lightweight chat round-trip. Body may carry unsaved form values
+	// (api_key/base_url/model); they win over the stored config so the UI
+	// can test a key before saving it.
+	if r.Method == http.MethodPost && subRoute == "test" {
+		var req struct {
+			APIKey  string `json:"api_key"`
+			BaseURL string `json:"base_url"`
+			Model   string `json:"model"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
+		}
+
+		if s.cfg == nil {
+			http.Error(w, "config unavailable", http.StatusInternalServerError)
+			return
+		}
+		provCfg := appconfig.ProviderConfig{}
+		if s.cfg.Providers != nil {
+			if saved, ok := s.cfg.Providers[name]; ok {
+				provCfg = saved
+			}
+		}
+		if req.APIKey != "" {
+			provCfg.APIKey = req.APIKey
+		}
+		if req.BaseURL != "" {
+			provCfg.BaseURL = req.BaseURL
+		}
+		if req.Model != "" {
+			provCfg.Models = []string{req.Model}
+		}
+		model := provCfg.GetCurrentModel()
+		if model == "" {
+			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no model configured"})
+			return
+		}
+
+		prov, err := appconfig.CreateProviderFor(name, provCfg)
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		start := time.Now()
+		resp, err := prov.Chat(ctx, []types.Message{{Role: "user", Content: "ping"}})
+		latencyMs := time.Since(start).Milliseconds()
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{
+				"ok":        false,
+				"error":     truncateRunes(err.Error(), 300),
+				"latencyMs": latencyMs,
+			})
+			return
+		}
+		replyChars := 0
+		if resp != nil {
+			replyChars = len([]rune(resp.Content))
+		}
+		jsonResponse(w, map[string]interface{}{
+			"ok":         true,
+			"model":      model,
+			"latencyMs":  latencyMs,
+			"replyChars": replyChars,
+		})
 		return
 	}
 

@@ -14,6 +14,8 @@ export interface ProviderInput {
   apiKey?: string
   baseUrl?: string
   models: string[]
+  // Explicit vision declaration: true/false, null = auto-detect by model name
+  vision?: boolean | null
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -72,6 +74,7 @@ export const useConfigStore = defineStore('config', () => {
           api_key: input.apiKey,
           base_url: input.baseUrl,
           models: input.models,
+          vision: input.vision ?? null,
         })
       } else {
         await providersApi.createProvider({
@@ -79,6 +82,7 @@ export const useConfigStore = defineStore('config', () => {
           api_key: input.apiKey,
           base_url: input.baseUrl,
           models: input.models,
+          vision: input.vision ?? null,
           enabled: true,
         })
       }

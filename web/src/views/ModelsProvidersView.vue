@@ -114,17 +114,39 @@
           />
         </n-form-item>
         <n-form-item :label="t('modelsProviders.apiKey')">
-          <n-input
-            v-model:value="editingProvider.apiKey"
-            type="password"
-            show-password-on="click"
-            :placeholder="t('modelsProviders.apiKeyPlaceholder')"
-          />
+          <n-input-group>
+            <n-input
+              v-model:value="editingProvider.apiKey"
+              type="password"
+              show-password-on="click"
+              :placeholder="t('modelsProviders.apiKeyPlaceholder')"
+            />
+            <n-button
+              :loading="testing"
+              :disabled="!editingProvider.name"
+              :title="testTitle"
+              @click="handleTestConnection"
+            >
+              <span
+                v-if="testResult && !testing"
+                class="test-dot"
+                :class="testResult.ok ? 'dot-ok' : 'dot-fail'"
+              ></span>
+              {{ testing ? t('modelsProviders.testing') : t('modelsProviders.testConnection') }}
+            </n-button>
+          </n-input-group>
         </n-form-item>
         <n-form-item :label="t('modelsProviders.baseUrl')">
           <n-input
             v-model:value="editingProvider.baseUrl"
             :placeholder="t('modelsProviders.baseUrlPlaceholder')"
+          />
+        </n-form-item>
+        <n-form-item :label="t('modelsProviders.visionLabel')">
+          <n-select
+            v-model:value="editingProvider.vision"
+            :options="visionOptions"
+            :placeholder="t('modelsProviders.visionAuto')"
           />
         </n-form-item>
       </n-form>
@@ -147,7 +169,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
-  NInput, NDynamicInput, NSpace, NEmpty, NSpin
+  NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin
 } from 'naive-ui'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
@@ -165,8 +187,68 @@ const editingProvider = ref({
   name: '',
   models: [] as string[],
   apiKey: '',
-  baseUrl: ''
+  baseUrl: '',
+  vision: null as boolean | null
 })
+
+// 视觉支持三态：null=按模型名自动检测，true/false=显式声明
+const visionOptions = [
+  { label: t('modelsProviders.visionAuto'), value: null },
+  { label: t('modelsProviders.visionOn'), value: true },
+  { label: t('modelsProviders.visionOff'), value: false }
+]
+
+// 测试连接：用表单当前值（未保存也行）向该 provider 发一条轻量请求
+const testing = ref(false)
+const testResult = ref<providersApi.ProviderTestResult | null>(null)
+
+// 详细结果放在按钮 title 里，hover 即可看到延迟或失败原因
+const testTitle = computed(() => {
+  if (!testResult.value) return ''
+  return testResult.value.ok
+    ? t('modelsProviders.testOk', { ms: testResult.value.latencyMs ?? 0 })
+    : t('modelsProviders.testFailed') + (testResult.value.error ? `: ${testResult.value.error}` : '')
+})
+
+function openAddProviderModal() {
+  isEditing.value = false
+  editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '', vision: null }
+  testResult.value = null
+  showProviderModal.value = true
+}
+
+function openEditProviderModal(name: string) {
+  isEditing.value = true
+  const providers = configStore.config?.providers || {}
+  const prov = providers[name] || {}
+  editingProvider.value = {
+    name,
+    models: prov.models || [],
+    apiKey: prov.api_key || '',
+    baseUrl: prov.base_url || '',
+    vision: prov.vision === true || prov.vision === false ? prov.vision : null
+  }
+  testResult.value = null
+  showProviderModal.value = true
+}
+
+async function handleTestConnection() {
+  const name = editingProvider.value.name
+  if (!name || testing.value) return
+  testing.value = true
+  testResult.value = null
+  try {
+    testResult.value = await providersApi.testProvider(name, {
+      api_key: editingProvider.value.apiKey || undefined,
+      base_url: editingProvider.value.baseUrl || undefined,
+      model: editingProvider.value.models?.[0] || undefined
+    })
+  } catch (e: any) {
+    testResult.value = { ok: false, error: e?.message || String(e) }
+  } finally {
+    testing.value = false
+  }
+}
 
 // 从配置中获取已添加的供应商列表
 const configProviders = computed(() => {
@@ -266,25 +348,6 @@ function selectProvider(name: string) {
   selectedProvider.value = name
 }
 
-function openAddProviderModal() {
-  isEditing.value = false
-  editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '' }
-  showProviderModal.value = true
-}
-
-function openEditProviderModal(name: string) {
-  isEditing.value = true
-  const providers = configStore.config?.providers || {}
-  const prov = providers[name] || {}
-  editingProvider.value = {
-    name,
-    models: prov.models || [],
-    apiKey: prov.api_key || '',
-    baseUrl: prov.base_url || ''
-  }
-  showProviderModal.value = true
-}
-
 async function handleSaveProvider() {
   if (!editingProvider.value.name) return
   
@@ -292,7 +355,8 @@ async function handleSaveProvider() {
     name: editingProvider.value.name,
     apiKey: editingProvider.value.apiKey,
     baseUrl: editingProvider.value.baseUrl,
-    models: editingProvider.value.models
+    models: editingProvider.value.models,
+    vision: editingProvider.value.vision
   })
   showProviderModal.value = false
   await configStore.loadConfig()
@@ -495,6 +559,21 @@ onMounted(async () => {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+}
+
+.test-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.dot-ok {
+  background: #18a058;
+}
+.dot-fail {
+  background: #d03050;
 }
 
 /* 移动端:左右分栏改为上下堆叠 */
