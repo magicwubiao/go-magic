@@ -241,6 +241,11 @@ type ConvertConfig struct {
 	// correct after /api/model/set switches models mid-session, instead of
 	// freezing the decision made at agent startup.
 	AutoVision bool
+	// VisionOverride, when set, beats model-name detection entirely. It
+	// carries the user's explicit per-provider "vision" config declaration,
+	// because name-based guessing is best-effort and inevitably lags new
+	// model releases (e.g. glm-4.1v-* matches no known pattern).
+	VisionOverride *bool
 }
 
 // DefaultConvertConfig returns default conversion config
@@ -286,8 +291,10 @@ func ModelSupportsVision(modelName string) bool {
 		}
 	}
 
-	// Check for common vision model patterns
-	visionPatterns := []string{"vision", "vl", "glm-4v", "glm-4.5v", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3", "pixtral", "internvl", "grok"}
+	// Check for common vision model patterns. Note these are substring
+	// matches against the lowercased model name — keep version-specific
+	// entries like "glm-4.1v" (plain "glm-4v" is NOT a substring of it).
+	visionPatterns := []string{"vision", "vl", "glm-4v", "glm-4.1v", "glm-4.5v", "glm-4.6v", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet-4", "claude-opus-4", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3", "pixtral", "internvl", "grok"}
 	for _, pattern := range visionPatterns {
 		if strings.Contains(modelLower, pattern) {
 			return true
@@ -308,6 +315,11 @@ func (c *ConvertConfig) WithAutoVision(modelName string) *ConvertConfig {
 		return c
 	}
 	cp := *c
+	if c.VisionOverride != nil {
+		// Explicit per-provider declaration wins over model-name guessing.
+		cp.SupportVision = *c.VisionOverride
+		return &cp
+	}
 	cp.SupportVision = ModelSupportsVision(modelName)
 	return &cp
 }

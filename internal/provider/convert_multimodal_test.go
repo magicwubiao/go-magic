@@ -153,3 +153,58 @@ func TestWithAutoVision(t *testing.T) {
 		t.Fatal("AutoVision off must return the config unchanged")
 	}
 }
+
+// Explicit per-provider "vision" declaration must beat name-based detection.
+// Regression: glm-4.1v-thinking-flashx (a vision model) matched no pattern,
+// so images were silently downgraded to text placeholders.
+func TestModelSupportsVisionPatterns(t *testing.T) {
+	visionModels := []string{
+		"glm-4.1v-thinking-flashx",
+		"glm-4.5v", "glm-4v-plus", "glm-4.6v",
+		"qwen-vl-max", "qwen3-vl-plus",
+		"claude-sonnet-4", "gpt-4o-mini", "gemini-2.5-flash",
+	}
+	for _, m := range visionModels {
+		if !ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = false, want true", m)
+		}
+	}
+	textModels := []string{
+		"glm-5.3-flash", "deepseek-v4-pro", "qwen3.8-flash",
+		"kimi-k2", "deepseek-chat",
+	}
+	for _, m := range textModels {
+		if ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = true, want false", m)
+		}
+	}
+}
+
+// VisionOverride (user's explicit config) wins over both the detected value
+// and the current model name.
+func TestWithAutoVisionOverride(t *testing.T) {
+	yes := true
+	no := false
+
+	// Provider declared vision-capable → vision stays on even for a model
+	// the detector would miss (or a text model the user insists supports it).
+	cfg := &ConvertConfig{SupportVision: false, AutoVision: true, VisionOverride: &yes}
+	if got := cfg.WithAutoVision("glm-5.3-flash"); !got.SupportVision {
+		t.Fatal("VisionOverride=true must force SupportVision on")
+	}
+	if cfg.SupportVision {
+		t.Fatal("shared config must not be mutated")
+	}
+
+	// Provider declared non-vision → detection must not turn it on.
+	cfg = &ConvertConfig{SupportVision: true, AutoVision: true, VisionOverride: &no}
+	if got := cfg.WithAutoVision("gpt-4o"); got.SupportVision {
+		t.Fatal("VisionOverride=false must force SupportVision off")
+	}
+
+	// nil override → fall back to detection.
+	cfg = &ConvertConfig{SupportVision: false, AutoVision: true}
+	if got := cfg.WithAutoVision("gpt-4o"); !got.SupportVision {
+		t.Fatal("nil override should use name detection")
+	}
+}

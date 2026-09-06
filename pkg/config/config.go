@@ -232,6 +232,11 @@ type ProviderConfig struct {
 	BaseURL string   `json:"base_url,omitempty"`
 	Model   string   `json:"model,omitempty"`  // Deprecated: use Models[0] instead, kept for backward compatibility
 	Models  []string `json:"models,omitempty"` // List of supported models, first element is current model
+	// Vision explicitly declares whether this provider's models accept
+	// image_url parts. nil = auto-detect from the model name; true/false
+	// overrides detection entirely (name-based guessing is best-effort and
+	// inevitably lags new model releases, e.g. glm-4.1v-*).
+	Vision *bool `json:"vision,omitempty"`
 }
 
 // GetCurrentModel returns the current model (first element of Models, fallback to Model field)

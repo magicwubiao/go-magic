@@ -813,6 +813,16 @@ GOAL GUIDANCE:
 		if m, ok := s.provider.(interface{ GetModel() string }); ok {
 			convertCfg.SupportVision = provider.ModelSupportsVision(m.GetModel())
 		}
+		// Explicit per-provider "vision" declaration beats name-based
+		// guessing: name detection is best-effort and lags new models
+		// (e.g. glm-4.1v-thinking-flashx matched no pattern and images
+		// were silently downgraded to placeholders).
+		if s.cfg.Providers != nil {
+			if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
+				convertCfg.VisionOverride = provCfg.Vision
+				convertCfg.SupportVision = *provCfg.Vision
+			}
+		}
 		// Set upload URL prefix if configured
 		if s.cfg.Server.UploadURLPrefix != "" {
 			convertCfg.UploadURLPrefix = s.cfg.Server.UploadURLPrefix
