@@ -102,15 +102,24 @@ func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, 
 
 // ProviderInfo contains metadata about a supported provider.
 type ProviderInfo struct {
-	Name         string   `json:"name"`
-	DisplayName  string   `json:"display_name"`
-	Description  string   `json:"description"`
-	Models       []string `json:"models"`
-	NeedsAPIKey  bool     `json:"needs_api_key"`
-	NeedsBaseURL bool     `json:"needs_base_url"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Models      []string `json:"models"`
+	// BaseURL is the provider's official API endpoint (matching each
+	// provider constructor's built-in fallback). It seeds the Web UI's
+	// add-provider form; users can override it per config. Empty for
+	// custom providers where the endpoint is user-supplied.
+	BaseURL     string `json:"base_url,omitempty"`
+	NeedsAPIKey bool   `json:"needs_api_key"`
+	// NeedsBaseURL reports whether the form should surface a base URL
+	// field for this provider (wenxin reuses it for secretKey).
+	NeedsBaseURL bool `json:"needs_base_url"`
 }
 
 // ListProviders returns all supported providers with their metadata.
+// BaseURL mirrors each provider constructor's built-in fallback endpoint so
+// the Web UI add-provider form can seed it without keeping its own copy.
 func ListProviders() []ProviderInfo {
 	return []ProviderInfo{
 		{
@@ -118,6 +127,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "DeepSeek",
 			Description:  "DeepSeek V4 - 高性价比",
 			Models:       []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+			BaseURL:      "https://api.deepseek.com",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: false,
 		},
@@ -126,6 +136,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "OpenAI",
 			Description:  "GPT-5.6 系列",
 			Models:       []string{"gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna"},
+			BaseURL:      "https://api.openai.com/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: false,
 		},
@@ -134,6 +145,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Anthropic",
 			Description:  "Claude 5 系列 - 强推理能力",
 			Models:       []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"},
+			BaseURL:      "https://api.anthropic.com",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: false,
 		},
@@ -142,6 +154,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "DashScope (通义千问)",
 			Description:  "阿里云通义千问大模型",
 			Models:       []string{"qwen3.8-max", "qwen3.7-plus", "qwen3.7-flash"},
+			BaseURL:      "https://dashscope.aliyuncs.com/compatible-mode/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -150,6 +163,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "MiniMax",
 			Description:  "MiniMax 大模型",
 			Models:       []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"},
+			BaseURL:      "https://api.minimax.chat/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -158,6 +172,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Ollama",
 			Description:  "本地部署的开源大模型",
 			Models:       []string{"qwen3.8", "gpt-oss", "deepseek-r1", "gemma4"},
+			BaseURL:      "http://localhost:11434",
 			NeedsAPIKey:  false,
 			NeedsBaseURL: true,
 		},
@@ -166,6 +181,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "OpenRouter",
 			Description:  "统一 API 网关，支持多种模型",
 			Models:       []string{"openai/gpt-5.6", "anthropic/claude-sonnet-5"},
+			BaseURL:      "https://openrouter.ai/api/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -174,6 +190,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "vLLM",
 			Description:  "本地部署的高性能推理引擎",
 			Models:       []string{"default"},
+			BaseURL:      "http://localhost:8000/v1",
 			NeedsAPIKey:  false,
 			NeedsBaseURL: true,
 		},
@@ -182,6 +199,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "智谱 AI (Zhipu)",
 			Description:  "智谱 GLM 系列大模型",
 			Models:       []string{"glm-5.3", "glm-5.3-flash", "glm-5.2"},
+			BaseURL:      "https://open.bigmodel.cn/api/paas/v4",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -190,6 +208,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Google Gemini",
 			Description:  "Google Gemini 系列模型",
 			Models:       []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro"},
+			BaseURL:      "https://generativelanguage.googleapis.com/v1beta",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -198,6 +217,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Groq",
 			Description:  "超高速 LLM 推理平台",
 			Models:       []string{"llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"},
+			BaseURL:      "https://api.groq.com/openai/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -206,6 +226,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Together AI",
 			Description:  "开源模型托管平台",
 			Models:       []string{"deepseek-ai/DeepSeek-V4-Pro", "meta-llama/Llama-4-Maverick-17B-128E-Instruct", "Qwen/Qwen3.8-2.4T-A95B"},
+			BaseURL:      "https://api.together.xyz/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -214,6 +235,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Mistral AI",
 			Description:  "Mistral 系列开源模型",
 			Models:       []string{"mistral-large-latest", "mistral-medium-3-5", "mistral-small-2603"},
+			BaseURL:      "https://api.mistral.ai/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -222,6 +244,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Cohere",
 			Description:  "Cohere Command 系列模型",
 			Models:       []string{"command-a-plus-05-2026", "command-a-reasoning-08-2025", "command-a-03-2025"},
+			BaseURL:      "https://api.cohere.ai/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -230,6 +253,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Perplexity",
 			Description:  "Perplexity 在线搜索增强模型",
 			Models:       []string{"sonar-pro", "sonar-reasoning-pro", "sonar-deep-research", "sonar"},
+			BaseURL:      "https://api.perplexity.ai",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -238,6 +262,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Volcengine (Doubao)",
 			Description:  "ByteDance Doubao models via Volcengine Ark",
 			Models:       []string{"doubao-seed-2.1-pro", "doubao-seed-2.1-turbo", "doubao-seed-2.0-lite"},
+			BaseURL:      "https://ark.cn-beijing.volces.com/api/v3",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -246,6 +271,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "文心一言 (Wenxin)",
 			Description:  "百度 ERNIE 系列大模型",
 			Models:       []string{"ernie-5.1", "ernie-5.0", "ernie-4.5-turbo-128k"},
+			BaseURL:      "https://aip.baidubce.com/rpc/2.0/ai_custom/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true, // BaseURL field is used for secretKey
 		},
@@ -254,6 +280,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "Moonshot (Kimi)",
 			Description:  "月之暗面 Kimi 大模型",
 			Models:       []string{"kimi-k3", "kimi-k2.6", "kimi-k2.7-code"},
+			BaseURL:      "https://api.moonshot.cn/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: false,
 		},
@@ -262,6 +289,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "MiMo",
 			Description:  "MiMo 大模型",
 			Models:       []string{"default"},
+			BaseURL:      "https://api.xiaomimimo.com/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -270,6 +298,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName:  "混元 (Hunyuan)",
 			Description:  "腾讯混元大模型",
 			Models:       []string{"hy3", "hy-2.0-think", "hunyuan-turbos"},
+			BaseURL:      "https://api.hunyuan.cloud.tencent.com/v1",
 			NeedsAPIKey:  true,
 			NeedsBaseURL: true,
 		},
@@ -278,6 +307,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName: "LongCat (美团龙猫)",
 			Description: "美团 LongCat 大模型",
 			Models:      []string{"LongCat-2.0-Preview"},
+			BaseURL:     "https://api.longcat.chat/openai/v1",
 			NeedsAPIKey: true,
 		},
 		{
@@ -285,6 +315,7 @@ func ListProviders() []ProviderInfo {
 			DisplayName: "Meta Model API (Muse Spark)",
 			Description: "Meta 超级智能实验室 Muse Spark 多模态推理模型",
 			Models:      []string{"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"},
+			BaseURL:     "https://api.meta.ai/v1",
 			NeedsAPIKey: true,
 		},
 		{

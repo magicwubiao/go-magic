@@ -20,8 +20,12 @@ export interface Model {
 export interface ProviderModelOption {
   name: string
   slug: string
+  display_name?: string
   models: string[]
   total_models: number
+  // Official API endpoint for built-in providers (empty for custom);
+  // seeds the add-provider form's base URL field.
+  base_url?: string
   is_current: boolean
 }
 

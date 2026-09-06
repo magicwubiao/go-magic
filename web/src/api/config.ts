@@ -4,6 +4,9 @@ export interface ProviderInfo {
   api_key: string
   models: string[]
   base_url?: string
+  // Explicit vision-capability declaration persisted via PUT/POST
+  // /api/providers/{name}: true/false, or absent/null for auto-detection.
+  vision?: boolean | null
 }
 
 export interface PrivacyConfig {

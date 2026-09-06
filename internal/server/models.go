@@ -692,6 +692,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 				"display_name": bp.DisplayName,
 				"models":       bp.Models,
 				"total_models": len(bp.Models),
+				"base_url":     bp.BaseURL,
 				"is_current":   isCurrent,
 			})
 		}

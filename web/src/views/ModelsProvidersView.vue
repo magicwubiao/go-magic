@@ -174,6 +174,7 @@ import {
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
 import * as providersApi from '@/api/providers'
+import { getModelOptions } from '@/api/models'
 
 const { t } = useI18n()
 const modelsStore = useModelsStore()
@@ -264,72 +265,56 @@ const configProviders = computed(() => {
 // 当前使用的供应商
 const currentConfigProvider = computed(() => configStore.config?.provider || '')
 
-const availableProviders = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic (Claude)', value: 'anthropic' },
-  { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'Google Gemini', value: 'gemini' },
-  { label: 'Groq', value: 'groq' },
-  { label: '硅基流动 SiliconFlow', value: 'siliconflow' },
-  { label: '智谱 GLM (Zhipu)', value: 'zhipu' },
-  { label: '通义千问 (DashScope)', value: 'dashscope' },
-  { label: '文心一言 (Wenxin)', value: 'wenxin' },
-  { label: 'MiniMax', value: 'minimax' },
-  { label: 'MiMo', value: 'mimo' },
-  { label: '腾讯混元 (Hunyuan)', value: 'hunyuan' },
-  { label: 'LongCat (美团龙猫)', value: 'longcat' },
-  { label: 'Meta (Muse Spark)', value: 'meta' },
-  { label: '火山引擎 (Huoshan)', value: 'huoshan' },
-  { label: '月之暗面 (Moonshot)', value: 'moonshot' },
-  { label: 'OpenRouter', value: 'openrouter' },
-  { label: 'Together AI', value: 'together' },
-  { label: 'Mistral AI', value: 'mistral' },
-  { label: 'Cohere', value: 'cohere' },
-  { label: 'Perplexity', value: 'perplexity' },
-  { label: 'Ollama (本地)', value: 'ollama' },
-  { label: 'vLLM (本地)', value: 'vllm' },
-  { label: '自定义 (Custom)', value: 'custom' },
-]
+// 新增供应商弹窗的候选与预设目录：从后端 /api/model/options 动态拉取，
+// pkg/config.ListProviders 是唯一真源（display_name/base_url/推荐模型列表）。
+// 前端不再维护自己的副本——历史上那份硬编码早已漂移（旧模型 ID、错误地址），
+// 且切换供应商时因字段非空导致预设不再套用（模型不联动 bug 的根因）。
+const availableProviders = ref<{ label: string; value: string }[]>([])
+const providerPresets = ref<Record<string, { baseUrl: string; models: string[] }>>({})
+
+async function loadProviderCatalog() {
+  try {
+    const opts = await getModelOptions()
+    const configured = new Set(Object.keys(configStore.config?.providers || {}))
+    const options: { label: string; value: string }[] = []
+    const presets: Record<string, { baseUrl: string; models: string[] }> = {}
+    for (const p of opts.providers || []) {
+      presets[p.name] = { baseUrl: p.base_url || '', models: p.models || [] }
+      // 已配置的供应商不在“新增”下拉里重复出现（修改走列表页的编辑按钮）
+      if (!configured.has(p.name)) {
+        options.push({ label: p.display_name || p.name, value: p.name })
+      }
+    }
+    // SiliconFlow 走 OpenAI 兼容协议，后端目录未单列，保留为前端附加项
+    if (!presets['siliconflow']) {
+      presets['siliconflow'] = { baseUrl: 'https://api.siliconflow.cn/v1', models: [] }
+      if (!configured.has('siliconflow')) {
+        options.push({ label: '硅基流动 SiliconFlow', value: 'siliconflow' })
+      }
+    }
+    providerPresets.value = presets
+    availableProviders.value = options
+  } catch {
+    // 目录拉取失败时保底仍可添加自定义供应商
+    availableProviders.value = [{ label: 'Custom (OpenAI Compatible)', value: 'custom' }]
+  }
+}
 
 // 当前选中的供应商
 const selectedProvider = ref('')
 
-// 已知供应商默认配置（与后端 internal/provider/config.go 的默认值保持一致）
-const providerPresets: Record<string, { baseUrl: string; model: string }> = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6' },
-  anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
-  deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
-  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.7-flash' },
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-  zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' },
-  dashscope: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  wenxin: { baseUrl: 'https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1', model: 'ernie-4.0-8k' },
-  minimax: { baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-M2.5' },
-  mimo: { baseUrl: 'https://api.mymimo.ai/v1', model: 'mimo-v2-flash' },
-  hunyuan: { baseUrl: 'https://hunyuan.cloud.tencent.com/v1', model: 'hunyuan-turbos-latest' },
-  longcat: { baseUrl: 'https://api.longcat.chat/openai/v1', model: 'LongCat-Flash-Chat' },
-  meta: { baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3' },
-  huoshan: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1.5-pro-32k' },
-  moonshot: { baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k2-0905-preview' },
-  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-5.6' },
-  together: { baseUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
-  mistral: { baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
-  cohere: { baseUrl: 'https://api.cohere.ai/v2', model: 'command-a-03-2025' },
-  perplexity: { baseUrl: 'https://api.perplexity.ai', model: 'sonar-pro' },
-  ollama: { baseUrl: 'http://localhost:11434', model: 'llama3.3' },
-  vllm: { baseUrl: 'http://localhost:8000', model: 'llama3' }
-}
-
-// 新增供应商时，按已知预设自动填充 baseUrl 和默认模型
+// 新增模式下选择/切换供应商：总是套用该供应商的预设（官方地址 + 完整推荐
+// 模型列表），保证切换后模型跟着变化；无预设项（custom 等）则清空待用户
+// 填写。API Key 不清除——中转站场景常是同一个 key。
 watch(() => editingProvider.value.name, (name) => {
   if (isEditing.value || !name) return
-  const preset = providerPresets[name]
-  if (!preset) return
-  if (!editingProvider.value.baseUrl) {
-    editingProvider.value.baseUrl = preset.baseUrl
-  }
-  if (editingProvider.value.models.length === 0) {
-    editingProvider.value.models = [preset.model]
+  const preset = providerPresets.value[name]
+  if (preset) {
+    if (preset.baseUrl) editingProvider.value.baseUrl = preset.baseUrl
+    editingProvider.value.models = preset.models.length > 0 ? [...preset.models] : []
+  } else {
+    editingProvider.value.baseUrl = ''
+    editingProvider.value.models = []
   }
 })
 
@@ -350,12 +335,13 @@ function selectProvider(name: string) {
 
 async function handleSaveProvider() {
   if (!editingProvider.value.name) return
-  
+
   await configStore.saveProvider({
     name: editingProvider.value.name,
     apiKey: editingProvider.value.apiKey,
     baseUrl: editingProvider.value.baseUrl,
-    models: editingProvider.value.models,
+    // 过滤动态输入里未填写的空行，避免空模型 ID 进配置
+    models: editingProvider.value.models.map(m => m.trim()).filter(Boolean),
     vision: editingProvider.value.vision
   })
   showProviderModal.value = false
@@ -424,6 +410,8 @@ async function refreshModelsList() {
 
 onMounted(async () => {
   await configStore.loadConfig()
+  // 拉取内置供应商目录（需先有 config 才能区分“已配置”项）
+  await loadProviderCatalog()
   // 默认选中当前供应商
   if (currentConfigProvider.value) {
     selectedProvider.value = currentConfigProvider.value
