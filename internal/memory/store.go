@@ -419,12 +419,22 @@ func (s *Store) Recall(query string, limit int, memoryTypes ...MemoryType) ([]*M
 // 命中范围为「scope 匹配当前工作区 或 scope 为空 或 类型为 user/preference」。
 // user/preference 是跨项目的用户画像，不受 scope 限制。
 func (s *Store) RecallScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	return s.RecallScopedBy("", query, limit, memoryTypes...)
+}
+
+// RecallScopedBy 按显式目录 scope 检索（目录级共享记忆）：命中范围 =
+// 类型 user/preference（跨目录画像）或 scope 为空（全局笔记）或
+// scope 精确等于 scopeKey。scopeKey 为空时退化为工作区默认 scope。
+func (s *Store) RecallScopedBy(scopeKey, query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	if scopeKey == "" {
+		scopeKey = s.workspaceScope
+	}
 
 	s.mu.RLock()
-	memories, err := s.queryRecallScoped(query, limit, memoryTypes...)
+	memories, err := s.queryRecallByScope(scopeKey, query, limit, memoryTypes...)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -439,14 +449,19 @@ func (s *Store) RecallScoped(query string, limit int, memoryTypes ...MemoryType)
 }
 
 // GetTopMemoriesScoped 带工作区过滤的高相关记忆检索（P0-1/P2-1）：
-// RecallScoped 捞 3 倍候选 → CalculateRelevanceScore 综合评分
-// （内容相关性 + 重要度 + 时间衰减）→ 取前 limit 条。
 // 供 cortex 动态召回门面使用，把散落的死代码串回主循环。
 func (s *Store) GetTopMemoriesScoped(query string, limit int, now time.Time, memTypes ...MemoryType) []*Memory {
+	return s.GetTopMemoriesByScope("", query, limit, now, memTypes...)
+}
+
+// GetTopMemoriesByScope 按显式目录 scope 的高相关记忆检索（目录级共享记忆）：
+// RecallScopedBy 捞 3 倍候选 → CalculateRelevanceScore 综合评分
+// （内容相关性 + 重要度 + 时间衰减）→ 取前 limit 条。scopeKey 为空退化为默认 scope。
+func (s *Store) GetTopMemoriesByScope(scopeKey, query string, limit int, now time.Time, memTypes ...MemoryType) []*Memory {
 	if limit <= 0 {
 		limit = 5
 	}
-	memories, err := s.RecallScoped(query, limit*3, memTypes...)
+	memories, err := s.RecallScopedBy(scopeKey, query, limit*3, memTypes...)
 	if err != nil {
 		log.Warnf("[Memory] RecallScoped failed: %v", err)
 		return nil
@@ -518,16 +533,21 @@ func (s *Store) queryRecall(query string, limit int, memoryTypes ...MemoryType) 
 
 // queryRecallScoped 带 scope 工作区过滤的 FTS 检索（P2-1）
 func (s *Store) queryRecallScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	return s.queryRecallByScope(s.workspaceScope, query, limit, memoryTypes...)
+}
+
+// queryRecallByScope 按显式目录 scope 过滤的 FTS 检索（目录级共享记忆）
+func (s *Store) queryRecallByScope(scopeKey, query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
 	if containsCJK(query) {
-		return s.queryRecallFallbackScoped(query, limit, memoryTypes...)
+		return s.queryRecallFallbackByScope(scopeKey, query, limit, memoryTypes...)
 	}
 
 	ftsQuery := sanitizeFTSQuery(query)
 	if ftsQuery == "" {
-		return s.queryRecallFallbackScoped(query, limit, memoryTypes...)
+		return s.queryRecallFallbackByScope(scopeKey, query, limit, memoryTypes...)
 	}
 
-	where, args := s.buildRecallWhere(memoryTypes, true)
+	where, args := s.buildRecallWhereScope(memoryTypes, scopeKey)
 	sqlQuery := fmt.Sprintf(`
 		SELECT m.id, m.type, m.content, m.scope, m.categories, m.importance,
 			   m.metadata, m.created_at, m.updated_at, m.last_access, m.access_count,
@@ -558,6 +578,20 @@ func (s *Store) queryRecallScoped(query string, limit int, memoryTypes ...Memory
 // LIKE 兜底路径的 SQL 都必须以 `FROM memories m`（带别名）执行，
 // 否则会出现 "no such column: m.type"（2026-09-05 修复的 P0 bug）。
 func (s *Store) buildRecallWhere(memoryTypes []MemoryType, scoped bool) (string, []interface{}) {
+	scopeKey := ""
+	if scoped {
+		scopeKey = s.workspaceScope
+	}
+	return s.buildRecallWhereScope(memoryTypes, scopeKey)
+}
+
+// buildRecallWhereScope 组装 type/scope 过滤条件与参数。
+// scopeKey 非空时叠加：type user/preference（跨目录画像）或 scope 为空（全局
+// 笔记）或 scope 精确等于 scopeKey。scopeKey 为空时不加 scope 过滤（兼容旧的
+// 非隔离检索路径）。列名统一用 m. 前缀——FTS 路径与 LIKE 兜底路径的 SQL
+// 都必须以 `FROM memories m`（带别名）执行，否则会出现 "no such column:
+// m.type"（2026-09-05 修复的 P0 bug）。
+func (s *Store) buildRecallWhereScope(memoryTypes []MemoryType, scopeKey string) (string, []interface{}) {
 	const tablePrefix = "m."
 	clauses := make([]string, 0, 2)
 	var args []interface{}
@@ -571,10 +605,10 @@ func (s *Store) buildRecallWhere(memoryTypes []MemoryType, scoped bool) (string,
 		clauses = append(clauses, fmt.Sprintf("AND %stype IN (%s)", tablePrefix, strings.Join(placeholders, ", ")))
 	}
 
-	if scoped && s.workspaceScope != "" {
+	if scopeKey != "" {
 		clauses = append(clauses,
 			fmt.Sprintf("AND (%stype IN ('user','preference') OR %sscope IN ('', ?))", tablePrefix, tablePrefix))
-		args = append(args, s.workspaceScope)
+		args = append(args, scopeKey)
 	}
 
 	return strings.Join(clauses, " "), args
@@ -621,7 +655,12 @@ func (s *Store) queryRecallFallback(query string, limit int, memoryTypes ...Memo
 // queryRecallFallbackScoped 带 scope 过滤的 LIKE 兜底检索（P2-1）。
 // 与 queryRecallFallback 相同的分词 LIKE 策略（likePatterns）。
 func (s *Store) queryRecallFallbackScoped(query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
-	where, args := s.buildRecallWhere(memoryTypes, true)
+	return s.queryRecallFallbackByScope(s.workspaceScope, query, limit, memoryTypes...)
+}
+
+// queryRecallFallbackByScope 按显式目录 scope 过滤的 LIKE 兜底检索（目录级共享记忆）
+func (s *Store) queryRecallFallbackByScope(scopeKey, query string, limit int, memoryTypes ...MemoryType) ([]*Memory, error) {
+	where, args := s.buildRecallWhereScope(memoryTypes, scopeKey)
 	patterns := likePatterns(query)
 	if len(patterns) == 0 {
 		return nil, nil

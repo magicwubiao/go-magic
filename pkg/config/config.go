@@ -84,9 +84,14 @@ type Config struct {
 	Memory       MemoryConfig              `json:"memory"`
 	Gateway      GatewayConfig             `json:"gateway"`
 	Cortex       CortexConfig              `json:"cortex"`
-	MCP          *MCPConfig                `json:"mcp,omitempty"`
-	SubAgent     *SubAgentConfig           `json:"subagent,omitempty"`
-	Voice        *VoiceConfig              `json:"voice,omitempty"`
+	// Context：静态规则文件（AGENTS.md/CLAUDE.md/CONTEXT.md）自动加载。
+	// 指针类型：nil（未配置）= 默认开启；显式 "enabled": false 才关闭。
+	// 不用普通 bool 是因为 config.Load 对已存在的 config.json 直接反序列化
+	// 到零值、不合并 defaultConfig——普通 bool 缺键会静默变 false。
+	Context  *ContextConfig  `json:"context,omitempty"`
+	MCP      *MCPConfig      `json:"mcp,omitempty"`
+	SubAgent *SubAgentConfig `json:"subagent,omitempty"`
+	Voice    *VoiceConfig    `json:"voice,omitempty"`
 	// Bot Mode: named agent profiles with persistent canonical chats
 	BotMode *BotModeConfig `json:"bot_mode,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
@@ -154,6 +159,14 @@ type CortexConfig struct {
 	PerceptionMaxHistory          *int           `json:"perception_max_history,omitempty" yaml:"perception_max_history,omitempty"`                   // 感知最大历史条数
 	PlanningMaxSteps              *int           `json:"planning_max_steps,omitempty" yaml:"planning_max_steps,omitempty"`                           // 规划最大步数
 	PlanningTimeout               *time.Duration `json:"planning_timeout,omitempty" yaml:"planning_timeout,omitempty"`                               // 规划超时
+}
+
+// ContextConfig 控制静态规则文件自动加载。
+// 会话设置了工作目录（work_dir_user_set）时，agent 从该目录向上逐级发现
+// AGENTS.md / CLAUDE.md / CONTEXT.md 并注入 system（就近优先），实现
+// 「同一目录的会话共享同一份规则共识」。Enabled 为 nil 时视为开启。
+type ContextConfig struct {
+	Enabled *bool `json:"enabled,omitempty"` // nil = 默认开启；false = 显式关闭
 }
 
 // ServerConfig represents server-related configuration

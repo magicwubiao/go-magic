@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -787,6 +788,21 @@ GOAL GUIDANCE:
 	if memoryEnabled {
 		agentOpts = append(agentOpts, agent.WithMemory(true))
 	}
+	// 目录级共享记忆：会话显式设置过工作目录（work_dir_user_set）时，把记忆
+	// scope 绑定到该目录的归一化键——同一目录的多个会话读写同一个目录记忆桶，
+	// 不同目录互不串扰；未设置目录的会话保持旧的全局默认行为。
+	// 静态规则链同样只对设过目录的会话生效（从该目录向上发现 AGENTS.md 等）。
+	if s.sessionStore != nil && (memoryEnabled || s.staticRulesEnabled()) {
+		sess, lerr := s.sessionStore.LoadSession(context.Background(), sessionID)
+		if lerr == nil && sess != nil && sess.WorkDirUserSet && strings.TrimSpace(sess.WorkDir) != "" {
+			if memoryEnabled {
+				agentOpts = append(agentOpts, agent.WithMemoryScope(normalizeDirScope(sess.WorkDir)))
+			}
+			if s.staticRulesEnabled() {
+				agentOpts = append(agentOpts, agent.WithRuleDir(sess.WorkDir))
+			}
+		}
+	}
 	// Enable Cortex for memory and context management
 	if s.cortexMgr != nil {
 		agentOpts = append(agentOpts, agent.WithCortex(s.cortexMgr))
@@ -848,6 +864,28 @@ GOAL GUIDANCE:
 	a.SetSession(sessionID)
 	s.agents[sessionID] = a
 	return a
+}
+
+// normalizeDirScope 把会话工作目录归一化为目录记忆 scope 键。读写两侧必须走
+// 同一函数才能命中同一桶：filepath.Clean 消除尾部斜杠/分隔符冗余；Windows 下
+// 统一小写，容忍同一目录被以不同盘符大小写引用（如 D:\A 与 d:\a）。
+func normalizeDirScope(dir string) string {
+	clean := filepath.Clean(dir)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
+
+// staticRulesEnabled 报告静态规则文件自动加载是否开启。
+// config 未配置 context 段、或 enabled 为 nil 时默认开启（指针字段，
+// 与 Memory/Cortex 的普通 bool 不同——config.Load 不合并默认值，
+// 普通 bool 缺键会静默变 false）。
+func (s *Server) staticRulesEnabled() bool {
+	if s.cfg == nil || s.cfg.Context == nil || s.cfg.Context.Enabled == nil {
+		return true
+	}
+	return *s.cfg.Context.Enabled
 }
 
 // registerApprovalSSEHandler registers an SSE push callback for the given session
@@ -1109,6 +1147,7 @@ func (s *Server) Start(port int) error {
 
 	// Sessions
 	mux.HandleFunc("/api/sessions", withCORS(requireAuth(s.handleSessions)))
+	mux.HandleFunc("/api/sessions/dir-groups", withCORS(requireAuth(s.handleSessionsDirGroups)))
 	mux.HandleFunc("/api/sessions/search", withCORS(requireAuth(s.handleSessionSearch)))
 	mux.HandleFunc("/api/sessions/", withCORS(requireAuth(s.handleSessionByID)))
 

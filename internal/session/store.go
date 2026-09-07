@@ -244,6 +244,30 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	}
 	defer rows.Close()
 
+	return scanSessionListRows(rows)
+}
+
+// ListSessionsByUserWorkDir returns web chat sessions whose working directory
+// was explicitly set by the user (workdir_user_set = 1), most recently active
+// first. It powers the chat page's "sessions grouped by working directory"
+// picker, so gateway/TUI sessions (whose workdir is not user-chosen in the
+// web UI) are deliberately excluded.
+func (s *Store) ListSessionsByUserWorkDir(ctx context.Context) ([]*Session, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at
+		FROM sessions
+		WHERE (platform = '' OR platform = 'web') AND workdir != '' AND workdir_user_set = 1
+		ORDER BY updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSessionListRows(rows)
+}
+
+func scanSessionListRows(rows *sql.Rows) ([]*Session, error) {
 	var sessions []*Session
 	for rows.Next() {
 		var session Session
@@ -259,7 +283,9 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 		}
 		sessions = append(sessions, &session)
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sessions, nil
 }
 

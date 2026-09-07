@@ -189,14 +189,15 @@ const editingProvider = ref({
   models: [] as string[],
   apiKey: '',
   baseUrl: '',
-  vision: null as boolean | null
+  vision: 'auto' as 'auto' | 'on' | 'off'
 })
 
-// 视觉支持三态：null=按模型名自动检测，true/false=显式声明
-const visionOptions = [
-  { label: t('modelsProviders.visionAuto'), value: null },
-  { label: t('modelsProviders.visionOn'), value: true },
-  { label: t('modelsProviders.visionOff'), value: false }
+// 视觉支持三态：auto=按模型名自动检测，on/off=显式声明。
+// 用字符串哨兵承载三态（naive Select 的值类型不支持 boolean/null 字面量）
+const visionOptions: Array<{ label: string; value: 'auto' | 'on' | 'off' }> = [
+  { label: t('modelsProviders.visionAuto'), value: 'auto' },
+  { label: t('modelsProviders.visionOn'), value: 'on' },
+  { label: t('modelsProviders.visionOff'), value: 'off' }
 ]
 
 // 测试连接：用表单当前值（未保存也行）向该 provider 发一条轻量请求
@@ -213,7 +214,7 @@ const testTitle = computed(() => {
 
 function openAddProviderModal() {
   isEditing.value = false
-  editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '', vision: null }
+  editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '', vision: 'auto' }
   testResult.value = null
   showProviderModal.value = true
 }
@@ -227,7 +228,7 @@ function openEditProviderModal(name: string) {
     models: prov.models || [],
     apiKey: prov.api_key || '',
     baseUrl: prov.base_url || '',
-    vision: prov.vision === true || prov.vision === false ? prov.vision : null
+    vision: prov.vision === true ? 'on' : prov.vision === false ? 'off' : 'auto'
   }
   testResult.value = null
   showProviderModal.value = true
@@ -342,7 +343,11 @@ async function handleSaveProvider() {
     baseUrl: editingProvider.value.baseUrl,
     // 过滤动态输入里未填写的空行，避免空模型 ID 进配置
     models: editingProvider.value.models.map(m => m.trim()).filter(Boolean),
-    vision: editingProvider.value.vision
+    vision: editingProvider.value.vision === 'on'
+      ? true
+      : editingProvider.value.vision === 'off'
+        ? false
+        : null
   })
   showProviderModal.value = false
   await configStore.loadConfig()

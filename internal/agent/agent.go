@@ -18,6 +18,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/bus"
 	"github.com/magicwubiao/go-magic/internal/complexity"
 	"github.com/magicwubiao/go-magic/internal/compress"
+	ctxrules "github.com/magicwubiao/go-magic/internal/context"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/provider"
@@ -107,11 +108,26 @@ type Agent struct {
 	// Memory integration
 	memoryEnabled bool
 
+	// 目录级记忆 scope（= 会话工作目录的归一化键）：非空时每轮召回与回合末
+	// 沉淀都限定在该目录记忆桶内，实现「同一目录的会话共享记忆、异目录隔离」。
+	// 为空时保持旧的全局工作区默认行为。
+	memoryScope string
+
 	// 动态记忆注入（P0-1）：每轮新用户输入进入时经 cortex 门面召回一次，
 	// turn 内保持稳定；出站消息在头部 system 之后插入。
 	// dynamicMemoryKey 用于防止同一次输入重复召回。
 	dynamicMemory    string
 	dynamicMemoryKey string
+
+	// 静态规则链：ruleDir 非空（= 会话工作目录）时，出站消息在头部 system
+	// 之后、动态记忆之前插入从工作目录向上逐级发现的规则文件
+	// （AGENTS.md / CLAUDE.md / CONTEXT.md）原文。ruleSig 为规则链的
+	// stat 签名——文件新增/修改/删除都会改变签名，从而在下一轮自动重载，
+	// 无需重启会话。与目录记忆 scope（memoryScope）互补：动态记忆沉淀
+	// 「事实」，规则文件承载「共识/规范」。
+	ruleDir     string
+	ruleSig     string
+	ruleContext string
 
 	// Cortex Agent six-system integration
 	cortexManager *cortex.Manager
@@ -407,6 +423,25 @@ func WithEventBus(eventBus *bus.EventBus) AgentOption {
 func WithMemory(enabled bool) AgentOption {
 	return func(a *Agent) {
 		a.memoryEnabled = enabled
+	}
+}
+
+// WithMemoryScope 为 agent 绑定目录级记忆 scope（= 会话工作目录的归一化键）。
+// 绑定后每轮动态召回与回合末记忆沉淀都只读写该 scope 的记忆桶：
+// 同一工作目录的多个会话共享一份目录记忆，不同目录互不串扰。
+// scope 为空时保持旧的全局工作区默认行为。
+func WithMemoryScope(scope string) AgentOption {
+	return func(a *Agent) {
+		a.memoryScope = scope
+	}
+}
+
+// WithRuleDir 绑定静态规则链的工作目录（= 会话 work_dir）。绑定后出站消息
+// 自动注入从该目录向上发现的 AGENTS.md/CLAUDE.md/CONTEXT.md（就近优先），
+// 文件变更通过 stat 签名自动感知。dir 为空表示不启用规则注入。
+func WithRuleDir(dir string) AgentOption {
+	return func(a *Agent) {
+		a.SetRuleDir(dir)
 	}
 }
 
@@ -717,6 +752,32 @@ func (a *Agent) SetSession(session string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.session = session
+}
+
+// SetMemoryScope 动态绑定/更新目录级记忆 scope（例如用户在本会话中途才设置
+// 工作目录时由 server 侧调用）。scope 为空回到旧的全局默认桶。目录变更后
+// 清掉本 turn 缓存的召回结果，让下一轮按新 scope 重新召回。
+func (a *Agent) SetMemoryScope(scope string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.memoryScope = scope
+	a.dynamicMemory = ""
+	a.dynamicMemoryKey = ""
+}
+
+// SetRuleDir 动态绑定/更新静态规则链的工作目录（例如用户在本会话中途才设置
+// 工作目录时由 server 侧调用）。变更后清空签名缓存，下一轮消息组装会按新
+// 目录重新发现规则文件；dir 为空则关闭规则注入。
+func (a *Agent) SetRuleDir(dir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	dir = strings.TrimSpace(dir)
+	if dir == a.ruleDir {
+		return
+	}
+	a.ruleDir = dir
+	a.ruleSig = ""
+	a.ruleContext = ""
 }
 
 // Emit emits an event to the event bus
@@ -1141,7 +1202,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd()
+				a.cortexManager.OnSessionEnd(a.memoryScope)
 			}
 			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
@@ -1462,7 +1523,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindAgentEnd, nil)
 
 			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd()
+				a.cortexManager.OnSessionEnd(a.memoryScope)
 			}
 
 			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
@@ -1497,7 +1558,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindAgentEnd, nil)
 
 			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd()
+				a.cortexManager.OnSessionEnd(a.memoryScope)
 			}
 
 			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
@@ -1549,7 +1610,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd()
+				a.cortexManager.OnSessionEnd(a.memoryScope)
 			}
 			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
@@ -2232,7 +2293,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 			// Cortex: refresh snapshot at session end
 			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd()
+				a.cortexManager.OnSessionEnd(a.memoryScope)
 			}
 
 			return nil
@@ -2333,7 +2394,7 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	// Cortex: refresh snapshot at session end
 	if a.cortexManager != nil {
-		a.cortexManager.OnSessionEnd()
+		a.cortexManager.OnSessionEnd(a.memoryScope)
 	}
 
 	if lastErr != nil {
@@ -3600,9 +3661,9 @@ func (a *Agent) buildLLMMessages() []provider.Message {
 	// ValidateMessageAlternation still passes (keep the newest, which is
 	// the real user input). Tool blocks are never merged.
 	msgs = collapseConsecutive(msgs)
-	// P0-1: 在头部 system 之后注入本 turn 的动态记忆（必须在 collapse
-	// 之后，否则注入的 system 会被合并逻辑吞掉）
-	return a.withDynamicMemory(msgs)
+	// P0-1: 在头部 system 之后注入静态规则链 + 本 turn 动态记忆（必须在
+	// collapse 之后，否则注入的 system 会被合并逻辑吞掉）
+	return a.withContextBlocks(msgs)
 }
 
 // prepareDynamicMemory 在新用户输入进入主循环时召回一次动态记忆（P0-1）。
@@ -3618,25 +3679,61 @@ func (a *Agent) prepareDynamicMemory(input string) {
 	if key == a.dynamicMemoryKey {
 		return
 	}
-	a.dynamicMemory = a.cortexManager.RecallForInput(input)
+	if a.memoryScope != "" {
+		// 目录级共享记忆：只从当前会话工作目录的记忆桶召回
+		a.dynamicMemory = a.cortexManager.RecallForInputScope(a.memoryScope, input)
+	} else {
+		a.dynamicMemory = a.cortexManager.RecallForInput(input)
+	}
 	a.dynamicMemoryKey = key
 }
 
-// withDynamicMemory 把本 turn 的动态记忆作为一条 system 消息插入出站
-// 消息头部 system 之后（无 system 时置于最前）。消息系统已容忍连续
-// system（messages.go），且 Zhipu 1214 约束只要求 system 之后紧跟 user，
-// 注入位置满足两端约束。无动态记忆时原样返回。
-func (a *Agent) withDynamicMemory(msgs []provider.Message) []provider.Message {
-	if a.dynamicMemory == "" || len(msgs) == 0 {
+// ensureRuleContext 按需重载静态规则链。ruleDir 为空时不做任何事；否则用
+// stat 签名判断规则文件是否变化，变了才重新发现+格式化（避免每个 provider
+// 调用都重读磁盘）。无规则文件时 ruleContext 保持空串，出站不插入。
+func (a *Agent) ensureRuleContext() {
+	if a.ruleDir == "" {
+		return
+	}
+	sig := ctxrules.RuleChainSignature(a.ruleDir, ctxrules.DefaultRuleNames)
+	if sig == a.ruleSig {
+		return
+	}
+	files := ctxrules.LoadRuleChain(a.ruleDir, ctxrules.DefaultRuleNames)
+	a.ruleContext = ctxrules.FormatRuleContext(files, 0)
+	a.ruleSig = sig
+}
+
+// withContextBlocks 把静态规则链与动态记忆作为 system 消息插入出站消息
+// 头部 system 之后（顺序：规则 → 记忆；无 system 时置于最前）。消息系统已
+// 容忍连续 system（messages.go），且 Zhipu 1214 约束只要求 system 之后紧跟
+// user，注入位置满足两端约束。两者都为空时原样返回。
+func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
+	if len(msgs) == 0 {
 		return msgs
 	}
-	memoryMsg := provider.Message{Role: "system", Content: a.dynamicMemory}
-	out := make([]provider.Message, 0, len(msgs)+1)
+	a.ensureRuleContext()
+	hasRule := a.ruleContext != ""
+	hasMemory := a.dynamicMemory != ""
+	if !hasRule && !hasMemory {
+		return msgs
+	}
+
+	var extras []provider.Message
+	if hasRule {
+		extras = append(extras, provider.Message{Role: "system", Content: a.ruleContext})
+	}
+	if hasMemory {
+		extras = append(extras, provider.Message{Role: "system", Content: a.dynamicMemory})
+	}
+
+	out := make([]provider.Message, 0, len(msgs)+len(extras))
 	if msgs[0].Role == "system" {
-		out = append(out, msgs[0], memoryMsg)
+		out = append(out, msgs[0])
+		out = append(out, extras...)
 		out = append(out, msgs[1:]...)
 	} else {
-		out = append(out, memoryMsg)
+		out = append(out, extras...)
 		out = append(out, msgs...)
 	}
 	return out

@@ -426,14 +426,106 @@
         </div>
       </div>
 
-      <!-- 底部状态栏：紧凑一行 = 当前会话所属分身（只读）+ 工作目录（只读）+ 打开文件夹 -->
+      <!-- 底部状态栏：紧凑一行 = 当前会话所属分身（只读）+ 工作目录（只读）+ 打开文件夹。
+           工作目录由用户显式设置过时，路径可点击：弹出"同目录会话 / 按目录分组"选择器。 -->
       <div class="workdir-bar">
         <div class="workdir-bar-inner">
           <span class="workdir-bar-profile" :title="t('chat.workDirProfile')">
             <n-icon size="12"><PersonOutline /></n-icon>
             <span class="workdir-bar-profile-name">{{ activeProfileName }}</span>
           </span>
-          <span v-if="chatStore.currentWorkDir" class="workdir-bar-path" :title="chatStore.currentWorkDir">
+          <!-- 用户设置过工作目录 → 目录路径可点击，查看该目录下/全部分组会话 -->
+          <div
+            v-if="chatStore.currentWorkDir && chatStore.currentWorkDirUserSet"
+            ref="dirSessAnchorRef"
+            class="dir-sess-anchor"
+          >
+            <span class="workdir-bar-path workdir-bar-path-link" :title="t('chat.dirSessionsOpen')" @click="toggleDirSessions">
+              <n-icon size="12"><FolderOutline /></n-icon>
+              <span class="workdir-bar-path-text">{{ chatStore.currentWorkDir }}</span>
+              <n-icon size="12" class="workdir-bar-caret"><ChevronDownOutline /></n-icon>
+            </span>
+            <div v-if="showDirSessions" class="dir-sess-panel" @click.stop>
+              <!-- 头部：当前工作目录 -->
+              <div class="dir-sess-panel-header">
+                <n-icon size="14" class="dir-sess-panel-folder"><FolderOutline /></n-icon>
+                <span class="dir-sess-panel-title" :title="chatStore.currentWorkDir">{{ chatStore.currentWorkDir }}</span>
+              </div>
+
+              <div v-if="dirSessionsLoading" class="dir-sess-loading">
+                <n-spin size="small" />
+              </div>
+
+              <template v-else>
+                <!-- 当前目录模式：只列同目录会话 -->
+                <template v-if="dirPanelMode === 'current'">
+                  <div v-if="currentDirSessions.length" class="dir-sess-list">
+                    <div
+                      v-for="s in currentDirSessions"
+                      :key="s.id"
+                      class="dir-sess-item"
+                      :class="{ active: s.id === chatStore.activeSessionId }"
+                      @click="selectDirSession(s)"
+                    >
+                      <div class="dir-sess-title">
+                        <span class="dir-sess-title-text">{{ s.title || t('chat.untitled') }}</span>
+                        <span v-if="s.id === chatStore.activeSessionId" class="dir-sess-current">{{ t('chat.dirSessionsCurrent') }}</span>
+                      </div>
+                      <div class="dir-sess-meta">
+                        {{ s.message_count || 0 }} {{ t('chat.messages') }} · {{ formatTime(s.last_active) }}
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="dir-sess-empty">{{ t('chat.dirSessionsEmpty') }}</div>
+                  <div v-if="dirGroups.length > 1" class="dir-sess-panel-footer">
+                    <n-button size="tiny" quaternary type="primary" @click="dirPanelMode = 'all'">
+                      {{ t('chat.dirSessionsAll') }}（{{ dirGroups.length }}）
+                    </n-button>
+                  </div>
+                </template>
+
+                <!-- 全部分组模式：目录 → 其下会话 -->
+                <template v-else>
+                  <div v-if="dirGroups.length" class="dir-sess-groups">
+                    <div v-for="g in dirGroups" :key="g.dir" class="dir-sess-group">
+                      <div class="dir-sess-group-head" :title="g.dir">
+                        <n-icon size="13" class="dir-sess-group-folder"><FolderOutline /></n-icon>
+                        <span class="dir-sess-group-dir">{{ g.dir }}</span>
+                        <span class="dir-sess-group-count">{{ g.sessions.length }}</span>
+                      </div>
+                      <div class="dir-sess-list">
+                        <div
+                          v-for="s in g.sessions"
+                          :key="s.id"
+                          class="dir-sess-item"
+                          :class="{ active: s.id === chatStore.activeSessionId }"
+                          @click="selectDirSession(s)"
+                        >
+                          <div class="dir-sess-title">
+                            <span class="dir-sess-title-text">{{ s.title || t('chat.untitled') }}</span>
+                            <span v-if="s.id === chatStore.activeSessionId" class="dir-sess-current">{{ t('chat.dirSessionsCurrent') }}</span>
+                          </div>
+                          <div class="dir-sess-meta">
+                            {{ s.message_count || 0 }} {{ t('chat.messages') }} · {{ formatTime(s.last_active) }}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="dir-sess-empty">{{ t('chat.dirSessionsAllEmpty') }}</div>
+                  <div class="dir-sess-panel-footer">
+                    <n-button size="tiny" quaternary @click="dirPanelMode = 'current'">
+                      <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
+                      {{ t('chat.dirSessionsBack') }}
+                    </n-button>
+                  </div>
+                </template>
+              </template>
+            </div>
+          </div>
+
+          <!-- 未锁定目录：普通只读展示 + 设置按钮 -->
+          <span v-else-if="chatStore.currentWorkDir" class="workdir-bar-path" :title="chatStore.currentWorkDir">
             <n-icon size="12"><FolderOutline /></n-icon>
             <span class="workdir-bar-path-text">{{ chatStore.currentWorkDir }}</span>
           </span>
@@ -501,12 +593,8 @@
         </div>
       </div>
 
-      <!-- Breadcrumb -->
+      <!-- 当前路径 + 新建文件夹（返回上级由目录列表中的 .. 条目承担） -->
       <div class="dir-picker-breadcrumb">
-        <n-button size="tiny" quaternary :disabled="!dirParent" @click="navigateDir(dirParent)">
-          <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
-          ..
-        </n-button>
         <n-text class="dir-picker-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
         <n-button size="tiny" quaternary @click="startNewFolder" :title="t('chat.newFolder')">
           <template #icon><n-icon><AddOutline /></n-icon></template>
@@ -593,7 +681,7 @@ import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -853,8 +941,6 @@ const recommendedDirs = computed(() => {
   return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
 })
 const newFolderInputRef = ref<{ focus: () => void } | null>(null)
-
-const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
 // Session goals cache
 const sessionGoals = ref<Record<string, sessionsApi.SessionGoal[]>>({})
@@ -1319,6 +1405,90 @@ async function handleWorkDirMenu(key: string) {
       message.error(e?.message || t('chat.workDirLocked'))
     }
   }
+}
+
+// ===== 底部状态栏："按工作目录查看会话"面板 =====
+// 数据源：/sessions/dir-groups（仅统计用户显式设置过工作目录的 web 会话，
+// 按目录聚合、组内/组间按最近活动倒序）。面板每次打开都重新拉取保证最新。
+const showDirSessions = ref(false)
+const dirSessionsLoading = ref(false)
+const dirGroups = ref<sessionsApi.SessionDirGroup[]>([])
+const dirPanelMode = ref<'current' | 'all'>('current')
+const dirSessAnchorRef = ref<HTMLElement>()
+
+// 目录 key 归一化：分隔符统一、去尾部斜杠、忽略大小写（Windows 路径大小写不敏感）
+function dirKey(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+async function loadDirGroups(): Promise<void> {
+  if (dirSessionsLoading.value) return
+  dirSessionsLoading.value = true
+  try {
+    const res = await sessionsApi.getSessionDirGroups()
+    dirGroups.value = res.groups || []
+  } catch (e) {
+    console.error('Failed to load session dir groups:', e)
+    dirGroups.value = []
+  } finally {
+    dirSessionsLoading.value = false
+  }
+}
+
+// 打开/关闭面板：打开时刷新数据并默认落在"当前目录"视图
+// （每次打开都重新拉取，避免新建/删除会话后目录分组过期）
+async function toggleDirSessions() {
+  if (showDirSessions.value) {
+    closeDirSessions()
+    return
+  }
+  showDirSessions.value = true
+  dirPanelMode.value = 'current'
+  await loadDirGroups()
+}
+
+// 点击面板外部或切换会话时关闭
+function closeDirSessions() {
+  if (!showDirSessions.value) return
+  showDirSessions.value = false
+  dirPanelMode.value = 'current'
+}
+
+function onDirSessDocMouseDown(e: MouseEvent) {
+  const anchor = dirSessAnchorRef.value
+  if (anchor && !anchor.contains(e.target as Node)) {
+    closeDirSessions()
+  }
+}
+
+watch(showDirSessions, (open) => {
+  if (open) {
+    document.addEventListener('mousedown', onDirSessDocMouseDown)
+  } else {
+    document.removeEventListener('mousedown', onDirSessDocMouseDown)
+  }
+})
+
+// 组件卸载时兜底移除监听（防止面板打开状态切走路由导致泄漏）
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onDirSessDocMouseDown)
+})
+
+// 与当前会话工作目录匹配的那一组会话
+const currentDirSessions = computed(() => {
+  const key = dirKey(chatStore.currentWorkDir || '')
+  if (!key) return []
+  const group = dirGroups.value.find(g => dirKey(g.dir) === key)
+  return group?.sessions || []
+})
+
+// 点击面板中的会话：老会话先并入 store（同搜索命中逻辑），再切换过去
+async function selectDirSession(s: sessionsApi.Session) {
+  closeDirSessions()
+  if (!chatStore.sessions.some(x => x.id === s.id)) {
+    chatStore.mergeSessions([s])
+  }
+  await chatStore.selectSession(s.id)
 }
 
 const commandSuggestions = ref<string[]>([])
@@ -2829,6 +2999,195 @@ onMounted(async () => {
   font-size: 11px;
   flex-shrink: 0;
   color: #2080f0;
+}
+
+/* 用户设置过目录时的可点击路径 + 按目录查看会话面板 */
+.dir-sess-anchor {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
+.workdir-bar-path-link {
+  cursor: pointer;
+  color: #555;
+}
+
+.workdir-bar-path-link:hover {
+  color: #2080f0;
+}
+
+.workdir-bar-caret {
+  flex-shrink: 0;
+  opacity: 0.6;
+  margin-left: 2px;
+  transition: transform 0.15s;
+}
+
+.dir-sess-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  width: min(430px, calc(100vw - 24px));
+  max-height: min(58vh, 460px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 1200;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.dir-sess-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dir-sess-panel-folder {
+  flex-shrink: 0;
+  color: #2080f0;
+}
+
+.dir-sess-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #555;
+}
+
+.dir-sess-loading {
+  padding: 18px;
+  display: flex;
+  justify-content: center;
+}
+
+.dir-sess-list {
+  overflow-y: auto;
+  max-height: 300px;
+  padding: 4px;
+}
+
+.dir-sess-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.dir-sess-item:hover {
+  background: #f5f7fa;
+}
+
+.dir-sess-item.active {
+  background: #e8f5e9;
+}
+
+.dir-sess-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dir-sess-title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+}
+
+.dir-sess-current {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #18a058;
+  background: #e8f5e9;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.dir-sess-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #999;
+}
+
+.dir-sess-empty {
+  padding: 18px;
+  text-align: center;
+  color: #aaa;
+  font-size: 12px;
+}
+
+.dir-sess-panel-footer {
+  border-top: 1px solid #f0f0f0;
+  padding: 4px 8px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dir-sess-groups {
+  overflow-y: auto;
+  max-height: 340px;
+}
+
+.dir-sess-groups .dir-sess-list {
+  max-height: none;
+  padding: 0 4px 6px;
+}
+
+.dir-sess-group + .dir-sess-group {
+  border-top: 1px solid #f5f5f5;
+  padding-top: 4px;
+}
+
+.dir-sess-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 2px;
+}
+
+.dir-sess-group-folder {
+  flex-shrink: 0;
+  color: #888;
+}
+
+.dir-sess-group-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  color: #666;
+  font-weight: 600;
+}
+
+.dir-sess-group-count {
+  flex-shrink: 0;
+  background: #f0f0f0;
+  color: #888;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 0 7px;
+  line-height: 16px;
 }
 
 .right-sidebar-fab {

@@ -426,6 +426,13 @@ const dynamicMemoryMaxChars = 800
 // 之外的历史记忆真正参与推理（修复「召回断路」）。
 // memoryStore 未初始化或无命中时返回空串（调用方直接跳过注入）。
 func (m *Manager) RecallForInput(query string) string {
+	return m.RecallForInputScope("", query)
+}
+
+// RecallForInputScope 按显式目录 scope 召回的动态记忆门面（目录级共享记忆）：
+// 同一工作目录的所有会话共享该目录记忆桶，不同目录互不串扰；scope 为空时
+// 退化为工作区默认桶（与 RecallForInput 行为一致，兼容旧的全局召回）。
+func (m *Manager) RecallForInputScope(scope, query string) string {
 	if m == nil || m.memoryStore == nil {
 		return ""
 	}
@@ -438,7 +445,7 @@ func (m *Manager) RecallForInput(query string) string {
 		query = string(r[:128])
 	}
 
-	tops := m.memoryStore.GetTopMemoriesScoped(query, 5, time.Now())
+	tops := m.memoryStore.GetTopMemoriesByScope(scope, query, 5, time.Now())
 	if len(tops) == 0 {
 		return ""
 	}
@@ -632,7 +639,9 @@ func (m *Manager) OnTurnEnd() {
 // OnSessionEnd is called when a session completes
 // Refreshes the memory snapshot and finalizes skill pattern analysis
 // Extracts information from conversation history for memory building
-func (m *Manager) OnSessionEnd() {
+// scope 非空时把本次会话沉淀的记忆写入该目录 scope（目录级共享记忆）；
+// 为空时保持旧的默认 scope 行为。
+func (m *Manager) OnSessionEnd(scope string) {
 	if !m.enabled || m.Snapshot == nil {
 		return
 	}
@@ -642,7 +651,7 @@ func (m *Manager) OnSessionEnd() {
 	hasHistory := len(m.conversationHistory) > 0
 	m.mu.RUnlock()
 	if hasHistory {
-		m.extractAndLearnFromConversation()
+		m.extractAndLearnFromConversation(scope)
 	}
 
 	// ========== Final skill analysis pass: analyze any remaining new tool calls ==========
@@ -671,7 +680,8 @@ func (m *Manager) SetConversationHistory(history []struct {
 }
 
 // extractAndLearnFromConversation extracts information from conversation and updates memory
-func (m *Manager) extractAndLearnFromConversation() {
+// scope 非空时沉淀到该目录 scope（目录级共享记忆），为空时保持默认行为。
+func (m *Manager) extractAndLearnFromConversation(scope string) {
 	// Snapshot conversation history under lock to avoid holding lock during long operations
 	m.mu.RLock()
 	history := make([]struct {
@@ -740,7 +750,7 @@ func (m *Manager) extractAndLearnFromConversation() {
 	}
 
 	if m.FTSMemory != nil || m.memoryStore != nil {
-		m.extractAndStoreMemories(provMsgs, nonSystemText)
+		m.extractAndStoreMemories(provMsgs, nonSystemText, scope)
 	}
 
 	// P1-2: 对话追加写入每日日志（append-only，蒸馏器的原始数据源）。
@@ -883,8 +893,10 @@ func (m *Manager) learnUserPreferences(conversation string) {
 
 // extractAndStoreMemories 抽取并存储重要信息
 // 优先使用 LLM 抽取器（internal/memory.MemoryExtractor），失败时回退到行匹配；
-// 同时写入 Store（结构化）与 FTSStore（全文检索），保持两者数据一致
-func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string) {
+// 同时写入 Store（结构化）与 FTSStore（全文检索），保持两者数据一致。
+// scope 非空时非 user/preference 记忆补上该目录 scope（目录级共享记忆），
+// user/preference 画像保持跨目录全局。
+func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string, scope string) {
 	ctx := context.Background()
 
 	// 优先使用 LLM 抽取器
@@ -893,6 +905,9 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 		if err == nil && len(memories) > 0 {
 			// 写入 Store（结构化存储，含衰减/检索能力）
 			if m.memoryStore != nil {
+				for _, mem := range memories {
+					applyMemoryScope(mem, scope)
+				}
 				_ = m.memoryExtractor.StoreMemories(memories)
 			}
 			// 同步写入 FTSStore（全文检索）
@@ -910,11 +925,26 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 	}
 
 	// Fallback：简陋行匹配（LLM 不可用或抽取失败时），双写 Store 与 FTSStore
-	m.fallbackLineMatchStore(conversation)
+	m.fallbackLineMatchStore(conversation, scope)
+}
+
+// applyMemoryScope 给待落库的记忆补目录 scope：仅当 scope 非空、记忆尚未带
+// scope 且类型不是 user/preference 时才补；user/preference 是跨目录用户画像，
+// 保持全局可见（与检索侧 buildRecallWhereScope 的过滤语义一致）。
+func applyMemoryScope(mem *memory.Memory, scope string) {
+	if scope == "" || mem.Scope != "" {
+		return
+	}
+	if mem.Type == memory.TypeUser || mem.Type == memory.TypePreference {
+		return
+	}
+	mem.Scope = scope
 }
 
 // fallbackLineMatchStore 用简陋行匹配抽取记忆，双写 Store 与 FTSStore
-func (m *Manager) fallbackLineMatchStore(conversation string) {
+// fallbackLineMatchStore 行匹配兜底写入（LLM 不可用/失败时）。
+// scope 非空时结构化记忆补该目录 scope（目录级共享记忆）。
+func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 	lines := strings.Split(conversation, "\n")
 	for _, line := range lines {
 		// 跳过过短行与系统消息
@@ -944,6 +974,7 @@ func (m *Manager) fallbackLineMatchStore(conversation string) {
 					Importance: 0.5,
 					Source:     "fallback",
 				}
+				applyMemoryScope(mem, scope)
 				_ = m.memoryStore.Store(mem)
 			}
 		}

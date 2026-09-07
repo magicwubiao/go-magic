@@ -65,6 +65,18 @@ export async function getSessions(limit: number = 20, offset: number = 0): Promi
   return { sessions: res.sessions || [], total: res.total || 0 }
 }
 
+// 按工作目录分组的会话（服务端只统计"用户显式设置过工作目录"的 web 会话，
+// 组内/组间按最近活动倒序），供底部状态栏"按目录查看会话"面板使用。
+export interface SessionDirGroup {
+  dir: string
+  sessions: Session[]
+}
+
+export async function getSessionDirGroups(): Promise<{ groups: SessionDirGroup[]; totalSessions: number }> {
+  const res = await request<{ groups?: SessionDirGroup[]; total_sessions?: number }>('/sessions/dir-groups')
+  return { groups: res?.groups || [], totalSessions: res?.total_sessions || 0 }
+}
+
 export async function getSession(id: string): Promise<{ session_id: string; messages: Message[] }> {
   return request(`/sessions/${id}/messages`)
 }

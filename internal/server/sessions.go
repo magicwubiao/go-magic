@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -109,6 +110,19 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
+			// 目录级共享记忆 + 静态规则链：工作目录一旦设置，把已缓存 agent 的
+			// 记忆 scope 绑定到该目录归一化键（召回/沉淀落目录桶），并开启从
+			// 该目录向上发现规则文件（AGENTS.md 等）的注入。
+			s.agentsMu.Lock()
+			if a, ok := s.agents[id]; ok && a != nil {
+				if (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil {
+					a.SetMemoryScope(normalizeDirScope(*req.WorkDir))
+				}
+				if s.staticRulesEnabled() {
+					a.SetRuleDir(*req.WorkDir)
+				}
+			}
+			s.agentsMu.Unlock()
 		}
 		jsonResponse(w, map[string]bool{"ok": true})
 	case "DELETE":
@@ -297,6 +311,69 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// SessionDirGroup groups sessions that share a working directory the user
+// explicitly set at least once (chat 页面"按工作目录查看会话"的弹层数据源)。
+type SessionDirGroup struct {
+	Dir      string     `json:"dir"`
+	Sessions []*Session `json:"sessions"`
+}
+
+// handleSessionsDirGroups aggregates web sessions whose working directory was
+// user-set, grouped by directory (newest activity first within each group).
+// 只统计用户显式设置过工作目录的会话，网关/TUI 等平台的会话不参与分组。
+func (s *Server) handleSessionsDirGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	empty := map[string]interface{}{"groups": []SessionDirGroup{}, "total_sessions": 0}
+	if s.sessionStore == nil {
+		jsonResponse(w, empty)
+		return
+	}
+
+	dbSessions, err := s.sessionStore.ListSessionsByUserWorkDir(r.Context())
+	if err != nil {
+		jsonResponse(w, empty)
+		return
+	}
+
+	// 按规范化路径聚合（清理尾部分隔符等），组内按最近活动倒序
+	byDir := map[string][]*Session{}
+	total := 0
+	for _, dbSess := range dbSessions {
+		apiSess := convertDBSessionToAPI(dbSess)
+		if apiSess == nil || strings.TrimSpace(apiSess.WorkDir) == "" {
+			continue
+		}
+		key := filepath.Clean(apiSess.WorkDir)
+		byDir[key] = append(byDir[key], apiSess)
+		total++
+	}
+
+	groups := make([]SessionDirGroup, 0, len(byDir))
+	for dir, list := range byDir {
+		sort.Slice(list, func(i, j int) bool { return list[i].LastActive > list[j].LastActive })
+		groups = append(groups, SessionDirGroup{Dir: dir, Sessions: list})
+	}
+	// 组间按组内最近一条会话的活动时间排序（最新在前）
+	sort.Slice(groups, func(i, j int) bool {
+		ai, bj := groups[i].Sessions, groups[j].Sessions
+		if len(ai) == 0 {
+			return false
+		}
+		if len(bj) == 0 {
+			return true
+		}
+		return ai[0].LastActive > bj[0].LastActive
+	})
+
+	jsonResponse(w, map[string]interface{}{
+		"groups":         groups,
+		"total_sessions": total,
+	})
 }
 
 func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, sessionID string) {

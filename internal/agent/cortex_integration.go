@@ -143,8 +143,8 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		req := &hooks.LLMHookRequest{
 			Provider: a.provider.Name(),
 			Model:    "",
-			// P0-1: 出站消息注入动态记忆（不改 a.history 本体）
-			Messages: a.withDynamicMemory(a.history),
+			// P0-1: 出站消息注入静态规则链 + 动态记忆（不改 a.history 本体）
+			Messages: a.withContextBlocks(a.history),
 			Tools:    a.tools,
 		}
 
@@ -212,7 +212,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				conversationHistory[i].Content = msg.Content
 			}
 			a.cortexManager.SetConversationHistory(conversationHistory)
-			a.cortexManager.OnSessionEnd()
+			a.cortexManager.OnSessionEnd(a.memoryScope)
 
 			// ========== CORTEX: Record trajectory (no tools) ==========
 			a.recordTrajectory(input, content, trajectorySteps, trajectoryStartTime, lastErr == nil)
@@ -350,7 +350,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		conversationHistory[i].Content = msg.Content
 	}
 	a.cortexManager.SetConversationHistory(conversationHistory)
-	a.cortexManager.OnSessionEnd()
+	a.cortexManager.OnSessionEnd(a.memoryScope)
 
 	// ========== CORTEX: Record trajectory (with tools) ==========
 	finalContent := ""
