@@ -49,14 +49,17 @@ type Server struct {
 	startTime    time.Time
 	cfg          *appconfig.Config
 	sessionStore *session.Store
-	provider     provider.Provider
-	toolReg      *tool.Registry
-	skillMgr     *skills.Manager
-	magicHome    string
-	execPath     string // Store the executable path for gateway restart
-	version      string
-	commit       string
-	buildDate    string
+	// uploadsMeta maps on-disk upload uuid names back to readable original
+	// filenames so the Files page can display user-friendly names. Lazy-open.
+	uploadsMeta *uploadsMetaStore
+	provider    provider.Provider
+	toolReg     *tool.Registry
+	skillMgr    *skills.Manager
+	magicHome   string
+	execPath    string // Store the executable path for gateway restart
+	version     string
+	commit      string
+	buildDate   string
 
 	// Active chat agents per session (lazy init)
 	agents   map[string]*agent.Agent
@@ -1406,6 +1409,10 @@ func (s *Server) Stop() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.httpServer.Shutdown(ctx)
+	}
+	if s.uploadsMeta != nil {
+		_ = s.uploadsMeta.Close()
+		s.uploadsMeta = nil
 	}
 }
 

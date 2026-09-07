@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -160,6 +161,13 @@ func (s *Server) cleanupSessionUploads(sessionID string) {
 		log.Warnf("[uploads] cleanup %s failed: %v", safe, err)
 		return
 	}
+	// Drop metadata rows for the removed session's uploads so uploads.db does
+	// not accumulate ghosts. Best-effort; missing metadata is harmless.
+	if meta := s.ensureUploadsMeta(); meta != nil {
+		if _, err := meta.DeleteSession(sessionID); err != nil {
+			log.Warnf("[uploads] meta cleanup for %s failed: %v", sessionID, err)
+		}
+	}
 	log.Infof("[uploads] cleaned session uploads: %s", safe)
 }
 
@@ -312,19 +320,110 @@ func resolveExtension(clientName string, sniff string) string {
 			return ".tar"
 		case "application/wasm":
 			return ".wasm"
+		case "application/x-7z-compressed":
+			return ".7z"
+		case "application/x-rar-compressed", "application/vnd.rar":
+			return ".rar"
 		case "video/mp4":
 			return ".mp4"
 		case "video/webm":
 			return ".webm"
+		case "video/x-msvideo", "video/avi":
+			return ".avi"
+		case "video/quicktime":
+			return ".mov"
 		case "audio/mpeg":
 			return ".mp3"
 		case "audio/wav", "audio/x-wav":
 			return ".wav"
 		case "audio/ogg":
 			return ".ogg"
+		case "audio/flac", "audio/x-flac":
+			return ".flac"
+		case "audio/aac", "audio/x-aac":
+			return ".aac"
+		case "audio/mp4", "audio/x-m4a":
+			return ".m4a"
+		case "audio/opus":
+			return ".opus"
+		case "text/markdown", "text/x-markdown":
+			return ".md"
+		case "text/x-go":
+			return ".go"
+		case "text/x-python", "text/x-script.python":
+			return ".py"
+		case "text/x-shellscript":
+			return ".sh"
+		case "application/rtf":
+			return ".rtf"
+		case "application/vnd.ms-office", "application/msword":
+			return ".doc"
+		case "application/vnd.ms-word.document.macroEnabled.12":
+			return ".docm"
+		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+			return ".docx"
+		case "application/vnd.ms-excel":
+			return ".xls"
+		case "application/vnd.ms-excel.sheet.macroEnabled.12":
+			return ".xlsm"
+		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+			return ".xlsx"
+		case "application/vnd.ms-powerpoint":
+			return ".ppt"
+		case "application/vnd.ms-powerpoint.presentation.macroEnabled.12":
+			return ".pptm"
+		case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+			return ".pptx"
+		case "application/vnd.oasis.opendocument.text":
+			return ".odt"
+		case "application/vnd.oasis.opendocument.spreadsheet":
+			return ".ods"
+		case "application/vnd.oasis.opendocument.presentation":
+			return ".odp"
+		case "application/epub+zip":
+			return ".epub"
 		}
 	}
 	return ".bin"
+}
+
+// detectOfficeZipExt inspects an on-disk file's zip structure and returns the
+// real OOXML extension (.docx/.xlsx/.pptx) when the archive is a Word/Excel/
+// PowerPoint container. http.DetectContentType reports all of these as
+// "application/zip", so without unpacking we cannot tell a .docx from a plain
+// .zip — this closes that gap. Returns "" when the file is not an Office Open
+// XML container (or not readable / not a zip).
+func detectOfficeZipExt(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	zr, err := zip.NewReader(f, st.Size())
+	if err != nil {
+		return ""
+	}
+	hasPrefix := func(prefix string) bool {
+		for _, zf := range zr.File {
+			if strings.HasPrefix(strings.ToLower(zf.Name), prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case hasPrefix("word/document.xml"):
+		return ".docx"
+	case hasPrefix("xl/workbook.xml"):
+		return ".xlsx"
+	case hasPrefix("ppt/presentation.xml"):
+		return ".pptx"
+	}
+	return ""
 }
 
 // handleFileUpload — POST /api/upload
@@ -451,6 +550,23 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.Chmod(dstPath, 0o600)
 
+	// Sniff reports every OOXML document (.docx/.xlsx/.pptx) as application/zip,
+	// so a docx whose client filename had no trusted extension would be stored
+	// as "<uuid>.zip". Unpack the container on disk and rename it to the real
+	// extension when the zip structure identifies an Office file.
+	if strings.EqualFold(diskExt, ".zip") {
+		if realExt := detectOfficeZipExt(dstPath); realExt != "" {
+			newDiskName := fileID + realExt
+			newPath := filepath.Join(dstDir, newDiskName)
+			if os.Rename(dstPath, newPath) == nil {
+				diskExt = realExt
+				diskName = newDiskName
+				dstPath = newPath
+				log.Infof("[uploads] corrected %s -> %s (OOXML container)", diskName, realExt)
+			}
+		}
+	}
+
 	// Build the public URL. Prefer cfg.Server.UploadURLPrefix if set; otherwise
 	// return the per-session-relative path so the file server can serve it via
 	// /api/uploads/<session>/<file>.
@@ -475,6 +591,14 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		Time: time.Now(), SessionID: sessionID,
 		Action: "upload", Filename: diskName, Size: written, IP: clientIP(r),
 	})
+
+	// Persist disk name -> original name so the Files page can show a readable
+	// name. Best-effort: metadata loss never blocks the upload itself.
+	if meta := s.ensureUploadsMeta(); meta != nil {
+		if err := meta.Upsert(sessionID, diskName, clientName, written, sniffed); err != nil {
+			log.Warnf("[uploads] meta upsert failed for %s: %v", diskName, err)
+		}
+	}
 
 	jsonResponse(w, uploadsUploadResult{
 		ID:       fileID,
@@ -501,6 +625,7 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 
 	type fileEntry struct {
 		Filename  string `json:"filename"`
+		Disk      string `json:"disk,omitempty"`
 		Size      int64  `json:"size"`
 		URL       string `json:"url"`
 		Updated   string `json:"updated"`
@@ -524,6 +649,12 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scanDir := func(dir string, sid string) {
+		// The shared bucket is stored under a "_shared" directory but its
+		// metadata rows and URLs use the empty session key. Normalize here so
+		// meta lookups and getFileURL stay consistent for shared uploads.
+		if sid == "_shared" {
+			sid = ""
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return
@@ -536,10 +667,20 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			disk := info.Name()
+			// Show the readable original name when we recorded one; otherwise
+			// fall back to the on-disk name (legacy uploads have no metadata).
+			display := disk
+			if meta := s.ensureUploadsMeta(); meta != nil {
+				if row, ok := meta.Get(sid, disk); ok && row.OrigName != "" {
+					display = row.OrigName
+				}
+			}
 			files = append(files, fileEntry{
-				Filename:  info.Name(),
+				Filename:  display,
+				Disk:      disk,
 				Size:      info.Size(),
-				URL:       getFileURL(sid, info.Name()),
+				URL:       getFileURL(sid, disk),
 				Updated:   info.ModTime().Format("2006-01-02 15:04:05"),
 				SessionID: sid,
 			})
@@ -628,6 +769,12 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "failed to delete file: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if meta := s.ensureUploadsMeta(); meta != nil {
+		if err := meta.DeleteDisk(sessionID, filename); err != nil {
+			log.Warnf("[uploads] meta delete failed for %s: %v", filename, err)
+		}
 	}
 
 	s.recordUploadAudit(uploadsAuditEntry{

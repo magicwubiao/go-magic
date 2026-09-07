@@ -91,7 +91,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showPreview = false">{{ t('common.close') }}</n-button>
-          <template v-if="previewType === 'text' && !isImageFile(previewTitle)">
+          <template v-if="previewType === 'text' && !isImageFile(previewTypeName)">
             <n-button v-if="!isEditing" @click="startEdit">{{ t('common.edit') }}</n-button>
             <template v-else>
               <n-button @click="cancelEdit">{{ t('common.cancel') }}</n-button>
@@ -306,7 +306,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
             icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
           }),
           h(NPopconfirm, {
-            onPositiveClick: () => handleDelete(row.filename),
+            onPositiveClick: () => handleDelete(row),
           }, {
             trigger: () => h(NButton, {
               size: 'tiny',
@@ -361,9 +361,13 @@ function handleUpload({ file, onFinish, onError }: UploadCustomRequestOptions) {
     })
 }
 
-async function handleDelete(filename: string) {
+async function handleDelete(file: sessionsApi.FileItem) {
+  // Delete by the on-disk uuid name (not the readable display name) so the
+  // backend can find the real file under its session directory. Fall back to
+  // the legacy filename when the server did not return a disk field.
+  const disk = file.disk || file.filename
   try {
-    await sessionsApi.deleteFile(filename)
+    await sessionsApi.deleteFile(file.session_id, disk)
     message.success(t('files.deleteSuccess'))
     await loadFiles()
   } catch (e) {
@@ -378,6 +382,9 @@ function downloadUploadFile(file: sessionsApi.FileItem) {
 // ===== Preview/Editor =====
 const showPreview = ref(false)
 const previewTitle = ref('')
+// Real on-disk filename (uuid.ext) used for type/language detection. Display
+// names may carry a client-chosen extension that differs from the actual file.
+const previewTypeName = ref('')
 const previewContent = ref('')
 const previewPath = ref('')
 const previewType = ref<'text' | 'image' | 'binary' | 'none'>('none')
@@ -410,7 +417,7 @@ const previewHtml = computed(() => {
   const content = previewContent.value
   if (!content) return ''
   if (content.length > 500000) return escapeHtml(content)
-  const name = previewPath.value || previewTitle.value
+  const name = previewPath.value || previewTypeName.value || previewTitle.value
   const ext = name.split('.').pop()?.toLowerCase() || ''
   const lang = extLanguageMap[ext]
   try {
@@ -443,14 +450,20 @@ async function previewUploadFile(file: sessionsApi.FileItem) {
   previewDownloadUrl.value = file.url
   isEditing.value = false
 
-  if (isImageFile(file.filename)) {
+  // Type detection must use the real on-disk extension (server-corrected),
+  // not the readable display name, so a renamed/extensionless upload still
+  // previews correctly.
+  const typeName = file.disk || file.filename
+  previewTypeName.value = typeName
+
+  if (isImageFile(typeName)) {
     previewType.value = 'image'
     previewImageUrl.value = file.url
     showPreview.value = true
     return
   }
 
-  if (isBinaryFile(file.filename)) {
+  if (isBinaryFile(typeName)) {
     previewType.value = 'binary'
     showPreview.value = true
     return

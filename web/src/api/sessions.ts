@@ -367,6 +367,8 @@ export async function uploadFile(file: File, sessionId?: string): Promise<Upload
 
 export interface FileItem {
   filename: string
+  disk?: string
+  session_id?: string
   size: number
   url: string
   updated: string
@@ -389,8 +391,9 @@ export async function listFiles(): Promise<FileItem[]> {
   }))
 }
 
-export async function deleteFile(filename: string): Promise<void> {
-  return request(`/files/${filename}`, { method: 'DELETE' })
+export async function deleteFile(sessionId: string | undefined, disk: string): Promise<void> {
+  const seg = sessionId ? `${sessionId}/${disk}` : disk
+  return request(`/files/${seg}`, { method: 'DELETE' })
 }
 
 export interface ChatStreamEvent {

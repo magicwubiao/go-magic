@@ -3,6 +3,7 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,6 +193,132 @@ func TestResolveExtensionNoSuffix(t *testing.T) {
 	}
 	// Client-supplied extensions always win, even when sniff says otherwise.
 	if got := resolveExtension("notes.md", "text/plain; charset=utf-8"); got != ".md" {
+		t.Errorf("client ext should win: got %q", got)
+	}
+}
+
+func TestResolveExtensionOffice(t *testing.T) {
+	cases := []struct{ mime, want string }{
+		{"application/zip", ".zip"},
+		{"application/msword", ".doc"},
+		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"},
+		{"application/vnd.ms-word.document.macroEnabled.12", ".docm"},
+		{"application/vnd.ms-excel", ".xls"},
+		{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"},
+		{"application/vnd.ms-excel.sheet.macroEnabled.12", ".xlsm"},
+		{"application/vnd.ms-powerpoint", ".ppt"},
+		{"application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"},
+		{"application/rtf", ".rtf"},
+		{"application/epub+zip", ".epub"},
+		{"text/markdown", ".md"},
+		{"application/x-7z-compressed", ".7z"},
+		{"audio/flac", ".flac"},
+	}
+	for _, c := range cases {
+		if got := resolveExtension("noext", c.mime); got != c.want {
+			t.Errorf("resolveExtension(%q) = %q, want %q", c.mime, got, c.want)
+		}
+	}
+	// A client extension still wins over an office sniff value.
+	if got := resolveExtension("README.txt", "application/octet-stream"); got != ".txt" {
+		t.Errorf("client ext should win for office: %q", got)
+	}
+}
+
+func TestDetectOfficeZipExt(t *testing.T) {
+	dir := t.TempDir()
+	writeZip := func(name string, files map[string]string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, buildTestZip(t, files), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	docx := writeZip("d.zip", map[string]string{"word/document.xml": "<w:document/>"})
+	if got := detectOfficeZipExt(docx); got != ".docx" {
+		t.Errorf("docx = %q, want .docx", got)
+	}
+
+	xlsx := writeZip("x.zip", map[string]string{"xl/workbook.xml": "<workbook/>", "xl/worksheets/sheet1.xml": "<ws/>"})
+	if got := detectOfficeZipExt(xlsx); got != ".xlsx" {
+		t.Errorf("xlsx = %q, want .xlsx", got)
+	}
+
+	pptx := writeZip("p.zip", map[string]string{"ppt/presentation.xml": "<p:presentation/>"})
+	if got := detectOfficeZipExt(pptx); got != ".pptx" {
+		t.Errorf("pptx = %q, want .pptx", got)
+	}
+
+	// A real (non-OOXML) zip returns empty.
+	plain := writeZip("plain.zip", map[string]string{"hello.txt": "hi"})
+	if got := detectOfficeZipExt(plain); got != "" {
+		t.Errorf("plain zip = %q, want empty", got)
+	}
+
+	// Not a zip at all returns empty.
+	garbage := filepath.Join(dir, "garbage.zip")
+	if err := os.WriteFile(garbage, []byte("PK\x03\x04 this is not a complete zip"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectOfficeZipExt(garbage); got != "" {
+		t.Errorf("garbage = %q, want empty", got)
+	}
+}
+
+// uploadDiskExtFromContent mirrors the full decision in handleFileUpload for a
+// client-supplied name and raw body: sniff, resolve an initial extension, then
+// unpack zip containers to the real OOXML extension. Extensionless client names
+// are the regression case under test.
+func uploadDiskExtFromContent(t *testing.T, clientName string, body []byte) string {
+	t.Helper()
+	head := body
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	sniffed := http.DetectContentType(head)
+	ext := resolveExtension(clientName, sniffed)
+	if ext == ".zip" && len(body) > 0 {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "probe.zip")
+		if err := os.WriteFile(p, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if real := detectOfficeZipExt(p); real != "" {
+			ext = real
+		}
+	}
+	return ext
+}
+
+func TestUploadExtensionlessContent(t *testing.T) {
+	docxBody := buildTestZip(t, map[string]string{"word/document.xml": "<w:document/>"})
+	xlsxBody := buildTestZip(t, map[string]string{"xl/workbook.xml": "<workbook/>", "xl/worksheets/sheet1.xml": "<ws/>"})
+
+	cases := []struct {
+		name string
+		body []byte
+		want string
+	}{
+		// No-extension text files must not land on .bin.
+		{"纯文本", []byte("hello world\nplain text body"), ".txt"},
+		{"LICENSE-style", []byte("# title\nbody text"), ".txt"},
+		// Real binary image content with no extension -> sniffed extension.
+		{"png内容", append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, bytes.Repeat([]byte{0}, 32)...), ".png"},
+		// Real OOXML container with no extension -> unpack-corrected ext.
+		{"docx内容", docxBody, ".docx"},
+		{"xlsx内容", xlsxBody, ".xlsx"},
+		// A real plain zip (not office) stays a zip.
+		{"普通zip", buildTestZip(t, map[string]string{"a.txt": "hi"}), ".zip"},
+	}
+	for _, c := range cases {
+		if got := uploadDiskExtFromContent(t, "noext", c.body); got != c.want {
+			t.Errorf("case %q: got ext %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// Sanity: an explicit client extension still wins over sniff.
+	if got := uploadDiskExtFromContent(t, "notes.md", []byte("plain")); got != ".md" {
 		t.Errorf("client ext should win: got %q", got)
 	}
 }
