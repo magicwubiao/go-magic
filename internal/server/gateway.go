@@ -279,16 +279,18 @@ func (s *Server) restartGatewayProcess() error {
 	return fmt.Errorf("gateway PID file not created after 10s")
 }
 
-// registerWeComQRLoginHook 让 WeCom 官方智能机器人扫码确认后自动重启 gateway：
-// 新 bot_id/secret 此时已写入 config.json，但 gateway 只在启动时读取一次凭据，
-// 不重启则新 bot 永不连接——即用户看到"扫码成功却收不到消息"。重启在后台
-// goroutine 执行，不阻塞扫码轮询与 HTTP 响应。
-func (s *Server) registerWeComQRLoginHook() {
-	gateway.GetQRManager().SetWeComConfirmedHook(func() {
-		log.Infof("[gateway] WeCom QR login confirmed — auto-restarting gateway to apply new bot credentials")
+// registerQRLoginRestartHook 让 QR 扫码平台（WeCom 官方智能机器人、微信 iLink）
+// 扫码确认后自动重启 gateway：新 bot_id/secret 或 token 此时已写入 config.json，
+// 但 gateway 只在启动时读取一次平台凭据，不重启则新 bot 永不连接——即用户看到
+// "扫码成功却收不到消息"，或 iLink 的"确认登录后仍无法连接"（gateway 先启动、
+// 平台配置后写入时，运行中的进程甚至没有该平台实例，热加载无从谈起）。
+// 重启在后台 goroutine 执行，不阻塞扫码轮询与 HTTP 响应。
+func (s *Server) registerQRLoginRestartHook() {
+	gateway.GetQRManager().SetLoginConfirmedHook(func(platform string) {
+		log.Infof("[gateway] %s QR login confirmed — auto-restarting gateway to apply new credentials", platform)
 		safeGo(func() {
 			if err := s.restartGatewayProcess(); err != nil {
-				log.Errorf("[gateway] Auto-restart after WeCom QR login failed: %v", err)
+				log.Errorf("[gateway] Auto-restart after %s QR login failed: %v", platform, err)
 			}
 		})
 	})

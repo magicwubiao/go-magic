@@ -24,11 +24,14 @@ type QRCodeManager struct {
 	cleanup chan string
 	pollers map[string]*QRPollContext // active pollers
 
-	// wecomConfirmFn 由 server 注入：WeCom AI Bot 扫码确认（新 bot_id/secret
-	// 已写入 config.json）后回调。gateway 只在启动时读取一次 wecom 凭据，
-	// 宿主可借此自动重启 gateway，避免"扫码成功但新 bot 未连接、收不到消息"。
-	wecomConfirmMu sync.RWMutex
-	wecomConfirmFn func()
+	// loginConfirmFn 由 server 注入：QR 扫码平台确认登录（新凭据已写入
+	// config.json）后回调，参数为平台 id（如 "wecom"/"wechat_ilink"）。
+	// gateway 只在启动时读取一次平台凭据，宿主可借此自动重启 gateway，避免
+	// "扫码成功但新 bot 未连接、收不到消息"。注意 wechat_ilink：若 gateway
+	// 先启动、平台配置后写入（如先起网关再扫码），运行中的进程根本没有该平台
+	// 实例，pollLoop 的 token 热加载无从谈起——重启是让新配置生效的唯一路径。
+	loginConfirmMu sync.RWMutex
+	loginConfirmFn func(platform string)
 }
 
 // QRPollContext holds the context for QR status polling
@@ -200,12 +203,13 @@ func (m *QRCodeManager) startPoller(platform string, session *QRCodeSession) {
 						currentSession.ExpiresAt = time.Now().Add(24 * time.Hour)
 						log.Infof("QR login confirmed for %s", platform)
 						m.mu.Unlock()
-						// WeCom AI Bot：凭据已落盘 config.json，但 gateway 进程只在
-						// 启动时读取一次 wecom 凭据——通知宿主（server）自动重启
-						// gateway 使新 bot_id/secret 生效。旧流程要求手动重启，
-						// 极易造成"扫码成功却收不到消息"。
-						if platform == "wecom" {
-							m.fireWeComConfirmed()
+						// WeCom AI Bot / WeChat iLink：凭据已落盘 config.json，
+						// 但 gateway 进程只在启动时读取一次平台凭据——通知宿主
+						// （server）自动重启 gateway 使新 bot_id/secret 或 token
+						// 生效。旧流程要求手动重启，极易造成"扫码成功却收不到消息"
+						// /"确认登录后仍无法连接"。
+						if platform == "wecom" || platform == "wechat_ilink" {
+							m.fireLoginConfirmed(platform)
 						}
 						return
 					case "expired":
@@ -311,22 +315,22 @@ func (m *QRCodeManager) UpdateSessionStatus(platform string, status string, mess
 	}
 }
 
-// SetWeComConfirmedHook 注册 WeCom AI Bot 扫码确认后的回调（通常由 server 注入）。
-// 回调在 bot_id/secret 已写入 config.json 之后触发，宿主可据此重启 gateway，
-// 使新凭据生效。传 nil 可注销。
-func (m *QRCodeManager) SetWeComConfirmedHook(fn func()) {
-	m.wecomConfirmMu.Lock()
-	defer m.wecomConfirmMu.Unlock()
-	m.wecomConfirmFn = fn
+// SetLoginConfirmedHook 注册 QR 扫码平台确认登录后的回调（通常由 server 注入）。
+// 回调在新凭据已写入 config.json 之后触发，宿主可据此重启 gateway 使新凭据生效。
+// 传 nil 可注销。回调参数为已确认登录的平台 id（如 "wecom"/"wechat_ilink"）。
+func (m *QRCodeManager) SetLoginConfirmedHook(fn func(platform string)) {
+	m.loginConfirmMu.Lock()
+	defer m.loginConfirmMu.Unlock()
+	m.loginConfirmFn = fn
 }
 
-// fireWeComConfirmed 调用已注册的 wecom 确认回调（无回调时为空操作）。
-func (m *QRCodeManager) fireWeComConfirmed() {
-	m.wecomConfirmMu.RLock()
-	fn := m.wecomConfirmFn
-	m.wecomConfirmMu.RUnlock()
+// fireLoginConfirmed 调用已注册的确认回调（无回调时为空操作）。
+func (m *QRCodeManager) fireLoginConfirmed(platform string) {
+	m.loginConfirmMu.RLock()
+	fn := m.loginConfirmFn
+	m.loginConfirmMu.RUnlock()
 	if fn != nil {
-		fn()
+		fn(platform)
 	}
 }
 

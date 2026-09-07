@@ -25,8 +25,9 @@ import (
 //     -> data.status 由 init/wait -> scaned -> success；success 时
 //     data.bot_info={botid, secret}
 //  3. 把 botid/secret 写入 config.json（gateway.platforms.wecom:
-//     mode="aibot"）。确认后 server 端通过 SetWeComConfirmedHook 自动重启
-//     gateway 使新凭据生效（gateway 只在启动时读取一次凭据），无需手动重启。
+//     mode="aibot"）。确认后 server 端通过 SetLoginConfirmedHook 自动重启
+//     gateway 使新凭据生效（gateway 只在启动时读取一次凭据），无需手动重启；
+//     同一机制也覆盖微信 iLink（wechat_ilink）扫码确认。
 //
 // 端点只接受 GET（实测 2026-09-02：POST 或带 ?source/plat 参数均返回 404「请求的
 // 网页不存在」或空响应），无需登录 cookie 与请求体；URL 实现成包级变量以便单测替换。

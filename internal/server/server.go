@@ -526,9 +526,10 @@ Your working directory is: %s
 	// Plugin-level failures are isolated and never block server startup.
 	_, s.agentPlugins = s.loadAgentPlugins()
 
-	// WeCom 扫码确认后自动重启 gateway：让新写入 config.json 的 bot_id/secret
-	// 生效（否则新 bot 永不连接，表现为"扫码成功但收不到消息"）。
-	s.registerWeComQRLoginHook()
+	// QR 扫码平台（WeCom AI Bot / WeChat iLink）确认登录后自动重启 gateway：
+	// 让新写入 config.json 的 bot_id/secret 或 token 生效（否则新 bot 永不
+	// 连接，表现为"扫码成功但收不到消息"或"确认后仍无法连接"）。
+	s.registerQRLoginRestartHook()
 
 	return s
 }
