@@ -168,10 +168,15 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 		modelName = "default"
 	}
 
-	// Infer context length and capabilities from model name
+	// Infer context length and capabilities from model name.
+	// Vision support now comes from the SINGLE source of truth
+	// (provider.ModelSupportsVision: runtime learning → per-model registry
+	// → negative/positive name heuristics) so the capabilities reported here
+	// match what the request path actually does with image parts. The old
+	// duplicated per-family switch drifted from the conversion logic.
 	contextLen := 128000
 	maxOutput := 4096
-	supportsVision := false
+	supportsVision := provider.ModelSupportsVision(modelName)
 	supportsReasoning := false
 	modelFamily := providerName
 	modelDisplayName := modelName
@@ -198,22 +203,18 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(modelLower, "gpt-5.6"):
 		contextLen = 1050000
 		maxOutput = 128000
-		supportsVision = true
 		modelFamily = "openai"
 	case strings.Contains(modelLower, "gpt-5"):
 		contextLen = 400000
 		maxOutput = 128000
-		supportsVision = true
 		modelFamily = "openai"
 	case strings.Contains(modelLower, "gpt-4o"):
 		contextLen = 128000
 		maxOutput = 16384
-		supportsVision = true
 		modelFamily = "openai"
 	case strings.Contains(modelLower, "gpt-4-turbo") || strings.Contains(modelLower, "gpt-4-1106"):
 		contextLen = 128000
 		maxOutput = 4096
-		supportsVision = true
 		modelFamily = "openai"
 	case strings.Contains(modelLower, "gpt-4"):
 		contextLen = 8192
@@ -226,17 +227,14 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(modelLower, "claude-sonnet-5") || strings.Contains(modelLower, "claude-opus-5") || strings.Contains(modelLower, "claude-fable") || strings.Contains(modelLower, "claude-haiku-4") || strings.Contains(modelLower, "claude-4"):
 		contextLen = 200000
 		maxOutput = 64000
-		supportsVision = true
 		modelFamily = "anthropic"
 	case strings.Contains(modelLower, "claude-3-5") || strings.Contains(modelLower, "claude-3.5"):
 		contextLen = 200000
 		maxOutput = 8192
-		supportsVision = true
 		modelFamily = "anthropic"
 	case strings.Contains(modelLower, "claude-3"):
 		contextLen = 200000
 		maxOutput = 4096
-		supportsVision = true
 		modelFamily = "anthropic"
 	case strings.Contains(modelLower, "claude"):
 		contextLen = 100000
@@ -249,7 +247,6 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(modelLower, "gemini"):
 		contextLen = 1000000
 		maxOutput = 8192
-		supportsVision = true
 		modelFamily = "google"
 	case strings.Contains(modelLower, "llama"):
 		contextLen = 128000
@@ -267,7 +264,6 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 		contextLen = 200000
 		maxOutput = 100000
 		supportsReasoning = true
-		supportsVision = true
 		modelFamily = "openai"
 	}
 
@@ -280,6 +276,16 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 			if caps.Vision {
 				supportsVision = true
 			}
+		}
+	}
+
+	// Explicit per-provider "vision" declaration (config Providers[].vision,
+	// edited via the UI dropdown) has the same precedence as the request
+	// path in server.go: it beats both name detection and provider-level
+	// capabilities.
+	if s.cfg.Providers != nil {
+		if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
+			supportsVision = *provCfg.Vision
 		}
 	}
 

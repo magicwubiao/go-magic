@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -206,5 +207,186 @@ func TestWithAutoVisionOverride(t *testing.T) {
 	cfg = &ConvertConfig{SupportVision: false, AutoVision: true}
 	if got := cfg.WithAutoVision("gpt-4o"); !got.SupportVision {
 		t.Fatal("nil override should use name detection")
+	}
+}
+
+// The curated per-model registry is authoritative for known IDs, in BOTH
+// directions — including text-only members (LongCat-2.0) and
+// vision-capable flags that plain name heuristics cannot express.
+func TestModelSupportsVisionRegistry(t *testing.T) {
+	visionModels := []string{
+		"gpt-5.6", "gpt-5.6-luna", "gpt-5.6-terra",
+		"claude-fable-5-1", "claude-haiku-4-5",
+		"gemini-3.8-flash", "gemini-3.1-pro",
+		"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1",
+	}
+	for _, m := range visionModels {
+		if !ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = false, want true (registry)", m)
+		}
+	}
+	textModels := []string{
+		"LongCat-2.0-Preview", // text/code model, confirmed no image input
+		"deepseek-v4-flash", "deepseek-v4-pro",
+		"qwen3.8", "gpt-oss", "deepseek-r1",
+	}
+	for _, m := range textModels {
+		if ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = true, want false (registry)", m)
+		}
+	}
+}
+
+// Heuristic families added for models whose vision capability is NOT in the
+// registry (user-configured names): doubao-seed, omni, llama-4, step-*,
+// kimi-latest, minicpm-v, molmo, phi-4-multimodal. Plus the negative list:
+// text-only members of otherwise-vision families (o-series minis) that the
+// old "o3" substring pattern falsely flagged.
+func TestModelSupportsVisionNewPatterns(t *testing.T) {
+	visionModels := []string{
+		"doubao-seed-2.1-pro", "doubao-seed-1.6",
+		"qwen3-omni-flash", "qwen-omni-turbo",
+		"llama-4-maverick", "llama-4-scout",
+		"step-3", "step-1v-8k", "step-1o-turbo",
+		"kimi-latest", "minicpm-v", "molmo-16b", "phi-4-multimodal",
+	}
+	for _, m := range visionModels {
+		if !ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = false, want true (pattern)", m)
+		}
+	}
+	textModels := []string{
+		"o3-mini", "o1-mini", "o1-preview",
+		"qwen3.7-plus", "kimi-k2", "glm-5.3",
+	}
+	for _, m := range textModels {
+		if ModelSupportsVision(m) {
+			t.Errorf("ModelSupportsVision(%q) = true, want false", m)
+		}
+	}
+}
+
+// Runtime learning: once a model rejects image parts, detection flips off
+// for it (case-insensitively) and stays off until the cache is cleared.
+func TestRememberModelNoVision(t *testing.T) {
+	if !ModelSupportsVision("gpt-4o") {
+		t.Fatal("precondition: gpt-4o should be detected as vision-capable")
+	}
+	RememberModelNoVision("GPT-4o")
+	defer resetLearnedVisionForTest()
+	if ModelSupportsVision("gpt-4o") {
+		t.Fatal("learned rejection must flip detection off")
+	}
+	resetLearnedVisionForTest()
+	if !ModelSupportsVision("gpt-4o") {
+		t.Fatal("cache reset must restore detection")
+	}
+	RememberModelNoVision("   ")
+	if _, ok := learnedNoVision.Load(""); ok {
+		t.Fatal("blank model name must not be recorded")
+	}
+}
+
+// Learned negatives must not bypass an explicit VisionOverride=true.
+func TestVisionOverrideBeatsLearnedNegative(t *testing.T) {
+	RememberModelNoVision("gpt-4o")
+	defer resetLearnedVisionForTest()
+	yes := true
+	cfg := &ConvertConfig{SupportVision: false, AutoVision: true, VisionOverride: &yes}
+	if got := cfg.WithAutoVision("gpt-4o"); !got.SupportVision {
+		t.Fatal("explicit vision declaration must win over learned negative")
+	}
+}
+
+func TestIsImageUnsupportedError(t *testing.T) {
+	yes := []error{
+		errors.New("api error [invalid_request_error]: Invalid content type: image_url is not supported by this model"),
+		errors.New("api error (400): This model does not support vision input"),
+		errors.New("api error (400): 该模型不支持图片输入"),
+		errors.New("stream API returned status 400: api error [invalid]: multimodal content is not accepted"),
+	}
+	for _, err := range yes {
+		if !IsImageUnsupportedError(err) {
+			t.Errorf("IsImageUnsupportedError(%q) = false, want true", err)
+		}
+	}
+	no := []error{
+		nil,
+		errors.New("api error (429): rate limit exceeded"),
+		errors.New("api error (401): invalid api key"),
+		errors.New("api error (400): messages 参数非法"),
+		errors.New("context length exceeded"),
+	}
+	for _, err := range no {
+		if IsImageUnsupportedError(err) {
+			t.Errorf("IsImageUnsupportedError(%q) = true, want false", err)
+		}
+	}
+}
+
+func TestMessagesContainImages(t *testing.T) {
+	imageMsg := types.Message{
+		ContentParts: []types.ContentPart{
+			{Type: "image_url", ImageURL: &types.MediaURL{URL: "data:image/png;base64,AAAA"}},
+		},
+	}
+	fileImageMsg := types.Message{
+		ContentParts: []types.ContentPart{
+			{Type: "file", File: &types.FileInfo{Name: "photo.png", MimeType: "image/png"}},
+		},
+	}
+	fileExtMsg := types.Message{
+		ContentParts: []types.ContentPart{
+			{Type: "file", File: &types.FileInfo{Name: "photo.jpg"}}, // mime resolved from extension
+		},
+	}
+	for i, msgs := range [][]types.Message{{imageMsg}, {fileImageMsg}, {fileExtMsg}} {
+		if !MessagesContainImages(msgs) {
+			t.Errorf("case %d: MessagesContainImages = false, want true", i)
+		}
+	}
+
+	plainMsg := types.Message{Content: "plain text"}
+	docMsg := types.Message{
+		ContentParts: []types.ContentPart{
+			{Type: "file", File: &types.FileInfo{Name: "doc.docx", MimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}},
+		},
+	}
+	textMsg := types.Message{
+		ContentParts: []types.ContentPart{{Type: "text", Text: "hello"}},
+	}
+	for i, msgs := range [][]types.Message{{plainMsg}, {docMsg}, {textMsg}, nil} {
+		if MessagesContainImages(msgs) {
+			t.Errorf("case %d: MessagesContainImages = true, want false", i)
+		}
+	}
+}
+
+func TestWithoutVision(t *testing.T) {
+	cfg := &ConvertConfig{SupportVision: true, AutoVision: true, StrategyName: "auto"}
+	got := cfg.WithoutVision()
+	if got.SupportVision {
+		t.Fatal("WithoutVision must force SupportVision off")
+	}
+	if got.AutoVision {
+		t.Fatal("WithoutVision must freeze AutoVision off — otherwise WithAutoVision(model) recompute flips SupportVision back on")
+	}
+	if got.StrategyName != "auto" {
+		t.Fatal("other fields must be preserved")
+	}
+	if !cfg.SupportVision {
+		t.Fatal("receiver must not be mutated (SupportVision)")
+	}
+	if !cfg.AutoVision {
+		t.Fatal("receiver must not be mutated (AutoVision)")
+	}
+	// Regression: the prep pipeline calls WithAutoVision(model) on the
+	// degraded copy — the forced-off state must survive that recompute.
+	if got.WithAutoVision("gpt-4o").SupportVision {
+		t.Fatal("WithAutoVision recompute must not re-enable vision on the degraded copy")
+	}
+	var nilCfg *ConvertConfig
+	if nilCfg.WithoutVision() != nil {
+		t.Fatal("nil receiver must return nil")
 	}
 }

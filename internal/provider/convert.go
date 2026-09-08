@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -339,21 +340,86 @@ func ParseFileStrategy(s string) FileStrategy {
 	}
 }
 
-// ModelSupportsVision checks if a model supports vision (image_url format)
+// learnedNoVision remembers model names (lowercased) that REJECTED image
+// parts at runtime with an image-unsupported provider error. Detection is
+// name-based and inevitably lags new releases, so the provider layer feeds
+// observed rejections back here: the first request pays for the mistake,
+// every later request for the same model skips images immediately.
+// In-memory on purpose — a process restart resets it, so a vendor fixing
+// their API is picked up again. VisionOverride (explicit user declaration)
+// bypasses this cache entirely.
+var learnedNoVision sync.Map
+
+// RememberModelNoVision records that modelName rejected image parts, so
+// subsequent ModelSupportsVision calls return false for it.
+func RememberModelNoVision(modelName string) {
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	if model == "" {
+		return
+	}
+	learnedNoVision.Store(model, struct{}{})
+}
+
+// resetLearnedVisionForTest clears the runtime learning cache.
+func resetLearnedVisionForTest() {
+	learnedNoVision.Range(func(k, _ interface{}) bool {
+		learnedNoVision.Delete(k)
+		return true
+	})
+}
+
+// visionNegativePatterns are substrings of model names that would otherwise
+// match the positive heuristics (or belong to vision-capable families) but
+// are confirmed text-only. Checked BEFORE the positive lists.
+var visionNegativePatterns = []string{
+	"o1-mini", "o1-preview", "o3-mini", // OpenAI o-series text-only members
+}
+
+// ModelSupportsVision checks if a model supports vision (image_url format).
+//
+// Detection is layered, most-trusted first:
+//  1. Runtime learning: the model itself rejected image parts earlier
+//     (see RememberModelNoVision).
+//  2. The curated per-model registry (defaultModelRegistry): authoritative
+//     for known IDs, both directions.
+//  3. A negative list for text-only members of vision-capable families.
+//  4. Positive name heuristics: substring matches for vision model
+//     families. These lag new releases — when they miss, the explicit
+//     per-provider "vision" config declaration or a runtime rejection
+//     corrects the guess.
 func ModelSupportsVision(modelName string) bool {
 	if modelName == "" {
 		return false
 	}
 	modelLower := strings.ToLower(modelName)
 
-	// Models that support vision
+	// 1. Observed runtime rejections win — hard evidence beats guessing.
+	if _, no := learnedNoVision.Load(modelLower); no {
+		return false
+	}
+
+	// 2. Curated registry: exact (case-insensitive) ID match is
+	// authoritative for both vision and text-only entries.
+	if vision, known := modelRegistryVision(modelLower); known {
+		return vision
+	}
+
+	// 3. Negative patterns.
+	for _, p := range visionNegativePatterns {
+		if strings.Contains(modelLower, p) {
+			return false
+		}
+	}
+
+	// 4. Models that support vision (family substrings).
 	visionModels := []string{
 		"gpt-5.6", "gpt-5", "gpt-4o", "gpt-4-turbo", "gpt-4-vision",
 		"claude-sonnet-5", "claude-opus-5", "claude-fable", "claude-haiku-4",
 		"claude-3", "claude-3.5", "claude-3-opus", "claude-3-sonnet",
 		"gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5", "gemini-pro-vision",
 		"qwen-vl", "qwen-vl-max", "qwen2-vl", "qwen3-vl",
-		"muse-spark",
+		"muse-spark", "doubao-seed", "kimi-latest", "step-1v", "step-1o",
+		"step-3", "llama-4", "phi-4-multimodal", "minicpm-v", "molmo",
 	}
 
 	for _, m := range visionModels {
@@ -362,10 +428,10 @@ func ModelSupportsVision(modelName string) bool {
 		}
 	}
 
-	// Check for common vision model patterns. Note these are substring
-	// matches against the lowercased model name — keep version-specific
-	// entries like "glm-4.1v" (plain "glm-4v" is NOT a substring of it).
-	visionPatterns := []string{"vision", "vl", "glm-4v", "glm-4.1v", "glm-4.5v", "glm-4.6v", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet-4", "claude-opus-4", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3", "pixtral", "internvl", "grok"}
+	// Common vision model patterns. Note these are substring matches
+	// against the lowercased model name — keep version-specific entries
+	// like "glm-4.1v" (plain "glm-4v" is NOT a substring of it).
+	visionPatterns := []string{"vision", "vl", "omni", "multimodal", "glm-4v", "glm-4.1v", "glm-4.5v", "glm-4.6v", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-sonnet-4", "claude-opus-4", "claude-sonnet-5", "claude-opus-5", "claude-fable", "gemini-1.5", "gemini-2", "gemini-3", "pixtral", "internvl", "grok"}
 	for _, pattern := range visionPatterns {
 		if strings.Contains(modelLower, pattern) {
 			return true
@@ -373,6 +439,86 @@ func ModelSupportsVision(modelName string) bool {
 	}
 
 	return false
+}
+
+// modelRegistryVision looks modelName up in the curated registry, scanning
+// every provider's list (model IDs are globally unique in practice). Returns
+// the Vision flag and whether the ID is known at all.
+func modelRegistryVision(modelLower string) (vision, known bool) {
+	for _, models := range defaultModelRegistry {
+		for _, m := range models {
+			if strings.EqualFold(m.ID, modelLower) {
+				return m.Vision, true
+			}
+		}
+	}
+	return false, false
+}
+
+// MessagesContainImages reports whether any message carries content that
+// converts to image_url parts — direct image parts AND file parts whose
+// resolved MIME type is an image (file images take the image_url path in
+// convertFilePart). Used to gate the image-reject degrade retry: when no
+// image was sent, a provider error mentioning "image" is about something
+// else and must not trigger a retry.
+func MessagesContainImages(messages []types.Message) bool {
+	for i := range messages {
+		for _, part := range messages[i].ContentParts {
+			switch part.Type {
+			case "image_url":
+				return true
+			case "file":
+				if part.File != nil {
+					mimeType := part.File.MimeType
+					if mimeType == "" {
+						mimeType = fileContentType(part.File.Name)
+					}
+					if isImage(mimeType) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// IsImageUnsupportedError reports whether a provider error looks like a
+// rejection of image/multimodal content (as opposed to auth, rate limit,
+// context length, ...). Best-effort by design: the retry that consumes it
+// only fires when image parts were actually sent, so a signature false
+// positive costs one harmless retry.
+func IsImageUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"image", "vision", "multimodal", "multi-modal", "visual",
+		"图片", "图像", "视觉",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// WithoutVision returns a request-scoped shallow copy of the config with
+// SupportVision forced off (and AutoVision frozen OFF — otherwise the
+// prep pipeline's WithAutoVision(model) recompute would immediately flip
+// SupportVision back to the name-detected value and the degrade retry
+// would re-send the very image parts the provider just rejected). Used by
+// the image-reject degrade retry to re-convert messages with images
+// replaced by text placeholders. The receiver is never mutated; nil-safe.
+func (c *ConvertConfig) WithoutVision() *ConvertConfig {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.SupportVision = false
+	cp.AutoVision = false
+	return &cp
 }
 
 // WithAutoVision returns a request-scoped shallow copy of the config with

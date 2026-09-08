@@ -277,7 +277,18 @@ func (p *OpenAICompatibleProvider) applyDashScopeDefaults(reqBody map[string]int
 // the agent's inline <think> history blocks are split into the dedicated
 // field (see ApplyReasoningPassback).
 func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[string]interface{} {
+	return p.prepMessagesWithConfig(messages, nil)
+}
+
+// prepMessagesWithConfig is prepMessages with an optional ConvertConfig
+// override: nil uses the provider's stored config. The image-reject degrade
+// retry passes a WithoutVision() copy here so the retry payload carries
+// text placeholders instead of image parts.
+func (p *OpenAICompatibleProvider) prepMessagesWithConfig(messages []types.Message, cfgOverride *ConvertConfig) []map[string]interface{} {
 	cfg := p.BaseProvider.ConvertCfg
+	if cfgOverride != nil {
+		cfg = cfgOverride
+	}
 	if cfg != nil {
 		cfg = cfg.WithAutoVision(p.GetModel())
 	}
@@ -293,6 +304,44 @@ func (p *OpenAICompatibleProvider) prepMessages(messages []types.Message) []map[
 		return ConvertMessagesWithConfig(trimmed, cfg)
 	}
 	return ApplyReasoningPassback(ConvertMessagesWithConfig(messages, cfg), p.GetModel())
+}
+
+// shouldDegradeAfterImageReject decides whether a provider error should
+// trigger the one-shot retry with image parts stripped. Conditions, all
+// required:
+//   - the error looks like an image/multimodal rejection
+//     (IsImageUnsupportedError) and image parts were actually sent
+//     (MessagesContainImages) — otherwise the error is unrelated;
+//   - the request really carried images (detection said vision-capable);
+//     when detection already said "no vision" the images were placeholders
+//     and there is nothing to strip;
+//   - no explicit per-provider "vision" declaration: when the user
+//     explicitly declared vision capability, a rejection must surface as an
+//     error (they should fix or remove the declaration), not be silently
+//     swallowed by a placeholder downgrade.
+func (p *OpenAICompatibleProvider) shouldDegradeAfterImageReject(err error, messages []types.Message) bool {
+	if err == nil || !IsImageUnsupportedError(err) {
+		return false
+	}
+	if !MessagesContainImages(messages) {
+		return false
+	}
+	cfg := p.BaseProvider.ConvertCfg
+	if cfg == nil || !cfg.WithAutoVision(p.GetModel()).SupportVision {
+		return false
+	}
+	if cfg.VisionOverride != nil {
+		return false
+	}
+	return true
+}
+
+// strippedImageMessages re-converts the original messages with vision forced
+// off, so image parts become the short "not supported" text placeholders.
+// Only call after shouldDegradeAfterImageReject returned true (which
+// guarantees ConvertCfg is non-nil).
+func (p *OpenAICompatibleProvider) strippedImageMessages(messages []types.Message) []map[string]interface{} {
+	return p.prepMessagesWithConfig(messages, p.BaseProvider.ConvertCfg.WithoutVision())
 }
 
 // applyExtraParams 将透传参数合并进请求体（已设置的键不覆盖既有核心字段），
@@ -422,7 +471,23 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	headers := map[string]string{}
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
-		return nil, fmt.Errorf("chat request failed: %w", err)
+		// Image-reject degrade retry: a 4xx complaining about image parts
+		// on a request that carried images means name detection wrongly
+		// said vision-capable. Retry once with placeholders and remember.
+		if p.shouldDegradeAfterImageReject(err, messages) {
+			model := p.GetModel()
+			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
+			reqBody["messages"] = p.strippedImageMessages(messages)
+			retryBody, retryStatus, retryErr := p.DoRequest(ctx, "POST", url, reqBody, headers)
+			if retryErr != nil {
+				return nil, fmt.Errorf("chat request failed: %w (retry without images also failed: %v)", err, retryErr)
+			}
+			RememberModelNoVision(model)
+			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			respBody, statusCode = retryBody, retryStatus
+		} else {
+			return nil, fmt.Errorf("chat request failed: %w", err)
+		}
 	}
 
 	if statusCode != 200 {
@@ -462,7 +527,21 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	headers := map[string]string{}
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
-		return nil, fmt.Errorf("chat with tools request failed: %w", err)
+		// Image-reject degrade retry (see Chat).
+		if p.shouldDegradeAfterImageReject(err, messages) {
+			model := p.GetModel()
+			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
+			reqBody["messages"] = p.strippedImageMessages(messages)
+			retryBody, retryStatus, retryErr := p.DoRequest(ctx, "POST", url, reqBody, headers)
+			if retryErr != nil {
+				return nil, fmt.Errorf("chat with tools request failed: %w (retry without images also failed: %v)", err, retryErr)
+			}
+			RememberModelNoVision(model)
+			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			respBody, statusCode = retryBody, retryStatus
+		} else {
+			return nil, fmt.Errorf("chat with tools request failed: %w", err)
+		}
 	}
 
 	if statusCode != 200 {
@@ -511,7 +590,23 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	headers := map[string]string{}
 	resp, err := p.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
 	if err != nil {
-		return fmt.Errorf("stream request failed: %w", err)
+		// Image-reject degrade retry (see Chat): the stream handshake
+		// failed before any event reached the handler, so a clean retry
+		// with placeholder-converted messages cannot duplicate output.
+		if p.shouldDegradeAfterImageReject(err, messages) {
+			model := p.GetModel()
+			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
+			reqBody["messages"] = p.strippedImageMessages(messages)
+			retryResp, retryErr := p.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
+			if retryErr != nil {
+				return fmt.Errorf("stream request failed: %w (retry without images also failed: %v)", err, retryErr)
+			}
+			RememberModelNoVision(model)
+			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			resp = retryResp
+		} else {
+			return fmt.Errorf("stream request failed: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 
