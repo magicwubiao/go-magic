@@ -45,7 +45,11 @@ import (
 var distFS embed.FS
 
 type Server struct {
-	mu           sync.RWMutex
+	mu sync.RWMutex
+	// configMu serializes config.json writes from server-side handlers;
+	// the gateway process writes the same file concurrently (QR login
+	// credentials), so every persist must go through persistConfig.
+	configMu     sync.Mutex
 	startTime    time.Time
 	cfg          *appconfig.Config
 	sessionStore *session.Store
@@ -525,6 +529,10 @@ Your working directory is: %s
 	// plugin skills / MCP tools into the skills manager and tool registry.
 	// Plugin-level failures are isolated and never block server startup.
 	_, s.agentPlugins = s.loadAgentPlugins()
+
+	// 桥接独立 MCP server（config.json 的 mcp.servers / magic mcp connect）：
+	// 连接并把发现的工具以 mcp_<server>_<tool> 注册进工具注册表，供模型调用。
+	s.initStandaloneMCP()
 
 	// QR 扫码平台（WeCom AI Bot / WeChat iLink）确认登录后自动重启 gateway：
 	// 让新写入 config.json 的 bot_id/secret 或 token 生效（否则新 bot 永不
@@ -1414,6 +1422,10 @@ func (s *Server) Stop() {
 	if s.uploadsMeta != nil {
 		_ = s.uploadsMeta.Close()
 		s.uploadsMeta = nil
+	}
+	// 关闭所有独立 MCP server 连接,释放 stdio/SSE 子进程与传输资源。
+	if s.mcpMgr != nil {
+		s.mcpMgr.DisconnectAll()
 	}
 }
 

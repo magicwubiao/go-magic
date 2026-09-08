@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -50,9 +48,7 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 						s.cfg.Providers[provName] = provCfg
 						// Also update the top-level model field for consistency
 						s.cfg.Model = req.Model
-						configPath := filepath.Join(s.magicHome, "config.json")
-						data, _ := json.MarshalIndent(s.cfg, "", "  ")
-						os.WriteFile(configPath, data, 0644)
+						_ = s.persistConfig(true)
 					}
 				}
 				jsonResponse(w, map[string]interface{}{
@@ -85,9 +81,7 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Save config
-		configPath := filepath.Join(s.magicHome, "config.json")
-		data, _ := json.MarshalIndent(s.cfg, "", "  ")
-		os.WriteFile(configPath, data, 0644)
+		_ = s.persistConfig(true)
 		// Recreate provider
 		s.provider = createProvider(s.cfg)
 		// Clear all agents to force re-creation
@@ -554,7 +548,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					s.cfg.Provider = ""
 					s.cfg.Model = ""
 				}
-				s.cfg.Save()
+				_ = s.persistConfig(true)
 				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 				return
 			}

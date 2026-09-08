@@ -157,6 +157,10 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 		registry.RegisterSkillTool(skillMgr)
 	}
 
+	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 messaging
+	// gateway 的 agent 也能调用这些工具。
+	bridgeConfiguredMCPTools(registry, cfg)
+
 	// Generate system prompt
 	systemPrompt := generateGatewaySystemPrompt(cfg)
 
@@ -285,6 +289,8 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 					if skillMgr, err := skills.NewManager(); err == nil {
 						h.registry.RegisterSkillTool(skillMgr)
 					}
+					// 热加载重建 registry 后同样桥接独立 MCP server 的工具。
+					bridgeConfiguredMCPTools(h.registry, cfg)
 					h.systemPrompt = generateGatewaySystemPrompt(cfg)
 				} else {
 					log.Errorf("[Gateway] Provider %q not found in config", cfg.Provider)

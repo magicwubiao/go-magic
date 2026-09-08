@@ -74,6 +74,8 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 桥接:把该 server 的工具注册进工具注册表,模型立即可调用。
+		s.syncMCPServerToRegistry(req.Name)
 		jsonResponse(w, map[string]interface{}{"name": req.Name, "success": true})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -101,6 +103,8 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// 桥接:重连成功后刷新该 server 在注册表中的工具。
+			s.syncMCPServerToRegistry(name)
 			jsonResponse(w, map[string]bool{"success": true})
 			return
 		case "disconnect":
@@ -112,6 +116,8 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// 桥接:断开后同步移除该 server 的 mcp_* 工具,避免模型调用失效工具。
+			s.removeMCPServerTools(name)
 			jsonResponse(w, map[string]bool{"success": true})
 			return
 		case "reconnect":
@@ -123,6 +129,8 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// 桥接:重连成功后刷新该 server 在注册表中的工具。
+			s.syncMCPServerToRegistry(name)
 			jsonResponse(w, map[string]bool{"success": true})
 			return
 		case "health":
@@ -153,6 +161,8 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+				// 桥接:tools 清单变化后刷新注册表中的 mcp_* 工具。
+				s.syncMCPServerToRegistry(name)
 				tools, _ := s.mcpMgr.ListToolsByServer(name)
 				jsonResponse(w, tools)
 				return
@@ -185,6 +195,8 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 桥接:删除 server 后同步移除其 mcp_* 工具。
+		s.removeMCPServerTools(name)
 		jsonResponse(w, map[string]string{"status": "deleted"})
 		return
 	}
@@ -371,7 +383,7 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.cfg.Tools.Disabled = newDisabled
-			_ = s.cfg.Save()
+			_ = s.persistConfig(true)
 		}
 		s.mu.Unlock()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": true})
@@ -400,7 +412,7 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.cfg.Tools.Enabled = newEnabled
-			_ = s.cfg.Save()
+			_ = s.persistConfig(true)
 		}
 		s.mu.Unlock()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": false})

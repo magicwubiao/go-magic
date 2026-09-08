@@ -60,6 +60,10 @@ func runChat(cmd *cobra.Command, args []string) error {
 		registry.RegisterSkillTool(skillMgr)
 	}
 
+	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 TUI chat 的
+	// agent 也能调用这些工具；退出 chat 时断开所有 MCP server 连接。
+	defer bridgeConfiguredMCPTools(registry, cfg)()
+
 	// Initialize session store
 	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 	os.MkdirAll(filepath.Dir(dbPath), 0755)

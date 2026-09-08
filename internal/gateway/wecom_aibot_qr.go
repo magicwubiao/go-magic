@@ -213,7 +213,14 @@ func saveWeComBotCredentials(botID, secret string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(configPath, newData, 0644); err != nil {
+	// Atomic write: a partial write (crash/power loss mid-write) would leave a
+	// truncated config.json that fails to parse and effectively resets config.
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	log.Infof("[WeCom/AIBot] Saved credentials to %s", configPath)

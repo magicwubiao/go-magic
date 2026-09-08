@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
+	"github.com/magicwubiao/go-magic/internal/mcpbridge"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -205,6 +207,21 @@ func runMCPAdd(cmd *cobra.Command, args []string) {
 
 	fmt.Println("\nExample:")
 	fmt.Printf("  magic mcp connect %s npx -y @modelcontextprotocol/server-filesystem /tmp\n", serverName)
+}
+
+// bridgeConfiguredMCPTools 把 config 中配置的独立 MCP server 连接起来，并将其
+// 发现的工具以 mcp_<server>_<tool> 名称注册进 reg（与 internal/server 的
+// initStandaloneMCP 行为一致）。返回的清理函数用于断开所有 MCP server；调用方
+// 应在入口退出前 defer 它。reg/cfg 为空或未配置任何 MCP server 时返回 no-op。
+func bridgeConfiguredMCPTools(reg *tool.Registry, cfg *config.Config) func() {
+	if reg == nil || cfg == nil || cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		return func() {}
+	}
+	mgr := mcp.NewManager()
+	if err := mcpbridge.ConnectAndSync(mgr, reg, cfg.MCP.Servers); err != nil {
+		fmt.Fprintf(os.Stderr, "[MCP] standalone MCP servers partially failed: %v\n", err)
+	}
+	return func() { mgr.DisconnectAll() }
 }
 
 func initMCPFromConfig(mgr *mcp.Manager) {

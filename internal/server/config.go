@@ -220,6 +220,52 @@ func (s *Server) deleteEnvVar(path string, key string) {
 	s.writeEnvFile(path, envVars)
 }
 
+// persistConfig atomically writes s.cfg to config.json (tmp + rename, 0600).
+//
+// When preserveGateway is true the gateway section is refreshed from disk
+// first: the gateway process writes QR-login credentials (wecom bot_id/secret,
+// wechat_ilink token) straight into config.json, and the server's in-memory
+// copy may be stale — a full overwrite used to revert those credentials
+// ("配置被还原/丢失" root cause). Sections the server itself just modified
+// (and already merged on top of a fresh disk read) must pass false.
+func (s *Server) persistConfig(preserveGateway bool) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if s.cfg == nil {
+		return nil
+	}
+	if preserveGateway {
+		if fresh, err := appconfig.Load(); err == nil && fresh != nil {
+			s.cfg.Gateway = fresh.Gateway
+		}
+	}
+	data, err := json.MarshalIndent(s.cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(s.magicHome, "config.json")
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// reloadConfig re-reads config.json into s.cfg so changes written by other
+// processes (gateway QR login credentials, CLI config edits) are picked up
+// before the server merges and saves its own changes.
+func (s *Server) reloadConfig() {
+	if fresh, err := appconfig.Load(); err == nil && fresh != nil {
+		s.mu.Lock()
+		s.cfg = fresh
+		s.mu.Unlock()
+	}
+}
+
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
 		var req map[string]interface{}
@@ -227,10 +273,44 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		// Merge settings into config
-		configPath := filepath.Join(s.magicHome, "config.json")
-		data, _ := json.MarshalIndent(s.cfg, "", "  ")
-		os.WriteFile(configPath, data, 0644)
+		// The frontend sends approval settings here. Apply them to the
+		// approval section instead of blindly overwriting the whole
+		// config.json with the in-memory copy — that used to revert
+		// credentials the gateway process had written (QR login).
+		if s.cfg == nil {
+			s.cfg = appconfig.DefaultConfig()
+		}
+		if s.cfg.Approval == nil {
+			s.cfg.Approval = appconfig.DefaultApprovalConfig()
+		}
+		if v, ok := req["strategy"].(string); ok && v != "" {
+			s.cfg.Approval.Strategy = v
+		}
+		if v, ok := req["timeout_strategy"].(string); ok && v != "" {
+			s.cfg.Approval.TimeoutStrategy = v
+		}
+		if v, ok := req["trust_threshold"].(float64); ok && v > 0 {
+			s.cfg.Approval.TrustThreshold = int(v)
+		}
+		if v, ok := req["enable_learning"].(bool); ok {
+			s.cfg.Approval.EnableLearning = v
+		}
+		if v, ok := req["cli_confirm"].(bool); ok {
+			s.cfg.Approval.EnableCLIConfirm = v
+		}
+		if mgr := s.getApprovalManager(); mgr != nil {
+			mgr.SetStrategy(approval.Strategy(s.cfg.Approval.Strategy))
+			mgr.SetTrustThreshold(s.cfg.Approval.TrustThreshold)
+			mgr.SetEnableLearning(s.cfg.Approval.EnableLearning)
+			mgr.SetEnableCLIConfirm(s.cfg.Approval.EnableCLIConfirm)
+			if s.cfg.Approval.ApprovalTimeout > 0 {
+				mgr.SetApprovalTimeout(s.cfg.Approval.ApprovalTimeout)
+			}
+		}
+		if err := s.persistConfig(true); err != nil {
+			http.Error(w, "failed to save config: "+err.Error(), 500)
+			return
+		}
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
@@ -261,14 +341,12 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 		name := strings.TrimSuffix(path, "/switch")
 		// Actually switch profile
 		if s.cfg != nil {
+			// Re-read from disk first so gateway/CLI writes are not reverted
+			s.reloadConfig()
 			s.cfg.Profile = name
-			if err := s.cfg.Save(); err != nil {
+			if err := s.persistConfig(false); err != nil {
 				http.Error(w, "Failed to save config: "+err.Error(), 500)
 				return
-			}
-			// Reload config to ensure memory is in sync
-			if newCfg, err := appconfig.Load(); err == nil {
-				s.cfg = newCfg
 			}
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
@@ -517,9 +595,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		// Always re-read from file to pick up changes made by gateway process (e.g. QR login token)
-		if freshCfg, err := appconfig.Load(); err == nil {
-			s.cfg = freshCfg
-		}
+		s.reloadConfig()
 		if s.cfg == nil {
 			jsonResponse(w, map[string]interface{}{})
 			return
@@ -542,6 +618,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Handle dot-notation keys (e.g. "memory.enabled") by expanding into nested objects
 		expanded := expandDotKeys(configData)
 
+		// Re-read config.json before merging: the gateway process may have
+		// written new QR credentials (wecom bot_id/secret, ilink token) after
+		// our in-memory copy was loaded; merging into a stale copy and saving
+		// would revert them ("配置被还原" root cause).
+		s.reloadConfig()
+
 		// Merge into config
 		if s.cfg == nil {
 			s.cfg = appconfig.DefaultConfig()
@@ -551,10 +633,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to merge config: "+err.Error(), 500)
 			return
 		}
-		// Save
-		configPath := filepath.Join(s.magicHome, "config.json")
-		saveData, _ := json.MarshalIndent(s.cfg, "", "  ")
-		if err := os.WriteFile(configPath, saveData, 0644); err != nil {
+		// Save (atomically; gateway section was refreshed above and merged,
+		// so do NOT preserve it from disk again here)
+		if err := s.persistConfig(false); err != nil {
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}

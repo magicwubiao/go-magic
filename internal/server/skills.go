@@ -59,7 +59,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			}
 			s.disabledSkillsMu.Unlock()
 			s.cfg.Skills.Disabled = disabledList
-			_ = s.cfg.Save()
+			_ = s.persistConfig(true)
 		}
 		s.mu.Unlock()
 

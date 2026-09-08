@@ -467,7 +467,9 @@ func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 		ApprovalTimeout:  ac.ApprovalTimeout,
 		TimeoutStrategy:  string(ac.TimeoutStrategy),
 	}
-	_ = s.cfg.Save()
+	// persistConfig(true) 刷新磁盘上的 gateway 段（网关进程扫码写入的凭据
+	// 可能比 server 内存副本新），避免全量落盘把新凭据还原成旧值。
+	_ = s.persistConfig(true)
 }
 
 func (s *Server) handleApprovalPendingByID(w http.ResponseWriter, r *http.Request) {

@@ -518,56 +518,109 @@ func base64DecodedLen(s string) int {
 	return (n*3)/4 - pad
 }
 
-// MCPTool wraps an MCP tool for integration with the tool registry
+// NamespacePrefix is the registry-name prefix shared by every tool exposed by
+// a standalone MCP server (mcp_<server>_<tool>).
+const NamespacePrefix = "mcp_"
+
+// ToolPrefix returns the registry-name prefix under which the tools of a given
+// standalone MCP server are registered (e.g. "mcp_filesystem_"). Callers use
+// it to find/remove all tools that belong to one server.
+func ToolPrefix(serverName string) string {
+	return NamespacePrefix + serverName + "_"
+}
+
+// ToolName returns the canonical registry name for a tool exposed by a
+// standalone MCP server: mcp_<server>_<tool>.
+func ToolName(serverName, toolName string) string {
+	return ToolPrefix(serverName) + toolName
+}
+
+// MCPTool adapts a tool discovered on a standalone MCP server so it can be
+// registered into the tool registry and invoked from the agent loop. It
+// satisfies the tool.Tool interface (Name/Description/Schema/Execute) by
+// construction, even though this package intentionally does not import the
+// tool package (avoiding the tool -> kanban -> config -> mcp import cycle).
 type MCPTool struct {
 	serverName string
 	tool       Tool
 	manager    *Manager
 }
 
-// Name returns the tool name
-func (t *MCPTool) Name() string {
-	return fmt.Sprintf("mcp_%s_%s", t.serverName, t.tool.Name)
+// NewMCPTool creates a registry adapter for a single MCP server tool.
+func NewMCPTool(serverName string, tool Tool, manager *Manager) *MCPTool {
+	return &MCPTool{serverName: serverName, tool: tool, manager: manager}
 }
 
-// Description returns the tool description
+// Name returns the tool name (mcp_<server>_<tool>).
+func (t *MCPTool) Name() string {
+	return ToolName(t.serverName, t.tool.Name)
+}
+
+// Description returns the tool description.
 func (t *MCPTool) Description() string {
 	return fmt.Sprintf("MCP %s: %s", t.serverName, t.tool.Description)
 }
 
-// Parameters returns the tool parameters
-func (t *MCPTool) Parameters() map[string]interface{} {
+// Schema returns the input schema in OpenAI function-calling JSON Schema form.
+func (t *MCPTool) Schema() map[string]interface{} {
 	return t.tool.InputSchema
 }
 
-// Execute executes the MCP tool
+// Parameters returns the tool parameters (deprecated alias of Schema kept for
+// callers that still use the old adapter shape).
+func (t *MCPTool) Parameters() map[string]interface{} {
+	return t.Schema()
+}
+
+// Execute executes the MCP tool.
 func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	return t.manager.CallTool(ctx, t.serverName, t.tool.Name, args)
 }
 
-// RegisterAsTools registers all MCP tools with the tool registry
-func (m *Manager) RegisterAsTools(registry interface {
-	Register(interface {
-		Name() string
-		Description() string
-		Parameters() map[string]interface{}
-		Execute(context.Context, map[string]interface{}) (interface{}, error)
-	})
-}) {
+// isConnected reports whether a server is currently connected.
+func (m *Manager) isConnected(name string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	_, ok := m.clients[name]
+	return ok
+}
 
-	for name, client := range m.clients {
-		client.mu.RLock()
-		for _, tool := range client.tools {
-			mcpTool := &MCPTool{
-				serverName: name,
-				tool:       tool,
-				manager:    m,
-			}
-			registry.Register(mcpTool)
+// ConnectConfigured connects every configured standalone MCP server. Per-server
+// failures are collected into a single error so one broken server never blocks
+// the others (matching the isolation policy used for Agent Plugin MCP servers).
+// Callers then sync the discovered tools into their tool registry (see
+// mcpbridge.SyncToRegistry).
+func (m *Manager) ConnectConfigured(servers map[string]ServerConfig) error {
+	var failures []string
+	for name, cfg := range servers {
+		if m.isConnected(name) {
+			continue
 		}
-		client.mu.RUnlock()
+		var err error
+		switch cfg.Transport {
+		case "sse":
+			err = m.ConnectSSE(name, cfg)
+		default:
+			err = m.ConnectStdio(name, cfg)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			log.Warnf("[MCP] failed to connect server %q: %v", name, err)
+			continue
+		}
+		log.Infof("[MCP] connected server %q", name)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("failed to connect MCP server(s): %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// DisconnectAll disconnects every connected MCP server. Safe to call multiple
+// times (e.g. from deferred shutdown paths).
+func (m *Manager) DisconnectAll() {
+	for _, name := range m.ListServers() {
+		_ = m.Disconnect(name)
 	}
 }
 

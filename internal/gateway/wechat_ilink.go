@@ -1174,7 +1174,17 @@ func (g *WeChatILinkGateway) saveTokenToConfig(token, baseURL string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, newData, 0644)
+	// Atomic write: a partial write would leave a truncated config.json that
+	// fails to parse and effectively resets config.
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename config: %w", err)
+	}
+	return nil
 }
 
 // ensureMap gets or creates a nested map[string]interface{} at the given key.

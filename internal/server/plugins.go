@@ -34,7 +34,7 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 						}
 					}
 					s.cfg.Plugins.Disabled = newDisabled
-					s.cfg.Save()
+					s.persistConfig(true)
 				}
 			}
 			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
@@ -65,7 +65,7 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 						}
 					}
 					s.cfg.Plugins.Enabled = newEnabled
-					s.cfg.Save()
+					s.persistConfig(true)
 				}
 			}
 			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})

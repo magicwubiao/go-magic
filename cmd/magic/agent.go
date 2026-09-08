@@ -122,6 +122,10 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 		registry.RegisterSkillTool(skillMgr)
 	}
 
+	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 subagent 的
+	// agent 循环也能调用这些工具；任务结束返回时断开所有 MCP server 连接。
+	defer bridgeConfiguredMCPTools(registry, cfg)()
+
 	// Create adapter for tool registry
 	registryAdapter := newToolRegistryAdapter(registry)
 

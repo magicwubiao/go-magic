@@ -170,9 +170,7 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(path, "/switch")
 		s.mu.Lock()
 		s.cfg.Profile = name
-		configPath := filepath.Join(s.magicHome, "config.json")
-		data, _ := json.MarshalIndent(s.cfg, "", "  ")
-		os.WriteFile(configPath, data, 0644)
+		_ = s.persistConfig(true)
 		s.mu.Unlock()
 		jsonResponse(w, map[string]bool{"ok": true})
 		return

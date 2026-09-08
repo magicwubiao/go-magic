@@ -86,7 +86,7 @@ func (s *Server) setPluginDisabled(name string, disabled bool) {
 		list = next
 	}
 	s.cfg.AgentPlugins.Disabled = list
-	_ = s.cfg.Save()
+	_ = s.persistConfig(true)
 }
 
 // handleAgentPlugins 暴露 Agent Plugins 的列表与重载 API。
