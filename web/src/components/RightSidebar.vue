@@ -88,6 +88,24 @@
                   <span class="todo-title" :title="todo.title + (todo.description ? '\n' + todo.description : '')">{{ todo.title }}</span>
                   <span v-if="todo.status !== 'completed'" class="todo-priority-dot" :style="{ background: priorityColor(todo.priority) }" :title="priorityLabel(todo.priority)"></span>
                 </div>
+                <n-popconfirm @positive-click="removeTodo(todo.id)">
+                  <template #trigger>
+                    <n-button
+                      class="todo-delete"
+                      size="tiny"
+                      quaternary
+                      circle
+                      type="error"
+                      :title="t('common.delete')"
+                      @click.stop
+                    >
+                      <template #icon>
+                        <n-icon :component="TrashOutline" :size="12" />
+                      </template>
+                    </n-button>
+                  </template>
+                  {{ t('common.confirmDelete') }}
+                </n-popconfirm>
               </div>
             </div>
 
@@ -674,6 +692,16 @@ function priorityLabel(p: string): string {
 }
 function priorityColor(p: string): string {
   return ({ high: '#e44234', medium: '#f0a020', low: '#6a9955' } as any)[p] || '#999'
+}
+
+async function removeTodo(id: string) {
+  try {
+    await todosStore.deleteTodo(id)
+    message.success(t('todos.deleted'))
+  } catch (e) {
+    console.error('Failed to delete todo:', e)
+    message.error(t('common.error'))
+  }
 }
 
 const isCollapsed = ref(false)
@@ -1536,6 +1564,14 @@ async function doUpload(files: File[]) {
   border: 1px solid #f0f0f0;
 }
 .todo-item:hover { background: #f5f8ff; border-color: #d8e4ff; }
+.todo-item .todo-delete {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.todo-item:hover .todo-delete {
+  opacity: 1;
+}
 .todo-item.done { background: #f7fff7; }
 .todo-item.done .todo-title {
   text-decoration: line-through;
