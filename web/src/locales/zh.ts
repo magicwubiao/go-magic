@@ -289,6 +289,9 @@ export default {
     unsavedChanges: '未保存的更改',
     binaryFilePreview: '二进制文件，不支持预览',
     changedFilesTitle: '变更的文件',
+    changedDiffClick: '点击查看行级 diff',
+    changedNoDiffTitle: '无可视 diff（二进制/文件过大/空文件）',
+    changedNoDiff: '该文件为二进制、过大或为空，无法展示行级 diff',
     fileActions: {
       read: '读取',
       write: '写入',

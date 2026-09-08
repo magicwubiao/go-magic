@@ -508,5 +508,21 @@ func countLinesByPrefix(diff, prefix string) int {
 	return count
 }
 
+// GenerateUnifiedDiff 是 generateUnifiedDiff 的导出封装，供 internal/server 的
+// "变更的文件"快照跟踪器生成行级 diff 文本。行尾先归一化（CRLF 与 LF 等价，
+// 避免整文件混入 \r 干扰比较）；空内容按零行处理，不会产出虚假的"空行增删"。
+func GenerateUnifiedDiff(label, oldContent, newContent string) string {
+	return generateUnifiedDiff(label, splitDiffLines(oldContent), splitDiffLines(newContent))
+}
+
+// splitDiffLines 把文本切成 diff 行；空内容返回 nil（零行），
+// 与 generateUnifiedDiff 的 hunk 头（-1,0 +1,N）语义匹配。
+func splitDiffLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(normalizeLineEndings(s), "\n")
+}
+
 // Ensure DiffPatchTool satisfies the Tool interface at compile time.
 var _ Tool = (*DiffPatchTool)(nil)

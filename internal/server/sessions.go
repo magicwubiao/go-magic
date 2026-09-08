@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/tool"
@@ -664,10 +665,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// Inject the session's working directory into the context so file and
 	// command tools resolve relative paths against it, then save the user
 	// message to the session.
+	// 本轮"变更的文件"快照跟踪器：经 ctx 注入 agent 的工具执行路径
+	// （见 fileops.go），在写前快照文件、结束时产出带行级 diff 的净变更。
+	turnOps := NewTurnFileOpTracker()
 	if s.sessionStore != nil {
 		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
 			ctx = tool.WithWorkDir(ctx, sess.WorkDir)
 			ctx = tool.WithWorkDirUserSet(ctx, sess.WorkDirUserSet)
+			ctx = agent.WithToolOps(ctx, turnOps)
 
 			// Materialize uploaded attachments into the session workdir so the
 			// model's file tools (sandboxed to the workdir) can read them. The
@@ -828,10 +833,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// Real streaming
 	var fullResponse strings.Builder
 	var streamErr error
-	// 本轮工具调用"变更的文件"（结果驱动）：写类工具成功才记录，
-	// 同路径按 delete > write 优先级取最终动作，失败调用不计入。
-	turnOps := NewTurnFileOpTracker()
-	lastToolArgs := map[string]string{}
 	streamHandler := func(chunk string, done bool) {
 		if done {
 			return
@@ -855,7 +856,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				toolName := m[1]
 				toolArgs := m[2]
 				fileOps := extractFileOps(toolName, toolArgs, "")
-				lastToolArgs[toolName] = toolArgs
 				argsSummary := toolArgs
 				if len(argsSummary) > 200 {
 					argsSummary = truncateRunes(argsSummary, 200) + "..."
@@ -884,11 +884,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					toolSuccess := submatch[2] == "true"
 					toolDuration := submatch[3]
 					toolContent := chunk[startMatch[1]:endMatch[0]]
-					// 结果驱动的变更统计：只在写类工具成功时记录路径，
-					// 失败的写入/删除不会进入"变更的文件"。
-					if toolSuccess {
-						turnOps.ObserveToolCall(toolName, lastToolArgs[toolName])
-					}
 					fileOps := extractFileOps(toolName, "{}", toolContent)
 					// Truncate tool content for display
 					if len(toolContent) > 500 {
@@ -930,6 +925,11 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		writeSSE("data: " + string(data) + "\n\n")
 	}
 
+	// 本轮"变更的文件"（写前快照 + 净 diff，见 fileops.go）：
+	// 先算一次，同时用于落库与 done 事件的 file_ops —— 前端收到 done 后
+	// 无需等刷新就能拿到带 diff 的列表。
+	finalOps := turnOps.Result()
+
 	// Save assistant message。
 	// 空内容保护：中断（用户点停止、超时等）且没有任何已生成内容时，
 	// 不追加空 assistant 消息 —— 否则下次打开会话会出现空白回答气泡；
@@ -940,7 +940,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				Role:      "assistant",
 				Content:   fullResponse.String(),
 				Timestamp: time.Now(),
-				FileOps:   turnOps.Result(),
+				FileOps:   finalOps,
 			})
 			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
 			sess.InputTokens += inputTokens
@@ -954,7 +954,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// Record usage statistics
 	s.recordUsage(aiAgent, sessionID)
 
-	doneData, _ := json.Marshal(map[string]bool{"done": true})
+	doneData, _ := json.Marshal(map[string]interface{}{"done": true, "file_ops": finalOps})
 	writeSSE("data: " + string(doneData) + "\n\n")
 }
 

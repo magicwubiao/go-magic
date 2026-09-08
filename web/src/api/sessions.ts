@@ -31,10 +31,13 @@ export interface Session {
 
 // 文件操作记录：一次工具调用对单个文件的动作。action 与后端 FileOp.Action 对齐，
 // 取值 read/write/delete/list/search/batch/access；path 可为绝对路径或会话工作目录相对路径。
+// diff：后端快照跟踪器生成的 unified diff 文本（write/delete 且文本可读时携带，
+// 空/缺省表示二进制、超限或内容未变，前端不展示可展开的 diff 行）。
 export interface FileOp {
   action: string
   path: string
   param?: string
+  diff?: string
 }
 
 export interface Message {

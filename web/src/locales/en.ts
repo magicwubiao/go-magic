@@ -289,6 +289,9 @@ export default {
     unsavedChanges: 'Unsaved changes',
     binaryFilePreview: 'Binary file, preview not supported',
     changedFilesTitle: 'Changed files',
+    changedDiffClick: 'Click to view line-level diff',
+    changedNoDiffTitle: 'No visual diff (binary / too large / empty)',
+    changedNoDiff: 'This file is binary, too large, or empty; no line-level diff available',
     fileActions: {
       read: 'Read',
       write: 'Write',

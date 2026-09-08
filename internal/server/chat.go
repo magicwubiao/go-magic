@@ -92,6 +92,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	defer sseW.Close()
 
+	// 本轮"变更的文件"快照跟踪器：经 ctx 注入 agent 的工具执行路径
+	// （见 fileops.go），写前快照 + 结束时按磁盘净变化产出带 diff 的列表。
+	turnOps := NewTurnFileOpTracker()
+	ctx = agent.WithToolOps(ctx, turnOps)
+
 	// Start heartbeat to prevent proxy/browser timeout
 	heartbeatDone := make(chan struct{})
 	safeGo(func() {
@@ -164,12 +169,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// extractFileOps 为包级函数（见 fileops.go），此处直接调用：
 	// 从工具参数/结果中提取文件操作信息，事件透传给前端。
-	// turnOps 只统计真正发生的写类变更（结果驱动）：工具成功才记录，
-	// 同路径按 delete > write 优先级取最终动作，失败调用不计入。
-	var turnOps = NewTurnFileOpTracker()
-	// lastToolArgs: 工具名 → 最近一次调用参数，TOOL_RESULT 时用于判定写入有效性。
-	lastToolArgs := map[string]string{}
-
+	// 变更统计已由注入 ctx 的 turnOps 观察者接管（见上方 WithToolOps），
+	// 此处不再做结果驱动的动作记录。
 	// Real streaming — use agent's RunConversationStream which handles tool execution loop
 	var fullResponse strings.Builder
 	// executedSteps 记录本轮已执行的工具调用与结果摘要。流式 handler 会把
@@ -204,7 +205,6 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				toolName := matches[1]
 				argsStr := matches[2]
 				fileOps := extractFileOps(toolName, argsStr, "")
-				lastToolArgs[toolName] = argsStr
 				var argsParsed interface{} = argsStr
 				if json.Valid([]byte(argsStr)) {
 					_ = json.Unmarshal([]byte(argsStr), &argsParsed)
@@ -235,11 +235,6 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				duration := matches[3]
 				toolContent := strings.TrimSpace(matches[4])
 				success := successStr == "true"
-				// 结果驱动的变更统计：只在写类工具成功时记录路径，
-				// 失败的写入/删除不会进入"变更的文件"。
-				if success {
-					turnOps.ObserveToolCall(toolName, lastToolArgs[toolName])
-				}
 				fileOps := extractFileOps(toolName, "{}", toolContent)
 				// 识别 todo_tool 调用，用于触发实时待办刷新
 				todoChanged := false
@@ -277,7 +272,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeSSE("data: " + string(data) + "\n\n")
 	}
 
-	writeSSE("data: {\"done\":true}\n\n")
+	// 本轮"变更的文件"（写前快照 + 净 diff）：先算一次，同时用于 done
+	// 事件的 file_ops 与落库 —— 前端收到 done 即可拿到带 diff 的列表。
+	finalOps := turnOps.Result()
+	doneData, _ := json.Marshal(map[string]interface{}{"done": true, "file_ops": finalOps})
+	writeSSE("data: " + string(doneData) + "\n\n")
 
 	// Save user & assistant messages to session store。
 	// fix: 流式路径此前完全不落库，导致 Web 对话刷新后丢失；
@@ -298,7 +297,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, fullResponse.String(), partial, turnOps.Result())
+	s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Message, fullResponse.String(), partial, finalOps)
 
 	// Record usage statistics after stream completes
 	s.recordUsage(aiAgent, sessionID)

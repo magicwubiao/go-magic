@@ -28,6 +28,10 @@ type FileOp struct {
 	Action string `json:"action"`
 	Path   string `json:"path"`
 	Param  string `json:"param,omitempty"`
+	// Diff 携带该文件"本轮变更"的 unified diff 文本（仅 write/delete 且
+	// 内容可读时生成）。展示用字段，不参与 agent history 序列化；
+	// 为空表示无 diff（内容相同 / 二进制 / 超限 / 未配置 workdir）。
+	Diff string `json:"diff,omitempty"`
 }
 
 // ContentPart represents a part of a multimodal message content

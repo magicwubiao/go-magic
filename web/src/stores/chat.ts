@@ -774,6 +774,9 @@ export const useChatStore = defineStore('chat', () => {
             pushTextSegmentIfNeeded(sessionId)
             const finalToolCalls = [...state.toolCalls]
             const finalTimeline = [...state.streamingSegments]
+            // 后端 done 事件携带本轮"变更的文件"（快照 + diff），直接写入消息：
+            // 无需等刷新，内存态消息的 file_ops 即为最终列表。
+            const finalFileOps = (data.file_ops as unknown as sessionsApi.FileOp[] | undefined) || undefined
             nextTick(() => {
               state.messages.push({
                 id: Date.now().toString(),
@@ -781,6 +784,7 @@ export const useChatStore = defineStore('chat', () => {
                 content: finalContent,
                 timestamp: new Date().toISOString(),
                 session_id: sessionId,
+                file_ops: finalFileOps,
                 tool_calls_snapshot: finalToolCalls as unknown[],
                 streaming_timeline_snapshot: finalTimeline as unknown[],
               })

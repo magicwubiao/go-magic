@@ -2600,8 +2600,21 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		}
 	}
 
+	// 工具执行前：把完整参数交给观察者做"写前快照"。此处在 registry.Execute
+	// 之前，文件尚未被本工具修改，是快照唯一可靠时机。观察者经 ctx 按请求
+	// 注入，nil 时无额外开销；被审批拒绝的工具不会走到这里。
+	if obs := toolOpsFromCtx(ctx); obs != nil {
+		obs.ToolStarting(ctx, toolName, callReq.ToolArgs)
+	}
+
 	result, err := a.registry.Execute(ctx, toolName, callReq.ToolArgs)
 	elapsed := time.Since(start)
+
+	// 工具执行完成：把真实成败交给观察者（文件操作统计/写后确认）。
+	// 观察者经 ctx 按请求注入，nil 时无额外开销。
+	if obs := toolOpsFromCtx(ctx); obs != nil {
+		obs.ToolFinished(ctx, toolName, callReq.ToolArgs, err)
+	}
 
 	if err != nil {
 		log.Debugf("[TOOL] %s error after %v: %v", toolName, elapsed, err)

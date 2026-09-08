@@ -209,30 +209,12 @@
                   :segments="msg.streaming_timeline_snapshot"
                   :tools="messageToolCalls(msg)"
                 />
-                <!-- 本轮变更的文件（仅写/删/批动作，按路径去重），默认折叠可展开 -->
-                <div v-if="changedFiles(msg).length > 0" class="file-changes-block">
-                  <div class="file-changes-head" role="button" tabindex="0" @click.stop="toggleFileChanges(`msg-${msg.id}`)" @keydown.enter.stop="toggleFileChanges(`msg-${msg.id}`)">
-                    <n-icon size="13" class="file-changes-arrow" :class="{ 'file-changes-arrow-open': isFileChangesExpanded(`msg-${msg.id}`) }"><ChevronForwardOutline /></n-icon>
-                    <n-icon size="13"><DocumentTextOutline /></n-icon>
-                    <span>{{ t('chat.changedFilesTitle') }}</span>
-                    <span class="file-changes-count">{{ changedFiles(msg).length }}</span>
-                  </div>
-                  <div v-show="isFileChangesExpanded(`msg-${msg.id}`)" class="file-changes-list">
-                    <div
-                      v-for="f in changedFiles(msg)"
-                      :key="f.path"
-                      class="file-change-item"
-                      :class="{ 'file-change-deleted': f.action === 'delete' }"
-                      :title="f.path"
-                    >
-                      <span class="file-change-action" :class="`action-${f.action}`">{{ fileActionLabel(f.action) }}</span>
-                      <span class="file-change-path">
-                        <span v-if="fileDirName(f.path)" class="file-change-dir">{{ fileDirName(f.path) }}/</span>
-                        <span class="file-change-base">{{ fileBaseName(f.path) }}</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
+                <!-- 本轮变更的文件（仅写/删动作，按路径去重），点开条目看行级 diff -->
+                <FileChangesBlock
+                  v-if="changedFiles(msg).length > 0"
+                  :files="changedFiles(msg)"
+                  :authoritative="!!(msg.file_ops && msg.file_ops.length)"
+                />
               </div>
             </div>
           </template>
@@ -277,30 +259,8 @@
                 :tools="chatStore.toolCalls"
                 :streaming="chatStore.streaming"
               />
-              <!-- 流式期间实时展示本轮已变更的文件，默认折叠可展开 -->
-              <div v-if="changedFiles().length > 0" class="file-changes-block">
-                <div class="file-changes-head" role="button" tabindex="0" @click.stop="toggleFileChanges('streaming')" @keydown.enter.stop="toggleFileChanges('streaming')">
-                  <n-icon size="13" class="file-changes-arrow" :class="{ 'file-changes-arrow-open': isFileChangesExpanded('streaming') }"><ChevronForwardOutline /></n-icon>
-                  <n-icon size="13"><DocumentTextOutline /></n-icon>
-                  <span>{{ t('chat.changedFilesTitle') }}</span>
-                  <span class="file-changes-count">{{ changedFiles().length }}</span>
-                </div>
-                <div v-show="isFileChangesExpanded('streaming')" class="file-changes-list">
-                  <div
-                    v-for="f in changedFiles()"
-                    :key="f.path"
-                    class="file-change-item"
-                    :class="{ 'file-change-deleted': f.action === 'delete' }"
-                    :title="f.path"
-                  >
-                    <span class="file-change-action" :class="`action-${f.action}`">{{ fileActionLabel(f.action) }}</span>
-                    <span class="file-change-path">
-                      <span v-if="fileDirName(f.path)" class="file-change-dir">{{ fileDirName(f.path) }}/</span>
-                      <span class="file-change-base">{{ fileBaseName(f.path) }}</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <!-- 流式期间实时展示本轮已变更的文件；done 后由后端 file_ops（带 diff）接管 -->
+              <FileChangesBlock :files="changedFiles()" />
             </div>
           </div>
         </template>
@@ -679,9 +639,10 @@ import { useModelsStore } from '@/stores/models'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
+import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, DocumentTextOutline, ChevronForwardOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -799,24 +760,12 @@ function messageToolCalls(msg?: sessionsApi.Message): ToolCallEvent[] {
   return chatStore.toolCalls
 }
 
-// ===== 变更的文件（内嵌列表 + 点击预览） =====
+// ===== 变更的文件（数据汇聚；渲染见 FileChangesBlock.vue） =====
 // 仅把"写/删/批"视为变更动作；read/list/search/access 不进入列表。
 const FILE_CHANGED_ACTIONS = new Set(['write', 'delete', 'batch'])
 
-function fileBaseName(path: string): string {
-  const norm = path.replace(/\\/g, '/')
-  const idx = norm.lastIndexOf('/')
-  return idx >= 0 ? norm.slice(idx + 1) : path
-}
-
-function fileDirName(path: string): string {
-  const norm = path.replace(/\\/g, '/')
-  const idx = norm.lastIndexOf('/')
-  return idx > 0 ? norm.slice(0, idx) : ''
-}
-
 // 本轮全部 file_ops：
-// - 历史消息：优先后端落库返回的 msg.file_ops（刷新后仍可用），
+// - 历史消息：优先后端落库返回的 msg.file_ops（含 diff，刷新后仍可用），
 //   内存态消息退化为从 tool_calls_snapshot 中聚合（流式结束写入的内存快照）；
 // - 流式进行中：直接聚合 chatStore.toolCalls。
 function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
@@ -828,45 +777,24 @@ function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
   return chatStore.toolCalls.flatMap(tc => tc.file_ops || [])
 }
 
-// 变更的文件：按路径去重；同路径先写后删时以 delete 为准（反映最终状态）。
-function changedFiles(msg?: sessionsApi.Message): { action: string; path: string }[] {
-  const entries: { action: string; path: string }[] = []
+// 变更的文件：按路径去重。同路径出现多次时以后一次为准
+// （写→删=删；删→写=重建=写）；携带 diff 的条目原样透传给渲染组件。
+function changedFiles(msg?: sessionsApi.Message): { action: string; path: string; diff?: string }[] {
+  const entries: { action: string; path: string; diff?: string }[] = []
   const index = new Map<string, number>()
   for (const op of collectTurnFileOps(msg)) {
     if (!op || !op.path) continue
     if (!FILE_CHANGED_ACTIONS.has(op.action)) continue
     const existing = index.get(op.path)
+    const entry = { action: op.action, path: op.path, diff: op.diff }
     if (existing === undefined) {
       index.set(op.path, entries.length)
-      entries.push({ action: op.action, path: op.path })
-    } else if (op.action === 'delete' && entries[existing].action !== 'delete') {
-      entries[existing].action = 'delete'
+      entries.push(entry)
+    } else {
+      entries[existing] = entry
     }
   }
   return entries
-}
-
-function fileActionLabel(action: string): string {
-  const key = `chat.fileActions.${action}`
-  const label = t(key)
-  return label === key ? action : label
-}
-
-// 变更文件列表折叠状态（默认收起，点击头部展开/收起）
-const expandedFileChanges = ref(new Set<string>())
-
-function isFileChangesExpanded(key: string): boolean {
-  return expandedFileChanges.value.has(key)
-}
-
-function toggleFileChanges(key: string) {
-  const next = new Set(expandedFileChanges.value)
-  if (next.has(key)) {
-    next.delete(key)
-  } else {
-    next.add(key)
-  }
-  expandedFileChanges.value = next
 }
 
 // Rotating hints during thinking

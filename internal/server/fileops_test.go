@@ -1,9 +1,14 @@
 package server
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -131,74 +136,169 @@ func TestMergeFileOps(t *testing.T) {
 	}
 }
 
-func TestTurnFileOpTracker_ResultDriven(t *testing.T) {
+func TestTurnFileOpTracker_SnapshotDiff(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	writeTool := &tool.WriteFileTool{}
+
+	// 已存在文件 → 修改：写前快照 + 净 diff
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old line 1\nold line 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	tr := NewTurnFileOpTracker()
-
-	// 失败的写不计入
-	tr.Observe("write", "fail.txt", true)
-	// 成功的写计入
-	tr.Observe("write", "a.txt", false)
-	// 读类动作不计入
-	tr.Observe("read", "b.txt", false)
-	// 写后又删 → 最终 delete
-	tr.Observe("write", "c.txt", false)
-	tr.Observe("delete", "c.txt", false)
-	// 删后又写 → 最终 write（重建）
-	tr.Observe("delete", "d.txt", false)
-	tr.Observe("write", "d.txt", false)
-
-	got := tr.Result()
-	want := []types.FileOp{
-		op("write", "a.txt"),
-		op("delete", "c.txt"),
-		op("write", "d.txt"),
+	args := map[string]interface{}{"path": "a.txt", "content": "new line 1\nold line 2\n"}
+	tr.ToolStarting(ctx, "write_file", args)
+	if _, err := writeTool.Execute(ctx, args); err != nil {
+		t.Fatalf("write_file failed: %v", err)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d ops (%+v), want %d (%+v)", len(got), got, len(want), want)
+	ops := tr.Result()
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op, got %+v", ops)
 	}
-	byPath := map[string]string{}
-	for _, o := range got {
-		byPath[o.Path] = o.Action
+	o := ops[0]
+	if o.Action != "write" || o.Path != "a.txt" {
+		t.Fatalf("got action=%q path=%q, want write/a.txt", o.Action, o.Path)
 	}
-	for _, w := range want {
-		if byPath[w.Path] != w.Action {
-			t.Errorf("path %s: got action %q, want %q", w.Path, byPath[w.Path], w.Action)
-		}
+	if !strings.Contains(o.Diff, "-old line 1") || !strings.Contains(o.Diff, "+new line 1") {
+		t.Fatalf("diff missing changed lines:\n%s", o.Diff)
 	}
 }
 
-func TestTurnFileOpTracker_ObserveToolCall(t *testing.T) {
+func TestTurnFileOpTracker_NewFileHasFullAdditions(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	writeTool := &tool.WriteFileTool{}
+
 	tr := NewTurnFileOpTracker()
+	args := map[string]interface{}{"path": "sub/created.txt", "content": "hello\nworld\n"}
+	tr.ToolStarting(ctx, "write_file", args)
+	if _, err := writeTool.Execute(ctx, args); err != nil {
+		t.Fatalf("write_file failed: %v", err)
+	}
+	ops := tr.Result()
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op, got %+v", ops)
+	}
+	o := ops[0]
+	if o.Action != "write" || o.Path != "sub/created.txt" {
+		t.Fatalf("got action=%q path=%q, want write/sub/created.txt", o.Action, o.Path)
+	}
+	if !strings.Contains(o.Diff, "+hello") || !strings.Contains(o.Diff, "+world") {
+		t.Fatalf("new file diff should be all additions:\n%s", o.Diff)
+	}
+}
 
-	// write_file 成功
-	tr.ObserveToolCall("write_file", `{"path":"src/main.go","content":"x"}`)
-	// file_edit 成功
-	tr.ObserveToolCall("file_edit", `{"path":"src/util.go","operation":"replace"}`)
-	// batch_write 成功
-	tr.ObserveToolCall("batch_file_ops", `{"operation":"batch_write","files":["a.go","b.go"]}`)
-	// batch_delete 成功
-	tr.ObserveToolCall("batch_file_ops", `{"operation":"batch_delete","files":["old.bin"]}`)
-	// 未知工具不应臆断
-	tr.ObserveToolCall("some_unknown_tool", `{"path":"mystery.txt"}`)
+func TestTurnFileOpTracker_IdenticalRewriteIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	writeTool := &tool.WriteFileTool{}
+	if err := os.WriteFile(filepath.Join(dir, "same.txt"), []byte("unchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	got := tr.Result()
-	byPath := map[string]string{}
-	for _, o := range got {
-		byPath[o.Path] = o.Action
+	tr := NewTurnFileOpTracker()
+	args := map[string]interface{}{"path": "same.txt", "content": "unchanged\n"}
+	tr.ToolStarting(ctx, "write_file", args)
+	if _, err := writeTool.Execute(ctx, args); err != nil {
+		t.Fatalf("write_file failed: %v", err)
 	}
-	expect := map[string]string{
-		"src/main.go": "write",
-		"src/util.go": "write",
-		"a.go":        "write",
-		"b.go":        "write",
-		"old.bin":     "delete",
+	if ops := tr.Result(); len(ops) != 0 {
+		t.Fatalf("identical rewrite must not surface as a change, got %+v", ops)
 	}
-	if len(byPath) != len(expect) {
-		t.Fatalf("got %+v, want %d entries", byPath, len(expect))
+}
+
+func TestTurnFileOpTracker_BatchDelete(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	if err := os.WriteFile(filepath.Join(dir, "gone.txt"), []byte("bye\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	for p, a := range expect {
-		if byPath[p] != a {
-			t.Errorf("path %s: got %q, want %q", p, byPath[p], a)
-		}
+	batchTool := tool.NewBatchFileOpsTool()
+
+	tr := NewTurnFileOpTracker()
+	args := map[string]interface{}{"operation": "batch_delete", "files": []interface{}{"gone.txt"}}
+	tr.ToolStarting(ctx, "batch_file_ops", args)
+	if _, err := batchTool.Execute(ctx, args); err != nil {
+		t.Fatalf("batch_delete failed: %v", err)
+	}
+	ops := tr.Result()
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op, got %+v", ops)
+	}
+	o := ops[0]
+	if o.Action != "delete" || o.Path != "gone.txt" {
+		t.Fatalf("got action=%q path=%q, want delete/gone.txt", o.Action, o.Path)
+	}
+	if !strings.Contains(o.Diff, "-bye") {
+		t.Fatalf("deleted file diff should show removed line:\n%s", o.Diff)
+	}
+}
+
+func TestTurnFileOpTracker_FailedWriteNotListed(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	writeTool := &tool.WriteFileTool{}
+
+	// 逃逸路径：工具会被安全策略拒绝，磁盘无净变化 → 不进入"变更的文件"。
+	tr := NewTurnFileOpTracker()
+	args := map[string]interface{}{"path": "../outside.txt", "content": "x"}
+	tr.ToolStarting(ctx, "write_file", args)
+	if _, err := writeTool.Execute(ctx, args); err == nil {
+		t.Fatal("expected escape write to fail")
+	}
+	if ops := tr.Result(); len(ops) != 0 {
+		t.Fatalf("failed write must not surface as a change, got %+v", ops)
+	}
+}
+
+func TestTurnFileOpTracker_WriteThenDeleteIsNetNoop(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	writeTool := &tool.WriteFileTool{}
+	batchTool := tool.NewBatchFileOpsTool()
+
+	// 建了又删：净无变化 → 列表为空（旧实现会误报 delete）。
+	tr := NewTurnFileOpTracker()
+	tr.ToolStarting(ctx, "write_file", map[string]interface{}{"path": "temp.txt", "content": "ephemeral\n"})
+	if _, err := writeTool.Execute(ctx, map[string]interface{}{"path": "temp.txt", "content": "ephemeral\n"}); err != nil {
+		t.Fatalf("write_file failed: %v", err)
+	}
+	tr.ToolStarting(ctx, "batch_file_ops", map[string]interface{}{"operation": "batch_delete", "files": []interface{}{"temp.txt"}})
+	if _, err := batchTool.Execute(ctx, map[string]interface{}{"operation": "batch_delete", "files": []interface{}{"temp.txt"}}); err != nil {
+		t.Fatalf("batch_delete failed: %v", err)
+	}
+	if ops := tr.Result(); len(ops) != 0 {
+		t.Fatalf("create-then-delete must be a net no-op, got %+v", ops)
+	}
+}
+
+func TestTurnFileOpTracker_DeleteExistingShowsRemoval(t *testing.T) {
+	dir := t.TempDir()
+	ctx := tool.WithWorkDir(context.Background(), dir)
+	if err := os.WriteFile(filepath.Join(dir, "old.txt"), []byte("keep me?\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	batchTool := tool.NewBatchFileOpsTool()
+
+	// 先改后删 → 文件消失：应显示 delete + 全部行移除。
+	tr := NewTurnFileOpTracker()
+	tr.ToolStarting(ctx, "write_file", map[string]interface{}{"path": "old.txt", "content": "replaced\n"})
+	if _, err := (&tool.WriteFileTool{}).Execute(ctx, map[string]interface{}{"path": "old.txt", "content": "replaced\n"}); err != nil {
+		t.Fatalf("write_file failed: %v", err)
+	}
+	tr.ToolStarting(ctx, "batch_file_ops", map[string]interface{}{"operation": "batch_delete", "files": []interface{}{"old.txt"}})
+	if _, err := batchTool.Execute(ctx, map[string]interface{}{"operation": "batch_delete", "files": []interface{}{"old.txt"}}); err != nil {
+		t.Fatalf("batch_delete failed: %v", err)
+	}
+	ops := tr.Result()
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op, got %+v", ops)
+	}
+	o := ops[0]
+	if o.Action != "delete" || o.Path != "old.txt" {
+		t.Fatalf("got action=%q path=%q, want delete/old.txt", o.Action, o.Path)
+	}
+	if !strings.Contains(o.Diff, "-keep me?") {
+		t.Fatalf("net-deleted file diff should show the original content removed:\n%s", o.Diff)
 	}
 }
