@@ -347,6 +347,7 @@
             <div class="toolbar-right">
               <n-select
                 v-if="modelOptions.length > 0"
+                ref="modelSelectRef"
                 v-model:value="currentModelId"
                 :options="modelOptions"
                 size="small"
@@ -354,6 +355,8 @@
                 :placeholder="t('chat.selectModel')"
                 :consistent-menu-width="false"
                 :render-label="renderModelLabel"
+                :menu-props="{ class: 'model-switch-menu', style: { maxWidth: modelMenuMaxWidth } }"
+                @update:show="onModelMenuShow"
                 @update:value="handleModelChange"
               />
               <n-button
@@ -405,7 +408,11 @@
               <span class="workdir-bar-path-text">{{ chatStore.currentWorkDir }}</span>
               <n-icon size="12" class="workdir-bar-caret"><ChevronDownOutline /></n-icon>
             </span>
-            <div v-if="showDirSessions" class="dir-sess-panel" @click.stop>
+            <div
+              v-if="showDirSessions"
+              class="dir-sess-panel"
+              @click.stop
+            >
               <!-- 头部：当前工作目录 -->
               <div class="dir-sess-panel-header">
                 <n-icon size="14" class="dir-sess-panel-folder"><FolderOutline /></n-icon>
@@ -705,6 +712,29 @@ const elapsedDisplay = computed(() => {
 // Model selection
 const modelOptions = computed(() => modelsStore.modelSelectOptions)
 const currentModelId = ref(modelsStore.currentModelInfo?.id || '')
+const modelSelectRef = ref<{ $el?: HTMLElement } | null>(null)
+// 菜单宽度上限按触发器位置动态计算（inline style 直通 naive 菜单，优先级最高）：
+// naive follower 放不下时会 flip 到 bottom-end（右缘对齐触发器），两种对齐方式能容纳的
+// 菜单宽分别是 (vw - 触发器左缘) 和 (触发器右缘)，取较大者留 12px 边距即绝对安全——
+// 无论触发器在屏幕什么位置、视口多窄，naive 总能选到放得下的一种，不再出现左侧被裁。
+// 静态 CSS 钳制做不到这一点：可用空间取决于触发器位置，是动态值。
+const modelMenuMaxWidth = ref('660px')
+
+function onModelMenuShow(show: boolean) {
+  if (!show) return
+  const host = modelSelectRef.value?.$el as HTMLElement | undefined
+  const vw = window.innerWidth
+  if (!host || !vw) {
+    modelMenuMaxWidth.value = '660px'
+    return
+  }
+  const r = host.getBoundingClientRect()
+  const margin = 12
+  const byEnd = r.right - margin      // bottom-end 对齐：菜单右缘=触发器右缘
+  const byStart = vw - r.left - margin // bottom-start 对齐：菜单左缘=触发器左缘
+  const usable = Math.max(byEnd, byStart, 160)
+  modelMenuMaxWidth.value = `${Math.floor(Math.min(usable, 660))}px`
+}
 
 // Sync currentModelId when store changes
 watch(() => modelsStore.currentModelInfo, (info) => {
@@ -726,10 +756,13 @@ function renderModelLabel(option: { label: string; value: string }) {
   const provider = parts[0] || ''
   const model = parts[1] || ''
   return h('div', {
-    style: 'display: flex; align-items: center; gap: 6px; padding: 4px 0;'
+    class: 'model-switch-option',
+    // 内联 max-width 是最后防线：部分移动端 webview 连 class 级 CSS 都可能没加载时，
+    // 也能把最宽选项的本征宽度钳在屏幕内（配合 flex + overflow-wrap 让长名折行）。
+    style: 'display: flex; align-items: center; gap: 6px; padding: 2px 0; min-width: 0; max-width: calc(100vw - 56px);'
   }, [
-    h('span', null, provider),
-    h('span', null, `/ ${model}`),
+    h('span', { class: 'msw-provider', style: 'flex-shrink: 0; color: var(--n-option-text-color-disabled, #999); font-size: .92em;' }, provider),
+    h('span', { class: 'msw-model', style: 'min-width: 0; overflow-wrap: anywhere;' }, `/ ${model}`),
   ])
 }
 
@@ -1354,7 +1387,6 @@ const dirSessionsLoading = ref(false)
 const dirGroups = ref<sessionsApi.SessionDirGroup[]>([])
 const dirPanelMode = ref<'current' | 'all'>('current')
 const dirSessAnchorRef = ref<HTMLElement>()
-
 // 目录 key 归一化：分隔符统一、去尾部斜杠、忽略大小写（Windows 路径大小写不敏感）
 function dirKey(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
@@ -2980,6 +3012,20 @@ onMounted(async () => {
 
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {
+  /* 目录会话面板：移动端把 absolute 覆盖成 fixed，钉到视口不占文档流。
+     absolute 右溢会把文档 scrollWidth 撑超 100vw，进而污染 window.innerWidth/100vw
+     （根因，见 <style> 块注释）；fixed 不占文档流、不撑宽、不产生横向滚动。
+     底部 workdir-bar 即屏幕底部，面板向上弹，bottom 取 bar 上方约 40px 处浮起。 */
+  .dir-sess-panel {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 42px;
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+  }
+
   .chat-container {
     flex-direction: column;
   }
@@ -3063,5 +3109,50 @@ onMounted(async () => {
     z-index: 150;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
+}
+</style>
+
+<!--
+  移动端 naive 弒层遮挡修复（真机问题：模型下拉左裁 / 目录面板右裁）。
+
+  模型下拉（n-select，teleport 到 body）：主方案是 onModelMenuShow 按触发器位置动态算
+  max-width 并经 menu-props.style 以 inline 写进菜单（375px 实测 left=61/right=356 完全屏内）；
+  CSS 只是 JS 未执行时的兜底。为什么纯 CSS 不够：naive follower 放不下时 flip 到 bottom-end
+  （右缘对齐触发器），可用空间取决于触发器位置（动态值），静态钳制值（如 100vw-16/40px）
+  在触发器贴近屏幕中/右时必然左溢（375 实测 left=-4/-26）。曾试过 :has() 选择器——X5/XWeb
+  等旧内核不支持，规则全灭，禁用。
+
+  目录会话面板（.dir-sess-panel）：桌面端 absolute 锚在目录文字下方向上弹（anchor 够宽，
+  正常不溢）。移动端是根因——absolute 右溢出把文档 scrollWidth 撑超 100vw（375 视口实测
+  scrollW=404），进一步污染 window.innerWidth/100vw 导致所有基于视口的测量错乱。修复：移动端
+  （@media max-width:768px）把面板改 position:fixed + left/right:8px 钉到视口，fixed 不占文档流、
+  不撑宽、不产生横向滚动，scrollW 恢复 375、面板完整落屏内（无需 JS translateX 校正）。
+-->
+<style>
+.model-switch-menu {
+  max-width: min(calc(100vw - 88px), 660px);
+}
+
+@media (max-width: 768px) {
+  .n-base-select-menu,
+  .n-popselect-menu,
+  .n-dropdown-menu,
+  .n-popover:not(.n-popover--raw) {
+    max-width: calc(100vw - 40px);
+  }
+}
+
+.model-switch-menu.n-base-select-menu .n-base-select-option .n-base-select-option__content {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+/* popselect 复用 NInternalSelectMenu，选项同样是 n-base-select-option__content；
+   4 类选择器（0,4,0）压过 naive 的 nowrap 原规则（0,3,0） */
+.n-popselect-menu.n-base-select-menu .n-base-select-option .n-base-select-option__content {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
 }
 </style>
