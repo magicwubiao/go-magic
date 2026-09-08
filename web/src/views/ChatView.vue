@@ -1328,9 +1328,20 @@ async function applyRecommendedDir(path: string) {
 }
 
 // 用系统文件管理器（Windows 资源管理器）打开目录；不传 path 时打开当前会话工作目录
+// 注意：该功能只能打开 go-magic 服务所在机器上的目录。通过域名/远程地址访问时，
+// 服务端没有浏览器所在机器的桌面环境，无法打开，因此直接提示并复制路径。
 function openWorkDirInExplorer(path?: string) {
   const target = path || chatStore.currentWorkDir
   if (!target) return
+  const hostname = window.location.hostname
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+  if (!isLocal) {
+    navigator.clipboard?.writeText(target).then(
+      () => message.info(t('chat.workDirOpenRemote', { path: target })),
+      () => message.info(t('chat.workDirOpenRemote', { path: target }))
+    )
+    return
+  }
   sessionsApi.openFolderInExplorer(target).catch((e: any) => {
     message.error(e?.message || t('common.operationFailed'))
   })

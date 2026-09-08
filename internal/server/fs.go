@@ -275,6 +275,17 @@ func (s *Server) handleFSOpenFolder(w http.ResponseWriter, r *http.Request) {
 	case "darwin":
 		cmd = exec.Command("open", absPath)
 	default:
+		// Linux 服务器（headless）通常没有安装 xdg-open 或没有桌面会话，
+		// 直接报"executable file not found in $PATH"会让人误以为文件不存在。
+		// 这里提前检测并返回明确的错误，提示通过远程访问时该功能不可用。
+		if _, err := exec.LookPath("xdg-open"); err != nil {
+			http.Error(w, "no file manager available on server (xdg-open not found); "+absPath, http.StatusNotImplemented)
+			return
+		}
+		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			http.Error(w, "no desktop session on server (DISPLAY not set); cannot open a window; "+absPath, http.StatusNotImplemented)
+			return
+		}
 		cmd = exec.Command("xdg-open", absPath)
 	}
 	if err := cmd.Start(); err != nil {

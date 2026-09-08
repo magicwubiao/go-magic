@@ -239,6 +239,7 @@ export default {
     workDirRecommended: '推荐目录（最近使用）',
     workDirProfile: '当前分身：该会话所属分身，仅作标识',
     workDirOpen: '在文件管理器中打开',
+    workDirOpenRemote: '远程访问无法在您的电脑上打开服务器目录，路径已复制：{path}',
     workDirCurrent: '当前工作目录',
     workDirNone: '未设置（使用默认目录）',
     workDirSet: '设置工作目录',

@@ -239,6 +239,7 @@ export default {
     workDirRecommended: 'Recommended (recently used)',
     workDirProfile: 'Current profile: the persona this session belongs to (display only)',
     workDirOpen: 'Open in File Explorer',
+    workDirOpenRemote: 'Remote access cannot open a server directory on your computer. Path copied: {path}',
     workDirCurrent: 'Current working directory',
     workDirNone: 'Not set (using default directory)',
     workDirSet: 'Set work directory',
