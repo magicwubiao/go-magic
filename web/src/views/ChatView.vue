@@ -209,7 +209,7 @@
                   :segments="msg.streaming_timeline_snapshot"
                   :tools="messageToolCalls(msg)"
                 />
-                <!-- 本轮变更的文件（仅写/删动作，按路径去重），点开条目看行级 diff -->
+                <!-- 本轮变更的文件（仅写/删动作，按路径去重），仅展示头部提示 -->
                 <FileChangesBlock
                   v-if="changedFiles(msg).length > 0"
                   :files="changedFiles(msg)"
@@ -259,7 +259,7 @@
                 :tools="chatStore.toolCalls"
                 :streaming="chatStore.streaming"
               />
-              <!-- 流式期间实时展示本轮已变更的文件；done 后由后端 file_ops（带 diff）接管 -->
+              <!-- 流式期间实时展示本轮已变更文件数量；done 后由后端 file_ops 接管 -->
               <FileChangesBlock :files="changedFiles()" />
             </div>
           </div>
@@ -2000,135 +2000,6 @@ onMounted(async () => {
   margin-bottom: 6px;
 }
 
-/* 变更的文件（助手消息内嵌列表，绿系区分"文件已改动"） */
-.file-changes-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.file-changes-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border-radius: 12px;
-  background: rgba(24, 160, 88, 0.08);
-  color: #18a058;
-  font-size: 12px;
-  line-height: 1.4;
-  width: fit-content;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
-}
-
-.file-changes-head:hover {
-  background: rgba(24, 160, 88, 0.14);
-}
-
-.file-changes-head:focus-visible {
-  outline: 2px solid rgba(24, 160, 88, 0.4);
-  outline-offset: 1px;
-}
-
-.file-changes-arrow {
-  transition: transform 0.15s;
-}
-
-.file-changes-arrow-open {
-  transform: rotate(90deg);
-}
-
-.file-changes-head .n-icon {
-  opacity: 0.85;
-}
-
-.file-changes-count {
-  padding: 0 6px;
-  border-radius: 9px;
-  background: rgba(24, 160, 88, 0.14);
-  font-weight: 600;
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.file-changes-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.file-change-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border: 1px solid #ececec;
-  background: #fff;
-  border-radius: 8px;
-  min-width: 0;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.file-change-item:hover {
-  border-color: #b7ebcf;
-  background: #f6fffb;
-}
-
-.file-change-action {
-  flex-shrink: 0;
-  min-width: 36px;
-  text-align: center;
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.7;
-  color: #fff;
-}
-
-.file-change-action.action-write { background: #18a058; }
-.file-change-action.action-delete { background: #d03050; }
-.file-change-action.action-batch { background: #f0a020; }
-
-.file-change-path {
-  display: flex;
-  align-items: baseline;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
-  font-size: 12px;
-}
-
-.file-change-dir {
-  color: #94a3b8;
-  font-size: 11px;
-  flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.file-change-base {
-  color: #1f2937;
-  font-weight: 600;
-  flex-shrink: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%;
-}
-
-.file-change-deleted .file-change-base {
-  color: #d03050;
-  text-decoration: line-through;
-}
-
 .system-bubble {
   background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
   color: #854d0e;
@@ -2579,37 +2450,6 @@ onMounted(async () => {
 
   .assistant-content {
     color: #e5e7eb;
-  }
-
-  .file-changes-head {
-    background: rgba(99, 226, 183, 0.12);
-    color: #63e2b7;
-  }
-
-  .file-changes-count {
-    background: rgba(99, 226, 183, 0.18);
-  }
-
-  .file-change-item {
-    border-color: #2a2a2a;
-    background: #1a1a1a;
-  }
-
-  .file-change-item:hover {
-    border-color: #2f7a5a;
-    background: #16241d;
-  }
-
-  .file-change-base {
-    color: #e5e7eb;
-  }
-
-  .file-change-dir {
-    color: #6b7280;
-  }
-
-  .file-change-deleted .file-change-base {
-    color: #e88080;
   }
 
   .system-bubble {
