@@ -234,12 +234,32 @@ func canonicalOpPath(ctx context.Context, raw string) (abs, display string) {
 
 // targetPathsForTool 从完整工具参数中提取写/删工具的目标路径。
 // 只处理已知写工具；batch_file_ops 按 operation 细分（batch_read 不视为变更）。
+// diff_patch 仅在 action=apply_patch 时写目标文件（show_diff/show_changes 只读）；
+// gitignore 仅在 action=generate 时写 output（默认 .gitignore）。
 func targetPathsForTool(toolName string, args map[string]interface{}) []string {
 	action := writeActionForTool(toolName)
 	if action == "" {
 		return nil
 	}
 	var out []string
+	if toolName == "diff_patch" {
+		if opName, _ := args["action"].(string); opName == "apply_patch" || opName == "create_backup" {
+			if p := paramString(args, "path"); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	if toolName == "gitignore" {
+		if opName, _ := args["action"].(string); opName == "generate" {
+			if p := paramString(args, "output"); p != "" {
+				out = append(out, p)
+			} else {
+				out = append(out, ".gitignore")
+			}
+		}
+		return out
+	}
 	if toolName != "batch_file_ops" {
 		if p := paramString(args, "path"); p != "" {
 			out = append(out, p)
@@ -294,6 +314,10 @@ func writeActionForTool(toolName string) string {
 		return "write"
 	case "delete_file", "file_delete":
 		return "delete"
+	// diff_patch 会写文件（apply_patch / create_backup），gitignore 会生成
+	// .gitignore —— 此前都漏统计；具体 action 过滤在 targetPathsForTool 里做。
+	case "diff_patch", "gitignore":
+		return "write"
 	default:
 		return ""
 	}
@@ -340,11 +364,36 @@ func extractFileOps(toolName string, argsStr string, resultContent string) []typ
 					op.Action = "search"
 				case "batch_file_ops":
 					op.Action = "batch"
+				case "diff_patch":
+					// apply_patch/create_backup 写文件；show_diff/show_changes 只读。
+					if a, _ := argsMap["action"].(string); a == "apply_patch" || a == "create_backup" {
+						op.Action = "write"
+					} else {
+						op.Action = "read"
+					}
+				case "gitignore":
+					// generate 生成 .gitignore；search/list 模板只读。
+					if a, _ := argsMap["action"].(string); a == "generate" {
+						op.Action = "write"
+					} else {
+						op.Action = "search"
+					}
 				default:
 					op.Action = "access"
 				}
 				fileOps = append(fileOps, op)
 			}
+		}
+	}
+	// gitignore generate 写 output（默认 .gitignore）；output 不在通用
+	// pathKeys 里（避免误捕其他工具的同名参数），这里单独提取。
+	if toolName == "gitignore" {
+		if a, _ := argsMap["action"].(string); a == "generate" {
+			p, _ := argsMap["output"].(string)
+			if p == "" {
+				p = ".gitignore"
+			}
+			fileOps = append(fileOps, types.FileOp{Path: p, Param: "output", Action: "write"})
 		}
 	}
 	// 如果 args 是文件路径列表/映射，额外提取 (如 batch_file_ops 的 items)。

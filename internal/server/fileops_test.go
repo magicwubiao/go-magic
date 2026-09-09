@@ -63,6 +63,30 @@ func TestExtractFileOps_basicMapping(t *testing.T) {
 			want:     []types.FileOp{op("access", "x.csv")},
 		},
 		{
+			name:     "diff_patch apply_patch maps to write",
+			toolName: "diff_patch",
+			args:     `{"action": "apply_patch", "path": "src/main.go", "patches": []}`,
+			want:     []types.FileOp{op("write", "src/main.go")},
+		},
+		{
+			name:     "diff_patch show_diff maps to read",
+			toolName: "diff_patch",
+			args:     `{"action": "show_diff", "path": "src/main.go"}`,
+			want:     []types.FileOp{op("read", "src/main.go")},
+		},
+		{
+			name:     "gitignore generate defaults to .gitignore",
+			toolName: "gitignore",
+			args:     `{"action": "generate"}`,
+			want:     []types.FileOp{op("write", ".gitignore")},
+		},
+		{
+			name:     "gitignore search produces no file op",
+			toolName: "gitignore",
+			args:     `{"action": "search", "query": "go"}`,
+			want:     []types.FileOp{},
+		},
+		{
 			name:     "same action+path deduped",
 			toolName: "write_file",
 			args:     `{"file_path": "a.txt", "path": "a.txt"}`,
