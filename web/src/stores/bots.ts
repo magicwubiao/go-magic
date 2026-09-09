@@ -137,6 +137,20 @@ export const useBotsStore = defineStore('bots', () => {
     return created
   }
 
+  /** Pause a bot (stops processing messages and routines) without deleting it. */
+  async function deactivateBot(name: string): Promise<void> {
+    const updated = await botsApi.deactivateBot(name)
+    const idx = bots.value.findIndex(b => b.name === name)
+    if (idx >= 0) bots.value[idx] = { ...bots.value[idx], ...updated }
+  }
+
+  /** Resume a paused bot (re-enables messages and routines). */
+  async function activateBot(name: string): Promise<void> {
+    const updated = await botsApi.activateBot(name)
+    const idx = bots.value.findIndex(b => b.name === name)
+    if (idx >= 0) bots.value[idx] = { ...bots.value[idx], ...updated }
+  }
+
   function openChat(name: string) {
     // Cancel any in-flight stream from the previous bot.
     cancelStream()
@@ -343,6 +357,7 @@ export const useBotsStore = defineStore('bots', () => {
     bots, loading, error, modeDisabled,
     activeBotName, messages, routines, chatLoading, sending,
     loadBots, createBot, updateBot, deleteBot, cloneBot,
+    activateBot, deactivateBot,
     openChat, closeChat, refreshChat, sendMessage, cancelStream,
     addRoutine, removeRoutine, toggleRoutine, updateRoutine,
     runRoutineNow, clearMessages,

@@ -8,6 +8,8 @@ export interface BotRuntime {
   queue_depth?: number
   history_length?: number
   active_routines?: number
+  active?: boolean
+  status?: string
   last_active?: number
 }
 
@@ -25,6 +27,8 @@ export interface Bot {
   avatar?: string
   env?: Record<string, string>
   hidden?: boolean
+  active?: boolean
+  status?: string
   created_at: number
   updated_at: number
   runtime?: BotRuntime
@@ -38,6 +42,7 @@ export interface BotRoutine {
   enabled: boolean
   last_run?: number
   last_status: string
+  last_result?: string
   created_at: number
 }
 
@@ -95,6 +100,16 @@ export async function deleteBot(name: string): Promise<void> {
 /** Clone a bot's full profile under a new name (fresh chat history). */
 export async function cloneBot(name: string, newName: string): Promise<Bot> {
   return request(`/bots/${name}/clone`, { method: 'POST', body: JSON.stringify({ name: newName }) })
+}
+
+/** Pause a bot (stops processing messages and routines) without deleting it. */
+export async function deactivateBot(name: string): Promise<Bot> {
+  return request(`/bots/${name}/deactivate`, { method: 'POST' })
+}
+
+/** Resume a paused bot (re-enables messages and routines). */
+export async function activateBot(name: string): Promise<Bot> {
+  return request(`/bots/${name}/activate`, { method: 'POST' })
 }
 
 export async function getBotMessages(name: string): Promise<BotMessage[]> {

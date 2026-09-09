@@ -36,6 +36,8 @@ func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interfac
 		"avatar":        cfg.Avatar,
 		"env":           cfg.Env,
 		"hidden":        cfg.Hidden,
+		"active":        cfg.IsActive(),
+		"status":        cfg.Status,
 		"created_at":    cfg.CreatedAt,
 		"updated_at":    cfg.UpdatedAt,
 	}
@@ -46,6 +48,8 @@ func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interfac
 			"queue_depth":     state.QueueDepth,
 			"history_length":  state.HistoryLength,
 			"active_routines": state.ActiveRoutines,
+			"active":          state.Active,
+			"status":          state.Status,
 			"last_active":     state.LastActiveUnix,
 		}
 	} else {
@@ -65,6 +69,7 @@ func routineToResponse(r *bot.RoutineConfig) map[string]interface{} {
 		"prompt":      r.Prompt,
 		"enabled":     r.Enabled,
 		"last_status": r.LastStatus,
+		"last_result": r.LastResult,
 		"created_at":  r.CreatedAt,
 	}
 	if r.LastRun != nil {
@@ -136,6 +141,10 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotMessages(w, r, name)
 	case len(parts) == 2 && parts[1] == "clone" && r.Method == http.MethodPost:
 		s.handleBotClone(w, r, name)
+	case len(parts) == 2 && parts[1] == "activate" && r.Method == http.MethodPost:
+		s.handleBotSetActive(w, r, name, true)
+	case len(parts) == 2 && parts[1] == "deactivate" && r.Method == http.MethodPost:
+		s.handleBotSetActive(w, r, name, false)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -717,6 +726,26 @@ func (s *Server) handleBotClone(w http.ResponseWriter, r *http.Request, name str
 	}
 	state := mgr.RuntimeStatus(cfg.Name)
 	w.WriteHeader(http.StatusCreated)
+	jsonResponse(w, botToResponse(cfg, &state))
+}
+
+// handleBotSetActive POST /api/bots/{name}/activate|deactivate — pause or
+// resume a bot without deleting it.
+func (s *Server) handleBotSetActive(w http.ResponseWriter, r *http.Request, name string, active bool) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	cfg, err := mgr.SetBotActive(name, active)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	state := mgr.RuntimeStatus(cfg.Name)
 	jsonResponse(w, botToResponse(cfg, &state))
 }
 

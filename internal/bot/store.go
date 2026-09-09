@@ -52,6 +52,15 @@ type Config struct {
 	// running (routines, DMs, rooms) and are reachable by name; the UI can show
 	// them behind a "show hidden" toggle.
 	Hidden bool `json:"hidden,omitempty"`
+	// Active controls whether the bot is online and able to process messages
+	// and run routines. nil or true = active; false = paused (its worker still
+	// exists but is idle and its routine schedule is suspended). Mirrors
+	// Hermes' bot activate/deactivate.
+	Active *bool `json:"active,omitempty"`
+	// Status is a short, human-readable lifecycle label persisted with the bot
+	// (e.g. "active", "paused", "error"). It is informational — the live
+	// RuntimeState carries the authoritative runtime view.
+	Status string `json:"status,omitempty"`
 
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
@@ -68,6 +77,10 @@ type RoutineConfig struct {
 	Enabled    bool   `json:"enabled"`
 	LastRun    *int64 `json:"last_run,omitempty"` // Unix seconds
 	LastStatus string `json:"last_status,omitempty"`
+	// LastResult is a short summary (or the head) of the most recent run's
+	// output, so users can see what a routine produced without opening the
+	// full chat history. Truncated to a reasonable length before persisting.
+	LastResult string `json:"last_result,omitempty"`
 	CreatedAt  int64  `json:"created_at"`
 }
 
@@ -91,6 +104,12 @@ func (c *Config) MentionTag() string {
 	tag := strings.ToLower(c.Name)
 	tag = strings.ReplaceAll(tag, "_", "-")
 	return strings.Trim(tag, "-")
+}
+
+// IsActive reports whether the bot is online/paused. A nil Active (unset)
+// defaults to active so existing on-disk bots keep working unchanged.
+func (c *Config) IsActive() bool {
+	return c.Active == nil || *c.Active
 }
 
 // EffectiveSystemPrompt builds the full system prompt for the bot,
@@ -151,6 +170,37 @@ func safeBase(name string) string {
 	return filepath.Base(name)
 }
 
+// writeFileAtomic writes data to path atomically: it writes to a temp file in
+// the same directory then renames it over the target. A crash mid-write can
+// never leave a truncated/corrupt config behind (the rename is atomic on
+// POSIX), matching the pattern already used by server/config.go and the
+// gateway QR-login stores.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 func (s *Store) botPath(name string) string {
 	return filepath.Join(s.dir, safeBase(name)+".json")
 }
@@ -166,7 +216,7 @@ func (s *Store) Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.botPath(cfg.Name), data, 0644)
+	return writeFileAtomic(s.botPath(cfg.Name), data, 0644)
 }
 
 // Load reads a bot config by name.
@@ -220,7 +270,7 @@ func (s *Store) SaveRoutines(botName string, routines []*RoutineConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.routinesPath(botName), data, 0644)
+	return writeFileAtomic(s.routinesPath(botName), data, 0644)
 }
 
 // LoadRoutines reads a bot's routine list (empty slice if none).
@@ -248,6 +298,13 @@ func NewRoutineID(botName string) string {
 	return fmt.Sprintf("bot_%s_%s", botName, id)
 }
 
+// Bot lifecycle status labels (used by RuntimeState.Status and Config.Status).
+const (
+	StatusActive = "active"
+	StatusPaused = "paused"
+	StatusError  = "error"
+)
+
 // RuntimeState tracks a bot's live activity for status display.
 type RuntimeState struct {
 	Name           string `json:"name"`
@@ -255,6 +312,10 @@ type RuntimeState struct {
 	QueueDepth     int    `json:"queue_depth"`
 	HistoryLength  int    `json:"history_length"`
 	ActiveRoutines int    `json:"active_routines"`
+	// Active reports whether the bot is currently online (not paused).
+	Active bool `json:"active"`
+	// Status is the live lifecycle label: "active", "paused", or "error".
+	Status string `json:"status"`
 	// LastActiveUnix is the Unix-seconds timestamp of the bot's most recent
 	// completed turn (0 = never active). Used for the "Active now" UI strip.
 	LastActiveUnix int64 `json:"last_active_unix,omitempty"`
@@ -311,7 +372,7 @@ func (s *Store) SaveRoom(r *RoomConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.roomPath(r.ID), data, 0644)
+	return writeFileAtomic(s.roomPath(r.ID), data, 0644)
 }
 
 // LoadRoom reads a room config by ID.

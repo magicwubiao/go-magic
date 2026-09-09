@@ -516,8 +516,8 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+// 直接透传后端错误，调用方负责提示。后端在 work_dir 已被用户设置后会拒绝修改。
   async function updateSessionWorkDir(id: string, workDir: string): Promise<void> {
-    // 直接透传后端错误，调用方负责提示。后端在 work_dir 已被用户设置后会拒绝修改。
     await sessionsApi.updateSessionWorkDir(id, workDir)
     const session = sessions.value.find(s => s.id === id)
     if (session) {
@@ -525,6 +525,12 @@ export const useChatStore = defineStore('chat', () => {
       // 仅在设置非空目录时锁定；清空时解除用户设置标记
       session.work_dir_user_set = workDir !== ''
     }
+  }
+
+  // 判断某个会话当前是否正在执行（流式进行中 / 断线恢复轮询中）。
+  function isSessionRunning(id: string): boolean {
+    const state = sessionStates.value[id]
+    return !!(state && state.streaming)
   }
 
   function flushStreamBuffer(sessionId: string): void {
@@ -1280,6 +1286,7 @@ export const useChatStore = defineStore('chat', () => {
     deleteSession,
     renameSession,
     updateSessionWorkDir,
+    isSessionRunning,
     sendMessage,
     stopGeneration,
     cleanup,

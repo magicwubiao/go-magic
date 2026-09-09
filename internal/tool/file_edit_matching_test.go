@@ -374,3 +374,90 @@ func TestTruncateRuneNoCorruption(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// operation 缺失时的自动推断容错（AI 偶尔漏传 operation 参数）
+// ---------------------------------------------------------------------------
+
+func TestInferOperation(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]interface{}
+		want   string
+	}{
+		{"old_content -> replace", map[string]interface{}{"old_content": "abc", "new_content": "def"}, "replace"},
+		{"new_content + line_start -> insert", map[string]interface{}{"new_content": "abc", "line_start": 3}, "insert"},
+		{"only new_content -> replace", map[string]interface{}{"new_content": "abc"}, "replace"},
+		{"only line_start -> delete", map[string]interface{}{"line_start": 5}, "delete"},
+		{"line_start + new_content + old_content -> replace", map[string]interface{}{"old_content": "x", "new_content": "y", "line_start": 2}, "replace"},
+		{"no usable args -> empty", map[string]interface{}{"path": "/tmp/x.go"}, ""},
+		{"empty strings -> empty", map[string]interface{}{"new_content": "", "old_content": ""}, ""},
+	}
+	for _, c := range cases {
+		got := inferOperation(c.params)
+		if got != c.want {
+			t.Errorf("%s: inferOperation() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// ValidateParams 在 operation 缺失时应自动推断并写回 params，而不是报错。
+func TestFileEditValidateParamsInfersOperation(t *testing.T) {
+	tool := &FileEditTool{}
+
+	cases := []struct {
+		name   string
+		params map[string]interface{}
+		wantOp string // 期望推断出的 operation；空表示期望报错
+	}{
+		{
+			name:   "replace inferred from old_content+new_content",
+			params: map[string]interface{}{"old_content": "func foo() {", "new_content": "func bar() {"},
+			wantOp: "replace",
+		},
+		{
+			name:   "insert inferred from new_content+line_start",
+			params: map[string]interface{}{"new_content": "// new line", "line_start": 1},
+			wantOp: "insert",
+		},
+		{
+			name:   "delete inferred from line_start",
+			params: map[string]interface{}{"line_start": 2, "line_end": 4},
+			wantOp: "delete",
+		},
+		{
+			// 只有 new_content 而无 old_content/line_start 时，推断为 replace 后
+			// 会因缺少匹配目标而报错（错误提示比 "missing operation" 更明确）。
+			name:   "new_content only -> replace then fails for missing target",
+			params: map[string]interface{}{"new_content": "package main"},
+			wantOp: "",
+		},
+		{
+			name:   "cannot infer -> error",
+			params: map[string]interface{}{"path": "/tmp/x.go"},
+			wantOp: "",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := map[string]interface{}{}
+			for k, v := range c.params {
+				p[k] = v
+			}
+			err := tool.ValidateParams(p)
+			if c.wantOp == "" {
+				if err == nil {
+					t.Fatalf("expected error for non-inferable params, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if got := paramString(p, "operation"); got != c.wantOp {
+				t.Errorf("inferred operation = %q, want %q", got, c.wantOp)
+			}
+		})
+	}
+}

@@ -157,6 +157,9 @@ func (m *Manager) Start(ctx context.Context) error {
 			log.Warnf("[BotMode] Failed to start routines for %s: %v", bc.Name, err)
 		} else {
 			m.routines[strings.ToLower(bc.Name)] = sched
+			if !bc.IsActive() {
+				sched.Pause()
+			}
 		}
 		log.Infof("[BotMode] Started bot %q (%s)", bc.Name, bc.Title)
 	}
@@ -262,6 +265,16 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 		}
 		msg := m.bots[key].queue[0]
 		m.bots[key].queue = m.bots[key].queue[1:]
+		// If the bot was paused (deactivated) while this message sat in the
+		// queue, drop it rather than process it: a paused bot must not act on
+		// new input. Notify a synchronous caller so it doesn't hang forever.
+		if !m.bots[key].cfg.IsActive() {
+			m.mu.Unlock()
+			if msg.replyCh != nil {
+				msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s is paused", rtName(key))}
+			}
+			continue
+		}
 		m.mu.Unlock()
 
 		m.processMessage(ctx, key, msg)
@@ -308,6 +321,11 @@ func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error)
 
 	// Register the bot-to-bot messaging tool (message_agent), Hermes-style.
 	registry.Register(newMessageAgentTool(m, bc.MentionTag()))
+	// Register the bot-to-bot delegation tool for synchronous subtask hand-off.
+	registry.Register(newDelegateTaskTool(m, bc.MentionTag()))
+	// Register the per-bot long-term memory tool so the bot can persist what
+	// it learns into its own Memory block (Hermes' runtime MEMORY.md writes).
+	registry.Register(newBotMemoryTool(m, bc.Name))
 
 	systemPrompt := m.buildBotSystemPrompt(bc)
 
@@ -495,7 +513,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		if err != nil {
 			status = "failed: " + err.Error()
 		}
-		m.recordRoutineResult(rt.cfg.Name, msg.RoutineID, status)
+		m.recordRoutineResult(rt.cfg.Name, msg.RoutineID, status, reply)
 	}
 
 	// Deliver the result to a synchronous caller if one is waiting.
@@ -591,6 +609,8 @@ func (m *Manager) SendToBot(botName, text string) (string, error) {
 		return res.Reply, res.Err
 	case <-m.stopCh:
 		return "", fmt.Errorf("bot manager shutting down")
+	case <-time.After(sendToBotTimeout):
+		return "", fmt.Errorf("timed out waiting for bot %s to reply", botName)
 	}
 }
 
@@ -1083,6 +1103,49 @@ func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) 
 	return cfg, nil
 }
 
+// SetBotActive pauses (active=false) or resumes (active=true) a bot without
+// deleting it. When paused, the bot stops processing new messages and its
+// routine schedule is suspended; the worker stays alive so it can be resumed
+// instantly. Persists the change and hot-reloads the runtime.
+func (m *Manager) SetBotActive(name string, active bool) (*Config, error) {
+	cfg, err := m.store.Load(name)
+	if err != nil {
+		return nil, fmt.Errorf("bot not found: %s", name)
+	}
+	if cfg.IsActive() == active {
+		return cfg, nil // no-op
+	}
+
+	t := active
+	cfg.Active = &t
+	if active {
+		cfg.Status = StatusActive
+	} else {
+		cfg.Status = StatusPaused
+	}
+	if err := m.store.Save(cfg); err != nil {
+		return nil, fmt.Errorf("failed to save bot: %w", err)
+	}
+
+	key := strings.ToLower(name)
+	m.mu.Lock()
+	if rt, ok := m.bots[key]; ok {
+		rt.cfg = cfg
+	}
+	if sched, ok2 := m.routines[key]; ok2 && sched != nil {
+		if active {
+			sched.Resume()
+		} else {
+			sched.Pause()
+		}
+	}
+	m.mu.Unlock()
+
+	m.queueCond.Broadcast() // wake worker so it re-checks active state
+	log.Infof("[BotMode] Bot %q %s", name, map[bool]string{true: "activated", false: "paused"}[active])
+	return cfg, nil
+}
+
 // DeleteBot removes a bot's config and stops its runtime. Its canonical chat
 // session is kept on disk for audit/history purposes.
 func (m *Manager) DeleteBot(name string) error {
@@ -1127,6 +1190,12 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 	if ok {
 		state.QueueDepth = len(rt.queue)
 		state.LastActiveUnix = rt.lastActive
+		state.Active = rt.cfg.IsActive()
+		if state.Active {
+			state.Status = StatusActive
+		} else {
+			state.Status = StatusPaused
+		}
 	}
 	routines, _ := m.store.LoadRoutines(rtName(key))
 	for _, r := range routines {
@@ -1187,6 +1256,11 @@ func (m *Manager) startBotLocked(cfg *Config) {
 		log.Warnf("[BotMode] Failed to start routines for %s: %v", cfg.Name, err)
 	} else {
 		m.routines[key] = sched
+		// A paused bot's routines must not fire even though the scheduler is
+		// registered — suspend it immediately.
+		if !cfg.IsActive() {
+			sched.Pause()
+		}
 	}
 	m.mu.Unlock()
 
@@ -1207,7 +1281,7 @@ func (m *Manager) rootCtxOrBackground() context.Context {
 // recordRoutineResult writes back a routine's last-run timestamp and status
 // after its turn finishes in the worker ("success" or "failed: <err>").
 // Called from processMessage; safe to call for unknown routine IDs.
-func (m *Manager) recordRoutineResult(botName, routineID, status string) {
+func (m *Manager) recordRoutineResult(botName, routineID, status, result string) {
 	routines, err := m.store.LoadRoutines(botName)
 	if err != nil {
 		log.Warnf("[BotMode] Failed to load routines for status write-back (%s): %v", botName, err)
@@ -1219,6 +1293,7 @@ func (m *Manager) recordRoutineResult(botName, routineID, status string) {
 		if r.ID == routineID {
 			r.LastRun = &now
 			r.LastStatus = status
+			r.LastResult = truncateRoutineResult(result)
 			found = true
 			break
 		}
@@ -1230,6 +1305,25 @@ func (m *Manager) recordRoutineResult(botName, routineID, status string) {
 	if err := m.store.SaveRoutines(botName, routines); err != nil {
 		log.Warnf("[BotMode] Failed to save routine status for %s: %v", botName, err)
 	}
+}
+
+// maxRoutineResultLen caps how much routine output is persisted so routine
+// configs stay small even for chatty runs.
+const maxRoutineResultLen = 2000
+
+// sendToBotTimeout bounds how long a synchronous SendToBot (used by the
+// delegate_task tool) waits for a teammate to reply before giving up, so a
+// busy or paused teammate can't block the delegating bot indefinitely.
+const sendToBotTimeout = 5 * time.Minute
+
+// truncateRoutineResult keeps the head of a routine's output and adds an
+// ellipsis marker when it was cut, so users can see the gist without the
+// full transcript.
+func truncateRoutineResult(result string) string {
+	if len(result) <= maxRoutineResultLen {
+		return result
+	}
+	return result[:maxRoutineResultLen] + "\n… [truncated]"
 }
 
 // isInternalMarker returns true if the content is an internal protocol marker

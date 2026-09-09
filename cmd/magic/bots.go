@@ -161,6 +161,22 @@ func init() {
 		},
 	})
 	botsCmd.AddCommand(&cobra.Command{
+		Use:   "activate <name>",
+		Short: "Resume a paused bot (re-enable its messages and routines)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runBotsSetActive(args[0], true)
+		},
+	})
+	botsCmd.AddCommand(&cobra.Command{
+		Use:   "deactivate <name>",
+		Short: "Pause a bot: it stops processing messages and running routines (kept on disk)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runBotsSetActive(args[0], false)
+		},
+	})
+	botsCmd.AddCommand(&cobra.Command{
 		Use:   "chat <name> <message>",
 		Short: "Send one message to a bot's canonical chat and print the reply",
 		Args:  cobra.MinimumNArgs(2),
@@ -304,6 +320,44 @@ func runBotsSetHidden(name string, hidden bool) error {
 		fmt.Printf("🙈 Bot %q hidden from the dashboard (still running)\n", name)
 	} else {
 		fmt.Printf("👀 Bot %q is visible in the dashboard again\n", name)
+	}
+	return nil
+}
+
+// runBotsSetActive pauses (active=false) or resumes (active=true) a bot by
+// toggling its persisted Active field. The running server picks this up on
+// its next reload; for an immediate live pause/resume use the web dashboard.
+func runBotsSetActive(name string, active bool) error {
+	store, err := openBotStore()
+	if err != nil {
+		return err
+	}
+	cfg, err := store.Load(name)
+	if err != nil {
+		return fmt.Errorf("bot not found: %s", name)
+	}
+	if cfg.IsActive() == active {
+		status := "already active"
+		if !active {
+			status = "already paused"
+		}
+		fmt.Printf("ℹ️  Bot %q is %s\n", name, status)
+		return nil
+	}
+	t := active
+	cfg.Active = &t
+	if active {
+		cfg.Status = bot.StatusActive
+	} else {
+		cfg.Status = bot.StatusPaused
+	}
+	if err := store.Save(cfg); err != nil {
+		return err
+	}
+	if active {
+		fmt.Printf("✅ Bot %q activated (messages and routines enabled)\n", name)
+	} else {
+		fmt.Printf("⏸️  Bot %q paused (messages and routines suspended)\n", name)
 	}
 	return nil
 }

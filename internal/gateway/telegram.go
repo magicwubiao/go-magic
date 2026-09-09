@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -179,34 +180,52 @@ func joinLines(lines []string) string {
 }
 
 func (t *TelegramHandler) listenUpdates(ctx context.Context) {
+	// 手动长轮询 getUpdates（而非 GetUpdatesChan）：GetUpdatesChan 依赖 bot 全局
+	// shutdownChannel，StopReceivingUpdates 一旦把它关闭，该实例上所有后续监听都会
+	// 立即失效，导致断线重连后无法恢复（只能重启服务器才能连上）。手动轮询完全由
+	// 本函数的 ctx 控制生命周期，断线自动重试，无需重启。
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
-	updates := t.bot.GetUpdatesChan(u)
-	defer t.bot.StopReceivingUpdates()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case update, ok := <-updates:
-			if !ok {
-				t.HandleDisconnection(fmt.Errorf("update channel closed"))
+		default:
+		}
+
+		updates, err := t.bot.GetUpdates(u)
+		if err != nil {
+			severity := ClassifyError(err)
+			log.Warnf("[Telegram] getUpdates error (severity=%d): %v", severity, err)
+			// 致命错误（token 失效等）交给重连机制判定，不再盲目重试。
+			if severity == ErrorFatal {
+				t.HandleDisconnection(err)
 				return
+			}
+			// 网络/临时错误：短暂退避后重试，保持监听不退出。
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+			continue
+		}
+
+		for _, update := range updates {
+			if update.UpdateID >= u.Offset {
+				u.Offset = update.UpdateID + 1
 			}
 			if update.Message == nil {
 				continue
 			}
-
 			if update.Message.Chat.Type != "private" && !t.config.AllowGroups {
 				continue
 			}
-
 			channelID := fmt.Sprintf("%d", update.Message.Chat.ID)
 			if !t.ShouldProcessChannel(channelID) {
 				continue
 			}
-
 			t.handleIncomingMessage(update.Message)
 		}
 	}

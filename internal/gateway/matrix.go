@@ -332,18 +332,47 @@ func (g *MatrixGateway) sync(ctx context.Context, pollTimeout time.Duration) err
 // (Disconnect), fixing a previous leak where syncLoop selected on an unset
 // internal ctx and never stopped.
 func (g *MatrixGateway) syncLoop(ctx context.Context) {
+	backoff := 5 * time.Second
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		default:
-			ctx, cancel := context.WithTimeout(context.Background(), g.longPollTimeout+10*time.Second)
-			if err := g.sync(ctx, g.longPollTimeout); err != nil {
-				log.Errorf("[Matrix] Sync error: %v", err)
-				time.Sleep(5 * time.Second)
-			}
-			cancel()
 		}
+
+		pollCtx, cancel := context.WithTimeout(context.Background(), g.longPollTimeout+10*time.Second)
+		err := g.sync(pollCtx, g.longPollTimeout)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+
+		if err != nil {
+			severity := ClassifyError(err)
+			log.Warnf("[Matrix] Sync error (severity=%d): %v", severity, err)
+			// 致命错误（token 失效等）交给重连机制判定，不再盲目重试。
+			if severity == ErrorFatal {
+				g.HandleDisconnection(err)
+				return
+			}
+			// 临时/网络错误：如实上报断连，随后退避重试，恢复后重新标记连接。
+			if g.IsConnected() {
+				g.markDisconnected(err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > time.Minute {
+				backoff = time.Minute
+			}
+			continue
+		}
+
+		if !g.IsConnected() {
+			g.markConnected() // recovered after an outage
+		}
+		backoff = 5 * time.Second
 	}
 }
 

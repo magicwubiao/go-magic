@@ -80,6 +80,22 @@ func (s *RoutineScheduler) Stop() {
 	}
 }
 
+// Pause suspends the cron scheduler so no routines fire (used when a bot is
+// deactivated). Scheduled entries are kept; Resume restarts the scheduler.
+func (s *RoutineScheduler) Pause() {
+	if s.cron != nil {
+		s.cron.Stop()
+	}
+}
+
+// Resume restarts the cron scheduler after Pause. Start() is idempotent in
+// robfig/cron, so this is safe to call even if never paused.
+func (s *RoutineScheduler) Resume() {
+	if s.cron != nil {
+		s.cron.Start()
+	}
+}
+
 // add registers one routine with the scheduler.
 func (s *RoutineScheduler) add(r *RoutineConfig) error {
 	routineID := r.ID

@@ -47,6 +47,8 @@
             <div class="session-content">
               <div v-if="editingSessionId !== session.id" class="session-title">
                 <div style="display: flex; align-items: center; gap: 4px;">
+                  <!-- 正在执行标识：该会话当前有回合在流式执行（小尺寸，避免喧宾夺主） -->
+                  <n-spin v-if="chatStore.isSessionRunning(session.id)" :size="12" style="flex-shrink: 0;" />
                   <!-- Goal indicator - icon only, hover shows details -->
                   <n-popover 
                     v-if="getSessionGoals(session.id).length" 
@@ -108,36 +110,25 @@
               </div>
             </div>
             <div class="session-actions">
-              <n-button
-                v-if="editingSessionId !== session.id"
-                class="session-rename-btn"
-                size="tiny"
-                quaternary
-                circle
-                @click.stop="startRename(session.id)"
-                :title="t('chat.rename')"
+              <n-dropdown
+                trigger="click"
+                placement="bottom-end"
+                :options="sessionMenuOptions()"
+                @select="(key: string) => onSessionMenuSelect(key, session.id)"
               >
-                <template #icon>
-                  <n-icon size="14"><PencilOutline /></n-icon>
-                </template>
-              </n-button>
-              <n-popconfirm @positive-click="deleteSession(session.id)">
-                <template #trigger>
-                  <n-button
-                    class="session-delete"
-                    size="tiny"
-                    quaternary
-                    circle
-                    type="error"
-                    @click.stop
-                  >
-                    <template #icon>
-                      <n-icon size="14"><TrashOutline /></n-icon>
-                    </template>
-                  </n-button>
-                </template>
-                {{ t('chat.deleteSession') }}
-              </n-popconfirm>
+                <n-button
+                  v-if="editingSessionId !== session.id"
+                  class="session-menu-btn"
+                  size="tiny"
+                  quaternary
+                  circle
+                  @click.stop
+                >
+                  <template #icon>
+                    <n-icon size="14"><EllipsisHorizontalOutline /></n-icon>
+                  </template>
+                </n-button>
+              </n-dropdown>
             </div>
           </div>
         <div v-if="chatStore.sessionsLoading || (isSearching && searchLoading)" style="padding: 16px; text-align: center;">
@@ -426,10 +417,29 @@
               class="dir-sess-panel"
               @click.stop
             >
-              <!-- 头部：当前工作目录 -->
+              <!-- 头部：当前工作目录 + 新建会话 + 批量删除(同目录全部) -->
               <div class="dir-sess-panel-header">
                 <n-icon size="14" class="dir-sess-panel-folder"><FolderOutline /></n-icon>
                 <span class="dir-sess-panel-title" :title="chatStore.currentWorkDir">{{ chatStore.currentWorkDir }}</span>
+                <n-button
+                  size="tiny"
+                  class="dir-sess-new-btn"
+                  :title="t('chat.newSessionInDir', { dir: chatStore.currentWorkDir })"
+                  @click.stop="createDirSession()"
+                >
+                  <template #icon><n-icon size="13"><AddOutline /></n-icon></template>
+                </n-button>
+                <n-button
+                  size="tiny"
+                  type="error"
+                  quaternary
+                  class="dir-sess-del-btn"
+                  :disabled="!currentDirSessions.length"
+                  :title="t('chat.deleteDirSessions')"
+                  @click.stop="deleteDirSessions()"
+                >
+                  <template #icon><n-icon size="13"><TrashOutline /></n-icon></template>
+                </n-button>
               </div>
 
               <div v-if="dirSessionsLoading" class="dir-sess-loading">
@@ -629,7 +639,7 @@
 <script setup lang="ts">
 import { ref, computed, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useMessage } from 'naive-ui'
+import { useMessage, useDialog, NIcon } from 'naive-ui'
 import { marked } from 'marked'
 import { stripZeroWidth } from '@/utils/text'
 import hljs from 'highlight.js/lib/core'
@@ -663,7 +673,7 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, PencilOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, TrashOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -674,6 +684,7 @@ const goalsStore = useGoalsStore()
 const modelsStore = useModelsStore()
 const router = useRouter()
 const message = useMessage()
+const dialogStore = useDialog()
 const inputValue = ref('')
 const chatTextareaRef = ref<{ focus: () => void } | null>(null)
 const rightSidebarMobileVisible = ref(false)
@@ -1477,6 +1488,46 @@ async function selectDirSession(s: sessionsApi.Session) {
   await chatStore.selectSession(s.id)
 }
 
+// 在当前工作目录下新建会话：复用 createSession(workDir) 让新会话默认沿用该目录，
+// 随后刷新目录分组并保留面板打开（方便继续新建/切换）。
+async function createDirSession() {
+  const dir = chatStore.currentWorkDir
+  if (!dir) return
+  const session = await chatStore.createSession(dir)
+  if (session) {
+    // 重新拉取目录分组，让新建的会话立即出现在"当前目录"列表里
+    await loadDirGroups()
+    sessionListRef.value?.scrollTo({ top: 0 })
+  }
+}
+
+// 一键批量删除当前工作目录下的全部会话（仅删除"设置过该工作目录"的会话记录，
+// 目录本身与用户文件保留；确认后逐个调用删除接口并统一刷新）。
+async function deleteDirSessions() {
+  const dir = chatStore.currentWorkDir
+  const sessions = currentDirSessions.value
+  if (!dir || !sessions.length) return
+  const ok = await dialogStore.warning({
+    title: t('chat.deleteDirSessions'),
+    content: t('chat.deleteDirSessionsConfirm', { count: sessions.length, dir }),
+    positiveText: t('chat.delete'),
+    negativeText: t('common.cancel'),
+  })
+  if (!ok) return
+  for (const s of sessions) {
+    // 这些会话均由用户显式设置过工作目录 → 不删除目录/文件本身
+    const deleteFiles = !s.work_dir_user_set
+    await chatStore.deleteSession(s.id, deleteFiles)
+  }
+  // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
+  const ids = new Set(sessions.map(s => s.id))
+  if (searchCache.value) {
+    searchCache.value = searchCache.value.filter(s => !ids.has(s.id))
+  }
+  await chatStore.loadSessions()
+  await loadDirGroups()
+}
+
 const commandSuggestions = ref<string[]>([])
 
 function handleInput() {
@@ -1673,6 +1724,39 @@ async function saveRename(id: string) {
   }
   editingSessionId.value = null
   editingName.value = ''
+}
+
+// 会话项下拉菜单选项（重命名 / 删除）
+function sessionMenuOptions() {
+  return [
+    {
+      label: t('chat.rename'),
+      key: 'rename',
+      icon: () => h(NIcon, null, { default: () => h(PencilOutline) }),
+    },
+    {
+      label: t('chat.deleteSession'),
+      key: 'delete',
+      icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
+    },
+  ]
+}
+
+async function onSessionMenuSelect(key: string, id: string) {
+  if (key === 'rename') {
+    startRename(id)
+  } else if (key === 'delete') {
+    // 删除前二次确认
+    const ok = await dialogStore.warning({
+      title: t('chat.deleteSession'),
+      content: t('chat.deleteSessionConfirm'),
+      positiveText: t('chat.delete'),
+      negativeText: t('common.cancel'),
+    })
+    if (ok) {
+      await deleteSession(id)
+    }
+  }
 }
 
 async function selectSession(id: string) {
@@ -1924,19 +2008,11 @@ onMounted(async () => {
   opacity: 1;
 }
 
-.session-rename-btn {
+.session-menu-btn {
   opacity: 0.7;
 }
 
-.session-rename-btn:hover {
-  opacity: 1;
-}
-
-.session-delete {
-  opacity: 0.7;
-}
-
-.session-delete:hover {
+.session-menu-btn:hover {
   opacity: 1;
 }
 
@@ -1952,6 +2028,9 @@ onMounted(async () => {
 .messages {
   flex: 1;
   overflow-y: auto;
+  /* 避免消息内容(长代码/表格/长URL)横向溢出撑宽页面产生左右滚动条；
+     长内容应在各自容器内局部滚动，而非撑破布局 */
+  overflow-x: hidden;
   padding: 20px 24px;
   padding-bottom: 20px;
 }
@@ -2037,6 +2116,22 @@ onMounted(async () => {
   line-height: 1.75;
   word-break: break-word;
   overflow-wrap: break-word;
+  /* 允许子元素在自身宽度内收缩，避免长内容(表格/代码)撑宽父容器 */
+  min-width: 0;
+}
+
+/* 助手消息内的表格：允许在局部横向滚动，避免撑宽页面 */
+.assistant-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 14px;
+}
+.assistant-content :deep(th),
+.assistant-content :deep(td) {
+  border: 1px solid #e0e0e0;
+  padding: 8px 12px;
+  text-align: left;
 }
 
 .tool-calls-wrap {
@@ -2264,6 +2359,28 @@ onMounted(async () => {
 }
 
 .message-bubble :deep(.code-block code) {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  color: #d4d4d4;
+}
+
+/* 助手消息(无气泡)内的代码块同样需要横向滚动约束，否则长代码行会撑宽
+   .assistant-content → .message-body → .messages → 页面，产生左右滚动条 */
+.assistant-content :deep(.code-block) {
+  position: relative;
+  margin: 8px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e1e1e;
+  min-width: 0;
+  max-width: 100%;
+}
+.assistant-content :deep(.code-block pre) {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+.assistant-content :deep(.code-block code) {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
   color: #d4d4d4;
@@ -2900,6 +3017,16 @@ onMounted(async () => {
   border-bottom: 1px solid #f0f0f0;
 }
 
+.dir-sess-new-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.dir-sess-del-btn {
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
 .dir-sess-panel-folder {
   flex-shrink: 0;
   color: #2080f0;
@@ -3112,6 +3239,10 @@ onMounted(async () => {
   .chat-main {
     flex: 1;
     min-height: 0;
+    /* 覆盖桌面端 min-width:360px，避免窄屏(<360px)下撑宽页面产生横向滚动 */
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
   }
   
   .messages {

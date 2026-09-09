@@ -73,7 +73,7 @@
               {{ b.title || b.description || b.model || '' }}
             </n-text>
           </div>
-          <span class="row-status" :class="{ online: b.runtime?.online, 'active-now': isActiveNow(b) }" />
+          <span class="row-status" :class="{ online: b.runtime?.online, 'active-now': isActiveNow(b), paused: b.active === false }" />
           <n-dropdown
             trigger="click"
             :options="cardMenuOptions(b)"
@@ -201,6 +201,24 @@
               {{ activeBot?.runtime?.online ? t('bots.online') : t('bots.offline') }}
             </n-tag>
             <n-tag v-if="isActiveNow(activeBotObj)" type="success" size="small" :bordered="false">● {{ t('bots.activeNow') }}</n-tag>
+            <n-tag v-if="activeBot?.active === false" type="warning" size="small" :bordered="false">
+              ⏸ {{ t('bots.paused') }}
+            </n-tag>
+            <n-button
+              v-if="activeBot?.active === false"
+              quaternary size="small" type="primary"
+              @click="handleToggleActive(activeBotObj)"
+            >
+              {{ t('bots.activate') }}
+            </n-button>
+            <n-button
+              v-else
+              quaternary size="small"
+              :disabled="!activeBot?.runtime?.online"
+              @click="handleToggleActive(activeBotObj)"
+            >
+              {{ t('bots.deactivate') }}
+            </n-button>
             <n-button quaternary size="small" @click="openRoutinesModal">
               <template #icon><n-icon><TimeOutline /></n-icon></template>
               {{ t('bots.routines') }} ({{ botsStore.routines.length }})
@@ -1169,6 +1187,22 @@ async function handleDeleteBot(b: Bot) {
   }
 }
 
+async function handleToggleActive(b: Bot | null | undefined) {
+  if (!b) return
+  try {
+    const paused = b.active === false
+    if (paused) {
+      await botsStore.activateBot(b.name)
+      message.success(t('bots.botActivated'))
+    } else {
+      await botsStore.deactivateBot(b.name)
+      message.success(t('bots.botPaused'))
+    }
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  }
+}
+
 function openRoutinesModal() {
   routineForm.name = ''
   routineForm.schedule = ''
@@ -2053,6 +2087,10 @@ async function loadCandidates() {
 
 .row-status.online {
   background: #18a058;
+}
+
+.row-status.paused {
+  background: #f0a020;
 }
 
 .row-status.active-now {

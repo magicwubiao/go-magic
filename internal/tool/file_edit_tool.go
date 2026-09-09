@@ -121,11 +121,43 @@ func (t *FileEditTool) ValidateParams(params map[string]interface{}) error {
 			return fmt.Errorf("DELETE requires line_start >= 1 (1-based). Optional line_end defaults to line_start. If you meant to clear content with replace, use replace + explicit old_content/new_content (both empty new_content and accidental delete-wipe are disallowed).")
 		}
 	case "":
+		// 容错：AI 偶尔会漏传 operation 参数。此时根据其他参数自动推断，
+		// 避免因参数缺失直接报错。只有完全无法推断时才报错。
+		if inferred := inferOperation(params); inferred != "" {
+			params["operation"] = inferred
+			return t.ValidateParams(params)
+		}
 		return fmt.Errorf("missing 'operation' argument. Must be one of: replace (recommended), insert, delete.")
 	default:
 		return fmt.Errorf("unknown operation %q. Valid: replace, insert, delete.", operation)
 	}
 	return nil
+}
+
+// inferOperation 在 operation 参数缺失时，根据其他参数自动推断编辑操作。
+// 返回空字符串表示无法推断（此时应由调用方报错）。
+// 推断规则（按优先级）：
+//   - 传了 old_content  -> replace（old_content 仅用于 replace）
+//   - 传了 new_content 且带 line_start -> insert（在指定行后插入）
+//   - 仅传了 new_content -> replace（line-based 或 match 替换）
+//   - 仅传了 line_start/line_end -> delete（按行删除）
+func inferOperation(params map[string]interface{}) string {
+	hasOld := paramString(params, "old_content") != ""
+	hasNew := paramString(params, "new_content") != ""
+	hasLineStart := paramInt(params, "line_start") > 0
+
+	switch {
+	case hasOld:
+		return "replace"
+	case hasNew && hasLineStart:
+		return "insert"
+	case hasNew:
+		return "replace"
+	case hasLineStart:
+		return "delete"
+	default:
+		return ""
+	}
 }
 
 // matchResult captures a found occurrence of old_content in the file
@@ -159,6 +191,10 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		}
 		return nil, err
 	}
+
+	// ValidateParams 可能在 operation 缺失时通过 inferOperation 自动推断并写回
+	// params["operation"]，因此这里重新读取，确保后续逻辑使用推断后的值。
+	operation = paramString(params, "operation")
 
 	// DEFENSE-IN-DEPTH 2: Extra rule: replace with empty new_content is NEVER
 	// allowed even if the caller explicitly passed new_content="". This used to

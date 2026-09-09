@@ -464,6 +464,20 @@ func Load() (*Config, error) {
 		cfg.WorkingDir = getDefaultWorkingDir()
 	}
 
+	// 兜底 Agent 循环上限默认值：磁盘 JSON 可能未写入 agent.max_turns 等字段
+	// （旧配置或手动编辑），此时若为 0 会导致 server 端回退到 agent 硬编码的
+	// 70 轮上限，与 Web 配置界面默认值(150)不一致。这里补齐默认值，确保
+	// 实际生效的上限与 UI 展示一致。
+	if cfg.Agent.GoalMaxTurns == 0 {
+		cfg.Agent.GoalMaxTurns = 60
+	}
+	if cfg.Agent.MaxTurns == 0 {
+		cfg.Agent.MaxTurns = 150
+	}
+	if cfg.Agent.MaxIterations == 0 {
+		cfg.Agent.MaxIterations = 200
+	}
+
 	return &cfg, nil
 }
 
@@ -500,6 +514,18 @@ func defaultConfig() *Config {
 		},
 		BotMode: DefaultBotModeConfig(),
 		Voice:   voice.DefaultVoiceConfig(),
+		// Agent 循环上限默认值，与 Web 配置界面(ConfigView.vue)的默认一致，
+		// 避免新建配置时回退到 agent 硬编码的 70 轮上限。
+		Agent: struct {
+			GoalMaxTurns int `json:"goal_max_turns"`
+			MaxTurns     int `json:"max_turns,omitempty"`
+			MaxIterations  int   `json:"max_iterations,omitempty"`
+			MaxTokenBudget int64 `json:"max_token_budget,omitempty"`
+		}{
+			GoalMaxTurns: 60,
+			MaxTurns:     150,
+			MaxIterations: 200,
+		},
 	}
 }
 

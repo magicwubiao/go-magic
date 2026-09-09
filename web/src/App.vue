@@ -2,6 +2,7 @@
   <n-config-provider :locale="naiveLocale" :date-locale="naiveDateLocale">
   <n-notification-provider>
     <n-message-provider>
+      <n-dialog-provider>
       <!-- Login page: no header -->
       <template v-if="isLoginPage">
         <router-view />
@@ -75,6 +76,7 @@
         :negative-text="t('common.cancel')"
         @positive-click="handleLogout"
       />
+      </n-dialog-provider>
     </n-message-provider>
   </n-notification-provider>
   </n-config-provider>
@@ -119,10 +121,16 @@ const isMobile = ref(window.innerWidth <= 768)
 const siderCollapsed = ref(isMobile.value)
 
 function handleAppResize() {
-  isMobile.value = window.innerWidth <= 768
-  if (!isMobile.value) {
+  const nowMobile = window.innerWidth <= 768
+  // 从桌面端缩放到移动端时，将导航栏默认折叠（移出屏幕外）；
+  // 从移动端切回桌面端则展开。仅在小屏/大屏切换边界处调整，
+  // 避免打断用户在移动端手动展开/折叠的意图。
+  if (nowMobile && !isMobile.value) {
+    siderCollapsed.value = true
+  } else if (!nowMobile && isMobile.value) {
     siderCollapsed.value = false
   }
+  isMobile.value = nowMobile
 }
 
 onMounted(() => {
@@ -147,6 +155,10 @@ onUnmounted(() => {
 
 function handleMenuClick(key: string) {
   router.push(key)
+  // 移动端切换导航后自动收起侧边栏，避免遮挡内容
+  if (isMobile.value) {
+    siderCollapsed.value = true
+  }
 }
 
 function handleLogout() {
@@ -159,14 +171,20 @@ function handleHeaderSelect(key: string) {
   // 以 "/" 开头的是路由跳转(管理下拉的审批/日志/用量)。
   if (key.startsWith('/')) {
     router.push(key)
+    // 移动端切换导航后自动收起侧边栏
+    if (isMobile.value) {
+      siderCollapsed.value = true
+    }
     return
   }
   switch (key) {
     case 'system':
       router.push('/system')
+      if (isMobile.value) siderCollapsed.value = true
       break
     case 'config':
       router.push('/config')
+      if (isMobile.value) siderCollapsed.value = true
       break
     case 'logout':
       showLogoutConfirm.value = true
