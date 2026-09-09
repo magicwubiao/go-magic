@@ -479,7 +479,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 				}
 			}
 			s.cfg.Providers[name] = provCfg
-			s.cfg.Save()
+			_ = s.persistConfig(true)
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 		return
@@ -532,7 +532,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 				}
 			}
 			s.cfg.Providers[providerName] = provCfg
-			s.cfg.Save()
+			_ = s.persistConfig(true)
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": providerName, "created": true})
 		return

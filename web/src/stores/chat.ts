@@ -131,6 +131,8 @@ export const useChatStore = defineStore('chat', () => {
   const sessionStates = ref<Record<string, SessionState>>({})
   const sessionEventSources = ref<Record<string, sessionsApi.ChatStream | null>>({})
   const sessionFlushTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
+  // 流断线恢复轮询定时器（移动端切后台杀连接后使用）
+  const sessionRecoveryTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
   
   let toolCallIdCounter = 0
 
@@ -450,6 +452,7 @@ export const useChatStore = defineStore('chat', () => {
       if (sessionFlushTimers.value[id]) {
         clearTimeout(sessionFlushTimers.value[id]!)
       }
+      stopStreamRecovery(id)
       if (sessionEventSources.value[id]) {
         sessionEventSources.value[id]!.close()
       }
@@ -496,13 +499,125 @@ export const useChatStore = defineStore('chat', () => {
   function flushStreamBuffer(sessionId: string): void {
     const state = sessionStates.value[sessionId]
     if (!state) return
-    
+
     if (state.streamBuffer) {
       state.streamContent += state.streamBuffer
       state.streamBuffer = ''
     }
     sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
     pushTextSegmentIfNeeded(sessionId)
+  }
+
+  // ========== 流断线恢复（移动端切后台/锁屏场景） ==========
+  // 手机浏览器切后台会杀掉 SSE 连接，但服务端回合与连接已解耦、
+  // 会继续执行并落库。onerror 不再直接判死，而是轮询 /running：
+  // running=false 且服务端出现 assistant 消息 → 用服务端最终消息收尾。
+
+  const RECOVERY_POLL_INTERVAL = 3000
+  const RECOVERY_TIMEOUT = 10 * 60 * 1000
+  const RECOVERY_EMPTY_CONFIRMATIONS = 3
+
+  function stopStreamRecovery(sessionId: string): void {
+    if (sessionRecoveryTimers.value[sessionId]) {
+      clearTimeout(sessionRecoveryTimers.value[sessionId]!)
+      sessionRecoveryTimers.value = { ...sessionRecoveryTimers.value, [sessionId]: null }
+    }
+  }
+
+  function clearStreamingState(sessionId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    state.streaming = false
+    state.taskProgress = null
+    state.streamContent = ''
+    state.streamBuffer = ''
+    state.toolCalls = []
+    state.streamingSegments = []
+    state.lastStreamSegEnd = 0
+  }
+
+  // 回合确实中断且服务端无完整结果时的兜底：固化已收到的部分内容。
+  function finalizeInterruptedStream(sessionId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    stopStreamRecovery(sessionId)
+    const partialContent = state.streamContent
+    const hadPartial = !!partialContent || state.toolCalls.length > 0
+    pushTextSegmentIfNeeded(sessionId)
+    const partialToolCalls = [...state.toolCalls]
+    const partialTimeline = [...state.streamingSegments]
+    clearStreamingState(sessionId)
+    if (hadPartial) {
+      state.messages.push({
+        id: Date.now().toString(),
+        role: 'assistant' as const,
+        content: partialContent + '\n\n*[Connection interrupted, partial response saved]*',
+        timestamp: new Date().toISOString(),
+        session_id: sessionId,
+        tool_calls_snapshot: partialToolCalls as unknown[],
+        streaming_timeline_snapshot: partialTimeline as unknown[],
+      })
+      loadSessions()
+    } else if (!state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
+      error.value = { message: 'Connection lost' }
+    }
+  }
+
+  function startStreamRecovery(sessionId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state || !state.streaming) return
+    if (sessionRecoveryTimers.value[sessionId]) return
+
+    const startedAt = Date.now()
+    let emptyFinishes = 0
+
+    const tick = async (): Promise<void> => {
+      sessionRecoveryTimers.value = { ...sessionRecoveryTimers.value, [sessionId]: null }
+      const st = sessionStates.value[sessionId]
+      if (!st || !st.streaming) return // 用户已点停止 / 新回合已开始
+      if (sessionEventSources.value[sessionId]) return // 流已重连
+
+      try {
+        const { running } = await sessionsApi.getSessionRunning(sessionId)
+        if (!running) {
+          const res = await sessionsApi.getSession(sessionId)
+          const serverMsgs = res.messages || []
+          const last = serverMsgs[serverMsgs.length - 1]
+          if (last && last.role === 'assistant') {
+            // 回合已在服务端完成并落库：用服务端最终消息替换内存态
+            st.messages = serverMsgs
+            clearStreamingState(sessionId)
+            loadSessions()
+            return
+          }
+          // running=false 但没有 assistant 落库（回合被取消/无输出）：
+          // 连续确认几次后按中断兜底，避免无限等待
+          emptyFinishes++
+          if (emptyFinishes >= RECOVERY_EMPTY_CONFIRMATIONS) {
+            finalizeInterruptedStream(sessionId)
+            return
+          }
+        } else {
+          emptyFinishes = 0
+        }
+      } catch {
+        // 网络暂不可达（弱网/离线），继续重试
+      }
+
+      if (Date.now() - startedAt > RECOVERY_TIMEOUT) {
+        finalizeInterruptedStream(sessionId)
+        return
+      }
+      sessionRecoveryTimers.value = {
+        ...sessionRecoveryTimers.value,
+        [sessionId]: setTimeout(tick, RECOVERY_POLL_INTERVAL),
+      }
+    }
+
+    sessionRecoveryTimers.value = {
+      ...sessionRecoveryTimers.value,
+      [sessionId]: setTimeout(tick, RECOVERY_POLL_INTERVAL),
+    }
   }
 
   async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[]): Promise<void> {
@@ -535,6 +650,8 @@ export const useChatStore = defineStore('chat', () => {
     state.pendingApprovals = []
     error.value = null
 
+    // 取消上一轮流断线后的恢复轮询，避免其与新一轮流互相干扰
+    stopStreamRecovery(sessionId)
     if (sessionFlushTimers.value[sessionId]) {
       clearTimeout(sessionFlushTimers.value[sessionId]!)
       sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
@@ -808,29 +925,10 @@ export const useChatStore = defineStore('chat', () => {
           sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
         }
 
-        state.streaming = false
-        state.taskProgress = null
-
-        // Save any partial content received before disconnect
-        if (state.streamContent) {
-          const partialContent = state.streamContent
-          pushTextSegmentIfNeeded(sessionId)
-          const finalToolCalls = [...state.toolCalls]
-          const finalTimeline = [...state.streamingSegments]
-          state.messages.push({
-            id: Date.now().toString(),
-            role: 'assistant' as const,
-            content: partialContent + '\n\n*[Connection interrupted, partial response saved]*',
-            timestamp: new Date().toISOString(),
-            session_id: sessionId,
-            tool_calls_snapshot: finalToolCalls as unknown[],
-            streaming_timeline_snapshot: finalTimeline as unknown[],
-          })
-          state.streamContent = ''
-          loadSessions()
-        } else if (!state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
-          error.value = { message: 'Connection lost' }
-        }
+        // 移动端切后台/锁屏会杀掉连接，但服务端回合与连接已解耦、
+        // 会继续执行并落库。不再立即判死，启动恢复轮询；
+        // 恢复失败或超时才按中断固化（finalizeInterruptedStream）。
+        startStreamRecovery(sessionId)
       }
     } catch (e) {
       state.streaming = false
@@ -848,6 +946,11 @@ export const useChatStore = defineStore('chat', () => {
 
     const sessionId = activeSessionId.value
     const state = getOrCreateSessionState(sessionId)
+
+    // 回合已与连接解耦：abort 本地流不再能取消服务端执行，
+    // 必须显式调用取消端点（best-effort，失败不阻塞本地清理）
+    sessionsApi.cancelGeneration(sessionId).catch(() => {})
+    stopStreamRecovery(sessionId)
 
     if (sessionFlushTimers.value[sessionId]) {
       clearTimeout(sessionFlushTimers.value[sessionId]!)
@@ -980,6 +1083,7 @@ export const useChatStore = defineStore('chat', () => {
       if (sessionFlushTimers.value[sessionId]) {
         clearTimeout(sessionFlushTimers.value[sessionId]!)
       }
+      stopStreamRecovery(sessionId)
       if (sessionEventSources.value[sessionId]) {
         sessionEventSources.value[sessionId]!.close()
       }
@@ -987,6 +1091,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionStates.value = {}
     sessionEventSources.value = {}
     sessionFlushTimers.value = {}
+    sessionRecoveryTimers.value = {}
   }
 
   return {

@@ -550,8 +550,22 @@ export class ChatStream {
   }
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[]): ChatStream {
-  // The server now resolves file content from the uploads directory by
+// 探测会话回合是否仍在服务端执行。移动端浏览器切后台会杀掉 SSE 连接，
+// 但服务端回合与连接已解耦、会继续跑完落库；前端用此接口轮询恢复。
+export async function getSessionRunning(sessionId: string): Promise<{ running: boolean }> {
+  const res = await request<{ session_id: string; running: boolean }>(
+    `/sessions/${encodeURIComponent(sessionId)}/running`
+  )
+  return { running: !!res.running }
+}
+
+// 显式取消会话正在执行的回合。回合已与连接解耦，前端 abort 本地流
+// 不再能停止服务端执行，用户点"停止"时必须调用此接口。
+export async function cancelGeneration(sessionId: string): Promise<void> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
+}
+
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.
   const slimFiles = files?.map(f => ({

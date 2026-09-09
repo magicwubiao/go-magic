@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +39,22 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(path, "/stream") {
 		sessionID := strings.TrimSuffix(path, "/stream")
 		s.handleSessionStream(w, r, sessionID)
+		return
+	}
+
+	// Check for running-state probe (mobile background recovery: the browser
+	// kills the SSE connection when backgrounded; the frontend polls this to
+	// learn whether the turn is still executing server-side)
+	if strings.HasSuffix(path, "/running") {
+		sessionID := strings.TrimSuffix(path, "/running")
+		s.handleSessionRunning(w, r, sessionID)
+		return
+	}
+
+	// Check for explicit generation cancel (user taps Stop)
+	if strings.HasSuffix(path, "/cancel") {
+		sessionID := strings.TrimSuffix(path, "/cancel")
+		s.handleSessionCancel(w, r, sessionID)
 		return
 	}
 
@@ -656,10 +673,15 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// 立即向当前 SSE 流推送 approval_required 事件，前端在对话流内渲染审批卡片。
 	defer s.registerApprovalSSEHandler(sessionID, writeSSE)()
 
-	// Use r.Context() directly so we detect client disconnects immediately.
-	// Use a generous timeout for long-running tasks.
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
+	// 回合生命周期与客户端连接解耦：手机浏览器切后台/锁屏时系统会杀掉
+	// 连接，挂在 r.Context() 上的回合会随之被取消——表现为"对话中断，
+	// 回复丢失"。改用独立 ctx（带超时）：客户端断开后回合继续执行并照常
+	// 落库；前端回前台后通过 GET /running 轮询恢复，用户点停止走 /cancel。
+	turnCtx, turnCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer turnCancel()
+	s.registerStreamCancel(sessionID, turnCancel)
+	defer s.unregisterStreamCancel(sessionID)
+	ctx := turnCtx
 	defer sseW.Close()
 
 	// Inject the session's working directory into the context so file and
@@ -756,7 +778,8 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			select {
 			case <-ticker.C:
 				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
-					cancel()
+					// 写失败只说明客户端连接已断（手机切后台等）。
+					// 回合与连接已解耦：仅停止心跳，不取消回合。
 					return
 				}
 			case <-heartbeatDone:
@@ -956,6 +979,72 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	doneData, _ := json.Marshal(map[string]interface{}{"done": true, "file_ops": finalOps})
 	writeSSE("data: " + string(doneData) + "\n\n")
+}
+
+// ============================================================================
+// Stream lifecycle registry
+//
+// 回合与客户端连接解耦后（见 handleSessionStream），server 需要记录每个
+// session 正在运行的回合，供 /running 探测和 /cancel 显式停止使用。
+// ============================================================================
+
+var streamCancels = struct {
+	sync.Mutex
+	m map[string]context.CancelFunc
+}{m: make(map[string]context.CancelFunc)}
+
+func (s *Server) registerStreamCancel(sessionID string, cancel context.CancelFunc) {
+	streamCancels.Lock()
+	streamCancels.m[sessionID] = cancel
+	streamCancels.Unlock()
+}
+
+func (s *Server) unregisterStreamCancel(sessionID string) {
+	streamCancels.Lock()
+	delete(streamCancels.m, sessionID)
+	streamCancels.Unlock()
+}
+
+func (s *Server) sessionTurnRunning(sessionID string) bool {
+	streamCancels.Lock()
+	_, ok := streamCancels.m[sessionID]
+	streamCancels.Unlock()
+	return ok
+}
+
+// handleSessionRunning GET /api/sessions/{id}/running — 前端在连接被手机
+// 浏览器切后台杀掉后轮询此端点：running=true 表示回合仍在服务端执行，
+// 继续等待；false 表示回合已结束，拉取 /messages 恢复完整回复。
+func (s *Server) handleSessionRunning(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"session_id": sessionID,
+		"running":    s.sessionTurnRunning(sessionID),
+	})
+}
+
+// handleSessionCancel POST /api/sessions/{id}/cancel — 用户点"停止"时由前端
+// 调用。连接解耦后，前端 abort 本地 fetch 不再能取消服务端回合，必须显式取消。
+func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	streamCancels.Lock()
+	cancel, ok := streamCancels.m[sessionID]
+	streamCancels.Unlock()
+	cancelled := false
+	if ok {
+		cancel()
+		cancelled = true
+	}
+	jsonResponse(w, map[string]interface{}{
+		"session_id": sessionID,
+		"cancelled":  cancelled,
+	})
 }
 
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {

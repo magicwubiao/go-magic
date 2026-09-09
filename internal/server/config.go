@@ -234,6 +234,13 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	if s.cfg == nil {
 		return nil
 	}
+	// Empty s.magicHome must never degrade to a relative ./config.json (that
+	// would write into the process CWD — including `go test` runs, which is
+	// exactly how test-run leftovers used to clobber the real config).
+	magicHome := s.magicHome
+	if magicHome == "" {
+		magicHome = appconfig.GetMagicHome()
+	}
 	if preserveGateway {
 		if fresh, err := appconfig.Load(); err == nil && fresh != nil {
 			s.cfg.Gateway = fresh.Gateway
@@ -243,7 +250,7 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	if err != nil {
 		return err
 	}
-	configPath := filepath.Join(s.magicHome, "config.json")
+	configPath := filepath.Join(magicHome, "config.json")
 	tmpPath := configPath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return err

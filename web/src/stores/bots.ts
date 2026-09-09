@@ -21,6 +21,77 @@ export const useBotsStore = defineStore('bots', () => {
   // AbortController for the in-flight streaming request so we can cancel
   // it when the user switches to a different bot or closes the chat.
   let streamAbort: AbortController | null = null
+  // Recovery poll timer after the SSE stream died mid-turn (mobile browser
+  // backgrounded): poll /running until the server turn finishes, then pull
+  // the final history.
+  let recoveryTimer: ReturnType<typeof setInterval> | null = null
+
+  function stopRecovery(): void {
+    if (recoveryTimer) {
+      clearInterval(recoveryTimer)
+      recoveryTimer = null
+    }
+  }
+
+  /**
+   * Poll GET /bots/{name}/running every 3s. When the server turn finishes,
+   * converge with the server history (the reply was persisted there even
+   * though our stream died). Silent on network errors; gives up after 10min.
+   */
+  function startStreamRecovery(name: string, streamId: string): void {
+    stopRecovery()
+    const startedAt = Date.now()
+    const timeoutMs = 10 * 60 * 1000
+    recoveryTimer = setInterval(async () => {
+      if (activeBotName.value !== name) {
+        stopRecovery()
+        return
+      }
+      let finished = false
+      try {
+        finished = !(await botsApi.getBotRunning(name))
+        if (!finished && Date.now() - startedAt < timeoutMs) return
+      } catch {
+        // Network not reachable yet (e.g. still backgrounded): keep polling.
+        if (Date.now() - startedAt < timeoutMs) return
+      }
+      stopRecovery()
+      sending.value = false
+      try {
+        const msgs = await botsApi.getBotMessages(name)
+        if (activeBotName.value === name) {
+          if (msgs.length > 0) {
+            messages.value = msgs
+          } else {
+            finalizeStreamBubble(streamId)
+          }
+        }
+      } catch {
+        finalizeStreamBubble(streamId)
+      }
+    }, 3000)
+  }
+
+  /** Stop the streaming spinner on a bubble when history isn't available. */
+  function finalizeStreamBubble(streamId: string): void {
+    const bubble = messages.value.find(m => m.id === streamId)
+    if (bubble) bubble._streaming = false
+  }
+
+  function cancelStream() {
+    // Note: keep any recovery poll alive — after an explicit cancel the poll
+    // sees running=false and converges the UI with the server history.
+    if (streamAbort) {
+      streamAbort.abort()
+      streamAbort = null
+    }
+    // The turn is decoupled from the SSE connection on the server: dropping
+    // the fetch doesn't stop it. Explicitly cancel when one is in flight.
+    if (activeBotName.value && sending.value) {
+      void botsApi.cancelBotTurn(activeBotName.value).catch(() => {})
+      sending.value = false
+    }
+  }
 
   async function loadBots(): Promise<void> {
     loading.value = true
@@ -84,13 +155,6 @@ export const useBotsStore = defineStore('bots', () => {
     sending.value = false
   }
 
-  function cancelStream() {
-    if (streamAbort) {
-      streamAbort.abort()
-      streamAbort = null
-    }
-  }
-
   async function refreshChat() {
     if (!activeBotName.value) return
     const name = activeBotName.value
@@ -139,6 +203,7 @@ export const useBotsStore = defineStore('bots', () => {
       timestamp: Date.now(),
       _streaming: true,
     })
+    let recovering = false
     try {
       // Prefer SSE streaming; falls back to blocking endpoint internally.
       const reply = await botsApi.sendBotChatStream(name, text, {
@@ -169,6 +234,19 @@ export const useBotsStore = defineStore('bots', () => {
     } catch (e) {
       // AbortError means we switched bots — not a real error.
       if (e instanceof DOMException && e.name === 'AbortError') return
+      if (e instanceof botsApi.StreamIncompleteError) {
+        // The connection died mid-turn (mobile browser backgrounded kills
+        // idle streams). The server turn keeps running and persists the
+        // final reply — poll /running and converge with history instead of
+        // declaring the conversation interrupted.
+        recovering = true
+        if (e.partial) {
+          const bubble = messages.value.find(m => m.id === streamId)
+          if (bubble && !bubble.content) bubble.content = e.partial
+        }
+        startStreamRecovery(name, streamId)
+        return
+      }
       // Drop the empty streaming bubble on error (only if still on same bot).
       if (activeBotName.value === name) {
         const idx = messages.value.findIndex(m => m.id === streamId)
@@ -181,11 +259,15 @@ export const useBotsStore = defineStore('bots', () => {
       if (streamAbort?.signal === signal) {
         streamAbort = null
       }
-      sending.value = false
-      // Refresh history so optimistic + server states converge
-      // (only if still on the same bot).
-      if (activeBotName.value === name) {
-        void refreshMessagesOnly()
+      // During recovery the polling timer owns sending/history convergence —
+      // don't stomp on it here.
+      if (!recovering) {
+        sending.value = false
+        // Refresh history so optimistic + server states converge
+        // (only if still on the same bot).
+        if (activeBotName.value === name) {
+          void refreshMessagesOnly()
+        }
       }
     }
   }
@@ -261,7 +343,7 @@ export const useBotsStore = defineStore('bots', () => {
     bots, loading, error, modeDisabled,
     activeBotName, messages, routines, chatLoading, sending,
     loadBots, createBot, updateBot, deleteBot, cloneBot,
-    openChat, closeChat, refreshChat, sendMessage,
+    openChat, closeChat, refreshChat, sendMessage, cancelStream,
     addRoutine, removeRoutine, toggleRoutine, updateRoutine,
     runRoutineNow, clearMessages,
   }

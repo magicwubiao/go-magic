@@ -86,6 +86,13 @@ type botRuntime struct {
 	// roomLoaded marks which room histories have been restored (keyed by room
 	// ID) so we don't re-append stale turns on agent rebuilds.
 	roomLoaded map[string]bool
+
+	// turnRunning is true while the worker is executing a message for this
+	// bot (queued messages don't count). turnCancel cancels the in-flight
+	// turn's context. Both guarded by m.mu; lets HTTP endpoints probe and
+	// cancel a turn whose SSE connection is gone (mobile background etc.).
+	turnRunning bool
+	turnCancel  context.CancelFunc
 }
 
 // NewManager creates a bot manager. Returns nil (no error) when no bots are defined.
@@ -394,6 +401,20 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 
+	// Mark the bot as having a turn in flight so /running probes and
+	// /cancel requests can observe and stop it even after the SSE client
+	// disconnects (mobile browsers kill idle streams when backgrounded).
+	m.mu.Lock()
+	rt.turnRunning = true
+	rt.turnCancel = cancel
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		rt.turnRunning = false
+		rt.turnCancel = nil
+		m.mu.Unlock()
+	}()
+
 	// runTurn executes one agent turn (streaming or blocking) and returns the
 	// full assistant text. Deltas are forwarded to msg.onDelta when set.
 	runTurn := func(stream bool, forwardDeltas bool) (string, error) {
@@ -611,6 +632,38 @@ func (m *Manager) SendToBotStream(botName, text string, onDelta StreamHandler) (
 	case <-m.stopCh:
 		return "", fmt.Errorf("bot manager shutting down")
 	}
+}
+
+// IsBusy reports whether the bot has a turn in flight or queued. Used by the
+// server's GET /api/bots/{name}/running probe so a client whose SSE stream
+// died (mobile background) can poll until the turn completes.
+func (m *Manager) IsBusy(botName string) bool {
+	key := strings.ToLower(botName)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rt, ok := m.bots[key]
+	if !ok {
+		return false
+	}
+	return rt.turnRunning || len(rt.queue) > 0
+}
+
+// CancelTurn cancels the bot's in-flight turn, if any. Returns true when a
+// running turn was actually canceled. Queued (not yet started) messages are
+// not affected — they have no cancellable context yet.
+func (m *Manager) CancelTurn(botName string) bool {
+	key := strings.ToLower(botName)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rt, ok := m.bots[key]
+	if !ok || rt.turnCancel == nil {
+		return false
+	}
+	cancel := rt.turnCancel
+	rt.turnCancel = nil
+	rt.turnRunning = false
+	cancel()
+	return true
 }
 
 // SendMessageAgent implements fire-and-forget bot-to-bot messaging

@@ -1273,6 +1273,13 @@ async function handleRemoveRoutine(routineId: string) {
 }
 
 async function handleSend() {
+  // While a turn is streaming the button acts as Stop: cancel the in-flight
+  // turn (decoupled from the SSE connection, so an explicit API cancel is
+  // required) instead of sending a new message.
+  if (botsStore.sending) {
+    botsStore.cancelStream()
+    return
+  }
   const text = draft.value.trim()
   if (!text) return
   // Canonical chat protection: bot conversations are persistent by design,

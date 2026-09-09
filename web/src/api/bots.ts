@@ -120,6 +120,32 @@ export async function sendBotChat(name: string, message: string): Promise<BotMes
   })
 }
 
+/** True when the bot has a turn in flight or queued on the server. */
+export async function getBotRunning(name: string): Promise<boolean> {
+  const resp = await request<{ running: boolean }>(`/bots/${name}/running`)
+  return !!resp.running
+}
+
+/** Explicitly cancel the bot's in-flight turn. Returns true if one was canceled. */
+export async function cancelBotTurn(name: string): Promise<boolean> {
+  const resp = await request<{ canceled: boolean }>(`/bots/${name}/cancel`, { method: 'POST' })
+  return !!resp.canceled
+}
+
+/**
+ * Thrown when the SSE stream ends (connection dropped, e.g. mobile browser
+ * backgrounded) before the server sent its terminal {"done":true} event.
+ * Carries the partial text received so far.
+ */
+export class StreamIncompleteError extends Error {
+  partial: string
+  constructor(partial: string) {
+    super('bot chat stream ended before completion')
+    this.name = 'StreamIncompleteError'
+    this.partial = partial
+  }
+}
+
 export interface BotChatStreamEvents {
   onDelta?: (text: string) => void
   signal?: AbortSignal
@@ -154,6 +180,7 @@ export async function sendBotChatStream(
   const decoder = new TextDecoder()
   let buffer = ''
   let finalText = ''
+  let sawDone = false
 
   const handleEvent = (raw: string) => {
     const line = raw.replace(/^data:\s*/, '').trim()
@@ -168,24 +195,43 @@ export async function sendBotChatStream(
         finalText = evt.final
       } else if (typeof evt.error === 'string' && evt.error) {
         throw new Error(evt.error)
+      } else if (evt.done) {
+        sawDone = true
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message && !(e instanceof SyntaxError)) throw e
       /* ignore malformed keep-alive chunks */
     }
   }
 
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let idx: number
-    while ((idx = buffer.indexOf('\n\n')) >= 0) {
-      const chunk = buffer.slice(0, idx)
-      buffer = buffer.slice(idx + 2)
-      for (const part of chunk.split('\n')) handleEvent(part)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        for (const part of chunk.split('\n')) handleEvent(part)
+      }
     }
+    if (buffer.trim()) handleEvent(buffer)
+  } catch (e) {
+    // User-initiated abort (switching bots) is not an incomplete stream.
+    if (e instanceof DOMException && e.name === 'AbortError') throw e
+    // Network-level failure mid-stream (mobile background kills the fetch):
+    // treat like an early stream end so the store can poll for recovery
+    // instead of losing the turn.
+    if (e instanceof Error) {
+      throw new StreamIncompleteError(finalText)
+    }
+    throw e
   }
-  if (buffer.trim()) handleEvent(buffer)
+
+  if (!sawDone) {
+    throw new StreamIncompleteError(finalText)
+  }
 
   return {
     id: 'stream_' + Date.now(),

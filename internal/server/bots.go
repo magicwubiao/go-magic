@@ -124,6 +124,10 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotChat(w, r, name)
 	case len(parts) == 3 && parts[1] == "chat" && parts[2] == "stream":
 		s.handleBotChatStream(w, r, name)
+	case len(parts) == 2 && parts[1] == "running" && r.Method == http.MethodGet:
+		s.handleBotRunning(w, r, name)
+	case len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost:
+		s.handleBotCancel(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
 		// Must be matched before the generic "messages" case below, otherwise
 		// DELETE falls through to handleBotMessages which rejects non-GET.
@@ -634,6 +638,33 @@ func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, nam
 		writeJSONEvent(map[string]interface{}{"final": reply})
 	}
 	writeSSE(`{"done":true}`)
+}
+
+// handleBotRunning GET /api/bots/{name}/running — probe whether the bot has
+// a turn in flight or queued. Clients whose SSE stream died (mobile browsers
+// kill idle streams when backgrounded) poll this until it reports false,
+// then fetch the final history.
+func (s *Server) handleBotRunning(w http.ResponseWriter, r *http.Request, name string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"running": mgr.IsBusy(name)})
+}
+
+// handleBotCancel POST /api/bots/{name}/cancel — explicitly cancel the bot's
+// in-flight turn. With the turn decoupled from the SSE connection, dropping
+// the stream no longer stops the server; clients call this to stop.
+func (s *Server) handleBotCancel(w http.ResponseWriter, r *http.Request, name string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"canceled": mgr.CancelTurn(name)})
 }
 
 // handleBotClearMessages DELETE /api/bots/{name}/messages — wipe the bot's
