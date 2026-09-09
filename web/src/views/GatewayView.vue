@@ -620,6 +620,11 @@ async function savePlatform(platform: Platform): Promise<void> {
     const platformsPayload: any = {}
     platformsPayload[platform.id] = buildPlatformPayload(platform)
     await configStore.updateConfig({ gateway: { enabled: gatewayEnabled.value, platforms: platformsPayload } })
+    if (gatewayStore.status?.running) {
+      // Telegram/Discord 等平台的 handler 只在网关进程启动时按 config 实例化，
+      // 运行中保存不会热生效——不提示会被误判为"连不上"。
+      message.warning(t('gateway.platformRestartHint', { name: platform.label }), { duration: 8000 })
+    }
   } catch (e) {
     message.error(t('gateway.saveFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   }

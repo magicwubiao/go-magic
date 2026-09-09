@@ -456,6 +456,7 @@ export default {
     reconnect: '重新连接',
     connectSuccess: '已重新连接',
     connectFailed: '重新连接失败',
+    platformRestartHint: '「{name}」配置已保存，需重启网关进程才生效：请先点「停止」再点「启动」（或重启服务），然后重新连接。',
     refreshFailed: '刷新失败',
   },
   kanban: {

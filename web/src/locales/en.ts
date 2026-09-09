@@ -456,6 +456,7 @@ export default {
     reconnect: 'Reconnect',
     connectSuccess: 'Reconnected',
     connectFailed: 'Reconnect failed',
+    platformRestartHint: 'Saved "{name}". It takes effect only after the gateway process restarts: click Stop then Start (or restart the service), then reconnect.',
     refreshFailed: 'Refresh failed',
   },
   kanban: {
