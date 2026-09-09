@@ -248,6 +248,21 @@ func (p *OpenAICompatibleProvider) isDashScope() bool {
 	return p.name == "dashscope"
 }
 
+// applyReasoningDefaults adds the reasoning_effort request key for OpenAI
+// reasoning models (gpt-5*/o-series). Without it these endpoints keep their
+// reasoning internal and never emit reasoning deltas, so the UI shows no
+// thinking process. Only applied for the "openai" provider — generic
+// openai_compatible gateways vary too much to risk unsolicited params.
+// User-set values (extra_params "reasoning_effort") win.
+func (p *OpenAICompatibleProvider) applyReasoningDefaults(reqBody map[string]interface{}) {
+	if p.name != "openai" || !p.skipTemperatureDefault() {
+		return
+	}
+	if _, ok := reqBody["reasoning_effort"]; !ok {
+		reqBody["reasoning_effort"] = "medium"
+	}
+}
+
 // applyDashScopeDefaults adds DashScope-only request keys on top of the
 // outbound body: enable_thinking + preserve_thinking (non-streaming &
 // streaming bodies); for streaming bodies also turns on
@@ -418,10 +433,12 @@ func parseTypedChatResponse(body []byte) (*ChatResponse, error) {
 
 	reasoning := choice.Message.ReasoningContent
 	if reasoning == "" && len(raw.Choices) > 0 && raw.Choices[0].Message != nil {
-		for _, alt := range []string{"thinking_content", "reasoning", "thinking"} {
-			if v, ok := raw.Choices[0].Message[alt].(string); ok && v != "" {
-				reasoning = v
-				break
+		for _, alt := range []string{"reasoning_content", "thinking_content", "reasoning", "thinking"} {
+			if v, ok := raw.Choices[0].Message[alt]; ok && v != nil {
+				if s := reasoningTextFrom(v); s != "" {
+					reasoning = s
+					break
+				}
 			}
 		}
 	}
@@ -465,6 +482,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, false)
+	p.applyReasoningDefaults(reqBody)
 
 	url := p.BaseURL + "/chat/completions"
 
@@ -506,6 +524,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, false)
+	p.applyReasoningDefaults(reqBody)
 
 	// tool_choice strategy:
 	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
@@ -573,6 +592,7 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, true)
+	p.applyReasoningDefaults(reqBody)
 
 	if withTools && tools != nil {
 		reqBody["tools"] = tools

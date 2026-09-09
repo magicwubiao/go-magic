@@ -250,6 +250,13 @@ type ProviderConfig struct {
 	// overrides detection entirely (name-based guessing is best-effort and
 	// inevitably lags new model releases, e.g. glm-4.1v-*).
 	Vision *bool `json:"vision,omitempty"`
+	// ExtraParams are transparent request-body params merged into every
+	// outbound /chat/completions call (only for OpenAI-compatible
+	// providers). Use case: enable reasoning output on gateways that hide
+	// it behind a flag, e.g. {"include_reasoning": true} (OpenRouter-style),
+	// {"enable_thinking": true} (DashScope-style) or
+	// {"reasoning_effort": "high"}. Reserved core keys are refused.
+	ExtraParams map[string]interface{} `json:"extra_params,omitempty"`
 }
 
 // GetCurrentModel returns the current model (first element of Models, fallback to Model field)

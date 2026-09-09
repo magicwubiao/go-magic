@@ -37,6 +37,25 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 // CreateProviderFor creates a provider from an explicit name + config pair.
 // Used by Bot Mode where each bot can pin its own provider/model.
 func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, error) {
+	prov, err := createProviderForName(name, provCfg)
+	if err != nil {
+		return nil, err
+	}
+	// Wire user-configured transparent request params (e.g. reasoning
+	// flags on gateways that hide thinking behind a request key).
+	if len(provCfg.ExtraParams) > 0 {
+		if sp, ok := prov.(interface {
+			SetExtraParam(key string, value interface{})
+		}); ok {
+			for k, v := range provCfg.ExtraParams {
+				sp.SetExtraParam(k, v)
+			}
+		}
+	}
+	return prov, nil
+}
+
+func createProviderForName(name string, provCfg ProviderConfig) (provider.Provider, error) {
 	// Get current model: Models[0] > Model field
 	model := provCfg.GetCurrentModel()
 	if model == "" {

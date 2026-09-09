@@ -154,18 +154,24 @@ func (p *OpenAIStreamParser) Parse(line string) (*StreamResponse, error) {
 		// If the tagged field was empty, probe the raw delta for common
 		// aliases. DashScope-native wrappers and some proxies have been
 		// observed sending thinking_content / reasoning / thinking.
+		// OpenAI gpt-5/o-series style endpoints may send `reasoning` as an
+		// object or summary-parts array instead of a plain string — the
+		// extractor unwraps those shapes too.
 		if reasoning == "" {
 			if rawChoices, ok := raw["choices"].([]interface{}); ok && len(rawChoices) > 0 {
 				if rawChoice, ok := rawChoices[0].(map[string]interface{}); ok {
 					if rawDelta, ok := rawChoice["delta"].(map[string]interface{}); ok {
 						for _, alt := range []string{
+							"reasoning_content",
 							"thinking_content",
 							"reasoning",
 							"thinking",
 						} {
-							if v, ok := rawDelta[alt].(string); ok && v != "" {
-								reasoning = v
-								break
+							if v, ok := rawDelta[alt]; ok && v != nil {
+								if s := reasoningTextFrom(v); s != "" {
+									reasoning = s
+									break
+								}
 							}
 						}
 					}
@@ -239,6 +245,37 @@ func (p *AnthropicStreamParser) Parse(line string) (*StreamResponse, error) {
 	_ = data // Event type tracking would go here
 
 	return nil, nil
+}
+
+// reasoningTextFrom extracts human-readable reasoning text from a raw JSON
+// value emitted under a reasoning-ish key. Provider shapes differ wildly:
+//   - string — the canonical reasoning_content delta
+//   - object with text / summary / content fields (OpenAI Responses-style
+//     reasoning summary objects, some gateway wrappers)
+//   - array of the above parts (summary parts streamed piecewise)
+//
+// Returns "" for null / unrecognized shapes so callers keep their previous
+// alias unchanged.
+func reasoningTextFrom(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []interface{}:
+		var b strings.Builder
+		for _, part := range t {
+			b.WriteString(reasoningTextFrom(part))
+		}
+		return b.String()
+	case map[string]interface{}:
+		for _, key := range []string{"text", "summary", "content", "thinking", "reasoning"} {
+			if inner, ok := t[key]; ok {
+				if s := reasoningTextFrom(inner); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // ParseStreamResponse parses a standard OpenAI-compatible streaming response
