@@ -170,7 +170,6 @@ All data is stored under **magic home**, which is `~/.magic` by default (Windows
 ├── config.json          main config file
 ├── sessions.db          session database (SQLite, with FTS5 full-text index)
 ├── bots.db              bot-mode database
-├── groupchat.db         group-chat database (gc_rooms / gc_room_agents / gc_messages)
 ├── kanban.db            kanban database
 ├── instance_id          this machine's identity (used for cross-machine peers, lazily generated)
 ├── peers.json           known peer list (permission 0600)
@@ -510,7 +509,6 @@ Launch: `magic server` (default `http://localhost:5000`). On first visit it walk
 | `/skills` | Skills | browse, install, enable/disable, review auto-generated skills |
 | `/cron` | Cron | cron job management |
 | `/gateway` | Gateway | platform start/stop, QR-code login |
-| `/groupchat` | Group Chat | multi-agent group chat (the only entry; `/rooms` redirects to `/bots`) |
 | `/bots` | Bots | bot profile management |
 | `/logs` | Logs | live logs |
 | `/system` | System | system info and health checks |
@@ -538,7 +536,6 @@ Launch: `magic server` (default `http://localhost:5000`). On first visit it walk
 /api/mcp/servers/*   MCP
 /api/cron/jobs/*      scheduled jobs
 /api/kanban/*         kanban
-/api/groupchat/*      group chat
 /api/bots/*          bots
 /api/fs/*             filesystem
 /api/usage/*          usage and budget
@@ -636,7 +633,7 @@ magic peer remove lab-b
 
 ---
 
-## 11. Group Chat & Rooms
+## 11. Rooms
 
 A Room holds **2–6 bots**. After a human sends a message, members speak in turns (up to 3 rounds) and pull each other in with `@name`. A bot starting its reply with `@user` interrupts the current round and throws the question back to the human.
 
@@ -648,16 +645,6 @@ magic rooms show <room-id>
 magic rooms list
 magic rooms remove <room-id>
 ```
-
-On the web, use the `/groupchat` page, where you can:
-
-- **Pull in existing bots** as agents when creating a room
-- Switch the **reply mode** in the header: `mention` (only replies when @-mentioned) / `all` (everyone replies)
-- **Join a room via invite code**
-- Manage members in the room info panel
-- The frontend handles SSE events like `round` / `start` / `pass`, showing round separators and skip hints
-
-> Legacy note: the old `/api/rooms` and `bots/rooms/*.json` are deprecated and are migrated **once, idempotently** to `groupchat.db` on first startup (the old directory is renamed to `rooms.migrated-<timestamp>` as a backup). Old data used second-precision timestamps while the new DB uses milliseconds; the migration code handles both automatically.
 
 ---
 
@@ -1103,10 +1090,6 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 README and the auto-generated docs used to mention `GO_MAGIC_PROFILE`, `MAGIC_HOME`, `MAGIC_PROFILE`, `MAGIC_VERBOSE`, `MAGIC_NO_COLOR`, none of which are **actually read by the code** (they only appeared in the doc text of `cmd/magic/docs.go`, `internal/docs/llm_generator.go`).
 
 **Fix**: `README.md`, `README.zh-CN.md`, `cmd/magic/docs.go`, and `internal/docs/llm_generator.go` now all use the real variables `GO_MAGIC_HOME`, `GO_MAGIC_CORS_ORIGINS`, `MAGIC_SKILL_DIR`, `MAGIC_SESSION_ID`. Profile switching still uses the `--profile/-p` flag or the `profile` field in the config file.
-
-### 22.4 Deprecated rooms route
-
-The old `/api/rooms` and frontend `RoomsView.vue` are deprecated; the frontend `/rooms` route redirects to `/bots`, and group chat uniformly uses `/groupchat` and `/api/groupchat/*`. Old data is auto-migrated to `groupchat.db` on first startup.
 
 ---
 

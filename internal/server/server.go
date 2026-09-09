@@ -26,7 +26,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/goal"
-	"github.com/magicwubiao/go-magic/internal/groupchat"
 	"github.com/magicwubiao/go-magic/internal/kanban"
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/metrics"
@@ -84,9 +83,6 @@ type Server struct {
 
 	// Plugin manager
 	pluginMgr *plugin.Manager
-
-	// GroupChat storage
-	groupchatStorage *groupchat.Storage
 
 	// Goal manager
 	goalMgr *goal.Manager
@@ -335,10 +331,6 @@ Your working directory is: %s
 	pluginMgr, err = plugin.NewManager(nil)
 	// Plugin manager may fail, continue without it
 
-	// Initialize GroupChat Storage
-	var groupchatStorage *groupchat.Storage
-	groupchatStorage, err = groupchat.NewStorageFromHome(magicHome)
-
 	// Initialize Goal Manager
 	var goalMgr *goal.Manager
 	goalMgr, err = goal.NewManager(magicHome)
@@ -479,7 +471,6 @@ Your working directory is: %s
 		cronMgr:              cronMgr,
 		kanbanMgr:            kanbanMgr,
 		pluginMgr:            pluginMgr,
-		groupchatStorage:     groupchatStorage,
 		goalMgr:              goalMgr,
 		cortexMgr:            cortexMgr,
 		approvalMgr:          approvalMgr,
@@ -1309,9 +1300,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/kanban/tasks", withCORS(requireAuth(s.handleKanbanTasks)))
 	mux.HandleFunc("/api/kanban/tasks/", withCORS(requireAuth(s.handleKanbanTaskByIDOrSubroute)))
 
-	// GroupChat
-	mux.HandleFunc("/api/groupchat/rooms", withCORS(requireAuth(s.handleGroupchatRooms)))
-	mux.HandleFunc("/api/groupchat/rooms/", withCORS(requireAuth(s.handleGroupchatRoomSubroutes)))
+	// Bots
 	mux.HandleFunc("/api/bots", withCORS(requireAuth(s.handleBots)))
 	mux.HandleFunc("/api/bots/", withCORS(requireAuth(s.handleBotByID)))
 	// Bot Mode group chat rooms

@@ -1722,7 +1722,7 @@ function handleCodeClick(e: MouseEvent) {
     const code = pre.querySelector('code')
     if (code) {
       navigator.clipboard.writeText(code.textContent || '').then(() => {
-        message.success(t('groupchat.copied') || 'Copied')
+        message.success(t('common.copied') || 'Copied')
       }).catch(() => {})
     }
   }

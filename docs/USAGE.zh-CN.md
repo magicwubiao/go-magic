@@ -170,7 +170,6 @@ magic doctor                # 自检
 ├── config.json          主配置文件
 ├── sessions.db          会话数据库（SQLite，含 FTS5 全文索引）
 ├── bots.db              Bot 模式库
-├── groupchat.db         群聊库（gc_rooms / gc_room_agents / gc_messages）
 ├── kanban.db            看板库
 ├── instance_id          本机身份标识（跨机器 Peer 用，惰性生成）
 ├── peers.json           已知 Peer 列表（权限 0600）
@@ -510,7 +509,6 @@ magic coding debug --chat              # 带编码上下文的交互调试
 | `/skills` | 技能 | 浏览、安装、启停、审核自动生成技能 |
 | `/cron` | 定时任务 | Cron 任务管理 |
 | `/gateway` | 网关 | 平台启停、扫码登录 |
-| `/groupchat` | 群聊 | 多 Agent 群聊（唯一入口，`/rooms` 已重定向到 `/bots`） |
 | `/bots` | Bots | Bot 档案管理 |
 | `/logs` | 日志 | 实时日志 |
 | `/system` | 系统 | 系统信息与健康检查 |
@@ -538,7 +536,6 @@ magic coding debug --chat              # 带编码上下文的交互调试
 /api/mcp/servers/*   MCP
 /api/cron/jobs/*     定时任务
 /api/kanban/*        看板
-/api/groupchat/*     群聊
 /api/bots/*          Bot
 /api/fs/*            文件系统
 /api/usage/*         用量与预算
@@ -636,7 +633,7 @@ magic peer remove lab-b
 
 ---
 
-## 11. 群聊与 Rooms
+## 11. Rooms
 
 一个 Room 容纳 **2–6 个 Bot**，人类发一条消息后，成员轮流发言（最多 3 轮），互相用 `@名字` 拉人。Bot 以 `@user` 开头即可中断本轮、把问题抛回人类。
 
@@ -648,16 +645,6 @@ magic rooms show <room-id>
 magic rooms list
 magic rooms remove <room-id>
 ```
-
-Web 端在 `/groupchat` 页面操作，可以：
-
-- 创建房间时**从现有 Bot 拉入**作为智能体
-- 头部切换**回复模式**：`mention`（只有被 @ 的回复）/ `all`（全员回复）
-- 用**邀请码加入房间**
-- 在房间信息面板管理成员
-- 前端会处理 `round` / `start` / `pass` 等 SSE 事件，展示轮次分隔与跳过提示
-
-> 历史遗留：旧版 `/api/rooms` 与 `bots/rooms/*.json` 已废弃，启动时**一次性幂等迁移**到 `groupchat.db`（旧目录会被改名为 `rooms.migrated-<时间戳>` 备份）。老数据时间戳是秒、新库是毫秒，迁移代码会自动兼容。
 
 ---
 
@@ -1103,10 +1090,6 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 README 与自动生成的文档里曾提到 `GO_MAGIC_PROFILE`、`MAGIC_HOME`、`MAGIC_PROFILE`、`MAGIC_VERBOSE`、`MAGIC_NO_COLOR`，这些在代码中**没有实际读取逻辑**（仅出现在 `cmd/magic/docs.go`、`internal/docs/llm_generator.go` 的文档文本里）。
 
 **修复**：`README.md`、`README.zh-CN.md`、`cmd/magic/docs.go`、`internal/docs/llm_generator.go` 中已全部替换为实际生效的 `GO_MAGIC_HOME`、`GO_MAGIC_CORS_ORIGINS`、`MAGIC_SKILL_DIR`、`MAGIC_SESSION_ID`。切换 Profile 仍用 `--profile/-p` 参数或配置文件 `profile` 字段。
-
-### 22.4 已废弃的 rooms 路由
-
-旧版 `/api/rooms` 与前端 `RoomsView.vue` 已废弃，前端 `/rooms` 路由重定向到 `/bots`，群聊统一走 `/groupchat` 与 `/api/groupchat/*`。旧数据在首次启动时自动迁移到 `groupchat.db`。
 
 ---
 

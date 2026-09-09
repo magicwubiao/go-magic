@@ -418,7 +418,7 @@ func EstimateMessagesTokens(messages []Message, systemPrompt string) int {
 }
 
 // Manager manages compression for multiple sessions.
-// Used by groupchat and other multi-session contexts.
+// Used by multi-session contexts.
 type Manager struct {
 	baseDir string
 	mu      sync.RWMutex

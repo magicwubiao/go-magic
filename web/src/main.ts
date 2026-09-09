@@ -18,7 +18,6 @@ import SystemView from './views/SystemView.vue'
 import KanbanView from './views/KanbanView.vue'
 import CronView from './views/CronView.vue'
 import GatewayView from './views/GatewayView.vue'
-import GroupChatView from './views/GroupChatView.vue'
 import BotsView from './views/BotsView.vue'
 import ProfilesView from './views/ProfilesView.vue'
 import GoalsView from './views/GoalsView.vue'
@@ -41,7 +40,6 @@ const router = createRouter({
     { path: '/skills', component: SkillsView },
     { path: '/cron', component: CronView },
     { path: '/gateway', component: GatewayView },
-    { path: '/groupchat', component: GroupChatView },
     // Bot 群聊已整合进 /bots（左侧 rail 内切换），旧链接重定向
     { path: '/rooms', redirect: '/bots' },
     { path: '/bots', component: BotsView },
