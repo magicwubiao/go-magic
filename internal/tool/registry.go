@@ -257,6 +257,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("vision_analyze", 120*time.Second)
 	r.SetTimeout("terminal", 120*time.Second)
 	r.SetTimeout("process", 30*time.Second)
+	// clarify 在 Web chat 会挂起等待用户答复（卡片交互），给足等待窗口；
+	// 内部 bridge 另有同长的答复时限，工具超时只是最后兜底。
+	r.SetTimeout("clarify", 300*time.Second)
 
 	// Register plugin tools
 	r.registerPluginTools()

@@ -4,6 +4,7 @@ import type { Session, Message, FileOp } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 import * as commandsApi from '@/api/commands'
 import * as approvalApi from '@/api/approval'
+import * as clarifyApi from '@/api/clarify'
 import { i18n } from '@/locales'
 
 export interface ChatError {
@@ -62,6 +63,23 @@ export interface PendingApprovalCard {
   resolveReason?: string
 }
 
+// 澄清卡片状态。pending=等待用户选择/补充；answering=已提交正在请求后端；
+// answered=已答复（短暂终态后移除）；expired=等待超时（AI 已继续或收尾）。
+export type ClarificationCardStatus = 'pending' | 'answering' | 'answered' | 'expired'
+
+export interface PendingClarificationCard {
+  id: string
+  question: string
+  options: string[]
+  context: string
+  multiSelect: boolean
+  header: string
+  createdAt: number // unix seconds
+  expiresAt: number // unix seconds
+  status: ClarificationCardStatus
+  answerSummary?: string // 本端已提交的答复描述（终态展示）
+}
+
 // 流式渲染 timeline：按"发生顺序"记录 text 段切点和 tool 段，
 // 使思考文本与工具执行在对话中能够互相穿插，而不是工具一律堆在文本最后。
 // - text 段：end = 该段结束时 streamContent 的累计字符长度
@@ -79,6 +97,7 @@ interface SessionState {
   toolCalls: ToolCallEvent[]
   taskProgress: TaskProgress | null
   pendingApprovals: PendingApprovalCard[]
+  pendingClarifications: PendingClarificationCard[]
   streamingSegments: StreamSegment[]
   // 上次追加 text 段时 streamContent 的末尾字符长度
   // （下次 push text 段时 end 必须大于它，否则不产生新段）
@@ -233,6 +252,15 @@ export const useChatStore = defineStore('chat', () => {
     return pendingApprovals.value.filter(p => p.status === 'pending')
   })
 
+  const pendingClarifications = computed(() => {
+    const state = activeSessionState.value
+    return state?.pendingClarifications || []
+  })
+
+  const activePendingClarifications = computed(() => {
+    return pendingClarifications.value.filter(c => c.status === 'pending')
+  })
+
   function getOrCreateSessionState(sessionId: string): SessionState {
     let state = sessionStates.value[sessionId]
     if (!state) {
@@ -244,6 +272,7 @@ export const useChatStore = defineStore('chat', () => {
         toolCalls: [],
         taskProgress: null,
         pendingApprovals: [],
+        pendingClarifications: [],
         streamingSegments: [],
         lastStreamSegEnd: 0,
       })
@@ -442,6 +471,8 @@ export const useChatStore = defineStore('chat', () => {
     // 恢复待审批：页面刷新或 SSE 断连后，从后端拉取当前会话的 pending 审批，
     // 确保用户不会因为连接中断而错过阻塞中的审批。
     restorePendingApprovals(id)
+    // 恢复待答复的澄清卡片（AI 需求不明确时的提问）。
+    restorePendingClarifies(id)
   }
 
   async function deleteSession(id: string, deleteFiles: boolean = false): Promise<void> {
@@ -648,6 +679,7 @@ export const useChatStore = defineStore('chat', () => {
     state.taskProgress = null
     // 新一轮对话开始时清空上一轮的审批卡片（此时 streaming=false 已保证无 pending 项）
     state.pendingApprovals = []
+    state.pendingClarifications = []
     error.value = null
 
     // 取消上一轮流断线后的恢复轮询，避免其与新一轮流互相干扰
@@ -795,6 +827,28 @@ export const useChatStore = defineStore('chat', () => {
             const exists = state.pendingApprovals.some(p => p.id === card.id)
             if (!exists) {
               state.pendingApprovals.push(card)
+            }
+            return
+          }
+
+          // 澄清请求：AI 需求不明确时调用 clarify 工具，后端推送本事件，
+          // 前端渲染澄清卡片（选项按钮 + 追加说明），用户答复后回合恢复。
+          if (data.type === 'clarify_required') {
+            const card: PendingClarificationCard = {
+              id: data.id || '',
+              question: data.question || '',
+              options: Array.isArray(data.options) ? data.options : [],
+              context: data.context || '',
+              multiSelect: !!data.multi_select,
+              header: data.header || '',
+              createdAt: data.created_at || Math.floor(Date.now() / 1000),
+              expiresAt: data.expires_at || 0,
+              status: 'pending',
+            }
+            if (!card.id) return
+            const exists = state.pendingClarifications.some(c => c.id === card.id)
+            if (!exists) {
+              state.pendingClarifications.push(card)
             }
             return
           }
@@ -1078,6 +1132,109 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 澄清卡片倒计时结束（等待超时）：AI 已自行继续/收尾，标记终态并移除。
+  function markClarifyExpired(sessionId: string, clarifyId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const card = state.pendingClarifications.find(c => c.id === clarifyId)
+    if (!card || card.status !== 'pending') return
+    card.status = 'expired'
+    setTimeout(() => {
+      const st = sessionStates.value[sessionId]
+      if (!st) return
+      const idx = st.pendingClarifications.findIndex(c => c.id === clarifyId)
+      if (idx >= 0) {
+        st.pendingClarifications.splice(idx, 1)
+      }
+    }, 2000)
+  }
+
+  // 从后端恢复待答复澄清（页面刷新 / SSE 断连后 fallback），按 id 去重。
+  async function restorePendingClarifies(sessionId: string): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    if (state.pendingClarifications.some(c => c.status === 'pending')) return
+    try {
+      const items = await clarifyApi.getPendingClarifies(sessionId)
+      const now = Math.floor(Date.now() / 1000)
+      for (const p of items) {
+        const exists = state.pendingClarifications.some(c => c.id === p.id)
+        if (exists) continue
+        state.pendingClarifications.push({
+          id: p.id,
+          question: p.question,
+          options: Array.isArray(p.options) ? p.options : [],
+          context: p.context || '',
+          multiSelect: !!p.multi_select,
+          header: p.header || '',
+          createdAt: p.created_at ? Math.floor(new Date(p.created_at).getTime() / 1000) : now,
+          expiresAt: p.expires_at ? Math.floor(new Date(p.expires_at).getTime() / 1000) : 0,
+          status: 'pending',
+        })
+      }
+    } catch {
+      // 静默失败，不影响会话加载
+    }
+  }
+
+  // 提交澄清答复：choices 为所选选项（单选 1 项/多选多项），note 为追加说明。
+  // 答复成功后后端唤醒挂起的 clarify 工具，AI 在本回合内继续原任务。
+  async function answerChatClarify(
+    sessionId: string,
+    clarifyId: string,
+    choices: string[],
+    note: string = '',
+  ): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const card = state.pendingClarifications.find(c => c.id === clarifyId)
+    if (!card) return
+    if (card.status !== 'pending') return
+
+    card.status = 'answering'
+    try {
+      await clarifyApi.answerClarify(clarifyId, { choices, note })
+      card.status = 'answered'
+      card.answerSummary = [choices.join(', '), note].filter(Boolean).join(' · ')
+      // 短暂展示终态后自动移除
+      setTimeout(() => {
+        const st = sessionStates.value[sessionId]
+        if (!st) return
+        const idx = st.pendingClarifications.findIndex(c => c.id === clarifyId)
+        if (idx >= 0) {
+          st.pendingClarifications.splice(idx, 1)
+        }
+      }, 1500)
+    } catch (e) {
+      card.status = 'pending'
+      const errMsg = e instanceof Error ? e.message : String(e)
+      error.value = { message: `${$t('chat.clarifyAnswerFailed')}: ${errMsg}` }
+      throw e
+    }
+  }
+
+  // 关闭澄清卡片（用户点 ✕）：通知服务端取消等待，成功后本地移除卡片。
+  // 挂起的 clarify 工具会收到"用户已关闭"错误，模型自行决定继续或收尾。
+  async function dismissChatClarify(sessionId: string, clarifyId: string): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    const card = state.pendingClarifications.find(c => c.id === clarifyId)
+    if (!card || card.status !== 'pending') return
+    try {
+      await clarifyApi.dismissClarify(clarifyId)
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e)
+      error.value = { message: `${$t('chat.clarifyDismissFailed')}: ${errMsg}` }
+      throw e
+    }
+    const st = sessionStates.value[sessionId]
+    if (!st) return
+    const idx = st.pendingClarifications.findIndex(c => c.id === clarifyId)
+    if (idx >= 0) {
+      st.pendingClarifications.splice(idx, 1)
+    }
+  }
+
   function cleanup(): void {
     for (const sessionId of Object.keys(sessionStates.value)) {
       if (sessionFlushTimers.value[sessionId]) {
@@ -1111,6 +1268,8 @@ export const useChatStore = defineStore('chat', () => {
     isLongTask,
     pendingApprovals,
     activePendingApprovals,
+    pendingClarifications,
+    activePendingClarifications,
     sessionsLoading,
     sessionsHasMore,
     loadSessions,
@@ -1132,6 +1291,10 @@ export const useChatStore = defineStore('chat', () => {
     resolveChatApproval,
     markApprovalExpired,
     restorePendingApprovals,
+    answerChatClarify,
+    dismissChatClarify,
+    markClarifyExpired,
+    restorePendingClarifies,
     onTodoChange,
     emitTodoChanged,
   }

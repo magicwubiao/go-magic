@@ -278,6 +278,18 @@
         />
       </div>
 
+      <!-- 澄清提问卡片（AI 需求不明确时挂起回合弹出，等待用户选择/补充说明） -->
+      <div v-if="chatStore.pendingClarifications.length" class="clarify-bar">
+        <div class="clarify-bar-list">
+          <ChatClarificationCard
+            v-for="clarify in chatStore.pendingClarifications"
+            :key="clarify.id"
+            :clarification="clarify"
+            :session-id="chatStore.activeSessionId || ''"
+          />
+        </div>
+      </div>
+
       <!-- 底部固定审批栏：待审批命令始终可见可操作，不随对话滚动。 -->
       <div v-if="chatStore.pendingApprovals.length > 0" class="approval-bar">
         <div class="approval-bar-list">
@@ -325,6 +337,7 @@
             :autosize="{ minRows: 1, maxRows: 8 }"
             :placeholder="chatStore.isCommand(inputValue) ? t('chat.commandPlaceholder') : t('chat.placeholder')"
             class="chat-textarea"
+            :ref="(el: any) => { chatTextareaRef = el }"
             @keydown.enter.exact.prevent="send"
             @input="handleInput"
           />
@@ -646,6 +659,7 @@ import { useModelsStore } from '@/stores/models'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
+import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
@@ -661,6 +675,7 @@ const modelsStore = useModelsStore()
 const router = useRouter()
 const message = useMessage()
 const inputValue = ref('')
+const chatTextareaRef = ref<{ focus: () => void } | null>(null)
 const rightSidebarMobileVisible = ref(false)
 const mobileSessionExpanded = ref(false)
 const isMobile = ref(window.innerWidth <= 768)
@@ -2294,6 +2309,24 @@ onMounted(async () => {
   box-shadow: 0 -2px 8px rgba(240, 160, 32, 0.08);
 }
 
+.clarify-bar {
+  padding: 8px 16px;
+  background: linear-gradient(180deg, #fafaff 0%, #fff 100%);
+  border-top: 1px solid #e2d9f7;
+  box-shadow: 0 -2px 8px rgba(124, 77, 255, 0.06);
+}
+
+.clarify-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .approval-bar-list {
   display: flex;
   flex-direction: column;
@@ -2533,6 +2566,11 @@ onMounted(async () => {
   .approval-bar {
     background: linear-gradient(180deg, #2a2014 0%, #1e1e1e 100%);
     border-top-color: #4a3818;
+  }
+
+  .clarify-bar {
+    background: linear-gradient(180deg, #221d2e 0%, #1e1e1e 100%);
+    border-top-color: #40335c;
   }
 
   .chat-input-box {

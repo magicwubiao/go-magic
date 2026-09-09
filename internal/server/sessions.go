@@ -672,6 +672,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// 注册本 session 的审批 SSE 推送回调：当 ApprovalHook 创建 pending 时，
 	// 立即向当前 SSE 流推送 approval_required 事件，前端在对话流内渲染审批卡片。
 	defer s.registerApprovalSSEHandler(sessionID, writeSSE)()
+	// 注册本 session 的澄清卡片推送回调：clarify 工具挂起时推 clarify_required，
+	// 前端在对话流内渲染澄清卡片（选项 + 追加说明）。
+	defer s.registerClarifySSEHandler(sessionID, writeSSE)()
 
 	// 回合生命周期与客户端连接解耦：手机浏览器切后台/锁屏时系统会杀掉
 	// 连接，挂在 r.Context() 上的回合会随之被取消——表现为"对话中断，

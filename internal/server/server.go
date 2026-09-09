@@ -98,6 +98,16 @@ type Server struct {
 	pendingSSEHandlers   map[string]func(approval.PendingApprovalInfo)
 	pendingSSEHandlersMu sync.Mutex
 
+	// clarifySSEHandlers 注册每个 session 的澄清卡片推送回调（Web chat）。
+	// clarify 工具执行时经 ClarifyBridge.Ask 查此表：存在活跃通道才挂起等答复，
+	// 否则回落为 gateway/CLI 的普通结构化结果。
+	clarifySSEHandlers   map[string]func(map[string]interface{}) bool
+	clarifySSEHandlersMu sync.Mutex
+
+	// 进行中的澄清请求（id → PendingClarification），chan 唤醒语义同审批。
+	clarifications   map[string]*PendingClarification
+	clarificationsMu sync.Mutex
+
 	// Usage manager
 	usageMgr *usage.Manager
 
@@ -483,6 +493,8 @@ Your working directory is: %s
 		shareTokens:          make(map[string]*ShareToken),
 		metricsMgr:           metrics.NewMetrics(),
 		pendingSSEHandlers:   make(map[string]func(approval.PendingApprovalInfo)),
+		clarifySSEHandlers:   make(map[string]func(map[string]interface{}) bool),
+		clarifications:       make(map[string]*PendingClarification),
 		globalBus:            bus.NewEventBus(),
 		globalBusSSEHandlers: make(map[uint64]func(kind string, payload []byte)),
 	}
@@ -490,6 +502,10 @@ Your working directory is: %s
 	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到
 	// globalBus -> SSE 订阅者（前端侧边栏通过 /api/events 订阅）。
 	tool.SetDefaultTodoChangeNotifier(&tool.GlobalBusOrDefaultTodoNotifier{Bus: s.globalBus})
+
+	// 注入 clarify 工具的 Web chat 澄清桥：clarify 在会话回合里挂起等待用户
+	// 在卡片上选择/补充说明，答复作为工具结果回流模型继续原任务。
+	s.ensureClarifyBridge()
 
 	// 启动一个 goroutine 把 globalBus 里感兴趣的事件（如 todo_update）分发给
 	// 所有 /api/events SSE 订阅者。
@@ -732,6 +748,11 @@ RULES:
   2. List todos to show the plan with action="list"
   3. Complete each todo as you finish with action="complete"
   4. If user adds new requirements, create additional todos
+- If the user's request is ambiguous or missing key information (unclear target,
+  unspecified file/path/scope, multiple plausible interpretations), call the
+  clarify tool with concrete options instead of guessing. The turn pauses and a
+  card lets the user pick an option or add details; resume with their answer.
+  Do not overuse it — only ask when guessing would waste real work.
 - Do not call time, system, math, session_search unless explicitly requested
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
@@ -1329,6 +1350,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/approval/stats", withCORS(requireAuth(s.handleApprovalStats)))
 	mux.HandleFunc("/api/approval/pending", withCORS(requireAuth(s.handleApprovalPending)))
 	mux.HandleFunc("/api/approval/pending/", withCORS(requireAuth(s.handleApprovalPendingByID)))
+
+	// Clarify (AI 澄清提问) Management — Web chat 澄清卡片
+	mux.HandleFunc("/api/clarify/pending", withCORS(requireAuth(s.handleClarifyPending)))
+	mux.HandleFunc("/api/clarify/", withCORS(requireAuth(s.handleClarifyByID)))
 	// Patterns endpoints (for frontend compatibility)
 	mux.HandleFunc("/api/approval/patterns/trusted", withCORS(requireAuth(s.handleApprovalPatternsTrusted)))
 	mux.HandleFunc("/api/approval/patterns/denied", withCORS(requireAuth(s.handleApprovalPatternsDenied)))
