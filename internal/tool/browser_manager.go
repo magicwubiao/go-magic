@@ -259,6 +259,13 @@ func (bm *BrowserManager) TabCount() int {
 // present. The tab's context installs a CDP-level JS dialog handler so that
 // alert/confirm/prompt never block automation — including dialogs raised
 // during page load, before any script could be injected.
+//
+// The freshly created context is warmed up inside the write lock: chromedp
+// binds the *whole browser* to the context of the FIRST Run call, so running
+// that first call under a per-call timeout would cancel the browser (and every
+// later CDP call) the moment the timeout fires. Warming up with the
+// long-lived tab.Ctx makes the browser live exactly as long as the tab, which
+// lets every subsequent operation safely wrap tab.Ctx in its own timeout.
 func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 	bm.mu.RLock()
 	if existingTab, ok := bm.tabs[tabID]; ok {
@@ -303,6 +310,17 @@ func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 	})
 
 	bm.tabs[tabID] = tab
+
+	// Warm up the CDP session now so the browser/target are owned by tab.Ctx.
+	// chromedp.Run without actions still allocates the browser and creates the
+	// first target (about:blank). Startup is internally bounded by chromedp's
+	// 20s websocket-read timeout, so this cannot hang forever.
+	if err := chromedp.Run(tabCtx); err != nil {
+		delete(bm.tabs, tabID)
+		tabCancel()
+		return nil, fmt.Errorf("failed to start browser: %w", err)
+	}
+
 	return tab, nil
 }
 

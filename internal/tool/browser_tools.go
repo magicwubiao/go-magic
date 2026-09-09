@@ -182,17 +182,30 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 func (t *BrowserNavigateTool) tryBrowserAutomation(tabID, urlStr string) (string, string, error) {
 	bm := GetBrowserManager()
 
-	if _, err := bm.NewTab(tabID); err != nil {
+	tab, err := bm.NewTab(tabID)
+	if err != nil {
 		// Only recycle the browser when no other tab depends on it — a dead
 		// Chrome left over from a previous run otherwise poisons every future
 		// attempt until the process restarts.
 		if bm.TabCount() == 0 {
 			bm.Close()
-			if _, err2 := bm.NewTab(tabID); err2 != nil {
-				return "", "", fmt.Errorf("failed to create browser tab: %w", err2)
+			tab, err = bm.NewTab(tabID)
+			if err != nil {
+				return "", "", fmt.Errorf("failed to create browser tab: %w", err)
 			}
 		} else {
 			return "", "", fmt.Errorf("failed to create browser tab: %w", err)
+		}
+	}
+
+	// A tab whose context is already canceled means the underlying Chrome
+	// session is gone. Recycle the whole browser and retry once so navigation
+	// self-heals instead of failing forever with "context canceled".
+	if tab.Ctx.Err() != nil {
+		bm.Close()
+		tab, err = bm.NewTab(tabID)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to restart browser: %w", err)
 		}
 	}
 
