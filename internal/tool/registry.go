@@ -233,8 +233,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("web_search", 30*time.Second)
 	r.SetTimeout("web_fetch", 30*time.Second)
 	r.SetTimeout("web_select", 30*time.Second)
-	// Browser automation tools - longer timeout for page loading
-	r.SetTimeout("browser_navigate", 60*time.Second)
+	// Browser automation tools - longer timeout for page loading. browser_navigate
+	// manages its own 120s internal navigation deadline; the registry budget stays
+	// above it so slow pages surface the tool's own error instead of a generic
+	// executor timeout.
+	r.SetTimeout("browser_navigate", 150*time.Second)
 	r.SetTimeout("browser_snapshot", 60*time.Second)
 	r.SetTimeout("browser_click", 30*time.Second)
 	r.SetTimeout("browser_type", 30*time.Second)

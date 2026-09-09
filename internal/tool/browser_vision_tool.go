@@ -10,6 +10,7 @@ import (
 	_ "image/png"  // register PNG decoder for image.DecodeConfig
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -75,19 +76,15 @@ func (t *BrowserVisionTool) Execute(ctx context.Context, args map[string]interfa
 		return nil, fmt.Errorf("failed to take screenshot: %w", err)
 	}
 
-	// Resolve the save directory
-	if outputDir == "" {
-		if envDir := os.Getenv("GO_MAGIC_SCREENSHOT_DIR"); envDir != "" {
-			outputDir = envDir
-		} else {
-			outputDir = filepath.Join(os.TempDir(), "go-magic", "screenshots")
-		}
-	}
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	// Resolve the save directory: explicit arg > env > <magic home>/screenshots
+	// > OS temp. The magic-home location keeps screenshots with other user data
+	// instead of vanishing from a temp dir wipe.
+	outputDir = resolveScreenshotDir(outputDir)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create screenshot directory: %w", err)
 	}
 
-	filename := fmt.Sprintf("browser_%s_%s.png", tabID, time.Now().Format("20060102_150405"))
+	filename := fmt.Sprintf("browser_%s_%s.png", sanitizeFilename(tabID), time.Now().Format("20060102_150405"))
 	savePath := filepath.Join(outputDir, filename)
 	if err := os.WriteFile(savePath, buf, 0644); err != nil {
 		return nil, fmt.Errorf("failed to save screenshot: %w", err)
@@ -117,4 +114,61 @@ func (t *BrowserVisionTool) Execute(ctx context.Context, args map[string]interfa
 		"note": "The screenshot has been saved to disk. Analyze it with a vision-capable model " +
 			"if you need to understand visual content such as CAPTCHAs or layout issues.",
 	}, nil
+}
+
+// resolveScreenshotDir picks the directory screenshots are saved to:
+// explicit output_dir > GO_MAGIC_SCREENSHOT_DIR > <magic home>/screenshots
+// > OS temp (used when the magic-home directory cannot be created).
+func resolveScreenshotDir(outputDir string) string {
+	if outputDir != "" {
+		return outputDir
+	}
+	if dir := os.Getenv("GO_MAGIC_SCREENSHOT_DIR"); dir != "" {
+		return dir
+	}
+	if magicHome := guessMagicHome(); magicHome != "" {
+		dir := filepath.Join(magicHome, "screenshots")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	return filepath.Join(os.TempDir(), "go-magic", "screenshots")
+}
+
+// guessMagicHome mirrors pkg/config.GetMagicHome without importing it (avoids
+// any import-cycle risk from this leaf package).
+func guessMagicHome() string {
+	if home := os.Getenv("GO_MAGIC_HOME"); home != "" {
+		return home
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".magic")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".magic")
+	}
+	return ""
+}
+
+// sanitizeFilename strips path-hostile characters from a user-controlled
+// value so it can never escape the target directory or corrupt the file name.
+func sanitizeFilename(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\x00':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	switch out {
+	case "", ".", "..":
+		out = "page"
+	}
+	if len(out) > 60 {
+		out = out[:60]
+	}
+	return out
 }

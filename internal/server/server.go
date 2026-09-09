@@ -1416,6 +1416,8 @@ func (s *Server) Stop() {
 	if s.mcpMgr != nil {
 		s.mcpMgr.DisconnectAll()
 	}
+	// 回收浏览器自动化进程,避免服务退出后残留 Chrome 孤儿进程。
+	tool.GetBrowserManager().Close()
 }
 
 // readTimeout10s is the timeout used for session-store reads from HTTP handlers.

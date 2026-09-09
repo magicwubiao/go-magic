@@ -72,11 +72,6 @@ func (t *BrowserDialogTool) Execute(ctx context.Context, args map[string]interfa
 		return nil, fmt.Errorf("no active browser tab. Please call browser_navigate first")
 	}
 
-	// Ensure the interceptor is installed (idempotent).
-	if err := bm.InstallDialogInterceptor(tabID); err != nil {
-		return nil, err
-	}
-
 	switch action {
 	case "list":
 		dialogs, err := bm.GetPendingDialogs(tabID)

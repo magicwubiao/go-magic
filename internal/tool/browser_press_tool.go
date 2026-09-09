@@ -24,7 +24,8 @@ func (t *BrowserPressTool) Name() string { return "browser_press" }
 func (t *BrowserPressTool) Description() string {
 	return "Press a keyboard key or type text in the current page. Supports named keys: " +
 		"Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, " +
-		"PageDown, Space, F1-F12, and modifier keys (Control, Shift, Alt, Meta). " +
+		"PageDown, Space, F1-F12, and modifier chords such as 'Control+A', " +
+		"'Control+Shift+P', 'Alt+F4'. " +
 		"Use for form submission, navigation, and keyboard shortcuts. " +
 		"Any other value is typed as literal text."
 }
@@ -36,7 +37,7 @@ func (t *BrowserPressTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"key": map[string]interface{}{
 				"type":        "string",
-				"description": "Key to press (e.g. 'Enter', 'Tab', 'Escape', 'ArrowDown') or text to type",
+				"description": "Key or chord to press (e.g. 'Enter', 'Tab', 'Control+A', 'ArrowDown') or text to type",
 			},
 			"times": map[string]interface{}{
 				"type":        "integer",

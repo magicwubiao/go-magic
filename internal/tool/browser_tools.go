@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +62,7 @@ func (t *BrowserNavigateTool) Schema() map[string]interface{} {
 			},
 			"wait_for": map[string]interface{}{
 				"type":        "string",
-				"description": "CSS selector or timeout to wait for (optional)",
+				"description": "CSS selector to wait for after the page loads (optional, up to 10s)",
 			},
 		},
 		"required": []string{"url"},
@@ -68,15 +70,63 @@ func (t *BrowserNavigateTool) Schema() map[string]interface{} {
 }
 
 // normalizeURL keeps URLs that already carry a scheme (http, https, file,
-// data, about, ...) untouched and only prepends "https://" to bare host
-// names like "example.com/page". Previously every non-http(s) URL —
-// including valid file:///D:/... paths — was blindly prefixed, producing
-// broken URLs such as "https://file:///D:/...".
+// data, about, ...) untouched and picks a sensible default scheme for bare
+// host names like "example.com/page". Local hosts (localhost, 127.0.0.1, any
+// bare IP) default to http:// since they are almost always plain-HTTP dev
+// servers; everything else defaults to https://.
 func normalizeURL(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return raw
 	}
+	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+		// A real scheme:// URL parses with no Opaque part. Opaque schemes
+		// (about:, data:, ...) are only kept when explicitly known —
+		// otherwise "localhost:8080" would be misread as scheme "localhost".
+		if u.Opaque == "" || opaqueSchemeOK(u.Scheme) {
+			return raw
+		}
+	}
+	if looksLikeLocalHost(raw) {
+		return "http://" + raw
+	}
 	return "https://" + raw
+}
+
+// opaqueSchemeOK lists schemes whose URLs carry no "//" authority (about:,
+// data:, ...) and should therefore be preserved as-is.
+func opaqueSchemeOK(scheme string) bool {
+	switch strings.ToLower(scheme) {
+	case "about", "data", "mailto", "javascript", "tel", "sms", "blob":
+		return true
+	}
+	return false
+}
+
+// looksLikeLocalHost reports whether a scheme-less raw URL points at a local
+// host (localhost or a bare IP address, with optional :port). IPv6 literals
+// (::1 or [::1]:8080) are handled.
+func looksLikeLocalHost(raw string) bool {
+	host := raw
+	// strip path / query / fragment for host extraction
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if strings.HasPrefix(host, "[") {
+		// bracketed IPv6 literal, e.g. [::1]:8080
+		if i := strings.Index(host, "]"); i >= 0 {
+			host = host[1:i]
+		}
+	} else if i := strings.LastIndex(host, ":"); i >= 0 && strings.Count(host, ":") == 1 {
+		// host:port — strip the numeric port
+		if _, err := strconv.Atoi(host[i+1:]); err == nil {
+			host = host[:i]
+		}
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	return net.ParseIP(host) != nil
 }
 
 func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -91,26 +141,40 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 	if id, ok := args["tab_id"].(string); ok && id != "" {
 		tabID = id
 	}
+	waitFor, _ := args["wait_for"].(string)
 
-	// Try browser automation first
+	// Browser automation first
 	title, text, err := t.tryBrowserAutomation(tabID, urlStr)
-	if err == nil && text != "" {
+	if err == nil {
+		waitStatus := "not_requested"
+		if waitFor != "" {
+			if werr := GetBrowserManager().WaitForElement(tabID, waitFor, 10*time.Second); werr != nil {
+				waitStatus = fmt.Sprintf("element not found within 10s: %v", werr)
+			} else {
+				waitStatus = "found"
+			}
+		}
 		return map[string]interface{}{
-			"url":     urlStr,
-			"title":   title,
-			"tab_id":  tabID,
-			"content": utils.Truncate(text, 5000),
-			"success": true,
-			"method":  "browser",
+			"url":      urlStr,
+			"title":    title,
+			"tab_id":   tabID,
+			"content":  utils.Truncate(text, 5000),
+			"success":  true,
+			"method":   "browser",
+			"wait_for": waitStatus,
 		}, nil
 	}
 
 	// Fallback to HTTP fetch if browser automation fails
-	result, err := t.fetchWithHTTP(urlStr, tabID)
-	if err != nil {
-		return nil, fmt.Errorf("both browser automation and HTTP fetch failed: %w", err)
+	result, ferr := t.fetchWithHTTP(urlStr, tabID)
+	if ferr != nil {
+		return nil, fmt.Errorf("both browser automation and HTTP fetch failed (browser: %v; http: %w)", err, ferr)
 	}
 
+	if m, ok := result.(map[string]interface{}); ok {
+		m["browser_error"] = err.Error()
+		m["note"] = "browser automation unavailable, so content was fetched over plain HTTP and may miss JavaScript-rendered parts; interactive tools (browser_click etc.) still need a working Chrome"
+	}
 	return result, nil
 }
 
@@ -118,9 +182,18 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 func (t *BrowserNavigateTool) tryBrowserAutomation(tabID, urlStr string) (string, string, error) {
 	bm := GetBrowserManager()
 
-	// Create or get tab
 	if _, err := bm.NewTab(tabID); err != nil {
-		return "", "", fmt.Errorf("failed to create browser tab: %w", err)
+		// Only recycle the browser when no other tab depends on it — a dead
+		// Chrome left over from a previous run otherwise poisons every future
+		// attempt until the process restarts.
+		if bm.TabCount() == 0 {
+			bm.Close()
+			if _, err2 := bm.NewTab(tabID); err2 != nil {
+				return "", "", fmt.Errorf("failed to create browser tab: %w", err2)
+			}
+		} else {
+			return "", "", fmt.Errorf("failed to create browser tab: %w", err)
+		}
 	}
 
 	// Navigate to URL and get content in single chromedp.Run call
@@ -170,6 +243,7 @@ func (t *BrowserNavigateTool) fetchWithHTTP(urlStr string, tabID string) (interf
 			"tab_id":  tabID,
 			"content": utils.Truncate(string(body), 5000),
 			"success": true,
+			"method":  "http",
 		}, nil
 	}
 
@@ -182,6 +256,7 @@ func (t *BrowserNavigateTool) fetchWithHTTP(urlStr string, tabID string) (interf
 		"tab_id":  tabID,
 		"content": utils.Truncate(text, 5000),
 		"success": true,
+		"method":  "http",
 	}, nil
 }
 
@@ -353,7 +428,7 @@ func NewBrowserGetImagesTool(bt *BrowserTools) *BrowserGetImagesTool {
 func (t *BrowserGetImagesTool) Name() string { return "browser_get_images" }
 
 func (t *BrowserGetImagesTool) Description() string {
-	return "Get all image URLs from the current page or a specific URL."
+	return "Get image URLs from the current page or a specific URL. When a live browser tab exists the rendered DOM is used (JavaScript-added images included) and min_width filtering works; otherwise the page is fetched over HTTP and only static HTML images are returned."
 }
 
 func (t *BrowserGetImagesTool) Schema() map[string]interface{} {
@@ -362,18 +437,17 @@ func (t *BrowserGetImagesTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"url": map[string]interface{}{
 				"type":        "string",
-				"description": "URL to extract images from",
+				"description": "URL to extract images from (optional when an active tab exists)",
 			},
 			"min_width": map[string]interface{}{
 				"type":        "number",
-				"description": "Minimum image width in pixels (optional)",
+				"description": "Minimum natural image width in pixels; only honored in live-tab mode (optional)",
 			},
 			"tab_id": map[string]interface{}{
 				"type":        "string",
 				"description": "Tab ID from previous browser_navigate call (optional)",
 			},
 		},
-		"required": []string{"url"},
 	}
 }
 
@@ -385,63 +459,68 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 		tabID = id
 	}
 
-	var html string
-	var err error
-
-	// Check if we have an active tab
 	bm := GetBrowserManager()
-	if tab, ok := bm.GetTab(tabID); ok && urlStr == "" {
-		// Use existing tab
-		html, err = bm.GetPageContent(tabID)
-		urlStr = tab.URL
-	} else {
-		// Fetch URL directly
-		if urlStr == "" {
-			return nil, fmt.Errorf("url is required when no active tab exists")
-		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	// Live-tab mode: reflect the rendered DOM (includes JS-added images and
+	// real natural widths).
+	if tab, ok := bm.GetTab(tabID); ok && (urlStr == "" || urlStr == tab.URL) {
+		imgs, err := bm.GetImagesWithInfo(tabID)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0")
-
-		client := util.GetHTTPClient()
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
+		images := make([]map[string]string, 0, len(imgs))
+		for _, im := range imgs {
+			if minWidth > 0 && float64(im.Width) < minWidth {
+				continue
+			}
+			if im.Src == "" {
+				continue
+			}
+			images = append(images, map[string]string{"src": im.Src, "alt": im.Alt})
 		}
-		defer resp.Body.Close()
-
-		doc, err := goquery.NewDocumentFromReader(resp.Body)
-		if err != nil {
-			return nil, err
+		result := map[string]interface{}{
+			"url":    tab.URL,
+			"count":  len(images),
+			"images": images,
+			"mode":   "live_tab",
 		}
-		html, _ = doc.Html()
+		if minWidth > 0 {
+			result["filter"] = fmt.Sprintf("natural_width >= %d", int(minWidth))
+		}
+		return result, nil
 	}
 
+	// Static fetch mode: only used when there is no matching live tab.
+	if urlStr == "" {
+		return nil, fmt.Errorf("url is required when no active tab exists")
+	}
+	urlStr = normalizeURL(urlStr)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	client := util.GetHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
 	baseURL, _ := url.Parse(urlStr)
-	var images []map[string]string
-
+	images := make([]map[string]string, 0)
 	doc.Find("img").Each(func(i int, s *goquery.Selection) {
 		src, _ := s.Attr("src")
 		alt, _ := s.Attr("alt")
-
-		// Resolve relative URLs
+		src = resolveImgURL(baseURL, src)
 		if src != "" {
-			if !strings.HasPrefix(src, "http") {
-				absURL := baseURL.ResolveReference(&url.URL{Path: src})
-				src = absURL.String()
-			}
 			images = append(images, map[string]string{
 				"src": src,
 				"alt": alt,
@@ -449,22 +528,34 @@ func (t *BrowserGetImagesTool) Execute(ctx context.Context, args map[string]inte
 		}
 	})
 
-	// Filter by minimum width if specified
-	if minWidth > 0 {
-		filtered := make([]map[string]string, 0, len(images))
-		for _, img := range images {
-			// Extract width from src URL if available (e.g., image wikis, APIs)
-			// Since we don't download images, we keep all images but note the filter
-			filtered = append(filtered, img)
-		}
-		images = filtered
-	}
-
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"url":    urlStr,
 		"count":  len(images),
 		"images": images,
-	}, nil
+		"mode":   "static_fetch",
+	}
+	if minWidth > 0 {
+		result["note"] = "min_width cannot be applied over a static HTTP fetch (image widths are unknown); use a live browser tab to filter by width"
+	}
+	return result, nil
+}
+
+// resolveImgURL resolves a possibly-relative src against the page base URL,
+// preserving query strings, absolute paths and protocol-relative (//host)
+// URLs. Falls back to the raw src on parse errors.
+func resolveImgURL(base *url.URL, src string) string {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return ""
+	}
+	ref, err := url.Parse(src)
+	if err != nil {
+		return src
+	}
+	if base == nil {
+		return src
+	}
+	return base.ResolveReference(ref).String()
 }
 
 // Helper functions
@@ -497,6 +588,9 @@ func ExportBrowserToolsJSON() string {
 	cookiesTool := NewBrowserGetCookiesTool()
 	imgTool := NewBrowserGetImagesTool(bt)
 	consoleTool := NewBrowserConsoleTool()
+	pressTool := NewBrowserPressTool(bt)
+	visionTool := NewBrowserVisionTool(bt)
+	dialogTool := NewBrowserDialogTool(bt)
 
 	result := []map[string]interface{}{
 		{"name": "browser_navigate", "description": "Navigate to URL and get page content", "schema": navTool.Schema()},
@@ -513,6 +607,9 @@ func ExportBrowserToolsJSON() string {
 		{"name": "browser_get_cookies", "description": "Get page cookies", "schema": cookiesTool.Schema()},
 		{"name": "browser_get_images", "description": "Extract image URLs", "schema": imgTool.Schema()},
 		{"name": "browser_console", "description": "Execute JavaScript", "schema": consoleTool.Schema()},
+		{"name": "browser_press", "description": "Press keyboard key or type text", "schema": pressTool.Schema()},
+		{"name": "browser_vision", "description": "Screenshot current page", "schema": visionTool.Schema()},
+		{"name": "browser_dialog", "description": "List or respond to JS dialogs", "schema": dialogTool.Schema()},
 	}
 
 	jsonBytes, _ := json.MarshalIndent(result, "", "  ")

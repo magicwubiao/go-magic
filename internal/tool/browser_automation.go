@@ -57,23 +57,22 @@ func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]interfac
 		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
 	}
 
-	// Perform click
+	// Perform click (real CDP input; the manager settles and syncs tab state
+	// afterwards, so page_title/page_text below reflect the post-click page)
 	if err := bm.Click(tabID, selector); err != nil {
 		return nil, fmt.Errorf("failed to click element: %w", err)
 	}
 
 	// Get updated page info
 	text, _ := bm.GetPageText(tabID)
-	title := ""
-	if tab, ok := bm.GetTab(tabID); ok {
-		title = tab.Title
-	}
+	title, currentURL := currentTabInfo(bm, tabID)
 
 	return map[string]interface{}{
 		"action":     "click",
 		"selector":   selector,
 		"success":    true,
 		"page_title": title,
+		"page_url":   currentURL,
 		"page_text":  truncateString(text, 1000),
 	}, nil
 }
@@ -147,20 +146,15 @@ func (t *BrowserTypeTool) Execute(ctx context.Context, args map[string]interface
 		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
 	}
 
-	// Clear existing content if requested
+	// Clear existing content if requested (React-safe native-setter clear)
 	if clear {
-		// Select all and delete
-		bm.ExecuteJS(tabID, fmt.Sprintf(`
-			element = document.querySelector('%s');
-			if (element) {
-				element.focus();
-				element.select();
-				element.value = '';
-			}
-		`, selector))
+		if err := bm.ClearInput(tabID, selector); err != nil {
+			return nil, fmt.Errorf("failed to clear element %q: %w", selector, err)
+		}
 	}
 
-	// Type text
+	// Type text (real keystrokes; falls back to direct value assignment for
+	// non-interactable fields)
 	if err := bm.Type(tabID, selector, text); err != nil {
 		return nil, fmt.Errorf("failed to type text: %w", err)
 	}
@@ -248,7 +242,8 @@ func (t *BrowserScrollTool) Execute(ctx context.Context, args map[string]interfa
 	case "down":
 		err = bm.Scroll(tabID, 0, int64(amount))
 	case "top":
-		err = bm.Scroll(tabID, 0, 0)
+		// window.scrollBy(0,0) is a no-op; use an explicit scrollTo
+		err = bm.ScrollToTop(tabID)
 	case "bottom":
 		_, err = bm.ExecuteJS(tabID, "window.scrollTo(0, document.body.scrollHeight);")
 	case "to_element":
@@ -317,14 +312,9 @@ func (t *BrowserBackTool) Execute(ctx context.Context, args map[string]interface
 		return nil, fmt.Errorf("failed to go back: %w", err)
 	}
 
-	// Get updated page info
+	// Get updated page info (navigation settles before this returns)
 	text, _ := bm.GetPageText(tabID)
-	title := ""
-	url := ""
-	if tab, ok := bm.GetTab(tabID); ok {
-		title = tab.Title
-		url = tab.URL
-	}
+	title, url := currentTabInfo(bm, tabID)
 
 	return map[string]interface{}{
 		"action":     "back",
@@ -384,8 +374,8 @@ func (t *BrowserConsoleTool) Execute(ctx context.Context, args map[string]interf
 		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
 	}
 
-	// Execute script
-	result, err := bm.ExecuteJS(tabID, script)
+	// Execute script (promises are awaited, like an async console snippet)
+	result, err := bm.ExecuteJSAwait(tabID, script)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute script: %w", err)
 	}
@@ -439,12 +429,7 @@ func (t *BrowserForwardTool) Execute(ctx context.Context, args map[string]interf
 	}
 
 	text, _ := bm.GetPageText(tabID)
-	title := ""
-	url := ""
-	if tab, ok := bm.GetTab(tabID); ok {
-		title = tab.Title
-		url = tab.URL
-	}
+	title, url := currentTabInfo(bm, tabID)
 
 	return map[string]interface{}{
 		"action":     "forward",
@@ -495,9 +480,12 @@ func (t *BrowserRefreshTool) Execute(ctx context.Context, args map[string]interf
 		return nil, fmt.Errorf("failed to refresh page: %w", err)
 	}
 
+	title, url := currentTabInfo(bm, tabID)
 	return map[string]interface{}{
-		"action":  "refresh",
-		"success": true,
+		"action":     "refresh",
+		"success":    true,
+		"page_title": title,
+		"page_url":   url,
 	}, nil
 }
 
@@ -623,7 +611,7 @@ func NewBrowserClearCacheTool() *BrowserClearCacheTool {
 func (t *BrowserClearCacheTool) Name() string { return "browser_clear_cache" }
 
 func (t *BrowserClearCacheTool) Description() string {
-	return "Clear browser localStorage and sessionStorage for the current page."
+	return "Clear the browser cache: localStorage, sessionStorage, HTTP cache and cookies."
 }
 
 func (t *BrowserClearCacheTool) Schema() map[string]interface{} {
@@ -714,4 +702,15 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// currentTabInfo reads the live title and URL of a tab after a navigation
+// action. Preferring the live document over cached tab fields avoids
+// returning stale page_url/page_title values.
+func currentTabInfo(bm *BrowserManager, tabID string) (title, url string) {
+	if info, err := bm.GetPageInfo(tabID); err == nil {
+		title, _ = info["title"].(string)
+		url, _ = info["url"].(string)
+	}
+	return title, url
 }

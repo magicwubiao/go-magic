@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
+	cruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 )
@@ -33,6 +38,27 @@ type BrowserTab struct {
 	URL     string
 	Title   string
 	History []string
+
+	// dialogMu guards the native-JS-dialog state below. Dialogs are handled at
+	// the CDP layer (Page.javascriptDialogOpening), so interception survives
+	// page navigations and works for dialogs opened before any JS injection.
+	dialogMu       sync.Mutex
+	dialogPresets  map[string]string        // dialog type -> preset response
+	pendingDialogs []map[string]interface{} // dialogs recorded so far
+}
+
+// historyCap bounds tab.History so it cannot grow unbounded.
+const historyCap = 200
+
+// jsQuote returns s as a JSON string literal, safe to embed inside a JS
+// context. Prevents selector/script injection when interpolating
+// user-supplied values into page JavaScript.
+func jsQuote(s string) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 var (
@@ -74,7 +100,9 @@ func (bm *BrowserManager) Initialize() error {
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("remote-debugging-port", "9222"),
+		// Do not hard-code a debugging port: chromedp picks a free random port
+		// (--remote-debugging-port=0) so leftover Chrome instances from crashed
+		// runs can never block browser tools from starting again.
 		chromedp.Flag("disable-logging", true),
 		chromedp.Flag("log-level", "3"),
 		chromedp.Flag("enable-logging", false),
@@ -196,7 +224,8 @@ func (bm *BrowserManager) findBrowser() string {
 	return ""
 }
 
-// Close closes the browser manager and all tabs
+// Close closes the browser manager and all tabs. Safe to call multiple times;
+// the next NewTab call will start a brand-new Chrome instance.
 func (bm *BrowserManager) Close() {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
@@ -215,14 +244,28 @@ func (bm *BrowserManager) Close() {
 	}
 }
 
-// NewTab creates a new browser tab or returns existing one if already exists
+// Reset is an alias for Close: tears down every tab and the Chrome instance so
+// the next use starts fresh (used to recover from a crashed browser).
+func (bm *BrowserManager) Reset() { bm.Close() }
+
+// TabCount returns the number of live tabs.
+func (bm *BrowserManager) TabCount() int {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	return len(bm.tabs)
+}
+
+// NewTab creates a new browser tab or returns the existing one if already
+// present. The tab's context installs a CDP-level JS dialog handler so that
+// alert/confirm/prompt never block automation — including dialogs raised
+// during page load, before any script could be injected.
 func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 	bm.mu.RLock()
-	needsInit := bm.allocCtx == nil
 	if existingTab, ok := bm.tabs[tabID]; ok {
 		bm.mu.RUnlock()
 		return existingTab, nil
 	}
+	needsInit := bm.allocCtx == nil
 	bm.mu.RUnlock()
 
 	if needsInit {
@@ -234,6 +277,11 @@ func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
+	// Re-check under the write lock: a concurrent NewTab with the same ID may
+	// have created the tab while we were initializing.
+	if existingTab, ok := bm.tabs[tabID]; ok {
+		return existingTab, nil
+	}
 	if bm.allocCtx == nil {
 		return nil, fmt.Errorf("browser not initialized")
 	}
@@ -241,11 +289,18 @@ func (bm *BrowserManager) NewTab(tabID string) (*BrowserTab, error) {
 	tabCtx, tabCancel := chromedp.NewContext(bm.allocCtx)
 
 	tab := &BrowserTab{
-		ID:      tabID,
-		Ctx:     tabCtx,
-		Cancel:  tabCancel,
-		History: make([]string, 0),
+		ID:            tabID,
+		Ctx:           tabCtx,
+		Cancel:        tabCancel,
+		History:       make([]string, 0),
+		dialogPresets: make(map[string]string),
 	}
+
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		if dlg, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			bm.handleDialogOpening(tab, dlg)
+		}
+	})
 
 	bm.tabs[tabID] = tab
 	return tab, nil
@@ -272,7 +327,93 @@ func (bm *BrowserManager) CloseTab(tabID string) {
 	}
 }
 
-// NavigateAndGetContent navigates to URL and gets page content in single call
+// ============================================================================
+// Navigation & page state
+// ============================================================================
+
+// recordURL updates tab.URL/History for a navigation. Callers must not hold
+// bm.mu. History records every distinct URL the tab has been on, capped to
+// historyCap entries.
+func (bm *BrowserManager) recordURL(tabID, url string) {
+	if url == "" || url == "about:blank" {
+		return
+	}
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	tab, ok := bm.tabs[tabID]
+	if !ok {
+		return
+	}
+	if tab.URL == url {
+		return
+	}
+	tab.History = append(tab.History, url)
+	if len(tab.History) > historyCap {
+		tab.History = tab.History[len(tab.History)-historyCap:]
+	}
+	tab.URL = url
+}
+
+// pageSnapshot reads the live URL/title/readyState of a tab in one round trip.
+func (bm *BrowserManager) pageSnapshot(tabID string) (url, title, readyState string, err error) {
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return "", "", "", fmt.Errorf("tab not found: %s", tabID)
+	}
+	ctx, cancel := context.WithTimeout(tab.Ctx, 15*time.Second)
+	defer cancel()
+	err = chromedp.Run(ctx,
+		chromedp.Title(&title),
+		chromedp.EvaluateAsDevTools("window.location.href", &url),
+		chromedp.EvaluateAsDevTools("document.readyState", &readyState),
+	)
+	return url, title, readyState, err
+}
+
+// syncTabState refreshes tab.URL/Title/History from the live page after a
+// navigation that was not initiated by NavigateAndGetContent (click, back,
+// forward, refresh, ...).
+func (bm *BrowserManager) syncTabState(tabID string) {
+	url, title, _, err := bm.pageSnapshot(tabID)
+	if err != nil {
+		return
+	}
+	bm.recordURL(tabID, url)
+	if title == "" {
+		return
+	}
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	if tab, ok := bm.tabs[tabID]; ok {
+		tab.Title = title
+	}
+}
+
+// settlePage gives an in-flight navigation a short window to reach
+// readyState=complete, then syncs the tab bookkeeping. Returns quickly when
+// nothing navigated (e.g. SPA interactions).
+func (bm *BrowserManager) settlePage(tabID string) {
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		_, _, ready, err := bm.pageSnapshot(tabID)
+		if err != nil {
+			return
+		}
+		if ready == "complete" {
+			bm.syncTabState(tabID)
+			return
+		}
+		if time.Now().After(deadline) {
+			bm.syncTabState(tabID)
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// NavigateAndGetContent navigates to URL and gets page content in single call.
+// A bounded internal timeout guarantees the call terminates even when the page
+// never finishes loading.
 func (bm *BrowserManager) NavigateAndGetContent(tabID string, url string) (string, string, error) {
 	bm.mu.RLock()
 	tab, ok := bm.tabs[tabID]
@@ -285,7 +426,10 @@ func (bm *BrowserManager) NavigateAndGetContent(tabID string, url string) (strin
 	var title string
 	var text string
 
-	err := chromedp.Run(tab.Ctx,
+	nctx, cancel := context.WithTimeout(tab.Ctx, 120*time.Second)
+	defer cancel()
+
+	err := chromedp.Run(nctx,
 		chromedp.Navigate(url),
 		chromedp.Title(&title),
 		chromedp.Text("body", &text),
@@ -295,19 +439,24 @@ func (bm *BrowserManager) NavigateAndGetContent(tabID string, url string) (strin
 		return "", "", fmt.Errorf("failed to navigate and get content: %w", err)
 	}
 
-	// Install JS dialog interceptor so alert/confirm/prompt never block the session
-	_ = bm.InstallDialogInterceptor(tabID)
-
+	bm.recordURL(tabID, url)
 	bm.mu.Lock()
-	tab.URL = url
-	tab.History = append(tab.History, url)
-	tab.Title = title
+	if t, ok := bm.tabs[tabID]; ok && title != "" {
+		t.Title = title
+	}
 	bm.mu.Unlock()
 
 	return title, text, nil
 }
 
-// Click clicks an element by selector
+// ============================================================================
+// Interaction primitives
+// ============================================================================
+
+// Click clicks an element by selector using real CDP mouse input (press +
+// release at the element center after scrolling it into view). Synthetic JS
+// clicks cannot drive hover-dependent controls, drag sequences or new-tab
+// links the same way.
 func (bm *BrowserManager) Click(tabID string, selector string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -318,68 +467,90 @@ func (bm *BrowserManager) Click(tabID string, selector string) error {
 	defer cancel()
 
 	err := chromedp.Run(ctx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(1000*time.Millisecond),
+		chromedp.WaitReady(selector, chromedp.ByQuery),
+		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.Sleep(600*time.Millisecond),
 	)
-
 	if err != nil {
 		return err
 	}
 
-	jsScript := fmt.Sprintf(`
-		(function() {
-			var element = document.querySelector('%s');
-			if (!element) {
-				return 'Element not found';
-			}
-			element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			return new Promise(function(resolve) {
-				setTimeout(function() {
-					try {
-						element.click();
-						resolve('Click successful');
-					} catch(e) {
-						resolve('Click error: ' + e.message);
-					}
-				}, 500);
-			});
-		})()
-	`, selector)
-
-	result, err := bm.ExecuteJS(tabID, jsScript)
-	if err != nil {
-		return err
-	}
-
-	resultStr := fmt.Sprintf("%v", result)
-	if resultStr == "Element not found" {
-		return fmt.Errorf("element not found: %s", selector)
-	}
-
+	// A click may have triggered navigation; settle and refresh bookkeeping.
+	bm.settlePage(tabID)
 	return nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// ClearInput clears an input/textarea using the native value setter and
+// dispatches input/change events, so controlled components (React/Vue) observe
+// the change. Returns an error when the selector does not resolve to an
+// INPUT/TEXTAREA.
+func (bm *BrowserManager) ClearInput(tabID string, selector string) error {
+	script := `(function() {
+		var el = document.querySelector(` + jsQuote(selector) + `);
+		if (!el) return 'not_found';
+		if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return 'not_input';
+		var proto = (el.tagName === 'TEXTAREA') ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+		if (proto) {
+			var d = Object.getOwnPropertyDescriptor(proto, 'value');
+			if (d && d.set) {
+				d.set.call(el, '');
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				el.dispatchEvent(new Event('change', { bubbles: true }));
+				return 'cleared';
+			}
+		}
+		el.value = '';
+		el.dispatchEvent(new Event('input', { bubbles: true }));
+		el.dispatchEvent(new Event('change', { bubbles: true }));
+		return 'cleared';
+	})()`
+
+	res, err := bm.ExecuteJS(tabID, script)
+	if err != nil {
+		return err
 	}
-	return b
+	switch s := fmt.Sprintf("%v", res); s {
+	case "not_found":
+		return fmt.Errorf("element not found: %s", selector)
+	case "not_input":
+		return fmt.Errorf("selector %q is not an input or textarea", selector)
+	}
+	return nil
 }
 
-// Type types text into an element
+// Type types text into an element via real keystrokes (focus + key events).
+// Real typing works with autocomplete/combobox/datepicker style controls that
+// need keydown/keyup, and with React controlled inputs. If the element is not
+// interactable (e.g. hidden), it falls back to direct value assignment so the
+// old behaviour is preserved.
 func (bm *BrowserManager) Type(tabID string, selector string, text string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return fmt.Errorf("tab not found: %s", tabID)
 	}
 
-	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(tab.Ctx, 90*time.Second)
 	defer cancel()
 
-	return chromedp.Run(ctx, chromedp.SetValue(selector, text))
+	err := chromedp.Run(ctx,
+		chromedp.WaitReady(selector, chromedp.ByQuery),
+		chromedp.SendKeys(selector, text, chromedp.ByQuery),
+	)
+	if err == nil {
+		return nil
+	}
+
+	// Fallback: invisible/edge-case fields get their value assigned directly
+	// (chromedp SetValue dispatches input/change events too).
+	ctx2, cancel2 := context.WithTimeout(tab.Ctx, 30*time.Second)
+	defer cancel2()
+	if err2 := chromedp.Run(ctx2, chromedp.SetValue(selector, text)); err2 != nil {
+		return fmt.Errorf("failed to type text: %v (send keys: %v)", err2, err)
+	}
+	return nil
 }
 
-// Scroll scrolls the page
+// Scroll scrolls the page by the given delta (window.scrollBy).
 func (bm *BrowserManager) Scroll(tabID string, x, y int64) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -394,28 +565,9 @@ func (bm *BrowserManager) Scroll(tabID string, x, y int64) error {
 	)
 }
 
-// ScrollToElement scrolls to an element
-func (bm *BrowserManager) ScrollToElement(tabID string, selector string) error {
-	tab, ok := bm.GetTab(tabID)
-	if !ok {
-		return fmt.Errorf("tab not found: %s", tabID)
-	}
-
-	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
-	defer cancel()
-
-	script := fmt.Sprintf(`
-		var element = document.querySelector('%s');
-		if (element) {
-			element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-		}
-	`, selector)
-
-	return chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, nil))
-}
-
-// Back goes back in history
-func (bm *BrowserManager) Back(tabID string) error {
+// ScrollToTop scrolls the page back to the top. window.scrollBy(0,0) is a
+// no-op, so this uses scrollTo.
+func (bm *BrowserManager) ScrollToTop(tabID string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return fmt.Errorf("tab not found: %s", tabID)
@@ -425,11 +577,52 @@ func (bm *BrowserManager) Back(tabID string) error {
 	defer cancel()
 
 	return chromedp.Run(ctx,
-		chromedp.EvaluateAsDevTools("window.history.back()", nil),
+		chromedp.EvaluateAsDevTools("window.scrollTo(0, 0)", nil),
 	)
 }
 
-// ExecuteJS executes JavaScript
+// ScrollToElement scrolls to an element. Fails when the selector does not
+// match any element (previously it silently succeeded).
+func (bm *BrowserManager) ScrollToElement(tabID string, selector string) error {
+	script := `(function() {
+		var element = document.querySelector(` + jsQuote(selector) + `);
+		if (!element) return false;
+		element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		return true;
+	})()`
+
+	res, err := bm.ExecuteJS(tabID, script)
+	if err != nil {
+		return err
+	}
+	if ok, _ := res.(bool); !ok {
+		return fmt.Errorf("element not found: %s", selector)
+	}
+	return nil
+}
+
+// Back goes back in history and waits for the resulting page to settle.
+func (bm *BrowserManager) Back(tabID string) error {
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return fmt.Errorf("tab not found: %s", tabID)
+	}
+
+	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
+	defer cancel()
+
+	err := chromedp.Run(ctx,
+		chromedp.EvaluateAsDevTools("window.history.back()", nil),
+		chromedp.Sleep(400*time.Millisecond),
+	)
+	if err != nil {
+		return err
+	}
+	bm.settlePage(tabID)
+	return nil
+}
+
+// ExecuteJS executes JavaScript and returns the serialized result.
 func (bm *BrowserManager) ExecuteJS(tabID string, script string) (interface{}, error) {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -451,8 +644,10 @@ func (bm *BrowserManager) ExecuteJS(tabID string, script string) (interface{}, e
 	return result, nil
 }
 
-// GetConsoleLogs gets console logs
-func (bm *BrowserManager) GetConsoleLogs(tabID string) ([]string, error) {
+// ExecuteJSAwait executes JavaScript and, when the expression yields a
+// promise, awaits its resolution before returning (like an async IIFE in the
+// DevTools console). Non-promise expressions behave exactly like ExecuteJS.
+func (bm *BrowserManager) ExecuteJSAwait(tabID string, script string) (interface{}, error) {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return nil, fmt.Errorf("tab not found: %s", tabID)
@@ -461,20 +656,37 @@ func (bm *BrowserManager) GetConsoleLogs(tabID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
 	defer cancel()
 
-	var logs []string
-	err := chromedp.Run(ctx,
-		chromedp.EvaluateAsDevTools(`
-			console.logs = [];
-			var originalLog = console.log;
-			console.log = function() {
-				console.logs.push([...arguments].join(' '));
-				originalLog.apply(console, arguments);
-			};
-			console.logs;
-		`, &logs),
-	)
-
-	return logs, err
+	var remote *cruntime.RemoteObject
+	var exc *cruntime.ExceptionDetails
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var e error
+		remote, exc, e = cruntime.Evaluate(script).
+			WithReturnByValue(true).
+			WithAwaitPromise(true).
+			Do(ctx)
+		return e
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute script: %w", err)
+	}
+	if remote == nil {
+		return nil, nil
+	}
+	if exc != nil {
+		detail := exc.Exception.Description
+		if detail == "" {
+			detail = exc.Text
+		}
+		return nil, fmt.Errorf("script error: %s", detail)
+	}
+	if len(remote.Value) == 0 || string(remote.Value) == "null" {
+		return nil, nil
+	}
+	var result interface{}
+	if err := json.Unmarshal(remote.Value, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode script result: %w", err)
+	}
+	return result, nil
 }
 
 // GetPageContent gets the HTML content of the page
@@ -543,8 +755,17 @@ func (bm *BrowserManager) Screenshot(tabID string) ([]byte, error) {
 	return buf, nil
 }
 
-// GetImages gets all images on the page
-func (bm *BrowserManager) GetImages(tabID string) ([]string, error) {
+// BrowserImageInfo describes one <img> element rendered in the live DOM.
+type BrowserImageInfo struct {
+	Src    string `json:"src"`
+	Alt    string `json:"alt"`
+	Width  int64  `json:"width"`  // naturalWidth (0 when not yet loaded)
+	Height int64  `json:"height"` // naturalHeight
+}
+
+// GetImagesWithInfo collects all rendered <img> elements with their natural
+// dimensions from the live DOM (images added by JavaScript are included).
+func (bm *BrowserManager) GetImagesWithInfo(tabID string) ([]BrowserImageInfo, error) {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return nil, fmt.Errorf("tab not found: %s", tabID)
@@ -553,19 +774,21 @@ func (bm *BrowserManager) GetImages(tabID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
 	defer cancel()
 
-	var images []string
+	var imgs []BrowserImageInfo
 	err := chromedp.Run(ctx,
-		chromedp.EvaluateAsDevTools(`Array.from(document.images).map(img => img.src)`, &images),
+		chromedp.EvaluateAsDevTools(`Array.from(document.images).map(function(im) {
+			return { src: im.currentSrc || im.src, alt: im.alt || '', width: im.naturalWidth, height: im.naturalHeight };
+		})`, &imgs),
 	)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get images: %w", err)
 	}
 
-	return images, nil
+	return imgs, nil
 }
 
-// Forward navigates forward in history
+// Forward navigates forward in history and settles afterwards
 func (bm *BrowserManager) Forward(tabID string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -575,12 +798,18 @@ func (bm *BrowserManager) Forward(tabID string) error {
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
 	defer cancel()
 
-	return chromedp.Run(ctx,
+	err := chromedp.Run(ctx,
 		chromedp.EvaluateAsDevTools("window.history.forward()", nil),
+		chromedp.Sleep(400*time.Millisecond),
 	)
+	if err != nil {
+		return err
+	}
+	bm.settlePage(tabID)
+	return nil
 }
 
-// Refresh refreshes the current page
+// Refresh refreshes the current page and settles afterwards
 func (bm *BrowserManager) Refresh(tabID string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -590,9 +819,15 @@ func (bm *BrowserManager) Refresh(tabID string) error {
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
 	defer cancel()
 
-	return chromedp.Run(ctx,
+	err := chromedp.Run(ctx,
 		chromedp.EvaluateAsDevTools("window.location.reload()", nil),
+		chromedp.Sleep(400*time.Millisecond),
 	)
+	if err != nil {
+		return err
+	}
+	bm.settlePage(tabID)
+	return nil
 }
 
 // WaitForElement waits for an element to appear on the page
@@ -610,19 +845,34 @@ func (bm *BrowserManager) WaitForElement(tabID string, selector string, timeout 
 	)
 }
 
-// WaitForLoad waits for the page to finish loading
+// WaitForLoad waits until document.readyState is "complete" (a plain body
+// element exists almost immediately even while resources are still loading).
 func (bm *BrowserManager) WaitForLoad(tabID string, timeout time.Duration) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return fmt.Errorf("tab not found: %s", tabID)
 	}
 
-	ctx, cancel := context.WithTimeout(tab.Ctx, timeout)
-	defer cancel()
+	deadline := time.Now().Add(timeout)
+	for {
+		var ready string
+		ctx, cancel := context.WithTimeout(tab.Ctx, 10*time.Second)
+		err := chromedp.Run(ctx,
+			chromedp.EvaluateAsDevTools("document.readyState", &ready),
+		)
+		cancel()
 
-	return chromedp.Run(ctx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-	)
+		if err != nil {
+			return err
+		}
+		if ready == "complete" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("page did not finish loading within %s (readyState=%s)", timeout, ready)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // GetPageInfo gets current page information
@@ -649,15 +899,20 @@ func (bm *BrowserManager) GetPageInfo(tabID string) (map[string]interface{}, err
 		return nil, fmt.Errorf("failed to get page info: %w", err)
 	}
 
+	bm.mu.RLock()
+	historyLen := len(tab.History)
+	bm.mu.RUnlock()
+
 	return map[string]interface{}{
 		"title":       title,
 		"url":         url,
 		"ready_state": readyState,
-		"history_len": len(tab.History),
+		"history_len": historyLen,
 	}, nil
 }
 
-// ClearCache clears browser cache and cookies
+// ClearCache clears localStorage/sessionStorage, the HTTP disk cache and all
+// cookies for the browser context.
 func (bm *BrowserManager) ClearCache(tabID string) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -671,11 +926,19 @@ func (bm *BrowserManager) ClearCache(tabID string) error {
 		chromedp.EvaluateAsDevTools(`
 			window.localStorage.clear();
 			window.sessionStorage.clear();
+			true;
 		`, nil),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.ClearBrowserCache().Do(ctx)
+		}),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.ClearBrowserCookies().Do(ctx)
+		}),
 	)
 }
 
-// GetCookies gets all cookies for the current page
+// GetCookies returns every cookie of the browser context — including HttpOnly
+// ones that are invisible to document.cookie.
 func (bm *BrowserManager) GetCookies(tabID string) ([]map[string]interface{}, error) {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -685,35 +948,47 @@ func (bm *BrowserManager) GetCookies(tabID string) ([]map[string]interface{}, er
 	ctx, cancel := context.WithTimeout(tab.Ctx, 30*time.Second)
 	defer cancel()
 
-	var cookies []map[string]interface{}
-	err := chromedp.Run(ctx,
-		chromedp.EvaluateAsDevTools(`document.cookie.split(';').map(c => {
-			const [name, value] = c.trim().split('=');
-			return { name, value };
-		})`, &cookies),
-	)
-
+	var cookies []*network.Cookie
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var e error
+		cookies, e = network.GetCookies().Do(ctx)
+		return e
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cookies: %w", err)
 	}
 
-	return cookies, nil
+	out := make([]map[string]interface{}, 0, len(cookies))
+	for _, c := range cookies {
+		out = append(out, map[string]interface{}{
+			"name":      c.Name,
+			"value":     c.Value,
+			"domain":    c.Domain,
+			"path":      c.Path,
+			"secure":    c.Secure,
+			"http_only": c.HTTPOnly,
+			"session":   c.Session,
+		})
+	}
+	return out, nil
 }
 
 // ============================================================================
 // Keyboard input
 // ============================================================================
 
-// PressKey presses a named key (Enter, Tab, Escape, ArrowUp, F5, ...) or types
-// arbitrary text into the currently focused element of the page. Named keys use
-// native CDP key events (so form submission on Enter works), not synthetic JS events.
+// PressKey presses a named key (Enter, Tab, Escape, ArrowUp, F5, ...), a
+// chord such as "Control+A", or types arbitrary text into the currently
+// focused element. Named keys use native CDP key events (so form submission
+// on Enter works), not synthetic JS events.
 func (bm *BrowserManager) PressKey(tabID string, key string, times int) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return fmt.Errorf("tab not found: %s", tabID)
 	}
 
-	keys := normalizeKeyName(key)
+	chordKey, mods := parseKeyChord(key)
+	keys := normalizeKeyName(chordKey)
 	if keys == "" {
 		return fmt.Errorf("invalid key: %s", key)
 	}
@@ -727,7 +1002,13 @@ func (bm *BrowserManager) PressKey(tabID string, key string, times int) error {
 
 	actions := make([]chromedp.Action, 0, times)
 	for i := 0; i < times; i++ {
-		actions = append(actions, chromedp.KeyEvent(keys))
+		if len(mods) > 0 {
+			// KeyModifiers lets a single key event carry the modifier state,
+			// which is how apps see Ctrl+A / Ctrl+Enter / etc.
+			actions = append(actions, chromedp.KeyEvent(keys, chromedp.KeyModifiers(mods...)))
+		} else {
+			actions = append(actions, chromedp.KeyEvent(keys))
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
@@ -737,6 +1018,51 @@ func (bm *BrowserManager) PressKey(tabID string, key string, times int) error {
 		return fmt.Errorf("failed to press key %q: %w", key, err)
 	}
 	return nil
+}
+
+// parseKeyChord splits "Control+A" / "ctrl+shift+p" into the actual key plus
+// the modifier bitmask. Strings without a leading modifier pass through
+// untouched so arbitrary literal text still works.
+func parseKeyChord(key string) (string, []input.Modifier) {
+	parts := strings.Split(key, "+")
+	if len(parts) < 2 {
+		return key, nil
+	}
+	var mods []input.Modifier
+	seen := map[input.Modifier]bool{}
+	for _, p := range parts[:len(parts)-1] {
+		m, ok := modifierFromName(p)
+		if !ok {
+			return key, nil // not a modifier chord → treat as literal text
+		}
+		if !seen[m] {
+			seen[m] = true
+			mods = append(mods, m)
+		}
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	// A chord targets the physical key, so "Control+A" must dispatch the
+	// lowercase letter — uppercase runes are not in kb.Keys and would be sent
+	// as key "Unidentified", breaking Ctrl+A style shortcuts.
+	if len(last) == 1 && last[0] >= 'A' && last[0] <= 'Z' {
+		last = strings.ToLower(last)
+	}
+	return last, mods
+}
+
+// modifierFromName maps a human modifier name to its CDP modifier bit.
+func modifierFromName(name string) (input.Modifier, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "control", "ctrl":
+		return input.ModifierCtrl, true
+	case "alt", "option":
+		return input.ModifierAlt, true
+	case "shift":
+		return input.ModifierShift, true
+	case "meta", "cmd", "command", "win", "windows", "super":
+		return input.ModifierMeta, true
+	}
+	return 0, false
 }
 
 // normalizeKeyName converts a human-readable key name into the key string
@@ -797,110 +1123,102 @@ func normalizeKeyName(key string) string {
 }
 
 // ============================================================================
-// Native JS dialog interception (alert / confirm / prompt)
+// Native JS dialog handling (CDP layer)
 // ============================================================================
 
-// dialogInterceptorScript overrides window.alert/confirm/prompt so that native
-// dialogs are recorded into window.__magicDialogs instead of blocking the
-// headless automation session. Responses can be pre-set via
-// window.__magicDialogResponses (keyed by dialog type).
-const dialogInterceptorScript = `
-(function() {
-	if (window.__magicDialogsInstalled) return;
-	window.__magicDialogsInstalled = true;
-	window.__magicDialogs = window.__magicDialogs || [];
-	window.__magicDialogResponses = window.__magicDialogResponses || {};
-	function record(type, message, defaultValue) {
-		var entry = { type: type, message: String(message), timestamp: new Date().toISOString() };
-		if (defaultValue !== undefined) entry.default_value = defaultValue;
-		window.__magicDialogs.push(entry);
+// handleDialogOpening records the dialog and answers it according to the
+// preset set via SetDialogResponse, so automation is never blocked by a modal
+// dialog. Runs on the tab's event listener; the CDP answer happens on a
+// detached goroutine so navigation races cannot deadlock the listener.
+func (bm *BrowserManager) handleDialogOpening(tab *BrowserTab, dlg *page.EventJavascriptDialogOpening) {
+	typ := string(dlg.Type)
+	entry := map[string]interface{}{
+		"type":      typ,
+		"message":   dlg.Message,
+		"url":       dlg.URL,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
-	window.alert = function(msg) {
-		record('alert', msg);
-		return true;
-	};
-	window.confirm = function(msg) {
-		record('confirm', msg);
-		var resp = window.__magicDialogResponses['confirm'];
-		return resp === undefined ? false : (resp === true || resp === 'true');
-	};
-	window.prompt = function(msg, defaultValue) {
-		record('prompt', msg, defaultValue);
-		var resp = window.__magicDialogResponses['prompt'];
-		return resp === undefined ? (defaultValue !== undefined ? defaultValue : null) : resp;
-	};
-})()
-`
+	if dlg.DefaultPrompt != "" {
+		entry["default_value"] = dlg.DefaultPrompt
+	}
 
-// InstallDialogInterceptor injects the alert/confirm/prompt interceptor into the
-// current page. It is idempotent and safe to call after every navigation.
-func (bm *BrowserManager) InstallDialogInterceptor(tabID string) error {
-	_, err := bm.ExecuteJS(tabID, dialogInterceptorScript)
-	if err != nil {
-		return fmt.Errorf("failed to install dialog interceptor: %w", err)
+	tab.dialogMu.Lock()
+	tab.pendingDialogs = append(tab.pendingDialogs, entry)
+	preset, hasPreset := tab.dialogPresets[typ]
+	tab.dialogMu.Unlock()
+
+	accept := true
+	promptText := ""
+	switch dlg.Type {
+	case page.DialogTypeConfirm:
+		if hasPreset {
+			accept = preset == "true"
+		} else {
+			accept = false // dismissing behaves like clicking "Cancel"
+		}
+	case page.DialogTypePrompt:
+		if hasPreset {
+			accept = true
+			promptText = preset
+		} else if dlg.DefaultPrompt != "" {
+			accept = true // accept the pre-filled default, like an idle user
+			promptText = dlg.DefaultPrompt
+		} else {
+			accept = false
+		}
+	case page.DialogTypeAlert, page.DialogTypeBeforeunload:
+		accept = true
 	}
-	return nil
+
+	go func() {
+		hctx, cancel := context.WithTimeout(tab.Ctx, 10*time.Second)
+		defer cancel()
+		_ = page.HandleJavaScriptDialog(accept).WithPromptText(promptText).Do(hctx)
+	}()
 }
 
-// GetPendingDialogs returns all dialogs captured by the interceptor so far.
+// GetPendingDialogs returns all native dialogs captured so far.
 func (bm *BrowserManager) GetPendingDialogs(tabID string) ([]map[string]interface{}, error) {
-	result, err := bm.ExecuteJS(tabID, `JSON.stringify(window.__magicDialogs || [])`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read pending dialogs: %w", err)
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return nil, fmt.Errorf("tab not found: %s", tabID)
 	}
-
-	return parseDialogsResult(result)
-}
-
-// parseDialogsResult converts the raw ExecuteJS result into dialog entries.
-func parseDialogsResult(result interface{}) ([]map[string]interface{}, error) {
-	switch v := result.(type) {
-	case string:
-		var dialogs []map[string]interface{}
-		if err := json.Unmarshal([]byte(v), &dialogs); err != nil {
-			return nil, fmt.Errorf("failed to parse dialogs: %w", err)
-		}
-		return dialogs, nil
-	case []interface{}:
-		dialogs := make([]map[string]interface{}, 0, len(v))
-		for _, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				dialogs = append(dialogs, m)
-			}
-		}
-		return dialogs, nil
-	case nil:
-		return []map[string]interface{}{}, nil
-	default:
-		return nil, fmt.Errorf("unexpected dialog result type: %T", result)
-	}
+	tab.dialogMu.Lock()
+	defer tab.dialogMu.Unlock()
+	out := make([]map[string]interface{}, 0, len(tab.pendingDialogs))
+	out = append(out, tab.pendingDialogs...)
+	return out, nil
 }
 
 // ClearDialogs clears all recorded pending dialogs.
 func (bm *BrowserManager) ClearDialogs(tabID string) error {
-	_, err := bm.ExecuteJS(tabID, `window.__magicDialogs = []; true`)
-	if err != nil {
-		return fmt.Errorf("failed to clear dialogs: %w", err)
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return fmt.Errorf("tab not found: %s", tabID)
 	}
+	tab.dialogMu.Lock()
+	tab.pendingDialogs = nil
+	tab.dialogMu.Unlock()
 	return nil
 }
 
-// SetDialogResponse pre-sets the response that the interceptor will return for
-// future dialogs of the given type ("confirm" or "prompt"). For confirm, use
-// "true"/"false". For prompt, use the text value to return.
+// SetDialogResponse pre-sets the answer used for future dialogs of the given
+// type ("confirm" or "prompt"). For confirm use "true"/"false"; for prompt use
+// the text value to return. Presets live on the Go side of the tab, so they
+// survive navigations.
 func (bm *BrowserManager) SetDialogResponse(tabID string, dialogType string, response string) error {
-	typ, err := json.Marshal(dialogType)
-	if err != nil {
-		return fmt.Errorf("invalid dialog type: %w", err)
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return fmt.Errorf("tab not found: %s", tabID)
 	}
-	resp, err := json.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("invalid response: %w", err)
+	if dialogType != "confirm" && dialogType != "prompt" {
+		return fmt.Errorf("dialog type must be 'confirm' or 'prompt', got %q", dialogType)
 	}
-
-	script := fmt.Sprintf(`window.__magicDialogResponses = window.__magicDialogResponses || {}; window.__magicDialogResponses[%s] = %s; true`, typ, resp)
-	if _, err := bm.ExecuteJS(tabID, script); err != nil {
-		return fmt.Errorf("failed to set dialog response: %w", err)
+	tab.dialogMu.Lock()
+	defer tab.dialogMu.Unlock()
+	if tab.dialogPresets == nil {
+		tab.dialogPresets = make(map[string]string)
 	}
+	tab.dialogPresets[dialogType] = response
 	return nil
 }

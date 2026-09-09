@@ -59,50 +59,6 @@ func TestNormalizeKeyNameOutOfRange(t *testing.T) {
 	}
 }
 
-func TestParseDialogsResult(t *testing.T) {
-	t.Run("json string", func(t *testing.T) {
-		got, err := parseDialogsResult(`[{"type":"alert","message":"hi"},{"type":"confirm","message":"ok?"}]`)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(got) != 2 {
-			t.Fatalf("expected 2 dialogs, got %d", len(got))
-		}
-		if got[0]["type"] != "alert" || got[0]["message"] != "hi" {
-			t.Errorf("unexpected first dialog: %v", got[0])
-		}
-	})
-
-	t.Run("interface slice", func(t *testing.T) {
-		raw := []interface{}{
-			map[string]interface{}{"type": "prompt", "message": "name?"},
-		}
-		got, err := parseDialogsResult(raw)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(got) != 1 || got[0]["type"] != "prompt" {
-			t.Errorf("unexpected result: %v", got)
-		}
-	})
-
-	t.Run("nil", func(t *testing.T) {
-		got, err := parseDialogsResult(nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(got) != 0 {
-			t.Errorf("expected empty list, got %v", got)
-		}
-	})
-
-	t.Run("invalid json", func(t *testing.T) {
-		if _, err := parseDialogsResult("not-json"); err == nil {
-			t.Error("expected error for invalid JSON")
-		}
-	})
-}
-
 func TestGuessImageExt(t *testing.T) {
 	tests := []struct {
 		contentType string
