@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -2419,6 +2420,10 @@ func (a *Agent) RunConversationStreamWithOutput(ctx context.Context, input strin
 	return &output, err
 }
 
+// toolCallIDSeq is a process-wide monotonic counter used to synthesize unique
+// IDs for tool calls that arrive without one (see executeToolsWithHooks).
+var toolCallIDSeq uint64
+
 // executeToolsWithHooks executes tools with hook support
 func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.ToolCall) (map[string]ToolCallResult, error) {
 	// Inject the agent's session ID into the context so that hooks (e.g. ApprovalHook)
@@ -2461,7 +2466,11 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 	// First, ensure all tool calls have an ID (modify in place)
 	for i := range validToolCalls {
 		if validToolCalls[i].ID == "" {
-			validToolCalls[i].ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
+			// Atomic counter instead of UnixNano: Windows clock granularity
+			// is ~15ms, so a tight loop over N id-less tool calls produced
+			// DUPLICATE IDs, and the results map (keyed by ID) then collided
+			// -- one result was served for every call in the batch.
+			validToolCalls[i].ID = fmt.Sprintf("call_%d_%d", time.Now().UnixMilli(), atomic.AddUint64(&toolCallIDSeq, 1))
 		}
 	}
 
@@ -2482,7 +2491,6 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 			}
 		} else {
 			var wg sync.WaitGroup
-			errCh := make(chan error, len(group.tools))
 
 			// 全局并发上限：信号量限制同时在飞的并行工具数量，防止 LLM 一次
 			// 吐出大量调用时打爆下游（网络/进程/文件系统），同时保留吞吐收益。
@@ -2511,27 +2519,24 @@ func (a *Agent) executeToolsWithHooks(ctx context.Context, toolCalls []types.Too
 					result := a.executeSingleToolWithHooks(ctx, tc)
 					mu.Lock()
 					results[tc.ID] = result
-					if result.Err != nil {
-						errCh <- result.Err
-					}
 					mu.Unlock()
+					// Per-call failure event: keep UI/backend informed without
+					// collapsing the whole batch into a single global error.
+					if result.Err != nil {
+						a.Emit(bus.EventKindToolError, result.Err.Error())
+					}
 				}()
 			}
 
 			wg.Wait()
-			close(errCh)
 
-			// Collect all errors but don't return early - all results must be processed
-			var execErrors []error
-			for err := range errCh {
-				if err != nil {
-					execErrors = append(execErrors, err)
-				}
-			}
-			if len(execErrors) > 0 {
-				// Return first error but still return all results
-				return results, execErrors[0]
-			}
+			// NOTE: do NOT collapse per-call failures into one global error
+			// here. Every failing call already carries its own Err in
+			// `results`; returning the first error made the callers stamp
+			// "Error: <first failure>" onto ALL tool calls in the batch
+			// (observed as: 10 parallel todo deletes, one duplicate already-
+			// deleted ID failing, and all 10 results reporting that same
+			// "todo not found" even though the other 9 succeeded).
 		}
 	}
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,5 +247,87 @@ func TestMaxParallelTools_ConcurrencyCap(t *testing.T) {
 	}
 	if tracker.peak > 2 {
 		t.Fatalf("concurrency cap violated: peak in-flight = %d (want <= 2)", tracker.peak)
+	}
+}
+
+// mixedResultRegistry fails calls whose tool name contains "fail", succeeds
+// otherwise, echoing the call's arguments back so per-call identity is
+// verifiable in the result content.
+type mixedResultRegistry struct{}
+
+func (r *mixedResultRegistry) Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
+	if strings.Contains(name, "fail") {
+		return nil, fmt.Errorf("boom for %v", args["id"])
+	}
+	return fmt.Sprintf("ok:%v", args["id"]), nil
+}
+
+// TestExecuteToolsWithHooks_ParallelPartialFailureIsolatesResults 回归测试：
+// 并行工具批次里部分调用失败时，不得把第一个错误冒泡成全局错误——
+// 否则调用方会给整批 tool call 盖上同一条错误文案，成功调用的真实结果
+// 全部被丢弃（用户观察到的"10 个并行 delete 全报同一个 todo not found，
+// 但实际全删成功了"即此病）。
+func TestExecuteToolsWithHooks_ParallelPartialFailureIsolatesResults(t *testing.T) {
+	a := NewAIAgent(nil, nil, nil, "sys")
+	a.registry = &mixedResultRegistry{}
+
+	calls := []types.ToolCall{
+		{ID: "c1", Function: types.Function{Name: "tool_del_a", Arguments: `{"id":"todo_1"}`}},
+		{ID: "c2", Function: types.Function{Name: "tool_del_fail", Arguments: `{"id":"todo_2"}`}},
+		{ID: "c3", Function: types.Function{Name: "tool_del_c", Arguments: `{"id":"todo_3"}`}},
+		{ID: "c4", Function: types.Function{Name: "tool_del_d", Arguments: `{"id":"todo_4"}`}},
+	}
+
+	results, err := a.executeToolsWithHooks(context.Background(), calls)
+	if err != nil {
+		t.Fatalf("per-call failures must NOT surface as a batch-global error, got: %v", err)
+	}
+	if len(results) != len(calls) {
+		t.Fatalf("expected %d results, got %d", len(calls), len(results))
+	}
+	for _, tc := range calls {
+		res, ok := results[tc.ID]
+		if !ok {
+			t.Fatalf("missing result for call %s", tc.ID)
+		}
+		if tc.ID == "c2" {
+			if res.Err == nil {
+				t.Fatalf("call c2 should carry its own error")
+			}
+			if !strings.Contains(res.Err.Error(), "todo_2") {
+				t.Fatalf("c2 error should mention its own id, got: %v", res.Err)
+			}
+			continue
+		}
+		if res.Err != nil {
+			t.Fatalf("call %s must succeed, got error: %v", tc.ID, res.Err)
+		}
+		want := "ok:todo_" + strings.TrimPrefix(tc.ID, "c") // c1 -> todo_a
+		if !strings.Contains(res.Content, want) {
+			t.Fatalf("call %s result content mismatch: want substring %q, got %q", tc.ID, want, res.Content)
+		}
+	}
+}
+
+// TestExecuteToolsWithHooks_UniqueSyntheticIDs 回归测试：模型吐出多个无 ID 的
+// tool call 时，合成 ID 必须互不相同（Windows 时钟 ~15ms 粒度下 UnixNano
+// 会撞车，导致 results map 互相覆盖）。
+func TestExecuteToolsWithHooks_UniqueSyntheticIDs(t *testing.T) {
+	a := NewAIAgent(nil, nil, nil, "sys")
+	a.registry = &mixedResultRegistry{}
+
+	calls := make([]types.ToolCall, 0, 10)
+	for i := 0; i < 10; i++ {
+		calls = append(calls, types.ToolCall{
+			Function: types.Function{Name: "tool_del", Arguments: fmt.Sprintf(`{"id":"todo_%d"}`, i)},
+		})
+	}
+
+	results, err := a.executeToolsWithHooks(context.Background(), calls)
+	if err != nil {
+		t.Fatalf("execute error: %v", err)
+	}
+	if len(results) != len(calls) {
+		t.Fatalf("synthetic ID collision: expected %d distinct results, got %d", len(calls), len(results))
 	}
 }
