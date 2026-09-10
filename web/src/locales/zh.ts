@@ -1215,6 +1215,15 @@ export default {
     memoryUsage: '内存使用',
     goroutines: '协程数',
     na: '无',
+    links: {
+      title: '项目链接',
+      website: '官方网站',
+      websiteDesc: '了解 Magic 与最新动态',
+      docs: '使用文档',
+      docsDesc: '安装、配置与命令参考',
+      github: 'GitHub 仓库',
+      githubDesc: '源码、Issue 与 Release',
+    },
     update: {
       title: '版本信息',
       currentVersion: '当前版本',

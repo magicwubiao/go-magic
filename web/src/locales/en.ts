@@ -1215,6 +1215,15 @@ export default {
     memoryUsage: 'Memory Usage',
     goroutines: 'Goroutines',
     na: 'N/A',
+    links: {
+      title: 'Project Links',
+      website: 'Official Website',
+      websiteDesc: 'Learn about Magic and what is new',
+      docs: 'Documentation',
+      docsDesc: 'Install, configure and CLI reference',
+      github: 'GitHub Repository',
+      githubDesc: 'Source code, issues and releases',
+    },
     update: {
       title: 'Version Info',
       currentVersion: 'Current Version',
