@@ -862,6 +862,15 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
+          // 澄清已终结（回合被取消/等待超时/用户在其他端关闭）：后端已删除
+          // pending，前端若不移除卡片，答复/关闭均会 404，变成永久死卡片。
+          if (data.type === 'clarify_closed') {
+            if (data.id) {
+              markClarifyExpired(sessionId, data.id)
+            }
+            return
+          }
+
           if (data.error) {
             state.streaming = false
             state.taskProgress = null
@@ -1033,6 +1042,14 @@ export const useChatStore = defineStore('chat', () => {
       if (tc.status === 'running') {
         tc.status = 'error'
         tc.success = false
+      }
+    }
+
+    // 回合被用户终止：挂起的澄清/提问随回合一起取消（后端 pending 已删），
+    // 标记过期移除，否则残留死卡片，答复/关闭均 404。
+    for (const c of state.pendingClarifications) {
+      if (c.status === 'pending') {
+        markClarifyExpired(sessionId, c.id)
       }
     }
 
@@ -1215,8 +1232,15 @@ export const useChatStore = defineStore('chat', () => {
         }
       }, 1500)
     } catch (e) {
-      card.status = 'pending'
       const errMsg = e instanceof Error ? e.message : String(e)
+      if (/HTTP 404|not found/i.test(errMsg)) {
+        // 后端已不存在该澄清（回合被取消/等待超时）：按过期处理，静默移除
+        // 卡片而不是报错卡死。
+        card.status = 'pending'
+        markClarifyExpired(sessionId, clarifyId)
+        return
+      }
+      card.status = 'pending'
       error.value = { message: `${$t('chat.clarifyAnswerFailed')}: ${errMsg}` }
       throw e
     }
@@ -1233,6 +1257,12 @@ export const useChatStore = defineStore('chat', () => {
       await clarifyApi.dismissClarify(clarifyId)
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e)
+      if (/HTTP 404|not found/i.test(errMsg)) {
+        // 后端已不存在该澄清（回合被取消/等待超时）：按过期处理，静默移除
+        // 卡片而不是报错卡死。
+        markClarifyExpired(sessionId, clarifyId)
+        return
+      }
       error.value = { message: `${$t('chat.clarifyDismissFailed')}: ${errMsg}` }
       throw e
     }

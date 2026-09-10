@@ -91,12 +91,35 @@ func (s *Server) Ask(ctx context.Context, sessionID string, req tool.ClarifyRequ
 	case ans := <-pc.ans:
 		return ans, nil
 	case <-pc.dismiss:
+		pushClarifyClosed(s, pc, "dismissed")
 		return nil, fmt.Errorf("clarification dismissed by user")
 	case <-ctx.Done():
+		// 回合被取消（如用户点停止）或结束：卡片已死，best-effort 通知前端
+		// 移除，否则前端残留一张答复/关闭均 404 的死卡片。
+		pushClarifyClosed(s, pc, "canceled")
 		return nil, ctx.Err()
 	case <-timer.C:
+		pushClarifyClosed(s, pc, "timeout")
 		return nil, fmt.Errorf("clarification timed out after %s", clarifyTimeout)
 	}
+}
+
+// pushClarifyClosed best-effort 向该会话的 SSE 流推送 clarify_closed 事件，
+// 前端据此把挂起的澄清卡片标记为过期并移除。SSE 通道已死时静默放弃
+// （此时前端卡片由倒计时兜底过期）。
+func pushClarifyClosed(s *Server, pc *PendingClarification, reason string) {
+	s.clarifySSEHandlersMu.Lock()
+	push := s.clarifySSEHandlers[pc.SessionID]
+	s.clarifySSEHandlersMu.Unlock()
+	if push == nil {
+		return
+	}
+	push(map[string]interface{}{
+		"type":       "clarify_closed",
+		"id":         pc.ID,
+		"session_id": pc.SessionID,
+		"reason":     reason,
+	})
 }
 
 // resolveClarification 唤醒等待中的澄清请求（幂等，非阻塞）。
