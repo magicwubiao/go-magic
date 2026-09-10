@@ -807,6 +807,22 @@ func NewProcessTool() *ProcessTool {
 
 func (t *ProcessTool) Name() string { return "process" }
 
+// procSnapshot returns a shallow copy of the process record so mutable
+// fields (Status/ExitCode, written by the reaper goroutine under the
+// lock) are never read outside the lock — otherwise `-race` flags the
+// reaper's write against poll/wait/log reads. The cmd/stdin/log
+// pointers in the copy are shared on purpose: the log buffer has its
+// own mutex, and kill/write run under the tool lock.
+func (t *ProcessTool) procSnapshot(sessionID string) (ProcessInfo, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p, ok := t.processes[sessionID]
+	if !ok {
+		return ProcessInfo{}, false
+	}
+	return *p, true
+}
+
 func (t *ProcessTool) Description() string {
 	return "Start and manage BACKGROUND processes. Actions: run (start a command in background, returns session_id immediately — use this instead of blocking the terminal for long-running commands), list, poll (check status), wait (block until exit or timeout), kill, write (write to process stdin), log (read captured output so far)."
 }
@@ -875,10 +891,7 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 			return nil, fmt.Errorf("session_id is required for action=poll")
 		}
 
-		t.mu.Lock()
-		p, ok := t.processes[sessionID]
-		t.mu.Unlock()
-
+		p, ok := t.procSnapshot(sessionID)
 		if !ok {
 			return map[string]interface{}{
 				"status": "not_found",
@@ -909,9 +922,7 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			t.mu.Lock()
-			p, ok := t.processes[sessionID]
-			t.mu.Unlock()
+			p, ok := t.procSnapshot(sessionID)
 			if !ok {
 				return map[string]interface{}{
 					"session_id": sessionID,
@@ -996,9 +1007,7 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 			return nil, fmt.Errorf("session_id is required for action=log")
 		}
 
-		t.mu.Lock()
-		p, ok := t.processes[sessionID]
-		t.mu.Unlock()
+		p, ok := t.procSnapshot(sessionID)
 		if !ok {
 			return map[string]interface{}{
 				"session_id": sessionID,
