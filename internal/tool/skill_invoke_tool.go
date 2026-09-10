@@ -78,7 +78,7 @@ func (t *SkillInvokeTool) Execute(ctx context.Context, params map[string]interfa
 		return t.listSkills()
 	case "info":
 		return t.getSkillInfo(params)
-	case "invoke":
+	case "invoke", "run": // "run" is a common LLM alias for invoking a skill
 		return t.invokeSkill(params)
 	case "create":
 		return t.createSkill(params)

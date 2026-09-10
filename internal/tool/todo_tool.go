@@ -274,7 +274,7 @@ func (t *TodoTool) Execute(ctx context.Context, args map[string]interface{}) (in
 	case "complete":
 		return t.completeTodo(args)
 	default:
-		return nil, fmt.Errorf("unknown action: %s", action)
+		return nil, fmt.Errorf("unknown action: %s (valid actions: create, list, update, delete, complete; to mark a todo in progress use action=update with status=in_progress)", action)
 	}
 }
 

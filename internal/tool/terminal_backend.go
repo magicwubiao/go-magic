@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -743,16 +744,59 @@ func (b *ModalBackend) Execute(ctx context.Context, cmd string, workDir string, 
 type ProcessTool struct {
 	processes map[string]*ProcessInfo
 	mu        sync.Mutex
+	seq       int
+}
+
+// procLogBuf is a bounded tail buffer capturing combined stdout/stderr.
+type procLogBuf struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const procLogMaxBytes = 64 * 1024
+
+func (b *procLogBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > procLogMaxBytes {
+		// Keep the tail; align to next newline for readability.
+		b.buf = b.buf[len(b.buf)-procLogMaxBytes:]
+		if idx := indexByte(b.buf, '\n'); idx >= 0 && idx < len(b.buf)-1 {
+			b.buf = b.buf[idx+1:]
+		}
+	}
+	return len(p), nil
+}
+
+func indexByte(b []byte, c byte) int {
+	for i, x := range b {
+		if x == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func (b *procLogBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
 
 type ProcessInfo struct {
-	ID      string    `json:"id"`
-	Command string    `json:"command"`
-	Backend string    `json:"backend"`
-	WorkDir string    `json:"workdir"`
-	PID     int       `json:"pid"`
-	Start   time.Time `json:"start"`
-	Status  string    `json:"status"`
+	ID       string    `json:"id"`
+	Command  string    `json:"command"`
+	Backend  string    `json:"backend"`
+	WorkDir  string    `json:"workdir"`
+	PID      int       `json:"pid"`
+	Start    time.Time `json:"start"`
+	Status   string    `json:"status"`
+	ExitCode int       `json:"exit_code,omitempty"`
+
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	log   *procLogBuf
 }
 
 func NewProcessTool() *ProcessTool {
@@ -764,7 +808,7 @@ func NewProcessTool() *ProcessTool {
 func (t *ProcessTool) Name() string { return "process" }
 
 func (t *ProcessTool) Description() string {
-	return "Manage background processes: list, status, kill, write input"
+	return "Start and manage BACKGROUND processes. Actions: run (start a command in background, returns session_id immediately — use this instead of blocking the terminal for long-running commands), list, poll (check status), wait (block until exit or timeout), kill, write (write to process stdin), log (read captured output so far)."
 }
 
 func (t *ProcessTool) Schema() map[string]interface{} {
@@ -773,28 +817,28 @@ func (t *ProcessTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"list", "poll", "wait", "kill", "write", "log"},
-				"description": "Action to perform",
+				"enum":        []string{"run", "list", "poll", "wait", "kill", "write", "log"},
+				"description": "Action to perform. run=start a new background process (requires command); poll/wait/kill/write/log operate on an existing session_id.",
 			},
 			"session_id": map[string]interface{}{
 				"type":        "string",
-				"description": "Process session ID",
+				"description": "Process session ID (returned by run)",
 			},
 			"command": map[string]interface{}{
 				"type":        "string",
-				"description": "Command to run (for background=true)",
-			},
-			"backend": map[string]interface{}{
-				"type":        "string",
-				"description": "Backend to use (default: local)",
+				"description": "Command to run (required for action=run)",
 			},
 			"workdir": map[string]interface{}{
 				"type":        "string",
-				"description": "Working directory",
+				"description": "Working directory (for action=run)",
 			},
 			"data": map[string]interface{}{
 				"type":        "string",
-				"description": "Data to write to process stdin",
+				"description": "Data to write to process stdin (for action=write)",
+			},
+			"timeout": map[string]interface{}{
+				"type":        "number",
+				"description": "Max seconds to block for action=wait (default: 30)",
 			},
 		},
 		"required": []string{"action"},
@@ -805,6 +849,9 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 	action, _ := args["action"].(string)
 
 	switch action {
+	case "run", "start": // "start" is a common LLM alias
+		return t.runProcess(ctx, args)
+
 	case "list":
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -822,10 +869,10 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 		return map[string]interface{}{"processes": processes}, nil
 
-	case "poll", "wait":
+	case "poll":
 		sessionID, _ := args["session_id"].(string)
 		if sessionID == "" {
-			return nil, fmt.Errorf("session_id is required")
+			return nil, fmt.Errorf("session_id is required for action=poll")
 		}
 
 		t.mu.Lock()
@@ -844,39 +891,216 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 			"status":     p.Status,
 			"pid":        p.PID,
 			"command":    p.Command,
+			"exit_code":  p.ExitCode,
 		}, nil
+
+	case "wait":
+		sessionID, _ := args["session_id"].(string)
+		if sessionID == "" {
+			return nil, fmt.Errorf("session_id is required for action=wait")
+		}
+
+		timeout := 30.0
+		if tv, ok := args["timeout"].(float64); ok && tv > 0 {
+			timeout = tv
+		}
+		deadline := time.After(time.Duration(timeout * float64(time.Second)))
+
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			t.mu.Lock()
+			p, ok := t.processes[sessionID]
+			t.mu.Unlock()
+			if !ok {
+				return map[string]interface{}{
+					"session_id": sessionID,
+					"status":     "not_found",
+					"error":      "Process not found",
+				}, nil
+			}
+			if p.Status != "running" {
+				return map[string]interface{}{
+					"session_id": p.ID,
+					"status":     p.Status,
+					"pid":        p.PID,
+					"command":    p.Command,
+					"exit_code":  p.ExitCode,
+				}, nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("wait canceled: %w", ctx.Err())
+			case <-deadline:
+				return map[string]interface{}{
+					"session_id": p.ID,
+					"status":     p.Status,
+					"pid":        p.PID,
+					"note":       fmt.Sprintf("still running after %.0fs; use action=log to inspect output", timeout),
+				}, nil
+			case <-ticker.C:
+			}
+		}
 
 	case "kill":
 		sessionID, _ := args["session_id"].(string)
 		if sessionID == "" {
-			return nil, fmt.Errorf("session_id is required")
+			return nil, fmt.Errorf("session_id is required for action=kill")
 		}
 
 		t.mu.Lock()
 		defer t.mu.Unlock()
 
 		if p, ok := t.processes[sessionID]; ok {
-			cmd := exec.Command("kill", fmt.Sprintf("%d", p.PID))
-			cmd.Run()
+			// Cross-platform: Process.Kill works on Windows where the `kill`
+			// shell command does not exist.
+			if p.cmd != nil && p.cmd.Process != nil && p.Status == "running" {
+				_ = p.cmd.Process.Kill()
+			}
 			p.Status = "killed"
 		}
 
 		return map[string]interface{}{"session_id": sessionID, "status": "killed"}, nil
 
+	case "write":
+		sessionID, _ := args["session_id"].(string)
+		if sessionID == "" {
+			return nil, fmt.Errorf("session_id is required for action=write")
+		}
+		data, _ := args["data"].(string)
+		if data == "" {
+			return nil, fmt.Errorf("data is required for action=write")
+		}
+
+		t.mu.Lock()
+		p, ok := t.processes[sessionID]
+		t.mu.Unlock()
+		if !ok {
+			return map[string]interface{}{
+				"session_id": sessionID,
+				"status":     "not_found",
+				"error":      "Process not found",
+			}, nil
+		}
+		if p.stdin == nil {
+			return nil, fmt.Errorf("process %s has no stdin (it was not started with a stdin pipe)", sessionID)
+		}
+		if _, err := io.WriteString(p.stdin, data); err != nil {
+			return nil, fmt.Errorf("failed to write to process stdin: %w", err)
+		}
+		return map[string]interface{}{"session_id": sessionID, "written": len(data)}, nil
+
 	case "log":
 		sessionID, _ := args["session_id"].(string)
 		if sessionID == "" {
-			return nil, fmt.Errorf("session_id is required")
+			return nil, fmt.Errorf("session_id is required for action=log")
+		}
+
+		t.mu.Lock()
+		p, ok := t.processes[sessionID]
+		t.mu.Unlock()
+		if !ok {
+			return map[string]interface{}{
+				"session_id": sessionID,
+				"status":     "not_found",
+				"error":      "Process not found",
+			}, nil
 		}
 
 		return map[string]interface{}{
-			"session_id": sessionID,
-			"message":    "Process log not implemented - use execute_command to run foreground commands",
+			"session_id": p.ID,
+			"status":     p.Status,
+			"pid":        p.PID,
+			"exit_code":  p.ExitCode,
+			"output":     p.log.String(),
 		}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown action: %s", action)
+		return nil, fmt.Errorf("unknown action: %s (valid actions: run, list, poll, wait, kill, write, log)", action)
 	}
+}
+
+// runProcess launches a command in the background, registers it and returns
+// immediately with the session_id. Combined stdout/stderr is captured into a
+// bounded buffer readable via action=log.
+func (t *ProcessTool) runProcess(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	command, _ := args["command"].(string)
+	if strings.TrimSpace(command) == "" {
+		return nil, fmt.Errorf("command is required for action=run")
+	}
+	workDir, _ := args["workdir"].(string)
+
+	execCmd := exec.Command("bash", "-c", command)
+	execCmd.Dir = workDir
+	if execCmd.Dir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			execCmd.Dir = cwd
+		}
+	}
+
+	logBuf := &procLogBuf{}
+	execCmd.Stdout = logBuf
+	execCmd.Stderr = logBuf
+	stdin, err := execCmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	if err := execCmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start process: %w", err)
+	}
+
+	t.mu.Lock()
+	t.seq++
+	info := &ProcessInfo{
+		ID:      fmt.Sprintf("proc_%d_%d", time.Now().Unix(), t.seq),
+		Command: command,
+		Backend: "local",
+		WorkDir: execCmd.Dir,
+		PID:     execCmd.Process.Pid,
+		Start:   time.Now(),
+		Status:  "running",
+		cmd:     execCmd,
+		stdin:   stdin,
+		log:     logBuf,
+	}
+	t.processes[info.ID] = info
+	t.mu.Unlock()
+
+	// Reap the process when it exits so it does not linger as a zombie and
+	// so poll/wait see the final status + exit code.
+	go func() {
+		waitErr := execCmd.Wait()
+		closeErr := stdin.Close()
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if info.Status == "killed" {
+			return
+		}
+		if waitErr == nil {
+			info.Status = "exited"
+			info.ExitCode = 0
+		} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			info.Status = "exited"
+			info.ExitCode = exitErr.ExitCode()
+		} else {
+			info.Status = "failed"
+			info.ExitCode = -1
+			fmt.Fprintf(info.log, "\n(process error: %v)", waitErr)
+		}
+		if closeErr != nil && waitErr == nil {
+			// stdin close race with an already-exited child is harmless
+			_ = closeErr
+		}
+	}()
+
+	return map[string]interface{}{
+		"session_id": info.ID,
+		"pid":        info.PID,
+		"status":     info.Status,
+		"command":    info.Command,
+		"note":       "Started in background. Use action=log to read output, action=poll/wait to check completion, action=kill to stop.",
+	}, nil
 }
 
 // ExportTerminalBackendsJSON exports available backends as JSON
