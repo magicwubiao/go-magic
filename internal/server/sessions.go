@@ -420,7 +420,11 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		Content   string   `json:"content"`
 		Images    []string `json:"images"`
 		ImageURLs []string `json:"imageUrls"` // uploaded /api/uploads/ path per image (same order) — used as the persisted reference
-		Files     []struct {
+		// 每张图片的原始文件名（与 images 同序）。图片走多模态通道，不在 files
+		// 里，落库时要靠它把「缩略图旁边显示什么名字」记下来；缺省时后端会回查
+		// uploads 元数据兜底（见 uploadDisplayName）。
+		ImageNames []string `json:"imageNames"`
+		Files      []struct {
 			Name     string `json:"name"`
 			Filename string `json:"filename"`
 			URL      string `json:"url"`
@@ -444,6 +448,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	)
 	var contentParts []types.ContentPart
 	var imageURLRefs []string // persisted reference per image part ("" = drop on persist)
+	var imageNames []string   // original display name per image part ("" = resolve from uploads meta on persist)
 	if len(payload.Images) > 0 {
 		if len(payload.Images) > maxImagesPerMessage {
 			http.Error(w, fmt.Sprintf("too many images: %d attached, max %d per message", len(payload.Images), maxImagesPerMessage), 400)
@@ -467,11 +472,16 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			if i < len(payload.ImageURLs) {
 				ref = payload.ImageURLs[i]
 			}
+			name := ""
+			if i < len(payload.ImageNames) {
+				name = payload.ImageNames[i]
+			}
 			contentParts = append(contentParts, types.ContentPart{
 				Type:     "image_url",
 				ImageURL: &types.MediaURL{URL: imgURL},
 			})
 			imageURLRefs = append(imageURLRefs, ref)
+			imageNames = append(imageNames, name)
 		}
 	}
 
@@ -535,34 +545,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 						handled = true
 						break
 					}
-					mimeType := "application/octet-stream"
-					ext := strings.ToLower(filepath.Ext(f.Name))
-					switch ext {
-					case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
-						mimeType = "text/plain"
-					case ".png":
-						mimeType = "image/png"
-					case ".jpg", ".jpeg":
-						mimeType = "image/jpeg"
-					case ".gif":
-						mimeType = "image/gif"
-					case ".webp":
-						mimeType = "image/webp"
-					case ".svg":
-						mimeType = "image/svg+xml"
-					case ".pdf":
-						mimeType = "application/pdf"
-					case ".doc":
-						mimeType = "application/msword"
-					case ".docx":
-						mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-					case ".xls", ".xlsx":
-						mimeType = "application/vnd.ms-excel"
-					case ".ppt", ".pptx":
-						mimeType = "application/vnd.ms-powerpoint"
-					case ".zip":
-						mimeType = "application/zip"
-					}
+					mimeType := mimeFromFilename(f.Name)
 					// Extensionless or unknown files (LICENSE, Makefile, .bin
 					// fallbacks...) stay at octet-stream here. Sniff the real
 					// content and override so convertFilePart doesn't file
@@ -723,43 +706,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			// Strip inline base64 payloads before persisting. The agent
 			// already consumed them for this turn; keeping megabytes of
 			// base64 in the SQLite message blob would bloat every saved
-			// session. Files keep their name/URL; images degrade to the
-			// uploaded reference path (imageUrls pairing) or are dropped
-			// entirely when no reference is known.
-			persistedParts := make([]types.ContentPart, 0, len(contentParts))
-			imgIdx := 0
-			for _, part := range contentParts {
-				switch {
-				case part.Type == "file" && part.File != nil:
-					persistedParts = append(persistedParts, types.ContentPart{
-						Type: "file",
-						File: &types.FileInfo{
-							Name: part.File.Name,
-							URL:  part.File.URL,
-							// MimeType kept — cheap and lets convert layer
-							// classify the file after a session reload.
-							MimeType: part.File.MimeType,
-							Contents: "", // not persisted
-						},
-					})
-				case part.Type == "image_url" && part.ImageURL != nil:
-					ref := ""
-					if imgIdx < len(imageURLRefs) {
-						ref = imageURLRefs[imgIdx]
-					}
-					imgIdx++
-					if ref != "" {
-						persistedParts = append(persistedParts, types.ContentPart{
-							Type:     "image_url",
-							ImageURL: &types.MediaURL{URL: ref},
-						})
-					}
-					// no reference → drop the part entirely; a bare data URL
-					// must never reach the session store.
-				default:
-					persistedParts = append(persistedParts, part)
-				}
-			}
+			// session. Files and images both degrade to their uploaded
+			// reference path; a bare data URL must never reach the store.
+			persistedParts := persistedContentParts(contentParts, imageURLRefs, imageNames, s.uploadDisplayName)
 
 			sess.Messages = append(sess.Messages, types.Message{
 				Role:         "user",
@@ -982,6 +931,112 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	doneData, _ := json.Marshal(map[string]interface{}{"done": true, "file_ops": finalOps})
 	writeSSE("data: " + string(doneData) + "\n\n")
+}
+
+// ============================================================================
+// Attachment persistence helpers
+// ============================================================================
+
+// mimeFromFilename 按扩展名给出 MIME，未知一律 application/octet-stream，由
+// 调用方决定是否再按内容嗅探修正。附件分类（文本 / 图片 / 二进制）依赖它。
+func mimeFromFilename(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".txt", ".md", ".json", ".yaml", ".yml", ".csv", ".xml", ".html", ".htm", ".js", ".ts", ".go", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".rb", ".php", ".sh", ".css", ".sql", ".log":
+		return "text/plain"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".doc":
+		return "application/msword"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls", ".xlsx":
+		return "application/vnd.ms-excel"
+	case ".ppt", ".pptx":
+		return "application/vnd.ms-powerpoint"
+	case ".zip":
+		return "application/zip"
+	}
+	return "application/octet-stream"
+}
+
+// imageMimeForRef 推断图片附件的 MIME：优先取 data URL 前缀（本轮请求里的图片
+// 就是 data URL），落库后只剩引用路径时退回扩展名。两者都判不出时返回
+// "image/*"——前端只要 startsWith("image/") 就能决定是否渲染缩略图。
+func imageMimeForRef(dataURL, ref string) string {
+	if strings.HasPrefix(dataURL, "data:") {
+		rest := strings.TrimPrefix(dataURL, "data:")
+		if i := strings.Index(rest, ";"); i > 0 {
+			if m := strings.ToLower(rest[:i]); strings.HasPrefix(m, "image/") {
+				return m
+			}
+		}
+	}
+	if m := mimeFromFilename(ref); strings.HasPrefix(m, "image/") {
+		return m
+	}
+	return "image/*"
+}
+
+// persistedContentParts 把本轮内容部件转成可落库的形态：剥掉内联 base64（本轮
+// 已消费完毕，几百 KB~几 MB 的 base64 存进会话库会让每次会话读取都变慢），
+// 其余元信息保留。
+//
+// 图片刻意落成 file 部件而不是 image_url：MediaURL 没有名字字段，图片一旦只
+// 剩一个 uuid 引用，回放时前端认不出它，气泡里就只剩 [文件] 占位。file 部件
+// 能同时带上原始名、MIME 与引用路径，前端据此渲染缩略图 + 文件名。
+// resolveName 在客户端没给名字时回查 uploads 元数据兜底（可为 nil）。
+func persistedContentParts(parts []types.ContentPart, imageURLRefs, imageNames []string, resolveName func(string) string) []types.ContentPart {
+	out := make([]types.ContentPart, 0, len(parts))
+	imgIdx := 0
+	for _, part := range parts {
+		switch {
+		case part.Type == "file" && part.File != nil:
+			out = append(out, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name: part.File.Name,
+					URL:  part.File.URL,
+					// MimeType kept — cheap and lets the API layer classify
+					// the attachment after a session reload.
+					MimeType: part.File.MimeType,
+					Contents: "", // not persisted
+				},
+			})
+		case part.Type == "image_url" && part.ImageURL != nil:
+			ref, name := "", ""
+			if imgIdx < len(imageURLRefs) {
+				ref = imageURLRefs[imgIdx]
+			}
+			if imgIdx < len(imageNames) {
+				name = imageNames[imgIdx]
+			}
+			imgIdx++
+			if name == "" && resolveName != nil {
+				name = resolveName(ref)
+			}
+			out = append(out, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     name,
+					MimeType: imageMimeForRef(part.ImageURL.URL, ref),
+					URL:      ref,
+				},
+			})
+		default:
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // ============================================================================

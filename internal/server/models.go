@@ -84,6 +84,10 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		_ = s.persistConfig(true)
 		// Recreate provider
 		s.provider = createProvider(s.cfg)
+		// Install the conversion/vision policy on the fresh instance: without
+		// it the new provider runs with a nil ConvertCfg and every image is
+		// downgraded to a placeholder.
+		s.refreshConvertConfig()
 		// Clear all agents to force re-creation
 		s.agents = make(map[string]*agent.Agent)
 	}
@@ -480,6 +484,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 			s.cfg.Providers[name] = provCfg
 			_ = s.persistConfig(true)
+			// The vision declaration is only useful if the running provider
+			// sees it: cached agents share this provider instance, so refresh
+			// its convert config instead of waiting for a restart.
+			s.refreshConvertConfig()
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 		return
@@ -533,6 +541,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 			s.cfg.Providers[providerName] = provCfg
 			_ = s.persistConfig(true)
+			// See the PUT branch: keep the live provider's vision policy in
+			// sync with the just-saved declaration.
+			s.refreshConvertConfig()
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": providerName, "created": true})
 		return

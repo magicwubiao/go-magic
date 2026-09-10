@@ -657,7 +657,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[]): Promise<void> {
+  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
       if (!session) return
@@ -673,7 +673,10 @@ export const useChatStore = defineStore('chat', () => {
       timestamp: new Date().toISOString(),
       session_id: sessionId,
       images,
-      files,
+      // 气泡里展示的附件清单：必须包含图片。图片走 images 多模态通道，不在
+      // files 里；只挂 files 的话这条消息一旦从服务端重载，图片就只剩 [文件]。
+      // attachments 是发送前的完整附件列表，仅用于本地渲染，不上行。
+      files: attachments && attachments.length ? attachments : files,
     })
 
     state.streaming = true
@@ -700,7 +703,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
-      const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls)
+      const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls, imageNames)
       sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
 
       eventSource.onmessage = (event) => {

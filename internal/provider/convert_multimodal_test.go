@@ -164,6 +164,10 @@ func TestModelSupportsVisionPatterns(t *testing.T) {
 		"glm-4.5v", "glm-4v-plus", "glm-4.6v",
 		"qwen-vl-max", "qwen3-vl-plus",
 		"claude-sonnet-4", "gpt-4o-mini", "gemini-2.5-flash",
+		// Multimodal members of text-looking families (see visionModels):
+		// previously mis-classified as text-only, which forced users to
+		// declare vision manually in the model settings page.
+		"glm-5.3-flash",
 	}
 	for _, m := range visionModels {
 		if !ModelSupportsVision(m) {
@@ -171,8 +175,8 @@ func TestModelSupportsVisionPatterns(t *testing.T) {
 		}
 	}
 	textModels := []string{
-		"glm-5.3-flash", "deepseek-v4-pro", "qwen3.8-flash",
-		"kimi-k2", "deepseek-chat",
+		"deepseek-v4-pro", "qwen3.8-flash",
+		"kimi-k2", "deepseek-chat", "glm-5.3",
 	}
 	for _, m := range textModels {
 		if ModelSupportsVision(m) {
@@ -239,7 +243,8 @@ func TestModelSupportsVisionRegistry(t *testing.T) {
 
 // Heuristic families added for models whose vision capability is NOT in the
 // registry (user-configured names): doubao-seed, omni, llama-4, step-*,
-// kimi-latest, minicpm-v, molmo, phi-4-multimodal. Plus the negative list:
+// kimi-latest, minicpm-v, molmo, phi-4-multimodal, plus the multimodal
+// "-flash" members of the deepseek/glm families. Plus the negative list:
 // text-only members of otherwise-vision families (o-series minis) that the
 // old "o3" substring pattern falsely flagged.
 func TestModelSupportsVisionNewPatterns(t *testing.T) {
@@ -249,6 +254,7 @@ func TestModelSupportsVisionNewPatterns(t *testing.T) {
 		"llama-4-maverick", "llama-4-scout",
 		"step-3", "step-1v-8k", "step-1o-turbo",
 		"kimi-latest", "minicpm-v", "molmo-16b", "phi-4-multimodal",
+		"deepseek-flash", "glm-5.3-flash",
 	}
 	for _, m := range visionModels {
 		if !ModelSupportsVision(m) {

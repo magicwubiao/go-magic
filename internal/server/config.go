@@ -424,6 +424,10 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 			s.cfg = newCfg
 			s.provider = createProvider(s.cfg)
 			s.agents = make(map[string]*agent.Agent)
+			// Fresh provider starts with a nil ConvertCfg, which means "no
+			// vision at all" until the next agent is built. Install the
+			// derived policy right away.
+			s.refreshConvertConfig()
 			s.mu.Unlock()
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true})
@@ -664,6 +668,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if needsProviderReload {
 			s.mu.Lock()
 			s.provider = createProvider(s.cfg)
+			// Same as the raw-editor path: the rebuilt provider needs the
+			// current conversion/vision policy installed on it.
+			s.refreshConvertConfig()
 			s.mu.Unlock()
 		}
 

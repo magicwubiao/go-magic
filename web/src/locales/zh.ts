@@ -245,6 +245,7 @@ export default {
     attachmentName: '附件',
     clickToViewFiles: '点击查看文件管理',
     fileBtn: '[文件]',
+    imageBtn: '图片',
     uploadFile: '上传文件',
     dropToUpload: '拖放文件到此处上传',
     uploadSuccess: '{count} 个文件上传成功',

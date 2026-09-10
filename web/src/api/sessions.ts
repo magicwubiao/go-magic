@@ -386,6 +386,31 @@ export function addTokenToUrl(url: string): string {
   return `${url}${sep}token=${encodeURIComponent(token)}`
 }
 
+// 去掉 URL 里已有的 token 参数。落库的上传引用可能带着签发时的 token
+// （上传响应就是 addTokenToUrl 处理过的），重新签发时若不剥掉，?token= 会
+// 叠加两个值，服务端只取第一个——凭据一旦轮换，旧 token 就让缩略图 401。
+function stripUrlToken(url: string): string {
+  if (!/[?&]token=/.test(url)) return url
+  const hashAt = url.indexOf('#')
+  const hash = hashAt >= 0 ? url.slice(hashAt) : ''
+  const base = hashAt >= 0 ? url.slice(0, hashAt) : url
+  const qAt = base.indexOf('?')
+  if (qAt < 0) return url
+  const params = new URLSearchParams(base.slice(qAt + 1))
+  params.delete('token')
+  const qs = params.toString()
+  return base.slice(0, qAt) + (qs ? `?${qs}` : '') + hash
+}
+
+// attachmentSrc 把消息里带回的附件地址变成能直接塞进 <img src> / <a href> 的
+// 地址。data:/blob:/外链原样返回；站内 /api/uploads/... 挂在 requireAuth 后面，
+// 浏览器发不出 Authorization 头，只能走 ?token=（与上传返回的 url 同一套机制）。
+export function attachmentSrc(url?: string): string {
+  if (!url) return ''
+  if (/^(data:|blob:|https?:)/i.test(url)) return url
+  return addTokenToUrl(stripUrlToken(url))
+}
+
 export async function listFiles(): Promise<FileItem[]> {
   const res = await request<{ files: FileItem[] }>('/files')
   return (res.files || []).map(f => ({
@@ -426,6 +451,9 @@ export class ChatStream {
     // 每张图片对应的已上传 /api/uploads/ 路径（与 images 同序）。
     // 后端用它作为持久化引用，避免把 data URL base64 写进会话库。
     imageUrls?: string[]
+    // 每张图片的原始文件名（与 images 同序）。后端落库时记下来，会话回放才
+    // 能在缩略图旁边显示用户认得出的名字，而不是一串 uuid。
+    imageNames?: string[]
     files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
   }) {
     const token = getAuthToken()
@@ -565,7 +593,7 @@ export async function cancelGeneration(sessionId: string): Promise<void> {
   return request(`/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.
   const slimFiles = files?.map(f => ({
@@ -577,6 +605,7 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     content,
     images,
     imageUrls,
+    imageNames,
     files: slimFiles,
   })
 }

@@ -245,6 +245,7 @@ export default {
     attachmentName: 'Attachment',
     clickToViewFiles: 'Click to view file manager',
     fileBtn: '[Files]',
+    imageBtn: 'Image',
     uploadFile: 'Upload file',
     dropToUpload: 'Drop files here to upload',
     uploadSuccess: '{count} file(s) uploaded',

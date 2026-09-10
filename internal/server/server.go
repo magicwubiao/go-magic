@@ -721,6 +721,62 @@ func createProvider(cfg *appconfig.Config) provider.Provider {
 	return prov
 }
 
+// buildConvertConfig derives the file-conversion / vision policy from the
+// CURRENT config and the CURRENT model.
+//
+// Precedence for SupportVision (mirrors provider.WithAutoVision):
+//  1. explicit per-provider "vision" declaration (config Providers[].vision,
+//     edited in the model settings page) — beats name-based guessing, which is
+//     best-effort and lags new releases (e.g. glm-4.1v-thinking-flashx matched
+//     no pattern and images were silently downgraded to placeholders);
+//  2. name-based detection (provider.ModelSupportsVision).
+//
+// AutoVision stays on either way: request-time re-evaluation keeps the value
+// correct when the model is switched without a provider rebuild.
+func (s *Server) buildConvertConfig() *provider.ConvertConfig {
+	convertCfg := &provider.ConvertConfig{
+		UploadURLPrefix: "",
+		StrategyName:    "auto",
+		SupportVision:   false,
+		AutoVision:      true,
+	}
+	if s.cfg == nil || s.provider == nil {
+		return convertCfg
+	}
+	if m, ok := s.provider.(interface{ GetModel() string }); ok {
+		convertCfg.SupportVision = provider.ModelSupportsVision(m.GetModel())
+	}
+	if s.cfg.Providers != nil {
+		if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
+			convertCfg.VisionOverride = provCfg.Vision
+			convertCfg.SupportVision = *provCfg.Vision
+		}
+	}
+	if s.cfg.Server.UploadURLPrefix != "" {
+		convertCfg.UploadURLPrefix = s.cfg.Server.UploadURLPrefix
+	}
+	convertCfg.StrategyName = s.cfg.Server.GetFileStrategy()
+	return convertCfg
+}
+
+// refreshConvertConfig re-installs the derived conversion/vision policy on the
+// LIVE provider instance.
+//
+// Why this is needed: the policy is stored on the provider itself
+// (BaseProvider.ConvertCfg) and used to be written only when a new agent was
+// built. The web UI reuses the cached per-session agent, so flipping
+// "图片输入（视觉）" in the model settings page wrote config.json but never
+// reached the running provider: images kept being replaced by placeholders
+// until a restart rebuilt everything. The provider instance is shared by every
+// cached agent, so refreshing it here fixes all existing sessions at once —
+// no agent invalidation, no dropped conversation state.
+func (s *Server) refreshConvertConfig() {
+	if s.provider == nil {
+		return
+	}
+	provider.ApplyConvertConfig(s.provider, s.buildConvertConfig())
+}
+
 func (s *Server) getOrCreateAgent(sessionID string) *agent.Agent {
 	s.agentsMu.Lock()
 	defer s.agentsMu.Unlock()
@@ -843,33 +899,7 @@ GOAL GUIDANCE:
 	// Set file conversion config. AutoVision re-evaluates vision support from
 	// the CURRENT model on every request — a startup-time snapshot goes stale
 	// the moment the user switches models via /api/model/set.
-	convertCfg := &provider.ConvertConfig{
-		UploadURLPrefix: "",
-		StrategyName:    "auto",
-		SupportVision:   false,
-		AutoVision:      true,
-	}
-	if s.cfg != nil && s.provider != nil {
-		if m, ok := s.provider.(interface{ GetModel() string }); ok {
-			convertCfg.SupportVision = provider.ModelSupportsVision(m.GetModel())
-		}
-		// Explicit per-provider "vision" declaration beats name-based
-		// guessing: name detection is best-effort and lags new models
-		// (e.g. glm-4.1v-thinking-flashx matched no pattern and images
-		// were silently downgraded to placeholders).
-		if s.cfg.Providers != nil {
-			if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
-				convertCfg.VisionOverride = provCfg.Vision
-				convertCfg.SupportVision = *provCfg.Vision
-			}
-		}
-		// Set upload URL prefix if configured
-		if s.cfg.Server.UploadURLPrefix != "" {
-			convertCfg.UploadURLPrefix = s.cfg.Server.UploadURLPrefix
-		}
-		convertCfg.StrategyName = s.cfg.Server.GetFileStrategy()
-	}
-	agentOpts = append(agentOpts, agent.WithConvertConfig(convertCfg))
+	agentOpts = append(agentOpts, agent.WithConvertConfig(s.buildConvertConfig()))
 
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
 
@@ -1073,6 +1103,49 @@ func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string
 		}
 		if len(m.FileOps) > 0 {
 			msg["file_ops"] = m.FileOps
+		}
+		// 附件随会话回放：落库时用户消息保留了附件部件（base64 已剥掉，只留
+		// name/url），但这里以前整块丢弃 → 刷新页面/切回会话后前端拿不到文件
+		// 名，只会在气泡里留下 [文件] 占位（chat.fileBtn）。名字与缩略图是
+		// 用户唯一能认出的线索，必须原样带回。
+		// 只回 file/image_url：流式路径会给用户消息追加内部提示文本部件
+		// （附件已放入工作目录…），混进 content 会当成用户自己说的话渲染。
+		if len(m.ContentParts) > 0 {
+			files := make([]map[string]interface{}, 0, len(m.ContentParts))
+			images := make([]string, 0, len(m.ContentParts))
+			for _, part := range m.ContentParts {
+				switch {
+				case part.Type == "file" && part.File != nil:
+					entry := map[string]interface{}{
+						"name":     part.File.Name,
+						"filename": part.File.Name,
+						"url":      part.File.URL,
+						"mime":     part.File.MimeType,
+					}
+					if part.File.Size > 0 {
+						entry["size"] = part.File.Size
+					}
+					files = append(files, entry)
+				case part.Type == "image_url" && part.ImageURL != nil && part.ImageURL.URL != "":
+					// 旧数据：图片曾以 image_url 落库，名字没地方放（MediaURL
+					// 无 name 字段），于是前端渲染不出来。这里按 file 部件回放，
+					// 缩略图靠引用路径、名字交给 uploads 元数据兜底——老会话也
+					// 能跟着修好。新数据已在落库时就转成 file 部件。
+					files = append(files, map[string]interface{}{
+						"name":     "",
+						"filename": "",
+						"url":      part.ImageURL.URL,
+						"mime":     imageMimeForRef("", part.ImageURL.URL),
+					})
+					images = append(images, part.ImageURL.URL)
+				}
+			}
+			if len(files) > 0 {
+				msg["files"] = files
+			}
+			if len(images) > 0 {
+				msg["images"] = images
+			}
 		}
 		result[i] = msg
 	}

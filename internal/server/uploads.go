@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -704,6 +705,45 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{"files": files})
+}
+
+// parseUploadRef 从上传引用还原出 (sessionID, 磁盘文件名)。引用形如
+// /api/uploads/<session>/<uuid>.<ext>，可能带 ?token= 查询串；配置了
+// UploadURLPrefix 时是绝对地址。解析不出时返回空串，调用方按「无引用」处理。
+func parseUploadRef(ref string) (string, string) {
+	if ref == "" {
+		return "", ""
+	}
+	if i := strings.IndexAny(ref, "?#"); i >= 0 {
+		ref = ref[:i]
+	}
+	ref = strings.TrimRight(ref, "/")
+	if ref == "" {
+		return "", ""
+	}
+	disk := path.Base(ref)
+	sid := path.Base(path.Dir(ref))
+	// 共享桶在磁盘上是 _shared，但元数据行和 URL 用的都是空 session 键。
+	if sid == "_shared" || sid == "uploads" || sid == "." || sid == "/" {
+		sid = ""
+	}
+	return sid, disk
+}
+
+// uploadDisplayName 把上传引用还原成用户当初看到的文件名（uuid → 原始名），
+// 供会话回放时给附件条显示。查不到元数据时返回空串，由前端退回本地化的
+// 「图片」占位——宁可显示通用名，也不把 uuid 暴露到对话气泡里。
+func (s *Server) uploadDisplayName(ref string) string {
+	sid, disk := parseUploadRef(ref)
+	if disk == "" {
+		return ""
+	}
+	if meta := s.ensureUploadsMeta(); meta != nil {
+		if row, ok := meta.Get(sid, disk); ok && row.OrigName != "" {
+			return row.OrigName
+		}
+	}
+	return ""
 }
 
 // handleFileDelete — DELETE /api/files/{session_id}/{filename}

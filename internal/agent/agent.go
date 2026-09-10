@@ -340,27 +340,16 @@ func WithSteering(cfg SteeringConfig) AgentOption {
 	}
 }
 
-// WithConvertConfig sets the file conversion configuration
+// WithConvertConfig sets the file conversion configuration.
+//
+// The type switch that used to live here moved to provider.ApplyConvertConfig
+// so the server can refresh the SAME value on the live provider when provider
+// settings change (vision toggle) — see Server.refreshConvertConfig. The
+// config lives on the provider instance (BaseProvider.ConvertCfg), which every
+// cached agent shares, so writing it once is enough for all sessions.
 func WithConvertConfig(cfg *provider.ConvertConfig) AgentOption {
 	return func(a *Agent) {
-		if a.provider != nil {
-			// Try to access BaseProvider if available
-			switch p := a.provider.(type) {
-			case *provider.OpenAICompatibleProvider:
-				p.BaseProvider.WithConvertConfig(cfg)
-			case *provider.DashScopeProvider:
-				if p.BaseProvider != nil {
-					p.BaseProvider.WithConvertConfig(cfg)
-				}
-			case *provider.DeepSeekProvider:
-				p.OpenAICompatibleProvider.BaseProvider.WithConvertConfig(cfg)
-			default:
-				// Try to access SetConvertConfig method via interface
-				if ccp, ok := a.provider.(interface{ SetConvertConfig(*provider.ConvertConfig) }); ok {
-					ccp.SetConvertConfig(cfg)
-				}
-			}
-		}
+		provider.ApplyConvertConfig(a.provider, cfg)
 	}
 }
 

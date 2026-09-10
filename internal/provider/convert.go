@@ -420,6 +420,15 @@ func ModelSupportsVision(modelName string) bool {
 		"qwen-vl", "qwen-vl-max", "qwen2-vl", "qwen3-vl",
 		"muse-spark", "doubao-seed", "kimi-latest", "step-1v", "step-1o",
 		"step-3", "llama-4", "phi-4-multimodal", "minicpm-v", "molmo",
+		// Multimodal members of otherwise text-looking families, named
+		// exactly as they appear on the wire (substring match). Both are
+		// reported as image-capable by users running them through
+		// OpenAI-compatible gateways; the generic heuristics above miss
+		// them because "deepseek-*" and plain "glm-5.x" carry no vision
+		// hint. A model that turns out to reject image parts is corrected
+		// automatically by the runtime learning path (one wasted request
+		// per process), so an over-eager entry is self-healing.
+		"deepseek-flash", "glm-5.3-flash",
 	}
 
 	for _, m := range visionModels {

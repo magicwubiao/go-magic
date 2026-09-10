@@ -174,11 +174,16 @@
                       v-for="(file, idx) in msg.files"
                       :key="idx"
                       class="message-file-item"
-                      @click="goToFilesPage"
-                      :title="t('chat.viewFileManagement')"
                     >
-                      <n-icon size="20"><DocumentOutline /></n-icon>
-                      <span class="message-file-name">{{ file.name }}</span>
+                      <img
+                        v-if="file.url && isImageAttachment(file)"
+                        class="message-file-thumb"
+                        :src="sessionsApi.attachmentSrc(file.url)"
+                        :alt="attachmentLabel(file)"
+                        loading="lazy"
+                      />
+                      <n-icon v-else size="20"><DocumentOutline /></n-icon>
+                      <span class="message-file-name">{{ attachmentLabel(file) }}</span>
                     </div>
                   </n-space>
                 </div>
@@ -1288,8 +1293,21 @@ function removeFile(index: number) {
   selectedFiles.value.splice(index, 1)
 }
 
-function goToFilesPage() {
-  router.push('/files')
+// 消息里的附件是图片吗？后端会带回 mime；老数据（或上传响应）可能没写或只写了
+// application/octet-stream，这时按扩展名兜底。SVG 明确排除：它走文本/文件通道，
+// 且按文本 MIME 提供时放进 <img> 根本不渲染。
+const IMAGE_THUMB_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i
+function isImageAttachment(file: Partial<sessionsApi.UploadedFile>): boolean {
+  const mime = ((file as { mime?: string }).mime || '').toLowerCase()
+  if (mime.startsWith('image/') && mime !== 'image/svg+xml') return true
+  if (mime && mime !== 'application/octet-stream') return false
+  return IMAGE_THUMB_EXT_RE.test(file.name || file.filename || '')
+}
+
+// 附件显示名。图片落库时若拿不到原始名（客户端没传、元数据也丢了），退回本地化
+// 的「图片」——绝不把 uuid 晾在气泡上。
+function attachmentLabel(file: Partial<sessionsApi.UploadedFile>): string {
+  return file.name || file.filename || t('chat.imageBtn')
 }
 
 // Work directory functions
@@ -1564,6 +1582,7 @@ async function send() {
   const allFiles = [...selectedFiles.value]
   const imageDataUrls: string[] = []
   const imageUrlRefs: string[] = []
+  const imageNames: string[] = []
   const nonImageFiles: sessionsApi.UploadedFile[] = []
 
   function readAsDataURL(blob: Blob): Promise<string> {
@@ -1630,9 +1649,11 @@ async function send() {
       try {
         const dataUrl = await toImageDataUrl(file)
         imageDataUrls.push(dataUrl)
-        // Remember the uploaded path so the backend can persist a small
-        // reference instead of megabytes of base64.
+        // Remember the uploaded path + original name so the backend can
+        // persist a small reference (instead of megabytes of base64) that the
+        // session replay can turn back into a thumbnail with a readable label.
         imageUrlRefs.push(file.url)
+        imageNames.push(file.name)
         continue
       } catch (_e) {
         // fall through to non-image handling
@@ -1654,6 +1675,8 @@ async function send() {
     imageDataUrls.length ? imageDataUrls : undefined,
     nonImageFiles.length ? nonImageFiles : undefined,
     imageUrlRefs.length ? imageUrlRefs : undefined,
+    imageNames.length ? imageNames : undefined,
+    allFiles.length ? allFiles : undefined,
   )
 }
 
@@ -2764,20 +2787,24 @@ onMounted(async () => {
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
   font-size: 13px;
   color: #fff;
-}
-.message-file-item:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.4);
 }
 .message-file-name {
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 图片附件的缩略图：会话回放后靠它一眼认出是哪张图，而不是只看到文件名 */
+.message-file-thumb {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: block;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.2);
 }
 
 /* Work directory picker */
