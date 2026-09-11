@@ -13,6 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/memory"
 	"github.com/magicwubiao/go-magic/internal/perception"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/internal/review"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/trigger"
@@ -453,6 +454,28 @@ func (m *Manager) RecallForInputScope(scope, query string) string {
 		return ""
 	}
 
+	// 召回守卫（记忆串止血）：丢弃内容描述了「别的项目」的记忆。历史污染
+	// 数据（或跨目录泄漏的全局偏好）即使还在库里，也不会再误导当前会话。
+	effScope := scope
+	if effScope == "" {
+		effScope = m.memoryStore.WorkspaceScope()
+	}
+	if effScope != "" {
+		nameToScope := m.knownProjectNameScope()
+		kept := make([]*memory.Memory, 0, len(tops))
+		for _, mem := range tops {
+			if memoryConflictsWithScope(mem.Content, effScope, nameToScope) {
+				log.Debugf("[Cortex] recall: drop memory scoped elsewhere (scope=%s): %.60s", effScope, mem.Content)
+				continue
+			}
+			kept = append(kept, mem)
+		}
+		if len(kept) == 0 {
+			return ""
+		}
+		tops = kept
+	}
+
 	summary := strings.TrimSpace(memory.SummarizeMemories(tops))
 	if r := []rune(summary); len(r) > dynamicMemoryMaxChars {
 		summary = string(r[:dynamicMemoryMaxChars]) + "\n...(truncated)"
@@ -746,26 +769,30 @@ func (m *Manager) extractAndLearnFromConversation(scope string) {
 	history = history[start:]
 
 	var userOnly strings.Builder
-	var nonSystem strings.Builder
+	// factText 只收「事实来源」：user 消息与 tool 结果。assistant 自己的输出
+	// 不是事实——模型在会话里说过的错误断言（例如把 A 项目的远程仓库说成 B
+	// 项目的）若被当事实抽取，就会变成高重要度记忆并长期污染后续会话。
+	var factText strings.Builder
 	for _, msg := range history {
 		if msg.Role == "system" {
 			continue
 		}
-		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
-		// GLM mimics this format and starts wrapping every reply in [].
-		// Use "Role: content" (no brackets).
-		nonSystem.WriteString(fmt.Sprintf("%s: %s\n", msg.Role, msg.Content))
 		if msg.Role == "user" {
 			userOnly.WriteString(msg.Content + "\n")
 		}
+		if msg.Role == "user" || msg.Role == "tool" {
+			// NOTE: do NOT wrap role with square brackets like "[user]: ...".
+			// GLM mimics this format and starts wrapping every reply in [].
+			factText.WriteString(fmt.Sprintf("%s: %s\n", msg.Role, msg.Content))
+		}
 	}
 	userText := userOnly.String()
-	nonSystemText := nonSystem.String()
+	factSourceText := factText.String()
 
-	// 构造 provider.Message 切片供 LLM 记忆抽取器使用
+	// 构造 provider.Message 切片供 LLM 记忆抽取器使用（同样剔除 assistant）
 	var provMsgs []provider.Message
 	for _, msg := range history {
-		if msg.Role == "system" {
+		if msg.Role == "system" || msg.Role == "assistant" {
 			continue
 		}
 		provMsgs = append(provMsgs, provider.Message{Role: msg.Role, Content: msg.Content})
@@ -783,7 +810,7 @@ func (m *Manager) extractAndLearnFromConversation(scope string) {
 	}
 
 	if m.FTSMemory != nil || m.memoryStore != nil {
-		m.extractAndStoreMemories(provMsgs, nonSystemText, scope)
+		m.extractAndStoreMemories(provMsgs, factSourceText, scope)
 	}
 
 	// P1-2: 对话追加写入每日日志（append-only，蒸馏器的原始数据源）。
@@ -943,9 +970,16 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 		memories, err := m.memoryExtractor.ExtractMemories(ctx, messages, "")
 		if err == nil && len(memories) > 0 {
 			// 写入 Store（结构化存储，含衰减/检索能力）
+			// 秘密脱敏：会话里出现过的 token/密钥绝不能进记忆库——记忆会被
+			// 召回并注入提示词，等于把凭据长期明文扩散（曾发生 GitHub token
+			// 被存入记忆的事故）。
+			for _, mem := range memories {
+				mem.Content = redact.Redact(mem.Content)
+			}
 			if m.memoryStore != nil {
+				nameToScope := m.knownProjectNameScope()
 				for _, mem := range memories {
-					applyMemoryScope(mem, scope)
+					applyMemoryScope(mem, scope, nameToScope)
 				}
 				_ = m.memoryExtractor.StoreMemories(memories)
 			}
@@ -967,17 +1001,53 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 	m.fallbackLineMatchStore(conversation, scope)
 }
 
-// applyMemoryScope 给待落库的记忆补目录 scope：仅当 scope 非空、记忆尚未带
-// scope 且类型不是 user/preference 时才补；user/preference 是跨目录用户画像，
-// 保持全局可见（与检索侧 buildRecallWhereScope 的过滤语义一致）。
-func applyMemoryScope(mem *memory.Memory, scope string) {
-	if scope == "" || mem.Scope != "" {
+// applyMemoryScope 给待落库的记忆确定归属 scope（目录级共享记忆）。
+//
+// 优先级（修复「记忆串」事故）：
+//  1. 记忆已自带 scope → 尊重，不改。
+//  2. 记忆文本里出现与本会话目录相关的项目路径 → 归本会话目录（原行为）。
+//  3. 记忆文本里出现的是「别的项目」的路径 → 归那个项目，而不是本会话目录。
+//     这一步是关键：此前无条件盖当前目录 scope，导致在 A 项目会话里提到 B 项目
+//     的内容（含助手自己的误述）被固化进 A 的记忆桶，之后反复污染 A 的会话。
+//  4. 无路径但点名了记忆库中已知的另一个项目（如「项目 X 的提交规范」）→ 归该项目。
+//  5. 无项目线索 → 沿用原行为（user/preference 全局可见，其余归会话目录）。
+//
+// 特例：user/preference 类默认跨目录全局可见，但若其内容锚定了具体项目
+// （路径或项目名），则收窄到该项目，避免项目专属偏好泄漏给其他项目会话。
+func applyMemoryScope(mem *memory.Memory, sessionScope string, nameToScope map[string]string) {
+	if mem == nil || mem.Scope != "" {
+		return
+	}
+
+	target := ""
+	cands := projectPathCandidates(mem.Content)
+	if len(cands) > 0 {
+		relatedToSession := false
+		for _, c := range cands {
+			if pathRelated(c, sessionScope) {
+				relatedToSession = true
+				break
+			}
+		}
+		if !relatedToSession {
+			target = cands[0]
+		}
+	}
+	if target == "" {
+		target = otherProjectByName(mem.Content, sessionScope, nameToScope)
+	}
+	if target != "" {
+		mem.Scope = target
+		return
+	}
+
+	if sessionScope == "" {
 		return
 	}
 	if mem.Type == memory.TypeUser || mem.Type == memory.TypePreference {
 		return
 	}
-	mem.Scope = scope
+	mem.Scope = sessionScope
 }
 
 // fallbackLineMatchStore 用简陋行匹配抽取记忆，双写 Store 与 FTSStore
@@ -996,6 +1066,7 @@ func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 		if strings.Contains(lower, "learned") ||
 			strings.Contains(lower, "important") ||
 			strings.Contains(lower, "remember") {
+			line = redact.Redact(line)
 			// 写入 FTSStore（全文检索；补 scope 标签保持与主库检索维度一致）
 			if m.FTSMemory != nil {
 				record := &memory.MemoryRecord{
@@ -1016,7 +1087,7 @@ func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 					Importance: 0.5,
 					Source:     "fallback",
 				}
-				applyMemoryScope(mem, scope)
+				applyMemoryScope(mem, scope, m.knownProjectNameScope())
 				_ = m.memoryStore.Store(mem)
 			}
 		}

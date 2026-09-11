@@ -3711,11 +3711,21 @@ func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	a.ensureRuleContext()
 	hasRule := a.ruleContext != ""
 	hasMemory := a.dynamicMemory != ""
-	if !hasRule && !hasMemory {
+	// 工作目录 ground truth：模型此前只能靠召回的记忆推断「我在哪个项目」，
+	// 一旦记忆被别的项目污染就会选择错误路径（记忆串事故）。这里每轮注入
+	// 当前目录并声明其他路径的记忆不具权威性。memoryScope 即会话目录的
+	// 归一化键，随 SetMemoryScope 更新，不会像 system prompt 那样过期。
+	hasWorkspace := a.memoryScope != ""
+	if !hasRule && !hasMemory && !hasWorkspace {
 		return msgs
 	}
 
 	var extras []provider.Message
+	if hasWorkspace {
+		extras = append(extras, provider.Message{Role: "system", Content: fmt.Sprintf(
+			"[Workspace]\nCurrent working directory: %s\nResolve every file, command and repository operation against this directory. Memory entries that reference other project paths are not authoritative for this workspace.",
+			a.memoryScope)})
+	}
 	if hasRule {
 		extras = append(extras, provider.Message{Role: "system", Content: a.ruleContext})
 	}

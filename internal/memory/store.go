@@ -127,6 +127,28 @@ func (s *Store) WorkspaceScope() string {
 	return s.workspaceScope
 }
 
+// DistinctScopes 返回库中已出现过的所有非空 scope（目录记忆分桶）。
+// 供 cortex 侧推导「已知项目名 → 项目 scope」映射：内容里只写项目名而没写
+// 绝对路径的记忆也能被归到正确项目，避免项目专属事实留在全局/别的项目桶里。
+func (s *Store) DistinctScopes() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`SELECT DISTINCT scope FROM memories WHERE scope != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sc string
+		if err := rows.Scan(&sc); err != nil {
+			return out, err
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
 // NewStore creates a new memory store
 func NewStore(memCfg *MemoryConfig) (*Store, error) {
 	if memCfg == nil {
