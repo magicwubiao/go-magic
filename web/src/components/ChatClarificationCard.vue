@@ -1,16 +1,14 @@
 <template>
+  <!-- 澄清卡片：紧凑单列布局。
+       结构精简原则：无独立顶栏行——问题文字占主体，倒计时/状态/关闭悬浮其右；
+       补充说明为单行输入（回车即提交），无操作提示行。 -->
   <div class="chat-clarify-card" :class="cardClass">
-    <!-- 顶栏：标题（左）+ 状态（右：倒计时 / 已答复 / 已超时） -->
-    <div class="clarify-header">
-      <span class="clarify-badge">
-        <span class="clarify-badge-ico" aria-hidden="true">💬</span>
-        {{ t('chat.clarifyTitle') }}
-      </span>
+    <!-- 行1：问题 + 右侧状态（倒计时 / ✕） -->
+    <div class="clarify-qrow">
+      <span class="clarify-question">{{ clarification.question }}</span>
       <span v-if="clarification.status === 'pending'" class="countdown-pill" :class="{ urgent: remainingMs < 60000 }">
         ⏳ {{ remainingDisplay }}
       </span>
-      <span v-else-if="clarification.status === 'answered'" class="status-pill ok">✓ {{ t('chat.clarifyAnswered') }}</span>
-      <span v-else-if="clarification.status === 'expired'" class="status-pill warn">⏱ {{ t('chat.clarifyExpired') }}</span>
       <button
         v-if="clarification.status === 'pending'"
         type="button"
@@ -22,11 +20,10 @@
       </button>
     </div>
 
-    <!-- 问题与背景说明 -->
-    <div class="clarify-question">{{ clarification.question }}</div>
+    <!-- 背景说明（可选，紧凑引用行） -->
     <div v-if="clarification.context" class="clarify-context">{{ clarification.context }}</div>
 
-    <!-- 选项（纵向行，单选/多选通过 mark 形状区分） -->
+    <!-- 选项（纵向紧凑行，单选/多选通过 mark 形状区分） -->
     <div v-if="clarification.options.length" class="clarify-options">
       <button
         v-for="opt in clarification.options"
@@ -44,33 +41,31 @@
       </button>
     </div>
 
-    <!-- 编辑区（仅挂起 / 提交中可见） -->
-    <div v-if="clarification.status === 'pending' || clarification.status === 'answering'" class="clarify-editor">
+    <!-- 单行补充说明 + 提交（仅挂起 / 提交中可见） -->
+    <div v-if="clarification.status === 'pending' || clarification.status === 'answering'" class="clarify-compose">
       <n-input
         v-model:value="note"
-        type="textarea"
-        :autosize="{ minRows: 2, maxRows: 4 }"
         size="small"
+        round
         :disabled="clarification.status !== 'pending'"
         :placeholder="t('chat.clarifyNotePlaceholder')"
         class="clarify-note"
         @keydown.enter.exact.prevent="submit"
       />
-      <div class="clarify-actions">
-        <span class="clarify-actions-hint">{{ selectionHint }}</span>
-        <div class="clarify-actions-right">
-          <n-spin v-if="clarification.status === 'answering'" size="small" />
-          <n-button
-            v-else
-            size="small"
-            type="primary"
-            :disabled="!canSubmit"
-            @click="submit"
-          >
-            {{ t('chat.clarifySubmit') }}
-          </n-button>
-        </div>
-      </div>
+      <n-spin v-if="clarification.status === 'answering'" size="small" />
+      <n-button
+        v-else
+        size="small"
+        circle
+        type="primary"
+        :title="t('chat.clarifySubmit')"
+        :disabled="!canSubmit"
+        @click="submit"
+      >
+        <template #icon>
+          <span class="clarify-send-ico" aria-hidden="true">➤</span>
+        </template>
+      </n-button>
     </div>
 
     <!-- 终态一行（已答复显示你的答复摘要；已超时提示未收到答复） -->
@@ -171,17 +166,6 @@ const canSubmit = computed(() => {
   return hasChoice || hasNote
 })
 
-// 操作区左侧的轻提示：说明当前可提交方式
-const selectionHint = computed(() => {
-  if (!props.clarification.options.length) return t('chat.clarifyNoteOnlyHint')
-  if (selected.value.length > 0) {
-    return t('chat.clarifySelectedCount', { n: selected.value.length })
-  }
-  return props.clarification.multiSelect
-    ? t('chat.clarifyMultiHint')
-    : t('chat.clarifySingleHint')
-})
-
 const cardClass = computed(() => {
   if (props.clarification.status === 'answered') return 'status-answered'
   if (props.clarification.status === 'expired') return 'status-expired'
@@ -236,11 +220,11 @@ async function dismiss() {
 .chat-clarify-card {
   box-sizing: border-box;
   width: 100%;
-  max-width: 640px;
+  max-width: 560px;
   margin: 0 auto;
   border: 1px solid #e2deee;
   border-radius: 10px;
-  padding: 12px 16px 14px;
+  padding: 10px 12px 11px;
   background: #fbfaff;
   box-shadow: 0 1px 4px rgba(124, 77, 255, 0.06);
   font-size: 13px;
@@ -262,44 +246,34 @@ async function dismiss() {
   background: #fffcf5;
 }
 
-/* ===== 顶栏 ===== */
-.clarify-header {
+/* ===== 行1：问题 + 状态 ===== */
+.clarify-qrow {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
+  align-items: flex-start;
+  gap: 8px;
 }
 
-.clarify-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
+.clarify-question {
+  flex: 1;
+  min-width: 0;
+  color: #1f1f2b;
+  font-size: 13.5px;
   font-weight: 600;
-  color: #6a45e0;
-  letter-spacing: 0.2px;
-}
-.clarify-badge-ico {
-  font-size: 13px;
-  line-height: 1;
-}
-
-.countdown-pill,
-.status-pill {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.6;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .countdown-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
   color: #b26a00;
   background: #fff4dc;
   border: 1px solid #ffe3a6;
@@ -310,27 +284,16 @@ async function dismiss() {
   border-color: #ffccc7;
 }
 
-.status-pill.ok {
-  color: #18a058;
-  background: #ecf9f0;
-  border: 1px solid #b7ebc5;
-}
-.status-pill.warn {
-  color: #b26a00;
-  background: #fff4dc;
-  border: 1px solid #ffe3a6;
-}
-
 /* ✕ 关闭按钮：取消本轮澄清 */
 .clarify-close {
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border: none;
   background: transparent;
   color: #9a9aac;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -343,18 +306,10 @@ async function dismiss() {
   color: #6a45e0;
 }
 
-/* ===== 问题 / 背景 ===== */
-.clarify-question {
-  color: #1f1f2b;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.55;
-  word-break: break-word;
-}
-
+/* ===== 背景说明 ===== */
 .clarify-context {
-  margin-top: 6px;
-  padding: 5px 10px;
+  margin-top: 5px;
+  padding: 3px 9px;
   border-left: 2px solid #d8cdf7;
   border-radius: 0 6px 6px 0;
   background: rgba(124, 77, 255, 0.06);
@@ -364,25 +319,25 @@ async function dismiss() {
   word-break: break-word;
 }
 
-/* ===== 选项：纵向行 ===== */
+/* ===== 选项：纵向紧凑行 ===== */
 .clarify-options {
-  margin-top: 10px;
+  margin-top: 7px;
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .option-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
   text-align: left;
-  padding: 6px 11px;
+  padding: 4px 10px;
   border: 1px solid #e2dcf3;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #fff;
   color: #2f2f3a;
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.5;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
@@ -403,8 +358,8 @@ async function dismiss() {
 
 .option-mark {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   border: 1.5px solid #b4a9dd;
   display: inline-flex;
@@ -414,10 +369,10 @@ async function dismiss() {
   transition: all 0.15s;
 }
 .option-mark.multi {
-  border-radius: 5px;
+  border-radius: 4px;
 }
 .option-mark .option-check {
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
   color: #fff;
   opacity: 0;
@@ -436,45 +391,32 @@ async function dismiss() {
   min-width: 0;
 }
 
-/* ===== 编辑区 ===== */
-.clarify-editor {
-  margin-top: 10px;
+/* ===== 单行补充说明 + 提交 ===== */
+.clarify-compose {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .clarify-note {
-  width: 100%;
-}
-
-.clarify-actions {
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.clarify-actions-hint {
+  flex: 1;
   min-width: 0;
-  font-size: 12px;
-  color: #9a9aac;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.clarify-actions-right {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.clarify-send-ico {
+  font-size: 12px;
+  line-height: 1;
+  display: inline-block;
+  transform: translateY(-1px);
 }
 
 /* ===== 终态 ===== */
 .clarify-final {
-  margin-top: 10px;
-  padding: 7px 12px;
-  border-radius: 8px;
-  font-size: 13px;
+  margin-top: 7px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
   line-height: 1.5;
   display: flex;
   align-items: flex-start;
@@ -505,7 +447,6 @@ async function dismiss() {
     background: #241d12;
     border-color: #4a3a1e;
   }
-  .clarify-badge { color: #b9a3f5; }
   .clarify-question { color: #e8e6ef; }
   .clarify-context {
     border-left-color: #4a3f6b;
@@ -533,7 +474,6 @@ async function dismiss() {
     background: #7c4dff;
     border-color: #7c4dff;
   }
-  .clarify-actions-hint { color: #7d7890; }
   .clarify-close { color: #7d7890; }
   .clarify-close:hover { background: #332a50; color: #b9a3f5; }
   .clarify-final.ok {
@@ -546,7 +486,5 @@ async function dismiss() {
   }
   .countdown-pill { color: #e5a94f; background: #33291a; border-color: #5a4522; }
   .countdown-pill.urgent { color: #f56b86; background: #3a1f24; border-color: #6b2f3c; }
-  .status-pill.ok { color: #6fdc9b; background: #17301f; border-color: #245236; }
-  .status-pill.warn { color: #e5a94f; background: #33291a; border-color: #5a4522; }
 }
 </style>
