@@ -920,12 +920,25 @@ GOAL GUIDANCE:
 	return a
 }
 
+// looksLikeWinPath 报告路径是否为 Windows 风格路径（盘符前缀或含反斜杠）。
+// 与 cortex.memscope.looksLikeWinPath 保持一致。
+func looksLikeWinPath(p string) bool {
+	if len(p) >= 2 && p[1] == ':' &&
+		(p[0] >= 'a' && p[0] <= 'z' || p[0] >= 'A' && p[0] <= 'Z') {
+		return true
+	}
+	return strings.Contains(p, `\`)
+}
+
 // normalizeDirScope 把会话工作目录归一化为目录记忆 scope 键。读写两侧必须走
-// 同一函数才能命中同一桶：filepath.Clean 消除尾部斜杠/分隔符冗余；Windows 下
-// 统一小写，容忍同一目录被以不同盘符大小写引用（如 D:\A 与 d:\a）。
+// 同一函数才能命中同一桶：filepath.Clean 消除尾部斜杠/分隔符冗余；Windows
+// 风格路径（盘符或含反斜杠）统一小写，容忍同一目录被以不同盘符大小写引用
+// （如 D:\A 与 d:\a）。判定按路径自身形态而非 runtime.GOOS，与 cortex 内的
+// memscope 归一化保持一致，避免跨宿主（Linux CI/容器）时落不同桶。
 func normalizeDirScope(dir string) string {
+	isWin := runtime.GOOS == "windows" || looksLikeWinPath(dir)
 	clean := filepath.Clean(dir)
-	if runtime.GOOS == "windows" {
+	if isWin {
 		return strings.ToLower(clean)
 	}
 	return clean

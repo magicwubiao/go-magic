@@ -1,6 +1,7 @@
 package cortex
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/magicwubiao/go-magic/internal/memory"
@@ -100,6 +101,21 @@ func TestMemoryConflictsWithScope(t *testing.T) {
 	// 空 scope（无目录绑定的会话）不做过滤
 	if memoryConflictsWithScope(`at D:\project\other`, "", names) {
 		t.Error("empty scope must not filter")
+	}
+}
+
+// 回归：盘符路径的归一化不依赖宿主 OS。曾因只在 GOOS==windows 时小写，
+// 导致 Linux CI 上 scope 大小写与 Windows 路径约定不一致（D: vs d:）。
+func TestNormalizeScopePathDriveLetterOnAnyOS(t *testing.T) {
+	for _, in := range []string{`D:\Project\Go\App`, `D:/Project/Go/App`} {
+		if got := normalizeScopePath(in); got != `d:\project\go\app` {
+			t.Fatalf("normalizeScopePath(%q) = %q, want d:\\project\\go\\app", in, got)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if got := normalizeScopePath(`/tmp/x`); got != `/tmp/x` {
+			t.Fatalf("normalizeScopePath(/tmp/x) = %q, want unchanged", got)
+		}
 	}
 }
 

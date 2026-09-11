@@ -36,19 +36,32 @@ var scopePathNoise = []string{
 	"/.magic/", "/.workbuddy/", "/.cache/", "/.npm/", "/.cargo/", "/go/pkg/",
 }
 
+// looksLikeWinPath 报告路径是否为 Windows 风格路径（盘符前缀或含反斜杠）。
+// 归一化按路径自身形态判定而非 runtime.GOOS：记忆内容里的路径来自用户与
+// 工具输出，宿主 OS 未必是 Windows（Linux CI、容器部署都会遇到 D:\ 路径），
+// 若只在 GOOS==windows 时小写，同一 Windows 路径在不同宿主上会落到不同桶。
+func looksLikeWinPath(p string) bool {
+	if len(p) >= 2 && p[1] == ':' &&
+		(p[0] >= 'a' && p[0] <= 'z' || p[0] >= 'A' && p[0] <= 'Z') {
+		return true
+	}
+	return strings.Contains(p, `\`)
+}
+
 // normalizeScopePath 把目录归一化为记忆 scope 键。必须与 server.normalizeDirScope
-// 保持一致（filepath.Clean + Windows 小写），否则读写两侧落不到同一个桶。
+// 保持一致（filepath.Clean + Windows 风格路径小写），否则读写两侧落不到同一个桶。
 // 该函数是纯函数，行为可直接对齐；若 server 侧规则变更需同步此处。
 func normalizeScopePath(dir string) string {
 	if dir == "" {
 		return ""
 	}
+	isWin := runtime.GOOS == "windows" || looksLikeWinPath(dir)
 	p := dir
-	if runtime.GOOS == "windows" {
+	if isWin {
 		p = strings.ReplaceAll(p, "/", `\`)
 	}
 	p = filepath.Clean(p)
-	if runtime.GOOS == "windows" {
+	if isWin {
 		return strings.ToLower(p)
 	}
 	return p
