@@ -64,13 +64,16 @@ type Manager struct {
 		Role    string
 		Content string
 	}
-	// 已抽取/已写日志的消息数水位。conversationHistory 是整个会话的累积
-	// 历史，每轮结束都会触发 extractAndLearnFromConversation——没有水位
-	// 时同一批消息会被反复送 LLM 抽取、反复写入每日日志（第 N 轮写 N 遍）。
-	// 历史被 truncateHistory 收缩时水位对齐到当前长度（跳过当轮抽取，
-	// 防止截断后前缀重放导致重复）。
-	processedHistoryLen int
-	mu                  sync.RWMutex // protects conversationHistory / processedHistoryLen
+	// 已抽取/已写日志的消息数水位（按会话键控，见 watermarks）。
+	watermarks map[string]int
+	// 最近一次喂入历史的会话键（SetConversationHistory 记录，抽取时取水位）。
+	lastHistoryKey string
+	// sessionEndMu 串行化「喂历史 + 抽取」关键区：server 的 cortex Manager
+	// 被所有会话共享，喂历史与触发抽取必须原子完成，否则并发会话在两步
+	// 之间互相覆盖 conversationHistory（A 喂的历史被 B 覆盖后，A 的抽取
+	// 实际处理的是 B 的历史）。
+	sessionEndMu sync.Mutex
+	mu           sync.RWMutex // protects conversationHistory / watermarks / lastHistoryKey
 
 	// Index of the last tool call that was already fed to SkillCreator.
 	// This prevents re-analyzing the same accumulated tool calls on every
@@ -669,14 +672,36 @@ func (m *Manager) OnSessionEnd(scope string) {
 	m.Snapshot.RefreshSnapshot()
 }
 
-// SetConversationHistory sets the conversation history for memory extraction
-func (m *Manager) SetConversationHistory(history []struct {
+// SetConversationHistory sets the conversation history for memory extraction.
+// sessionKey 标识历史归属的会话（水位按此键分桶，见 extractAndLearnFrom-
+// Conversation）；server 场景传 session ID，单机场景可传空串。
+func (m *Manager) SetConversationHistory(sessionKey string, history []struct {
 	Role    string
 	Content string
 }) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.conversationHistory = history
+	m.lastHistoryKey = sessionKey
+}
+
+// EndSessionWithHistory 是回合/会话结束点的统一入口：以会话键原子地喂入
+// 会话历史并触发 OnSessionEnd 抽取沉淀。此前 agent 的流式路径只调
+// OnSessionEnd 不喂历史（历史只在非流式 RunWithCortex 里喂），导致 web
+// 聊天的记忆抽取静默空转——记忆库与每日日志从不落盘。历史键控水位防
+// 止共享 Manager 上的多会话互相踩踏（新会话首回合被跳过、短会话永远
+// 追不上旧水位导致永不抽取）。
+func (m *Manager) EndSessionWithHistory(sessionKey, scope string, history []struct {
+	Role    string
+	Content string
+}) {
+	if m == nil || !m.enabled || m.Snapshot == nil {
+		return
+	}
+	m.sessionEndMu.Lock()
+	defer m.sessionEndMu.Unlock()
+	m.SetConversationHistory(sessionKey, history)
+	m.OnSessionEnd(scope)
 }
 
 // extractAndLearnFromConversation extracts information from conversation and updates memory
@@ -693,19 +718,27 @@ func (m *Manager) extractAndLearnFromConversation(scope string) {
 
 	// 增量处理：只抽取上次水位之后的新消息（P0 修复——历史是累积的，
 	// 全量处理会让每轮把同样的内容重复抽取/重复写日志 N 遍）。
+	// 水位按会话键分桶（server 的 Manager 被所有会话共享，单值水位会被
+	// 并发会话踩踏）；历史被 truncateHistory 收缩时水位对齐到当前长度
+	//（跳过当轮抽取，防止截断后前缀重放导致重复）。
 	m.mu.Lock()
+	if m.watermarks == nil {
+		m.watermarks = make(map[string]int)
+	}
+	key := m.lastHistoryKey
 	start := 0
+	wm := m.watermarks[key]
 	switch {
-	case m.processedHistoryLen > 0 && m.processedHistoryLen <= len(history):
-		start = m.processedHistoryLen
-	case m.processedHistoryLen > len(history):
+	case wm > 0 && wm <= len(history):
+		start = wm
+	case wm > len(history):
 		// 历史被 truncateHistory 收缩：水位对齐当前长度，跳过本轮
 		//（被保留的尾部都是已处理过的旧消息，重放会造成重复）。
 		log.Debugf("[Cortex] history shrank (%d -> %d), realigning extraction watermark",
-			m.processedHistoryLen, len(history))
+			wm, len(history))
 		start = len(history)
 	}
-	m.processedHistoryLen = len(history)
+	m.watermarks[key] = len(history)
 	m.mu.Unlock()
 	if start >= len(history) {
 		return // 没有新消息

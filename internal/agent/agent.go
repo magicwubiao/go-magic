@@ -1192,9 +1192,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
-			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd(a.memoryScope)
-			}
+			a.endCortexTurn()
 			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
 	}
@@ -1513,9 +1511,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
-			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd(a.memoryScope)
-			}
+			a.endCortexTurn()
 
 			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
 		}
@@ -1548,9 +1544,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
-			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd(a.memoryScope)
-			}
+			a.endCortexTurn()
 
 			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
 		}
@@ -1600,9 +1594,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
-			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd(a.memoryScope)
-			}
+			a.endCortexTurn()
 			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
 		}
 
@@ -2282,10 +2274,8 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
-			// Cortex: refresh snapshot at session end
-			if a.cortexManager != nil {
-				a.cortexManager.OnSessionEnd(a.memoryScope)
-			}
+			// Cortex: feed history + extract (see endCortexTurn)
+			a.endCortexTurn()
 
 			return nil
 		}
@@ -2383,10 +2373,8 @@ Please provide a comprehensive, well-structured final response based on these su
 
 	a.Emit(bus.EventKindAgentEnd, nil)
 
-	// Cortex: refresh snapshot at session end
-	if a.cortexManager != nil {
-		a.cortexManager.OnSessionEnd(a.memoryScope)
-	}
+	// Cortex: feed history + extract (see endCortexTurn)
+	a.endCortexTurn()
 
 	if lastErr != nil {
 		// Persisted history must not end malformed for the next turn (bot

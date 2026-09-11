@@ -17,6 +17,26 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
+// endCortexTurn 是回合/会话结束点的 cortex 收口：把 agent 累积历史喂给
+// Manager 并触发 OnSessionEnd 抽取沉淀（历史键控水位见 cortex 侧注释）。
+// 此前各结束点只调 OnSessionEnd 不喂历史，conversationHistory 恒为空，
+// 抽取静默空转——web 聊天的记忆与每日日志从不落盘（零沉淀根因）。
+// 流式/非流式路径统一走这里，避免再出现「只触发不喂历史」的调用点。
+func (a *Agent) endCortexTurn() {
+	if a.cortexManager == nil {
+		return
+	}
+	conv := make([]struct {
+		Role    string
+		Content string
+	}, len(a.history))
+	for i, msg := range a.history {
+		conv[i].Role = string(msg.Role)
+		conv[i].Content = msg.Content
+	}
+	a.cortexManager.EndSessionWithHistory(a.session, a.memoryScope, conv)
+}
+
 // RunWithCortex runs a conversation with full Cortex Agent integration.
 // This enhanced method leverages all Cortex systems:
 //   - SOUL.md system personality
@@ -203,16 +223,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
 			// Set conversation history for memory extraction before OnSessionEnd
-			conversationHistory := make([]struct {
-				Role    string
-				Content string
-			}, len(a.history))
-			for i, msg := range a.history {
-				conversationHistory[i].Role = string(msg.Role)
-				conversationHistory[i].Content = msg.Content
-			}
-			a.cortexManager.SetConversationHistory(conversationHistory)
-			a.cortexManager.OnSessionEnd(a.memoryScope)
+			a.endCortexTurn()
 
 			// ========== CORTEX: Record trajectory (no tools) ==========
 			a.recordTrajectory(input, content, trajectorySteps, trajectoryStartTime, lastErr == nil)
@@ -341,16 +352,7 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	a.Emit(bus.EventKindAgentEnd, nil)
 
 	// Set conversation history for memory extraction before OnSessionEnd
-	conversationHistory := make([]struct {
-		Role    string
-		Content string
-	}, len(a.history))
-	for i, msg := range a.history {
-		conversationHistory[i].Role = string(msg.Role)
-		conversationHistory[i].Content = msg.Content
-	}
-	a.cortexManager.SetConversationHistory(conversationHistory)
-	a.cortexManager.OnSessionEnd(a.memoryScope)
+	a.endCortexTurn()
 
 	// ========== CORTEX: Record trajectory (with tools) ==========
 	finalContent := ""
