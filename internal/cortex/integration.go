@@ -909,17 +909,20 @@ func (m *Manager) learnUserPreferences(conversation string) {
 		if !strings.Contains(lower, p.pattern) {
 			continue
 		}
-		// 提取模式周围的上下文
-		idx := strings.Index(lower, p.pattern)
-		start := 0
-		if idx-50 > 0 {
-			start = idx - 50
+		// 提取模式周围的上下文。rune 安全窗口：strings.Index 返回字节索引，
+		// 直接按字节 ±50 切片会把中文切成 U+FFFD 乱码。
+		ri := strings.Index(lower, p.pattern)
+		runes := []rune(lower)
+		rIdx := len([]rune(lower[:ri]))
+		rStart := 0
+		if rIdx-25 > 0 {
+			rStart = rIdx - 25
 		}
-		end := len(lower)
-		if idx+len(p.pattern)+50 < end {
-			end = idx + len(p.pattern) + 50
+		rEnd := len(runes)
+		if rIdx+len([]rune(p.pattern))+25 < rEnd {
+			rEnd = rIdx + len([]rune(p.pattern)) + 25
 		}
-		context := strings.TrimSpace(lower[start:end])
+		context := strings.TrimSpace(string(runes[rStart:rEnd]))
 		_ = m.UserProfile.LearnPreference(p.key, p.pattern, context)
 	}
 }
@@ -930,7 +933,10 @@ func (m *Manager) learnUserPreferences(conversation string) {
 // scope 非空时非 user/preference 记忆补上该目录 scope（目录级共享记忆），
 // user/preference 画像保持跨目录全局。
 func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string, scope string) {
-	ctx := context.Background()
+	// 抽取 LLM 调用必须有界：此处在回合收尾的同步路径上，provider 挂起
+	// 会无限拖住 SSE done 与历史落库。60s 覆盖慢模型；超时走行匹配兜底。
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
 	// 优先使用 LLM 抽取器
 	if m.memoryExtractor != nil && m.provider != nil && len(messages) > 0 {
@@ -990,12 +996,15 @@ func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 		if strings.Contains(lower, "learned") ||
 			strings.Contains(lower, "important") ||
 			strings.Contains(lower, "remember") {
-			// 写入 FTSStore（全文检索）
+			// 写入 FTSStore（全文检索；补 scope 标签保持与主库检索维度一致）
 			if m.FTSMemory != nil {
 				record := &memory.MemoryRecord{
 					Content:     line,
 					ContentType: string(memory.TypeKnowledge),
 					Importance:  5,
+				}
+				if scope != "" {
+					record.Tags = append(record.Tags, "scope:"+scope)
 				}
 				_ = m.FTSMemory.Add(record)
 			}
