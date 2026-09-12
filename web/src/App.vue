@@ -52,12 +52,6 @@
 
           <!-- Content -->
           <n-layout>
-            <!-- Mobile: floating hamburger button (left).
-                 No top toolbar; it floats over the content so it never blocks pages. -->
-            <!-- Left floating hamburger: toggles the sidebar drawer -->
-            <div v-if="isMobile" class="mobile-fab mobile-fab--left" :class="{ open: !siderCollapsed }" @click="siderCollapsed = !siderCollapsed">
-              <n-icon :component="siderCollapsed ? MenuOutline : CloseOutline" :size="22" />
-            </div>
             <n-layout-content :class="{'full-content': isChatPage}" style="padding: 24px; overflow: auto;">
               <router-view />
             </n-layout-content>
@@ -105,8 +99,6 @@ import {
   PieChartOutline,
   ServerOutline,
   LogOutOutline,
-  MenuOutline,
-  CloseOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -394,16 +386,16 @@ body {
     position: fixed !important;
     z-index: 200;
     height: 100vh;
-    transform: translateX(-100%);
-    transition: transform 0.3s ease;
+    left: -220px;
+    transition: left 0.3s ease;
   }
   
   .n-layout-sider.n-layout-sider--collapsed {
-    transform: translateX(-100%);
+    left: -220px;
   }
   
   .n-layout-sider:not(.n-layout-sider--collapsed) {
-    transform: translateX(0);
+    left: 0;
     box-shadow: 2px 0 8px rgba(0,0,0,0.15);
   }
   
@@ -417,60 +409,50 @@ body {
     padding-top: 0 !important;
   }
   
-  .n-layout-sider__trigger {
-    display: none !important;
-  }
-
-  /* 移动端两侧悬浮元素：不占布局空间，悬浮在内容之上。
-     左侧为汉堡按钮（控制侧边栏抽屉），右侧为面包屑路径。 */
-  .mobile-fab {
-    position: fixed;
-    bottom: 24px;
-    z-index: 250;
-    display: flex;
-    align-items: center;
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
-    box-sizing: border-box;
-    cursor: pointer;
-    transition: background 0.2s, box-shadow 0.2s, left 0.3s ease;
-  }
-  .mobile-fab:hover {
-    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.18);
-  }
-
-  /* 左侧汉堡按钮：圆形，放在左侧中间 */
-  .mobile-fab--left {
-    left: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    display: flex;
+  /* 移动端：侧边栏自带的展开/关闭触发器（替代原汉堡按钮）。
+     实际 DOM 元素类名是 .n-layout-toggle-button（naive-ui 实现），
+     而不是 .n-layout-sider__trigger。
+     保持 naive-ui 原生的「一半嵌在抽屉边缘」样式。注意不能用 right:0 锚定：
+     收起时 naive-ui 会把 sider 宽度动画到 collapsed-width=64，right 边缘跟着
+     缩进屏幕外（left:-220px + width 64px），按钮会整颗消失。
+     因此用 left:220px（抽屉固定宽）锚定可见右缘，随抽屉一起滑动。
+     尺寸对齐 ChatView 右侧 right-sidebar-fab：40px 圆形 + 20px 图标。 */
+  .n-layout-sider > .n-layout-toggle-button {
+    display: flex !important;
     align-items: center;
     justify-content: center;
+    position: absolute !important;
+    top: 50% !important;
+    left: 220px !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    border-radius: 50% !important;
+    background: #fff !important;
+    border: 1px solid #e0e0e0 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    z-index: 250;
   }
-  .mobile-fab--left:hover {
-    background: #f5f5f5;
+  .n-layout-sider > .n-layout-toggle-button:hover {
+    background: #f5f5f5 !important;
   }
-
-  /* 左侧抽屉展开时，汉堡按钮跟随到抽屉右边缘（抽屉宽 220px），避免遮挡在抽屉上 */
-  .mobile-fab--left.open {
-    left: 220px;
+  /* 触发器内图标与右侧 FAB 一致（GridOutline :size=20） */
+  .n-layout-sider > .n-layout-toggle-button .n-base-icon {
+    font-size: 20px !important;
   }
 }
 
-/* 深色模式下悬浮元素配色跟随系统 */
+/* 深色模式下侧边栏触发器配色跟随系统 */
 @media (prefers-color-scheme: dark) {
-  .mobile-fab {
-    background: #1f1f1f;
-    border-color: #333;
+  .n-layout-sider > .n-layout-toggle-button {
+    background: #1f1f1f !important;
+    border-color: #333 !important;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
   }
-  .mobile-fab--left:hover {
-    background: #2a2a2a;
+  .n-layout-sider > .n-layout-toggle-button:hover {
+    background: #2a2a2a !important;
   }
 }
 </style>
