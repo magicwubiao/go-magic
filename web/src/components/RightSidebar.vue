@@ -3,30 +3,16 @@
   <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
   <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }">
     <!-- Collapse toggle button (desktop only) -->
-    <n-button 
-      size="small" 
-      quaternary 
-      circle 
+<n-button
+      size="small"
+      quaternary
+      circle
       class="collapse-toggle"
       @click="isCollapsed = !isCollapsed"
       :title="isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')"
     >
       <template #icon>
         <n-icon :component="isCollapsed ? ChevronForwardOutline : ChevronBackOutline" :size="16" />
-      </template>
-    </n-button>
-
-    <!-- Mobile close button -->
-    <n-button
-      size="small"
-      quaternary
-      circle
-      class="mobile-close-btn"
-      @click="$emit('update:mobileVisible', false)"
-      :title="t('sidebar.collapse')"
-    >
-      <template #icon>
-        <n-icon :component="CloseOutline" :size="16" />
       </template>
     </n-button>
 
@@ -2030,16 +2016,11 @@ async function doUpload(files: File[]) {
   border-radius: 6px;
 }
 
-/* Mobile close button - hidden on desktop */
-.mobile-close-btn {
-  display: none;
-}
-
 /* Mobile backdrop */
 .right-sidebar-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: transparent;
   z-index: 199;
 }
 
@@ -2071,22 +2052,6 @@ async function doUpload(files: File[]) {
 
   .collapse-toggle {
     display: none;
-  }
-
-  .mobile-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    flex-shrink: 0;
-    position: absolute;
-    left: -36px;
-    top: 4px;
-    z-index: 10;
-    background: #fff !important;
-    border: 1px solid #e0e0e0 !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   }
 
   .right-sidebar.collapsed .sidebar-content {
@@ -2135,11 +2100,6 @@ async function doUpload(files: File[]) {
   }
   
   .collapse-toggle {
-    background: #1e1e1e !important;
-    border-color: #333 !important;
-  }
-
-  .mobile-close-btn {
     background: #1e1e1e !important;
     border-color: #333 !important;
   }

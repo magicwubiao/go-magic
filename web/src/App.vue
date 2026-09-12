@@ -38,6 +38,7 @@
                 <n-dropdown
                   placement="top-start"
                   :options="headerOptions"
+                  :trigger="isMobile ? 'click' : 'hover'"
                   @select="handleHeaderSelect"
                 >
                   <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
@@ -51,15 +52,13 @@
 
           <!-- Content -->
           <n-layout>
-            <n-layout-content :class="{ 'full-content': isChatPage }" style="padding: 24px; overflow: auto;">
-              <!-- Mobile sider toggle button -->
-              <div
-                v-if="isMobile"
-                class="mobile-sider-toggle"
-                @click="siderCollapsed = !siderCollapsed"
-              >
-                <n-icon :component="siderCollapsed ? ChevronForwardOutline : ChevronBackOutline" :size="22" />
-              </div>
+            <!-- Mobile: floating hamburger button (left).
+                 No top toolbar; it floats over the content so it never blocks pages. -->
+            <!-- Left floating hamburger: toggles the sidebar drawer -->
+            <div v-if="isMobile" class="mobile-fab mobile-fab--left" :class="{ open: !siderCollapsed }" @click="siderCollapsed = !siderCollapsed">
+              <n-icon :component="siderCollapsed ? MenuOutline : CloseOutline" :size="22" />
+            </div>
+            <n-layout-content :class="{'full-content': isChatPage}" style="padding: 24px; overflow: auto;">
               <router-view />
             </n-layout-content>
           </n-layout>
@@ -106,8 +105,8 @@ import {
   PieChartOutline,
   ServerOutline,
   LogOutOutline,
-  ChevronForwardOutline,
-  ChevronBackOutline,
+  MenuOutline,
+  CloseOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -148,6 +147,31 @@ const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEn
 const isLoginPage = computed(() => route.path === '/login')
 const isChatPage = computed(() => route.path === '/chat' || route.path === '/rooms' || route.path === '/bots')
 const activeKey = computed(() => route.path)
+
+// 移动端顶部工具条标题：根据当前路由映射到对应菜单文案
+const pageTitle = computed(() => {
+  const map: Record<string, string> = {
+    '/chat': t('nav.chat'),
+    '/kanban': t('nav.kanban'),
+    '/goals': t('goals.title'),
+    '/models-providers': t('models.title'),
+    '/tools': t('nav.tools'),
+    '/skills': t('nav.skills'),
+    '/cron': t('nav.cronJobs'),
+    '/bots': t('bots.title'),
+    '/gateway': t('nav.gateway'),
+    '/files': t('nav.files'),
+    '/mcp': t('nav.mcp'),
+    '/plugins': t('nav.plugins'),
+    '/profiles': t('nav.profiles'),
+    '/approval': t('nav.approval'),
+    '/logs': t('nav.logs'),
+    '/usage': t('nav.usage'),
+    '/system': t('nav.system'),
+    '/config': t('nav.config'),
+  }
+  return map[route.path] || t('nav.chat')
+})
 
 onUnmounted(() => {
   useChatStore().cleanup()
@@ -385,32 +409,68 @@ body {
   
   .n-layout-content {
     margin-left: 0 !important;
+    /* 悬浮工具条不占布局空间，内容占满全屏，不再让出顶部高度 */
+  }
+
+  /* 聊天页 full-content 同样不需要再让出工具条高度 */
+  .n-layout-content.full-content {
+    padding-top: 0 !important;
   }
   
   .n-layout-sider__trigger {
     display: none !important;
   }
 
-  .mobile-sider-toggle {
+  /* 移动端两侧悬浮元素：不占布局空间，悬浮在内容之上。
+     左侧为汉堡按钮（控制侧边栏抽屉），右侧为面包屑路径。 */
+  .mobile-fab {
     position: fixed;
-    left: 0;
+    bottom: 24px;
+    z-index: 250;
+    display: flex;
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background 0.2s, box-shadow 0.2s, left 0.3s ease;
+  }
+  .mobile-fab:hover {
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.18);
+  }
+
+  /* 左侧汉堡按钮：圆形，放在左侧中间 */
+  .mobile-fab--left {
+    left: 12px;
     top: 50%;
     transform: translateY(-50%);
-    width: 24px;
-    height: 48px;
-    z-index: 300;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.95);
-    border-radius: 0 6px 6px 0;
-    box-shadow: 2px 0 6px rgba(0, 0, 0, 0.12);
-    cursor: pointer;
-    transition: background 0.2s;
+  }
+  .mobile-fab--left:hover {
+    background: #f5f5f5;
   }
 
-  .mobile-sider-toggle:hover {
-    background: rgba(245, 245, 245, 0.98);
+  /* 左侧抽屉展开时，汉堡按钮跟随到抽屉右边缘（抽屉宽 220px），避免遮挡在抽屉上 */
+  .mobile-fab--left.open {
+    left: 220px;
+  }
+}
+
+/* 深色模式下悬浮元素配色跟随系统 */
+@media (prefers-color-scheme: dark) {
+  .mobile-fab {
+    background: #1f1f1f;
+    border-color: #333;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
+  .mobile-fab--left:hover {
+    background: #2a2a2a;
   }
 }
 </style>

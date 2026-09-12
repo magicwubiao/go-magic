@@ -555,16 +555,17 @@
     <!-- Goal Sidebar -->
     <RightSidebar v-model:mobile-visible="rightSidebarMobileVisible" />
 
-    <!-- Mobile right sidebar toggle FAB -->
+    <!-- Mobile right sidebar toggle: floating at right-middle, follows the panel when open -->
     <n-button
       class="right-sidebar-fab"
+      :class="{ open: rightSidebarMobileVisible }"
       circle
       size="large"
       @click="rightSidebarMobileVisible = !rightSidebarMobileVisible"
       :title="t('sidebar.expand')"
     >
       <template #icon>
-        <n-icon :component="FlagOutline" :size="20" />
+        <n-icon :component="GridOutline" :size="20" />
       </template>
     </n-button>
 
@@ -678,7 +679,7 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -2773,6 +2774,16 @@ onMounted(async () => {
     border-left-color: #444;
     color: #999;
   }
+
+  .right-sidebar-fab {
+    background: #2a2a2a !important;
+    border-color: #444 !important;
+  }
+  .right-sidebar-fab:hover,
+  .right-sidebar-fab:active,
+  .right-sidebar-fab:focus {
+    background: #2a2a2a !important;
+  }
 }
 
 /* ========== Message File Attachments ========== */
@@ -3220,6 +3231,8 @@ onMounted(async () => {
 
   .chat-container {
     flex-direction: column;
+    /* 顶部不再有固定工具条（已改为悬浮按钮，不占布局空间），容器占满全屏 */
+    height: 100vh;
   }
   
   .session-sidebar {
@@ -3300,10 +3313,26 @@ onMounted(async () => {
   .right-sidebar-fab {
     display: flex;
     position: fixed;
-    right: 6px;
-    bottom: 200px;
-    z-index: 150;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1000;
+    background: #fff !important;
+    border: 1px solid #e0e0e0 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    transition: right 0.3s ease;
+  }
+
+  /* 确保按钮背景在所有状态下都稳定显示（naive-ui 按钮默认背景会随状态变化） */
+  .right-sidebar-fab:hover,
+  .right-sidebar-fab:active,
+  .right-sidebar-fab:focus {
+    background: #fff !important;
+  }
+
+  /* 右侧面板展开时，按钮跟随到面板左边缘（面板宽 280px + 间距） */
+  .right-sidebar-fab.open {
+    right: 286px;
   }
 }
 </style>
