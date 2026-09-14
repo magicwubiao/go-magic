@@ -100,6 +100,39 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// isMaskedAPIKey 报告前端回传的是不是脱敏占位值（GET /api/providers / GET
+// /api/providers/{name} 返回的是 maskAPIKey 形式，如 "sk-1234****cdef"）。
+//
+// 模型设置页的编辑弹窗用列表里的值预填 key 输入框（ModelsProvidersView
+// openEditProviderModal），用户不动 key 直接点保存时，脱敏串就会被当成真 key
+// 落盘 —— 之后所有请求都 401「无效的 API Key」，而且从配置里看不出来（长度、
+// 前缀都像真的）。这种"回写脱敏值"的保存视为「保持原 key 不变」。
+func isMaskedAPIKey(key string) bool {
+	return strings.Contains(key, "****")
+}
+
+// applyLiveProviderCredentials 把刚保存的 provider 配置装到**正在运行**的
+// provider 实例上。缓存 agent 与 server 共享同一实例，只写 config.json 不会让
+// 新 key 生效：聊天继续用旧 key 请求 → 一直 401（而设置页的"测试连接"是通的，
+// 因为它用新配置新建临时 provider，掩盖了这个问题）。
+//
+// 只有被编辑的 provider 正是当前使用中的那个才需要处理；就地更新不支持时
+// （凭据存在私有字段里的实现，见 provider.ApplyCredentials）回退为重建 provider
+// 并清空缓存 agent —— 与切换供应商（handleModelSet）走同一条路径。
+func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.ProviderConfig) {
+	if s.cfg == nil || s.cfg.Provider != name {
+		return
+	}
+	if s.provider != nil && provider.ApplyCredentials(s.provider, provCfg.APIKey, provCfg.BaseURL) {
+		return
+	}
+	s.provider = createProvider(s.cfg)
+	s.refreshConvertConfig()
+	s.agentsMu.Lock()
+	s.agents = make(map[string]*agent.Agent)
+	s.agentsMu.Unlock()
+}
+
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := make([]map[string]interface{}, 0)
 	if s.cfg != nil && s.cfg.Providers != nil {
@@ -460,7 +493,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
-			if req.APIKey != "" {
+			if req.APIKey != "" && !isMaskedAPIKey(req.APIKey) {
 				provCfg.APIKey = req.APIKey
 			}
 			// Models array: first element is current model
@@ -484,6 +517,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 			s.cfg.Providers[name] = provCfg
 			_ = s.persistConfig(true)
+			// 凭据/地址改动必须落到正在运行的 provider 实例上（缓存 agent 共享
+			// 同一实例，只写 config 的话聊天仍用旧 key 请求，一直 401）。
+			s.applyLiveProviderCredentials(name, provCfg)
 			// The vision declaration is only useful if the running provider
 			// sees it: cached agents share this provider instance, so refresh
 			// its convert config instead of waiting for a restart.
@@ -520,7 +556,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
-			if req.APIKey != "" {
+			if req.APIKey != "" && !isMaskedAPIKey(req.APIKey) {
 				provCfg.APIKey = req.APIKey
 			}
 			// Models array: first element is current model
@@ -541,6 +577,8 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 			s.cfg.Providers[providerName] = provCfg
 			_ = s.persistConfig(true)
+			// See the PUT branch: credentials must reach the live instance.
+			s.applyLiveProviderCredentials(providerName, provCfg)
 			// See the PUT branch: keep the live provider's vision policy in
 			// sync with the just-saved declaration.
 			s.refreshConvertConfig()
