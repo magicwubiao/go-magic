@@ -181,6 +181,8 @@ export default {
     refreshSessions: '刷新会话列表',
     deleteSession: '删除',
     deleteSessionConfirm: '确定要删除此会话吗？',
+    deleteSessionDone: '会话已删除',
+    deleteFailed: '删除会话失败，请重试',
     deleteDirSessions: '批量删除该目录下所有会话',
     deleteDirSessionsConfirm: '确定要删除该工作目录下的 {count} 个会话吗？此操作不可撤销（目录与文件保留）。',
     renameSession: '重命名会话',

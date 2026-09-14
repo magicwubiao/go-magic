@@ -691,6 +691,39 @@ const modelsStore = useModelsStore()
 const router = useRouter()
 const message = useMessage()
 const dialogStore = useDialog()
+
+// naive-ui 的 useDialog().warning() 返回的是 DialogReactive 对象（不是 Promise，
+// 也没有 then），`await` 它只会立刻拿到一个真值对象 —— 于是
+// `if (await dialog.warning(...))` 这种写法根本不等用户点按钮：
+// 弹窗刚弹出来，删除就已经执行完了（曾致「还没确认，会话已经被删掉」）。
+// 破坏性操作必须由用户点击驱动，这里把 onPositiveClick/onNegativeClick/onClose
+// 桥接成 Promise<boolean>，只有点「确认」才返回 true。
+function confirmDialog(options: {
+  title: string
+  content: string
+  positiveText: string
+  negativeText: string
+}): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (v: boolean) => {
+      if (!settled) {
+        settled = true
+        resolve(v)
+      }
+    }
+    dialogStore.warning({
+      ...options,
+      onPositiveClick: () => finish(true),
+      onNegativeClick: () => finish(false),
+      onClose: () => finish(false),
+      onMaskClick: () => finish(false),
+      onEsc: () => finish(false),
+      // 兜底：任何关闭路径都要落定，避免 await 永远挂住
+      onAfterLeave: () => finish(false),
+    })
+  })
+}
 const inputValue = ref('')
 const chatTextareaRef = ref<{ focus: () => void } | null>(null)
 const rightSidebarMobileVisible = ref(false)
@@ -1526,17 +1559,24 @@ async function deleteDirSessions() {
   const dir = chatStore.currentWorkDir
   const sessions = currentDirSessions.value
   if (!dir || !sessions.length) return
-  const ok = await dialogStore.warning({
+  // 破坏性批量操作：必须等用户点「确认」才开始删（confirmDialog 说明见上）
+  const ok = await confirmDialog({
     title: t('chat.deleteDirSessions'),
     content: t('chat.deleteDirSessionsConfirm', { count: sessions.length, dir }),
     positiveText: t('chat.delete'),
     negativeText: t('common.cancel'),
   })
   if (!ok) return
+  let failed = 0
   for (const s of sessions) {
     // 这些会话均由用户显式设置过工作目录 → 不删除目录/文件本身
     const deleteFiles = !s.work_dir_user_set
-    await chatStore.deleteSession(s.id, deleteFiles)
+    if (!(await chatStore.deleteSession(s.id, deleteFiles))) failed++
+  }
+  if (failed > 0) {
+    message.error(t('chat.deleteFailed'))
+  } else {
+    message.success(t('chat.deleteSessionDone'))
   }
   // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
   const ids = new Set(sessions.map(s => s.id))
@@ -1715,7 +1755,13 @@ async function deleteSession(id: string) {
   const session = chatStore.sessions.find(s => s.id === id)
     ?? searchCache.value?.find(s => s.id === id)
   const deleteFiles = !session?.work_dir_user_set
-  await chatStore.deleteSession(id, deleteFiles)
+  // store 不再吞掉请求错误（只吞会让"到底删没删"无从判断），这里给出明确反馈
+  const ok = await chatStore.deleteSession(id, deleteFiles)
+  if (!ok) {
+    message.error(t('chat.deleteFailed'))
+  } else {
+    message.success(t('chat.deleteSessionDone'))
+  }
   await chatStore.loadSessions()
   // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
   if (searchCache.value) {
@@ -1770,8 +1816,8 @@ async function onSessionMenuSelect(key: string, id: string) {
   if (key === 'rename') {
     startRename(id)
   } else if (key === 'delete') {
-    // 删除前二次确认
-    const ok = await dialogStore.warning({
+    // 删除前二次确认（confirmDialog 只有点「确认」才返回 true）
+    const ok = await confirmDialog({
       title: t('chat.deleteSession'),
       content: t('chat.deleteSessionConfirm'),
       positiveText: t('chat.delete'),

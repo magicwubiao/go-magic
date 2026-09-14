@@ -475,33 +475,40 @@ export const useChatStore = defineStore('chat', () => {
     restorePendingClarifies(id)
   }
 
-  async function deleteSession(id: string, deleteFiles: boolean = false): Promise<void> {
+  // 返回是否成功：调用方需要据此给用户反馈（曾经无条件 catch + console.error，
+  // 界面上既不报错也不提示，用户无法判断"到底删没删"）。
+  async function deleteSession(id: string, deleteFiles: boolean = false): Promise<boolean> {
+    let ok = true
     try {
       await sessionsApi.deleteSession(id, deleteFiles)
-      sessions.value = sessions.value.filter(s => s.id !== id)
-      
-      if (sessionFlushTimers.value[id]) {
-        clearTimeout(sessionFlushTimers.value[id]!)
-      }
-      stopStreamRecovery(id)
-      if (sessionEventSources.value[id]) {
-        sessionEventSources.value[id]!.close()
-      }
-      
-      const newStates = { ...sessionStates.value }
-      delete newStates[id]
-      sessionStates.value = newStates
-      
-      const newEventSources = { ...sessionEventSources.value }
-      delete newEventSources[id]
-      sessionEventSources.value = newEventSources
-      
-      if (activeSessionId.value === id) {
-        activeSessionId.value = null
-      }
     } catch (e) {
+      ok = false
       console.error('Failed to delete session:', e)
     }
+    // 请求失败也照常做本地清理：会话可能早已不存在（重复删除/别的标签页删过），
+    // 让条目继续挂在侧栏比"看起来删不掉"更糟。
+    sessions.value = sessions.value.filter(s => s.id !== id)
+
+    if (sessionFlushTimers.value[id]) {
+      clearTimeout(sessionFlushTimers.value[id]!)
+    }
+    stopStreamRecovery(id)
+    if (sessionEventSources.value[id]) {
+      sessionEventSources.value[id]!.close()
+    }
+
+    const newStates = { ...sessionStates.value }
+    delete newStates[id]
+    sessionStates.value = newStates
+
+    const newEventSources = { ...sessionEventSources.value }
+    delete newEventSources[id]
+    sessionEventSources.value = newEventSources
+
+    if (activeSessionId.value === id) {
+      activeSessionId.value = null
+    }
+    return ok
   }
 
   async function renameSession(id: string, name: string): Promise<void> {

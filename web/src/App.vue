@@ -140,31 +140,6 @@ const isLoginPage = computed(() => route.path === '/login')
 const isChatPage = computed(() => route.path === '/chat' || route.path === '/rooms' || route.path === '/bots')
 const activeKey = computed(() => route.path)
 
-// 移动端顶部工具条标题：根据当前路由映射到对应菜单文案
-const pageTitle = computed(() => {
-  const map: Record<string, string> = {
-    '/chat': t('nav.chat'),
-    '/kanban': t('nav.kanban'),
-    '/goals': t('goals.title'),
-    '/models-providers': t('models.title'),
-    '/tools': t('nav.tools'),
-    '/skills': t('nav.skills'),
-    '/cron': t('nav.cronJobs'),
-    '/bots': t('bots.title'),
-    '/gateway': t('nav.gateway'),
-    '/files': t('nav.files'),
-    '/mcp': t('nav.mcp'),
-    '/plugins': t('nav.plugins'),
-    '/profiles': t('nav.profiles'),
-    '/approval': t('nav.approval'),
-    '/logs': t('nav.logs'),
-    '/usage': t('nav.usage'),
-    '/system': t('nav.system'),
-    '/config': t('nav.config'),
-  }
-  return map[route.path] || t('nav.chat')
-})
-
 onUnmounted(() => {
   useChatStore().cleanup()
 })

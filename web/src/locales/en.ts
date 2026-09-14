@@ -181,6 +181,8 @@ export default {
     refreshSessions: 'Refresh sessions',
     deleteSession: 'Delete',
     deleteSessionConfirm: 'Are you sure you want to delete this session?',
+    deleteSessionDone: 'Session deleted',
+    deleteFailed: 'Failed to delete the session. Please retry.',
     deleteDirSessions: 'Delete all sessions in this directory',
     deleteDirSessionsConfirm: 'Delete all {count} sessions in this working directory? This cannot be undone (directory and files are kept).',
     renameSession: 'Rename Session',
