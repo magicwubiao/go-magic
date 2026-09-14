@@ -383,6 +383,7 @@
             :ref="(el: any) => { chatTextareaRef = el }"
             @keydown.enter.exact.prevent="send"
             @input="handleInput"
+            @paste="handlePaste"
           />
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
@@ -1477,40 +1478,81 @@ async function sha1OfFile(file: File): Promise<string> {
   return ''
 }
 
+// Shared upload path for the file picker and clipboard paste: dedup key,
+// upload, push to selectedFiles (keeping the raw File for the multimodal
+// channel) and localized error toast. Returns true on success.
+async function uploadNativeFile(nativeFile: File): Promise<boolean> {
+  // Two-tier dedup key: sha1 (when supported) plus name+size as a fallback so
+  // very old browsers still get some protection.
+  const hash = await sha1OfFile(nativeFile)
+  const fileKey = (hash || `${nativeFile.name}-${nativeFile.size}-${nativeFile.lastModified}`)
+  if (uploadingFiles.value.has(fileKey)) {
+    return false
+  }
+  uploadingFiles.value.add(fileKey)
+
+  try {
+    const uploaded = await sessionsApi.uploadFile(nativeFile, chatStore.activeSessionId ?? undefined)
+    // Keep the raw File in memory: the multimodal channel reads it directly
+    // with FileReader (the /api/uploads URL sits behind requireAuth, so a
+    // bare fetch of it would 401 and silently kill the image channel).
+    uploaded._native = nativeFile
+    selectedFiles.value.push(uploaded)
+    return true
+  } catch (e) {
+    console.error('Upload failed:', e)
+    message.error(describeUploadError(e as Error & { code?: string }, nativeFile))
+    return false
+  } finally {
+    uploadingFiles.value.delete(fileKey)
+  }
+}
+
 async function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
   const nativeFile = file.file
   if (!nativeFile) {
     onError()
     return
   }
-
-  // Two-tier dedup key: sha1 (when supported) plus name+size as a fallback so
-  // very old browsers still get some protection.
-  const hash = await sha1OfFile(nativeFile)
-  const fileKey = (hash || `${nativeFile.name}-${nativeFile.size}-${nativeFile.lastModified}`)
-  if (uploadingFiles.value.has(fileKey)) {
+  const ok = await uploadNativeFile(nativeFile)
+  if (ok) {
+    onFinish()
+  } else {
     onError()
-    return
   }
-  uploadingFiles.value.add(fileKey)
+}
 
-  sessionsApi.uploadFile(nativeFile, chatStore.activeSessionId ?? undefined)
-    .then((uploaded) => {
-      // Keep the raw File in memory: the multimodal channel reads it directly
-      // with FileReader (the /api/uploads URL sits behind requireAuth, so a
-      // bare fetch of it would 401 and silently kill the image channel).
-      uploaded._native = nativeFile
-      selectedFiles.value.push(uploaded)
-      onFinish()
-    })
-    .catch((e) => {
-      console.error('Upload failed:', e)
-      message.error(describeUploadError(e as Error & { code?: string }, nativeFile))
-      onError()
-    })
-    .finally(() => {
-      uploadingFiles.value.delete(fileKey)
-    })
+// Clipboard paste into the chat input: screenshots / copied files (Ctrl+V,
+// Win+Shift+S, right-click-copy) become attachments like the file picker.
+// Text-only pastes keep the native textarea behavior untouched.
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const files: File[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'file') {
+      const f = item.getAsFile()
+      if (f) files.push(f)
+    }
+  }
+  if (!files.length) return
+  // Screenshots pasted from clipboard have no meaningful name ("image.png");
+  // give the upload a stable timestamped name so the bubble label reads well.
+  const stamp = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stampStr = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`
+  let imgIdx = 0
+  e.preventDefault()
+  for (const f of files) {
+    let target = f
+    if (/^image\//.test(f.type) && (!f.name || /^image\.png$/i.test(f.name))) {
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+      imgIdx += 1
+      target = new File([f], `${t('chat.imageBtn')}-${stampStr}${imgIdx > 1 ? '-' + imgIdx : ''}.${ext}`, { type: f.type })
+    }
+    await uploadNativeFile(target)
+  }
 }
 
 // Translate backend upload errors into localized, human-readable messages.

@@ -211,6 +211,10 @@ func NewServer(dbPath string) *Server {
 		cfg = appconfig.DefaultConfig()
 	}
 
+	// Apply the persistent browser profile dir (empty = temp profile, the
+	// historical behavior). Must happen before the first browser tool use.
+	tool.GetBrowserManager().SetProfileDir(cfg.BrowserProfileDir)
+
 	// Open session store
 	if dbPath == "" {
 		dbPath = filepath.Join(magicHome, "sessions.db")

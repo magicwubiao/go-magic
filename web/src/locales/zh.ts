@@ -197,7 +197,7 @@ export default {
     messages: '消息',
     noSessions: '暂无会话',
     groupNoWorkDir: '默认',
-    loadMoreSessions: '加载更多（还有 {count} 条）',
+    loadMoreSessions: '加载更多（{count}）',
     searchPlaceholder: '搜索会话…',
     searchNoResults: '无匹配会话',
     searchResults: '搜索结果 ({count})',

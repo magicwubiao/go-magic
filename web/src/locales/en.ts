@@ -197,7 +197,7 @@ export default {
     messages: 'Messages',
     noSessions: 'No sessions yet',
     groupNoWorkDir: 'Default',
-    loadMoreSessions: 'Load more ({count} left)',
+    loadMoreSessions: 'Load more ({count})',
     searchPlaceholder: 'Search sessions…',
     searchNoResults: 'No matching sessions',
     searchResults: 'Search results ({count})',

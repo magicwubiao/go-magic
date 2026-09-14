@@ -14,12 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	cruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
+	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // BrowserManager manages browser instances and tabs
@@ -28,6 +30,29 @@ type BrowserManager struct {
 	tabs        map[string]*BrowserTab
 	allocCtx    context.Context
 	allocCancel context.CancelFunc
+
+	// profileDir is the persistent Chrome --user-data-dir for the allocator.
+	// Empty = default temporary profile (no persisted login state). Must be
+	// set before the first Initialize() call; a running browser keeps using
+	// the profile it was started with until Close()/Reset().
+	profileDir string
+}
+
+// SetProfileDir sets the persistent user-data-dir used by the next browser
+// start. Takes effect only if the browser has not been initialized yet (or
+// after the next Close()/Reset()); call Close() beforehand to force a fresh
+// start when no tabs are open.
+func (bm *BrowserManager) SetProfileDir(dir string) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	bm.profileDir = dir
+}
+
+// ProfileDir returns the configured persistent profile directory ("" = temp).
+func (bm *BrowserManager) ProfileDir() string {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	return bm.profileDir
 }
 
 // BrowserTab represents a browser tab
@@ -111,6 +136,27 @@ func (bm *BrowserManager) Initialize() error {
 
 	if !isSandboxed {
 		opts = append(opts, chromedp.Flag("start-maximized", true))
+	}
+
+	// Persistent profile: explicit SetProfileDir wins, then
+	// BROWSER_PROFILE_DIR env, then the config file's browser_profile_dir
+	// (covers TUI/CLI sessions that never go through the server), otherwise
+	// the default temporary profile (fresh every start, no login state). The
+	// directory is created up front so Chrome never sees a missing path.
+	profileDir := bm.profileDir
+	if profileDir == "" {
+		profileDir = os.Getenv("BROWSER_PROFILE_DIR")
+	}
+	if profileDir == "" {
+		if cfg, err := config.Load(); err == nil {
+			profileDir = cfg.BrowserProfileDir
+		}
+	}
+	if profileDir != "" {
+		if err := os.MkdirAll(profileDir, 0700); err != nil {
+			return fmt.Errorf("failed to create browser profile dir %q: %w", profileDir, err)
+		}
+		opts = append(opts, chromedp.UserDataDir(profileDir))
 	}
 
 	bm.allocCtx, bm.allocCancel = chromedp.NewExecAllocator(context.Background(), opts...)
@@ -989,6 +1035,92 @@ func (bm *BrowserManager) GetCookies(tabID string) ([]map[string]interface{}, er
 		})
 	}
 	return out, nil
+}
+
+// SetCookies injects cookies into the browser context (e.g. login state
+// exported from another browser). Each entry is a map with "name" and "value"
+// required, plus optional "url" or "domain" (+ "path"), "secure",
+// "http_only", "same_site" ("Strict"/"Lax"/"None") and "expires" (unix
+// seconds as number, or RFC3339 string). Entries missing both url and domain
+// are rejected — CDP needs one of them to scope the cookie.
+func (bm *BrowserManager) SetCookies(tabID string, cookies []map[string]interface{}) (int, error) {
+	tab, ok := bm.GetTab(tabID)
+	if !ok {
+		return 0, fmt.Errorf("tab not found: %s", tabID)
+	}
+
+	params := make([]*network.CookieParam, 0, len(cookies))
+	for i, raw := range cookies {
+		name, _ := raw["name"].(string)
+		value, _ := raw["value"].(string)
+		if name == "" {
+			return 0, fmt.Errorf("cookie #%d: name is required", i+1)
+		}
+		cp := &network.CookieParam{Name: name, Value: value}
+		if v, ok := raw["url"].(string); ok && v != "" {
+			cp.URL = v
+		}
+		if v, ok := raw["domain"].(string); ok && v != "" {
+			cp.Domain = v
+		}
+		if v, ok := raw["path"].(string); ok && v != "" {
+			cp.Path = v
+		}
+		if v, ok := raw["secure"].(bool); ok {
+			cp.Secure = v
+		}
+		if v, ok := raw["http_only"].(bool); ok {
+			cp.HTTPOnly = v
+		}
+		if v, ok := raw["same_site"].(string); ok && v != "" {
+			switch strings.ToLower(v) {
+			case "strict":
+				cp.SameSite = network.CookieSameSiteStrict
+			case "lax":
+				cp.SameSite = network.CookieSameSiteLax
+			case "none":
+				cp.SameSite = network.CookieSameSiteNone
+			default:
+				return 0, fmt.Errorf("cookie #%d: invalid same_site %q (use Strict/Lax/None)", i+1, v)
+			}
+		}
+		switch exp := raw["expires"].(type) {
+		case float64:
+			e := cdp.TimeSinceEpoch(time.Unix(int64(exp), 0))
+			cp.Expires = &e
+		case string:
+			if exp != "" {
+				var t time.Time
+				if parsed, err := time.Parse(time.RFC3339, exp); err == nil {
+					t = parsed
+				} else if secs, err2 := strconv.ParseFloat(exp, 64); err2 == nil {
+					t = time.Unix(int64(secs), 0)
+				} else {
+					return 0, fmt.Errorf("cookie #%d: invalid expires %q (use unix seconds or RFC3339)", i+1, exp)
+				}
+				e := cdp.TimeSinceEpoch(t)
+				cp.Expires = &e
+			}
+		}
+		if cp.URL == "" && cp.Domain == "" {
+			return 0, fmt.Errorf("cookie #%d (%s): either url or domain is required", i+1, name)
+		}
+		params = append(params, cp)
+	}
+	if len(params) == 0 {
+		return 0, fmt.Errorf("no cookies to set")
+	}
+
+	ctx, cancel := context.WithTimeout(tab.Ctx, 30*time.Second)
+	defer cancel()
+
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return network.SetCookies(params).Do(ctx)
+	}))
+	if err != nil {
+		return 0, fmt.Errorf("failed to set cookies: %w", err)
+	}
+	return len(params), nil
 }
 
 // ============================================================================

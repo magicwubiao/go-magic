@@ -96,8 +96,12 @@ type Config struct {
 	BotMode *BotModeConfig `json:"bot_mode,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
 	Privacy *privacy.Config `json:"privacy,omitempty"`
-	Display DisplayConfig   `json:"display,omitempty"`
-	Server  ServerConfig    `json:"server,omitempty"`
+	// BrowserProfileDir 指定自动化浏览器的持久 profile 目录（Chrome --user-data-dir）。
+	// 留空 = 每次启动用全新临时 profile（历史行为，无登录态）；设置后登录一次
+	// 即长期保留 cookie/localStorage。BROWSER_PROFILE_DIR 环境变量可覆盖。
+	BrowserProfileDir string        `json:"browser_profile_dir,omitempty"`
+	Display           DisplayConfig `json:"display,omitempty"`
+	Server            ServerConfig  `json:"server,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"`      // chat, plan, act

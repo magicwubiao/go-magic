@@ -696,6 +696,88 @@ func (t *BrowserGetCookiesTool) Execute(ctx context.Context, args map[string]int
 	}, nil
 }
 
+// BrowserSetCookiesTool injects cookies into the browser context, e.g. login
+// state exported from another browser session.
+type BrowserSetCookiesTool struct{}
+
+func NewBrowserSetCookiesTool() *BrowserSetCookiesTool {
+	return &BrowserSetCookiesTool{}
+}
+
+func (t *BrowserSetCookiesTool) Name() string { return "browser_set_cookies" }
+
+func (t *BrowserSetCookiesTool) Description() string {
+	return "Inject cookies into the browser (e.g. to reuse a login session exported elsewhere). Each cookie object needs name and value, plus either url or domain. Optional per-cookie fields: path, secure, http_only, same_site (Strict/Lax/None), expires (unix seconds or RFC3339)."
+}
+
+func (t *BrowserSetCookiesTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"cookies": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name":      map[string]interface{}{"type": "string"},
+						"value":     map[string]interface{}{"type": "string"},
+						"url":       map[string]interface{}{"type": "string"},
+						"domain":    map[string]interface{}{"type": "string"},
+						"path":      map[string]interface{}{"type": "string"},
+						"secure":    map[string]interface{}{"type": "boolean"},
+						"http_only": map[string]interface{}{"type": "boolean"},
+						"same_site": map[string]interface{}{"type": "string", "enum": []string{"Strict", "Lax", "None"}},
+						"expires":   map[string]interface{}{"type": "string", "description": "unix seconds or RFC3339, e.g. 1790000000 or 2026-09-15T00:00:00Z"},
+					},
+					"required": []string{"name", "value"},
+				},
+				"description": "Cookies to set; each needs name+value and url or domain",
+			},
+			"tab_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Tab ID from previous browser_navigate call (optional)",
+			},
+		},
+		"required": []string{"cookies"},
+	}
+}
+
+func (t *BrowserSetCookiesTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	tabID := "default"
+	if id, ok := args["tab_id"].(string); ok && id != "" {
+		tabID = id
+	}
+
+	rawCookies, ok := args["cookies"].([]interface{})
+	if !ok || len(rawCookies) == 0 {
+		return nil, fmt.Errorf("cookies must be a non-empty array of cookie objects")
+	}
+	cookies := make([]map[string]interface{}, 0, len(rawCookies))
+	for _, rc := range rawCookies {
+		m, ok := rc.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("each cookie must be an object with name/value")
+		}
+		cookies = append(cookies, m)
+	}
+
+	bm := GetBrowserManager()
+	if _, ok := bm.GetTab(tabID); !ok {
+		return nil, fmt.Errorf("no active browser tab found. Please call browser_navigate first")
+	}
+
+	n, err := bm.SetCookies(tabID, cookies)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set cookies: %w", err)
+	}
+
+	return map[string]interface{}{
+		"action":  "set_cookies",
+		"count":   n,
+		"success": true,
+	}, nil
+}
+
 // truncateString truncates a string to max length
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {

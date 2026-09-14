@@ -10,6 +10,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/approval"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -709,6 +710,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// initBotMode only when the manager is (re)created).
 		if _, ok := expanded["bot_mode"]; ok && s.botManager != nil {
 			s.botManager.ReloadConfig(s.cfg)
+		}
+
+		// Persistent browser profile dir: apply immediately. A running browser
+		// keeps its current profile; when idle (no tabs) we tear it down so the
+		// next use starts fresh with the new dir.
+		if _, ok := expanded["browser_profile_dir"]; ok {
+			bm := tool.GetBrowserManager()
+			if bm.ProfileDir() != s.cfg.BrowserProfileDir {
+				if bm.TabCount() == 0 {
+					bm.Close()
+				}
+				bm.SetProfileDir(s.cfg.BrowserProfileDir)
+			}
 		}
 
 		// Return updated config

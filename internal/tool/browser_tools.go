@@ -599,6 +599,7 @@ func ExportBrowserToolsJSON() string {
 	infoTool := NewBrowserGetInfoTool()
 	clearCacheTool := NewBrowserClearCacheTool()
 	cookiesTool := NewBrowserGetCookiesTool()
+	setCookiesTool := NewBrowserSetCookiesTool()
 	imgTool := NewBrowserGetImagesTool(bt)
 	consoleTool := NewBrowserConsoleTool()
 	pressTool := NewBrowserPressTool(bt)
@@ -618,6 +619,7 @@ func ExportBrowserToolsJSON() string {
 		{"name": "browser_get_info", "description": "Get page information", "schema": infoTool.Schema()},
 		{"name": "browser_clear_cache", "description": "Clear browser cache", "schema": clearCacheTool.Schema()},
 		{"name": "browser_get_cookies", "description": "Get page cookies", "schema": cookiesTool.Schema()},
+		{"name": "browser_set_cookies", "description": "Inject cookies into the browser", "schema": setCookiesTool.Schema()},
 		{"name": "browser_get_images", "description": "Extract image URLs", "schema": imgTool.Schema()},
 		{"name": "browser_console", "description": "Execute JavaScript", "schema": consoleTool.Schema()},
 		{"name": "browser_press", "description": "Press keyboard key or type text", "schema": pressTool.Schema()},

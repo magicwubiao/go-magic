@@ -200,6 +200,7 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewBrowserGetInfoTool())
 	r.Register(NewBrowserClearCacheTool())
 	r.Register(NewBrowserGetCookiesTool())
+	r.Register(NewBrowserSetCookiesTool())
 	r.Register(NewBrowserPressTool(bt))
 	r.Register(NewBrowserVisionTool(bt))
 	r.Register(NewBrowserDialogTool(bt))
