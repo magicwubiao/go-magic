@@ -36,29 +36,75 @@
       </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
         <div v-if="isSearching" class="profile-group-header">{{ t('chat.searchResults', { count: visibleSessions.length }) }}</div>
+        <template v-for="row in sidebarRows" :key="row.key">
+          <!-- 分组头（点标题折叠/展开）。仅当存在"设置过工作目录"的分组时出现，
+               全是未设置目录的会话时侧栏保持扁平列表。 -->
           <div
-            v-for="session in visibleSessions"
-            :key="session.id"
+            v-if="row.kind === 'group'"
+            class="session-group-head"
+            :class="{ collapsed: row.collapsed, 'group-dir': row.userSet }"
+            :title="row.label"
+            @click="toggleGroup(row.groupKey)"
+          >
+            <n-icon size="12" class="session-group-caret"><ChevronDownOutline /></n-icon>
+            <n-icon size="13" class="session-group-icon" :component="row.userSet ? FolderOutline : ChatbubbleOutline" />
+            <span class="session-group-label">{{ row.userSet ? dirLabel(row.label) : row.label }}</span>
+            <!-- 悬停时用操作按钮顶替数量徽标：分组头本身很窄，留出位置给「新建/删除」 -->
+            <span class="session-group-count">{{ row.count }}</span>
+            <span class="session-group-actions">
+              <n-button
+                size="tiny"
+                quaternary
+                circle
+                class="session-group-action"
+                :title="row.userSet ? t('chat.newSessionInDir', { dir: row.label }) : t('chat.newSession')"
+                @click.stop="createSessionInGroup(row)"
+              >
+                <template #icon><n-icon size="13"><AddOutline /></n-icon></template>
+              </n-button>
+              <n-button
+                size="tiny"
+                quaternary
+                circle
+                type="error"
+                class="session-group-action"
+                :title="row.userSet ? t('chat.deleteDirSessions') : t('chat.deleteGroupSessions')"
+                @click.stop="deleteGroupSessions(row)"
+              >
+                <template #icon><n-icon size="13"><TrashOutline /></n-icon></template>
+              </n-button>
+            </span>
+          </div>
+          <!-- 组内"加载更多"：该目录下还有没渲染出来的会话 -->
+          <div
+            v-else-if="row.kind === 'more'"
+            class="session-group-more"
+            @click="showMoreInGroup(row.groupKey)"
+          >
+            {{ t('chat.loadMoreSessions', { count: row.hidden }) }}
+          </div>
+          <div
+            v-else
             class="session-item"
-            :class="{ active: chatStore.activeSessionId === session.id }"
-            @click="handleSessionClick(session.id)"
-            @mouseenter="loadSessionGoals(session.id)"
+            :class="{ active: chatStore.activeSessionId === row.session.id, 'in-group': showGroupHeaders }"
+            @click="handleSessionClick(row.session.id)"
+            @mouseenter="loadSessionGoals(row.session.id)"
           >
             <div class="session-content">
-              <div v-if="editingSessionId !== session.id" class="session-title">
+              <div v-if="editingSessionId !== row.session.id" class="session-title">
                 <div style="display: flex; align-items: center; gap: 4px;">
                   <!-- 正在执行标识：该会话当前有回合在流式执行（小尺寸，避免喧宾夺主） -->
-                  <n-spin v-if="chatStore.isSessionRunning(session.id)" :size="12" style="flex-shrink: 0;" />
+                  <n-spin v-if="chatStore.isSessionRunning(row.session.id)" :size="12" style="flex-shrink: 0;" />
                   <!-- Goal indicator - icon only, hover shows details -->
                   <n-popover 
-                    v-if="getSessionGoals(session.id).length" 
+                    v-if="getSessionGoals(row.session.id).length" 
                     trigger="hover"
                     placement="right"
                     :show-arrow="true"
                     :duration="100"
-                    :show="popoverShow[session.id]"
-                    @mouseenter="popoverShow[session.id] = true"
-                    @mouseleave="popoverShow[session.id] = false"
+                    :show="popoverShow[row.session.id]"
+                    @mouseenter="popoverShow[row.session.id] = true"
+                    @mouseleave="popoverShow[row.session.id] = false"
                   >
                     <template #trigger>
                       <n-icon :component="FlagOutline" :size="14" color="#2080f0" style="cursor: pointer; flex-shrink: 0;" />
@@ -70,7 +116,7 @@
                         </n-text>
                         <div class="session-goal-list">
                           <div 
-                            v-for="goal in getSessionGoals(session.id)" 
+                            v-for="goal in getSessionGoals(row.session.id)" 
                             :key="goal.id" 
                             class="session-goal-item"
                           >
@@ -81,14 +127,14 @@
                             <n-text depth="3" style="font-size: 11px;">{{ t('goals.statusOptions.' + goal.status) }}</n-text>
                             <n-space :size="4" style="margin-top: 4px;">
                               <n-button size="tiny" text @click="(e: Event) => { e.stopPropagation(); goToGoal(goal.id); }">{{ t('goals.details') }}</n-button>
-                              <n-button size="tiny" text type="error" @click="(e: Event) => { e.stopPropagation(); unlinkSessionGoal(goal.id, session.id, session.id); }">{{ t('goals.unlinkGoal') }}</n-button>
+                              <n-button size="tiny" text type="error" @click="(e: Event) => { e.stopPropagation(); unlinkSessionGoal(goal.id, row.session.id, row.session.id); }">{{ t('goals.unlinkGoal') }}</n-button>
                             </n-space>
                           </div>
                         </div>
                       </div>
                     </template>
                   </n-popover>
-                  <span class="session-title-text">{{ session.title || t('chat.untitled') }}</span>
+                  <span class="session-title-text">{{ row.session.title || t('chat.untitled') }}</span>
                 </div>
               </div>
               <div v-else class="session-title-edit">
@@ -96,17 +142,17 @@
                   v-model:value="editingName"
                   class="session-title-input"
                   size="small"
-                  @keydown.enter="saveRename(session.id)"
+                  @keydown.enter="saveRename(row.session.id)"
                   @keydown.esc="cancelRename"
-                  @blur="saveRename(session.id)"
+                  @blur="saveRename(row.session.id)"
                   autofocus
                 />
               </div>
               <div class="session-meta">
-                <n-tag v-if="session.source && session.source !== 'web'" size="tiny" :type="sourceType(session.source)" style="margin-right: 4px;">
-                  {{ session.source }}
+                <n-tag v-if="row.session.source && row.session.source !== 'web'" size="tiny" :type="sourceType(row.session.source)" style="margin-right: 4px;">
+                  {{ row.session.source }}
                 </n-tag>
-                {{ session.message_count || 0 }} {{ t('chat.messages') }}
+                {{ row.session.message_count || 0 }} {{ t('chat.messages') }}
               </div>
             </div>
             <div class="session-actions">
@@ -114,10 +160,10 @@
                 trigger="click"
                 placement="bottom-end"
                 :options="sessionMenuOptions()"
-                @select="(key: string) => onSessionMenuSelect(key, session.id)"
+                @select="(key: string) => onSessionMenuSelect(key, row.session.id)"
               >
                 <n-button
-                  v-if="editingSessionId !== session.id"
+                  v-if="editingSessionId !== row.session.id"
                   class="session-menu-btn"
                   size="tiny"
                   quaternary
@@ -131,13 +177,14 @@
               </n-dropdown>
             </div>
           </div>
+        </template>
         <div v-if="chatStore.sessionsLoading || (isSearching && searchLoading)" style="padding: 16px; text-align: center;">
           <n-spin size="small" />
         </div>
         <n-text v-if="isSearching && !chatStore.sessionsLoading && !searchLoading && visibleSessions.length === 0" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.searchNoResults') }}
         </n-text>
-        <n-text v-if="!isSearching && !chatStore.sessions.length && !chatStore.sessionsLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <n-text v-if="!isSearching && !sidebarRows.length && !chatStore.sessionsLoading && !searchLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.noSessions') }}
         </n-text>
       </div>
@@ -679,7 +726,7 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import { useRouter } from 'vue-router'
@@ -1032,12 +1079,15 @@ function renderMarkdown(content: string): string {
   return html
 }
 
-// ===== 会话侧栏搜索（本地过滤） =====
-// 说明：会话列表本身按 20 条/页懒加载，仅过滤"已加载"的会话会让搜索漏掉
-// 更早的历史会话；因此搜索激活时首次会一次性补齐后端全部 web 会话到本地
-// 缓存（searchCache），后续过滤均为纯前端操作，不引入服务端搜索语义。
+// ===== 侧栏会话数据源：全量 web 会话缓存 =====
+// 说明：侧栏现在按"工作目录"分组（见下方 sessionGroups），分组只有在拿到**全部**
+// web 会话时才正确——只看 store 里分页加载的 20 条，会出现的不是"某目录只这么
+// 几条会话"，而是"该目录的会话还没加载出来"。因此侧栏挂载时（onMounted）就一次性
+// 补齐后端全部 web 会话到本地缓存（allWebSessions），搜索过滤与分组都基于它做纯
+// 前端计算；store.sessions 仍保留（分页），作为缓存就绪前的兜底数据源。
+// 缓存就绪前显示的条数会偏少，属于预期的中间态。
 const sessionSearch = ref('')
-const searchCache = ref<sessionsApi.Session[] | null>(null) // null=尚未全量补齐
+const allWebSessions = ref<sessionsApi.Session[] | null>(null) // null=尚未全量补齐
 const searchLoading = ref(false)
 const SESSION_FETCH_STEP = 100
 
@@ -1047,12 +1097,14 @@ function isWebSession(s: sessionsApi.Session): boolean {
   return !s.source || s.source === 'web'
 }
 
-// 当前侧栏实际展示的会话：普通浏览 = store 分页列表；搜索 = 过滤后的候选集。
+// 侧栏数据源：缓存就绪后用缓存（含分组），否则退回 store 分页列表。
+const sidebarSessionPool = computed(() => allWebSessions.value ?? chatStore.sessions)
+
+// 搜索命中的会话（扁平结果，不分目录——搜索时按相关性给结果更有用）
 const visibleSessions = computed(() => {
   const q = sessionSearch.value.trim().toLowerCase()
-  if (!q) return chatStore.sessions
-  const pool = searchCache.value ?? chatStore.sessions
-  return pool.filter(s => {
+  if (!q) return sidebarSessionPool.value
+  return sidebarSessionPool.value.filter(s => {
     if (!isWebSession(s)) return false
     const title = (s.title || '').toLowerCase()
     const preview = (s.preview || '').toLowerCase()
@@ -1060,9 +1112,9 @@ const visibleSessions = computed(() => {
   })
 })
 
-// 一次性拉全后端 web 会话作为搜索候选（分页循环，避免截断）
+// 一次性拉全后端 web 会话（分页循环，避免截断）。侧栏挂载时就调用，供分组与搜索使用。
 async function loadFullSessions(): Promise<void> {
-  if (searchLoading.value || searchCache.value) return
+  if (searchLoading.value || allWebSessions.value) return
   searchLoading.value = true
   try {
     const web: sessionsApi.Session[] = []
@@ -1074,38 +1126,199 @@ async function loadFullSessions(): Promise<void> {
       web.push(...res.sessions.filter(isWebSession))
       if (res.sessions.length < SESSION_FETCH_STEP) break
     }
-    searchCache.value = web
+    allWebSessions.value = web
   } catch (e) {
-    // 拉全量失败时退化为过滤已加载会话，不阻断搜索输入
-    console.error('Failed to load full sessions for search:', e)
+    // 拉全量失败时退化为 store 分页列表（侧栏仍可用，只是分组不完整）
+    console.error('Failed to load full sessions:', e)
   } finally {
     searchLoading.value = false
   }
 }
 
-// 防抖触发全量补齐：首次输入后 250ms 内不重复请求
+// 兜底：挂载时的全量补齐失败（缓存仍为 null）时，用户开始搜索再补一次，250ms 防抖
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 watch(sessionSearch, (val) => {
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer)
     searchDebounceTimer = null
   }
-  if (!val.trim() || searchCache.value) return
+  if (!val.trim() || allWebSessions.value) return
   searchDebounceTimer = setTimeout(loadFullSessions, 250)
 })
 
-// 搜索候选缓存建立后，store 中新增/刷新出的会话保持同步（如新建会话后立即可搜到）
+// 缓存就绪后，store 中新增/刷新出的会话保持同步（如新建会话后立即出现在侧栏）
 watch(() => chatStore.sessions, (list) => {
-  if (!searchCache.value) return
-  const known = new Set(searchCache.value.map(s => s.id))
+  if (!allWebSessions.value) return
+  const known = new Set(allWebSessions.value.map(s => s.id))
   const fresh = list.filter(s => isWebSession(s) && !known.has(s.id))
-  if (fresh.length > 0) searchCache.value = [...searchCache.value, ...fresh]
+  if (fresh.length > 0) allWebSessions.value = [...fresh, ...allWebSessions.value]
+})
+
+// 就地修改（改名、改工作目录）不会改变 store.sessions 的数组引用，watcher 不会触发，
+// 这里手动把变化同步进缓存，否则分组/标题要等下一次刷新才更新。
+function patchCachedSession(id: string, patch: Partial<sessionsApi.Session>): void {
+  if (!allWebSessions.value) return
+  const hit = allWebSessions.value.find(s => s.id === id)
+  if (hit) Object.assign(hit, patch)
+}
+
+function removeCachedSession(id: string): void {
+  if (allWebSessions.value) {
+    allWebSessions.value = allWebSessions.value.filter(s => s.id !== id)
+  }
+}
+
+// ===== 侧栏会话分组：按"是否设置过工作目录" =====
+// - 用户显式设置过工作目录的会话 → 按目录各自成组（可折叠，组内分页"加载更多"）
+// - 没设置过的（创建时自动分配的临时目录）→ 全部并进一个兜底分组
+// 组间按组内最近活动倒序，兜底组排在最后；组数据来自全量缓存 allWebSessions。
+const NO_DIR_GROUP_KEY = '__no_work_dir__'
+// 目录 key 归一化：分隔符统一、去尾部斜杠、忽略大小写（Windows 路径大小写不敏感）
+function dirKey(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+// 分组标题的展示名：多级路径只取最后一段（完整路径放在 title 提示里）。
+// 侧栏宽度有限，长路径若从头截断，D:\a\web 与 D:\b\web 会显示成一模一样。
+function dirLabel(p: string): string {
+  const norm = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const idx = norm.lastIndexOf('/')
+  const tail = idx >= 0 ? norm.slice(idx + 1) : norm
+  return tail || p
+}
+
+interface SidebarGroup {
+  key: string
+  label: string
+  userSet: boolean
+  sessions: sessionsApi.Session[]
+}
+
+// 每组默认渲染的会话条数：同一目录会话多时，靠"加载更多"按页展开，
+// 避免一组几十条把侧栏整个顶下去。
+const GROUP_PAGE_SIZE = 5
+const collapsedGroups = ref<Record<string, boolean>>({})
+const groupPageCount = ref<Record<string, number>>({})
+
+function isGroupCollapsed(key: string): boolean {
+  return collapsedGroups.value[key] === true
+}
+
+function toggleGroup(key: string): void {
+  collapsedGroups.value = { ...collapsedGroups.value, [key]: !isGroupCollapsed(key) }
+}
+
+function groupLimit(key: string): number {
+  return groupPageCount.value[key] ?? GROUP_PAGE_SIZE
+}
+
+function showMoreInGroup(key: string): void {
+  groupPageCount.value = { ...groupPageCount.value, [key]: groupLimit(key) + GROUP_PAGE_SIZE }
+}
+
+const sessionGroups = computed<SidebarGroup[]>(() => {
+  const byDir = new Map<string, sessionsApi.Session[]>()
+  const noDir: sessionsApi.Session[] = []
+  for (const s of sidebarSessionPool.value) {
+    if (!isWebSession(s)) continue
+    if (s.work_dir_user_set && s.work_dir) {
+      const k = dirKey(s.work_dir)
+      const list = byDir.get(k)
+      if (list) list.push(s)
+      else byDir.set(k, [s])
+    } else {
+      noDir.push(s)
+    }
+  }
+  const byRecency = (a: sessionsApi.Session, b: sessionsApi.Session) => (b.last_active || 0) - (a.last_active || 0)
+  const newestAt = (list: sessionsApi.Session[]) => list.reduce((m, s) => Math.max(m, s.last_active || 0), 0)
+  const groups: SidebarGroup[] = [...byDir.entries()]
+    .map(([k, list]) => ({
+      key: `dir:${k}`,
+      label: list[0]?.work_dir || k,
+      userSet: true,
+      sessions: [...list].sort(byRecency),
+    }))
+    .sort((a, b) => newestAt(b.sessions) - newestAt(a.sessions))
+  // 未设置工作目录的会话固定成一组「默认」，始终排在最前面，不参与插入排序，
+  // 避免它随着最近活动时间上下浮动、位置不可预期。
+  if (noDir.length) {
+    groups.unshift({
+      key: NO_DIR_GROUP_KEY,
+      label: t('chat.groupNoWorkDir'),
+      userSet: false,
+      sessions: [...noDir].sort(byRecency),
+    })
+  }
+  return groups
+})
+
+// 只有存在"设置过工作目录"的分组时才画分组标题：全都是未设置目录的会话时，
+// 侧栏保持与以前一致的扁平列表，不凭空多出一行无信息量的表头（也就没有可折叠的东西）。
+const showGroupHeaders = computed(() => sessionGroups.value.some(g => g.userSet))
+
+// 某组当前实际渲染的会话：截到分页上限；若活动会话落在上限之外，一并展开到它，
+// 否则切到某个老会话后，侧栏里看不见自己在哪里。
+function groupVisibleSessions(group: SidebarGroup): sessionsApi.Session[] {
+  const limit = groupLimit(group.key)
+  const activeId = chatStore.activeSessionId
+  let end = Math.min(limit, group.sessions.length)
+  if (activeId) {
+    const idx = group.sessions.findIndex(s => s.id === activeId)
+    if (idx >= end) end = idx + 1
+  }
+  return group.sessions.slice(0, end)
+}
+
+type SidebarRow =
+  | { kind: 'group'; key: string; groupKey: string; label: string; workDir: string; count: number; collapsed: boolean; userSet: boolean }
+  | { kind: 'session'; key: string; session: sessionsApi.Session }
+  | { kind: 'more'; key: string; groupKey: string; hidden: number }
+
+// 模板只遍历这一份扁平的"行"列表（分组头 / 会话 / 加载更多 按顺序混排），
+// 会话条目模板因此只保留一份；搜索时就是不掺分组头的纯会话行。
+const sidebarRows = computed<SidebarRow[]>(() => {
+  if (isSearching.value) {
+    return visibleSessions.value.map(s => ({ kind: 'session' as const, key: `s:${s.id}`, session: s }))
+  }
+  const rows: SidebarRow[] = []
+  for (const g of sessionGroups.value) {
+    const visible = groupVisibleSessions(g)
+    if (showGroupHeaders.value) {
+      rows.push({
+        kind: 'group',
+        key: `g:${g.key}`,
+        groupKey: g.key,
+        label: g.label,
+        // 分组头快捷操作要用真实目录（「默认」组为空 → 新建时走系统默认目录）
+        workDir: g.userSet ? g.label : '',
+        count: g.sessions.length,
+        collapsed: isGroupCollapsed(g.key),
+        userSet: g.userSet,
+      })
+    }
+    if (isGroupCollapsed(g.key)) continue
+    for (const s of visible) rows.push({ kind: 'session', key: `s:${s.id}`, session: s })
+    const hidden = g.sessions.length - visible.length
+    if (hidden > 0) rows.push({ kind: 'more', key: `m:${g.key}`, groupKey: g.key, hidden })
+  }
+  return rows
+})
+
+// 切到某个会话时，若它所在的分组处于折叠状态就自动展开——否则侧栏里看不见当前会话
+// （从"按目录查看会话"面板或搜索结果跳进一个折叠分组里的会话时尤其明显）。
+watch(() => chatStore.activeSessionId, (id) => {
+  if (!id || !showGroupHeaders.value) return
+  const group = sessionGroups.value.find(g => g.sessions.some(s => s.id === id))
+  if (group && isGroupCollapsed(group.key)) {
+    collapsedGroups.value = { ...collapsedGroups.value, [group.key]: false }
+  }
 })
 
 // 点击搜索命中的会话：若不在 store 已加载列表中，先并入再进入，保证派生状态完整
 async function handleSessionClick(id: string) {
-  if (isSearching.value && searchCache.value) {
-    const hit = searchCache.value.find(s => s.id === id)
+  if (isSearching.value && allWebSessions.value) {
+    const hit = allWebSessions.value.find(s => s.id === id)
     if (hit) chatStore.mergeSessions([hit])
   }
   await selectSession(id)
@@ -1354,11 +1567,18 @@ async function loadWorkDirHistory() {
   }
 }
 
+// 设置/清空某个会话的工作目录，并同步进全量缓存：分组"归属哪个目录"由工作目录
+// 决定，不同步的话侧栏要等下次刷新才会把会话挪进新分组。
+async function setSessionWorkDir(id: string, dir: string): Promise<void> {
+  await chatStore.updateSessionWorkDir(id, dir)
+  patchCachedSession(id, { work_dir: dir, work_dir_user_set: dir !== '' })
+}
+
 // 点击推荐目录直接应用为当前会话的工作目录
 async function applyRecommendedDir(path: string) {
   if (!chatStore.activeSessionId) return
   try {
-    await chatStore.updateSessionWorkDir(chatStore.activeSessionId, path)
+    await setSessionWorkDir(chatStore.activeSessionId, path)
     showDirPicker.value = false
     message.success(t('chat.workDir') + ': ' + path)
   } catch (e: any) {
@@ -1448,7 +1668,7 @@ async function handleWorkDirMenu(key: string) {
   } else if (key === 'set') {
     if (!chatStore.activeSessionId || !dirCurrentPath.value) return
     try {
-      await chatStore.updateSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
+      await setSessionWorkDir(chatStore.activeSessionId, dirCurrentPath.value)
       showDirPicker.value = false
       message.success(t('chat.workDir') + ': ' + dirCurrentPath.value)
     } catch (e: any) {
@@ -1465,10 +1685,7 @@ const dirSessionsLoading = ref(false)
 const dirGroups = ref<sessionsApi.SessionDirGroup[]>([])
 const dirPanelMode = ref<'current' | 'all'>('current')
 const dirSessAnchorRef = ref<HTMLElement>()
-// 目录 key 归一化：分隔符统一、去尾部斜杠、忽略大小写（Windows 路径大小写不敏感）
-function dirKey(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-}
+// 目录 key 归一化复用上方分组用的 dirKey（分隔符统一、去尾部斜杠、忽略大小写）
 
 async function loadDirGroups(): Promise<void> {
   if (dirSessionsLoading.value) return
@@ -1580,8 +1797,54 @@ async function deleteDirSessions() {
   }
   // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
   const ids = new Set(sessions.map(s => s.id))
-  if (searchCache.value) {
-    searchCache.value = searchCache.value.filter(s => !ids.has(s.id))
+  if (allWebSessions.value) {
+    allWebSessions.value = allWebSessions.value.filter(s => !ids.has(s.id))
+  }
+  await chatStore.loadSessions()
+  await loadDirGroups()
+}
+
+// 侧栏分组头上的「新建」：在该目录下开一个新会话（「默认」组不传目录，走系统默认）。
+// 后端返回的 last_active 就是当前时间、且 work_dir_user_set=true，所以新会话必然
+// 落在同一分组的第一条；这里只需把折叠的组展开，保证用户立刻看到它。
+async function createSessionInGroup(row: Extract<SidebarRow, { kind: 'group' }>) {
+  const session = await chatStore.createSession(row.workDir || undefined)
+  if (!session) {
+    message.error(t('chat.createSessionFailed'))
+    return
+  }
+  if (isGroupCollapsed(row.groupKey)) toggleGroup(row.groupKey)
+}
+
+// 侧栏分组头上的「删除」：删除该分组下的全部会话。
+// 目录分组只删会话记录（目录与用户文件保留）；「默认」分组的会话没有用户指定目录，
+// 其临时工作目录随会话一起清掉（与单条删除的 deleteFiles 规则保持一致）。
+async function deleteGroupSessions(row: Extract<SidebarRow, { kind: 'group' }>) {
+  const group = sessionGroups.value.find(g => g.key === row.groupKey)
+  if (!group || !group.sessions.length) return
+  // 破坏性批量操作：必须等用户点「确认」才开始删（confirmDialog 说明见上）
+  const ok = await confirmDialog({
+    title: row.userSet ? t('chat.deleteDirSessions') : t('chat.deleteGroupSessions'),
+    content: row.userSet
+      ? t('chat.deleteDirSessionsConfirm', { count: group.sessions.length, dir: group.label })
+      : t('chat.deleteGroupSessionsConfirm', { count: group.sessions.length, group: group.label }),
+    positiveText: t('chat.delete'),
+    negativeText: t('common.cancel'),
+  })
+  if (!ok) return
+  let failed = 0
+  for (const s of group.sessions) {
+    if (!(await chatStore.deleteSession(s.id, !s.work_dir_user_set))) failed++
+  }
+  if (failed > 0) {
+    message.error(t('chat.deleteFailed'))
+  } else {
+    message.success(t('chat.deleteSessionDone'))
+  }
+  // 同步侧栏数据源（分组由它派生，不清掉的话被删会话还会留在分组里）
+  const ids = new Set(group.sessions.map(s => s.id))
+  if (allWebSessions.value) {
+    allWebSessions.value = allWebSessions.value.filter(s => !ids.has(s.id))
   }
   await chatStore.loadSessions()
   await loadDirGroups()
@@ -1740,9 +2003,9 @@ async function refreshSessions() {
   sidebarRefreshing.value = true
   try {
     await chatStore.loadSessions()
-    if (searchCache.value) {
+    if (allWebSessions.value) {
       // 候选缓存已建立：作废后重建，保证刷新后搜索结果同样是最新的
-      searchCache.value = null
+      allWebSessions.value = null
       await loadFullSessions()
     }
   } finally {
@@ -1753,7 +2016,7 @@ async function refreshSessions() {
 async function deleteSession(id: string) {
   // 可能直接在搜索结果中删除尚未并入 store 的会话，回退到搜索缓存查找
   const session = chatStore.sessions.find(s => s.id === id)
-    ?? searchCache.value?.find(s => s.id === id)
+    ?? allWebSessions.value?.find(s => s.id === id)
   const deleteFiles = !session?.work_dir_user_set
   // store 不再吞掉请求错误（只吞会让"到底删没删"无从判断），这里给出明确反馈
   const ok = await chatStore.deleteSession(id, deleteFiles)
@@ -1763,16 +2026,14 @@ async function deleteSession(id: string) {
     message.success(t('chat.deleteSessionDone'))
   }
   await chatStore.loadSessions()
-  // 同步搜索候选缓存：被删除的会话立即从搜索结果中移除
-  if (searchCache.value) {
-    searchCache.value = searchCache.value.filter(s => s.id !== id)
-  }
+  // 同步全量缓存：被删除的会话立即从侧栏分组/搜索结果中消失
+  removeCachedSession(id)
 }
 
 function startRename(id: string) {
   // 搜索结果里可能选中尚未并入 store 的会话，回退到搜索缓存查找
   const session = chatStore.sessions.find(s => s.id === id)
-    ?? searchCache.value?.find(s => s.id === id)
+    ?? allWebSessions.value?.find(s => s.id === id)
   if (session) {
     editingSessionId.value = id
     editingName.value = session.title || ''
@@ -1787,10 +2048,9 @@ function cancelRename() {
 async function saveRename(id: string) {
   if (editingName.value.trim()) {
     await chatStore.renameSession(id, editingName.value.trim())
-    // 同步搜索候选缓存：store 的 rename 是原地改对象、不会触发缓存同步
-    // watcher（只监听数组引用），这里直接改缓存条目保持搜索结果即时更新
-    const hit = searchCache.value?.find(s => s.id === id)
-    if (hit) hit.title = editingName.value.trim()
+    // store 的 rename 是原地改对象、不会触发缓存同步 watcher（只监听数组引用），
+    // 这里直接改缓存条目，保持侧栏标题与搜索结果即时更新
+    patchCachedSession(id, { title: editingName.value.trim() })
   }
   editingSessionId.value = null
   editingName.value = ''
@@ -1949,6 +2209,8 @@ watch(() => goalsStore.linkVersion, () => {
 onMounted(async () => {
   await chatStore.loadSessions()
   modelsStore.loadModels()
+  // 侧栏按工作目录分组需要全量会话（分页的 20 条会让分组残缺），挂载即补齐
+  loadFullSessions()
   // Bind scroll event for session list infinite scroll
   if (sessionListRef.value) {
     sessionListRef.value.addEventListener('scroll', handleSessionScroll)
@@ -2014,6 +2276,117 @@ onMounted(async () => {
   color: #999;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* ===== 侧栏会话分组（按"是否设置过工作目录"） ===== */
+.session-group-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 固定行高：悬停出现的操作按钮（22px）比文字徽标高，若参与布局会把行撑高，
+     鼠标一进入整行就变高、下方内容跟着位移，看起来像在抖动。 */
+  height: 32px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  cursor: pointer;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f0;
+  user-select: none;
+  font-size: 12px;
+  color: #666;
+}
+
+.session-group-head:hover {
+  background: #f0f0f0;
+}
+
+.session-group-caret {
+  flex-shrink: 0;
+  color: #999;
+  transition: transform 0.15s;
+}
+
+.session-group-head.collapsed .session-group-caret {
+  transform: rotate(-90deg);
+}
+
+.session-group-icon {
+  flex-shrink: 0;
+  color: #999;
+}
+
+.session-group-head.group-dir .session-group-icon {
+  color: #2080f0;
+}
+
+.session-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 数量徽标固定槽宽：始终占位，悬停时按钮落在同一位置，标题可用宽度全程不变 */
+.session-group-count {
+  flex-shrink: 0;
+  width: 48px;
+  text-align: right;
+  font-size: 11px;
+  color: #999;
+}
+
+/* 分组头快捷操作：绝对定位到右侧固定槽位，出现/消失不参与布局（行高与标题宽度都不变） */
+.session-group-actions {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  width: 48px; /* = 两个 22px 圆形按钮 + 2px 间距 */
+  align-items: center;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+.session-group-head:hover .session-group-actions,
+.session-group-head:focus-within .session-group-actions {
+  display: flex;
+}
+
+/* 用 visibility 而非 display：保留占位，标题的省略号截断位置不会跳动 */
+.session-group-head:hover .session-group-count,
+.session-group-head:focus-within .session-group-count {
+  visibility: hidden;
+}
+
+/* 触屏没有 hover：常驻显示操作按钮，否则分组头的新建/删除根本点不到 */
+@media (hover: none) {
+  .session-group-actions {
+    display: flex;
+  }
+  .session-group-count {
+    display: none;
+  }
+}
+
+.session-group-more {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #2080f0;
+  text-align: center;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.session-group-more:hover {
+  background: #f0f0f0;
+}
+
+/* 分组内的会话条目缩进一级，视觉上归属分组 */
+.session-item.in-group {
+  padding-left: 22px;
 }
 
 .session-item {
