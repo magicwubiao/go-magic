@@ -660,6 +660,7 @@ export default {
     skills: '技能',
     rawJson: '原始 JSON',
     secretRedaction: '敏感信息脱敏',
+    secretRedactionHint: '开启后，工具输出、终端命令与模型回复中的 API Key、Token、私钥、数据库口令等凭据会被替换为 ***REDACTED*** 后再落库与展示；不受上方「启用脱敏」总开关影响。',
     workingDirectory: '工作目录',
     chatMode: '聊天模式',
     chatModes: {

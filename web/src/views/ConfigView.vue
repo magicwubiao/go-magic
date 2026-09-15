@@ -12,9 +12,6 @@
       <!-- General Tab -->
       <n-tab-pane name="general" :tab="t('config.general')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item :label="t('config.secretRedaction')">
-            <n-switch v-model:value="generalForm.secret_redaction" />
-          </n-form-item>
           <n-form-item :label="t('config.workingDirectory')">
             <n-space>
               <n-input v-model:value="generalForm.working_dir" :placeholder="t('config.workingDirectory')" style="flex: 1;" />
@@ -77,21 +74,14 @@
         </n-form>
       </n-tab-pane>
 
-      <!-- Memory Tab -->
+      <!-- Memory Tab（Cortex AI 已并入此处统一管理） -->
       <n-tab-pane name="memory" :tab="t('config.memory')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
           <n-form-item :label="t('config.enableMemory')">
             <n-switch v-model:value="memoryForm.enabled" />
           </n-form-item>
-          <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveMemory">{{ t('common.save') }}</n-button>
-          </n-form-item>
-        </n-form>
-      </n-tab-pane>
-
-      <!-- Cortex Tab -->
-      <n-tab-pane name="cortex" :tab="t('config.cortex')">
-        <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
+          <n-divider style="margin: 8px 0 24px;" />
+          <h3 style="margin: 0 0 16px 0;">{{ t('config.cortex') }}</h3>
           <n-form-item :label="t('config.cortexEnabled')">
             <n-switch v-model:value="cortexForm.enabled" />
             <span style="margin-left: 12px; color: #999;">{{ t('config.cortexEnabledHint') }}</span>
@@ -101,7 +91,7 @@
             <span style="margin-left: 12px; color: #999;">{{ t('config.cortexSkillPatternFreqHint') }}</span>
           </n-form-item>
           <n-form-item>
-            <n-button type="primary" :loading="saving" @click="saveCortex">{{ t('common.save') }}</n-button>
+            <n-button type="primary" :loading="saving" @click="saveMemory">{{ t('common.save') }}</n-button>
           </n-form-item>
         </n-form>
       </n-tab-pane>
@@ -185,6 +175,13 @@
           </n-form-item>
           <n-form-item :label="t('config.privacyRedactAddress')">
             <n-switch v-model:value="privacyForm.redact_address" />
+          </n-form-item>
+          <n-divider style="margin: 8px 0 24px;" />
+          <n-form-item :label="t('config.secretRedaction')">
+            <n-switch v-model:value="privacyForm.secret_redaction" />
+            <template #feedback>
+              <span style="color: #999; font-size: 12px;">{{ t('config.secretRedactionHint') }}</span>
+            </template>
           </n-form-item>
           <n-form-item>
             <n-button type="primary" :loading="saving" @click="savePrivacy">{{ t('common.save') }}</n-button>
@@ -305,7 +302,6 @@ const authConfigured = ref(false)
 
 const generalForm = reactive({
   working_dir: '',
-  secret_redaction: false,
   chat_mode: 'chat',
 })
 
@@ -365,6 +361,8 @@ const privacyForm = reactive({
   redact_bank_card: true,
   redact_ip: true,
   redact_address: true,
+  // 顶层 secret_redaction（凭据脱敏），由「隐私脱敏」页面统一配置
+  secret_redaction: false,
 })
 
 const fileStrategyOptions = computed(() => [
@@ -385,7 +383,6 @@ const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.pa
 
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
-  generalForm.secret_redaction = cfg.secret_redaction || false
   generalForm.chat_mode = cfg.chat_mode || 'chat'
 
   const agent = cfg.agent || {}
@@ -427,6 +424,8 @@ function populateFromConfig(cfg: any) {
   privacyForm.redact_bank_card = privacy.redact_bank_card !== false
   privacyForm.redact_ip = privacy.redact_ip !== false
   privacyForm.redact_address = privacy.redact_address !== false
+  // 顶层字段：凭据脱敏开关（随「隐私脱敏」页面一起保存）
+  privacyForm.secret_redaction = cfg.secret_redaction || false
 }
 
 async function saveGeneral() {
@@ -434,7 +433,6 @@ async function saveGeneral() {
   try {
     await configStore.updateConfig({
       working_dir: generalForm.working_dir,
-      secret_redaction: generalForm.secret_redaction,
       chat_mode: generalForm.chat_mode,
     })
     // Reload to ensure sync with server
@@ -475,32 +473,19 @@ async function saveAgent() {
   }
 }
 
+// 记忆页统一保存：memory + cortex（Cortex AI 已并入记忆页）
 async function saveMemory() {
   saving.value = true
   try {
     await configStore.updateConfig({
-      memory: { enabled: memoryForm.enabled }
-    })
-    await configStore.loadConfig()
-    message.success(t('config.memorySaved'))
-  } catch (e) {
-    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
-  } finally {
-    saving.value = false
-  }
-}
-
-async function saveCortex() {
-  saving.value = true
-  try {
-    await configStore.updateConfig({
+      memory: { enabled: memoryForm.enabled },
       cortex: {
         enabled: cortexForm.enabled,
         skill_min_pattern_freq: cortexForm.skill_min_pattern_freq,
-      }
+      },
     })
     await configStore.loadConfig()
-    message.success(t('config.cortexSaved'))
+    message.success(t('config.memorySaved'))
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
   } finally {
@@ -530,6 +515,7 @@ async function savePrivacy() {
   saving.value = true
   try {
     await configStore.updateConfig({
+      secret_redaction: privacyForm.secret_redaction,
       privacy: {
         enabled: privacyForm.enabled,
         redact_phone: privacyForm.redact_phone,

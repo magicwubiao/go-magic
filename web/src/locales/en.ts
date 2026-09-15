@@ -660,6 +660,7 @@ export default {
     skills: 'Skills',
     rawJson: 'Raw JSON',
     secretRedaction: 'Secret Redaction',
+    secretRedactionHint: 'When on, credentials (API keys, tokens, private keys, DB passwords) in tool output, shell commands, and model replies are replaced with ***REDACTED*** before being stored or shown. Not affected by the Enable Redaction master switch above.',
     workingDirectory: 'Working Directory',
     chatMode: 'Chat Mode',
     chatModes: {
