@@ -79,6 +79,7 @@
           <div
             v-else-if="row.kind === 'more'"
             class="session-group-more"
+            :class="{ 'in-group': showGroupHeaders }"
             @click="showMoreInGroup(row.groupKey)"
           >
             {{ t('chat.loadMoreSessions', { count: row.hidden }) }}
@@ -2439,17 +2440,26 @@ onMounted(async () => {
   }
 }
 
+/* 组内"加载更多"：左对齐（不再居中），颜色取侧栏中性灰，
+   避免蓝色主色在这种次要入口上过于抢眼 */
 .session-group-more {
   padding: 7px 12px;
   font-size: 12px;
-  color: #2080f0;
-  text-align: center;
+  color: #888;
+  text-align: left;
   cursor: pointer;
   border-bottom: 1px solid #f0f0f0;
 }
 
+/* 有分组头时（组内会话缩进 22px），"加载更多"跟着缩进对齐会话标题；
+   扁平列表（无分组头）则与普通会话条目一样贴 12px。 */
+.session-group-more.in-group {
+  padding-left: 22px;
+}
+
 .session-group-more:hover {
   background: #f0f0f0;
+  color: #555;
 }
 
 /* 分组内的会话条目缩进一级，视觉上归属分组 */
