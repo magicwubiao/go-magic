@@ -720,6 +720,7 @@ hljs.registerLanguage('markdown', markdown)
 import { useChatStore, type ToolCallEvent } from '@/stores/chat'
 import { useGoalsStore } from '@/stores/goals'
 import { useModelsStore } from '@/stores/models'
+import { useConfigStore } from '@/stores/config'
 import RightSidebar from '@/components/RightSidebar.vue'
 import TaskTimeline from '@/components/TaskTimeline.vue'
 import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
@@ -736,6 +737,7 @@ const { t } = useI18n()
 const chatStore = useChatStore()
 const goalsStore = useGoalsStore()
 const modelsStore = useModelsStore()
+const configStore = useConfigStore()
 const router = useRouter()
 const message = useMessage()
 const dialogStore = useDialog()
@@ -1001,6 +1003,20 @@ const dirLoading = ref(false)
 const showNewFolderInput = ref(false)
 const newFolderName = ref('')
 const workDirHistory = ref<string[]>([])
+
+// 配置页「通用」中设置的全局工作目录（后端 cfg.WorkingDir）。会话没有显式设置工作
+// 目录时，后端会把会话目录自动建在 <全局工作目录>/chat/Chat_<时间>-<短ID> 下。
+const globalWorkDir = computed(() => configStore.config?.working_dir || '')
+
+// 配置按需拉取（首次打开选择器时），避免聊天页每次进入都多一个请求。
+async function ensureConfigLoaded(): Promise<void> {
+  if (configStore.config) return
+  try {
+    await configStore.loadConfig()
+  } catch (e) {
+    console.error('Failed to load config for work dir picker:', e)
+  }
+}
 
 // 统一路径分隔符并忽略 Windows 盘符大小写，用于排除当前会话已设置的工作目录
 function normalizeDirPath(p: string): string {
@@ -1648,15 +1664,17 @@ function openWorkDirInExplorer(path?: string) {
   })
 }
 
-async function loadDirs(path?: string) {
+async function loadDirs(path?: string): Promise<boolean> {
   dirLoading.value = true
   try {
     const res = await sessionsApi.listDirs(path)
     dirCurrentPath.value = res.current
     dirEntries.value = res.dirs || []
+    return true
   } catch (e) {
     console.error('Failed to list directories:', e)
     dirEntries.value = []
+    return false
   } finally {
     dirLoading.value = false
   }
@@ -1705,7 +1723,15 @@ async function handleWorkDirMenu(key: string) {
     // 已锁定的会话不再允许重新选择目录
     if (chatStore.currentWorkDirUserSet) return
     showDirPicker.value = true
-    loadWorkDirHistory()
+    // 起点优先取配置页设置的全局工作目录（如 D:\workspace），而不是会话被自动创建
+    // 的子目录 <全局>/chat/Chat_<时间>-<短ID>——后者会被误当成会话根目录。全局目录
+    // 不存在或不可读时，再退回当前会话的工作目录。
+    await Promise.all([loadWorkDirHistory(), ensureConfigLoaded()])
+    const prefer = globalWorkDir.value
+    if (prefer && (await loadDirs(prefer))) return
+    if (prefer) {
+      console.warn('Global working dir unreadable, falling back to session work dir:', prefer)
+    }
     await loadDirs(chatStore.currentWorkDir || undefined)
   } else if (key === 'set') {
     if (!chatStore.activeSessionId || !dirCurrentPath.value) return
