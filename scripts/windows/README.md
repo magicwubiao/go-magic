@@ -32,7 +32,15 @@ cd go-magic
 
 ### Option 3: Manual Build
 
+> **Prerequisite:** the web dashboard is embedded via `//go:embed dist`, and
+> `internal/server/dist` is **not** tracked in git. You must build the web UI
+> first, otherwise `go build` fails with `pattern dist: no matching files found`.
+
 ```cmd
+cd web
+npm ci
+npm run build
+cd ..
 go build -ldflags="-s -w" -o magic.exe .\cmd\magic
 ```
 
