@@ -60,7 +60,6 @@
     "relay_token": ""
   },
   "agent": {
-    "goal_max_turns": 20,
     "max_turns": 150,
     "max_iterations": 200,
     "max_token_budget": 0

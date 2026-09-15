@@ -233,9 +233,8 @@ magic config reset     # 恢复默认
   "skills": { "enabled": [], "disabled": [], "user_dir": "" },
 
   "agent": {
-    "goal_max_turns": 20,      // 目标驱动模式的最大回合
-    "max_turns": 60,           // 单轮对话的工具循环上限，0 = 内置默认
-    "max_iterations": 80,      // 转向控制上限
+    "max_turns": 150,          // 单轮对话的工具循环上限，0 = 内置默认
+    "max_iterations": 200,     // 转向控制上限
     "max_token_budget": 0      // 令牌预算，0 = 不限
   },
 

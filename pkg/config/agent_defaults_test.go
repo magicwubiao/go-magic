@@ -16,9 +16,6 @@ func TestDefaultConfigAgentDefaults(t *testing.T) {
 	if cfg.Agent.MaxIterations != 200 {
 		t.Errorf("defaultConfig().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
 	}
-	if cfg.Agent.GoalMaxTurns != 60 {
-		t.Errorf("defaultConfig().Agent.GoalMaxTurns = %d, want 60", cfg.Agent.GoalMaxTurns)
-	}
 
 	exp := DefaultConfig()
 	if exp.Agent.MaxTurns != 150 {
@@ -54,8 +51,5 @@ func TestLoadFillsAgentDefaults(t *testing.T) {
 	}
 	if cfg.Agent.MaxIterations != 200 {
 		t.Errorf("Load().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
-	}
-	if cfg.Agent.GoalMaxTurns != 60 {
-		t.Errorf("Load().Agent.GoalMaxTurns = %d, want 60", cfg.Agent.GoalMaxTurns)
 	}
 }

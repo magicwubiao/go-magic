@@ -32,9 +32,6 @@
       <!-- Agent Tab -->
       <n-tab-pane name="agent" :tab="t('config.agent')">
         <n-form label-placement="left" label-width="200" style="max-width: 600px; margin-top: 16px;">
-          <n-form-item :label="t('config.goalMaxTurns')">
-            <n-input-number v-model:value="agentForm.goal_max_turns" :min="1" :max="200" />
-          </n-form-item>
           <n-form-item :label="t('config.maxTurns')">
             <n-input-number v-model:value="agentForm.max_turns" :min="1" :max="500" />
             <span style="margin-left: 12px; color: #999;">{{ t('config.maxTurnsHint') }}</span>
@@ -322,7 +319,6 @@ const botModeNeedsRestart = computed(
 )
 
 const agentForm = reactive({
-  goal_max_turns: 60,
   max_turns: 150,
   max_iterations: 200,
 })
@@ -386,7 +382,6 @@ function populateFromConfig(cfg: any) {
   generalForm.chat_mode = cfg.chat_mode || 'chat'
 
   const agent = cfg.agent || {}
-  agentForm.goal_max_turns = agent.goal_max_turns || 60
   // 0 means "use built-in default"; show the effective value in UI.
   const maxTurns = Number(agent.max_turns) || 0
   agentForm.max_turns = maxTurns > 0 ? maxTurns : 150
@@ -450,7 +445,6 @@ async function saveAgent() {
   try {
     await configStore.updateConfig({
       agent: {
-        goal_max_turns: agentForm.goal_max_turns,
         max_turns: agentForm.max_turns,
         max_iterations: agentForm.max_iterations,
       },

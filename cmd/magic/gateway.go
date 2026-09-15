@@ -695,8 +695,6 @@ func (h *gatewayAgentHandler) handleGoalCommand(ctx context.Context, userID stri
 		}
 
 		goal := gm.SetGoal(goalText)
-		goal.MaxTurns = 20 // Default for gateway
-		gm.SetMaxTurns(20)
 		gm.SaveWithSessionID(userID)
 
 		return fmt.Sprintf("🎯 Goal set: %s (max %d turns)\nI'll start working on this goal now.", goal.Text, goal.MaxTurns), nil

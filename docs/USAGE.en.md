@@ -233,9 +233,8 @@ magic config reset     # restore defaults
   "skills": { "enabled": [], "disabled": [], "user_dir": "" },
 
   "agent": {
-    "goal_max_turns": 20,      // max rounds in goal-driven mode
-    "max_turns": 60,           // tool-loop cap per turn, 0 = built-in default
-    "max_iterations": 80,      // turn-control cap
+    "max_turns": 150,          // tool-loop cap per turn, 0 = built-in default
+    "max_iterations": 200,     // turn-control cap
     "max_token_budget": 0      // token budget, 0 = unlimited
   },
 

@@ -107,11 +107,10 @@ type Config struct {
 	Mode            string `json:"mode,omitempty"`      // chat, plan, act
 	ChatMode        string `json:"chat_mode,omitempty"` // chat, coding - default mode for magic chat
 	Agent           struct {
-		GoalMaxTurns int `json:"goal_max_turns"`
 		// MaxTurns caps one conversation turn's tool-loop iterations for
-		// server/bot agents (default 60). 0 keeps the built-in default.
+		// server/bot agents (default 150). 0 keeps the built-in default.
 		MaxTurns       int   `json:"max_turns,omitempty"`
-		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 80
+		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 200
 		MaxTokenBudget int64 `json:"max_token_budget,omitempty"` // steering token budget
 	} `json:"agent,omitempty"`
 	// Approval settings
@@ -472,9 +471,6 @@ func Load() (*Config, error) {
 	// （旧配置或手动编辑），此时若为 0 会导致 server 端回退到 agent 硬编码的
 	// 70 轮上限，与 Web 配置界面默认值(150)不一致。这里补齐默认值，确保
 	// 实际生效的上限与 UI 展示一致。
-	if cfg.Agent.GoalMaxTurns == 0 {
-		cfg.Agent.GoalMaxTurns = 60
-	}
 	if cfg.Agent.MaxTurns == 0 {
 		cfg.Agent.MaxTurns = 150
 	}
@@ -521,12 +517,10 @@ func defaultConfig() *Config {
 		// Agent 循环上限默认值，与 Web 配置界面(ConfigView.vue)的默认一致，
 		// 避免新建配置时回退到 agent 硬编码的 70 轮上限。
 		Agent: struct {
-			GoalMaxTurns   int   `json:"goal_max_turns"`
 			MaxTurns       int   `json:"max_turns,omitempty"`
 			MaxIterations  int   `json:"max_iterations,omitempty"`
 			MaxTokenBudget int64 `json:"max_token_budget,omitempty"`
 		}{
-			GoalMaxTurns:  60,
 			MaxTurns:      150,
 			MaxIterations: 200,
 		},

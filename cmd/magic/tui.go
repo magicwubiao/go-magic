@@ -2138,11 +2138,6 @@ func (m *TUIModel) doGoal(args string) {
 			return
 		}
 		m.goalManager = agent.NewGoalManager(prov, goalsDir)
-		maxTurns := m.cfg.Agent.GoalMaxTurns
-		if maxTurns <= 0 {
-			maxTurns = 20
-		}
-		m.goalManager.SetMaxTurns(maxTurns)
 
 		// Try to load saved goal
 		_ = m.goalManager.Load(m.sessionID)
@@ -2184,12 +2179,6 @@ func (m *TUIModel) doGoal(args string) {
 			m.addMessage("system", "Usage: /goal <text> | /goal status | /goal pause | /goal resume | /goal clear")
 		} else {
 			goal := m.goalManager.SetGoal(goalText)
-			maxTurns := m.cfg.Agent.GoalMaxTurns
-			if maxTurns <= 0 {
-				maxTurns = 20
-			}
-			goal.MaxTurns = maxTurns
-			m.goalManager.SetMaxTurns(maxTurns)
 			m.addMessage("system", fmt.Sprintf("Goal set: %s (max %d turns)", goal.Text, goal.MaxTurns))
 			m.goalManager.SaveWithSessionID(m.sessionID)
 		}

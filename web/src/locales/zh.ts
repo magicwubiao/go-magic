@@ -667,7 +667,6 @@ export default {
       chat: '聊天',
       coding: '编程',
     },
-    goalMaxTurns: '目标最大轮数',
     maxTurns: '单次对话最大轮数',
     maxTurnsHint: '每轮对话工具循环迭代上限，默认 150',
     maxIterations: '最大总迭代次数',

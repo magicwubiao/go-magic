@@ -667,7 +667,6 @@ export default {
       chat: 'Chat',
       coding: 'Coding',
     },
-    goalMaxTurns: 'Goal Max Turns',
     maxTurns: 'Max Turns (per conversation)',
     maxTurnsHint: 'Tool-loop iteration cap per turn; default 150',
     maxIterations: 'Max Total Iterations',
