@@ -6,13 +6,15 @@ import (
 	"testing"
 )
 
-// newTestTodoTool builds an isolated TodoTool (no singleton, temp data file).
+// newTestTodoTool builds an isolated TodoTool (no singleton, temp data files).
 func newTestTodoTool(t *testing.T) *TodoTool {
 	t.Helper()
+	dir := t.TempDir()
 	return &TodoTool{
-		todos:      make(map[string]*TodoItem),
-		dataFile:   t.TempDir() + "/todos.json",
-		tombstones: make(map[string]tombstoneInfo),
+		todos:         make(map[string]*TodoItem),
+		dataFile:      dir + "/todos.json",
+		tombstones:    make(map[string]tombstoneInfo),
+		tombstoneFile: dir + "/tombstones.json",
 	}
 }
 
@@ -80,5 +82,61 @@ func TestTodoTombstoneIdempotentOps(t *testing.T) {
 	if _, err := tt.Execute(ctx, map[string]interface{}{"action": "complete", "id": "todo_nope"}); err == nil ||
 		!strings.Contains(err.Error(), "todo not found") {
 		t.Fatalf("unknown id should fail with 'todo not found', got %v", err)
+	}
+}
+
+// TestTodoTombstoneSurvivesRestart verifies tombstones are persisted: after a
+// simulated process restart (rebuild from the same data dir), late operations
+// on auto-cleaned IDs still degrade to no-op instead of "todo not found".
+// Regression: in-memory tombstones were wiped by deploy/upgrade restarts and
+// the agent saw hard errors on IDs from its conversation history.
+func TestTodoTombstoneSurvivesRestart(t *testing.T) {
+	tt := newTestTodoTool(t)
+	ctx := WithSessionID(context.Background(), "restart-session")
+
+	mk, err := tt.Execute(ctx, map[string]interface{}{"action": "create", "title": "step A"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	idA, _ := mk.(map[string]interface{})["id"].(string)
+	if _, err := tt.Execute(ctx, map[string]interface{}{"action": "create", "title": "step B"}); err != nil {
+		t.Fatalf("create B: %v", err)
+	}
+
+	// Complete everything -> bucket auto-cleanup + tombstone persistence.
+	list, _ := tt.Execute(ctx, map[string]interface{}{"action": "list"})
+	for _, row := range list.(map[string]interface{})["todos"].([]map[string]interface{}) {
+		if _, err := tt.Execute(ctx, map[string]interface{}{"action": "complete", "id": row["id"].(string)}); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+	}
+
+	// Simulate restart: fresh in-memory maps, same files.
+	dir := tt.dataFile[:len(tt.dataFile)-len("/todos.json")]
+	reborn := &TodoTool{
+		todos:         make(map[string]*TodoItem),
+		dataFile:      dir + "/todos.json",
+		tombstones:    make(map[string]tombstoneInfo),
+		tombstoneFile: dir + "/tombstones.json",
+	}
+	reborn.load()
+	reborn.loadTombstones()
+	if len(reborn.tombstones) == 0 {
+		t.Fatal("tombstones.json missing entries after cleanup")
+	}
+
+	for _, op := range []map[string]interface{}{
+		{"action": "complete", "id": idA},
+		{"action": "update", "id": idA, "status": "completed"},
+		{"action": "delete", "id": idA},
+	} {
+		resp, err := reborn.Execute(ctx, op)
+		if err != nil {
+			t.Fatalf("post-restart %v on tombstoned id returned error: %v", op["action"], err)
+		}
+		m, ok := resp.(map[string]interface{})
+		if !ok || m["tombstoned"] != true {
+			t.Fatalf("post-restart %v: expected tombstoned=true, got %#v", op["action"], resp)
+		}
 	}
 }

@@ -94,7 +94,12 @@ type TodoTool struct {
 	// (cleanupSessionIfAllDoneLocked). Operations on tombstoned IDs are
 	// answered idempotently instead of failing with "todo not found", so a
 	// late update/complete/delete after cleanup never aborts an agent run.
+	// Persisted to tombstoneFile: without disk persistence a process restart
+	// (deploy/upgrade) wipes them and late ops on cleaned IDs error again.
 	tombstones map[string]tombstoneInfo
+	// tombstoneFile persists tombstones across restarts; empty = memory-only
+	// (tests).
+	tombstoneFile string
 }
 
 // tombstoneInfo keeps just enough context to answer gracefully.
@@ -102,7 +107,12 @@ type tombstoneInfo struct {
 	SessionID string
 	Title     string
 	Status    string // status the item had when it was cleaned up (usually completed/cancelled)
+	CleanedAt time.Time
 }
+
+// maxTombstones caps tombstone.json growth: each entry is tiny but cleanup
+// fires forever, so prune oldest by CleanedAt beyond this.
+const maxTombstones = 512
 
 var (
 	todoOnce sync.Once
@@ -124,11 +134,13 @@ func GetTodoTool() *TodoTool {
 		_ = os.MkdirAll(dataDir, defaultFileSecurity().DefaultDirMode)
 
 		todoTool = &TodoTool{
-			todos:      make(map[string]*TodoItem),
-			dataFile:   filepath.Join(dataDir, "todos.json"),
-			tombstones: make(map[string]tombstoneInfo),
+			todos:         make(map[string]*TodoItem),
+			dataFile:      filepath.Join(dataDir, "todos.json"),
+			tombstones:    make(map[string]tombstoneInfo),
+			tombstoneFile: filepath.Join(dataDir, "tombstones.json"),
 		}
 		todoTool.load()
+		todoTool.loadTombstones()
 	})
 	return todoTool
 }
@@ -178,6 +190,66 @@ func (t *TodoTool) save() error {
 		return err
 	}
 	return os.Rename(tmp, t.dataFile)
+}
+
+// loadTombstones restores auto-cleanup tombstones from disk. Missing or
+// corrupt file just starts with an empty set (same tolerance as load()).
+func (t *TodoTool) loadTombstones() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	data, err := os.ReadFile(t.tombstoneFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[TODO] failed to read %s: %v (starting with empty tombstones)", t.tombstoneFile, err)
+		}
+		return
+	}
+	var tombs map[string]tombstoneInfo
+	if err := json.Unmarshal(data, &tombs); err != nil {
+		log.Printf("[TODO] failed to parse %s: %v (starting with empty tombstones)", t.tombstoneFile, err)
+		return
+	}
+	for id, info := range tombs {
+		t.tombstones[id] = info
+	}
+}
+
+// saveTombstonesLocked persists tombstones atomically; prunes oldest entries
+// beyond maxTombstones. Caller must hold t.mu (write). Failures are logged,
+// never fatal — tombstones are a graceful-degradation mechanism, losing some
+// only means a late op may error "todo not found" as before.
+func (t *TodoTool) saveTombstonesLocked() {
+	if t.tombstoneFile == "" {
+		return
+	}
+	if len(t.tombstones) > maxTombstones {
+		type entry struct {
+			id string
+			at time.Time
+		}
+		entries := make([]entry, 0, len(t.tombstones))
+		for id, info := range t.tombstones {
+			entries = append(entries, entry{id, info.CleanedAt})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].at.Before(entries[j].at) })
+		for _, e := range entries[:len(entries)-maxTombstones] {
+			delete(t.tombstones, e.id)
+		}
+	}
+	data, err := json.MarshalIndent(t.tombstones, "", "  ")
+	if err != nil {
+		log.Printf("[TODO] marshal tombstones failed: %v", err)
+		return
+	}
+	tmp := t.tombstoneFile + ".tmp"
+	if err := os.WriteFile(tmp, data, defaultFileSecurity().DefaultFileMode); err != nil {
+		log.Printf("[TODO] tombstone write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, t.tombstoneFile); err != nil {
+		log.Printf("[TODO] tombstone rename failed: %v", err)
+	}
 }
 
 // Name returns the tool name
@@ -687,6 +759,7 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 			SessionID: todo.SessionID,
 			Title:     todo.Title,
 			Status:    todo.Status,
+			CleanedAt: time.Now(),
 		}
 		removedIDs = append(removedIDs, todo.ID)
 	}
@@ -695,6 +768,8 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 			log.Printf("[todo] cleanup bucket(%s) save failed: %v", sessionID, err)
 			return removedIDs
 		}
+		// 墓碑持久化：进程重启（部署/升级）后旧 ID 的迟到操作仍能优雅降级。
+		t.saveTombstonesLocked()
 		for _, id := range removedIDs {
 			broadcastTodoChanged(id, "delete")
 		}
