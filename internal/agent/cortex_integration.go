@@ -22,19 +22,30 @@ import (
 // 此前各结束点只调 OnSessionEnd 不喂历史，conversationHistory 恒为空，
 // 抽取静默空转——web 聊天的记忆与每日日志从不落盘（零沉淀根因）。
 // 流式/非流式路径统一走这里，避免再出现「只触发不喂历史」的调用点。
+//
+// 抽取链路里 ExtractMemories 是一次真实的 LLM 调用（每回合固定 +1 个
+// 上游请求），此前同步跑在回合收尾路径上，会拖住 SSE done 与历史落库。
+// 现在快照历史后异步执行：Manager 的 sessionEndMu 串行化 + 键控水位
+// 增量抽取，保证连续回合并发触发时不重复、不漏抽。代价是进程退出时
+// 尚未完成的抽取会丢失（可接受的权衡）。
 func (a *Agent) endCortexTurn() {
 	if a.cortexManager == nil {
 		return
 	}
+	// getHistory() 加锁快照；调用返回后下一回合可能立刻改动 a.history，
+	// 异步 goroutine 里绝不能再直接读 a.history。
+	history := a.getHistory()
 	conv := make([]struct {
 		Role    string
 		Content string
-	}, len(a.history))
-	for i, msg := range a.history {
+	}, len(history))
+	for i, msg := range history {
 		conv[i].Role = string(msg.Role)
 		conv[i].Content = msg.Content
 	}
-	a.cortexManager.EndSessionWithHistory(a.session, a.memoryScope, conv)
+	session := a.session
+	scope := a.memoryScope
+	go a.cortexManager.EndSessionWithHistory(session, scope, conv)
 }
 
 // RunWithCortex runs a conversation with full Cortex Agent integration.

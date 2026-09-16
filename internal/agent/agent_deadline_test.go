@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -96,10 +97,11 @@ func TestCanStartAnotherTurn_TooLittleTime(t *testing.T) {
 }
 
 func TestWriteDeadlineCheckpoint(t *testing.T) {
+	// GO_MAGIC_HOME 隔离：writeDeadlineCheckpoint 走 config.GetMagicHome()
+	// （GO_MAGIC_HOME → HOME → UserHomeDir），Windows 上 os.UserHomeDir()
+	// 读 USERPROFILE 而非 HOME，只设 HOME 隔离不住，会写进真实用户目录。
 	tmpHome := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("GO_MAGIC_HOME", tmpHome)
 
 	a := newDeadlineTestAgent()
 	a.session = "unit_test_session"
@@ -114,8 +116,8 @@ func TestWriteDeadlineCheckpoint(t *testing.T) {
 	if path == "" {
 		t.Fatal("expected checkpoint path, got empty")
 	}
-	if !strings.Contains(path, ".magic") || !strings.Contains(path, "checkpoints") {
-		t.Fatalf("unexpected checkpoint path: %s", path)
+	if !strings.HasPrefix(path, tmpHome) || !strings.Contains(path, "checkpoints") {
+		t.Fatalf("checkpoint escaped GO_MAGIC_HOME isolation: %s", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -140,10 +142,7 @@ func TestWriteDeadlineCheckpoint(t *testing.T) {
 }
 
 func TestGracefulDeadlineFinish_MessageAndEvent(t *testing.T) {
-	tmpHome := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
 
 	a := newDeadlineTestAgent()
 	events := a.bus.Subscribe(8)
@@ -180,10 +179,12 @@ func TestSanitizeAgentSlug(t *testing.T) {
 }
 
 func TestCheckpointFilePermissions(t *testing.T) {
-	tmpHome := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", oldHome)
+	if runtime.GOOS == "windows" {
+		// Windows 不强制 POSIX 权限位，os.Stat 的 Perm() 由只读属性推断，
+		// 0600 文件会报成 -rw-rw-rw-；该断言只在类 Unix 上有效。
+		t.Skip("POSIX file permissions not enforced on windows")
+	}
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
 
 	a := newDeadlineTestAgent()
 	a.session = "perm_check"

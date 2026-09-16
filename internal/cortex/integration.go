@@ -960,8 +960,9 @@ func (m *Manager) learnUserPreferences(conversation string) {
 // scope 非空时非 user/preference 记忆补上该目录 scope（目录级共享记忆），
 // user/preference 画像保持跨目录全局。
 func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string, scope string) {
-	// 抽取 LLM 调用必须有界：此处在回合收尾的同步路径上，provider 挂起
-	// 会无限拖住 SSE done 与历史落库。60s 覆盖慢模型；超时走行匹配兜底。
+	// 抽取 LLM 调用必须有界：本链路已由 agent.endCortexTurn 异步化（不再
+	// 阻塞 SSE done），但超时仍是必要护栏——provider 挂起不能无限占住
+	// sessionEndMu 卡住后续回合的收尾。60s 覆盖慢模型；超时走行匹配兜底。
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

@@ -804,10 +804,13 @@ RULES:
 - Web search → Call web_search
 - Execute command/code → Call execute_command
 - For complex multi-step tasks (3+ steps), ALWAYS use todo tool first:
-  1. Create a todo for each step with action="create"
+  1. Create a todo for each step with action="create" — emit ALL create calls
+     as parallel tool calls in a SINGLE response, never one create per turn
   2. List todos to show the plan with action="list"
   3. Complete each todo as you finish with action="complete"
   4. If user adds new requirements, create additional todos
+- When several tool calls are independent (multiple creates, reads, searches),
+  batch them as parallel tool calls in one response to save round-trips
 - If the user's request is ambiguous or missing key information (unclear target,
   unspecified file/path/scope, multiple plausible interpretations), call the
   clarify tool with concrete options instead of guessing. The turn pauses and a

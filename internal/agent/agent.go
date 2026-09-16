@@ -26,6 +26,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/redact"
 	"github.com/magicwubiao/go-magic/internal/retry"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
@@ -2814,12 +2815,10 @@ func (a *Agent) writeDeadlineCheckpoint(task, reason string) string {
 	historyCount := len(a.history)
 	a.mu.RUnlock()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Warnf("[Agent] checkpoint skipped: resolve home dir failed: %v", err)
-		return ""
-	}
-	dir := filepath.Join(home, ".magic", "checkpoints")
+	// 用 config.GetMagicHome() 统一解析（GO_MAGIC_HOME → HOME → UserHomeDir），
+	// 之前自行 os.UserHomeDir() 会在 Windows 上无视测试设置的 HOME，把
+	// checkpoint 写进真实用户目录（GO_MAGIC_HOME 隔离失效）。
+	dir := filepath.Join(config.GetMagicHome(), "checkpoints")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Warnf("[Agent] checkpoint dir create failed: %v", err)
 		return ""
