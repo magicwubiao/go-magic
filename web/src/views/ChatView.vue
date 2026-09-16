@@ -160,8 +160,8 @@
               <n-dropdown
                 trigger="click"
                 placement="bottom-end"
-                :options="sessionMenuOptions()"
-                @select="(key: string) => onSessionMenuSelect(key, row.session.id)"
+                :options="sessionMenuOptions(row.session)"
+                @select="(key: string) => onSessionMenuSelect(key, row.session)"
               >
                 <n-button
                   v-if="editingSessionId !== row.session.id"
@@ -588,15 +588,31 @@
             <template #icon><n-icon size="13"><FolderOpenOutline /></n-icon></template>
             {{ t('chat.workDirSet') }}
           </n-button>
-          <n-icon
-            v-if="chatStore.currentWorkDir"
-            size="13"
-            class="workdir-bar-open"
-            :title="t('chat.workDirOpen')"
-            @click.stop="openWorkDirInExplorer()"
+          <!-- 快速设置审批策略：聊天页直接切换，无需进入审批管理页 -->
+          <n-tooltip
+            v-if="approvalStrategyOptions.length > 0"
+            :disabled="!approvalStrategyOptions.length"
+            placement="top-end"
           >
-            <OpenOutline />
-          </n-icon>
+            <template #trigger>
+              <!-- consistent-menu-width=false：菜单按内容自适应宽度，否则菜单=触发框宽(96px)，
+                   选项"手动审批"等长文案被截成"手…"（截图问题根因之一）。
+                   menu-props 加 approval-select-menu class 供全局样式精确定位（菜单 teleport 到 body） -->
+              <n-select
+                v-model:value="approvalStrategy"
+                :options="approvalStrategyOptions"
+                size="tiny"
+                class="workdir-bar-approval"
+                :consistent-menu-width="false"
+                :menu-props="{ class: 'approval-select-menu' }"
+                :placeholder="t('chat.quickApproval')"
+                :loading="approvalLoading"
+                :render-label="renderApprovalLabelShort"
+                @update:value="handleApprovalStrategyChange"
+              />
+            </template>
+            {{ t('chat.quickApprovalHint') }}
+          </n-tooltip>
         </div>
       </div>
     </div>
@@ -729,9 +745,10 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
+import * as approvalApi from '@/api/approval'
 import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
@@ -881,6 +898,66 @@ function renderModelLabel(option: { label: string; value: string }) {
     h('span', { class: 'msw-model', style: 'min-width: 0; overflow-wrap: anywhere;' }, `/ ${model}`),
   ])
 }
+
+// 快速设置审批策略：聊天页直接切换，无需进入审批管理页。
+const approvalStrategy = ref<string>('smart')
+const approvalLoading = ref(false)
+const approvalStrategyOptions = computed(() => [
+  { label: t('approval.settings.strategies.manual'), value: 'manual' },
+  { label: t('approval.settings.strategies.auto'), value: 'auto' },
+  { label: t('approval.settings.strategies.smart'), value: 'smart' },
+  { label: t('approval.settings.strategies.whitelist'), value: 'whitelist' },
+])
+
+// 底部工具栏使用的紧凑版审批策略标签：仅显示短标题（如“智能审批”），避免文案过长。
+// 注意：naive-ui 的 render-label 同时作用于触发框和下拉菜单选项，同一份内联截断样式
+// 会把菜单选项也压成"手…"半个字。触发框的截断必须保留（内联写法，h() 渲染的节点
+// 可能带不上 scoped 的 data-v 属性，scoped CSS 不可靠）；菜单侧由全局样式块
+// .approval-select-menu 用 !important 覆盖放开（!important 优先级高于内联样式）。
+function renderApprovalLabelShort(option: { label: string; value: string }) {
+  const title = (option.label.split(' - ')[0] || option.label).trim()
+  return h('div', {
+    class: 'approval-short-label',
+    style: 'display: flex; align-items: center; gap: 4px; min-width: 0;',
+  }, [
+    h(NIcon, { component: ShieldCheckmarkOutline, size: 12, style: 'flex-shrink: 0;' }),
+    h('span', { class: 'approval-short-label__text', style: 'min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;' }, title),
+  ])
+}
+
+// 加载当前审批策略
+async function loadApprovalStrategy() {
+  approvalLoading.value = true
+  try {
+    const settings = await approvalApi.getSettings()
+    approvalStrategy.value = settings.strategy || 'smart'
+  } catch (e) {
+    console.error('load approval strategy failed', e)
+  } finally {
+    approvalLoading.value = false
+  }
+}
+
+// 切换审批策略：仅更新 strategy，其余设置保持不变
+async function handleApprovalStrategyChange(value: string) {
+  if (!value || value === approvalStrategy.value) return
+  try {
+    const settings = await approvalApi.getSettings()
+    settings.strategy = value
+    await approvalApi.saveSettings(settings)
+    approvalStrategy.value = value
+    const label = approvalStrategyOptions.value.find(o => o.value === value)?.label.split(' - ')[0] || value
+    message.success(t('chat.quickApprovalSaved', { strategy: label }))
+  } catch (e: any) {
+    message.error(t('chat.quickApprovalSaveFailed'))
+    // 恢复为实际保存的值
+    loadApprovalStrategy()
+  }
+}
+
+onMounted(() => {
+  loadApprovalStrategy()
+})
 
 // Current agent phase
 const agentPhase = computed(() => {
@@ -2149,8 +2226,16 @@ async function saveRename(id: string) {
 }
 
 // 会话项下拉菜单选项（重命名 / 删除）
-function sessionMenuOptions() {
-  return [
+function sessionMenuOptions(session: sessionsApi.Session) {
+  const opts: any[] = []
+  if (session.work_dir) {
+    opts.push({
+      label: t('chat.dirSessionsOpenFolder'),
+      key: 'openFolder',
+      icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }),
+    })
+  }
+  opts.push(
     {
       label: t('chat.rename'),
       key: 'rename',
@@ -2160,13 +2245,16 @@ function sessionMenuOptions() {
       label: t('chat.deleteSession'),
       key: 'delete',
       icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
-    },
-  ]
+    }
+  )
+  return opts
 }
 
-async function onSessionMenuSelect(key: string, id: string) {
-  if (key === 'rename') {
-    startRename(id)
+async function onSessionMenuSelect(key: string, session: sessionsApi.Session) {
+  if (key === 'openFolder') {
+    openWorkDirInExplorer(session.work_dir)
+  } else if (key === 'rename') {
+    startRename(session.id)
   } else if (key === 'delete') {
     // 删除前二次确认（confirmDialog 只有点「确认」才返回 true）
     const ok = await confirmDialog({
@@ -2176,7 +2264,7 @@ async function onSessionMenuSelect(key: string, id: string) {
       negativeText: t('common.cancel'),
     })
     if (ok) {
-      await deleteSession(id)
+      await deleteSession(session.id)
     }
   }
 }
@@ -3261,10 +3349,6 @@ onMounted(async () => {
     color: #888;
   }
 
-  .workdir-bar-open {
-    color: #aaa;
-  }
-
   .workdir-bar-empty {
     color: #555;
   }
@@ -3508,21 +3592,53 @@ onMounted(async () => {
   color: #bbb;
 }
 
-.workdir-bar-open {
-  cursor: pointer;
-  opacity: 0.55;
-  flex-shrink: 0;
-  color: #555;
-}
-
-.workdir-bar-open:hover {
-  opacity: 1;
-}
-
 .workdir-bar-set-btn {
   font-size: 11px;
   flex-shrink: 0;
   color: #2080f0;
+}
+
+/* 底部工具栏中的审批策略选择器：紧凑显示，避免文案过长，样式与工具栏一致且无外边框 */
+.workdir-bar-approval {
+  flex-shrink: 0;
+  width: 96px;
+  margin-left: 8px;
+}
+.workdir-bar-approval .n-base-selection {
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.workdir-bar-approval .n-base-selection:hover {
+  border: none;
+  box-shadow: none;
+}
+.workdir-bar-approval .n-base-selection--active {
+  border: none;
+  box-shadow: none;
+}
+.workdir-bar-approval .n-base-selection-label {
+  padding: 0 22px 0 8px;
+  height: 24px;
+  color: #555;
+}
+.workdir-bar-approval .n-base-selection-label span {
+  /* 仅截断"触发框"内的标签（菜单 teleport 到 body，不受 scoped 样式影响），
+     菜单内选项由下方全局样式放开，保证"手动审批"等完整展示 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workdir-bar-approval .approval-short-label__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workdir-bar-approval .n-base-selection-label .n-base-selection__arrow {
+  color: #999;
 }
 
 /* 用户设置过目录时的可点击路径 + 按目录查看会话面板 */
@@ -3854,6 +3970,18 @@ onMounted(async () => {
   .right-sidebar-fab.open {
     right: 286px;
   }
+
+  /* 移动端底部工具栏：压缩审批策略选择器，避免挤压工作目录/分身名 */
+  .workdir-bar {
+    padding: 0 8px;
+  }
+  .workdir-bar-approval {
+    width: 88px;
+    margin-left: 6px;
+  }
+  .workdir-bar-profile-name {
+    max-width: 76px;
+  }
 }
 </style>
 
@@ -3900,4 +4028,23 @@ onMounted(async () => {
   overflow-wrap: anywhere;
   text-overflow: clip;
 }
+
+/* 审批策略下拉（chat 工具条）：菜单 teleport 到 body，scoped 样式够不到，
+   在这里按 approval-select-menu class 精确放开选项截断，保证"手动审批 -
+   所有命令需确认"这类长文案完整展示。render-label 的内联截断样式同时挂在
+   触发框和菜单选项上，触发框需要保留截断，菜单侧用 !important 覆盖（> 内联）。 */
+.approval-select-menu.n-base-select-menu {
+  max-width: calc(100vw - 24px);
+}
+.approval-select-menu .n-base-select-option .n-base-select-option__content {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+.approval-select-menu .n-base-select-option .approval-short-label__text {
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+
 </style>
