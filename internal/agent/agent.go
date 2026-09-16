@@ -93,6 +93,9 @@ type Agent struct {
 	maxTurns    int
 	maxTotalLen int // max chars in message history
 	maxMsgLen   int // max chars per message
+	// skillsCtx 记录当前注入系统提示的技能清单块，供 SetSkillsContext
+	// 以替换（而非追加）语义原地刷新，避免重复堆叠。
+	skillsCtx string
 	// Steering settings
 	maxIterations  int
 	maxTokenBudget int64
@@ -855,26 +858,57 @@ func (a *Agent) getIteration() int {
 	return a.iterationCount
 }
 
-// AddSkillsContext adds skills context to system prompt
+// AddSkillsContext adds skills context to system prompt.
+// Kept as the historical entry point; it now delegates to SetSkillsContext so
+// the injected block is tracked and can be replaced later.
 func (a *Agent) AddSkillsContext(skillsCtx string) {
-	if skillsCtx == "" {
-		return
-	}
+	a.SetSkillsContext(skillsCtx)
+}
 
+// SetSkillsContext 以「替换」语义更新系统提示里的技能清单。
+//
+// 为什么需要替换而不是追加：agent 是按会话缓存的，技能块此前只在创建时
+// 注入一次，用户随后批准/删除自动技能后当前会话仍用旧清单（表现为
+// 「批准了却感知不到」）。重建 agent 代价太大——web 聊天不从 DB 回灌历史
+// （getOrCreateAgent），重建会丢掉整段会话上下文。故原地替换。
+func (a *Agent) SetSkillsContext(skillsCtx string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	old := a.skillsCtx
+	a.skillsCtx = skillsCtx
+
 	for i, msg := range a.history {
-		if msg.Role == "system" {
-			a.history[i].Content += "\n\n" + skillsCtx
-			return
+		if msg.Role != "system" {
+			continue
 		}
+		content := a.history[i].Content
+		if old != "" {
+			if strings.Contains(content, "\n\n"+old) {
+				content = strings.Replace(content, "\n\n"+old, "", 1)
+			} else if content == old {
+				// 系统提示恰好只由旧技能块构成（无前导分隔符）
+				content = ""
+			}
+		}
+		switch {
+		case skillsCtx == "":
+			// 清空：保持移除后的内容
+		case content == "":
+			content = skillsCtx
+		default:
+			content += "\n\n" + skillsCtx
+		}
+		a.history[i].Content = content
+		return
 	}
 
-	a.history = append([]provider.Message{{
-		Role:    "system",
-		Content: skillsCtx,
-	}}, a.history...)
+	if skillsCtx != "" {
+		a.history = append([]provider.Message{{
+			Role:    "system",
+			Content: skillsCtx,
+		}}, a.history...)
+	}
 }
 
 // wrapLLMReasoning wraps the provider's reasoning_content in <think> tags

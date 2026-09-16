@@ -376,12 +376,24 @@ Your working directory is: %s
 	}
 
 	// Bridge cortex's auto skill creator with the skills Manager so
-	// auto-generated skills (in <cortexDir>/auto_skills) are registered
-	// and visible via /api/skills.
+	// auto-generated skills are registered and visible via /api/skills.
 	if skillMgr != nil {
 		cortexMgr.BindSkillsManager(skillMgr)
 		// Also load any previously generated auto skills from disk.
-		loadAutoSkillsIntoManager(skillMgr, filepath.Join(cortexDir, "auto_skills"))
+		// 路径必须以 Manager 的 autoSkillsDir 为准：BindSkillsManager 刚把
+		// SkillCreator 的 baseDir 同步到 magicHome/skills/auto_skills，此前这里
+		// 固定扫 cortexDir/auto_skills（旧路径，已无写入方，目录通常不存在）
+		// → 重启后 DB 里的自动技能一个都扫不到，含已批准的也被 GetSkillsList
+		// 过滤掉，表现为「沉淀的技能感知不到」。
+		autoDir := skillMgr.GetAutoSkillsDir()
+		if autoDir == "" {
+			autoDir = filepath.Join(cortexDir, "auto_skills")
+		}
+		loadAutoSkillsIntoManager(skillMgr, autoDir)
+		// 兼容历史版本写在 cortexDir 下的自动技能，扫到即补登记。
+		if legacyDir := filepath.Join(cortexDir, "auto_skills"); legacyDir != autoDir {
+			loadAutoSkillsIntoManager(skillMgr, legacyDir)
+		}
 	}
 
 	// Initialize Approval Manager independently (not tied to agents)
@@ -786,6 +798,12 @@ func (s *Server) getOrCreateAgent(sessionID string) *agent.Agent {
 	defer s.agentsMu.Unlock()
 
 	if a, ok := s.agents[sessionID]; ok {
+		// 每回合刷新技能清单：agent 按会话缓存，技能块此前只在创建时注入，
+		// 用户批准/删除自动技能后当前会话仍用旧清单（「批准了却感知不到」）。
+		// SetSkillsContext 是替换语义且不动历史，故不会丢会话上下文。
+		if s.skillMgr != nil {
+			a.SetSkillsContext(s.skillMgr.GetSkillsList())
+		}
 		return a
 	}
 
@@ -1750,6 +1768,10 @@ func loadAutoSkillsIntoManager(mgr *skills.Manager, autoDir string) {
 		{filepath.Join(autoDir, "pending"), skills.SkillStatusPending},
 		{filepath.Join(autoDir, "approved"), skills.SkillStatusApproved},
 		{filepath.Join(autoDir, "archived"), skills.SkillStatusArchived},
+		// rejected 也是 SkillCreator 会写入的状态目录（RejectAutoSkill），
+		// 不回扫会导致被拒技能重启后从状态列表消失，且模式检查看不到它而
+		// 重新生成同名技能。
+		{filepath.Join(autoDir, "rejected"), skills.SkillStatusRejected},
 	}
 
 	for _, sd := range statusDirs {

@@ -118,8 +118,9 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	if err := os.MkdirAll(m.hubDir, 0755); err != nil {
 		log.Warnf("failed to create hub dir %s: %v", m.hubDir, err)
 	}
-	// 创建四态目录
-	for _, sub := range []string{"pending", "approved", "archived"} {
+	// 创建四态目录（rejected 也需要：RejectAutoSkill 会把目录 Rename 进去，
+	// 父目录缺失会导致移动失败）
+	for _, sub := range []string{"pending", "approved", "archived", "rejected"} {
 		if err := os.MkdirAll(filepath.Join(m.autoSkillsDir, sub), 0755); err != nil {
 			log.Warnf("failed to create auto skill subdir %s: %v", sub, err)
 		}

@@ -37,10 +37,11 @@ type EnhancedAutoCreator struct {
 func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	skillsDir := filepath.Join(baseDir, "auto_skills")
 	os.MkdirAll(skillsDir, 0755)
-	// 四态子目录：pending / approved / archived
+	// 四态子目录：pending / approved / archived / rejected
 	os.MkdirAll(filepath.Join(skillsDir, "pending"), 0755)
 	os.MkdirAll(filepath.Join(skillsDir, "approved"), 0755)
 	os.MkdirAll(filepath.Join(skillsDir, "archived"), 0755)
+	os.MkdirAll(filepath.Join(skillsDir, "rejected"), 0755)
 
 	patternsFile := filepath.Join(skillsDir, "patterns.json")
 	var patterns []Pattern
@@ -77,6 +78,7 @@ func (e *EnhancedAutoCreator) SetBaseDir(dir string) {
 	os.MkdirAll(filepath.Join(dir, "pending"), 0755)
 	os.MkdirAll(filepath.Join(dir, "approved"), 0755)
 	os.MkdirAll(filepath.Join(dir, "archived"), 0755)
+	os.MkdirAll(filepath.Join(dir, "rejected"), 0755)
 	// 若新目录下没有 patterns.json 但旧目录有，则迁移过去
 	newPatternsFile := filepath.Join(dir, "patterns.json")
 	oldPatternsFile := filepath.Join(oldBase, "patterns.json")
@@ -254,9 +256,10 @@ func (e *EnhancedAutoCreator) checkAndGenerateSkillsFromSnapshot(patterns []Patt
 	for _, pattern := range patterns {
 		// 提高置信度阈值也提高到 0.8，避免低质量的自动生成
 		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.8 {
-			// Check if skill already generated for this pattern (look in pending, approved, archived)
+			// Check if skill already generated for this pattern
+			// (look in pending, approved, archived, rejected)
 			exists := false
-			for _, subdir := range []string{"pending", "approved", "archived"} {
+			for _, subdir := range []string{"pending", "approved", "archived", "rejected"} {
 				entries, _ := os.ReadDir(filepath.Join(e.baseDir, subdir))
 				for _, entry := range entries {
 					if strings.HasPrefix(entry.Name(), fmt.Sprintf("auto-%s-", pattern.Name)) && entry.IsDir() {
