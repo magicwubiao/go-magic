@@ -1975,7 +1975,9 @@ async function deleteDirSessions() {
 
 // 侧栏分组头上的「新建」：在该目录下开一个新会话（「默认」组不传目录，走系统默认）。
 // 后端返回的 last_active 就是当前时间、且 work_dir_user_set=true，所以新会话必然
-// 落在同一分组的第一条；这里只需把折叠的组展开，保证用户立刻看到它。
+// 落在同一分组的第一条；同时分组按「最新活动」重排，该分组会跳到侧栏最顶部。
+// 因此这里除了把折叠的组展开，还必须把滚动条拉回顶部——否则用户若是在侧栏偏下
+// 的分组里新建，新会话跑到顶部后会被滚轴遮住看不到。
 async function createSessionInGroup(row: Extract<SidebarRow, { kind: 'group' }>) {
   const session = await chatStore.createSession(row.workDir || undefined)
   if (!session) {
@@ -1983,6 +1985,8 @@ async function createSessionInGroup(row: Extract<SidebarRow, { kind: 'group' }>)
     return
   }
   if (isGroupCollapsed(row.groupKey)) toggleGroup(row.groupKey)
+  // 新会话所在分组已因最新活动跳至列表顶部，滚动定位到顶部让用户立刻看到它
+  sessionListRef.value?.scrollTo({ top: 0 })
 }
 
 // 侧栏分组头上的「删除」：删除该分组下的全部会话。
