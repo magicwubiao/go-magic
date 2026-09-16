@@ -652,7 +652,7 @@ function handleResize() {
 watch(isMobile, (mobile) => {
   if (!mobile) {
     emit('update:mobileVisible', false)
-    isCollapsed.value = false
+    isCollapsed.value = true
   }
 })
 
@@ -690,7 +690,7 @@ async function removeTodo(id: string) {
   }
 }
 
-const isCollapsed = ref(false)
+const isCollapsed = ref(true)
 const activeTab = ref<'goals' | 'files'>('goals')
 const expandedGoals = ref<string[]>([])
 const goalSessions = ref<Record<string, any[]>>({})
