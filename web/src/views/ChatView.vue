@@ -1164,12 +1164,35 @@ watch(sessionSearch, (val) => {
   searchDebounceTimer = setTimeout(loadFullSessions, 250)
 })
 
-// 缓存就绪后，store 中新增/刷新出的会话保持同步（如新建会话后立即出现在侧栏）
+// 缓存就绪后，store 中新增/刷新出的会话保持同步（如新建会话后立即出现在侧栏）。
+// 除新增外，还要把刷新后变化的字段（标题、预览、消息数、token、最近活动等）
+// 回写进缓存里的既有会话，否则会话标题要等下次全量刷新/整页刷新才更新。
 watch(() => chatStore.sessions, (list) => {
   if (!allWebSessions.value) return
   const known = new Set(allWebSessions.value.map(s => s.id))
   const fresh = list.filter(s => isWebSession(s) && !known.has(s.id))
+  let changed = false
+  for (const ns of list) {
+    if (!isWebSession(ns)) continue
+    const cached = allWebSessions.value.find(s => s.id === ns.id)
+    if (!cached) continue
+    // 仅当字段有变化时才写，避免无谓触发 computed 重算
+    if (
+      cached.title !== ns.title ||
+      cached.preview !== ns.preview ||
+      cached.last_active !== ns.last_active ||
+      cached.message_count !== ns.message_count ||
+      cached.input_tokens !== ns.input_tokens ||
+      cached.output_tokens !== ns.output_tokens ||
+      cached.work_dir !== ns.work_dir ||
+      cached.work_dir_user_set !== ns.work_dir_user_set
+    ) {
+      Object.assign(cached, ns)
+      changed = true
+    }
+  }
   if (fresh.length > 0) allWebSessions.value = [...fresh, ...allWebSessions.value]
+  else if (changed) allWebSessions.value = [...allWebSessions.value]
 })
 
 // 就地修改（改名、改工作目录）不会改变 store.sessions 的数组引用，watcher 不会触发，
