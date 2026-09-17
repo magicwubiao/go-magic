@@ -12,6 +12,15 @@ const DefaultNudgeThreshold = 15
 // MessageTrigger handles the six-system's first two components:
 // 1. User message trigger - starts skill creation flow
 // 2. Periodic Nudge mechanism - triggers background review every N turns
+//
+// Nil-safety: a nil *MessageTrigger is a valid "disabled" state, and every
+// method tolerates it. cortex.NewManager returns early when the Cortex system
+// is disabled, leaving Manager.Trigger nil while Manager itself stays non-nil —
+// so call sites that only check `cortexManager != nil` still reach these
+// methods with a nil receiver. Dereferencing mt.mu there panicked the whole
+// turn with a nil pointer dereference the moment a tool was called. Guarding
+// here (rather than at each call site) keeps that from recurring as new call
+// sites appear.
 type MessageTrigger struct {
 	mu             sync.RWMutex
 	turnCount      int
@@ -36,6 +45,9 @@ func NewMessageTrigger() *MessageTrigger {
 // OnUserMessage is called when a new user message arrives
 // This marks the start of a task and increments turn counter
 func (mt *MessageTrigger) OnUserMessage(input string) {
+	if mt == nil {
+		return
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
@@ -44,7 +56,7 @@ func (mt *MessageTrigger) OnUserMessage(input string) {
 	mt.taskStartTime = time.Now()
 
 	// Check if we should trigger a nudge
-	if mt.turnCount%mt.nudgeThreshold == 0 {
+	if mt.nudgeThreshold > 0 && mt.turnCount%mt.nudgeThreshold == 0 {
 		mt.triggerNudge()
 	}
 }
@@ -60,6 +72,9 @@ func (mt *MessageTrigger) triggerNudge() {
 // OnToolCall records a tool call for skill creation pattern detection.
 // This feeds into System 6 (Skill Evolution) to detect repeated tool sequences.
 func (mt *MessageTrigger) OnToolCall(toolName string, args map[string]interface{}) {
+	if mt == nil {
+		return
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
@@ -69,10 +84,20 @@ func (mt *MessageTrigger) OnToolCall(toolName string, args map[string]interface{
 
 // OnTaskComplete marks the end of a task, returns duration and resets tool tracking
 func (mt *MessageTrigger) OnTaskComplete() time.Duration {
+	if mt == nil {
+		return 0
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
-	duration := time.Since(mt.taskStartTime)
+	// taskStartTime is zero unless OnUserMessage ran. time.Since(zeroTime)
+	// overflows int64 nanoseconds and comes back as the maximum Duration
+	// (~292 years), which would be reported as a task that ran forever.
+	// A zero start means "no task was started", so report no duration.
+	var duration time.Duration
+	if !mt.taskStartTime.IsZero() {
+		duration = time.Since(mt.taskStartTime)
+	}
 	mt.currentTask = ""
 	mt.currentToolCalls = nil
 	mt.toolCallCount = 0
@@ -81,6 +106,9 @@ func (mt *MessageTrigger) OnTaskComplete() time.Duration {
 
 // RegisterNudgeHandler registers a function to call on nudge
 func (mt *MessageTrigger) RegisterNudgeHandler(handler func()) {
+	if mt == nil {
+		return
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
@@ -89,6 +117,9 @@ func (mt *MessageTrigger) RegisterNudgeHandler(handler func()) {
 
 // GetTurnCount returns the current turn count
 func (mt *MessageTrigger) GetTurnCount() int {
+	if mt == nil {
+		return 0
+	}
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.turnCount
@@ -96,6 +127,9 @@ func (mt *MessageTrigger) GetTurnCount() int {
 
 // SetNudgeThreshold sets the nudge threshold
 func (mt *MessageTrigger) SetNudgeThreshold(threshold int) {
+	if mt == nil {
+		return
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 	if threshold > 0 {
@@ -105,6 +139,9 @@ func (mt *MessageTrigger) SetNudgeThreshold(threshold int) {
 
 // Reset resets the turn counter and tool tracking for new sessions
 func (mt *MessageTrigger) Reset() {
+	if mt == nil {
+		return
+	}
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 	mt.turnCount = 0
@@ -115,6 +152,9 @@ func (mt *MessageTrigger) Reset() {
 
 // GetCurrentTask returns the current task description
 func (mt *MessageTrigger) GetCurrentTask() string {
+	if mt == nil {
+		return ""
+	}
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.currentTask
@@ -123,6 +163,9 @@ func (mt *MessageTrigger) GetCurrentTask() string {
 // GetToolCalls returns the ordered tool call names for the current task.
 // Returns a copy to avoid data races.
 func (mt *MessageTrigger) GetToolCalls() []string {
+	if mt == nil {
+		return nil
+	}
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	if mt.currentToolCalls == nil {
@@ -135,6 +178,9 @@ func (mt *MessageTrigger) GetToolCalls() []string {
 
 // GetToolCallCount returns the total number of tool calls in current task
 func (mt *MessageTrigger) GetToolCallCount() int {
+	if mt == nil {
+		return 0
+	}
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.toolCallCount

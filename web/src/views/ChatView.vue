@@ -305,57 +305,15 @@
               />
               <!-- 流式期间实时展示本轮已变更文件数量；done 后由后端 file_ops 接管 -->
               <FileChangesBlock :files="changedFiles()" />
-            </div>
-          </div>
-        </template>
 
-        <!-- 排队中的消息：回合进行中继续发送的消息，按 FIFO 依次执行。
-             用 1 起的序号显式表达"第几条执行"，避免用户以为消息丢了。
-             正在执行的那条不在 queued 里（已转入上面的流式渲染）。 -->
-        <template v-if="chatStore.queuedMessages.length">
-          <div
-            v-for="(q, qi) in chatStore.queuedMessages"
-            :key="q.turnId"
-            class="message user queued-message"
-          >
-            <div class="avatar">🧑</div>
-            <div class="message-body user-body">
-              <div class="queued-bubble">
-                <div class="queued-head">
-                  <span class="queued-badge">
-                    <n-icon size="11"><TimeOutline /></n-icon>
-                    {{ t('chat.queuedBadge', { position: qi + 1 }) }}
-                  </span>
-                  <span class="queued-hint">{{ t('chat.queuedHint') }}</span>
-                  <!-- 排队项操作：编辑＝撤下并回填输入框；删除＝丢弃这一条。
-                       触屏没有 hover，因此按钮常驻（不做悬停才显示）。 -->
-                  <span class="queued-actions">
-                    <button
-                      type="button"
-                      class="queued-action-btn"
-                      :title="t('chat.queuedEdit')"
-                      @click="editQueued(q.turnId)"
-                    >
-                      <n-icon size="13"><PencilOutline /></n-icon>
-                    </button>
-                    <button
-                      type="button"
-                      class="queued-action-btn queued-action-danger"
-                      :title="t('chat.queuedDelete')"
-                      @click="removeQueued(q.turnId)"
-                    >
-                      <n-icon size="13"><TrashOutline /></n-icon>
-                    </button>
-                  </span>
-                </div>
-                <div class="queued-content">{{ q.content }}</div>
-                <div v-if="queuedFilesFor(q.turnId).length" class="queued-files">
-                  <span
-                    v-for="f in queuedFilesFor(q.turnId)"
-                    :key="f.url"
-                    class="queued-file-chip"
-                  >{{ f.name }}</span>
-                </div>
+              <!-- 执行状态坞：贴在本轮回答内容的最下方（属于消息内容的一部分，
+                   不悬浮、不吸底）。任务一开跑就出现在这里，随着工具逐条执行
+                   往下长，回合结束后随消息一起留在历史里。 -->
+              <div v-if="taskDockVisible" class="task-dock-inline">
+                <TaskTimeline
+                  :steps="taskTimelineSteps"
+                  :progress="chatStore.taskProgress"
+                />
               </div>
             </div>
           </div>
@@ -366,13 +324,89 @@
         </n-text>
       </div>
 
-      <!-- 执行状态条（沉底）：任务执行期间固定在消息区下方、输入框上方，单行提示“正在执行” -->
-      <div v-if="taskDockVisible" class="task-dock-zone">
-        <TaskTimeline
-          :steps="taskTimelineSteps"
-          :progress="chatStore.taskProgress"
-        />
+      <!-- 排队中的消息（沉底 dock）：固定在输入框上方，不随对话滚动。
+           放在 .messages 之外是刻意的——排队气泡若留在滚动区里，会随着
+           流式内容增长被不断顶动（"晃动"），且位置落在正在生成的回答
+           下方，读起来是倒的。做成独立 dock 后它始终待在输入框正上方，
+           符合"待发件箱"的直觉，也是主流智能体的做法。
+           正在执行的那条不在 queued 里（已转入上面的流式渲染）。
+
+           每一行的结构对齐主流智能体的"待发件箱"：拖动柄 + 单行内容 +
+           重发/编辑/删除三个常驻图标，行与行之间用发丝线分隔，整块保持
+           中性底色。刻意不做卡片、不加标题栏、不用序号——排队区是"已提交
+           内容的清单"，不是需要被强调的告警，越安静越不打扰正在读的回答。
+
+           唯一的例外是底部这行"清空待发"：它是一个作用于整块的操作，
+           塞进单行卡片会与那一行的三个图标混淆语义。做成一条安静的
+           文字按钮贴在末尾，既不抢视线，也让"一次撤掉后面全部"有出口。 -->
+      <div v-if="chatStore.queuedMessages.length" class="queue-dock">
+        <div class="queue-dock-inner">
+          <div
+            v-for="(q, qi) in chatStore.queuedMessages"
+            :key="q.turnId"
+            class="queue-row"
+            :class="{ 'queue-row-dragging': draggingTurnId === q.turnId }"
+            @dragover.prevent="onQueueDragOver($event, qi)"
+            @drop.prevent="onQueueDrop($event, qi)"
+            @dragend="onQueueDragEnd"
+          >
+            <!-- 拖动柄：原生 draggable 让"拖动排序"这件事对键盘/触屏之外
+                 的交互也有语义（拖到别处=移动），不必自造指针逻辑。 -->
+            <button
+              type="button"
+              class="queue-handle"
+              draggable="true"
+              :title="t('chat.queuedDrag')"
+              @dragstart="onQueueDragStart($event, q.turnId, qi)"
+            >
+              <span class="queue-handle-dots" aria-hidden="true"></span>
+            </button>
+            <div class="queue-row-main">
+              <div class="queue-row-text">{{ q.content }}</div>
+              <div v-if="queuedFilesFor(q.turnId).length" class="queue-row-files">
+                <span
+                  v-for="(f, fi) in queuedFilesFor(q.turnId)"
+                  :key="fi"
+                  class="queue-row-file"
+                >
+                  <n-icon size="11"><DocumentOutline /></n-icon>
+                  {{ attachmentLabel(f) }}
+                </span>
+              </div>
+            </div>
+            <!-- 操作常驻显示（触屏无 hover，悬停才出现则永远点不到） -->
+            <div class="queue-row-actions">
+              <button
+                type="button"
+                class="queue-row-btn"
+                :title="t('chat.queuedRetry')"
+                @click="retryQueued(q.turnId)"
+              >
+                <n-icon size="15"><RefreshOutline /></n-icon>
+              </button>
+              <button
+                type="button"
+                class="queue-row-btn"
+                :title="t('chat.queuedEdit')"
+                @click="editQueued(q.turnId)"
+              >
+                <n-icon size="15"><PencilOutline /></n-icon>
+              </button>
+              <button
+                type="button"
+                class="queue-row-btn queue-row-btn-danger"
+                :title="t('chat.queuedDelete')"
+                @click="removeQueued(q.turnId)"
+              >
+                <n-icon size="15"><TrashOutline /></n-icon>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <!-- 执行状态坞已移入流式消息内容内（见上方 .task-dock-inline），
+           此处不再保留吸底的独立 dock 区，避免同一状态出现两处。 -->
 
       <!-- 澄清提问卡片（AI 需求不明确时挂起回合弹出，等待用户选择/补充说明） -->
       <div v-if="chatStore.pendingClarifications.length" class="clarify-bar">
@@ -469,11 +503,16 @@
                 @update:show="onModelMenuShow"
                 @update:value="handleModelChange"
               />
-              <!-- 同一槽位二选一：执行中（含排队）显示停止键，空闲时显示发送键。
-                   不再并排两个圆按钮（此前 sending + stop 同时出现，视觉上是
-                   "两个发送键"，用户无从分辨）。 -->
+              <!-- 同一槽位按需切换，优先照顾"用户想发消息"这件事：
+                   1. 输入框有内容（文字或附件）→ 永远显示发送键。用户正在打字
+                      就是明确要发，此时把按钮换成停止键是反直觉的（这也是本次
+                      修的 bug：busy 期间按钮被停止键占走，打好的字发不出去）。
+                   2. 否则若在忙（流式或队列非空）→ 显示停止键。
+                   3. 否则显示发送键（禁用态）。
+                   两种情况下发送键都可点：服务端队列保证串行执行，busy 期间
+                   发送就是排队，不会丢也不会并发。 -->
               <n-button
-                v-if="chatStore.busy"
+                v-if="chatStore.busy && !hasComposerContent"
                 type="warning"
                 size="small"
                 circle
@@ -491,7 +530,8 @@
                 size="small"
                 circle
                 @click="send"
-                :disabled="!inputValue.trim() && !selectedFiles.length"
+                :disabled="!hasComposerContent"
+                :title="chatStore.busy ? t('chat.queuedSendHint') : t('chat.send')"
                 class="send-circle-btn"
               >
                 <template #icon>
@@ -801,7 +841,8 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, TimeOutline } from '@vicons/ionicons5'
+import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -1062,8 +1103,10 @@ function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
 // 变更的文件：按路径去重。同路径出现多次时以后一次为准
 // （写→删=删；删→写=重建=写）；携带 diff 的条目原样透传给渲染组件。
 // 排队消息的附件清单。store 里用 turnId 索引（local_* 期间也能查到），
-// 用于在排队气泡上展示"这条消息带了哪些文件"。
-function queuedFilesFor(turnId: string): sessionsApi.UploadedFile[] {
+// 用于在排队区展示"这条消息带了哪些文件"。
+// 类型是 Partial：刷新后从服务端队列快照恢复的附件只有 name/url/mime，
+// 没有 id/size（uploads 元数据不在队列里）。
+function queuedFilesFor(turnId: string): Partial<sessionsApi.UploadedFile>[] {
   return chatStore.queuedAttachments.get(turnId) || []
 }
 
@@ -1086,12 +1129,63 @@ async function editQueued(turnId: string) {
   }
   inputValue.value = picked.content
   if (picked.attachments.length) {
-    selectedFiles.value = [...picked.attachments]
+    selectedFiles.value = [...picked.attachments] as sessionsApi.UploadedFile[]
   }
   nextTick(() => {
-    const el = document.querySelector<HTMLTextAreaElement>('.chat-input textarea')
-    el?.focus()
+    chatTextareaRef.value?.focus()
   })
+}
+
+// 重发一条排队消息：内容与附件原样再提交一次，效果是这条排到队尾。
+// 服务端在入队前先摘掉原条目（retry_of），因此不会被查重逻辑合并成一条。
+async function retryQueued(turnId: string) {
+  const sessionId = chatStore.activeSessionId
+  if (!sessionId) return
+  await chatStore.retryQueuedMessage(sessionId, turnId)
+}
+
+// ---- 排队区拖动排序 ----
+// 用 HTML5 原生 drag 事件而不是自造指针逻辑：桌面端浏览器已经处理好了
+// 拖动阈值、拖动时的手指/光标形态、以及跨元素拖放的语义，自造一套只会
+// 在触屏与移动端边界上反复踩坑。触屏排序后续如需支持再补指针事件即可。
+const draggingTurnId = ref('')
+const draggingFromIndex = ref(-1)
+
+function onQueueDragStart(e: DragEvent, turnId: string, index: number) {
+  draggingTurnId.value = turnId
+  draggingFromIndex.value = index
+  if (e.dataTransfer) {
+    // 必须 setData 才会被浏览器认定为"有效拖动"（否则部分浏览器直接取消）。
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', turnId)
+  }
+}
+
+// dragover 的目标行：把被拖行**插入**到这一行的位置。
+// 这里不做实时预览换位（那需要为每一帧重排列表，长队列下会明显掉帧），
+// 只在落下时执行一次移动——拖动过程中被拖行半透明，落点一目了然。
+function onQueueDragOver(_e: DragEvent, _index: number) {
+  // 占位：dragover 必须被处理（模板里已 preventDefault）才能收到 drop，
+  // 但落点的计算推迟到 drop 时做，避免拖动过程中的高频重排。
+}
+
+async function onQueueDrop(_e: DragEvent, index: number) {
+  const turnId = draggingTurnId.value
+  const from = draggingFromIndex.value
+  draggingTurnId.value = ''
+  draggingFromIndex.value = -1
+
+  const sessionId = chatStore.activeSessionId
+  if (!sessionId || !turnId || from < 0 || from === index) return
+
+  // 从上往下拖时，被拖行原本占着 from，摘除后目标位置会后移一位。
+  const to = from < index ? index - 1 : index
+  await chatStore.moveQueuedMessage(sessionId, turnId, to)
+}
+
+function onQueueDragEnd() {
+  draggingTurnId.value = ''
+  draggingFromIndex.value = -1
 }
 
 function changedFiles(msg?: sessionsApi.Message): { action: string; path: string; diff?: string }[] {
@@ -1153,6 +1247,13 @@ const editingName = ref('')
 // File upload
 const selectedFiles = ref<sessionsApi.UploadedFile[]>([])
 const uploadingFiles = ref<Set<string>>(new Set())
+
+// hasComposerContent 表示输入区"有东西可发"（文字或附件）。
+// 底部按钮据此在发送键与停止键之间取舍：只要用户已经开始输入，就必须让发送键
+// 可见——busy（流式/排队）期间把它换成停止键会让打好的字发不出去。
+const hasComposerContent = computed(
+  () => !!inputValue.value.trim() || selectedFiles.value.length > 0,
+)
 
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return ''
@@ -1564,23 +1665,34 @@ const taskTimelineSteps = computed((): TimelineStep[] => {
   // Phase 1: Planning (if we have a task progress)
   if (chatStore.taskProgress) {
     steps.push({
+      key: 'planning',
       title: t('chat.taskPlanning'),
       description: t('chat.taskPlanningDesc'),
       status: 'completed',
+      isTool: false,
     })
   }
 
-  // Phase 2: Tool execution steps
+  // Phase 2: Tool execution steps —— 逐条展示，不再按工具名去重。
+  // 去重会把「连续读 5 个文件」压成一条，坞里就只剩一个名字、毫无过程感；
+  // 而坞的价值恰恰在于"看到它一条条在推进"。重复调用由展开体的滚动区消化。
   for (const tc of tcs) {
-    const existing = steps.find(s => s.title === tc.name)
-    if (existing) continue
-
     steps.push({
-      title: tc.name,
+      key: tc.id,
+      title: toolShortName(tc.name) || tc.name,
+      summary: toolCallSummary(tc, 72),
       description: tc.args?.substring(0, 80) || '',
-      status: tc.status === 'running' ? 'running' : tc.status === 'completed' ? 'completed' : tc.status === 'error' ? 'failed' : 'pending',
-      detail: tc.status === 'running' ? t('chat.executing') : tc.duration ? `${t('chat.duration')} ${tc.duration}` : undefined,
+      status:
+        tc.status === 'running'
+          ? 'running'
+          : tc.status === 'completed'
+            ? 'completed'
+            : tc.status === 'error'
+              ? 'failed'
+              : 'pending',
+      detail: tc.status === 'running' ? t('chat.executing') : undefined,
       duration: tc.duration,
+      isTool: true,
     })
   }
 
@@ -1592,10 +1704,12 @@ const taskTimelineSteps = computed((): TimelineStep[] => {
 
   if (synthesisStarted.value && chatStore.streaming) {
     steps.push({
+      key: 'synthesis',
       title: t('chat.resultSynthesis'),
       description: t('chat.resultSynthesisDesc'),
       status: 'running',
       detail: t('chat.generating'),
+      isTool: false,
     })
   }
 
@@ -2851,108 +2965,154 @@ onMounted(async () => {
   border-bottom-right-radius: 4px;
 }
 
-/* ========== Queued messages ==========
-   排队中的消息用虚线边框 + 降饱和度区分于已提交的消息，并显式标出执行顺序。
-   视觉上必须"看起来还没轮到它"，否则用户会以为消息已被处理。 */
-.queued-message {
-  opacity: 0.72;
+/* ========== Queue dock（排队区）==========
+   固定在输入框上方、消息滚动区之外。设计要点：
+   - 与 task-dock-zone / clarify-bar / approval-bar 同一套"沉底 dock"范式，
+     宽度与输入框对齐（max-width 900px 居中），视觉语言统一。
+   - 每一行 = 拖动柄 + 单行截断内容 + 三个常驻图标（重发/编辑/删除），
+     行间用发丝线分隔。刻意不做卡片、不加标题栏、不用序号圆标：排队区是
+     "已提交内容的清单"，不是需要被强调的告警，越安静越不打扰正在读的回答。
+   - 中性底色（不是绿色渐变）：这里的等待是常态，不是异常状态；
+     绿色只留给"正在执行"的语义，两者同时出现时才不会互相稀释。 */
+.queue-dock {
+  padding: 4px 16px 0;
+  background: var(--body-color, #fff);
+  border-top: 1px solid var(--border-color, #efefef);
 }
 
-.queued-bubble {
-  padding: 10px 14px;
-  border-radius: 14px;
-  border: 1px dashed rgba(24, 160, 88, 0.5);
-  background: rgba(24, 160, 88, 0.06);
-  color: var(--text-color, #333);
+.queue-dock-inner {
+  max-width: 900px;
+  margin: 0 auto;
 }
 
-.queued-head {
+/* 多条排队时列表内部滚动，避免顶掉输入区。整块 dock 一起滚，
+   行与行的分隔线因此不会在滚动时"悬空"在容器边缘。 */
+.queue-dock-inner {
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.queue-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
-  flex-wrap: wrap;
+  padding: 7px 0;
+  /* 发丝分隔线：最后一行不画，避免与 dock 的 border-top 形成双线。 */
+  border-bottom: 1px solid var(--border-color, #f0f0f0);
 }
 
-.queued-badge {
+/* 发丝分隔线：最后一行不画，避免与 dock 的 border-top 形成双线。 */
+.queue-row:last-child {
+  border-bottom: none;
+}
+
+.queue-row-dragging {
+  opacity: 0.45;
+}
+
+/* 拖动柄：2 列 × 3 行的小圆点阵列，用重复径向渐变画出来——
+   ionicons 没有六点握把字形，画背景比塞一个额外的 SVG 元素更轻。 */
+.queue-handle {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
-  border-radius: 9px;
-  font-size: 11px;
+  justify-content: center;
+  width: 14px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: grab;
+  color: var(--text-color-3, #c0c4cc);
+  transition: color 0.15s;
+}
+
+.queue-handle:hover {
+  color: var(--text-color-2, #888);
+}
+
+.queue-handle:active {
+  cursor: grabbing;
+}
+
+.queue-handle-dots {
+  width: 8px;
+  height: 12px;
+  background-image: radial-gradient(circle, currentColor 1.1px, transparent 1.2px);
+  background-size: 4px 4px;
+  background-position: 1px 1px;
+  background-repeat: repeat;
+}
+
+.queue-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 单行截断：排队区只做"让你认出是哪条"，完整内容在编辑里可见 */
+.queue-row-text {
+  font-size: 13px;
   font-weight: 600;
-  color: #18a058;
-  background: rgba(24, 160, 88, 0.14);
+  line-height: 1.5;
+  color: var(--text-color, #1f2937);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.queue-row-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-color-2, #666);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.queued-hint {
-  font-size: 11px;
-  color: var(--text-color-3, #999);
-}
-
-/* 排队项操作按钮：常驻显示（触屏无 hover，若只在悬停时出现则永远点不到）。
-   用 margin-left:auto 推到行尾，与左侧的序号徽标/提示语拉开距离。 */
-.queued-actions {
-  margin-left: auto;
+/* 操作按钮常驻（触屏无 hover，悬停才出现则永远点不到） */
+.queue-row-actions {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 2px;
 }
 
-.queued-action-btn {
+.queue-row-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-color-3, #999);
+  color: var(--text-color-3, #8b8b8b);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
-.queued-action-btn:hover {
-  background: rgba(24, 160, 88, 0.14);
-  color: #18a058;
-}
-
-.queued-action-btn.queued-action-danger:hover {
-  background: rgba(208, 48, 80, 0.14);
-  color: #d03050;
-}
-
-.queued-content {
-  font-size: 14px;
-  line-height: 1.6;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
-  max-height: 8em;
-  overflow: hidden;
-}
-
-.queued-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.queued-file-chip {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 8px;
+.queue-row-btn:hover {
   background: rgba(0, 0, 0, 0.06);
-  color: var(--text-color-2, #666);
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text-color, #333);
+}
+
+.queue-row-btn.queue-row-btn-danger:hover {
+  background: rgba(208, 48, 80, 0.1);
+  color: #d03050;
 }
 
 /* Assistant 回答不使用气泡，直接展示内容 */
@@ -3070,9 +3230,9 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-/* ========== 长任务进度坞（沉底） ========== */
-.task-dock-zone {
-  padding: 0 24px 10px;
+/* ========== 长任务进度坞（内联在流式消息内容里） ========== */
+.task-dock-inline {
+  margin-top: 8px;
 }
 
 /* Agent status panel */

@@ -67,7 +67,12 @@ const (
 type turnEvent struct {
 	data string
 	done bool
-	err  error // 回合已结束但结果未能落库时的错误说明
+	// queueIdle 与 done 配对使用：表示"本回合结束后队列已经彻底排空，不会
+	// 再有后续回合"。转发层据此决定是否关闭这条 SSE 连接——没有它就分不清
+	// "这一轮完了但后面还有"与"整个队列都干完了"，只能二选一：要么过早关闭
+	// （后排的消息推不出去），要么永不关闭（连接泄漏）。
+	queueIdle bool
+	err       error // 回合已结束但结果未能落库时的错误说明
 }
 
 // turnSink 是一个 SSE 订阅者。回合事件被 append 到 evch，由消费 goroutine
@@ -280,6 +285,29 @@ func (q *sessionQueue) cancelAll() cancelSignal {
 	return cancelSignal{active: cancel != nil, pending: pending}
 }
 
+// clearPending 只丢弃排队等待的消息，**不动正在执行的回合**。
+//
+// 这是第三种停止语义，与另外两个刻意区分开：
+//
+//   - cancelAll    ：停止这一切——取消当前回合 + 清空队列（用户点"停止"）；
+//   - dropItem     ：只丢用户点名的那一条，其余排队消息照旧；
+//   - clearPending ：保留当前回合跑完（用户还想看这条回答），只把后面
+//     等着的一串撤掉。
+//
+// 为什么必须单独有一个：把"我不想看后面那些"也做成 cancelAll，用户就得为了
+// 删掉几条待发消息而牺牲正在生成的回答；反过来若复用 dropItem，用户得一条
+// 一条点删除。运行中的回合不受影响这件事由实现保证——这里只切 items、不碰
+// q.cancel，也不置 cancelRequested。
+//
+// 返回被丢弃的条数。
+func (q *sessionQueue) clearPending() int {
+	q.mu.Lock()
+	pending := len(q.items)
+	q.items = nil
+	q.mu.Unlock()
+	return pending
+}
+
 // dropItem 从队列中移除指定的一条尚未执行的排队消息。
 //
 // 与 cancelAll 的区别：cancelAll 是"停止这一切"（连正在跑的回合一起杀），
@@ -325,6 +353,32 @@ func (q *sessionQueue) updateItem(id string, content string, contentParts, persi
 	return false
 }
 
+// findItem 返回指定排队项的**完整**内容与附件快照。
+//
+// 存在的理由：/running 里的 queued[].content 是给人看的一行预览，被
+// shortenQueuedContent 截到 120 字符。前端"编辑排队消息"要把内容回填进
+// 输入框，拿预览去填就等于把用户写的东西砍掉大半——刷新页面后尤其明显
+// （那时本地已无原件，只能问服务端）。因此编辑路径必须能取到全文。
+//
+// 返回 ok=false 表示该条已不在队列里（被 worker 认领执行、或被删了）。
+// 注意这里刻意不返回 *queuedTurn：调用方只该拿到一份拷贝，避免在锁外
+// 读写队列内部状态。
+func (q *sessionQueue) findItem(id string) (content string, parts []types.ContentPart, ok bool) {
+	if id == "" {
+		return "", nil, false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, it := range q.items {
+		if it.id != id {
+			continue
+		}
+		// 附件与快照同源（queuedAttachmentsOf 已是轻量引用，不含 base64）。
+		return it.content, queuedAttachmentsOf(it), true
+	}
+	return "", nil, false
+}
+
 // itemExists 判断某条消息是否仍在队列中等待执行（尚未被 worker 认领）。
 func (q *sessionQueue) itemExists(id string) bool {
 	if id == "" {
@@ -340,6 +394,49 @@ func (q *sessionQueue) itemExists(id string) bool {
 	return false
 }
 
+// moveItem 把某条排队消息挪到指定位置（0 起，超界自动夹到末尾）。
+//
+// 队列本身仍是 FIFO 串行执行的，这里改的是"等待中的顺序"。正在执行的回合
+// 不受影响（它已经不在 items 里了），因此拖动排队项永远不会打断当前回答。
+//
+// 返回 (是否存在, 是否真的发生了位移)。第二项用于让 handler 区分
+// "拖到原处"（无需广播，否则多端会因为一次空操作各自重排、列表闪一下）与
+// "确实换了位置"。id 为空或不在队列里时返回 (false, false)。
+func (q *sessionQueue) moveItem(id string, to int) (bool, bool) {
+	if id == "" {
+		return false, false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	from := -1
+	for i, it := range q.items {
+		if it.id == id {
+			from = i
+			break
+		}
+	}
+	if from < 0 {
+		return false, false
+	}
+	if to < 0 {
+		to = 0
+	}
+	if to > len(q.items)-1 {
+		to = len(q.items) - 1
+	}
+	if to == from {
+		return true, false
+	}
+	it := q.items[from]
+	q.items = append(q.items[:from], q.items[from+1:]...)
+	// 摘除之后切片短了一位，插入位置需按插入前的目标下标还原：
+	// 目标在原位置之后时，摘除动作已经让它左移了一格。
+	q.items = append(q.items, nil)
+	copy(q.items[to+1:], q.items[to:])
+	q.items[to] = it
+	return true, true
+}
+
 // ============================================================================
 // Snapshot (/running 与会话加载)
 // ============================================================================
@@ -350,6 +447,61 @@ type queuedTurnInfo struct {
 	Content   string `json:"content"`
 	CreatedAt int64  `json:"created_at"`
 	Position  int    `json:"position"` // 1 起：1 表示下一个执行
+	// Attachments 是这条排队消息携带的附件（图片与文件统一为 file 形态），
+	// 与 content 一样是「预览」：页面刷新后前端手上只剩服务端快照，而
+	// queuedAttachments 是纯内存 Map（刷新即丢）——不带上附件的话，一条
+	// 「图 + 一句话」的排队消息刷新后就只剩文字，点重试会把图弄丢。
+	// 因此这里回传落库版本（persistedParts），它本身就是轻量引用，
+	// 不含 inline base64，序列化开销可以忽略。
+	Attachments []types.ContentPart `json:"attachments,omitempty"`
+}
+
+// queuedAttachmentsOf 从一条排队消息中挑出附件部件。
+//
+// 优先取 persistedParts（落库版本：inline base64 已换成上传引用路径，图片
+// 也已归一成带 name/url/mime 的 file 部件），它正是前端重发时要还原的东西。
+// persistedParts 为空（早期入队路径没算）时退回 contentParts，同样把
+// image_url 部件翻译成 file 形态——前端只需要一种形态。
+func queuedAttachmentsOf(item *queuedTurn) []types.ContentPart {
+	parts := item.persistedParts
+	if len(parts) == 0 {
+		parts = item.contentParts
+	}
+	var out []types.ContentPart
+	for _, p := range parts {
+		switch {
+		case p.Type == "file" && p.File != nil:
+			// Contents 里可能还留着 inline base64（persistedParts 已清空），
+			// 这里同样清掉：快照只用于展示与重发引用，回传 MB 级 base64 会
+			// 让 /running 的响应体无谓地膨胀。
+			out = append(out, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     p.File.Name,
+					MimeType: p.File.MimeType,
+					URL:      p.File.URL,
+				},
+			})
+		case p.Type == "image_url" && p.ImageURL != nil:
+			out = append(out, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     "",
+					MimeType: imageMimeForRef(p.ImageURL.URL, ""),
+					URL:      p.ImageURL.URL,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// uploadRef 是前端重发一条带附件的排队消息（retry）时提交的轻量引用。
+// 与 chatPayload.Files 的元素同构子集，便于后端复用同一条解析路径。
+type uploadRef struct {
+	Name     string `json:"name"`
+	Filename string `json:"filename"`
+	URL      string `json:"url"`
 }
 
 // queueSnapshot 是队列的只读快照。
@@ -365,10 +517,11 @@ func (q *sessionQueue) snapshot() queueSnapshot {
 	snap := queueSnapshot{running: q.running, activeID: q.activeID}
 	for i, it := range q.items {
 		snap.items = append(snap.items, queuedTurnInfo{
-			ID:        it.id,
-			Content:   shortenQueuedContent(it.content),
-			CreatedAt: it.createdAt.Unix(),
-			Position:  i + 1,
+			ID:          it.id,
+			Content:     shortenQueuedContent(it.content),
+			CreatedAt:   it.createdAt.Unix(),
+			Position:    i + 1,
+			Attachments: queuedAttachmentsOf(it),
 		})
 	}
 	return snap
@@ -396,22 +549,44 @@ func shortenQueuedContent(content string) string {
 // Worker loop
 // ============================================================================
 
+// shouldWorkerExit 报告 worker 此刻是否应当退出。调用方须持有 q.mu。
+//
+// 判据只有一条：**队列已排空**。与是否存在 SSE 监听者无关。
+//
+// 这一条曾经写成「队列为空 **且** 无监听者才退出」，并在取件前先判
+// `if len(q.items) == 0 { return }`——两者叠加出的行为是：
+//
+//   - 无监听者 + 队列为空 → 在上面那个 for 条件里根本不 Wait，直接落到
+//     `len(q.items) == 0` 的 return，队列被回收；
+//   - 而"无监听者"在真实使用中极易出现：前端收到 done 时若 state.queued
+//     为空（正在执行的那条已被移出，后续消息还没排进来）就会 close() 掉
+//     SSE 连接。于是"用户停止观看"被误当成"没人需要队列了"。
+//
+// 分开看：有 sink 时 worker 等待新消息是对的（复用连接）；但**没有 sink
+// 绝不意味着没有工作**——排队消息必须照常执行，否则用户点完发送关了页面，
+// 回来会发现消息卡死。因此退出只由 items 决定。
+func shouldWorkerExit(q *sessionQueue) bool {
+	return len(q.items) == 0 && !q.hasSinksLocked()
+}
+
 // runQueue 是该会话唯一的回合执行 goroutine：串行取出队列头部消息执行，
 // 空闲时挂起等待唤醒。
 //
-// 退出条件：队列空且没有 SSE 监听者。此时队列会被回收，workerLive 复位，
-// 下一条消息到达时重新拉起 worker——长时间不活跃的会话因此不会常驻
-// goroutine。注意 workerLive 必须在 mu 之外、且在判定"确实要退出"之后复位，
-// 否则会出现"worker 已决定退出但新消息刚入队"的竞态（消息没人消费）。
+// 退出条件：队列空且没有 SSE 监听者（见 shouldWorkerExit）。此时队列会被
+// 回收，workerLive 复位，下一条消息到达时重新拉起 worker——长时间不活跃的
+// 会话因此不会常驻 goroutine。注意 workerLive 必须在 mu 之外、且在判定
+// "确实要退出"之后复位，否则会出现"worker 已决定退出但新消息刚入队"的
+// 竞态（消息没人消费）。
 func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 	defer s.releaseWorker(sessionID, q)
 
 	for {
 		q.mu.Lock()
+		// 有监听者时挂起等待；没有监听者时不 Wait（直接走到下面的退出判定）。
 		for len(q.items) == 0 && q.hasSinksLocked() {
 			q.cond.Wait()
 		}
-		if len(q.items) == 0 {
+		if shouldWorkerExit(q) {
 			q.mu.Unlock()
 			return
 		}
@@ -440,6 +615,13 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 // releaseWorker 在 worker 退出时复位 workerLive 并回收空闲队列。复位与
 // "是否还有未消费消息"的判定必须在 chatQueuesMu 下完成：若复位后队列里
 // 已有新消息，则立即重新拉起 worker，避免消息永久滞留。
+//
+// "队列里还有消息"这件事必须优先于一切回收动作。历史上这里漏掉了
+// workerLive 复位的原子性：释放在 chatQueuesMu 内、但重新拉起 worker 却在
+// 锁外，于是存在一个窗口——worker A 已复位 workerLive，新消息入队时看到
+// workerLive==false 而拉起 worker B，同时 A（或另一个 defer）又拉起一个
+// worker C，两个 worker 并行消费同一个 agent。现在统一在锁内决策、锁外启动，
+// 且启动前再确认一次 workerLive 已被自己置位。
 func (s *Server) releaseWorker(sessionID string, q *sessionQueue) {
 	s.chatQueuesMu.Lock()
 	if s.chatQueues[sessionID] != q || !q.workerLive {
@@ -455,6 +637,7 @@ func (s *Server) releaseWorker(sessionID string, q *sessionQueue) {
 
 	if pending > 0 {
 		// worker 退出与新消息入队发生竞态：把 worker 交还给新消息。
+		// 队列绝不能在有待执行消息时被回收，因此这里不删 map。
 		q.workerLive = true
 		s.chatQueuesMu.Unlock()
 		safeGo(func() { s.runQueue(sessionID, q) })
@@ -621,12 +804,15 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 		streamErr = s.runAgentStream(ctx, sessionID, item.content, streamHandler)
 	}
 
+	// 先取本回合的取消标记，再落库：这两个顺序不能颠倒——落库过程本身会
+	// 触发记忆沉淀等副作用，期间队列状态可能已经翻页。
+	cancelled := queue.cancelWasRequested()
+
 	// 本轮"变更的文件"（写前快照 + 净 diff，见 fileops.go）在回合真正结束后
 	// 才能取到；先落库再广播 done，保证前端拿到 done 时数据已经一致。
 	finalOps := run.fileOps.Result()
 	s.persistAssistantMessage(sessionID, fullResponse.String(), streamed.String(), finalOps, deliveredAny)
 
-	cancelled := queue.cancelWasRequested()
 	switch {
 	case streamErr != nil && !cancelled:
 		queue.broadcast(turnEvent{err: streamErr})
@@ -635,12 +821,31 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 		// 让排队中的下一条消息能接上（队列已被 cancelAll 清空则不会再有）。
 	}
 
+	// pending 是本回合结束后仍待执行的条数。queue_idle 是给"这条 SSE 连接
+	// 可以收尾了"的显式信号：只有队列真的空了、后面不会再有回合，连接才有
+	// 必要关闭。前端与 forwardTurnEvents 都据此决定退出，避免连接既不能关
+	// （错过后面的回合）也不能留（永久挂着泄漏）。
+	pending := queue.pendingCount()
 	doneData, _ := json.Marshal(map[string]interface{}{
 		"done":     true,
 		"file_ops": finalOps,
 		"turn_id":  item.id,
+		// queue_depth 是"本回合结束后还剩多少条待执行消息"。前端据此决定
+		// 是否保留 SSE 连接：队列非空时必须留着，否则下一条的
+		// stream_started/delta 推不到客户端，用户看到的就是"消息执行完了，
+		// 排队的那条没被发送"。仅靠前端本地 state.queued 判断不够——新消息
+		// 可能在 done 之后才入队，那一刻本地是空的。
+		"queue_depth": pending,
+		"queue_idle":  pending == 0,
 	})
-	queue.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true})
+	queue.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true, queueIdle: pending == 0})
+}
+
+// pendingCount 返回尚未执行的排队消息条数（不含正在执行的这一条）。
+func (q *sessionQueue) pendingCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.items)
 }
 
 // runAgentStream 调用会话对应的 agent。取不到 agent 时返回错误，由调用方

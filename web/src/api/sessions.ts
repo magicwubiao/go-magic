@@ -6,6 +6,9 @@ export interface UploadedFile {
   filename: string
   url: string
   size: number
+  // MIME 类型。上传接口会回传，队列快照恢复的附件也带；渲染层据此判断
+  // 是否渲染缩略图（见 isImageAttachment）。缺省时该函数会退回按扩展名判断。
+  mime?: string
   data?: string  // base64 data URL for reliable message sending
   // 前端附加（仅内存，不序列化、不上传）：上传时的原始 File 对象。
   // 图片走多模态通道时直接用 FileReader 读取，绕开带鉴权的 /api/uploads。
@@ -455,6 +458,9 @@ export class ChatStream {
     // 能在缩略图旁边显示用户认得出的名字，而不是一串 uuid。
     imageNames?: string[]
     files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
+    // 「重新发送」的原排队项 id。带上它 = 这是一次重发：服务端先摘掉原条目
+    // 再入队，避免同内容消息被查重合并成一条（点了重发却毫无变化）。
+    retry_of?: string
   }, attach = false) {
     const token = getAuthToken()
     const headers: Record<string, string> = {
@@ -593,6 +599,7 @@ export async function submitMessage(
   files?: UploadedFile[],
   imageUrls?: string[],
   imageNames?: string[],
+  retryOf?: string,
 ): Promise<{ id: string; queued: boolean; duplicate: boolean }> {
   const slimFiles = files?.map(f => ({ name: f.name, filename: f.filename, url: f.url }))
   return request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -603,6 +610,7 @@ export async function submitMessage(
       imageUrls,
       imageNames,
       files: slimFiles,
+      retry_of: retryOf || undefined,
     }),
   })
 }
@@ -613,6 +621,45 @@ export interface QueuedTurnInfo {
   created_at: number
   /** 1 起，1 表示下一个执行 */
   position: number
+  /**
+   * 这条排队消息携带的附件。服务端回的是落库形态（file 部件，只含
+   * name/mime/url，不含 inline base64），前端把它当作 UploadedFile 的
+   * 子集使用即可。
+   */
+  attachments?: QueuedAttachment[]
+}
+
+/** 排队消息附件的轻量形态（服务端快照回传的形态）。 */
+export interface QueuedAttachment {
+  type: string
+  file?: {
+    name?: string
+    mime_type?: string
+    url?: string
+  }
+}
+
+// queuedAttachmentsFromParts 把服务端回传的 content parts 收敛成前端统一的
+// 附件结构。url 是持久化引用（/api/uploads/...），页面刷新后仍然有效 ——
+// 渲染时由 attachmentSrc 补上认证 token。
+//
+// 刻意回 Partial<UploadedFile> 而不是 UploadedFile：服务端快照里本来就没有
+// id/size（uploads 元数据不在队列里），硬凑两个假字段只会在下游某处被当成
+// 真值使用。渲染层（isImageAttachment / attachmentLabel）接受的正是 Partial。
+export function queuedAttachmentsFromParts(parts?: QueuedAttachment[]): Partial<UploadedFile>[] {
+  if (!parts || !parts.length) return []
+  const out: Partial<UploadedFile>[] = []
+  for (const part of parts) {
+    const f = part?.file
+    if (!f || !f.url) continue
+    out.push({
+      name: f.name || '',
+      filename: f.url,
+      url: f.url,
+      mime: f.mime_type || '',
+    })
+  }
+  return out
 }
 
 export interface SessionRunningState {
@@ -653,6 +700,43 @@ export async function cancelGeneration(sessionId: string): Promise<{ cancelled: 
   return { cancelled: !!res.cancelled, dropped: res.dropped || 0 }
 }
 
+// clearQueuedTurns 清空待发队列，但保留正在执行的回合。
+//
+// 与 cancelGeneration 的区别：这里不取消运行中的回合，用户想撤掉后面排着的
+// 一串、但仍然想看当前这条回答时用它。返回被丢弃的条数。
+export async function clearQueuedTurns(
+  sessionId: string,
+): Promise<{ dropped: number; queueDepth: number }> {
+  const res = await request<{ dropped?: number; queue_depth?: number }>(
+    `/sessions/${encodeURIComponent(sessionId)}/queue/clear`,
+    { method: 'POST' },
+  )
+  return { dropped: res.dropped || 0, queueDepth: res.queue_depth || 0 }
+}
+
+// getQueuedTurnContent 取一条排队消息的完整原文（非预览）。
+//
+// /running 里的 content 是截断到 120 字的预览，只够在排队列表里显示一行。
+// "编辑后重发"要把原文回填进输入框，刷新页面后本地已无原件，必须问服务端。
+// 返回 null 表示该条已不在队列里（已被认领执行或已被删除）。
+export async function getQueuedTurnContent(
+  sessionId: string,
+  turnId: string,
+): Promise<{ content: string; attachments: Partial<UploadedFile>[] } | null> {
+  try {
+    const res = await request<{ content?: string; attachments?: QueuedAttachment[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(turnId)}/content`,
+    )
+    return {
+      content: res.content || '',
+      attachments: queuedAttachmentsFromParts(res.attachments),
+    }
+  } catch {
+    // 404 = 该条已经转入执行（或已删除）：调用方把它当"来不及编辑"处理。
+    return null
+  }
+}
+
 // attachStream 把一条 SSE 连接挂到会话事件总线上，不发送任何新消息。
 // 用于断线恢复（手机切后台被杀连接）或回合进行中打开页面续接实时输出。
 // 连接上没有回合在跑时服务端会立即回 stream_started{started:false} 并保持
@@ -674,6 +758,26 @@ export async function removeQueuedTurn(
     { method: 'DELETE' },
   )
   return { removed: !!res.removed, queueDepth: res.queue_depth || 0 }
+}
+
+// moveQueuedTurn 把一条排队消息拖到队列中的新位置（0 起，0 = 下一个执行）。
+// 只改变等待顺序，正在执行的回合不受影响。服务端会把越界下标夹到有效区间，
+// 因此这里可以直接传拖动落点的下标。
+// moved=false 且 started=true 表示该条已被认领执行，前端应把它撤出排队区。
+export async function moveQueuedTurn(
+  sessionId: string,
+  turnId: string,
+  to: number,
+): Promise<{ moved: boolean; started: boolean; queueDepth: number }> {
+  const res = await request<{ moved?: boolean; started?: boolean; queue_depth?: number }>(
+    `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(turnId)}/position`,
+    { method: 'PUT', body: JSON.stringify({ to }) },
+  )
+  return {
+    moved: !!res.moved,
+    started: !!res.started,
+    queueDepth: res.queue_depth || 0,
+  }
 }
 
 // updateQueuedTurn 修改一条排队消息的内容（编辑后重发）。
@@ -698,7 +802,7 @@ export async function updateQueuedTurn(
   return { updated: !!res.updated, started: !!res.started }
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[], retryOf?: string, attach = false): ChatStream {  // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.
   const slimFiles = files?.map(f => ({
@@ -712,7 +816,10 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     imageUrls,
     imageNames,
     files: slimFiles,
-  })
+    // 重发：告诉服务端先摘掉原排队项，否则两条同内容消息会被查重合并，
+    // 表现为"点了重发但队列没变化"。见 handleSessionStream。
+    retry_of: retryOf || undefined,
+  }, attach)
 }
 
 export interface SessionGoal {

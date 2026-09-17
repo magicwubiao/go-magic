@@ -53,12 +53,34 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 清空待发队列（POST /queue/clear），但**不打断正在执行的回合**。
+	// 必须排在下面带通配 {turnId} 的 /queue/ 分支**之前**：否则 "clear"
+	// 会被当作一个 turnId 收走，请求落到 handleSessionQueueItem 上。
+	if strings.HasSuffix(path, "/queue/clear") {
+		sessionID := strings.TrimSuffix(path, "/queue/clear")
+		s.handleSessionQueueClear(w, r, sessionID)
+		return
+	}
+
 	// 单条排队消息的增删改：/queue/{turnId}（删除、编辑）。
 	// 与 /cancel 的区别是只作用于点名的那一条，不动正在执行的回合。
 	if idx := strings.Index(path, "/queue/"); idx >= 0 {
 		sessionID := path[:idx]
-		turnID := path[idx+len("/queue/"):]
-		s.handleSessionQueueItem(w, r, sessionID, turnID)
+		rest := path[idx+len("/queue/"):]
+		// 拖动排序：PUT /queue/{turnId}/position，body 为 {"to": n}。
+		// 与 PUT /queue/{turnId}（改内容）区分开，避免把两个语义挤进一个
+		// 端点——一个改的是这条消息说什么，一个改的是它排第几个执行。
+		if i := strings.Index(rest, "/position"); i >= 0 {
+			s.handleSessionQueuePosition(w, r, sessionID, rest[:i])
+			return
+		}
+		// 取全文：GET /queue/{turnId}/content。排队列表里的 content 是截断
+		// 到 120 字的预览，编辑回填必须拿到完整原文（见 handleSessionQueueContent）。
+		if i := strings.Index(rest, "/content"); i >= 0 {
+			s.handleSessionQueueContent(w, r, sessionID, rest[:i])
+			return
+		}
+		s.handleSessionQueueItem(w, r, sessionID, rest)
 		return
 	}
 
@@ -407,7 +429,11 @@ type chatPayload struct {
 	// 里，落库时要靠它把「缩略图旁边显示什么名字」记下来；缺省时后端会回查
 	// uploads 元数据兜底（见 uploadDisplayName）。
 	ImageNames []string `json:"imageNames"`
-	Files      []struct {
+	// RetryOf 是「重新发送」的原排队项 id（可空）。带上它表示这是一次重发，
+	// 服务端在入队前先摘掉原条目，避免两条同内容消息被查重逻辑合并成一条
+	// 而让重发看起来毫无效果。见 handleSessionStream 里的处理。
+	RetryOf string `json:"retry_of"`
+	Files   []struct {
 		Name     string `json:"name"`
 		Filename string `json:"filename"`
 		URL      string `json:"url"`
@@ -423,6 +449,8 @@ type parsedChatPayload struct {
 	imageURLRefs       []string
 	imageNames         []string
 	pendingMaterialize []uploadToMaterialize
+	// retryOf 见 chatPayload.RetryOf。
+	retryOf string
 }
 
 // parseChatPayload 解析请求体并构建 content parts。
@@ -437,7 +465,7 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 		return nil, "failed to decode payload: " + err.Error()
 	}
 
-	out := &parsedChatPayload{content: payload.Content}
+	out := &parsedChatPayload{content: payload.Content, retryOf: payload.RetryOf}
 
 	// Parse images from JSON body field. Inline base64 payloads are capped —
 	// they ride in the request body, get embedded into the agent history for
@@ -729,6 +757,21 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	}
 	defer sseW.Close()
 
+	// 重发（retry）：这一条是某条排队消息被用户点「重新发送」后再提交的，
+	// 服务端在入队前先把原条目摘掉。
+	//
+	// 为什么要服务端来摘：前端点重发时原条目在队列里是"活的"，两条内容相同
+	// 的消息会被 enqueueChatTurn 的查重逻辑合并成一条，用户看到的现象是
+	// "点了重发但什么都没发生"。所以必须让服务端原子地完成
+	// 「摘掉旧的 + 放入新的」——放在前端做（先 DELETE 再提交）会留下一个
+	// 窗口：DELETE 成功而提交失败，消息就凭空消失了。
+	retryOf := parsed.retryOf
+	if retryOf != "" {
+		if q := s.lookupSessionQueue(sessionID); q != nil {
+			q.dropItem(retryOf)
+		}
+	}
+
 	aiAgent := s.getOrCreateAgent(sessionID)
 	if aiAgent == nil {
 		writeSSE("data: " + sseErrorPayload(errProviderNotConfigured{}) + "\n\n")
@@ -838,6 +881,13 @@ func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types
 	if dupItem := queue.findDuplicate(content); dupItem != nil {
 		return dupItem, true
 	}
+	// enqueue 内部会 cond.Signal 唤醒正在等待的 worker。
+	//
+	// 这一点是"上一条执行完后排队消息不执行"的另一半修复。worker 用
+	// cond.Wait 挂起时，只有 Signal/Broadcast 能叫醒它——如果入队只是
+	// 往 items 里塞一条就返回，worker 会一直睡到下一次有 sink 变动才醒。
+	// 早期版本在"队列空且无监听者"的情况下 worker 已经提前 return 掉了，
+	// 于是这条消息既没有 worker 认领、也没有任何人会去唤醒，永久滞留。
 	queue.enqueue(item)
 
 	if spawnWorker {
@@ -862,8 +912,22 @@ func (q *sessionQueue) findDuplicate(content string) *queuedTurn {
 	return nil
 }
 
-// forwardTurnEvents 把 sink 上的回合事件转发到这条 SSE 连接，直到回合结束
-// （done/error）或客户端断开。回合结束后仅结束本次请求，不是"停止回合"。
+// forwardTurnEvents 把 sink 上的回合事件转发到这条 SSE 连接，直到客户端断开
+// 或本连接不再需要（见下）。回合结束（done/error）**不再结束本次请求**。
+//
+// 为什么不能在第一个 done 就返回：
+//
+//	本会话的队列是串行多回合的。用户在上一条还在跑时又发了一条，第二条进入
+//	队列等待；第一条结束时广播 done。如果这里见到 done 就 return，handler 的
+//	defer 会立刻 snk.cancel() + closeSink()，sink 从队列上摘掉。紧接着 worker
+//	开始执行第二条——此时队列已经一个监听者都没有，它的 stream_started 与所有
+//	delta 全部落进"无人监听"的兜底路径（只写会话历史，不推给客户端）。用户
+//	看到的现象正是：「消息执行完后，排队的消息没有自动发送」——其实服务端跑了，
+//	只是这条连接已经死了，前端收不到任何事件。
+//
+// 因此这里改为：收到 done 后不返回，而是继续监听，让同一个 sink 承接后续回合。
+// 退出条件交给调用方（客户端断开 / 空闲回收），见 handleSessionStream 里
+// 对 sink 的 defer 清理。
 func (s *Server) forwardTurnEvents(ctx context.Context, writeSSE func(string) bool, snk *turnSink) {
 	for {
 		select {
@@ -877,9 +941,11 @@ func (s *Server) forwardTurnEvents(ctx context.Context, writeSSE func(string) bo
 			if ev.data != "" && !writeSSE(ev.data) {
 				return
 			}
-			if ev.done {
+			if ev.done && ev.queueIdle {
+				// 队列已排空：后面不会再有回合，可以安全收尾。
 				return
 			}
+			// ev.done 但队列非空：留在循环里等下一条的 stream_started。
 		case <-ctx.Done():
 			return
 		}
@@ -1088,6 +1154,83 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request, ses
 	})
 }
 
+// handleSessionQueueClear POST /api/sessions/{id}/queue/clear — 只清空待发队列，
+// 不打断正在执行的回合。
+//
+// 这是介于 /cancel（全停）与 /queue/{turnId} 删除（逐条）之间的第三种语义。
+// 用户想撤掉后面排着的一串、但仍然想看当前这条回答时用它；用 /cancel 会把
+// 正在生成的回答一起杀掉，逐条删又太笨。
+//
+// 实现上只切 q.items，不碰 q.cancel，因此运行中的回合完全无感——它照常把
+// 这一轮跑完并广播 done。被丢弃的条目从未落库（persistUserMessage 是在
+// 回合真正开跑时才写），所以清队列不会在会话历史里留下痕迹。
+func (s *Server) handleSessionQueueClear(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	dropped := 0
+	if q := s.lookupSessionQueue(sessionID); q != nil {
+		dropped = q.clearPending()
+		// 通知其它连接（多标签页 / 手机）同步撤掉排队气泡。
+		snap := q.snapshot()
+		q.broadcast(turnEvent{data: sseQueueChangedPayload(sessionID, snap)})
+	}
+	jsonResponse(w, map[string]interface{}{
+		"session_id":  sessionID,
+		"dropped":     dropped,
+		"queue_depth": 0,
+	})
+}
+
+// handleSessionQueueContent GET /api/sessions/{id}/queue/{turnId}/content —
+// 取一条排队消息的完整原文，供前端"编辑后重发"回填输入框。
+//
+// 为什么需要独立端点：/running 的 queued[].content 是 shortenQueuedContent
+// 截到 120 字的**预览**，那是给排队列表一行显示用的。编辑要的是原文，
+// 拿预览去填等于把用户写的内容悄悄砍掉大半——刷新页面后本地已无原件，
+// 这个问题就必然暴露。
+//
+// 返回 404 表示该条已不在队列里（已被 worker 认领执行或已被删除），
+// 与 PUT 的语义一致：来不及编辑了，前端应提示改用停止。
+func (s *Server) handleSessionQueueContent(w http.ResponseWriter, r *http.Request, sessionID, turnID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if turnID == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		http.Error(w, "queued message not found", http.StatusNotFound)
+		return
+	}
+	content, parts, ok := q.findItem(turnID)
+	if !ok {
+		// 不在队列里：可能已被认领（activeID 匹配）或已删除。
+		snap := q.snapshot()
+		if snap.activeID == turnID {
+			jsonResponse(w, map[string]interface{}{
+				"session_id": sessionID,
+				"id":         turnID,
+				"started":    true,
+				"error":      "turn already started",
+			})
+			return
+		}
+		http.Error(w, "queued message not found", http.StatusNotFound)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"session_id":  sessionID,
+		"id":          turnID,
+		"content":     content,
+		"attachments": parts,
+	})
+}
+
 // handleSessionQueueItem 处理单条排队消息的编辑与删除。
 //
 //	DELETE /api/sessions/{id}/queue/{turnId}  — 丢弃这一条排队消息
@@ -1178,6 +1321,72 @@ func (s *Server) handleSessionQueueItem(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// handleSessionQueuePosition 处理排队消息的拖动排序。
+//
+//	PUT /api/sessions/{id}/queue/{turnId}/position  body: {"to": n}
+//
+// "to" 是队列内的目标下标（0 起，0 表示下一个执行）。越界会被夹到有效
+// 区间内，前端因此不必为"拖过头"处理特例。拖动只改等待中的顺序，正在执行
+// 的回合不受影响——这也是它与 /cancel 的根本区别。
+//
+// 队列本身仍是 FIFO 串行执行，排序只决定"下一条是谁"。为了让其它端
+// （多标签页 / 手机）立刻看到新顺序，成功改动后广播 queue_changed。
+func (s *Server) handleSessionQueuePosition(w http.ResponseWriter, r *http.Request, sessionID, turnID string) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if turnID == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	var body struct {
+		To int `json:"to"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		// 队列已回收（回合结束 / 服务重启）：这条消息不会再执行了。
+		jsonResponse(w, map[string]interface{}{
+			"session_id":  sessionID,
+			"id":          turnID,
+			"moved":       false,
+			"queue_depth": 0,
+		})
+		return
+	}
+
+	exists, moved := q.moveItem(turnID, body.To)
+	snap := q.snapshot()
+	if exists && moved {
+		// 只在实际位移后广播：拖回原位不该让其它端的列表重排闪烁。
+		q.broadcast(turnEvent{data: sseQueueChangedPayload(sessionID, snap)})
+	}
+	if !exists {
+		// 已被 worker 认领开始执行：改不动了，让前端把它从排队区移除
+		// （它已经转入流式渲染），而不是留一条永远拖不动的死行。
+		jsonResponse(w, map[string]interface{}{
+			"session_id":  sessionID,
+			"id":          turnID,
+			"moved":       false,
+			"started":     snap.activeID == turnID,
+			"queue_depth": len(snap.items),
+		})
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"session_id":  sessionID,
+		"id":          turnID,
+		"moved":       moved,
+		"queue_depth": len(snap.items),
+	})
+}
+
 // sseQueueChangedPayload 构造"队列发生变化"的 SSE 载荷，让附着在同一会话
 // 上的其它连接同步刷新排队气泡（删除/编辑后位置与条目都要重排）。
 func sseQueueChangedPayload(sessionID string, snap queueSnapshot) string {
@@ -1236,6 +1445,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 		if parsed == nil {
 			http.Error(w, errMsg, 400)
 			return
+		}
+
+		// 重发：与 /stream 一致的语义——先摘掉原排队项再入队，否则两条同内容
+		// 消息会被 enqueueChatTurn 的查重合并成一条，重发看起来毫无效果。
+		if parsed.retryOf != "" {
+			if q := s.lookupSessionQueue(sessionID); q != nil {
+				q.dropItem(parsed.retryOf)
+			}
 		}
 
 		run := &turnRunCtx{fileOps: NewTurnFileOpTracker()}

@@ -169,11 +169,19 @@ export const useChatStore = defineStore('chat', () => {
   const sessionStates = ref<Record<string, SessionState>>({})
   const sessionEventSources = ref<Record<string, sessionsApi.ChatStream | null>>({})
   const sessionFlushTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
-  // 排队消息的本地附件清单（key = 排队项 id）。仅用于排队气泡上的缩略图
-  // 展示——服务端落库时也会带上附件引用，刷新后由会话消息重建。
-  const queuedAttachments = new Map<string, sessionsApi.UploadedFile[]>()
+  // 排队消息的本地附件清单（key = 排队项 id）。用于排队区上的缩略图展示与
+  // 「重新发送」时还原附件——服务端落库时也会带上附件引用，刷新后由队列
+  // 快照（/running 的 attachments）重建。
+  //
+  // 值的类型刻意放宽到 Partial：从服务端快照恢复出来的附件只有
+  // name/mime/url（uploads 元数据不在队列里），凑不齐 id/size。渲染与重发
+  // 两条路径都只读 name/url/mime，用 Partial 才是诚实表达。
+  const queuedAttachments = new Map<string, Partial<sessionsApi.UploadedFile>[]>()
   // 流断线恢复轮询定时器（移动端切后台杀连接后使用）
   const sessionRecoveryTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
+  // 队列看门狗定时器：done 之后服务端仍有排队消息时，轮询 /running 直到
+  // 下一条被真正认领（或确认排空），见 scheduleQueueWatchdog。
+  const sessionQueueWatchdogs = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
   
   let toolCallIdCounter = 0
 
@@ -707,6 +715,81 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // ========== 队列看门狗（"排队消息没被执行"的兜底） ==========
+  //
+  // 场景：上一条消息的 done 到达时，本地 state.queued 恰好为空（正在执行的
+  // 那条在 stream_started 时已被移出），但服务端队列里其实还有待执行消息。
+  // 此时若把 SSE 连接拆掉，服务端紧接着推的下一条 stream_started 就没人接，
+  // 界面会永远停在"排队中"，用户看到的就是"消息执行完了，排队的那条没发送"。
+  //
+  // done 事件现在带回 queue_depth，服务端有货时我们就不拆连接。但仍有极小
+  // 窗口：worker 已判定退出、消息在 done 之后才入队。看门狗负责这一段的
+  // 自愈 —— 轮询 /running，一旦发现服务端确实还有活（running 或队列非空）
+  // 就重新拉一条流接上；若服务端已经彻底排空则安静收尾。
+  function stopQueueWatchdog(sessionId: string): void {
+    if (sessionQueueWatchdogs.value[sessionId]) {
+      clearTimeout(sessionQueueWatchdogs.value[sessionId]!)
+      sessionQueueWatchdogs.value = { ...sessionQueueWatchdogs.value, [sessionId]: null }
+    }
+  }
+
+  function scheduleQueueWatchdog(sessionId: string): void {
+    if (sessionQueueWatchdogs.value[sessionId]) return
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+
+    let attempts = 0
+    const MAX_ATTEMPTS = 40 // × 1.5s ≈ 60s，与服务端队列空闲回收时长对齐
+
+    const tick = async (): Promise<void> => {
+      sessionQueueWatchdogs.value = { ...sessionQueueWatchdogs.value, [sessionId]: null }
+      const st = sessionStates.value[sessionId]
+      if (!st) return
+      // 已经有人在跑了（新流接上 / 用户又发了消息），交给正常路径。
+      if (sessionEventSources.value[sessionId] || st.streaming) return
+
+      attempts++
+      try {
+        const running = await sessionsApi.getSessionRunning(sessionId)
+        syncQueuedFromServer(sessionId, running.queued, running.active_id)
+
+        if (running.running || running.queue_depth > 0 || st.queued.length > 0) {
+          // 服务端确实还有活：重新挂一条附着流把后续事件接回来。
+          // 传 attach=true，服务端只把连接挂到事件总线上、不提交新消息
+          // （因此 body 里的 content 留空也无妨，服务端会跳过内容校验）。
+          const es = sessionsApi.streamChat(sessionId, '', undefined, undefined, undefined, undefined, undefined, true)
+          attachStreamHandlers(sessionId, es)
+          sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: es }
+          return
+        }
+
+        // 服务端已排空：把库里最新消息拉回来收尾，避免界面停留在旧状态。
+        const res = await sessionsApi.getSession(sessionId)
+        if (res.messages) {
+          sessionStates.value = {
+            ...sessionStates.value,
+            [sessionId]: { ...st, messages: res.messages },
+          }
+        }
+        loadSessions()
+      } catch {
+        // 网络暂不可达：继续重试
+      }
+
+      if (attempts < MAX_ATTEMPTS) {
+        sessionQueueWatchdogs.value = {
+          ...sessionQueueWatchdogs.value,
+          [sessionId]: setTimeout(tick, 1500),
+        }
+      }
+    }
+
+    sessionQueueWatchdogs.value = {
+      ...sessionQueueWatchdogs.value,
+      [sessionId]: setTimeout(tick, 300),
+    }
+  }
+
   // 本地待确认的排队占位：服务端 queued 事件到达前的临时状态，
   // 用 localId 关联，收到 queued 事件后替换成带 turnId 的正式项。
   let localQueuedCounter = 0
@@ -743,6 +826,9 @@ export const useChatStore = defineStore('chat', () => {
         // 本地占位：服务端队列为空且无活跃回合 → 说明提交失败或已执行完
         return !(serverQueued.length === 0 && !activeId)
       }
+      // 正在执行的项（status==='running'）是当前回合的镜像，它在服务端
+      // snapshot 的 items 之外（由 activeId 标识），不应被当作"已不存在"删除。
+      if (q.status === 'running') return true
       if (serverIds.has(q.turnId)) return true
       queuedAttachments.delete(q.turnId)
       return false
@@ -754,6 +840,12 @@ export const useChatStore = defineStore('chat', () => {
       const existing = state.queued.find(q => q.turnId === sq.id)
       if (existing) {
         existing.position = sq.position
+        // 本地没有这条的附件记录时（典型场景：刷新页面后只剩下服务端快照），
+        // 用快照里的附件补上。否则一条"图 + 一句话"的排队消息刷新后只剩
+        // 文字，点重发就会把图弄丢。
+        if (!queuedAttachments.has(sq.id) && sq.attachments?.length) {
+          queuedAttachments.set(sq.id, sessionsApi.queuedAttachmentsFromParts(sq.attachments))
+        }
         continue
       }
       state.queued.push({
@@ -763,6 +855,9 @@ export const useChatStore = defineStore('chat', () => {
         createdAt: sq.created_at * 1000 || Date.now(),
         position: sq.position,
       })
+      if (sq.attachments?.length) {
+        queuedAttachments.set(sq.id, sessionsApi.queuedAttachmentsFromParts(sq.attachments))
+      }
     }
 
     // 3) 按服务端顺序重排，保证"下一条执行的"排在最前
@@ -776,7 +871,9 @@ export const useChatStore = defineStore('chat', () => {
     if (activeId) state.activeTurnId = activeId
   }
 
-  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[]): Promise<void> {
+  // retryOf 可空：非空表示这是一次「重新发送」，值是原排队项 id，服务端会
+  // 在入队前先摘掉它（见 handleSessionStream 里的 retry_of 处理）。
+  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[], retryOf?: string): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
       if (!session) return
@@ -828,11 +925,45 @@ export const useChatStore = defineStore('chat', () => {
 
     try {
       if (sessionEventSources.value[sessionId]) {
-        // 回合进行中：复用现有连接入队。服务端会在这条流上回 queued 事件，
-        // 当前回合的渲染因此不会被打断。
-        await sessionsApi.submitMessage(sessionId, content, images, files, imageUrls, imageNames)
+        // 回合进行中：复用现有连接入队。当前回合的渲染因此不会被打断。
+        // 注意 /messages 是"入队即返回"的 JSON 接口，不会像 /stream 那样在
+        // 这条流上回 queued 事件——因此必须用返回的 id 手动替换本地占位，
+        // 否则 local_* 占位永远变不回真实 turnId，留下"幽灵排队气泡"。
+        const resp = await sessionsApi.submitMessage(sessionId, content, images, files, imageUrls, imageNames, retryOf)
+        if (resp.duplicate) {
+          // 服务端判定与队列中某条重复：本次提交并入已有项，未新插入。
+          // 已有项若是本地排队气泡（弱网重试场景），撤掉刚 push 的占位即可；
+          // 若本地没有对应气泡（另一台设备排的），用返回 id 替换占位对齐。
+          const clash = resp.id ? state.queued.some((q) => q.turnId === resp.id) : false
+          if (clash) {
+            state.queued = state.queued.filter((q) => q.turnId !== localId)
+            queuedAttachments.delete(localId)
+          } else if (resp.id) {
+            const item = state.queued.find((q) => q.turnId === localId)
+            if (item) {
+              item.turnId = resp.id
+              const att = queuedAttachments.get(localId)
+              if (att) {
+                queuedAttachments.delete(localId)
+                queuedAttachments.set(resp.id, att)
+              }
+            }
+          }
+          return
+        }
+        if (resp.id) {
+          const item = state.queued.find((q) => q.turnId === localId)
+          if (item) {
+            item.turnId = resp.id
+            const att = queuedAttachments.get(localId)
+            if (att) {
+              queuedAttachments.delete(localId)
+              queuedAttachments.set(resp.id, att)
+            }
+          }
+        }
       } else {
-        const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls, imageNames)
+        const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls, imageNames, retryOf)
         sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
         attachStreamHandlers(sessionId, eventSource, localId)
       }
@@ -933,6 +1064,8 @@ export const useChatStore = defineStore('chat', () => {
             if (data.started === false) {
               return
             }
+            // 下一条排队消息已经开始执行，看门狗的职责完成。
+            stopQueueWatchdog(sessionId)
             const turnId = String(data.id || '')
             // 本条流对应的排队项转入"执行中"；其余项的排队位置前移。
             const mine = turnId
@@ -1121,22 +1254,24 @@ export const useChatStore = defineStore('chat', () => {
             const errContent = state.streamContent
             const executedSomething = !!errContent || errToolCalls.length > 0
 
-            nextTick(() => {
-              // 后端在无文本输出时会落库 partial（已执行工具摘要），前端刷新后可见；
-              // 这里同步固化当前内存中的内容，保证不刷新也不丢失。
-              if (executedSomething) {
-                let msgContent = errContent || ''
-                if (!msgContent && errToolCalls.length > 0) {
-                  const steps = errToolCalls.map(tc => {
-                    const mark = tc.status === 'error' ? '✗' : '✓'
-                    return `- ${mark} ${tc.name}`
-                  }).join('\n')
-                  msgContent = `⚠️ 对话在此轮执行中途出错（${data.error}），以下为出错前已完成的操作：\n\n${steps}`
-                } else {
-                  msgContent += `\n\n⚠️ 对话在此轮执行中途出错（${data.error}）`
-                }
+            // 与 done 分支同理：这里不能放进 nextTick。下一条排队消息的
+            // stream_started 是同步固化用户消息的，延后 push 会让出错回答
+            // 排到后一条问题之后，对话顺序错乱。
+            if (executedSomething) {
+              let msgContent = errContent || ''
+              if (!msgContent && errToolCalls.length > 0) {
+                const steps = errToolCalls.map(tc => {
+                  const mark = tc.status === 'error' ? '✗' : '✓'
+                  return `- ${mark} ${tc.name}`
+                }).join('\n')
+                msgContent = `⚠️ 对话在此轮执行中途出错（${data.error}），以下为出错前已完成的操作：\n\n${steps}`
+              } else {
+                msgContent += `\n\n⚠️ 对话在此轮执行中途出错（${data.error}）`
+              }
+              const errId = `assistant_err_${Date.now()}`
+              if (!state.messages.some(m => m.id === errId)) {
                 state.messages.push({
-                  id: Date.now().toString(),
+                  id: errId,
                   role: 'assistant' as const,
                   content: msgContent,
                   timestamp: new Date().toISOString(),
@@ -1145,13 +1280,13 @@ export const useChatStore = defineStore('chat', () => {
                   streaming_timeline_snapshot: errTimeline as unknown[],
                 })
               }
-              state.streamContent = ''
-              state.streamBuffer = ''
-              state.toolCalls = []
-              state.streamingSegments = []
-              state.lastStreamSegEnd = 0
-              loadSessions()
-            })
+            }
+            state.streamContent = ''
+            state.streamBuffer = ''
+            state.toolCalls = []
+            state.streamingSegments = []
+            state.lastStreamSegEnd = 0
+            nextTick(() => loadSessions())
 
             error.value = { message: data.error }
             console.error('Stream error:', data.error)
@@ -1180,7 +1315,18 @@ export const useChatStore = defineStore('chat', () => {
             // 先恢复按钮状态，让用户可以立即操作。注意：排队队列非空时
             // 连接必须保留——服务端 worker 会立刻开始执行下一条排队消息并
             // 在同一条流上继续推 stream_started/delta，拆掉连接就看不到它。
-            const hasMoreQueued = state.queued.length > 0
+            //
+            // 判断依据以服务端的 queue_idle 为准（它由 worker 在本回合收尾时
+            // 计算，是唯一权威）：只有它说"队列真的空了"才关连接。
+            //
+            // 为什么不能只看本地 state.queued：正在执行的这一条在
+            // stream_started 时就已经被移出 queued 了，所以"回合跑完 + 后排
+            // 消息还没在当前连接上被认领"的时刻，本地看起来是空的，连接就会
+            // 被误关 —— 结果就是服务端紧接着执行的下一条推不出来，用户看到
+            // "消息执行完了，队列消息没有自动发送"。
+            const serverPending = Number(data.queue_depth ?? data.queued_count ?? 0) || 0
+            const queueIdle = data.queue_idle === undefined ? serverPending === 0 : !!data.queue_idle
+            const hasMoreQueued = !queueIdle || state.queued.length > 0
             state.streaming = false
             state.taskProgress = null
             state.activeTurnId = ''
@@ -1188,9 +1334,24 @@ export const useChatStore = defineStore('chat', () => {
             if (!hasMoreQueued && sessionEventSources.value[sessionId]) {
               sessionEventSources.value[sessionId]!.close()
               sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+            } else if (hasMoreQueued) {
+              // 还有待执行消息：连接会由服务端继续复用推下一条。但为防
+              // 服务端 worker 已回收 / 消息被取消导致永远没动静，挂一个
+              // 看门狗兜底对齐队列快照。
+              scheduleQueueWatchdog(sessionId)
             }
 
-            // 用 nextTick 让按钮切换先渲染，再处理内容 push 和会话刷新
+            // 立即把本回合的回答推进 messages，**不能放进 nextTick**。
+            //
+            // 这里曾经用 nextTick(...) 包着 push，理由是"让按钮切换先渲染"。
+            // 但 nextTick 是延后回调，而下一条排队消息的 stream_started 到达时
+            // promoteQueuedToMessage 是**同步** push 用户消息的。两者一快一慢，
+            // 只要下一条的 stream_started 先于本回合的 nextTick 刷新落地，用户
+            // 消息就会插到本条回答**前面**——表现就是对话顺序错乱：
+            // 问题2 出现在 回答1 之前。
+            //
+            // 顺序正确性优先于渲染时机：push 是纯数据操作，同步执行不会造成
+            // 视觉问题（按钮状态已在上方同步改完）。
             const finalContent = state.streamContent
             pushTextSegmentIfNeeded(sessionId)
             const finalToolCalls = [...state.toolCalls]
@@ -1198,9 +1359,13 @@ export const useChatStore = defineStore('chat', () => {
             // 后端 done 事件携带本轮"变更的文件"（快照 + diff），直接写入消息：
             // 无需等刷新，内存态消息的 file_ops 即为最终列表。
             const finalFileOps = (data.file_ops as unknown as sessionsApi.FileOp[] | undefined) || undefined
-            nextTick(() => {
+            // 用 turn_id 作稳定 id：既便于去重（同一 done 可能重放），也让
+            // 顺序调试有据可查（能直接把消息对回服务端的队列项）。
+            const doneTurnId = String(data.turn_id || '')
+            const assistantId = doneTurnId ? `assistant_${doneTurnId}` : `assistant_${Date.now()}`
+            if (!state.messages.some(m => m.id === assistantId)) {
               state.messages.push({
-                id: Date.now().toString(),
+                id: assistantId,
                 role: 'assistant' as const,
                 content: finalContent,
                 timestamp: new Date().toISOString(),
@@ -1209,14 +1374,14 @@ export const useChatStore = defineStore('chat', () => {
                 tool_calls_snapshot: finalToolCalls as unknown[],
                 streaming_timeline_snapshot: finalTimeline as unknown[],
               })
-              // 清空流式残留，为下一条排队消息腾出干净的渲染状态
-              state.streamContent = ''
-              state.streamBuffer = ''
-              state.toolCalls = []
-              state.streamingSegments = []
-              state.lastStreamSegEnd = 0
-              loadSessions()
-            })
+            }
+            // 清空流式残留，为下一条排队消息腾出干净的渲染状态
+            state.streamContent = ''
+            state.streamBuffer = ''
+            state.toolCalls = []
+            state.streamingSegments = []
+            state.lastStreamSegEnd = 0
+            nextTick(() => loadSessions())
           }
         } catch (e) {
           console.error('Failed to parse stream event:', e)
@@ -1312,21 +1477,70 @@ export const useChatStore = defineStore('chat', () => {
     return true
   }
 
+  // clearQueuedMessages 清空待发队列，但**保留正在执行的回合**。
+  //
+  // 与 stopGeneration（取消当前回合 + 清空队列）刻意区分：用户可能只是想把
+  // 后面排着的一串撤掉，还想看完当前这条回答。服务端对应端点 /queue/clear
+  // 只切 items、不碰运行中回合的 ctx，因此这里也绝不能关闭 SSE 连接——
+  // 关了就等于把当前回合的实时输出丢掉。
+  //
+  // 注意：该能力的 UI 入口**目前刻意不暴露**（用户 2026-09-17 要求先从界面上
+  // 撤下）。此处与后端 /queue/clear 都保留完好，需要恢复时在 ChatView 的排队
+  // dock 底部加回一个按钮、调用本函数即可，不必重写服务端语义。
+  async function clearQueuedMessages(sessionId: string): Promise<number> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return 0
+
+    for (const q of state.queued) {
+      queuedAttachments.delete(q.turnId)
+    }
+    state.queued = []
+
+    try {
+      const res = await sessionsApi.clearQueuedTurns(sessionId)
+      return res.dropped
+    } catch {
+      // 网络失败：本地已清空，服务端队列会在下次 /running 对账时收敛。
+      // 不把本地恢复成清空前——那会让用户以为"点了没反应"，反而更困惑。
+      return 0
+    }
+  }
+
   // editQueuedMessage 把一条排队消息的内容从队列撤下并返回，供输入框回填。
   //
   // 语义是"改完再发"：撤下这一条（服务端 + 本地），把内容交给调用方填进
   // 输入框，用户改完点发送就是一条全新的排队消息。若服务端已开始执行
-  // （started=true），撤回失败并返回 null，调用方应提示用户改用停止。
-  async function editQueuedMessage(sessionId: string, turnId: string): Promise<{ content: string; attachments: sessionsApi.UploadedFile[] } | null> {
+  // （removed=false），撤回失败并返回 null，调用方应提示用户改用停止。
+  //
+  // 内容来源分两种，必须区分：
+  //   - 本地还在（本次会话内发的）→ 直接用 state.queued 里的 content，
+  //     但**它本身也只是预览**，长消息同样被截断过；
+  //   - 刷新页面后恢复的 → 本地只有服务端快照，content 同样是 120 字预览。
+  //
+  // 所以只要不是 local_ 占位，就一律再向服务端要一次全文（/content）。
+  // 这个额外往返换来的是"编辑不会被悄悄截断"，值得；失败则退回预览，
+  // 至少不比原来更差。
+  async function editQueuedMessage(sessionId: string, turnId: string): Promise<{ content: string; attachments: Partial<sessionsApi.UploadedFile>[] } | null> {
     const state = sessionStates.value[sessionId]
     if (!state) return null
     const item = state.queued.find(q => q.turnId === turnId)
     if (!item) return null
 
-    const content = item.content
-    const attachments = queuedAttachments.get(turnId) || []
+    let content = item.content
+    let attachments = queuedAttachments.get(turnId) || []
 
+    // local_ 占位还没拿到服务端 id，服务端那边没有这条，无需（也无法）查全文。
     if (!turnId.startsWith('local_')) {
+      try {
+        const full = await sessionsApi.getQueuedTurnContent(sessionId, turnId)
+        if (full) {
+          if (full.content) content = full.content
+          if (full.attachments.length) attachments = full.attachments
+        }
+      } catch {
+        // 取全文失败：退回预览，不阻塞编辑。
+      }
+
       try {
         const res = await sessionsApi.removeQueuedTurn(sessionId, turnId)
         if (!res.removed) {
@@ -1343,6 +1557,86 @@ export const useChatStore = defineStore('chat', () => {
     state.queued = state.queued.filter(q => q.turnId !== turnId)
     queuedAttachments.delete(turnId)
     return { content, attachments }
+  }
+
+  // retryQueuedMessage 重发一条排队消息：把它从队列里原样再提交一次。
+  //
+  // 与"编辑后重发"的区别是内容与附件都不动，用户只是想让这一条**重新排到
+  // 队尾**（比如发现前面那条还没跑完、想先做别的），或者不想要它被别的消息
+  // 插在前面。语义上等价于「删掉这条 + 把一模一样的内容再发一次」。
+  //
+  // 实现上刻意不写成"先删再 sendMessage"：那样会留下一个失败窗口——删除
+  // 成功了但重新提交失败，消息就凭空消失了。这里改为把原 id 作为 retry_of
+  // 带上去，由服务端在入队前原子地摘掉旧条目（见 handleSessionStream），
+  // 失败了也只是"没重发"，原消息仍在队列里等待。
+  //
+  // 返回 false 表示这一条已经不在队列里了（已被 worker 认领开始执行）。
+  async function retryQueuedMessage(sessionId: string, turnId: string): Promise<boolean> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return false
+    const item = state.queued.find(q => q.turnId === turnId)
+    if (!item) return false
+
+    const content = item.content
+    const attachments = queuedAttachments.get(turnId) || []
+
+    // 本地占位还没拿到服务端 id：服务端那边没有"旧条目"可摘，直接撤掉本地
+    // 占位再重新提交一次即可（此时也还没有真实的排队项，不存在查重问题）。
+    const isLocal = turnId.startsWith('local_')
+    if (isLocal) {
+      state.queued = state.queued.filter(q => q.turnId !== turnId)
+      queuedAttachments.delete(turnId)
+      await sendMessage(content, undefined, undefined, undefined, undefined, undefined)
+      return true
+    }
+
+    // 先把这条从本地排队区摘掉：重发成功后它会以新 id 重新出现在队尾，
+    // 留着旧 id 会短暂出现两条一模一样的气泡。
+    state.queued = state.queued.filter(q => q.turnId !== turnId)
+    queuedAttachments.delete(turnId)
+
+    await sendMessage(
+      content,
+      undefined,
+      attachments.length ? (attachments as sessionsApi.UploadedFile[]) : undefined,
+      undefined,
+      undefined,
+      attachments.length ? (attachments as sessionsApi.UploadedFile[]) : undefined,
+      turnId,
+    )
+    return true
+  }
+
+  // moveQueuedMessage 拖动排序：把一条排队消息挪到队列中的新下标（0 起）。
+  //
+  // 采用"先本地落位、失败再对账"的策略而不是等服务端回包：拖动是高频交互，
+  // 等一次往返再动会明显迟滞（手感上像拽不动）。服务端成功后也会广播
+  // queue_changed，本地顺序会被它校正，因此乐观更新不会留下长期偏差。
+  async function moveQueuedMessage(sessionId: string, turnId: string, to: number): Promise<void> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+
+    const from = state.queued.findIndex(q => q.turnId === turnId)
+    if (from < 0 || from === to) return
+
+    const next = [...state.queued]
+    const [moved] = next.splice(from, 1)
+    const clamped = Math.max(0, Math.min(to, next.length))
+    next.splice(clamped, 0, moved)
+    state.queued = next
+
+    if (turnId.startsWith('local_')) return
+
+    try {
+      const res = await sessionsApi.moveQueuedTurn(sessionId, turnId, to)
+      if (!res.moved && res.started) {
+        // 拖动期间这一条已经被 worker 认领：撤出排队区（已转流式渲染）。
+        state.queued = state.queued.filter(q => q.turnId !== turnId)
+        queuedAttachments.delete(turnId)
+      }
+    } catch {
+      // 网络失败：保留本地顺序，等下一次 queue_changed / /running 对账校正。
+    }
   }
 
   function stopGeneration(): void {
@@ -1620,6 +1914,7 @@ export const useChatStore = defineStore('chat', () => {
         clearTimeout(sessionFlushTimers.value[sessionId]!)
       }
       stopStreamRecovery(sessionId)
+      stopQueueWatchdog(sessionId)
       if (sessionEventSources.value[sessionId]) {
         sessionEventSources.value[sessionId]!.close()
       }
@@ -1627,6 +1922,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionStates.value = {}
     sessionEventSources.value = {}
     sessionFlushTimers.value = {}
+    sessionQueueWatchdogs.value = {}
     sessionRecoveryTimers.value = {}
   }
 
@@ -1666,7 +1962,10 @@ export const useChatStore = defineStore('chat', () => {
     isSessionRunning,
     sendMessage,
     removeQueuedMessage,
+    clearQueuedMessages,
     editQueuedMessage,
+    retryQueuedMessage,
+    moveQueuedMessage,
     stopGeneration,
     cleanup,
     isCommand,

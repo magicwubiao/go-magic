@@ -9,7 +9,11 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
+
+// subTaskResultMaxRunes 是汇总进父任务的单个子任务结果上限（rune 计）。
+const subTaskResultMaxRunes = 2000
 
 // SubTaskNode represents a node in the task dependency graph
 type SubTaskNode struct {
@@ -238,15 +242,11 @@ func (rs *ResultSynthesizer) SynthesizeResults(ctx context.Context, goal string,
 	i := 1
 	for taskID, result := range results {
 		resultsBuilder.WriteString(fmt.Sprintf("\n--- Sub-task %d: %s ---\n", i, taskID))
-		if len(result) > 2000 {
-			// NOTE: avoid square brackets — this text reaches the LLM and
-			// GLM mimics bracketed markers as a structural template.
-			// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
-			r := []rune(result)
-			resultsBuilder.WriteString(string(r[:2000]) + "\n... (truncated)")
-		} else {
-			resultsBuilder.WriteString(result)
-		}
+		// NOTE: avoid square brackets — this text reaches the LLM and
+		// GLM mimics bracketed markers as a structural template.
+		// 按 rune 截断：中文一个字符占 3 字节，若按字节判断、按 rune 切片，
+		// 两个单位不一致会直接越界 panic。
+		resultsBuilder.WriteString(utils.Truncate(result, subTaskResultMaxRunes))
 		resultsBuilder.WriteString("\n")
 		i++
 	}

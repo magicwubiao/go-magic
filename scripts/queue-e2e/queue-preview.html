@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Queue dock preview</title>
+<style>
+  :root {
+    --body-color: #fff;
+    --border-color: #f0f0f0;
+    --text-color: #1f2937;
+    --text-color-2: #666;
+    --text-color-3: #8b8b8b;
+  }
+  body {
+    margin: 0;
+    background: #f7f8fa;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .frame {
+    max-width: 980px;
+    margin: 40px auto;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.06);
+    overflow: hidden;
+  }
+  .fake-msg { padding: 24px 24px 8px; color: #6b7280; font-size: 13px; }
+
+  /* ===== 以下为 ChatView.vue 中的 .queue-* 样式，原样拷贝以做像素级对照 ===== */
+  .queue-dock {
+    padding: 4px 16px 0;
+    background: var(--body-color, #fff);
+    border-top: 1px solid var(--border-color, #efefef);
+  }
+  .queue-dock-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    max-height: 168px;
+    overflow-y: auto;
+  }
+  .queue-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border-color, #f0f0f0);
+  }
+  .queue-row:last-child { border-bottom: none; }
+  .queue-row-dragging { opacity: 0.45; }
+  .queue-handle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: grab;
+    color: var(--text-color-3, #c0c4cc);
+    transition: color 0.15s;
+  }
+  .queue-handle:hover { color: var(--text-color-2, #888); }
+  .queue-handle:active { cursor: grabbing; }
+  .queue-handle-dots {
+    width: 8px;
+    height: 12px;
+    background-image: radial-gradient(circle, currentColor 1.1px, transparent 1.2px);
+    background-size: 4px 4px;
+    background-position: 1px 1px;
+    background-repeat: repeat;
+  }
+  .queue-row-main { flex: 1 1 auto; min-width: 0; }
+  .queue-row-text {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--text-color, #1f2937);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .queue-row-files { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+  .queue-row-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 7px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-color-2, #666);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queue-row-actions {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .queue-row-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-color-3, #8b8b8b);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .queue-row-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text-color, #333); }
+  .queue-row-btn.queue-row-btn-danger:hover { background: rgba(208, 48, 80, 0.1); color: #d03050; }
+  .queue-row-btn svg { width: 15px; height: 15px; }
+  /* ===== 对照样式结束 ===== */
+
+  .input-area {
+    padding: 12px 16px 20px;
+    border-top: 1px solid var(--border-color);
+  }
+  .input-box {
+    max-width: 900px;
+    margin: 0 auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: #9ca3af;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="fake-msg">（上方为消息滚动区，省略）</div>
+
+  <div class="queue-dock">
+    <div class="queue-dock-inner">
+      <div class="queue-row">
+        <button type="button" class="queue-handle" draggable="true" title="拖动可调整执行顺序">
+          <span class="queue-handle-dots" aria-hidden="true"></span>
+        </button>
+        <div class="queue-row-main">
+          <div class="queue-row-text">hello</div>
+        </div>
+        <div class="queue-row-actions">
+          <button type="button" class="queue-row-btn" title="重新发送（排到队尾）">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M432 144H112l48-48-34-34L32 156l94 94 34-34-48-48h320v96h48V96a48 48 0 0 0-48-48z"/><path d="M80 368h320l-48 48 34 34 94-94-94-94-34 34 48 48H80v-96H32v144a48 48 0 0 0 48 48z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn" title="编辑后重发">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M290 5.7a24 24 0 0 0-16.6 7L240 46 180 106 406 332l60-60 33.3-33.4c9.4-9.4 9.4-24.6 0-34L316 13.6a24 24 0 0 0-26-7.9zM156 130 42 244c-6 6-10 14-11 23l-15 106c-1 9 2 18 9 25s16 10 25 9l106-15c9-1 17-5 23-11l114-114L156 130z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn queue-row-btn-danger" title="删除这条排队消息">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M296 64h-80a24 24 0 0 0-24 24v24h128V88a24 24 0 0 0-24-24zM432 120H80v48h32v256a40 40 0 0 0 40 40h208a40 40 0 0 0 40-40V168h32v-48zM192 200h40v208h-40V200zm88 0h40v208h-40V200z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="queue-row">
+        <button type="button" class="queue-handle" draggable="true" title="拖动可调整执行顺序">
+          <span class="queue-handle-dots" aria-hidden="true"></span>
+        </button>
+        <div class="queue-row-main">
+          <div class="queue-row-text">你好</div>
+        </div>
+        <div class="queue-row-actions">
+          <button type="button" class="queue-row-btn" title="重新发送（排到队尾）">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M432 144H112l48-48-34-34L32 156l94 94 34-34-48-48h320v96h48V96a48 48 0 0 0-48-48z"/><path d="M80 368h320l-48 48 34 34 94-94-94-94-34 34 48 48H80v-96H32v144a48 48 0 0 0 48 48z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn" title="编辑后重发">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M290 5.7a24 24 0 0 0-16.6 7L240 46 180 106 406 332l60-60 33.3-33.4c9.4-9.4 9.4-24.6 0-34L316 13.6a24 24 0 0 0-26-7.9zM156 130 42 244c-6 6-10 14-11 23l-15 106c-1 9 2 18 9 25s16 10 25 9l106-15c9-1 17-5 23-11l114-114L156 130z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn queue-row-btn-danger" title="删除这条排队消息">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M296 64h-80a24 24 0 0 0-24 24v24h128V88a24 24 0 0 0-24-24zM432 120H80v48h32v256a40 40 0 0 0 40 40h208a40 40 0 0 0 40-40V168h32v-48zM192 200h40v208h-40V200zm88 0h40v208h-40V200z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="queue-row">
+        <button type="button" class="queue-handle" draggable="true" title="拖动可调整执行顺序">
+          <span class="queue-handle-dots" aria-hidden="true"></span>
+        </button>
+        <div class="queue-row-main">
+          <div class="queue-row-text">hi</div>
+          <div class="queue-row-files">
+            <span class="queue-row-file">
+              <svg viewBox="0 0 512 512" width="11" height="11" fill="currentColor"><path d="M428 224H288V96a32 32 0 0 0-64 0v128H84a32 32 0 0 0 0 64h140v128a32 32 0 0 0 64 0V288h140a32 32 0 0 0 0-64z"/></svg>
+              screenshot.png
+            </span>
+          </div>
+        </div>
+        <div class="queue-row-actions">
+          <button type="button" class="queue-row-btn" title="重新发送（排到队尾）">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M432 144H112l48-48-34-34L32 156l94 94 34-34-48-48h320v96h48V96a48 48 0 0 0-48-48z"/><path d="M80 368h320l-48 48 34 34 94-94-94-94-34 34 48 48H80v-96H32v144a48 48 0 0 0 48 48z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn" title="编辑后重发">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M290 5.7a24 24 0 0 0-16.6 7L240 46 180 106 406 332l60-60 33.3-33.4c9.4-9.4 9.4-24.6 0-34L316 13.6a24 24 0 0 0-26-7.9zM156 130 42 244c-6 6-10 14-11 23l-15 106c-1 9 2 18 9 25s16 10 25 9l106-15c9-1 17-5 23-11l114-114L156 130z"/></svg>
+          </button>
+          <button type="button" class="queue-row-btn queue-row-btn-danger" title="删除这条排队消息">
+            <svg viewBox="0 0 512 512" fill="currentColor"><path d="M296 64h-80a24 24 0 0 0-24 24v24h128V88a24 24 0 0 0-24-24zM432 120H80v48h32v256a40 40 0 0 0 40 40h208a40 40 0 0 0 40-40V168h32v-48zM192 200h40v208h-40V200zm88 0h40v208h-40V200z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-box">输入消息…</div>
+  </div>
+</div>
+</body>
+</html>

@@ -13,7 +13,12 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
+
+// extractContentMaxRunes 是送进抽取提示词的单条消息字符上限（rune 计）。
+// 按字符而非字节计，避免中英文混排时截断长度相差 3 倍。
+const extractContentMaxRunes = 1000
 
 // MemoryExtractor handles semantic extraction of memories from conversations
 type MemoryExtractor struct {
@@ -74,12 +79,10 @@ func (me *MemoryExtractor) ExtractMemories(ctx context.Context, messages []provi
 
 	var contextBuilder strings.Builder
 	for _, msg := range messages {
-		content := msg.Content
-		if len(content) > 1000 {
-			// rune 安全截断：字节截断会把中文切成乱码（U+FFFD）
-			r := []rune(content)
-			content = string(r[:1000]) + "... (truncated)"
-		}
+		// 每个消息截断到 1000 个字符（rune）。必须用 rune 计数：中文一个
+		// 字符占 3 字节，若按字节判断、按 rune 切片，两个单位不一致会直接
+		// 越界 panic（`[:1000] with capacity 768`）。
+		content := utils.Truncate(msg.Content, extractContentMaxRunes)
 		// NOTE: do NOT wrap role with square brackets like "[user]: ...".
 		// GLM mimics this format and starts wrapping every reply in [].
 		// Use "Role: content" (no brackets).
