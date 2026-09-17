@@ -1754,14 +1754,28 @@ function openWorkDirInExplorer(path?: string) {
   const hostname = window.location.hostname
   const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
   if (!isLocal) {
+    // 远程访问：服务端目录打不开，路径复制到剪贴板就行 —— 不必再回显一遍完整路径，
+    // 那条 Chat_<时间>-<短ID> 的路径很长，气泡会被撑成两行。
     navigator.clipboard?.writeText(target).then(
-      () => message.info(t('chat.workDirOpenRemote', { path: target })),
-      () => message.info(t('chat.workDirOpenRemote', { path: target }))
+      () => message.info(t('chat.workDirOpenRemote')),
+      () => message.info(t('chat.workDirOpenRemote'))
     )
     return
   }
   sessionsApi.openFolderInExplorer(target).catch((e: any) => {
-    message.error(e?.message || t('common.operationFailed'))
+    // 后端失败时回的是 `HTTP 501: no file manager available on server (xdg-open not found); /path/…`
+    // 这类英文长串 —— 状态码和路径都别往气泡上晾。按 HTTP 状态压成一句短提示，
+    // 无状态码（网络层报错）才退回原始 message。
+    const status = /^HTTP (\d{3})/.exec(String(e?.message || ''))?.[1]
+    if (status === '501') {
+      message.error(t('chat.workDirNoDesktop'))
+      return
+    }
+    if (status === '404') {
+      message.error(t('chat.workDirNotFound'))
+      return
+    }
+    message.error(status ? t('chat.workDirOpenFailed') : e?.message || t('chat.workDirOpenFailed'))
   })
 }
 
