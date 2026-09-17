@@ -327,6 +327,26 @@
                     {{ t('chat.queuedBadge', { position: qi + 1 }) }}
                   </span>
                   <span class="queued-hint">{{ t('chat.queuedHint') }}</span>
+                  <!-- 排队项操作：编辑＝撤下并回填输入框；删除＝丢弃这一条。
+                       触屏没有 hover，因此按钮常驻（不做悬停才显示）。 -->
+                  <span class="queued-actions">
+                    <button
+                      type="button"
+                      class="queued-action-btn"
+                      :title="t('chat.queuedEdit')"
+                      @click="editQueued(q.turnId)"
+                    >
+                      <n-icon size="13"><PencilOutline /></n-icon>
+                    </button>
+                    <button
+                      type="button"
+                      class="queued-action-btn queued-action-danger"
+                      :title="t('chat.queuedDelete')"
+                      @click="removeQueued(q.turnId)"
+                    >
+                      <n-icon size="13"><TrashOutline /></n-icon>
+                    </button>
+                  </span>
                 </div>
                 <div class="queued-content">{{ q.content }}</div>
                 <div v-if="queuedFilesFor(q.turnId).length" class="queued-files">
@@ -449,9 +469,24 @@
                 @update:show="onModelMenuShow"
                 @update:value="handleModelChange"
               />
-              <!-- 发送按钮始终可用：回合进行中发送的消息会进入队列排队执行，
-                   不再像以前那样被禁用（用户无法追问、只能等）。 -->
+              <!-- 同一槽位二选一：执行中（含排队）显示停止键，空闲时显示发送键。
+                   不再并排两个圆按钮（此前 sending + stop 同时出现，视觉上是
+                   "两个发送键"，用户无从分辨）。 -->
               <n-button
+                v-if="chatStore.busy"
+                type="warning"
+                size="small"
+                circle
+                @click="stopGeneration"
+                :title="t('chat.queuedStopAll')"
+                class="send-circle-btn"
+              >
+                <template #icon>
+                  <n-icon><StopCircleOutline /></n-icon>
+                </template>
+              </n-button>
+              <n-button
+                v-else
                 type="primary"
                 size="small"
                 circle
@@ -461,18 +496,6 @@
               >
                 <template #icon>
                   <n-icon><SendOutline /></n-icon>
-                </template>
-              </n-button>
-              <n-button
-                v-if="chatStore.busy"
-                type="warning"
-                size="small"
-                circle
-                @click="stopGeneration"
-                class="send-circle-btn"
-              >
-                <template #icon>
-                  <n-icon><StopCircleOutline /></n-icon>
                 </template>
               </n-button>
             </div>
@@ -1042,6 +1065,33 @@ function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
 // 用于在排队气泡上展示"这条消息带了哪些文件"。
 function queuedFilesFor(turnId: string): sessionsApi.UploadedFile[] {
   return chatStore.queuedAttachments.get(turnId) || []
+}
+
+// 删除一条排队消息。只动这一条，正在执行的回合继续跑（那是停止键的职责）。
+async function removeQueued(turnId: string) {
+  const sessionId = chatStore.activeSessionId
+  if (!sessionId) return
+  await chatStore.removeQueuedMessage(sessionId, turnId)
+}
+
+// 编辑一条排队消息：把它从队列撤下，内容与附件回填到输入框，用户改完再发。
+// 若该条已经开始执行则撤不下来（服务端返回 null），此时提示改用停止。
+async function editQueued(turnId: string) {
+  const sessionId = chatStore.activeSessionId
+  if (!sessionId) return
+  const picked = await chatStore.editQueuedMessage(sessionId, turnId)
+  if (!picked) {
+    message.warning(t('chat.queuedEditTooLate'))
+    return
+  }
+  inputValue.value = picked.content
+  if (picked.attachments.length) {
+    selectedFiles.value = [...picked.attachments]
+  }
+  nextTick(() => {
+    const el = document.querySelector<HTMLTextAreaElement>('.chat-input textarea')
+    el?.focus()
+  })
 }
 
 function changedFiles(msg?: sessionsApi.Message): { action: string; path: string; diff?: string }[] {
@@ -2840,6 +2890,40 @@ onMounted(async () => {
 .queued-hint {
   font-size: 11px;
   color: var(--text-color-3, #999);
+}
+
+/* 排队项操作按钮：常驻显示（触屏无 hover，若只在悬停时出现则永远点不到）。
+   用 margin-left:auto 推到行尾，与左侧的序号徽标/提示语拉开距离。 */
+.queued-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.queued-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-color-3, #999);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.queued-action-btn:hover {
+  background: rgba(24, 160, 88, 0.14);
+  color: #18a058;
+}
+
+.queued-action-btn.queued-action-danger:hover {
+  background: rgba(208, 48, 80, 0.14);
+  color: #d03050;
 }
 
 .queued-content {

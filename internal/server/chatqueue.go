@@ -280,6 +280,66 @@ func (q *sessionQueue) cancelAll() cancelSignal {
 	return cancelSignal{active: cancel != nil, pending: pending}
 }
 
+// dropItem 从队列中移除指定的一条尚未执行的排队消息。
+//
+// 与 cancelAll 的区别：cancelAll 是"停止这一切"（连正在跑的回合一起杀），
+// dropItem 只针对用户明确点名的那一条，正在执行的回合与其它排队消息都不受影响。
+//
+// 返回 false 表示该 id 不在队列里（已被 worker 认领开始执行、或是别人刚删过）。
+// 这个区分很重要：若该条已经开始执行，前端不能把它当作"删掉了"处理。
+func (q *sessionQueue) dropItem(id string) bool {
+	if id == "" {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.items {
+		if it.id != id {
+			continue
+		}
+		q.items = append(q.items[:i], q.items[i+1:]...)
+		return true
+	}
+	return false
+}
+
+// updateItem 就地替换一条尚未执行的排队消息的内容。
+//
+// 保留原 id 与 created_at，因此前端不需要重新对账——排队气泡的 id 不变，
+// 只换内容，视觉上就是"这条改了"。返回 false 表示该 id 已不在队列里。
+func (q *sessionQueue) updateItem(id string, content string, contentParts, persistedParts []types.ContentPart) bool {
+	if id == "" {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, it := range q.items {
+		if it.id != id {
+			continue
+		}
+		it.content = content
+		it.contentParts = contentParts
+		it.persistedParts = persistedParts
+		return true
+	}
+	return false
+}
+
+// itemExists 判断某条消息是否仍在队列中等待执行（尚未被 worker 认领）。
+func (q *sessionQueue) itemExists(id string) bool {
+	if id == "" {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, it := range q.items {
+		if it.id == id {
+			return true
+		}
+	}
+	return false
+}
+
 // ============================================================================
 // Snapshot (/running 与会话加载)
 // ============================================================================

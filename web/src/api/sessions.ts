@@ -661,6 +661,43 @@ export function attachStream(sessionId: string): ChatStream {
   return new ChatStream(sessionId, { content: '' }, true)
 }
 
+// removeQueuedTurn 丢弃一条尚未执行的排队消息。
+// 与 cancelGeneration 的区别：只作用于点名的那一条，正在执行的回合与其它
+// 排队消息都不受影响。removed=false 说明该条已被 worker 认领开始执行
+// （来不及删了），前端据此提示用户改用停止。
+export async function removeQueuedTurn(
+  sessionId: string,
+  turnId: string,
+): Promise<{ removed: boolean; queueDepth: number }> {
+  const res = await request<{ removed?: boolean; queue_depth?: number }>(
+    `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(turnId)}`,
+    { method: 'DELETE' },
+  )
+  return { removed: !!res.removed, queueDepth: res.queue_depth || 0 }
+}
+
+// updateQueuedTurn 修改一条排队消息的内容（编辑后重发）。
+// started=true 表示该条已经被认领执行，服务端拒绝修改。
+export async function updateQueuedTurn(
+  sessionId: string,
+  turnId: string,
+  content: string,
+  images?: string[],
+  files?: UploadedFile[],
+  imageUrls?: string[],
+  imageNames?: string[],
+): Promise<{ updated: boolean; started: boolean }> {
+  const slimFiles = files?.map(f => ({ name: f.name, filename: f.filename, url: f.url }))
+  const res = await request<{ updated?: boolean; started?: boolean }>(
+    `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(turnId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ content, images, imageUrls, imageNames, files: slimFiles }),
+    },
+  )
+  return { updated: !!res.updated, started: !!res.started }
+}
+
 export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.

@@ -53,6 +53,15 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 单条排队消息的增删改：/queue/{turnId}（删除、编辑）。
+	// 与 /cancel 的区别是只作用于点名的那一条，不动正在执行的回合。
+	if idx := strings.Index(path, "/queue/"); idx >= 0 {
+		sessionID := path[:idx]
+		turnID := path[idx+len("/queue/"):]
+		s.handleSessionQueueItem(w, r, sessionID, turnID)
+		return
+	}
+
 	// Check for reset endpoint
 	if strings.HasSuffix(path, "/reset") {
 		sessionID := strings.TrimSuffix(path, "/reset")
@@ -1077,6 +1086,113 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request, ses
 		"dropped":     res.pending,
 		"queue_depth": 0,
 	})
+}
+
+// handleSessionQueueItem 处理单条排队消息的编辑与删除。
+//
+//	DELETE /api/sessions/{id}/queue/{turnId}  — 丢弃这一条排队消息
+//	PUT    /api/sessions/{id}/queue/{turnId}  — 修改这一条的内容（重发前先撤下）
+//
+// 只影响点名的那一条：正在执行的回合与其它排队消息都不动。若该条已经被
+// worker 认领开始执行（不在 items 里了），返回 409 让前端知道"来不及改了"，
+// 而不是假装删成功——前端据此可以提示用户改用停止。
+func (s *Server) handleSessionQueueItem(w http.ResponseWriter, r *http.Request, sessionID, turnID string) {
+	if turnID == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		// 队列不存在（回合早已结束 / 服务重启）→ 这条消息已经不可能执行了。
+		jsonResponse(w, map[string]interface{}{
+			"session_id":  sessionID,
+			"id":          turnID,
+			"removed":     false,
+			"running":     false,
+			"queue_depth": 0,
+		})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		removed := q.dropItem(turnID)
+		snap := q.snapshot()
+		// 通知其它连接刷新排队列表（多设备 / 多标签页保持一致）
+		q.broadcast(turnEvent{data: sseQueueChangedPayload(sessionID, snap)})
+		jsonResponse(w, map[string]interface{}{
+			"session_id":  sessionID,
+			"id":          turnID,
+			"removed":     removed,
+			"queue_depth": len(snap.items),
+		})
+
+	case http.MethodPut:
+		// 先把 body 读进内存，再交给 parseChatPayload 复用同一套附件/图片处理。
+		// 直接调用 parseChatPayload 需要一个 *http.Request，这里用读到的字节
+		// 重建 body，保证两条路径对 content parts 的构造完全一致。
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
+		if err != nil {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		parsed, errMsg := s.parseChatPayload(r, sessionID)
+		if errMsg != "" {
+			http.Error(w, errMsg, http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(parsed.content) == "" {
+			http.Error(w, "content required", http.StatusBadRequest)
+			return
+		}
+		// 该条已被认领执行：不能改（回合已带着旧内容跑起来了）
+		if !q.itemExists(turnID) {
+			snap := q.snapshot()
+			if snap.activeID == turnID {
+				jsonResponse(w, map[string]interface{}{
+					"session_id": sessionID,
+					"id":         turnID,
+					"updated":    false,
+					"started":    true,
+					"error":      "turn already started",
+				})
+				return
+			}
+			http.Error(w, "queued message not found", http.StatusNotFound)
+			return
+		}
+		persisted := persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
+		ok := q.updateItem(turnID, parsed.content, parsed.contentParts, persisted)
+		snap := q.snapshot()
+		q.broadcast(turnEvent{data: sseQueueChangedPayload(sessionID, snap)})
+		jsonResponse(w, map[string]interface{}{
+			"session_id":  sessionID,
+			"id":          turnID,
+			"updated":     ok,
+			"queue_depth": len(snap.items),
+		})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// sseQueueChangedPayload 构造"队列发生变化"的 SSE 载荷，让附着在同一会话
+// 上的其它连接同步刷新排队气泡（删除/编辑后位置与条目都要重排）。
+func sseQueueChangedPayload(sessionID string, snap queueSnapshot) string {
+	items := snap.items
+	if items == nil {
+		items = []queuedTurnInfo{}
+	}
+	b, _ := json.Marshal(map[string]interface{}{
+		"type":        "queue_changed",
+		"session_id":  sessionID,
+		"active_id":   snap.activeID,
+		"queue_depth": len(items),
+		"queued":      items,
+	})
+	return "data: " + string(b) + "\n\n"
 }
 
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {

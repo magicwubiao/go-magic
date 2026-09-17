@@ -951,6 +951,13 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
+          // queue_changed：别的连接（另一台设备 / 另一个标签页）增删改了
+          // 队列。用服务端快照对齐本地排队镜像，保证多端一致。
+          if (data.type === 'queue_changed') {
+            syncQueuedFromServer(sessionId, data.queued || [], String(data.active_id || ''))
+            return
+          }
+
           if (data.type === 'progress') {
             state.taskProgress = {
               phase: data.phase || 'executing',
@@ -1239,6 +1246,63 @@ export const useChatStore = defineStore('chat', () => {
     // 排队气泡转为流式渲染：把它从队列里移除（内容会由 delta 重建），
     // 但保留 activeTurnId 关联，done 时才能对应上。
     state.activeTurnId = item.turnId
+  }
+
+  // removeQueuedMessage 删除一条尚未执行的排队消息（本地 + 服务端）。
+  //
+  // 删除是"用户点名这一条"，与停止（清空全部 + 杀当前回合）不同：这里
+  // 只动这一条，正在执行的回合继续跑。服务端返回 removed=false 表示该条
+  // 已经被 worker 认领（来不及删），此时同样从本地队列移除——它已经转入
+  // 流式渲染，留着排队气泡就是重复显示。
+  async function removeQueuedMessage(sessionId: string, turnId: string): Promise<boolean> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return false
+
+    // 本地占位（服务端还没认领）不需要请求：直接从本地删除即可，
+    // 但为避免"幽灵提交"，仍调用服务端接口做 best-effort 清理。
+    const isLocal = turnId.startsWith('local_')
+    try {
+      if (!isLocal) await sessionsApi.removeQueuedTurn(sessionId, turnId)
+    } catch {
+      // 网络失败不阻塞本地删除：服务端队列会在下次 /running 对账时收敛
+    }
+
+    state.queued = state.queued.filter(q => q.turnId !== turnId)
+    queuedAttachments.delete(turnId)
+    return true
+  }
+
+  // editQueuedMessage 把一条排队消息的内容从队列撤下并返回，供输入框回填。
+  //
+  // 语义是"改完再发"：撤下这一条（服务端 + 本地），把内容交给调用方填进
+  // 输入框，用户改完点发送就是一条全新的排队消息。若服务端已开始执行
+  // （started=true），撤回失败并返回 null，调用方应提示用户改用停止。
+  async function editQueuedMessage(sessionId: string, turnId: string): Promise<{ content: string; attachments: sessionsApi.UploadedFile[] } | null> {
+    const state = sessionStates.value[sessionId]
+    if (!state) return null
+    const item = state.queued.find(q => q.turnId === turnId)
+    if (!item) return null
+
+    const content = item.content
+    const attachments = queuedAttachments.get(turnId) || []
+
+    if (!turnId.startsWith('local_')) {
+      try {
+        const res = await sessionsApi.removeQueuedTurn(sessionId, turnId)
+        if (!res.removed) {
+          // 已经被认领开始执行：不能编辑。本地也把它移出排队（已转流式渲染）。
+          state.queued = state.queued.filter(q => q.turnId !== turnId)
+          queuedAttachments.delete(turnId)
+          return null
+        }
+      } catch {
+        // 网络失败：本地照常撤下，服务端会在下次 /running 对账时收敛
+      }
+    }
+
+    state.queued = state.queued.filter(q => q.turnId !== turnId)
+    queuedAttachments.delete(turnId)
+    return { content, attachments }
   }
 
   function stopGeneration(): void {
@@ -1561,6 +1625,8 @@ export const useChatStore = defineStore('chat', () => {
     updateSessionWorkDir,
     isSessionRunning,
     sendMessage,
+    removeQueuedMessage,
+    editQueuedMessage,
     stopGeneration,
     cleanup,
     isCommand,
