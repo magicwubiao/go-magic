@@ -2,9 +2,23 @@
   <div class="models-providers-page">
     <div class="page-header">
       <h2>{{ t('modelsProviders.title') }}</h2>
-      <n-button type="primary" @click="openAddProviderModal">
-        {{ t('modelsProviders.addProvider') }}
-      </n-button>
+      <n-space align="center">
+        <!-- 刷新：重新拉 config + 供应商目录（后者决定"新增"下拉里的可选供应商） -->
+        <n-button
+          secondary
+          :loading="refreshing"
+          :disabled="refreshing"
+          @click="handleRefresh"
+        >
+          <template #icon>
+            <n-icon><RefreshOutline /></n-icon>
+          </template>
+          {{ t('common.refresh') }}
+        </n-button>
+        <n-button type="primary" @click="openAddProviderModal">
+          {{ t('modelsProviders.addProvider') }}
+        </n-button>
+      </n-space>
     </div>
 
     <div class="page-content">
@@ -167,16 +181,19 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useMessage } from 'naive-ui'
 import {
   NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
-  NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin
+  NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin, NIcon
 } from 'naive-ui'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
 import * as providersApi from '@/api/providers'
 import { getModelOptions } from '@/api/models'
 
 const { t } = useI18n()
+const message = useMessage()
 const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 
@@ -411,6 +428,31 @@ async function setCurrentModel(model: string) {
 async function refreshModelsList() {
   // 重新获取配置
   await configStore.loadConfig()
+}
+
+// 刷新按钮：config 与供应商目录都重拉一遍。目录必须在 config 之后拉——
+// loadProviderCatalog 靠 configStore.config.providers 判断哪些供应商"已配置"，
+// 先拉目录会把已配置项也塞进"新增"下拉里。
+const refreshing = ref(false)
+async function handleRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await configStore.loadConfig()
+    await loadProviderCatalog()
+    // 选中项保持有效：供应商可能已被删除/改名，落到无效值就回退到当前或首个
+    const names = configProviders.value.map(p => p.name)
+    if (!names.includes(selectedProvider.value)) {
+      selectedProvider.value = names.includes(currentConfigProvider.value)
+        ? currentConfigProvider.value
+        : names[0] || ''
+    }
+    message.success(t('common.refreshed'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.refreshFailed'))
+  } finally {
+    refreshing.value = false
+  }
 }
 
 onMounted(async () => {

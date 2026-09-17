@@ -33,6 +33,7 @@ export default {
     add: '添加',
     refresh: '刷新',
     refreshed: '已刷新',
+    refreshFailed: '刷新失败',
     copied: '已复制',
     copyFailed: '复制失败',
     confirm: '确认',

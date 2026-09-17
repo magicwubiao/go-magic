@@ -2,7 +2,19 @@
   <div>
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('profiles.title') }}</h2>
-      <n-button type="primary" @click="showCreateModal = true">{{ t('profiles.newProfile') }}</n-button>
+      <n-space>
+        <!-- 刷新：重拉分身列表 + 当前展开分身的详情（SOUL / 用户画像 / 偏好） -->
+        <n-button
+          secondary
+          :loading="refreshing"
+          :disabled="refreshing"
+          @click="handleRefresh"
+        >
+          <template #icon><n-icon :component="RefreshOutline" /></template>
+          {{ t('common.refresh') }}
+        </n-button>
+        <n-button type="primary" @click="showCreateModal = true">{{ t('profiles.newProfile') }}</n-button>
+      </n-space>
     </n-space>
 
     <n-spin v-if="loading" />
@@ -197,6 +209,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { RefreshOutline } from '@vicons/ionicons5'
 import { request } from '@/api/client'
 import { useConfigStore } from '@/stores/config'
 import { useChatStore } from '@/stores/chat'
@@ -469,4 +482,29 @@ async function editSoul(name: string): Promise<void> {
 onMounted(() => {
   loadProfiles()
 })
+
+// 刷新按钮：列表 + 当前已打开的详情一起重拉。
+// 详情面板的数据（SOUL / 用户画像 / 偏好）各自独立请求，只刷列表的话
+// 面板里还是旧内容；这里按 showDetailModal 的状态把三者一并刷新。
+const refreshing = ref(false)
+async function handleRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await loadProfiles()
+    const name = editingProfile.value
+    if (name && showDetailModal.value) {
+      await Promise.all([
+        loadUserProfile(name),
+        loadSoul(name),
+        loadPreferences(name),
+      ])
+    }
+    message.success(t('common.refreshed'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.refreshFailed'))
+  } finally {
+    refreshing.value = false
+  }
+}
 </script>

@@ -3,6 +3,16 @@
     <n-space justify="space-between" style="margin-bottom: 16px;">
       <h2>{{ t('skills.title') }}</h2>
       <n-space>
+        <!-- 刷新：重拉技能清单 + 统计数据（页面原本只在 onMounted 拉一次） -->
+        <n-button
+          secondary
+          :loading="refreshing"
+          :disabled="refreshing"
+          @click="handleRefresh"
+        >
+          <template #icon><n-icon :component="RefreshIcon" /></template>
+          {{ t('common.refresh') }}
+        </n-button>
         <n-button type="primary" @click="openHubModal">{{ t('skills.browseHub') }}</n-button>
       </n-space>
     </n-space>
@@ -614,17 +624,33 @@ async function handleCustomUpload({ file, onFinish, onError }: UploadCustomReque
   }
 }
 
-// Load data on mount
-onMounted(async () => {
+// 技能清单 + 统计的统一拉取，onMounted 与刷新按钮共用（避免两处逻辑漂移）
+async function loadSkillsData(reportError: boolean) {
   await skillsStore.loadSkills()
-
   try {
-    const stats = await getSkillStatistics()
-    skillStats.value = stats
+    skillStats.value = await getSkillStatistics()
   } catch (e) {
     console.error('Failed to load skill data:', e)
+    // 首次进页面统计失败很常见（后端没装），不打扰用户；手动刷新才提示
+    if (reportError) message.error(t('common.refreshFailed'))
   }
-})
+}
+
+// 刷新按钮：重新拉技能清单与统计
+const refreshing = ref(false)
+async function handleRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await loadSkillsData(true)
+    message.success(t('common.refreshed'))
+  } finally {
+    refreshing.value = false
+  }
+}
+
+// Load data on mount
+onMounted(() => loadSkillsData(false))
 </script>
 
 <style scoped>

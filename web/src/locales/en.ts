@@ -33,6 +33,7 @@ export default {
     add: 'Add',
     refresh: 'Refresh',
     refreshed: 'Refreshed',
+    refreshFailed: 'Refresh failed',
     copied: 'Copied',
     copyFailed: 'Copy failed',
     confirm: 'Confirm',
