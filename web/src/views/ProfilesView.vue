@@ -10,7 +10,6 @@
           :disabled="refreshing"
           @click="handleRefresh"
         >
-          <template #icon><n-icon :component="RefreshOutline" /></template>
           {{ t('common.refresh') }}
         </n-button>
         <n-button type="primary" @click="showCreateModal = true">{{ t('profiles.newProfile') }}</n-button>
@@ -209,7 +208,6 @@
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { RefreshOutline } from '@vicons/ionicons5'
 import { request } from '@/api/client'
 import { useConfigStore } from '@/stores/config'
 import { useChatStore } from '@/stores/chat'
