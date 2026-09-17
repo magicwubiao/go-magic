@@ -947,6 +947,18 @@ export const useChatStore = defineStore('chat', () => {
             } else {
               state.activeTurnId = turnId
               state.streaming = true
+              // 附着/重连到已在执行的回合：本地没有排队项可迁移（刷新后队列
+              // 已清空），但服务端在 stream_started 里带了内容，据它补一条
+              // 用户消息，否则重连后同样只剩回答、看不到问题。
+              if (turnId && data.content) {
+                promoteQueuedToMessage(state, sessionId, {
+                  turnId,
+                  content: String(data.content),
+                  status: 'running',
+                  createdAt: Date.now(),
+                  position: 0,
+                })
+              }
             }
             return
           }
@@ -1231,6 +1243,10 @@ export const useChatStore = defineStore('chat', () => {
 
   // startStreamingFromQueued 把一条排队消息切换为流式渲染状态：
   // 清空上一轮的流式残留，让 delta 从零开始累积。
+  //
+  // 同时把这条用户消息**固化为正式消息**：排队气泡此前只是"待执行"的临时
+  // 展示，一旦开始执行就必须变成对话历史的一部分，否则问答会只剩回答——
+  // 用户看不到自己刚发的问题（消息落库在服务端，但内存态没有补上）。
   function startStreamingFromQueued(sessionId: string, item: QueuedMessage): void {
     const state = sessionStates.value[sessionId]
     if (!state) return
@@ -1246,6 +1262,30 @@ export const useChatStore = defineStore('chat', () => {
     // 排队气泡转为流式渲染：把它从队列里移除（内容会由 delta 重建），
     // 但保留 activeTurnId 关联，done 时才能对应上。
     state.activeTurnId = item.turnId
+    promoteQueuedToMessage(state, sessionId, item)
+  }
+
+  // promoteQueuedToMessage 把一条排队项转成 messages 里的正式用户消息。
+  //
+  // 去重依据是 turnId 生成的稳定消息 id：同一条排队项只会被固化一次
+  // （stream_started 可能因多连接/重放重复到达）。
+  function promoteQueuedToMessage(state: SessionState, sessionId: string, item: QueuedMessage): void {
+    const msgId = `user_${item.turnId}`
+    if (state.messages.some(m => m.id === msgId)) return
+    const files = queuedAttachments.get(item.turnId)
+    const msg: sessionsApi.Message = {
+      id: msgId,
+      role: 'user',
+      content: item.content,
+      timestamp: new Date(item.createdAt || Date.now()).toISOString(),
+      session_id: sessionId,
+      // UploadedFile 结构上是 Partial<UploadedFile> 的超集，可直接赋给 files；
+      // 渲染层只看 name/url/mime，与刷新后回放的服务端消息走同一条路径。
+      files: files && files.length ? files : undefined,
+    }
+    state.messages.push(msg)
+    // 附件已随消息固化，释放队列里的引用（否则长会话里会一直攒着）。
+    queuedAttachments.delete(item.turnId)
   }
 
   // removeQueuedMessage 删除一条尚未执行的排队消息（本地 + 服务端）。
