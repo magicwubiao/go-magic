@@ -455,7 +455,7 @@ export class ChatStream {
     // 能在缩略图旁边显示用户认得出的名字，而不是一串 uuid。
     imageNames?: string[]
     files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
-  }) {
+  }, attach = false) {
     const token = getAuthToken()
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -467,7 +467,12 @@ export class ChatStream {
 
     this.abortController = new AbortController()
 
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stream`, {
+    // attach 模式只挂事件总线、不提交消息，服务端据此跳过"内容不能为空"校验。
+    const url = attach
+      ? `/api/sessions/${encodeURIComponent(sessionId)}/stream?attach=1`
+      : `/api/sessions/${encodeURIComponent(sessionId)}/stream`
+
+    fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -578,19 +583,82 @@ export class ChatStream {
   }
 }
 
+// 非流式提交：把消息放进服务端会话队列后立即返回（不等结果）。
+// 用于"当前回合进行中再发一条"的场景——此时已有 SSE 连接在推当前回合的
+// 输出，再开一条流会打断渲染，因此复用现有连接提交、由它回传 queued 事件。
+export async function submitMessage(
+  sessionId: string,
+  content: string,
+  images?: string[],
+  files?: UploadedFile[],
+  imageUrls?: string[],
+  imageNames?: string[],
+): Promise<{ id: string; queued: boolean; duplicate: boolean }> {
+  const slimFiles = files?.map(f => ({ name: f.name, filename: f.filename, url: f.url }))
+  return request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content,
+      images,
+      imageUrls,
+      imageNames,
+      files: slimFiles,
+    }),
+  })
+}
+
+export interface QueuedTurnInfo {
+  id: string
+  content: string
+  created_at: number
+  /** 1 起，1 表示下一个执行 */
+  position: number
+}
+
+export interface SessionRunningState {
+  running: boolean
+  active_id: string
+  queue_depth: number
+  queued: QueuedTurnInfo[]
+}
+
 // 探测会话回合是否仍在服务端执行。移动端浏览器切后台会杀掉 SSE 连接，
 // 但服务端回合与连接已解耦、会继续跑完落库；前端用此接口轮询恢复。
-export async function getSessionRunning(sessionId: string): Promise<{ running: boolean }> {
-  const res = await request<{ session_id: string; running: boolean }>(
-    `/sessions/${encodeURIComponent(sessionId)}/running`
-  )
-  return { running: !!res.running }
+// 同时返回排队消息列表：用户在一个回合进行中继续发消息会进入服务端队列，
+// 刷新页面后需要靠它恢复"排队中"的界面状态。
+export async function getSessionRunning(sessionId: string): Promise<SessionRunningState> {
+  const res = await request<{
+    session_id: string
+    running: boolean
+    active_id?: string
+    queue_depth?: number
+    queued?: QueuedTurnInfo[]
+  }>(`/sessions/${encodeURIComponent(sessionId)}/running`)
+  return {
+    running: !!res.running,
+    active_id: res.active_id || '',
+    queue_depth: res.queue_depth ?? (res.queued?.length || 0),
+    queued: res.queued || [],
+  }
 }
 
 // 显式取消会话正在执行的回合。回合已与连接解耦，前端 abort 本地流
 // 不再能停止服务端执行，用户点"停止"时必须调用此接口。
-export async function cancelGeneration(sessionId: string): Promise<void> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
+// 服务端语义是"停止这一切"：正在执行的回合被取消，排队消息一并丢弃。
+export async function cancelGeneration(sessionId: string): Promise<{ cancelled: boolean; dropped: number }> {
+  const res = await request<{ cancelled?: boolean; dropped?: number }>(
+    `/sessions/${encodeURIComponent(sessionId)}/cancel`,
+    { method: 'POST' },
+  )
+  return { cancelled: !!res.cancelled, dropped: res.dropped || 0 }
+}
+
+// attachStream 把一条 SSE 连接挂到会话事件总线上，不发送任何新消息。
+// 用于断线恢复（手机切后台被杀连接）或回合进行中打开页面续接实时输出。
+// 连接上没有回合在跑时服务端会立即回 stream_started{started:false} 并保持
+// 心跳，不会发 done——前端据此判定"当前无回合"。
+export function attachStream(sessionId: string): ChatStream {
+  return new ChatStream(sessionId, { content: '' }, true)
 }
 
 export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[]): ChatStream {  // The server now resolves file content from the uploads directory by

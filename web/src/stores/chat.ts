@@ -40,6 +40,19 @@ export interface TaskProgress {
   tokensRemaining: number
 }
 
+// 排队中的用户消息（本地镜像）。服务端队列才是权威，这里只负责渲染：
+// status='queued' 表示等待执行，'running' 表示已被服务端认领正在执行。
+// turnId 是服务端分配的队列项 ID，用于把 queued / stream_started / done
+// 三类事件关联到同一条消息。
+export interface QueuedMessage {
+  turnId: string
+  content: string
+  status: 'queued' | 'running'
+  createdAt: number
+  /** 服务端给出的排队位置，1 起；0 表示尚未确认 */
+  position: number
+}
+
 // 对话流内嵌审批卡片状态。pending=等待用户决策，
 // approving/denying=已点击按钮正在请求后端，approved/denied/expired=终态。
 export type ApprovalCardStatus =
@@ -102,6 +115,12 @@ interface SessionState {
   // 上次追加 text 段时 streamContent 的末尾字符长度
   // （下次 push text 段时 end 必须大于它，否则不产生新段）
   lastStreamSegEnd: number
+  // 服务端队列状态。用户在一个回合进行中继续发消息不再被丢弃：消息进入
+  // 服务端 per-session 串行队列，依次执行。queued 是本地镜像（用于渲染
+  // 排队气泡），queueDepth 用于状态提示，activeTurnId 标识"当前正在执行
+  // 的是哪一条"（空串表示这条是本地发起但尚未被服务端认领）。
+  queued: QueuedMessage[]
+  activeTurnId: string
 }
 
 function $t(key: string, params?: Record<string, unknown>): string {
@@ -150,6 +169,9 @@ export const useChatStore = defineStore('chat', () => {
   const sessionStates = ref<Record<string, SessionState>>({})
   const sessionEventSources = ref<Record<string, sessionsApi.ChatStream | null>>({})
   const sessionFlushTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
+  // 排队消息的本地附件清单（key = 排队项 id）。仅用于排队气泡上的缩略图
+  // 展示——服务端落库时也会带上附件引用，刷新后由会话消息重建。
+  const queuedAttachments = new Map<string, sessionsApi.UploadedFile[]>()
   // 流断线恢复轮询定时器（移动端切后台杀连接后使用）
   const sessionRecoveryTimers = ref<Record<string, ReturnType<typeof setTimeout> | null>>({})
   
@@ -179,6 +201,20 @@ export const useChatStore = defineStore('chat', () => {
     const state = activeSessionState.value
     return state?.streaming || false
   })
+
+  // 当前会话排队等待执行的消息（不含正在执行的）。
+  const queuedMessages = computed((): QueuedMessage[] => {
+    const state = activeSessionState.value
+    return state?.queued || []
+  })
+
+  // 排队数量，供状态栏提示与"停止并清空"确认文案使用。
+  const queueDepth = computed(() => queuedMessages.value.length)
+
+  // 是否有回合在跑或有消息排队：决定输入框能否发送。
+  // 与改造前不同，现在"回合进行中"不再禁止发送（消息会排队），
+  // 因此这里只用于提示，不再作为发送按钮的禁用依据。
+  const busy = computed(() => streaming.value || queueDepth.value > 0)
 
   const streamContent = computed(() => {
     const state = activeSessionState.value
@@ -275,6 +311,8 @@ export const useChatStore = defineStore('chat', () => {
         pendingClarifications: [],
         streamingSegments: [],
         lastStreamSegEnd: 0,
+        queued: [],
+        activeTurnId: '',
       })
       sessionStates.value = { ...sessionStates.value, [sessionId]: state }
     }
@@ -578,6 +616,7 @@ export const useChatStore = defineStore('chat', () => {
     state.toolCalls = []
     state.streamingSegments = []
     state.lastStreamSegEnd = 0
+    state.activeTurnId = ''
   }
 
   // 回合确实中断且服务端无完整结果时的兜底：固化已收到的部分内容。
@@ -622,8 +661,12 @@ export const useChatStore = defineStore('chat', () => {
       if (sessionEventSources.value[sessionId]) return // 流已重连
 
       try {
-        const { running } = await sessionsApi.getSessionRunning(sessionId)
-        if (!running) {
+        const running = await sessionsApi.getSessionRunning(sessionId)
+        // 服务端队列是权威：把本地排队镜像对齐过去。这样刷新页面、或在
+        // 另一台设备上操作后，本端也能看到"还有几条在等"。
+        syncQueuedFromServer(sessionId, running.queued, running.active_id)
+
+        if (!running.running && running.queue_depth === 0) {
           const res = await sessionsApi.getSession(sessionId)
           const serverMsgs = res.messages || []
           const last = serverMsgs[serverMsgs.length - 1]
@@ -664,6 +707,75 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 本地待确认的排队占位：服务端 queued 事件到达前的临时状态，
+  // 用 localId 关联，收到 queued 事件后替换成带 turnId 的正式项。
+  let localQueuedCounter = 0
+
+  // sendMessage 提交一条用户消息。
+  //
+  // 与改造前最重要的差别：不再因为"当前回合正在跑"而拒绝发送。消息交给
+  // 服务端 per-session 队列，同一个会话永远只有一个回合在跑，后续消息排队
+  // 依次执行——因此这里既不再有 `if (streaming) return` 的静默丢弃，也不需要
+  // 在回合进行中强行拆掉现有 SSE 连接。
+  //
+  // 三种情形：
+  //   1. 空闲（无流、无排队）→ 开新流提交，进入流式渲染；
+  //   2. 有回合在跑 → 复用现有连接提交（服务端回 queued 事件），
+  //      前端只追加一条"排队中"气泡；
+  //   3. 客户端处于断线恢复轮询 → 停止轮询并重新建立连接后提交。
+  // syncQueuedFromServer 用服务端队列快照对齐本地排队镜像。
+  //
+  // 两个方向都要处理：
+  //   - 服务端有、本地没有（刷新页面 / 另一台设备提交 / 本地占位丢失）→ 补上；
+  //   - 本地有、服务端没有（已被执行 / 被取消丢弃）→ 移除。
+  // 正在执行的那一条由 active_id 标识，会在服务端 snapshot 的 items 之外，
+  // 因此不能出现在排队列表里（它已被转入流式渲染）。
+  function syncQueuedFromServer(sessionId: string, serverQueued: sessionsApi.QueuedTurnInfo[], activeId: string): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+
+    const serverIds = new Set(serverQueued.map(q => q.id))
+
+    // 1) 移除服务端已不存在的本地项（本地占位 local_* 除外：它还没被认领，
+    //    服务端可能尚未处理到；但若队列已空且没有回合在跑，也要清掉）。
+    state.queued = state.queued.filter(q => {
+      if (q.turnId.startsWith('local_')) {
+        // 本地占位：服务端队列为空且无活跃回合 → 说明提交失败或已执行完
+        return !(serverQueued.length === 0 && !activeId)
+      }
+      if (serverIds.has(q.turnId)) return true
+      queuedAttachments.delete(q.turnId)
+      return false
+    })
+
+    // 2) 补齐服务端有而本地没有的项
+    for (const sq of serverQueued) {
+      if (sq.id === activeId) continue
+      const existing = state.queued.find(q => q.turnId === sq.id)
+      if (existing) {
+        existing.position = sq.position
+        continue
+      }
+      state.queued.push({
+        turnId: sq.id,
+        content: sq.content,
+        status: 'queued',
+        createdAt: sq.created_at * 1000 || Date.now(),
+        position: sq.position,
+      })
+    }
+
+    // 3) 按服务端顺序重排，保证"下一条执行的"排在最前
+    const order = new Map(serverQueued.map(q => [q.id, q.position]))
+    state.queued.sort((a, b) => {
+      const pa = order.get(a.turnId) ?? Number.MAX_SAFE_INTEGER
+      const pb = order.get(b.turnId) ?? Number.MAX_SAFE_INTEGER
+      return pa - pb
+    })
+
+    if (activeId) state.activeTurnId = activeId
+  }
+
   async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
@@ -673,47 +785,76 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value!
     const state = getOrCreateSessionState(sessionId)
 
-    state.messages.push({
-      id: Date.now().toString(),
-      role: 'user',
+    // 本地乐观插入排队项，立刻可见（避免"点了发送但界面没反应"）。
+    // turnId 先占位（local_ 前缀），服务端 queued 事件回来后替换成真实 ID。
+    const localId = `local_${++localQueuedCounter}`
+    state.queued.push({
+      turnId: localId,
       content,
-      timestamp: new Date().toISOString(),
-      session_id: sessionId,
-      images,
-      // 气泡里展示的附件清单：必须包含图片。图片走 images 多模态通道，不在
-      // files 里；只挂 files 的话这条消息一旦从服务端重载，图片就只剩 [文件]。
-      // attachments 是发送前的完整附件列表，仅用于本地渲染，不上行。
-      files: attachments && attachments.length ? attachments : files,
+      status: 'queued',
+      createdAt: Date.now(),
+      position: 0,
     })
+    // 附件跟随排队项展示，保证本地不丢缩略图（服务端落库时同样带上引用）。
+    const pendingFiles = attachments && attachments.length ? attachments : files
+    if (pendingFiles?.length) queuedAttachments.set(localId, pendingFiles)
 
-    state.streaming = true
-    state.streamContent = ''
-    state.streamBuffer = ''
-    state.toolCalls = []
-    state.streamingSegments = []
-    state.lastStreamSegEnd = 0
-    state.taskProgress = null
-    // 新一轮对话开始时清空上一轮的审批卡片（此时 streaming=false 已保证无 pending 项）
-    state.pendingApprovals = []
-    state.pendingClarifications = []
+    if (!state.streaming) {
+      // 空闲提交：清空上一轮流式残留，让本回合从干净状态开始。
+      state.streamContent = ''
+      state.streamBuffer = ''
+      state.toolCalls = []
+      state.streamingSegments = []
+      state.lastStreamSegEnd = 0
+      state.taskProgress = null
+      state.pendingApprovals = []
+      state.pendingClarifications = []
+    }
     error.value = null
 
-    // 取消上一轮流断线后的恢复轮询，避免其与新一轮流互相干扰
+    // 新请求马上会建立/复用连接，断线恢复轮询必须停掉，否则两者互相干扰
     stopStreamRecovery(sessionId)
     if (sessionFlushTimers.value[sessionId]) {
       clearTimeout(sessionFlushTimers.value[sessionId]!)
       sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
     }
-    if (sessionEventSources.value[sessionId]) {
+
+    // 已经不 streaming 却还挂着旧连接（上一轮结束后未关闭 / 附着遗留）：
+    // 关掉它并重新建流，避免在陈旧连接上等待。
+    if (!state.streaming && sessionEventSources.value[sessionId]) {
       sessionEventSources.value[sessionId]!.close()
       sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
     }
 
     try {
-      const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls, imageNames)
-      sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
+      if (sessionEventSources.value[sessionId]) {
+        // 回合进行中：复用现有连接入队。服务端会在这条流上回 queued 事件，
+        // 当前回合的渲染因此不会被打断。
+        await sessionsApi.submitMessage(sessionId, content, images, files, imageUrls, imageNames)
+      } else {
+        const eventSource = sessionsApi.streamChat(sessionId, content, images, files, imageUrls, imageNames)
+        sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
+        attachStreamHandlers(sessionId, eventSource, localId)
+      }
+    } catch (e) {
+      // 提交失败：撤掉本地占位，避免留下"永远排队中"的幽灵气泡
+      state.queued = state.queued.filter(q => q.turnId !== localId)
+      queuedAttachments.delete(localId)
+      const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      if (errMsg.includes('aborted') || errMsg.includes('abort')) {
+        return
+      }
+      error.value = { message: 'Failed to send message: ' + errMsg }
+    }
+  }
 
-      eventSource.onmessage = (event) => {
+  // attachStreamHandlers 把 SSE 事件处理逻辑挂到一条流上。抽成独立函数是因为
+  // 现在有多条入口需要挂同一套处理（新提交、续接已有回合、断线重连）。
+  function attachStreamHandlers(sessionId: string, eventSource: sessionsApi.ChatStream, localId?: string): void {
+    const state = getOrCreateSessionState(sessionId)
+    let myLocalId = localId || ''
+
+    eventSource.onmessage = (event) => {
         // Handle legacy [DONE] signal (now backend sends {"done":true}, but keep for safety)
         if (event.data === '[DONE]') {
           if (sessionFlushTimers.value[sessionId]) {
@@ -748,6 +889,67 @@ export const useChatStore = defineStore('chat', () => {
 
         try {
           const data = JSON.parse(event.data)
+
+          // queued：服务端已把消息放进队列，回传队列项 ID 与位置。
+          // 用服务端 ID 替换本地占位，后续 stream_started/done 才能对齐。
+          if (data.type === 'queued') {
+            const turnId = String(data.id || '')
+            const item = myLocalId
+              ? state.queued.find(q => q.turnId === myLocalId)
+              : undefined
+            if (item && turnId) {
+              // 附着模式下服务端可能重发已存在的排队项：同 ID 不重复插入
+              const clash = state.queued.some(q => q.turnId === turnId)
+              item.turnId = turnId
+              item.position = data.position || 0
+              if (myLocalId) {
+                const att = queuedAttachments.get(myLocalId)
+                if (att) {
+                  queuedAttachments.delete(myLocalId)
+                  queuedAttachments.set(turnId, att)
+                }
+              }
+              if (clash) {
+                state.queued = state.queued.filter(q => q !== item)
+              }
+              myLocalId = turnId
+            } else if (turnId && !state.queued.some(q => q.turnId === turnId)) {
+              // 恢复场景：本地没有对应占位（例如刷新页面后重新附着），
+              // 按服务端快照补一条排队气泡，保证用户看得见"还有几条在等"。
+              state.queued.push({
+                turnId,
+                content: data.content || '',
+                status: 'queued',
+                createdAt: (data.created_at || 0) * 1000 || Date.now(),
+                position: data.position || 0,
+              })
+            }
+            return
+          }
+
+          // stream_started：某个回合开始执行。started=false 是附着连接的
+          // "此刻没有回合在跑"应答（不是错误，也不结束连接）。
+          if (data.type === 'stream_started') {
+            if (data.started === false) {
+              return
+            }
+            const turnId = String(data.id || '')
+            // 本条流对应的排队项转入"执行中"；其余项的排队位置前移。
+            const mine = turnId
+              ? state.queued.find(q => q.turnId === turnId)
+              : state.queued.find(q => q.status === 'queued')
+            if (mine) {
+              mine.status = 'running'
+              state.activeTurnId = mine.turnId
+              state.queued = state.queued.filter(q => q !== mine)
+              // 排队项转入流式渲染：把它从"排队气泡"移出，内容由 delta 重建。
+              startStreamingFromQueued(sessionId, mine)
+            } else {
+              state.activeTurnId = turnId
+              state.streaming = true
+            }
+            return
+          }
 
           if (data.type === 'progress') {
             state.taskProgress = {
@@ -956,14 +1158,18 @@ export const useChatStore = defineStore('chat', () => {
 
             flushStreamBuffer(sessionId)
 
-            if (sessionEventSources.value[sessionId]) {
+            // 先恢复按钮状态，让用户可以立即操作。注意：排队队列非空时
+            // 连接必须保留——服务端 worker 会立刻开始执行下一条排队消息并
+            // 在同一条流上继续推 stream_started/delta，拆掉连接就看不到它。
+            const hasMoreQueued = state.queued.length > 0
+            state.streaming = false
+            state.taskProgress = null
+            state.activeTurnId = ''
+
+            if (!hasMoreQueued && sessionEventSources.value[sessionId]) {
               sessionEventSources.value[sessionId]!.close()
               sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
             }
-
-            // 先恢复按钮状态，让用户可以立即操作
-            state.streaming = false
-            state.taskProgress = null
 
             // 用 nextTick 让按钮切换先渲染，再处理内容 push 和会话刷新
             const finalContent = state.streamContent
@@ -984,7 +1190,12 @@ export const useChatStore = defineStore('chat', () => {
                 tool_calls_snapshot: finalToolCalls as unknown[],
                 streaming_timeline_snapshot: finalTimeline as unknown[],
               })
+              // 清空流式残留，为下一条排队消息腾出干净的渲染状态
               state.streamContent = ''
+              state.streamBuffer = ''
+              state.toolCalls = []
+              state.streamingSegments = []
+              state.lastStreamSegEnd = 0
               loadSessions()
             })
           }
@@ -993,31 +1204,41 @@ export const useChatStore = defineStore('chat', () => {
         }
       }
 
-      eventSource.onerror = () => {
-        if (sessionFlushTimers.value[sessionId]) {
-          clearTimeout(sessionFlushTimers.value[sessionId]!)
-          sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
-        }
-        flushStreamBuffer(sessionId)
-        if (sessionEventSources.value[sessionId]) {
-          sessionEventSources.value[sessionId]!.close()
-          sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
-        }
+    eventSource.onerror = () => {
+      if (sessionFlushTimers.value[sessionId]) {
+        clearTimeout(sessionFlushTimers.value[sessionId]!)
+        sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
+      }
+      flushStreamBuffer(sessionId)
+      if (sessionEventSources.value[sessionId]) {
+        sessionEventSources.value[sessionId]!.close()
+        sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+      }
 
-        // 移动端切后台/锁屏会杀掉连接，但服务端回合与连接已解耦、
-        // 会继续执行并落库。不再立即判死，启动恢复轮询；
-        // 恢复失败或超时才按中断固化（finalizeInterruptedStream）。
-        startStreamRecovery(sessionId)
-      }
-    } catch (e) {
-      state.streaming = false
-      const errMsg = e instanceof Error ? e.message : 'Unknown error'
-      // Ignore abort errors (user cancelled or timeout)
-      if (errMsg.includes('aborted') || errMsg.includes('abort')) {
-        return
-      }
-      error.value = { message: 'Failed to send message: ' + errMsg }
+      // 移动端切后台/锁屏会杀掉连接，但服务端回合与连接已解耦、
+      // 会继续执行并落库。不再立即判死，启动恢复轮询；
+      // 恢复失败或超时才按中断固化（finalizeInterruptedStream）。
+      startStreamRecovery(sessionId)
     }
+  }
+
+  // startStreamingFromQueued 把一条排队消息切换为流式渲染状态：
+  // 清空上一轮的流式残留，让 delta 从零开始累积。
+  function startStreamingFromQueued(sessionId: string, item: QueuedMessage): void {
+    const state = sessionStates.value[sessionId]
+    if (!state) return
+    state.streaming = true
+    state.streamContent = ''
+    state.streamBuffer = ''
+    state.toolCalls = []
+    state.streamingSegments = []
+    state.lastStreamSegEnd = 0
+    state.taskProgress = null
+    state.pendingApprovals = []
+    state.pendingClarifications = []
+    // 排队气泡转为流式渲染：把它从队列里移除（内容会由 delta 重建），
+    // 但保留 activeTurnId 关联，done 时才能对应上。
+    state.activeTurnId = item.turnId
   }
 
   function stopGeneration(): void {
@@ -1027,7 +1248,8 @@ export const useChatStore = defineStore('chat', () => {
     const state = getOrCreateSessionState(sessionId)
 
     // 回合已与连接解耦：abort 本地流不再能取消服务端执行，
-    // 必须显式调用取消端点（best-effort，失败不阻塞本地清理）
+    // 必须显式调用取消端点（best-effort，失败不阻塞本地清理）。
+    // 服务端语义是"停止这一切"：正在执行的回合被取消，排队消息一并丢弃。
     sessionsApi.cancelGeneration(sessionId).catch(() => {})
     stopStreamRecovery(sessionId)
 
@@ -1044,6 +1266,13 @@ export const useChatStore = defineStore('chat', () => {
 
     state.streaming = false
     state.taskProgress = null
+    state.activeTurnId = ''
+    // 清空排队消息：与服务端 cancelAll 保持一致，否则刷新后这些消息
+    // 会从服务端队列里"复活"并开始执行，与用户的停止意图相反。
+    for (const q of state.queued) {
+      queuedAttachments.delete(q.turnId)
+    }
+    state.queued = []
 
     for (const tc of state.toolCalls) {
       if (tc.status === 'running') {
@@ -1302,6 +1531,10 @@ export const useChatStore = defineStore('chat', () => {
     activeSessionId,
     messages,
     streaming,
+    busy,
+    queuedMessages,
+    queueDepth,
+    queuedAttachments,
     streamContent,
     error,
     activeSession,

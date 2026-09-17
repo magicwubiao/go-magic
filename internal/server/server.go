@@ -68,6 +68,12 @@ type Server struct {
 	agents   map[string]*agent.Agent
 	agentsMu sync.Mutex
 
+	// 每会话的串行消息队列（见 chatqueue.go）。用户在一个回合进行中继续
+	// 发消息时不再被丢弃：消息入队等待，由唯一的 worker goroutine 串行
+	// 执行，从而保证同一个 *agent.Agent 不会被并发使用。
+	chatQueues   map[string]*sessionQueue
+	chatQueuesMu sync.Mutex
+
 	// Disabled skills tracking
 	disabledSkills   map[string]bool
 	disabledSkillsMu sync.Mutex
@@ -511,6 +517,7 @@ Your working directory is: %s
 		pendingSSEHandlers:   make(map[string]func(approval.PendingApprovalInfo)),
 		clarifySSEHandlers:   make(map[string]func(map[string]interface{}) bool),
 		clarifications:       make(map[string]*PendingClarification),
+		chatQueues:           make(map[string]*sessionQueue),
 		globalBus:            bus.NewEventBus(),
 		globalBusSSEHandlers: make(map[uint64]func(kind string, payload []byte)),
 	}
@@ -791,6 +798,14 @@ func (s *Server) refreshConvertConfig() {
 		return
 	}
 	provider.ApplyConvertConfig(s.provider, s.buildConvertConfig())
+}
+
+// lookupAgent 只查不建：用于回合收尾阶段读取 token 统计。回合执行期间
+// agent 一定已由 getOrCreateAgent 建好，这里拿不到就静默跳过统计即可。
+func (s *Server) lookupAgent(sessionID string) *agent.Agent {
+	s.agentsMu.Lock()
+	defer s.agentsMu.Unlock()
+	return s.agents[sessionID]
 }
 
 func (s *Server) getOrCreateAgent(sessionID string) *agent.Agent {

@@ -309,6 +309,38 @@
           </div>
         </template>
 
+        <!-- 排队中的消息：回合进行中继续发送的消息，按 FIFO 依次执行。
+             用 1 起的序号显式表达"第几条执行"，避免用户以为消息丢了。
+             正在执行的那条不在 queued 里（已转入上面的流式渲染）。 -->
+        <template v-if="chatStore.queuedMessages.length">
+          <div
+            v-for="(q, qi) in chatStore.queuedMessages"
+            :key="q.turnId"
+            class="message user queued-message"
+          >
+            <div class="avatar">🧑</div>
+            <div class="message-body user-body">
+              <div class="queued-bubble">
+                <div class="queued-head">
+                  <span class="queued-badge">
+                    <n-icon size="11"><TimeOutline /></n-icon>
+                    {{ t('chat.queuedBadge', { position: qi + 1 }) }}
+                  </span>
+                  <span class="queued-hint">{{ t('chat.queuedHint') }}</span>
+                </div>
+                <div class="queued-content">{{ q.content }}</div>
+                <div v-if="queuedFilesFor(q.turnId).length" class="queued-files">
+                  <span
+                    v-for="f in queuedFilesFor(q.turnId)"
+                    :key="f.url"
+                    class="queued-file-chip"
+                  >{{ f.name }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" class="empty-hint">
           {{ t('chat.selectSession') }}
         </n-text>
@@ -417,8 +449,9 @@
                 @update:show="onModelMenuShow"
                 @update:value="handleModelChange"
               />
+              <!-- 发送按钮始终可用：回合进行中发送的消息会进入队列排队执行，
+                   不再像以前那样被禁用（用户无法追问、只能等）。 -->
               <n-button
-                v-if="!chatStore.streaming"
                 type="primary"
                 size="small"
                 circle
@@ -431,7 +464,7 @@
                 </template>
               </n-button>
               <n-button
-                v-else
+                v-if="chatStore.busy"
                 type="warning"
                 size="small"
                 circle
@@ -745,7 +778,7 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, TimeOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -1005,6 +1038,12 @@ function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
 
 // 变更的文件：按路径去重。同路径出现多次时以后一次为准
 // （写→删=删；删→写=重建=写）；携带 diff 的条目原样透传给渲染组件。
+// 排队消息的附件清单。store 里用 turnId 索引（local_* 期间也能查到），
+// 用于在排队气泡上展示"这条消息带了哪些文件"。
+function queuedFilesFor(turnId: string): sessionsApi.UploadedFile[] {
+  return chatStore.queuedAttachments.get(turnId) || []
+}
+
 function changedFiles(msg?: sessionsApi.Message): { action: string; path: string; diff?: string }[] {
   const entries: { action: string; path: string; diff?: string }[] = []
   const index = new Map<string, number>()
@@ -2054,7 +2093,9 @@ function selectCommand(suggestion: string) {
 
 async function send() {
   const content = inputValue.value.trim()
-  if ((!content && !selectedFiles.value.length) || chatStore.streaming) return
+  // 排队功能：回合进行中不再拦截发送——消息会进入服务端队列依次执行。
+  // 只有真正空内容才忽略（提交失败会由 store 回滚本地占位并报错）。
+  if (!content && !selectedFiles.value.length) return
 
   // Handle commands - all logic (session create, execution, message push) handled in chatStore
   if (chatStore.isCommand(content)) {
@@ -2758,6 +2799,76 @@ onMounted(async () => {
   background: linear-gradient(135deg, #18a058 0%, #20803a 100%);
   color: white;
   border-bottom-right-radius: 4px;
+}
+
+/* ========== Queued messages ==========
+   排队中的消息用虚线边框 + 降饱和度区分于已提交的消息，并显式标出执行顺序。
+   视觉上必须"看起来还没轮到它"，否则用户会以为消息已被处理。 */
+.queued-message {
+  opacity: 0.72;
+}
+
+.queued-bubble {
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px dashed rgba(24, 160, 88, 0.5);
+  background: rgba(24, 160, 88, 0.06);
+  color: var(--text-color, #333);
+}
+
+.queued-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.queued-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #18a058;
+  background: rgba(24, 160, 88, 0.14);
+  white-space: nowrap;
+}
+
+.queued-hint {
+  font-size: 11px;
+  color: var(--text-color-3, #999);
+}
+
+.queued-content {
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  max-height: 8em;
+  overflow: hidden;
+}
+
+.queued-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.queued-file-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-color-2, #666);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Assistant 回答不使用气泡，直接展示内容 */

@@ -963,6 +963,10 @@ func (a *Agent) trySubTaskDelegation(ctx context.Context, input string) (bool, s
 // RunConversationWithMedia runs a conversation with multimodal input support.
 // If contentParts is provided, it takes priority over plain text input.
 func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, contentParts []types.ContentPart) (string, error) {
+	// 与 RunConversationStreamWithMedia 一致：回合结束时通知观察者（见 defer
+	// 在该函数中的说明）。非流式路径同样可能被 web chat 的降级分支调用。
+	defer notifyTurnFinished(ctx)
+
 	// If cortex is enabled, use the full cortex integration path
 	if a.cortexManager != nil {
 		return a.RunWithCortex(ctx, input)
@@ -1269,6 +1273,9 @@ Please provide a comprehensive, well-structured final response based on these su
 
 // RunConversation runs a conversation with automatic tool execution
 func (a *Agent) RunConversation(ctx context.Context, input string) (string, error) {
+	// 回合收尾钩子，与 RunConversationStreamWithMedia 同语义。
+	defer notifyTurnFinished(ctx)
+
 	// If cortex is enabled, use the full cortex integration path
 	if a.cortexManager != nil {
 		return a.RunWithCortex(ctx, input)
@@ -1819,6 +1826,11 @@ func (a *Agent) RunConversationStream(ctx context.Context, input string, handler
 // RunConversationStreamWithMedia runs a streaming conversation with multimodal input support.
 // If contentParts is provided, it takes priority over plain text input.
 func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string, contentParts []types.ContentPart, handler StreamHandler) error {
+	// 回合收尾钩子：defer 保证正常返回、报错、被取消三条路径都会通知观察者。
+	// 观察者（server 侧的 TurnFileOpTracker）据此在回合结束时落库"本轮变更的
+	// 文件"——回合已与 SSE 连接解耦，不能只依赖当前恰好连着的那条连接。
+	defer notifyTurnFinished(ctx)
+
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 

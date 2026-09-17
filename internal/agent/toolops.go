@@ -24,6 +24,12 @@ type ToolOpsObserver interface {
 	ToolStarting(ctx context.Context, toolName string, args map[string]interface{})
 	// ToolFinished 在工具执行完成后回调，err 非空表示执行失败。
 	ToolFinished(ctx context.Context, toolName string, args map[string]interface{}, err error)
+	// TurnFinished 在一个回合结束时回调（无论成功、出错还是被取消）。
+	// 回合已经不再与 SSE 连接一一绑定：客户端可能在回合进行中才接上流，
+	// 也可能整个回合都没人监听。此时"本轮改了哪些文件"的收尾信息必须
+	// 能够持久化到会话，而不是只随 done 事件推给当时恰好连着的那条连接。
+	// 实现（TurnFileOpTracker）需要自行处理重复调用。
+	TurnFinished(ctx context.Context)
 }
 
 // WithToolOps 把观察者写入 ctx，供 RunConversationStream/executeToolsWithHooks
@@ -44,4 +50,16 @@ func toolOpsFromCtx(ctx context.Context) ToolOpsObserver {
 		return v
 	}
 	return nil
+}
+
+// notifyTurnFinished 在回合结束时调用观察者的收尾钩子。所有退出路径
+// （正常结束、出错、被取消）都必须走到这里，否则"本轮变更的文件"会在
+// 无人监听 SSE 的回合里丢掉。nil 观察者与 nil ctx 都安全。
+func notifyTurnFinished(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	if obs := toolOpsFromCtx(ctx); obs != nil {
+		obs.TurnFinished(ctx)
+	}
 }

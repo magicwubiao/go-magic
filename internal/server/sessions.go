@@ -9,18 +9,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/magicwubiao/go-magic/internal/agent"
-	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
-	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -394,49 +389,46 @@ func (s *Server) handleSessionsDirGroups(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, sessionID string) {
-	// Only POST is allowed. The frontend previously used GET with everything
-	// stuffed into query params (token, base64 file contents, etc.) which leaks
-	// secrets via browser history, Referer, reverse-proxy access logs, and
-	// hits URL-length limits. POST keeps the payload in the body and lets us
-	// authenticate via the Authorization header instead of the URL.
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// chatPayload 是提交一条聊天消息的公共请求体（/stream 与 /messages 共用）。
+type chatPayload struct {
+	Content   string   `json:"content"`
+	Images    []string `json:"images"`
+	ImageURLs []string `json:"imageUrls"` // uploaded /api/uploads/ path per image (same order) — used as the persisted reference
+	// 每张图片的原始文件名（与 images 同序）。图片走多模态通道，不在 files
+	// 里，落库时要靠它把「缩略图旁边显示什么名字」记下来；缺省时后端会回查
+	// uploads 元数据兜底（见 uploadDisplayName）。
+	ImageNames []string `json:"imageNames"`
+	Files      []struct {
+		Name     string `json:"name"`
+		Filename string `json:"filename"`
+		URL      string `json:"url"`
+		Data     string `json:"data"` // legacy base64 data URL — kept for back-compat only
+	} `json:"files"`
+}
 
-	if s.provider == nil {
-		http.Error(w, "LLM provider not configured. Please add a provider in Models page.", 400)
-		return
-	}
+// parsedChatPayload 是 chatPayload 解析后的结果：模型可见的 content parts、
+// 落库用的引用、以及需要在执行前物化到工作目录的附件。
+type parsedChatPayload struct {
+	content            string
+	contentParts       []types.ContentPart
+	imageURLRefs       []string
+	imageNames         []string
+	pendingMaterialize []uploadToMaterialize
+}
 
-	// Cap body size to a reasonable limit. 16 MiB is well above any realistic
-	// chat payload but stops a malicious caller from streaming 10 GB into us.
-	const maxStreamBodyBytes = 16 << 20
-	r.Body = http.MaxBytesReader(w, r.Body, maxStreamBodyBytes)
-	defer r.Body.Close()
-
-	var payload struct {
-		Content   string   `json:"content"`
-		Images    []string `json:"images"`
-		ImageURLs []string `json:"imageUrls"` // uploaded /api/uploads/ path per image (same order) — used as the persisted reference
-		// 每张图片的原始文件名（与 images 同序）。图片走多模态通道，不在 files
-		// 里，落库时要靠它把「缩略图旁边显示什么名字」记下来；缺省时后端会回查
-		// uploads 元数据兜底（见 uploadDisplayName）。
-		ImageNames []string `json:"imageNames"`
-		Files      []struct {
-			Name     string `json:"name"`
-			Filename string `json:"filename"`
-			URL      string `json:"url"`
-			Data     string `json:"data"` // legacy base64 data URL — kept for back-compat only
-		} `json:"files"`
-	}
+// parseChatPayload 解析请求体并构建 content parts。
+//
+// 这段逻辑原本内联在 handleSessionStream 里；/messages 的 POST 也需要同样的
+// 处理（它同样是"提交一条消息"，只是不等结果），因此抽出来共用，
+// 避免两个入口对附件/图片的处理出现分叉。
+// errMsg 非空表示是调用方应回给客户端的 4xx 校验错误。
+func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedChatPayload, string) {
+	var payload chatPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "failed to decode stream payload: "+err.Error(), http.StatusBadRequest)
-		return
+		return nil, "failed to decode payload: " + err.Error()
 	}
 
-	content := payload.Content
+	out := &parsedChatPayload{content: payload.Content}
 
 	// Parse images from JSON body field. Inline base64 payloads are capped —
 	// they ride in the request body, get embedded into the agent history for
@@ -446,13 +438,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		maxImagesPerMessage  = 8
 		maxImagePayloadBytes = 12 << 20 // 12 MiB of base64 payload in total
 	)
-	var contentParts []types.ContentPart
-	var imageURLRefs []string // persisted reference per image part ("" = drop on persist)
-	var imageNames []string   // original display name per image part ("" = resolve from uploads meta on persist)
 	if len(payload.Images) > 0 {
 		if len(payload.Images) > maxImagesPerMessage {
-			http.Error(w, fmt.Sprintf("too many images: %d attached, max %d per message", len(payload.Images), maxImagesPerMessage), 400)
-			return
+			return nil, fmt.Sprintf("too many images: %d attached, max %d per message", len(payload.Images), maxImagesPerMessage)
 		}
 		totalImageBytes := 0
 		for i, imgURL := range payload.Images {
@@ -465,8 +453,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 				totalImageBytes += len(imgURL)
 			}
 			if totalImageBytes > maxImagePayloadBytes {
-				http.Error(w, "images too large: total inline payload exceeds 12 MiB — please attach fewer or smaller images", 400)
-				return
+				return nil, "images too large: total inline payload exceeds 12 MiB — please attach fewer or smaller images"
 			}
 			ref := ""
 			if i < len(payload.ImageURLs) {
@@ -476,12 +463,12 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 			if i < len(payload.ImageNames) {
 				name = payload.ImageNames[i]
 			}
-			contentParts = append(contentParts, types.ContentPart{
+			out.contentParts = append(out.contentParts, types.ContentPart{
 				Type:     "image_url",
 				ImageURL: &types.MediaURL{URL: imgURL},
 			})
-			imageURLRefs = append(imageURLRefs, ref)
-			imageNames = append(imageNames, name)
+			out.imageURLRefs = append(out.imageURLRefs, ref)
+			out.imageNames = append(out.imageNames, name)
 		}
 	}
 
@@ -493,7 +480,9 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	//   3. Fetch external URL (when uploaded somewhere else).
 	// All payloads live in the request body — the URL stays clean.
 	uploadsDir := s.uploadsRoot()
-	var pendingMaterialize []uploadToMaterialize
+	// 需要在回合开始前物化到会话工作目录的附件（agent 的文件工具被限制在
+	// 工作目录内，够不到 <magicHome>/uploads 根目录）。物化在入队前完成，
+	// 保证排队时间再长也不受上传目录清理影响。
 	for _, f := range payload.Files {
 		var dataURL string
 		handled := false // set when we already emitted a content part for this file
@@ -526,14 +515,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					// Remember for workdir materialization: the agent's file
 					// tools are sandboxed to the workdir and cannot reach the
 					// uploads root, so we copy the file over at stream time.
-					pendingMaterialize = append(pendingMaterialize, uploadToMaterialize{Name: f.Name, Src: candidate})
+					out.pendingMaterialize = append(out.pendingMaterialize, uploadToMaterialize{Name: f.Name, Src: candidate})
 					// Zip-based Office documents (xlsx/docx) are unreadable
 					// to the LLM as raw bytes — extract their text here so
 					// the model gets real content instead of hunting the
 					// filesystem for a file its tools cannot reach.
 					if parsed, ok := parseOfficeText(f.Name, data); ok {
 						payloadText := fmt.Sprintf("（以下内容从附件 %s 自动提取）\n\n%s", f.Name, parsed)
-						contentParts = append(contentParts, types.ContentPart{
+						out.contentParts = append(out.contentParts, types.ContentPart{
 							Type: "file",
 							File: &types.FileInfo{
 								Name:     f.Name,
@@ -607,7 +596,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 					finalMime = rest[:strings.Index(rest, ";")]
 				}
 			}
-			contentParts = append(contentParts, types.ContentPart{
+			out.contentParts = append(out.contentParts, types.ContentPart{
 				Type: "file",
 				File: &types.FileInfo{
 					Name:     f.Name,
@@ -619,16 +608,53 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 
-	// Validate that we have at least content or media to send
-	if content == "" && len(contentParts) == 0 {
-		http.Error(w, "content or media required", 400)
+	return out, ""
+}
+
+// handleSessionStream POST /api/sessions/{id}/stream
+//
+// 语义（改造后）：
+//   - 普通模式：把消息放入会话队列，然后保持 SSE 连接监听该会话的事件总线，
+//     转发回合事件直到本回合结束（done）。回合由队列 worker 串行执行，
+//     一个会话永远只有一个回合在跑，后续消息排队等待。
+//   - 附着模式（?attach=1）：不提交消息，只把连接挂到事件总线，用于断线
+//     （手机切后台）或回合进行中打开页面时续接实时输出。
+//
+// 之所以不再在 handler 里同步跑 agent：handler 的生命周期受 HTTP 连接
+// 约束，而回合的生命周期只受超时与用户停止约束。排队功能要求"提交"与
+// "执行"解耦——提交请求可以立刻返回，回合在后台按 FIFO 串行执行。
+func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, sessionID string) {
+	// Only POST is allowed. The frontend previously used GET with everything
+	// stuffed into query params (token, base64 file contents, etc.) which leaks
+	// secrets via browser history, Referer, reverse-proxy access logs, and
+	// hits URL-length limits. POST keeps the payload in the body and lets us
+	// authenticate via the Authorization header instead of the URL.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	aiAgent := s.getOrCreateAgent(sessionID)
-	if aiAgent == nil {
-		http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
+	if s.provider == nil {
+		http.Error(w, "LLM provider not configured. Please add a provider in Models page.", 400)
 		return
+	}
+
+	// Cap body size to a reasonable limit. 16 MiB is well above any realistic
+	// chat payload but stops a malicious caller from streaming 10 GB into us.
+	const maxStreamBodyBytes = 16 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxStreamBodyBytes)
+	defer r.Body.Close()
+
+	// 附着模式：只把连接挂到会话的事件总线上，不发送新消息（见下方说明）。
+	attach := r.URL.Query().Get("attach") == "1"
+
+	// Validate that we have at least content or media to send. 附着模式下
+	// 不带消息，因此该校验只对普通发送生效。
+	if !attach {
+		if s.provider == nil {
+			http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -649,288 +675,248 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	sseW := newSSEWriter(w, flusher)
 	writeSSE := sseW.Write
 
-	// Flush headers immediately so the client/proxy knows the stream is alive.
-	writeSSE("data: {\"type\":\"connected\"}\n\n")
+	// ------------------------------------------------------------------
+	// 附着模式（?attach=1）：不发送任何新消息，只是把当前 SSE 连接挂到该
+	// 会话的事件总线上，用于断线（手机切后台）或回合进行中打开页面时续接
+	// 实时输出。没有回合在跑时不发 done，连接由 keepAlive 维持，直到客户端
+	// 主动断开——前端若在附着期间发消息会关闭旧连接并以普通模式重开。
+	// ------------------------------------------------------------------
+	if attach {
+		writeSSE("data: {\"type\":\"connected\"}\n\n")
 
-	// 注册本 session 的审批 SSE 推送回调：当 ApprovalHook 创建 pending 时，
-	// 立即向当前 SSE 流推送 approval_required 事件，前端在对话流内渲染审批卡片。
-	defer s.registerApprovalSSEHandler(sessionID, writeSSE)()
-	// 注册本 session 的澄清卡片推送回调：clarify 工具挂起时推 clarify_required，
-	// 前端在对话流内渲染澄清卡片（选项 + 追加说明）。
-	defer s.registerClarifySSEHandler(sessionID, writeSSE)()
+		queue := s.sessionQueueFor(sessionID)
+		snk := queue.addSink()
+		defer func() {
+			snk.cancel()
+			queue.closeSink(snk)
+		}()
 
-	// 回合生命周期与客户端连接解耦：手机浏览器切后台/锁屏时系统会杀掉
-	// 连接，挂在 r.Context() 上的回合会随之被取消——表现为"对话中断，
-	// 回复丢失"。改用独立 ctx（带超时）：客户端断开后回合继续执行并照常
-	// 落库；前端回前台后通过 GET /running 轮询恢复，用户点停止走 /cancel。
-	turnCtx, turnCancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer turnCancel()
-	s.registerStreamCancel(sessionID, turnCancel)
-	defer s.unregisterStreamCancel(sessionID)
-	ctx := turnCtx
-	defer sseW.Close()
+		streamCtx, streamCancel := context.WithCancel(context.Background())
+		defer streamCancel()
+		startSSEClientWatch(r.Context(), streamCancel)
 
-	// Inject the session's working directory into the context so file and
-	// command tools resolve relative paths against it, then save the user
-	// message to the session.
-	// 本轮"变更的文件"快照跟踪器：经 ctx 注入 agent 的工具执行路径
-	// （见 fileops.go），在写前快照文件、结束时产出带行级 diff 的净变更。
-	turnOps := NewTurnFileOpTracker()
-	if s.sessionStore != nil {
-		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-			ctx = tool.WithWorkDir(ctx, sess.WorkDir)
-			ctx = tool.WithWorkDirUserSet(ctx, sess.WorkDirUserSet)
-			ctx = agent.WithToolOps(ctx, turnOps)
-
-			// Materialize uploaded attachments into the session workdir so the
-			// model's file tools (sandboxed to the workdir) can read them. The
-			// canonical copies under <magicHome>/uploads stay untouched — they
-			// remain the source of truth for GC and audit.
-			if len(pendingMaterialize) > 0 {
-				if summary := materializeUploads(pendingMaterialize, sess.WorkDir); summary != "" {
-					contentParts = append(contentParts, types.ContentPart{Type: "text", Text: summary})
-				} else {
-					// Fallback: workdir unavailable (not created yet?). At
-					// least point the model at the canonical server paths.
-					var lines []string
-					for _, it := range pendingMaterialize {
-						lines = append(lines, fmt.Sprintf("- %s → %s", it.Name, it.Src))
-					}
-					contentParts = append(contentParts, types.ContentPart{
-						Type: "text",
-						Text: "附件已保存在以下服务器路径（工作目录暂不可用，如需读取请告知用户）：\n" + strings.Join(lines, "\n"),
-					})
-				}
-			}
-
-			// Strip inline base64 payloads before persisting. The agent
-			// already consumed them for this turn; keeping megabytes of
-			// base64 in the SQLite message blob would bloat every saved
-			// session. Files and images both degrade to their uploaded
-			// reference path; a bare data URL must never reach the store.
-			persistedParts := persistedContentParts(contentParts, imageURLRefs, imageNames, s.uploadDisplayName)
-
-			sess.Messages = append(sess.Messages, types.Message{
-				Role:         "user",
-				Content:      content,
-				ContentParts: persistedParts,
-				Timestamp:    time.Now(),
-			})
-			sess.UpdatedAt = time.Now()
-			s.sessionStore.SaveSession(context.Background(), sess)
-		}
-	}
-
-	// Start heartbeat goroutine to keep connection alive during long tool executions
-	heartbeatDone := make(chan struct{})
-	safeGo(func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if !writeSSE("data: {\"type\":\"ping\"}\n\n") {
-					// 写失败只说明客户端连接已断（手机切后台等）。
-					// 回合与连接已解耦：仅停止心跳，不取消回合。
-					return
-				}
-			case <-heartbeatDone:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	})
-
-	// Check if provider supports streaming
-	_, supportsStream := s.provider.(provider.StreamingToolCaller)
-	if !supportsStream {
-		// Fallback: non-streaming response sent as single chunk
-		var resp string
-		var err error
-		if len(contentParts) > 0 {
-			resp, err = aiAgent.RunConversationWithMedia(ctx, content, contentParts)
-		} else {
-			resp, err = aiAgent.RunConversation(ctx, content)
-		}
-		close(heartbeatDone)
-		if err != nil {
-			data, _ := json.Marshal(map[string]string{"error": err.Error()})
-			writeSSE("data: " + string(data) + "\n\n")
+		if queue.snapshot().running {
+			// 回合正在进行：只挂监听，实时事件照常转发（不发 done——
+			// 本连接是附着者，回合结果由回合自身的结束信号负责）。
+			s.forwardTurnEvents(streamCtx, writeSSE, snk)
 			return
 		}
 
-		// Send as delta chunks
-		words := strings.Split(resp, "")
-		clientGone := false
-		for _, word := range words {
-			select {
-			case <-ctx.Done():
-				// 客户端断开时回复已完整生成，仍要落库，避免整轮丢失
-				clientGone = true
-			default:
-			}
-			if clientGone {
-				break
-			}
-			data, _ := json.Marshal(map[string]string{"delta": word})
-			if !writeSSE("data: " + string(data) + "\n\n") {
-				clientGone = true
-				break
-			}
-		}
-
-		// Save assistant message（即使发送中途断开也保存完整回复）
-		if s.sessionStore != nil && strings.TrimSpace(resp) != "" {
-			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-				sess.Messages = append(sess.Messages, types.Message{
-					Role:      "assistant",
-					Content:   resp,
-					Timestamp: time.Now(),
-				})
-				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
-				sess.InputTokens += inputTokens
-				sess.OutputTokens += outputTokens
-				sess.CacheReadTokens += cacheTokens
-				sess.UpdatedAt = time.Now()
-				s.sessionStore.SaveSession(context.Background(), sess)
-			}
-		}
-
-		// Record usage statistics
-		s.recordUsage(aiAgent, sessionID)
-
-		doneData, _ := json.Marshal(map[string]bool{"done": true})
-		writeSSE("data: " + string(doneData) + "\n\n")
+		// 空闲：报一个 started=false，让前端立刻知道"这一刻没有回合在跑"，
+		// 随后保持心跳（若用户在此期间发消息，worker 会推 turn_started）。
+		writeSSE("data: {\"type\":\"stream_started\",\"started\":false}\n\n")
+		s.keepAlive(streamCtx, writeSSE, queue)
 		return
 	}
 
-	// Real streaming
-	var fullResponse strings.Builder
-	var streamErr error
-	streamHandler := func(chunk string, done bool) {
-		if done {
-			return
-		}
-		if chunk == "" {
-			return
-		}
+	parsed, errMsg := s.parseChatPayload(r, sessionID)
+	if parsed == nil {
+		writeSSE("data: " + sseErrorPayload(fmt.Errorf("%s", errMsg)) + "\n\n")
+		return
+	}
+	if parsed.content == "" && len(parsed.contentParts) == 0 {
+		writeSSE("data: " + sseErrorPayload(fmt.Errorf("content or media required")) + "\n\n")
+		return
+	}
+	defer sseW.Close()
 
+	aiAgent := s.getOrCreateAgent(sessionID)
+	if aiAgent == nil {
+		writeSSE("data: " + sseErrorPayload(errProviderNotConfigured{}) + "\n\n")
+		return
+	}
+
+	// Inject the session's working directory into the turn run context.
+	// 解析阶段就固定下来：排队消息可能在很久以后才被执行，期间用户可能改了
+	// 会话的工作目录——一条消息的工作目录必须与发送它的那一刻一致。
+	turnRun := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
+	if s.sessionStore != nil {
+		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+			turnRun.workDir = sess.WorkDir
+			turnRun.workDirUserSet = sess.WorkDirUserSet
+		}
+	}
+
+	// Materialize uploaded attachments into the session workdir so the model's
+	// file tools (sandboxed to the workdir) can read them. The canonical copies
+	// under <magicHome>/uploads stay untouched — they remain the source of
+	// truth for GC and audit. 必须在入队前完成：排队项若携带上传引用，
+	// 文件可能在真正执行前被清理，届时再物化就晚了。
+	var materializeSummary string
+	if len(parsed.pendingMaterialize) > 0 {
+		materializeSummary = materializeUploads(parsed.pendingMaterialize, turnRun.workDir)
+		if materializeSummary == "" {
+			// 工作目录不可用（尚未创建？）：至少把服务器的规范路径告诉模型。
+			lines := make([]string, 0, len(parsed.pendingMaterialize))
+			for _, it := range parsed.pendingMaterialize {
+				lines = append(lines, fmt.Sprintf("- %s → %s", it.Name, it.Src))
+			}
+			materializeSummary = "附件已保存在以下服务器路径（工作目录暂不可用，如需读取请告知用户）：\n" + strings.Join(lines, "\n")
+		}
+	}
+
+	// 落库用的 content parts 在此处（入队前）算好：队列项里保留的是轻量引用，
+	// 而 persistedContentParts 需要把 inline 载荷换成上传路径引用。
+	persistedParts := persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
+
+	item, dup := s.enqueueChatTurn(sessionID, parsed.content, parsed.contentParts, persistedParts, turnRun, materializeSummary)
+	if item == nil {
+		writeSSE("data: " + sseErrorPayload(fmt.Errorf("message not accepted, please retry")) + "\n\n")
+		return
+	}
+
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
+
+	queue := s.sessionQueueFor(sessionID)
+	snk := queue.addSink()
+	defer func() {
+		snk.cancel()
+		queue.closeSink(snk)
+	}()
+
+	// 排队位置：入队后立刻回给前端，避免"点了发送但界面没反应"。
+	if !dup {
+		writeSSE(sseQueuedPayload(item, queue))
+	}
+
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+	startSSEClientWatch(r.Context(), streamCancel)
+
+	s.forwardTurnEvents(streamCtx, writeSSE, snk)
+}
+
+// enqueueChatTurn 把一条消息放入会话队列并确保 worker 在跑。重复提交
+// （同 session 同内容、队列里已存在完全相同的待执行项）会被合并，避免
+// 弱网重试在前端留下两条一模一样的排队气泡。
+// 返回 nil 表示队列正在回收（调用方应让客户端重试）。
+func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types.ContentPart, persistedParts []types.ContentPart, run *turnRunCtx, materializeSummary string) (*queuedTurn, bool) {
+	// 物化摘要先并入 content parts，再统一剥离 inline 载荷——保持与改造前
+	// 完全一致的模型输入顺序（用户文本 → 图片/文件 → 物化摘要）。
+	if materializeSummary != "" {
+		contentParts = append(contentParts, types.ContentPart{Type: "text", Text: materializeSummary})
+	}
+	// 所有需要字节的步骤（物化、Office 文本抽取）都已在入队前完成，此处把
+	// inline base64 降级为轻量引用：排队项可能等上几分钟，带着几十 MB 的
+	// base64 排队既占内存又会随会话落库膨胀。
+	if slimmed := stripInlineMediaParts(contentParts); slimmed != nil {
+		contentParts = slimmed
+	}
+
+	item := &queuedTurn{
+		id:             uuid.NewString(),
+		content:        content,
+		contentParts:   contentParts,
+		persistedParts: persistedParts,
+		createdAt:      time.Now(),
+		run:            run,
+	}
+
+	s.chatQueuesMu.Lock()
+	queue := s.chatQueues[sessionID]
+	if queue == nil {
+		queue = newSessionQueue()
+		s.chatQueues[sessionID] = queue
+	}
+	// workerLive 在 chatQueuesMu 下判定，保证两个人同时发消息时只会有一个
+	// worker 被拉起——否则同一个 *agent.Agent 会被并行使用。
+	spawnWorker := !queue.workerLive
+	if spawnWorker {
+		queue.workerLive = true
+	}
+	s.chatQueuesMu.Unlock()
+
+	if dupItem := queue.findDuplicate(content); dupItem != nil {
+		return dupItem, true
+	}
+	queue.enqueue(item)
+
+	if spawnWorker {
+		safeGo(func() { s.runQueue(sessionID, queue) })
+	}
+	return item, false
+}
+
+// findDuplicate 返回队列中内容完全相同的待执行项（仅比对文本，命中即视为
+// 同一消息的重发）。
+func (q *sessionQueue) findDuplicate(content string) *queuedTurn {
+	if content == "" {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, it := range q.items {
+		if it.content == content {
+			return it
+		}
+	}
+	return nil
+}
+
+// forwardTurnEvents 把 sink 上的回合事件转发到这条 SSE 连接，直到回合结束
+// （done/error）或客户端断开。回合结束后仅结束本次请求，不是"停止回合"。
+func (s *Server) forwardTurnEvents(ctx context.Context, writeSSE func(string) bool, snk *turnSink) {
+	for {
 		select {
+		case ev, ok := <-snk.evch:
+			if !ok {
+				return
+			}
+			if ev.err != nil {
+				writeSSE("data: " + sseErrorPayload(ev.err) + "\n\n")
+			}
+			if ev.data != "" && !writeSSE(ev.data) {
+				return
+			}
+			if ev.done {
+				return
+			}
 		case <-ctx.Done():
 			return
-		default:
-		}
-
-		// Parse tool markers and emit structured events for web frontend
-		// >>>TOOL_START|toolName|args<<<
-		if strings.Contains(chunk, ">>>TOOL_START|") {
-			re := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
-			m := re.FindStringSubmatch(chunk)
-			if m != nil {
-				toolName := m[1]
-				toolArgs := m[2]
-				fileOps := extractFileOps(toolName, toolArgs, "")
-				argsSummary := toolArgs
-				if len(argsSummary) > 200 {
-					argsSummary = truncateRunes(argsSummary, 200) + "..."
-				}
-				eventData, _ := json.Marshal(map[string]interface{}{
-					"type":     "tool_start",
-					"name":     toolName,
-					"args":     argsSummary,
-					"file_ops": fileOps,
-				})
-				writeSSE("data: " + string(eventData) + "\n\n")
-			}
-			return
-		}
-
-		// >>>TOOL_RESULT_START|toolName|success|duration<<<content>>>TOOL_RESULT_END<<<
-		if strings.Contains(chunk, ">>>TOOL_RESULT_START|") {
-			re := regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^<]+)<<<`)
-			endRe := regexp.MustCompile(`>>>TOOL_RESULT_END<<<`)
-			startMatch := re.FindStringSubmatchIndex(chunk)
-			endMatch := endRe.FindStringIndex(chunk)
-			if startMatch != nil && endMatch != nil {
-				submatch := re.FindStringSubmatch(chunk[startMatch[0]:startMatch[1]])
-				if len(submatch) >= 4 {
-					toolName := submatch[1]
-					toolSuccess := submatch[2] == "true"
-					toolDuration := submatch[3]
-					toolContent := chunk[startMatch[1]:endMatch[0]]
-					fileOps := extractFileOps(toolName, "{}", toolContent)
-					// Truncate tool content for display
-					if len(toolContent) > 500 {
-						toolContent = utils.Truncate(toolContent, 500)
-					}
-					eventData, _ := json.Marshal(map[string]interface{}{
-						"type":     "tool_result",
-						"name":     toolName,
-						"success":  toolSuccess,
-						"duration": toolDuration,
-						"content":  strings.TrimSpace(toolContent),
-						"file_ops": fileOps,
-					})
-					writeSSE("data: " + string(eventData) + "\n\n")
-				}
-			}
-			return
-		}
-
-		// Skip other internal markers
-		if strings.Contains(chunk, ">>>TURN_START<<<") {
-			return
-		}
-
-		fullResponse.WriteString(chunk)
-		data, _ := json.Marshal(map[string]string{"delta": chunk})
-		writeSSE("data: " + string(data) + "\n\n")
-	}
-	if len(contentParts) > 0 {
-		streamErr = aiAgent.RunConversationStreamWithMedia(ctx, content, contentParts, streamHandler)
-	} else {
-		streamErr = aiAgent.RunConversationStream(ctx, content, streamHandler)
-	}
-
-	close(heartbeatDone)
-
-	if streamErr != nil {
-		data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
-		writeSSE("data: " + string(data) + "\n\n")
-	}
-
-	// 本轮"变更的文件"（写前快照 + 净 diff，见 fileops.go）：
-	// 先算一次，同时用于落库与 done 事件的 file_ops —— 前端收到 done 后
-	// 无需等刷新就能拿到带 diff 的列表。
-	finalOps := turnOps.Result()
-
-	// Save assistant message。
-	// 空内容保护：中断（用户点停止、超时等）且没有任何已生成内容时，
-	// 不追加空 assistant 消息 —— 否则下次打开会话会出现空白回答气泡；
-	// 用户消息已在流开始前保存，此处跳过即可保持历史干净。
-	if assistantText := strings.TrimSpace(fullResponse.String()); s.sessionStore != nil && assistantText != "" {
-		if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-			sess.Messages = append(sess.Messages, types.Message{
-				Role:      "assistant",
-				Content:   fullResponse.String(),
-				Timestamp: time.Now(),
-				FileOps:   finalOps,
-			})
-			inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
-			sess.InputTokens += inputTokens
-			sess.OutputTokens += outputTokens
-			sess.CacheReadTokens += cacheTokens
-			sess.UpdatedAt = time.Now()
-			s.sessionStore.SaveSession(context.Background(), sess)
 		}
 	}
+}
 
-	// Record usage statistics
-	s.recordUsage(aiAgent, sessionID)
+// startSSEClientWatch 监视客户端是否断开。回合与连接已解耦：断开只意味着
+// "没人看这条流了"，不取消回合；这里只是让读事件的循环尽快退出，避免
+// handler goroutine 与 SSE 连接泄漏。
+func startSSEClientWatch(rctx context.Context, cancel context.CancelFunc) {
+	safeGo(func() {
+		<-rctx.Done()
+		cancel()
+	})
+}
 
-	doneData, _ := json.Marshal(map[string]interface{}{"done": true, "file_ops": finalOps})
-	writeSSE("data: " + string(doneData) + "\n\n")
+// ============================================================================
+// SSE payload helpers
+// ============================================================================
+
+func sseErrorPayload(err error) string {
+	b, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return string(b)
+}
+
+func sseQueuedPayload(item *queuedTurn, queue *sessionQueue) string {
+	b, _ := json.Marshal(map[string]interface{}{
+		"type":       "queued",
+		"id":         item.id,
+		"content":    shortenQueuedContent(item.content),
+		"position":   queue.positionOf(item.id),
+		"created_at": item.createdAt.Unix(),
+	})
+	return "data: " + string(b) + "\n\n"
+}
+
+// positionOf 返回队列项的位置（1 起）；0 表示已经不在队列中（可能已开始执行）。
+func (q *sessionQueue) positionOf(id string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.items {
+		if it.id == id {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // ============================================================================
@@ -1043,65 +1029,53 @@ func persistedContentParts(parts []types.ContentPart, imageURLRefs, imageNames [
 // Stream lifecycle registry
 //
 // 回合与客户端连接解耦后（见 handleSessionStream），server 需要记录每个
-// session 正在运行的回合，供 /running 探测和 /cancel 显式停止使用。
+// session 的队列状态，供 /running 探测（含排队深度）、/cancel 显式停止使用。
+// 状态即 chatqueue.go 里的 sessionQueue：改造前这里是一个只有 cancel func
+// 的全局 map，既不区分"在跑"与"排队"，也无法回答"还有几条在等"。
 // ============================================================================
-
-var streamCancels = struct {
-	sync.Mutex
-	m map[string]context.CancelFunc
-}{m: make(map[string]context.CancelFunc)}
-
-func (s *Server) registerStreamCancel(sessionID string, cancel context.CancelFunc) {
-	streamCancels.Lock()
-	streamCancels.m[sessionID] = cancel
-	streamCancels.Unlock()
-}
-
-func (s *Server) unregisterStreamCancel(sessionID string) {
-	streamCancels.Lock()
-	delete(streamCancels.m, sessionID)
-	streamCancels.Unlock()
-}
-
-func (s *Server) sessionTurnRunning(sessionID string) bool {
-	streamCancels.Lock()
-	_, ok := streamCancels.m[sessionID]
-	streamCancels.Unlock()
-	return ok
-}
 
 // handleSessionRunning GET /api/sessions/{id}/running — 前端在连接被手机
 // 浏览器切后台杀掉后轮询此端点：running=true 表示回合仍在服务端执行，
 // 继续等待；false 表示回合已结束，拉取 /messages 恢复完整回复。
+// 同时返回队列信息，前端据此渲染"排队中"的消息并支持刷新后恢复。
 func (s *Server) handleSessionRunning(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	snap := s.queueInfoFor(sessionID)
+	queued := snap.items
+	if queued == nil {
+		queued = []queuedTurnInfo{}
+	}
 	jsonResponse(w, map[string]interface{}{
-		"session_id": sessionID,
-		"running":    s.sessionTurnRunning(sessionID),
+		"session_id":  sessionID,
+		"running":     snap.running,
+		"active_id":   snap.activeID,
+		"queue_depth": len(queued),
+		"queued":      queued,
 	})
 }
 
 // handleSessionCancel POST /api/sessions/{id}/cancel — 用户点"停止"时由前端
 // 调用。连接解耦后，前端 abort 本地 fetch 不再能取消服务端回合，必须显式取消。
+// 语义是「停止这一切」：既取消正在执行的回合，也丢弃全部排队消息——前端在
+// 点停止时会同时清掉本地的排队气泡，服务端若保留队列，刷新后那些消息会
+// 重新冒出来执行，与用户的意图相反。
 func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	streamCancels.Lock()
-	cancel, ok := streamCancels.m[sessionID]
-	streamCancels.Unlock()
-	cancelled := false
-	if ok {
-		cancel()
-		cancelled = true
+	res := cancelSignal{}
+	if q := s.lookupSessionQueue(sessionID); q != nil {
+		res = q.cancelAll()
 	}
 	jsonResponse(w, map[string]interface{}{
-		"session_id": sessionID,
-		"cancelled":  cancelled,
+		"session_id":  sessionID,
+		"cancelled":   res.active,
+		"dropped":     res.pending,
+		"queue_depth": 0,
 	})
 }
 
@@ -1125,64 +1099,63 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 			"messages":   messages,
 		})
 	case "POST":
+		// POST /api/sessions/{id}/messages —— 非流式提交入口。
+		//
+		// 改造后语义变为"入队"：消息进入会话队列后立即返回，由队列 worker
+		// 串行执行，结果通过 SSE 流（/stream）或会话消息接口异步获取。这样
+		// 客户端在一个回合进行中提交第二条消息时不会被阻塞或丢弃。
+		// 注意这不再是"同步等结果"的接口——需要实时输出的调用方应使用 /stream。
 		if s.provider == nil {
 			http.Error(w, "provider not configured", 400)
 			return
 		}
 
-		var req struct {
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
-			http.Error(w, "invalid request: content required", 400)
+		const maxBodyBytes = 16 << 20
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		defer r.Body.Close()
+
+		// 与 /stream 共用同一套解析：图片上限、Office 文本抽取、附件物化
+		// 等处理必须完全一致，否则两条入口会出现行为分叉。
+		parsed, errMsg := s.parseChatPayload(r, sessionID)
+		if parsed == nil {
+			http.Error(w, errMsg, 400)
 			return
 		}
 
-		aiAgent := s.getOrCreateAgent(sessionID)
-		if aiAgent == nil {
-			http.Error(w, "LLM provider not configured. Please set up a provider in Settings.", http.StatusServiceUnavailable)
-			return
-		}
-
-		ctx := context.Background()
-		respContent, err := aiAgent.RunConversation(ctx, req.Content)
-		if err != nil {
-			// 出错也要保存本轮已执行的内容：用户消息 + agent history 中
-			// 已完成的工具调用/结果（partial），否则整轮工作全部丢失。
-			partial := extractPartialTurnText(aiAgent.GetHistory(), req.Content)
-			s.persistTurnMessagesWithPartial(aiAgent, sessionID, req.Content, "", partial, nil)
-			s.recordUsage(aiAgent, sessionID)
-			http.Error(w, fmt.Sprintf("agent error: %v", err), 500)
-			return
-		}
-
-		// Save to session store
+		run := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
 		if s.sessionStore != nil {
 			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-				sess.Messages = append(sess.Messages, types.Message{
-					Role:      "user",
-					Content:   req.Content,
-					Timestamp: time.Now(),
-				})
-				sess.Messages = append(sess.Messages, types.Message{
-					Role:      "assistant",
-					Content:   respContent,
-					Timestamp: time.Now(),
-				})
-				inputTokens, outputTokens, cacheTokens := aiAgent.GetTokenStats()
-				sess.InputTokens += inputTokens
-				sess.OutputTokens += outputTokens
-				sess.CacheReadTokens += cacheTokens
-				sess.UpdatedAt = time.Now()
-				s.sessionStore.SaveSession(context.Background(), sess)
+				run.workDir = sess.WorkDir
+				run.workDirUserSet = sess.WorkDirUserSet
 			}
 		}
 
+		var materializeSummary string
+		if len(parsed.pendingMaterialize) > 0 {
+			materializeSummary = materializeUploads(parsed.pendingMaterialize, run.workDir)
+			if materializeSummary == "" {
+				lines := make([]string, 0, len(parsed.pendingMaterialize))
+				for _, it := range parsed.pendingMaterialize {
+					lines = append(lines, fmt.Sprintf("- %s → %s", it.Name, it.Src))
+				}
+				materializeSummary = "附件已保存在以下服务器路径（工作目录暂不可用，如需读取请告知用户）：\n" + strings.Join(lines, "\n")
+			}
+		}
+
+		persistedParts := persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
+		item, dup := s.enqueueChatTurn(sessionID, parsed.content, parsed.contentParts, persistedParts, run, materializeSummary)
+		if item == nil {
+			http.Error(w, "message not accepted, please retry", http.StatusServiceUnavailable)
+			return
+		}
+
 		jsonResponse(w, map[string]interface{}{
-			"id":        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-			"role":      "assistant",
-			"content":   respContent,
-			"timestamp": time.Now().Unix(),
+			"id":        item.id,
+			"role":      "user",
+			"content":   parsed.content,
+			"queued":    !dup,
+			"duplicate": dup,
+			"timestamp": item.createdAt.Unix(),
 		})
 	default:
 		http.Error(w, "method not allowed", 405)

@@ -81,6 +81,13 @@ func (t *TurnFileOpTracker) ToolStarting(ctx context.Context, toolName string, a
 func (t *TurnFileOpTracker) ToolFinished(_ context.Context, _ string, _ map[string]interface{}, _ error) {
 }
 
+// TurnFinished 是回合收尾钩子（agent 在 RunConversation* 返回前调用）。本
+// 追踪器的净变更比较完全基于磁盘，因此无需在此做任何事——保留空实现是为了
+// 让"本轮改了哪些文件"的结果由 server 在回合结束后统一取用并落库，而不是
+// 依赖某条恰好连着的 SSE 连接（详见 agent.ToolOpsObserver 的说明）。
+func (t *TurnFileOpTracker) TurnFinished(_ context.Context) {
+}
+
 // snapshotPath 对单个目标路径做写前快照（同路径本轮只拍一次）。
 func (t *TurnFileOpTracker) snapshotPath(ctx context.Context, _ string, raw string) {
 	abs, display := canonicalOpPath(ctx, raw)
