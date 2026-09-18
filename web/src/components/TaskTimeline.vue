@@ -301,7 +301,9 @@ const decoratedSteps = computed(() =>
   border: 1px solid #e6ebf3;
   border-radius: 8px;
   background: #fafbfd;
-  max-height: 168px;
+  /* 6px×2 内边距 + 7×24px 整行 = 180px：滚动截断处永远停在整行边界，
+     不会把最后一行文字切一半吊在那（"文字一半被遮挡"就是这么来的）。 */
+  max-height: 180px;
   overflow-y: auto;
 }
 
@@ -309,7 +311,9 @@ const decoratedSteps = computed(() =>
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 24px;
+  /* min-height 而不是固定 height：万一内容比预期高（字体回退、缩放），
+     行会自己长高而不是把文字溢出到相邻行上，看起来像"文字被盖住一半"。 */
+  min-height: 24px;
   font-size: 12px;
   color: #6b7280;
 }
@@ -347,12 +351,16 @@ const decoratedSteps = computed(() =>
   flex-shrink: 0;
   font-weight: 500;
   color: #4b5563;
+  white-space: nowrap;
 }
 
 .td-step-summary {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  /* text-overflow: ellipsis 必须搭配 nowrap 才生效——缺了它长参数会折行，
+     在固定行高里溢出压到下一行上，正是"文字一半被遮挡"的另一半来源。 */
+  white-space: nowrap;
   text-overflow: ellipsis;
   color: #9ca3af;
   font-family: 'SF Mono', 'Consolas', monospace;

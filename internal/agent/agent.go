@@ -207,6 +207,11 @@ type Agent struct {
 	trajCfg      cortex.TrajectoryInjectorConfig
 	trajStore    *cortex.TrajectoryStore
 
+	// 引导（guide）收件箱：回合进行中用户追加的补充指示。零值即可用；
+	// push 由 HTTP handler goroutine 调用，排水只发生在回合 goroutine
+	// （迭代顶部）与 server 回合收尾（残留回收）——契约见 guide.go。
+	guideInbox guideInbox
+
 	// Smart error recovery for tool execution
 	smartRecovery *retry.SmartRecovery
 }
@@ -1045,6 +1050,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
 			"turn": a.iterationCount,
 		})
+
+		// 引导注入：与流式循环一致（见 guide.go）。
+		a.drainGuidesIntoHistory()
 
 		// Build LLM request. buildLLMMessages strips <think> reasoning trails
 		// from the outbound copy — see stripThinkContent for why.
@@ -1940,6 +1948,11 @@ Please provide a comprehensive, well-structured final response based on these su
 		if a.iterationCount > 0 {
 			handler("\n>>>TURN_START<<<\n", false)
 		}
+
+		// 引导注入：排水本迭代积累的用户引导并入历史（见 guide.go）。
+		// 必须在 buildLLMMessages 之前，保证本次 LLM 调用就能看到；
+		// 迭代 0 时引导会并入刚追加的本回合输入（合并策略见 applyGuides）。
+		a.drainGuidesIntoHistory()
 
 		// Build LLM request. buildLLMMessages strips <think> reasoning trails
 		// from the outbound copy — see stripThinkContent for why.

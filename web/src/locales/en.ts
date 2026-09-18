@@ -235,6 +235,7 @@ export default {
     queuedDelete: 'Delete this queued message',
     queuedRetry: 'Resend (moves to the back of the queue)',
     queuedSendHint: 'Send (runs after the current turn finishes)',
+    guideSendHint: 'Guide the conversation: the message is sent but will not interrupt the model',
     queuedDrag: 'Drag to reorder',
     queuedEditTooLate: 'This message has already started running and cannot be edited — use Stop to interrupt it',
     toolStats: '{total} tool call(s) · {success} succeeded · {failed} failed',

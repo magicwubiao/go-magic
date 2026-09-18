@@ -524,8 +524,27 @@
                   <n-icon><StopCircleOutline /></n-icon>
                 </template>
               </n-button>
+              <!-- 引导键：回合进行中且输入框有纯文本时出现。点击把这条消息注入
+                   正在运行的回合——模型在下一次 LLM 调用前看到它并调整方向，
+                   生成不被打断（区别于发送：busy 期间发送是排队，作为新回合
+                   稍后执行）。引导只支持纯文本，带附件时不显示（服务端对带
+                   附件的引导会回落入队）。 -->
               <n-button
-                v-else
+                v-if="canGuide"
+                size="small"
+                circle
+                secondary
+                type="info"
+                @click="handleGuide"
+                :title="t('chat.guideSendHint')"
+                class="send-circle-btn"
+              >
+                <template #icon>
+                  <n-icon><FlashOutline /></n-icon>
+                </template>
+              </n-button>
+              <n-button
+                v-else-if="!chatStore.busy || hasComposerContent"
                 type="primary"
                 size="small"
                 circle
@@ -842,7 +861,7 @@ import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { AttachOutline, SendOutline, StopCircleOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -1253,6 +1272,13 @@ const uploadingFiles = ref<Set<string>>(new Set())
 // 可见——busy（流式/排队）期间把它换成停止键会让打好的字发不出去。
 const hasComposerContent = computed(
   () => !!inputValue.value.trim() || selectedFiles.value.length > 0,
+)
+
+// canGuide 决定引导键（⚡）是否出现：回合进行中（busy）+ 输入框有纯文本 +
+// 没有附件。引导只注入文本（服务端对带附件的引导回落入队），所以带附件时
+// 不给入口，避免用户以为附件也会被模型立刻看到。
+const canGuide = computed(
+  () => !!inputValue.value.trim() && chatStore.busy && selectedFiles.value.length === 0,
 )
 
 function formatFileSize(bytes: number): string {
@@ -2253,6 +2279,18 @@ function handleInput() {
 function selectCommand(suggestion: string) {
   inputValue.value = suggestion + ' '
   commandSuggestions.value = []
+}
+
+// 引导（steer）：回合进行中把输入框内容注入正在运行的回合——模型在下一次
+// LLM 调用前看到它并调整方向，不排队、不打断当前生成。与 send 不同：引导
+// 只携带纯文本（带附件的引导服务端会回落成普通排队消息），且不走命令解析。
+// 提交失败由 store 回滚乐观气泡并置 error；输入框即刻清空保持手感一致。
+async function handleGuide() {
+  const content = inputValue.value.trim()
+  if (!content) return
+  inputValue.value = ''
+  commandSuggestions.value = []
+  await chatStore.guideMessage(content)
 }
 
 async function send() {

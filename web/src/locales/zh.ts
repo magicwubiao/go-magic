@@ -235,6 +235,7 @@ export default {
     queuedDelete: '删除这条排队消息',
     queuedRetry: '重新发送（排到队尾）',
     queuedSendHint: '发送（当前回合结束后自动执行）',
+    guideSendHint: '引导会话，消息将被发出但模型不会中断',
     queuedDrag: '拖动可调整执行顺序',
     queuedEditTooLate: '这条消息已经开始执行，无法编辑；如需中断请点停止',
     toolStats: '工具调用 {total} 次 · 成功 {success} · 失败 {failed}',

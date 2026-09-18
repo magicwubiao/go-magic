@@ -433,7 +433,11 @@ type chatPayload struct {
 	// 服务端在入队前先摘掉原条目，避免两条同内容消息被查重逻辑合并成一条
 	// 而让重发看起来毫无效果。见 handleSessionStream 里的处理。
 	RetryOf string `json:"retry_of"`
-	Files   []struct {
+	// Guide 为 true 表示这是一条「引导」消息：当前回合在跑时注入运行中的
+	// 回合（模型在下一次 LLM 调用前看到，生成不被打断）；没有回合在跑或
+	// 带附件时回落为普通入队。仅 /messages 处理该标志，仅纯文本有效。
+	Guide bool `json:"guide"`
+	Files []struct {
 		Name     string `json:"name"`
 		Filename string `json:"filename"`
 		URL      string `json:"url"`
@@ -451,6 +455,8 @@ type parsedChatPayload struct {
 	pendingMaterialize []uploadToMaterialize
 	// retryOf 见 chatPayload.RetryOf。
 	retryOf string
+	// guide 见 chatPayload.Guide。
+	guide bool
 }
 
 // parseChatPayload 解析请求体并构建 content parts。
@@ -465,7 +471,7 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 		return nil, "failed to decode payload: " + err.Error()
 	}
 
-	out := &parsedChatPayload{content: payload.Content, retryOf: payload.RetryOf}
+	out := &parsedChatPayload{content: payload.Content, retryOf: payload.RetryOf, guide: payload.Guide}
 
 	// Parse images from JSON body field. Inline base64 payloads are capped —
 	// they ride in the request body, get embedded into the agent history for
@@ -475,6 +481,7 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 		maxImagesPerMessage  = 8
 		maxImagePayloadBytes = 12 << 20 // 12 MiB of base64 payload in total
 	)
+	uploadsDir := s.uploadsRoot()
 	if len(payload.Images) > 0 {
 		if len(payload.Images) > maxImagesPerMessage {
 			return nil, fmt.Sprintf("too many images: %d attached, max %d per message", len(payload.Images), maxImagesPerMessage)
@@ -506,6 +513,16 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 			})
 			out.imageURLRefs = append(out.imageURLRefs, ref)
 			out.imageNames = append(out.imageNames, name)
+			// 图片同样物化到会话工作目录：文件工具被沙箱在工作目录里，没有
+			// 这份副本，不支持视觉的模型（以及需要用工具处理图片的场景）
+			// 对这张图就彻底无能为力；用户也会期望"发过的文件在目录里能看到"。
+			if ref != "" {
+				if local := resolveUploadLocalPath(uploadsDir, ref); local != "" {
+					out.pendingMaterialize = append(out.pendingMaterialize, uploadToMaterialize{
+						Name: name, Src: local,
+					})
+				}
+			}
 		}
 	}
 
@@ -516,7 +533,7 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 	//      by the current frontend).
 	//   3. Fetch external URL (when uploaded somewhere else).
 	// All payloads live in the request body — the URL stays clean.
-	uploadsDir := s.uploadsRoot()
+	// （uploadsDir 已在上方图片解析处取得，此处直接复用。）
 	// 需要在回合开始前物化到会话工作目录的附件（agent 的文件工具被限制在
 	// 工作目录内，够不到 <magicHome>/uploads 根目录）。物化在入队前完成，
 	// 保证排队时间再长也不受上传目录清理影响。
@@ -811,7 +828,15 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// 而 persistedContentParts 需要把 inline 载荷换成上传路径引用。
 	persistedParts := persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
 
-	item, dup := s.enqueueChatTurn(sessionID, parsed.content, parsed.contentParts, persistedParts, turnRun, materializeSummary)
+	// inline base64 降级为轻量引用：排队项可能等上几分钟，带着几十 MB 的
+	// base64 排队既占内存又会随会话落库膨胀。图片换成 "ref:" 引用部件，
+	// 回合开跑时由 rehydrateMediaRefs 从磁盘还原（runQueuedTurn）。
+	mediaParts := parsed.contentParts
+	if slimmed := stripInlineMediaParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames); slimmed != nil {
+		mediaParts = slimmed
+	}
+
+	item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, turnRun, materializeSummary)
 	if item == nil {
 		writeSSE("data: " + sseErrorPayload(fmt.Errorf("message not accepted, please retry")) + "\n\n")
 		return
@@ -841,18 +866,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 // enqueueChatTurn 把一条消息放入会话队列并确保 worker 在跑。重复提交
 // （同 session 同内容、队列里已存在完全相同的待执行项）会被合并，避免
 // 弱网重试在前端留下两条一模一样的排队气泡。
+// contentParts 必须已经是剥离过 inline base64 的版本（调用方在拥有
+// imageURLRefs/imageNames 的地方调 stripInlineMediaParts 完成）。
 // 返回 nil 表示队列正在回收（调用方应让客户端重试）。
 func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types.ContentPart, persistedParts []types.ContentPart, run *turnRunCtx, materializeSummary string) (*queuedTurn, bool) {
-	// 物化摘要先并入 content parts，再统一剥离 inline 载荷——保持与改造前
-	// 完全一致的模型输入顺序（用户文本 → 图片/文件 → 物化摘要）。
+	// 物化摘要并入 content parts，保持与改造前完全一致的模型输入顺序
+	// （用户文本 → 图片/文件 → 物化摘要）。
 	if materializeSummary != "" {
 		contentParts = append(contentParts, types.ContentPart{Type: "text", Text: materializeSummary})
-	}
-	// 所有需要字节的步骤（物化、Office 文本抽取）都已在入队前完成，此处把
-	// inline base64 降级为轻量引用：排队项可能等上几分钟，带着几十 MB 的
-	// base64 排队既占内存又会随会话落库膨胀。
-	if slimmed := stripInlineMediaParts(contentParts); slimmed != nil {
-		contentParts = slimmed
 	}
 
 	item := &queuedTurn{
@@ -1455,6 +1476,17 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 			}
 		}
 
+		// 引导（guide）：回合进行中把这条消息注入运行中的回合——模型在下一次
+		// LLM 调用前看到它并调整方向，生成不被打断。没有回合在跑、带附件或
+		// 拿不到 agent 时回落为普通入队（引导退化为排队消息，绝不静默丢弃）。
+		// 响应里 guided=true/false，前端据此决定乐观气泡转正还是转回排队项。
+		if parsed.guide {
+			if resp := s.tryInjectGuide(sessionID, parsed); resp != nil {
+				jsonResponse(w, resp)
+				return
+			}
+		}
+
 		run := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
 		if s.sessionStore != nil {
 			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
@@ -1476,7 +1508,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 		}
 
 		persistedParts := persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
-		item, dup := s.enqueueChatTurn(sessionID, parsed.content, parsed.contentParts, persistedParts, run, materializeSummary)
+
+		// 与 /stream 相同：入队前剥离 inline base64，执行时再还原。
+		mediaParts := parsed.contentParts
+		if slimmed := stripInlineMediaParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames); slimmed != nil {
+			mediaParts = slimmed
+		}
+
+		item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, run, materializeSummary)
 		if item == nil {
 			http.Error(w, "message not accepted, please retry", http.StatusServiceUnavailable)
 			return

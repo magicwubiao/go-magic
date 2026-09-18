@@ -2,7 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -99,7 +103,8 @@ func (snk *turnSink) cancel() {
 
 // queuedTurn 是一条排队等待执行的消息。contentParts 里只保留轻量内容
 // （文本、上传引用、物化摘要）——inline base64 在入队前就被剥离了（见
-// stripInlineMediaParts），否则几条排队消息就能把内存和会话库撑爆。
+// stripInlineMediaParts），否则几条排队消息就能把内存和会话库撑爆；
+// 被剥离的图片在回合开跑时由 rehydrateMediaRefs 从磁盘还原。
 type queuedTurn struct {
 	id           string
 	content      string
@@ -599,16 +604,78 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		q.cancel = turnCancel
 		q.mu.Unlock()
 
-		s.runQueuedTurn(sessionID, q, turnCtx, item)
+		finalOps := s.runQueuedTurn(sessionID, q, turnCtx, item)
 
 		turnCancel()
+
+		// 回合收尾（顺序不可变）：
+		//   1) running 翻负与「残留引导回收」在同一 q.mu 临界区内完成——
+		//      tryInjectGuide 依据同一把锁判定 running，因此它判定为真时
+		//      注入的引导，要么已被本回合迭代顶部排水（模型看到），要么被
+		//      这里的回收转成新排队回合，绝不悬空到之后某个无关回合（那会
+		//      把引导错误地拼进下一条消息的开头）。
+		//   2) 残留入队之后才广播 done：done 帧的 queue_depth/queue_idle
+		//      必须把残留回合算进去，否则 SSE 连接会在还有后续回合时被
+		//      前端/转发层误导关闭——下一回合零监听者，delta 全走"只落库
+		//      不推送"的兜底（血债：排队消息执行完却不刷新）。
+		var leftovers []string
 		q.mu.Lock()
+		wasCancelled := q.cancelRequested
 		q.running = false
 		q.activeID = ""
 		q.cancel = nil
 		q.cancelRequested = false
 		q.turns++
+		if a := s.lookupAgent(sessionID); a != nil {
+			leftovers = a.DrainGuides()
+			if wasCancelled {
+				leftovers = nil // 用户已停止：未消费的引导一并丢弃
+			}
+		}
 		q.mu.Unlock()
+
+		for _, g := range leftovers {
+			g = strings.TrimSpace(g)
+			if g == "" {
+				continue
+			}
+			leftoverRun := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
+			if s.sessionStore != nil {
+				if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+					leftoverRun.workDir = sess.WorkDir
+					leftoverRun.workDirUserSet = sess.WorkDirUserSet
+				}
+			}
+			// 引导残留转成普通排队回合（内容不带 [Guide] 前缀——对模型而言
+			// 它就是一条新的用户消息）。enqueueChatTurn 的查重会把与队列中
+			// 已有项完全相同的残留合并掉。
+			//
+			// 已知边界（issue 4）：残留回收发生在「回合已结束、引导尚未被模型
+			// 消费」的时刻，而前端在注入那一刻就已把引导气泡转正（user_<id>）。
+			// 于是用户视角会出现「已转正的气泡 + 新排队项」并存——引导从
+			// 即时指引退化为一条待执行的普通消息，气泡会被后置排队项「打回」。
+			// 这是注入即消费与收尾回收两条路径的固有语义差：注入时无法预知
+			// 回合是否会及时消费。彻底消除该跳变需要服务端在回收时向客户端
+			// 发送「引导被回收为排队项」的专用事件，由前端撤销已转正的气泡；
+			// 当前以低频边界场景接受此轻微跳变，暂不实现。
+			s.enqueueChatTurn(sessionID, g, nil, nil, leftoverRun, "")
+		}
+
+		// done 广播（自 runQueuedTurn 上移至此，见上）。
+		pending := q.pendingCount()
+		doneData, _ := json.Marshal(map[string]interface{}{
+			"done":     true,
+			"file_ops": finalOps,
+			"turn_id":  item.id,
+			// queue_depth 是"本回合结束后还剩多少条待执行消息"。前端据此决定
+			// 是否保留 SSE 连接：队列非空时必须留着，否则下一条的
+			// stream_started/delta 推不到客户端，用户看到的就是"消息执行完了，
+			// 排队的那条没被发送"。仅靠前端本地 state.queued 判断不够——新消息
+			// 可能在 done 之后才入队，那一刻本地是空的。
+			"queue_depth": pending,
+			"queue_idle":  pending == 0,
+		})
+		q.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true, queueIdle: pending == 0})
 	}
 }
 
@@ -695,10 +762,12 @@ func (s *Server) keepAlive(ctx context.Context, writeSSE func(string) bool, q *s
 // "跑 agent"那段逻辑的搬迁，差别只在于：
 //   - 事件不再直接写 HTTP 连接，而是 append 到队列 sink（可能没人监听）；
 //   - 队列项在入队前已剥离 inline base64（见 stripInlineMediaParts），
-//     落库时只需按上传引用重建 content parts；
+//     执行时先经 rehydrateMediaRefs 还原，落库只需按上传引用重建 content parts；
 //   - 回合开始/结束都向所有 sink 广播，排队中的后续消息因此能被前端正确
-//     显示为"正在执行"。
-func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx context.Context, item *queuedTurn) {
+//     显示为"正在执行"；
+//   - done 广播在 runQueue 的收尾临界区之后（残留引导回收 + 残留入队），
+//     本函数只返回本轮 file ops 供 done 帧使用。
+func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx context.Context, item *queuedTurn) []types.FileOp {
 	run, ok := item.run.(*turnRunCtx)
 	if !ok || run == nil {
 		run = &turnRunCtx{fileOps: NewTurnFileOpTracker()}
@@ -799,7 +868,11 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	// 会正常返回 nil。两者都在这里统一收尾。
 	var streamErr error
 	if len(item.contentParts) > 0 {
-		streamErr = s.runAgentStreamWithMedia(ctx, sessionID, item.content, item.contentParts, streamHandler)
+		// 入队时 inline base64 被剥离成 "ref:" 引用（见 stripInlineMediaParts），
+		// 这里在真正送进模型之前从 uploads 磁盘读回字节还原成图片部件。
+		// 没有这一步，模型只能看到占位文字——用户粘贴的截图会整个"失踪"。
+		parts := s.rehydrateMediaRefs(item.contentParts)
+		streamErr = s.runAgentStreamWithMedia(ctx, sessionID, item.content, parts, streamHandler)
 	} else {
 		streamErr = s.runAgentStream(ctx, sessionID, item.content, streamHandler)
 	}
@@ -821,24 +894,10 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 		// 让排队中的下一条消息能接上（队列已被 cancelAll 清空则不会再有）。
 	}
 
-	// pending 是本回合结束后仍待执行的条数。queue_idle 是给"这条 SSE 连接
-	// 可以收尾了"的显式信号：只有队列真的空了、后面不会再有回合，连接才有
-	// 必要关闭。前端与 forwardTurnEvents 都据此决定退出，避免连接既不能关
-	// （错过后面的回合）也不能留（永久挂着泄漏）。
-	pending := queue.pendingCount()
-	doneData, _ := json.Marshal(map[string]interface{}{
-		"done":     true,
-		"file_ops": finalOps,
-		"turn_id":  item.id,
-		// queue_depth 是"本回合结束后还剩多少条待执行消息"。前端据此决定
-		// 是否保留 SSE 连接：队列非空时必须留着，否则下一条的
-		// stream_started/delta 推不到客户端，用户看到的就是"消息执行完了，
-		// 排队的那条没被发送"。仅靠前端本地 state.queued 判断不够——新消息
-		// 可能在 done 之后才入队，那一刻本地是空的。
-		"queue_depth": pending,
-		"queue_idle":  pending == 0,
-	})
-	queue.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true, queueIdle: pending == 0})
+	// done 广播已上移至 runQueue（在残留引导回收与残留入队之后执行），
+	// 保证 done 帧的 queue_depth/queue_idle 把残留回合计算在内——见
+	// runQueue 收尾处的竞态与顺序说明。
+	return finalOps
 }
 
 // pendingCount 返回尚未执行的排队消息条数（不含正在执行的这一条）。
@@ -864,6 +923,116 @@ func (s *Server) runAgentStreamWithMedia(ctx context.Context, sessionID, input s
 		return errProviderNotConfigured{}
 	}
 	return a.RunConversationStreamWithMedia(ctx, input, parts, handler)
+}
+
+// ============================================================================
+// 引导（guide）注入
+// ============================================================================
+
+// tryInjectGuide 在「当前会话确有回合在跑」时把引导消息注入运行中的回合、
+// 落库并广播 guide_added，返回给客户端的响应体；返回 nil 表示此刻无法注入
+// （没有运行中回合 / 纯附件无文本 / 拿不到 agent），调用方应回落普通入队——
+// 引导就退化为一条普通的排队消息，绝不静默丢弃。带图/附件的多模态引导会
+// 提取 text 部件作为纯文本即时注入（图片不随注入路径携带），详见函数体内。
+//
+// 竞态封闭性：running 判定与 InjectGuide 在 q.mu 同一临界区内完成，而
+// runQueue 的收尾把 running 翻负与残留引导回收放进同一临界区——两侧在此
+// 握手：这里判定 running 为真时，注入的引导要么被本回合的迭代顶部排水
+// （模型看到），要么被收尾回收转成新排队回合，绝不会悬空到之后某个无关
+// 回合（那会把引导错误地拼进下一条消息的开头）。
+func (s *Server) tryInjectGuide(sessionID string, parsed *parsedChatPayload) map[string]interface{} {
+	content := strings.TrimSpace(parsed.content)
+	if content == "" {
+		return nil
+	}
+	// 多模态（带图/附件）引导：注入路径没有 media 还原管线（它绑定在
+	// 「入队 → 回合开跑」的 stripInlineMediaParts → rehydrateMediaRefs 上），
+	// 无法把图片即时注入运行中的回合。这里退而求其次：仅提取 text 部件作为
+	// 纯文本引导即时注入，保住用户文本指引不被丢；图片不随注入路径携带
+	// （模型本轮看不到图，只能靠文本描述）。若连文本都没有（纯附件），才
+	// 回落普通入队——附件必须走完整还原管线，不能静默丢弃。
+	if len(parsed.contentParts) > 0 {
+		textParts := make([]string, 0, len(parsed.contentParts))
+		for _, p := range parsed.contentParts {
+			if p.Type == "text" && strings.TrimSpace(p.Text) != "" {
+				textParts = append(textParts, strings.TrimSpace(p.Text))
+			}
+		}
+		if len(textParts) == 0 {
+			// 纯附件引导：无文本可注入，回落入队走完整还原管线。
+			return nil
+		}
+		content = strings.Join(textParts, "\n")
+	}
+	a := s.lookupAgent(sessionID)
+	if a == nil {
+		return nil
+	}
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		return nil
+	}
+
+	q.mu.Lock()
+	if !q.running {
+		q.mu.Unlock()
+		return nil
+	}
+	a.InjectGuide(content)
+	q.mu.Unlock()
+
+	// 引导在采集后即已被消费（"停止"只会丢弃尚未消费的收件箱残留），直接落库
+	// 为普通 user 消息即可，历史顺序天然正确：本回合输入 < 引导 < 本回合
+	// assistant 回复。
+	//
+	// id 必须在落库前生成并同时用于广播/响应：前端以 user_<id> 作为气泡去重键，
+	// 落库消息若不带同一个 id，刷新页面后会与 guide_added 广播产生重复气泡
+	// （见 issue 3）。
+	id := uuid.NewString()
+	s.persistGuideMessage(sessionID, id, content)
+
+	ev, _ := json.Marshal(map[string]interface{}{
+		"type":    "guide_added",
+		"id":      id,
+		"content": content,
+	})
+	// 广播给本会话所有 SSE 监听者（多标签页同步刷新气泡）。无人监听也无妨：
+	// 消息已注入 agent 并落库，客户端刷新后从会话历史拿回。
+	q.broadcast(turnEvent{data: "data: " + string(ev) + "\n\n"})
+
+	return map[string]interface{}{
+		"guided":    true,
+		"id":        id,
+		"role":      "user",
+		"content":   content,
+		"timestamp": time.Now().Unix(),
+	}
+}
+
+// persistGuideMessage 把引导消息作为普通 user 消息写入会话历史，并携带与
+// 广播/响应一致的 id（前端 user_<id> 去重键）。与排队消息「回合开跑才落库」
+// 不同：引导注入即消费，不存在被丢弃的窗口，直接落库即可。
+//
+// 注意落库内容是不带 [Guide] 前缀的纯文本（用户输入的原样）。这与
+// applyGuides 并入 agent history 时加前缀并不冲突：落库给用户看（所见即
+// 所输），history 前缀给模型看（提示这是回合中追加的补充指示）。二者语义
+// 目标不同，落库形态是正确的，勿误判为不一致。
+func (s *Server) persistGuideMessage(sessionID, id, content string) {
+	if s.sessionStore == nil {
+		return
+	}
+	sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
+	if err != nil {
+		return
+	}
+	sess.Messages = append(sess.Messages, types.Message{
+		ID:        id,
+		Role:      "user",
+		Content:   content,
+		Timestamp: time.Now(),
+	})
+	sess.UpdatedAt = time.Now()
+	_ = s.sessionStore.SaveSession(context.Background(), sess)
 }
 
 // errProviderNotConfigured 表示服务端尚未配置 LLM provider。
@@ -983,12 +1152,20 @@ func (t *turnRunCtx) applyTo(ctx context.Context) context.Context {
 	return ctx
 }
 
-// stripInlineMediaParts 返回一份把 inline base64 载荷替换为上传引用路径的
+// stripInlineMediaParts 返回一份把 inline base64 载荷替换为轻量引用的
 // content parts 副本。队列项会存活到真正被执行（可能几分钟），期间若保留
 // data URL，几条带截图的排队消息就能占用几十 MB 内存并随会话落库膨胀——
 // 而所有需要字节的地方都在入队前用过了（物化、Office 文本抽取）。
+//
+// 图片部件换成 "ref:<uploads 路径>" 引用部件，runQueuedTurn 在回合开跑时
+// 通过 rehydrateMediaRefs 从磁盘读回字节还原成 image_url 部件——模型必须
+// 真正看到图，绝不能只收到一句占位文字（血债：占位文案导致用户粘贴的
+// 截图整个排队重构期间模型都看不见）。没有上传引用可回捞的图片（老客户
+// 端直接内联、从未上传）保留原载荷：宁可排队时占内存，也不能丢图。
 // 返回 nil 表示无需改写（没有 media 部件）。
-func stripInlineMediaParts(parts []types.ContentPart) []types.ContentPart {
+// imageURLRefs/imageNames 与 parts 里的 image 部件按出现顺序一一对应
+// （parseChatPayload 保证），imgIdx 用于维护这份对齐。
+func stripInlineMediaParts(parts []types.ContentPart, imageURLRefs, imageNames []string) []types.ContentPart {
 	needs := false
 	for _, p := range parts {
 		if p.ImageURL != nil && strings.HasPrefix(p.ImageURL.URL, "data:") {
@@ -1005,14 +1182,35 @@ func stripInlineMediaParts(parts []types.ContentPart) []types.ContentPart {
 	}
 
 	out := make([]types.ContentPart, 0, len(parts))
+	imgIdx := 0
 	for _, p := range parts {
 		switch {
 		case p.ImageURL != nil && strings.HasPrefix(p.ImageURL.URL, "data:"):
+			ref, name := "", ""
+			if imgIdx < len(imageURLRefs) {
+				ref = imageURLRefs[imgIdx]
+			}
+			if imgIdx < len(imageNames) {
+				name = imageNames[imgIdx]
+			}
+			imgIdx++
+			if ref == "" {
+				// 没有上传引用（图片从未落到 uploads 磁盘），无从回捞：
+				// 保留原 data URL，保证模型一定能看到图。
+				out = append(out, p)
+				continue
+			}
 			// 图片：保留 file 引用的形式，让模型仍知道"有这么一张图"，
-			// 同时不必把 base64 一路带进执行阶段。
+			// 同时不必把 base64 一路带进执行阶段。执行前由 rehydrateMediaRefs
+			// 还原（见 runQueuedTurn）。
 			out = append(out, types.ContentPart{
-				Type: "text",
-				Text: "[图片附件已随消息接收，如需查看请告知用户重新发送]",
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     name,
+					MimeType: dataURLMime(p.ImageURL.URL),
+					URL:      ref,
+					Contents: "ref:" + ref,
+				},
 			})
 		case p.File != nil && strings.HasPrefix(p.File.Contents, "data:") && len(p.File.Contents) > 64*1024:
 			out = append(out, types.ContentPart{
@@ -1024,4 +1222,135 @@ func stripInlineMediaParts(parts []types.ContentPart) []types.ContentPart {
 		}
 	}
 	return out
+}
+
+// dataURLMime 从 data URL 前缀取 MIME（"data:image/png;base64,..." →
+// "image/png"）；解析不出时回退 image/png——调用方只会对 data: 图片调它。
+func dataURLMime(dataURL string) string {
+	rest := strings.TrimPrefix(dataURL, "data:")
+	if i := strings.Index(rest, ";"); i >= 0 {
+		if m := rest[:i]; m != "" {
+			return m
+		}
+	}
+	return "image/png"
+}
+
+// rehydrateMediaRefs 在回合真正开跑前，把 stripInlineMediaParts 留下的
+// "ref:<uploads 路径>" 部件还原成带真实字节的 image_url 部件。引用指向
+// /api/uploads/<bucket>/<file>，对应磁盘 <magicHome>/uploads/<bucket>/<file>；
+// 查找顺序与 parseChatPayload 的附件解析一致（session 桶 → _shared → 根）。
+// 读取失败（文件被清理等）时降级为一句明确的文字，回合照常进行。
+func (s *Server) rehydrateMediaRefs(parts []types.ContentPart) []types.ContentPart {
+	needs := false
+	for _, p := range parts {
+		if p.File != nil && strings.HasPrefix(p.File.Contents, "ref:") {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return parts
+	}
+
+	root := s.uploadsRoot()
+	out := make([]types.ContentPart, 0, len(parts))
+	for _, p := range parts {
+		if p.File == nil || !strings.HasPrefix(p.File.Contents, "ref:") {
+			out = append(out, p)
+			continue
+		}
+		name := p.File.Name
+		data := readUploadRef(root, strings.TrimPrefix(p.File.Contents, "ref:"))
+		if len(data) == 0 {
+			label := name
+			if label == "" {
+				label = "未命名图片"
+			}
+			out = append(out, types.ContentPart{
+				Type: "text",
+				Text: "[图片附件 " + label + " 的原始文件已丢失（可能被上传清理任务回收），请让用户重新发送]",
+			})
+			continue
+		}
+		mime := p.File.MimeType
+		if mime == "" || mime == "application/octet-stream" {
+			if name != "" {
+				if m := mimeFromFilename(name); m != "" && m != "application/octet-stream" {
+					mime = m
+				}
+			}
+			if mime == "" || mime == "application/octet-stream" {
+				sniffed := http.DetectContentType(data[:min(len(data), 512)])
+				if i := strings.Index(sniffed, ";"); i >= 0 {
+					sniffed = strings.TrimSpace(sniffed[:i])
+				}
+				if sniffed != "" {
+					mime = sniffed
+				}
+			}
+		}
+		if mime == "" {
+			mime = "image/png"
+		}
+		out = append(out, types.ContentPart{
+			Type:     "image_url",
+			ImageURL: &types.MediaURL{URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
+		})
+	}
+	return out
+}
+
+// readUploadRef 解析 "ref:" 后的引用（/api/uploads/<bucket>/<file>，可能带
+// token 查询串），从磁盘读回文件字节。
+func readUploadRef(root, ref string) []byte {
+	p := resolveUploadLocalPath(root, ref)
+	if p == "" {
+		return nil
+	}
+	d, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	return d
+}
+
+// resolveUploadLocalPath 把 "/api/uploads/<bucket>/<file>" 引用解析成磁盘
+// 路径，查找顺序与 parseChatPayload 的附件解析一致（引用桶 → _shared → 根）。
+// 所有路径段都过 filepath.Base，杜绝引用里的 .. 逃出 uploads 根；
+// 解析不到现有文件时返回 ""。
+func resolveUploadLocalPath(root, ref string) string {
+	clean := ref
+	if i := strings.IndexAny(clean, "?#"); i >= 0 {
+		clean = clean[:i]
+	}
+	clean = strings.TrimPrefix(clean, "/api/uploads/")
+	clean = strings.TrimPrefix(clean, "api/uploads/")
+	clean = strings.Trim(clean, "/")
+	if clean == "" {
+		return ""
+	}
+	segments := strings.Split(filepath.ToSlash(clean), "/")
+	file := filepath.Base(segments[len(segments)-1])
+	if file == "" || file == "." || file == ".." {
+		return ""
+	}
+	bucket := ""
+	if len(segments) >= 2 {
+		bucket = filepath.Base(segments[0])
+	}
+	candidates := []string{}
+	if bucket != "" && bucket != "." && bucket != ".." {
+		candidates = append(candidates, filepath.Join(root, bucket, file))
+	}
+	candidates = append(candidates,
+		filepath.Join(root, "_shared", file),
+		filepath.Join(root, file),
+	)
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	return ""
 }

@@ -615,6 +615,19 @@ export async function submitMessage(
   })
 }
 
+// 引导提交：回合进行中把这条消息注入运行中的回合——模型在下一次 LLM 调用前
+// 看到它并调整方向，生成不被打断。服务端在无法注入时回落为普通入队：返回体
+// 里 guided 缺失/false 且带 queued/duplicate，调用方据此把乐观气泡转回排队项。
+export async function submitGuide(
+  sessionId: string,
+  content: string,
+): Promise<{ guided?: boolean; id: string; queued?: boolean; duplicate?: boolean; content?: string }> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content, guide: true }),
+  })
+}
+
 export interface QueuedTurnInfo {
   id: string
   content: string

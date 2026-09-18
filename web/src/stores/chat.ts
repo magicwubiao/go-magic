@@ -979,6 +979,65 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // guideMessage 引导（steer）：回合进行中把这条消息注入运行中的回合——
+  // 模型在下一次 LLM 调用前看到它并调整方向，生成不被打断。
+  //
+  // 与 sendMessage 的本质差异：引导不进排队气泡，而是直接作为一条用户消息
+  // 出现在对话流里（它"已被发出"——服务端即刻注入 agent 并落库）。消息 id
+  // 用 user_<服务端id>，与 promoteQueuedToMessage 的固化键一致，因此本标签页
+  // 收到自己那条 guide_added 广播时会被去重跳过。
+  async function guideMessage(content: string): Promise<void> {
+    if (!activeSessionId.value) return
+    const sessionId = activeSessionId.value
+    const state = getOrCreateSessionState(sessionId)
+
+    // 乐观插入用户消息气泡（引导"已发出"，不占排队位）。
+    const localId = `guide_local_${++localQueuedCounter}`
+    state.messages.push({
+      id: localId,
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+      session_id: sessionId,
+    } as sessionsApi.Message)
+    error.value = null
+
+    try {
+      const resp = await sessionsApi.submitGuide(sessionId, content)
+      if (resp.guided) {
+        // 注入成功：把乐观气泡 id 换成 user_<服务端id>（与 guide_added
+        // 广播的去重键一致）。若 SSE 广播先于响应到达（竞态），本地已由
+        // 广播路径固化，find 不中 → 这里自然变 no-op，两侧幂等。
+        const mine = state.messages.find(m => m.id === localId)
+        if (mine && resp.id) mine.id = `user_${resp.id}`
+        return
+      }
+      // 回落：服务端无法注入（回合恰好结束），已把消息当普通消息入队。
+      // 撤掉消息气泡，转回排队项，语义与普通发送完全对齐。
+      state.messages = state.messages.filter(m => m.id !== localId)
+      if (resp.duplicate) {
+        // 与队列中已有项重复：并入已有项，本地不再重复插气泡。
+        return
+      }
+      const fallbackTurnId = resp.id || `local_${++localQueuedCounter}`
+      state.queued.push({
+        turnId: fallbackTurnId,
+        content,
+        status: 'queued',
+        createdAt: Date.now(),
+        position: 0,
+      })
+    } catch (e) {
+      // 提交失败：撤掉乐观气泡
+      state.messages = state.messages.filter(m => m.id !== localId)
+      const errMsg = e instanceof Error ? e.message : 'Unknown error'
+      if (errMsg.includes('aborted') || errMsg.includes('abort')) {
+        return
+      }
+      error.value = { message: 'Failed to send guide: ' + errMsg }
+    }
+  }
+
   // attachStreamHandlers 把 SSE 事件处理逻辑挂到一条流上。抽成独立函数是因为
   // 现在有多条入口需要挂同一套处理（新提交、续接已有回合、断线重连）。
   function attachStreamHandlers(sessionId: string, eventSource: sessionsApi.ChatStream, localId?: string): void {
@@ -1100,6 +1159,26 @@ export const useChatStore = defineStore('chat', () => {
           // 队列。用服务端快照对齐本地排队镜像，保证多端一致。
           if (data.type === 'queue_changed') {
             syncQueuedFromServer(sessionId, data.queued || [], String(data.active_id || ''))
+            return
+          }
+
+          // guide_added：另一台设备/标签页注入了一条引导。补一条用户消息；
+          // 本标签页自己发的引导由提交路径固化（id 去重键 user_<id> 一致，
+          // 不会重复）。
+          if (data.type === 'guide_added') {
+            const guideId = String(data.id || '')
+            if (guideId) {
+              const msgId = `user_${guideId}`
+              if (!state.messages.some(m => m.id === msgId)) {
+                state.messages.push({
+                  id: msgId,
+                  role: 'user',
+                  content: String(data.content || ''),
+                  timestamp: new Date().toISOString(),
+                  session_id: sessionId,
+                } as sessionsApi.Message)
+              }
+            }
             return
           }
 
@@ -1961,6 +2040,7 @@ export const useChatStore = defineStore('chat', () => {
     updateSessionWorkDir,
     isSessionRunning,
     sendMessage,
+    guideMessage,
     removeQueuedMessage,
     clearQueuedMessages,
     editQueuedMessage,
