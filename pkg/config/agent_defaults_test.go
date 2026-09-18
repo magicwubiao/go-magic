@@ -7,19 +7,19 @@ import (
 )
 
 // 验证 defaultConfig / DefaultConfig 的 Agent 循环上限默认值，
-// 确保与 Web 配置界面(ConfigView.vue)默认值一致，避免回退到硬编码 70。
+// 确保与 Web 配置界面(ConfigView.vue)以及 agent 内置默认值三者一致。
 func TestDefaultConfigAgentDefaults(t *testing.T) {
 	cfg := defaultConfig()
-	if cfg.Agent.MaxTurns != 150 {
-		t.Errorf("defaultConfig().Agent.MaxTurns = %d, want 150", cfg.Agent.MaxTurns)
+	if cfg.Agent.MaxTurns != 300 {
+		t.Errorf("defaultConfig().Agent.MaxTurns = %d, want 300", cfg.Agent.MaxTurns)
 	}
-	if cfg.Agent.MaxIterations != 200 {
-		t.Errorf("defaultConfig().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
+	if cfg.Agent.MaxIterations != 400 {
+		t.Errorf("defaultConfig().Agent.MaxIterations = %d, want 400", cfg.Agent.MaxIterations)
 	}
 
 	exp := DefaultConfig()
-	if exp.Agent.MaxTurns != 150 {
-		t.Errorf("DefaultConfig().Agent.MaxTurns = %d, want 150", exp.Agent.MaxTurns)
+	if exp.Agent.MaxTurns != 300 {
+		t.Errorf("DefaultConfig().Agent.MaxTurns = %d, want 300", exp.Agent.MaxTurns)
 	}
 }
 
@@ -46,10 +46,10 @@ func TestLoadFillsAgentDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Agent.MaxTurns != 150 {
-		t.Errorf("Load().Agent.MaxTurns = %d, want 150 (default filled)", cfg.Agent.MaxTurns)
+	if cfg.Agent.MaxTurns != 300 {
+		t.Errorf("Load().Agent.MaxTurns = %d, want 300 (default filled)", cfg.Agent.MaxTurns)
 	}
-	if cfg.Agent.MaxIterations != 200 {
-		t.Errorf("Load().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
+	if cfg.Agent.MaxIterations != 400 {
+		t.Errorf("Load().Agent.MaxIterations = %d, want 400", cfg.Agent.MaxIterations)
 	}
 }

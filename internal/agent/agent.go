@@ -245,8 +245,10 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		registry:         registry,
 		tools:            tools,
 		history:          history,
-		maxTurns:         70,
-		maxIterations:    200,
+		// 内置兜底上限：调用方（config / WithMaxTurns）未指定时生效。与
+		// config 默认值保持一致，避免"配了 0 反而比默认值更紧"的困惑。
+		maxTurns:         300,
+		maxIterations:    400,
 		maxTotalLen:      200000, // 200K chars max history (~50K tokens)
 		maxMsgLen:        50000,  // 50K chars per message (~12K tokens)
 		maxTokenBudget:   0,
@@ -375,9 +377,9 @@ func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 	}
 }
 
-// WithMaxTurns overrides the per-turn tool-loop cap (default 70, overridable
-// via config agent.max_turns which defaults to 150). Values <= 0
-// are ignored so callers can pass config straight through.
+// WithMaxTurns overrides the per-turn tool-loop cap (built-in default 300,
+// overridable via config agent.max_turns which also defaults to 300).
+// Values <= 0 are ignored so callers can pass config straight through.
 func WithMaxTurns(n int) AgentOption {
 	return func(a *Agent) {
 		if n > 0 {

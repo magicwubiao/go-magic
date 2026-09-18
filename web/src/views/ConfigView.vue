@@ -319,8 +319,8 @@ const botModeNeedsRestart = computed(
 )
 
 const agentForm = reactive({
-  max_turns: 150,
-  max_iterations: 200,
+  max_turns: 300,
+  max_iterations: 400,
 })
 
 // Bot Mode section on the Agent tab (config.bot_mode.*)
@@ -384,9 +384,9 @@ function populateFromConfig(cfg: any) {
   const agent = cfg.agent || {}
   // 0 means "use built-in default"; show the effective value in UI.
   const maxTurns = Number(agent.max_turns) || 0
-  agentForm.max_turns = maxTurns > 0 ? maxTurns : 150
+  agentForm.max_turns = maxTurns > 0 ? maxTurns : 300
   const maxIterations = Number(agent.max_iterations) || 0
-  agentForm.max_iterations = maxIterations > 0 ? maxIterations : 200
+  agentForm.max_iterations = maxIterations > 0 ? maxIterations : 400
 
   const botMode = cfg.bot_mode || {}
   botModeForm.enabled = botMode.enabled === true
