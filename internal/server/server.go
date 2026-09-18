@@ -118,7 +118,7 @@ type Server struct {
 	usageMgr *usage.Manager
 
 	// Track cumulative token counts per session to compute deltas
-	sessionTokens   map[string][2]int // [inputTokens, outputTokens]
+	sessionTokens   map[string][3]int // [inputTokens, outputTokens, cacheReadTokens]
 	sessionTokensMu sync.Mutex
 
 	// Background actions tracking
@@ -509,7 +509,7 @@ Your working directory is: %s
 		usageMgr:             usageMgr,
 		mcpMgr:               mcpMgr,
 		actions:              make(map[string]*ActionStatus),
-		sessionTokens:        make(map[string][2]int),
+		sessionTokens:        make(map[string][3]int),
 		authToken:            authToken,
 		allowedOrigins:       allowedOrigins,
 		shareTokens:          make(map[string]*ShareToken),

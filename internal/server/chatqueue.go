@@ -886,6 +886,12 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	finalOps := run.fileOps.Result()
 	s.persistAssistantMessage(sessionID, fullResponse.String(), streamed.String(), finalOps, deliveredAny)
 
+	// 用量记账：队列路径的回合跑在 worker 里，不会经过旧 /api/chat 那套收尾，
+	// 这里不显式记一笔，/usage 页面就再也不会有新数据（表现为"用量统计不到"）。
+	// 即使本回合一个字都没产出（fullResponse 为空、上面没落库），已经消耗的
+	// token 照样要记账。
+	s.accountTurnUsage(sessionID)
+
 	switch {
 	case streamErr != nil && !cancelled:
 		queue.broadcast(turnEvent{err: streamErr})
@@ -1090,16 +1096,9 @@ func (s *Server) persistAssistantMessage(sessionID, fullResponse, streamed strin
 		Timestamp: time.Now(),
 		FileOps:   finalOps,
 	})
-	// token 统计由 agent 自身累计；这里记录的是"本回合新增量"，通过
-	// GetTokenStats 的当前值减去进入回合前的值得到——但 agent 是共享实例，
-	// 简单起见沿用改造前的做法：把最新累计值作为本回合增量累加。
-	// （改造前 handleSessionStream 也是这么做的，保持行为一致。）
-	if a := s.lookupAgent(sessionID); a != nil {
-		in, out, cache := a.GetTokenStats()
-		sess.InputTokens += in
-		sess.OutputTokens += out
-		sess.CacheReadTokens += cache
-	}
+	// token 不在这里累加：GetTokenStats 是会话级累计值，每回合加一次全量会
+	// 让会话 token 数越滚越大。增量由 accountTurnUsage 统一记账（它同时写
+	// usage 统计与本会话字段），本回合只管消息文本。
 	sess.UpdatedAt = time.Now()
 	_ = s.sessionStore.SaveSession(context.Background(), sess)
 }

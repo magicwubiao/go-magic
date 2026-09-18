@@ -462,21 +462,46 @@ func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID,
 	}
 }
 
-func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
-	if s.usageMgr == nil || aiAgent == nil {
-		return
+// turnTokenDelta 返回该会话自上次记账以来新增的 token，并推进基线。
+//
+// agent 的 GetTokenStats 是"会话级累计值"，而记账要的是"本回合增量"，因此
+// 必须用基线差。同一份 delta 只能取一次（第二次必然是 0）——调用方取到后要
+// 同时用于 usage 记账与会话 token 落库，不能各取一遍。
+func (s *Server) turnTokenDelta(sessionID string) (int, int, int) {
+	a := s.lookupAgent(sessionID)
+	if a == nil {
+		return 0, 0, 0
 	}
-	inputTokens, outputTokens, _ := aiAgent.GetTokenStats()
+	in, out, cache := a.GetTokenStats()
 
 	s.sessionTokensMu.Lock()
 	prev, ok := s.sessionTokens[sessionID]
 	if !ok {
-		prev = [2]int{0, 0}
+		prev = [3]int{0, 0, 0}
 	}
-	deltaInput := inputTokens - prev[0]
-	deltaOutput := outputTokens - prev[1]
-	s.sessionTokens[sessionID] = [2]int{inputTokens, outputTokens}
+	s.sessionTokens[sessionID] = [3]int{in, out, cache}
 	s.sessionTokensMu.Unlock()
+
+	// 累计值变小只可能是 agent 实例被重建 / 统计被重置：此时当前值本身就是
+	// 本回合的全新消耗，按全量计，避免负 delta 把已有统计冲减掉。
+	dIn, dOut, dCache := in-prev[0], out-prev[1], cache-prev[2]
+	if dIn < 0 {
+		dIn = in
+	}
+	if dOut < 0 {
+		dOut = out
+	}
+	if dCache < 0 {
+		dCache = cache
+	}
+	return dIn, dOut, dCache
+}
+
+func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
+	if s.usageMgr == nil || aiAgent == nil {
+		return
+	}
+	deltaInput, deltaOutput, _ := s.turnTokenDelta(sessionID)
 
 	// Only record if there are new tokens consumed in this turn
 	if deltaInput > 0 || deltaOutput > 0 {
@@ -489,6 +514,40 @@ func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
 			provider = "unknown"
 		}
 		s.usageMgr.Record(deltaInput, deltaOutput, model, provider, sessionID)
+	}
+}
+
+// accountTurnUsage 为一个刚结束的回合记账：既写全局用量统计（/usage 页面的
+// 数据源），也把增量累加进会话自身的 token 字段（会话详情/上下文估算用）。
+//
+// 队列路径（Web 会话）必须显式调用它——回合跑在 worker 里，不再经过
+// handleChatStream 那套收尾，漏掉这一步 /usage 页面就永远没有新数据。
+func (s *Server) accountTurnUsage(sessionID string) {
+	dIn, dOut, dCache := s.turnTokenDelta(sessionID)
+	if dIn <= 0 && dOut <= 0 && dCache <= 0 {
+		return
+	}
+	if dIn > 0 || dOut > 0 {
+		model := s.cfg.GetCurrentModel()
+		if model == "" {
+			model = "unknown"
+		}
+		provider := s.cfg.Provider
+		if provider == "" {
+			provider = "unknown"
+		}
+		if s.usageMgr != nil {
+			s.usageMgr.Record(dIn, dOut, model, provider, sessionID)
+		}
+	}
+	if s.sessionStore == nil {
+		return
+	}
+	if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil && sess != nil {
+		sess.InputTokens += dIn
+		sess.OutputTokens += dOut
+		sess.CacheReadTokens += dCache
+		_ = s.sessionStore.SaveSession(context.Background(), sess)
 	}
 }
 
