@@ -203,6 +203,8 @@ export default {
     searchNoResults: '无匹配会话',
     searchResults: '搜索结果 ({count})',
     selectSession: '选择会话或开始新聊天',
+    jumpToBottom: '回到最新消息',
+    jumpToBottomUnread: '回到最新消息（{count} 条新消息）',
     untitled: '未命名',
     default: '默认',
     selectModel: '选择模型',

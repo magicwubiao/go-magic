@@ -203,7 +203,14 @@
 
       
 
-      <div class="messages" ref="messagesRef">
+      <div class="messages-wrap">
+      <div
+        class="messages"
+        ref="messagesRef"
+        @scroll.passive="handleMessagesScroll"
+        @wheel.passive="cancelJumpScrolling"
+        @touchstart.passive="cancelJumpScrolling"
+      >
         <div
           v-for="msg in chatStore.messages"
           :key="msg.id"
@@ -322,6 +329,24 @@
         <n-text v-if="!chatStore.messages.length && !chatStore.streaming" depth="3" class="empty-hint">
           {{ t('chat.selectSession') }}
         </n-text>
+      </div>
+
+      <!-- 回到底部：用户上滚看历史时出现（此时自动跟随已让位），点击一键回到最新。
+           有未读新消息时角标给出条数，让"下面还有东西"这件事不必靠猜。
+           放在 .messages 外层是为了不随内容一起滚动（absolute 在滚动容器里会跟着走）。 -->
+      <Transition name="jump-fade">
+        <button
+          v-if="showJumpBottom"
+          type="button"
+          class="jump-bottom-btn"
+          :title="jumpTitle"
+          :aria-label="jumpTitle"
+          @click="jumpToBottom"
+        >
+          <n-icon size="18" :component="ArrowDownOutline" />
+          <span v-if="unreadBelow > 0" class="jump-badge">{{ unreadBelow > 99 ? '99+' : unreadBelow }}</span>
+        </button>
+      </Transition>
       </div>
 
       <!-- 排队中的消息（沉底 dock）：固定在输入框上方，不随对话滚动。
@@ -861,7 +886,7 @@ import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { AttachOutline, SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
+import { AttachOutline, SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -927,6 +952,64 @@ onUnmounted(() => {
 })
 const messagesRef = ref<HTMLDivElement>()
 const sessionListRef = ref<HTMLDivElement>()
+
+// ========== 「回到对话底部」悬浮按钮 ==========
+// 之前只要有新消息/新工具调用就无条件 scrollToBottom，用户上翻看历史时会被
+// 反复拽回底部。这里改成"贴底跟随"：只有用户本身就在底部时才自动跟随；一旦
+// 上滚，就露出悬浮按钮 + 未读计数，由用户自己决定何时回去。
+const stickBottom = ref(true)       // 用户是否贴着底部（决定要不要自动跟随）
+const showJumpBottom = ref(false)   // 悬浮按钮显隐
+const unreadBelow = ref(0)          // 上滚期间新到达的消息条数
+const STICK_THRESHOLD = 80          // 距底 ≤ 此值即视为贴底（吸收亚像素/平滑滚动残差）
+const JUMP_BTN_THRESHOLD = 200      // 距底 > 此值才显示按钮，避免贴底时按钮闪烁
+let jumpScrolling = false           // 程序触发的平滑滚动进行中（scroll 事件不算用户上滚）
+let jumpScrollTimer: ReturnType<typeof setTimeout> | null = null
+let msgScrollRaf = 0
+
+function messagesBottomDistance(): number {
+  const el = messagesRef.value
+  if (!el) return 0
+  return el.scrollHeight - el.scrollTop - el.clientHeight
+}
+
+function handleMessagesScroll() {
+  // 滚动事件很密集，用 rAF 合并到一帧一次（读的是帧内最新的 scrollTop）
+  if (msgScrollRaf) return
+  msgScrollRaf = requestAnimationFrame(() => {
+    msgScrollRaf = 0
+    const dist = messagesBottomDistance()
+    if (dist <= STICK_THRESHOLD) {
+      stickBottom.value = true
+      showJumpBottom.value = false
+      unreadBelow.value = 0
+      endJumpScrolling()
+      return
+    }
+    if (jumpScrolling) return
+    stickBottom.value = false
+    showJumpBottom.value = dist >= JUMP_BTN_THRESHOLD
+  })
+}
+
+// 用户主动滚动/触摸时立刻交还控制权：平滑滚动途中用户反悔要能中断
+function cancelJumpScrolling() {
+  if (!jumpScrolling) return
+  endJumpScrolling()
+}
+
+function endJumpScrolling() {
+  jumpScrolling = false
+  if (jumpScrollTimer) {
+    clearTimeout(jumpScrollTimer)
+    jumpScrollTimer = null
+  }
+}
+
+const jumpTitle = computed(() => (
+  unreadBelow.value > 0
+    ? t('chat.jumpToBottomUnread', { count: unreadBelow.value })
+    : t('chat.jumpToBottom')
+))
 
 // Elapsed timer for streaming
 const elapsedSeconds = ref(0)
@@ -2575,10 +2658,26 @@ async function unlinkSessionGoal(goalId: string, sessionId: string, popoverKey: 
   }
 }
 
-function scrollToBottom() {
+// 滚到底部。behavior 默认 smooth；会话切换等"换了一批消息"的场景用 auto，
+// 免得几十屏的历史被平滑滚一遍。
+function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+  // 意图先落定：平滑滚动途中到达的新内容不该被算成"未读"
+  stickBottom.value = true
+  showJumpBottom.value = false
+  unreadBelow.value = 0
+  jumpScrolling = true
+  if (jumpScrollTimer) clearTimeout(jumpScrollTimer)
+  // 兜底解锁：平滑滚动被打断（内容高度突变等）时也可能收不到最终 scroll 事件
+  jumpScrollTimer = setTimeout(endJumpScrolling, 1000)
   nextTick(() => {
-    messagesRef.value?.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' })
+    const el = messagesRef.value
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
   })
+}
+
+function jumpToBottom() {
+  scrollToBottom('smooth')
 }
 
 // Handle session list scroll - load more when scrolled to bottom
@@ -2608,10 +2707,24 @@ onUnmounted(() => {
   }
 })
 
-watch(() => chatStore.messages.length, scrollToBottom)
-watch(() => chatStore.toolCalls.length, scrollToBottom)
-// 新审批到达时自动滚动到底部，避免用户在查看历史时错过待审批卡片
-watch(() => chatStore.pendingApprovals.length, scrollToBottom)
+// 贴底才自动跟随；否则只累计未读数，由悬浮按钮提示（用户正在看历史，别拽他）
+watch(() => chatStore.messages.length, (n, o) => {
+  if (n <= o) return
+  if (stickBottom.value) scrollToBottom()
+  else unreadBelow.value += n - o
+})
+watch(() => chatStore.toolCalls.length, () => {
+  if (stickBottom.value) scrollToBottom()
+})
+// 新审批到达时强制滚动到底部（审批需要立刻看见、立刻处理，优先级高于"正在看历史"）
+watch(() => chatStore.pendingApprovals.length, () => scrollToBottom())
+// 切换会话=换了一批消息：重新贴底、清未读，用 auto 直接落到最新处
+watch(() => chatStore.activeSessionId, () => {
+  stickBottom.value = true
+  unreadBelow.value = 0
+  showJumpBottom.value = false
+  scrollToBottom('auto')
+})
 
 // 审批快捷键：A=批准首个待审批，D=拒绝首个待审批。输入框聚焦时不响应。
 function handleApprovalKeydown(e: KeyboardEvent) {
@@ -2918,6 +3031,16 @@ onMounted(async () => {
   background: #fff;
 }
 
+/* 滚动区的外壳：只用来给"回到底部"按钮提供定位上下文（滚动容器内部的
+   absolute 会随内容滚动，所以必须包一层不滚动的父级） */
+.messages-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -2926,6 +3049,65 @@ onMounted(async () => {
   overflow-x: hidden;
   padding: 20px 24px;
   padding-bottom: 20px;
+}
+
+/* ========== 回到底部悬浮按钮 ========== */
+.jump-bottom-btn {
+  position: absolute;
+  right: 28px;
+  bottom: 16px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  color: #4b5563;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  z-index: 5;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.jump-bottom-btn:hover {
+  background: #f5f5f5;
+  color: #111827;
+}
+
+.jump-bottom-btn:active {
+  transform: scale(0.94);
+}
+
+/* 未读角标：告诉用户"下面还有几条新消息"，而不是只给一个箭头 */
+.jump-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #d03050;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.jump-fade-enter-active,
+.jump-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.jump-fade-enter-from,
+.jump-fade-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 .empty-hint {
@@ -3673,6 +3855,18 @@ onMounted(async () => {
     background: #141414;
   }
 
+  .jump-bottom-btn {
+    background: #2a2a2a;
+    border-color: #3a3a3a;
+    color: #e5e7eb;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  .jump-bottom-btn:hover {
+    background: #333;
+    color: #fff;
+  }
+
   .assistant-content {
     color: #e5e7eb;
   }
@@ -4309,6 +4503,12 @@ onMounted(async () => {
     align-items: center;
     padding: 10px 0;
     cursor: pointer;
+  }
+
+  /* 移动端屏幕窄，按钮往边角收一点，别压住消息正文 */
+  .jump-bottom-btn {
+    right: 12px;
+    bottom: 12px;
   }
 
   .handle-bar {

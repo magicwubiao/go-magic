@@ -203,6 +203,8 @@ export default {
     searchNoResults: 'No matching sessions',
     searchResults: 'Search results ({count})',
     selectSession: 'Select a session or start a new chat',
+    jumpToBottom: 'Jump to latest',
+    jumpToBottomUnread: 'Jump to latest ({count} new)',
     untitled: 'Untitled',
     default: 'Default',
     selectModel: 'Select Model',
