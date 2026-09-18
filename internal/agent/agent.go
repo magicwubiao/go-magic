@@ -241,10 +241,10 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 	}
 
 	agent := &Agent{
-		provider:         prov,
-		registry:         registry,
-		tools:            tools,
-		history:          history,
+		provider: prov,
+		registry: registry,
+		tools:    tools,
+		history:  history,
 		// 内置兜底上限：调用方（config / WithMaxTurns）未指定时生效。与
 		// config 默认值保持一致，避免"配了 0 反而比默认值更紧"的困惑。
 		maxTurns:         300,
