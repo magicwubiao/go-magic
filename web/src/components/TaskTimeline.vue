@@ -263,6 +263,11 @@ const decoratedSteps = computed(() =>
   text-overflow: ellipsis;
   font-weight: 500;
   color: #2563eb;
+  /* 不能沿用 bar 的 line-height:1：行盒正好等于字号时，Windows 字体回退的
+     字形上伸部会超出 em 框，被自身的 overflow:hidden 削掉上半截
+     （"terminal · git push … 文字被挡到一半"就是这个）。显式放宽行盒，
+     align-items:center 仍保证垂直居中，ellipsis 不受影响。 */
+  line-height: 18px;
 }
 .task-dock-bar.is-error .td-label {
   color: inherit;
