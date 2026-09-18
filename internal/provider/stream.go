@@ -333,7 +333,7 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check for completion
+		// 流终止标记（OpenAI 的 data: [DONE]）：只有它才结束读取循环。
 		if parser.IsDone(line) {
 			done = true
 			break
@@ -415,18 +415,24 @@ func ParseStreamWithParser(ctx context.Context, body io.Reader, handler StreamHa
 			})
 		}
 
+		// Usage 可能出现在任意一个 chunk 上，不能只在 Done 分支捕获：
+		// OpenAI 兼容接口在 stream_options.include_usage 时把 usage 放在一个
+		// choices 为空、没有 finish_reason 的独立 chunk 里（紧跟在 [DONE] 之前），
+		// 而 [DONE] 行本身不携带任何数据。只在 Done 分支取会让 usage 整块丢失
+		// ——下游 agent 因此永远累计不到 token（表现为 /usage 页面恒为 0）。
+		if resp.Usage != nil {
+			finalUsage = resp.Usage
+		}
+
+		// finish_reason 到达只标记"模型说完了"，**绝不能在此 break**：
+		// OpenAI 兼容接口把 usage 放在 finish_reason chunk 之后的独立 chunk
+		// （choices 为空、无 finish_reason），再后面才是 [DONE]。提前跳出会
+		// 让 usage 永远读不到——agent 累计不到 token，/usage 页面恒为 0。
+		// 继续读直到真正的流终止标记（上面 IsDone 分支）。
 		if resp.Done {
 			done = true
-			// Capture usage from final chunk
-			if resp.Usage != nil {
-				finalUsage = resp.Usage
-			}
 		}
 		mu.Unlock()
-
-		if done {
-			break
-		}
 	}
 
 	if err := scanner.Err(); err != nil {

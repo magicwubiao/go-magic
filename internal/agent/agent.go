@@ -2082,11 +2082,8 @@ Please provide a comprehensive, well-structured final response based on these su
 						}
 						toolCalls[i].Normalize()
 					}
-					// Track token usage from final stream chunk
-					if resp.Usage != nil {
-						a.inputTokens += resp.Usage.PromptTokens
-						a.outputTokens += resp.Usage.CompletionTokens
-					}
+					// Track token usage from final stream chunk（含 cache 命中量）
+					a.trackUsage(&provider.ChatResponse{Usage: resp.Usage})
 					// Close think tag if still open (for handler completeness)
 					handlerContent := ""
 					if reasoningStarted && !thinkClosed {
@@ -2194,11 +2191,8 @@ Please provide a comprehensive, well-structured final response based on these su
 					// Done chunk 的 Content 可能为空（perplexity/gemini/wenxin），
 					// 仅在非空时覆盖，避免清空已累积的内容
 					finalizeFullContent(resp)
-					// Track token usage from final stream chunk
-					if resp.Usage != nil {
-						a.inputTokens += resp.Usage.PromptTokens
-						a.outputTokens += resp.Usage.CompletionTokens
-					}
+					// Track token usage from final stream chunk（含 cache 命中量）
+					a.trackUsage(&provider.ChatResponse{Usage: resp.Usage})
 					// Close think tag if still open
 					handlerContent := ""
 					if reasoningStarted && !thinkClosed {

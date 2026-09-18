@@ -81,6 +81,39 @@ func TestAccountTurnUsageRecordsOnce(t *testing.T) {
 	}
 }
 
+// TestRunQueuedTurnRecordsUsage 跑一次真实的队列回合（不经过任何旧接口），
+// 断言回合结束后 usage 表里出现了本回合的消耗。这是「/usage 页面有数据」
+// 这条链的最末端验证：修复前这里必然是 0。
+func TestRunQueuedTurnRecordsUsage(t *testing.T) {
+	mgr, err := usage.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	s := &Server{
+		cfg:           &config.Config{Provider: "stub"},
+		usageMgr:      mgr,
+		agents:        make(map[string]*agent.Agent),
+		sessionTokens: make(map[string][3]int),
+	}
+	s.agents["sess-q"] = agent.NewAIAgent(&stubUsageProvider{}, nil, nil, "")
+
+	q := newSessionQueue()
+	s.runQueuedTurn("sess-q", q, context.Background(), &queuedTurn{
+		id:      "turn-1",
+		content: "hi",
+		run:     &turnRunCtx{fileOps: NewTurnFileOpTracker()},
+	})
+
+	today, err := mgr.GetTodayStats()
+	if err != nil {
+		t.Fatalf("GetTodayStats: %v", err)
+	}
+	if today.TotalRequests == 0 || today.TotalInput == 0 {
+		t.Fatalf("队列回合结束后今日统计仍为空 (requests=%d, in=%d, out=%d)：用量没有被记账",
+			today.TotalRequests, today.TotalInput, today.TotalOutput)
+	}
+}
+
 // TestRunQueuedTurnAccountsUsage 是结构断言：队列路径的回合必须在收尾处
 // 调用 accountTurnUsage。队列改造后回合跑在 worker 里，不再经过旧 /api/chat
 // 的收尾，漏掉这一行 /usage 页面就永远没有新数据（用户报「用量统计不到」）。
