@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,51 @@ func TestClarifyAskRoundTrip(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("pending clarification leaked: %d remain", left)
 	}
+}
+
+// TestClarifyAskReachesQueueSink 钉死真正的 Web 路径：Web 会话的 SSE 连接是
+// 挂在会话队列上的 sink（handleSessionStream），不是 registerClarifySSEHandler
+// 那种"handler 里直写"的闭包。队列改造曾把卡片注册从 handleSessionStream 里
+// 删掉，导致 clarify 工具拿不到通道、直接回落成普通结果——表现就是"澄清卡片
+// 永远不弹出"。这里直接断言事件确实进了队列总线。
+func TestClarifyAskReachesQueueSink(t *testing.T) {
+	s := newClarifyTestServer()
+	s.chatQueues = make(map[string]*sessionQueue)
+
+	q := s.sessionQueueFor("sess-web")
+	snk := q.addSink()
+	defer func() {
+		snk.cancel()
+		q.closeSink(snk)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = s.Ask(ctx, "sess-web", tool.ClarifyRequest{
+			Question: "A or B?",
+			Options:  []string{"A", "B"},
+		})
+	}()
+
+	select {
+	case ev := <-snk.evch:
+		if !strings.Contains(ev.data, `"type":"clarify_required"`) {
+			t.Fatalf("expected clarify_required frame, got %q", ev.data)
+		}
+		if !strings.Contains(ev.data, `"question":"A or B?"`) {
+			t.Fatalf("clarify payload lost the question: %q", ev.data)
+		}
+	case <-ctx.Done():
+		t.Fatal("clarify card was not delivered to the session queue sink")
+	}
+
+	// 收尾：取消回合，避免 Ask 挂到超时并把 goroutine 留在测试里。
+	cancel()
+	<-done
 }
 
 func TestClarifyAskCtxCancel(t *testing.T) {

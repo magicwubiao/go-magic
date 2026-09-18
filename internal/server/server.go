@@ -538,12 +538,7 @@ Your working directory is: %s
 	// 仅当 approvalMgr 存在时注册。
 	if s.approvalMgr != nil {
 		s.approvalMgr.SetOnPendingCreated(func(info approval.PendingApprovalInfo) {
-			s.pendingSSEHandlersMu.Lock()
-			handler, ok := s.pendingSSEHandlers[info.SessionID]
-			s.pendingSSEHandlersMu.Unlock()
-			if ok && handler != nil {
-				handler(info)
-			}
+			s.pushApprovalRequired(info)
 		})
 	}
 
@@ -999,6 +994,36 @@ func (s *Server) staticRulesEnabled() bool {
 // so that approval_required events are delivered into the chat stream. Returns an
 // unregister func that removes the handler (call via defer). Both handleChatStream
 // and handleSessionStream use this to ensure approval cards appear in the chat bubble.
+// pushApprovalRequired 推送一张待审批卡片。与澄清卡片同源：优先走会话队列
+// 总线（Web 会话的 SSE 连接挂在那里），否则回退到旧版直写回调。
+func (s *Server) pushApprovalRequired(info approval.PendingApprovalInfo) {
+	riskLevel := ""
+	if info.RiskLevel != "" {
+		riskLevel = info.RiskLevel
+	}
+	payload := map[string]interface{}{
+		"type":       "approval_required",
+		"id":         info.ID,
+		"command":    info.Command,
+		"session_id": info.SessionID,
+		"work_dir":   info.WorkingDir,
+		"risk_level": riskLevel,
+		"reason":     info.Reason,
+		"context":    info.Context,
+		"created_at": info.CreatedAt.Unix(),
+		"expires_at": info.ExpiresAt.Unix(),
+	}
+	if s.pushSessionCardEvent(info.SessionID, payload) {
+		return
+	}
+	s.pendingSSEHandlersMu.Lock()
+	handler := s.pendingSSEHandlers[info.SessionID]
+	s.pendingSSEHandlersMu.Unlock()
+	if handler != nil {
+		handler(info)
+	}
+}
+
 func (s *Server) registerApprovalSSEHandler(sessionID string, writeSSE func(string) bool) func() {
 	if s.approvalMgr == nil {
 		return func() {}

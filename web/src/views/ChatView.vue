@@ -1100,6 +1100,13 @@ function renderModelLabel(option: { label: string; value: string }) {
 
 // 快速设置审批策略：聊天页直接切换，无需进入审批管理页。
 const approvalStrategy = ref<string>('smart')
+// 服务端已生效的那一份策略。为什么不能直接用 approvalStrategy 做"值没变就
+// 跳过"的判断：`v-model:value` 与 `@update:value` 同时存在时 Vue 会把两者合并
+// 成数组且**赋值在前**（编译产物：`onUpdate:value: [$event => x = $event, handler]`），
+// 于是处理函数里 `value === approvalStrategy.value` 恒为真——曾经这行让保存
+// 整段被 return 掉，表现为"切了策略看着变了、实际没保存、刷新又回去"。
+// 已保存值必须独立于绑定值记一份。
+const appliedStrategy = ref<string>('smart')
 const approvalLoading = ref(false)
 const approvalStrategyOptions = computed(() => [
   { label: t('approval.settings.strategies.manual'), value: 'manual' },
@@ -1129,7 +1136,9 @@ async function loadApprovalStrategy() {
   approvalLoading.value = true
   try {
     const settings = await approvalApi.getSettings()
-    approvalStrategy.value = settings.strategy || 'smart'
+    const s = settings.strategy || 'smart'
+    approvalStrategy.value = s
+    appliedStrategy.value = s
   } catch (e) {
     console.error('load approval strategy failed', e)
   } finally {
@@ -1139,18 +1148,21 @@ async function loadApprovalStrategy() {
 
 // 切换审批策略：仅更新 strategy，其余设置保持不变
 async function handleApprovalStrategyChange(value: string) {
-  if (!value || value === approvalStrategy.value) return
+  // 与"服务端已生效值"比较（不能与 approvalStrategy 比，原因见其声明处注释）
+  if (!value || value === appliedStrategy.value) return
+  const prev = appliedStrategy.value
   try {
     const settings = await approvalApi.getSettings()
     settings.strategy = value
     await approvalApi.saveSettings(settings)
+    appliedStrategy.value = value
     approvalStrategy.value = value
     const label = approvalStrategyOptions.value.find(o => o.value === value)?.label.split(' - ')[0] || value
     message.success(t('chat.quickApprovalSaved', { strategy: label }))
   } catch (e: any) {
     message.error(t('chat.quickApprovalSaveFailed'))
-    // 恢复为实际保存的值
-    loadApprovalStrategy()
+    // 保存失败：把选择框拉回服务端实际的值
+    approvalStrategy.value = prev
   }
 }
 

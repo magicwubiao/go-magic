@@ -37,11 +37,36 @@ type PendingClarification struct {
 //     tool.ErrClarifyUnavailable，clarify 工具回落为普通结构化结果；
 //   - 有通道 → 推 clarify_required 卡片事件后挂起，直到用户答复 / ctx 取消 /
 //     等待超时。返回的答复会作为 clarify 工具结果回流模型继续原回合。
-func (s *Server) Ask(ctx context.Context, sessionID string, req tool.ClarifyRequest) (*tool.ClarifyAnswer, error) {
+//
+// hasClarifyChannel 报告该会话此刻是否有人能收到澄清卡片：会话队列上有
+// SSE 连接（Web 会话的正常路径），或旧版 /api/chat/stream 注册过直写回调。
+func (s *Server) hasClarifyChannel(sessionID string) bool {
+	if q := s.lookupSessionQueue(sessionID); q != nil && q.hasAnySink() {
+		return true
+	}
 	s.clarifySSEHandlersMu.Lock()
+	defer s.clarifySSEHandlersMu.Unlock()
 	push, ok := s.clarifySSEHandlers[sessionID]
+	return ok && push != nil
+}
+
+// pushClarifyEvent 推送一张澄清卡片事件。优先走会话队列总线（多条 SSE 连接
+// 都能收到，含回合中途附着上来的页面），失败再回退到旧版直写回调。
+func pushClarifyEvent(s *Server, sessionID string, payload map[string]interface{}) bool {
+	if s.pushSessionCardEvent(sessionID, payload) {
+		return true
+	}
+	s.clarifySSEHandlersMu.Lock()
+	push := s.clarifySSEHandlers[sessionID]
 	s.clarifySSEHandlersMu.Unlock()
-	if !ok || push == nil {
+	if push == nil {
+		return false
+	}
+	return push(payload)
+}
+
+func (s *Server) Ask(ctx context.Context, sessionID string, req tool.ClarifyRequest) (*tool.ClarifyAnswer, error) {
+	if !s.hasClarifyChannel(sessionID) {
 		return nil, tool.ErrClarifyUnavailable
 	}
 
@@ -78,9 +103,9 @@ func (s *Server) Ask(ctx context.Context, sessionID string, req tool.ClarifyRequ
 		"created_at":   pc.CreatedAt.Unix(),
 		"expires_at":   pc.ExpiresAt.Unix(),
 	}
-	if !push(payload) {
-		// SSE 流在推送瞬间已死（writeSSE 返回 false）。回合上下文独立于连接，
-		// 澄清无人可答，直接取消避免工具挂到超时。
+	if !pushClarifyEvent(s, pc.SessionID, payload) {
+		// 没有任何连接承接（SSE 流在推送瞬间已死 / 页面不在）。回合上下文
+		// 独立于连接，澄清无人可答，直接取消避免工具挂到超时。
 		return nil, fmt.Errorf("clarification channel closed")
 	}
 
@@ -108,13 +133,7 @@ func (s *Server) Ask(ctx context.Context, sessionID string, req tool.ClarifyRequ
 // 前端据此把挂起的澄清卡片标记为过期并移除。SSE 通道已死时静默放弃
 // （此时前端卡片由倒计时兜底过期）。
 func pushClarifyClosed(s *Server, pc *PendingClarification, reason string) {
-	s.clarifySSEHandlersMu.Lock()
-	push := s.clarifySSEHandlers[pc.SessionID]
-	s.clarifySSEHandlersMu.Unlock()
-	if push == nil {
-		return
-	}
-	push(map[string]interface{}{
+	pushClarifyEvent(s, pc.SessionID, map[string]interface{}{
 		"type":       "clarify_closed",
 		"id":         pc.ID,
 		"session_id": pc.SessionID,

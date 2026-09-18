@@ -1113,6 +1113,25 @@ func (q *sessionQueue) broadcast(ev turnEvent) bool {
 	return q.appendEvent(ev)
 }
 
+// pushSessionCardEvent 把一张"交互卡片"事件（审批 / 澄清）推给该会话的所有
+// SSE 连接。返回是否至少有一个页面收到了它。
+//
+// 为什么必须有这条路：队列改造后回合跑在 worker 里，SSE 连接只是挂在会话
+// 队列上的 sink（可能多条、可随时附着/断开），handler 里那个"当前流的
+// writeSSE"不再存在——卡片事件若还走它，Web 会话永远收不到，clarify 工具
+// 会因为拿不到通道直接回落成普通结果（表现为"澄清卡片不弹出"）。
+func (s *Server) pushSessionCardEvent(sessionID string, payload map[string]interface{}) bool {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		return false
+	}
+	return q.broadcast(turnEvent{data: "data: " + string(b) + "\n\n"})
+}
+
 // cancelWasRequested 报告当前回合是否是被用户显式取消的。
 func (q *sessionQueue) cancelWasRequested() bool {
 	q.mu.Lock()
