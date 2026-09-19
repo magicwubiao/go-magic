@@ -179,15 +179,23 @@
             </div>
           </div>
         </template>
-        <div v-if="chatStore.sessionsLoading || (isSearching && searchLoading)" style="padding: 16px; text-align: center;">
-          <n-spin size="small" />
-        </div>
         <n-text v-if="isSearching && !chatStore.sessionsLoading && !searchLoading && visibleSessions.length === 0" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.searchNoResults') }}
         </n-text>
         <n-text v-if="!isSearching && !sidebarRows.length && !chatStore.sessionsLoading && !searchLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.noSessions') }}
         </n-text>
+      </div>
+      <!-- 加载更多时的指示器：绝对定位覆盖在列表底部，**不进入滚动流**。
+           它曾作为 .session-list 的最后一个子元素渲染，出现/消失会让 scrollHeight
+           变化 66px；浏览器随之钳制/锚定 scrollTop，列表在底部时表现为
+           "删掉一个会话后整列先跳一下、再弹回、再跳"——即用户看到的抖动。
+           同时 pointer-events:none，不挡住底下那一行的点击。 -->
+      <div
+        v-if="(!isMobile || mobileSessionExpanded) && (chatStore.sessionsLoading || (isSearching && searchLoading))"
+        class="session-list-loading"
+      >
+        <n-spin size="small" />
       </div>
     </div>
 
@@ -208,8 +216,9 @@
         class="messages"
         ref="messagesRef"
         @scroll.passive="handleMessagesScroll"
-        @wheel.passive="cancelJumpScrolling"
-        @touchstart.passive="cancelJumpScrolling"
+        @wheel.passive="handleMessagesWheel"
+        @touchstart.passive="handleMessagesTouchStart"
+        @touchmove.passive="handleMessagesTouchMove"
       >
         <div
           v-for="msg in chatStore.messages"
@@ -965,11 +974,41 @@ const JUMP_BTN_THRESHOLD = 200      // 距底 > 此值才显示按钮，避免�
 let jumpScrolling = false           // 程序触发的平滑滚动进行中（scroll 事件不算用户上滚）
 let jumpScrollTimer: ReturnType<typeof setTimeout> | null = null
 let msgScrollRaf = 0
+let followRaf = 0                   // 贴底跟随的合并帧
+// 最近一次"程序自身"滚动的时间戳。程序滚动同样会派发 scroll 事件，而流式内容
+// 在这个过程中还在长高，于是事件里量到的离底距离可能已经超过阈值——若不豁免，
+// 就会被误判成"用户上滚"从而关掉跟随，表现为跟随到一半突然卡住不再贴底。
+let programScrollAt = 0
+const PROGRAM_SCROLL_GRACE = 200    // 程序滚动后这段时间内的 scroll 事件不判用户意图
 
 function messagesBottomDistance(): number {
   const el = messagesRef.value
   if (!el) return 0
   return el.scrollHeight - el.scrollTop - el.clientHeight
+}
+
+// 贴底跟随：把视口对齐到内容底部。必须用即时滚动（直接写 scrollTop）而不是
+// smooth——smooth 每次调用都会重启一段动画，在持续增高的内容上永远追不上，
+// 观感就是"内容都写了几秒才滑到底"。
+function followBottom() {
+  if (!stickBottom.value) return
+  if (followRaf) return
+  followRaf = requestAnimationFrame(() => {
+    followRaf = 0
+    if (!stickBottom.value) return
+    const el = messagesRef.value
+    if (!el) return
+    if (messagesBottomDistance() <= 0) return  // 已经贴底，别再写 scrollTop
+    programScrollAt = performance.now()
+    el.scrollTop = el.scrollHeight
+  })
+}
+
+// 用户主动离开底部：停止跟随、露出悬浮按钮
+function detachFollow() {
+  if (!stickBottom.value) return
+  stickBottom.value = false
+  showJumpBottom.value = messagesBottomDistance() >= JUMP_BTN_THRESHOLD
 }
 
 function handleMessagesScroll() {
@@ -986,6 +1025,8 @@ function handleMessagesScroll() {
       return
     }
     if (jumpScrolling) return
+    // 程序滚动刚把视口推到底、内容又长了高：这是流式输出，不是用户想离开底部
+    if (performance.now() - programScrollAt < PROGRAM_SCROLL_GRACE) return
     stickBottom.value = false
     showJumpBottom.value = dist >= JUMP_BTN_THRESHOLD
   })
@@ -996,6 +1037,31 @@ function cancelJumpScrolling() {
   if (!jumpScrolling) return
   endJumpScrolling()
 }
+
+// 滚轮：向上滚 = 明确要看历史，立即放开跟随（不能等 scroll 事件，那会被上面
+// 那个程序滚动时间窗吃掉一拍）
+function handleMessagesWheel(e: WheelEvent) {
+  cancelJumpScrolling()
+  if (e.deltaY < 0) detachFollow()
+}
+
+// 触摸：手指下移 = 内容上移 = 看历史，同样立即放开跟随
+let touchStartY = 0
+function handleMessagesTouchStart(e: TouchEvent) {
+  cancelJumpScrolling()
+  touchStartY = e.touches[0]?.clientY ?? 0
+}
+
+function handleMessagesTouchMove(e: TouchEvent) {
+  const y = e.touches[0]?.clientY ?? 0
+  if (y - touchStartY > 8) detachFollow()
+}
+
+onUnmounted(() => {
+  if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0 }
+  if (msgScrollRaf) { cancelAnimationFrame(msgScrollRaf); msgScrollRaf = 0 }
+  if (jumpScrollTimer) { clearTimeout(jumpScrollTimer); jumpScrollTimer = null }
+})
 
 function endJumpScrolling() {
   jumpScrolling = false
@@ -2684,6 +2750,13 @@ function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
   nextTick(() => {
     const el = messagesRef.value
     if (!el) return
+    // 必须等 DOM patch 之后再量距离：若贴底跟随已经把视口对齐到底（流式进行中
+    // 的常态），再滚一次只会让内容抖一下
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= 1) {
+      endJumpScrolling()
+      return
+    }
+    programScrollAt = performance.now()
     el.scrollTo({ top: el.scrollHeight, behavior })
   })
 }
@@ -2726,8 +2799,19 @@ watch(() => chatStore.messages.length, (n, o) => {
   else unreadBelow.value += n - o
 })
 watch(() => chatStore.toolCalls.length, () => {
-  if (stickBottom.value) scrollToBottom()
+  if (stickBottom.value) followBottom()
 })
+
+// ===== 流式输出期间的贴底跟随 =====
+// 流式文本是每 ~80ms 往 streamContent 里追加的，这期间 messages.length 不变，
+// 只挂 messages.length 的话整段回答要等回合结束、消息落库那一下才被滚出来——
+// 用户感知就是"内容都写完几秒了才拉到底"。这里让内容的每一次增长都触发贴底
+// 跟随（rAF 合并，多路同时触发也只滚一帧）。
+watch(() => chatStore.streamContent, () => followBottom())
+watch(() => chatStore.streamingSegments, () => followBottom(), { deep: true })
+watch(() => chatStore.taskProgress, () => followBottom())
+// 回合收尾：流式气泡消失、历史消息接管，高度会变一次，补一次贴底
+watch(() => chatStore.streaming, (v) => { if (!v) followBottom() })
 // 新审批到达时强制滚动到底部（审批需要立刻看见、立刻处理，优先级高于"正在看历史"）
 watch(() => chatStore.pendingApprovals.length, () => scrollToBottom())
 // 切换会话=换了一批消息：重新贴底、清未读，用 auto 直接落到最新处
@@ -2801,6 +2885,8 @@ onMounted(async () => {
   background: #fff;
   height: 100vh;
   overflow: hidden;
+  /* 底部"加载更多"指示条要绝对定位到列表底部（它不能进滚动流，否则改 scrollHeight）*/
+  position: relative;
 }
 
 .sidebar-header {
@@ -2833,10 +2919,45 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  /* 上下留一点呼吸，首/末行的圆角高亮不贴着表头和底部 */
+  padding: 4px 0 6px;
+  /* 侧栏只有 240px，通栏分隔线 + 贴边高亮在这么窄的列里显得很挤，所以行统一改成
+     左右各内缩 8px 的圆角条目（见下方 .session-item / .session-group-head）。
+     正因如此这里必须不保留滚动槽：经典（非 overlay）滚动条实占约 10px 宽度，
+     会把右侧内缩顶成 18px、左右不对称，条目和分隔线也到不了该到的位置。
+     滚轮/触摸照常可滚，每组还有「加载更多」分页兜底。两套写法覆盖新旧内核。 */
+  scrollbar-width: none;
+}
+
+.session-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* 底部"加载更多"指示条：绝对定位覆盖在列表底部，不占布局高度。
+   它的出现/消失会随每次分页请求发生；若参与布局（曾作为列表的最后一个子元素，
+   高 66px）就会改 scrollHeight，浏览器随即钳制 scrollTop，
+   在"滚到底部删除会话"时表现为整列跳一下、弹回、再跳一下的抖动。
+   做成居中的白色小药丸：只遮住最后一行中间一小块，pointer-events:none 也不挡点击。 */
+.session-list-loading {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.session-list-loading > * {
+  background: #fff;
+  border-radius: 999px;
+  padding: 3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
 }
 
 .profile-group-header {
-  padding: 8px 12px 4px;
+  padding: 10px 16px 4px;
   font-size: 11px;
   font-weight: 600;
   color: #999;
@@ -2852,19 +2973,20 @@ onMounted(async () => {
   gap: 6px;
   /* 固定行高：悬停出现的操作按钮（22px）比文字徽标高，若参与布局会把行撑高，
      鼠标一进入整行就变高、下方内容跟着位移，看起来像在抖动。 */
-  height: 32px;
-  padding: 0 12px;
+  height: 30px;
+  margin: 2px 8px;
+  padding: 0 8px;
   box-sizing: border-box;
   cursor: pointer;
-  background: #fafafa;
-  border-bottom: 1px solid #f0f0f0;
+  background: #f2f2f2;
+  border-radius: 8px;
   user-select: none;
   font-size: 12px;
   color: #666;
 }
 
 .session-group-head:hover {
-  background: #f0f0f0;
+  background: #e9e9e9;
 }
 
 .session-group-caret {
@@ -2906,7 +3028,7 @@ onMounted(async () => {
 /* 分组头快捷操作：绝对定位到右侧固定槽位，出现/消失不参与布局（行高与标题宽度都不变） */
 .session-group-actions {
   position: absolute;
-  right: 12px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
   display: none;
@@ -2940,12 +3062,13 @@ onMounted(async () => {
 /* 组内"加载更多"：左对齐（不再居中），颜色取侧栏中性灰，
    避免蓝色主色在这种次要入口上过于抢眼 */
 .session-group-more {
-  padding: 7px 12px;
+  margin: 2px 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
   font-size: 12px;
   color: #888;
   text-align: left;
   cursor: pointer;
-  border-bottom: 1px solid #f0f0f0;
 }
 
 /* 有分组头时（组内会话缩进 22px），"加载更多"跟着缩进对齐会话标题；
@@ -2965,9 +3088,10 @@ onMounted(async () => {
 }
 
 .session-item {
-  padding: 10px 12px;
+  margin: 2px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
-  border-bottom: 1px solid #f0f0f0;
   position: relative;
   display: flex;
   align-items: center;

@@ -56,12 +56,12 @@
     <!-- Platform Cards -->
     <n-grid :cols="3" :x-gap="12" :y-gap="12">
       <n-gi v-for="platform in platforms" :key="platform.id">
-        <n-card size="small" :title="platform.label">
+        <n-card size="small" :title="platformName(platform)">
           <template #header-extra>
             <n-switch v-model:value="platform.enabled" size="small" @update:value="savePlatform(platform)" />
           </template>
           <n-space vertical size="small">
-            <n-text depth="3">{{ platform.description }}</n-text>
+            <n-text depth="3">{{ platformDesc(platform) }}</n-text>
             <n-space size="small">
               <n-tag :type="platform.enabled ? 'success' : 'default'" size="small">
                 {{ platform.enabled ? t('common.enabled') : t('common.disabled') }}
@@ -93,7 +93,7 @@
                     {{ t('gateway.disconnect') }}
                   </n-button>
                 </template>
-                {{ t('gateway.disconnectConfirm', { name: platform.label }) }}
+                {{ t('gateway.disconnectConfirm', { name: platformName(platform) }) }}
               </n-popconfirm>
               <!-- 已启用但未连接：仅对可安全运行时重连的平台显示 -->
               <n-button
@@ -113,7 +113,7 @@
     </n-grid>
 
     <!-- Edit Platform Modal -->
-    <n-modal v-model:show="showEditModal" :title="editingPlatform?.label" preset="dialog" class="modal-responsive" style="width: 500px; max-width: 96vw;">
+    <n-modal v-model:show="showEditModal" :title="editingPlatform ? platformName(editingPlatform) : ''" preset="dialog" class="modal-responsive" style="width: 500px; max-width: 96vw;">
       <n-form v-if="editingPlatform" label-placement="left" label-width="120" size="small">
         <!-- 通用 Token 只适用于 bot-token 类平台（telegram/discord/slack/line/matrix/wechat_ilink）。
              QQ / WeCom / Teams 为 App 凭据专用表单；dingtalk / feishu 为 App 凭据模式，后端用
@@ -270,7 +270,7 @@
 
 
     <!-- QR Login Modal -->
-    <n-modal v-model:show="showQRModal" :title="`QR Code Login - ${qrPlatform?.label}`" preset="card" class="modal-responsive" style="width: 400px; max-width: 96vw;">
+    <n-modal v-model:show="showQRModal" :title="qrModalTitle" preset="card" class="modal-responsive" style="width: 400px; max-width: 96vw;">
       <div class="qr-modal-content">
         <!-- QR Code Display -->
         <div v-if="qrStatus === 'loading'" class="qr-loading">
@@ -350,12 +350,10 @@ import { useConfigStore } from '@/stores/config'
 import type { PlatformStatus } from '@/api/gateway'
 import { getPlatforms, platformAction } from '@/api/gateway'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 interface Platform {
   id: string
-  label: string
-  description: string
   enabled: boolean
   token: string
   tokenLabel: string
@@ -423,9 +421,24 @@ let qrPollInterval: ReturnType<typeof setInterval> | null = null
 let qrCountdownInterval: ReturnType<typeof setInterval> | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 
-function createPlatform(id: string, label: string, description: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
+// 平台卡片显示名与说明统一走 i18n（gateway.platformNames / gateway.platformDescs）：
+// 中文环境下「微信 / 企业微信 / 钉钉 / 飞书」等一眼可辨，切换语言即时生效；
+// 缺键时回落到平台 id，避免页面出现空白标题。
+function platformName(p?: Platform | null): string {
+  if (!p) return ''
+  const key = `gateway.platformNames.${p.id}`
+  return te(key) ? t(key) : p.id
+}
+
+function platformDesc(p?: Platform | null): string {
+  if (!p) return ''
+  const key = `gateway.platformDescs.${p.id}`
+  return te(key) ? t(key) : ''
+}
+
+function createPlatform(id: string, tokenLabel: string, tokenPlaceholder: string, supportsQR = false): Platform {
   return reactive({
-    id, label, description, enabled: false, token: '',
+    id, enabled: false, token: '',
     tokenLabel, tokenType: 'password', tokenPlaceholder, supportsQR,
     corpId: '', agentId: '', secret: '',
     appKey: '', appSecret: '', appId: '', wsUrl: '', botId: '',
@@ -438,20 +451,20 @@ function createPlatform(id: string, label: string, description: string, tokenLab
 }
 
 const platforms = ref<Platform[]>([
-  createPlatform('telegram', 'Telegram', 'Telegram Bot', 'Bot Token', 'Token from @BotFather'),
-  createPlatform('discord', 'Discord', 'Discord Bot', 'Bot Token', 'Discord Bot Token'),
-  createPlatform('slack', 'Slack', 'Slack Bot', 'Bot Token', 'Slack Bot Token'),
-  createPlatform('wechat_ilink', 'WeChat iLink', 'WeChat Personal', 'Token', 'iLink Token', true),
-  createPlatform('wecom', 'WeCom', t('gateway.wecomAibotDesc'), 'Token', 'WeCom Token', true),
-  createPlatform('qq', 'QQ', t('gateway.qqGuildBot'), 'App ID', t('gateway.qqBotAppId')),
-  createPlatform('dingtalk', 'DingTalk', 'DingTalk Bot', 'Token', 'DingTalk Token'),
-  createPlatform('feishu', 'Feishu/Lark', 'Feishu/Lark Bot', 'Token', 'Feishu Token'),
-  createPlatform('line', 'LINE', 'LINE Bot', 'Channel Token', 'LINE Channel Token'),
-  createPlatform('matrix', 'Matrix', 'Matrix Protocol', 'Token', 'Matrix Token'),
-  createPlatform('teams', 'Microsoft Teams', t('gateway.teamsDesc'), 'App ID', 'Microsoft App ID'),
-  createPlatform('googlechat', 'Google Chat', t('gateway.googlechatDesc'), 'Webhook URL', 'https://chat.googleapis.com/v1/spaces/...'),
-  createPlatform('email', 'Email', t('gateway.emailDesc'), 'Email', 'bot@example.com'),
-  createPlatform('sms', 'SMS', t('gateway.smsDesc'), 'Account SID', 'Twilio Account SID'),
+  createPlatform('telegram', 'Bot Token', 'Token from @BotFather'),
+  createPlatform('discord', 'Bot Token', 'Discord Bot Token'),
+  createPlatform('slack', 'Bot Token', 'Slack Bot Token'),
+  createPlatform('wechat_ilink', 'Token', 'iLink Token', true),
+  createPlatform('wecom', 'Token', 'WeCom Token', true),
+  createPlatform('qq', 'App ID', t('gateway.qqBotAppId')),
+  createPlatform('dingtalk', 'Token', 'DingTalk Token'),
+  createPlatform('feishu', 'Token', 'Feishu Token'),
+  createPlatform('line', 'Channel Token', 'LINE Channel Token'),
+  createPlatform('matrix', 'Token', 'Matrix Token'),
+  createPlatform('teams', 'App ID', 'Microsoft App ID'),
+  createPlatform('googlechat', 'Webhook URL', 'https://chat.googleapis.com/v1/spaces/...'),
+  createPlatform('email', 'Email', 'bot@example.com'),
+  createPlatform('sms', 'Account SID', 'Twilio Account SID'),
 ])
 
 // wechat_ilink / wecom 支持扫码登录（wecom 为官方智能机器人扫码创建；whatsapp 已于 2026-09 移除）。
@@ -473,6 +486,12 @@ async function refreshConnected(): Promise<void> {
 }
 
 const gatewayRunning = computed(() => !!gatewayStore.status?.running)
+
+// 扫码弹窗标题：跟随语言显示平台中文名
+const qrModalTitle = computed(() => {
+  const name = platformName(qrPlatform.value)
+  return name ? `${t('gateway.qrLogin')} - ${name}` : t('gateway.qrLogin')
+})
 
 // name -> connected lookup from the gateway health detail
 const connectedMap = computed<Record<string, boolean>>(() => {
@@ -556,13 +575,11 @@ function populateFromConfig(cfg: any) {
     if (platform.id === 'qq') {
       // 仅官方机器人：强制清掉历史 onebot/onebot_v11 mode（OneBot 接入已移除）
       platform.mode = ''
-      platform.description = t('gateway.qqGuildBot')
     }
 
     if (platform.id === 'wecom') {
       // 企业微信仅保留官方智能机器人：历史 mode='app'/'' 一律按 aibot 处理
       platform.mode = 'aibot'
-      platform.description = t('gateway.wecomAibotDesc')
       // 自建应用已移除：清掉 corp_id/agent_id，保存时同步抹除遗留配置
       platform.corpId = ''
       platform.agentId = ''
@@ -623,7 +640,7 @@ async function savePlatform(platform: Platform): Promise<void> {
     if (gatewayStore.status?.running) {
       // Telegram/Discord 等平台的 handler 只在网关进程启动时按 config 实例化，
       // 运行中保存不会热生效——不提示会被误判为"连不上"。
-      message.warning(t('gateway.platformRestartHint', { name: platform.label }), { duration: 8000 })
+      message.warning(t('gateway.platformRestartHint', { name: platformName(platform) }), { duration: 8000 })
     }
   } catch (e) {
     message.error(t('gateway.saveFailed') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
