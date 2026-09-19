@@ -40,8 +40,9 @@ var gatewayPlatform string // --platform 参数
 
 var gatewayCmd = &cobra.Command{
 	Use:   "gateway",
-	Short: "Start the messaging gateway (with health check on :8081)",
-	Long:  "Start the messaging gateway for Telegram, Discord, WeCom, etc.\nHealth check endpoint available at http://localhost:8081/health",
+	Short: fmt.Sprintf("Start the messaging gateway (with health check on :%d)", gateway.DefaultHealthPort),
+	Long: fmt.Sprintf("Start the messaging gateway for Telegram, Discord, WeCom, etc.\n"+
+		"Health check endpoint available at http://localhost:%d/health", gateway.DefaultHealthPort),
 }
 
 var gatewayStartCmd = &cobra.Command{
@@ -1091,7 +1092,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	agentHandler := NewGatewayAgentHandler()
 	gwCfg := gateway.GatewayConfig{
 		EnableAPI: true,
-		APIPort:   8080,
+		APIPort:   gateway.DefaultAPIPort,
 	}
 	switch {
 	case cfg.Gateway.RateLimitPerUser > 0:
@@ -1367,7 +1368,7 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 	pidFile := filepath.Join(magicHome, pidFileName)
 
 	// Try to read the PID file. If it doesn't exist, also check whether
-	// a previous gateway is still holding 8080/8081 (PID file might have
+	// a previous gateway is still holding the reserved ports (PID file might
 	// been cleaned up but the process orphaned).
 	data, err := os.ReadFile(pidFile)
 	if err != nil && !os.IsNotExist(err) {
@@ -1384,15 +1385,15 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Belt-and-braces: if a previous gateway is still bound to 8080/8081
+	// Belt-and-braces: if a previous gateway is still bound to those ports
 	// even after the PID-based kill, try to find and kill whatever is
 	// holding those ports. This handles the case where the PID file was
 	// cleaned up but the process is still alive.
-	if !isPortFree(8080) || !isPortFree(8081) {
-		fmt.Println("Ports 8080/8081 still in use; attempting to clear them...")
-		orphanPid := findPidByPort(8080)
+	if !isPortFree(gateway.DefaultAPIPort) || !isPortFree(gateway.DefaultHealthPort) {
+		fmt.Printf("Ports %d/%d still in use; attempting to clear them...\n", gateway.DefaultAPIPort, gateway.DefaultHealthPort)
+		orphanPid := findPidByPort(gateway.DefaultAPIPort)
 		if orphanPid == 0 {
-			orphanPid = findPidByPort(8081)
+			orphanPid = findPidByPort(gateway.DefaultHealthPort)
 		}
 		if orphanPid > 0 {
 			fmt.Printf("Killing orphan gateway process holding the port: PID %d\n", orphanPid)
@@ -1401,10 +1402,10 @@ func runGatewayStop(cmd *cobra.Command, args []string) {
 	}
 
 	os.Remove(pidFile)
-	if isPortFree(8080) && isPortFree(8081) {
+	if isPortFree(gateway.DefaultAPIPort) && isPortFree(gateway.DefaultHealthPort) {
 		fmt.Println("✓ Gateway stopped.")
 	} else {
-		fmt.Println("⚠ Ports 8080/8081 may still be in use. Check manually.")
+		fmt.Printf("⚠ Ports %d/%d may still be in use. Check manually.\n", gateway.DefaultAPIPort, gateway.DefaultHealthPort)
 	}
 }
 
@@ -1482,12 +1483,12 @@ func runGatewayRestart(cmd *cobra.Command, args []string) {
 	}
 
 	// If no PID file or stale PID, but ports are still occupied, hunt
-	// down the orphan process holding 8080/8081.
-	if !stopped && (!isPortFree(8080) || !isPortFree(8081)) {
-		fmt.Println("Ports 8080/8081 in use; attempting to clear orphan process...")
-		orphanPid := findPidByPort(8080)
+	// down the orphan process holding the reserved ports.
+	if !stopped && (!isPortFree(gateway.DefaultAPIPort) || !isPortFree(gateway.DefaultHealthPort)) {
+		fmt.Printf("Ports %d/%d in use; attempting to clear orphan process...\n", gateway.DefaultAPIPort, gateway.DefaultHealthPort)
+		orphanPid := findPidByPort(gateway.DefaultAPIPort)
 		if orphanPid == 0 {
-			orphanPid = findPidByPort(8081)
+			orphanPid = findPidByPort(gateway.DefaultHealthPort)
 		}
 		if orphanPid > 0 {
 			fmt.Printf("Killing orphan gateway process holding the port: PID %d\n", orphanPid)
@@ -1500,7 +1501,7 @@ func runGatewayRestart(cmd *cobra.Command, args []string) {
 
 	// Final safety: wait for ports to be free (up to 3s)
 	if !waitForPortsFree(3 * time.Second) {
-		fmt.Println("⚠ Warning: ports 8080/8081 may still be busy. New gateway may fail to bind.")
+		fmt.Printf("⚠ Warning: ports %d/%d may still be busy. New gateway may fail to bind.\n", gateway.DefaultAPIPort, gateway.DefaultHealthPort)
 	}
 
 	// Start again
@@ -1609,7 +1610,7 @@ func runGatewayStatus(cmd *cobra.Command, args []string) {
 		}
 
 		client := &http.Client{Timeout: 2 * time.Second}
-		if resp, err := client.Get("http://localhost:8081/health"); err == nil {
+		if resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", gateway.DefaultHealthPort)); err == nil {
 			resp.Body.Close()
 			fmt.Println("● Health endpoint: REACHABLE")
 		} else {

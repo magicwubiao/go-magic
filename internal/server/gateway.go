@@ -18,10 +18,14 @@ import (
 )
 
 // GatewayAPIPort is the port of the gateway's embedded API server.
-const GatewayAPIPort = 8080
+// It aliases gateway.DefaultAPIPort so the value has exactly one definition;
+// a duplicate literal here is how the DingTalk callback ended up colliding with
+// this port (see internal/gateway/dingtalk.go).
+const GatewayAPIPort = gateway.DefaultAPIPort
 
 // GatewayHealthPort is the port of the gateway's health check server.
-const GatewayHealthPort = 8081
+// It aliases gateway.DefaultHealthPort so the value has exactly one definition.
+const GatewayHealthPort = gateway.DefaultHealthPort
 
 func (s *Server) runAction(id, name string, fn func() (int, error)) {
 	s.actionsMu.Lock()

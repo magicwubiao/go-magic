@@ -1,89 +1,139 @@
 @echo off
-REM go-magic Windows Install Script
-REM Usage: Run from project root or any subdirectory
+REM ============================================================================
+REM go-magic Windows Install Script (build from source + install to user dir)
+REM Usage: scripts\windows\install.bat
+REM
+REM Output: %USERPROFILE%\go-magic\magic.exe
+REM NOTE: keep this file ASCII-only (cmd uses the OEM codepage).
+REM ============================================================================
+setlocal
 
-echo ===================================
-echo  go-magic Install Script
-echo ===================================
-echo.
-
-REM Get project root directory (parent of scripts folder)
-set SCRIPT_DIR=%~dp0
-set PROJECT_ROOT=%SCRIPT_DIR:~0,-1%
-for %%i in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~dpi
-set PROJECT_ROOT=%PROJECT_ROOT:~0,-1%
-
-echo [INFO] Project root: %PROJECT_ROOT%
+REM Project root = two levels up from scripts\windows\ (this file's folder).
+REM The previous version stripped only one level and ended up in scripts\,
+REM so the "cmd\magic" check always failed.
+set "SCRIPT_DIR=%~dp0"
+pushd "%SCRIPT_DIR%..\.."
+set "PROJECT_ROOT=%CD%"
+popd
 cd /d "%PROJECT_ROOT%"
 
-REM Verify we're in the right place
-if not exist "cmd\magic" (
-    echo [ERROR] Cannot find cmd\magic directory
+echo ===================================
+echo  go-magic Install (from source)
+echo ===================================
+echo.
+echo [INFO] Project root: %PROJECT_ROOT%
+
+if not exist "go.mod" (
+    echo [ERROR] go.mod not found - wrong project root?
     echo Current directory: %CD%
-    echo Expected: %PROJECT_ROOT%
     pause
     exit /b 1
 )
 
-REM Check Go installation
 where go >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Go is not installed or not in PATH
-    echo Please install Go from: https://go.dev/dl/
+if errorlevel 1 (
+    echo [ERROR] go not found in PATH. Install Go 1.26+: https://go.dev/dl/
     pause
     exit /b 1
 )
 
-for /f "tokens=*" %%i in ('go version') do set GO_VERSION=%%i
-echo [OK] Go installed:
-echo     %GO_VERSION%
+for /f "tokens=*" %%i in ('go version') do set "GO_VERSION=%%i"
+echo [ OK ] %GO_VERSION%
+
+REM Version source: git tag (same as CI). No hardcoded version.
+set "VERSION=dev"
+for /f "delims=" %%v in ('git describe --tags --exact-match 2^>nul') do set "VERSION=%%v"
+if "%VERSION%"=="dev" (
+    for /f "delims=" %%v in ('git describe --tags --always 2^>nul') do set "VERSION=%%v"
+)
+echo [ OK ] Version: %VERSION%
 echo.
 
-REM Download dependencies
-echo [1/3] Downloading dependencies...
+echo [1/4] Building Web UI ^(required by go:embed dist^)...
+if exist "internal\server\dist\index.html" (
+    echo [ OK ] Web UI already built
+    goto :deps
+)
+
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] npm not found. Install Node.js 22+: https://nodejs.org/
+    pause
+    exit /b 1
+)
+pushd web
+call npm ci
+if errorlevel 1 (
+    echo [WARN] npm ci failed, retrying with --legacy-peer-deps
+    call npm ci --legacy-peer-deps
+)
+if errorlevel 1 (
+    echo [ERROR] npm dependency install failed
+    popd
+    pause
+    exit /b 1
+)
+call npm run build
+if errorlevel 1 (
+    echo [ERROR] npm run build failed
+    popd
+    pause
+    exit /b 1
+)
+popd
+echo [ OK ] Web UI built
+echo.
+
+:deps
+echo [2/4] Downloading Go dependencies...
 go mod download
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to download dependencies
+if errorlevel 1 (
+    echo [ERROR] go mod download failed
     pause
     exit /b 1
 )
-echo [OK] Dependencies downloaded
+echo [ OK ] Dependencies downloaded
 echo.
 
-REM Build project
-echo [2/3] Building project...
-go build -ldflags="-s -w" -o magic.exe ./cmd/magic
-if %ERRORLEVEL% neq 0 (
+echo [3/4] Building magic.exe...
+set "CGO_ENABLED=0"
+go build -ldflags "-s -w -X main.Version=%VERSION%" -o magic.exe .\cmd\magic
+if errorlevel 1 (
     echo [ERROR] Build failed
     echo Current directory: %CD%
     pause
     exit /b 1
 )
-echo [OK] Build completed: magic.exe
+echo [ OK ] Build completed: magic.exe
 echo.
 
-REM Installation
-echo [3/3] Installing to user directory...
-set INSTALL_DIR=%USERPROFILE%\go-magic
+echo [4/4] Installing to user directory...
+set "INSTALL_DIR=%USERPROFILE%\go-magic"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-copy magic.exe "%INSTALL_DIR%\" >nul
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to copy files
+copy /y magic.exe "%INSTALL_DIR%\magic.exe" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy magic.exe
     pause
     exit /b 1
 )
-echo [OK] Installed to: %INSTALL_DIR%
-echo.
-
-echo ===================================
-echo  Installation Complete!
-echo ===================================
-echo.
-echo Run with: %INSTALL_DIR%\magic.exe
-echo Or add to PATH and run: magic
-echo.
-
-REM Cleanup
 del magic.exe >nul 2>&1
+echo [ OK ] Installed: %INSTALL_DIR%\magic.exe
+echo.
+
+echo ===================================
+echo  Installation Complete
+echo ===================================
+echo.
+echo Run:
+echo   %INSTALL_DIR%\magic.exe setup
+echo   %INSTALL_DIR%\magic.exe chat
+echo   %INSTALL_DIR%\magic.exe server
+echo.
+echo To use "magic" from anywhere, add this to PATH:
+echo   %INSTALL_DIR%
+echo.
+echo Config dir: %USERPROFILE%\.magic
+echo.
 
 pause
+endlocal

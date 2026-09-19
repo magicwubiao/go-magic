@@ -1,11 +1,11 @@
 {
   "profile": "default",
   "provider": "deepseek",
-  "model": "deepseek-chat",
+  "model": "deepseek-flash",
   "providers": {
     "openai": {
       "api_key": "your-openai-api-key-here",
-      "model": "gpt-5.6"
+      "model": "deepseek-flash"
     }
   },
   "voice": {

@@ -58,13 +58,15 @@
 ### 2.1 下载预编译二进制（推荐）
 
 ```bash
-# Linux / macOS
-curl -L https://github.com/magicwubiao/go-magic/releases/latest/download/magic-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
-chmod +x magic-*
-sudo mv magic-* /usr/local/bin/magic
+# Linux / macOS（下载的是裸二进制，直接改名即可，无需解压）
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fL "https://github.com/magicwubiao/go-magic/releases/latest/download/go-magic-${OS}-${ARCH}" -o magic
+chmod +x magic
+sudo mv magic /usr/local/bin/magic
 ```
 
-Windows 用户直接从 [Releases](https://github.com/magicwubiao/go-magic/releases) 下载 `magic-windows-amd64.exe`。
+Windows 用户直接从 [Releases](https://github.com/magicwubiao/go-magic/releases) 下载 `go-magic-windows-amd64.exe`（ARM64 设备选 `go-magic-windows-arm64.exe`）。
 
 ### 2.2 Go Install
 
@@ -78,22 +80,25 @@ go install github.com/magicwubiao/go-magic/cmd/magic@latest
 curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
 ```
 
-另有 Homebrew / Scoop 安装脚本，见 `scripts/` 目录。
+另有 Homebrew / Scoop 安装脚本，见 `scripts/` 目录（需要对应的 tap / bucket 仓库先发布；
+若尚未发布，请使用上面的 `install.sh`）。
 
 ### 2.4 Docker
 
 ```bash
-docker run -it magicwubiao/go-magic
+# 快速运行（需映射 8642 才能从宿主机访问 Web UI）
+docker run -it -p 8642:8642 magicwubiao/go-magic
 
-# 或用 compose（含可选 Redis）
+# 或用 compose
 docker compose up -d
 ```
 
-> ⚠️ **注意（实测）**：`docker-compose.yml` 映射的是 `8642:8642`，但 `magic server` 的默认端口是 **5000**。容器里默认执行的是 `magic server`，因此需要显式指定端口才能对上映射：
+> ℹ️ **关于端口**：`magic server` 的默认端口是 **5000**，但镜像的 `CMD` 已固定为 `["server", "--port", "8642"]`，与 `EXPOSE 8642` 及 compose 的 `8642:8642` 对齐。所以按镜像原样启动即可，**不需要**再手动追加 `server --port 8642`：
 > ```bash
-> docker run -p 8642:8642 magicwubiao/go-magic server --port 8642
+> docker run -p 8642:8642 magicwubiao/go-magic
 > ```
-> 详见 [22. 已知问题](#22-已知问题实测确认)。
+> 只有当你**覆盖了容器命令**时（例如 `docker run ... magicwubiao/go-magic server`，位置参数会替换 `CMD`，而 `ENTRYPOINT` 仍是 `/app/magic`），才需要自己补上 `--port 8642`，否则容器内会退回监听 5000、映射失效。
+> 详见 [22. 已知问题 → 22.2](#22-已知问题实测确认)。
 
 ### 2.5 从源码构建
 
@@ -1079,7 +1084,7 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 ### 22.2 Docker 端口与默认端口不一致 ✅ 已修复
 
 - `magic server` 的默认端口是 **5000**
-- `Dockerfile` / `docker-compose.yml` / `Makefile` 暴露的是 **8642（API）与 8643（Webhook）**
+- `Dockerfile` / `docker-compose.yml` / `Makefile` 暴露的是 **8642（API）与 8643（预留，无服务监听）**
 - 容器默认命令是 `magic server`，所以按 compose 原样启动会在容器内监听 5000，与 `8642:8642` 映射对不上
 
 **修复**：`Dockerfile` 的 `CMD` 已改为 `["server", "--port", "8642"]`，`docker-compose.yml` 端口映射改为 `8642:8642`，`Makefile docker-run` 同步去掉了无效的 `GO_MAGIC_PROFILE` 并修正端口。`peers.go` 帮助文本中的 `:8642` 示例也已更正。
@@ -1089,6 +1094,34 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 README 与自动生成的文档里曾提到 `GO_MAGIC_PROFILE`、`MAGIC_HOME`、`MAGIC_PROFILE`、`MAGIC_VERBOSE`、`MAGIC_NO_COLOR`，这些在代码中**没有实际读取逻辑**（仅出现在 `cmd/magic/docs.go`、`internal/docs/llm_generator.go` 的文档文本里）。
 
 **修复**：`README.md`、`README.zh-CN.md`、`cmd/magic/docs.go`、`internal/docs/llm_generator.go` 中已全部替换为实际生效的 `GO_MAGIC_HOME`、`GO_MAGIC_CORS_ORIGINS`、`MAGIC_SKILL_DIR`、`MAGIC_SESSION_ID`。切换 Profile 仍用 `--profile/-p` 参数或配置文件 `profile` 字段。
+
+### 22.4 网关保留端口被平台回调占用 + 容器内 webhook 全部不可达 ✅ 已修复
+
+三个互相牵连的问题：
+
+1. **钉钉回调端口撞上网关内嵌 API**：`internal/gateway/dingtalk.go` 把回调端口设为 `8080`，而网关自身的内嵌 API 固定绑定 `127.0.0.1:8080`。同一进程里 `0.0.0.0:8080` 与 `127.0.0.1:8080` 无法共存，回调服务器 `ListenAndServe` 直接 `EADDRINUSE`，钉钉永远收不到消息，且错误只写进日志。
+2. **飞书回调端口撞上健康检查服务**：同理 `feishu.go` 用 `8081`，而健康检查服务绑定 `127.0.0.1:8081`（就是文档里那个 `http://localhost:8081/health`）。健康服务启动更早，飞书回调必然失败。
+3. **容器部署下所有 webhook 平台都不可达**：`Dockerfile` 只 `EXPOSE 8642 8643`，`docker-compose.yml` 也只映射这两个端口，而各平台回调走的是各自的端口，从未被映射出去。
+
+**修复**：
+
+- 钉钉回调改为 **8091**、飞书改为 **8092**，避开网关保留的 8080/8081。
+- 8080/8081 收敛为单一常量源 `gateway.DefaultAPIPort` / `gateway.DefaultHealthPort`；`internal/server` 和 `cmd/magic/health.go` 改为引用它，不再各写一份字面量（此前正是这种重复导致了端口撞车无人察觉）。
+- `Dockerfile` 的 `EXPOSE` 与 `docker-compose.yml` 的 `ports` 补齐真实回调端口：**8091 钉钉、8092 飞书、8084 Discord、8085 Slack、8087 LINE、8088 Teams、8089 Google Chat、8090 SMS**。只用到的平台才需要放开对应端口，用不到的建议整行删掉。
+- 顺带更正：`8643` 其实**没有任何服务监听**（只出现在 CORS 允许源列表里），原文档把各平台回调说成「统一走 8643」是错的。
+
+> **升级注意**：改成 8091/8092 后，请把钉钉/飞书后台登记的 webhook 地址端口一并改掉。
+
+### 22.5 Docker 后端与沙箱的若干修复 ✅ 已修复
+
+- **`DockerBackend` 的工作目录根本不可用**：原代码只传 `-w <宿主机路径>` 而没有任何 `-v` 挂载，容器里不存在该路径，`docker run` 直接报 `no such file or directory`。现改为把宿主机目录 bind-mount 到容器内**同一路径**并作为工作目录，路径语义与本地后端保持一致；同时补上 `--network`（原先 `networkMode` 字段是死配置）、`--privileged`（保持默认关闭，仅显式开启时生效）、`-e HOME=/tmp`（否则非 root uid 下 go/npm 无法创建缓存）。
+- **后端探针会无限阻塞**：`IsAvailable()` / `Health()` 原先用裸 `exec.Command` 探测 `docker`/`ssh`/`daytona`/`singularity`/`modal`，一旦二进制卡住（daemon 不可达、ssh 等待 host key 确认）就会把后端列表与 `/health` 一起挂死。现统一走带 5s 超时的 `probeBinary`。
+- **`DockerBackend.Execute` 忽略 `timeout` 参数**：调用方并不给 `ctx` 设置 deadline，所以该参数是唯一的超时手段；原实现完全没用它，命令可以无限挂起。现在 `ctx` 无 deadline 时会用它派生超时。
+- **沙箱路径逃逸与命令注入**（`internal/sandbox`，该包目前无调用方）：
+  - `DockerSandbox` 的文件操作把宿主机绝对路径当容器路径用（容器里只挂载了 `/workspace`，`cat`/`rm` 必然失败）；现统一映射到 `/workspace/...` 并拒绝 `..` 穿越。
+  - `WriteFile` 原先把文件内容拼进 shell heredoc（`cat > f << 'EOF'`），内容含 `EOF` 行即损坏，且是注入面；现改用 stdin 管道（`-i`），目标路径以位置参数传入、不作为脚本文本解析。无用的临时文件写入已删除。
+  - `BasicSandbox` 的 `isPathSafe` 用 `strings.HasPrefix` 比较绝对路径，存在经典的**前缀缺陷**（`/tmp/abc-evil` 会被当作 `/tmp/abc` 的子路径），且从不把入参与 `workDir` 拼接，导致相对路径一律被拒。现改用 `filepath.Rel` 判定包含关系，并解析软链接后再校验。
+  - 已为该包的路径包含逻辑补充单元测试 `internal/sandbox/sandbox_test.go`（此前零覆盖）。
 
 ---
 

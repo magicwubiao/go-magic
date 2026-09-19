@@ -145,13 +145,20 @@ go install github.com/magicwubiao/go-magic/cmd/magic@latest
 
 ### Docker
 
-```bash
-# Quick run
-docker run -it magicwubiao/go-magic
+The image runs as a non-root user; `magic server` defaults to port 5000, and the image CMD explicitly switches it to 8642 — so port 8642 must be mapped for the Web UI to be reachable:
 
-# Docker Compose (includes optional Redis and PostgreSQL)
+```bash
+# Quick run (without -p 8642:8642 the Web UI is unreachable from the host)
+docker run -it -p 8642:8642 magicwubiao/go-magic
+
+# Docker Compose
 docker compose up -d
+
+# Rebuild after frontend changes so a stale dist is not baked into the image
+rm -rf internal/server/dist && docker compose build --no-cache
 ```
+
+Webhook-based gateway platforms (DingTalk / Feishu / Discord, ...) each listen on their **own dedicated port**; only expose the ones you actually use. See [Docker Deployment & Troubleshooting](#docker-deployment--troubleshooting) for the full port table and debugging steps.
 
 ### One-Line Install (Linux/macOS)
 
@@ -171,6 +178,90 @@ magic chat
 # Start web dashboard
 magic server
 ```
+
+## Docker Deployment & Troubleshooting
+
+The image is a multi-stage build (Node builds the frontend → Go compiles with `embed` → Alpine runtime) and runs as the non-root user `magic` (uid 1000). The four points below cover most deployment failures, and each was verified against the source.
+
+### 1. Ports must line up (`magic server` defaults to 5000)
+
+| Port | Purpose | Notes |
+|------|---------|-------|
+| 8642 | API / Web UI | Image CMD hardcodes `server --port 8642` |
+| 8643 | Reserved | Nothing listens on it; only registered as a CORS origin |
+| 8091 / 8092 | DingTalk / Feishu | webhook callback |
+| 8084 / 8085 | Discord / Slack | webhook callback |
+| 8087 / 8088 | LINE / Teams | webhook callback |
+| 8089 / 8090 | Google Chat / SMS | webhook callback |
+| 8080 / 8081 | Gateway loopback ports (API / health) | not exposed outside the container |
+
+These ports are hardcoded constants in the source — no config key or env var overrides them:
+
+- `cmd/magic/server.go` — the `--port` default is `5000`
+- `internal/gateway/`: `dingtalk.go`, `feishu.go`, `discord.go`, `slack.go`, `line.go`, `teams.go`, `googlechat.go`, `sms.go` — per-platform `SetCallbackPort(...)`
+- `internal/gateway/gateway.go` — `DefaultAPIPort = 8080`, `DefaultHealthPort = 8081`
+
+So when overriding `command:` you must pass `--port 8642` explicitly, otherwise the process listens on 5000 while the mapping points at 8642. Any platform you want callbacks from also needs its port published, or the platform will never reach you.
+
+```bash
+docker compose port magic 8642            # host mapping
+docker exec go-magic netstat -tlnp        # what actually listens inside
+curl -sf http://localhost:8642/api/health
+```
+
+### 2. healthcheck and `/api/health`
+
+Both the image and compose use `curl -sf http://localhost:8642/api/health`. The route is registered with a plain `mux.HandleFunc` and the handler never inspects `r.Method`:
+
+```go
+// internal/server/server.go
+mux.HandleFunc("/api/health", withCORS(s.handleHealth))
+
+// internal/server/health.go
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+    jsonResponse(w, map[string]string{"status": "healthy"})
+}
+```
+
+GET and HEAD both return 200, so "`/api/health` does not support HEAD" is not a valid explanation for a false unhealthy. If you do hit one, check startup timing (first-time `~/.magic` initialization) or the probe tool's own behavior instead. `start_period` is 10s in compose and 5s in the image; raise it if cold starts are slow.
+
+```bash
+docker inspect --format '{{json .State.Health}}' go-magic | jq
+docker logs --tail 100 go-magic
+```
+
+### 3. A stale frontend build can get baked into the image
+
+The frontend output directory points straight at Go's embedded directory, and Go packs it in at compile time:
+
+```ts
+// web/vite.config.ts
+outDir: '../internal/server/dist',
+```
+
+```go
+// internal/server/server.go
+//go:embed dist
+```
+
+A leftover local `internal/server/dist` is therefore silently compiled into the binary. The `Dockerfile` avoids this through the ordering of `COPY --from=web-builder`, and `.dockerignore` lists `internal/server/dist/` and `web/dist/` explicitly (a bare `dist/` only matches the context root, not those paths).
+
+If frontend changes don't show up:
+
+```bash
+rm -rf internal/server/dist
+docker compose build --no-cache
+```
+
+### 4. Volume permissions
+
+The container runs as uid 1000 with the `magic-config` volume mounted at `/home/magic/.magic`; if the volume permissions don't match, config writes fail:
+
+```bash
+docker exec -u 0 go-magic chown -R 1000:1000 /home/magic/.magic
+```
+
+> A `permission denied ... /var/run/docker.sock` error from `docker ps` is a host permission issue: add your user to the `docker` group and log in again — `sudo usermod -aG docker $USER`.
 
 ## CLI Commands
 

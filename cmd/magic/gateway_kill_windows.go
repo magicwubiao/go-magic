@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/gateway"
 	"golang.org/x/sys/windows"
 )
 
@@ -77,13 +78,13 @@ func isPortFree(port int) bool {
 	return true
 }
 
-// waitForPortsFree polls isPortFree for both the gateway API (8080) and
-// health (8081) ports until they are both free or the timeout expires.
-// Returns true if both ports are free.
+// waitForPortsFree polls isPortFree for both the gateway API and health
+// ports (see gateway.DefaultAPIPort / gateway.DefaultHealthPort) until they
+// are both free or the timeout expires. Returns true if both ports are free.
 func waitForPortsFree(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
-		if isPortFree(8080) && isPortFree(8081) {
+		if isPortFree(gateway.DefaultAPIPort) && isPortFree(gateway.DefaultHealthPort) {
 			return true
 		}
 		if time.Now().After(deadline) {

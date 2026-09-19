@@ -53,7 +53,12 @@ func NewDingTalkGateway(appKey, appSecret string) *DingTalkGateway {
 	}
 
 	g.BasePlatform = NewBasePlatform("dingtalk", config)
-	g.SetCallbackPort(8080)
+	// 注意：8080/8081 是网关自身保留的回环端口（内嵌 API :8080、健康检查
+	// :8081，见 internal/gateway/gateway.go 的 DefaultAPIPort 与
+	// cmd/magic/health.go）。回调端口若与它们重合，ListenAndServe 会返回
+	// EADDRINUSE，回调服务器静默启动失败、平台永远收不到消息。
+	// 因此钉钉回调使用 8091，避开保留端口。
+	g.SetCallbackPort(8091)
 	g.BasePlatform.onConnect = g.onConnect
 	g.BasePlatform.onDisconnect = g.onDisconnect
 	g.BasePlatform.onSend = g.onSend

@@ -42,7 +42,9 @@ func NewFeishuGateway(appID, appSecret string) *FeishuGateway {
 	}
 
 	g.BasePlatform = NewBasePlatform("feishu", config)
-	g.SetCallbackPort(8081)
+	// 飞书原先用 8081，与网关自身的健康检查服务（127.0.0.1:8081）冲突，
+	// 导致回调服务器 EADDRINUSE 起不来。改用 8092 避开保留端口 8080/8081。
+	g.SetCallbackPort(8092)
 	g.BasePlatform.onConnect = g.onConnect
 	g.BasePlatform.onDisconnect = g.onDisconnect
 	g.BasePlatform.onSend = g.onSend

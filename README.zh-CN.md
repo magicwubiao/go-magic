@@ -145,13 +145,20 @@ go install github.com/magicwubiao/go-magic/cmd/magic@latest
 
 ### Docker
 
-```bash
-# 快速运行
-docker run -it magicwubiao/go-magic
+镜像以非 root 用户运行；`magic server` 默认端口是 5000，镜像 CMD 已显式改为 8642，因此必须映射 8642 才能从宿主机访问 Web UI：
 
-# Docker Compose（包含可选的 Redis 和 PostgreSQL）
+```bash
+# 快速运行（不映射 8642 则宿主机访问不到 Web UI）
+docker run -it -p 8642:8642 magicwubiao/go-magic
+
+# Docker Compose
 docker compose up -d
+
+# 改了前端后重建，避免旧 dist 被编进镜像
+rm -rf internal/server/dist && docker compose build --no-cache
 ```
+
+网关平台（钉钉 / 飞书 / Discord 等）的 webhook 回调使用**各自独立端口**，只用到的平台才需要在 compose 里放开。完整端口表与排障步骤见 [Docker 部署与排障](#docker-部署与排障)。
 
 ### 一键安装 (Linux/macOS)
 
@@ -171,6 +178,90 @@ magic chat
 # 启动 Web Dashboard
 magic server
 ```
+
+## Docker 部署与排障
+
+镜像为多阶段构建（Node 构建前端 → Go 编译并 `embed` → Alpine 运行时），容器以非 root 用户 `magic`（uid 1000）运行。下面四点覆盖绝大多数部署故障，均已回到源码确认。
+
+### 1. 端口必须对齐（`magic server` 默认 5000）
+
+| 端口 | 用途 | 说明 |
+|------|------|------|
+| 8642 | API / Web UI | 镜像 CMD 已写死 `server --port 8642` |
+| 8643 | 预留 | 当前无服务监听，仅登记在 CORS 允许源里 |
+| 8091 / 8092 | 钉钉 / 飞书 | webhook 回调 |
+| 8084 / 8085 | Discord / Slack | webhook 回调 |
+| 8087 / 8088 | LINE / Teams | webhook 回调 |
+| 8089 / 8090 | Google Chat / SMS | webhook 回调 |
+| 8080 / 8081 | 网关自身回环端口（API / 健康检查） | 不对容器外暴露 |
+
+这些端口在源码中是硬编码常量，没有配置项或环境变量可以覆盖：
+
+- `cmd/magic/server.go` — `--port` 默认值 `5000`
+- `internal/gateway/` 下 `dingtalk.go`、`feishu.go`、`discord.go`、`slack.go`、`line.go`、`teams.go`、`googlechat.go`、`sms.go` — 各平台 `SetCallbackPort(...)`
+- `internal/gateway/gateway.go` — `DefaultAPIPort = 8080`、`DefaultHealthPort = 8081`
+
+因此：覆盖 `command:` 时必须显式带上 `--port 8642`，否则容器内监听 5000、映射 8642 直接失效；需要哪个平台的回调，就必须映射对应端口，否则平台永远收不到通知。
+
+```bash
+docker compose port magic 8642            # 宿主机映射情况
+docker exec go-magic netstat -tlnp        # 容器内真实监听端口
+curl -sf http://localhost:8642/api/health
+```
+
+### 2. healthcheck 与 `/api/health`
+
+镜像与 compose 均使用 `curl -sf http://localhost:8642/api/health`。该路由由普通 `mux.HandleFunc` 注册，handler 完全不检查 `r.Method`：
+
+```go
+// internal/server/server.go
+mux.HandleFunc("/api/health", withCORS(s.handleHealth))
+
+// internal/server/health.go
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+    jsonResponse(w, map[string]string{"status": "healthy"})
+}
+```
+
+GET / HEAD 都会返回 200，所以「`/api/health` 不支持 HEAD」不能作为误报 unhealthy 的原因。真遇到 unhealthy 时，请从启动时序（首次初始化 `~/.magic`）或探测工具自身差异入手。compose 的 `start_period` 为 10s、镜像内为 5s，冷启动慢可调大。
+
+```bash
+docker inspect --format '{{json .State.Health}}' go-magic | jq
+docker logs --tail 100 go-magic
+```
+
+### 3. 旧的前端产物会被编进镜像
+
+前端输出目录直接指向 Go 的嵌入目录，Go 侧在编译期打包：
+
+```ts
+// web/vite.config.ts
+outDir: '../internal/server/dist',
+```
+
+```go
+// internal/server/server.go
+//go:embed dist
+```
+
+因此本地残留的旧 `internal/server/dist` 会被静默编入二进制。`Dockerfile` 通过 `COPY --from=web-builder` 的先后顺序规避这一点，`.dockerignore` 也显式列出了 `internal/server/dist/` 与 `web/dist/`（裸 `dist/` 只匹配上下文根目录，匹配不到这两处）。
+
+改了前端却仍看到旧页面时：
+
+```bash
+rm -rf internal/server/dist
+docker compose build --no-cache
+```
+
+### 4. 数据卷权限
+
+容器以 uid 1000 运行，配置卷 `magic-config` 挂载到 `/home/magic/.magic`；卷权限不匹配时配置写不进去：
+
+```bash
+docker exec -u 0 go-magic chown -R 1000:1000 /home/magic/.magic
+```
+
+> `docker ps` 报 `permission denied ... /var/run/docker.sock` 属于宿主机权限问题：把当前用户加入 `docker` 组后重新登录即可 —— `sudo usermod -aG docker $USER`。
 
 ## CLI 命令
 

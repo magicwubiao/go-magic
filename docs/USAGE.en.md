@@ -58,13 +58,17 @@
 ### 2.1 Download prebuilt binaries (recommended)
 
 ```bash
-# Linux / macOS
-curl -L https://github.com/magicwubiao/go-magic/releases/latest/download/magic-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
-chmod +x magic-*
-sudo mv magic-* /usr/local/bin/magic
+# Linux / macOS — the release assets are plain binaries (no .tar.gz, no extraction)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fL "https://github.com/magicwubiao/go-magic/releases/latest/download/go-magic-${OS}-${ARCH}" -o magic
+chmod +x magic
+sudo mv magic /usr/local/bin/magic
 ```
 
-Windows users: download `magic-windows-amd64.exe` directly from [Releases](https://github.com/magicwubiao/go-magic/releases).
+Windows users: download `go-magic-windows-amd64.exe` (or `go-magic-windows-arm64.exe` on ARM64)
+directly from [Releases](https://github.com/magicwubiao/go-magic/releases).
+
 
 ### 2.2 Go Install
 
@@ -78,22 +82,25 @@ go install github.com/magicwubiao/go-magic/cmd/magic@latest
 curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
 ```
 
-Homebrew / Scoop install scripts are also available under `scripts/`.
+Homebrew / Scoop install scripts are also available under `scripts/` (they require the
+corresponding tap / bucket repositories to be published first; otherwise use `install.sh` above).
 
 ### 2.4 Docker
 
 ```bash
-docker run -it magicwubiao/go-magic
+# Quick run (map 8642 so the Web UI is reachable from the host)
+docker run -it -p 8642:8642 magicwubiao/go-magic
 
-# Or with compose (includes optional Redis)
+# Or with compose
 docker compose up -d
 ```
 
-> ⚠️ **Note (verified)**: `docker-compose.yml` maps `8642:8642`, but `magic server`'s default port is **5000**. The container runs `magic server` by default, so you must specify the port explicitly to match the mapping:
+> ℹ️ **About the port**: `magic server`'s default port is **5000**, but the image's `CMD` is fixed at `["server", "--port", "8642"]`, matching `EXPOSE 8642` and compose's `8642:8642`. So running the image as-is works — you do **not** need to append `server --port 8642`:
 > ```bash
-> docker run -p 8642:8642 magicwubiao/go-magic server --port 8642
+> docker run -p 8642:8642 magicwubiao/go-magic
 > ```
-> See [22. Known Issues](#22-known-issues-verified).
+> Only when you **override the container command** (e.g. `docker run ... magicwubiao/go-magic server` — positional args replace `CMD` while `ENTRYPOINT` stays `/app/magic`) must you pass `--port 8642` yourself, otherwise the container falls back to listening on 5000 and the mapping breaks.
+> See [22. Known Issues → 22.2](#22-known-issues-verified).
 
 ### 2.5 Build from source
 
@@ -1079,7 +1086,7 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 ### 22.2 Docker port mismatch ✅ Fixed
 
 - `magic server`'s default port is **5000**
-- `Dockerfile` / `docker-compose.yml` / `Makefile` expose **8642 (API) and 8643 (Webhook)**
+- `Dockerfile` / `docker-compose.yml` / `Makefile` expose **8642 (API) and 8643 (reserved, nothing listens)**
 - The container's default command is `magic server`, so starting compose as-is listens on 5000 inside the container, which doesn't match the `8642:8642` mapping
 
 **Fix**: the `Dockerfile` `CMD` now reads `["server", "--port", "8642"]`, `docker-compose.yml` port mapping is `8642:8642`, and `Makefile docker-run` dropped the invalid `GO_MAGIC_PROFILE` and fixed the port. The `:8642` example in `peers.go`'s help text was also corrected.
@@ -1089,6 +1096,34 @@ panic: unable to redefine 'p' shorthand in "create" flagset: it's already used f
 README and the auto-generated docs used to mention `GO_MAGIC_PROFILE`, `MAGIC_HOME`, `MAGIC_PROFILE`, `MAGIC_VERBOSE`, `MAGIC_NO_COLOR`, none of which are **actually read by the code** (they only appeared in the doc text of `cmd/magic/docs.go`, `internal/docs/llm_generator.go`).
 
 **Fix**: `README.md`, `README.zh-CN.md`, `cmd/magic/docs.go`, and `internal/docs/llm_generator.go` now all use the real variables `GO_MAGIC_HOME`, `GO_MAGIC_CORS_ORIGINS`, `MAGIC_SKILL_DIR`, `MAGIC_SESSION_ID`. Profile switching still uses the `--profile/-p` flag or the `profile` field in the config file.
+
+### 22.4 Gateway reserved ports taken by platform callbacks + all webhooks unreachable in containers ✅ Fixed
+
+Three intertwined problems:
+
+1. **The DingTalk callback port collided with the gateway's embedded API.** `internal/gateway/dingtalk.go` set the callback port to `8080`, while the gateway's own embedded API is pinned to `127.0.0.1:8080`. Inside one process `0.0.0.0:8080` and `127.0.0.1:8080` cannot coexist, so the callback server's `ListenAndServe` failed with `EADDRINUSE` and DingTalk never received a single message — the error only ever reached the log.
+2. **The Feishu callback port collided with the health-check server.** Same story: `feishu.go` used `8081`, while the health server binds `127.0.0.1:8081` (the `http://localhost:8081/health` endpoint documented in this file). The health server starts first, so the Feishu callback could never come up.
+3. **Every webhook-based platform was unreachable under Docker.** The `Dockerfile` only did `EXPOSE 8642 8643` and `docker-compose.yml` only published those two, while each platform's callback listens on its own port — none of them were ever mapped out of the container.
+
+**Fix**:
+
+- DingTalk moved to **8091** and Feishu to **8092**, clear of the gateway's reserved 8080/8081.
+- 8080/8081 are now single-sourced as `gateway.DefaultAPIPort` / `gateway.DefaultHealthPort`; `internal/server` and `cmd/magic/health.go` reference them instead of repeating the literals (that duplication is exactly how the collisions went unnoticed).
+- `EXPOSE` in the `Dockerfile` and `ports` in `docker-compose.yml` now list the real callback ports: **8091 DingTalk, 8092 Feishu, 8084 Discord, 8085 Slack, 8087 LINE, 8088 Teams, 8089 Google Chat, 8090 SMS**. Only publish the ones you actually use; delete the rest.
+- Related correction: **nothing listens on `8643`** (it only appears in the CORS allow-list), so the old claim that platform callbacks "go through 8643" was wrong.
+
+> **Upgrade note**: after switching to 8091/8092, update the port in the webhook URLs registered in the DingTalk/Feishu consoles as well.
+
+### 22.5 Assorted Docker backend and sandbox fixes ✅ Fixed
+
+- **`DockerBackend`'s working directory could never work**: it passed `-w <host path>` without any `-v` mount, so the path did not exist inside the container and `docker run` failed with `no such file or directory`. The host directory is now bind-mounted at the *same path* and used as the working directory, matching the local backend's path semantics. Also added `--network` (the `networkMode` field used to be dead config), `--privileged` (still off by default, only honoured when explicitly enabled), and `-e HOME=/tmp` (without it a non-root uid leaves go/npm unable to create their caches).
+- **Backend probes could block forever**: `IsAvailable()` / `Health()` probed `docker`/`ssh`/`daytona`/`singularity`/`modal` with a bare `exec.Command`, so a hung binary (unreachable daemon, ssh waiting on a host-key prompt) would hang the backend listing and `/health` along with it. They all go through `probeBinary` with a 5s timeout now.
+- **`DockerBackend.Execute` ignored its `timeout` argument**: callers never put a deadline on `ctx`, so that argument is the only timeout mechanism — the old code ignored it entirely and a command could hang indefinitely. It now derives a deadline from it when `ctx` has none.
+- **Sandbox path escape and command injection** (`internal/sandbox`, which currently has no callers):
+  - `DockerSandbox`'s file operations fed host absolute paths to container commands (the container only mounts `/workspace`, so `cat`/`rm` always failed). Paths are now mapped to `/workspace/...` and `..` traversal is rejected.
+  - `WriteFile` interpolated the payload into a shell heredoc (`cat > f << 'EOF'`), which broke on any data containing a line equal to `EOF` and was an injection surface; it now pipes over stdin (`-i`) with the destination passed as a positional argument rather than parsed as script text. The useless temp-file write is gone.
+  - `BasicSandbox.isPathSafe` compared absolute paths with `strings.HasPrefix`, which has the classic **prefix flaw** (`/tmp/abc-evil` passed as a child of `/tmp/abc`) and never joined the argument with `workDir`, so every relative path was rejected. Containment is now decided with `filepath.Rel` after resolving symlinks.
+  - Added `internal/sandbox/sandbox_test.go` covering the path-containment logic (previously zero coverage).
 
 ---
 

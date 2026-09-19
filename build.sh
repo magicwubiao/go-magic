@@ -1,139 +1,85 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# =============================================================================
+# go-magic 构建入口（仓库根目录）
+# =============================================================================
+# 这里曾经是第三份独立的构建实现（与 scripts/build.sh、scripts/build-cross.sh
+# 逻辑互相矛盾：把版本号兜底成一个假的固定版本、gzip 之后还在打印已被删除的路径、
+# 用 grep -P 在 macOS 上直接失败……）。
+#
+# 现在它只是一个薄封装，真正实现在 scripts/ 下，保证只有一份构建逻辑：
+#   scripts/lib/common.sh     版本/平台/资产名（单一事实源）
+#   scripts/build-cross.sh    平台编译
+#   scripts/build.sh          web / 平台 / docker / release 编排
+#
+# 兼容旧命令名:
+#   ./build.sh cli     -> scripts/build.sh current   （当前平台）
+#   ./build.sh web     -> scripts/build.sh web
+#   ./build.sh docker  -> scripts/build.sh docker
+#   ./build.sh all     -> scripts/build.sh all
+#   ./build.sh release -> scripts/build.sh release
+#
+# 其它参数（--version/--dir/--compress/--checksum/--clean 等）原样透传。
+# 注意: 旧版本的 `all` 会顺带执行 docker build，现在不会（避免无 docker 环境时中断）。
+# =============================================================================
+set -Eeuo pipefail
 
-# go-magic Build Script
-# Usage: ./build.sh [target]
-# Targets: cli, web, all (default: all)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-VERSION=${VERSION:-"dev"}
-BUILD_DIR=${BUILD_DIR:-"./dist"}
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
+TARGET="${1:-all}"
+[[ $# -gt 0 ]] && shift || true
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-# Parse arguments
-TARGET=${1:-"all"}
-
-# Ensure build directory
-mkdir -p "$BUILD_DIR"
-
-# Web is built directly to internal/server/dist by vite
-
-# Get Go info
-GO_VERSION=$(go version | grep -oP 'go\d+\.\d+')
-GO_ARCH=$(go env GOARCH)
-GO_OS=$(go env GOOS)
-
-log_info "Building go-magic v${VERSION}"
-log_info "Go: ${GO_VERSION}, Arch: ${GO_ARCH}, OS: ${GO_OS}"
-
-# Build CLI
-build_cli() {
-    log_info "Building CLI binary..."
-
-    local OUTPUT="${BUILD_DIR}/magic-${GO_OS}-${GO_ARCH}"
-
-    case "$GO_OS" in
-        windows)
-            OUTPUT="${OUTPUT}.exe"
-            ;;
-    esac
-
-    local GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-
-    CGO_ENABLED=0 go build \
-        -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildDate=${TIMESTAMP}" \
-        -o "$OUTPUT" \
-        ./cmd/magic
-
-    # Create compressed archive
-    cd "$BUILD_DIR"
-    if command -v gzip &> /dev/null; then
-        gzip -f "magic-${GO_OS}-${GO_ARCH}" 2>/dev/null || true
-    fi
-
-    log_info "CLI built: $OUTPUT"
-    cd - > /dev/null
-}
-
-# Build Web UI
-build_web() {
-    log_info "Building Web UI..."
-
-    if [ ! -d "web" ]; then
-        log_warn "Web directory not found, skipping web build"
-        return
-    fi
-
-    cd web
-
-    if [ ! -f "package.json" ]; then
-        log_warn "package.json not found, skipping web build"
-        cd - > /dev/null
-        return
-    fi
-
-    # Install dependencies if needed
-    if [ ! -d "node_modules" ]; then
-        log_info "Installing web dependencies..."
-        npm install --legacy-peer-deps 2>/dev/null || pnpm install 2>/dev/null || yarn install
-    fi
-
-    # Build
-    npm run build 2>/dev/null || pnpm build 2>/dev/null || yarn build
-
-    cd - > /dev/null
-
-    log_info "Web UI built"
-}
-
-# Build Docker image
-build_docker() {
-    log_info "Building Docker image..."
-
-    if [ ! -f "Dockerfile" ]; then
-        log_warn "Dockerfile not found, skipping docker build"
-        return
-    fi
-
-    local IMAGE_NAME="go-magic:${VERSION}"
-    docker build -t "$IMAGE_NAME" .
-
-    log_info "Docker image built: $IMAGE_NAME"
-}
-
-# Build all
 case "$TARGET" in
-    cli)
-        # Ensure web is built and copied for embedding
-        build_web
-        build_cli
+    cli|current)
+        exec "$SCRIPT_DIR/scripts/build.sh" current "$@"
         ;;
     web)
-        build_web
+        exec "$SCRIPT_DIR/scripts/build.sh" web "$@"
         ;;
     docker)
-        build_docker
+        exec "$SCRIPT_DIR/scripts/build.sh" docker "$@"
         ;;
-    all)
-        # Build web first, then CLI (which embeds web assets), then Docker
-        build_web
-        build_cli
-        build_docker
+    all|"")
+        exec "$SCRIPT_DIR/scripts/build.sh" all "$@"
+        ;;
+    release)
+        exec "$SCRIPT_DIR/scripts/build.sh" release "$@"
+        ;;
+    clean)
+        exec "$SCRIPT_DIR/scripts/build.sh" clean "$@"
+        ;;
+    list)
+        exec "$SCRIPT_DIR/scripts/build.sh" list "$@"
+        ;;
+    go)
+        exec "$SCRIPT_DIR/scripts/build.sh" go "$@"
+        ;;
+    -h|--help|help)
+        cat <<EOF
+go-magic 构建入口（转发到 scripts/build.sh）
+
+用法: ./build.sh [命令] [平台...] [选项]
+
+命令:
+  all        构建 Web UI + CI 6 个发布平台（默认）
+  cli        只构建当前平台（旧名，等价 scripts/build.sh current）
+  web        只构建 Web UI
+  docker     构建 Docker 镜像
+  release    构建 + 打包 + 创建 GitHub Release
+  clean      清理 dist/ 与 build/
+  list       列出所有可用平台
+
+选项:
+  --version <v>  --dir <path>  --compress  --checksum  --clean
+  --no-web      跳过 Web UI 构建
+  --publish     release 时直接发布（默认 draft）
+  --push        docker 时 buildx 多架构并推送
+
+等价实现: ./scripts/build.sh --help
+EOF
         ;;
     *)
-        log_error "Unknown target: $TARGET"
-        echo "Usage: $0 [cli|web|docker|all]"
+        echo "[FAIL] 未知目标: $TARGET" >&2
+        echo "用法: ./build.sh [all|cli|web|docker|release|clean|list]" >&2
         exit 1
         ;;
 esac
-
-log_info "Build complete!"

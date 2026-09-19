@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -55,11 +56,23 @@ func (b *LocalBackend) Description() string {
 	return "Local terminal execution on the current machine"
 }
 
+// probeTimeout bounds every CLI availability/health probe below. Without it a
+// hung binary (unreachable docker daemon, ssh blocking on a host-key prompt,
+// ...) blocks GetBackend/List() — and therefore the terminal backend listing
+// and /health — indefinitely, because IsAvailable() takes no context by design.
+const probeTimeout = 5 * time.Second
+
+// probeBinary runs a short-lived availability probe with a bounded timeout.
+func probeBinary(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Run()
+}
+
 func (b *LocalBackend) IsAvailable() bool { return true }
 
 func (b *LocalBackend) Health() error {
-	cmd := exec.Command("echo", "health check")
-	return cmd.Run()
+	return probeBinary("echo", "health check")
 }
 
 func (b *LocalBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
@@ -118,7 +131,7 @@ type DockerBackend struct {
 
 func NewDockerBackend() *DockerBackend {
 	return &DockerBackend{
-		image:       "golang:1.25-alpine",
+		image:       "golang:1.26-alpine",
 		networkMode: "bridge",
 		memoryLimit: "512m",
 		cpuLimit:    "1.0",
@@ -133,21 +146,32 @@ func (b *DockerBackend) Description() string {
 }
 
 func (b *DockerBackend) IsAvailable() bool {
-	cmd := exec.Command("docker", "version")
-	return cmd.Run() == nil
+	return probeBinary("docker", "version") == nil
 }
 
 func (b *DockerBackend) Health() error {
-	cmd := exec.Command("docker", "ps")
-	return cmd.Run()
+	return probeBinary("docker", "ps")
 }
 
 func (b *DockerBackend) SetImage(image string)       { b.image = image }
 func (b *DockerBackend) SetMemoryLimit(limit string) { b.memoryLimit = limit }
 func (b *DockerBackend) SetCpuLimit(limit string)    { b.cpuLimit = limit }
+func (b *DockerBackend) SetNetworkMode(mode string)  { b.networkMode = mode }
+func (b *DockerBackend) SetPrivileged(p bool)        { b.privileged = p }
 
 func (b *DockerBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
 	start := time.Now()
+
+	// The caller passes the timeout as a bare duration and does NOT put a
+	// deadline on ctx, so without this a runaway command would hang the agent
+	// forever. Honour the duration when ctx carries no deadline of its own.
+	if timeout > 0 {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+	}
 
 	// Build docker run command
 	args := []string{"run", "--rm"}
@@ -160,15 +184,48 @@ func (b *DockerBackend) Execute(ctx context.Context, cmd string, workDir string,
 		args = append(args, "--cpus", b.cpuLimit)
 	}
 
-	// Add working directory
-	if workDir != "" {
-		args = append(args, "-w", workDir)
+	// Docker can only run in a directory it can actually see: a bare
+	// `-w <host path>` used to fail with "no such file or directory" because
+	// that path does not exist inside the container. Bind-mount the host
+	// directory at the same path (keeping path semantics identical to the
+	// local backend) and make it the working directory.
+	hostWorkDir := workDir
+	if hostWorkDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			hostWorkDir = wd
+		}
+	}
+	if hostWorkDir != "" {
+		if abs, err := filepath.Abs(hostWorkDir); err == nil {
+			hostWorkDir = abs
+		}
+		args = append(args, "-v", hostWorkDir+":"+hostWorkDir, "-w", hostWorkDir)
 	} else {
 		args = append(args, "-w", "/workspace")
 	}
 
-	// Add current user to avoid root in container
-	args = append(args, "-u", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
+	// Apply the configured network mode ("bridge" by default) instead of
+	// silently ignoring it. Empty means "let docker decide".
+	if b.networkMode != "" {
+		args = append(args, "--network", b.networkMode)
+	}
+
+	// Privileged is opt-in only: it disables essentially all container
+	// isolation, so it must never be enabled implicitly.
+	if b.privileged {
+		args = append(args, "--privileged")
+	}
+
+	// Run as the calling user so files written into the bind mount are not
+	// owned by root. On Windows Getuid/Getgid return -1, for which the flag is
+	// meaningless (and rejected by docker), so only pass it when it is sane.
+	if os.Getuid() >= 0 && os.Getgid() >= 0 {
+		args = append(args, "-u", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
+	}
+
+	// A uid without a passwd entry usually has no HOME, which breaks the Go and
+	// npm toolchains inside the container (they cannot create their caches).
+	args = append(args, "-e", "HOME=/tmp")
 
 	// Add image and command
 	args = append(args, b.image, "/bin/sh", "-c", cmd)
@@ -220,8 +277,7 @@ func (b *SSHBackend) Description() string {
 
 func (b *SSHBackend) IsAvailable() bool {
 	// Check if SSH client is available
-	cmd := exec.Command("ssh", "-V")
-	return cmd.Run() == nil
+	return probeBinary("ssh", "-V") == nil
 }
 
 func (b *SSHBackend) Health() error {
@@ -475,14 +531,12 @@ func (b *DaytonaBackend) Description() string {
 
 func (b *DaytonaBackend) IsAvailable() bool {
 	// Check if daytona CLI is available
-	cmd := exec.Command("daytona", "version")
-	return cmd.Run() == nil
+	return probeBinary("daytona", "version") == nil
 }
 
 func (b *DaytonaBackend) Health() error {
 	// Check Daytona server connection
-	cmd := exec.Command("daytona", "ping")
-	return cmd.Run()
+	return probeBinary("daytona", "ping")
 }
 
 func (b *DaytonaBackend) Configure(workspace, image, language, serverURL, apiKey string) {
@@ -568,13 +622,11 @@ func (b *SingularityBackend) Description() string {
 }
 
 func (b *SingularityBackend) IsAvailable() bool {
-	cmd := exec.Command("singularity", "version")
-	return cmd.Run() == nil
+	return probeBinary("singularity", "version") == nil
 }
 
 func (b *SingularityBackend) Health() error {
-	cmd := exec.Command("singularity", "instance", "list")
-	return cmd.Run()
+	return probeBinary("singularity", "instance", "list")
 }
 
 func (b *SingularityBackend) Configure(imagePath string, bindPaths []string, overlayPath string) {
@@ -666,13 +718,11 @@ func (b *ModalBackend) Description() string {
 }
 
 func (b *ModalBackend) IsAvailable() bool {
-	cmd := exec.Command("modal", "token", "verify")
-	return cmd.Run() == nil
+	return probeBinary("modal", "token", "verify") == nil
 }
 
 func (b *ModalBackend) Health() error {
-	cmd := exec.Command("modal", "setup", "status")
-	return cmd.Run()
+	return probeBinary("modal", "setup", "status")
 }
 
 func (b *ModalBackend) Configure(appName, volumePath, gpu string, memory int, cpu float64) {

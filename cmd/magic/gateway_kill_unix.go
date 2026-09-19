@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/magicwubiao/go-magic/internal/gateway"
 )
 
 // killProcessGroup sends sig to the process group identified by pid.
@@ -59,13 +61,13 @@ func isPortFree(port int) bool {
 	return true
 }
 
-// waitForPortsFree polls isPortFree for both the gateway API (8080) and
-// health (8081) ports until they are both free or the timeout expires.
-// Returns true if both ports are free.
+// waitForPortsFree polls isPortFree for both the gateway API and health
+// ports (see gateway.DefaultAPIPort / gateway.DefaultHealthPort) until they
+// are both free or the timeout expires. Returns true if both ports are free.
 func waitForPortsFree(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
-		if isPortFree(8080) && isPortFree(8081) {
+		if isPortFree(gateway.DefaultAPIPort) && isPortFree(gateway.DefaultHealthPort) {
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -78,7 +80,8 @@ func waitForPortsFree(timeout time.Duration) bool {
 // findPidByPort uses /proc/net/tcp (and /proc/net/tcp6) to find the PID
 // of the process listening on the given TCP port. Returns 0 if not found.
 //
-// Port 8080 = 0x1F90, 8081 = 0x1F91 in hex.
+// The port is matched against the hex-encoded local_address field, e.g.
+// 8080 is written as "1F90" and 8081 as "1F91".
 func findPidByPort(port int) int {
 	portHex := fmt.Sprintf("%04X", port)
 	// Scan /proc/net/tcp and /proc/net/tcp6 for LISTEN sockets bound to
@@ -170,7 +173,7 @@ func findPidByInode(inode string) int {
 // isOurProcess returns true if the process with the given pid appears to
 // be a magic gateway (its exe path or comm matches). This is a best-effort
 // check used to avoid killing unrelated processes that happen to be
-// holding port 8080/8081.
+// holding the reserved gateway ports.
 func isOurProcess(pid int) bool {
 	if pid <= 0 {
 		return false

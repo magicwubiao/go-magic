@@ -303,6 +303,23 @@ type GatewayConfig struct {
 	BlockedUserIDs   []string      // users whose messages are always dropped
 }
 
+// 网关自身的回环（loopback-only）端口。
+//
+// 这两个端口是整个进程内固定保留的：内嵌 API 服务器绑定
+// 127.0.0.1:DefaultAPIPort，健康检查服务绑定 127.0.0.1:DefaultHealthPort。
+// 二者同时被 cmd/magic/gateway_kill_*.go 的孤儿进程清理逻辑和
+// docs/USAGE.*.md 引用，因此**平台回调端口必须避开它们**，否则回调服务器
+// 的 ListenAndServe 会因 EADDRINUSE 静默启动失败。
+//
+// 平台回调端口现状：dingtalk=8091, feishu=8092, discord=8084, slack=8085,
+// line=8087, teams=8088, googlechat=8089, sms=8090。
+const (
+	// DefaultAPIPort is the loopback-only port of the gateway's embedded API server.
+	DefaultAPIPort = 8080
+	// DefaultHealthPort is the loopback-only port of the gateway health-check server.
+	DefaultHealthPort = 8081
+)
+
 // DefaultGatewayConfig returns default gateway configuration
 func DefaultGatewayConfig() *GatewayConfig {
 	return &GatewayConfig{
@@ -310,7 +327,7 @@ func DefaultGatewayConfig() *GatewayConfig {
 		SessionTimeout:  24 * time.Hour,
 		EnableSlashCmd:  true,
 		PlatformTimeout: 30 * time.Second,
-		APIPort:         8080,
+		APIPort:         DefaultAPIPort,
 		EnableAPI:       true,
 	}
 }

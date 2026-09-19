@@ -419,7 +419,11 @@ func (bp *BasePlatform) GetChannelFilter() ([]string, []string) {
 	return bp.allowedChannels, bp.blockedChannels
 }
 
-// SetCallbackPort sets the callback port for webhook-based platforms
+// SetCallbackPort sets the callback port for webhook-based platforms.
+//
+// 8100 以下已被网关自身与各平台占用，新增平台请从 8093 起分配，并且
+// 绝不能使用 gateway.DefaultAPIPort (8080) 或 gateway.DefaultHealthPort
+// (8081)——那两个是网关自己的回环端口，重合会导致回调服务器 EADDRINUSE。
 func (bp *BasePlatform) SetCallbackPort(port int) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()

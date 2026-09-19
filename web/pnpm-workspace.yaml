@@ -1,3 +1,12 @@
-allowBuilds:
-  esbuild: set this to true or false
-  vue-demi: set this to true or false
+# pnpm 可选配置。
+#
+# 本项目以 npm 为主：Dockerfile、CI（.github/workflows/ci.yml）和
+# scripts/build.sh 都用 `npm ci` / `npm run build`。只有在装了 pnpm 时
+# （Makefile 的 pnpm 分支、脚本里的 pnpm 回退）才会读到这里。
+#
+# 原先这里是未填写的模板占位符（`esbuild: set this to true or false`），
+# 属于无效配置。pnpm 10 起默认禁止依赖执行安装脚本，必须显式放行，
+# 而 esbuild 与 vue-demi 都依赖各自的安装脚本来完成初始化。
+onlyBuiltDependencies:
+  - esbuild
+  - vue-demi

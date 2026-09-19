@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/server"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -76,9 +77,10 @@ func startHealthServer(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 
-	server := &http.Server{
+	addr := fmt.Sprintf("127.0.0.1:%d", server.GatewayHealthPort)
+	httpSrv := &http.Server{
 		// 仅绑定回环地址：health 端点仅供本地 Web UI 使用，不对外暴露
-		Addr:    "127.0.0.1:8081",
+		Addr:    addr,
 		Handler: mux,
 	}
 
@@ -86,11 +88,11 @@ func startHealthServer(ctx context.Context) {
 		<-ctx.Done()
 		ctxShutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(ctxShutdown)
+		httpSrv.Shutdown(ctxShutdown)
 	}()
 
-	fmt.Println("[Health] Starting health check server on 127.0.0.1:8081")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	fmt.Printf("[Health] Starting health check server on %s\n", addr)
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Printf("[Health] Failed to start health check server: %v\n", err)
 	}
 }

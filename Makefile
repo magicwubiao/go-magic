@@ -57,11 +57,13 @@ build-cli: build-web
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic ./cmd/magic
 
 build-web:
-	@echo "Building Web UI..."
-	@if [ -d "web" ] && [ -f "web/package.json" ]; then \
-		cd web && pnpm install 2>/dev/null || npm install --legacy-peer-deps 2>/dev/null; \
-		pnpm build 2>/dev/null || npm run build 2>/dev/null; \
-		cd - > /dev/null; \
+	@echo "Building Web UI (required by go:embed dist)..."
+	@if [ ! -d web ] || [ ! -f web/package.json ]; then \
+		echo "web/ not found, skipping Web UI build"; \
+	else \
+		cd web; \
+		if [ -f package-lock.json ]; then npm ci || npm ci --legacy-peer-deps; else npm install --legacy-peer-deps; fi; \
+		npm run build; \
 	fi
 
 build-docker:
@@ -70,34 +72,38 @@ build-docker:
 	@docker tag $(DOCKER_REPO):$(VERSION) $(DOCKER_REPO):latest
 
 # Cross-platform build
+# 默认不压缩：CI 发布的就是裸二进制（go-magic-<os>-<arch>[.exe]）；
+# 需要 .tar.gz/.zip 与 checksums.txt 时追加: ./scripts/build-cross.sh all --compress --checksum
 build-all:
 	@echo "Building for all common platforms..."
-	@./scripts/build-cross.sh common --dir $(CROSS_DIR) --compress --checksum
+	@./scripts/build-cross.sh common --dir $(CROSS_DIR)
 
 build-cross:
 	@echo "Building for all supported platforms..."
-	@./scripts/build-cross.sh all --dir $(CROSS_DIR) --compress --checksum
+	@./scripts/build-cross.sh all --dir $(CROSS_DIR)
+
 
 # Platform-specific builds
+# 命名与 CI 发布资产一致: go-magic-<os>-<arch>[.exe]
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-linux-amd64 ./cmd/magic
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-linux-arm64 ./cmd/magic
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-linux-amd64 ./cmd/magic
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-linux-arm64 ./cmd/magic
 	@echo "Linux builds complete"
 
 build-macos:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-darwin-amd64 ./cmd/magic
-	@GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-darwin-arm64 ./cmd/magic
+	@GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-darwin-amd64 ./cmd/magic
+	@GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-darwin-arm64 ./cmd/magic
 	@echo "macOS builds complete"
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-windows-amd64.exe ./cmd/magic
-	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic-windows-arm64.exe ./cmd/magic
+	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-windows-amd64.exe ./cmd/magic
+	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-windows-arm64.exe ./cmd/magic
 	@echo "Windows builds complete"
 
 # Install
@@ -194,8 +200,9 @@ info:
 	@echo "Cross Build Dir: $(CROSS_DIR)"
 	@echo "Docker Repo: $(DOCKER_REPO)"
 	@echo ""
-	@echo "Supported platforms:"
-	@echo "  Linux:   386, amd64, armv6, arm64, riscv64, ppc64le, s390x"
+	@echo "Release platforms (与 CI 产物同名，CI 只构建这些):"
+	@echo "  Linux:   amd64, arm64"
 	@echo "  macOS:   amd64, arm64"
-	@echo "  Windows: 386, amd64, arm64"
-	@echo "  BSD:     freebsd, openbsd, netbsd"
+	@echo "  Windows: amd64, arm64"
+	@echo "Extra local-only platforms (不发布, 见 ./scripts/build-cross.sh list):"
+	@echo "  linux/386, linux/armv7, linux/riscv64, linux/ppc64le, linux/s390x, freebsd/amd64"
