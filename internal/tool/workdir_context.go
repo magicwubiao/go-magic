@@ -223,16 +223,29 @@ func checkPathEscape(absPath, baseDir string) error {
 // 这些路径——用户看到的就是"工具用绝对路径操作文件失败"，改用相对路径却正常。
 // 非 Windows 平台保持原本的严格比较。
 func withinDir(dir, target string) bool {
-	dir = filepath.Clean(dir)
-	target = filepath.Clean(target)
-	if runtime.GOOS == "windows" {
+	return pathContains(
+		filepath.Clean(dir),
+		filepath.Clean(target),
+		string(filepath.Separator),
+		runtime.GOOS == "windows",
+	)
+}
+
+// pathContains 是 withinDir 的平台无关内核：分隔符与大小写策略由调用方显式给出，
+// 于是"Windows 不区分大小写 / 其它平台区分大小写"两种语义在任意宿主平台上都
+// 可以被直接断言（CI 跑 Linux 时也能覆盖 Windows 分支，反之亦然）。
+//
+// 前置条件：dir/target 已 Clean。期望值在测试里用 filepath.Join 拼装，避免
+// 硬编码分隔符——`\` 在 Linux 上只是普通字符，硬编码会让测试在异构平台假失败。
+func pathContains(dir, target, sep string, foldCase bool) bool {
+	if foldCase {
 		dir = strings.ToLower(dir)
 		target = strings.ToLower(target)
 	}
 	if target == dir {
 		return true
 	}
-	return strings.HasPrefix(target, dir+string(filepath.Separator))
+	return strings.HasPrefix(target, dir+sep)
 }
 
 // normalizeToolPath 归一化模型/前端常见的 Windows 路径变体，使其能被

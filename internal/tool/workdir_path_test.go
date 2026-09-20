@@ -147,22 +147,53 @@ func TestResolvePathOutsideWorkDirStillRejected(t *testing.T) {
 	}
 }
 
-// TestWithinDirCaseInsensitiveOnWindows 直接钉住边界判定的平台差异。
-func TestWithinDirCaseInsensitiveOnWindows(t *testing.T) {
-	base := `C:\proj\ws`
-	target := `C:\proj\ws\sub\a.txt`
+// TestWithinDirContainment 钉住边界判定的语义与平台差异：同前缀的兄弟目录
+// 不算"在目录内"，大小写敏感性随平台（Windows 不敏感、其它平台敏感）。
+//
+// 关键：Windows / 非 Windows 两种语义都在这里被断言，不靠 runtime.GOOS 分支
+// "在本机跑到哪一支算哪一支"——之前的写法在 Windows 上绿、在 Linux CI 上红
+// （硬编码 `\` 在 Linux 不是分隔符），属于测试自身的缺陷。
+func TestWithinDirContainment(t *testing.T) {
+	// 平台无关内核：显式给定分隔符与大小写策略。
+	winSep, nixSep := `\`, "/"
+	// Windows：不区分大小写，且必须认反斜杠。
+	if !pathContains(`C:\Proj\WS`, `c:\proj\ws\sub\a.txt`, winSep, true) {
+		t.Error("Windows containment must ignore case (mixed-case base, lowercase target)")
+	}
+	if !pathContains(`C:\proj\ws`, `C:\proj\ws`, winSep, true) {
+		t.Error("a directory must contain itself")
+	}
+	if pathContains(`C:\proj\ws`, `C:\proj\ws-evil\a.txt`, winSep, true) {
+		t.Error("prefix-matching sibling must not count as inside (\\ws-evil vs \\ws)")
+	}
+	// 非 Windows：区分大小写，用正斜杠。
+	if !pathContains("/proj/ws", "/proj/ws/sub/a.txt", nixSep, false) {
+		t.Error("non-Windows containment must accept a plain child path")
+	}
+	if pathContains("/proj/ws", "/PROJ/WS/a.txt", nixSep, false) {
+		t.Error("non-Windows containment must stay case-sensitive")
+	}
+	if pathContains("/proj/ws", "/proj/ws-evil/a.txt", nixSep, false) {
+		t.Error("prefix-matching sibling must not count as inside (/ws-evil vs /ws)")
+	}
+
+	// 接入层：确认 withinDir 确实按当前平台选对了语义，且分隔符不写死。
+	base := filepath.Join("proj", "ws") // proj\ws 或 proj/ws
+	target := filepath.Join(base, "sub", "a.txt")
+	sibling := filepath.Join("proj", "ws-evil", "a.txt")
 	if !withinDir(base, target) {
 		t.Errorf("withinDir(%q, %q) = false, want true", base, target)
 	}
-	if withinDir(base, `C:\proj\ws-evil\a.txt`) {
-		t.Error("prefix-matching sibling must not count as inside (C:\\proj\\ws-evil vs C:\\proj\\ws)")
+	if withinDir(base, sibling) {
+		t.Errorf("withinDir(%q, %q) = true, want false", base, sibling)
 	}
 	if runtime.GOOS == "windows" {
 		if !withinDir(`D:\proj\ws`, `d:\PROJ\WS\sub\a.txt`) {
-			t.Error("Windows containment must ignore case")
+			t.Error("Windows withinDir must ignore case")
 		}
+		return
 	}
-	if runtime.GOOS != "windows" && withinDir("/proj/ws", "/PROJ/WS/a.txt") {
-		t.Error("non-Windows containment must stay case-sensitive")
+	if withinDir("/proj/ws", "/PROJ/WS/a.txt") {
+		t.Error("non-Windows withinDir must stay case-sensitive")
 	}
 }
