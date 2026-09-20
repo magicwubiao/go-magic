@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go-magic 本地构建入口
+# go-magic local build entry point
 # =============================================================================
-# 与 CI (.github/workflows/release.yml) 对齐：
-#   - 版本号来自 git tag（唯一来源），不硬编码任何版本号
-#   - 先构建 Web UI（internal/server/dist 是 //go:embed 目标且被 .gitignore 忽略）
-#   - 产物名与 Release 资产一致：go-magic-<os>-<arch>[.exe]
-#   - 平台编译逻辑只有一份，在 build-cross.sh
+# Aligned with CI (.github/workflows/release.yml):
+#   - Version comes from the git tag (single source of truth), never hardcoded
+#   - Builds the Web UI first (internal/server/dist is the //go:embed target and
+#     is ignored by .gitignore)
+#   - Artifact names match the Release assets: go-magic-<os>-<arch>[.exe]
+#   - There is exactly one implementation of the per-platform compile logic,
+#     in build-cross.sh
 #
-# 用法:
-#   scripts/build.sh                    # web + CI 6 平台
-#   scripts/build.sh web                # 只构建 Web UI（强制重建）
-#   scripts/build.sh current            # 只构建当前平台
-#   scripts/build.sh go linux/amd64     # 构建指定平台
-#   scripts/build.sh docker             # 构建 Docker 镜像
-#   scripts/build.sh release            # 构建 + 打包 + 创建 GitHub Release(draft)
+# Usage:
+#   scripts/build.sh                    # web + the 6 CI platforms
+#   scripts/build.sh web                # build the Web UI only (force rebuild)
+#   scripts/build.sh current            # build the current platform only
+#   scripts/build.sh go linux/amd64     # build the given platform
+#   scripts/build.sh docker             # build the Docker image
+#   scripts/build.sh release            # build + package + create a GitHub Release (draft)
 #   scripts/build.sh clean
 #   scripts/build.sh list
 #
-# 选项:
+# Options:
 #   --version <v>  --dir <path>  --compress  --checksum  --clean
-#   --no-web       跳过 Web UI 构建（要求 dist 已存在）
-#   --publish      release 时直接发布（默认 draft）
-#   --push         docker 时用 buildx 构建多架构并推送
+#   --no-web       skip the Web UI build (requires dist to exist)
+#   --publish      publish on release (default: draft)
+#   --push         build multi-arch with buildx and push (docker)
 #   -h, --help
 #
-# 兼容性: Bash 3.2+（macOS 自带 /bin/bash）
+# Compatibility: Bash 3.2+ (the /bin/bash shipped with macOS)
 # =============================================================================
 set -Eeuo pipefail
 
@@ -51,32 +53,32 @@ PUSH="false"
 
 usage() {
     cat <<EOF
-go-magic 本地构建
+go-magic local build
 
-用法: $0 [命令] [平台...] [选项]
+Usage: $0 [command] [platform...] [options]
 
-命令:
-  all            构建 Web UI + CI 6 个发布平台（默认）
-  web            只构建 Web UI（强制重建）
-  current        只构建当前平台
-  go             构建指定平台（需跟平台键）
-  docker         构建 Docker 镜像（${DOCKER_REPO}:\$VERSION 与 :latest）
-  release        构建 + 打包 + 创建 GitHub Release
-  clean          清理 dist/ 与 build/
-  list           列出所有可用平台
+Commands:
+  all            build the Web UI + the 6 CI release platforms (default)
+  web            build the Web UI only (force rebuild)
+  current        build the current platform only
+  go             build the given platform(s) (requires a platform key)
+  docker         build the Docker image (${DOCKER_REPO}:\$VERSION and :latest)
+  release        build + package + create a GitHub Release
+  clean          remove dist/ and build/
+  list           list all available platforms
 
-选项:
-  --version <v>  版本号（默认: git tag）
-  --dir <path>   输出目录（默认: ./dist）
-  --compress     额外生成 .tar.gz / .zip
-  --checksum     生成 checksums.txt
-  --clean        构建前清空输出目录
-  --no-web       跳过 Web UI 构建
-  --publish      release 时直接发布（默认 draft）
-  --push         docker 时 buildx 构建多架构并推送
-  -h, --help     显示帮助
+Options:
+  --version <v>  version (default: git tag)
+  --dir <path>   output directory (default: ./dist)
+  --compress     also produce .tar.gz / .zip
+  --checksum     generate checksums.txt
+  --clean        empty the output directory before building
+  --no-web       skip the Web UI build
+  --publish      publish on release (default: draft)
+  --push         build multi-arch with buildx and push (docker)
+  -h, --help     show help
 
-示例:
+Examples:
   $0
   $0 go linux/amd64 windows/arm64
   $0 all --compress --checksum
@@ -84,7 +86,7 @@ go-magic 本地构建
 EOF
 }
 
-# 当前平台的平台键；arm 主机映射到 linux/armv7
+# Platform key of the current machine; arm hosts map to linux/armv7
 current_platform_key() {
     local goos goarch key
     goos="$(go env GOOS)"
@@ -102,20 +104,21 @@ current_platform_key() {
     return 1
 }
 
-# Web UI 前置：默认按需构建；--no-web 时要求已存在（否则 go build 必然失败）
+# Web UI prerequisite: built on demand by default; with --no-web it must already
+# exist (otherwise go build is guaranteed to fail)
 await_web() {
     if [[ "$NO_WEB" == "true" ]]; then
         if gm_web_dist_ready; then
-            gm_ok "跳过 Web UI 构建（--no-web）"
+            gm_ok "skipping the Web UI build (--no-web)"
             return 0
         fi
-        gm_error "--no-web 但 $(gm_web_dist_dir)/index.html 不存在，go:embed dist 会失败"
+        gm_error "--no-web given but $(gm_web_dist_dir)/index.html is missing; go:embed dist would fail"
         return 1
     fi
     gm_ensure_web_dist
 }
 
-# 平台编译统一委托给 build-cross.sh（单一实现）
+# Per-platform compilation is delegated to build-cross.sh (single implementation)
 delegate_build() {
     local platforms="$1"
     local args=()
@@ -134,18 +137,18 @@ delegate_build() {
 
 cmd_docker() {
     gm_require_cmd docker "https://docs.docker.com/get-docker/" || exit 1
-    [[ -f "$REPO_ROOT/Dockerfile" ]] || { gm_error "找不到 Dockerfile"; exit 1; }
+    [[ -f "$REPO_ROOT/Dockerfile" ]] || { gm_error "Dockerfile not found"; exit 1; }
 
     await_web || exit 1
 
     if [[ "$PUSH" == "true" ]]; then
         docker buildx build --platform linux/amd64,linux/arm64 \
             -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" --push "$REPO_ROOT"
-        gm_ok "已推送多架构镜像 $DOCKER_REPO:$VERSION"
+        gm_ok "pushed multi-arch image $DOCKER_REPO:$VERSION"
     else
-        # 只构建本地镜像，不再像旧脚本那样隐式 --push
+        # Build the local image only; no implicit --push like the old script did
         docker build -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" "$REPO_ROOT"
-        gm_ok "镜像已构建: $DOCKER_REPO:$VERSION, $DOCKER_REPO:latest"
+        gm_ok "image built: $DOCKER_REPO:$VERSION, $DOCKER_REPO:latest"
     fi
 }
 
@@ -155,7 +158,7 @@ cmd_release() {
 
     local tag="$1"
     case "$VERSION" in
-        *-[0-9]*-g*) gm_warn "版本 $VERSION 不是精确 tag，正式发布请基于 tag 运行" ;;
+        *-[0-9]*-g*) gm_warn "version $VERSION is not an exact tag; run from a tag for a real release" ;;
     esac
 
     PLATFORMS="$(printf '%s\n' "${GM_PLATFORMS_CI[@]}" | tr '\n' ' ')"
@@ -163,7 +166,8 @@ cmd_release() {
     CHECKSUM="true"
     delegate_build "$PLATFORMS"
 
-    # 收集产物（bash 3.2 下空数组展开不安全，这里用字符串 + 计数）
+    # Collect artifacts (expanding empty arrays is unsafe on bash 3.2, so use a
+    # string plus a counter here)
     local assets="" count=0
     for f in "$BUILD_DIR"/go-magic-*; do
         if [[ -f "$f" ]]; then
@@ -172,37 +176,37 @@ cmd_release() {
         fi
     done
     if [[ "$count" -eq 0 ]]; then
-        gm_error "没有可上传的产物"
+        gm_error "no artifacts to upload"
         exit 1
     fi
 
     local gh_args=(release create "$tag" --title "$tag" --generate-notes)
     [[ "$PUBLISH" != "true" ]] && gh_args+=(--draft)
 
-    gm_step "创建 Release $tag（$( [[ "$PUBLISH" == "true" ]] && echo 发布 || echo draft)）"
+    gm_step "creating Release $tag ($( [[ "$PUBLISH" == "true" ]] && echo published || echo draft))"
     # shellcheck disable=SC2086
     gh "${gh_args[@]}" $assets
-    gm_ok "Release 地址: https://github.com/$GM_REPO/releases/tag/$tag"
+    gm_ok "Release URL: https://github.com/$GM_REPO/releases/tag/$tag"
 }
 
 cmd_clean() {
     rm -rf "$BUILD_DIR" "$REPO_ROOT/build"
-    gm_ok "已清理 $BUILD_DIR 与 $REPO_ROOT/build"
+    gm_ok "removed $BUILD_DIR and $REPO_ROOT/build"
 }
 
 show_summary() {
-    gm_step "构建摘要"
-    gm_info "版本: $VERSION"
-    gm_info "输出: $BUILD_DIR"
+    gm_step "build summary"
+    gm_info "version: $VERSION"
+    gm_info "output:  $BUILD_DIR"
     if [[ -d "$BUILD_DIR" ]]; then
         ls -1 "$BUILD_DIR" 2>/dev/null | sed 's/^/  /'
     fi
     echo ""
-    gm_info "运行: ./scripts/run.sh -p 5000"
+    gm_info "run: ./scripts/run.sh -p 5000"
 }
 
 # =============================================================================
-# 参数解析
+# Argument parsing
 # =============================================================================
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -210,11 +214,11 @@ while [[ $# -gt 0 ]]; do
             COMMAND="$1"
             ;;
         --version)
-            [[ -n "${2:-}" ]] || { gm_error "--version 需要参数"; exit 1; }
+            [[ -n "${2:-}" ]] || { gm_error "--version requires a value"; exit 1; }
             VERSION="$2"; shift
             ;;
         --dir)
-            [[ -n "${2:-}" ]] || { gm_error "--dir 需要参数"; exit 1; }
+            [[ -n "${2:-}" ]] || { gm_error "--dir requires a value"; exit 1; }
             BUILD_DIR="$2"; shift
             ;;
         --compress) COMPRESS="true" ;;
@@ -225,7 +229,7 @@ while [[ $# -gt 0 ]]; do
         --push)     PUSH="true" ;;
         -h|--help)  usage; exit 0 ;;
         -*)
-            gm_error "未知选项: $1"; usage; exit 1
+            gm_error "unknown option: $1"; usage; exit 1
             ;;
         *)
             key="$(gm_normalize_platform "$1")"
@@ -233,7 +237,7 @@ while [[ $# -gt 0 ]]; do
                 if [[ -z "$PLATFORMS" ]]; then PLATFORMS="$key"; else PLATFORMS="$PLATFORMS $key"; fi
                 [[ -z "$COMMAND" ]] && COMMAND="go"
             else
-                gm_error "未知平台: $1（用 $0 list 查看可用平台）"
+                gm_error "unknown platform: $1 (use $0 list to see the available platforms)"
                 exit 1
             fi
             ;;
@@ -259,30 +263,30 @@ case "${COMMAND:-all}" in
         cmd_release "$(gm_tag_name "$VERSION")"
         ;;
     current)
-        key="$(current_platform_key)" || { gm_error "无法识别当前平台（$(go env GOOS)/$(go env GOARCH)）"; exit 1; }
-        gm_step "构建当前平台 $key"
+        key="$(current_platform_key)" || { gm_error "cannot detect the current platform ($(go env GOOS)/$(go env GOARCH))"; exit 1; }
+        gm_step "building the current platform $key"
         await_web || exit 1
         delegate_build "$key"
         show_summary
         ;;
     go)
         if [[ -z "$PLATFORMS" ]]; then
-            gm_error "go 命令需要指定平台，例如: $0 go linux/amd64"
+            gm_error "the go command requires a platform, e.g. $0 go linux/amd64"
             exit 1
         fi
-        gm_step "构建指定平台: $PLATFORMS"
+        gm_step "building platform(s): $PLATFORMS"
         await_web || exit 1
         delegate_build "$PLATFORMS"
         show_summary
         ;;
     all)
-        gm_step "构建 Web UI + CI 发布平台"
+        gm_step "building the Web UI + the CI release platforms"
         await_web || exit 1
         delegate_build "$(printf '%s\n' "${GM_PLATFORMS_CI[@]}" | tr '\n' ' ')"
         show_summary
         ;;
     *)
-        gm_error "未知命令: $COMMAND"
+        gm_error "unknown command: $COMMAND"
         usage
         exit 1
         ;;

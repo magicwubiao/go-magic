@@ -1,15 +1,18 @@
 # =============================================================================
 # go-magic Homebrew Formula
 # =============================================================================
-# 该文件属于 tap 仓库 magicwubiao/homebrew-tap 的 Formula/ 目录（当前仓库只是源文件，
-# tap 仓库尚未创建，见同目录 README.md）。
+# This file belongs in Formula/ of the tap repository magicwubiao/homebrew-tap
+# (this repository only holds the source file; the tap repository has not been
+# created yet, see README.md in the same directory).
 #
-# 资产名与 CI 完全一致（.github/workflows/release.yml 上传的是**裸二进制**，没有 tar.gz）：
+# Asset names match CI exactly (.github/workflows/release.yml uploads **bare
+# binaries**, there is no tar.gz):
 #   go-magic-darwin-amd64 / go-magic-darwin-arm64
 #   go-magic-linux-amd64  / go-magic-linux-arm64
 #
-# version 与 sha256 必须与某个已发布 Release 对应；发新版时由 tap 的自动化（brew bump）更新。
-# 当前值对应 Release v0.5.19。
+# version and sha256 must correspond to a published Release; the tap automation
+# (brew bump) updates them when a new version ships. The current values
+# correspond to Release v0.5.19.
 # =============================================================================
 class GoMagic < Formula
   desc "High-performance AI Agent in Go"
@@ -40,20 +43,21 @@ class GoMagic < Formula
   end
 
   def install
-    # 下载的是裸二进制，文件名随平台变化，因此按前缀匹配后重命名为 magic
+    # The download is a bare binary whose file name varies per platform, so match
+    # by prefix and rename it to magic
     binary = Dir["go-magic-*"].first
-    odie "无法在下载内容中找到 go-magic 二进制" if binary.nil?
+    odie "no go-magic binary found in the download" if binary.nil?
     bin.install binary => "magic"
   end
 
   def caveats
     <<~EOS
-      首次使用请先初始化配置：
+      Initialize the configuration before first use:
         magic setup
         magic chat
         magic server
 
-      配置目录为 ~/.magic（与二进制安装位置无关）。
+      The config directory is ~/.magic (independent of where the binary lives).
     EOS
   end
 

@@ -81,18 +81,22 @@ USER magic
 
 # Expose ports
 # 8642: Main API / Web UI
-# 8643: 预留，当前没有任何服务监听它（仅登记在 CORS 允许源里）
+# 8643: reserved; nothing listens on it today (it is only listed in the CORS allowed origins)
 #
-# 各网关平台（钉钉/飞书/Discord 等）的 webhook 回调**各自使用独立端口**
-# （见 internal/gateway 各平台 SetCallbackPort），并不经由 8643。
-# 容器里启用 webhook 类平台时必须把这些端口一并映射出去，否则平台永远收不到
-# 回调（这正是此前 Docker 部署下 webhook 平台全部不可达的原因）。
-# 当前分配（导出仅为声明，实际是否对外开放取决于 compose/-p 的映射）：
+# Each gateway platform (DingTalk/Feishu/Discord, ...) uses its **own distinct port**
+# for webhook callbacks (see SetCallbackPort in each internal/gateway platform); none
+# of them go through 8643.
+# When any webhook-style platform is enabled in the container, these ports must be
+# mapped as well, otherwise the platform can never reach the callback (this is exactly
+# why every webhook platform was unreachable under Docker before).
+# Current allocation (EXPOSE is only a declaration; whether a port is actually
+# reachable from outside is decided by the compose/-p mapping):
 #   8091 dingtalk      8092 feishu
 #   8084 discord       8085 slack
 #   8087 line          8088 teams
 #   8089 googlechat    8090 sms
-# 注意 8080/8081 是网关自身的回环端口（API / 健康检查），不对容器外暴露。
+# Note: 8080/8081 are the gateway's own loopback ports (API / health check) and are
+# not exposed outside the container.
 EXPOSE 8642 8643 8084 8085 8087 8088 8089 8090 8091 8092
 
 # Health check
@@ -101,7 +105,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Default command - start server with web UI
 #
-# `magic server` 的默认端口是 5000，必须显式指定 8642 才能与上面的
-# EXPOSE / docker-compose 的端口映射对齐，否则容器内监听 5000 → 映射失效。
+# `magic server` defaults to port 5000, so 8642 must be passed explicitly to line up
+# with the EXPOSE above / the docker-compose port mapping; otherwise the container
+# listens on 5000 and the mapping goes nowhere.
 ENTRYPOINT ["/app/magic"]
 CMD ["server", "--port", "8642"]

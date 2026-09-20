@@ -12,16 +12,19 @@ services:
     container_name: go-magic
     restart: unless-stopped
     ports:
-      # `magic server` 默认端口是 5000；镜像 CMD 已显式指定 --port 8642，
-      # 因此这里映射 8642 才对得上。若覆盖 command，请同步修改端口。
+      # `magic server` defaults to port 5000; the image CMD already passes --port 8642
+      # explicitly, so mapping 8642 here is what lines up. If you override command,
+      # change the port to match.
       - "8642:8642"   # API / Web UI
-      - "8643:8643"   # 预留，当前无服务监听（仅出现在 CORS 允许源里）
+      - "8643:8643"   # reserved; nothing listens on it (it only appears in the CORS allowed origins)
       #
-      # 网关平台 webhook 回调端口：各平台各自独立监听，不经由 8643。
-      # 只用到了某个平台时才需要放开对应端口；用不到的可以整行删掉，
-      # 以免无谓地对外暴露端口（回调服务器要求能从公网访问）。
-      - "8091:8091"   # 钉钉 dingtalk
-      - "8092:8092"   # 飞书 feishu
+      # Gateway platform webhook callback ports: each platform listens on its own port
+      # and none of them go through 8643.
+      # Only uncomment the platform you actually use; delete the whole line for the
+      # others, so ports are not exposed needlessly (the callback server must be
+      # reachable from the public internet).
+      - "8091:8091"   # DingTalk (dingtalk)
+      - "8092:8092"   # Feishu (feishu)
       - "8084:8084"   # Discord
       - "8085:8085"   # Slack
       - "8087:8087"   # LINE
@@ -35,30 +38,33 @@ services:
     networks:
       - magic-network
     healthcheck:
-      # 与 Dockerfile 的 HEALTHCHECK 保持一致（curl 已装在镜像里）。
+      # Kept in sync with the HEALTHCHECK in the Dockerfile (curl is installed in the image).
       #
-      # 更正一条历史结论：此前这里注释称 `/api/health` 不支持 HEAD，所以
-      # 用 `wget --spider` 会误报。经查源码并非如此——
+      # Correcting an earlier conclusion: a comment here used to claim that `/api/health`
+      # does not support HEAD and that `wget --spider` therefore produced false alarms.
+      # The source says otherwise --
       #   internal/server/server.go: mux.HandleFunc("/api/health", withCORS(s.handleHealth))
-      #   internal/server/health.go:  handler 完全不读 r.Method，GET/HEAD 都回 200
-      # 也就是说探测方式本身不是「方法不兼容」问题。若出现过 unhealthy，
-      # 更可能是探测工具（busybox wget 版本差异）或启动时序问题，需实测确认，
-      # 不要再把「HEAD 不被支持」当成原因。
+      #   internal/server/health.go:  the handler never reads r.Method; GET and HEAD both return 200
+      # so the probe method itself is not a "method not supported" problem. If a container
+      # ever shows unhealthy, it is more likely the probe tool (busybox wget version
+      # differences) or startup timing; that needs to be measured, do not keep blaming
+      # "HEAD is unsupported".
       #
-      # start_period 此处 10s（镜像内为 5s），留给首次初始化 ~/.magic 的时间。
+      # start_period is 10s here (5s in the image) to allow the first ~/.magic initialization.
       test: ["CMD", "curl", "-sf", "http://localhost:8642/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
 
-  # 本项目不使用 Redis / 外部缓存服务：
-  #   - 持久化走 SQLite（modernc.org/sqlite，纯 Go 无 CGO）
-  #   - 缓存是进程内 map（internal/tool/cache.go 的 InMemoryToolCache / TTLCache）
-  #   - go.mod 中不存在任何 Redis 客户端依赖，全仓代码也没有 6379 相关引用
-  # 这里曾有一个 redis 服务，但代码从未连接它，属于孤立服务：
-  # 只会白起一个容器、白占一个数据卷，还需靠「只绑回环」来规避其默认无鉴权的风险。
-  # 若将来要重新引入，请先让代码真正使用它，再加回来。
+  # This project uses no Redis / external cache service:
+  #   - persistence goes through SQLite (modernc.org/sqlite, pure Go, no CGO)
+  #   - the cache is an in-process map (InMemoryToolCache / TTLCache in internal/tool/cache.go)
+  #   - go.mod has no Redis client dependency and no code in the repository references 6379
+  # There used to be a redis service here, but the code never connected to it, so it was an
+  # orphan service: it only started a container and occupied a data volume for nothing, and
+  # needed a loopback-only bind to work around its default lack of authentication.
+  # If it is ever reintroduced, make the code actually use it first, then add it back.
 
 networks:
   magic-network:

@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go-magic Debian/Ubuntu 安装脚本
+# go-magic Debian/Ubuntu install script
 # =============================================================================
-# 默认（也是最可靠的）方式：直接从 GitHub Release 安装 CI 产出的 .deb
+# Default (and most reliable) method: install the .deb CI produces straight from
+# the GitHub Release
 #   https://github.com/magicwubiao/go-magic/releases/download/v0.5.19/go-magic_amd64.deb
-#   CI 目前只构建 amd64 的 .deb（见 .github/workflows/release.yml）
+#   CI currently only builds the amd64 .deb (see .github/workflows/release.yml)
 #
-# 备选方式：配置自建 APT 仓库（需要显式给出 --repo-url，CI 并不托管 APT 仓库）
+# Alternative: configure your own APT repository (requires an explicit --repo-url;
+# CI does not host an APT repository)
 #
-# 用法:
-#   ./install-apt.sh                       # 从 Release 下载 .deb 并安装
+# Usage:
+#   ./install-apt.sh                       # download the .deb from the Release and install it
 #   ./install-apt.sh --version v0.5.19
 #   ./install-apt.sh --repo-url https://packages.example.com --install
-#   ./install-apt.sh --remove              # 移除仓库配置与 GPG key
+#   ./install-apt.sh --remove              # remove the repository config and GPG key
 # =============================================================================
 set -euo pipefail
 
@@ -24,7 +26,7 @@ REPO_URL=""
 DISTRIBUTION=""
 DO_REMOVE="false"
 
-# 颜色
+# Colors
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 else
@@ -40,19 +42,19 @@ trap cleanup EXIT
 
 show_help() {
     cat <<EOF
-go-magic Debian/Ubuntu 安装脚本
+go-magic Debian/Ubuntu install script
 
-用法: $0 [选项]
+Usage: $0 [options]
 
-选项:
-    --version <ver>       指定版本，例如 v0.5.19（默认取最新 Release）
-    --repo-url <url>      使用自建 APT 仓库（不指定则直接用 GitHub Release 的 .deb）
-    --distribution <cod>  仓库模式下的发行版代号（默认 lsb_release -cs）
-    --remove              移除 APT 仓库配置与 GPG key
-    -h, --help            显示帮助
+Options:
+    --version <ver>       version, e.g. v0.5.19 (default: the latest Release)
+    --repo-url <url>      use your own APT repository (otherwise the .deb from the GitHub Release is used directly)
+    --distribution <cod>  distribution codename for repository mode (default: lsb_release -cs)
+    --remove              remove the APT repository config and the GPG key
+    -h, --help            show help
 
-示例:
-    $0                                  # 最简：安装 Release 里的 .deb
+Examples:
+    $0                                  # simplest: install the .deb from the Release
     $0 --version v0.5.19
     $0 --repo-url https://packages.example.com
     $0 --remove
@@ -62,15 +64,15 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)
-            [[ -n "${2:-}" ]] || log_error "--version 需要参数"
+            [[ -n "${2:-}" ]] || log_error "--version requires a value"
             VERSION="$2"; shift
             ;;
         --repo-url)
-            [[ -n "${2:-}" ]] || log_error "--repo-url 需要参数"
+            [[ -n "${2:-}" ]] || log_error "--repo-url requires a value"
             REPO_URL="$2"; shift
             ;;
         --distribution)
-            [[ -n "${2:-}" ]] || log_error "--distribution 需要参数"
+            [[ -n "${2:-}" ]] || log_error "--distribution requires a value"
             DISTRIBUTION="$2"; shift
             ;;
         --remove)
@@ -80,14 +82,14 @@ while [[ $# -gt 0 ]]; do
             show_help; exit 0
             ;;
         *)
-            log_error "未知参数: $1（用 --help 查看用法）"
+            log_error "unknown argument: $1 (use --help for usage)"
             ;;
     esac
     shift
 done
 
 require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || log_error "缺少必需命令: $1${2:+（$2）}"
+    command -v "$1" >/dev/null 2>&1 || log_error "missing required command: $1${2:+ ($2)}"
 }
 
 ensure_v_prefix() {
@@ -106,10 +108,10 @@ resolve_version() {
     local json tag auth=()
     [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     json="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null)" \
-        || log_error "无法获取最新版本，请用 --version 指定（或设置 GITHUB_TOKEN）"
+        || log_error "could not fetch the latest version; pass --version (or set GITHUB_TOKEN)"
     tag="$(printf '%s' "$json" | tr -d '\r\n' \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    [[ -n "$tag" ]] || log_error "无法解析版本号，请用 --version 指定"
+    [[ -n "$tag" ]] || log_error "could not parse the version; pass --version explicitly"
     printf '%s\n' "$tag"
 }
 
@@ -118,62 +120,62 @@ is_debian_like() {
 }
 
 # -----------------------------------------------------------------------------
-# 移除仓库配置
+# Remove the repository config
 # -----------------------------------------------------------------------------
 remove_repo() {
-    log_info "移除 APT 仓库配置"
+    log_info "removing the APT repository config"
     sudo rm -f "$REPO_FILE" "$KEYRING_FILE"
     sudo apt update >/dev/null 2>&1 || true
-    log_info "已移除: $REPO_FILE, $KEYRING_FILE"
-    log_info "如不再需要程序: sudo apt remove -y go-magic"
+    log_info "removed: $REPO_FILE, $KEYRING_FILE"
+    log_info "if the program is no longer needed: sudo apt remove -y go-magic"
 }
 
 # -----------------------------------------------------------------------------
-# 方式一：从 GitHub Release 安装 .deb（默认）
+# Method 1: install the .deb from the GitHub Release (default)
 # -----------------------------------------------------------------------------
 install_from_release() {
-    is_debian_like || log_error "本方式需要 apt 与 dpkg"
+    is_debian_like || log_error "this method requires apt and dpkg"
 
     local arch tag deb url size
     arch="$(dpkg --print-architecture)"
     if [[ "$arch" != "amd64" ]]; then
-        log_error "CI 目前只为 amd64 构建 .deb（当前架构: ${arch}）。
-请改用 install.sh --method binary，或从源码构建。"
+        log_error "CI currently only builds the .deb for amd64 (current arch: ${arch}).
+Use install.sh --method binary instead, or build from source."
     fi
 
     tag="$(ensure_v_prefix "$(resolve_version)")"
     deb="go-magic_${arch}.deb"
     url="https://github.com/${REPO}/releases/download/${tag}/${deb}"
 
-    log_info "版本: ${tag}"
-    log_info "下载: ${url}"
+    log_info "version:  ${tag}"
+    log_info "download: ${url}"
 
     require_cmd curl
     TMP_FILE="$(mktemp "${TMPDIR:-/tmp}/go-magic.XXXXXX.deb")"
-    # -f 必不可少，否则 404 的错误页会被当成 .deb 保存下来
-    curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_FILE" "$url" || log_error "下载失败: $url"
+    # -f is essential, otherwise a 404 error page is saved as the .deb
+    curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_FILE" "$url" || log_error "download failed: $url"
 
     size="$(wc -c <"$TMP_FILE" | tr -d ' ')"
     if [[ "$size" -lt 1048576 ]]; then
-        log_error "下载内容异常（仅 ${size} 字节）: ${url}"
+        log_error "unexpected download content (only ${size} bytes): ${url}"
     fi
 
-    log_info "安装 .deb"
+    log_info "installing the .deb"
     sudo apt install -y "$TMP_FILE"
 
     if command -v magic >/dev/null 2>&1; then
-        log_info "验证通过: $(magic --version)"
+        log_info "verification passed: $(magic --version)"
     else
-        log_warn "已安装但 magic 不在 PATH 中，请检查 /usr/bin/magic"
+        log_warn "installed but magic is not in PATH; check /usr/bin/magic"
     fi
 }
 
 # -----------------------------------------------------------------------------
-# 方式二：配置自建 APT 仓库
+# Method 2: configure your own APT repository
 # -----------------------------------------------------------------------------
 install_from_repo() {
     local codename
-    is_debian_like || log_error "本方式需要 apt 与 dpkg"
+    is_debian_like || log_error "this method requires apt and dpkg"
     require_cmd curl
     require_cmd gpg "sudo apt install gnupg"
 
@@ -182,20 +184,22 @@ install_from_repo() {
             DISTRIBUTION="$(lsb_release -cs)"
         else
             DISTRIBUTION="stable"
-            log_warn "无法检测发行版代号（缺少 lsb-release），回退为: ${DISTRIBUTION}"
+            log_warn "could not detect the distribution codename (lsb-release is missing); falling back to: ${DISTRIBUTION}"
         fi
     fi
     codename="$DISTRIBUTION"
 
-    log_info "仓库: ${REPO_URL}  发行版: ${codename}  架构: $(dpkg --print-architecture)"
+    log_info "repository: ${REPO_URL}  distribution: ${codename}  arch: $(dpkg --print-architecture)"
 
-    # 现代做法：keyring 放 /etc/apt/keyrings（而不是已废弃的 trusted.gpg.d）
+    # Modern approach: the keyring goes into /etc/apt/keyrings (not the deprecated
+    # trusted.gpg.d)
     sudo mkdir -p /etc/apt/keyrings /etc/apt/sources.list.d
 
-    # 先写临时文件再原子替换：避免 gpg 报 “文件已存在” 或写坏已有 keyring
+    # Write a temp file first and replace atomically: avoids gpg complaining that
+    # the file exists, or corrupting an existing keyring
     local key_tmp
     key_tmp="$(mktemp)"
-    curl -fsSL "${REPO_URL}/keys/public.gpg" -o "$key_tmp" || { rm -f "$key_tmp"; log_error "下载 GPG key 失败"; }
+    curl -fsSL "${REPO_URL}/keys/public.gpg" -o "$key_tmp" || { rm -f "$key_tmp"; log_error "downloading the GPG key failed"; }
     sudo gpg --dearmor --yes -o "$KEYRING_FILE" "$key_tmp"
     rm -f "$key_tmp"
     sudo chmod 0644 "$KEYRING_FILE"
@@ -203,16 +207,16 @@ install_from_repo() {
 
     printf 'deb [signed-by=%s] %s %s main\n' "$KEYRING_FILE" "$REPO_URL" "$codename" \
         | sudo tee "$REPO_FILE" >/dev/null
-    log_info "仓库配置: $REPO_FILE"
+    log_info "repository config: $REPO_FILE"
 
-    log_info "更新软件源"
+    log_info "updating the package index"
     sudo apt update
 
-    log_info "安装 go-magic"
+    log_info "installing go-magic"
     sudo apt install -y go-magic
 
     if command -v magic >/dev/null 2>&1; then
-        log_info "验证通过: $(magic --version)"
+        log_info "verification passed: $(magic --version)"
     fi
 }
 
@@ -220,13 +224,13 @@ install_from_repo() {
 # Main
 # -----------------------------------------------------------------------------
 echo ""
-log_info "go-magic Debian/Ubuntu 安装脚本"
+log_info "go-magic Debian/Ubuntu install script"
 
 if [[ "$DO_REMOVE" == "true" ]]; then
-    is_debian_like || log_error "本脚本仅支持 Debian/Ubuntu 系"
+    is_debian_like || log_error "this script only supports Debian/Ubuntu"
     remove_repo
     echo ""
-    log_info "完成"
+    log_info "done"
     exit 0
 fi
 
@@ -237,6 +241,6 @@ else
 fi
 
 echo ""
-log_info "完成"
+log_info "done"
 echo ""
-log_info "使用: magic --help"
+log_info "usage: magic --help"

@@ -1,14 +1,16 @@
 ﻿# =============================================================================
-# go-magic PowerShell 共享库
+# go-magic PowerShell shared library
 # =============================================================================
-# 供 scripts\windows\*.ps1 点源使用:  . "$PSScriptRoot\..\lib\common.ps1"
+# Dot-source it from scripts\windows\*.ps1:
+#   . "$PSScriptRoot\..\lib\common.ps1"
 #
-# 单一事实源与 shell 版保持一致:
-#   - 版本号来自 git tag（与 CI release.yml 相同），不硬编码
-#   - internal/server/dist 是 //go:embed dist 的目标且被 .gitignore 忽略，
-#     干净克隆上必须先构建 Web UI，否则 go build 报 "pattern dist: no matching files found"
+# Single source of truth, kept in sync with the shell version:
+#   - The version comes from the git tag (same as CI release.yml), never hardcoded
+#   - internal/server/dist is the //go:embed dist target and is ignored by
+#     .gitignore, so on a clean clone the Web UI must be built first, otherwise
+#     go build fails with "pattern dist: no matching files found"
 #
-# 兼容 PowerShell 5.1（Windows 自带）与 PowerShell 7+
+# Compatible with PowerShell 5.1 (bundled with Windows) and PowerShell 7+
 # =============================================================================
 
 $script:GmRepo = "magicwubiao/go-magic"
@@ -20,7 +22,7 @@ function Write-GmError { param([string]$Message) Write-Host "[FAIL] $Message" -F
 
 function Get-GmRepoRoot {
     <#
-      .SYNOPSIS 由 scripts\windows\ 下的脚本调用时返回仓库根目录
+      .SYNOPSIS Returns the repository root when called from a script under scripts\windows\
     #>
     param([string]$PSScriptRootPath)
     return (Resolve-Path (Join-Path $PSScriptRootPath "..\..")).Path
@@ -28,8 +30,8 @@ function Get-GmRepoRoot {
 
 function Get-GmVersion {
     <#
-      .SYNOPSIS 版本唯一来源：环境变量 VERSION > 精确 git tag > git describe > dev
-      .DESCRIPTION 与 shell 版 gm_resolve_version 行为一致，绝不硬编码版本号
+      .SYNOPSIS Single source of the version: env var VERSION > exact git tag > git describe > dev
+      .DESCRIPTION Behaves like the shell gm_resolve_version; the version is never hardcoded
     #>
     if ($env:VERSION) { return $env:VERSION }
 
@@ -59,7 +61,8 @@ function Get-GmLdflags {
     param([string]$Version)
     $commit = Get-GmCommit
     $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    # 变量名必须是 main.Version（大写）；写成 main.version 会被 Go 静默忽略
+    # The variable name must be main.Version (capitalized); main.version is
+    # silently ignored by Go
     return "-s -w -X main.Version=$Version -X main.Commit=$commit -X main.BuildDate=$date"
 }
 
@@ -70,7 +73,7 @@ function Test-GmWebDist {
 
 function Build-GmWebDist {
     <#
-      .SYNOPSIS 构建 Web UI（与 CI 一致使用 npm ci）
+      .SYNOPSIS Builds the Web UI (npm ci, same as CI)
     #>
     param(
         [string]$RepoRoot,
@@ -79,48 +82,48 @@ function Build-GmWebDist {
 
     $dist = Join-Path $RepoRoot "internal\server\dist"
     if ((Test-GmWebDist $RepoRoot) -and (-not $Force)) {
-        Write-GmOk "Web UI 已就绪: $dist"
+        Write-GmOk "Web UI already present: $dist"
         return
     }
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw "缺少 npm，请先安装 Node.js 22+（https://nodejs.org/）"
+        throw "npm is missing; please install Node.js 22+ (https://nodejs.org/)"
     }
 
     $web = Join-Path $RepoRoot "web"
     if (-not (Test-Path (Join-Path $web "package.json"))) {
-        throw "找不到 web\package.json，无法构建 Web UI"
+        throw "web\package.json not found; cannot build the Web UI"
     }
 
-    Write-GmInfo "构建 Web UI（go:embed dist 依赖）..."
+    Write-GmInfo "building the Web UI (required by go:embed dist)..."
     Push-Location $web
     try {
         if (Test-Path (Join-Path $web "package-lock.json")) {
             & npm ci
             if ($LASTEXITCODE -ne 0) {
-                Write-GmWarn "npm ci 失败，回退 npm ci --legacy-peer-deps"
+                Write-GmWarn "npm ci failed; falling back to npm ci --legacy-peer-deps"
                 & npm ci --legacy-peer-deps
             }
         } else {
             & npm install --legacy-peer-deps
         }
-        if ($LASTEXITCODE -ne 0) { throw "npm 安装依赖失败" }
+        if ($LASTEXITCODE -ne 0) { throw "npm install of dependencies failed" }
 
         & npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build 失败" }
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
     } finally {
         Pop-Location
     }
 
     if (-not (Test-GmWebDist $RepoRoot)) {
-        throw "构建结束但 $dist\index.html 仍不存在（vite outDir 是否被改动？）"
+        throw "the build finished but $dist\index.html still does not exist (was the vite outDir changed?)"
     }
-    Write-GmOk "Web UI 构建完成"
+    Write-GmOk "Web UI build complete"
 }
 
 function Invoke-GmGoBuild {
     <#
-      .SYNOPSIS 按平台编译，CGO_ENABLED=0 与 CI 一致
+      .SYNOPSIS Builds for the given platform with CGO_ENABLED=0, same as CI
     #>
     param(
         [string]$RepoRoot,

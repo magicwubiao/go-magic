@@ -72,8 +72,8 @@ build-docker:
 	@docker tag $(DOCKER_REPO):$(VERSION) $(DOCKER_REPO):latest
 
 # Cross-platform build
-# 默认不压缩：CI 发布的就是裸二进制（go-magic-<os>-<arch>[.exe]）；
-# 需要 .tar.gz/.zip 与 checksums.txt 时追加: ./scripts/build-cross.sh all --compress --checksum
+# Not compressed by default: CI publishes bare binaries (go-magic-<os>-<arch>[.exe]);
+# to also get .tar.gz/.zip and checksums.txt run: ./scripts/build-cross.sh all --compress --checksum
 build-all:
 	@echo "Building for all common platforms..."
 	@./scripts/build-cross.sh common --dir $(CROSS_DIR)
@@ -84,7 +84,7 @@ build-cross:
 
 
 # Platform-specific builds
-# 命名与 CI 发布资产一致: go-magic-<os>-<arch>[.exe]
+# Naming matches the CI release assets: go-magic-<os>-<arch>[.exe]
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)
@@ -200,9 +200,9 @@ info:
 	@echo "Cross Build Dir: $(CROSS_DIR)"
 	@echo "Docker Repo: $(DOCKER_REPO)"
 	@echo ""
-	@echo "Release platforms (与 CI 产物同名，CI 只构建这些):"
+	@echo "Release platforms (same names as the CI artifacts; CI builds only these):"
 	@echo "  Linux:   amd64, arm64"
 	@echo "  macOS:   amd64, arm64"
 	@echo "  Windows: amd64, arm64"
-	@echo "Extra local-only platforms (不发布, 见 ./scripts/build-cross.sh list):"
+	@echo "Extra local-only platforms (never released; see ./scripts/build-cross.sh list):"
 	@echo "  linux/386, linux/armv7, linux/riscv64, linux/ppc64le, linux/s390x, freebsd/amd64"

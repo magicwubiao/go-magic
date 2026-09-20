@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go-magic 一键安装脚本
+# go-magic one-line install script
 # =============================================================================
-# 安装: curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
+# Install: curl -fsSL https://raw.githubusercontent.com/magicwubiao/go-magic/main/scripts/install.sh | bash
 #
-# 重要：本脚本支持 `curl | bash` 方式执行，此时没有同级目录、无法 source 其它文件，
-#      因此必须自包含。其资产命名规则与 CI (.github/workflows/release.yml) 严格一致：
+# Important: this script supports the `curl | bash` invocation, where there is no
+#      sibling directory and other files cannot be sourced, so it must be
+#      self-contained. Its asset naming rules match CI
+#      (.github/workflows/release.yml) exactly:
 #        go-magic-<os>-<arch>        Linux/macOS
 #        go-magic-<os>-<arch>.exe    Windows
 #        go-magic_amd64.deb          Debian/Ubuntu
-#      CI 只发布 amd64/arm64（Linux/macOS/Windows），不发布 386/armv6/BSD。
+#      CI only releases amd64/arm64 (Linux/macOS/Windows); no 386/armv6/BSD.
 #
-# 安装目录与配置目录是分开的：
-#   --dir     二进制目录   默认 ~/.local/share/go-magic
-#   --bin-dir 命令软链接   默认 ~/.local/bin
-#   配置目录始终是 magic home（默认 ~/.magic），由程序自己创建
+# The install directory and the config directory are separate:
+#   --dir     binary directory  default ~/.local/share/go-magic
+#   --bin-dir command symlinks  default ~/.local/bin
+#   The config directory is always magic home (default ~/.magic), created by the
+#   program itself
 # =============================================================================
 
 set -euo pipefail
@@ -22,25 +25,27 @@ set -euo pipefail
 REPO="magicwubiao/go-magic"
 GITHUB_API="https://api.github.com/repos/${REPO}"
 VERSION="${VERSION:-}"
-# 不在顶层展开 $HOME：HOME 未设置时（docker run 精简环境、env -i、部分 sudo/CI）
-# 顶层展开会让脚本连 --help 都跑不起来，因此改为按需惰性解析
+# $HOME is not expanded at the top level: when HOME is unset (stripped-down
+# docker run environments, env -i, some sudo/CI setups) a top-level expansion
+# makes even --help unrunnable, so it is resolved lazily instead
 INSTALL_DIR="${INSTALL_DIR:-}"
 BIN_DIR="${BIN_DIR:-}"
 INSTALL_METHOD="${INSTALL_METHOD:-binary}"
 
 resolve_install_dirs() {
-    # 只有在需要推断默认目录时才要求 HOME；显式传了 --dir/--bin-dir 就无需 HOME
+    # HOME is only required when the default directories must be inferred;
+    # passing --dir/--bin-dir explicitly needs no HOME
     if [[ -z "$INSTALL_DIR" || -z "$BIN_DIR" ]]; then
         if [[ -z "${HOME:-}" ]]; then
-            error "环境变量 HOME 未设置，无法推断默认安装目录。
-请显式指定: --dir <binary-dir> --bin-dir <bin-dir>"
+            error "the HOME environment variable is not set, so the default install directories cannot be inferred.
+Specify them explicitly: --dir <binary-dir> --bin-dir <bin-dir>"
         fi
     fi
     INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/go-magic}"
     BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 }
 
-# 颜色
+# Colors
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 else
@@ -52,8 +57,8 @@ success() { printf '%b[ OK ]%b %s\n' "$GREEN"  "$NC" "$*"; }
 warn()    { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$*" >&2; }
 error()   { printf '%b[FAIL]%b %s\n' "$RED"    "$NC" "$*" >&2; exit 1; }
 
-# 临时文件用全局变量 + 单一 EXIT trap：
-# 若把 tmp 声明为 local，函数返回后 trap 在 set -u 下会因变量已消失而报错
+# Temp files use a global variable plus a single EXIT trap: if tmp were declared
+# local, the trap would fail under set -u once the variable goes out of scope
 TMP_FILE=""
 cleanup() { [[ -n "$TMP_FILE" && -e "$TMP_FILE" ]] && rm -f "$TMP_FILE"; return 0; }
 trap cleanup EXIT
@@ -65,69 +70,71 @@ new_tmp() {
 
 show_help() {
     cat <<EOF
-go-magic 一键安装脚本
+go-magic one-line install script
 
-用法: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash -s -- [选项]
+Usage: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash -s -- [options]
 
-选项:
-    --method <m>     安装方式: binary | homebrew | docker | apt | scoop (默认: binary)
-    --version <ver>  指定版本，例如 v0.5.19 (默认: 取 GitHub 最新 Release)
-    --dir <path>     二进制安装目录 (默认: ~/.local/share/go-magic)
-    --bin-dir <path> 命令软链接目录 (默认: ~/.local/bin)
-    -h, --help       显示帮助
+Options:
+    --method <m>     install method: binary | homebrew | docker | apt | scoop (default: binary)
+    --version <ver>  version, e.g. v0.5.19 (default: the latest GitHub Release)
+    --dir <path>     binary install directory (default: ~/.local/share/go-magic)
+    --bin-dir <path> command symlink directory (default: ~/.local/bin)
+    -h, --help       show help
 
-安装方式说明:
-    binary    下载预编译二进制（推荐，Linux/macOS/Windows）
-    homebrew  使用 Homebrew (macOS/Linux) —— 需要 tap magicwubiao/tap 已发布
-    docker    拉取 Docker 镜像        —— CI 只构建镜像不推送，故通常不可用
-    apt       Debian/Ubuntu：从 GitHub Release 安装 .deb（仅 amd64）
-    scoop     Windows：通过 Scoop bucket 安装 —— 需要 bucket 已发布
+Install methods:
+    binary    download a prebuilt binary (recommended; Linux/macOS/Windows)
+    homebrew  use Homebrew (macOS/Linux) -- requires the tap magicwubiao/tap to be published
+    docker    pull the Docker image      -- CI only builds the image, never pushes, so usually unavailable
+    apt       Debian/Ubuntu: install the .deb from GitHub Release (amd64 only)
+    scoop     Windows: install via the Scoop bucket -- requires the bucket to be published
 
-注意: homebrew / docker / scoop 依赖外部仓库或镜像先行发布；若失败脚本会给出
-      明确提示与替代方案，此时请使用默认的 binary 方式。
+Note: homebrew / docker / scoop depend on an external repository or image being
+      published first; if they fail the script prints a clear message and an
+      alternative -- use the default binary method in that case.
 
-支持的平台（与 Release 资产一致）:
+Supported platforms (matching the Release assets):
     Linux:   amd64, arm64
     macOS:   amd64, arm64
     Windows: amd64, arm64
 
-配置目录是 magic home（默认 ~/.magic），与二进制安装目录相互独立。
+The config directory is magic home (default ~/.magic), independent of the
+binary install directory.
 EOF
 }
 
 # -----------------------------------------------------------------------------
-# 参数解析
+# Argument parsing
 # -----------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --method)
-            [[ -n "${2:-}" ]] || error "--method 需要参数"
+            [[ -n "${2:-}" ]] || error "--method requires a value"
             INSTALL_METHOD="$2"; shift
             ;;
         --version)
-            [[ -n "${2:-}" ]] || error "--version 需要参数"
+            [[ -n "${2:-}" ]] || error "--version requires a value"
             VERSION="$2"; shift
             ;;
         --dir)
-            [[ -n "${2:-}" ]] || error "--dir 需要参数"
+            [[ -n "${2:-}" ]] || error "--dir requires a value"
             INSTALL_DIR="$2"; shift
             ;;
         --bin-dir)
-            [[ -n "${2:-}" ]] || error "--bin-dir 需要参数"
+            [[ -n "${2:-}" ]] || error "--bin-dir requires a value"
             BIN_DIR="$2"; shift
             ;;
         -h|--help)
             show_help; exit 0
             ;;
         *)
-            error "未知参数: $1（用 --help 查看用法）"
+            error "unknown argument: $1 (use --help for usage)"
             ;;
     esac
     shift
 done
 
 # -----------------------------------------------------------------------------
-# 平台检测 —— 只接受 CI 真实发布过的组合
+# Platform detection -- only combinations CI has actually released are accepted
 # -----------------------------------------------------------------------------
 detect_os() {
     case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
@@ -153,13 +160,14 @@ assert_supported_platform() {
             return 0
             ;;
     esac
-    error "不支持的平台: $os/$arch
-Release 只提供: Linux(amd64,arm64) / macOS(amd64,arm64) / Windows(amd64,arm64)
-其它平台请从源码构建: go install github.com/${REPO}/cmd/magic@latest"
+    error "unsupported platform: $os/$arch
+Release only provides: Linux(amd64,arm64) / macOS(amd64,arm64) / Windows(amd64,arm64)
+For other platforms build from source: go install github.com/${REPO}/cmd/magic@latest"
 }
 
 # -----------------------------------------------------------------------------
-# 版本解析 —— 只信任 git tag（GitHub Release），不硬编码任何兜底版本号
+# Version resolution -- only the git tag (GitHub Release) is trusted; no
+# hardcoded fallback version
 # -----------------------------------------------------------------------------
 resolve_version() {
     if [[ -n "$VERSION" ]]; then
@@ -167,20 +175,20 @@ resolve_version() {
         return 0
     fi
 
-    command -v curl >/dev/null 2>&1 || error "需要 curl 来查询最新版本，或使用 --version 指定版本"
+    command -v curl >/dev/null 2>&1 || error "curl is required to query the latest version, or pass --version"
 
     local json tag auth=()
     [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 
     if ! json="$(curl -fsSL "${auth[@]}" "$GITHUB_API/releases/latest" 2>/dev/null)"; then
-        error "无法获取最新版本（GitHub API 失败，可能是网络或速率限制）。
-请显式指定版本，例如: --version v0.5.19
-或设置 GITHUB_TOKEN 提高速率限制上限。"
+        error "could not fetch the latest version (GitHub API failed; network or rate limit?).
+Specify the version explicitly, e.g. --version v0.5.19
+or set GITHUB_TOKEN to raise the rate limit."
     fi
 
     tag="$(printf '%s' "$json" | tr -d '\r\n' \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    [[ -n "$tag" ]] || error "无法解析最新版本号，请用 --version 显式指定"
+    [[ -n "$tag" ]] || error "could not parse the latest version; pass --version explicitly"
 
     printf '%s\n' "$tag"
 }
@@ -195,24 +203,24 @@ ensure_v_prefix() {
 download() {
     local url="$1" dest="$2"
     if command -v curl >/dev/null 2>&1; then
-        # -f 必须保留：否则 404 的错误页会被当成二进制写进目标文件
+        # -f must stay: otherwise a 404 error page is written into the target as if it were the binary
         curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url"
     elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$dest" "$url"
     else
-        error "未找到 curl 或 wget"
+        error "neither curl nor wget was found"
     fi
 }
 
 # -----------------------------------------------------------------------------
-# binary 安装
+# binary install
 # -----------------------------------------------------------------------------
 install_binary() {
     local os arch tag asset url ext tmp
 
     os="$(detect_os)"
     arch="$(detect_arch)"
-    [[ "$os" == "unsupported" ]] && error "不支持的操作系统: $(uname -s)"
+    [[ "$os" == "unsupported" ]] && error "unsupported operating system: $(uname -s)"
     assert_supported_platform "$os" "$arch"
     resolve_install_dirs
 
@@ -222,41 +230,43 @@ install_binary() {
     asset="go-magic-${os}-${arch}${ext}"
     url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
 
-    info "安装 go-magic ${tag} (${os}/${arch})"
-    info "下载: ${url}"
+    info "installing go-magic ${tag} (${os}/${arch})"
+    info "download: ${url}"
 
     mkdir -p "$INSTALL_DIR" "$BIN_DIR"
     tmp="$(new_tmp magic-install)"
 
-    download "$url" "$tmp" || error "下载失败: $url"
+    download "$url" "$tmp" || error "download failed: $url"
 
-    # 体积自检：真实二进制约 35MB；过小说明拿到的是错误页而非二进制
+    # Size sanity check: a real binary is about 35MB; anything much smaller means
+    # an error page was fetched instead of a binary
     local size
     size="$(wc -c <"$tmp" | tr -d ' ')"
     if [[ "$size" -lt 1048576 ]]; then
-        error "下载内容异常（仅 ${size} 字节），可能该版本没有对应平台的产物: $asset"
+        error "unexpected download content (only ${size} bytes); this version may have no artifact for that platform: $asset"
     fi
 
     install_binary_file "$tmp" "${INSTALL_DIR}/${asset}"
-    success "已安装: ${INSTALL_DIR}/${asset}"
+    success "installed: ${INSTALL_DIR}/${asset}"
 
-    # Windows(msys/git-bash) 下软链接常不可用，直接复制
+    # Symlinks are often unavailable on Windows (msys/git-bash), so copy instead
     if [[ "$os" == "windows" ]]; then
         cp -f "${INSTALL_DIR}/${asset}" "${BIN_DIR}/magic${ext}"
     else
         ln -sf "${INSTALL_DIR}/${asset}" "${BIN_DIR}/magic"
     fi
-    success "命令入口: ${BIN_DIR}/magic${ext}"
+    success "command entry point: ${BIN_DIR}/magic${ext}"
 
     if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
-        warn "${BIN_DIR} 不在 PATH 中，请加入 shell 配置（~/.bashrc 或 ~/.zshrc）:"
+        warn "${BIN_DIR} is not in PATH; add it to your shell config (~/.bashrc or ~/.zshrc):"
         printf '\n  export PATH="%s:$PATH"\n\n' "$BIN_DIR"
     fi
 
     verify_install "${BIN_DIR}/magic${ext}"
 }
 
-# 安装二进制：优先 install(1)，缺失时退化为 cp + chmod（Windows msys 等环境没有 install）
+# Install the binary: prefer install(1), fall back to cp + chmod when it is
+# missing (environments such as Windows msys have no install)
 install_binary_file() {
     local src="$1" dst="$2"
     if command -v install >/dev/null 2>&1; then
@@ -270,14 +280,14 @@ install_binary_file() {
 verify_install() {
     local bin="$1"
     if [[ ! -x "$bin" ]]; then
-        warn "找不到可执行文件 $bin，跳过验证"
+        warn "executable $bin not found; skipping verification"
         return 0
     fi
     local out
     if out="$("$bin" --version 2>/dev/null)"; then
-        success "验证通过: ${out}"
+        success "verification passed: ${out}"
     else
-        warn "安装验证失败，可尝试手动运行: $bin --version"
+        warn "install verification failed; try running it manually: $bin --version"
     fi
 }
 
@@ -288,85 +298,85 @@ verify_install() {
 install_homebrew() {
     local os
     os="$(detect_os)"
-    [[ "$os" == "windows" ]] && error "Windows 不支持 Homebrew，请使用 --method scoop"
+    [[ "$os" == "windows" ]] && error "Homebrew is not supported on Windows; use --method scoop"
 
-    command -v brew >/dev/null 2>&1 || error "未安装 Homebrew，请先安装: https://brew.sh"
+    command -v brew >/dev/null 2>&1 || error "Homebrew is not installed; install it first: https://brew.sh"
 
-    info "添加 Tap magicwubiao/tap"
+    info "adding the tap magicwubiao/tap"
     brew tap magicwubiao/tap
 
-    info "安装 go-magic"
+    info "installing go-magic"
     brew install magicwubiao/tap/go-magic
-    success "Homebrew 安装完成"
+    success "Homebrew install complete"
     command -v magic >/dev/null 2>&1 && verify_install "$(command -v magic)"
 }
 
 install_docker() {
-    command -v docker >/dev/null 2>&1 || error "未找到 Docker: https://docs.docker.com/get-docker/"
+    command -v docker >/dev/null 2>&1 || error "Docker not found: https://docs.docker.com/get-docker/"
 
     local tag
     tag="$(ensure_v_prefix "$(resolve_version)")"
     local image="${REPO}:${tag}"
 
-    info "拉取镜像 ${image}"
-    docker pull "$image" || error "拉取失败：镜像可能尚未发布（docker 镜像由 make docker-push / docker-buildx 发布）"
+    info "pulling image ${image}"
+    docker pull "$image" || error "pull failed: the image may not be published yet (docker images are published by make docker-push / docker-buildx)"
 
-    success "镜像已就绪: ${image}"
-    info "运行: docker run -it --rm -p 8642:8642 -v ~/.magic:/home/magic/.magic ${image}"
+    success "image ready: ${image}"
+    info "run: docker run -it --rm -p 8642:8642 -v ~/.magic:/home/magic/.magic ${image}"
 }
 
 install_apt() {
     local os arch arch_deb tag deb url tmp
     os="$(detect_os)"
     arch="$(detect_arch)"
-    [[ "$os" == "linux" ]] || error "apt 安装仅支持 Linux"
+    [[ "$os" == "linux" ]] || error "the apt method only supports Linux"
 
-    # CI 只构建 amd64 的 .deb
-    [[ "$arch" == "amd64" ]] || error "apt 方式目前仅提供 amd64 的 .deb（当前架构: ${arch}）。
-请改用 --method binary。"
+    # CI only builds the amd64 .deb
+    [[ "$arch" == "amd64" ]] || error "the apt method currently only provides an amd64 .deb (current arch: ${arch}).
+Use --method binary instead."
 
-    command -v apt >/dev/null 2>&1 || error "未找到 apt"
-    command -v sudo >/dev/null 2>&1 || warn "未找到 sudo，后续命令可能需要 root 权限"
+    command -v apt >/dev/null 2>&1 || error "apt not found"
+    command -v sudo >/dev/null 2>&1 || warn "sudo not found; the following commands may need root privileges"
 
     tag="$(ensure_v_prefix "$(resolve_version)")"
     arch_deb="$(dpkg --print-architecture 2>/dev/null || printf 'amd64')"
     deb="go-magic_${arch_deb}.deb"
     url="https://github.com/${REPO}/releases/download/${tag}/${deb}"
 
-    info "下载 ${deb}"
+    info "downloading ${deb}"
     tmp="$(new_tmp go-magic-deb)"
-    download "$url" "$tmp" || error "下载失败: $url"
+    download "$url" "$tmp" || error "download failed: $url"
 
-    info "安装 .deb"
+    info "installing the .deb"
     sudo apt install -y "$tmp"
-    success "APT 安装完成"
+    success "APT install complete"
     verify_install "/usr/bin/magic"
 }
 
 install_scoop() {
     local os
     os="$(detect_os)"
-    [[ "$os" == "windows" ]] || error "Scoop 仅支持 Windows（当前: ${os}）"
+    [[ "$os" == "windows" ]] || error "Scoop only supports Windows (current: ${os})"
 
-    command -v scoop >/dev/null 2>&1 || error "未安装 Scoop，请先安装: https://scoop.sh"
+    command -v scoop >/dev/null 2>&1 || error "Scoop is not installed; install it first: https://scoop.sh"
 
-    info "添加 Scoop bucket"
+    info "adding the Scoop bucket"
     scoop bucket add magic "https://github.com/magicwubiao/scoop-bucket" \
-        || error "无法添加 bucket（magicwubiao/scoop-bucket 可能尚未发布）。
-请改用: --method binary（或在 Windows 上从源码构建 scripts\\windows\\install.bat）"
+        || error "could not add the bucket (magicwubiao/scoop-bucket may not be published yet).
+Use --method binary instead (or build from source on Windows: scripts\\windows\\install.bat)"
 
-    info "安装 go-magic"
+    info "installing go-magic"
     scoop install magic
-    success "Scoop 安装完成"
+    success "Scoop install complete"
 }
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 printf '\n%b╔════════════════════════════════════════╗%b\n' "$GREEN" "$NC"
-printf '%b║      go-magic 一键安装脚本             ║%b\n' "$GREEN" "$NC"
+printf '%b║      go-magic Installer                ║%b\n' "$GREEN" "$NC"
 printf '%b╚════════════════════════════════════════╝%b\n\n' "$GREEN" "$NC"
-info "安装方式: ${INSTALL_METHOD}"
+info "install method: ${INSTALL_METHOD}"
 
 case "$INSTALL_METHOD" in
     binary)   install_binary ;;
@@ -375,18 +385,18 @@ case "$INSTALL_METHOD" in
     docker)   install_docker ;;
     apt)      install_apt ;;
     scoop)    install_scoop ;;
-    *)        error "未知安装方式: ${INSTALL_METHOD}（可选: binary|homebrew|docker|apt|scoop）" ;;
+    *)        error "unknown install method: ${INSTALL_METHOD} (available: binary|homebrew|docker|apt|scoop)" ;;
 esac
 
 printf '\n'
-success "安装完成"
+success "install complete"
 printf '\n'
-info "下一步: magic setup   # 初始化配置（配置目录 ~/.magic）"
-info "        magic chat    # 开始对话"
-info "        magic server  # 启动 Web 控制台"
+info "next: magic setup   # initialize the configuration (config dir ~/.magic)"
+info "      magic chat    # start a conversation"
+info "      magic server  # start the Web console"
 printf '\n'
 if [[ "$INSTALL_METHOD" == "binary" ]]; then
-    info "卸载: 删除 ${INSTALL_DIR} 与 ${BIN_DIR}/magic 即可（配置在 ~/.magic，可按需保留）"
+    info "uninstall: delete ${INSTALL_DIR} and ${BIN_DIR}/magic (the config in ~/.magic is yours to keep)"
     printf '\n'
 fi
 

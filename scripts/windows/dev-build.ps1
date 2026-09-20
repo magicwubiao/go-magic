@@ -1,8 +1,9 @@
-﻿# go-magic 开发构建脚本 (PowerShell, 带调试符号)
-# 用法: .\scripts\windows\dev-build.ps1 [-Version v0.5.19]
+﻿# go-magic development build script (PowerShell, with debug symbols)
+# Usage: .\scripts\windows\dev-build.ps1 [-Version v0.5.19]
 #
-# 与发布构建的区别: 关闭优化并保留调试符号（-gcflags="all=-N -l"），
-# 便于使用 dlv 调试。产物: magic-dev.exe
+# Difference from the release build: optimizations are disabled and debug symbols
+# are kept (-gcflags="all=-N -l"), which makes dlv debugging possible.
+# Artifact: magic-dev.exe
 
 param(
     [string]$Version = "",
@@ -23,30 +24,30 @@ Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host " go-magic Dev Build (with debug)" -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host ""
-Write-GmInfo "项目根目录: $RepoRoot"
-Write-GmInfo "版本: $version"
+Write-GmInfo "repository root: $RepoRoot"
+Write-GmInfo "version: $version"
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-    Write-GmError "未找到 go，请先安装 Go 1.26+: https://go.dev/dl/"
+    Write-GmError "go not found; please install Go 1.26+: https://go.dev/dl/"
     exit 1
 }
 
-# 未提交改动提醒（不影响构建）
+# Uncommitted changes notice (does not affect the build)
 try {
     $status = & git status --porcelain
     if ($status) {
-        Write-GmWarn "存在未提交改动:"
+        Write-GmWarn "uncommitted changes:"
         $status | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
     }
 } catch { }
 
-# Web UI 必须先构建（go:embed dist）
+# The Web UI must be built first (go:embed dist)
 if ($NoWeb) {
     if (-not (Test-GmWebDist $RepoRoot)) {
-        Write-GmError "--NoWeb 但 internal\server\dist\index.html 不存在，go:embed dist 会失败"
+        Write-GmError "-NoWeb given but internal\server\dist\index.html is missing; go:embed dist would fail"
         exit 1
     }
-    Write-GmOk "跳过 Web UI 构建 (-NoWeb)"
+    Write-GmOk "skipping the Web UI build (-NoWeb)"
 } else {
     try {
         Build-GmWebDist -RepoRoot $RepoRoot
@@ -57,7 +58,7 @@ if ($NoWeb) {
 }
 
 $out = "magic-dev.exe"
-Write-GmInfo "编译（调试符号）-> $out"
+Write-GmInfo "building (debug symbols) -> $out"
 
 $previousCgo = $env:CGO_ENABLED
 try {
@@ -71,11 +72,11 @@ try {
 
 if ($code -eq 0 -and (Test-Path $out)) {
     $sizeMb = [math]::Round((Get-Item $out).Length / 1MB, 1)
-    Write-GmOk "构建成功: $out ($sizeMb MB)"
+    Write-GmOk "build succeeded: $out ($sizeMb MB)"
     Write-Host ""
-    Write-Host "运行: .\$out" -ForegroundColor Cyan
-    Write-Host "调试: dlv debug ./cmd/magic" -ForegroundColor Gray
+    Write-Host "Run:   .\$out" -ForegroundColor Cyan
+    Write-Host "Debug: dlv debug ./cmd/magic" -ForegroundColor Gray
 } else {
-    Write-GmError "构建失败"
+    Write-GmError "build failed"
     exit 1
 }

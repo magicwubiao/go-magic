@@ -1,33 +1,34 @@
-# Windows 构建指南
+# Windows Build Guide
 
-## 前置条件
+## Prerequisites
 
-1. **Go 1.26+**（必需）—— <https://go.dev/dl/>
-2. **Node.js 22+**（必需）—— Web UI 通过 `//go:embed dist` 打进二进制，
-   而 `internal/server/dist` 被 `.gitignore` 忽略，所以**干净克隆必须先构建 Web UI**，
-   否则 `go build` 会直接失败：`pattern dist: no matching files found`
-   （下面的脚本都会自动完成这一步）
-3. **Git**（可选，用于版本号检测）
+1. **Go 1.26+** (required) -- <https://go.dev/dl/>
+2. **Node.js 22+** (required) -- the Web UI is embedded into the binary via
+   `//go:embed dist`, and `internal/server/dist` is ignored by `.gitignore`, so
+   **a clean clone must build the Web UI first**, otherwise `go build` fails
+   outright with `pattern dist: no matching files found`
+   (the scripts below all handle this step automatically)
+3. **Git** (optional, used for version detection)
 
-## 快速构建
+## Quick build
 
-### 方式一：PowerShell（推荐）
+### Option 1: PowerShell (recommended)
 
 ```powershell
 git clone https://github.com/magicwubiao/go-magic.git
 cd go-magic
 
-# 构建 Windows amd64 + arm64（自动先建 Web UI）
+# Build Windows amd64 + arm64 (builds the Web UI first)
 .\scripts\windows\build.ps1
 
-# 跨平台构建（与 CI 发布矩阵一致，6 个平台）
+# Cross-platform build (same 6 platforms as the CI release matrix)
 .\scripts\windows\build-all.ps1
 
-# 开发构建（保留调试符号，方便 dlv 调试）
+# Development build (keeps debug symbols, handy for dlv)
 .\scripts\windows\dev-build.ps1
 ```
 
-### 方式二：命令提示符（CMD）
+### Option 2: Command Prompt (CMD)
 
 ```cmd
 git clone https://github.com/magicwubiao/go-magic.git
@@ -35,13 +36,13 @@ cd go-magic
 .\scripts\windows\build.bat
 ```
 
-### 方式三：源码编译并安装到用户目录
+### Option 3: Build from source and install into your user directory
 
 ```cmd
 .\scripts\windows\install.bat
 ```
 
-### 方式四：手动构建
+### Option 4: Manual build
 
 ```cmd
 cd web
@@ -51,57 +52,61 @@ cd ..
 go build -ldflags="-s -w" -o magic.exe .\cmd\magic
 ```
 
-## 产物
+## Artifacts
 
-产物命名与 CI Release 资产**完全一致**，便于和发布的文件对应：
+Artifact names match the CI Release assets **exactly**, which makes them easy to
+map onto the published files:
 
-| 脚本 | 输出 |
+| Script | Output |
 | --- | --- |
-| `build.ps1` / `build.bat` | `build\go-magic-windows-amd64.exe`、`build\go-magic-windows-arm64.exe` |
+| `build.ps1` / `build.bat` | `build\go-magic-windows-amd64.exe`, `build\go-magic-windows-arm64.exe` |
 | `build-all.ps1` | `dist\go-magic-{linux,darwin,windows}-{amd64,arm64}[.exe]` |
 | `dev-build.ps1` | `magic-dev.exe` |
 | `install.bat` | `%USERPROFILE%\go-magic\magic.exe` |
 
-> 版本号来自 `git describe`（与 CI 相同的 git tag 来源）。
-> 可用 `-Version v0.5.19`（PowerShell）或环境变量 `VERSION` 覆盖；不再有硬编码的 `dev`/`1.0.0`。
+> The version comes from `git describe` (the same git tag source as CI).
+> Override it with `-Version v0.5.19` (PowerShell) or the `VERSION` environment
+> variable; there is no hardcoded `dev`/`1.0.0` anymore.
 
-## 使用
+## Usage
 
 ```cmd
-:: 启动 Web 控制台
+:: start the Web console
 build\go-magic-windows-amd64.exe server
 
-:: 启动网关（Telegram / Discord / Teams 等已启用的平台）
+:: start the gateway (Telegram / Discord / Teams and other enabled platforms)
 build\go-magic-windows-amd64.exe gateway start
 
-:: 交互式对话
+:: interactive chat
 build\go-magic-windows-amd64.exe chat
 
-:: 查看帮助 / 版本
+:: help / version
 build\go-magic-windows-amd64.exe --help
 build\go-magic-windows-amd64.exe --version
 ```
 
-配置目录为 `%USERPROFILE%\.magic`，与二进制所在目录无关。
+The config directory is `%USERPROFILE%\.magic`, independent of where the binary lives.
 
-## 常见问题
+## Troubleshooting
 
-### “This app can't run on your PC”
+### "This app can't run on your PC"
 
-架构选错了：64 位系统用 `amd64`，ARM64 设备（如 Surface Pro X）用 `arm64`。
-查看方式：设置 > 系统 > 关于 > 系统类型。
+The wrong architecture was picked: use `amd64` on 64-bit systems and `arm64` on
+ARM64 devices (such as the Surface Pro X).
+To check: Settings > System > About > System type.
 
-### “Go is not recognized”
+### "Go is not recognized"
 
-安装 Go 后重启终端，或临时加入 PATH：
+Restart the terminal after installing Go, or add it to PATH temporarily:
 
 ```powershell
 $env:Path += ";C:\Program Files\Go\bin"
 ```
 
-### 报错 `pattern dist: no matching files found`
+### Error `pattern dist: no matching files found`
 
-`internal/server/dist` 不存在（被 `.gitignore` 忽略）。先构建 Web UI：
+`internal/server/dist` does not exist (it is ignored by `.gitignore`). Build the
+Web UI first:
 
 ```cmd
 cd web
@@ -109,7 +114,8 @@ npm ci
 npm run build
 ```
 
-### 构建时提示 npm / Node 缺失
+### npm / Node reported missing during the build
 
-只影响 Web UI。若只是想验证 Go 代码，可先在前端产物存在的机器上构建，
-或安装 Node.js 22+ 后重试（`build.ps1 -NoWeb` 可在 dist 已存在时跳过前端构建）。
+This only affects the Web UI. If you just want to verify the Go code, build on a
+machine that already has the frontend artifacts, or install Node.js 22+ and retry
+(`build.ps1 -NoWeb` skips the frontend build when dist already exists).

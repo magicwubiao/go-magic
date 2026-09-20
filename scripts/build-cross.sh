@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go-magic 跨平台编译脚本（唯一的平台编译实现）
+# go-magic cross-platform build script (the single platform build implementation)
 # =============================================================================
-# 产物命名与 CI Release 资产严格一致：go-magic-<os>-<arch>[.exe]
+# Artifact names match the CI Release assets exactly: go-magic-<os>-<arch>[.exe]
 #   go-magic-linux-amd64   go-magic-linux-arm64
 #   go-magic-darwin-amd64  go-magic-darwin-arm64
 #   go-magic-windows-amd64.exe   go-magic-windows-arm64.exe
 #
-# 用法:
-#   scripts/build-cross.sh                          # CI 6 平台
-#   scripts/build-cross.sh all                      # CI 6 平台 + 额外平台
-#   scripts/build-cross.sh linux/amd64 darwin/arm64 # 指定平台（也接受 linux-amd64）
-#   scripts/build-cross.sh list                     # 列出平台
+# Usage:
+#   scripts/build-cross.sh                          # the 6 CI platforms
+#   scripts/build-cross.sh all                      # the 6 CI platforms + extras
+#   scripts/build-cross.sh linux/amd64 darwin/arm64 # specific platforms (linux-amd64 works too)
+#   scripts/build-cross.sh list                     # list platforms
 #
-# 选项:
-#   --version <v>   指定版本（默认取 git tag，与 CI 同源）
-#   --dir <path>    输出目录（默认 ./dist）
-#   --compress      额外生成 .tar.gz / .zip
-#   --checksum      生成 checksums.txt
-#   --clean         先清空输出目录
-#   -h, --help      帮助
+# Options:
+#   --version <v>   version (default: git tag, same source as CI)
+#   --dir <path>    output directory (default: ./dist)
+#   --compress      also produce .tar.gz / .zip
+#   --checksum      generate checksums.txt
+#   --clean         empty the output directory first
+#   -h, --help      help
 #
-# 兼容性: Bash 3.2+（macOS 自带 /bin/bash），不使用关联数组 / 空数组展开
+# Compatibility: Bash 3.2+ (the /bin/bash shipped with macOS); no associative
+# arrays and no empty-array expansion
 # =============================================================================
 set -Eeuo pipefail
 
@@ -39,7 +40,8 @@ CHECKSUM="false"
 CLEAN="false"
 COMMAND=""
 
-# 平台列表用换行分隔字符串保存：空数组展开在 bash 3.2 + set -u 下会报 unbound variable
+# The platform list is kept in a newline-separated string: expanding an empty
+# array under bash 3.2 + set -u raises "unbound variable"
 PLATFORMS=""
 PLATFORM_COUNT=0
 FAILED=""
@@ -47,24 +49,24 @@ FAILED_COUNT=0
 
 usage() {
     cat <<EOF
-go-magic 跨平台编译
+go-magic cross-platform build
 
-用法: $0 [命令] [平台...] [选项]
+Usage: $0 [command] [platform...] [options]
 
-命令:
-  common         构建 CI 的 6 个发布平台（默认）
-  all            构建 CI 6 平台 + 额外本地平台
-  list           列出所有可用平台
+Commands:
+  common         build the 6 CI release platforms (default)
+  all            build the 6 CI platforms + the extra local ones
+  list           list all available platforms
 
-选项:
-  --version <v>  版本号（默认: git describe 得到的 git tag）
-  --dir <path>   输出目录（默认: ./dist）
-  --compress     额外生成 .tar.gz / .zip
-  --checksum     生成 checksums.txt
-  --clean        先删除输出目录
-  -h, --help     显示帮助
+Options:
+  --version <v>  version (default: the git tag from git describe)
+  --dir <path>   output directory (default: ./dist)
+  --compress     also produce .tar.gz / .zip
+  --checksum     generate checksums.txt
+  --clean        remove the output directory first
+  -h, --help     show help
 
-示例:
+Examples:
   $0
   $0 all --compress --checksum
   $0 linux/amd64 darwin/arm64 --dir ./build
@@ -73,18 +75,19 @@ EOF
 
 list_platforms() {
     local key
-    printf 'CI 发布平台（与 Release 资产同名）:\n'
+    printf 'CI release platforms (same names as the Release assets):\n'
     for key in "${GM_PLATFORMS_CI[@]}"; do
         printf '  %-16s -> %s\n' "$key" "$(gm_platform_asset "$key")"
     done
-    printf '\n额外本地平台（不发布）:\n'
+    printf '\nExtra local platforms (not released):\n'
     for key in "${GM_PLATFORMS_EXTRA[@]}"; do
         printf '  %-16s -> %s\n' "$key" "$(gm_platform_asset "$key")"
     done
 }
 
 add_platform() {
-    # 去重（用换行分隔的精确匹配，避免重复编译同一平台）
+    # Deduplicate (exact match on the newline-separated list, so the same
+    # platform is never compiled twice)
     if [[ $'\n'"$PLATFORMS"$'\n' == *$'\n'"$1"$'\n'* ]]; then
         return 0
     fi
@@ -97,7 +100,7 @@ $1"
     PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
 }
 
-# linux-amd64 -> linux/amd64（同时兼容已经是 linux/amd64 的写法）
+# linux-amd64 -> linux/amd64 (already-slash form is accepted as well)
 normalize_platform() {
     gm_normalize_platform "$1"
 }
@@ -118,7 +121,7 @@ build_one() {
     local env_str goos goarch goarm asset out
 
     if ! env_str="$(gm_platform_env "$key")"; then
-        gm_error "不支持的平台: $key（用 $0 list 查看可用平台）"
+        gm_error "unsupported platform: $key (use $0 list to see the available platforms)"
         return 1
     fi
 
@@ -132,15 +135,15 @@ build_one() {
     asset="$(gm_platform_asset "$key")"
     out="$OUT_DIR/$asset"
 
-    gm_info "编译 $key -> $asset"
+    gm_info "building $key -> $asset"
 
-    # CGO_ENABLED=0 与 CI 一致（SQLite 使用纯 Go 的 modernc.org/sqlite）
+    # CGO_ENABLED=0 matches CI (SQLite uses the pure-Go modernc.org/sqlite)
     if ! run_go_build "$goos" "$goarch" "$goarm" "$out"; then
-        gm_error "编译失败: $key"
+        gm_error "build failed: $key"
         return 1
     fi
 
-    gm_ok "已生成 $out ($(gm_file_size "$out"))"
+    gm_ok "created $out ($(gm_file_size "$out"))"
 
     if [[ "$COMPRESS" == "true" ]]; then
         create_archive "$out" "$goos"
@@ -159,15 +162,15 @@ create_archive() {
             if command -v zip >/dev/null 2>&1; then
                 ( cd "$dir" && rm -f "${base%.exe}.zip" && zip -q "${base%.exe}.zip" "$base" )
                 rm -f "$bin"
-                gm_ok "已压缩 ${base%.exe}.zip"
+                gm_ok "compressed ${base%.exe}.zip"
             else
-                gm_warn "未安装 zip，跳过 $base 的压缩"
+                gm_warn "zip is not installed; skipping the archive for $base"
             fi
             ;;
         *)
             ( cd "$dir" && tar -czf "${base}.tar.gz" "$base" )
             rm -f "$bin"
-            gm_ok "已压缩 ${base}.tar.gz"
+            gm_ok "compressed ${base}.tar.gz"
             ;;
     esac
 }
@@ -181,11 +184,12 @@ generate_checksums() {
     elif command -v sha256 >/dev/null 2>&1; then
         tool="sha256"
     else
-        gm_warn "找不到 sha256 工具，跳过 checksums"
+        gm_warn "no sha256 tool found; skipping checksums"
         return 1
     fi
 
-    # 必须先排除 checksums.txt 自身，否则重跑会把上一版结果算进去（原脚本的 bug）
+    # checksums.txt itself must be excluded first, otherwise a re-run folds the
+    # previous result into the new one (bug in the original script)
     (
         cd "$OUT_DIR" || exit 1
         rm -f checksums.txt
@@ -193,11 +197,11 @@ generate_checksums() {
         find . -maxdepth 1 -type f ! -name checksums.txt -exec $tool {} + \
             | sed 's# \./# #' | sort -k2 > checksums.txt
     )
-    gm_ok "已生成 $OUT_DIR/checksums.txt"
+    gm_ok "created $OUT_DIR/checksums.txt"
 }
 
 # =============================================================================
-# 参数解析
+# Argument parsing
 # =============================================================================
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -205,11 +209,11 @@ while [[ $# -gt 0 ]]; do
             COMMAND="$1"
             ;;
         --version)
-            [[ -n "${2:-}" ]] || { gm_error "--version 需要参数"; exit 1; }
+            [[ -n "${2:-}" ]] || { gm_error "--version requires a value"; exit 1; }
             VERSION="$2"; shift
             ;;
         --dir)
-            [[ -n "${2:-}" ]] || { gm_error "--dir 需要参数"; exit 1; }
+            [[ -n "${2:-}" ]] || { gm_error "--dir requires a value"; exit 1; }
             OUT_DIR="$2"; shift
             ;;
         --compress) COMPRESS="true" ;;
@@ -217,18 +221,19 @@ while [[ $# -gt 0 ]]; do
         --clean)    CLEAN="true" ;;
         -h|--help)  usage; exit 0 ;;
         -*)
-            gm_error "未知选项: $1"
+            gm_error "unknown option: $1"
             usage
             exit 1
             ;;
         *)
-            # 修正原脚本把第一个位置参数当成 COMMAND 吞掉的 bug
-            # （./build-cross.sh linux-amd64 过去会静默退化成构建 common）
+            # Fixes a bug in the original script that swallowed the first
+            # positional argument as COMMAND (./build-cross.sh linux-amd64 used
+            # to silently degrade to building "common")
             key="$(normalize_platform "$1")"
             if gm_platform_env "$key" >/dev/null 2>&1; then
                 add_platform "$key"
             else
-                gm_error "未知平台: $1（用 $0 list 查看可用平台）"
+                gm_error "unknown platform: $1 (use $0 list to see the available platforms)"
                 exit 1
             fi
             ;;
@@ -241,9 +246,9 @@ if [[ "$COMMAND" == "list" ]]; then
     exit 0
 fi
 
-gm_require_cmd go "请安装 Go 1.26+" || exit 1
+gm_require_cmd go "please install Go 1.26+" || exit 1
 
-# 平台选择：显式平台 > 命令 > 默认 common
+# Platform selection: explicit platforms > command > default "common"
 if [[ "$PLATFORM_COUNT" -eq 0 ]]; then
     case "${COMMAND:-common}" in
         all)
@@ -259,24 +264,25 @@ if [[ "$PLATFORM_COUNT" -eq 0 ]]; then
     esac
 fi
 
-# 安全检查：避免 --dir 为空或指向根目录导致 rm -rf 灾难
+# Safety check: an empty --dir or one pointing at the root would make rm -rf a disaster
 if [[ -z "$OUT_DIR" || "$OUT_DIR" == "/" || ${#OUT_DIR} -lt 3 ]]; then
-    gm_error "输出目录不合法: '$OUT_DIR'"
+    gm_error "invalid output directory: '$OUT_DIR'"
     exit 1
 fi
 
 if [[ "$CLEAN" == "true" ]]; then
-    gm_info "清空输出目录 $OUT_DIR"
+    gm_info "emptying the output directory $OUT_DIR"
     rm -rf "$OUT_DIR"
 fi
 mkdir -p "$OUT_DIR"
 
 # =============================================================================
-# 开始构建
+# Build
 # =============================================================================
-gm_step "go-magic ${VERSION} —— 共 ${PLATFORM_COUNT} 个平台 -> $OUT_DIR"
+gm_step "go-magic ${VERSION} -- ${PLATFORM_COUNT} platform(s) -> $OUT_DIR"
 
-# 干净克隆上没有 internal/server/dist 时 go build 会直接失败，这里先兜底构建
+# On a clean clone internal/server/dist is missing and go build fails outright,
+# so build it here as a fallback
 gm_ensure_web_dist || exit 1
 
 while IFS= read -r key; do
@@ -294,15 +300,15 @@ if [[ "$CHECKSUM" == "true" ]]; then
     generate_checksums || true
 fi
 
-gm_step "构建结果"
-gm_info "版本:   $VERSION"
-gm_info "输出:   $OUT_DIR"
-gm_info "成功:   $((PLATFORM_COUNT - FAILED_COUNT))/${PLATFORM_COUNT}"
+gm_step "build result"
+gm_info "version:  $VERSION"
+gm_info "output:   $OUT_DIR"
+gm_info "succeeded: $((PLATFORM_COUNT - FAILED_COUNT))/${PLATFORM_COUNT}"
 
 if [[ "$FAILED_COUNT" -gt 0 ]]; then
-    gm_error "失败平台: $FAILED"
+    gm_error "failed platforms: $FAILED"
     exit 1
 fi
 
 ls -1 "$OUT_DIR" 2>/dev/null | sed 's/^/  /'
-gm_ok "全部完成"
+gm_ok "all done"

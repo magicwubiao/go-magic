@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go-magic 构建入口（仓库根目录）
+# go-magic build entry point (repository root)
 # =============================================================================
-# 这里曾经是第三份独立的构建实现（与 scripts/build.sh、scripts/build-cross.sh
-# 逻辑互相矛盾：把版本号兜底成一个假的固定版本、gzip 之后还在打印已被删除的路径、
-# 用 grep -P 在 macOS 上直接失败……）。
+# This used to be a third, independent build implementation that contradicted
+# scripts/build.sh and scripts/build-cross.sh (it fell back to a fake fixed
+# version, printed a path that had already been deleted after gzipping, and used
+# grep -P, which fails outright on macOS ...).
 #
-# 现在它只是一个薄封装，真正实现在 scripts/ 下，保证只有一份构建逻辑：
-#   scripts/lib/common.sh     版本/平台/资产名（单一事实源）
-#   scripts/build-cross.sh    平台编译
-#   scripts/build.sh          web / 平台 / docker / release 编排
+# It is now a thin wrapper; the real implementation lives under scripts/, so
+# there is only one build logic:
+#   scripts/lib/common.sh     version/platform/asset naming (single source of truth)
+#   scripts/build-cross.sh    per-platform compilation
+#   scripts/build.sh          web / platform / docker / release orchestration
 #
-# 兼容旧命令名:
-#   ./build.sh cli     -> scripts/build.sh current   （当前平台）
+# Legacy command names are still accepted:
+#   ./build.sh cli     -> scripts/build.sh current   (current platform)
 #   ./build.sh web     -> scripts/build.sh web
 #   ./build.sh docker  -> scripts/build.sh docker
 #   ./build.sh all     -> scripts/build.sh all
 #   ./build.sh release -> scripts/build.sh release
 #
-# 其它参数（--version/--dir/--compress/--checksum/--clean 等）原样透传。
-# 注意: 旧版本的 `all` 会顺带执行 docker build，现在不会（避免无 docker 环境时中断）。
+# All other arguments (--version/--dir/--compress/--checksum/--clean etc.) are
+# passed through unchanged.
+# Note: the old `all` also ran docker build; it no longer does (so a machine
+# without docker does not abort the build).
 # =============================================================================
 set -Eeuo pipefail
 
@@ -55,31 +59,31 @@ case "$TARGET" in
         ;;
     -h|--help|help)
         cat <<EOF
-go-magic 构建入口（转发到 scripts/build.sh）
+go-magic build entry point (forwards to scripts/build.sh)
 
-用法: ./build.sh [命令] [平台...] [选项]
+Usage: ./build.sh [command] [platform...] [options]
 
-命令:
-  all        构建 Web UI + CI 6 个发布平台（默认）
-  cli        只构建当前平台（旧名，等价 scripts/build.sh current）
-  web        只构建 Web UI
-  docker     构建 Docker 镜像
-  release    构建 + 打包 + 创建 GitHub Release
-  clean      清理 dist/ 与 build/
-  list       列出所有可用平台
+Commands:
+  all        build the Web UI + the 6 CI release platforms (default)
+  cli        build the current platform only (legacy name; same as scripts/build.sh current)
+  web        build the Web UI only
+  docker     build the Docker image
+  release    build + package + create a GitHub Release
+  clean      remove dist/ and build/
+  list       list all available platforms
 
-选项:
+Options:
   --version <v>  --dir <path>  --compress  --checksum  --clean
-  --no-web      跳过 Web UI 构建
-  --publish     release 时直接发布（默认 draft）
-  --push        docker 时 buildx 多架构并推送
+  --no-web      skip the Web UI build
+  --publish     publish on release (default: draft)
+  --push        build multi-arch with buildx and push (docker)
 
-等价实现: ./scripts/build.sh --help
+Equivalent: ./scripts/build.sh --help
 EOF
         ;;
     *)
-        echo "[FAIL] 未知目标: $TARGET" >&2
-        echo "用法: ./build.sh [all|cli|web|docker|release|clean|list]" >&2
+        echo "[FAIL] unknown target: $TARGET" >&2
+        echo "usage: ./build.sh [all|cli|web|docker|release|clean|list]" >&2
         exit 1
         ;;
 esac
