@@ -72,17 +72,31 @@ func probeBinary(name string, args ...string) error {
 func (b *LocalBackend) IsAvailable() bool { return true }
 
 func (b *LocalBackend) Health() error {
-	return probeBinary("echo", "health check")
+	// `echo` is a shell builtin on Windows (cmd.exe) and on POSIX shells; there
+	// is no echo.exe on PATH, so probing it as a binary made this backend report
+	// an unhealthy local terminal on every Windows host. Run it through the
+	// host shell instead.
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd, err := shellCommand(ctx, "echo health check")
+	if err != nil {
+		return err
+	}
+	return cmd.Run()
 }
 
 func (b *LocalBackend) Execute(ctx context.Context, cmd string, workDir string, timeout time.Duration) (*ExecutionResult, error) {
 	start := time.Now()
 
-	var execCmd *exec.Cmd
-	if strings.Contains(cmd, "powershell") || strings.Contains(cmd, "cmd.exe") {
-		execCmd = exec.CommandContext(ctx, "powershell", "-Command", cmd)
-	} else {
-		execCmd = exec.CommandContext(ctx, "bash", "-c", cmd)
+	// Always go through the host shell. This used to hard-code `bash -c` unless
+	// the command text happened to contain "powershell"/"cmd.exe", so every
+	// command failed on a Windows host without Git Bash. On Windows the resolved
+	// shell *is* PowerShell, so the removed special case is no longer needed:
+	// a command that literally invokes powershell/cmd.exe still works, it is
+	// simply started by PowerShell as a child process.
+	execCmd, err := shellCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
 	}
 
 	if workDir != "" {
@@ -1089,8 +1103,31 @@ func (t *ProcessTool) runProcess(ctx context.Context, args map[string]interface{
 	}
 	workDir, _ := args["workdir"].(string)
 
-	execCmd := exec.Command("bash", "-c", command)
-	execCmd.Dir = workDir
+	// nil ctx on purpose: a background job must outlive the tool call that
+	// started it. The shell is resolved per host (PowerShell on Windows) instead
+	// of hard-coding `bash`, which does not exist on a stock Windows host.
+	execCmd, err := shellCommand(nil, command)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve the working directory the way every other tool does. Previously
+	// the value was passed straight to exec.Cmd, so a *relative* workdir was
+	// interpreted against the server's own CWD (not the session workdir), and an
+	// omitted one started the job in whatever directory the server was launched
+	// from.
+	switch {
+	case workDir != "":
+		resolved, rerr := resolvePath(ctx, workDir)
+		if rerr != nil {
+			return nil, fmt.Errorf("invalid workdir: %w", rerr)
+		}
+		execCmd.Dir = resolved
+	default:
+		if base := normalizeToolPath(WorkDirFromContext(ctx)); base != "" {
+			execCmd.Dir = base
+		}
+	}
 	if execCmd.Dir == "" {
 		if cwd, err := os.Getwd(); err == nil {
 			execCmd.Dir = cwd
@@ -1158,6 +1195,8 @@ func (t *ProcessTool) runProcess(ctx context.Context, args map[string]interface{
 		"pid":        info.PID,
 		"status":     info.Status,
 		"command":    info.Command,
+		"workdir":    info.WorkDir,
+		"shell":      shellName(),
 		"note":       "Started in background. Use action=log to read output, action=poll/wait to check completion, action=kill to stop.",
 	}, nil
 }

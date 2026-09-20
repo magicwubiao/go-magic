@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -73,9 +74,22 @@ func DefaultLintOptions() LintOptions {
 
 // LintFile performs syntax checking on a file after writing.
 // Returns issues (non-blocking) or nil if no issues found.
+//
+// This runs on every write, so every branch must stay cheap and must not build
+// a project: .go shells out to `gofmt -e` (~40ms), JS to `node --check`
+// (~100ms), the data formats are parsed in-process. Type-checking a TypeScript
+// project costs ~20s and therefore lives in the lsp_diagnostics tool instead.
+//
+// Extensions without a cheap checker (.ts/.vue/...) intentionally return nil —
+// they are a "not checked here" signal, not a claim that the file is clean; use
+// `lint` or `lsp_diagnostics` for those.
 func LintFile(filePath string) ([]string, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
+	case ".go":
+		return lintGo(filePath)
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return lintJavaScript(filePath)
 	case ".py":
 		return lintPython(filePath)
 	case ".json":
@@ -89,29 +103,57 @@ func LintFile(filePath string) ([]string, error) {
 	}
 }
 
-// lintPython checks Python syntax using py_compile
-func lintPython(path string) ([]string, error) {
-	// Check if python3 is available
-	cmd := exec.Command("which", "python3")
-	if err := cmd.Run(); err != nil {
-		// python3 not available, skip
-		return nil, nil
+// lintGo reports Go syntax errors using the compiler's own parser front-end
+// (`gofmt -e`), which works per file and needs no module context.
+func lintGo(path string) ([]string, error) {
+	if _, err := exec.LookPath("gofmt"); err != nil {
+		return nil, nil // Go toolchain absent: nothing to report
 	}
 
-	// Run py_compile to check syntax
-	cmd = exec.Command("python3", "-m", "py_compile", path)
+	cmd := exec.Command("gofmt", "-e", path)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		output := strings.TrimSpace(stderr.String())
-		if output == "" {
-			output = fmt.Sprintf("python syntax error (exit code %d)", cmd.ProcessState.ExitCode())
+		if output := strings.TrimSpace(stderr.String()); output != "" {
+			return strings.Split(output, "\n"), nil
 		}
-		return []string{output}, nil
 	}
 
 	return nil, nil
+}
+
+// lintJavaScript reports JavaScript syntax errors using node's parser.
+//
+// Syntax only, on purpose: eslint/type checking is `lint`'s or lsp_diagnostics'
+// job. node parses both CommonJS and ES modules, so this does not produce the
+// "Cannot use import statement outside a module" false positive that a naive
+// checker emits on modern sources.
+func lintJavaScript(path string) ([]string, error) {
+	line, message, ok := nodeCheckSyntax(path)
+	if !ok || message == "" {
+		return nil, nil
+	}
+	if line > 0 {
+		return []string{fmt.Sprintf("%s (line %d)", message, line)}, nil
+	}
+	return []string{message}, nil
+}
+
+// lintPython reports Python syntax errors using the interpreter's own parser.
+//
+// The previous implementation gated on `exec.Command("which", "python3")`, which
+// can never succeed on Windows (there is no `which` binary), so Python files
+// were silently never checked there.
+func lintPython(path string) ([]string, error) {
+	line, message, ok := pythonSyntaxCheck(path)
+	if !ok || message == "" {
+		return nil, nil
+	}
+	if line > 0 {
+		return []string{fmt.Sprintf("%s (line %d)", message, line)}, nil
+	}
+	return []string{message}, nil
 }
 
 // lintJSON checks JSON syntax using Go's encoding/json
@@ -868,12 +910,28 @@ func runBlack(ctx context.Context, dir string, autoFormat bool) ([]LintResult, e
 	}}, nil
 }
 
-// findNodeBinary finds a node binary in local node_modules or globally
+// findNodeBinary locates a CLI in a project's node_modules/.bin, then on PATH.
+//
+// On Windows the entry in .bin is the extension-less shell script with an
+// executable wrapper (foo.cmd) next to it, and only the wrapper can be started by
+// Go's exec. Returning the bare script made every local linter invocation fail
+// with "not a valid Win32 application" — and because the callers treat a failed
+// run as "no issues", eslint/prettier silently did nothing on Windows.
 func findNodeBinary(dir, binary string) string {
-	// Check local node_modules
-	localPath := filepath.Join(dir, "node_modules", ".bin", binary)
-	if fileExists(localPath) {
-		return localPath
+	binDir := filepath.Join(dir, "node_modules", ".bin")
+	candidates := []string{filepath.Join(binDir, binary)}
+	if runtime.GOOS == "windows" {
+		candidates = []string{
+			filepath.Join(binDir, binary+".cmd"),
+			filepath.Join(binDir, binary+".exe"),
+			filepath.Join(binDir, binary+".bat"),
+			filepath.Join(binDir, binary),
+		}
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c
+		}
 	}
 
 	// Check global
@@ -944,34 +1002,45 @@ func (t *LintTool) Execute(ctx context.Context, params map[string]interface{}) (
 		opts.StrictMode = strictMode
 	}
 
-	// Check if path is a file or directory
-	info, err := os.Stat(path)
+	// Resolve against the session workdir, exactly like the file tools do.
+	// Previously the raw argument went straight to os.Stat/exec, so a relative
+	// path was resolved against the *server process* CWD: whenever the agent's
+	// working directory differed from where the server was launched,
+	// `lint src/app.ts` failed with
+	// "failed to stat path: ... The system cannot find the path specified."
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat path: %w", err)
+		return nil, err
+	}
+
+	// Check if path is a file or directory
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %q (resolved to %q): %w", path, absPath, err)
 	}
 
 	var results []LintResult
 	if info.IsDir() {
-		results, err = RunLinter(ctx, path, opts)
+		results, err = RunLinter(ctx, absPath, opts)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		// Single file linting
-		issues, err := LintFile(path)
+		issues, err := LintFile(absPath)
 		if err != nil {
 			return nil, err
 		}
 		lintIssues := make([]LintIssue, len(issues))
 		for i, msg := range issues {
 			lintIssues[i] = LintIssue{
-				FilePath: path,
+				FilePath: absPath,
 				Message:  msg,
 				Level:    LintLevelError,
 			}
 		}
 		results = []LintResult{{
-			FilePath: path,
+			FilePath: absPath,
 			Issues:   lintIssues,
 			Success:  len(lintIssues) == 0,
 		}}
@@ -1018,9 +1087,18 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 		return nil, fmt.Errorf("path parameter is required")
 	}
 
-	info, err := os.Stat(path)
+	// Same workdir-relative resolution as the lint tool: without it a relative
+	// path was resolved against the server process CWD and the formatter either
+	// failed to stat the path or (worse, because it looked successful) rewrote
+	// files in the wrong tree.
+	absPath, err := resolvePath(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat path: %w", err)
+		return nil, err
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %q (resolved to %q): %w", path, absPath, err)
 	}
 
 	language := ""
@@ -1031,7 +1109,7 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 	if language == "" {
 		// Auto-detect language
 		if info.IsDir() {
-			projectType := DetectProjectType(path)
+			projectType := DetectProjectType(absPath)
 			switch projectType {
 			case ProjectTypeGo:
 				language = "go"
@@ -1043,7 +1121,7 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 				language = "python"
 			}
 		} else {
-			ext := strings.ToLower(filepath.Ext(path))
+			ext := strings.ToLower(filepath.Ext(absPath))
 			switch ext {
 			case ".go":
 				language = "go"
@@ -1063,23 +1141,23 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 	case "go":
 		if info.IsDir() {
 			cmd := exec.CommandContext(ctx, "gofmt", "-w", ".")
-			cmd.Dir = path
+			cmd.Dir = absPath
 			err := cmd.Run()
 			if err != nil {
 				return nil, fmt.Errorf("gofmt failed: %w", err)
 			}
 		} else {
-			cmd := exec.CommandContext(ctx, "gofmt", "-w", path)
+			cmd := exec.CommandContext(ctx, "gofmt", "-w", absPath)
 			err := cmd.Run()
 			if err != nil {
 				return nil, fmt.Errorf("gofmt failed: %w", err)
 			}
 		}
 	case "rust":
-		cmd := exec.CommandContext(ctx, "rustfmt", path)
+		cmd := exec.CommandContext(ctx, "rustfmt", absPath)
 		if info.IsDir() {
 			cmd = exec.CommandContext(ctx, "cargo", "fmt")
-			cmd.Dir = path
+			cmd.Dir = absPath
 		}
 		err := cmd.Run()
 		if err != nil {
@@ -1087,13 +1165,13 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 		}
 	case "python":
 		if _, err := exec.LookPath("black"); err == nil {
-			cmd := exec.CommandContext(ctx, "black", path)
+			cmd := exec.CommandContext(ctx, "black", absPath)
 			err := cmd.Run()
 			if err != nil {
 				return nil, fmt.Errorf("black failed: %w", err)
 			}
 		} else if _, err := exec.LookPath("autopep8"); err == nil {
-			cmd := exec.CommandContext(ctx, "autopep8", "--in-place", "--aggressive", path)
+			cmd := exec.CommandContext(ctx, "autopep8", "--in-place", "--aggressive", absPath)
 			err := cmd.Run()
 			if err != nil {
 				return nil, fmt.Errorf("autopep8 failed: %w", err)
@@ -1102,13 +1180,21 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 			return nil, fmt.Errorf("no Python formatter found (install black or autopep8)")
 		}
 	case "javascript", "typescript":
-		prettierCmd := findNodeBinary(path, "prettier")
+		// node_modules lives at the project root, not next to the source file and
+		// not in "<file>/node_modules". The path used to be handed to
+		// findNodeBinary as if it were a directory, so a locally installed
+		// prettier was never found.
+		binRoot := absPath
+		if !info.IsDir() {
+			binRoot = filepath.Dir(absPath)
+		}
+		prettierCmd := findNodeBinary(findNodeModulesRoot(binRoot), "prettier")
 		if prettierCmd == "" {
 			return nil, fmt.Errorf("prettier not found")
 		}
-		cmd := exec.CommandContext(ctx, prettierCmd, "--write", path)
+		cmd := exec.CommandContext(ctx, prettierCmd, "--write", absPath)
 		if info.IsDir() {
-			cmd.Dir = path
+			cmd.Dir = absPath
 		}
 		err := cmd.Run()
 		if err != nil {
@@ -1120,7 +1206,7 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 
 	return map[string]interface{}{
 		"success":  true,
-		"path":     path,
+		"path":     absPath,
 		"language": language,
 	}, nil
 }

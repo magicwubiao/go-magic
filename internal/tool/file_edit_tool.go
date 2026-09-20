@@ -309,7 +309,10 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		result["match"] = matchInfo
 	}
 
-	if issues, _ := LintFile(path); len(issues) > 0 {
+	// Post-write lint must use the resolved path: LintFile shells out to gofmt /
+	// node for .go/.js files, and a relative path would be resolved against the
+	// server process CWD (or worse, hit a same-named file in another tree).
+	if issues, _ := LintFile(absPath); len(issues) > 0 {
 		result["lint_warning"] = fmt.Sprintf("Lint issues found:\n%s", strings.Join(issues, "\n"))
 	}
 

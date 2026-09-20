@@ -1,17 +1,19 @@
 package tool
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // FileChangeVerifier tracks file changes and produces a verification footer
@@ -235,21 +237,21 @@ func NewLSPDiagnosticTool(workDir string) *LSPDiagnosticTool {
 		workDir: workDir,
 	}
 	tool.name = "lsp_diagnostics"
-	tool.description = "Run LSP semantic diagnostics on a file to check for type errors, undefined symbols, missing imports, etc. Use this after writing or editing code files to catch errors immediately."
+	tool.description = "Run semantic/syntax diagnostics on one source file to catch errors right after writing or editing it. Reliable for go, python, javascript and typescript. Returns only findings for the requested file; unsupported languages return an explicit error instead of a false all-clear."
 	tool.schema = map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"file_path": map[string]interface{}{
 				"type":        "string",
-				"description": "Absolute or relative path to the file to diagnose",
+				"description": "Path to the file to diagnose (relative to the working directory or absolute)",
 			},
 			"language": map[string]interface{}{
 				"type":        "string",
-				"description": "Programming language (go, python, typescript, javascript, rust, etc.)",
-				"enum":        []string{"go", "python", "typescript", "javascript", "rust", "java", "c", "cpp"},
+				"description": "Optional; auto-detected from the file extension when omitted. Only languages with a working checker are listed — other languages are rejected with an error rather than silently reported as clean.",
+				"enum":        []string{"go", "python", "typescript", "javascript"},
 			},
 		},
-		"required": []string{"file_path", "language"},
+		"required": []string{"file_path"},
 	}
 	return tool
 }
@@ -267,38 +269,84 @@ type LSPDiagnostic struct {
 type LSPDiagnosticResult struct {
 	File         string          `json:"file"`
 	Language     string          `json:"language"`
+	Checker      string          `json:"checker,omitempty"`
 	Diagnostics  []LSPDiagnostic `json:"diagnostics"`
 	ErrorCount   int             `json:"error_count"`
 	WarningCount int             `json:"warning_count"`
 	Summary      string          `json:"summary"`
+	Note         string          `json:"note,omitempty"`
 }
+
+// supportedDiagnosticLanguages is both the dispatch domain and the text used in
+// the "unsupported language" error, so the two cannot drift apart.
+var supportedDiagnosticLanguages = []string{"go", "python", "typescript", "javascript"}
 
 // Execute runs LSP diagnostics on the specified file
 func (t *LSPDiagnosticTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-	filePath, _ := params["file_path"].(string)
+	rawPath, _ := params["file_path"].(string)
 	language, _ := params["language"].(string)
 
-	if filePath == "" {
+	if strings.TrimSpace(rawPath) == "" {
 		return nil, fmt.Errorf("file_path is required")
 	}
+
+	// Resolve before touching the file system. The previous implementation read
+	// the raw argument, so a relative path was resolved against the server
+	// process CWD — and a failed read became a *diagnostic* ("Cannot read
+	// file: ..."), which made a path mistake look like a code error the agent
+	// then tried to "fix". Fail loudly instead.
+	filePath, err := t.resolveFile(ctx, rawPath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat %q (resolved to %q): %w", rawPath, filePath, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%q is a directory; lsp_diagnostics checks a single file (use the `lint` tool for a project)",
+			filePath)
+	}
+
 	if language == "" {
 		language = detectLanguage(filePath)
 	}
+	language = normalizeLanguage(language)
 
 	result := &LSPDiagnosticResult{
 		File:     filePath,
 		Language: language,
 	}
 
-	// Run language-specific diagnostics
+	var note string
 	switch language {
 	case "go":
-		result.Diagnostics = runGoDiagnostics(t.workDir, filePath)
+		result.Diagnostics, result.Checker, note, err = runGoDiagnostics(ctx, filePath)
 	case "python":
-		result.Diagnostics = runPythonDiagnostics(filePath)
+		result.Diagnostics, result.Checker, note, err = runPythonDiagnostics(filePath)
+	case "javascript":
+		result.Diagnostics, result.Checker, note, err = runJSDiagnostics(filePath)
+	case "typescript":
+		var projectTotal int
+		result.Diagnostics, projectTotal, result.Checker, note, err = runTSProjectCheck(ctx, filePath)
+		if err == nil && projectTotal > len(result.Diagnostics) {
+			note += fmt.Sprintf("; %d more diagnostic(s) exist elsewhere in the project",
+				projectTotal-len(result.Diagnostics))
+		}
 	default:
-		return nil, fmt.Errorf("unsupported language: %s", language)
+		// An unimplemented language used to be answered with
+		// "unsupported language: javascript" while the schema still advertised
+		// javascript/rust/java/c/cpp as valid inputs. The schema now lists only
+		// what is implemented, and this error stays explicit so the agent can
+		// switch tools instead of retrying.
+		return nil, fmt.Errorf(
+			"unsupported language %q: this build runs diagnostics for %s only (use the `lint` tool or execute_command for anything else)",
+			language, strings.Join(supportedDiagnosticLanguages, ", "))
 	}
+	if err != nil {
+		return nil, err
+	}
+	result.Note = note
 
 	for _, d := range result.Diagnostics {
 		switch d.Severity {
@@ -319,6 +367,34 @@ func (t *LSPDiagnosticTool) Execute(ctx context.Context, params map[string]inter
 	return result, nil
 }
 
+// resolveFile resolves a caller-supplied path the way the file tools do.
+//
+// The constructor-time workDir is only a fallback: it is a snapshot taken when
+// the registry was built, and the live session workdir (injected per turn) is
+// the authoritative one.
+func (t *LSPDiagnosticTool) resolveFile(ctx context.Context, p string) (string, error) {
+	if WorkDirFromContext(ctx) == "" && t.workDir != "" {
+		ctx = WithWorkDir(ctx, t.workDir)
+	}
+	return resolvePath(ctx, p)
+}
+
+// normalizeLanguage folds the aliases a model may pass into canonical names.
+func normalizeLanguage(lang string) string {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "go", "golang":
+		return "go"
+	case "python", "py", "python3":
+		return "python"
+	case "typescript", "ts", "tsx", "vue":
+		return "typescript"
+	case "javascript", "js", "jsx", "mjs", "cjs", "node":
+		return "javascript"
+	default:
+		return strings.ToLower(strings.TrimSpace(lang))
+	}
+}
+
 func detectLanguage(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	langMap := map[string]string{
@@ -326,8 +402,11 @@ func detectLanguage(path string) string {
 		".py":   "python",
 		".ts":   "typescript",
 		".tsx":  "typescript",
+		".vue":  "typescript",
 		".js":   "javascript",
 		".jsx":  "javascript",
+		".mjs":  "javascript",
+		".cjs":  "javascript",
 		".rs":   "rust",
 		".java": "java",
 		".c":    "c",
@@ -340,71 +419,192 @@ func detectLanguage(path string) string {
 	return "unknown"
 }
 
-func runGoDiagnostics(workDir, filePath string) []LSPDiagnostic {
-	// Use go vet for Go diagnostics
-	// In production, this would use gopls LSP server
-	diagnostics := make([]LSPDiagnostic, 0)
+// --- per-language diagnostic runners ---
+//
+// Every runner returns (diagnostics, checker, note, error). No error with zero
+// diagnostics means "checked and clean"; a non-nil error means "could not be
+// checked" and is surfaced to the caller, so an unchecked file is never
+// presented as a clean one.
 
-	// Simple syntax check: try to parse the file
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		diagnostics = append(diagnostics, LSPDiagnostic{
-			File: filePath, Line: 1, Column: 1,
-			Severity: "error", Message: fmt.Sprintf("Cannot read file: %v", err),
-		})
-		return diagnostics
+// goDiagRe matches the "<file>:<line>:<col>: <message>" shape shared by gofmt
+// and go vet.
+var goDiagRe = regexp.MustCompile(`^(.+?):(\d+):(\d+):\s*(.*)$`)
+
+// goVetTimeout bounds `go vet`, which has to load and type-check a whole package.
+const goVetTimeout = 90 * time.Second
+
+// runGoDiagnostics checks a Go file with the real toolchain:
+//
+//  1. `gofmt -e` for syntax errors — per file, fast, no module required.
+//  2. `go vet <package>` for the type/semantic errors gopls would surface,
+//     skipped while the file does not parse (vet cannot parse it either).
+//
+// The previous implementation only looked for lines containing both "TODO" and
+// "FIXME" and called that diagnostics, while claiming "In production, this would
+// use gopls".
+func runGoDiagnostics(ctx context.Context, filePath string) ([]LSPDiagnostic, string, string, error) {
+	if _, err := exec.LookPath("gofmt"); err != nil {
+		return nil, "", "", fmt.Errorf("gofmt not found on PATH; install the Go toolchain to check Go files")
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Check for common Go errors
-		if strings.Contains(trimmed, "TODO") && strings.Contains(trimmed, "FIXME") {
-			diagnostics = append(diagnostics, LSPDiagnostic{
-				File: filePath, Line: i + 1, Column: 1,
-				Severity: "hint", Message: "TODO/FIXME marker found",
-			})
+	syntax := make([]LSPDiagnostic, 0)
+	cmd := exec.CommandContext(ctx, "gofmt", "-e", filePath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		syntax = parseGoDiagnostics(stderr.String(), filePath, "")
+		for i := range syntax {
+			syntax[i].Severity = "error"
 		}
 	}
-
-	return diagnostics
-}
-
-func runPythonDiagnostics(filePath string) []LSPDiagnostic {
-	diagnostics := make([]LSPDiagnostic, 0)
-
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		diagnostics = append(diagnostics, LSPDiagnostic{
-			File: filePath, Line: 1, Column: 1,
-			Severity: "error", Message: fmt.Sprintf("Cannot read file: %v", err),
-		})
-		return diagnostics
+	if len(syntax) > 0 {
+		return syntax, "gofmt", "syntax errors found: `go vet` was skipped until the file parses", nil
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Check for common Python issues
-		if strings.HasPrefix(trimmed, "import ") && strings.Contains(trimmed, ",") {
-			parts := strings.Split(trimmed[len("import "):], ",")
-			for _, p := range parts {
-				p = strings.TrimSpace(p)
-				if strings.Contains(p, " as ") && strings.Count(p, " as ") > 1 {
-					diagnostics = append(diagnostics, LSPDiagnostic{
-						File: filePath, Line: i + 1, Column: 1,
-						Severity: "warning", Message: "Multiple 'as' in single import",
-					})
-				}
+	moduleRoot, pkgRel := goModuleContext(filePath)
+	if moduleRoot == "" {
+		return nil, "gofmt", "file is not inside a Go module: only syntax was checked", nil
+	}
+
+	pattern := "."
+	if pkgRel != "" {
+		pattern = "./" + filepath.ToSlash(pkgRel)
+	}
+
+	vctx, cancel := context.WithTimeout(ctx, goVetTimeout)
+	defer cancel()
+
+	vet := exec.CommandContext(vctx, "go", "vet", pattern)
+	vet.Dir = moduleRoot
+	var out bytes.Buffer
+	vet.Stdout = &out
+	vet.Stderr = &out
+	runErr := vet.Run()
+
+	if vctx.Err() == context.DeadlineExceeded {
+		return nil, "go vet", "", fmt.Errorf("`go vet %s` in %s timed out after %s", pattern, moduleRoot, goVetTimeout)
+	}
+	if runErr == nil {
+		return nil, "go vet", "", nil
+	}
+
+	diags := parseGoDiagnostics(out.String(), filePath, moduleRoot)
+	if len(diags) == 0 {
+		// The package failed to build but nothing was attributed to this file
+		// (the error is in a sibling file, or the failure is environmental).
+		// Report it as an error rather than a clean result for this file.
+		return nil, "go vet", "", fmt.Errorf("`go vet %s` in %s failed with no diagnostic in %s; output:\n%s",
+			pattern, moduleRoot, filepath.Base(filePath), utils.Truncate(strings.TrimSpace(out.String()), 1200))
+	}
+	for i := range diags {
+		diags[i].Severity = "error"
+	}
+	return diags, "go vet", "", nil
+}
+
+// parseGoDiagnostics keeps only the `<file>:<line>:<col>: <msg>` entries that
+// belong to targetFile. base resolves relative references: `go vet` prints paths
+// relative to the directory it ran in.
+func parseGoDiagnostics(out, targetFile, base string) []LSPDiagnostic {
+	var diags []LSPDiagnostic
+	for _, raw := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(raw)
+		if l == "" {
+			continue
+		}
+		m := goDiagRe.FindStringSubmatch(l)
+		if m == nil {
+			// Position-less lines (package headers, "exit status 1") belong to
+			// the package, not to this file.
+			continue
+		}
+		ref := m[1]
+		if !filepath.IsAbs(ref) && base != "" {
+			ref = filepath.Join(base, ref)
+		}
+		if !sameFile(ref, targetFile, base) {
+			continue
+		}
+		line, _ := strconv.Atoi(m[2])
+		col, _ := strconv.Atoi(m[3])
+		diags = append(diags, LSPDiagnostic{
+			File:     targetFile,
+			Line:     line,
+			Column:   col,
+			Severity: "warning",
+			Message:  m[4],
+		})
+	}
+	return diags
+}
+
+// goModuleContext walks up to the enclosing go.mod and returns the module root
+// plus the package directory relative to it ("" when the file sits at the root).
+func goModuleContext(filePath string) (moduleRoot string, pkgRel string) {
+	fileDir := filepath.Dir(filePath)
+	for dir := fileDir; ; {
+		if pathExists(filepath.Join(dir, "go.mod")) {
+			rel, err := filepath.Rel(dir, fileDir)
+			if err != nil || rel == "." {
+				rel = ""
 			}
+			return dir, rel
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", ""
+		}
+		dir = parent
 	}
-
-	return diagnostics
 }
 
-// need sync import
-var _ = io.EOF
-var _ = json.Marshal
-var _ = url.QueryEscape
-var _ = http.StatusOK
+// runPythonDiagnostics parses a Python file with the real interpreter (see
+// pythonSyntaxCheck). The previous implementation scanned the text for shapes
+// like "multiple 'as' in a single import" and never ran a parser at all.
+func runPythonDiagnostics(filePath string) ([]LSPDiagnostic, string, string, error) {
+	line, message, ok := pythonSyntaxCheck(filePath)
+	if !ok {
+		return nil, "", "", fmt.Errorf(
+			"no python interpreter found on PATH (tried python3, python, py); install Python to check .py files")
+	}
+	if message == "" {
+		return nil, "python", "checked syntax only; use the `lint` tool (pylint/flake8) for style and lint rules", nil
+	}
+	if line == 0 {
+		line = 1
+	}
+	return []LSPDiagnostic{{
+		File:     filePath,
+		Line:     line,
+		Column:   1,
+		Severity: "error",
+		Message:  message,
+	}}, "python", "", nil
+}
+
+// runJSDiagnostics syntax-checks a JavaScript file with `node --check`.
+//
+// Syntax only, deliberately. Project-wide rules (eslint) and type checking
+// belong to the `lint` tool or to a .ts file, and `node --check` parses both
+// CommonJS and ES modules, so it never invents the "Cannot use import statement
+// outside a module" error that a naive checker produces on modern sources.
+func runJSDiagnostics(filePath string) ([]LSPDiagnostic, string, string, error) {
+	line, message, ok := nodeCheckSyntax(filePath)
+	if !ok {
+		return nil, "", "", fmt.Errorf("node not found on PATH; install Node.js to check JavaScript files")
+	}
+	if line == 0 && message == "" {
+		return nil, "node --check", "checked syntax only; use the `lint` tool for eslint rules and `lsp_diagnostics` on a .ts file for type errors", nil
+	}
+	if message == "" {
+		message = "syntax error"
+	}
+	return []LSPDiagnostic{{
+			File:     filePath,
+			Line:     line,
+			Column:   1,
+			Severity: "error",
+			Message:  message,
+		}}, "node --check",
+		"checked syntax only; eslint rules and type errors are not covered here", nil
+}
