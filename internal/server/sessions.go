@@ -900,6 +900,14 @@ func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types
 	s.chatQueuesMu.Unlock()
 
 	if dupItem := queue.findDuplicate(content); dupItem != nil {
+		// 命中查重：这一条不再入队。但上面的 workerLive 已经置位，若此刻确实
+		// 没有存活的 worker（spawnWorker 为真），必须照常把它拉起来——否则
+		// workerLive 会永远停在 true 而没有任何 goroutine 消费队列，后续消息
+		// 只会一直堆在 items 里，用户看到的就是"消息长时间排队、最后没人执行"。
+		// worker 起来后发现队列里已有那条重复项，照常执行它即可（语义正确）。
+		if spawnWorker {
+			safeGo(func() { s.runQueue(sessionID, queue) })
+		}
 		return dupItem, true
 	}
 	// enqueue 内部会 cond.Signal 唤醒正在等待的 worker。

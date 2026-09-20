@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -64,6 +67,11 @@ const (
 	turnIdleTeardown = 60 * time.Second
 	// queuedContentPreview 是 /running 里回给前端的排队消息预览长度。
 	queuedContentPreview = 120
+	// queueWaitWarnThreshold 是"排队超过多久就记一条 WARN"的阈值。用户报告过
+	// "发新消息有时候长时间排队"，但事后无从判断是前一个回合拖了太久、还是
+	// worker 该醒没醒——这条日志把等待时长与当时队列深度留在日志里，下次
+	// 复现就能直接定位，而不是靠猜。
+	queueWaitWarnThreshold = 5 * time.Second
 )
 
 // turnEvent 是回合向 SSE 连接广播的一条事件。data 是已经序列化好的整帧
@@ -604,7 +612,14 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		q.cancel = turnCancel
 		q.mu.Unlock()
 
-		finalOps := s.runQueuedTurn(sessionID, q, turnCtx, item)
+		// 排队时长观测：等待明显偏长时留一条 WARN（含当时的队列深度），
+		// 用于区分"前一个回合跑太久"和"worker 没被唤醒"这两类原因。
+		if waited := time.Since(item.createdAt); waited > queueWaitWarnThreshold {
+			log.Warnf("[queue] session %s: turn %s waited %s in queue before starting (pending=%d)",
+				sessionID, item.id, waited.Truncate(time.Millisecond), q.pendingCount())
+		}
+
+		finalOps := s.runQueuedTurnSafely(sessionID, q, turnCtx, item)
 
 		turnCancel()
 
@@ -757,6 +772,31 @@ func (s *Server) keepAlive(ctx context.Context, writeSSE func(string) bool, q *s
 // ============================================================================
 // Turn execution
 // ============================================================================
+
+// runQueuedTurnSafely 执行一个回合并把 panic 收敛在回合边界内。
+//
+// 为什么必须收敛：runQueue 的收尾（running 翻负、cancel 复位、残留引导回收、
+// done 广播）写在执行回合之后。一旦回合内部 panic，收尾整段被跳过，于是
+// q.running 会**永远停在 true**、q.cancel 不再复位——/running 一直回答
+// "有回合在跑"，前端据此把新消息显示成"排队中"并等一个永远不会来的
+// stream_started，而实际上没有任何 worker 在干活。用户看到的现象正是
+// "对话早就执行完/停止过了，发新消息却长时间排队"。
+//
+// 历史上这条路径真的被触发过（Cortex 禁用时 Trigger 为 nil，每个回合都
+// panic），而 safeGo 的 recover 只保证进程不死，不负责让队列状态复原。
+//
+// panic 被恢复后按"回合已结束但结果异常"处理：记日志、向监听者广播一条
+// error 事件，随后收尾照常执行（done 依旧会广播，排队中的下一条能接上）。
+func (s *Server) runQueuedTurnSafely(sessionID string, queue *sessionQueue, ctx context.Context, item *queuedTurn) (ops []types.FileOp) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("[server] PANIC in queued turn %s (session %s): %v\n%s",
+				item.id, sessionID, r, debug.Stack())
+			queue.broadcast(turnEvent{err: fmt.Errorf("internal error while running the turn: %v", r)})
+		}
+	}()
+	return s.runQueuedTurn(sessionID, queue, ctx, item)
+}
 
 // runQueuedTurn 执行队列中的一条消息。这是改造前 handleSessionStream 里
 // "跑 agent"那段逻辑的搬迁，差别只在于：

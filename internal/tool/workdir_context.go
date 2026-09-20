@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -29,7 +30,11 @@ func WithWorkDir(ctx context.Context, workDir string) context.Context {
 	if workDir == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, workDirKey{}, workDir)
+	// 会话里存下来的工作目录可能是畸形 Windows 形态（历史数据里出现过
+	// "/D:/project/..."，见 internal/server/fs.go 的 normalizeFSPath）。在注入
+	// 点归一化，让所有下游使用者（工具路径解析、shell 的 cwd、文件变更跟踪）
+	// 拿到同一个规范形态，而不是各自处理。
+	return context.WithValue(ctx, workDirKey{}, normalizeToolPath(workDir))
 }
 
 // WithWorkDirUserSet marks whether the working directory was explicitly
@@ -112,8 +117,13 @@ func defaultFileSecurity() FileSecurityConfig {
 func resolvePath(ctx context.Context, path string) (string, error) {
 	security := FileSecurityFromContext(ctx)
 
+	// 归一化 Windows 路径变体（/D:/a、/d/a、引号包裹、正斜杠盘符）后再判定
+	// 绝对/相对，否则 filepath.IsAbs 会把 "/D:/a/b" 当成相对路径、把
+	// "d:\a\b" 当成工作目录外的路径——两者都会让"用绝对路径操作文件"失败。
+	path = normalizeToolPath(path)
+
 	if !security.Enabled {
-		if workDir := WorkDirFromContext(ctx); workDir != "" && !filepath.IsAbs(path) {
+		if workDir := normalizeToolPath(WorkDirFromContext(ctx)); workDir != "" && !filepath.IsAbs(path) {
 			path = filepath.Join(workDir, path)
 		}
 		return filepath.Abs(path)
@@ -123,7 +133,9 @@ func resolvePath(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("path cannot be empty")
 	}
 
-	baseWorkDir := WorkDirFromContext(ctx)
+	// 工作目录本身也可能是畸形形态（历史会话里存过 "/D:/project/..."），
+	// 归一化后再参与拼接与边界判定，避免把工作目录内的绝对路径误判成越界。
+	baseWorkDir := normalizeToolPath(WorkDirFromContext(ctx))
 
 	// Note: Session-level directory isolation is already handled upstream:
 	//   - If the user selected a directory explicitly, it is used as-is.
@@ -190,11 +202,91 @@ func checkPathEscape(absPath, baseDir string) error {
 	absPath = filepath.Clean(absPath)
 	baseAbs = filepath.Clean(baseAbs)
 
-	if !strings.HasPrefix(absPath, baseAbs+string(filepath.Separator)) && absPath != baseAbs {
-		return fmt.Errorf("path escape detected: path '%s' is outside working directory '%s'", absPath, baseAbs)
+	if !withinDir(baseAbs, absPath) {
+		// 报错信息要能让模型自己纠正：说清工作目录，并给出"改用相对路径"的
+		// 具体建议。只回一句 "path escape detected" 时，模型往往原样重试同一个
+		// 绝对路径，于是同一个工具调用连续失败。
+		return fmt.Errorf(
+			"path escape detected: path '%s' is outside working directory '%s'; "+
+				"retry with a path relative to the working directory (for example \"subdir/file.txt\") or an absolute path inside it",
+			absPath, baseAbs)
 	}
 
 	return nil
+}
+
+// withinDir 判定 target 是否等于 dir、或位于 dir 之下。
+//
+// Windows 路径大小写不敏感，因此比较在 Windows 上不区分大小写：此前这里用
+// 区分大小写的 strings.HasPrefix/!= 比较，把 "d:\proj\x"（模型常写小写盘符）
+// 或任何大小写不一致的写法误判为"越界"，而 os.Open/WriteFile 本身完全能处理
+// 这些路径——用户看到的就是"工具用绝对路径操作文件失败"，改用相对路径却正常。
+// 非 Windows 平台保持原本的严格比较。
+func withinDir(dir, target string) bool {
+	dir = filepath.Clean(dir)
+	target = filepath.Clean(target)
+	if runtime.GOOS == "windows" {
+		dir = strings.ToLower(dir)
+		target = strings.ToLower(target)
+	}
+	if target == dir {
+		return true
+	}
+	return strings.HasPrefix(target, dir+string(filepath.Separator))
+}
+
+// normalizeToolPath 归一化模型/前端常见的 Windows 路径变体，使其能被
+// filepath.IsAbs 正确识别为绝对路径：
+//
+//	"D:/a/b"    → "D:\a\b"   （正斜杠写法）
+//	"/D:/a/b"   → "D:\a\b"   （浏览器 URL 处理产物，见 server.resolveFSPath）
+//	"/d/a/b"    → "D:\a\b"   （Git-Bash 风格盘符路径；仅当字面路径不存在时）
+//	"\"D:\a\b\"" → "D:\a\b"  （模型把路径连同引号一起传进来）
+//
+// 非 Windows 平台、以及非盘符形态的路径原样返回。这是工具侧与
+// internal/server/fs.go 的 normalizeFSPath 对齐的修复：文件面板早就修过这个
+// 问题，但 agent 工具链没有，于是"文件面板能打开、工具却打不开同一路径"。
+func normalizeToolPath(p string) string {
+	if p == "" {
+		return p
+	}
+	// 去掉成对包裹的引号（模型经常把路径写成 "\"D:\\a\\b.txt\""）。
+	if len(p) >= 2 {
+		if (p[0] == '"' && p[len(p)-1] == '"') || (p[0] == '\'' && p[len(p)-1] == '\'') {
+			p = p[1 : len(p)-1]
+		}
+	}
+	if p == "" || runtime.GOOS != "windows" {
+		return p
+	}
+
+	// "/D:/a" / "\D:\a"：多余的前导分隔符 + 盘符
+	if len(p) >= 3 && (p[0] == '/' || p[0] == '\\') && p[2] == ':' {
+		return filepath.FromSlash(p[1:])
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		return filepath.FromSlash(p)
+	}
+
+	// "/d/a"（Git-Bash 风格）：映射成盘符路径，但仅当目标（或其父目录）确实
+	// 存在于该盘符上时才认——否则保留字面含义，避免在"工作目录下真有个 d
+	// 目录"的场景里把路径悄悄指到 D:\。
+	if len(p) >= 4 && p[0] == '/' && p[2] == '/' && isASCIILetter(p[1]) {
+		mapped := strings.ToUpper(p[1:2]) + ":" + filepath.FromSlash(p[2:])
+		if pathExists(mapped) || pathExists(filepath.Dir(mapped)) {
+			return mapped
+		}
+	}
+	return p
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func checkSymlink(path string) error {
@@ -220,14 +312,11 @@ func checkPathAllowed(absPath string, security FileSecurityConfig) error {
 	}
 
 	for _, allowed := range security.AllowedPaths {
-		allowedAbs, err := filepath.Abs(allowed)
+		allowedAbs, err := filepath.Abs(normalizeToolPath(allowed))
 		if err != nil {
 			continue
 		}
-		allowedAbs = filepath.Clean(allowedAbs)
-		absPathClean := filepath.Clean(absPath)
-
-		if absPathClean == allowedAbs || strings.HasPrefix(absPathClean, allowedAbs+string(filepath.Separator)) {
+		if withinDir(allowedAbs, absPath) {
 			return nil
 		}
 	}
@@ -245,19 +334,13 @@ func checkPathBlocked(absPath, baseWorkDir string, security FileSecurityConfig) 
 	// 工作目录内的路径始终允许访问(已通过 checkPathEscape 校验未越界)，
 	// 即使工作目录本身位于被阻止的路径下也不例外。
 	if baseWorkDir != "" {
-		baseAbs, err := filepath.Abs(baseWorkDir)
-		if err == nil {
-			baseAbs = filepath.Clean(baseAbs)
-			if absPathClean == baseAbs || strings.HasPrefix(absPathClean, baseAbs+string(filepath.Separator)) {
-				return nil
-			}
+		if baseAbs, err := filepath.Abs(baseWorkDir); err == nil && withinDir(baseAbs, absPathClean) {
+			return nil
 		}
 	}
 
 	for _, blocked := range security.BlockedPaths {
-		blocked = filepath.Clean(blocked)
-
-		if absPathClean == blocked || strings.HasPrefix(absPathClean, blocked+string(filepath.Separator)) {
+		if withinDir(normalizeToolPath(blocked), absPathClean) {
 			return fmt.Errorf("path '%s' is blocked", absPath)
 		}
 	}
