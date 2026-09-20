@@ -222,6 +222,7 @@ magic config reset     # 恢复默认
   "provider": "deepseek",               // 当前 Provider
   "model": "deepseek-chat",             // 已废弃，建议用 providers.<x>.models[0]
   "chat_mode": "chat",                  // magic chat 的默认模式：chat | coding
+  "browser_profile_dir": "~/.magic/browser-profile",  // 自动化浏览器持久 profile 目录，留空=每次全新临时 profile（无 cookie/登录态）
 
   "providers": {
     "deepseek": {
@@ -308,6 +309,9 @@ magic config reset     # 恢复默认
 | `GO_MAGIC_CORS_ORIGINS` | Dashboard 额外允许的 CORS 源，逗号分隔 | ✅ |
 | `MAGIC_SKILL_DIR` | 覆盖技能目录 | ✅ |
 | `MAGIC_SESSION_ID` | 指定会话 ID | ✅ |
+| `BROWSER_HEADLESS` | 强制浏览器以无头（headless）模式运行，`true` 开启（沙箱环境下默认开启） | ✅ |
+| `BROWSER_PROFILE_DIR` | 覆盖自动化浏览器持久 profile 目录，留空=每次全新临时 profile | ✅ |
+| `CHROME_PATH` / `EDGE_PATH` | 指定 Chrome / Edge 浏览器可执行文件路径 | ✅ |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | 各家 API Key | ✅ |
 | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | 网关 Token | ✅ |
 

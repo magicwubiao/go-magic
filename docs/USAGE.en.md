@@ -224,6 +224,7 @@ magic config reset     # restore defaults
   "provider": "deepseek",               // current provider
   "model": "deepseek-chat",             // deprecated; prefer providers.<x>.models[0]
   "chat_mode": "chat",                  // default mode for magic chat: chat | coding
+  "browser_profile_dir": "~/.magic/browser-profile",  // persistent browser profile dir; empty = fresh temp profile each start (no cookies/login)
 
   "providers": {
     "deepseek": {
@@ -310,6 +311,9 @@ magic config reset     # restore defaults
 | `GO_MAGIC_CORS_ORIGINS` | extra CORS origins allowed by the Dashboard, comma-separated | ✅ |
 | `MAGIC_SKILL_DIR` | override the skills directory | ✅ |
 | `MAGIC_SESSION_ID` | bind to a specific session ID | ✅ |
+| `BROWSER_HEADLESS` | force the automation browser to run in headless mode, `true` enables (enabled by default in sandboxed environments) | ✅ |
+| `BROWSER_PROFILE_DIR` | override the automation browser persistent profile directory; empty = fresh temp profile each run | ✅ |
+| `CHROME_PATH` / `EDGE_PATH` | specify the Chrome / Edge executable path | ✅ |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | per-provider API keys | ✅ |
 | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | gateway tokens | ✅ |
 
