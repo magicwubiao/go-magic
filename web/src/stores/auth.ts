@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as authApi from '@/api/auth'
+import { getAuthToken, setAuthToken } from '@/api/client'
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(localStorage.getItem('auth_token'))
+  const token = ref<string | null>(getAuthToken())
   const configured = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -17,7 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
       // If auth is not configured, clear any stale token
       if (!status.configured && token.value) {
         token.value = null
-        localStorage.removeItem('auth_token')
+        setAuthToken(null)
       }
     } catch {
       configured.value = false
@@ -30,38 +31,42 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await authApi.setupAuth(password)
       token.value = res.token
-      localStorage.setItem('auth_token', res.token)
+      setAuthToken(res.token)
       configured.value = true
       return true
     } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Setup failed'
-      error.value = errMsg
+      error.value = e instanceof Error ? e.message : 'Setup failed'
       return false
     } finally {
       loading.value = false
     }
   }
 
-  async function login(password: string): Promise<boolean> {
+  async function login(password: string, remember = false): Promise<boolean> {
     loading.value = true
     error.value = null
     try {
-      const res = await authApi.login(password)
+      const res = await authApi.login(password, remember)
       token.value = res.token
-      localStorage.setItem('auth_token', res.token)
+      setAuthToken(res.token)
       return true
     } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Login failed'
-      error.value = errMsg
+      error.value = e instanceof Error ? e.message : 'Login failed'
       return false
     } finally {
       loading.value = false
     }
   }
 
-  function logout(): void {
+  async function logout(): Promise<void> {
+    try {
+      // Invalidate the session server-side so the token can't be reused.
+      await authApi.logout()
+    } catch {
+      // best-effort: still clear the local token even if the network call fails
+    }
     token.value = null
-    localStorage.removeItem('auth_token')
+    setAuthToken(null)
   }
 
   return {

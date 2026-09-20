@@ -1627,5 +1627,11 @@ export default {
     setPasswordButton: 'Set Password & Login',
     firstTimeSetup: 'First time setup — choose a password to protect your dashboard',
     passwordMinLength: 'Password must be at least 8 characters',
+    rememberMe: 'Remember me (stay logged in 30 days)',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
+    loginFailed: 'Incorrect password, please try again',
+    tooManyAttempts: 'Too many attempts, please try again later',
+    loginSuccess: 'Login successful',
   },
 }

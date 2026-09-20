@@ -20,9 +20,15 @@ export async function setupAuth(password: string): Promise<AuthResponse> {
   })
 }
 
-export async function login(password: string): Promise<AuthResponse> {
+export async function login(password: string, remember = false): Promise<AuthResponse> {
   return request('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, remember }),
+  })
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+  return request('/auth/logout', {
+    method: 'POST',
   })
 }

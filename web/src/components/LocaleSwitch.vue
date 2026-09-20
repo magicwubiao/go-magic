@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import { NDropdown } from 'naive-ui'
 import { locales, setLocale, getLocale } from '../locales'
 
+const props = withDefaults(defineProps<{ light?: boolean }>(), { light: false })
+
 const currentLocale = computed(() => getLocale())
 
 function handleSelect(code: string) {
@@ -16,7 +18,7 @@ function handleSelect(code: string) {
     @select="handleSelect"
     trigger="click"
   >
-    <div class="locale-switch">
+    <div class="locale-switch" :class="{ light }">
       <span class="locale-name">{{ locales.find(l => l.code === currentLocale)?.name }}</span>
     </div>
   </n-dropdown>
@@ -33,9 +35,19 @@ function handleSelect(code: string) {
   color: rgb(51, 54, 57);
 }
 
+.locale-switch.light {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
 .locale-switch:hover {
   background-color: rgba(0, 0, 0, 0.05);
   color: #18a058;
+}
+
+.locale-switch.light:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
 }
 
 .locale-name {

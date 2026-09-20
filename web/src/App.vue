@@ -152,9 +152,9 @@ function handleMenuClick(key: string) {
   }
 }
 
-function handleLogout() {
+async function handleLogout() {
   useChatStore().cleanup()
-  authStore.logout()
+  await authStore.logout()
   router.push('/login')
 }
 

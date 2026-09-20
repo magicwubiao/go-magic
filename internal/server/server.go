@@ -126,8 +126,10 @@ type Server struct {
 	actionsMu sync.RWMutex
 
 	// Auth
-	authToken string
-	authMu    sync.RWMutex
+	authToken    string
+	authMu       sync.RWMutex
+	sessions     *webSessionManager
+	loginLimiter *loginRateLimiter
 
 	// CORS allowed origins (empty list => default to local-only)
 	allowedOrigins []string
@@ -511,6 +513,8 @@ Your working directory is: %s
 		actions:              make(map[string]*ActionStatus),
 		sessionTokens:        make(map[string][3]int),
 		authToken:            authToken,
+		sessions:             newWebSessionManagerFile(filepath.Join(magicHome, ".web_sessions.json")),
+		loginLimiter:         newLoginRateLimiter(10*time.Minute, 5),
 		allowedOrigins:       allowedOrigins,
 		shareTokens:          make(map[string]*ShareToken),
 		metricsMgr:           metrics.NewMetrics(),
@@ -1281,6 +1285,14 @@ func (s *Server) Start(port int) error {
 				return
 			}
 
+			// 1) Live session token (modern, supports logout/expiry).
+			if st := bearerToken(r); s.sessions.validate(st) {
+				h(w, r)
+				return
+			}
+
+			// 2) Legacy static token (the bcrypt hash itself) for backward
+			//    compatibility with clients that logged in before sessions.
 			authHeader := r.Header.Get("Authorization")
 			if subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+token)) == 1 {
 				h(w, r)
@@ -1305,6 +1317,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/auth/status", withCORS(s.handleAuthStatus))
 	mux.HandleFunc("/api/auth/setup", withCORS(s.handleAuthSetup))
 	mux.HandleFunc("/api/auth/login", withCORS(s.handleAuthLogin))
+	mux.HandleFunc("/api/auth/logout", withCORS(requireAuth(s.handleAuthLogout)))
 	mux.HandleFunc("/api/auth/reset", withCORS(requireAuth(s.handleAuthReset)))
 
 	// Base API handler for CORS preflight

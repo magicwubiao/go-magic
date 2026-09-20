@@ -1627,6 +1627,12 @@ export default {
     setPasswordButton: '设置密码并登录',
     firstTimeSetup: '首次使用 — 设置密码以保护您的仪表板',
     passwordMinLength: '密码至少需要 8 个字符',
+    rememberMe: '记住我（30 天免登录）',
+    showPassword: '显示密码',
+    hidePassword: '隐藏密码',
+    loginFailed: '密码错误，请重试',
+    tooManyAttempts: '尝试次数过多，请稍后再试',
+    loginSuccess: '登录成功',
   },
 
 }
