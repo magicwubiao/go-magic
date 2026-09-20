@@ -8,12 +8,13 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
-// TestGuideInboxRoundTrip 验证收件箱 FIFO、排水后清空、空白文本忽略。
+// TestGuideInboxRoundTrip 验证收件箱 FIFO、排水后清空、空白文本忽略，
+// 以及 id 在两种排水视图下的一致性。
 func TestGuideInboxRoundTrip(t *testing.T) {
 	a := &Agent{}
-	a.InjectGuide("先做 A")
-	a.InjectGuide("   ") // 空白：必须被忽略
-	a.InjectGuide("再做 B")
+	a.InjectGuide("g1", "先做 A")
+	a.InjectGuide("g2", "   ") // 空白：必须被忽略
+	a.InjectGuide("g3", "再做 B")
 
 	got := a.DrainGuides()
 	if len(got) != 2 || got[0] != "先做 A" || got[1] != "再做 B" {
@@ -21,6 +22,17 @@ func TestGuideInboxRoundTrip(t *testing.T) {
 	}
 	if again := a.DrainGuides(); len(again) != 0 {
 		t.Fatalf("second drain = %#v, want empty", again)
+	}
+
+	// 带 id 的排水视图：server 收尾回收依赖它把「未消费的引导」还原成
+	// 与落库消息同 id 的排队回合（收件箱是一次性排水，两个视图不可叠加使用）。
+	a.InjectGuide("g4", "收尾补充")
+	items := a.DrainGuideItems()
+	if len(items) != 1 || items[0].ID != "g4" || items[0].Text != "收尾补充" {
+		t.Fatalf("item drain = %#v, want [{g4 收尾补充}]", items)
+	}
+	if left := a.DrainGuides(); len(left) != 0 {
+		t.Fatalf("drain after item drain = %#v, want empty", left)
 	}
 }
 
@@ -131,7 +143,7 @@ func TestDrainGuidesIntoHistory(t *testing.T) {
 		{Role: "user", Content: "起点"},
 		{Role: "assistant", Content: "回复"},
 	}}
-	a.InjectGuide("补充说明")
+	a.InjectGuide("g1", "补充说明")
 	a.drainGuidesIntoHistory()
 
 	if len(a.history) != 3 {

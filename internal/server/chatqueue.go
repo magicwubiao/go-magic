@@ -633,7 +633,7 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		//      必须把残留回合算进去，否则 SSE 连接会在还有后续回合时被
 		//      前端/转发层误导关闭——下一回合零监听者，delta 全走"只落库
 		//      不推送"的兜底（血债：排队消息执行完却不刷新）。
-		var leftovers []string
+		var leftovers []agent.GuideItem
 		q.mu.Lock()
 		wasCancelled := q.cancelRequested
 		q.running = false
@@ -642,42 +642,16 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		q.cancelRequested = false
 		q.turns++
 		if a := s.lookupAgent(sessionID); a != nil {
-			leftovers = a.DrainGuides()
+			leftovers = a.DrainGuideItems()
 			if wasCancelled {
 				leftovers = nil // 用户已停止：未消费的引导一并丢弃
 			}
 		}
 		q.mu.Unlock()
 
-		for _, g := range leftovers {
-			g = strings.TrimSpace(g)
-			if g == "" {
-				continue
-			}
-			leftoverRun := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
-			if s.sessionStore != nil {
-				if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
-					leftoverRun.workDir = sess.WorkDir
-					leftoverRun.workDirUserSet = sess.WorkDirUserSet
-				}
-			}
-			// 引导残留转成普通排队回合（内容不带 [Guide] 前缀——对模型而言
-			// 它就是一条新的用户消息）。enqueueChatTurn 的查重会把与队列中
-			// 已有项完全相同的残留合并掉。
-			//
-			// 已知边界（issue 4）：残留回收发生在「回合已结束、引导尚未被模型
-			// 消费」的时刻，而前端在注入那一刻就已把引导气泡转正（user_<id>）。
-			// 于是用户视角会出现「已转正的气泡 + 新排队项」并存——引导从
-			// 即时指引退化为一条待执行的普通消息，气泡会被后置排队项「打回」。
-			// 这是注入即消费与收尾回收两条路径的固有语义差：注入时无法预知
-			// 回合是否会及时消费。彻底消除该跳变需要服务端在回收时向客户端
-			// 发送「引导被回收为排队项」的专用事件，由前端撤销已转正的气泡；
-			// 当前以低频边界场景接受此轻微跳变，暂不实现。
-			s.enqueueChatTurn(sessionID, g, nil, nil, leftoverRun, "")
-		}
-
 		// done 广播（自 runQueuedTurn 上移至此，见上）。
-		pending := q.pendingCount()
+		pending := s.reclaimLeftoverGuides(sessionID, leftovers)
+
 		doneData, _ := json.Marshal(map[string]interface{}{
 			"done":     true,
 			"file_ops": finalOps,
@@ -692,6 +666,42 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		})
 		q.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true, queueIdle: pending == 0})
 	}
+}
+
+// reclaimLeftoverGuides 把「本回合没来得及消费的引导」转成新的排队回合，
+// 返回入队后的待执行条数（done 帧的 queue_depth 据此计算；入队在 done 广播
+// **之前**完成，否则前端/转发层会在还有后续回合时误判队列已空而关连接）。
+//
+// id 复用是这里的关键：引导注入时已按 id 落库并广播（用户气泡已经出现），
+// 若回收出的回合换一个新 id 重新落库，会话历史里就会出现两条内容完全相同的
+// user 消息——用户看到的就是"引导发了两次"。因此回收项沿用引导自己的 id：
+//   - server 侧：persistUserMessage 按 id 幂等，同 id 只保留一条；
+//   - 前端侧：promoteQueuedToMessage 的键是 user_<id>，与引导气泡同键，
+//     于是"回收成排队项"这件事不会凭空多出一个气泡（见 web/src/stores/chat.ts）。
+func (s *Server) reclaimLeftoverGuides(sessionID string, leftovers []agent.GuideItem) int {
+	for _, li := range leftovers {
+		g := strings.TrimSpace(li.Text)
+		if g == "" {
+			continue
+		}
+		leftoverRun := &turnRunCtx{fileOps: NewTurnFileOpTracker()}
+		if s.sessionStore != nil {
+			if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil {
+				leftoverRun.workDir = sess.WorkDir
+				leftoverRun.workDirUserSet = sess.WorkDirUserSet
+			}
+		}
+		// 引导残留转成普通排队回合（内容不带 [Guide] 前缀——对模型而言
+		// 它就是一条新的用户消息）。enqueueChatTurn 的查重会把与队列中
+		// 已有项完全相同的残留合并掉。
+		s.enqueueChatTurn(sessionID, g, nil, nil, leftoverRun, "", li.ID)
+	}
+
+	q := s.lookupSessionQueue(sessionID)
+	if q == nil {
+		return 0
+	}
+	return q.pendingCount()
 }
 
 // releaseWorker 在 worker 退出时复位 workerLive 并回收空闲队列。复位与
@@ -1024,17 +1034,18 @@ func (s *Server) tryInjectGuide(sessionID string, parsed *parsedChatPayload) map
 		q.mu.Unlock()
 		return nil
 	}
-	a.InjectGuide(content)
+	// id 必须在注入前生成，并**同时**用于：收件箱（模型侧）、落库、广播、
+	// HTTP 响应，以及「本回合没消费它时」由 reclaimLeftoverGuides 转出的排队
+	// 回合。四处共用同一个 id 才能保证同一句话在会话历史与前端气泡里都只有
+	// 一份：落库按 id 幂等（persistUserMessage），前端按 user_<id> 去重
+	// （web/src/stores/chat.ts 的 guide_added / promoteQueuedToMessage）。
+	id := uuid.NewString()
+	a.InjectGuide(id, content)
 	q.mu.Unlock()
 
 	// 引导在采集后即已被消费（"停止"只会丢弃尚未消费的收件箱残留），直接落库
 	// 为普通 user 消息即可，历史顺序天然正确：本回合输入 < 引导 < 本回合
 	// assistant 回复。
-	//
-	// id 必须在落库前生成并同时用于广播/响应：前端以 user_<id> 作为气泡去重键，
-	// 落库消息若不带同一个 id，刷新页面后会与 guide_added 广播产生重复气泡
-	// （见 issue 3）。
-	id := uuid.NewString()
 	s.persistGuideMessage(sessionID, id, content)
 
 	ev, _ := json.Marshal(map[string]interface{}{
@@ -1094,6 +1105,12 @@ func (errProviderNotConfigured) Error() string {
 // "停止"直接丢弃（cancelAll 会清空队列）——提前落库会让这些从未执行的消息
 // 永久留在会话历史里。等到回合真正开始执行再写，历史顺序自然与执行顺序
 // 一致，也不会出现两条 user 消息紧邻（中间缺 assistant）的畸形序列。
+//
+// id 幂等：同 id 的消息只保留一条。唯一会撞 id 的场景是「引导未被消费 →
+// 收尾回收转成排队回合」（见 reclaimLeftoverGuides）：那条引导在注入时就
+// 已按同一个 id 落库了，回收出的回合再写一次就会让同一句话在历史里出现
+// 两次——用户看到"引导发了两次"。写入前按 id 判重即可，且必须判重而不是
+// "顺手复用 id 覆盖"，否则排序会乱（引导应停在它被注入的位置）。
 func (s *Server) persistUserMessage(sessionID string, item *queuedTurn) {
 	if s.sessionStore == nil {
 		return
@@ -1102,7 +1119,15 @@ func (s *Server) persistUserMessage(sessionID string, item *queuedTurn) {
 	if err != nil {
 		return
 	}
+	if item.id != "" {
+		for _, m := range sess.Messages {
+			if m.ID == item.id {
+				return
+			}
+		}
+	}
 	sess.Messages = append(sess.Messages, types.Message{
+		ID:           item.id,
 		Role:         "user",
 		Content:      item.content,
 		ContentParts: item.persistedParts,

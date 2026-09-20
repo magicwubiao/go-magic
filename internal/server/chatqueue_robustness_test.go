@@ -29,7 +29,7 @@ func TestEnqueueChatTurnDuplicateStillSpawnsWorker(t *testing.T) {
 	q.mu.Unlock()
 
 	// 同内容再次提交 → 命中查重。
-	item, dup := s.enqueueChatTurn(sid, "same content", nil, nil, &turnRunCtx{fileOps: NewTurnFileOpTracker()}, "")
+	item, dup := s.enqueueChatTurn(sid, "same content", nil, nil, &turnRunCtx{fileOps: NewTurnFileOpTracker()}, "", "")
 	if item == nil {
 		t.Fatal("enqueueChatTurn returned nil item")
 	}

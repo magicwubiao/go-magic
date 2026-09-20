@@ -836,7 +836,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		mediaParts = slimmed
 	}
 
-	item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, turnRun, materializeSummary)
+	item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, turnRun, materializeSummary, "")
 	if item == nil {
 		writeSSE("data: " + sseErrorPayload(fmt.Errorf("message not accepted, please retry")) + "\n\n")
 		return
@@ -868,16 +868,22 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 // 弱网重试在前端留下两条一模一样的排队气泡。
 // contentParts 必须已经是剥离过 inline base64 的版本（调用方在拥有
 // imageURLRefs/imageNames 的地方调 stripInlineMediaParts 完成）。
+// turnID 为空时自生成；非空时必须由调用方保证其唯一性——目前唯一的非空
+// 调用点是「引导未被消费 → 收尾回收」，它沿用引导自己的 id，使回收出的回合
+// 与已落库的引导消息共用同一个 id（见 reclaimLeftoverGuides）。
 // 返回 nil 表示队列正在回收（调用方应让客户端重试）。
-func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types.ContentPart, persistedParts []types.ContentPart, run *turnRunCtx, materializeSummary string) (*queuedTurn, bool) {
+func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types.ContentPart, persistedParts []types.ContentPart, run *turnRunCtx, materializeSummary, turnID string) (*queuedTurn, bool) {
 	// 物化摘要并入 content parts，保持与改造前完全一致的模型输入顺序
 	// （用户文本 → 图片/文件 → 物化摘要）。
 	if materializeSummary != "" {
 		contentParts = append(contentParts, types.ContentPart{Type: "text", Text: materializeSummary})
 	}
 
+	if turnID == "" {
+		turnID = uuid.NewString()
+	}
 	item := &queuedTurn{
-		id:             uuid.NewString(),
+		id:             turnID,
 		content:        content,
 		contentParts:   contentParts,
 		persistedParts: persistedParts,
@@ -1523,7 +1529,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, s
 			mediaParts = slimmed
 		}
 
-		item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, run, materializeSummary)
+		item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, run, materializeSummary, "")
 		if item == nil {
 			http.Error(w, "message not accepted, please retry", http.StatusServiceUnavailable)
 			return

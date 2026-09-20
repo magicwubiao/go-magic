@@ -6,6 +6,13 @@ import * as commandsApi from '@/api/commands'
 import * as approvalApi from '@/api/approval'
 import * as clarifyApi from '@/api/clarify'
 import { i18n } from '@/locales'
+import {
+  GUIDE_LOCAL_PREFIX,
+  indexOfMessage,
+  planGuideBroadcast,
+  planGuideSettle,
+  type GuideEventPlan,
+} from '@/utils/guideMessages'
 
 export interface ChatError {
   message: string
@@ -794,6 +801,29 @@ export const useChatStore = defineStore('chat', () => {
   // 用 localId 关联，收到 queued 事件后替换成带 turnId 的正式项。
   let localQueuedCounter = 0
 
+  // applyGuidePlan 执行 utils/guideMessages.ts 给出的处置计划。
+  //
+  // 计划是纯函数算出来的，这里只负责落到 messages 上——判定与副作用分离，
+  // 去重规则才能在 Node 里被直接断言（见 .workbuddy/probe/guide-dedupe-test.mjs）。
+  // drop 用**原地删除**而不是重新过滤：messages 是响应式数组，重新赋值会让
+  // 已经读过它的 computed（如 messages）整体换引用，滚动/贴底跟随要重新量一遍。
+  function applyGuidePlan(state: SessionState, plan: GuideEventPlan): void {
+    switch (plan.kind) {
+      case 'rename':
+      case 'adopt':
+        // rename：响应固化乐观气泡；adopt：广播先到时原地认领乐观气泡。
+        // 两者都是"改 id、不新增"。
+        state.messages[plan.index].id = plan.id
+        return
+      case 'drop':
+        state.messages.splice(plan.index, 1)
+        return
+      default:
+        // push 由调用方处理（需要构造完整 Message）；noop 无需动作。
+        return
+    }
+  }
+
   // sendMessage 提交一条用户消息。
   //
   // 与改造前最重要的差别：不再因为"当前回合正在跑"而拒绝发送。消息交给
@@ -983,16 +1013,20 @@ export const useChatStore = defineStore('chat', () => {
   // 模型在下一次 LLM 调用前看到它并调整方向，生成不被打断。
   //
   // 与 sendMessage 的本质差异：引导不进排队气泡，而是直接作为一条用户消息
-  // 出现在对话流里（它"已被发出"——服务端即刻注入 agent 并落库）。消息 id
-  // 用 user_<服务端id>，与 promoteQueuedToMessage 的固化键一致，因此本标签页
-  // 收到自己那条 guide_added 广播时会被去重跳过。
+  // 出现在对话流里（它"已被发出"——服务端即刻注入 agent 并落库）。
+  //
+  // 去重：这条引导会从**两条异步通道**回到本标签页——提交响应（带服务端 id）
+  // 与 guide_added 广播（同一个 id，推给所有监听连接），到达顺序不确定。
+  // 三条写入路径（乐观气泡 / 响应固化 / 广播补气泡）的判定统一收敛在
+  // utils/guideMessages.ts 的纯函数里，两个方向都必须幂等；否则会出现同一句话
+  // 两个气泡（"引导发了两次"），且两条 id 相同。
   async function guideMessage(content: string): Promise<void> {
     if (!activeSessionId.value) return
     const sessionId = activeSessionId.value
     const state = getOrCreateSessionState(sessionId)
 
     // 乐观插入用户消息气泡（引导"已发出"，不占排队位）。
-    const localId = `guide_local_${++localQueuedCounter}`
+    const localId = `${GUIDE_LOCAL_PREFIX}${++localQueuedCounter}`
     state.messages.push({
       id: localId,
       role: 'user',
@@ -1005,11 +1039,7 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const resp = await sessionsApi.submitGuide(sessionId, content)
       if (resp.guided) {
-        // 注入成功：把乐观气泡 id 换成 user_<服务端id>（与 guide_added
-        // 广播的去重键一致）。若 SSE 广播先于响应到达（竞态），本地已由
-        // 广播路径固化，find 不中 → 这里自然变 no-op，两侧幂等。
-        const mine = state.messages.find(m => m.id === localId)
-        if (mine && resp.id) mine.id = `user_${resp.id}`
+        applyGuidePlan(state, planGuideSettle(state.messages, localId, resp.id || ''))
         return
       }
       // 回落：服务端无法注入（回合恰好结束），已把消息当普通消息入队。
@@ -1162,22 +1192,27 @@ export const useChatStore = defineStore('chat', () => {
             return
           }
 
-          // guide_added：另一台设备/标签页注入了一条引导。补一条用户消息；
-          // 本标签页自己发的引导由提交路径固化（id 去重键 user_<id> 一致，
-          // 不会重复）。
+          // guide_added：一条引导注入成功，广播给本会话所有监听连接（可能是
+          // 本标签页自己刚发的，也可能是别的设备/标签页发的）。
+          //
+          // 去重规则见 utils/guideMessages.ts：本标签页自己发的那条有乐观气泡，
+          // 广播先到时要**认领**它（adopt）而不是再补一条——原先只比对
+          // `user_<id>`，乐观气泡的键是 `guide_local_<n>`，必然比不中，于是
+          // 广播补一条、响应再把乐观气泡改名成同一个 id，同一句话两个气泡。
           if (data.type === 'guide_added') {
             const guideId = String(data.id || '')
-            if (guideId) {
-              const msgId = `user_${guideId}`
-              if (!state.messages.some(m => m.id === msgId)) {
-                state.messages.push({
-                  id: msgId,
-                  role: 'user',
-                  content: String(data.content || ''),
-                  timestamp: new Date().toISOString(),
-                  session_id: sessionId,
-                } as sessionsApi.Message)
-              }
+            const guideContent = String(data.content || '')
+            const plan = planGuideBroadcast(state.messages, guideId, guideContent)
+            if (plan.kind === 'push') {
+              state.messages.push({
+                id: `user_${guideId}`,
+                role: 'user',
+                content: guideContent,
+                timestamp: new Date().toISOString(),
+                session_id: sessionId,
+              } as sessionsApi.Message)
+            } else {
+              applyGuidePlan(state, plan)
             }
             return
           }
@@ -1513,9 +1548,14 @@ export const useChatStore = defineStore('chat', () => {
   //
   // 去重依据是 turnId 生成的稳定消息 id：同一条排队项只会被固化一次
   // （stream_started 可能因多连接/重放重复到达）。
+  //
+  // indexOfMessage 同时认 `user_<id>` 与原始 `<id>` 两种形态，后者对应
+  // 「引导未被模型消费 → 服务端收尾把残留转成排队回合」：那条引导在注入时
+  // 就已按原始 id 落库，页面刷新后 messages 由服务端历史重建（键是原始 id），
+  // 若只比对 `user_<id>` 就会把同一句话再补一个气泡——用户看到"引导发了两次"。
   function promoteQueuedToMessage(state: SessionState, sessionId: string, item: QueuedMessage): void {
     const msgId = `user_${item.turnId}`
-    if (state.messages.some(m => m.id === msgId)) return
+    if (indexOfMessage(state.messages, item.turnId) >= 0) return
     const files = queuedAttachments.get(item.turnId)
     const msg: sessionsApi.Message = {
       id: msgId,

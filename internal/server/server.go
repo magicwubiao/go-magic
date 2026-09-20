@@ -1149,8 +1149,20 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, len(msgs))
 	for i, m := range msgs {
+		// id 优先用落库时保存的真实 id（引导消息、排队回合的用户消息都带），
+		// 缺失时才退回按位置生成的 msg_<i>（历史数据 / assistant 消息）。
+		//
+		// 为什么必须保留真实 id：前端判断"这条消息是否已在列表里"时认两种
+		// id 形态——内存态的 user_<id> 与服务端原始 id。若这里一律改写成位置
+		// id，刷新页面后「引导消息」与「由它回收而成的排队回合」就再也对不上，
+		// 回合开始执行时前端会再补一个同内容气泡，用户看到的就是"引导被发送
+		// 了两次"（见 web/src/utils/guideMessages.ts 的 indexOfMessage）。
+		msgID := m.ID
+		if msgID == "" {
+			msgID = fmt.Sprintf("msg_%d", i)
+		}
 		msg := map[string]interface{}{
-			"id":         fmt.Sprintf("msg_%d", i),
+			"id":         msgID,
 			"role":       m.Role,
 			"content":    m.Content,
 			"session_id": sessionID,
