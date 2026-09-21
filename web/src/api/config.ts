@@ -47,6 +47,11 @@ export interface Config {
   max_tokens?: number
   gateway?: Record<string, unknown>
   working_dir?: string
+  /**
+   * 自动化浏览器持久 profile 目录（Chrome --user-data-dir）。
+   * 缺省 = ~/.magic/browser-profile；显式空串 = 每次全新临时 profile。支持 `~` 开头。
+   */
+  browser_profile_dir?: string
   chat_mode?: string
   agent?: Record<string, unknown>
   memory?: Record<string, unknown>

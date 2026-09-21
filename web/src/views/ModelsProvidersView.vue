@@ -112,14 +112,21 @@
     <n-modal v-model:show="showProviderModal" preset="card" class="modal-responsive modal-scroll" :title="isEditing ? t('modelsProviders.editProvider') : t('modelsProviders.addProvider')" style="width: 500px; max-width: 96vw;">
       <n-form :model="editingProvider" label-placement="top">
         <n-form-item :label="t('modelsProviders.providerName')" path="name">
+          <!-- tag + filterable：内置目录之外还要能自由命名。目录里只有一个
+               `custom` 条目，加过之后就被"已配置的不再出现在下拉里"过滤掉，
+               历史上因此只能添加一个自定义供应商。 -->
           <n-select
             v-if="!isEditing"
             v-model:value="editingProvider.name"
             :options="availableProviders"
             filterable
-            :placeholder="t('modelsProviders.selectProviderType')"
+            tag
+            :placeholder="t('modelsProviders.providerNamePlaceholder')"
           />
           <n-input v-else :value="editingProvider.name" disabled />
+          <template #feedback>
+            <span class="field-hint">{{ t('modelsProviders.providerNameHint') }}</span>
+          </template>
         </n-form-item>
         <n-form-item :label="t('modelsProviders.models')">
           <n-dynamic-input
@@ -191,6 +198,12 @@ import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'
 import * as providersApi from '@/api/providers'
 import { getModelOptions } from '@/api/models'
+import {
+  normalizeModels,
+  normalizeProviderName,
+  planProviderSave,
+  type ProviderSaveProblem
+} from '@/utils/providerName'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -322,14 +335,17 @@ async function loadProviderCatalog() {
 const selectedProvider = ref('')
 
 // 新增模式下选择/切换供应商：总是套用该供应商的预设（官方地址 + 完整推荐
-// 模型列表），保证切换后模型跟着变化；无预设项（custom 等）则清空待用户
-// 填写。API Key 不清除——中转站场景常是同一个 key。
+// 模型列表），保证切换后模型跟着变化；无预设项（用户自己输入的名称）则清空
+// 待用户填写。API Key 不清除——中转站场景常是同一个 key。
 watch(() => editingProvider.value.name, (name) => {
   if (isEditing.value || !name) return
   const preset = providerPresets.value[name]
   if (preset) {
     if (preset.baseUrl) editingProvider.value.baseUrl = preset.baseUrl
-    editingProvider.value.models = preset.models.length > 0 ? [...preset.models] : []
+    // 目录里的 custom 条目是"模板"（唯一没有官方地址的条目）：它的模型列表
+    // 只是占位（"default"），预填进去等于塞一个必然 404 的假模型 ID，清空
+    // 让用户按自己的中转站填真实模型名
+    editingProvider.value.models = preset.baseUrl ? [...preset.models] : []
   } else {
     editingProvider.value.baseUrl = ''
     editingProvider.value.models = []
@@ -351,15 +367,34 @@ function selectProvider(name: string) {
   selectedProvider.value = name
 }
 
+// 保存校验问题的提示文案（顺序即 providerName.ts 里 push 的优先级）
+const saveProblemKeys: Record<ProviderSaveProblem, string> = {
+  name: 'modelsProviders.problemInvalidName',
+  nameExists: 'modelsProviders.problemNameExists',
+  baseUrl: 'modelsProviders.problemBaseUrlRequired',
+  models: 'modelsProviders.problemModelsRequired'
+}
+
 async function handleSaveProvider() {
-  if (!editingProvider.value.name) return
+  const name = normalizeProviderName(editingProvider.value.name)
+  // 过滤动态输入里未填写的空行，避免空模型 ID 进配置
+  const models = normalizeModels(editingProvider.value.models)
+  const plan = planProviderSave(
+    { name, baseUrl: editingProvider.value.baseUrl, models, isEditing: isEditing.value },
+    providerPresets.value,
+    configProviders.value.map(p => p.name)
+  )
+  if (!plan.ok) {
+    const problem = plan.problems[0]
+    if (problem) message.error(t(saveProblemKeys[problem]))
+    return
+  }
 
   await configStore.saveProvider({
-    name: editingProvider.value.name,
+    name,
     apiKey: editingProvider.value.apiKey,
     baseUrl: editingProvider.value.baseUrl,
-    // 过滤动态输入里未填写的空行，避免空模型 ID 进配置
-    models: editingProvider.value.models.map(m => m.trim()).filter(Boolean),
+    models,
     vision: editingProvider.value.vision === 'on'
       ? true
       : editingProvider.value.vision === 'off'
@@ -368,13 +403,13 @@ async function handleSaveProvider() {
   })
   showProviderModal.value = false
   await configStore.loadConfig()
-  
+
   if (isEditing.value) {
     // 编辑后刷新当前选择
     await refreshModelsList()
   } else {
     // 添加后选中新供应商
-    selectedProvider.value = editingProvider.value.name
+    selectedProvider.value = name
   }
 }
 
@@ -603,6 +638,13 @@ onMounted(async () => {
   border-radius: 50%;
   margin-right: 6px;
   flex-shrink: 0;
+}
+/* n-form-item 的 feedback 槽：单行提示文本，行高按 ≥1.4em 给（line-height:1
+   配弹性居中会削掉 Windows 字体回退的上伸部） */
+.field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--n-text-color-3, #909399);
 }
 .dot-ok {
   background: #18a058;
