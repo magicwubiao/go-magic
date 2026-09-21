@@ -21,6 +21,18 @@ const (
 	// 默认即持久：登录一次（cookie/localStorage）后续都用同一份，适合抓需要
 	// 登录态的站点。想回到"每次全新临时 profile"就把它显式写成 ""。
 	DefaultBrowserProfileDir = "~/.magic/browser-profile"
+	// DefaultBrowserHeadless 是自动化浏览器是否无头运行的默认值。
+	//
+	// 默认 true（无头）：服务器的正常形态就是「没有显示服务」——容器、云主机、
+	// CI、systemd 服务全都如此。在这些环境里跑「有头」Chrome 会直接死在
+	// "cannot open display"，而 agent 又没有任何补救手段（它只能调工具、看不到
+	// 报错原因），所以默认必须是无头。
+	//
+	// 无头不影响浏览器能力：页面照常渲染，截图（browser_vision）、点击、执行 JS
+	// 全部正常，只是没有打到显示器上的窗口。仅当需要人工操作（首次登录扫码/输
+	// 密码/过验证码）时才需要临时打开：设 BROWSER_HEADLESS=false，或把它写进
+	// 配置文件的 browser_headless 字段。
+	DefaultBrowserHeadless = true
 )
 
 func GetMagicHome() string {
@@ -107,9 +119,17 @@ type Config struct {
 	// 其他值 = 该目录。路径支持 `~` 开头。BROWSER_PROFILE_DIR 环境变量可覆盖。
 	// 用指针而非普通 string：Load 对已存在的 config.json 直接反序列化到零值、
 	// 不合并 defaultConfig——普通 string 无法区分"没写"和"显式写空"。
-	BrowserProfileDir *string       `json:"browser_profile_dir,omitempty"`
-	Display           DisplayConfig `json:"display,omitempty"`
-	Server            ServerConfig  `json:"server,omitempty"`
+	BrowserProfileDir *string `json:"browser_profile_dir,omitempty"`
+	// BrowserHeadless 控制自动化浏览器是否无头运行。指针语义（同 BrowserProfileDir）：
+	// nil（配置里没写）= 用默认值 DefaultBrowserHeadless（true，无头）；
+	// 显式 false = 开有头窗口（需要显示服务：本机桌面，或 Xvfb/noVNC）；
+	// 显式 true = 无头。BROWSER_HEADLESS 环境变量优先级最高（"false" 关、"true" 开）。
+	//
+	// 默认无头的理由见 DefaultBrowserHeadless 的注释：服务器上没有显示服务，
+	// 有头 Chrome 会直接起不来。想人工登录时临时开窗即可。
+	BrowserHeadless *bool         `json:"browser_headless,omitempty"`
+	Display         DisplayConfig `json:"display,omitempty"`
+	Server          ServerConfig  `json:"server,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
 	Mode            string `json:"mode,omitempty"`      // chat, plan, act
@@ -518,6 +538,67 @@ func (c *Config) GetBrowserProfileDir() string {
 // strPtr 返回字符串字面量的指针，供指针语义的配置字段（nil = 用默认值）使用。
 func strPtr(s string) *string { return &s }
 
+// boolPtr 返回 bool 字面量的指针，供指针语义的配置字段（nil = 用默认值）使用。
+func boolPtr(b bool) *bool { return &b }
+
+// BrowserHeadlessSource 说明 GetBrowserHeadless 的返回值是哪里来的。
+// 只为排障/日志用——只报一个 true/false 的话，用户没法知道是自己的配置生效了、
+// 还是被环境变量或默认值覆盖了。
+type BrowserHeadlessSource string
+
+const (
+	// BrowserHeadlessFromEnv 来自 BROWSER_HEADLESS 环境变量（优先级最高）。
+	BrowserHeadlessFromEnv BrowserHeadlessSource = "env:BROWSER_HEADLESS"
+	// BrowserHeadlessFromConfig 来自配置文件的 browser_headless 字段。
+	BrowserHeadlessFromConfig BrowserHeadlessSource = "config:browser_headless"
+	// BrowserHeadlessFromDefault 既没配也没设环境变量，取内置默认值。
+	BrowserHeadlessFromDefault BrowserHeadlessSource = "default"
+)
+
+// GetBrowserHeadless 返回自动化浏览器是否应该无头运行。
+//
+// 优先级（高 → 低）：
+//  1. BROWSER_HEADLESS 环境变量：认 "false"/"0"/"no"/"off" 为关，其余非空值为开。
+//     只认 "true" 会让 `BROWSER_HEADLESS=false` 被静默当成没设，反过来也踩坑。
+//  2. 配置文件的 browser_headless 字段（显式 true / false）。
+//  3. 内置默认值 DefaultBrowserHeadless（true = 无头）。
+//
+// 调用方一律走这里，别直接读字段，否则会漏掉"环境变量覆盖"和"默认值"两支。
+func (c *Config) GetBrowserHeadless() bool {
+	v, _ := c.GetBrowserHeadlessWithSource()
+	return v
+}
+
+// GetBrowserHeadlessWithSource 同 GetBrowserHeadless，另外返回取值来源。
+func (c *Config) GetBrowserHeadlessWithSource() (bool, BrowserHeadlessSource) {
+	if raw, ok := os.LookupEnv("BROWSER_HEADLESS"); ok {
+		// 空字符串等同于没设：`BROWSER_HEADLESS=` 这种写法在 shell 脚本里
+		// 很常见（尤其是 `docker run -e BROWSER_HEADLESS` 不带值），
+		// 把它当成"显式开启"会让用户莫名其妙地失去有头窗口。
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			return ParseBoolish(trimmed, DefaultBrowserHeadless), BrowserHeadlessFromEnv
+		}
+	}
+	if c != nil && c.BrowserHeadless != nil {
+		return *c.BrowserHeadless, BrowserHeadlessFromConfig
+	}
+	return DefaultBrowserHeadless, BrowserHeadlessFromDefault
+}
+
+// ParseBoolish 解析人类可写的布尔值（"1"/"true"/"yes"/"on"、"0"/"false"/"no"/"off"）。
+// 认不出来时返回 def（不报错）：环境变量里写错一个词就让浏览器起不来，
+// 比"按默认值走"糟糕得多。导出是为了让 internal/tool 在拿不到配置文件时
+// （首次运行 / 不经过 server 的 TUI 会话）复用同一套判定。
+func ParseBoolish(s string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on", "y", "t":
+		return true
+	case "0", "false", "no", "off", "n", "f":
+		return false
+	}
+	return def
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Profile:    "default",
@@ -529,6 +610,8 @@ func defaultConfig() *Config {
 		// 默认就带上持久 profile 目录：浏览器登录态（cookie/localStorage）跨
 		// 会话保留。显式写成 "" 才会退回每次全新的临时 profile。
 		BrowserProfileDir: strPtr(DefaultBrowserProfileDir),
+		// 默认无头：服务器/容器没有显示服务，有头 Chrome 会直接起不来。
+		BrowserHeadless: boolPtr(DefaultBrowserHeadless),
 		Cortex: CortexConfig{
 			Enabled:             true,
 			SkillMinPatternFreq: 3,

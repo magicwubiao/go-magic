@@ -131,12 +131,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # with the EXPOSE above / the docker-compose port mapping; otherwise the container
 # listens on 5000 and the mapping goes nowhere.
 #
-# BROWSER_HEADLESS=true is required, not cosmetic: this image has no X display,
-# and isSandboxedEnvironment() does not detect a bare Alpine container (no
-# TAURI_ENV / FLATPAK_ID / SNAP / APPIMAGE), so without the flag the browser
-# tools would try to open a GUI window and die on "cannot open display".
-# It applies to every Chrome start, including the ones that reuse the persistent
-# profile in ~/.magic/browser-profile, so there is no reason to turn it off.
-ENV BROWSER_HEADLESS=true
+# No BROWSER_HEADLESS is set here on purpose: config.GetBrowserHeadless() already
+# defaults to headless, so there is nothing to force. Setting it would only add a
+# second source of truth that could drift from the code default. (Historically
+# isSandboxedEnvironment() did not detect a bare Alpine container, which is
+# exactly why the default was moved down into the config layer instead.)
 ENTRYPOINT ["/app/magic"]
 CMD ["server", "--port", "8642"]

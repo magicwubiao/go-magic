@@ -36,6 +36,14 @@ type BrowserManager struct {
 	// set before the first Initialize() call; a running browser keeps using
 	// the profile it was started with until Close()/Reset().
 	profileDir string
+
+	// headlessApplied records the headless value that the *currently running*
+	// Chrome was actually launched with (vs. whatever the config says now).
+	// Only meaningful while allocCtx != nil; the hot-reload path compares it
+	// against the effective config to decide whether a relaunch is needed.
+	// Without it, saving an unrelated config field would look like a headless
+	// change and needlessly tear down a live browser.
+	headlessApplied bool
 }
 
 // SetProfileDir sets the persistent user-data-dir used by the next browser
@@ -146,12 +154,28 @@ func (bm *BrowserManager) Initialize() error {
 		return fmt.Errorf("browser not found: please install Google Chrome or Microsoft Edge, or set CHROME_PATH or EDGE_PATH environment variable")
 	}
 
-	// Check if running in a sandboxed environment (e.g., Tauri, Flatpak, Snap)
+	// Headless by default: a server normally has no display service (container,
+	// cloud host, CI, systemd unit) and a headed Chrome dies there with
+	// "cannot open display" -- leaving the agent to fail with no way to diagnose
+	// it. resolveHeadless decides the final value (env > config > default true);
+	// see config.GetBrowserHeadless for the full precedence.
+	headless, headlessSrc := bm.resolveHeadless()
+
+	// A headed browser needs a display to attach to. Starting one anyway is a
+	// guaranteed crash, so refuse loudly instead of returning a confusing
+	// "cannot open display" from deep inside Chrome later.
+	if !headless && !hasDisplay() {
+		return fmt.Errorf("headed browser requested (from %s) but no display is available: "+
+			"set BROWSER_HEADLESS=true (or drop the browser_headless=false config) to run headless, "+
+			"or provide an X display such as Xvfb / noVNC", headlessSrc)
+	}
+
+	// isSandboxed keeps the original sandbox behaviours that are unrelated to
+	// headless-ness (no window-maximization flag, etc.).
 	isSandboxed := isSandboxedEnvironment()
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		// Use headless mode in sandboxed environments or when explicitly requested
-		chromedp.Flag("headless", isSandboxed || os.Getenv("BROWSER_HEADLESS") == "true"),
+		chromedp.Flag("headless", headless),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
@@ -165,7 +189,9 @@ func (bm *BrowserManager) Initialize() error {
 		chromedp.ExecPath(browserPath),
 	)
 
-	if !isSandboxed {
+	if !isSandboxed && !headless {
+		// Only meaningful for a headed browser: a headless window cannot be
+		// maximized, and passing the flag there is pure noise in the log.
 		opts = append(opts, chromedp.Flag("start-maximized", true))
 	}
 
@@ -182,10 +208,75 @@ func (bm *BrowserManager) Initialize() error {
 	}
 
 	bm.allocCtx, bm.allocCancel = chromedp.NewExecAllocator(context.Background(), opts...)
+	bm.headlessApplied = headless
 	return nil
 }
 
+// HeadlessEffective reports whether the running browser was launched headless.
+// Returns the config-effective value when no browser is running (nothing has
+// been applied yet), so callers doing change-detection get a meaningful answer
+// before the first launch too.
+func (bm *BrowserManager) HeadlessEffective() bool {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	if bm.allocCtx == nil {
+		v, _ := bm.resolveHeadless()
+		return v
+	}
+	return bm.headlessApplied
+}
+
+// NoteHeadlessApplied records the headless value for the next launch. Call it
+// after Close() when the config changed; the value is picked up by
+// Initialize() anyway, so this only keeps HeadlessEffective() honest in the
+// window before the next launch.
+func (bm *BrowserManager) NoteHeadlessApplied(headless bool) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	bm.headlessApplied = headless
+}
+
+// resolveHeadless decides whether the browser should run headless.
+//
+// Precedence is owned by config.GetBrowserHeadless (env > config > default true);
+// this wrapper adds the tool-side fallback when no config is reachable, which is
+// the case for TUI/CLI sessions that never go through the server.
+//
+// Contract: **not locked** -- called from Initialize() while it holds the write
+// lock, so it must not take bm.mu (sync.RWMutex is not reentrant).
+func (bm *BrowserManager) resolveHeadless() (bool, config.BrowserHeadlessSource) {
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		return cfg.GetBrowserHeadlessWithSource()
+	}
+	// No config on disk (first run) -- still honour the environment variable,
+	// then fall back to the built-in default. Mirrors GetBrowserHeadless.
+	if v := os.Getenv("BROWSER_HEADLESS"); strings.TrimSpace(v) != "" {
+		return config.ParseBoolish(v, config.DefaultBrowserHeadless), config.BrowserHeadlessFromEnv
+	}
+	return config.DefaultBrowserHeadless, config.BrowserHeadlessFromDefault
+}
+
+// hasDisplay reports whether there is an X/Wayland display a headed browser
+// could attach to.
+//
+// A bare `DISPLAY` check would be wrong on Wayland (which uses WAYLAND_DISPLAY
+// and often has no DISPLAY), and a bare `WAYLAND_DISPLAY` check would be wrong
+// on a normal X session -- so either one counts. Windows/macOS always have a
+// window system, so they short-circuit to true.
+func hasDisplay() bool {
+	switch runtime.GOOS {
+	case "windows", "darwin", "js", "wasip1":
+		return true
+	}
+	return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+}
+
 // isSandboxedEnvironment detects if running in a sandboxed environment
+//
+// NOTE: this no longer decides headless-ness -- that is resolveHeadless's job,
+// and it now defaults to headless everywhere. What is left here is the sandbox
+// behaviours that stand on their own (notably: skip --start-maximized, which is
+// meaningless or harmful inside a packaged sandbox).
 func isSandboxedEnvironment() bool {
 	// Check for Tauri environment
 	if os.Getenv("TAURI_ENV") != "" || os.Getenv("TAURI_APP_DIR") != "" {

@@ -4,6 +4,7 @@
   "provider": "openai",
   "model": "gpt-5.6",
   "browser_profile_dir": "~/.magic/browser-profile",
+  "browser_headless": true,
   "providers": {
     "openai": {
       "api_key": "your-openai-api-key-here",

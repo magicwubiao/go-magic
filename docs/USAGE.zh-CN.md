@@ -223,6 +223,7 @@ magic config reset     # 恢复默认
   "model": "deepseek-chat",             // 已废弃，建议用 providers.<x>.models[0]
   "chat_mode": "chat",                  // magic chat 的默认模式：chat | coding
   "browser_profile_dir": "~/.magic/browser-profile",  // 自动化浏览器持久 profile 目录（默认值，不写就是这个）；路径支持 ~ 开头（展开为用户主目录）；显式写成 "" = 每次全新临时 profile（无 cookie/登录态）
+  "browser_headless": true,             // 浏览器是否无头运行（默认值，不写就是这个）；服务器/容器请保持 true；设 false 需有显示服务（Xvfb/noVNC），仅人工登录时用；环境变量 BROWSER_HEADLESS 优先级更高
 
   "providers": {
     "deepseek": {
@@ -309,7 +310,7 @@ magic config reset     # 恢复默认
 | `GO_MAGIC_CORS_ORIGINS` | Dashboard 额外允许的 CORS 源，逗号分隔 | ✅ |
 | `MAGIC_SKILL_DIR` | 覆盖技能目录 | ✅ |
 | `MAGIC_SESSION_ID` | 指定会话 ID | ✅ |
-| `BROWSER_HEADLESS` | 强制浏览器以无头（headless）模式运行，`true` 开启（沙箱环境下默认开启） | ✅ |
+| `BROWSER_HEADLESS` | 覆盖浏览器无头开关，`false`/`0`/`no`/`off` 关、其余非空值为开；不设则用配置的 `browser_headless`（默认开） | ✅ |
 | `BROWSER_PROFILE_DIR` | 覆盖自动化浏览器持久 profile 目录，留空=每次全新临时 profile | ✅ |
 | `CHROME_PATH` / `EDGE_PATH` | 指定 Chrome / Edge 浏览器可执行文件路径 | ✅ |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | 各家 API Key | ✅ |
@@ -847,26 +848,41 @@ CHROME_PATH=/usr/bin/chromium magic server --port 8642
 ```
 
 **第二层（更容易被忽略）：没有 X display。** 容器和多数云主机都没有显示服务，
-Chrome 默认要开 GUI 窗口，会直接死于 `cannot open display`。所以必须无头：
+而 Chrome 默认要开 GUI 窗口，会直接死于 `cannot open display`。
+
+**好消息：这一层代码已经默认处理好了 —— 浏览器默认就是无头的。** 你什么都不用配：
+
+优先级（高 → 低）：
+
+1. `BROWSER_HEADLESS` 环境变量（认 `false`/`0`/`no`/`off` 为关，其余非空值为开）
+2. 配置文件的 `browser_headless` 字段
+3. 内置默认值 **`true`（无头）**
+
+如果确实要开有头窗口（只在人工登录时有用），任选一种：
 
 ```bash
-export BROWSER_HEADLESS=true
+export BROWSER_HEADLESS=false        # 临时
+magic config set browser_headless false   # 或写进配置
 ```
 
-> 为什么镜像里要显式设这个变量：代码里的 `isSandboxedEnvironment()` 只认
-> `TAURI_ENV` / `FLATPAK_ID` / `SNAP` / `APPIMAGE` / `/.flatpak-info`，
-> **不认普通 Alpine/Debian 容器**，所以不会自动切无头。
+> **为什么默认必须是无头**：服务器的正常形态就是「没有显示服务」——容器、云主机、
+> CI、systemd 服务全都如此。在这些环境里跑有头 Chrome 会直接起不来，而 agent
+> 看不见报错原因（它只能调工具），所以默认值只能是安全的那个。
+>
+> **有头但没显示服务时会明确报错**，而不是让你对着 Chrome 深处那句
+> `cannot open display` 猜：错误信息里会指出这个 `false` 是环境变量写的还是
+> 配置文件写的。
 
 #### 无头不等于看不见 UI —— 自动化浏览器自己会截图
 
-这是最常见的误解。headless 只表示「没有打到显示器的窗口」，
+这是最常见的误解。headless 只表示「没有打到显示器上的窗口」，
 **页面照常渲染**，因此这些能力全都正常：
 
 所有 `browser_*` 交互（点击/输入/滚动/执行 JS/取 DOM）、
 以及 **`browser_vision`（服务端截图，再把图交给多模态模型理解）**。
 
-也就是说：**只要目的是「让 agent 看网页 / 操作网页」，装一次 Chromium + 开无头就完全够用，
-不需要 Xvfb，也不需要 VNC。**
+也就是说：**只要目的是「让 agent 看网页 / 操作网页」，装一次 Chromium 就完全够用，
+无头是默认行为，不需要 Xvfb，也不需要 VNC。**
 
 #### 什么时候才真的需要「看见界面」
 
@@ -882,8 +898,8 @@ export BROWSER_HEADLESS=true
 
 | 方案 | 需要 X 服务 | 能装/需要吗 | 适用场景 |
 |------|------------|------------|----------|
-| **Chromium + `BROWSER_HEADLESS=true`** | 否 | 装 chromium 即可 | **推荐**。95% 场景：抓取 JS 渲染页、自动化操作、截图理解 |
-| Chromium + Xvfb（无 VNC） | 是（虚拟） | 多装 xvfb | 少数站点检测到 headless UA/指纹就拒绝服务。Xvfb 下跑「有头」Chrome 可绕过部分检测，但仍看不到画面 |
+| **Chromium（默认无头）** | 否 | 装 chromium 即可 | **推荐**。95% 场景：抓取 JS 渲染页、自动化操作、截图理解。**无需任何配置** |
+| Chromium + Xvfb（无 VNC） | 是（虚拟） | 多装 xvfb，且设 `BROWSER_HEADLESS=false` | 少数站点检测到 headless UA/指纹就拒绝服务。Xvfb 下跑「有头」Chrome 可绕过部分检测，但仍看不到画面 |
 | **Chromium + Xvfb + noVNC** | 是（虚拟） | 多装 xvfb/x11vnc/websockify | 需要在服务器上**人工登录**（扫码、验证码）。浏览器访问 `http://<host>:6080` 即可操作容器内的 Chrome |
 | X11 转发 / VNC 到真桌面 | 是（真） | 云主机需装桌面套件，重且慢 | 不推荐，纯为浏览器装桌面不划算 |
 | 本机 Chrome + CDP 端口暴露 | 否（服务器上） | 需处理网络与认证 | 服务器只做计算、浏览器跑在你自己的机器上。**注意**：当前 `BrowserManager` 只支持本机启动 Chrome，**没有** `CDP_URL` 之类的远程连接配置，需要改造代码 |
@@ -917,8 +933,8 @@ services:
 # 1. 容器里能看到 chromium 吗
 docker compose exec magic which chromium
 
-# 2. 无头模式真的生效了吗
-docker compose exec magic printenv BROWSER_HEADLESS
+# 2. 无头是否生效（默认就是开的，这里确认没被覆盖成 false）
+docker compose exec magic printenv BROWSER_HEADLESS   # 为空 = 走默认 true
 
 # 3. 让 agent 跑一次 browser_navigate，看返回的 "method" 字段
 #    "browser" = 走真实浏览器成功；"http" = 已降级为普通抓取（说明浏览器没起来）

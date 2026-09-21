@@ -736,6 +736,30 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Browser headless toggle: same treatment as the profile dir above.
+		// Headless-ness is baked into Chrome's launch flags, so a running
+		// browser cannot change mode in place -- it has to be relaunched. We
+		// only tear it down when idle (no tabs); with tabs open the new setting
+		// takes effect on the next restart, and we say so instead of silently
+		// dropping live sessions.
+		if _, ok := expanded["browser_headless"]; ok {
+			bm := tool.GetBrowserManager()
+			// 比较的是 HeadlessEffective()（已把环境变量优先级算进去）而不是
+			// *BrowserHeadless：设了 BROWSER_HEADLESS 时后者恒不等于生效值，
+			// 每次保存都会白关一次浏览器。
+			//
+			// 注意 bool 的"零值陷阱"：旧的比较逻辑用 != 判断"变了"，在 bool 上
+			// 同样成立——但环境变量会覆盖配置，所以必须比生效值。
+			if want, _ := s.cfg.GetBrowserHeadlessWithSource(); bm.HeadlessEffective() != want {
+				if bm.TabCount() == 0 {
+					bm.Close()
+				}
+				// HeadlessEffective() 会随配置变化自动重算，无需额外的 setter
+				// （记录的是"上一次真正用来启动 Chrome 的值"）。
+				bm.NoteHeadlessApplied(want)
+			}
+		}
+
 		// Return updated config
 		jsonResponse(w, s.cfg)
 	default:

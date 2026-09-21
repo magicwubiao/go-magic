@@ -52,6 +52,13 @@ export interface Config {
    * 缺省 = ~/.magic/browser-profile；显式空串 = 每次全新临时 profile。支持 `~` 开头。
    */
   browser_profile_dir?: string
+  /**
+   * 自动化浏览器是否无头运行。缺省 = true（无头，适合服务器/容器）。
+   * 显式 false = 开有头窗口，需要显示服务（本机桌面，或 Xvfb/noVNC），
+   * 且仅在需要人工登录（扫码/验证码）时才用得上。
+   * 环境变量 BROWSER_HEADLESS 优先级高于本字段。
+   */
+  browser_headless?: boolean
   chat_mode?: string
   agent?: Record<string, unknown>
   memory?: Record<string, unknown>

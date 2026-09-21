@@ -36,12 +36,10 @@ services:
       # timestamps: with TZ=UTC a "0 9 * * *" routine fires at 17:00 Beijing time.
       - TZ=Asia/Shanghai
       #
-      # The image already sets BROWSER_HEADLESS=true; it is repeated here because
-      # `environment:` is the place people actually look. It is required in a
-      # container: there is no X display, and isSandboxedEnvironment() does not
-      # detect a plain Alpine container, so Chrome would otherwise try to open a
-      # GUI window and fail with "cannot open display".
-      - BROWSER_HEADLESS=true
+      # No BROWSER_HEADLESS here: headless is already the code default, so there
+      # is nothing to configure. Only set it to "false" if you deliberately want
+      # a headed window (needs a display server, e.g. Xvfb -- see section 14.1
+      # of docs/USAGE.zh-CN.md).
       #
       # Force Chinese/UTF-8 output from tools the agent runs (git log, ls, psql, ...);
       # without it an Alpine container defaults to POSIX locale and mangles CJK.

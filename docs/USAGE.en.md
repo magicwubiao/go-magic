@@ -225,6 +225,7 @@ magic config reset     # restore defaults
   "model": "deepseek-chat",             // deprecated; prefer providers.<x>.models[0]
   "chat_mode": "chat",                  // default mode for magic chat: chat | coding
   "browser_profile_dir": "~/.magic/browser-profile",  // persistent browser profile dir (this is the default when omitted); a leading ~ expands to the user home dir; set it to "" for a fresh temp profile each start (no cookies/login)
+  "browser_headless": true,             // run the browser headless (this is the default when omitted); keep true on servers/containers; false needs a display server (Xvfb/noVNC) and is only for manual login; the BROWSER_HEADLESS env var takes precedence
 
   "providers": {
     "deepseek": {
@@ -311,7 +312,7 @@ magic config reset     # restore defaults
 | `GO_MAGIC_CORS_ORIGINS` | extra CORS origins allowed by the Dashboard, comma-separated | ✅ |
 | `MAGIC_SKILL_DIR` | override the skills directory | ✅ |
 | `MAGIC_SESSION_ID` | bind to a specific session ID | ✅ |
-| `BROWSER_HEADLESS` | force the automation browser to run in headless mode, `true` enables (enabled by default in sandboxed environments) | ✅ |
+| `BROWSER_HEADLESS` | overrides the headless toggle; `false`/`0`/`no`/`off` turns it off, any other non-empty value turns it on. When unset, the config field `browser_headless` applies (default on) | ✅ |
 | `BROWSER_PROFILE_DIR` | override the automation browser persistent profile directory; empty = fresh temp profile each run | ✅ |
 | `CHROME_PATH` / `EDGE_PATH` | specify the Chrome / Edge executable path | ✅ |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | per-provider API keys | ✅ |
@@ -851,17 +852,32 @@ CHROME_PATH=/usr/bin/chromium magic server --port 8642
 ```
 
 **Layer 2 (the one people miss): no X display.** Containers and most cloud hosts
-have no display server. Chrome tries to open a GUI window by default and dies
-with `cannot open display`, so headless is mandatory:
+have no display server, and Chrome tries to open a GUI window by default, dying
+with `cannot open display`.
+
+**Good news: the code already defaults to headless — there is nothing to
+configure.** Precedence, highest first:
+
+1. the `BROWSER_HEADLESS` environment variable (`false`/`0`/`no`/`off` turns it
+   off; any other non-empty value turns it on)
+2. the `browser_headless` config field
+3. the built-in default, **`true` (headless)**
+
+If you genuinely want a headed window (only useful for manual login), pick either:
 
 ```bash
-export BROWSER_HEADLESS=true
+export BROWSER_HEADLESS=false              # temporary
+magic config set browser_headless false    # or persist it in the config
 ```
 
-> Why the image sets this explicitly: `isSandboxedEnvironment()` in the code only
-> recognises `TAURI_ENV` / `FLATPAK_ID` / `SNAP` / `APPIMAGE` / `/.flatpak-info`.
-> A plain Alpine or Debian container matches **none** of them, so it will not
-> switch to headless on its own.
+> **Why the default has to be headless**: the normal shape of a server is "no
+> display service" — containers, cloud hosts, CI, systemd units all qualify.
+> Running a headed Chrome there fails outright, and the agent cannot see why
+> (it can only call tools), so the default has to be the safe one.
+>
+> **Headed without a display now fails loudly** instead of leaving you to guess
+> at Chrome's obscure `cannot open display`: the error names the source of the
+> `false` (environment variable or config file).
 
 #### Headless does not mean the UI is gone — the browser screenshots itself
 
@@ -873,7 +889,7 @@ and **`browser_vision`** (the server takes the screenshot and hands it to a
 multimodal model).
 
 In other words: **if the goal is "let the agent see and operate web pages", one
-Chromium install plus the headless flag is enough. No Xvfb, no VNC.**
+Chromium install is enough — headless is the default. No Xvfb, no VNC.**
 
 #### When you actually need to *see* the UI
 
@@ -890,8 +906,8 @@ lands on disk, so you log in **once** and the day-to-day runs are fully headless
 
 | Option | Needs an X server | Extra install | When to use |
 |--------|------------------|---------------|-------------|
-| **Chromium + `BROWSER_HEADLESS=true`** | No | just chromium | **Recommended.** ~95% of cases: JS-rendered scraping, automation, screenshot understanding |
-| Chromium + Xvfb (no VNC) | Yes (virtual) | + xvfb | Sites that detect a headless UA/fingerprint and refuse to serve. A "headed" Chrome under Xvfb evades some of that, but you still cannot see anything |
+| **Chromium (headless by default)** | No | just chromium | **Recommended.** ~95% of cases: JS-rendered scraping, automation, screenshot understanding. **Zero configuration needed** |
+| Chromium + Xvfb (no VNC) | Yes (virtual) | + xvfb, plus `BROWSER_HEADLESS=false` | Sites that detect a headless UA/fingerprint and refuse to serve. A "headed" Chrome under Xvfb evades some of that, but you still cannot see anything |
 | **Chromium + Xvfb + noVNC** | Yes (virtual) | + xvfb/x11vnc/websockify | You must log in **manually on the server** (QR code, CAPTCHA). Open `http://<host>:6080` in your own browser to drive the container's Chrome |
 | X11 forwarding / VNC to a real desktop | Yes (real) | full desktop stack — heavy and slow | Not recommended; installing a desktop just for a browser is a bad trade |
 | Local Chrome + exposed CDP port | No (on the server) | networking + auth to sort out | Server only computes; the browser runs on your own machine. **Caveat**: `BrowserManager` currently only launches a local Chrome — there is **no** `CDP_URL`-style remote-attach config, so this needs a code change |
@@ -928,8 +944,8 @@ never leave 5900/6080 exposed to the public internet long-term.**
 # 1. can the container see chromium?
 docker compose exec magic which chromium
 
-# 2. is headless mode really on?
-docker compose exec magic printenv BROWSER_HEADLESS
+# 2. is headless really on? (it defaults to on -- confirm nothing overrode it)
+docker compose exec magic printenv BROWSER_HEADLESS   # empty = the default true applies
 
 # 3. run browser_navigate once and look at the "method" field
 #    "browser" = real browser worked; "http" = it silently fell back to a plain fetch
