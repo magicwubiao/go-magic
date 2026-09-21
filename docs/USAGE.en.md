@@ -827,6 +827,129 @@ Toggle via config:
 "tools": { "enabled": ["all"], "disabled": ["browser_*"] }
 ```
 
+### 14.1 Running the automation browser on a headless server
+
+The `browser_*` tools do **not** fetch pages over plain HTTP — they drive a real
+Chromium through CDP using chromedp. So "my server has no browser" has two
+distinct layers, and both need fixing:
+
+**Layer 1: no Chromium binary.** Container images ship it (the Alpine `chromium`
+package, see `Dockerfile`). On a bare-metal box install it yourself:
+
+```bash
+# Debian / Ubuntu
+apt-get install -y chromium fonts-noto-cjk
+# CentOS / RHEL / Rocky
+dnf install -y chromium fonts-noto-cjk
+```
+
+Then make sure `magic` can find it (see the lookup order below), or point at it
+explicitly with `CHROME_PATH`:
+
+```bash
+CHROME_PATH=/usr/bin/chromium magic server --port 8642
+```
+
+**Layer 2 (the one people miss): no X display.** Containers and most cloud hosts
+have no display server. Chrome tries to open a GUI window by default and dies
+with `cannot open display`, so headless is mandatory:
+
+```bash
+export BROWSER_HEADLESS=true
+```
+
+> Why the image sets this explicitly: `isSandboxedEnvironment()` in the code only
+> recognises `TAURI_ENV` / `FLATPAK_ID` / `SNAP` / `APPIMAGE` / `/.flatpak-info`.
+> A plain Alpine or Debian container matches **none** of them, so it will not
+> switch to headless on its own.
+
+#### Headless does not mean the UI is gone — the browser screenshots itself
+
+This is the most common misconception. Headless only means "no window on a
+display"; the page still renders normally, so all of this keeps working:
+
+every `browser_*` interaction (click / type / scroll / run JS / read the DOM),
+and **`browser_vision`** (the server takes the screenshot and hands it to a
+multimodal model).
+
+In other words: **if the goal is "let the agent see and operate web pages", one
+Chromium install plus the headless flag is enough. No Xvfb, no VNC.**
+
+#### When you actually need to *see* the UI
+
+Exactly one scenario: **the first login, when a human has to scan a QR code, type
+a password, or clear a CAPTCHA.** A headless Chrome has nowhere for a human to
+click, so that is the only case that needs Xvfb + x11vnc + noVNC (or logging in
+locally and importing the cookies into the server).
+
+The persistent-profile mechanism exists precisely for this
+(`browser_profile_dir`, default `~/.magic/browser-profile`): the logged-in state
+lands on disk, so you log in **once** and the day-to-day runs are fully headless.
+
+#### Option comparison
+
+| Option | Needs an X server | Extra install | When to use |
+|--------|------------------|---------------|-------------|
+| **Chromium + `BROWSER_HEADLESS=true`** | No | just chromium | **Recommended.** ~95% of cases: JS-rendered scraping, automation, screenshot understanding |
+| Chromium + Xvfb (no VNC) | Yes (virtual) | + xvfb | Sites that detect a headless UA/fingerprint and refuse to serve. A "headed" Chrome under Xvfb evades some of that, but you still cannot see anything |
+| **Chromium + Xvfb + noVNC** | Yes (virtual) | + xvfb/x11vnc/websockify | You must log in **manually on the server** (QR code, CAPTCHA). Open `http://<host>:6080` in your own browser to drive the container's Chrome |
+| X11 forwarding / VNC to a real desktop | Yes (real) | full desktop stack — heavy and slow | Not recommended; installing a desktop just for a browser is a bad trade |
+| Local Chrome + exposed CDP port | No (on the server) | networking + auth to sort out | Server only computes; the browser runs on your own machine. **Caveat**: `BrowserManager` currently only launches a local Chrome — there is **no** `CDP_URL`-style remote-attach config, so this needs a code change |
+
+#### One-time manual login on the server (noVNC)
+
+Use `docker compose` to start a second container that shares the same profile
+volume, then remove it once you are logged in:
+
+```yaml
+# docker-compose.override.yml (only while logging in)
+services:
+  chrome-login:
+    image: zenika/alpine-chrome:with-node   # or any image that has chromium
+    command: >
+      sh -c "Xvfb :99 -screen 0 1440x900x24 &
+             x11vnc -display :99 -forever -nopw -listen 0.0.0.0 -rfbport 5900 &
+             websockify --web /usr/share/novnc 6080 localhost:5900 &
+             chromium --no-sandbox --user-data-dir=/profile --remote-debugging-port=9222"
+    ports:
+      - "6080:6080"        # open http://<server-ip>:6080/vnc.html
+    volumes:
+      - magic-browser-profile:/profile
+```
+
+When the login is done, run `docker compose rm -sf chrome-login` and the agent in
+the main container can use that session immediately. **The login window only
+exists while that container is running — delete it right after logging in, and
+never leave 5900/6080 exposed to the public internet long-term.**
+
+#### Verification checklist
+
+```bash
+# 1. can the container see chromium?
+docker compose exec magic which chromium
+
+# 2. is headless mode really on?
+docker compose exec magic printenv BROWSER_HEADLESS
+
+# 3. run browser_navigate once and look at the "method" field
+#    "browser" = real browser worked; "http" = it silently fell back to a plain fetch
+```
+
+When the browser is unavailable, `browser_navigate` **silently degrades** to a
+plain HTTP fetch. The `"method": "http"` field in the response is the signal —
+only `"method": "browser"` proves the real browser was used. Check that field
+first when debugging; it is faster than reading logs.
+
+#### Other common traps
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| Screenshots full of tofu boxes | Image is missing CJK fonts, so `browser_vision` literally cannot see the text. Install `font-noto-cjk` (Alpine) / `fonts-noto-cjk` (Debian) |
+| Browser starts then exits immediately | Root filesystem too small: Chrome needs a writable `/tmp` and profile dir. `--disable-dev-shm-usage` is already on by default; mount a tmpfs on `/tmp` if needed |
+| `chrome_crashpad` errors spamming the log | Normal container noise, harmless |
+| Memory exhausted / OOM | A resident headless Chrome costs 200–500MB. Cap concurrent tabs, or raise the container memory limit |
+| Pages load but the login state keeps vanishing | `browser_profile_dir` was explicitly set to `""` (fresh temp profile every time), or the profile volume is not mounted / has the wrong owner (see the ownership note in compose) |
+
 ---
 
 ## 15. MCP & ACP

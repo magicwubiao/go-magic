@@ -32,9 +32,40 @@ services:
       - "8089:8089"   # Google Chat
       - "8090:8090"   # SMS (Twilio)
     environment:
-      - TZ=UTC
+      # TZ matters for the cron entries (`magic cron` / bot routines) and for log
+      # timestamps: with TZ=UTC a "0 9 * * *" routine fires at 17:00 Beijing time.
+      - TZ=Asia/Shanghai
+      #
+      # The image already sets BROWSER_HEADLESS=true; it is repeated here because
+      # `environment:` is the place people actually look. It is required in a
+      # container: there is no X display, and isSandboxedEnvironment() does not
+      # detect a plain Alpine container, so Chrome would otherwise try to open a
+      # GUI window and fail with "cannot open display".
+      - BROWSER_HEADLESS=true
+      #
+      # Force Chinese/UTF-8 output from tools the agent runs (git log, ls, psql, ...);
+      # without it an Alpine container defaults to POSIX locale and mangles CJK.
+      - LANG=C.UTF-8
     volumes:
+      # Named volume for config. NOTE the ownership trap: Docker creates a named
+      # volume root-owned on first use, but the image runs as uid 1000 (USER magic),
+      # so the very first start leaves ~/.magic unwritable and `magic setup` cannot
+      # save config.json. If that happens, fix it once with:
+      #   docker compose run --rm --user root magic \
+      #     chown -R magic:magic /home/magic/.magic
       - magic-config:/home/magic/.magic
+      #
+      # The browser profile gets its OWN volume, separate from the config volume.
+      # This is deliberate: it is where the logged-in state of the automation
+      # browser lives (cookies, localStorage), it is large and churny, and it must
+      # stay writable by uid 1000. Keeping it separate means the config volume can
+      # be backed up/restored without dragging browser cache along.
+      #
+      # Log in once there (see docs/USAGE.zh-CN.md "在服务器上跑自动化浏览器"),
+      # e.g. by starting a second container with the noVNC image and a VNC client,
+      # or by hand-importing cookies via the browser_get_cookies/browser_set_cookies
+      # pair. The session then survives `docker compose up --build`.
+      - magic-browser-profile:/home/magic/.magic/browser-profile
     networks:
       - magic-network
     healthcheck:
@@ -72,3 +103,4 @@ networks:
 
 volumes:
   magic-config:
+  magic-browser-profile:

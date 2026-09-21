@@ -825,6 +825,119 @@ magic tools toolsets enable <name> / disable <name>
 "tools": { "enabled": ["all"], "disabled": ["browser_*"] }
 ```
 
+### 14.1 在服务器上跑自动化浏览器（无桌面环境）
+
+`browser_*` 工具不是走 HTTP 抓页面，而是用 **chromedp 通过 CDP 驱动一个真实的 Chromium**。
+所以「服务器上没有浏览器」有两层含义，要分别解决：
+
+**第一层：没有 Chromium 二进制。** 容器镜像里已经装了（Alpine 的 `chromium` 包，见 `Dockerfile`），
+裸机部署需要自己装：
+
+```bash
+# Debian / Ubuntu
+apt-get install -y chromium fonts-noto-cjk
+# CentOS / RHEL / Rocky
+dnf install -y chromium fonts-noto-cjk
+```
+
+装完确认 `magic` 能看见它（查找顺序见下表），必要时用 `CHROME_PATH` 直接指过去：
+
+```bash
+CHROME_PATH=/usr/bin/chromium magic server --port 8642
+```
+
+**第二层（更容易被忽略）：没有 X display。** 容器和多数云主机都没有显示服务，
+Chrome 默认要开 GUI 窗口，会直接死于 `cannot open display`。所以必须无头：
+
+```bash
+export BROWSER_HEADLESS=true
+```
+
+> 为什么镜像里要显式设这个变量：代码里的 `isSandboxedEnvironment()` 只认
+> `TAURI_ENV` / `FLATPAK_ID` / `SNAP` / `APPIMAGE` / `/.flatpak-info`，
+> **不认普通 Alpine/Debian 容器**，所以不会自动切无头。
+
+#### 无头不等于看不见 UI —— 自动化浏览器自己会截图
+
+这是最常见的误解。headless 只表示「没有打到显示器的窗口」，
+**页面照常渲染**，因此这些能力全都正常：
+
+所有 `browser_*` 交互（点击/输入/滚动/执行 JS/取 DOM）、
+以及 **`browser_vision`（服务端截图，再把图交给多模态模型理解）**。
+
+也就是说：**只要目的是「让 agent 看网页 / 操作网页」，装一次 Chromium + 开无头就完全够用，
+不需要 Xvfb，也不需要 VNC。**
+
+#### 什么时候才真的需要「看见界面」
+
+只有一类场景：**首次登录，需要人工扫码 / 输密码 / 过验证码**。
+无头 Chrome 的页面没有地方给人操作，这时才需要 `Xvfb + x11vnc + noVNC` 那套
+（或者干脆在本机登录好、把 cookie 导入服务器）。
+
+对应地，这个项目的持久 profile 机制是为此设计的
+（`browser_profile_dir`，默认 `~/.magic/browser-profile`）：
+把登录态落在磁盘上，**登录一次，之后一直复用**，日常运行全程无头。
+
+#### 方案对比
+
+| 方案 | 需要 X 服务 | 能装/需要吗 | 适用场景 |
+|------|------------|------------|----------|
+| **Chromium + `BROWSER_HEADLESS=true`** | 否 | 装 chromium 即可 | **推荐**。95% 场景：抓取 JS 渲染页、自动化操作、截图理解 |
+| Chromium + Xvfb（无 VNC） | 是（虚拟） | 多装 xvfb | 少数站点检测到 headless UA/指纹就拒绝服务。Xvfb 下跑「有头」Chrome 可绕过部分检测，但仍看不到画面 |
+| **Chromium + Xvfb + noVNC** | 是（虚拟） | 多装 xvfb/x11vnc/websockify | 需要在服务器上**人工登录**（扫码、验证码）。浏览器访问 `http://<host>:6080` 即可操作容器内的 Chrome |
+| X11 转发 / VNC 到真桌面 | 是（真） | 云主机需装桌面套件，重且慢 | 不推荐，纯为浏览器装桌面不划算 |
+| 本机 Chrome + CDP 端口暴露 | 否（服务器上） | 需处理网络与认证 | 服务器只做计算、浏览器跑在你自己的机器上。**注意**：当前 `BrowserManager` 只支持本机启动 Chrome，**没有** `CDP_URL` 之类的远程连接配置，需要改造代码 |
+
+#### 服务器上人工登录的一次性做法（noVNC）
+
+用 `docker compose` 起第二个容器，共用同一个 profile 卷，登录完就删掉：
+
+```yaml
+# docker-compose.override.yml（只在需要登录时临时用）
+services:
+  chrome-login:
+    image: zenika/alpine-chrome:with-node   # 或任意带 chromium 的基础镜像
+    command: >
+      sh -c "Xvfb :99 -screen 0 1440x900x24 &
+             x11vnc -display :99 -forever -nopw -listen 0.0.0.0 -rfbport 5900 &
+             websockify --web /usr/share/novnc 6080 localhost:5900 &
+             chromium --no-sandbox --user-data-dir=/profile --remote-debugging-port=9222"
+    ports:
+      - "6080:6080"        # 浏览器打开 http://<服务器IP>:6080/vnc.html
+    volumes:
+      - magic-browser-profile:/profile
+```
+
+登录完成后 `docker compose rm -sf chrome-login`，主容器里的 agent 就能直接用这份登录态。
+**登录窗口只在该容器存在期间开放，登录完立刻删掉，不要把 5900/6080 长期暴露在公网上。**
+
+#### 验证清单
+
+```bash
+# 1. 容器里能看到 chromium 吗
+docker compose exec magic which chromium
+
+# 2. 无头模式真的生效了吗
+docker compose exec magic printenv BROWSER_HEADLESS
+
+# 3. 让 agent 跑一次 browser_navigate，看返回的 "method" 字段
+#    "browser" = 走真实浏览器成功；"http" = 已降级为普通抓取（说明浏览器没起来）
+```
+
+`browser_navigate` 在浏览器不可用时会**静默降级**成普通 HTTP 抓取，
+返回体里 `"method": "http"` 就是信号 —— 只有 `"method": "browser"` 才证明走的是真浏览器。
+排障时先看这个字段，比看日志快。
+
+#### 其他容易踩的点
+
+| 现象 | 原因 / 处理 |
+|------|------------|
+| 中文页面截图全是方框 | 镜像缺中文字体，`browser_vision` 会「看不见字」。装 `font-noto-cjk`（Alpine）/ `fonts-noto-cjk`（Debian） |
+| 浏览器起来了但立刻退出 | 根分区太小：Chrome 需要可写的 `/tmp` 和 profile 目录。加 `--disable-dev-shm-usage` 已默认开启，必要时挂载 tmpfs 到 `/tmp` |
+| `chrome_crashpad` 报错刷屏 | 容器内正常噪音，不影响功能，可忽略 |
+| 内存被吃满 / OOM | 无头 Chrome 单实例常驻 200–500MB。限制并发标签页数量，或给容器加内存上限并调大 |
+| 页面能抓但登录态每次丢 | `browser_profile_dir` 被显式配成了 `""`（每次全新临时 profile），或 profile 卷没挂上 / 归属不对（见 compose 里的 ownership 说明） |
+
 ---
 
 ## 15. MCP 与 ACP

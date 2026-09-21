@@ -54,6 +54,16 @@ LABEL maintainer="go-magic"
 LABEL description="High-performance AI Agent in Go"
 
 # Install runtime dependencies
+#
+# chromium is what the agent's browser_* tools drive (chromedp talks CDP to it),
+# so it must stay installed even though the container has no display: chromedp
+# launches it headless. `chromium-chromedriver` is NOT needed by chromedp (it
+# speaks CDP directly over a websocket), so it is only kept for users who run
+# WebDriver-based scripts themselves.
+#
+# The web fonts (font-noto* / ttf-dejavu) are not cosmetic: without them Chrome
+# renders every CJK glyph as a blank box, which silently breaks
+# `browser_vision` (screenshot -> LLM) on Chinese pages.
 RUN apk add --no-cache \
     ca-certificates \
     curl \
@@ -61,7 +71,10 @@ RUN apk add --no-cache \
     bash \
     openssh-client \
     chromium \
-    chromium-chromedriver
+    chromium-chromedriver \
+    font-noto \
+    font-noto-cjk \
+    ttf-dejavu
 
 # Create non-root user
 RUN addgroup -g 1000 magic && \
@@ -72,8 +85,17 @@ WORKDIR /app
 # Copy binary from builder (contains embedded web assets)
 COPY --from=builder /magic /app/magic
 
-# Create config directory
-RUN mkdir -p /home/magic/.magic && \
+# Create the config directory and a writable browser profile dir.
+#
+# The agent's persistent Chrome profile defaults to ~/.magic/browser-profile.
+# Leaving the whole ~/.magic to the `magic-config` volume would be the obvious
+# move, but a named volume is created root-owned on first use while this image
+# runs as uid 1000 (USER magic) -- Chrome then cannot write the profile and the
+# browser tools fail even though chromium is installed. So the profile gets its
+# own directory, pre-created with the right owner, and is mounted separately in
+# docker-compose.yml, so a logged-in session survives `compose up --build`.
+# See docs/USAGE.zh-CN.md section 14.1 for the one-time noVNC login recipe.
+RUN mkdir -p /home/magic/.magic /home/magic/.magic/browser-profile && \
     chown -R magic:magic /home/magic
 
 # Switch to non-root user
@@ -108,5 +130,13 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # `magic server` defaults to port 5000, so 8642 must be passed explicitly to line up
 # with the EXPOSE above / the docker-compose port mapping; otherwise the container
 # listens on 5000 and the mapping goes nowhere.
+#
+# BROWSER_HEADLESS=true is required, not cosmetic: this image has no X display,
+# and isSandboxedEnvironment() does not detect a bare Alpine container (no
+# TAURI_ENV / FLATPAK_ID / SNAP / APPIMAGE), so without the flag the browser
+# tools would try to open a GUI window and die on "cannot open display".
+# It applies to every Chrome start, including the ones that reuse the persistent
+# profile in ~/.magic/browser-profile, so there is no reason to turn it off.
+ENV BROWSER_HEADLESS=true
 ENTRYPOINT ["/app/magic"]
 CMD ["server", "--port", "8642"]
