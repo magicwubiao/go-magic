@@ -89,6 +89,44 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("token"))
 }
 
+// authorized reports whether the request carries a credential that requireAuth
+// would accept: a live web session, or one of the legacy static-token forms
+// (Bearer header / X-Magic-Session-Token / token query param).
+//
+// Both the auth middleware and /api/auth/status go through here so the two can
+// never disagree: the web router guard treats "authenticated" as "the protected
+// middleware would let me in".
+func (s *Server) authorized(r *http.Request) bool {
+	s.authMu.RLock()
+	token := s.authToken
+	s.authMu.RUnlock()
+
+	if token == "" {
+		return false
+	}
+
+	// 1) Live session token (modern, supports logout/expiry).
+	if st := bearerToken(r); s.sessions.validate(st) {
+		return true
+	}
+
+	// 2) Legacy static token (the bcrypt hash itself) for backward
+	//    compatibility with clients that logged in before sessions.
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) == 1 {
+		return true
+	}
+
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Magic-Session-Token")), []byte(token)) == 1 {
+		return true
+	}
+
+	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
+		return true
+	}
+
+	return false
+}
+
 // handleAuthLogin verifies the password and, on success, issues a fresh
 // random session token instead of returning the stored hash.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +250,13 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 
 	// Issue a session so the first-time setup flows straight into the app.
 	sessionToken := s.sessions.create(true)
+	if sessionToken == "" {
+		// 密码已落盘但会话没建起来：明确报错，别回一个 token:"" 让前端存空串
+		// （空串在 localStorage 里是 falsy，会被当成"没登录"，用户刚设完密码
+		// 又被弹回登录页，还不明白为什么）。
+		http.Error(w, `{"error":"failed to create session"}`, http.StatusInternalServerError)
+		return
+	}
 	jsonResponse(w, map[string]interface{}{
 		"ok":    true,
 		"token": sessionToken,
@@ -244,12 +289,21 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]bool{"ok": true})
 }
 
+// handleAuthStatus reports whether a password is configured, plus whether the
+// credential the caller presented is still valid.
+//
+// `authenticated` exists so the web router guard can tell a real login from a
+// token left over in localStorage (expired session, revoked sessions after a
+// password reset, or a server that switched magic home). 只凭"本地有 token"
+// 放行，会让主界面带着死 token 并发发出十几个请求全部 401，把错误提示弹在
+// 认证页上——那正是用户看到的"有时候出现弹窗错误"。
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	s.authMu.RLock()
 	token := s.authToken
 	s.authMu.RUnlock()
 
 	jsonResponse(w, map[string]interface{}{
-		"configured": token != "",
+		"configured":    token != "",
+		"authenticated": s.authorized(r),
 	})
 }

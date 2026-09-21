@@ -1638,6 +1638,9 @@ export default {
     hidePassword: 'Hide password',
     loginFailed: 'Incorrect password, please try again',
     tooManyAttempts: 'Too many attempts, please try again later',
+    alreadyConfigured: 'Authentication is already set up — please sign in',
+    serverError: 'Server error, please try again later',
+    serverUnreachable: 'Cannot reach the server — please check your network',
     loginSuccess: 'Login successful',
   },
 }

@@ -4,7 +4,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import naive from 'naive-ui'
 import App from './App.vue'
 import { i18n } from './locales'
-import { getAuthToken } from './api/client'
+import { getAuthToken, setAuthToken } from './api/client'
 import { getAuthStatus } from './api/auth'
 
 import AuthView from './views/AuthView.vue'
@@ -79,7 +79,21 @@ router.beforeEach(async (to) => {
       return true
     }
 
-    // Has token → authenticated, allow all routes
+    // 有 token 不等于会话有效（过期 / 被吊销 / 服务端换了 magic home / 升级后
+    // 会话存储重建）。必须由服务端确认，否则会带着死凭据进主界面，十几个并发
+    // 请求全部 401，错误提示就落在认证页上了——即"有时出现弹窗错误"。
+    //
+    // 只在明确 false 时拦：老后端没有 authenticated 字段（新旧混装）时退回旧行为，
+    // 否则会把已登录用户永远挡在登录页。
+    if (status.authenticated === false) {
+      setAuthToken(null)
+      if (to.path !== '/login') {
+        return { path: '/login' }
+      }
+      return true
+    }
+
+    // Has a valid session → allow all routes
     // If on login page, redirect to main
     if (to.path === '/login') {
       return { path: '/' }

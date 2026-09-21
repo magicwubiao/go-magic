@@ -4,8 +4,8 @@
       <locale-switch light />
     </div>
     <n-card class="auth-card" :title="authStore.configured ? t('auth.login') : t('auth.setPassword')">
-      <n-alert v-if="authStore.error" type="error" style="margin-bottom: 16px;" closable @close="authStore.error = null">
-        {{ authStore.error }}
+      <n-alert v-if="alertText" type="error" style="margin-bottom: 16px;" closable @close="clearError">
+        {{ alertText }}
       </n-alert>
 
       <n-form @submit.prevent="handleSubmit">
@@ -61,10 +61,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
+import type { AuthErrorCode } from '@/stores/auth'
 import { useMessage } from 'naive-ui'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 
@@ -75,6 +76,33 @@ const authStore = useAuthStore()
 const password = ref('')
 const showPassword = ref(false)
 const remember = ref(true)
+// 纯前端的校验（如密码长度）不进 store，避免和接口错误混在一起
+const localError = ref('')
+
+// 服务端错误按分类码映射文案：早前直接把异常 message 当文案，会先渲染一帧
+// 原始英文 "Unauthorized" 再被覆盖，看上去像"弹了个错误"。
+function errorTextFor(code: AuthErrorCode): string {
+  switch (code) {
+    case 'rate_limited':
+      return t('auth.tooManyAttempts')
+    case 'conflict':
+      return t('auth.alreadyConfigured')
+    case 'server':
+      return t('auth.serverError')
+    case 'network':
+      return t('auth.serverUnreachable')
+    default:
+      return t('auth.loginFailed')
+  }
+}
+
+const alertText = computed(() =>
+  localError.value || (authStore.errorCode ? errorTextFor(authStore.errorCode) : ''))
+
+function clearError(): void {
+  localError.value = ''
+  authStore.clearError()
+}
 
 onMounted(async () => {
   await authStore.checkStatus()
@@ -84,30 +112,22 @@ onMounted(async () => {
 })
 
 async function handleSubmit(): Promise<void> {
+  localError.value = ''
+  authStore.clearError()
+
   if (!password.value || password.value.length < 8) {
-    authStore.error = t('auth.passwordMinLength')
+    localError.value = t('auth.passwordMinLength')
     return
   }
 
-  let success = false
-  if (authStore.configured) {
-    success = await authStore.login(password.value, remember.value)
-  } else {
-    success = await authStore.setup(password.value)
-  }
+  const success = authStore.configured
+    ? await authStore.login(password.value, remember.value)
+    : await authStore.setup(password.value)
 
   if (success) {
     password.value = ''
     message.success(t('auth.loginSuccess'))
     router.push('/')
-  } else {
-    // Surface a friendlier message for rate-limit responses.
-    const msg = authStore.error || ''
-    if (msg.includes('429') || /too many/i.test(msg)) {
-      authStore.error = t('auth.tooManyAttempts')
-    } else if (authStore.configured) {
-      authStore.error = t('auth.loginFailed')
-    }
   }
 }
 </script>

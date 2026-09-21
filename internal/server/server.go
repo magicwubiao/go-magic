@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -1287,26 +1286,9 @@ func (s *Server) Start(port int) error {
 				return
 			}
 
-			// 1) Live session token (modern, supports logout/expiry).
-			if st := bearerToken(r); s.sessions.validate(st) {
-				h(w, r)
-				return
-			}
-
-			// 2) Legacy static token (the bcrypt hash itself) for backward
-			//    compatibility with clients that logged in before sessions.
-			authHeader := r.Header.Get("Authorization")
-			if subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+token)) == 1 {
-				h(w, r)
-				return
-			}
-
-			if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Magic-Session-Token")), []byte(token)) == 1 {
-				h(w, r)
-				return
-			}
-
-			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
+			// 判定逻辑与 /api/auth/status 的 authenticated 完全共用（s.authorized），
+			// 保证前端守卫"服务端说有效"与中间件"放行"永远一致。
+			if s.authorized(r) {
 				h(w, r)
 				return
 			}

@@ -21,6 +21,31 @@ export interface RequestOptions extends RequestInit {
   skipAuth?: boolean
 }
 
+/** Error carrying the HTTP status, so callers can tell 401/429/5xx apart without
+ *  string-matching on the message. */
+export interface ApiError extends Error {
+  status?: number
+}
+
+function apiError(message: string, status?: number): ApiError {
+  const err = new Error(message) as ApiError
+  if (status !== undefined) err.status = status
+  return err
+}
+
+/**
+ * 会话失效时统一收口：清掉本地 token，并把路由带回登录页。
+ * 只在"尚未处于登录页"时改写一次 hash——一个页面挂载会并发发出十几个请求，
+ * 每个 401 都写一次 hash 会反复触发路由，而且后续请求的错误会以 toast 的形式
+ * 落在刚打开的认证页上。
+ */
+export function handleUnauthorized(): void {
+  setAuthToken(null)
+  if (!window.location.hash.startsWith('#/login')) {
+    window.location.hash = '#/login'
+  }
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = `${BASE_URL}${path}`
   const headers: Record<string, string> = {
@@ -56,13 +81,12 @@ async function doRequest<T>(url: string, options: RequestInit & { headers: Recor
     })
 
     if (response.status === 401) {
-      setAuthToken(null)
-      window.location.hash = '#/login'
-      throw new Error('Unauthorized')
+      handleUnauthorized()
+      throw apiError('Unauthorized', 401)
     }
 
     if (response.status === 403) {
-      throw new Error('Forbidden')
+      throw apiError('Forbidden', 403)
     }
 
     if (RETRY_STATUS_CODES.includes(response.status) && retries > 0) {
@@ -72,7 +96,7 @@ async function doRequest<T>(url: string, options: RequestInit & { headers: Recor
 
     if (!response.ok) {
       const text = await response.text().catch(() => response.statusText)
-      throw new Error(`HTTP ${response.status}: ${text}`)
+      throw apiError(`HTTP ${response.status}: ${text}`, response.status)
     }
 
     const contentLength = response.headers.get('content-length')
@@ -111,14 +135,13 @@ export async function requestText(path: string, options: RequestOptions = {}): P
   const response = await fetch(url, { ...options, headers })
 
   if (response.status === 401) {
-    setAuthToken(null)
-    window.location.hash = '#/login'
-    throw new Error('Unauthorized')
+    handleUnauthorized()
+    throw apiError('Unauthorized', 401)
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText)
-    throw new Error(`HTTP ${response.status}: ${text}`)
+    throw apiError(`HTTP ${response.status}: ${text}`, response.status)
   }
 
   return response.text()
@@ -136,7 +159,7 @@ export async function downloadFile(path: string, fileName: string): Promise<void
   const response = await fetch(url, { headers })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw apiError(`HTTP ${response.status}`, response.status)
   }
 
   const blob = await response.blob()

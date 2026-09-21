@@ -1638,6 +1638,9 @@ export default {
     hidePassword: '隐藏密码',
     loginFailed: '密码错误，请重试',
     tooManyAttempts: '尝试次数过多，请稍后再试',
+    alreadyConfigured: '认证已配置，请直接登录',
+    serverError: '服务端错误，请稍后重试',
+    serverUnreachable: '无法连接服务器，请检查网络后重试',
     loginSuccess: '登录成功',
   },
 
