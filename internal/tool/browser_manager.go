@@ -42,10 +42,14 @@ type BrowserManager struct {
 // start. Takes effect only if the browser has not been initialized yet (or
 // after the next Close()/Reset()); call Close() beforehand to force a fresh
 // start when no tabs are open.
+//
+// `~` 在这里就展开（配置/接口可能传 `~/.magic/browser-profile`）：存下展开后
+// 的绝对路径，ProfileDir() 的调用方拿到的、以及之后创建的目录才会在同一处，
+// 否则会在 CWD 下建出一个字面量 `~` 目录。
 func (bm *BrowserManager) SetProfileDir(dir string) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
-	bm.profileDir = dir
+	bm.profileDir = config.ExpandHome(dir)
 }
 
 // ProfileDir returns the configured persistent profile directory ("" = temp).
@@ -53,6 +57,33 @@ func (bm *BrowserManager) ProfileDir() string {
 	bm.mu.RLock()
 	defer bm.mu.RUnlock()
 	return bm.profileDir
+}
+
+// resolveProfileDir 决定持久 profile 目录的最终取值：显式 SetProfileDir 优先，
+// 其次 BROWSER_PROFILE_DIR 环境变量，再其次配置文件的 browser_profile_dir
+// （覆盖从不经过 server 的 TUI/CLI 会话），都没有则返回 ""（=每次全新临时
+// profile，无登录态）。
+//
+// 返回值统一过 ExpandHome：三个来源都可能写成 `~/.magic/browser-profile`，
+// 少了这步就会在进程 CWD（打包安装后即安装目录）下建出字面量 `~` 目录。
+//
+// 调用契约：**不加锁**，直接读 bm.profileDir。Initialize() 是持写锁调用它的，
+// 这里再去抢读锁会自死锁（sync.RWMutex 不可重入）。
+func (bm *BrowserManager) resolveProfileDir() string {
+	dir := bm.profileDir
+	if dir == "" {
+		dir = os.Getenv("BROWSER_PROFILE_DIR")
+	}
+	if dir == "" {
+		// Load 在"配置文件不存在"（首次运行）时返回 defaultConfig() 加一个哨兵
+		// 错误，默认值照样可用，所以拿到 cfg 就用，别因 err 丢掉默认目录。
+		if cfg, _ := config.Load(); cfg != nil {
+			// GetBrowserProfileDir 已含"未配置 → 默认目录"与 `~` 展开；
+			// 显式配成 "" 才会返回空（=临时 profile）。
+			dir = cfg.GetBrowserProfileDir()
+		}
+	}
+	return config.ExpandHome(dir)
 }
 
 // BrowserTab represents a browser tab
@@ -138,21 +169,12 @@ func (bm *BrowserManager) Initialize() error {
 		opts = append(opts, chromedp.Flag("start-maximized", true))
 	}
 
-	// Persistent profile: explicit SetProfileDir wins, then
-	// BROWSER_PROFILE_DIR env, then the config file's browser_profile_dir
-	// (covers TUI/CLI sessions that never go through the server), otherwise
-	// the default temporary profile (fresh every start, no login state). The
-	// directory is created up front so Chrome never sees a missing path.
-	profileDir := bm.profileDir
-	if profileDir == "" {
-		profileDir = os.Getenv("BROWSER_PROFILE_DIR")
-	}
-	if profileDir == "" {
-		if cfg, err := config.Load(); err == nil {
-			profileDir = cfg.BrowserProfileDir
-		}
-	}
-	if profileDir != "" {
+	// The directory is created up front so Chrome never sees a missing path.
+	// 解析结果回填到 bm.profileDir（此处持写锁，只能直接赋值）：ProfileDir() 该
+	// 反映"真正在用的目录"，只认 SetProfileDir 的话，走配置/环境变量这条路的
+	// 调用方（比如 server 的热更新比较）会误判成没配置。
+	if profileDir := bm.resolveProfileDir(); profileDir != "" {
+		bm.profileDir = profileDir
 		if err := os.MkdirAll(profileDir, 0700); err != nil {
 			return fmt.Errorf("failed to create browser profile dir %q: %w", profileDir, err)
 		}

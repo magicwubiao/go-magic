@@ -219,9 +219,11 @@ func NewServer(dbPath string) *Server {
 		cfg = appconfig.DefaultConfig()
 	}
 
-	// Apply the persistent browser profile dir (empty = temp profile, the
-	// historical behavior). Must happen before the first browser tool use.
-	tool.GetBrowserManager().SetProfileDir(cfg.BrowserProfileDir)
+	// Apply the persistent browser profile dir. GetBrowserProfileDir resolves
+	// "config key absent → default dir (~/.magic/browser-profile)" and expands
+	// `~`; only an explicit empty string in config.json asks for the fresh
+	// temp profile per start. Must happen before the first browser tool use.
+	tool.GetBrowserManager().SetProfileDir(cfg.GetBrowserProfileDir())
 
 	// Open session store
 	if dbPath == "" {

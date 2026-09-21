@@ -224,7 +224,7 @@ magic config reset     # restore defaults
   "provider": "deepseek",               // current provider
   "model": "deepseek-chat",             // deprecated; prefer providers.<x>.models[0]
   "chat_mode": "chat",                  // default mode for magic chat: chat | coding
-  "browser_profile_dir": "~/.magic/browser-profile",  // persistent browser profile dir; empty = fresh temp profile each start (no cookies/login)
+  "browser_profile_dir": "~/.magic/browser-profile",  // persistent browser profile dir (this is the default when omitted); a leading ~ expands to the user home dir; set it to "" for a fresh temp profile each start (no cookies/login)
 
   "providers": {
     "deepseek": {

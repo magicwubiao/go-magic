@@ -222,7 +222,7 @@ magic config reset     # 恢复默认
   "provider": "deepseek",               // 当前 Provider
   "model": "deepseek-chat",             // 已废弃，建议用 providers.<x>.models[0]
   "chat_mode": "chat",                  // magic chat 的默认模式：chat | coding
-  "browser_profile_dir": "~/.magic/browser-profile",  // 自动化浏览器持久 profile 目录，留空=每次全新临时 profile（无 cookie/登录态）
+  "browser_profile_dir": "~/.magic/browser-profile",  // 自动化浏览器持久 profile 目录（默认值，不写就是这个）；路径支持 ~ 开头（展开为用户主目录）；显式写成 "" = 每次全新临时 profile（无 cookie/登录态）
 
   "providers": {
     "deepseek": {

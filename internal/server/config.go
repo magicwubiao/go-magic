@@ -645,6 +645,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to merge config: "+err.Error(), 500)
 			return
 		}
+		// 路径类配置在写入前统一展开 `~`：前端 / 脚本可能直接 POST 字面量
+		// `~/.magic/...`，不展开就会在进程 CWD 下建出名为 `~` 的目录，
+		// 而且会被持久化进 config.json 一直错下去。
+		s.cfg.WorkingDir = appconfig.ExpandHome(s.cfg.WorkingDir)
+		if s.cfg.BrowserProfileDir != nil {
+			dir := appconfig.ExpandHome(*s.cfg.BrowserProfileDir)
+			s.cfg.BrowserProfileDir = &dir
+		}
 		// Save (atomically; gateway section was refreshed above and merged,
 		// so do NOT preserve it from disk again here)
 		if err := s.persistConfig(false); err != nil {
@@ -717,11 +725,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// next use starts fresh with the new dir.
 		if _, ok := expanded["browser_profile_dir"]; ok {
 			bm := tool.GetBrowserManager()
-			if bm.ProfileDir() != s.cfg.BrowserProfileDir {
+			// 两侧都取"生效值"（GetBrowserProfileDir 已展开 `~` 并补默认目录）：
+			// ProfileDir() 存的是展开后的绝对路径，直接比原始配置会在每次保存时
+			// 误判成"变了"而白关一次浏览器。
+			if dir := s.cfg.GetBrowserProfileDir(); bm.ProfileDir() != dir {
 				if bm.TabCount() == 0 {
 					bm.Close()
 				}
-				bm.SetProfileDir(s.cfg.BrowserProfileDir)
+				bm.SetProfileDir(dir)
 			}
 		}
 

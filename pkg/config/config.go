@@ -17,6 +17,10 @@ import (
 const (
 	DefaultMagicHome = "~/.magic"
 	ConfigFileName   = "config.json"
+	// DefaultBrowserProfileDir 是自动化浏览器持久 profile 的默认目录。
+	// 默认即持久：登录一次（cookie/localStorage）后续都用同一份，适合抓需要
+	// 登录态的站点。想回到"每次全新临时 profile"就把它显式写成 ""。
+	DefaultBrowserProfileDir = "~/.magic/browser-profile"
 )
 
 func GetMagicHome() string {
@@ -97,9 +101,13 @@ type Config struct {
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
 	Privacy *privacy.Config `json:"privacy,omitempty"`
 	// BrowserProfileDir 指定自动化浏览器的持久 profile 目录（Chrome --user-data-dir）。
-	// 留空 = 每次启动用全新临时 profile（历史行为，无登录态）；设置后登录一次
-	// 即长期保留 cookie/localStorage。BROWSER_PROFILE_DIR 环境变量可覆盖。
-	BrowserProfileDir string        `json:"browser_profile_dir,omitempty"`
+	// 指针语义（同下方 Context）：nil（配置里没写）= 用默认值
+	// DefaultBrowserProfileDir（~/.magic/browser-profile，登录态长期保留）；
+	// 显式 "" = 每次启动用全新临时 profile（无 cookie/登录态）；
+	// 其他值 = 该目录。路径支持 `~` 开头。BROWSER_PROFILE_DIR 环境变量可覆盖。
+	// 用指针而非普通 string：Load 对已存在的 config.json 直接反序列化到零值、
+	// 不合并 defaultConfig——普通 string 无法区分"没写"和"显式写空"。
+	BrowserProfileDir *string       `json:"browser_profile_dir,omitempty"`
 	Display           DisplayConfig `json:"display,omitempty"`
 	Server            ServerConfig  `json:"server,omitempty"`
 	// Agent settings
@@ -467,6 +475,20 @@ func Load() (*Config, error) {
 		cfg.WorkingDir = getDefaultWorkingDir()
 	}
 
+	// 配置里的路径允许写 `~`（config.example.json / docs/USAGE 推荐
+	// `~/.magic/browser-profile` 这种写法），在唯一的读取入口展开成真实主目录。
+	// 少了这一步，进程会把 `~` 当普通目录名，在**当前工作目录**（打包安装后
+	// 就是安装目录）下建出一个名为 `~` 的字面量文件夹。
+	cfg.WorkingDir = ExpandHome(cfg.WorkingDir)
+	if cfg.BrowserProfileDir != nil {
+		dir := ExpandHome(*cfg.BrowserProfileDir)
+		cfg.BrowserProfileDir = &dir
+	}
+	if cfg.Memory.DBPath != nil {
+		dbPath := ExpandHome(*cfg.Memory.DBPath)
+		cfg.Memory.DBPath = &dbPath
+	}
+
 	// 兜底 Agent 循环上限默认值：磁盘 JSON 可能未写入 agent.max_turns 等字段
 	// （旧配置或手动编辑），此时若为 0 会导致 server 端回退到 agent 硬编码的
 	// 内置上限，与 Web 配置界面默认值不一致。这里补齐默认值，确保
@@ -481,6 +503,21 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+// GetBrowserProfileDir 返回最终生效的浏览器持久 profile 目录（已展开 `~`）。
+//   - 未配置（nil，老配置文件没这个键）→ 默认目录 DefaultBrowserProfileDir
+//   - 显式空字符串 → ""，表示不持久化、每次启动用全新临时 profile
+//
+// 调用方一律走这里，别直接读字段，否则会漏掉"默认值"这一支。
+func (c *Config) GetBrowserProfileDir() string {
+	if c == nil || c.BrowserProfileDir == nil {
+		return ExpandHome(DefaultBrowserProfileDir)
+	}
+	return ExpandHome(*c.BrowserProfileDir)
+}
+
+// strPtr 返回字符串字面量的指针，供指针语义的配置字段（nil = 用默认值）使用。
+func strPtr(s string) *string { return &s }
+
 func defaultConfig() *Config {
 	return &Config{
 		Profile:    "default",
@@ -489,6 +526,9 @@ func defaultConfig() *Config {
 		Provider:   "deepseek",
 		Model:      "deepseek-v4-flash",
 		Mode:       "chat",
+		// 默认就带上持久 profile 目录：浏览器登录态（cookie/localStorage）跨
+		// 会话保留。显式写成 "" 才会退回每次全新的临时 profile。
+		BrowserProfileDir: strPtr(DefaultBrowserProfileDir),
 		Cortex: CortexConfig{
 			Enabled:             true,
 			SkillMinPatternFreq: 3,
