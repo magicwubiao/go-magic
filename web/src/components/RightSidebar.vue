@@ -447,112 +447,15 @@
       </template>
     </n-modal>
 
-    <!-- File preview modal -->
-    <n-modal
+    <!-- 文件预览：公共组件（与 FilesView 复用），内置高亮/编辑/全屏与移动端适配 -->
+    <FilePreviewDialog
       v-model:show="showFilePreview"
-      preset="card"
-      :title="previewFile?.name || ''"
-      :style="{ width: '760px', maxWidth: '90vw' }"
-      :mask-closable="!hasUnsavedChanges"
-      :close-on-esc="!hasUnsavedChanges"
-      @before-leave="handleBeforePreviewClose"
-    >
-      <template #header-extra>
-        <n-tag v-if="previewFile?.size !== undefined" size="small" type="info">
-          {{ formatSize(previewFile.size) }}
-        </n-tag>
-      </template>
-      <div v-if="previewLoading" style="text-align: center; padding: 40px;">
-        <n-spin size="large" />
-        <n-text depth="3" style="display: block; margin-top: 12px;">Loading...</n-text>
-      </div>
-      <div v-else-if="previewError" style="text-align: center; padding: 40px;">
-        <n-text type="error">{{ previewError }}</n-text>
-      </div>
-      <div v-else>
-        <div class="preview-toolbar">
-          <n-space :size="8">
-            <n-button
-              size="small"
-              :type="isEditing ? 'warning' : 'default'"
-              @click="toggleEdit"
-            >
-              <template #icon>
-                <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
-              </template>
-              {{ isEditing ? t('chat.cancel') : t('chat.edit') }}
-            </n-button>
-            <n-button
-              v-if="isEditing"
-              size="small"
-              type="primary"
-              :loading="editSaving"
-              :disabled="!hasUnsavedChanges"
-              @click="saveFile"
-            >
-              <template #icon>
-                <n-icon :component="SaveOutline" />
-              </template>
-              {{ t('chat.save') }}
-            </n-button>
-          </n-space>
-          <n-space :size="8">
-            <n-button
-              size="small"
-              quaternary
-              :disabled="!previewContent"
-              @click="copyContent"
-            >
-              <template #icon>
-                <n-icon :component="CopyOutline" />
-              </template>
-              {{ t('chat.copyContent') }}
-            </n-button>
-            <n-button
-              size="small"
-              quaternary
-              :disabled="!previewFile"
-              @click="downloadPreviewFile"
-            >
-              <template #icon>
-                <n-icon :component="DownloadOutline" />
-              </template>
-              {{ t('chat.download') }}
-            </n-button>
-          </n-space>
-        </div>
-        <div v-if="hasUnsavedChanges" class="unsaved-hint">
-          <n-icon size="14" color="#f0a020" style="margin-right: 6px;">
-            <AlertCircleOutline />
-          </n-icon>
-          <n-text depth="2" style="font-size: 12px;">{{ t('chat.unsavedChanges') }}</n-text>
-        </div>
-        <div class="preview-content-container">
-          <textarea
-            v-if="isEditing"
-            v-model="editingContent"
-            class="preview-textarea"
-            spellcheck="false"
-          ></textarea>
-          <div v-else-if="previewIsBinary && isImageFile(previewFile?.name || '')" style="text-align: center; padding: 16px;">
-            <img
-              :src="getPreviewImageUrl()"
-              :alt="previewFile?.name"
-              style="max-width: 100%; max-height: 60vh; border-radius: 4px;"
-            />
-          </div>
-          <div v-else-if="previewIsBinary" style="text-align: center; padding: 40px;">
-            <n-icon size="48" depth="3"><DocumentOutline /></n-icon>
-            <n-text depth="3" style="display: block; margin-top: 16px;">{{ t('chat.binaryFilePreview') || 'Binary file, preview not supported' }}</n-text>
-            <n-button size="small" style="margin-top: 12px;" @click="downloadPreviewFile">
-              <template #icon><n-icon :component="DownloadOutline" /></template>
-              {{ t('chat.download') }}
-            </n-button>
-          </div>
-          <pre v-else class="preview-content" v-html="previewHtml"></pre>
-        </div>
-      </div>
-    </n-modal>
+      :name="previewFile?.name || ''"
+      :size="previewFile?.size"
+      :fs-path="previewFile?.path || ''"
+      :session-id="chatStore.activeSessionId || undefined"
+      @saved="loadFiles"
+    />
   </div>
 </template>
 
@@ -561,10 +464,10 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick, h } f
 import { useRouter } from 'vue-router'
 import { useMessage, NIcon } from 'naive-ui'
 import { 
-  FlagOutline, 
-  AddOutline, 
-  ChevronBackOutline, 
-  ChevronForwardOutline, 
+  FlagOutline,
+  AddOutline,
+  ChevronBackOutline,
+  ChevronForwardOutline,
   ChevronDownOutline,
   ChevronUpOutline,
   ChatbubblesOutline,
@@ -572,16 +475,11 @@ import {
   FolderOutline,
   FileTrayOutline,
   DocumentTextOutline,
-  DocumentOutline,
   DownloadOutline,
   EllipsisHorizontalOutline,
   PencilOutline,
   TrashOutline,
   RefreshOutline,
-  CopyOutline,
-  SaveOutline,
-  CloseOutline,
-  AlertCircleOutline,
   CheckmarkCircleOutline,
   CheckboxOutline,
   EyeOutline,
@@ -598,33 +496,8 @@ import type { Goal } from '@/api/goals'
 import { getGoalSessions } from '@/api/goals'
 import * as sessionsApi from '@/api/sessions'
 
-// ===== Syntax highlighting for file preview (highlight.js, light palette) =====
-import hljs from 'highlight.js/lib/core'
-import javascript from 'highlight.js/lib/languages/javascript'
-import typescript from 'highlight.js/lib/languages/typescript'
-import python from 'highlight.js/lib/languages/python'
-import go from 'highlight.js/lib/languages/go'
-import bash from 'highlight.js/lib/languages/bash'
-import json from 'highlight.js/lib/languages/json'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import markdown from 'highlight.js/lib/languages/markdown'
-import yaml from 'highlight.js/lib/languages/yaml'
-import sql from 'highlight.js/lib/languages/sql'
-import ini from 'highlight.js/lib/languages/ini'
-
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('go', go)
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('css', css)
-hljs.registerLanguage('markdown', markdown)
-hljs.registerLanguage('yaml', yaml)
-hljs.registerLanguage('sql', sql)
-hljs.registerLanguage('ini', ini)
+// 文件预览（含高亮）已抽为公共组件，RightSidebar 与 FilesView 复用
+import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const props = defineProps<{
   mobileVisible?: boolean
@@ -732,58 +605,9 @@ const renameNewName = ref('')
 const showDeleteModal = ref(false)
 const deleteTarget = ref<sessionsApi.FSEntry | null>(null)
 
-// File preview state
+// File preview state（加载/类型判定/高亮/编辑已收敛到公共组件 FilePreviewDialog）
 const showFilePreview = ref(false)
 const previewFile = ref<sessionsApi.FSEntry | null>(null)
-const previewContent = ref('')
-const previewLoading = ref(false)
-const previewError = ref('')
-const previewIsBinary = ref(false)
-const isEditing = ref(false)
-const editingContent = ref('')
-const editSaving = ref(false)
-const originalContent = ref('')
-
-const hasUnsavedChanges = computed(() => {
-  return isEditing.value && editingContent.value !== originalContent.value
-})
-
-// 扩展名 → highlight.js 语言映射
-const extLanguageMap: Record<string, string> = {
-  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
-  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-  py: 'python', go: 'go',
-  sh: 'bash', bash: 'bash', zsh: 'bash',
-  json: 'json', xml: 'xml', svg: 'xml', html: 'xml', htm: 'xml', vue: 'xml',
-  css: 'css', scss: 'css', less: 'css',
-  md: 'markdown', markdown: 'markdown',
-  yml: 'yaml', yaml: 'yaml',
-  sql: 'sql',
-  ini: 'ini', conf: 'ini', cfg: 'ini', toml: 'ini', properties: 'ini', env: 'ini',
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-// 预览高亮 HTML：按扩展名选语言，未识别时自动探测；
-// 超长文件跳过高亮（避免卡顿），异常时回退纯转义文本。
-const previewHtml = computed(() => {
-  const content = previewContent.value
-  if (!content) return ''
-  if (content.length > 500000) return escapeHtml(content)
-  const name = previewFile.value?.name || ''
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  const lang = extLanguageMap[ext]
-  try {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value
-    }
-    return hljs.highlightAuto(content).value
-  } catch {
-    return escapeHtml(content)
-  }
-})
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -1034,7 +858,7 @@ function formatTime(timestamp: number): string {
 async function loadFiles(path?: string) {
   filesLoading.value = true
   try {
-    const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, undefined, showHiddenFiles.value)
+    const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, showHiddenFiles.value)
     dirCurrentPath.value = res.current
     // 无 session 时后端会自动附加一条 ".." 父目录条目，前端已单独渲染 ".." 项，这里过滤避免重复
     fsEntries.value = (res.entries || []).filter(e => e.name !== '..')
@@ -1096,136 +920,15 @@ async function handleFileClick(entry: sessionsApi.FSEntry) {
     navigateDir(entry.path)
   } else {
     // Show file preview
-    await openFilePreview(entry)
+    openFilePreview(entry)
   }
 }
 
-async function openFilePreview(entry: sessionsApi.FSEntry) {
+// 打开预览：只负责把目标文件交给公共预览组件；类型判定、内容加载、
+// 高亮、编辑保存、全屏与移动端适配都在 FilePreviewDialog 内部完成。
+function openFilePreview(entry: sessionsApi.FSEntry) {
   previewFile.value = entry
-  previewContent.value = ''
-  previewError.value = ''
-  previewIsBinary.value = false
-  isEditing.value = false
-  editingContent.value = ''
-  originalContent.value = ''
   showFilePreview.value = true
-  previewLoading.value = true
-
-  const ext = entry.name.split('.').pop()?.toLowerCase() || ''
-  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg']
-  const binaryExts = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'mp3', 'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flac', 'aac', 'ogg', 'wav', 'ico', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
-
-  if (imageExts.includes(ext)) {
-    previewIsBinary.value = true
-    previewLoading.value = false
-    return
-  }
-
-  if (binaryExts.includes(ext)) {
-    previewIsBinary.value = true
-    previewError.value = ''
-    previewLoading.value = false
-    return
-  }
-
-  try {
-    previewContent.value = await sessionsApi.readFSFile(entry.path, chatStore.activeSessionId || undefined)
-    if (previewContent.value.includes('"binary":true') && previewContent.value.includes('"error"')) {
-      try {
-        const parsed = JSON.parse(previewContent.value)
-        if (parsed.binary) {
-          previewIsBinary.value = true
-          previewContent.value = ''
-          previewLoading.value = false
-          return
-        }
-      } catch {}
-    }
-    originalContent.value = previewContent.value
-  } catch (e: any) {
-    previewError.value = e.message || 'Failed to read file'
-    previewContent.value = ''
-  } finally {
-    previewLoading.value = false
-  }
-}
-
-function handleBeforePreviewClose(e: Event) {
-  if (hasUnsavedChanges.value) {
-    e.preventDefault()
-    if (window.confirm(t('chat.discardChanges'))) {
-      isEditing.value = false
-      editingContent.value = ''
-      showFilePreview.value = false
-    }
-  }
-}
-
-function toggleEdit() {
-  if (isEditing.value) {
-    if (hasUnsavedChanges.value && !window.confirm(t('chat.discardChanges'))) {
-      return
-    }
-    isEditing.value = false
-    editingContent.value = ''
-    return
-  }
-  editingContent.value = previewContent.value
-  originalContent.value = previewContent.value
-  isEditing.value = true
-}
-
-async function copyContent() {
-  const content = isEditing.value ? editingContent.value : previewContent.value
-  try {
-    await navigator.clipboard.writeText(content || '')
-    message.success(t('chat.contentCopied'))
-  } catch (e: any) {
-    const textarea = document.createElement('textarea')
-    textarea.value = content || ''
-    document.body.appendChild(textarea)
-    textarea.select()
-    try {
-      document.execCommand('copy')
-      message.success(t('chat.contentCopied'))
-    } catch (err) {
-      message.error(t('common.operationFailed'))
-    }
-    document.body.removeChild(textarea)
-  }
-}
-
-function isImageFile(name: string): boolean {
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
-}
-
-function getPreviewImageUrl(): string {
-  if (!previewFile.value) return ''
-  return sessionsApi.getFSReadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
-}
-
-function downloadPreviewFile() {
-  if (!previewFile.value) return
-  const url = sessionsApi.getFSDownloadUrl(previewFile.value.path, chatStore.activeSessionId || undefined)
-  downloadFile(url, previewFile.value.name)
-}
-
-async function saveFile() {
-  if (!previewFile.value) return
-  editSaving.value = true
-  try {
-    await sessionsApi.writeFSFile(previewFile.value.path, editingContent.value, chatStore.activeSessionId || undefined)
-    previewContent.value = editingContent.value
-    originalContent.value = editingContent.value
-    isEditing.value = false
-    message.success(t('chat.saveSuccess'))
-    loadFiles()
-  } catch (e: any) {
-    message.error(e.message || t('chat.saveFail'))
-  } finally {
-    editSaving.value = false
-  }
 }
 
 function startNewFolder() {
@@ -1290,10 +993,16 @@ function downloadFile(url: string, filename?: string) {
   message.success(t('common.downloadStarted'))
 }
 
-function downloadZip() {
+async function downloadZip() {
   if (!dirCurrentPath.value) return
-  const url = sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!, undefined, showHiddenFiles.value)
-  downloadFile(url, 'files.zip')
+  try {
+    // 票据是异步换来的：<a href> 带不上 Authorization 头，所以只能先把
+    // 「这一次打包」的权限（含 hidden 语义）签进 URL，再交给浏览器下载。
+    const url = await sessionsApi.getFSZipUrl(dirCurrentPath.value, chatStore.activeSessionId!, showHiddenFiles.value)
+    downloadFile(url, 'files.zip')
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.operationFailed'))
+  }
 }
 
 function getFileActions(entry: sessionsApi.FSEntry): any[] {
@@ -1325,8 +1034,12 @@ function getFileActions(entry: sessionsApi.FSEntry): any[] {
 
 async function handleFileAction(key: string, entry: sessionsApi.FSEntry) {
   if (key === 'download') {
-    const url = sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
-    downloadFile(url, entry.name)
+    try {
+      const url = await sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
+      downloadFile(url, entry.name)
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : t('common.operationFailed'))
+    }
   } else if (key === 'rename') {
     renameTarget.value = entry
     renameNewName.value = entry.name
@@ -1889,131 +1602,6 @@ async function doUpload(files: File[]) {
   justify-content: center;
   height: 100%;
   padding: 8px;
-}
-
-/* File preview styles */
-.preview-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  background: #fafafa;
-  border: 1px solid #e8e8e8;
-  border-radius: 8px;
-  margin-bottom: 12px;
-}
-
-.preview-content-container {
-  max-height: 60vh;
-  overflow: auto;
-  border: 1px solid #e8e8e8;
-  border-radius: 8px;
-}
-
-.preview-content {
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0;
-  padding: 16px;
-  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
-}
-
-.preview-textarea {
-  width: 100%;
-  min-height: 400px;
-  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 16px;
-  border: none;
-  border-radius: 8px;
-  resize: vertical;
-  box-sizing: border-box;
-  outline: none;
-}
-
-.preview-textarea:focus {
-  box-shadow: inset 0 0 0 2px #2080f0;
-}
-
-/* 预览高亮：GitHub Light 配色（全局已加载 github-dark.css，这里是浅色底，
-   必须用 :deep 覆盖 token 颜色，避免深色主题文字在浅色背景上不可读） */
-.preview-content :deep(.hljs-keyword),
-.preview-content :deep(.hljs-selector-tag),
-.preview-content :deep(.hljs-doctag) {
-  color: #d73a49;
-}
-.preview-content :deep(.hljs-string),
-.preview-content :deep(.hljs-regexp) {
-  color: #032f62;
-}
-.preview-content :deep(.hljs-comment),
-.preview-content :deep(.hljs-quote) {
-  color: #6a737d;
-  font-style: italic;
-}
-.preview-content :deep(.hljs-number),
-.preview-content :deep(.hljs-literal),
-.preview-content :deep(.hljs-symbol),
-.preview-content :deep(.hljs-bullet) {
-  color: #005cc5;
-}
-.preview-content :deep(.hljs-title),
-.preview-content :deep(.hljs-title.function_),
-.preview-content :deep(.hljs-title.class_),
-.preview-content :deep(.hljs-function) {
-  color: #6f42c1;
-}
-.preview-content :deep(.hljs-attr),
-.preview-content :deep(.hljs-attribute),
-.preview-content :deep(.hljs-variable),
-.preview-content :deep(.hljs-template-variable),
-.preview-content :deep(.hljs-name) {
-  color: #22863a;
-}
-.preview-content :deep(.hljs-built_in),
-.preview-content :deep(.hljs-type),
-.preview-content :deep(.hljs-class),
-.preview-content :deep(.hljs-params) {
-  color: #e36209;
-}
-.preview-content :deep(.hljs-meta),
-.preview-content :deep(.hljs-link),
-.preview-content :deep(.hljs-selector-attr),
-.preview-content :deep(.hljs-selector-pseudo),
-.preview-content :deep(.hljs-selector-id),
-.preview-content :deep(.hljs-selector-class) {
-  color: #005cc5;
-}
-.preview-content :deep(.hljs-section) {
-  color: #005cc5;
-  font-weight: 600;
-}
-.preview-content :deep(.hljs-emphasis) {
-  font-style: italic;
-}
-.preview-content :deep(.hljs-strong) {
-  font-weight: 600;
-}
-.preview-content :deep(.hljs-addition) {
-  color: #22863a;
-  background: #f0fff4;
-}
-.preview-content :deep(.hljs-deletion) {
-  color: #b31d28;
-  background: #ffeef0;
-}
-
-.unsaved-hint {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
-  border-radius: 6px;
 }
 
 /* Mobile backdrop */

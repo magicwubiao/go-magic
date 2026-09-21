@@ -672,6 +672,14 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 这条路由不再套 requireAuth：EventSource 无法附带 Authorization 头，只能
+	// 通过查询参数带一张 scope=events 的票据。授权判定收在这里，header 认证仍
+	// 然支持（方便其它客户端与测试），而 ?token= 已被彻底关闭（见 auth.go）。
+	if !s.eventsRequestAuthorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1247,7 +1255,14 @@ func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string
 	return result
 }
 
-func (s *Server) Start(port int) error {
+// buildRouter assembles the full HTTP route table.
+//
+// Split out of Start so tests can exercise the real chain — mux routing plus the
+// CORS and requireAuth middlewares — instead of calling handlers directly. The
+// previous /api/fs/serve tests invoked the handler in isolation and therefore
+// never noticed that the credential they assumed would arrive on every
+// sub-resource request was in fact stripped by the browser.
+func (s *Server) buildRouter() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// CORS middleware wrapper
@@ -1340,7 +1355,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/chat/stream", withCORS(requireAuth(s.handleChatStream)))
 
 	// Global realtime events (todo updates, etc.) via SSE (no session binding)
-	mux.HandleFunc("/api/events", withCORS(requireAuth(s.handleGlobalEvents)))
+	mux.HandleFunc("/api/events", withCORS(s.handleGlobalEvents))
 
 	// Tools
 	mux.HandleFunc("/api/tools", withCORS(requireAuth(s.handleTools)))
@@ -1419,6 +1434,24 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/fs/open-folder", withCORS(requireAuth(s.handleFSOpenFolder)))
 	mux.HandleFunc("/api/fs/list", withCORS(requireAuth(s.handleFSList)))
 	mux.HandleFunc("/api/fs/read", withCORS(requireAuth(s.handleFSRead)))
+	// Static preview. The credential is signed into the URL *path*
+	// (/api/fs/serve/<sig>/<subpath>) rather than sitting in a query param or a
+	// cookie, because iframe sub-resource requests keep the path (RFC 3986
+	// §5.3 path merge) but drop the query, carry no Authorization header, and
+	// carry no cookies under sandbox="allow-scripts" (no allow-same-origin).
+	// Hence the serve route is intentionally NOT wrapped in requireAuth:
+	// handleFSServe verifies the signature itself. Signing happens on the
+	// authenticated /api/fs/sign endpoint, which is the only place that needs
+	// the login token. See fs_serve.go.
+	mux.HandleFunc("/api/fs/sign", withCORS(requireAuth(s.handleFSServeSign)))
+	mux.HandleFunc(fsServePrefix+"/", withCORS(s.handleFSServe))
+	// 票据入口：给「浏览器无法附带 Authorization 头」的资源用（<img src>、
+	// <a href>、EventSource）。与 /api/fs/serve 一样刻意不套 requireAuth ——
+	// 签名票据本身就是凭据，且只解锁「某一个文件 + 某一种动作」并带硬性过期。
+	// 这里不存在任何可被客户端篡改的 query 参数：路径、动作、有效期全部来自
+	// 签名载荷。签发入口是上面那个 requireAuth 保护的 /api/fs/sign。
+	// 详见 fs_ticket.go。
+	mux.HandleFunc(fsTicketPrefix+"/", withCORS(s.handleFSTicket))
 	mux.HandleFunc("/api/fs/download", withCORS(requireAuth(s.handleFSDownload)))
 	mux.HandleFunc("/api/fs/zip", withCORS(requireAuth(s.handleFSZip)))
 	mux.HandleFunc("/api/fs/share", withCORS(requireAuth(s.handleFSShare)))
@@ -1555,6 +1588,12 @@ func (s *Server) Start(port int) error {
 
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
+
+	return mux
+}
+
+func (s *Server) Start(port int) error {
+	mux := s.buildRouter()
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)

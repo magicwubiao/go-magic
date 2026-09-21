@@ -506,7 +506,7 @@ Used inside `magic chat`:
 
 ## 9. Web Dashboard
 
-Launch: `magic server` (default `http://localhost:5000`). On first visit it walks you through setting a login password (**at least 8 characters**, stored with bcrypt). Once set, all endpoints except `/api/health`, `/api/status`, `/metrics`, `/api/fs/shared/*`, and `/api/relay/v1/dm` require an authenticated session.
+Launch: `magic server` (default `http://localhost:5000`). On first visit it walks you through setting a login password (**at least 8 characters**, stored with bcrypt). Once set, all endpoints except `/api/health`, `/api/status`, `/metrics`, `/api/fs/shared/*`, and `/api/relay/v1/dm` require an authenticated session. Login credentials go in request headers only (`Authorization: Bearer <token>` or `X-Magic-Session-Token: <token>`); the old `?token=<login credential>` form has been removed — cases that must put a credential in a URL now use a **scoped, signed ticket** (see [9.1](#91-authentication-and-url-tickets) and [AUTH.en.md](AUTH.en.md)).
 
 ### Page list
 
@@ -549,12 +549,35 @@ Launch: `magic server` (default `http://localhost:5000`). On first visit it walk
 /api/kanban/*         kanban
 /api/bots/*          bots
 /api/fs/*             filesystem
+/api/fs/sign          ticket minting (the only place a URL credential needs header auth)
+/api/fs/ticket/<sig>  ticket consumption: single-file read / download / zip / uploads
+/api/fs/serve/<sig>/  ticket consumption: served-directory static preview (credential in the path)
+/api/events           global SSE (accepts an ?sig= ticket; EventSource cannot send headers)
 /api/usage/*          usage and budget
 /api/gateway/*        gateway control
 /api/logs/*           logs
 /api/relay/v1/dm      cross-machine relay (no login check; token validated separately in the body)
 /metrics             Prometheus metrics
 ```
+
+### 9.1 Authentication and URL tickets
+
+**One rule**: scripts/curl use headers, browsers use tickets, and login credentials never enter a URL.
+
+| Scenario | How |
+|----------|-----|
+| scripts, curl, server-side integrations | `Authorization: Bearer <token from login>` (or `X-Magic-Session-Token: <content of <magic_home>/.auth_token>`) |
+| `<img>` / open a file in a new tab | `POST /api/fs/sign {"scope":"read","path":...}` with header auth → feed the returned `url` to `<img src>` |
+| `<a href>` attachment download | `scope:"download"` |
+| archive download | `scope:"zip"` (`hidden:true` includes hidden files) |
+| session uploads | `scope:"uploads"`, with `path` relative to the upload root |
+| static web preview (iframe) | `scope:"serve"` → `/api/fs/serve/<sig>/<entry>`; the credential sits in the **path** (relative sub-resources merge paths only and drop the query) |
+| SSE event stream | `scope:"events"` → `new EventSource('/api/events?sig=...')` |
+| let an outsider view one file | `/api/fs/shared/<token>` from `POST /api/fs/share` (separate credential, not a login credential) |
+
+Ticket properties: self-contained HMAC signature (key derived one-way from `authToken`), **one action on one path**, hard expiry (1 hour for one-shot actions, 24 hours for `serve`/`events`, reported as `expires_in`), reusable within its TTL but never interchangeable across scopes. Consequently **resetting the password invalidates every existing ticket immediately**.
+
+Full field reference, error codes, an old-to-new mapping table and troubleshooting: **[AUTH.en.md](AUTH.en.md)**.
 
 ---
 

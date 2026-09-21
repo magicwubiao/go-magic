@@ -68,39 +68,14 @@
       </n-card>
     </n-spin>
 
-    <!-- File preview/editor modal -->
-    <n-modal v-model:show="showPreview" preset="card" class="modal-responsive modal-scroll" :title="previewTitle" style="width: min(950px, 95vw);">
-      <n-scrollbar style="max-height: 70vh;">
-        <div v-if="previewType === 'image'" class="image-preview-wrapper">
-          <img :src="previewImageUrl" :alt="previewTitle" style="max-width: 100%; max-height: 65vh;" />
-        </div>
-        <div v-else-if="previewType === 'binary'" class="binary-preview-wrapper">
-          <n-empty :description="t('chat.binaryFilePreview') || 'Binary file, preview not supported'" />
-        </div>
-        <div v-else-if="previewType === 'text' && isEditing">
-          <n-input
-            v-model:value="editContent"
-            type="textarea"
-            :autosize="{ minRows: 20, maxRows: 40 }"
-            style="width: 100%; font-family: monospace; font-size: 13px;"
-          />
-        </div>
-        <pre v-else-if="previewContent" class="file-preview-content"><code class="preview-code" v-html="previewHtml"></code></pre>
-        <n-empty v-else :description="t('files.noPreview')" />
-      </n-scrollbar>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showPreview = false">{{ t('common.close') }}</n-button>
-          <template v-if="previewType === 'text' && !isImageFile(previewTypeName)">
-            <n-button v-if="!isEditing" @click="startEdit">{{ t('common.edit') }}</n-button>
-            <template v-else>
-              <n-button @click="cancelEdit">{{ t('common.cancel') }}</n-button>
-              <n-button type="primary" @click="saveEdit">{{ t('common.save') }}</n-button>
-            </template>
-          </template>
-        </n-space>
-      </template>
-    </n-modal>
+    <!-- 文件预览：公共组件（与 RightSidebar 复用），内置高亮/编辑/全屏与移动端适配 -->
+    <FilePreviewDialog
+      v-model:show="showPreview"
+      :name="previewFile?.filename || ''"
+      :type-name="previewFile?.disk || previewFile?.filename || ''"
+      :size="previewFile?.size"
+      :url="previewFile?.url || ''"
+    />
   </div>
 </template>
 
@@ -115,13 +90,11 @@ import {
   NDataTable,
   NEmpty,
   NPopconfirm,
-  NInput,
   NGrid,
   NGridItem,
   NStatistic,
   NCard,
   NSpin,
-  NScrollbar,
   useMessage,
 } from 'naive-ui'
 import {
@@ -143,33 +116,8 @@ import {
 import * as sessionsApi from '@/api/sessions'
 import type { DataTableColumns, PaginationProps, UploadCustomRequestOptions } from 'naive-ui'
 
-// ===== Syntax highlighting for file preview (highlight.js, light palette) =====
-import hljs from 'highlight.js/lib/core'
-import javascript from 'highlight.js/lib/languages/javascript'
-import typescript from 'highlight.js/lib/languages/typescript'
-import python from 'highlight.js/lib/languages/python'
-import go from 'highlight.js/lib/languages/go'
-import bash from 'highlight.js/lib/languages/bash'
-import json from 'highlight.js/lib/languages/json'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import markdown from 'highlight.js/lib/languages/markdown'
-import yaml from 'highlight.js/lib/languages/yaml'
-import sql from 'highlight.js/lib/languages/sql'
-import ini from 'highlight.js/lib/languages/ini'
-
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('go', go)
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('css', css)
-hljs.registerLanguage('markdown', markdown)
-hljs.registerLanguage('yaml', yaml)
-hljs.registerLanguage('sql', sql)
-hljs.registerLanguage('ini', ini)
+// 文件预览（含高亮）已抽为公共组件，FilesView 与 RightSidebar 复用
+import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -375,158 +323,32 @@ async function handleDelete(file: sessionsApi.FileItem) {
   }
 }
 
-function downloadUploadFile(file: sessionsApi.FileItem) {
-  downloadWithAuth(file.url, file.filename)
+async function downloadUploadFile(file: sessionsApi.FileItem) {
+  try {
+    // 先换一张 uploads 票据再交给浏览器下载：<a href> 带不上 Authorization 头，
+    // 而 FileItem.url 现在是裸地址。旧实现把登录凭据拼进 url（下面那个函数
+    // 名叫 downloadWithAuth，其实并不带任何认证头），那正是本次要消除的做法。
+    const url = await sessionsApi.resolveAttachmentSrc(file.url)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = file.filename
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    message.success(t('common.downloadStarted'))
+  } catch (e) {
+    message.error(t('common.operationFailed'))
+  }
 }
 
-// ===== Preview/Editor =====
+// ===== Preview（预览 UI 收敛到公共组件 FilePreviewDialog） =====
 const showPreview = ref(false)
-const previewTitle = ref('')
-// Real on-disk filename (uuid.ext) used for type/language detection. Display
-// names may carry a client-chosen extension that differs from the actual file.
-const previewTypeName = ref('')
-const previewContent = ref('')
-const previewPath = ref('')
-const previewType = ref<'text' | 'image' | 'binary' | 'none'>('none')
-const previewImageUrl = ref('')
-const previewDownloadUrl = ref('')
-const isEditing = ref(false)
-const editContent = ref('')
+const previewFile = ref<sessionsApi.FileItem | null>(null)
 
-// 扩展名 → highlight.js 语言映射
-const extLanguageMap: Record<string, string> = {
-  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
-  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-  py: 'python', go: 'go',
-  sh: 'bash', bash: 'bash', zsh: 'bash',
-  json: 'json', xml: 'xml', svg: 'xml', html: 'xml', htm: 'xml', vue: 'xml',
-  css: 'css', scss: 'css', less: 'css',
-  md: 'markdown', markdown: 'markdown',
-  yml: 'yaml', yaml: 'yaml',
-  sql: 'sql',
-  ini: 'ini', conf: 'ini', cfg: 'ini', toml: 'ini', properties: 'ini', env: 'ini',
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-// 预览高亮 HTML：按扩展名选语言，未识别时自动探测；
-// 超长文件跳过高亮（避免卡顿），异常时回退纯转义文本。
-const previewHtml = computed(() => {
-  const content = previewContent.value
-  if (!content) return ''
-  if (content.length > 500000) return escapeHtml(content)
-  const name = previewPath.value || previewTypeName.value || previewTitle.value
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  const lang = extLanguageMap[ext]
-  try {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value
-    }
-    return hljs.highlightAuto(content).value
-  } catch {
-    return escapeHtml(content)
-  }
-})
-
-function isImageFile(name: string): boolean {
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  return ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico'].includes(ext)
-}
-
-function isBinaryFile(name: string): boolean {
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  const binaryExts = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'mp3', 'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flac', 'aac', 'ogg', 'wav', 'ico', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
-  return binaryExts.includes(ext)
-}
-
-async function previewUploadFile(file: sessionsApi.FileItem) {
-  previewPath.value = ''
-  previewTitle.value = file.filename
-  previewType.value = 'none'
-  previewContent.value = ''
-  previewImageUrl.value = ''
-  previewDownloadUrl.value = file.url
-  isEditing.value = false
-
-  // Type detection must use the real on-disk extension (server-corrected),
-  // not the readable display name, so a renamed/extensionless upload still
-  // previews correctly.
-  const typeName = file.disk || file.filename
-  previewTypeName.value = typeName
-
-  if (isImageFile(typeName)) {
-    previewType.value = 'image'
-    previewImageUrl.value = file.url
-    showPreview.value = true
-    return
-  }
-
-  if (isBinaryFile(typeName)) {
-    previewType.value = 'binary'
-    showPreview.value = true
-    return
-  }
-
-  try {
-    const res = await fetch(file.url)
-    if (!res.ok) {
-      throw new Error(`Failed to preview file: ${res.statusText}`)
-    }
-    const content = await res.text()
-    if (content.includes('"binary":true') && content.includes('"error"')) {
-      try {
-        const parsed = JSON.parse(content)
-        if (parsed.binary) {
-          previewType.value = 'binary'
-          showPreview.value = true
-          return
-        }
-      } catch {}
-    }
-    previewContent.value = content
-    editContent.value = content
-    previewType.value = 'text'
-    showPreview.value = true
-  } catch (e) {
-    message.error(t('files.previewError') || 'Failed to preview file')
-    console.error(e)
-  }
-}
-
-function startEdit() {
-  isEditing.value = true
-}
-
-function cancelEdit() {
-  isEditing.value = false
-  editContent.value = previewContent.value
-}
-
-async function saveEdit() {
-  if (!previewPath.value) return
-  try {
-    await sessionsApi.writeFSFile(previewPath.value, editContent.value, undefined)
-    previewContent.value = editContent.value
-    isEditing.value = false
-    message.success(t('common.success'))
-    await loadFiles()
-  } catch (e) {
-    message.error(t('files.uploadError') || 'Save failed')
-    console.error(e)
-  }
-}
-
-async function downloadWithAuth(url: string, filename: string) {
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.style.display = 'none'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  message.success(t('common.downloadStarted'))
+function previewUploadFile(file: sessionsApi.FileItem) {
+  previewFile.value = file
+  showPreview.value = true
 }
 
 function formatSize(bytes: number): string {
@@ -551,103 +373,6 @@ onUnmounted(() => {
   height: 100%;
 }
 
-.file-preview-content {
-  background: #f5f5f5;
-  padding: 16px;
-  border-radius: 4px;
-  font-family: monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 70vh;
-  overflow: auto;
-}
-
-/* 预览高亮：GitHub Light 配色（全局已加载 github-dark.css，这里是浅色底，
-   必须用 :deep 覆盖 token 颜色，避免深色主题文字在浅色背景上不可读） */
-.file-preview-content .preview-code {
-  font: inherit;
-  white-space: inherit;
-}
-.file-preview-content :deep(.hljs-keyword),
-.file-preview-content :deep(.hljs-selector-tag),
-.file-preview-content :deep(.hljs-doctag) {
-  color: #d73a49;
-}
-.file-preview-content :deep(.hljs-string),
-.file-preview-content :deep(.hljs-regexp) {
-  color: #032f62;
-}
-.file-preview-content :deep(.hljs-comment),
-.file-preview-content :deep(.hljs-quote) {
-  color: #6a737d;
-  font-style: italic;
-}
-.file-preview-content :deep(.hljs-number),
-.file-preview-content :deep(.hljs-literal),
-.file-preview-content :deep(.hljs-symbol),
-.file-preview-content :deep(.hljs-bullet) {
-  color: #005cc5;
-}
-.file-preview-content :deep(.hljs-title),
-.file-preview-content :deep(.hljs-title.function_),
-.file-preview-content :deep(.hljs-title.class_),
-.file-preview-content :deep(.hljs-function) {
-  color: #6f42c1;
-}
-.file-preview-content :deep(.hljs-attr),
-.file-preview-content :deep(.hljs-attribute),
-.file-preview-content :deep(.hljs-variable),
-.file-preview-content :deep(.hljs-template-variable),
-.file-preview-content :deep(.hljs-name) {
-  color: #22863a;
-}
-.file-preview-content :deep(.hljs-built_in),
-.file-preview-content :deep(.hljs-type),
-.file-preview-content :deep(.hljs-class),
-.file-preview-content :deep(.hljs-params) {
-  color: #e36209;
-}
-.file-preview-content :deep(.hljs-meta),
-.file-preview-content :deep(.hljs-link),
-.file-preview-content :deep(.hljs-selector-attr),
-.file-preview-content :deep(.hljs-selector-pseudo),
-.file-preview-content :deep(.hljs-selector-id),
-.file-preview-content :deep(.hljs-selector-class) {
-  color: #005cc5;
-}
-.file-preview-content :deep(.hljs-section) {
-  color: #005cc5;
-  font-weight: 600;
-}
-.file-preview-content :deep(.hljs-emphasis) {
-  font-style: italic;
-}
-.file-preview-content :deep(.hljs-strong) {
-  font-weight: 600;
-}
-.file-preview-content :deep(.hljs-addition) {
-  color: #22863a;
-  background: #f0fff4;
-}
-.file-preview-content :deep(.hljs-deletion) {
-  color: #b31d28;
-  background: #ffeef0;
-}
-
-.image-preview-wrapper {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.binary-preview-wrapper {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 40px 0;
-}
 
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {

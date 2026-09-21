@@ -345,6 +345,8 @@ magic server
 
 Then open `http://localhost:5000` in your browser.
 
+The dashboard is protected by a login password you set on first visit. **Credentials travel in request headers only** (`Authorization: Bearer <token>`), never in a URL — for the few requests a browser cannot attach headers to (`<img src>`, `<a href>`, `EventSource`, iframe sub-resources) the frontend first mints a scoped, hard-expiring **signed ticket** via `POST /api/fs/sign` and puts *that* in the URL. The legacy `?token=<login credential>` form has been removed. See [docs/AUTH.en.md](docs/AUTH.en.md) for the credential layers, ticket scopes/TTLs, error codes and the migration table for external scripts.
+
 Features:
 - Real-time chat with streaming responses
 - Session management (create, search, resume)

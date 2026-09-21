@@ -504,7 +504,7 @@ magic coding debug --chat              # 带编码上下文的交互调试
 
 ## 9. Web Dashboard
 
-启动：`magic server`（默认 `http://localhost:5000`）。首次访问会引导设置登录密码（**至少 8 位**，用 bcrypt 存储）。设置完成后除 `/api/health`、`/api/status`、`/metrics`、`/api/fs/shared/*`、`/api/relay/v1/dm` 外，其余接口都需登录态。
+启动：`magic server`（默认 `http://localhost:5000`）。首次访问会引导设置登录密码（**至少 8 位**，用 bcrypt 存储）。设置完成后除 `/api/health`、`/api/status`、`/metrics`、`/api/fs/shared/*`、`/api/relay/v1/dm` 外，其余接口都需登录态。登录凭据只走请求头（`Authorization: Bearer <token>` 或 `X-Magic-Session-Token: <token>`）；过去那种 `?token=<登录凭据>` 已彻底删除，必须出现在 URL 里的场景改用**作用域受限的签名票据**，详见 [9.1](#91-鉴权与-url-票据) 与 [AUTH.zh-CN.md](AUTH.zh-CN.md)。
 
 ### 页面清单
 
@@ -547,12 +547,35 @@ magic coding debug --chat              # 带编码上下文的交互调试
 /api/kanban/*        看板
 /api/bots/*          Bot
 /api/fs/*            文件系统
+/api/fs/sign         票据签发（唯一需要请求头凭据的 URL 凭据入口）
+/api/fs/ticket/<sig> 票据消费：单文件 read / download / zip / uploads
+/api/fs/serve/<sig>/ 票据消费：托管目录静态预览（凭据在路径里）
+/api/events          全局 SSE（可带 ?sig= 票据，EventSource 发不出请求头）
 /api/usage/*         用量与预算
 /api/gateway/*       网关控制
 /api/logs/*          日志
 /api/relay/v1/dm     跨机器 relay（不套登录校验，令牌在请求体内独立校验）
 /metrics             Prometheus 指标
 ```
+
+### 9.1 鉴权与 URL 票据
+
+**规则一句话**：脚本/curl 用请求头，浏览器用票据；登录凭据永不进 URL。
+
+| 场景 | 做法 |
+|------|------|
+| 脚本、curl、服务端集成 | `Authorization: Bearer <登录返回的 token>`（或 `X-Magic-Session-Token: <magic_home>/.auth_token` 内容） |
+| `<img>` / 新标签页打开文件 | 带请求头 `POST /api/fs/sign {"scope":"read","path":...}` → 返回的 `url` 给 `<img src>` |
+| `<a href>` 下载附件 | `scope:"download"` |
+| 打包下载 | `scope:"zip"`（`hidden:true` 含隐藏文件） |
+| 会话上传附件 | `scope:"uploads"`，`path` 用上传根内相对路径 |
+| 静态网页预览（iframe） | `scope:"serve"` → `/api/fs/serve/<sig>/<入口>`，凭据写在**路径**里（相对子资源只做路径合并，query 会丢） |
+| SSE 事件流 | `scope:"events"` → `new EventSource('/api/events?sig=...')` |
+| 给站外的人看一个文件 | `POST /api/fs/share` 签发的 `/api/fs/shared/<token>`（独立凭据，不是登录凭据） |
+
+票据特性：自包含 HMAC 签名（密钥由 `authToken` 单向派生）、**只解锁一个动作 + 一个路径**、带硬性过期时间（一次性动作 1 小时，`serve`/`events` 24 小时，响应里给出 `expires_in`）、TTL 内可重复使用但作用域不可互相顶替。因此**重置密码会让所有旧票据立即失效**。
+
+完整字段、错误码、旧写法到新写法的对照表、以及常见报错排障，见 **[AUTH.zh-CN.md](AUTH.zh-CN.md)**。
 
 ---
 

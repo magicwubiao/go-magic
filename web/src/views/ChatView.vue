@@ -242,7 +242,7 @@
                       <img
                         v-if="file.url && isImageAttachment(file)"
                         class="message-file-thumb"
-                        :src="sessionsApi.attachmentSrc(file.url)"
+                        :src="attachmentSrcFor(file.url)"
                         :alt="attachmentLabel(file)"
                         loading="lazy"
                       />
@@ -857,7 +857,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, h, onMounted, onUnmounted, nextTick, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
 import { marked } from 'marked'
@@ -2104,6 +2104,38 @@ function isImageAttachment(file: Partial<sessionsApi.UploadedFile>): boolean {
 // 的「图片」——绝不把 uuid 晾在气泡上。
 function attachmentLabel(file: Partial<sessionsApi.UploadedFile>): string {
   return file.name || file.filename || t('chat.imageBtn')
+}
+
+// 附件缩略图的票据地址缓存。
+//
+// <img src> 带不上 Authorization 头，所以必须先用一次带头的 fetch 换一张
+// uploads 票据（见 sessionsApi.resolveAttachmentSrc）。麻烦在于渲染是同步的、
+// 换票据是异步的：这里先返回缓存值（缺失则为空串），同时后台换取并回填，
+// 靠 Vue 的响应式让图片自己补上。会话记录里的同一张图会被反复渲染，
+// sessionsApi 内部还有一层缓存，因此不会重复签发。
+const attachmentSrcs = reactive<Record<string, string>>({})
+const attachmentSrcPending = new Set<string>()
+
+function attachmentSrcFor(url?: string): string {
+  if (!url) return ''
+  if (/^(data:|blob:|https?:)/i.test(url)) return url
+  const cached = attachmentSrcs[url]
+  if (cached) return cached
+  if (!attachmentSrcPending.has(url)) {
+    attachmentSrcPending.add(url)
+    sessionsApi.resolveAttachmentSrc(url)
+      .then((signed) => {
+        attachmentSrcs[url] = signed
+      })
+      .catch(() => {
+        // 换取失败（附件已删除 / 未登录）：保持空 src，交给 <img> 自身兜底，
+        // 不把异常变成未处理的 promise rejection。
+      })
+      .finally(() => {
+        attachmentSrcPending.delete(url)
+      })
+  }
+  return ''
 }
 
 // Work directory functions

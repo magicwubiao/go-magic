@@ -346,6 +346,8 @@ magic server
 
 然后在浏览器中打开 `http://localhost:5000`。
 
+Dashboard 由首次访问时设置的登录密码保护。**登录凭据只走请求头**（`Authorization: Bearer <token>`），永不进 URL——浏览器发不出请求头的那几类请求（`<img src>`、`<a href>`、`EventSource`、iframe 子资源）改为先用 `POST /api/fs/sign` 换一张**范围受限、带硬性过期时间的签名票据**，把票据放进 URL。旧的 `?token=<登录凭据>` 写法已删除。凭据分层、票据作用域与有效期、错误码，以及外部脚本的迁移对照表见 [docs/AUTH.zh-CN.md](docs/AUTH.zh-CN.md)。
+
 功能：
 - 实时聊天对话，支持流式响应
 - 会话管理（创建、搜索、恢复）

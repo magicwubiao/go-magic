@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as todosApi from '@/api/todos'
 import type { TodoItem, TodoListResponse } from '@/api/todos'
-import { getAuthToken } from '@/api/client'
+import { signFSTicket } from '@/api/sessions'
 import { useChatStore } from './chat'
 
 let globalEventSource: EventSource | null = null
@@ -23,15 +23,36 @@ function resolveSessionId(explicit?: string): string {
   }
 }
 
+const EVENTS_RESIGN_DELAY_MS = 10_000
+
 function ensureGlobalEventSource(onTodoUpdate: () => void): void {
   globalEventSourceRefCount++
   if (globalEventSource) return
+  // 票据是异步换来的，所以这里不能直接 new EventSource。
+  void openGlobalEventSource(onTodoUpdate)
+}
 
-  const token = getAuthToken()
-  let url = '/api/events'
-  if (token) {
-    url += '?token=' + encodeURIComponent(token)
+// openGlobalEventSource 换一张 events 票据并建立 SSE 连接。
+//
+// EventSource 无法自定义请求头，凭据只能走 URL——这正是这条流过去唯一必须
+// 依赖 ?token=<登录凭据> 的原因。现在换成一张 scope=events 的签名票据：它只
+// 解锁这条只读事件流、对其它 API 无效，且带过期时间；换取票据用带
+// Authorization 头的 fetch，登录凭据不再出现在 URL 里。
+async function openGlobalEventSource(onTodoUpdate: () => void): Promise<void> {
+  // 期间可能已被 release（或已被另一次 ensure 打开）
+  if (globalEventSourceRefCount <= 0 || globalEventSource) return
+
+  let url: string
+  try {
+    url = await signFSTicket({ scope: 'events' })
+  } catch {
+    // 换不到票据（离线、未登录、服务重启）：按与断线重连相同的节奏重试
+    scheduleGlobalEventSourceReopen(onTodoUpdate)
+    return
   }
+
+  // await 期间状态可能已变：重新检查，避免留下一个无人引用的连接
+  if (globalEventSourceRefCount <= 0 || globalEventSource) return
 
   const es = new EventSource(url)
   es.onmessage = (event: MessageEvent) => {
@@ -45,19 +66,29 @@ function ensureGlobalEventSource(onTodoUpdate: () => void): void {
     }
   }
   es.onerror = () => {
-    // 浏览器 EventSource 会自动在网络错误时重连，但如果是 401 等会停止
-    // 这里兜底：如果 readyState === CLOSED，10s 后重建
+    // 浏览器 EventSource 在网络抖动时会自动重连，但它复用**同一个 URL**：
+    // 若票据已过期，重连只会一遍遍拿到 403，永远好不了。所以 CLOSED 时清掉
+    // 实例、重新签一张票据再连，而不是原样重连那串旧票据。
     if (es.readyState === EventSource.CLOSED) {
-      setTimeout(() => {
-        if (globalEventSource === es) {
-          globalEventSource = null
-          globalEventSourceRefCount = Math.max(0, globalEventSourceRefCount)
-          if (globalEventSourceRefCount > 0) ensureGlobalEventSource(onTodoUpdate)
-        }
-      }, 10000)
+      if (globalEventSource === es) {
+        globalEventSource = null
+      }
+      scheduleGlobalEventSourceReopen(onTodoUpdate)
     }
   }
   globalEventSource = es
+}
+
+// scheduleGlobalEventSourceReopen 延迟重建连接。
+//
+// 刻意不调用 ensureGlobalEventSource：那会再自增一次引用计数，而这里并没有
+// 新增订阅者。原实现正是在这条路径上反复自增，使计数只涨不跌——连接被关掉
+// 之后计数还大于 0，后续 release 永远归不了零。
+function scheduleGlobalEventSourceReopen(onTodoUpdate: () => void): void {
+  setTimeout(() => {
+    if (globalEventSource || globalEventSourceRefCount <= 0) return
+    void openGlobalEventSource(onTodoUpdate)
+  }, EVENTS_RESIGN_DELAY_MS)
 }
 
 function releaseGlobalEventSource(): void {

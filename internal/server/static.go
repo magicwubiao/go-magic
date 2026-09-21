@@ -79,6 +79,12 @@ func getContentType(path string) string {
 }
 
 func serveSPA(w http.ResponseWriter, r *http.Request) {
+	// 票据虽然已经从「登录凭据」降级为「单文件、短时效」，它终究还是出现在
+	// URL 里。Referrer-Policy 必须落在**文档响应**上才能真正生效：它约束的是
+	// 本页发起的后续请求要不要带 Referer，而不是这条 API 响应本身。
+	// no-referrer 确保页面里任何外链都拿不到我们 URL 上的票据。
+	w.Header().Set("Referrer-Policy", "no-referrer")
+
 	path := r.URL.Path
 
 	// Remove leading slash

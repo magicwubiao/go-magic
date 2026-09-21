@@ -66,6 +66,19 @@ func jsonResponse(w http.ResponseWriter, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// jsonError writes a JSON error body together with a real HTTP status code.
+//
+// Deliberately not jsonResponse: that helper always writes 200, which turns
+// failures into fake successes. Callers that only look at res.ok (or at a
+// non-2xx status) then read the error payload as if it were real content —
+// e.g. the file preview used to render
+// {"error":"file too large for preview (>2MB)"} as the file body.
+func jsonError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{"error": msg})
+}
+
 func newSSEWriter(w http.ResponseWriter, flusher http.Flusher) *sseWriter {
 	sw := &sseWriter{
 		// Buffered channel sized generously: at 5s-heartbeat cadence a

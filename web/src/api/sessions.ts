@@ -87,10 +87,9 @@ export async function getSession(id: string): Promise<{ session_id: string; mess
   return request(`/sessions/${id}/messages`)
 }
 
-export async function createSession(workDir?: string, workspaceId?: string): Promise<Session> {
+export async function createSession(workDir?: string): Promise<Session> {
   const body: Record<string, string> = {}
   if (workDir) body.work_dir = workDir
-  if (workspaceId) body.workspace_id = workspaceId
   return request('/sessions', {
     method: 'POST',
     body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
@@ -153,11 +152,10 @@ export interface FSEntry {
   hidden?: boolean
 }
 
-export async function listFSEntries(path?: string, sessionId?: string, workspaceId?: string, showHidden = false): Promise<{ current: string; entries: FSEntry[] }> {
+export async function listFSEntries(path?: string, sessionId?: string, showHidden = false): Promise<{ current: string; entries: FSEntry[] }> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
   if (sessionId) params.set('session_id', sessionId)
-  if (workspaceId) params.set('workspace_id', workspaceId)
   if (showHidden) params.set('hidden', '1')
   const query = params.toString() ? `?${params.toString()}` : ''
   const res = await request<{ current?: string; entries?: FSEntry[]; error?: string }>(`/fs/list${query}`)
@@ -169,21 +167,84 @@ export async function listFSEntries(path?: string, sessionId?: string, workspace
   return { current: res?.current || '', entries: res?.entries || [] }
 }
 
-export async function readFSFile(path: string, sessionId?: string, workspaceId?: string): Promise<string> {
+/**
+ * 预览读取失败的分类。调用方据此决定「显示错误」还是「降级为二进制占位」，
+ * 不再靠解析正文里的 {"binary":true} 去猜。
+ */
+export type FSPreviewErrorKind = 'binary' | 'too-large' | 'not-found' | 'other'
+
+export class FSPreviewError extends Error {
+  readonly kind: FSPreviewErrorKind
+  readonly status: number
+
+  constructor(message: string, kind: FSPreviewErrorKind, status: number) {
+    super(message)
+    this.name = 'FSPreviewError'
+    this.kind = kind
+    this.status = status
+  }
+}
+
+function classifyReadFailure(status: number, binary: boolean): FSPreviewErrorKind {
+  if (binary) return 'binary'
+  if (status === 413) return 'too-large'
+  if (status === 404) return 'not-found'
+  return 'other'
+}
+
+/**
+ * 读取文件原始字节。
+ *
+ * 返回 ArrayBuffer 而不是字符串，是为了把编码判定交给调用方：服务端一律按
+ * UTF-8 应答，而 GBK/GB18030 的中文文件直接 text() 会整篇乱码。
+ *
+ * 失败时抛 FSPreviewError。服务端已改为用真实状态码（413 过大 / 415 二进制 /
+ * 404 不存在）加 JSON 错误体应答，这里必须按状态码判定——只读正文的话，
+ * {"error":"file too large for preview (>2MB)"} 会被当成文件内容渲染出来。
+ */
+export async function readFSFileBytes(path: string, sessionId?: string): Promise<{ buffer: ArrayBuffer; contentType: string }> {
   const params = new URLSearchParams()
   params.set('path', path)
   if (sessionId) params.set('session_id', sessionId)
-  if (workspaceId) params.set('workspace_id', workspaceId)
-  const token = getAuthToken()
-  const headers: Record<string, string> = {}
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
-  const res = await fetch(`/api/fs/read?${params.toString()}`, { headers })
+  const res = await fetch(`/api/fs/read?${params.toString()}`, { headers: getFSAuthHeaders() })
+
   if (!res.ok) {
-    throw new Error(`Failed to read file: ${res.statusText}`)
+    let detail = ''
+    let binary = false
+    try {
+      const body = (await res.json()) as { error?: string; binary?: boolean }
+      detail = body?.error || ''
+      binary = body?.binary === true
+    } catch {
+      // 非 JSON 错误体：退回状态文本
+    }
+    throw new FSPreviewError(
+      detail || `Failed to read file: ${res.statusText || res.status}`,
+      classifyReadFailure(res.status, binary),
+      res.status,
+    )
   }
-  return res.text()
+
+  const buffer = await res.arrayBuffer()
+
+  // 兼容旧后端：二进制文件曾以 200 + {"binary":true,"error":...} 应答（现已改为 415）。
+  // 只认这个不可能出现在真实文本文件里的固定形状，避免把内容恰好是
+  // {"error": "..."} 的合法 JSON 文件误判成错误。
+  if (buffer.byteLength > 0 && buffer.byteLength <= 1024) {
+    const head = new TextDecoder('utf-8').decode(buffer)
+    if (head.includes('"binary"') && head.includes('"error"')) {
+      try {
+        const stub = JSON.parse(head) as { binary?: boolean; error?: string }
+        if (stub?.binary === true) {
+          throw new FSPreviewError(stub.error || 'binary file', 'binary', 200)
+        }
+      } catch (e) {
+        if (e instanceof FSPreviewError) throw e
+      }
+    }
+  }
+
+  return { buffer, contentType: res.headers.get('Content-Type') || '' }
 }
 
 export function getFSAuthHeaders(): Record<string, string> {
@@ -195,54 +256,114 @@ export function getFSAuthHeaders(): Record<string, string> {
   return headers
 }
 
-export function getFSReadUrl(path: string, sessionId?: string, workspaceId?: string): string {
-  const params = new URLSearchParams()
-  params.set('path', path)
-  if (sessionId) params.set('session_id', sessionId)
-  if (workspaceId) params.set('workspace_id', workspaceId)
-  const token = getAuthToken()
-  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
-  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
-  if (token) params.set('token', token)
-  return `/api/fs/read?${params.toString()}`
+/**
+ * 换取「单文件内联读取」票据地址（用于 <img src>、新标签页打开）。
+ *
+ * 不再把登录 token 拼进 query：那会让同一串能打开全部接口的凭据留在浏览器
+ * 历史、Referer 与反代日志里。改为服务端签发一张只解锁这一个文件的票据。
+ * 换取动作本身走带 Authorization 头的 fetch，因此凭据不进 URL。
+ */
+export async function getFSReadUrl(path: string, sessionId?: string): Promise<string> {
+  return signFSTicket({ scope: 'read', path, sessionId })
 }
 
-export function getFSDownloadUrl(path: string, sessionId?: string, workspaceId?: string): string {
-  const params = new URLSearchParams()
-  params.set('path', path)
-  if (sessionId) params.set('session_id', sessionId)
-  if (workspaceId) params.set('workspace_id', workspaceId)
-  const token = getAuthToken()
-  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
-  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
-  if (token) params.set('token', token)
-  return `/api/fs/download?${params.toString()}`
+// createFSServeUrl 申请静态网页预览地址（POST /api/fs/sign）。
+//
+// 返回的地址形如 /api/fs/serve/<签名>/<入口>，签名覆盖「托管目录 + 过期时间」
+// 并且写在**路径**里。这一点是必需的，不是风格选择：
+//   1. index.html 里的相对引用（assets/style.css）按 RFC 3986 §5.3 只做路径
+//      合并，query 会被整段丢弃 —— 原先挂在 ?path=&token= 上的托管根和凭据
+//      会一起消失，于是每个 css/js/图片都变成 401；
+//   2. iframe 内的子资源请求（img/link/script）带不上 Authorization header；
+//   3. sandbox 收紧后（刻意不保留 allow-same-origin）cookie 同样不会随子资源
+//      发送 —— 已实测确认：带 allow-same-origin 时子资源收到 cookie，去掉后
+//      为空。而正是这一步阻断了被预览页面读取 localStorage.auth_token。
+// 路径段是唯一能被相对引用自动继承、又不依赖任何浏览器凭据的位置。
+//
+// 请求本身走带 Authorization 头的 fetch，因此返回的地址里不含任何凭据，
+// 可以放心交给被预览的页面。
+export async function createFSServeUrl(path: string, sessionId?: string): Promise<string> {
+  return signFSTicket({ scope: 'serve', path, sessionId })
 }
 
-export async function deleteFSPath(path: string, sessionId?: string, workspaceId?: string): Promise<void> {
+/** 票据作用域：每个作用域只解锁一类动作，服务端严格校验，不可互相顶替。 */
+export type FSTicketScope = 'serve' | 'read' | 'download' | 'zip' | 'uploads' | 'events'
+
+/**
+ * signFSTicket 用登录凭据换一张作用域受限的签名票据地址（POST /api/fs/sign）。
+ *
+ * 这是「浏览器发不出 Authorization 头」那类请求（<img src> / <a href> /
+ * EventSource）唯一的凭据来源。它替代了过去的 ?token=<登录凭据>：
+ *
+ *   - 只解锁被声明的**单个动作 + 单个文件**，而不是整套 API；
+ *   - 有硬性过期时间（一次性动作 1 小时；长驻的 serve/events 1 天）；
+ *   - 密钥由 authToken 单向派生，从票据无法反推登录凭据。
+ *
+ * 换取动作本身走带 Authorization 头的 fetch，所以登录凭据永远不进 URL。
+ */
+export async function signFSTicket(params: {
+  scope: FSTicketScope
+  path?: string
+  sessionId?: string
+  hidden?: boolean
+}): Promise<string> {
+  // events 不需要 path；uploads 的 path 是上传根内的相对路径，与工作区路径
+  // 语义不同。这里原样透传，由服务端按 scope 解释，避免前端复制一遍路径规则。
+  const body: Record<string, unknown> = { scope: params.scope }
+  if (params.path !== undefined) body.path = params.path
+  if (params.sessionId) body.session_id = params.sessionId
+  if (params.hidden) body.hidden = true
+
+  const res = await fetch('/api/fs/sign', {
+    method: 'POST',
+    headers: { ...getFSAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let detail = ''
+    try {
+      detail = ((await res.json()) as { error?: string })?.error || ''
+    } catch {
+      // 非 JSON 错误体：退回状态文本
+    }
+    throw new Error(detail || `Failed to sign ticket: ${res.statusText || res.status}`)
+  }
+
+  const data = (await res.json()) as { url?: string }
+  if (!data?.url) {
+    throw new Error('Failed to sign ticket')
+  }
+  return data.url
+}
+
+/**
+ * 换取「单文件附件下载」票据地址（用于 <a href>，浏览器发不出 Authorization）。
+ */
+export async function getFSDownloadUrl(path: string, sessionId?: string): Promise<string> {
+  return signFSTicket({ scope: 'download', path, sessionId })
+}
+
+export async function deleteFSPath(path: string, sessionId?: string): Promise<void> {
   const body: Record<string, string> = { path }
   if (sessionId) body.session_id = sessionId
-  if (workspaceId) body.workspace_id = workspaceId
   return request('/fs/delete', {
     method: 'POST',
     body: JSON.stringify(body),
   })
 }
 
-export async function renameFSPath(path: string, newName: string, sessionId?: string, workspaceId?: string): Promise<{ path: string; name: string }> {
+export async function renameFSPath(path: string, newName: string, sessionId?: string): Promise<{ path: string; name: string }> {
   const body: Record<string, string> = { path, new_name: newName }
   if (sessionId) body.session_id = sessionId
-  if (workspaceId) body.workspace_id = workspaceId
   return request('/fs/rename', {
     method: 'POST',
     body: JSON.stringify(body),
   })
 }
 
-export async function writeFSFile(path: string, content: string, sessionId?: string, workspaceId?: string): Promise<{ path: string; size: number }> {
+export async function writeFSFile(path: string, content: string, sessionId?: string): Promise<{ path: string; size: number }> {
   const body: Record<string, string> = { path, content }
   if (sessionId) body.session_id = sessionId
-  if (workspaceId) body.workspace_id = workspaceId
   return request('/fs/write', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -285,17 +406,14 @@ export async function uploadFSToDir(dirPath: string, files: File[], sessionId?: 
   return response.json()
 }
 
-export function getFSZipUrl(path: string, sessionId?: string, workspaceId?: string, showHidden = false): string {
-  const params = new URLSearchParams()
-  params.set('path', path)
-  if (sessionId) params.set('session_id', sessionId)
-  if (workspaceId) params.set('workspace_id', workspaceId)
-  if (showHidden) params.set('hidden', '1')
-  const token = getAuthToken()
-  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
-  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
-  if (token) params.set('token', token)
-  return `/api/fs/zip?${params.toString()}`
+/**
+ * 换取「打包下载」票据地址。
+ *
+ * showHidden 必须写进票据载荷，不能只作为 query 参数：否则拿到票据的人可以
+ * 自行翻转 hidden，去取本不该给他的隐藏文件。所以这里把它一起交给签发端。
+ */
+export async function getFSZipUrl(path: string, sessionId?: string, showHidden = false): Promise<string> {
+  return signFSTicket({ scope: 'zip', path, sessionId, hidden: showHidden })
 }
 
 export interface ShareResponse {
@@ -314,10 +432,9 @@ export async function createShare(path: string, seconds: number = 3600): Promise
   })
 }
 
-export async function createDir(parent: string, name: string, sessionId?: string, workspaceId?: string): Promise<{ path: string; name: string }> {
+export async function createDir(parent: string, name: string, sessionId?: string): Promise<{ path: string; name: string }> {
   const body: Record<string, string> = { parent, name }
   if (sessionId) body.session_id = sessionId
-  if (workspaceId) body.workspace_id = workspaceId
   return request('/fs/mkdir', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -362,7 +479,8 @@ export async function uploadFile(file: File, sessionId?: string): Promise<Upload
   }
 
   const result: UploadedFile = await response.json()
-  result.url = addTokenToUrl(result.url)
+  // 不再往 url 上拼登录凭据：落库的引用保持裸地址，展示时由
+  // resolveAttachmentSrc 换取作用域受限的上传票据。
   // Server already persisted the file; we no longer need base64 on the wire
   // because the SSE endpoint now reads files from disk by filename. Leaving
   // the data field in the type for backward compatibility but clearing it
@@ -380,19 +498,12 @@ export interface FileItem {
   updated: string
 }
 
-export function addTokenToUrl(url: string): string {
-  const token = getAuthToken()
-  if (!token) return url
-  // TODO: 安全风险 - token 出现在 URL 中会被浏览器历史/Referer/日志记录
-  // 后续应改用一次性短 token 或 fetch-event-source 库支持 header 传 token
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}token=${encodeURIComponent(token)}`
-}
-
-// 去掉 URL 里已有的 token 参数。落库的上传引用可能带着签发时的 token
-// （上传响应就是 addTokenToUrl 处理过的），重新签发时若不剥掉，?token= 会
-// 叠加两个值，服务端只取第一个——凭据一旦轮换，旧 token 就让缩略图 401。
-function stripUrlToken(url: string): string {
+// 去掉 URL 里历史遗留的 token 参数。
+//
+// 旧实现的上传响应会被 addTokenToUrl 处理，落库的引用因而可能带着 ?token=。
+// 签发票据前必须剥掉：uploads 票据的 path 是上传根内的相对路径，残留的 query
+// 会被当成路径的一部分而导致解析失败。
+function stripLegacyUrlToken(url: string): string {
   if (!/[?&]token=/.test(url)) return url
   const hashAt = url.indexOf('#')
   const hash = hashAt >= 0 ? url.slice(hashAt) : ''
@@ -405,21 +516,36 @@ function stripUrlToken(url: string): string {
   return base.slice(0, qAt) + (qs ? `?${qs}` : '') + hash
 }
 
-// attachmentSrc 把消息里带回的附件地址变成能直接塞进 <img src> / <a href> 的
-// 地址。data:/blob:/外链原样返回；站内 /api/uploads/... 挂在 requireAuth 后面，
-// 浏览器发不出 Authorization 头，只能走 ?token=（与上传返回的 url 同一套机制）。
-export function attachmentSrc(url?: string): string {
+// 附件票据缓存。同一条聊天记录里的同一张图会被反复渲染，而签发一次票据是
+// 一次网络往返，不能每渲染一次就签一次。服务端一次性票据有效期 1 小时，
+// 缓存取半小时，留足余量避免把临期票据塞进 DOM。
+const attachmentTicketCache = new Map<string, { url: string; expiresAt: number }>()
+const ATTACHMENT_TICKET_CACHE_MS = 30 * 60 * 1000
+
+/**
+ * resolveAttachmentSrc 把消息里带回的附件地址换成能直接塞进 <img src> /
+ * <a href> 的地址。
+ *
+ * data:/blob:/外链原样返回；站内 /api/uploads/... 在认证后面，而浏览器发不出
+ * Authorization 头——这正是票据要解决的问题：换一张 scope=uploads 的票据，
+ * 只解锁这一个附件。票据异步换取，结果按源地址缓存。
+ */
+export async function resolveAttachmentSrc(url?: string): Promise<string> {
   if (!url) return ''
   if (/^(data:|blob:|https?:)/i.test(url)) return url
-  return addTokenToUrl(stripUrlToken(url))
+  const key = stripLegacyUrlToken(url)
+  const hit = attachmentTicketCache.get(key)
+  if (hit && hit.expiresAt > Date.now()) return hit.url
+  const signed = await signFSTicket({ scope: 'uploads', path: key })
+  attachmentTicketCache.set(key, { url: signed, expiresAt: Date.now() + ATTACHMENT_TICKET_CACHE_MS })
+  return signed
 }
 
 export async function listFiles(): Promise<FileItem[]> {
+  // FileItem.url 保持裸地址（不再拼登录凭据）；需要展示时由调用方通过
+  // resolveAttachmentSrc 换取票据。
   const res = await request<{ files: FileItem[] }>('/files')
-  return (res.files || []).map(f => ({
-    ...f,
-    url: addTokenToUrl(f.url),
-  }))
+  return res.files || []
 }
 
 export async function deleteFile(sessionId: string | undefined, disk: string): Promise<void> {
@@ -654,7 +780,7 @@ export interface QueuedAttachment {
 
 // queuedAttachmentsFromParts 把服务端回传的 content parts 收敛成前端统一的
 // 附件结构。url 是持久化引用（/api/uploads/...），页面刷新后仍然有效 ——
-// 渲染时由 attachmentSrc 补上认证 token。
+// 渲染时由 resolveAttachmentSrc 换取 uploads 票据（登录凭据不进 URL）。
 //
 // 刻意回 Partial<UploadedFile> 而不是 UploadedFile：服务端快照里本来就没有
 // id/size（uploads 元数据不在队列里），硬凑两个假字段只会在下游某处被当成

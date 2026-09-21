@@ -879,9 +879,21 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the archive name
-	archiveName := filepath.Base(absPath) + ".zip"
+	if err := s.writeFSZipArchive(w, absPath, info, showHidden); err != nil {
+		fmt.Fprintf(os.Stderr, "zip error: %v\n", err)
+	}
+}
 
+// writeFSZipArchive 把 absPath（文件或目录）打成 zip 流写入 w。
+//
+// 被 /api/fs/zip（header 认证）与 /api/fs/ticket/<sig>（票据认证）共用。
+// 两条入口的差别只在「如何证明你有权限」，归档语义必须完全一致——把这段
+// 逻辑复制一份出去，迟早会出现「一条入口记得跳过隐藏文件、另一条忘了」的
+// 那种不一致，而那种不一致本身就是信息泄漏。
+//
+// Content-* 响应头由本函数设置，调用方不要在调用后再写头。
+func (s *Server) writeFSZipArchive(w http.ResponseWriter, absPath string, info os.FileInfo, showHidden bool) error {
+	archiveName := filepath.Base(absPath) + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+archiveName+"\"")
 
@@ -890,11 +902,11 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 
 	if info.IsDir() {
 		base := absPath
-		err = filepath.Walk(base, func(p string, fi os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
+		walkErr := filepath.Walk(base, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
 			}
-			// Skip hidden files/dirs unless explicitly requested via ?hidden=1
+			// Skip hidden files/dirs unless explicitly requested (hidden).
 			name := fi.Name()
 			if !showHidden && strings.HasPrefix(name, ".") && p != base {
 				if fi.IsDir() {
@@ -909,7 +921,7 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 			if rel == "." {
 				return nil
 			}
-			// Always use forward slashes inside the zip
+			// Always use forward slashes inside the zip.
 			zipName := filepath.ToSlash(rel)
 			if fi.IsDir() {
 				_, err := zw.CreateHeader(&zip.FileHeader{
@@ -919,12 +931,11 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 				})
 				return err
 			}
-			header := &zip.FileHeader{
+			fw, err := zw.CreateHeader(&zip.FileHeader{
 				Name:     zipName,
 				Method:   zip.Deflate,
 				Modified: fi.ModTime(),
-			}
-			fw, err := zw.CreateHeader(header)
+			})
 			if err != nil {
 				return err
 			}
@@ -936,34 +947,25 @@ func (s *Server) handleFSZip(w http.ResponseWriter, r *http.Request) {
 			_, err = io.Copy(fw, f)
 			return err
 		})
-		if err != nil {
-			// Headers already sent, best effort log via stderr.
-			fmt.Fprintf(os.Stderr, "zip walk error: %v\n", err)
-			return
-		}
-		return
+		return walkErr
 	}
 
-	// Single file archive
-	header := &zip.FileHeader{
+	// Single file archive.
+	fw, err := zw.CreateHeader(&zip.FileHeader{
 		Name:     filepath.ToSlash(filepath.Base(absPath)),
 		Method:   zip.Deflate,
 		Modified: info.ModTime(),
-	}
-	fw, err := zw.CreateHeader(header)
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "zip header error: %v\n", err)
-		return
+		return err
 	}
 	f, err := os.Open(absPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "zip open error: %v\n", err)
-		return
+		return err
 	}
 	defer f.Close()
-	if _, err := io.Copy(fw, f); err != nil {
-		fmt.Fprintf(os.Stderr, "zip copy error: %v\n", err)
-	}
+	_, err = io.Copy(fw, f)
+	return err
 }
 
 func (s *Server) handleFSCreateDir(w http.ResponseWriter, r *http.Request) {
@@ -1219,29 +1221,29 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")
 	absPath, err := s.resolveFSPath(path, sessionID)
 	if err != nil {
-		jsonResponse(w, map[string]interface{}{"error": err.Error()})
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	info, err := os.Stat(absPath)
 	if err != nil {
-		jsonResponse(w, map[string]interface{}{"error": "file not found"})
+		jsonError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	if info.IsDir() {
-		jsonResponse(w, map[string]interface{}{"error": "path is a directory"})
+		jsonError(w, http.StatusBadRequest, "path is a directory")
 		return
 	}
 
 	// Size limit: 2MB for preview
 	if info.Size() > 2*1024*1024 {
-		jsonResponse(w, map[string]interface{}{"error": "file too large for preview (>2MB)"})
+		jsonError(w, http.StatusRequestEntityTooLarge, "file too large for preview (>2MB)")
 		return
 	}
 
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		jsonResponse(w, map[string]interface{}{"error": "cannot read file: " + err.Error()})
+		jsonError(w, http.StatusInternalServerError, "cannot read file: "+err.Error())
 		return
 	}
 
@@ -1312,7 +1314,14 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 		contentType = "image/svg+xml"
 	default:
 		if !isTextFile(data) {
-			jsonResponse(w, map[string]interface{}{"error": "binary file, preview not supported", "binary": true})
+			// 415 而不是 200：预览弹窗要能把「这是二进制」和「读取出错」区分开，
+			// 靠状态码而不是靠解析正文里的 {"binary":true} 猜。
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":  "binary file, preview not supported",
+				"binary": true,
+			})
 			return
 		}
 	}
@@ -1329,3 +1338,8 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(data)
 }
+
+// 静态预览（/api/fs/serve、/api/fs/sign）见 fs_serve.go。原实现把托管根和
+// token 挂在 query 上，而相对资源引用会丢弃 query，导致每个 css/js/图片都 401；
+// 且 http.FileServer 在目录缺少 index.html 时会生成目录列表（连 .env 一起列出）。
+// 现在改为路径签名凭据 + 显式目录解析，两处都在 fs_serve.go 里说明。

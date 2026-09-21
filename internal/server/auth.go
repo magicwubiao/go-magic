@@ -79,6 +79,11 @@ func (l *loginRateLimiter) reset(ip string) {
 }
 
 // bearerToken extracts the session token from the standard auth headers.
+//
+// 只认请求头。查询参数里的 token 曾是历史遗留通道，现已移除：登录凭据出现在
+// URL 里会被浏览器历史、Referer 头、反向代理日志记录，而且同一串凭据能打开
+// 全部受保护接口。需要「浏览器发不出请求头」的场景（<img src>、<a href>、
+// EventSource）改用作用域受限的签名票据，见 fs_ticket.go。
 func bearerToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
@@ -86,12 +91,12 @@ func bearerToken(r *http.Request) string {
 	if h := strings.TrimSpace(r.Header.Get("X-Magic-Session-Token")); h != "" {
 		return h
 	}
-	return strings.TrimSpace(r.URL.Query().Get("token"))
+	return ""
 }
 
 // authorized reports whether the request carries a credential that requireAuth
-// would accept: a live web session, or one of the legacy static-token forms
-// (Bearer header / X-Magic-Session-Token / token query param).
+// would accept: a live web session, or one of the legacy static-token headers
+// (Bearer / X-Magic-Session-Token).
 //
 // Both the auth middleware and /api/auth/status go through here so the two can
 // never disagree: the web router guard treats "authenticated" as "the protected
@@ -120,10 +125,10 @@ func (s *Server) authorized(r *http.Request) bool {
 		return true
 	}
 
-	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
-		return true
-	}
-
+	// 这里曾有一条 ?token=<登录凭据> 的判定分支，已删除。
+	// 它让同一串凭据能打开全部受保护接口，并把凭据留在浏览器历史、Referer
+	// 与反代日志里。需要 URL 携带凭据的场景一律改用作用域受限的签名票据
+	// （见 fs_ticket.go），且票据只解锁被声明的单个动作。
 	return false
 }
 

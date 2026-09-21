@@ -49,7 +49,11 @@ func TestAuthStatusAuthenticated(t *testing.T) {
 		{name: "有效会话 token", header: "Bearer " + live, want: true},
 		{name: "旧式静态 token（Authorization）", header: "Bearer " + legacyHash, want: true},
 		{name: "旧式静态 token（X-Magic-Session-Token）", xToken: legacyHash, want: true},
-		{name: "旧式静态 token（query）", query: legacyHash, want: true},
+		// ?token= 这条旁路已被移除：它曾让同一串登录凭据出现在浏览器历史、
+		// Referer 与反代日志里，并能打开全部受保护接口。需要 URL 携带凭据的
+		// 场景改用作用域受限的签名票据（见 fs_ticket.go）。
+		// 这里刻意保留该用例并断言 false，把它变成一条"后门必须失效"的回归测试。
+		{name: "旧式静态 token（query）旁路必须失效", query: legacyHash, want: false},
 		{name: "错误凭据", header: "Bearer nope", want: false},
 	}
 
