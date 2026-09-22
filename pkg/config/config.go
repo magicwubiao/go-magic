@@ -540,23 +540,35 @@ func (c *Config) GetBrowserProfileDir() string {
 
 // defaultBrowserProfileDirAbs 解析"没有显式配置 browser_profile_dir"时的默认目录。
 //
-// 刻意用**真实的 magic home**（GetMagicHome：GO_MAGIC_HOME → HOME → UserHomeDir →
-// /etc/passwd → /tmp）而不是 DefaultBrowserProfileDir 那个字面量 `~/.magic/...`：
-// DefaultBrowserProfileDir 是给人看的展示值（写进 config.example.json / Web 表单），
-// 一旦环境里没有 HOME，"~" 就无从展开，Chrome 会把 `~` 当普通目录名，在**进程 CWD**
-// 下建出站点目录里的 `~/.magic/browser-profile`——宝塔面板以 root 起服务时就是这样。
+// 口径分两支，**顺序不能调换**（调换过一次，CI 上 red 了，见 paths_test.go）：
 //
-// 注意 magic home 自身可能带 `~`（默认 "~/.magic"），所以这里再兜一层
-// ExpandHome：GetMagicHome 在没有 HOME 时会拼出 "\~\.magic" 这种带波浪号的
-// 相对路径，光靠它仍然收不到绝对路径。
+//  1. 拿得到真实主目录 → `$REALHOME/.magic/browser-profile`，也就是展示值
+//     DefaultBrowserProfileDir（`~/.magic/browser-profile`）的展开结果。
+//     老部署的登录态就在这儿，这一支必须**一个字节都不能变**，否则升级后
+//     所有人的 cookie/localStorage 会凭空消失。
+//  2. 拿不到主目录（面板 / systemd `Restart=` 起的服务、`sudo` 清过环境、
+//     容器里的裸 root）→ 退回**真实的 magic home**（GetMagicHome：
+//     GO_MAGIC_HOME → HOME → UserHomeDir → /etc/passwd → /tmp）。
+//
+// 为什么第 2 支不能直接写成 `filepath.Join(GetMagicHome(), "browser-profile")`
+// 一把梭：HOME 可用时 GetMagicHome() 本身就是 `$HOME/.magic`，Join 出来仍是
+// `$HOME/.magic/browser-profile`，看着对；但这样得到的是**绝对路径**，
+// ExpandHome 于是原样返回、函数提前返回，"重锚到 magic home"的逻辑永远走不到。
+// 更要命的是它绕开了展示值的口径——配置里写的、界面上显示的、真正用的三者
+// 从此不一致，排障时 `magic config list` 的 Profile Dir 会指到一个没人配过的
+// 地方。所以第 1 支显式复用 ExpandHome(DefaultBrowserProfileDir)。
+//
+// 注意第 2 支里 magic home 自身可能带 `~`（HOME 缺失时 GetMagicHome 会拼出
+// `~/.magic`），所以还要再兜一层 ExpandHome，末尾再兜一层"基于 CWD 绝对化"：
+// 位置不理想，但至少是绝对路径，Chrome 不会再在站点目录里建出一个字面量 `~`。
 func defaultBrowserProfileDirAbs() string {
-	dir := filepath.Join(GetMagicHome(), "browser-profile")
-	if abs := ExpandHome(dir); abs != dir {
-		return abs
+	// 第 1 支：有真实主目录，保持约定位置不动。
+	if dir := ExpandHome(DefaultBrowserProfileDir); !strings.Contains(dir, "~") {
+		return dir
 	}
-	// 到这里说明 magic home 也没能拿回真实主目录（HOME 缺失）。最后退回"基于
-	// CWD 的绝对路径"：虽然位置不理想，但至少是个绝对路径，Chrome 不会再建出一个
-	// 字面量 `~` 目录，排障时也一眼能看出东西落在哪。
+
+	// 第 2 支：主目录不可用，落到 magic home 下。
+	dir := ExpandHome(filepath.Join(GetMagicHome(), "browser-profile"))
 	if !filepath.IsAbs(dir) {
 		if wd, err := os.Getwd(); err == nil {
 			return filepath.Join(wd, dir)

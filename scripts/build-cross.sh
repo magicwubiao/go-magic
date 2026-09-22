@@ -107,12 +107,17 @@ normalize_platform() {
 
 run_go_build() {
     local goos="$1" goarch="$2" goarm="$3" out="$4"
+    # `go` is a **native** binary: under Git Bash a POSIX `-o /d/...` path is read
+    # as "drive-relative", the compile silently lands in `D:\d\...` and go exits 0.
+    # Hand the toolchain a Windows path when that is what it expects.
+    local out_native
+    out_native="$(gm_native_path "$out")"
     if [[ -n "$goarm" ]]; then
         CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
-            go build -ldflags "$(gm_ldflags "$VERSION")" -o "$out" ./cmd/magic
+            go build -ldflags "$(gm_ldflags "$VERSION")" -o "$out_native" ./cmd/magic
     else
         CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-            go build -ldflags "$(gm_ldflags "$VERSION")" -o "$out" ./cmd/magic
+            go build -ldflags "$(gm_ldflags "$VERSION")" -o "$out_native" ./cmd/magic
     fi
 }
 
@@ -140,6 +145,15 @@ build_one() {
     # CGO_ENABLED=0 matches CI (SQLite uses the pure-Go modernc.org/sqlite)
     if ! run_go_build "$goos" "$goarch" "$goarm" "$out"; then
         gm_error "build failed: $key"
+        return 1
+    fi
+
+    # go build can exit 0 without producing anything (most notoriously when `-o`
+    # gets a path the native toolchain cannot interpret, e.g. a Git-Bash
+    # `/d/...` -- see gm_native_path). Never report success on a phantom file.
+    if [[ ! -f "$out" ]]; then
+        gm_error "go build exited 0 but $out does not exist"
+        gm_error "  (native toolchain could not write the -o path; is it a POSIX path on Windows?)"
         return 1
     fi
 

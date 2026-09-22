@@ -99,6 +99,42 @@ gm_require_cmd() {
 }
 
 # -----------------------------------------------------------------------------
+# gm_native_path <path> -- convert a Git-Bash/MSYS POSIX path into a Windows
+# path when (and only when) the toolchain consuming it is a native Windows
+# binary.
+#
+# Why this exists (real bug, 2026-09-22): `go build -o /d/foo/dist/magic` under
+# Git Bash does NOT fail. Native go.exe reads `/d/foo/...` as a path relative to
+# the current drive (`D:\d\foo\...`), silently creates that tree and exits 0. The
+# build script then reports "[ OK ] created .../go-magic-linux-amd64 ()" with an
+# empty size and the expected file never appears -- which is exactly what
+# "dist/ is empty although the build said success" looks like.
+#
+# `cygpath -w` would be the canonical converter but is not always on PATH, so we
+# do the two cases we actually need: /c/... -> C:\... and /x/... -> X:\... .
+# Anything else (already-Windows paths, relative paths, UNC) is returned as-is.
+gm_native_path() {
+    local p="${1:-}"
+
+    # Only MSYS/Git-Bash style "/<letter>/..." drive mounts are rewritten.
+    case "$p" in
+        /[A-Za-z]/*) ;;
+        *) printf '%s\n' "$p"; return 0 ;;
+    esac
+
+    # ...and only when we are actually on Windows (MSYS/Cygwin uname reports it).
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) printf '%s\n' "$p"; return 0 ;;
+    esac
+
+    local drive rest
+    drive="$(printf '%s' "${p#/}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
+    rest="${p#/?}"
+    printf '%s:%s\n' "$drive" "${rest//\//\\}"
+}
+
+# -----------------------------------------------------------------------------
 # Version resolution -- the only source is the git tag (same as CI); the version
 # is never hardcoded
 #   priority: env var VERSION > exact tag > git describe --tags --always > dev

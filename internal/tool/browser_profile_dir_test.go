@@ -67,14 +67,21 @@ func TestBrowserProfileDirExpandsTilde(t *testing.T) {
 	})
 
 	// 配置里没写 browser_profile_dir（老配置文件 / 全新安装）→ 用默认目录，
-	// 登录态跨会话持久。默认目录落在 **magic home** 下（不依赖 HOME），
-	// 理由见 pkg/config 的 ResolveBrowserProfileDir / defaultBrowserProfileDirAbs。
+	// 登录态跨会话持久。口径与 pkg/config 的 defaultBrowserProfileDirAbs 一致：
+	// **有真实主目录就仍是 `~/.magic/browser-profile`**（老部署不能搬家），
+	// 拿不到主目录时才回落到 magic home。
 	t.Run("配置缺键回落到默认目录", func(t *testing.T) {
 		magicHome := isolateConfig(t, `{"provider":"deepseek","model":"m"}`)
 
+		want := filepath.Join(home, ".magic", "browser-profile")
+		if os.Getenv("HOME") == "" && runtime.GOOS != "windows" {
+			// 只在"类 Unix 且 HOME 缺失"这一支才该落到 magic home。
+			want = filepath.Join(magicHome, "browser-profile")
+		}
+
 		bm := &BrowserManager{}
 		got := bm.resolveProfileDir()
-		if want := filepath.Join(magicHome, "browser-profile"); got != want {
+		if got != want {
 			t.Errorf("resolveProfileDir() = %q, want %q", got, want)
 		}
 		if strings.Contains(got, "~") {
