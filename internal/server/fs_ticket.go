@@ -197,12 +197,20 @@ func (s *Server) handleFSTicket(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid or expired ticket", http.StatusForbidden)
 			return
 		}
-		// 上传内容是**不可信用户内容**，与 /api/uploads/ 保持同一套加固：
-		// sandbox CSP 阻止内联 SVG/HTML 在本源执行脚本，nosniff + attachment
-		// 让响应语义恒为「下载」。
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		// 上传内容是**不可信用户内容**，应答策略（disposition + CSP）按类型
+		// 分档，见 uploadTicketPolicyFor。这里只负责落实策略，不在这里贴具体
+		// 取值：两者必须成对，散在两处迟早配错。
+		//
+		// disposition 必须**带真实文件名**：裸 "attachment"（无 filename）会让
+		// 浏览器拿 URL 最后一段当文件名——也就是把整张票据当成下载文件名。
+		// 同时 inline/attachment 的差别决定了「在新标签页打开」是渲染还是下载。
+		policy := uploadTicketPolicyFor(filepath.Ext(abs))
+		if policy.CSP != "" {
+			w.Header().Set("Content-Security-Policy", policy.CSP)
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", "attachment")
+		w.Header().Set("Content-Disposition",
+			uploadContentDisposition(filepath.Ext(abs), s.uploadTicketName(tk.Path)))
 		s.serveTicketFile(w, r, abs, false)
 	case fsScopeServe:
 		// 预览票据只能走 /api/fs/serve（那里才做 subpath 解析）。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -746,6 +747,170 @@ func (s *Server) uploadDisplayName(ref string) string {
 	return ""
 }
 
+// uploadTicketName 把「上传根内相对路径」还原成用户当初看到的文件名；查不到
+// 元数据时退回磁盘文件名。
+//
+// 票据消费端要靠它给 Content-Disposition 填名字。不填的后果不是「文件名难看」
+// 而是「文件名变成票据」：裸 attachment 时浏览器只能用 URL 最后一段命名，而
+// 上传票据的 URL 最后一段就是整张签名票据。
+func (s *Server) uploadTicketName(rel string) string {
+	if name := s.uploadDisplayName("/api/uploads/" + path.Clean("/"+rel)); name != "" {
+		return name
+	}
+	return filepath.Base(rel)
+}
+
+// 上传票据响应的固定 CSP 档位。
+//
+// 分档而不是给一个通用值：disposition 与 CSP 必须**配对**，配错的后果在浏览器
+// 里全是静默的（图不居中、页面白框、脚本读不到数据），没有任何报错可循。
+const (
+	// 位图/音视频：内容里不可能藏脚本，顶层打开要的就是「看图、看播放器」。
+	//
+	// 这里只留 sandbox（把文档关进不透明源，万一类型判断出偏差也执行不了本站
+	// 脚本）。**绝不能加 default-src 'none'**：Chrome 的图片文档（ImageDocument）
+	// 靠它自己注入的样式把 <img> 居中，default-src 会连 style-src 一起卡死，
+	// 图片于是被贴到左上角——「新标签页看图不居中」就是这个头造成的（实测：
+	// 带 default-src 'none' 时 img rect=[0,0]，去掉后回到居中）。
+	uploadCSPMedia = "sandbox"
+
+	// HTML：允许内联脚本（图表、交互全靠它），但不给 allow-same-origin，
+	// 文档因此跑在不透明源里——读不到本站 localStorage 的登录凭据，请求也不带
+	// 任何凭据（本服务不用 cookie），拿不到任何授权。
+	//
+	// 刻意不设 default-src：被预览的 HTML 报告通常自带样式与图片，卡死子资源
+	// 只会得到一个裸文本页。子资源能加载不代表能拿到数据，因为它读不到凭据。
+	uploadCSPHTML = "sandbox allow-scripts allow-forms"
+
+	// 其余类型一律按附件下载，连渲染的机会都不给。保留最紧的 CSP 作为第二道
+	// 闸：万一某个浏览器仍把它当文档渲染（<embed> 等），脚本也起不来。
+	uploadCSPAttachment = "default-src 'none'; sandbox"
+)
+
+// uploadTicketPolicy 是「某类上传文件在票据消费端怎么应答」的完整策略。
+type uploadTicketPolicy struct {
+	// Inline 为 true 时顶层导航渲染内容，false 时下载。
+	Inline bool
+	// CSP 是票据响应的 Content-Security-Policy；空串表示不发这个头。
+	CSP string
+}
+
+// uploadTicketPolicies 按磁盘扩展名给出应答策略，键为带点的扩展名。
+//
+// 白名单而非黑名单：默认落到「下载」，只有明确能安全渲染的类型才放行。顶层导航
+// 时能在本站源里执行代码的只有 svg 与 html 两类：html 用 CSP sandbox 关进不透明
+// 源后可以放行；svg 是 XML 文档，加 sandbox 只是让脚本改为跑在不透明源里，收益
+// 不如干脆不给它顶层文档的位置。
+var uploadTicketPolicies = map[string]uploadTicketPolicy{
+	".png":  {Inline: true, CSP: uploadCSPMedia},
+	".jpg":  {Inline: true, CSP: uploadCSPMedia},
+	".jpeg": {Inline: true, CSP: uploadCSPMedia},
+	".jfif": {Inline: true, CSP: uploadCSPMedia},
+	".gif":  {Inline: true, CSP: uploadCSPMedia},
+	".webp": {Inline: true, CSP: uploadCSPMedia},
+	".bmp":  {Inline: true, CSP: uploadCSPMedia},
+	".ico":  {Inline: true, CSP: uploadCSPMedia},
+	".avif": {Inline: true, CSP: uploadCSPMedia},
+	".apng": {Inline: true, CSP: uploadCSPMedia},
+
+	".mp4":  {Inline: true, CSP: uploadCSPMedia},
+	".webm": {Inline: true, CSP: uploadCSPMedia},
+	".mov":  {Inline: true, CSP: uploadCSPMedia},
+	".m4v":  {Inline: true, CSP: uploadCSPMedia},
+	".ogv":  {Inline: true, CSP: uploadCSPMedia},
+	".mp3":  {Inline: true, CSP: uploadCSPMedia},
+	".wav":  {Inline: true, CSP: uploadCSPMedia},
+	".m4a":  {Inline: true, CSP: uploadCSPMedia},
+	".flac": {Inline: true, CSP: uploadCSPMedia},
+	".aac":  {Inline: true, CSP: uploadCSPMedia},
+	".ogg":  {Inline: true, CSP: uploadCSPMedia},
+	".oga":  {Inline: true, CSP: uploadCSPMedia},
+	".opus": {Inline: true, CSP: uploadCSPMedia},
+
+	".html": {Inline: true, CSP: uploadCSPHTML},
+	".htm":  {Inline: true, CSP: uploadCSPHTML},
+
+	// PDF：交给浏览器内置阅读器。**刻意不发 CSP** —— sandbox 会让阅读器初始化
+	// 失败（与前端 iframe 对 pdf 不加 sandbox 是同一个原因，见
+	// FilePreviewDialog 的 frameSandbox）。PDF 里的脚本跑在阅读器进程内，
+	// 碰不到本站的 DOM 与存储，风险与一张图片同级。
+	".pdf": {Inline: true},
+}
+
+// uploadTicketPolicyFor 查策略，未列出的扩展名一律走「下载」。
+func uploadTicketPolicyFor(ext string) uploadTicketPolicy {
+	if p, ok := uploadTicketPolicies[strings.ToLower(ext)]; ok {
+		return p
+	}
+	return uploadTicketPolicy{Inline: false, CSP: uploadCSPAttachment}
+}
+
+// uploadTicketCSP 返回该类型该发的 Content-Security-Policy，空串表示不发这个头
+// （PDF 需要这样：sandbox 会让浏览器内置阅读器初始化失败）。
+func uploadTicketCSP(ext string) string {
+	return uploadTicketPolicyFor(ext).CSP
+}
+
+// uploadContentDisposition 生成上传票据的 Content-Disposition。
+//
+// ext 必须取自**磁盘扩展名**（upload 时按内容嗅探校正过），不要用展示名：
+// 展示名是不可信的原始客户端文件名。
+func uploadContentDisposition(ext, name string) string {
+	kind := "attachment"
+	if uploadTicketPolicyFor(ext).Inline {
+		kind = "inline"
+	}
+	return formatDisposition(kind, name)
+}
+
+// formatDisposition 拼 Content-Disposition 头值。
+//
+// 名字给两份：ASCII 化的一份进 filename=，非 ASCII 原名进 RFC 5987 的
+// filename*=（浏览器优先用它）。这样中文名不会被压成一串下划线，而看不懂
+// filename* 的老客户端也仍有可用的名字。
+//
+// 两份都必须过清洗：展示名来自上传时的原始客户端文件名，其中可能带引号、
+// 反斜杠乃至 CRLF——直接拼进响应头就是响应头注入。
+func formatDisposition(kind, name string) string {
+	ascii := dispositionNameASCII(name)
+	if ascii == "" {
+		ascii = "file"
+	}
+	out := kind + `; filename="` + ascii + `"`
+	if name != "" && name != ascii {
+		out += "; filename*=UTF-8''" + escapeRFC5987(name)
+	}
+	return out
+}
+
+// dispositionNameASCII 逐字节把名字压成可安全放进 filename="..." 的形式。
+// 非 ASCII 字节（中文等）每个都塌成一个 '_'，属于有损降级；原名由
+// filename* 承载，不依赖这里。
+func dispositionNameASCII(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c == '.' || c == '-' || c == '_' || c == ' ' || c == '(' || c == ')' || c == '+':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), " .")
+}
+
+// escapeRFC5987 做 RFC 5987 的 ext-value 百分号编码。
+//
+// url.QueryEscape 把所有非 unreserved 字节都转成 %XX（含 CR/LF，因此不可能
+// 注入响应头），唯一要修的是它把空格写成 '+'，而 attr-char 里没有 '+'。
+func escapeRFC5987(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
 // handleFileDelete — DELETE /api/files/{session_id}/{filename}
 // Legacy form /api/files/{filename} is accepted as a fallback for shared bucket.
 func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
@@ -828,17 +993,15 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 // uploadsServeHandler serves /api/uploads/ from the per-session layout. Each
 // request is auth-gated by requireAuth in the router. We never list dirs.
 //
-// Responses carry hardening headers: uploads are untrusted user content, and
-// an inline-rendered SVG (or HTML) executes in our origin — where it could
-// read localStorage tokens. "sandbox" CSP + nosniff + attachment disposition
-// guarantee download-only semantics regardless of file type.
+// Responses carry the same hardening as the uploads ticket (see
+// uploadTicketPolicyFor): uploads are untrusted user content, so the disposition
+// and CSP are picked per type rather than giving every file one blanket answer.
+// 两个入口必须给同一套策略——同一份字节因为「从哪条路子来」而行为不同，
+// 是最容易被漏掉的不一致。
 func (s *Server) uploadsServeHandler() http.Handler {
 	root := s.uploadsRoot()
 	fs := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", "attachment")
 		upath := r.URL.Path
 		if !strings.HasPrefix(upath, "/api/uploads/") {
 			http.NotFound(w, r)
@@ -864,6 +1027,13 @@ func (s *Server) uploadsServeHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		policy := uploadTicketPolicyFor(filepath.Ext(resolved))
+		if policy.CSP != "" {
+			w.Header().Set("Content-Security-Policy", policy.CSP)
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition",
+			uploadContentDisposition(filepath.Ext(resolved), s.uploadTicketName(rel)))
 		r2 := r.Clone(r.Context())
 		r2.URL.Path = "/" + filepath.ToSlash(rel)
 		fs.ServeHTTP(w, r2)

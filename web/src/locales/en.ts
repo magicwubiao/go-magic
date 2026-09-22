@@ -343,6 +343,8 @@ export default {
     unwrapLines: 'No wrap',
     markdownPreview: 'Rendered view',
     markdownSource: 'Source view',
+    htmlPreview: 'Rendered view',
+    htmlSource: 'Source view',
     openInNewTab: 'Open in new tab',
     changedFilesTitle: 'Changed files',
     changedDiffClick: 'Click to view line-level diff',

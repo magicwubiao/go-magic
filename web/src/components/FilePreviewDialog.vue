@@ -73,7 +73,7 @@
             </n-button>
           </template>
           <n-button
-            v-if="kind === 'text' && content"
+            v-if="(kind === 'text' || htmlSource) && content"
             size="small"
             quaternary
             :title="wrapLines ? t('chat.unwrapLines') : t('chat.wrapLines')"
@@ -91,6 +91,26 @@
           >
             <template #icon><n-icon :component="markdownRendered ? CodeSlashOutline : EyeOutline" /></template>
             <span v-if="!isMobile" class="btn-label">{{ markdownRendered ? t('chat.markdownSource') : t('chat.markdownPreview') }}</span>
+          </n-button>
+          <!-- HTML：默认渲染页面，可切到源码。没有这个入口时，HTML 预览是一
+               个只能看渲染结果的黑盒——排版/脚本一出问题就无从下手。
+               注意源码视图对**单文件**页面最有用：iframe 里的相对子资源
+               （<img src="logo.png">）会按票据 URL 解析，取不到同目录的别的
+               上传文件，多文件站点在这里只会渲染出一部分。 -->
+          <n-button
+            v-if="isHtmlDoc"
+            size="small"
+            quaternary
+            :loading="sourceLoading"
+            :title="htmlSource ? t('chat.htmlPreview') : t('chat.htmlSource')"
+            @click="toggleHtmlSource"
+          >
+            <template #icon>
+              <n-icon :component="htmlSource ? EyeOutline : CodeSlashOutline" />
+            </template>
+            <span v-if="!isMobile" class="btn-label">
+              {{ htmlSource ? t('chat.htmlPreview') : t('chat.htmlSource') }}
+            </span>
           </n-button>
           <n-button
             v-if="openableUrl"
@@ -207,7 +227,7 @@
           />
         </div>
 
-        <div v-else-if="kind === 'web'" class="html-preview-container">
+        <div v-else-if="kind === 'web' && !htmlSource" class="html-preview-container">
           <div v-if="webLoading" class="web-preview-loading">
             <n-spin size="large" />
           </div>
@@ -397,6 +417,11 @@ const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v', 'mpg', 'mpeg', 'ogv']
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'flac', 'aac', 'oga', 'ogg']
 const MARKDOWN_EXTS = ['md', 'markdown']
 
+// 「按网页文档渲染」的类型，必须严格是 WEB_EXTS 里走 iframe 的那几个。
+// 只有它们需要「渲染预览 ↔ 查看源码」这一对视图：音视频/PDF 没有可读源码，
+// xhtml 落在文本预览分支里本来就直接显示源码，都不该再挂一个切换按钮。
+const HTML_DOC_EXTS = ['html', 'htm']
+
 // HTML 预览的 sandbox：必须允许脚本（否则预览页跑不起来），但绝不能加
 // allow-same-origin —— 那会让被预览的 HTML 与主站同源，从而能读到
 // localStorage.auth_token，并直接拿它调用后端 API（被预览页面即可接管账号）。
@@ -463,6 +488,10 @@ const IMAGE_ZOOM_MAX = 8
 const wrapLines = ref(false)
 // Markdown：默认看源码（带高亮），可切到渲染视图
 const markdownRendered = ref(false)
+// HTML：默认渲染 iframe（上传的 HTML 也照样渲染，服务端现在按 inline 应答，
+// 隔离由响应 CSP 的 sandbox 承担），可切到源码视图（见 toggleHtmlSource）
+const htmlSource = ref(false)
+const sourceLoading = ref(false)
 
 const isMobile = ref(typeof window !== 'undefined' && window.innerWidth <= 768)
 const updateIsMobile = () => {
@@ -477,8 +506,16 @@ const ext = computed(() => (props.typeName || props.name || '').split('.').pop()
 
 const usesFsPath = computed(() => !!props.fsPath)
 
-// 只有工作区文件（有 fsPath）才可写回保存
-const canEdit = computed(() => props.editable && usesFsPath.value)
+// 只有真拿到正文的文本类文件才可写回：二进制与音视频/PDF 根本没有正文，
+// 旧实现下它们照样显示「编辑」，点开是一个空文本域——一旦误保存就把文件清空。
+// HTML 在读出来源之后（htmlSource 分支）同样可编辑，kind 仍是 'web'，
+// 所以这里按「有没有正文」判，而不是只认 kind === 'text'。
+const canEdit = computed(
+  () =>
+    props.editable
+    && usesFsPath.value
+    && (kind.value === 'text' || (kind.value === 'web' && !!content.value)),
+)
 
 const unsavedChanges = computed(
   () => isEditing.value && editingContent.value !== originalContent.value,
@@ -501,6 +538,9 @@ const imageUrl = computed(() => readUrl.value)
 const frameSandbox = computed(() => (ext.value === 'pdf' ? undefined : HTML_FRAME_SANDBOX))
 
 const isMarkdown = computed(() => MARKDOWN_EXTS.includes(ext.value))
+
+// 可切换「渲染预览 / 源码」的网页文档（HTML）
+const isHtmlDoc = computed(() => HTML_DOC_EXTS.includes(ext.value))
 
 // 能在新标签页独立打开的地址（图片/媒体/PDF/HTML 用托管地址）
 const openableUrl = computed(() => {
@@ -581,6 +621,8 @@ function reset() {
   imageZoom.value = 1
   imageNaturalWidth.value = 0
   markdownRendered.value = false
+  htmlSource.value = false
+  sourceLoading.value = false
   clearWebTimer()
 }
 
@@ -623,6 +665,26 @@ function decodeText(buffer: ArrayBuffer, contentType: string): string {
   } catch {
     return new TextDecoder('utf-8').decode(bytes)
   }
+}
+
+/**
+ * 读出文件正文（文本预览与 HTML 源码视图共用）。
+ *
+ * 体积预判放在这里而不是调用点：后端超限会返回 413，但不必先把 2MB 下下来
+ * 才发现看不了。命中时抛错，由调用方展示——错误提示本身已含「请下载后查看」。
+ */
+async function readTextBody(): Promise<string> {
+  if (typeof props.size === 'number' && props.size > MAX_TEXT_PREVIEW_BYTES) {
+    throw new Error(t('chat.tooLargeToPreview', { size: formatSize(MAX_TEXT_PREVIEW_BYTES) }))
+  }
+  if (usesFsPath.value) {
+    const { buffer, contentType } = await sessionsApi.readFSFileBytes(props.fsPath, props.sessionId)
+    return decodeText(buffer, contentType)
+  }
+  const res = await fetch(readUrl.value)
+  if (!res.ok) throw new Error(`${t('files.previewError')}: ${res.statusText}`)
+  const contentType = res.headers.get('Content-Type') || ''
+  return decodeText(await res.arrayBuffer(), contentType)
 }
 
 // 换取托管签名地址（凭据在路径里，见 sessionsApi.createFSServeUrl）。
@@ -723,26 +785,8 @@ async function load() {
       return
     }
 
-    // 体积预判：后端超限会返回 413，但不必先把 2MB 下下来才发现看不了。
-    // 命中时给错误提示；错误态自带下载入口，用户照样拿得到文件。
-    if (typeof props.size === 'number' && props.size > MAX_TEXT_PREVIEW_BYTES) {
-      error.value = t('chat.tooLargeToPreview', { size: formatSize(MAX_TEXT_PREVIEW_BYTES) })
-      return
-    }
-
-    let text: string
-    if (usesFsPath.value) {
-      const { buffer, contentType } = await sessionsApi.readFSFileBytes(props.fsPath, props.sessionId)
-      if (seq !== loadSeq) return
-      text = decodeText(buffer, contentType)
-    } else {
-      const res = await fetch(readUrl.value)
-      if (!res.ok) throw new Error(`${t('files.previewError')}: ${res.statusText}`)
-      const buffer = await res.arrayBuffer()
-      if (seq !== loadSeq) return
-      text = decodeText(buffer, res.headers.get('Content-Type') || '')
-    }
-
+    const text = await readTextBody()
+    if (seq !== loadSeq) return
     content.value = text
     originalContent.value = text
     kind.value = 'text'
@@ -807,12 +851,43 @@ function onImageWheel(e: WheelEvent) {
   zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1)
 }
 
+/**
+ * 切换 HTML 的「渲染预览 / 查看源码」。
+ *
+ * 源码按需读取：HTML 走 iframe 分支，正文从未进过 content，首次切换时才去取
+ * （并留在 content 里缓存），否则每预览一个 HTML 都要白读一遍文件。
+ * 读失败就不切视图，用提示说明原因（过大 / 接口报错），免得留一个空白框。
+ */
+async function toggleHtmlSource() {
+  if (htmlSource.value) {
+    htmlSource.value = false
+    return
+  }
+  if (!content.value) {
+    sourceLoading.value = true
+    try {
+      const text = await readTextBody()
+      content.value = text
+      originalContent.value = text
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : t('files.previewError'))
+      return
+    } finally {
+      sourceLoading.value = false
+    }
+  }
+  htmlSource.value = true
+}
+
 // 在独立标签页打开当前预览内容。
 //
-// 注意这里与 iframe 预览不是同一档隔离：新标签页是顶层文档，与主站同源，
-// 因此被预览的页面能读到 localStorage.auth_token。区别在于这是用户主动点击
-// 的动作（且能直观看到整个页面），而 iframe 预览是「点一下文件树就自动加载」，
-// 所以那道隔离必须保住。要彻底消除，需要把预览放到独立源（另一个端口/域名）上。
+// 这条路径的隔离程度取决于内容从哪来：
+//  - 上传附件：服务端按 inline 应答并带上 sandbox CSP，顶层文档因此跑在不透明
+//    源里，读不到 localStorage.auth_token，请求也不带任何凭据（本服务不用
+//    cookie），所以「打开看看」不会把账号交出去。
+//  - 工作区文件（scope=read/serve）：与主站同源，被打开的页面能读到
+//    localStorage。这是本地项目自己的文件，且打开是用户主动点击的动作，
+//    所以维持现状；要彻底消除得把预览放到独立源（另一个端口/域名）。
 function openInNewTab() {
   const url = openableUrl.value
   if (!url) return

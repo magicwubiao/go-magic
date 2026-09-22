@@ -343,6 +343,8 @@ export default {
     unwrapLines: '取消折行',
     markdownPreview: '渲染预览',
     markdownSource: '查看源码',
+    htmlPreview: '渲染预览',
+    htmlSource: '查看源码',
     openInNewTab: '在新标签页打开',
     changedFilesTitle: '变更的文件',
     changedDiffClick: '点击查看行级 diff',
