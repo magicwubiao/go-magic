@@ -1137,13 +1137,14 @@ onUnmounted(() => {
   overflow: auto;
 }
 
-/* 放大后内容会超出容器：仍保持居中显示，并通过 margin:auto 让溢出部分
-   落在可滚动区域内（flex 居中时子元素超出容器会把头部挤到负坐标、滚动条
-   够不到；给子元素加 margin:auto 后，溢出部分会向两端扩展，滚动条可访问
-   全部内容，视觉上也始终以图片中心为焦点）。 */
+/* 放大后内容会超出容器，需要兼顾“居中显示”和“能看全”：
+   - 图片比容器小时：margin:auto 会吸收两侧多余空间，把图片居中。
+   - 图片比容器大时：auto 边距退化为 0，此时由 flex-start(左上角对齐) 兜底，
+     overflow 全部落在正方向，滚动条可访问整张图（若用 justify-content/align-items:
+     center 居中，溢出部分会被挤到负坐标、滚动条够不到，看不全）。 */
 .image-preview-wrapper--zoomed {
-  justify-content: center;
-  align-items: center;
+  justify-content: flex-start;
+  align-items: flex-start;
 }
 
 .image-preview-wrapper--zoomed .preview-image {
