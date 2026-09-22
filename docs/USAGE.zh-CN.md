@@ -896,6 +896,52 @@ magic config set browser_headless false   # 或写进配置
 > `cannot open display` 猜：错误信息里会指出这个 `false` 是环境变量写的还是
 > 配置文件写的。
 
+**第三层：profile 目录的 `~` 在服务进程里可能展开不了。** 面板 / 守护进程启动的
+服务经常拿不到 `HOME`（systemd unit 没设 `User`/`Environment`、`sudo` 清了环境、
+宝塔之类的面板用 root 起进程）。`~` 的展开只能看 `HOME`，此时它无处可展开，
+Chrome 会把 `~` 当成**普通相对目录名** —— 于是站点目录（进程 CWD）下多出一个叫
+`~` 的文件夹，路径看起来就是：
+
+```
+/www/wwwroot/ai.magictech.cc/~/.magic/browser-profile
+```
+
+**代码已对此兜底**：解析 profile 目录时如果发现 `~` 没能展开（拿不到 `HOME`），
+就落到 **magic home** 下的 `browser-profile`，而不是把带 `~` 的路径交给 Chrome。
+所以修好之后这类环境里不会再有字面量 `~` 目录。
+
+用下面这条命令确认实际生效的目录（打印的是**解析后的绝对路径**）：
+
+```bash
+magic config list | grep -A2 Browser
+```
+
+想自己指定位置就显式写绝对路径（优先级：`BROWSER_PROFILE_DIR` 环境变量 >
+配置文件 `browser_profile_dir`；server 启动时用配置值喂给浏览器管理器）：
+
+```bash
+# 推荐：整个 magic home 都用绝对路径，配置、会话库、profile 一起搬到站点目录下
+export GO_MAGIC_HOME=/www/wwwroot/ai.magictech.cc/.magic
+
+# 或者只钉住 profile 目录
+export BROWSER_PROFILE_DIR=/www/wwwroot/ai.magictech.cc/.magic/browser-profile
+```
+
+```jsonc
+// 配置文件里同样写绝对路径（示例里的 `~/.magic/browser-profile` 是有 HOME 时的默认写法）
+"browser_profile_dir": "/www/wwwroot/ai.magictech.cc/.magic/browser-profile"
+```
+
+> 有 `HOME` 的环境里默认值仍是 `~/.magic/browser-profile`（不搬家，老部署的登录态
+> 不受影响）；兜底只在这条路径展开不了时才生效。
+
+如果之前已经误建了字面量 `~` 目录（确认里面没有需要保留的登录态再删）：
+
+```bash
+ls -la "/www/wwwroot/ai.magictech.cc/~/.magic/browser-profile"   # 先看清有什么
+rm -rf "/www/wwwroot/ai.magictech.cc/~"                          # 注意：字面量波浪号要引号包住
+```
+
 #### 无头不等于看不见 UI —— 自动化浏览器自己会截图
 
 这是最常见的误解。headless 只表示「没有打到显示器上的窗口」，

@@ -902,6 +902,59 @@ magic config set browser_headless false    # or persist it in the config
 > at Chrome's obscure `cannot open display`: the error names the source of the
 > `false` (environment variable or config file).
 
+**Third layer: `~` in the profile path may not expand inside a service process.**
+Services started by a panel or init system often have no `HOME` (a systemd unit
+without `User`/`Environment`, a `sudo` that scrubbed the environment, a
+root-owned process spawned by a hosting panel). `~` can only expand against
+`HOME`, so with no `HOME` nothing happens, and Chrome treats `~` as an ordinary
+**relative directory name** — a folder literally named `~` appears under the
+process CWD (the site root). The resulting path looks like:
+
+```
+/www/wwwroot/ai.magictech.cc/~/.magic/browser-profile
+```
+
+**The code now handles this**: when resolving the profile dir it detects a `~`
+that could not expand (no `HOME`) and falls back to `browser-profile` **under the
+magic home** instead of handing Chrome a tilde-bearing path. Environments like
+this no longer produce a literal `~` directory.
+
+Check what is actually in effect (this prints the **resolved absolute path**):
+
+```bash
+magic config list | grep -A2 Browser
+```
+
+To choose the location yourself, use absolute paths (precedence:
+`BROWSER_PROFILE_DIR` env var > the `browser_profile_dir` config field; on
+startup the server feeds the config value to the browser manager):
+
+```bash
+# Recommended: move the whole magic home under the site directory
+export GO_MAGIC_HOME=/www/wwwroot/ai.magictech.cc/.magic
+
+# Or pin just the profile dir
+export BROWSER_PROFILE_DIR=/www/wwwroot/ai.magictech.cc/.magic/browser-profile
+```
+
+```jsonc
+// Absolute paths in the config file work the same way (the `~/.magic/...` example
+// is what the default looks like when HOME is available)
+"browser_profile_dir": "/www/wwwroot/ai.magictech.cc/.magic/browser-profile"
+```
+
+> Where `HOME` exists the default stays `~/.magic/browser-profile` (nothing moves,
+> so existing deployments keep their login state). The fallback only kicks in when
+> that path cannot be expanded.
+
+Remove an accidentally created literal `~` directory (after checking there is no
+login state worth keeping):
+
+```bash
+ls -la "/www/wwwroot/ai.magictech.cc/~/.magic/browser-profile"   # look first
+rm -rf "/www/wwwroot/ai.magictech.cc/~"                          # quote the literal tilde
+```
+
 #### Headless does not mean the UI is gone — the browser screenshots itself
 
 This is the most common misconception. Headless only means "no window on a

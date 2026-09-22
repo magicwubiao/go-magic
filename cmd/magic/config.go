@@ -566,6 +566,24 @@ func runConfigList(cmd *cobra.Command, args []string) {
 	// Show Cortex
 	fmt.Printf("\nCortex AI:\n")
 	fmt.Printf("  Enabled: %v\n", cfg.Cortex.Enabled)
+
+	// Show the browser profile dir as the **effective absolute path**, not just the
+	// configured value: this is the field that bites on hosting panels, where a
+	// missing HOME leaves `~` unexpanded and Chrome then creates a literal `~`
+	// folder under the process CWD. Printing the resolved path makes that
+	// immediately visible instead of showing a misleading `~/.magic/...`.
+	profileDir := cfg.GetBrowserProfileDir()
+	if profileDir == "" {
+		profileDir = "(disabled: a fresh temp profile is used on every start)"
+	}
+	fmt.Printf("\nBrowser:\n")
+	fmt.Printf("  Profile Dir: %s\n", profileDir)
+	fmt.Printf("  Headless:    %v", cfg.GetBrowserHeadless())
+	if v, src := cfg.GetBrowserHeadlessWithSource(); src != config.BrowserHeadlessFromConfig {
+		// Only worth mentioning when the config field is not what decided it.
+		fmt.Printf("  (from %s: %v)", src, v)
+	}
+	fmt.Println()
 }
 
 func runConfigPath(cmd *cobra.Command, args []string) {

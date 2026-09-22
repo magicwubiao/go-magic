@@ -501,7 +501,10 @@ func Load() (*Config, error) {
 	// 就是安装目录）下建出一个名为 `~` 的字面量文件夹。
 	cfg.WorkingDir = ExpandHome(cfg.WorkingDir)
 	if cfg.BrowserProfileDir != nil {
-		dir := ExpandHome(*cfg.BrowserProfileDir)
+		// 这里额外做一次"无 HOME 时改落到 magic home"的兜底，理由见
+		// ResolveBrowserProfileDir。注意不能只依赖 ExpandHome：面板/守护进程起
+		// 服务时常常没有 HOME，`~` 会原样留下来。
+		dir := ResolveBrowserProfileDir(*cfg.BrowserProfileDir)
 		cfg.BrowserProfileDir = &dir
 	}
 	if cfg.Memory.DBPath != nil {
@@ -523,16 +526,82 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// GetBrowserProfileDir 返回最终生效的浏览器持久 profile 目录（已展开 `~`）。
-//   - 未配置（nil，老配置文件没这个键）→ 默认目录 DefaultBrowserProfileDir
+// GetBrowserProfileDir 返回最终生效的浏览器持久 profile 目录（绝对路径）。
+//   - 未配置（nil，老配置文件没这个键）→ 默认目录（见 defaultBrowserProfileDirAbs）
 //   - 显式空字符串 → ""，表示不持久化、每次启动用全新临时 profile
 //
 // 调用方一律走这里，别直接读字段，否则会漏掉"默认值"这一支。
 func (c *Config) GetBrowserProfileDir() string {
 	if c == nil || c.BrowserProfileDir == nil {
-		return ExpandHome(DefaultBrowserProfileDir)
+		return defaultBrowserProfileDirAbs()
 	}
-	return ExpandHome(*c.BrowserProfileDir)
+	return ResolveBrowserProfileDir(*c.BrowserProfileDir)
+}
+
+// defaultBrowserProfileDirAbs 解析"没有显式配置 browser_profile_dir"时的默认目录。
+//
+// 刻意用**真实的 magic home**（GetMagicHome：GO_MAGIC_HOME → HOME → UserHomeDir →
+// /etc/passwd → /tmp）而不是 DefaultBrowserProfileDir 那个字面量 `~/.magic/...`：
+// DefaultBrowserProfileDir 是给人看的展示值（写进 config.example.json / Web 表单），
+// 一旦环境里没有 HOME，"~" 就无从展开，Chrome 会把 `~` 当普通目录名，在**进程 CWD**
+// 下建出站点目录里的 `~/.magic/browser-profile`——宝塔面板以 root 起服务时就是这样。
+//
+// 注意 magic home 自身可能带 `~`（默认 "~/.magic"），所以这里再兜一层
+// ExpandHome：GetMagicHome 在没有 HOME 时会拼出 "\~\.magic" 这种带波浪号的
+// 相对路径，光靠它仍然收不到绝对路径。
+func defaultBrowserProfileDirAbs() string {
+	dir := filepath.Join(GetMagicHome(), "browser-profile")
+	if abs := ExpandHome(dir); abs != dir {
+		return abs
+	}
+	// 到这里说明 magic home 也没能拿回真实主目录（HOME 缺失）。最后退回"基于
+	// CWD 的绝对路径"：虽然位置不理想，但至少是个绝对路径，Chrome 不会再建出一个
+	// 字面量 `~` 目录，排障时也一眼能看出东西落在哪。
+	if !filepath.IsAbs(dir) {
+		if wd, err := os.Getwd(); err == nil {
+			return filepath.Join(wd, dir)
+		}
+	}
+	return dir
+}
+
+// ResolveBrowserProfileDir 把一处 browser_profile_dir 取值解析成绝对路径：
+// 展开 `~`，并把解析后仍带字面量 `~` 的（= HOME 缺失，ExpandHome 拿不到家目录）
+// 落到 magic home 下的同名子目录。
+//
+// 这个兜底是为了"配置里残留 DefaultBrowserProfileDir / 文档示例里的
+// `~/.magic/browser-profile`，但服务进程没有 HOME"那类部署：此时若原样交给
+// Chrome，`--user-data-dir` 就是相对路径，会在站点目录下建出字面量 `~` 目录。
+// 相对路径（用户有意为之）不带 `~`，原样返回，行为不变。
+//
+// 展示与默认值仍以 DefaultBrowserProfileDir（`~/.magic/browser-profile`）为准，
+// 所以新写的配置文件里看到的还是那个值；这里只管"真正落盘用哪个目录"。
+func ResolveBrowserProfileDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	expanded := ExpandHome(dir)
+	if !strings.Contains(expanded, "~") {
+		return expanded
+	}
+	if rest := tildeSuffix(expanded); rest != "" {
+		return filepath.Join(GetMagicHome(), rest)
+	}
+	return expanded
+}
+
+// tildeSuffix 从一条仍带波浪号的路径里取出"波浪号之后的部分"，取不到返回 ""。
+//
+// 只认纯 `~` 或以 `~` + 分隔符开头这一种形态（与 ExpandHome 同口径），并且只在
+// 波浪号确实处在路径**开头**时才替换——`/tmp/~cache/x` 里那个 `~` 是普通字符，
+// 不能碰。
+func tildeSuffix(p string) string {
+	p = strings.TrimPrefix(p, "./")
+	if !strings.HasPrefix(p, "~") {
+		return ""
+	}
+	rest := strings.TrimLeft(p[1:], `/\`)
+	return strings.TrimPrefix(rest, ".magic/")
 }
 
 // strPtr 返回字符串字面量的指针，供指针语义的配置字段（nil = 用默认值）使用。

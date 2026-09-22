@@ -3,6 +3,7 @@
   "magic_home": "~/.magic",
   "provider": "openai",
   "model": "gpt-5.6",
+  "comment_browser_profile_dir": "Persistent browser profile dir. A leading ~ expands against HOME; when HOME is unavailable (systemd units, hosting panels running as root) a leftover ~ is re-anchored under the magic home instead of being handed to Chrome as a relative path. Set \"\" for a fresh temp profile each start. Prefer an absolute path on servers.",
   "browser_profile_dir": "~/.magic/browser-profile",
   "browser_headless": true,
   "providers": {

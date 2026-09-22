@@ -72,8 +72,11 @@ func (bm *BrowserManager) ProfileDir() string {
 // （覆盖从不经过 server 的 TUI/CLI 会话），都没有则返回 ""（=每次全新临时
 // profile，无登录态）。
 //
-// 返回值统一过 ExpandHome：三个来源都可能写成 `~/.magic/browser-profile`，
-// 少了这步就会在进程 CWD（打包安装后即安装目录）下建出字面量 `~` 目录。
+// 返回值统一过 config.ResolveBrowserProfileDir：三个来源都可能写成
+// `~/.magic/browser-profile`，而"服务进程没有 HOME"（面板/守护进程常见）时
+// ExpandHome 拿不到家目录。少了这条兜底，`~` 会被原样交给 Chrome 的
+// --user-data-dir，于是在进程 CWD 下建出字面量 `~` 目录——宝塔以 root 起服务时
+// 表现为站点目录里多出一个 `~/.magic/browser-profile`。
 //
 // 调用契约：**不加锁**，直接读 bm.profileDir。Initialize() 是持写锁调用它的，
 // 这里再去抢读锁会自死锁（sync.RWMutex 不可重入）。
@@ -86,12 +89,12 @@ func (bm *BrowserManager) resolveProfileDir() string {
 		// Load 在"配置文件不存在"（首次运行）时返回 defaultConfig() 加一个哨兵
 		// 错误，默认值照样可用，所以拿到 cfg 就用，别因 err 丢掉默认目录。
 		if cfg, _ := config.Load(); cfg != nil {
-			// GetBrowserProfileDir 已含"未配置 → 默认目录"与 `~` 展开；
+			// GetBrowserProfileDir 已含"未配置 → 默认目录"与 `~` 展开/兜底；
 			// 显式配成 "" 才会返回空（=临时 profile）。
 			dir = cfg.GetBrowserProfileDir()
 		}
 	}
-	return config.ExpandHome(dir)
+	return config.ResolveBrowserProfileDir(dir)
 }
 
 // BrowserTab represents a browser tab
