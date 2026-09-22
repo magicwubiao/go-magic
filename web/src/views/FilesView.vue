@@ -224,6 +224,7 @@ const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
     title: t('files.updated'),
     key: 'updated',
     width: 170,
+    defaultSortOrder: 'descend',
     sorter: (a, b) => new Date(a.updated).getTime() - new Date(b.updated).getTime(),
     render(row) {
       return h('span', { style: { color: '#999', fontSize: '13px' } }, row.updated)
