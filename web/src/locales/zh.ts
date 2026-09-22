@@ -863,7 +863,7 @@ export default {
     switchToThisProvider: '切换为当前供应商',
     apiKey: 'API Key',
     baseUrl: '接口地址',
-    baseUrlPlaceholder: '选填，如使用默认地址可不填',
+    baseUrlPlaceholder: '如 https://api.openai.com/v1',
     confirmDeleteProvider: '确定要删除供应商 "{name}" 吗？',
     providerNamePlaceholder: '选择内置供应商，或直接输入自定义名称',
     providerNameHint: '内置供应商从列表选；自定义供应商直接输入名称即可（按 OpenAI 兼容协议调用，需自行填写接口地址与模型 ID）',

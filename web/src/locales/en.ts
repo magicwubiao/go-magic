@@ -863,7 +863,7 @@ export default {
     switchToThisProvider: 'Switch to This Provider',
     apiKey: 'API Key',
     baseUrl: 'Base URL',
-    baseUrlPlaceholder: 'Optional, leave empty for default',
+    baseUrlPlaceholder: 'e.g. https://api.openai.com/v1',
     confirmDeleteProvider: 'Are you sure you want to delete provider "{name}"?',
     providerNamePlaceholder: 'Pick a built-in provider or type a custom name',
     providerNameHint: 'Choose a built-in provider from the list, or type a name to add your own (OpenAI-compatible; base URL and model IDs are required)',
