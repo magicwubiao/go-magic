@@ -839,7 +839,7 @@ export default {
     selectProvider: 'Select a provider on the left',
     noModels: 'No models yet',
     modelName: 'Model Name',
-    apiKeyPlaceholder: 'API Key (optional)',
+    apiKeyPlaceholder: 'Enter API Key',
     selectProviderType: 'Select provider type',
   },
   modelsProviders: {
@@ -857,7 +857,7 @@ export default {
     providerName: 'Provider Name',
     modelName: 'Model Name',
     modelPlaceholder: 'Enter model name',
-    apiKeyPlaceholder: 'API Key (optional)',
+    apiKeyPlaceholder: 'Enter API Key',
     selectProviderType: 'Select provider type',
     noProviders: 'No providers yet, add one',
     switchToThisProvider: 'Switch to This Provider',

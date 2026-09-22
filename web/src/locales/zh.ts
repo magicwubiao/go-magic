@@ -839,7 +839,7 @@ export default {
     selectProvider: '请选择左侧供应商',
     noModels: '暂无模型',
     modelName: '模型名称',
-    apiKeyPlaceholder: '输入 API Key（可选）',
+    apiKeyPlaceholder: '输入 API Key',
     selectProviderType: '选择供应商类型',
   },
   modelsProviders: {
@@ -857,7 +857,7 @@ export default {
     providerName: '供应商名称',
     modelName: '模型名称',
     modelPlaceholder: '输入模型名称',
-    apiKeyPlaceholder: '输入 API Key（可选）',
+    apiKeyPlaceholder: '输入 API Key',
     selectProviderType: '选择供应商类型',
     noProviders: '暂无供应商，请添加',
     switchToThisProvider: '切换为当前供应商',
@@ -1658,5 +1658,4 @@ export default {
     serverUnreachable: '无法连接服务器，请检查网络后重试',
     loginSuccess: '登录成功',
   },
-
 }
