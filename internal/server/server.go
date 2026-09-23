@@ -1771,6 +1771,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		"memory_":   "Memory",
 		"delegate_": "Delegation",
 		"poll_":     "Delegation",
+		"kanban_":   "Kanban",
 		"code_":     "Code Execution",
 		"skill_":    "Skills",
 		"mcp_":      "MCP",
@@ -1834,7 +1835,7 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	}
 
 	// Add categorized toolsets in a fixed order (based on categoryMap order)
-	categoryOrder := []string{"File", "Web", "Browser", "Code Execution", "Memory", "Delegation", "Skills", "MCP"}
+	categoryOrder := []string{"File", "Web", "Browser", "Code Execution", "Memory", "Delegation", "Kanban", "Skills", "MCP"}
 	for _, catName := range categoryOrder {
 		if tools, ok := categoryTools[catName]; ok {
 			id := strings.ToLower(strings.ReplaceAll(catName, " ", "_"))
