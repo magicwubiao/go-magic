@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Python syntax checking, shared by the post-write hook (LintFile) and the
@@ -50,6 +51,56 @@ func pyInterpreterCandidates() [][]string {
 		return [][]string{{"python"}, {"python3"}, {"py", "-3"}}
 	}
 	return [][]string{{"python3"}, {"python"}}
+}
+
+// pythonCmdCache caches the resolved interpreter so execute_code does not pay
+// the probe cost (LookPath + a real --version subprocess) on every call.
+var pythonCmdCache struct {
+	sync.Once
+	bin    string
+	prefix []string
+}
+
+// ResolvePythonCommand returns a runnable Python interpreter command.
+//
+// It returns (bin, prefixArgs, ok). The command must be invoked as
+// exec.Command(bin, append(prefixArgs, userArgs...)...): on Windows the best
+// candidate may be the "py" launcher, which needs a "-3" argument before the
+// user's own flags.
+//
+// Each candidate is validated with a real `--version` run, not just LookPath —
+// the Microsoft Store's app-execution aliases (python.exe / python3.exe in
+// WindowsApps) resolve on LookPath but only print "Python was not found" and
+// exit 9009, which is exactly the "command not found" symptom users report.
+// The result is cached for the process lifetime; interpreter installs rarely
+// appear mid-run, and re-probing on every call would add startup latency to
+// every execute_code invocation.
+func ResolvePythonCommand() (string, []string, bool) {
+	pythonCmdCache.Do(func() {
+		for _, cand := range pyInterpreterCandidates() {
+			bin, err := exec.LookPath(cand[0])
+			if err != nil {
+				continue
+			}
+			probe := append(append([]string{}, cand[1:]...), "--version")
+			cmd := exec.Command(bin, probe...)
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			cmd.Stderr = &out
+			if err := cmd.Run(); err != nil {
+				continue
+			}
+			text := strings.ToLower(out.String())
+			if strings.Contains(text, "python was not found") {
+				// Microsoft Store shim: resolves but never runs anything.
+				continue
+			}
+			pythonCmdCache.bin = bin
+			pythonCmdCache.prefix = append([]string{}, cand[1:]...)
+			return
+		}
+	})
+	return pythonCmdCache.bin, pythonCmdCache.prefix, pythonCmdCache.bin != ""
 }
 
 // pythonSyntaxCheck parses a file with the host interpreter's own parser and

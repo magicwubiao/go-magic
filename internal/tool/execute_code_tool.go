@@ -330,10 +330,19 @@ func (t *ExecuteCodeTool) executeWithLanguage(ctx context.Context, execCtx *code
 
 // executePython executes Python code with pip package support
 func (t *ExecuteCodeTool) executePython(ctx context.Context, execCtx *codeExecutionContext) (interface{}, error) {
+	// Resolve a real interpreter. Hardcoding "python3" used to break Windows:
+	// there is no python3 command there (only the Microsoft Store shim, which
+	// exits 9009), so every call failed with "command not found".
+	bin, prefix, ok := ResolvePythonCommand()
+	if !ok {
+		return nil, fmt.Errorf("python interpreter not found (tried python, python3, py -3); install Python 3 and make sure it is on PATH")
+	}
+
 	// Install packages if specified
 	if len(execCtx.packages) > 0 {
-		pkgArgs := append([]string{"-m", "pip", "install", "--quiet"}, execCtx.packages...)
-		cmd := exec.CommandContext(ctx, "python3", pkgArgs...)
+		pkgArgs := append(append([]string{}, prefix...), "-m", "pip", "install", "--quiet")
+		pkgArgs = append(pkgArgs, execCtx.packages...)
+		cmd := exec.CommandContext(ctx, bin, pkgArgs...)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("failed to install packages: %w\n%s", err, output)
 		}
@@ -343,7 +352,7 @@ func (t *ExecuteCodeTool) executePython(ctx context.Context, execCtx *codeExecut
 	toolWrapper := t.generatePythonToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
 	fullCode := toolWrapper + "\n\n# User code\n" + execCtx.code
 
-	return t.executeScript(ctx, fullCode, "python3", ".py", execCtx.workDir, execCtx.timeout, execCtx.progArgs)
+	return t.executeScript(ctx, fullCode, bin, prefix, ".py", execCtx.workDir, execCtx.timeout, execCtx.progArgs)
 }
 
 // executeJavaScript executes JavaScript/Node.js code with npm package support
@@ -371,7 +380,7 @@ func (t *ExecuteCodeTool) executeJavaScript(ctx context.Context, execCtx *codeEx
 	toolWrapper := t.generateNodeToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
 	fullCode := toolWrapper + "\n\n// User code\n" + execCtx.code
 
-	return t.executeScript(ctx, fullCode, "node", ".js", tempDir, execCtx.timeout, execCtx.progArgs)
+	return t.executeScript(ctx, fullCode, "node", nil, ".js", tempDir, execCtx.timeout, execCtx.progArgs)
 }
 
 // executeTypeScript executes TypeScript code with ts-node
@@ -651,8 +660,10 @@ func (t *ExecuteCodeTool) installNpmPackages(dir string, packages []string) erro
 	return nil
 }
 
-// executeScript executes a script file
-func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable, fileExt, workDir string, timeout time.Duration, args []string) (interface{}, error) {
+// executeScript executes a script file. prefixArgs are inserted before the
+// script path — e.g. Windows' "py" launcher needs "-3" there. Pass nil for
+// interpreters invoked directly (node, python.exe).
+func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable string, prefixArgs []string, fileExt, workDir string, timeout time.Duration, args []string) (interface{}, error) {
 	// Write code to temp file
 	tmpFile, err := os.CreateTemp("", "magic_code_*"+fileExt)
 	if err != nil {
@@ -667,7 +678,8 @@ func (t *ExecuteCodeTool) executeScript(ctx context.Context, code, executable, f
 	tmpFile.Close()
 
 	// Build command
-	cmdArgs := append([]string{tmpFile.Name()}, args...)
+	cmdArgs := append(append([]string{}, prefixArgs...), tmpFile.Name())
+	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, executable, cmdArgs...)
 	cmd.Dir = workDir
 
