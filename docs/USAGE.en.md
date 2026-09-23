@@ -242,9 +242,10 @@ magic config reset     # restore defaults
   "skills": { "enabled": [], "disabled": [], "user_dir": "" },
 
   "agent": {
-    "max_turns": 150,          // tool-loop cap per turn, 0 = built-in default; bounded by the 30-min turn wall, hence 150
-    "max_iterations": 200,     // turn-control cap
-    "max_token_budget": 0      // token budget, 0 = unlimited
+    "max_turns": 150,              // tool-loop cap per turn, 0 = built-in default (150)
+    "max_iterations": 200,         // turn-control cap, 0 = built-in default (200)
+    "max_token_budget": 0,         // token budget, 0 = unlimited
+    "turn_timeout_minutes": 30     // per-turn wall clock (minutes), 0 = built-in default (30)
   },
 
   "bot_mode": {

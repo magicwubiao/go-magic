@@ -33,6 +33,14 @@ const (
 	// 密码/过验证码）时才需要临时打开：设 BROWSER_HEADLESS=false，或把它写进
 	// 配置文件的 browser_headless 字段。
 	DefaultBrowserHeadless = true
+	// DefaultTurnTimeoutMinutes 是单个会话回合在 chat queue 中的执行时限（分钟）。
+	//
+	// 这是"一轮对话能跑多久"的真正硬约束：超过它，回合被取消并按"被中断"
+	// 收尾（已产出的部分照常落库，不会丢）。它与 agent.max_turns 是两道独立
+	// 的闸门——max_turns 限的是"工具循环迭代几次"，本项限的是"总共跑多久"，
+	// 谁先到谁生效。因此任务确实需要更长时间时，该调的是本项，而不是
+	// max_turns（后者调多大都会被时间墙挡住）。
+	DefaultTurnTimeoutMinutes = 30
 )
 
 func GetMagicHome() string {
@@ -137,12 +145,21 @@ type Config struct {
 	Agent           struct {
 		// MaxTurns caps one conversation turn's tool-loop iterations for
 		// server/bot agents (default 150). 0 keeps the built-in default.
-		// Note the hard 30-minute per-turn wall clock in the chat queue: at
-		// ~10-30s per iteration only ~60-180 iterations are reachable, so a
-		// larger cap silently never takes effect.
+		// Note TurnTimeoutMinutes below: at ~10-30s per iteration only
+		// ~60-180 iterations fit inside the turn wall, so a larger cap
+		// silently never takes effect.
 		MaxTurns       int   `json:"max_turns,omitempty"`
 		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 200
 		MaxTokenBudget int64 `json:"max_token_budget,omitempty"` // steering token budget
+		// TurnTimeoutMinutes caps how long a single conversation turn in the
+		// chat queue may run (all LLM calls + tool executions). 0 = default
+		// (30 min). When the deadline hits the turn is cancelled and settled
+		// as "interrupted": partial output is persisted, not lost.
+		//
+		// Raising this is the right lever when a task legitimately needs more
+		// than 30 minutes — raising MaxTurns instead does nothing, because the
+		// clock wall (not the iteration cap) is what actually binds.
+		TurnTimeoutMinutes int `json:"turn_timeout_minutes,omitempty"`
 	} `json:"agent,omitempty"`
 	// Approval settings
 	Approval *ApprovalConfig `json:"approval,omitempty"`
@@ -519,18 +536,25 @@ func Load() (*Config, error) {
 	// （旧配置或手动编辑），此时若为 0 会导致 server 端回退到 agent 硬编码的
 	// 内置上限，与 Web 配置界面默认值不一致。这里补齐默认值，确保
 	// 实际生效的上限与 UI 展示一致。
+	// 取值依据：单个回合受回合时限（TurnTimeoutMinutes，默认 30 分钟）约束，
+	// 而每轮迭代是一次 LLM 调用加工具执行（实测 10~30s），因此单回合物理可达
+	// 的迭代数是 30min/10s≈180 到 30min/30s≈60 之间。旧默认 300 落在该区间
+	// 之外——永远先撞时间墙，回合上限形同虚设。150 落在可达区间内，能真正起到
+	// "止住失控循环"的作用；max_iterations 是 max_turns 之外的转向闸门，两者
+	// 取先到者，故设为 200 使其同样是个有意义的约束。
 	//
-	// 取值依据：单个回合受 sessionTurnTimeout（30 分钟）约束，而每轮迭代是
-	// 一次 LLM 调用加工具执行（实测 10~30s），因此单回合物理可达的迭代数是
-	// 30min/10s≈180 到 30min/30s≈60 之间。旧默认 300 落在该区间之外——永远
-	// 先撞时间墙，回合上限形同虚设。150 落在可达区间内，能真正起到"止住失控
-	// 循环"的作用；max_iterations 是 max_turns 之外的转向闸门，两者取先到者，
-	// 故设为 200 使其同样是个有意义的约束。
+	// 注意：这几个默认值只在字段为 0 时补齐，用户显式写下的值一律不动。
 	if cfg.Agent.MaxTurns == 0 {
 		cfg.Agent.MaxTurns = 150
 	}
 	if cfg.Agent.MaxIterations == 0 {
 		cfg.Agent.MaxIterations = 200
+	}
+	// 回合时限兜底。注意它**不随 max_turns 联动**：用户把时限调大后，
+	// 只要不显式改 max_turns，上限仍是 150——两者是独立的闸门，改一个
+	// 不会自动放开另一个（配置页文案已说明这点）。
+	if cfg.Agent.TurnTimeoutMinutes == 0 {
+		cfg.Agent.TurnTimeoutMinutes = DefaultTurnTimeoutMinutes
 	}
 
 	return &cfg, nil
@@ -730,15 +754,15 @@ func defaultConfig() *Config {
 		Voice:   voice.DefaultVoiceConfig(),
 		// Agent 循环上限默认值，与 Web 配置界面(ConfigView.vue)的默认一致，
 		// 避免新建配置时回退到 agent 内置的上限。
-		// 150/200 的取值依据见 Load() 里的同类注释：旧值 300/400 超出了一
-		// 个回合（30 分钟）物理上可达的迭代数，实际永远不会触发。
 		Agent: struct {
-			MaxTurns       int   `json:"max_turns,omitempty"`
-			MaxIterations  int   `json:"max_iterations,omitempty"`
-			MaxTokenBudget int64 `json:"max_token_budget,omitempty"`
+			MaxTurns           int   `json:"max_turns,omitempty"`
+			MaxIterations      int   `json:"max_iterations,omitempty"`
+			MaxTokenBudget     int64 `json:"max_token_budget,omitempty"`
+			TurnTimeoutMinutes int   `json:"turn_timeout_minutes,omitempty"`
 		}{
-			MaxTurns:      150,
-			MaxIterations: 200,
+			MaxTurns:           150,
+			MaxIterations:      200,
+			TurnTimeoutMinutes: DefaultTurnTimeoutMinutes,
 		},
 	}
 }

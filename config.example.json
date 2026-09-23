@@ -65,7 +65,8 @@
   "agent": {
     "max_turns": 150,
     "max_iterations": 200,
-    "max_token_budget": 0
+    "max_token_budget": 0,
+    "turn_timeout_minutes": 30
   },
   "server": {
     "upload_max_bytes": 104857600,

@@ -32,6 +32,21 @@ export interface BotModeConfig {
   relay_token?: string
 }
 
+export interface AgentConfig {
+  /** Cap on tool-loop iterations within one conversation turn. 0 = default (150). */
+  max_turns?: number
+  /** Steering cap on total iterations for a task. 0 = default (200). */
+  max_iterations?: number
+  /** Steering token budget. 0 = unlimited. */
+  max_token_budget?: number
+  /**
+   * Cap on how long a single conversation turn may run (minutes).
+   * 0 = default (30). This is the binding constraint on long tasks: raising it
+   * is the right lever, raising max_turns is not.
+   */
+  turn_timeout_minutes?: number
+}
+
 export interface ServerConfig {
   upload_url_prefix?: string
   file_strategy?: string
@@ -60,7 +75,7 @@ export interface Config {
    */
   browser_headless?: boolean
   chat_mode?: string
-  agent?: Record<string, unknown>
+  agent?: AgentConfig
   memory?: Record<string, unknown>
   provider_config?: Record<string, unknown>
   providers?: Record<string, ProviderInfo>

@@ -40,6 +40,10 @@
             <n-input-number v-model:value="agentForm.max_iterations" :min="1" :max="2000" />
             <span style="margin-left: 12px; color: #999;">{{ t('config.maxIterationsHint') }}</span>
           </n-form-item>
+          <n-form-item :label="t('config.turnTimeout')">
+            <n-input-number v-model:value="agentForm.turn_timeout_minutes" :min="1" :max="1440" />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.turnTimeoutHint') }}</span>
+          </n-form-item>
           <n-divider style="margin: 8px 0 24px;" />
           <h3 style="margin: 0 0 16px 0;">{{ t('config.botMode') }}</h3>
           <n-form-item :label="t('config.botModeEnabled')">
@@ -320,10 +324,14 @@ const botModeNeedsRestart = computed(
 
 const agentForm = reactive({
   // 与后端默认值保持一致（pkg/config/config.go）。150/200 的取值依据：
-  // 单回合受 30 分钟 wall-clock 约束，每轮迭代 10~30s，物理可达 60~180 轮，
-  // 故 300 永远不会触发，150 才是真实生效的失控循环闸门。
+  // 单回合受回合时限（turn_timeout_minutes，默认 30 分钟）约束，每轮迭代
+  // 10~30s，物理可达 60~180 轮，故 300 永远不会触发，150 才是真实生效的
+  // 失控循环闸门。
   max_turns: 150,
   max_iterations: 200,
+  // 单个回合的执行时限（分钟）。这是"一轮能跑多久"的真正硬约束，与
+  // max_turns 是两道独立闸门：任务确实需要更长时间时应该调这项。
+  turn_timeout_minutes: 30,
 })
 
 // Bot Mode section on the Agent tab (config.bot_mode.*)
@@ -390,6 +398,8 @@ function populateFromConfig(cfg: any) {
   agentForm.max_turns = maxTurns > 0 ? maxTurns : 150
   const maxIterations = Number(agent.max_iterations) || 0
   agentForm.max_iterations = maxIterations > 0 ? maxIterations : 200
+  const turnTimeout = Number(agent.turn_timeout_minutes) || 0
+  agentForm.turn_timeout_minutes = turnTimeout > 0 ? turnTimeout : 30
 
   const botMode = cfg.bot_mode || {}
   botModeForm.enabled = botMode.enabled === true
@@ -450,6 +460,7 @@ async function saveAgent() {
       agent: {
         max_turns: agentForm.max_turns,
         max_iterations: agentForm.max_iterations,
+        turn_timeout_minutes: agentForm.turn_timeout_minutes,
       },
       bot_mode: {
         enabled: botModeForm.enabled,

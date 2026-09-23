@@ -20,10 +20,19 @@ func TestDefaultConfigAgentDefaults(t *testing.T) {
 	if cfg.Agent.MaxIterations != 200 {
 		t.Errorf("defaultConfig().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
 	}
+	// 回合时限默认 30 分钟：与 internal/server/chatqueue.go 的兜底常量一致。
+	if cfg.Agent.TurnTimeoutMinutes != DefaultTurnTimeoutMinutes {
+		t.Errorf("defaultConfig().Agent.TurnTimeoutMinutes = %d, want %d",
+			cfg.Agent.TurnTimeoutMinutes, DefaultTurnTimeoutMinutes)
+	}
 
 	exp := DefaultConfig()
 	if exp.Agent.MaxTurns != 150 {
 		t.Errorf("DefaultConfig().Agent.MaxTurns = %d, want 150", exp.Agent.MaxTurns)
+	}
+	if exp.Agent.TurnTimeoutMinutes != DefaultTurnTimeoutMinutes {
+		t.Errorf("DefaultConfig().Agent.TurnTimeoutMinutes = %d, want %d",
+			exp.Agent.TurnTimeoutMinutes, DefaultTurnTimeoutMinutes)
 	}
 }
 
@@ -56,6 +65,10 @@ func TestLoadFillsAgentDefaults(t *testing.T) {
 	if cfg.Agent.MaxIterations != 200 {
 		t.Errorf("Load().Agent.MaxIterations = %d, want 200", cfg.Agent.MaxIterations)
 	}
+	if cfg.Agent.TurnTimeoutMinutes != DefaultTurnTimeoutMinutes {
+		t.Errorf("Load().Agent.TurnTimeoutMinutes = %d, want %d (default filled)",
+			cfg.Agent.TurnTimeoutMinutes, DefaultTurnTimeoutMinutes)
+	}
 }
 
 // 用户显式配置的值必须原样保留，不能被兜底默认值覆盖。
@@ -84,5 +97,39 @@ func TestLoadRespectsExplicitAgentLimits(t *testing.T) {
 	}
 	if cfg.Agent.MaxIterations != 400 {
 		t.Errorf("explicit max_iterations was overridden: got %d, want 400", cfg.Agent.MaxIterations)
+	}
+}
+
+// 用户显式配置的回合时限必须原样保留且可调大——这正是"任务确实需要跑更久"
+// 时用户唯一该动的那一项。默认值（30）只在字段缺失时为 0 才会被填上。
+func TestLoadRespectsExplicitTurnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, ".magic")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(home, ConfigFileName)
+	body := `{"provider":"deepseek","model":"m","agent":{"turn_timeout_minutes":120}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GO_MAGIC_HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Agent.TurnTimeoutMinutes != 120 {
+		t.Errorf("explicit turn_timeout_minutes was overridden: got %d, want 120",
+			cfg.Agent.TurnTimeoutMinutes)
+	}
+	// 相邻字段不受影响：调大时限不会顺手改动两个迭代上限（它们是独立闸门）。
+	if cfg.Agent.MaxTurns != 150 {
+		t.Errorf("MaxTurns = %d, want 150 (unchanged)", cfg.Agent.MaxTurns)
+	}
+	if cfg.Agent.MaxIterations != 200 {
+		t.Errorf("MaxIterations = %d, want 200 (unchanged)", cfg.Agent.MaxIterations)
 	}
 }

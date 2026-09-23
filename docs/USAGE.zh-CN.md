@@ -240,9 +240,10 @@ magic config reset     # 恢复默认
   "skills": { "enabled": [], "disabled": [], "user_dir": "" },
 
   "agent": {
-    "max_turns": 150,          // 单轮对话的工具循环上限，0 = 内置默认；受 30 分钟回合时限约束故默认 150
-    "max_iterations": 200,     // 转向控制上限
-    "max_token_budget": 0      // 令牌预算，0 = 不限
+    "max_turns": 150,              // 单轮对话的工具循环上限，0 = 内置默认（150）
+    "max_iterations": 200,         // 转向控制上限，0 = 内置默认（200）
+    "max_token_budget": 0,         // 令牌预算，0 = 不限
+    "turn_timeout_minutes": 30     // 单个回合的时限（分钟），0 = 内置默认（30）
   },
 
   "bot_mode": {

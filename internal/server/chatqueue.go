@@ -54,8 +54,9 @@ import (
 // ============================================================================
 
 const (
-	// sessionTurnTimeout 是单个回合的执行上限（与原 handleSessionStream 中
-	// 的 30 分钟一致）。超时会被取消，回合按"被中断"处理并照常落库。
+	// sessionTurnTimeout 是单个回合的**兜底**执行上限：当配置缺失或为 0 时
+	// 使用。正常路径取 config.Agent.TurnTimeoutMinutes（见 Server.turnTimeout），
+	// 因此用户可以在配置页调整。超时会被取消，回合按"被中断"处理并照常落库。
 	sessionTurnTimeout = 30 * time.Minute
 	// turnEventBuffer 是单个 sink 的事件缓冲。一个 30 分钟的长回合会产生
 	// 成百上千条 delta，加上工具事件与心跳，1024 与 sseWriter 的缓冲同量级。
@@ -73,6 +74,33 @@ const (
 	// 复现就能直接定位，而不是靠猜。
 	queueWaitWarnThreshold = 5 * time.Second
 )
+
+// turnTimeout 返回本回合应使用的执行时限。
+//
+// 取值优先级：config.Agent.TurnTimeoutMinutes > sessionTurnTimeout 兜底。
+// 之所以放在这里而不是在常量里，是为了让用户在配置页改完即生效，无需重编译；
+// 同时保证 cfg 为 nil（未初始化 / 测试替身）时行为与旧版完全一致。
+//
+// 上限做了夹取：配置里塞进一个荒谬的大值（例如 100000 分钟）会让一个失控回合
+// 永远占住会话队列，用户既等不到结果也发不出新消息。用一个宽松但有限的
+// maxTurnTimeoutMinutes 兜住比不设防安全。
+func (s *Server) turnTimeout() time.Duration {
+	minutes := 0
+	if s.cfg != nil {
+		minutes = s.cfg.Agent.TurnTimeoutMinutes
+	}
+	if minutes <= 0 {
+		return sessionTurnTimeout
+	}
+	if minutes > maxTurnTimeoutMinutes {
+		minutes = maxTurnTimeoutMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+// maxTurnTimeoutMinutes 是回合时限的配置上限（24 小时）。它不是功能约束，
+// 而是防呆：挡住手滑写成 100000 之类的值把会话永久钉死。
+const maxTurnTimeoutMinutes = 24 * 60
 
 // turnEvent 是回合向 SSE 连接广播的一条事件。data 是已经序列化好的整帧
 // （例如 `{"delta":"hi"}`），由 sink 负责按 SSE 分帧写出。
@@ -608,7 +636,7 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		q.running = true
 		q.activeID = item.id
 		q.cancelRequested = false
-		turnCtx, turnCancel := context.WithTimeout(context.Background(), sessionTurnTimeout)
+		turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 		q.cancel = turnCancel
 		q.mu.Unlock()
 
