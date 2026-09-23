@@ -442,35 +442,17 @@ Your working directory is: %s
 		}
 	}
 
-	// Initialize Approval Manager independently (not tied to agents)
-	// Read approval config from main config file if available
-	approvalCfg := approval.DefaultConfig()
-	if cfg != nil && cfg.Approval != nil {
-		ac := cfg.Approval
-		approvalCfg.Strategy = approval.Strategy(ac.Strategy)
-		approvalCfg.TrustThreshold = ac.TrustThreshold
-		approvalCfg.EnableLearning = ac.EnableLearning
-		approvalCfg.EnableCLIConfirm = ac.EnableCLIConfirm
-		// 仅在显式设置时覆盖 timeout_strategy，否则保留 DefaultConfig 的 deny。
-		if ac.TimeoutStrategy != "" {
-			approvalCfg.TimeoutStrategy = approval.TimeoutStrategy(ac.TimeoutStrategy)
-		}
-		// 仅在显式设置 (>0) 时覆盖，否则保留 DefaultConfig 的 60s。
-		// 若无条件覆盖，配置文件中 approval 段未写 approval_timeout 时，
-		// Go 零值 0 会使 pending 审批立即过期，用户来不及点击批准。
-		if ac.ApprovalTimeout > 0 {
-			approvalCfg.ApprovalTimeout = ac.ApprovalTimeout
-		}
+	// Initialize Approval Manager independently (not tied to agents).
+	// 配置映射已收敛到 approval.NewManagerFromAppConfig：web / bot / gateway
+	// 等所有 agent 创建路径共用同一份解释，防止各路径策略口径漂移
+	// （此前 bot 模式漏接这一映射，agent 静默跑在默认 smart 策略上）。
+	var ac *appconfig.ApprovalConfig
+	if cfg != nil {
+		ac = cfg.Approval
 	}
-	approvalMgr, err := approval.NewManager(approvalCfg)
+	approvalMgr, err := approval.NewManagerFromAppConfig(ac)
 	if err != nil {
 		approvalMgr = nil
-	} else {
-		// If no persisted config, use main config values (already set above)
-		loadedStrategy := approvalMgr.GetConfig().Strategy
-		if loadedStrategy == "" {
-			approvalMgr.SetStrategy(approval.StrategySmart)
-		}
 	}
 
 	// Create usage manager

@@ -47,11 +47,7 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 	// Per-bot isolated workdir: bots/<name>/. Tools that root themselves in a
 	// working directory (terminal, file ops) stay inside this bot's sandbox,
 	// so one bot cannot read or modify another bot's files by accident.
-	workDir := cfg.WorkingDir
-	if workDir == "" {
-		workDir, _ = os.Getwd()
-	}
-	botWorkDir := filepath.Join(workDir, "bots", sanitizeDirComponent(botCfg.Name))
+	botWorkDir := botWorkDirFor(globalCfg, botCfg)
 	if err := os.MkdirAll(botWorkDir, 0755); err != nil {
 		return nil, nil, fmt.Errorf("failed to create bot workdir for %q: %w", botCfg.Name, err)
 	}
@@ -132,9 +128,29 @@ func (f *skillFilter) GetSkillInfo(name string) (string, []string, string, error
 	return f.inner.GetSkillInfo(name)
 }
 
+// botWorkDirFor returns the per-bot isolated working directory:
+// <WorkingDir | cwd>/bots/<sanitized-name>. Shared by buildBotDeps (which
+// creates it and roots the bot tools there) and by the turn runner (which
+// injects it into the turn ctx via tool.WithWorkDir) — the two must agree,
+// otherwise relative paths written by bot tools land somewhere the approval
+// hook's scope check and the file tools disagree on.
+func botWorkDirFor(globalCfg *config.Config, botCfg *Config) string {
+	workDir := globalCfg.WorkingDir
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+	return filepath.Join(workDir, "bots", sanitizeDirComponent(botCfg.Name))
+}
+
 // sanitizeDirComponent makes a bot name safe to use as a directory name.
 func sanitizeDirComponent(name string) string {
 	name = strings.ToLower(name)
+	// 空名与点名必须在字符替换之前拦截："."/".." 会被下面的 Map 替换成
+	// "_"/"__"，导致这个守卫永远匹配不上（死代码），点目录名以 "_. 音" 的
+	// 形式漏进路径。提前拦截后 ".." 明确回落为 "bot"。
+	if name == "" || name == "." || name == ".." {
+		return "bot"
+	}
 	name = strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
@@ -145,7 +161,7 @@ func sanitizeDirComponent(name string) string {
 			return '_'
 		}
 	}, name)
-	if name == "" || name == "." || name == ".." {
+	if name == "" {
 		return "bot"
 	}
 	return name

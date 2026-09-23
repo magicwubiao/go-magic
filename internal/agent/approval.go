@@ -198,6 +198,13 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	// If needs user confirmation.
 	if result.AskUser {
 		var approved bool
+		// denyReason carries the truthful denial attribution into the tool
+		// result. Previously every deny here was reported as "User rejected
+		// command: ..." — including the non-interactive fail-closed path where
+		// NO user was ever asked — which made the model believe the user had
+		// actively refused ("用户拒绝了写入操作") instead of fixing the real
+		// cause (missing approval wiring / out-of-scope path).
+		denyReason := result.Reason
 
 		// 将 RequestApproval 给出的 reason/risk 写回 req，供 CreatePendingApproval
 		// 通过 OnPendingCreated 回调推送给 SSE 流（前端审批卡片展示）。
@@ -225,10 +232,14 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				// timeout_strategy 决定放行/拒绝，写入审计历史并通知回调）。
 				timeoutResult := h.manager.ResolveTimeout(req)
 				approved = timeoutResult.Approved
+				if !approved {
+					denyReason = "Approval timed out and was auto-resolved to deny: " + timeoutResult.Reason
+				}
 			} else if approved {
 				h.manager.Approve(req)
 			} else {
 				h.manager.Deny(req)
+				denyReason = "User rejected via web approval: " + result.Reason
 				// Notify callbacks of the web decision.
 				h.manager.NotifyApproval(webResult, req)
 			}
@@ -239,13 +250,22 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				h.manager.Approve(req)
 			} else {
 				h.manager.Deny(req)
+				denyReason = "User rejected via interactive prompt: " + result.Reason
 			}
 		} else if !isStdinTerminal() {
 			// 非交互模式且没有自定义 prompt：fail-closed（默认拒绝）。
 			// 之前的行为是自动批准，这会让 Critical 风险命令在 CI/管道里
 			// 静默执行。要求调用方显式配置 web 审批或注入 promptFunc。
-			fmt.Printf("  [DENIED] Non-interactive mode requires web approval or promptFunc: %s\n", command)
+			//
+			// 血债（2026-09-23 bot 模式"写入被拒绝"）：这里原来只有一条
+			// fmt.Printf 到 stdout（服务进程里无人看见、也不进日志文件），
+			// 且最终拒绝理由沿用 "User rejected command: ..." —— 用户根本
+			// 没被询问过，模型却被误导去向用户道歉并反复澄清。现在：
+			// ① 拒绝进日志（log.Warnf），可被 grep 追溯；
+			// ② 拒绝理由对模型说真话并给出可行动的修复路径。
+			log.Warnf("[Approval] Non-interactive session denied %q (no web approval/promptFunc configured)", command)
 			approved = false
+			denyReason = "Denied automatically: this session cannot show an approval prompt (bot/background mode). File writes inside the session working directory are auto-approved; for other operations set approval.strategy to auto in config.json, or run the task via the web UI / CLI where approval prompts are available."
 			h.manager.Deny(req)
 			h.manager.NotifyApproval(&approval.ApprovalResult{
 				Approved: false,
@@ -289,6 +309,7 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 			case actionDeny:
 				approved = false
 				h.manager.Deny(req)
+				denyReason = "User rejected via CLI prompt: " + result.Reason
 				h.manager.NotifyApproval(&approval.ApprovalResult{
 					Approved: false,
 					Strategy: result.Strategy,
@@ -311,6 +332,9 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				// 不调用 Deny，避免污染 denied pattern 计数。
 				timeoutResult := h.manager.ResolveTimeout(req)
 				approved = timeoutResult.Approved
+				if !approved {
+					denyReason = "Approval timed out and was auto-resolved to deny: " + timeoutResult.Reason
+				}
 			}
 		}
 
@@ -319,7 +343,7 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		}
 		return call, hooks.HookDecision{
 			Action: hooks.HookActionReject,
-			Reason: fmt.Sprintf("User rejected command: %s", result.Reason),
+			Reason: fmt.Sprintf("Tool call denied: %s", denyReason),
 		}, nil
 	}
 
@@ -760,7 +784,13 @@ func truncateCommand(cmd string, maxLen int) string {
 	return cmd[:maxLen-3] + "..."
 }
 
+// stdinIsTerminal is a package-level seam so tests can simulate interactive
+// and non-interactive stdin without touching the real terminal.
+var stdinIsTerminal = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
 // isStdinTerminal returns true if os.Stdin is a real terminal (interactive).
 func isStdinTerminal() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
+	return stdinIsTerminal()
 }

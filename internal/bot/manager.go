@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	sessionstore "github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -65,6 +67,15 @@ type Manager struct {
 	stopCh    chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg        sync.WaitGroup
+
+	// approvalMgr is the shared approval Manager built from the main config's
+	// approval section; every bot agent is wired to it via
+	// agent.WithApprovalManager. Nil (init failure) lets agents fall back to
+	// the agent package's builtin default hook. Before this field existed, bot
+	// agents ran on DefaultConfig (smart strategy) with no approval UI — every
+	// write_file was fail-closed denied in the non-interactive server process
+	// ("写入被拒绝" clarify loops).
+	approvalMgr *approval.Manager
 }
 
 // botRuntime holds one bot's live agents plus its message queue. A bot has
@@ -123,6 +134,10 @@ func NewManager(cfg *config.Config, sessions *sessionstore.Store) (*Manager, err
 		stopCh:   make(chan struct{}),
 	}
 	m.queueCond = sync.NewCond(&m.mu)
+
+	// Follow the same approval policy as web/CLI sessions (config approval
+	// section). Nil on init failure → agents keep the builtin default hook.
+	m.approvalMgr = approval.NewManagerFromAppConfigOrWarn(cfg.Approval, "BotMode")
 
 	return m, nil
 }
@@ -332,6 +347,15 @@ func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error)
 	// Restore history from the session store.
 	history := m.loadHistory(sessionID)
 	ag := agent.NewEnhancedAgent(prov, registry, getToolsSchema(registry), systemPrompt)
+	// Wire the shared approval manager built from the main config so bot
+	// sessions follow the user's approval strategy (e.g. auto). Without this
+	// the agent keeps the builtin default hook (DefaultConfig → smart), and
+	// since bot turns are non-interactive with no web approval UI, content
+	// tools (write_file/file_edit/execute_code) were fail-closed denied every
+	// time — the model then told the user "写入被拒绝" and looped on clarify.
+	if m.approvalMgr != nil {
+		ag.ApplyOption(agent.WithApprovalManager(m.approvalMgr))
+	}
 	// Bot mode uses a moderate tool-loop cap.  Bots are conversational
 	// agents — a single user message typically needs 3–10 rounds of tool
 	// calls.  A reasonable cap prevents runaway loops while allowing
@@ -418,6 +442,15 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	}
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	// Inject the bot's isolated workdir into the turn context. Two reasons:
+	// ① the approval hook's C2 scope check (isPathWithinWorkdir) needs it to
+	//   recognize in-workdir writes and auto-approve them — without it the
+	//   check always fails and every write_file demanded confirmation that a
+	//   non-interactive bot session can never answer;
+	// ② file/terminal tools resolve relative paths against the bot sandbox
+	//   (<working_dir>/bots/<name>), matching the RegisterBotTools isolation
+	//   design in buildBotDeps instead of falling back to the server cwd.
+	runCtx = tool.WithWorkDir(runCtx, botWorkDirFor(m.cfg, rt.cfg))
 
 	// Mark the bot as having a turn in flight so /running probes and
 	// /cancel requests can observe and stop it even after the SSE client
