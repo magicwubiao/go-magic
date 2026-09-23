@@ -52,6 +52,10 @@ type ExecutionLog struct {
 	Output     string     `json:"output,omitempty"`
 	Error      string     `json:"error,omitempty"`
 	Duration   string     `json:"duration,omitempty"`
+	// WorkDir is the per-run working directory the agent executed in
+	// (agent mode only; empty for script mode). Artifacts live here —
+	// surfacing it in the log answers "这次运行的产物在哪" without guessing.
+	WorkDir string `json:"work_dir,omitempty"`
 }
 
 // Manager manages cron jobs with real scheduling
@@ -236,7 +240,9 @@ func (m *Manager) executeJob(jobID string) {
 		output, execErr = executeScript(m.ctx, job.Script)
 	} else if job.Prompt != "" {
 		// Agent mode - use LLM to generate and execute script
-		output, execErr = m.executeAgentPrompt(m.ctx, job)
+		var workDir string
+		output, workDir, execErr = m.executeAgentPrompt(m.ctx, job)
+		execLog.WorkDir = workDir
 	} else if job.Script != "" {
 		// Fallback to script mode if no prompt
 		output, execErr = executeScript(m.ctx, job.Script)
@@ -519,13 +525,23 @@ func (m *Manager) saveLogs() error {
 	return os.WriteFile(m.logsFile, data, 0644)
 }
 
-// executeAgentPrompt uses the full Agent with all tools to execute the prompt
-func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, error) {
+// cronRunDirName returns the per-run directory name for a job execution:
+// run_<yyyyMMdd-HHmmss> (local time), human-readable so artifact dirs can be
+// matched against job logs at a glance. Callers fall back to a UnixNano name
+// if the same-second slot is already taken.
+func cronRunDirName(now time.Time) string {
+	return "run_" + now.Format("20060102-150405")
+}
+
+// executeAgentPrompt uses the full Agent with all tools to execute the prompt.
+// Returns the conversation result and the per-run working directory the agent
+// executed in (recorded into ExecutionLog.WorkDir by executeJob).
+func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, string, error) {
 	if m.prov == nil {
-		return "", fmt.Errorf("no LLM provider configured for agent mode")
+		return "", "", fmt.Errorf("no LLM provider configured for agent mode")
 	}
 	if m.toolReg == nil {
-		return "", fmt.Errorf("no tool registry configured for agent mode")
+		return "", "", fmt.Errorf("no tool registry configured for agent mode")
 	}
 
 	log.Infof("[Cron] Agent job %s executing: %s", job.Name, job.Prompt)
@@ -534,15 +550,27 @@ func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, err
 	tools := m.toolReg.ListWithSchemas()
 	log.Infof("[Cron] Agent job %s has %d tools available", job.Name, len(tools))
 
-	// Determine working directory - always use a "cron" subdirectory
-	baseDir := m.workingDir
-	if baseDir == "" {
-		baseDir = filepath.Join(config.GetMagicHome(), "workspace")
+	// Determine working directory - always under a "cron" subdirectory.
+	//
+	// 此前所有 cron 任务共用 <base>/cron：不同任务的产物互相覆盖（同名文件如
+	// report.md / pelican_bike.html 互相清掉），定时触发与手动触发重叠时两个
+	// agent 还会往同一目录同时写。对齐看板"每任务一目录"的布局：
+	//   cron/<jobID>/            = 该任务的产物根目录（"对应的任务目录"）
+	//   cron/<jobID>/run_<时间>/  = 单次执行的隔离目录
+	runDir := filepath.Join(m.workingDir, "cron", job.ID, cronRunDirName(time.Now()))
+	if m.workingDir == "" {
+		runDir = filepath.Join(config.GetMagicHome(), "workspace", "cron", job.ID, cronRunDirName(time.Now()))
 	}
-	workDir := filepath.Join(baseDir, "cron")
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		log.Warnf("[Cron] Failed to create workspace %s: %v", workDir, err)
+	// 同秒内再次触发（手动 + 定时重叠）：换用纳秒后缀名，保证不共享目录
+	if _, err := os.Stat(runDir); err == nil {
+		base := filepath.Dir(runDir)
+		runDir = filepath.Join(base, fmt.Sprintf("run_%d", time.Now().UnixNano()))
 	}
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		log.Warnf("[Cron] Failed to create workspace %s: %v", runDir, err)
+	}
+	workDir := runDir
+	log.Infof("[Cron] Agent job %s workdir: %s", job.Name, workDir)
 
 	// System prompt for cron agent - simple, direct, no explanation
 	systemPrompt := fmt.Sprintf(`You are a reliable task execution assistant. You have access to various tools.
@@ -577,11 +605,11 @@ Your working directory is: %s
 	// Run the conversation
 	result, err := a.RunConversation(ctx, job.Prompt)
 	if err != nil {
-		return "", fmt.Errorf("agent execution failed: %w", err)
+		return "", workDir, fmt.Errorf("agent execution failed: %w", err)
 	}
 
 	log.Infof("[Cron] Agent job %s completed", job.Name)
-	return result, nil
+	return result, workDir, nil
 }
 
 // removeMarkdownCodeBlocks removes markdown code block formatting

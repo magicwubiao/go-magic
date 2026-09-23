@@ -77,8 +77,15 @@ func NewRedactor(cfg *Config) *Redactor {
 	}
 
 	// Add default patterns based on config
+	//
+	// 边界约定：PHONE/ID_CARD/SSN 这类"纯数字长串"模式必须带 \b 词边界。
+	// 没有边界时 `1[3-9]\d{9}` 会命中 19 位任务 ID（task_1790159593523920700
+	// 里的 "17901595935"）和 13 位毫秒时间戳等长数字串的子段，把看板任务
+	// ID、文件路径、订单号改写成 [PHONE]，模型后续工具调用全部拿假 ID。
+	// \b 在数字串内部（数字邻数字、下划线邻数字）不成立，只对独立出现的
+	// 11 位号码生效——误伤 ID 换来的检出增益不值得。
 	if cfg.RedactPhone {
-		r.AddPattern("PHONE", `1[3-9]\d{9}`, "[PHONE]")
+		r.AddPattern("PHONE", `\b1[3-9]\d{9}\b`, "[PHONE]")
 	}
 
 	if cfg.RedactEmail {
@@ -87,9 +94,9 @@ func NewRedactor(cfg *Config) *Redactor {
 
 	if cfg.RedactIDCard {
 		// Chinese ID card (18 digits)
-		r.AddPattern("ID_CARD", `[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]`, "[ID_CARD]")
+		r.AddPattern("ID_CARD", `\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b`, "[ID_CARD]")
 		// US SSN
-		r.AddPattern("SSN", `\d{3}-\d{2}-\d{4}`, "[SSN]")
+		r.AddPattern("SSN", `\b\d{3}-\d{2}-\d{4}\b`, "[SSN]")
 	}
 
 	if cfg.RedactBankCard {

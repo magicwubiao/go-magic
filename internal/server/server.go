@@ -329,6 +329,16 @@ Your working directory is: %s
 						agent.WithSteering(agent.SteeringConfig{MaxIterations: 30}),
 					}
 
+					// 应用 PII 脱敏配置（来自 config.Privacy）。此前看板 worker 漏接
+					// 这一项：privacyCfg 为 nil 时 NewPrivacyHook 回退到 DefaultConfig
+					// （enabled=true, redact_phone=true），用户关闭 privacy.enabled 总开关
+					// 后看板任务仍被脱敏，任务 ID / 工作目录被 [PHONE] 占位符破坏。
+					// 每次 spawn 现读磁盘配置（同 cron manager 的做法），改开关后
+					// 下一个任务即生效，无需重启服务。
+					if freshCfg, _ := appconfig.Load(); freshCfg != nil && freshCfg.Privacy != nil {
+						agentOpts = append(agentOpts, agent.WithPrivacy(freshCfg.Privacy))
+					}
+
 					// Create agent with all tools
 					a := agent.NewEnhancedAgent(prov, registry, tools, systemPrompt, agentOpts...)
 
