@@ -204,15 +204,19 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	// Return all tools from all toolsets
-	tools := make([]map[string]interface{}, 0)
-	toolsets := s.buildToolsets()
-	for _, ts := range toolsets {
-		if tsTools, ok := ts["tools"].([]map[string]interface{}); ok {
-			tools = append(tools, tsTools...)
+	// Flatten every toolset into one list of tool names.
+	//
+	// buildToolsets() stores each toolset's "tools" value as []string (tool
+	// names, for frontend compatibility). This used to assert
+	// []map[string]interface{}, which can never succeed against []string — so
+	// the endpoint silently answered `[]` no matter how many tools existed.
+	names := make([]string, 0)
+	for _, ts := range s.buildToolsets() {
+		if tsTools, ok := ts["tools"].([]string); ok {
+			names = append(names, tsTools...)
 		}
 	}
-	jsonResponse(w, tools)
+	jsonResponse(w, names)
 }
 
 func (s *Server) handleMCPHealth(w http.ResponseWriter, r *http.Request) {
@@ -244,15 +248,9 @@ func (s *Server) handleGetToolsets() []Toolset {
 	result := make([]Toolset, 0, len(dynamicToolsets))
 	for _, ts := range dynamicToolsets {
 		name, _ := ts["name"].(string)
-		// Convert tool objects to tool names for backward compatibility
-		var toolNames []string
-		if tsTools, ok := ts["tools"].([]map[string]interface{}); ok {
-			for _, t := range tsTools {
-				if toolName, ok := t["name"].(string); ok {
-					toolNames = append(toolNames, toolName)
-				}
-			}
-		}
+		// "tools" is already a []string of tool names; earlier code asserted
+		// []map[string]interface{} and therefore always produced an empty list.
+		toolNames, _ := ts["tools"].([]string)
 		result = append(result, Toolset{
 			ID:      strings.ToLower(strings.ReplaceAll(name, " ", "_")),
 			Name:    name,

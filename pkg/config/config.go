@@ -136,9 +136,12 @@ type Config struct {
 	ChatMode        string `json:"chat_mode,omitempty"` // chat, coding - default mode for magic chat
 	Agent           struct {
 		// MaxTurns caps one conversation turn's tool-loop iterations for
-		// server/bot agents (default 300). 0 keeps the built-in default.
+		// server/bot agents (default 150). 0 keeps the built-in default.
+		// Note the hard 30-minute per-turn wall clock in the chat queue: at
+		// ~10-30s per iteration only ~60-180 iterations are reachable, so a
+		// larger cap silently never takes effect.
 		MaxTurns       int   `json:"max_turns,omitempty"`
-		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 400
+		MaxIterations  int   `json:"max_iterations,omitempty"`   // steering cap; default 200
 		MaxTokenBudget int64 `json:"max_token_budget,omitempty"` // steering token budget
 	} `json:"agent,omitempty"`
 	// Approval settings
@@ -516,11 +519,18 @@ func Load() (*Config, error) {
 	// （旧配置或手动编辑），此时若为 0 会导致 server 端回退到 agent 硬编码的
 	// 内置上限，与 Web 配置界面默认值不一致。这里补齐默认值，确保
 	// 实际生效的上限与 UI 展示一致。
+	//
+	// 取值依据：单个回合受 sessionTurnTimeout（30 分钟）约束，而每轮迭代是
+	// 一次 LLM 调用加工具执行（实测 10~30s），因此单回合物理可达的迭代数是
+	// 30min/10s≈180 到 30min/30s≈60 之间。旧默认 300 落在该区间之外——永远
+	// 先撞时间墙，回合上限形同虚设。150 落在可达区间内，能真正起到"止住失控
+	// 循环"的作用；max_iterations 是 max_turns 之外的转向闸门，两者取先到者，
+	// 故设为 200 使其同样是个有意义的约束。
 	if cfg.Agent.MaxTurns == 0 {
-		cfg.Agent.MaxTurns = 300
+		cfg.Agent.MaxTurns = 150
 	}
 	if cfg.Agent.MaxIterations == 0 {
-		cfg.Agent.MaxIterations = 400
+		cfg.Agent.MaxIterations = 200
 	}
 
 	return &cfg, nil
@@ -720,13 +730,15 @@ func defaultConfig() *Config {
 		Voice:   voice.DefaultVoiceConfig(),
 		// Agent 循环上限默认值，与 Web 配置界面(ConfigView.vue)的默认一致，
 		// 避免新建配置时回退到 agent 内置的上限。
+		// 150/200 的取值依据见 Load() 里的同类注释：旧值 300/400 超出了一
+		// 个回合（30 分钟）物理上可达的迭代数，实际永远不会触发。
 		Agent: struct {
 			MaxTurns       int   `json:"max_turns,omitempty"`
 			MaxIterations  int   `json:"max_iterations,omitempty"`
 			MaxTokenBudget int64 `json:"max_token_budget,omitempty"`
 		}{
-			MaxTurns:      300,
-			MaxIterations: 400,
+			MaxTurns:      150,
+			MaxIterations: 200,
 		},
 	}
 }

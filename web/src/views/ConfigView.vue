@@ -319,8 +319,11 @@ const botModeNeedsRestart = computed(
 )
 
 const agentForm = reactive({
-  max_turns: 300,
-  max_iterations: 400,
+  // 与后端默认值保持一致（pkg/config/config.go）。150/200 的取值依据：
+  // 单回合受 30 分钟 wall-clock 约束，每轮迭代 10~30s，物理可达 60~180 轮，
+  // 故 300 永远不会触发，150 才是真实生效的失控循环闸门。
+  max_turns: 150,
+  max_iterations: 200,
 })
 
 // Bot Mode section on the Agent tab (config.bot_mode.*)
@@ -384,9 +387,9 @@ function populateFromConfig(cfg: any) {
   const agent = cfg.agent || {}
   // 0 means "use built-in default"; show the effective value in UI.
   const maxTurns = Number(agent.max_turns) || 0
-  agentForm.max_turns = maxTurns > 0 ? maxTurns : 300
+  agentForm.max_turns = maxTurns > 0 ? maxTurns : 150
   const maxIterations = Number(agent.max_iterations) || 0
-  agentForm.max_iterations = maxIterations > 0 ? maxIterations : 400
+  agentForm.max_iterations = maxIterations > 0 ? maxIterations : 200
 
   const botMode = cfg.bot_mode || {}
   botModeForm.enabled = botMode.enabled === true

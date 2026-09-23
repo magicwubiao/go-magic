@@ -63,8 +63,8 @@
     "relay_token": ""
   },
   "agent": {
-    "max_turns": 300,
-    "max_iterations": 400,
+    "max_turns": 150,
+    "max_iterations": 200,
     "max_token_budget": 0
   },
   "server": {

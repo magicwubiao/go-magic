@@ -247,8 +247,13 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		history:  history,
 		// 内置兜底上限：调用方（config / WithMaxTurns）未指定时生效。与
 		// config 默认值保持一致，避免"配了 0 反而比默认值更紧"的困惑。
-		maxTurns:         300,
-		maxIterations:    400,
+		//
+		// 150/200 而非更大的值：单回合受 chatqueue.sessionTurnTimeout
+		// （30 分钟）约束，每轮迭代是一次 LLM 调用加工具执行（实测
+		// 10~30s），物理可达的迭代数约 60~180。300 落在这个区间之外，
+		// 永远先撞时间墙 → 回合上限形同虚设。见 pkg/config/config.go 同项注释。
+		maxTurns:         150,
+		maxIterations:    200,
 		maxTotalLen:      200000, // 200K chars max history (~50K tokens)
 		maxMsgLen:        50000,  // 50K chars per message (~12K tokens)
 		maxTokenBudget:   0,

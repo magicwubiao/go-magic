@@ -32,6 +32,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/internal/subagent"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
@@ -82,6 +83,11 @@ type Server struct {
 
 	// Kanban manager
 	kanbanMgr *kanban.Manager
+
+	// subagentMgr 驱动 delegate_task / poll_task / list_tasks / cancel_task。
+	// 通过它，主 agent 能把超长任务切分成边界清晰的子任务并行执行，而不是在
+	// 单条主循环里线性消耗回合数（见 internal/server/subagent.go）。
+	subagentMgr *subagent.Manager
 
 	// MCP manager
 	mcpMgr *mcp.Manager
@@ -349,6 +355,27 @@ Your working directory is: %s
 		}
 	}
 
+	// Initialize Subagent Manager and register the delegation tools.
+	//
+	// 没有这一步，Web / Bot 入口的 agent 就看不到 delegate_task：超长任务只能
+	// 在单条主循环里线性消耗回合数，撞上 max_turns 时整个任务失败。接上之后
+	// 主 agent 可以把任务切分成子任务并行执行，各自独立消耗回合预算。
+	var subagentMgr *subagent.Manager
+	if prov != nil {
+		subagentMgr = subagent.NewManager(
+			buildSubagentConfig(cfg),
+			prov,
+			&subagentRegistryAdapter{registry: registry},
+			newSubagentRunner,
+		)
+		subagentMgr.Start()
+		registry.RegisterDelegationTools(subagentMgr)
+		log.Infof("[Subagent] Delegation tools registered (max_concurrent=%d, max_depth=%d)",
+			buildSubagentConfig(cfg).MaxConcurrent, buildSubagentConfig(cfg).MaxDepth)
+	} else {
+		log.Warnf("[Subagent] No provider configured; delegate_task will not be available")
+	}
+
 	// Initialize Plugin Manager
 	var pluginMgr *plugin.Manager
 	pluginMgr, err = plugin.NewManager(nil)
@@ -505,6 +532,7 @@ Your working directory is: %s
 		disabledSkills:       disabledSkills,
 		cronMgr:              cronMgr,
 		kanbanMgr:            kanbanMgr,
+		subagentMgr:          subagentMgr,
 		pluginMgr:            pluginMgr,
 		goalMgr:              goalMgr,
 		cortexMgr:            cortexMgr,
@@ -1639,6 +1667,11 @@ func (s *Server) Stop() {
 	// 关闭所有独立 MCP server 连接,释放 stdio/SSE 子进程与传输资源。
 	if s.mcpMgr != nil {
 		s.mcpMgr.DisconnectAll()
+	}
+	// 停止子代理管理器：取消在跑的子任务并回收 worker goroutine。
+	// 不做这一步，正在执行的 delegate_task 会随进程退出变成幽灵任务。
+	if s.subagentMgr != nil {
+		s.subagentMgr.Stop()
 	}
 	// 回收浏览器自动化进程,避免服务退出后残留 Chrome 孤儿进程。
 	tool.GetBrowserManager().Close()
