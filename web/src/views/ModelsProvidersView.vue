@@ -193,6 +193,7 @@ import {
   NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
   NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin, NIcon
 } from 'naive-ui'
+import { NPopconfirm } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import { useModelsStore } from '@/stores/models'
 import { useConfigStore } from '@/stores/config'

@@ -85,6 +85,7 @@ import {
 } from '@vicons/ionicons5'
 import { useSystemStore } from '@/stores/system'
 import UpdateManager from '@/components/UpdateManager.vue'
+import { NCard, NDescriptions, NDescriptionsItem, NGi, NGrid, NIcon, NSpin, NTag } from 'naive-ui'
 
 const { t } = useI18n()
 const systemStore = useSystemStore()

@@ -93,6 +93,7 @@ import { RefreshOutline } from '@vicons/ionicons5'
 import * as systemApi from '@/api/system'
 import type { SystemVersion, VersionCheckResult } from '@/api/system'
 import { getLocale } from '@/locales'
+import { NAlert, NButton, NCard, NCode, NCollapse, NCollapseItem, NDivider, NTag } from 'naive-ui'
 
 const { t } = useI18n()
 const versionInfo = ref<SystemVersion | null>(null)

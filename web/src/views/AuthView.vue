@@ -67,6 +67,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import type { AuthErrorCode } from '@/stores/auth'
 import { useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NIcon, NInput, NText } from 'naive-ui'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 
 const { t } = useI18n()

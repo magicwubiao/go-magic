@@ -68,6 +68,7 @@ import type { PropType } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { TaskProgress } from '@/stores/chat'
 import { toolEmojiByTitle } from '@/utils/toolCallView'
+import { NCollapseTransition } from 'naive-ui'
 
 export interface TimelineStep {
   /** 稳定 key（工具调用 id），避免动画/复用错位 */

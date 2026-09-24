@@ -85,6 +85,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore, type PendingClarificationCard } from '@/stores/chat'
+import { NButton, NInput, NSpin } from 'naive-ui'
 
 const props = defineProps<{
   clarification: PendingClarificationCard

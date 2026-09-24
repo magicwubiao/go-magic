@@ -799,7 +799,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import {
   NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NModal,
@@ -1774,14 +1775,87 @@ function handleDocumentCodeClick(e: MouseEvent) {
   setTimeout(() => { btn.textContent = original }, 2000)
 }
 
-onMounted(() => {
+// ========== 路由缓存（keep-alive）==========
+// /bots 与 /chat 同样是聊天形态：正文草稿、消息区滚动位置、当前选中的 bot / 群聊
+// 都是"离开一下再回来还在"才自然的状态。路由侧已开 meta.keepAlive（main.ts），
+// 组件不再随路由销毁重建，于是 onMounted 只会在第一次进入时跑一次 —— 数据刷新
+// 与全局监听改挂到 activated/deactivated，并做下面两件事：
+//   ① 数据不每次激活都重拉（30s 新鲜窗口，与 ChatView 的侧栏缓存同一口径）；
+//   ② 显式存取滚动位置：KeepAlive 停用时 Vue 会把整棵 DOM 移进游离容器，
+//      游离元素没有滚动盒，浏览器不会替我们保住阅读位置。
+const BOTS_DATA_STALE_MS = 30_000
+let botsDataLoaded = false
+let botsDataFetchedAt = 0
+
+function loadBotsPageData(force = false) {
+  if (!force && botsDataLoaded && Date.now() - botsDataFetchedAt < BOTS_DATA_STALE_MS) return
+  botsDataLoaded = true
+  botsDataFetchedAt = Date.now()
   void botsStore.loadBots()
   void roomsStore.loadRooms()
   void modelsStore.loadModels()
   void loadCandidates()
-  document.addEventListener('click', handleDocumentCodeClick)
+}
+
+// 消息区有两个（bot 单聊 / 群聊 room），同一时刻只有一个可见，取当前这一个。
+function activeMessagesEl(): HTMLElement | null {
+  return viewMode.value === 'rooms' ? roomMessagesEl.value : messagesEl.value
+}
+function activeMessagesCount(): number {
+  return viewMode.value === 'rooms' ? roomsStore.messages.length : botsStore.messages.length
+}
+
+let savedMessagesScrollTop = 0
+let savedMessagesCount = 0
+let hasSavedMessagesScroll = false
+
+// 保存点必须在"离开路由的守卫"里，不能放 onDeactivated：Vue 的 KeepAlive.deactivate
+// 先 move DOM 再在 post-render 调 onDeactivated，那时 scrollTop 读回来恒为 0。
+function saveBotsScrollState() {
+  const el = activeMessagesEl()
+  if (!el) {
+    hasSavedMessagesScroll = false
+    return
+  }
+  savedMessagesScrollTop = el.scrollTop
+  savedMessagesCount = activeMessagesCount()
+  hasSavedMessagesScroll = true
+}
+
+onBeforeRouteLeave(() => {
+  saveBotsScrollState()
 })
 
+// 挂载时也装一次监听 + 拉一次数据：keep-alive 只是让 activated 在回访时也触发，
+// 但"路由 meta.keepAlive 被拿掉"或"缓存实例被重建"时，onMounted 是唯一的入口 ——
+// 只挂 activated 会让这两种情况下页面直接空白（onActivated 对非缓存组件永不触发）。
+// 同一函数引用重复 addEventListener 是幂等的；数据加载有 30s 新鲜窗口，第二次是 no-op。
+onMounted(() => {
+  document.addEventListener('click', handleDocumentCodeClick)
+  loadBotsPageData()
+})
+
+onActivated(() => {
+  document.addEventListener('click', handleDocumentCodeClick)
+  loadBotsPageData()
+  if (!hasSavedMessagesScroll) return
+  // 必须等 DOM 重新插回主文档、布局可用后再写：游离状态下写 scrollTop 是空操作。
+  nextTick(() => {
+    const el = activeMessagesEl()
+    if (!el) return
+    // 离开期间消息仍可能到达（发送不随路由中断，只是观感在后台）。有新增就按聊天
+    // 习惯贴到最新，否则精确回到原来那一屏，不打扰正在翻历史的用户。
+    el.scrollTop = activeMessagesCount() > savedMessagesCount ? el.scrollHeight : savedMessagesScrollTop
+  })
+})
+
+// 全局 document 监听在停用时必须摘掉：组件还活着，但页面已经不可见，
+// 不该再响应点击（也会留下多余的监听器）。
+onDeactivated(() => {
+  document.removeEventListener('click', handleDocumentCodeClick)
+})
+
+// 兜底：keep-alive 缓存被真正销毁时（登出等）确保监听器不残留
 onUnmounted(() => {
   document.removeEventListener('click', handleDocumentCodeClick)
 })

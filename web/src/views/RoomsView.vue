@@ -235,6 +235,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NButton, NEmpty, NForm, NFormItem, NFormItemGi, NGrid, NIcon, NInput, NModal, NPopconfirm, NSlider, NSpin, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import {

@@ -17,8 +17,11 @@
           <n-button :type="currentGoal ? 'primary' : 'default'" size="small" quaternary class="goal-select-btn">
             <template #default>
               <span class="goal-title">{{ currentGoal?.title || t('goals.selectGoal') }}</span>
-            </template>
-            <template #suffix>
+              <!-- 展开箭头必须放在 default 槽里：NButton 只有 default / icon 两个槽，
+                   原先写成 #suffix 无效 —— 组件静默忽略该槽，箭头其实一直没渲染出来
+                   （.goal-select-btn 的 justify-content: space-between + .goal-title 的
+                   flex:1 正是给"标题 + 右侧箭头"两个子元素准备的）。
+                   类型检查（vue-tsc）会报 "Property 'suffix' does not exist"。 -->
               <n-icon :component="ChevronDownOutline" :size="14" />
             </template>
           </n-button>
@@ -105,6 +108,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import { NButton, NCard, NDropdown, NForm, NFormItem, NIcon, NInput, NModal, NProgress, NSpace, NTag, NText } from 'naive-ui'
 import { FlagOutline, AddOutline, CloseOutline, ChevronDownOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'

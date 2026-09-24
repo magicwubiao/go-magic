@@ -38,6 +38,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useLogsStore } from '@/stores/logs'
+import { NAlert, NButton, NEmpty, NSelect, NSpace, NSpin } from 'naive-ui'
 
 const { t } = useI18n()
 const logsStore = useLogsStore()

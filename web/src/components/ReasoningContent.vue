@@ -42,6 +42,7 @@ import json from 'highlight.js/lib/languages/json'
 import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import markdown from 'highlight.js/lib/languages/markdown'
+import { NCollapseTransition, NIcon } from 'naive-ui'
 import 'highlight.js/styles/github-dark.css'
 
 hljs.registerLanguage('javascript', javascript)

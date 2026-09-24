@@ -1,3 +1,5 @@
+import { resetSessionCache } from '@/utils/sessionCache'
+
 const BASE_URL = '/api'
 
 const RETRY_STATUS_CODES = [429, 500, 502, 503, 504]
@@ -13,6 +15,10 @@ export function setAuthToken(token: string | null): void {
     localStorage.setItem('auth_token', token)
   } else {
     localStorage.removeItem('auth_token')
+    // 清 token 是"身份切换"的唯一咽喉点（登出与 401 都走这里）。
+    // 任何与当前用户绑定的内存缓存都必须一起失效，否则换账号后
+    // 会先看到上一个用户的会话列表。见 utils/sessionCache.ts。
+    resetSessionCache()
   }
 }
 

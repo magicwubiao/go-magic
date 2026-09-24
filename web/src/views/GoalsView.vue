@@ -51,6 +51,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NButton, NForm, NFormItem, NIcon, NInput, NModal, NSlider, NSpace, NTabPane, NTabs, NText } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'

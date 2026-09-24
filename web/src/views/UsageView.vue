@@ -213,6 +213,7 @@ import {
   NButton, NIcon, NModal, NFormItem, NInputNumber, NSlider,
   NProgress
 } from 'naive-ui'
+import { NSpace } from 'naive-ui'
 import { RefreshCircleOutline, WalletOutline } from '@vicons/ionicons5'
 import type { DataTableColumns } from 'naive-ui'
 import {

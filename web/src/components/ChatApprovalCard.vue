@@ -49,7 +49,7 @@
           >✓</button>
         </template>
         <!-- 处理中 -->
-        <n-spin v-else-if="approval.status === 'approving' || approval.status === 'denying'" size="tiny" />
+        <n-spin v-else-if="approval.status === 'approving' || approval.status === 'denying'" size="small" />
       </div>
     </div>
 
@@ -72,6 +72,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore, type PendingApprovalCard } from '@/stores/chat'
+import { NSpin } from 'naive-ui'
 
 const props = defineProps<{
   approval: PendingApprovalCard

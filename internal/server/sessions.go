@@ -249,29 +249,30 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		dbSessions, err := s.sessionStore.ListSessions(context.Background(), "")
+		// 走轻量摘要查询：不读 messages 大字段，LIMIT/OFFSET 下推到 SQL。
+		//
+		// 旧实现是 ListSessions 把全表（含每个会话的全部消息 JSON）读出来、
+		// 反序列化、再在内存里切片取 20 条 —— 取一页也要付"全部会话 × 全部消息"
+		// 的代价，且随会话数与消息体量线性放大。首屏侧栏还要按目录分组拉全量，
+		// 放大倍数更明显。
+		summaries, total, err := s.sessionStore.ListSessionSummaries(r.Context(), limit, offset)
 		if err != nil {
 			jsonResponse(w, map[string]interface{}{"sessions": []Session{}, "total": 0, "limit": limit})
 			return
 		}
 
-		// Convert to API format
-		apiSessions := make([]*Session, 0, len(dbSessions))
-		for _, sess := range dbSessions {
-			apiSessions = append(apiSessions, convertDBSessionToAPI(sess))
+		apiSessions := make([]*Session, 0, len(summaries))
+		for _, sm := range summaries {
+			apiSessions = append(apiSessions, convertSessionSummaryToAPI(sm))
 		}
 
-		total := len(apiSessions)
+		// offset 超出总数时回显钳制后的值（与旧实现一致；查询本身由 SQL 返回空页）
 		if offset > total {
 			offset = total
 		}
-		end := offset + limit
-		if end > total {
-			end = total
-		}
 
 		jsonResponse(w, map[string]interface{}{
-			"sessions": apiSessions[offset:end],
+			"sessions": apiSessions,
 			"total":    total,
 			"limit":    limit,
 			"offset":   offset,
@@ -378,7 +379,9 @@ func (s *Server) handleSessionsDirGroups(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	dbSessions, err := s.sessionStore.ListSessionsByUserWorkDir(r.Context())
+	// 同样走轻量摘要：这个接口本身就是全量返回，若还带上每个会话的全部消息，
+	// 打开"按目录查看会话"面板会非常重。
+	summaries, err := s.sessionStore.ListSessionSummariesByUserWorkDir(r.Context())
 	if err != nil {
 		jsonResponse(w, empty)
 		return
@@ -387,8 +390,8 @@ func (s *Server) handleSessionsDirGroups(w http.ResponseWriter, r *http.Request)
 	// 按规范化路径聚合（清理尾部分隔符等），组内按最近活动倒序
 	byDir := map[string][]*Session{}
 	total := 0
-	for _, dbSess := range dbSessions {
-		apiSess := convertDBSessionToAPI(dbSess)
+	for _, sm := range summaries {
+		apiSess := convertSessionSummaryToAPI(sm)
 		if apiSess == nil || strings.TrimSpace(apiSess.WorkDir) == "" {
 			continue
 		}

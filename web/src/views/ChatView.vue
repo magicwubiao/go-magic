@@ -35,6 +35,13 @@
         </n-button>
       </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
+        <!-- 会话骨架：数据（尤其是全量补齐）到位前占位，避免"空 → 20 条 → 分组"的多次跳变 -->
+        <div v-if="sessionListSkeletonVisible" class="session-skeleton">
+          <div v-for="i in 8" :key="`sk${i}`" class="session-skeleton-row">
+            <div class="session-skeleton-line sk-title"></div>
+            <div class="session-skeleton-line sk-meta"></div>
+          </div>
+        </div>
         <div v-if="isSearching" class="profile-group-header">{{ t('chat.searchResults', { count: visibleSessions.length }) }}</div>
         <template v-for="row in sidebarRows" :key="row.key">
           <!-- 分组头（点标题折叠/展开）。仅当存在"设置过工作目录"的分组时出现，
@@ -182,7 +189,7 @@
         <n-text v-if="isSearching && !chatStore.sessionsLoading && !searchLoading && visibleSessions.length === 0" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.searchNoResults') }}
         </n-text>
-        <n-text v-if="!isSearching && !sidebarRows.length && !chatStore.sessionsLoading && !searchLoading" depth="3" style="padding: 16px; display: block; text-align: center;">
+        <n-text v-if="!isSearching && !sidebarRows.length && !chatStore.sessionsLoading && !searchLoading && !sessionListSkeletonVisible" depth="3" style="padding: 16px; display: block; text-align: center;">
           {{ t('chat.noSessions') }}
         </n-text>
       </div>
@@ -190,9 +197,11 @@
            它曾作为 .session-list 的最后一个子元素渲染，出现/消失会让 scrollHeight
            变化 66px；浏览器随之钳制/锚定 scrollTop，列表在底部时表现为
            "删掉一个会话后整列先跳一下、再弹回、再跳"——即用户看到的抖动。
-           同时 pointer-events:none，不挡住底下那一行的点击。 -->
+           同时 pointer-events:none，不挡住底下那一行的点击。
+           门控必须用 sessionsLoadingMore（分页专用），不能用 sessionsLoading：
+           后者由 loadSessions 驱动，而它在每轮对话落库收尾时都会跑一次。 -->
       <div
-        v-if="(!isMobile || mobileSessionExpanded) && (chatStore.sessionsLoading || (isSearching && searchLoading))"
+        v-if="(!isMobile || mobileSessionExpanded) && !sessionListSkeletonVisible && (chatStore.sessionsLoadingMore || (isSearching && searchLoading))"
         class="session-list-loading"
       >
         <n-spin size="small" />
@@ -855,11 +864,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, h, onMounted, onUnmounted, nextTick, watch, reactive } from 'vue'
+import { ref, computed, h, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
+import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NTag, NText, NTooltip, NUpload } from 'naive-ui'
 import { marked } from 'marked'
 import { stripZeroWidth } from '@/utils/text'
+import {
+  allWebSessions,
+  fullSessionsLoading,
+  fullSessionsFailed,
+  fullSessionsFetchedAt,
+} from '@/utils/sessionCache'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -897,7 +913,7 @@ import { AttachOutline, SendOutline, StopCircleOutline, FlashOutline, DocumentOu
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
-import { useRouter } from 'vue-router'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -1059,6 +1075,69 @@ onUnmounted(() => {
   if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0 }
   if (msgScrollRaf) { cancelAnimationFrame(msgScrollRaf); msgScrollRaf = 0 }
   if (jumpScrollTimer) { clearTimeout(jumpScrollTimer); jumpScrollTimer = null }
+})
+
+// ===== keep-alive 下的滚动位置保存与还原 =====
+// 实例被停用时，Vue 会把整棵 DOM 移入一个游离的 storage container。游离元素没有
+// 滚动盒——scrollTop 读回来是 0，重新插回主文档时也是 0（实测：侧栏滚到 150，回来变 0）。
+// 也就是说浏览器不会替我们保住这两个容器的阅读位置，必须显式存取。
+// 消息区还要一并记住"是否贴底"：离开时贴着底部（流式跟随的常态）就重新落到最新处；
+// 否则精确回到原来那一屏，只把期间新增的消息计成未读，不打扰正在看历史的用户。
+let savedSessionListScrollTop = 0
+let savedMessagesScrollTop = 0
+let savedStickBottom = true
+let deactivatedMsgCount = 0
+let hasSavedScrollState = false
+
+// 关键时序：**不能在 onDeactivated 里读 scrollTop**。
+// Vue 的 KeepAlive.deactivate 是先把 DOM 移进游离的 storage container，再在
+// post-render 里调 onDeactivated（见 runtime-core 的 sharedContext.deactivate）。
+// 那时元素已经没有滚动盒，scrollTop 读回来恒为 0——于是"保存"下来的是 0，
+// 回来自然还原成 0。必须在离开路由的守卫里取，那一刻 DOM 还在文档中、位置是真的。
+onBeforeRouteLeave(() => {
+  const list = sessionListRef.value
+  if (list) savedSessionListScrollTop = list.scrollTop
+  const el = messagesRef.value
+  if (el) savedMessagesScrollTop = el.scrollTop
+  savedStickBottom = stickBottom.value
+  deactivatedMsgCount = chatStore.messages.length
+  hasSavedScrollState = true
+})
+
+onDeactivated(() => {
+  // 兜底（覆盖"非路由来源的停用"）：此时 DOM 已被移走、位置已读不到，只能保住
+  // 贴底意图与消息条数；位置由上面的守卫负责，且这里**不能**覆写它。
+  savedStickBottom = stickBottom.value
+  deactivatedMsgCount = chatStore.messages.length
+  hasSavedScrollState = true
+})
+
+onActivated(() => {
+  // 首次挂载也会触发 activated，此时没有可还原的状态，交给原有的首屏逻辑
+  if (!hasSavedScrollState) return
+  // 必须等 DOM 重新插回主文档、布局可用后再写：游离状态下写 scrollTop 是空操作
+  nextTick(() => {
+    // 侧栏：直接回到原来那一屏。列表内容来自缓存，激活时已在 DOM 里，可以立即写。
+    const list = sessionListRef.value
+    if (list) list.scrollTop = savedSessionListScrollTop
+
+    const el = messagesRef.value
+    if (!el) return
+    if (savedStickBottom) {
+      stickBottom.value = true
+      showJumpBottom.value = false
+      unreadBelow.value = 0
+      el.scrollTop = el.scrollHeight
+      return
+    }
+    el.scrollTop = savedMessagesScrollTop
+    // 离开期间新消息仍会落库（SSE 不随路由中断），但用户在看历史——保持不打扰：
+    // 位置不动，只把新增条数补进未读角标，由用户决定何时回到底部
+    const arrived = chatStore.messages.length - deactivatedMsgCount
+    stickBottom.value = false
+    unreadBelow.value = arrived > 0 ? arrived : 0
+    showJumpBottom.value = unreadBelow.value > 0
+  })
 })
 
 function endJumpScrolling() {
@@ -1519,8 +1598,17 @@ function handleCodeBlockClick(e: MouseEvent) {
   setTimeout(() => { btn.textContent = original }, 2000)
 }
 
-onMounted(() => {
+// 代码块复制按钮的点击委托。走 activated/deactivated 而不是 mounted/unmounted：
+// /chat 被 keep-alive 缓存后，切到别的页面并不会卸载组件，onUnmounted 不会触发，
+// 挂在 document 上的监听会跟着缓存实例一直留着，在别的页面上做无谓空转。
+// onUnmounted 仍需兜底——缓存实例被真正销毁时（登出、keep-alive 父级销毁）只走 unmount，
+// 不经过 deactivated。同一个函数引用重复 addEventListener 是幂等的，不会重复触发。
+onActivated(() => {
   document.addEventListener('click', handleCodeBlockClick)
+})
+
+onDeactivated(() => {
+  document.removeEventListener('click', handleCodeBlockClick)
 })
 
 onUnmounted(() => {
@@ -1556,10 +1644,18 @@ function renderMarkdown(content: string): string {
 // 补齐后端全部 web 会话到本地缓存（allWebSessions），搜索过滤与分组都基于它做纯
 // 前端计算；store.sessions 仍保留（分页），作为缓存就绪前的兜底数据源。
 // 缓存就绪前显示的条数会偏少，属于预期的中间态。
+//
+// allWebSessions / fullSessionsLoading / fullSessionsFailed 三者来自模块级模块
+// （见 chatSessionCache.ts）而不是组件内 ref：ChatView 随路由切换卸载重建，
+// 缓存若挂在组件里，每次回到会话页都要重新全量拉取 + 再铺一次骨架屏。
 const sessionSearch = ref('')
-const allWebSessions = ref<sessionsApi.Session[] | null>(null) // null=尚未全量补齐
-const searchLoading = ref(false)
+const searchLoading = fullSessionsLoading // 本视图沿用的旧名：同一次"全量补齐"
 const SESSION_FETCH_STEP = 100
+// 分页请求的并发上限。串行 for 在会话上千时会退化成几十次串行往返，每次至少
+// 一个网络 RTT；有限并发把这段等待压到 RTT × ceil(页数 / 并发度)。
+// 不宜更大：后端会话库是单连接（见 internal/session/store.go 的 NewStore），
+// 并发过高只会在数据库层排队，白白占住首屏的其它请求。
+const SESSION_FETCH_CONCURRENCY = 4
 
 const isSearching = computed(() => sessionSearch.value.trim().length > 0)
 
@@ -1583,22 +1679,47 @@ const visibleSessions = computed(() => {
 })
 
 // 一次性拉全后端 web 会话（分页循环，避免截断）。侧栏挂载时就调用，供分组与搜索使用。
-async function loadFullSessions(): Promise<void> {
-  if (searchLoading.value || allWebSessions.value) return
+// 缓存命中后多久算"过期"（毫秒）。窗口内回访完全不发请求；过期后的刷新也是
+// 静默的——侧栏已经有缓存数据在渲染，不会出现骨架或空白。取值只需覆盖
+// "用户在几个页面之间来回切"这种高频回访，不必更短。
+const FULL_SESSIONS_STALE_MS = 30_000
+
+async function loadFullSessions(force = false): Promise<void> {
+  if (searchLoading.value) return
+  // 已有缓存：直接用，不重拉。只有缓存明显过期才在后台静默刷新一次
+  // （保留自愈能力：别的端新建的会话仍会被补进来）。
+  if (!force && allWebSessions.value
+      && Date.now() - fullSessionsFetchedAt.value < FULL_SESSIONS_STALE_MS) {
+    return
+  }
   searchLoading.value = true
   try {
     const web: sessionsApi.Session[] = []
     const first = await sessionsApi.getSessions(SESSION_FETCH_STEP, 0)
     web.push(...first.sessions.filter(isWebSession))
     const total = first.total ?? 0
+    // 先按服务端给出的总数把剩余页下标算好，再按有限并发成批拉。
+    // 并发下不再有"某页不满即提前 break"的机会：多算出来的页最多是空页，
+    // 拼接结果不受影响（顺序仍由后端的 updated_at 倒序保证）。
+    const offsets: number[] = []
     for (let offset = SESSION_FETCH_STEP; offset < total; offset += SESSION_FETCH_STEP) {
-      const res = await sessionsApi.getSessions(SESSION_FETCH_STEP, offset)
-      web.push(...res.sessions.filter(isWebSession))
-      if (res.sessions.length < SESSION_FETCH_STEP) break
+      offsets.push(offset)
+    }
+    for (let i = 0; i < offsets.length; i += SESSION_FETCH_CONCURRENCY) {
+      const pages = await Promise.all(
+        offsets.slice(i, i + SESSION_FETCH_CONCURRENCY)
+          .map(offset => sessionsApi.getSessions(SESSION_FETCH_STEP, offset)),
+      )
+      for (const page of pages) {
+        web.push(...page.sessions.filter(isWebSession))
+      }
     }
     allWebSessions.value = web
+    fullSessionsFetchedAt.value = Date.now()
+    fullSessionsFailed.value = false
   } catch (e) {
     // 拉全量失败时退化为 store 分页列表（侧栏仍可用，只是分组不完整）
+    fullSessionsFailed.value = true
     console.error('Failed to load full sessions:', e)
   } finally {
     searchLoading.value = false
@@ -1619,6 +1740,12 @@ watch(sessionSearch, (val) => {
 // 缓存就绪后，store 中新增/刷新出的会话保持同步（如新建会话后立即出现在侧栏）。
 // 除新增外，还要把刷新后变化的字段（标题、预览、消息数、token、最近活动等）
 // 回写进缓存里的既有会话，否则会话标题要等下次全量刷新/整页刷新才更新。
+//
+// immediate: true 是"缓存跨路由存活"的必要补偿：组件重新挂载时这个 watch 是
+// 新注册的（旧实例的已随卸载销毁），若不在挂载瞬间跑一次，那段时间里 store
+// 已刷新的数据（例如别的端新建的会话、刚改的名字）就进不了缓存，而全量补齐
+// 又在 30s 新鲜窗口内被抑制 —— 表现为"回来看不到新会话"。
+// 挂载时 onMounted 会先 await loadSessions()，这里拿到的是刚拉到的第一页。
 watch(() => chatStore.sessions, (list) => {
   if (!allWebSessions.value) return
   const known = new Set(allWebSessions.value.map(s => s.id))
@@ -1645,7 +1772,7 @@ watch(() => chatStore.sessions, (list) => {
   }
   if (fresh.length > 0) allWebSessions.value = [...fresh, ...allWebSessions.value]
   else if (changed) allWebSessions.value = [...allWebSessions.value]
-})
+}, { immediate: true })
 
 // 就地修改（改名、改工作目录）不会改变 store.sessions 的数组引用，watcher 不会触发，
 // 这里手动把变化同步进缓存，否则分组/标题要等下一次刷新才更新。
@@ -1796,6 +1923,29 @@ const sidebarRows = computed<SidebarRow[]>(() => {
     if (hidden > 0) rows.push({ kind: 'more', key: `m:${g.key}`, groupKey: g.key, hidden })
   }
   return rows
+})
+
+// ===== 侧栏骨架屏 =====
+// 首屏有两个"列表形态还会变"的窗口：
+//   ① 分页列表还没回来 —— 侧栏是纯空白；
+//   ② 分页回来了、但全量缓存还在补 —— 此时若把 20 条画出来，全量到达后会整体
+//      变成"按目录分组"的结构，整列位置大挪移。这正是"会话多时首次打开观感不好"
+//      里最扎眼的一环。
+// 两段都用固定行高的骨架占位，把"空 → 20 条 → 分组"三次切换压成"骨架 → 分组"一次。
+const awaitingFullSessions = computed(() =>
+  allWebSessions.value === null && !fullSessionsFailed.value && chatStore.sessionsHasMore
+)
+
+const sessionListSkeletonVisible = computed(() => {
+  // 搜索态有自己的"检索中 / 无结果"提示，不叠加会话骨架
+  if (isSearching.value) return false
+  // 已经有行可渲染时，绝不拿骨架去盖：从别的页面切回会话页时，store 里本就留着
+  // 上一轮的分页数据（全局 pinia），此时再铺一次骨架就是"每次进入都重新加载"
+  // 这一观感的直接来源。
+  if (sidebarRows.value.length > 0) return false
+  if (awaitingFullSessions.value) return true
+  // 兜底：连分页列表都还没到（且确实在加载）
+  return chatStore.sessionsLoading
 })
 
 // 切到某个会话时，若它所在的分组处于折叠状态就自动展开——否则侧栏里看不见当前会话
@@ -2343,6 +2493,13 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', onDirSessDocMouseDown)
 })
 
+// keep-alive 下"切走路由"不再触发 onUnmounted，上面那条兜底就管不到了：面板开着
+// 切走时，document 上的外部点击监听会留在缓存实例上，在别的页面点一下就会去关一个
+// 看不见的面板。离开页面时直接收起面板——watch 随之摘掉监听，回来时是干净的闭合态。
+onDeactivated(() => {
+  closeDirSessions()
+})
+
 // 与当前会话工作目录匹配的那一组会话
 const currentDirSessions = computed(() => {
   const key = dirKey(chatStore.currentWorkDir || '')
@@ -2800,7 +2957,8 @@ let loadMoreThrottleTimer: ReturnType<typeof setTimeout> | null = null
 function handleSessionScroll(e: Event) {
   if (isSearching.value) return // 搜索模式候选集已全量，无需滚动加载更多
   if (loadMoreThrottleTimer) return
-  if (chatStore.sessionsLoading) return
+  // loadSessions 在飞时也不能分页：它会把 offset 归零，两边的 offset 会打架
+  if (chatStore.sessionsLoading || chatStore.sessionsLoadingMore) return
   if (!chatStore.sessionsHasMore) return
 
   const target = e.target as HTMLDivElement
@@ -2871,8 +3029,15 @@ function handleApprovalKeydown(e: KeyboardEvent) {
     if (first) chatStore.resolveChatApproval(chatStore.activeSessionId || '', first.id, false)
   }
 }
-onMounted(() => {
+// 挂 window 而不是组件根元素：快捷键要在整页任意焦点位置都生效。
+// 同样必须走 activated/deactivated——否则缓存实例的监听会在看板/设置页继续监听，
+// 在那边按下 A/D 会直接批准/拒绝一条用户根本没看见的审批（且带 preventDefault，
+// 吞掉目标页面的按键）。这是 keep-alive 下最需要防的一类串页行为。
+onActivated(() => {
   window.addEventListener('keydown', handleApprovalKeydown)
+})
+onDeactivated(() => {
+  window.removeEventListener('keydown', handleApprovalKeydown)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleApprovalKeydown)
@@ -2889,12 +3054,28 @@ watch(() => goalsStore.linkVersion, () => {
 onMounted(async () => {
   await chatStore.loadSessions()
   modelsStore.loadModels()
-  // 侧栏按工作目录分组需要全量会话（分页的 20 条会让分组残缺），挂载即补齐
-  loadFullSessions()
+  // 侧栏按工作目录分组需要全量会话（分页的 20 条会让分组残缺），挂载后补齐。
+  // 放到首帧之后：会话库是单连接，补齐请求会和首屏首绘抢资源；先让上面那次
+  // 分页把骨架换成真实内容，再在后台加量，观感上"有内容"的时刻会更早。
+  setTimeout(() => { loadFullSessions() }, 0)
   // Bind scroll event for session list infinite scroll
   if (sessionListRef.value) {
     sessionListRef.value.addEventListener('scroll', handleSessionScroll)
   }
+})
+
+// 回访时的自愈刷新。加了 keep-alive 之后 onMounted 只在首次进入时跑一次，回访问不到
+// 上面那段"挂载后补齐"，缓存就再没有刷新机会了（30s 新鲜窗口一旦过期就会永久用旧数据）。
+// loadFullSessions 自带新鲜窗口判断，窗口内直接返回、不发请求，所以这里每次激活都调一次：
+// 窗口内零开销，窗口外静默刷新——侧栏已有缓存内容在渲染，不会铺骨架、不会空白。
+// 首次激活跳过，那一次仍走上面的延后补齐（避免与首屏分页抢数据库的单条连接）。
+let keepAliveActivatedOnce = false
+onActivated(() => {
+  if (!keepAliveActivatedOnce) {
+    keepAliveActivatedOnce = true
+    return
+  }
+  loadFullSessions()
 })
 </script>
 
@@ -2984,6 +3165,40 @@ onMounted(async () => {
   border-radius: 999px;
   padding: 3px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+/* 会话骨架：外边距/内边距与 .session-item 对齐（2px+8px 外边距、8px+10px 内边距），
+   骨架换成真实条目时列表总高度基本不变，不会产生位移。 */
+.session-skeleton {
+  padding: 4px 0 6px;
+}
+
+.session-skeleton-row {
+  margin: 2px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.session-skeleton-line {
+  height: 10px;
+  border-radius: 5px;
+  background: #ececec;
+  animation: session-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.session-skeleton-line.sk-title {
+  width: 62%;
+}
+
+.session-skeleton-line.sk-meta {
+  width: 34%;
+  height: 8px;
+  margin-top: 7px;
+}
+
+@keyframes session-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .profile-group-header {

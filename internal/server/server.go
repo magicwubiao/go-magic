@@ -40,7 +40,13 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
-//go:embed dist
+// all:dist 而不是 dist：Go 的 embed 规则会静默排除以 "_" 或 "." 开头的文件。
+// vite 拆 chunk 后会产出这种名字的公共模块（如 _plugin-vue_export-helper-*.js），
+// 一旦被排除，浏览器加载该 chunk 时收到的是 SPA fallback 的 HTML，
+// 路由懒加载整体失败（"Failed to fetch dynamically imported module"）。
+// 见 embed_dist_test.go 的一致性守卫。
+//
+//go:embed all:dist
 var distFS embed.FS
 
 type Server struct {
@@ -1120,36 +1126,11 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 	if s == nil {
 		return nil
 	}
-	msgCount := len(s.Messages)
-	var toolCallCount int
-	var preview string
-	var title string
+	// 派生字段（标题/预览/条数）统一由 session.DeriveSessionMeta 计算：
+	// 同一份规则也用于写入 sessions 表的冗余列，列表接口因此可以完全不读 messages。
+	meta := session.DeriveSessionMeta(s.Messages)
 
-	for _, m := range s.Messages {
-		if m.Role == "user" || m.Role == "assistant" {
-			if len(preview) < 200 {
-				preview += m.Content + " "
-			}
-		}
-		if len(m.ToolCalls) > 0 {
-			toolCallCount += len(m.ToolCalls)
-		}
-		// Extract title from first user message
-		if title == "" && m.Role == "user" && m.Content != "" {
-			title = strings.TrimSpace(m.Content)
-			runes := []rune(title)
-			if len(runes) > 50 {
-				title = string(runes[:50]) + "..."
-			}
-		}
-	}
-
-	preview = strings.TrimSpace(preview)
-	runes := []rune(preview)
-	if len(runes) > 200 {
-		preview = string(runes[:200]) + "..."
-	}
-
+	title := meta.Title
 	// Use custom name if available, otherwise fallback to auto-generated title
 	if s.Name != "" {
 		title = s.Name
@@ -1171,11 +1152,47 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		StartedAt:      s.CreatedAt.Unix(),
 		LastActive:     s.UpdatedAt.Unix(),
 		IsActive:       isActive,
-		MessageCount:   msgCount,
-		ToolCallCount:  toolCallCount,
+		MessageCount:   meta.MessageCount,
+		ToolCallCount:  meta.ToolCallCount,
 		InputTokens:    s.InputTokens,
 		OutputTokens:   s.OutputTokens,
-		Preview:        preview,
+		Preview:        meta.Preview,
+	}
+}
+
+// convertSessionSummaryToAPI 把轻量会话摘要转成 API 形态。
+//
+// 字段与 convertDBSessionToAPI 逐项对齐（含 title 回退与 is_active 的 30 分钟口径），
+// 区别只有一个：摘要不携带消息正文，所以派生字段直接读冗余列而不是现算。
+func convertSessionSummaryToAPI(sm *session.SessionSummary) *Session {
+	if sm == nil {
+		return nil
+	}
+
+	title := sm.Title
+	// Use custom name if available, otherwise fallback to auto-generated title
+	if sm.Name != "" {
+		title = sm.Name
+	} else if title == "" {
+		title = "Untitled"
+	}
+
+	return &Session{
+		ID:             sm.ID,
+		Profile:        sm.Profile,
+		Source:         sm.Platform,
+		Model:          sm.Model,
+		Title:          title,
+		WorkDir:        sm.WorkDir,
+		WorkDirUserSet: sm.WorkDirUserSet,
+		StartedAt:      sm.CreatedAt.Unix(),
+		LastActive:     sm.UpdatedAt.Unix(),
+		IsActive:       time.Since(sm.UpdatedAt) < 30*time.Minute,
+		MessageCount:   sm.MessageCount,
+		ToolCallCount:  sm.ToolCallCount,
+		InputTokens:    sm.InputTokens,
+		OutputTokens:   sm.OutputTokens,
+		Preview:        sm.Preview,
 	}
 }
 

@@ -152,11 +152,10 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 	sessions := 0
 	messages := 0
 	if s.sessionStore != nil {
-		if list, err := s.sessionStore.ListSessions(context.Background(), ""); err == nil {
-			sessions = len(list)
-			for _, sess := range list {
-				messages += len(sess.Messages)
-			}
+		// 只要两个数字：COUNT + SUM(msg_count) 就够，不必读全表消息
+		if n, m, err := s.sessionStore.CountSessions(context.Background()); err == nil {
+			sessions = n
+			messages = m
 		}
 	}
 

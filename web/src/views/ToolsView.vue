@@ -142,6 +142,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NButton, NCard, NDescriptions, NDescriptionsItem, NEmpty, NGi, NGrid, NIcon, NList, NListItem, NModal, NSpace, NSpin, NStatistic, NSwitch, NTag, NText, NThing } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useToolsStore } from '@/stores/tools'

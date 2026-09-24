@@ -289,13 +289,37 @@ func paramInt(params map[string]interface{}, key string) int {
 	return 0
 }
 
-// paramBool reads a boolean parameter. Returns false if missing or not bool.
+// paramBool reads a boolean parameter, tolerating bool (JSON decoding), the
+// "true"/"false"/"1"/"0"/"yes"/"no" string forms, and int/int64/float64/
+// json.Number. Falls back to def when the key is missing or unrecognised.
+//
+// 严格断言 .(bool) 是"配置被静默吃掉"的常见来源：参数若被中间层重新编码成
+// 字符串，use_regex:"true" 会静默退化成 false，于是正则被当成纯文本做
+// QuoteMeta，最终表现为"某些模式莫名搜不到"，且调用方看不出任何异常。
 func paramBool(params map[string]interface{}, key string, def bool) bool {
 	switch v := params[key].(type) {
 	case bool:
 		return v
 	case nil:
 		return def
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "1", "yes", "y", "on":
+			return true
+		case "false", "0", "no", "n", "off":
+			return false
+		}
+		return def
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i != 0
+		}
 	}
 	return def
 }

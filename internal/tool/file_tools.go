@@ -107,7 +107,10 @@ func (t *SearchInFilesTool) Name() string {
 }
 
 func (t *SearchInFilesTool) Description() string {
-	return "Search for a pattern in file contents. Supports both plain text and regular expressions (set use_regex=true for regex). Returns matching lines with optional context."
+	return "Search for a pattern in file contents. Supports both plain text and regular expressions (set use_regex=true for regex). " +
+		"Returns matching lines with optional context. The pattern is matched literally unless use_regex=true, lines are matched " +
+		"individually (so ^/$ anchor per line), and LF/CRLF/lone-CR endings are all handled. When nothing matches, the result " +
+		"carries a hint describing the options that were actually applied."
 }
 
 func (t *SearchInFilesTool) Schema() map[string]interface{} {
@@ -124,24 +127,26 @@ func (t *SearchInFilesTool) Schema() map[string]interface{} {
 				"default":     ".",
 			},
 			"file_pattern": map[string]interface{}{
-				"type":        "string",
-				"description": "File glob pattern to filter (e.g., '*.go', '*.txt')",
-				"default":     "*",
+				"type": "string",
+				"description": "File glob to filter by, matched against the file name and the path relative to `path`. " +
+					"Supports '*.go' (any depth), 'sub/*.go', '**/*.go' and '{a,b}' brace groups (e.g. '*.{go,md}').",
+				"default": "*",
 			},
 			"use_regex": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Treat pattern as a regular expression instead of plain text. Enables alternation (a|b), anchors (^...$), character classes ([a-z]), etc.",
+				"description": "Treat pattern as a regular expression instead of plain text. Enables alternation (a|b), anchors (^...$), character classes ([a-z]), etc. When false the pattern is matched literally, so 'a|b' looks for the 4 characters 'a|b'.",
 				"default":     false,
 			},
 			"case_sensitive": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Case sensitive search",
+				"description": "Case sensitive search (default false = case-insensitive)",
 				"default":     false,
 			},
 			"whole_word": map[string]interface{}{
-				"type":        "boolean",
-				"description": "Match whole word only (word boundaries)",
-				"default":     false,
+				"type": "boolean",
+				"description": "Match whole word only (word boundaries). Boundaries are only added on sides that start/end " +
+					"with a word character, so patterns like '@foo' remain usable.",
+				"default": false,
 			},
 			"context_lines": map[string]interface{}{
 				"type":        "number",
@@ -159,44 +164,37 @@ func (t *SearchInFilesTool) Schema() map[string]interface{} {
 }
 
 func (t *SearchInFilesTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok || pattern == "" {
+	pattern := paramString(args, "pattern")
+	if pattern == "" {
 		return nil, fmt.Errorf("pattern argument is required")
 	}
 
-	searchPath := "."
-	if p, ok := args["path"].(string); ok && p != "" {
-		searchPath = p
+	searchPath := paramString(args, "path")
+	if searchPath == "" {
+		searchPath = "."
 	}
 
-	filePattern := "*"
-	if fp, ok := args["file_pattern"].(string); ok && fp != "" {
-		filePattern = fp
+	filePattern := paramString(args, "file_pattern")
+	if filePattern == "" {
+		filePattern = "*"
 	}
 
-	useRegex := false
-	if r, ok := args["use_regex"].(bool); ok {
-		useRegex = r
-	}
-
-	caseSensitive := false
-	if cs, ok := args["case_sensitive"].(bool); ok {
-		caseSensitive = cs
-	}
-
-	wholeWord := false
-	if ww, ok := args["whole_word"].(bool); ok {
-		wholeWord = ww
-	}
+	// 一律走参数强转助手。旧实现用 .(bool)/.(float64) 直接断言，参数不是
+	// 该具体类型时就静默回落默认值：context_lines 传成 int、max_results 传成
+	// json.Number、use_regex 传成 "true" 都会被无声吃掉，表现为"某些模式
+	// 莫名其妙搜不到"，且结果里看不出任何异常。
+	useRegex := paramBool(args, "use_regex", false)
+	caseSensitive := paramBool(args, "case_sensitive", false)
+	wholeWord := paramBool(args, "whole_word", false)
 
 	contextLines := 0
-	if cl, ok := args["context_lines"].(float64); ok {
-		contextLines = int(cl)
+	if v := paramInt(args, "context_lines"); v > 0 {
+		contextLines = v
 	}
 
 	maxResults := 100
-	if mr, ok := args["max_results"].(float64); ok {
-		maxResults = int(mr)
+	if v := paramInt(args, "max_results"); v > 0 {
+		maxResults = v
 	}
 
 	// Use the advanced file_search tool for actual implementation,

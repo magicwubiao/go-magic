@@ -53,7 +53,36 @@
           <!-- Content -->
           <n-layout>
             <n-layout-content :class="{'full-content': isChatPage}" style="padding: 24px; overflow: auto;">
-              <router-view />
+              <!-- 路由出口按元信息分流：
+                   - meta.keepAlive 的页面（/chat、/bots 这两个聊天形态页）走 keep-alive
+                     缓存，切到别的页面再回来时保留组件状态（输入框草稿、消息区滚动位置、
+                     侧栏展开态），不再重新挂载 → 重新请求 → 重铺骨架；
+                   - 其余页面保持原语义（切走即销毁），不占额外内存。
+                   用 route.meta 而不是 keep-alive 的 include：include 要靠组件名匹配，
+                   而"哪些页面缓存"这件事应当只有一个事实来源 —— 路由表里的 meta；
+                   include 还得多维护一份名字清单，改路由时容易漏。
+
+                   ⚠️ 两个分支上的 :key="route.path" 不能省。
+                   Vue 编译器会给 v-if 分支自动补一个 `key: 0`，而 RouterView 传给插槽的
+                   `Component` 其实是它自己 `h()` 出来的 **vnode**（见 vue-router 的
+                   RouterView.render：`const component = h(ViewComponent, ...)`），
+                   `<component :is="vnode">` 走的是 createVNode 的"克隆已有 vnode"分支
+                   （源码注释 #2078），编译器补的 key 会一起并进去。
+                   于是 KeepAlive 的缓存键变成 `vnode.key == null ? comp : vnode.key`
+                   = 0 —— **两个被缓存的页面撞同一个缓存键**：切到 /bots 时 KeepAlive 从
+                   缓存里取出的是 /chat 的 vnode，把 BotsView 的 vnode 接到 ChatView 的
+                   component 实例上（`vnode.component = cachedVNode.component`），
+                   随后 activate 时拿错实例去 patch，报
+                     `TypeError: ctx.deactivate is not a function`
+                   （那是 KeepAlive 实例 ctx 上才有的方法），整棵 router-view 就此错乱：
+                   新页面不渲染、旧页面内容残留。实测 /chat→/kanban→/chat 都正常，
+                   只有"缓存页 → 另一个缓存页"这一跳会炸，正是这个缘故。 -->
+              <router-view v-slot="{ Component, route }">
+                <keep-alive>
+                  <component :is="Component" :key="route.path" v-if="route.meta.keepAlive" />
+                </keep-alive>
+                <component :is="Component" :key="route.path" v-if="!route.meta.keepAlive" />
+              </router-view>
             </n-layout-content>
           </n-layout>
         </n-layout>
@@ -78,7 +107,7 @@
 <script setup lang="ts">
 import { computed, h, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
+import { NIcon, NConfigProvider, NDialogProvider, NDropdown, NLayout, NLayoutContent, NLayoutSider, NMenu, NMessageProvider, NModal, NNotificationProvider, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   ChatbubbleOutline,

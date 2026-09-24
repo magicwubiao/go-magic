@@ -139,6 +139,10 @@ export const useChatStore = defineStore('chat', () => {
   const activeSessionId = ref<string | null>(null)
   const error = ref<ChatError | null>(null)
   const sessionsLoading = ref(false)
+  // 与 sessionsLoading 分开：那个标志由 loadSessions 驱动，而 loadSessions 在
+  // 每轮对话结束（落库收尾）时都会跑一次，若用它驱动底部转圈，侧栏底部会在
+  // 每次回复结束时闪一下。转圈只该表达"正在分页取更早的会话"这一件事。
+  const sessionsLoadingMore = ref(false)
   const sessionsHasMore = ref(true)
   const sessionsOffset = ref(0)
   const SESSIONS_LIMIT = 20
@@ -337,6 +341,9 @@ export const useChatStore = defineStore('chat', () => {
   async function loadSessions(): Promise<void> {
     sessionsOffset.value = 0
     sessionsHasMore.value = true
+    // 首屏这一次加载也要有 loading 态：否则侧栏在"还没有任何数据"和
+    // "确实没有会话"之间无法区分，会先闪出"暂无会话"再被真实列表顶掉。
+    sessionsLoading.value = true
     try {
       const result = await sessionsApi.getSessions(SESSIONS_LIMIT, 0)
       const filtered = result.sessions.filter(s => !s.source || s.source === 'web')
@@ -353,14 +360,20 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       console.error('Failed to load sessions:', e)
       sessions.value = []
+    } finally {
+      // 必须无条件复位。这个标志位身兼三职：侧栏底部加载指示器的显示条件、
+      // loadMoreSessions 的重入锁、handleSessionScroll 的守卫。漏掉 finally
+      // 会让"加载中"这一状态永久滞留——转圈不停，且分页加载彻底失效。
+      sessionsLoading.value = false
     }
   }
 
   async function loadMoreSessions(): Promise<boolean> {
     if (sessionsLoading.value) return false
+    if (sessionsLoadingMore.value) return false
     if (!sessionsHasMore.value) return false
 
-    sessionsLoading.value = true
+    sessionsLoadingMore.value = true
     sessionsOffset.value += SESSIONS_LIMIT
     try {
       const result = await sessionsApi.getSessions(SESSIONS_LIMIT, sessionsOffset.value)
@@ -381,7 +394,7 @@ export const useChatStore = defineStore('chat', () => {
       sessionsHasMore.value = false
       return false
     } finally {
-      sessionsLoading.value = false
+      sessionsLoadingMore.value = false
     }
   }
 
@@ -2069,6 +2082,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingClarifications,
     activePendingClarifications,
     sessionsLoading,
+    sessionsLoadingMore,
     sessionsHasMore,
     loadSessions,
     loadMoreSessions,

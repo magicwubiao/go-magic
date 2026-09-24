@@ -283,6 +283,7 @@
 <script setup lang="ts">
 import { reactive, ref, computed, onMounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NDivider, NForm, NFormItem, NIcon, NInput, NInputNumber, NModal, NPopconfirm, NSelect, NSpace, NSpin, NSwitch, NTabPane, NTabs, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'

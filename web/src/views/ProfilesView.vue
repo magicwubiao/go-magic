@@ -207,6 +207,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NDynamicTags, NEmpty, NForm, NFormItem, NGi, NGrid, NInput, NList, NListItem, NModal, NPopconfirm, NSelect, NSpace, NSpin, NSwitch, NTabPane, NTabs, NTag, NText, NThing } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
 import { useConfigStore } from '@/stores/config'

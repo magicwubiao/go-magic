@@ -41,6 +41,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ToolCallCard from './ToolCallCard.vue'
 import type { ToolCallEvent } from '@/stores/chat'
+import { NCollapseTransition } from 'naive-ui'
 
 const props = defineProps<{
   tools: ToolCallEvent[]

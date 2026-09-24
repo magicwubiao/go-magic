@@ -51,6 +51,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolCallEvent } from '@/stores/chat'
+import { NCollapseTransition } from 'naive-ui'
 
 const props = defineProps<{
   tool: ToolCallEvent

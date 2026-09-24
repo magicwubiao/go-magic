@@ -19,8 +19,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	sessions := 0
 	if s.sessionStore != nil {
-		if list, err := s.sessionStore.ListSessions(context.Background(), ""); err == nil {
-			sessions = len(list)
+		// 只要计数：走聚合查询，避免为了 len() 把全表消息读出来
+		if n, _, err := s.sessionStore.CountSessions(context.Background()); err == nil {
+			sessions = n
 		}
 	}
 

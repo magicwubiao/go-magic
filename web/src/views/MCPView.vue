@@ -217,6 +217,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { NButton, NCard, NEmpty, NFormItem, NGi, NGrid, NInput, NList, NListItem, NModal, NSelect, NSpace, NSpin, NStatistic, NTable, NTag, NText, NThing } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,

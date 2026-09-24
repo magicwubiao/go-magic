@@ -42,6 +42,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronForwardOutline, DocumentTextOutline } from '@vicons/ionicons5'
 import type { FileOp } from '@/api/sessions'
+import { NIcon } from 'naive-ui'
 
 const props = defineProps<{
   // 已按路径去重、仅含变更动作（write/delete）的文件列表。
