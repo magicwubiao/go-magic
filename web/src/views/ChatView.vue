@@ -4736,7 +4736,7 @@ onMounted(async () => {
     top: 50%;
     transform: translate(50%, -50%);
     width: 34px;
-    height: 84px;
+    height: 56px;
     z-index: 1000;
     background: #fff;
     border: 1px solid #e0e0e0;
