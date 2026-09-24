@@ -16,11 +16,6 @@
           >{{ t('rooms.title') }}</button>
         </div>
         <n-space :size="4" align="center">
-          <!-- Cross-machine peers: a config-level entry point rather than a third
-               rail tab — a peer has no per-item view worth a whole pane. -->
-          <n-button quaternary size="tiny" :title="t('peers.open')" @click="openPeersModal">
-            <template #icon><n-icon><ShareSocialOutline /></n-icon></template>
-          </n-button>
           <n-button quaternary size="tiny" :loading="viewMode === 'bots' ? botsStore.loading : roomsStore.loading" @click="handleRailRefresh">
             <template #icon><n-icon><RefreshOutline /></n-icon></template>
           </n-button>
@@ -94,7 +89,7 @@
       </div>
 
       <!-- ===== Rooms list ===== -->
-      <div v-else class="bot-list">
+      <div v-else-if="viewMode === 'rooms'" class="bot-list">
         <n-spin v-if="roomsStore.loading && !roomsStore.rooms.length" size="small" class="list-spinner" />
         <n-empty
           v-else-if="!roomsStore.rooms.length"
@@ -817,155 +812,6 @@
         </div>
       </template>
     </n-modal>
-    <!-- ========== Cross-machine Peers Modal (bot_mode relay) ========== -->
-    <n-modal
-      v-model:show="showPeersModal"
-      preset="card"
-      class="modal-responsive modal-scroll"
-      style="width: 680px; max-width: 96vw;"
-      :title="t('peers.title')"
-    >
-      <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 16px;">
-        {{ t('peers.subtitle') }}
-      </n-text>
-
-      <!-- This machine's identity: what a remote operator needs to register us. -->
-      <n-card size="small" :title="t('peers.identityTitle')" class="peer-card">
-        <div class="peer-field">
-          <n-text depth="3" style="font-size: 12px;">{{ t('peers.instanceId') }}</n-text>
-          <n-space align="center" :size="8">
-            <n-text code>{{ peersStore.instanceId || '—' }}</n-text>
-            <n-button v-if="peersStore.instanceId" size="tiny" quaternary @click="copyPeerText(peersStore.instanceId)">
-              <template #icon><n-icon><CopyOutline /></n-icon></template>
-              {{ t('peers.copy') }}
-            </n-button>
-          </n-space>
-        </div>
-        <div class="peer-field">
-          <n-text depth="3" style="font-size: 12px;">{{ t('peers.magicHome') }}</n-text>
-          <n-text code>{{ peersStore.magicHome || '—' }}</n-text>
-        </div>
-        <n-text depth="3" style="font-size: 12px;">{{ t('peers.identityHint') }}</n-text>
-      </n-card>
-
-      <n-card size="small" :title="t('peers.listTitle')" class="peer-card">
-        <n-spin v-if="peersStore.loading && !peersStore.peers.length" size="small" />
-        <n-empty v-else-if="!peersStore.peers.length" :description="t('peers.empty')">
-          <template #extra>
-            <n-text depth="3" style="font-size: 12px;">{{ t('peers.emptyHint') }}</n-text>
-          </template>
-        </n-empty>
-        <n-list v-else hoverable>
-          <n-list-item v-for="p in peersStore.peers" :key="p.name">
-            <n-thing>
-              <template #header>
-                <n-space align="center" :size="8">
-                  <n-text strong>{{ p.name }}</n-text>
-                  <n-tag :type="p.has_token ? 'success' : 'default'" size="small" round>
-                    {{ p.has_token ? t('peers.hasToken') : t('peers.noToken') }}
-                  </n-tag>
-                </n-space>
-              </template>
-              <template #description>
-                <n-text code style="font-size: 12px;">{{ p.base_url }}</n-text>
-              </template>
-            </n-thing>
-            <template #suffix>
-              <n-space :size="8">
-                <n-button size="small" @click="openPeerDm(p)">{{ t('peers.dm') }}</n-button>
-                <n-popconfirm @positive-click="removePeer(p)">
-                  <template #trigger>
-                    <n-button size="small" type="error" quaternary>
-                      <template #icon><n-icon><TrashOutline /></n-icon></template>
-                    </n-button>
-                  </template>
-                  {{ t('peers.deleteConfirm', { name: p.name }) }}
-                </n-popconfirm>
-              </n-space>
-            </template>
-          </n-list-item>
-        </n-list>
-      </n-card>
-
-      <template #action>
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
-          <n-button @click="showPeersModal = false">{{ t('common.close') }}</n-button>
-          <n-button type="primary" @click="openAddPeer">
-            <template #icon><n-icon><AddOutline /></n-icon></template>
-            {{ t('peers.add') }}
-          </n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- ========== Add Peer Modal (cross-machine relay) ========== -->
-    <n-modal
-      v-model:show="showAddPeer"
-      preset="card"
-      class="modal-responsive"
-      style="width: 520px; max-width: 96vw;"
-      :title="t('peers.addTitle')"
-    >
-      <n-form label-placement="top">
-        <n-form-item :label="t('peers.name')">
-          <n-input v-model:value="peerForm.name" :placeholder="t('peers.namePlaceholder')" />
-          <n-text depth="3" class="peer-hint">{{ t('peers.nameHint') }}</n-text>
-        </n-form-item>
-        <n-form-item :label="t('peers.baseUrl')">
-          <n-input v-model:value="peerForm.base_url" :placeholder="t('peers.baseUrlPlaceholder')" />
-          <n-text depth="3" class="peer-hint">{{ t('peers.baseUrlHint') }}</n-text>
-        </n-form-item>
-        <n-form-item :label="t('peers.token')">
-          <n-input
-            v-model:value="peerForm.token"
-            type="password"
-            show-password-on="click"
-            :placeholder="t('peers.tokenPlaceholder')"
-          />
-          <n-text depth="3" class="peer-hint">{{ t('peers.tokenHint') }}</n-text>
-        </n-form-item>
-      </n-form>
-      <template #action>
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
-          <n-button @click="showAddPeer = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="peerSaving" @click="savePeer">{{ t('common.save') }}</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- ========== Peer DM Modal: relay a message to a remote bot ========== -->
-    <n-modal
-      v-model:show="showPeerDm"
-      preset="card"
-      class="modal-responsive"
-      style="width: 560px; max-width: 96vw;"
-      :title="t('peers.dmTitle', { name: dmPeer?.name || '' })"
-    >
-      <n-form label-placement="top">
-        <n-form-item :label="t('peers.dmBot')">
-          <n-input v-model:value="peerDmForm.bot" :placeholder="t('peers.dmBotPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('peers.dmMessage')">
-          <n-input
-            v-model:value="peerDmForm.message"
-            type="textarea"
-            :rows="3"
-            :placeholder="t('peers.dmMessagePlaceholder')"
-          />
-        </n-form-item>
-      </n-form>
-      <n-alert v-if="peerDmReply" type="success" :title="t('peers.dmSent')" class="peer-reply-alert">
-        <pre class="peer-reply">{{ peerDmReply }}</pre>
-      </n-alert>
-      <template #action>
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
-          <n-button @click="showPeerDm = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="peerSending" @click="sendPeerDm">
-            {{ peerSending ? t('peers.sending') : t('peers.send') }}
-          </n-button>
-        </div>
-      </template>
-    </n-modal>
   </div>
 </template>
 
@@ -978,19 +824,17 @@ import {
   NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, NThing, useMessage,
 } from 'naive-ui'
 import {
-  AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline, CopyOutline,
+  AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
   CreateOutline, EllipsisHorizontalOutline, PeopleOutline, RefreshOutline, SearchOutline,
-  ShareSocialOutline, TimeOutline, TrashOutline,
+  TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
 import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
-import { usePeersStore } from '@/stores/peers'
 import type { Bot, BotRoutine } from '@/api/bots'
 import type { RoomMessage, RoomSendResult } from '@/api/rooms'
-import type { PeerInfo } from '@/api/peers'
 import { request } from '@/api/client'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
@@ -1002,7 +846,6 @@ const message = useMessage()
 const botsStore = useBotsStore()
 const modelsStore = useModelsStore()
 const roomsStore = useRoomsStore()
-const peersStore = usePeersStore()
 
 const showEditModal = ref(false)
 const advancedExpanded = ref(false)
@@ -1021,104 +864,6 @@ const railHasActive = computed(() =>
   (viewMode.value === 'bots' && !!botsStore.activeBotName) ||
   (viewMode.value === 'rooms' && !!roomsStore.activeRoomId)
 )
-
-const searchPlaceholder = computed(() =>
-  viewMode.value === 'rooms' ? t('rooms.searchPlaceholder') : t('bots.searchPlaceholder')
-)
-
-// ========== Cross-machine peers (bot_mode relay) ==========
-// Peers are machine-level settings rather than conversations, so they live in a
-// modal opened from the rail header instead of owning a rail tab.
-const showPeersModal = ref(false)
-const showAddPeer = ref(false)
-const peerSaving = ref(false)
-const peerSending = ref(false)
-const peerForm = reactive({ name: '', base_url: '', token: '' })
-const peerDmForm = reactive({ bot: '', message: '' })
-const peerDmReply = ref('')
-const showPeerDm = ref(false)
-const dmPeer = ref<PeerInfo | null>(null)
-
-function openPeersModal() {
-  showPeersModal.value = true
-  void peersStore.loadPeers()
-}
-
-function openAddPeer() {
-  peerForm.name = ''
-  peerForm.base_url = ''
-  peerForm.token = ''
-  showAddPeer.value = true
-}
-
-async function savePeer() {
-  if (!peerForm.name.trim() || !peerForm.base_url.trim()) {
-    message.warning(t('peers.fillRequired'))
-    return
-  }
-  peerSaving.value = true
-  try {
-    await peersStore.addPeer({
-      name: peerForm.name.trim(),
-      base_url: peerForm.base_url.trim(),
-      token: peerForm.token.trim(),
-    })
-    message.success(t('peers.created'))
-    showAddPeer.value = false
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : t('common.error'))
-  } finally {
-    peerSaving.value = false
-  }
-}
-
-async function removePeer(p: PeerInfo) {
-  try {
-    await peersStore.removePeer(p.name)
-    message.success(t('peers.deleted'))
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : t('common.error'))
-  }
-}
-
-function openPeerDm(p: PeerInfo) {
-  dmPeer.value = p
-  peerDmForm.bot = ''
-  peerDmForm.message = ''
-  peerDmReply.value = ''
-  showPeerDm.value = true
-}
-
-async function sendPeerDm() {
-  const peer = dmPeer.value
-  if (!peer) return
-  if (!peerDmForm.bot.trim() || !peerDmForm.message.trim()) {
-    message.warning(t('peers.fillDm'))
-    return
-  }
-  peerSending.value = true
-  peerDmReply.value = ''
-  try {
-    const res = await peersStore.sendDM(peer.name, peerDmForm.bot.trim(), peerDmForm.message.trim())
-    peerDmReply.value = res.reply || ''
-  } catch (e) {
-    // A relayed DM drives a whole agent turn on the remote machine and can
-    // legitimately take minutes; surface the remote error verbatim instead of a
-    // generic toast (same reasoning as the retry policy in api/peers.ts).
-    message.error(`${t('peers.dmFailed')}: ${e instanceof Error ? e.message : ''}`)
-  } finally {
-    peerSending.value = false
-  }
-}
-
-async function copyPeerText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    message.success(t('peers.copied'))
-  } catch {
-    message.error(t('common.error'))
-  }
-}
 
 function switchView(v: 'bots' | 'rooms') {
   viewMode.value = v
@@ -3726,37 +3471,5 @@ async function loadCandidates() {
   word-break: break-word;
   font-size: 12px;
   line-height: 1.5;
-}
-
-/* ===== Cross-machine peers (managed from the rail-header entry point) ===== */
-.peer-card + .peer-card {
-  margin-top: 16px;
-}
-
-.peer-hint {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-}
-
-.peer-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 12px;
-}
-
-.peer-reply-alert {
-  margin-top: 12px;
-  white-space: normal;
-}
-
-.peer-reply {
-  margin: 8px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.6;
-  font-family: inherit;
 }
 </style>

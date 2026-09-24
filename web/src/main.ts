@@ -31,6 +31,7 @@ const FilesView = () => import('./views/FilesView.vue')
 const UsageView = () => import('./views/UsageView.vue')
 const MCPView = () => import('./views/MCPView.vue')
 const AgentPluginsView = () => import('./views/AgentPluginsView.vue')
+const PeersView = () => import('./views/PeersView.vue')
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -52,8 +53,8 @@ const router = createRouter({
     // Bot 群聊已整合进 /bots（左侧 rail 内切换），旧链接重定向
     { path: '/rooms', redirect: '/bots' },
     { path: '/bots', component: BotsView, meta: { keepAlive: true } },
-    // Bot Mode 跨机 peer 已整合进 /bots（左侧 rail 内切换），旧链接重定向
-    { path: '/peers', redirect: '/bots' },
+    // Bot Mode 跨机 peer 独立页面（与 /bots 并列，见 App.vue 侧边栏 Bot Mode 分组）
+    { path: '/peers', component: PeersView },
     { path: '/logs', component: LogsView },
     { path: '/system', component: SystemView },
     { path: '/profiles', component: ProfilesView },

@@ -127,6 +127,7 @@ import {
   FolderOutline,
   PieChartOutline,
   ServerOutline,
+  ShareSocialOutline,
   LogOutOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
@@ -221,8 +222,11 @@ const menuOptions = computed(() => [
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
   { type: 'divider' as const },
-  { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
+  // Bot Mode 组：本机机器人 + 跨机 peer，独立成组与其余导航区分
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
+  { label: t('peers.title'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
+  { type: 'divider' as const },
+  { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
