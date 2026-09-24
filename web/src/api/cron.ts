@@ -8,6 +8,7 @@ export interface CronJob {
   schedule_display: string
   prompt: string
   script: string
+  working_dir?: string
   no_agent: boolean
   skills: string[]
   enabled: boolean
@@ -29,6 +30,7 @@ export interface ExecutionLog {
   output?: string
   error?: string
   duration?: string
+  work_dir?: string
 }
 
 export async function getCronJobs(): Promise<CronJob[]> {

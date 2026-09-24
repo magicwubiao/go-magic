@@ -17,7 +17,6 @@
             <n-space align="center" :size="12">
               <n-tag :type="stateType(job.state)" size="small">{{ stateLabel(job.state) }}</n-tag>
               <n-text strong style="font-size: 15px;">{{ job.name }}</n-text>
-              <n-text depth="3" style="font-size: 12px;">{{ job.description }}</n-text>
             </n-space>
             <n-space :size="4">
               <n-button v-if="job.state === 'active'" size="tiny" @click="handlePause(job.id)">{{ t('cron.pause') }}</n-button>
@@ -61,6 +60,7 @@
           <n-space style="margin-top: 8px;">
             <n-tag v-if="job.prompt" size="tiny" type="info">{{ t('cron.agentModeLabel') }}</n-tag>
             <n-tag v-if="job.script" size="tiny" type="warning">{{ t('cron.scriptModeLabel') }}</n-tag>
+            <n-tag v-if="job.working_dir" size="tiny">{{ t('cron.workingDir') }}: {{ job.working_dir }}</n-tag>
             <n-text v-if="job.prompt" depth="3" style="font-size: 11px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
               {{ job.prompt }}
             </n-text>
@@ -77,9 +77,6 @@
       <n-form label-placement="top">
         <n-form-item :label="t('cron.jobName')" required>
           <n-input v-model:value="form.name" :placeholder="t('cron.jobName')" />
-        </n-form-item>
-        <n-form-item :label="t('common.description')">
-          <n-input v-model:value="form.description" :placeholder="t('cron.jobDescription')" />
         </n-form-item>
         <n-form-item :label="t('cron.cronExpression')" required>
           <n-input v-model:value="form.schedule" :placeholder="t('cron.cronExpressionPlaceholder')" />
@@ -100,6 +97,18 @@
         </n-form-item>
         <n-form-item v-if="form.no_agent" :label="t('cron.scriptMode')">
           <n-input v-model:value="form.script" type="textarea" :rows="3" :placeholder="t('cron.scriptPlaceholder')" />
+        </n-form-item>
+        <n-form-item :label="t('cron.workingDir')">
+          <n-input-group>
+            <n-input v-model:value="form.working_dir" :placeholder="t('cron.workingDirPlaceholder')" clearable />
+            <n-button :title="t('cron.workingDirBrowse')" @click="openDirPicker">
+              <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+              {{ t('cron.workingDirBrowse') }}
+            </n-button>
+          </n-input-group>
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('cron.workingDirHint') }}</n-text>
+          </template>
         </n-form-item>
         <n-form-item :label="t('cron.commonExpressions')">
           <n-space>
@@ -131,23 +140,88 @@
           :time="formatTime(log.started_at)"
         >
           <n-text v-if="log.duration" depth="3" style="font-size: 12px;">{{ t('cron.duration', { duration: log.duration }) }}</n-text>
+          <n-text v-if="log.work_dir" depth="3" style="font-size: 12px; display: block; margin-top: 4px;">{{ t('cron.workingDir') }}: {{ log.work_dir }}</n-text>
           <n-text v-if="log.output" depth="3" style="font-size: 12px; display: block; margin-top: 4px; white-space: pre-wrap;">{{ log.output }}</n-text>
           <n-text v-if="log.error" type="error" style="font-size: 12px; display: block; margin-top: 4px;">{{ log.error }}</n-text>
         </n-timeline-item>
       </n-timeline>
     </n-modal>
+
+    <!-- Directory Picker Modal（工作目录选择） -->
+    <n-modal v-model:show="showDirPicker" :title="t('cron.workingDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
+      <div v-if="recommendedDirs.length" class="dir-picker-recommended">
+        <div class="dir-picker-recommended-title">{{ t('cron.workingDirRecommended') }}</div>
+        <div
+          v-for="d in recommendedDirs"
+          :key="d"
+          class="dir-picker-recommended-item"
+          :title="d"
+          @click="applyRecommendedDir(d)"
+        >
+          <n-icon size="16"><FolderOutline /></n-icon>
+          <span class="dir-picker-recommended-path">{{ d }}</span>
+        </div>
+      </div>
+
+      <div class="dir-picker-breadcrumb">
+        <n-text class="dir-picker-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        <n-button size="tiny" quaternary :title="t('cron.newFolder')" @click="startNewFolder">
+          <template #icon><n-icon><AddOutline /></n-icon></template>
+        </n-button>
+      </div>
+
+      <div v-if="showNewFolderInput" class="dir-picker-new-folder">
+        <n-input
+          v-model:value="newFolderName"
+          size="small"
+          :placeholder="t('cron.newFolder')"
+          @keyup.enter="createNewFolder"
+          @blur="cancelNewFolder"
+          ref="newFolderInputRef"
+        />
+      </div>
+
+      <div class="dir-picker-list">
+        <div v-if="dirLoading" class="dir-picker-loading">
+          <n-spin size="small" />
+        </div>
+        <div v-else-if="dirEntries.length === 0" class="dir-picker-empty">
+          <n-text depth="3">{{ t('cron.workingDirEmpty') }}</n-text>
+        </div>
+        <div
+          v-for="entry in dirEntries"
+          v-else
+          :key="entry.path"
+          class="dir-picker-item"
+          @click="navigateDir(entry.path)"
+        >
+          <n-icon size="16"><FolderOutline /></n-icon>
+          <span>{{ entry.name }}</span>
+        </div>
+      </div>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showDirPicker = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="applyDirCurrent" :disabled="!dirCurrentPath">
+            {{ t('cron.workingDirSet') }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { RefreshOutline } from '@vicons/ionicons5'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { RefreshOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
-import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NModal, NRadio, NRadioGroup, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
+import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NModal, NRadio, NRadioGroup, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
 import { useCronStore } from '@/stores/cron'
 import type { CronJob } from '@/api/cron'
 import { getLocale } from '@/locales'
+import * as sessionsApi from '@/api/sessions'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -159,10 +233,10 @@ const saving = ref(false)
 
 const form = reactive({
   name: '',
-  description: '',
   schedule: '',
   prompt: '',
   script: '',
+  working_dir: '',
   no_agent: false,
 })
 
@@ -208,13 +282,116 @@ function setSchedule(s: string) {
   form.schedule = s
 }
 
+// ===== 工作目录选择器 =====
+const showDirPicker = ref(false)
+const dirCurrentPath = ref('')
+const dirEntries = ref<sessionsApi.DirEntry[]>([])
+const dirLoading = ref(false)
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+const workDirHistory = ref<string[]>([])
+const newFolderInputRef = ref<{ focus: () => void } | null>(null)
+
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// 已使用过的目录作为推荐项；排除当前已选中的工作目录
+const recommendedDirs = computed(() => {
+  const current = normalizeDirPath(form.working_dir || '')
+  return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
+})
+
+async function loadWorkDirHistory(): Promise<void> {
+  try {
+    workDirHistory.value = await sessionsApi.listWorkDirHistory()
+  } catch (e) {
+    workDirHistory.value = []
+  }
+}
+
+async function loadDirs(path?: string): Promise<boolean> {
+  dirLoading.value = true
+  try {
+    const res = await sessionsApi.listDirs(path)
+    dirCurrentPath.value = res.current
+    dirEntries.value = res.dirs || []
+    return true
+  } catch (e) {
+    dirEntries.value = []
+    return false
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+function navigateDir(path: string) {
+  if (!path) return
+  showNewFolderInput.value = false
+  newFolderName.value = ''
+  loadDirs(path)
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  newFolderName.value = ''
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+function cancelNewFolder() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    newFolderName.value = ''
+  }, 150)
+}
+
+async function createNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    showNewFolderInput.value = false
+    return
+  }
+  try {
+    await sessionsApi.createDir(dirCurrentPath.value, name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+    loadDirs(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+async function openDirPicker() {
+  showDirPicker.value = true
+  await loadWorkDirHistory()
+  // 起点优先取当前已设置的工作目录，否则返回上次浏览位置；都无效时由后端取默认
+  const prefer = form.working_dir.trim()
+  if (prefer && (await loadDirs(prefer))) return
+  await loadDirs(undefined)
+}
+
+function applyRecommendedDir(path: string) {
+  form.working_dir = path
+  showDirPicker.value = false
+}
+
+function applyDirCurrent() {
+  if (!dirCurrentPath.value) return
+  form.working_dir = dirCurrentPath.value
+  showDirPicker.value = false
+}
+
 function openCreateModal() {
   editingJob.value = null
   form.name = ''
-  form.description = ''
   form.schedule = ''
   form.prompt = ''
   form.script = ''
+  form.working_dir = ''
   form.no_agent = false
   showModal.value = true
 }
@@ -222,10 +399,10 @@ function openCreateModal() {
 function openEditModal(job: CronJob) {
   editingJob.value = job
   form.name = job.name
-  form.description = job.description || ''
   form.schedule = job.schedule
   form.prompt = job.prompt || ''
   form.script = job.script || ''
+  form.working_dir = job.working_dir || ''
   form.no_agent = job.no_agent
   showModal.value = true
 }
@@ -249,9 +426,9 @@ async function handleSave() {
   try {
     const data: Partial<CronJob> = {
       name: form.name,
-      description: form.description,
       schedule: form.schedule,
       no_agent: form.no_agent,
+      working_dir: form.working_dir.trim(),
     }
 
     if (form.no_agent) {
@@ -297,3 +474,91 @@ async function handleResume(id: string) {
 
 onMounted(() => cronStore.loadJobs())
 </script>
+
+<style scoped>
+.dir-picker-recommended {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 4px;
+}
+
+.dir-picker-recommended-title {
+  font-size: 12px;
+  color: #999;
+  padding: 4px 12px 6px;
+}
+
+.dir-picker-recommended-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.dir-picker-recommended-item:hover {
+  background: #f0f0f0;
+}
+
+.dir-picker-recommended-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-picker-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dir-picker-current {
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  color: #666;
+}
+
+.dir-picker-new-folder {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dir-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.dir-picker-item:hover {
+  background: #f0f0f0;
+}
+
+.dir-picker-empty,
+.dir-picker-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+</style>

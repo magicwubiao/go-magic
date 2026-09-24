@@ -23,22 +23,27 @@ import (
 
 // Job represents a scheduled cron job
 type Job struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Schedule    string                 `json:"schedule"`
-	Prompt      string                 `json:"prompt"`
-	Skills      []string               `json:"skills,omitempty"`
-	Platform    string                 `json:"platform,omitempty"`
-	Enabled     bool                   `json:"enabled"`
-	NoAgent     bool                   `json:"no_agent"` // Skip agent, run script directly
-	Script      string                 `json:"script"`   // Script/command for no_agent mode
-	NextRun     *time.Time             `json:"next_run,omitempty"`
-	LastRun     *time.Time             `json:"last_run,omitempty"`
-	LastStatus  string                 `json:"last_status,omitempty"` // success, failed, running
-	LastError   string                 `json:"last_error,omitempty"`
-	RunCount    int                    `json:"run_count,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Schedule    string   `json:"schedule"`
+	Prompt      string   `json:"prompt"`
+	Skills      []string `json:"skills,omitempty"`
+	Platform    string   `json:"platform,omitempty"`
+	Enabled     bool     `json:"enabled"`
+	NoAgent     bool     `json:"no_agent"` // Skip agent, run script directly
+	Script      string   `json:"script"`   // Script/command for no_agent mode
+	// WorkingDir pins the directory this job executes in (both agent and
+	// script mode). Supports "~" expansion. When empty, agent mode falls back
+	// to the per-run isolated dir (<base>/cron/<jobID>/run_<ts>) and script
+	// mode inherits the server process working directory.
+	WorkingDir string                 `json:"working_dir,omitempty"`
+	NextRun    *time.Time             `json:"next_run,omitempty"`
+	LastRun    *time.Time             `json:"last_run,omitempty"`
+	LastStatus string                 `json:"last_status,omitempty"` // success, failed, running
+	LastError  string                 `json:"last_error,omitempty"`
+	RunCount   int                    `json:"run_count,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ExecutionLog records the result of a job execution
@@ -237,7 +242,7 @@ func (m *Manager) executeJob(jobID string) {
 	// Execute based on mode
 	if job.NoAgent && job.Script != "" {
 		// Script mode - execute directly
-		output, execErr = executeScript(m.ctx, job.Script)
+		output, execErr = executeScript(m.ctx, job.Script, resolveJobWorkDir(job))
 	} else if job.Prompt != "" {
 		// Agent mode - use LLM to generate and execute script
 		var workDir string
@@ -245,7 +250,7 @@ func (m *Manager) executeJob(jobID string) {
 		execLog.WorkDir = workDir
 	} else if job.Script != "" {
 		// Fallback to script mode if no prompt
-		output, execErr = executeScript(m.ctx, job.Script)
+		output, execErr = executeScript(m.ctx, job.Script, resolveJobWorkDir(job))
 	} else {
 		execErr = fmt.Errorf("no prompt or script defined for job %s", job.Name)
 	}
@@ -550,26 +555,29 @@ func (m *Manager) executeAgentPrompt(ctx context.Context, job *Job) (string, str
 	tools := m.toolReg.ListWithSchemas()
 	log.Infof("[Cron] Agent job %s has %d tools available", job.Name, len(tools))
 
-	// Determine working directory - always under a "cron" subdirectory.
+	// Determine working directory.
 	//
-	// 此前所有 cron 任务共用 <base>/cron：不同任务的产物互相覆盖（同名文件如
-	// report.md / pelican_bike.html 互相清掉），定时触发与手动触发重叠时两个
-	// agent 还会往同一目录同时写。对齐看板"每任务一目录"的布局：
+	// 优先级：任务显式配置的 WorkingDir > 每次运行隔离目录。
+	// 任务配置了 WorkingDir 时直接在该目录执行（用户期望产物落在固定位置，
+	// 便于下游流程消费），不再套 run_<时间> 子目录；隔离性由执行日志的
+	// WorkDir 字段追溯。未配置时保持原有布局：
 	//   cron/<jobID>/            = 该任务的产物根目录（"对应的任务目录"）
 	//   cron/<jobID>/run_<时间>/  = 单次执行的隔离目录
-	runDir := filepath.Join(m.workingDir, "cron", job.ID, cronRunDirName(time.Now()))
-	if m.workingDir == "" {
-		runDir = filepath.Join(config.GetMagicHome(), "workspace", "cron", job.ID, cronRunDirName(time.Now()))
+	workDir := resolveJobWorkDir(job)
+	if workDir == "" {
+		workDir = filepath.Join(m.workingDir, "cron", job.ID, cronRunDirName(time.Now()))
+		if m.workingDir == "" {
+			workDir = filepath.Join(config.GetMagicHome(), "workspace", "cron", job.ID, cronRunDirName(time.Now()))
+		}
+		// 同秒内再次触发（手动 + 定时重叠）：换用纳秒后缀名，保证不共享目录
+		if _, err := os.Stat(workDir); err == nil {
+			base := filepath.Dir(workDir)
+			workDir = filepath.Join(base, fmt.Sprintf("run_%d", time.Now().UnixNano()))
+		}
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			log.Warnf("[Cron] Failed to create workspace %s: %v", workDir, err)
+		}
 	}
-	// 同秒内再次触发（手动 + 定时重叠）：换用纳秒后缀名，保证不共享目录
-	if _, err := os.Stat(runDir); err == nil {
-		base := filepath.Dir(runDir)
-		runDir = filepath.Join(base, fmt.Sprintf("run_%d", time.Now().UnixNano()))
-	}
-	if err := os.MkdirAll(runDir, 0755); err != nil {
-		log.Warnf("[Cron] Failed to create workspace %s: %v", runDir, err)
-	}
-	workDir := runDir
 	log.Infof("[Cron] Agent job %s workdir: %s", job.Name, workDir)
 
 	// System prompt for cron agent - simple, direct, no explanation
@@ -637,9 +645,30 @@ func removeMarkdownCodeBlocks(s string) string {
 
 // --- Script Execution (cross-platform) ---
 
-// executeScript runs a script/command with 60s timeout
+// resolveJobWorkDir expands and validates a job's custom working directory.
+// Supports "~" expansion; the directory is created if missing. Returns ""
+// when the job has no custom directory configured or the directory cannot
+// be prepared (caller then falls back to the default per-run layout).
+func resolveJobWorkDir(job *Job) string {
+	if job.WorkingDir == "" {
+		return ""
+	}
+	dir := job.WorkingDir
+	dir = config.ExpandHome(dir)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Warnf("[Cron] Job %s custom workdir %s unavailable: %v (falling back to default)", job.Name, dir, err)
+		return ""
+	}
+	return dir
+}
+
+// executeScript runs a script/command with 60s timeout.
+// dir optionally sets the process working directory for the command.
 // Automatically detects PowerShell vs CMD on Windows
-func executeScript(ctx context.Context, script string) (string, error) {
+func executeScript(ctx context.Context, script string, dir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -659,6 +688,9 @@ func executeScript(ctx context.Context, script string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if dir != "" {
+		cmd.Dir = dir
+	}
 
 	err := cmd.Run()
 	if err != nil {

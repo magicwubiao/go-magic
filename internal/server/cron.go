@@ -28,6 +28,7 @@ func cronJobToResponse(job *cron.Job) map[string]interface{} {
 		"description":      job.Description,
 		"prompt":           job.Prompt,
 		"script":           job.Script,
+		"working_dir":      job.WorkingDir,
 		"schedule":         job.Schedule,
 		"schedule_display": describeSchedule(job.Schedule),
 		"enabled":          job.Enabled,
@@ -144,6 +145,8 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 			NoAgent     *bool    `json:"no_agent,omitempty"`
 			Enabled     *bool    `json:"enabled,omitempty"`
 			Skills      []string `json:"skills"`
+			// Pointer so an explicit empty string clears the directory.
+			WorkingDir *string `json:"working_dir,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -180,6 +183,9 @@ func (s *Server) handleCronJobByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Skills != nil {
 			job.Skills = req.Skills
+		}
+		if req.WorkingDir != nil {
+			job.WorkingDir = strings.TrimSpace(*req.WorkingDir)
 		}
 		if err := s.cronMgr.Update(job); err != nil {
 			http.Error(w, fmt.Sprintf("failed to update job: %v", err), http.StatusInternalServerError)
@@ -223,6 +229,7 @@ func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request) {
 			Script      string   `json:"script"`
 			NoAgent     bool     `json:"no_agent"`
 			Skills      []string `json:"skills"`
+			WorkingDir  string   `json:"working_dir"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -253,6 +260,7 @@ func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request) {
 			Script:      req.Script,
 			NoAgent:     req.NoAgent,
 			Skills:      req.Skills,
+			WorkingDir:  strings.TrimSpace(req.WorkingDir),
 			Enabled:     true,
 		}
 
