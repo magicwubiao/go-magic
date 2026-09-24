@@ -4736,12 +4736,12 @@ onMounted(async () => {
     top: 50%;
     transform: translate(50%, -50%);
     width: 34px;
-    height: 56px;
+    height: 42px;
     z-index: 1000;
     background: #fff;
     border: 1px solid #e0e0e0;
     border-right: none;
-    border-radius: 10px 0 0 10px;
+    border-radius: 10px;
     box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
     color: #666;
     cursor: pointer;
