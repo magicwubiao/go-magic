@@ -909,11 +909,11 @@
       <n-form label-placement="top">
         <n-form-item :label="t('peers.name')">
           <n-input v-model:value="peerForm.name" :placeholder="t('peers.namePlaceholder')" />
-          <n-text depth="3" style="font-size: 12px;">{{ t('peers.nameHint') }}</n-text>
+          <n-text depth="3" class="peer-hint">{{ t('peers.nameHint') }}</n-text>
         </n-form-item>
         <n-form-item :label="t('peers.baseUrl')">
           <n-input v-model:value="peerForm.base_url" :placeholder="t('peers.baseUrlPlaceholder')" />
-          <n-text depth="3" style="font-size: 12px;">{{ t('peers.baseUrlHint') }}</n-text>
+          <n-text depth="3" class="peer-hint">{{ t('peers.baseUrlHint') }}</n-text>
         </n-form-item>
         <n-form-item :label="t('peers.token')">
           <n-input
@@ -922,7 +922,7 @@
             show-password-on="click"
             :placeholder="t('peers.tokenPlaceholder')"
           />
-          <n-text depth="3" style="font-size: 12px;">{{ t('peers.tokenHint') }}</n-text>
+          <n-text depth="3" class="peer-hint">{{ t('peers.tokenHint') }}</n-text>
         </n-form-item>
       </n-form>
       <template #action>
@@ -3731,6 +3731,12 @@ async function loadCandidates() {
 /* ===== Cross-machine peers (managed from the rail-header entry point) ===== */
 .peer-card + .peer-card {
   margin-top: 16px;
+}
+
+.peer-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
 }
 
 .peer-field {
