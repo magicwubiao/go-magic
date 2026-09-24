@@ -665,7 +665,7 @@ magic peer remove lab-b
 - `relay_token` 为空时 relay **只接受来自本机（127.0.0.1）的请求**，跨机 peer 一律 403；要跨机私聊必须在接收方设置 `relay_token`
 - relay 有按来源 IP 的限流（默认 30 次/分钟），防止单个 peer 灌爆 Bot 队列
 - relay 只信任 TCP 连接的真实来源地址（`RemoteAddr`），不解析 `X-Forwarded-For`；放在反向代理后面时请确认代理转发的是真实 peer 地址
-- Web 面板左侧「跨机 Peer」页等价于本节命令：查看/复制本机实例 ID、增删 peer、直接向远端 Bot 发消息（失败时原样显示远端报错）
+- Web 面板 /bots 页左侧栏顶部的「跨机 Peer」入口按钮等价于本节命令：查看/复制本机实例 ID、增删 peer、直接向远端 Bot 发消息（失败时原样显示远端报错）
 
 ---
 

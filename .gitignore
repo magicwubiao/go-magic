@@ -29,6 +29,9 @@ Thumbs.db
 *.tmp
 *.log
 
+# Vite config timestamp temp files
+web/vite.config.ts.timestamp-*.mjs
+
 # WorkBuddy
 .workbuddy/
 

@@ -127,7 +127,6 @@ import {
   FolderOutline,
   PieChartOutline,
   ServerOutline,
-  ShareSocialOutline,
   LogOutOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
@@ -224,7 +223,6 @@ const menuOptions = computed(() => [
   { type: 'divider' as const },
   { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
-  { label: t('nav.peers'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },

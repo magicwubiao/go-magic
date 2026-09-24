@@ -667,7 +667,7 @@ magic peer remove lab-b
 - With an empty `relay_token`, relay **only accepts requests from localhost (127.0.0.1)**; remote peers get 403. Set `relay_token` on the receiving side to DM across machines
 - Relay is rate limited per source IP (default 30 requests/minute) so one peer cannot flood a bot's queue
 - Relay trusts only the TCP peer address (`RemoteAddr`) and does not parse `X-Forwarded-For`; behind a reverse proxy, make sure the real peer address is forwarded
-- The dashboard's **Peers** page mirrors these commands: copy this instance's ID, add/remove peers, and DM a remote bot directly (remote errors are shown verbatim)
+- The **Peers** entry button at the top of the rail on the /bots page mirrors these commands: copy this instance's ID, add/remove peers, and DM a remote bot directly (remote errors are shown verbatim)
 
 ---
 
