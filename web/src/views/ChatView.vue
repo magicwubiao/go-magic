@@ -769,19 +769,17 @@
     <!-- Goal Sidebar -->
     <RightSidebar v-model:mobile-visible="rightSidebarMobileVisible" />
 
-    <!-- Mobile right sidebar toggle: floating at right-middle, follows the panel when open -->
-    <n-button
+    <!-- Mobile right sidebar toggle: edge handle embedded into the screen's right edge
+         (mirrors the left session-sidebar handle), half inside/half outside, so it
+         never overlaps the chat content. -->
+    <div
       class="right-sidebar-fab"
       :class="{ open: rightSidebarMobileVisible }"
-      circle
-      size="large"
       @click="rightSidebarMobileVisible = !rightSidebarMobileVisible"
       :title="t('sidebar.expand')"
     >
-      <template #icon>
-        <n-icon :component="GridOutline" :size="20" />
-      </template>
-    </n-button>
+      <n-icon :component="GridOutline" :size="16" />
+    </div>
 
     <!-- Work Directory Picker Modal -->
     <n-modal v-model:show="showDirPicker" :title="t('chat.workDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
@@ -4153,13 +4151,15 @@ onMounted(async () => {
   }
 
   .right-sidebar-fab {
-    background: #2a2a2a !important;
-    border-color: #444 !important;
+    background: #2a2a2a;
+    border-color: #444;
+    color: #bbb;
   }
   .right-sidebar-fab:hover,
   .right-sidebar-fab:active,
   .right-sidebar-fab:focus {
-    background: #2a2a2a !important;
+    background: #333;
+    color: #fff;
   }
 }
 
@@ -4725,29 +4725,39 @@ onMounted(async () => {
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
 
+  /* 右侧边栏拉手：紧靠屏幕右边缘，一半嵌入边缘、一半露出（参考左侧会话手柄），
+     几乎不遮挡聊天内容。竖条、左侧圆角，右侧与屏幕边缘齐平。 */
   .right-sidebar-fab {
     display: flex;
+    align-items: center;
+    justify-content: center;
     position: fixed;
-    right: 12px;
+    right: 0;
     top: 50%;
-    transform: translateY(-50%);
+    transform: translate(50%, -50%);
+    width: 34px;
+    height: 84px;
     z-index: 1000;
-    background: #fff !important;
-    border: 1px solid #e0e0e0 !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-right: none;
+    border-radius: 10px 0 0 10px;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
+    color: #666;
+    cursor: pointer;
     transition: right 0.3s ease;
   }
 
-  /* 确保按钮背景在所有状态下都稳定显示（naive-ui 按钮默认背景会随状态变化） */
   .right-sidebar-fab:hover,
   .right-sidebar-fab:active,
   .right-sidebar-fab:focus {
-    background: #fff !important;
+    background: #f7f7f7;
+    color: #333;
   }
 
-  /* 右侧面板展开时，按钮跟随到面板左边缘（面板宽 280px + 间距） */
+  /* 右侧面板展开时，拉手跟随到面板左边缘（面板宽 280px），保持半嵌入姿态 */
   .right-sidebar-fab.open {
-    right: 286px;
+    right: 280px;
   }
 
   /* 移动端底部工具栏：压缩审批策略选择器，避免挤压工作目录/分身名 */
