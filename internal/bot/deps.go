@@ -135,7 +135,10 @@ func (f *skillFilter) GetSkillInfo(name string) (string, []string, string, error
 // otherwise relative paths written by bot tools land somewhere the approval
 // hook's scope check and the file tools disagree on.
 func botWorkDirFor(globalCfg *config.Config, botCfg *Config) string {
-	workDir := globalCfg.WorkingDir
+	workDir := ""
+	if globalCfg != nil {
+		workDir = globalCfg.WorkingDir
+	}
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}

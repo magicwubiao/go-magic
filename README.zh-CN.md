@@ -93,11 +93,12 @@ magic bots routine add researcher daily-digest --schedule "0 9 * * *" --prompt "
 
 ```bash
 # 在机器 B（需要已启动 dashboard / gateway，relay 端点在线）
-magic config set bot_mode.relay_token "shared-secret"   # 可选，但推荐设置
+magic config set bot_mode.relay_token "shared-secret"   # 跨机私聊必须设置
 # 在机器 A
 magic peer add lab-b http://192.168.1.20:8642 --token shared-secret
 magic peer dm lab-b researcher "报告进展如何？"
 # peer 表保存在 <magic_home>/peers.json；本机身份标识在 <magic_home>/instance_id
+# 未设置 relay_token 时 /api/relay/v1/dm 只接受来自本机（127.0.0.1）的请求
 ```
 
 ### MCP 协议

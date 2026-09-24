@@ -24,6 +24,7 @@ const KanbanView = () => import('./views/KanbanView.vue')
 const CronView = () => import('./views/CronView.vue')
 const GatewayView = () => import('./views/GatewayView.vue')
 const BotsView = () => import('./views/BotsView.vue')
+const PeersView = () => import('./views/PeersView.vue')
 const ProfilesView = () => import('./views/ProfilesView.vue')
 const GoalsView = () => import('./views/GoalsView.vue')
 const ApprovalView = () => import('./views/ApprovalView.vue')
@@ -52,6 +53,8 @@ const router = createRouter({
     // Bot 群聊已整合进 /bots（左侧 rail 内切换），旧链接重定向
     { path: '/rooms', redirect: '/bots' },
     { path: '/bots', component: BotsView, meta: { keepAlive: true } },
+    // Bot Mode 跨机 peer：本机身份 + 远端实例表 + 直接私聊远端 Bot
+    { path: '/peers', component: PeersView },
     { path: '/logs', component: LogsView },
     { path: '/system', component: SystemView },
     { path: '/profiles', component: ProfilesView },

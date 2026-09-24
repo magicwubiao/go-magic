@@ -56,17 +56,31 @@ type turnResult struct {
 // canonical chat sessions, processes inbound messages sequentially per bot,
 // routes bot-to-bot DMs, and coordinates group chat rooms.
 type Manager struct {
-	mu        sync.Mutex
-	store     *Store
-	cfg       *config.Config
-	sessions  *sessionstore.Store
-	routines  map[string]*RoutineScheduler
-	bots      map[string]*botRuntime
-	rooms     map[string]*roomRuntime // room ID (lowercase) -> coordinator
+	mu       sync.Mutex
+	store    *Store
+	cfg      *config.Config
+	sessions *sessionstore.Store
+	routines map[string]*RoutineScheduler
+	bots     map[string]*botRuntime
+	rooms    map[string]*roomRuntime // room ID (lowercase) -> coordinator
+	// routineMu serializes every routines-file read-modify-write cycle
+	// (add/update/remove, plus the last_run/last_status write-back done by a
+	// firing routine and by the worker when its turn finishes). Without it two
+	// routines completing at the same moment interleave load -> mutate -> save
+	// and silently clobber each other's status.
+	//
+	// Lock order: routineMu is always acquired BEFORE m.mu and never while m.mu
+	// is held, so the two can never deadlock.
+	routineMu sync.Mutex
 	queueCond *sync.Cond
 	stopCh    chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg        sync.WaitGroup
+	// stopping is set by Stop() before it waits for the worker WaitGroup. Once
+	// true no new worker/coordinator goroutine may be spawned: a wg.Add racing
+	// wg.Wait is undefined behaviour (and can panic with "WaitGroup is reused
+	// before previous Wait has returned"). Guarded by mu.
+	stopping bool
 
 	// approvalMgr is the shared approval Manager built from the main config's
 	// approval section; every bot agent is wired to it via
@@ -107,7 +121,12 @@ type botRuntime struct {
 }
 
 // NewManager creates a bot manager. Returns nil (no error) when no bots are defined.
-func NewManager(cfg *config.Config, sessions *sessionstore.Store) (*Manager, error) {
+//
+// Bot sessions live in their own SQLite database (<magicHome>/bots.db) rather
+// than in the server's shared session store: bot chats are a separate
+// namespace from user sessions, and Stop() closes this database — sharing the
+// server store would tear down the whole dashboard on shutdown.
+func NewManager(cfg *config.Config) (*Manager, error) {
 	if cfg == nil || !IsEnabled(cfg) {
 		return nil, nil
 	}
@@ -159,8 +178,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
+	if m.stopping {
+		m.mu.Unlock()
+		return nil
+	}
 	m.rootCtx = ctx
-	m.mu.Unlock()
 
 	for _, bc := range configs {
 		rt := &botRuntime{cfg: bc}
@@ -181,10 +203,12 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Launch one worker per bot so messages within a bot are serialized
 	// (canonical chat is single-threaded), while different bots run concurrently.
+	// wg.Add happens while mu is held so it can never race Stop()'s wg.Wait().
 	for name := range m.bots {
 		m.wg.Add(1)
 		go m.workerLoop(ctx, name)
 	}
+	m.mu.Unlock()
 
 	// Bring persisted group chat rooms online.
 	if rooms, err := m.store.ListRooms(); err == nil {
@@ -207,6 +231,16 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down all workers and routine schedulers.
 func (m *Manager) Stop() {
+	// Mark the manager as stopping BEFORE waking/waiting on the workers: any
+	// concurrent CreateBot/CreateRoom must not add to m.wg after Wait started.
+	m.mu.Lock()
+	alreadyStopping := m.stopping
+	m.stopping = true
+	m.mu.Unlock()
+	if alreadyStopping {
+		return
+	}
+
 	close(m.stopCh)
 	m.mu.Lock()
 	m.queueCond.Broadcast()
@@ -284,9 +318,10 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 		// queue, drop it rather than process it: a paused bot must not act on
 		// new input. Notify a synchronous caller so it doesn't hang forever.
 		if !m.bots[key].cfg.IsActive() {
+			pausedName := m.bots[key].cfg.Name
 			m.mu.Unlock()
 			if msg.replyCh != nil {
-				msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s is paused", rtName(key))}
+				msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s is paused", pausedName)}
 			}
 			continue
 		}
@@ -436,10 +471,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		return
 	}
 
-	turnTimeout := 5 * time.Minute
-	if m.cfg != nil && m.cfg.BotMode != nil && m.cfg.BotMode.TurnTimeoutMinutes > 0 {
-		turnTimeout = time.Duration(m.cfg.BotMode.TurnTimeoutMinutes) * time.Minute
-	}
+	turnTimeout := m.turnTimeout()
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 	// Inject the bot's isolated workdir into the turn context. Two reasons:
@@ -450,7 +482,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	// ② file/terminal tools resolve relative paths against the bot sandbox
 	//   (<working_dir>/bots/<name>), matching the RegisterBotTools isolation
 	//   design in buildBotDeps instead of falling back to the server cwd.
-	runCtx = tool.WithWorkDir(runCtx, botWorkDirFor(m.cfg, rt.cfg))
+	runCtx = tool.WithWorkDir(runCtx, m.botWorkDir(rt.cfg))
 
 	// Mark the bot as having a turn in flight so /running probes and
 	// /cancel requests can observe and stop it even after the SSE client
@@ -642,7 +674,7 @@ func (m *Manager) SendToBot(botName, text string) (string, error) {
 		return res.Reply, res.Err
 	case <-m.stopCh:
 		return "", fmt.Errorf("bot manager shutting down")
-	case <-time.After(sendToBotTimeout):
+	case <-time.After(m.turnTimeout() + sendToBotTimeoutSlack):
 		return "", fmt.Errorf("timed out waiting for bot %s to reply", botName)
 	}
 }
@@ -881,12 +913,23 @@ func sanitizeBotHistory(history []provider.Message) []provider.Message {
 // bot_mode.history_window is unset.
 const defaultHistoryWindow = 200
 
+// defaultTurnTimeout bounds a single bot turn when bot_mode.turn_timeout_minutes
+// is unset, mirroring the agent package's own default.
+const defaultTurnTimeout = 5 * time.Minute
+
 // historyWindow returns the configured canonical-chat message cap (min 20).
+//
+// It takes m.mu because ReloadConfig swaps m.cfg on a live manager; reading it
+// unlocked raced with the hot reload (-race). Must NOT be called while holding
+// m.mu.
 func (m *Manager) historyWindow() int {
-	w := 0
+	m.mu.Lock()
+	var w int
 	if m.cfg != nil && m.cfg.BotMode != nil {
 		w = m.cfg.BotMode.HistoryWindow
 	}
+	m.mu.Unlock()
+
 	if w <= 0 {
 		w = defaultHistoryWindow
 	}
@@ -894,6 +937,31 @@ func (m *Manager) historyWindow() int {
 		w = 20
 	}
 	return w
+}
+
+// turnTimeout returns the configured per-turn deadline (bot_mode.turn_timeout_minutes).
+// Must NOT be called while holding m.mu.
+func (m *Manager) turnTimeout() time.Duration {
+	m.mu.Lock()
+	var minutes int
+	if m.cfg != nil && m.cfg.BotMode != nil {
+		minutes = m.cfg.BotMode.TurnTimeoutMinutes
+	}
+	m.mu.Unlock()
+
+	if minutes > 0 {
+		return time.Duration(minutes) * time.Minute
+	}
+	return defaultTurnTimeout
+}
+
+// botWorkDir resolves a bot's isolated sandbox directory from the live config
+// snapshot. Must NOT be called while holding m.mu.
+func (m *Manager) botWorkDir(bc *Config) string {
+	m.mu.Lock()
+	cfg := m.cfg
+	m.mu.Unlock()
+	return botWorkDirFor(cfg, bc)
 }
 
 // truncateHistoryAtTurnBoundary trims a provider-message history to at most
@@ -1194,8 +1262,16 @@ func (m *Manager) DeleteBot(name string) error {
 		delete(m.routines, key)
 	}
 	if rt, ok := m.bots[key]; ok {
-		// Drop any pending messages so the worker exits promptly.
+		// Drop any pending messages so the worker exits promptly, and abort the
+		// turn that is currently in flight. Without the cancel the deleted bot
+		// kept running to completion — burning tokens and writing history for a
+		// bot that no longer exists.
 		rt.queue = nil
+		if rt.turnCancel != nil {
+			rt.turnCancel()
+			rt.turnCancel = nil
+		}
+		rt.turnRunning = false
 		delete(m.bots, key)
 	}
 	m.mu.Unlock()
@@ -1229,22 +1305,29 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 		} else {
 			state.Status = StatusPaused
 		}
-	}
-	routines, _ := m.store.LoadRoutines(rtName(key))
-	for _, r := range routines {
-		if r.Enabled {
-			state.ActiveRoutines++
-		}
+		// Routines are stored under the bot's ORIGINAL name, not the lowercase
+		// map key: routinesPath() derives the filename from Config.Name. Looking
+		// them up with the lowercased key made ActiveRoutines read 0 for every
+		// bot whose name contains an uppercase letter.
+		botName = rt.cfg.Name
 	}
 	m.mu.Unlock()
+
+	// Disk read outside the lock: this used to run while holding m.mu, blocking
+	// every worker/API call behind a file read.
+	if routines, err := m.store.LoadRoutines(botName); err == nil {
+		for _, r := range routines {
+			if r.Enabled {
+				state.ActiveRoutines++
+			}
+		}
+	}
 
 	if ag := m.AgentFor(botName); ag != nil {
 		state.HistoryLength = len(ag.GetHistory())
 	}
 	return state
 }
-
-func rtName(key string) string { return key }
 
 // AgentFor exposes a bot's live agent (nil when offline). Used by the web
 // layer to read history without racing the message queue.
@@ -1265,11 +1348,17 @@ func (m *Manager) Sessions() *sessionstore.Store {
 }
 
 // startBotLocked brings one bot online (idempotent). Safe to call while
-// running or before Start().
+// running or before Start(). No-op once the manager is stopping: spawning a
+// worker then would race Stop()'s wg.Wait().
 func (m *Manager) startBotLocked(cfg *Config) {
 	key := strings.ToLower(cfg.Name)
 
 	m.mu.Lock()
+	if m.stopping {
+		m.mu.Unlock()
+		log.Debugf("[BotMode] Ignoring start of bot %q: manager is stopping", cfg.Name)
+		return
+	}
 	if _, exists := m.bots[key]; exists {
 		m.mu.Unlock()
 		return
@@ -1295,10 +1384,13 @@ func (m *Manager) startBotLocked(cfg *Config) {
 			sched.Pause()
 		}
 	}
-	m.mu.Unlock()
-
+	// Registered while mu is held: a concurrent Stop() either sees the bot
+	// before starting its Wait (and the worker exits on stopCh/ctx), or sets
+	// stopping first and this whole call bails out above.
 	m.wg.Add(1)
 	go m.workerLoop(ctx, key)
+	m.mu.Unlock()
+
 	log.Infof("[BotMode] Bot %q is now online (%s)", cfg.Name, cfg.Title)
 }
 
@@ -1311,31 +1403,49 @@ func (m *Manager) rootCtxOrBackground() context.Context {
 	return context.Background()
 }
 
+// withRoutines runs one atomic read-modify-write cycle over a bot's routine
+// list: fn receives the freshly loaded slice, may mutate it in place or return
+// a new one, and the result is persisted only when fn returns a nil error.
+//
+// Everything runs under routineMu so a firing routine, its worker's status
+// write-back, and a dashboard add/edit/remove can never interleave and lose
+// one another's changes.
+func (m *Manager) withRoutines(botName string, fn func([]*RoutineConfig) ([]*RoutineConfig, error)) error {
+	m.routineMu.Lock()
+	defer m.routineMu.Unlock()
+
+	routines, err := m.store.LoadRoutines(botName)
+	if err != nil {
+		return err
+	}
+	next, err := fn(routines)
+	if err != nil {
+		return err
+	}
+	if next == nil {
+		return nil
+	}
+	return m.store.SaveRoutines(botName, next)
+}
+
 // recordRoutineResult writes back a routine's last-run timestamp and status
 // after its turn finishes in the worker ("success" or "failed: <err>").
 // Called from processMessage; safe to call for unknown routine IDs.
 func (m *Manager) recordRoutineResult(botName, routineID, status, result string) {
-	routines, err := m.store.LoadRoutines(botName)
-	if err != nil {
-		log.Warnf("[BotMode] Failed to load routines for status write-back (%s): %v", botName, err)
-		return
-	}
-	now := time.Now().Unix()
-	found := false
-	for _, r := range routines {
-		if r.ID == routineID {
-			r.LastRun = &now
-			r.LastStatus = status
-			r.LastResult = truncateRoutineResult(result)
-			found = true
-			break
+	err := m.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+		now := time.Now().Unix()
+		for _, r := range routines {
+			if r.ID == routineID {
+				r.LastRun = &now
+				r.LastStatus = status
+				r.LastResult = truncateRoutineResult(result)
+				return routines, nil
+			}
 		}
-	}
-	if !found {
-		// Routine was deleted while its message sat in the queue.
-		return
-	}
-	if err := m.store.SaveRoutines(botName, routines); err != nil {
+		// Routine was deleted while its message sat in the queue: nothing to do.
+		return nil, nil
+	})
+	if err != nil {
 		log.Warnf("[BotMode] Failed to save routine status for %s: %v", botName, err)
 	}
 }
@@ -1344,10 +1454,13 @@ func (m *Manager) recordRoutineResult(botName, routineID, status, result string)
 // configs stay small even for chatty runs.
 const maxRoutineResultLen = 2000
 
-// sendToBotTimeout bounds how long a synchronous SendToBot (used by the
-// delegate_task tool) waits for a teammate to reply before giving up, so a
-// busy or paused teammate can't block the delegating bot indefinitely.
-const sendToBotTimeout = 5 * time.Minute
+// sendToBotTimeoutSlack is added on top of the configured per-turn deadline to
+// bound how long a synchronous SendToBot (the delegate_task tool, the relay
+// endpoint, CLI) waits for a teammate's reply. The old fixed 5-minute cap
+// equalled the default turn deadline, so a teammate that legitimately used its
+// full timeout lost the race and the caller saw "timed out" even though the
+// turn was about to finish. Slack also covers the queue wait in front of it.
+const sendToBotTimeoutSlack = 30 * time.Second
 
 // truncateRoutineResult keeps the head of a routine's output and adds an
 // ellipsis marker when it was cut, so users can see the gist without the

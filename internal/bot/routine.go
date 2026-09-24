@@ -113,51 +113,61 @@ func (s *RoutineScheduler) add(r *RoutineConfig) error {
 
 // runRoutine executes one routine turn inside the bot's canonical chat context.
 func (s *RoutineScheduler) runRoutine(routineID string) {
-	routines, err := s.manager.store.LoadRoutines(s.botCfg.Name)
-	if err != nil {
-		return
-	}
-	var target *RoutineConfig
-	for _, r := range routines {
-		if r.ID == routineID {
-			target = r
-			break
-		}
-	}
-	if target == nil || !target.Enabled {
-		return
-	}
+	botName := s.botCfg.Name
 
-	now := time.Now().Unix()
-	prompt := target.Prompt
+	// Claim the firing and persist "triggered" in one atomic cycle. prompt is
+	// captured here so the routine config can be edited mid-flight without the
+	// in-flight turn picking up the new text.
+	var prompt string
+	found := false
+	if err := s.manager.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+		for _, r := range routines {
+			if r.ID != routineID {
+				continue
+			}
+			if !r.Enabled {
+				return nil, nil
+			}
+			now := time.Now().Unix()
+			r.LastRun = &now
+			r.LastStatus = "triggered"
+			prompt = r.Prompt
+			found = true
+			return routines, nil
+		}
+		return nil, nil
+	}); err != nil {
+		log.Warnf("[BotMode] Failed to claim routine %s for %s: %v", routineID, botName, err)
+		return
+	}
+	if !found {
+		return
+	}
 
 	// Fire-and-forget into the bot's queue so execution stays serialized
 	// with regular chat turns on the same canonical session. RoutineID is
 	// carried so the worker writes back last-run status after the turn.
-	if err := s.manager.EnqueueMsg(s.botCfg.Name, pendingMessage{
+	if err := s.manager.EnqueueMsg(botName, pendingMessage{
 		Text:      prompt,
 		From:      "",
 		Timestamp: time.Now(),
-		RoutineID: target.ID,
+		RoutineID: routineID,
 	}); err != nil {
-		log.Warnf("[BotMode] Routine %q enqueue failed for %s: %v", target.Name, s.botCfg.Name, err)
-		target.LastRun = &now
-		target.LastStatus = "failed: enqueue error"
-		s.persistRoutines(routines)
-		return
-	}
-
-	// Record that the routine fired (final success/failed status lands via
-	// recordRoutineResult once the worker finishes this turn).
-	target.LastRun = &now
-	target.LastStatus = "triggered"
-	s.persistRoutines(routines)
-}
-
-// persistRoutines writes the routine list back to disk.
-func (s *RoutineScheduler) persistRoutines(routines []*RoutineConfig) {
-	if err := s.manager.store.SaveRoutines(s.botCfg.Name, routines); err != nil {
-		log.Warnf("[BotMode] Failed to save routines for %s: %v", s.botCfg.Name, err)
+		log.Warnf("[BotMode] Routine %s enqueue failed for %s: %v", routineID, botName, err)
+		// Record the failure instead of leaving the routine stuck on
+		// "triggered" forever (the worker never runs, so it never writes back).
+		if err := s.manager.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+			for _, r := range routines {
+				if r.ID == routineID {
+					now := time.Now().Unix()
+					r.LastRun = &now
+					r.LastStatus = "failed: enqueue error"
+				}
+			}
+			return routines, nil
+		}); err != nil {
+			log.Warnf("[BotMode] Failed to record enqueue failure for %s: %v", botName, err)
+		}
 	}
 }
 
@@ -183,23 +193,19 @@ func (m *Manager) AddRoutine(botName string, r *RoutineConfig) error {
 	r.Enabled = true
 	r.CreatedAt = time.Now().Unix()
 
-	routines, err := m.store.LoadRoutines(botName)
-	if err != nil {
-		return err
-	}
-	routines = append(routines, r)
-	if err := m.store.SaveRoutines(botName, routines); err != nil {
+	if err := m.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+		return append(routines, r), nil
+	}); err != nil {
 		return err
 	}
 
 	m.mu.Lock()
-	if ok && sched != nil {
+	defer m.mu.Unlock()
+	if sched != nil {
 		if err := sched.add(r); err != nil {
-			m.mu.Unlock()
 			return fmt.Errorf("failed to schedule routine: %w", err)
 		}
 	}
-	m.mu.Unlock()
 	return nil
 }
 
@@ -210,39 +216,38 @@ func (m *Manager) AddRoutine(botName string, r *RoutineConfig) error {
 //   - Schedule/Prompt/Name: persisted immediately; if the routine is enabled,
 //     the cron entry is replaced so changes take effect without a restart.
 func (m *Manager) UpdateRoutine(botName, idOrName string, mutate func(*RoutineConfig)) (*RoutineConfig, error) {
-	routines, err := m.store.LoadRoutines(botName)
-	if err != nil {
-		return nil, err
-	}
 	var target *RoutineConfig
-	for _, r := range routines {
-		if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
-			target = r
-			break
+	err := m.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+		for _, r := range routines {
+			if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
+				target = r
+				break
+			}
 		}
-	}
-	if target == nil {
-		return nil, fmt.Errorf("routine not found: %s", idOrName)
-	}
+		if target == nil {
+			return nil, fmt.Errorf("routine not found: %s", idOrName)
+		}
 
-	mutate(target)
+		mutate(target)
 
-	if target.Schedule == "" {
-		return nil, fmt.Errorf("schedule is required")
-	}
-	// Validate schedule by dry-parsing (same parser as AddRoutine).
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.SecondOptional)
-	if _, err := parser.Parse(target.Schedule); err != nil {
-		return nil, fmt.Errorf("invalid schedule %q: %w", target.Schedule, err)
-	}
-
-	if err := m.store.SaveRoutines(botName, routines); err != nil {
+		if target.Schedule == "" {
+			return nil, fmt.Errorf("schedule is required")
+		}
+		// Validate schedule by dry-parsing (same parser as AddRoutine).
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.SecondOptional)
+		if _, err := parser.Parse(target.Schedule); err != nil {
+			return nil, fmt.Errorf("invalid schedule %q: %w", target.Schedule, err)
+		}
+		return routines, nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
 	// Re-register the cron entry so live state matches the stored config.
 	key := strings.ToLower(botName)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if sched, ok := m.routines[key]; ok && sched != nil {
 		if entryID, exists := sched.entryIDs[target.ID]; exists {
 			sched.cron.Remove(entryID)
@@ -250,12 +255,10 @@ func (m *Manager) UpdateRoutine(botName, idOrName string, mutate func(*RoutineCo
 		}
 		if target.Enabled && target.Schedule != "" {
 			if err := sched.add(target); err != nil {
-				m.mu.Unlock()
 				return nil, fmt.Errorf("failed to schedule routine: %w", err)
 			}
 		}
 	}
-	m.mu.Unlock()
 	return target, nil
 }
 
@@ -266,34 +269,33 @@ func (m *Manager) ListRoutines(botName string) ([]*RoutineConfig, error) {
 
 // RemoveRoutine deletes a routine by ID or name.
 func (m *Manager) RemoveRoutine(botName string, idOrName string) error {
-	routines, err := m.store.LoadRoutines(botName)
-	if err != nil {
-		return err
-	}
-	var kept []*RoutineConfig
 	var removed *RoutineConfig
-	for _, r := range routines {
-		if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
-			removed = r
-			continue
+	err := m.withRoutines(botName, func(routines []*RoutineConfig) ([]*RoutineConfig, error) {
+		kept := make([]*RoutineConfig, 0, len(routines))
+		for _, r := range routines {
+			if r.ID == idOrName || strings.EqualFold(r.Name, idOrName) {
+				removed = r
+				continue
+			}
+			kept = append(kept, r)
 		}
-		kept = append(kept, r)
-	}
-	if removed == nil {
-		return fmt.Errorf("routine not found: %s", idOrName)
-	}
-	if err := m.store.SaveRoutines(botName, kept); err != nil {
+		if removed == nil {
+			return nil, fmt.Errorf("routine not found: %s", idOrName)
+		}
+		return kept, nil
+	})
+	if err != nil {
 		return err
 	}
 
 	// Unschedule if running live.
 	m.mu.Lock()
-	if sched, ok := m.routines[strings.ToLower(botName)]; ok {
+	defer m.mu.Unlock()
+	if sched, ok := m.routines[strings.ToLower(botName)]; ok && sched != nil {
 		if entryID, exists := sched.entryIDs[removed.ID]; exists {
 			sched.cron.Remove(entryID)
 			delete(sched.entryIDs, removed.ID)
 		}
 	}
-	m.mu.Unlock()
 	return nil
 }

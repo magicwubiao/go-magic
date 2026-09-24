@@ -260,6 +260,14 @@
                 <n-tag size="tiny" :bordered="false">
                   {{ t('bots.routineCount', { count: activeBot?.runtime?.active_routines ?? 0 }) }}
                 </n-tag>
+                <!-- Live queue/history depth: makes a backed-up bot visible
+                     instead of silently accepting messages it cannot process yet. -->
+                <n-tag v-if="(activeBot?.runtime?.queue_depth ?? 0) > 0" size="tiny" type="warning">
+                  {{ t('bots.queueDepth', { count: activeBot?.runtime?.queue_depth ?? 0 }) }}
+                </n-tag>
+                <n-tag v-if="(activeBot?.runtime?.history_length ?? 0) > 0" size="tiny" :bordered="false">
+                  {{ t('bots.historyLength', { count: activeBot?.runtime?.history_length ?? 0 }) }}
+                </n-tag>
               </n-space>
               <div class="starter-title">{{ t('bots.starterTitle') }}</div>
               <div class="starter-chips">
@@ -690,6 +698,15 @@
               </n-text>
             </n-gi>
           </n-grid>
+
+          <!-- Last run output: the API has always returned last_result, but the
+               card only rendered the status tag, so users had to open the chat
+               history to see what a routine actually produced. -->
+          <n-collapse v-if="rt.last_result" style="margin-top: 8px;">
+            <n-collapse-item :title="t('bots.routineLastResult')" name="result">
+              <pre class="routine-result">{{ rt.last_result }}</pre>
+            </n-collapse-item>
+          </n-collapse>
         </n-card>
       </n-space>
 
@@ -802,7 +819,7 @@
 import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import {
-  NAlert, NAvatar, NButton, NCard, NDivider, NDropdown, NEmpty, NForm,
+  NAlert, NAvatar, NButton, NCard, NCollapse, NCollapseItem, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NModal,
   NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
@@ -3445,5 +3462,17 @@ async function loadCandidates() {
     background: rgba(32, 128, 240, 0.2);
     color: #7cb6ff;
   }
+}
+
+/* Routine last-run output: keep the raw text readable and bounded so a chatty
+   2000-char run does not push the routine card off screen. */
+.routine-result {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

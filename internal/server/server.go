@@ -173,6 +173,11 @@ type Server struct {
 	botMu          sync.Mutex
 	botManager     *bot.Manager
 	botModeStarted bool
+
+	// relayLimiter throttles the unauthenticated /api/relay/v1/dm endpoint per
+	// remote IP. Lazily initialised so Server literals in tests keep working.
+	relayLimiterOnce sync.Once
+	relayLimiter     *relayLimiter
 }
 
 // isAllowedOrigin 校验 origin 是否在允许列表内。
@@ -1561,6 +1566,9 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// the relay secret travels in the request body and is validated by the
 	// handler itself, so remote instances don't need the dashboard token.
 	mux.HandleFunc("/api/relay/v1/dm", withCORS(s.handleRelayDM))
+	// Bot Mode peer table (which remote instances this machine can DM).
+	mux.HandleFunc("/api/peers", withCORS(requireAuth(s.handlePeers)))
+	mux.HandleFunc("/api/peers/", withCORS(requireAuth(s.handlePeerByName)))
 
 	// Goals
 	mux.HandleFunc("/api/goals", withCORS(requireAuth(s.handleGoals)))
@@ -1721,7 +1729,7 @@ func (s *Server) initBotMode() (*bot.Manager, error) {
 		return nil, fmt.Errorf("bot_mode disabled in config")
 	}
 
-	mgr, err := bot.NewManager(cfg, s.sessionStore)
+	mgr, err := bot.NewManager(cfg)
 	if err != nil {
 		s.botModeStarted = true
 		return nil, err

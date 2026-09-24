@@ -60,6 +60,13 @@
   },
   "bot_mode": {
     "enabled": false,
+    "comment_inject_bot_protocol": "Add the bot-to-bot messaging protocol section to every bot's system prompt. Omit for the default (true).",
+    "inject_bot_protocol": true,
+    "comment_history_window": "Messages kept per bot canonical chat, trimmed on turn boundaries. 0 = default (200, minimum 20).",
+    "history_window": 200,
+    "comment_turn_timeout_minutes": "Time limit for one inbound message (all LLM calls + tool runs). 0 = default (5).",
+    "turn_timeout_minutes": 5,
+    "comment_relay_token": "Shared secret remote instances must present on /api/relay/v1/dm. Empty = the relay only accepts requests from localhost; set a value to allow cross-machine peer DMs.",
     "relay_token": ""
   },
   "agent": {

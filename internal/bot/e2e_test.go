@@ -180,7 +180,7 @@ func TestUserTurnAndPersistence(t *testing.T) {
 	_ = cfg
 	_ = llm
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestUserTurnAndPersistence(t *testing.T) {
 	mgr.Stop()
 
 	// Restart: history should be restored into the new agent's context.
-	mgr2, err := NewManager(mustLoadConfig(t), nil)
+	mgr2, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr2 == nil {
 		t.Fatalf("restart NewManager: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestBotToBotMessage(t *testing.T) {
 	})
 	_ = cfg
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestMessageAgentTool(t *testing.T) {
 	}
 	_ = store.Save(&Config{Name: "scout", Title: "Scout"})
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestUnknownBotRejected(t *testing.T) {
 	})
 	_ = cfg
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestRoutineTriggerAndStatus(t *testing.T) {
 	})
 	_ = cfg
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestUpdateRoutine(t *testing.T) {
 	})
 	_ = cfg
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestHistoryWindowTruncation(t *testing.T) {
 	})
 	_ = cfg
 
-	mgr, err := NewManager(mustLoadConfig(t), nil)
+	mgr, err := NewManager(mustLoadConfig(t))
 	if err != nil || mgr == nil {
 		t.Fatalf("NewManager: %v", err)
 	}

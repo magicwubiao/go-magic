@@ -1,6 +1,10 @@
 package peer
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -119,4 +123,105 @@ func TestInstanceIDPersists(t *testing.T) {
 	if id1 != id2 {
 		t.Fatalf("instance id not stable: %q vs %q", id1, id2)
 	}
+}
+
+// TestClientSendDMSuccess covers the outbound half of the relay: the request the
+// remote instance receives (path, headers, payload) and the reply it returns.
+func TestClientSendDMSuccess(t *testing.T) {
+	var got DMRequest
+	var gotPath, gotInstance, gotUA, gotCT string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotInstance = r.Header.Get("X-Peer-Instance")
+		gotUA = r.Header.Get("User-Agent")
+		gotCT = r.Header.Get("Content-Type")
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("relay handler could not decode the body: %v", err)
+		}
+		json.NewEncoder(w).Encode(DMResponse{OK: true, Reply: "pong"})
+	}))
+	defer srv.Close()
+
+	reply, err := NewClient().SendDM(
+		context.Background(),
+		&Peer{Name: "remote", BaseURL: srv.URL, Token: "shared"},
+		"this-host-1a2b", "cli", "worker", "ping",
+	)
+	if err != nil {
+		t.Fatalf("SendDM: %v", err)
+	}
+	if reply != "pong" {
+		t.Errorf("reply = %q, want %q", reply, "pong")
+	}
+
+	if gotPath != "/api/relay/v1/dm" {
+		t.Errorf("request path = %q, want /api/relay/v1/dm", gotPath)
+	}
+	if got.Instance != "this-host-1a2b" || got.From != "cli" || got.To != "worker" || got.Text != "ping" {
+		t.Errorf("payload mismatch: %+v", got)
+	}
+	if got.Token != "shared" {
+		t.Errorf("relay token not forwarded: %q", got.Token)
+	}
+	if gotInstance != "this-host-1a2b" {
+		t.Errorf("X-Peer-Instance = %q, want the sender instance id", gotInstance)
+	}
+	if gotUA != "go-magic/peer" {
+		t.Errorf("User-Agent = %q, want go-magic/peer", gotUA)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotCT)
+	}
+}
+
+// TestClientSendDMErrors: a non-200 response and an application-level {ok:false}
+// must both surface as errors carrying the remote message, never as an empty
+// successful reply.
+func TestClientSendDMErrors(t *testing.T) {
+	t.Run("http status", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"error":"invalid relay token"}`, http.StatusForbidden)
+		}))
+		defer srv.Close()
+
+		_, err := NewClient().SendDM(context.Background(),
+			&Peer{Name: "remote", BaseURL: srv.URL}, "me", "cli", "worker", "ping")
+		if err == nil {
+			t.Fatal("a 403 response should fail the DM")
+		}
+		if !strings.Contains(err.Error(), "403") {
+			t.Errorf("error should mention the status code: %v", err)
+		}
+	})
+
+	t.Run("application error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(DMResponse{OK: false, Error: "unknown bot: ghost"})
+		}))
+		defer srv.Close()
+
+		_, err := NewClient().SendDM(context.Background(),
+			&Peer{Name: "remote", BaseURL: srv.URL}, "me", "cli", "ghost", "ping")
+		if err == nil {
+			t.Fatal("{ok:false} should fail the DM")
+		}
+		if !strings.Contains(err.Error(), "unknown bot: ghost") {
+			t.Errorf("remote error text lost: %v", err)
+		}
+	})
+
+	t.Run("not json", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("<html>not the relay endpoint</html>"))
+		}))
+		defer srv.Close()
+
+		// The relay endpoint is unauthenticated by design and may be fronted by
+		// something else; a non-JSON 200 must be a clear error, not a silent "".
+		if _, err := NewClient().SendDM(context.Background(),
+			&Peer{Name: "remote", BaseURL: srv.URL}, "me", "cli", "worker", "ping"); err == nil {
+			t.Fatal("a non-JSON response should fail the DM")
+		}
+	})
 }

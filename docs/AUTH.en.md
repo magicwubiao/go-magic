@@ -211,7 +211,7 @@ data = s.get(f'{base}{ticket}').content      # or hand the URL to <a href>
 * **Attachment refs already persisted in old sessions** may still carry `?token=` (left over from the old upload response). The web client strips that query param on read (`stripLegacyUrlToken` in `web/src/api/sessions.ts`), so old sessions keep rendering — **no data migration needed**.
 * **CLI / TUI** read and write the local filesystem directly and never touch these HTTP endpoints.
 * **The desktop app (go-magic-desktop)** spawns the very same Go binary and embeds the same web UI, so it follows the new model automatically — no changes needed.
-* **Cross-machine relay** (`bot_mode.relay_token`) uses a completely separate check and is untouched.
+* **Cross-machine relay** (`bot_mode.relay_token`) uses a completely separate check from session tokens: `/api/relay/v1/dm` validates only the shared secret in the request body (constant-time compare), and with no secret configured it accepts loopback (127.0.0.1) callers only. Managing the peer table (`/api/peers`) is an admin surface and requires a session token like every other `/api/*` route.
 * **Public share links** `/api/fs/shared/<token>` carry a token issued by `POST /api/fs/share` — a credential for "let an outsider view one file", not a login credential. Unchanged (TTL bound, hidden files skipped in directory listings).
 * **Header-authenticated use** (scripts, `curl`, server-side integrations) behaves exactly as before: `/api/fs/read`, `/api/fs/download`, `/api/fs/zip`, `/api/uploads/` and `/api/events` still accept header credentials.
 

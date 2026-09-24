@@ -251,7 +251,7 @@ magic config reset     # 恢复默认
     "inject_bot_protocol": true,   // nil 时运行时默认开启
     "history_window": 200,         // 每个 Bot 保留的历史消息数，0 = 200
     "turn_timeout_minutes": 5,     // 单回合超时，0 = 5 分钟
-    "relay_token": ""              // 跨机器 relay 共享密钥，空 = 匿名（仅可信网络）
+    "relay_token": ""              // 跨机器 relay 共享密钥；空 = 只接受本机（127.0.0.1）请求
   },
 
   "gateway": {
@@ -662,7 +662,10 @@ magic peer remove lab-b
 - 本机身份：`<magicHome>/instance_id`
 - relay 端点：`POST http://<host>:<port>/api/relay/v1/dm`，消息带 `[relay from@instance]` 前缀
 - **DM 是阻塞的**：会一直等到远端 Bot 跑完整个回合，所以远端慢 = 命令慢（客户端超时 6 分钟，响应上限 4MB）
-- `relay_token` 为空时 relay 接受匿名请求，仅限可信网络
+- `relay_token` 为空时 relay **只接受来自本机（127.0.0.1）的请求**，跨机 peer 一律 403；要跨机私聊必须在接收方设置 `relay_token`
+- relay 有按来源 IP 的限流（默认 30 次/分钟），防止单个 peer 灌爆 Bot 队列
+- relay 只信任 TCP 连接的真实来源地址（`RemoteAddr`），不解析 `X-Forwarded-For`；放在反向代理后面时请确认代理转发的是真实 peer 地址
+- Web 面板左侧「跨机 Peer」页等价于本节命令：查看/复制本机实例 ID、增删 peer、直接向远端 Bot 发消息（失败时原样显示远端报错）
 
 ---
 
@@ -673,11 +676,14 @@ magic peer remove lab-b
 ```bash
 magic rooms create design-review --members researcher,coder --topic "架构评审"
 magic rooms send <room-id> "Review the plan" --target researcher
+magic rooms edit <room-id> --members researcher,coder,writer --rounds 2
 magic rooms messages <room-id>
 magic rooms show <room-id>
 magic rooms list
 magic rooms remove <room-id>
 ```
+
+`magic rooms edit` 只应用你实际传入的参数：`--topic ""` 会清空话题，未传的字段保持原值（改成员视为整体替换，需 2–6 个已存在的 Bot）。
 
 ---
 

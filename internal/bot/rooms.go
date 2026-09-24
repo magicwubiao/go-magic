@@ -254,9 +254,15 @@ func (m *Manager) SendToRoom(ctx context.Context, roomID, text, target string) (
 // --- Coordinator ---
 
 // startRoomLocked brings a room online (idempotent). Safe before Start().
+// No-op once the manager is stopping (a wg.Add after Stop's wg.Wait is a race).
 func (m *Manager) startRoomLocked(cfg *RoomConfig) {
 	key := strings.ToLower(cfg.ID)
 	m.mu.Lock()
+	if m.stopping {
+		m.mu.Unlock()
+		log.Debugf("[BotMode] Ignoring start of room %q: manager is stopping", cfg.Name)
+		return
+	}
 	if _, exists := m.rooms[key]; exists {
 		m.mu.Unlock()
 		return
@@ -267,10 +273,11 @@ func (m *Manager) startRoomLocked(cfg *RoomConfig) {
 		stopCh:    make(chan struct{}),
 	}
 	m.rooms[key] = rt
-	m.mu.Unlock()
-
+	// Add while mu is held so it can't race Stop()'s wg.Wait().
 	m.wg.Add(1)
 	go m.roomLoop(rt)
+	m.mu.Unlock()
+
 	log.Infof("[BotMode] Room %q is online", cfg.Name)
 }
 
@@ -294,6 +301,10 @@ func (m *Manager) roomLoop(rt *roomRuntime) {
 // members take turns (target first), up to MaxRounds rounds; each bot speaks
 // at most once per round; the round stops early when a bot escalates to
 // @user or when nobody has anything to add.
+//
+// It also aborts as soon as the room is torn down (UpdateRoom hot-reload or
+// DeleteRoom) or the manager shuts down: without that check a removed room
+// kept delivering turns to its old members for the rest of the round.
 func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	room := rt.cfg
 	// Persist the human's message into the room log.
@@ -311,16 +322,27 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	needsUser := false
 
 	for round := 0; round < maxRounds; round++ {
+		if m.roomClosed(rt) {
+			break
+		}
 		anySpoke := false
 		for _, member := range members {
+			if m.roomClosed(rt) {
+				break
+			}
 			// Skip members that were removed mid-round.
 			if m.FindByTag(member) == nil {
 				continue
 			}
 			history, _ := m.loadRoomHistory(room.ID)
 			prompt := m.buildRoomPrompt(room, member, history, round, maxRounds)
-			reply, err := m.sendRoomTurn(room.ID, member, prompt)
+			reply, err := m.sendRoomTurn(rt, member, prompt)
 			if err != nil {
+				// Room torn down mid-turn: stop silently. Appending the error
+				// here would recreate the room log DeleteRoom just removed.
+				if m.roomClosed(rt) {
+					break
+				}
 				log.Warnf("[BotMode] Room %s member %s turn failed: %v", room.Name, member, err)
 				m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")")
 				continue
@@ -350,13 +372,28 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	}
 }
 
+// roomClosed reports whether this room's coordinator was torn down (room
+// deleted or hot-reloaded) or the whole manager is shutting down.
+func (m *Manager) roomClosed(rt *roomRuntime) bool {
+	select {
+	case <-rt.stopCh:
+		return true
+	case <-m.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
 // sendRoomTurn enqueues one room turn to a member bot and waits for its
-// worker to finish (serialized with the bot's other chats).
-func (m *Manager) sendRoomTurn(roomID, botName, text string) (string, error) {
+// worker to finish (serialized with the bot's other chats). The wait also
+// ends when the room is closed, so a hot-reloaded room releases its
+// coordinator immediately instead of after the slowest member replies.
+func (m *Manager) sendRoomTurn(rt *roomRuntime, botName, text string) (string, error) {
 	msg := pendingMessage{
 		Text:    text,
-		From:    "room:" + roomID,
-		RoomID:  strings.ToLower(roomID),
+		From:    "room:" + rt.cfg.ID,
+		RoomID:  strings.ToLower(rt.cfg.ID),
 		replyCh: make(chan turnResult, 1),
 	}
 	if err := m.EnqueueMsg(botName, msg); err != nil {
@@ -365,6 +402,8 @@ func (m *Manager) sendRoomTurn(roomID, botName, text string) (string, error) {
 	select {
 	case res := <-msg.replyCh:
 		return res.Reply, res.Err
+	case <-rt.stopCh:
+		return "", errors.New("room closed")
 	case <-m.stopCh:
 		return "", errors.New("bot manager shutting down")
 	}

@@ -23,6 +23,7 @@ A bot can stop the round by starting its reply with @user (escalation).
 Quick start:
   magic rooms create <name> --members researcher,coder
   magic rooms send <room-id> "Review the plan" [--target researcher]
+  magic rooms edit <room-id> --members researcher,coder,writer --rounds 2
   magic rooms list`,
 }
 
@@ -46,8 +47,21 @@ func init() {
 	}
 	sendCmd.Flags().StringVar(&roomsFlagTarget, "target", "", "Bot mention tag to address first")
 
+	editCmd := &cobra.Command{
+		Use:   "edit <room-id>",
+		Short: "Edit a room's name, topic, members or limits",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runRoomsEdit,
+	}
+	editCmd.Flags().StringVar(&roomsFlagName, "name", "", "New room name")
+	editCmd.Flags().StringVar(&roomsFlagTopic, "topic", "", "New room topic")
+	editCmd.Flags().StringVar(&roomsFlagMembers, "members", "", "Comma-separated bot names (2-6); replaces the member list")
+	editCmd.Flags().IntVar(&roomsFlagRounds, "rounds", 0, "Max speaking rounds per message (default 3)")
+	editCmd.Flags().IntVar(&roomsFlagMaxMessages, "max-messages", 0, "Recent messages per bot context (default 10)")
+
 	roomsCmd.AddCommand(createCmd)
 	roomsCmd.AddCommand(sendCmd)
+	roomsCmd.AddCommand(editCmd)
 	roomsCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all group chat rooms",
@@ -75,9 +89,12 @@ func init() {
 }
 
 var (
-	roomsFlagMembers string
-	roomsFlagTopic   string
-	roomsFlagTarget  string
+	roomsFlagMembers     string
+	roomsFlagTopic       string
+	roomsFlagTarget      string
+	roomsFlagName        string
+	roomsFlagRounds      int
+	roomsFlagMaxMessages int
 )
 
 func newRoomsManager() (*bot.Manager, error) {
@@ -85,7 +102,7 @@ func newRoomsManager() (*bot.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return bot.NewManager(cfg, nil)
+	return bot.NewManager(cfg)
 }
 
 func runRoomsCreate(cmd *cobra.Command, args []string) error {
@@ -188,6 +205,72 @@ func runRoomsMessages(cmd *cobra.Command, args []string) error {
 	for _, m := range msgs {
 		fmt.Printf("[%s] @%s: %s\n", time.Unix(m.Timestamp, 0).Format("15:04:05"), m.From, m.Content)
 	}
+	return nil
+}
+
+// runRoomsEdit applies partial updates to a room. Only flags the caller
+// actually passed are applied, so `--topic ""` genuinely clears the topic while
+// omitting a flag leaves the stored value alone.
+func runRoomsEdit(cmd *cobra.Command, args []string) error {
+	if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("topic") &&
+		!cmd.Flags().Changed("members") && !cmd.Flags().Changed("rounds") &&
+		!cmd.Flags().Changed("max-messages") {
+		return fmt.Errorf("nothing to change: pass at least one of --name/--topic/--members/--rounds/--max-messages")
+	}
+
+	mgr, err := newRoomsManager()
+	if err != nil {
+		return err
+	}
+	if mgr == nil {
+		return fmt.Errorf("bot manager unavailable")
+	}
+	if err := mgr.Start(context.Background()); err != nil {
+		return err
+	}
+	defer mgr.Stop()
+
+	var members []string
+	if cmd.Flags().Changed("members") {
+		for _, m := range strings.Split(roomsFlagMembers, ",") {
+			t := strings.TrimSpace(m)
+			if t == "" {
+				continue
+			}
+			if mgr.FindByTag(t) == nil {
+				return fmt.Errorf("unknown bot %q; create it first with `magic bots create`", t)
+			}
+			members = append(members, t)
+		}
+		if len(members) < bot.MinRoomMembers {
+			return fmt.Errorf("--members requires at least %d bots", bot.MinRoomMembers)
+		}
+	}
+
+	room, err := mgr.UpdateRoom(args[0], func(r *bot.RoomConfig) {
+		if cmd.Flags().Changed("name") && strings.TrimSpace(roomsFlagName) != "" {
+			r.Name = strings.TrimSpace(roomsFlagName)
+		}
+		if cmd.Flags().Changed("topic") {
+			r.Topic = roomsFlagTopic
+		}
+		if cmd.Flags().Changed("members") {
+			r.Members = members
+		}
+		if cmd.Flags().Changed("rounds") {
+			r.MaxRounds = roomsFlagRounds
+		}
+		if cmd.Flags().Changed("max-messages") {
+			r.MaxMessages = roomsFlagMaxMessages
+		}
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✅ Room %q updated (%s)\n", room.Name, room.ID)
+	fmt.Printf("   Members: @%s\n", strings.Join(room.Members, ", @"))
+	fmt.Printf("   Topic:   %s\n", room.Topic)
+	fmt.Printf("   Rounds:  %d, context: last %d messages\n", room.Rounds(), room.MessagesCap())
 	return nil
 }
 

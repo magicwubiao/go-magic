@@ -66,6 +66,19 @@
             />
             <span style="margin-left: 12px; color: #999;">{{ t('config.botModeInjectProtocolHint') }}</span>
           </n-form-item>
+          <n-form-item :label="t('config.botModeRelayToken')">
+            <n-input
+              v-model:value="botModeForm.relay_token"
+              type="password"
+              show-password-on="click"
+              :placeholder="t('config.botModeRelayTokenPlaceholder')"
+              style="width: 320px;"
+            />
+            <span style="margin-left: 12px; color: #999;">{{ t('config.botModeRelayTokenHint') }}</span>
+          </n-form-item>
+          <n-alert v-if="!botModeForm.relay_token" type="info" style="margin-bottom: 12px;">
+            {{ t('config.botModeRelayTokenEmptyHint') }}
+          </n-alert>
           <n-alert v-if="botModeNeedsRestart" type="warning" style="margin-bottom: 12px;">
             {{ t('config.botModeRestartHint') }}
           </n-alert>
@@ -343,6 +356,9 @@ const botModeForm = reactive({
   turn_timeout_minutes: 5,
   // tri-state: null/'' = follow default, 'on'/'off' explicit
   inject_bot_protocol: '' as '' | 'on' | 'off',
+  // Shared secret remote peers must present on /api/relay/v1/dm. Empty means
+  // the relay only accepts calls from localhost.
+  relay_token: '',
 })
 // Track the originally loaded enabled flag to warn when a restart is needed.
 let botModeEnabledAtLoad = false
@@ -413,6 +429,7 @@ function populateFromConfig(cfg: any) {
   if (botMode.inject_bot_protocol === true) botModeForm.inject_bot_protocol = 'on'
   else if (botMode.inject_bot_protocol === false) botModeForm.inject_bot_protocol = 'off'
   else botModeForm.inject_bot_protocol = ''
+  botModeForm.relay_token = typeof botMode.relay_token === 'string' ? botMode.relay_token : ''
 
   const mem = cfg.memory || {}
   memoryForm.enabled = mem.enabled !== false
@@ -471,6 +488,9 @@ async function saveAgent() {
         inject_bot_protocol:
           botModeForm.inject_bot_protocol === 'on' ? true :
           botModeForm.inject_bot_protocol === 'off' ? false : undefined,
+        // Empty string is meaningful here: it means "only accept relay DMs
+        // from localhost", so it must be persisted rather than omitted.
+        relay_token: botModeForm.relay_token,
       },
     })
     await configStore.loadConfig()

@@ -497,7 +497,7 @@ func runBotsChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	mgr, err := bot.NewManager(cfg, nil)
+	mgr, err := bot.NewManager(cfg)
 	if err != nil {
 		return err
 	}
@@ -537,7 +537,7 @@ func runBotsMessage(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	mgr, err := bot.NewManager(cfg, nil)
+	mgr, err := bot.NewManager(cfg)
 	if err != nil {
 		return err
 	}
@@ -579,7 +579,7 @@ func runBotsRoutineAdd(cmd *cobra.Command, args []string) error {
 	if err != nil && cfgLocal == nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	mgr, err := bot.NewManager(cfgLocal, nil)
+	mgr, err := bot.NewManager(cfgLocal)
 	if err != nil {
 		return err
 	}
@@ -630,7 +630,7 @@ func runBotsRoutineToggle(botName, idOrName string, enable bool) error {
 	if err != nil && cfgLocal == nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	mgr, _ := bot.NewManager(cfgLocal, nil)
+	mgr, _ := bot.NewManager(cfgLocal)
 	if mgr != nil {
 		if _, err := mgr.UpdateRoutine(botName, idOrName, func(r *bot.RoutineConfig) {
 			r.Enabled = enable
@@ -688,7 +688,7 @@ func runBotsRoutineRemove(cmd *cobra.Command, args []string) error {
 	if err != nil && cfgLocal == nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	mgr, _ := bot.NewManager(cfgLocal, nil)
+	mgr, _ := bot.NewManager(cfgLocal)
 
 	if mgr != nil {
 		if err := mgr.RemoveRoutine(botName, idOrName); err == nil {

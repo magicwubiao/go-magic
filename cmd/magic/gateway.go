@@ -1123,7 +1123,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) {
 	go agentHandler.recoverInterruptedSessions(ctx)
 
 	// Start Bot Mode (named agent profiles) if enabled.
-	botMgr, err := bot.NewManager(cfg, store)
+	botMgr, err := bot.NewManager(cfg)
 	if err != nil {
 		fmt.Printf("Warning: Failed to initialize Bot Mode: %v\n", err)
 	} else if botMgr != nil {

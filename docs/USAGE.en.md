@@ -253,7 +253,7 @@ magic config reset     # restore defaults
     "inject_bot_protocol": true,   // runtime defaults to on when nil
     "history_window": 200,         // history messages kept per bot, 0 = 200
     "turn_timeout_minutes": 5,     // per-round timeout, 0 = 5 min
-    "relay_token": ""              // shared secret for cross-machine relay; empty = anonymous (trusted networks only)
+    "relay_token": ""              // shared secret for cross-machine relay; empty = localhost (127.0.0.1) callers only
   },
 
   "gateway": {
@@ -664,7 +664,10 @@ magic peer remove lab-b
 - This machine's identity: `<magicHome>/instance_id`
 - Relay endpoint: `POST http://<host>:<port>/api/relay/v1/dm`, messages prefixed with `[relay from@instance]`
 - **DM is blocking**: it waits until the remote bot finishes the whole round, so a slow remote = a slow command (client timeout 6 min, response cap 4MB)
-- With an empty `relay_token`, relay accepts anonymous requests (trusted networks only)
+- With an empty `relay_token`, relay **only accepts requests from localhost (127.0.0.1)**; remote peers get 403. Set `relay_token` on the receiving side to DM across machines
+- Relay is rate limited per source IP (default 30 requests/minute) so one peer cannot flood a bot's queue
+- Relay trusts only the TCP peer address (`RemoteAddr`) and does not parse `X-Forwarded-For`; behind a reverse proxy, make sure the real peer address is forwarded
+- The dashboard's **Peers** page mirrors these commands: copy this instance's ID, add/remove peers, and DM a remote bot directly (remote errors are shown verbatim)
 
 ---
 
@@ -675,11 +678,14 @@ A Room holds **2–6 bots**. After a human sends a message, members speak in tur
 ```bash
 magic rooms create design-review --members researcher,coder --topic "architecture review"
 magic rooms send <room-id> "Review the plan" --target researcher
+magic rooms edit <room-id> --members researcher,coder,writer --rounds 2
 magic rooms messages <room-id>
 magic rooms show <room-id>
 magic rooms list
 magic rooms remove <room-id>
 ```
+
+`magic rooms edit` applies only the flags you actually pass: `--topic ""` clears the topic, omitted fields keep their stored value, and `--members` replaces the member list (2-6 existing bots).
 
 ---
 

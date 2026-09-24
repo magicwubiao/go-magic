@@ -20,6 +20,48 @@ import (
 // in the file-backed store.
 var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
+// maskedEnvValue is the placeholder returned in place of a bot's env values.
+// It round-trips: the dashboard never sees the real secret, and a value left
+// untouched comes back as this sentinel, which mergeMaskedEnv translates back
+// to the stored secret instead of overwriting it.
+const maskedEnvValue = "***"
+
+// maskEnv hides env values while keeping the keys visible, so the dashboard can
+// still show which variables a bot has without shipping every bot's API keys
+// and tokens to any authenticated browser (and into browser caches, logs and
+// screenshots). Bots' secrets live in <workdir>/bots/<name>/.env, which stays
+// readable to the bot's own tools.
+func maskEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for k := range env {
+		out[k] = maskedEnvValue
+	}
+	return out
+}
+
+// mergeMaskedEnv applies an incoming env map onto the stored one. Values equal
+// to maskedEnvValue are "unchanged" placeholders, so the stored secret wins.
+// An empty incoming map means the caller removed every variable.
+func mergeMaskedEnv(stored, incoming map[string]string) map[string]string {
+	if len(incoming) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(incoming))
+	for k, v := range incoming {
+		if v == maskedEnvValue {
+			if old, ok := stored[k]; ok {
+				merged[k] = old
+				continue
+			}
+		}
+		merged[k] = v
+	}
+	return merged
+}
+
 // botToResponse serializes a bot config for the dashboard API.
 func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interface{} {
 	resp := map[string]interface{}{
@@ -34,7 +76,7 @@ func botToResponse(cfg *bot.Config, state *bot.RuntimeState) map[string]interfac
 		"skills":        cfg.Skills,
 		"memory":        cfg.Memory,
 		"avatar":        cfg.Avatar,
-		"env":           cfg.Env,
+		"env":           maskEnv(cfg.Env),
 		"hidden":        cfg.Hidden,
 		"active":        cfg.IsActive(),
 		"status":        cfg.Status,
@@ -301,7 +343,10 @@ func (s *Server) handleBotUpdate(w http.ResponseWriter, r *http.Request, name st
 			c.Avatar = *req.Avatar
 		}
 		if req.Env != nil {
-			c.Env = req.Env
+			// Values the caller did not touch come back as maskedEnvValue
+			// (botToResponse never exposes the plaintext), so keep the stored
+			// secret for those keys instead of persisting the mask itself.
+			c.Env = mergeMaskedEnv(c.Env, req.Env)
 		} else if req.ClearEnv != nil && *req.ClearEnv {
 			c.Env = nil
 		}

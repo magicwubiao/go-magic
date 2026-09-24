@@ -211,7 +211,7 @@ data = s.get(f'{base}{ticket}').content      # 或直接丢给 <a href>
 * **历史会话里落库的附件引用**可能仍带 `?token=`（旧上传响应留下的）。Web 端在读取时会剥离该查询参数（`web/src/api/sessions.ts` 中的 `stripLegacyUrlToken`），因此老会话照常显示，**不需要数据迁移**。
 * **CLI / TUI** 直接读写本地文件系统，不经过这些 HTTP 端点，不受影响。
 * **桌面端（go-magic-desktop）**启动的是同一个 Go 二进制并内嵌同一套 Web UI，自动跟随新模型，无需改动。
-* **跨机器 relay**（`bot_mode.relay_token`）与会话令牌是两套独立校验，本次改动不涉及。
+* **跨机器 relay**（`bot_mode.relay_token`）与会话令牌是两套独立校验：`/api/relay/v1/dm` 只校验请求体里的共享密钥（常量时间比较），未配置密钥时仅接受本机回环（127.0.0.1）请求；peer 表的增删查（`/api/peers`）属于管理接口，与其他 `/api/*` 一样要求会话令牌。
 * **对外分享链接** `/api/fs/shared/<token>` 里的 token 由 `POST /api/fs/share` 签发，是「给站外的人看一个文件」的独立凭据，不是登录凭据，保持不变（默认带 TTL，目录列举会跳过隐藏文件）。
 * 需要**带请求头**的场景（脚本、`curl`、服务端集成）行为完全不变：`/api/fs/read`、`/api/fs/download`、`/api/fs/zip`、`/api/uploads/`、`/api/events` 都照旧接受请求头凭据。
 

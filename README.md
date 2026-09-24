@@ -93,11 +93,12 @@ Cross-machine peers: DM a bot on another go-magic instance over HTTP(S).
 
 ```bash
 # on machine B (run the dashboard / gateway so the relay endpoint is up)
-magic config set bot_mode.relay_token "shared-secret"   # optional, recommended
+magic config set bot_mode.relay_token "shared-secret"   # required for remote peers
 # on machine A
 magic peer add lab-b http://192.168.1.20:8642 --token shared-secret
 magic peer dm lab-b researcher "What's the status of the report?"
 # peers live in <magic_home>/peers.json; this machine's id in <magic_home>/instance_id
+# without a relay_token, /api/relay/v1/dm only accepts calls from localhost
 ```
 
 ### MCP Protocol
