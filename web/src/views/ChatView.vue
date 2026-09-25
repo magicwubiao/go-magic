@@ -2,13 +2,37 @@
   <div class="chat-container">
     <!-- Session Sidebar -->
     <div class="session-sidebar" :class="{ 'mobile-expanded': mobileSessionExpanded }">
-      <!-- Mobile drag handle -->
-      <div class="mobile-session-handle" @click="mobileSessionExpanded = !mobileSessionExpanded">
-        <div class="handle-bar"></div>
+      <!-- 移动端顶部工具条：收起时它就是整个顶栏（桌面端隐藏）。
+           中间 = 当前会话标题（绝对居中，点按任意空白处展开/收起会话抽屉），
+           右侧 = 搜索 / 新建两个高频操作成组外露，不必先展开抽屉再找。
+           旧版这里只有一根 30px 的拖动条：既看不到当前会话是哪个，
+           任何操作也得先展开——这是移动端头部体验的最大短板。 -->
+      <div class="mobile-topbar" @click="mobileSessionExpanded = !mobileSessionExpanded">
+        <n-icon size="16" class="mobile-topbar-caret" :class="{ open: mobileSessionExpanded }"><ChevronDownOutline /></n-icon>
+        <span class="mobile-topbar-title">{{ mobileTopbarTitle }}</span>
+        <span class="mobile-topbar-actions">
+          <button
+            type="button"
+            class="mobile-topbar-btn"
+            :aria-label="t('chat.searchPlaceholder')"
+            @click.stop="expandAndFocusSearch"
+          >
+            <n-icon :size="18"><SearchOutline /></n-icon>
+          </button>
+          <button
+            type="button"
+            class="mobile-topbar-btn"
+            :aria-label="t('chat.newSession')"
+            @click.stop="createSession"
+          >
+            <n-icon :size="18"><AddOutline /></n-icon>
+          </button>
+        </span>
       </div>
       <div class="sidebar-header" v-show="!isMobile || mobileSessionExpanded">
         <!-- 会话搜索：本地过滤已加载会话；命中不足时自动补齐后端全量 web 会话 -->
         <n-input
+          ref="sidebarSearchInput"
           v-model:value="sessionSearch"
           size="small"
           round
@@ -21,8 +45,8 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
-        <!-- 新建聊天 -->
-        <n-button type="primary" class="new-chat-btn" @click="createSession" size="small">
+        <!-- 新建聊天（移动端隐藏：顶栏工具条上已有 + 按钮，避免重复入口） -->
+        <n-button v-show="!isMobile" type="primary" class="new-chat-btn" @click="createSession" size="small">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
           </template>
@@ -954,7 +978,18 @@ const inputValue = ref('')
 const chatTextareaRef = ref<{ focus: () => void } | null>(null)
 const rightSidebarMobileVisible = ref(false)
 const mobileSessionExpanded = ref(false)
+const sidebarSearchInput = ref<{ focus: () => void } | null>(null)
 const isMobile = ref(window.innerWidth <= 768)
+
+// 移动端顶部工具条的标题：当前会话名；尚未选中会话时给出引导文案
+const mobileTopbarTitle = computed(() => chatStore.activeSession?.title || t('chat.selectSession'))
+
+// 顶栏搜索按钮：展开会话抽屉并聚焦搜索框。
+// v-show 从 display:none 复显后必须等 nextTick 才能聚焦，同步调用会被 display:none 吞掉。
+function expandAndFocusSearch() {
+  mobileSessionExpanded.value = true
+  nextTick(() => sidebarSearchInput.value?.focus())
+}
 
 function handleResize() {
   isMobile.value = window.innerWidth <= 768
@@ -1946,6 +1981,8 @@ async function handleSessionClick(id: string) {
     if (hit) chatStore.mergeSessions([hit])
   }
   await selectSession(id)
+  // 移动端：选完会话自动收起顶部抽屉，把屏幕还给聊天区（旧版得再点一次拖动条）
+  if (isMobile.value) mobileSessionExpanded.value = false
 }
 
 // 侧栏会话列表：不再按分身分组，展示一份展平的统一列表（按更新时间/后端返回顺序）。
@@ -2832,6 +2869,8 @@ async function createSession() {
   // 后侧栏永远只有 20 条，滚动加载也因此无从触发（表现为"超出隐藏、
   // 动一下窗口/刷新滚轴才出现"）。整表刷新交给手动刷新按钮。
   sessionListRef.value?.scrollTo({ top: 0 })
+  // 移动端顶栏 + 新建后同样收起抽屉，直接进入新会话的聊天区
+  if (isMobile.value) mobileSessionExpanded.value = false
 }
 
 async function deleteSession(id: string) {
@@ -4899,8 +4938,8 @@ onActivated(() => {
   display: none;
 }
 
-/* Mobile drag handle - hidden on desktop */
-.mobile-session-handle {
+/* 移动端顶部工具条 - 桌面端隐藏（桌面侧栏常驻，没有抽屉态） */
+.mobile-topbar {
   display: none;
 }
 
@@ -4922,14 +4961,15 @@ onActivated(() => {
 
   .chat-container {
     flex-direction: column;
-    /* 顶部不再有固定工具条（已改为悬浮按钮，不占布局空间），容器占满全屏 */
+    /* 顶部工具条常驻一行（会话标题 + 搜索/新建），其下为可展开的会话抽屉 */
     height: 100vh;
   }
-  
+
   .session-sidebar {
     width: 100%;
     height: auto;
-    max-height: 30px;
+    /* 收起时抽屉里只有顶部工具条一行（44px + 1px 分隔线），48px 留一点余量 */
+    max-height: 48px;
     border-right: none;
     border-bottom: 1px solid #e0e0e0;
     transition: max-height 0.3s ease;
@@ -4947,12 +4987,81 @@ onActivated(() => {
     flex: 1;
   }
 
-  .mobile-session-handle {
+  /* 顶部工具条：标题 + 搜索/新建。收起时它就是抽屉的全部内容。
+     position:relative 供标题做绝对居中（左右控件宽度不等，flex:1 居中会偏）。 */
+  .mobile-topbar {
+    position: relative;
     display: flex;
-    justify-content: center;
     align-items: center;
-    padding: 10px 0;
+    min-height: 44px;
+    padding: 6px 10px 6px 12px;
+    box-sizing: border-box;
+    flex-shrink: 0;
     cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 展开时与下方搜索行之间补一条发丝线（收起时侧栏自带 border-bottom，不叠加） */
+  .session-sidebar.mobile-expanded .mobile-topbar {
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .mobile-topbar-caret {
+    flex-shrink: 0;
+    color: #999;
+    transition: transform 0.3s ease;
+  }
+
+  .mobile-topbar-caret.open {
+    transform: rotate(180deg);
+  }
+
+  /* 标题绝对居中：不随左侧箭头/右侧按钮的宽度差左右偏移。
+     max-width 预留两侧控件空间（左箭头约 28px、右按钮组约 76px，各留余量），
+     超长会话名省略号截断，不会压到两侧按钮。 */
+  .mobile-topbar-title {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    max-width: calc(100% - 176px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    text-align: center;
+  }
+
+  .mobile-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    margin-left: auto; /* 标题改为绝对定位后，按钮组靠右对齐 */
+  }
+
+  .mobile-topbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    color: #555;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-topbar-btn:active {
+    background: #ececec;
+    color: #333;
   }
 
   /* 移动端屏幕窄，按钮往边角收一点，别压住消息正文 */
@@ -4961,18 +5070,6 @@ onActivated(() => {
     bottom: 12px;
   }
 
-  .handle-bar {
-    width: 56px;
-    height: 6px;
-    border-radius: 3px;
-    background: #bbb;
-    transition: background 0.2s;
-  }
-
-  .mobile-session-handle:hover .handle-bar {
-    background: #888;
-  }
-  
   .chat-main {
     flex: 1;
     min-height: 0;

@@ -16,7 +16,7 @@
           >{{ t('rooms.title') }}</button>
         </div>
         <n-space :size="4" align="center">
-          <n-button size="tiny" type="primary" :disabled="viewMode === 'bots' && botModeDisabled" @click="handleRailCreate">
+          <n-button size="small" class="rail-create-btn" type="primary" :disabled="viewMode === 'bots' && botModeDisabled" @click="handleRailCreate">
             <template #icon><n-icon><AddOutline /></n-icon></template>
           </n-button>
         </n-space>
@@ -1997,6 +1997,15 @@ async function loadCandidates() {
   gap: 8px;
   padding: 12px 14px 8px;
   flex-shrink: 0;
+}
+
+/* 新建按钮：放大尺寸 */
+.rail-create-btn {
+  width: 32px;
+  height: 32px;
+}
+.rail-create-btn .n-button__icon {
+  font-size: 18px;
 }
 
 /* Segmented view switcher: Bot | 群聊 */
