@@ -137,6 +137,9 @@ function $t(key: string, params?: Record<string, unknown>): string {
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<string | null>(null)
+  // 会话级规划模式开关：sessionId -> 是否启用 plan-guided execution。
+  const planModeSessions = reactive<Record<string, boolean>>({})
+  const planModeLoading = ref(false)
   const error = ref<ChatError | null>(null)
   const sessionsLoading = ref(false)
   // 与 sessionsLoading 分开：那个标志由 loadSessions 驱动，而 loadSessions 在
@@ -539,6 +542,41 @@ export const useChatStore = defineStore('chat', () => {
     restorePendingApprovals(id)
     // 恢复待答复的澄清卡片（AI 需求不明确时的提问）。
     restorePendingClarifies(id)
+    // 恢复规划模式开关状态（会话级持久化）。
+    void loadPlanMode(id)
+  }
+
+  // 当前会话的规划模式是否开启。
+  const planModeEnabled = computed<boolean>(() =>
+    activeSessionId.value ? !!planModeSessions[activeSessionId.value] : false,
+  )
+
+  // 从服务端加载某会话的规划模式状态（会话级持久化，刷新后恢复）。
+  async function loadPlanMode(id: string): Promise<void> {
+    try {
+      const enabled = await sessionsApi.getPlanMode(id)
+      planModeSessions[id] = enabled
+    } catch (e) {
+      console.error('Failed to load plan mode:', e)
+    }
+  }
+
+  // 切换当前会话的规划模式开关，并同步到服务端持久化。
+  async function togglePlanMode(enabled: boolean): Promise<boolean> {
+    const id = activeSessionId.value
+    if (!id) return false
+    planModeLoading.value = true
+    try {
+      const next = await sessionsApi.setPlanMode(id, enabled)
+      planModeSessions[id] = next
+      return next
+    } catch (e) {
+      console.error('Failed to set plan mode:', e)
+      error.value = { message: e instanceof Error ? e.message : 'Failed to set plan mode' }
+      return planModeSessions[id] ?? false
+    } finally {
+      planModeLoading.value = false
+    }
   }
 
   // 返回是否成功：调用方需要据此给用户反馈（曾经无条件 catch + console.error，
@@ -2061,6 +2099,10 @@ export const useChatStore = defineStore('chat', () => {
   return {
     sessions,
     activeSessionId,
+    planModeEnabled,
+    planModeLoading,
+    togglePlanMode,
+    loadPlanMode,
     messages,
     streaming,
     busy,

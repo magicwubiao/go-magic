@@ -53,6 +53,14 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 规划模式开关：GET 返回当前状态，POST body {"enabled": bool} 切换。
+	// 会话级持久化，刷新页面后仍保持。
+	if strings.HasSuffix(path, "/plan-mode") {
+		sessionID := strings.TrimSuffix(path, "/plan-mode")
+		s.handleSessionPlanMode(w, r, sessionID)
+		return
+	}
+
 	// 清空待发队列（POST /queue/clear），但**不打断正在执行的回合**。
 	// 必须排在下面带通配 {turnId} 的 /queue/ 分支**之前**：否则 "clear"
 	// 会被当作一个 turnId 收走，请求落到 handleSessionQueueItem 上。
@@ -1190,6 +1198,35 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request, ses
 		"dropped":     res.pending,
 		"queue_depth": 0,
 	})
+}
+
+// handleSessionPlanMode GET/POST /api/sessions/{id}/plan-mode — 会话级规划模式
+// 开关。GET 返回当前状态；POST body {"enabled": bool} 切换并作用于运行中的
+// agent（若存在），状态持久化到会话记录，刷新页面后仍保持。
+func (s *Server) handleSessionPlanMode(w http.ResponseWriter, r *http.Request, sessionID string) {
+	switch r.Method {
+	case http.MethodGet:
+		jsonResponse(w, map[string]interface{}{
+			"session_id": sessionID,
+			"enabled":    s.planModeEnabled(sessionID),
+		})
+	case http.MethodPost:
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		s.setPlanMode(sessionID, req.Enabled)
+		jsonResponse(w, map[string]interface{}{
+			"session_id": sessionID,
+			"enabled":    req.Enabled,
+			"ok":         true,
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleSessionQueueClear POST /api/sessions/{id}/queue/clear — 只清空待发队列，

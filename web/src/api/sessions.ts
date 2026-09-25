@@ -839,6 +839,23 @@ export async function cancelGeneration(sessionId: string): Promise<{ cancelled: 
   return { cancelled: !!res.cancelled, dropped: res.dropped || 0 }
 }
 
+// getPlanMode 查询会话当前的规划模式开关状态。
+export async function getPlanMode(sessionId: string): Promise<boolean> {
+  const res = await request<{ enabled?: boolean }>(
+    `/sessions/${encodeURIComponent(sessionId)}/plan-mode`,
+  )
+  return !!res.enabled
+}
+
+// setPlanMode 切换会话的规划模式开关（持久化到服务端）。
+export async function setPlanMode(sessionId: string, enabled: boolean): Promise<boolean> {
+  const res = await request<{ enabled?: boolean }>(
+    `/sessions/${encodeURIComponent(sessionId)}/plan-mode`,
+    { method: 'POST', body: JSON.stringify({ enabled }) },
+  )
+  return !!res.enabled
+}
+
 // clearQueuedTurns 清空待发队列，但保留正在执行的回合。
 //
 // 与 cancelGeneration 的区别：这里不取消运行中的回合，用户想撤掉后面排着的

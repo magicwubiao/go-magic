@@ -16,9 +16,6 @@
           >{{ t('rooms.title') }}</button>
         </div>
         <n-space :size="4" align="center">
-          <n-button quaternary size="tiny" :loading="viewMode === 'bots' ? botsStore.loading : roomsStore.loading" @click="handleRailRefresh">
-            <template #icon><n-icon><RefreshOutline /></n-icon></template>
-          </n-button>
           <n-button size="tiny" type="primary" :disabled="viewMode === 'bots' && botModeDisabled" @click="handleRailCreate">
             <template #icon><n-icon><AddOutline /></n-icon></template>
           </n-button>
@@ -825,7 +822,7 @@ import {
 } from 'naive-ui'
 import {
   AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
-  CreateOutline, EllipsisHorizontalOutline, PeopleOutline, RefreshOutline, SearchOutline,
+  CreateOutline, EllipsisHorizontalOutline, PeopleOutline, SearchOutline,
   TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
@@ -873,15 +870,6 @@ function switchView(v: 'bots' | 'rooms') {
 function handleRailCreate() {
   if (viewMode.value === 'rooms') openRoomCreate()
   else openCreateModal()
-}
-
-function handleRailRefresh() {
-  if (viewMode.value === 'rooms') {
-    void roomsStore.loadRooms()
-    if (roomsStore.activeRoomId) void roomsStore.refreshMessages()
-  } else {
-    void botsStore.loadBots()
-  }
 }
 
 const form = reactive({

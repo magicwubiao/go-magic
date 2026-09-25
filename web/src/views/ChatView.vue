@@ -21,12 +21,6 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
-        <!-- 刷新会话列表 -->
-        <n-button size="small" quaternary circle :title="t('chat.refreshSessions')" :loading="sidebarRefreshing" @click="refreshSessions">
-          <template #icon>
-            <n-icon :component="RefreshOutline" />
-          </template>
-        </n-button>
         <!-- 新建聊天 -->
         <n-button type="primary" class="new-chat-btn" @click="createSession" size="small">
           <template #icon>
@@ -419,13 +413,17 @@
             </div>
             <!-- 操作常驻显示（触屏无 hover，悬停才出现则永远点不到） -->
             <div class="queue-row-actions">
+              <!-- 引导按钮（置于原"重试"位置）：把本条排队内容注入正在运行的回合
+                   直接发送——模型在下一次 LLM 调用前看到它并调整方向，不排队、
+                   不打断生成。引导成功后本条从队列移除，不再重复执行。 -->
               <button
                 type="button"
-                class="queue-row-btn"
-                :title="t('chat.queuedRetry')"
-                @click="retryQueued(q.turnId)"
+                class="queue-row-btn queue-row-btn-guide"
+                :title="t('chat.guideSendHint')"
+                :disabled="!chatStore.busy"
+                @click="handleGuide(q.turnId, q.content)"
               >
-                <n-icon size="15"><RefreshOutline /></n-icon>
+                <n-icon size="15"><FlashOutline /></n-icon>
               </button>
               <button
                 type="button"
@@ -489,7 +487,7 @@
         </n-space>
       </div>
 
-      <!-- ChatGPT-style input box -->
+      <!-- ChatGPT-style input box（支持折叠/展开） -->
       <div class="input-area">
         <!-- Command suggestions -->
         <div v-if="commandSuggestions.length > 0" class="command-suggestions">
@@ -518,18 +516,33 @@
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
             <div class="toolbar-left">
-              <!-- File upload -->
+              <!-- 工具按钮：上传文件 / 计划模式 合并到加号下拉菜单中 -->
+              <n-dropdown
+                trigger="click"
+                placement="bottom-start"
+                :options="toolbarMenuOptions"
+                @select="handleToolbarMenuSelect"
+                @update:show="(v: boolean) => (toolbarMenuOpen = v)"
+              >
+                <n-button
+                  size="tiny"
+                  quaternary
+                  class="toolbar-btn"
+                  :title="t('chat.toolbarActions')"
+                >
+                  <template #icon>
+                    <n-icon><AddOutline /></n-icon>
+                  </template>
+                </n-button>
+              </n-dropdown>
+              <!-- 隐藏的上传入口：由下拉菜单"上传文件"触发 -->
               <n-upload
+                ref="toolbarUploadRef"
                 :show-file-list="false"
                 :multiple="true"
                 :custom-request="handleFileSelect"
-              >
-                <n-button size="tiny" quaternary class="toolbar-btn" :title="t('chat.uploadHint')">
-                  <template #icon>
-                    <n-icon><AttachOutline /></n-icon>
-                  </template>
-                </n-button>
-              </n-upload>
+                class="toolbar-upload-hidden"
+              />
             </div>
             <div class="toolbar-right">
               <n-select
@@ -567,27 +580,8 @@
                   <n-icon><StopCircleOutline /></n-icon>
                 </template>
               </n-button>
-              <!-- 引导键：回合进行中且输入框有纯文本时出现。点击把这条消息注入
-                   正在运行的回合——模型在下一次 LLM 调用前看到它并调整方向，
-                   生成不被打断（区别于发送：busy 期间发送是排队，作为新回合
-                   稍后执行）。引导只支持纯文本，带附件时不显示（服务端对带
-                   附件的引导会回落入队）。 -->
               <n-button
-                v-if="canGuide"
-                size="small"
-                circle
-                secondary
-                type="info"
-                @click="handleGuide"
-                :title="t('chat.guideSendHint')"
-                class="send-circle-btn"
-              >
-                <template #icon>
-                  <n-icon><FlashOutline /></n-icon>
-                </template>
-              </n-button>
-              <n-button
-                v-else-if="!chatStore.busy || hasComposerContent"
+                v-else
                 type="primary"
                 size="small"
                 circle
@@ -867,7 +861,7 @@
 import { ref, computed, h, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
-import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NTag, NText, NTooltip, NUpload } from 'naive-ui'
+import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, NUpload } from 'naive-ui'
 import { marked } from 'marked'
 import { stripZeroWidth } from '@/utils/text'
 import {
@@ -909,8 +903,8 @@ import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { AttachOutline, SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, RefreshOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
-import type { UploadCustomRequestOptions } from 'naive-ui'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, GitBranchOutline } from '@vicons/ionicons5'
+import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
@@ -1194,6 +1188,8 @@ const modelSelectRef = ref<{ $el?: HTMLElement } | null>(null)
 // 无论触发器在屏幕什么位置、视口多窄，naive 总能选到放得下的一种，不再出现左侧被裁。
 // 静态 CSS 钳制做不到这一点：可用空间取决于触发器位置，是动态值。
 const modelMenuMaxWidth = ref('660px')
+// 隐藏的上传入口（由工具下拉菜单"上传文件"触发），通过 openOpenFileDialog 打开系统文件选择器。
+const toolbarUploadRef = ref<{ openOpenFileDialog: () => void } | null>(null)
 
 function onModelMenuShow(show: boolean) {
   if (!show) return
@@ -1393,14 +1389,6 @@ async function editQueued(turnId: string) {
   })
 }
 
-// 重发一条排队消息：内容与附件原样再提交一次，效果是这条排到队尾。
-// 服务端在入队前先摘掉原条目（retry_of），因此不会被查重逻辑合并成一条。
-async function retryQueued(turnId: string) {
-  const sessionId = chatStore.activeSessionId
-  if (!sessionId) return
-  await chatStore.retryQueuedMessage(sessionId, turnId)
-}
-
 // ---- 排队区拖动排序 ----
 // 用 HTML5 原生 drag 事件而不是自造指针逻辑：桌面端浏览器已经处理好了
 // 拖动阈值、拖动时的手指/光标形态、以及跨元素拖放的语义，自造一套只会
@@ -1510,13 +1498,6 @@ const uploadingFiles = ref<Set<string>>(new Set())
 // 可见——busy（流式/排队）期间把它换成停止键会让打好的字发不出去。
 const hasComposerContent = computed(
   () => !!inputValue.value.trim() || selectedFiles.value.length > 0,
-)
-
-// canGuide 决定引导键（⚡）是否出现：回合进行中（busy）+ 输入框有纯文本 +
-// 没有附件。引导只注入文本（服务端对带附件的引导回落入队），所以带附件时
-// 不给入口，避免用户以为附件也会被模型立刻看到。
-const canGuide = computed(
-  () => !!inputValue.value.trim() && chatStore.busy && selectedFiles.value.length === 0,
 )
 
 function formatFileSize(bytes: number): string {
@@ -2162,8 +2143,85 @@ async function uploadNativeFile(nativeFile: File): Promise<boolean> {
     uploadingFiles.value.delete(fileKey)
   }
 }
+// 工具下拉菜单：上传文件（规划模式已直接显示在工具栏上，不再放这里）。
+const toolbarMenuOpen = ref(false)
+
+// 输入框折叠/展开状态。
+
+const toolbarMenuOptions = computed<DropdownOption[]>(() => {
+  return [
+    {
+      label: t('chat.uploadFile'),
+      key: 'upload',
+      // 无活动会话时禁用上传
+      disabled: !chatStore.activeSessionId,
+    },
+    {
+      key: 'divider-1',
+      type: 'divider',
+    },
+    {
+      // 计划模式：合并到加号下拉菜单中，用开关显示当前状态。
+      // 注意：naive-ui 的下拉菜单只有在 type: 'render' 时才会调用 render 函数，
+      // 否则会被当作普通选项渲染（没有 label/icon 就显示为空白行）。
+      key: 'plan-mode',
+      type: 'render',
+      render: () =>
+        h(
+          'div',
+          {
+            class: 'plan-mode-menu-item',
+            // 无活动会话时禁用计划模式
+            onClick: (e: MouseEvent) => {
+              e.stopPropagation()
+              if (!chatStore.activeSessionId) return
+              togglePlanMode()
+            },
+          },
+          [
+            h(
+              'span',
+              { class: 'plan-mode-menu-icon' },
+              { default: () => h(NIcon, { size: 14 }, { default: () => h(GitBranchOutline) }) }
+            ),
+            h('span', { class: 'plan-mode-menu-label' }, t('chat.taskPlanning')),
+            h(NSwitch, {
+              size: 'small',
+              value: chatStore.planModeEnabled,
+              loading: chatStore.planModeLoading,
+              // 无活动会话时禁用计划模式开关
+              disabled: !chatStore.activeSessionId,
+              // 阻止冒泡：否则点击开关会同时触发外层 div 的 onClick，
+              // 导致 togglePlanMode 被调用两次、状态来回切换。
+              onClick: (e: MouseEvent) => e.stopPropagation(),
+              'onUpdate:value': () => togglePlanMode(),
+            }),
+          ]
+        ),
+    },
+  ]
+})
+function handleToolbarMenuSelect(key: string) {
+  if (key === 'upload') {
+    // 无活动会话时禁用上传
+    if (!chatStore.activeSessionId) return
+    toolbarUploadRef.value?.openOpenFileDialog()
+  }
+}
+
+// 规划模式开关：切换当前会话的 plan-guided execution。
+// 无活动会话时不自动新建会话，直接不执行（开关已禁用）。
+async function togglePlanMode() {
+  if (!chatStore.activeSessionId) return
+  await chatStore.togglePlanMode(!chatStore.planModeEnabled)
+}
 
 async function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
+  // 无活动会话时禁止上传
+  if (!chatStore.activeSessionId) {
+    onError()
+    return
+  }
   const nativeFile = file.file
   if (!nativeFile) {
     onError()
@@ -2629,16 +2687,17 @@ function selectCommand(suggestion: string) {
   commandSuggestions.value = []
 }
 
-// 引导（steer）：回合进行中把输入框内容注入正在运行的回合——模型在下一次
-// LLM 调用前看到它并调整方向，不排队、不打断当前生成。与 send 不同：引导
-// 只携带纯文本（带附件的引导服务端会回落成普通排队消息），且不走命令解析。
-// 提交失败由 store 回滚乐观气泡并置 error；输入框即刻清空保持手感一致。
-async function handleGuide() {
-  const content = inputValue.value.trim()
-  if (!content) return
-  inputValue.value = ''
-  commandSuggestions.value = []
-  await chatStore.guideMessage(content)
+// 引导（steer）：把排队中的这条内容注入正在运行的回合——模型在下一次 LLM
+// 调用前看到它并调整方向，不排队、不打断当前生成。与 send 不同：引导只携带
+// 纯文本（带附件的引导服务端会回落成普通排队消息），且不走命令解析。
+// 引导成功后该条已不再需要排队，随即从队列移除，避免稍后又被重复执行。
+async function handleGuide(turnId: string, content: string) {
+  const text = content.trim()
+  if (!text) return
+  await chatStore.guideMessage(text)
+  const sessionId = chatStore.activeSessionId
+  if (!sessionId) return
+  await chatStore.removeQueuedMessage(sessionId, turnId)
 }
 
 async function send() {
@@ -2773,22 +2832,6 @@ async function createSession() {
   // 后侧栏永远只有 20 条，滚动加载也因此无从触发（表现为"超出隐藏、
   // 动一下窗口/刷新滚轴才出现"）。整表刷新交给手动刷新按钮。
   sessionListRef.value?.scrollTo({ top: 0 })
-}
-
-const sidebarRefreshing = ref(false)
-async function refreshSessions() {
-  if (sidebarRefreshing.value) return
-  sidebarRefreshing.value = true
-  try {
-    await chatStore.loadSessions()
-    if (allWebSessions.value) {
-      // 候选缓存已建立：作废后重建，保证刷新后搜索结果同样是最新的
-      allWebSessions.value = null
-      await loadFullSessions()
-    }
-  } finally {
-    sidebarRefreshing.value = false
-  }
 }
 
 async function deleteSession(id: string) {
@@ -3593,6 +3636,16 @@ onActivated(() => {
   overflow-y: auto;
 }
 
+/* 引导按钮（排队操作区，原"重试"位置）：把排队内容注入正在运行的回合直接
+   发送。用 info 蓝区分于编辑/删除，hover 时高亮。 */
+.queue-row-btn.queue-row-btn-guide {
+  color: var(--primary-color, #18a058);
+}
+.queue-row-btn.queue-row-btn-guide:hover {
+  background: rgba(24, 160, 88, 0.1);
+  color: var(--primary-color, #18a058);
+}
+
 .queue-row {
   display: flex;
   align-items: center;
@@ -4193,6 +4246,20 @@ onActivated(() => {
 .toolbar-btn {
   padding: 4px 8px;
 }
+
+/* 工具下拉里隐藏的上传入口：隐藏 n-upload 默认触发按钮，
+   仅保留内部 file input（供 openFileDialog 触发文件选择）。 */
+.toolbar-upload-hidden .n-upload-trigger,
+.toolbar-upload-hidden .n-upload-trigger-button {
+  display: none;
+}
+
+/* 输入框折叠态：只显示一条细的展开栏 */
+
+/* 加号下拉菜单中的「计划模式」行（type:'render' 自定义行）样式【不在这里】：
+   该行的 DOM 由 render 函数创建、且挂在 naive-ui 组件（无 __scopeId）的渲染里，
+   拿不到 data-v-xxx 属性，scoped 规则对它一条都不生效。
+   样式统一写在文件末尾的全局 <style> 里（见 .plan-mode-menu-item）。 */
 
 .workdir-btn {
   display: flex;
@@ -5050,5 +5117,49 @@ onActivated(() => {
   text-overflow: clip !important;
 }
 
+/* 加号下拉菜单里的「计划模式」行（naive-ui type:'render' 自定义行）。
+   之所以必须放全局：菜单 teleport 到 body，且这一行由 render 函数创建，
+   既不在 ChatView 模板里、也不在 naive-ui 组件（无 __scopeId）的渲染里，
+   所以它身上没有 data-v-xxx —— 写在 <style scoped> 里的规则一条都不会命中
+   （症状：图标/文字/开关挤在一行、左侧贴菜单边缘、开关紧贴文字）。
 
+   另外 naive-ui 的 DropdownRenderOption 只渲染一个裸 div，不套
+   .n-dropdown-option-body 的 34px 行高、36px 图标前缀、悬停底色，
+   这里手工对齐：左边 4px(悬停底色内缩) + 7px = 11px，正是 36px 图标前缀里
+   14px 图标的居中位置；右边 4px + 8px = 12px，与普通选项的悬停底色同宽。 */
+.plan-mode-menu-item {
+  display: flex;
+  align-items: center;
+  height: var(--n-option-height, 34px); /* 与「上传文件」行等高（medium = 34px） */
+  margin: 0 4px;                        /* 与 naive 选项 ::before 悬停底色一样左右内缩 4px */
+  padding: 0 8px 0 7px;
+  box-sizing: border-box;
+  cursor: pointer;
+  border-radius: var(--n-border-radius, 3px);
+  transition: background-color 0.3s var(--n-bezier, cubic-bezier(0.4, 0, 0.2, 1));
+}
+.plan-mode-menu-item:hover {
+  background-color: var(--n-option-color-hover, rgb(243, 243, 245));
+}
+.plan-mode-menu-item .plan-mode-menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 8px;
+  color: var(--n-option-text-color, rgb(51, 54, 57));
+}
+/* label 与开关一起靠左排版：不再用 flex:1 把开关推到行尾，
+   而是让 label 占内容宽度、开关紧跟其后，与「上传文件」行保持一致。 */
+.plan-mode-menu-item .plan-mode-menu-label {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-right: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-mode-menu-item .n-switch {
+  flex-shrink: 0;
+}
 </style>

@@ -36,6 +36,7 @@ type Session struct {
 	Model           string          `json:"model"`
 	WorkDir         string          `json:"work_dir"`
 	WorkDirUserSet  bool            `json:"work_dir_user_set"`
+	PlanMode        bool            `json:"plan_mode"`
 	Messages        []types.Message `json:"messages"`
 	InputTokens     int             `json:"input_tokens"`
 	OutputTokens    int             `json:"output_tokens"`
@@ -246,6 +247,9 @@ func initSchema(db *sql.DB) error {
 	if err := addWorkDirUserSetColumnIfNotExists(db); err != nil {
 		return err
 	}
+	if err := addPlanModeColumnIfNotExists(db); err != nil {
+		return err
+	}
 	if err := addSessionMetaColumnsIfNotExists(db); err != nil {
 		return err
 	}
@@ -402,6 +406,22 @@ func addWorkDirUserSetColumnIfNotExists(db *sql.DB) error {
 	return nil
 }
 
+// addPlanModeColumnIfNotExists 补齐 plan_mode 列（会话级规划模式开关持久化）。
+func addPlanModeColumnIfNotExists(db *sql.DB) error {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'plan_mode')`
+	if err := db.QueryRow(query).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN plan_mode INTEGER DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	messages, err := json.Marshal(session.Messages)
 	if err != nil {
@@ -414,11 +434,11 @@ func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	meta := DeriveSessionMeta(session.Messages)
 
 	query := `
-	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, workdir_user_set, messages, title, preview, msg_count, tool_call_count, meta_version, input_tokens, output_tokens, cache_read_tokens, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, workdir_user_set, plan_mode, messages, title, preview, msg_count, tool_call_count, meta_version, input_tokens, output_tokens, cache_read_tokens, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
 	_, err = s.db.ExecContext(ctx, query,
-		session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, session.WorkDirUserSet,
+		session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, session.WorkDirUserSet, session.PlanMode,
 		string(messages), meta.Title, meta.Preview, meta.MessageCount, meta.ToolCallCount, metaVersion,
 		session.InputTokens, session.OutputTokens, session.CacheReadTokens)
 	return err
@@ -468,17 +488,19 @@ func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string
 }
 
 func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {
-	query := `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, name, profile, platform, model, workdir, workdir_user_set, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, query, id)
 
 	var session Session
 	var messagesStr string
 	var workDirUserSet int
-	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+	var planMode int
+	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &planMode, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	session.WorkDirUserSet = workDirUserSet != 0
+	session.PlanMode = planMode != 0
 
 	if messagesStr != "" {
 		if err := json.Unmarshal([]byte(messagesStr), &session.Messages); err != nil {
@@ -496,10 +518,10 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	var err error
 
 	if profile == "" {
-		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query)
 	} else {
-		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query, profile)
 	}
 	if err != nil {
@@ -517,7 +539,7 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 // web UI) are deliberately excluded.
 func (s *Store) ListSessionsByUserWorkDir(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, profile, platform, model, workdir, workdir_user_set, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at
+		SELECT id, name, profile, platform, model, workdir, workdir_user_set, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at
 		FROM sessions
 		WHERE (platform = '' OR platform = 'web') AND workdir != '' AND workdir_user_set = 1
 		ORDER BY updated_at DESC
@@ -536,11 +558,13 @@ func scanSessionListRows(rows *sql.Rows) ([]*Session, error) {
 		var session Session
 		var messagesStr sql.NullString
 		var workDirUserSet int
-		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+		var planMode int
+		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &planMode, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
 		session.WorkDirUserSet = workDirUserSet != 0
+		session.PlanMode = planMode != 0
 		if messagesStr.Valid && messagesStr.String != "" {
 			json.Unmarshal([]byte(messagesStr.String), &session.Messages)
 		}
@@ -620,6 +644,32 @@ func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string, userSet b
 		return fmt.Errorf("session not found: %s", id)
 	}
 
+	return nil
+}
+
+// UpdatePlanMode toggles plan-guided execution for a session and persists it.
+// If the session row does not exist yet, it is created with the flag set.
+func (s *Store) UpdatePlanMode(ctx context.Context, id string, enabled bool) error {
+	planModeInt := 0
+	if enabled {
+		planModeInt = 1
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET plan_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, planModeInt, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		// 会话行尚不存在（可能还没发过消息）：插入一条带 flag 的空行，
+		// 让开关状态在会话真正创建前也能被持久化。
+		_, err = s.db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO sessions (id, profile, platform, plan_mode, updated_at) VALUES (?, '', '', ?, CURRENT_TIMESTAMP)`,
+			id, planModeInt)
+		return err
+	}
 	return nil
 }
 

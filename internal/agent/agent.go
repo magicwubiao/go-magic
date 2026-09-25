@@ -572,6 +572,37 @@ func WithPlanExecution(cfg PlanExecutorConfig) AgentOption {
 	}
 }
 
+// WithPlanConfig only sets the plan executor configuration without enabling
+// plan-guided execution. The server uses this so every agent carries a usable
+// plan config, while the per-session plan-mode switch (SetPlanEnabled) decides
+// whether planning actually runs.
+func WithPlanConfig(cfg PlanExecutorConfig) AgentOption {
+	return func(a *Agent) {
+		a.planCfg = cfg
+	}
+}
+
+// SetPlanEnabled dynamically toggles plan-guided execution. When disabled, the
+// current plan executor is dropped so the next turn starts fresh (or skips
+// planning entirely). Called by the server when the user flips the plan mode
+// switch in the chat UI.
+func (a *Agent) SetPlanEnabled(enabled bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.planEnabled = enabled
+	if !enabled {
+		a.planExecutor = nil
+		a.failStreak = 0
+	}
+}
+
+// PlanEnabled reports whether plan-guided execution is currently on.
+func (a *Agent) PlanEnabled() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.planEnabled
+}
+
 // initPlanExecutor initializes the plan executor
 func (a *Agent) initPlanExecutor(ctx context.Context, goal string) error {
 	if !a.planEnabled || a.planExecutor != nil {

@@ -74,6 +74,12 @@ type Server struct {
 	agents   map[string]*agent.Agent
 	agentsMu sync.Mutex
 
+	// planModeSessions records which sessions have plan-guided execution enabled
+	// (the "plan mode" switch in the chat UI). Persisted in the session store so
+	// the choice survives page reloads / server restarts.
+	planModeSessions   map[string]bool
+	planModeSessionsMu sync.Mutex
+
 	// 每会话的串行消息队列（见 chatqueue.go）。用户在一个回合进行中继续
 	// 发消息时不再被丢弃：消息入队等待，由唯一的 worker goroutine 串行
 	// 执行，从而保证同一个 *agent.Agent 不会被并发使用。
@@ -532,6 +538,7 @@ Your working directory is: %s
 		commit:               "unknown",
 		buildDate:            "unknown",
 		agents:               make(map[string]*agent.Agent),
+		planModeSessions:     make(map[string]bool),
 		disabledSkills:       disabledSkills,
 		cronMgr:              cronMgr,
 		kanbanMgr:            kanbanMgr,
@@ -980,7 +987,16 @@ GOAL GUIDANCE:
 	// the moment the user switches models via /api/model/set.
 	agentOpts = append(agentOpts, agent.WithConvertConfig(s.buildConvertConfig()))
 
+	// 每个 agent 都携带可用的规划配置，但默认不启用；是否真正跑规划由
+	// 会话级 plan mode 开关决定（见 SetPlanEnabled / planModeSessions）。
+	agentOpts = append(agentOpts, agent.WithPlanConfig(agent.DefaultPlanExecutorConfig()))
+
 	a := agent.NewEnhancedAgent(s.provider, s.toolReg, toolsSchema, systemPrompt, agentOpts...)
+
+	// 若该会话此前开启了 plan mode（内存态或持久化），恢复规划执行。
+	if s.planModeEnabled(sessionID) {
+		a.SetPlanEnabled(true)
+	}
 
 	// Enable web approval mode for server-side agents
 	if ah := a.GetApprovalHook(); ah != nil {
@@ -997,6 +1013,46 @@ GOAL GUIDANCE:
 	a.SetSession(sessionID)
 	s.agents[sessionID] = a
 	return a
+}
+
+// planModeEnabled reports whether the given session has plan-guided execution
+// enabled. Falls back to the persisted session flag if the in-memory map has no
+// entry (e.g. after a server restart).
+func (s *Server) planModeEnabled(sessionID string) bool {
+	s.planModeSessionsMu.Lock()
+	enabled, ok := s.planModeSessions[sessionID]
+	s.planModeSessionsMu.Unlock()
+	if ok {
+		return enabled
+	}
+	// 未在内存态记录：回落到会话持久化字段（重启后首次访问时恢复）。
+	if s.sessionStore != nil {
+		sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
+		if err == nil && sess != nil {
+			return sess.PlanMode
+		}
+	}
+	return false
+}
+
+// setPlanMode toggles plan-guided execution for a session and applies it to the
+// live agent if one exists.
+func (s *Server) setPlanMode(sessionID string, enabled bool) {
+	s.planModeSessionsMu.Lock()
+	s.planModeSessions[sessionID] = enabled
+	s.planModeSessionsMu.Unlock()
+
+	// 更新运行中的 agent（若存在）。
+	s.agentsMu.Lock()
+	if a, ok := s.agents[sessionID]; ok {
+		a.SetPlanEnabled(enabled)
+	}
+	s.agentsMu.Unlock()
+
+	// 持久化，刷新后仍保持。
+	if s.sessionStore != nil {
+		_ = s.sessionStore.UpdatePlanMode(context.Background(), sessionID, enabled)
+	}
 }
 
 // looksLikeWinPath 报告路径是否为 Windows 风格路径（盘符前缀或含反斜杠）。
