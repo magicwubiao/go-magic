@@ -243,6 +243,8 @@ export default {
     queuedDrag: 'Drag to reorder',
     queuedEditTooLate: 'This message has already started running and cannot be edited — use Stop to interrupt it',
     turnElapsed: 'Current turn running for {duration}',
+    turnElapsedSeconds: '{seconds}s',
+    turnElapsedMinutesSeconds: '{minutes}m {seconds}s',
     turnElapsedMinutes: '{minutes} min',
     turnElapsedHours: '{hours} h',
     turnElapsedHoursMinutes: '{hours} h {minutes} min',

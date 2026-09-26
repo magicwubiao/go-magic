@@ -250,7 +250,7 @@ export const useChatStore = defineStore('chat', () => {
     return state?.activeTurnStartedAt || 0
   })
 
-  // 低频时钟：仅在回合进行时每 30 秒跳动一次，驱动"已执行时长"刷新；
+  // 低频时钟：仅在回合进行时每秒跳动一次，驱动"已执行时长"实时刷新；
   // 空闲时清除定时器，不给常驻路径增加任何开销。
   const elapsedTick = ref(0)
   let elapsedTimer: ReturnType<typeof setInterval> | null = null
@@ -260,7 +260,7 @@ export const useChatStore = defineStore('chat', () => {
       if (started > 0 && elapsedTimer === null) {
         elapsedTimer = setInterval(() => {
           elapsedTick.value++
-        }, 30_000)
+        }, 1000)
       } else if (started <= 0 && elapsedTimer !== null) {
         clearInterval(elapsedTimer)
         elapsedTimer = null
@@ -269,12 +269,13 @@ export const useChatStore = defineStore('chat', () => {
     { immediate: true },
   )
 
-  // 当前回合已执行分钟数（向下取整）。0 表示空闲或刚起步不足 1 分钟。
-  const activeTurnElapsedMinutes = computed(() => {
+  // 当前回合已执行秒数。0 表示空闲。基于服务端认领时刻（active_started_at）
+  // 计算，刷新页面不归零——本地从零起算的计时器做不到这一点。
+  const activeTurnElapsedSeconds = computed(() => {
     void elapsedTick.value
     const started = activeTurnStartedAt.value
     if (!started) return 0
-    return Math.max(0, Math.floor((Date.now() / 1000 - started) / 60))
+    return Math.max(0, Math.floor(Date.now() / 1000 - started))
   })
 
   const streamContent = computed(() => {
@@ -2156,7 +2157,7 @@ export const useChatStore = defineStore('chat', () => {
     queueDepth,
     queuedAttachments,
     activeTurnStartedAt,
-    activeTurnElapsedMinutes,
+    activeTurnElapsedSeconds,
     streamContent,
     error,
     activeSession,
