@@ -209,14 +209,6 @@ func runBotsCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	store, err := openBotStore()
-	if err != nil {
-		return err
-	}
-	if _, err := store.Load(name); err == nil {
-		return fmt.Errorf("bot %q already exists (use 'magic bots edit')", name)
-	}
-
 	cfg := &bot.Config{
 		Name:         name,
 		Title:        botsFlagTitle,
@@ -230,14 +222,33 @@ func runBotsCreate(cmd *cobra.Command, args []string) error {
 		Avatar:       botsFlagAvatar,
 		Env:          parseEnvPairs(botsFlagEnv),
 		Hidden:       botsFlagHidden,
-		CreatedAt:    time.Now().Unix(),
 	}
 	if cfg.Title == "" {
 		cfg.Title = strings.Title(strings.ReplaceAll(name, "-", " "))
 	}
-	if err := store.Save(cfg); err != nil {
+
+	// Route through the manager's canonical CreateBot so the CLI and the
+	// web/API share a single code path for validation, existence checks,
+	// timestamps, and bringing the bot online. This keeps the CLI behaviour
+	// consistent with runBotsChat/runBotsMessage, which also drive the manager.
+	loadCfg, err := loadConfigForBots()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	mgr, err := bot.NewManager(loadCfg)
+	if err != nil {
 		return err
 	}
+	if mgr == nil {
+		return fmt.Errorf("bot manager unavailable")
+	}
+	if err := mgr.CreateBot(cfg); err != nil {
+		return err
+	}
+	// Tear down the transient manager so the one-shot CLI process exits cleanly.
+	// The bot is persisted to disk and picked up by a running gateway on its
+	// next reload/restart (the gateway is a separate process the CLI can't touch).
+	mgr.Stop()
 
 	fmt.Printf("✅ Bot %q created (%s)\n", name, storePathHint(name))
 	fmt.Println("   Chat it:      magic bots chat " + name + " \"hello\"")
@@ -364,42 +375,27 @@ func runBotsSetActive(name string, active bool) error {
 
 // runBotsClone duplicates a bot's full profile under a new name.
 func runBotsClone(cmd *cobra.Command, args []string) error {
-	store, err := openBotStore()
+	// Route through the manager's canonical CloneBot so the CLI and web/API
+	// share one code path (validation, deep-copy, timestamps, and bringing
+	// the clone online when a manager is live).
+	loadCfg, err := loadConfigForBots()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	mgr, err := bot.NewManager(loadCfg)
 	if err != nil {
 		return err
 	}
-	src, err := store.Load(args[0])
-	if err != nil {
-		return fmt.Errorf("bot not found: %s", args[0])
+	if mgr == nil {
+		return fmt.Errorf("bot manager unavailable")
 	}
-	newName := args[1]
-	if err := bot.ValidateName(newName); err != nil {
+	if _, err := mgr.CloneBot(args[0], args[1]); err != nil {
 		return err
 	}
-	if _, err := store.Load(newName); err == nil {
-		return fmt.Errorf("bot %q already exists", newName)
-	}
-	if strings.EqualFold(src.Name, newName) {
-		return fmt.Errorf("new name must differ from the source bot")
-	}
+	// Tear down the transient manager so the one-shot CLI process exits cleanly.
+	mgr.Stop()
 
-	clone := *src
-	clone.Name = newName
-	clone.Tools = append([]string(nil), src.Tools...)
-	clone.Skills = append([]string(nil), src.Skills...)
-	if src.Env != nil {
-		clone.Env = make(map[string]string, len(src.Env))
-		for k, v := range src.Env {
-			clone.Env[k] = v
-		}
-	}
-	now := time.Now().Unix()
-	clone.CreatedAt = now
-	clone.UpdatedAt = now
-	if err := store.Save(&clone); err != nil {
-		return err
-	}
-	fmt.Printf("✅ Cloned bot %q -> %q (profile copied, chat history starts fresh)\n", args[0], newName)
+	fmt.Printf("✅ Cloned bot %q -> %q (profile copied, chat history starts fresh)\n", args[0], args[1])
 	fmt.Println("   The clone comes online on the next gateway restart (or immediately when created via the web UI).")
 	return nil
 }
@@ -777,7 +773,10 @@ func enableBotModeHint() error {
 }
 
 // loadConfigForBots loads config, ensuring Bot Mode is enabled so a Manager
-// can be constructed for one-shot CLI commands (chat/message).
+// can be constructed for one-shot CLI commands (chat/message). The override is
+// in-memory only: it must NOT be written back to disk, otherwise a single
+// one-shot CLI invocation would silently enable global Bot Mode for the user
+// even if they never opted in.
 func loadConfigForBots() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err != nil && cfg == nil {
@@ -788,7 +787,6 @@ func loadConfigForBots() (*config.Config, error) {
 	}
 	if !cfg.BotMode.Enabled {
 		cfg.BotMode.Enabled = true
-		_ = cfg.Save() // Best-effort persist; in-memory override is enough for one-shot runs
 	}
 	return cfg, nil
 }

@@ -70,7 +70,24 @@ func (t *delegateTaskTool) Execute(ctx context.Context, params map[string]interf
 	}
 
 	target = strings.TrimPrefix(strings.TrimSpace(target), "@")
-	reply, err := t.manager.SendToBot(target, task)
+
+	// Detect delegation cycles before enqueueing: if the target bot is already
+	// in the active synchronous delegation chain, delegating to it would block
+	// both workers forever (A delegates to B, B delegates back to A) until the
+	// SendToBot timeout. Refuse up-front instead of deadlocking.
+	chain := delegationChainFromCtx(ctx)
+	for _, hop := range chain {
+		if strings.EqualFold(hop, target) {
+			return nil, fmt.Errorf(
+				"delegation cycle detected: @%s is already awaiting a reply in this chain (%s); "+
+					"delegating back would deadlock. Complete the current subtask instead.",
+				target, strings.Join(chain, " -> "))
+		}
+	}
+	// Extend the chain with this sender so the delegated turn inherits it.
+	newChain := append(append([]string(nil), chain...), t.sender)
+
+	reply, err := t.manager.SendToBotDelegated(target, task, newChain)
 	if err != nil {
 		return nil, fmt.Errorf("delegation to @%s failed: %w", target, err)
 	}

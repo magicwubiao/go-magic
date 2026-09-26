@@ -43,6 +43,12 @@ type pendingMessage struct {
 	// (bot:<name>:room:<roomID>) instead of the canonical chat, and routes the
 	// reply back to the room coordinator via replyCh. Used by SendToRoom.
 	RoomID string
+	// delegationChain is the ordered list of bots (canonical names) that this
+	// turn is nested inside via synchronous delegate_task calls. It is used to
+	// detect delegation cycles (A delegates to B, B delegates back to A) that
+	// would otherwise deadlock both workers until the SendToBot timeout. Nil
+	// for ordinary turns. Set by SendToBotDelegated.
+	delegationChain []string
 }
 
 // turnResult carries one completed agent turn to a synchronous caller.
@@ -50,6 +56,25 @@ type turnResult struct {
 	Reply       string
 	Err         error
 	FailureCode FailureCode // machine-readable reason when Err != nil
+}
+
+// delegationChainCtxKey is the context key that carries the active synchronous
+// delegation chain (ordered list of bot names) through an agent turn. It lets
+// the delegate_task tool detect cycles before enqueueing a nested turn.
+type delegationChainCtxKey struct{}
+
+// delegationChainFromCtx returns the delegation chain carried by ctx, or nil
+// when the turn is not nested inside any delegate_task call.
+func delegationChainFromCtx(ctx context.Context) []string {
+	if v, ok := ctx.Value(delegationChainCtxKey{}).([]string); ok {
+		return v
+	}
+	return nil
+}
+
+// withDelegationChain returns a context carrying the given delegation chain.
+func withDelegationChain(ctx context.Context, chain []string) context.Context {
+	return context.WithValue(ctx, delegationChainCtxKey{}, chain)
 }
 
 // Manager runs all configured bots: it owns per-bot agents, persists their
@@ -108,9 +133,6 @@ type botRuntime struct {
 
 	// roomAgents holds per-room agents keyed by room ID. Guarded by m.mu.
 	roomAgents map[string]*agent.Agent
-	// roomLoaded marks which room histories have been restored (keyed by room
-	// ID) so we don't re-append stale turns on agent rebuilds.
-	roomLoaded map[string]bool
 
 	// turnRunning is true while the worker is executing a message for this
 	// bot (queued messages don't count). turnCancel cancels the in-flight
@@ -474,6 +496,11 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	turnTimeout := m.turnTimeout()
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	// Propagate the synchronous delegation chain (if any) into the turn
+	// context so nested delegate_task calls can detect cycles.
+	if msg.delegationChain != nil {
+		runCtx = withDelegationChain(runCtx, msg.delegationChain)
+	}
 	// Inject the bot's isolated workdir into the turn context. Two reasons:
 	// ① the approval hook's C2 scope check (isPathWithinWorkdir) needs it to
 	//   recognize in-workdir writes and auto-approve them — without it the
@@ -650,6 +677,17 @@ func (m *Manager) Enqueue(botName, text, from string) error {
 // through the same per-bot queue, so concurrent callers can't corrupt the
 // shared conversation history.
 func (m *Manager) SendToBot(botName, text string) (string, error) {
+	return m.sendToBot(botName, text, nil)
+}
+
+// SendToBotDelegated is SendToBot for nested delegate_task turns. It records
+// the active delegation chain so the target turn can refuse to delegate back
+// into the chain and deadlock both workers.
+func (m *Manager) SendToBotDelegated(botName, text string, chain []string) (string, error) {
+	return m.sendToBot(botName, text, chain)
+}
+
+func (m *Manager) sendToBot(botName, text string, chain []string) (string, error) {
 	key := strings.ToLower(botName)
 
 	m.mu.Lock()
@@ -660,9 +698,10 @@ func (m *Manager) SendToBot(botName, text string) (string, error) {
 	}
 
 	msg := pendingMessage{
-		Text:    text,
-		From:    "user",
-		replyCh: make(chan turnResult, 1),
+		Text:            text,
+		From:            "user",
+		replyCh:         make(chan turnResult, 1),
+		delegationChain: chain,
 	}
 
 	if err := m.EnqueueMsg(key, msg); err != nil {
@@ -1187,7 +1226,6 @@ func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) 
 		rt.ag = nil
 		rt.loaded = false
 		rt.roomAgents = nil
-		rt.roomLoaded = nil
 	}
 	if sched, ok2 := m.routines[key]; ok2 && sched != nil {
 		sched.Stop()
@@ -1459,8 +1497,14 @@ const maxRoutineResultLen = 2000
 // endpoint, CLI) waits for a teammate's reply. The old fixed 5-minute cap
 // equalled the default turn deadline, so a teammate that legitimately used its
 // full timeout lost the race and the caller saw "timed out" even though the
-// turn was about to finish. Slack also covers the queue wait in front of it.
-const sendToBotTimeoutSlack = 30 * time.Second
+// turn was about to finish. Slack also covers the queue wait in front of it:
+// a bot can sit behind several earlier turns before its own turn starts, and
+// each of those can take up to turnTimeout. 2 minutes of slack keeps a
+// legitimate call from false-timeouting under a busy queue. A delegation cycle
+// (A -> B -> A) is rejected up-front by delegate_task's cycle detection, so
+// this timeout is no longer the last line of defense against a deadlock and a
+// generous slack is safe.
+const sendToBotTimeoutSlack = 2 * time.Minute
 
 // truncateRoutineResult keeps the head of a routine's output and adds an
 // ellipsis marker when it was cut, so users can see the gist without the

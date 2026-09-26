@@ -74,6 +74,10 @@ func (m *Manager) RememberMemory(botName, fact string) error {
 
 	// Hot-reload the agent so the updated Memory is injected next turn.
 	// Room agents too, so the new memory is visible everywhere the bot acts.
+	// Rebuilding is safe: each room agent restores its persisted history from
+	// the session store on next use (getOrCreateAgentLocked -> buildAgent), so
+	// in-flight room turns (which already hold their agent reference) continue
+	// undisturbed and no durable room context is lost.
 	key := strings.ToLower(botName)
 	m.mu.Lock()
 	if rt, ok := m.bots[key]; ok {
@@ -81,7 +85,6 @@ func (m *Manager) RememberMemory(botName, fact string) error {
 		rt.ag = nil
 		rt.loaded = false
 		rt.roomAgents = nil
-		rt.roomLoaded = nil
 	}
 	m.mu.Unlock()
 
