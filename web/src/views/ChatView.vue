@@ -228,18 +228,6 @@
 
     <!-- Chat Area -->
     <div class="chat-main">
-      <!-- 当前回合已执行时长（WorkBuddy 风格状态行）：置于对话区最上方。
-           chat-main 本身不滚动，这一行位置天然固定，无论用户翻到哪里都看得见。
-           回合一被服务端认领就出现（spinner 旋转 + 秒级实时），回应"界面停了
-           但不确定是否真停"的疑虑——spinner 在转、秒数在走，就说明回合确实
-           还在被服务端执行；时长基于服务端认领时刻计算，刷新页面不归零。 -->
-      <div v-if="chatStore.activeTurnStartedAt > 0" class="turn-elapsed-line">
-        <div class="turn-elapsed-line-inner">
-          <span class="turn-elapsed-spinner" aria-hidden="true"></span>
-          <span>{{ t('chat.turnElapsed', { duration: formatTurnElapsed(chatStore.activeTurnElapsedSeconds) }) }}</span>
-        </div>
-      </div>
-
       <n-alert v-if="chatStore.error" type="error" closable style="margin: 12px;" @close="chatStore.error = null">
         {{ chatStore.error.message }}
       </n-alert>
@@ -340,12 +328,22 @@
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
+              <!-- 回合执行状态行（WorkBuddy 风格）：贴着机器人头像、在回合
+                   内容之上。回合一开跑就出现，spinner 在转 + 秒数在走 =
+                   回合确实还在被服务端执行，回应"界面停了但不确定是否真停"
+                   的疑虑。时长优先取服务端认领时刻（active_started_at，
+                   刷新页面不归零），服务端数据未同步时回退本地流式计时。
+                   回合结束后随流式消息一起消失，不进历史。 -->
+              <div class="turn-elapsed-line">
+                <span class="turn-elapsed-spinner" aria-hidden="true"></span>
+                <span>{{ t('chat.turnElapsed', { duration: formatTurnElapsed(turnElapsedForDisplay) }) }}</span>
+              </div>
+
               <!-- Status panel when no content yet & no running tools -->
               <div v-if="!chatStore.streamContent && chatStore.activeToolCalls.length === 0 && chatStore.pendingApprovals.length === 0" class="agent-status-panel">
                 <div class="status-header">
                   <div class="status-spinner"></div>
                   <span class="status-phase">{{ agentPhase }}</span>
-                  <span class="status-elapsed">{{ elapsedDisplay }}</span>
                 </div>
                 <div class="status-hint">{{ t(thinkingHints[hintIndex]) }}</div>
               </div>
@@ -1218,12 +1216,13 @@ onUnmounted(() => {
   if (elapsedTimer) clearInterval(elapsedTimer)
 })
 
-const elapsedDisplay = computed(() => {
-  const s = elapsedSeconds.value
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const sec = s % 60
-  return `${m}m${sec}s`
+// 回合状态行显示的已执行秒数：优先服务端口径（active_started_at，
+// 刷新页面不归零）；服务端数据尚未同步（旧流重挂、事件竞态窗口）时
+// 回退本地从 streaming 起算的计时，保证"刚起步"阶段也有合理读数。
+const turnElapsedForDisplay = computed(() => {
+  const serverSecs = chatStore.activeTurnElapsedSeconds
+  if (serverSecs > 0) return serverSecs
+  return elapsedSeconds.value
 })
 
 // Model selection
@@ -3692,21 +3691,14 @@ onActivated(() => {
      "已提交内容的清单"，不是需要被强调的告警，越安静越不打扰正在读的回答。
    - 中性底色（不是绿色渐变）：这里的等待是常态，不是异常状态；
      绿色只留给"正在执行"的语义，两者同时出现时才不会互相稀释。 */
-/* 当前回合已执行时长（WorkBuddy 风格状态行）：固定在对话区最上方，
-   spinner 在转 + 秒数在走 = 回合仍被服务端执行，回应"是不是已经停了"
-   的疑虑。容器对齐与消息区一致（max-width 900px 居中）。 */
+/* 回合执行状态行（WorkBuddy 风格）：贴着机器人头像、在回合内容之上，
+   属于流式消息的一部分（不悬浮、不吸顶）。spinner 在转 + 秒数在走 =
+   回合仍被服务端执行，回应"是不是已经停了"的疑虑。 */
 .turn-elapsed-line {
-  padding: 10px 16px 8px;
-  background: var(--body-color, #fff);
-  border-bottom: 1px solid var(--border-color, #efefef);
-}
-
-.turn-elapsed-line-inner {
-  max-width: 900px;
-  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: 2px 0 12px;
   font-size: 12px;
   color: var(--text-color-3, #999);
 }
@@ -4028,15 +4020,6 @@ onActivated(() => {
   color: #333;
   font-weight: 500;
   flex: 1;
-}
-
-.status-elapsed {
-  font-size: 12px;
-  color: #999;
-  font-variant-numeric: tabular-nums;
-  background: #e8e8e8;
-  padding: 2px 8px;
-  border-radius: 8px;
 }
 
 .status-hint {
@@ -4450,11 +4433,6 @@ onActivated(() => {
 
   .status-phase {
     color: #ddd;
-  }
-
-  .status-elapsed {
-    color: #666;
-    background: #2a2a2a;
   }
 
   .status-hint {
