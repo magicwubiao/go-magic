@@ -59,6 +59,12 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	if h, ok := args["include_hidden"].(bool); ok {
 		includeHidden = h
 	}
+	pattern, _ := args["pattern"].(string)
+	if pattern != "" {
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return nil, fmt.Errorf("invalid file pattern %q: %w", pattern, err)
+		}
+	}
 
 	absPath, err := resolvePath(ctx, path)
 	if err != nil {
@@ -75,6 +81,12 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		// Skip hidden files unless requested
 		if !includeHidden && strings.HasPrefix(entry.Name(), ".") {
 			continue
+		}
+		if pattern != "" {
+			matched, _ := filepath.Match(pattern, entry.Name()) // validated above
+			if !matched {
+				continue
+			}
 		}
 
 		info, _ := entry.Info()
@@ -262,14 +274,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	offset := 0 // 0-based index into lines
 	limit := 0
 
-	if o, ok := args["offset"].(float64); ok {
-		offset = int(o) - 1 // Convert to 0-based
-		if offset < 0 {
-			offset = 0
-		}
+	if v := paramInt(args, "offset"); v > 0 {
+		offset = v - 1 // Convert to 0-based
 	}
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
+	if v := paramInt(args, "limit"); v > 0 {
+		limit = v
 	}
 
 	// Stream the file line by line instead of os.ReadFile: memory use is
@@ -287,14 +296,17 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	// Keep trailing \r on CRLF files: previous os.ReadFile+strings.Split
 	// semantics preserved them, and edit_file's verbatim old_content
 	// matching depends on read_file returning the exact bytes.
+	endedWithNewline := false
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
 		}
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			endedWithNewline = true
 			return i + 1, data[:i], nil
 		}
 		if atEOF {
+			endedWithNewline = false
 			return len(data), data, nil
 		}
 		return 0, nil, nil
@@ -333,6 +345,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	readContent := strings.Join(lines, "\n")
+	if len(lines) > 0 {
+		lastReturnedLine := offset + len(lines)
+		if lastReturnedLine < totalLines || (lastReturnedLine == totalLines && endedWithNewline) {
+			readContent += "\n"
+		}
+	}
 
 	// Guard against silent agent-level truncation: when the caller did not
 	// pass limit, the agent truncates oversized tool results (~50K chars)
@@ -474,23 +492,42 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 
 	security := FileSecurityFromContext(ctx)
 
-	if security.MaxFileSizeKB > 0 && len(content) > security.MaxFileSizeKB*1024 {
-		return nil, fmt.Errorf("file size %d bytes exceeds maximum allowed size of %d KB", len(content), security.MaxFileSizeKB)
+	appendMode := paramBool(args, "append", false)
+	fileMode := security.DefaultFileMode
+	if fileMode == 0 {
+		fileMode = 0600
+	}
+	var existingSize int64
+	if info, statErr := os.Stat(absPath); statErr == nil {
+		fileMode = info.Mode().Perm()
+		existingSize = info.Size()
+	} else if !os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("failed to stat target file: %w", statErr)
+	}
+
+	if security.MaxFileSizeKB > 0 {
+		newSize := int64(len(content))
+		if appendMode {
+			newSize += existingSize
+		}
+		maxSize := int64(security.MaxFileSizeKB) * 1024
+		if newSize > maxSize {
+			return nil, fmt.Errorf("file size %d bytes exceeds maximum allowed size of %d KB", newSize, security.MaxFileSizeKB)
+		}
 	}
 
 	dir := filepath.Dir(absPath)
-	if err := os.MkdirAll(dir, security.DefaultDirMode); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
+	dirMode := security.DefaultDirMode
+	if dirMode == 0 {
+		dirMode = 0700
 	}
-
-	appendMode := false
-	if a, ok := args["append"].(bool); ok {
-		appendMode = a
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	var err2 error
 	if appendMode {
-		f, ferr := os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, security.DefaultFileMode)
+		f, ferr := os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
 		if ferr != nil {
 			err2 = ferr
 		} else {
@@ -502,21 +539,27 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 			}
 		}
 	} else {
-		err2 = os.WriteFile(absPath, []byte(content), security.DefaultFileMode)
+		err2 = atomicWriteFile(absPath, []byte(content), fileMode)
 	}
 
 	if err2 != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err2)
 	}
 
-	// Get file info
-	info, _ := os.Stat(absPath)
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat written file: %w", err)
+	}
 
+	lineCount := 0
+	if content != "" {
+		lineCount = strings.Count(content, "\n") + 1
+	}
 	result := map[string]interface{}{
 		"success": true,
 		"path":    absPath,
 		"bytes":   len(content),
-		"lines":   strings.Count(content, "\n") + 1,
+		"lines":   lineCount,
 		"size":    info.Size(),
 	}
 

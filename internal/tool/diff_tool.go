@@ -86,20 +86,20 @@ func (t *DiffPatchTool) Execute(ctx context.Context, params map[string]interface
 
 	switch action {
 	case "show_diff":
-		return t.showDiff(params)
+		return t.showDiff(ctx, params)
 	case "apply_patch":
-		return t.applyPatch(params)
+		return t.applyPatch(ctx, params)
 	case "show_changes":
-		return t.showChanges(params)
+		return t.showChanges(ctx, params)
 	case "create_backup":
-		return t.createBackup(params)
+		return t.createBackup(ctx, params)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
 }
 
 // showDiff shows the diff between the current file content and a proposed new content.
-func (t *DiffPatchTool) showDiff(params map[string]interface{}) (interface{}, error) {
+func (t *DiffPatchTool) showDiff(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	path, _ := params["path"].(string)
 	newContent, _ := params["new_content"].(string)
 
@@ -110,19 +110,21 @@ func (t *DiffPatchTool) showDiff(params map[string]interface{}) (interface{}, er
 		return nil, fmt.Errorf("new_content is required for show_diff")
 	}
 
-	data, err := os.ReadFile(path)
+	absPath, err := resolvePath(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file path: %w", err)
+	}
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// 规范化行尾后再做行级 diff，避免 CRLF 文件的每行混入 \r 干扰比较。
 	oldLines := strings.Split(normalizeLineEndings(string(data)), "\n")
 	newLines := strings.Split(normalizeLineEndings(newContent), "\n")
-
-	diff := generateUnifiedDiff(path, oldLines, newLines)
+	diff := generateUnifiedDiff(absPath, oldLines, newLines)
 
 	return map[string]interface{}{
-		"path":      path,
+		"path":      absPath,
 		"action":    "show_diff",
 		"diff":      diff,
 		"additions": countLinesByPrefix(diff, "+"),
@@ -131,7 +133,7 @@ func (t *DiffPatchTool) showDiff(params map[string]interface{}) (interface{}, er
 }
 
 // applyPatch applies a set of search-and-replace operations to a file atomically.
-func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, error) {
+func (t *DiffPatchTool) applyPatch(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	path, _ := params["path"].(string)
 
 	if path == "" {
@@ -162,8 +164,12 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 		patches = append(patches, patch{OldText: oldText, NewText: newText})
 	}
 
+	absPath, err := resolvePath(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file path: %w", err)
+	}
 	// Read the original file
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -206,14 +212,21 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 		appliedCount++
 	}
 
-	// Write the result, preserving the file's original line ending style.
+	sec := FileSecurityFromContext(ctx)
+	if sec.MaxFileSizeKB > 0 && len(working) > sec.MaxFileSizeKB*1024 {
+		return nil, fmt.Errorf("patched file size %d bytes exceeds maximum allowed size of %d KB", len(working), sec.MaxFileSizeKB)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat target file: %w", err)
+	}
 	newContent := convertLineEndings(working, lineEnding)
-	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+	if err := atomicWriteFile(absPath, []byte(newContent), info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	return map[string]interface{}{
-		"path":             path,
+		"path":             absPath,
 		"action":           "apply_patch",
 		"patches_applied":  appliedCount,
 		"total_patches":    len(patchesRaw),
@@ -223,32 +236,38 @@ func (t *DiffPatchTool) applyPatch(params map[string]interface{}) (interface{}, 
 }
 
 // showChanges compares two files and shows differences.
-func (t *DiffPatchTool) showChanges(params map[string]interface{}) (interface{}, error) {
+func (t *DiffPatchTool) showChanges(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	fileA, _ := params["file_a"].(string)
 	fileB, _ := params["file_b"].(string)
 
 	if fileA == "" || fileB == "" {
 		return nil, fmt.Errorf("file_a and file_b are required for show_changes")
 	}
+	pathA, err := resolvePath(ctx, fileA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file_a: %w", err)
+	}
+	pathB, err := resolvePath(ctx, fileB)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file_b: %w", err)
+	}
 
-	dataA, err := os.ReadFile(fileA)
+	dataA, err := os.ReadFile(pathA)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file_a: %w", err)
 	}
-	dataB, err := os.ReadFile(fileB)
+	dataB, err := os.ReadFile(pathB)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file_b: %w", err)
 	}
 
-	// 规范化行尾后再比较，CRLF 与 LF 内容视为等价。
 	linesA := strings.Split(normalizeLineEndings(string(dataA)), "\n")
 	linesB := strings.Split(normalizeLineEndings(string(dataB)), "\n")
-
-	diff := generateUnifiedDiff(fmt.Sprintf("%s vs %s", filepath.Base(fileA), filepath.Base(fileB)), linesA, linesB)
+	diff := generateUnifiedDiff(fmt.Sprintf("%s vs %s", filepath.Base(pathA), filepath.Base(pathB)), linesA, linesB)
 
 	return map[string]interface{}{
-		"file_a":    fileA,
-		"file_b":    fileB,
+		"file_a":    pathA,
+		"file_b":    pathB,
 		"action":    "show_changes",
 		"diff":      diff,
 		"additions": countLinesByPrefix(diff, "+"),
@@ -257,33 +276,39 @@ func (t *DiffPatchTool) showChanges(params map[string]interface{}) (interface{},
 }
 
 // createBackup creates a backup of a file before modification.
-func (t *DiffPatchTool) createBackup(params map[string]interface{}) (interface{}, error) {
+func (t *DiffPatchTool) createBackup(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	path, _ := params["path"].(string)
 
 	if path == "" {
 		return nil, fmt.Errorf("path is required for create_backup")
 	}
-
-	data, err := os.ReadFile(path)
+	absPath, err := resolvePath(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file path: %w", err)
+	}
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat original file: %w", err)
+	}
 
-	// Generate backup path: <original>.bak.<timestamp>
-	ext := filepath.Ext(path)
-	base := path[:len(path)-len(ext)]
-	timestamp := time.Now().Format("20060102-150405")
+	ext := filepath.Ext(absPath)
+	base := absPath[:len(absPath)-len(ext)]
+	timestamp := time.Now().Format("20060102-150405.000000000")
 	backupPath := fmt.Sprintf("%s.bak%s.%s", base, ext, timestamp)
-
-	if err := os.WriteFile(backupPath, data, 0644); err != nil {
+	if _, err := resolvePath(ctx, backupPath); err != nil {
+		return nil, fmt.Errorf("failed to resolve backup path: %w", err)
+	}
+	if err := atomicWriteFile(backupPath, data, info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
 
-	info, _ := os.Stat(path)
-
 	return map[string]interface{}{
 		"action":        "create_backup",
-		"original_path": path,
+		"original_path": absPath,
 		"backup_path":   backupPath,
 		"size_bytes":    len(data),
 		"original_mod":  info.ModTime().Format(time.RFC3339),

@@ -137,17 +137,13 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 			filePath = v
 		case map[string]interface{}:
 			filePath, _ = v["path"].(string)
-			if o, ok := v["offset"].(float64); ok {
-				offset = int(o)
-			}
-			if l, ok := v["limit"].(float64); ok {
-				limit = int(l)
-			}
+			offset = paramInt(v, "offset")
+			limit = paramInt(v, "limit")
 			if b, ok := v["binary_ok"].(bool); ok {
 				binaryOK = b
 			}
-			if kb, ok := v["max_size_kb"].(float64); ok && kb > 0 {
-				maxSizeKB = int(kb)
+			if kb := paramInt(v, "max_size_kb"); kb > 0 {
+				maxSizeKB = kb
 			}
 		default:
 			continue
@@ -205,8 +201,20 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 
 		if !isBinary {
 			content := normalizeLineEndings(string(data))
+			endedWithNewline := strings.HasSuffix(content, "\n")
 			lines := strings.Split(content, "\n")
+			if endedWithNewline && len(lines) > 0 {
+				lines = lines[:len(lines)-1]
+			}
+			if content == "" {
+				lines = nil
+			}
 			totalLines := len(lines)
+			if endedWithNewline {
+				// Preserve the historical line count convention (newline count + 1),
+				// which includes the final empty line after a trailing newline.
+				totalLines++
+			}
 
 			startIdx := 0
 			if offset > 0 {
@@ -226,7 +234,14 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 				readLines = readLines[:limit]
 			}
 
-			result["content"] = strings.Join(readLines, "\n")
+			readContent := strings.Join(readLines, "\n")
+			if len(readLines) > 0 {
+				lastReturnedLine := startIdx + len(readLines)
+				if lastReturnedLine < totalLines || (lastReturnedLine == totalLines && endedWithNewline) {
+					readContent += "\n"
+				}
+			}
+			result["content"] = readContent
 			result["total"] = totalLines
 			result["read"] = len(readLines)
 			result["offset"] = offset
@@ -279,26 +294,56 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 			continue
 		}
 
+		security := FileSecurityFromContext(ctx)
+		if security.MaxFileSizeKB > 0 && len(content) > security.MaxFileSizeKB*1024 {
+			results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("file size %d bytes exceeds maximum allowed size of %d KB", len(content), security.MaxFileSizeKB)}
+			continue
+		}
+
 		if createDirs {
+			dirMode := security.DefaultDirMode
+			if dirMode == 0 {
+				dirMode = 0700
+			}
 			dir := filepath.Dir(absPath)
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := os.MkdirAll(dir, dirMode); err != nil {
 				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to create directories: %v", err)}
 				continue
 			}
 		}
 
-		// Detect target line-ending style: preserve existing file's style, else LF.
+		fileMode := security.DefaultFileMode
+		if fileMode == 0 {
+			fileMode = 0644
+		}
 		targetLE := LineEndingLF
-		if existing, err := os.ReadFile(absPath); err == nil && len(existing) > 0 {
-			targetLE = detectLineEnding(string(existing))
-			// Optional backup
+		existing, readErr := os.ReadFile(absPath)
+		if readErr == nil {
+			if info, statErr := os.Stat(absPath); statErr == nil {
+				fileMode = info.Mode().Perm()
+			} else {
+				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to stat existing file: %v", statErr)}
+				continue
+			}
+			if len(existing) > 0 {
+				targetLE = detectLineEnding(string(existing))
+			}
 			if doBackup {
-				bakPath := absPath + ".bak"
-				if err := os.WriteFile(bakPath, existing, 0644); err != nil {
+				// Resolve the backup destination independently: an existing .bak
+				// symlink must not let a backup write escape the allowed workspace.
+				backupPath, resolveErr := resolvePath(ctx, filePath+".bak")
+				if resolveErr != nil {
+					results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to resolve backup path: %v", resolveErr)}
+					continue
+				}
+				if err := atomicWriteFile(backupPath, existing, fileMode); err != nil {
 					results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to create backup: %v", err)}
 					continue
 				}
 			}
+		} else if !os.IsNotExist(readErr) {
+			results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to read existing file: %v", readErr)}
+			continue
 		}
 
 		// Sanity check on incoming content: refuse clearly binary data unless path is code
@@ -311,18 +356,15 @@ func (t *BatchFileOpsTool) batchWrite(ctx context.Context, params map[string]int
 			continue
 		}
 
-		// Normalize user's input to LF first; then emit target line-ending.
-		// This guarantees the written file has a consistent ending and the
-		// line-count below matches the on-disk content.
 		toWrite := convertLineEndings(content, targetLE)
 
 		if doAtomic {
-			if err := atomicWriteFile(absPath, []byte(toWrite), 0644); err != nil {
+			if err := atomicWriteFile(absPath, []byte(toWrite), fileMode); err != nil {
 				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to write file: %v", err)}
 				continue
 			}
 		} else {
-			if err := os.WriteFile(absPath, []byte(toWrite), 0644); err != nil {
+			if err := os.WriteFile(absPath, []byte(toWrite), fileMode); err != nil {
 				results[filePath] = map[string]interface{}{"success": false, "error": fmt.Sprintf("failed to write file: %v", err)}
 				continue
 			}
@@ -473,6 +515,15 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 			continue
 		}
 
+		info, statErr := os.Stat(absPath)
+		if statErr != nil {
+			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to stat file: %v", statErr)}
+			continue
+		}
+		if maxKB := FileSecurityFromContext(ctx).MaxFileSizeKB; maxKB > 0 && info.Size() > int64(maxKB)*1024 {
+			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("file exceeds max size (%d bytes > %d KB limit)", info.Size(), maxKB)}
+			continue
+		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to read file: %v", err)}
@@ -567,8 +618,18 @@ func (t *BatchFileOpsTool) batchSearchReplace(ctx context.Context, params map[st
 			continue
 		}
 
-		// Commit: preserve original line-ending style; write atomically.
-		if err := atomicWriteFile(absPath, []byte(convertLineEndings(newContent, lineEnding)), 0644); err != nil {
+		// Commit: preserve original line-ending style and permission mode; write atomically.
+		fileMode := FileSecurityFromContext(ctx).DefaultFileMode
+		if fileMode == 0 {
+			fileMode = 0644
+		}
+		if info, statErr := os.Stat(absPath); statErr == nil {
+			fileMode = info.Mode().Perm()
+		} else if !os.IsNotExist(statErr) {
+			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to stat existing file: %v", statErr)}
+			continue
+		}
+		if err := atomicWriteFile(absPath, []byte(convertLineEndings(newContent, lineEnding)), fileMode); err != nil {
 			results[filePath] = map[string]interface{}{"changes": 0, "error": fmt.Sprintf("failed to write file: %v", err)}
 			continue
 		}

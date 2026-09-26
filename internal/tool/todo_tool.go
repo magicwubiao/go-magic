@@ -395,9 +395,12 @@ func toBase36(i int64) string {
 
 func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) {
 	title, ok := args["title"].(string)
-	if !ok || title == "" {
+	if !ok || strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("title is required for create")
 	}
+	// 规范化：去掉首尾空白，避免出现"看似有标题、实际只有空格"的空白待办，
+	// 否则前端侧边栏会渲染出没有文字的空白项。
+	title = strings.TrimSpace(title)
 
 	now := time.Now()
 	todo := &TodoItem{
@@ -625,7 +628,12 @@ func (t *TodoTool) updateTodo(args map[string]interface{}) (interface{}, error) 
 	// If the key is NOT in args, we leave the existing value untouched.
 	if _, hasTitle := args["title"]; hasTitle {
 		if v, ok := args["title"].(string); ok {
-			todo.Title = v
+			// 拒绝把标题清空/改成纯空白：否则前端侧边栏会渲染出没有文字的空白项。
+			// 允许调用方删除 title 键来保留原值，但显式传空串或全空格会报错提示。
+			if strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("title cannot be empty for update")
+			}
+			todo.Title = strings.TrimSpace(v)
 		}
 	}
 	if _, hasDesc := args["description"]; hasDesc {

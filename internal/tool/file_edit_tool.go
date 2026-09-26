@@ -285,15 +285,18 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 	// Solution: stat the original file and re-apply its exact permission mode.
 	sec := FileSecurityFromContext(ctx)
 	var fileMode os.FileMode = sec.DefaultFileMode
+	if fileMode == 0 {
+		fileMode = 0600
+	}
 	if fi, staterr := os.Stat(absPath); staterr == nil {
 		fileMode = fi.Mode().Perm()
 	} else if !os.IsNotExist(staterr) {
-		// If the path exists but we can't stat it (extremely unusual: e.g.
-		// dangling symlink with EPERM), surface the problem instead of
-		// silently writing 0644 and potentially corrupting ACLs.
 		return nil, fmt.Errorf("failed to stat target file for permission preservation: %w", staterr)
 	}
-	if err := os.WriteFile(absPath, []byte(newContent), fileMode); err != nil {
+	if sec.MaxFileSizeKB > 0 && len(newContent) > sec.MaxFileSizeKB*1024 {
+		return nil, fmt.Errorf("edited file size %d bytes exceeds maximum allowed size of %d KB", len(newContent), sec.MaxFileSizeKB)
+	}
+	if err := atomicWriteFile(absPath, []byte(newContent), fileMode); err != nil {
 		return nil, fmt.Errorf("failed to write file (mode=%v): %w", fileMode, err)
 	}
 

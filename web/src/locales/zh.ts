@@ -141,6 +141,7 @@ export default {
     updated: '待办已更新',
     deleted: '待办已删除',
     noTodos: '暂无待办，等待 AI 规划后自动同步',
+    untitled: '未命名',
     inputPlaceholder: '输入待办标题，回车创建...',
     priorityHigh: '高',
     priorityMedium: '中',

@@ -228,16 +228,24 @@ func (p *OpenAICompatibleProvider) SetExtraParam(key string, value interface{}) 
 // Users can still override it per-model via extraParams ("temperature").
 const defaultTemperature = 0.7
 
-// skipTemperatureDefault reports whether the configured model is known to
-// reject non-default temperature values (OpenAI o-series / gpt-5 style
-// reasoning models). For those we omit the default and let the provider
-// apply its own fixed value.
-func (p *OpenAICompatibleProvider) skipTemperatureDefault() bool {
+// isReasoningModel reports whether the configured model is an OpenAI-style
+// reasoning model (o-series / gpt-5+ / gpt-6). These endpoints keep their
+// reasoning internal by default and reject some request params that plain
+// chat models accept, so the provider applies special-casing for them.
+func (p *OpenAICompatibleProvider) isReasoningModel() bool {
 	model := strings.ToLower(p.GetModel())
 	if strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") {
 		return true
 	}
-	return strings.Contains(model, "gpt-5")
+	return strings.Contains(model, "gpt-5") || strings.Contains(model, "gpt-6")
+}
+
+// skipTemperatureDefault reports whether the configured model is known to
+// reject non-default temperature values (OpenAI o-series / gpt-5+ style
+// reasoning models). For those we omit the default and let the provider
+// apply its own fixed value.
+func (p *OpenAICompatibleProvider) skipTemperatureDefault() bool {
+	return p.isReasoningModel()
 }
 
 // isDashScope is true when this provider instance talks to the
@@ -249,13 +257,25 @@ func (p *OpenAICompatibleProvider) isDashScope() bool {
 }
 
 // applyReasoningDefaults adds the reasoning_effort request key for OpenAI
-// reasoning models (gpt-5*/o-series). Without it these endpoints keep their
-// reasoning internal and never emit reasoning deltas, so the UI shows no
-// thinking process. Only applied for the "openai" provider — generic
+// reasoning models (gpt-5*/gpt-6*/o-series). Without it these endpoints keep
+// their reasoning internal and never emit reasoning events, so the UI shows
+// no thinking process. Only applied for the "openai" provider — generic
 // openai_compatible gateways vary too much to risk unsolicited params.
 // User-set values (extra_params "reasoning_effort") win.
-func (p *OpenAICompatibleProvider) applyReasoningDefaults(reqBody map[string]interface{}) {
-	if p.name != "openai" || !p.skipTemperatureDefault() {
+//
+// withTools tells the caller whether this request carries function tools.
+// OpenAI reasoning models reject a non-"none" reasoning_effort combined with
+// function tools on /v1/chat/completions ("Function tools with
+// reasoning_effort are not supported ... set reasoning_effort to 'none'").
+// In that case we force "none" so tool calling works, even if the user set a
+// higher effort via extra_params — reasoning is sacrificed for the tool turn.
+func (p *OpenAICompatibleProvider) applyReasoningDefaults(reqBody map[string]interface{}, withTools bool) {
+	if p.name != "openai" || !p.isReasoningModel() {
+		return
+	}
+	if withTools {
+		// Tool turns cannot carry a non-"none" reasoning_effort.
+		reqBody["reasoning_effort"] = "none"
 		return
 	}
 	if _, ok := reqBody["reasoning_effort"]; !ok {
@@ -482,7 +502,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, false)
-	p.applyReasoningDefaults(reqBody)
+	p.applyReasoningDefaults(reqBody, false)
 
 	url := p.BaseURL + "/chat/completions"
 
@@ -524,7 +544,7 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, false)
-	p.applyReasoningDefaults(reqBody)
+	p.applyReasoningDefaults(reqBody, true)
 
 	// tool_choice strategy:
 	// - Standard providers (OpenAI, Groq, Together, Perplexity) use "auto"
@@ -592,7 +612,7 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	}
 	p.applyExtraParams(reqBody)
 	p.applyDashScopeDefaults(reqBody, true)
-	p.applyReasoningDefaults(reqBody)
+	p.applyReasoningDefaults(reqBody, withTools)
 
 	if withTools && tools != nil {
 		reqBody["tools"] = tools

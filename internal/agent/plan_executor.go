@@ -209,11 +209,19 @@ func (pe *PlanExecutor) MarkStepComplete(stepID int) {
 		return
 	}
 
+	var completedStep *cognition.Step
 	for i := range pe.plan.Steps {
 		if pe.plan.Steps[i].ID == stepID {
+			if pe.plan.Steps[i].Status == cognition.StepComplete {
+				return
+			}
 			pe.plan.Steps[i].Status = cognition.StepComplete
+			completedStep = &pe.plan.Steps[i]
 			break
 		}
+	}
+	if completedStep == nil {
+		return
 	}
 
 	pe.state.StepsCompleted = append(pe.state.StepsCompleted, stepID)
@@ -222,12 +230,7 @@ func (pe *PlanExecutor) MarkStepComplete(stepID int) {
 		stepID, len(pe.state.StepsCompleted), len(pe.plan.Steps))
 
 	if pe.onStepComplete != nil {
-		for i := range pe.plan.Steps {
-			if pe.plan.Steps[i].ID == stepID {
-				pe.onStepComplete(&pe.plan.Steps[i])
-				break
-			}
-		}
+		pe.onStepComplete(completedStep)
 	}
 }
 
@@ -349,17 +352,21 @@ func (pe *PlanExecutor) DetectStepCompletion(history []provider.Message, toolRes
 		return false
 	}
 
-	// Simple heuristic: if we've had successful tool calls and the LLM
-	// has indicated progress, consider step complete
+	// Only consider results from the most recent tool batch. Counting the full
+	// conversation history lets successful calls from earlier steps accumulate
+	// and can incorrectly mark every later step complete immediately.
 	successfulTools := 0
-	for _, msg := range history {
-		if msg.Role == "tool" && !strings.HasPrefix(msg.Content, "Error:") {
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.Role != "tool" {
+			break
+		}
+		if !strings.HasPrefix(strings.TrimSpace(msg.Content), "Error:") {
 			successfulTools++
 		}
 	}
 
-	// If we've made enough tool calls with success, assume step done
-	return successfulTools >= currentStep.EstimatedTurns
+	return successfulTools > 0 && successfulTools >= currentStep.EstimatedTurns
 }
 
 // GenerateStepSummary generates a summary of a completed step

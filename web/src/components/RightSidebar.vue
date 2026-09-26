@@ -71,7 +71,7 @@
                   <n-icon v-else :component="CheckboxOutline" :size="14" color="#aaa" />
                 </span>
                 <div class="todo-info">
-                  <span class="todo-title" :title="todo.title + (todo.description ? '\n' + todo.description : '')">{{ todo.title }}</span>
+                  <span class="todo-title" :title="todo.title + (todo.description ? '\n' + todo.description : '')">{{ todo.title || t('todos.untitled') }}</span>
                   <span v-if="todo.status !== 'completed'" class="todo-priority-dot" :style="{ background: priorityColor(todo.priority) }" :title="priorityLabel(todo.priority)"></span>
                 </div>
                 <n-popconfirm @positive-click="removeTodo(todo.id)">

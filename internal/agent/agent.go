@@ -195,9 +195,10 @@ type Agent struct {
 	reflectionCfg  ReflectionConfig
 	reflectEnabled bool
 
-	// Plan-guided execution
+	// Plan-guided execution. The enabled flag may be changed by the server
+	// while a conversation is running; planExecutor remains conversation-owned.
 	planExecutor *PlanExecutor
-	planEnabled  bool
+	planEnabled  atomic.Bool
 	planCfg      PlanExecutorConfig
 	failStreak   int
 
@@ -568,7 +569,7 @@ func (a *Agent) performReflection(ctx context.Context, turn int) error {
 func WithPlanExecution(cfg PlanExecutorConfig) AgentOption {
 	return func(a *Agent) {
 		a.planCfg = cfg
-		a.planEnabled = true
+		a.planEnabled.Store(true)
 	}
 }
 
@@ -582,30 +583,20 @@ func WithPlanConfig(cfg PlanExecutorConfig) AgentOption {
 	}
 }
 
-// SetPlanEnabled dynamically toggles plan-guided execution. When disabled, the
-// current plan executor is dropped so the next turn starts fresh (or skips
-// planning entirely). Called by the server when the user flips the plan mode
-// switch in the chat UI.
+// SetPlanEnabled dynamically toggles plan-guided execution. Changes take effect
+// at the next conversation boundary; plan state remains owned by the agent loop.
 func (a *Agent) SetPlanEnabled(enabled bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.planEnabled = enabled
-	if !enabled {
-		a.planExecutor = nil
-		a.failStreak = 0
-	}
+	a.planEnabled.Store(enabled)
 }
 
 // PlanEnabled reports whether plan-guided execution is currently on.
 func (a *Agent) PlanEnabled() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.planEnabled
+	return a.planEnabled.Load()
 }
 
 // initPlanExecutor initializes the plan executor
 func (a *Agent) initPlanExecutor(ctx context.Context, goal string) error {
-	if !a.planEnabled || a.planExecutor != nil {
+	if !a.PlanEnabled() || a.planExecutor != nil {
 		return nil
 	}
 
@@ -1356,11 +1347,13 @@ Please provide a comprehensive, well-structured final response based on these su
 		a.initReflector(input)
 	}
 
-	// Initialize plan executor
-	if a.planEnabled {
-		if err := a.initPlanExecutor(ctx, input); err != nil {
-			log.Warnf("[Agent] Plan executor init failed: %v", err)
-		}
+	// Initialize plan executor. Keep executor state confined to the conversation
+	// goroutine; mode changes are atomic and take effect on the next turn.
+	if !a.PlanEnabled() {
+		a.planExecutor = nil
+		a.failStreak = 0
+	} else if err := a.initPlanExecutor(ctx, input); err != nil {
+		log.Warnf("[Agent] Plan executor init failed: %v", err)
 	}
 
 	// Initialize and inject trajectory-based learning
@@ -2456,6 +2449,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Check context after tool execution
 		a.truncateHistory()
 		a.Emit(bus.EventKindTurnEnd, nil)
+		if a.planExecutor != nil {
+			a.updatePlanProgress(ctx)
+		}
 
 		// Cortex: analyze tool sequence for skill evolution
 		if a.cortexManager != nil {

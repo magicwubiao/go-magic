@@ -1014,6 +1014,7 @@ const showJumpBottom = ref(false)   // 悬浮按钮显隐
 const unreadBelow = ref(0)          // 上滚期间新到达的消息条数
 const STICK_THRESHOLD = 80          // 距底 ≤ 此值即视为贴底（吸收亚像素/平滑滚动残差）
 const JUMP_BTN_THRESHOLD = 200      // 距底 > 此值才显示按钮，避免贴底时按钮闪烁
+const TOOL_FOLLOW_THRESHOLD = 480   // 新工具调用到达时距底 ≤ 此值即自动贴底跟随（正在看底部工具区）
 let jumpScrolling = false           // 程序触发的平滑滚动进行中（scroll 事件不算用户上滚）
 let jumpScrollTimer: ReturnType<typeof setTimeout> | null = null
 let msgScrollRaf = 0
@@ -3069,7 +3070,15 @@ watch(() => chatStore.messages.length, (n, o) => {
   else unreadBelow.value += n - o
 })
 watch(() => chatStore.toolCalls.length, () => {
-  if (stickBottom.value) followBottom()
+  // 新工具调用到达时：只要用户离底部不远（正在看底部工具区/已展开的工具），
+  // 就自动贴底跟随，避免"展开工具拉到底、新工具又得手动滚一下"的反复摩擦。
+  // 只有明确上翻到很靠上的历史（距底 > TOOL_FOLLOW_THRESHOLD）才不打扰，交给悬浮按钮。
+  if (stickBottom.value) {
+    followBottom()
+  } else if (messagesBottomDistance() <= TOOL_FOLLOW_THRESHOLD) {
+    stickBottom.value = true
+    followBottom()
+  }
 })
 
 // ===== 流式输出期间的贴底跟随 =====
@@ -4993,8 +5002,8 @@ onActivated(() => {
     position: relative;
     display: flex;
     align-items: center;
-    min-height: 44px;
-    padding: 6px 10px 6px 12px;
+    min-height: 36px;
+    padding: 3px 10px 3px 12px;
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;

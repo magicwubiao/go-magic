@@ -67,9 +67,12 @@ func (t *DirectoryTreeTool) Execute(ctx context.Context, params map[string]inter
 		path = p
 	}
 
-	maxDepth := 2
-	if md, ok := params["max_depth"].(float64); ok {
-		maxDepth = int(md)
+	maxDepth := 3
+	if _, ok := params["max_depth"]; ok {
+		maxDepth = paramInt(params, "max_depth")
+		if maxDepth < 0 {
+			maxDepth = 0
+		}
 	}
 
 	includeHidden := false
@@ -194,9 +197,7 @@ func (t *DirectoryTreeTool) buildTree(dirPath string, depth int, maxDepth int, i
 		}
 
 		if entry.IsDir() {
-			child.Type = "directory"
-			childNode := t.buildTree(entryPath, depth+1, maxDepth, includeHidden, exclude)
-			child.Children = []*TreeNode{childNode}
+			child = t.buildTree(entryPath, depth+1, maxDepth, includeHidden, exclude)
 		} else {
 			child.Type = "file"
 			if info, err := entry.Info(); err == nil {

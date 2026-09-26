@@ -141,6 +141,7 @@ export default {
     updated: 'Todo updated',
     deleted: 'Todo deleted',
     noTodos: 'No todos yet. They will auto-sync once AI plans them.',
+    untitled: 'Untitled',
     inputPlaceholder: 'Enter title, press Enter to create...',
     priorityHigh: 'High',
     priorityMedium: 'Med',
