@@ -6,6 +6,16 @@ import { i18n } from './locales'
 import { getAuthToken, setAuthToken } from './api/client'
 import { getAuthStatus } from './api/auth'
 
+// 全局拖拽守卫。桌面壳（go-magic-desktop）为让 HTML5 拖拽在打包后的 Windows
+// WebView2 里工作，禁用了 Tauri 的原生拖放处理器（见其 main.rs 的注释）——
+// 否则壳的 IDropTarget 会把 dragover/drop 全部吞掉，看板拖卡片在浏览器正常、
+// 打包后失效。禁用后 WebView2 恢复默认拖放行为：文件落到没有 drop 处理器的
+// 区域时，默认动作是"整个 webview 导航到该文件"，等于把应用顶掉。这里在
+// window 级阻止该默认动作；各页面自己的 .prevent 处理器（看板、技能/插件
+// 拖拽安装区）照常触发，不受影响。
+window.addEventListener('dragover', (e) => e.preventDefault())
+window.addEventListener('drop', (e) => e.preventDefault())
+
 // 页面组件全部按需加载。
 //
 // 原先这 19 个 view 是静态 import，会被打进同一份首屏 chunk（实测 index chunk
