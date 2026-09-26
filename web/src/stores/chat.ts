@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed, reactive, nextTick } from 'vue'
+import { ref, computed, reactive, nextTick, watch } from 'vue'
 import type { Session, Message, FileOp } from '@/api/sessions'
 import * as sessionsApi from '@/api/sessions'
 import * as commandsApi from '@/api/commands'
@@ -128,6 +128,10 @@ interface SessionState {
   // 的是哪一条"（空串表示这条是本地发起但尚未被服务端认领）。
   queued: QueuedMessage[]
   activeTurnId: string
+  // 当前回合被服务端认领的时刻（unix 秒；0 表示空闲或未知）。来自
+  // /running 与 queue_changed 的对账，用于显示"当前回合已执行 X 分钟"——
+  // 用户由此判断服务端是"真的还在跑"还是"已经结束/卡住了"。
+  activeTurnStartedAt: number
 }
 
 function $t(key: string, params?: Record<string, unknown>): string {
@@ -238,6 +242,41 @@ export const useChatStore = defineStore('chat', () => {
   // 因此这里只用于提示，不再作为发送按钮的禁用依据。
   const busy = computed(() => streaming.value || queueDepth.value > 0)
 
+  // 当前回合认领时刻（unix 秒，0 = 空闲）。来自服务端 /running 与
+  // queue_changed 的 active_started_at，用于让用户判断"当前回合是
+  // 真的还在跑，还是已经停了/卡住了"——这是线上故障的直接回应。
+  const activeTurnStartedAt = computed(() => {
+    const state = activeSessionState.value
+    return state?.activeTurnStartedAt || 0
+  })
+
+  // 低频时钟：仅在回合进行时每 30 秒跳动一次，驱动"已执行时长"刷新；
+  // 空闲时清除定时器，不给常驻路径增加任何开销。
+  const elapsedTick = ref(0)
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null
+  watch(
+    activeTurnStartedAt,
+    (started) => {
+      if (started > 0 && elapsedTimer === null) {
+        elapsedTimer = setInterval(() => {
+          elapsedTick.value++
+        }, 30_000)
+      } else if (started <= 0 && elapsedTimer !== null) {
+        clearInterval(elapsedTimer)
+        elapsedTimer = null
+      }
+    },
+    { immediate: true },
+  )
+
+  // 当前回合已执行分钟数（向下取整）。0 表示空闲或刚起步不足 1 分钟。
+  const activeTurnElapsedMinutes = computed(() => {
+    void elapsedTick.value
+    const started = activeTurnStartedAt.value
+    if (!started) return 0
+    return Math.max(0, Math.floor((Date.now() / 1000 - started) / 60))
+  })
+
   const streamContent = computed(() => {
     const state = activeSessionState.value
     return state?.streamContent || ''
@@ -335,6 +374,7 @@ export const useChatStore = defineStore('chat', () => {
         lastStreamSegEnd: 0,
         queued: [],
         activeTurnId: '',
+        activeTurnStartedAt: 0,
       })
       sessionStates.value = { ...sessionStates.value, [sessionId]: state }
     }
@@ -683,6 +723,7 @@ export const useChatStore = defineStore('chat', () => {
     state.streamingSegments = []
     state.lastStreamSegEnd = 0
     state.activeTurnId = ''
+    state.activeTurnStartedAt = 0
   }
 
   // 回合确实中断且服务端无完整结果时的兜底：固化已收到的部分内容。
@@ -730,7 +771,7 @@ export const useChatStore = defineStore('chat', () => {
         const running = await sessionsApi.getSessionRunning(sessionId)
         // 服务端队列是权威：把本地排队镜像对齐过去。这样刷新页面、或在
         // 另一台设备上操作后，本端也能看到"还有几条在等"。
-        syncQueuedFromServer(sessionId, running.queued, running.active_id)
+        syncQueuedFromServer(sessionId, running.queued, running.active_id, running.active_started_at)
 
         if (!running.running && running.queue_depth === 0) {
           const res = await sessionsApi.getSession(sessionId)
@@ -809,7 +850,7 @@ export const useChatStore = defineStore('chat', () => {
       attempts++
       try {
         const running = await sessionsApi.getSessionRunning(sessionId)
-        syncQueuedFromServer(sessionId, running.queued, running.active_id)
+        syncQueuedFromServer(sessionId, running.queued, running.active_id, running.active_started_at)
 
         if (running.running || running.queue_depth > 0 || st.queued.length > 0) {
           // 服务端确实还有活：重新挂一条附着流把后续事件接回来。
@@ -894,9 +935,13 @@ export const useChatStore = defineStore('chat', () => {
   //   - 本地有、服务端没有（已被执行 / 被取消丢弃）→ 移除。
   // 正在执行的那一条由 active_id 标识，会在服务端 snapshot 的 items 之外，
   // 因此不能出现在排队列表里（它已被转入流式渲染）。
-  function syncQueuedFromServer(sessionId: string, serverQueued: sessionsApi.QueuedTurnInfo[], activeId: string): void {
+  // activeStartedAt（unix 秒，0=空闲）随对账刷新：轮询/对账是用户判断
+  // "服务端是否真的还在跑"的唯一窗口，时刻必须同步更新。
+  function syncQueuedFromServer(sessionId: string, serverQueued: sessionsApi.QueuedTurnInfo[], activeId: string, activeStartedAt = 0): void {
     const state = sessionStates.value[sessionId]
     if (!state) return
+
+    state.activeTurnStartedAt = activeStartedAt || 0
 
     const serverIds = new Set(serverQueued.map(q => q.id))
 
@@ -1239,7 +1284,7 @@ export const useChatStore = defineStore('chat', () => {
           // queue_changed：别的连接（另一台设备 / 另一个标签页）增删改了
           // 队列。用服务端快照对齐本地排队镜像，保证多端一致。
           if (data.type === 'queue_changed') {
-            syncQueuedFromServer(sessionId, data.queued || [], String(data.active_id || ''))
+            syncQueuedFromServer(sessionId, data.queued || [], String(data.active_id || ''), Number(data.active_started_at || 0))
             return
           }
 
@@ -1495,6 +1540,7 @@ export const useChatStore = defineStore('chat', () => {
             state.streaming = false
             state.taskProgress = null
             state.activeTurnId = ''
+            state.activeTurnStartedAt = 0
 
             if (!hasMoreQueued && sessionEventSources.value[sessionId]) {
               sessionEventSources.value[sessionId]!.close()
@@ -2109,6 +2155,8 @@ export const useChatStore = defineStore('chat', () => {
     queuedMessages,
     queueDepth,
     queuedAttachments,
+    activeTurnStartedAt,
+    activeTurnElapsedMinutes,
     streamContent,
     error,
     activeSession,

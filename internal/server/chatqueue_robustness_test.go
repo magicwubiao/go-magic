@@ -77,7 +77,7 @@ func TestQueuedTurnPanicDoesNotLeaveQueueRunning(t *testing.T) {
 	// 用来模拟"回合并发路径里的任意 panic"。
 	q.enqueue(&queuedTurn{id: "t1", content: "boom", run: &turnRunCtx{fileOps: nil}})
 
-	safeGo(func() { s.runQueue(sid, q) })
+	safeGo(func() { s.runQueue(sid, q, q.workerGen) })
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

@@ -109,7 +109,7 @@ func TestSessionQueueEnqueueAfterWorkerExitRevives(t *testing.T) {
 	q.items = append(q.items, &queuedTurn{id: "late", content: "late"})
 	q.mu.Unlock()
 
-	s.releaseWorker(sid, q)
+	s.releaseWorker(sid, q, q.workerGen)
 
 	// 等待被重新拉起的 worker 认领这条消息。
 	deadline := time.Now().Add(2 * time.Second)

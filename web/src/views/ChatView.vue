@@ -400,6 +400,20 @@
            唯一的例外是底部这行"清空待发"：它是一个作用于整块的操作，
            塞进单行卡片会与那一行的三个图标混淆语义。做成一条安静的
            文字按钮贴在末尾，既不抢视线，也让"一次撤掉后面全部"有出口。 -->
+      <!-- 当前回合已执行时长：回应"界面停了但不确定是否真停"的疑虑。
+           刻意超过 1 分钟才出现——正常回答大多在 1 分钟内完成，不打扰；
+           一旦出现，这行数字每 30 秒在跳，就说明回合确实还在被服务端执行，
+           而不是死在了前端。与排队 dock 同时出现时紧贴其上（dock 的
+           border-top 让位），读作"正在跑的第 X 分钟 + 后面排着 N 条"。 -->
+      <div
+        v-if="chatStore.activeTurnStartedAt > 0 && chatStore.activeTurnElapsedMinutes >= 1"
+        class="turn-elapsed-line"
+      >
+        <div class="turn-elapsed-line-inner">
+          <span class="turn-elapsed-dot" aria-hidden="true"></span>
+          {{ t('chat.turnElapsed', { duration: formatTurnElapsed(chatStore.activeTurnElapsedMinutes) }) }}
+        </div>
+      </div>
       <div v-if="chatStore.queuedMessages.length" class="queue-dock">
         <div class="queue-dock-inner">
           <div
@@ -1397,6 +1411,19 @@ function collectTurnFileOps(msg?: sessionsApi.Message): sessionsApi.FileOp[] {
 // 没有 id/size（uploads 元数据不在队列里）。
 function queuedFilesFor(turnId: string): Partial<sessionsApi.UploadedFile>[] {
   return chatStore.queuedAttachments.get(turnId) || []
+}
+
+// "当前回合已执行时长"的展示格式：< 1 小时显示"X 分钟"，
+// 之上按"X 小时 / X 小时 Y 分钟"拆分。服务端回合超时上限最长 24h，
+// 长任务跨小时并不罕见。
+function formatTurnElapsed(totalMinutes: number): string {
+  if (totalMinutes >= 60) {
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    if (minutes > 0) return t('chat.turnElapsedHoursMinutes', { hours, minutes })
+    return t('chat.turnElapsedHours', { hours })
+  }
+  return t('chat.turnElapsedMinutes', { minutes: totalMinutes })
 }
 
 // 删除一条排队消息。只动这一条，正在执行的回合继续跑（那是停止键的职责）。
@@ -3666,6 +3693,49 @@ onActivated(() => {
      "已提交内容的清单"，不是需要被强调的告警，越安静越不打扰正在读的回答。
    - 中性底色（不是绿色渐变）：这里的等待是常态，不是异常状态；
      绿色只留给"正在执行"的语义，两者同时出现时才不会互相稀释。 */
+/* 当前回合已执行时长（超过 1 分钟才出现）：一行安静的小字 + 呼吸点。
+   呼吸点在动 = 回合仍被服务端执行，回应"是不是已经停了"的疑虑。
+   容器对齐与排队 dock 一致（max-width 900px 居中）。 */
+.turn-elapsed-line {
+  padding: 8px 16px 0;
+  background: var(--body-color, #fff);
+  border-top: 1px solid var(--border-color, #efefef);
+}
+
+/* 与排队 dock 相邻时共用一条分隔线，避免两条线叠出割裂感。 */
+.turn-elapsed-line + .queue-dock {
+  border-top: none;
+}
+
+.turn-elapsed-line-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-color-3, #999);
+}
+
+/* 呼吸点：用"还在动"的视觉证明回合活着，而不是靠用户盯着文字数秒。 */
+.turn-elapsed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success-color, #18a058);
+  animation: turn-elapsed-pulse 2s ease-in-out infinite;
+}
+
+@keyframes turn-elapsed-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .queue-dock {
   padding: 4px 16px 0;
   background: var(--body-color, #fff);

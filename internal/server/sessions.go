@@ -902,28 +902,39 @@ func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types
 		run:            run,
 	}
 
+	// 入队与 worker 拉起判定必须在**同一临界区**（chatQueuesMu）内完成。
+	//
+	// 拆开的写法留下过一个竞态窗口：先在锁内判定 spawnWorker（看到
+	// workerLive=true，即上一回合的 worker 还活着），锁外再 enqueue——而
+	// 那个 worker 可能恰好在此间隙走到生命终点：releaseWorker 把
+	// workerLive 复位、发现队列为空且无监听者、把队列从 map 里回收。随后
+	// 本消息带着 spawnWorker=false 入队，结果进入一个无人认领（甚至已被
+	// 摘除）的队列——前端永远显示"排队中"，stream_started 永远不来。
+	// 现在判定、置位、入队原子化，配合 releaseWorker 的代数守卫
+	// （workerGen），两侧不再存在可交错的窗口。
 	s.chatQueuesMu.Lock()
 	queue := s.chatQueues[sessionID]
 	if queue == nil {
 		queue = newSessionQueue()
 		s.chatQueues[sessionID] = queue
 	}
-	// workerLive 在 chatQueuesMu 下判定，保证两个人同时发消息时只会有一个
-	// worker 被拉起——否则同一个 *agent.Agent 会被并行使用。
 	spawnWorker := !queue.workerLive
 	if spawnWorker {
 		queue.workerLive = true
+		// 每次取得所有权都换代：使任何上一代残骸（含被看门狗放弃的僵尸
+		// worker）的 defer releaseWorker 因代数不匹配而无操作。
+		queue.workerGen++
 	}
-	s.chatQueuesMu.Unlock()
 
 	if dupItem := queue.findDuplicate(content); dupItem != nil {
-		// 命中查重：这一条不再入队。但上面的 workerLive 已经置位，若此刻确实
-		// 没有存活的 worker（spawnWorker 为真），必须照常把它拉起来——否则
-		// workerLive 会永远停在 true 而没有任何 goroutine 消费队列，后续消息
-		// 只会一直堆在 items 里，用户看到的就是"消息长时间排队、最后没人执行"。
-		// worker 起来后发现队列里已有那条重复项，照常执行它即可（语义正确）。
+		// 命中查重：这一条不再入队。但上面刚置位 workerLive 时必须照常把
+		// worker 拉起来——否则置位没有任何 goroutine 对应，队列里那条
+		// 重复项无人消费，后续消息也只会堆积（弱网重试场景的"点了重发
+		// 毫无反应"只是表象，队列死掉才是实质）。
+		gen := queue.workerGen
+		s.chatQueuesMu.Unlock()
 		if spawnWorker {
-			safeGo(func() { s.runQueue(sessionID, queue) })
+			safeGo(func() { s.runQueue(sessionID, queue, gen) })
 		}
 		return dupItem, true
 	}
@@ -936,8 +947,11 @@ func (s *Server) enqueueChatTurn(sessionID, content string, contentParts []types
 	// 于是这条消息既没有 worker 认领、也没有任何人会去唤醒，永久滞留。
 	queue.enqueue(item)
 
+	gen := queue.workerGen
+	s.chatQueuesMu.Unlock()
+
 	if spawnWorker {
-		safeGo(func() { s.runQueue(sessionID, queue) })
+		safeGo(func() { s.runQueue(sessionID, queue, gen) })
 	}
 	return item, false
 }
@@ -1169,12 +1183,20 @@ func (s *Server) handleSessionRunning(w http.ResponseWriter, r *http.Request, se
 	if queued == nil {
 		queued = []queuedTurnInfo{}
 	}
+	// active_started_at：当前回合被认领的时刻（0=空闲）。前端据此显示
+	// "当前回合已执行 X 分钟"——用户由此能判断服务端是"真的还在跑"
+	// （时长持续增长）还是"其实已经结束/卡住了"，不再只能靠猜。
+	var activeStartedAt int64
+	if !snap.activeStartedAt.IsZero() {
+		activeStartedAt = snap.activeStartedAt.Unix()
+	}
 	jsonResponse(w, map[string]interface{}{
-		"session_id":  sessionID,
-		"running":     snap.running,
-		"active_id":   snap.activeID,
-		"queue_depth": len(queued),
-		"queued":      queued,
+		"session_id":        sessionID,
+		"running":           snap.running,
+		"active_id":         snap.activeID,
+		"active_started_at": activeStartedAt,
+		"queue_depth":       len(queued),
+		"queued":            queued,
 	})
 }
 
@@ -1469,12 +1491,20 @@ func sseQueueChangedPayload(sessionID string, snap queueSnapshot) string {
 	if items == nil {
 		items = []queuedTurnInfo{}
 	}
+	// active_started_at 与 /running 对齐：queue_changed 也是前端对账队列
+	// 状态的一条通道，带上后前端在任何对账路径都能刷新"当前回合已执行
+	// X 分钟"的显示。
+	var activeStartedAt int64
+	if !snap.activeStartedAt.IsZero() {
+		activeStartedAt = snap.activeStartedAt.Unix()
+	}
 	b, _ := json.Marshal(map[string]interface{}{
-		"type":        "queue_changed",
-		"session_id":  sessionID,
-		"active_id":   snap.activeID,
-		"queue_depth": len(items),
-		"queued":      items,
+		"type":              "queue_changed",
+		"session_id":        sessionID,
+		"active_id":         snap.activeID,
+		"active_started_at": activeStartedAt,
+		"queue_depth":       len(items),
+		"queued":            items,
 	})
 	return "data: " + string(b) + "\n\n"
 }

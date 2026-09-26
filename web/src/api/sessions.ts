@@ -806,6 +806,10 @@ export interface SessionRunningState {
   active_id: string
   queue_depth: number
   queued: QueuedTurnInfo[]
+  // 当前回合被服务端认领的时刻（unix 秒；0 表示空闲）。前端据此显示
+  // "当前回合已执行 X 分钟"，让用户能区分"服务端真的还在跑"与
+  // "输出停了但其实已经结束/卡住了"，不再只能靠猜。
+  active_started_at: number
 }
 
 // 探测会话回合是否仍在服务端执行。移动端浏览器切后台会杀掉 SSE 连接，
@@ -817,12 +821,14 @@ export async function getSessionRunning(sessionId: string): Promise<SessionRunni
     session_id: string
     running: boolean
     active_id?: string
+    active_started_at?: number
     queue_depth?: number
     queued?: QueuedTurnInfo[]
   }>(`/sessions/${encodeURIComponent(sessionId)}/running`)
   return {
     running: !!res.running,
     active_id: res.active_id || '',
+    active_started_at: res.active_started_at ?? 0,
     queue_depth: res.queue_depth ?? (res.queued?.length || 0),
     queued: res.queued || [],
   }

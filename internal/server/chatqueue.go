@@ -168,6 +168,22 @@ type sessionQueue struct {
 	// 由 chatQueuesMu 保护（而非 mu），保证同一队列只会有一个 worker 被
 	// 拉起——两个人同时发消息不会各自 spawn 一个 worker 并行跑同一个 agent。
 	workerLive bool
+	// workerGen 是 worker 的"代数"，与 workerLive 同锁（chatQueuesMu）。
+	// 每次以"拉起新 worker"的方式取得所有权时递增；releaseWorker 只允许
+	// 自己那一代的 worker 复位状态。没有代数时，旧 worker 的退出收尾可能
+	// 与"新消息刚拉起的新 worker"竞争：要么把 workerLive 复位掉（队列从此
+	// 无人消费，消息永远"排队中"），要么与收尾里的 pending>0 重拉叠加出
+	// 两个并行 worker（同一个 agent 被并发使用，历史交叉污染）。
+	workerGen uint64
+	// turnEpoch 是"回合纪元"，由 q.mu 保护。正常收尾与卡死看门狗的强制
+	// 解锁都在 q.mu 下比较纪元：被看门狗强制收走的回合，其僵尸 worker 稍后
+	// 醒来时发现自己的纪元已过期，跳过收尾与取件，避免覆盖新 worker 的状态
+	// （workerGen 管 worker 归属，turnEpoch 管回合归属，二者互补）。
+	turnEpoch uint64
+	// turnStartedAt 是当前回合被认领的时刻（零值表示空闲）。/running 据此
+	// 回传 active_started_at，前端得以显示"当前回合已执行 X 分钟"——用户
+	// 由此能区分"服务端真的还在跑"与"已经停了/卡住了"，不再靠猜。
+	turnStartedAt time.Time
 	// cancelRequested 记录"用户点了停止"：用于区分「被取消」和「回合真的出错」，
 	// 取消导致的 ctx 错误不应作为 error 事件推送给用户（前端已有停止态）。
 	cancelRequested bool
@@ -549,13 +565,17 @@ type uploadRef struct {
 type queueSnapshot struct {
 	running  bool
 	activeID string
-	items    []queuedTurnInfo
+	// activeStartedAt 是当前正在执行的回合被认领的时刻（零值表示空闲）。
+	// /running 透传给前端后，用户能看到"当前回合已执行 X 分钟"，从而
+	// 区分"服务端真的还在跑"与"输出停了但确实结束了/卡住了"。
+	activeStartedAt time.Time
+	items           []queuedTurnInfo
 }
 
 func (q *sessionQueue) snapshot() queueSnapshot {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	snap := queueSnapshot{running: q.running, activeID: q.activeID}
+	snap := queueSnapshot{running: q.running, activeID: q.activeID, activeStartedAt: q.turnStartedAt}
 	for i, it := range q.items {
 		snap.items = append(snap.items, queuedTurnInfo{
 			ID:          it.id,
@@ -615,11 +635,16 @@ func shouldWorkerExit(q *sessionQueue) bool {
 //
 // 退出条件：队列空且没有 SSE 监听者（见 shouldWorkerExit）。此时队列会被
 // 回收，workerLive 复位，下一条消息到达时重新拉起 worker——长时间不活跃的
-// 会话因此不会常驻 goroutine。注意 workerLive 必须在 mu 之外、且在判定
-// "确实要退出"之后复位，否则会出现"worker 已决定退出但新消息刚入队"的
-// 竞态（消息没人消费）。
-func (s *Server) runQueue(sessionID string, q *sessionQueue) {
-	defer s.releaseWorker(sessionID, q)
+// 会话因此不会常驻 goroutine。注意 workerLive 的复位只允许发生在
+// releaseWorker 里、且仅当自己的代数仍是当前代（workerGen == gen）——旧
+// worker 的收尾绝不能碰新一代 worker 的状态。
+//
+// gen 参数：拉起本 worker 时分配的代数（spawn 方在 chatQueuesMu 下置位
+// workerLive 并递增 workerGen，随后把同一代数传进来）。若中途有强制解锁
+// （看门狗）或新一代 worker 被拉起，本 worker 的代数即告过期，循环顶部与
+// 收尾临界区都会据 epoch/gen 让位，绝不越权改状态。
+func (s *Server) runQueue(sessionID string, q *sessionQueue, gen uint64) {
+	defer s.releaseWorker(sessionID, q, gen)
 
 	for {
 		q.mu.Lock()
@@ -636,9 +661,17 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		q.running = true
 		q.activeID = item.id
 		q.cancelRequested = false
+		q.turnStartedAt = time.Now()
+		myEpoch := q.turnEpoch
 		turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 		q.cancel = turnCancel
 		q.mu.Unlock()
+
+		// 卡死看门狗：正常路径下 turnCtx 的 deadline 会让回合自行收尾；只有
+		// "回合 goroutine 无视取消"（卡在不响应 ctx 的调用上）时看门狗才会
+		// 真正触发，把队列状态强制复原——没有它，一次卡死就等于该会话永久
+		// "排队中"，唯一出路是重启进程。
+		s.startTurnStallWatchdog(sessionID, q, item.id, gen, myEpoch, turnCancel)
 
 		// 排队时长观测：等待明显偏长时留一条 WARN（含当时的队列深度），
 		// 用于区分"前一个回合跑太久"和"worker 没被唤醒"这两类原因。
@@ -661,13 +694,25 @@ func (s *Server) runQueue(sessionID string, q *sessionQueue) {
 		//      必须把残留回合算进去，否则 SSE 连接会在还有后续回合时被
 		//      前端/转发层误导关闭——下一回合零监听者，delta 全走"只落库
 		//      不推送"的兜底（血债：排队消息执行完却不刷新）。
+		//
+		//   3) epoch 守卫：本回合若已被看门狗强制收走（turnEpoch 变化），
+		//      状态归新 owner 所有，这里绝不能再动 running/cancel/done——
+		//      否则僵尸醒来的一次收尾会把新回合的 running 误翻负，队列
+		//      再次回到"无人认领"或"双 worker"的混沌状态。
 		var leftovers []agent.GuideItem
 		q.mu.Lock()
+		if q.turnEpoch != myEpoch {
+			q.mu.Unlock()
+			log.Warnf("[queue] session %s: turn %s finished after the stall watchdog already reclaimed the queue; discarding late finish",
+				sessionID, item.id)
+			return
+		}
 		wasCancelled := q.cancelRequested
 		q.running = false
 		q.activeID = ""
 		q.cancel = nil
 		q.cancelRequested = false
+		q.turnStartedAt = time.Time{}
 		q.turns++
 		if a := s.lookupAgent(sessionID); a != nil {
 			leftovers = a.DrainGuideItems()
@@ -736,15 +781,26 @@ func (s *Server) reclaimLeftoverGuides(sessionID string, leftovers []agent.Guide
 // "是否还有未消费消息"的判定必须在 chatQueuesMu 下完成：若复位后队列里
 // 已有新消息，则立即重新拉起 worker，避免消息永久滞留。
 //
-// "队列里还有消息"这件事必须优先于一切回收动作。历史上这里漏掉了
-// workerLive 复位的原子性：释放在 chatQueuesMu 内、但重新拉起 worker 却在
-// 锁外，于是存在一个窗口——worker A 已复位 workerLive，新消息入队时看到
-// workerLive==false 而拉起 worker B，同时 A（或另一个 defer）又拉起一个
-// worker C，两个 worker 并行消费同一个 agent。现在统一在锁内决策、锁外启动，
-// 且启动前再确认一次 workerLive 已被自己置位。
-func (s *Server) releaseWorker(sessionID string, q *sessionQueue) {
+// gen（代数）守卫：只有"自己仍是当前一代 worker"时才允许复位。没有这个
+// 守卫时存在两个历史窗口：
+//
+//   - 入队竞态：worker 退出收尾（workerLive=false）与新消息的拉起判定
+//     （workerLive=true）交错，收尾把新 worker 的标记复位掉，队列从此
+//     无人消费——前端"排队中"永远等不到 stream_started；
+//   - 双重收尾：收尾里的 pending>0 重拉与新消息的拉起叠加出两个并行
+//     worker，同一个 agent 被并发使用（历史交叉污染、读改写丢消息）。
+//
+// 代数不相等即说明所有权已移交（新消息拉起了新一代、或看门狗强制换代），
+// 本 worker 的收尾必须整体退让。
+//
+// "队列里还有消息"这件事必须优先于一切回收动作：pending>0 时立刻以当前
+// 代重新拉起 worker 交还所有权（此处不需要递增代数——旧 goroutine 已经
+// 走到生命终点，不会再竞争）。
+func (s *Server) releaseWorker(sessionID string, q *sessionQueue, gen uint64) {
 	s.chatQueuesMu.Lock()
-	if s.chatQueues[sessionID] != q || !q.workerLive {
+	if s.chatQueues[sessionID] != q || !q.workerLive || q.workerGen != gen {
+		// 所有权已不属于本 worker：新一代 worker 在跑（或队列已被回收），
+		// 复位/重拉/回收都不该由这里做。
 		s.chatQueuesMu.Unlock()
 		return
 	}
@@ -752,7 +808,6 @@ func (s *Server) releaseWorker(sessionID string, q *sessionQueue) {
 
 	q.mu.Lock()
 	pending := len(q.items)
-	idle := pending == 0
 	q.mu.Unlock()
 
 	if pending > 0 {
@@ -760,13 +815,128 @@ func (s *Server) releaseWorker(sessionID string, q *sessionQueue) {
 		// 队列绝不能在有待执行消息时被回收，因此这里不删 map。
 		q.workerLive = true
 		s.chatQueuesMu.Unlock()
-		safeGo(func() { s.runQueue(sessionID, q) })
+		safeGo(func() { s.runQueue(sessionID, q, gen) })
 		return
 	}
-	if idle && !q.hasAnySink() {
+	if !q.hasAnySink() {
 		delete(s.chatQueues, sessionID)
 	}
 	s.chatQueuesMu.Unlock()
+}
+
+// ============================================================================
+// Stall watchdog（卡死看门狗）
+// ============================================================================
+
+// turnStallGrace 是看门狗在回合 deadline 之后的额外宽限。正常路径下
+// turnCtx 的 deadline 触发时，回合会走 gracefulDeadlineFinish 收尾（落
+// checkpoint、写 handler），允许它有几分钟的宽限；只有超过 deadline+宽限
+// 仍不结束的回合，才被认定"无视取消的卡死"。
+const turnStallGrace = 5 * time.Minute
+
+// startTurnStallWatchdog 为一个正在执行的回合挂一个一次性的看门狗。正常
+// 结束的回合只是让 goroutine 睡到点后做一次"无事可做"的检查后退出，代价
+// 是每回合一个短命 goroutine；换来的是任何"无视 ctx 取消的卡死"都无法
+// 再把会话队列永久钉死。
+func (s *Server) startTurnStallWatchdog(sessionID string, q *sessionQueue, itemID string, gen, epoch uint64, turnCancel context.CancelFunc) {
+	deadline := s.turnTimeout() + turnStallGrace
+	safeGo(func() {
+		time.Sleep(deadline)
+		s.forceRecoverStalledTurn(sessionID, q, itemID, gen, epoch, turnCancel)
+	})
+}
+
+// forceRecoverStalledTurn 在"回合超过 deadline+宽限仍未结束"时把队列状态
+// 强制复原，并让排队的后续消息能继续执行。判定必须三重一致（纪元、回合
+// id、running），任何一个不匹配都说明回合早已正常收尾或看门狗已触发过。
+//
+// 触发后的动作：
+//  1. q.mu 下递增 turnEpoch——僵尸 worker 醒来后在收尾/取件两处都会发现
+//     纪元过期而整体退让（这正是 epoch 守卫存在的意义）；
+//  2. running 翻负、activeID/cancel/turnStartedAt 复位；
+//  3. 广播 error + done：挂着的 SSE 连接由此解锁，前端把卡住的回合按
+//     出错收尾；done 的 queue_idle 如实反映当前队列深度；
+//  4. 若还有排队消息，递增 workerGen 拉起新一代 worker 继续消费——旧
+//     worker 被认定已卡死（它的 defer releaseWorker 会因代数不匹配而无
+//     操作），不能指望它交还所有权。
+//
+// 已知代价：被认定卡死的 goroutine 若最终醒来，它可能仍握着 agent 继续
+// 跑完剩余步骤（落库照常），与新 worker 的回合存在理论上的并发窗口。这
+// 是"会话永久钉死"与"极端情况下并发收尾"之间的权衡——前者是用户实际
+// 报告的故障（"发新消息一直在排队中"），后者只在 ctx 取消、超时、工具
+// 上限全部失效的极端场景才会出现，且有日志与 epoch 守卫兜住状态一致性。
+func (s *Server) forceRecoverStalledTurn(sessionID string, q *sessionQueue, itemID string, gen, epoch uint64, turnCancel context.CancelFunc) {
+	q.mu.Lock()
+	if q.turnEpoch != epoch || q.activeID != itemID || !q.running {
+		// 回合早已正常结束 / 新回合已开始 / 看门狗已触发过：无事可做。
+		q.mu.Unlock()
+		return
+	}
+	log.Errorf("[queue] session %s: turn %s ignored its deadline and cancellation for %s — "+
+		"force-releasing the queue (worker gen %d presumed wedged; it will be abandoned if it ever wakes)",
+		sessionID, itemID, turnStallGrace.Truncate(time.Second), gen)
+	q.turnEpoch++
+	q.running = false
+	q.activeID = ""
+	q.cancel = nil
+	q.cancelRequested = false
+	q.turnStartedAt = time.Time{}
+	q.mu.Unlock()
+
+	// 尽力取消一次：即便卡死的调用不响应，它内部仍在 ctx 上的环节（HTTP
+	// 请求、工具子进程等）会收到取消信号，加速僵尸自我了断。
+	if turnCancel != nil {
+		turnCancel()
+	}
+
+	// 广播 error + done，解锁挂着的 SSE 连接；queue_depth 用触发时刻的
+	// 实际值——若有排队消息，前端会保留连接等下一条的 stream_started。
+	errEv := turnEvent{err: fmt.Errorf("turn stalled past its deadline and was force-stopped; the session queue has been released")}
+	q.broadcast(errEv)
+	pending := q.pendingCount()
+	doneData, _ := json.Marshal(map[string]interface{}{
+		"done":        true,
+		"turn_id":     itemID,
+		"queue_depth": pending,
+		"queue_idle":  pending == 0,
+		"forced":      true,
+	})
+	q.broadcast(turnEvent{data: "data: " + string(doneData) + "\n\n", done: true, queueIdle: pending == 0})
+
+	// 所有权处置：被认定卡死的旧 worker 此刻仍持有 workerLive=true（它
+	// 永远走不到 releaseWorker 的复位），必须在这里把所有权收走，否则
+	// 后续入队会因 spawn=false 而无人消费，强制解锁就失去了意义。
+	// 是否需要新 worker 以 CQM 临界区内**重新读取**的队列深度为准——
+	// 广播 done 与拿锁之间可能恰好有新消息入队。
+	s.chatQueuesMu.Lock()
+	if s.chatQueues[sessionID] != q {
+		// 队列已被回收（空闲且无监听者时 releaseWorker 会删 map）：既然
+		// map 里都没有它了，也无所有权可收。
+		s.chatQueuesMu.Unlock()
+		return
+	}
+	q.mu.Lock()
+	pendingNow := len(q.items)
+	q.mu.Unlock()
+	if pendingNow == 0 {
+		// 队列已空：不拉新 worker，但必须释放僵尸的所有权（workerLive
+		// 复位），否则下一条消息会因 spawn=false 而永远无人消费。僵尸
+		// 若将来醒来，其 loop-top/收尾的 epoch 守卫会让它整体退让，
+		// defer releaseWorker 也会因代数不匹配而无操作。
+		q.workerLive = false
+		if !q.hasAnySink() {
+			delete(s.chatQueues, sessionID)
+		}
+		s.chatQueuesMu.Unlock()
+		return
+	}
+	// 有排队消息：换代拉起新 worker 继续消费。换代后旧 worker 的
+	// defer releaseWorker 会因代数不匹配而无操作。
+	q.workerGen++
+	next := q.workerGen
+	q.workerLive = true
+	s.chatQueuesMu.Unlock()
+	safeGo(func() { s.runQueue(sessionID, q, next) })
 }
 
 // hasSinksLocked 报告是否还有 SSE 监听者（调用方须持有 q.mu）。
