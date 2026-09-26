@@ -328,15 +328,14 @@
           <div class="message assistant">
             <div class="avatar bot-avatar">🤖</div>
             <div class="message-body assistant-body">
-              <!-- 回合执行状态行（WorkBuddy 风格）：贴着机器人头像、在回合
-                   内容之上。回合一开跑就出现，spinner 在转 + 秒数在走 =
-                   回合确实还在被服务端执行，回应"界面停了但不确定是否真停"
-                   的疑虑。时长优先取服务端认领时刻（active_started_at，
-                   刷新页面不归零），服务端数据未同步时回退本地流式计时。
+              <!-- 回合执行状态行：贴着机器人头像、在回合内容之上，只有
+                   文字、不带图标。回合一开跑就出现，秒数在走 = 回合确实
+                   还在被服务端执行，回应"界面停了但不确定是否真停"的疑虑。
+                   时长优先取服务端认领时刻（active_started_at，刷新页面
+                   不归零），服务端数据未同步时回退本地流式计时。
                    回合结束后随流式消息一起消失，不进历史。 -->
               <div class="turn-elapsed-line">
-                <span class="turn-elapsed-spinner" aria-hidden="true"></span>
-                <span>{{ t('chat.turnElapsed', { duration: formatTurnElapsed(turnElapsedForDisplay) }) }}</span>
+                {{ t('chat.turnElapsed', { duration: formatTurnElapsed(turnElapsedForDisplay) }) }}
               </div>
 
               <!-- Status panel when no content yet & no running tools -->
@@ -3691,28 +3690,13 @@ onActivated(() => {
      "已提交内容的清单"，不是需要被强调的告警，越安静越不打扰正在读的回答。
    - 中性底色（不是绿色渐变）：这里的等待是常态，不是异常状态；
      绿色只留给"正在执行"的语义，两者同时出现时才不会互相稀释。 */
-/* 回合执行状态行（WorkBuddy 风格）：贴着机器人头像、在回合内容之上，
-   属于流式消息的一部分（不悬浮、不吸顶）。spinner 在转 + 秒数在走 =
+/* 回合执行状态行：贴着机器人头像、在回合内容之上，属于流式消息的
+   一部分（不悬浮、不吸顶）。只有一行小字、不带图标——秒数在走 =
    回合仍被服务端执行，回应"是不是已经停了"的疑虑。 */
 .turn-elapsed-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin: 2px 0 12px;
   font-size: 12px;
   color: var(--text-color-3, #999);
-}
-
-/* 复用 status-spinner 同款旋转弧：转动的图形比呼吸点更明确地传达
-   "正在执行"，且与流式面板的执行中视觉语言一致。 */
-.turn-elapsed-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid #d0d0d0;
-  border-top-color: #666;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  flex-shrink: 0;
 }
 
 .queue-dock {
