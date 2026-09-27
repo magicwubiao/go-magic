@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -41,7 +42,7 @@ func (p *WenxinProvider) GetConvertConfig() *ConvertConfig {
 // NewWenxinProvider creates a new Wenxin provider
 func NewWenxinProvider(apiKey, secretKey, model string) *WenxinProvider {
 	if model == "" {
-		model = "ernie-5.1" // Default model
+		model = catalog.DefaultModel("wenxin")
 	}
 	return &WenxinProvider{
 		apiKey:    apiKey,

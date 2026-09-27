@@ -129,10 +129,42 @@
           </template>
         </n-form-item>
         <n-form-item :label="t('modelsProviders.models')">
-          <n-dynamic-input
-            v-model:value="editingProvider.models"
-            :placeholder="t('modelsProviders.modelPlaceholder')"
-          />
+          <div class="models-field">
+            <n-dynamic-input
+              v-model:value="editingProvider.models"
+              :placeholder="t('modelsProviders.modelPlaceholder')"
+            />
+            <div class="fetch-models-bar">
+              <n-button
+                size="small"
+                :loading="fetchingModels"
+                :disabled="!editingProvider.name"
+                :title="t('modelsProviders.fetchModels')"
+                @click="handleFetchModels"
+              >
+                {{ fetchingModels ? t('modelsProviders.fetchingModels') : t('modelsProviders.fetchModels') }}
+              </n-button>
+              <span v-if="fetchedModelsTitle" class="fetch-models-status">{{ fetchedModelsTitle }}</span>
+            </div>
+            <!-- 在线拉取结果：勾选需要补充的模型，合并进上面的输入列表 -->
+            <div v-if="fetchedModels.length" class="fetched-models">
+              <div class="fetched-models-actions">
+                <n-button size="tiny" text @click="selectAllFetched(true)">{{ t('modelsProviders.selectAll') }}</n-button>
+                <n-button size="tiny" text @click="selectAllFetched(false)">{{ t('modelsProviders.selectNone') }}</n-button>
+              </div>
+              <n-checkbox-group v-model:value="selectedFetchedModels" class="fetched-models-list">
+                <n-checkbox v-for="m in fetchedModels" :key="m" :value="m" :label="m" class="fetched-model-item" />
+              </n-checkbox-group>
+              <n-button
+                size="small"
+                type="primary"
+                :disabled="!selectedFetchedModels.length"
+                @click="addSelectedFetchedModels"
+              >
+                {{ t('modelsProviders.addSelected') }}
+              </n-button>
+            </div>
+          </div>
         </n-form-item>
         <n-form-item :label="t('modelsProviders.apiKey')">
           <n-input-group>
@@ -191,7 +223,8 @@ import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import {
   NButton, NList, NListItem, NTag, NSelect, NModal, NForm, NFormItem,
-  NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin, NIcon
+  NInput, NInputGroup, NDynamicInput, NSpace, NEmpty, NSpin, NIcon,
+  NCheckbox, NCheckboxGroup
 } from 'naive-ui'
 import { NPopconfirm } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
@@ -243,10 +276,74 @@ const testTitle = computed(() => {
     : t('modelsProviders.testFailed') + (testResult.value.error ? `: ${testResult.value.error}` : '')
 })
 
+// ===== 从厂商 API 在线获取模型列表 =====
+// 走后端 POST /api/providers/{name}/fetch-models：用表单当前值（未保存也行，
+// 与测试连接同语义）实时调厂商 /models 端点，返回的列表勾选后合并进输入框。
+const fetchingModels = ref(false)
+const fetchedModels = ref<string[]>([])
+const selectedFetchedModels = ref<string[]>([])
+const fetchModelsError = ref('')
+
+const fetchedModelsTitle = computed(() => {
+  if (fetchModelsError.value) {
+    return t('modelsProviders.fetchModelsFailed') + ': ' + fetchModelsError.value
+  }
+  if (fetchedModels.value.length) {
+    return t('modelsProviders.fetchedCount', { n: fetchedModels.value.length })
+  }
+  return ''
+})
+
+function resetFetchedModels() {
+  fetchedModels.value = []
+  selectedFetchedModels.value = []
+  fetchModelsError.value = ''
+}
+
+async function handleFetchModels() {
+  const name = editingProvider.value.name
+  if (!name || fetchingModels.value) return
+  fetchingModels.value = true
+  resetFetchedModels()
+  try {
+    const res = await providersApi.fetchProviderModels(name, {
+      api_key: editingProvider.value.apiKey || undefined,
+      base_url: editingProvider.value.baseUrl || undefined,
+    })
+    if (!res.ok || !res.models) {
+      fetchModelsError.value = res.error || 'unknown error'
+      return
+    }
+    fetchedModels.value = res.models
+    // 默认勾选"列表里还没有的"——合并操作以补新为主，已有模型不用再勾
+    const existing = new Set(editingProvider.value.models)
+    selectedFetchedModels.value = res.models.filter(m => !existing.has(m))
+  } catch (e: any) {
+    fetchModelsError.value = e?.message || String(e)
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+function selectAllFetched(all: boolean) {
+  selectedFetchedModels.value = all ? [...fetchedModels.value] : []
+}
+
+function addSelectedFetchedModels() {
+  const existing = new Set(editingProvider.value.models)
+  const toAdd = selectedFetchedModels.value.filter(m => !existing.has(m))
+  if (toAdd.length) {
+    editingProvider.value.models = [...editingProvider.value.models, ...toAdd]
+  }
+  resetFetchedModels()
+  message.success(t('modelsProviders.addedCount', { n: toAdd.length }))
+}
+
 function openAddProviderModal() {
   isEditing.value = false
   editingProvider.value = { name: '', models: [], apiKey: '', baseUrl: '', vision: 'auto' }
   testResult.value = null
+  resetFetchedModels()
   showProviderModal.value = true
 }
 
@@ -262,6 +359,7 @@ function openEditProviderModal(name: string) {
     vision: prov.vision === true ? 'on' : prov.vision === false ? 'off' : 'auto'
   }
   testResult.value = null
+  resetFetchedModels()
   showProviderModal.value = true
 }
 
@@ -669,5 +767,51 @@ onMounted(async () => {
   .providers-list {
     width: 100%;
   }
+}
+
+/* 在线获取模型列表 */
+.models-field {
+  width: 100%;
+}
+
+.fetch-models-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.fetch-models-status {
+  font-size: 12px;
+  opacity: 0.75;
+  word-break: break-all;
+}
+
+.fetched-models {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--n-border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fetched-models-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.fetched-models-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fetched-model-item {
+  font-family: monospace;
+  font-size: 12px;
 }
 </style>

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -81,76 +82,16 @@ func isNoKeyProvider(name string) bool {
 	return false
 }
 
-// getDefaultBaseURL returns the default base URL for a provider
+// getDefaultBaseURL returns the default base URL for a provider.
+// Data derives from pkg/catalog（唯一目录源）— do NOT add entries here.
 func getDefaultBaseURL(name string) string {
-	defaults := map[string]string{
-		"openai":     "https://api.openai.com/v1",
-		"anthropic":  "https://api.anthropic.com",
-		"deepseek":   "https://api.deepseek.com",
-		"gemini":     "https://generativelanguage.googleapis.com/v1beta",
-		"groq":       "https://api.groq.com/openai/v1",
-		"kimi":       "https://api.moonshot.cn/v1", // kimi 为 moonshot 兼容别名
-		"moonshot":   "https://api.moonshot.cn/v1",
-		"openrouter": "https://openrouter.ai/api/v1",
-		"ollama":     "http://localhost:11434",
-		"vllm":       "http://localhost:8000",
-		"cohere":     "https://api.cohere.ai/v2",
-		"mistral":    "https://api.mistral.ai/v1",
-		"perplexity": "https://api.perplexity.ai",
-		"together":   "https://api.together.xyz/v1",
-		"dashscope":  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		"zhipu":      "https://open.bigmodel.cn/api/paas/v4",
-		"wenxin":     "https://aip.baidubce.com/rpc/2/0/ai_qianfan_200/v1",
-		"doubao":     "https://ark.cn-beijing.volces.com/api/v3", // doubao 为 huoshan 兼容别名
-		"huoshan":    "https://ark.cn-beijing.volces.com/api/v3",
-		"hunyuan":    "https://hunyuan.cloud.tencent.com/v1",
-		"minimax":    "https://api.minimax.chat/v1",
-		"mimo":       "https://api.mymimo.ai/v1",
-		"longcat":    "https://api.longcat.chat/openai/v1",
-		"meta":       "https://api.meta.ai/v1", // Meta Model API (Muse Spark)
-	}
-
-	if url, ok := defaults[strings.ToLower(name)]; ok {
-		return url
-	}
-
-	return ""
+	return catalog.BaseURL(name)
 }
 
-// getDefaultModel returns the default model for a provider
+// getDefaultModel returns the default model for a provider.
+// Data derives from pkg/catalog（唯一目录源）— do NOT add entries here.
 func getDefaultModel(name string) string {
-	defaults := map[string]string{
-		"openai":     "gpt-5.6",           // GPT-5.6 Sol (alias gpt-5.6), also: gpt-5.6-terra, gpt-5.6-luna
-		"anthropic":  "claude-sonnet-5",   // also: claude-fable-5-1, claude-opus-5, claude-haiku-4-5
-		"deepseek":   "deepseek-v4-flash", // V4 主力（deepseek-chat/reasoner 已于 2026-07-24 弃用）
-		"gemini":     "gemini-3.8-flash",  // latest stable; also: gemini-3.7-flash, gemini-3.1-pro
-		"groq":       "llama-3.3-70b-versatile",
-		"kimi":       "kimi-k3", // kimi 为 moonshot 兼容别名；also: kimi-k2.6, kimi-k2.7-code
-		"moonshot":   "kimi-k3",
-		"openrouter": "openai/gpt-5.6",
-		"ollama":     "qwen3.8",
-		"vllm":       "llama3",
-		"cohere":     "command-a-plus-05-2026",
-		"mistral":    "mistral-large-latest",
-		"perplexity": "sonar-pro",
-		"together":   "deepseek-ai/DeepSeek-V4-Pro",
-		"dashscope":  "qwen3.7-plus",
-		"zhipu":      "glm-5.3",
-		"wenxin":     "ernie-5.1",
-		"doubao":     "doubao-seed-2.1-pro", // doubao 为 huoshan 兼容别名
-		"huoshan":    "doubao-seed-2.1-pro",
-		"hunyuan":    "hy3",
-		"minimax":    "MiniMax-M3",
-		"mimo":       "mimo-v2-flash",
-		"longcat":    "LongCat-2.0-Preview", // Flash 系列已于 2026-05-29 停止服务
-		"meta":       "muse-spark-1.3",      // Meta Model API (Muse Spark)
-	}
-
-	if model, ok := defaults[strings.ToLower(name)]; ok {
-		return model
-	}
-
-	return ""
+	return catalog.DefaultModel(name)
 }
 
 // ConfigManager manages provider configurations with hot reload support

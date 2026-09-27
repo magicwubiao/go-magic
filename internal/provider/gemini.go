@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -36,10 +37,10 @@ func (p *GeminiProvider) GetConvertConfig() *ConvertConfig {
 // NewGeminiProvider creates a new Gemini provider
 func NewGeminiProvider(apiKey, baseURL, model string) *GeminiProvider {
 	if model == "" {
-		model = "gemini-3.7-flash" // Default to latest stable model
+		model = catalog.DefaultModel("gemini")
 	}
 	if baseURL == "" {
-		baseURL = "https://generativelanguage.googleapis.com/v1beta"
+		baseURL = catalog.BaseURL("gemini")
 	}
 	return &GeminiProvider{
 		apiKey:  apiKey,

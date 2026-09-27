@@ -12,6 +12,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/voice"
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 )
 
 const (
@@ -720,7 +721,7 @@ func defaultConfig() *Config {
 		MagicHome:  "~/.magic",
 		WorkingDir: getDefaultWorkingDir(),
 		Provider:   "deepseek",
-		Model:      "deepseek-v4-flash",
+		Model:      catalog.DefaultModel("deepseek"),
 		Mode:       "chat",
 		// 默认就带上持久 profile 目录：浏览器登录态（cookie/localStorage）跨
 		// 会话保留。显式写成 "" 才会退回每次全新的临时 profile。

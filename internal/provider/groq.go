@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // GroqProvider implements the Groq API (fast inference) using OpenAI-compatible format.
 // Groq uses OpenAI-compatible format but with different base URL and specific models.
 type GroqProvider struct {
@@ -9,10 +11,10 @@ type GroqProvider struct {
 // NewGroqProvider creates a new Groq provider
 func NewGroqProvider(apiKey, baseURL, model string) *GroqProvider {
 	if model == "" {
-		model = "llama-3.3-70b-versatile" // Default to fast model
+		model = catalog.DefaultModel("groq")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.groq.com/openai/v1"
+		baseURL = catalog.BaseURL("groq")
 	}
 	return &GroqProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("groq", apiKey, baseURL, model),

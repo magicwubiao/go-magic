@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -36,7 +37,7 @@ func (p *AnthropicProvider) GetConvertConfig() *ConvertConfig {
 // NewAnthropicProvider creates a new Anthropic provider
 func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
 	if model == "" {
-		model = "claude-sonnet-5" // Default to balanced model
+		model = catalog.DefaultModel("anthropic")
 	}
 	return &AnthropicProvider{
 		apiKey: apiKey,

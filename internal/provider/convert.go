@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -380,7 +381,7 @@ var visionNegativePatterns = []string{
 // Detection is layered, most-trusted first:
 //  1. Runtime learning: the model itself rejected image parts earlier
 //     (see RememberModelNoVision).
-//  2. The curated per-model registry (defaultModelRegistry): authoritative
+//  2. The catalog's explicit vision verdicts (pkg/catalog): authoritative
 //     for known IDs, both directions.
 //  3. A negative list for text-only members of vision-capable families.
 //  4. Positive name heuristics: substring matches for vision model
@@ -450,14 +451,15 @@ func ModelSupportsVision(modelName string) bool {
 	return false
 }
 
-// modelRegistryVision looks modelName up in the curated registry, scanning
-// every provider's list (model IDs are globally unique in practice). Returns
-// the Vision flag and whether the ID is known at all.
+// modelRegistryVision looks modelName up in the catalog (pkg/catalog，唯一
+// 目录源), scanning every provider's list (model IDs are globally unique in
+// practice). Only entries with an explicit Vision verdict (non-nil) are
+// authoritative; unknown entries fall through to the heuristics below.
 func modelRegistryVision(modelLower string) (vision, known bool) {
-	for _, models := range defaultModelRegistry {
-		for _, m := range models {
-			if strings.EqualFold(m.ID, modelLower) {
-				return m.Vision, true
+	for _, p := range catalog.All() {
+		for _, m := range p.Models {
+			if strings.EqualFold(m.ID, modelLower) && m.Vision != nil {
+				return *m.Vision, true
 			}
 		}
 	}

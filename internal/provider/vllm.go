@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 import (
 	"bytes"
 	"context"
@@ -34,10 +36,10 @@ type vllmUsageInfo struct {
 
 func NewVLLMProvider(baseURL, model string) *vLLMProvider {
 	if baseURL == "" {
-		baseURL = "http://localhost:8000/v1"
+		baseURL = catalog.BaseURL("vllm")
 	}
 	if model == "" {
-		model = "default"
+		model = catalog.DefaultModel("vllm")
 	}
 	return &vLLMProvider{
 		baseURL: baseURL,

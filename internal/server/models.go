@@ -692,6 +692,67 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Handle POST /{name}/fetch-models - pull the provider's live model list
+	// from its /models API endpoint. Body may carry unsaved form values
+	// (api_key/base_url); they win over the stored config, same as /test, so
+	// the UI can fetch with a key typed into the edit modal before saving.
+	if r.Method == http.MethodPost && subRoute == "fetch-models" {
+		var req struct {
+			APIKey  string `json:"api_key"`
+			BaseURL string `json:"base_url"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
+		}
+
+		if s.cfg == nil {
+			http.Error(w, "config unavailable", http.StatusInternalServerError)
+			return
+		}
+		provCfg := appconfig.ProviderConfig{}
+		if s.cfg.Providers != nil {
+			if saved, ok := s.cfg.Providers[name]; ok {
+				provCfg = saved
+			}
+		}
+		if req.APIKey != "" {
+			provCfg.APIKey = req.APIKey
+		}
+		if req.BaseURL != "" {
+			provCfg.BaseURL = req.BaseURL
+		}
+		// baseURL 兜底：内置目录里的官方端点（与构造函数 fallback 同源）
+		if provCfg.BaseURL == "" {
+			for _, bp := range appconfig.ListProviders() {
+				if bp.Name == name {
+					provCfg.BaseURL = bp.BaseURL
+					break
+				}
+			}
+		}
+		if provCfg.BaseURL == "" {
+			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no base URL configured for this provider"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		defer cancel()
+		models, err := provider.FetchModels(ctx, name, provCfg.APIKey, provCfg.BaseURL)
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{
+				"ok":    false,
+				"error": truncateRunes(err.Error(), 300),
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"ok":     true,
+			"models": models,
+			"count":  len(models),
+		})
+		return
+	}
+
 	http.Error(w, "not found", http.StatusNotFound)
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -36,10 +37,10 @@ func (p *PerplexityProvider) GetConvertConfig() *ConvertConfig {
 // NewPerplexityProvider creates a new Perplexity provider
 func NewPerplexityProvider(apiKey, baseURL, model string) *PerplexityProvider {
 	if model == "" {
-		model = "sonar" // Default model
+		model = catalog.DefaultModel("perplexity")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.perplexity.ai"
+		baseURL = catalog.BaseURL("perplexity")
 	}
 	return &PerplexityProvider{
 		apiKey:  apiKey,

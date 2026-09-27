@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // OpenRouterProvider OpenRouter (兼容OpenAI格式)
 type OpenRouterProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type OpenRouterProvider struct {
 // NewOpenRouterProvider creates a new OpenRouter provider
 func NewOpenRouterProvider(apiKey, baseURL, model string) *OpenRouterProvider {
 	if model == "" {
-		model = "openai/gpt-5.6"
+		model = catalog.DefaultModel("openrouter")
 	}
 	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
+		baseURL = catalog.BaseURL("openrouter")
 	}
 	return &OpenRouterProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("openrouter", apiKey, baseURL, model),

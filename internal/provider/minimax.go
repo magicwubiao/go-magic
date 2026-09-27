@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // MiniMaxProvider MiniMax (兼容OpenAI格式)
 type MiniMaxProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type MiniMaxProvider struct {
 // NewMiniMaxProvider creates a new MiniMax provider
 func NewMiniMaxProvider(apiKey, baseURL, model string) *MiniMaxProvider {
 	if model == "" {
-		model = "MiniMax-M3"
+		model = catalog.DefaultModel("minimax")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.minimax.chat/v1"
+		baseURL = catalog.BaseURL("minimax")
 	}
 	return &MiniMaxProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("minimax", apiKey, baseURL, model),

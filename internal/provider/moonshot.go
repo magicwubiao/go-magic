@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // MoonshotProvider implements the Moonshot (Kimi) AI API using OpenAI-compatible format.
 // Note: Moonshot and Kimi use the same API endpoint (https://api.moonshot.cn/v1).
 // This provider is kept for backward compatibility with existing configurations.
@@ -10,10 +12,10 @@ type MoonshotProvider struct {
 // NewMoonshotProvider creates a new Moonshot provider
 func NewMoonshotProvider(apiKey, baseURL, model string) *MoonshotProvider {
 	if model == "" {
-		model = "kimi-k3" // Default model
+		model = catalog.DefaultModel("moonshot")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.moonshot.cn/v1"
+		baseURL = catalog.BaseURL("moonshot")
 	}
 	return &MoonshotProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("moonshot", apiKey, baseURL, model),

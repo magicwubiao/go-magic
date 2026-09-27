@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // MetaProvider implements the Meta Model API (Muse Spark) using OpenAI-compatible format.
 // API docs: https://ai.developer.meta.com/docs/overview
 // Endpoint: https://api.meta.ai/v1/chat/completions (Bearer auth, MODEL_API_KEY)
@@ -12,10 +14,10 @@ type MetaProvider struct {
 // NewMetaProvider creates a new Meta Model API provider
 func NewMetaProvider(apiKey, baseURL, model string) *MetaProvider {
 	if model == "" {
-		model = "muse-spark-1.3" // Default model (latest, released 2026-09-02)
+		model = catalog.DefaultModel("meta")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.meta.ai/v1"
+		baseURL = catalog.BaseURL("meta")
 	}
 	return &MetaProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("meta", apiKey, baseURL, model),

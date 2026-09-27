@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // LongCatProvider implements the Meituan LongCat API using OpenAI-compatible format.
 // API docs: https://longcat.chat/platform/docs/zh/APIDocs.html
 // Endpoint: https://api.longcat.chat/openai/v1/chat/completions (Bearer auth)
@@ -11,10 +13,10 @@ type LongCatProvider struct {
 // NewLongCatProvider creates a new LongCat provider
 func NewLongCatProvider(apiKey, baseURL, model string) *LongCatProvider {
 	if model == "" {
-		model = "LongCat-2.0-Preview" // Default model
+		model = catalog.DefaultModel("longcat")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.longcat.chat/openai/v1"
+		baseURL = catalog.BaseURL("longcat")
 	}
 	return &LongCatProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("longcat", apiKey, baseURL, model),

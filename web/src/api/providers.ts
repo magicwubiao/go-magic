@@ -82,3 +82,24 @@ export async function testProvider(
     body: JSON.stringify(overrides ?? {}),
   })
 }
+
+export interface FetchModelsResult {
+  ok: boolean
+  models?: string[]
+  count?: number
+  error?: string
+}
+
+// Pull the provider's live model list from its /models API endpoint.
+// Overrides let the UI fetch with unsaved form values (api_key/base_url),
+// same semantics as testProvider.
+export async function fetchProviderModels(
+  id: string,
+  overrides?: { api_key?: string; base_url?: string }
+): Promise<FetchModelsResult> {
+  return request(`/providers/${id}/fetch-models`, {
+    method: 'POST',
+    retries: 0,
+    body: JSON.stringify(overrides ?? {}),
+  })
+}

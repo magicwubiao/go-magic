@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // HunyuanProvider implements the Tencent Hunyuan API using OpenAI-compatible format.
 type HunyuanProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type HunyuanProvider struct {
 // NewHunyuanProvider creates a new Hunyuan provider
 func NewHunyuanProvider(apiKey, baseURL, model string) *HunyuanProvider {
 	if model == "" {
-		model = "hunyuan-turbo" // Default model
+		model = catalog.DefaultModel("hunyuan")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
+		baseURL = catalog.BaseURL("hunyuan")
 	}
 	return &HunyuanProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("hunyuan", apiKey, baseURL, model),

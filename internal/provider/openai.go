@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // OpenAIProvider implements the OpenAI API
 type OpenAIProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type OpenAIProvider struct {
 // NewOpenAIProvider creates a new OpenAI provider
 func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = catalog.BaseURL("openai")
 	}
 	if model == "" {
-		model = "gpt-5.6"
+		model = catalog.DefaultModel("openai")
 	}
 	return &OpenAIProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("openai", apiKey, baseURL, model),

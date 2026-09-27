@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // MistralProvider implements the Mistral AI API using OpenAI-compatible format.
 type MistralProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type MistralProvider struct {
 // NewMistralProvider creates a new Mistral AI provider
 func NewMistralProvider(apiKey, baseURL, model string) *MistralProvider {
 	if model == "" {
-		model = "mistral-large-latest" // Default model
+		model = catalog.DefaultModel("mistral")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.mistral.ai/v1"
+		baseURL = catalog.BaseURL("mistral")
 	}
 	return &MistralProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("mistral", apiKey, baseURL, model),

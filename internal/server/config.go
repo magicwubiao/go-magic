@@ -11,6 +11,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -31,7 +32,7 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 			},
 			"model": map[string]interface{}{
 				"type":       "string",
-				"default":    "deepseek-v4-flash",
+				"default":    catalog.DefaultModel("deepseek"),
 				"deprecated": true,
 			},
 			"cortex.enabled": map[string]interface{}{

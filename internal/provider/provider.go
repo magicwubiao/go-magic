@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -147,53 +148,25 @@ func IsModelSupported(p Provider, model string) bool {
 	return false
 }
 
-// defaultModelRegistry is the curated per-provider model list. ModelInfo.Vision
-// flags here feed vision detection for known IDs (see modelRegistryVision);
-// entries without the flag are text-only by omission. Keep the list evidence
-// based: mark Vision only for models with confirmed image input.
-var defaultModelRegistry = map[string][]ModelInfo{
-	"openai": {
-		{ID: "gpt-5.6", Name: "GPT-5.6 Sol", Description: "最新旗舰模型", ContextLen: 1050000, Vision: true},
-		{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Description: "均衡模型", ContextLen: 1050000, Vision: true},
-		{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Description: "最快最便宜", ContextLen: 1050000, Vision: true},
-	},
-	"deepseek": {
-		{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Description: "高性价比主力模型", ContextLen: 1000000},
-		{ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", Description: "旗舰推理模型", ContextLen: 1000000},
-	},
-	"anthropic": {
-		{ID: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: "最强推理旗舰", ContextLen: 1000000, Vision: true},
-		{ID: "claude-opus-5", Name: "Claude Opus 5", Description: "企业级智能体编码", ContextLen: 1000000, Vision: true},
-		{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Description: "速度与智能均衡", ContextLen: 1000000, Vision: true},
-		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Description: "最快模型", ContextLen: 200000, Vision: true},
-	},
-	"gemini": {
-		{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash", Description: "最新主力模型", ContextLen: 1000000, Vision: true},
-		{ID: "gemini-3.7-flash", Name: "Gemini 3.7 Flash", Description: "高性价比", ContextLen: 1000000, Vision: true},
-		{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro", Description: "最强推理", ContextLen: 1000000, Vision: true},
-	},
-	"ollama": {
-		{ID: "qwen3.8", Name: "Qwen 3.8", Description: "阿里开源模型", ContextLen: 131072},
-		{ID: "gpt-oss", Name: "GPT-OSS", Description: "OpenAI 开源模型", ContextLen: 131072},
-		{ID: "deepseek-r1", Name: "DeepSeek R1", Description: "推理模型", ContextLen: 131072},
-	},
-	"longcat": {
-		// LongCat-2.0 is a text/code model: confirmed NO image input
-		// (Meituan, 2026-06 release). LongCat-Flash-Omni (the multimodal
-		// member) retired with the Flash series on 2026-05-29.
-		{ID: "LongCat-2.0-Preview", Name: "LongCat 2.0 Preview", Description: "旗舰推理与 Agent 模型", ContextLen: 1000000},
-	},
-	"meta": {
-		{ID: "muse-spark-1.3", Name: "Muse Spark 1.3", Description: "旗舰多模态推理模型", ContextLen: 1048576, Vision: true},
-		{ID: "muse-spark-1.2", Name: "Muse Spark 1.2", Description: "多模态推理模型", ContextLen: 1048576, Vision: true},
-		{ID: "muse-spark-1.1", Name: "Muse Spark 1.1", Description: "首发推理模型", ContextLen: 1048576, Vision: true},
-	},
-}
-
-// GetDefaultModels returns the default models for known providers
+// GetDefaultModels returns the default models for a provider. Data derives
+// from the single catalog source (pkg/catalog) — do NOT add model entries
+// here; edit pkg/catalog/catalog.go instead. Unknown providers return nil.
 func GetDefaultModels(providerName string) []ModelInfo {
-	if models, ok := defaultModelRegistry[providerName]; ok {
-		return models
+	models := catalog.Models(providerName)
+	if len(models) == 0 {
+		return nil
 	}
-	return nil
+	out := make([]ModelInfo, len(models))
+	for i, m := range models {
+		out[i] = ModelInfo{
+			ID:          m.ID,
+			Name:        m.Name,
+			Description: m.Description,
+			ContextLen:  m.ContextLen,
+			// Vision 三态收敛为 bool：nil（未知）按 false 透出。权威判定
+			// 由 modelRegistryVision 直接查 catalog 的 *bool，不经过这里。
+			Vision: m.Vision != nil && *m.Vision,
+		}
+	}
+	return out
 }

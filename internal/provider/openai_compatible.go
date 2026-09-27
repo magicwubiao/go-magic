@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -24,88 +25,20 @@ type OpenAICompatibleProvider struct {
 // NewOpenAICompatibleProvider creates a new OpenAI-compatible provider
 // If userModels is provided (non-nil), it will be used; otherwise defaults are loaded
 func NewOpenAICompatibleProvider(name, apiKey, baseURL, model string, userModels []ModelInfo) *OpenAICompatibleProvider {
-	// Defensive: apply default base URL per provider if not provided
+	// Defensive: apply default base URL per provider if not provided.
+	// Data derives from pkg/catalog（唯一目录源）。custom 没有固定端点，
+	// 但直连构造时保持历史兜底（OpenAI 官方地址）。
 	if baseURL == "" {
-		switch name {
-		case "openai", "custom":
+		if name == "custom" {
 			baseURL = "https://api.openai.com/v1"
-		case "anthropic":
-			baseURL = "https://api.anthropic.com/v1"
-		case "deepseek":
-			baseURL = "https://api.deepseek.com"
-		case "kimi", "moonshot": // kimi 为 moonshot 兼容别名
-			baseURL = "https://api.moonshot.cn/v1"
-		case "zhipu":
-			baseURL = "https://open.bigmodel.cn/api/paas/v4"
-		case "minimax":
-			baseURL = "https://api.minimax.chat/v1"
-		case "groq":
-			baseURL = "https://api.groq.com/openai/v1"
-		case "openrouter":
-			baseURL = "https://openrouter.ai/api/v1"
-		case "mistral":
-			baseURL = "https://api.mistral.ai/v1"
-		case "dashscope":
-			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-		case "doubao", "huoshan": // doubao 为 huoshan 兼容别名
-			baseURL = "https://ark.cn-beijing.volces.com/api/v3"
-		case "perplexity":
-			baseURL = "https://api.perplexity.ai"
-		case "hunyuan":
-			baseURL = "https://api.hunyuan.cloud.tencent.com/v1"
-		case "longcat":
-			// 美团 LongCat 开放平台（OpenAI 兼容端点）
-			baseURL = "https://api.longcat.chat/openai/v1"
-		case "mimo":
-			baseURL = "https://api.xiaomimimo.com/v1"
-		case "ollama":
-			baseURL = "http://localhost:11434"
-		case "vllm":
-			baseURL = "http://localhost:8000/v1"
+		} else {
+			baseURL = catalog.BaseURL(name)
 		}
 	}
 
+	// 同上：默认模型兜底也走 catalog。
 	if model == "" {
-		switch name {
-		case "openai":
-			model = "gpt-5.6"
-		case "custom":
-			model = "gpt-4o-mini"
-		case "anthropic":
-			model = "claude-sonnet-5"
-		case "deepseek":
-			model = "deepseek-v4-flash"
-		case "kimi", "moonshot": // kimi 为 moonshot 兼容别名
-			model = "kimi-k3"
-		case "zhipu":
-			model = "glm-5.3"
-		case "minimax":
-			model = "MiniMax-M3"
-		case "groq":
-			model = "llama-3.3-70b-versatile"
-		case "openrouter":
-			model = "openai/gpt-5.6"
-		case "mistral":
-			model = "mistral-large-latest"
-		case "dashscope":
-			model = "qwen3.7-plus"
-		case "doubao", "huoshan": // doubao 为 huoshan 兼容别名
-			model = "doubao-seed-2.1-pro"
-		case "perplexity":
-			model = "sonar-pro"
-		case "hunyuan":
-			model = "hy3"
-		case "longcat":
-			model = "LongCat-2.0-Preview"
-		case "meta":
-			model = "muse-spark-1.3"
-		case "mimo":
-			model = "mimo-v2-flash"
-		case "ollama":
-			model = "qwen3.8"
-		case "vllm":
-			model = "default-model"
-		}
+		model = catalog.DefaultModel(name)
 	}
 
 	var modelList []ModelInfo

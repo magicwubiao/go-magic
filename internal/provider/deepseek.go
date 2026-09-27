@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -16,10 +17,10 @@ type DeepSeekProvider struct {
 // If baseURL is empty, the default DeepSeek API URL will be used
 func NewDeepSeekProvider(apiKey, baseURL, model string, userModels []ModelInfo) *DeepSeekProvider {
 	if baseURL == "" {
-		baseURL = "https://api.deepseek.com"
+		baseURL = catalog.BaseURL("deepseek")
 	}
 	if model == "" {
-		model = "deepseek-v4-flash"
+		model = catalog.DefaultModel("deepseek")
 	}
 	return &DeepSeekProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProvider("deepseek", apiKey, baseURL, model, userModels),
@@ -129,7 +130,7 @@ func (bp *BaseStreamProvider) StreamWithTools(ctx context.Context, messages []ty
 // NewBaseStreamProvider creates a new provider with streaming support
 func NewBaseStreamProvider(name, apiKey, baseURL, model string) *BaseStreamProvider {
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = catalog.BaseURL("deepseek")
 	}
 	return &BaseStreamProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults(name, apiKey, baseURL, model),

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -23,10 +24,10 @@ type DashScopeProvider struct {
 
 func NewDashScopeProvider(apiKey, baseURL, model string) *DashScopeProvider {
 	if model == "" {
-		model = "qwen3.7-plus"
+		model = catalog.DefaultModel("dashscope")
 	}
 	if baseURL == "" {
-		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		baseURL = catalog.BaseURL("dashscope")
 	}
 	return &DashScopeProvider{
 		apiKey:         apiKey,

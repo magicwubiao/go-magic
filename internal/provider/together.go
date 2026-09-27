@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -36,10 +37,10 @@ func (p *TogetherProvider) GetConvertConfig() *ConvertConfig {
 // NewTogetherProvider creates a new Together AI provider
 func NewTogetherProvider(apiKey, baseURL, model string) *TogetherProvider {
 	if model == "" {
-		model = "mistralai/Mixtral-8x7B-Instruct-v0.1" // Default model
+		model = catalog.DefaultModel("together")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.together.xyz/v1"
+		baseURL = catalog.BaseURL("together")
 	}
 	return &TogetherProvider{
 		apiKey:  apiKey,

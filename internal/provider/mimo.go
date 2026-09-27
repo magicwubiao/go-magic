@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // MiMoProvider implements the Xiaomi MiMo API using OpenAI-compatible format.
 type MiMoProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type MiMoProvider struct {
 // NewMiMoProvider creates a new MiMo provider
 func NewMiMoProvider(apiKey, baseURL, model string) *MiMoProvider {
 	if model == "" {
-		model = "mimo-v2-flash" // Default model
+		model = catalog.DefaultModel("mimo")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.xiaomimimo.com/v1"
+		baseURL = catalog.BaseURL("mimo")
 	}
 	return &MiMoProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("mimo", apiKey, baseURL, model),

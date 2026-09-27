@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/magicwubiao/go-magic/pkg/catalog"
+
 // ZhipuProvider 智谱AI (兼容OpenAI格式)
 type ZhipuProvider struct {
 	*OpenAICompatibleProvider
@@ -8,10 +10,10 @@ type ZhipuProvider struct {
 // NewZhipuProvider creates a new Zhipu provider
 func NewZhipuProvider(apiKey, baseURL, model string) *ZhipuProvider {
 	if model == "" {
-		model = "glm-4"
+		model = catalog.DefaultModel("zhipu")
 	}
 	if baseURL == "" {
-		baseURL = "https://open.bigmodel.cn/api/paas/v4"
+		baseURL = catalog.BaseURL("zhipu")
 	}
 	return &ZhipuProvider{
 		OpenAICompatibleProvider: NewOpenAICompatibleProviderWithDefaults("zhipu", apiKey, baseURL, model),

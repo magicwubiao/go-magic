@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -36,10 +37,10 @@ func (p *CohereProvider) GetConvertConfig() *ConvertConfig {
 // NewCohereProvider creates a new Cohere provider
 func NewCohereProvider(apiKey, baseURL, model string) *CohereProvider {
 	if model == "" {
-		model = "command-r-plus" // Default model
+		model = catalog.DefaultModel("cohere")
 	}
 	if baseURL == "" {
-		baseURL = "https://api.cohere.ai/v1"
+		baseURL = catalog.BaseURL("cohere")
 	}
 	return &CohereProvider{
 		apiKey:  apiKey,
