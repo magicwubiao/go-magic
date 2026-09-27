@@ -343,13 +343,21 @@ func TestFSServeRejectsTraversal(t *testing.T) {
 	outside := filepath.Join(f.root, "outside.env")
 	link := filepath.Join(f.dist, "escape.env")
 	if err := os.Symlink(outside, link); err == nil {
-		if _, err := safeJoinFSServe(f.dist, "escape.env"); err == nil {
-			t.Error("safeJoinFSServe 允许了指向根外的符号链接")
-		}
-		base := f.sign(t, f.dist, "")
-		rec := f.get(base + "escape.env")
-		if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "top-secret") {
-			t.Errorf("符号链接逃逸成功: code=%d body=%q", rec.Code, rec.Body.String())
+		// os.Symlink 成功不代表真的创建了链接：在无符号链接权限的 Windows
+		// （未开开发者模式/非管理员）及部分沙箱环境下，它会静默退化成普通
+		// 文件（Lstat 看不到 ModeSymlink）。此时 dist 里只是个普通文件，
+		// 200 返回是正确行为，用例前提不成立，按不支持跳过。
+		if fi, lerr := os.Lstat(link); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Logf("跳过符号链接用例（os.Symlink 未产生真实符号链接）: lerr=%v mode=%v", lerr, fi.Mode())
+		} else {
+			if _, err := safeJoinFSServe(f.dist, "escape.env"); err == nil {
+				t.Error("safeJoinFSServe 允许了指向根外的符号链接")
+			}
+			base := f.sign(t, f.dist, "")
+			rec := f.get(base + "escape.env")
+			if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "top-secret") {
+				t.Errorf("符号链接逃逸成功: code=%d body=%q", rec.Code, rec.Body.String())
+			}
 		}
 	} else {
 		t.Logf("跳过符号链接用例（环境不支持）: %v", err)
