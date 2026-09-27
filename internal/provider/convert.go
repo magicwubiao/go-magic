@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -341,33 +340,9 @@ func ParseFileStrategy(s string) FileStrategy {
 	}
 }
 
-// learnedNoVision remembers model names (lowercased) that REJECTED image
-// parts at runtime with an image-unsupported provider error. Detection is
-// name-based and inevitably lags new releases, so the provider layer feeds
-// observed rejections back here: the first request pays for the mistake,
-// every later request for the same model skips images immediately.
-// In-memory on purpose — a process restart resets it, so a vendor fixing
-// their API is picked up again. VisionOverride (explicit user declaration)
-// bypasses this cache entirely.
-var learnedNoVision sync.Map
-
-// RememberModelNoVision records that modelName rejected image parts, so
-// subsequent ModelSupportsVision calls return false for it.
-func RememberModelNoVision(modelName string) {
-	model := strings.ToLower(strings.TrimSpace(modelName))
-	if model == "" {
-		return
-	}
-	learnedNoVision.Store(model, struct{}{})
-}
-
-// resetLearnedVisionForTest clears the runtime learning cache.
-func resetLearnedVisionForTest() {
-	learnedNoVision.Range(func(k, _ interface{}) bool {
-		learnedNoVision.Delete(k)
-		return true
-	})
-}
+// 运行时学习（正向 + 反向）的实现与持久化在 vision_learn.go。
+// 检测是名称驱动的，天然滞后新发布，所以 provider 层把观测到的接受/拒绝
+// 都喂回缓存：首次请求为误判买单，之后同模型的所有请求直接走对路。
 
 // visionNegativePatterns are substrings of model names that would otherwise
 // match the positive heuristics (or belong to vision-capable families) but
@@ -379,14 +354,15 @@ var visionNegativePatterns = []string{
 // ModelSupportsVision checks if a model supports vision (image_url format).
 //
 // Detection is layered, most-trusted first:
-//  1. Runtime learning: the model itself rejected image parts earlier
-//     (see RememberModelNoVision).
+//  1. Runtime learning: the model itself accepted or rejected image parts
+//     earlier (see vision_learn.go) — hard evidence beats any guess, and
+//     the learned verdict persists across restarts.
 //  2. The catalog's explicit vision verdicts (pkg/catalog): authoritative
 //     for known IDs, both directions.
 //  3. A negative list for text-only members of vision-capable families.
 //  4. Positive name heuristics: substring matches for vision model
 //     families. These lag new releases — when they miss, the explicit
-//     per-provider "vision" config declaration or a runtime rejection
+//     per-provider "vision" config declaration or runtime learning
 //     corrects the guess.
 func ModelSupportsVision(modelName string) bool {
 	if modelName == "" {
@@ -394,9 +370,10 @@ func ModelSupportsVision(modelName string) bool {
 	}
 	modelLower := strings.ToLower(modelName)
 
-	// 1. Observed runtime rejections win — hard evidence beats guessing.
-	if _, no := learnedNoVision.Load(modelLower); no {
-		return false
+	// 1. Observed runtime evidence wins — the model's own behavior beats
+	// every static list (which may be outdated in either direction).
+	if vision, known := learnedVisionVerdict(modelLower); known {
+		return vision
 	}
 
 	// 2. Curated registry: exact (case-insensitive) ID match is

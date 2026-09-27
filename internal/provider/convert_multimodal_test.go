@@ -288,7 +288,7 @@ func TestRememberModelNoVision(t *testing.T) {
 		t.Fatal("cache reset must restore detection")
 	}
 	RememberModelNoVision("   ")
-	if _, ok := learnedNoVision.Load(""); ok {
+	if _, known := learnedVisionVerdict(""); known {
 		t.Fatal("blank model name must not be recorded")
 	}
 }

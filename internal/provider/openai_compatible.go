@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/catalog"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -427,6 +428,17 @@ func parseTypedChatResponse(body []byte) (*ChatResponse, error) {
 	return chatResp, nil
 }
 
+// rememberVisionIfImages 记录正向视觉证据：带图请求被 API 接受（200 /
+// 流握手成功）即硬证据表明该模型支持视觉。学习结果持久化，重启不丢。
+func (p *OpenAICompatibleProvider) rememberVisionIfImages(messages []types.Message) {
+	if !MessagesContainImages(messages) {
+		return
+	}
+	if RememberModelVision(p.GetModel()) {
+		log.Infof("[OpenAICompat] model %q accepted image parts; remembered as vision-capable (persisted)", p.GetModel())
+	}
+}
+
 // Chat implements the Provider interface
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Message) (*ChatResponse, error) {
 	reqBody := map[string]interface{}{
@@ -440,12 +452,14 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 	url := p.BaseURL + "/chat/completions"
 
 	headers := map[string]string{}
+	imageDegraded := false
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
 		// Image-reject degrade retry: a 4xx complaining about image parts
 		// on a request that carried images means name detection wrongly
 		// said vision-capable. Retry once with placeholders and remember.
 		if p.shouldDegradeAfterImageReject(err, messages) {
+			imageDegraded = true
 			model := p.GetModel()
 			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
 			reqBody["messages"] = p.strippedImageMessages(messages)
@@ -453,8 +467,9 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 			if retryErr != nil {
 				return nil, fmt.Errorf("chat request failed: %w (retry without images also failed: %v)", err, retryErr)
 			}
-			RememberModelNoVision(model)
-			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			if RememberModelNoVision(model) {
+				log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision (persisted, TTL %dd)", model, int(visionNegativeTTL/(24*time.Hour)))
+			}
 			respBody, statusCode = retryBody, retryStatus
 		} else {
 			return nil, fmt.Errorf("chat request failed: %w", err)
@@ -463,6 +478,10 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []types.Me
 
 	if statusCode != 200 {
 		return nil, p.ParseAPIError(respBody, statusCode)
+	}
+	// 只有带图的原始请求本身成功才算正向证据；降级重试走的是无图请求。
+	if !imageDegraded {
+		p.rememberVisionIfImages(messages)
 	}
 	return parseTypedChatResponse(respBody)
 }
@@ -497,10 +516,12 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	url := p.BaseURL + "/chat/completions"
 
 	headers := map[string]string{}
+	imageDegraded := false
 	respBody, statusCode, err := p.DoRequest(ctx, "POST", url, reqBody, headers)
 	if err != nil {
 		// Image-reject degrade retry (see Chat).
 		if p.shouldDegradeAfterImageReject(err, messages) {
+			imageDegraded = true
 			model := p.GetModel()
 			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
 			reqBody["messages"] = p.strippedImageMessages(messages)
@@ -508,8 +529,9 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 			if retryErr != nil {
 				return nil, fmt.Errorf("chat with tools request failed: %w (retry without images also failed: %v)", err, retryErr)
 			}
-			RememberModelNoVision(model)
-			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			if RememberModelNoVision(model) {
+				log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision (persisted, TTL %dd)", model, int(visionNegativeTTL/(24*time.Hour)))
+			}
 			respBody, statusCode = retryBody, retryStatus
 		} else {
 			return nil, fmt.Errorf("chat with tools request failed: %w", err)
@@ -519,6 +541,9 @@ func (p *OpenAICompatibleProvider) ChatWithTools(ctx context.Context, messages [
 	if statusCode != 200 {
 		parsedErr := p.ParseAPIError(respBody, statusCode)
 		return nil, fmt.Errorf("chat with tools request failed: status %d, %w", statusCode, parsedErr)
+	}
+	if !imageDegraded {
+		p.rememberVisionIfImages(messages)
 	}
 	return parseTypedChatResponse(respBody)
 }
@@ -561,12 +586,14 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 	url := p.BaseURL + "/chat/completions"
 
 	headers := map[string]string{}
+	imageDegraded := false
 	resp, err := p.DoStreamRequestWithBreaker(ctx, url, reqBody, headers)
 	if err != nil {
 		// Image-reject degrade retry (see Chat): the stream handshake
 		// failed before any event reached the handler, so a clean retry
 		// with placeholder-converted messages cannot duplicate output.
 		if p.shouldDegradeAfterImageReject(err, messages) {
+			imageDegraded = true
 			model := p.GetModel()
 			log.Warnf("[OpenAICompat] model %q rejected image parts (%v); retrying once without images", model, err)
 			reqBody["messages"] = p.strippedImageMessages(messages)
@@ -574,14 +601,20 @@ func (p *OpenAICompatibleProvider) streamWithContext(ctx context.Context, messag
 			if retryErr != nil {
 				return fmt.Errorf("stream request failed: %w (retry without images also failed: %v)", err, retryErr)
 			}
-			RememberModelNoVision(model)
-			log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision for this process", model)
+			if RememberModelNoVision(model) {
+				log.Infof("[OpenAICompat] model %q does not accept image parts; remembered as non-vision (persisted, TTL %dd)", model, int(visionNegativeTTL/(24*time.Hour)))
+			}
 			resp = retryResp
 		} else {
 			return fmt.Errorf("stream request failed: %w", err)
 		}
 	}
 	defer resp.Body.Close()
+
+	// 流握手成功 = API 校验并接受了整个请求体（含图片部件），正向证据成立。
+	if !imageDegraded {
+		p.rememberVisionIfImages(messages)
+	}
 
 	if withTools {
 		return ParseStreamResponseWithTools(ctx, resp.Body, handler)

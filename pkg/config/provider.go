@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/catalog"
@@ -38,6 +39,10 @@ func CreateProvider(cfg *Config) (provider.Provider, error) {
 // CreateProviderFor creates a provider from an explicit name + config pair.
 // Used by Bot Mode where each bot can pin its own provider/model.
 func CreateProviderFor(name string, provCfg ProviderConfig) (provider.Provider, error) {
+	// 视觉能力运行时学习的持久化位置。幂等（首调获胜），此处是所有
+	// provider 创建的必经点，CLI / server / bot 三条链路都被覆盖。
+	provider.SetVisionLearnedPath(filepath.Join(GetMagicHome(), "vision_learned.json"))
+
 	prov, err := createProviderForName(name, provCfg)
 	if err != nil {
 		return nil, err
