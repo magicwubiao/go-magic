@@ -55,40 +55,50 @@ func b(v bool) *bool { return &v }
 var catalog = []Provider{
 	{
 		Name: "deepseek", DisplayName: "DeepSeek",
-		Description:  "DeepSeek V4 - 高性价比",
+		Description:  "DeepSeek V4.1 - 高性价比，原生多模态",
 		BaseURL:      "https://api.deepseek.com",
 		NeedsAPIKey:  true,
-		DefaultModel: "deepseek-v4-flash",
+		DefaultModel: "deepseek-flash",
 		Group:        "recommended",
 		Models: []Model{
-			{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Description: "高性价比主力模型", ContextLen: 1000000, Vision: b(false)},
-			{ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", Description: "旗舰推理模型", ContextLen: 1000000, Vision: b(false)},
+			// 2026-09-10 发布：V4.1-Flash（552B MoE，官方模型名 deepseek-flash），
+			// 原生多模态视觉理解；V4-Flash 已下线，旧名临时路由到 V4.1-Flash。
+			{ID: "deepseek-flash", Name: "DeepSeek V4.1 Flash", Description: "最新主力，原生视觉", ContextLen: 1000000, Vision: b(true)},
+			// V4-Pro 官方宣布 9-14 后继续提供服务（应用户需求延长）。
+			{ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", Description: "上代旗舰推理", ContextLen: 1000000, Vision: b(false)},
+			// 兼容别名：官方临时路由到 V4.1-Flash（多模态），故视觉判定为 true。
+			{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Description: "旧名，路由到 V4.1", ContextLen: 1000000, Vision: b(true)},
 		},
 	},
 	{
 		Name: "openai", DisplayName: "OpenAI",
-		Description:  "GPT-5.6 系列",
+		Description:  "GPT-6 系列（2026-09）",
 		BaseURL:      "https://api.openai.com/v1",
 		NeedsAPIKey:  true,
-		DefaultModel: "gpt-5.6",
+		DefaultModel: "gpt-6-sol",
 		Group:        "recommended",
 		Models: []Model{
-			{ID: "gpt-5.6", Name: "GPT-5.6 Sol", Description: "最新旗舰模型", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Description: "均衡模型", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Description: "最快最便宜", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-6-astra", Name: "GPT-6 Astra", Description: "最强旗舰", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-6-sol", Name: "GPT-6 Sol", Description: "智能与成本均衡", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-6-luna", Name: "GPT-6 Luna", Description: "最快最便宜", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-5.6", Name: "GPT-5.6 Sol", Description: "上代旗舰", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Description: "上代均衡", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Description: "上代轻量", ContextLen: 1050000, Vision: b(true)},
 			{ID: "o3-mini", Name: "o3 Mini", Description: "o3 推理系列（纯文本）"},
 		},
 	},
 	{
 		Name: "anthropic", DisplayName: "Anthropic",
-		Description:  "Claude 5 系列 - 强推理能力",
+		Description:  "Claude 5.5 / Fable 5.1 - 强推理能力",
 		BaseURL:      "https://api.anthropic.com",
 		NeedsAPIKey:  true,
-		DefaultModel: "claude-sonnet-5",
+		DefaultModel: "claude-opus-5-5",
 		Group:        "recommended",
 		Models: []Model{
-			{ID: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: "最强推理旗舰", ContextLen: 1000000, Vision: b(true)},
-			{ID: "claude-opus-5", Name: "Claude Opus 5", Description: "企业级智能体编码", ContextLen: 1000000, Vision: b(true)},
+			// 2026-09-22 发布：长时间运行的智能体编码与知识工作。
+			{ID: "claude-opus-5-5", Name: "Claude Opus 5.5", Description: "最新旗舰，自适应思考", ContextLen: 1000000, Vision: b(true)},
+			{ID: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: "Fable 级推理旗舰", ContextLen: 1000000, Vision: b(true)},
+			{ID: "claude-opus-5", Name: "Claude Opus 5", Description: "上代旗舰", ContextLen: 1000000, Vision: b(true)},
 			{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Description: "速度与智能均衡", ContextLen: 1000000, Vision: b(true)},
 			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Description: "最快模型", ContextLen: 200000, Vision: b(true)},
 		},
@@ -99,10 +109,13 @@ var catalog = []Provider{
 		BaseURL:      "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "qwen3.7-plus",
+		DefaultModel: "qwen3.8-flash",
 		Group:        "china",
 		Models: []Model{
-			{ID: "qwen3.8-max", Name: "Qwen 3.8 Max", Description: "多模态旗舰"},
+			// 2026-09：Qwen3.8 系列（2.4T MoE，原生视觉，1M 上下文）。
+			{ID: "qwen3.8-max", Name: "Qwen 3.8 Max", Description: "旗舰（快照 0902）", ContextLen: 1000000, Vision: b(true)},
+			{ID: "qwen3.8-flash", Name: "Qwen 3.8 Flash", Description: "最新多模态主力", ContextLen: 1000000, Vision: b(true)},
+			{ID: "qwen3.8-omni-flash", Name: "Qwen 3.8 Omni Flash", Description: "全模态（音视频）", ContextLen: 1000000, Vision: b(true)},
 			{ID: "qwen3.7-plus", Name: "Qwen 3.7 Plus"},
 			{ID: "qwen3.7-flash", Name: "Qwen 3.7 Flash"},
 			{ID: "qwen3.5-omni-plus", Name: "Qwen 3.5 Omni Plus", Description: "多模态"},
@@ -118,7 +131,8 @@ var catalog = []Provider{
 		DefaultModel: "MiniMax-M3",
 		Group:        "china",
 		Models: []Model{
-			{ID: "MiniMax-M3", Name: "MiniMax M3", Description: "最新，编码"},
+			// M3：428B/23B MoE，1M 上下文，原生多模态（图片+视频）。
+			{ID: "MiniMax-M3", Name: "MiniMax M3", Description: "旗舰，原生多模态，1M 上下文", ContextLen: 1000000, Vision: b(true)},
 			{ID: "MiniMax-M2.7", Name: "MiniMax M2.7", Description: "增强编码"},
 			{ID: "MiniMax-M2.5", Name: "MiniMax M2.5", Description: "高级推理"},
 		},
@@ -145,14 +159,16 @@ var catalog = []Provider{
 		BaseURL:      "https://openrouter.ai/api/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "openai/gpt-5.6",
+		DefaultModel: "openai/gpt-6-sol",
 		Note:         "完整列表见 https://openrouter.ai/models",
 		Group:        "aggregator",
 		Models: []Model{
+			{ID: "openai/gpt-6-sol", Name: "GPT-6 Sol"},
 			{ID: "openai/gpt-5.6", Name: "GPT-5.6 Sol"},
+			{ID: "anthropic/claude-opus-5-5", Name: "Claude Opus 5.5"},
 			{ID: "anthropic/claude-sonnet-5", Name: "Claude Sonnet 5"},
 			{ID: "google/gemini-3.8-flash", Name: "Gemini 3.8 Flash"},
-			{ID: "deepseek/deepseek-v4-pro", Name: "DeepSeek V4 Pro"},
+			{ID: "deepseek/deepseek-flash", Name: "DeepSeek V4.1 Flash"},
 		},
 	},
 	{
@@ -176,9 +192,11 @@ var catalog = []Provider{
 		DefaultModel: "glm-5.3",
 		Group:        "china",
 		Models: []Model{
-			{ID: "glm-5.3", Name: "GLM-5.3", Description: "最新，Agentic 编码"},
-			{ID: "glm-5.3-flash", Name: "GLM-5.3 Flash", Description: "原生多模态"},
-			{ID: "glm-5.2", Name: "GLM-5.2", Description: "1M 上下文", ContextLen: 1000000},
+			// GLM-5.3（2026-08）：753B/40B，1M 上下文，纯文本输入。
+			{ID: "glm-5.3", Name: "GLM-5.3", Description: "最新旗舰，Agentic 编码", ContextLen: 1000000, Vision: b(false)},
+			// GLM-5.3-Flash：320B/18B，GLM-5 系列首个原生多模态成员。
+			{ID: "glm-5.3-flash", Name: "GLM-5.3 Flash", Description: "原生多模态", ContextLen: 1000000, Vision: b(true)},
+			{ID: "glm-5.2", Name: "GLM-5.2", Description: "1M 上下文", ContextLen: 1000000, Vision: b(false)},
 		},
 	},
 	{
@@ -208,6 +226,7 @@ var catalog = []Provider{
 		Group:        "aggregator",
 		Models: []Model{
 			{ID: "llama-3.3-70b-versatile", Name: "Llama 3.3 70B"},
+			{ID: "meta-llama/llama-4-maverick-17b-128e-instruct", Name: "Llama 4 Maverick", ContextLen: 1000000},
 			{ID: "openai/gpt-oss-120b", Name: "GPT-OSS 120B"},
 			{ID: "openai/gpt-oss-20b", Name: "GPT-OSS 20B"},
 			{ID: "llama-3.1-8b-instant", Name: "Llama 3.1 8B (最快)"},
@@ -222,10 +241,10 @@ var catalog = []Provider{
 		DefaultModel: "deepseek-ai/DeepSeek-V4-Pro",
 		Group:        "aggregator",
 		Models: []Model{
+			{ID: "deepseek-ai/DeepSeek-V4.1-Flash", Name: "DeepSeek V4.1 Flash"},
 			{ID: "deepseek-ai/DeepSeek-V4-Pro", Name: "DeepSeek V4 Pro"},
 			{ID: "meta-llama/Llama-4-Maverick-17B-128E-Instruct", Name: "Llama 4 Maverick"},
 			{ID: "Qwen/Qwen3.8-2.4T-A95B", Name: "Qwen 3.8 Max 开源权重"},
-			{ID: "deepseek-ai/DeepSeek-V4-Flash", Name: "DeepSeek V4 Flash"},
 			{ID: "moonshotai/Kimi-K3", Name: "Kimi K3"},
 		},
 	},
@@ -238,7 +257,9 @@ var catalog = []Provider{
 		DefaultModel: "mistral-large-latest",
 		Group:        "other",
 		Models: []Model{
-			{ID: "mistral-large-latest", Name: "Mistral Large 3", Description: "旗舰，256K 上下文"},
+			// Mistral Large 确认为纯文本模型（官方文档，2026-09）。
+			{ID: "mistral-large-latest", Name: "Mistral Large 3", Description: "旗舰，文本", ContextLen: 128000, Vision: b(false)},
+			{ID: "pixtral-large-latest", Name: "Pixtral Large", Description: "多模态", Vision: b(true)},
 			{ID: "mistral-medium-3-5", Name: "Mistral Medium 3.5"},
 			{ID: "mistral-small-2603", Name: "Mistral Small 4", Description: "快速"},
 			{ID: "magistral-medium-latest", Name: "Magistral Medium", Description: "推理"},
@@ -285,11 +306,13 @@ var catalog = []Provider{
 		Note:         "豆包由火山引擎提供，doubao 为兼容别名，也支持火山方舟 endpoint ID (ep-xxx)",
 		Group:        "china",
 		Models: []Model{
-			{ID: "doubao-seed-2.1-pro", Name: "Doubao Seed 2.1 Pro", Description: "旗舰"},
+			// 2026-09-16：2.1 Pro 更新至 0915 版，多模态 Coding（看图写代码）。
+			{ID: "doubao-seed-2.1-pro", Name: "Doubao Seed 2.1 Pro", Description: "旗舰，多模态 Coding", Vision: b(true)},
 			{ID: "doubao-seed-2.1-turbo", Name: "Doubao Seed 2.1 Turbo", Description: "均衡"},
 			{ID: "doubao-seed-2.0-lite", Name: "Doubao Seed 2.0 Lite", Description: "全模态"},
 			{ID: "doubao-seed-2.0-mini", Name: "Doubao Seed 2.0 Mini"},
-			{ID: "doubao-seed-evolving", Name: "Doubao Seed Evolving", Description: "始终指向最新 Agent 模型"},
+			// Evolving 与 2.1 Pro 同步更新至 0915 版，无需换接入节点。
+			{ID: "doubao-seed-evolving", Name: "Doubao Seed Evolving", Description: "始终指向最新 Agent 模型", Vision: b(true)},
 		},
 	},
 	{
@@ -301,8 +324,9 @@ var catalog = []Provider{
 		DefaultModel: "ernie-5.1",
 		Group:        "china",
 		Models: []Model{
-			{ID: "ernie-5.1", Name: "ERNIE 5.1", Description: "最新旗舰"},
-			{ID: "ernie-5.0", Name: "ERNIE 5.0", Description: "原生全模态"},
+			{ID: "ernie-5.1", Name: "ERNIE 5.1", Description: "最新文本旗舰，效价比"},
+			// ERNIE 5.0：原生统一多模态（文本/图像/音频/视频）。
+			{ID: "ernie-5.0", Name: "ERNIE 5.0", Description: "原生全模态", Vision: b(true)},
 			{ID: "ernie-4.5-turbo-128k", Name: "ERNIE 4.5 Turbo 128K"},
 			{ID: "ernie-x1.1-preview", Name: "ERNIE X1.1", Description: "深度推理"},
 		},
@@ -315,10 +339,10 @@ var catalog = []Provider{
 		DefaultModel: "kimi-k3",
 		Group:        "china",
 		Models: []Model{
-			{ID: "kimi-k3", Name: "Kimi K3", Description: "旗舰", ContextLen: 1000000},
-			{ID: "kimi-k2.6", Name: "Kimi K2.6", Description: "通用"},
-			{ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", Description: "编码"},
-			{ID: "kimi-k2.7-code-highspeed", Name: "Kimi K2.7 Code Highspeed", Description: "编码（加速版）"},
+			{ID: "kimi-k3", Name: "Kimi K3", Description: "旗舰，2.8T MoE，原生视觉", ContextLen: 1000000, Vision: b(true)},
+			{ID: "kimi-k2.6", Name: "Kimi K2.6", Description: "多模态+思考", ContextLen: 262144, Vision: b(true)},
+			{ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", Description: "编码", ContextLen: 262144, Vision: b(true)},
+			{ID: "kimi-k2.7-code-highspeed", Name: "Kimi K2.7 Code Highspeed", Description: "编码（加速版）", ContextLen: 262144, Vision: b(true)},
 		},
 	},
 	{
@@ -327,9 +351,13 @@ var catalog = []Provider{
 		BaseURL:      "https://api.xiaomimimo.com/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "mimo-v2-flash",
+		DefaultModel: "mimo-v2.6-flash",
 		Group:        "other",
 		Models: []Model{
+			// 用户实测 mimo-v2.6-flash 接受图片输入（2026-06）。
+			{ID: "mimo-v2.6-flash", Name: "MiMo V2.6 Flash", Description: "最新轻量模型", Vision: b(true)},
+			// V2.5 Pro：1T/42B MoE，1M 上下文，原生视觉+音频推理。
+			{ID: "mimo-v2.5-pro", Name: "MiMo V2.5 Pro", Description: "旗舰推理", ContextLen: 1000000, Vision: b(true)},
 			{ID: "mimo-v2-flash", Name: "MiMo V2 Flash", Description: "快速"},
 			{ID: "mimo-v2-pro", Name: "MiMo V2 Pro", Description: "推理"},
 			{ID: "mimo-v2-omni", Name: "MiMo V2 Omni", Description: "多模态"},
@@ -341,10 +369,12 @@ var catalog = []Provider{
 		BaseURL:      "https://api.hunyuan.cloud.tencent.com/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "hy3",
+		DefaultModel: "hy4-preview",
 		Group:        "china",
 		Models: []Model{
-			{ID: "hy3", Name: "Tencent Hy3", Description: "最新，MoE Agent 模型"},
+			// Hy4 preview（2026-08-28）：770B/49B 紧凑旗舰，1M 上下文。
+			{ID: "hy4-preview", Name: "Hunyuan Hy4 Preview", Description: "最新旗舰，1M 上下文", ContextLen: 1000000},
+			{ID: "hy3", Name: "Tencent Hy3", Description: "MoE Agent 模型"},
 			{ID: "hy-2.0-think", Name: "HY 2.0 Think", Description: "深度推理"},
 			{ID: "hy-2.0-instruct", Name: "HY 2.0 Instruct"},
 			{ID: "hunyuan-turbos", Name: "Hunyuan TurboS", Description: "快速"},
@@ -355,13 +385,16 @@ var catalog = []Provider{
 		Description:  "美团 LongCat 大模型",
 		BaseURL:      "https://api.longcat.chat/openai/v1",
 		NeedsAPIKey:  true,
-		DefaultModel: "LongCat-2.0-Preview",
+		DefaultModel: "LongCat-2.5-Preview",
 		Group:        "other",
 		Models: []Model{
+			// LongCat-2.5-Preview（2026-09-25）：1.6T/48B，1M 上下文，
+			// 新增原生图片理解，兼容 OpenAI 与 Anthropic 协议。
+			{ID: "LongCat-2.5-Preview", Name: "LongCat 2.5 Preview", Description: "最新，长程 Agent + 图片理解", ContextLen: 1000000, Vision: b(true)},
 			// LongCat-2.0 是文本/代码模型：已确认不支持图片输入（美团，
 			// 2026-06 发布）。多模态成员 LongCat-Flash-Omni 随 Flash 系列
 			// 于 2026-05-29 停止服务。
-			{ID: "LongCat-2.0-Preview", Name: "LongCat 2.0 Preview", Description: "旗舰推理与 Agent 模型", ContextLen: 1000000, Vision: b(false)},
+			{ID: "LongCat-2.0-Preview", Name: "LongCat 2.0 Preview", Description: "上代旗舰推理与 Agent 模型", ContextLen: 1000000, Vision: b(false)},
 		},
 	},
 	{

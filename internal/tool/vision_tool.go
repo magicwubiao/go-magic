@@ -17,8 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/util"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // VisionAnalyzeTool analyzes an image with AI vision.
@@ -119,8 +121,65 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, params map[string]inter
 		return info, nil
 	}
 
-	info["note"] = "Vision API not configured. Set VISION_API_KEY or OPENAI_API_KEY (optionally VISION_BASE_URL / VISION_MODEL) to enable AI analysis, or use the saved image path with a vision-capable model."
+	// 独立 VISION_API_KEY 未配置：复用当前配置的对话模型（很多模型本身
+	// 就支持视觉，如 mimo-v2.6-flash），不需要额外的环境变量。
+	if description, usedModel, ok := analyzeWithSessionModel(ctx, localPath, question); ok {
+		info["description"] = description
+		info["model"] = usedModel
+		info["ai_analysis"] = true
+		info["source"] = "session_model"
+		return info, nil
+	}
+
+	info["note"] = "No vision backend available: VISION_API_KEY/OPENAI_API_KEY is unset and the current chat model either is not configured or does not support image input. Set VISION_API_KEY (optionally VISION_BASE_URL / VISION_MODEL), or switch to a vision-capable chat model (e.g. via /api/model/set), or use the saved image path with such a model."
 	return info, nil
+}
+
+// analyzeWithSessionModel 用当前配置的对话模型分析图片（无需独立
+// VISION_API_KEY）。走 provider.Chat，协议无关（OpenAI 兼容 / Anthropic /
+// Gemini 各自的转换都由 provider 层处理），并且自动吃到视觉能力运行时
+// 自学习的判定结果。返回 ok=false 表示不可用（provider 未配置 / 模型不
+// 支持视觉 / 请求失败），调用方回退到元数据模式。
+func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (description, usedModel string, ok bool) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil || cfg.Provider == "" {
+		return "", "", false
+	}
+	provCfg, configured := cfg.Providers[cfg.Provider]
+	if !configured {
+		return "", "", false
+	}
+	// 与 createProviderForName 同规则：Models[0] > Model。
+	modelName := provCfg.Model
+	if len(provCfg.Models) > 0 {
+		modelName = provCfg.Models[0]
+	}
+	if strings.TrimSpace(modelName) == "" || !provider.ModelSupportsVision(modelName) {
+		return "", "", false
+	}
+
+	prov, err := config.CreateProviderFor(cfg.Provider, provCfg)
+	if err != nil || prov == nil {
+		return "", "", false
+	}
+
+	data, err := os.ReadFile(imagePath)
+	if err != nil {
+		return "", "", false
+	}
+	dataURL := "data:" + mimeForImage(imagePath) + ";base64," + base64.StdEncoding.EncodeToString(data)
+
+	resp, err := prov.Chat(ctx, []types.Message{{
+		Role: "user",
+		ContentParts: []types.ContentPart{
+			{Type: "text", Text: question},
+			{Type: "image_url", ImageURL: &types.MediaURL{URL: dataURL}},
+		},
+	}})
+	if err != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(resp.Content), modelName, true
 }
 
 // inspectImage returns metadata about a local image file.

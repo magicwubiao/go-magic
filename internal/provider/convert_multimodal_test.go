@@ -175,8 +175,8 @@ func TestModelSupportsVisionPatterns(t *testing.T) {
 		}
 	}
 	textModels := []string{
-		"deepseek-v4-pro", "qwen3.8-flash",
-		"kimi-k2", "deepseek-chat", "glm-5.3",
+		"deepseek-v4-pro", "qwen3.7-plus",
+		"kimi-k2", "deepseek-chat", "glm-5.2",
 	}
 	for _, m := range textModels {
 		if ModelSupportsVision(m) {
@@ -231,7 +231,7 @@ func TestModelSupportsVisionRegistry(t *testing.T) {
 	}
 	textModels := []string{
 		"LongCat-2.0-Preview", // text/code model, confirmed no image input
-		"deepseek-v4-flash", "deepseek-v4-pro",
+		"deepseek-v4-pro",     // 仍单独提供，纯文本
 		"qwen3.8", "gpt-oss", "deepseek-r1",
 	}
 	for _, m := range textModels {

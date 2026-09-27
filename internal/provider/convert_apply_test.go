@@ -52,7 +52,9 @@ func TestApplyConvertConfig(t *testing.T) {
 // image parts, an override of false — or auto-detection on a text-only-looking
 // name — must downgrade them to placeholders.
 func TestAppliedConvertConfigDrivesImageParts(t *testing.T) {
-	model := "deepseek-v4-flash" // curated registry entry: text-only → auto says "no vision"
+	// curated registry entry: text-only → auto says "no vision"
+	// （deepseek-v4-flash 已随 V4.1-Flash 兼容路由变为多模态，不能再用作反例）
+	model := "deepseek-v4-pro"
 	msgs := []types.Message{{
 		Role: "user",
 		ContentParts: []types.ContentPart{

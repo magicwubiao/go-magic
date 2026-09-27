@@ -17,9 +17,10 @@ import (
 // provider instead.
 func TestProviderVisionToggleAppliesWithoutRestart(t *testing.T) {
 	// Model name that name-based detection classifies as text-only (curated
-	// registry, text-only by omission) — the exact situation where the user
+	// registry, text-only verdict) — the exact situation where the user
 	// has to declare vision manually.
-	const model = "deepseek-v4-flash"
+	// （deepseek-v4-flash 已随 V4.1-Flash 兼容路由变为多模态，不能再用作反例）
+	const model = "deepseek-v4-pro"
 
 	s := &Server{cfg: &appconfig.Config{
 		Provider: "custom",
