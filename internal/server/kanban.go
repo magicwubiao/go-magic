@@ -48,6 +48,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 			DueDate        string  `json:"due_date"`
 			EstimatedHours float64 `json:"estimated_hours"`
 			GoalID         string  `json:"goal_id"`
+			WorkingDir     string  `json:"working_dir"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -61,7 +62,10 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 
 		priority := priorityFromString(req.Priority)
 
-		task, err := s.kanbanMgr.CreateTask(req.Title, req.Description, "", kanban.WithPriority(priority))
+		task, err := s.kanbanMgr.CreateTask(req.Title, req.Description, "",
+			kanban.WithPriority(priority),
+			kanban.WithWorkingDir(strings.TrimSpace(req.WorkingDir)),
+		)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -89,6 +93,7 @@ func (s *Server) handleKanbanTasks(w http.ResponseWriter, r *http.Request) {
 			"status":          task.Status,
 			"priority":        priorityToString(task.Priority),
 			"tags":            task.Skills,
+			"working_dir":     task.WorkingDir,
 			"created_at":      task.CreatedAt.Unix(),
 			"updated_at":      task.UpdatedAt.Unix(),
 			"due_date":        task.DueDate,
@@ -402,6 +407,8 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 			Description string `json:"description"`
 			Priority    string `json:"priority"`
 			Status      string `json:"status"`
+			// Pointer so an explicit empty string clears the working directory.
+			WorkingDir *string `json:"working_dir,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -426,6 +433,9 @@ func (s *Server) handleKanbanTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Status != "" {
 			updates["status"] = req.Status
+		}
+		if req.WorkingDir != nil {
+			updates["working_dir"] = strings.TrimSpace(*req.WorkingDir)
 		}
 
 		updatedTask, err := s.kanbanMgr.UpdateTask(id, updates)

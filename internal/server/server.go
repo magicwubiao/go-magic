@@ -304,7 +304,7 @@ func NewServer(dbPath string) *Server {
 		disp := kanbanMgr.GetDispatcher()
 		if disp != nil {
 			disp.SetSpawner(func(task *kanban.Task) error {
-				workDir := filepath.Join(cfg.WorkingDir, "kanban", task.ID)
+				workDir := resolveKanbanWorkDir(cfg.WorkingDir, task)
 				if err := os.MkdirAll(workDir, 0755); err != nil {
 					return fmt.Errorf("create workspace: %w", err)
 				}
@@ -2366,6 +2366,25 @@ func (s *Server) findCronJobByID(id string) *cron.Job {
 	return s.cronMgr.GetByID(id)
 }
 
+// resolveKanbanWorkDir determines the working directory a kanban worker runs in.
+//
+// The task's own WorkingDir (set from the web UI) wins — that is where the user
+// wants artifacts to land, so it is used as-is ("~" expanded, abs path). When
+// the task has no WorkingDir we keep the previous default isolated layout:
+// <baseDir>/kanban/<taskID>.
+func resolveKanbanWorkDir(baseDir string, task *kanban.Task) string {
+	if task != nil {
+		if dir := strings.TrimSpace(task.WorkingDir); dir != "" {
+			dir = appconfig.ExpandHome(dir)
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
+			}
+			return dir
+		}
+	}
+	return filepath.Join(baseDir, "kanban", task.ID)
+}
+
 func (s *Server) taskToJSON(t *kanban.Task) map[string]interface{} {
 	return map[string]interface{}{
 		"id":              t.ID,
@@ -2375,6 +2394,7 @@ func (s *Server) taskToJSON(t *kanban.Task) map[string]interface{} {
 		"priority":        priorityToString(t.Priority),
 		"assignee":        t.Assignee,
 		"tags":            t.Skills,
+		"working_dir":     t.WorkingDir,
 		"created_at":      t.CreatedAt.Unix(),
 		"updated_at":      t.UpdatedAt.Unix(),
 		"due_date":        t.DueDate,

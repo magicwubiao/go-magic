@@ -158,6 +158,9 @@ func (m *Manager) UpdateTask(id string, updates map[string]interface{}) (*Task, 
 	if goalID, ok := updates["goal_id"].(string); ok {
 		task.GoalID = goalID
 	}
+	if workingDir, ok := updates["working_dir"].(string); ok {
+		task.WorkingDir = strings.TrimSpace(workingDir)
+	}
 
 	if err := m.db.UpdateTask(task); err != nil {
 		return nil, err
@@ -564,6 +567,7 @@ Only respond with the JSON, no additional text.`, task.Title, task.Body)
 			WithPriority(st.Priority),
 			WithTenant(task.Tenant),
 			WithWorkspace(task.Workspace),
+			WithWorkingDir(task.WorkingDir),
 		)
 		if err != nil {
 			log.Warnf("[Kanban] Failed to create subtask: %v", err)

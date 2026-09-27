@@ -225,6 +225,18 @@
           <n-form-item :label="t('kanban.linkedGoal')">
             <n-select v-model:value="taskForm.goal_id" :placeholder="t('kanban.selectGoal')" clearable :options="goalOptions" />
           </n-form-item>
+          <n-form-item :label="t('kanban.workingDir')">
+            <n-input-group>
+              <n-input v-model:value="taskForm.working_dir" :placeholder="t('kanban.workingDirPlaceholder')" clearable />
+              <n-button :title="t('kanban.workingDirBrowse')" @click="openDirPicker">
+                <template #icon><n-icon :component="FolderOpenOutline" /></template>
+                {{ t('kanban.workingDirBrowse') }}
+              </n-button>
+            </n-input-group>
+            <template #feedback>
+              <n-text depth="3" style="font-size: 12px;">{{ t('kanban.workingDirHint') }}</n-text>
+            </template>
+          </n-form-item>
           <n-form-item :label="t('kanban.formPriority')">
             <n-select v-model:value="taskForm.priority" :options="priorityOptions" />
           </n-form-item>
@@ -332,6 +344,69 @@
       </template>
     </n-modal>
 
+    <!-- Directory Picker Modal（工作目录选择） -->
+    <n-modal v-model:show="showDirPicker" :title="t('kanban.workingDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
+      <div v-if="recommendedDirs.length" class="dir-picker-recommended">
+        <div class="dir-picker-recommended-title">{{ t('kanban.workingDirRecommended') }}</div>
+        <div
+          v-for="d in recommendedDirs"
+          :key="d"
+          class="dir-picker-recommended-item"
+          :title="d"
+          @click="applyRecommendedDir(d)"
+        >
+          <n-icon size="16" :component="FolderOutline" />
+          <span class="dir-picker-recommended-path">{{ d }}</span>
+        </div>
+      </div>
+
+      <div class="dir-picker-breadcrumb">
+        <n-text class="dir-picker-current" :title="dirCurrentPath">{{ dirCurrentPath }}</n-text>
+        <n-button size="tiny" quaternary :title="t('kanban.newFolder')" @click="startNewFolder">
+          <template #icon><n-icon :component="AddOutline" /></template>
+        </n-button>
+      </div>
+
+      <div v-if="showNewFolderInput" class="dir-picker-new-folder">
+        <n-input
+          v-model:value="newFolderName"
+          size="small"
+          :placeholder="t('kanban.newFolder')"
+          @keyup.enter="createNewFolder"
+          @blur="cancelNewFolder"
+          ref="newFolderInputRef"
+        />
+      </div>
+
+      <div class="dir-picker-list">
+        <div v-if="dirLoading" class="dir-picker-loading">
+          <n-spin size="small" />
+        </div>
+        <div v-else-if="dirEntries.length === 0" class="dir-picker-empty">
+          <n-text depth="3">{{ t('kanban.workingDirEmpty') }}</n-text>
+        </div>
+        <div
+          v-for="entry in dirEntries"
+          v-else
+          :key="entry.path"
+          class="dir-picker-item"
+          @click="navigateDir(entry.path)"
+        >
+          <n-icon size="16" :component="FolderOutline" />
+          <span>{{ entry.name }}</span>
+        </div>
+      </div>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showDirPicker = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" @click="applyDirCurrent" :disabled="!dirCurrentPath">
+            {{ t('kanban.workingDirSet') }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
     <!-- Error Banner -->
     <n-alert
       v-if="kanbanStore.error"
@@ -372,14 +447,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NDatePicker, NDivider, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputNumber, NList, NListItem, NModal, NSelect, NSpace, NSpin, NStatistic, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NDatePicker, NDivider, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NInputNumber, NList, NListItem, NModal, NSelect, NSpace, NSpin, NStatistic, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   CalendarOutline, TimeOutline, StatsChartOutline,
   ChatbubbleOutline, GitBranchOutline, SparklesOutline,
-  RefreshOutline,
+  RefreshOutline, FolderOpenOutline, FolderOutline, AddOutline,
 } from '@vicons/ionicons5'
 import { useKanbanStore } from '@/stores/kanban'
 import { useGoalsStore } from '@/stores/goals'
@@ -387,6 +462,7 @@ import type { KanbanTask } from '@/api/kanban'
 import {
   getTaskComments, addTaskComment, getTaskChildren, triageTask, blockTask,
 } from '@/api/kanban'
+import * as sessionsApi from '@/api/sessions'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -424,6 +500,7 @@ const taskForm = reactive({
   due_date: null as number | null,
   estimated_hours: 0,
   goal_id: '',
+  working_dir: '',
 })
 
 const filterForm = reactive({
@@ -585,6 +662,7 @@ function openAddTask() {
   taskForm.due_date = null
   taskForm.estimated_hours = 0
   taskForm.goal_id = ''
+  taskForm.working_dir = ''
   showTaskModal.value = true
 }
 
@@ -597,6 +675,7 @@ function openEditTask(task: KanbanTask) {
   taskForm.due_date = task.due_date ? new Date(task.due_date).getTime() : null
   taskForm.estimated_hours = task.estimated_hours || 0
   taskForm.goal_id = task.goal_id || ''
+  taskForm.working_dir = task.working_dir || ''
   showTaskModal.value = true
 }
 
@@ -745,6 +824,109 @@ async function confirmBlock() {
   } catch (e) {
     message.error(t('kanban.blockFailed'))
   }
+}
+
+// ===== 工作目录选择器 =====
+const showDirPicker = ref(false)
+const dirCurrentPath = ref('')
+const dirEntries = ref<sessionsApi.DirEntry[]>([])
+const dirLoading = ref(false)
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+const workDirHistory = ref<string[]>([])
+const newFolderInputRef = ref<{ focus: () => void } | null>(null)
+
+function normalizeDirPath(p: string): string {
+  let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// 已使用过的目录作为推荐项；排除当前已选中的工作目录
+const recommendedDirs = computed(() => {
+  const current = normalizeDirPath(taskForm.working_dir || '')
+  return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
+})
+
+async function loadWorkDirHistory(): Promise<void> {
+  try {
+    workDirHistory.value = await sessionsApi.listWorkDirHistory()
+  } catch (e) {
+    workDirHistory.value = []
+  }
+}
+
+async function loadDirs(path?: string): Promise<boolean> {
+  dirLoading.value = true
+  try {
+    const res = await sessionsApi.listDirs(path)
+    dirCurrentPath.value = res.current
+    dirEntries.value = res.dirs || []
+    return true
+  } catch (e) {
+    dirEntries.value = []
+    return false
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+function navigateDir(path: string) {
+  if (!path) return
+  showNewFolderInput.value = false
+  newFolderName.value = ''
+  loadDirs(path)
+}
+
+function startNewFolder() {
+  showNewFolderInput.value = true
+  newFolderName.value = ''
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+function cancelNewFolder() {
+  setTimeout(() => {
+    showNewFolderInput.value = false
+    newFolderName.value = ''
+  }, 150)
+}
+
+async function createNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    showNewFolderInput.value = false
+    return
+  }
+  try {
+    await sessionsApi.createDir(dirCurrentPath.value, name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+    loadDirs(dirCurrentPath.value)
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+async function openDirPicker() {
+  showDirPicker.value = true
+  await loadWorkDirHistory()
+  // 起点优先取当前已设置的工作目录，否则由后端取默认
+  const prefer = taskForm.working_dir.trim()
+  if (prefer && (await loadDirs(prefer))) return
+  await loadDirs(undefined)
+}
+
+function applyRecommendedDir(path: string) {
+  taskForm.working_dir = path
+  showDirPicker.value = false
+}
+
+function applyDirCurrent() {
+  if (!dirCurrentPath.value) return
+  taskForm.working_dir = dirCurrentPath.value
+  showDirPicker.value = false
 }
 
 // --- Lifecycle ---
@@ -903,5 +1085,81 @@ onUnmounted(() => {
     min-height: 60px;
     padding: 10px;
   }
+}
+
+/* 工作目录选择器 */
+.dir-picker-recommended {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 4px;
+}
+.dir-picker-recommended-title {
+  font-size: 12px;
+  color: #999;
+  padding: 4px 12px 6px;
+}
+.dir-picker-recommended-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+.dir-picker-recommended-item:hover {
+  background: #f0f0f0;
+}
+.dir-picker-recommended-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dir-picker-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.dir-picker-current {
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  color: #666;
+}
+.dir-picker-new-folder {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.dir-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.dir-picker-item:hover {
+  background: #f0f0f0;
+}
+.dir-picker-empty,
+.dir-picker-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
 }
 </style>

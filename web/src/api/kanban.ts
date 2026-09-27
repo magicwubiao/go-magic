@@ -13,6 +13,7 @@ export interface KanbanTask {
   due_date?: string | null
   estimated_hours?: number
   goal_id?: string
+  working_dir?: string
   parent_count?: number
   child_count?: number
   comment_count?: number

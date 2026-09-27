@@ -649,6 +649,15 @@ export default {
     dragHint: '拖拽卡片到其他列可快速移动',
     quickActions: '快捷操作',
     batchMove: '批量移动',
+    // 工作目录（与定时任务的工作目录选择器一致）
+    workingDir: '工作目录',
+    workingDirPlaceholder: '例如：D:\\data\\reports 或 ~/reports（可选）',
+    workingDirHint: '留空则使用默认隔离目录（kanban/<任务ID>）；填写后任务在该目录内执行（支持 ~ 展开）',
+    workingDirBrowse: '浏览',
+    workingDirRecommended: '推荐目录（最近使用）',
+    workingDirSet: '选择此目录',
+    workingDirEmpty: '无子目录',
+    newFolder: '新建文件夹',
   },
   logs: {
     title: '日志',

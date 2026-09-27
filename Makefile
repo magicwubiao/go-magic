@@ -7,7 +7,10 @@ VERSION := $(shell git describe --tags --always 2>/dev/null || echo "dev")
 BUILD_DIR := ./dist
 CROSS_DIR := ./build
 GO := go
-GOFLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
+# NOTE: do NOT name this GOFLAGS — GNU make re-exports variables that came
+# from the environment, so an environment GOFLAGS (e.g. -mod=mod) would be
+# overwritten and go would fail parsing "-ldflags ... -X ..." as GOFLAGS.
+GO_LDFLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
 DOCKER_REPO := magicwubiao/go-magic
 
 # Go version for cross-compilation
@@ -54,7 +57,7 @@ build: build-web build-cli
 build-cli: build-web
 	@echo "Building CLI for current platform..."
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/magic ./cmd/magic
+	CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/magic ./cmd/magic
 
 build-web:
 	@echo "Building Web UI (required by go:embed dist)..."
@@ -88,22 +91,22 @@ build-cross:
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-linux-amd64 ./cmd/magic
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-linux-arm64 ./cmd/magic
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-linux-amd64 ./cmd/magic
+	@GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-linux-arm64 ./cmd/magic
 	@echo "Linux builds complete"
 
 build-macos:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-darwin-amd64 ./cmd/magic
-	@GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-darwin-arm64 ./cmd/magic
+	@GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-darwin-amd64 ./cmd/magic
+	@GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-darwin-arm64 ./cmd/magic
 	@echo "macOS builds complete"
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-windows-amd64.exe ./cmd/magic
-	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/go-magic-windows-arm64.exe ./cmd/magic
+	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-windows-amd64.exe ./cmd/magic
+	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GO_LDFLAGS) -o $(BUILD_DIR)/go-magic-windows-arm64.exe ./cmd/magic
 	@echo "Windows builds complete"
 
 # Install

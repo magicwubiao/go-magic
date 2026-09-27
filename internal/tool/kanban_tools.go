@@ -351,6 +351,10 @@ func NewKanbanCreateTool() *KanbanCreateTool {
 						"type":        "integer",
 						"description": "Priority: 0=low, 1=medium, 2=high, 3=critical",
 					},
+					"working_dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Working directory the task's worker should execute in (optional; supports ~). Defaults to an isolated kanban workspace.",
+					},
 				},
 				"required": []string{"title"},
 			},
@@ -372,6 +376,9 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, params map[string]interf
 	var opts []kanban.TaskOption
 	if priority, ok := params["priority"].(float64); ok {
 		opts = append(opts, kanban.WithPriority(int(priority)))
+	}
+	if wd, ok := params["working_dir"].(string); ok && strings.TrimSpace(wd) != "" {
+		opts = append(opts, kanban.WithWorkingDir(strings.TrimSpace(wd)))
 	}
 
 	if KanbanManager == nil {

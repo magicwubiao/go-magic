@@ -649,6 +649,15 @@ export default {
     dragHint: 'Drag cards to other columns to move',
     quickActions: 'Quick Actions',
     batchMove: 'Batch Move',
+    // Working directory (mirrors the cron job working-dir picker)
+    workingDir: 'Working Directory',
+    workingDirPlaceholder: 'e.g. D:\\data\\reports or ~/reports (optional)',
+    workingDirHint: 'Leave empty for the default isolated directory (kanban/<taskID>); when set, the task worker runs inside this directory (~ is expanded)',
+    workingDirBrowse: 'Browse',
+    workingDirRecommended: 'Recommended (recently used)',
+    workingDirSet: 'Select this directory',
+    workingDirEmpty: 'No subdirectories',
+    newFolder: 'New folder',
   },
   logs: {
     title: 'Logs',

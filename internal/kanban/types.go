@@ -35,20 +35,24 @@ func IsValidStatus(s TaskStatus) bool {
 
 // Task represents a kanban task
 type Task struct {
-	ID                string     `json:"id"`
-	Title             string     `json:"title"`
-	Body              string     `json:"body"`
-	Assignee          string     `json:"assignee"`
-	Status            TaskStatus `json:"status"`
-	Priority          int        `json:"priority"` // 0=low, 1=medium, 2=high, 3=critical
-	Tenant            string     `json:"tenant"`
-	Workspace         string     `json:"workspace"`
-	Skills            []string   `json:"skills"`
-	MaxRuntimeSeconds int        `json:"max_runtime_seconds"`
-	IdempotencyKey    string     `json:"idempotency_key"`
-	CurrentRunID      string     `json:"current_run_id"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID        string     `json:"id"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	Assignee  string     `json:"assignee"`
+	Status    TaskStatus `json:"status"`
+	Priority  int        `json:"priority"` // 0=low, 1=medium, 2=high, 3=critical
+	Tenant    string     `json:"tenant"`
+	Workspace string     `json:"workspace"`
+	// WorkingDir pins the directory this task's worker agent executes in.
+	// Supports "~" expansion. When empty, the worker falls back to the default
+	// isolated directory (<working_dir>/kanban/<taskID>).
+	WorkingDir        string    `json:"working_dir,omitempty"`
+	Skills            []string  `json:"skills"`
+	MaxRuntimeSeconds int       `json:"max_runtime_seconds"`
+	IdempotencyKey    string    `json:"idempotency_key"`
+	CurrentRunID      string    `json:"current_run_id"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 
 	// Time tracking fields
 	DueDate        *time.Time `json:"due_date,omitempty"`        // Deadline
@@ -133,6 +137,13 @@ func WithTenant(t string) TaskOption {
 func WithWorkspace(w string) TaskOption {
 	return func(task *Task) {
 		task.Workspace = w
+	}
+}
+
+// WithWorkingDir sets the task working directory (the dir its worker executes in)
+func WithWorkingDir(dir string) TaskOption {
+	return func(task *Task) {
+		task.WorkingDir = dir
 	}
 }
 

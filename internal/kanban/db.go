@@ -56,6 +56,7 @@ func (kdb *KanbanDB) Init() error {
 		priority INTEGER DEFAULT 0,
 		tenant TEXT DEFAULT '',
 		workspace TEXT DEFAULT '',
+		working_dir TEXT DEFAULT '',
 		skills TEXT DEFAULT '[]',
 		max_runtime_seconds INTEGER DEFAULT 0,
 		idempotency_key TEXT DEFAULT '',
@@ -134,6 +135,7 @@ func (kdb *KanbanDB) Init() error {
 		"ALTER TABLE tasks ADD COLUMN started_at DATETIME",
 		"ALTER TABLE tasks ADD COLUMN completed_at DATETIME",
 		"ALTER TABLE tasks ADD COLUMN goal_id TEXT DEFAULT ''",
+		"ALTER TABLE tasks ADD COLUMN working_dir TEXT DEFAULT ''",
 		"ALTER TABLE task_runs ADD COLUMN retry_count INTEGER DEFAULT 0",
 	}
 	for _, m := range migrations {
@@ -173,15 +175,15 @@ func (kdb *KanbanDB) CreateTask(task *Task) error {
 	query := `
 	INSERT INTO tasks (id, title, body, assignee, status, priority, tenant, workspace, skills, 
 		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
-		actual_hours, started_at, completed_at, goal_id, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		actual_hours, started_at, completed_at, goal_id, working_dir, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := kdb.db.Exec(query,
 		task.ID, task.Title, task.Body, task.Assignee, string(task.Status), task.Priority,
 		task.Tenant, task.Workspace, string(skillsJSON), task.MaxRuntimeSeconds,
 		task.IdempotencyKey, task.CurrentRunID, task.DueDate, task.EstimatedHours,
-		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID,
+		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID, task.WorkingDir,
 		task.CreatedAt, task.UpdatedAt)
 
 	if err != nil {
@@ -196,7 +198,7 @@ func (kdb *KanbanDB) GetTask(id string) (*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills, 
 		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
-		actual_hours, started_at, completed_at, goal_id, created_at, updated_at
+		actual_hours, started_at, completed_at, goal_id, working_dir, created_at, updated_at
 	FROM tasks WHERE id = ?
 	`
 
@@ -206,7 +208,7 @@ func (kdb *KanbanDB) GetTask(id string) (*Task, error) {
 		&task.ID, &task.Title, &task.Body, &task.Assignee, &task.Status, &task.Priority,
 		&task.Tenant, &task.Workspace, &skillsJSON, &task.MaxRuntimeSeconds,
 		&task.IdempotencyKey, &task.CurrentRunID, &task.DueDate, &task.EstimatedHours,
-		&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID,
+		&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID, &task.WorkingDir,
 		&task.CreatedAt, &task.UpdatedAt)
 
 	if err == sql.ErrNoRows {
@@ -234,7 +236,7 @@ func (kdb *KanbanDB) UpdateTask(task *Task) error {
 	UPDATE tasks SET title = ?, body = ?, assignee = ?, status = ?, priority = ?, 
 		tenant = ?, workspace = ?, skills = ?, max_runtime_seconds = ?, 
 		idempotency_key = ?, current_run_id = ?, due_date = ?, estimated_hours = ?,
-		actual_hours = ?, started_at = ?, completed_at = ?, goal_id = ?, updated_at = ?
+		actual_hours = ?, started_at = ?, completed_at = ?, goal_id = ?, working_dir = ?, updated_at = ?
 	WHERE id = ?
 	`
 
@@ -242,7 +244,7 @@ func (kdb *KanbanDB) UpdateTask(task *Task) error {
 		task.Title, task.Body, task.Assignee, string(task.Status), task.Priority,
 		task.Tenant, task.Workspace, string(skillsJSON), task.MaxRuntimeSeconds,
 		task.IdempotencyKey, task.CurrentRunID, task.DueDate, task.EstimatedHours,
-		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID, task.UpdatedAt, task.ID)
+		task.ActualHours, task.StartedAt, task.CompletedAt, task.GoalID, task.WorkingDir, task.UpdatedAt, task.ID)
 
 	if err != nil {
 		return fmt.Errorf("failed to update task: %w", err)
@@ -261,7 +263,7 @@ func (kdb *KanbanDB) ListTasks(filter TaskFilter) ([]*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills,
 		max_runtime_seconds, idempotency_key, current_run_id, due_date, estimated_hours, 
-		actual_hours, started_at, completed_at, goal_id, created_at, updated_at
+		actual_hours, started_at, completed_at, goal_id, working_dir, created_at, updated_at
 	FROM tasks WHERE 1=1
 	`
 	args := []interface{}{}
@@ -319,7 +321,7 @@ func (kdb *KanbanDB) ListTasks(filter TaskFilter) ([]*Task, error) {
 			&task.ID, &task.Title, &task.Body, &task.Assignee, &task.Status, &task.Priority,
 			&task.Tenant, &task.Workspace, &skillsJSON, &task.MaxRuntimeSeconds,
 			&task.IdempotencyKey, &task.CurrentRunID, &task.DueDate, &task.EstimatedHours,
-			&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID,
+			&task.ActualHours, &task.StartedAt, &task.CompletedAt, &task.GoalID, &task.WorkingDir,
 			&task.CreatedAt, &task.UpdatedAt,
 		); err != nil {
 			continue
@@ -407,7 +409,7 @@ func (kdb *KanbanDB) RemoveLink(parentID, childID string) error {
 func (kdb *KanbanDB) GetParents(taskID string) ([]*Task, error) {
 	query := `
 	SELECT t.id, t.title, t.body, t.assignee, t.status, t.priority, t.tenant, t.workspace, t.skills,
-		t.max_runtime_seconds, t.idempotency_key, t.current_run_id, t.created_at, t.updated_at
+		t.max_runtime_seconds, t.idempotency_key, t.current_run_id, t.working_dir, t.created_at, t.updated_at
 	FROM tasks t
 	INNER JOIN task_links l ON t.id = l.parent_id
 	WHERE l.child_id = ?
@@ -420,7 +422,7 @@ func (kdb *KanbanDB) GetParents(taskID string) ([]*Task, error) {
 func (kdb *KanbanDB) GetChildren(taskID string) ([]*Task, error) {
 	query := `
 	SELECT t.id, t.title, t.body, t.assignee, t.status, t.priority, t.tenant, t.workspace, t.skills,
-		t.max_runtime_seconds, t.idempotency_key, t.current_run_id, t.created_at, t.updated_at
+		t.max_runtime_seconds, t.idempotency_key, t.current_run_id, t.working_dir, t.created_at, t.updated_at
 	FROM tasks t
 	INNER JOIN task_links l ON t.id = l.child_id
 	WHERE l.parent_id = ?
@@ -459,7 +461,7 @@ func (kdb *KanbanDB) queryTasks(query string, args ...interface{}) ([]*Task, err
 		if err := rows.Scan(
 			&task.ID, &task.Title, &task.Body, &task.Assignee, &task.Status, &task.Priority,
 			&task.Tenant, &task.Workspace, &skillsJSON, &task.MaxRuntimeSeconds,
-			&task.IdempotencyKey, &task.CurrentRunID, &task.CreatedAt, &task.UpdatedAt,
+			&task.IdempotencyKey, &task.CurrentRunID, &task.WorkingDir, &task.CreatedAt, &task.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -707,7 +709,7 @@ func (kdb *KanbanDB) ClaimTask(taskID, assignee, runID string) (bool, error) {
 func (kdb *KanbanDB) GetRunningTasks() ([]*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills,
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at
+		max_runtime_seconds, idempotency_key, current_run_id, working_dir, created_at, updated_at
 	FROM tasks WHERE status = 'running'
 	`
 
@@ -718,7 +720,7 @@ func (kdb *KanbanDB) GetRunningTasks() ([]*Task, error) {
 func (kdb *KanbanDB) GetReadyTasks() ([]*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills,
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at
+		max_runtime_seconds, idempotency_key, current_run_id, working_dir, created_at, updated_at
 	FROM tasks WHERE status = 'ready'
 	ORDER BY priority DESC, created_at ASC
 	`
@@ -730,7 +732,7 @@ func (kdb *KanbanDB) GetReadyTasks() ([]*Task, error) {
 func (kdb *KanbanDB) GetTodoTasks() ([]*Task, error) {
 	query := `
 	SELECT id, title, body, assignee, status, priority, tenant, workspace, skills,
-		max_runtime_seconds, idempotency_key, current_run_id, created_at, updated_at
+		max_runtime_seconds, idempotency_key, current_run_id, working_dir, created_at, updated_at
 	FROM tasks WHERE status = 'todo'
 	`
 
