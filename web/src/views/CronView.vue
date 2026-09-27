@@ -219,6 +219,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NModal, NRadio, NRadioGroup, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
 import { useCronStore } from '@/stores/cron'
+import { useConfigStore } from '@/stores/config'
 import type { CronJob } from '@/api/cron'
 import { getLocale } from '@/locales'
 import * as sessionsApi from '@/api/sessions'
@@ -226,6 +227,7 @@ import * as sessionsApi from '@/api/sessions'
 const { t } = useI18n()
 const message = useMessage()
 const cronStore = useCronStore()
+const configStore = useConfigStore()
 const showModal = ref(false)
 const showLogsModal = ref(false)
 const editingJob = ref<CronJob | null>(null)
@@ -291,6 +293,20 @@ const showNewFolderInput = ref(false)
 const newFolderName = ref('')
 const workDirHistory = ref<string[]>([])
 const newFolderInputRef = ref<{ focus: () => void } | null>(null)
+
+// 配置页「通用」中设置的全局工作目录（后端 cfg.WorkingDir）。选择器打开时
+// 作为默认起点，与 chat 页的选择器行为一致。
+const globalWorkDir = computed(() => configStore.config?.working_dir || '')
+
+// 配置按需拉取（首次打开选择器时），避免页面每次进入都多一个请求。
+async function ensureConfigLoaded(): Promise<void> {
+  if (configStore.config) return
+  try {
+    await configStore.loadConfig()
+  } catch {
+    // 拉取失败不影响选择器：起点退回后端默认
+  }
+}
 
 function normalizeDirPath(p: string): string {
   let s = (p || '').trim().replace(/[\\/]+/g, '\\').replace(/[\\]+$/, '')
@@ -367,9 +383,10 @@ async function createNewFolder() {
 
 async function openDirPicker() {
   showDirPicker.value = true
-  await loadWorkDirHistory()
-  // 起点优先取当前已设置的工作目录，否则返回上次浏览位置；都无效时由后端取默认
-  const prefer = form.working_dir.trim()
+  // 起点优先取当前已设置的工作目录（编辑场景），否则取配置页设置的全局
+  // 工作目录——与 chat 页选择器一致。全局目录不可读时再退回后端默认。
+  await Promise.all([loadWorkDirHistory(), ensureConfigLoaded()])
+  const prefer = form.working_dir.trim() || globalWorkDir.value
   if (prefer && (await loadDirs(prefer))) return
   await loadDirs(undefined)
 }
