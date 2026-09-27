@@ -3191,6 +3191,9 @@ onActivated(() => {
     return
   }
   loadFullSessions()
+  // 模型/供应商配置可能在别处变化（设置页修改、外部直接编辑 config.json）：
+  // keep-alive 下 onMounted 只跑一次，回访必须重新拉，否则下拉一直显示旧值。
+  modelsStore.loadModels()
 })
 </script>
 

@@ -124,6 +124,9 @@ func (s *Server) handleConfigByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 子路由各自处理（raw/schema/defaults 不依赖内存快照）
+	s.syncConfigFromDisk()
+
 	if s.cfg == nil {
 		jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
 		return
@@ -260,6 +263,9 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+	// 自己刚写盘成功，刷新 mtime 基线，避免下一次 syncConfigFromDisk
+	// 把这笔写入误判成外部修改而白白重建 provider。
+	s.markConfigMtime()
 	return nil
 }
 
@@ -271,7 +277,74 @@ func (s *Server) reloadConfig() {
 		s.mu.Lock()
 		s.cfg = fresh
 		s.mu.Unlock()
+		s.markConfigMtime()
 	}
+}
+
+// configPath 返回当前生效 profile 的 config.json 路径。
+func (s *Server) configPath() string {
+	magicHome := s.magicHome
+	if magicHome == "" {
+		magicHome = appconfig.GetMagicHome()
+	}
+	return filepath.Join(magicHome, "config.json")
+}
+
+// markConfigMtime 把 configMtime 基线刷成磁盘上 config.json 的当前修改时间。
+// 在启动加载、reloadConfig 和 persistConfig 成功后调用，使"我们自己刚写过
+// 的文件"不会在下一次 syncConfigFromDisk 里被误判为外部变更。
+func (s *Server) markConfigMtime() {
+	if info, err := os.Stat(s.configPath()); err == nil {
+		s.mu.Lock()
+		s.configMtime = info.ModTime()
+		s.mu.Unlock()
+	}
+}
+
+// syncConfigFromDisk 让内存配置快照跟上外部对 config.json 的直接修改。
+//
+// 之前配置只在启动时 Load 一次，之后只有 GET/PUT /api/config 会顺带
+// reload —— 用户手改 config.json 后，chat 页依赖的 /api/model/options、
+// /api/providers 等只读接口读的一直是启动时的旧快照，页面永远看不到更新。
+// 这里用 mtime 做廉价变更检测：磁盘比已知基线新才重读，并在配置真的
+// 变化后重建 provider、清空缓存 agent（与 handleModelSet 全量切换同一条
+// 路径），保证新的 key/模型/baseURL 对后续对话立即生效。
+func (s *Server) syncConfigFromDisk() {
+	info, err := os.Stat(s.configPath())
+	if err != nil {
+		return
+	}
+	s.mu.RLock()
+	known := s.configMtime
+	s.mu.RUnlock()
+	if !info.ModTime().After(known) {
+		return
+	}
+
+	s.mu.Lock()
+	if !info.ModTime().After(s.configMtime) {
+		// 另一个请求已同步过
+		s.mu.Unlock()
+		return
+	}
+	s.configMtime = info.ModTime()
+	s.mu.Unlock()
+
+	fresh, err := appconfig.Load()
+	if err != nil || fresh == nil {
+		return
+	}
+	s.mu.Lock()
+	s.cfg = fresh
+	s.mu.Unlock()
+
+	if fresh.Provider != "" {
+		s.provider = createProvider(fresh)
+		s.refreshConvertConfig()
+	}
+	s.agentsMu.Lock()
+	s.agents = make(map[string]*agent.Agent)
+	s.agentsMu.Unlock()
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {

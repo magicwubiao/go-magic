@@ -54,9 +54,13 @@ type Server struct {
 	// configMu serializes config.json writes from server-side handlers;
 	// the gateway process writes the same file concurrently (QR login
 	// credentials), so every persist must go through persistConfig.
-	configMu     sync.Mutex
-	startTime    time.Time
-	cfg          *appconfig.Config
+	configMu  sync.Mutex
+	startTime time.Time
+	cfg       *appconfig.Config
+	// configMtime 记录最近一次已加载进内存的 config.json 修改时间，
+	// 供 syncConfigFromDisk 做"外部进程改了配置文件"的廉价变更检测。
+	// 由 s.mu 保护。
+	configMtime  time.Time
 	sessionStore *session.Store
 	// uploadsMeta maps on-disk upload uuid names back to readable original
 	// filenames so the Files page can display user-friendly names. Lazy-open.
@@ -563,6 +567,11 @@ Your working directory is: %s
 		chatQueues:           make(map[string]*sessionQueue),
 		globalBus:            bus.NewEventBus(),
 		globalBusSSEHandlers: make(map[uint64]func(kind string, payload []byte)),
+	}
+
+	// 记录启动时 config.json 的 mtime，作为 syncConfigFromDisk 的变更检测基线
+	if info, err := os.Stat(filepath.Join(magicHome, "config.json")); err == nil {
+		s.configMtime = info.ModTime()
 	}
 
 	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到

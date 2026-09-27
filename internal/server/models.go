@@ -134,6 +134,7 @@ func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.Pro
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+	s.syncConfigFromDisk()
 	providers := make([]map[string]interface{}, 0)
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
@@ -185,6 +186,7 @@ func (s *Server) handleModelByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
+	s.syncConfigFromDisk()
 	providerName := s.cfg.Provider
 	modelName := s.cfg.GetCurrentModel()
 
@@ -339,6 +341,7 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	s.syncConfigFromDisk()
 	models := make([]map[string]interface{}, 0)
 	seen := make(map[string]bool)
 
@@ -693,6 +696,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
+	s.syncConfigFromDisk()
 	providerList := make([]map[string]interface{}, 0)
 	providerNames := make(map[string]bool) // Track which providers are already added
 

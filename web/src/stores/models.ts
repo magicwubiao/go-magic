@@ -66,12 +66,10 @@ export const useModelsStore = defineStore('models', () => {
   async function loadModels() {
     loading.value = true
     try {
-      // Ensure config.providers is available so modelSelectOptions can
-      // filter to only user-configured models. Bots page (and anywhere
-      // that calls loadModels without a prior loadConfig) now works.
-      if (!configStore.config) {
-        await configStore.loadConfig()
-      }
+      // 总是刷新配置：chat 页被 keep-alive 缓存，onMounted 只跑一次；
+      // 之前 config 非空就跳过，外部直接改 config.json 后页面永远用旧值。
+      // GET /api/config 在后端会重读磁盘，开销很小。
+      await configStore.loadConfig()
       // Load from model options API which includes all provider models
       const options = await modelsApi.getModelOptions()
       currentProvider.value = options.provider
