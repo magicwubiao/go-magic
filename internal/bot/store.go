@@ -319,6 +319,12 @@ type RuntimeState struct {
 	// LastActiveUnix is the Unix-seconds timestamp of the bot's most recent
 	// completed turn (0 = never active). Used for the "Active now" UI strip.
 	LastActiveUnix int64 `json:"last_active_unix,omitempty"`
+	// LastMessage is a short preview of the most recent user/assistant text in
+	// the canonical chat ("" when the bot has no history yet). Lets the
+	// dashboard render an IM-style last-message line under each bot.
+	LastMessage string `json:"last_message,omitempty"`
+	// LastMessageUnix is the timestamp (Unix seconds) of that last message.
+	LastMessageUnix int64 `json:"last_message_unix,omitempty"`
 }
 
 // --- Group chat rooms ---

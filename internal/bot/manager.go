@@ -2,9 +2,11 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +37,10 @@ type pendingMessage struct {
 	// onDelta, when set, receives incremental assistant output while the
 	// worker streams this turn (SendToBotStream). May be nil.
 	onDelta StreamHandler
+	// onToolEvent, when set, receives structured tool_start / tool_result
+	// events parsed from the agent's inline stream markers, so SSE clients can
+	// render live tool activity instead of a silent spinner. May be nil.
+	onToolEvent func(map[string]interface{})
 	// retried marks that this message already went through one automatic
 	// retry (transient failure or context compaction), preventing infinite
 	// retry loops within a single enqueued message.
@@ -49,6 +55,15 @@ type pendingMessage struct {
 	// would otherwise deadlock both workers until the SendToBot timeout. Nil
 	// for ordinary turns. Set by SendToBotDelegated.
 	delegationChain []string
+	// ContentParts carries multimodal input (images/attachments) for this
+	// turn, already rehydrated into reference form by the caller. When set,
+	// the turn runs through the agent's WithMedia entry points and the user
+	// message is stored with these parts instead of plain text. May be nil.
+	ContentParts []types.ContentPart
+	// persistedParts is the lightweight on-disk form of ContentParts (inline
+	// base64 replaced by upload refs). Applied to the turn's user message
+	// right before the history is saved so bot.db stores refs, not payloads.
+	persistedParts []types.ContentPart
 }
 
 // turnResult carries one completed agent turn to a synchronous caller.
@@ -539,8 +554,48 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	}()
 
 	// runTurn executes one agent turn (streaming or blocking) and returns the
-	// full assistant text. Deltas are forwarded to msg.onDelta when set.
+	// full assistant text. Deltas are forwarded to msg.onDelta when set, and
+	// tool activity is parsed out of the inline markers and forwarded to
+	// msg.onToolEvent so streaming clients can show live tool calls.
+	//
+	// Multimodal turns (msg.ContentParts set — web bot chat with images) run
+	// through the WithMedia entry points: the user message then carries
+	// content parts instead of plain text, so msg.Text must ride along as a
+	// text part (the caller guarantees it; RunConversation*WithMedia ignores
+	// the plain-text input when parts are present). Only this turn's refs are
+	// rehydrated into real bytes — historical images stay as lightweight refs
+	// so the provider context doesn't replay every past image each turn.
+	turnParts := msg.ContentParts
+	if len(turnParts) > 0 {
+		if rehydrated, changed := rehydrateBotMediaParts(turnParts); changed {
+			turnParts = rehydrated
+		}
+	}
 	runTurn := func(stream bool, forwardDeltas bool) (string, error) {
+		if len(turnParts) > 0 {
+			if !stream {
+				return ag.RunConversationWithMedia(runCtx, msg.Text, turnParts)
+			}
+			var sb strings.Builder
+			err := ag.RunConversationStreamWithMedia(runCtx, msg.Text, turnParts, func(content string, done bool) {
+				if done || content == "" {
+					return
+				}
+				// Internal protocol markers are never shown to users; tool markers
+				// are parsed into structured events first (SSE tool activity).
+				if forwardToolMarkers(content, msg.onToolEvent) {
+					return
+				}
+				if isInternalMarker(content) {
+					return
+				}
+				sb.WriteString(content)
+				if forwardDeltas && msg.onDelta != nil {
+					msg.onDelta(content, false)
+				}
+			})
+			return sb.String(), err
+		}
 		if !stream {
 			return ag.RunConversation(runCtx, msg.Text)
 		}
@@ -549,7 +604,11 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 			if done || content == "" {
 				return
 			}
-			// Skip internal protocol markers that should never be shown to users.
+			// Internal protocol markers are never shown to users; tool markers
+			// are parsed into structured events first (SSE tool activity).
+			if forwardToolMarkers(content, msg.onToolEvent) {
+				return
+			}
 			if isInternalMarker(content) {
 				return
 			}
@@ -600,7 +659,17 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	if msg.RoomID != "" {
 		sessionID = RoomSessionID(rt.cfg.Name, msg.RoomID)
 	}
-	if trimmed, didTrim := m.saveHistory(sessionID, ag.GetHistory()); didTrim {
+	// Multimodal turns: swap the live data-URL image parts of this turn's
+	// user message back to their lightweight upload refs before the history
+	// hits disk (bot.db would otherwise grow by megabytes of base64 per
+	// image). The trimmed slice returned below is also what stays in the
+	// in-memory agent history — that's fine: historical images remain refs
+	// and the provider degrades them to a one-line "File: ..." mention.
+	history := ag.GetHistory()
+	if len(msg.persistedParts) > 0 {
+		history = replaceLastUserParts(history, msg.persistedParts)
+	}
+	if trimmed, didTrim := m.saveHistory(sessionID, history); didTrim {
 		// Keep the live agent's in-memory history aligned with what was saved,
 		// otherwise context grows unbounded even though disk stays trimmed.
 		ag.SetHistory(trimmed)
@@ -739,6 +808,13 @@ type StreamHandler func(content string, done bool)
 // but assistant deltas are forwarded to onDelta as they are generated.
 // onDelta may be nil; the full reply is also returned when the turn ends.
 func (m *Manager) SendToBotStream(botName, text string, onDelta StreamHandler) (string, error) {
+	return m.SendToBotStreamEvents(botName, text, onDelta, nil)
+}
+
+// SendToBotStreamEvents is SendToBotStream with an additional onToolEvent
+// callback that receives structured tool_start / tool_result events parsed
+// from the agent stream, letting web clients render live tool activity.
+func (m *Manager) SendToBotStreamEvents(botName, text string, onDelta StreamHandler, onToolEvent func(map[string]interface{})) (string, error) {
 	key := strings.ToLower(botName)
 
 	m.mu.Lock()
@@ -753,16 +829,82 @@ func (m *Manager) SendToBotStream(botName, text string, onDelta StreamHandler) (
 	}
 
 	msg := pendingMessage{
-		Text:    text,
-		From:    "user",
-		replyCh: make(chan turnResult, 1),
-		onDelta: onDelta,
+		Text:        text,
+		From:        "user",
+		replyCh:     make(chan turnResult, 1),
+		onDelta:     onDelta,
+		onToolEvent: onToolEvent,
 	}
 
 	if err := m.EnqueueMsg(key, msg); err != nil {
 		return "", err
 	}
 
+	select {
+	case res := <-msg.replyCh:
+		return res.Reply, res.Err
+	case <-m.stopCh:
+		return "", fmt.Errorf("bot manager shutting down")
+	}
+}
+
+// SendToBotWithMedia is SendToBot for multimodal input: parts carries the
+// user's message as content parts (a leading text part plus image/attachment
+// parts, already stripped to upload refs by the caller), and persistedParts
+// is the lightweight on-disk form applied when the history is saved.
+func (m *Manager) SendToBotWithMedia(botName, text string, parts, persistedParts []types.ContentPart) (string, error) {
+	key := strings.ToLower(botName)
+
+	m.mu.Lock()
+	rt, ok := m.bots[key]
+	m.mu.Unlock()
+	if !ok || rt == nil {
+		return "", fmt.Errorf("bot not found: %s", botName)
+	}
+
+	msg := pendingMessage{
+		Text:           text,
+		From:           "user",
+		ContentParts:   parts,
+		persistedParts: persistedParts,
+		replyCh:        make(chan turnResult, 1),
+	}
+	return m.enqueueAndAwait(key, msg)
+}
+
+// SendToBotStreamWithMedia is SendToBotStream for multimodal input: same
+// part semantics as SendToBotWithMedia, with assistant deltas streamed back
+// through onDelta as the turn runs.
+func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persistedParts []types.ContentPart, onDelta StreamHandler) (string, error) {
+	key := strings.ToLower(botName)
+
+	m.mu.Lock()
+	rt, ok := m.bots[key]
+	m.mu.Unlock()
+	if !ok || rt == nil {
+		return "", fmt.Errorf("bot not found: %s", botName)
+	}
+	if onDelta == nil {
+		return m.SendToBotWithMedia(botName, text, parts, persistedParts)
+	}
+
+	msg := pendingMessage{
+		Text:           text,
+		From:           "user",
+		ContentParts:   parts,
+		persistedParts: persistedParts,
+		replyCh:        make(chan turnResult, 1),
+		onDelta:        onDelta,
+	}
+	return m.enqueueAndAwait(key, msg)
+}
+
+// enqueueAndAwait queues msg on the bot's worker and blocks until the turn
+// finishes (or the manager shuts down). Shared tail of the SendToBot* family.
+func (m *Manager) enqueueAndAwait(key string, msg pendingMessage) (string, error) {
+	if err := m.EnqueueMsg(key, msg); err != nil {
+		return "", err
+	}
 	select {
 	case res := <-msg.replyCh:
 		return res.Reply, res.Err
@@ -919,6 +1061,11 @@ func (m *Manager) loadHistory(sessionID string) []provider.Message {
 			Content:    msg.Content,
 			ToolCalls:  msg.ToolCalls,
 			ToolCallID: msg.ToolCallID,
+			// Multimodal user messages persist as lightweight upload refs
+			// (file parts, no inline base64) — map them through so the
+			// provider can mention past attachments and the current-turn
+			// rehydrate can restore bytes for the message being answered.
+			ContentParts: msg.ContentParts,
 		})
 	}
 	// Sanitize: drop orphaned tool messages that have no preceding assistant
@@ -1014,6 +1161,18 @@ func (m *Manager) botWorkDir(bc *Config) string {
 	cfg := m.cfg
 	m.mu.Unlock()
 	return botWorkDirFor(cfg, bc)
+}
+
+// BotWorkDir resolves a bot's isolated working directory by name, for callers
+// outside the package (the web server materializes uploaded attachments there
+// so the bot's sandboxed file tools can read them). Returns "" when the bot
+// does not exist.
+func (m *Manager) BotWorkDir(name string) string {
+	cfg, err := m.store.Load(name)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return m.botWorkDir(cfg)
 }
 
 // truncateHistoryAtTurnBoundary trims a provider-message history to at most
@@ -1377,7 +1536,38 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 	if ag := m.AgentFor(botName); ag != nil {
 		state.HistoryLength = len(ag.GetHistory())
 	}
+
+	// Last-message preview: read the canonical chat from disk (the store is
+	// saved after every turn, so disk is never more than one turn behind).
+	// Runs without m.mu like the routine load above.
+	if sess, err := m.loadSessionForPreview(CanonicalSessionID(strings.ToLower(botName))); err == nil && sess != nil {
+		for i := len(sess.Messages) - 1; i >= 0; i-- {
+			msg := sess.Messages[i]
+			if (msg.Role != "user" && msg.Role != "assistant") || strings.TrimSpace(msg.Content) == "" {
+				continue
+			}
+			state.LastMessage = truncateString(strings.TrimSpace(msg.Content), 120)
+			if !msg.Timestamp.IsZero() {
+				state.LastMessageUnix = msg.Timestamp.Unix()
+			} else {
+				state.LastMessageUnix = sess.UpdatedAt.Unix()
+			}
+			break
+		}
+	}
 	return state
+}
+
+// loadSessionForPreview loads one session with a short timeout; preview reads
+// must never make an API call hang on a slow disk.
+func (m *Manager) loadSessionForPreview(sessionID string) (*sessionstore.Session, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sess, err := m.sessions.LoadSession(ctx, sessionID)
+	if err != nil || sess == nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 // AgentFor exposes a bot's live agent (nil when offline). Used by the web
@@ -1547,4 +1737,60 @@ func isInternalMarker(content string) bool {
 		return true
 	}
 	return false
+}
+
+// The agent stream embeds tool activity as inline markers (same format the
+// main chat SSE handler parses). These regexes destructure them.
+var (
+	botToolStartRe  = regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|([\s\S]*?)<<<`)
+	botToolResultRe = regexp.MustCompile(`>>>TOOL_RESULT_START\|([^|]+)\|([^|]+)\|([^|]+)<<<\n?([\s\S]*?)\n?>>>TOOL_RESULT_END<<<`)
+)
+
+// forwardToolMarkers parses one stream chunk carrying a tool marker and emits
+// a structured event to onToolEvent (nil callback = skip). Returns true when
+// the chunk was a marker and must not reach the visible text stream.
+func forwardToolMarkers(content string, onToolEvent func(map[string]interface{})) bool {
+	t := strings.TrimSpace(content)
+	if strings.Contains(t, ">>>TOOL_START|") {
+		if matches := botToolStartRe.FindStringSubmatch(t); len(matches) > 2 {
+			if onToolEvent != nil {
+				argsStr := matches[2]
+				var args interface{} = argsStr
+				if json.Valid([]byte(argsStr)) {
+					_ = json.Unmarshal([]byte(argsStr), &args)
+				}
+				onToolEvent(map[string]interface{}{
+					"type":      "tool_start",
+					"name":      matches[1],
+					"args":      args,
+					"args_text": argsStr,
+				})
+			}
+			return true
+		}
+	}
+	if strings.Contains(t, ">>>TOOL_RESULT_START|") {
+		if matches := botToolResultRe.FindStringSubmatch(t); len(matches) > 4 {
+			if onToolEvent != nil {
+				onToolEvent(map[string]interface{}{
+					"type":     "tool_result",
+					"name":     matches[1],
+					"success":  matches[2] == "true",
+					"duration": matches[3],
+					"content":  truncateString(strings.TrimSpace(matches[4]), 400),
+				})
+			}
+			return true
+		}
+	}
+	return strings.Contains(t, ">>>TOOL_RESULT_END<<<")
+}
+
+// truncateString cuts s to at most max runes, appending an ellipsis when cut.
+func truncateString(s string, max int) string {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }

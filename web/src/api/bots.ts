@@ -46,6 +46,12 @@ export interface BotRoutine {
   created_at: number
 }
 
+export interface BotMessageAttachment {
+  name: string
+  url: string
+  mime?: string
+}
+
 export interface BotMessage {
   id: string
   role: 'user' | 'assistant'
@@ -53,6 +59,22 @@ export interface BotMessage {
   content: string
   timestamp: number
   _streaming?: boolean
+  /** Attachments persisted with a user message (upload refs, no inline base64). */
+  attachments?: BotMessageAttachment[]
+}
+
+/**
+ * Attachment payload for a bot chat message — mirrors the sessions chat
+ * request shape so the backend's shared parseChatPayload handles both:
+ *   - images/imageUrls/imageNames: the vision channel (data URL + paired
+ *     upload ref + display name, same order);
+ *   - files: everything else (resolved server-side from the upload bucket).
+ */
+export interface BotChatPayload {
+  images?: string[]
+  imageUrls?: string[]
+  imageNames?: string[]
+  files?: { name: string; filename: string; url: string }[]
 }
 
 export async function getBots(): Promise<Bot[]> {
@@ -128,10 +150,15 @@ export async function runBotRoutineNow(name: string, routineId: string): Promise
   })
 }
 
-export async function sendBotChat(name: string, message: string): Promise<BotMessage> {
+export async function sendBotChat(
+  name: string,
+  message: string,
+  payload?: BotChatPayload
+): Promise<BotMessage> {
+  const body = payload && Object.keys(payload).length ? { message, ...payload } : { message }
   return request(`/bots/${name}/chat`, {
     method: 'POST',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -174,21 +201,23 @@ export interface BotChatStreamEvents {
 export async function sendBotChatStream(
   name: string,
   message: string,
-  events: BotChatStreamEvents = {}
+  events: BotChatStreamEvents = {},
+  payload?: BotChatPayload
 ): Promise<BotMessage> {
   const token = getAuthToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
+  const body = payload && Object.keys(payload).length ? { message, ...payload } : { message }
   const resp = await fetch(`${BASE_URL}/bots/${encodeURIComponent(name)}/chat/stream`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
     signal: events.signal,
   })
   if (!resp.ok || !resp.body) {
     // Fallback to synchronous endpoint on any pre-stream failure.
-    return sendBotChat(name, message)
+    return sendBotChat(name, message, payload)
   }
 
   const reader = resp.body.getReader()

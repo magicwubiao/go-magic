@@ -1687,6 +1687,24 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// Register this server with the uploads GC so orphan per-session folders
 	// get cleaned up periodically.
 	registerUploadsServer(s.magicHome, func(id string) (any, error) {
+		// Bot sessions live in a separate store (bots.db), and their upload
+		// buckets are named after the sanitized canonical session id. Without
+		// this branch the GC would treat those buckets as orphans and delete
+		// attachments out from under persisted bot chats.
+		if strings.HasPrefix(id, "bot_") {
+			if mgr := s.botManager; mgr != nil {
+				for _, cfg := range mgr.List() {
+					sid := bot.CanonicalSessionID(strings.ToLower(cfg.Name))
+					if fileNameSafeRe.ReplaceAllString(sid, "_") == id {
+						return mgr.Sessions().LoadSession(context.Background(), sid)
+					}
+				}
+			}
+			// Manager down or bot unknown: keep the bucket. Losing chat
+			// attachments because bot mode happens to be off is worse than a
+			// stale directory; explicit bot deletion cleans it up itself.
+			return nil, nil
+		}
 		if s.sessionStore == nil {
 			return nil, fmt.Errorf("no session store")
 		}

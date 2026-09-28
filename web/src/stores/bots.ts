@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as botsApi from '@/api/bots'
 import type { Bot, BotRoutine, BotMessage, BotUpdate } from '@/api/bots'
+import * as sessionsApi from '@/api/sessions'
 
 export const useBotsStore = defineStore('bots', () => {
   const bots = ref<Bot[]>([])
@@ -190,9 +191,76 @@ export const useBotsStore = defineStore('bots', () => {
     }
   }
 
-  async function sendMessage(text: string) {
+  /**
+   * Upload bucket for a bot's chat attachments: the sanitized form of the
+   * bot's canonical session id (bot:<name>:chat), matching the backend's
+   * botUploadBucket so the chat turn can resolve the uploaded refs.
+   */
+  function botUploadBucket(name: string): string {
+    return 'bot_' + name.toLowerCase() + '_chat'
+  }
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  /**
+   * Upload picked files into the bot's upload bucket and build the chat
+   * payload: images go through the vision channel (data URL + paired upload
+   * ref + display name), everything else through the files channel — the
+   * same split the sessions chat uses.
+   */
+  async function uploadBotChatFiles(
+    name: string,
+    files: File[]
+  ): Promise<{ payload: botsApi.BotChatPayload; attachments: botsApi.BotMessageAttachment[] }> {
+    const bucket = botUploadBucket(name)
+    const payload: botsApi.BotChatPayload = {}
+    const attachments: botsApi.BotMessageAttachment[] = []
+    const images: string[] = []
+    const imageUrls: string[] = []
+    const imageNames: string[] = []
+    const plainFiles: { name: string; filename: string; url: string }[] = []
+    for (const f of files) {
+      const uploaded = await sessionsApi.uploadFile(f, bucket)
+      attachments.push({ name: f.name, url: uploaded.url, mime: f.type })
+      const isImage = f.type.startsWith('image/') && f.type !== 'image/svg+xml'
+      if (isImage) {
+        images.push(await fileToDataUrl(f))
+        imageUrls.push(uploaded.url)
+        imageNames.push(f.name)
+      } else {
+        plainFiles.push({ name: f.name, filename: uploaded.filename, url: uploaded.url })
+      }
+    }
+    if (images.length) {
+      payload.images = images
+      payload.imageUrls = imageUrls
+      payload.imageNames = imageNames
+    }
+    if (plainFiles.length) payload.files = plainFiles
+    return { payload, attachments }
+  }
+
+  async function sendMessage(text: string, files?: File[]) {
     const name = activeBotName.value
-    if (!name || !text.trim()) return
+    if (!name) return
+    if (!text.trim() && !files?.length) return
+
+    // Upload attachments before touching the UI state; on failure the user
+    // keeps their draft and picked files (the view re-raises the error).
+    let payload: botsApi.BotChatPayload | undefined
+    let attachments: botsApi.BotMessageAttachment[] | undefined
+    if (files?.length) {
+      const up = await uploadBotChatFiles(name, files)
+      payload = up.payload
+      attachments = up.attachments
+    }
 
     // Cancel any previous in-flight stream (shouldn't happen, but be safe).
     cancelStream()
@@ -206,6 +274,7 @@ export const useBotsStore = defineStore('bots', () => {
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      attachments,
     })
     sending.value = true
     // Streaming assistant bubble: grows as deltas arrive.
@@ -220,6 +289,7 @@ export const useBotsStore = defineStore('bots', () => {
     let recovering = false
     try {
       // Prefer SSE streaming; falls back to blocking endpoint internally.
+      // payload carries the uploaded attachment refs (vision/files channels).
       const reply = await botsApi.sendBotChatStream(name, text, {
         signal,
         onDelta: (delta) => {
@@ -231,7 +301,7 @@ export const useBotsStore = defineStore('bots', () => {
             bubble.timestamp = Date.now()
           }
         },
-      })
+      }, payload)
       // Replace the growing bubble with the authoritative reply.
       // Only if we're still on the same bot.
       if (activeBotName.value === name) {

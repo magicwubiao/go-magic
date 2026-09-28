@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/magicwubiao/go-magic/internal/bot"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // validNamePattern matches safe bot names and room IDs: alphanumeric start,
@@ -372,6 +375,11 @@ func (s *Server) handleBotDelete(w http.ResponseWriter, r *http.Request, name st
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The chat session is gone with the bot — its upload bucket is now an
+	// orphan the GC will keep forever (it deliberately errs on the side of
+	// keeping bot buckets). Remove it explicitly, mirroring session deletion
+	// with delete_files=true.
+	s.cleanupSessionUploads(botUploadBucket(name))
 	jsonResponse(w, map[string]interface{}{"deleted": name})
 }
 
@@ -486,6 +494,94 @@ func (s *Server) handleBotRoutineByID(w http.ResponseWriter, r *http.Request, na
 	}
 }
 
+// botUploadBucket 是 bot 聊天附件在上传目录里的桶名。bot 会话存在独立的
+// bots.db 里，桶名直接取 canonical session id 的清洗形态（清洗规则与
+// uploadsDirFor 一致），前端上传附件时也带同名 session_id，两侧必然对上。
+func botUploadBucket(botName string) string {
+	sid := bot.CanonicalSessionID(strings.ToLower(botName))
+	return fileNameSafeRe.ReplaceAllString(sid, "_")
+}
+
+// parseBotChatPayload 解析 bot 聊天请求体（/chat 与 /chat/stream 共用），
+// 复用 sessions 的 parseChatPayload（files/images/imageUrls/imageNames 与
+// 会话聊天完全同一请求形状），并兼容旧的 {"message": "..."} 字段。
+//
+// 返回：
+//   - text：用户输入的纯文本（content 与 message 两个字段的合并结果）；
+//   - parts：模型可见的 content parts（文本作为首个 text 部件——带部件的
+//     消息在出站转换时只发 parts，纯文本 input 会被丢弃）；
+//   - persisted：落盘用的引用形态 parts（base64 已换成上传引用，不含
+//     物化摘要——那是当回合的执行提示，不是用户说的话）；
+//   - errMsg：非空表示应回给客户端的 4xx 文案。
+func (s *Server) parseBotChatPayload(r *http.Request, botName string) (text string, parts, persisted []types.ContentPart, errMsg string) {
+	const maxBotChatBodyBytes = 16 << 20
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxBotChatBodyBytes))
+	if err != nil {
+		return "", nil, nil, "failed to read request body: " + err.Error()
+	}
+
+	// Back-compat: the original bot chat contract was {"message": "..."}.
+	// parseChatPayload only knows the sessions shape, so the legacy field is
+	// decoded separately and merged below.
+	var legacy struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(raw, &legacy)
+
+	// parseChatPayload re-reads the body; hand the saved bytes back.
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+
+	bucket := botUploadBucket(botName)
+	parsed, perr := s.parseChatPayload(r, bucket)
+	if parsed == nil {
+		return "", nil, nil, perr
+	}
+
+	text = strings.TrimSpace(parsed.content)
+	if text == "" {
+		text = strings.TrimSpace(legacy.Message)
+	}
+	if text == "" && len(parsed.contentParts) == 0 {
+		return "", nil, nil, "message is required"
+	}
+
+	// Materialize uploaded attachments into the bot's isolated workdir so its
+	// sandboxed file tools can read them (canonical copies under
+	// <magicHome>/uploads stay untouched — GC/audit source of truth). Done
+	// before enqueueing: the uploads GC must not reclaim files a queued turn
+	// still needs.
+	var materializeSummary string
+	if len(parsed.pendingMaterialize) > 0 {
+		if mgr := s.botMgr(); mgr != nil {
+			if workDir := mgr.BotWorkDir(botName); workDir != "" {
+				materializeSummary = materializeUploads(parsed.pendingMaterialize, workDir)
+			}
+		}
+		if materializeSummary == "" {
+			// 工作目录不可用：至少把服务器规范路径告诉模型（与 sessions 同）。
+			lines := make([]string, 0, len(parsed.pendingMaterialize))
+			for _, it := range parsed.pendingMaterialize {
+				lines = append(lines, fmt.Sprintf("- %s → %s", it.Name, it.Src))
+			}
+			materializeSummary = "附件已保存在以下服务器路径（工作目录暂不可用，如需读取请告知用户）：\n" + strings.Join(lines, "\n")
+		}
+	}
+
+	if text != "" {
+		parts = append(parts, types.ContentPart{Type: "text", Text: text})
+	}
+	parts = append(parts, parsed.contentParts...)
+	if materializeSummary != "" {
+		parts = append(parts, types.ContentPart{Type: "text", Text: materializeSummary})
+	}
+
+	persisted = persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
+	if text != "" {
+		persisted = append([]types.ContentPart{{Type: "text", Text: text}}, persisted...)
+	}
+	return text, parts, persisted, ""
+}
+
 // handleBotChat POST /api/bots/{name}/chat — synchronous send-and-wait turn.
 func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost {
@@ -497,19 +593,19 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 
-	var req struct {
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.Message) == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+	text, parts, persisted, errMsg := s.parseBotChatPayload(r, name)
+	if errMsg != "" {
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	reply, err := mgr.SendToBot(name, req.Message)
+	var reply string
+	var err error
+	if len(parts) > 0 {
+		reply, err = mgr.SendToBotWithMedia(name, text, parts, persisted)
+	} else {
+		reply, err = mgr.SendToBot(name, text)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -546,6 +642,7 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		role      string
 		from      string
 		content   string
+		parts     []types.ContentPart
 		timestamp int64
 	}
 
@@ -604,6 +701,7 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 			role:      msg.Role,
 			from:      msg.From,
 			content:   msg.Content,
+			parts:     msg.ContentParts,
 			timestamp: ts,
 		}
 		if msg.Role == "user" {
@@ -617,13 +715,51 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 
 	result := make([]map[string]interface{}, 0, len(merged))
 	for _, m := range merged {
-		result = append(result, map[string]interface{}{
+		entry := map[string]interface{}{
 			"id":        m.id,
 			"role":      m.role,
 			"from":      m.from,
 			"content":   m.content,
 			"timestamp": m.timestamp,
-		})
+		}
+		// Multimodal user messages: the persisted parts are the lightweight
+		// ref form (file parts with /api/uploads URLs, no inline base64).
+		// Expose name/url so the dashboard can render attachment thumbnails
+		// after a reload, and synthesize the bubble text from text parts when
+		// the agent history stored the message as parts-only (Content empty —
+		// the outbound convention for multimodal messages).
+		if len(m.parts) > 0 {
+			attachments := make([]map[string]string, 0, len(m.parts))
+			textBits := make([]string, 0, len(m.parts))
+			for _, p := range m.parts {
+				switch {
+				case p.Type == "text" && strings.TrimSpace(p.Text) != "":
+					textBits = append(textBits, p.Text)
+				case p.Type == "file" && p.File != nil && p.File.URL != "":
+					attachments = append(attachments, map[string]string{
+						"name": p.File.Name,
+						"url":  p.File.URL,
+						"mime": p.File.MimeType,
+					})
+				case p.Type == "image_url" && p.ImageURL != nil &&
+					p.ImageURL.URL != "" && !strings.HasPrefix(p.ImageURL.URL, "data:"):
+					// Legacy inline-image persistence (pre-ref form): URL is a
+					// plain link, no readable name.
+					attachments = append(attachments, map[string]string{
+						"name": "",
+						"url":  p.ImageURL.URL,
+						"mime": "",
+					})
+				}
+			}
+			if len(attachments) > 0 {
+				entry["attachments"] = attachments
+			}
+			if strings.TrimSpace(m.content) == "" && len(textBits) > 0 {
+				entry["content"] = strings.Join(textBits, "\n")
+			}
+		}
+		result = append(result, entry)
 	}
 	jsonResponse(w, result)
 }
@@ -641,15 +777,9 @@ func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 
-	var req struct {
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.Message) == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+	text, parts, persisted, errMsg := s.parseBotChatPayload(r, name)
+	if errMsg != "" {
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -676,12 +806,23 @@ func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, nam
 	// Headers out immediately so proxies/clients see a live stream.
 	writeSSE(`{"type":"connected"}`)
 
-	reply, err := mgr.SendToBotStream(name, req.Message, func(content string, done bool) {
-		if done || content == "" {
-			return
-		}
-		writeJSONEvent(map[string]string{"delta": content})
-	})
+	var reply string
+	var err error
+	if len(parts) > 0 {
+		reply, err = mgr.SendToBotStreamWithMedia(name, text, parts, persisted, func(content string, done bool) {
+			if done || content == "" {
+				return
+			}
+			writeJSONEvent(map[string]string{"delta": content})
+		})
+	} else {
+		reply, err = mgr.SendToBotStream(name, text, func(content string, done bool) {
+			if done || content == "" {
+				return
+			}
+			writeJSONEvent(map[string]string{"delta": content})
+		})
+	}
 
 	if err != nil {
 		msg := err.Error()

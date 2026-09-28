@@ -201,6 +201,15 @@
             <n-tag v-if="activeBot?.active === false" type="warning" size="small" :bordered="false">
               ⏸ {{ t('bots.paused') }}
             </n-tag>
+            <!-- Live backlog: a bot chewing through queued DMs/routines is
+                 invisible once the conversation is non-empty — keep the
+                 empty-state's queue/history tags visible here too. -->
+            <n-tag v-if="(activeBot?.runtime?.queue_depth ?? 0) > 0" type="warning" size="small" :bordered="false">
+              {{ t('bots.queueDepth', { count: activeBot?.runtime?.queue_depth ?? 0 }) }}
+            </n-tag>
+            <n-tag v-if="(activeBot?.runtime?.history_length ?? 0) > 0" size="small" :bordered="false">
+              {{ t('bots.historyLength', { count: activeBot?.runtime?.history_length ?? 0 }) }}
+            </n-tag>
             <n-button
               v-if="activeBot?.active === false"
               quaternary size="small" type="primary"
@@ -219,6 +228,14 @@
             <n-button quaternary size="small" @click="openRoutinesModal">
               <template #icon><n-icon><TimeOutline /></n-icon></template>
               {{ t('bots.routines') }} ({{ botsStore.routines.length }})
+            </n-button>
+            <n-button
+              quaternary size="small"
+              :disabled="!botsStore.messages.length"
+              @click="handleExportChat"
+            >
+              <template #icon><n-icon><DownloadOutline /></n-icon></template>
+              {{ t('bots.exportChat') }}
             </n-button>
             <n-popconfirm @positive-click="handleClearChat">
               <template #trigger>
@@ -295,15 +312,35 @@
                     <div class="message-header">
                       <n-text strong class="sender-name">{{ msg.role === 'assistant' ? botDisplayName : t('bots.you') }}</n-text>
                       <n-tag v-if="msg.role === 'assistant'" size="tiny" type="success">AI</n-tag>
+                      <!-- Cross-source messages (bot-to-bot replies, routine
+                           runs, room echoes) arrive as user-role bubbles;
+                           without the source tag they all read as "You". -->
+                      <n-tag v-else-if="msgSource(msg)" size="tiny" type="info" :bordered="false">{{ msgSource(msg) }}</n-tag>
                       <span v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</span>
                     </div>
                     <div class="message-bubble" :class="[msg.role === 'assistant' ? 'agent-bubble' : 'user-bubble', { streaming: msg._streaming }]">
+                      <div v-if="msg.attachments?.length" class="msg-attachments">
+                        <template v-for="(a, ai) in msg.attachments" :key="a.url + ai">
+                          <img
+                            v-if="attachmentIsImage(a)"
+                            :src="attachmentSrcFor(a.url)"
+                            class="msg-attach-img"
+                            loading="lazy"
+                            alt=""
+                            @click="openAttachment(a.url)"
+                          />
+                          <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a.url)">
+                            <n-icon size="14"><DocumentOutline /></n-icon>
+                            <span>{{ a.name || attachmentLabelFromUrl(a.url) }}</span>
+                          </a>
+                        </template>
+                      </div>
                       <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
                       <template v-if="msg.role === 'assistant' && msg.content">
                         <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
                       </template>
                       <div
-                        v-else
+                        v-else-if="msg.content || !msg.attachments?.length"
                         class="bubble-content"
                         v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"
                       ></div>
@@ -339,7 +376,36 @@
         </div>
 
         <div class="input-area">
+          <!-- Pending attachments: thumbnails for images, name chips otherwise -->
+          <div v-if="selectedFiles.length" class="attach-chips">
+            <div v-for="(sel, i) in selectedFiles" :key="sel.key" class="attach-chip">
+              <img v-if="sel.preview" :src="sel.preview" class="attach-thumb" alt="" />
+              <n-icon v-else size="16" class="attach-file-icon"><DocumentOutline /></n-icon>
+              <span class="attach-name" :title="sel.file.name">{{ sel.file.name }}</span>
+              <button class="attach-remove" type="button" @click="removeSelectedFile(i)">
+                <n-icon size="12"><CloseOutline /></n-icon>
+              </button>
+            </div>
+          </div>
           <div class="input-wrapper">
+            <input
+              ref="fileInputEl"
+              type="file"
+              multiple
+              class="hidden-file-input"
+              tabindex="-1"
+              aria-hidden="true"
+              @change="onFilesPicked"
+            />
+            <button
+              class="attach-btn"
+              type="button"
+              :disabled="botsStore.sending"
+              :title="t('bots.attach')"
+              @click="fileInputEl?.click()"
+            >
+              <n-icon size="17"><AttachOutline /></n-icon>
+            </button>
             <n-input
               v-model:value="draft"
               type="textarea"
@@ -348,11 +414,12 @@
               :disabled="botsStore.sending"
               class="chat-input"
               @keydown.enter.exact.prevent="handleSend"
+              @paste="onPasteFiles"
             />
             <button
               class="send-btn-inline"
               :class="{ stopping: botsStore.sending }"
-              :disabled="!botsStore.sending && !draft.trim()"
+              :disabled="!botsStore.sending && !draft.trim() && !selectedFiles.length"
               @click="handleSend"
               @mousedown.prevent
               :title="botsStore.sending ? t('bots.sending') : t('bots.send')"
@@ -821,8 +888,8 @@ import {
   NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
-  AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
-  CreateOutline, EllipsisHorizontalOutline, PeopleOutline, SearchOutline,
+  AddOutline, ArrowBackOutline, AttachOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
+  CreateOutline, DocumentOutline, DownloadOutline, EllipsisHorizontalOutline, PeopleOutline, SearchOutline,
   TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
@@ -830,8 +897,9 @@ import { useBotsStore } from '@/stores/bots'
 import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
-import type { Bot, BotRoutine } from '@/api/bots'
+import type { Bot, BotRoutine, BotMessage, BotMessageAttachment } from '@/api/bots'
 import type { RoomMessage, RoomSendResult } from '@/api/rooms'
+import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
@@ -1323,19 +1391,201 @@ async function handleSend() {
     return
   }
   const text = draft.value.trim()
-  if (!text) return
+  // Attachment-only sends are allowed (empty text + files) — the backend
+  // prepends the text part only when non-empty.
+  if (!text && !selectedFiles.value.length) return
   // Canonical chat protection: bot conversations are persistent by design,
   // so session-reset commands are not available here. Use "Clear chat" instead.
   if (/^\/(new|reset)\b/i.test(text)) {
     message.warning(t('bots.canonicalChatHint'))
     return
   }
+  const files = selectedFiles.value.map(s => s.file)
   draft.value = ''
   try {
-    await botsStore.sendMessage(text)
+    await botsStore.sendMessage(text, files.length ? files : undefined)
+    // Success: drop the pending chips (and their object URLs). On failure the
+    // chips stay so the user can retry without re-picking.
+    clearSelectedFiles()
   } catch (e: any) {
     message.error(e.message || t('common.operationFailed'))
   }
+}
+
+// ========== Chat attachments (pending chips + message rendering) ==========
+// Mirrors ChatView's multimodal flow: picked/pasted files sit in
+// selectedFiles until send, then the store uploads them into the bot's
+// upload bucket and routes them through the vision/files channels.
+const selectedFiles = ref<{ file: File; key: string; preview: string }[]>([])
+const fileInputEl = ref<HTMLInputElement | null>(null)
+let selectedFileSeq = 0
+
+function addPickedFiles(files: File[]) {
+  for (const f of files) {
+    selectedFileSeq += 1
+    let preview = ''
+    if (f.type.startsWith('image/') && f.type !== 'image/svg+xml') {
+      preview = URL.createObjectURL(f)
+    }
+    selectedFiles.value.push({ file: f, key: `${Date.now()}_${selectedFileSeq}_${f.name}`, preview })
+  }
+}
+
+function onFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (files.length) addPickedFiles(files)
+  input.value = ''
+}
+
+function removeSelectedFile(i: number) {
+  const sel = selectedFiles.value[i]
+  if (!sel) return
+  if (sel.preview) URL.revokeObjectURL(sel.preview)
+  selectedFiles.value.splice(i, 1)
+}
+
+function clearSelectedFiles() {
+  for (const sel of selectedFiles.value) {
+    if (sel.preview) URL.revokeObjectURL(sel.preview)
+  }
+  selectedFiles.value = []
+}
+
+// Clipboard paste into the bot chat input: screenshots / copied files become
+// pending attachments, same as the sessions chat. Text-only pastes keep the
+// native textarea behavior untouched.
+async function onPasteFiles(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const files: File[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'file') {
+      const f = item.getAsFile()
+      if (f) files.push(f)
+    }
+  }
+  if (!files.length) return
+  e.preventDefault()
+  // Unnamed clipboard screenshots get a stable timestamped name so the
+  // bubble label reads well.
+  const stamp = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stampStr = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`
+  let imgIdx = 0
+  for (const f of files) {
+    let target = f
+    if (/^image\//.test(f.type) && (!f.name || /^image\.png$/i.test(f.name))) {
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+      imgIdx += 1
+      target = new File([f], `${t('chat.imageBtn')}-${stampStr}${imgIdx > 1 ? '-' + imgIdx : ''}.${ext}`, { type: f.type })
+    }
+    addPickedFiles([target])
+  }
+}
+
+// 消息附件是图片吗？后端带回 mime；老数据可能没写或只写了
+// application/octet-stream，这时按扩展名兜底。SVG 明确排除：它走文件通道，
+// 且按文本 MIME 提供时放进 <img> 根本不渲染。
+const ATTACH_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i
+function attachmentIsImage(a: BotMessageAttachment): boolean {
+  const mime = (a.mime || '').toLowerCase()
+  if (mime.startsWith('image/') && mime !== 'image/svg+xml') return true
+  if (mime && mime !== 'application/octet-stream') return false
+  return ATTACH_IMAGE_EXT_RE.test(a.name || attachmentLabelFromUrl(a.url))
+}
+
+function attachmentLabelFromUrl(url: string): string {
+  try {
+    const base = decodeURIComponent(new URL(url, window.location.origin).pathname.split('/').pop() || '')
+    return base || url
+  } catch {
+    return url
+  }
+}
+
+// 附件缩略图的票据地址缓存（同 ChatView）：<img>/<a> 带不上 Authorization 头，
+// 需要先换一张 uploads 票据。渲染是同步的、换票据是异步的：先返回缓存值
+// （缺失为空串），后台换取后回填，靠响应式让图片自己补上。
+const attachmentSrcs = reactive<Record<string, string>>({})
+const attachmentSrcPending = new Set<string>()
+
+function attachmentSrcFor(url?: string): string {
+  if (!url) return ''
+  if (/^(data:|blob:|https?:)/i.test(url)) return url
+  const cached = attachmentSrcs[url]
+  if (cached) return cached
+  if (!attachmentSrcPending.has(url)) {
+    attachmentSrcPending.add(url)
+    sessionsApi.resolveAttachmentSrc(url)
+      .then(src => { attachmentSrcs[url] = src })
+      .catch(() => { /* keep empty; next render retries via cache miss */ })
+      .finally(() => attachmentSrcPending.delete(url))
+  }
+  return ''
+}
+
+async function openAttachment(url: string) {
+  try {
+    const src = await sessionsApi.resolveAttachmentSrc(url)
+    if (src) window.open(src, '_blank', 'noopener')
+  } catch { /* ignore */ }
+}
+
+// Cross-source user-role bubbles: bot-to-bot replies arrive with
+// from="bot:<tag>", room relays with from="room:<id>", routine runs with
+// from="" — without a tag they all read as plain "You".
+function msgSource(msg: BotMessage): string {
+  const from = msg.from ?? ''
+  if (from === 'user' || msg.role === 'assistant') return ''
+  if (from.startsWith('bot:')) return '@' + from.slice(4)
+  if (from.startsWith('room:')) return t('bots.sourceRoom')
+  return t('bots.sourceRoutine')
+}
+
+// Export the active bot's conversation as a Markdown transcript (metadata
+// header + per-message sections + attachment links). Attachments keep their
+// server refs — they stay resolvable while the upload exists.
+function handleExportChat() {
+  const bot = activeBot.value
+  const name = botsStore.activeBotName || 'bot'
+  const msgs = botsStore.messages
+  if (!msgs.length) return
+  const lines: string[] = []
+  lines.push(`# ${t('bots.exportChatTitle', { name: '@' + (bot?.mention_tag || name) })}`)
+  lines.push('')
+  lines.push(`- Bot: ${bot?.title ? `${bot.title} (@${bot.mention_tag || name})` : '@' + (bot?.mention_tag || name)}`)
+  lines.push(`- ${t('bots.exportTime')}: ${new Date().toLocaleString()}`)
+  lines.push(`- ${t('bots.exportCount', { count: msgs.length })}`)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+  for (const msg of msgs) {
+    const who = msg.role === 'assistant'
+      ? botDisplayName.value
+      : (msgSource(msg) ? `${t('bots.you')} (${msgSource(msg)})` : t('bots.you'))
+    const when = formatTime(msg.timestamp)
+    lines.push(`### ${who}${when ? ` · ${when}` : ''}`)
+    lines.push('')
+    if (msg.attachments?.length) {
+      for (const a of msg.attachments) {
+        lines.push(`- 📎 [${a.name || attachmentLabelFromUrl(a.url)}](${a.url})`)
+      }
+      lines.push('')
+    }
+    if (msg.content) {
+      lines.push(msg.content)
+      lines.push('')
+    }
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${name}-chat-${new Date().toISOString().slice(0, 10)}.md`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // Quick starter chips send their prompt immediately (Grok-style starters).
@@ -2945,6 +3195,148 @@ async function loadCandidates() {
   color: #333;
 }
 
+/* ========== Pending attachment chips (bot chat input) ========== */
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto 4px;
+}
+
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+  max-width: 240px;
+}
+
+.attach-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.attach-file-icon {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.attach-name {
+  font-size: 12px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.attach-remove {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.attach-remove:hover {
+  color: #d03050;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.attach-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-bottom: 3px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.attach-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+  color: #18a058;
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+/* ========== Message attachments (rendered in bubbles) ========== */
+.message-bubble {
+  flex-wrap: wrap;
+}
+
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-bottom: 2px;
+}
+
+.msg-attachments + .bubble-content {
+  margin-top: 4px;
+}
+
+.msg-attach-img {
+  max-width: min(320px, 100%);
+  max-height: 240px;
+  border-radius: 10px;
+  cursor: zoom-in;
+  display: block;
+}
+
+.msg-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
+  font-size: 12px;
+  text-decoration: none !important;
+  max-width: 260px;
+}
+
+.msg-attach-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-bubble .msg-attach-file {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #374151;
+}
+
 /* ========== Input Area ========== */
 .input-area {
   display: flex;
@@ -2981,6 +3373,17 @@ async function loadCandidates() {
   padding-right: 48px;
   background: #fff;
   transition: border-color 0.2s, box-shadow 0.2s;
+  /* Bot chat adds an inline attach button before the input; flex keeps the
+     textarea filling the rest while both buttons anchor to the bottom edge
+     as the autosize textarea grows. */
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.input-wrapper .chat-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .input-wrapper:focus-within {
@@ -3460,6 +3863,29 @@ async function loadCandidates() {
   .target-chip {
     background: rgba(32, 128, 240, 0.2);
     color: #7cb6ff;
+  }
+  .attach-chip {
+    background: #1f1f23;
+    border-color: #374151;
+  }
+  .attach-name {
+    color: #d1d5db;
+  }
+  .attach-file-icon {
+    color: #9ca3af;
+  }
+  .attach-remove:hover {
+    color: #f87196;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .attach-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: #36ad6a;
+  }
+  .agent-bubble .msg-attach-file {
+    background: #26262b;
+    border-color: #374151;
+    color: #d1d5db;
   }
 }
 
