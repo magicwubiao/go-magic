@@ -1054,11 +1054,11 @@ docker compose exec magic printenv BROWSER_HEADLESS   # 为空 = 走默认 true
 连接外部 MCP 服务器，把它们的工具挂进 Agent（工具名前缀 `mcp_*`）。支持 stdio 与 SSE 两种传输。
 
 ```bash
-magic mcp add <server-name>
+magic mcp add <server-name> --command npx --args "-y @modelcontextprotocol/server-filesystem /data"
 magic mcp connect <server-name> <command> [args...]     # stdio 方式
 magic mcp list            # 列出已连接服务器及其工具
 magic mcp health [server-name]
-magic mcp disconnect <server-name>
+magic mcp disconnect <server-name>     # 断开并从配置中删除
 ```
 
 配置写在 `config.json` 的 `mcp.servers` 下：
@@ -1074,6 +1074,41 @@ magic mcp disconnect <server-name>
   }
 }
 ```
+
+#### 用 JSON 添加（可直接粘贴别家的配置）
+
+Web 页 `MCP 服务器 → 添加服务器 → JSON`、CLI `magic mcp add --json`、以及
+`POST /api/mcp/servers` 共用同一套解析，可以直接粘贴 Claude Desktop / Cursor /
+Cline 的 `mcpServers` 片段，一次导入多个服务器：
+
+```bash
+magic mcp add --json '{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]}}}'
+cat mcp.json | magic mcp add --json -      # 从 stdin 读
+magic mcp add --file ./mcp.json            # 从文件读
+```
+
+以下写法都能识别（`transport` 也可以用 `type` 表达，缺省时按 `command`/`url` 推断）：
+
+```jsonc
+{"mcpServers": {"fs": {"command": "npx"}}}          // 外部生态标准写法
+{"servers":    {"fs": {"command": "npx"}}}          // 本项目 config.json 的片段
+{"mcp": {"servers": {"fs": {"command": "npx"}}}}    // 整段 mcp 段
+{"fs": {"command": "npx"}}                          // 裸的 name → 配置 map
+{"name": "fs", "command": "npx"}                    // 单个服务器
+[{"name": "fs", "command": "npx"}]                  // 数组
+```
+
+几点约定：
+
+- `http` / `streamable-http` 一律按 `sse` 处理（本项目的 SSE 传输就是
+  "POST JSON-RPC、读 SSE 响应"，与 streamable HTTP 端点线级兼容）。
+- `env` 写成 `{"KEY": "value"}` 或 `["KEY=value"]` 均可；`args` 写成数组或
+  一整串都可以（整串按引号规则切分）。
+- 标记 `"disabled": true` 的条目会被跳过。
+- 添加时会**先落盘再连接**：即使连接失败（命令不存在、URL 不通），配置也会保存，
+  在列表里显示为"未连接"，可以直接编辑后重连。
+- 接口返回的 `env` 只带 key，值一律是 `***`；表单原样回传掩码时后端会还原成
+  磁盘上的真实值。
 
 ### 15.2 ACP（Agent Communication Protocol）
 

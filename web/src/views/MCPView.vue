@@ -3,7 +3,7 @@
     <n-space justify="space-between" style="margin-bottom: 24px;" align="center">
       <h2>{{ t('mcp.title') }}</h2>
       <n-space>
-        <n-button type="primary" @click="showAddModal = true">
+        <n-button type="primary" @click="openAddModal">
           <template #icon>
             <component :is="AddOutline" />
           </template>
@@ -49,14 +49,19 @@
           @update:expanded-row-keys="handleRowExpand"
         >
           <template #body-cell:status="{ row }">
-            <n-tag :type="row.connected ? 'success' : 'error'" size="small">
-              {{ row.connected ? t('mcp.statusConnected') : t('mcp.statusDisconnected') }}
-            </n-tag>
+            <n-space :size="4" align="center">
+              <n-tag :type="row.connected ? 'success' : 'error'" size="small">
+                {{ row.connected ? t('mcp.statusConnected') : t('mcp.statusDisconnected') }}
+              </n-tag>
+              <n-tag v-if="row.configured === false" size="small" :bordered="false">
+                {{ t('mcp.notConfigured') }}
+              </n-tag>
+            </n-space>
           </template>
 
           <template #body-cell:transport="{ row }">
             <n-tag :type="row.transport === 'stdio' ? 'info' : 'warning'" size="small">
-              {{ row.transport.toUpperCase() }}
+              {{ (row.transport || 'stdio').toUpperCase() }}
             </n-tag>
           </template>
 
@@ -68,6 +73,16 @@
 
           <template #body-cell:actions="{ row }">
             <n-space :size="8">
+              <n-button
+                text
+                size="small"
+                @click="openEditModal(row)"
+                :disabled="!row.configured"
+              >
+                <template #icon>
+                  <component :is="CreateOutline" />
+                </template>
+              </n-button>
               <n-button
                 text
                 size="small"
@@ -155,53 +170,87 @@
       style="width: 520px; max-width: 96vw; max-height: 85vh;"
     >
       <n-space vertical>
-        <n-form-item :label="t('mcp.serverName')" required>
-          <n-input
-            v-model:value="formData.name"
-            :disabled="isEditing"
-            placeholder="e.g., filesystem"
-          />
+        <n-form-item v-if="!isEditing" :label="t('mcp.inputMode')">
+          <n-radio-group v-model:value="inputMode" size="small">
+            <n-radio-button value="form">{{ t('mcp.modeForm') }}</n-radio-button>
+            <n-radio-button value="json">{{ t('mcp.modeJSON') }}</n-radio-button>
+          </n-radio-group>
         </n-form-item>
 
-        <n-form-item :label="t('mcp.transport')" required>
-          <n-select
-            v-model:value="formData.transport"
-            :options="transportOptions"
-            placeholder="Select transport"
-          />
-        </n-form-item>
+        <!-- JSON 模式：粘贴别的 MCP 客户端（Claude Desktop / Cursor / Cline）
+             或 config.json 里的片段即可，支持一次导入多个服务器。 -->
+        <template v-if="inputMode === 'json' && !isEditing">
+          <n-form-item :label="t('mcp.jsonConfig')" required>
+            <n-input
+              v-model:value="jsonText"
+              type="textarea"
+              :rows="12"
+              :placeholder="jsonPlaceholder"
+            />
+          </n-form-item>
+          <div class="json-preview">
+            <n-text v-if="jsonPreview.error" type="error" style="font-size: 12px;">
+              {{ t('mcp.jsonInvalid') }}{{ jsonPreview.error }}
+            </n-text>
+            <n-text v-else-if="jsonPreview.names.length" depth="3" style="font-size: 12px;">
+              {{ t('mcp.jsonDetected', { count: jsonPreview.names.length }) }}
+              <span class="json-names">{{ jsonPreview.names.join(', ') }}</span>
+            </n-text>
+            <n-text v-else depth="3" style="font-size: 12px;">
+              {{ t('mcp.jsonHint') }}
+            </n-text>
+          </div>
+        </template>
 
-        <n-form-item :label="t('mcp.command')" v-if="formData.transport === 'stdio'" required>
-          <n-input
-            v-model:value="formData.command"
-            placeholder="e.g., npx"
-          />
-        </n-form-item>
+        <template v-else>
+          <n-form-item :label="t('mcp.serverName')" required>
+            <n-input
+              v-model:value="formData.name"
+              :disabled="isEditing"
+              placeholder="e.g., filesystem"
+            />
+          </n-form-item>
 
-        <n-form-item :label="t('mcp.args')" v-if="formData.transport === 'stdio'">
-          <n-input
-            v-model:value="formData.argsStr"
-            type="textarea"
-            :rows="3"
-            placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
-          />
-        </n-form-item>
+          <n-form-item :label="t('mcp.transport')" required>
+            <n-select
+              v-model:value="formData.transport"
+              :options="transportOptions"
+              placeholder="Select transport"
+            />
+          </n-form-item>
 
-        <n-form-item :label="t('mcp.url')" v-if="formData.transport === 'sse'" required>
-          <n-input
-            v-model:value="formData.url"
-            placeholder="http://localhost:8080/mcp"
-          />
-        </n-form-item>
+          <n-form-item :label="t('mcp.command')" v-if="formData.transport === 'stdio'" required>
+            <n-input
+              v-model:value="formData.command"
+              placeholder="e.g., npx"
+            />
+          </n-form-item>
 
-        <n-form-item :label="t('mcp.env')">
-          <n-input
-            v-model:value="formData.envStr"
-            type="textarea"
-            :rows="2"
-            placeholder="KEY=value&#10;ANOTHER_KEY=value"
-          />
-        </n-form-item>
+          <n-form-item :label="t('mcp.args')" v-if="formData.transport === 'stdio'">
+            <n-input
+              v-model:value="formData.argsStr"
+              type="textarea"
+              :rows="3"
+              placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
+            />
+          </n-form-item>
+
+          <n-form-item :label="t('mcp.url')" v-if="formData.transport === 'sse'" required>
+            <n-input
+              v-model:value="formData.url"
+              placeholder="http://localhost:8080/mcp"
+            />
+          </n-form-item>
+
+          <n-form-item :label="t('mcp.env')">
+            <n-input
+              v-model:value="formData.envStr"
+              type="textarea"
+              :rows="2"
+              placeholder="KEY=value&#10;ANOTHER_KEY=value"
+            />
+          </n-form-item>
+        </template>
       </n-space>
 
       <template #footer>
@@ -215,9 +264,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NButton, NCard, NEmpty, NFormItem, NGi, NGrid, NInput, NList, NListItem, NModal, NSelect, NSpace, NSpin, NStatistic, NTable, NTag, NText, NThing } from 'naive-ui'
+import { NButton, NCard, NEmpty, NFormItem, NGi, NGrid, NInput, NList, NListItem, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NStatistic, NTable, NTag, NText, NThing } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,
@@ -226,9 +275,11 @@ import {
   RefreshCircleOutline,
   PowerOutline,
   TrashOutline,
+  CreateOutline,
 } from '@vicons/ionicons5'
 import { useMCPStore } from '@/stores/mcp'
-import type { MCPConfig } from '@/api/mcp'
+import { mcpErrorMessage } from '@/api/mcp'
+import type { MCPConfig, MCPServer } from '@/api/mcp'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -237,6 +288,20 @@ const mcpStore = useMCPStore()
 const showAddModal = ref(false)
 const isEditing = ref(false)
 const serverTools = ref<Record<string, any[]>>({})
+
+// 添加弹窗的两种录入方式：表单（单服务器）与 JSON（可一次导入多个）。
+const inputMode = ref<'form' | 'json'>('form')
+const jsonText = ref('')
+
+const jsonPlaceholder = `{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": { "TOKEN": "xxx" }
+    }
+  }
+}`
 
 const formData = reactive({
   name: '',
@@ -251,6 +316,52 @@ const transportOptions = [
   { label: 'STDIO', value: 'stdio' },
   { label: 'SSE', value: 'sse' },
 ]
+
+/**
+ * 本地预检粘贴的 JSON —— 只为在提交前给出即时反馈（列出识别到的服务器名）。
+ * 真正的权威解析在后端（internal/mcp/import.go），它接受的形态更多
+ * （jsonc 注释、http 传输、args 整串写法…），所以这里识别不出来时不做拦截。
+ */
+const jsonPreview = computed<{ names: string[]; error: string }>(() => {
+  const text = jsonText.value.trim()
+  if (!text) return { names: [], error: '' }
+
+  let raw: any
+  try {
+    raw = JSON.parse(text)
+  } catch (e: any) {
+    return { names: [], error: String(e?.message ?? e) }
+  }
+
+  const names = new Set<string>()
+  const collect = (node: any): boolean => {
+    if (Array.isArray(node)) {
+      node.forEach((item) => {
+        if (item && typeof item === 'object' && typeof item.name === 'string') names.add(item.name)
+      })
+      return true
+    }
+    if (!node || typeof node !== 'object') return false
+    for (const key of ['mcpServers', 'servers', 'mcp']) {
+      if (node[key] && typeof node[key] === 'object') return collect(node[key])
+    }
+    if (typeof node.name === 'string' && (node.command || node.url || node.type || node.transport)) {
+      names.add(node.name)
+      return true
+    }
+    let sawObject = false
+    Object.entries(node).forEach(([key, value]) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        names.add(key)
+        sawObject = true
+      }
+    })
+    return sawObject
+  }
+
+  if (!collect(raw)) return { names: [], error: '' }
+  return { names: [...names], error: '' }
+})
 
 const columns = [
   {
@@ -286,7 +397,7 @@ const columns = [
   {
     title: t('common.actions'),
     key: 'actions',
-    width: 200,
+    width: 240,
   },
 ]
 
@@ -318,7 +429,7 @@ async function handleHealthCheck(name: string) {
       message.error(t('mcp.healthFailed', { name }))
     }
   } catch (e: any) {
-    message.error(e.message || t('mcp.healthFailed', { name }))
+    message.error(mcpErrorMessage(e) || t('mcp.healthFailed', { name }))
   }
 }
 
@@ -327,7 +438,7 @@ async function handleReconnect(name: string) {
     await mcpStore.reconnectServer(name)
     message.success(t('mcp.reconnected', { name }))
   } catch (e: any) {
-    message.error(e.message || t('mcp.reconnectFailed', { name }))
+    message.error(mcpErrorMessage(e) || t('mcp.reconnectFailed', { name }))
   }
 }
 
@@ -336,7 +447,7 @@ async function handleDisconnect(name: string) {
     await mcpStore.disconnectServer(name)
     message.success(t('mcp.serverDisconnected', { name }))
   } catch (e: any) {
-    message.error(e.message || t('mcp.disconnectFailed', { name }))
+    message.error(mcpErrorMessage(e) || t('mcp.disconnectFailed', { name }))
   }
 }
 
@@ -346,7 +457,7 @@ async function handleDelete(name: string) {
     delete serverTools.value[name]
     message.success(t('mcp.deleted', { name }))
   } catch (e: any) {
-    message.error(e.message || t('mcp.deleteFailed', { name }))
+    message.error(mcpErrorMessage(e) || t('mcp.deleteFailed', { name }))
   }
 }
 
@@ -355,11 +466,39 @@ async function handleRefreshTools(name: string) {
     serverTools.value[name] = await mcpStore.refreshTools(name)
     message.success(t('mcp.toolsRefreshed'))
   } catch (e: any) {
-    message.error(e.message || t('mcp.refreshToolsFailed'))
+    message.error(mcpErrorMessage(e) || t('mcp.refreshToolsFailed'))
   }
 }
 
+function openAddModal() {
+  isEditing.value = false
+  inputMode.value = 'form'
+  jsonText.value = ''
+  Object.assign(formData, { name: '', transport: 'stdio', command: '', argsStr: '', url: '', envStr: '' })
+  showAddModal.value = true
+}
+
+function openEditModal(row: MCPServer) {
+  isEditing.value = true
+  inputMode.value = 'form'
+  Object.assign(formData, {
+    name: row.name,
+    transport: row.transport || 'stdio',
+    command: row.command || '',
+    argsStr: (row.args || []).join(' '),
+    url: row.url || '',
+    // env 的值是 *** 掩码，原样回传时由后端还原成磁盘上的真值
+    envStr: Object.entries(row.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+  })
+  showAddModal.value = true
+}
+
 async function handleSave() {
+  if (inputMode.value === 'json' && !isEditing.value) {
+    await handleImportJSON()
+    return
+  }
+
   if (!formData.name) {
     message.error(t('mcp.serverNameRequired'))
     return
@@ -393,7 +532,34 @@ async function handleSave() {
     }
     showAddModal.value = false
   } catch (e: any) {
-    message.error(e.message || t('mcp.saveFailed'))
+    message.error(mcpErrorMessage(e) || t('mcp.saveFailed'))
+  }
+}
+
+async function handleImportJSON() {
+  if (!jsonText.value.trim()) {
+    message.error(t('mcp.jsonRequired'))
+    return
+  }
+  try {
+    const result = await mcpStore.importServersFromJSON(jsonText.value)
+    const failed = result?.failed ?? []
+    if (failed.length) {
+      // 部分成功：配置已经写盘，只是有几个连不上（报错内容来自后端）。
+      const detail = failed.map(f => `${f.name}: ${f.error}`).join('; ')
+      message.warning(
+        `${t('mcp.jsonPartial', { added: result?.added?.length ?? 0, failed: failed.length })} ${detail}`,
+        { duration: 8000 },
+      )
+    } else {
+      message.success(t('mcp.jsonAdded', { count: result?.added?.length ?? 0 }))
+    }
+    if (result?.warning) {
+      message.warning(result.warning, { duration: 8000 })
+    }
+    showAddModal.value = false
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.saveFailed'))
   }
 }
 
@@ -406,6 +572,19 @@ onMounted(async () => {
 /* Action buttons inside table cells: more compact to fit narrower columns */
 .btn-condensed {
   padding: 0 6px;
+}
+
+/* JSON 模式的预检提示 */
+.json-preview {
+  margin-top: -12px;
+  padding: 0 2px 4px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.json-names {
+  color: var(--primary-color, #2080f0);
+  font-family: var(--font-family-mono, monospace);
 }
 
 /* 移动端:表格横向滚动 + 底部安全区 */

@@ -1073,11 +1073,11 @@ first when debugging; it is faster than reading logs.
 Connect external MCP servers and mount their tools into the agent (tool names prefixed `mcp_*`). Supports stdio and SSE transports.
 
 ```bash
-magic mcp add <server-name>
+magic mcp add <server-name> --command npx --args "-y @modelcontextprotocol/server-filesystem /data"
 magic mcp connect <server-name> <command> [args...]     # stdio
 magic mcp list            # list connected servers and their tools
 magic mcp health [server-name]
-magic mcp disconnect <server-name>
+magic mcp disconnect <server-name>     # disconnect and remove from config
 ```
 
 Config goes under `mcp.servers` in `config.json`:
@@ -1093,6 +1093,44 @@ Config goes under `mcp.servers` in `config.json`:
   }
 }
 ```
+
+#### Adding servers from JSON (paste another client's config)
+
+The dashboard (`MCP Servers → Add Server → JSON`), the CLI (`magic mcp add --json`)
+and `POST /api/mcp/servers` share one parser, so an `mcpServers` snippet from Claude
+Desktop / Cursor / Cline can be pasted as-is — several servers at once:
+
+```bash
+magic mcp add --json '{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]}}}'
+cat mcp.json | magic mcp add --json -      # from stdin
+magic mcp add --file ./mcp.json            # from a file
+```
+
+All of these are accepted (`type` may be used instead of `transport`; when both are
+absent it is inferred from `command` / `url`):
+
+```jsonc
+{"mcpServers": {"fs": {"command": "npx"}}}          // the common external shape
+{"servers":    {"fs": {"command": "npx"}}}          // a fragment of this project's config.json
+{"mcp": {"servers": {"fs": {"command": "npx"}}}}    // the whole mcp section
+{"fs": {"command": "npx"}}                          // a bare name → config map
+{"name": "fs", "command": "npx"}                    // a single server
+[{"name": "fs", "command": "npx"}]                  // an array
+```
+
+Conventions worth knowing:
+
+- `http` / `streamable-http` are treated as `sse`: this project's SSE transport is
+  "POST JSON-RPC, read the SSE response", which is wire-compatible with streamable
+  HTTP endpoints.
+- `env` may be an object (`{"KEY": "value"}`) or an array (`["KEY=value"]`); `args`
+  may be an array or a single quoted string (split with shell quoting rules).
+- Entries marked `"disabled": true` are skipped.
+- Adding saves to disk **before** connecting: if the connect fails (missing binary,
+  unreachable URL) the config is still saved and shows up as "not connected", ready
+  to be edited and reconnected.
+- The API only ever returns env **keys**; values are `***`. Posting the mask back
+  restores the stored value instead of overwriting it.
 
 ### 15.2 ACP (Agent Communication Protocol)
 

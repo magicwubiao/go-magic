@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as mcpApi from '@/api/mcp'
-import type { MCPServer, MCPTool, MCPConfig } from '@/api/mcp'
+import type { MCPServer, MCPTool, MCPConfig, MCPImportResult } from '@/api/mcp'
 
 export const useMCPStore = defineStore('mcp', () => {
   const servers = ref<MCPServer[]>([])
@@ -71,6 +71,13 @@ export const useMCPStore = defineStore('mcp', () => {
     await loadServers()
   }
 
+  /** 粘贴 JSON 添加（可一次加多个），返回每个服务器的结果 */
+  async function importServersFromJSON(payload: string): Promise<MCPImportResult> {
+    const result = await mcpApi.addMCPServersFromJSON(payload)
+    await loadServers()
+    return result
+  }
+
   async function removeServer(name: string) {
     await mcpApi.removeMCPServer(name)
     delete serverTools.value[name]
@@ -102,6 +109,7 @@ export const useMCPStore = defineStore('mcp', () => {
     refreshTools,
     addServer,
     updateServer,
+    importServersFromJSON,
     removeServer,
     getTools,
     getHealthStatus,

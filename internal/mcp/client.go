@@ -73,6 +73,14 @@ type ToolAnnotations struct {
 	Privacy             []string `json:"privacy,omitempty"`
 }
 
+// Supported transport names, used as ServerConfig.Transport values. External
+// JSON configs spell these differently (type: "http", "streamable-http", …) —
+// see NormalizeTransport in import.go for the mapping.
+const (
+	TransportStdio = "stdio"
+	TransportSSE   = "sse"
+)
+
 // ServerConfig represents MCP server configuration
 type ServerConfig struct {
 	Command   string   `json:"command"`
