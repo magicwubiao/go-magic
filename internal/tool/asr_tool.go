@@ -148,7 +148,9 @@ func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (i
 
 	if audioPath, ok := params["audio_path"].(string); ok && audioPath != "" {
 		// 从文件加载
-		absPath, err := filepath.Abs(audioPath)
+		// 相对路径按会话工作目录解析（上传附件物化在 <workDir>/.magic-uploads/）；
+		// 此前 filepath.Abs 只按进程 cwd 解析，上传音频的首调会直接找不到文件。
+		absPath, err := resolveLocalMedia(ctx, audioPath)
 		if err != nil {
 			return nil, fmt.Errorf("invalid audio path: %w", err)
 		}
@@ -417,7 +419,9 @@ func (t *AudioPlayTool) Execute(ctx context.Context, params map[string]interface
 	manager := voice.NewManager(nil)
 
 	if audioPath, ok := params["audio_path"].(string); ok && audioPath != "" {
-		absPath, err := filepath.Abs(audioPath)
+		// 相对路径按会话工作目录解析（上传附件物化在 <workDir>/.magic-uploads/）；
+		// 此前 filepath.Abs 只按进程 cwd 解析，上传音频的首调会直接找不到文件。
+		absPath, err := resolveLocalMedia(ctx, audioPath)
 		if err != nil {
 			return nil, fmt.Errorf("invalid audio path: %w", err)
 		}

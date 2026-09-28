@@ -1,7 +1,10 @@
 package tool
 
 import (
+	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -151,6 +154,77 @@ func TestVisionToolRequiresSource(t *testing.T) {
 	_, err := tool.Execute(nil, map[string]interface{}{})
 	if err == nil {
 		t.Error("expected error when neither image_path nor image_url is provided")
+	}
+}
+
+// TestResolveLocalImageWorkDirFallback locks the fix for the "first
+// vision_analyze call fails at 0ms" report: attachments are materialized to
+// <workDir>/.magic-uploads/, the model passes that workdir-relative path
+// through, and the tool used to os.Stat it against the process cwd.
+func TestResolveLocalImageWorkDirFallback(t *testing.T) {
+	workDir := t.TempDir()
+	rel := filepath.Join(".magic-uploads", "shot.png")
+	abs := filepath.Join(workDir, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte("png"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithWorkDir(context.Background(), workDir)
+
+	// Relative path that only exists under the workdir resolves there.
+	got, err := resolveLocalMedia(ctx, rel)
+	if err != nil {
+		t.Fatalf("resolveLocalMedia(%q): %v", rel, err)
+	}
+	if got != abs {
+		t.Errorf("resolved = %q, want %q", got, abs)
+	}
+
+	// Absolute path passes through untouched (normalized form on Windows).
+	got, err = resolveLocalMedia(ctx, abs)
+	if err != nil {
+		t.Fatalf("resolveLocalMedia(abs): %v", err)
+	}
+	if got != filepath.Clean(abs) {
+		t.Errorf("abs passthrough = %q, want %q", got, filepath.Clean(abs))
+	}
+
+	// Missing everywhere: the error must name both tried locations so the
+	// model can self-correct.
+	_, err = resolveLocalMedia(ctx, filepath.Join(".magic-uploads", "nope.png"))
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "nope.png") || !strings.Contains(msg, workDir) {
+		t.Errorf("error should mention the missing name and the session workdir, got: %v", err)
+	}
+
+	// No workdir in ctx (CLI-style): falls back to the literal path error.
+	if _, err := resolveLocalMedia(context.Background(), "missing.png"); err == nil {
+		t.Error("expected error when path missing and no workdir configured")
+	}
+}
+
+// TestResolveLocalImagePrefersProcessCwd: when the relative path exists
+// relative to the process cwd, it wins (backwards-compatible CLI behavior).
+func TestResolveLocalImagePrefersProcessCwd(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "local.png"), []byte("png"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A workdir is configured but has no such file; the cwd copy must win.
+	ctx := WithWorkDir(context.Background(), t.TempDir())
+
+	got, err := resolveLocalMedia(ctx, "local.png")
+	if err != nil {
+		t.Fatalf("resolveLocalMedia: %v", err)
+	}
+	if want := filepath.Join(dir, "local.png"); got != want {
+		t.Errorf("resolved = %q, want %q", got, want)
 	}
 }
 

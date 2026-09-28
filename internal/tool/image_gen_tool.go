@@ -863,8 +863,13 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 		}, nil
 	}
 
-	// 读取源图片
-	imageData, err := os.ReadFile(imagePath)
+	// 读取源图片（相对路径按会话工作目录解析，与文件工具一致——附件被
+	// 物化到 <workDir>/.magic-uploads/，模型传的就是该相对路径）
+	resolvedImage, rerr := resolveLocalMedia(ctx, imagePath)
+	if rerr != nil {
+		return nil, rerr
+	}
+	imageData, err := os.ReadFile(resolvedImage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read image file: %w", err)
 	}

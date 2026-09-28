@@ -97,6 +97,19 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, params map[string]inter
 		return nil, fmt.Errorf("could not resolve image location")
 	}
 
+	// Relative paths must resolve against the session working directory, the
+	// same base the file tools use: uploaded attachments are materialized to
+	// <workDir>/.magic-uploads/ and the model passes that relative path
+	// straight through. Without this, os.Stat resolved it against the process
+	// cwd and the call failed instantly with "image file not found" (seen in
+	// the wild: first vision_analyze call failed at 0ms and the agent had to
+	// list files and retry before vision analysis worked).
+	resolved, rerr := resolveLocalMedia(ctx, localPath)
+	if rerr != nil {
+		return nil, rerr
+	}
+	localPath = resolved
+
 	info, err := inspectImage(localPath)
 	if err != nil {
 		return nil, err
@@ -180,6 +193,52 @@ func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (d
 		return "", "", false
 	}
 	return strings.TrimSpace(resp.Content), modelName, true
+}
+
+// resolveLocalMedia resolves a local media file path (image/video/audio) for
+// the media tools (vision_analyze / video_analyze / image edit / ASR).
+//
+// Absolute paths (after normalizeToolPath) and paths that already exist
+// relative to the process cwd are used as-is. A relative path that does not
+// exist as-given is then tried against the session working directory
+// (WorkDirFromContext) — the base file tools resolve against, and where
+// uploaded attachments are materialized (<workDir>/.magic-uploads/).
+// When neither location exists, the error names both candidates so the model
+// can self-correct instead of blindly retrying the same path.
+//
+// Without this, media tools os.Stat'ed / filepath.Abs'ed the raw path against
+// the process cwd, so a workdir-relative path like ".magic-uploads/x.png"
+// (exactly what the model is told to pass after an upload) failed instantly
+// with "file not found" and the agent had to list files and retry.
+func resolveLocalMedia(ctx context.Context, path string) (string, error) {
+	p := normalizeToolPath(path)
+	if p == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	if pathExists(p) {
+		// Keep the absolute form: the returned metadata and any later read
+		// must not depend on the process cwd at that moment.
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs, nil
+		}
+		return p, nil
+	}
+	if workDir := normalizeToolPath(WorkDirFromContext(ctx)); workDir != "" {
+		joined := filepath.Join(workDir, p)
+		if pathExists(joined) {
+			return joined, nil
+		}
+		// Plain '%s' quoting on purpose: %q would escape Windows separators
+		// into "C:\\a\\b" in the text the model reads.
+		return "", fmt.Errorf(
+			"file not found: tried '%s' (relative to the process working directory) and '%s' (relative to the session working directory); "+
+				"verify the actual location with list_files and retry with an existing path",
+			p, joined)
+	}
+	return "", fmt.Errorf("file not found: %s", p)
 }
 
 // inspectImage returns metadata about a local image file.

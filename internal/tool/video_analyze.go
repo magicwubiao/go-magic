@@ -72,7 +72,7 @@ func (t *VideoAnalyzeTool) Execute(ctx context.Context, params map[string]interf
 	}
 
 	// 处理本地文件
-	return t.analyzeLocalFile(videoPath, question, frameCount)
+	return t.analyzeLocalFile(ctx, videoPath, question, frameCount)
 }
 
 func (t *VideoAnalyzeTool) analyzeURL(url, question string, frameCount int) (interface{}, error) {
@@ -94,8 +94,17 @@ func (t *VideoAnalyzeTool) analyzeURL(url, question string, frameCount int) (int
 	return result, nil
 }
 
-func (t *VideoAnalyzeTool) analyzeLocalFile(path, question string, frameCount int) (interface{}, error) {
+func (t *VideoAnalyzeTool) analyzeLocalFile(ctx context.Context, path, question string, frameCount int) (interface{}, error) {
 	expandedPath := expandPath(path)
+
+	// 相对路径按会话工作目录解析：附件被物化到 <workDir>/.magic-uploads/，
+	// 模型拿到的就是这个相对路径。此前直接 os.Stat 会按进程 cwd 解析，于是
+	// 首次调用必然报 "video file not found"。
+	resolved, rerr := resolveLocalMedia(ctx, expandedPath)
+	if rerr != nil {
+		return nil, rerr
+	}
+	expandedPath = resolved
 
 	info, err := os.Stat(expandedPath)
 	if os.IsNotExist(err) {
