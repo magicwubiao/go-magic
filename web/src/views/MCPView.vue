@@ -494,12 +494,21 @@ watch(inputMode, (mode) => {
  * 整段 JSON 会落进名字框，而 JSON 输入框在另一个分支里是空的 —— 用户看到的
  * 就是"粘贴没反应、内容跑到表单里了"。服务器名的合法字符只有 [A-Za-z0-9_.-]，
  * 以 { 或 [ 开头的一定是配置，所以在捕获阶段拦下来换成 JSON 模式。
+ *
+ * 注意：从文档/README/聊天里复制时经常把 Markdown 代码围栏（```json ... ```）
+ * 一起带走，那样首字符是 ` 而不是 {，只按"首字符"判断仍然会漏 —— 所以先剥围栏。
  */
+function stripCodeFence(text: string): string {
+  const m = text.match(/^\s*`{3,}[^\n]*\r?\n([\s\S]*?)\r?\n?\s*`{3,}\s*$/)
+  return m ? m[1] : text
+}
+
 function onModalPaste(e: ClipboardEvent) {
   // 编辑模式没有 JSON 分支；JSON 模式下交给 textarea 自己处理
   if (isEditing.value || inputMode.value === 'json') return
 
-  const text = e.clipboardData?.getData('text') ?? ''
+  const raw = e.clipboardData?.getData('text') ?? ''
+  const text = stripCodeFence(raw)
   const trimmed = text.trim()
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return
 

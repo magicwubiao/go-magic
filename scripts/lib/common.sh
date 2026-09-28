@@ -244,17 +244,51 @@ gm_web_dist_ready() {
     [[ -f "$(gm_web_dist_dir)/index.html" ]]
 }
 
+# 前端源码是否比已构建的 dist 新（返回 0 = 需要重建）。
+#
+# 为什么需要：dist 在 .gitignore 里，`git pull` 只更新 web/src 下的源码、不会碰 dist。
+# 旧逻辑只要 dist/index.html 存在就直接复用，于是"拉了新代码后重新编译"会把上一次的
+# 前端(包括旧 chunk)原样打进二进制 —— 现象就是页面"改了完全没生效"，而且因为旧 chunk
+# 一直在浏览器/WebView 缓存里，连强刷都救不回来。用 mtime 比较是保守做法：判定不了就
+# 重建，方向安全（顶多多花一次前端构建）。
+gm_web_dist_is_stale() {
+    local root dist marker newer
+    root="$(gm_repo_root)"
+    dist="$(gm_web_dist_dir)"
+    marker="$dist/index.html"
+
+    # 没有产物 = 必须构建
+    [[ -f "$marker" ]] || return 0
+
+    # 任何一个前端输入比产物新都要重建（不存在的路径由 find 自行跳过）
+    newer="$(find \
+        "$root/web/src" \
+        "$root/web/public" \
+        "$root/web/index.html" \
+        "$root/web/package.json" \
+        "$root/web/package-lock.json" \
+        "$root/web/vite.config.ts" \
+        "$root/web/vite.config.js" \
+        -newer "$marker" -print -quit 2>/dev/null || true)"
+
+    [[ -n "$newer" ]]
+}
+
 gm_ensure_web_dist() {
     local root dist
     root="$(gm_repo_root)"
     dist="$(gm_web_dist_dir)"
 
-    if [[ -f "$dist/index.html" ]]; then
-        gm_ok "Web UI already present ($dist)"
+    if [[ -f "$dist/index.html" ]] && ! gm_web_dist_is_stale; then
+        gm_ok "Web UI already present and up to date ($dist)"
         return 0
     fi
 
-    gm_step "building the Web UI (required by go:embed dist)"
+    if [[ -f "$dist/index.html" ]]; then
+        gm_step "web/ sources are newer than $dist, rebuilding the Web UI"
+    else
+        gm_step "building the Web UI (required by go:embed dist)"
+    fi
     gm_require_cmd npm "please install Node.js 22+" || return 1
 
     if [[ ! -f "$root/web/package.json" ]]; then
