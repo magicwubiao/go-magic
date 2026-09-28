@@ -559,11 +559,11 @@ func (m *Manager) saveRoomHistory(roomID string, msgs []RoomMessage) {
 	for _, msg := range msgs {
 		t := time.Unix(msg.Timestamp, 0)
 		sess.Messages = append(sess.Messages, types.Message{
-			ID:           msg.ID,
-			Role:         "user", // room log is informational; role not meaningful
-			From:         msg.From,
-			Content:      msg.Content,
-			Timestamp:    t,
+			ID:        msg.ID,
+			Role:      "user", // room log is informational; role not meaningful
+			From:      msg.From,
+			Content:   msg.Content,
+			Timestamp: t,
 			// Attachments ride as ref-form file parts so the session store
 			// schema stays untouched (same encoding bot chat history uses).
 			ContentParts: roomPartsFromAttachments(msg.Attachments),
