@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/gateway"
@@ -108,6 +109,20 @@ type gatewayAgentHandler struct {
 	mu         sync.Mutex
 	privacyCfg *privacy.Config
 
+	// cfg 是启动时加载的主配置快照。审批策略、工具循环上限都从这里取，
+	// 与 web server / bot mode 共用同一套接线——网关曾经是唯一漏接的路径。
+	cfg *config.Config
+
+	// approvalMgr 由主配置 approval 段构建（见 applyConfig），注入给每个用户
+	// agent。nil（初始化失败）时 agent 回退到内置默认钩子。
+	approvalMgr *approval.Manager
+
+	// workDir 是网关 agent 的落盘沙箱（见 gatewayWorkDir：gateway.working_dir
+	// 或 <working_dir>/gateway，缺省回退进程 cwd）。每轮消息入口会把它注入 ctx：
+	// 审批钩子的 C2 范围放行（isPathWithinWorkdir）靠它识别"目录内写入"并自动放行，
+	// 文件/终端工具也按它解析相对路径。
+	workDir string
+
 	// Per-user agents for conversation context
 	agents       map[string]*agent.Agent
 	systemPrompt string
@@ -128,42 +143,16 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Warnf("[Gateway] Failed to load config for agent handler: %v", err)
-		return &gatewayAgentHandler{
-			agents: make(map[string]*agent.Agent),
-		}
+		return newEmptyGatewayAgentHandler()
 	}
 
 	provCfg, ok := cfg.Providers[cfg.Provider]
 	if !ok {
 		log.Warnf("[Gateway] Provider %s not configured", cfg.Provider)
-		return &gatewayAgentHandler{
-			agents: make(map[string]*agent.Agent),
-		}
+		return newEmptyGatewayAgentHandler()
 	}
 
 	prov := createProvider(cfg.Provider, provCfg)
-	registry := tool.NewRegistry()
-
-	// Get workDir with fallback to current directory
-	workDir := cfg.WorkingDir
-	if workDir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			workDir = cwd
-		}
-	}
-	registry.RegisterAll(workDir)
-
-	// Register skill invoke tool
-	if skillMgr, err := skills.NewManager(); err == nil {
-		registry.RegisterSkillTool(skillMgr)
-	}
-
-	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 messaging
-	// gateway 的 agent 也能调用这些工具。
-	bridgeConfiguredMCPTools(registry, cfg)
-
-	// Generate system prompt
-	systemPrompt := generateGatewaySystemPrompt(cfg)
 
 	// Initialize cortex if enabled
 	var cortexMgr *cortex.Manager
@@ -177,17 +166,82 @@ func NewGatewayAgentHandler() *gatewayAgentHandler {
 		}
 	}
 
+	h := newEmptyGatewayAgentHandler()
+	h.provider = prov
+	h.cortexMgr = cortexMgr
+	h.checkpointMgr = newCheckpointManager()
+	h.applyConfig(cfg)
+	return h
+}
+
+// newEmptyGatewayAgentHandler 造一个"还没接到配置"的 handler。provider 为 nil
+// 时 Process 会先在锁内重新加载配置并调用 applyConfig（热加载路径）。
+func newEmptyGatewayAgentHandler() *gatewayAgentHandler {
 	return &gatewayAgentHandler{
-		provider:      prov,
-		registry:      registry,
-		agents:        make(map[string]*agent.Agent),
-		goalManagers:  make(map[string]*agent.GoalManager),
-		systemPrompt:  systemPrompt,
-		cortexMgr:     cortexMgr,
-		checkpointMgr: newCheckpointManager(),
-		privacyCfg:    cfg.Privacy,
-		botMgr:        nil, // Started separately in runGatewayStart (needs ctx)
+		agents:       make(map[string]*agent.Agent),
+		goalManagers: make(map[string]*agent.GoalManager),
 	}
+}
+
+// applyConfig 把主配置里网关 agent 需要的那部分接线到 handler 上：
+// 落盘沙箱、工具注册表、系统提示词、审批策略。web server 与 bot mode 各自
+// 在启动时做同一件事，网关过去只接了 provider，其余全是写死的默认值。
+//
+// 由构造路径与 Process 的懒加载路径共用，因此对同一份配置重复调用应当是安全的。
+func (h *gatewayAgentHandler) applyConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	h.cfg = cfg
+	h.privacyCfg = cfg.Privacy
+	h.systemPrompt = generateGatewaySystemPrompt(cfg)
+
+	// 网关 agent 的落盘沙箱。先建目录：execute_code/execute_command 以它为 cwd
+	// 启动子进程，目录不存在时第一次工具调用就会以 ENOENT 失败。
+	workDir := gatewayWorkDir(cfg)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		log.Warnf("[Gateway] Failed to create working directory %s: %v", workDir, err)
+	}
+	h.workDir = workDir
+
+	h.registry = tool.NewRegistry()
+	h.registry.RegisterAll(workDir)
+
+	// Register skill invoke tool
+	if skillMgr, err := skills.NewManager(); err == nil {
+		h.registry.RegisterSkillTool(skillMgr)
+	}
+
+	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 messaging
+	// gateway 的 agent 也能调用这些工具。
+	bridgeConfiguredMCPTools(h.registry, cfg)
+
+	// 审批策略接入主配置——与 web server / bot mode 共用
+	// approval.NewManagerFromAppConfig 的映射。不接的话 agent 用内置默认钩子
+	// （DefaultConfig → smart），用户配的 approval.strategy=auto 在网关上不生效。
+	h.approvalMgr = approval.NewManagerFromAppConfigOrWarn(cfg.Approval, "Gateway")
+}
+
+// gatewayWorkDir resolves the gateway agent's on-disk sandbox:
+//
+//  1. gateway.working_dir 显式配置 → 原样使用（`~` 已在 config.Load 里展开）；
+//  2. 否则 <working_dir>/gateway——与 bot 模式的 <working_dir>/bots/<name> 同构，
+//     把网关产物圈在自己的子目录里，不和 web/CLI 会话的工作目录互相污染；
+//  3. working_dir 也为空（config.Load 失败 / 手工构造的 Config）时回退进程 cwd。
+//
+// 这个目录同时是审批钩子 C2 "范围放行"的判定边界：只有落在它内部的
+// write_file/file_edit 才会在无人应答审批的网关进程里被自动放行（见 turnContext）。
+func gatewayWorkDir(cfg *config.Config) string {
+	if cfg != nil {
+		if dir := strings.TrimSpace(cfg.Gateway.WorkingDir); dir != "" {
+			return dir
+		}
+		if base := strings.TrimSpace(cfg.WorkingDir); base != "" {
+			return filepath.Join(base, "gateway")
+		}
+	}
+	cwd, _ := os.Getwd()
+	return cwd
 }
 
 // newCheckpointManager creates a checkpoint manager, returning nil on error
@@ -244,13 +298,59 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 	if h.privacyCfg != nil {
 		agentOpts = append(agentOpts, agent.WithPrivacy(h.privacyCfg))
 	}
+	// 审批策略：与 web server / bot mode 共用同一套主配置映射。不接的话 agent
+	// 只会用内置默认钩子（DefaultConfig → smart），用户配的
+	// approval.strategy=auto 在网关上完全不生效。
+	if h.approvalMgr != nil {
+		agentOpts = append(agentOpts, agent.WithApprovalManager(h.approvalMgr))
+	}
+	// 工具循环上限 / steering 预算同样接入主配置。max_turns 为 0 时保留 agent
+	// 内置默认（150），与 server、bot 的判定保持一致。
+	if h.cfg != nil {
+		if h.cfg.Agent.MaxTurns > 0 {
+			agentOpts = append(agentOpts, agent.WithMaxTurns(h.cfg.Agent.MaxTurns))
+		}
+		if h.cfg.Agent.MaxIterations > 0 || h.cfg.Agent.MaxTokenBudget > 0 {
+			agentOpts = append(agentOpts, agent.WithSteering(agent.SteeringConfig{
+				MaxIterations:  h.cfg.Agent.MaxIterations,
+				MaxTokenBudget: h.cfg.Agent.MaxTokenBudget,
+			}))
+		}
+	}
 
 	// Create new agent for this user
 	newAgent := agent.NewEnhancedAgent(h.provider, h.registry, toolsSchema, h.systemPrompt, agentOpts...)
+
+	// 网关是无人值守的守护进程。它常常从终端里启动（stdin 恰好是 tty），但控制台
+	// 前没有人会看到审批提示——让审批钩子去读 stdin 只会把整轮对话阻塞到超时。
+	// 置位 nonInteractive 后：工作目录内的写入照旧走 C2 范围放行，其余操作立即
+	// fail-closed 并给出可行动的拒绝理由（而不是伪装成"用户拒绝了"）。
+	if ah := newAgent.GetApprovalHook(); ah != nil {
+		ah.SetNonInteractive(true)
+	}
+
 	newAgent.SetSession(userID)
 
 	h.agents[userID] = newAgent
 	return newAgent, nil
+}
+
+// turnContext 给一轮网关消息补齐下游依赖的 ctx 值。
+//
+// gateway.processMessage 只提供了 context.WithCancel(context.Background())，
+// 下面两个下游因此都拿不到工作目录：
+//
+//  1. 审批钩子的 C2 范围放行（internal/agent/approval.go 的 isPathWithinWorkdir）
+//     要靠它把"工作目录内的写入"识别成可自动放行。缺了它，write_file/file_edit
+//     每次都会落到 AskUser；而网关是无人应答审批的非交互进程，最终走 fail-closed
+//     拒绝，模型只能反复换姿势重试，直到烧完 maxTurns 并报出
+//     "AI processing failed: exceeded maximum turns"。
+//  2. 文件/终端工具按它解析相对路径，否则会落到进程 CWD 而不是配置的工作目录。
+//
+// 与 bot 模式（internal/bot/manager.go 的 processMessage）使用同一套注入。
+func (h *gatewayAgentHandler) turnContext(ctx context.Context, msg gateway.Message) context.Context {
+	ctx = tool.WithWorkDir(ctx, h.workDir)
+	return tool.WithSessionID(ctx, msg.UserID)
 }
 
 // Process processes a message from a gateway platform and returns a response.
@@ -277,22 +377,9 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 				provCfg, ok := cfg.Providers[cfg.Provider]
 				if ok {
 					h.provider = createProvider(cfg.Provider, provCfg)
-
-					workDir := cfg.WorkingDir
-					if workDir == "" {
-						if cwd, err := os.Getwd(); err == nil {
-							workDir = cwd
-						}
-					}
-
-					h.registry = tool.NewRegistry()
-					h.registry.RegisterAll(workDir)
-					if skillMgr, err := skills.NewManager(); err == nil {
-						h.registry.RegisterSkillTool(skillMgr)
-					}
-					// 热加载重建 registry 后同样桥接独立 MCP server 的工具。
-					bridgeConfiguredMCPTools(h.registry, cfg)
-					h.systemPrompt = generateGatewaySystemPrompt(cfg)
+					// 热加载：重建 registry / 重算沙箱 / 重新接线审批策略，
+					// 与构造路径共用 applyConfig，避免两处逻辑漂移。
+					h.applyConfig(cfg)
 				} else {
 					log.Errorf("[Gateway] Provider %q not found in config", cfg.Provider)
 				}
@@ -309,6 +396,9 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 			"Please run 'magic setup' to configure an AI provider.\n\n"+
 			"Message: %s", msg.Content), nil
 	}
+
+	// 补齐下游依赖的 ctx 值（工作目录 / 会话 ID）——见 turnContext 的说明。
+	ctx = h.turnContext(ctx, msg)
 
 	ag, err := h.getOrCreateAgent(msg.UserID)
 	if err != nil {

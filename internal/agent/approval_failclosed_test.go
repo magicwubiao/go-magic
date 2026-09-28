@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
@@ -59,6 +60,55 @@ func TestBeforeToolFailClosedDenialIsTruthful(t *testing.T) {
 	}
 	if strings.Contains(dec.Reason, "User rejected") {
 		t.Errorf("reason must not claim a user rejected the call, got %q", dec.Reason)
+	}
+}
+
+// gateway / bot 这类守护进程常常是从终端里启动的：stdin 恰好是 tty，但控制台前
+// 没有人会看到审批提示。SetNonInteractive 必须让钩子直接 fail-closed，而不是去读
+// stdin（那会把整轮对话阻塞到超时，还把"没有人做过的决定"记成用户拒绝）。
+func TestBeforeToolNonInteractiveOverridesTerminalStdin(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	mgr, err := approval.NewManager(&approval.ApprovalConfig{Strategy: approval.StrategyManual})
+	if err != nil {
+		t.Fatalf("NewManager error: %v", err)
+	}
+	waitForApprovalFlush(t, mgr)
+	h := NewApprovalHookWithManager(mgr)
+	if h.IsNonInteractive() {
+		t.Fatal("hook should default to interactive")
+	}
+	h.SetNonInteractive(true)
+	if !h.IsNonInteractive() {
+		t.Fatal("SetNonInteractive(true) did not stick")
+	}
+
+	// 假装处在交互式终端：非交互标记必须压过这个判定。
+	orig := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	defer func() { stdinIsTerminal = orig }()
+
+	start := time.Now()
+	_, dec, err := h.BeforeTool(context.Background(), &hooks.ToolCallHookRequest{
+		ToolName: "write_file",
+		// 工作目录外的路径：拿不到 C2 范围放行，必然要走确认分支。
+		ToolArgs: map[string]interface{}{"path": "/definitely/out/of/scope.txt", "content": "x"},
+	})
+	if err != nil {
+		t.Fatalf("BeforeTool error: %v", err)
+	}
+	if dec.Action != hooks.HookActionReject {
+		t.Fatalf("action = %v (reason=%q), want Reject", dec.Action, dec.Reason)
+	}
+	if !strings.Contains(dec.Reason, "Denied automatically") {
+		t.Errorf("reason = %q, want the automatic-denial wording", dec.Reason)
+	}
+	if strings.Contains(dec.Reason, "User rejected") {
+		t.Errorf("reason must not claim a user rejected the call, got %q", dec.Reason)
+	}
+	// 走 CLI 提示会阻塞到 defaultApprovalTimeout（30s）；这里必须秒回。
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("BeforeTool blocked for %v — it must not read stdin in non-interactive mode", elapsed)
 	}
 }
 

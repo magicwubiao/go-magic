@@ -354,6 +354,14 @@ type GatewayConfig struct {
 	RateLimitWindow  int      `json:"rate_limit_window_sec,omitempty"` // window seconds, default 60
 	BlockedUsers     []string `json:"blocked_users,omitempty"`         // user IDs never processed
 	SensitiveWords   []string `json:"sensitive_words,omitempty"`       // filtered words
+	// WorkingDir 是消息网关 agent 的落盘沙箱，供"通过微信/飞书等发指令让 agent
+	// 写文件"的场景使用。留空时默认 <working_dir>/gateway（与 bot 模式的
+	// <working_dir>/bots/<name> 同构，把网关产生的文件圈在自己的子目录里，
+	// 不和 web/CLI 会话的目录互相污染）；配置了就原样使用（支持 `~`）。
+	//
+	// 这个目录同时是审批钩子 C2 "范围放行"的判定边界：只有落在它内部的
+	// write_file/file_edit 才会在无人应答审批的网关进程里被自动放行。
+	WorkingDir string `json:"working_dir,omitempty"`
 }
 
 // PlatformConfig represents platform-specific configuration
@@ -521,6 +529,9 @@ func Load() (*Config, error) {
 	// 少了这一步，进程会把 `~` 当普通目录名，在**当前工作目录**（打包安装后
 	// 就是安装目录）下建出一个名为 `~` 的字面量文件夹。
 	cfg.WorkingDir = ExpandHome(cfg.WorkingDir)
+	// 网关沙箱目录同样允许 `~`（理由同上）。这里**不给**它填默认值：留空表示
+	// "用 <working_dir>/gateway"，由网关侧解析，免得把"没配"当成"配成了默认值"。
+	cfg.Gateway.WorkingDir = ExpandHome(cfg.Gateway.WorkingDir)
 	if cfg.BrowserProfileDir != nil {
 		// 这里额外做一次"无 HOME 时改落到 magic home"的兜底，理由见
 		// ResolveBrowserProfileDir。注意不能只依赖 ExpandHome：面板/守护进程起

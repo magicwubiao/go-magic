@@ -36,11 +36,15 @@ const (
 // It supports CLI interactive prompts with rich risk display, Web-based approval mode,
 // TUI mode via injectable PromptFunc, approval timeout handling, and session-level skip behavior.
 type ApprovalHook struct {
-	manager      *approval.Manager
-	webMode      bool
-	cliTimeout   time.Duration
-	skipMutex    sync.Mutex
-	skipPatterns map[string]map[string]bool // sessionID -> normalizedPattern -> skipped
+	manager *approval.Manager
+	webMode bool
+	// nonInteractive 标记"这个会话没有任何向人弹出审批提示的通道"（消息网关、
+	// 后台守护进程）。置位后即便 stdin 恰好是个终端也不走 CLI 交互提示——
+	// 守护进程的控制台前没有人会来点"同意"，读 stdin 只会把整轮对话阻塞到超时。
+	nonInteractive bool
+	cliTimeout     time.Duration
+	skipMutex      sync.Mutex
+	skipPatterns   map[string]map[string]bool // sessionID -> normalizedPattern -> skipped
 
 	// promptFunc allows TUI or other non-stdio environments to provide
 	// a custom confirmation prompt. When nil, the default CLI stdin reader is used.
@@ -85,6 +89,23 @@ func (h *ApprovalHook) Name() string { return "approval" }
 func (h *ApprovalHook) SetWebMode(enabled bool) {
 	h.webMode = enabled
 }
+
+// SetNonInteractive marks this hook as having no human-facing prompt channel:
+// the agent runs inside a daemon (message gateway, background worker) where
+// nobody is watching the console. Content tools that need confirmation then
+// fail closed immediately with an actionable reason, instead of blocking the
+// turn on a CLI prompt that will only time out (default 30s) and poison the
+// denied-pattern learning with a decision no user ever made.
+//
+// Callers that DO have a prompt channel (TUI via SetPromptFunc, web via
+// SetWebMode) must not set this.
+func (h *ApprovalHook) SetNonInteractive(enabled bool) {
+	h.nonInteractive = enabled
+}
+
+// IsNonInteractive reports whether the hook was marked as having no
+// human-facing prompt channel (see SetNonInteractive).
+func (h *ApprovalHook) IsNonInteractive() bool { return h.nonInteractive }
 
 // SetPromptFunc injects a custom approval prompt function for TUI or other
 // non-stdio environments. When set, this function is called instead of the
@@ -252,10 +273,14 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 				h.manager.Deny(req)
 				denyReason = "User rejected via interactive prompt: " + result.Reason
 			}
-		} else if !isStdinTerminal() {
+		} else if h.nonInteractive || !isStdinTerminal() {
 			// 非交互模式且没有自定义 prompt：fail-closed（默认拒绝）。
 			// 之前的行为是自动批准，这会让 Critical 风险命令在 CI/管道里
 			// 静默执行。要求调用方显式配置 web 审批或注入 promptFunc。
+			//
+			// h.nonInteractive 覆盖"stdin 恰好是终端、但其实是守护进程"的情形
+			// （gateway 常从终端启动）：那种情况下 CLI 提示只会阻塞到超时，
+			// 且没有人会真的看到它。
 			//
 			// 血债（2026-09-23 bot 模式"写入被拒绝"）：这里原来只有一条
 			// fmt.Printf 到 stdout（服务进程里无人看见、也不进日志文件），

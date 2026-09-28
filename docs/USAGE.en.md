@@ -262,6 +262,7 @@ magic config reset     # restore defaults
     "rate_limit_window_sec": 60,
     "blocked_users": [],
     "sensitive_words": [],
+    "working_dir": "",             // gateway agent sandbox; empty = <working_dir>/gateway
     "platforms": {
       "telegram": {
         "enabled": true,
@@ -729,6 +730,7 @@ magic gateway restart
   "rate_limit_per_user": 20,
   "blocked_users": ["spam-user-id"],
   "sensitive_words": [],
+  "working_dir": "",                     // gateway agent sandbox; empty = <working_dir>/gateway
   "platforms": {
     "telegram": {
       "enabled": true,
@@ -750,7 +752,20 @@ magic gateway restart
 }
 ```
 
-### 12.3 Talking to bots on platforms
+### 12.3 The agent's working directory and approvals
+
+The gateway agent reads and writes files inside **its own sandbox directory**:
+
+| Config | Effective directory |
+|--------|--------------------|
+| `gateway.working_dir` | used as-is (`~` supported) |
+| not set | `<working_dir>/gateway` (mirrors bot mode's `<working_dir>/bots/<name>`) |
+
+That directory is also the approval boundary: `write_file` / `file_edit` inside it are auto-approved, anything outside still needs confirmation. The gateway is unattended — there is no UI to click "approve" (and it will not read stdin, even when launched from a terminal), so writes outside the sandbox are denied fail-closed. To allow them, set `approval.strategy: "auto"`, or keep the operation inside the working directory.
+
+The gateway agent takes `agent.max_turns` / `max_iterations` / `max_token_budget` and the whole `approval` section from the main config, with the same semantics as the Web UI and Bot Mode.
+
+### 12.4 Talking to bots on platforms
 
 ```
 /bot <name> <message>

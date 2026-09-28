@@ -260,6 +260,7 @@ magic config reset     # 恢复默认
     "rate_limit_window_sec": 60,
     "blocked_users": [],
     "sensitive_words": [],
+    "working_dir": "",             // 网关 agent 的落盘沙箱；留空 = <working_dir>/gateway
     "platforms": {
       "telegram": {
         "enabled": true,
@@ -727,6 +728,7 @@ magic gateway restart
   "rate_limit_per_user": 20,
   "blocked_users": ["spam-user-id"],
   "sensitive_words": [],
+  "working_dir": "",                     // 网关 agent 的落盘沙箱；留空 = <working_dir>/gateway
   "platforms": {
     "telegram": {
       "enabled": true,
@@ -748,7 +750,20 @@ magic gateway restart
 }
 ```
 
-### 12.3 在平台上与 Bot 对话
+### 12.3 Agent 的工作目录与审批
+
+网关 agent 在**自己的沙箱目录**里读写文件：
+
+| 配置 | 生效目录 |
+|------|---------|
+| `gateway.working_dir` | 原样使用（支持 `~`） |
+| 未配置 | `<working_dir>/gateway`（与 bot 模式的 `<working_dir>/bots/<name>` 同构） |
+
+这个目录同时是审批的边界：落在它内部的 `write_file` / `file_edit` 会自动放行，之外的操作仍需确认。网关是无人值守的进程，没有可以点「同意」的界面（从终端启动时也不会去读 stdin），所以目录外的写入会被 fail-closed 拒绝——要放开就设 `approval.strategy: "auto"`，或者把操作改到工作目录内。
+
+网关 agent 的 `agent.max_turns` / `max_iterations` / `max_token_budget` 与整个 `approval` 段都取自主配置，与 Web UI、Bot 模式是同一套语义。
+
+### 12.4 在平台上与 Bot 对话
 
 ```
 /bot <名称> <消息>
