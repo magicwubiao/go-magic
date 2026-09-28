@@ -745,6 +745,19 @@ func (t *ExecuteCodeTool) runCommand(ctx context.Context, cmd *exec.Cmd, timeout
 		cmd.WaitDelay = defaultCommandWaitDelay
 	}
 
+	// 已经过期的 ctx 直接快失败，不启动子进程：上层（turn 超时/用户取消）已经
+	// 放弃这一轮了，再拉一个解释器起来纯属浪费——Windows 上首次进程创建还要付
+	// 冷启动代价（实测首个 python 子进程可达数秒），会把"取消延迟"从 ~0.8s 拖到
+	// 十几秒。返回值仍是 payload 形态，与取消路径的文案保持一致。
+	if err := ctx.Err(); err != nil {
+		return map[string]interface{}{
+			"stdout":    "",
+			"stderr":    "",
+			"exit_code": -1,
+			"error":     fmt.Sprintf("execution cancelled: %v", err),
+		}, nil
+	}
+
 	// Start（非 Run）：成功后进程句柄可用；失败镜像旧行为以 payload 返回。
 	if err := cmd.Start(); err != nil {
 		return map[string]interface{}{
