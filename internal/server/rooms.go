@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/bot"
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // roomToResponse serializes a room config for the dashboard API.
@@ -207,7 +210,40 @@ func (s *Server) handleRoomDelete(w http.ResponseWriter, r *http.Request, id str
 		http.Error(w, err.Error(), status)
 		return
 	}
+	// Reclaim the room's uploads bucket (mirrors bot deletion).
+	s.cleanupSessionUploads(roomUploadBucket(id))
 	jsonResponse(w, map[string]interface{}{"deleted": id})
+}
+
+// roomUploadBucket is the uploads bucket for a room's shared attachments.
+// The "room_" prefix (plus the id itself, which also starts with "room_" for
+// bot.NewRoomID ids) makes the GC recognize these buckets unambiguously; the
+// sanitized lowercase id keeps the directory filesystem-safe.
+func roomUploadBucket(roomID string) string {
+	return "room_" + fileNameSafeRe.ReplaceAllString(strings.ToLower(roomID), "_")
+}
+
+// roomMessageToWire serializes a room log entry for the dashboard API,
+// including attachment refs when present.
+func roomMessageToWire(msg bot.RoomMessage) map[string]interface{} {
+	out := map[string]interface{}{
+		"id":        msg.ID,
+		"from":      msg.From,
+		"content":   msg.Content,
+		"timestamp": msg.Timestamp * 1000,
+	}
+	if len(msg.Attachments) > 0 {
+		atts := make([]map[string]interface{}, 0, len(msg.Attachments))
+		for _, a := range msg.Attachments {
+			atts = append(atts, map[string]interface{}{
+				"name": a.Name,
+				"url":  a.URL,
+				"mime": a.Mime,
+			})
+		}
+		out["attachments"] = atts
+	}
+	return out
 }
 
 // handleRoomMessages GET /api/rooms/{id}/messages
@@ -227,14 +263,52 @@ func (s *Server) handleRoomMessages(w http.ResponseWriter, r *http.Request, id s
 	}
 	result := make([]map[string]interface{}, 0, len(msgs))
 	for _, msg := range msgs {
-		result = append(result, map[string]interface{}{
-			"id":        msg.ID,
-			"from":      msg.From,
-			"content":   msg.Content,
-			"timestamp": msg.Timestamp * 1000,
-		})
+		result = append(result, roomMessageToWire(msg))
 	}
 	jsonResponse(w, result)
+}
+
+// parseRoomSendPayload parses the room send body through the shared
+// parseChatPayload (same attachment contract as bot chat / sessions):
+// inline images and upload refs are stripped into persisted ref parts, and
+// the canonical uploads are returned so each member bot gets a private copy
+// materialized into its workdir. Back-compat: the original
+// {"message","target"} body keeps working.
+func (s *Server) parseRoomSendPayload(r *http.Request, roomID string) (text, target string, persisted []types.ContentPart, items []bot.RoomUploadItem, errMsg string) {
+	const maxRoomSendBodyBytes = 16 << 20
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxRoomSendBodyBytes))
+	if err != nil {
+		return "", "", nil, nil, "failed to read request body: " + err.Error()
+	}
+
+	var legacy struct {
+		Message string `json:"message"`
+		Target  string `json:"target"`
+	}
+	_ = json.Unmarshal(raw, &legacy)
+	target = strings.TrimSpace(legacy.Target)
+
+	// parseChatPayload re-reads the body; hand the saved bytes back.
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+
+	parsed, perr := s.parseChatPayload(r, roomUploadBucket(roomID))
+	if parsed == nil {
+		return "", "", nil, nil, perr
+	}
+
+	text = strings.TrimSpace(parsed.content)
+	if text == "" {
+		text = strings.TrimSpace(legacy.Message)
+	}
+	if text == "" && len(parsed.contentParts) == 0 {
+		return "", "", nil, nil, "message is required"
+	}
+
+	persisted = persistedContentParts(parsed.contentParts, parsed.imageURLRefs, parsed.imageNames, s.uploadDisplayName)
+	for _, it := range parsed.pendingMaterialize {
+		items = append(items, bot.RoomUploadItem{Name: it.Name, Src: it.Src})
+	}
+	return text, target, persisted, items, ""
 }
 
 // handleRoomSend POST /api/rooms/{id}/send — deliver a user message to the
@@ -245,20 +319,13 @@ func (s *Server) handleRoomSend(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	var req struct {
-		Message string `json:"message"`
-		Target  string `json:"target,omitempty"` // optional @bot to address first
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.Message) == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+	text, target, persisted, items, errMsg := s.parseRoomSendPayload(r, id)
+	if errMsg != "" {
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	res, err := mgr.SendToRoom(r.Context(), id, req.Message, req.Target)
+	res, err := mgr.SendToRoomWithMedia(r.Context(), id, text, persisted, items, target)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {
@@ -272,12 +339,7 @@ func (s *Server) handleRoomSend(w http.ResponseWriter, r *http.Request, id strin
 	}
 	result := make([]map[string]interface{}, 0, len(res.Messages))
 	for _, msg := range res.Messages {
-		result = append(result, map[string]interface{}{
-			"id":        msg.ID,
-			"from":      msg.From,
-			"content":   msg.Content,
-			"timestamp": msg.Timestamp * 1000,
-		})
+		result = append(result, roomMessageToWire(msg))
 	}
 	jsonResponse(w, map[string]interface{}{
 		"room_id":    res.RoomID,

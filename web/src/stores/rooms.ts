@@ -54,17 +54,31 @@ export const useRoomsStore = defineStore('rooms', () => {
    * Deliver a message to the room. The backend blocks until the coordinated
    * round finishes, so the user message is optimistically appended locally and
    * replaced/kept by the authoritative results afterwards.
+   *
+   * payload carries uploaded attachment refs (vision/files channels, same
+   * shape as the bot chat payload).
    */
-  async function sendMessage(message: string, target?: string): Promise<RoomSendResult | null> {
+  async function sendMessage(
+    message: string,
+    target?: string,
+    payload?: roomsApi.RoomSendPayload,
+    attachments?: roomsApi.RoomAttachment[]
+  ): Promise<RoomSendResult | null> {
     if (!activeRoomId.value || sending.value) return null
     const roomId = activeRoomId.value
     sending.value = true
     sendAbort = new AbortController()
 
     const localId = 'local_' + Date.now()
-    messages.value.push({ id: localId, from: '@user', content: message, timestamp: Date.now() })
+    messages.value.push({
+      id: localId,
+      from: '@user',
+      content: message,
+      timestamp: Date.now(),
+      attachments,
+    })
     try {
-      const res = await roomsApi.sendRoomMessage(roomId, message, target, sendAbort.signal)
+      const res = await roomsApi.sendRoomMessage(roomId, message, target, sendAbort.signal, payload)
       messages.value = messages.value.filter(m => m.id !== localId)
       for (const m of res.messages) {
         if (!messages.value.some(x => x.id === m.id)) {

@@ -166,7 +166,7 @@ func TestDeleteRoomRemovesSessionsAndCoordinator(t *testing.T) {
 	if err := mgr.CreateRoom(room); err != nil {
 		t.Fatal(err)
 	}
-	mgr.appendRoomMessage(room, "user", "hello room")
+	mgr.appendRoomMessage(room, "user", "hello room", nil)
 
 	if msgs, _ := mgr.RoomMessages(room.ID); len(msgs) != 1 {
 		t.Fatalf("room log not written: %d messages", len(msgs))
@@ -216,7 +216,7 @@ func TestRoomMessageHistoryIsCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 6; i++ {
-		mgr.appendRoomMessage(room, "user", fmt.Sprintf("m%d", i))
+		mgr.appendRoomMessage(room, "user", fmt.Sprintf("m%d", i), nil)
 	}
 
 	msgs, err := mgr.RoomMessages(room.ID)

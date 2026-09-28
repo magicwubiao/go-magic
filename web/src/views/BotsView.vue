@@ -335,6 +335,17 @@
                           </a>
                         </template>
                       </div>
+                      <!-- Live tool activity: parsed from the agent stream's
+                           tool markers and forwarded as SSE tool events. -->
+                      <div v-if="msg.role === 'assistant' && msg._tools?.length" class="tool-strip">
+                        <div v-for="(te, ti) in visibleToolEvents(msg)" :key="ti" class="tool-row">
+                          <n-icon size="12" class="tool-row-icon"><SettingsOutline /></n-icon>
+                          <span class="tool-row-name">{{ te.name }}</span>
+                          <span v-if="te.type === 'tool_start' && te.success === undefined" class="tool-row-status running">{{ t('bots.toolRunning') }}</span>
+                          <span v-else-if="te.success === true" class="tool-row-status ok">✓ {{ te.duration }}</span>
+                          <span v-else-if="te.success === false" class="tool-row-status fail">✗ {{ te.duration }}</span>
+                        </div>
+                      </div>
                       <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
                       <template v-if="msg.role === 'assistant' && msg.content">
                         <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
@@ -387,6 +398,11 @@
               </button>
             </div>
           </div>
+          <!-- Failed-send retry: the exact text + files are re-sent as-is -->
+          <div v-if="lastFailedSend && !botsStore.sending" class="retry-bar">
+            <span class="retry-text">{{ t('bots.sendFailed') }}</span>
+            <n-button size="tiny" type="warning" secondary @click="retryFailedSend">{{ t('bots.retrySend') }}</n-button>
+          </div>
           <div class="input-wrapper">
             <input
               ref="fileInputEl"
@@ -405,6 +421,15 @@
               @click="fileInputEl?.click()"
             >
               <n-icon size="17"><AttachOutline /></n-icon>
+            </button>
+            <button
+              class="attach-btn"
+              type="button"
+              :disabled="botsStore.sending || !draft.trim()"
+              :title="t('bots.guideHint')"
+              @click="handleGuide"
+            >
+              <n-icon size="17"><FlashOutline /></n-icon>
             </button>
             <n-input
               v-model:value="draft"
@@ -525,10 +550,27 @@
                     <span v-if="msg.content.startsWith('⚠️')" class="send-error">{{ t('rooms.sendFailed') }}</span>
                   </div>
                   <div class="message-bubble" :class="[isRoomUserMsg(msg) ? 'user-bubble' : 'agent-bubble', { 'bubble-error': msg.content.startsWith('⚠️') }]">
+                    <!-- Attachments shared into the room (images render, files as chips) -->
+                    <div v-if="msg.attachments?.length" class="msg-attachments">
+                      <template v-for="(a, ai) in msg.attachments" :key="a.url + ai">
+                        <img
+                          v-if="attachmentIsImage(a)"
+                          :src="attachmentSrcFor(a.url)"
+                          class="msg-attach-img"
+                          loading="lazy"
+                          alt=""
+                          @click="openAttachment(a.url)"
+                        />
+                        <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a.url)">
+                          <n-icon size="14"><DocumentOutline /></n-icon>
+                          <span>{{ a.name || attachmentLabelFromUrl(a.url) }}</span>
+                        </a>
+                      </template>
+                    </div>
                     <template v-if="!isRoomUserMsg(msg)">
                       <ReasoningContent :content="msg.content" :streaming="false" />
                     </template>
-                    <div v-else class="bubble-content" v-html="renderMarkdown(msg.content)"></div>
+                    <div v-else-if="msg.content || !msg.attachments?.length" class="bubble-content" v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"></div>
                   </div>
                 </div>
               </template>
@@ -552,7 +594,34 @@
             {{ t('rooms.inputHint') }}
             <span v-if="roomActiveTarget" class="target-chip">→ {{ roomActiveTarget }}</span>
           </div>
+          <div v-if="roomSelectedFiles.length" class="attach-chips">
+            <div v-for="(sel, i) in roomSelectedFiles" :key="sel.key" class="attach-chip">
+              <img v-if="sel.preview" :src="sel.preview" class="attach-thumb" alt="" />
+              <n-icon v-else size="16" class="attach-file-icon"><DocumentOutline /></n-icon>
+              <span class="attach-name" :title="sel.file.name">{{ sel.file.name }}</span>
+              <button class="attach-remove" type="button" @click="removeRoomSelectedFile(i)">
+                <n-icon size="12"><CloseOutline /></n-icon>
+              </button>
+            </div>
+          </div>
           <div class="input-wrapper">
+            <input
+              ref="roomFileInputEl"
+              type="file"
+              multiple
+              class="hidden-file-input"
+              tabindex="-1"
+              aria-hidden="true"
+              @change="onRoomFilesPicked"
+            />
+            <button
+              class="attach-btn"
+              :disabled="roomsStore.sending"
+              :title="t('bots.attach')"
+              @click="roomFileInputEl?.click()"
+            >
+              <n-icon size="18"><AttachOutline /></n-icon>
+            </button>
             <n-input
               v-model:value="roomDraft"
               type="textarea"
@@ -562,6 +631,7 @@
               class="chat-input"
               @keydown="onRoomKeydown"
               @input="onRoomInput"
+              @paste="onRoomPasteFiles"
             />
             <div v-if="roomShowMention && roomFilteredMentions.length" class="mention-popup">
               <div
@@ -577,7 +647,7 @@
             </div>
             <button
               class="send-btn-inline"
-              :disabled="roomsStore.sending || !roomDraft.trim()"
+              :disabled="roomsStore.sending || (!roomDraft.trim() && !roomSelectedFiles.length)"
               @click="roomSend()"
               @mousedown.prevent
               :title="t('rooms.send')"
@@ -889,16 +959,16 @@ import {
 } from 'naive-ui'
 import {
   AddOutline, ArrowBackOutline, AttachOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
-  CreateOutline, DocumentOutline, DownloadOutline, EllipsisHorizontalOutline, PeopleOutline, SearchOutline,
-  TimeOutline, TrashOutline,
+  CreateOutline, DocumentOutline, DownloadOutline, EllipsisHorizontalOutline, FlashOutline, PeopleOutline,
+  SearchOutline, SettingsOutline, TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
 import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
-import type { Bot, BotRoutine, BotMessage, BotMessageAttachment } from '@/api/bots'
-import type { RoomMessage, RoomSendResult } from '@/api/rooms'
+import type { Bot, BotRoutine, BotMessage, BotMessageAttachment, BotToolEvent } from '@/api/bots'
+import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload } from '@/api/rooms'
 import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
 import { marked } from 'marked'
@@ -1402,14 +1472,55 @@ async function handleSend() {
   }
   const files = selectedFiles.value.map(s => s.file)
   draft.value = ''
+  await doSend(text, files)
+}
+
+// handleGuide steers the in-flight turn: the text is injected into the
+// running agent without interrupting generation. When no turn is running
+// (server reports injected=false) the store transparently degrades to a
+// regular send. On degradation failure the snapshot feeds the retry bar.
+async function handleGuide() {
+  const text = draft.value.trim()
+  if (!text || botsStore.sending) return
+  draft.value = ''
+  try {
+    await botsStore.guideBot(text)
+  } catch {
+    lastFailedSend.value = { text, files: [] }
+    draft.value = text
+  }
+}
+
+// Shared send path for fresh sends and retries: on failure the snapshot is
+// kept so the retry bar can re-send the exact same text + files.
+async function doSend(text: string, files: File[]) {
   try {
     await botsStore.sendMessage(text, files.length ? files : undefined)
-    // Success: drop the pending chips (and their object URLs). On failure the
-    // chips stay so the user can retry without re-picking.
+    // Success: drop the pending chips (and their object URLs) and any stale
+    // retry bar. On failure the chips stay so the user can retry without
+    // re-picking.
     clearSelectedFiles()
+    lastFailedSend.value = null
   } catch (e: any) {
+    lastFailedSend.value = { text, files }
     message.error(e.message || t('common.operationFailed'))
   }
+}
+
+const lastFailedSend = ref<{ text: string; files: File[] } | null>(null)
+
+function retryFailedSend() {
+  const failed = lastFailedSend.value
+  if (!failed || botsStore.sending) return
+  lastFailedSend.value = null
+  void doSend(failed.text, failed.files)
+}
+
+// ========== Live tool activity (streaming turns) ==========
+// The store caps msg._tools at 20 entries; the bubble only shows the most
+// recent few to stay compact during long tool-heavy turns.
+function visibleToolEvents(msg: BotMessage): BotToolEvent[] {
+  return (msg._tools || []).slice(-4)
 }
 
 // ========== Chat attachments (pending chips + message rendering) ==========
@@ -1834,12 +1945,44 @@ function onRoomKeydown(e: KeyboardEvent) {
 
 async function roomSend(): Promise<void> {
   const text = roomDraft.value.trim()
-  if (!text || roomsStore.sending || !activeRoom.value) return
+  // Attachment-only sends are allowed (empty text + files).
+  if ((!text && !roomSelectedFiles.value.length) || roomsStore.sending || !activeRoom.value) return
   const target = roomActiveTarget.value || undefined
+  const files = roomSelectedFiles.value.map(s => s.file)
   roomDraft.value = ''
   roomShowMention.value = false
   try {
-    const res: RoomSendResult | null = await roomsStore.sendMessage(text, target)
+    // Upload into the room's uploads bucket first (on failure the user keeps
+    // draft + chips). Images ride the vision channel, other files the files
+    // channel — the same split single-bot chat uses.
+    let payload: RoomSendPayload | undefined
+    let atts: RoomAttachment[] | undefined
+    if (files.length) {
+      const bucket = roomUploadBucket(activeRoom.value.id)
+      const images: string[] = []
+      const imageUrls: string[] = []
+      const imageNames: string[] = []
+      const plain: { name: string; filename: string; url: string }[] = []
+      atts = []
+      for (const f of files) {
+        const uploaded = await sessionsApi.uploadFile(f, bucket)
+        atts.push({ name: f.name, url: uploaded.url, mime: f.type })
+        if (f.type.startsWith('image/') && f.type !== 'image/svg+xml') {
+          images.push(await roomFileToDataUrl(f))
+          imageUrls.push(uploaded.url)
+          imageNames.push(f.name)
+        } else {
+          plain.push({ name: f.name, filename: uploaded.filename, url: uploaded.url })
+        }
+      }
+      if (images.length) {
+        payload = { images, imageUrls, imageNames }
+        if (plain.length) payload.files = plain
+      } else if (plain.length) {
+        payload = { files: plain }
+      }
+    }
+    const res: RoomSendResult | null = await roomsStore.sendMessage(text, target, payload, atts)
     if (res?.needs_user) {
       roomsStore.messages.push({
         id: 'sys_' + Date.now(),
@@ -1848,26 +1991,112 @@ async function roomSend(): Promise<void> {
         timestamp: Date.now(),
       })
     }
+    clearRoomSelectedFiles()
   } catch {
     message.error(t('rooms.sendFailed'))
-    // restore draft so the user doesn't lose their message
+    // restore draft so the user doesn't lose their message; chips stay for retry
     if (!roomDraft.value) roomDraft.value = text
   }
 }
 
+// ---------- room attachments ----------
+// Mirrors the bot chat pending-chips flow; kept separate so switching between
+// bot chat and room chat never leaks chips across the two composers.
+const roomSelectedFiles = ref<{ file: File; key: string; preview: string }[]>([])
+const roomFileInputEl = ref<HTMLInputElement | null>(null)
+let roomFileSeq = 0
+
+function roomUploadBucket(roomId: string): string {
+  return 'room_' + roomId.toLowerCase()
+}
+
+function roomFileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+function addRoomFiles(files: File[]) {
+  for (const f of files) {
+    roomFileSeq += 1
+    let preview = ''
+    if (f.type.startsWith('image/') && f.type !== 'image/svg+xml') {
+      preview = URL.createObjectURL(f)
+    }
+    roomSelectedFiles.value.push({ file: f, key: `${Date.now()}_${roomFileSeq}_${f.name}`, preview })
+  }
+}
+
+function onRoomFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (files.length) addRoomFiles(files)
+  input.value = ''
+}
+
+function removeRoomSelectedFile(i: number) {
+  const sel = roomSelectedFiles.value[i]
+  if (!sel) return
+  if (sel.preview) URL.revokeObjectURL(sel.preview)
+  roomSelectedFiles.value.splice(i, 1)
+}
+
+function clearRoomSelectedFiles() {
+  for (const sel of roomSelectedFiles.value) {
+    if (sel.preview) URL.revokeObjectURL(sel.preview)
+  }
+  roomSelectedFiles.value = []
+}
+
+// Clipboard paste into the room input: screenshots / copied files become
+// pending attachments. Text-only pastes keep native behavior.
+async function onRoomPasteFiles(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const files: File[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'file') {
+      const f = item.getAsFile()
+      if (f) files.push(f)
+    }
+  }
+  if (!files.length) return
+  e.preventDefault()
+  const stamp = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stampStr = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`
+  let imgIdx = 0
+  for (const f of files) {
+    let target = f
+    if (/^image\//.test(f.type) && (!f.name || /^image\.png$/i.test(f.name))) {
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+      imgIdx += 1
+      target = new File([f], `${t('chat.imageBtn')}-${stampStr}${imgIdx > 1 ? '-' + imgIdx : ''}.${ext}`, { type: f.type })
+    }
+    addRoomFiles([target])
+  }
+}
+
 // ---------- room helpers ----------
+// Backend room logs store the human's from as "user" (no @); the optimistic
+// bubble uses "@user". Accept both (plus relay's "user:" prefix) or the
+// authoritative history would flip the user's own messages to the bot side.
 function isRoomUserMsg(msg: RoomMessage): boolean {
-  return msg.from === '@user' || msg.from.startsWith('user:')
+  return msg.from === '@user' || msg.from === 'user' || msg.from.startsWith('user:')
 }
 
 function roomDisplayName(from: string): string {
-  if (from === '@user') return t('rooms.you')
+  if (from === '@user' || from === 'user') return t('rooms.you')
   if (from === '@system') return 'System'
   return from
 }
 
 function roomAvatarText(from: string): string {
-  if (from === '@user') return t('rooms.you').slice(0, 1)
+  if (from === '@user' || from === 'user') return t('rooms.you').slice(0, 1)
   const n = from.replace(/^@/, '')
   return n ? n.slice(0, 1).toUpperCase() : 'B'
 }
@@ -3337,6 +3566,101 @@ async function loadCandidates() {
   color: #374151;
 }
 
+/* ========== Live tool activity strip (streaming bubbles) ========== */
+.tool-strip {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
+  min-width: 0;
+}
+
+.tool-row-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.tool-row-name {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-row-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.tool-row-status.running {
+  animation: tool-pulse 1.2s ease-in-out infinite;
+}
+
+.tool-row-status.ok {
+  color: #b7f0c6;
+}
+
+.tool-row-status.fail {
+  color: #ffc2cd;
+}
+
+@keyframes tool-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.agent-bubble .tool-strip {
+  border-color: #e0e0e0;
+  background: #f7f7f8;
+}
+
+.agent-bubble .tool-row {
+  color: #555;
+}
+
+.agent-bubble .tool-row-status.ok {
+  color: #18a058;
+}
+
+.agent-bubble .tool-row-status.fail {
+  color: #d03050;
+}
+
+/* ========== Failed-send retry bar ========== */
+.retry-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto 4px;
+  padding: 5px 10px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fef3c7;
+}
+
+.retry-text {
+  font-size: 12px;
+  color: #92400e;
+}
+
 /* ========== Input Area ========== */
 .input-area {
   display: flex;
@@ -3886,6 +4210,27 @@ async function loadCandidates() {
     background: #26262b;
     border-color: #374151;
     color: #d1d5db;
+  }
+  .tool-strip {
+    border-color: #4b5563;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .tool-row {
+    color: #d1d5db;
+  }
+  .agent-bubble .tool-strip {
+    border-color: #4b5563;
+    background: #26262b;
+  }
+  .agent-bubble .tool-row {
+    color: #9ca3af;
+  }
+  .retry-bar {
+    border-color: #78350f;
+    background: #3a2c10;
+  }
+  .retry-text {
+    color: #fbbf24;
   }
 }
 

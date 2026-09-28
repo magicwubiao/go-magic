@@ -151,10 +151,14 @@ type botRuntime struct {
 
 	// turnRunning is true while the worker is executing a message for this
 	// bot (queued messages don't count). turnCancel cancels the in-flight
-	// turn's context. Both guarded by m.mu; lets HTTP endpoints probe and
-	// cancel a turn whose SSE connection is gone (mobile background etc.).
+	// turn's context. turnRoomID carries the in-flight turn's room ID (empty
+	// for the canonical chat) so GuideBot can tell a steer-able canonical
+	// turn from a room turn. All guarded by m.mu; lets HTTP endpoints probe
+	// and cancel a turn whose SSE connection is gone (mobile background
+	// etc.).
 	turnRunning bool
 	turnCancel  context.CancelFunc
+	turnRoomID  string
 }
 
 // NewManager creates a bot manager. Returns nil (no error) when no bots are defined.
@@ -545,11 +549,13 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	}
 	rt.turnRunning = true
 	rt.turnCancel = cancel
+	rt.turnRoomID = msg.RoomID
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
 		rt.turnRunning = false
 		rt.turnCancel = nil
+		rt.turnRoomID = ""
 		m.mu.Unlock()
 	}()
 
@@ -673,6 +679,27 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		// Keep the live agent's in-memory history aligned with what was saved,
 		// otherwise context grows unbounded even though disk stays trimmed.
 		ag.SetHistory(trimmed)
+	}
+
+	// Reclaim guide messages this turn never consumed: the user steered while
+	// the model was already generating its final answer, so no further LLM
+	// call happened to drain the inbox (see internal/agent/guide.go). Requeue
+	// them as ordinary user messages — they run as their own turn through the
+	// normal queue, mirroring the web chat queue's reclaimLeftoverGuides.
+	// Draining here is within the guide package's concurrency contract: this
+	// is the turn's own worker goroutine, past the point where the turn could
+	// ever consume them. Only the canonical chat accepts guides; room turns
+	// drop any residue defensively so a stale guide can't leak into the next
+	// room round.
+	if msg.RoomID == "" {
+		for _, it := range ag.DrainGuideItems() {
+			text := strings.TrimSpace(it.Text)
+			if text == "" {
+				continue
+			}
+			log.Infof("[BotMode] Bot %s: reclaiming unconsumed guide as a new queued turn", rt.cfg.Name)
+			_ = m.Enqueue(rt.cfg.Name, text, "user")
+		}
 	}
 
 	// Mark the bot active (used for the "Active now" indicator). Counts every
@@ -874,8 +901,9 @@ func (m *Manager) SendToBotWithMedia(botName, text string, parts, persistedParts
 
 // SendToBotStreamWithMedia is SendToBotStream for multimodal input: same
 // part semantics as SendToBotWithMedia, with assistant deltas streamed back
-// through onDelta as the turn runs.
-func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persistedParts []types.ContentPart, onDelta StreamHandler) (string, error) {
+// through onDelta and structured tool activity through onToolEvent (either
+// callback may be nil) as the turn runs.
+func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persistedParts []types.ContentPart, onDelta StreamHandler, onToolEvent func(map[string]interface{})) (string, error) {
 	key := strings.ToLower(botName)
 
 	m.mu.Lock()
@@ -895,6 +923,7 @@ func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persiste
 		persistedParts: persistedParts,
 		replyCh:        make(chan turnResult, 1),
 		onDelta:        onDelta,
+		onToolEvent:    onToolEvent,
 	}
 	return m.enqueueAndAwait(key, msg)
 }
@@ -925,6 +954,40 @@ func (m *Manager) IsBusy(botName string) bool {
 		return false
 	}
 	return rt.turnRunning || len(rt.queue) > 0
+}
+
+// GuideBot injects a steering message into the bot's in-flight canonical-chat
+// turn (agent guide mechanism, internal/agent/guide.go). The turn goroutine
+// drains the guide before its next LLM call and merges it into the history,
+// so the model adjusts direction mid-turn without the generation being
+// interrupted or the message being queued behind the running one.
+//
+// Returns true when the guide was injected. Returns false (nil error) when no
+// canonical turn is currently running — the caller should fall back to a
+// regular send. Room turns are deliberately not steer-able (the guide would
+// otherwise land in the idle canonical agent's inbox and leak into whatever
+// the bot chats next): GuideBot checks the in-flight turn's room ID and
+// declines when the bot is busy with a room round.
+func (m *Manager) GuideBot(botName, text string) (bool, error) {
+	key := strings.ToLower(botName)
+	m.mu.Lock()
+	rt, ok := m.bots[key]
+	if !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("bot not found: %s", botName)
+	}
+	// turnRunning implies rt.ag is already built: processMessage creates the
+	// agent (getOrCreateAgentLocked) before flipping turnRunning, both under
+	// m.mu. Reading the pointer here under the same lock is race-free.
+	ag := rt.ag
+	steerable := rt.turnRunning && rt.turnRoomID == ""
+	m.mu.Unlock()
+	if !steerable || ag == nil {
+		return false, nil
+	}
+	// InjectGuide is thread-safe and non-blocking; blank text is a no-op.
+	ag.InjectGuide("", text)
+	return true, nil
 }
 
 // CancelTurn cancels the bot's in-flight turn, if any. Returns true when a

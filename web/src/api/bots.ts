@@ -59,6 +59,8 @@ export interface BotMessage {
   content: string
   timestamp: number
   _streaming?: boolean
+  /** Live tool activity captured during this turn's stream (not persisted server-side). */
+  _tools?: BotToolEvent[]
   /** Attachments persisted with a user message (upload refs, no inline base64). */
   attachments?: BotMessageAttachment[]
 }
@@ -168,6 +170,19 @@ export async function getBotRunning(name: string): Promise<boolean> {
   return !!resp.running
 }
 
+/**
+ * Inject a steering message into the bot's in-flight turn (agent guide).
+ * The model sees it before its next LLM call; generation is not interrupted.
+ * Returns injected=false when no turn is running — the caller should fall
+ * back to a regular send.
+ */
+export async function submitBotGuide(name: string, text: string): Promise<{ injected: boolean }> {
+  return request<{ injected: boolean }>(`/bots/${encodeURIComponent(name)}/guide`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
 /** Explicitly cancel the bot's in-flight turn. Returns true if one was canceled. */
 export async function cancelBotTurn(name: string): Promise<boolean> {
   const resp = await request<{ canceled: boolean }>(`/bots/${name}/cancel`, { method: 'POST' })
@@ -188,8 +203,19 @@ export class StreamIncompleteError extends Error {
   }
 }
 
+/** Structured tool activity event (tool_start / tool_result) from the stream. */
+export interface BotToolEvent {
+  type: 'tool_start' | 'tool_result'
+  name: string
+  args_text?: string
+  success?: boolean
+  duration?: string
+  content?: string
+}
+
 export interface BotChatStreamEvents {
   onDelta?: (text: string) => void
+  onTool?: (evt: BotToolEvent) => void
   signal?: AbortSignal
 }
 
@@ -237,6 +263,9 @@ export async function sendBotChatStream(
       } else if (typeof evt.final === 'string' && evt.final) {
         // Authoritative full reply from server.
         finalText = evt.final
+      } else if (evt.tool && typeof evt.tool === 'object') {
+        // Live tool activity (tool_start / tool_result).
+        events.onTool?.(evt.tool as BotToolEvent)
       } else if (typeof evt.error === 'string' && evt.error) {
         throw new Error(evt.error)
       } else if (evt.done) {

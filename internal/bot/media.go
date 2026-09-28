@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/base64"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,4 +180,118 @@ func replaceLastUserParts(history []provider.Message, persisted []types.ContentP
 	out[idx] = history[idx]
 	out[idx].ContentParts = append([]types.ContentPart(nil), persisted...)
 	return out
+}
+
+// --- 群聊（rooms）附件支持 ---
+
+// botWorkdirAttachmentsDir 与 server 侧 workdirAttachmentsDir 同名：成员 bot
+// 的工作目录里都用 <workDir>/.magic-uploads/ 收纳本回合附件副本。
+const botWorkdirAttachmentsDir = ".magic-uploads"
+
+// roomAttachmentsFromParts 从 ref-form file 部件（persistedContentParts 产出：
+// Name/URL/Mime 齐全，Contents 为空）提取群聊日志用的附件列表。
+func roomAttachmentsFromParts(parts []types.ContentPart) []RoomAttachment {
+	if len(parts) == 0 {
+		return nil
+	}
+	atts := make([]RoomAttachment, 0, len(parts))
+	for _, p := range parts {
+		if p.Type != "file" || p.File == nil || p.File.URL == "" {
+			continue
+		}
+		atts = append(atts, RoomAttachment{
+			Name: p.File.Name,
+			URL:  p.File.URL,
+			Mime: p.File.MimeType,
+		})
+	}
+	if len(atts) == 0 {
+		return nil
+	}
+	return atts
+}
+
+// roomPartsFromAttachments 是 roomAttachmentsFromParts 的逆变换：把群聊日志
+// 消息里的附件编码回 ref-form file 部件，借用 session store 的 ContentParts
+// 字段持久化（不改动 store 结构）。
+func roomPartsFromAttachments(atts []RoomAttachment) []types.ContentPart {
+	if len(atts) == 0 {
+		return nil
+	}
+	parts := make([]types.ContentPart, 0, len(atts))
+	for _, a := range atts {
+		if a.URL == "" {
+			continue
+		}
+		parts = append(parts, types.ContentPart{
+			Type: "file",
+			File: &types.FileInfo{
+				Name:     a.Name,
+				MimeType: a.Mime,
+				URL:      a.URL,
+			},
+		})
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+// materializeRoomUploads 把一轮群聊附件的规范副本拷进成员 bot 的工作目录
+// （与单 bot 聊天的 materializeUploads 同语义），返回给模型的摘要文字；
+// 没有可拷贝项或工作目录不可用时返回 ""。Src 是 server 侧上传落盘的规范
+// 路径，成员拿到的副本互不影响。
+func (m *Manager) materializeRoomUploads(items []RoomUploadItem, botName string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	workDir := m.BotWorkDir(botName)
+	if workDir == "" {
+		return ""
+	}
+	dstDir := filepath.Join(workDir, botWorkdirAttachmentsDir)
+	if err := os.MkdirAll(dstDir, 0o700); err != nil {
+		return ""
+	}
+	var lines []string
+	for _, it := range items {
+		if it.Src == "" || it.Name == "" {
+			continue
+		}
+		dst := filepath.Join(dstDir, filepath.Base(it.Src))
+		if err := copyRoomUpload(it.Src, dst); err != nil {
+			continue
+		}
+		lines = append(lines, "- "+it.Name+" → "+botWorkdirAttachmentsDir+"/"+filepath.Base(dst)+"（工作目录内）")
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "本次消息的附件已放入工作目录，可直接用文件工具读取：\n" + strings.Join(lines, "\n")
+}
+
+// copyRoomUpload copies src to dst (temp + rename, 0600) — same shape as the
+// server-side copyUploadFile.
+func copyRoomUpload(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }

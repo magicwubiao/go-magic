@@ -1705,6 +1705,18 @@ func (s *Server) buildRouter() *http.ServeMux {
 			// stale directory; explicit bot deletion cleans it up itself.
 			return nil, nil
 		}
+		// Room attachment buckets ("room_" + sanitized room id): the room's
+		// shared log lives in the bot manager's separate store, same as bot
+		// chats. Existence of the room keeps the bucket; explicit room
+		// deletion cleans it up itself.
+		if strings.HasPrefix(id, "room_") {
+			if mgr := s.botManager; mgr != nil {
+				if _, err := mgr.GetRoom(strings.TrimPrefix(id, "room_")); err == nil {
+					return struct{}{}, nil
+				}
+			}
+			return nil, nil
+		}
 		if s.sessionStore == nil {
 			return nil, fmt.Errorf("no session store")
 		}

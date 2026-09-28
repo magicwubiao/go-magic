@@ -13,12 +13,31 @@ export interface Room {
   updated_at: number
 }
 
+export interface RoomAttachment {
+  name: string
+  url: string
+  mime?: string
+}
+
 export interface RoomMessage {
   id: string
   from: string
   content: string
   timestamp: number
+  attachments?: RoomAttachment[]
   _sending?: boolean
+}
+
+/**
+ * Attachment payload for a room send — same shape as the bot chat payload
+ * (shared parseChatPayload on the backend): images ride the vision channel,
+ * everything else the files channel.
+ */
+export interface RoomSendPayload {
+  images?: string[]
+  imageUrls?: string[]
+  imageNames?: string[]
+  files?: { name: string; filename: string; url: string }[]
 }
 
 export interface RoomSendResult {
@@ -61,7 +80,8 @@ export async function sendRoomMessage(
   id: string,
   message: string,
   target?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  payload?: RoomSendPayload
 ): Promise<RoomSendResult> {
   const token = getAuthToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -73,10 +93,11 @@ export async function sendRoomMessage(
   signal?.addEventListener('abort', onOuterAbort)
 
   try {
+    const body = payload && Object.keys(payload).length ? { message, target, ...payload } : { message, target }
     const resp = await fetch(`${BASE_URL}/rooms/${encodeURIComponent(id)}/send`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, target }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     })
     if (!resp.ok) {

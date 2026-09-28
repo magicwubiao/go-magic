@@ -301,6 +301,24 @@ export const useBotsStore = defineStore('bots', () => {
             bubble.timestamp = Date.now()
           }
         },
+        onTool: (evt) => {
+          if (activeBotName.value !== name) return
+          const bubble = messages.value.find(m => m.id === streamId)
+          if (!bubble) return
+          const tools = bubble._tools || (bubble._tools = [])
+          if (evt.type === 'tool_result') {
+            // Attach the result to the most recent open start of the same tool.
+            for (let i = tools.length - 1; i >= 0; i--) {
+              if (tools[i].type === 'tool_start' && tools[i].name === evt.name && tools[i].success === undefined) {
+                tools[i] = { ...tools[i], success: evt.success, duration: evt.duration, content: evt.content }
+                return
+              }
+            }
+          }
+          tools.push(evt)
+          if (tools.length > 20) tools.splice(0, tools.length - 20)
+          bubble.timestamp = Date.now()
+        },
       }, payload)
       // Replace the growing bubble with the authoritative reply.
       // Only if we're still on the same bot.
@@ -354,6 +372,43 @@ export const useBotsStore = defineStore('bots', () => {
         }
       }
     }
+  }
+
+  /**
+   * guideBot steers the bot's in-flight turn: the message is injected into
+   * the running agent (visible before its next LLM call) without queuing or
+   * interrupting generation. Mirrors the sessions chat guide flow, minus the
+   * broadcast dedupe — bot chat is a single SSE connection, so there is no
+   * second delivery channel to reconcile.
+   *
+   * Fallback: when the server reports injected=false (the turn just ended)
+   * or the request fails, the optimistic bubble is withdrawn and the text is
+   * sent as a regular message instead.
+   */
+  async function guideBot(text: string): Promise<void> {
+    const name = activeBotName.value
+    if (!name || !text.trim()) return
+
+    // Optimistic user bubble — the guide "has been sent" the moment we POST.
+    const localId = 'guide_local_' + Date.now()
+    messages.value.push({
+      id: localId,
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    })
+
+    try {
+      const resp = await botsApi.submitBotGuide(name, text)
+      if (resp.injected) return
+    } catch {
+      // Endpoint unreachable: degrade to a regular send below.
+    }
+    // Fallback: withdraw the guide bubble and send normally. sendMessage
+    // throws on failure — let it propagate so the view's retry bar captures.
+    const idx = messages.value.findIndex(m => m.id === localId)
+    if (idx >= 0) messages.value.splice(idx, 1)
+    await sendMessage(text)
   }
 
   async function refreshMessagesOnly() {
@@ -428,7 +483,7 @@ export const useBotsStore = defineStore('bots', () => {
     activeBotName, messages, routines, chatLoading, sending,
     loadBots, createBot, updateBot, deleteBot, cloneBot,
     activateBot, deactivateBot,
-    openChat, closeChat, refreshChat, sendMessage, cancelStream,
+    openChat, closeChat, refreshChat, sendMessage, guideBot, cancelStream,
     addRoutine, removeRoutine, toggleRoutine, updateRoutine,
     runRoutineNow, clearMessages,
   }

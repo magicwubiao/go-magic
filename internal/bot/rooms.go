@@ -14,12 +14,28 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
+// RoomAttachment is one file/image attached to a room message.
+type RoomAttachment struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Mime string `json:"mime,omitempty"`
+}
+
 // RoomMessage is one entry in a group chat's shared history.
 type RoomMessage struct {
-	ID        string `json:"id"`
-	From      string `json:"from"` // bot mention tag or "user"
-	Content   string `json:"content"`
-	Timestamp int64  `json:"timestamp"` // Unix seconds
+	ID          string           `json:"id"`
+	From        string           `json:"from"` // bot mention tag or "user"
+	Content     string           `json:"content"`
+	Timestamp   int64            `json:"timestamp"` // Unix seconds
+	Attachments []RoomAttachment `json:"attachments,omitempty"`
+}
+
+// RoomUploadItem is one uploaded attachment (canonical uploads copy) that a
+// room round copies into each member bot's workdir so sandboxed file tools
+// can read it.
+type RoomUploadItem struct {
+	Name string
+	Src  string
 }
 
 // RoomResult is the outcome of one SendToRoom round.
@@ -34,7 +50,11 @@ type roomRequest struct {
 	Text   string
 	From   string // "user"
 	Target string // optional @bot tag to address the first turn at
-	Reply  chan *RoomResult
+	// Persisted carries the ref-form attachment parts (file parts with
+	// Name/URL/Mime, images included) for this round; nil = text-only.
+	Persisted []types.ContentPart
+	Items     []RoomUploadItem
+	Reply     chan *RoomResult
 }
 
 // roomRuntime is a room's live state: its config plus the coordinator
@@ -214,6 +234,14 @@ func (m *Manager) RoomMessages(roomID string) ([]RoomMessage, error) {
 // the first word. Returns the full room history and whether a bot escalated
 // to @user.
 func (m *Manager) SendToRoom(ctx context.Context, roomID, text, target string) (*RoomResult, error) {
+	return m.SendToRoomWithMedia(ctx, roomID, text, nil, nil, target)
+}
+
+// SendToRoomWithMedia is SendToRoom for multimodal input: persisted carries
+// the ref-form attachment parts (file parts with Name/URL/Mime — images
+// included) that every member turn receives, and items lists the canonical
+// uploads copies to materialize into each member bot's workdir.
+func (m *Manager) SendToRoomWithMedia(ctx context.Context, roomID, text string, persisted []types.ContentPart, items []RoomUploadItem, target string) (*RoomResult, error) {
 	key := strings.ToLower(roomID)
 	m.mu.Lock()
 	rt, ok := m.rooms[key]
@@ -230,10 +258,12 @@ func (m *Manager) SendToRoom(ctx context.Context, roomID, text, target string) (
 	}
 
 	req := roomRequest{
-		Text:   text,
-		From:   "user",
-		Target: target,
-		Reply:  make(chan *RoomResult, 1),
+		Text:      text,
+		From:      "user",
+		Target:    target,
+		Persisted: persisted,
+		Items:     items,
+		Reply:     make(chan *RoomResult, 1),
 	}
 	select {
 	case rt.triggerCh <- req:
@@ -307,8 +337,9 @@ func (m *Manager) roomLoop(rt *roomRuntime) {
 // kept delivering turns to its old members for the rest of the round.
 func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	room := rt.cfg
-	// Persist the human's message into the room log.
-	m.appendRoomMessage(room, "user", req.Text)
+	// Persist the human's message into the room log (with attachment refs so
+	// reloads still show what was shared).
+	m.appendRoomMessage(room, "user", req.Text, roomAttachmentsFromParts(req.Persisted))
 
 	members := room.Members
 	if req.Target != "" && req.Target != "user" {
@@ -336,7 +367,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			}
 			history, _ := m.loadRoomHistory(room.ID)
 			prompt := m.buildRoomPrompt(room, member, history, round, maxRounds)
-			reply, err := m.sendRoomTurn(rt, member, prompt)
+			reply, err := m.sendRoomTurn(rt, member, prompt, req)
 			if err != nil {
 				// Room torn down mid-turn: stop silently. Appending the error
 				// here would recreate the room log DeleteRoom just removed.
@@ -344,7 +375,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 					break
 				}
 				log.Warnf("[BotMode] Room %s member %s turn failed: %v", room.Name, member, err)
-				m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")")
+				m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")", nil)
 				continue
 			}
 			reply = strings.TrimSpace(reply)
@@ -352,7 +383,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 				continue
 			}
 			anySpoke = true
-			m.appendRoomMessage(room, member, reply)
+			m.appendRoomMessage(room, member, reply, nil)
 			if needsHuman(reply) {
 				needsUser = true
 				log.Infof("[BotMode] Room %s: @%s escalated to user", room.Name, member)
@@ -389,13 +420,28 @@ func (m *Manager) roomClosed(rt *roomRuntime) bool {
 // worker to finish (serialized with the bot's other chats). The wait also
 // ends when the room is closed, so a hot-reloaded room releases its
 // coordinator immediately instead of after the slowest member replies.
-func (m *Manager) sendRoomTurn(rt *roomRuntime, botName, text string) (string, error) {
+//
+// When the round carries attachments (req.Persisted non-empty), the prompt
+// rides as the leading text part and the attachment refs ride alongside —
+// the provider conversion sends only parts in that case. Each member gets
+// the canonical uploads copies materialized into its own workdir so
+// sandboxed file tools can read them; images additionally rehydrate into
+// real bytes at turn start (same path as single-bot chat).
+func (m *Manager) sendRoomTurn(rt *roomRuntime, botName, text string, req roomRequest) (string, error) {
 	msg := pendingMessage{
-		Text:    text,
-		From:    "room:" + rt.cfg.ID,
-		RoomID:  strings.ToLower(rt.cfg.ID),
-		replyCh: make(chan turnResult, 1),
+		From:   "room:" + rt.cfg.ID,
+		RoomID: strings.ToLower(rt.cfg.ID),
 	}
+	if len(req.Persisted) > 0 {
+		parts := append([]types.ContentPart{{Type: "text", Text: text}}, req.Persisted...)
+		if summary := m.materializeRoomUploads(req.Items, botName); summary != "" {
+			parts = append(parts, types.ContentPart{Type: "text", Text: summary})
+		}
+		msg.ContentParts = parts
+	} else {
+		msg.Text = text
+	}
+	msg.replyCh = make(chan turnResult, 1)
 	if err := m.EnqueueMsg(botName, msg); err != nil {
 		return "", err
 	}
@@ -436,6 +482,14 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 		sb.WriteString("(no messages yet)\n")
 	}
 	for _, msg := range history {
+		if len(msg.Attachments) > 0 {
+			names := make([]string, 0, len(msg.Attachments))
+			for _, a := range msg.Attachments {
+				names = append(names, a.Name)
+			}
+			fmt.Fprintf(&sb, "- @%s: %s [附件: %s]\n", msg.From, msg.Content, strings.Join(names, ", "))
+			continue
+		}
 		fmt.Fprintf(&sb, "- @%s: %s\n", msg.From, msg.Content)
 	}
 	fmt.Fprintf(&sb, "\nYour turn (round %d/%d). You are @%s.\n", round+1, maxRounds, member)
@@ -446,16 +500,17 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 
 // appendRoomMessage persists one message into the room's shared session log
 // and keeps only the last MessagesCap entries (10-message hard cap).
-func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string) {
+func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts []RoomAttachment) {
 	msgs, err := m.loadRoomHistory(room.ID)
 	if err != nil {
 		msgs = nil
 	}
 	msgs = append(msgs, RoomMessage{
-		ID:        "m_" + uuid.New().String()[:8],
-		From:      from,
-		Content:   content,
-		Timestamp: time.Now().Unix(),
+		ID:          "m_" + uuid.New().String()[:8],
+		From:        from,
+		Content:     content,
+		Timestamp:   time.Now().Unix(),
+		Attachments: atts,
 	})
 	capN := room.MessagesCap()
 	if len(msgs) > capN {
@@ -480,10 +535,11 @@ func (m *Manager) loadRoomHistory(roomID string) ([]RoomMessage, error) {
 	out := make([]RoomMessage, 0, len(sess.Messages))
 	for _, msg := range sess.Messages {
 		out = append(out, RoomMessage{
-			ID:        msg.ID,
-			From:      msg.From,
-			Content:   msg.Content,
-			Timestamp: msg.Timestamp.Unix(),
+			ID:          msg.ID,
+			From:        msg.From,
+			Content:     msg.Content,
+			Timestamp:   msg.Timestamp.Unix(),
+			Attachments: roomAttachmentsFromParts(msg.ContentParts),
 		})
 	}
 	return out, nil
@@ -503,11 +559,14 @@ func (m *Manager) saveRoomHistory(roomID string, msgs []RoomMessage) {
 	for _, msg := range msgs {
 		t := time.Unix(msg.Timestamp, 0)
 		sess.Messages = append(sess.Messages, types.Message{
-			ID:        msg.ID,
-			Role:      "user", // room log is informational; role not meaningful
-			From:      msg.From,
-			Content:   msg.Content,
-			Timestamp: t,
+			ID:           msg.ID,
+			Role:         "user", // room log is informational; role not meaningful
+			From:         msg.From,
+			Content:      msg.Content,
+			Timestamp:    t,
+			// Attachments ride as ref-form file parts so the session store
+			// schema stays untouched (same encoding bot chat history uses).
+			ContentParts: roomPartsFromAttachments(msg.Attachments),
 		})
 	}
 	if err := m.sessions.SaveSession(ctx, sess); err != nil {

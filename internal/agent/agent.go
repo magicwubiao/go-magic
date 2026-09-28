@@ -1410,6 +1410,11 @@ Please provide a comprehensive, well-structured final response based on these su
 			"budgetTotal": a.budget.MaxTotal(),
 		})
 
+		// 引导注入：与 RunConversationWithMedia 的循环一致（见 guide.go）。
+		// 排水必须在 buildLLMMessages 之前，本次 LLM 调用才能看到引导内容；
+		// 迭代 0 时引导并入刚追加的本回合输入（合并策略见 applyGuides）。
+		a.drainGuidesIntoHistory()
+
 		// Self-reflection check (every N turns)
 		if a.reflector != nil {
 			if err := a.performReflection(ctx, a.iterationCount); err != nil {

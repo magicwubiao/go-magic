@@ -178,6 +178,8 @@ func (s *Server) handleBotByID(w http.ResponseWriter, r *http.Request) {
 		s.handleBotRunning(w, r, name)
 	case len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost:
 		s.handleBotCancel(w, r, name)
+	case len(parts) == 2 && parts[1] == "guide" && r.Method == http.MethodPost:
+		s.handleBotGuide(w, r, name)
 	case len(parts) == 2 && parts[1] == "messages" && r.Method == http.MethodDelete:
 		// Must be matched before the generic "messages" case below, otherwise
 		// DELETE falls through to handleBotMessages which rejects non-GET.
@@ -808,20 +810,26 @@ func (s *Server) handleBotChatStream(w http.ResponseWriter, r *http.Request, nam
 
 	var reply string
 	var err error
+	// onToolEvent forwards structured tool_start / tool_result activity to the
+	// SSE client as {"tool":{...}} events so the web UI can render live tool
+	// activity while the bot works (same parser the sessions chat uses).
+	onToolEvent := func(evt map[string]interface{}) {
+		writeJSONEvent(map[string]interface{}{"tool": evt})
+	}
 	if len(parts) > 0 {
 		reply, err = mgr.SendToBotStreamWithMedia(name, text, parts, persisted, func(content string, done bool) {
 			if done || content == "" {
 				return
 			}
 			writeJSONEvent(map[string]string{"delta": content})
-		})
+		}, onToolEvent)
 	} else {
-		reply, err = mgr.SendToBotStream(name, text, func(content string, done bool) {
+		reply, err = mgr.SendToBotStreamEvents(name, text, func(content string, done bool) {
 			if done || content == "" {
 				return
 			}
 			writeJSONEvent(map[string]string{"delta": content})
-		})
+		}, onToolEvent)
 	}
 
 	if err != nil {
@@ -860,6 +868,48 @@ func (s *Server) handleBotCancel(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 	jsonResponse(w, map[string]interface{}{"canceled": mgr.CancelTurn(name)})
+}
+
+// handleBotGuide POST /api/bots/{name}/guide — inject a steering message into
+// the bot's in-flight turn (agent guide mechanism). The model sees it before
+// its next LLM call within the same turn; generation is not interrupted.
+// When no turn is running the response is {"injected": false} and the client
+// falls back to a regular send.
+func (s *Server) handleBotGuide(w http.ResponseWriter, r *http.Request, name string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Text string `json:"text"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		http.Error(w, "text is required", http.StatusBadRequest)
+		return
+	}
+	injected, err := mgr.GuideBot(name, req.Text)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"injected": injected})
 }
 
 // handleBotClearMessages DELETE /api/bots/{name}/messages — wipe the bot's
