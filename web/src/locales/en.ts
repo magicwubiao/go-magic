@@ -1539,6 +1539,7 @@ export default {
     jsonRequired: 'Paste a JSON config first',
     jsonAdded: 'Added {count} server(s)',
     jsonPartial: 'Saved {failed} server(s) that could not connect ({added} connected)',
+    jsonPasted: 'Detected a JSON config — switched to JSON mode',
   },
   agentplugins: {
     title: 'Agent Plugins',

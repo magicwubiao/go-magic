@@ -1539,6 +1539,7 @@ export default {
     jsonRequired: '请粘贴 JSON 配置',
     jsonAdded: '已添加 {count} 个服务器',
     jsonPartial: '已保存 {failed} 个无法连接的服务器（共 {added} 个成功）',
+    jsonPasted: '已识别为 JSON 配置，已切换到 JSON 模式',
   },
   agentplugins: {
     title: 'Agent 插件',

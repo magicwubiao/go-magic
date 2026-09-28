@@ -27,7 +27,7 @@
           v-model:value="searchQuery"
           size="small"
           clearable
-          :placeholder="searchPlaceholder"
+          :placeholder="railSearchPlaceholder"
         >
           <template #prefix><n-icon><SearchOutline /></n-icon></template>
         </n-input>
@@ -817,8 +817,8 @@ import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmount
 import { onBeforeRouteLeave } from 'vue-router'
 import {
   NAlert, NAvatar, NButton, NCard, NCollapse, NCollapseItem, NDivider, NDropdown, NEmpty, NForm,
-  NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NList, NListItem, NModal,
-  NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, NThing, useMessage,
+  NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NModal,
+  NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui'
 import {
   AddOutline, ArrowBackOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
@@ -856,6 +856,11 @@ const messagesEl = ref<HTMLElement | null>(null)
 // ========== View switching: bots | rooms ==========
 const viewMode = ref<'bots' | 'rooms'>('bots')
 const searchQuery = ref('')
+
+// 左栏搜索框为 Bot / 群聊两个视图共用，占位文案跟着当前视图走。
+const railSearchPlaceholder = computed(() =>
+  t(viewMode.value === 'rooms' ? 'rooms.searchPlaceholder' : 'bots.searchPlaceholder')
+)
 
 const railHasActive = computed(() =>
   (viewMode.value === 'bots' && !!botsStore.activeBotName) ||

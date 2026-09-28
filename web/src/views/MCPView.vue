@@ -169,6 +169,11 @@
       class="modal-responsive modal-scroll"
       style="width: 520px; max-width: 96vw; max-height: 85vh;"
     >
+      <!-- 弹窗打开后第一个可聚焦元素是"服务名称"输入框（naive 的 focus trap 行为）。
+           从别处复制一段 JSON 直接 Ctrl+V，内容会整段落进名字框——而 JSON 输入框在
+           另一个分支里，用户看到的就是"粘贴没反应、内容跑到表单里了"。
+           这里在捕获阶段先看一眼剪贴板：像 JSON 就拦下来，切到 JSON 模式再填入。 -->
+      <div class="mcp-modal-body" @paste.capture="onModalPaste">
       <n-space vertical>
         <n-form-item v-if="!isEditing" :label="t('mcp.inputMode')">
           <n-radio-group v-model:value="inputMode" size="small">
@@ -182,6 +187,7 @@
         <template v-if="inputMode === 'json' && !isEditing">
           <n-form-item :label="t('mcp.jsonConfig')" required>
             <n-input
+              ref="jsonInputRef"
               v-model:value="jsonText"
               type="textarea"
               :rows="12"
@@ -252,6 +258,7 @@
           </n-form-item>
         </template>
       </n-space>
+      </div>
 
       <template #footer>
         <n-space justify="end">
@@ -264,7 +271,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { NButton, NCard, NEmpty, NFormItem, NGi, NGrid, NInput, NList, NListItem, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NStatistic, NTable, NTag, NText, NThing } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -292,6 +299,9 @@ const serverTools = ref<Record<string, any[]>>({})
 // 添加弹窗的两种录入方式：表单（单服务器）与 JSON（可一次导入多个）。
 const inputMode = ref<'form' | 'json'>('form')
 const jsonText = ref('')
+// naive 的 n-input 实例：切到 JSON 模式后把光标放进去，用户点完"JSON"就能直接
+// Ctrl+V，不会再出现"光标还在表单里"的错位粘贴。
+const jsonInputRef = ref<any>(null)
 
 const jsonPlaceholder = `{
   "mcpServers": {
@@ -468,6 +478,35 @@ async function handleRefreshTools(name: string) {
   } catch (e: any) {
     message.error(mcpErrorMessage(e) || t('mcp.refreshToolsFailed'))
   }
+}
+
+// 切到 JSON 模式后把光标移进 JSON 输入框。
+watch(inputMode, (mode) => {
+  if (mode !== 'json') return
+  nextTick(() => jsonInputRef.value?.focus?.())
+})
+
+/**
+ * 弹窗内的粘贴兜底。
+ *
+ * 为什么需要：弹窗打开后 naive 的 focus trap 会把焦点放在第一个可聚焦元素上，
+ * 也就是"服务名称"输入框。此时从别处复制一段 mcpServers JSON 直接 Ctrl+V，
+ * 整段 JSON 会落进名字框，而 JSON 输入框在另一个分支里是空的 —— 用户看到的
+ * 就是"粘贴没反应、内容跑到表单里了"。服务器名的合法字符只有 [A-Za-z0-9_.-]，
+ * 以 { 或 [ 开头的一定是配置，所以在捕获阶段拦下来换成 JSON 模式。
+ */
+function onModalPaste(e: ClipboardEvent) {
+  // 编辑模式没有 JSON 分支；JSON 模式下交给 textarea 自己处理
+  if (isEditing.value || inputMode.value === 'json') return
+
+  const text = e.clipboardData?.getData('text') ?? ''
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return
+
+  e.preventDefault()
+  jsonText.value = text
+  inputMode.value = 'json'
+  message.info(t('mcp.jsonPasted'), { duration: 3000 })
 }
 
 function openAddModal() {
