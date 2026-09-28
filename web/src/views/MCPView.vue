@@ -174,90 +174,107 @@
            另一个分支里，用户看到的就是"粘贴没反应、内容跑到表单里了"。
            这里在捕获阶段先看一眼剪贴板：像 JSON 就拦下来，切到 JSON 模式再填入。 -->
       <div class="mcp-modal-body" @paste.capture="onModalPaste">
-      <n-space vertical>
-        <n-form-item v-if="!isEditing" :label="t('mcp.inputMode')">
-          <n-radio-group v-model:value="inputMode" size="small">
-            <n-radio-button value="form">{{ t('mcp.modeForm') }}</n-radio-button>
-            <n-radio-button value="json">{{ t('mcp.modeJSON') }}</n-radio-button>
-          </n-radio-group>
-        </n-form-item>
-
-        <!-- JSON 模式：粘贴别的 MCP 客户端（Claude Desktop / Cursor / Cline）
-             或 config.json 里的片段即可，支持一次导入多个服务器。 -->
-        <template v-if="inputMode === 'json' && !isEditing">
-          <n-form-item :label="t('mcp.jsonConfig')" required>
-            <n-input
-              ref="jsonInputRef"
-              v-model:value="jsonText"
-              type="textarea"
-              :rows="12"
-              :placeholder="jsonPlaceholder"
-            />
+        <n-space vertical>
+          <n-form-item v-if="!isEditing" :label="t('mcp.inputMode')">
+            <n-radio-group v-model:value="inputMode" size="small">
+              <n-radio-button value="form">{{ t('mcp.modeForm') }}</n-radio-button>
+              <n-radio-button value="json">{{ t('mcp.modeJSON') }}</n-radio-button>
+            </n-radio-group>
           </n-form-item>
-          <div class="json-preview">
-            <n-text v-if="jsonPreview.error" type="error" style="font-size: 12px;">
-              {{ t('mcp.jsonInvalid') }}{{ jsonPreview.error }}
-            </n-text>
-            <n-text v-else-if="jsonPreview.names.length" depth="3" style="font-size: 12px;">
-              {{ t('mcp.jsonDetected', { count: jsonPreview.names.length }) }}
-              <span class="json-names">{{ jsonPreview.names.join(', ') }}</span>
-            </n-text>
-            <n-text v-else depth="3" style="font-size: 12px;">
-              {{ t('mcp.jsonHint') }}
-            </n-text>
+
+          <!--
+            两种录入方式各自包一层**带唯一 key** 的容器，这一步不是装饰，是修 bug 的：
+
+            两支若都写成 <template v-if>/<template v-else>，编译器会产出两个 Fragment，
+            Vue 认为"同一位置、同类节点"，于是**原地复用** DOM 与组件实例，只做 props 补丁；
+            两支里的 NFormItem → NInput 恰好同类型，JSON 分支的控件就被复用成了表单分支
+            那个单行 input（placeholder 还是 e.g., filesystem，rows/type 全被吃掉）。
+            现象就是"切到 JSON 之后，JSON 配置下面还是个小单行框"。
+            显式 key 让两支强制卸载/重建，彻底断掉复用。
+          -->
+          <!-- JSON 模式：粘贴别的 MCP 客户端（Claude Desktop / Cursor / Cline）
+               或 config.json 里的片段即可，支持一次导入多个服务器。 -->
+          <div v-if="jsonMode" key="mcp-mode-json">
+            <n-form-item :label="t('mcp.jsonConfig')" required>
+              <n-input
+                key="mcp-json-input"
+                ref="jsonInputRef"
+                v-model:value="jsonText"
+                type="textarea"
+                :rows="12"
+                :placeholder="jsonPlaceholder"
+              />
+            </n-form-item>
+            <div class="json-preview">
+              <n-text v-if="jsonPreview.error" type="error" style="font-size: 12px;">
+                {{ t('mcp.jsonInvalid') }}{{ jsonPreview.error }}
+              </n-text>
+              <n-text v-else-if="jsonPreview.names.length" depth="3" style="font-size: 12px;">
+                {{ t('mcp.jsonDetected', { count: jsonPreview.names.length }) }}
+                <span class="json-names">{{ jsonPreview.names.join(', ') }}</span>
+              </n-text>
+              <n-text v-else depth="3" style="font-size: 12px;">
+                {{ t('mcp.jsonHint') }}
+              </n-text>
+            </div>
           </div>
-        </template>
 
-        <template v-else>
-          <n-form-item :label="t('mcp.serverName')" required>
-            <n-input
-              v-model:value="formData.name"
-              :disabled="isEditing"
-              placeholder="e.g., filesystem"
-            />
-          </n-form-item>
+          <div v-else key="mcp-mode-form">
+            <n-form-item :label="t('mcp.serverName')" required>
+              <n-input
+                key="mcp-name-input"
+                v-model:value="formData.name"
+                :disabled="isEditing"
+                placeholder="e.g., filesystem"
+              />
+            </n-form-item>
 
-          <n-form-item :label="t('mcp.transport')" required>
-            <n-select
-              v-model:value="formData.transport"
-              :options="transportOptions"
-              placeholder="Select transport"
-            />
-          </n-form-item>
+            <n-form-item :label="t('mcp.transport')" required>
+              <n-select
+                key="mcp-transport-select"
+                v-model:value="formData.transport"
+                :options="transportOptions"
+                placeholder="Select transport"
+              />
+            </n-form-item>
 
-          <n-form-item :label="t('mcp.command')" v-if="formData.transport === 'stdio'" required>
-            <n-input
-              v-model:value="formData.command"
-              placeholder="e.g., npx"
-            />
-          </n-form-item>
+            <n-form-item :label="t('mcp.command')" v-if="formData.transport === 'stdio'" required>
+              <n-input
+                key="mcp-command-input"
+                v-model:value="formData.command"
+                placeholder="e.g., npx"
+              />
+            </n-form-item>
 
-          <n-form-item :label="t('mcp.args')" v-if="formData.transport === 'stdio'">
-            <n-input
-              v-model:value="formData.argsStr"
-              type="textarea"
-              :rows="3"
-              placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
-            />
-          </n-form-item>
+            <n-form-item :label="t('mcp.args')" v-if="formData.transport === 'stdio'">
+              <n-input
+                key="mcp-args-input"
+                v-model:value="formData.argsStr"
+                type="textarea"
+                :rows="3"
+                placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
+              />
+            </n-form-item>
 
-          <n-form-item :label="t('mcp.url')" v-if="formData.transport === 'sse'" required>
-            <n-input
-              v-model:value="formData.url"
-              placeholder="http://localhost:8080/mcp"
-            />
-          </n-form-item>
+            <n-form-item :label="t('mcp.url')" v-if="formData.transport === 'sse'" required>
+              <n-input
+                key="mcp-url-input"
+                v-model:value="formData.url"
+                placeholder="http://localhost:8080/mcp"
+              />
+            </n-form-item>
 
-          <n-form-item :label="t('mcp.env')">
-            <n-input
-              v-model:value="formData.envStr"
-              type="textarea"
-              :rows="2"
-              placeholder="KEY=value&#10;ANOTHER_KEY=value"
-            />
-          </n-form-item>
-        </template>
-      </n-space>
+            <n-form-item :label="t('mcp.env')">
+              <n-input
+                key="mcp-env-input"
+                v-model:value="formData.envStr"
+                type="textarea"
+                :rows="2"
+                placeholder="KEY=value&#10;ANOTHER_KEY=value"
+              />
+            </n-form-item>
+          </div>
+        </n-space>
       </div>
 
       <template #footer>
@@ -302,6 +319,10 @@ const jsonText = ref('')
 // naive 的 n-input 实例：切到 JSON 模式后把光标放进去，用户点完"JSON"就能直接
 // Ctrl+V，不会再出现"光标还在表单里"的错位粘贴。
 const jsonInputRef = ref<any>(null)
+
+// 只有"新增 + JSON 模式"才走 JSON 分支；编辑既有服务器永远走表单。
+// 单独抽成 computed：模板里两处（分支条件、粘贴判断）共用一份口径，避免写岔。
+const jsonMode = computed(() => inputMode.value === 'json' && !isEditing.value)
 
 const jsonPlaceholder = `{
   "mcpServers": {
@@ -504,8 +525,8 @@ function stripCodeFence(text: string): string {
 }
 
 function onModalPaste(e: ClipboardEvent) {
-  // 编辑模式没有 JSON 分支；JSON 模式下交给 textarea 自己处理
-  if (isEditing.value || inputMode.value === 'json') return
+  // 编辑模式没有 JSON 分支；已经在 JSON 模式下就交给 textarea 自己处理
+  if (jsonMode.value) return
 
   const raw = e.clipboardData?.getData('text') ?? ''
   const text = stripCodeFence(raw)
