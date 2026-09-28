@@ -336,14 +336,21 @@
                         </template>
                       </div>
                       <!-- Live tool activity: parsed from the agent stream's
-                           tool markers and forwarded as SSE tool events. -->
+                           tool markers and forwarded as SSE tool events.
+                           Aggregated per tool name — one row per tool with
+                           success/failure counts keeps tool-heavy turns
+                           compact instead of one row per call. -->
                       <div v-if="msg.role === 'assistant' && msg._tools?.length" class="tool-strip">
-                        <div v-for="(te, ti) in visibleToolEvents(msg)" :key="ti" class="tool-row">
+                        <div v-for="agg in aggregatedToolRuns(msg)" :key="agg.name" class="tool-row">
                           <n-icon size="12" class="tool-row-icon"><SettingsOutline /></n-icon>
-                          <span class="tool-row-name">{{ te.name }}</span>
-                          <span v-if="te.type === 'tool_start' && te.success === undefined" class="tool-row-status running">{{ t('bots.toolRunning') }}</span>
-                          <span v-else-if="te.success === true" class="tool-row-status ok">✓ {{ te.duration }}</span>
-                          <span v-else-if="te.success === false" class="tool-row-status fail">✗ {{ te.duration }}</span>
+                          <span class="tool-row-name">{{ agg.name }}</span>
+                          <span v-if="agg.total > 1" class="tool-row-count">×{{ agg.total }}</span>
+                          <span class="tool-row-status" :class="{ running: agg.running > 0 }">
+                            <span v-if="agg.ok" class="tool-stat ok">✓{{ agg.ok }}</span>
+                            <span v-if="agg.fail" class="tool-stat fail">✗{{ agg.fail }}</span>
+                            <span v-if="agg.running" class="tool-stat running">{{ t('bots.toolRunning') }}</span>
+                            <span v-else-if="agg.lastDuration" class="tool-stat duration">{{ agg.lastDuration }}</span>
+                          </span>
                         </div>
                       </div>
                       <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
@@ -967,7 +974,7 @@ import { useBotsStore } from '@/stores/bots'
 import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
-import type { Bot, BotRoutine, BotMessage, BotMessageAttachment, BotToolEvent } from '@/api/bots'
+import type { Bot, BotRoutine, BotMessage, BotMessageAttachment } from '@/api/bots'
 import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload } from '@/api/rooms'
 import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
@@ -1517,10 +1524,44 @@ function retryFailedSend() {
 }
 
 // ========== Live tool activity (streaming turns) ==========
-// The store caps msg._tools at 20 entries; the bubble only shows the most
-// recent few to stay compact during long tool-heavy turns.
-function visibleToolEvents(msg: BotMessage): BotToolEvent[] {
-  return (msg._tools || []).slice(-4)
+// The store caps msg._tools at 20 entries. Instead of one row per call,
+// aggregate per tool name — "write_file ×5 ✓4 ✗1" — so a tool-heavy turn
+// stays one line per distinct tool. Running tools sort first (they're what
+// the user is waiting on), then most-recent activity; rows cap at 6.
+interface ToolRunAgg {
+  name: string
+  total: number
+  ok: number
+  fail: number
+  running: number
+  lastDuration?: string
+  lastIdx: number
+}
+
+function aggregatedToolRuns(msg: BotMessage): ToolRunAgg[] {
+  const byName = new Map<string, ToolRunAgg>()
+  const events = msg._tools || []
+  events.forEach((te, idx) => {
+    let agg = byName.get(te.name)
+    if (!agg) {
+      agg = { name: te.name, total: 0, ok: 0, fail: 0, running: 0, lastIdx: idx }
+      byName.set(te.name, agg)
+    }
+    agg.total++
+    agg.lastIdx = idx
+    if (te.success === undefined) {
+      agg.running++
+    } else if (te.success === true) {
+      agg.ok++
+      if (te.duration) agg.lastDuration = te.duration
+    } else {
+      agg.fail++
+      if (te.duration) agg.lastDuration = te.duration
+    }
+  })
+  const list = Array.from(byName.values())
+  list.sort((a, b) => (b.running - a.running) || (b.lastIdx - a.lastIdx))
+  return list.slice(0, 6)
 }
 
 // ========== Chat attachments (pending chips + message rendering) ==========
@@ -3604,19 +3645,42 @@ async function loadCandidates() {
 .tool-row-status {
   margin-left: auto;
   flex-shrink: 0;
-  opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.9;
 }
 
 .tool-row-status.running {
   animation: tool-pulse 1.2s ease-in-out infinite;
 }
 
-.tool-row-status.ok {
+.tool-row-count {
+  flex-shrink: 0;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.tool-stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-stat.ok {
   color: #b7f0c6;
 }
 
-.tool-row-status.fail {
+.tool-stat.fail {
   color: #ffc2cd;
+}
+
+.tool-stat.running {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.tool-stat.duration {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 10px;
 }
 
 @keyframes tool-pulse {
@@ -3633,12 +3697,24 @@ async function loadCandidates() {
   color: #555;
 }
 
-.agent-bubble .tool-row-status.ok {
+.agent-bubble .tool-row-count {
+  color: #999;
+}
+
+.agent-bubble .tool-stat.ok {
   color: #18a058;
 }
 
-.agent-bubble .tool-row-status.fail {
+.agent-bubble .tool-stat.fail {
   color: #d03050;
+}
+
+.agent-bubble .tool-stat.running {
+  color: #555;
+}
+
+.agent-bubble .tool-stat.duration {
+  color: #999;
 }
 
 /* ========== Failed-send retry bar ========== */
@@ -4224,6 +4300,21 @@ async function loadCandidates() {
   }
   .agent-bubble .tool-row {
     color: #9ca3af;
+  }
+  .tool-row-count {
+    color: rgba(255, 255, 255, 0.45);
+  }
+  .tool-stat.ok {
+    color: #6ee7a0;
+  }
+  .tool-stat.fail {
+    color: #fda4af;
+  }
+  .tool-stat.running {
+    color: #d1d5db;
+  }
+  .tool-stat.duration {
+    color: rgba(255, 255, 255, 0.45);
   }
   .retry-bar {
     border-color: #78350f;
