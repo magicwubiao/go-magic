@@ -514,7 +514,20 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	// Mark the bot as having a turn in flight so /running probes and
 	// /cancel requests can observe and stop it even after the SSE client
 	// disconnects (mobile browsers kill idle streams when backgrounded).
+	//
+	// Re-check that the bot is still registered: the message was popped
+	// earlier and DeleteBot may have removed the runtime in the meantime.
+	// Without this check the turn would run to completion for a bot that no
+	// longer exists and would clobber the cancel DeleteBot just installed.
 	m.mu.Lock()
+	if cur, ok := m.bots[key]; !ok || cur != rt {
+		m.mu.Unlock()
+		log.Infof("[BotMode] Dropping turn for deleted bot %s", rt.cfg.Name)
+		if msg.replyCh != nil {
+			msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s was deleted", rt.cfg.Name)}
+		}
+		return
+	}
 	rt.turnRunning = true
 	rt.turnCancel = cancel
 	m.mu.Unlock()

@@ -184,12 +184,15 @@ func TestManagerLifecycleAfterStop(t *testing.T) {
 
 // TestDeleteBotCancelsInFlightTurn: a deleted bot must not keep running its
 // current turn (it would keep burning tokens and write history for a bot that
-// no longer exists). Queued messages are dropped too.
+// no longer exists).
 //
-// The in-flight turn is simulated by installing a cancel func on the runtime
-// rather than by enqueueing a message: enqueueing would make the worker start a
-// real turn and overwrite turnCancel with its own context (which is exactly the
-// production path, but not a deterministic assertion).
+// The in-flight turn is simulated by installing a cancel func on the runtime.
+// We deliberately do NOT enqueue a pending message: the worker pops the queue
+// based on len(queue)>0 alone (turnRunning is a normal production state with
+// queued messages), so a queued message would let the worker start a real
+// turn and overwrite rt.turnCancel with its own cancel — exactly the flake
+// seen in CI (DeleteBot then canceled the worker's turn while the test's
+// channel never fired).
 func TestDeleteBotCancelsInFlightTurn(t *testing.T) {
 	mgr := newTestManager(t, "alice")
 
@@ -204,7 +207,6 @@ func TestDeleteBotCancelsInFlightTurn(t *testing.T) {
 	}
 	rt.turnRunning = true
 	rt.turnCancel = func() { once.Do(func() { close(canceled) }) }
-	rt.queue = append(rt.queue, pendingMessage{Text: "queued while running"})
 	mgr.mu.Unlock()
 
 	if err := mgr.DeleteBot("alice"); err != nil {

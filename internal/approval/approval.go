@@ -372,7 +372,8 @@ type Manager struct {
 	// Async save to avoid blocking on disk I/O
 	patternsDirty bool
 	historyDirty  bool
-	saveMu        sync.Mutex // prevents concurrent disk writes
+	saveMu        sync.Mutex     // prevents concurrent disk writes
+	savesWG       sync.WaitGroup // tracks in-flight async saves (see FlushPendingSaves)
 }
 
 // NewManager creates a new approval manager.
@@ -405,6 +406,34 @@ func NewManager(config *ApprovalConfig) (*Manager, error) {
 	m.loadHistory()
 
 	return m, nil
+}
+
+// savePatternsAsync launches savePatterns on a goroutine, tracked so that
+// FlushPendingSaves can await it.
+func (m *Manager) savePatternsAsync() {
+	m.savesWG.Add(1)
+	go func() {
+		defer m.savesWG.Done()
+		_ = m.savePatterns()
+	}()
+}
+
+// saveHistoryAsync launches saveHistory on a goroutine, tracked so that
+// FlushPendingSaves can await it.
+func (m *Manager) saveHistoryAsync() {
+	m.savesWG.Add(1)
+	go func() {
+		defer m.savesWG.Done()
+		_ = m.saveHistory()
+	}()
+}
+
+// FlushPendingSaves blocks until every async save started so far has finished
+// writing to disk. Tests use it before their temp GO_MAGIC_HOME is removed:
+// the bare `go m.saveX()` calls used to race with t.TempDir() cleanup and
+// fail with "unlinkat ...: directory not empty".
+func (m *Manager) FlushPendingSaves() {
+	m.savesWG.Wait()
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,7 +1123,7 @@ func (m *Manager) Approve(req *ApprovalRequest) error {
 	m.mu.Unlock()
 
 	// Save async to avoid blocking
-	go m.savePatterns()
+	m.savePatternsAsync()
 
 	// 记录历史，使 stats 完整
 	m.recordDecision(req, &ApprovalResult{
@@ -1139,7 +1168,7 @@ func (m *Manager) Deny(req *ApprovalRequest) error {
 	m.mu.Unlock()
 
 	// Save async to avoid blocking
-	go m.savePatterns()
+	m.savePatternsAsync()
 
 	// 记录历史，使 stats 完整
 	m.recordDecision(req, &ApprovalResult{
@@ -1189,7 +1218,7 @@ func (m *Manager) RemovePattern(pattern string) error {
 	m.patternsDirty = true
 	m.mu.Unlock()
 
-	go m.savePatterns()
+	m.savePatternsAsync()
 	return nil
 }
 
@@ -1200,7 +1229,7 @@ func (m *Manager) RemovePatternByHash(hash string) error {
 	m.patternsDirty = true
 	m.mu.Unlock()
 
-	go m.savePatterns()
+	m.savePatternsAsync()
 	return nil
 }
 
@@ -1659,7 +1688,7 @@ func (m *Manager) recordDecision(req *ApprovalRequest, result *ApprovalResult, s
 	m.invalidateStatsCache()
 
 	// 异步保存历史，避免阻塞热路径
-	go m.saveHistory()
+	m.saveHistoryAsync()
 }
 
 // RecordDecision records a specific approval decision to history (public API).
@@ -1865,8 +1894,8 @@ func (m *Manager) ClearHistory(olderThan time.Duration) {
 	m.mu.Unlock()
 
 	m.invalidateStatsCache()
-	go m.saveHistory()
-	go m.savePatterns()
+	m.saveHistoryAsync()
+	m.savePatternsAsync()
 }
 
 // ---------------------------------------------------------------------------

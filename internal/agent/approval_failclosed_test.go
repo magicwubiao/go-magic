@@ -16,6 +16,16 @@ import (
 // ① fail-closed 拒绝必须说真话（Denied automatically + 可行动指引）；
 // ② 真正的用户拒绝必须如实标注来源（CLI / interactive prompt）。
 // NewManager 会写 GetMagicHome()/approval，用 GO_MAGIC_HOME 隔离。
+// 审批记录的落盘是异步的（saveHistoryAsync/savePatternsAsync），必须先等
+// 它写完再让 t.TempDir() 删除目录，否则 CI 上会偶发
+// "unlinkat ...: directory not empty"。
+
+func waitForApprovalFlush(t *testing.T, mgr *approval.Manager) {
+	t.Helper()
+	// t.Cleanup 是 LIFO：这里晚于 t.Setenv/t.TempDir 注册，因此会先于
+	// 目录删除执行。
+	t.Cleanup(mgr.FlushPendingSaves)
+}
 
 func TestBeforeToolFailClosedDenialIsTruthful(t *testing.T) {
 	t.Setenv("GO_MAGIC_HOME", t.TempDir())
@@ -24,6 +34,7 @@ func TestBeforeToolFailClosedDenialIsTruthful(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager error: %v", err)
 	}
+	waitForApprovalFlush(t, mgr)
 	h := NewApprovalHookWithManager(mgr)
 
 	orig := stdinIsTerminal
@@ -58,6 +69,7 @@ func TestBeforeToolPromptFuncDenyAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager error: %v", err)
 	}
+	waitForApprovalFlush(t, mgr)
 	h := NewApprovalHookWithManager(mgr)
 	h.SetPromptFunc(func(command, reason string, riskLevel approval.RiskLevel) bool {
 		return false // user actively denies
@@ -88,6 +100,7 @@ func TestBeforeToolAutoStrategyApprovesInSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager error: %v", err)
 	}
+	waitForApprovalFlush(t, mgr)
 	h := NewApprovalHookWithManager(mgr)
 
 	_, dec, err := h.BeforeTool(context.Background(), &hooks.ToolCallHookRequest{
