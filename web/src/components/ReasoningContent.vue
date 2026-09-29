@@ -23,6 +23,10 @@
       class="final-content"
       v-html="renderedFinal"
     ></div>
+
+    <!-- 无正文提示：思考存在、正文为空且不允许提升时，明确告诉用户本回合没
+         有回答（例如回合被中断，模型停在工具调用那一步）。缺省不显示。 -->
+    <div v-if="showEmptyHint" class="empty-answer-hint">{{ emptyHint }}</div>
   </div>
 </template>
 
@@ -62,6 +66,9 @@ const props = defineProps<{
   // 分段渲染（timeline 切片）时，工具调用之间的中间思考段必须关闭此能力，
   // 否则纯思考段会被当作正文展开显示，而不是折叠的思考块。
   allowPromote?: boolean
+  // 正文为空的提示文案（例如"本回合未产生回答"）。仅在流式结束、思考非空、
+  // 正文为空且已禁止提升时显示；不传则保持纯折叠区。
+  emptyHint?: string
 }>()
 
 const { t } = useI18n()
@@ -130,8 +137,12 @@ const parsedContent = computed(() => {
     finalParts.push(content.substring(cursor))
   }
 
-  let reasoning = reasoningParts.map((s) => s.trim()).filter((s) => s).join('\n\n')
-  let final = finalParts.map((s) => s.trim()).filter((s) => s).join('\n\n')
+  // 判空要去掉零宽字符：后端对"只发起工具调用、正文为空"的 assistant 回合会写入
+  // U+200B 占位符。JS 的 trim() 不认为它是空白，于是 final 会被判成非空——
+  // 下面的"纯思考提升为正文"兜底失效，气泡里只剩一个渲染为空的正文块。
+  const hasVisibleText = (s: string): boolean => stripZeroWidth(s).trim() !== ''
+  let reasoning = reasoningParts.filter(hasVisibleText).map((s) => s.trim()).join('\n\n')
+  let final = finalParts.filter(hasVisibleText).map((s) => s.trim()).join('\n\n')
 
   // 兜底：无 <think> 标签时尝试 Markdown 标题式思考
   if (!low.includes(thinkOpen) && !reasoning && !final) {
@@ -221,6 +232,13 @@ const collapseRepetitiveThinking = (text: string): string => {
 
 const reasoningPart = computed(() => collapseRepetitiveThinking(parsedContent.value.reasoning))
 const finalPart = computed(() => parsedContent.value.final)
+
+// 正文为空提示：只在流式结束（流式期间正文本来就还没到）且思考非空、
+// 正文确实为空时显示。这样"回合被中断、只剩思考"的气泡给出明确交代，
+// 而不是把思考当成回答，也不是留一个空块。
+const showEmptyHint = computed(
+  () => !isStreaming.value && !!props.emptyHint && !!reasoningPart.value && !finalPart.value,
+)
 
 // ---- Markdown 渲染 ----
 const codeRenderer = (code: string, lang?: string): string => {
@@ -317,6 +335,12 @@ const renderedFinal = computed(() => {
   border-left: 2px solid #e5e7eb;
   padding-left: 14px;
   margin-bottom: 2px;
+}
+
+.empty-answer-hint {
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .thinking-block.collapsed {

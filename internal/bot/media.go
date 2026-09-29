@@ -182,6 +182,51 @@ func replaceLastUserParts(history []provider.Message, persisted []types.ContentP
 	return out
 }
 
+// stripInlineImageData 返回一份新历史：把其中所有内联 data: URL 图片部件
+// 换成一句文字提及（没有内联图片时原样返回，changed=false）。
+//
+// replaceLastUserParts 只看最后一条 user 消息，因此一条更早的内联图片
+// （回合被取消后重试留下的重复 user 消息、或旧版本写下的行）会一直留在
+// bots.db 里，并被之后每一轮整包重发。这里是落库前的兜底：base64 绝不
+// 进磁盘，也不留在 agent 内存历史里。
+func stripInlineImageData(history []provider.Message) ([]provider.Message, bool) {
+	changed := false
+	out := history
+	for i := range history {
+		parts := history[i].ContentParts
+		if len(parts) == 0 {
+			continue
+		}
+		hit := false
+		for _, p := range parts {
+			if p.Type == "image_url" && p.ImageURL != nil && strings.HasPrefix(p.ImageURL.URL, "data:") {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		if !changed {
+			out = append([]provider.Message(nil), history...)
+			changed = true
+		}
+		repl := make([]types.ContentPart, 0, len(parts))
+		for _, p := range parts {
+			if p.Type == "image_url" && p.ImageURL != nil && strings.HasPrefix(p.ImageURL.URL, "data:") {
+				repl = append(repl, types.ContentPart{
+					Type: "text",
+					Text: "[图片附件：原图未保留在历史中，如需重新查看请让用户重发]",
+				})
+				continue
+			}
+			repl = append(repl, p)
+		}
+		out[i].ContentParts = repl
+	}
+	return out, changed
+}
+
 // --- 群聊（rooms）附件支持 ---
 
 // botWorkdirAttachmentsDir 与 server 侧 workdirAttachmentsDir 同名：成员 bot

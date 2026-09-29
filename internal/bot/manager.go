@@ -635,7 +635,15 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		// Automatic retry policy:
 		//   - transient failures (rate limit, 5xx, offline, timeout) retry once;
 		//   - context overflow compacts the history then retries once.
-		if !msg.retried && cls.Transient {
+		//
+		// Never retry once the turn's own context is finished: runCtx's
+		// deadline IS the turn budget, so a retry cannot succeed — it only
+		// re-appends this turn's user message (for multimodal turns: the full
+		// prompt plus the base64 image) to the history and fails instantly.
+		// A timed-out room member used to leave exactly that behind: a
+		// duplicated user message that then rode along in every later turn of
+		// that room.
+		if !msg.retried && cls.Transient && runCtx.Err() == nil {
 			msg.retried = true
 			if cls.Code == FailureContextOverflow {
 				compact := compactHistory(ag.GetHistory())
@@ -667,15 +675,29 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	}
 	// Multimodal turns: swap the live data-URL image parts of this turn's
 	// user message back to their lightweight upload refs before the history
-	// hits disk (bot.db would otherwise grow by megabytes of base64 per
-	// image). The trimmed slice returned below is also what stays in the
-	// in-memory agent history — that's fine: historical images remain refs
-	// and the provider degrades them to a one-line "File: ..." mention.
+	// hits disk (bots.db would otherwise grow by megabytes of base64 per
+	// image).
+	//
+	// The ref form must also stay in the in-memory agent history — that is
+	// what makes "only the current turn's image is live, historical images
+	// degrade to a one-line File: mention" true. Writing the trimmed slice
+	// back only when the window truncated it left the base64 payload in
+	// memory, so every later turn of the same agent re-sent the image (a room
+	// agent serves every member turn of every round, which is what made
+	// image-heavy rooms crawl).
 	history := ag.GetHistory()
 	if len(msg.persistedParts) > 0 {
 		history = replaceLastUserParts(history, msg.persistedParts)
 	}
-	if trimmed, didTrim := m.saveHistory(sessionID, history); didTrim {
+	// Safety net: replaceLastUserParts only sees the LAST user message, so any
+	// earlier inline image (a duplicate user append left by an aborted turn,
+	// or a row written by an older build) would stay in bots.db and be
+	// re-sent — base64 and all — on every single later turn of that session.
+	// Degrade every remaining data-URL image to a text mention; the live copy
+	// of this turn's image was already swapped to its ref form above.
+	history, strippedInline := stripInlineImageData(history)
+	trimmed, didTrim := m.saveHistory(sessionID, history)
+	if didTrim || len(msg.persistedParts) > 0 || strippedInline {
 		// Keep the live agent's in-memory history aligned with what was saved,
 		// otherwise context grows unbounded even though disk stays trimmed.
 		ag.SetHistory(trimmed)
@@ -1141,10 +1163,15 @@ func (m *Manager) loadHistory(sessionID string) []provider.Message {
 // sanitizeBotHistory removes orphaned tool messages from bot chat history.
 func sanitizeBotHistory(history []provider.Message) []provider.Message {
 	cleaned := make([]provider.Message, 0, len(history))
-	for i, msg := range history {
+	for _, msg := range history {
 		if msg.Role == "tool" {
 			hasCaller := false
-			for j := i - 1; j >= 0; j-- {
+			// Walk backwards over the messages KEPT SO FAR. cleaned is shorter
+			// than history whenever an earlier orphan was dropped, so indexing
+			// it with the history index (i-1) reads past the end and panics —
+			// that is a real production crash (index out of range [9] with
+			// length 9) as soon as one droppable tool message precedes another.
+			for j := len(cleaned) - 1; j >= 0; j-- {
 				if cleaned[j].Role == "assistant" && len(cleaned[j].ToolCalls) > 0 {
 					for _, tc := range cleaned[j].ToolCalls {
 						if tc.ID == msg.ToolCallID {

@@ -61,6 +61,13 @@ export interface BotMessage {
   _streaming?: boolean
   /** Live tool activity captured during this turn's stream (not persisted server-side). */
   _tools?: BotToolEvent[]
+  /**
+   * Server flag: this assistant bubble ends on a tool step (it announced a tool
+   * call), so its text is that step's reasoning, not the turn's reply. An
+   * interrupted turn leaves exactly such a bubble behind — the UI must keep the
+   * reasoning collapsed instead of promoting it into the answer body.
+   */
+  hasToolCalls?: boolean
   /** Attachments persisted with a user message (upload refs, no inline base64). */
   attachments?: BotMessageAttachment[]
 }

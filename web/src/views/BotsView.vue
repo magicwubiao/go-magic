@@ -355,7 +355,12 @@
                       </div>
                       <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
                       <template v-if="msg.role === 'assistant' && msg.content">
-                        <ReasoningContent :content="msg.content" :streaming="msg._streaming" />
+                        <ReasoningContent
+                          :content="msg.content"
+                          :streaming="msg._streaming"
+                          :allow-promote="!isToolStep(msg)"
+                          :empty-hint="msg._streaming ? '' : t('bots.noAnswer')"
+                        />
                       </template>
                       <div
                         v-else-if="msg.content || !msg.attachments?.length"
@@ -1536,6 +1541,15 @@ interface ToolRunAgg {
   running: number
   lastDuration?: string
   lastIdx: number
+}
+
+// 是否为"工具步骤"气泡：气泡里的文本只是这一步的思考，不是回合的回答。
+// hasToolCalls 来自服务端（历史消息：该 assistant 消息带 tool_calls），
+// _tools 是本次流式期间收到的工具事件（直播气泡；切走/取消后仍会保留）。
+// 这类气泡必须禁止把 <think> 提升为正文，否则回合被中断时，用户看到的
+// "回复"其实是模型的英文内心独白。
+function isToolStep(msg: BotMessage): boolean {
+  return !!msg.hasToolCalls || !!msg._tools?.length
 }
 
 function aggregatedToolRuns(msg: BotMessage): ToolRunAgg[] {

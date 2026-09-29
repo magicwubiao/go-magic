@@ -621,6 +621,79 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, name stri
 }
 
 // handleBotMessages GET /api/bots/{name}/messages — canonical chat history.
+// botChatMsg is one bubble of the dashboard's bot chat. Consecutive assistant
+// messages are folded into a single bubble by mergeBotChatMessages.
+type botChatMsg struct {
+	id        string
+	role      string
+	from      string
+	content   string
+	parts     []types.ContentPart
+	timestamp int64
+	// hasToolCalls marks assistant messages that announced a tool call. Their
+	// content is that step's reasoning only (the answer arrives in a later
+	// assistant message), so the UI must not treat it as the turn's reply.
+	// An interrupted turn leaves exactly such a message behind — without this
+	// flag the dashboard promoted its <think> trail into the visible answer,
+	// showing the model's private monologue as the bot's reply.
+	hasToolCalls bool
+}
+
+// mergeBotChatMessages folds consecutive assistant messages into one bubble
+// (the dashboard shows a reply as a unit) while keeping every user message as
+// its own bubble.
+//
+// hasToolCalls is OR-ed across the group and survives the merge: a bubble that
+// contains a tool step is not a finished reply, which matters most when the
+// turn was interrupted (no later answer message) — see botChatMsg.hasToolCalls.
+func mergeBotChatMessages(entries []botChatMsg) []botChatMsg {
+	var merged []botChatMsg
+	var pending []botChatMsg
+
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if len(pending) == 1 {
+			merged = append(merged, pending[0])
+		} else {
+			var sb strings.Builder
+			var lastTS int64
+			hasToolCalls := false
+			for _, pa := range pending {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(pa.content)
+				hasToolCalls = hasToolCalls || pa.hasToolCalls
+				if pa.timestamp > lastTS {
+					lastTS = pa.timestamp
+				}
+			}
+			merged = append(merged, botChatMsg{
+				id:           pending[0].id,
+				role:         "assistant",
+				from:         pending[0].from,
+				content:      sb.String(),
+				timestamp:    lastTS,
+				hasToolCalls: hasToolCalls,
+			})
+		}
+		pending = nil
+	}
+
+	for _, e := range entries {
+		if e.role == "user" {
+			flush()
+			merged = append(merged, e)
+			continue
+		}
+		pending = append(pending, e)
+	}
+	flush()
+	return merged
+}
+
 func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -639,47 +712,7 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		jsonResponse(w, []interface{}{})
 		return
 	}
-	type chatMsg struct {
-		id        string
-		role      string
-		from      string
-		content   string
-		parts     []types.ContentPart
-		timestamp int64
-	}
-
-	var merged []chatMsg
-	var pendingAssistants []chatMsg
-
-	flushPending := func() {
-		if len(pendingAssistants) == 0 {
-			return
-		}
-		if len(pendingAssistants) == 1 {
-			merged = append(merged, pendingAssistants[0])
-		} else {
-			var sb strings.Builder
-			var lastTS int64
-			for _, pa := range pendingAssistants {
-				if sb.Len() > 0 {
-					sb.WriteString("\n\n")
-				}
-				sb.WriteString(pa.content)
-				if pa.timestamp > lastTS {
-					lastTS = pa.timestamp
-				}
-			}
-			merged = append(merged, chatMsg{
-				id:        pendingAssistants[0].id,
-				role:      "assistant",
-				from:      pendingAssistants[0].from,
-				content:   sb.String(),
-				timestamp: lastTS,
-			})
-		}
-		pendingAssistants = nil
-	}
-
+	entries := make([]botChatMsg, 0, len(sess.Messages))
 	for i, msg := range sess.Messages {
 		if msg.Role != "user" && msg.Role != "assistant" {
 			continue
@@ -698,22 +731,17 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 		} else {
 			ts = sess.UpdatedAt.UnixMilli()
 		}
-		entry := chatMsg{
-			id:        fmt.Sprintf("%s-%d", sess.ID, i),
-			role:      msg.Role,
-			from:      msg.From,
-			content:   msg.Content,
-			parts:     msg.ContentParts,
-			timestamp: ts,
-		}
-		if msg.Role == "user" {
-			flushPending()
-			merged = append(merged, entry)
-		} else {
-			pendingAssistants = append(pendingAssistants, entry)
-		}
+		entries = append(entries, botChatMsg{
+			id:           fmt.Sprintf("%s-%d", sess.ID, i),
+			role:         msg.Role,
+			from:         msg.From,
+			content:      msg.Content,
+			parts:        msg.ContentParts,
+			timestamp:    ts,
+			hasToolCalls: len(msg.ToolCalls) > 0,
+		})
 	}
-	flushPending()
+	merged := mergeBotChatMessages(entries)
 
 	result := make([]map[string]interface{}, 0, len(merged))
 	for _, m := range merged {
@@ -723,6 +751,12 @@ func (s *Server) handleBotMessages(w http.ResponseWriter, r *http.Request, name 
 			"from":      m.from,
 			"content":   m.content,
 			"timestamp": m.timestamp,
+		}
+		// Lets the dashboard keep a tool step's reasoning collapsed instead of
+		// promoting it into the reply body (see botChatMsg.hasToolCalls). Omitted
+		// for user messages and for turns that only produced an answer.
+		if m.hasToolCalls {
+			entry["hasToolCalls"] = true
 		}
 		// Multimodal user messages: the persisted parts are the lightweight
 		// ref form (file parts with /api/uploads URLs, no inline base64).

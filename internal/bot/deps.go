@@ -43,6 +43,14 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create provider for bot %q: %w", botCfg.Name, err)
 	}
+	// 视觉 / 文件转换策略必须装到 provider 实例上，理由与会话侧 server 的
+	// buildConvertConfig 完全一致：不装的话 BaseProvider.ConvertCfg 保持 nil，
+	// 转换层把每个模型都当纯文本模型，image_url 部件被静默换成
+	// "(image attachment omitted: current model does not support vision)"
+	// 占位文本 —— 模型因此永远看不到用户发的图，只能复述"当前模型不支持
+	// 视觉识别"，再试图装 OCR 自救（群聊里表现为整轮卡死）。会话链路一直在
+	// 装，bot 链路漏了。
+	provider.ApplyConvertConfig(prov, botConvertConfig(globalCfg, effectiveProvCfg, prov))
 
 	// Per-bot isolated workdir: bots/<name>/. Tools that root themselves in a
 	// working directory (terminal, file ops) stay inside this bot's sandbox,
@@ -92,6 +100,49 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 	}
 
 	return prov, registry, nil
+}
+
+// botConvertConfig derives the file-conversion / vision policy for one bot's
+// provider, mirroring Server.buildConvertConfig (internal/server/server.go) so
+// that a bot and a web session pinned to the same provider/model treat image
+// parts identically. Precedence:
+//
+//  1. an explicit per-provider "vision" declaration (config Providers[].vision)
+//     wins over name-based guessing, which is best-effort and lags new
+//     releases;
+//  2. otherwise provider.ModelSupportsVision(model), which itself consults the
+//     runtime learning cache before the catalog and the name heuristics.
+//
+// AutoVision stays on so the value is re-evaluated per request (the model can
+// be switched without rebuilding the agent). Without this policy installed,
+// the conversion layer never emits image_url parts and every picture a user
+// shares with a bot degrades to a "does not support vision" placeholder.
+func botConvertConfig(globalCfg *config.Config, provCfg config.ProviderConfig, prov provider.Provider) *provider.ConvertConfig {
+	conv := &provider.ConvertConfig{
+		StrategyName: "auto",
+		AutoVision:   true,
+	}
+	if globalCfg != nil {
+		conv.UploadURLPrefix = globalCfg.Server.UploadURLPrefix
+		conv.StrategyName = globalCfg.Server.GetFileStrategy()
+	}
+	// The live provider already carries the per-bot model pin (Models[0] was
+	// overwritten above), so prefer the instance over the config copy.
+	model := ""
+	if prov != nil {
+		if m, ok := prov.(interface{ GetModel() string }); ok {
+			model = m.GetModel()
+		}
+	}
+	if model == "" {
+		model = provCfg.GetCurrentModel()
+	}
+	conv.SupportVision = provider.ModelSupportsVision(model)
+	if provCfg.Vision != nil {
+		conv.VisionOverride = provCfg.Vision
+		conv.SupportVision = *provCfg.Vision
+	}
+	return conv
 }
 
 // skillFilter wraps a skills manager and hides any skill outside the bot's

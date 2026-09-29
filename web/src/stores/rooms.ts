@@ -13,6 +13,20 @@ export const useRoomsStore = defineStore('rooms', () => {
   // AbortController for the in-flight blocking round so the user can cancel.
   let sendAbort: AbortController | null = null
 
+  // Live-progress polling for the in-flight round. The backend runs members
+  // one after another and only returns from /send when the whole round is
+  // done — minutes later — so without polling the dashboard looks frozen
+  // exactly while the bots are working.
+  const POLL_INTERVAL_MS = 2000
+
+  function isAbortError(e: unknown): boolean {
+    return e instanceof DOMException && e.name === 'AbortError'
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
   async function loadRooms(): Promise<void> {
     loading.value = true
     try {
@@ -55,6 +69,11 @@ export const useRoomsStore = defineStore('rooms', () => {
    * round finishes, so the user message is optimistically appended locally and
    * replaced/kept by the authoritative results afterwards.
    *
+   * Because a round is serial over its members (each with its own turn
+   * budget), we ALSO poll the room log while it runs — see watchRound. That is
+   * what makes members show up one by one instead of the chat appearing to
+   * hang for minutes.
+   *
    * payload carries uploaded attachment refs (vision/files channels, same
    * shape as the bot chat payload).
    */
@@ -77,6 +96,29 @@ export const useRoomsStore = defineStore('rooms', () => {
       timestamp: Date.now(),
       attachments,
     })
+    // 回合期间持续拉取房间日志（乐观气泡在服务端回传该条消息后自动让位）。
+    let watching = true
+    const probe = { id: localId, text: message }
+    void (async () => {
+      while (watching) {
+        await delay(POLL_INTERVAL_MS)
+        if (!watching) return
+        try {
+          const [msgs, status] = await Promise.all([
+            roomsApi.getRoomMessages(roomId),
+            roomsApi.getRoomStatus(roomId),
+          ])
+          if (!watching) return
+          if (activeRoomId.value === roomId) applyServerMessages(msgs, probe)
+          // 阻塞的 POST 已经返回时由它的收尾逻辑负责；否则 running=false
+          // 说明这一轮跑完了 —— 但 POST 还在路上，交给它做最终合并。
+          if (!status.running) return
+        } catch {
+          /* 轮询失败不打断回合，下一拍重试 */
+        }
+      }
+    })()
+
     try {
       const res = await roomsApi.sendRoomMessage(roomId, message, target, sendAbort.signal, payload)
       messages.value = messages.value.filter(m => m.id !== localId)
@@ -87,14 +129,66 @@ export const useRoomsStore = defineStore('rooms', () => {
       }
       return res
     } catch (e) {
+      if (isAbortError(e)) {
+        // 我们本地不等了（取消，或等满这次调用的上限），但后端那一轮通常
+        // 还在跑：保留已经轮询到的成员回复，继续盯到这一轮真正结束，而不是
+        // 把用户的这条消息打成错误。
+        // 先停掉上面那个轮询协程，否则两个循环会各拉一份房间日志。
+        watching = false
+        await watchUntilRoundDone(roomId, probe)
+        return null
+      }
       // On failure, replace the optimistic bubble with a visible error marker.
       messages.value = messages.value.map(m =>
         m.id === localId ? { ...m, content: `⚠️ ${m.content}` } : m
       )
       throw e
     } finally {
+      watching = false
       sendAbort = null
       sending.value = false
+    }
+  }
+
+  /**
+   * Merge a server room log into the current list. The optimistic bubble is
+   * kept (appended last, where it belongs — nothing else can have arrived
+   * before the server echoes it) until the server echoes that same message.
+   */
+  function applyServerMessages(incoming: RoomMessage[], probe: { id: string; text: string }): void {
+    const echoed = incoming.some(m => isUserMessage(m) && m.content === probe.text)
+    if (echoed) {
+      messages.value = incoming
+      return
+    }
+    const local = messages.value.find(m => m.id === probe.id)
+    messages.value = local ? [...incoming, local] : incoming
+  }
+
+  function isUserMessage(m: RoomMessage): boolean {
+    // Same predicate BotsView uses to render the human's own bubbles.
+    return m.from === '@user' || m.from === 'user' || m.from.startsWith('user:')
+  }
+
+  /**
+   * Poll until this room's round is no longer running. Used after we stopped
+   * waiting on the blocking send so the reply of the last member still lands
+   * in the UI.
+   */
+  async function watchUntilRoundDone(roomId: string, probe: { id: string; text: string }): Promise<void> {
+    const deadline = Date.now() + 30 * 60 * 1000
+    while (Date.now() < deadline) {
+      try {
+        const [msgs, status] = await Promise.all([
+          roomsApi.getRoomMessages(roomId),
+          roomsApi.getRoomStatus(roomId),
+        ])
+        if (activeRoomId.value === roomId) applyServerMessages(msgs, probe)
+        if (!status.running) return
+      } catch {
+        /* keep polling */
+      }
+      await delay(POLL_INTERVAL_MS)
     }
   }
 

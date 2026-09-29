@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -57,6 +58,44 @@ func (s *Server) uploadsDirFor(sessionID string) string {
 		return filepath.Join(root, "_shared")
 	}
 	return filepath.Join(root, safe)
+}
+
+// uploadBucketExists reports whether a client-supplied upload bucket id maps to
+// a chat that actually exists.
+//
+// Plain dashboard chats live in the web session store. Bot chats and rooms keep
+// their attachments in <magicHome>/uploads/<sanitized id>/ and are owned by the
+// bot manager instead: bot session ids are "bot:<name>:chat" (sanitized by the
+// web client to "bot_<name>_chat") and rooms are "room:<id>" ("room_<id>").
+// Without those branches every bot/room upload failed the plain-session check
+// and silently landed in _shared — losing per-chat isolation, never being
+// reclaimed on bot deletion, and logging a spurious "not found" warning. This
+// mirrors the uploads GC lookup so a bucket that survives GC is also accepted
+// here.
+func (s *Server) uploadBucketExists(id string) bool {
+	if id == "" {
+		return false
+	}
+	if mgr := s.botManager; mgr != nil {
+		if strings.HasPrefix(id, "bot_") {
+			for _, cfg := range mgr.List() {
+				sid := bot.CanonicalSessionID(cfg.Name)
+				if fileNameSafeRe.ReplaceAllString(sid, "_") == id {
+					return true
+				}
+			}
+			return false
+		}
+		if strings.HasPrefix(id, "room_") {
+			_, err := mgr.GetRoom(strings.TrimPrefix(id, "room_"))
+			return err == nil
+		}
+	}
+	if s.sessionStore == nil {
+		return false
+	}
+	_, err := s.sessionStore.LoadSession(context.Background(), id)
+	return err == nil
 }
 
 // uploadsGCState is reserved for future per-server bookkeeping. We keep a
@@ -457,11 +496,11 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Validate session id: if provided, it must exist (or we silently bucket
 	// into _shared). This avoids filling uploads/ with random unknown ids.
-	if sessionID != "" && s.sessionStore != nil {
-		if _, err := s.sessionStore.LoadSession(context.Background(), sessionID); err != nil {
-			log.Warnf("[uploads] session id %q not found, falling back to _shared", sessionID)
-			sessionID = ""
-		}
+	// Bot chats and rooms live in the bot manager's store — see
+	// uploadBucketExists for why the plain session lookup is not enough.
+	if sessionID != "" && !s.uploadBucketExists(sessionID) {
+		log.Warnf("[uploads] session id %q not found, falling back to _shared", sessionID)
+		sessionID = ""
 	}
 
 	dstDir := s.uploadsDirFor(sessionID)

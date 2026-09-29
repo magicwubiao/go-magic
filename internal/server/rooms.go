@@ -69,6 +69,15 @@ func (s *Server) handleRoomByID(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case len(parts) == 2 && parts[1] == "status":
+		// 群聊回合可能跑几分钟（成员逐个发言，各自还有回合上限），阻塞的
+		// POST 不适合当进度信号：前端靠这个端点判断还要不要继续轮询房间
+		// 日志，从而在回合进行中就能看到成员回复。
+		if r.Method == http.MethodGet {
+			s.handleRoomStatus(w, r, id)
+		} else {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case len(parts) == 2 && parts[1] == "send":
 		if r.Method == http.MethodPost {
 			s.handleRoomSend(w, r, id)
@@ -244,6 +253,19 @@ func roomMessageToWire(msg bot.RoomMessage) map[string]interface{} {
 		out["attachments"] = atts
 	}
 	return out
+}
+
+// handleRoomStatus GET /api/rooms/{id}/status — reports whether a coordinated
+// round is currently in flight for this room. The blocking /send call is the
+// wrong progress signal for the dashboard: a round legitimately takes minutes
+// (members speak one after another, each with its own turn budget), so the UI
+// polls the room log while this says running.
+func (s *Server) handleRoomStatus(w http.ResponseWriter, r *http.Request, id string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"running": mgr.RoomRoundRunning(id)})
 }
 
 // handleRoomMessages GET /api/rooms/{id}/messages

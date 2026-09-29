@@ -144,7 +144,7 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, params map[string]inter
 		return info, nil
 	}
 
-	info["note"] = "No vision backend available: VISION_API_KEY/OPENAI_API_KEY is unset and the current chat model either is not configured or does not support image input. Set VISION_API_KEY (optionally VISION_BASE_URL / VISION_MODEL), or switch to a vision-capable chat model (e.g. via /api/model/set), or use the saved image path with such a model."
+	info["note"] = "No vision backend available: VISION_API_KEY/OPENAI_API_KEY is unset and the current chat model either is not configured or does not support image input. Set VISION_API_KEY (optionally VISION_BASE_URL / VISION_MODEL), or switch to a vision-capable chat model (e.g. via /api/model/set), or use the saved image path with such a model. Do not try to install OCR or image-processing packages as a workaround — report the situation to the user instead."
 	return info, nil
 }
 
@@ -167,7 +167,13 @@ func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (d
 	if len(provCfg.Models) > 0 {
 		modelName = provCfg.Models[0]
 	}
-	if strings.TrimSpace(modelName) == "" || !provider.ModelSupportsVision(modelName) {
+	// 用户显式声明（Providers[].vision）优先于名字/目录判定，与会话链路
+	// server.buildConvertConfig 的口径保持一致。
+	visionSupported := provider.ModelSupportsVision(modelName)
+	if provCfg.Vision != nil {
+		visionSupported = *provCfg.Vision
+	}
+	if strings.TrimSpace(modelName) == "" || !visionSupported {
 		return "", "", false
 	}
 
@@ -175,6 +181,20 @@ func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (d
 	if err != nil || prov == nil {
 		return "", "", false
 	}
+	// 必须把视觉策略装到 provider 上再发请求。不装的话转换层按
+	// SupportVision=false 处理，image_url 部件被替换成
+	// "(image attachment omitted: current model does not support vision)"
+	// 占位文本：模型看到的根本不是图片，只能回一句"我看不到图"，而这里又把
+	// 这段文本当作成功结果返回（ai_analysis=true）。模型据此认定视觉通道
+	// 可用却失效，转而安装 OCR 依赖自救（线上表现为群聊整轮卡死）。
+	// 装上之后判定与请求一致：支持视觉的模型真的收到图，不支持的会在
+	// 上面提前返回 ok=false，走明确的 note 分支。
+	provider.ApplyConvertConfig(prov, &provider.ConvertConfig{
+		StrategyName:   "auto",
+		AutoVision:     true,
+		SupportVision:  visionSupported,
+		VisionOverride: provCfg.Vision,
+	})
 
 	data, err := os.ReadFile(imagePath)
 	if err != nil {

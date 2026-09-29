@@ -204,6 +204,52 @@ func TestSanitizeHistoryDropsLeadingIllegalRoles(t *testing.T) {
 	}
 }
 
+// TestSanitizeHistoryOrphanBeforeToolDoesNotPanic is the agent-side twin of the
+// bot sanitizer crash: Pass 1 scanned `cleaned` (kept messages) with an index
+// taken from the source slice (`i-1`), so one orphaned tool message ahead of any
+// other tool message made the first cleaned[j] read go out of range — a fatal
+// panic inside the running agent, not just a rejected request.
+func TestSanitizeHistoryOrphanBeforeToolDoesNotPanic(t *testing.T) {
+	a := &Agent{}
+	a.history = []provider.Message{
+		{Role: "user", Content: "第一条"},
+		{Role: "tool", ToolCallID: "", Content: "stale result"},
+		{Role: "assistant", Content: "我看看"},
+		// Panic point before the fix (cleaned was 3 elements, j started at 3).
+		{Role: "tool", ToolCallID: "call_orphan", Content: "第二个孤儿"},
+		{Role: "user", Content: "第二条"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{
+			ID: "call_ok", Type: "function", Function: types.Function{Name: "read_file"},
+		}}},
+		{Role: "tool", ToolCallID: "call_ok", Content: "文件内容"},
+	}
+
+	a.sanitizeHistory()
+
+	for _, m := range a.history {
+		if m.Content == "stale result" || m.Content == "第二个孤儿" {
+			t.Fatalf("orphaned tool message survived sanitize: %q", m.Content)
+		}
+	}
+	var haveAssistant, haveTool bool
+	for _, m := range a.history {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == "call_ok" {
+					haveAssistant = true
+				}
+			}
+		}
+		if m.Role == "tool" && m.ToolCallID == "call_ok" && m.Content == "文件内容" {
+			haveTool = true
+		}
+	}
+	if !haveAssistant || !haveTool {
+		t.Fatalf("valid tool exchange dropped (assistant=%v tool=%v): %+v",
+			haveAssistant, haveTool, a.history)
+	}
+}
+
 // TestBuildLLMMessagesNeverProducesWhitespaceEmptyAssistant is the regression
 // test for the 1→9 violation-growth bug. The symptom was: every streaming
 // tool turn produced a new "sanitizing N message-alternation violation(s)"

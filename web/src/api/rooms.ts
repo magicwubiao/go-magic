@@ -70,11 +70,31 @@ export async function getRoomMessages(id: string): Promise<RoomMessage[]> {
   return request(`/rooms/${encodeURIComponent(id)}/messages`)
 }
 
+export interface RoomStatus {
+  /** True while a coordinated round is in flight (or queued) for this room. */
+  running: boolean
+}
+
+/**
+ * Round-in-flight probe. A room round is serial over its members and each
+ * member turn has its own multi-minute budget, so "is it still going?" cannot
+ * be inferred from the blocking send call — the UI polls this and the room log
+ * together to show members replying live.
+ */
+export async function getRoomStatus(id: string): Promise<RoomStatus> {
+  return request(`/rooms/${encodeURIComponent(id)}/status`)
+}
+
 /**
  * Blocking room send. A coordinated multi-bot round (up to max_rounds) can
  * easily exceed the default 30s request timeout, so this uses a dedicated
- * fetch with a 5-minute cap and no auto-retry (retrying a live room round
- * would double-post).
+ * fetch with its own cap and no auto-retry (retrying a live room round would
+ * double-post).
+ *
+ * The cap is only how long THIS call waits: the round keeps running on the
+ * backend, and the caller keeps polling getRoomStatus/getRoomMessages until
+ * it finishes (see stores/rooms.ts). Worst case is members × rounds turn
+ * timeouts, hence the generous 30 minutes.
  */
 export async function sendRoomMessage(
   id: string,
@@ -88,7 +108,7 @@ export async function sendRoomMessage(
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000)
+  const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000)
   const onOuterAbort = () => controller.abort()
   signal?.addEventListener('abort', onOuterAbort)
 

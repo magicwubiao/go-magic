@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
 // SummaryPrefix is prepended to compressed context summaries.
@@ -111,11 +113,62 @@ type CompressResult struct {
 }
 
 // Message represents a conversation message.
+//
+// ToolCalls/ToolCallID/ContentParts are carried through unchanged: Compress only
+// ever copies the protected head/tail verbatim and synthesizes one system
+// summary, so whatever is set here comes back out for the messages that survive.
+// They must not be dropped at this boundary — a tool result whose owning
+// tool_call id was lost is structurally invalid for every provider (and a
+// multimodal turn loses its attachments), even though the compaction itself is
+// perfectly legal.
 type Message struct {
-	Role      string
-	Content   string
-	Name      string // For tool messages
-	Timestamp int64  // Optional timestamp for message ordering
+	Role         string
+	Content      string
+	Name         string // For tool messages
+	Timestamp    int64  // Optional timestamp for message ordering
+	ToolCalls    []types.ToolCall
+	ToolCallID   string
+	ContentParts []types.ContentPart
+}
+
+// safeHeadEnd extends the protected head when its cut would land in the middle
+// of a tool exchange: the last kept message announced tool calls, so its results
+// are pulled into the head as well. The results are the model's own observations
+// — keeping the announcement while summarising the results away is both
+// structurally invalid and lossy.
+func safeHeadEnd(messages []Message, end int) int {
+	for end > 0 && end < len(messages) && messages[end].Role == "tool" {
+		owner := end - 1
+		for owner > 0 && messages[owner].Role == "tool" {
+			owner--
+		}
+		if !toolCallingAssistant(messages[owner]) {
+			break
+		}
+		end++
+	}
+	return end
+}
+
+// safeTailStart walks the tail's cut point back over tool results so the
+// assistant that announced them stays attached (same rule as cortex's
+// findSafeKeepStart, applied at this boundary too). After the loop the kept
+// region starts on a non-tool message, so no result can be orphaned by the cut.
+func safeTailStart(messages []Message, headEnd, start int) int {
+	if start < headEnd {
+		return start
+	}
+	if start > len(messages) {
+		start = len(messages)
+	}
+	for start > headEnd && start < len(messages) && messages[start].Role == "tool" {
+		start--
+	}
+	return start
+}
+
+func toolCallingAssistant(m Message) bool {
+	return m.Role == "assistant" && len(m.ToolCalls) > 0
 }
 
 // Compress compresses the message list by summarizing middle turns.
@@ -129,10 +182,28 @@ func (c *Compressor) Compress(messages []Message, systemPrompt string) (*Compres
 		}, nil
 	}
 
-	// Split into protected and compressible sections
-	head := messages[:c.ProtectFirstN]
-	tail := messages[len(messages)-c.ProtectLastN:]
-	middle := messages[c.ProtectFirstN : len(messages)-c.ProtectLastN]
+	// Split into protected and compressible sections. Both cut points are first
+	// shifted off a tool exchange: a count-based boundary can land between an
+	// assistant's tool_calls and its results, and either surviving half is
+	// structurally invalid for every provider (an assistant with unclaimed
+	// tool_calls, or a tool result with no owner) — the load-time sanitizers then
+	// have to throw the results away, so the model loses observations it made.
+	// Cortex's ContextCompressor does the same for its tail boundary
+	// (findSafeKeepStart).
+	headEnd := safeHeadEnd(messages, c.ProtectFirstN)
+	tailStart := safeTailStart(messages, headEnd, len(messages)-c.ProtectLastN)
+	if tailStart <= headEnd || tailStart > len(messages) {
+		// One unsplittable exchange: better to keep the history as-is than to
+		// summarise it into a payload the provider will reject.
+		return &CompressResult{
+			Messages:        messages,
+			OriginalCount:   len(messages),
+			CompressedCount: len(messages),
+		}, nil
+	}
+	head := messages[:headEnd]
+	middle := messages[headEnd:tailStart]
+	tail := messages[tailStart:]
 
 	// Generate summary of middle section
 	summary, err := c.generateSummary(middle, systemPrompt)

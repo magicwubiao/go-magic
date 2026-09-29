@@ -1646,6 +1646,7 @@ export default {
     exportCount: '{count} messages',
     sourceRoutine: 'Routine',
     sourceRoom: 'Room message',
+    noAnswer: 'No answer was produced for this turn (interrupted, or the model emitted reasoning only)',
     toolRunning: 'Running…',
     sendFailed: 'Last send failed',
     retrySend: 'Retry',

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1085,6 +1086,13 @@ Please provide a comprehensive, well-structured final response based on these su
 		// 引导注入：与流式循环一致（见 guide.go）。
 		a.drainGuidesIntoHistory()
 
+		// 上下文压缩：位置与 RunConversation 一致（都在 buildLLMMessages
+		// 之前）。媒体循环此前漏了这一步，而压缩阈值只有 8000 tokens ⇒
+		// 带图会话的历史只增不减：群聊成员每次发言都把整包历史（实测单
+		// 成员会话已到 177KB、含多份内联图片）重新发给模型，回合越跑越
+		// 慢，最后撞满回合上限、一个字都产不出来。
+		a.maybeCompressContext()
+
 		// Build LLM request. buildLLMMessages strips <think> reasoning trails
 		// from the outbound copy — see stripThinkContent for why.
 		req := &hooks.LLMHookRequest{
@@ -1144,6 +1152,18 @@ Please provide a comprehensive, well-structured final response based on these su
 		if err != nil {
 			lastErr = err
 			a.Emit(bus.EventKindError, err.Error())
+			// 已死的 ctx 无从恢复：与 RunConversation 一致，立即以明确的
+			// 原因收场，而不是继续往一个已经过期的上下文里发请求。
+			if cerr := ctx.Err(); cerr != nil {
+				return "", fmt.Errorf("conversation aborted after %d turn(s): %w", a.iterationCount+1, cerr)
+			}
+			// 请求"挂住"吃掉的是一次传输超时（默认 180s），而回合预算通常
+			// 只有几分钟：原地重试只会再挂一次，最终整个回合一个字都没有
+			// （bot 侧表现为 turn_timeout，群聊里则该成员白白占用整轮）。
+			// 直接失败，让调用方立即记录原因并推进。
+			if llmRequestTimedOut(err) {
+				return "", fmt.Errorf("provider request timed out after %d turn(s): %w", a.iterationCount+1, err)
+			}
 			continue
 		}
 
@@ -1255,6 +1275,99 @@ Please provide a comprehensive, well-structured final response based on these su
 	}
 	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
 		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
+}
+
+// llmRequestTimedOut reports whether an LLM request failed because of a
+// transport-level timeout rather than a response the provider actually
+// produced.
+//
+// Why it matters: the provider's HTTP client aborts a hung request after
+// DefaultTimeoutDuration (180s). A bot turn budget is typically only a few
+// minutes, so an instant retry after such a hang re-enters the same stall and
+// the turn ends with zero output — observed in production as a group-chat
+// member burning the whole 5-minute turn timeout and returning nothing, while
+// the room round waited on it the entire time. Callers should fail fast
+// instead of retrying a request that timed out at the transport layer.
+func llmRequestTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// maybeCompressContext summarizes the middle of a.history once the estimated
+// token count crosses the compressor's threshold, replacing it with one system
+// summary message while keeping the protected head/tail.
+//
+// The protected head/tail are chosen by MESSAGE COUNT, so the cut can land in
+// the middle of a tool exchange. Everything the kept messages need to stay
+// structurally valid must therefore survive the round trip through
+// compress.Message: dropping tool_calls / tool_call_id here (a) leaves "tool role
+// message without its assistant tool_calls" — which providers reject with an
+// opaque 400 — and (b) makes the history sanitizers discard those tool results on
+// the next load, silently starving the model of its own observations. Dropping
+// content_parts likewise throws away multimodal attachments mid-conversation.
+//
+// Genuinely split pairs (owner summarised away) are still handled downstream by
+// sanitizeHistory Pass 1/Pass 4 — the job here is simply not to destroy data.
+func (a *Agent) maybeCompressContext() {
+	if a.compressor == nil {
+		return
+	}
+	totalChars := 0
+	for _, msg := range a.history {
+		totalChars += messageWeight(msg)
+	}
+	if !a.compressor.ShouldCompress(totalChars / 4) { // rough token estimate
+		return
+	}
+
+	a.Emit(bus.EventKindTurnStart, map[string]interface{}{
+		"type":   "progress",
+		"phase":  "compressing",
+		"detail": "Context window full, compressing history...",
+	})
+
+	msgs := make([]compress.Message, 0, len(a.history))
+	for _, msg := range a.history {
+		if msg.Role == "system" {
+			continue
+		}
+		msgs = append(msgs, compress.Message{
+			Role:         msg.Role,
+			Content:      msg.Content,
+			ToolCalls:    msg.ToolCalls,
+			ToolCallID:   msg.ToolCallID,
+			ContentParts: msg.ContentParts,
+		})
+	}
+	result, err := a.compressor.Compress(msgs, "")
+	if err != nil || result == nil {
+		return
+	}
+
+	// Replace history with the compressed version: system prompts keep their
+	// original position at the head, then the compressor's head/summary/tail.
+	newHistory := make([]provider.Message, 0, len(a.history))
+	for _, msg := range a.history {
+		if msg.Role == "system" {
+			newHistory = append(newHistory, msg)
+		}
+	}
+	for _, msg := range result.Messages {
+		newHistory = append(newHistory, provider.Message{
+			Role:         msg.Role,
+			Content:      msg.Content,
+			ToolCalls:    msg.ToolCalls,
+			ToolCallID:   msg.ToolCallID,
+			ContentParts: msg.ContentParts,
+		})
+	}
+	a.history = newHistory
 }
 
 // RunConversation runs a conversation with automatic tool execution
@@ -1370,45 +1483,7 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Check if context compression is needed
-		if a.compressor != nil {
-			totalChars := 0
-			for _, msg := range a.history {
-				totalChars += messageWeight(msg)
-			}
-			if a.compressor.ShouldCompress(totalChars / 4) { // rough token estimate
-				a.Emit(bus.EventKindTurnStart, map[string]interface{}{
-					"type":   "progress",
-					"phase":  "compressing",
-					"detail": "Context window full, compressing history...",
-				})
-				msgs := make([]compress.Message, 0, len(a.history))
-				for _, msg := range a.history {
-					if msg.Role != "system" {
-						msgs = append(msgs, compress.Message{
-							Role:    msg.Role,
-							Content: msg.Content,
-						})
-					}
-				}
-				result, err := a.compressor.Compress(msgs, "")
-				if err == nil && result != nil {
-					// Replace history with compressed version
-					newHistory := make([]provider.Message, 0)
-					for _, msg := range a.history {
-						if msg.Role == "system" {
-							newHistory = append(newHistory, msg)
-						}
-					}
-					for _, msg := range result.Messages {
-						newHistory = append(newHistory, provider.Message{
-							Role:    msg.Role,
-							Content: msg.Content,
-						})
-					}
-					a.history = newHistory
-				}
-			}
-		}
+		a.maybeCompressContext()
 
 		// Build LLM request. buildLLMMessages strips <think> reasoning trails
 		// from the outbound copy — see stripThinkContent for why.
@@ -1465,7 +1540,7 @@ Please provide a comprehensive, well-structured final response based on these su
 				a.provider.Name(), len(req.Messages), len(a.tools))
 			resp, err = oa.ChatWithTools(ctx, req.Messages, req.Tools)
 		} else {
-			log.Warnf("[Agent:RunConversationWithMedia] Falling back to Chat (no tools): provider=%s, hasToolIface=%v, toolsCount=%d",
+			log.Warnf("[Agent:RunConversation] Falling back to Chat (no tools): provider=%s, hasToolIface=%v, toolsCount=%d",
 				a.provider.Name(), ok, len(a.tools))
 			resp, err = a.provider.Chat(ctx, req.Messages)
 		}
@@ -1891,6 +1966,10 @@ Please provide a comprehensive, well-structured final response based on these su
 		// 必须在 buildLLMMessages 之前，保证本次 LLM 调用就能看到；
 		// 迭代 0 时引导会并入刚追加的本回合输入（合并策略见 applyGuides）。
 		a.drainGuidesIntoHistory()
+
+		// 上下文压缩：与另外三条循环同位置（buildLLMMessages 之前）。
+		// web 聊天带图走的就是这条流式媒体循环，此前同样漏了压缩。
+		a.maybeCompressContext()
 
 		// Build LLM request. buildLLMMessages strips <think> reasoning trails
 		// from the outbound copy — see stripThinkContent for why.
@@ -3569,34 +3648,12 @@ func normalizeRepWord(w string) string {
 // reasoning models imitate and progressively amplify their own deliberation,
 // which degenerates into repetitive "thinking loops" across turns. Stripping
 // them from the outbound request cuts that feedback loop.
+//
+// Implementation lives in the provider package so non-agent callers (the bot
+// group chat broadcasts each member's reply into a shared room log) strip
+// with exactly the same rules.
 func stripThinkContent(s string) string {
-	if s == "" || !strings.Contains(s, "<think") {
-		return s
-	}
-	low := strings.ToLower(s)
-	var b strings.Builder
-	cursor := 0
-	for {
-		relIdx := strings.Index(low[cursor:], "<think>")
-		if relIdx == -1 {
-			b.WriteString(s[cursor:])
-			break
-		}
-		openIdx := cursor + relIdx
-		b.WriteString(s[cursor:openIdx])
-		closeRel := strings.Index(low[openIdx:], "</think>")
-		if closeRel == -1 {
-			// Unterminated <think>: drop everything from the opening tag on.
-			break
-		}
-		cursor = openIdx + closeRel + len("</think>")
-		// Skip a single newline right after the closing tag (the agent adds
-		// one when wrapping reasoning) to avoid stacking blank lines.
-		if cursor < len(s) && s[cursor] == '\n' {
-			cursor++
-		}
-	}
-	return strings.TrimSpace(b.String())
+	return provider.StripThinkTrails(s)
 }
 
 // thinkPlaceholder is used when stripping would leave an assistant message
@@ -3817,10 +3874,14 @@ func collapseConsecutive(msgs []provider.Message) []provider.Message {
 func (a *Agent) sanitizeHistory() {
 	// Pass 1: drop orphaned tool messages (existing behavior).
 	cleaned := make([]provider.Message, 0, len(a.history))
-	for i, m := range a.history {
+	for _, m := range a.history {
 		if m.Role == "tool" {
 			hasCaller := false
-			for j := i - 1; j >= 0; j-- {
+			// Walk the messages KEPT SO FAR, never the source slice: cleaned
+			// shrinks every time an orphan is dropped, so an index taken from
+			// the source (i-1) can be past cleaned's end and panic — same crash
+			// as the bot-side sanitizer (index out of range [9] with length 9).
+			for j := len(cleaned) - 1; j >= 0; j-- {
 				if cleaned[j].Role == "assistant" && len(cleaned[j].ToolCalls) > 0 {
 					for _, tc := range cleaned[j].ToolCalls {
 						if tc.ID == m.ToolCallID {

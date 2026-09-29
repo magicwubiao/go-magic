@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/magicwubiao/go-magic/internal/provider"
 	sessionstore "github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -63,6 +65,10 @@ type roomRuntime struct {
 	cfg       *RoomConfig
 	triggerCh chan roomRequest
 	stopCh    chan struct{}
+	// roundRunning 为 true 表示协调器正在跑一轮（成员逐个发言）。房间回合
+	// 合法耗时可达数分钟，前端靠它判断"还该不该继续轮询房间日志"，而不是
+	// 傻等那个阻塞的 POST。
+	roundRunning atomic.Bool
 }
 
 // NewRoomID generates a unique room identifier.
@@ -210,6 +216,22 @@ func (m *Manager) GetRoom(id string) (*RoomConfig, error) {
 	return m.store.LoadRoom(id)
 }
 
+// RoomRoundRunning 报告该房间此刻是否有回合在进行（含已排队尚未开跑的）。
+// 供 Web 端判断是否继续轮询房间日志：一轮群聊会跑几分钟，界面不能只靠
+// 那个阻塞的 POST 来知道"还在进行"。
+func (m *Manager) RoomRoundRunning(roomID string) bool {
+	key := strings.ToLower(roomID)
+	m.mu.Lock()
+	rt, ok := m.rooms[key]
+	m.mu.Unlock()
+	if !ok || rt == nil {
+		return false
+	}
+	// 排队的请求同样算"进行中"：协调器逐个消费，中途会出现
+	// roundRunning=false 的瞬间，只看它会误报"已结束"。
+	return rt.roundRunning.Load() || len(rt.triggerCh) > 0
+}
+
 // RoomMessages returns the shared message history of a room (most recent
 // first, capped at maxMessages).
 func (m *Manager) RoomMessages(roomID string) ([]RoomMessage, error) {
@@ -322,7 +344,9 @@ func (m *Manager) roomLoop(rt *roomRuntime) {
 		case <-rt.stopCh:
 			return
 		case req := <-rt.triggerCh:
+			rt.roundRunning.Store(true)
 			m.runRoomRound(rt, req)
+			rt.roundRunning.Store(false)
 		}
 	}
 }
@@ -356,6 +380,16 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		if m.roomClosed(rt) {
 			break
 		}
+		// 活图只跟首轮投递：req.Persisted 会被每一个成员、每一轮重复使用，
+		// 一次用户发图会变成 4 成员 × 3 轮 = 12 次投递，每投一次成员就重新
+		// 识别一次（单次识别十几秒到几分钟，这正是群聊"卡住"的主因之一）。
+		// 第二轮起成员自己的会话历史里已经有这张图（落库为轻量引用），
+		// 房间日志也记着附件，工作目录里的副本同样还在。
+		turnReq := req
+		if round > 0 {
+			turnReq.Persisted = nil
+			turnReq.Items = nil
+		}
 		anySpoke := false
 		for _, member := range members {
 			if m.roomClosed(rt) {
@@ -367,7 +401,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			}
 			history, _ := m.loadRoomHistory(room.ID)
 			prompt := m.buildRoomPrompt(room, member, history, round, maxRounds)
-			reply, err := m.sendRoomTurn(rt, member, prompt, req)
+			reply, err := m.sendRoomTurn(rt, member, prompt, turnReq)
 			if err != nil {
 				// Room torn down mid-turn: stop silently. Appending the error
 				// here would recreate the room log DeleteRoom just removed.
@@ -378,7 +412,12 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 				m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")", nil)
 				continue
 			}
-			reply = strings.TrimSpace(reply)
+			// 房间日志是广播面：人和其他成员都会读它，而 buildRoomPrompt
+			// 又会把整份日志灌进每个成员的下一轮提示词。模型内部的
+			// <think> 独白绝不能进这里——实测它让每个成员的提示词多背
+			// ~12KB 他人内心独白，还带着"视觉不可用，去装 OCR"这类已经
+			// 过期的结论，下一轮成员照着重做一遍。
+			reply = broadcastReplyText(reply)
 			if reply == "" {
 				continue
 			}
@@ -431,6 +470,11 @@ func (m *Manager) sendRoomTurn(rt *roomRuntime, botName, text string, req roomRe
 	msg := pendingMessage{
 		From:   "room:" + rt.cfg.ID,
 		RoomID: strings.ToLower(rt.cfg.ID),
+		// persistedParts 是落库形态：回合开始时 ContentParts 里的图片引用会被
+		// 还原成带字节的 base64 部件送给模型，这份轻量副本让 manager 在写盘前
+		// 把该条消息换回上传引用（与单聊 SendToBotWithMedia 同一语义）。少了它，
+		// base64 会进 bots.db 并留在 agent 内存历史里，被之后每一轮重放。
+		persistedParts: req.Persisted,
 	}
 	if len(req.Persisted) > 0 {
 		parts := append([]types.ContentPart{{Type: "text", Text: text}}, req.Persisted...)
@@ -572,6 +616,21 @@ func (m *Manager) saveRoomHistory(roomID string, msgs []RoomMessage) {
 	if err := m.sessions.SaveSession(ctx, sess); err != nil {
 		log.Warnf("[BotMode] Failed to persist room %s log: %v", roomID, err)
 	}
+}
+
+// broadcastReplyText prepares one member's reply for the shared room log.
+//
+// The room log is a broadcast surface: humans read it in the dashboard, and
+// buildRoomPrompt pastes the whole thing into every member's next prompt. The
+// model's internal <think> trail therefore must not ride along — it bloats
+// every member's prompt (~12KB of other bots' monologue per turn in practice),
+// pushes members to imitate each other's deliberation, and carries stale
+// conclusions ("vision is unavailable, install OCR") that the next member then
+// acts on. Zero-width placeholders left by an empty reply are stripped as
+// well, so a reply that was nothing but thinking collapses to "" and the
+// caller skips it instead of broadcasting a blank bubble.
+func broadcastReplyText(reply string) string {
+	return provider.SanitizeAssistantContent(provider.StripThinkTrails(reply))
 }
 
 // needsHuman detects an escalation request: reply opens with @user.

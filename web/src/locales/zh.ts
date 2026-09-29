@@ -1646,6 +1646,7 @@ export default {
     exportCount: '{count} 条消息',
     sourceRoutine: '定时任务',
     sourceRoom: '群聊消息',
+    noAnswer: '本回合未产生回答（已中断，或模型只输出了思考）',
     toolRunning: '执行中…',
     sendFailed: '上次发送失败',
     retrySend: '重试',

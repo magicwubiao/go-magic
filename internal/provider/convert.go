@@ -109,6 +109,53 @@ func SanitizeAssistantContent(content string) string {
 	return StripZeroWidth(StripLegacyPlaceholder(content))
 }
 
+// StripThinkTrails removes <think>...</think> reasoning blocks (and any
+// unterminated trailing <think>) from content.
+//
+// Two distinct reasons to strip:
+//   - Outbound: feeding a model its own deliberation back verbatim makes
+//     reasoning models imitate and progressively amplify it (reasoning
+//     loops). The agent loop strips on the way out (buildLLMMessages).
+//   - Broadcast: anywhere one agent's reply is handed to ANOTHER agent or to
+//     a human-readable log must be stripped too. A group chat copies each
+//     member's reply into the shared room log, and that log is then pasted
+//     into every member's next prompt — so raw thinking trails became 12KB
+//     of other bots' internal monologue per turn, including their stale
+//     conclusions (e.g. "vision is unavailable, let me install OCR"), which
+//     the next member then acted on.
+//
+// Zero-width placeholders (U+200B etc.) left behind by an empty reply are
+// removed by the caller as needed — see SanitizeAssistantContent.
+func StripThinkTrails(content string) string {
+	if content == "" || !strings.Contains(content, "<think") {
+		return content
+	}
+	low := strings.ToLower(content)
+	var b strings.Builder
+	cursor := 0
+	for {
+		relIdx := strings.Index(low[cursor:], "<think>")
+		if relIdx == -1 {
+			b.WriteString(content[cursor:])
+			break
+		}
+		openIdx := cursor + relIdx
+		b.WriteString(content[cursor:openIdx])
+		closeRel := strings.Index(low[openIdx:], "</think>")
+		if closeRel == -1 {
+			// Unterminated <think>: drop everything from the opening tag on.
+			break
+		}
+		cursor = openIdx + closeRel + len("</think>")
+		// Skip a single newline right after the closing tag (the agent adds
+		// one when wrapping reasoning) to avoid stacking blank lines.
+		if cursor < len(content) && content[cursor] == '\n' {
+			cursor++
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // SplitThinkPrefix splits a leading "<think>...</think>" block off assistant
 // content. The agent layer stores provider reasoning inline as a leading
 // think block (wrapLLMReasoning) so the UI and session persistence can show
@@ -925,7 +972,7 @@ func convertContentPart(part types.ContentPart, config *ConvertConfig) map[strin
 			// base64 payloads), and echoing them back as "text" blows up the
 			// token budget or gets the request rejected outright.
 			// NOTE: avoid square brackets — GLM mimics them in its output.
-			desc := "(image attachment omitted: current model does not support vision)"
+			desc := "(image attachment omitted: the current model cannot view images. Do not install OCR or image libraries; tell the user the image cannot be viewed and suggest a vision-capable model)"
 			log.Debugf("[convertContentPart] Converting image_url to text placeholder")
 			return map[string]interface{}{
 				"type": "text",
@@ -1003,7 +1050,7 @@ func convertFilePart(file *types.FileInfo, config *ConvertConfig) map[string]int
 			// Model doesn't support vision: short placeholder, never inline
 			// the URL (data URLs are multi-MB base64 payloads).
 			// NOTE: avoid square brackets — GLM mimics them in its output.
-			return buildTextPart("(image attachment omitted: current model does not support vision)")
+			return buildTextPart("(image attachment omitted: the current model cannot view images. Do not install OCR or image libraries; tell the user the image cannot be viewed and suggest a vision-capable model)")
 		}
 		return map[string]interface{}{
 			"type": "image_url",

@@ -11,6 +11,7 @@
           v-if="seg.kind === 'text' && textSlices[idx]"
           :content="textSlices[idx]"
           :streaming="!!streaming"
+          :allow-promote="!isIntermediateSlice(idx)"
         />
         <ToolCallCard
           v-else-if="seg.kind === 'tool' && toolsById[seg.toolCallId]"
@@ -63,6 +64,19 @@ const normalizedSegments = computed<StreamSegment[]>(() => {
 })
 
 const hasTimeline = computed(() => normalizedSegments.value.length > 0)
+
+// 中间思考段 = 后面还有工具调用的文本段。那段文本只是"这一步在想什么"，
+// 不是回合的回答（回合可能还没结束，例如被中断），因此禁止 ReasoningContent
+// 把它提升为正文；否则时间线里会把模型的思考当回答展示。
+// 最后一个文本段（其后不再有 tool 段）才是回答，保持默认可提升。
+function isIntermediateSlice(idx: number): boolean {
+  const segs = normalizedSegments.value
+  for (let i = idx + 1; i < segs.length; i++) {
+    if (segs[i].kind === 'tool') return true
+    if (segs[i].kind === 'text') return false
+  }
+  return false
+}
 
 // ---- tools 按 id 索引 ----
 const toolsById = computed<Record<string, ToolCallEvent>>(() => {
