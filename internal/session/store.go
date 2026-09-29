@@ -647,31 +647,9 @@ func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string, userSet b
 	return nil
 }
 
-// UpdatePlanMode toggles plan-guided execution for a session and persists it.
-// If the session row does not exist yet, it is created with the flag set.
-func (s *Store) UpdatePlanMode(ctx context.Context, id string, enabled bool) error {
-	planModeInt := 0
-	if enabled {
-		planModeInt = 1
-	}
-	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET plan_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, planModeInt, id)
-	if err != nil {
-		return err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		// 会话行尚不存在（可能还没发过消息）：插入一条带 flag 的空行，
-		// 让开关状态在会话真正创建前也能被持久化。
-		_, err = s.db.ExecContext(ctx,
-			`INSERT OR IGNORE INTO sessions (id, profile, platform, plan_mode, updated_at) VALUES (?, '', '', ?, CURRENT_TIMESTAMP)`,
-			id, planModeInt)
-		return err
-	}
-	return nil
-}
+// UpdatePlanMode 已随计划模式（plan mode）清理删除 —— 2026-09-29。
+// plan_mode 列、Session.PlanMode 字段与增删改查里的读写一律保留（免迁移），
+// 只是不再有代码修改它。历史见 .workbuddy/reviews/2026-09-29-plan-mode-review.md。
 
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	query := `DELETE FROM sessions WHERE id = ?`

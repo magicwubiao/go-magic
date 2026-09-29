@@ -13,6 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/execution"
 	"github.com/magicwubiao/go-magic/internal/perception"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
@@ -28,6 +29,10 @@ import (
 // 现在快照历史后异步执行：Manager 的 sessionEndMu 串行化 + 键控水位
 // 增量抽取，保证连续回合并发触发时不重复、不漏抽。代价是进程退出时
 // 尚未完成的抽取会丢失（可接受的权衡）。
+//
+// 异步走 Manager.EndSessionWithHistoryAsync 而不是裸 `go`：任务按代理内的
+// WaitGroup 记账，Manager.WaitPendingWrites 能等到它落定（测试的 TempDir
+// 清理要靠这个，见 integration.go 里的注释）。
 func (a *Agent) endCortexTurn() {
 	if a.cortexManager == nil {
 		return
@@ -45,7 +50,7 @@ func (a *Agent) endCortexTurn() {
 	}
 	session := a.session
 	scope := a.memoryScope
-	go a.cortexManager.EndSessionWithHistory(session, scope, conv)
+	a.cortexManager.EndSessionWithHistoryAsync(session, scope, conv)
 }
 
 // RunWithCortex runs a conversation with full Cortex Agent integration.
@@ -164,6 +169,14 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			break
 		}
 
+		// 引导注入：与其余三条循环一致（见 guide.go）。
+		// 排水必须在下面构造 LLM 请求之前，本次调用才能看到引导内容。
+		// 此前这条入口漏挂排水：cortex 开启时（web/网关的默认路径）
+		// 中途插话的引导会一直悬在队列里，直到回合收尾被回收重排，
+		// 模型在本回合里完全看不到（bot 是唯一注入方，而 bot 不挂 cortex，
+		// 所以缺口尚未在线上显形，属"入口不等价"的隐患）。
+		a.drainGuidesIntoHistory()
+
 		a.Emit(bus.EventKindTurnStart, map[string]interface{}{
 			"turn":       a.iterationCount,
 			"perception": perceptionResult.Intent.Type,
@@ -253,6 +266,35 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				Arguments: tc.Arguments,
 				Function:  tc.Function,
 			}
+		}
+
+		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
+		// cortex 路径此前没有这道保护：工具死循环会一路烧到 maxTurns，最后
+		// 只回一句裸的 "exceeded maximum turns"，而上下文已经全花在重复调用上。
+		a.recordToolCallsForLoop(resp.ToolCalls)
+		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
+			log.Warnf("[Agent:Cortex] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
+
+			if checkpoint != nil {
+				a.cortexManager.Execution.CompleteCheckpoint(checkpoint)
+			}
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+
+			// Cortex: feed history + extract (see endCortexTurn)
+			a.endCortexTurn()
+
+			// ========== CORTEX: Record trajectory ==========
+			a.recordTrajectory(input, summaryText, trajectorySteps, trajectoryStartTime, finalErr == nil)
+
+			a.maxTurns = originalMaxTurns
+			a.tools = originalTools
+
+			if finalErr != nil {
+				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
+			}
+			return summaryText, nil
 		}
 
 		a.history = append(a.history, provider.Message{

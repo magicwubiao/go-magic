@@ -894,7 +894,7 @@
 import { ref, computed, h, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
-import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, NUpload } from 'naive-ui'
+import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NTag, NText, NTooltip, NUpload } from 'naive-ui'
 import { marked } from 'marked'
 import { stripZeroWidth } from '@/utils/text'
 import {
@@ -936,7 +936,7 @@ import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, GitBranchOutline } from '@vicons/ionicons5'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
 import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -2218,49 +2218,12 @@ const toolbarMenuOptions = computed<DropdownOption[]>(() => {
       // 无活动会话时禁用上传
       disabled: !chatStore.activeSessionId,
     },
-    {
-      key: 'divider-1',
-      type: 'divider',
-    },
-    {
-      // 计划模式：合并到加号下拉菜单中，用开关显示当前状态。
-      // 注意：naive-ui 的下拉菜单只有在 type: 'render' 时才会调用 render 函数，
-      // 否则会被当作普通选项渲染（没有 label/icon 就显示为空白行）。
-      key: 'plan-mode',
-      type: 'render',
-      render: () =>
-        h(
-          'div',
-          {
-            class: 'plan-mode-menu-item',
-            // 无活动会话时禁用计划模式
-            onClick: (e: MouseEvent) => {
-              e.stopPropagation()
-              if (!chatStore.activeSessionId) return
-              togglePlanMode()
-            },
-          },
-          [
-            h(
-              'span',
-              { class: 'plan-mode-menu-icon' },
-              { default: () => h(NIcon, { size: 14 }, { default: () => h(GitBranchOutline) }) }
-            ),
-            h('span', { class: 'plan-mode-menu-label' }, t('chat.taskPlanning')),
-            h(NSwitch, {
-              size: 'small',
-              value: chatStore.planModeEnabled,
-              loading: chatStore.planModeLoading,
-              // 无活动会话时禁用计划模式开关
-              disabled: !chatStore.activeSessionId,
-              // 阻止冒泡：否则点击开关会同时触发外层 div 的 onClick，
-              // 导致 togglePlanMode 被调用两次、状态来回切换。
-              onClick: (e: MouseEvent) => e.stopPropagation(),
-              'onUpdate:value': () => togglePlanMode(),
-            }),
-          ]
-        ),
-    },
+    // 计划模式开关已于 2026-09-29 冻结，随后按"确认永不恢复"全量删除（agent 侧的
+    // PlanExecutor 与服务端 /plan-mode 路由都没了，见
+    // .workbuddy/reviews/2026-09-29-plan-mode-review.md）。原功能的用途是"先规划再执行"，
+    // 现已下沉为"复杂任务先建待办"的引导（服务端 server.go、CLI cmd/magic/chat.go、
+    // gateway.go 的 TASK PLANNING 段与 todo 工具描述）。
+    // 会话表的 plan_mode 列仍在（免迁移），但已无任何读写代码。
   ]
 })
 function handleToolbarMenuSelect(key: string) {
@@ -2269,13 +2232,6 @@ function handleToolbarMenuSelect(key: string) {
     if (!chatStore.activeSessionId) return
     toolbarUploadRef.value?.openOpenFileDialog()
   }
-}
-
-// 规划模式开关：切换当前会话的 plan-guided execution。
-// 无活动会话时不自动新建会话，直接不执行（开关已禁用）。
-async function togglePlanMode() {
-  if (!chatStore.activeSessionId) return
-  await chatStore.togglePlanMode(!chatStore.planModeEnabled)
 }
 
 async function handleFileSelect({ file, onFinish, onError }: UploadCustomRequestOptions) {
@@ -4331,10 +4287,10 @@ onActivated(() => {
 
 /* 输入框折叠态：只显示一条细的展开栏 */
 
-/* 加号下拉菜单中的「计划模式」行（type:'render' 自定义行）样式【不在这里】：
-   该行的 DOM 由 render 函数创建、且挂在 naive-ui 组件（无 __scopeId）的渲染里，
-   拿不到 data-v-xxx 属性，scoped 规则对它一条都不生效。
-   样式统一写在文件末尾的全局 <style> 里（见 .plan-mode-menu-item）。 */
+/* 历史备注：加号下拉菜单曾有一个「计划模式」行（type:'render' 自定义行），
+   其 DOM 由 render 函数创建、挂在 naive-ui 组件（无 __scopeId）的渲染里，
+   拿不到 data-v-xxx，scoped 规则对它一条都不生效，那样的行样式必须写在
+   文件末尾的全局 <style> 区。该菜单行已于 2026-09-29 冻结移除。 */
 
 .workdir-btn {
   display: flex;
@@ -5245,49 +5201,8 @@ onActivated(() => {
   text-overflow: clip !important;
 }
 
-/* 加号下拉菜单里的「计划模式」行（naive-ui type:'render' 自定义行）。
-   之所以必须放全局：菜单 teleport 到 body，且这一行由 render 函数创建，
-   既不在 ChatView 模板里、也不在 naive-ui 组件（无 __scopeId）的渲染里，
-   所以它身上没有 data-v-xxx —— 写在 <style scoped> 里的规则一条都不会命中
-   （症状：图标/文字/开关挤在一行、左侧贴菜单边缘、开关紧贴文字）。
-
-   另外 naive-ui 的 DropdownRenderOption 只渲染一个裸 div，不套
-   .n-dropdown-option-body 的 34px 行高、36px 图标前缀、悬停底色，
-   这里手工对齐：左边 4px(悬停底色内缩) + 7px = 11px，正是 36px 图标前缀里
-   14px 图标的居中位置；右边 4px + 8px = 12px，与普通选项的悬停底色同宽。 */
-.plan-mode-menu-item {
-  display: flex;
-  align-items: center;
-  height: var(--n-option-height, 34px); /* 与「上传文件」行等高（medium = 34px） */
-  margin: 0 4px;                        /* 与 naive 选项 ::before 悬停底色一样左右内缩 4px */
-  padding: 0 8px 0 7px;
-  box-sizing: border-box;
-  cursor: pointer;
-  border-radius: var(--n-border-radius, 3px);
-  transition: background-color 0.3s var(--n-bezier, cubic-bezier(0.4, 0, 0.2, 1));
-}
-.plan-mode-menu-item:hover {
-  background-color: var(--n-option-color-hover, rgb(243, 243, 245));
-}
-.plan-mode-menu-item .plan-mode-menu-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-right: 8px;
-  color: var(--n-option-text-color, rgb(51, 54, 57));
-}
-/* label 与开关一起靠左排版：不再用 flex:1 把开关推到行尾，
-   而是让 label 占内容宽度、开关紧跟其后，与「上传文件」行保持一致。 */
-.plan-mode-menu-item .plan-mode-menu-label {
-  flex: 0 0 auto;
-  min-width: 0;
-  margin-right: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.plan-mode-menu-item .n-switch {
-  flex-shrink: 0;
-}
+/* 加号下拉菜单里的「计划模式」行已于 2026-09-29 冻结并全量删除，对应的
+   .plan-mode-menu-item / .plan-mode-menu-icon / .plan-mode-menu-label 样式一并删除。
+   若日后恢复该菜单项：它由 render 函数创建、菜单 teleport 到 body，身上没有
+   data-v-xxx，样式必须写在全局区（不能放 <style scoped>）。 */
 </style>

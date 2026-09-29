@@ -35,6 +35,8 @@ const (
 	EventKindWarning
 	EventKindSteering
 	EventKindReflection
+	// EventKindPlanUpdate 目前没有任何发射方：计划模式（plan mode）已于 2026-09-29
+	// 全量清理。枚举与线名 "plan_update" 保留，避免改动对外的事件词表。
 	EventKindPlanUpdate
 	EventKindTrajectory
 	EventKindMemoryUpdate

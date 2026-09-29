@@ -17,8 +17,26 @@ func NewPlanner() *Planner {
 	return &Planner{}
 }
 
-// CreatePlan creates an execution plan based on perception result
+// CreatePlan creates an execution plan based on perception result.
+//
+// result 允许为 nil：规则规划只用得上「意图类型 + 复杂度」这两项，缺省时按中等复杂度
+// 的 task 意图处理。曾经的实现直接解引用 result（result.Intent.Complexity），而当时
+// 唯一的 nil 调用方（已随计划模式于 2026-09-29 删除的 agent.PlanExecutor）走的正是
+// **最需要兜底的那条路径（LLM 规划失败 → 规则规划）**，于是必然 panic。
+// 现在调用方都传非 nil，但「result 可为 nil」仍是本函数的公开契约：任何
+// "result 一定非空"的假设都不要在这里重新引入（回归测试见 planner_nil_test.go）。
 func (p *Planner) CreatePlan(input string, result *perception.PerceptionResult) *Decision {
+	if result == nil {
+		result = &perception.PerceptionResult{
+			Input: input,
+			Intent: perception.IntentClassification{
+				Type:       perception.IntentTask,
+				Confidence: 0.5,
+				Complexity: perception.ComplexityMedium,
+			},
+		}
+	}
+
 	decision := &Decision{
 		RetrievalHints:  make([]RetrievalHint, 0),
 		ContextHints:    make([]string, 0),

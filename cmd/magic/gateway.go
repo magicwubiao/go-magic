@@ -265,9 +265,19 @@ RULES:
 - Create/write files → Call write_file
 - Search web → Call web_search
 - Execute commands/code → Call execute_command
-- Do not call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- Do not call time, system, math, memory_recall, session_search unless explicitly requested
 - Reply in Chinese for Chinese questions, English for English questions
-- File lists should be concise summaries, not raw JSON`
+- File lists should be concise summaries, not raw JSON
+
+TASK PLANNING:
+- For any task needing 3+ steps, call the todo tool FIRST — before the first
+  execution step. Emit ALL action="create" calls as parallel tool calls in a
+  SINGLE response (never one create per turn: each extra turn costs a full
+  round-trip), then call action="complete" as each step lands.
+- Nobody is watching this turn in real time, so the todo list is the only
+  progress record the user can inspect later. Keep it accurate: no step marked
+  complete unless it actually is.
+- Skip the todo tool for single-step and purely conversational requests.`
 
 	// Check for custom system prompt in config (if field exists in future)
 	// For now, use the base prompt

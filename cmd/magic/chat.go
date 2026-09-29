@@ -154,7 +154,16 @@ TOOL USAGE RULES:
 - EDIT/MODIFY EXISTING FILES -> ALWAYS use file_edit tool with old_content + new_content for EXACT text matching. NEVER use sed, grep, awk, python, or shell commands to modify files.
 - Web search -> Call web_search
 - Execute commands/code (NOT for file editing) -> Call execute_command
-- Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- Do NOT call time, system, math, memory_recall, session_search unless explicitly requested
+
+TASK PLANNING:
+- When a request needs 3+ steps, call the todo tool FIRST — before the first
+  execution step. Emit ALL action="create" calls as parallel tool calls in a
+  SINGLE response (never one create per turn: each extra turn costs a full
+  round-trip), then call action="complete" as each step lands.
+- Treat the todo list as the plan of record. If the user adds requirements or
+  the situation changes, create/update todos instead of silently changing course.
+- Skip the todo tool for single-step or purely conversational requests.
 
 CRITICAL FILE EDITING RULES:
 1. ALWAYS use the file_edit tool to modify files, NOT shell commands (sed/grep/awk/python)
@@ -219,7 +228,16 @@ TOOL USAGE RULES:
 - Suggest fixes -> Call suggest_fix
 - Show file diffs -> Call diff_patch (show_diff, apply_patch, show_changes)
 - Analyze project -> Call project_analyze (structure, dependencies, complexity, entry points)
-- Do NOT call time, system, math, memory_recall, todo, session_search unless explicitly requested
+- Do NOT call time, system, math, memory_recall, session_search unless explicitly requested
+
+TASK PLANNING:
+- For any task needing 3+ steps, call the todo tool FIRST — before the first
+  execution step. Emit ALL action="create" calls as parallel tool calls in a
+  SINGLE response (never one create per turn: each extra turn costs a full
+  round-trip), then call action="complete" as each step lands.
+- Treat the todo list as the plan of record. If the user adds requirements or
+  the situation changes, create/update todos instead of silently changing course.
+- Skip the todo tool for single-step edits and purely conversational requests.
 
 CRITICAL FILE EDITING RULES:
 1. ALWAYS use the file_edit tool to modify files, NOT shell commands (sed/grep/awk/python/perl/etc.)

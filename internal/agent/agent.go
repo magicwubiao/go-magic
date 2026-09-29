@@ -195,13 +195,6 @@ type Agent struct {
 	reflectionCfg  ReflectionConfig
 	reflectEnabled bool
 
-	// Plan-guided execution. The enabled flag may be changed by the server
-	// while a conversation is running; planExecutor remains conversation-owned.
-	planExecutor *PlanExecutor
-	planEnabled  atomic.Bool
-	planCfg      PlanExecutorConfig
-	failStreak   int
-
 	// Trajectory-based learning
 	trajInjector *cortex.TrajectoryInjector
 	trajEnabled  bool
@@ -565,141 +558,6 @@ func (a *Agent) performReflection(ctx context.Context, turn int) error {
 	return nil
 }
 
-// WithPlanExecution enables plan-guided agent execution
-func WithPlanExecution(cfg PlanExecutorConfig) AgentOption {
-	return func(a *Agent) {
-		a.planCfg = cfg
-		a.planEnabled.Store(true)
-	}
-}
-
-// WithPlanConfig only sets the plan executor configuration without enabling
-// plan-guided execution. The server uses this so every agent carries a usable
-// plan config, while the per-session plan-mode switch (SetPlanEnabled) decides
-// whether planning actually runs.
-func WithPlanConfig(cfg PlanExecutorConfig) AgentOption {
-	return func(a *Agent) {
-		a.planCfg = cfg
-	}
-}
-
-// SetPlanEnabled dynamically toggles plan-guided execution. Changes take effect
-// at the next conversation boundary; plan state remains owned by the agent loop.
-func (a *Agent) SetPlanEnabled(enabled bool) {
-	a.planEnabled.Store(enabled)
-}
-
-// PlanEnabled reports whether plan-guided execution is currently on.
-func (a *Agent) PlanEnabled() bool {
-	return a.planEnabled.Load()
-}
-
-// initPlanExecutor initializes the plan executor
-func (a *Agent) initPlanExecutor(ctx context.Context, goal string) error {
-	if !a.PlanEnabled() || a.planExecutor != nil {
-		return nil
-	}
-
-	a.planExecutor = NewPlanExecutor(a.provider, a.planCfg)
-	plan, err := a.planExecutor.CreatePlan(ctx, goal)
-	if err != nil {
-		return err
-	}
-
-	// Emit plan event
-	a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
-		"action": "created",
-		"steps":  len(plan.Steps),
-	})
-
-	// Inject plan into conversation history
-	planPrompt := a.planExecutor.GetPlanPrompt()
-	if planPrompt != "" {
-		a.history = append(a.history, provider.Message{
-			Role:    "user",
-			Content: planPrompt,
-		})
-	}
-
-	return nil
-}
-
-// updatePlanProgress checks for step completion and updates the plan
-func (a *Agent) updatePlanProgress(ctx context.Context) {
-	if a.planExecutor == nil {
-		return
-	}
-
-	currentStep := a.planExecutor.GetCurrentStep()
-	if currentStep == nil {
-		return
-	}
-
-	// Detect if current step is complete
-	if a.planExecutor.DetectStepCompletion(a.history, nil) {
-		summary := a.planExecutor.GenerateStepSummary(ctx, currentStep.ID, a.history)
-		a.planExecutor.MarkStepComplete(currentStep.ID)
-
-		// Record achievement for reflection
-		if a.reflector != nil {
-			a.reflector.RecordAchievement(summary)
-		}
-
-		a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
-			"action":    "step_complete",
-			"step_id":   currentStep.ID,
-			"step_desc": currentStep.Description,
-			"progress":  a.planExecutor.GetProgress(),
-			"summary":   summary,
-		})
-
-		// If plan is complete, inject completion message
-		if a.planExecutor.IsPlanComplete() {
-			a.history = append(a.history, provider.Message{
-				Role:    "user",
-				Content: "\n\n📋 All plan steps have been completed. Please provide a comprehensive final summary of everything that was accomplished.",
-			})
-		}
-	}
-}
-
-// handlePlanFailure handles a tool execution failure in plan context
-func (a *Agent) handlePlanFailure(ctx context.Context, errMsg string) {
-	if a.planExecutor == nil {
-		return
-	}
-
-	a.failStreak++
-
-	currentStep := a.planExecutor.GetCurrentStep()
-	if currentStep != nil {
-		a.planExecutor.MarkStepFailed(currentStep.ID, errMsg)
-
-		if a.reflector != nil {
-			a.reflector.RecordBlocker(errMsg)
-		}
-	}
-
-	// Check if we need to replan
-	if a.planExecutor.ShouldReplan(a.failStreak) {
-		adjustment, err := a.planExecutor.Replan(ctx, errMsg)
-		if err == nil && adjustment != nil {
-			a.failStreak = 0
-			a.Emit(bus.EventKindPlanUpdate, map[string]interface{}{
-				"action":     "replan",
-				"adjustment": adjustment,
-			})
-
-			// Inject replan notification
-			a.history = append(a.history, provider.Message{
-				Role: "user",
-				Content: fmt.Sprintf("\n\n🔄 Plan has been adjusted: %s\nNew plan steps:\n%s",
-					adjustment.Reason, a.planExecutor.GetPlanPrompt()),
-			})
-		}
-	}
-}
-
 // WithTrajectoryLearning enables trajectory-based learning from past executions
 func WithTrajectoryLearning(store *cortex.TrajectoryStore, cfg cortex.TrajectoryInjectorConfig) AgentOption {
 	return func(a *Agent) {
@@ -878,6 +736,70 @@ func (a *Agent) getToolCallHistoryLength() int {
 	return len(a.toolCallHistory)
 }
 
+// recordToolCallsForLoop 把本轮的工具调用记账进循环检测历史（空名字跳过——
+// 空工具调用由 executeToolsWithHooks 单独处理，不该计入循环阈值）。
+func (a *Agent) recordToolCallsForLoop(toolCalls []types.ToolCall) {
+	for i := range toolCalls {
+		if name := toolCalls[i].GetToolName(); name != "" {
+			a.recordToolCall(name)
+		}
+	}
+}
+
+// detectToolLoop 依据累计的工具调用历史判定是否已触发循环上限，返回
+// (是否触发, 触发原因)。
+//
+// 四条工具循环 —— RunConversation、RunConversationWithMedia、
+// RunConversationStreamWithMedia、RunWithCortex —— 必须共用这一套判定：
+// 历史上流式与 cortex 两条入口漏挂保护，工具死循环会一路烧到 maxTurns，
+// 最后只回一句裸的 "exceeded maximum turns"，模型把上下文全烧在重复调用上。
+//
+// 计数按 toolCallHistory 的出现顺序推进，而不是遍历 map：map 顺序随机，
+// 会让同一段历史给出不同的触发原因（日志与测试都不可复现）。
+func (a *Agent) detectToolLoop() (bool, string) {
+	counts := make(map[string]int, len(a.toolCallHistory))
+	for _, name := range a.toolCallHistory {
+		counts[name]++
+	}
+	for _, name := range a.toolCallHistory {
+		if counts[name] >= a.sameToolLimit {
+			return true, fmt.Sprintf("tool %s called %d times", name, counts[name])
+		}
+	}
+	if len(a.toolCallHistory) >= a.consecutiveLimit {
+		return true, fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
+	}
+	return false, ""
+}
+
+// concludeAfterToolLoop 是循环触发后的共用收口动作：把模型已经产出的内容
+// 追加进历史，再要一份"不要再调工具"的总结。返回总结文本；第二次调用失败
+// 时返回错误（调用方自行决定是返回错误还是静默收场）。
+func (a *Agent) concludeAfterToolLoop(ctx context.Context, lastContent string) (string, error) {
+	a.history = append(a.history, provider.Message{
+		Role:      "assistant",
+		Content:   utils.TruncateDetailed(lastContent, a.maxMsgLen),
+		Timestamp: time.Now(),
+	})
+	a.history = append(a.history, provider.Message{
+		Role:      "user",
+		Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+		Timestamp: time.Now(),
+	})
+
+	finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages())
+	if finalErr != nil {
+		return "", finalErr
+	}
+	summaryText := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
+	a.history = append(a.history, provider.Message{
+		Role:      "assistant",
+		Content:   utils.TruncateDetailed(summaryText, a.maxMsgLen),
+		Timestamp: time.Now(),
+	})
+	return summaryText, nil
+}
+
 // incrementIteration safely increments the iteration count
 func (a *Agent) incrementIteration() {
 	a.mu.Lock()
@@ -1001,8 +923,10 @@ func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, cont
 	// 在该函数中的说明）。非流式路径同样可能被 web chat 的降级分支调用。
 	defer notifyTurnFinished(ctx)
 
-	// If cortex is enabled, use the full cortex integration path
-	if a.cortexManager != nil {
+	// If cortex is enabled, use the full cortex integration path.
+	// 与 RunConversation 同样的判定：只判 `!= nil` 会在 cortex.enabled=false 时
+	// 与 RunWithCortex 的回落分支互递归 → fatal stack overflow。
+	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		return a.RunWithCortex(ctx, input)
 	}
 
@@ -1214,58 +1138,14 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 		a.endTurnTiming()
 
-		// Check for tool call loops
-		if len(a.toolCallHistory) > 0 && a.toolCallHistory[len(a.toolCallHistory)-1] == "unknown" {
-			// Replace last if unknown
-			a.toolCallHistory = a.toolCallHistory[:len(a.toolCallHistory)-1]
-		}
-		for _, tc := range resp.ToolCalls {
-			name := tc.GetToolName()
-			a.toolCallHistory = append(a.toolCallHistory, name)
-		}
-
-		// Detect loops
-		loopDetected := false
-		loopReason := ""
-		toolCounts := make(map[string]int)
-		for _, name := range a.toolCallHistory {
-			toolCounts[name]++
-			if toolCounts[name] > a.sameToolLimit {
-				loopDetected = true
-				loopReason = fmt.Sprintf("tool %s called %d times", name, toolCounts[name])
-				break
-			}
-		}
-
-		// Check consecutive tool calls limit
-		if len(a.toolCallHistory) >= a.consecutiveLimit {
-			loopDetected = true
-			if loopReason == "" {
-				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
-			}
-		}
-
-		if loopDetected {
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
-			a.history = append(a.history, provider.Message{
-				Role:      "user",
-				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
-				Timestamp: time.Now(),
-			})
-			finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages())
+		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
+		a.recordToolCallsForLoop(resp.ToolCalls)
+		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
+			log.Warnf("[Agent] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
-			summaryText := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(summaryText, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			a.endCortexTurn()
@@ -1313,8 +1193,12 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 	// 回合收尾钩子，与 RunConversationStreamWithMedia 同语义。
 	defer notifyTurnFinished(ctx)
 
-	// If cortex is enabled, use the full cortex integration path
-	if a.cortexManager != nil {
+	// If cortex is enabled, use the full cortex integration path.
+	// 必须同时判 IsEnabled()：用禁用配置构造出来的 Manager 是个空壳（各子系统为 nil），
+	// 而 RunWithCortex 在 !IsEnabled() 时会回落到 RunConversation —— 只看 `!= nil`
+	// 会让两者无限互递归，最终是**不可 recover 的 fatal stack overflow 直接杀进程**。
+	// 现在两边判定一致（见 cortex_integration.go RunWithCortex 开头），禁用时正常走本地路径。
+	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		return a.RunWithCortex(ctx, input)
 	}
 
@@ -1345,15 +1229,6 @@ Please provide a comprehensive, well-structured final response based on these su
 	// Initialize self-reflection with the goal
 	if a.reflectEnabled {
 		a.initReflector(input)
-	}
-
-	// Initialize plan executor. Keep executor state confined to the conversation
-	// goroutine; mode changes are atomic and take effect on the next turn.
-	if !a.PlanEnabled() {
-		a.planExecutor = nil
-		a.failStreak = 0
-	} else if err := a.initPlanExecutor(ctx, input); err != nil {
-		log.Warnf("[Agent] Plan executor init failed: %v", err)
 	}
 
 	// Initialize and inject trajectory-based learning
@@ -1613,8 +1488,6 @@ Please provide a comprehensive, well-structured final response based on these su
 					tc.ID = fmt.Sprintf("call_%d", time.Now().UnixNano()%100000000)
 				}
 				validToolCalls = append(validToolCalls, tc)
-				a.toolCallCount[name]++
-				a.toolCallHistory = append(a.toolCallHistory, name)
 			} else {
 				log.Debugf("[TOOL] skipping empty tool call in response (ID: %s)", tc.ID)
 			}
@@ -1638,46 +1511,14 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Replace resp.ToolCalls with valid ones for further processing
 		resp.ToolCalls = validToolCalls
 
-		// Check if same tool called too many times (with more context)
-		loopDetected := false
-		loopReason := ""
-		for name, count := range a.toolCallCount {
-			if count >= a.sameToolLimit {
-				loopDetected = true
-				loopReason = fmt.Sprintf("tool %s called %d times", name, count)
-				break
-			}
-		}
-
-		// Check consecutive tool calls limit
-		if len(a.toolCallHistory) >= a.consecutiveLimit {
-			loopDetected = true
-			if loopReason == "" {
-				loopReason = fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
-			}
-		}
-
-		if loopDetected {
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
-			a.history = append(a.history, provider.Message{
-				Role:      "user",
-				Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
-				Timestamp: time.Now(),
-			})
-			finalResp, finalErr := a.provider.Chat(ctx, a.buildLLMMessages())
+		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
+		a.recordToolCallsForLoop(resp.ToolCalls)
+		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
+			log.Warnf("[Agent] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
-			summaryText := wrapLLMReasoning(finalResp.ReasoningContent, finalResp.Content)
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(summaryText, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			a.endCortexTurn()
@@ -1800,11 +1641,6 @@ Please provide a comprehensive, well-structured final response based on these su
 							return "", esc
 						}
 					}
-
-					// Handle plan failure
-					if a.planExecutor != nil {
-						a.handlePlanFailure(ctx, errInfo.ErrorMessage)
-					}
 				}
 			} else if a.smartRecovery != nil && toolErr == nil {
 				a.smartRecovery.RecordSuccess(tc.GetToolName())
@@ -1816,9 +1652,6 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 		}
 		a.endTurnTiming()
-
-		// Update plan progress at end of iteration
-		a.updatePlanProgress(ctx)
 
 		// Truncate history to prevent overflow
 		a.truncateHistory()
@@ -2370,6 +2203,30 @@ Please provide a comprehensive, well-structured final response based on these su
 			return nil
 		}
 
+		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
+		// 流式路径此前完全没有这道保护：工具死循环会一路烧到 maxTurns，最后
+		// 只回一句裸的 "exceeded maximum turns"，而模型已经把上下文全花在
+		// 重复调用上（web 聊天与 bot 流式都走这里，是影响面最大的缺口）。
+		a.recordToolCallsForLoop(toolCalls)
+		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
+			log.Warnf("[Agent:Stream] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			summaryText, finalErr := a.concludeAfterToolLoop(ctx, fullContent)
+			if finalErr != nil {
+				a.sanitizeHistory()
+				return fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
+			}
+			a.Emit(bus.EventKindTurnEnd, nil)
+			a.Emit(bus.EventKindAgentEnd, nil)
+
+			// Cortex: feed history + extract (see endCortexTurn)
+			a.endCortexTurn()
+
+			// 客户端已经看过本轮的流式增量，收口文本必须再推一次才会显示；
+			// 沿用增量语义（done 由 runQueue 收尾广播）。
+			handler(redact.RedactIfEnabled(summaryText, a.secretRedaction), false)
+			return nil
+		}
+
 		// Store tool calls for history
 		tcs := make([]types.ToolCall, len(toolCalls))
 		for i, tc := range toolCalls {
@@ -2454,9 +2311,6 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Check context after tool execution
 		a.truncateHistory()
 		a.Emit(bus.EventKindTurnEnd, nil)
-		if a.planExecutor != nil {
-			a.updatePlanProgress(ctx)
-		}
 
 		// Cortex: analyze tool sequence for skill evolution
 		if a.cortexManager != nil {

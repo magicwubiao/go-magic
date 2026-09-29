@@ -99,6 +99,11 @@ type Manager struct {
 
 	// 每日对话日志（P1-2，懒初始化）
 	dailyLog *memory.DailyLog
+
+	// asyncWG 记账「结束点沉淀」的后台任务（见 EndSessionWithHistoryAsync）。
+	// 没有它就没法在停机/测试收尾时等一个仍然在写盘的 goroutine 落定：
+	// TempDir 清理会撞上"刚被创建的目录项"而报 unlinkat ... directory not empty。
+	asyncWG sync.WaitGroup
 }
 
 // ManagerConfig holds configuration for Cortex systems
@@ -725,6 +730,43 @@ func (m *Manager) EndSessionWithHistory(sessionKey, scope string, history []stru
 	defer m.sessionEndMu.Unlock()
 	m.SetConversationHistory(sessionKey, history)
 	m.OnSessionEnd(scope)
+}
+
+// EndSessionWithHistoryAsync 是 EndSessionWithHistory 的后台版本：抽取链路里
+// ExtractMemories 是一次真实的 LLM 调用（每回合固定 +1 个上游请求），同步跑在
+// 回合收尾路径上会拖住 SSE done 与历史落库，所以调用方（agent.endCortexTurn）
+// 一直是 `go` 出去的。
+//
+// 差别在于**可等待**：任务按 asyncWG 记账，WaitPendingWrites 能等到它落定。
+// 直接用裸 `go` 的话，写盘 goroutine 与进程退出 / 测试的 TempDir 清理会竞态
+// （CI 上表现为 `TempDir RemoveAll cleanup: unlinkat ...: directory not empty`，
+// 而测试自身的断言全绿）。
+func (m *Manager) EndSessionWithHistoryAsync(sessionKey, scope string, history []struct {
+	Role    string
+	Content string
+}) {
+	if m == nil {
+		return
+	}
+	m.asyncWG.Add(1)
+	go func() {
+		defer m.asyncWG.Done()
+		m.EndSessionWithHistory(sessionKey, scope, history)
+	}()
+}
+
+// WaitPendingWrites 等待所有后台沉淀任务（EndSessionWithHistoryAsync）结束。
+// 停机前调用可降低"抽取未完成即退出"的丢失；测试里可注册为
+// t.Cleanup(mgr.WaitPendingWrites) 以避免写盘 goroutine 与 TempDir 清理竞态
+// （注册得比 t.TempDir() 晚，按 LIFO 天然先执行）。
+//
+// 不要与 EndSessionWithHistoryAsync 并发调用本方法：WaitGroup 的 Add 与 Wait
+// 并发是未定义行为。约定是"回合结束后、不再产生新任务时"才等待。
+func (m *Manager) WaitPendingWrites() {
+	if m == nil {
+		return
+	}
+	m.asyncWG.Wait()
 }
 
 // extractAndLearnFromConversation extracts information from conversation and updates memory
