@@ -31,6 +31,9 @@ const (
 	// "这次是让我做总结"，返回 testSummaryMarker 而不是又一个工具调用。
 	testSummaryPrompt = "final summary of what has been accomplished"
 	testSummaryMarker = "LOOP-SUMMARY-MARKER"
+	// 正常的最终回答标记（没有被"要求收口"时的回答），用来区分
+	// "这轮正常执行完了" 与 "这轮被判成死循环、只给了个总结"。
+	testFinalAnswerMarker = "FINAL-ANSWER-MARKER"
 )
 
 // scriptedLoopProvider 永远重复调用同一个工具，直到被问到收口总结为止。
@@ -81,13 +84,18 @@ func (p *scriptedLoopProvider) snapshot() (toolTurns int, sawGuide bool, chatCal
 	return p.toolTurns, p.sawGuide, p.chatCalls
 }
 
+// lastMessageContains 判断**最后一条**消息是否是含 needle 的用户消息。
+//
+// 只看最后一条：收口提示是紧跟在待收口内容之后追加的 user 消息，所以"最后一条
+// = 含收口提示的 user 消息"就是"这次是让我给总结"的准确判据。先前实现会回扫
+// 任意历史 user 消息，多回合测试里上一轮的收口提示会被当成这一轮的 → mock 从
+// 第二回合起永远只回总结、不再发起工具调用（一个会让测试自己骗自己的陷阱）。
 func lastMessageContains(messages []provider.Message, needle string) bool {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && strings.Contains(messages[i].Content, needle) {
-			return true
-		}
+	if len(messages) == 0 {
+		return false
 	}
-	return false
+	last := messages[len(messages)-1]
+	return last.Role == "user" && strings.Contains(last.Content, needle)
 }
 
 func newLoopTestAgent(t *testing.T, prov provider.Provider, opts ...AgentOption) *Agent {
@@ -150,20 +158,144 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 		t.Fatalf("触发原因应点名工具，实际: %q", reason)
 	}
 
-	// 连续调用上限：每轮换一个工具名，绕开"同一工具"判定。
+	// 同名但参数不同的调用**不算**死循环：一个回合里 read_file 读 5 个不同的
+	// 文件是正常工作方式，只比工具名会把这类回合直接判死（见 toolCallSignature）。
+	// 用一个干净的 agent：上面的 ag 已经攒了 sameToolLimit 次 loop_tool。
+	agArgs := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < 5; i++ {
+		agArgs.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"file_%d.go"}`, i))
+	}
+	if detected, reason := agArgs.detectToolLoop(); detected {
+		t.Fatalf("同名但参数不同的调用不该触发死循环判定，实际: %q", reason)
+	}
+
+	// 单回合总调用量上限：每轮换一个工具名，绕开"同一调用"判定。
 	ag2 := newLoopTestAgent(t, &scriptedLoopProvider{})
 	for i := 0; i < ag2.consecutiveLimit-1; i++ {
 		ag2.recordToolCall(fmt.Sprintf("tool_%d", i))
 		if detected, _ := ag2.detectToolLoop(); detected {
-			t.Fatalf("连续第 %d 次调用不该触发（上限 %d）", i+1, ag2.consecutiveLimit)
+			t.Fatalf("单回合第 %d 次调用不该触发（上限 %d）", i+1, ag2.consecutiveLimit)
 		}
 	}
 	ag2.recordToolCall(fmt.Sprintf("tool_%d", ag2.consecutiveLimit-1))
 	if detected, reason := ag2.detectToolLoop(); !detected {
-		t.Fatalf("连续第 %d 次调用必须触发（上限 %d）", ag2.consecutiveLimit, ag2.consecutiveLimit)
-	} else if !strings.Contains(reason, "consecutive") {
-		t.Fatalf("触发原因应说明是连续调用，实际: %q", reason)
+		t.Fatalf("单回合第 %d 次调用必须触发（上限 %d）", ag2.consecutiveLimit, ag2.consecutiveLimit)
+	} else if !strings.Contains(reason, "in one turn") {
+		t.Fatalf("触发原因应说明是单回合调用量超限，实际: %q", reason)
 	}
+}
+
+// scriptedTurnProvider 按"回合"脚本化返回：测试在每轮开始前用 setScript 指定
+// 本轮要连续发起的工具调用，脚本用尽后返回普通最终回答。
+type scriptedTurnProvider struct {
+	mu     sync.Mutex
+	script []string
+	idx    int
+	asked  int // 被要求"给总结"的次数
+}
+
+func (p *scriptedTurnProvider) Name() string { return "scripted-turn" }
+
+func (p *scriptedTurnProvider) setScript(names ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.script = names
+	p.idx = 0
+}
+
+func (p *scriptedTurnProvider) Chat(_ context.Context, messages []provider.Message) (*provider.ChatResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if lastMessageContains(messages, testSummaryPrompt) {
+		p.asked++
+		return &provider.ChatResponse{Content: testSummaryMarker}, nil
+	}
+	if p.idx < len(p.script) {
+		name := p.script[p.idx]
+		p.idx++
+		return &provider.ChatResponse{
+			ToolCalls: []types.ToolCall{{
+				ID:       fmt.Sprintf("call-%s-%d", name, p.idx),
+				Type:     "function",
+				Function: types.Function{Name: name, Arguments: `{}`},
+			}},
+		}, nil
+	}
+	return &provider.ChatResponse{Content: testFinalAnswerMarker}, nil
+}
+
+// TestLoopCountersResetBetweenTurns 锁死"循环计数按回合清零"。
+//
+// 这是一个把功能整体打残过的回归：计数只在 Agent.Reset()（清空整个会话）时清零，
+// 于是跨回合累积 —— 一个正常会话里某个工具累计用过 sameToolLimit 次之后，**之后
+// 每一轮的待执行工具调用都会在判定处被丢弃**，模型被注入"不要再调工具，直接给
+// 总结"。用户看到的现象就是"一直在制定计划、永远不执行"。
+//
+// 关键在于这条回归不会让任何已有断言变红（每轮单独看都"收口成功"），所以必须
+// 显式断言第二轮的工具**真的执行了**。
+func TestLoopCountersResetBetweenTurns(t *testing.T) {
+	prov := &scriptedTurnProvider{}
+
+	var mu sync.Mutex
+	hits := map[string]int{}
+	registry := &mockRegistry{tools: map[string]func(map[string]interface{}) (string, error){
+		"first_turn_tool": func(map[string]interface{}) (string, error) {
+			mu.Lock()
+			hits["first_turn_tool"]++
+			mu.Unlock()
+			return "ok", nil
+		},
+		"second_turn_tool": func(map[string]interface{}) (string, error) {
+			mu.Lock()
+			hits["second_turn_tool"]++
+			mu.Unlock()
+			return "ok", nil
+		},
+	}}
+	ag := NewEnhancedAgent(prov, registry, nil, "You are a helpful assistant.")
+
+	// 第 1 轮：同一工具连续 sameToolLimit 次 → 本轮内收口（这道保护本身是对的）。
+	script := make([]string, ag.sameToolLimit)
+	for i := range script {
+		script[i] = "first_turn_tool"
+	}
+	prov.setScript(script...)
+
+	resp, err := ag.RunConversation(context.Background(), "first turn")
+	if err != nil {
+		t.Fatalf("第 1 轮不该返回错误: %v", err)
+	}
+	if resp != testSummaryMarker {
+		t.Fatalf("第 1 轮应在第 %d 次同工具调用处收口，实际: %q", ag.sameToolLimit, resp)
+	}
+	if got := hits["first_turn_tool"]; got != ag.sameToolLimit-1 {
+		t.Fatalf("第 1 轮应执行前 %d 次调用（最后一次被判定拦下），实际执行 %d 次",
+			ag.sameToolLimit-1, got)
+	}
+
+	// 第 2 轮：换一个工具。计数必须已经按回合清零。
+	prov.setScript("second_turn_tool")
+	resp, err = ag.RunConversation(context.Background(), "second turn")
+	if err != nil {
+		t.Fatalf("第 2 轮不该返回错误: %v", err)
+	}
+	if got := hits["second_turn_tool"]; got != 1 {
+		t.Fatalf("第 2 轮的工具调用被丢弃了（%d 次执行，期望 1 次）：循环计数没有按回合清零，"+
+			"上一轮的历史让本轮在第一次判定时就被判成死循环", got)
+	}
+	if resp != testFinalAnswerMarker {
+		t.Fatalf("第 2 轮应正常执行并返回最终回答，实际: %q", resp)
+	}
+	if asked, _ := prov.snapshotAsked(); asked != 1 {
+		t.Fatalf("只应在第 1 轮被要求收口一次，实际 %d 次", asked)
+	}
+}
+
+func (p *scriptedTurnProvider) snapshotAsked() (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.asked, p.idx
 }
 
 // TestCortexLoopDetectionAndGuideDrain 锁死 cortex 分流路径的两处缺口。

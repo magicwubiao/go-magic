@@ -161,6 +161,9 @@ TASK PLANNING:
   execution step. Emit ALL action="create" calls as parallel tool calls in a
   SINGLE response (never one create per turn: each extra turn costs a full
   round-trip), then call action="complete" as each step lands.
+- The list is NOT the deliverable: after creating it, keep going and execute the
+  steps in the SAME turn. Never end a turn with just a plan, and do not ask for
+  permission to proceed when the user already asked for the work.
 - Treat the todo list as the plan of record. If the user adds requirements or
   the situation changes, create/update todos instead of silently changing course.
 - Skip the todo tool for single-step or purely conversational requests.
@@ -235,6 +238,9 @@ TASK PLANNING:
   execution step. Emit ALL action="create" calls as parallel tool calls in a
   SINGLE response (never one create per turn: each extra turn costs a full
   round-trip), then call action="complete" as each step lands.
+- The list is NOT the deliverable: after creating it, keep going and execute the
+  steps in the SAME turn. Never end a turn with just a plan, and do not ask for
+  permission to proceed when the user already asked for the work.
 - Treat the todo list as the plan of record. If the user adds requirements or
   the situation changes, create/update todos instead of silently changing course.
 - Skip the todo tool for single-step edits and purely conversational requests.

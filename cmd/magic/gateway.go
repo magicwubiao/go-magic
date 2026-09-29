@@ -274,6 +274,9 @@ TASK PLANNING:
   execution step. Emit ALL action="create" calls as parallel tool calls in a
   SINGLE response (never one create per turn: each extra turn costs a full
   round-trip), then call action="complete" as each step lands.
+- The list is NOT the deliverable: after creating it, keep going and execute the
+  steps in the SAME turn. Never end a turn with just a plan — nobody will reply
+  to let you continue.
 - Nobody is watching this turn in real time, so the todo list is the only
   progress record the user can inspect later. Keep it accurate: no step marked
   complete unless it actually is.

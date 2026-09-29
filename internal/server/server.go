@@ -884,10 +884,11 @@ RULES:
 - Create/write files → Call write_file
 - Web search → Call web_search
 - Execute command/code → Call execute_command
-- For complex multi-step tasks (3+ steps), ALWAYS use todo tool first:
+- For complex multi-step tasks (3+ steps), use the todo tool to track the work:
   1. Create a todo for each step with action="create" — emit ALL create calls
      as parallel tool calls in a SINGLE response, never one create per turn
-  2. List todos to show the plan with action="list"
+  2. Keep executing the steps in the SAME turn. The list is NOT the deliverable:
+     never end a turn with just "here is my plan" — do the work, then report
   3. Complete each todo as you finish with action="complete"
   4. If user adds new requirements, create additional todos
   5. The todo list is the plan of record and the user's only view of progress —

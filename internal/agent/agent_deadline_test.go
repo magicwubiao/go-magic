@@ -106,7 +106,10 @@ func TestWriteDeadlineCheckpoint(t *testing.T) {
 	a := newDeadlineTestAgent()
 	a.session = "unit_test_session"
 	a.iterationCount = 7
-	a.toolCallHistory = []string{"read_file", "write_file", "execute_command"}
+	// 走公开记账入口（toolCallHistory 的条目类型是循环检测内部的记录结构）。
+	for _, name := range []string{"read_file", "write_file", "execute_command"} {
+		a.recordToolCall(name)
+	}
 	a.history = append(a.history,
 		types.Message{Role: "user", Content: strings.Repeat("任务描述", 500)},
 		types.Message{Role: "assistant", Content: "step1 done"},

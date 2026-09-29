@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,10 +103,15 @@ type Agent struct {
 	maxTokenBudget int64
 
 	// Tool call loop detection (protected by mu)
-	toolCallHistory  []string       // 记录已调用的工具名
-	toolCallCount    map[string]int // 每个工具被调用的次数
-	sameToolLimit    int            // 同一工具最大调用次数
-	consecutiveLimit int            // 连续 tool call 最大次数
+	//
+	// toolCallHistory 只记录**本回合**发出的工具调用签名（工具名 + 参数指纹，
+	// 见 toolCallSignature），由 resetToolLoopCounters 在每个回合进入循环前清零。
+	// 它必须按回合清零：这道检测的语义是"模型在这一轮里卡住了"，跨回合累积会把
+	// 后续所有正常轮次误判成死循环 —— 表现是模型只说要做什么、永远不动手
+	// （每轮的工具调用都被丢弃，换上一句"不要再调工具，给个总结"）。
+	toolCallHistory  []toolLoopRecord
+	sameToolLimit    int // 同一（工具 + 参数）最大重复次数
+	consecutiveLimit int // 单回合 tool call 总次数上限
 
 	// maxParallelTools 全局并行工具执行并发上限（跨所有并行组共享）。
 	// 默认 4；<=0 视为非法并在运行时兜底为串行。
@@ -246,15 +253,19 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// （30 分钟）约束，每轮迭代是一次 LLM 调用加工具执行（实测
 		// 10~30s），物理可达的迭代数约 60~180。300 落在这个区间之外，
 		// 永远先撞时间墙 → 回合上限形同虚设。见 pkg/config/config.go 同项注释。
-		maxTurns:         150,
-		maxIterations:    200,
-		maxTotalLen:      200000, // 200K chars max history (~50K tokens)
-		maxMsgLen:        50000,  // 50K chars per message (~12K tokens)
-		maxTokenBudget:   0,
-		sameToolLimit:    3,
-		consecutiveLimit: 10,
+		maxTurns:       150,
+		maxIterations:  200,
+		maxTotalLen:    200000, // 200K chars max history (~50K tokens)
+		maxMsgLen:      50000,  // 50K chars per message (~12K tokens)
+		maxTokenBudget: 0,
+		// sameToolLimit 比的是"工具名 + 参数指纹"：同一回合里 read_file 读 3 个
+		// 不同文件是完全正常的，只有反复发起**同一个调用**才是死循环信号。
+		sameToolLimit: 3,
+		// consecutiveLimit 是单回合工具调用总量兜底（参数每次都变的死循环走这条）。
+		// 10 太紧：一次正常的多文件重构轻松超过 10 次调用，会被误判成死循环而中断
+		// 正在执行的回合。maxTurns(150)/回合超时仍是最终上限。
+		consecutiveLimit: 25,
 		maxParallelTools: defaultMaxParallelTools,
-		toolCallCount:    make(map[string]int),
 		subTaskEnabled:   true,
 		hooks:            hooks.NewHookManager(),
 		bus:              bus.NewEventBus(),
@@ -714,60 +725,124 @@ func (a *Agent) getHistory() []provider.Message {
 	return result
 }
 
-// recordToolCall safely records a tool call for loop detection
-func (a *Agent) recordToolCall(name string) {
+// toolLoopRecord 是一次工具调用在循环检测里的记账项。
+// Name 只用于日志与错误信息，Sig 才是判定依据（见 toolCallSignature）。
+type toolLoopRecord struct {
+	Name string
+	Sig  string
+}
+
+// toolCallSignature 生成循环检测用的调用签名：工具名 + 参数指纹。
+//
+// 为什么不只比工具名：一个回合里 read_file/list_files/search_in_files 被调用
+// 三五次是**正常工作方式**（要多读几个文件），只比名字会把这类回合判成死循环，
+// 直接把待执行的调用丢弃。为什么不只比参数：那样又无法定位是哪个工具卡住了。
+// 两者结合才同时满足：合法重复（不同目标）不触发、真死循环（同一个调用反复发）
+// 立刻触发。
+func toolCallSignature(name, args string) string {
+	if args == "" {
+		return name
+	}
+	sum := sha256.Sum256([]byte(args))
+	return name + "#" + hex.EncodeToString(sum[:4])
+}
+
+// resetToolLoopCounters 清零循环检测计数。**每个回合进入工具循环前必须调用。**
+//
+// 这些计数的语义是"本回合内模型是否卡在重复调用上"，必须按回合隔离。此前只有
+// Agent.Reset()（清空整个会话）会清零，于是计数跨回合累积：一个正常会话里某个
+// 工具累计用过 sameToolLimit 次之后，**之后每一轮的待执行工具调用都会在判定处
+// 被丢弃**，模型被注入"不要再调工具，直接给总结"——用户看到的就是"一直在说
+// 计划、永远不执行"（2026-09-29 线上复现，web 聊天主路径）。
+func (a *Agent) resetToolLoopCounters() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.toolCallHistory = append(a.toolCallHistory, name)
-	a.toolCallCount[name]++
+	a.toolCallHistory = nil
 }
 
-// getToolCallCount safely returns the count for a specific tool
-func (a *Agent) getToolCallCount(name string) int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.toolCallCount[name]
+// recordToolCall 记录一次工具调用（无参数变体，供只关心工具名的调用方使用）。
+func (a *Agent) recordToolCall(name string) {
+	a.recordToolCallSig(name, "")
 }
 
-// getToolCallHistoryLength safely returns the length of tool call history
-func (a *Agent) getToolCallHistoryLength() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return len(a.toolCallHistory)
+// recordToolCallSig 记录一次工具调用（带参数指纹）。
+func (a *Agent) recordToolCallSig(name, args string) {
+	if name == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolCallHistory = append(a.toolCallHistory, toolLoopRecord{
+		Name: name,
+		Sig:  toolCallSignature(name, args),
+	})
 }
 
 // recordToolCallsForLoop 把本轮的工具调用记账进循环检测历史（空名字跳过——
 // 空工具调用由 executeToolsWithHooks 单独处理，不该计入循环阈值）。
 func (a *Agent) recordToolCallsForLoop(toolCalls []types.ToolCall) {
 	for i := range toolCalls {
-		if name := toolCalls[i].GetToolName(); name != "" {
-			a.recordToolCall(name)
+		name := toolCalls[i].GetToolName()
+		if name == "" {
+			continue
 		}
+		a.recordToolCallSig(name, toolCalls[i].Function.Arguments)
 	}
 }
 
-// detectToolLoop 依据累计的工具调用历史判定是否已触发循环上限，返回
+// recentToolCallNames 返回最近 n 次工具调用的名字（日志/错误信息用）。
+func (a *Agent) recentToolCallNames(n int) []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	start := 0
+	if len(a.toolCallHistory) > n {
+		start = len(a.toolCallHistory) - n
+	}
+	names := make([]string, 0, len(a.toolCallHistory)-start)
+	for _, rec := range a.toolCallHistory[start:] {
+		names = append(names, rec.Name)
+	}
+	return names
+}
+
+// toolCallHistoryLength 返回本回合已记录的工具调用次数。
+func (a *Agent) toolCallHistoryLength() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.toolCallHistory)
+}
+
+// detectToolLoop 依据**本回合**的工具调用历史判定是否已触发循环上限，返回
 // (是否触发, 触发原因)。
 //
 // 四条工具循环 —— RunConversation、RunConversationWithMedia、
-// RunConversationStreamWithMedia、RunWithCortex —— 必须共用这一套判定：
-// 历史上流式与 cortex 两条入口漏挂保护，工具死循环会一路烧到 maxTurns，
-// 最后只回一句裸的 "exceeded maximum turns"，模型把上下文全烧在重复调用上。
+// RunConversationStreamWithMedia、RunWithCortex —— 必须共用这一套判定，并且
+// **每条入口都要在进入循环前调 resetToolLoopCounters**：
+//   - 漏挂保护 ⇒ 工具死循环一路烧到 maxTurns，最后只回一句裸的
+//     "exceeded maximum turns"；
+//   - 漏了按回合清零 ⇒ 计数跨回合累积，正常会话的后续轮次被整轮误判成死循环，
+//     模型被要求"不要再调工具"，表现是只出计划、不执行。
 //
 // 计数按 toolCallHistory 的出现顺序推进，而不是遍历 map：map 顺序随机，
 // 会让同一段历史给出不同的触发原因（日志与测试都不可复现）。
 func (a *Agent) detectToolLoop() (bool, string) {
-	counts := make(map[string]int, len(a.toolCallHistory))
-	for _, name := range a.toolCallHistory {
-		counts[name]++
+	a.mu.RLock()
+	history := make([]toolLoopRecord, len(a.toolCallHistory))
+	copy(history, a.toolCallHistory)
+	a.mu.RUnlock()
+
+	// 按调用签名（工具名 + 参数指纹）计数：反复发起同一个调用才是死循环。
+	counts := make(map[string]int, len(history))
+	for _, rec := range history {
+		counts[rec.Sig]++
 	}
-	for _, name := range a.toolCallHistory {
-		if counts[name] >= a.sameToolLimit {
-			return true, fmt.Sprintf("tool %s called %d times", name, counts[name])
+	for _, rec := range history {
+		if counts[rec.Sig] >= a.sameToolLimit {
+			return true, fmt.Sprintf("tool %s called %d times with identical arguments", rec.Name, counts[rec.Sig])
 		}
 	}
-	if len(a.toolCallHistory) >= a.consecutiveLimit {
-		return true, fmt.Sprintf("%d consecutive tool calls", len(a.toolCallHistory))
+	if len(history) >= a.consecutiveLimit {
+		return true, fmt.Sprintf("%d tool calls in one turn", len(history))
 	}
 	return false, ""
 }
@@ -929,6 +1004,9 @@ func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, cont
 	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		return a.RunWithCortex(ctx, input)
 	}
+
+	// 回合开始：清零循环检测计数（跨回合累积会把后续正常轮次整轮误判成死循环）。
+	a.resetToolLoopCounters()
 
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
@@ -1175,17 +1253,8 @@ Please provide a comprehensive, well-structured final response based on these su
 	if lastErr != nil {
 		return "", lastErr
 	}
-	recentTools := []string{}
-	if len(a.toolCallHistory) > 0 {
-		recentCount := len(a.toolCallHistory)
-		start := 0
-		if recentCount > 5 {
-			start = recentCount - 5
-		}
-		recentTools = a.toolCallHistory[start:]
-	}
 	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxTurns, a.iterationCount, len(a.toolCallHistory), recentTools)
+		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
 }
 
 // RunConversation runs a conversation with automatic tool execution
@@ -1201,6 +1270,9 @@ func (a *Agent) RunConversation(ctx context.Context, input string) (string, erro
 	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		return a.RunWithCortex(ctx, input)
 	}
+
+	// 回合开始：清零循环检测计数（跨回合累积会把后续正常轮次整轮误判成死循环）。
+	a.resetToolLoopCounters()
 
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
@@ -1679,17 +1751,8 @@ Please provide a comprehensive, well-structured final response based on these su
 	if lastErr != nil {
 		return "", lastErr
 	}
-	recentTools := []string{}
-	if len(a.toolCallHistory) > 0 {
-		recentCount := len(a.toolCallHistory)
-		start := 0
-		if recentCount > 5 {
-			start = recentCount - 5
-		}
-		recentTools = a.toolCallHistory[start:]
-	}
 	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxTurns, a.iterationCount, len(a.toolCallHistory), recentTools)
+		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
 }
 
 // StreamHandler is called for each streaming chunk
@@ -1707,6 +1770,12 @@ func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string
 	// 观察者（server 侧的 TurnFileOpTracker）据此在回合结束时落库"本轮变更的
 	// 文件"——回合已与 SSE 连接解耦，不能只依赖当前恰好连着的那条连接。
 	defer notifyTurnFinished(ctx)
+
+	// 回合开始：清零循环检测计数。web 聊天与 bot 流式都走这条入口，且每个
+	// 用户消息是一次独立的回合 —— 少了这一步，会话里任何工具累计用过
+	// sameToolLimit 次之后，后续每一轮的工具调用都会被判成死循环丢弃
+	// （症状：模型只说要做什么、永远不动手）。
+	a.resetToolLoopCounters()
 
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
@@ -2844,8 +2913,7 @@ func (a *Agent) Reset() {
 	a.inputTokens = 0
 	a.outputTokens = 0
 	a.cacheReadTokens = 0
-	a.toolCallHistory = nil
-	a.toolCallCount = make(map[string]int)
+	a.resetToolLoopCounters()
 	// Clear the repeated-failure memory so prior-task failures do not poison a
 	// new conversation's escalation decisions.
 	if a.failureDetector != nil {

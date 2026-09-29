@@ -262,6 +262,7 @@ func (t *TodoTool) Description() string {
 	return "Task planning and tracking tool. Use this to break down complex tasks into manageable steps. " +
 		"WHEN TO USE: When the user asks for something requiring 3+ steps; Before starting a multi-step workflow (coding, research, analysis); To track progress on long-running tasks. " +
 		"PLAN OF RECORD: create the list BEFORE executing the first step (not after), and keep statuses truthful — never mark an item completed unless it actually is. Update the list when the plan changes instead of silently deviating. " +
+		"NOT A DELIVERABLE: creating the list does not finish the task. After the create calls, keep working through the steps in the same turn — never end your turn with just the plan. " +
 		"HOW TO USE: 1) Call action=create to add steps, 2) Call action=list to show progress, 3) Call action=complete when done, 4) Call action=update if plans change. " +
 		"BATCHING: When creating multiple todos, emit ALL create calls together in a single response as parallel tool calls — never one create per turn. Each extra turn costs a full LLM round-trip, so batching is required, not optional. " +
 		"EXAMPLE: User says 'Build a login page' -> In ONE response emit parallel create calls for: Design form, Add validation, Connect API, Test -> Complete each as you finish."

@@ -70,6 +70,10 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		return a.RunConversation(ctx, input)
 	}
 
+	// 回合开始：清零循环检测计数（跨回合累积会把后续正常轮次整轮误判成死循环，
+	// 模型被要求"不要再调工具"，表现是只出计划、不执行）。
+	a.resetToolLoopCounters()
+
 	// Emit agent start event
 	a.Emit(bus.EventKindAgentStart, nil)
 
