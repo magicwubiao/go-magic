@@ -502,6 +502,8 @@ async function handleSaveProvider() {
   })
   showProviderModal.value = false
   await configStore.loadConfig()
+  // 重建“新增”下拉：刚保存的供应商要从候选里移除（避免重复出现在下拉中）
+  await loadProviderCatalog()
 
   if (isEditing.value) {
     // 编辑后刷新当前选择
@@ -515,6 +517,8 @@ async function handleSaveProvider() {
 async function deleteProvider(name: string) {
   await providersApi.deleteProvider(name)
   await configStore.loadConfig()
+  // 重建“新增”下拉：被删除的供应商要重新出现在候选里
+  await loadProviderCatalog()
   // Update selected provider
   const providers = configStore.config?.providers || {}
   if (selectedProvider.value === name) {
