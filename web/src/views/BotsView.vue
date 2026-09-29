@@ -2472,16 +2472,25 @@ function hashCode(s: string): number {
   return h
 }
 
+// /api/tools 返回纯字符串数组（toolset 工具名摊平，见 internal/server/tools.go
+// handleTools），/api/skills 返回带 name 的对象数组——历史上都按 {name} 解析，
+// 字符串的 .name 是 undefined，被 filter 滤空，工具白名单下拉因此恒为空。
+// 两种形态都兜住，并去重排序。
+function toOptionList(raw: unknown): { label: string; value: string }[] {
+  const names = (Array.isArray(raw) ? raw : [])
+    .map((x) => {
+      if (typeof x === 'string') return x
+      const o = x as { name?: string; id?: string } | null
+      return o?.name || o?.id || ''
+    })
+    .filter(v => v)
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b)).map(n => ({ label: n, value: n }))
+}
+
 async function loadCandidates() {
   try {
-    const tools = (await request('/tools')) as { name?: string }[]
-    toolOptions.value = (tools || [])
-      .map(x => ({ label: x.name || '', value: x.name || '' }))
-      .filter(x => x.value)
-    const skills = (await request('/skills')) as { name?: string }[]
-    skillOptions.value = (skills || [])
-      .map(x => ({ label: x.name || '', value: x.name || '' }))
-      .filter(x => x.value)
+    toolOptions.value = toOptionList(await request('/tools'))
+    skillOptions.value = toOptionList(await request('/skills'))
   } catch {
     /* candidates are optional; tag mode still allows free-text entry */
   }

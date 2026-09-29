@@ -1,15 +1,13 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import * as toolsApi from '@/api/tools'
-import type { Tool, Toolset } from '@/api/tools'
+import type { Toolset } from '@/api/tools'
 
 export const useToolsStore = defineStore('tools', () => {
-  const tools = ref<Tool[]>([])
+  const tools = ref<string[]>([])
   const toolsets = ref<Toolset[]>([])
   const categories = ref<string[]>([])
   const loading = ref(false)
-
-  const enabledTools = computed(() => tools.value.filter(t => t.enabled))
 
   async function loadTools() {
     loading.value = true
@@ -43,7 +41,6 @@ export const useToolsStore = defineStore('tools', () => {
     toolsets,
     categories,
     loading,
-    enabledTools,
     loadTools,
     loadToolsets,
     loadCategories,

@@ -12,7 +12,8 @@ export interface Toolset {
   id: string
   name: string
   description: string
-  tools: Tool[]
+  // 服务端把每个 toolset 的 tools 存为 []string（工具名），见 buildToolsets。
+  tools: string[]
   enabled: boolean
 }
 
@@ -34,7 +35,9 @@ export interface ToolsetStatistics {
   last_used: string
 }
 
-export async function getTools(): Promise<Tool[]> {
+// GET /api/tools 返回的是纯字符串数组（所有 toolset 的工具名摊平，
+// 见 internal/server/tools.go handleTools），不是对象。
+export async function getTools(): Promise<string[]> {
   return request('/tools')
 }
 
