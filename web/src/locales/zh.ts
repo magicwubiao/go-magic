@@ -1224,6 +1224,7 @@ export default {
     send: '发送',
     sendFailed: '发送失败，请重试',
     botsReplying: 'Bots 正在讨论…',
+    stopRound: '停止',
     noMessages: '暂无消息，发一条开始讨论吧',
     bot: 'Bot',
     you: '我',

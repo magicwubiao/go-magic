@@ -78,6 +78,14 @@ func (s *Server) handleRoomByID(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case len(parts) == 2 && parts[1] == "stop":
+		// 停止进行中的一轮：跳过剩余成员/轮次、取消正在发言的成员回合。
+		// 此前唯一的出路是删房间，显然不是"停止"。
+		if r.Method == http.MethodPost {
+			s.handleRoomStop(w, r, id)
+		} else {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case len(parts) == 2 && parts[1] == "send":
 		if r.Method == http.MethodPost {
 			s.handleRoomSend(w, r, id)
@@ -266,6 +274,19 @@ func (s *Server) handleRoomStatus(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	jsonResponse(w, map[string]interface{}{"running": mgr.RoomRoundRunning(id)})
+}
+
+// handleRoomStop POST /api/rooms/{id}/stop — abort the room's in-flight
+// round. A coordinated round legitimately runs for minutes (members speak one
+// after another, each with its own turn budget), and until now the only way
+// out was deleting the whole room. Returns {"stopped": true} when a round was
+// actually aborted, false when the room was already idle.
+func (s *Server) handleRoomStop(w http.ResponseWriter, r *http.Request, id string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"stopped": mgr.StopRoomRound(id)})
 }
 
 // handleRoomMessages GET /api/rooms/{id}/messages

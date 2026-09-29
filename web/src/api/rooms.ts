@@ -86,6 +86,16 @@ export async function getRoomStatus(id: string): Promise<RoomStatus> {
 }
 
 /**
+ * Stop the room's in-flight round server-side: remaining members and rounds
+ * are skipped and the turn that is currently speaking is canceled. Aborting
+ * the send fetch alone does NOT do this — the backend never derives "stop"
+ * from a dropped HTTP client.
+ */
+export async function stopRoomRound(id: string): Promise<{ stopped: boolean }> {
+  return request(`/rooms/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+}
+
+/**
  * Blocking room send. A coordinated multi-bot round (up to max_rounds) can
  * easily exceed the default 30s request timeout, so this uses a dedicated
  * fetch with its own cap and no auto-retry (retrying a live room round would

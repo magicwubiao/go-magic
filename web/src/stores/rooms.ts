@@ -196,6 +196,25 @@ export const useRoomsStore = defineStore('rooms', () => {
     sendAbort?.abort()
   }
 
+  /**
+   * Stop the in-flight round for real: tell the backend to abort (remaining
+   * members are skipped and the currently speaking turn is canceled), then
+   * drop the local wait on the blocking send. cancelSend() alone only tears
+   * down the fetch — the round kept running server-side, which is exactly
+   * the "群聊没法停止" trap. Polling continues until the backend reports the
+   * round is really over, so partial replies still land in the UI.
+   */
+  async function stopRound(): Promise<void> {
+    const roomId = activeRoomId.value
+    cancelSend()
+    if (!roomId) return
+    try {
+      await roomsApi.stopRoomRound(roomId)
+    } catch {
+      /* 本地已不再等待；后端不可达时停止请求本身也无法送达 */
+    }
+  }
+
   async function refreshMessages(): Promise<void> {
     if (!activeRoomId.value) return
     try {
@@ -233,6 +252,7 @@ export const useRoomsStore = defineStore('rooms', () => {
     getActiveRoom,
     sendMessage,
     cancelSend,
+    stopRound,
     refreshMessages,
     updateRoom,
     deleteRoom,

@@ -1224,6 +1224,7 @@ export default {
     send: 'Send',
     sendFailed: 'Send failed, please retry',
     botsReplying: 'Bots are discussing…',
+    stopRound: 'Stop',
     noMessages: 'No messages yet, send one to start the discussion',
     bot: 'Bot',
     you: 'Me',

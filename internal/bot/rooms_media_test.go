@@ -128,9 +128,17 @@ func (r *recordingLLM) allParts() []map[string]interface{} {
 // 可直接当 RoomUploadItem.Src。
 func newRoomRig(t *testing.T, reply string, maxRounds int) (mgr *Manager, llm *recordingLLM, roomID, pngPath string) {
 	t.Helper()
-
 	llm = &recordingLLM{reply: reply}
-	server := httptest.NewServer(http.HandlerFunc(llm.handler))
+	mgr, roomID, pngPath = newRoomRigHandler(t, llm.handler, maxRounds)
+	return mgr, llm, roomID, pngPath
+}
+
+// newRoomRigHandler 是 newRoomRig 的可注入版本：需要阻塞、受控行为的测试
+// （如"停止群聊"）传自己的 LLM handler。
+func newRoomRigHandler(t *testing.T, handler http.HandlerFunc, maxRounds int) (mgr *Manager, roomID, pngPath string) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	home := t.TempDir()
@@ -192,7 +200,7 @@ func newRoomRig(t *testing.T, reply string, maxRounds int) (mgr *Manager, llm *r
 	if err := mgr.CreateRoom(room); err != nil {
 		t.Fatalf("CreateRoom: %v", err)
 	}
-	return mgr, llm, room.ID, pngPath
+	return mgr, room.ID, pngPath
 }
 
 // picPersisted / picItem 是同一张测试图的两种形态：落库引用与工作目录副本源。

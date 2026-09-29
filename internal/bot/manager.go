@@ -64,6 +64,12 @@ type pendingMessage struct {
 	// base64 replaced by upload refs). Applied to the turn's user message
 	// right before the history is saved so bot.db stores refs, not payloads.
 	persistedParts []types.ContentPart
+	// cancelCh, when non-nil, is closed to abort this turn from the outside.
+	// Room rounds use it so that stopping a round kills the member turn that
+	// is currently in flight instead of abandoning it to burn its whole turn
+	// budget in the background. Closing it only ever accelerates a turn that
+	// would end anyway — the regular timeout still applies.
+	cancelCh <-chan struct{}
 }
 
 // turnResult carries one completed agent turn to a synchronous caller.
@@ -515,6 +521,21 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	turnTimeout := m.turnTimeout()
 	runCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	if msg.cancelCh != nil {
+		// External stop (a room round being aborted). Without this the turn
+		// kept running to completion — minutes of LLM calls — even though its
+		// coordinator had already moved on. No goroutine leak: the watcher
+		// exits as soon as either side closes, and cancel is deferred above.
+		watcherDone := make(chan struct{})
+		defer close(watcherDone)
+		go func() {
+			select {
+			case <-msg.cancelCh:
+				cancel()
+			case <-watcherDone:
+			}
+		}()
+	}
 	// Propagate the synchronous delegation chain (if any) into the turn
 	// context so nested delegate_task calls can detect cycles.
 	if msg.delegationChain != nil {

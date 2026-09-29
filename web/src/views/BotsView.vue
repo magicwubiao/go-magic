@@ -593,8 +593,11 @@
               <div class="room-typing-bubble">
                 <div class="room-typing-dots"><span></span><span></span><span></span></div>
                 <span class="room-typing-text">{{ t('rooms.botsReplying') }}</span>
-                <n-button size="tiny" text type="error" @click="roomsStore.cancelSend()">
+                <!-- 停止必须打到服务端（POST /rooms/{id}/stop）：只 abort 本地
+                     fetch 时那一轮会在后台继续跑完，界面看起来像"停不掉"。 -->
+                <n-button size="tiny" type="error" secondary :title="t('rooms.stopRound')" @click="roomsStore.stopRound()">
                   <template #icon><n-icon><CloseOutline /></n-icon></template>
+                  {{ t('rooms.stopRound') }}
                 </n-button>
               </div>
             </div>
