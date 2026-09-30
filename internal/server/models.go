@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -26,8 +25,17 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// 先让内存快照跟上磁盘，再进临界区。
+	//
+	// 这一步绝不能在持 s.mu 时做：syncConfigFromDisk 内部要拿 s.agentsMu，
+	// 而反向路径（approval.go 审批广播、sessions.go 工作目录设置）持
+	// s.agentsMu 再读 s.cfg/s.provider。两条相反顺序叠加就是 AB-BA 死锁——
+	// 表现为"chat 页切完模型、再打开模型供应商页，整个后端卡死到重启"
+	// （回归见 model_switch_deadlock_test.go）。
+	s.syncConfigFromDisk()
+
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
 
 	// If only changing model (not provider), try to use Modeler interface
 	if req.Provider == "" && req.Model != "" && s.provider != nil {
@@ -88,8 +96,10 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		// it the new provider runs with a nil ConvertCfg and every image is
 		// downgraded to a placeholder.
 		s.refreshConvertConfig()
-		// Clear all agents to force re-creation
-		s.agents = make(map[string]*agent.Agent)
+		// Clear all agents to force re-creation. 必须走 agentsMu：map 写入
+		// 与 getOrCreateAgent / approval 广播的读并发，裸写会触发 fatal
+		// "concurrent map writes"。
+		s.clearAgents()
 	}
 
 	jsonResponse(w, map[string]interface{}{
@@ -128,9 +138,7 @@ func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.Pro
 	}
 	s.provider = createProvider(s.cfg)
 	s.refreshConvertConfig()
-	s.agentsMu.Lock()
-	s.agents = make(map[string]*agent.Agent)
-	s.agentsMu.Unlock()
+	s.clearAgents()
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {

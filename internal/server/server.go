@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -57,10 +58,13 @@ type Server struct {
 	configMu  sync.Mutex
 	startTime time.Time
 	cfg       *appconfig.Config
-	// configMtime 记录最近一次已加载进内存的 config.json 修改时间，
+	// configMtimeNs 记录最近一次已加载进内存的 config.json 修改时间（UnixNano），
 	// 供 syncConfigFromDisk 做"外部进程改了配置文件"的廉价变更检测。
-	// 由 s.mu 保护。
-	configMtime  time.Time
+	//
+	// 用 atomic 而非 s.mu 保护：markConfigMtime 会在 persistConfig 成功后被
+	// 调用，而 persistConfig 的调用方常已持 s.mu（RWMutex 不可重入），
+	// 走 s.mu 就会自我死锁。陈旧值的唯一后果是"多重载一次配置"，可接受。
+	configMtimeNs atomic.Int64
 	sessionStore *session.Store
 	// uploadsMeta maps on-disk upload uuid names back to readable original
 	// filenames so the Files page can display user-friendly names. Lazy-open.
@@ -77,7 +81,10 @@ type Server struct {
 	// Active chat agents per session (lazy init)
 	agents   map[string]*agent.Agent
 	agentsMu sync.Mutex
-
+	// 加锁顺序守卫（见 lockorder.go）：持 agentsMu 时再拿 s.mu 会立即 panic。
+	// 顺序反了不会立刻崩，而是在并发下变成永久死锁，所以用显式断言把它
+	// 变成确定性失败。
+	lockOrder lockOrderGuard
 	// 每会话的串行消息队列（见 chatqueue.go）。用户在一个回合进行中继续
 	// 发消息时不再被丢弃：消息入队等待，由唯一的 worker goroutine 串行
 	// 执行，从而保证同一个 *agent.Agent 不会被并发使用。
@@ -564,7 +571,7 @@ Your working directory is: %s
 
 	// 记录启动时 config.json 的 mtime，作为 syncConfigFromDisk 的变更检测基线
 	if info, err := os.Stat(filepath.Join(magicHome, "config.json")); err == nil {
-		s.configMtime = info.ModTime()
+		s.configMtimeNs.Store(info.ModTime().UnixNano())
 	}
 
 	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到
@@ -635,8 +642,8 @@ func (s *Server) agentCleanupLoop() {
 }
 
 func (s *Server) cleanupInactiveAgents() {
-	s.agentsMu.Lock()
-	defer s.agentsMu.Unlock()
+	s.acquireAgentsMu()
+	defer s.releaseAgentsMu()
 
 	// For now, simple strategy: if we have more than 20 agents, remove half
 	// In the future, agent could track lastUsed timestamp
@@ -851,14 +858,14 @@ func (s *Server) refreshConvertConfig() {
 // lookupAgent 只查不建：用于回合收尾阶段读取 token 统计。回合执行期间
 // agent 一定已由 getOrCreateAgent 建好，这里拿不到就静默跳过统计即可。
 func (s *Server) lookupAgent(sessionID string) *agent.Agent {
-	s.agentsMu.Lock()
-	defer s.agentsMu.Unlock()
+	s.acquireAgentsMu()
+	defer s.releaseAgentsMu()
 	return s.agents[sessionID]
 }
 
 func (s *Server) getOrCreateAgent(sessionID string) *agent.Agent {
-	s.agentsMu.Lock()
-	defer s.agentsMu.Unlock()
+	s.acquireAgentsMu()
+	defer s.releaseAgentsMu()
 
 	if a, ok := s.agents[sessionID]; ok {
 		// 每回合刷新技能清单：agent 按会话缓存，技能块此前只在创建时注入，

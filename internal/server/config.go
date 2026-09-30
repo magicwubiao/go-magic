@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/catalog"
@@ -234,6 +233,19 @@ func (s *Server) deleteEnvVar(path string, key string) {
 // ("配置被还原/丢失" root cause). Sections the server itself just modified
 // (and already merged on top of a fresh disk read) must pass false.
 func (s *Server) persistConfig(preserveGateway bool) error {
+	// 反向路径守卫：若调用方正持 agentsMu，这里再去读 s.cfg/拿 s.mu 就构成
+	// s.agentsMu → s.mu 的反序，与 syncConfigFromDisk 的 s.mu → s.agentsMu
+	// 撞成 AB-BA 死锁。见 lockorder.go。
+	s.checkBeforeServerMu("persistConfig")
+	// 注意 s.configMu 保护的是**文件写入**，不是 s.cfg/s.configMtime。
+	//
+	// 这里刻意不碰 s.mu：调用方常已持 s.mu（handleModelSet、tools/profiles
+	// 的 enable/disable、privacy 热重载都这么调），而 sync.RWMutex 不可重入
+	// ——在持锁路径里再拿一次就是自我死锁，表现和跨 goroutine 死锁一模一样
+	// （整个后端挂住、agentsMu 却是空闲的，极易误判方向）。
+	// s.cfg 的读写由下列调用方各自的 s.mu 临界区负责：handleModelSet /
+	// tools / profiles 持锁调用本函数；handleConfig PUT 在 s.mu 之外合并
+	// 配置（配置写入本身由 configMu 串行化）。
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	if s.cfg == nil {
@@ -266,8 +278,19 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	}
 	// 自己刚写盘成功，刷新 mtime 基线，避免下一次 syncConfigFromDisk
 	// 把这笔写入误判成外部修改而白白重建 provider。
-	s.markConfigMtime()
+	s.setConfigMtimeFromDisk()
 	return nil
+}
+
+// setConfigMtimeFromDisk 把 configMtime 基线刷成磁盘上 config.json 的当前
+// 修改时间（见 markConfigMtime）。configMtime 只被 syncConfigFromDisk 的
+// mtime 比较读取，那个比较本身容忍陈旧值（最坏情况是多重载一次配置），
+// 因此这里用 atomic 读写即可，不需要去碰 s.mu —— 拿 s.mu 会在
+// "persistConfig 的调用方已持 s.mu"时自我死锁。
+func (s *Server) setConfigMtimeFromDisk() {
+	if info, err := os.Stat(s.configPath()); err == nil {
+		s.configMtimeNs.Store(info.ModTime().UnixNano())
+	}
 }
 
 // reloadConfig re-reads config.json into s.cfg so changes written by other
@@ -275,9 +298,9 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 // before the server merges and saves its own changes.
 func (s *Server) reloadConfig() {
 	if fresh, err := appconfig.Load(); err == nil && fresh != nil {
-		s.mu.Lock()
+		s.acquireServerMu("")
 		s.cfg = fresh
-		s.mu.Unlock()
+		s.releaseServerMu()
 		s.markConfigMtime()
 	}
 }
@@ -294,13 +317,7 @@ func (s *Server) configPath() string {
 // markConfigMtime 把 configMtime 基线刷成磁盘上 config.json 的当前修改时间。
 // 在启动加载、reloadConfig 和 persistConfig 成功后调用，使"我们自己刚写过
 // 的文件"不会在下一次 syncConfigFromDisk 里被误判为外部变更。
-func (s *Server) markConfigMtime() {
-	if info, err := os.Stat(s.configPath()); err == nil {
-		s.mu.Lock()
-		s.configMtime = info.ModTime()
-		s.mu.Unlock()
-	}
-}
+func (s *Server) markConfigMtime() { s.setConfigMtimeFromDisk() }
 
 // syncConfigFromDisk 让内存配置快照跟上外部对 config.json 的直接修改。
 //
@@ -310,42 +327,53 @@ func (s *Server) markConfigMtime() {
 // 这里用 mtime 做廉价变更检测：磁盘比已知基线新才重读，并在配置真的
 // 变化后重建 provider、清空缓存 agent（与 handleModelSet 全量切换同一条
 // 路径），保证新的 key/模型/baseURL 对后续对话立即生效。
+//
+// 加锁顺序契约：**s.mu → s.agentsMu**，任何地方都不得反序。
+// 调用方也**不得在持 s.mu 时调用本函数**（handleModelSet 曾这么干，
+// 于是立刻退化成 s.mu → s.agentsMu 的反序持有，与 approvals/sessions
+// 的 s.agentsMu → s.cfg 相撞，把整个后端锁死）。
 func (s *Server) syncConfigFromDisk() {
+	// 契约断言：调用方**不得持 s.mu**。
+	//
+	// 这里要拿 s.agentsMu（见函数末尾的 clearAgents），若调用方已持 s.mu，
+	// 本 goroutine 就走成 s.mu → s.agentsMu 的反向持有；只要另一条路径
+	// 恰好持 agentsMu 又想拿 s.mu（approval/sessions 的 s.cfg 读），
+	// 立即 AB-BA 死锁，线上表现为整个后端卡死。这正是 handleModelSet 曾经
+	// 踩中的坑（chat 页切完模型、打开模型供应商页即死）。
+	// 见 model_switch_deadlock_test.go。
+	s.assertNotHoldingServerMu("syncConfigFromDisk")
+
 	info, err := os.Stat(s.configPath())
 	if err != nil {
 		return
 	}
-	s.mu.RLock()
-	known := s.configMtime
-	s.mu.RUnlock()
-	if !info.ModTime().After(known) {
+	if info.ModTime().UnixNano() <= s.configMtimeNs.Load() {
 		return
 	}
 
-	s.mu.Lock()
-	if !info.ModTime().After(s.configMtime) {
-		// 另一个请求已同步过
-		s.mu.Unlock()
+	// 用 CAS 抢占"由我来重载"的权利：并发请求只留一个真正重载，其余直接返回。
+	// 旧实现用 RLock 读 + Lock 判重，两次加锁之间没有任何互斥，语义等价但
+	// 多绕两圈；换成 atomic 后这段完全不碰 s.mu，也就不会在"调用方已持
+	// s.mu"时自我死锁。
+	prev := s.configMtimeNs.Swap(info.ModTime().UnixNano())
+	if prev == info.ModTime().UnixNano() {
 		return
 	}
-	s.configMtime = info.ModTime()
-	s.mu.Unlock()
 
 	fresh, err := appconfig.Load()
 	if err != nil || fresh == nil {
 		return
 	}
-	s.mu.Lock()
+	s.acquireServerMu("")
 	s.cfg = fresh
-	s.mu.Unlock()
-
 	if fresh.Provider != "" {
 		s.provider = createProvider(fresh)
 		s.refreshConvertConfig()
 	}
-	s.agentsMu.Lock()
-	s.agents = make(map[string]*agent.Agent)
-	s.agentsMu.Unlock()
+	s.releaseServerMu()
+
+	// 必须在释放 s.mu 之后调用：s.mu → s.agentsMu 的顺序契约。
+	s.clearAgents()
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -495,15 +523,18 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 		// Reload config
 		newCfg, err := appconfig.Load()
 		if err == nil {
-			s.mu.Lock()
+			s.acquireServerMu("")
 			s.cfg = newCfg
 			s.provider = createProvider(s.cfg)
-			s.agents = make(map[string]*agent.Agent)
 			// Fresh provider starts with a nil ConvertCfg, which means "no
 			// vision at all" until the next agent is built. Install the
 			// derived policy right away.
 			s.refreshConvertConfig()
-			s.mu.Unlock()
+			s.releaseServerMu()
+			// 清空 agent 缓存走 agentsMu（见 clearAgents）——不能在 s.mu 里做：
+			// syncConfigFromDisk 的加锁顺序是 s.mu -> s.agentsMu，而
+			// approvals/sessions 路径是 s.agentsMu -> s.cfg，反序即死锁。
+			s.clearAgents()
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true})
 	default:
@@ -749,12 +780,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload provider if provider-related config changed
 		if needsProviderReload {
-			s.mu.Lock()
+			s.acquireServerMu("")
 			s.provider = createProvider(s.cfg)
 			// Same as the raw-editor path: the rebuilt provider needs the
 			// current conversion/vision policy installed on it.
 			s.refreshConvertConfig()
-			s.mu.Unlock()
+			s.releaseServerMu()
 		}
 
 		// Hot-reload approval config if approval section changed
@@ -781,9 +812,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload privacy/PII config: clear agent cache so new sessions pick up the new redactor
 		if _, ok := expanded["privacy"]; ok {
-			s.mu.Lock()
-			s.agents = make(map[string]*agent.Agent)
-			s.mu.Unlock()
+			s.clearAgents()
 		}
 
 		// Bot Mode: history_window / inject_bot_protocol apply to the running
