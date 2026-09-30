@@ -427,7 +427,6 @@ export default {
     workspaceLoadError: 'Failed to load workspace',
     previewError: 'Failed to preview file',
     noPreview: 'No preview content',
-    previewTitle: 'Click to preview',
     downloadError: 'Download failed',
     zipDownload: 'Download as ZIP',
     edit: 'Edit',

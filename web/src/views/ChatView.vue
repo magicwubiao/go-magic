@@ -258,28 +258,35 @@
             <div class="avatar user-avatar">👤</div>
             <div class="message-body">
               <div class="message-bubble user-bubble">
-                <!-- File attachments in message -->
+                <!-- File attachments in message：图片按 bot 页面渲染成大图缩略 +
+                     下方文件名；其他文件是「图标 + 文件名」chip。点击任意附件打开预览。 -->
                 <div v-if="msg.files?.length" class="message-files">
-                  <n-space>
-                    <div
-                      v-for="(file, idx) in msg.files"
-                      :key="idx"
-                      class="message-file-item"
-                      :class="{ 'message-file-item--clickable': !!file.url }"
-                      :title="file.url ? t('files.previewTitle') : ''"
-                      @click="file.url && openAttachmentPreview(file)"
+                  <template v-for="(file, idx) in msg.files" :key="idx">
+                    <figure
+                      v-if="file.url && isImageAttachment(file)"
+                      class="message-file-image"
+                      :title="attachmentLabel(file)"
+                      @click="openAttachmentPreview(file)"
                     >
                       <img
-                        v-if="file.url && isImageAttachment(file)"
-                        class="message-file-thumb"
+                        class="message-file-img"
                         :src="attachmentSrcFor(file.url)"
                         :alt="attachmentLabel(file)"
                         loading="lazy"
                       />
-                      <n-icon v-else size="20"><DocumentOutline /></n-icon>
+                      <figcaption class="message-file-caption">{{ attachmentLabel(file) }}</figcaption>
+                    </figure>
+                    <div
+                      v-else
+                      class="message-file-item"
+                      :class="{ 'message-file-item--clickable': !!file.url }"
+                      :title="attachmentLabel(file)"
+                      @click="file.url && openAttachmentPreview(file)"
+                    >
+                      <n-icon size="16"><DocumentOutline /></n-icon>
                       <span class="message-file-name">{{ attachmentLabel(file) }}</span>
                     </div>
-                  </n-space>
+                  </template>
                 </div>
                 <div v-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
                 <div v-else-if="!msg.files?.length" class="empty-content">{{ t('chat.fileBtn') }}</div>
@@ -4498,19 +4505,63 @@ onActivated(() => {
 }
 
 /* ========== Message File Attachments ========== */
+/* 与 bot 页面一致：图片大图缩略、多张自动换行。
+   移动端要点：气泡很窄（message-body 72% + padding），所有附件条目必须能**收缩**
+   —— flex 子项默认 min-width:auto，nowrap 的文件名会把自己的最小宽度撑到整串
+   文字宽，chip 的 max-width 拦不住，文件名就溢出圆角框盖住气泡里的其他文字。
+   因此每条 item 都要 min-width:0 + overflow:hidden，宽度上限用 min(固定值, 100%)。 */
 .message-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
   margin-bottom: 8px;
 }
+/* 图片附件：图片本体 + 下方文件名（点击打开预览） */
+.message-file-image {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  min-width: 0;
+  max-width: min(320px, 100%);
+  cursor: zoom-in;
+}
+.message-file-img {
+  max-width: 100%;
+  max-height: 240px;
+  display: block;
+  border-radius: 10px;
+}
+.message-file-caption {
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 非图片附件：「图标 + 文件名」chip */
 .message-file-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  min-width: 0;
+  max-width: min(260px, 100%);
+  padding: 6px 10px;
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 8px;
   font-size: 13px;
   color: #fff;
+  overflow: hidden;
+}
+.message-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 有 url 的附件可点击预览：给手型与悬浮反馈，无 url（元数据丢失）保持普通态 */
 .message-file-item--clickable {
@@ -4519,22 +4570,6 @@ onActivated(() => {
 }
 .message-file-item--clickable:hover {
   background: rgba(255, 255, 255, 0.28);
-}
-.message-file-name {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* 图片附件的缩略图：会话回放后靠它一眼认出是哪张图，而不是只看到文件名 */
-.message-file-thumb {
-  width: 40px;
-  height: 40px;
-  flex: none;
-  display: block;
-  object-fit: cover;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.2);
 }
 
 /* Work directory picker */

@@ -3631,10 +3631,16 @@ async function loadCandidates() {
   color: #fff;
   font-size: 12px;
   text-decoration: none !important;
-  max-width: 260px;
+  /* 移动端窄气泡里的关键约束：flex 子项默认 min-width:auto，nowrap 的文件名会把
+     最小宽度撑到整串文字宽，chip 就冲出气泡（甚至压到头像/别的文字）。
+     min-width:0 + overflow:hidden 让它真正收缩成省略号，宽度上限取 min(260px, 100%)。 */
+  min-width: 0;
+  max-width: min(260px, 100%);
+  overflow: hidden;
 }
 
 .msg-attach-file span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -427,7 +427,6 @@ export default {
     workspaceLoadError: '加载工作目录失败',
     previewError: '预览文件失败',
     noPreview: '无预览内容',
-    previewTitle: '点击预览',
     downloadError: '下载失败',
     zipDownload: '打包下载',
     newFolder: '新建文件夹',
