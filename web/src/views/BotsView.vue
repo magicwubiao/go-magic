@@ -327,9 +327,9 @@
                             class="msg-attach-img"
                             loading="lazy"
                             alt=""
-                            @click="openAttachment(a.url)"
+                            @click="openAttachment(a)"
                           />
-                          <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a.url)">
+                          <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a)">
                             <n-icon size="14"><DocumentOutline /></n-icon>
                             <span>{{ a.name || attachmentLabelFromUrl(a.url) }}</span>
                           </a>
@@ -571,9 +571,9 @@
                           class="msg-attach-img"
                           loading="lazy"
                           alt=""
-                          @click="openAttachment(a.url)"
+                          @click="openAttachment(a)"
                         />
-                        <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a.url)">
+                        <a v-else class="msg-attach-file" :href="attachmentSrcFor(a.url)" target="_blank" rel="noopener" @click.prevent="openAttachment(a)">
                           <n-icon size="14"><DocumentOutline /></n-icon>
                           <span>{{ a.name || attachmentLabelFromUrl(a.url) }}</span>
                         </a>
@@ -961,6 +961,15 @@
         </div>
       </template>
     </n-modal>
+
+    <!-- 消息附件预览：公共组件（url 票据来源，禁用编辑） -->
+    <FilePreviewDialog
+      v-model:show="showAttachmentPreview"
+      :name="previewAttachment?.name || attachmentLabelFromUrl(previewAttachment?.url || '')"
+      :type-name="previewAttachment?.name || ''"
+      :url="previewAttachment?.url || ''"
+      :editable="false"
+    />
   </div>
 </template>
 
@@ -990,6 +999,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import ReasoningContent from '@/components/ReasoningContent.vue'
+import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -1695,11 +1705,14 @@ function attachmentSrcFor(url?: string): string {
   return ''
 }
 
-async function openAttachment(url: string) {
-  try {
-    const src = await sessionsApi.resolveAttachmentSrc(url)
-    if (src) window.open(src, '_blank', 'noopener')
-  } catch { /* ignore */ }
+// 附件预览：点击气泡里的图片或文件条目，打开公共预览弹窗
+// （FilePreviewDialog 走 props.url 的 uploads 票据来源，编辑已禁用）。
+const showAttachmentPreview = ref(false)
+const previewAttachment = ref<BotMessageAttachment | null>(null)
+
+function openAttachment(a: BotMessageAttachment) {
+  previewAttachment.value = a
+  showAttachmentPreview.value = true
 }
 
 // Cross-source user-role bubbles: bot-to-bot replies arrive with

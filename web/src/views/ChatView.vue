@@ -265,6 +265,9 @@
                       v-for="(file, idx) in msg.files"
                       :key="idx"
                       class="message-file-item"
+                      :class="{ 'message-file-item--clickable': !!file.url }"
+                      :title="file.url ? t('files.previewTitle') : ''"
+                      @click="file.url && openAttachmentPreview(file)"
                     >
                       <img
                         v-if="file.url && isImageAttachment(file)"
@@ -805,6 +808,16 @@
     <!-- Goal Sidebar -->
     <RightSidebar v-model:mobile-visible="rightSidebarMobileVisible" />
 
+    <!-- 消息附件预览：公共组件（url 票据来源，禁用编辑） -->
+    <FilePreviewDialog
+      v-model:show="showAttachmentPreview"
+      :name="previewAttachment ? attachmentLabel(previewAttachment) : ''"
+      :type-name="previewAttachment ? (previewAttachment.name || previewAttachment.filename || '') : ''"
+      :size="previewAttachment?.size"
+      :url="previewAttachment?.url || ''"
+      :editable="false"
+    />
+
     <!-- Mobile right sidebar toggle: edge handle embedded into the screen's right edge
          (mirrors the left session-sidebar handle), half inside/half outside, so it
          never overlaps the chat content. -->
@@ -934,6 +947,7 @@ import ChatApprovalCard from '@/components/ChatApprovalCard.vue'
 import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
+import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
 import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, CloseCircleOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline } from '@vicons/ionicons5'
@@ -2328,6 +2342,18 @@ function isImageAttachment(file: Partial<sessionsApi.UploadedFile>): boolean {
 // 的「图片」——绝不把 uuid 晾在气泡上。
 function attachmentLabel(file: Partial<sessionsApi.UploadedFile>): string {
   return file.name || file.filename || t('chat.imageBtn')
+}
+
+// ===== 消息附件预览 =====
+// 点击气泡里的附件条目打开公共预览弹窗（FilePreviewDialog 走 props.url 的
+// uploads 票据来源，编辑已禁用；预览/下载/新标签打开都在弹窗内完成）。
+const showAttachmentPreview = ref(false)
+const previewAttachment = ref<Partial<sessionsApi.UploadedFile> | null>(null)
+
+function openAttachmentPreview(file: Partial<sessionsApi.UploadedFile>) {
+  if (!file.url) return
+  previewAttachment.value = file
+  showAttachmentPreview.value = true
 }
 
 // 附件缩略图的票据地址缓存。
@@ -4485,6 +4511,14 @@ onActivated(() => {
   border-radius: 8px;
   font-size: 13px;
   color: #fff;
+}
+/* 有 url 的附件可点击预览：给手型与悬浮反馈，无 url（元数据丢失）保持普通态 */
+.message-file-item--clickable {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.message-file-item--clickable:hover {
+  background: rgba(255, 255, 255, 0.28);
 }
 .message-file-name {
   max-width: 200px;
