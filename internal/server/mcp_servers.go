@@ -367,7 +367,7 @@ func (s *Server) persistMCPServers(upsert map[string]mcp.ServerConfig, remove []
 	s.reloadConfig()
 	s.acquireServerMu("")
 	if s.cfg == nil {
-		s.cfg = &appconfig.Config{}
+		s.setCfg(&appconfig.Config{})
 	}
 	if s.cfg.MCP == nil {
 		s.cfg.MCP = &appconfig.MCPConfig{}
@@ -391,8 +391,8 @@ func (s *Server) mcpServerConfigs() map[string]mcp.ServerConfig {
 	if s == nil {
 		return out
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
 	if s.cfg == nil || s.cfg.MCP == nil {
 		return out
 	}

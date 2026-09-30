@@ -143,6 +143,9 @@ func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.Pro
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
+	// 渲染整份 provider 配置必须在 s.mu 内：s.cfg 与其 Providers map 会被
+	// handleModelSet / syncConfigFromDisk 并发整体替换（-race 下裸读必报）。
+	s.acquireServerMu("")
 	providers := make([]map[string]interface{}, 0)
 	if s.cfg != nil && s.cfg.Providers != nil {
 		for name, provCfg := range s.cfg.Providers {
@@ -157,6 +160,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	s.releaseServerMu()
 	jsonResponse(w, providers)
 }
 
@@ -195,8 +199,19 @@ func (s *Server) handleModelByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
-	providerName := s.cfg.Provider
-	modelName := s.cfg.GetCurrentModel()
+	// 读 s.cfg 字段（Provider/GetCurrentModel/Providers）需在 s.mu 内：
+	// s.cfg 会被 syncConfigFromDisk/handleModelSet 并发整体替换。
+	s.acquireServerMu("")
+	cfg := s.cfg
+	providerName := ""
+	if cfg != nil {
+		providerName = cfg.Provider
+	}
+	modelName := ""
+	if cfg != nil {
+		modelName = cfg.GetCurrentModel()
+	}
+	s.releaseServerMu()
 
 	// Try to get current model from Modeler interface
 	if s.provider != nil {
@@ -324,11 +339,13 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	// edited via the UI dropdown) has the same precedence as the request
 	// path in server.go: it beats both name detection and provider-level
 	// capabilities.
-	if s.cfg.Providers != nil {
+	s.acquireServerMu("")
+	if s.cfg != nil && s.cfg.Providers != nil {
 		if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
 			supportsVision = *provCfg.Vision
 		}
 	}
+	s.releaseServerMu()
 
 	jsonResponse(w, map[string]interface{}{
 		"model":                    fmt.Sprintf("%s/%s", providerName, modelName),
@@ -451,6 +468,16 @@ func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request) {
+	// 整个 handler 都是 provider 配置的读写（GET/PUT/POST/DELETE 子路由），
+	// 全程在 s.mu 内完成：s.cfg 与其 Providers map 会被 handleModelSet /
+	// syncConfigFromDisk 并发整体替换，此前无锁直读直写是真实数据竞态。
+	//
+	// 注意：这里**不**先 reloadConfig —— 那会把内存快照整体换成磁盘内容，
+	// 而 PUT 语义本就是"在内存快照上改一处再落盘"。无条件重载反而会丢掉
+	// 本次请求前的内存态（测试也依赖这一点：直接构造 Server 并预置 cfg 后
+	// 调 PUT，期望改的是那份 cfg）。网关/CLI 的外部写入由 persistConfig
+	// 的 preserveGateway 与 reloadConfig 的其它调用点兜底。
+	s.acquireServerMu("")
 	// Support both /api/providers/{name}/* and /api/platforms/{name}/*
 	path := r.URL.Path
 	path = strings.TrimPrefix(path, "/api/providers/")
@@ -468,6 +495,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 	if r.Method == http.MethodGet && subRoute == "" {
 		if s.cfg != nil && s.cfg.Providers != nil {
 			if provCfg, ok := s.cfg.Providers[name]; ok {
+				s.releaseServerMu()
 				jsonResponse(w, ProviderInfo{
 					Name:    name,
 					Label:   name,
@@ -478,6 +506,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
+		s.releaseServerMu()
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
 	}
@@ -492,6 +521,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.releaseServerMu()
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -536,6 +566,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			// its convert config instead of waiting for a restart.
 			s.refreshConvertConfig()
 		}
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 		return
 	}
@@ -550,6 +581,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.releaseServerMu()
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -594,6 +626,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			// sync with the just-saved declaration.
 			s.refreshConvertConfig()
 		}
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": providerName, "created": true})
 		return
 	}
@@ -609,22 +642,26 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					s.cfg.Model = ""
 				}
 				_ = s.persistConfig(true)
+				s.releaseServerMu()
 				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 				return
 			}
 		}
+		s.releaseServerMu()
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
 	}
 
 	// Handle POST /{name}/enable - enable provider
 	if r.Method == http.MethodPost && subRoute == "enable" {
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
 		return
 	}
 
 	// Handle POST /{name}/disable - disable provider
 	if r.Method == http.MethodPost && subRoute == "disable" {
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
 		return
 	}
@@ -644,6 +681,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		}
 
 		if s.cfg == nil {
+			s.releaseServerMu()
 			http.Error(w, "config unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -664,9 +702,13 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		}
 		model := provCfg.GetCurrentModel()
 		if model == "" {
+			s.releaseServerMu()
 			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no model configured"})
 			return
 		}
+		// 配置已快照成 provCfg：测试连接要打真实网络请求（最多 20s），
+		// 绝不能持 s.mu —— 否则一个卡住的端点会让整个后端的配置读全部排队。
+		s.releaseServerMu()
 
 		prov, err := appconfig.CreateProviderFor(name, provCfg)
 		if err != nil {
@@ -714,6 +756,7 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		}
 
 		if s.cfg == nil {
+			s.releaseServerMu()
 			http.Error(w, "config unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -739,9 +782,13 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 		}
 		if provCfg.BaseURL == "" {
+			s.releaseServerMu()
 			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no base URL configured for this provider"})
 			return
 		}
+		// 凭据已快照到 provCfg：立刻放锁，网络请求（FetchModels）绝不能
+		// 持 s.mu —— 那是全 server 的配置读锁，一个慢请求会拖死整个后端。
+		s.releaseServerMu()
 
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
@@ -766,6 +813,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
+	// 模型供应商页的主接口。整段渲染 provider 列表都在 s.mu 内：
+	// s.cfg / s.cfg.Providers 会被 handleModelSet、syncConfigFromDisk 并发
+	// 整体替换，之前无锁直读是真实数据竞态（-race 必报）。
+	s.acquireServerMu("")
 	providerList := make([]map[string]interface{}, 0)
 	providerNames := make(map[string]bool) // Track which providers are already added
 
@@ -832,6 +883,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.releaseServerMu()
 	jsonResponse(w, map[string]interface{}{
 		"model":     model,
 		"provider":  currentProviderName,

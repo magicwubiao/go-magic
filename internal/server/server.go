@@ -57,7 +57,25 @@ type Server struct {
 	// credentials), so every persist must go through persistConfig.
 	configMu  sync.Mutex
 	startTime time.Time
-	cfg       *appconfig.Config
+	// cfgMu 保护 s.cfg **这个指针字段本身**（不是它指向的结构体内容）。
+	//
+	// 为什么需要它：s.cfg 会在运行期被整体替换（reloadConfig /
+	// syncConfigFromDisk / handleConfig 的 raw 编辑器分支都做 `s.cfg = fresh`），
+	// 而读取点极其分散 —— 有的在 s.mu 临界区内，有的只在 s.agentsMu 内
+	// （sessions.go 设置工作目录时读 s.cfg.Memory.Enabled），有的干脆无锁
+	// （handleConfig GET 分支自己）。读一个可能与 s.mu 写并发的指针就是
+	// 数据竞态，`go test -race` 会直接报 DATA RACE，
+	// 见 model_switch_deadlock_test.go::TestModelSwitchUnderConcurrentLoad。
+	//
+	// 锁的层级：cfgMu 是**叶子锁**，持 cfgMu 期间不得再去拿 s.mu / s.agentsMu
+	// / configMu（否则立刻引入新的 AB-BA 面）。因为只保护一个指针的读写，
+	// 临界区极短，从任何持有其它锁的位置调用它都是安全的 —— 这也正是它
+	// 能同时给 s.mu 内、agentsMu 内、无锁三处读取点兜底的原因。
+	//
+	// 结构性内容（s.cfg.Provider、s.cfg.Approval 等字段）仍由 s.mu
+	// 在写侧串行化；cfgMu 只解决"指针被替换"与"读指针"之间的竞态。
+	cfgMu sync.Mutex
+	cfg   *appconfig.Config
 	// configMtimeNs 记录最近一次已加载进内存的 config.json 修改时间（UnixNano），
 	// 供 syncConfigFromDisk 做"外部进程改了配置文件"的廉价变更检测。
 	//
@@ -65,7 +83,7 @@ type Server struct {
 	// 调用，而 persistConfig 的调用方常已持 s.mu（RWMutex 不可重入），
 	// 走 s.mu 就会自我死锁。陈旧值的唯一后果是"多重载一次配置"，可接受。
 	configMtimeNs atomic.Int64
-	sessionStore *session.Store
+	sessionStore  *session.Store
 	// uploadsMeta maps on-disk upload uuid names back to readable original
 	// filenames so the Files page can display user-friendly names. Lazy-open.
 	uploadsMeta *uploadsMetaStore
@@ -1053,10 +1071,13 @@ func normalizeDirScope(dir string) string {
 // 与 Memory/Cortex 的普通 bool 不同——config.Load 不合并默认值，
 // 普通 bool 缺键会静默变 false）。
 func (s *Server) staticRulesEnabled() bool {
-	if s.cfg == nil || s.cfg.Context == nil || s.cfg.Context.Enabled == nil {
+	// 走 cfgSnapshot：本函数会被持 agentsMu 的路径调用（sessions.go 设置
+	// 工作目录），而 s.cfg 会在 s.mu 下被整体替换 —— 裸读指针即数据竞态。
+	cfg := s.cfgSnapshot()
+	if cfg == nil || cfg.Context == nil || cfg.Context.Enabled == nil {
 		return true
 	}
-	return *s.cfg.Context.Enabled
+	return *cfg.Context.Enabled
 }
 
 // registerApprovalSSEHandler registers an SSE push callback for the given session

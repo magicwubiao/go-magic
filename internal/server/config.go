@@ -299,7 +299,7 @@ func (s *Server) setConfigMtimeFromDisk() {
 func (s *Server) reloadConfig() {
 	if fresh, err := appconfig.Load(); err == nil && fresh != nil {
 		s.acquireServerMu("")
-		s.cfg = fresh
+		s.setCfg(fresh)
 		s.releaseServerMu()
 		s.markConfigMtime()
 	}
@@ -365,7 +365,7 @@ func (s *Server) syncConfigFromDisk() {
 		return
 	}
 	s.acquireServerMu("")
-	s.cfg = fresh
+	s.setCfg(fresh)
 	if fresh.Provider != "" {
 		s.provider = createProvider(fresh)
 		s.refreshConvertConfig()
@@ -387,8 +387,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// approval section instead of blindly overwriting the whole
 		// config.json with the in-memory copy — that used to revert
 		// credentials the gateway process had written (QR login).
+		//
+		// 整段改写 + persistConfig 都在 s.mu 内：这里原地改的是配置对象
+		// 自身，且 persistConfig 序列化整份 s.cfg，必须与其它写点串行。
+		s.acquireServerMu("")
 		if s.cfg == nil {
-			s.cfg = appconfig.DefaultConfig()
+			s.setCfg(appconfig.DefaultConfig())
 		}
 		if s.cfg.Approval == nil {
 			s.cfg.Approval = appconfig.DefaultApprovalConfig()
@@ -418,9 +422,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.persistConfig(true); err != nil {
+			s.releaseServerMu()
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}
+		s.releaseServerMu()
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
@@ -450,15 +456,18 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 	if strings.HasSuffix(path, "/switch") {
 		name := strings.TrimSuffix(path, "/switch")
 		// Actually switch profile
+		s.acquireServerMu("")
 		if s.cfg != nil {
 			// Re-read from disk first so gateway/CLI writes are not reverted
 			s.reloadConfig()
 			s.cfg.Profile = name
 			if err := s.persistConfig(false); err != nil {
+				s.releaseServerMu()
 				http.Error(w, "Failed to save config: "+err.Error(), 500)
 				return
 			}
 		}
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
 		return
 	}
@@ -524,8 +533,8 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 		newCfg, err := appconfig.Load()
 		if err == nil {
 			s.acquireServerMu("")
-			s.cfg = newCfg
-			s.provider = createProvider(s.cfg)
+			s.setCfg(newCfg)
+			s.provider = createProvider(newCfg)
 			// Fresh provider starts with a nil ConvertCfg, which means "no
 			// vision at all" until the next agent is built. Install the
 			// derived policy right away.
@@ -713,11 +722,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		// Always re-read from file to pick up changes made by gateway process (e.g. QR login token)
 		s.reloadConfig()
-		if s.cfg == nil {
+		// 经 cfgSnapshot 取快照：reloadConfig 会在 s.mu 下整体替换 s.cfg，
+		// 这里若无保护地裸读指针就是数据竞态（-race 直接报）。
+		cfg := s.cfgSnapshot()
+		if cfg == nil {
 			jsonResponse(w, map[string]interface{}{})
 			return
 		}
-		jsonResponse(w, s.cfg)
+		jsonResponse(w, cfg)
 	case "PUT":
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -741,12 +753,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// would revert them ("配置被还原" root cause).
 		s.reloadConfig()
 
+		// 整段合并必须在 s.mu 内完成：这里是**唯一**原地改写配置对象的
+		// 分支（其余写点都是整体替换指针）。若并发到来，别的读取方
+		// （reloadConfig 的替换、其他 handler 的字段读）会读到半改状态。
+		// 顺带把 cfgMu 的语义收紧为"指针替换"，物化前确保指针已就位。
+		s.acquireServerMu("")
 		// Merge into config
-		if s.cfg == nil {
-			s.cfg = appconfig.DefaultConfig()
+		if s.cfgSnapshot() == nil {
+			s.setCfg(appconfig.DefaultConfig())
 		}
 		data, _ := json.Marshal(expanded)
 		if err := json.Unmarshal(data, s.cfg); err != nil {
+			s.releaseServerMu()
 			http.Error(w, "failed to merge config: "+err.Error(), 500)
 			return
 		}
@@ -761,6 +779,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Save (atomically; gateway section was refreshed above and merged,
 		// so do NOT preserve it from disk again here)
 		if err := s.persistConfig(false); err != nil {
+			s.releaseServerMu()
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}
@@ -780,12 +799,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload provider if provider-related config changed
 		if needsProviderReload {
-			s.acquireServerMu("")
 			s.provider = createProvider(s.cfg)
 			// Same as the raw-editor path: the rebuilt provider needs the
 			// current conversion/vision policy installed on it.
 			s.refreshConvertConfig()
-			s.releaseServerMu()
 		}
 
 		// Hot-reload approval config if approval section changed
@@ -812,7 +829,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload privacy/PII config: clear agent cache so new sessions pick up the new redactor
 		if _, ok := expanded["privacy"]; ok {
+			s.releaseServerMu()
 			s.clearAgents()
+			s.acquireServerMu("")
 		}
 
 		// Bot Mode: history_window / inject_bot_protocol apply to the running
@@ -864,7 +883,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Return updated config
-		jsonResponse(w, s.cfg)
+		respCfg := s.cfgSnapshot()
+		s.releaseServerMu()
+		if respCfg == nil {
+			jsonResponse(w, map[string]interface{}{})
+			return
+		}
+		jsonResponse(w, respCfg)
 	default:
 		http.Error(w, "method not allowed", 405)
 	}

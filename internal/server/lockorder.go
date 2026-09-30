@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/magicwubiao/go-magic/internal/agent"
+	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
 // 加锁顺序守卫。
@@ -109,6 +110,13 @@ var strictLockOrder atomic.Bool
 
 // EnableStrictLockOrder 打开加锁顺序断言。供测试与本地排障使用。
 func EnableStrictLockOrder(on bool) { strictLockOrder.Store(on) }
+
+// cfgWriteGen 每次 setCfg 自增。用于并发测试断言"配置替换与读取没有
+// 交错到数据竞态"——本机跑不了 -race，靠这个计数器做廉价观测点。
+var cfgWriteGen atomic.Int64
+
+// cfgWriteCount 返回 s.cfg 被整体替换的累计次数（测试观测用）。
+func cfgWriteCount() int64 { return cfgWriteGen.Load() }
 
 // acquireServerMu / releaseServerMu 是获取 s.mu 的统一入口。
 //
@@ -217,4 +225,30 @@ func (s *Server) clearAgents() {
 	s.acquireAgentsMu()
 	s.agents = make(map[string]*agent.Agent)
 	s.releaseAgentsMu()
+}
+
+// setCfg 替换内存里的整份配置快照。**所有 `s.cfg = ...` 写点都必须走这里**，
+// 否则读取点（很多在 s.mu / s.agentsMu 之外）会与写入并发读到撕裂的指针。
+//
+// 只拿 cfgMu（叶子锁），因此可以从 s.mu 临界区内部安全调用。
+func (s *Server) setCfg(cfg *appconfig.Config) {
+	s.cfgMu.Lock()
+	s.cfg = cfg
+	s.cfgMu.Unlock()
+	cfgWriteGen.Add(1)
+}
+
+// cfgSnapshot 返回当前配置快照的指针。
+//
+// 调用方拿到的是一个**不可变快照**：写入侧永远整体替换指针、绝不原地改
+// 已有对象（handleConfig PUT 的合并分支是唯一例外，它在 s.mu 内原地
+// 改写自己的快照，此时不会有人同时持有它）。因此拿到指针后可以自由
+// 读取其中的字段，无需继续持 cfgMu。
+//
+// 注意：返回 nil 是合法的（尚未加载配置），调用方仍需判空。
+func (s *Server) cfgSnapshot() *appconfig.Config {
+	s.cfgMu.Lock()
+	cfg := s.cfg
+	s.cfgMu.Unlock()
+	return cfg
 }

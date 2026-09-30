@@ -52,15 +52,17 @@ func TestModelSetDoesNotDeadlockWithAgentsMu(t *testing.T) {
 		)
 	}()
 
-	// (b) 反向顺序：持 agentsMu 期间读 s.cfg —— 与 sessions.go 设置工作目录
-	//     (s.agentsMu 内读 s.cfg.Memory.Enabled / staticRulesEnabled) 同形。
-	//     这类"持 agentsMu 读 cfg"本身合法；致命的是它同时想拿 s.mu，
-	//     所以下方额外断言守卫能抓到那种写法。
+	// (b) 反向顺序：持 agentsMu 期间读配置 —— 与 sessions.go 设置工作目录
+	//     (s.agentsMu 内读 cfg.Memory.Enabled / staticRulesEnabled) 同形。
+	//     这类"持 agentsMu 读 cfg"本身合法；读取必须走 cfgMu（cfgSnapshot），
+	//     不能裸读 s.cfg —— reloadConfig/syncConfigFromDisk 会在 s.mu 下
+	//     并发整体替换它，裸读就是数据竞态（CI -race 报的正是这一条）。
+	//     致命的是它同时想拿 s.mu，所以下方额外断言守卫能抓到那种写法。
 	reverseDone := make(chan struct{})
 	go func() {
 		defer close(reverseDone)
 		s.acquireAgentsMu()
-		_ = s.cfg != nil && s.cfg.Provider != ""
+		_ = s.cfgSnapshot() != nil
 		s.releaseAgentsMu()
 	}()
 
@@ -191,7 +193,9 @@ func TestModelSwitchUnderConcurrentLoad(t *testing.T) {
 	stop := make(chan struct{})
 	var holders sync.WaitGroup
 
-	// 反向路径：不断持 agentsMu 读 cfg（sessions/approval 同形）
+	// 反向路径：不断持 agentsMu 读 cfg（sessions/approval 同形）。
+	// 读快照而非裸读 s.cfg：写入侧在 s.mu 下整体替换指针，裸读会被
+	// -race 判为 DATA RACE（这正是本测试在 CI 上失败的原因）。
 	holders.Add(1)
 	go func() {
 		defer holders.Done()
@@ -201,7 +205,7 @@ func TestModelSwitchUnderConcurrentLoad(t *testing.T) {
 				return
 			default:
 				s.acquireAgentsMu()
-				_ = s.cfg != nil
+				_ = s.cfgSnapshot() != nil
 				s.releaseAgentsMu()
 			}
 		}
@@ -225,6 +229,95 @@ func TestModelSwitchUnderConcurrentLoad(t *testing.T) {
 	holders.Wait()
 }
 
+// TestCfgReadersDoNotRaceWithReplacement 把"所有会读 s.cfg 的只读入口"
+// 与"会整体替换 s.cfg 的写入口"真正并发跑起来。
+//
+// 本机无 gcc、跑不了 -race，但这条测试仍有价值：它钉住的是**可观测的
+// 语义**——写侧每次替换都会让 cfgWriteGen 自增，读侧每次都经 cfgSnapshot
+// 取快照。若哪天有人把某个入口改回裸读 s.cfg，配上 -race 的 CI 就会报；
+// 在本机，至少能保证这些入口在并发替换下不 panic、不死锁、不返回损坏结构。
+//
+// 覆盖的入口即 CI 上 `-race` 报 DATA RACE 的那批（handleConfig GET /
+// handleProviders / handleModelOptions）——它们此前都完全不持锁地裸读 s.cfg。
+func TestCfgReadersDoNotRaceWithReplacement(t *testing.T) {
+	s := newLockTestServer(t)
+	time.Sleep(50 * time.Millisecond)
+
+	const rounds = 40
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// 写侧：不断整体替换 s.cfg（走 syncConfigFromDisk 的真实路径）。
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				// 直接走 setCfg 模拟 reloadConfig / raw 编辑器分支的替换。
+				if cur := s.cfgSnapshot(); cur != nil {
+					s.setCfg(cur)
+				}
+			}
+		}
+	}()
+
+	// 读侧：多路并发调用所有读配置的 HTTP 入口。
+	type endpoint struct {
+		name string
+		call func()
+	}
+	endpoints := []endpoint{
+		{"GET /api/config", func() {
+			s.handleConfig(httptest.NewRecorder(), newJSONRequest(t, http.MethodGet, "/api/config", nil))
+		}},
+		{"GET /api/model/options", func() {
+			s.handleModelOptions(httptest.NewRecorder(), newJSONRequest(t, http.MethodGet, "/api/model/options", nil))
+		}},
+		{"GET /api/providers", func() {
+			s.handleProviders(httptest.NewRecorder(), newJSONRequest(t, http.MethodGet, "/api/providers", nil))
+		}},
+		{"GET /api/models/info", func() {
+			s.handleModelInfo(httptest.NewRecorder(), newJSONRequest(t, http.MethodGet, "/api/models/info", nil))
+		}},
+	}
+
+	var readers sync.WaitGroup
+	errCh := make(chan string, len(endpoints)*rounds)
+	for _, ep := range endpoints {
+		ep := ep
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for i := 0; i < rounds; i++ {
+				func() {
+					// 读入口不应 panic；用 recover 把 panic 变成可读失败信息，
+					// 否则整个测试进程会以 stack trace 崩掉、定位困难。
+					defer func() {
+						if r := recover(); r != nil {
+							errCh <- ep.name + " panic: " + fmt.Sprint(r)
+						}
+					}()
+					ep.call()
+				}()
+			}
+		}()
+	}
+
+	readersDone := make(chan struct{})
+	go func() { readers.Wait(); close(readersDone) }()
+	waitFor(t, readersDone, "并发读配置入口出现死锁/挂起")
+	close(stop)
+	wg.Wait()
+
+	close(errCh)
+	for msg := range errCh {
+		t.Error(msg)
+	}
+}
+
 func newLockTestServer(t *testing.T) *Server {
 	t.Helper()
 	// 打开加锁顺序断言：任何"持 agentsMu 再拿 s.mu"的反序都会立即 panic，
@@ -246,7 +339,7 @@ func newLockTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.cfg = cfg
+	s.setCfg(cfg)
 	s.markConfigMtime()
 	return s
 }

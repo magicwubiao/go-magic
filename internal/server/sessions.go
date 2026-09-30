@@ -159,7 +159,13 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			// 该目录向上发现规则文件（AGENTS.md 等）的注入。
 			s.acquireAgentsMu()
 			if a, ok := s.agents[id]; ok && a != nil {
-				if (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil {
+				// cfgSnapshot 而非裸读 s.cfg：此处只持 agentsMu，而
+				// reloadConfig/syncConfigFromDisk 会在 s.mu 下整体替换
+				// s.cfg —— 无保护地读这个指针就是数据竞态
+				// （hold agentsMu 再去拿 s.mu 会构成 AB-BA 死锁，所以
+				// 只能走 cfgMu 这把叶子锁取快照）。
+				cfg := s.cfgSnapshot()
+				if (cfg != nil && cfg.Memory.Enabled) || s.cortexMgr != nil {
 					a.SetMemoryScope(normalizeDirScope(*req.WorkDir))
 				}
 				if s.staticRulesEnabled() {

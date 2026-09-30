@@ -49,10 +49,13 @@ func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplug
 // disabledAgentPlugins 从配置读取被禁用的插件名集合。
 func (s *Server) disabledAgentPlugins() map[string]bool {
 	out := make(map[string]bool)
-	if s.cfg == nil {
+	// cfgSnapshot：调用方可能不持任何锁（loadAgentPlugins 在启动/重载路径），
+	// 而 s.cfg 会被 reloadConfig 并发整体替换。
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
 		return out
 	}
-	for _, n := range s.cfg.AgentPlugins.Disabled {
+	for _, n := range cfg.AgentPlugins.Disabled {
 		out[n] = true
 	}
 	return out
@@ -60,7 +63,13 @@ func (s *Server) disabledAgentPlugins() map[string]bool {
 
 // setPluginDisabled 更新配置中的禁用状态并持久化。
 // disabled=true → 加入禁用列表;false → 从禁用列表移除。
+//
+// 全程在 s.mu 内：这里原地改写 s.cfg.AgentPlugins 并 persistConfig
+// （序列化整份 s.cfg）。调用方（卸载/启停插件两条路径）此前都不持锁，
+// 裸改写就是数据竞态。
 func (s *Server) setPluginDisabled(name string, disabled bool) {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
 	if s.cfg == nil {
 		return
 	}
@@ -104,9 +113,9 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case rest == "" && r.Method == http.MethodGet:
-		s.mu.RLock()
+		s.acquireServerMu("")
 		plugins := s.agentPlugins
-		s.mu.RUnlock()
+		s.releaseServerMu()
 		if plugins == nil {
 			jsonResponse(w, []map[string]any{})
 			return
@@ -283,9 +292,9 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	// 确认插件存在。
-	s.mu.RLock()
+	s.acquireServerMu("")
 	plugins := s.agentPlugins
-	s.mu.RUnlock()
+	s.releaseServerMu()
 	if plugins == nil {
 		http.Error(w, "plugins not loaded", http.StatusServiceUnavailable)
 		return
