@@ -388,7 +388,8 @@ func TestCfgModifyHelpersDoNotSelfDeadlock(t *testing.T) {
 	waitFor(t, done, "改配置路径出现自我死锁（持 cfgMu 时又去拿 cfgMu）")
 }
 
-func newLockTestServer(t *testing.T) *Server {	t.Helper()
+func newLockTestServer(t *testing.T) *Server {
+	t.Helper()
 	// 打开加锁顺序断言：任何"持 agentsMu 再拿 s.mu"的反序都会立即 panic，
 	// 而不是在特定交错下悄悄变成永久死锁。
 	EnableStrictLockOrder(true)
