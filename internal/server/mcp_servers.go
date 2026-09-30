@@ -365,7 +365,7 @@ func (s *Server) persistMCPServers(upsert map[string]mcp.ServerConfig, remove []
 		return nil
 	}
 	s.reloadConfig()
-	s.mu.Lock()
+	s.acquireServerMu("")
 	if s.cfg == nil {
 		s.cfg = &appconfig.Config{}
 	}
@@ -381,7 +381,7 @@ func (s *Server) persistMCPServers(upsert map[string]mcp.ServerConfig, remove []
 	for _, name := range remove {
 		delete(s.cfg.MCP.Servers, name)
 	}
-	s.mu.Unlock()
+	s.releaseServerMu()
 	return s.persistConfig(true)
 }
 

@@ -168,10 +168,10 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(path, "/switch") && r.Method == http.MethodPost {
 		name := strings.TrimSuffix(path, "/switch")
-		s.mu.Lock()
+		s.acquireServerMu("")
 		s.cfg.Profile = name
 		_ = s.persistConfig(true)
-		s.mu.Unlock()
+		s.releaseServerMu()
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}

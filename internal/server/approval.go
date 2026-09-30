@@ -258,8 +258,8 @@ func (s *Server) getApprovalManager() *approval.Manager {
 	}
 
 	// Fallback: try to find any agent with an approval hook
-	s.agentsMu.Lock()
-	defer s.agentsMu.Unlock()
+	s.acquireAgentsMu()
+	defer s.releaseAgentsMu()
 	for _, a := range s.agents {
 		if hook := a.GetApprovalHook(); hook != nil {
 			return hook.GetManager()

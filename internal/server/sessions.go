@@ -157,7 +157,7 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			// 目录级共享记忆 + 静态规则链：工作目录一旦设置，把已缓存 agent 的
 			// 记忆 scope 绑定到该目录归一化键（召回/沉淀落目录桶），并开启从
 			// 该目录向上发现规则文件（AGENTS.md 等）的注入。
-			s.agentsMu.Lock()
+			s.acquireAgentsMu()
 			if a, ok := s.agents[id]; ok && a != nil {
 				if (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil {
 					a.SetMemoryScope(normalizeDirScope(*req.WorkDir))
@@ -166,7 +166,7 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 					a.SetRuleDir(*req.WorkDir)
 				}
 			}
-			s.agentsMu.Unlock()
+			s.releaseAgentsMu()
 		}
 		jsonResponse(w, map[string]bool{"ok": true})
 	case "DELETE":
@@ -176,9 +176,9 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&req)
 
 		s.sessionStore.DeleteSession(context.Background(), id)
-		s.agentsMu.Lock()
+		s.acquireAgentsMu()
 		delete(s.agents, id)
-		s.agentsMu.Unlock()
+		s.releaseAgentsMu()
 
 		if req.DeleteFiles {
 			if dbSession.WorkDir != "" && !dbSession.WorkDirUserSet {
@@ -206,9 +206,9 @@ func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	// Reset agent for this session
-	s.agentsMu.Lock()
+	s.acquireAgentsMu()
 	delete(s.agents, sessionID)
-	s.agentsMu.Unlock()
+	s.releaseAgentsMu()
 
 	// Reset session messages in DB
 	if s.sessionStore != nil {

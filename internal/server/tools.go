@@ -141,7 +141,7 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 	// Handle enable/disable
 	if strings.HasSuffix(r.URL.Path, "/enable") {
 		id = strings.TrimSuffix(id, "/enable")
-		s.mu.Lock()
+		s.acquireServerMu("")
 		if s.cfg != nil {
 			// Add to enabled list if not present
 			found := false
@@ -164,13 +164,13 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tools.Disabled = newDisabled
 			_ = s.persistConfig(true)
 		}
-		s.mu.Unlock()
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": true})
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/disable") {
 		id = strings.TrimSuffix(id, "/disable")
-		s.mu.Lock()
+		s.acquireServerMu("")
 		if s.cfg != nil {
 			// Add to disabled list
 			found := false
@@ -193,7 +193,7 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Tools.Enabled = newEnabled
 			_ = s.persistConfig(true)
 		}
-		s.mu.Unlock()
+		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": id, "enabled": false})
 		return
 	}

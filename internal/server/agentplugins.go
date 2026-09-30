@@ -140,18 +140,18 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 
 // reloadAgentPlugins 停止现有 MCP 运行时并重新加载。
 func (s *Server) reloadAgentPlugins(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
+	s.acquireServerMu("")
 	old := s.agentPlugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 	if old != nil {
 		agentplugin.StopAll(old)
 	}
 
 	_, plugins := s.loadAgentPlugins()
 
-	s.mu.Lock()
+	s.acquireServerMu("")
 	s.agentPlugins = plugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 
 	skillCount := 0
 	for _, g := range agentplugin.AllSkills(plugins) {
@@ -216,16 +216,16 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 重新加载以激活新插件。
-	s.mu.Lock()
+	s.acquireServerMu("")
 	old := s.agentPlugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 	if old != nil {
 		agentplugin.StopAll(old)
 	}
 	_, plugins := s.loadAgentPlugins()
-	s.mu.Lock()
+	s.acquireServerMu("")
 	s.agentPlugins = plugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 
 	jsonResponse(w, map[string]any{
 		"ok":   true,
@@ -241,9 +241,9 @@ func (s *Server) uninstallAgentPlugin(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 	// 先从运行时映射中停止该插件的 MCP(若有)。
-	s.mu.Lock()
+	s.acquireServerMu("")
 	old := s.agentPlugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 	if old != nil {
 		if mp, ok := old[name]; ok && mp.Runtime != nil {
 			mp.Runtime.Stop()
@@ -264,9 +264,9 @@ func (s *Server) uninstallAgentPlugin(w http.ResponseWriter, r *http.Request, na
 		agentplugin.StopAll(old)
 	}
 	_, plugins := s.loadAgentPlugins()
-	s.mu.Lock()
+	s.acquireServerMu("")
 	s.agentPlugins = plugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 
 	jsonResponse(w, map[string]any{
 		"ok":   true,
@@ -298,16 +298,16 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 	s.setPluginDisabled(name, disabled)
 
 	// 停止旧运行时并重新加载(禁用/启用需重建运行时)。
-	s.mu.Lock()
+	s.acquireServerMu("")
 	old := s.agentPlugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 	if old != nil {
 		agentplugin.StopAll(old)
 	}
 	_, newPlugins := s.loadAgentPlugins()
-	s.mu.Lock()
+	s.acquireServerMu("")
 	s.agentPlugins = newPlugins
-	s.mu.Unlock()
+	s.releaseServerMu()
 
 	jsonResponse(w, map[string]any{
 		"ok":       true,
