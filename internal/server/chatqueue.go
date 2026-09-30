@@ -86,8 +86,8 @@ const (
 // maxTurnTimeoutMinutes 兜住比不设防安全。
 func (s *Server) turnTimeout() time.Duration {
 	minutes := 0
-	if s.cfg != nil {
-		minutes = s.cfg.Agent.TurnTimeoutMinutes
+	if cfg := s.cfgSnapshot(); cfg != nil {
+		minutes = cfg.Agent.TurnTimeoutMinutes
 	}
 	if minutes <= 0 {
 		return sessionTurnTimeout

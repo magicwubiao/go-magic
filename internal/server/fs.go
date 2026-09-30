@@ -57,7 +57,7 @@ func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	} else if absPath == s.cfg.WorkingDir {
+	} else if absPath == s.cfgWorkingDir() {
 		jsonResponse(w, map[string]interface{}{"error": "cannot delete root working directory"})
 		return
 	}
@@ -110,7 +110,7 @@ func isTextFile(data []byte) bool {
 }
 
 func (s *Server) getSessionWorkDir(sessionID string, sessionName string) string {
-	baseDir := s.cfg.WorkingDir
+	baseDir := s.cfgWorkingDir()
 	if baseDir == "" {
 		baseDir = filepath.Join(s.magicHome, "workspace")
 	}
@@ -218,7 +218,7 @@ func (s *Server) handleWorkDirHistory(w http.ResponseWriter, r *http.Request) {
 		dirs = append(dirs, cleaned)
 	}
 
-	addDir(s.cfg.WorkingDir)
+	addDir(s.cfgWorkingDir())
 	if s.sessionStore != nil {
 		if list, err := s.sessionStore.ListWorkDirs(r.Context()); err == nil {
 			for _, d := range list {
@@ -620,7 +620,7 @@ func (s *Server) resolveFSPath(path string, sessionID string) (string, error) {
 		return realPath, nil
 	}
 	if path == "" {
-		path = s.cfg.WorkingDir
+		path = s.cfgWorkingDir()
 	}
 	return sanitizeFSPath(normalizeFSPath(path))
 }
@@ -1049,7 +1049,7 @@ func (s *Server) cleanupSessionWorkDir(workDir string) {
 	if workDir == "" {
 		return
 	}
-	baseDir := s.cfg.WorkingDir
+	baseDir := s.cfgWorkingDir()
 	if baseDir == "" {
 		baseDir = filepath.Join(s.magicHome, "workspace")
 	}

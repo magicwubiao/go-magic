@@ -177,8 +177,8 @@ func (s *Server) handleRelayDM(w http.ResponseWriter, r *http.Request) {
 
 // relayToken returns the configured relay secret (bot_mode.relay_token).
 func (s *Server) relayToken() string {
-	if s.cfg != nil && s.cfg.BotMode != nil {
-		return s.cfg.BotMode.RelayToken
+	if cfg := s.cfgSnapshot(); cfg != nil && cfg.BotMode != nil {
+		return cfg.BotMode.RelayToken
 	}
 	return ""
 }

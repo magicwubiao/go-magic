@@ -22,11 +22,12 @@ func (s *Server) initStandaloneMCP() {
 	if s == nil || s.mcpMgr == nil || s.toolReg == nil {
 		return
 	}
-	if s.cfg == nil || s.cfg.MCP == nil || len(s.cfg.MCP.Servers) == 0 {
+	cfg := s.cfgSnapshot()
+	if cfg == nil || cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
 		return
 	}
 
-	if err := mcpbridge.ConnectAndSync(s.mcpMgr, s.toolReg, s.cfg.MCP.Servers); err != nil {
+	if err := mcpbridge.ConnectAndSync(s.mcpMgr, s.toolReg, cfg.MCP.Servers); err != nil {
 		log.Warnf("[MCP] standalone MCP servers partially failed: %v", err)
 	}
 	log.Infof("[MCP] standalone MCP servers connected: %d, total tools in registry: %d",

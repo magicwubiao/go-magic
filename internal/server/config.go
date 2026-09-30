@@ -64,6 +64,9 @@ func (s *Server) scanProfiles() []map[string]interface{} {
 	profilesDir := filepath.Join(s.magicHome, "profiles")
 	profiles := make([]map[string]interface{}, 0)
 
+	// 一次快照，避免在循环里反复裸读 s.cfg（setCfg 可并发整体替换该指针）。
+	curProfile := s.cfgProfile()
+
 	entries, err := os.ReadDir(profilesDir)
 	if err != nil {
 		// Return default profile
@@ -91,7 +94,7 @@ func (s *Server) scanProfiles() []map[string]interface{} {
 		profiles = append(profiles, map[string]interface{}{
 			"name":        entry.Name(),
 			"path":        profilePath,
-			"is_default":  entry.Name() == s.cfg.Profile,
+			"is_default":  entry.Name() == curProfile,
 			"model":       nil,
 			"provider":    nil,
 			"has_env":     hasEnv,
@@ -127,14 +130,15 @@ func (s *Server) handleConfigByID(w http.ResponseWriter, r *http.Request) {
 	// 子路由各自处理（raw/schema/defaults 不依赖内存快照）
 	s.syncConfigFromDisk()
 
-	if s.cfg == nil {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
 		jsonResponse(w, map[string]interface{}{"id": id, "value": ""})
 		return
 	}
 
 	// Get specific config value
 	cfgMap := make(map[string]interface{})
-	data, _ := json.Marshal(s.cfg)
+	data, _ := json.Marshal(cfg)
 	json.Unmarshal(data, &cfgMap)
 
 	if val, ok := cfgMap[id]; ok {
@@ -237,18 +241,22 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	// s.agentsMu → s.mu 的反序，与 syncConfigFromDisk 的 s.mu → s.agentsMu
 	// 撞成 AB-BA 死锁。见 lockorder.go。
 	s.checkBeforeServerMu("persistConfig")
-	// 注意 s.configMu 保护的是**文件写入**，不是 s.cfg/s.configMtime。
+	// 注意 s.configMu 只保护**文件写入**，不保护 s.cfg/s.configMtime。
 	//
-	// 这里刻意不碰 s.mu：调用方常已持 s.mu（handleModelSet、tools/profiles
-	// 的 enable/disable、privacy 热重载都这么调），而 sync.RWMutex 不可重入
-	// ——在持锁路径里再拿一次就是自我死锁，表现和跨 goroutine 死锁一模一样
-	// （整个后端挂住、agentsMu 却是空闲的，极易误判方向）。
-	// s.cfg 的读写由下列调用方各自的 s.mu 临界区负责：handleModelSet /
-	// tools / profiles 持锁调用本函数；handleConfig PUT 在 s.mu 之外合并
-	// 配置（配置写入本身由 configMu 串行化）。
+	// 这里刻意不碰 s.mu 与 cfgMu：调用方常已持 s.mu（handleModelSet、
+	// tools/profiles 的 enable/disable、privacy 热重载都这么调），而
+	// sync.RWMutex 不可重入 —— 在持锁路径里再拿一次就是自我死锁。
+	// cfgMu 同理：绝大多数写点都持 cfgMu 后才落盘（lockCfgForWrite /
+	// setPluginDisabled / syncApprovalToMainConfig …），这里再拿一次必自锁。
+	//
+	// 因此本函数**直接读 s.cfg 的字段值，但绝不解引用其内容**（不遍历、
+	// 不原地改写）——只把它交给 json.Marshal 序列化。"是否有人在改这个
+	// 对象"由调用方保证：改配置的调用方必须持 cfgMu，且按 copy-on-write
+	// 约定改的是私有副本。这样本函数既不引入新锁，也不与任何写点竞态。
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	if s.cfg == nil {
+	cfg := s.cfg
+	if cfg == nil {
 		return nil
 	}
 	// Empty s.magicHome must never degrade to a relative ./config.json (that
@@ -258,12 +266,19 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	if magicHome == "" {
 		magicHome = appconfig.GetMagicHome()
 	}
+	// preserveGateway：网关进程会把扫码登录凭据直接写进 config.json，内存
+	// 副本可能是旧的，全量覆盖会把凭据冲掉。这里先在**副本**上合并磁盘上
+	// 更新的 gateway 段，绝不改 s.cfg 指向的对象（那是共享快照，就地改
+	// 会与无锁读者竞态）。
+	toWrite := cfg
 	if preserveGateway {
 		if fresh, err := appconfig.Load(); err == nil && fresh != nil {
-			s.cfg.Gateway = fresh.Gateway
+			merged := cloneConfig(cfg)
+			merged.Gateway = fresh.Gateway
+			toWrite = merged
 		}
 	}
-	data, err := json.MarshalIndent(s.cfg, "", "  ")
+	data, err := json.MarshalIndent(toWrite, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -388,12 +403,15 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// config.json with the in-memory copy — that used to revert
 		// credentials the gateway process had written (QR login).
 		//
-		// 整段改写 + persistConfig 都在 s.mu 内：这里原地改的是配置对象
-		// 自身，且 persistConfig 序列化整份 s.cfg，必须与其它写点串行。
+		// 整段改写 + persistConfig 都在 s.mu + cfgMu 内：这里原地改的是
+		// 配置对象自身，且 persistConfig 序列化整份 s.cfg，必须与其它写点
+		// 串行。cfgMu 与 s.mu 互不相干（setCfg 走 cfgMu），只拿 s.mu 会被
+		// CI 的 -race 判为 DATA RACE；cfgMu 是叶子锁，可持 s.mu 再拿。
 		s.acquireServerMu("")
-		if s.cfg == nil {
-			s.setCfg(appconfig.DefaultConfig())
-		}
+		defer s.releaseServerMu()
+		s.lockCfgForWrite()
+		defer s.unlockCfgForWrite()
+		// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
 		if s.cfg.Approval == nil {
 			s.cfg.Approval = appconfig.DefaultApprovalConfig()
 		}
@@ -422,11 +440,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.persistConfig(true); err != nil {
-			s.releaseServerMu()
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}
-		s.releaseServerMu()
 		jsonResponse(w, map[string]bool{"ok": true})
 		return
 	}
@@ -456,18 +472,22 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 	if strings.HasSuffix(path, "/switch") {
 		name := strings.TrimSuffix(path, "/switch")
 		// Actually switch profile
+		//
+		// 先 reloadConfig 把网关/CLI 的外部写入合并进来，**再**进临界区：
+		// reloadConfig 自身要拿 s.mu，放在 s.mu 内部会自我死锁
+		// （sync.RWMutex 不可重入）。
+		s.reloadConfig()
 		s.acquireServerMu("")
+		defer s.releaseServerMu()
+		s.lockCfgForWrite()
+		defer s.unlockCfgForWrite()
 		if s.cfg != nil {
-			// Re-read from disk first so gateway/CLI writes are not reverted
-			s.reloadConfig()
 			s.cfg.Profile = name
 			if err := s.persistConfig(false); err != nil {
-				s.releaseServerMu()
 				http.Error(w, "Failed to save config: "+err.Error(), 500)
 				return
 			}
 		}
-		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
 		return
 	}
@@ -753,33 +773,32 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// would revert them ("配置被还原" root cause).
 		s.reloadConfig()
 
-		// 整段合并必须在 s.mu 内完成：这里是**唯一**原地改写配置对象的
-		// 分支（其余写点都是整体替换指针）。若并发到来，别的读取方
-		// （reloadConfig 的替换、其他 handler 的字段读）会读到半改状态。
-		// 顺带把 cfgMu 的语义收紧为"指针替换"，物化前确保指针已就位。
-		s.acquireServerMu("")
+		// 整段合并必须在 s.mu + cfgMu 内完成：这里是**唯一**原地改写配置
+		// 对象的分支（其余写点都是整体替换指针）。s.mu 管内容字段的逻辑
+		// 串行化，cfgMu 管与 setCfg 的互斥（两把锁互不相干，只拿 s.mu 会被
+		// CI 的 -race 判为 DATA RACE）。cfgMu 是叶子锁，可持 s.mu 再拿。
+		g := s.lockCfgWriteGuard()
 		// Merge into config
-		if s.cfgSnapshot() == nil {
-			s.setCfg(appconfig.DefaultConfig())
-		}
+		// lockCfgWriteGuard 已保证 s.cfg 非 nil 且是本写点私有的副本。
+		cfg := s.cfg
 		data, _ := json.Marshal(expanded)
-		if err := json.Unmarshal(data, s.cfg); err != nil {
-			s.releaseServerMu()
+		if err := json.Unmarshal(data, cfg); err != nil {
+			g.Release()
 			http.Error(w, "failed to merge config: "+err.Error(), 500)
 			return
 		}
 		// 路径类配置在写入前统一展开 `~`：前端 / 脚本可能直接 POST 字面量
 		// `~/.magic/...`，不展开就会在进程 CWD 下建出名为 `~` 的目录，
 		// 而且会被持久化进 config.json 一直错下去。
-		s.cfg.WorkingDir = appconfig.ExpandHome(s.cfg.WorkingDir)
-		if s.cfg.BrowserProfileDir != nil {
-			dir := appconfig.ExpandHome(*s.cfg.BrowserProfileDir)
-			s.cfg.BrowserProfileDir = &dir
+		cfg.WorkingDir = appconfig.ExpandHome(cfg.WorkingDir)
+		if cfg.BrowserProfileDir != nil {
+			dir := appconfig.ExpandHome(*cfg.BrowserProfileDir)
+			cfg.BrowserProfileDir = &dir
 		}
 		// Save (atomically; gateway section was refreshed above and merged,
 		// so do NOT preserve it from disk again here)
 		if err := s.persistConfig(false); err != nil {
-			s.releaseServerMu()
+			g.Release()
 			http.Error(w, "failed to save config: "+err.Error(), 500)
 			return
 		}
@@ -797,9 +816,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Hot-reload provider if provider-related config changed
+		// Hot-reload provider if provider-related config changed.
+		//
+		// refreshConvertConfig / clearAgents 会去读配置快照（cfgSnapshot
+		// 拿 cfgMu）和 agentsMu —— 此刻 cfgMu 还握在 g 手上，必须在
+		// 释放之后再做。Release 幂等。
 		if needsProviderReload {
-			s.provider = createProvider(s.cfg)
+			s.provider = createProvider(cfg)
+		}
+		needsClearAgents := needsProviderReload
+		g.Release()
+		if needsProviderReload {
 			// Same as the raw-editor path: the rebuilt provider needs the
 			// current conversion/vision policy installed on it.
 			s.refreshConvertConfig()
@@ -807,7 +834,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload approval config if approval section changed
 		if _, ok := expanded["approval"]; ok && s.approvalMgr != nil {
-			if ac := s.cfg.Approval; ac != nil {
+			if ac := cfg.Approval; ac != nil {
 				// 校验 strategy 合法性，空字符串保持不变
 				if ac.Strategy != "" {
 					switch ac.Strategy {
@@ -829,28 +856,38 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Hot-reload privacy/PII config: clear agent cache so new sessions pick up the new redactor
 		if _, ok := expanded["privacy"]; ok {
-			s.releaseServerMu()
-			s.clearAgents()
-			s.acquireServerMu("")
+			// clearAgents 要拿 agentsMu，而 cfgMu 是叶子锁 —— 必须先放锁。
+			// g.Release 幂等且是"全放"，后续段落不再需要写锁（只读快照）。
+			g.Release()
+			needsClearAgents = true
 		}
+		// 重建 provider 之后同样要清 agent 缓存（缓存的 agent 持有旧
+		// provider 引用）。统一在放锁后做一次，避免重复清空。
+		if needsClearAgents {
+			s.clearAgents()
+		}
+
+		// 以下段落只**读**配置：用一次快照，避免裸读 s.cfg（此处已无锁，
+		// 裸读会与 setCfg 竞态）。g.Release 幂等，重复调用安全。
+		cfgSnap := s.cfgSnapshot()
 
 		// Bot Mode: history_window / inject_bot_protocol apply to the running
 		// manager immediately; toggling enabled requires a full restart, which
 		// the UI surfaces as a warning banner (bot_mode.enabled is read by
 		// initBotMode only when the manager is (re)created).
-		if _, ok := expanded["bot_mode"]; ok && s.botManager != nil {
-			s.botManager.ReloadConfig(s.cfg)
+		if _, ok := expanded["bot_mode"]; ok && s.botManager != nil && cfgSnap != nil {
+			s.botManager.ReloadConfig(cfgSnap)
 		}
 
 		// Persistent browser profile dir: apply immediately. A running browser
 		// keeps its current profile; when idle (no tabs) we tear it down so the
 		// next use starts fresh with the new dir.
-		if _, ok := expanded["browser_profile_dir"]; ok {
+		if _, ok := expanded["browser_profile_dir"]; ok && cfgSnap != nil {
 			bm := tool.GetBrowserManager()
 			// 两侧都取"生效值"（GetBrowserProfileDir 已展开 `~` 并补默认目录）：
 			// ProfileDir() 存的是展开后的绝对路径，直接比原始配置会在每次保存时
 			// 误判成"变了"而白关一次浏览器。
-			if dir := s.cfg.GetBrowserProfileDir(); bm.ProfileDir() != dir {
+			if dir := cfgSnap.GetBrowserProfileDir(); bm.ProfileDir() != dir {
 				if bm.TabCount() == 0 {
 					bm.Close()
 				}
@@ -864,7 +901,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// only tear it down when idle (no tabs); with tabs open the new setting
 		// takes effect on the next restart, and we say so instead of silently
 		// dropping live sessions.
-		if _, ok := expanded["browser_headless"]; ok {
+		if _, ok := expanded["browser_headless"]; ok && cfgSnap != nil {
 			bm := tool.GetBrowserManager()
 			// 比较的是 HeadlessEffective()（已把环境变量优先级算进去）而不是
 			// *BrowserHeadless：设了 BROWSER_HEADLESS 时后者恒不等于生效值，
@@ -872,7 +909,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			//
 			// 注意 bool 的"零值陷阱"：旧的比较逻辑用 != 判断"变了"，在 bool 上
 			// 同样成立——但环境变量会覆盖配置，所以必须比生效值。
-			if want, _ := s.cfg.GetBrowserHeadlessWithSource(); bm.HeadlessEffective() != want {
+			if want, _ := cfgSnap.GetBrowserHeadlessWithSource(); bm.HeadlessEffective() != want {
 				if bm.TabCount() == 0 {
 					bm.Close()
 				}
@@ -884,7 +921,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Return updated config
 		respCfg := s.cfgSnapshot()
-		s.releaseServerMu()
+		g.Release()
 		if respCfg == nil {
 			jsonResponse(w, map[string]interface{}{})
 			return

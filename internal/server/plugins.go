@@ -15,28 +15,7 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 	if strings.HasSuffix(path, "/enable") {
 		name := strings.TrimSuffix(path, "/enable")
 		if r.Method == http.MethodPost {
-			// Add to enabled list
-			if s.cfg != nil {
-				found := false
-				for _, e := range s.cfg.Plugins.Enabled {
-					if e == name {
-						found = true
-						break
-					}
-				}
-				if !found {
-					s.cfg.Plugins.Enabled = append(s.cfg.Plugins.Enabled, name)
-					// Remove from disabled list if present
-					newDisabled := []string{}
-					for _, d := range s.cfg.Plugins.Disabled {
-						if d != name {
-							newDisabled = append(newDisabled, d)
-						}
-					}
-					s.cfg.Plugins.Disabled = newDisabled
-					s.persistConfig(true)
-				}
-			}
+			s.setDashboardPluginEnabled(name, true)
 			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
 			return
 		}
@@ -46,28 +25,7 @@ func (s *Server) handleDashboardPluginsSubRoutes(w http.ResponseWriter, r *http.
 	if strings.HasSuffix(path, "/disable") {
 		name := strings.TrimSuffix(path, "/disable")
 		if r.Method == http.MethodPost {
-			// Add to disabled list
-			if s.cfg != nil {
-				found := false
-				for _, d := range s.cfg.Plugins.Disabled {
-					if d == name {
-						found = true
-						break
-					}
-				}
-				if !found {
-					s.cfg.Plugins.Disabled = append(s.cfg.Plugins.Disabled, name)
-					// Remove from enabled list if present
-					newEnabled := []string{}
-					for _, e := range s.cfg.Plugins.Enabled {
-						if e != name && e != "all" {
-							newEnabled = append(newEnabled, e)
-						}
-					}
-					s.cfg.Plugins.Enabled = newEnabled
-					s.persistConfig(true)
-				}
-			}
+			s.setDashboardPluginEnabled(name, false)
 			jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
 			return
 		}
@@ -182,4 +140,64 @@ func (s *Server) handleDashboardPluginsRescan(w http.ResponseWriter, r *http.Req
 	plugins := s.scanPluginsDir()
 	// Return the plugins list so frontend can update
 	jsonResponse(w, plugins)
+}
+
+// setDashboardPluginEnabled 更新 Dashboard 里的插件启用/禁用列表并落盘。
+//
+// 全程在 s.mu + cfgMu 内：这里原地改写 s.cfg.Plugins 并 persistConfig
+// （序列化整份 s.cfg）。cfgMu 管与 setCfg 的互斥 —— s.mu 与 cfgMu 是两把
+// 互不相干的锁，只拿 s.mu 会被 CI 的 `-race` 判为 DATA RACE。
+// cfgMu 是叶子锁，可持 s.mu 再拿。
+func (s *Server) setDashboardPluginEnabled(name string, enabled bool) {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	s.lockCfgForWrite()
+	defer s.unlockCfgForWrite()
+	if s.cfg == nil {
+		return
+	}
+	if enabled {
+		found := false
+		for _, e := range s.cfg.Plugins.Enabled {
+			if e == name {
+				found = true
+				break
+			}
+		}
+		if found {
+			return
+		}
+		s.cfg.Plugins.Enabled = append(s.cfg.Plugins.Enabled, name)
+		// Remove from disabled list if present
+		newDisabled := []string{}
+		for _, d := range s.cfg.Plugins.Disabled {
+			if d != name {
+				newDisabled = append(newDisabled, d)
+			}
+		}
+		s.cfg.Plugins.Disabled = newDisabled
+		s.persistConfig(true)
+		return
+	}
+	// disable
+	found := false
+	for _, d := range s.cfg.Plugins.Disabled {
+		if d == name {
+			found = true
+			break
+		}
+	}
+	if found {
+		return
+	}
+	s.cfg.Plugins.Disabled = append(s.cfg.Plugins.Disabled, name)
+	// Remove from enabled list if present
+	newEnabled := []string{}
+	for _, e := range s.cfg.Plugins.Enabled {
+		if e != name && e != "all" {
+			newEnabled = append(newEnabled, e)
+		}
+	}
+	s.cfg.Plugins.Enabled = newEnabled
+	s.persistConfig(true)
 }

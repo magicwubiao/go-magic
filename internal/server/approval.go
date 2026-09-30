@@ -455,11 +455,14 @@ func (s *Server) handleApprovalStats(w http.ResponseWriter, r *http.Request) {
 // 使 strategy / trust_threshold / enable_learning / cli_confirm / approval_timeout
 // 等可在重启后保留。其它字段（dangerous_patterns 等）由 DefaultConfig 维护，不在此同步。
 func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
-	// 整段改写 + 落盘都在 s.mu 内：这里是原地改配置对象，且 persistConfig
-	// 序列化整份 s.cfg，须与其它写点串行（此前是裸写，-race 下必报）。
+	// 整段改写 + 落盘都在 s.mu + cfgMu 内：这里是原地改配置对象，且
+	// persistConfig 序列化整份 s.cfg，须与其它写点串行。cfgMu 管与 setCfg
+	// 的互斥（两把锁互不相干，只拿 s.mu 会被 CI 的 -race 判为 DATA RACE）。
 	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	s.lockCfgForWrite()
+	defer s.unlockCfgForWrite()
 	if s.cfg == nil {
-		s.releaseServerMu()
 		return
 	}
 	ac := mgr.GetConfig()
@@ -474,7 +477,6 @@ func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 	// persistConfig(true) 刷新磁盘上的 gateway 段（网关进程扫码写入的凭据
 	// 可能比 server 内存副本新），避免全量落盘把新凭据还原成旧值。
 	_ = s.persistConfig(true)
-	s.releaseServerMu()
 }
 
 func (s *Server) handleApprovalPendingByID(w http.ResponseWriter, r *http.Request) {

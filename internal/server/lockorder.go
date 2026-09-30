@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -251,4 +252,131 @@ func (s *Server) cfgSnapshot() *appconfig.Config {
 	cfg := s.cfg
 	s.cfgMu.Unlock()
 	return cfg
+}
+
+// cfgWorkingDir 是 `s.cfg.WorkingDir` 的并发安全读取快捷方式。
+//
+// 工作目录是读得最频繁、且写入侧几乎不变的字段，但 **s.cfg 指针本身**会
+// 被 setCfg 整体替换 —— 所以哪怕只读一个字符串字段，也必须先经 cfgMu
+// 取快照，否则就是与指针替换的数据竞态。
+func (s *Server) cfgWorkingDir() string {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.WorkingDir
+}
+
+// cfgCurrentModel 是 `s.cfg.GetCurrentModel()` 的并发安全读取快捷方式。
+func (s *Server) cfgCurrentModel() string {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetCurrentModel()
+}
+
+// cfgProfile 是 `s.cfg.Profile` 的并发安全读取快捷方式。
+func (s *Server) cfgProfile() string {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Profile
+}
+
+// cfgProvider 是 `s.cfg.Provider` 的并发安全读取快捷方式。
+func (s *Server) cfgProvider() string {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Provider
+}
+
+// lockCfgForWrite / unlockCfgForWrite 供"要在 s.mu 临界区内改写配置"的
+// 写点使用（典型：handleModelSet 改 Provider/Model、handleConfig PUT
+// 合并整份配置）。
+//
+// **写时复制（copy-on-write）**：lockCfgForWrite 会把当前配置**深拷贝**
+// 一份放进 s.cfg，后续对 s.cfg 的原地改写因而只发生在私有副本上。
+// unlockCfgForWrite 无需额外动作（副本此刻已是 s.cfg 本身）。
+//
+// 为什么不能"直接原地改写已有对象"：cfgSnapshot() 的契约是"返回不可变
+// 快照、拿到后无需继续持锁即可自由读"。若写点原地改已有对象，任何在此
+// 之前取过快照的读者都会与这次写入并发访问同一块内存 —— 这正是 CI
+// `-race` 报 DATA RACE 的形态（读者在 s.mu/cfgMu 之外读字段）。
+// 每次写入先换新副本，读者手上的旧对象就永远不会再被改动。
+//
+// 为什么不能只拿 s.mu：**s.mu 与 cfgMu 是两把互不相干的锁** —— 只持
+// s.mu 并不能与 setCfg（由 cfgMu 保护）互斥，CI 的 `-race` 会直接报
+// DATA RACE。所以"改配置"这件事统一以 cfgMu 为准，s.mu 只负责配置
+// **内容**各字段之间的逻辑串行化。
+//
+// 顺序：cfgMu 是叶子锁，在持 s.mu 时再拿它**安全**（不会引入新的
+// AB-BA 面）。切勿反向：持 cfgMu 去拿 s.mu。
+func (s *Server) lockCfgForWrite() {
+	s.cfgMu.Lock()
+	// 换上新副本：调用方随后对 s.cfg 的原地改写只影响本副本。
+	if s.cfg != nil {
+		s.cfg = cloneConfig(s.cfg)
+	} else {
+		s.cfg = appconfig.DefaultConfig()
+	}
+}
+
+func (s *Server) unlockCfgForWrite() {
+	s.cfgMu.Unlock()
+	cfgWriteGen.Add(1)
+}
+
+// cloneConfig 深拷贝一份配置：JSON 往返是最省心且不易漏字段的做法
+// （配置里全是可序列化字段；手写逐字段拷贝会在新增字段时悄悄漏掉）。
+// 拷贝失败时退化为返回原对象（宁可冒一次竞态，也不能把配置丢成 nil）。
+func cloneConfig(cfg *appconfig.Config) *appconfig.Config {
+	if cfg == nil {
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return cfg
+	}
+	out := &appconfig.Config{}
+	if err := json.Unmarshal(data, out); err != nil {
+		return cfg
+	}
+	return out
+}
+
+// cfgWriteGuard 让"在 s.mu + cfgMu 临界区内改配置"的 handler 可以安全地
+// **提前解锁**（典型场景：临界区里要先打一次网络请求，绝不能持锁）。
+//
+// 用法：
+//
+//	g := s.lockCfgWriteGuard()
+//	defer g.Release()
+//	... 改配置 ...
+//	g.Release()      // 网络请求前提前放锁，Release 幂等
+//	... do network ...
+//
+// Release 幂等且可重入自保护：多次调用只放一次锁，避免"提前放了、
+// defer 又放一次"导致 unlock of unlocked mutex。
+type cfgWriteGuard struct {
+	s        *Server
+	released bool
+}
+
+func (s *Server) lockCfgWriteGuard() *cfgWriteGuard {
+	s.acquireServerMu("")
+	s.lockCfgForWrite()
+	return &cfgWriteGuard{s: s}
+}
+
+func (g *cfgWriteGuard) Release() {
+	if g == nil || g.released {
+		return
+	}
+	g.released = true
+	g.s.unlockCfgForWrite()
+	g.s.releaseServerMu()
 }

@@ -30,8 +30,8 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		// Clone from default profile if requested
 		if req.CloneFromDefault {
 			defaultDir := s.magicHome
-			if s.cfg.Profile != "" && s.cfg.Profile != "default" {
-				defaultDir = filepath.Join(s.magicHome, "profiles", s.cfg.Profile)
+			if cur := s.cfgProfile(); cur != "" && cur != "default" {
+				defaultDir = filepath.Join(s.magicHome, "profiles", cur)
 			}
 
 			// Copy .env file if exists
@@ -169,8 +169,10 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(path, "/switch") && r.Method == http.MethodPost {
 		name := strings.TrimSuffix(path, "/switch")
 		s.acquireServerMu("")
+		s.lockCfgForWrite()
 		s.cfg.Profile = name
 		_ = s.persistConfig(true)
+		s.unlockCfgForWrite()
 		s.releaseServerMu()
 		jsonResponse(w, map[string]bool{"ok": true})
 		return

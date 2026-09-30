@@ -51,6 +51,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 
 		// Persist disabled skills to config
 		s.acquireServerMu("")
+		s.lockCfgForWrite()
 		if s.cfg != nil {
 			disabledList := make([]string, 0)
 			s.disabledSkillsMu.Lock()
@@ -61,6 +62,7 @@ func (s *Server) handleSkillByID(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Skills.Disabled = disabledList
 			_ = s.persistConfig(true)
 		}
+		s.unlockCfgForWrite()
 		s.releaseServerMu()
 
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": req.Name, "enabled": req.Enabled})

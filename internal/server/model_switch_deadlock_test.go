@@ -318,8 +318,77 @@ func TestCfgReadersDoNotRaceWithReplacement(t *testing.T) {
 	}
 }
 
-func newLockTestServer(t *testing.T) *Server {
-	t.Helper()
+// TestCfgWritePathsAreCopyOnWrite 钉住 cfgSnapshot 的"不可变快照"契约。
+//
+// 为什么必须有这条：`-race` 能报出"两个 goroutine 同时碰同一块内存"，
+// 但报不出"设计上就不该被改的对象被改了"。写点若原地改写 s.cfg 指向的
+// 对象，任何在此之前取过快照的读者都会与写入并发访问同一块内存 ——
+// 这正是 CI 上报的那 13 条 DATA RACE 的成因。
+//
+// 因此约定：lockCfgForWrite 必须先把 s.cfg 换成**新副本**，写点随后只改
+// 副本。本测试直接断言：持有旧快照的读者，在写点走过一轮之后，看到的
+// 仍是旧值（且内存未被改动）。
+func TestCfgWritePathsAreCopyOnWrite(t *testing.T) {
+	s := newLockTestServer(t)
+
+	before := s.cfgSnapshot()
+	if before == nil {
+		t.Fatal("测试前置：配置不应为 nil")
+	}
+	if before.Model != "m1" {
+		t.Fatalf("测试前置：种子配置 model 应为 m1，got %s", before.Model)
+	}
+
+	// 走真实写路径（等价于"模型设置页改模型"）。
+	s.handleModelSet(httptest.NewRecorder(), newJSONRequest(t, http.MethodPost, "/api/model/set",
+		map[string]any{"provider": "deepseek", "model": "m2"}))
+
+	// ① 写后必须换成了新对象（而不是原地改旧的）。
+	after := s.cfgSnapshot()
+	if after == before {
+		t.Error("写路径必须整体替换 s.cfg（copy-on-write），实际复用了同一对象")
+	}
+	if after == nil || after.Model != "m2" {
+		t.Errorf("新快照应反映写入结果 model=m2，got %+v", after)
+	}
+
+	// ② 旧快照必须原封不动 —— 这是"读者拿到的快照可无锁读"的全部依据。
+	//    若这里失败，说明有写点原地改了共享对象，-race 下必然报 DATA RACE。
+	if before.Model != "m1" {
+		t.Errorf("旧快照被原地改写（应保持 m1，实际 %s）—— 违反不可变快照契约", before.Model)
+	}
+}
+
+// TestCfgModifyHelpersDoNotSelfDeadlock 覆盖"持 cfgMu 时调 cfgSnapshot"这类
+// 自我死锁。sync.Mutex 不可重入，而且死锁当场表现为整个进程挂住，
+// 比数据竞态更难定位，所以用超时把它变成确定性失败。
+func TestCfgModifyHelpersDoNotSelfDeadlock(t *testing.T) {
+	s := newLockTestServer(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		// 1) handleProvidersSubRoutes 的 PUT：改配置 + 落盘 + 把凭据推到
+		//    运行中的 provider，全程不 panic、不死锁。
+		rec := httptest.NewRecorder()
+		s.handleProvidersSubRoutes(rec, newJSONRequest(t, http.MethodPut, "/api/providers/deepseek",
+			map[string]any{"api_key": "k2", "models": []string{"m2", "m1"}}))
+
+		// 2) handleConfig PUT 的合并分支（g.Release 之后还要刷新 provider /
+		//    清 agent 缓存 —— 都必须在放锁后做，否则自锁）。
+		recCfg := httptest.NewRecorder()
+		s.handleConfig(recCfg, newJSONRequest(t, http.MethodPut, "/api/config",
+			map[string]any{"model": "m3", "provider": "deepseek"}))
+
+		// 3) 单条 persistConfig（写点普遍在持 cfgMu 时调它）。
+		_ = s.persistConfig(true)
+	}()
+
+	waitFor(t, done, "改配置路径出现自我死锁（持 cfgMu 时又去拿 cfgMu）")
+}
+
+func newLockTestServer(t *testing.T) *Server {	t.Helper()
 	// 打开加锁顺序断言：任何"持 agentsMu 再拿 s.mu"的反序都会立即 panic，
 	// 而不是在特定交错下悄悄变成永久死锁。
 	EnableStrictLockOrder(true)

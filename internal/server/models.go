@@ -34,6 +34,9 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 	// （回归见 model_switch_deadlock_test.go）。
 	s.syncConfigFromDisk()
 
+	// s.mu 负责配置内容各字段之间的逻辑串行化；cfgMu 负责 s.cfg 指针/
+	// 对象的读写（写入侧 setCfg 由 cfgMu 保护，只拿 s.mu 并不与之互斥）。
+	// cfgMu 是叶子锁，持 s.mu 时再拿它安全。
 	s.acquireServerMu("")
 	defer s.releaseServerMu()
 
@@ -42,9 +45,13 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		if modeler, ok := provider.GetModeler(s.provider); ok {
 			if err := modeler.SetModel(req.Model); err == nil {
 				// Update config for persistence: move model to first position in models array
-				if s.cfg != nil && s.cfg.Providers != nil {
-					provName := s.cfg.Provider
-					if provCfg, ok := s.cfg.Providers[provName]; ok {
+				var respProvider string
+				s.lockCfgForWrite()
+				// 直接读 s.cfg：已持 cfgMu，走 cfgSnapshot 会自锁
+				// （sync.Mutex 不可重入）。该值已是本写点的私有副本。
+				if cfg := s.cfg; cfg != nil && cfg.Providers != nil {
+					provName := cfg.Provider
+					if provCfg, ok := cfg.Providers[provName]; ok {
 						// Remove model if exists and add to front
 						newModels := []string{req.Model}
 						for _, m := range provCfg.Models {
@@ -53,16 +60,18 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 							}
 						}
 						provCfg.Models = newModels
-						s.cfg.Providers[provName] = provCfg
+						cfg.Providers[provName] = provCfg
 						// Also update the top-level model field for consistency
-						s.cfg.Model = req.Model
+						cfg.Model = req.Model
 						_ = s.persistConfig(true)
 					}
+					respProvider = cfg.Provider
 				}
+				s.unlockCfgForWrite()
 				jsonResponse(w, map[string]interface{}{
 					"ok":       true,
 					"scope":    req.Scope,
-					"provider": s.cfg.Provider,
+					"provider": respProvider,
 					"model":    req.Model,
 					"message":  "model switched dynamically",
 				})
@@ -73,11 +82,17 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 
 	// Full provider switch (recreate provider)
 	if req.Provider != "" && req.Model != "" {
-		s.cfg.Provider = req.Provider
-		s.cfg.Model = req.Model
+		// 整段原地改写 s.cfg 必须在 cfgMu 内（写入侧 setCfg 由 cfgMu 保护）。
+		// 注意 cfgMu 是叶子锁：refreshConvertConfig / clearAgents 会去拿
+		// 别的锁，必须在放掉 cfgMu 之后再做。
+		s.lockCfgForWrite()
+		// lockCfgForWrite 保证 s.cfg 非 nil（且已是本写点私有的副本）。
+		cfg := s.cfg
+		cfg.Provider = req.Provider
+		cfg.Model = req.Model
 		// Update provider models array: move selected model to front
-		if s.cfg.Providers != nil {
-			if provCfg, ok := s.cfg.Providers[req.Provider]; ok {
+		if cfg.Providers != nil {
+			if provCfg, ok := cfg.Providers[req.Provider]; ok {
 				newModels := []string{req.Model}
 				for _, m := range provCfg.Models {
 					if m != req.Model {
@@ -85,13 +100,14 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				provCfg.Models = newModels
-				s.cfg.Providers[req.Provider] = provCfg
+				cfg.Providers[req.Provider] = provCfg
 			}
 		}
 		// Save config
 		_ = s.persistConfig(true)
 		// Recreate provider
-		s.provider = createProvider(s.cfg)
+		s.provider = createProvider(cfg)
+		s.unlockCfgForWrite()
 		// Install the conversion/vision policy on the fresh instance: without
 		// it the new provider runs with a nil ConvertCfg and every image is
 		// downgraded to a placeholder.
@@ -130,25 +146,49 @@ func isMaskedAPIKey(key string) bool {
 // （凭据存在私有字段里的实现，见 provider.ApplyCredentials）回退为重建 provider
 // 并清空缓存 agent —— 与切换供应商（handleModelSet）走同一条路径。
 func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.ProviderConfig) {
-	if s.cfg == nil || s.cfg.Provider != name {
+	// 直接读 s.cfg，**不能**走 cfgSnapshot：本函数的调用方
+	// （handleProvidersSubRoutes）已持 cfgMu，再拿一次必自我死锁。
+	// 调用方持 cfgMu 同时也保证了这里读到的是本写点的私有副本。
+	cfg := s.cfg
+	if cfg == nil || cfg.Provider != name {
 		return
 	}
+	// 快路径：provider 支持就地更新凭据时直接改，不碰任何锁。
 	if s.provider != nil && provider.ApplyCredentials(s.provider, provCfg.APIKey, provCfg.BaseURL) {
 		return
 	}
-	s.provider = createProvider(s.cfg)
+	// 慢路径要重建 provider + 清 agent 缓存，会去拿别的锁 —— 此刻
+	// cfgMu 还被调用方持着，这里不能动。打标记，由调用方在放锁后调
+	// rebuildLiveProvider 完成。
+	s.rebuildLiveProvider = true
+}
+
+// rebuildLiveProviderNow 在**不持 cfgMu** 的前提下重建 provider 并清空
+// agent 缓存。由 applyLiveProviderCredentials 打标记、调用方在释放
+// cfgMu 之后调用。
+func (s *Server) rebuildLiveProviderNow() {
+	if !s.rebuildLiveProvider {
+		return
+	}
+	s.rebuildLiveProvider = false
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return
+	}
+	s.provider = createProvider(cfg)
 	s.refreshConvertConfig()
 	s.clearAgents()
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
-	// 渲染整份 provider 配置必须在 s.mu 内：s.cfg 与其 Providers map 会被
-	// handleModelSet / syncConfigFromDisk 并发整体替换（-race 下裸读必报）。
-	s.acquireServerMu("")
+	// 走 cfgSnapshot 而非"用 s.mu 包住裸读"：s.cfg 的写入侧（setCfg）由
+	// cfgMu 保护，两把锁互不相干，拿 s.mu 并不能与 setCfg 互斥
+	// （CI `-race` 实测报 DATA RACE）。
+	cfg := s.cfgSnapshot()
 	providers := make([]map[string]interface{}, 0)
-	if s.cfg != nil && s.cfg.Providers != nil {
-		for name, provCfg := range s.cfg.Providers {
+	if cfg != nil && cfg.Providers != nil {
+		for name, provCfg := range cfg.Providers {
 			providers = append(providers, map[string]interface{}{
 				"id":       name,
 				"name":     name,
@@ -160,7 +200,6 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	s.releaseServerMu()
 	jsonResponse(w, providers)
 }
 
@@ -199,10 +238,9 @@ func (s *Server) handleModelByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
-	// 读 s.cfg 字段（Provider/GetCurrentModel/Providers）需在 s.mu 内：
-	// s.cfg 会被 syncConfigFromDisk/handleModelSet 并发整体替换。
-	s.acquireServerMu("")
-	cfg := s.cfg
+	// 取一次不可变快照即可：写入侧 setCfg 由 cfgMu 保护，与 s.mu 无关，
+	// 所以这里不能用 s.mu 来"保护"裸读（那样两把锁并不互斥）。
+	cfg := s.cfgSnapshot()
 	providerName := ""
 	if cfg != nil {
 		providerName = cfg.Provider
@@ -211,7 +249,6 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil {
 		modelName = cfg.GetCurrentModel()
 	}
-	s.releaseServerMu()
 
 	// Try to get current model from Modeler interface
 	if s.provider != nil {
@@ -339,13 +376,12 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	// edited via the UI dropdown) has the same precedence as the request
 	// path in server.go: it beats both name detection and provider-level
 	// capabilities.
-	s.acquireServerMu("")
-	if s.cfg != nil && s.cfg.Providers != nil {
-		if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
+	// 复用本函数开头取的 cfg 快照（不可变），无需再加锁。
+	if cfg != nil && cfg.Providers != nil {
+		if provCfg, ok := cfg.Providers[cfg.Provider]; ok && provCfg.Vision != nil {
 			supportsVision = *provCfg.Vision
 		}
 	}
-	s.releaseServerMu()
 
 	jsonResponse(w, map[string]interface{}{
 		"model":                    fmt.Sprintf("%s/%s", providerName, modelName),
@@ -367,11 +403,14 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
+	// 取不可变快照：s.cfg 的写入侧由 cfgMu 保护，与 s.mu 无关
+	// （拿 s.mu 包裸读并不能与 setCfg 互斥，CI `-race` 会报）。
+	cfg := s.cfgSnapshot()
 	models := make([]map[string]interface{}, 0)
 	seen := make(map[string]bool)
 
-	if s.cfg != nil && s.cfg.Providers != nil {
-		for name, provCfg := range s.cfg.Providers {
+	if cfg != nil && cfg.Providers != nil {
+		for name, provCfg := range cfg.Providers {
 			// Collect all models from the provider's Models array and Model field
 			modelSet := make(map[string]bool)
 
@@ -402,12 +441,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Always include current provider's models
-	if s.cfg != nil && s.cfg.Provider != "" {
+	if cfg != nil && cfg.Provider != "" {
 		modelSet := make(map[string]bool)
 
 		// Add from Models array
-		if s.cfg.Providers != nil {
-			if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok {
+		if cfg.Providers != nil {
+			if provCfg, ok := cfg.Providers[cfg.Provider]; ok {
 				for _, m := range provCfg.Models {
 					modelSet[m] = true
 				}
@@ -415,12 +454,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for modelName := range modelSet {
-			id := fmt.Sprintf("%s/%s", s.cfg.Provider, modelName)
+			id := fmt.Sprintf("%s/%s", cfg.Provider, modelName)
 			if !seen[id] {
 				models = append(models, map[string]interface{}{
 					"id":         id,
 					"name":       modelName,
-					"provider":   s.cfg.Provider,
+					"provider":   cfg.Provider,
 					"contextLen": 128000,
 				})
 			}
@@ -443,9 +482,10 @@ func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
 	auxiliaryModels := make([]map[string]interface{}, 0)
 
 	// Try to read auxiliary models from config providers
-	if s.cfg != nil && s.cfg.Providers != nil {
-		for name, provCfg := range s.cfg.Providers {
-			if name == s.cfg.Provider {
+	cfg := s.cfgSnapshot()
+	if cfg != nil && cfg.Providers != nil {
+		for name, provCfg := range cfg.Providers {
+			if name == cfg.Provider {
 				continue // skip primary model
 			}
 			auxiliaryModels = append(auxiliaryModels, map[string]interface{}{
@@ -469,15 +509,22 @@ func (s *Server) handleModelAuxiliary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request) {
 	// 整个 handler 都是 provider 配置的读写（GET/PUT/POST/DELETE 子路由），
-	// 全程在 s.mu 内完成：s.cfg 与其 Providers map 会被 handleModelSet /
+	// 全程在 s.mu + cfgMu 内完成：s.cfg 与其 Providers map 会被 handleModelSet /
 	// syncConfigFromDisk 并发整体替换，此前无锁直读直写是真实数据竞态。
+	//
+	// **两把锁都要**：s.mu 负责配置内容各字段的逻辑串行化，cfgMu 负责
+	// s.cfg 指针/对象与其它写入方（setCfg）互斥 —— 只拿 s.mu 并不能与
+	// setCfg 互斥（CI `-race` 实测）。cfgMu 是叶子锁，可安全地持 s.mu 再拿它。
 	//
 	// 注意：这里**不**先 reloadConfig —— 那会把内存快照整体换成磁盘内容，
 	// 而 PUT 语义本就是"在内存快照上改一处再落盘"。无条件重载反而会丢掉
 	// 本次请求前的内存态（测试也依赖这一点：直接构造 Server 并预置 cfg 后
 	// 调 PUT，期望改的是那份 cfg）。网关/CLI 的外部写入由 persistConfig
 	// 的 preserveGateway 与 reloadConfig 的其它调用点兜底。
-	s.acquireServerMu("")
+	// 用 cfgWriteGuard 同时持有 s.mu + cfgMu，且可幂等地提前释放
+	// （本 handler 里有两次网络请求，绝不能持锁）。
+	g := s.lockCfgWriteGuard()
+	defer g.Release()
 	// Support both /api/providers/{name}/* and /api/platforms/{name}/*
 	path := r.URL.Path
 	path = strings.TrimPrefix(path, "/api/providers/")
@@ -493,9 +540,8 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 	// Handle GET /{name} - get single provider
 	if r.Method == http.MethodGet && subRoute == "" {
-		if s.cfg != nil && s.cfg.Providers != nil {
-			if provCfg, ok := s.cfg.Providers[name]; ok {
-				s.releaseServerMu()
+		if cfg := s.cfgSnapshot(); cfg != nil && cfg.Providers != nil {
+			if provCfg, ok := cfg.Providers[name]; ok {
 				jsonResponse(w, ProviderInfo{
 					Name:    name,
 					Label:   name,
@@ -506,7 +552,6 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		s.releaseServerMu()
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
 	}
@@ -521,16 +566,17 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.releaseServerMu()
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
 		// Update provider config
-		if s.cfg != nil {
-			if s.cfg.Providers == nil {
-				s.cfg.Providers = make(map[string]appconfig.ProviderConfig)
+		// 直接读 s.cfg（**不能**用 cfgSnapshot：此处已持 cfgMu，再拿一次
+		// 就是不可重入的自我死锁）。lockCfgForWrite 已把它换成私有副本。
+		if cfg := s.cfg; cfg != nil {
+			if cfg.Providers == nil {
+				cfg.Providers = make(map[string]appconfig.ProviderConfig)
 			}
-			provCfg := s.cfg.Providers[name]
+			provCfg := cfg.Providers[name]
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
@@ -541,8 +587,8 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.Models != nil {
 				provCfg.Models = req.Models
 				// If this is the current provider, also update top-level model
-				if s.cfg.Provider == name && len(req.Models) > 0 {
-					s.cfg.Model = req.Models[0]
+				if cfg.Provider == name && len(req.Models) > 0 {
+					cfg.Model = req.Models[0]
 				}
 			}
 			// Vision: key present with true/false sets the declaration, with
@@ -556,17 +602,25 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					provCfg.Vision = vb
 				}
 			}
-			s.cfg.Providers[name] = provCfg
+			cfg.Providers[name] = provCfg
 			_ = s.persistConfig(true)
 			// 凭据/地址改动必须落到正在运行的 provider 实例上（缓存 agent 共享
 			// 同一实例，只写 config 的话聊天仍用旧 key 请求，一直 401）。
+			// 只做快路径（就地更新凭据）；需要重建时它会打标记。
 			s.applyLiveProviderCredentials(name, provCfg)
-			// The vision declaration is only useful if the running provider
-			// sees it: cached agents share this provider instance, so refresh
-			// its convert config instead of waiting for a restart.
-			s.refreshConvertConfig()
 		}
-		s.releaseServerMu()
+		// 重建 provider / 刷新视觉策略都会去拿别的锁（clearAgents 拿
+		// agentsMu、refreshConvertConfig 要读配置快照），必须在释放
+		// cfgMu 之后做 —— Release 幂等，defer 里再调一次安全。
+		rebuild := s.rebuildLiveProvider
+		g.Release()
+		if rebuild {
+			s.rebuildLiveProviderNow()
+		}
+		// The vision declaration is only useful if the running provider
+		// sees it: cached agents share this provider instance, so refresh
+		// its convert config instead of waiting for a restart.
+		s.refreshConvertConfig()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 		return
 	}
@@ -581,7 +635,6 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			Vision  json.RawMessage `json:"vision,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.releaseServerMu()
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -591,11 +644,11 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			providerName = name
 		}
 		// Create/update provider config
-		if s.cfg != nil {
-			if s.cfg.Providers == nil {
-				s.cfg.Providers = make(map[string]appconfig.ProviderConfig)
+		if cfg := s.cfgSnapshot(); cfg != nil {
+			if cfg.Providers == nil {
+				cfg.Providers = make(map[string]appconfig.ProviderConfig)
 			}
-			provCfg := s.cfg.Providers[providerName]
+			provCfg := cfg.Providers[providerName]
 			if req.BaseURL != "" {
 				provCfg.BaseURL = req.BaseURL
 			}
@@ -606,8 +659,8 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			if req.Models != nil {
 				provCfg.Models = req.Models
 				// If this is the current provider, also update top-level model
-				if s.cfg.Provider == providerName && len(req.Models) > 0 {
-					s.cfg.Model = req.Models[0]
+				if cfg.Provider == providerName && len(req.Models) > 0 {
+					cfg.Model = req.Models[0]
 				}
 			}
 			// Vision declaration: true/false sets, null clears (auto),
@@ -618,50 +671,51 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 					provCfg.Vision = vb
 				}
 			}
-			s.cfg.Providers[providerName] = provCfg
+			cfg.Providers[providerName] = provCfg
 			_ = s.persistConfig(true)
 			// See the PUT branch: credentials must reach the live instance.
 			s.applyLiveProviderCredentials(providerName, provCfg)
-			// See the PUT branch: keep the live provider's vision policy in
-			// sync with the just-saved declaration.
-			s.refreshConvertConfig()
 		}
-		s.releaseServerMu()
+		// See the PUT branch: 释放 cfgMu 之后再重建 / 刷新视觉策略。
+		rebuild := s.rebuildLiveProvider
+		g.Release()
+		if rebuild {
+			s.rebuildLiveProviderNow()
+		}
+		// See the PUT branch: keep the live provider's vision policy in
+		// sync with the just-saved declaration.
+		s.refreshConvertConfig()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": providerName, "created": true})
 		return
 	}
 
 	// Handle DELETE /{name} - delete provider
 	if r.Method == http.MethodDelete && subRoute == "" {
-		if s.cfg != nil && s.cfg.Providers != nil {
-			if _, exists := s.cfg.Providers[name]; exists {
-				delete(s.cfg.Providers, name)
+		if cfg := s.cfgSnapshot(); cfg != nil && cfg.Providers != nil {
+			if _, exists := cfg.Providers[name]; exists {
+				delete(cfg.Providers, name)
 				// If deleted provider was current, clear top-level fields
-				if s.cfg.Provider == name {
-					s.cfg.Provider = ""
-					s.cfg.Model = ""
+				if cfg.Provider == name {
+					cfg.Provider = ""
+					cfg.Model = ""
 				}
 				_ = s.persistConfig(true)
-				s.releaseServerMu()
 				jsonResponse(w, map[string]interface{}{"ok": true, "name": name})
 				return
 			}
 		}
-		s.releaseServerMu()
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
 	}
 
 	// Handle POST /{name}/enable - enable provider
 	if r.Method == http.MethodPost && subRoute == "enable" {
-		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": true})
 		return
 	}
 
 	// Handle POST /{name}/disable - disable provider
 	if r.Method == http.MethodPost && subRoute == "disable" {
-		s.releaseServerMu()
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "enabled": false})
 		return
 	}
@@ -680,14 +734,16 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
 		}
 
-		if s.cfg == nil {
-			s.releaseServerMu()
+		// 直接读 s.cfg：此处仍持 cfgMu（g 未释放），走 cfgSnapshot 会自锁。
+		// 只读它的字段值、且下面马上 Release，不改动它。
+		cfg := s.cfg
+		if cfg == nil {
 			http.Error(w, "config unavailable", http.StatusInternalServerError)
 			return
 		}
 		provCfg := appconfig.ProviderConfig{}
-		if s.cfg.Providers != nil {
-			if saved, ok := s.cfg.Providers[name]; ok {
+		if cfg.Providers != nil {
+			if saved, ok := cfg.Providers[name]; ok {
 				provCfg = saved
 			}
 		}
@@ -702,13 +758,13 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		}
 		model := provCfg.GetCurrentModel()
 		if model == "" {
-			s.releaseServerMu()
 			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no model configured"})
 			return
 		}
 		// 配置已快照成 provCfg：测试连接要打真实网络请求（最多 20s），
-		// 绝不能持 s.mu —— 否则一个卡住的端点会让整个后端的配置读全部排队。
-		s.releaseServerMu()
+		// 绝不能持 s.mu / cfgMu —— 否则一个卡住的端点会让整个后端的
+		// 配置读全部排队。Release 幂等，defer 里再调一次也安全。
+		g.Release()
 
 		prov, err := appconfig.CreateProviderFor(name, provCfg)
 		if err != nil {
@@ -755,14 +811,15 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
 		}
 
-		if s.cfg == nil {
-			s.releaseServerMu()
+		// 直接读 s.cfg：此处仍持 cfgMu（g 未释放），走 cfgSnapshot 会自锁。
+		cfg := s.cfg
+		if cfg == nil {
 			http.Error(w, "config unavailable", http.StatusInternalServerError)
 			return
 		}
 		provCfg := appconfig.ProviderConfig{}
-		if s.cfg.Providers != nil {
-			if saved, ok := s.cfg.Providers[name]; ok {
+		if cfg.Providers != nil {
+			if saved, ok := cfg.Providers[name]; ok {
 				provCfg = saved
 			}
 		}
@@ -782,13 +839,13 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			}
 		}
 		if provCfg.BaseURL == "" {
-			s.releaseServerMu()
 			jsonResponse(w, map[string]interface{}{"ok": false, "error": "no base URL configured for this provider"})
 			return
 		}
 		// 凭据已快照到 provCfg：立刻放锁，网络请求（FetchModels）绝不能
-		// 持 s.mu —— 那是全 server 的配置读锁，一个慢请求会拖死整个后端。
-		s.releaseServerMu()
+		// 持 s.mu / cfgMu —— 那是全 server 的配置读锁，一个慢请求会拖死
+		// 整个后端。Release 幂等，defer 里再调一次也安全。
+		g.Release()
 
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
@@ -813,17 +870,20 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	s.syncConfigFromDisk()
-	// 模型供应商页的主接口。整段渲染 provider 列表都在 s.mu 内：
-	// s.cfg / s.cfg.Providers 会被 handleModelSet、syncConfigFromDisk 并发
-	// 整体替换，之前无锁直读是真实数据竞态（-race 必报）。
-	s.acquireServerMu("")
+	// 模型供应商页的主接口。
+	//
+	// **必须走 cfgSnapshot 而不是裸读 s.cfg**：s.cfg 的写入侧（setCfg）由
+	// cfgMu 保护，而 cfgMu 与 s.mu 是两把不同的锁 —— 用 s.mu 包住裸读
+	// **不能**和 setCfg 互斥（CI `-race` 实测报 DATA RACE）。这里先取一次
+	// 不可变快照，后续全程只读快照字段。
+	cfg := s.cfgSnapshot()
 	providerList := make([]map[string]interface{}, 0)
 	providerNames := make(map[string]bool) // Track which providers are already added
 
 	// First: Add all configured providers from config
-	if s.cfg != nil && s.cfg.Providers != nil {
-		for name, provCfg := range s.cfg.Providers {
-			isCurrent := name == s.cfg.Provider
+	if cfg != nil && cfg.Providers != nil {
+		for name, provCfg := range cfg.Providers {
+			isCurrent := name == cfg.Provider
 			providerNames[name] = true
 
 			// Get models from config first (user-configured models take priority)
@@ -858,7 +918,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	builtinProviders := appconfig.ListProviders()
 	for _, bp := range builtinProviders {
 		if !providerNames[bp.Name] {
-			isCurrent := s.cfg != nil && bp.Name == s.cfg.Provider
+			isCurrent := cfg != nil && bp.Name == cfg.Provider
 			providerList = append(providerList, map[string]interface{}{
 				"name":         bp.Name,
 				"slug":         bp.Name,
@@ -873,9 +933,9 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 
 	model := ""
 	currentProviderName := ""
-	if s.cfg != nil {
-		model = s.cfg.GetCurrentModel()
-		currentProviderName = s.cfg.Provider
+	if cfg != nil {
+		model = cfg.GetCurrentModel()
+		currentProviderName = cfg.Provider
 		// Try to get current model from Modeler interface
 		if s.provider != nil {
 			if modeler, ok := provider.GetModeler(s.provider); ok {
@@ -883,7 +943,6 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.releaseServerMu()
 	jsonResponse(w, map[string]interface{}{
 		"model":     model,
 		"provider":  currentProviderName,

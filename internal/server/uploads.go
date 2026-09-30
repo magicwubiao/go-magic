@@ -510,8 +510,9 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.Chmod(dstDir, 0o700)
 
-	maxBytes := s.cfg.Server.GetUploadMaxBytes()
-	blocked := s.cfg.Server.GetUploadBlockedExts()
+	cfgSnap := s.cfgSnapshot()
+	maxBytes := cfgSnap.Server.GetUploadMaxBytes()
+	blocked := cfgSnap.Server.GetUploadBlockedExts()
 
 	extLower := strings.ToLower(filepath.Ext(safe))
 	if _, bad := blocked[extLower]; bad {
@@ -613,8 +614,8 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	// /api/uploads/<session>/<file>.
 	var fileURL string
 	safeSession := fileNameSafeRe.ReplaceAllString(sessionID, "_")
-	if s.cfg.Server.UploadURLPrefix != "" {
-		base := strings.TrimRight(s.cfg.Server.UploadURLPrefix, "/")
+	if cfgSnap.Server.UploadURLPrefix != "" {
+		base := strings.TrimRight(cfgSnap.Server.UploadURLPrefix, "/")
 		if safeSession == "" {
 			fileURL = fmt.Sprintf("%s/_shared/%s", base, diskName)
 		} else {
@@ -675,9 +676,12 @@ func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {
 
 	files := []fileEntry{}
 
+	// 一次快照：闭包 getFileURL 会被逐条调用，逐次裸读 s.cfg 会与 setCfg 竞态。
+	cfgSnap := s.cfgSnapshot()
+
 	getFileURL := func(sid string, name string) string {
-		if s.cfg.Server.UploadURLPrefix != "" {
-			base := strings.TrimRight(s.cfg.Server.UploadURLPrefix, "/")
+		if cfgSnap.Server.UploadURLPrefix != "" {
+			base := strings.TrimRight(cfgSnap.Server.UploadURLPrefix, "/")
 			if sid == "" {
 				return fmt.Sprintf("%s/_shared/%s", base, name)
 			}

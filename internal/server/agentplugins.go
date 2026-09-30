@@ -64,12 +64,15 @@ func (s *Server) disabledAgentPlugins() map[string]bool {
 // setPluginDisabled 更新配置中的禁用状态并持久化。
 // disabled=true → 加入禁用列表;false → 从禁用列表移除。
 //
-// 全程在 s.mu 内：这里原地改写 s.cfg.AgentPlugins 并 persistConfig
+// 全程在 s.mu + cfgMu 内：这里原地改写 s.cfg.AgentPlugins 并 persistConfig
 // （序列化整份 s.cfg）。调用方（卸载/启停插件两条路径）此前都不持锁，
-// 裸改写就是数据竞态。
+// 裸改写就是数据竞态。cfgMu 与 s.mu 互不相干（setCfg 走 cfgMu），
+// 只拿 s.mu 会被 CI 的 -race 判为 DATA RACE；cfgMu 是叶子锁。
 func (s *Server) setPluginDisabled(name string, disabled bool) {
 	s.acquireServerMu("")
 	defer s.releaseServerMu()
+	s.lockCfgForWrite()
+	defer s.unlockCfgForWrite()
 	if s.cfg == nil {
 		return
 	}

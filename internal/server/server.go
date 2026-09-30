@@ -76,6 +76,15 @@ type Server struct {
 	// 在写侧串行化；cfgMu 只解决"指针被替换"与"读指针"之间的竞态。
 	cfgMu sync.Mutex
 	cfg   *appconfig.Config
+	// rebuildLiveProvider 是"需要重建 provider + 清 agent 缓存"的延迟标记。
+	//
+	// 为什么需要它：handleProvidersSubRoutes 保存 provider 后要保证凭据
+	// 落到**正在运行**的 provider 实例上，但重建 provider / 清 agent 都会
+	// 去拿别的锁，而那一刻 cfgMu 还被握着（applyLiveProviderCredentials
+	// 的调用点）。于是改为打标记，由调用方在释放 cfgMu 之后调
+	// rebuildLiveProvider 完成。
+	// 只在持 cfgMu 的临界区里读写，无需额外同步。
+	rebuildLiveProvider bool
 	// configMtimeNs 记录最近一次已加载进内存的 config.json 修改时间（UnixNano），
 	// 供 syncConfigFromDisk 做"外部进程改了配置文件"的廉价变更检测。
 	//
@@ -836,22 +845,24 @@ func (s *Server) buildConvertConfig() *provider.ConvertConfig {
 		SupportVision:   false,
 		AutoVision:      true,
 	}
-	if s.cfg == nil || s.provider == nil {
+	// 快照一次：setCfg 可在任意时刻整体替换 s.cfg，裸读指针即数据竞态。
+	cfg := s.cfgSnapshot()
+	if cfg == nil || s.provider == nil {
 		return convertCfg
 	}
 	if m, ok := s.provider.(interface{ GetModel() string }); ok {
 		convertCfg.SupportVision = provider.ModelSupportsVision(m.GetModel())
 	}
-	if s.cfg.Providers != nil {
-		if provCfg, ok := s.cfg.Providers[s.cfg.Provider]; ok && provCfg.Vision != nil {
+	if cfg.Providers != nil {
+		if provCfg, ok := cfg.Providers[cfg.Provider]; ok && provCfg.Vision != nil {
 			convertCfg.VisionOverride = provCfg.Vision
 			convertCfg.SupportVision = *provCfg.Vision
 		}
 	}
-	if s.cfg.Server.UploadURLPrefix != "" {
-		convertCfg.UploadURLPrefix = s.cfg.Server.UploadURLPrefix
+	if cfg.Server.UploadURLPrefix != "" {
+		convertCfg.UploadURLPrefix = cfg.Server.UploadURLPrefix
 	}
-	convertCfg.StrategyName = s.cfg.Server.GetFileStrategy()
+	convertCfg.StrategyName = cfg.Server.GetFileStrategy()
 	return convertCfg
 }
 
@@ -965,22 +976,24 @@ GOAL GUIDANCE:
 
 	// Build agent options
 	var agentOpts []agent.AgentOption
+	// 快照一次，后续所有读都基于它（setCfg 会并发整体替换 s.cfg 指针）。
+	cfgSnap := s.cfgSnapshot()
 	// Apply configurable loop caps from config.agent (max_turns etc.).
 	// Previously these were hard-coded defaults (60 turns) and the config
 	// keys were silently ignored by the web server path.
-	if s.cfg != nil {
-		if s.cfg.Agent.MaxTurns > 0 {
-			agentOpts = append(agentOpts, agent.WithMaxTurns(s.cfg.Agent.MaxTurns))
+	if cfgSnap != nil {
+		if cfgSnap.Agent.MaxTurns > 0 {
+			agentOpts = append(agentOpts, agent.WithMaxTurns(cfgSnap.Agent.MaxTurns))
 		}
-		if s.cfg.Agent.MaxIterations > 0 || s.cfg.Agent.MaxTokenBudget > 0 {
+		if cfgSnap.Agent.MaxIterations > 0 || cfgSnap.Agent.MaxTokenBudget > 0 {
 			agentOpts = append(agentOpts, agent.WithSteering(agent.SteeringConfig{
-				MaxIterations:  s.cfg.Agent.MaxIterations,
-				MaxTokenBudget: s.cfg.Agent.MaxTokenBudget,
+				MaxIterations:  cfgSnap.Agent.MaxIterations,
+				MaxTokenBudget: cfgSnap.Agent.MaxTokenBudget,
 			}))
 		}
 	}
 	// Enable memory if config says so OR if cortex is available (cortex provides snapshot memory)
-	memoryEnabled := (s.cfg != nil && s.cfg.Memory.Enabled) || s.cortexMgr != nil
+	memoryEnabled := (cfgSnap != nil && cfgSnap.Memory.Enabled) || s.cortexMgr != nil
 	if memoryEnabled {
 		agentOpts = append(agentOpts, agent.WithMemory(true))
 	}
@@ -1008,8 +1021,8 @@ GOAL GUIDANCE:
 		agentOpts = append(agentOpts, agent.WithApprovalManager(s.approvalMgr))
 	}
 	// 应用 PII 脱敏配置（来自 config.Privacy）
-	if s.cfg != nil && s.cfg.Privacy != nil {
-		agentOpts = append(agentOpts, agent.WithPrivacy(s.cfg.Privacy))
+	if cfgSnap != nil && cfgSnap.Privacy != nil {
+		agentOpts = append(agentOpts, agent.WithPrivacy(cfgSnap.Privacy))
 	}
 
 	// Set file conversion config. AutoVision re-evaluates vision support from
@@ -1796,7 +1809,7 @@ func (s *Server) initBotMode() (*bot.Manager, error) {
 		return s.botManager, nil
 	}
 
-	cfg := s.cfg
+	cfg := s.cfgSnapshot()
 	if cfg == nil {
 		cfg = appconfig.DefaultConfig()
 	}
@@ -1903,10 +1916,13 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 	// Build toolset list
 	toolsets := make([]map[string]interface{}, 0, len(categoryTools))
 
+	// 一次快照：下面 isEnabled 闭包会被多次调用，逐次裸读 s.cfg 会与 setCfg 竞态。
+	cfgSnap := s.cfgSnapshot()
+
 	// Check if all tools are enabled by default
 	allEnabled := false
-	if s.cfg != nil && s.cfg.Tools.Enabled != nil {
-		for _, e := range s.cfg.Tools.Enabled {
+	if cfgSnap != nil && cfgSnap.Tools.Enabled != nil {
+		for _, e := range cfgSnap.Tools.Enabled {
 			if e == "all" {
 				allEnabled = true
 				break
@@ -1916,23 +1932,23 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 
 	// Helper to check if toolset is enabled
 	isEnabled := func(id string) bool {
-		if s.cfg == nil || s.cfg.Tools.Disabled == nil || s.cfg.Tools.Enabled == nil {
+		if cfgSnap == nil || cfgSnap.Tools.Disabled == nil || cfgSnap.Tools.Enabled == nil {
 			return true // Default to enabled if no config
 		}
 		// Check disabled list first
-		for _, d := range s.cfg.Tools.Disabled {
+		for _, d := range cfgSnap.Tools.Disabled {
 			if d == id || d == "all" {
 				return false
 			}
 		}
 		// Check enabled list
-		for _, e := range s.cfg.Tools.Enabled {
+		for _, e := range cfgSnap.Tools.Enabled {
 			if e == id || e == "all" {
 				return true
 			}
 		}
 		// Default: all enabled if not specified
-		return allEnabled || len(s.cfg.Tools.Enabled) == 0
+		return allEnabled || len(cfgSnap.Tools.Enabled) == 0
 	}
 
 	// Add categorized toolsets in a fixed order (based on categoryMap order)
@@ -2178,16 +2194,16 @@ func (s *Server) getRealSkills() []Skill {
 
 func (s *Server) getUserSkillsDir() string {
 	userDir := "skills"
-	if s.cfg != nil && s.cfg.Skills.UserDir != "" {
-		userDir = s.cfg.Skills.UserDir
+	if cfg := s.cfgSnapshot(); cfg != nil && cfg.Skills.UserDir != "" {
+		userDir = cfg.Skills.UserDir
 	}
 	return filepath.Join(s.magicHome, userDir)
 }
 
 func (s *Server) getDefaultSkillsDir() string {
 	defaultDir := "skills-default"
-	if s.cfg != nil && s.cfg.Skills.DefaultDir != "" {
-		defaultDir = s.cfg.Skills.DefaultDir
+	if cfg := s.cfgSnapshot(); cfg != nil && cfg.Skills.DefaultDir != "" {
+		defaultDir = cfg.Skills.DefaultDir
 	}
 	return filepath.Join(s.magicHome, defaultDir)
 }
@@ -2195,8 +2211,8 @@ func (s *Server) getDefaultSkillsDir() string {
 // getAllowedFSRoots 返回文件分享允许的根目录白名单。
 func (s *Server) getAllowedFSRoots() []string {
 	roots := []string{s.magicHome}
-	if s.cfg != nil && s.cfg.WorkingDir != "" {
-		roots = append(roots, s.cfg.WorkingDir)
+	if wd := s.cfgWorkingDir(); wd != "" {
+		roots = append(roots, wd)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		roots = append(roots, cwd)
@@ -2332,9 +2348,9 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 	disabledPlugins := make(map[string]bool)
 	enableAll := false
 
-	if s.cfg != nil {
+	if cfg := s.cfgSnapshot(); cfg != nil {
 		// Check if "all" is in enabled list
-		for _, e := range s.cfg.Plugins.Enabled {
+		for _, e := range cfg.Plugins.Enabled {
 			if e == "all" {
 				enableAll = true
 				break
@@ -2342,7 +2358,7 @@ func (s *Server) scanPluginsDir() []map[string]interface{} {
 			enabledPlugins[e] = true
 		}
 		// Build disabled list
-		for _, d := range s.cfg.Plugins.Disabled {
+		for _, d := range cfg.Plugins.Disabled {
 			disabledPlugins[d] = true
 		}
 	}

@@ -314,8 +314,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			platform = "web"
 		}
 		model := req.Model
-		if model == "" {
-			model = s.cfg.GetCurrentModel()
+		cfgSnap := s.cfgSnapshot()
+		profileName := ""
+		if cfgSnap != nil {
+			profileName = cfgSnap.Profile
+			if model == "" {
+				model = cfgSnap.GetCurrentModel()
+			}
 		}
 
 		workDir := req.WorkDir
@@ -333,7 +338,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 		newSession := &session.Session{
 			ID:              sessionID,
-			Profile:         s.cfg.Profile,
+			Profile:         profileName,
 			Platform:        platform,
 			Model:           model,
 			WorkDir:         workDir,
@@ -1646,12 +1651,16 @@ func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
 		// Search in messages content
 		for _, m := range sess.Messages {
 			if strings.Contains(strings.ToLower(m.Content), strings.ToLower(query)) {
+				curModel := ""
+				if cs := s.cfgSnapshot(); cs != nil {
+					curModel = cs.GetCurrentModel()
+				}
 				results = append(results, map[string]interface{}{
 					"session_id":      sess.ID,
 					"snippet":         utils.Truncate(m.Content, 200),
 					"role":            m.Role,
 					"source":          sess.Platform,
-					"model":           s.cfg.GetCurrentModel(),
+					"model":           curModel,
 					"session_started": sess.CreatedAt.Unix(),
 				})
 				break // One match per session

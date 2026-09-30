@@ -414,9 +414,9 @@ func (s *Server) persistTurnMessagesWithPartial(aiAgent *agent.Agent, sessionID,
 			now := time.Now()
 			sess = &session.Session{
 				ID:        sessionID,
-				Profile:   s.cfg.Profile,
+				Profile:   s.cfgProfile(),
 				Platform:  "web",
-				Model:     s.cfg.GetCurrentModel(),
+				Model:     s.cfgCurrentModel(),
 				CreatedAt: now,
 				UpdatedAt: now,
 				Messages:  []types.Message{},
@@ -505,11 +505,11 @@ func (s *Server) recordUsage(aiAgent *agent.Agent, sessionID string) {
 
 	// Only record if there are new tokens consumed in this turn
 	if deltaInput > 0 || deltaOutput > 0 {
-		model := s.cfg.GetCurrentModel()
+		model := s.cfgCurrentModel()
 		if model == "" {
 			model = "unknown"
 		}
-		provider := s.cfg.Provider
+		provider := s.cfgProvider()
 		if provider == "" {
 			provider = "unknown"
 		}
@@ -528,11 +528,11 @@ func (s *Server) accountTurnUsage(sessionID string) {
 		return
 	}
 	if dIn > 0 || dOut > 0 {
-		model := s.cfg.GetCurrentModel()
+		model := s.cfgCurrentModel()
 		if model == "" {
 			model = "unknown"
 		}
-		provider := s.cfg.Provider
+		provider := s.cfgProvider()
 		if provider == "" {
 			provider = "unknown"
 		}
@@ -632,7 +632,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		response := map[string]interface{}{
 			"id":            fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 			"content":       "",
-			"model":         s.cfg.GetCurrentModel(),
+			"model":         s.cfgCurrentModel(),
 			"tool_messages": toolMessages,
 		}
 		jsonResponse(w, response)
@@ -664,7 +664,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"id":      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		"content": respContent,
-		"model":   s.cfg.GetCurrentModel(),
+		"model":   s.cfgCurrentModel(),
 	}
 
 	jsonResponse(w, response)

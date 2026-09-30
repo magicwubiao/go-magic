@@ -366,9 +366,10 @@ func (s *Server) persistMCPServers(upsert map[string]mcp.ServerConfig, remove []
 	}
 	s.reloadConfig()
 	s.acquireServerMu("")
-	if s.cfg == nil {
-		s.setCfg(&appconfig.Config{})
-	}
+	defer s.releaseServerMu()
+	s.lockCfgForWrite()
+	defer s.unlockCfgForWrite()
+	// lockCfgForWrite 保证 s.cfg 非 nil。
 	if s.cfg.MCP == nil {
 		s.cfg.MCP = &appconfig.MCPConfig{}
 	}
@@ -381,7 +382,6 @@ func (s *Server) persistMCPServers(upsert map[string]mcp.ServerConfig, remove []
 	for _, name := range remove {
 		delete(s.cfg.MCP.Servers, name)
 	}
-	s.releaseServerMu()
 	return s.persistConfig(true)
 }
 
@@ -391,13 +391,14 @@ func (s *Server) mcpServerConfigs() map[string]mcp.ServerConfig {
 	if s == nil {
 		return out
 	}
-	s.acquireServerMu("")
-	defer s.releaseServerMu()
-	if s.cfg == nil || s.cfg.MCP == nil {
+	// 走快照而非"用 s.mu 包裸读"：s.cfg 的写入侧（setCfg）由 cfgMu 保护，
+	// 与 s.mu 互不相干（CI `-race` 会报）。快照是不可变的，可自由遍历。
+	cfg := s.cfgSnapshot()
+	if cfg == nil || cfg.MCP == nil {
 		return out
 	}
-	for name, cfg := range s.cfg.MCP.Servers {
-		out[name] = cfg
+	for name, c := range cfg.MCP.Servers {
+		out[name] = c
 	}
 	return out
 }
