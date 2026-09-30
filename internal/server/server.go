@@ -76,14 +76,15 @@ type Server struct {
 	// 在写侧串行化；cfgMu 只解决"指针被替换"与"读指针"之间的竞态。
 	cfgMu sync.Mutex
 	cfg   *appconfig.Config
-	// rebuildLiveProvider 是"需要重建 provider + 清 agent 缓存"的延迟标记。
+	// rebuildLiveProvider 是"保存 provider 后需要重建 provider + 清 agent 缓存"
+	// 的延迟标记。
 	//
-	// 为什么需要它：handleProvidersSubRoutes 保存 provider 后要保证凭据
-	// 落到**正在运行**的 provider 实例上，但重建 provider / 清 agent 都会
-	// 去拿别的锁，而那一刻 cfgMu 还被握着（applyLiveProviderCredentials
-	// 的调用点）。于是改为打标记，由调用方在释放 cfgMu 之后调
-	// rebuildLiveProvider 完成。
-	// 只在持 cfgMu 的临界区里读写，无需额外同步。
+	// 为什么需要它：handleProvidersSubRoutes 保存 provider 后要保证凭据落到
+	// **正在运行**的 provider 实例上 —— 快路径（provider.ApplyCredentials）
+	// 不碰锁、可以就地做；但慢路径要重建 provider 并清 agent 缓存，那会去拿
+	// 别的锁，而此刻 cfgMu 还被握着。于是改为打标记，由调用方**在 cfgMu
+	// 临界区内读出并清零**，再于释放后调 rebuildLiveProviderNow() 完成。
+	// 该字段只在持 cfgMu 时读写（rebuildLiveProviderNow 自己不碰它）。
 	rebuildLiveProvider bool
 	// configMtimeNs 记录最近一次已加载进内存的 config.json 修改时间（UnixNano），
 	// 供 syncConfigFromDisk 做"外部进程改了配置文件"的廉价变更检测。

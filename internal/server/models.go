@@ -164,13 +164,10 @@ func (s *Server) applyLiveProviderCredentials(name string, provCfg appconfig.Pro
 }
 
 // rebuildLiveProviderNow 在**不持 cfgMu** 的前提下重建 provider 并清空
-// agent 缓存。由 applyLiveProviderCredentials 打标记、调用方在释放
-// cfgMu 之后调用。
+// agent 缓存。由调用方在释放 cfgMu 之后**仅当** `s.rebuildLiveProvider`
+// 为真时调用 —— 标记的读取与清零都在调用方的 cfgMu 临界区内完成，
+// 本函数自己完全不碰那个字段（否则会与其它请求在 cfgMu 下的写入竞态）。
 func (s *Server) rebuildLiveProviderNow() {
-	if !s.rebuildLiveProvider {
-		return
-	}
-	s.rebuildLiveProvider = false
 	cfg := s.cfgSnapshot()
 	if cfg == nil {
 		return
@@ -612,7 +609,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 		// 重建 provider / 刷新视觉策略都会去拿别的锁（clearAgents 拿
 		// agentsMu、refreshConvertConfig 要读配置快照），必须在释放
 		// cfgMu 之后做 —— Release 幂等，defer 里再调一次安全。
+		// 在持锁期间读出并清零标记：出锁后本函数不再碰它（避免竞态）。
 		rebuild := s.rebuildLiveProvider
+		s.rebuildLiveProvider = false
 		g.Release()
 		if rebuild {
 			s.rebuildLiveProviderNow()
@@ -677,7 +676,9 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			s.applyLiveProviderCredentials(providerName, provCfg)
 		}
 		// See the PUT branch: 释放 cfgMu 之后再重建 / 刷新视觉策略。
+		// 持锁期间读出并清零标记，出锁后不再碰它。
 		rebuild := s.rebuildLiveProvider
+		s.rebuildLiveProvider = false
 		g.Release()
 		if rebuild {
 			s.rebuildLiveProviderNow()
