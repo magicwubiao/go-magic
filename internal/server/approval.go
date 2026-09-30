@@ -462,9 +462,7 @@ func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 	defer s.releaseServerMu()
 	s.lockCfgForWrite()
 	defer s.unlockCfgForWrite()
-	if s.cfg == nil {
-		return
-	}
+	// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
 	ac := mgr.GetConfig()
 	s.cfg.Approval = &appconfig.ApprovalConfig{
 		Strategy:         string(ac.Strategy),

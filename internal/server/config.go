@@ -481,12 +481,11 @@ func (s *Server) handleSettingsProfiles(w http.ResponseWriter, r *http.Request) 
 		defer s.releaseServerMu()
 		s.lockCfgForWrite()
 		defer s.unlockCfgForWrite()
-		if s.cfg != nil {
-			s.cfg.Profile = name
-			if err := s.persistConfig(false); err != nil {
-				http.Error(w, "Failed to save config: "+err.Error(), 500)
-				return
-			}
+		// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
+		s.cfg.Profile = name
+		if err := s.persistConfig(false); err != nil {
+			http.Error(w, "Failed to save config: "+err.Error(), 500)
+			return
 		}
 		jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "switched": true})
 		return

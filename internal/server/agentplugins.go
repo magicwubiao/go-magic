@@ -73,9 +73,7 @@ func (s *Server) setPluginDisabled(name string, disabled bool) {
 	defer s.releaseServerMu()
 	s.lockCfgForWrite()
 	defer s.unlockCfgForWrite()
-	if s.cfg == nil {
-		return
-	}
+	// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
 	list := s.cfg.AgentPlugins.Disabled
 	if disabled {
 		found := false
