@@ -192,11 +192,20 @@ func (s *Store) ListSessionSummariesByUserWorkDir(ctx context.Context) ([]*Sessi
 }
 
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?mode=rwc&_journal=WAL&_busy_timeout=5000")
+	// DSN 只能写 modernc 的 `_pragma=NAME(VALUE)` 形式：该驱动只解析
+	// _pragma / _time_format / _txlock，其余查询参数一律静默忽略（包括 mattn
+	// 风格的 `_journal=WAL`、`_busy_timeout=5000`，以及 `mode=rwc`——打开标志
+	// 硬编码为 READWRITE|CREATE）。
+	// 原写法 `?mode=rwc&_journal=WAL&_busy_timeout=5000` 实际以
+	// journal_mode=delete + busy_timeout=0 运行：desktop server / CLI chat /
+	// sessions / gateway 多进程同时写同一个 sessions.db 时会立刻报
+	// SQLITE_BUSY "database is locked"（与 kanban 10-01 事故同源）。
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// 进程内仍用单连接串行化；跨进程的写冲突由上面的 WAL + busy_timeout 兜住。
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)

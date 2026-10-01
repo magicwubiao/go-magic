@@ -171,7 +171,9 @@ func TestInitSchemaBackfillsLegacyDB(t *testing.T) {
 	dbPath := filepath.Join(dir, "legacy.db")
 
 	// 老版本的 schema：只有 messages，没有 title/preview/msg_count/...
-	legacy, err := sql.Open("sqlite", dbPath+"?mode=rwc")
+	// 注意：modernc 驱动忽略 `?mode=rwc` 这类 mattn 风格参数（打开标志本就是
+	// READWRITE|CREATE），这里直接给路径即可，别再写无效参数。
+	legacy, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open legacy db: %v", err)
 	}
