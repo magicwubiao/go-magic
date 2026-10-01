@@ -537,7 +537,11 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 	// Handle GET /{name} - get single provider
 	if r.Method == http.MethodGet && subRoute == "" {
-		if cfg := s.cfgSnapshot(); cfg != nil && cfg.Providers != nil {
+		// 直接读 s.cfg：本 handler 入口已持 s.mu + cfgMu（g 未释放），
+		// 走 cfgSnapshot 会再拿一次 cfgMu ⇒ 不可重入的自我死锁（前端
+		// "保存供应商"第一步就 GET 探存在性，一点保存整个后端当场挂死）。
+		// 这里只读不改，读的是 lockCfgForWrite 换出的写点私有副本。
+		if cfg := s.cfg; cfg != nil && cfg.Providers != nil {
 			if provCfg, ok := cfg.Providers[name]; ok {
 				jsonResponse(w, ProviderInfo{
 					Name:    name,
@@ -643,7 +647,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 			providerName = name
 		}
 		// Create/update provider config
-		if cfg := s.cfgSnapshot(); cfg != nil {
+		// 直接读 s.cfg（**不能**用 cfgSnapshot：此处已持 cfgMu，再拿一次
+		// 就是不可重入的自我死锁）。lockCfgForWrite 已把它换成私有副本，
+		// 下面的原地改写只发生在这份副本上。
+		if cfg := s.cfg; cfg != nil {
 			if cfg.Providers == nil {
 				cfg.Providers = make(map[string]appconfig.ProviderConfig)
 			}
@@ -692,7 +699,10 @@ func (s *Server) handleProvidersSubRoutes(w http.ResponseWriter, r *http.Request
 
 	// Handle DELETE /{name} - delete provider
 	if r.Method == http.MethodDelete && subRoute == "" {
-		if cfg := s.cfgSnapshot(); cfg != nil && cfg.Providers != nil {
+		// 直接读 s.cfg：此处仍持 cfgMu，走 cfgSnapshot 会自锁；且本分支
+		// 要**原地改** Providers（删条目），必须改在写点私有副本上
+		// （lockCfgForWrite 已做过 COW），改快照会污染别人手上的旧快照。
+		if cfg := s.cfg; cfg != nil && cfg.Providers != nil {
 			if _, exists := cfg.Providers[name]; exists {
 				delete(cfg.Providers, name)
 				// If deleted provider was current, clear top-level fields
