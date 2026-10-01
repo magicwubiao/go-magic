@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -27,15 +28,16 @@ func NewKanbanDB(path string) (*KanbanDB, error) {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	// NOTE: modernc.org/sqlite does NOT understand mattn-style DSN params
+	// (`_journal_mode=WAL&_busy_timeout=5000` were silently ignored, leaving us
+	// with journal_mode=delete and busy_timeout=0). Any concurrent write — e.g.
+	// several kanban_create tool calls executed in parallel within one turn —
+	// then failed immediately with SQLITE_BUSY "database is locked".
+	// modernc only honors `_pragma=NAME(VALUE)` params; set WAL, a busy
+	// timeout, and foreign keys per connection here.
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// Enable foreign keys
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
 	return &KanbanDB{
@@ -151,9 +153,15 @@ func (kdb *KanbanDB) Close() error {
 	return kdb.db.Close()
 }
 
+// idSeq disambiguates IDs generated within the same clock tick: parallel
+// kanban_create calls (parallel tool execution) can call generateID at the
+// same UnixNano, and Windows wall-clock granularity makes that a real
+// PRIMARY KEY collision risk (same lesson as tool-call IDs in agent.go).
+var idSeq atomic.Uint64
+
 // generateID generates a unique task ID
 func generateID(prefix string) string {
-	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), idSeq.Add(1))
 }
 
 // CreateTask creates a new task

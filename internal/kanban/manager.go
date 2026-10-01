@@ -87,14 +87,17 @@ func (m *Manager) CreateTask(title, body, assignee string, opts ...TaskOption) (
 	// Handle parent linking if specified via option
 	// (In practice, use AddLink separately)
 
-	// Add created event
+	// Add created event (task itself is already persisted; only warn on
+	// event failure so partial writes are visible in logs)
 	event := &Event{
 		ID:        generateID("evt"),
 		TaskID:    task.ID,
 		EventType: EventCreated,
 		Payload:   fmt.Sprintf(`{"title":"%s","assignee":"%s"}`, title, assignee),
 	}
-	m.db.AddEvent(event)
+	if err := m.db.AddEvent(event); err != nil {
+		log.Warnf("[Kanban] Failed to record created event for task %s: %v", task.ID, err)
+	}
 
 	return task, nil
 }
