@@ -712,10 +712,20 @@ func getSessionID(ctx context.Context) string {
 }
 
 // getWorkingDir extracts working_dir from context if available.
-// 优先使用 tool.WorkDirFromContext（类型化键），回退到字符串键 "working_dir"。
+//
+// 取值优先级：沙箱根（tool.WithWorkDirScope）> 生效工作目录（tool.WithWorkDir）>
+// 字符串键 "working_dir"。
+//
+// 先 scope 后 workdir 是刻意的：网关把每轮的生效目录收窄到
+// <gateway 沙箱>/<用户>（相对路径的落点因此按用户隔离），但范围放行必须以整个
+// gateway 沙箱为界——模型会沿用上一轮记下的绝对路径，收窄边界会把它们判成"越界"
+// → 非交互网关 fail-closed → 重试烧满 maxTurns。
 func getWorkingDir(ctx context.Context) string {
 	if ctx == nil {
 		return ""
+	}
+	if scope := tool.WorkDirScopeFromContext(ctx); scope != "" {
+		return scope
 	}
 	if dir := tool.WorkDirFromContext(ctx); dir != "" {
 		return dir

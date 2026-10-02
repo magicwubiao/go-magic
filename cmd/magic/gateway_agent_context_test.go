@@ -26,6 +26,12 @@ import (
 // → write_file 落到 AskUser → 网关是非交互进程，fail-closed 拒绝 → 模型换个姿势
 // 再试，直到 maxTurns。bot 模式（internal/bot/manager.go）早就注入了工作目录，
 // 网关这条路径漏了。
+//
+// 后续需求：所有网关产物原先都平铺在 <working_dir>/gateway 里，不同微信用户的
+// 文件混在一起。现在每轮的生效工作目录再按用户收窄一层
+// （<working_dir>/gateway/<用户>），但审批范围放行的边界保持整个 gateway 沙箱——
+// 模型会原样复用上一轮记下的绝对路径（现场就是 "D:\workspace\gateway\test.txt"），
+// 边界一旦跟着收窄，这些旧路径会被判越界，重新踩回上面那个 maxTurns 事故。
 
 // gatewayWorkDir 的三级解析：显式配置 > <working_dir>/gateway > 进程 cwd。
 func TestGatewayWorkDirResolution(t *testing.T) {
@@ -203,45 +209,195 @@ func TestGatewayAgentApprovalHookIsNonInteractive(t *testing.T) {
 	}
 }
 
-// 注入后的 ctx 必须真的能让工作目录内的 write_file 自动放行，而不只是"ctx 里有
-// 这个值"：只要有人把 turnContext 的注入删掉或改成别的键，这里就会红。
+// 每轮消息注入两个工作目录值：生效目录按用户收窄（产物隔离），沙箱根保持整个
+// gateway 沙箱（审批范围放行的边界）。两者都不能被对方顶掉。
+func TestGatewayTurnContextIsolatesUsersAndKeepsSandboxScope(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	base := t.TempDir()
+	h := &gatewayAgentHandler{workDir: base}
+
+	ctxA := h.turnContext(context.Background(), gateway.Message{UserID: "user-a", Platform: "wechat_ilink"})
+	ctxB := h.turnContext(context.Background(), gateway.Message{UserID: "user-b", Platform: "wechat_ilink"})
+
+	wantA := filepath.Join(base, "user-a")
+	wantB := filepath.Join(base, "user-b")
+	if got := tool.WorkDirFromContext(ctxA); got != wantA {
+		t.Errorf("user-a work dir = %q, want %q", got, wantA)
+	}
+	if got := tool.WorkDirFromContext(ctxB); got != wantB {
+		t.Errorf("user-b work dir = %q, want %q", got, wantB)
+	}
+	// 目录必须已建好：execute_command 以它作 cwd，缺了第一次调用就 ENOENT。
+	for _, dir := range []string{wantA, wantB} {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			t.Errorf("per-user dir %q was not created: err=%v", dir, err)
+		}
+	}
+	// 两个用户的生效目录必须真的不同——这是"产物不再混在一起"的全部意义。
+	if tool.WorkDirFromContext(ctxA) == tool.WorkDirFromContext(ctxB) {
+		t.Error("different users share the same work dir")
+	}
+	for name, ctx := range map[string]context.Context{"a": ctxA, "b": ctxB} {
+		if got := tool.WorkDirScopeFromContext(ctx); got != base {
+			t.Errorf("user-%s sandbox scope = %q, want %q", name, got, base)
+		}
+		if got := tool.SessionIDFromContext(ctx); got == "" {
+			t.Errorf("user-%s session id not injected", name)
+		}
+	}
+
+	// 沙箱还没接线（workDir 为空）时退化成"不注入"，而不是注入一个相对目录
+	// （那会让文件工具以进程 CWD 为基准落盘）。
+	unwired := (&gatewayAgentHandler{}).turnContext(context.Background(), gateway.Message{UserID: "user-a"})
+	if got := tool.WorkDirFromContext(unwired); got != "" {
+		t.Errorf("unwired handler injected work dir %q, want none", got)
+	}
+	if got := tool.WorkDirScopeFromContext(unwired); got != "" {
+		t.Errorf("unwired handler injected sandbox scope %q, want none", got)
+	}
+}
+
+// 用户目录名的清洗：安全字符原样保留（常见平台 ID 不改名，便于人工对照），
+// 一旦发生替换/裁剪/截断/撞保留名就必须带上哈希后缀，避免两个用户合租目录。
+func TestGatewayUserDirNameSanitization(t *testing.T) {
+	cases := []struct {
+		userID string
+		want   string
+		lossy  bool
+	}{
+		{"user-1", "user-1", false},
+		{"o9cq808vHT9O5weB_75CFpNJcK1s@im.wechat", "o9cq808vHT9O5weB_75CFpNJcK1s@im.wechat", false},
+		{"", gatewayDefaultUserDir, true},
+		{".", gatewayDefaultUserDir, true},
+		{"..", gatewayDefaultUserDir, true},
+		{"用户1", "__1", true},
+		{"user.", "user", true},
+		{"con", "con", true},
+		{"COM1", "COM1", true},
+		{"a/b:c", "a_b_c", true},
+	}
+	for _, tc := range cases {
+		got, lossy := sanitizeGatewayUserDirComponent(tc.userID)
+		if got != tc.want || lossy != tc.lossy {
+			t.Errorf("sanitizeGatewayUserDirComponent(%q) = (%q, %v), want (%q, %v)",
+				tc.userID, got, lossy, tc.want, tc.lossy)
+		}
+	}
+
+	// 长 ID 截断后仍是单段合法目录名。
+	long := strings.Repeat("z", 200)
+	got, lossy := sanitizeGatewayUserDirComponent(long)
+	if !lossy || len(got) > maxGatewayUserDirLen {
+		t.Errorf("long id: got %q (lossy=%v), want lossy and <= %d chars", got, lossy, maxGatewayUserDirLen)
+	}
+
+	// 有损清洗必须靠哈希后缀区分：否则 "a/b" 与 "a_b" 会落到同一个目录。
+	slashed := gatewayUserDirName("a/b")
+	plain := gatewayUserDirName("a_b")
+	if slashed == plain {
+		t.Fatalf("lossy sanitization collided: %q == %q", slashed, plain)
+	}
+	// 任何用户目录名都必须是单段（不含分隔符），否则就能靠 ID 逃出沙箱。
+	for _, userID := range []string{"../../etc/passwd", `..\..\win`, "a/b", "x:y"} {
+		name := gatewayUserDirName(userID)
+		if name != filepath.Base(name) || strings.ContainsAny(name, `/\`) {
+			t.Errorf("gatewayUserDirName(%q) = %q, which is not a single path segment", userID, name)
+		}
+	}
+}
+
+// 注入后的 ctx 必须真的能让范围放行成立，而不只是"ctx 里有这个值"：只要有人把
+// turnContext 的注入删掉或改成别的键，这里就会红。
 func TestGatewayTurnContextEnablesScopedFileWriteApproval(t *testing.T) {
 	// NewManager 会写 GetMagicHome()/approval，用临时目录隔离。
 	t.Setenv("GO_MAGIC_HOME", t.TempDir())
 
-	workDir := t.TempDir()
-	h := &gatewayAgentHandler{workDir: workDir}
+	base := t.TempDir()
+	h := &gatewayAgentHandler{workDir: base}
 
 	ctx := h.turnContext(context.Background(), gateway.Message{
 		UserID:   "user-1",
 		Platform: "wecom",
 	})
 
-	if got := tool.WorkDirFromContext(ctx); got != workDir {
-		t.Fatalf("work dir not injected into ctx: got %q, want %q", got, workDir)
+	if got := tool.WorkDirFromContext(ctx); got != filepath.Join(base, "user-1") {
+		t.Fatalf("work dir not narrowed per user: got %q, want %q", got, filepath.Join(base, "user-1"))
 	}
 	if got := tool.SessionIDFromContext(ctx); got != "user-1" {
 		t.Errorf("session id not injected into ctx: got %q, want %q", got, "user-1")
 	}
 
-	mgr, err := approval.NewManager(nil) // strategy=smart，与生产默认一致
+	hook, _ := newGatewayTestApprovalHook(t)
+
+	// 相对路径按收窄后的生效目录解析 ⇒ 落在该用户自己的子目录里 ⇒ 自动放行。
+	if dec := gatewayWriteDecision(t, hook, ctx, "test.txt"); dec.Action != hooks.HookActionContinue {
+		t.Fatalf("write_file inside the per-user work dir was not auto-approved: action=%v, reason=%q",
+			dec.Action, dec.Reason)
+	}
+}
+
+// 决定性的边界回归：范围放行以**沙箱根**为界，而不是收窄后的用户目录。
+//
+// 现场依据：模型会把上一轮见过的绝对路径记进历史（"D:\workspace\gateway\test.txt"）
+// 并在后续轮次原样复用。若边界跟着收窄，这些写入会被判越界 → 非交互网关
+// fail-closed 拒绝 → 模型重试烧满 maxTurns（就是本次修的那类事故）。
+// 反向也要成立：沙箱之外的绝对路径必须仍然拒绝。
+func TestGatewayScopedApprovalUsesSandboxRootBoundary(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	base := t.TempDir()
+	h := &gatewayAgentHandler{workDir: base}
+	ctx := h.turnContext(context.Background(), gateway.Message{UserID: "user-1", Platform: "wechat_ilink"})
+
+	hook, _ := newGatewayTestApprovalHook(t)
+
+	// 1) 模型沿用历史里的绝对路径（沙箱根下、但在这个用户的子目录之外）⇒ 仍放行。
+	legacyPath := filepath.Join(base, "test.txt")
+	dec := gatewayWriteDecision(t, hook, ctx, legacyPath)
+	if dec.Action != hooks.HookActionContinue {
+		t.Errorf("absolute path %q inside the gateway sandbox was not auto-approved: action=%v, reason=%q",
+			legacyPath, dec.Action, dec.Reason)
+	}
+
+	// 2) 该用户子目录内的路径 ⇒ 放行。
+	inUser := filepath.Join(base, "user-1", "report.md")
+	if dec := gatewayWriteDecision(t, hook, ctx, inUser); dec.Action != hooks.HookActionContinue {
+		t.Errorf("path %q inside the per-user dir was not auto-approved: action=%v, reason=%q",
+			inUser, dec.Action, dec.Reason)
+	}
+
+	// 3) 沙箱之外的绝对路径 ⇒ 必须不是放行（非交互 fail-closed）。
+	outside := filepath.Join(t.TempDir(), "escape.txt")
+	if dec := gatewayWriteDecision(t, hook, ctx, outside); dec.Action == hooks.HookActionContinue {
+		t.Errorf("path %q outside the gateway sandbox was auto-approved", outside)
+	}
+}
+
+// newGatewayTestApprovalHook 造一个与生产默认一致的审批钩子（smart 策略 +
+// 非交互 fail-closed），并把异步落盘的审批记录 flush 挂在 t.Cleanup 上——
+// t.Cleanup 是 LIFO，这里晚注册所以先于 t.TempDir() 的删除执行。
+func newGatewayTestApprovalHook(t *testing.T) (*agent.ApprovalHook, *approval.Manager) {
+	t.Helper()
+	mgr, err := approval.NewManager(nil)
 	if err != nil {
 		t.Fatalf("approval.NewManager error: %v", err)
 	}
-	// 审批结果与模式是异步落盘的，必须先 flush 再让 t.TempDir() 删目录
-	// （t.Cleanup 是 LIFO，这里晚注册所以先执行）。
 	t.Cleanup(mgr.FlushPendingSaves)
 	hook := agent.NewApprovalHookWithManager(mgr)
+	hook.SetNonInteractive(true)
+	return hook, mgr
+}
 
+// gatewayWriteDecision 走一次 BeforeTool 审批，返回钩子给出的决定。
+func gatewayWriteDecision(t *testing.T, hook *agent.ApprovalHook, ctx context.Context, path string) hooks.HookDecision {
+	t.Helper()
 	_, dec, err := hook.BeforeTool(ctx, &hooks.ToolCallHookRequest{
 		ToolName: "write_file",
-		ToolArgs: map[string]interface{}{"path": "test.txt", "content": "hello"},
+		ToolArgs: map[string]interface{}{"path": path, "content": "hello"},
 	})
 	if err != nil {
-		t.Fatalf("BeforeTool error: %v", err)
+		t.Fatalf("BeforeTool(%q) error: %v", path, err)
 	}
-	if dec.Action != hooks.HookActionContinue {
-		t.Fatalf("write_file inside the gateway work dir was not auto-approved: action=%v, reason=%q",
-			dec.Action, dec.Reason)
-	}
+	return dec
 }

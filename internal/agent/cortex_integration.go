@@ -424,7 +424,11 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("exceeded maximum turns (%d)", a.maxTurns)
+	// 与其余三条循环共用同一句报错：cortex 是 gateway / server 非流式这两条
+	// 线上主路径的实际入口，此前它只回一句裸的
+	// "exceeded maximum turns (N)"，用户看到"文件都写出来了却只收到一句报错"
+	// 时无法还原现场（已完成轮数、本回合工具调用都缺）。
+	return "", a.maxTurnsExhaustedError()
 }
 
 // ========== Cortex Integration Helper Methods ==========

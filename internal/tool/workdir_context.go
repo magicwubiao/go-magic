@@ -14,6 +14,7 @@ type workDirKey struct{}
 type sessionIDKey struct{}
 type fileSecurityKey struct{}
 type workDirUserSetKey struct{}
+type workDirScopeKey struct{}
 
 type FileSecurityConfig struct {
 	Enabled          bool
@@ -65,6 +66,40 @@ func WorkDirFromContext(ctx context.Context) string {
 		return ""
 	}
 	if v, ok := ctx.Value(workDirKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithWorkDirScope 注入"生效工作目录所属的沙箱根"。
+//
+// 与 WithWorkDir 的分工：workDirKey 是**生效**目录（相对路径解析、shell 的 cwd、
+// 文件写入的落点都按它算），workDirScopeKey 是它外层的**沙箱根**。多数调用方
+// （CLI / web 的会话）两者的取值一致，所以只需注入 workDir；网关是唯一需要区分
+// 的地方：每轮把生效目录收窄到 <gateway 沙箱>/<用户>，但审批钩子 C2 的范围放行
+// 仍以**整个 gateway 沙箱**为界。
+//
+// 不能把两者合并成"生效目录"的原因有实证：模型会把上一轮见过的绝对路径记进
+// 历史（事故现场里就是 "D:\workspace\gateway\test.txt"），沙箱以生效目录为界时
+// 这些旧绝对路径会落到范围外 → 非交互网关 fail-closed 拒绝 → 模型换个姿势重试
+// → 烧满 maxTurns（见 internal/agent/approval.go 的 isPathWithinWorkdir）。
+//
+// 下游读取顺序由 internal/agent 的 getWorkingDir 定：scope 有值就用 scope，
+// 否则回落到 WorkDirFromContext。
+func WithWorkDirScope(ctx context.Context, scope string) context.Context {
+	if scope == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, workDirScopeKey{}, normalizeToolPath(scope))
+}
+
+// WorkDirScopeFromContext 返回注入的沙箱根；未注入时返回空串（调用方应回落到
+// WorkDirFromContext）。
+func WorkDirScopeFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(workDirScopeKey{}).(string); ok {
 		return v
 	}
 	return ""

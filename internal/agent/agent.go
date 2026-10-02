@@ -779,13 +779,29 @@ func (a *Agent) recordToolCallSig(name, args string) {
 	})
 }
 
-// recordToolCallsForLoop 把本轮的工具调用记账进循环检测历史（空名字跳过——
-// 空工具调用由 executeToolsWithHooks 单独处理，不该计入循环阈值）。
+// emptyToolCallName 是"没有工具名"的调用在循环检测历史里的占位名。
+//
+// 用占位名而不是空串：recordToolCallSig 对空名直接 return，报错里的
+// recentToolCallNames 也需要一个能一眼看出"这是空工具调用"的字样。
+const emptyToolCallName = "(empty tool call)"
+
+// recordToolCallsForLoop 把本轮的工具调用记账进循环检测历史。
+//
+// 空名字的调用**同样必须记账**（用 emptyToolCallName 占位）。此前这里直接
+// 跳过，等于给"模型持续返回空名工具调用"开了后门——这类调用三条保护全部
+// 失效：不落 registry（因此没有 [TOOL] 日志）、不计入循环阈值
+// （detectToolLoop 永远为假）、也不产生 error（executeToolsWithHooks 把空调用
+// 转成合成错误结果后仍返回 nil error，lastErr 保持 nil）。结果是四条循环都会
+// 一路烧到 maxTurns，最后只回一句裸的 "exceeded maximum turns"，
+// 在日志上看起来"什么都没发生过"。
+//
+// 空名工具调用本身就是异常信号（provider 解析丢字段 / 模型吐坏响应），
+// 必须和正常调用一样参与阈值判定，才能被 detectToolLoop 提前收口。
 func (a *Agent) recordToolCallsForLoop(toolCalls []types.ToolCall) {
 	for i := range toolCalls {
 		name := toolCalls[i].GetToolName()
 		if name == "" {
-			continue
+			name = emptyToolCallName
 		}
 		a.recordToolCallSig(name, toolCalls[i].Function.Arguments)
 	}
@@ -811,6 +827,19 @@ func (a *Agent) toolCallHistoryLength() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return len(a.toolCallHistory)
+}
+
+// maxTurnsExhaustedError 是四条工具循环共用的"回合上限耗尽"报错。
+//
+// 必须共用：入口不同、报错详略不同，会让同一条上层路径（gateway / web / bot）
+// 在用户侧表现不一致。此前 cortex 与流式两条入口只回一句裸的
+// "exceeded maximum turns (N)"，既没有已完成轮数、也没有本回合调过哪些工具——
+// 用户报告"文件都写出来了，却只收到一句 exceeded maximum turns"时，
+// 现场完全无法还原（max_turns 与回合超时是两条不同的撞墙路径，见
+// NewEnhancedAgent 里的上限说明）。诊断信息统一在这里拼。
+func (a *Agent) maxTurnsExhaustedError() error {
+	return fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
 }
 
 // detectToolLoop 依据**本回合**的工具调用历史判定是否已触发循环上限，返回
@@ -1273,8 +1302,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
+	return "", a.maxTurnsExhaustedError()
 }
 
 // llmRequestTimedOut reports whether an LLM request failed because of a
@@ -1624,6 +1652,14 @@ Please provide a comprehensive, well-structured final response based on these su
 			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
 		}
 
+		// 空名工具调用（provider 解析丢字段 / 模型吐坏响应）必须**先**记账：
+		// 下面会把它们从待执行列表里过滤掉，但过滤不能连循环检测一起过滤。
+		// 此前这条入口在 provider 持续吐空名调用时会静默返回空回答
+		// （resp.Content 通常也是空的），既没有 error、也没有日志痕迹，
+		// 更不会触发任何阈值判定 —— 与另三条入口的行为不一致。
+		a.recordToolCallsForLoop(resp.ToolCalls)
+		loopDetected, loopReason := a.detectToolLoop()
+
 		// Tool call loop detection - track tool calls more precisely
 		// First, filter out empty tool calls and ensure all have IDs
 		validToolCalls := make([]types.ToolCall, 0, len(resp.ToolCalls))
@@ -1640,27 +1676,17 @@ Please provide a comprehensive, well-structured final response based on these su
 			}
 		}
 
-		// If no valid tool calls, return the response directly
-		if len(validToolCalls) == 0 {
-			a.history = append(a.history, provider.Message{
-				Role:      "assistant",
-				Content:   utils.TruncateDetailed(resp.Content, a.maxMsgLen),
-				Timestamp: time.Now(),
-			})
-			a.Emit(bus.EventKindTurnEnd, nil)
-			a.Emit(bus.EventKindAgentEnd, nil)
-
-			a.endCortexTurn()
-
-			return redact.RedactIfEnabled(resp.Content, a.secretRedaction), nil
+		// 响应里带着工具调用、但全都是坏的时候**不能**按"没有工具调用"收尾：
+		// 此前这里直接 `return resp.Content`，而这类响应的 Content 通常也是空的
+		// ⇒ 用户收到一个空回复、日志上没有任何痕迹。原样交给
+		// executeToolsWithHooks，由它落一条"空工具调用"的错误结果进历史
+		// （模型下一轮能看见），循环阈值负责兜底收口。
+		if len(validToolCalls) > 0 {
+			resp.ToolCalls = validToolCalls
 		}
 
-		// Replace resp.ToolCalls with valid ones for further processing
-		resp.ToolCalls = validToolCalls
-
 		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
-		a.recordToolCallsForLoop(resp.ToolCalls)
-		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
+		if loopDetected {
 			log.Warnf("[Agent] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
 			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 			if finalErr != nil {
@@ -1826,8 +1852,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
-		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
+	return "", a.maxTurnsExhaustedError()
 }
 
 // StreamHandler is called for each streaming chunk
@@ -2480,7 +2505,7 @@ Please provide a comprehensive, well-structured final response based on these su
 	// Max turns exhausted: nothing new to call — sanitize so the stored tail
 	// is a legal sequence, then report.
 	a.sanitizeHistory()
-	return fmt.Errorf("exceeded maximum turns (%d)", a.maxTurns)
+	return a.maxTurnsExhaustedError()
 }
 
 // RunConversationStreamWithOutput runs streaming and returns output builder

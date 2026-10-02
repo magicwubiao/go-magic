@@ -260,7 +260,7 @@ magic config reset     # 恢复默认
     "rate_limit_window_sec": 60,
     "blocked_users": [],
     "sensitive_words": [],
-    "working_dir": "",             // 网关 agent 的落盘沙箱；留空 = <working_dir>/gateway
+    "working_dir": "",             // 网关 agent 的沙箱根；留空 = <working_dir>/gateway，每轮再按用户收窄到 <沙箱根>/<用户>
     "platforms": {
       "telegram": {
         "enabled": true,
@@ -728,7 +728,7 @@ magic gateway restart
   "rate_limit_per_user": 20,
   "blocked_users": ["spam-user-id"],
   "sensitive_words": [],
-  "working_dir": "",                     // 网关 agent 的落盘沙箱；留空 = <working_dir>/gateway
+  "working_dir": "",                     // 网关 agent 的沙箱根；留空 = <working_dir>/gateway，每轮再按用户收窄到 <沙箱根>/<用户>
   "platforms": {
     "telegram": {
       "enabled": true,
@@ -752,14 +752,17 @@ magic gateway restart
 
 ### 12.3 Agent 的工作目录与审批
 
-网关 agent 在**自己的沙箱目录**里读写文件：
+网关 agent 在**自己的沙箱目录**里读写文件，并且每个用户还有一层自己的子目录：
 
 | 配置 | 生效目录 |
 |------|---------|
-| `gateway.working_dir` | 原样使用（支持 `~`） |
-| 未配置 | `<working_dir>/gateway`（与 bot 模式的 `<working_dir>/bots/<name>` 同构） |
+| `gateway.working_dir` | 原样使用（支持 `~`），作为**沙箱根** |
+| 未配置 | `<working_dir>/gateway`（与 bot 模式的 `<working_dir>/bots/<name>` 同构），作为**沙箱根** |
+| 每轮实际生效 | `<沙箱根>/<平台用户 ID>`——文件工具的相对路径、`execute_command` 的 cwd 都按它解析，所以每个用户（每个微信/飞书账号）的产物各归各的子目录，互不混杂 |
 
-这个目录同时是审批的边界：落在它内部的 `write_file` / `file_edit` 会自动放行，之外的操作仍需确认。网关是无人值守的进程，没有可以点「同意」的界面（从终端启动时也不会去读 stdin），所以目录外的写入会被 fail-closed 拒绝——要放开就设 `approval.strategy: "auto"`，或者把操作改到工作目录内。
+平台用户 ID 会被清洗成合法目录名（保留大小写；含路径分隔符等字符时替换为 `_` 并追加一段短哈希，避免两个用户落到同一个目录）。
+
+**审批边界是上面那个沙箱根，不是用户的子目录**：落在整个沙箱内的 `write_file` / `file_edit` 会自动放行，之外的操作仍需确认。之所以不跟着收窄到子目录，是因为模型会把上一轮见过的**绝对路径**记进对话历史并在后续轮次原样复用（例如 `D:\workspace\gateway\test.txt`），边界一旦收窄，这类写入就会被判越界。网关是无人值守的进程，没有可以点「同意」的界面（从终端启动时也不会去读 stdin），越界写入会被 fail-closed 拒绝——要放开就设 `approval.strategy: "auto"`，或者把操作改到沙箱内。
 
 网关 agent 的 `agent.max_turns` / `max_iterations` / `max_token_budget` 与整个 `approval` 段都取自主配置，与 Web UI、Bot 模式是同一套语义。
 

@@ -262,7 +262,7 @@ magic config reset     # restore defaults
     "rate_limit_window_sec": 60,
     "blocked_users": [],
     "sensitive_words": [],
-    "working_dir": "",             // gateway agent sandbox; empty = <working_dir>/gateway
+    "working_dir": "",             // gateway agent sandbox root; empty = <working_dir>/gateway, narrowed per user to <root>/<user>
     "platforms": {
       "telegram": {
         "enabled": true,
@@ -730,7 +730,7 @@ magic gateway restart
   "rate_limit_per_user": 20,
   "blocked_users": ["spam-user-id"],
   "sensitive_words": [],
-  "working_dir": "",                     // gateway agent sandbox; empty = <working_dir>/gateway
+  "working_dir": "",                     // gateway agent sandbox root; empty = <working_dir>/gateway, narrowed per user to <root>/<user>
   "platforms": {
     "telegram": {
       "enabled": true,
@@ -754,14 +754,17 @@ magic gateway restart
 
 ### 12.3 The agent's working directory and approvals
 
-The gateway agent reads and writes files inside **its own sandbox directory**:
+The gateway agent reads and writes files inside **its own sandbox directory**, and every user gets a subdirectory of their own:
 
 | Config | Effective directory |
 |--------|--------------------|
-| `gateway.working_dir` | used as-is (`~` supported) |
-| not set | `<working_dir>/gateway` (mirrors bot mode's `<working_dir>/bots/<name>`) |
+| `gateway.working_dir` | used as-is (`~` supported), as the **sandbox root** |
+| not set | `<working_dir>/gateway` (mirrors bot mode's `<working_dir>/bots/<name>`), as the **sandbox root** |
+| per turn | `<sandbox root>/<platform user ID>` — relative paths of the file tools and the `execute_command` cwd resolve against it, so each user (each WeChat / Feishu account) writes into their own subdirectory instead of all sharing one folder |
 
-That directory is also the approval boundary: `write_file` / `file_edit` inside it are auto-approved, anything outside still needs confirmation. The gateway is unattended — there is no UI to click "approve" (and it will not read stdin, even when launched from a terminal), so writes outside the sandbox are denied fail-closed. To allow them, set `approval.strategy: "auto"`, or keep the operation inside the working directory.
+Platform user IDs are sanitized into a legal directory name (case is preserved; characters such as path separators become `_`, and a short hash suffix is appended whenever the sanitization was lossy so two users can never share a directory).
+
+**The approval boundary is that sandbox root, not the per-user subdirectory**: `write_file` / `file_edit` anywhere inside the sandbox are auto-approved, anything outside still needs confirmation. It deliberately does not narrow along with the work dir, because the model records **absolute paths** it has seen earlier in the conversation history and reuses them verbatim in later turns (e.g. `D:\workspace\gateway\test.txt`); a narrowed boundary would classify those writes as out-of-scope. The gateway is unattended — there is no UI to click "approve" (and it will not read stdin, even when launched from a terminal), so out-of-scope writes are denied fail-closed. To allow them, set `approval.strategy: "auto"`, or keep the operation inside the sandbox.
 
 The gateway agent takes `agent.max_turns` / `max_iterations` / `max_token_budget` and the whole `approval` section from the main config, with the same semantics as the Web UI and Bot Mode.
 

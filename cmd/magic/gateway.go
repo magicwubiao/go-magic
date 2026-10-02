@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -117,10 +118,12 @@ type gatewayAgentHandler struct {
 	// agent。nil（初始化失败）时 agent 回退到内置默认钩子。
 	approvalMgr *approval.Manager
 
-	// workDir 是网关 agent 的落盘沙箱（见 gatewayWorkDir：gateway.working_dir
-	// 或 <working_dir>/gateway，缺省回退进程 cwd）。每轮消息入口会把它注入 ctx：
-	// 审批钩子的 C2 范围放行（isPathWithinWorkdir）靠它识别"目录内写入"并自动放行，
-	// 文件/终端工具也按它解析相对路径。
+	// workDir 是网关 agent 的落盘沙箱**根**（见 gatewayWorkDir：gateway.working_dir
+	// 或 <working_dir>/gateway，缺省回退进程 cwd）。每轮消息入口按用户把它收窄成
+	// <workDir>/<用户目录> 注入 ctx（见 ensureUserWorkDir / turnContext）：文件工具与
+	// execute_command 的 cwd 按收窄后的目录解析相对路径，于是每个用户的产物各归
+	// 各的子目录；而审批钩子的 C2 范围放行（isPathWithinWorkdir）以整个沙箱根为界，
+	// 这样模型沿用上一轮记下的绝对路径也不会被判越界。
 	workDir string
 
 	// Per-user agents for conversation context
@@ -222,15 +225,15 @@ func (h *gatewayAgentHandler) applyConfig(cfg *config.Config) {
 	h.approvalMgr = approval.NewManagerFromAppConfigOrWarn(cfg.Approval, "Gateway")
 }
 
-// gatewayWorkDir resolves the gateway agent's on-disk sandbox:
+// gatewayWorkDir resolves the gateway agent's on-disk sandbox **root**:
 //
 //  1. gateway.working_dir 显式配置 → 原样使用（`~` 已在 config.Load 里展开）；
 //  2. 否则 <working_dir>/gateway——与 bot 模式的 <working_dir>/bots/<name> 同构，
 //     把网关产物圈在自己的子目录里，不和 web/CLI 会话的工作目录互相污染；
 //  3. working_dir 也为空（config.Load 失败 / 手工构造的 Config）时回退进程 cwd。
 //
-// 这个目录同时是审批钩子 C2 "范围放行"的判定边界：只有落在它内部的
-// write_file/file_edit 才会在无人应答审批的网关进程里被自动放行（见 turnContext）。
+// 它既是每轮注入 ctx 的沙箱根，也是审批钩子 C2 "范围放行"的判定边界（见
+// turnContext）；具体到每一轮，生效工作目录还要再按用户收窄一层（ensureUserWorkDir）。
 func gatewayWorkDir(cfg *config.Config) string {
 	if cfg != nil {
 		if dir := strings.TrimSpace(cfg.Gateway.WorkingDir); dir != "" {
@@ -242,6 +245,112 @@ func gatewayWorkDir(cfg *config.Config) string {
 	}
 	cwd, _ := os.Getwd()
 	return cwd
+}
+
+// 每用户子目录名的约束。
+const (
+	// maxGatewayUserDirLen 限制目录名长度：平台用户 ID 可能很长，而 Windows 的
+	// 单段路径上限（MAX_PATH 时代 255 字符）还得给文件名留位置。
+	maxGatewayUserDirLen = 64
+	// gatewayDefaultUserDir 是 userID 为空 / 清洗后不可用时的兜底目录名。
+	gatewayDefaultUserDir = "default"
+)
+
+// gatewayUserDirName 把平台用户 ID 映射成一个可安全用作目录名的片段。
+//
+// 与 bot 模式的 sanitizeDirComponent 有一处刻意不同：这里**保留大小写**。平台
+// 用户 ID（openid、snowflake 之类）是大小写敏感的，统一小写会让"只差大小写"的
+// 两个用户合租同一个目录。代价是字符替换可能是有损的（两个不同 ID 映射到同一个
+// 名字），所以只在替换真的发生时追加 ID 的短哈希，既保住常见 ID 的可读性，又
+// 杜绝跨用户共用目录。
+func gatewayUserDirName(userID string) string {
+	name, lossy := sanitizeGatewayUserDirComponent(userID)
+	if lossy {
+		sum := sha256.Sum256([]byte(userID))
+		name += "-" + fmt.Sprintf("%x", sum[:4])
+	}
+	return name
+}
+
+// sanitizeGatewayUserDirComponent 做字符级清洗，第二个返回值表示清洗是否**有损**
+// （被替换 / 被裁掉 / 被截断 / 撞上保留名），有损时调用方必须追加哈希兜底。
+func sanitizeGatewayUserDirComponent(userID string) (string, bool) {
+	if userID == "" {
+		return gatewayDefaultUserDir, true
+	}
+
+	lossy := false
+	var b strings.Builder
+	b.Grow(len(userID))
+	for _, r := range userID {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '@' || r == '.' || r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			// 路径分隔符、引号、通配符、控制字符……一律替换，避免目录逃逸。
+			b.WriteRune('_')
+			lossy = true
+		}
+	}
+	name := b.String()
+
+	// Windows 会静默丢掉目录名尾部的点与空格（"user." 与 "user" 会重合），
+	// 主动裁掉并记为有损。
+	if trimmed := strings.TrimRight(name, ". "); trimmed != name {
+		name = trimmed
+		lossy = true
+	}
+	// 单个点目录建不出正常目录；纯替换字符（如 "///" 全变 "_"）无信息量。
+	if name == "" || name == "." || name == ".." {
+		return gatewayDefaultUserDir, true
+	}
+	// Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）在任何目录下都建不出
+	// 目录；记为有损，让哈希后缀把它变成可用的名字。
+	if isWindowsReservedDirName(name) {
+		lossy = true
+	}
+	// 截断只会在 ASCII 上发生（非 ASCII 字符已被替换成 '_'），不会切断多字节字符。
+	if len(name) > maxGatewayUserDirLen {
+		name = strings.TrimRight(name[:maxGatewayUserDirLen], ". ")
+		if name == "" {
+			return gatewayDefaultUserDir, true
+		}
+		lossy = true
+	}
+	return name, lossy
+}
+
+// isWindowsReservedDirName 判断是否为 Windows 保留设备名。
+func isWindowsReservedDirName(name string) bool {
+	upper := strings.ToUpper(name)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	for _, prefix := range [...]string{"COM", "LPT"} {
+		if len(upper) == len(prefix)+1 && strings.HasPrefix(upper, prefix) {
+			if d := upper[len(prefix)]; d >= '1' && d <= '9' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ensureUserWorkDir 返回 <沙箱根>/<用户目录> 并确保它存在。base 为空（沙箱还没
+// 接线）时返回空串，调用方注入 ctx 时会退化成"不注入"，与改造前一致。
+func ensureUserWorkDir(base, userID string) string {
+	if base == "" {
+		return ""
+	}
+	dir := filepath.Join(base, gatewayUserDirName(userID))
+	// execute_command 以它作 cwd 启动子进程、文件工具按它拼相对路径，目录不存在
+	// 时第一次工具调用就会以 ENOENT 失败。
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warnf("[Gateway] Failed to create user working directory %s: %v", dir, err)
+	}
+	return dir
 }
 
 // newCheckpointManager creates a checkpoint manager, returning nil on error
@@ -348,6 +457,13 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 	return newAgent, nil
 }
 
+// sandboxRoot 返回网关沙箱根目录（读锁内取，热加载路径会在持锁时重建它）。
+func (h *gatewayAgentHandler) sandboxRoot() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.workDir
+}
+
 // turnContext 给一轮网关消息补齐下游依赖的 ctx 值。
 //
 // gateway.processMessage 只提供了 context.WithCancel(context.Background())，
@@ -360,9 +476,21 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 //     "AI processing failed: exceeded maximum turns"。
 //  2. 文件/终端工具按它解析相对路径，否则会落到进程 CWD 而不是配置的工作目录。
 //
-// 与 bot 模式（internal/bot/manager.go 的 processMessage）使用同一套注入。
+// 这里注入的是**两个**值，不要合并成一个：
+//
+//   - 生效工作目录 = <沙箱根>/<用户>（userWorkDir）。相对路径的落点按用户隔离，
+//     每个微信用户的产物各归各的子目录，不再全堆在 gateway/ 平铺。
+//   - 沙箱根（tool.WithWorkDirScope）= 整个 gateway 沙箱，供审批范围放行使用。
+//     不合并的原因见 getWorkingDir 的说明：模型会原样复用上一轮记下的绝对路径
+//     （事故现场里就是 "D:\workspace\gateway\test.txt"），一旦把放行边界收窄到
+//     每用户目录，这些旧绝对路径会被判越界 → fail-closed → 重试烧满 maxTurns。
+//
+// 与 bot 模式（internal/bot/manager.go 的 processMessage）使用同一套注入；差别只在
+// bot 的沙箱根是 <working_dir>/bots/<name>、本就一个 bot 一个目录。
 func (h *gatewayAgentHandler) turnContext(ctx context.Context, msg gateway.Message) context.Context {
-	ctx = tool.WithWorkDir(ctx, h.workDir)
+	base := h.sandboxRoot()
+	ctx = tool.WithWorkDir(ctx, ensureUserWorkDir(base, msg.UserID))
+	ctx = tool.WithWorkDirScope(ctx, base)
 	return tool.WithSessionID(ctx, msg.UserID)
 }
 
