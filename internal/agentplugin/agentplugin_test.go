@@ -178,14 +178,17 @@ func TestValidateAndExpandSpec_StdioArgsEnvExpanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Args[0] != filepath.Join(root, "server.js") {
-		t.Errorf("args[0] = %q, want %q", out.Args[0], filepath.Join(root, "server.js"))
+	// expandVars 是纯字符串替换（mcpconfig.go），不做路径分隔符规范化：
+	// 用户写的 "${PLUGIN_ROOT}/server.js" 展开后保持正斜杠，Windows 上
+	// 也不等于 filepath.Join 的反斜杠结果。
+	if out.Args[0] != root+"/server.js" {
+		t.Errorf("args[0] = %q, want %q", out.Args[0], root+"/server.js")
 	}
 	if out.Args[2] != data {
 		t.Errorf("args[2] = %q, want %q", out.Args[2], data)
 	}
-	if out.Env["CONFIG"] != filepath.Join(root, "config.json") {
-		t.Errorf("env CONFIG = %q, want %q", out.Env["CONFIG"], filepath.Join(root, "config.json"))
+	if out.Env["CONFIG"] != root+"/config.json" {
+		t.Errorf("env CONFIG = %q, want %q", out.Env["CONFIG"], root+"/config.json")
 	}
 	// command 不展开占位符。
 	if out.Command != "node" {
