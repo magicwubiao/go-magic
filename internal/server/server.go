@@ -375,6 +375,8 @@ Your working directory is: %s
 
 					// Agent options
 					agentOpts := []agent.AgentOption{
+						// 5=同一(工具+参数)重复上限；15=连续无进展次数上限
+						// （非调用总量：看板任务常需几十次各不相同的读写）。
 						agent.WithLoopLimits(5, 15),
 						agent.WithSteering(agent.SteeringConfig{MaxIterations: 30}),
 					}

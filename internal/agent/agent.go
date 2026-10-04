@@ -112,7 +112,7 @@ type Agent struct {
 	// （每轮的工具调用都被丢弃，换上一句"不要再调工具，给个总结"）。
 	toolCallHistory  []toolLoopRecord
 	sameToolLimit    int // 同一（工具 + 参数）最大重复次数
-	consecutiveLimit int // 单回合 tool call 总次数上限
+	consecutiveLimit int // 连续无进展（重复签名）次数上限，非调用总量
 
 	// maxParallelTools 全局并行工具执行并发上限（跨所有并行组共享）。
 	// 默认 4；<=0 视为非法并在运行时兜底为串行。
@@ -262,9 +262,11 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// sameToolLimit 比的是"工具名 + 参数指纹"：同一回合里 read_file 读 3 个
 		// 不同文件是完全正常的，只有反复发起**同一个调用**才是死循环信号。
 		sameToolLimit: 3,
-		// consecutiveLimit 是单回合工具调用总量兜底（参数每次都变的死循环走这条）。
-		// 10 太紧：一次正常的多文件重构轻松超过 10 次调用，会被误判成死循环而中断
-		// 正在执行的回合。maxTurns(150)/回合超时仍是最终上限。
+		// consecutiveLimit 是"连续无进展"兜底：从尾部往前连续这么多条调用
+		// 全都是**已经出现过的 工具+参数 签名**时，才认定原地打转并收口。
+		// 注意它**不是**调用总量上限——旧实现按总数判定，把"二十来步的正常
+		// 重构"直接腰斩成"几十轮就停止"。调用多但每步都不同（有进展）永不触发；
+		// 真正的总量/时长上限由 maxTurns 与回合超时兜底。
 		consecutiveLimit: 25,
 		maxParallelTools: defaultMaxParallelTools,
 		subTaskEnabled:   true,
@@ -871,8 +873,33 @@ func (a *Agent) detectToolLoop() (bool, string) {
 			return true, fmt.Sprintf("tool %s called %d times with identical arguments", rec.Name, counts[rec.Sig])
 		}
 	}
-	if len(history) >= a.consecutiveLimit {
-		return true, fmt.Sprintf("%d tool calls in one turn", len(history))
+
+	// 总量兜底：只有**连续无进展**才算失控，不能只数总数。
+	//
+	// 旧实现是 `len(history) >= consecutiveLimit`（默认 25），即单回合内累计
+	// 发起 25 次调用就直接收口。这个口径对正常任务是灾难：一次二十来步的重构
+	// （读 5~6 个文件 + 多轮编辑 + 验证）轻松超过 25 次**各不相同**的调用，
+	// 于是任务在"几十轮"处被腰斩，模型被要求"不要再调工具，给总结"——
+	// 用户看到的就是"几十轮就停止"，且与 maxTurns(150) 的死因完全不同。
+	//
+	// 正确的信号是"有没有推进"：新签名（本回合首次出现的 工具+参数）代表进展，
+	// 重复签名代表原地打转。只有从尾部往前连续 consecutiveLimit 条**全部**是
+	// 已经出现过的签名时，才认定为失控。这样"调用多但每步都不同"永不被误杀，
+	// 而"换着工具名重复同一件事"仍会被提前收口。真正的总上限由 maxTurns 兜底。
+	if a.consecutiveLimit > 0 && len(history) >= a.consecutiveLimit {
+		seen := make(map[string]bool, len(history))
+		noProgress := 0
+		for _, rec := range history {
+			if seen[rec.Sig] {
+				noProgress++
+				if noProgress >= a.consecutiveLimit {
+					return true, fmt.Sprintf("%d consecutive tool calls without progress (no new tool+args combination)", noProgress)
+				}
+				continue
+			}
+			seen[rec.Sig] = true
+			noProgress = 0
+		}
 	}
 	return false, ""
 }

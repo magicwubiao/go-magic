@@ -591,7 +591,10 @@ Your working directory is: %s
 
 	// Agent options - balance between capability and safety
 	agentOpts := []agent.AgentOption{
-		agent.WithLoopLimits(5, 15), // Max 5 tool calls per turn, 15 turns max
+		// sameToolLimit=5：同一(工具+参数)重复 5 次才算打转。
+		// consecutiveLimit=15：**连续无进展** 15 次才收口（不是"15 轮"，
+		// 也不是调用总量上限——调用多但每步不同属于正常推进）。
+		agent.WithLoopLimits(5, 15),
 		agent.WithSteering(agent.SteeringConfig{
 			MaxIterations: 30, // Enough for complex multi-step tasks
 		}),

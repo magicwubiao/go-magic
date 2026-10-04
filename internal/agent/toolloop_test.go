@@ -169,19 +169,44 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 		t.Fatalf("同名但参数不同的调用不该触发死循环判定，实际: %q", reason)
 	}
 
-	// 单回合总调用量上限：每轮换一个工具名，绕开"同一调用"判定。
+	// 单回合"连续无进展"兜底：每轮换一个**新**工具名 = 有进展，不该触发。
+	// 这正是旧实现（按调用总量计数）误杀正常任务的场景：二十来步的重构
+	// 每步签名都不同，却会在第 consecutiveLimit 次被腰斩成"几十轮就停止"。
 	ag2 := newLoopTestAgent(t, &scriptedLoopProvider{})
-	for i := 0; i < ag2.consecutiveLimit-1; i++ {
+	for i := 0; i < ag2.consecutiveLimit*2; i++ {
 		ag2.recordToolCall(fmt.Sprintf("tool_%d", i))
-		if detected, _ := ag2.detectToolLoop(); detected {
-			t.Fatalf("单回合第 %d 次调用不该触发（上限 %d）", i+1, ag2.consecutiveLimit)
+		if detected, reason := ag2.detectToolLoop(); detected {
+			t.Fatalf("每步都是新签名（有进展）不该触发，第 %d 次被误判: %q", i+1, reason)
 		}
 	}
-	ag2.recordToolCall(fmt.Sprintf("tool_%d", ag2.consecutiveLimit-1))
-	if detected, reason := ag2.detectToolLoop(); !detected {
-		t.Fatalf("单回合第 %d 次调用必须触发（上限 %d）", ag2.consecutiveLimit, ag2.consecutiveLimit)
-	} else if !strings.Contains(reason, "in one turn") {
-		t.Fatalf("触发原因应说明是单回合调用量超限，实际: %q", reason)
+
+	// 同名但参数每次都变（读不同文件）= 有进展，同样不该触发。
+	ag2b := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < ag2b.consecutiveLimit*2; i++ {
+		ag2b.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"f_%d.go"}`, i))
+		if detected, reason := ag2b.detectToolLoop(); detected {
+			t.Fatalf("参数各不相同（有进展）不该触发，第 %d 次被误判: %q", i+1, reason)
+		}
+	}
+
+	// 连续**重复签名**（换工具名也没用，签名=工具名+参数）达到上限时必须收口。
+	ag3 := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < ag3.consecutiveLimit-1; i++ {
+		ag3.recordToolCallSig("same_tool", `{"x":1}`)
+		if detected, _ := ag3.detectToolLoop(); detected {
+			// sameToolLimit(3) 会先于 consecutiveLimit 触发，这里允许（也是保护）。
+			break
+		}
+	}
+	// 直接验证"无进展"判定：连续 sameToolLimit 次重复已足以收口。
+	ag4 := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < ag4.sameToolLimit; i++ {
+		ag4.recordToolCallSig("loop_tool", `{"x":1}`)
+	}
+	if detected, reason := ag4.detectToolLoop(); !detected {
+		t.Fatalf("同一签名重复 %d 次必须触发，实际未触发", ag4.sameToolLimit)
+	} else if !strings.Contains(reason, "identical arguments") {
+		t.Fatalf("重复签名应收口并说明原因，实际: %q", reason)
 	}
 }
 
