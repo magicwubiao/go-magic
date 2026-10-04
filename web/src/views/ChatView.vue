@@ -770,7 +770,7 @@
           </span>
           <span v-else class="workdir-bar-path workdir-bar-empty" :title="t('chat.workDirNone')">
             <n-icon size="12"><FolderOutline /></n-icon>
-            <span>{{ t('chat.workDirNone') }}</span>
+            <span class="workdir-bar-empty-text">{{ t('chat.workDirNone') }}</span>
           </span>
           <n-button
             v-if="!chatStore.currentWorkDirUserSet"
@@ -4740,6 +4740,16 @@ onActivated(() => {
 
 .workdir-bar-empty {
   color: #bbb;
+}
+
+/* 未设置目录的占位文案：与路径文本同样禁止换行。此前漏了 nowrap —— 移动端
+   窄屏下 flex 把这一项挤窄，"未设置（使用默认目录）"没有省略号兜底就折成
+   两行，把 30px 高的底栏撑乱（默认/设置按钮/审批选择器全被顶得错位）。 */
+.workdir-bar-empty-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workdir-bar-set-btn {
