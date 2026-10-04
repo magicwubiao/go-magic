@@ -65,13 +65,22 @@ func (t *ClarifyTool) Name() string {
 	return "clarify"
 }
 
-// Description returns the tool description
+// Description returns the tool description.
+//
+// 措辞刻意偏"劝阻"：这个工具是 LLM 反复反问用户的主要出口，描述里若
+// 只写"请求不明确时调用"，模型会把任何轻微不确定都当作调用理由。
+// 先给默认行动的指令，再给调用门槛，最后才说怎么用。
 func (t *ClarifyTool) Description() string {
-	return "Ask the user for clarification when a request is ambiguous or missing information. " +
-		"In the Web chat, calling this tool pauses the turn and pops up an interactive card " +
-		"(question + selectable options + free-text note); the turn resumes with the user's answer " +
-		"so you can finish the original task. On Telegram and Discord, options are shown as native " +
-		"interactive buttons. On CLI, options are shown as numbered choices."
+	return "Ask the user a question ONLY when you cannot proceed safely without the answer. " +
+		"Prefer acting on a reasonable assumption: if you can guess a sensible default, " +
+		"gather the missing detail with another tool (read_file, list_files, search), or the " +
+		"cost of guessing wrong is low, DO NOT call this tool — just proceed and state your " +
+		"assumption. Call it only when a wrong guess would destroy or overwrite user data, or " +
+		"when there is genuinely no defensible default. In the Web chat, calling this tool " +
+		"pauses the turn and pops up an interactive card (question + selectable options + " +
+		"free-text note); the turn resumes with the user's answer so you can finish the original " +
+		"task. On Telegram and Discord, options are shown as native interactive buttons. " +
+		"On CLI, options are shown as numbered choices."
 }
 
 // Parameters returns the tool parameters schema

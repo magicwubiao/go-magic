@@ -115,10 +115,15 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		activePlan = llmPlan
 	}
 
-	// Dynamically adjust maxIterations
+	// Dynamically adjust maxTurns — 收紧上限时设下限保护。
+	//
+	// activePlan.MaxTurns 是**模型自己填的**（见 cognition/llm_planner.go 的输出
+	// schema），启发式 planner 还会给出 8/15/25。直接采纳会把 150 轮的预算压到
+	// 个位数：任务跑不完就直接收尾反问用户，"简单任务老是来问我"由此而来。
+	// 因此只在模型值足够宽裕时才收敛，且不低于 minCortexMaxTurns。
 	originalMaxTurns := a.maxTurns
-	if activePlan.MaxTurns > 0 && activePlan.MaxTurns < a.maxTurns {
-		a.maxTurns = activePlan.MaxTurns
+	if planTurns := planMaxTurns(activePlan, a.maxTurns); planTurns > 0 {
+		a.maxTurns = planTurns
 	}
 
 	// Apply tool filter
@@ -545,20 +550,75 @@ func (a *Agent) injectMemoryIntoSystemPrompt(memory, user string) {
 	}
 }
 
-// filterTools returns only tools matching the given names
+// minCortexMaxTurns 是 cortex 计划收敛回合上限时的下限。
+// 计划器（LLM 自填 + 启发式）常给出个位数上限，低于此值会直接把任务
+// 逼到"跑不完就反问用户"。宁可多花几轮也不能让预算小到无法完成任务。
+const minCortexMaxTurns = 30
+
+// planMaxTurns 计算 cortex 计划允许的回合上限。
+// 返回 0 表示不收敛（保持 a.maxTurns 不变）。
+//
+// 规则：计划上限缺失/非正/不低于当前预算 ⇒ 不动；否则收敛到
+// max(计划上限, minCortexMaxTurns)，但绝不放大到超过当前预算。
+func planMaxTurns(plan *cognition.Decision, current int) int {
+	if plan == nil || plan.MaxTurns <= 0 {
+		return 0
+	}
+	if plan.MaxTurns >= current {
+		return 0
+	}
+	clamped := plan.MaxTurns
+	if clamped < minCortexMaxTurns {
+		clamped = minCortexMaxTurns
+	}
+	if clamped >= current {
+		return 0
+	}
+	return clamped
+}
+
+// toolSchemaName 从 OpenAI 工具 schema 中取出工具名。
+//
+// 工具表元素的结构是 {"type":"function","function":{"name":...,"parameters":...}}，
+// 名字在 function.name 里，**不在** 顶层 type（那里恒为 "function"）。
+// 早期实现读的是 tool["type"]，于是拿字面量 "function" 去比对工具名，
+// 永不命中 ⇒ 过滤器非空时返回空表 ⇒ 模型一个工具都调不了，只能反复反问用户。
+// 这是"简单任务总是询问用户"的主因，勿改回。
+func toolSchemaName(tool map[string]interface{}) string {
+	fn, ok := tool["function"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	name, _ := fn["name"].(string)
+	return name
+}
+
+// filterTools returns only tools matching the given names.
+//
+// 防御性兜底：若过滤后为空，返回原始工具表而不是空表。"模型给出无意义
+// 过滤器 ⇒ 模型失去全部工具" 是不可接受的失败模式（它会把任务退化成
+// 反复询问用户），宁可忽略过滤器也不能让 agent 变哑。
 func (a *Agent) filterTools(allowed []string) []map[string]interface{} {
 	allowedMap := make(map[string]bool)
 	for _, name := range allowed {
-		allowedMap[name] = true
+		if name != "" {
+			allowedMap[name] = true
+		}
+	}
+	if len(allowedMap) == 0 {
+		return a.tools
 	}
 
 	var filtered []map[string]interface{}
 	for _, tool := range a.tools {
-		if name, ok := tool["type"].(string); ok {
-			if allowedMap[name] {
-				filtered = append(filtered, tool)
-			}
+		if allowedMap[toolSchemaName(tool)] {
+			filtered = append(filtered, tool)
 		}
+	}
+
+	// 过滤器指向了不存在的工具名（模型幻觉）⇒ 视为无过滤器。
+	if len(filtered) == 0 {
+		return a.tools
 	}
 	return filtered
 }

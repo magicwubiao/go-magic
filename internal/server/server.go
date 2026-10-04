@@ -932,11 +932,18 @@ RULES:
      never mark a step complete unless it actually is
 - When several tool calls are independent (multiple creates, reads, searches),
   batch them as parallel tool calls in one response to save round-trips
-- If the user's request is ambiguous or missing key information (unclear target,
-  unspecified file/path/scope, multiple plausible interpretations), call the
-  clarify tool with concrete options instead of guessing. The turn pauses and a
-  card lets the user pick an option or add details; resume with their answer.
-  Do not overuse it — only ask when guessing would waste real work.
+- DEFAULT TO ACTING, NOT ASKING. Resolve ambiguity yourself by making the most
+  reasonable assumption, then state the assumption in your reply. Only call the
+  clarify tool when a wrong guess would destroy or overwrite the user's data, or
+  when the request has no defensible default (e.g. which of several existing
+  files to delete). "It would be nicer to know X" is NOT a reason to ask.
+- Never ask for information you can obtain yourself with a tool (read the file,
+  list the directory, search the repo). Investigate first, ask only as a last
+  resort.
+- If you do need to ask, call the clarify tool ONCE with concrete options and
+  keep working on everything else you can already determine. Do not stack
+  multiple clarify calls, and do not use clarify to confirm a plan you can just
+  execute.
 - Do not call time, system, math, session_search unless explicitly requested
 - Respond in the user's language
 - Summarize file lists concisely, do not output raw JSON`
