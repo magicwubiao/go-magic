@@ -189,7 +189,7 @@ func (t *TodoTool) save() error {
 	if err := os.WriteFile(tmp, data, defaultFileSecurity().DefaultFileMode); err != nil {
 		return err
 	}
-	return os.Rename(tmp, t.dataFile)
+	return renameWithLockRetry(tmp, t.dataFile)
 }
 
 // loadTombstones restores auto-cleanup tombstones from disk. Missing or
@@ -247,7 +247,7 @@ func (t *TodoTool) saveTombstonesLocked() {
 		log.Printf("[TODO] tombstone write failed: %v", err)
 		return
 	}
-	if err := os.Rename(tmp, t.tombstoneFile); err != nil {
+	if err := renameWithLockRetry(tmp, t.tombstoneFile); err != nil {
 		log.Printf("[TODO] tombstone rename failed: %v", err)
 	}
 }

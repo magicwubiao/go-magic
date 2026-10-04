@@ -424,7 +424,10 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	// renameWithLockRetry: on Windows the replace fails transiently when the
+	// destination is open by another process (editor/AV/concurrent writer);
+	// retry briefly before surfacing the lock error (see file_lock_retry.go).
+	if err := renameWithLockRetry(tmpName, path); err != nil {
 		return err
 	}
 	cleanup = false
