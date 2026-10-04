@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
+	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -1349,6 +1350,23 @@ func (s *Server) persistAssistantMessage(sessionID, fullResponse, streamed strin
 	if strings.TrimSpace(fullResponse) == "" {
 		return
 	}
+
+	// 只含 <think> 而没有实际正文的回合**不得**作为 assistant 消息落库。
+	//
+	// 事故背景（10-04，DeepSeek 长会话"反复询问用户"）：reasoning 模型在部分
+	// 轮次把产出全放在 reasoning_content、content 留空，流式 handler 产出的
+	// fullResponse 就变成一段未闭合的 "<think>User wants to ..."。旧实现只判
+	// TrimSpace 非空便落库，于是历史里堆积大量"只有思考、没有回答"的消息。
+	//
+	// 这类消息对模型是毒药：它读到自己的历史里没有结论，只能重新推导、
+	// 重新确认——表现为同一个简单任务反复询问、几十轮停不下来。已确认线上
+	// 某会话 49 条 assistant 中 29 条属于这种残留。
+	//
+	// 判据用剥离后的正文是否为空，而不是原始串是否为空。
+	if strings.TrimSpace(provider.StripThinkTrails(fullResponse)) == "" {
+		return
+	}
+
 	sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
 	if err != nil {
 		return

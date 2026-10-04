@@ -1004,16 +1004,21 @@ func (a *Agent) SetSkillsContext(skillsCtx string) {
 // original content is returned unchanged. Used by the non-streaming
 // fallbacks so thinking still shows up in the UI and is persisted to
 // history exactly like the streaming path does.
+//
+// 关键不变量（10-04 事故）：content 为空时返回**空串**，不得只返回
+// "<think>R</think>"。reasoning 是思考过程，不是回答——把它单独当正文返回，
+// 落库的历史就变成"只有思考、没有产出"的残缺轮次，模型下一轮读到自己这份
+// 历史只能重新推导、重新确认，症状就是同一个简单任务反复询问用户、几十轮
+// 停不下来。流式路径的同一不变量见 finalizeFullContent。
 func wrapLLMReasoning(reasoning, content string) string {
 	reasoning = strings.TrimSpace(reasoning)
 	if reasoning == "" {
 		return content
 	}
-	wrapped := "<think>" + reasoning + "</think>"
-	if content == "" {
-		return wrapped
+	if strings.TrimSpace(content) == "" {
+		return ""
 	}
-	return wrapped + "\n" + content
+	return "<think>" + reasoning + "</think>\n" + content
 }
 
 // trySubTaskDelegation checks if the task is complex and delegates to sub-task executor.
@@ -2079,6 +2084,12 @@ Please provide a comprehensive, well-structured final response based on these su
 		var reasoningStarted, thinkClosed bool
 		var accumulatedReasoning strings.Builder
 
+		// reasoningEmitted 记录"本轮的 <think> 标签是否真的推给过客户端"。
+		// handler 必须以单个 chunk 为单位保持自洽：要么整块推、要么整块不推，
+		// 绝不能把 "<think>" 推出去、却把内容留在本地——那正是 10-04 事故里
+		// 前端"一直转圈 / 显示一个空思考块"的形态（推送层 addPendingThink）。
+		var reasoningEmitted bool
+
 		// buildStreamHandlerContent wraps reasoning content with <think> markers
 		// and transitions to normal content with </think> closing tag.
 		buildStreamHandlerContent := func(resp *provider.StreamResponse) string {
@@ -2089,12 +2100,14 @@ Please provide a comprehensive, well-structured final response based on these su
 					handlerContent += "<think>"
 					reasoningStarted = true
 				}
+				reasoningEmitted = true
 				handlerContent += resp.ReasoningContent
 			}
 			if resp.Content != "" {
 				if reasoningStarted && !thinkClosed {
 					handlerContent += "</think>\n"
 					thinkClosed = true
+					reasoningEmitted = true
 				}
 				handlerContent += resp.Content
 			}
@@ -2103,19 +2116,50 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// finalizeFullContent constructs fullContent with <think> tags from
 		// the Done chunk's accumulated reasoning and content.
+		//
+		// 关键不变量：reasoning **绝不能**在缺正文时被当作正文顶上去。
+		//
+		// 事故背景（10-04，DeepSeek 长会话"反复询问用户"）：DeepSeek 等
+		// reasoning 模型在部分轮次把全部产出放在 reasoning_content、content
+		// 留空。旧实现走 `else if reasoning != ""` 分支，把 accumulatedReasoning
+		// 直接拼成 fullContent——于是落库的 assistant 消息变成一段**没有闭合
+		// 标签、也没有实际回答**的 "<think>User wants to ..."，而 fullContent
+		// 里累积的 reasoning 片段还会与前面已拼过的内容重复。
+		//
+		// 后果是致命的：历史里看不到"这一步已经做完了"，模型下一轮读到自己
+		// 残缺的历史只能**重新推导、重新确认**，表现出来就是同一个简单任务
+		// 反复询问用户、几十轮停不下来。已确认线上会话 49 条 assistant 中
+		// 29 条是这种未闭合的 reasoning 残留。
+		//
+		// 正确做法：只在 content 非空时以 "<think>R</think>\n" + content 落库；
+		// content 为空就**保持为空**，让上层按"无正文"处理（丢弃或补占位），
+		// 而不是拿思考过程冒充回答。
 		finalizeFullContent := func(resp *provider.StreamResponse) {
-			reasoning := accumulatedReasoning.String()
+			// delta 累积的正文（不含 reasoning）。buildStreamHandlerContent
+			// 把 reasoning 写进 handlerContent 但**不**写进 fullContent，
+			// 因此这里 fullContent 就是纯正文。
+			body := fullContent
 			if resp.Content != "" {
-				if reasoning != "" {
-					fullContent = "<think>" + reasoning + "</think>\n" + resp.Content
-				} else {
-					fullContent = resp.Content
-				}
-			} else if reasoning != "" {
-				// Some providers send empty Content at Done; prepend reasoning
-				// to the delta-accumulated fullContent.
-				fullContent = "<think>" + reasoning + "</think>\n" + fullContent
+				body = resp.Content
 			}
+			reasoning := accumulatedReasoning.String()
+			if reasoning == "" {
+				fullContent = body
+				return
+			}
+			if strings.TrimSpace(body) == "" {
+				// 无正文：不拿 reasoning 冒充回答。留空交由上层判定。
+				// 本轮 reasoning 也**必须**从客户端可见输出里撤掉——只推给
+				// 前端就作数的话，用户会看到一个只转圈、没有内容的"思考中"
+				// 气泡，而模型其实什么都没说。
+				fullContent = ""
+				// 撤销本轮已经推出去的 <think> 开头（尚未闭合）。
+				// false 与后续 err==nil && 被裁剪路径的 _finalFlush 由上层负责清理。
+				handler(redact.RedactIfEnabled("", a.secretRedaction), false)
+				log.Warnf("[Agent:Stream] turn produced reasoning only (no content) — suppressed reasoning from client output")
+				return
+			}
+			fullContent = "<think>" + reasoning + "</think>\n" + body
 		}
 
 		// Check if provider supports streaming
@@ -2170,9 +2214,16 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			if err == nil {
 				streamed = true
+				// reasoning-only 轮次：正文为空、但有 <think> 已经推给客户端。
+				// finalizeFullContent 已经用空 chunk 把未闭合的 think 块抹掉，
+				// 这里只需记账——不 fallback 非流式（非流式同样只有 reasoning，
+				// 再问一次模型只会放大重复），由上层 decision 进入下一轮。
+				if reasoningEmitted && fullContent == "" {
+					log.Warnf("[Agent:Stream] streaming turn emitted reasoning without content (suppressed)")
+				}
 				// 流式成功但内容为空且无工具调用，说明流异常（如网络中断导致提前结束）
 				// 标记为未流式成功，进入 fallback 非流式重试
-				if fullContent == "" && len(toolCalls) == 0 {
+				if fullContent == "" && len(toolCalls) == 0 && !reasoningEmitted {
 					log.Warnf("[Agent:Stream] Stream succeeded but empty content, falling back to non-streaming")
 					streamed = false
 					lastErr = fmt.Errorf("stream returned empty content")
@@ -2246,6 +2297,10 @@ Please provide a comprehensive, well-structured final response based on these su
 				}
 			}
 		} else if ss, ok := a.provider.(simpleStreamer); ok {
+			// 与上面 StreamWithTools 分支逐字一致的 reasoning 处理：simple 路径
+			// 按构造只会在没有注册工具时命中，但**同一条聊天入口**（web / bot 流式）
+			// 在会话早期就可能落到这里，两个分支的行为必须等价——否则"没有工具时
+			// 正常、注册了工具就出问题"这类入口不等价缺陷会再次出现。
 			err = ss.Stream(ctx, req.Messages, func(resp *provider.StreamResponse) {
 				if resp.Error != nil {
 					lastErr = resp.Error
@@ -2262,9 +2317,10 @@ Please provide a comprehensive, well-structured final response based on these su
 					finalizeFullContent(resp)
 					// Track token usage from final stream chunk（含 cache 命中量）
 					a.trackUsage(&provider.ChatResponse{Usage: resp.Usage})
-					// Close think tag if still open
+					// Close think tag if still open — 只在 <think> 真的推给过
+					// 客户端时才补闭合标签，否则会凭空产生一个 "</think>"。
 					handlerContent := ""
-					if reasoningStarted && !thinkClosed {
+					if reasoningStarted && !thinkClosed && reasoningEmitted {
 						handlerContent = "</think>\n"
 						thinkClosed = true
 					}
@@ -2279,8 +2335,12 @@ Please provide a comprehensive, well-structured final response based on these su
 			})
 			if err == nil {
 				streamed = true
+				// reasoning-only 轮次：见 StreamWithTools 分支同名说明。
+				if reasoningEmitted && fullContent == "" {
+					log.Warnf("[Agent:Stream] simple-stream turn emitted reasoning without content (suppressed)")
+				}
 				// 流式成功但内容为空，进入 fallback 非流式重试
-				if fullContent == "" {
+				if fullContent == "" && !reasoningEmitted {
 					log.Warnf("[Agent:Stream] Simple stream succeeded but empty content, falling back")
 					streamed = false
 					lastErr = fmt.Errorf("stream returned empty content")
@@ -2389,6 +2449,28 @@ Please provide a comprehensive, well-structured final response based on these su
 		// No tool calls - return the response
 		if len(toolCalls) == 0 {
 			content := provider.SanitizeAssistantContent(utils.TruncateDetailed(llmResp.Content, a.maxMsgLen))
+			// reasoning-only 轮次（content 为空、只有 reasoning_content）
+			// 不是回答：把它当最终答复收尾就是**静默空回复**——历史里只留
+			// 一段没有正文的思考，客户端拿到空串。此时应当直接进入下一轮，
+			// 让模型基于（不含该空轮的）历史重新产出。
+			//
+			// 这正是 10-04 长会话"反复询问用户"的流式侧半边：DeepSeek 在
+			// 若干轮把全部产出放进 reasoning_content、content 留空，此前
+			// fullContent 会被 reasoning 顶替（finalizeFullContent 旧实现），
+			// 落库成未闭合的 "<think>...";修掉顶替之后，这里必须同时改成
+			// "不把它当回答"，否则等于把"拿思考冒充回答"换成"直接空回复"。
+			if strings.TrimSpace(provider.StripThinkTrails(content)) == "" {
+				log.Warnf("[Agent:Stream] reasoning-only turn (no content, no tool calls) — continuing loop (turn %d)", a.iterationCount)
+				a.Emit(bus.EventKindLLMResponse, map[string]interface{}{"content": ""})
+				handler("", true)
+				a.history = append(a.history, provider.Message{
+					Role:      "assistant",
+					Content:   content,
+					Timestamp: time.Now(),
+				})
+				a.sanitizeHistory()
+				continue
+			}
 			a.history = append(a.history, provider.Message{
 				Role:      "assistant",
 				Content:   content,
