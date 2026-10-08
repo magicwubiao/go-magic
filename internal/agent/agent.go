@@ -863,15 +863,31 @@ func (a *Agent) detectToolLoop() (bool, string) {
 	copy(history, a.toolCallHistory)
 	a.mu.RUnlock()
 
-	// 按调用签名（工具名 + 参数指纹）计数：反复发起同一个调用才是死循环。
-	counts := make(map[string]int, len(history))
-	for _, rec := range history {
-		counts[rec.Sig]++
-	}
-	for _, rec := range history {
-		if counts[rec.Sig] >= a.sameToolLimit {
-			return true, fmt.Sprintf("tool %s called %d times with identical arguments", rec.Name, counts[rec.Sig])
+	// 死循环信号是**连续**发起同一个调用（工具名 + 参数指纹全同），不是
+	// "本回合累计"重复过几次。
+	//
+	// 旧实现是 `counts[rec.Sig] >= sameToolLimit`，而 counts 统计的是**整个
+	// 回合**的出现次数：同一(工具+参数)在回合里第 3 次出现就收口——无论中间
+	// 夹了多少有进展的调用。长任务里"读同一个文件三次以确认改动"、"跑同一条
+	// build 命令三次"这类完全正常的动作必然撞上它，concludeAfterToolLoop 立刻
+	// 收口并要求模型"不要再调工具，给总结"。用户看到的就是"长任务跑一阵就停、
+	// 只能手动说'继续'"——会话里会留下那句合成提示词
+	// "Please provide a final summary ... Do not call any more tools"。
+	//
+	// 连续重复才是卡死；间隔性的合法重复不该触发。"换着工具名交替重复"
+	// （A B A B）由下面的连续无进展兜底负责，这里不重复覆盖。
+	streak := 0
+	prevSig := ""
+	for i, rec := range history {
+		if i > 0 && rec.Sig == prevSig {
+			streak++
+		} else {
+			streak = 1
 		}
+		if streak >= a.sameToolLimit {
+			return true, fmt.Sprintf("tool %s called %d times in a row with identical arguments", rec.Name, streak)
+		}
+		prevSig = rec.Sig
 	}
 
 	// 总量兜底：只有**连续无进展**才算失控，不能只数总数。

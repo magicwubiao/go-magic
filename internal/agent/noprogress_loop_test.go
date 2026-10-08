@@ -109,3 +109,38 @@ func TestRepeatedSignatureStillStops(t *testing.T) {
 			ag.sameToolLimit, toolTurns, ag.maxTurns)
 	}
 }
+
+// TestInterleavedRepeatIsNotALoop 锁死"长任务跑一阵就停"的线上故障。
+//
+// 旧实现的 sameToolLimit 判定用的是**本回合累计**次数：同一个(工具+参数)
+// 在回合里第 3 次出现就收口，哪怕中间夹着大量有进展的调用。长任务里
+// "读同一个文件三次以确认改动"、"同一条 build 命令跑三次"必然撞上它 ——
+// concludeAfterToolLoop 立刻要求模型"不要再调工具，给总结"，用户看到的就是
+// 任务跑到一半突然收尾（会话里会留下合成提示词 "Please provide a final
+// summary ... Do not call any more tools"），只能手动说"继续处理"。
+//
+// 本用例构造"同一签名间隔出现、每次之间都夹着新签名的进展"，断言不得收口；
+// 旧实现下第 3 次 read_file 就会触发。
+func TestInterleavedRepeatIsNotALoop(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+
+	const repeats = 5 // 远超 sameToolLimit(3) 的累计次数
+	for i := 0; i < repeats; i++ {
+		// 同一个调用（读同一个文件）反复出现……
+		ag.recordToolCallSig("read_file", `{"path":"contact.html"}`)
+		if detected, reason := ag.detectToolLoop(); detected {
+			t.Fatalf("第 %d 次间隔重复不该判死循环，实际: %q", i+1, reason)
+		}
+		// ……但每次之间都夹着**新签名**的进展（改不同的文件）。
+		for j := 0; j < ag.sameToolLimit; j++ {
+			ag.recordToolCallSig("edit_file", fmt.Sprintf(`{"path":"file_%d.go"}`, i*10+j))
+		}
+	}
+
+	if detected, reason := ag.detectToolLoop(); detected {
+		t.Fatalf("有进展的间隔重复不得触发循环收口，实际: %q", reason)
+	}
+	if got, want := ag.toolCallHistoryLength(), repeats*(1+ag.sameToolLimit); got != want {
+		t.Fatalf("调用记账条数不符：got %d, want %d", got, want)
+	}
+}

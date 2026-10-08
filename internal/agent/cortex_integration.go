@@ -115,16 +115,21 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		activePlan = llmPlan
 	}
 
-	// Dynamically adjust maxTurns — 收紧上限时设下限保护。
+	// 计划的 max_turns **不得**用来改写硬上限（用户配置优先）。
 	//
-	// activePlan.MaxTurns 是**模型自己填的**（见 cognition/llm_planner.go 的输出
-	// schema），启发式 planner 还会给出 8/15/25。直接采纳会把 150 轮的预算压到
-	// 个位数：任务跑不完就直接收尾反问用户，"简单任务老是来问我"由此而来。
-	// 因此只在模型值足够宽裕时才收敛，且不低于 minCortexMaxTurns。
+	// activePlan.MaxTurns 是模型自己填的（见 cognition/llm_planner.go 的输出
+	// schema，只有一句 "max_turns": number，没有任何范围约束）。此前 planMaxTurns
+	// 会把它收敛到 [minCortexMaxTurns, current) 区间再覆盖 a.maxTurns：实测对
+	// "重构整个模块 + 全量测试通过"这类长任务，计划器给的是 25，夹到下限 30 后
+	// **直接覆盖用户配的 300** —— 长任务跑到 30 轮就被判"回合耗尽"，用户把
+	// max_turns 配多大都无效。
+	//
+	// 语义上计划的 max_turns 是"预计需要几轮"，不是"允许多少轮"，拿它当硬上界
+	// 属于错位。硬上限只认用户配置；简单任务也不会因此空烧——没有工具调用的
+	// 轮次在循环里本来就立即返回（见下方 len(resp.ToolCalls) == 0 分支）。
+	//
+	// planMaxTurns 保留在原地（含回归测试）仅作为历史记录，不再参与控制流。
 	originalMaxTurns := a.maxTurns
-	if planTurns := planMaxTurns(activePlan, a.maxTurns); planTurns > 0 {
-		a.maxTurns = planTurns
-	}
 
 	// Apply tool filter
 	originalTools := a.tools
