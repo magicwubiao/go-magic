@@ -446,6 +446,9 @@ func (h *gatewayAgentHandler) getOrCreateAgent(userID string) (*agent.Agent, err
 				MaxTokenBudget: h.cfg.Agent.MaxTokenBudget,
 			}))
 		}
+		// 上下文压缩阈值（0 = 内置默认）。不接的话网关长任务会频繁触发压缩、
+		// 把刚读到的文件内容摘要掉 ⇒ 模型反复重读同一批文件。
+		agentOpts = append(agentOpts, agent.WithCompression(h.cfg.Agent.CompressThresholdTokens, 0))
 	}
 
 	// Create new agent for this user

@@ -601,8 +601,12 @@ Your working directory is: %s
 	}
 
 	// 应用 PII 脱敏配置（来自 config.Privacy）
-	if cfg, _ := config.Load(); cfg != nil && cfg.Privacy != nil {
-		agentOpts = append(agentOpts, agent.WithPrivacy(cfg.Privacy))
+	if cfg, _ := config.Load(); cfg != nil {
+		if cfg.Privacy != nil {
+			agentOpts = append(agentOpts, agent.WithPrivacy(cfg.Privacy))
+		}
+		// 上下文压缩阈值（0 = 内置默认）。
+		agentOpts = append(agentOpts, agent.WithCompression(cfg.Agent.CompressThresholdTokens, 0))
 	}
 
 	// Create agent with all tools (Cortex/Memory disabled by default)

@@ -37,6 +37,12 @@ type Compressor struct {
 	SummaryRatio         float64 // Proportion of compressed content for summary
 	SummaryTokensCeiling int     // Absolute ceiling for summary tokens
 
+	// ToolResultHeadChars 是兜底摘要里为每条工具结果保留的正文头部长度
+	// （字符）。工具结果是模型观察外部世界的唯一渠道：旧实现只把 "Tool: 名字"
+	// 记进摘要，连路径都没有，模型压缩后对自己"读过什么、内容是什么"完全失忆，
+	// 只能反复重读同一批文件。<=0 时取 defaultToolResultHeadChars。
+	ToolResultHeadChars int
+
 	// Summarizer 用 LLM 生成中段摘要（可选）。为 nil 时退化为
 	// buildDeterministicSummary 的规则式摘要。
 	// SetSummarizer 注入；实现方需保证并发安全与短超时（建议 ≤20s）。
@@ -61,11 +67,17 @@ func NewCompressor(thresholdTokens int) *Compressor {
 		MinSummaryTokens:     2000,
 		SummaryRatio:         0.20,
 		SummaryTokensCeiling: 12000,
+		ToolResultHeadChars:  defaultToolResultHeadChars,
 		lastPromptTokens:     -1, // -1 sentinel: no real API usage yet
 		lastRealPromptTokens: 0,
 		summaryCache:         make(map[string]string),
 	}
 }
+
+// defaultToolResultHeadChars 是兜底摘要里每条工具结果保留的正文长度。
+// 1500 字符足以覆盖典型文件的开头（导航块、import、函数签名），又不会让
+// 摘要本身失控膨胀。
+const defaultToolResultHeadChars = 1500
 
 // ShouldCompress returns true if the given token count exceeds the threshold.
 func (c *Compressor) ShouldCompress(tokens int) bool {
@@ -191,7 +203,18 @@ func (c *Compressor) Compress(messages []Message, systemPrompt string) (*Compres
 	// Cortex's ContextCompressor does the same for its tail boundary
 	// (findSafeKeepStart).
 	headEnd := safeHeadEnd(messages, c.ProtectFirstN)
-	tailStart := safeTailStart(messages, headEnd, len(messages)-c.ProtectLastN)
+
+	// 尾部保护量自适应：固定的 ProtectLastN（默认 4 条）在长历史里太小。
+	// 一轮"并行读 4 个文件"就会产生 1 条 assistant(tool_calls) + 4 条 tool
+	// 结果共 5 条消息，4 条的保护窗口刚好吃掉最早那份结果 —— 模型为了比对
+	// 只能重读，重读又撑爆阈值再次压缩，形成"读完就忘"的正反馈死循环
+	// （实测：一个改导航栏的任务因此空转 18 分钟、283 次调用、零写入）。
+	// 因此至少保护最近 len/4 条消息，让刚读到的原文留在上下文里。
+	protectTail := c.ProtectLastN
+	if n := len(messages) / 4; n > protectTail {
+		protectTail = n
+	}
+	tailStart := safeTailStart(messages, headEnd, len(messages)-protectTail)
 	if tailStart <= headEnd || tailStart > len(messages) {
 		// One unsplittable exchange: better to keep the history as-is than to
 		// summarise it into a payload the provider will reject.
@@ -306,6 +329,10 @@ func (c *Compressor) SetSummarizer(fn func(ctx context.Context, middle []Message
 
 // buildDeterministicSummary creates a summary without LLM assistance.
 // This is used as a fallback when the auxiliary model is unavailable.
+//
+// 与旧实现的区别：工具结果不再只记一个工具名。每条 tool 消息保留其**目标资源**
+// （路径/命令/查询）与正文头部，摘要因此仍然携带"读过什么、内容大致是什么"，
+// 避免模型在压缩后因为完全失忆而反复重读同一批文件。
 func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 	var parts []string
 
@@ -313,6 +340,27 @@ func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 	var toolCalls []string
 	var userAsks []string
 	var fileMentions []string
+	var observations []string
+
+	// tool_call id -> "name(target)"，供 tool 结果消息回填目标。
+	callTarget := make(map[string]string, len(middle))
+	for _, msg := range middle {
+		for _, tc := range msg.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
+			label := tc.Name
+			if t := toolCallTarget(tc); t != "" {
+				label += "(" + t + ")"
+			}
+			callTarget[tc.ID] = label
+		}
+	}
+
+	headChars := c.ToolResultHeadChars
+	if headChars <= 0 {
+		headChars = defaultToolResultHeadChars
+	}
 
 	for _, msg := range middle {
 		switch msg.Role {
@@ -322,14 +370,29 @@ func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 				userAsks = append(userAsks, content)
 			}
 		case "assistant":
-			// Extract tool calls
-			if strings.Contains(msg.Content, "tool_call") || strings.Contains(msg.Content, "function") {
-				toolCalls = append(toolCalls, truncateString(msg.Content, 150))
+			// 带工具调用的 assistant：登记它发起了哪些调用（含目标资源），
+			// 比截断一段自然语言有用得多。
+			for _, tc := range msg.ToolCalls {
+				label := tc.Name
+				if t := toolCallTarget(tc); t != "" {
+					label += "(" + t + ")"
+				}
+				toolCalls = append(toolCalls, label)
+			}
+			if len(msg.ToolCalls) == 0 {
+				if content := truncateString(msg.Content, 150); content != "" {
+					toolCalls = append(toolCalls, content)
+				}
 			}
 		case "tool":
-			if msg.Name != "" {
-				toolCalls = append(toolCalls, fmt.Sprintf("Tool: %s", msg.Name))
+			label := msg.Name
+			if l, ok := callTarget[msg.ToolCallID]; ok && l != "" {
+				label = l
 			}
+			if label == "" {
+				label = "tool"
+			}
+			observations = append(observations, fmt.Sprintf("- %s → %s", label, truncateString(msg.Content, headChars)))
 		}
 
 		// Extract file path mentions
@@ -356,6 +419,19 @@ func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 		}
 	}
 
+	// 工具结果是模型观察外部世界的唯一渠道，压缩后必须留下"看过的内容"，
+	// 否则模型会为了重新获得这些事实而反复读取同一批文件。
+	if len(observations) > 0 {
+		parts = append(parts, "\n## Observations (already read — do NOT read these again)")
+		for i, ob := range observations {
+			if i >= 8 {
+				parts = append(parts, fmt.Sprintf("... and %d more", len(observations)-i))
+				break
+			}
+			parts = append(parts, ob)
+		}
+	}
+
 	if len(fileMentions) > 0 {
 		parts = append(parts, "\n## Files Referenced")
 		uniqueFiles := dedupeStrings(fileMentions)
@@ -372,6 +448,22 @@ func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 	parts = append(parts, "(See latest user message for current instructions)")
 
 	return strings.Join(parts, "\n")
+}
+
+// toolCallTarget 从一次工具调用的参数里提取"目标资源"，让摘要保留下模型实际
+// 操作过的对象（文件路径、命令、查询词等）。键名按 internal/tool 各工具 schema
+// 的常见约定排列。解析不出目标时返回 ""。
+func toolCallTarget(tc types.ToolCall) string {
+	for _, k := range []string{"path", "file_path", "file", "pattern", "query", "url", "command", "dir", "directory"} {
+		v, ok := tc.Arguments[k]
+		if !ok {
+			continue
+		}
+		if s, ok := v.(string); ok && s != "" {
+			return truncateString(s, 120)
+		}
+	}
+	return ""
 }
 
 // hashMessages creates a hash of messages for cache key.

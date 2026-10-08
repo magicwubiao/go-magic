@@ -144,3 +144,80 @@ func TestInterleavedRepeatIsNotALoop(t *testing.T) {
 		t.Fatalf("调用记账条数不符：got %d, want %d", got, want)
 	}
 }
+
+// TestRepeatedResourceReadsWithoutModificationStop 锁死 2026-10-08 线上事故：
+// "一个简单的任务一直在执行"。
+//
+// 事故形态（web 聊天、任务"把顶部导航改成几个已实现的页面 + 语言切换 + GitHub
+// 地址"，工作目录 D:\project\article）：模型在 20:58 就改完了文件，之后又在
+// 18 分钟里重新读同一批文件 80 余次、一个字没写，直到 30 分钟回合超时才被砍掉。
+// 现场证据是这 4 个文件的 atime 一直在刷新、mtime 停在 20:58；session 里留下了
+// 289,702 字符的循环念白（"Let me read the actual nav markup in all three files."
+// 反复出现）。
+//
+// 这类调用**每一步签名都不同**（换文件轮着读、换关键词接着搜），所以前两道判据
+// 全部失守：sameToolLimit 要求"连续 3 次完全相同"，consecutiveLimit 只要中间插入
+// 一个新签名就清零。本用例复刻这个形态（三个文件轮着读、零修改），断言必须收口；
+// 在加入 repeatedResourceLimit 之前，这里会一直读到 maxTurns / 回合超时。
+func TestRepeatedResourceReadsWithoutModificationStop(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+	limit := ag.repeatedResourceLimit
+	if limit <= 1 {
+		t.Fatalf("前置条件失效：repeatedResourceLimit=%d", limit)
+	}
+
+	detected, reason := false, ""
+	for i := 0; i < limit && !detected; i++ {
+		for _, f := range []string{"index.html", "docs.html", "contact.html"} {
+			ag.recordToolCallSig("read_file", fmt.Sprintf(`{"path":%q}`, f))
+			if d, r := ag.detectToolLoop(); d {
+				detected, reason = true, r
+				break
+			}
+		}
+	}
+	if !detected {
+		t.Fatalf("同一批文件在没有任何修改的情况下被反复重读，必须判成空转（阈值 %d）", limit)
+	}
+	t.Logf("收口原因：%s", reason)
+}
+
+// TestReadsInterleavedWithModificationAreNotALoop 是上一条的反向保护：
+// "改一次 → 读一次确认"重复再多轮都属于正常调试，不得被误杀。
+func TestReadsInterleavedWithModificationAreNotALoop(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+
+	for i := 0; i < ag.repeatedResourceLimit*4; i++ {
+		ag.recordToolCallSig("file_edit",
+			fmt.Sprintf(`{"path":"index.html","old_string":"v%d","new_string":"v%d"}`, i, i+1))
+		ag.recordToolCallSig("read_file", `{"path":"index.html"}`)
+		if detected, reason := ag.detectToolLoop(); detected {
+			t.Fatalf("第 %d 轮「改后验证」被误判成空转：%q", i+1, reason)
+		}
+	}
+}
+
+// TestDistinctResourceReadsAreNotALoop：读一堆**不同**的文件是正常工作方式，
+// 无论多少次都不该触发（这条保护 toolCallSignature 注释里说的"合法重复"）。
+func TestDistinctResourceReadsAreNotALoop(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < ag.repeatedResourceLimit*5; i++ {
+		ag.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"file_%d.go"}`, i))
+		if detected, reason := ag.detectToolLoop(); detected {
+			t.Fatalf("读不同文件不该被误判成空转：%q", reason)
+		}
+	}
+}
+
+// TestResourceLessToolsAreNotCounted：参数里没有路径/关键词等"对象标识"的工具
+// （如 kanban_create 批量建任务）不参与重复计数——它们的"对象"不可比较，
+// 硬数会把一次并行建多个任务这类正常批量操作误杀。
+func TestResourceLessToolsAreNotCounted(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+	for i := 0; i < ag.repeatedResourceLimit*4; i++ {
+		ag.recordToolCallSig("kanban_create", fmt.Sprintf(`{"title":"task %d"}`, i))
+		if detected, reason := ag.detectToolLoop(); detected {
+			t.Fatalf("无对象标识的工具不该参与重复计数：%q", reason)
+		}
+	}
+}

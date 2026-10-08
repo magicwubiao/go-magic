@@ -161,6 +161,14 @@ type Config struct {
 		// than 30 minutes — raising MaxTurns instead does nothing, because the
 		// clock wall (not the iteration cap) is what actually binds.
 		TurnTimeoutMinutes int `json:"turn_timeout_minutes,omitempty"`
+		// CompressThresholdTokens 是上下文压缩触发的 token 阈值（粗估 = 历史
+		// 字符数 / 4）。0 = 内置默认（32000）。
+		//
+		// 旧默认是硬编码的 8000（≈3.2 万字符），属 8K 上下文时代的遗留：读一个
+		// 稍大的文件就会越过它，触发压缩把刚读到的内容摘要掉，模型只能重读，
+		// 重读又触发压缩 —— "读完就忘"的正反馈死循环，任务因此空转到回合时间墙。
+		// 现代模型上下文为 128K 级，可据此适当调大；调小则压缩更频繁、更省 token。
+		CompressThresholdTokens int `json:"compress_threshold_tokens,omitempty"`
 	} `json:"agent,omitempty"`
 	// Approval settings
 	Approval *ApprovalConfig `json:"approval,omitempty"`
@@ -767,14 +775,16 @@ func defaultConfig() *Config {
 		// Agent 循环上限默认值，与 Web 配置界面(ConfigView.vue)的默认一致，
 		// 避免新建配置时回退到 agent 内置的上限。
 		Agent: struct {
-			MaxTurns           int   `json:"max_turns,omitempty"`
-			MaxIterations      int   `json:"max_iterations,omitempty"`
-			MaxTokenBudget     int64 `json:"max_token_budget,omitempty"`
-			TurnTimeoutMinutes int   `json:"turn_timeout_minutes,omitempty"`
+			MaxTurns                int   `json:"max_turns,omitempty"`
+			MaxIterations           int   `json:"max_iterations,omitempty"`
+			MaxTokenBudget          int64 `json:"max_token_budget,omitempty"`
+			TurnTimeoutMinutes      int   `json:"turn_timeout_minutes,omitempty"`
+			CompressThresholdTokens int   `json:"compress_threshold_tokens,omitempty"`
 		}{
-			MaxTurns:           150,
-			MaxIterations:      200,
-			TurnTimeoutMinutes: DefaultTurnTimeoutMinutes,
+			MaxTurns:                150,
+			MaxIterations:           200,
+			TurnTimeoutMinutes:      DefaultTurnTimeoutMinutes,
+			CompressThresholdTokens: 32000,
 		},
 	}
 }

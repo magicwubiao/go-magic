@@ -113,6 +113,18 @@ type Agent struct {
 	toolCallHistory  []toolLoopRecord
 	sameToolLimit    int // 同一（工具 + 参数）最大重复次数
 	consecutiveLimit int // 连续无进展（重复签名）次数上限，非调用总量
+	// repeatedResourceLimit 是"在没有任何修改的情况下反复访问同一目标资源"的次数上限。
+	//
+	// 前两条判据计的都是**重复签名**，对"间隔性重复"完全免疫：一个回合里
+	// 读A→读B→读C→读A→读B→读C，每一步签名都不同，两条判据都不触发，模型可以
+	// 这样空转很久。2026-10-08 线上事故就是这种形态（web 聊天、任务"改顶部导航"）：
+	// 模型在 20:58 改完文件后，又在 18 分钟里读了同一批文件 80 余次、一个字没写，
+	// 直到 30 分钟回合超时才被砍掉——三道循环闸门一个都没响。
+	//
+	// 因此这里换一个问法："有没有修改？没有修改的重读能带来新信息吗？"以**最后一次
+	// 修改性调用**为分界，只统计其后的资源访问次数。改后验证（读 1~2 次）、分段读
+	// 大文件（offset 进了资源键）都不会触发。
+	repeatedResourceLimit int
 
 	// maxParallelTools 全局并行工具执行并发上限（跨所有并行组共享）。
 	// 默认 4；<=0 视为非法并在运行时兜底为串行。
@@ -232,6 +244,22 @@ type SteeringConfig struct {
 	MaxTokenBudget int64
 }
 
+// defaultCompressThresholdTokens 是上下文压缩的默认 token 阈值（历史字符数 / 4）。
+//
+// 旧值 8000（≈3.2 万字符）是 8K 上下文时代的遗留：读一个稍大的文件就会越过它，
+// 触发压缩把刚读到的内容摘要掉；模型于是重读、再压缩 —— 形成"读完就忘"的正反馈
+// 死循环（2026-10-08 事故：一个改顶部导航的简单任务空转到 30 分钟回合墙，283 次
+// 调用里 86% 是只读、写入仅 1 次）。
+//
+// 当前主力模型（deepseek-v4.1 / glm-5.3 等）上下文窗口为 128K 级，32000 tokens
+// （≈12.8 万字符）既能让典型工作集留在上下文里，又为输出与系统提示留足余量。
+// 可通过 config agent.compress_threshold_tokens 或 WithCompression 覆盖。
+const defaultCompressThresholdTokens = 32000
+
+// defaultCompressProtectLastN 是压缩时尾部保护的基准条数（Compress 内还会按
+// 历史长度自适应放大到至少 len/4，见 compress.Compressor.Compress）。
+const defaultCompressProtectLastN = 8
+
 // NewAIAgent creates a new AI agent
 func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[string]interface{}, systemPrompt string) *Agent {
 	history := make([]provider.Message, 0)
@@ -268,15 +296,28 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// 重构"直接腰斩成"几十轮就停止"。调用多但每步都不同（有进展）永不触发；
 		// 真正的总量/时长上限由 maxTurns 与回合超时兜底。
 		consecutiveLimit: 25,
-		maxParallelTools: defaultMaxParallelTools,
-		subTaskEnabled:   true,
-		hooks:            hooks.NewHookManager(),
-		bus:              bus.NewEventBus(),
-		budget:           budget.Preset("parent"),
-		compressor:       compress.NewCompressor(8000),
-		errorClassifier:  retry.NewClassifier(),
-		failureDetector:  retry.NewRepeatedFailureDetector(retry.DefaultRepeatedFailureConfig()),
-		smartRecovery:    retry.NewSmartRecovery(retry.DefaultSmartRecoveryConfig()),
+		// repeatedResourceLimit 是第三道、也是唯一按**累计**计的兜底：自最后一次
+		// 修改性调用以来，同一目标资源（见 toolCallResourceKey）被访问达到这个
+		// 次数，就认定在空转。
+		//
+		// 它补的正是前两条的盲区——"读A→读B→读C→读A→读B→读C"这种间隔性重复，
+		// 每一步签名都不同，连续判据永远不会响；而 consecutiveLimit 只要中间插入
+		// 一个新签名就清零，同样不响。2026-10-08 线上事故就是这种形态：一个"改顶部
+		// 导航"的简单任务空转到 30 分钟回合超时才收场（283 次调用、86% 只读、
+		// 0 次写入），三道循环闸门一个都没触发。
+		//
+		// 取 5 而不是更小：改完之后"为了确认再读一两次"是正常行为，读到第 5 次
+		// 且期间一次都没改，才只能是空转。
+		repeatedResourceLimit: 5,
+		maxParallelTools:      defaultMaxParallelTools,
+		subTaskEnabled:        true,
+		hooks:                 hooks.NewHookManager(),
+		bus:                   bus.NewEventBus(),
+		budget:                budget.Preset("parent"),
+		compressor:            compress.NewCompressor(defaultCompressThresholdTokens),
+		errorClassifier:       retry.NewClassifier(),
+		failureDetector:       retry.NewRepeatedFailureDetector(retry.DefaultRepeatedFailureConfig()),
+		smartRecovery:         retry.NewSmartRecovery(retry.DefaultSmartRecoveryConfig()),
 	}
 
 	agent.registerBuiltinHooks()
@@ -285,6 +326,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 	// 压缩超阈值时中段消息交由主 provider 生成语义摘要；
 	// 失败/超时(20s硬上限)由 compressor 内部兜底为规则式摘要。
 	if agent.compressor != nil {
+		agent.compressor.ProtectLastN = defaultCompressProtectLastN
 		agent.compressor.SetSummarizer(newProviderSummarizer(agent))
 	}
 
@@ -303,6 +345,10 @@ func newProviderSummarizer(a *Agent) func(ctx context.Context, middle []compress
 		var b strings.Builder
 		for _, m := range middle {
 			content := m.Content
+			// 普通消息按 maxMsgLen/8（上限 2000 字符）截断即可；但**工具结果**
+			// 要给更大配额 —— 它是模型观察外部世界的唯一渠道，只喂 2000 字符
+			// 会让摘要丢掉文件的关键内容，模型压缩后只能重读同一批文件
+			// （"读完就忘"），这正是 2026-10-08 空转事故的诱因。
 			limit := maxMsgLen / 8
 			if limit < 500 {
 				limit = 500
@@ -310,7 +356,24 @@ func newProviderSummarizer(a *Agent) func(ctx context.Context, middle []compress
 			if limit > 2000 {
 				limit = 2000
 			}
+			if m.Role == "tool" {
+				limit = 6000
+			}
 			b.WriteString(m.Role)
+			if m.Role == "tool" && m.Name != "" {
+				b.WriteString("(")
+				b.WriteString(m.Name)
+				b.WriteString(")")
+			}
+			if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+				names := make([]string, 0, len(m.ToolCalls))
+				for _, tc := range m.ToolCalls {
+					names = append(names, tc.Name)
+				}
+				b.WriteString("[called: ")
+				b.WriteString(strings.Join(names, ", "))
+				b.WriteString("]")
+			}
 			b.WriteString(": ")
 			b.WriteString(utils.TruncateDetailed(content, limit))
 			b.WriteString("\n")
@@ -321,7 +384,10 @@ func newProviderSummarizer(a *Agent) func(ctx context.Context, middle []compress
 				Role: "system",
 				Content: "你是对话压缩助手。将给定历史对话压缩为高信息密度的接力摘要，供后续上下文窗口继续任务使用。" +
 					"必须保留：①当前任务目标与原始用户诉求；②已完成的关键步骤及其结果；③重要决策及理由；" +
-					"④涉及的具体文件路径/命令/数据；⑤报错信息的核心内容；⑥未完成事项与建议的下一步。" +
+					"④涉及的具体文件路径/命令/数据；⑤报错信息的核心内容；⑥未完成事项与建议的下一步；" +
+					"⑦**已经读取/查看过的每个文件或资源：路径 + 从其中得到的关键事实与结论**（尤其是与当前任务" +
+					"直接相关的片段，例如被修改的那段代码/HTML/配置的现状）——后续窗口不得仅因为遗忘而重复读取" +
+					"这些文件，所以这些事实必须写清楚，而不是只写「读过某文件」。" +
 					"直接输出摘要正文，不要客套话，不要 Markdown 标题。",
 			},
 			{
@@ -397,6 +463,30 @@ func WithMaxTurns(n int) AgentOption {
 	return func(a *Agent) {
 		if n > 0 {
 			a.maxTurns = n
+		}
+	}
+}
+
+// WithCompression 调整上下文压缩策略。两项都直接决定"模型会不会因为上下文被
+// 摘要掉而反复重读同一批文件"：
+//
+//   - thresholdTokens：触发压缩的 token 阈值（历史字符数/4）。越高越不容易触发，
+//     默认 defaultCompressThresholdTokens(32000)。旧的硬编码 8000 是 8K 上下文
+//     时代的遗留，读一个文件就会触发。
+//   - protectLastN：压缩时尾部原样保留的消息条数，默认 defaultCompressProtectLastN(8)；
+//     Compress 内部还会按历史长度自适应放大到至少 len/4。
+//
+// 任一项 <= 0 表示保留内置默认，方便调用方把 config 原样透传。
+func WithCompression(thresholdTokens, protectLastN int) AgentOption {
+	return func(a *Agent) {
+		if a.compressor == nil {
+			return
+		}
+		if thresholdTokens > 0 {
+			a.compressor.ThresholdTokens = thresholdTokens
+		}
+		if protectLastN > 0 {
+			a.compressor.ProtectLastN = protectLastN
 		}
 	}
 }
@@ -729,10 +819,17 @@ func (a *Agent) getHistory() []provider.Message {
 }
 
 // toolLoopRecord 是一次工具调用在循环检测里的记账项。
-// Name 只用于日志与错误信息，Sig 才是判定依据（见 toolCallSignature）。
+//
+//   - Name 只用于日志与错误信息；
+//   - Sig 判"完全相同的一次调用"（工具名 + 全部参数指纹，见 toolCallSignature）；
+//   - Key 判"同一个目标资源"（工具名 + 路径/关键词等**去掉装饰性参数后**的对象标识，
+//     见 toolCallResourceKey）。两者不可互相替代：Sig 抓"一字不差地重复同一个调用"，
+//     Key 抓"换个关键词、换个工具，本质上还是在鼓捣同一个文件"——后者正是
+//     2026-10-08 打转事故里逃过所有闸门的形态。
 type toolLoopRecord struct {
 	Name string
 	Sig  string
+	Key  string
 }
 
 // toolCallSignature 生成循环检测用的调用签名：工具名 + 参数指纹。
@@ -748,6 +845,65 @@ func toolCallSignature(name, args string) string {
 	}
 	sum := sha256.Sum256([]byte(args))
 	return name + "#" + hex.EncodeToString(sum[:4])
+}
+
+// resourceKeyFields 是工具参数里"标识这次操作作用在哪个对象上"的字段。
+// 命中即拼进资源键（顺序无关，全部命中都拼）。
+var resourceKeyFields = []string{
+	"path", "file_path", "filepath", "file", "dir", "directory",
+	"url", "pattern", "query", "offset", "start_line", "line",
+}
+
+// mutatingTools 是**可能改变文件/系统状态**的工具（名字取自 internal/tool 的
+// 实际注册名）。
+//
+// 它们的作用有两个：① 把"此前的读取"作废，所以是统计窗口的分界（最后一次修改
+// 之后的重读才叫空转）；② 自身不参与"重复访问"计数。execute_command/terminal/
+// execute_code 不是专门的写工具，但能间接改文件（sed、构建、脚本），一律按
+// "可能修改"处理——宁可少收口，也不误杀正常的"跑一下看结果"。
+var mutatingTools = map[string]bool{
+	"write_file":      true,
+	"file_edit":       true,
+	"edit_file":       true, // 兼容别名
+	"batch_file_ops":  true,
+	"diff_patch":      true,
+	"apply_patch":     true, // 兼容别名
+	"execute_command": true,
+	"terminal":        true,
+	"execute_code":    true,
+}
+
+// isMutatingToolCall 判断一次调用是否属于"可能产生修改"的工具。
+func isMutatingToolCall(name string) bool { return mutatingTools[name] }
+
+// toolCallResourceKey 提取一次调用的"目标资源"标识。
+//
+// 与 toolCallSignature（哈希**全部**参数）不同，资源键刻意丢掉"装饰性参数"
+// （limit、timeout、encoding、force、dry_run……），只保留"作用在哪个对象上"。
+// 这样"换一组无关参数重读同一个文件"仍会被识别成重复访问；而"分段读同一个大
+// 文件"（offset 不同）不会被误判成重复。search_in_files 把 pattern 也纳入，
+// 因此"换关键词继续搜"不算重复，"反复搜同一个词"才算。
+//
+// 解析失败（模型给出非法 JSON 或无参数）时退化为工具名，等价于"只看工具名"，
+// 与旧行为一致，不引入新的误判。
+func toolCallResourceKey(name, args string) string {
+	if args == "" {
+		return name
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return name
+	}
+	parts := []string{name}
+	for _, k := range resourceKeyFields {
+		if v, ok := m[k]; ok {
+			parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+		}
+	}
+	if len(parts) == 1 {
+		return name
+	}
+	return strings.Join(parts, "|")
 }
 
 // resetToolLoopCounters 清零循环检测计数。**每个回合进入工具循环前必须调用。**
@@ -778,6 +934,7 @@ func (a *Agent) recordToolCallSig(name, args string) {
 	a.toolCallHistory = append(a.toolCallHistory, toolLoopRecord{
 		Name: name,
 		Sig:  toolCallSignature(name, args),
+		Key:  toolCallResourceKey(name, args),
 	})
 }
 
@@ -915,6 +1072,37 @@ func (a *Agent) detectToolLoop() (bool, string) {
 			}
 			seen[rec.Sig] = true
 			noProgress = 0
+		}
+	}
+	// 第三道：同一目标资源的重复访问（**累计**口径，但按"资源"而不是"完整签名"聚合）。
+	//
+	// 前两道只能识别"重复签名"，对**间隔性重复**完全免疫——每一步换个文件、换个
+	// 关键词，看起来每步都在推进，实际上原地打转。这里换一个问法："期间改过东西
+	// 吗？没改过的话，重读还能带来新信息吗？"以**最后一次修改性调用**为分界，只统计
+	// 其后的访问：改完文件后重读同一个文件达到 repeatedResourceLimit 次且期间一次
+	// 没改，就不可能是有效工作。
+	if a.repeatedResourceLimit > 0 {
+		lastMutation := -1
+		for i, rec := range history {
+			if isMutatingToolCall(rec.Name) {
+				lastMutation = i
+			}
+		}
+		counts := make(map[string]int)
+		for _, rec := range history[lastMutation+1:] {
+			if isMutatingToolCall(rec.Name) {
+				continue
+			}
+			// 资源键退化成工具名（参数里没有 path/pattern/url 之类的对象标识）时
+			// 不参与计数：这类工具的"对象"不可比较，硬数会把"一次并行建 4 个任务"
+			// 这类完全正常的批量操作误杀。
+			if rec.Key == rec.Name {
+				continue
+			}
+			counts[rec.Key]++
+			if counts[rec.Key] >= a.repeatedResourceLimit {
+				return true, fmt.Sprintf("resource %q accessed %d times since the last modification without making any change", rec.Key, counts[rec.Key])
+			}
 		}
 	}
 	return false, ""

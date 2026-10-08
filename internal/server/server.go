@@ -390,6 +390,11 @@ Your working directory is: %s
 					if freshCfg, _ := appconfig.Load(); freshCfg != nil && freshCfg.Privacy != nil {
 						agentOpts = append(agentOpts, agent.WithPrivacy(freshCfg.Privacy))
 					}
+					// 看板任务常是长任务（多文件读写 + 反复验证），同样需要主配置的
+					// 压缩阈值，否则会用内置默认而不是用户调过的值。
+					if freshCfg, _ := appconfig.Load(); freshCfg != nil {
+						agentOpts = append(agentOpts, agent.WithCompression(freshCfg.Agent.CompressThresholdTokens, 0))
+					}
 
 					// Create agent with all tools
 					a := agent.NewEnhancedAgent(prov, registry, tools, systemPrompt, agentOpts...)
@@ -1033,6 +1038,11 @@ GOAL GUIDANCE:
 	// 应用 PII 脱敏配置（来自 config.Privacy）
 	if cfgSnap != nil && cfgSnap.Privacy != nil {
 		agentOpts = append(agentOpts, agent.WithPrivacy(cfgSnap.Privacy))
+	}
+	// 上下文压缩阈值接入主配置：config 里没写（0）时用 agent 内置默认。
+	// 这项直接决定长任务会不会因为"读完就忘"而反复重读同一批文件。
+	if cfgSnap != nil {
+		agentOpts = append(agentOpts, agent.WithCompression(cfgSnap.Agent.CompressThresholdTokens, 0))
 	}
 
 	// Set file conversion config. AutoVision re-evaluates vision support from

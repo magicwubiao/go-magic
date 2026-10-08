@@ -454,6 +454,9 @@ func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error)
 			MaxTokenBudget: m.cfg.Agent.MaxTokenBudget,
 		}))
 	}
+	// 上下文压缩阈值（0 = 内置默认）：与会话型 agent 一致，避免长任务因
+	// 频繁压缩把刚读到的内容摘要掉而反复重读同一批文件。
+	ag.ApplyOption(agent.WithCompression(m.cfg.Agent.CompressThresholdTokens, 0))
 	ag.SetSession(sessionID)
 	if len(history) > 0 {
 		ag.SetHistory(history)
