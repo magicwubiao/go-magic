@@ -465,12 +465,17 @@ Your working directory is: %s
 	cortexDir := filepath.Join(magicHome, "cortex")
 	cortexConfig := &cortex.ManagerConfig{
 		Enabled:             true,
+		GEPAEnabled:         true,
 		SkillMinPatternFreq: 3,
 	}
 	if cfg != nil {
 		cortexConfig.Enabled = cfg.Cortex.Enabled
 		if cfg.Cortex.SkillMinPatternFreq > 0 {
 			cortexConfig.SkillMinPatternFreq = cfg.Cortex.SkillMinPatternFreq
+		}
+		// GEPA 自进化开关：nil（老配置文件没写）= 保持默认开启
+		if cfg.Cortex.GEPAEnabled != nil {
+			cortexConfig.GEPAEnabled = *cfg.Cortex.GEPAEnabled
 		}
 	}
 	cortexMgr := cortex.NewManagerWithProfileAndConfig(cortexDir, prov, "", cortexConfig)

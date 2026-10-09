@@ -168,34 +168,80 @@ func (g *GEPAEngine) Stop() {
 	g.mu.Unlock()
 }
 
-// evolutionLoop runs the main GEPA evolution algorithm
+// GEPA 后台进化的调度参数：正常 5 分钟一轮；连续失败时指数退避，上限 4 小时。
+//
+// 为什么需要退避：线上实测（2026-10-08）provider 域名解析不了时，
+// evolutionLoop 每 5 分钟原样重试一次并打一条同样的错误日志 —— 24 小时 288 条
+// 噪声，而且完全没有恢复机会上的差别。退避后同样的故障一天只留 6 条左右。
+const (
+	gepaBaseInterval = 5 * time.Minute
+	gepaMaxInterval  = 4 * time.Hour
+)
+
+// gepaBackoffInterval 返回连续失败 failures 次后的重试间隔（5m 倍增，封顶 4h）。
+func gepaBackoffInterval(failures int) time.Duration {
+	interval := gepaBaseInterval
+	for i := 0; i < failures; i++ {
+		interval *= 2
+		if interval >= gepaMaxInterval {
+			return gepaMaxInterval
+		}
+	}
+	return interval
+}
+
+// evolutionLoop runs the main GEPA evolution algorithm.
+//
+// 失败处理约定：
+//   - 首败打一条 WARN（含退避后的下次重试间隔），此后同一轮故障不再刷屏；
+//   - 连续失败按指数退避拉长间隔（gepaBackoffInterval）；
+//   - 一旦成功（或回到"轨迹不足"的正常态）立即复位到基准间隔。
 func (g *GEPAEngine) evolutionLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute) // Evaluate every 5 minutes
-	defer ticker.Stop()
+	interval := gepaBaseInterval
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	consecutiveFailures := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			// Check convergence under lock to avoid data race
-			g.mu.RLock()
-			converged := g.isConverged
-			g.mu.RUnlock()
-			if converged {
-				continue
-			}
+		case <-timer.C:
+		}
 
-			if err := g.evolve(ctx); err != nil {
-				// Insufficient trajectories is a normal condition for a fresh
-				// system — skip silently instead of spamming the log every
-				// tick. Only log genuine evolution errors.
-				if !errors.Is(err, errInsufficientTrajectories) {
-					log.Printf("[GEPA] evolution error: %v", err)
-				}
-				continue
+		// Check convergence under lock to avoid data race
+		g.mu.RLock()
+		converged := g.isConverged
+		g.mu.RUnlock()
+		if converged {
+			timer.Reset(interval)
+			continue
+		}
+
+		err := g.evolve(ctx)
+		switch {
+		case err == nil:
+			if consecutiveFailures > 0 {
+				log.Printf("[GEPA] evolution recovered after %d consecutive failure(s)", consecutiveFailures)
+			}
+			consecutiveFailures = 0
+			interval = gepaBaseInterval
+		case errors.Is(err, errInsufficientTrajectories):
+			// 新系统还没攒够轨迹：正常状态，不算故障、不告警、不退避。
+			consecutiveFailures = 0
+			interval = gepaBaseInterval
+		default:
+			consecutiveFailures++
+			interval = gepaBackoffInterval(consecutiveFailures)
+			if consecutiveFailures == 1 {
+				log.Printf("[GEPA] WARN evolution failed (backing off, next retry in %s): %v", interval, err)
+			} else {
+				log.Printf("[GEPA] evolution still failing (%d consecutive, next retry in %s): %v",
+					consecutiveFailures, interval, err)
 			}
 		}
+		timer.Reset(interval)
 	}
 }
 

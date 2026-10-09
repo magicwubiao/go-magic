@@ -124,14 +124,14 @@ func TestStreamLoopDetectionEndsTurnGracefully(t *testing.T) {
 
 	toolTurns, _, _ := prov.snapshot()
 	if toolTurns != ag.sameToolLimit {
-		t.Fatalf("循环判定应在第 %d 次同工具调用时收口，实际跑了 %d 次（maxTurns=%d）",
+		t.Fatalf("loop detection should conclude at same-tool call #%d, but ran %d calls (maxTurns=%d)",
 			ag.sameToolLimit, toolTurns, ag.maxTurns)
 	}
 
 	// 收口文本必须被推给客户端：流式增量已在前面推过，客户端的最终
 	// 可见内容里必须包含总结，否则用户只会看到"卡住后突然结束"。
 	if !strings.Contains(out.String(), testSummaryMarker) {
-		t.Fatalf("收口总结没有推给客户端，实际输出: %q", out.String())
+		t.Fatalf("the conclusion summary was not pushed to the client, output: %q", out.String())
 	}
 }
 
@@ -146,16 +146,16 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 	for i := 1; i < ag.sameToolLimit; i++ {
 		ag.recordToolCall(testLoopToolName)
 		if detected, _ := ag.detectToolLoop(); detected {
-			t.Fatalf("同一工具第 %d 次调用不该触发（阈值 %d）", i, ag.sameToolLimit)
+			t.Fatalf("same-tool call #%d must not trigger (limit %d)", i, ag.sameToolLimit)
 		}
 	}
 	ag.recordToolCall(testLoopToolName)
 	detected, reason := ag.detectToolLoop()
 	if !detected {
-		t.Fatalf("同一工具第 %d 次调用必须触发（阈值 %d）", ag.sameToolLimit, ag.sameToolLimit)
+		t.Fatalf("same-tool call #%d must trigger (limit %d)", ag.sameToolLimit, ag.sameToolLimit)
 	}
 	if !strings.Contains(reason, testLoopToolName) {
-		t.Fatalf("触发原因应点名工具，实际: %q", reason)
+		t.Fatalf("the trigger reason should name the tool, got: %q", reason)
 	}
 
 	// 同名但参数不同的调用**不算**死循环：一个回合里 read_file 读 5 个不同的
@@ -166,7 +166,7 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 		agArgs.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"file_%d.go"}`, i))
 	}
 	if detected, reason := agArgs.detectToolLoop(); detected {
-		t.Fatalf("同名但参数不同的调用不该触发死循环判定，实际: %q", reason)
+		t.Fatalf("same tool name with different args must not trigger loop detection, got: %q", reason)
 	}
 
 	// 单回合"连续无进展"兜底：每轮换一个**新**工具名 = 有进展，不该触发。
@@ -176,7 +176,7 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 	for i := 0; i < ag2.consecutiveLimit*2; i++ {
 		ag2.recordToolCall(fmt.Sprintf("tool_%d", i))
 		if detected, reason := ag2.detectToolLoop(); detected {
-			t.Fatalf("每步都是新签名（有进展）不该触发，第 %d 次被误判: %q", i+1, reason)
+			t.Fatalf("every step has a new signature (progress) so it must not trigger; misjudged at #%d: %q", i+1, reason)
 		}
 	}
 
@@ -185,7 +185,7 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 	for i := 0; i < ag2b.consecutiveLimit*2; i++ {
 		ag2b.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"f_%d.go"}`, i))
 		if detected, reason := ag2b.detectToolLoop(); detected {
-			t.Fatalf("参数各不相同（有进展）不该触发，第 %d 次被误判: %q", i+1, reason)
+			t.Fatalf("all args differ (progress) so it must not trigger; misjudged at #%d: %q", i+1, reason)
 		}
 	}
 
@@ -204,9 +204,9 @@ func TestDetectToolLoopBoundary(t *testing.T) {
 		ag4.recordToolCallSig("loop_tool", `{"x":1}`)
 	}
 	if detected, reason := ag4.detectToolLoop(); !detected {
-		t.Fatalf("同一签名重复 %d 次必须触发，实际未触发", ag4.sameToolLimit)
+		t.Fatalf("the same signature repeated %d times must trigger, but it did not", ag4.sameToolLimit)
 	} else if !strings.Contains(reason, "identical arguments") {
-		t.Fatalf("重复签名应收口并说明原因，实际: %q", reason)
+		t.Fatalf("a repeated signature should conclude and explain why, got: %q", reason)
 	}
 }
 
@@ -289,13 +289,13 @@ func TestLoopCountersResetBetweenTurns(t *testing.T) {
 
 	resp, err := ag.RunConversation(context.Background(), "first turn")
 	if err != nil {
-		t.Fatalf("第 1 轮不该返回错误: %v", err)
+		t.Fatalf("turn 1 should not return an error: %v", err)
 	}
 	if resp != testSummaryMarker {
-		t.Fatalf("第 1 轮应在第 %d 次同工具调用处收口，实际: %q", ag.sameToolLimit, resp)
+		t.Fatalf("turn 1 should conclude at same-tool call #%d, got: %q", ag.sameToolLimit, resp)
 	}
 	if got := hits["first_turn_tool"]; got != ag.sameToolLimit-1 {
-		t.Fatalf("第 1 轮应执行前 %d 次调用（最后一次被判定拦下），实际执行 %d 次",
+		t.Fatalf("turn 1 should execute the first %d calls (the last one is blocked by the check), executed %d",
 			ag.sameToolLimit-1, got)
 	}
 
@@ -303,17 +303,17 @@ func TestLoopCountersResetBetweenTurns(t *testing.T) {
 	prov.setScript("second_turn_tool")
 	resp, err = ag.RunConversation(context.Background(), "second turn")
 	if err != nil {
-		t.Fatalf("第 2 轮不该返回错误: %v", err)
+		t.Fatalf("turn 2 should not return an error: %v", err)
 	}
 	if got := hits["second_turn_tool"]; got != 1 {
-		t.Fatalf("第 2 轮的工具调用被丢弃了（%d 次执行，期望 1 次）：循环计数没有按回合清零，"+
-			"上一轮的历史让本轮在第一次判定时就被判成死循环", got)
+		t.Fatalf("turn 2 tool calls were dropped (%d executed, want 1): the loop counters are not reset per turn, "+
+			"so the previous turn's history makes this turn look like a dead loop at the very first check", got)
 	}
 	if resp != testFinalAnswerMarker {
-		t.Fatalf("第 2 轮应正常执行并返回最终回答，实际: %q", resp)
+		t.Fatalf("turn 2 should run normally and return the final answer, got: %q", resp)
 	}
 	if asked, _ := prov.snapshotAsked(); asked != 1 {
-		t.Fatalf("只应在第 1 轮被要求收口一次，实际 %d 次", asked)
+		t.Fatalf("should be asked to conclude exactly once (turn 1), asked %d times", asked)
 	}
 }
 
@@ -361,10 +361,10 @@ func TestCortexLoopDetectionAndGuideDrain(t *testing.T) {
 	// +1 是给 LLM 规划的余量（复杂度判定为 medium 以上时 cortex 会问一次
 	// "LLMPlanner"，mock 对它的答复同样是工具调用、解析失败后回落）。
 	if toolTurns > ag.sameToolLimit+1 {
-		t.Fatalf("cortex 路径没有在循环阈值处收口：跑了 %d 次工具调用（阈值 %d，maxTurns=%d）",
+		t.Fatalf("cortex path did not conclude at the loop limit: ran %d tool calls (limit %d, maxTurns=%d)",
 			toolTurns, ag.sameToolLimit, ag.maxTurns)
 	}
 	if !sawGuide {
-		t.Fatal("cortex 路径没有把引导并入出站历史（drainGuidesIntoHistory 缺失）")
+		t.Fatal("cortex path did not drain guides into the outgoing history (drainGuidesIntoHistory missing)")
 	}
 }

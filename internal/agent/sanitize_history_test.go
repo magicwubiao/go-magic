@@ -22,7 +22,7 @@ func TestSanitizeHistoryCollapsesConsecutiveUsers(t *testing.T) {
 		// Injected recovery/summary prompt left behind by an aborted turn:
 		{Role: "user", Content: "Please provide a final summary of what has been accomplished so far."},
 		// Real new input:
-		{Role: "user", Content: "继续处理"},
+		{Role: "user", Content: "keep processing"},
 	}
 
 	a.sanitizeHistory()
@@ -31,7 +31,7 @@ func TestSanitizeHistoryCollapsesConsecutiveUsers(t *testing.T) {
 		t.Fatalf("history still invalid after sanitize: %v", v)
 	}
 	last := a.history[len(a.history)-1]
-	if last.Content != "继续处理" {
+	if last.Content != "keep processing" {
 		t.Fatalf("real user input lost: kept %q", last.Content)
 	}
 	for _, m := range a.history {
@@ -212,22 +212,22 @@ func TestSanitizeHistoryDropsLeadingIllegalRoles(t *testing.T) {
 func TestSanitizeHistoryOrphanBeforeToolDoesNotPanic(t *testing.T) {
 	a := &Agent{}
 	a.history = []provider.Message{
-		{Role: "user", Content: "第一条"},
+		{Role: "user", Content: "first item"},
 		{Role: "tool", ToolCallID: "", Content: "stale result"},
-		{Role: "assistant", Content: "我看看"},
+		{Role: "assistant", Content: "let me take a look"},
 		// Panic point before the fix (cleaned was 3 elements, j started at 3).
-		{Role: "tool", ToolCallID: "call_orphan", Content: "第二个孤儿"},
-		{Role: "user", Content: "第二条"},
+		{Role: "tool", ToolCallID: "call_orphan", Content: "second orphan"},
+		{Role: "user", Content: "second item"},
 		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{
 			ID: "call_ok", Type: "function", Function: types.Function{Name: "read_file"},
 		}}},
-		{Role: "tool", ToolCallID: "call_ok", Content: "文件内容"},
+		{Role: "tool", ToolCallID: "call_ok", Content: "file content"},
 	}
 
 	a.sanitizeHistory()
 
 	for _, m := range a.history {
-		if m.Content == "stale result" || m.Content == "第二个孤儿" {
+		if m.Content == "stale result" || m.Content == "second orphan" {
 			t.Fatalf("orphaned tool message survived sanitize: %q", m.Content)
 		}
 	}
@@ -240,7 +240,7 @@ func TestSanitizeHistoryOrphanBeforeToolDoesNotPanic(t *testing.T) {
 				}
 			}
 		}
-		if m.Role == "tool" && m.ToolCallID == "call_ok" && m.Content == "文件内容" {
+		if m.Role == "tool" && m.ToolCallID == "call_ok" && m.Content == "file content" {
 			haveTool = true
 		}
 	}

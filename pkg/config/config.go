@@ -209,6 +209,12 @@ type CortexConfig struct {
 	Enabled             bool `json:"enabled"`                // Enable/disable Cortex system
 	SkillMinPatternFreq int  `json:"skill_min_pattern_freq"` // Min frequency for skill pattern detection
 
+	// GEPAEnabled 控制自进化子系统（后台进化循环 + 最优策略应用）。
+	// nil = 默认开启；false = 显式关闭（不再产生任何后台进化流量）。
+	// 注意：GEPA 复用主 provider 做策略生成，主 provider 不可达时进化必然失败
+	// （已加指数退避与首败告警，见 internal/cortex/gepa.go）。
+	GEPAEnabled *bool `json:"gepa_enabled,omitempty" yaml:"gepa_enabled,omitempty"`
+
 	// 以下为可选字段，零值（nil）表示使用默认值。
 	// 与 internal/cortex.ManagerConfig 对应，便于配置驱动 Cortex 调参。
 	ReviewInterval                *time.Duration `json:"review_interval,omitempty" yaml:"review_interval,omitempty"`                                 // 后台评审间隔
@@ -750,6 +756,7 @@ func defaultConfig() *Config {
 		Cortex: CortexConfig{
 			Enabled:             true,
 			SkillMinPatternFreq: 3,
+			GEPAEnabled:         boolPtr(true),
 		},
 		Memory: MemoryConfig{
 			Enabled: true,

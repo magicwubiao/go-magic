@@ -56,7 +56,7 @@ func (p *staticTextProvider) Chat(context.Context, []provider.Message) (*provide
 
 func mediaParts() []types.ContentPart {
 	return []types.ContentPart{
-		{Type: "text", Text: "看看这张图"},
+		{Type: "text", Text: "look at this image"},
 		{Type: "image_url", ImageURL: &types.MediaURL{URL: "data:image/png;base64,AAAA"}},
 	}
 }
@@ -70,7 +70,7 @@ func TestMediaTurnStopsRetryingAfterProviderTimeout(t *testing.T) {
 	prov := &timeoutProbeProvider{err: &url.Error{Op: "Post", URL: "http://example.invalid", Err: context.DeadlineExceeded}}
 	ag := newLoopTestAgent(t, prov, WithMaxTurns(5))
 
-	_, err := ag.RunConversationWithMedia(context.Background(), "看看这张图", mediaParts())
+	_, err := ag.RunConversationWithMedia(context.Background(), "look at this image", mediaParts())
 	if err == nil {
 		t.Fatal("a hung provider request must fail the media turn, not loop silently")
 	}
@@ -92,7 +92,7 @@ func TestMediaTurnPropagatesDeadContextImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := ag.RunConversationWithMedia(ctx, "看看这张图", mediaParts()); err == nil {
+	if _, err := ag.RunConversationWithMedia(ctx, "look at this image", mediaParts()); err == nil {
 		t.Fatal("expected the cancelled turn to fail")
 	}
 	if got := prov.callCount(); got != 0 {
@@ -132,11 +132,11 @@ func TestMediaTurnsCompactContext(t *testing.T) {
 	}
 
 	t.Run("non-streaming", func(t *testing.T) {
-		ag := newLoopTestAgent(t, &staticTextProvider{text: "回答"}, WithMaxTurns(1))
+		ag := newLoopTestAgent(t, &staticTextProvider{text: "answer"}, WithMaxTurns(1))
 		ag.compressor = compress.NewCompressor(1) // 阈值 1：必然触发压缩
 		ag.history = entries()
 
-		if _, err := ag.RunConversationWithMedia(context.Background(), "看看这张图", mediaParts()); err != nil {
+		if _, err := ag.RunConversationWithMedia(context.Background(), "look at this image", mediaParts()); err != nil {
 			t.Fatalf("RunConversationWithMedia: %v", err)
 		}
 		if countSummary(ag) != 1 {
@@ -146,12 +146,12 @@ func TestMediaTurnsCompactContext(t *testing.T) {
 	})
 
 	t.Run("streaming", func(t *testing.T) {
-		ag := newLoopTestAgent(t, &staticTextProvider{text: "回答"}, WithMaxTurns(1))
+		ag := newLoopTestAgent(t, &staticTextProvider{text: "answer"}, WithMaxTurns(1))
 		ag.compressor = compress.NewCompressor(1)
 		ag.history = entries()
 
 		// provider 不实现流式接口 ⇒ 流式入口内部回落到非流式，仍走同一条循环。
-		err := ag.RunConversationStreamWithMedia(context.Background(), "看看这张图", mediaParts(),
+		err := ag.RunConversationStreamWithMedia(context.Background(), "look at this image", mediaParts(),
 			func(string, bool) {})
 		if err != nil {
 			t.Fatalf("RunConversationStreamWithMedia: %v", err)

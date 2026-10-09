@@ -68,23 +68,23 @@ func TestMultiStepTaskIsNotCutOffByCallVolume(t *testing.T) {
 
 	ag := newLoopTestAgent(t, prov)
 	if ag.consecutiveLimit >= steps {
-		t.Fatalf("前置条件失效：本用例要求 steps(%d) > consecutiveLimit(%d)", steps, ag.consecutiveLimit)
+		t.Fatalf("precondition failed: this case requires steps(%d) > consecutiveLimit(%d)", steps, ag.consecutiveLimit)
 	}
 
 	resp, err := ag.RunConversation(context.Background(), "refactor the whole module")
 	if err != nil {
-		t.Fatalf("多步任务不应报错：%v", err)
+		t.Fatalf("a multi-step task should not fail: %v", err)
 	}
 	if resp != testFinalAnswerMarker {
-		t.Fatalf("任务被提前打断：期望真实最终答案，实际 %q（疑似仍被调用总量腰斩）", resp)
+		t.Fatalf("task cut short: expected the real final answer, got %q (the total call count looks like it is still cutting it off)", resp)
 	}
 
 	calls, summaryReq := prov.snapshot()
 	if calls != steps {
-		t.Fatalf("应完成全部 %d 步，实际 %d 步", steps, calls)
+		t.Fatalf("should complete all %d steps, got %d", steps, calls)
 	}
 	if summaryReq != 0 {
-		t.Fatalf("有进展的多步任务不该被要求收口，实际被收口 %d 次", summaryReq)
+		t.Fatalf("a multi-step task making progress must not be asked to conclude, asked %d times", summaryReq)
 	}
 }
 
@@ -97,15 +97,15 @@ func TestRepeatedSignatureStillStops(t *testing.T) {
 
 	resp, err := ag.RunConversation(context.Background(), "keep going")
 	if err != nil {
-		t.Fatalf("死循环应以温和总结收口而非报错：%v", err)
+		t.Fatalf("a dead loop should end with a gentle summary instead of an error: %v", err)
 	}
 	if resp != testSummaryMarker {
-		t.Fatalf("死循环应收口给总结，实际 %q", resp)
+		t.Fatalf("a dead loop should conclude with a summary, got %q", resp)
 	}
 
 	toolTurns, _, _ := prov.snapshot()
 	if toolTurns != ag.sameToolLimit {
-		t.Fatalf("应在第 %d 次同签名调用处收口，实际 %d 次（maxTurns=%d）",
+		t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
 			ag.sameToolLimit, toolTurns, ag.maxTurns)
 	}
 }
@@ -129,7 +129,7 @@ func TestInterleavedRepeatIsNotALoop(t *testing.T) {
 		// 同一个调用（读同一个文件）反复出现……
 		ag.recordToolCallSig("read_file", `{"path":"contact.html"}`)
 		if detected, reason := ag.detectToolLoop(); detected {
-			t.Fatalf("第 %d 次间隔重复不该判死循环，实际: %q", i+1, reason)
+			t.Fatalf("spaced repetition #%d should not be flagged as a dead loop, got: %q", i+1, reason)
 		}
 		// ……但每次之间都夹着**新签名**的进展（改不同的文件）。
 		for j := 0; j < ag.sameToolLimit; j++ {
@@ -138,10 +138,10 @@ func TestInterleavedRepeatIsNotALoop(t *testing.T) {
 	}
 
 	if detected, reason := ag.detectToolLoop(); detected {
-		t.Fatalf("有进展的间隔重复不得触发循环收口，实际: %q", reason)
+		t.Fatalf("spaced repetition with progress must not trigger loop conclusion, got: %q", reason)
 	}
 	if got, want := ag.toolCallHistoryLength(), repeats*(1+ag.sameToolLimit); got != want {
-		t.Fatalf("调用记账条数不符：got %d, want %d", got, want)
+		t.Fatalf("call record count mismatch: got %d, want %d", got, want)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestRepeatedResourceReadsWithoutModificationStop(t *testing.T) {
 	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
 	limit := ag.repeatedResourceLimit
 	if limit <= 1 {
-		t.Fatalf("前置条件失效：repeatedResourceLimit=%d", limit)
+		t.Fatalf("precondition failed: repeatedResourceLimit=%d", limit)
 	}
 
 	detected, reason := false, ""
@@ -177,9 +177,9 @@ func TestRepeatedResourceReadsWithoutModificationStop(t *testing.T) {
 		}
 	}
 	if !detected {
-		t.Fatalf("同一批文件在没有任何修改的情况下被反复重读，必须判成空转（阈值 %d）", limit)
+		t.Fatalf("re-reading the same files with no modification in between must count as spinning (limit %d)", limit)
 	}
-	t.Logf("收口原因：%s", reason)
+	t.Logf("conclusion reason: %s", reason)
 }
 
 // TestReadsInterleavedWithModificationAreNotALoop 是上一条的反向保护：
@@ -192,7 +192,7 @@ func TestReadsInterleavedWithModificationAreNotALoop(t *testing.T) {
 			fmt.Sprintf(`{"path":"index.html","old_string":"v%d","new_string":"v%d"}`, i, i+1))
 		ag.recordToolCallSig("read_file", `{"path":"index.html"}`)
 		if detected, reason := ag.detectToolLoop(); detected {
-			t.Fatalf("第 %d 轮「改后验证」被误判成空转：%q", i+1, reason)
+			t.Fatalf("round %d: post-edit verification was misjudged as spinning: %q", i+1, reason)
 		}
 	}
 }
@@ -204,7 +204,7 @@ func TestDistinctResourceReadsAreNotALoop(t *testing.T) {
 	for i := 0; i < ag.repeatedResourceLimit*5; i++ {
 		ag.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"file_%d.go"}`, i))
 		if detected, reason := ag.detectToolLoop(); detected {
-			t.Fatalf("读不同文件不该被误判成空转：%q", reason)
+			t.Fatalf("reading different files must not be misjudged as spinning: %q", reason)
 		}
 	}
 }
@@ -217,7 +217,7 @@ func TestResourceLessToolsAreNotCounted(t *testing.T) {
 	for i := 0; i < ag.repeatedResourceLimit*4; i++ {
 		ag.recordToolCallSig("kanban_create", fmt.Sprintf(`{"title":"task %d"}`, i))
 		if detected, reason := ag.detectToolLoop(); detected {
-			t.Fatalf("无对象标识的工具不该参与重复计数：%q", reason)
+			t.Fatalf("tools without a resource key must not count towards repetition: %q", reason)
 		}
 	}
 }

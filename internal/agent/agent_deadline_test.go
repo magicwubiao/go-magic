@@ -111,11 +111,11 @@ func TestWriteDeadlineCheckpoint(t *testing.T) {
 		a.recordToolCall(name)
 	}
 	a.history = append(a.history,
-		types.Message{Role: "user", Content: strings.Repeat("任务描述", 500)},
+		types.Message{Role: "user", Content: strings.Repeat("task description", 500)},
 		types.Message{Role: "assistant", Content: "step1 done"},
 	)
 
-	path := a.writeDeadlineCheckpoint("完成一个大任务", "test reason")
+	path := a.writeDeadlineCheckpoint("complete a big task", "test reason")
 	if path == "" {
 		t.Fatal("expected checkpoint path, got empty")
 	}

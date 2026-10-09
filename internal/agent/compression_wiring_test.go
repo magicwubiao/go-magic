@@ -45,7 +45,7 @@ func TestWithCompressionWiresSettings(t *testing.T) {
 	}
 
 	if defaultCompressThresholdTokens < 16000 {
-		t.Fatalf("默认压缩阈值 %d 过小（8K 上下文时代的量级），长任务会频繁压缩并反复重读",
+		t.Fatalf("built-in compression threshold %d is too small (8K-context era magnitude); long tasks would compress repeatedly and re-read files",
 			defaultCompressThresholdTokens)
 	}
 }

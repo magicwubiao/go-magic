@@ -64,7 +64,7 @@ func TestReasoningOnlyTurnIsNotReportedAsAnswer(t *testing.T) {
 	})
 
 	if strings.Contains(out.String(), secret) {
-		t.Fatalf("reasoning 原文被当作回答推给了客户端: %q", out.String())
+		t.Fatalf("raw reasoning was pushed to the client as the answer: %q", out.String())
 	}
 
 	for _, m := range ag.getHistory() {
@@ -72,10 +72,10 @@ func TestReasoningOnlyTurnIsNotReportedAsAnswer(t *testing.T) {
 			continue
 		}
 		if strings.Contains(m.Content, secret) {
-			t.Fatalf("reasoning 原文被写进 assistant 历史: %q", m.Content)
+			t.Fatalf("raw reasoning was written into the assistant history: %q", m.Content)
 		}
 		if strings.TrimSpace(provider.StripThinkTrails(m.Content)) == "" && strings.Contains(m.Content, "<think") {
-			t.Fatalf("历史里留下只有 <think> 没有正文的 assistant 消息: %q", m.Content)
+			t.Fatalf("history kept an assistant message with <think> but no body: %q", m.Content)
 		}
 	}
 }

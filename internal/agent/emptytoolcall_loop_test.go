@@ -79,21 +79,21 @@ func TestEmptyToolCallCountsTowardLoopDetection(t *testing.T) {
 	for i := 1; i < ag.sameToolLimit; i++ {
 		ag.recordToolCallsForLoop(emptyCall)
 		if detected, reason := ag.detectToolLoop(); detected {
-			t.Fatalf("同一空名调用第 %d 次不该触发（阈值 %d），实际: %q", i, ag.sameToolLimit, reason)
+			t.Fatalf("empty-name call #%d should not trigger (limit %d), got: %q", i, ag.sameToolLimit, reason)
 		}
 	}
 
 	ag.recordToolCallsForLoop(emptyCall)
 	if got := ag.toolCallHistoryLength(); got != ag.sameToolLimit {
-		t.Fatalf("空名调用没有被记账：历史 %d 条，期望 %d 条", got, ag.sameToolLimit)
+		t.Fatalf("empty-name calls were not recorded: %d history entries, want %d", got, ag.sameToolLimit)
 	}
 	detected, reason := ag.detectToolLoop()
 	if !detected {
-		t.Fatalf("同一空名调用第 %d 次必须触发死循环判定（阈值 %d）",
+		t.Fatalf("empty-name call #%d must trigger loop detection (limit %d)",
 			ag.sameToolLimit, ag.sameToolLimit)
 	}
 	if !strings.Contains(reason, "empty tool call") {
-		t.Fatalf("触发原因应点明是空工具调用，实际: %q", reason)
+		t.Fatalf("the trigger reason should call out the empty tool call, got: %q", reason)
 	}
 }
 
@@ -108,10 +108,10 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		t.Helper()
 		resp, err := invoke(context.Background(), ag)
 		if err != nil {
-			t.Fatalf("空名工具调用应被提前收口并给出总结，实际返回错误: %v", err)
+			t.Fatalf("empty-name tool calls should conclude early with a summary, got error: %v", err)
 		}
 		if !strings.Contains(resp, testSummaryMarker) {
-			t.Fatalf("应收口为总结文本，实际: %q", resp)
+			t.Fatalf("should conclude with the summary text, got: %q", resp)
 		}
 	}
 
@@ -123,10 +123,10 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		})
 		toolTurns := prov.snapshot()
 		if toolTurns >= emptyToolCallTestMaxTurns {
-			t.Fatalf("没有提前收口：跑了 %d 次（maxTurns=%d）", toolTurns, emptyToolCallTestMaxTurns)
+			t.Fatalf("did not conclude early: ran %d calls (maxTurns=%d)", toolTurns, emptyToolCallTestMaxTurns)
 		}
 		if toolTurns > ag.sameToolLimit {
-			t.Fatalf("应在第 %d 次同签名调用处收口，实际 %d 次", ag.sameToolLimit, toolTurns)
+			t.Fatalf("should conclude at identical-signature call #%d, got %d calls", ag.sameToolLimit, toolTurns)
 		}
 	})
 
@@ -138,7 +138,7 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 			return ag.RunConversationWithMedia(ctx, "keep going", parts)
 		})
 		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit {
-			t.Fatalf("应在第 %d 次同签名调用处收口，实际 %d 次（maxTurns=%d）",
+			t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
 				ag.sameToolLimit, toolTurns, emptyToolCallTestMaxTurns)
 		}
 	})
@@ -154,7 +154,7 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 			return out.String(), err
 		})
 		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit {
-			t.Fatalf("应在第 %d 次同签名调用处收口，实际 %d 次（maxTurns=%d）",
+			t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
 				ag.sameToolLimit, toolTurns, emptyToolCallTestMaxTurns)
 		}
 	})
@@ -178,7 +178,7 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		// mock 对它同样回工具调用、解析失败后回落）——见
 		// TestCortexLoopDetectionAndGuideDrain 的同款容差。
 		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit+1 {
-			t.Fatalf("cortex 路径应在循环阈值处收口：跑了 %d 次（阈值 %d，maxTurns=%d）",
+			t.Fatalf("cortex path should conclude at the loop limit: ran %d calls (limit %d, maxTurns=%d)",
 				toolTurns, ag.sameToolLimit, emptyToolCallTestMaxTurns)
 		}
 	})
@@ -205,7 +205,7 @@ func TestMaxTurnsExhaustedErrorCarriesDiagnostics(t *testing.T) {
 		emptyToolCallName,
 	} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("报错缺少 %q，实际: %s", want, msg)
+			t.Fatalf("error is missing %q, got: %s", want, msg)
 		}
 	}
 }

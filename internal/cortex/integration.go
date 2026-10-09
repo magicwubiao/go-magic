@@ -92,6 +92,10 @@ type Manager struct {
 	// GEPA 最优策略应用循环的取消函数
 	gepaApplyCancel context.CancelFunc
 
+	// gepaEnabled 是 GEPA 自进化子系统的总开关（配置 cortex.gepa_enabled，
+	// 缺省为开）。关掉后不建引擎、不起进化循环，也不起最优策略应用循环。
+	gepaEnabled bool
+
 	// 记忆库维护循环（清理过期记忆 + 每日蒸馏）的停止信号
 	memoryMaintenanceStop chan struct{}
 	// 维护循环退出信号：Stop() 关闭 stop 后等待 done，再关闭数据库
@@ -110,6 +114,9 @@ type Manager struct {
 type ManagerConfig struct {
 	// Master switch
 	Enabled bool // Enable/disable Cortex system
+
+	// GEPA self-evolution switch（缺省为开；关掉后不再起后台进化循环）
+	GEPAEnabled bool
 
 	// Review settings
 	ReviewInterval      time.Duration
@@ -157,6 +164,7 @@ func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, prof
 	if config == nil {
 		config = &ManagerConfig{
 			Enabled:                       true,
+			GEPAEnabled:                   true,
 			ReviewInterval:                30 * time.Minute,
 			ReviewEnabled:                 true,
 			SkillMinPatternFreq:           3,
@@ -171,9 +179,10 @@ func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, prof
 
 	// Create manager with basic fields
 	mgr := &Manager{
-		baseDir:  baseDir,
-		provider: prov,
-		enabled:  config.Enabled,
+		baseDir:     baseDir,
+		provider:    prov,
+		enabled:     config.Enabled,
+		gepaEnabled: config.GEPAEnabled,
 	}
 
 	// Skip cortex system initialization if disabled
@@ -369,7 +378,9 @@ func (m *Manager) Start() error {
 	}
 
 	// NEW: Initialize GEPA Engine (self-evolution)（Trajectory→GEPA 接线；失败不再静默吞错）
-	if m.provider != nil && m.TrajectoryStore != nil {
+	if !m.gepaEnabled {
+		log.Infof("[Cortex] GEPA self-evolution disabled by config (cortex.gepa_enabled=false)")
+	} else if m.provider != nil && m.TrajectoryStore != nil {
 		gepa := NewGEPAEngine(cortexDir, m.provider, m.TrajectoryStore)
 		if err := gepa.Start(nil); err == nil {
 			m.GEPAEngine = gepa
@@ -380,7 +391,9 @@ func (m *Manager) Start() error {
 	}
 
 	// 启动 GEPA 最优策略定期应用循环（将最优策略写入 SOUL.md）
-	m.startGEPAStrategyApplier()
+	if m.gepaEnabled {
+		m.startGEPAStrategyApplier()
+	}
 
 	// 启动记忆库维护循环（P2-3 清理 + P1-3 每日蒸馏）
 	m.startMemoryMaintenance()

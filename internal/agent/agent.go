@@ -382,17 +382,23 @@ func newProviderSummarizer(a *Agent) func(ctx context.Context, middle []compress
 		req := []provider.Message{
 			{
 				Role: "system",
-				Content: "你是对话压缩助手。将给定历史对话压缩为高信息密度的接力摘要，供后续上下文窗口继续任务使用。" +
-					"必须保留：①当前任务目标与原始用户诉求；②已完成的关键步骤及其结果；③重要决策及理由；" +
-					"④涉及的具体文件路径/命令/数据；⑤报错信息的核心内容；⑥未完成事项与建议的下一步；" +
-					"⑦**已经读取/查看过的每个文件或资源：路径 + 从其中得到的关键事实与结论**（尤其是与当前任务" +
-					"直接相关的片段，例如被修改的那段代码/HTML/配置的现状）——后续窗口不得仅因为遗忘而重复读取" +
-					"这些文件，所以这些事实必须写清楚，而不是只写「读过某文件」。" +
-					"直接输出摘要正文，不要客套话，不要 Markdown 标题。",
+				Content: "You are a conversation-compression assistant. Compress the given conversation " +
+					"history into a high-information-density hand-off summary that a later context window can " +
+					"use to continue the task. You MUST preserve: (1) the current task goal and the user's " +
+					"original request; (2) the key steps already completed and their results; (3) important " +
+					"decisions and the reasons behind them; (4) the concrete file paths/commands/data " +
+					"involved; (5) the core content of any error messages; (6) unfinished work and the " +
+					"suggested next steps; (7) **every file or resource already read/inspected: its path plus " +
+					"the key facts and conclusions drawn from it** (especially the parts directly relevant to " +
+					"the current task, such as the current state of the code/HTML/config that was modified) " +
+					"-- a later window must not re-read these files merely because it forgot about them, so " +
+					"write those facts out explicitly instead of just saying \"read some file\". " +
+					"Write the summary in the same language the conversation is in. " +
+					"Output the summary body directly: no pleasantries, no Markdown headings.",
 			},
 			{
 				Role:      "user",
-				Content:   "以下是需要压缩的历史对话：\n\n" + b.String(),
+				Content:   "Here is the conversation history to compress:\n\n" + b.String(),
 				Timestamp: time.Now(),
 			},
 		}
@@ -1269,6 +1275,64 @@ func neutralizeThinkTags(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// thinkTagLiterals 是需要被中和的字面标签（比较时大小写不敏感）。
+var thinkTagLiterals = []string{"<think>", "</think>"}
+
+// thinkStreamNeutralizer 在**流式推送**路径上中和模型自己写出的 <think> 标签。
+//
+// 为什么不能直接对每个 chunk 调 neutralizeThinkTags：标签会被切在 chunk 边界上
+// （"<thi" + "nk>"、"<" + "/think>" 都是常见的 token 切法），逐 chunk 处理会把
+// 半截标签推给客户端，拼接后 UI 里照样看到标签。因此这里回退暂存"末尾最长可能
+// 是标签前缀"的那几个字符（≤ len("<think>")-1 = 7），等下个 chunk 到齐再一起处理。
+//
+// 注意：**不能**用它处理包装方自己补的 <think>/</think>（那是给前端渲染思考块的
+// 结构标记），所以调用方只把 provider 给的 ReasoningContent / Content 送进来。
+type thinkStreamNeutralizer struct {
+	pending string
+}
+
+// push 送入一个 chunk，返回当前可以安全推给客户端的文本（可能为空串）。
+func (n *thinkStreamNeutralizer) push(chunk string) string {
+	s := n.pending + chunk
+	hold := pendingTagPrefixLen(s)
+	if hold > 0 {
+		n.pending = s[len(s)-hold:]
+		s = s[:len(s)-hold]
+	} else {
+		n.pending = ""
+	}
+	return neutralizeThinkTags(s)
+}
+
+// flush 吐出暂存的尾部（流结束时调用，避免最后几个字符被丢在缓冲区里）。
+func (n *thinkStreamNeutralizer) flush() string {
+	s := n.pending
+	n.pending = ""
+	return neutralizeThinkTags(s)
+}
+
+// pendingTagPrefixLen 返回 s 末尾"可能是不完整标签"的最长长度。
+// 例："...abc<thi" → 4；"...abc" → 0。
+func pendingTagPrefixLen(s string) int {
+	low := strings.ToLower(s)
+	best := 0
+	for _, tag := range thinkTagLiterals {
+		max := len(tag) - 1 // 完整标签不会停在末尾（那样它已被中和）
+		if len(low) < max {
+			max = len(low)
+		}
+		for l := max; l > 0; l-- {
+			if strings.HasSuffix(low, tag[:l]) {
+				if l > best {
+					best = l
+				}
+				break
+			}
+		}
+	}
+	return best
 }
 
 // trySubTaskDelegation checks if the task is complex and delegates to sub-task executor.
@@ -2342,24 +2406,59 @@ Please provide a comprehensive, well-structured final response based on these su
 
 		// buildStreamHandlerContent wraps reasoning content with <think> markers
 		// and transitions to normal content with </think> closing tag.
+		//
+		// contentNeutralizer / reasoningNeutralizer 负责把**模型自己写出的**
+		// <think> 标签从推送流里摘掉（跨 chunk 的安全网，见
+		// thinkStreamNeutralizer）。包装方补的结构标签不受影响。
+		contentNeutralizer := &thinkStreamNeutralizer{}
+		reasoningNeutralizer := &thinkStreamNeutralizer{}
+
 		buildStreamHandlerContent := func(resp *provider.StreamResponse) string {
 			handlerContent := ""
 			if resp.ReasoningContent != "" {
+				// 原文照常进账（finalizeFullContent 依赖完整 reasoning），
+				// 只有推给客户端的那份需要暂存/中和。
 				accumulatedReasoning.WriteString(resp.ReasoningContent)
+				if text := reasoningNeutralizer.push(resp.ReasoningContent); text != "" {
+					if !reasoningStarted {
+						handlerContent += "<think>"
+						reasoningStarted = true
+					}
+					handlerContent += text
+					reasoningEmitted = true
+				}
+			}
+			if resp.Content != "" {
+				if text := contentNeutralizer.push(resp.Content); text != "" {
+					if reasoningStarted && !thinkClosed {
+						handlerContent += "</think>\n"
+						thinkClosed = true
+						reasoningEmitted = true
+					}
+					handlerContent += text
+				}
+			}
+			return handlerContent
+		}
+
+		// flushStreamNeutralizers 在流收尾时吐出两个中和器的暂存尾部，
+		// 保证被跨 chunk 暂存的那几个字符不会留在缓冲区里。
+		flushStreamNeutralizers := func() string {
+			handlerContent := ""
+			if text := reasoningNeutralizer.flush(); text != "" {
 				if !reasoningStarted {
 					handlerContent += "<think>"
 					reasoningStarted = true
 				}
+				handlerContent += text
 				reasoningEmitted = true
-				handlerContent += resp.ReasoningContent
 			}
-			if resp.Content != "" {
+			if text := contentNeutralizer.flush(); text != "" {
 				if reasoningStarted && !thinkClosed {
 					handlerContent += "</think>\n"
 					thinkClosed = true
-					reasoningEmitted = true
 				}
-				handlerContent += resp.Content
+				handlerContent += text
 			}
 			return handlerContent
 		}
@@ -2433,6 +2532,14 @@ Please provide a comprehensive, well-structured final response based on these su
 				// per-chunk rune removal is boundary-safe.
 				resp.Content = provider.StripZeroWidth(resp.Content)
 				if resp.Done {
+					// 先把中和器里跨 chunk 暂存的尾部**单独推给客户端**，再走
+					// finalizeFullContent：这段文本属于本轮已经产生、应当可见的
+					// 输出，必须先于 finalizeFullContent 内部的"reasoning-only
+					// 撤销"（handler("", false)）到达，否则撤销会把已推的 <think>
+					// 关掉、而暂存尾部又被补在后面，前端看到错乱的思考块。
+					if pending := flushStreamNeutralizers(); pending != "" {
+						handler(redact.RedactIfEnabled(pending, a.secretRedaction), false)
+					}
 					// Done chunk 携带的 Content 语义因 provider 而异：
 					// - stream.go/anthropic.go: 完整累积内容（覆盖正确）
 					// - perplexity/gemini/wenxin: 空字符串（覆盖会清空已累积内容）
@@ -2447,10 +2554,9 @@ Please provide a comprehensive, well-structured final response based on these su
 					}
 					// Track token usage from final stream chunk（含 cache 命中量）
 					a.trackUsage(&provider.ChatResponse{Usage: resp.Usage})
-					// Close think tag if still open (for handler completeness)
 					handlerContent := ""
 					if reasoningStarted && !thinkClosed {
-						handlerContent = "</think>\n"
+						handlerContent += "</think>\n"
 						thinkClosed = true
 					}
 					handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
@@ -2562,6 +2668,11 @@ Please provide a comprehensive, well-structured final response based on these su
 				// per-chunk rune removal is boundary-safe.
 				resp.Content = provider.StripZeroWidth(resp.Content)
 				if resp.Done {
+					// 先把中和器暂存的尾部单独推出去，理由同 StreamWithTools 分支
+					// （必须早于 finalizeFullContent 内部的 reasoning-only 撤销）。
+					if pending := flushStreamNeutralizers(); pending != "" {
+						handler(redact.RedactIfEnabled(pending, a.secretRedaction), false)
+					}
 					// Done chunk 的 Content 可能为空（perplexity/gemini/wenxin），
 					// 仅在非空时覆盖，避免清空已累积的内容
 					finalizeFullContent(resp)
@@ -2571,7 +2682,7 @@ Please provide a comprehensive, well-structured final response based on these su
 					// 客户端时才补闭合标签，否则会凭空产生一个 "</think>"。
 					handlerContent := ""
 					if reasoningStarted && !thinkClosed && reasoningEmitted {
-						handlerContent = "</think>\n"
+						handlerContent += "</think>\n"
 						thinkClosed = true
 					}
 					handler(redact.RedactIfEnabled(handlerContent, a.secretRedaction), resp.Done)
