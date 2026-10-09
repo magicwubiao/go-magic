@@ -262,10 +262,12 @@ func (t *TodoTool) Description() string {
 	return "Task planning and tracking tool. Use this to break down complex tasks into manageable steps. " +
 		"WHEN TO USE: When the user asks for something requiring 3+ steps; Before starting a multi-step workflow (coding, research, analysis); To track progress on long-running tasks. " +
 		"PLAN OF RECORD: create the list BEFORE executing the first step (not after), and keep statuses truthful — never mark an item completed unless it actually is. Update the list when the plan changes instead of silently deviating. " +
+		"MARK AS YOU GO: the moment ONE step truly lands, immediately issue action=complete (or action=update with status=completed) for THAT item — one completion per finished step, in the same response as the work that finished it. " +
+		"NEVER BATCH COMPLETIONS: do not hold the completions back and fire them all at once when the whole task is over — not even as a tidy final sweep. A status that lags behind reality is the most common way this list goes wrong: an item left at pending after its work is done is indistinguishable from unfinished work for the user, and it blocks the list from being cleaned up. " +
 		"NOT A DELIVERABLE: creating the list does not finish the task. After the create calls, keep working through the steps in the same turn — never end your turn with just the plan. " +
-		"HOW TO USE: 1) Call action=create to add steps, 2) Call action=list to show progress, 3) Call action=complete when done, 4) Call action=update if plans change. " +
-		"BATCHING: When creating multiple todos, emit ALL create calls together in a single response as parallel tool calls — never one create per turn. Each extra turn costs a full LLM round-trip, so batching is required, not optional. " +
-		"EXAMPLE: User says 'Build a login page' -> In ONE response emit parallel create calls for: Design form, Add validation, Connect API, Test -> Complete each as you finish."
+		"HOW TO USE: 1) Call action=create to add steps, 2) Call action=list to show progress, 3) Call action=complete right after each step lands (one per step, as you go), 4) Call action=update if plans change. " +
+		"BATCHING APPLIES TO CREATE ONLY: when creating multiple todos, emit ALL create calls together in a single response as parallel tool calls — never one create per turn, since each extra turn costs a full LLM round-trip. Completions are the exact opposite of batched: they must follow reality step by step. " +
+		"EXAMPLE: User says 'Build a login page' -> In ONE response emit parallel create calls for: Design form, Add validation, Connect API, Test -> then complete EACH one individually right after it actually works (verify it first), never all four in one final batch."
 }
 
 // Parameters returns the tool parameters schema
@@ -476,11 +478,16 @@ func (t *TodoTool) createTodo(args map[string]interface{}) (interface{}, error) 
 	}
 	broadcastTodoChanged(todo.ID, "create")
 
+	// 返回值也带一句收尾提醒：模型每回合都会重读工具结果，"刚建完计划"正是
+	// 最该把"完成一个就标一个"钉进上下文的那一刻（比只写在 Description 里更靠近
+	// 决策点）。线上残留的主因就是模型把 complete 攒到最后——甚至根本不发。
+	// 文案里的 "one completion per finished step" 是 5 处提示词共用的标记短语，
+	// 由 todo_tool_guidance_test.go 守卫。
 	return map[string]interface{}{
 		"id":      todo.ID,
 		"title":   todo.Title,
 		"status":  todo.Status,
-		"message": "Todo created successfully",
+		"message": "Todo created successfully. As soon as this step actually lands, mark it complete right away (action=complete) — one completion per finished step; do not hold the completions back for a single batch at the end.",
 	}, nil
 }
 
@@ -786,6 +793,68 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 		log.Printf("[todo] cleanup bucket(%s): %d todos removed", sessionID, len(removedIDs))
 	}
 	return removedIDs
+}
+
+// SweepSessionTerminal removes every already-finished todo (completed / cancelled)
+// of the given bucket and returns how many were removed. Unfinished items
+// (pending / in_progress) are deliberately left alone — they represent real
+// outstanding work.
+//
+// Why this exists: cleanupSessionIfAllDoneLocked only clears a bucket when *every*
+// item in it is terminal. A real conversation almost always leaves at least one
+// step unfinished (or the model simply never marks the last one), so the bucket
+// never reaches the "all done" state and finished items pile up in the sidebar
+// forever. Observed in the wild: 47 completed items still on disk across 10
+// sessions. The agent calls this once per turn (Agent.sweepFinishedTodos) so
+// finished work disappears when the conversation stops.
+//
+// sessionID == "" targets the global (unowned) bucket, mirroring listTodos.
+func (t *TodoTool) SweepSessionTerminal(sessionID string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	removed := make([]*TodoItem, 0, 8)
+	for _, todo := range t.todos {
+		if todo.SessionID != sessionID {
+			continue
+		}
+		if todo.Status == "completed" || todo.Status == "cancelled" {
+			removed = append(removed, todo)
+		}
+	}
+	if len(removed) == 0 {
+		return 0
+	}
+
+	for _, todo := range removed {
+		delete(t.todos, todo.ID)
+	}
+	if err := t.save(); err != nil {
+		// Roll back so memory and disk stay consistent: committing the in-memory
+		// deletion while the file still holds the items makes them reappear after a
+		// restart (the panel would look "haunted").
+		for _, todo := range removed {
+			t.todos[todo.ID] = todo
+		}
+		log.Printf("[todo] sweep bucket(%s) save failed: %v (rolled back)", sessionID, err)
+		return 0
+	}
+
+	for _, todo := range removed {
+		t.tombstones[todo.ID] = tombstoneInfo{
+			SessionID: todo.SessionID,
+			Title:     todo.Title,
+			Status:    todo.Status,
+			CleanedAt: time.Now(),
+		}
+	}
+	// 墓碑持久化：进程重启（部署/升级）后旧 ID 的迟到操作仍能优雅降级。
+	t.saveTombstonesLocked()
+	for _, todo := range removed {
+		broadcastTodoChanged(todo.ID, "delete")
+	}
+	log.Printf("[todo] sweep bucket(%s): %d finished todos removed", sessionID, len(removed))
+	return len(removed)
 }
 
 // resolveTombstoneLocked answers an operation on an auto-cleaned todo

@@ -757,6 +757,32 @@ func (a *Agent) SetSession(session string) {
 	a.session = session
 }
 
+// sweepFinishedTodos drops this session's already-finished todos (completed /
+// cancelled) at the end of a turn.
+//
+// 背景：待办清空原本只有一条通道 —— TodoTool.cleanupSessionIfAllDoneLocked，
+// 而它要求"整个会话桶**全部**终态才清"。真实对话几乎总会留下一条没做完的步骤，
+// 于是整个桶永远到不了"全完成"，已完成项就永久堆在侧栏里（线上实测 10 个会话
+// 里躺着 47 条 completed）。这里在**回合结束时**把终态项收走；仍 pending /
+// in_progress 的项**故意保留**，那是真实未完成的工作。
+//
+// 由每个 RunConversation* 入口的 defer 调用，因此正常返回、报错、被取消
+// 三条路径都会执行 —— 恰恰是"残留最容易出现"的场景。
+func (a *Agent) sweepFinishedTodos() {
+	a.mu.RLock()
+	session := a.session
+	a.mu.RUnlock()
+
+	// 只清工具在跑的会话；没有会话上下文时（罕见）不动全局桶，避免误伤。
+	if session == "" {
+		return
+	}
+	defer func() { _ = recover() }()
+	if n := tool.GetTodoTool().SweepSessionTerminal(session); n > 0 {
+		log.Debugf("[AGENT] swept %d finished todos for session %s", n, session)
+	}
+}
+
 // SetMemoryScope 动态绑定/更新目录级记忆 scope（例如用户在本会话中途才设置
 // 工作目录时由 server 侧调用）。scope 为空回到旧的全局默认桶。目录变更后
 // 清掉本 turn 缓存的召回结果，让下一轮按新 scope 重新召回。
@@ -1379,6 +1405,8 @@ func (a *Agent) RunConversationWithMedia(ctx context.Context, input string, cont
 	// 与 RunConversationStreamWithMedia 一致：回合结束时通知观察者（见 defer
 	// 在该函数中的说明）。非流式路径同样可能被 web chat 的降级分支调用。
 	defer notifyTurnFinished(ctx)
+	// 回合结束收走本会话已完成/已取消的待办（残留清理，见 sweepFinishedTodos）。
+	defer a.sweepFinishedTodos()
 
 	// If cortex is enabled, use the full cortex integration path.
 	// 与 RunConversation 同样的判定：只判 `!= nil` 会在 cortex.enabled=false 时
@@ -1804,6 +1832,8 @@ func (a *Agent) maybeCompressBeforeTruncate() bool {
 func (a *Agent) RunConversation(ctx context.Context, input string) (string, error) {
 	// 回合收尾钩子，与 RunConversationStreamWithMedia 同语义。
 	defer notifyTurnFinished(ctx)
+	// 回合结束收走本会话已完成/已取消的待办（残留清理，见 sweepFinishedTodos）。
+	defer a.sweepFinishedTodos()
 
 	// If cortex is enabled, use the full cortex integration path.
 	// 必须同时判 IsEnabled()：用禁用配置构造出来的 Manager 是个空壳（各子系统为 nil），
@@ -2272,6 +2302,8 @@ func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string
 	// 观察者（server 侧的 TurnFileOpTracker）据此在回合结束时落库"本轮变更的
 	// 文件"——回合已与 SSE 连接解耦，不能只依赖当前恰好连着的那条连接。
 	defer notifyTurnFinished(ctx)
+	// 回合结束收走本会话已完成/已取消的待办（残留清理，见 sweepFinishedTodos）。
+	defer a.sweepFinishedTodos()
 
 	// 回合开始：清零循环检测计数。web 聊天与 bot 流式都走这条入口，且每个
 	// 用户消息是一次独立的回合 —— 少了这一步，会话里任何工具累计用过

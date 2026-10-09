@@ -155,14 +155,47 @@ func (s *Server) createTodo(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, result)
 }
 
-func (s *Server) updateTodo(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		Priority    string `json:"priority"`
-		Status      string `json:"status"`
-		SessionID   string `json:"session_id"`
+// todoUpdateRequest 用指针承载"请求体里到底出现了哪些字段"：
+// nil = 该字段没出现（保留原值）；非 nil = 显式提供（空串 = 显式清空）。
+// 不能用 string 零值代替 —— 那样无法区分"没传"与"传了空串"。
+type todoUpdateRequest struct {
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+	Priority    *string `json:"priority"`
+	Status      *string `json:"status"`
+	SessionID   string  `json:"session_id"`
+}
+
+// buildTodoUpdateArgs 把请求体映射成 todo 工具的 args。
+//
+// 工具侧是"**键在 args 里就按值生效**"语义（空串 = 显式清空），所以这里
+// 绝不能无条件写入 title/description/priority：那会让任何局部更新都撞上
+// "title cannot be empty for update"（改状态 / 优先级 / 描述全部 500），
+// 并把未提供的 description / priority 静默清空（数据丢失）。
+func buildTodoUpdateArgs(id, sessionID string, req todoUpdateRequest) map[string]interface{} {
+	args := map[string]interface{}{
+		"action":     "update",
+		"id":         id,
+		"session_id": sessionID,
 	}
+	if req.Title != nil {
+		args["title"] = *req.Title
+	}
+	if req.Description != nil {
+		args["description"] = *req.Description
+	}
+	if req.Priority != nil {
+		args["priority"] = *req.Priority
+	}
+	// 空 status 无意义（工具会忽略），不写 key 以免与"显式清空"混淆。
+	if req.Status != nil && *req.Status != "" {
+		args["status"] = *req.Status
+	}
+	return args
+}
+
+func (s *Server) updateTodo(w http.ResponseWriter, r *http.Request, id string) {
+	var req todoUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -171,18 +204,7 @@ func (s *Server) updateTodo(w http.ResponseWriter, r *http.Request, id string) {
 	sessionID := pickSessionIDFromRequest(r, req.SessionID)
 
 	todoTool := tool.GetTodoTool()
-	args := map[string]interface{}{
-		"action":     "update",
-		"id":         id,
-		"session_id": sessionID,
-	}
-	// 这里必须显式带 key（哪怕为空串），TodoTool 用 "key present in args" 语义
-	args["title"] = req.Title
-	args["description"] = req.Description
-	args["priority"] = req.Priority
-	if req.Status != "" {
-		args["status"] = req.Status
-	}
+	args := buildTodoUpdateArgs(id, sessionID, req)
 
 	result, err := todoTool.Execute(r.Context(), args)
 	if err != nil {

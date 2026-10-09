@@ -938,10 +938,16 @@ RULES:
      as parallel tool calls in a SINGLE response, never one create per turn
   2. Keep executing the steps in the SAME turn. The list is NOT the deliverable:
      never end a turn with just "here is my plan" — do the work, then report
-  3. Complete each todo as you finish with action="complete"
+  3. Mark a step complete the moment it actually lands: issue action="complete"
+     (or action="update" with status="completed") for THAT single item right
+     after you verify the step — one completion per finished step, as you go.
+     Never defer the completions and never fire them all at once when the whole
+     task is over: a status that lags reality makes finished work look
+     unfinished and blocks the list from being cleaned up
   4. If user adds new requirements, create additional todos
   5. The todo list is the plan of record and the user's only view of progress —
-     never mark a step complete unless it actually is
+     never mark a step complete unless it actually is, and never leave a step
+     unmarked once it genuinely is complete
 - When several tool calls are independent (multiple creates, reads, searches),
   batch them as parallel tool calls in one response to save round-trips
 - DEFAULT TO ACTING, NOT ASKING. Resolve ambiguity yourself by making the most

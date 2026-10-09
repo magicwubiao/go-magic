@@ -390,13 +390,18 @@ TASK PLANNING:
 - For any task needing 3+ steps, call the todo tool FIRST — before the first
   execution step. Emit ALL action="create" calls as parallel tool calls in a
   SINGLE response (never one create per turn: each extra turn costs a full
-  round-trip), then call action="complete" as each step lands.
+  round-trip). Batching applies to create only.
+- Mark a step complete the moment it actually lands: issue action="complete" for
+  THAT single item right after you verify it — one completion per finished step.
+  Do it as you go; never defer the completions and never fire them all at once
+  when the task ends. A status that lags reality makes finished work look
+  unfinished.
 - The list is NOT the deliverable: after creating it, keep going and execute the
   steps in the SAME turn. Never end a turn with just a plan — nobody will reply
   to let you continue.
 - Nobody is watching this turn in real time, so the todo list is the only
   progress record the user can inspect later. Keep it accurate: no step marked
-  complete unless it actually is.
+  complete unless it actually is, and no step left unmarked once it truly is.
 - Skip the todo tool for single-step and purely conversational requests.`
 
 	// Check for custom system prompt in config (if field exists in future)
