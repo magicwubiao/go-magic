@@ -1886,8 +1886,21 @@ function isGroupCollapsed(key: string): boolean {
   return collapsedGroups.value[key] === true
 }
 
+// 收起某组的分页进度：删掉 key 而不是写回 GROUP_PAGE_SIZE —— groupLimit 的语义
+// 是"缺省即默认页"，写死一个 5 会让默认值出现第二份事实来源。
+function resetGroupPage(key: string): void {
+  if (groupPageCount.value[key] === undefined) return
+  const next = { ...groupPageCount.value }
+  delete next[key]
+  groupPageCount.value = next
+}
+
 function toggleGroup(key: string): void {
   collapsedGroups.value = { ...collapsedGroups.value, [key]: !isGroupCollapsed(key) }
+  // 折叠/展开都是"收起这一组"的意图：顺手把这组的分页进度收回默认页。
+  // 重新展开后只显示 GROUP_PAGE_SIZE 条，要再点「加载更多」才继续展开——
+  // 否则折叠前翻过十几页的组，一展开又整片铺回来，与"折叠"的意图正好相反。
+  resetGroupPage(key)
 }
 
 function groupLimit(key: string): number {
