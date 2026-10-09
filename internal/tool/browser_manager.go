@@ -827,6 +827,12 @@ func (bm *BrowserManager) ExecuteJS(tabID string, script string) (interface{}, e
 // ExecuteJSAwait executes JavaScript and, when the expression yields a
 // promise, awaits its resolution before returning (like an async IIFE in the
 // DevTools console). Non-promise expressions behave exactly like ExecuteJS.
+//
+// A bare `return` (or a top-level `await`) is a SYNTAX ERROR here: CDP compiles
+// the snippet as a Script, not as a function body — yet "return document.title"
+// is exactly how models write console snippets. Such snippets used to fail with
+// "SyntaxError: Illegal return statement" every time (14 occurrences in the
+// production logs). They are now retried once wrapped in an async IIFE.
 func (bm *BrowserManager) ExecuteJSAwait(tabID string, script string) (interface{}, error) {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
@@ -836,6 +842,38 @@ func (bm *BrowserManager) ExecuteJSAwait(tabID string, script string) (interface
 	ctx, cancel := context.WithTimeout(tab.Ctx, 60*time.Second)
 	defer cancel()
 
+	remote, exc, err := bm.evalJS(ctx, script)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute script: %w", err)
+	}
+	if needsAsyncIIFE(exc) {
+		// Wrapped verbatim as a function body so `return`/`await` become legal.
+		// The original snippet is untouched, so a genuine error inside it still
+		// reports the user's own code.
+		remote, exc, err = bm.evalJS(ctx, "(async () => {\n"+script+"\n})()")
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute script: %w", err)
+		}
+	}
+	if remote == nil {
+		return nil, nil
+	}
+	if exc != nil {
+		return nil, fmt.Errorf("script error: %s", exceptionDetail(exc))
+	}
+	if len(remote.Value) == 0 || string(remote.Value) == "null" {
+		return nil, nil
+	}
+	var result interface{}
+	if err := json.Unmarshal(remote.Value, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode script result: %w", err)
+	}
+	return result, nil
+}
+
+// evalJS performs a single Runtime.evaluate round-trip: no retry, no
+// unwrapping. WithAwaitPromise awaits a promise-valued expression.
+func (bm *BrowserManager) evalJS(ctx context.Context, script string) (*cruntime.RemoteObject, *cruntime.ExceptionDetails, error) {
 	var remote *cruntime.RemoteObject
 	var exc *cruntime.ExceptionDetails
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -846,27 +884,33 @@ func (bm *BrowserManager) ExecuteJSAwait(tabID string, script string) (interface
 			Do(ctx)
 		return e
 	}))
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute script: %w", err)
+	return remote, exc, err
+}
+
+// needsAsyncIIFE reports whether the exception is the Script-vs-function-body
+// syntax error caused by a top-level `return` or `await`. Matching is on the
+// engine's message text because the CDP error carries no structured code.
+func needsAsyncIIFE(exc *cruntime.ExceptionDetails) bool {
+	if exc == nil {
+		return false
 	}
-	if remote == nil {
-		return nil, nil
+	low := strings.ToLower(exceptionDetail(exc))
+	return strings.Contains(low, "illegal return statement") ||
+		strings.Contains(low, "await is only valid")
+}
+
+// exceptionDetail extracts the human-readable message from a CDP
+// ExceptionDetails. `Exception` can legitimately be nil — the payload then
+// carries only `Text` — so both fields must be probed defensively.
+// Dereferencing Exception unconditionally panics the tool on such responses.
+func exceptionDetail(exc *cruntime.ExceptionDetails) string {
+	if exc == nil {
+		return ""
 	}
-	if exc != nil {
-		detail := exc.Exception.Description
-		if detail == "" {
-			detail = exc.Text
-		}
-		return nil, fmt.Errorf("script error: %s", detail)
+	if exc.Exception != nil && exc.Exception.Description != "" {
+		return exc.Exception.Description
 	}
-	if len(remote.Value) == 0 || string(remote.Value) == "null" {
-		return nil, nil
-	}
-	var result interface{}
-	if err := json.Unmarshal(remote.Value, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode script result: %w", err)
-	}
-	return result, nil
+	return exc.Text
 }
 
 // GetPageContent gets the HTML content of the page

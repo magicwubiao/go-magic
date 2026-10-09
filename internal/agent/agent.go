@@ -1215,7 +1215,7 @@ func (a *Agent) SetSkillsContext(skillsCtx string) {
 // 历史只能重新推导、重新确认，症状就是同一个简单任务反复询问用户、几十轮
 // 停不下来。流式路径的同一不变量见 finalizeFullContent。
 func wrapLLMReasoning(reasoning, content string) string {
-	reasoning = strings.TrimSpace(reasoning)
+	reasoning = neutralizeThinkTags(strings.TrimSpace(reasoning))
 	if reasoning == "" {
 		return content
 	}
@@ -1223,6 +1223,52 @@ func wrapLLMReasoning(reasoning, content string) string {
 		return ""
 	}
 	return "<think>" + reasoning + "</think>\n" + content
+}
+
+// neutralizeThinkTags 删掉文本里作为**字面量**出现的 <think> / </think> 标签
+// （大小写不敏感），保留标签之外的正文。
+//
+// 它只用于"即将被包进 <think>...</think> 的 reasoning 文本"。包装方自己会补一对
+// 标签，如果 reasoning 内部又带着模型自己写出的标签，落库结果就是嵌套：
+// `<think>A<think>B</think>` —— 开闭数量失衡，前端思考块解析错乱，而且这串历史
+// 下一轮又被模型看到、继续模仿，每轮净增一个未闭合标签，自增强式膨胀。
+//
+// 实测线上会话库（最近 40 个会话、381 条 assistant 消息）：96 条嵌套、21 条截断，
+// 只有 68 条开闭平衡；单条最长 262,923 字符，绝大部分是重复的思考片段。
+//
+// 与 provider.StripThinkTrails 的区别：那个是"从开标签丢弃到首个闭标签"，用在
+// `A<think>B` 上会把 B 一起吃掉；这里只摘掉标签本身，正文完整保留。
+func neutralizeThinkTags(s string) string {
+	if s == "" {
+		return s
+	}
+	low := strings.ToLower(s)
+	if !strings.Contains(low, "<think") && !strings.Contains(low, "</think") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	cursor := 0
+	for cursor < len(s) {
+		i := strings.Index(low[cursor:], "<")
+		if i < 0 {
+			b.WriteString(s[cursor:])
+			break
+		}
+		open := cursor + i
+		b.WriteString(s[cursor:open])
+		// 标签的大小写变体长度一致，所以可以直接用 low 上的偏移量切开原串。
+		switch {
+		case strings.HasPrefix(low[open:], "</think>"):
+			cursor = open + len("</think>")
+		case strings.HasPrefix(low[open:], "<think>"):
+			cursor = open + len("<think>")
+		default:
+			b.WriteByte(s[open])
+			cursor = open + 1
+		}
+	}
+	return b.String()
 }
 
 // trySubTaskDelegation checks if the task is complex and delegates to sub-task executor.
@@ -2346,7 +2392,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			if resp.Content != "" {
 				body = resp.Content
 			}
-			reasoning := accumulatedReasoning.String()
+			reasoning := neutralizeThinkTags(accumulatedReasoning.String())
 			if reasoning == "" {
 				fullContent = body
 				return

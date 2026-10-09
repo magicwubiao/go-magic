@@ -122,7 +122,9 @@ func (t *SearchInFilesTool) Description() string {
 	return "Search for a pattern in file contents. Supports both plain text and regular expressions (set use_regex=true for regex). " +
 		"Returns matching lines with optional context. The pattern is matched literally unless use_regex=true, lines are matched " +
 		"individually (so ^/$ anchor per line), and LF/CRLF/lone-CR endings are all handled. When nothing matches, the result " +
-		"carries a hint describing the options that were actually applied."
+		"carries a hint describing the options that were actually applied. " +
+		"Regex dialect is Go RE2: lookahead/lookbehind ((?=), (?!), (?<=)) and backreferences (\\1) are NOT supported — " +
+		"express those constraints with plain alternation or a second plain-text search instead."
 }
 
 func (t *SearchInFilesTool) Schema() map[string]interface{} {
