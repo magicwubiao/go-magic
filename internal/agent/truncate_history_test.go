@@ -11,9 +11,10 @@ import (
 )
 
 // newTruncationAgent returns a minimally wired Agent suitable for exercising
-// truncateHistory in isolation. Compression is disabled so that the test can
-// distinguish byte-level truncation from LLM-driven summarisation; each test
-// sets its own maxTotalLen to control the threshold.
+// truncateHistory in isolation. The compressor is nil, so the summarising path
+// (maybeCompressBeforeTruncate) stays out of the way and the test can observe
+// byte-level truncation on its own; each test sets its own maxTotalLen to
+// control the threshold.
 func newTruncationAgent(maxTotalLen int) *Agent {
 	return &Agent{
 		maxTotalLen: maxTotalLen,
@@ -218,9 +219,9 @@ func TestTruncateHistory_NoUserMessagesEverywhereSurvives(t *testing.T) {
 // TestTruncateHistory_DoesNotLoopForeverOnSingleHugeTail asserts the safety
 // cap: when even the protected tail block alone is bigger than maxTotalLen
 // (an extreme edge case — caller appends a multi-MB input), truncateHistory
-// must terminate. The fix delegates this case to compressHistory (which is
-// a no-op for short tails) and then runs sanitiser; the test mainly guards
-// against an infinite loop in production by giving the call a budget of
+// must terminate. The protected-tail branch asks the summariser to take over
+// (nil here, so it declines) and then runs the sanitiser; the test mainly
+// guards against an infinite loop in production by giving the call a budget of
 // ~2s — Go's testing framework will fail with a clear timeout otherwise.
 func TestTruncateHistory_DoesNotLoopForeverOnSingleHugeTail(t *testing.T) {
 	if testing.Short() {
@@ -228,7 +229,6 @@ func TestTruncateHistory_DoesNotLoopForeverOnSingleHugeTail(t *testing.T) {
 	}
 
 	a := newTruncationAgent(10)
-	a.compressionEnabled = false // belt-and-braces; isolate byte-level path
 
 	a.history = []provider.Message{
 		{Role: "user", Content: strings.Repeat("Q", 5000)},

@@ -712,8 +712,17 @@ func (m TUIModel) processCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "compress":
-		m.agent.EnableCompression(true)
-		m.addMessage("system", "Compression enabled. Will trigger automatically when context exceeds threshold.")
+		// 摘要是无条件跑一次（绕过 token 阈值）—— 阈值只约束自动触发。
+		// 旧实现只翻了一个与压缩机制无关的布尔量，却把 "Compression enabled"
+		// 当成功消息打出来：既有误导（压缩本来就一直是开着的），又让
+		// truncateHistory 走进另一套按"前 2 + 后 4 条 user 消息"重写历史的
+		// 规则式压缩（该实现已删除）。
+		if m.agent.CompressNow() {
+			m.addMessage("system", fmt.Sprintf("Context compressed. History is now %d message(s).",
+				m.agent.GetHistoryLength()))
+		} else {
+			m.addMessage("system", "Nothing to compress (history is already minimal).")
+		}
 		m.refreshViewport()
 		return m, nil
 

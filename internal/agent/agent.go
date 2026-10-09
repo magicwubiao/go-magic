@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
 	"github.com/magicwubiao/go-magic/internal/approval"
@@ -173,10 +174,12 @@ type Agent struct {
 	session        string
 	iterationCount int
 
-	// Compression settings
-	compressionEnabled bool
-	compressionRatio   float64
-	maxMemoryTokens    int
+	// Compression settings. 摘要压缩只有一条路径：compressor（由
+	// WithCompression 装配阈值，unconditionally 由 maybeCompressContext 驱动）。
+	// 曾经的 compressionEnabled / compressionRatio 是 TUI /compress 专用开关，
+	// 已在 2026-10-09 删除 —— 见 truncateHistory 里 maybeCompressBeforeTruncate
+	// 的注释，那两个字段的"恒真"判定让截断路径退化成了另一套规则式压缩。
+	maxMemoryTokens int
 
 	// Token usage tracking
 	tokenUsage      int64
@@ -1695,13 +1698,37 @@ func (a *Agent) maybeCompressContext() {
 	if a.compressor == nil {
 		return
 	}
-	totalChars := 0
-	for _, msg := range a.history {
-		totalChars += messageWeight(msg)
-	}
-	if !a.compressor.ShouldCompress(totalChars / 4) { // rough token estimate
+	if !a.compressor.ShouldCompress(a.GetHistoryLength() / 4) { // rough token estimate
 		return
 	}
+	a.compressContext()
+}
+
+// CompressNow 立即执行一次摘要压缩，**绕过** token 阈值。
+//
+// 阈值配置只应约束"自动触发"（maybeCompressContext 在每个回合的开始处调用），
+// 用户显式敲的 /compress 应当立刻生效，而不是等到上下文涨到阈值才动 —— 这正是
+// TUI 旧实现（EnableCompression(true)）没做到的事：它只翻了一个与压缩机制**无关**
+// 的布尔量，然后把"Compression enabled"当成成功消息打给用户。
+//
+// 返回是否真的产生了新摘要（历史变短）。
+func (a *Agent) CompressNow() bool {
+	if a.compressor == nil {
+		return false
+	}
+	return a.compressContext()
+}
+
+// compressContext 无条件跑一次压缩，返回历史是否真的变短。
+//
+// 拆成独立函数的两个理由：①手动入口（CompressNow）要绕过阈值门；
+// ②截断路径（maybeCompressBeforeTruncate）必须知道"压缩到底生效没有"，
+// 才能决定是停下、还是继续做破坏性的字节裁剪。
+func (a *Agent) compressContext() bool {
+	if a.compressor == nil {
+		return false
+	}
+	before := a.GetHistoryLength()
 
 	a.Emit(bus.EventKindTurnStart, map[string]interface{}{
 		"type":   "progress",
@@ -1724,7 +1751,7 @@ func (a *Agent) maybeCompressContext() {
 	}
 	result, err := a.compressor.Compress(msgs, "")
 	if err != nil || result == nil {
-		return
+		return false
 	}
 
 	// Replace history with the compressed version: system prompts keep their
@@ -1745,6 +1772,32 @@ func (a *Agent) maybeCompressContext() {
 		})
 	}
 	a.history = newHistory
+	return a.GetHistoryLength() < before
+}
+
+// maybeCompressBeforeTruncate 在字节级截断之前给摘要器一次机会，返回"历史
+// 是否真的被摘要缩短了"。
+//
+// 两条路径的语义差是这件事的全部理由：压缩把中段**摘要**成一条能继续接力的
+// 记录；truncateHistory 的字节级路径把整段 user 块**直接删掉**、不留任何摘要
+// （2026-10-08 "读完就忘"事故的形态）。所以只要摘要器可用，就不该轮到硬截断。
+//
+// 这里判的是"摘要器是否装配"（compressor != nil），而**不再经过 token 阈值**：
+// 调用方只会在历史已越过硬上限时叫到这里，而硬上限恒 ≥ 压缩触发点 × 5/4
+// （见 historyHardLimit），所以那一刻阈值本来就必然已经越过；此时多做一次摘要
+// 远比"整段删掉 user 块"便宜。真正无内容可压时 Compress 会原样返回（它自己的
+// ProtectFirst/Last 门），本函数于是返回 false，调用方照旧走 sanitize / 字节路径。
+//
+// 旧实现这两处判的是 a.compressionEnabled && a.compressionRatio，两个字段都只由
+// TUI 的 /compress 设置，而 compressionRatio 全仓库零赋值（恒为 0）：
+//   - web / gateway / bot / cron 走 WithCompression（只设 ThresholdTokens，从不置
+//     compressionEnabled）⇒ 这两个兜底在四个入口里**永远不触发**，退化成"sanitize
+//     之后把超长历史原样发给模型"；
+//   - TUI 一旦敲过 /compress ⇒ `totalLen > limit*0` 恒真 ⇒ **每次** truncateHistory
+//     都跑老的规则式 compressHistory()（只留前 2 + 后 4 条 user 消息，与 token 阈值
+//     毫无关系），中段每回合都被静默换掉。
+func (a *Agent) maybeCompressBeforeTruncate() bool {
+	return a.CompressNow()
 }
 
 // RunConversation runs a conversation with automatic tool execution
@@ -3657,9 +3710,9 @@ func (a *Agent) historyHardLimit() int {
 // we will NEVER touch (not even individually). Truncation therefore
 // proceeds by removing whole EARLIER user blocks — i.e. each user message
 // and everything between it and the next user message (assistant tool_calls
-// + trailing tool results). When only the protected tail block remains
-// below maxTotalLen we hand off to compressHistory, which is the
-// dedicated mechanism for summarising the middle of a long conversation.
+// + trailing tool results). Because that path destroys context outright, it
+// only ever runs after the summarising compressor (maybeCompressBeforeTruncate
+// → compressContext, the threshold-driven LLM-assisted path) has had its turn.
 func (a *Agent) truncateHistory() {
 	// 用 limit 而不是裸的 a.maxTotalLen：硬上限必须恒 ≥ 压缩触发点，见
 	// historyHardLimit 的注释。否则把 agent.compress_threshold_tokens 抬到
@@ -3670,14 +3723,22 @@ func (a *Agent) truncateHistory() {
 	}
 
 	totalLen := a.GetHistoryLength()
-
-	if a.compressionEnabled && totalLen > int(float64(limit)*a.compressionRatio) {
-		a.compressHistory()
+	if totalLen < limit {
 		return
 	}
 
-	if totalLen < limit {
-		return
+	// 已经越过硬上限：先让摘要器接管。这里换掉了旧的
+	// `compressionEnabled && totalLen > limit*compressionRatio` —— ratio 恒为 0
+	// 使该判定恒真（每回合无条件重写历史），而四个非 TUI 入口又从不置
+	// compressionEnabled（兜底永不生效），两头都是错的。详见
+	// maybeCompressBeforeTruncate 的注释。
+	if a.maybeCompressBeforeTruncate() {
+		if totalLen = a.GetHistoryLength(); totalLen < limit {
+			return
+		}
+		// 摘要后仍在上限之上（例如某条工具结果单独就顶满了整个预算）：
+		// 继续做字节级裁剪。此时历史里至少已经留下一条可接力的摘要，
+		// 模型不会像旧行为那样永久失忆。
 	}
 
 	systemIdx := -1
@@ -3688,18 +3749,22 @@ func (a *Agent) truncateHistory() {
 		}
 	}
 
+	// 系统提示词自身的上限（**字节**）。这里是字节切分点，所以必须落在 UTF-8
+	// rune 边界上：裸的 Content[:maxSystemLen] 一旦切在多字节 rune 中间，得到的
+	// 就是非法 UTF-8 —— 严格些的 provider 直接 400，宽松的静默替换成 U+FFFD，
+	// 系统提示词尾部变成乱码字符还不报错。中文提示词（3 字节/字）必踩。
 	const maxSystemLen = 50000
 	if systemIdx >= 0 && len(a.history[systemIdx].Content) > maxSystemLen {
-		truncated := a.history[systemIdx].Content[:maxSystemLen]
-		lastNewline := strings.LastIndex(truncated, "\n")
-		if lastNewline > maxSystemLen/2 {
+		orig := a.history[systemIdx].Content
+		truncated := truncateBytesOnRuneBoundary(orig, maxSystemLen)
+		if lastNewline := strings.LastIndex(truncated, "\n"); lastNewline > maxSystemLen/2 {
 			truncated = truncated[:lastNewline]
 		}
 		truncated += "\n\n[...system prompt truncated...]"
-		totalLen -= len(a.history[systemIdx].Content) - len(truncated)
 		a.history[systemIdx].Content = truncated
-		log.Warnf("[Agent] System prompt truncated from %d to %d chars (maxSystemLen=%d)",
-			len(a.history[systemIdx].Content), len(truncated), maxSystemLen)
+		totalLen -= len(orig) - len(truncated)
+		log.Warnf("[Agent] System prompt truncated from %d to %d bytes (maxSystemLen=%d)",
+			len(orig), len(truncated), maxSystemLen)
 	}
 
 	if totalLen < limit {
@@ -3723,18 +3788,17 @@ func (a *Agent) truncateHistory() {
 	}
 	// If even the protected tail alone fits under the cap, every earlier
 	// reduction candidate is by definition larger; there is nothing we can
-	// responsibly remove without destroying user context, so we exit and
-	// let compressHistory's LLM-assisted summarisation take over on the
-	// NEXT turn (or via its own threshold above).
+	// responsibly remove without destroying user context, so we ask the
+	// summariser to take over, and otherwise just run the sanitiser.
 	if lastUserIdx >= 0 && tailBlockSize >= limit {
-		log.Warnf("[Agent] truncateHistory: protected tail block (%d msgs, %d chars) >= history cap=%d — delegating to compressHistory",
+		log.Warnf("[Agent] truncateHistory: protected tail block (%d msgs, %d chars) >= history cap=%d — asking the summariser to take over",
 			len(a.history)-lastUserIdx, tailBlockSize, limit)
-		if a.compressionEnabled {
-			a.compressHistory()
+		if a.maybeCompressBeforeTruncate() && a.GetHistoryLength() < limit {
 			return
 		}
-		// Compression is disabled: fall through and at least run sanitiser
-		// so Pass 4/5 mask any structural damage the caller is about to ship.
+		// Summarisation unavailable or insufficient: fall through and at
+		// least run sanitiser so Pass 4/5 mask any structural damage the
+		// caller is about to ship.
 		a.sanitizeHistory()
 		return
 	}
@@ -3869,8 +3933,9 @@ func (a *Agent) truncateHistory() {
 
 		case "user":
 			// Tail-block protection: if idx is the protected tail user, we
-			// cannot remove any further user block. Stop iterating and
-			// delegate to compressHistory for a summary-based reduction.
+			// cannot remove any further user block. Stop iterating and let
+			// the summariser produce a summary-based reduction; when it is
+			// not available (or does not help), just sanitise.
 			if idx == lastUserIdx {
 				if !deletedAny {
 					// Nothing has been deleted yet on this pass — a single
@@ -3880,8 +3945,7 @@ func (a *Agent) truncateHistory() {
 					// safe moves available without summarising.
 					log.Warnf("[Agent] truncateHistory reached protected tail user without further droppable blocks")
 				}
-				if a.compressionEnabled {
-					a.compressHistory()
+				if a.maybeCompressBeforeTruncate() && a.GetHistoryLength() < limit {
 					return
 				}
 				a.sanitizeHistory()
@@ -3919,11 +3983,10 @@ func (a *Agent) truncateHistory() {
 	// If we exited the loop because of the safety cap or because the
 	// protected tail made further byte-level removal impossible, try the
 	// summarisation path one more time before handing the noisy payload to
-	// the provider layer. compressHistory is a no-op when its own gate
-	// (len(userMsgs) <= keepRecent+keepFirst) says there isn't enough to
-	// summarise, which is the correct response for short tails.
-	if totalLen > limit && a.compressionEnabled {
-		a.compressHistory()
+	// the provider layer. It is a no-op when the history is below the
+	// compressor's own token gate, which is the correct response for tails
+	// that are large in bytes but cheap in tokens.
+	if totalLen > limit && a.maybeCompressBeforeTruncate() && a.GetHistoryLength() < limit {
 		return
 	}
 
@@ -4369,6 +4432,30 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max])
 }
 
+// truncateBytesOnRuneBoundary 把 s 截到至多 maxBytes 个字节，且不会把一个多
+// 字节 UTF-8 rune 劈成两半。
+//
+// 与 truncateRunes 的区别是**口径**：那个按字符数限长，这个按字节数限长。凡是
+// 上游用字节数下发的预算（例如 truncateHistory 的 maxSystemLen，它限制的是发给
+// provider 的 payload 体积）都必须用这个版本 —— 裸的 s[:maxBytes] 一旦切在 rune
+// 中间，产出的字符串就是非法 UTF-8：严格的 provider 直接 400，宽松的静默替换成
+// U+FFFD，中文提示词的尾部会变成一个乱码字符且没有任何报错。
+func truncateBytesOnRuneBoundary(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	// 回退到最近的 rune 起始字节（0b0xxxxxxx / 0b11xxxxxx）；
+	// len(s) > maxBytes 保证 end 始终是合法下标。
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
 // collapseConsecutive merges runs of consecutive same-role messages that
 // are not tool messages, keeping the LAST one in each run. This repairs
 // alternation breakage introduced by dropping empty assistant turns
@@ -4529,157 +4616,6 @@ func (a *Agent) sanitizeHistory() {
 	if violations := ValidateMessageAlternation(a.history); len(violations) > 0 {
 		log.Warnf("[Agent] sanitizeHistory repairing %d residual violation(s)", len(violations))
 		a.history = SanitizeMessageHistory(a.history)
-	}
-}
-
-// compressHistory performs smart context compression
-func (a *Agent) compressHistory() {
-	var userMsgs []provider.Message
-	var assistantMsgs []provider.Message
-
-	for _, m := range a.history {
-		switch m.Role {
-		case "user":
-			userMsgs = append(userMsgs, m)
-		case "assistant":
-			assistantMsgs = append(assistantMsgs, m)
-		}
-	}
-
-	totalMsgs := len(userMsgs)
-	keepRecent := 4
-	keepFirst := 2
-
-	if totalMsgs <= keepRecent+keepFirst {
-		return
-	}
-
-	// Build a set of indices to keep (system + first N user msgs + last N user msgs + their assistant replies)
-	keepIndices := make(map[int]bool)
-
-	// Always keep system messages
-	for i, m := range a.history {
-		if m.Role == "system" {
-			keepIndices[i] = true
-		}
-	}
-
-	// Keep first N user messages and their adjacent assistant/tool messages
-	kept := 0
-	for i, m := range a.history {
-		if m.Role == "user" && kept < keepFirst {
-			keepIndices[i] = true
-			kept++
-			// Also keep the assistant reply and any tool messages that follow
-			for j := i + 1; j < len(a.history); j++ {
-				if a.history[j].Role == "assistant" || a.history[j].Role == "tool" {
-					keepIndices[j] = true
-				} else {
-					break
-				}
-			}
-		}
-	}
-
-	// Keep last N user messages and their adjacent assistant/tool messages
-	kept = 0
-	for i := len(a.history) - 1; i >= 0 && kept < keepRecent; i-- {
-		if a.history[i].Role == "user" {
-			keepIndices[i] = true
-			kept++
-			// Also keep the assistant reply and any tool messages that follow
-			for j := i + 1; j < len(a.history); j++ {
-				if a.history[j].Role == "assistant" || a.history[j].Role == "tool" {
-					keepIndices[j] = true
-				} else {
-					break
-				}
-			}
-		}
-	}
-
-	// Generate summary of removed messages
-	var removedMsgs []provider.Message
-	for i, m := range a.history {
-		if !keepIndices[i] && m.Role == "user" {
-			removedMsgs = append(removedMsgs, m)
-		}
-	}
-
-	var newHistory []provider.Message
-	for i, m := range a.history {
-		if keepIndices[i] {
-			newHistory = append(newHistory, m)
-		}
-	}
-
-	// Insert summary after system messages
-	if len(removedMsgs) > 0 {
-		summary := a.generateCompressionSummary(removedMsgs)
-		summaryMsg := provider.Message{
-			Role: "system",
-			Content: fmt.Sprintf("\n\nPrevious conversation summary (%d messages summarized):\n%s",
-				len(removedMsgs), summary),
-		}
-		// Insert after the last system message
-		insertIdx := 0
-		for i, m := range newHistory {
-			if m.Role == "system" {
-				insertIdx = i + 1
-			}
-		}
-		newHistory = append(newHistory[:insertIdx], append([]provider.Message{summaryMsg}, newHistory[insertIdx:]...)...)
-	}
-
-	a.history = newHistory
-}
-
-// generateCompressionSummary generates a summary of old messages
-func (a *Agent) generateCompressionSummary(messages []provider.Message) string {
-	var summary strings.Builder
-	summary.WriteString("Summary of earlier conversation:\n")
-
-	userCount := 0
-	actionCount := 0
-
-	for _, m := range messages {
-		if m.Role == "user" {
-			userCount++
-			content := m.Content
-			if len(content) > 100 {
-				content = truncateRunes(content, 100) + "..."
-			}
-			if userCount <= 3 {
-				summary.WriteString(fmt.Sprintf("- User: %s\n", content))
-			}
-		} else if m.Role == "tool" && !strings.Contains(m.Content, "Error:") {
-			actionCount++
-			if actionCount <= 3 {
-				if len(m.Content) > 50 {
-					summary.WriteString(fmt.Sprintf("- Tool result: %s...\n", truncateRunes(m.Content, 50)))
-				} else {
-					summary.WriteString(fmt.Sprintf("- Tool result: %s\n", m.Content))
-				}
-			}
-		}
-	}
-
-	if userCount > 3 {
-		summary.WriteString(fmt.Sprintf("- ... and %d more exchanges\n", userCount-3))
-	}
-
-	return summary.String()
-}
-
-// EnableCompression enables/disables context compression
-func (a *Agent) EnableCompression(enabled bool) {
-	a.compressionEnabled = enabled
-}
-
-// SetCompressionRatio sets the threshold ratio for compression
-func (a *Agent) SetCompressionRatio(ratio float64) {
-	if ratio > 0.3 && ratio <= 1.0 {
-		a.compressionRatio = ratio
 	}
 }
 
