@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,37 @@ func newTicketServer(token string) *Server {
 	return &Server{authToken: token, sessions: newWebSessionManager()}
 }
 
+// tamperTicketSig 确定性地破坏票据签名段：解出 MAC 字节 → 翻转一个 bit →
+// 按**规范** base64 重新编码。
+//
+// 为什么不能写成 `sig[:len(sig)-2] + "XX"`：MAC 是 16 字节，base64 的最后一个
+// quantum 只有 1 个字节、即 2 个有效 bit，因此**同一个字节对应 4 种字符组合**
+// （末位只能是 A/Q/g/w，倒数第二位的前 2 bit 被丢弃）。于是当签名恰好以 "XQ"
+// 结尾时，"篡改"出来的字符串与原文**解码后完全相同**，HMAC 校验自然通过 ——
+// 测试随机变红，而产品代码一点问题都没有。实测命中率 14/4000 ≈ 1/256，CI 上
+// 属于"偶尔红一次、重跑又绿"的那类假失败。
+//
+// 这里改成先解码再重新规范编码，保证解码后的字节必然不同。
+func tamperTicketSig(t *testing.T, sig string) string {
+	t.Helper()
+	payload, macPart, ok := strings.Cut(sig, ".")
+	if !ok || payload == "" || macPart == "" {
+		t.Fatalf("票据缺少分隔符: %q", sig)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(macPart)
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("签名段不是合法 base64: %q (%v)", macPart, err)
+	}
+	raw[len(raw)-1] ^= 0x01
+
+	tampered := payload + "." + base64.RawURLEncoding.EncodeToString(raw)
+	// 自检：篡改必须真的改变了字符串（否则调用方的断言等于没测）。
+	if tampered == sig {
+		t.Fatalf("篡改没有改变票据: %q", sig)
+	}
+	return tampered
+}
+
 func TestFSTicketRoundTrip(t *testing.T) {
 	s := newTicketServer("ticket-test-secret")
 	now := time.Now()
@@ -90,7 +122,7 @@ func TestFSTicketRoundTrip(t *testing.T) {
 	})
 
 	t.Run("篡改签名必须失效", func(t *testing.T) {
-		tampered := sig[:len(sig)-2] + "XX"
+		tampered := tamperTicketSig(t, sig)
 		if _, err := s.parseFSTicket(tampered, now); err == nil {
 			t.Error("篡改后的签名被接受")
 		}
@@ -129,6 +161,36 @@ func TestFSTicketRoundTrip(t *testing.T) {
 			t.Error("authToken 为空时仍接受了票据")
 		}
 	})
+}
+
+// TestTamperedTicketAlwaysRejectedAcrossExpiries 是上面那条假失败的回归守卫。
+//
+// 票据 MAC 覆盖的载荷含过期时间戳，所以每个不同秒签出来的签名都不同。用
+// 「替换末尾两字符」当篡改手段时，签名恰好以 "XQ" 结尾的那些 payload 会构造出
+// **解码后完全相同**的签名（见 tamperTicketSig 注释），于是若干秒里必然有几秒
+// 通过校验 —— 这就是 CI 上那条偶发红的来源。这里把时间轴铺开逐个验，等价于把
+// 那次偶发变成必现；篡改手段正确时它恒绿。
+func TestTamperedTicketAlwaysRejectedAcrossExpiries(t *testing.T) {
+	s := newTicketServer("ticket-test-secret")
+	base := time.Unix(1700000000, 0)
+
+	accepted := 0
+	for i := 0; i < 2048; i++ {
+		now := base.Add(time.Duration(i) * time.Second)
+		sig, err := s.signFSTicket(fsTicket{Scope: fsScopeRead, Path: "/tmp/a.txt", Exp: now.Add(time.Hour)})
+		if err != nil {
+			t.Fatalf("signFSTicket(exp=+%ds): %v", i, err)
+		}
+		if _, err := s.parseFSTicket(tamperTicketSig(t, sig), now); err == nil {
+			accepted++
+			if accepted <= 3 {
+				t.Errorf("篡改后的签名被接受: exp=+%ds sig=%q", i, sig)
+			}
+		}
+	}
+	if accepted != 0 {
+		t.Errorf("2048 个不同签名里有 %d 个篡改后仍通过校验（篡改手法必须保证解码字节真的变了）", accepted)
+	}
 }
 
 // cutTicket 只用于构造「改载荷但保留签名」的畸形输入。
@@ -219,7 +281,16 @@ func TestFSTicketEndpointRejectsBadTickets(t *testing.T) {
 
 	t.Run("篡改签名", func(t *testing.T) {
 		target := f.signWithScope(t, "read", signedFile, "", nil)
-		tampered := target[:len(target)-2] + "XX"
+		// 先证明同一个地址（未篡改）确实是通的，否则「403」可能只是因为
+		// 地址本身就不对，断言等于没测。
+		if rec := f.get(target); rec.Code != http.StatusOK {
+			t.Fatalf("sanity: 未篡改票据 = %d, want 200", rec.Code)
+		}
+		sig := strings.TrimPrefix(target, fsTicketPrefix+"/")
+		if sig == target {
+			t.Fatalf("票据地址形状不符预期: %q", target)
+		}
+		tampered := fsTicketPrefix + "/" + tamperTicketSig(t, sig)
 		if rec := f.get(tampered); rec.Code != http.StatusForbidden {
 			t.Errorf("篡改票据 = %d, want 403", rec.Code)
 		}

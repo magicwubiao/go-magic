@@ -270,9 +270,17 @@ func TestFSServeRequiresValidSignature(t *testing.T) {
 	})
 
 	t.Run("签名字符被篡改", func(t *testing.T) {
-		tampered := base[:len(base)-2] + "XX/"
-		if rec := f.get(tampered + "assets/style.css"); rec.Code == http.StatusOK {
-			t.Error("tampered signature was accepted")
+		// base 形如 <prefix>/<sig>/；取出签名段做**确定性**篡改。
+		// 不要用「替换末尾两字符」：base64 最后一个 quantum 有别名，那会构造出
+		// 解码后完全相同的签名，让这条断言随机变红（见 tamperTicketSig 注释）。
+		inner := strings.TrimPrefix(base, fsServePrefix+"/")
+		sig := strings.TrimSuffix(inner, "/")
+		if sig == inner || sig == "" {
+			t.Fatalf("预览地址形状不符预期: %q", base)
+		}
+		tampered := fsServePrefix + "/" + tamperTicketSig(t, sig) + "/"
+		if rec := f.get(tampered + "assets/style.css"); rec.Code != http.StatusForbidden {
+			t.Errorf("tampered signature = %d, want 403", rec.Code)
 		}
 	})
 
