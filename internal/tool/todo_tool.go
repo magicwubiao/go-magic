@@ -795,6 +795,90 @@ func (t *TodoTool) cleanupSessionIfAllDoneLocked(sessionID string) []string {
 	return removedIDs
 }
 
+// PendingTitlesForSession returns the titles of the given bucket's unfinished
+// items (pending / in_progress), ordered by creation time. Callers embed them
+// in LLM prompts and are responsible for their own length budgeting (the agent's
+// reconcile nudge caps the list itself).
+//
+// 供 Agent 的回合末"待办对账提醒"使用（nudgeTodoReconciliation）：模型给出
+// 最终回答前，若本回合动过 todo 且会话仍有未完成项，把它们的名字递回去。
+func (t *TodoTool) PendingTitlesForSession(sessionID string) []string {
+	t.mu.RLock()
+	items := make([]*TodoItem, 0, 8)
+	for _, todo := range t.todos {
+		if todo.SessionID != sessionID {
+			continue
+		}
+		if todo.Status == "pending" || todo.Status == "in_progress" {
+			items = append(items, todo)
+		}
+	}
+	t.mu.RUnlock()
+
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
+	titles := make([]string, 0, len(items))
+	for _, todo := range items {
+		titles = append(titles, todo.Title)
+	}
+	return titles
+}
+
+// TodoPlanEntry 是一条注入给模型的"在案计划"条目。
+//
+// 与 PendingTitlesForSession 的关键区别是**带 ID**：模型要调 action=complete /
+// update 必须给出精确 ID，而 ID 只出现在 create 的返回值里。历史一旦被压缩，
+// 那份返回值就没了（见 ActivePlanForSession 的说明）。
+type TodoPlanEntry struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// ActivePlanForSession 返回该会话**未完成**（pending / in_progress）的待办快照，
+// 供请求组装时当作权威"在案计划"注入。
+//
+// 为什么必须存在：待办列表原本只活在**对话历史**里（create 的工具结果携带 ID），
+// 而对话历史正是系统唯一会主动删除的东西 —— 长回合必然触发历史压缩
+// （agent.maybeCompressContext，每次 LLM 调用前查阈值），压缩把中段消息整体换成
+// 一条摘要，而摘要既不保留待办 ID、注入的 SummaryPrefix 还明说"早先的事已经处理
+// 完了、只回应最新用户消息"。2026-10-09 线上事故即由此而来：模型建了 4 条待办、
+// 只标了 1 条（压缩之前那条），压缩之后既没有 ID、也不知道列表还在案，此后再没
+// 发过 complete，残留永久留在面板上。
+//
+// 因此"在案计划"必须从**持久层**（本工具的 todos 内存/磁盘态）每轮重新渲染进请求，
+// 而不是寄存在会被删掉的历史里。provider 每轮重算 ⇒ 压缩永远删不掉它。
+//
+// 排序：in_progress 在前（正在做的），其余按创建时间；上限由调用方（注入点）裁剪。
+func (t *TodoTool) ActivePlanForSession(sessionID string) []TodoPlanEntry {
+	if sessionID == "" {
+		// 无会话上下文时不动全局桶，避免把别人的计划注入本次请求。
+		return nil
+	}
+	t.mu.RLock()
+	items := make([]*TodoItem, 0, 8)
+	for _, todo := range t.todos {
+		if todo.SessionID != sessionID {
+			continue
+		}
+		if todo.Status == "pending" || todo.Status == "in_progress" {
+			items = append(items, todo)
+		}
+	}
+	t.mu.RUnlock()
+
+	sort.Slice(items, func(i, j int) bool {
+		if (items[i].Status == "in_progress") != (items[j].Status == "in_progress") {
+			return items[i].Status == "in_progress"
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	entries := make([]TodoPlanEntry, 0, len(items))
+	for _, todo := range items {
+		entries = append(entries, TodoPlanEntry{ID: todo.ID, Title: todo.Title, Status: todo.Status})
+	}
+	return entries
+}
+
 // SweepSessionTerminal removes every already-finished todo (completed / cancelled)
 // of the given bucket and returns how many were removed. Unfinished items
 // (pending / in_progress) are deliberately left alone — they represent real

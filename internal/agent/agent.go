@@ -127,6 +127,15 @@ type Agent struct {
 	// 大文件（offset 进了资源键）都不会触发。
 	repeatedResourceLimit int
 
+	// todoNudgeUsed 标记"回合末待办对账提醒"是否已注入（每回合最多一次），
+	// 由 resetToolLoopCounters 随工具循环计数一起按回合清零。
+	todoNudgeUsed bool
+	// todoPendingTitles 是可注入的待办查询（测试用）；nil 时用全局 TodoTool 单例。
+	todoPendingTitles func(sessionID string) []string
+	// todoPlanSnapshot 是可注入的"在案计划"查询（测试用）；nil 时用全局 TodoTool 单例。
+	// 与 todoPendingTitles 的区别：带 ID —— 那是 complete/update 的唯一凭据。
+	todoPlanSnapshot func(sessionID string) []tool.TodoPlanEntry
+
 	// maxParallelTools 全局并行工具执行并发上限（跨所有并行组共享）。
 	// 默认 4；<=0 视为非法并在运行时兜底为串行。
 	maxParallelTools int
@@ -783,6 +792,137 @@ func (a *Agent) sweepFinishedTodos() {
 	}
 }
 
+// nudgeTodoReconciliation 在模型给出"无工具调用的最终回答"之前做一次待办对账：
+// 本回合调用过 todo 工具、且该会话仍有 pending / in_progress 项时，向历史注入
+// 一条一次性对账提醒，并让调用方 continue 循环而不是收尾（返回 true）。
+//
+// 背景（2026-10-09 线上日志）：提示词引导只有部分效果 —— 模型 20:08 建了 4 条
+// 待办、只标完 1 条，回合结束时其余 3 条仍是 pending（清扫只收终态项，故意保留
+// 未完成项）。这是一道**确定性**收口：每回合最多触发一次（todoNudgeUsed，
+// resetToolLoopCounters 清零），模型标记后下一轮自然结束；仍不标记也只多花一次
+// 往返，不会死循环。
+//
+// 只看"本回合动过 todo"：会话里更早遗留的 pending 不能让之后每一轮都平白多一次
+// LLM 往返。注入文案延续"每完成一个标记一个、不要批量"的口径：逐条标记确实完成
+// 的步骤，没做完的不要标。
+func (a *Agent) nudgeTodoReconciliation() bool {
+	a.mu.RLock()
+	session := a.session
+	touched := false
+	for _, rec := range a.toolCallHistory {
+		if rec.Name == "todo" {
+			touched = true
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if session == "" || !touched {
+		return false
+	}
+
+	pendingFn := a.todoPendingTitles
+	if pendingFn == nil {
+		pendingFn = tool.GetTodoTool().PendingTitlesForSession
+	}
+	titles := pendingFn(session)
+	if len(titles) == 0 {
+		return false
+	}
+
+	// 双检：避免并发路径重复注入。
+	a.mu.Lock()
+	if a.todoNudgeUsed {
+		a.mu.Unlock()
+		return false
+	}
+	a.todoNudgeUsed = true
+	a.mu.Unlock()
+
+	// 注入点自己做长度预算：不管数据源给多少条，prompt 必须有界。
+	const maxList = 8
+	shown := titles
+	extra := 0
+	if len(shown) > maxList {
+		shown, extra = shown[:maxList], len(shown)-maxList
+	}
+	list := strings.Join(shown, "; ")
+	if extra > 0 {
+		list = fmt.Sprintf("%s; ...and %d more", list, extra)
+	}
+	msg := fmt.Sprintf("[todo reconcile] The todo list for this turn still has %d unfinished item(s): %s. "+
+		"Before you finish: for each step that is actually done, call the todo tool with action=complete "+
+		"for THAT item — one call per item, mark them as you go. If a step is genuinely not done, "+
+		"leave it unmarked and briefly state what remains in your reply.",
+		len(titles), list)
+	a.history = append(a.history, provider.Message{
+		Role:      "user",
+		Content:   msg,
+		Timestamp: time.Now(),
+	})
+	log.Debugf("[AGENT] todo reconcile nudge injected for session %s (%d pending)", session, len(titles))
+	return true
+}
+
+// activePlanBlock 把当前会话**未完成**的待办渲染成一段权威"在案计划"文本，供每一轮
+// 请求注入；没有未完成项时返回 ""（不污染无关回合的 prompt）。
+//
+// 这是"根治"而不是补救。背景（2026-10-09 线上事故）：待办列表原本只活在**对话历史**
+// 里（create 的工具结果携带 ID），而对话历史正是系统唯一会主动删除的东西 —— 长回合必然
+// 触发历史压缩（maybeCompressContext 在每次 LLM 调用前查阈值），压缩把中段消息整体换成
+// 一条摘要；摘要既不保留待办 ID，注入的 SummaryPrefix 还明说"早先的事已经处理完了、
+// 只回应最新用户消息"。于是压缩之后模型既没有 ID、也不知道列表还在案，此后再没发过
+// complete —— 实测一轮里建 4 条只标 1 条（压缩之前那条）。
+//
+// 解法：让"在案计划"每轮从**持久层**重新渲染进请求（见 tool.ActivePlanForSession），
+// 而不是寄存在会被删掉的历史里。压缩删不掉它，ID 恒在。
+//
+// 与 nudgeTodoReconciliation 的分工：那个是"回合末拉回来补标一次"的兜底（只在"本回合
+// 动过 todo"时触发）；这个是**始终看得见**的地基 —— 模型在每一个决策点都能拿到 ID 和状态。
+func (a *Agent) activePlanBlock() string {
+	a.mu.RLock()
+	session := a.session
+	snapshot := a.todoPlanSnapshot
+	a.mu.RUnlock()
+	if session == "" {
+		return ""
+	}
+	if snapshot == nil {
+		snapshot = tool.GetTodoTool().ActivePlanForSession
+	}
+	entries := snapshot(session)
+	if len(entries) == 0 {
+		return ""
+	}
+
+	// 注入点自己做长度预算：不管数据源给多少条，prompt 必须有界。
+	const maxPlan = 12
+	shown, extra := entries, 0
+	if len(shown) > maxPlan {
+		shown, extra = shown[:maxPlan], len(shown)-maxPlan
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Active Plan] This session has %d unfinished todo item(s). "+
+		"The list below is AUTHORITATIVE — it is re-read from the todo store on every request, "+
+		"so it stays correct even if earlier conversation was compacted or summarised. "+
+		"Trust it over any summary or recollection.\n", len(entries))
+	for _, e := range shown {
+		// 标题可能含换行（模型自己写的），压成单行否则列表结构会被打断。
+		title := strings.Join(strings.Fields(e.Title), " ")
+		title = truncateRunes(title, 120)
+		if title == "" {
+			title = "(untitled)"
+		}
+		fmt.Fprintf(&b, "- id=%s  [%s]  %s\n", e.ID, e.Status, title)
+	}
+	if extra > 0 {
+		fmt.Fprintf(&b, "- ...and %d more (call action=list to see the rest)\n", extra)
+	}
+	b.WriteString("Mark a step done with action=complete and its EXACT id the moment it actually lands — " +
+		"one completion per finished step, as you go. Never batch the completions to the end, and never " +
+		"mark a step that is not really done. Items already completed are cleaned up automatically at turn end.")
+	return b.String()
+}
+
 // SetMemoryScope 动态绑定/更新目录级记忆 scope（例如用户在本会话中途才设置
 // 工作目录时由 server 侧调用）。scope 为空回到旧的全局默认桶。目录变更后
 // 清掉本 turn 缓存的召回结果，让下一轮按新 scope 重新召回。
@@ -955,6 +1095,7 @@ func (a *Agent) resetToolLoopCounters() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toolCallHistory = nil
+	a.todoNudgeUsed = false
 }
 
 // recordToolCall 记录一次工具调用（无参数变体，供只关心工具名的调用方使用）。
@@ -1606,6 +1747,11 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:   content,
 				Timestamp: time.Now(),
 			})
+			// 待办对账（见 nudgeTodoReconciliation）：本回合动过 todo 且仍有
+			// 未完成项时，先提醒一次再收尾。
+			if a.nudgeTodoReconciliation() {
+				continue
+			}
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
@@ -1726,9 +1872,19 @@ func (a *Agent) maybeCompressContext() {
 	if a.compressor == nil {
 		return
 	}
-	if !a.compressor.ShouldCompress(a.GetHistoryLength() / 4) { // rough token estimate
+	est := a.GetHistoryLength() / 4 // rough token estimate
+	if !a.compressor.ShouldCompress(est) {
 		return
 	}
+	// INFO 而不是 DEBUG：DEBUG 不进日志文件，压缩一直是**零可见**的路径
+	// （2026-10-09 事故全程只能靠人肉读 280KB 思考轨迹复盘）。回合号 + 会话号
+	// 足以把"模型忽然不认账"定位到具体某一次压缩。
+	a.mu.RLock()
+	session := a.session
+	turn := a.iterationCount
+	a.mu.RUnlock()
+	log.Infof("[AGENT] context compression triggered (est %d tokens >= threshold %d) session=%s turn=%d",
+		est, a.compressor.ThresholdTokens, session, turn)
 	a.compressContext()
 }
 
@@ -1757,6 +1913,10 @@ func (a *Agent) compressContext() bool {
 		return false
 	}
 	before := a.GetHistoryLength()
+	beforeMsgs := len(a.history)
+	// 待办工具结果数是"压缩有没有把在案计划吃掉"的唯一可观测指标（见
+	// countTodoToolMessages）。必须在替换历史**之前**采。
+	todoMsgsBefore := countTodoToolMessages(a.history)
 
 	a.Emit(bus.EventKindTurnStart, map[string]interface{}{
 		"type":   "progress",
@@ -1800,7 +1960,58 @@ func (a *Agent) compressContext() bool {
 		})
 	}
 	a.history = newHistory
-	return a.GetHistoryLength() < before
+
+	after := a.GetHistoryLength()
+	if after < before {
+		a.mu.RLock()
+		session := a.session
+		a.mu.RUnlock()
+		log.Infof("[AGENT] context compacted: %d->%d msgs, %d->%d chars session=%s",
+			beforeMsgs, len(a.history), before, after, session)
+		if lost := todoMsgsBefore - countTodoToolMessages(a.history); lost > 0 {
+			// 待办 ID 只存在于 create 的工具结果里，而它通常正落在被摘要的中段 ⇒
+			// 压缩之后模型既无法 complete、也不再知道列表在案。2026-10-09 事故
+			// 正是如此（建 4 条只标 1 条，且那 1 条在压缩之前）。
+			// 现在由 activePlanBlock 每轮从持久层重注入兜住；这里留痕是为了让
+			// "模型忽然不认账"在线上可定位，而不是只能人肉读思考轨迹。
+			log.Warnf("[AGENT] compaction dropped %d todo tool result(s) from context "+
+				"(todo IDs live only there; the Active Plan block re-injects the live list each request) session=%s",
+				lost, session)
+		}
+	}
+	return after < before
+}
+
+// countTodoToolMessages 统计历史里**属于 `todo` 工具**的结果消息数。
+//
+// 工具名只能从发起调用的 assistant 消息里取：tool 消息（provider.Message）没有
+// name 字段，只有 ToolCallID；压缩往返也不携带 name（compressContext 组
+// compress.Message 时就没设 Name）。
+//
+// 用途：判断一次压缩是否把"在案计划"（待办 ID 的唯一载体）摘要出了上下文 ——
+// 这是那类"模型建了待办却再也不标"事故最直接的观测点。
+func countTodoToolMessages(history []provider.Message) int {
+	owner := make(map[string]string, len(history))
+	for _, m := range history {
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
+			name := tc.Name
+			if name == "" {
+				// 少数 provider 只填 Function.Name；漏了会让统计恒为 0。
+				name = tc.Function.Name
+			}
+			owner[tc.ID] = name
+		}
+	}
+	n := 0
+	for _, m := range history {
+		if m.Role == "tool" && owner[m.ToolCallID] == "todo" {
+			n++
+		}
+	}
+	return n
 }
 
 // maybeCompressBeforeTruncate 在字节级截断之前给摘要器一次机会，返回"历史
@@ -2076,6 +2287,10 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:   content,
 				Timestamp: time.Now(),
 			})
+			// 待办对账（见 nudgeTodoReconciliation）：先提醒一次再收尾。
+			if a.nudgeTodoReconciliation() {
+				continue
+			}
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
@@ -2925,6 +3140,12 @@ Please provide a comprehensive, well-structured final response based on these su
 				Content:   content,
 				Timestamp: time.Now(),
 			})
+			// 待办对账（见 nudgeTodoReconciliation）：本回合动过 todo 且仍有
+			// 未完成项时，先提醒一次再收尾。流式路径正文已经推给客户端，
+			// 继续循环时模型的补充说明会作为后续增量继续推送。
+			if a.nudgeTodoReconciliation() {
+				continue
+			}
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 
@@ -4421,11 +4642,20 @@ func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	// 当前目录并声明其他路径的记忆不具权威性。memoryScope 即会话目录的
 	// 归一化键，随 SetMemoryScope 更新，不会像 system prompt 那样过期。
 	hasWorkspace := a.memoryScope != ""
-	if !hasRule && !hasMemory && !hasWorkspace {
+	// 在案计划（根治）：待办列表必须每轮从持久层重算注入，否则会随历史压缩蒸发
+	// —— 见 activePlanBlock 与 tool.ActivePlanForSession 的说明。
+	planBlock := a.activePlanBlock()
+	hasPlan := planBlock != ""
+	if !hasRule && !hasMemory && !hasWorkspace && !hasPlan {
 		return msgs
 	}
 
 	var extras []provider.Message
+	// 放在最前：与 [Workspace] 同属"权威 ground truth"区，紧跟头部 system prompt
+	// 之后，模型会当成指令而不是对话内容来读。
+	if hasPlan {
+		extras = append(extras, provider.Message{Role: "system", Content: planBlock})
+	}
 	if hasWorkspace {
 		extras = append(extras, provider.Message{Role: "system", Content: fmt.Sprintf(
 			"[Workspace]\nCurrent working directory: %s\nResolve every file, command and repository operation against this directory. Memory entries that reference other project paths are not authoritative for this workspace.",
