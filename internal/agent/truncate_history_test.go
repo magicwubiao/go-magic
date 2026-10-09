@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/compress"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
@@ -255,6 +256,66 @@ func TestTruncateHistory_DoesNotLoopForeverOnSingleHugeTail(t *testing.T) {
 	last := a.history[len(a.history)-1]
 	if last.Role != "user" {
 		t.Fatalf("protected tail vanished under single-message truncation: %+v", a.history)
+	}
+}
+
+// TestHistoryHardLimitNeverPreemptsCompression 锁死"硬截断晚于压缩触发"这个
+// 不等式。
+//
+// 两条路径：压缩（compressor 的 LLM 摘要）会把中段摘要成可接力的记录；字节级
+// 截断则直接删整段 user 块、不留摘要。所以硬上限必须恒 ≥ 压缩触发点。触发点是
+// **配置**出来的（agent.compress_threshold_tokens → ThresholdTokens×4 字节），
+// 硬上限却是构造时写死的 200000 字节 ⇒ 阈值一旦超过 50000 token，顺序就反过来，
+// 模型会在没有任何摘要的情况下永久丢掉中段上下文。
+func TestHistoryHardLimitNeverPreemptsCompression(t *testing.T) {
+	// 默认 32K token：触发点 128K < 固定上限 200K ⇒ 顺序不变、行为零变化。
+	def := &Agent{maxTotalLen: 200000, compressor: compress.NewCompressor(defaultCompressThresholdTokens)}
+	if got := def.historyHardLimit(); got != 200000 {
+		t.Fatalf("default hard cap = %d, want 200000 (ordering must stay unchanged)", got)
+	}
+
+	// 阈值抬到 60000 token：触发点 240K > 200K ⇒ 硬上限必须跟着抬起来。
+	const raisedTokens = 60000
+	raised := &Agent{maxTotalLen: 200000, compressor: compress.NewCompressor(raisedTokens)}
+	trigger := raisedTokens * 4
+	if got := raised.historyHardLimit(); got <= trigger {
+		t.Fatalf("hard cap %d must stay above the compression trigger %d "+
+			"(otherwise byte-truncation preempts compression and drops blocks with no summary)", got, trigger)
+	}
+
+	// 阈值低于固定上限时，硬上限不得被压低（老行为保留）。
+	lowered := &Agent{maxTotalLen: 200000, compressor: compress.NewCompressor(16000)}
+	if got := lowered.historyHardLimit(); got != 200000 {
+		t.Fatalf("hard cap = %d, want 200000 (a lower compression threshold must not shrink it)", got)
+	}
+
+	// 未接线压缩的调用方（compressor == nil）仍以 maxTotalLen 为准。
+	bare := &Agent{maxTotalLen: 200000}
+	if got := bare.historyHardLimit(); got != 200000 {
+		t.Fatalf("nil-compressor hard cap = %d, want 200000", got)
+	}
+}
+
+// TestTruncateHistory_DoesNotDropBlocksBelowDerivedCap 是上一条的行为侧验证：
+// 阈值抬高到硬上限跟着变高之后，一段"超过固定 200K、但低于派生的硬上限"的历史
+// 必须原样返回 —— 字节级路径一次都不许动手，压缩才有机会先发生。
+func TestTruncateHistory_DoesNotDropBlocksBelowDerivedCap(t *testing.T) {
+	a := &Agent{maxTotalLen: 200000, compressor: compress.NewCompressor(60000)}
+
+	a.history = []provider.Message{{Role: "system", Content: "sys"}}
+	// 3 个各 90K 字节的 user 块 + 尾部 user（保护块）：合计 ~270K 字节，
+	// 越过固定的 200K，但低于 60000×4×5/4 = 300K。
+	for i := 0; i < 3; i++ {
+		a.history = append(a.history, provider.Message{Role: "user", Content: strings.Repeat("A", 90000)})
+	}
+	a.history = append(a.history, provider.Message{Role: "user", Content: "latest"})
+	before := len(a.history)
+
+	a.truncateHistory()
+
+	if len(a.history) != before {
+		t.Fatalf("history was byte-truncated (%d -> %d msgs) while still below the derived hard cap; "+
+			"compression must get its chance first", before, len(a.history))
 	}
 }
 

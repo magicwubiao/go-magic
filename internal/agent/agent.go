@@ -94,7 +94,7 @@ type Agent struct {
 	tools       []map[string]interface{} // tools schema for provider
 	history     []provider.Message
 	maxTurns    int
-	maxTotalLen int // max chars in message history
+	maxTotalLen int // max BYTES in message history (messageWeight sums len(), not runes)
 	maxMsgLen   int // max chars per message
 	// skillsCtx 记录当前注入系统提示的技能清单块，供 SetSkillsContext
 	// 以替换（而非追加）语义原地刷新，避免重复堆叠。
@@ -282,10 +282,13 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// （30 分钟）约束，每轮迭代是一次 LLM 调用加工具执行（实测
 		// 10~30s），物理可达的迭代数约 60~180。300 落在这个区间之外，
 		// 永远先撞时间墙 → 回合上限形同虚设。见 pkg/config/config.go 同项注释。
-		maxTurns:       150,
-		maxIterations:  200,
-		maxTotalLen:    200000, // 200K chars max history (~50K tokens)
-		maxMsgLen:      50000,  // 50K chars per message (~12K tokens)
+		maxTurns:      150,
+		maxIterations: 200,
+		// 单位是**字节**（messageWeight 用 len()），注释里的 "~50K tokens" 按
+		// ASCII 4 字节/token 折算（中文 3 字节/字、≈1 token/字，实际更高）。
+		// 生效的硬上限由 historyHardLimit() 取"本值"与"压缩触发点 ×5/4"的较大者。
+		maxTotalLen:    200000, // 200K bytes max history (~50K tokens ASCII)
+		maxMsgLen:      50000,  // 50K bytes per message (~12K tokens ASCII)
 		maxTokenBudget: 0,
 		// sameToolLimit 比的是"工具名 + 参数指纹"：同一回合里 read_file 读 3 个
 		// 不同文件是完全正常的，只有反复发起**同一个调用**才是死循环信号。
@@ -3601,6 +3604,44 @@ func (a *Agent) GetHistoryLength() int {
 	return total
 }
 
+// hardCapSlackNum / hardCapSlackDen 是"历史硬上限"相对压缩触发点保留的余量
+// （5/4 = 25%）。
+//
+// 两条路径的语义完全不同：压缩（compressor 的 LLM 摘要，或 agent 内的
+// compressHistory）把中段**摘要**成一条能继续接力的记录；而 truncateHistory
+// 的字节级路径是把整段 user 块**直接删掉** —— 不生成任何摘要，模型永久失去
+// 这段上下文（2026-10-08 "读完就忘"事故的形态）。所以硬截断必须在语义上
+// 永远**晚于**压缩触发：只要还有压缩可用，就轮不到它动手。
+//
+// 但两条阈值的口径本来不同步——压缩触发点是 token 配置
+// （agent.compress_threshold_tokens → compressor.ThresholdTokens，按
+// 4 字节/token 折算），硬上限却是 NewAIAgent 里固定写死的 200000 字节
+// （注释记作 ~50K tokens）。默认配置（32K tokens ⇒ 128K 字节触发点 < 200K
+// 上限）下顺序是对的，但这是**隐式**的：管理员把阈值调到 60000（⇒ 240K 字节
+// 触发点）就变成"先硬截断、后压缩"，而且那条路径不留摘要。
+// historyHardLimit 把"硬上限 ≥ 压缩触发点"从隐式假设变成结构性保证。
+const (
+	hardCapSlackNum = 5
+	hardCapSlackDen = 4
+)
+
+// historyHardLimit 返回本回合生效的历史硬上限（字节）。
+//
+// 恒 ≥ maxTotalLen；当压缩触发点（ThresholdTokens × 4，与
+// maybeCompressContext 里 totalChars/4 的估算口径一致）比它更高时，跟着抬起来
+// 并留出 hardCapSlack 的余量。compressor 为 nil（未接线压缩的调用方）时退化为
+// maxTotalLen 本身，即"硬上限是唯一防线"的老行为。
+func (a *Agent) historyHardLimit() int {
+	limit := a.maxTotalLen
+	if a.compressor != nil && a.compressor.ThresholdTokens > 0 {
+		trigger := a.compressor.ThresholdTokens * 4
+		if need := trigger * hardCapSlackNum / hardCapSlackDen; need > limit {
+			limit = need
+		}
+	}
+	return limit
+}
+
 // truncateHistory truncates message history to prevent overflow.
 //
 // The structural contract here is that the LAST user-role message must
@@ -3620,18 +3661,22 @@ func (a *Agent) GetHistoryLength() int {
 // below maxTotalLen we hand off to compressHistory, which is the
 // dedicated mechanism for summarising the middle of a long conversation.
 func (a *Agent) truncateHistory() {
-	if a.maxTotalLen <= 0 {
+	// 用 limit 而不是裸的 a.maxTotalLen：硬上限必须恒 ≥ 压缩触发点，见
+	// historyHardLimit 的注释。否则把 agent.compress_threshold_tokens 抬到
+	// 50000 以上时，这条"整段删 user 块"的路径会先于压缩触发。
+	limit := a.historyHardLimit()
+	if limit <= 0 {
 		return
 	}
 
 	totalLen := a.GetHistoryLength()
 
-	if a.compressionEnabled && totalLen > int(float64(a.maxTotalLen)*a.compressionRatio) {
+	if a.compressionEnabled && totalLen > int(float64(limit)*a.compressionRatio) {
 		a.compressHistory()
 		return
 	}
 
-	if totalLen < a.maxTotalLen {
+	if totalLen < limit {
 		return
 	}
 
@@ -3657,7 +3702,7 @@ func (a *Agent) truncateHistory() {
 			len(a.history[systemIdx].Content), len(truncated), maxSystemLen)
 	}
 
-	if totalLen < a.maxTotalLen {
+	if totalLen < limit {
 		return
 	}
 
@@ -3681,9 +3726,9 @@ func (a *Agent) truncateHistory() {
 	// responsibly remove without destroying user context, so we exit and
 	// let compressHistory's LLM-assisted summarisation take over on the
 	// NEXT turn (or via its own threshold above).
-	if lastUserIdx >= 0 && tailBlockSize >= a.maxTotalLen {
-		log.Warnf("[Agent] truncateHistory: protected tail block (%d msgs, %d chars) >= maxTotalLen=%d — delegating to compressHistory",
-			len(a.history)-lastUserIdx, tailBlockSize, a.maxTotalLen)
+	if lastUserIdx >= 0 && tailBlockSize >= limit {
+		log.Warnf("[Agent] truncateHistory: protected tail block (%d msgs, %d chars) >= history cap=%d — delegating to compressHistory",
+			len(a.history)-lastUserIdx, tailBlockSize, limit)
 		if a.compressionEnabled {
 			a.compressHistory()
 			return
@@ -3732,7 +3777,7 @@ func (a *Agent) truncateHistory() {
 	}
 
 	deletedAny := false
-	for totalLen > a.maxTotalLen && len(a.history) > 1 && maxIters > 0 {
+	for totalLen > limit && len(a.history) > 1 && maxIters > 0 {
 		maxIters--
 
 		// Pick the victim index, always skipping a leading system message.
@@ -3877,7 +3922,7 @@ func (a *Agent) truncateHistory() {
 	// the provider layer. compressHistory is a no-op when its own gate
 	// (len(userMsgs) <= keepRecent+keepFirst) says there isn't enough to
 	// summarise, which is the correct response for short tails.
-	if totalLen > a.maxTotalLen && a.compressionEnabled {
+	if totalLen > limit && a.compressionEnabled {
 		a.compressHistory()
 		return
 	}
