@@ -204,13 +204,11 @@ type MemoryConfig struct {
 
 	// 以下为可选字段，零值（nil）表示使用默认值。
 	// 与 internal/memory.MemoryConfig 对应，便于配置驱动 cortex.Manager 的记忆子系统。
-	DBPath             *string `json:"db_path,omitempty" yaml:"db_path,omitempty"`                           // 记忆 SQLite 数据库路径
-	MaxContentLength   *int    `json:"max_content_length,omitempty" yaml:"max_content_length,omitempty"`     // 单条记忆最大字符数
-	MaxAgentMemLength  *int    `json:"max_agent_mem_length,omitempty" yaml:"max_agent_mem_length,omitempty"` // agent 记忆文件最大字符数
-	MaxUserMemLength   *int    `json:"max_user_mem_length,omitempty" yaml:"max_user_mem_length,omitempty"`   // user 记忆文件最大字符数
-	AutoSummarize      *bool   `json:"auto_summarize,omitempty" yaml:"auto_summarize,omitempty"`             // 是否开启自动摘要
-	SummarizeThreshold *int    `json:"summarize_threshold,omitempty" yaml:"summarize_threshold,omitempty"`   // 触发摘要的字符阈值
-	LLMProvider        *string `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`                 // 摘要使用的 LLM provider
+	DBPath             *string `json:"db_path,omitempty" yaml:"db_path,omitempty"`                         // 记忆 SQLite 数据库路径
+	MaxContentLength   *int    `json:"max_content_length,omitempty" yaml:"max_content_length,omitempty"`   // 单条记忆最大字符数
+	AutoSummarize      *bool   `json:"auto_summarize,omitempty" yaml:"auto_summarize,omitempty"`           // 是否开启自动摘要
+	SummarizeThreshold *int    `json:"summarize_threshold,omitempty" yaml:"summarize_threshold,omitempty"` // 触发摘要的字符阈值
+	LLMProvider        *string `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`               // 摘要使用的 LLM provider
 }
 
 // CortexConfig represents Cortex AI configuration

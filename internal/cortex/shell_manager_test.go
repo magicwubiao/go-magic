@@ -25,9 +25,6 @@ func TestDisabledManagerShellIsSafe(t *testing.T) {
 	if err := mgr.AppendMemory("line"); err == nil {
 		t.Fatal("AppendMemory on shell should error, not panic")
 	}
-	if err := mgr.AppendUser("line"); err == nil {
-		t.Fatal("AppendUser on shell should error, not panic")
-	}
 	// Start/OnUserMessage already gate on enabled — just confirm no panic.
 	_ = mgr.Start()
 	mgr.OnUserMessage("hello")

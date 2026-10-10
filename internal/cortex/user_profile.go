@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -390,35 +391,50 @@ func (up *UserProfile) GetHighConfidence(minConfidence float64) []*UserPreferenc
 	return prefs
 }
 
-// GetForPrompt returns the user profile formatted for system prompt
+// GetForPrompt returns the user profile formatted for system prompt.
+//
+// 空画像返回 ""（不注入）。此前无条件返回 "## User Profile\n\n" 的空壳，
+// 等于每轮往 system prompt 里塞一段零信息的样板。
+// 偏好按 key 排序输出：map 遍历顺序随机，同一份画像每次拼出的文本必须逐字节
+// 一致，否则 prompt 前缀缓存永远命中不了。
 func (up *UserProfile) GetForPrompt() string {
 	up.mu.RLock()
 	defer up.mu.RUnlock()
 
 	var lines []string
-	lines = append(lines, "## User Profile")
-	lines = append(lines, "")
 
-	// Add high-confidence preferences（阈值从 0.6 降到 0.5，让强化后的 learned 偏好可显示）
-	for _, p := range up.preferences {
-		if p.Confidence >= 0.5 {
-			lines = append(lines, "- "+p.Key+": "+p.Value)
+	// 高置信度偏好（阈值从 0.6 降到 0.5，让强化后的 learned 偏好可显示）
+	keys := make([]string, 0, len(up.preferences))
+	for k, p := range up.preferences {
+		if p != nil && p.Confidence >= 0.5 {
+			keys = append(keys, k)
 		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, "- "+k+": "+up.preferences[k].Value)
 	}
 
 	// Add tech stack
 	if len(up.techStack) > 0 {
-		lines = append(lines, "")
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, "Tech stack: "+strings.Join(up.techStack, ", "))
 	}
 
 	// Add interests
 	if len(up.interests) > 0 {
-		lines = append(lines, "")
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, "Interests: "+strings.Join(up.interests, ", "))
 	}
 
-	return strings.Join(lines, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return "## User Profile\n\n" + strings.Join(lines, "\n")
 }
 
 // Reset resets the user profile to default

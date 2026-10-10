@@ -152,10 +152,12 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		a.tools = a.filterTools(activePlan.ToolFilter)
 	}
 
-	// ========== CORTEX: Frozen Snapshot Memory ==========
-	memoryPrompt := a.cortexManager.Snapshot.GetMemoryForPrompt()
-	userPrompt := a.cortexManager.Snapshot.GetUserForPrompt()
-	if a.memoryEnabled && memoryPrompt != "" {
+	// ========== CORTEX: Frozen Snapshot Memory + User Profile ==========
+	// 记忆走冻结快照；用户画像走 UserProfile.GetForPrompt()（结构化、已过滤
+	// "[Not set]" 占位符）——两者都经 Manager 门面，不再直接读 USER.md 原文。
+	memoryPrompt := a.cortexManager.GetPromptContext()
+	userPrompt := a.cortexManager.GetUserContext()
+	if a.memoryEnabled {
 		a.injectMemoryIntoSystemPrompt(memoryPrompt, userPrompt)
 	}
 
@@ -458,41 +460,32 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 // ========== Cortex Integration Helper Methods ==========
 
-// injectCortexContext injects SOUL.md personality and UserProfile into system prompt
+// injectCortexContext 记录 cortex 静态上下文（SOUL.md 人格），供本轮出站注入。
+//
+// **不再往 history 里写**：旧实现把 SOUL.md + UserProfile 追加到历史里的 system
+// 消息上（对 a.history[i].Content 做 += 追加），每个回合追加一次 ⇒ 基础 system
+// prompt 随轮数无限膨胀（只靠 maxSystemLen 字节预算兜底），且每轮都变 ⇒ prompt
+// 前缀缓存（OpenAI/Gemini 自动缓存、Anthropic cache_control）永远命中不了。现在
+// 只覆盖 a.cortexStatic，由 withContextBlocks 作为独立 system 块送出（排在静态
+// 规则链之后，属可缓存前缀的一部分）。
+//
+// 用户画像**不在这里注入**：它的唯一来源是 Manager.GetUserContext()
+// （即 UserProfile.GetForPrompt()，已过滤 "[Not set]" 占位符），随
+// injectMemoryIntoSystemPrompt 一并送出。此前这里也塞一份，等于同一份画像
+// 在同一份 payload 里注入两遍。
 func (a *Agent) injectCortexContext() {
 	if a.cortexManager == nil {
 		return
 	}
 
-	var injections []string
-
-	// Inject SOUL.md personality
+	soul := ""
 	if a.cortexManager.Soul != nil {
-		soulPrompt := a.cortexManager.Soul.GetSoulForPrompt()
-		if soulPrompt != "" {
-			injections = append(injections, soulPrompt)
-		}
+		soul = a.cortexManager.Soul.GetSoulForPrompt()
 	}
 
-	// Inject UserProfile
-	if a.cortexManager.UserProfile != nil {
-		userProfile := a.cortexManager.UserProfile.GetForPrompt()
-		if userProfile != "" {
-			injections = append(injections, userProfile)
-		}
-	}
-
-	// Inject into system message
-	if len(injections) > 0 {
-		for i, msg := range a.history {
-			if msg.Role == "system" {
-				for _, injection := range injections {
-					a.history[i].Content += "\n\n" + injection
-				}
-				return
-			}
-		}
-	}
+	a.mu.Lock()
+	a.cortexStatic = soul
+	a.mu.Unlock()
 }
 
 // compressWithContextEngine uses Cortex ContextCompressor for intelligent compression

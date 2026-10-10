@@ -11,21 +11,22 @@ import (
 // This simulates human memory - you don't remember every word, just the conclusions
 const (
 	MemoryLimitChars = 2200 // MEMORY.md max chars
-	UserLimitChars   = 1375 // USER.md max chars
 )
 
 // SnapshotManager implements the "frozen snapshot" pattern from Cortex Agent
 // Memory updates are written to disk immediately but
 // the current turn uses a frozen snapshot to protect prefix cache
 // This is crucial for cost optimization with Anthropic's prefix caching
+//
+// 只负责 MEMORY.md（agent 记忆）。用户画像（USER.md）不再经过这里：
+// 它的唯一来源是 cortex.UserProfile.GetForPrompt()（结构化偏好、自动过滤
+// "[Not set]" 占位符）。此前这里也读一份原始 USER.md，等于同一份数据有两个
+// 读入口，且原始文件里的占位符会被原样塞进提示词。
 type SnapshotManager struct {
 	mu           sync.RWMutex
 	memoryPath   string
-	userPath     string
 	frozenMemory string // Snapshot for current turn
-	frozenUser   string
 	latestMemory string // Latest version (on disk)
-	latestUser   string
 	version      int
 	compressor   *MemoryCompressor
 }
@@ -39,7 +40,6 @@ type MemoryCompressor struct{}
 func NewSnapshotManager(baseDir string) *SnapshotManager {
 	return &SnapshotManager{
 		memoryPath: filepath.Join(baseDir, "MEMORY.md"),
-		userPath:   filepath.Join(baseDir, "USER.md"),
 		compressor: &MemoryCompressor{},
 		version:    1,
 	}
@@ -53,11 +53,6 @@ func (sm *SnapshotManager) Load() error {
 	if content, err := os.ReadFile(sm.memoryPath); err == nil {
 		sm.latestMemory = string(content)
 		sm.frozenMemory = sm.latestMemory
-	}
-
-	if content, err := os.ReadFile(sm.userPath); err == nil {
-		sm.latestUser = string(content)
-		sm.frozenUser = sm.latestUser
 	}
 
 	return nil
@@ -78,7 +73,6 @@ func (sm *SnapshotManager) RefreshSnapshot() {
 	defer sm.mu.Unlock()
 
 	sm.frozenMemory = sm.latestMemory
-	sm.frozenUser = sm.latestUser
 	sm.version++
 }
 
@@ -88,14 +82,6 @@ func (sm *SnapshotManager) GetMemoryForPrompt() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.frozenMemory
-}
-
-// GetUserForPrompt returns the user profile to include in system prompt.
-// Uses the frozen snapshot, NOT the latest.
-func (sm *SnapshotManager) GetUserForPrompt() string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.frozenUser
 }
 
 // UpdateMemory updates memory, writes to disk immediately
@@ -112,20 +98,6 @@ func (sm *SnapshotManager) UpdateMemory(content string) error {
 	return os.WriteFile(sm.memoryPath, []byte(content), 0644)
 }
 
-// UpdateUser updates user profile, writes to disk immediately
-// but does NOT refresh the frozen snapshot.
-func (sm *SnapshotManager) UpdateUser(content string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if runeLen(content) > UserLimitChars {
-		content = sm.compressor.compressUser(content, UserLimitChars)
-	}
-
-	sm.latestUser = content
-	return os.WriteFile(sm.userPath, []byte(content), 0644)
-}
-
 // AppendToMemory appends a line to memory (P1-1: 共享分节合并)
 func (sm *SnapshotManager) AppendToMemory(line string) error {
 	sm.mu.Lock()
@@ -137,27 +109,15 @@ func (sm *SnapshotManager) AppendToMemory(line string) error {
 	return os.WriteFile(sm.memoryPath, []byte(newContent), 0644)
 }
 
-// AppendToUser appends a line to user profile (P1-1: 共享分节合并)
-func (sm *SnapshotManager) AppendToUser(line string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	newContent := mergeIntoMarkdown(sm.latestUser, line, UserLimitChars, sm.compressor.compressUser)
-
-	sm.latestUser = newContent
-	return os.WriteFile(sm.userPath, []byte(newContent), 0644)
-}
-
 // mergeIntoMarkdown 把新增内容按分节合并进现有 Markdown（P1-1 统一写入门面）：
 //   - 新增内容带 "## header" 时合并进现有同名分节（同一主题不再裂成多个分节），
 //     新分节追加到末尾；分节体内逐行去重
 //   - 新增内容不带分节头时按旧行为直接追加到末尾
 //   - 全文去重连续重复行
-//   - 超过 limit 时调用 compress 压缩（MEMORY.md 用分节压缩，USER.md 用
-//     简单去重截断），由调用方决定压缩策略
+//   - 超过 limit 时调用 compress 压缩（MEMORY.md 用分节压缩），由调用方决定压缩策略
 //
-// 返回合并后的完整内容，不落盘——落盘路径由调用方（SnapshotManager /
-// Store 的文件 API）各自持锁完成。
+// 返回合并后的完整内容，不落盘——落盘路径由调用方（distiller /
+// SnapshotManager）各自持锁完成。
 func mergeIntoMarkdown(existing, addition string, limit int, compress func(string, int) string) string {
 	addition = strings.TrimSpace(addition)
 	if addition == "" {
@@ -276,13 +236,6 @@ func (sm *SnapshotManager) GetLatestMemory() string {
 	return sm.latestMemory
 }
 
-// GetLatestUser returns the latest user profile (not frozen)
-func (sm *SnapshotManager) GetLatestUser() string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.latestUser
-}
-
 // GetVersion returns the current memory version
 func (sm *SnapshotManager) GetVersion() int {
 	sm.mu.RLock()
@@ -320,13 +273,6 @@ func (mc *MemoryCompressor) CompressMemory(content string, limit int) string {
 	}
 
 	return result
-}
-
-// compressUser compresses user profile with a simpler strategy:
-// Keep all unique lines, truncating verbose ones
-func (mc *MemoryCompressor) compressUser(content string, limit int) string {
-	content = deduplicateLines(content)
-	return truncateString(content, limit)
 }
 
 // section represents a markdown section with its header and body

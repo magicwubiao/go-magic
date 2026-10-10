@@ -1114,12 +1114,17 @@ func (m *Manager) GetPromptContext() string {
 }
 
 // GetUserContext returns the user profile for the system prompt.
-// Uses the frozen snapshot; safe on a disabled (shell) Manager.
+// Safe on a disabled (shell) Manager.
+//
+// 唯一来源是 UserProfile.GetForPrompt()（结构化偏好，JSON 权威存储），
+// 不是"再读一遍 USER.md 原文"：后者会把 cortex.DefaultUserProfile 里的
+// "[Not set]" 占位符原样注入（~290 字符纯样板），且多出一个与 UserProfile
+// 并列的读入口。UserProfile 为空时返回 ""（不注入）。
 func (m *Manager) GetUserContext() string {
-	if m == nil || m.Snapshot == nil {
+	if m == nil || m.UserProfile == nil {
 		return ""
 	}
-	return m.Snapshot.GetUserForPrompt()
+	return m.UserProfile.GetForPrompt()
 }
 
 // AppendMemory adds a line to the memory file
@@ -1129,15 +1134,6 @@ func (m *Manager) AppendMemory(line string) error {
 		return fmt.Errorf("cortex memory disabled")
 	}
 	return m.Snapshot.AppendToMemory(line)
-}
-
-// AppendUser adds a line to the user profile
-// Writes to disk immediately but does NOT refresh frozen snapshot
-func (m *Manager) AppendUser(line string) error {
-	if m == nil || m.Snapshot == nil {
-		return fmt.Errorf("cortex memory disabled")
-	}
-	return m.Snapshot.AppendToUser(line)
 }
 
 // GetTurnCount returns the current turn count

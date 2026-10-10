@@ -170,6 +170,12 @@ type Agent struct {
 	// 永远不可能命中。现在它作为易变块由 withContextBlocks 注入到稳定前缀之后。
 	snapshotMemory string
 
+	// cortexStatic 是 cortex 静态上下文（SOUL.md 人格）的当前文本，每轮由
+	// injectCortexContext 覆盖写入。理由同 snapshotMemory：**不得**追加进
+	// history 里的 system 消息，只能作为独立注入块由 withContextBlocks
+	// 送出（它几乎不变，因此排在静态规则链之后、属可缓存前缀的一部分）。
+	cortexStatic string
+
 	// 静态规则链：ruleDir 非空（= 会话工作目录）时，出站消息在头部 system
 	// 之后、动态记忆之前插入从工作目录向上逐级发现的规则文件
 	// （AGENTS.md / CLAUDE.md / CONTEXT.md）原文。ruleSig 为规则链的
@@ -2751,15 +2757,17 @@ func (a *Agent) RunConversationStreamWithMedia(ctx context.Context, input string
 	if a.cortexManager != nil && a.cortexManager.IsEnabled() {
 		a.cortexManager.OnUserMessage(input)
 
-		// Inject memory and user context into system prompt
-		if a.iterationCount == 0 {
-			if memCtx := a.cortexManager.GetPromptContext(); memCtx != "" {
-				a.AddSystemContext("[Memory Context]\n" + memCtx)
-			}
-			if userCtx := a.cortexManager.GetUserContext(); userCtx != "" {
-				a.AddSystemContext("[User Profile]\n" + userCtx)
-			}
-		}
+		// 冻结快照记忆 + 用户画像：**覆盖写入** agent 上的注入字段，由
+		// withContextBlocks 作为独立 system 块送出（与 RunWithCortex 路径同一机制）。
+		//
+		// 这里原先是 a.AddSystemContext("[Memory Context]...")，把内容追加进
+		// history[0].Content —— 两个硬伤：基础 system prompt 每轮变长，且每轮都变
+		// ⇒ prompt 前缀缓存永不命中。AddSystemContext 已随该缺陷一并删除。
+		// injectMemoryIntoSystemPrompt 是幂等的（覆盖而非追加），故无需 iterationCount 门。
+		a.injectMemoryIntoSystemPrompt(
+			a.cortexManager.GetPromptContext(),
+			a.cortexManager.GetUserContext(),
+		)
 	}
 
 	// Skip sub-task delegation when contentParts are present (e.g., multimodal input with images)
@@ -4852,31 +4860,47 @@ func (a *Agent) snapshotMemoryBlock() string {
 	return a.snapshotMemory
 }
 
-// withContextBlocks 把规则链 / 工作目录 / 快照记忆 / 动态记忆 / 在案计划作为
-// system 消息插入出站消息头部 system 之后（无 system 时置于最前）。消息系统已
-// 容忍连续 system（messages.go），且 Zhipu 1214 约束只要求 system 之后紧跟
-// user，注入位置满足两端约束。五段全空时原样返回。
+// cortexStaticBlock 读取 cortex 静态上下文（SOUL.md 人格，加锁读）。
+func (a *Agent) cortexStaticBlock() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.cortexStatic
+}
+
+// withContextBlocks 把规则链 / cortex 静态上下文 / 工作目录 / 快照记忆 /
+// 动态记忆 / 在案计划作为 system 消息插入出站消息头部 system 之后（无 system 时
+// 置于最前）。消息系统已容忍连续 system（messages.go），且 Zhipu 1214 约束只要求
+// system 之后紧跟 user，注入位置满足两端约束。六段全空时原样返回。
 //
 // **顺序按「跨轮稳定性」从高到低排，这是有意设计，勿随意调换**：
 //
 //	① ruleContext    静态规则链 —— 只在规则文件变化时重载（ensureRuleContext 有签名门）
-//	② [Workspace]    绑定会话目录 —— 会话内恒定
-//	③ snapshotMemory cortex 快照记忆 —— 内容变化频率远低于逐轮召回
-//	④ dynamicMemory  动态记忆 —— 每 turn 按输入召回一次
-//	⑤ [Active Plan]  在案计划 —— 每轮从待办持久层重算
+//	② cortexStatic   SOUL.md 人格 —— 几乎不变（用户手动编辑才变）
+//	③ [Workspace]    绑定会话目录 —— 会话内恒定
+//	④ snapshotMemory cortex 快照记忆 —— 内容变化频率远低于逐轮召回
+//	⑤ dynamicMemory  动态记忆 —— 每 turn 按输入召回一次
+//	⑥ [Active Plan]  在案计划 —— 每轮从待办持久层重算
 //
 // 理由：prompt 前缀缓存（OpenAI/Gemini 服务端自动缓存、Anthropic 显式
 // cache_control）按**最长公共前缀**命中，只要稳定段逐字节不变，其后追加什么
 // 都不影响前缀命中。旧顺序把最易变的 [Active Plan] 放在最前，等于每轮第一段
 // 就变，可缓存前缀长度恒为 0 —— 几百轮任务里 system / 规则 / 工作目录这些每轮
-// 原价重发。改为稳定优先后，①②成为可缓存前缀（Anthropic 断点见 anthropic.go
+// 原价重发。改为稳定优先后，①②③成为可缓存前缀（Anthropic 断点见 anthropic.go
 // buildRequest）。
+//
+// 这些段一律**不写回 history**：早期实现（AddSystemContext / injectCortexContext）
+// 把内容追加到 history 里的 system 消息上，于是基础 system prompt 随轮数无限膨胀，
+// 且每轮内容都变 ⇒ 可缓存前缀长度恒为 0。注入只能走这里。
 func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	if len(msgs) == 0 {
 		return msgs
 	}
 	a.ensureRuleContext()
 	hasRule := a.ruleContext != ""
+	// cortex 静态上下文（SOUL.md 人格）：由 injectCortexContext 覆盖写入，
+	// 不追加进 history（见 cortexStatic 字段说明）。
+	static := a.cortexStaticBlock()
+	hasStatic := static != ""
 	hasMemory := a.dynamicMemory != ""
 	// 工作目录 ground truth：模型此前只能靠召回的记忆推断「我在哪个项目」，
 	// 一旦记忆被别的项目污染就会选择错误路径（记忆串事故）。这里每轮注入
@@ -4891,15 +4915,18 @@ func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	// —— 见 activePlanBlock 与 tool.ActivePlanForSession 的说明。
 	planBlock := a.activePlanBlock()
 	hasPlan := planBlock != ""
-	if !hasRule && !hasMemory && !hasWorkspace && !hasSnapshot && !hasPlan {
+	if !hasRule && !hasStatic && !hasMemory && !hasWorkspace && !hasSnapshot && !hasPlan {
 		return msgs
 	}
 
-	// 稳定优先（见函数注释）：规则 → 工作目录 → 快照记忆 → 动态记忆 → 计划。
+	// 稳定优先（见函数注释）：规则 → SOUL → 工作目录 → 快照记忆 → 动态记忆 → 计划。
 	// 最易变的一段压在最后，紧挨对话。
-	extras := make([]provider.Message, 0, 5)
+	extras := make([]provider.Message, 0, 6)
 	if hasRule {
 		extras = append(extras, provider.Message{Role: "system", Content: a.ruleContext})
+	}
+	if hasStatic {
+		extras = append(extras, provider.Message{Role: "system", Content: static})
 	}
 	if hasWorkspace {
 		extras = append(extras, provider.Message{Role: "system", Content: fmt.Sprintf(
@@ -5134,16 +5161,6 @@ func (a *Agent) SetMaxIterations(max int) {
 	if max > 0 {
 		a.maxIterations = max
 	}
-}
-
-// AddSystemContext appends context to the system prompt message.
-// If no system message exists, creates one.
-func (a *Agent) AddSystemContext(ctx string) {
-	if len(a.history) == 0 || a.history[0].Role != "system" {
-		a.history = append([]provider.Message{{Role: "system", Content: ctx}}, a.history...)
-		return
-	}
-	a.history[0].Content += "\n\n" + ctx
 }
 
 // GetProvider returns the agent's provider for use by other components

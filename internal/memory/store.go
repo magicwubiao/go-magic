@@ -60,8 +60,6 @@ type Memory struct {
 type MemoryConfig struct {
 	DBPath             string
 	MaxContentLength   int    // Max characters per memory
-	MaxAgentMemLength  int    // Max characters for agent memory file
-	MaxUserMemLength   int    // Max characters for user memory file
 	AutoSummarize      bool   // Enable automatic summarization
 	SummarizeThreshold int    // Threshold for summarization (characters)
 	LLMProvider        string // LLM provider for summarization
@@ -80,8 +78,6 @@ func DefaultConfig() *MemoryConfig {
 	return &MemoryConfig{
 		DBPath:             filepath.Join(home, "memories", "memory.db"),
 		MaxContentLength:   5000,
-		MaxAgentMemLength:  2200,
-		MaxUserMemLength:   1375,
 		AutoSummarize:      true,
 		SummarizeThreshold: 3000,
 		LLMProvider:        "openai",
@@ -94,15 +90,8 @@ type Store struct {
 	config *MemoryConfig
 	mu     sync.RWMutex
 
-	// File-based memory paths (Cortex style)
-	agentMemoryPath string
-	userMemoryPath  string
-
 	// workspaceScope 是本项目的工作区 scope（通常为 cwd），用于项目隔离
 	workspaceScope string
-
-	// fileMu 串行化 MEMORY.md / USER.md 的文件级读写，防止跨 goroutine append 互相覆盖
-	fileMu sync.Mutex
 
 	// llmProvider 允许外部注入用于 Summarize 的 provider（SetLLMProvider），
 	// 避免依赖环境变量探测
@@ -181,20 +170,12 @@ func NewStore(memCfg *MemoryConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	// Set up file paths
-	memoryDir := filepath.Join(config.GetMagicHome(), "memories")
-	store.agentMemoryPath = filepath.Join(memoryDir, "MEMORY.md")
-	store.userMemoryPath = filepath.Join(memoryDir, "USER.md")
-
 	// Workspace scope for project isolation (P2-1)
 	if memCfg.WorkspaceScope != "" {
 		store.workspaceScope = memCfg.WorkspaceScope
 	} else if wd, err := os.Getwd(); err == nil {
 		store.workspaceScope = filepath.ToSlash(wd)
 	}
-
-	// Ensure file-based memories exist
-	store.ensureMemoryFiles()
 
 	// Start background flusher for access statistics (P2-4: 去写放大)
 	store.pendingAccess = make(map[string]struct{})
@@ -335,22 +316,6 @@ func (s *Store) initSchema() error {
 
 	_, err := s.db.Exec(schema)
 	return err
-}
-
-// ensureMemoryFiles creates Cortex-style memory files if they don't exist
-func (s *Store) ensureMemoryFiles() {
-	for _, path := range []string{s.agentMemoryPath, s.userMemoryPath} {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			os.MkdirAll(filepath.Dir(path), 0755)
-			var template string
-			if strings.HasSuffix(path, "MEMORY.md") {
-				template = "# Agent Memory\n\n## Notes\n\n"
-			} else {
-				template = "# User Profile\n\n## Basic Info\n\n"
-			}
-			os.WriteFile(path, []byte(template), 0644)
-		}
-	}
 }
 
 // Store adds a new memory
@@ -997,96 +962,20 @@ func (s *Store) getLLMProvider() provider.Provider {
 	return nil
 }
 
-// ReadAgentMemory reads the Cortex-style agent memory file
-func (s *Store) ReadAgentMemory() (string, error) {
-	// 文件读写全程持 fileMu，防止并发 append 互相覆盖
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-
-	content, err := os.ReadFile(s.agentMemoryPath)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
-}
-
-// WriteAgentMemory writes to the Cortex-style agent memory file
-func (s *Store) WriteAgentMemory(content string) error {
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-	return s.writeAgentMemoryLocked(content)
-}
-
-// writeAgentMemoryLocked 写入 agent 记忆文件，调用方必须已持有 s.fileMu
-func (s *Store) writeAgentMemoryLocked(content string) error {
-	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
-	content = truncateString(content, s.config.MaxAgentMemLength)
-	return os.WriteFile(s.agentMemoryPath, []byte(content), 0644)
-}
-
-// ReadUserMemory reads the Cortex-style user profile file
-func (s *Store) ReadUserMemory() (string, error) {
-	// 文件读写全程持 fileMu，防止并发 append 互相覆盖
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-
-	content, err := os.ReadFile(s.userMemoryPath)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
-}
-
-// WriteUserMemory writes to the Cortex-style user profile file
-func (s *Store) WriteUserMemory(content string) error {
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-	return s.writeUserMemoryLocked(content)
-}
-
-// writeUserMemoryLocked 写入用户记忆文件，调用方必须已持有 s.fileMu
-func (s *Store) writeUserMemoryLocked(content string) error {
-	// 按字符限制截断，回退到 UTF-8 rune 边界，避免切断多字节字符
-	content = truncateString(content, s.config.MaxUserMemLength)
-	return os.WriteFile(s.userMemoryPath, []byte(content), 0644)
-}
-
-// AppendAgentMemory appends content to agent memory (Cortex-style).
-// P1-1: 与 SnapshotManager 共用 mergeIntoMarkdown 分节合并门面，
-// 超限时退化为「截旧保新」的 rune 安全截断。
-func (s *Store) AppendAgentMemory(content string) error {
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-
-	current, err := os.ReadFile(s.agentMemoryPath)
-	if err != nil {
-		current = []byte("# Agent Memory\n\n## Notes\n\n")
-	}
-
-	newContent := mergeIntoMarkdown(string(current), content, s.config.MaxAgentMemLength, func(c string, limit int) string {
-		return truncateString(c, limit)
-	})
-
-	return s.writeAgentMemoryLocked(newContent)
-}
-
-// AppendUserMemory appends content to user memory (Cortex-style).
-// P1-1: 与 SnapshotManager 共用 mergeIntoMarkdown 分节合并门面。
-func (s *Store) AppendUserMemory(content string) error {
-	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
-
-	current, err := os.ReadFile(s.userMemoryPath)
-	if err != nil {
-		current = []byte("# User Profile\n\n## Basic Info\n\n")
-	}
-
-	newContent := mergeIntoMarkdown(string(current), content, s.config.MaxUserMemLength, func(c string, limit int) string {
-		return truncateString(c, limit)
-	})
-
-	return s.writeUserMemoryLocked(newContent)
-}
+// 说明（勿在此处重新引入"第二份 MEMORY.md / USER.md"）：
+// 文件型记忆（MEMORY.md / USER.md）**只有一份**，位于 cortex 目录
+// （<magicHome>/cortex/MEMORY.md、USER.md）：MEMORY.md 由每日蒸馏器
+// （internal/memory/distill.go，DistillerConfig.MemoryMDPath）写入，USER.md
+// 由 cortex.UserProfile 写入；两者经 cortex.Manager 的 Snapshot /
+// UserProfile 注入提示词。
+//
+// 这里曾有一整套 Store.ReadAgentMemory / WriteAgentMemory /
+// AppendAgentMemory / ReadUserMemory / WriteUserMemory /
+// AppendUserMemory + ensureMemoryFiles，把同一逻辑文件又写到
+// <magicHome>/memories/{MEMORY,USER}.md，且**没有任何生产调用方**
+// （唯一使用者是同样无人调用的 CLI internal/memory/tool.go）。
+// 结果就是同一份"记忆"在磁盘上裂成两份、读的那份永远不是写的那份。
+// 该通道与 tool.go 一并删除，别再按 <magicHome>/memories/*.md 找记忆。
 
 // RecordCommandAction records a command approval/denial
 func (s *Store) RecordCommandAction(command, action, sessionID string) error {
