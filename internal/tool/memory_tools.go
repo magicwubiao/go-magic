@@ -22,8 +22,9 @@ var (
 )
 
 // GetSharedMemoryStore 返回进程级共享的结构化记忆 Store。
-// 数据库位于 <magicHome>/memories/memory.db，与 CLI memory 命令共用同一份数据。
-// 初始化失败时返回 nil，工具自动降级为纯文件模式。
+// 数据库位于 <magicHome>/memories/memory.db（memory.DefaultConfig()），
+// **cortex 记忆抽取写的是同一个库**（它不再覆盖 DBPath），CLI memory 命令
+// 也共用这份数据。初始化失败时返回 nil，工具自动降级为纯文件模式。
 func GetSharedMemoryStore() *memory.Store {
 	sharedMemoryStoreOnce.Do(func() {
 		s, err := memory.NewStore(memory.DefaultConfig())
@@ -283,30 +284,13 @@ func collectRelated(store *memory.Store, key string, limit int) []map[string]int
 	return related
 }
 
-// 共享的 FTS 会话历史库（进程级懒加载单例）。
-// search_history 工具用它检索 cortex 记录的完整对话历史
-// （<magicHome>/cortex/fts/memory.sqlite），与结构化记忆库分离。
-var (
-	sharedFTSStore     *memory.FTSStore
-	sharedFTSStoreOnce sync.Once
-)
-
-// GetSharedFTSStore 返回进程级共享的 FTS 会话历史库。
-// 初始化失败时返回 nil，调用方降级到结构化记忆 Store 的 Search。
-func GetSharedFTSStore() *memory.FTSStore {
-	sharedFTSStoreOnce.Do(func() {
-		f, err := memory.NewFTSStore(filepath.Join(config.GetMagicHome(), "cortex", "fts"))
-		if err != nil {
-			log.Printf("[memory] FTS history store init failed, search_history will degrade: %v", err)
-			return
-		}
-		sharedFTSStore = f
-	})
-	return sharedFTSStore
-}
-
 // SearchHistoryTool 检索历史对话记录（P0-2）：给 agent 一个「翻旧对话」的
 // 自助入口，弥补动态注入只覆盖当前相关记忆的盲区。
+//
+// 数据来源就是 GetSharedMemoryStore 的那一份结构化记忆库（自带 FTS5 索引，
+// CJK 走 LIKE 兜底）——与 cortex 记忆抽取写的是**同一个库**。以前这里另开
+// 一个 <magicHome>/cortex/fts/memory.sqlite 副本当「会话历史库」，那份副本
+// 的 session_id/role/turn 三列从来没被填过，等于同一批数据存两遍。
 type SearchHistoryTool struct{}
 
 func (t *SearchHistoryTool) Name() string {
@@ -347,61 +331,47 @@ func (t *SearchHistoryTool) Execute(ctx context.Context, args map[string]interfa
 		limit = 20
 	}
 
-	// 1) 主路径：FTS 会话历史库
-	if fts := GetSharedFTSStore(); fts != nil {
-		results, err := fts.Search(query, limit)
-		if err == nil && len(results) > 0 {
-			items := make([]map[string]interface{}, 0, len(results))
-			for _, r := range results {
-				items = append(items, map[string]interface{}{
-					"session_id": r.SessionID,
-					"turn":       r.TurnNumber,
-					"role":       r.Role,
-					"content":    truncateRunes(r.Content, 240),
-					"snippet":    r.Snippet,
-					"time":       r.CreatedAt.Format("2006-01-02 15:04"),
-					"importance": r.Importance,
-				})
-			}
-			return map[string]interface{}{
-				"found":  true,
-				"query":  query,
-				"source": "history_fts",
-				"items":  items,
-			}, nil
-		}
-		if err != nil {
-			log.Printf("[memory] FTS history search failed, degrading to memory store: %v", err)
-		}
+	store := GetSharedMemoryStore()
+	if store == nil {
+		return map[string]interface{}{
+			"found": false,
+			"query": query,
+			"hint":  "Memory store unavailable; no matching history found.",
+		}, nil
 	}
 
-	// 2) 降级：结构化记忆 Store 的 Search（同样支持 FTS/LIKE 兜底）
-	if store := GetSharedMemoryStore(); store != nil {
-		results, err := store.Search(query, limit)
-		if err == nil && len(results) > 0 {
-			items := make([]map[string]interface{}, 0, len(results))
-			for _, m := range results {
-				items = append(items, map[string]interface{}{
-					"key":        m.Scope,
-					"type":       string(m.Type),
-					"content":    truncateRunes(m.Content, 240),
-					"time":       m.UpdatedAt.Format("2006-01-02 15:04"),
-					"importance": m.Importance,
-				})
-			}
-			return map[string]interface{}{
-				"found":  true,
-				"query":  query,
-				"source": "memory_store",
-				"items":  items,
-			}, nil
-		}
+	results, err := store.Search(query, limit)
+	if err != nil {
+		log.Printf("[memory] history search failed: %v", err)
+		return map[string]interface{}{
+			"found": false,
+			"query": query,
+			"hint":  "Memory search failed; no matching history found.",
+		}, nil
+	}
+	if len(results) == 0 {
+		return map[string]interface{}{
+			"found": false,
+			"query": query,
+			"hint":  "No matching history found.",
+		}, nil
 	}
 
+	items := make([]map[string]interface{}, 0, len(results))
+	for _, m := range results {
+		items = append(items, map[string]interface{}{
+			"key":        m.Scope,
+			"type":       string(m.Type),
+			"content":    truncateRunes(m.Content, 240),
+			"time":       m.UpdatedAt.Format("2006-01-02 15:04"),
+			"importance": m.Importance,
+		})
+	}
 	return map[string]interface{}{
-		"found": false,
-		"query": query,
-		"hint":  "No matching history found.",
+		"found":  true,
+		"query":  query,
+		"source": "memory_store",
+		"items":  items,
 	}, nil
 }
 

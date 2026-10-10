@@ -51,19 +51,17 @@ type Distiller struct {
 	cfg   DistillerConfig
 	log   *DailyLog
 	store *Store            // 可为 nil
-	fts   *FTSStore         // 可为 nil
 	prov  provider.Provider // 可为 nil（回退基础摘要）
 }
 
-// NewDistiller creates a distiller. store/fts/prov are all optional;
+// NewDistiller creates a distiller. store/prov are both optional;
 // each missing component degrades the corresponding step.
-func NewDistiller(cfg DistillerConfig, store *Store, fts *FTSStore, prov provider.Provider) *Distiller {
+func NewDistiller(cfg DistillerConfig, store *Store, prov provider.Provider) *Distiller {
 	cfg = cfg.withDefaults()
 	return &Distiller{
 		cfg:   cfg,
 		log:   NewDailyLog(cfg.LogDir),
 		store: store,
-		fts:   fts,
 		prov:  prov,
 	}
 }
@@ -206,7 +204,7 @@ func (d *Distiller) basicDigest(content string) string {
 }
 
 // writeDigest merges the digest into MEMORY.md (section-aware) and
-// best-effort persists it into the structured store / FTS.
+// best-effort persists it into the structured store.
 // Returns true if the digest was persisted to at least one medium.
 func (d *Distiller) writeDigest(digest string) bool {
 	persisted := false
@@ -235,13 +233,6 @@ func (d *Distiller) writeDigest(digest string) bool {
 		}
 		if err := d.store.Store(mem); err != nil {
 			log.Warnf("[Memory] distiller store digest failed: %v", err)
-		} else {
-			persisted = true
-		}
-	}
-	if d.fts != nil {
-		if err := d.fts.AddInsight("distiller", digest, 8); err != nil {
-			log.Warnf("[Memory] distiller FTS insight failed: %v", err)
 		} else {
 			persisted = true
 		}

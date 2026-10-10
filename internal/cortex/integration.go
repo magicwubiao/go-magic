@@ -45,8 +45,9 @@ type Manager struct {
 	Cognition    *cognition.Planner               // Layer 2: Planning and decision making
 	LLMPlanner   *cognition.LLMPlanner            // LLM-based planning (NEW)
 	Execution    *execution.Manager               // Layer 3: Checkpoint + Resume
-	FTSMemory    *memory.FTSStore                 // System 5: FTS full-text search
 	SkillCreator *skills.EnhancedAutoCreator      // System 6: Auto skill evolution
+	// System 5（全息记忆检索）不再另开一份 FTS 副本：结构化 store
+	// （memoryStore，见下）自带 FTS5 索引，直接用它的 Search 即可。
 
 	// NEW: Hermes-inspired systems
 	Soul              *SoulManager       // System personality (SOUL.md)
@@ -80,7 +81,11 @@ type Manager struct {
 	// turn, which would inflate pattern frequencies.
 	lastAnalyzedToolIdx int
 
-	// 结构化记忆存储（与 FTSMemory 双写，保持数据一致）
+	// 结构化记忆存储（System 5：自带 FTS5 全文检索）。
+	// **路径必须与工具层（tool.GetSharedMemoryStore）一致** —— 以前这里把
+	// DBPath 覆盖成 <cortexDir>/memories/memory.db，导致进程里存在两份互不
+	// 相干的记忆库，还得再复制一份 FTS 副本当桥。现在统一用
+	// memory.DefaultConfig().DBPath（<magicHome>/memories/memory.db）。
 	memoryStore *memory.Store
 	// LLM 记忆抽取器（抽取失败时回退到行匹配）
 	memoryExtractor *memory.MemoryExtractor
@@ -318,17 +323,9 @@ func (m *Manager) Start() error {
 		return err
 	}
 
-	// System 5: Initialize FTS holographic memory (best effort，失败不再静默吞错)
-	if fts, err := memory.NewFTSStore(filepath.Join(cortexDir, "fts")); err == nil {
-		m.FTSMemory = fts
-	} else {
-		log.Warnf("[Cortex] FTS memory init failed: %v", err)
-		m.recordInitFailure("fts_memory", err)
-	}
-
-	// 初始化结构化记忆 Store（与 FTSStore 双写，保持数据一致）
+	// System 5: 初始化结构化记忆 Store（自带 FTS5 索引，不再单独建 FTS 副本；
+	// 路径与工具层完全一致，见 Manager.memoryStore 的字段注释）
 	memCfg := memory.DefaultConfig()
-	memCfg.DBPath = filepath.Join(cortexDir, "memories", "memory.db")
 	if ms, err := memory.NewStore(memCfg); err == nil {
 		m.memoryStore = ms
 	} else {
@@ -412,12 +409,6 @@ func (m *Manager) Stop() {
 			m.memoryMaintenanceDone = nil
 		}
 	}
-	if m.FTSMemory != nil {
-		if err := m.FTSMemory.Close(); err != nil {
-			log.Warnf("[Cortex] FTS memory close failed: %v", err)
-		}
-		m.FTSMemory = nil
-	}
 	if m.memoryStore != nil {
 		if err := m.memoryStore.Close(); err != nil {
 			log.Warnf("[Cortex] memory store close failed: %v", err)
@@ -490,7 +481,7 @@ func (m *Manager) RecallForInputScope(scope, query string) string {
 
 // startMemoryMaintenance 启动记忆库维护循环（P2-3 + P1-3）：
 // 每 24 小时清理一次过期记忆——结构化 Store 删除「重要度低于 0.3 且
-// 30 天未访问」的记录；FTS 会话库删除「重要度 < 4 且 90 天前」的记录。
+// 30 天未访问」的记录（以前还要额外清一份 FTS 副本，该副本已删）。
 // 同时驱动每日蒸馏器（P1-3）：超过 30 天的每日日志经 LLM 摘要合并进
 // MEMORY.md 后删除（每日至多一次，状态文件幂等）。
 // 启动时先跑一次；低频、幂等，失败仅告警不影响主流程。
@@ -511,7 +502,7 @@ func (m *Manager) startMemoryMaintenance() {
 			LogDir:       filepath.Join(m.baseDir, "daily"),
 			MemoryMDPath: filepath.Join(m.baseDir, "MEMORY.md"),
 			Retention:    30 * 24 * time.Hour,
-		}, m.memoryStore, m.FTSMemory, m.provider)
+		}, m.memoryStore, m.provider)
 		// 蒸馏器需要更高频的检查（每日至多一次，内部状态文件幂等），
 		// 用独立的 1h ticker 驱动
 		distillStop := make(chan struct{})
@@ -525,13 +516,6 @@ func (m *Manager) startMemoryMaintenance() {
 					log.Warnf("[Cortex] memory cleanup failed: %v", err)
 				} else if n > 0 {
 					log.Infof("[Cortex] memory cleanup removed %d expired entries", n)
-				}
-			}
-			if m.FTSMemory != nil {
-				if n, err := m.FTSMemory.CleanupOld(90*24*time.Hour, 4); err != nil {
-					log.Warnf("[Cortex] FTS cleanup failed: %v", err)
-				} else if n > 0 {
-					log.Infof("[Cortex] FTS cleanup removed %d expired entries", n)
 				}
 			}
 		}
@@ -851,7 +835,7 @@ func (m *Manager) extractAndLearnFromConversation(scope string) {
 		m.learnUserPreferences(userText)
 	}
 
-	if m.FTSMemory != nil || m.memoryStore != nil {
+	if m.memoryStore != nil {
 		m.extractAndStoreMemories(provMsgs, factSourceText, scope)
 	}
 
@@ -998,7 +982,7 @@ func (m *Manager) learnUserPreferences(conversation string) {
 
 // extractAndStoreMemories 抽取并存储重要信息
 // 优先使用 LLM 抽取器（internal/memory.MemoryExtractor），失败时回退到行匹配；
-// 同时写入 Store（结构化）与 FTSStore（全文检索），保持两者数据一致。
+// 只写结构化 Store（它自带 FTS5 索引，检索够用，不再维护第二份副本）。
 // scope 非空时非 user/preference 记忆补上该目录 scope（目录级共享记忆），
 // user/preference 画像保持跨目录全局。
 func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversation string, scope string) {
@@ -1026,12 +1010,6 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 				}
 				_ = m.memoryExtractor.StoreMemories(memories)
 			}
-			// 同步写入 FTSStore（全文检索）
-			if m.FTSMemory != nil {
-				for _, mem := range memories {
-					_ = m.FTSMemory.Add(memoryRecordFromMemory(mem))
-				}
-			}
 			return
 		}
 		// LLM 抽取失败则回退到行匹配
@@ -1040,7 +1018,7 @@ func (m *Manager) extractAndStoreMemories(messages []provider.Message, conversat
 		}
 	}
 
-	// Fallback：简陋行匹配（LLM 不可用或抽取失败时），双写 Store 与 FTSStore
+	// Fallback：简陋行匹配（LLM 不可用或抽取失败时）
 	m.fallbackLineMatchStore(conversation, scope)
 }
 
@@ -1093,7 +1071,6 @@ func applyMemoryScope(mem *memory.Memory, sessionScope string, nameToScope map[s
 	mem.Scope = sessionScope
 }
 
-// fallbackLineMatchStore 用简陋行匹配抽取记忆，双写 Store 与 FTSStore
 // fallbackLineMatchStore 行匹配兜底写入（LLM 不可用/失败时）。
 // scope 非空时结构化记忆补该目录 scope（目录级共享记忆）。
 func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
@@ -1110,19 +1087,7 @@ func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 			strings.Contains(lower, "important") ||
 			strings.Contains(lower, "remember") {
 			line = redact.Redact(line)
-			// 写入 FTSStore（全文检索；补 scope 标签保持与主库检索维度一致）
-			if m.FTSMemory != nil {
-				record := &memory.MemoryRecord{
-					Content:     line,
-					ContentType: string(memory.TypeKnowledge),
-					Importance:  5,
-				}
-				if scope != "" {
-					record.Tags = append(record.Tags, "scope:"+scope)
-				}
-				_ = m.FTSMemory.Add(record)
-			}
-			// 写入 Store（结构化存储）
+			// 只写结构化 Store（自带 FTS5，检索维度更全）
 			if m.memoryStore != nil {
 				mem := &memory.Memory{
 					Type:       memory.TypeKnowledge,
@@ -1134,29 +1099,6 @@ func (m *Manager) fallbackLineMatchStore(conversation string, scope string) {
 				_ = m.memoryStore.Store(mem)
 			}
 		}
-	}
-}
-
-// memoryRecordFromMemory 将结构化 Memory 转换为 FTSStore 的 MemoryRecord
-// Importance 范围 0-1，MemoryRecord.Importance 为 int，映射到 0-10。
-// 补齐 SessionID（会话溯源）与 scope/categories→tags（P1-4），
-// 保证 FTS 双写副本携带与主库一致的检索维度。
-func memoryRecordFromMemory(mem *memory.Memory) *memory.MemoryRecord {
-	importance := int(mem.Importance * 10)
-	if importance < 0 {
-		importance = 0
-	}
-	tags := append([]string{}, mem.Categories...)
-	if mem.Scope != "" {
-		tags = append(tags, "scope:"+mem.Scope)
-	}
-	return &memory.MemoryRecord{
-		SessionID:   mem.SessionID,
-		Content:     mem.Content,
-		ContentType: string(mem.Type),
-		Importance:  importance,
-		Tags:        tags,
-		CreatedAt:   mem.CreatedAt,
 	}
 }
 
@@ -1356,34 +1298,6 @@ func (m *Manager) SuggestRecoveryAction(err error) execution.RecoveryAction {
 	return m.Execution.SuggestRecoveryAction(m.LastCheckpoint, err)
 }
 
-// ========== Phase 4: FTS Memory (System 5) ==========
-
-// SearchMemory performs full-text search across all conversation history
-func (m *Manager) SearchMemory(query string, limit int) []memory.SearchResult {
-	if m.FTSMemory == nil {
-		return nil
-	}
-	results, _ := m.FTSMemory.Search(query, limit)
-	return results
-}
-
-// AddMemoryInsight stores a learned insight in FTS memory
-func (m *Manager) AddMemoryInsight(insight string, importance int) error {
-	if m.FTSMemory == nil {
-		return nil
-	}
-	return m.FTSMemory.AddInsight("", insight, importance)
-}
-
-// GetMemoryStats returns statistics about the memory store
-func (m *Manager) GetMemoryStats() map[string]interface{} {
-	if m.FTSMemory == nil {
-		return nil
-	}
-	stats, _ := m.FTSMemory.GetStats()
-	return stats
-}
-
 // ========== Phase 4: Skill Evolution (System 6) ==========
 
 // AnalyzeToolSequence analyzes a tool sequence for pattern recognition
@@ -1467,13 +1381,13 @@ func (m *Manager) GetSystemStatus() map[string]interface{} {
 		status["system_4_frozen_snapshot"] = "not_initialized"
 	}
 	totalSystems++
-	if m.FTSMemory != nil {
-		status["system_5_fts_memory"] = "ready"
+	if m.memoryStore != nil {
+		status["system_5_memory_store"] = "ready"
 		totalReady++
-	} else if m.initFailed("fts_memory") {
-		status["system_5_fts_memory"] = "init_failed"
+	} else if m.initFailed("memory_store") {
+		status["system_5_memory_store"] = "init_failed"
 	} else {
-		status["system_5_fts_memory"] = "not_initialized"
+		status["system_5_memory_store"] = "not_initialized"
 	}
 	totalSystems++
 	if m.SkillCreator != nil {
